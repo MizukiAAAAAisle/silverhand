@@ -1,0 +1,945 @@
+# Silverhand — Core Design
+
+> 这是 silverhand（即本 Electron Coding Agent Hub）的**产品 + 数据模型权威文档**。
+>
+> 多轮对话形成的所有共识、设计权衡、隐含约束都写在这里。代码与本文档冲突时，**以本文档为准**，代码必须改回来。
+>
+> 写作规则：每条决策旁边记一句"为什么"。新决策追加节，旧决策不改写（可"作废"标注）。
+
+---
+
+## 1. 产品前提
+
+### 1.1 我们在做什么
+
+一个桌面应用，让多个 AI coding agent（Claude Code / Codex / Cursor / Gemini 等 CLI agent）在**同一个会话里协作对话**。
+
+### 1.2 核心价值
+
+> **多 agent 在同一上下文中协作**——这是这个 app 存在的唯一理由。
+>
+> 如果只能 1v1，用户直接开 terminal 跑 `claude` / `codex` 就够了，不需要本应用。
+
+典型场景：
+
+| 场景 | 体现 |
+|------|------|
+| 角色分工 | claude 负责架构规划、codex 负责代码 review、gemini 负责文档撰写 |
+| 多 agent 比对 | 同一个问题让 claude 和 codex 都答一遍，对比观点 |
+| 接力 | claude 做完高层设计，codex 接着写实现 |
+| 守卫 | 一个 agent 干活，另一个旁观，发现问题打断 |
+
+### 1.3 单机本地为主，多人协作是加成
+
+> **多机文件 ≠ 多人协作**。文件读写本质局部，跨机器要么靠 git（半同步、有冲突）、要么靠云容器（脱离本地工作流）。本应用**不试图解决跨机器文件协作**。
+
+形态定位：**local-agent + multi-human**：
+- Agent 跑在某台机器上（v1 = 本机）
+- 多个用户都可以加入聊天、看上下文、发消息
+- 但实际文件操作只发生在 agent 所在机器
+- 其他用户来"参与讨论 / 围观决策"，不参与"动手敲代码"
+
+---
+
+## 2. 实体模型
+
+### 2.1 ER 总览
+
+```
+Host (computer | sandbox)              ← 物理 / 虚拟宿主，v1 只有 1 个 (this machine)
+  └─ Agent (name, runtime, system_prompt, host_id)
+                  ▲
+                  │ (n:m via channel_members)
+                  ▼
+Channel = "项目室"
+  ├─ name (UNIQUE)
+  ├─ kind: 'channel' | 'dm'
+  ├─ description?
+  ├─ workspace_path (NOT NULL，未填时自动生成)
+  ├─ workspace_host_id (v1 implicit = this machine)
+  ├─ git_url? (元数据)
+  └─ channel_members → [agent_id, ...]
+
+Session = "一次会话 / 多 agent 协作的对话线程"
+  ├─ channel_id, title
+  └─ session_agents → [(agent_id, cli_session_id, pid, status), ...]
+            ↑
+            session 创建时从 channel.members 快照而来
+
+Message
+  ├─ session_id
+  ├─ from_kind: 'user' | 'agent'
+  ├─ from_agent_id (nullable, from_kind='agent' 时填)
+  ├─ from_user_id  (nullable, v2 多用户用，v1 implicit local user)
+  ├─ content, seq, created_at
+```
+
+### 2.2 Host
+
+| 字段 | 含义 |
+|------|------|
+| `id` | 自生成 |
+| `kind` | `computer` \| `sandbox` |
+| `name` | 给用户看的标识，computer 默认 = `os.hostname()` |
+| `metadata` | JSON：OS、架构、CPU、sandbox URL 等 |
+
+**为什么需要**：agent 必须知道自己跑在哪。v1 只有 1 个 computer host（本机），但模型层为 v2 sandbox / 多机预留。
+
+### 2.3 Agent
+
+| 字段 | 含义 |
+|------|------|
+| `id` | 自生成 |
+| `host_id` | 该 agent 跑在哪个 host 上 |
+| `name` | 用户起的（"claude-planner"、"codex-reviewer"）|
+| `runtime` | `claude` \| `codex` \| `cursor` \| `gemini` |
+| `model` | 可选，特定模型（如 `sonnet-4-6`）|
+| `system_prompt` | 可选，定义这个 agent 的"身份/角色"（"你是规划师，专注架构设计"）|
+
+**为什么需要 Agent 一等公民**：
+- 同一个 runtime 可以有多个 agent 实例，每个有不同身份（claude-planner vs claude-debugger）
+- Agent 是跨 channel 复用的对象（一个 claude-planner 可以加入 N 个 channel）
+- Agent 持有 memory（见 §4），memory 跨 channel 累积
+
+**为什么 workspace 不在 agent 上**：agent 是身份，workspace 是任务上下文。一个 agent 可以在 0 / 1 / N 个 workspace 上工作。绑死违反这个直觉。
+
+### 2.4 Channel（含 DM）
+
+| 字段 | 含义 |
+|------|------|
+| `id` | 自生成 |
+| `name` | UNIQUE 字符串（DM 的 name = `@<agent.name>`）|
+| `kind` | `channel` \| `dm`（默认 `channel`）|
+| `description?` | 可选 |
+| `workspace_path` | NOT NULL，未填则后端默认生成 |
+| `workspace_host_id` | v1 implicit |
+| `git_url?` | 纯元数据，不自动 clone（v1）|
+| 关联：channel_members | 该 channel 内的 agent 成员 |
+
+**Workspace 生成规则**（创建 channel 时）：
+
+```ts
+if (!input.workspace_path) {
+  workspace_path = path.join(
+    os.homedir(),
+    '.silverhand',
+    'workspaces',
+    sanitize(channel.name),    // channel.name 是 UNIQUE，可作目录名
+  );
+}
+fs.mkdir(workspace_path, { recursive: true });
+```
+
+**为什么 workspace 一定要有（不允许 nullable）**：agent CLI 必须有 cwd。"纯聊天"场景对应 workspace 是个空目录，不是没目录。后端始终保证 `workspace_path` 非空，UI 上"留空"只是触发自动生成。
+
+**DM 是特殊 channel**：
+- `kind = 'dm'`
+- 必须恰好 1 个 agent 成员
+- name 自动 = `@<agent.name>`，受 UNIQUE 约束保护"一个 agent 同一时间只有一个 DM"
+- workspace_path 同样可选，规则一致
+- UI 上 DM 单独列在 `DIRECT MESSAGES` section，跟 `CHANNELS` 平级
+
+**为什么 DM 不另起一套表**：
+- 数据 + 路由 + UI 完全可以复用
+- 用户心智上"DM = 1 对 1 的频道"是对的
+- 只多一个 `kind` 字段就能区分
+
+**Channel 的 workspace_host_id 隐含约束**：channel 的所有 member agent 必须跑在同一个 host 上（即 `workspace_host_id`），否则跨机器 cwd 不通。v1 只有 1 host 自动满足。
+
+### 2.5 Session（多 agent 协作单元）
+
+| 字段 | 含义 |
+|------|------|
+| `id` | 自生成 |
+| `channel_id` | 所属 channel |
+| `title` | 用户起的（"修复 login bug" / "v2 架构讨论"）|
+| `status` | session 自身的状态聚合 |
+| 关联：session_agents | 该 session 启动了哪些 agent CLI 进程 |
+
+**为什么 session 上没有 agent_id**：因为一个 session 对应**多个** agent。Session 是一次"协作回合"，不是"1v1 对话"。
+
+**session_agents 表**：
+
+| 字段 | 含义 |
+|------|------|
+| `session_id` | |
+| `agent_id` | |
+| `cli_session_id` | 底层 CLI 的 session id（resume 用）|
+| `pid` | 当前活进程 PID（idle 时 NULL）|
+| `status` | `starting` / `active` / `idle` / `crashed` |
+| `joined_at` | |
+
+**session.members = channel.members 的快照**：
+- session 创建那一刻，复制当时的 channel.members 进 session_agents
+- 之后 channel 加 / 减成员**不影响**已有 session（避免 mid-session 改 spawn 集合）
+- 只影响新建 session
+
+**为什么快照而非 live join**：mid-session spawn / kill agent 进程 + system prompt 注入 + 历史消息回放 = 一坨工程复杂度，价值不高。要新成员就新开 session。
+
+### 2.6 Message
+
+| 字段 | 含义 |
+|------|------|
+| `id`, `session_id`, `seq`, `created_at` | 标准 |
+| `from_kind` | `user` \| `agent` |
+| `from_agent_id` | nullable，`from_kind='agent'` 时填 |
+| `from_user_id` | nullable，v2 多用户区分发送者；v1 implicit 单用户 |
+| `content` | 文本 |
+| `metadata` | JSON：tool_call 引用、附件、引用消息等 |
+
+**消息是 session-scoped**：换 session 就是另一条对话流。Channel 不直接持消息。
+
+---
+
+## 3. 多 agent 协作机制
+
+### 3.1 消息分发（stdin push 为主，HTTP pull 为兜底，对齐 slock-ai）
+
+> **调研更正**（2026-05-01，覆盖 04-30 的初版结论）：早期我把 `check_messages` 的 tool 描述当成了主路径，写成了"纯 pull"。实际重读 daemon 源码（`chunk-RNEIFBXW.js` line 4540-4640 + gated steering 状态机 line 4310-4400）后确认：**slock 是 push 为主，pull 为兜底**。下面写新版，旧版废弃。
+
+#### 三档投递梯度（同一 stdin 通道，不同 payload 复杂度）
+
+| 档位 | Payload 形态 | Agent 视角 | 触发场景 |
+|------|------------|----------|---------|
+| **A. Push 完整内容** | 把整条新消息包成伪 user message 写 stdin：`{"type":"user","message":{"content":[{"type":"text","text":"New message received: <发件人><正文>...Respond as appropriate."}]}}` | 直接读到完整消息内容，立即 reply | direct mode + inbox 非空 + driver.encodeStdinMessage 成功 |
+| **B. Push 短提示** | 写一行 ASCII：`[System notification: You have N new messages waiting. Call check_messages to read them when you're ready.]` | 读到提示后**自己调 `check_messages` MCP 工具**走 HTTP 拉正文 | 上面 A 的 encode 失败 / driver 不支持 direct push / 边缘 case |
+| **C. 不 push** | 什么都不写到 stdin | 消息留 inbox，等下次 spawn 时拼进 initial prompt，或 agent 自发 check | agent 进程不在跑 / Claude gated 模式但当前不在 safe boundary |
+
+**关键理解**：A 和 B **共用 stdin 通道**，区别只是 payload 复杂度。"fallback" 不是切换到别的通道，是**降级 payload 复杂度换可靠性**——A 失败的可能原因（formatting、字符转义、长度、driver 对 busy 模式只支持简单字符串），B 一行 ASCII 几乎不会失败。完整内容 push 的好处是**省一次 HTTP round-trip**（agent 不需要再调 check_messages 拉正文），所以是默认快路。
+
+#### Claude 的 gated steering 特例
+
+Claude Code 在 turn 进行中，stdin 不是任何时刻都能塞东西的（会污染 thinking block 等）。slock 维护一个 `gatedSteering` 状态机：
+
+- 跟踪 `outstandingToolUses`（当前未完成的 tool call 数）和 `compacting`（是否在压缩上下文）
+- "Safe boundary" = `outstandingToolUses === 0 && !compacting`，即**两次 tool call 之间**
+- 消息进 inbox 时，**不立即 push**；状态机检测到 safe boundary 时调 A 档一次性把整批 inbox push 出去
+- 没到 boundary 时（gated 分支 return），消息留 inbox 等下个 boundary
+
+所以 `busyDeliveryMode` 的 `gated`（Claude）vs `direct`（codex 等）不是"全推/降级推"，而是"**等机会推/立刻推**"。两者最终都走 A 档。
+
+#### `check_messages` 工具的真实定位
+
+不是 agent 周期 poll 用的（slock 的 system prompt 明示 `New messages arrive automatically — you do not need to poll or wait for them`），而是：
+
+1. **B 档的拉取动作**：agent 收到短提示后用它拉正文
+2. **agent 主观觉得"我可能漏看了"的安全网**：长 tool chain 中段用户提了关键问题但还没到 safe boundary，agent 可以主动 check
+3. **piggyback channel**：每次 `send_message` 的响应里也带 `recentUnread`——agent 发完顺便看一眼新消息
+
+#### 我们的 v1 实现
+
+**用户/其它 agent 发消息**：
+
+1. Backend INSERT `messages` 行（`from_kind` ∈ `user` / `agent` / `system`）
+2. Backend 把消息 ID append 到 session 内**每个其它 agent** 的 inbox 队列（SQLite 表 `agent_inboxes`，task #13 落实）
+3. 对每个 agent，根据 driver 模式投递：
+   - **direct（codex 等）**：立刻调 A 档 push
+   - **gated（Claude）**：进 gated 状态机等 safe boundary，到了再 A 档 push
+   - agent 不在跑：不 push，等 spawn
+
+**Agent 发消息**（通过 `send_reply` MCP 工具）：
+
+1. chat-bridge 启动参数 `--session-id` + `--agent-id`，backend 知道 from 谁
+2. POST `/internal/agent/<agentId>/send` → 写 messages 行 + 分发给 session 内其它成员（同上 push 流程）
+3. 响应体 piggyback 该 agent 自己 inbox 的未读
+
+**Agent 从"睡"到"醒"**：
+
+- Agent 进程不在跑时，新消息只写 messages + inbox，不 spawn
+- 当 session 被打开 / 用户指名某 agent / 用户指定 "wake all members" 时，SessionManager 才 spawn
+- spawn 时把当前未 ack 的 inbox 拼进 initial prompt 一次性 stdin 灌入（C 档的延迟交付）
+- 之后回到 A 档实时 push
+
+**v1 不实现 B 档**。失败处理策略：A push 失败 → 重试一次 → 仍失败则记日志 + 进程级 stop 重新 spawn（C 档延迟交付兜底）。等真碰到 driver encode 不稳的 case 再补 B。
+
+#### 已知代价
+
+- **Agent 在长 tool chain 中段不可达（Claude）/ 必须等当前一步结束（其它）**：这是 CLI turn 模型的硬限制，任何分发协议都解决不了。用户想"立刻打断"必须走 §3.2 的打断通道，不是消息通道。
+- **gated 状态机调试复杂**：Claude 的 safe boundary 检测涉及 thinking block / compaction / tool call 嵌套，slock 都遇到过 bug（源码中有 `toolBoundaryFlushDisabled` 应急开关）。我们抄实现时把这套状态机一起抄，遇到问题先 fallback 成 "等 turn 结束再投递"。
+
+### 3.2 打断（soft + hard 两层）
+
+UI 提供两个不同语义的按钮 / 快捷键，背后走不同机制：
+
+#### Soft：追加新指令打断当前思路
+
+场景：用户看到 agent 走偏，想"等等，换个方向"。不希望 agent 完全停，希望它把新指令并进上下文继续推进。
+
+- **Claude**：走 §3.1 的 A 档 push（实际就是 gated steering）。Claude 内部到 safe boundary 时会读到追加的 user message，下一步 reasoning 就会考虑新输入。
+- **Codex 等 direct mode**：直接 stdin write 一条新 user message，agent 当前一步结束就读到。
+- **本质**：跟"用户追加一条普通消息"完全相同的代码路径，只是 UI 上长得像"打断"。
+
+#### Hard：终止当前 turn
+
+场景：用户认为 agent 完全跑偏，要立刻停下，不接受任何 partial output。
+
+- **Claude（首选）**：走 control protocol —— 往 stdin 写 `{"type":"control_request","request":{"subtype":"interrupt"}}`，Claude 立即终止当前 turn，输出 `turn_end` 事件，进程不退出
+- **Claude（fallback）/ Codex（待确认）**：走进程级 SIGTERM → 5s 内不退就 SIGKILL（slock 的 `stopAgent` 实现，`chunk-RNEIFBXW.js` line 3766-3780）
+- **Hard 打断后**：进程退出 / turn 终止，session_agents.status 变 `idle`，inbox 中尚未投递的消息保留，下次 spawn 时通过 C 档 initial prompt 重新交付
+
+#### Codex 的 hard 打断（开放）
+
+Codex CLI 有没有等价的 control_request interrupt？slock 源码里对 codex 没看到这条，似乎 stop 直接走 SIGTERM。这块在做 codex driver 时验证；目前先按"只有 SIGTERM"实现。
+
+### 3.3 防回声 / 反无限对话
+
+**调研结论**（2026-04-30）：slock-ai **没有任何机械防回声机制**，完全靠 agent system prompt 自律。
+
+我们 v1 同款策略：
+
+- System prompt 明示规则（见 §4.7）
+- 不强制 @mention
+- 不限制连续 agent reply 轮数
+- 信任 prompt 引导，跑起来出问题再加机械限制
+
+**v1 兜底**（如果实际跑出失控）：每个 session 设 turn 上限——例如连续 N 个 agent reply 没用户消息就强制 pause，等用户介入。**不预先实现**，观察后再说。
+
+### 3.4 chat-bridge 启动参数
+
+每个 (session, agent) 对应一个 chat-bridge 子进程：
+
+```
+chat-bridge \
+  --session-id <session.id> \
+  --agent-id   <agent.id> \
+  --server-url http://127.0.0.1:<port> \
+  # auth-token via env AGENT_HUB_AUTH_TOKEN
+```
+
+> 已废弃：之前提的 `--auth-token` 走 argv。v1 决策走 env，避免 `ps` 看到。
+
+### 3.5 上下文压缩处理（observer 角色，不自己压）
+
+> **调研结论**（2026-05-01，slock-ai daemon `chunk-RNEIFBXW.js` line 4470-4500、line 4254-4282、line 1045-1052）：slock 不做任何 server-side 上下文压缩，压缩完全是各 agent CLI 内部行为（model 接近上下文窗口上限时自动触发）。slock 只做 observer + 副作用协调。**v1 同款。**
+
+#### slock 的具体做法
+
+**Driver 解析压缩事件**（每个 driver 各识别自己 runtime 的事件，统一映射成 `compaction_started` / `compaction_finished`）：
+
+- Claude：JSON-RPC `subtype: "status", status: "compacting"` / `subtype: "compact_boundary"`
+- Codex：`case "contextCompaction"`
+- Kimi：`StepBegin/CompactionBegin` / `CompactionEnd`
+
+**SessionManager 收到事件后做四件副作用**：
+
+1. **广播 UI**：`broadcastActivity('working', 'Compacting context')`，让用户看到状态
+2. **暂停 stdin push**：`gatedSteering.compacting = true` —— 压缩期间新消息进 inbox 不投递（不打扰 agent）；`compaction_finished` 后恢复，inbox 等下个 safe boundary 一次性 flush
+3. **Trajectory 落盘**：`flushPendingTrajectory(agentId)` —— 把待写的观察日志先 sync，免压缩中崩溃丢
+4. **Watchdog**：`COMPACTION_STALE_MS = 5 * 60_000` —— 5 分钟超时不报错，只 broadcast `"still running, no finish event observed"`，UI 给状态显示
+
+#### 跨 agent 不协调
+
+N 个 agent 进程独立运行，各有自己的 context window，独立触发压缩。slock 不做跨 agent 同步。一个 channel 里 claude 在压、codex 在工作、gemini idle —— 三者互不干扰。
+
+#### MEMORY.md 是压缩的"安全网"（关键设计）
+
+slock 不信任 model 内置压缩能无损保留所有信息（合理——压缩本质损失性）。它在 system prompt 里强力要求 agent 把"恢复所需的一切"写进 MEMORY.md，并保证：
+
+- 启动时第一件事就是读 MEMORY.md
+- 压缩后第一件事也是重读 MEMORY.md（这是 model 自己的行为，slock 靠 prompt 强化）
+
+这把 "压缩损失" 问题转化成了 "agent 自律维护 MEMORY.md" 问题。**§4.7 平台 prompt 模板里必须有 Compaction safety 段落**——这是整套压缩方案能 work 的前提。
+
+#### 不压缩 chat history（messages 表）
+
+slock 完全不动 messages 表。投递过的消息留在 db 里供 history 检索。压缩 *消息事实层* 是反模式——压缩的是 *agent context window 内的 LLM 历史*，那是 agent 自己的私事。**v1 同款：messages 表是 append-only 事实层，永不裁剪。**
+
+#### v1 实现要点
+
+- Driver 接口加 `parseLine` 输出 `compaction_started` / `compaction_finished` 事件类型（task #10）
+- SessionManager 把这两个事件接到 gated steering 状态机的 `compacting` 标志（task #11）
+- 5 分钟 watchdog 抄过来，超时只广播状态，不强行 kill
+- DB schema 不需要为压缩加任何字段（messages append-only，trajectory 是 driver 调试日志，可后期再说）
+
+
+### 3.6 子 session（child session）—— 取代 slock thread 的真隔离方案
+
+#### 动机
+
+slock 的 thread 只是**消息的服务端归类 + 投递过滤**——参与 thread 的 agent 看到的是混合上下文（thread 消息和其他 channel 消息穿插在同一个 CLI conversation 里），thread 之间没有真正的上下文隔离。这是 slock 在"agent 单进程订阅多 channel"模型下的必然妥协。
+
+我们既然走 **session-主导 = 每个 session 独立 CLI 进程独立上下文**，就有条件做到 slock 做不到的事：**让 agent 主动 spawn 一个真正隔离的子讨论**。
+
+#### 核心规则
+
+- **谁能 spawn**：agent 通过 MCP 工具 `spawn_child_session`；human 通过 UI 在某条消息上点 **Thread**（详见 [`app-layout.md` §7](./app-layout.md#7-thread--child-session)）。两条路径产物相同（一行 child `sessions`），区别在 `spawned_by_agent_id`：agent spawn 非 NULL，human Thread 为 NULL，且只有 human Thread 会写入 `thread_anchor` 系统消息把 child 跟原消息绑定。
+- **拉谁进来**：必须从父 channel 的 member pool 里选（防止跨 channel 滥拉）
+- **嵌套深度**：**硬限 1 层**，子 session 不能再开子 session（写死，不开放配置）
+- **Workspace**：子 session 共享父的 `workspace_path`（同 channel），CONSENSUS / agent memory 自然继承
+- **DB**：sessions 表加 `parent_session_id` / `spawned_by_agent_id` / `closed_at` / `close_summary`，复用现有表结构，不另开表
+- **Inbox**：子 session 自己一份 `agent_inboxes`（按 session 维度切，跟普通 session 一致）
+
+#### MCP 工具：spawn_child_session
+
+```ts
+spawn_child_session({
+  title: string,             // 子 session 标题
+  members: AgentId[],        // 拉哪些 agent 进来（必须 ⊆ 父 channel members）
+  context_summary: string,   // 父 session 中跟新话题相关的浓缩信息（agent 自己写）
+  initial_prompt: string,    // 给子 session 第一个 agent 的开场指令
+})
+→ { child_session_id: string }
+```
+
+后端落库：
+1. `INSERT INTO sessions` 带 `parent_session_id` + `spawned_by_agent_id`
+2. 拉 members 进 `session_agents`
+3. 写第一条 message：`from_kind='system'`, content = `"Inherited context from parent session '<父 title>': <context_summary>"`
+4. 写第二条 message：`from_kind='agent'`, `from_agent_id=<spawning agent>`, content = `<initial_prompt>`
+5. 不主动 spawn 子 session 进程——等第一个 member agent 被 wake 时按 §3.1 spawn
+
+**关键设计：context_summary 必须由 agent 自己写，不由后端自动塞父 session 最近 N 条消息。**
+
+理由：
+- N 条消息没有判断力（容易塞一堆无关讨论）
+- 强制 agent 写 summary 是 forcing function——逼它想清楚 "我为什么要分出去 / 子 session 真正需要知道什么"，而不是冲动 fork
+- 这个 summary 同时是 close_session 的对照基准（"你当初要解决 X，现在解决了吗"）
+
+#### 跨 session 通信：parent ↔ child 双向
+
+可达性规则——**当前 session 树上相邻一跳**：
+
+```
+对一个 session S，可以向：
+- self（S 本身）             ← 现有 send_message
+- parent(S)                  ← 上行
+- children(S) 中的任一个     ← 下行
+
+不可达：
+- 兄弟 session（同 parent 下另一个子）
+- 跨 channel 的任何 session
+- 既然只允许 1 层嵌套，孙辈/祖辈本来不存在
+```
+
+工具形状（统一到 send_message，不拆三个工具避免 LLM 误用）：
+
+```ts
+send_message({
+  target?: 'self' | 'parent' | { child_session_id: string },
+  // 省略 = self（current session）
+  content: string,
+})
+```
+
+后端校验 target 在可达集合内，否则返回结构化错误 `target not reachable from current session`。
+
+Human 侧不需要"target"概念——UI sidebar 树状显示父子，user 切 tab 选哪个 session 就往哪个发，物理上等价。
+
+#### 关闭：close_session 与回流
+
+子 session 通过 `close_session` 终止：
+
+```ts
+close_session({
+  summary: string,
+  posted_to_parent?: boolean,  // 默认 false → 自动投 summary 到父；true → 跳过自动投
+})
+```
+
+后端行为：
+1. `UPDATE sessions SET closed_at = ?, close_summary = ?`
+2. 如果 `!posted_to_parent` → 往父 session 投一条 `from_kind='system'`：`"Sub-session '<子 title>' closed by @<agent>. Summary: <summary>"`
+3. 终止子 session 进程
+
+**send_message + close_session 的分工心智模型**：
+
+```
+┌─ 子 session 进行中 ──────────────────────────────────┐
+│  send_message(target='parent', ...)                 │  ← 中途主动汇报
+│    用途：blocked、发现父需立刻知道的事、求决策     │     ad-hoc、可选、随时
+├─ 子 session 结束时 ──────────────────────────────────┤
+│  close_session(summary)                             │  ← 最终结论
+│    用途：固化"这件事的结果"                         │     强制、一次、结构化
+└──────────────────────────────────────────────────────┘
+```
+
+不做自动去重逻辑（"判断 agent 最近的 send 算不算总结" 是脆的）。给 agent 显式 flag `posted_to_parent`，让它自己决定。System prompt 里写明：「如果你已发过最终结论给 parent，调用 close_session 时设 posted_to_parent=true 避免重复；否则保持 false 让系统自动投 summary」。
+
+#### 边角 case
+
+| 场景 | 处理 |
+|------|------|
+| Parent close 但 child 还没 close | **拒绝**（"close all children first"），避免孤儿 child |
+| Child 已 close，parent 还想发消息 | 拒绝（closed session 只读）|
+| Parent 给 child 发消息时 child 进程挂了 | 走 §3.1 inbox 流程，下次 spawn 时 inject |
+| Parent crash 重启后 child 还在跑 | child 不受影响（独立进程），parent 重启后能继续向 child 发 |
+
+#### 防回声 / 防 ping-pong
+
+子↔父通信适用 §3.3 防回声原则——靠 system prompt 自律：
+
+1. **Parent → Child**：只在"补充关键信息 / 改方向 / 紧急叫停"时下行。日常情况让 child 跑完。
+2. **Child → Parent**：只在"被卡住需要决策 / 发现 parent 必须立刻知道"时上行。日常进度藏着，最终用 close_session summary 一次性交付。
+
+System prompt 必须写明：**频繁双向通信通常是 spawn 决策本身有问题**——如果你跟 parent 来回 5 轮以上，说明这事根本不该 spawn 出去，应该回到 parent session 一起讨论。
+
+#### 限额配置（v1 默认全不限，配置存在即启用）
+
+`server-config.json` 加一段：
+
+```jsonc
+{
+  "child_sessions": {
+    "max_concurrent_per_parent": null,   // null = 不限；填数字 = 单个父 session 下活跃 child 数上限
+    "spawn_cooldown_seconds": null,      // null = 不限；填数字 = 同一 agent 连续 spawn 的最小间隔（秒）
+    "max_depth": 1                        // 硬编码，配置无效（写死避免嵌套语义复杂化）
+  }
+}
+```
+
+设计取舍：
+- `max_concurrent_per_parent` 防"agent 一次 spawn 8 个并行子任务"导致进程 + token 爆炸
+- `spawn_cooldown_seconds` 防 agent 在同一 turn 里连开多个（通常是规划失误）
+- v1 默认全不限——加 telemetry 记录"单 turn spawn 数 / 单父并发数"，观察实际行为再决定阈值
+- 超限的 spawn 请求返回结构化错误 `child session limit reached: ...`，agent 看到自己决定怎么办
+
+#### v1 实现要点
+
+- DB migration：sessions 加 4 列（`parent_session_id` `spawned_by_agent_id` `closed_at` `close_summary`），见 task #13
+- chat-bridge 加两个工具：`spawn_child_session` / `close_session`；`send_message` 加 `target` 参数
+- backend：spawn 校验 members ⊆ 父 channel + 限额；close 校验"无活跃 child"
+- SessionManager：跨 session 投递（target=parent/child 时路由到对应 session 的 inbox）
+- UI：SessionView tabs 改成树状（子 session indent + 父名前缀，如 `↳ refactor auth (parent: API redesign)`）；消息右键 "Branch into sub-session"
+- System prompt（§4.7）增加段落：何时 spawn / 何时 send_message_to_parent / close_session 礼仪 / 防 ping-pong
+
+
+## 4. Memory / Notes / Consensus —— 三层知识
+
+### 4.1 三层结构（核心思想：分层 + DM 为塑造层）
+
+| 层级 | 内容 | 谁拥有 | 谁可写 | 通过什么场景塑造 |
+|------|------|--------|--------|-----------------|
+| **L1: Agent Global** | agent 的"出厂设定" + 跨 channel 全局认知 | agent | 该 agent（在 DM 中）+ 用户（管理界面）| **DM** |
+| **L2: Per-Channel Per-Agent Instance** | 该 agent 在该 channel 内的 instance 状态（角色 + 局部知识）| (channel, agent) | 该 agent 在该 channel 工作时 | **Channel onboarding + 该 channel 内的对话** |
+| **L3: Channel Consensus** | 该 channel 内**所有 agent 都必须重视**的少数几条关键共识 | channel | 所有 channel member agents | **Channel 内多 agent 对话** |
+
+> **关键设计**：L2 是 L1 的**拷贝**（channel 创建时一次性 seed），不是 symlink、不是引用。这样 channel 之间相互独立——claude 在 channel A 当规划师、在 channel B 当 reviewer，两套 system_prompt 完全分离。
+>
+> **DM 是塑造 L1 的专用场所**：DM 的 cwd **直接** = `~/.silverhand/agents/<id>/`（agent 全局 home），所以在 DM 里 agent 对自己 MEMORY 的更新等于更新 global，未来新 channel 继承到这个新版本。
+>
+> **CONSENSUS 必须保持精炼**：L3 不是聊天记录摘要、不是 todo、不是任何 agent 的个人笔记。它只容纳**该 channel 内所有 agent 都需要遵守的少数关键约定**——例如"本项目只用 TypeScript，不写 JS"、"所有新 API 必须由 codex 写测试前端才能调用"这种。
+>
+> - 判断标准：**"这条如果 agent 不知道，会产生严重后果吗？"** 否 → 进自己的 L2 MEMORY，不要进 CONSENSUS。
+> - 字数上限（硬性自律）：建议 < 2KB。超过就是信号——要么内容不够关键需要精简，要么应该拆进各自 L2。
+> - 平台层 system prompt 会明示这条标准，agent 应在动手写之前自问一遍。
+> - CONSENSUS 不是堆砌地"什么都往里放"的安全网。宁缺毋滥。
+
+### 4.2 文件存储完整图
+
+> 所有 silverhand 应用数据统一放 `~/.silverhand/`，不走 Electron 的 userData。这样 (1) 用户能直接 `cd` 进去看；(2) 跨 Electron 重装 / 切机器都能保留；(3) 跟 agent CLI 自己的 `~/.claude/` `~/.codex/` 形成对称结构。
+
+```
+~/.silverhand/
+├─ silverhand.db                 ← 主数据库
+├─ server-config.json            ← embedded server URL + auth token（mode 0600）
+├─ agents/
+│  └─ <agent-id>/                ← L1：agent 全局 home（真实文件，唯一权威源）
+│     ├─ identity.json           ← {name, runtime, model, host_id}
+│     ├─ system_prompt.md        ← 全局身份模板
+│     ├─ MEMORY.md               ← 全局记忆（agent 在 DM 中迭代）
+│     └─ notes/                  ← 全局笔记
+└─ workspaces/                   ← channel 自动生成 workspace 的默认根目录
+   └─ <sanitized-channel-name>/
+      └─ ...（同 <workspace> 结构）
+
+<workspace>/                     ← channel.workspace_path
+├─ <用户的代码 / 项目文件>...
+└─ .silverhand/
+   ├─ CONSENSUS.md               ← L3：channel 关键共识（精炼、<2KB）
+   └─ agents/
+      ├─ <agent-id>/             ← L2：per-channel 拷贝
+      │  ├─ system_prompt.md     ← channel 内的角色定义（可与 L1 不同）
+      │  ├─ MEMORY.md            ← channel 内累积的 agent 记忆
+      │  └─ notes/
+      └─ <agent-id-2>/...
+
+<os.tmpdir()>/silverhand/<session-id>/     ← 每次 spawn 的运行时临时文件
+├─ system-prompt.md              ← 平台 + L2 + session ctx 合成
+└─ mcp.json                      ← chat-bridge 配置
+```
+
+**为什么 `<workspace>/.silverhand/` 下没有 `sessions/` 目录**：session 的 system-prompt + mcp.json 是每次 spawn 临时合成的、只在 chat-bridge 生命周期内有用，完全可以从 `channel.members + 当前 L2` 重算。写进 workspace 会污染用户目录（git status 看到、文件浏览器看到）、session 多了会堆积成一大堆无关内容。改放 OS tmp（例如 `/tmp/silverhand/<session-id>/`），spawn 前写、进程退出清，出错残留也由 OS 定期清理。**真正持久化的是 SQLite 里的 session / messages 行**——文件系统只负责跑起来。
+
+**那既然可以重算，为什么还落盘？** 不是为了我们自己持久化，而是因为 **agent CLI 的 argv 接口强制要求文件路径**：
+
+- `mcp.json` 必须是文件（`claude --mcp-config <path>` / codex 同类参数都只收路径，没有 inline 选项）
+- `system-prompt` 为了跨 runtime 兼容，统一走 `--system-prompt-file <path>`（claude 支持 inline `--system-prompt`，但不是所有 runtime 都有）
+- 落盘还顺便提供一个调试锚点：agent 行为异常时可以直接 `cat` 出实际喂进去的 prompt
+
+换句话说，这些 /tmp 文件是**"给 child process 传参的一次性媒介"**，不是 silverhand 的状态。生命周期 = 从 spawn 前写入到进程退出，退出后残留只等 OS 清理。`os.tmpdir()` 的语义（跨重启不保证、定期清）刚好匹配。
+
+**DM 例外**：DM channel 的 `workspace_path` **直接** = `~/.silverhand/agents/<agent-id>/`。也就是说 DM 没有自己的 `<workspace>/.silverhand/agents/<id>/` 嵌套——agent 在 DM 中的 cwd 就是它的 global home，所有读写都直接落到 L1。DM 也没有 CONSENSUS.md（单 agent + 单用户，"共识"就等于 memory）。
+
+### 4.3 Channel 创建后的对话式 onboarding（关键流程）
+
+> **设计原则**：onboarding 不是表单，而是 channel 内的第一段对话。这跟整个 app 的"对话即一切"理念一致——用户对 agent 角色的塑造，本身就是一种"跟 agent 说话"。
+
+#### 创建步骤（无表单 onboarding）
+
+用户填完 channel 基础信息（name + 可选 description + 可选 workspace_path + 选成员 agents）点确认后，后端原子性完成：
+
+1. INSERT channel 行
+2. 计算 + mkdir workspace_path（未填时按 §2.4 规则生成）
+3. mkdir `<workspace>/.silverhand/agents/` + 建空 `CONSENSUS.md`
+4. 对每个成员 agent：把 L1 (`~/.silverhand/agents/<id>/`) **全量拷贝**到 L2 (`<workspace>/.silverhand/agents/<id>/`)
+5. 自动建一个 session（title = `Onboarding`），spawn 所有 member agent 的 chat-bridge
+6. Backend 自动 INSERT 一条 `from_kind='system'` 的 message 进这个 session（platform 写的"开场白"），所有 agent 通过 `check_messages` 收到
+
+> 第 6 步要求 message 表支持 `from_kind='system'`。Schema 中加这个枚举值。
+
+#### 系统 onboarding 消息模板
+
+```markdown
+Welcome to channel **<channel.name>**.
+
+Members joining this channel:
+- **<agent-A.name>** (<runtime>) — currently configured as:
+  > <agent-A 的 L1 system_prompt 第一段，截断 200 字符>
+  Memory: <MEMORY.md 字数 / 最近修改时间，或 "empty">
+- **<agent-B.name>** (<runtime>) — ...
+
+Each agent has been seeded with their global identity. The user can now
+talk to you to refine your role for *this* channel — e.g. "claude, in this
+channel focus on architecture review only" / "codex, your job here is to
+write tests".
+
+When the user gives you per-channel role guidance, update your own
+`./.silverhand/agents/<your-id>/system_prompt.md` (use Write/Edit). When
+they teach you something durable, append to your MEMORY.md.
+
+There is no "onboarding done" signal — when the user starts asking you to
+work, just start working.
+```
+
+#### 流程要点
+
+- **没有"完成"状态**：onboarding session 跟普通 session 没本质区别，第一条消息是 system 而已。用户什么时候开始下达正经任务，onboarding 就什么时候自然结束。
+- **角色塑造由 agent 自己写文件**：用户说"你做架构师"，agent 用 Write 工具改 L2/system_prompt.md。Backend 不解析、不强制 JSON 格式。
+- **用户可以跳过**：如果用户对默认设定满意，直接开始问问题就行——agent 该 reply 还是 reply。
+- **角色反转例**：用户在 DM 中把 claude 塑造成"通用规划师"（写入 L1）。在 channel `react-frontend` onboarding 时，对 claude 说"你这里只做前端架构"——claude 自己改 L2.system_prompt.md。在 channel `code-review-pool` onboarding 时，对 claude 说"你这里只做严格代码 reviewer"——又一份独立 L2。三套 prompt 互不影响。
+
+### 4.4 L1 ↔ L2 同步（仅一个方向、一个时机）
+
+| 方向 | 时机 | 触发方式 |
+|------|------|---------|
+| **L1 → L2 全量** | Channel 创建那一刻 | 自动 |
+| **隐式自动同步** | 不存在 | —— |
+| **重置 / 提升** | 走对话——用户在 DM 中跟 agent 说"忘掉你在 channel X 学的"或"把你在 channel X 的设定记到 global"，agent 自己执行文件操作 | 不需要专门 UI |
+
+DM 不参与同步——DM 直接操作 L1（cwd = global home）。
+
+### 4.5 .silverhand/ 目录约定
+
+```
+<workspace>/.silverhand/
+├─ CONSENSUS.md             ← L3（精炼、所有成员都重视的关键共识）
+└─ agents/<id>/             ← L2（DM 中此层不存在，cwd 就是 L1）
+   ├─ system_prompt.md
+   ├─ MEMORY.md
+   └─ notes/
+```
+
+> session 级的临时文件（每次 spawn 合成的 system-prompt + mcp.json）放 `<os.tmpdir()>/silverhand/<session-id>/`，见 §4.2。不进 workspace。
+
+### 4.6 不引入 memory / consensus MCP 工具
+
+> 设计决策：**不引入** memory-related MCP 工具。
+>
+> 理由：所有 coding agent CLI 都已自带 Read/Write/Edit 文件工具。再加一层 MCP 抽象只增加复杂度（MCP 调用 → backend HTTP → 写文件），且语义不清。slock-ai 也是同样选择（调研于 2026-04-30）。
+
+### 4.7 System prompt 合成机制
+
+每次 SessionManager 启动一个 (session, agent) 的 chat-bridge 时，合成最终的 system prompt 写到 `<os.tmpdir()>/silverhand/<session-id>/system-prompt.md`（不写进 workspace，避免污染用户目录），agent CLI 通过 `--append-system-prompt`（或类似机制）拉入。合成逻辑：
+
+```
+[平台层 prompt — silverhand 注入的协作教育，包含 Critical rules / Startup sequence / Compaction safety / Etiquette]
+  ↓
+[L2 层 prompt — 该 channel 内该 agent 的 system_prompt.md（agent 角色定义）]
+  ↓
+[Session 上下文 — channel name、其他 member 列表、CONSENSUS.md 路径提示]
+  ↓
+[Initial inbox dump — 如果 spawn 时有未 ack 消息，附在末尾，见 §3.1 C 档]
+```
+
+#### 平台层 prompt 模板（基于 slock 全文研读，2026-05-01）
+
+> 要点：slock 的 system prompt 不是"几条提醒"，而是一份完整的**操作手册**——明示了 agent 必须遵守的关键规则、启动后必须执行的步骤、压缩安全策略、协作礼仪、记忆管理结构。我们要把同等覆盖度的内容塞进平台 prompt，不能只丢一句"互相礼貌点"。
+
+```markdown
+You are <agent.name>, an AI agent in silverhand — a desktop hub where
+multiple coding agents collaborate with the user in shared sessions.
+
+## Who you are
+
+Your workspace and your MEMORY.md persist across turns. You will be
+started, put to sleep when idle, and woken up again when there is new
+work. Think of yourself as a colleague who is always available,
+accumulates knowledge over time, and develops expertise through
+interactions in this channel.
+
+You are in channel "<channel.name>" (kind=<channel|dm>).
+Other members in this session:
+<list of other agents with name + role hint>
+The human user is also present.
+
+## CRITICAL RULES (must)
+
+- Communicate ONLY through the `send_reply` MCP tool. Never print chat
+  content to stdout — it will not reach the user or other agents.
+- Read your MEMORY.md at session start, before doing any work.
+- When you receive `from_kind=system` messages (platform announcements),
+  treat them as informational. Don't reply unless they explicitly request
+  it (e.g. an onboarding message asking for your role definition).
+
+## Startup sequence
+
+1. Read `./.silverhand/agents/<your-id>/MEMORY.md` first. This is your
+   recovery anchor — everything you need to know about who you are in
+   this channel and what's been happening.
+2. Read `./.silverhand/CONSENSUS.md` — the channel's shared agreements
+   that bind all members.
+3. If your initial input contains a concrete incoming message, decide
+   whether it needs an early acknowledgment. If yes, send a brief one
+   via `send_reply` before deep context-gathering.
+4. Process the message(s), then reply via `send_reply`.
+5. Complete ALL the work the message implies before stopping. If it's
+   multi-step (research → code → test), do all steps, report results,
+   then stop. New messages will arrive automatically while you're alive
+   — you do not need to poll.
+
+## Workspace & Memory
+
+Your home in this channel: `./.silverhand/agents/<your-id>/`
+- `system_prompt.md` — your role definition (already loaded above)
+- `MEMORY.md` — what you've learned in this channel. The entry point /
+  index. Read at startup, update when you learn something durable.
+- `notes/` — detailed knowledge files (one per topic). Reference from
+  MEMORY.md so future-you can find them.
+
+### What to memorize (observe and record proactively)
+
+1. User preferences — how they like things done, conventions, patterns
+2. Project context — tech stack, architectural decisions, conventions
+3. Domain knowledge — terminology, best practices specific to this work
+4. Work history — decisions made and why, what worked / failed
+5. Channel context — what this channel is about, ongoing tasks
+6. Other agents — who else is here, their specialties, how to work with
+   them effectively
+
+Suggested file layout:
+- `notes/user-preferences.md`
+- `notes/project.md`
+- `notes/work-log.md`
+- `notes/<domain>.md`
+
+Update notes proactively. Don't wait to be asked.
+
+## Compaction safety (CRITICAL)
+
+Your context will be periodically compressed by the runtime to stay
+within model limits. When that happens you lose your in-context
+conversation history but **MEMORY.md is always re-read on startup and
+after compaction**. Therefore:
+
+- MEMORY.md must be self-sufficient as a recovery point. After reading
+  it, you should know who you are, what you know, and what you were
+  doing.
+- Before a long task, write a brief "Active Context" note in MEMORY.md
+  so you can resume mid-task if compaction interrupts you.
+- After completing significant work, update notes and the MEMORY.md
+  index so nothing is lost.
+- Keep MEMORY.md complete enough that compression preserves: which
+  channel this is, what's in progress, what the user has asked for, what
+  other agents are doing.
+
+## Channel consensus
+
+`./.silverhand/CONSENSUS.md` — agreements EVERY agent in this channel
+must respect. Read at startup.
+
+- Keep it minimal. Only add when (a) the whole group has actually
+  agreed, AND (b) forgetting this would cause real problems.
+- If it's only useful to you, put it in your own MEMORY.md instead.
+- If it's a passing task or todo, don't write it here.
+- Target: stays under 2KB. If it grows, prune — don't keep appending.
+
+## Multi-agent etiquette
+
+- Messages you receive carry a `from` field (user / agent name / system).
+  Use it to know who's talking.
+- Don't echo or restate what another agent already said.
+- If another agent already answered well, stay quiet unless you have
+  something genuinely new to add.
+- Respect ongoing back-and-forth: if the user is in a focused exchange
+  with one specific agent, don't barge in unless explicitly addressed.
+- Reply via `send_reply` only when you have content. Silence is OK.
+- Send brief progress updates for multi-step work ("step 2/3..."), but
+  keep them concise. Don't flood chat.
+
+## Initial role
+
+<config.system_prompt — agent's L2 role definition appended here>
+```
+
+#### DM 场景的特例
+
+DM 平台 prompt 在结构上一致，但 §"Workspace & Memory" / §"Channel consensus" 段做调整：
+
+- cwd 直接 = `~/.silverhand/agents/<your-id>/`，所有写都落 L1 global
+- 没有 channel 维度的 CONSENSUS（"共识"对单 agent + 单用户没意义）
+- 加一段说明："You are in a DM. Updates to your MEMORY.md and notes will affect your global identity in all future channels."
+
+#### 为什么平台 prompt 要这么长？
+
+可能感觉这一坨"啰嗦"。但 slock 的实际 system prompt 也是这个量级（~3-4K tokens），且每一段都有具体落地的副作用——少了哪段，agent 就会在那个维度出 bug：
+
+- 没有 Critical rules → agent 把 reply 打到 stdout 而不是 send_reply
+- 没有 Startup sequence → agent 不读 MEMORY.md，每次"失忆"
+- 没有 Compaction safety → 上下文压缩后 agent 不知道自己是谁
+- 没有 Etiquette → 多 agent 一起 reply 同一个问题，回声爆炸
+
+**v1 把 slock 的对应内容抄过来，等真跑起来发现某段多余再删。**
+
+---
+
+## 5. v1 用户操作流（最终）
+
+1. **首次启动 → 引导建第一个 Agent**
+   - "给你的第一个 AI 助手起个名字" → 选 runtime（claude / codex 等）→ （可选）写 system prompt → 保存
+   - 后端自动建 `~/.silverhand/agents/<id>/{MEMORY.md, notes/, identity.json}`
+2. **建 Channel**
+   - 表单：名称（unique）+ 描述（可选）+ 工作目录（可选，留空自动生成）+ 勾选成员（agents，至少 1 个）
+   - 提交后后端原子性完成：建 channel 行 → mkdir workspace → 建 `.silverhand/{CONSENSUS.md, agents/<id>/}` → 把每个成员 agent 的 L1 **全量拷贝**到 L2 → 自动建一个 `Onboarding` session → 自动 INSERT 一条 `from_kind='system'` 的开场白消息（见 §4.3）
+   - 用户进 channel 看到的就是已经在跑的 onboarding session，可以直接对话塑造各 agent 角色
+3. **建后续 Session**（在某 channel 内）
+   - 标题
+   - **不选 agent**——session.members 自动 = channel.members 快照
+4. **聊天**
+   - 用户消息进 messages 表，广播给所有 session_agents
+   - 每个 agent 回复 via send_reply，标记 from_agent_id，其他 agent 通过 check_messages 看到
+5. **DM**（替代流程）
+   - Sidebar `DIRECT MESSAGES` section 点 + → 选一个 agent → 自动建 `kind='dm'` channel（name=`@<agent.name>`），workspace_path 直接指向 `~/.silverhand/agents/<agent-id>/`
+   - DM 没有 onboarding 消息（cwd 就是 L1，没有"塑造本 channel 角色"的概念；要塑造就直接说话即可）
+   - 之后跟 channel 一样使用，但 agent 在 DM 中对 MEMORY/notes 的更新等于更新 global
+
+---
+
+## 6. v2 演进展望（不实现，仅声明方向）
+
+### 6.1 架构演进
+
+| v1 | v2 |
+|----|----|
+| 单 host (this machine) | 多 host：computer + sandbox（云容器、e2b 等）|
+| 单用户 implicit | 多用户：users 表 + channel_humans 关联 + message.from_user_id |
+| 无群聊邀请 | UI "邀请用户加入 channel" |
+| 无防回声机械限制 | 如有需要：连续 N 轮无人介入 → pause |
+| Embedded backend | 可切 remote backend（同 schema，加 auth middleware）|
+| 仅本地 workspace | git_url 支持自动 clone（"加入此 channel"按钮）|
+
+### 6.2 slock-ai 已有但 v1 跳过的协作功能（2026-05-01 全文研读 system_prompt 后归档）
+
+> 这些是 slock 的 system prompt 中明确教 agent 使用的功能，每一项都是一组 MCP 工具 + 数据模型 + UI。我们 v1 不实现，但记录在案以免遗忘 / 未来对齐。
+
+| 功能 | slock 怎么用 | 我们 v1 是否需要 | 排到 v2 时的代价估计 |
+|------|------------|--------------|----------------|
+| **Threads（消息嵌套讨论）** | `target=#channel:<msgId-shortId>` 表示 thread；可在 channel / DM 内开 thread；`thread unfollow` 退订 | **已收编进 §3.6 子 session**。slock thread 是"消息归类 + 投递过滤"，agent 上下文并未隔离。我们改用真隔离的子 session（独立进程 / 独立 conversation / 父子双向通信 / close_session 强制 summary 回流），比 slock 更干净 | —— |
+| **Task board（任务板）** | 任务是带 `[task #N status=...]` 后缀的特殊消息；工具：`list_tasks`、`create_tasks`、`claim_tasks`、`unclaim_task`、`update_task_status`；状态：todo / claimed / in_review / done；slock 强制 "claim before work" | **v2**。多 agent 并行协作的核心原语，但 v1 用普通消息聊任务也能凑合 | 大：tasks 表 + 状态机 + 5 个 MCP 工具 + UI 任务板视图 + 防 race claim 逻辑 |
+| **Reminders（提醒/调度）** | 工具：`schedule_reminder`、`list_reminders`、`cancel_reminder`；支持一次性 / 定时 / 周期；daemon 负责到点投递 | **v2**。"提醒我下周一问 codex 那个问题"这种场景需要它，但 v1 用户可以自己设系统闹钟 | 中：reminders 表 + 调度器（cron-like）+ 3 个 MCP 工具 |
+| **Attachments（附件）** | 工具：`upload_file`、`view_file`；附件以 ID 形式挂在消息上；支持 mime sniffing / 图片预览 | **v2**。code review 给截图 / 贴日志文件场景需要，v1 用户用 path 引用本地文件代替 | 中：attachments 表 + 文件存储路径 + 2 个 MCP 工具 + UI 上传/预览 |
+| **Read history（消息历史检索）** | 工具：`read_history`，支持 `before/after/around` 分页；`search_messages` 全文搜索 | **v1.5 / v2**。Agent 接活时想了解"这个 channel 之前在干嘛"会用到。v1 时 agent 可以靠 cwd 里的文件 + MEMORY.md 凑合 | 小：messages 已有 seq + ts，加查询路由 + 1 个 MCP 工具即可 |
+| **Profile / Avatar** | 工具：`profile show`、`profile update --avatar-file`；agent 有自己的头像 | **v2**。UI 美化项 | 小：agents 表加 avatar_path，UI 显示 |
+| **Discovery 工具** | `list_server`：列出 channel + agent + human；`channel members`：列出某 channel/DM/thread 成员 | **v1.5**。多 channel 多 agent 后 agent 需要"发现"其他 channel 与同事。v1 单 channel 起步可以跳 | 小：1-2 个 MCP 工具，纯查 |
+| **Runtime profile control（daemon 控制 agent）** | 特殊 system prompt 段 + `runtime_profile_migration_done` 工具；用于 daemon 灰度 / 升级 | **不需要**。这是 slock 内部 ops 机制，跟产品功能无关 | —— |
+| **Skills（agent 技能管理）** | 类似 npm 的 skill 安装机制 | **不需要**。各 agent CLI（claude / codex）自己已有技能/MCP 生态 | —— |
+| **特殊 message 渲染 token** | `@name` / `#channel` / `task #N` / `#channel:msgId` 在消息里自动渲染成可点击链接 | **v2**。需要时再做 markdown render 增强 | 小：renderer 端的 message 渲染插件 |
+
+---
+
+## 7. 非目标（v1 明确不做）
+
+- ❌ 跨机器同步同一份 workspace 文件（违反 §1.3 形态定位）
+- ❌ Memory / consensus 走专门 MCP 工具（用 Read/Write 即可）
+- ❌ Agent 跨 channel @mention 别 channel 的 agent —— 违反 channel 隔离
+- ❌ Channel mid-session 加减 member（要新建 session）
+- ❌ 真实的 turn-taking 协议（信 system prompt 引导即可）
+- ❌ 子 session 嵌套超过 1 层（写死，§3.6）
+
+---
+
+## 8. 已废弃 / 修正过的设计（备查）
+
+| 旧 | 新 | 改的原因 |
+|----|----|---------|
+| 1 channel = N 1v1 session | 1 channel = N 多-agent session | 多 agent 协作是产品核心，不能让 session 退化成 1v1 |
+| Channel.workspace_path optional | NOT NULL（后端自动生成兜底）| Agent CLI 必须有 cwd |
+| Agent 绑 workspace | Agent 不绑 workspace | Agent 是身份不是任务，workspace 跟 channel 走 |
+| Project + per-host workspace binding | 砍掉 Project 这层 | 跨机器文件协作非目标，过度设计 |
+| `--auth-token` argv 注入 | env `AGENT_HUB_AUTH_TOKEN` | 避免 `ps` 暴露 token |
+| `.agent-hub` 目录名 | `.silverhand` | 跟 app 名统一 |
+| Memory 在 workspace 级别 | Memory 分三层（L1 agent-global / L2 channel-instance / L3 channel-consensus）| Agent 身份要跨 channel 复用又要支持 channel 内角色反转，单层 memory 做不到 |
+| L2 用 symlink 指 L1（隐式共享）| L2 是 L1 的拷贝（创建时一次性 seed，之后独立）| 不同 channel 中同一 agent 可以是不同角色（planner vs reviewer），symlink 共享会污染 |
+| DM 跟普通 channel 一样有独立 workspace | DM workspace_path = `~/.silverhand/agents/<id>/`（直接落 L1）| DM 是塑造 agent 全局身份的专用场所，写到独立 workspace 就跟 channel 没区别了 |
+| 应用数据放 Electron `userData` | 全部放 `~/.silverhand/`（db / config / agents / workspaces）| 用户能直接 `cd` 进去看；跟 `~/.claude` `~/.codex` 形成对称；跨 Electron 重装保留 |
+| Channel 创建有强制 onboarding 表单（preview + 按钮编辑 system_prompt / 清 MEMORY）| 创建后自动 post 一条 `from_kind='system'` onboarding message，用户通过对话塑造 agent 角色（agent 自己 Write L2 文件）| 与"对话即一切"的产品理念一致；表单步骤是 UI 工程量也是用户的认知负担 |
+| Message.from_kind = `user` \| `agent` | Message.from_kind = `user` \| `agent` \| `system` | onboarding 开场白 / 后续 platform 公告需要一个非用户非 agent 的来源 |
+| Session 运行时文件放 `<workspace>/.silverhand/sessions/<session-id>/` | 放 `<os.tmpdir()>/silverhand/<session-id>/` | session 的 system-prompt + mcp.json 是每次 spawn 临时合成、可重算，写进 workspace 会污染用户目录 + 堆积旧 session 残骸 |
+| 消息分发方案待定（stdin vs pull 二选一） | 04-30 误判为"纯 pull + piggyback"，05-01 重读 slock 源码后改正：**stdin push 为主（A 档完整内容 / B 档短提示降级）+ HTTP pull 兜底 + spawn 时 inject**。详见 §3.1 | 第一次只看了 chat-bridge 工具描述，没追到 daemon 的 deliverNotificationToAgent + gated steering 路径，错把兜底当主路径 |
+| 没有打断机制 / "需要时加 SIGINT" | 显式两层：soft（追加新指令走 §3.1 A 档 push）+ hard（Claude control_request interrupt → SIGTERM fallback） | 用户实际需要"换方向"和"立刻停"两种语义，slock 也是这套（control 协议 + 进程信号） |
+| Server-side 上下文压缩 / chat history 裁剪 | 全部不做，跟随 slock：压缩是 agent CLI 内部行为，silverhand 只 observer + push 暂停 + watchdog；messages 表 append-only 永不裁剪 | 压缩本质损失性，由 model runtime 自己决定最合适；server 介入会双重压缩 / 触发不一致 |
+| §4.7 平台 prompt 模板"几条 etiquette 提醒" | 完整操作手册（Critical rules / Startup sequence / Workspace & Memory / Compaction safety / Etiquette / Initial role），抄 slock 的覆盖度 | 单靠几句礼貌话不够：少了 startup sequence agent 不读 MEMORY、少了 compaction safety 压缩后 agent 失忆、少了 critical rule agent 把 reply 打到 stdout |
+| CONSENSUS = "多 agent 协作产物" | CONSENSUS = "所有成员都必须遵守的少数关键共识，<2KB" | 定义太宽会被滥用成堆砌式 todo / 聊天摘要，失去"共识"的价值 |
+| 子话题用 slock-style thread（消息归类）| §3.6 子 session：真隔离的子进程 + 父子双向通信（send_message target=parent/child）+ close_session 强制 summary 回流；硬限 1 层嵌套 | slock thread 不隔离 agent 上下文（同进程订阅多 channel），是 slock 单进程模型下的妥协。我们 session-主导模型有条件做真隔离，干脆做对 |
+
+---
+
+## 9. 待决策（开放）
+
+1. **Agent system_prompt 编辑入口**：v1 是否在 CreateAgentDialog 里暴露这个字段？还是先用 driver 默认 prompt + 隐藏字段，让用户后期在 DM 中通过对话塑造？
+2. **跨 agent 共享的全局 KB**？比如所有 agent 都读得到的"用户偏好"？倾向 NO，可加 agent 之间互相 @ 的机制代替。
+3. **Workspace 默认位置**：当前 = `~/.silverhand/workspaces/<channel-name>/`。要不要支持用户级别的 default 根目录配置（"我的所有 workspace 都建在 ~/code/silverhand/ 下"）？
+4. **Channel 改名 / workspace 改路径**：v1 实现还是直接禁用（要改就建新 channel 迁移）？倾向后者，复杂度低、用户也理解。 → **2026-05-02 翻案**：决定允许改名，方案见下面 §10。workspace 改路径仍禁用。
+5. **Onboarding session 的特殊性**：是不是要给它一个 `metadata.kind='onboarding'` 标记，让 UI 在 session tab 上显示个小标签？还是完全跟普通 session 一视同仁？倾向后者，越少特殊状态越好。
+
+---
+
+## 10. Deferred design — Channel 设置 / 改名 / archive
+
+> 2026-05-02 起记录。Sidebar 顶部的 channel info 区准备加 settings 菜单（rename / archive / delete），但先把方向钉死，避免后面改名造成 agent 记忆与现实脱节。
+
+### 改名机制（决定走方案 b）
+
+- **不**采用 "name 永久不可变" 或 "prompt 只用 ID" 的方案——人类指代频道用名字，agent 自然会把名字写进 MEMORY.md。
+- **采用**：允许改名，但**改名时由 backend 自动给 channel 所有 root open session 投一条 `from_kind=system` 消息**：`Channel renamed from #X to #Y. Update any references in your MEMORY.md and notes.`
+  - 这条消息走和 "@xxx joined / left" 一样的广播路径（参考 `provision.ts:joinChannel/leaveChannel`）。
+  - 利用平台 prompt 的现有规则——system 消息显式 ask for action 时 agent 会响应——agent 自己会把 MEMORY 里的旧名替换成新名。
+  - 不主动重写 MEMORY.md（背离 "agent 自治" 原则；也不可靠）。
+- 实现位置：新增 `PATCH /api/channels/:id` 端点；在路由里调一个新的 `renameChannel(channelId, newName, opts)` provision helper。
+
+### Archive
+
+- 当前后端只有 `DELETE /api/channels/:id`（硬删，工作区文件保留）。Archive 是软删——频道在 sidebar 折叠到 "Archived" 分组，session 不再启动 agent，但历史消息仍可读。
+- 数据模型补一列 `channels.archived_at INTEGER NULL`（迁移）。`listForChannel` / sidebar 默认过滤掉 archived。
+- archive 时：
+  - 写 `archived_at`
+  - 把所有 root open session 标 `closed_at`（如果还没关）
+  - `sessionManager` 停掉所有正在跑的 agent（按 channel 过滤；当前只有 `stopAll()` 全停的 API，需补 `stopAllForChannel(id)`）
+  - 不发 system 消息（频道已死，发了也没人读）
+- unarchive：清 `archived_at`，但不自动重启 session。
+
+### Settings 菜单（UI）
+
+- SessionsSidebar 顶部 header：channel name + workspace path 副标题（已实现），右侧加一个齿轮 icon。点击弹出 dropdown：
+  - Rename channel… → 输入框 dialog → `PATCH /api/channels/:id`
+  - Archive → 确认 dialog → `POST /api/channels/:id/archive`
+  - Delete → 二次确认 dialog（"This will permanently delete the channel; workspace files at `<path>` are kept on disk."）→ `DELETE /api/channels/:id`
+- 三项都仅对 `kind=regular` 显示。DM 频道随 agent 生命周期管理，不暴露这些操作。
+
+### 暂不做的原因
+
+- 想先把 channel 协作模型（成员同步、onboarding 触发）跑顺，看实际使用中改名 / archive 的频率到底多高。如果低，齿轮菜单的优先级会被推后。
+
+---
+
+文档版本：2026-04-30 v1（§10 增补 2026-05-02）
+下次更新：开始 task #10 / #11 实现前如有偏离，回这里改。

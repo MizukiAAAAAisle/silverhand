@@ -1,0 +1,274 @@
+@import "tailwindcss";
+
+/* Themes — each one defines the full token contract.
+   The default (paper-ink) doubles as :root to avoid FOUC on first paint. */
+@import "./themes/paper-ink.css";
+@import "./themes/warm-coral.css";
+
+/* Highlight.js theme for fenced code blocks rendered by rehype-highlight.
+   Picked the "github" light theme as a neutral baseline — works under
+   warm-coral. If we ship a dark theme later, swap this for github-dark
+   based on data-theme. */
+@import "highlight.js/styles/github.css";
+
+@theme inline {
+  --color-bg-base: var(--bg-base);
+  --color-bg-primary: var(--bg-primary);
+  --color-bg-elevated: var(--bg-elevated);
+  --color-bg-surface: var(--bg-surface);
+  --color-bg-hover: var(--bg-hover);
+  --color-bg-active: var(--bg-active);
+  --color-bg-selected: var(--bg-selected);
+  --color-bg-floating: var(--bg-floating);
+  --color-bg-island: var(--bg-island);
+  --color-bg-island-deep: var(--bg-island-deep);
+
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-text-inverse: var(--text-inverse);
+  --color-text-island: var(--text-island);
+  --color-text-inline-code: var(--text-inline-code);
+
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-glow: var(--accent-glow);
+
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-error: var(--error);
+  --color-error-soft: var(--error-soft);
+
+  --color-border: var(--border);
+  --color-border-subtle: var(--border-subtle);
+  --color-border-island: var(--border-island);
+  --color-border-focus: var(--border-focus);
+
+  --color-text-on-accent: var(--text-on-accent);
+  --color-text-on-success: var(--text-on-success);
+  --color-text-on-warning: var(--text-on-warning);
+  --color-text-on-error: var(--text-on-error);
+  --color-text-on-selected: var(--text-on-selected);
+
+  --color-overlay-backdrop: var(--overlay-backdrop);
+
+  --shadow-popover: var(--shadow-popover);
+  --shadow-modal: var(--shadow-modal);
+  --shadow-button: var(--shadow-button);
+
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+
+  --font-sans: var(--font-sans);
+  --font-serif: var(--font-serif);
+  --font-mono: var(--font-mono);
+}
+
+/* ── Non-themable layout constants ── */
+:root {
+  --titlebar-height: 36px;
+  --nav-rail-width: 52px;
+  --sidebar-width: 240px;
+  --sessions-sidebar-width: 240px;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Electron window-drag regions. Apply `.drag-region` to anything that
+   should let the user pick up the window (the titlebar bar, empty
+   spans). Children that need pointer events (buttons, dropdowns) opt
+   out with `.no-drag`. */
+.drag-region { -webkit-app-region: drag; }
+.no-drag { -webkit-app-region: no-drag; }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--bg-hover);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--bg-active); }
+
+::selection { background: var(--accent-soft); color: var(--text-primary); }
+
+button:not(:disabled) { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+
+/* ── Markdown body — applied to .markdown-body wrapper around <ReactMarkdown> ── */
+.markdown-body { line-height: 1.55; }
+.markdown-body > *:first-child { margin-top: 0; }
+.markdown-body > *:last-child { margin-bottom: 0; }
+
+.markdown-body p { margin: 0.4em 0; }
+.markdown-body strong { font-weight: 600; color: var(--text-primary); }
+.markdown-body em { font-style: italic; }
+.markdown-body a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.markdown-body a:hover { color: var(--accent-hover); }
+
+.markdown-body h1, .markdown-body h2, .markdown-body h3,
+.markdown-body h4, .markdown-body h5, .markdown-body h6 {
+  margin: 0.8em 0 0.4em;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.markdown-body h1 { font-size: 1.4em; }
+.markdown-body h2 { font-size: 1.2em; }
+.markdown-body h3 { font-size: 1.1em; }
+.markdown-body h4, .markdown-body h5, .markdown-body h6 { font-size: 1em; }
+
+.markdown-body ul, .markdown-body ol {
+  margin: 0.4em 0;
+  padding-left: 1.4em;
+}
+.markdown-body li { margin: 0.15em 0; }
+.markdown-body li > p { margin: 0.15em 0; }
+
+.markdown-body blockquote {
+  margin: 0.5em 0;
+  padding: 0.2em 0.8em;
+  border-left: 3px solid var(--border);
+  color: var(--text-secondary);
+}
+
+.markdown-body hr {
+  margin: 0.8em 0;
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.markdown-body table {
+  margin: 0.5em 0;
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+.markdown-body th, .markdown-body td {
+  padding: 0.3em 0.6em;
+  border: 1px solid var(--border-subtle);
+  text-align: left;
+}
+.markdown-body th { background: var(--bg-elevated); font-weight: 600; }
+
+/* Inline code — chip-style: tighter, bordered, breathes next to CJK
+   text via inline margin, and breaks anywhere so a long path can't
+   blow out the message bubble. Background is an ink-wash on the
+   page (mix of `--text-primary` into `--bg-base`) so the chip stays
+   in the theme's own color family — warm in paper-ink, neutral in
+   warm-coral — instead of looking like a foreign gray block. */
+.markdown-body :not(pre) > code {
+  display: inline;
+  padding: 0.08em 0.36em;
+  margin-inline: 0.15em;
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  color: var(--text-inline-code);
+  background: color-mix(in srgb, var(--text-primary) 6%, var(--bg-base));
+  border: 1px solid color-mix(in srgb, var(--text-primary) 14%, transparent);
+  border-radius: var(--radius-sm);
+  overflow-wrap: anywhere;
+}
+
+/* Code blocks — `pre` is wrapped by CodeBlock for the header chrome
+   (language tag + copy + expand). The `pre` itself is the scroll
+   container; the surrounding wrapper applies the border/rounded
+   shell so the header strip can sit flush with the top edge.
+   Background uses the same ink-wash recipe as inline code, just at
+   a lighter strength so the block feels like a card on the page. */
+.markdown-body .code-block {
+  margin: 0.5em 0;
+  border: 1px solid color-mix(in srgb, var(--text-primary) 12%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--text-primary) 4%, var(--bg-base));
+  overflow: hidden;
+}
+.markdown-body .code-block__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.25em 0.6em;
+  border-bottom: 1px solid color-mix(in srgb, var(--text-primary) 10%, transparent);
+  font-family: var(--font-mono);
+  font-size: 0.75em;
+  color: var(--text-muted);
+  user-select: none;
+}
+.markdown-body .code-block__lang {
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+}
+.markdown-body .code-block__copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25em;
+  color: var(--text-muted);
+  transition: color 120ms ease;
+}
+.markdown-body .code-block__copy:hover {
+  color: var(--text-primary);
+}
+.markdown-body .code-block pre {
+  margin: 0;
+  padding: 0.7em 0.9em;
+  max-height: 22rem;
+  overflow: auto;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  line-height: 1.5;
+}
+.markdown-body .code-block--expanded pre {
+  max-height: none;
+}
+.markdown-body .code-block__expand {
+  display: block;
+  width: 100%;
+  padding: 0.3em 0.6em;
+  border-top: 1px solid color-mix(in srgb, var(--text-primary) 10%, transparent);
+  background: transparent;
+  font-size: 0.75em;
+  color: var(--text-muted);
+  text-align: center;
+  transition: color 120ms ease, background 120ms ease;
+}
+.markdown-body .code-block__expand:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+.markdown-body .code-block pre code {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font-size: 1em;
+  margin: 0;
+  overflow-wrap: normal;
+}
+
+/* Flash highlight applied by SessionView when jumping to a message
+   from the Saved view. Two pulses of accent-soft so the eye catches
+   it even if the page is already at the right scroll position. */
+@keyframes msg-jump-flash {
+  0%, 100% { background-color: transparent; }
+  20%, 60% { background-color: var(--accent-soft); }
+}
+.msg-jump-flash {
+  animation: msg-jump-flash 1.6s ease-in-out;
+}

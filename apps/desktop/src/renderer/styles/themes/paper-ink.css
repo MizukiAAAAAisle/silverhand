@@ -1,0 +1,101 @@
+/* ================================================================
+   Theme: Paper Ink (warm ivory paper, dusk-blue ink accent)
+   性格：暖象牙基底 + 暮霭蓝墨色 accent，留白派——靠色温过渡而非描边。
+   Default theme — also serves as :root so first paint has tokens.
+   See docs/design-new-theme.md for the full token contract.
+   ================================================================ */
+
+:root,
+[data-theme='paper-ink'] {
+  /* ── Backgrounds (warm ivory ladder) ──
+     base = chat 主区（最亮、读区）；primary = sidebar/composer 等"框"
+     surface，刻意拉深 ~6%，让导航沉下去、内容浮起来。elevated 比之前
+     再深一档，chat 区里的 card / 代码块更可见。 */
+  --bg-base: #FFFAEF;          /* chat 主区 / 全局窗口底色 —— 老纸感 */
+  --bg-primary: #EFE5CE;       /* sidebar、composer、main column 容器 —— 框 */
+  --bg-elevated: #E8DDC0;      /* 卡片休眠、segment 容器、设置面板小块 */
+  --bg-surface: #DCD0A8;       /* 嵌套面板 */
+  --bg-hover: #D2C595;         /* 通用 hover 反馈（比 primary 深 ~7%） */
+  --bg-active: #C5B57F;        /* 按下/激活 */
+  --bg-selected: #FFFFFF;      /* 导航激活（warm 派偷懒：纯白从任何一档都跳出） */
+  --bg-floating: #FFFFFF;      /* 浮层 / 卡片表面 */
+
+  /* ── Nav rail / sidebar accents (theme-specific) ──
+     不再"每区一种独立色"——全部坐落在 nav-rail-yellow 到 bg-base-ivory
+     的 oklab 色线上，按 100% / 55% / 22% / 0% 逐档稀释。眼睛看到的是从
+     饱和黄 → 蜂蜜麦色 → 淡奶黄 → ivory 的连续过渡，不再有 hue 跳。
+     非 paper-ink 主题里这三个 token 退化为 var(--bg-primary)。 */
+  --bg-nav-rail: #FFD440;
+  --bg-channels-sidebar: color-mix(in oklab, var(--bg-nav-rail) 55%, var(--bg-base));
+  --bg-sessions-sidebar: color-mix(in oklab, var(--bg-nav-rail) 22%, var(--bg-base));
+
+  /* ── Islands (代码块、JSON、终端) ──
+     冷暖中性灰，与 ivory 形成"另一种材质"的对比，
+     避免代码块看起来像"另一张纸" */
+  --bg-island: #E8E5DC;
+  --bg-island-deep: #DCD9CD;
+
+  /* ── Text — 暖深棕近黑（墨色） ── */
+  --text-primary: #1F1B14;
+  --text-secondary: #56503F;
+  --text-muted: #8A8270;
+  --text-inverse: #FFFAEF;
+  --text-island: #2A2520;
+  --text-inline-code: color-mix(in srgb, var(--accent) 55%, var(--text-primary));
+
+  /* ── Accent (dusk-blue ink) ── */
+  --accent: #3F5C6E;
+  --accent-soft: #3F5C6E26;    /* ~15% alpha — selected item 填充 / selection bg */
+  --accent-hover: #344B5A;
+  --accent-glow: #3F5C6E33;    /* ~20% alpha — focus ring / resize handle glow */
+
+  /* ── Semantic (与暖底协调，避免与 accent 撞色) ── */
+  --success: #5A7A3D;
+  --success-soft: #5A7A3D15;
+  --warning: #B07820;
+  --warning-soft: #B0782015;
+  --error: #9A4434;
+  --error-soft: #9A443415;
+
+  /* ── Borders (留白派：几乎不可见) ── */
+  --border: #00000010;
+  --border-subtle: #00000006;
+  --border-island: #6B5A4026;
+  --border-focus: #3F5C6E40;
+
+  /* ── On-color foregrounds ── */
+  --text-on-accent: #FFFFFF;
+  --text-on-success: #FFFFFF;
+  --text-on-warning: #FFFFFF;
+  --text-on-error: #FFFFFF;
+  --text-on-selected: var(--text-primary);
+
+  /* ── Overlay ── */
+  --overlay-backdrop: rgba(31, 27, 20, 0.32);
+
+  /* ── Shadows (暖 umber 基色，避免黑阴影在暖底上发青) ── */
+  --shadow-base: 58, 44, 28;
+  --shadow-popover:
+    0 4px 12px -4px rgba(var(--shadow-base), 0.12);
+  --shadow-modal:
+    0 6px 20px -8px rgba(var(--shadow-base), 0.18);
+  --shadow-button: none;
+
+  /* ── Radii ── */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+
+  /* ── Fonts ── */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+  --font-serif: 'New York', 'Charter', 'Iowan Old Style', 'Source Serif Pro', Georgia, serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', 'Sarasa Mono SC', 'Source Han Mono SC', 'Noto Sans Mono CJK SC', 'PingFang SC', monospace;
+
+  /* ── Motion ── */
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --duration: 200ms;
+
+  /* ── Chat default ── */
+  --chat-font-size: 15px;
+}

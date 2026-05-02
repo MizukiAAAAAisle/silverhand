@@ -1,0 +1,144 @@
+import { CornerDownRight } from 'lucide-react';
+import type { MessageDto } from '@silverhand/shared';
+import { useMessage } from '@/features/messages/hooks';
+import { Markdown } from './Markdown';
+import { useRelativeTime } from './useRelativeTime';
+
+interface QuotedMessagePreviewProps {
+  /** The thread_anchor system message — its metadata carries the
+   *  snapshot needed to render the original. For old rows without
+   *  snapshot fields we lazily fetch the original via
+   *  `quoted_message_id`. */
+  quoteMessage: MessageDto;
+  /** Click handler — caller can route a click to "jump back to the
+   *  original message in the parent session". Undefined disables. */
+  onJumpToOriginal?: () => void;
+}
+
+interface QuotedFields {
+  content: string;
+  fromKind: string | null;
+  agentName: string | null;
+  createdAt: number;
+}
+
+function readSnapshot(metadata: MessageDto['metadata']): QuotedFields | null {
+  if (!metadata) return null;
+  const meta = metadata as Record<string, unknown>;
+  const content = typeof meta['quoted_content'] === 'string' ? meta['quoted_content'] : null;
+  const createdAt =
+    typeof meta['quoted_created_at'] === 'number' ? meta['quoted_created_at'] : null;
+  if (!content || createdAt === null) return null;
+  return {
+    content,
+    fromKind: typeof meta['quoted_from_kind'] === 'string' ? meta['quoted_from_kind'] : null,
+    agentName:
+      typeof meta['quoted_agent_name'] === 'string'
+        ? (meta['quoted_agent_name'] as string)
+        : null,
+    createdAt,
+  };
+}
+
+function readQuotedMessageId(metadata: MessageDto['metadata']): string | null {
+  if (!metadata) return null;
+  const v = (metadata as Record<string, unknown>)['quoted_message_id'];
+  return typeof v === 'string' ? v : null;
+}
+
+/**
+ * Renders the message that anchored a thread child session as the first
+ * row in the child's chat scroll area. Mirrors `MessageItem`'s frame
+ * (white background, 2px subtle border, full width) so it reads as
+ * "the original message" — a small "↳ thread from" hint signals intent.
+ *
+ * Modern data: snapshot fields live in `metadata` directly, no extra
+ * fetch. Legacy data (PR4 pre-fix): falls back to a lazy fetch of the
+ * original message via `quoted_message_id`.
+ */
+export function QuotedMessagePreview({
+  quoteMessage,
+  onJumpToOriginal,
+}: QuotedMessagePreviewProps): JSX.Element | null {
+  const snapshot = readSnapshot(quoteMessage.metadata);
+
+  // Legacy fallback — only fires when the snapshot is missing.
+  const fallbackId = snapshot ? null : readQuotedMessageId(quoteMessage.metadata);
+  const { data: fetched, isLoading: fetching } = useMessage(fallbackId);
+
+  let fields: QuotedFields | null = snapshot;
+  if (!fields && fetched) {
+    fields = {
+      content: fetched.message.content,
+      fromKind: fetched.message.from_kind,
+      agentName: fetched.agent_name,
+      createdAt: fetched.message.created_at,
+    };
+  }
+
+  // Call useRelativeTime unconditionally — pass 0 when fields aren't
+  // ready so we don't change hook count between renders. The result
+  // gets thrown away on the early-return paths below.
+  const { relative, absolute } = useRelativeTime(fields?.createdAt ?? 0);
+
+  // No snapshot, no fallback id → can't render anything useful.
+  if (!fields && !fallbackId) return null;
+  // Loading the fallback — skip render until it resolves rather than
+  // flash an empty card.
+  if (!fields && fetching) return null;
+  // Fallback finished but the message is gone (deleted parent etc.).
+  if (!fields) return null;
+
+  const isUser = fields.fromKind === 'user';
+  const displayName = isUser
+    ? 'you'
+    : fields.agentName
+      ? `@${fields.agentName}`
+      : '@agent';
+
+  return (
+    <div
+      className={
+        'w-full border-2 border-border bg-bg-floating px-4 py-2 ' +
+        (onJumpToOriginal ? 'cursor-pointer transition-colors hover:border-accent' : '')
+      }
+      onClick={onJumpToOriginal}
+      role={onJumpToOriginal ? 'button' : undefined}
+      tabIndex={onJumpToOriginal ? 0 : undefined}
+      onKeyDown={
+        onJumpToOriginal
+          ? e => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onJumpToOriginal();
+              }
+            }
+          : undefined
+      }
+    >
+      <div className="mb-1 flex items-center gap-1 text-[10px] uppercase tracking-wider text-text-muted">
+        <CornerDownRight className="size-3" />
+        <span>thread from</span>
+      </div>
+      <header className="mb-1 text-xs">
+        <span
+          className={
+            'font-medium ' + (isUser ? 'text-text-primary' : 'text-accent')
+          }
+        >
+          {displayName}
+        </span>
+        <time
+          dateTime={new Date(fields.createdAt).toISOString()}
+          title={absolute}
+          className="ml-2 text-text-muted"
+        >
+          {relative}
+        </time>
+      </header>
+      <div className="text-sm text-text-primary">
+        <Markdown content={fields.content} />
+      </div>
+    </div>
+  );
+}

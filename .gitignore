@@ -1,0 +1,23 @@
+node_modules
+dist
+out
+.DS_Store
+*.log
+.vite
+.cache
+coverage
+
+# Electron
+release/
+
+# Local data
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# IDE
+.idea
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json

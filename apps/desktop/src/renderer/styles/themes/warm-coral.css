@@ -1,0 +1,89 @@
+/* ================================================================
+   Theme: Warm Coral (cool paper, coral accent)
+   See docs/design-new-theme.md for the full token contract.
+   ================================================================ */
+
+[data-theme='warm-coral'] {
+  /* ── Backgrounds (cool warm-white ladder) ── */
+  --bg-base: #F9F9F7;
+  --bg-primary: #F3F3F0;
+  --bg-elevated: #ECECE8;
+  --bg-surface: #E5E5E0;
+  --bg-hover: #DEDED8;
+  --bg-active: #D4D4CD;
+  --bg-selected: #FFFFFF;
+  --bg-floating: #FFFFFF;
+
+  /* ── Sidebar (no special accent — falls back to primary) ── */
+  --bg-nav-rail: var(--bg-primary);
+  --bg-channels-sidebar: var(--bg-primary);
+  --bg-sessions-sidebar: var(--bg-primary);
+
+  /* ── Islands (code) ── */
+  --bg-island: #EFEFEC;
+  --bg-island-deep: #E7E7E3;
+
+  /* ── Text — neutral near-black ── */
+  --text-primary: #1A1A18;
+  --text-secondary: #555550;
+  --text-muted: #88857F;
+  --text-inverse: #F9F9F7;
+  --text-island: #2A2A2A;
+  --text-inline-code: color-mix(in srgb, var(--accent) 50%, var(--text-primary));
+
+  /* ── Accent (coral terracotta) ── */
+  --accent: #CC7D5E;
+  --accent-soft: #CC7D5E15;
+  --accent-hover: #B36849;
+  --accent-glow: #CC7D5E20;
+
+  /* ── Semantic ── */
+  --success: #6B7C3F;
+  --success-soft: #6B7C3F15;
+  --warning: #B8862A;
+  --warning-soft: #B8862A15;
+  --error: #A04A3A;
+  --error-soft: #A04A3A15;
+
+  /* ── Borders ── */
+  --border: #00000010;
+  --border-subtle: #00000006;
+  --border-island: #88858026;
+  --border-focus: #CC7D5E40;
+
+  /* ── On-color foregrounds ── */
+  --text-on-accent: #FFFFFF;
+  --text-on-success: #FFFFFF;
+  --text-on-warning: #FFFFFF;
+  --text-on-error: #FFFFFF;
+  --text-on-selected: var(--text-primary);
+
+  /* ── Overlay ── */
+  --overlay-backdrop: rgba(0, 0, 0, 0.30);
+
+  /* ── Shadows (kept minimal — UI is flat; only floating surfaces use them) ── */
+  --shadow-base: 26, 26, 24;
+  --shadow-popover:
+    0 4px 12px -4px rgba(var(--shadow-base), 0.10);
+  --shadow-modal:
+    0 6px 20px -8px rgba(var(--shadow-base), 0.15);
+  --shadow-button: none;
+
+  /* ── Radii ── */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+
+  /* ── Fonts ── */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+  --font-serif: 'New York', 'Charter', 'Iowan Old Style', 'Source Serif Pro', Georgia, serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', 'Sarasa Mono SC', 'Source Han Mono SC', 'Noto Sans Mono CJK SC', 'PingFang SC', monospace;
+
+  /* ── Motion ── */
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --duration: 200ms;
+
+  /* ── Chat default ── */
+  --chat-font-size: 15px;
+}
