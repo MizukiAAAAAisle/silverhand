@@ -7,6 +7,8 @@ import {
   RuntimeKindSchema,
   SessionAgentStatusSchema,
   SessionStatusSchema,
+  TaskAssigneeTypeSchema,
+  TaskStatusSchema,
 } from '../db/schema.js';
 
 // ── Host ─────────────────────────────────────────────────────────
@@ -238,6 +240,14 @@ export const SessionAgentDtoSchema = z.object({
 export type SessionAgentDto = z.infer<typeof SessionAgentDtoSchema>;
 
 // ── Message ──────────────────────────────────────────────────────
+export const TaskAssigneeDtoSchema = z.object({
+  type: TaskAssigneeTypeSchema,
+  id: z.string(),
+  /** Agent display_name or user handle — denormalized for list render. */
+  name: z.string(),
+});
+export type TaskAssigneeDto = z.infer<typeof TaskAssigneeDtoSchema>;
+
 export const MessageDtoSchema = z.object({
   id: z.string(),
   session_id: z.string(),
@@ -248,6 +258,12 @@ export const MessageDtoSchema = z.object({
   metadata: z.record(z.unknown()).nullable(),
   seq: z.number(),
   created_at: z.number(),
+  /** Task metadata — all null when this message is not a task. */
+  task_number: z.number().nullable(),
+  task_status: TaskStatusSchema.nullable(),
+  task_title: z.string().nullable(),
+  task_channel_id: z.string().nullable(),
+  task_assignee: TaskAssigneeDtoSchema.nullable(),
 });
 export type MessageDto = z.infer<typeof MessageDtoSchema>;
 
@@ -255,6 +271,152 @@ export const SendMessageInputSchema = z.object({
   content: z.string().min(1),
 });
 export type SendMessageInput = z.infer<typeof SendMessageInputSchema>;
+
+// ── Tasks ────────────────────────────────────────────────────────
+//
+// Per docs/tasks-design.md. A task == a message with task metadata.
+// Numbering space is per-channel (#1 monotonic across all sessions of
+// the channel); ownership/operation scope is per-session (only agents
+// in the task's session may claim/unclaim/update; other sessions get
+// read-only aggregate visibility). Human UI is not assignee-restricted.
+
+export const TaskSessionRefSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+});
+export type TaskSessionRef = z.infer<typeof TaskSessionRefSchema>;
+
+export const TaskCreatorDtoSchema = z.object({
+  type: z.enum(['agent', 'user', 'system']),
+  id: z.string().nullable(),
+  name: z.string(),
+});
+export type TaskCreatorDto = z.infer<typeof TaskCreatorDtoSchema>;
+
+export const TaskSummaryDtoSchema = z.object({
+  message_id: z.string(),
+  task_number: z.number(),
+  channel_id: z.string(),
+  channel_name: z.string(),
+  session: TaskSessionRefSchema,
+  status: TaskStatusSchema,
+  title: z.string(),
+  assignee: TaskAssigneeDtoSchema.nullable(),
+  creator: TaskCreatorDtoSchema,
+  created_at: z.number(),
+});
+export type TaskSummaryDto = z.infer<typeof TaskSummaryDtoSchema>;
+
+// GET /api/tasks (human) / /internal/agent/:aid/tasks (agent)
+export const ListTasksQuerySchema = z.object({
+  channel_id: z.string().optional(),
+  session_id: z.string().optional(),
+  status: z
+    .union([TaskStatusSchema, z.literal('all')])
+    .optional()
+    .default('all'),
+});
+export type ListTasksQuery = z.infer<typeof ListTasksQuerySchema>;
+
+// POST /internal/agent/:aid/tasks — create_tasks MCP tool
+export const CreateTasksInputSchema = z.object({
+  tasks: z
+    .array(
+      z.object({
+        title: z.string().min(1).max(200),
+        body: z.string().optional(),
+      }),
+    )
+    .min(1),
+});
+export type CreateTasksInput = z.infer<typeof CreateTasksInputSchema>;
+
+export const CreateTasksResultSchema = z.object({
+  tasks: z.array(
+    z.object({
+      message_id: z.string(),
+      task_number: z.number(),
+      title: z.string(),
+    }),
+  ),
+});
+export type CreateTasksResult = z.infer<typeof CreateTasksResultSchema>;
+
+// POST /internal/agent/:aid/tasks/claim — claim_tasks MCP tool
+export const ClaimTasksInputSchema = z
+  .object({
+    task_numbers: z.array(z.number()).optional(),
+    message_ids: z.array(z.string()).optional(),
+  })
+  .refine(v => (v.task_numbers?.length ?? 0) + (v.message_ids?.length ?? 0) > 0, {
+    message: 'provide at least one of task_numbers or message_ids',
+  });
+export type ClaimTasksInput = z.infer<typeof ClaimTasksInputSchema>;
+
+export const ClaimResultEntrySchema = z.object({
+  success: z.boolean(),
+  task_number: z.number().optional(),
+  message_id: z.string().optional(),
+  reason: z.string().optional(),
+  /** If the task belongs to a different session, its id+title surface
+   *  here so the caller can explain to the agent why claim failed. */
+  owner_session: TaskSessionRefSchema.optional(),
+});
+export type ClaimResultEntry = z.infer<typeof ClaimResultEntrySchema>;
+
+export const ClaimTasksResultSchema = z.object({
+  results: z.array(ClaimResultEntrySchema),
+});
+export type ClaimTasksResult = z.infer<typeof ClaimTasksResultSchema>;
+
+// POST /internal/agent/:aid/tasks/unclaim
+export const UnclaimTaskInputSchema = z.object({
+  task_number: z.number().int().positive(),
+});
+export type UnclaimTaskInput = z.infer<typeof UnclaimTaskInputSchema>;
+
+// POST /internal/agent/:aid/tasks/update-status
+export const UpdateTaskStatusInputSchema = z.object({
+  task_number: z.number().int().positive(),
+  status: TaskStatusSchema,
+});
+export type UpdateTaskStatusInput = z.infer<typeof UpdateTaskStatusInputSchema>;
+
+// Simple success/failure envelope reused by unclaim / update-status.
+export const TaskMutationResultSchema = z.object({
+  success: z.boolean(),
+  reason: z.string().optional(),
+});
+export type TaskMutationResult = z.infer<typeof TaskMutationResultSchema>;
+
+// Human UI — POST /api/tasks/:messageId/status
+export const HumanUpdateTaskStatusInputSchema = z.object({
+  status: TaskStatusSchema,
+});
+export type HumanUpdateTaskStatusInput = z.infer<
+  typeof HumanUpdateTaskStatusInputSchema
+>;
+
+// Human UI — POST /api/tasks/:messageId/claim (optional target agent)
+export const HumanClaimTaskInputSchema = z.object({
+  agent_id: z.string().optional(),
+});
+export type HumanClaimTaskInput = z.infer<typeof HumanClaimTaskInputSchema>;
+
+// SSE payload — published on every task mutation (create / claim /
+// unclaim / status change). Consumers refresh the list + any open
+// session's inline task drawer.
+export const TaskChangedEventSchema = z.object({
+  kind: z.enum(['create', 'claim', 'unclaim', 'status']),
+  channel_id: z.string(),
+  session_id: z.string(),
+  task_number: z.number(),
+  message_id: z.string(),
+  status: TaskStatusSchema,
+  assignee: TaskAssigneeDtoSchema.nullable(),
+  title: z.string(),
+});
+export type TaskChangedEvent = z.infer<typeof TaskChangedEventSchema>;
 
 // ── Internal API (chat-bridge → backend) ─────────────────────────
 

@@ -211,4 +211,33 @@ export const migrations: Migration[] = [
         ON notifications(created_at DESC);
     `,
   },
+  {
+    version: 7,
+    name: 'tasks',
+    // Tasks are message metadata, not a separate table — see
+    // docs/tasks-design.md §3. A message "is a task" iff
+    // task_number IS NOT NULL. Per-channel numbering space; per-session
+    // operational scope (the session that owns the message owns the
+    // task). `task_channel_id` is a denormalized pointer to
+    // sessions.channel_id so the partial unique index below can be a
+    // plain (col, col) index — SQLite doesn't do JOIN-based indexes.
+    // Backend is the single writer and fills it in the same transaction
+    // as any task mutation.
+    up: `
+      ALTER TABLE messages ADD COLUMN task_number             INTEGER;
+      ALTER TABLE messages ADD COLUMN task_status             TEXT;
+      ALTER TABLE messages ADD COLUMN task_assignee_agent_id  TEXT REFERENCES agents(id) ON DELETE SET NULL;
+      ALTER TABLE messages ADD COLUMN task_assignee_user_id   TEXT;
+      ALTER TABLE messages ADD COLUMN task_title              TEXT;
+      ALTER TABLE messages ADD COLUMN task_channel_id         TEXT REFERENCES channels(id) ON DELETE CASCADE;
+
+      CREATE UNIQUE INDEX uniq_messages_task_number
+        ON messages(task_channel_id, task_number)
+        WHERE task_number IS NOT NULL;
+
+      CREATE INDEX idx_messages_task_channel
+        ON messages(task_channel_id, task_status)
+        WHERE task_channel_id IS NOT NULL;
+    `,
+  },
 ];

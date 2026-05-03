@@ -8,7 +8,8 @@ import { getBackendInfo } from '@/lib/api';
  */
 export interface SessionStreamEvent {
   /** SSE `event:` field. Known values: `connected`, `ping`, `message`,
-   *  `agent_status`, `agent_event`, `compaction_stale`, `thread_updated`. */
+   *  `agent_status`, `agent_event`, `compaction_stale`, `thread_updated`,
+   *  `task_changed`. */
   kind: string;
   /** Parsed JSON payload from SSE `data:` field. */
   payload: any;
@@ -52,6 +53,7 @@ export function useSessionStream(
         'agent_event',
         'compaction_stale',
         'thread_updated',
+        'task_changed',
       ];
       for (const kind of known) {
         es.addEventListener(kind, (raw: MessageEvent) => {

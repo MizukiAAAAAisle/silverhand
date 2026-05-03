@@ -1,4 +1,4 @@
-import { Settings, MessageSquarePlus, Users } from 'lucide-react';
+import { Settings, MessageSquarePlus, Users, CheckSquare } from 'lucide-react';
 import type { ChannelKind } from '@silverhand/shared';
 import { ManageMembersPopover } from '@/features/channels/ManageMembersPopover';
 
@@ -9,6 +9,12 @@ interface TitlebarProps {
   workspacePath: string | null;
   onOpenChannelSettings?: () => void;
   onCreateSession?: () => void;
+  /** Tasks panel trigger. Provided only when a chat channel is selected.
+   *  Click opens the channel-wide tasks dialog (4-column kanban). */
+  onOpenTasks?: () => void;
+  /** Active-task count for the channel — drives the small badge next to
+   *  the Tasks button. Hidden when 0 / undefined. */
+  taskCount?: number;
 }
 
 /**
@@ -29,11 +35,14 @@ export function Titlebar({
   workspacePath,
   onOpenChannelSettings,
   onCreateSession,
+  onOpenTasks,
+  taskCount,
 }: TitlebarProps): JSX.Element {
   const hasChannel = channelName !== null;
   const showManageMembers = hasChannel && channelKind !== 'dm' && !!channelId;
   const showCreateSession = hasChannel && !!onCreateSession;
   const showSettings = hasChannel && !!onOpenChannelSettings;
+  const showTasks = hasChannel && !!onOpenTasks;
 
   return (
     <header
@@ -63,6 +72,23 @@ export function Titlebar({
           className="no-drag flex size-6 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
         >
           <MessageSquarePlus className="size-3.5" />
+        </button>
+      ) : null}
+
+      {showTasks ? (
+        <button
+          type="button"
+          onClick={onOpenTasks}
+          aria-label="Tasks"
+          title="Tasks"
+          className="no-drag relative flex size-6 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
+        >
+          <CheckSquare className="size-3.5" />
+          {taskCount && taskCount > 0 ? (
+            <span className="absolute -right-1 -top-1 min-w-[14px] rounded-full bg-accent px-1 text-[9px] font-medium leading-[14px] text-text-on-accent">
+              {taskCount}
+            </span>
+          ) : null}
         </button>
       ) : null}
 

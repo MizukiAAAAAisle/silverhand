@@ -8,15 +8,22 @@ import {
   AgentCloseSessionInputSchema,
   AgentSendMessageInputSchema,
   AgentSpawnChildInputSchema,
+  ClaimTasksInputSchema,
   CloseSessionInputSchema,
   CreateAgentInputSchema,
   CreateChannelInputSchema,
   CreateSessionInputSchema,
+  CreateTasksInputSchema,
   DeleteAgentInputSchema,
+  HumanClaimTaskInputSchema,
+  HumanUpdateTaskStatusInputSchema,
+  ListTasksQuerySchema,
   MarkNotificationsReadInputSchema,
   SendMessageInputSchema,
+  UnclaimTaskInputSchema,
   UpdateAgentInputSchema,
   UpdateChannelInputSchema,
+  UpdateTaskStatusInputSchema,
   type AgentDeleteImpactDto,
   type SendMessageTarget,
 } from '@silverhand/shared';
@@ -35,6 +42,16 @@ import { provisionChannel, provisionDmChannel, joinChannel, leaveChannel, delete
 import { ccMentionsFromUserMessage } from './mention-cc.js';
 import { detectRuntimes } from './runtimes.js';
 import { buildAgentWorkspaceDto } from './agent-workspace.js';
+import {
+  claimTasksByAgent,
+  createTasksByAgent,
+  humanClaim,
+  humanUnclaim,
+  humanUpdateStatus,
+  listTasks,
+  unclaimTaskByAgent,
+  updateTaskStatusByAgent,
+} from './tasks.js';
 
 function isRepoError(err: unknown): err is RepoError {
   return err instanceof Error && typeof (err as RepoError).code === 'string';
@@ -1037,6 +1054,54 @@ export function createApiRouter(ctx: BackendContext): Hono {
     return c.json({ error: 'invalid input' }, 400);
   });
 
+  // ── Tasks (human-facing list + overrides) ────────────────────────
+  const taskDeps = { ctx, agents, channels, sessions, messages };
+
+  app.get(apiPaths.tasks, c => {
+    const parsed = ListTasksQuerySchema.safeParse({
+      channel_id: c.req.query('channel_id') || undefined,
+      session_id: c.req.query('session_id') || undefined,
+      status: c.req.query('status') || undefined,
+    });
+    if (!parsed.success) {
+      return c.json({ error: 'invalid query', issues: parsed.error.issues }, 400);
+    }
+    return c.json({ tasks: listTasks(taskDeps, parsed.data) });
+  });
+
+  app.post('/api/tasks/:messageId/claim', async c => {
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = HumanClaimTaskInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    const result = await humanClaim(taskDeps, {
+      messageId: c.req.param('messageId'),
+      agentId: parsed.data.agent_id,
+    });
+    return c.json(result, result.success ? 200 : 409);
+  });
+
+  app.post('/api/tasks/:messageId/unclaim', async c => {
+    const result = await humanUnclaim(taskDeps, {
+      messageId: c.req.param('messageId'),
+    });
+    return c.json(result, result.success ? 200 : 409);
+  });
+
+  app.post('/api/tasks/:messageId/status', async c => {
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = HumanUpdateTaskStatusInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    const result = await humanUpdateStatus(taskDeps, {
+      messageId: c.req.param('messageId'),
+      status: parsed.data.status,
+    });
+    return c.json(result, result.success ? 200 : 409);
+  });
+
   return app;
 }
 
@@ -1281,6 +1346,107 @@ export function createInternalRouter(ctx: BackendContext): Hono {
     }
 
     return c.json({ session: closed });
+  });
+
+  // ── Tasks — 5 agent-facing endpoints backing the MCP tools ───────
+  // See docs/tasks-design.md §5. Each binds (session_id, agent_id) so
+  // task service functions can enforce "operate only on your own
+  // session's tasks".
+  const taskDeps = { ctx, agents, channels, sessions, messages };
+
+  app.get('/internal/sessions/:sid/agents/:aid/tasks', c => {
+    const sid = c.req.param('sid');
+    const aid = c.req.param('aid');
+    const session = sessions.get(sid);
+    if (!session) return c.json({ error: 'session not found' }, 404);
+    if (!agents.get(aid)) return c.json({ error: 'agent not found' }, 404);
+    const parsed = ListTasksQuerySchema.safeParse({
+      channel_id: c.req.query('channel_id') || session.channel_id,
+      session_id: c.req.query('session_id') || undefined,
+      status: c.req.query('status') || undefined,
+    });
+    if (!parsed.success) {
+      return c.json({ error: 'invalid query', issues: parsed.error.issues }, 400);
+    }
+    return c.json({ tasks: listTasks(taskDeps, parsed.data) });
+  });
+
+  app.post('/internal/sessions/:sid/agents/:aid/tasks/create', async c => {
+    const sid = c.req.param('sid');
+    const aid = c.req.param('aid');
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = CreateTasksInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    const result = await createTasksByAgent(taskDeps, {
+      sessionId: sid,
+      agentId: aid,
+      tasks: parsed.data.tasks,
+    });
+    if ('error' in result) {
+      return c.json({ error: result.error }, 400);
+    }
+    return c.json(result);
+  });
+
+  app.post('/internal/sessions/:sid/agents/:aid/tasks/claim', async c => {
+    const sid = c.req.param('sid');
+    const aid = c.req.param('aid');
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = ClaimTasksInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    const result = await claimTasksByAgent(taskDeps, {
+      sessionId: sid,
+      agentId: aid,
+      task_numbers: parsed.data.task_numbers,
+      message_ids: parsed.data.message_ids,
+    });
+    if ('error' in result) {
+      return c.json({ error: result.error }, 400);
+    }
+    return c.json(result);
+  });
+
+  app.post('/internal/sessions/:sid/agents/:aid/tasks/unclaim', async c => {
+    const sid = c.req.param('sid');
+    const aid = c.req.param('aid');
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = UnclaimTaskInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    const result = await unclaimTaskByAgent(taskDeps, {
+      sessionId: sid,
+      agentId: aid,
+      taskNumber: parsed.data.task_number,
+    });
+    if ('error' in result) {
+      return c.json({ error: result.error }, 400);
+    }
+    return c.json(result);
+  });
+
+  app.post('/internal/sessions/:sid/agents/:aid/tasks/update-status', async c => {
+    const sid = c.req.param('sid');
+    const aid = c.req.param('aid');
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = UpdateTaskStatusInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    const result = await updateTaskStatusByAgent(taskDeps, {
+      sessionId: sid,
+      agentId: aid,
+      taskNumber: parsed.data.task_number,
+      status: parsed.data.status,
+    });
+    if ('error' in result) {
+      return c.json({ error: result.error }, 400);
+    }
+    return c.json(result);
   });
 
   return app;

@@ -122,6 +122,15 @@ function ActiveSessionView({
     [messages, anchor],
   );
 
+  // Resolve the prop-driven jump target — fires when the global Saved
+  // view or the Tasks panel hands us a `{sessionId, messageId}` for a
+  // message inside this session. Cleared by `onJumped` once the
+  // message-list scroll completes.
+  const effectiveJumpMessageId =
+    jumpTarget && jumpTarget.sessionId === session.id
+      ? jumpTarget.messageId
+      : null;
+
   // Open-thread summary for this session — only fetched on parent
   // panes (where Thread is actionable). Child panes can't have
   // grandchildren so the query is gated and stays disabled there.
@@ -196,24 +205,22 @@ function ActiveSessionView({
         </div>
       </header>
 
-      <MessageList
-        sessionId={session.id}
-        channelId={session.channel_id}
-        messages={visibleMessages}
-        isLoading={isLoading}
-        leadingSlot={anchor ? <QuotedMessagePreview quoteMessage={anchor} /> : null}
-        highlightedMessageId={highlightedMessageId ?? null}
-        jumpToMessageId={
-          jumpTarget && jumpTarget.sessionId === session.id
-            ? jumpTarget.messageId
-            : null
-        }
-        onJumped={onJumped}
-        onThreadCreated={onThreadCreated}
-        threadByAnchor={threadByAnchor}
-      />
+      <div className="flex min-h-0 flex-1 flex-col">
+        <MessageList
+          sessionId={session.id}
+          channelId={session.channel_id}
+          messages={visibleMessages}
+          isLoading={isLoading}
+          leadingSlot={anchor ? <QuotedMessagePreview quoteMessage={anchor} /> : null}
+          highlightedMessageId={highlightedMessageId ?? null}
+          jumpToMessageId={effectiveJumpMessageId}
+          onJumped={() => onJumped?.()}
+          onThreadCreated={onThreadCreated}
+          threadByAnchor={threadByAnchor}
+        />
 
-      <Composer sessionId={session.id} disabled={closed} />
+        <Composer sessionId={session.id} disabled={closed} />
+      </div>
     </main>
   );
 }

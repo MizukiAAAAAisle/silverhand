@@ -56,6 +56,14 @@ export const apiPaths = {
   notifications: '/api/notifications',
   notificationsUnread: '/api/notifications/unread',
   notificationsRead: '/api/notifications/read',
+
+  // tasks — human-facing list + mutation endpoints. Per
+  // docs/tasks-design.md §6.2. Path key = message id (a task is a
+  // message with task metadata).
+  tasks: '/api/tasks',
+  taskClaim: (messageId: string) => `/api/tasks/${messageId}/claim`,
+  taskUnclaim: (messageId: string) => `/api/tasks/${messageId}/unclaim`,
+  taskStatus: (messageId: string) => `/api/tasks/${messageId}/status`,
 } as const;
 
 export const internalPaths = {
@@ -68,4 +76,19 @@ export const internalPaths = {
   /** Agent closes the current session (must be a child or own). */
   agentCloseSession: (sid: string, aid: string) =>
     `/internal/sessions/${sid}/agents/${aid}/close`,
+
+  // ── Task MCP tool endpoints (chat-bridge → backend) ──────────────
+  // Scoped under (session_id, agent_id) so the backend can enforce
+  // "you may only operate on your own session's tasks". See
+  // docs/tasks-design.md §6.1.
+  agentListTasks: (sid: string, aid: string) =>
+    `/internal/sessions/${sid}/agents/${aid}/tasks`,
+  agentCreateTasks: (sid: string, aid: string) =>
+    `/internal/sessions/${sid}/agents/${aid}/tasks/create`,
+  agentClaimTasks: (sid: string, aid: string) =>
+    `/internal/sessions/${sid}/agents/${aid}/tasks/claim`,
+  agentUnclaimTask: (sid: string, aid: string) =>
+    `/internal/sessions/${sid}/agents/${aid}/tasks/unclaim`,
+  agentUpdateTaskStatus: (sid: string, aid: string) =>
+    `/internal/sessions/${sid}/agents/${aid}/tasks/update-status`,
 } as const;

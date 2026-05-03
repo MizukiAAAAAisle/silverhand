@@ -7,6 +7,7 @@ import { SessionsSidebar } from '@/components/layout/SessionsSidebar';
 import { SessionView } from '@/components/layout/SessionView';
 import { SavedListView } from '@/components/layout/SavedListView';
 import { SplitPane } from '@/components/layout/SplitPane';
+import { TasksSection } from '@/components/layout/TasksSection';
 import { Titlebar } from '@/components/layout/Titlebar';
 import { VerticalSplitter } from '@/components/layout/VerticalSplitter';
 import { useAppearance } from '@/hooks/useAppearance';
@@ -14,6 +15,8 @@ import { useResizableWidth } from '@/hooks/useResizableWidth';
 import { CreateChannelDialog } from '@/features/channels/CreateChannelDialog';
 import { CreateSessionDialog } from '@/features/channels/CreateSessionDialog';
 import { ChannelSettingsDialog } from '@/features/channels/ChannelSettingsDialog';
+import { ChannelTasksDialog } from '@/components/tasks/ChannelTasksDialog';
+import { useTasks } from '@/features/tasks/hooks';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { AgentView } from '@/features/agents/AgentView';
 import {
@@ -67,6 +70,7 @@ export function App(): JSX.Element {
   const [createChannelOpen, setCreateChannelOpen] = useState(false);
   const [createSessionOpen, setCreateSessionOpen] = useState(false);
   const [channelSettingsOpen, setChannelSettingsOpen] = useState(false);
+  const [tasksDialogOpen, setTasksDialogOpen] = useState(false);
   // One-shot jump target consumed by SessionView once messages are
   // loaded for the target session. Cleared after handling. Kept in
   // memory rather than the URL because it's truly ephemeral —
@@ -95,6 +99,17 @@ export function App(): JSX.Element {
   // Per-channel unread count for the sidebar badges (5s polling).
   const { data: unreadCounts } = useUnreadCounts();
   const markRead = useMarkNotificationsRead();
+  // Active-task count for the titlebar Tasks badge — scoped to the
+  // current channel so the number matches what the panel will show
+  // when opened (default filter = current session, but the badge is
+  // channel-aggregate to match where the entry lives).
+  const { data: channelTasks = [] } = useTasks(
+    selectedChannelId ? { channel_id: selectedChannelId } : {},
+    { enabled: !!selectedChannelId },
+  );
+  const channelActiveTaskCount = channelTasks.filter(
+    t => t.status !== 'done',
+  ).length;
 
   // Auto-select first channel when chat is open without a channel id.
   // Replace so the bare /chat URL doesn't pile up in history.
@@ -333,12 +348,19 @@ export function App(): JSX.Element {
             ? () => setCreateSessionOpen(true)
             : undefined
         }
+        onOpenTasks={
+          appSection === 'chat' && view === 'channel' && selectedChannel
+            ? () => setTasksDialogOpen(true)
+            : undefined
+        }
+        taskCount={channelActiveTaskCount}
       />
       <div className="flex flex-1 overflow-hidden">
         <NavRail
           current={appSection}
           onChange={section => {
             if (section === 'chat') nav.toChat();
+            else if (section === 'tasks') nav.toTasks();
             else if (section === 'members') nav.toMembers();
             else if (section === 'settings') nav.toSettings();
             else nav.toComputers();
@@ -346,6 +368,8 @@ export function App(): JSX.Element {
         />
         {appSection === 'settings' ? (
           <SettingsPage />
+        ) : appSection === 'tasks' ? (
+          <TasksSection onJump={handleJumpToMessage} />
         ) : appSection === 'members' ? (
           <>
             <aside className="flex h-full w-[var(--sidebar-width)] flex-col bg-[var(--bg-channels-sidebar)]">
@@ -468,6 +492,22 @@ export function App(): JSX.Element {
         workspacePath={selectedChannel?.workspace_path ?? null}
         onDeleted={handleChannelDeleted}
       />
+      {selectedChannel ? (
+        <ChannelTasksDialog
+          open={tasksDialogOpen}
+          onOpenChange={setTasksDialogOpen}
+          channelId={selectedChannel.id}
+          channelName={selectedChannel.name}
+          sessions={sessions.map(s => ({
+            id: s.id,
+            title: s.title,
+            closed_at: s.closed_at,
+            created_at: s.created_at,
+          }))}
+          defaultSessionId={selectedSessionId}
+          onJumpToMessage={handleJumpToMessage}
+        />
+      ) : null}
     </div>
   );
 }

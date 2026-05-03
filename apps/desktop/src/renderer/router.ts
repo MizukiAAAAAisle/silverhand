@@ -19,6 +19,7 @@ export const routes = {
   members: () => '/members',
   membersAgent: (agentId: string) => `/members/${agentId}`,
   computers: () => '/computers',
+  tasks: () => '/tasks',
   settings: () => '/settings',
 } as const;
 
@@ -31,6 +32,7 @@ export const routePatterns = {
   membersAgent: '/members/:agentId',
   members: '/members',
   computers: '/computers',
+  tasks: '/tasks',
   settings: '/settings',
 } as const;
 
@@ -72,6 +74,7 @@ export function useRouteState(): RouteState {
   let section: AppSection = 'chat';
   if (pathname.startsWith('/members')) section = 'members';
   else if (pathname.startsWith('/computers')) section = 'computers';
+  else if (pathname.startsWith('/tasks')) section = 'tasks';
   else if (pathname.startsWith('/settings')) section = 'settings';
 
   const chatView: ChatView = pathname.startsWith('/chat/saved') ? 'saved' : 'channel';
@@ -100,6 +103,7 @@ export function useNav(): {
   toThread: (channelId: string, sessionId: string, childSessionId: string) => void;
   toMembers: (agentId?: string) => void;
   toComputers: () => void;
+  toTasks: () => void;
   toSettings: () => void;
 } {
   const navigate = useNavigate();
@@ -127,6 +131,7 @@ export function useNav(): {
       [go],
     ),
     toComputers: useCallback(() => go(routes.computers()), [go]),
+    toTasks: useCallback(() => go(routes.tasks()), [go]),
     toSettings: useCallback(() => go(routes.settings()), [go]),
   };
 }

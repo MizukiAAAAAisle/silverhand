@@ -867,3 +867,56 @@ URL scheme：
 
 
 
+
+## 2026-05-03 (后续 +2) — Tasks 系统（PR-T1 ~ PR-T4）
+
+实现 silverhand 自己的多 agent 任务协调原语。背景：slock-ai 的网站上有 tasks 概念，原型是"channel-level task list + agent claim"。silverhand 引入了 channel/session 两级，于是把 task 的可见性 / 操作性拆开（channel 级可见 read-only、session 级可操作 claim/update），其他保持一致。
+
+设计文档：`docs/tasks-design.md`。
+
+### 数据模型（PR-T1）
+
+不新增表，扩 `messages`：
+
+- migration v7 `tasks`：`messages` 加 6 列 `task_number / task_status / task_assignee_agent_id / task_assignee_user_id / task_title / task_channel_id`
+- `task_channel_id` 是冗余字段（可从 session 反查），用于支撑 partial unique index `uniq_messages_task_number(task_channel_id, task_number) WHERE task_number IS NOT NULL` —— `task_number` 在 channel 维度递增、唯一
+- 一条消息既是 message 也是 task：避免 join、SSE 投递路径不变
+
+### 后端（PR-T1）
+
+- `packages/backend/src/tasks.ts`：service 层，所有事务都集中在这里
+  - `createTasksByAgent` —— 单事务 `SELECT MAX(task_number) + 1` + insert 多条，避免并发抢号
+  - `claimTasksByAgent` —— 原子 `UPDATE ... WHERE task_assignee_agent_id IS NULL AND task_status != 'done'` + `changes()` 检测 race；也支持 promote-and-claim（直接传 messageId 把已有消息升格成 task）
+  - `updateTaskStatusByAgent` —— `VALID_TRANSITIONS` 表约束状态机，跨 session 操作直接拒绝
+  - `humanClaim / humanUnclaim / humanUpdateStatus` —— 不受 assignee-only 限制（详见设计文档 §4.3）
+- 4 个 agent endpoints + 3 个 human endpoints，挂在 `/api/tasks/*` 与 `/internal/sessions/:sid/agents/:aid/tasks*`
+- 事件：每次状态变更广播 `task_changed` SSE 事件 + 一条系统消息（`subtype: task_create | task_claim | task_unclaim | task_status`），系统消息走现有 inbox fanout 让离线 agent 也能感知
+- 测试：`packages/backend/tests/routes/tasks.test.ts` 8 条，覆盖 create / claim race / promote / cross-session reject / update status rules / human approval / SSE / inbox fanout
+
+### MCP 工具（PR-T2）
+
+- `packages/chat-bridge/src/server.ts`：新增 5 个 MCP tool（`list_tasks / create_tasks / claim_tasks / unclaim_task / update_task_status`），描述详细写明 silverhand 特有的"channel 可见、session 可操作"约束
+- `packages/backend/src/drivers/platform-prompt.ts`：在 `## Tasks (coordination primitive)` 段写入 5 条硬规则（claim 前先 list；想干就先 claim；干完推 in_review 让 human approve；不要瞎跨 session 操作；不要在 done 上反复 toggle）
+
+### UI（PR-T3 ~ PR-T4）
+
+经过几轮反复设计，最终落地为两个层级，具体差异见 `docs/tasks-design.md` §7.5。
+
+- **NavRail Tasks section**：`apps/desktop/src/renderer/components/layout/TasksSection.tsx` —— 单栏布局，header 下方 channel chip strip（`All` + 前 10 个 regular channel 按 active 数量倒序 + 分隔条 + DM channels），主视图四列 Kanban
+- **Titlebar Tasks 入口**：`Titlebar` 在 chat section + 选中 channel 时显示 `CheckSquare` 按钮（带 active 数量 badge），点击打开 `ChannelTasksDialog`（`apps/desktop/src/renderer/components/tasks/ChannelTasksDialog.tsx`）—— 中央模态、四列 Kanban、session chip strip（默认当前 session）
+- 共享组件：`KanbanColumn` / `TaskCard` / `TaskStatusPill` / `useTasks` / `useUpdateTaskStatus`
+- Kanban 设计要点：modal 高度固定 `h-[80vh] max-h-[760px]`，但每列 `items-start` 自适应内容高度（避免 empty 时大空盒），空态显示 `No <status> tasks`
+- SSE：`useSessionStream` 加入 `task_changed` 事件；React Query 失效粒度选择"整个 `tasks` 树都失效"——简单且任务列表本身很小
+
+### 中间走过的弯路
+
+- 一开始按设计文档做了 `TaskDrawer`（SessionView 右侧抽屉）和 SessionsSidebar 的 Sessions/Tasks tab 切换，用户 review 后觉得：
+  - Drawer 跟 channel 入口职责重叠、还挤压消息流空间
+  - SessionsSidebar 加 tab 把侧栏"语义混杂"了
+- 改成现在的"titlebar 入口 + 中央 dialog + chip strip 切 session" 后干净很多。废弃的 `TaskDrawer.tsx` 已删
+
+### 验证
+
+- `pnpm typecheck` 全过（4 个 workspace）
+- `pnpm test` 136/136（新增 8 条 task 测试）
+- UI 在浏览器中由用户人工 review 通过

@@ -133,6 +133,160 @@ export async function startBridge(args: BridgeArgs): Promise<void> {
     },
   );
 
+  // ── Tasks ────────────────────────────────────────────────────────
+  // See docs/tasks-design.md §5. Tasks are message metadata; numbering
+  // space is per-channel, operation scope is per-session. These tools
+  // aggregate at channel level (you'll see other sessions' tasks in
+  // list_tasks output) but only accept mutations on tasks that belong
+  // to YOUR session — cross-session claim/unclaim/update fails with
+  // `owner_session` in the failure reason.
+
+  server.tool(
+    'list_tasks',
+    'View the task board for the current channel. Aggregates tasks from EVERY session ' +
+      'in this channel — each entry carries a `session` field pointing to the session it ' +
+      'belongs to. You can only claim/update tasks in YOUR own session (see reason field ' +
+      'on claim failures).',
+    {
+      status: z
+        .enum(['all', 'todo', 'in_progress', 'in_review', 'done'])
+        .optional()
+        .describe('Filter by status. Default = all.'),
+    },
+    async ({ status }) => {
+      log('info', { status: status ?? 'all' }, 'tool: list_tasks invoked');
+      try {
+        const r = await client.listTasks({ status });
+        return { content: [{ type: 'text', text: JSON.stringify(r) }] };
+      } catch (err) {
+        log('error', { err }, 'tool: list_tasks failed');
+        throw err;
+      }
+    },
+  );
+
+  server.tool(
+    'create_tasks',
+    'Create one or more task-messages in the current session. Use for genuinely new work; ' +
+      'if the work already exists as a message, use claim_tasks with message_ids instead ' +
+      '(promotes the existing message to a task and claims it). Does NOT auto-claim — call ' +
+      'claim_tasks afterward if you intend to work on them yourself.',
+    {
+      tasks: z
+        .array(
+          z.object({
+            title: z.string().min(1).max(200).describe('Short task title.'),
+            body: z
+              .string()
+              .optional()
+              .describe('Optional longer body. Defaults to the title when omitted.'),
+          }),
+        )
+        .min(1)
+        .describe('Array of tasks to create.'),
+    },
+    async input => {
+      log('info', { count: input.tasks.length }, 'tool: create_tasks invoked');
+      try {
+        const r = await client.createTasks(input);
+        log('info', { created: r.tasks.length }, 'tool: create_tasks ok');
+        return { content: [{ type: 'text', text: JSON.stringify(r) }] };
+      } catch (err) {
+        log('error', { err }, 'tool: create_tasks failed');
+        throw err;
+      }
+    },
+  );
+
+  server.tool(
+    'claim_tasks',
+    'Claim tasks so you become the assignee. Two modes:\n' +
+      '1. task_numbers: claim existing tasks (shown in list_tasks) — e.g. [1,3].\n' +
+      '2. message_ids: promote a regular message to a task and claim it (use the message\n' +
+      '   id from chat). Thread / system messages cannot become tasks.\n' +
+      'Claim is atomic: if another agent already claimed it OR the task belongs to a\n' +
+      'different session, the result entry has success=false with a reason. ALWAYS move ' +
+      'on when a claim fails — do not retry, do not work on it anyway. Claiming a `todo` ' +
+      'task auto-advances it to `in_progress`.',
+    {
+      task_numbers: z
+        .array(z.number().int().positive())
+        .optional()
+        .describe('Existing task numbers to claim (from list_tasks output).'),
+      message_ids: z
+        .array(z.string().min(1))
+        .optional()
+        .describe(
+          'Message ids to promote-and-claim. Message must be in your session and not be ' +
+            'a system / thread message.',
+        ),
+    },
+    async input => {
+      log(
+        'info',
+        {
+          byNumber: input.task_numbers?.length ?? 0,
+          byMessage: input.message_ids?.length ?? 0,
+        },
+        'tool: claim_tasks invoked',
+      );
+      try {
+        const r = await client.claimTasks(input);
+        const ok = r.results.filter(x => x.success).length;
+        log('info', { ok, total: r.results.length }, 'tool: claim_tasks ok');
+        return { content: [{ type: 'text', text: JSON.stringify(r) }] };
+      } catch (err) {
+        log('error', { err }, 'tool: claim_tasks failed');
+        throw err;
+      }
+    },
+  );
+
+  server.tool(
+    'unclaim_task',
+    'Release your claim on a task so someone else can pick it up. Use only when you can no ' +
+      'longer work on it — do NOT use unclaim to signal "done" (use update_task_status with ' +
+      'in_review / done instead). Fails if you are not the assignee or the task is already done.',
+    {
+      task_number: z.number().int().positive().describe('Task number to unclaim.'),
+    },
+    async ({ task_number }) => {
+      log('info', { task_number }, 'tool: unclaim_task invoked');
+      try {
+        const r = await client.unclaimTask(task_number);
+        return { content: [{ type: 'text', text: JSON.stringify(r) }] };
+      } catch (err) {
+        log('error', { err }, 'tool: unclaim_task failed');
+        throw err;
+      }
+    },
+  );
+
+  server.tool(
+    'update_task_status',
+    'Move a task through its lifecycle. You must be the assignee.\n' +
+      '  in_progress → in_review: your work is ready for human validation\n' +
+      '  in_progress → done     : ONLY for trivial tasks or after explicit human approval\n' +
+      '  in_review   → done     : after human approval (usually the human does this)\n' +
+      '  in_review   → in_progress: if you need to go back and iterate\n' +
+      'Other transitions are rejected. Stop at `in_review` by default and let the human ' +
+      'push it to done.',
+    {
+      task_number: z.number().int().positive(),
+      status: z.enum(['in_progress', 'in_review', 'done']),
+    },
+    async input => {
+      log('info', input, 'tool: update_task_status invoked');
+      try {
+        const r = await client.updateTaskStatus(input);
+        return { content: [{ type: 'text', text: JSON.stringify(r) }] };
+      } catch (err) {
+        log('error', { err }, 'tool: update_task_status failed');
+        throw err;
+      }
+    },
+  );
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
   log('info', {}, 'chat-bridge: connected to MCP transport');

@@ -4,6 +4,8 @@ import type {
   MessageRow,
   SavedMessageRow,
   SavedMessageDto,
+  TaskAssigneeDto,
+  TaskStatus,
 } from '@silverhand/shared';
 
 function newId(): string {
@@ -21,6 +23,13 @@ interface JoinedRow extends SavedMessageRow {
   m_metadata: string | null;
   m_seq: number;
   m_created_at: number;
+  m_task_number: number | null;
+  m_task_status: TaskStatus | null;
+  m_task_title: string | null;
+  m_task_channel_id: string | null;
+  m_task_assignee_agent_id: string | null;
+  m_task_assignee_user_id: string | null;
+  m_task_assignee_name: string | null;
   // Channel + session + agent
   channel_name: string;
   session_title: string;
@@ -28,6 +37,20 @@ interface JoinedRow extends SavedMessageRow {
 }
 
 function rowToDto(row: JoinedRow): SavedMessageDto {
+  let assignee: TaskAssigneeDto | null = null;
+  if (row.m_task_assignee_agent_id) {
+    assignee = {
+      type: 'agent',
+      id: row.m_task_assignee_agent_id,
+      name: row.m_task_assignee_name ?? row.m_task_assignee_agent_id,
+    };
+  } else if (row.m_task_assignee_user_id) {
+    assignee = {
+      type: 'user',
+      id: row.m_task_assignee_user_id,
+      name: row.m_task_assignee_user_id,
+    };
+  }
   return {
     id: row.id,
     saved_at: row.saved_at,
@@ -48,6 +71,11 @@ function rowToDto(row: JoinedRow): SavedMessageDto {
         : null,
       seq: row.m_seq,
       created_at: row.m_created_at,
+      task_number: row.m_task_number,
+      task_status: row.m_task_status,
+      task_title: row.m_task_title,
+      task_channel_id: row.m_task_channel_id,
+      task_assignee: assignee,
     },
   };
 }
@@ -68,6 +96,13 @@ const SELECT_JOINED = `
     m.metadata         AS m_metadata,
     m.seq              AS m_seq,
     m.created_at       AS m_created_at,
+    m.task_number             AS m_task_number,
+    m.task_status             AS m_task_status,
+    m.task_title              AS m_task_title,
+    m.task_channel_id         AS m_task_channel_id,
+    m.task_assignee_agent_id  AS m_task_assignee_agent_id,
+    m.task_assignee_user_id   AS m_task_assignee_user_id,
+    ta.display_name           AS m_task_assignee_name,
     c.name             AS channel_name,
     s.title            AS session_title,
     a.name             AS agent_name
@@ -75,7 +110,8 @@ const SELECT_JOINED = `
   JOIN messages m ON m.id = sm.message_id
   JOIN channels c ON c.id = sm.channel_id
   JOIN sessions s ON s.id = sm.session_id
-  LEFT JOIN agents a ON a.id = m.from_agent_id
+  LEFT JOIN agents a  ON a.id  = m.from_agent_id
+  LEFT JOIN agents ta ON ta.id = m.task_assignee_agent_id
 `;
 
 export class SavedMessageRepo {

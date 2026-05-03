@@ -40,6 +40,11 @@ export function buildPlatformPrompt(input: PlatformPromptInput): string {
   const sendMessage = t('send_message');
   const spawnChild = t('spawn_child_session');
   const closeSession = t('close_session');
+  const listTasks = t('list_tasks');
+  const createTasks = t('create_tasks');
+  const claimTasks = t('claim_tasks');
+  const unclaimTask = t('unclaim_task');
+  const updateTaskStatus = t('update_task_status');
   const sessionContextBlock = renderSessionContext(input.sessionContext);
 
   return `# Silverhand platform manual
@@ -171,6 +176,46 @@ to avoid duplicate posting.
 
 Frequent parent ↔ child back-and-forth (5+ rounds) means the spawn
 decision was wrong — close out and continue in the parent.
+
+## Tasks (coordination primitive)
+
+The channel has a task board that aggregates tasks across every
+session. You can see tasks from other sessions in this channel but
+you can only *act* on tasks in YOUR current session. Tasks exist to
+prevent duplicated work: always claim before you start.
+
+Tools:
+- ${listTasks} — view the channel's task board. Each entry carries a
+  \`session\` field; other sessions' tasks appear in the listing but
+  are read-only to you.
+- ${createTasks} — create new task-messages in THIS session only. Use
+  for genuinely new subtasks or follow-up work.
+- ${claimTasks} — claim by \`task_numbers\` (own session) or promote a
+  regular message to a task and claim it via \`message_ids\` (own
+  session). Fails atomically if another agent already claimed it or
+  the task belongs to another session.
+- ${unclaimTask} — release your claim (not a "done" signal).
+- ${updateTaskStatus} — \`in_progress → in_review / done\`,
+  \`in_review → in_progress / done\`. You must be the assignee.
+
+Rules:
+1. **Claim before working.** If the claim fails (already taken, wrong
+   session, already done), MOVE ON — do not retry, do not work on it
+   anyway. Claim failures carry a reason; read it.
+2. **Only operate on YOUR session's tasks.** You will see other
+   sessions' tasks in ${listTasks} output (marked with
+   \`session: {id, title}\`), but claim/unclaim/update will reject
+   them. That is intentional — the other session's agents will
+   handle those.
+3. **Stop at \`in_review\` for non-trivial work.** The human validates
+   and moves it to \`done\`. Setting \`done\` yourself is only
+   appropriate for trivial tasks or after explicit approval.
+4. **Prefer promoting existing messages over ${createTasks}.** If the
+   work already exists as a message, use ${claimTasks} with
+   \`message_ids\` to promote-and-claim in one call. Use ${createTasks}
+   only for genuinely new work.
+5. **No duplicates.** Before ${createTasks}, run ${listTasks} to check
+   whether the work already has a task on the board.
 
 ## Initial role (your assignment in this channel)
 ${input.l2SystemPrompt.trim() || '_(role not yet defined — wait for the user to shape it during onboarding)_'}

@@ -29,6 +29,17 @@ export type SessionAgentStatus = z.infer<typeof SessionAgentStatusSchema>;
 export const FromKindSchema = z.enum(['user', 'agent', 'system']);
 export type FromKind = z.infer<typeof FromKindSchema>;
 
+export const TaskStatusSchema = z.enum([
+  'todo',
+  'in_progress',
+  'in_review',
+  'done',
+]);
+export type TaskStatus = z.infer<typeof TaskStatusSchema>;
+
+export const TaskAssigneeTypeSchema = z.enum(['agent', 'user']);
+export type TaskAssigneeType = z.infer<typeof TaskAssigneeTypeSchema>;
+
 export const SessionEventKindSchema = z.enum([
   'session_init',
   'tool_call',
@@ -112,6 +123,12 @@ export interface MessageRow {
   metadata: string | null;
   seq: number;
   created_at: number;
+  task_number: number | null;
+  task_status: TaskStatus | null;
+  task_assignee_agent_id: string | null;
+  task_assignee_user_id: string | null;
+  task_title: string | null;
+  task_channel_id: string | null;
 }
 
 export interface AgentInboxRow {

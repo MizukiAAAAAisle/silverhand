@@ -1,15 +1,49 @@
 import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
-import type { FromKind, MessageDto, MessageRow } from '@silverhand/shared';
+import type {
+  FromKind,
+  MessageDto,
+  MessageRow,
+  TaskAssigneeDto,
+} from '@silverhand/shared';
 
 function newId(): string {
   return randomBytes(12).toString('base64url');
 }
 
-function rowToDto(row: MessageRow): MessageDto {
+export function messageRowToDto(
+  row: MessageRow,
+  opts?: { assigneeName?: string | null },
+): MessageDto {
+  let assignee: TaskAssigneeDto | null = null;
+  if (row.task_assignee_agent_id) {
+    assignee = {
+      type: 'agent',
+      id: row.task_assignee_agent_id,
+      name: opts?.assigneeName ?? row.task_assignee_agent_id,
+    };
+  } else if (row.task_assignee_user_id) {
+    assignee = {
+      type: 'user',
+      id: row.task_assignee_user_id,
+      name: opts?.assigneeName ?? row.task_assignee_user_id,
+    };
+  }
   return {
-    ...row,
+    id: row.id,
+    session_id: row.session_id,
+    from_kind: row.from_kind,
+    from_agent_id: row.from_agent_id,
+    from_user_id: row.from_user_id,
+    content: row.content,
     metadata: row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : null,
+    seq: row.seq,
+    created_at: row.created_at,
+    task_number: row.task_number,
+    task_status: row.task_status,
+    task_title: row.task_title,
+    task_channel_id: row.task_channel_id,
+    task_assignee: assignee,
   };
 }
 
@@ -22,14 +56,14 @@ export class MessageRepo {
         `SELECT * FROM messages WHERE session_id = ? ORDER BY seq ASC LIMIT ?`,
       )
       .all(sessionId, limit);
-    return rows.map(rowToDto);
+    return rows.map(r => messageRowToDto(r));
   }
 
   getById(id: string): MessageDto | null {
     const row = this.db
       .prepare<[string], MessageRow>('SELECT * FROM messages WHERE id = ?')
       .get(id);
-    return row ? rowToDto(row) : null;
+    return row ? messageRowToDto(row) : null;
   }
 
   insert(params: {
@@ -70,6 +104,6 @@ export class MessageRepo {
       .prepare<[string], MessageRow>('SELECT * FROM messages WHERE id = ?')
       .get(id);
     if (!row) throw new Error('message insert failed');
-    return rowToDto(row);
+    return messageRowToDto(row);
   }
 }
