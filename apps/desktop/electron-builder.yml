@@ -1,0 +1,87 @@
+# electron-builder config for the silverhand desktop app.
+#
+# macOS-only (per CLAUDE.md). Produces a universal dmg + zip under
+# `apps/desktop/release/`. Run via `pnpm package` from the repo root —
+# that wrapper script swaps better-sqlite3 to the Electron ABI first
+# and rebuilds workspace packages, both of which electron-builder
+# itself can't do correctly in our pnpm monorepo.
+
+appId: com.silverhand.desktop
+productName: Silverhand
+copyright: Copyright © 2026 Silverhand
+
+directories:
+  # Where electron-builder looks for icons / entitlements / dmg
+  # background. Default is `build/`; spell it out for clarity.
+  buildResources: build
+  # Output dir for the packaged .dmg / .app / .zip artifacts.
+  output: release
+
+# We pre-build everything via `pnpm -r build` in scripts/package.sh, so
+# don't let electron-builder also try to rebuild native modules — the
+# better-sqlite3 binding it would produce would be for the *system*
+# Node ABI, not Electron's, which would crash on launch. The wrapper
+# script swaps in the Electron-ABI binding before this runs.
+npmRebuild: false
+nodeGypRebuild: false
+
+# What gets included in the asar.
+# - out/**: electron-vite output (main + preload + renderer)
+# - package.json: electron uses "main" to find the entrypoint
+# - node_modules: production deps (hono, better-sqlite3, etc.).
+#   Workspace deps (@silverhand/*) are bundled by electron-vite into
+#   out/main/index.js, so the symlinks in node_modules don't need to
+#   resolve at runtime — and they MUST be excluded, otherwise
+#   electron-builder follows them out of apps/desktop/ and bails on
+#   "must be under <project>" when it hits packages/*/dist/.
+files:
+  - out/**/*
+  - package.json
+  - "!node_modules/@silverhand"
+  - "!node_modules/@silverhand/**"
+  - "!**/{tsconfig*.json,*.tsbuildinfo}"
+  - "!**/node_modules/*/{README.md,readme.md,*.d.ts,LICENSE*,license*}"
+  - "!**/node_modules/**/test/**"
+
+# better-sqlite3's .node binary cannot live inside the asar — Node's
+# dlopen needs a real path on disk. The glob unpacks the whole package
+# (binding + JS shim) so requires resolve cleanly.
+asarUnpack:
+  - node_modules/better-sqlite3/**/*
+
+# Ship chat-bridge's bundled dist/cli.js outside the asar as a
+# resource. main/index.ts resolves it via process.resourcesPath when
+# packaged. The source `from` is relative to apps/desktop/.
+# Renamed to `.mjs` because esbuild emits ESM (import statements) and
+# Node treats `.js` as CommonJS unless a sibling package.json declares
+# `"type": "module"` — `.mjs` skips that song and dance entirely.
+extraResources:
+  - from: ../../packages/chat-bridge/dist/cli.js
+    to: chat-bridge/cli.mjs
+
+mac:
+  category: public.app-category.developer-tools
+  # arm64-only for now. Universal (arm64+x64) was attempted but the
+  # x64 Electron zip download fails over our network — switch back
+  # by adding `- universal` once that's fixed, or build x64 on a
+  # machine with reliable github.com access.
+  target:
+    - target: dmg
+      arch:
+        - arm64
+    - target: zip
+      arch:
+        - arm64
+  # null = ad-hoc sign with the local codesign tool ("codesign --sign -").
+  # Required so Gatekeeper at least loads the app on the build machine.
+  # For distribution, set to a Developer ID identity.
+  identity: null
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  icon: build/icon.icns
+
+dmg:
+  # Default window layout — fine for now; tweak when there's a custom
+  # background. `sign: false` skips dmg signing (we're ad-hoc only).
+  sign: false
+  writeUpdateInfo: false

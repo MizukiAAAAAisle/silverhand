@@ -131,12 +131,17 @@ export function SettingsPage(): JSX.Element {
                 id="proxy-url"
                 value={proxyUrl}
                 onChange={e => setProxyUrl(e.target.value)}
-                placeholder="http://127.0.0.1:7897"
+                placeholder="127.0.0.1:7897 / http://… / socks5://…"
                 disabled={settingsQuery.isLoading}
               />
               <p className="text-xs text-text-muted">
-                非空时注入 <code>HTTP_PROXY</code> / <code>HTTPS_PROXY</code> /{' '}
-                <code>ALL_PROXY</code>（含小写）到下方勾选 runtime 的 agent 子进程。
+                注入到下方勾选 runtime 的 agent 子进程，会自动展开成{' '}
+                <code>http_proxy</code> / <code>https_proxy</code> /{' '}
+                <code>all_proxy</code>（含大写）。bare host:port 或{' '}
+                <code>http://</code> 假设是 Clash 这类 mixed-port，HTTP 用{' '}
+                <code>http://</code>、<code>all_proxy</code> 用{' '}
+                <code>socks5://</code>；填 <code>socks5://</code> 则只设{' '}
+                <code>all_proxy</code>。
               </p>
             </div>
 

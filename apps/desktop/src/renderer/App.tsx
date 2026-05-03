@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Toaster } from 'sonner';
 import { NavRail } from '@/components/layout/NavRail';
 import { ComputersPanel } from '@/components/layout/ComputersPanel';
 import { MembersPanel } from '@/components/layout/MembersPanel';
@@ -26,6 +27,7 @@ import {
 import { useSavedMessages } from '@/features/saved/hooks';
 import {
   useMarkNotificationsRead,
+  useNotificationToasts,
   useUnreadCounts,
 } from '@/features/notifications/hooks';
 import { useNav, useRouteState } from '@/router';
@@ -99,6 +101,8 @@ export function App(): JSX.Element {
   // Per-channel unread count for the sidebar badges (5s polling).
   const { data: unreadCounts } = useUnreadCounts();
   const markRead = useMarkNotificationsRead();
+  // In-app + system notifications for new mentions and agent failures.
+  useNotificationToasts(selectedChannelId ?? null);
   // Active-task count for the titlebar Tasks badge — scoped to the
   // current channel so the number matches what the panel will show
   // when opened (default filter = current session, but the badge is
@@ -206,6 +210,18 @@ export function App(): JSX.Element {
   const childSession = openChildSessionId
     ? sessions.find(s => s.id === openChildSessionId) ?? null
     : null;
+  const activeEventSessionId = openChildSessionId ?? selectedSessionId;
+
+  useEffect(() => {
+    void window.agentHub.setActiveSession({
+      channelId:
+        appSection === 'chat' && view === 'channel' ? selectedChannelId : null,
+      sessionId:
+        appSection === 'chat' && view === 'channel'
+          ? activeEventSessionId
+          : null,
+    });
+  }, [appSection, view, selectedChannelId, activeEventSessionId]);
 
   const handleSelectChannel = (id: string): void => {
     // If the channel has unread mentions, jump straight to the latest
@@ -340,6 +356,7 @@ export function App(): JSX.Element {
         channelName={selectedChannel?.name ?? null}
         channelKind={selectedChannel?.kind ?? null}
         workspacePath={selectedChannel?.workspace_path ?? null}
+        channelArchivedAt={selectedChannel?.archived_at ?? null}
         onOpenChannelSettings={
           selectedChannel ? () => setChannelSettingsOpen(true) : undefined
         }
@@ -416,6 +433,7 @@ export function App(): JSX.Element {
                 kind: c.kind,
                 dm_agent_id: c.dm_agent_id,
                 unread: unreadCounts?.by_channel?.[c.id] ?? 0,
+                archived: c.archived_at !== null,
               }))}
               selectedChannelId={selectedChannelId}
               onSelectChannel={handleSelectChannel}
@@ -471,7 +489,9 @@ export function App(): JSX.Element {
       <CreateChannelDialog
         open={createChannelOpen}
         onOpenChange={setCreateChannelOpen}
-        onCreated={id => nav.toChannel(id)}
+        onCreated={({ channelId, sessionId }) =>
+          nav.toSession(channelId, sessionId)
+        }
       />
       <CreateSessionDialog
         open={createSessionOpen}
@@ -490,6 +510,7 @@ export function App(): JSX.Element {
         channelName={selectedChannel?.name ?? null}
         channelKind={selectedChannel?.kind ?? null}
         workspacePath={selectedChannel?.workspace_path ?? null}
+        archivedAt={selectedChannel?.archived_at ?? null}
         onDeleted={handleChannelDeleted}
       />
       {selectedChannel ? (
@@ -508,6 +529,7 @@ export function App(): JSX.Element {
           onJumpToMessage={handleJumpToMessage}
         />
       ) : null}
+      <Toaster position="bottom-right" richColors />
     </div>
   );
 }

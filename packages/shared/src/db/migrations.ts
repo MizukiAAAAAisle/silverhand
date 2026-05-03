@@ -240,4 +240,20 @@ export const migrations: Migration[] = [
         WHERE task_channel_id IS NOT NULL;
     `,
   },
+  {
+    version: 8,
+    name: 'channel_archive',
+    // Soft-archive a channel: it stays in the DB (sessions, members,
+    // messages all reachable for read), but the renderer hides it
+    // behind an "Archived" group and the composer/auto-spawn paths
+    // refuse new activity. Reversible — `archived_at = NULL` puts it
+    // back in active rotation. Partial index keeps the active-channel
+    // listing path cheap (the common query).
+    up: `
+      ALTER TABLE channels ADD COLUMN archived_at INTEGER;
+      CREATE INDEX idx_channels_active
+        ON channels(updated_at DESC)
+        WHERE archived_at IS NULL;
+    `,
+  },
 ];

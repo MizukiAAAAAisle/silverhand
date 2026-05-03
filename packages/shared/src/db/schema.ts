@@ -81,6 +81,7 @@ export interface ChannelRow {
   workspace_path: string;
   workspace_host_id: string;
   dm_agent_id: string | null;
+  archived_at: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -157,7 +158,12 @@ export interface SavedMessageRow {
   saved_at: number;
 }
 
-export const NotificationKindSchema = z.enum(['mention_external']);
+export const NotificationKindSchema = z.enum([
+  'mention_external',
+  /** An agent failed to start before its process was even spawned
+   *  (e.g. runtime binary not on PATH). Inserted by SessionManager. */
+  'agent_start_failed',
+]);
 export type NotificationKind = z.infer<typeof NotificationKindSchema>;
 
 export interface NotificationRow {

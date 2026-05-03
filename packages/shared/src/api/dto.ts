@@ -159,6 +159,7 @@ export const ChannelDtoSchema = z.object({
   workspace_path: z.string(),
   workspace_host_id: z.string(),
   dm_agent_id: z.string().nullable(),
+  archived_at: z.number().nullable(),
   created_at: z.number(),
   updated_at: z.number(),
 });
@@ -185,6 +186,14 @@ export const UpdateChannelInputSchema = z.object({
     .regex(/^[a-zA-Z0-9_\-]+$/, 'name must be alphanumeric / dash / underscore'),
 });
 export type UpdateChannelInput = z.infer<typeof UpdateChannelInputSchema>;
+
+/** Body for `PATCH /api/channels/:id/archive`. Toggle-shaped instead of
+ *  separate archive / unarchive endpoints — the UI flips a flag, the
+ *  backend looks at the boolean. */
+export const ArchiveChannelInputSchema = z.object({
+  archived: z.boolean(),
+});
+export type ArchiveChannelInput = z.infer<typeof ArchiveChannelInputSchema>;
 
 // ── Channel membership ───────────────────────────────────────────
 export const ChannelMemberDtoSchema = z.object({

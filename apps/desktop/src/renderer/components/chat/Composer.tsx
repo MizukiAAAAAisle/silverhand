@@ -19,6 +19,8 @@ interface ComposerProps {
   disabled: boolean;
 }
 
+const MAX_TEXTAREA_HEIGHT = 192; // Mirrors Tailwind max-h-48.
+
 /**
  * Message composer with @-mention / #-channel autocomplete.
  *
@@ -51,6 +53,10 @@ export function Composer({ sessionId, disabled }: ComposerProps): JSX.Element {
   const [composing, setComposing] = useState(false);
   const send = useSendMessage(sessionId);
   const ref = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    resizeTextarea(ref.current);
+  }, [draft]);
 
   const { data: agents = [] } = useAgents();
   const { data: channels = [] } = useChannels();
@@ -198,7 +204,6 @@ export function Composer({ sessionId, disabled }: ComposerProps): JSX.Element {
           onKeyDown={onKeyDown}
           onCompositionStart={() => setComposing(true)}
           onCompositionEnd={() => setComposing(false)}
-          rows={2}
           disabled={disabled}
           placeholder={
             disabled
@@ -220,6 +225,15 @@ export function Composer({ sessionId, disabled }: ComposerProps): JSX.Element {
       </div>
     </form>
   );
+}
+
+function resizeTextarea(el: HTMLTextAreaElement | null): void {
+  if (!el) return;
+  el.style.height = 'auto';
+  const nextHeight = Math.min(el.scrollHeight, MAX_TEXTAREA_HEIGHT);
+  el.style.height = `${nextHeight}px`;
+  el.style.overflowY =
+    el.scrollHeight > MAX_TEXTAREA_HEIGHT ? 'auto' : 'hidden';
 }
 
 // ── trigger detection ─────────────────────────────────────────────

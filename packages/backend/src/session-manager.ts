@@ -15,16 +15,28 @@ import {
   type SessionContextInput,
 } from './drivers/index.js';
 import { detectRuntimes } from './runtimes.js';
+import { expandProxyEnv } from './proxy.js';
 import { prepareSpawnFiles, type SpawnPrepHandle } from './spawn-prep.js';
 import { AgentRepo } from './repos/agent-repo.js';
 import { ChannelRepo } from './repos/channel-repo.js';
 import { InboxRepo, type PendingInboxItem } from './repos/inbox-repo.js';
 import { MessageRepo } from './repos/message-repo.js';
+import { NotificationRepo } from './repos/notification-repo.js';
 import { SessionRepo } from './repos/session-repo.js';
 import { SettingsRepo, SETTINGS_KEYS } from './repos/settings-repo.js';
 
 /** §3.5 watchdog window. Slock's `COMPACTION_STALE_MS` = 5 min. */
 const COMPACTION_STALE_MS = 5 * 60 * 1000;
+
+/**
+ * If the agent CLI doesn't emit `session_init` within this window we
+ * assume it's wedged (claude with empty stdin, codex JSON-RPC dead,
+ * cursor child crashed silently, etc.) and kill it. The exit handler
+ * flips status to `crashed` so the UI shows the failure instead of
+ * sitting on `starting` forever — see 2026-05-02 progress note about
+ * the original spawn-time stdin race that motivated this watchdog.
+ */
+const INIT_WATCHDOG_MS = 30 * 1000;
 
 /**
  * One running agent CLI = one AgentHandle. Keyed by `${sessionId}:${agentId}`
@@ -50,6 +62,15 @@ interface AgentHandle {
    *  `compaction_finished`. Fires once after 5min if compaction never
    *  reports completion (slock's `COMPACTION_STALE_MS`). */
   compactionWatchdog: NodeJS.Timeout | null;
+  /** Watchdog timer started on spawn; cleared on first `session_init`
+   *  (or exit / stop). Fires once if the agent never initializes —
+   *  see INIT_WATCHDOG_MS doc comment. */
+  initWatchdog: NodeJS.Timeout | null;
+  /** Set by the init watchdog when it kills the child. Takes precedence
+   *  over `intentionallyStopped` in the exit handler so the status
+   *  flips to `crashed` (not `idle`) and oneShot agents don't auto
+   *  respawn into the same hang. */
+  initTimedOut: boolean;
   /** Detached when stop() runs to suppress crash-status updates on
    *  intentional shutdown. */
   intentionallyStopped: boolean;
@@ -82,8 +103,12 @@ export class SessionManager {
   private readonly sessions: SessionRepo;
   private readonly inboxes: InboxRepo;
   private readonly messages: MessageRepo;
+  private readonly notifications: NotificationRepo;
   private readonly settings: SettingsRepo;
   private binariesPromise: Promise<Map<string, string>> | null = null;
+  /** Visible-for-testing knob — production code never touches this.
+   *  Tests dial it down to avoid waiting INIT_WATCHDOG_MS in real time. */
+  initWatchdogMs = INIT_WATCHDOG_MS;
 
   constructor(private readonly ctx: BackendContext) {
     this.agents = new AgentRepo(ctx.db);
@@ -91,11 +116,84 @@ export class SessionManager {
     this.sessions = new SessionRepo(ctx.db);
     this.inboxes = new InboxRepo(ctx.db);
     this.messages = new MessageRepo(ctx.db);
+    this.notifications = new NotificationRepo(ctx.db);
     this.settings = new SettingsRepo(ctx.db);
   }
 
   isRunning(sessionId: string, agentId: string): boolean {
     return this.handles.has(handleKey(sessionId, agentId));
+  }
+
+  /**
+   * Record a pre-spawn failure (before the child process is created).
+   * Writes a notification row, flips session_agent status to `crashed`,
+   * and publishes an `agent_status` SSE event so the renderer can show
+   * an error badge and — once useNotificationToasts is wired — a toast.
+   */
+  private recordStartFailure(sessionId: string, agentId: string, error: Error): void {
+    const agent = this.agents.get(agentId);
+    const session = this.sessions.get(sessionId);
+    // Ensure the session_agent row exists so we can update its status.
+    let sa = this.sessions.getAgent(sessionId, agentId);
+    if (!sa) sa = this.sessions.addAgent(sessionId, agentId);
+
+    this.sessions.updateAgentRuntime(sessionId, agentId, { status: 'crashed', pid: null });
+
+    try {
+      this.notifications.insert({
+        kind: 'agent_start_failed',
+        agentId,
+        sessionId,
+        channelId: session?.channel_id ?? null,
+        payload: {
+          agent_name: agent?.name ?? agentId,
+          error: error.message,
+          reason: 'spawn_error',
+        },
+      });
+    } catch (e) {
+      this.ctx.logger.error({ sessionId, agentId, e }, 'session: failed to insert start-failure notification');
+    }
+
+    this.ctx.events.publish(sessionId, {
+      kind: 'agent_status',
+      payload: {
+        agent_id: agentId,
+        status: 'crashed',
+        reason: 'spawn_error',
+        error: error.message,
+      },
+    });
+  }
+
+  /**
+   * Record a runtime crash from the exit handler (process died with non-zero
+   * exit or init watchdog timeout). Does NOT update session_agent status —
+   * the exit handler already does that. Just writes the notification row.
+   */
+  private recordCrashNotification(
+    sessionId: string,
+    agentId: string,
+    opts: { initTimedOut: boolean; exitCode: number | null },
+  ): void {
+    const agent = this.agents.get(agentId);
+    const session = this.sessions.get(sessionId);
+    const reason = opts.initTimedOut ? 'init_timeout' : 'runtime_crash';
+    try {
+      this.notifications.insert({
+        kind: 'agent_start_failed',
+        agentId,
+        sessionId,
+        channelId: session?.channel_id ?? null,
+        payload: {
+          agent_name: agent?.name ?? agentId,
+          reason,
+          exit_code: opts.exitCode,
+        },
+      });
+    } catch (e) {
+      this.ctx.logger.error({ sessionId, agentId, e }, 'session: failed to insert crash notification');
+    }
   }
 
   /**
@@ -161,13 +259,15 @@ export class SessionManager {
     const driver = getDriver(agent.runtime);
     const binary = await this.resolveBinary(agent.runtime);
     if (!binary) {
+      const err = new Error(
+        `runtime '${agent.runtime}' is not installed (no binary on PATH)`,
+      );
       this.ctx.logger.error(
         { sessionId, agentId, runtime: agent.runtime },
         "session: runtime binary not found on PATH",
       );
-      throw new Error(
-        `runtime '${agent.runtime}' is not installed (no binary on PATH)`,
-      );
+      this.recordStartFailure(sessionId, agentId, err);
+      throw err;
     }
 
     // Synthesize prompt + write spawn files.
@@ -252,6 +352,8 @@ export class SessionManager {
       busy: { outstandingToolUses: 0, compacting: false },
       pendingDeliveries: [],
       compactionWatchdog: null,
+      initWatchdog: null,
+      initTimedOut: false,
       intentionallyStopped: false,
       drainChain: Promise.resolve(),
     };
@@ -266,6 +368,10 @@ export class SessionManager {
       status: 'starting',
       pid: child.pid ?? null,
     });
+
+    // Arm before stdin is primed so a child that hangs on the very first
+    // read still hits the timeout. Cleared on first session_init / exit.
+    this.startInitWatchdog(handle);
 
     rl.on('line', line => {
       const events = driver.parseLine(line);
@@ -287,8 +393,14 @@ export class SessionManager {
         { sessionId, agentId, code, signal },
         'agent process exited',
       );
-      const status: 'idle' | 'crashed' =
-        handle.intentionallyStopped || code === 0 ? 'idle' : 'crashed';
+      // initTimedOut wins over intentionallyStopped — we explicitly
+      // killed the child *because* it failed to start, which is a
+      // crash from the user's POV.
+      const status: 'idle' | 'crashed' = handle.initTimedOut
+        ? 'crashed'
+        : handle.intentionallyStopped || code === 0
+          ? 'idle'
+          : 'crashed';
       this.sessions.updateAgentRuntime(sessionId, agentId, {
         status,
         pid: null,
@@ -298,18 +410,32 @@ export class SessionManager {
         status,
         exit_code: code,
         signal,
+        ...(handle.initTimedOut ? { reason: 'init_timeout' } : {}),
       });
+      // Write a persistent notification for unexpected crashes so the
+      // global toast hook can alert the user even if they aren't watching
+      // this session's SSE stream.
+      if (status === 'crashed' && !handle.intentionallyStopped) {
+        this.recordCrashNotification(sessionId, agentId, {
+          initTimedOut: handle.initTimedOut,
+          exitCode: code,
+        });
+      }
       this.handles.delete(key);
       this.clearCompactionWatchdog(handle);
+      this.clearInitWatchdog(handle);
       rl.close();
       void spawnPrep.cleanup();
 
       // OneShot drivers (cursor) exit after each turn. If new messages
       // arrived in the inbox while the agent was running, respawn so
       // they actually get processed — otherwise they sit forever.
+      // Don't respawn if we just timed out at init: looping into the
+      // same hang would burn cycles and pollute the UI with crashes.
       if (
         driver.oneShot &&
         !handle.intentionallyStopped &&
+        !handle.initTimedOut &&
         this.inboxes.listPending(sessionId, agentId).length > 0
       ) {
         this.start(sessionId, agentId, opts).catch(err =>
@@ -388,6 +514,8 @@ export class SessionManager {
 
     // hard: control_request first, then process signals as fallback.
     h.intentionallyStopped = true;
+    // No point waiting for an init that the user clearly doesn't want.
+    this.clearInitWatchdog(h);
     const interruptLine = h.driver.encodeInterruptControl();
     if (interruptLine) {
       try {
@@ -437,6 +565,9 @@ export class SessionManager {
         // log, drainInbox) which were intended for first-init only.
         if (handle.cliSessionId === ev.sessionId) break;
         handle.cliSessionId = ev.sessionId;
+        // First init landed → cancel the watchdog. Subsequent inits
+        // short-circuit above, so this only fires once.
+        this.clearInitWatchdog(handle);
         this.sessions.updateAgentRuntime(sessionId, agentId, {
           status: 'active',
           cliSessionId: ev.sessionId,
@@ -721,6 +852,49 @@ export class SessionManager {
     }
   }
 
+  private startInitWatchdog(handle: AgentHandle): void {
+    this.clearInitWatchdog(handle);
+    const timeoutMs = this.initWatchdogMs;
+    handle.initWatchdog = setTimeout(() => {
+      handle.initWatchdog = null;
+      // Defensive: another path (e.g. `stop()`) may have raced and
+      // already cleared the handle out of the map. Nothing to do then.
+      if (!this.handles.has(handleKey(handle.sessionId, handle.agentId))) return;
+      // Race: init landed in the same tick the timer fired. Honor it.
+      if (handle.cliSessionId !== null) return;
+      this.ctx.logger.warn(
+        {
+          sessionId: handle.sessionId,
+          agentId: handle.agentId,
+          elapsedMs: timeoutMs,
+        },
+        'agent: session_init watchdog fired; killing child',
+      );
+      handle.initTimedOut = true;
+      // Surface the timeout reason as a separate event so the UI can
+      // distinguish "child crashed naturally" from "we killed it because
+      // it never initialized". The exit handler will publish the usual
+      // `agent_status: crashed` shortly after.
+      this.publish(handle.sessionId, 'agent_init_timeout', {
+        agent_id: handle.agentId,
+        elapsed_ms: timeoutMs,
+      });
+      handle.child.kill('SIGTERM');
+      setTimeout(() => {
+        if (this.handles.has(handleKey(handle.sessionId, handle.agentId))) {
+          handle.child.kill('SIGKILL');
+        }
+      }, 5_000).unref();
+    }, timeoutMs);
+  }
+
+  private clearInitWatchdog(handle: AgentHandle): void {
+    if (handle.initWatchdog) {
+      clearTimeout(handle.initWatchdog);
+      handle.initWatchdog = null;
+    }
+  }
+
   private async resolveBinary(runtime: string): Promise<string | null> {
     if (!this.binariesPromise) {
       this.binariesPromise = detectRuntimes().then(infos => {
@@ -737,19 +911,16 @@ export class SessionManager {
 
   /**
    * Read the host-wide `proxy_url` + `proxy_runtimes` settings; if the
-   * URL is set AND this agent's runtime is in the allowlist, inject
-   * `HTTP[S]_PROXY` / `ALL_PROXY` (uppercase + lowercase) into the
-   * spawned env. Otherwise return env unchanged.
+   * URL is set AND this agent's runtime is in the allowlist, expand
+   * the user-entered URL into the per-channel env vars (HTTP CONNECT
+   * for `http[s]_proxy`, SOCKS for `all_proxy` — see `expandProxyEnv`
+   * for the full table) and inject them into the spawned env.
+   * Otherwise return env unchanged.
    *
    * Per-runtime opt-in (rather than blanket "apply to everyone") because
    * different runtimes hit different endpoints — codex needs the proxy
    * to reach chatgpt.com through corporate firewalls; claude/anthropic
    * may not. The user picks which runtimes need it in Settings.
-   *
-   * Why both cases: most CLIs respect either, but Rust/reqwest prefers
-   * uppercase; many shell-launched tools (curl, git) use lowercase.
-   * Setting both is harmless and avoids subtle "works in zsh but not
-   * in app" surprises.
    */
   private applyProxySetting(
     env: NodeJS.ProcessEnv,
@@ -761,15 +932,9 @@ export class SessionManager {
       this.settings.get(SETTINGS_KEYS.PROXY_RUNTIMES),
     );
     if (!allowlist.has(runtime)) return env;
-    return {
-      ...env,
-      HTTP_PROXY: proxyUrl,
-      http_proxy: proxyUrl,
-      HTTPS_PROXY: proxyUrl,
-      https_proxy: proxyUrl,
-      ALL_PROXY: proxyUrl,
-      all_proxy: proxyUrl,
-    };
+    const expanded = expandProxyEnv(proxyUrl);
+    if (!expanded) return env;
+    return { ...env, ...expanded };
   }
 
   /** Fetch + format pending inbox items, write one combined stdin user

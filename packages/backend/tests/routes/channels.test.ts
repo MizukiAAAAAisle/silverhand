@@ -251,3 +251,73 @@ describe('PATCH /api/channels/:id (rename)', () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe('PATCH /api/channels/:id/archive', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('flips archived_at on/off and surfaces it in the channel DTO', async () => {
+    t = buildTestApp();
+    const ch = await (
+      await http(t.app).post('/api/channels', { name: 'attic' })
+    ).json() as any;
+    expect(ch.channel.archived_at).toBeNull();
+
+    const archived = await (
+      await http(t.app).patch(`/api/channels/${ch.channel.id}/archive`, {
+        archived: true,
+      })
+    ).json() as any;
+    expect(archived.channel.archived_at).toBeGreaterThan(0);
+
+    // GET /api/channels reflects the flip — sidebar reads from this list.
+    const list = await (await http(t.app).get('/api/channels')).json() as any;
+    const row = list.channels.find((c: any) => c.id === ch.channel.id);
+    expect(row.archived_at).toEqual(archived.channel.archived_at);
+
+    const restored = await (
+      await http(t.app).patch(`/api/channels/${ch.channel.id}/archive`, {
+        archived: false,
+      })
+    ).json() as any;
+    expect(restored.channel.archived_at).toBeNull();
+  });
+
+  it('no-op when already in the requested state — same row, no error', async () => {
+    t = buildTestApp();
+    const ch = await (
+      await http(t.app).post('/api/channels', { name: 'static' })
+    ).json() as any;
+    const res = await http(t.app).patch(
+      `/api/channels/${ch.channel.id}/archive`,
+      { archived: false },
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.channel.archived_at).toBeNull();
+  });
+
+  it('returns 400 on bad body shape', async () => {
+    t = buildTestApp();
+    const ch = await (
+      await http(t.app).post('/api/channels', { name: 'shape' })
+    ).json() as any;
+    const res = await http(t.app).patch(
+      `/api/channels/${ch.channel.id}/archive`,
+      { wrong: 'field' },
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 404 for unknown channel id', async () => {
+    t = buildTestApp();
+    const res = await http(t.app).patch(
+      '/api/channels/missing/archive',
+      { archived: true },
+    );
+    expect(res.status).toBe(404);
+  });
+});

@@ -23,6 +23,7 @@ import {
   UnclaimTaskInputSchema,
   UpdateAgentInputSchema,
   UpdateChannelInputSchema,
+  ArchiveChannelInputSchema,
   UpdateTaskStatusInputSchema,
   type AgentDeleteImpactDto,
   type SendMessageTarget,
@@ -415,6 +416,35 @@ export function createApiRouter(ctx: BackendContext): Hono {
     return c.json({ channel: updated });
   });
 
+  // Archive / unarchive — soft visibility flag. Keeps the channel and all
+  // its sessions intact; just hides it behind the renderer's "Archived"
+  // group. Doesn't auto-stop running agents (user can do that explicitly
+  // if they want to free resources). Reversible via the same endpoint
+  // with `archived: false`.
+  app.patch('/api/channels/:id/archive', async c => {
+    const channel = channels.get(c.req.param('id'));
+    if (!channel) return c.json({ error: 'channel not found' }, 404);
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = ArchiveChannelInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    const wantArchived = parsed.data.archived;
+    const isArchived = channel.archived_at !== null;
+    if (wantArchived === isArchived) {
+      // No-op — same state. Return the current row so the client can
+      // refresh its cache without hitting an error path.
+      return c.json({ channel });
+    }
+    const updated = channels.setArchived(channel.id, wantArchived);
+    if (!updated) return c.json({ error: 'archive update failed' }, 500);
+    ctx.logger.info(
+      { channelId: channel.id, archived: wantArchived },
+      wantArchived ? 'api: channel archived' : 'api: channel unarchived',
+    );
+    return c.json({ channel: updated });
+  });
+
   app.get('/api/channels/:id/members', c => {
     const channel = channels.get(c.req.param('id'));
     if (!channel) return c.json({ error: 'channel not found' }, 404);
@@ -573,11 +603,38 @@ export function createApiRouter(ctx: BackendContext): Hono {
       'api: user message accepted, distributing',
     );
 
-    // Auto-wake any non-running recipient. Errors per-agent are logged
-    // and swallowed so one missing/broken runtime doesn't block delivery
-    // for the rest. deliverMessage below will see the freshly-set handle
-    // (or fall back to the inbox path, which drains on session_init).
-    await Promise.all(
+    // Deliver to inbox / running-agent stdin. For running agents this
+    // writes to stdin immediately; for idle agents it writes to the inbox
+    // (drained automatically on the next session_init after auto-wake).
+    for (const sa of recipients) {
+      void ctx.sessionManager.deliverMessage(session.id, sa.agent_id, msg.id);
+    }
+
+    // Publish SSE immediately so the sender's UI reflects the message
+    // without waiting for agent auto-start (which can take seconds).
+    ctx.events.publish(session.id, {
+      kind: 'message',
+      payload: { message: msg },
+    });
+
+    // Bump parent thread badge (fire-and-forget — no client latency).
+    if (session.parent_session_id) {
+      ctx.events.publish(session.parent_session_id, {
+        kind: 'thread_updated',
+        payload: {
+          parent_session_id: session.parent_session_id,
+          child_session_id: session.id,
+        },
+      });
+    }
+
+    // Respond to the sender immediately — background work below.
+    const result = c.json({ message: msg }, 201);
+
+    // Background: auto-wake idle agents (they'll drain their inbox on
+    // session_init) + fan out cross-channel mention CCs. Errors are
+    // logged per-recipient and never surface to the caller.
+    void Promise.all(
       recipients
         .filter(r => r.status !== 'active' && r.status !== 'starting')
         .map(r =>
@@ -589,15 +646,6 @@ export function createApiRouter(ctx: BackendContext): Hono {
           }),
         ),
     );
-
-    for (const sa of recipients) {
-      void ctx.sessionManager.deliverMessage(session.id, sa.agent_id, msg.id);
-    }
-
-    ctx.events.publish(session.id, {
-      kind: 'message',
-      payload: { message: msg },
-    });
 
     // Cross-channel mention CC: any @handle pointing at an agent who
     // isn't a member of THIS session gets a wrapped copy in their DM
@@ -620,19 +668,7 @@ export function createApiRouter(ctx: BackendContext): Hono {
       });
     }
 
-    // If this session is a thread (child), bump the parent's stream so
-    // the parent view's reply-count badge can refresh without polling.
-    if (session.parent_session_id) {
-      ctx.events.publish(session.parent_session_id, {
-        kind: 'thread_updated',
-        payload: {
-          parent_session_id: session.parent_session_id,
-          child_session_id: session.id,
-        },
-      });
-    }
-
-    return c.json({ message: msg }, 201);
+    return result;
   });
 
   app.get('/api/sessions/:id/children', c => {

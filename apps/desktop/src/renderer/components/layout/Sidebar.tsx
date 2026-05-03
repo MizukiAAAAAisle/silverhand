@@ -19,13 +19,16 @@ interface SidebarProps {
 }
 
 export function Sidebar(props: SidebarProps): JSX.Element {
-  const { dms, regular } = useMemo(() => {
+  const { dms, regular, archived } = useMemo(() => {
     const dms: ChannelItem[] = [];
     const regular: ChannelItem[] = [];
+    const archived: ChannelItem[] = [];
     for (const c of props.channels) {
-      (c.kind === 'dm' ? dms : regular).push(c);
+      if (c.archived) archived.push(c);
+      else if (c.kind === 'dm') dms.push(c);
+      else regular.push(c);
     }
-    return { dms, regular };
+    return { dms, regular, archived };
   }, [props.channels]);
 
   // While the Saved view is active, suppress channel highlighting so
@@ -86,6 +89,16 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             </>
           }
         />
+        {archived.length > 0 ? (
+          <ChannelGroup
+            label="ARCHIVED"
+            kind="regular"
+            channels={archived}
+            selectedChannelId={channelHighlight}
+            onSelectChannel={props.onSelectChannel}
+            defaultExpanded={false}
+          />
+        ) : null}
       </nav>
 
       <div className="border-t border-border-subtle px-3 py-2.5">

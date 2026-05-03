@@ -1,17 +1,76 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type MenuItemConstructorOptions } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell, type MenuItemConstructorOptions } from 'electron';
+import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { startBackend, createFileLogger, type RunningBackend, type FileLogger } from '@silverhand/backend';
 import { loadOrCreateServerConfig, databasePath, silverhandDir, writeServerConfig } from './config.js';
 
 let backend: RunningBackend | null = null;
 let logger: FileLogger | null = null;
+let mainWindow: BrowserWindow | null = null;
 let eventsWindow: BrowserWindow | null = null;
+let activeSession: ActiveSessionInfo = { channelId: null, sessionId: null };
 
 /** Set `SILVERHAND_HEADLESS=1` to boot the backend without a window.
  *  Useful for curl-driven smoke tests and integration scripts — see
  *  `pnpm dev:headless`. The process keeps the backend alive until
  *  SIGINT / SIGTERM. */
 const HEADLESS = process.env.SILVERHAND_HEADLESS === '1';
+
+interface ActiveSessionInfo {
+  channelId: string | null;
+  sessionId: string | null;
+}
+
+/**
+ * macOS: when launched from Finder/Dock, GUI apps inherit launchd's
+ * minimal default PATH (`/usr/bin:/bin:/usr/sbin:/sbin`) — they do NOT
+ * see the PATH from `~/.zshrc` / `config.fish`. That means binaries the
+ * user installed via brew (`/opt/homebrew/bin`), nvm, or `npm i -g`
+ * (`~/.npm-global/bin`) are invisible, and `detectRuntimes` reports
+ * "claude / codex not installed" even though they're on the user's
+ * shell PATH.
+ *
+ * Fix: ask the user's login shell what its PATH actually is, and copy
+ * that into `process.env.PATH`. Same trick Slack / Cursor / VS Code use
+ * (cf. the `fix-path` package — inlined here to avoid a new dep).
+ *
+ * Only runs when packaged + macOS; in `pnpm dev` we already inherit
+ * the terminal's PATH so this would be wasted work (and could conflict
+ * if the dev shell has a different PATH than the user's login shell).
+ */
+function patchPathFromLoginShell(): { ok: boolean; detail: string } {
+  if (!app.isPackaged || process.platform !== 'darwin') {
+    return { ok: false, detail: 'skipped (not packaged darwin)' };
+  }
+  const userShell = process.env.SHELL || '/bin/zsh';
+  try {
+    // `-i -l -c`: interactive + login so rc/profile files run. Use
+    // `printenv` (a real binary, not a shell builtin) instead of
+    // `echo $PATH` so the probe stays shell-agnostic — bash/zsh use
+    // `${PATH}` while fish needs `{$PATH}`, and we don't want to
+    // branch per shell. Sentinel markers protect us from rc-file
+    // banner output (oh-my-zsh, fish greetings, etc.).
+    const out = execFileSync(
+      userShell,
+      ['-ilc', 'echo __PATH_BEGIN__; printenv PATH; echo __PATH_END__'],
+      { encoding: 'utf-8', timeout: 5_000, stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    const m = out.match(/__PATH_BEGIN__\s*\n([\s\S]*?)\n\s*__PATH_END__/);
+    if (!m || !m[1]) {
+      return {
+        ok: false,
+        detail: `no marker match (shell=${userShell}, raw=${JSON.stringify(out.slice(0, 200))})`,
+      };
+    }
+    process.env.PATH = m[1].trim();
+    return { ok: true, detail: `shell=${userShell}, len=${process.env.PATH.length}` };
+  } catch (err) {
+    return {
+      ok: false,
+      detail: `shell=${userShell}, threw=${(err as Error).message}`,
+    };
+  }
+}
 
 /**
  * Resolve how to spawn the chat-bridge MCP server.
@@ -31,29 +90,23 @@ const HEADLESS = process.env.SILVERHAND_HEADLESS === '1';
  *
  * Release: re-use the Electron binary as a node host via
  *   `ELECTRON_RUN_AS_NODE=1` (otherwise spawning `process.execPath`
- *   would re-launch the GUI). Chat-bridge is built to `dist/cli.js` by
- *   `pnpm -r build` (the recursive build pulls in the `chat-bridge`
- *   package's `tsc` script).
- *
- *   NOTE: `app.getAppPath()` in a packaged build resolves to
- *   `<appBundle>/Contents/Resources/app[.asar]`, so the `../..` walk
- *   below currently assumes the chat-bridge package sits at
- *   `Resources/packages/chat-bridge/...`. When packaging is set up
- *   (electron-builder/forge), wire `extraResources` so the chat-bridge
- *   `dist/` lands at that path — or revisit this resolver.
+ *   would re-launch the GUI). chat-bridge is bundled (esbuild --bundle)
+ *   to a single `dist/cli.js` and shipped as `chat-bridge/cli.js` under
+ *   `process.resourcesPath` via electron-builder's `extraResources` —
+ *   see `apps/desktop/electron-builder.yml`.
  */
 function resolveChatBridgeLauncher(): {
   command: string;
   args: string[];
   env?: Record<string, string>;
 } {
-  const repoRoot = resolve(app.getAppPath(), '../..');
   if (!app.isPackaged) {
+    const repoRoot = resolve(app.getAppPath(), '../..');
     const tsxBin = join(repoRoot, 'packages/chat-bridge/node_modules/.bin/tsx');
     const entry = join(repoRoot, 'packages/chat-bridge/src/cli.ts');
     return { command: tsxBin, args: [entry] };
   }
-  const entry = join(repoRoot, 'packages/chat-bridge/dist/cli.js');
+  const entry = join(process.resourcesPath, 'chat-bridge', 'cli.mjs');
   return {
     command: process.execPath,
     args: [entry],
@@ -63,13 +116,17 @@ function resolveChatBridgeLauncher(): {
 
 async function bootstrap(): Promise<void> {
   try {
+    const pathResult = patchPathFromLoginShell();
     const config = await loadOrCreateServerConfig();
     logger = createFileLogger({
       dir: join(silverhandDir(), 'logs'),
       alsoConsole: !app.isPackaged,
       base: { app: 'silverhand-desktop' },
     });
-    logger.info({ logFile: logger.filePath }, 'logger initialized');
+    logger.info(
+      { logFile: logger.filePath, path: process.env.PATH, pathPatch: pathResult },
+      'logger initialized',
+    );
     backend = await startBackend({
       dbPath: databasePath(),
       silverhandDir: silverhandDir(),
@@ -106,8 +163,12 @@ function createWindow(): void {
       contextIsolation: true,
     },
   });
+  mainWindow = win;
 
   win.on('ready-to-show', () => win.show());
+  win.on('closed', () => {
+    if (mainWindow === win) mainWindow = null;
+  });
 
   win.webContents.setWindowOpenHandler(details => {
     shell.openExternal(details.url);
@@ -133,6 +194,7 @@ function showEventsWindow(): void {
   if (eventsWindow && !eventsWindow.isDestroyed()) {
     eventsWindow.show();
     eventsWindow.focus();
+    pushActiveSessionToEvents();
     return;
   }
   const win = new BrowserWindow({
@@ -154,9 +216,37 @@ function showEventsWindow(): void {
   });
 
   if (process.env['ELECTRON_RENDERER_URL']) {
-    win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/events.html`);
+    const url = new URL('events.html', process.env['ELECTRON_RENDERER_URL']);
+    for (const [key, value] of Object.entries(activeSessionQuery())) {
+      url.searchParams.set(key, value);
+    }
+    win.loadURL(url.toString());
   } else {
-    win.loadFile(join(__dirname, '../renderer/events.html'));
+    win.loadFile(join(__dirname, '../renderer/events.html'), {
+      query: activeSessionQuery(),
+    });
+  }
+}
+
+function activeSessionQuery(): Record<string, string> {
+  const query: Record<string, string> = {};
+  if (activeSession.channelId) query.channelId = activeSession.channelId;
+  if (activeSession.sessionId) query.sessionId = activeSession.sessionId;
+  return query;
+}
+
+function pushActiveSessionToEvents(): void {
+  const win = eventsWindow;
+  if (!win || win.isDestroyed()) return;
+  const send = () => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('active-session:update', activeSession);
+    }
+  };
+  if (win.webContents.isLoading()) {
+    win.webContents.once('did-finish-load', send);
+  } else {
+    send();
   }
 }
 
@@ -248,6 +338,35 @@ ipcMain.handle('window:setAlwaysOnTop', (event, pinned: boolean) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   win?.setAlwaysOnTop(!!pinned);
 });
+
+ipcMain.handle('active-session:set', (_event, next: unknown) => {
+  activeSession = normalizeActiveSession(next);
+  pushActiveSessionToEvents();
+});
+
+ipcMain.handle('notification:show', (_event, opts: unknown) => {
+  // Fire a system notification only when no Electron window is focused.
+  // `BrowserWindow.getFocusedWindow()` returns null when the app is in
+  // the background — more correct than checking mainWindow alone, which
+  // would misfire when the Events window or a dialog has focus.
+  if (BrowserWindow.getFocusedWindow() !== null) return;
+  if (!opts || typeof opts !== 'object') return;
+  const { title, body } = opts as Partial<Record<string, unknown>>;
+  if (typeof title !== 'string' || typeof body !== 'string') return;
+  const n = new Notification({ title, body });
+  n.show();
+});
+
+function normalizeActiveSession(value: unknown): ActiveSessionInfo {
+  if (!value || typeof value !== 'object') {
+    return { channelId: null, sessionId: null };
+  }
+  const v = value as Partial<Record<keyof ActiveSessionInfo, unknown>>;
+  return {
+    channelId: typeof v.channelId === 'string' ? v.channelId : null,
+    sessionId: typeof v.sessionId === 'string' ? v.sessionId : null,
+  };
+}
 
 app.whenReady().then(async () => {
   await bootstrap();

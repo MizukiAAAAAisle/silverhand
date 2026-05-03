@@ -16,6 +16,7 @@ export const apiPaths = {
   // channels
   channels: '/api/channels',
   channel: (id: string) => `/api/channels/${id}`,
+  channelArchive: (id: string) => `/api/channels/${id}/archive`,
   channelMembers: (id: string) => `/api/channels/${id}/members`,
   channelMember: (id: string, agentId: string) =>
     `/api/channels/${id}/members/${agentId}`,

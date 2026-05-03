@@ -340,3 +340,74 @@ describe('SessionManager.reconcileOnBoot', () => {
     });
   });
 });
+
+describe('SessionManager init watchdog', () => {
+  let h: ManagerHarness | null = null;
+  afterEach(async () => {
+    await h?.cleanup();
+    h = null;
+  });
+
+  it('fires when session_init never arrives → publishes init_timeout + crashes the agent', async () => {
+    h = await buildManagerHarness();
+    h.setMockEnv({ MOCK_CLAUDE_NO_INIT: '1' });
+    h.manager.initWatchdogMs = 150;
+
+    const timeout = h.waitForEvent(e => e.kind === 'agent_init_timeout');
+    const crashed = waitStatus(h, 'crashed');
+
+    await h.manager.start(h.sessionId, h.agentId);
+    const ev = await timeout;
+    expect((ev.payload as any).agent_id).toBe(h.agentId);
+    expect((ev.payload as any).elapsed_ms).toBe(150);
+
+    const exit = await crashed;
+    expect((exit as any).payload.reason).toBe('init_timeout');
+    expect(dbStatus(h).status).toBe('crashed');
+    expect(dbStatus(h).pid).toBeNull();
+    expect(h.manager.isRunning(h.sessionId, h.agentId)).toBe(false);
+  });
+
+  it('does NOT fire when session_init lands in time', async () => {
+    h = await buildManagerHarness();
+    // Pick a window comfortably above mock-claude's spawn + init time
+    // (~100ms in CI) so a healthy startup doesn't race the timer.
+    h.manager.initWatchdogMs = 1_000;
+
+    let timedOut = false;
+    h.on(e => {
+      if (e.kind === 'agent_init_timeout') timedOut = true;
+    });
+
+    await h.manager.start(h.sessionId, h.agentId);
+    await waitInit(h);
+    // Wait past the watchdog window — if it weren't cleared, it would
+    // fire here.
+    await new Promise(r => setTimeout(r, 1_200));
+
+    expect(timedOut).toBe(false);
+    expect(dbStatus(h).status).toBe('active');
+  });
+
+  it('hard-stop before init clears the watchdog (no spurious init_timeout)', async () => {
+    h = await buildManagerHarness();
+    h.setMockEnv({ MOCK_CLAUDE_NO_INIT: '1' });
+    h.manager.initWatchdogMs = 200;
+
+    let timedOut = false;
+    h.on(e => {
+      if (e.kind === 'agent_init_timeout') timedOut = true;
+    });
+
+    await h.manager.start(h.sessionId, h.agentId);
+    // Stop before the watchdog window expires.
+    await h.manager.stop(h.sessionId, h.agentId, 'hard');
+    await waitStatus(h, 'idle');
+    // Wait past the original window — confirm timer didn't survive stop.
+    await new Promise(r => setTimeout(r, 300));
+
+    expect(timedOut).toBe(false);
+    // Intentional stop → idle, NOT crashed.
+    expect(dbStatus(h).status).toBe('idle');
+  });
+});

@@ -34,8 +34,15 @@ export function useCreateChannel() {
       );
       return res;
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: channelsKey });
+    onSuccess: async res => {
+      qc.setQueryData<ChannelDto[]>(channelsKey, prev => {
+        const cur = prev ?? [];
+        if (cur.some(c => c.id === res.channel.id)) {
+          return cur.map(c => (c.id === res.channel.id ? res.channel : c));
+        }
+        return [...cur, res.channel];
+      });
+      await qc.invalidateQueries({ queryKey: channelsKey });
     },
   });
 }
@@ -69,6 +76,25 @@ export function useRenameChannel() {
       // the rename system broadcast we just emitted), so refresh
       // sessions for this channel as well.
       qc.invalidateQueries({ queryKey: sessionsKey(channel.id) });
+    },
+  });
+}
+
+export function useArchiveChannel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: { id: string; archived: boolean }) => {
+      const res = await api<{ channel: ChannelDto }>(
+        `/api/channels/${vars.id}/archive`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ archived: vars.archived }),
+        },
+      );
+      return res.channel;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: channelsKey });
     },
   });
 }

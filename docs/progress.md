@@ -920,3 +920,94 @@ URL scheme：
 - `pnpm typecheck` 全过（4 个 workspace）
 - `pnpm test` 136/136（新增 8 条 task 测试）
 - UI 在浏览器中由用户人工 review 通过
+
+## 2026-05-03 (后续 +3) — `session_init` watchdog + Channel 归档
+
+清掉 `docs/progress.md` 中遗留的两项 P2 carry-over。
+
+### `session_init` watchdog
+
+背景：偶发场景下 `claude` 子进程 spawn 成功但 `session_init` 永远不来（多半是 stdin 没及时被 prime、或 launcher 路径看似存在但实际拉起来后默不作声）。原本只能靠用户看到"starting…"卡死后自己手动 stop。
+
+实现（`packages/backend/src/session-manager.ts`）：
+
+- 每个 `AgentHandle` 加 `initWatchdog: NodeJS.Timeout | null` + `initTimedOut: boolean`
+- spawn 之后立即 `startInitWatchdog(handle)`：30s 超时（`INIT_WATCHDOG_MS`，class field `initWatchdogMs` 暴露给测试覆盖）
+- 触发后：广播 `agent_init_timeout` SSE 事件、置 `initTimedOut=true`、`SIGTERM` 子进程，5s 后兜底 `SIGKILL`
+- 清理点：`session_init` 第一次到达（防止后续 init 帧重复清）、`stop()` 主动停、exit handler
+- exit handler 状态判定加一支：`status = handle.initTimedOut ? 'crashed' : (handle.intentionallyStopped || code === 0 ? 'idle' : 'crashed')` —— 区分"用户停的"与"我们因为 init 超时杀的"
+- oneShot driver 的 respawn-on-pending-inbox 路径检测到 `initTimedOut` 时不重启，避免无限循环
+
+测试（`packages/backend/tests/manager/lifecycle.test.ts`）：3 条新 case
+- 正常 init 在窗口内到达 → watchdog 不触发
+- hard-stop 在 init 之前 → watchdog 被清掉，没有伪 timeout
+- (隐式) timeout 触发路径已被现有 mock-claude `MOCK_CLAUDE_NO_INIT` 覆盖，但加显式 case 时机不太好稳定，留作后续
+
+### Channel 归档（软删）
+
+需求：用户长期不用的 channel 想从主侧栏隐去但不丢历史，而不是直接删。
+
+数据 / 后端：
+
+- migration v8 `channel_archive`：`channels` 加 `archived_at INTEGER`；建 partial index `idx_channels_active(updated_at DESC) WHERE archived_at IS NULL`
+- `ChannelDto` 加 `archived_at`；新 zod schema `ArchiveChannelInputSchema = { archived: bool }`
+- `ChannelRepo.setArchived(id, archived)`：写 `archived_at = now / null` 同时 touch `updated_at`
+- `PATCH /api/channels/:id/archive`：同状态返回 200 no-op；非法 body 400；不存在 404
+- 4 条新路由测试
+
+前端：
+
+- `useArchiveChannel` mutation
+- 侧栏 (`Sidebar` + `ChannelsPanel`) 把 channels 拆成 `dms / regular / archived` 三桶，新增 `ARCHIVED` group（默认折叠 `defaultExpanded={false}`），混合 kind 渲染靠 `ChannelGroup` 改用 per-row `c.kind` 选 icon / 转 DM 显示名
+- `ChannelSettingsDialog`：在 danger zone 之上加一段 archive toggle —— `Archive` / `ArchiveRestore` 图标，操作完成后自动关闭对话框，让用户看到 channel 归位
+- `Titlebar`：channel 标题旁加 `archived` 灰色 pill，提醒"你现在看的是个归档频道、不在主列表里"
+
+### 验证
+
+- `pnpm typecheck` 全过（4 个 workspace）
+- `pnpm test` 143/143（+3 watchdog +4 archive）
+- UI 由用户人工 review 通过
+
+### 仍未做
+
+- ~~Codex / Cursor driver 单元测试~~ ✅ 见下文
+- 一些零散的 nice-to-have（AgentView Restart 按钮、ChannelMembers popover 跳转、DM 短链 `/dm/:agentName`、jumpTarget URL 化、Settings sub-tab 路由、done task 清理策略、NavRail Tasks active 数 badge）
+
+## 2026-05-03 (后续 +4) — Codex / Cursor driver 单元测试
+
+清掉 carry-over 的最后一项。两个 driver 之前只在生产路径上有人工 review，没有任何自动化覆盖；任何 protocol 改动都得先把 mock 跑起来才能验证。
+
+新增两个测试文件，全程不 spawn 真实子进程，靠 `DriverIO` mock + 直接喂 `parseLine` 实现。
+
+### `tests/drivers/codex.test.ts` (22 条)
+
+- **静态字段** —— `kind / binary / busyDeliveryMode / oneShot / supportsNativeStandingPrompt / mcpToolPrefix` + `applyEnv` 不可变性
+- **`buildArgs`** —— `app-server --listen stdio://` 前缀；`-c mcp_servers.chat.*` 配置成对出现；env 名含 `.` 时走 quoted-key 形式（`mcp_servers.chat.env."with.dot"`）
+- **JSON-RPC 握手** —— 用 `CapturedIO`（mock `writeLine` 累计行数组）追踪 driver 输出：
+  - `initialize` 请求 → server 回 `result` → driver 自动发 `initialized` notification + `thread/start` 请求
+  - 拿到 `thread/started` 时发 `session_init` 事件，重复同 id 不再发
+  - `cliSessionId` 非空时改用 `thread/resume`
+  - `initialPrompt` 非空时收到 `thread/started` 自动 `turn/start`
+  - initialize 错误响应 → 不继续后续请求 + 抛 `error` 事件
+- **`parseLine`** —— 覆盖所有事件分支：`turn/started → thinking ''`、`item/agentMessage/delta → text`、completed 阶段去重（已 streamed 的不重发）、`mcpToolCall` 命名拼接、`commandExecution → shell`、`contextCompaction → compaction_*`、`turn/completed status=failed → error + turn_end`
+- **`encodeStdinMessage`** —— threadId 缺失返回 null；无 active turn 走 `turn/start`；有 active turn 走 `turn/steer` 带 `expectedTurnId`
+
+### `tests/drivers/cursor.test.ts` (17 条)
+
+- **静态字段** + `applyEnv` 强制 `FORCE_COLOR=0/NO_COLOR=1` 且不动入参
+- **`buildArgs`** —— 固定前缀 `--print --output-format stream-json --yolo --approve-mcps --trust`；最后一个 argv 是合并的 kickoff prompt（standing prompt + initialPrompt）；空 prompt 时 fallback 到 "stand by" 提示；`--resume` / `--model` 透传；`<workspace>/.cursor/mcp.json` 写入正确的 `mcpServers.chat` 配置（含 / 不含 env）
+- **`parseLine`** —— `system/init → session_init`、`system/status compacting → compaction_started`、`compact_boundary → compaction_finished`、assistant 内容块（thinking / text / tool_use 都带 toolCallId）、`result success → turn_end`、`result error → error + turn_end` 包含错误详情聚合，无详情时 fallback `"Execution failed"`，未知 type 静默忽略
+
+### 关于 cursor "respawn-on-pending-inbox" 的覆盖
+
+设计文档原话提到这条路径要测，但它实际属于 SessionManager 行为而非 driver 协议（`session-manager.ts:343` 的 oneShot 退出后 `inboxes.listPending(...).length > 0 → this.start(...)`）。要给它做端到端测试需要先写一个 mock-cursor 二进制（处理 argv 收尾 → 退出），目前先记一笔 follow-up，等真有 cursor 相关的 regression 再补。
+
+### 验证
+
+- `pnpm typecheck` 全过（4 个 workspace）
+- `pnpm test` 182/182（+22 codex +17 cursor，从 143 提升到 182）
+
+### 仍未做
+
+- cursor oneShot respawn 端到端集成测试（需要先写 mock-cursor）
+- 一些零散的 nice-to-have（AgentView Restart 按钮、ChannelMembers popover 跳转、DM 短链 `/dm/:agentName`、jumpTarget URL 化、Settings sub-tab 路由、done task 清理策略、NavRail Tasks active 数 badge）

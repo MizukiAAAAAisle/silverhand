@@ -11,12 +11,13 @@ import {
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { useAgents } from '@/features/agents/hooks';
+import { AgentPicker } from './AgentPicker';
 import { useCreateChannel } from './hooks';
 
 interface CreateChannelDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCreated?: (id: string) => void;
+  onCreated?: (created: { channelId: string; sessionId: string }) => void;
 }
 
 export function CreateChannelDialog({
@@ -26,7 +27,7 @@ export function CreateChannelDialog({
 }: CreateChannelDialogProps): JSX.Element {
   const [name, setName] = useState('');
   const [workspacePath, setWorkspacePath] = useState('');
-  const [selectedAgents, setSelectedAgents] = useState<Set<string>>(new Set());
+  const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const { data: agents = [] } = useAgents();
@@ -35,7 +36,7 @@ export function CreateChannelDialog({
   const reset = () => {
     setName('');
     setWorkspacePath('');
-    setSelectedAgents(new Set());
+    setSelectedAgents([]);
     setError(null);
   };
 
@@ -50,9 +51,12 @@ export function CreateChannelDialog({
       const res = await createChannel.mutateAsync({
         name: name.trim(),
         workspace_path: workspacePath.trim() || undefined,
-        member_agent_ids: [...selectedAgents],
+        member_agent_ids: selectedAgents,
       });
-      onCreated?.(res.channel.id);
+      onCreated?.({
+        channelId: res.channel.id,
+        sessionId: res.onboarding_session_id,
+      });
       reset();
       onOpenChange(false);
     } catch (err) {
@@ -63,15 +67,6 @@ export function CreateChannelDialog({
   const pickDirectory = async () => {
     const path = await window.agentHub.pickDirectory();
     if (path) setWorkspacePath(path);
-  };
-
-  const toggleAgent = (id: string) => {
-    setSelectedAgents(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
   };
 
   return (
@@ -114,35 +109,29 @@ export function CreateChannelDialog({
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label>初始成员（可选）</Label>
+            <Label htmlFor="ch-add-member">
+              初始成员
+              <span className="ml-1 text-text-muted">
+                ({selectedAgents.length} / {agents.length})
+              </span>
+            </Label>
             {agents.length === 0 ? (
               <span className="text-xs text-text-muted">
                 还没有 agent。可以稍后从 Members 面板加入。
               </span>
             ) : (
-              <div className="flex flex-wrap gap-2">
-                {agents.map(a => {
-                  const sel = selectedAgents.has(a.id);
-                  return (
-                    <button
-                      key={a.id}
-                      type="button"
-                      onClick={() => toggleAgent(a.id)}
-                      className={
-                        'rounded-md border px-2.5 py-1 text-xs transition-colors ' +
-                        (sel
-                          ? 'border-accent-base bg-accent-soft text-text-primary'
-                          : 'border-border-default text-text-secondary hover:border-border-strong')
-                      }
-                    >
-                      @{a.name}
-                      <span className="ml-1 text-[10px] text-text-muted">
-                        {a.runtime}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+              <AgentPicker
+                selectId="ch-add-member"
+                candidates={agents}
+                value={selectedAgents}
+                onChange={setSelectedAgents}
+                placeholder={
+                  selectedAgents.length === 0
+                    ? '选择初始 agent…'
+                    : '继续添加 agent…'
+                }
+                allSelectedText="已添加全部 agent"
+              />
             )}
           </div>
 

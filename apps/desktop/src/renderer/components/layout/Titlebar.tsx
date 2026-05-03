@@ -7,6 +7,10 @@ interface TitlebarProps {
   channelName: string | null;
   channelKind: ChannelKind | null;
   workspacePath: string | null;
+  /** epoch ms when the channel was archived; null for active channels.
+   *  Drives the inline `Archived` pill so the user knows why this
+   *  channel is missing from the main sidebar list. */
+  channelArchivedAt: number | null;
   onOpenChannelSettings?: () => void;
   onCreateSession?: () => void;
   /** Tasks panel trigger. Provided only when a chat channel is selected.
@@ -33,6 +37,7 @@ export function Titlebar({
   channelName,
   channelKind,
   workspacePath,
+  channelArchivedAt,
   onOpenChannelSettings,
   onCreateSession,
   onOpenTasks,
@@ -43,6 +48,7 @@ export function Titlebar({
   const showCreateSession = hasChannel && !!onCreateSession;
   const showSettings = hasChannel && !!onOpenChannelSettings;
   const showTasks = hasChannel && !!onOpenTasks;
+  const isArchived = channelArchivedAt !== null;
 
   return (
     <header
@@ -62,6 +68,12 @@ export function Titlebar({
           <span className="ml-1 text-text-muted">· DM</span>
         ) : null}
       </span>
+
+      {isArchived ? (
+        <span className="rounded-full bg-bg-elevated px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-text-muted">
+          archived
+        </span>
+      ) : null}
 
       {showCreateSession ? (
         <button

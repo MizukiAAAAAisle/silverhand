@@ -17,11 +17,11 @@ interface SessionOption {
  * session at a time and pipes its SSE feed through `<EventStream>`.
  *
  * Single-window flow: opened via the macOS app menu (View → Developer
- * → Show Events Window). Doesn't try to follow the main window's
- * selection — too coupled for a debug surface; the picker takes one
- * extra click and keeps the windows independent. Pin toggle on the
- * right of the titlebar flips the window's always-on-top state via
- * the `window:setAlwaysOnTop` preload bridge.
+ * → Show Events Window). Cold start receives the main window's active
+ * session through the URL query; already-open windows receive selection
+ * changes over IPC. Pin toggle on the right of the titlebar flips the
+ * window's always-on-top state via the `window:setAlwaysOnTop` preload
+ * bridge.
  */
 export function EventsApp(): JSX.Element {
   // Inherit theme tokens from main window (shares localStorage).
@@ -75,10 +75,20 @@ export function EventsApp(): JSX.Element {
     return out;
   }, [groups]);
 
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(() =>
+    initialSessionIdFromUrl(),
+  );
+
+  useEffect(() => {
+    return window.agentHub.onActiveSession(active => {
+      setSessionId(active.sessionId);
+    });
+  }, []);
 
   // Auto-pick the most recently-created session once the list arrives
-  // so the SSE feed starts immediately on first open.
+  // so the SSE feed starts immediately when no active-session hint was
+  // provided. If a URL/IPC hint exists, keep it while the per-channel
+  // queries catch up.
   useEffect(() => {
     if (sessionId) return;
     if (allOptions.length === 0) return;
@@ -177,6 +187,11 @@ export function EventsApp(): JSX.Element {
       </div>
     </div>
   );
+}
+
+function initialSessionIdFromUrl(): string | null {
+  const value = new URLSearchParams(window.location.search).get('sessionId');
+  return value && value.trim() ? value : null;
 }
 
 function SessionItem({ session }: { session: SessionDto }): JSX.Element {

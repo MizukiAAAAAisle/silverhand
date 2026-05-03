@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { Copy, Check } from 'lucide-react';
+import { Copy, Check, Archive, ArchiveRestore } from 'lucide-react';
 import type { ChannelKind } from '@silverhand/shared';
 import {
   Dialog,
@@ -10,7 +10,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { useDeleteChannel, useRenameChannel } from './hooks';
+import { useArchiveChannel, useDeleteChannel, useRenameChannel } from './hooks';
 
 interface ChannelSettingsDialogProps {
   open: boolean;
@@ -19,6 +19,8 @@ interface ChannelSettingsDialogProps {
   channelName: string | null;
   channelKind: ChannelKind | null;
   workspacePath: string | null;
+  /** epoch ms when archived; null for active channels. */
+  archivedAt: number | null;
   onDeleted?: () => void;
 }
 
@@ -31,6 +33,7 @@ export function ChannelSettingsDialog({
   channelName,
   channelKind,
   workspacePath,
+  archivedAt,
   onDeleted,
 }: ChannelSettingsDialogProps): JSX.Element {
   const [name, setName] = useState('');
@@ -39,8 +42,10 @@ export function ChannelSettingsDialog({
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const renameChannel = useRenameChannel();
   const deleteChannel = useDeleteChannel();
+  const archiveChannel = useArchiveChannel();
 
   const isDm = channelKind === 'dm';
+  const isArchived = archivedAt !== null;
 
   // Reset every time the dialog reopens for a (potentially different)
   // channel.
@@ -89,6 +94,20 @@ export function ChannelSettingsDialog({
         onDeleted?.();
       },
     });
+  };
+
+  const handleToggleArchive = () => {
+    if (!channelId || archiveChannel.isPending) return;
+    archiveChannel.mutate(
+      { id: channelId, archived: !isArchived },
+      {
+        onSuccess: () => {
+          // Close so the user sees the channel either disappear into
+          // the Archived group or pop back into the active list.
+          onOpenChange(false);
+        },
+      },
+    );
   };
 
   const renameDirty = name.trim() !== (channelName ?? '');
@@ -153,6 +172,37 @@ export function ChannelSettingsDialog({
             </div>
           </div>
         ) : null}
+
+        <div className="mt-2 flex items-center justify-between gap-3 rounded-md border border-border-subtle bg-bg-elevated/40 p-3">
+          <div className="flex flex-col gap-0.5">
+            <span className="text-sm font-medium text-text-primary">
+              {isArchived ? '已归档' : '归档频道'}
+            </span>
+            <span className="text-xs text-text-muted">
+              {isArchived
+                ? '该频道当前折叠在侧栏的 Archived 分组下，仍可访问。取消归档放回活跃列表。'
+                : '从侧栏隐藏到 Archived 折叠组，仍保留所有会话与历史。可随时恢复。'}
+            </span>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleToggleArchive}
+            disabled={!channelId || archiveChannel.isPending}
+          >
+            {isArchived ? (
+              <>
+                <ArchiveRestore className="mr-1.5 size-3.5" />
+                {archiveChannel.isPending ? '处理中…' : '取消归档'}
+              </>
+            ) : (
+              <>
+                <Archive className="mr-1.5 size-3.5" />
+                {archiveChannel.isPending ? '处理中…' : '归档'}
+              </>
+            )}
+          </Button>
+        </div>
 
         <div className="mt-2 flex flex-col gap-2 rounded-md border border-error/30 bg-error/5 p-3">
           <div className="flex flex-col gap-0.5">

@@ -4,6 +4,11 @@ export interface BackendInfo {
   auth_token: string;
 }
 
+export interface ActiveSessionInfo {
+  channelId: string | null;
+  sessionId: string | null;
+}
+
 declare global {
   interface Window {
     agentHub: {
@@ -12,6 +17,9 @@ declare global {
       openExternal(url: string): Promise<void>;
       showItemInFolder(path: string): Promise<void>;
       setWindowAlwaysOnTop(pinned: boolean): Promise<void>;
+      setActiveSession(active: ActiveSessionInfo): Promise<void>;
+      onActiveSession(handler: (active: ActiveSessionInfo) => void): () => void;
+      showSystemNotification(opts: { title: string; body: string }): Promise<void>;
     };
   }
 }

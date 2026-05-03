@@ -12,10 +12,16 @@ export interface ChannelItem {
   /** Unread mention notifications scoped to this channel. Falsy / 0
    *  hides the badge. */
   unread?: number;
+  /** True for soft-archived channels — drives the Archived sidebar
+   *  group; the row itself looks the same once you're inside it. */
+  archived?: boolean;
 }
 
 interface ChannelGroupProps {
   label: string;
+  /** Default kind for icon picking when a row's `kind` is the same.
+   *  For mixed groups (e.g. Archived combines DM + regular) the per-row
+   *  `c.kind` wins. Kept on the group for the empty-state messaging. */
   kind: ChannelKind;
   channels: ChannelItem[];
   selectedChannelId: string | null;
@@ -25,6 +31,9 @@ interface ChannelGroupProps {
   onAdd?: () => void;
   /** Shown when `channels` is empty. */
   emptyHint?: ReactNode;
+  /** Whether the group starts expanded. Defaults to true; archive group
+   *  defaults to false so it stays out of the way. */
+  defaultExpanded?: boolean;
 }
 
 const ICON_BY_KIND: Record<ChannelKind, JSX.Element> = {
@@ -34,12 +43,12 @@ const ICON_BY_KIND: Record<ChannelKind, JSX.Element> = {
 
 export function ChannelGroup({
   label,
-  kind,
   channels,
   selectedChannelId,
   onSelectChannel,
   onAdd,
   emptyHint,
+  defaultExpanded,
 }: ChannelGroupProps): JSX.Element {
   return (
     <SidebarSection
@@ -47,7 +56,7 @@ export function ChannelGroup({
       count={channels.length}
       onAdd={onAdd}
       collapsible
-      defaultExpanded
+      defaultExpanded={defaultExpanded ?? true}
     >
       {channels.length === 0 ? (
         <li className="px-2 py-2 text-xs text-text-muted">{emptyHint ?? '空'}</li>
@@ -55,8 +64,8 @@ export function ChannelGroup({
         channels.map(c => (
           <SidebarRow
             key={c.id}
-            icon={ICON_BY_KIND[kind]}
-            title={kind === 'dm' ? displayDmName(c.name) : c.name}
+            icon={ICON_BY_KIND[c.kind]}
+            title={c.kind === 'dm' ? displayDmName(c.name) : c.name}
             selected={c.id === selectedChannelId}
             status={c.active ? 'active' : null}
             badge={c.unread}

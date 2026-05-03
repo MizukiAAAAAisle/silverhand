@@ -110,6 +110,21 @@ export class ChannelRepo {
     return this.get(id);
   }
 
+  /** Toggle the soft-archive flag. `true` sets `archived_at = now`,
+   *  `false` clears it back to NULL. Touches `updated_at` either way so
+   *  the active-list ordering reflects the change. */
+  setArchived(id: string, archived: boolean): ChannelDto | null {
+    const now = Date.now();
+    this.db
+      .prepare(
+        `UPDATE channels
+         SET archived_at = ?, updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(archived ? now : null, now, id);
+    return this.get(id);
+  }
+
   delete(id: string): void {
     this.db.prepare('DELETE FROM channels WHERE id = ?').run(id);
   }
