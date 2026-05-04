@@ -1,6 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Copy, Check, Archive, ArchiveRestore } from 'lucide-react';
-import type { ChannelKind } from '@silverhand/shared';
 import {
   Dialog,
   DialogContent,
@@ -10,70 +9,70 @@ import {
 } from '@/components/ui/dialog';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { useArchiveChannel, useDeleteChannel, useRenameChannel } from './hooks';
+import { useArchiveWorkspace, useDeleteWorkspace, useRenameWorkspace } from './hooks';
 
-interface ChannelSettingsDialogProps {
+interface WorkspaceSettingsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  channelId: string | null;
-  channelName: string | null;
-  channelKind: ChannelKind | null;
+  workspaceId: string | null;
+  workspaceName: string | null;
+  workspaceKind: string | null;
   workspacePath: string | null;
-  /** epoch ms when archived; null for active channels. */
+  /** epoch ms when archived; null for active workspaces. */
   archivedAt: number | null;
   onDeleted?: () => void;
 }
 
 const NAME_PATTERN = /^[a-zA-Z0-9_\-]+$/;
 
-export function ChannelSettingsDialog({
+export function WorkspaceSettingsDialog({
   open,
   onOpenChange,
-  channelId,
-  channelName,
-  channelKind,
+  workspaceId,
+  workspaceName,
+  workspaceKind,
   workspacePath,
   archivedAt,
   onDeleted,
-}: ChannelSettingsDialogProps): JSX.Element {
+}: WorkspaceSettingsDialogProps): JSX.Element {
   const [name, setName] = useState('');
   const [renameError, setRenameError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const renameChannel = useRenameChannel();
-  const deleteChannel = useDeleteChannel();
-  const archiveChannel = useArchiveChannel();
+  const renameWorkspace = useRenameWorkspace();
+  const deleteWorkspace = useDeleteWorkspace();
+  const archiveWorkspace = useArchiveWorkspace();
 
-  const isDm = channelKind === 'dm';
+  const isDm = workspaceKind === 'dm';
   const isArchived = archivedAt !== null;
 
   // Reset every time the dialog reopens for a (potentially different)
-  // channel.
+  // workspace.
   useEffect(() => {
     if (open) {
-      setName(channelName ?? '');
+      setName(workspaceName ?? '');
       setRenameError(null);
       setCopied(false);
       setConfirmingDelete(false);
     }
-  }, [open, channelName]);
+  }, [open, workspaceName]);
 
   const handleRename = async (e: FormEvent) => {
     e.preventDefault();
     setRenameError(null);
-    if (!channelId) return;
+    if (!workspaceId) return;
     const trimmed = name.trim();
     if (!trimmed) {
-      setRenameError('请填写频道名');
+      setRenameError('请填写 Workspace 名称');
       return;
     }
     if (!NAME_PATTERN.test(trimmed)) {
       setRenameError('只允许字母、数字、`-` 和 `_`');
       return;
     }
-    if (trimmed === channelName) return;
+    if (trimmed === workspaceName) return;
     try {
-      await renameChannel.mutateAsync({ id: channelId, name: trimmed });
+      await renameWorkspace.mutateAsync({ id: workspaceId, name: trimmed });
     } catch (err) {
       setRenameError(String(err));
     }
@@ -87,8 +86,8 @@ export function ChannelSettingsDialog({
   };
 
   const handleDelete = () => {
-    if (!channelId || deleteChannel.isPending) return;
-    deleteChannel.mutate(channelId, {
+    if (!workspaceId || deleteWorkspace.isPending) return;
+    deleteWorkspace.mutate(workspaceId, {
       onSuccess: () => {
         onOpenChange(false);
         onDeleted?.();
@@ -97,12 +96,12 @@ export function ChannelSettingsDialog({
   };
 
   const handleToggleArchive = () => {
-    if (!channelId || archiveChannel.isPending) return;
-    archiveChannel.mutate(
-      { id: channelId, archived: !isArchived },
+    if (!workspaceId || archiveWorkspace.isPending) return;
+    archiveWorkspace.mutate(
+      { id: workspaceId, archived: !isArchived },
       {
         onSuccess: () => {
-          // Close so the user sees the channel either disappear into
+          // Close so the user sees the workspace either disappear into
           // the Archived group or pop back into the active list.
           onOpenChange(false);
         },
@@ -110,27 +109,27 @@ export function ChannelSettingsDialog({
     );
   };
 
-  const renameDirty = name.trim() !== (channelName ?? '');
+  const renameDirty = name.trim() !== (workspaceName ?? '');
   const renameDisabled =
-    isDm || renameChannel.isPending || !renameDirty || !channelId;
+    isDm || renameWorkspace.isPending || !renameDirty || !workspaceId;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>频道设置</DialogTitle>
+          <DialogTitle>Workspace 设置</DialogTitle>
           <DialogDescription>
             {isDm
-              ? 'DM 频道的名称由 dm-<agent> 约定生成，不可修改。'
-              : '修改名称会向所有未关闭的根会话广播 system 消息，提示在线 agent 更新自己 MEMORY 里的旧名引用。工作目录路径不会变。'}
+              ? 'DM Workspace 的名称由 dm-<agent> 约定生成，不可修改。'
+              : '修改名称会向所有未关闭的根 Channel 广播 system 消息，提示在线 agent 更新自己 MEMORY 里的旧名引用。工作目录路径不会变。'}
           </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleRename} className="flex flex-col gap-1.5">
-          <Label htmlFor="channel-settings-name">名称</Label>
+          <Label htmlFor="workspace-settings-name">名称</Label>
           <div className="flex gap-2">
             <Input
-              id="channel-settings-name"
+              id="workspace-settings-name"
               value={name}
               onChange={e => setName(e.target.value)}
               placeholder="my-frontend"
@@ -138,7 +137,7 @@ export function ChannelSettingsDialog({
               autoFocus={!isDm}
             />
             <Button type="submit" disabled={renameDisabled}>
-              {renameChannel.isPending ? '保存中…' : '保存'}
+              {renameWorkspace.isPending ? '保存中…' : '保存'}
             </Button>
           </div>
           {renameError ? (
@@ -176,29 +175,29 @@ export function ChannelSettingsDialog({
         <div className="mt-2 flex items-center justify-between gap-3 rounded-md border border-border-subtle bg-bg-elevated/40 p-3">
           <div className="flex flex-col gap-0.5">
             <span className="text-sm font-medium text-text-primary">
-              {isArchived ? '已归档' : '归档频道'}
+              {isArchived ? '已归档' : '归档 Workspace'}
             </span>
             <span className="text-xs text-text-muted">
               {isArchived
-                ? '该频道当前折叠在侧栏的 Archived 分组下，仍可访问。取消归档放回活跃列表。'
-                : '从侧栏隐藏到 Archived 折叠组，仍保留所有会话与历史。可随时恢复。'}
+                ? '该 Workspace 当前折叠在侧栏的 Archived 分组下，仍可访问。取消归档放回活跃列表。'
+                : '从侧栏隐藏到 Archived 折叠组，仍保留所有 Channel、Thread 与历史。可随时恢复。'}
             </span>
           </div>
           <Button
             type="button"
             variant="outline"
             onClick={handleToggleArchive}
-            disabled={!channelId || archiveChannel.isPending}
+            disabled={!workspaceId || archiveWorkspace.isPending}
           >
             {isArchived ? (
               <>
                 <ArchiveRestore className="mr-1.5 size-3.5" />
-                {archiveChannel.isPending ? '处理中…' : '取消归档'}
+                {archiveWorkspace.isPending ? '处理中…' : '取消归档'}
               </>
             ) : (
               <>
                 <Archive className="mr-1.5 size-3.5" />
-                {archiveChannel.isPending ? '处理中…' : '归档'}
+                {archiveWorkspace.isPending ? '处理中…' : '归档'}
               </>
             )}
           </Button>
@@ -207,10 +206,10 @@ export function ChannelSettingsDialog({
         <div className="mt-2 flex flex-col gap-2 rounded-md border border-error/30 bg-error/5 p-3">
           <div className="flex flex-col gap-0.5">
             <span className="text-sm font-medium text-text-primary">
-              删除频道
+              删除 Workspace
             </span>
             <span className="text-xs text-text-muted">
-              所有会话与消息都会一并清除，不可恢复。
+              所有 Channel、Thread 与消息都会一并清除，不可恢复。
             </span>
           </div>
           {confirmingDelete ? (
@@ -219,7 +218,7 @@ export function ChannelSettingsDialog({
                 type="button"
                 variant="ghost"
                 onClick={() => setConfirmingDelete(false)}
-                disabled={deleteChannel.isPending}
+                disabled={deleteWorkspace.isPending}
               >
                 取消
               </Button>
@@ -227,9 +226,9 @@ export function ChannelSettingsDialog({
                 type="button"
                 variant="danger"
                 onClick={handleDelete}
-                disabled={deleteChannel.isPending}
+                disabled={deleteWorkspace.isPending}
               >
-                {deleteChannel.isPending ? '删除中…' : '确认删除'}
+                {deleteWorkspace.isPending ? '删除中…' : '确认删除'}
               </Button>
             </div>
           ) : (
@@ -238,9 +237,9 @@ export function ChannelSettingsDialog({
                 type="button"
                 variant="danger"
                 onClick={() => setConfirmingDelete(true)}
-                disabled={!channelId}
+                disabled={!workspaceId}
               >
-                删除频道
+                删除 Workspace
               </Button>
             </div>
           )}

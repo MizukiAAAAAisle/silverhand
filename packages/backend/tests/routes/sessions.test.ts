@@ -911,7 +911,7 @@ describe('GET /api/sessions/:id/threads', () => {
     );
     expect(onboarding.content).toContain('ask the user whether to close it');
     expect(onboarding.content).toContain(
-      'Only call `close_session` after the user explicitly confirms',
+      'Only call `close_thread` after the user explicitly confirms',
     );
     expect(onboarding.content).not.toContain('then call `close_session`');
   });

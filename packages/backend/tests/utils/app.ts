@@ -6,6 +6,7 @@ import type {
   ServerConfig,
 } from '@silverhand/shared';
 import type { BackendContext, BackendLogger } from '../../src/context.js';
+import { silverhandCors } from '../../src/cors.js';
 import { SessionEventBus } from '../../src/event-bus.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { createApiRouter, createInternalRouter } from '../../src/routes.js';
@@ -145,6 +146,7 @@ export function buildTestApp(): TestApp {
   new HostRepo(db).ensureLocal();
 
   const app = new Hono();
+  app.use('*', silverhandCors());
   app.route('/', createApiRouter(ctx));
   app.route('/', createInternalRouter(ctx));
 

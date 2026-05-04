@@ -44,6 +44,8 @@ import { SearchRepo } from './repos/search-repo.js';
 import { SessionReadRepo } from './repos/session-read-repo.js';
 import { SessionRepo, type RepoError } from './repos/session-repo.js';
 import { SettingsRepo, SETTINGS_KEYS } from './repos/settings-repo.js';
+import { WorkspaceRepo } from './repos/workspace-repo.js';
+import { ConversationRepo } from './repos/conversation-repo.js';
 import { provisionChannel, provisionDmChannel, joinChannel, leaveChannel, deleteChannel } from './provision.js';
 import { ccMentionsFromUserMessage } from './mention-cc.js';
 import { detectRuntimes } from './runtimes.js';
@@ -98,6 +100,8 @@ export function createApiRouter(ctx: BackendContext): Hono {
   const channels = new ChannelRepo(ctx.db, { workspacesRoot: ctx.workspacesRoot });
   const members = new MembershipRepo(ctx.db);
   const sessions = new SessionRepo(ctx.db);
+  const workspaces = new WorkspaceRepo(ctx.db, { workspacesRoot: ctx.workspacesRoot });
+  const conversations = new ConversationRepo(ctx.db);
   const messages = new MessageRepo(ctx.db);
   const saved = new SavedMessageRepo(ctx.db);
   const search = new SearchRepo(ctx.db);
@@ -132,6 +136,83 @@ export function createApiRouter(ctx: BackendContext): Hono {
   });
 
   app.get(apiPaths.hosts, c => c.json({ hosts: hosts.list() }));
+
+  // ── Workspaces / conversations (new naming model) ───────────────
+  //
+  // These endpoints are additive while the renderer is still on the
+  // legacy channel/session routes. They read the shadow schema created
+  // by migration 011 and enforce route kind guards so a thread id cannot
+  // silently pass as a channel id.
+
+  app.get(apiPaths.workspaces, c =>
+    c.json({ workspaces: workspaces.list() }),
+  );
+
+  app.get(apiPaths.workspace(':id'), c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'workspace id required' }, 400);
+    const workspace = workspaces.get(id);
+    if (!workspace || workspace.workspace_kind !== 'regular') {
+      return c.json({ error: 'workspace not found' }, 404);
+    }
+    return c.json({ workspace });
+  });
+
+  app.get(apiPaths.workspaceChannels(':id'), c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'workspace id required' }, 400);
+    const workspace = workspaces.get(id);
+    if (!workspace || workspace.workspace_kind !== 'regular') {
+      return c.json({ error: 'workspace not found' }, 404);
+    }
+    return c.json({
+      channels: conversations.listChannelsForWorkspace(workspace.id),
+    });
+  });
+
+  app.get(apiPaths.workspaceDmChannels, c =>
+    c.json({ dm_channels: conversations.listDmChannels() }),
+  );
+
+  app.get(apiPaths.conversationChannelMessages(':id'), c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'channel id required' }, 400);
+    const channel = conversations.getChannel(id);
+    if (!channel) return c.json({ error: 'channel not found' }, 404);
+    const parsedLimit = Number(c.req.query('limit') ?? 200);
+    const parsedBefore = c.req.query('before_seq');
+    const limit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 500) : 200;
+    const beforeSeq = parsedBefore ? Number(parsedBefore) : null;
+    return c.json(messages.listWindowForSession(channel.id, { limit, beforeSeq }));
+  });
+
+  app.get(apiPaths.threadMessages(':id'), c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'thread id required' }, 400);
+    const thread = conversations.getThread(id);
+    if (!thread) return c.json({ error: 'thread not found' }, 404);
+    const parsedLimit = Number(c.req.query('limit') ?? 200);
+    const parsedBefore = c.req.query('before_seq');
+    const limit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 500) : 200;
+    const beforeSeq = parsedBefore ? Number(parsedBefore) : null;
+    return c.json(messages.listWindowForSession(thread.id, { limit, beforeSeq }));
+  });
+
+  app.get(apiPaths.conversationChannelAgents(':id'), c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'channel id required' }, 400);
+    const channel = conversations.getChannel(id);
+    if (!channel) return c.json({ error: 'channel not found' }, 404);
+    return c.json({ agents: conversations.listAgents(channel.id) });
+  });
+
+  app.get(apiPaths.threadAgents(':id'), c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'thread id required' }, 400);
+    const thread = conversations.getThread(id);
+    if (!thread) return c.json({ error: 'thread not found' }, 404);
+    return c.json({ agents: conversations.listAgents(thread.id) });
+  });
 
   // ── Agents ───────────────────────────────────────────────────────
   app.get(apiPaths.agents, c => c.json({ agents: agents.list() }));
@@ -597,7 +678,7 @@ export function createApiRouter(ctx: BackendContext): Hono {
       messages.insert({
         sessionId: session.id,
         fromKind: 'system',
-        content: `Inherited context from parent session '${parent?.title ?? '(unknown)'}': ${parsed.data.context_summary}`,
+        content: `Inherited context from parent channel '${parent?.title ?? '(unknown)'}': ${parsed.data.context_summary}`,
         metadata: { subtype: 'child_context' },
       });
     }
@@ -964,7 +1045,7 @@ export function createApiRouter(ctx: BackendContext): Hono {
   // ── Thread → child session (human-triggered) ─────────────────────
   // Per docs/app-layout.md §7. Creates a child session anchored to the
   // anchor message; default members = every member currently present in
-  // the parent session. Two seed messages are written: a thread_anchor
+  // the parent channel. Two seed messages are written: a thread_anchor
   // with metadata pointing back to the original message, then an
   // onboarding system message imperatively asking the relevant agent to
   // greet briefly.
@@ -1006,7 +1087,7 @@ export function createApiRouter(ctx: BackendContext): Hono {
     const channel = channels.get(parent.channel_id);
     if (!channel) return c.json({ error: 'channel not found' }, 404);
 
-    // Thread membership follows the current parent session roster, not
+    // Thread membership follows the current parent channel roster, not
     // just the author of the clicked message. This keeps multi-agent
     // discussions intact when the user peels off a Thread.
     const parentAgentIds = sessions.listAgents(parent.id).map(sa => sa.agent_id);
@@ -1117,7 +1198,7 @@ export function createApiRouter(ctx: BackendContext): Hono {
       `The user wants to dig deeper into the quoted message above.`,
       ``,
       `Read the quote, send one short greeting acknowledging the topic, then wait for the user.`,
-      `If you need parent context, ask the parent session via \`target='parent'\`. When you think the thread has reached a conclusion, post a visible summary in this thread and ask the user whether to close it. Only call \`close_session\` after the user explicitly confirms.`,
+      `If you need parent context, ask the parent channel via \`target='parent'\`. When you think the thread has reached a conclusion, post a visible summary in this thread and ask the user whether to close it. Only call \`close_thread\` after the user explicitly confirms.`,
     ].join('\n');
     messages.insert({
       sessionId: child.id,
@@ -1424,7 +1505,7 @@ export function createInternalRouter(ctx: BackendContext): Hono {
     return c.json({ message_id: msg.id });
   });
 
-  // ── spawn_child_session ─────────────────────────────────────────
+  // ── create_thread (legacy internal path: spawn-child) ───────────
   app.post('/internal/sessions/:sid/agents/:aid/spawn-child', async c => {
     const sid = c.req.param('sid');
     const aid = c.req.param('aid');
@@ -1481,7 +1562,7 @@ export function createInternalRouter(ctx: BackendContext): Hono {
       sessionId: child.id,
       fromKind: 'system',
       content:
-        `Inherited context from parent session '${parent.title}': ${parsed.data.context_summary}`,
+        `Inherited context from parent channel '${parent.title}': ${parsed.data.context_summary}`,
       metadata: { subtype: 'child_context' },
     });
     messages.insert({
@@ -1491,10 +1572,10 @@ export function createInternalRouter(ctx: BackendContext): Hono {
       content: parsed.data.initial_prompt,
     });
 
-    return c.json({ child_session_id: child.id });
+    return c.json({ thread_id: child.id });
   });
 
-  // ── create_session ─────────────────────────────────────────────
+  // ── create_channel (legacy internal path: create-session) ──────
   app.post('/internal/sessions/:sid/agents/:aid/create-session', async c => {
     const sid = c.req.param('sid');
     const aid = c.req.param('aid');
@@ -1566,7 +1647,7 @@ export function createInternalRouter(ctx: BackendContext): Hono {
     return c.json({ session_id: session.id });
   });
 
-  // ── close_session ───────────────────────────────────────────────
+  // ── close_thread (legacy internal path: close session) ──────────
   app.post('/internal/sessions/:sid/agents/:aid/close', async c => {
     const sid = c.req.param('sid');
     const aid = c.req.param('aid');
@@ -1734,7 +1815,7 @@ export function createInternalRouter(ctx: BackendContext): Hono {
   return app;
 }
 
-/** Resolve `target` against the current session. Returns a session DTO
+/** Resolve `target` against the current channel/thread. Returns a session DTO
  *  on success, or an error message string on failure. */
 function resolveTarget(
   current: NonNullable<ReturnType<SessionRepo['get']>>,
@@ -1743,16 +1824,16 @@ function resolveTarget(
 ): NonNullable<ReturnType<SessionRepo['get']>> | string {
   if (target === 'self') return current;
   if (target === 'parent') {
-    if (!current.parent_session_id) return 'no parent session — current session is top-level';
+    if (!current.parent_session_id) return 'no parent channel — current channel is top-level';
     const parent = sessions.get(current.parent_session_id);
-    if (!parent) return 'parent session not found';
+    if (!parent) return 'parent channel not found';
     return parent;
   }
-  // Child target: must be a direct child of current.
-  const child = sessions.get(target.child_session_id);
-  if (!child) return 'child session not found';
+  // Thread target: must be a direct child of current.
+  const child = sessions.get(target.thread_id);
+  if (!child) return 'thread not found';
   if (child.parent_session_id !== current.id) {
-    return 'target is not a direct child of current session';
+    return 'target is not a direct thread of current channel';
   }
   return child;
 }

@@ -1,7 +1,7 @@
 import * as Popover from '@radix-ui/react-popover';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { AgentDto, SessionAgentStatus } from '@silverhand/shared';
-import { useSessionAgents, useStartAgent } from '@/features/sessions/hooks';
+import { useChannelAgents, useStartAgent } from '@/features/channels/hooks';
 import { AgentAvatar } from './AgentAvatar';
 
 interface AgentInfoPopoverProps {
@@ -158,7 +158,7 @@ function PresenceLine({
   agentId: string;
   sessionId: string;
 }): JSX.Element {
-  const { data: sa = [] } = useSessionAgents(sessionId);
+  const { data: sa = [] } = useChannelAgents(sessionId);
   const row = sa.find(s => s.agent_id === agentId);
   if (!row) {
     return (
@@ -180,7 +180,7 @@ function RetryRow({
   agentId: string;
   sessionId: string;
 }): JSX.Element | null {
-  const { data: sa = [] } = useSessionAgents(sessionId);
+  const { data: sa = [] } = useChannelAgents(sessionId);
   const start = useStartAgent(sessionId);
   const row = sa.find(s => s.agent_id === agentId);
   if (!row || row.status !== 'crashed') return null;

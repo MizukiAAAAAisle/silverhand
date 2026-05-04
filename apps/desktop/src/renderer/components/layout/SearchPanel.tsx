@@ -24,12 +24,12 @@ import { cn } from '@/lib/cn';
 interface SearchPanelProps {
   channels: ChannelDto[];
   onJumpMessage: (params: {
+    workspaceId?: string;
     channelId: string;
-    sessionId: string;
     messageId: string;
   }) => void;
-  onOpenChannel: (channelId: string) => void;
-  onOpenSession: (channelId: string, sessionId: string) => void;
+  onOpenChannel: (workspaceId: string) => void;
+  onOpenSession: (workspaceId: string, channelId: string) => void;
 }
 
 type ChannelFilter = 'all' | 'scope:dm' | 'scope:regular' | `channel:${string}`;
@@ -218,8 +218,8 @@ export function SearchPanel({
                           onOpenSession(result.channel.id, result.session.id);
                         } else {
                           onJumpMessage({
-                            channelId: result.channel.id,
-                            sessionId: result.session.id,
+                            workspaceId: result.channel.id,
+                            channelId: result.session.id,
                             messageId: result.message.id,
                           });
                         }

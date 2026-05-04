@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, type FormEvent } from 'react';
-import type { AgentDto, ChannelKind } from '@silverhand/shared';
+import type { AgentDto } from '@silverhand/shared';
 import {
   Dialog,
   DialogContent,
@@ -12,62 +12,65 @@ import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { useChannelMembers } from '@/features/agents/hooks';
 import { AgentPicker } from './AgentPicker';
-import { useCreateSession } from './hooks';
+import { useCreateChannel } from './hooks';
 
-interface CreateSessionDialogProps {
+// Stable empty array so the useEffect dependency on `members` doesn't
+// create a new reference every render when the query hasn't resolved yet.
+const EMPTY_AGENTS: AgentDto[] = [];
+
+interface CreateChannelDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  channelId: string | null;
-  /** Drives member-picker behaviour. DM auto-adds the DM agent and
-   *  hides the picker entirely; regular shows a dropdown + chips. */
-  channelKind: ChannelKind | null;
-  /** Required when `channelKind === 'dm'` — auto-added as the sole
-   *  session member. Ignored for regular channels. */
-  dmAgentId: string | null;
-  parentSessionId?: string | null;
-  parentSessionTitle?: string | null;
+  workspaceId: string | null;
+  /** Drives member-picker behaviour. DM and regular workspaces diverge in
+   *  several places (agent strip, sub-channel affordances, member
+   *  management). */
+  workspaceKind: string | null;
+  parentChannelId?: string | null;
+  parentChannelTitle?: string | null;
   onCreated?: (id: string) => void;
 }
 
-export function CreateSessionDialog({
+export function CreateChannelDialog({
   open,
   onOpenChange,
-  channelId,
-  channelKind,
-  dmAgentId,
-  parentSessionId,
-  parentSessionTitle,
+  workspaceId,
+  workspaceKind,
+  parentChannelId,
+  parentChannelTitle,
   onCreated,
-}: CreateSessionDialogProps): JSX.Element {
+}: CreateChannelDialogProps): JSX.Element {
   const [title, setTitle] = useState('');
   const [contextSummary, setContextSummary] = useState('');
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const { data: members = [] } = useChannelMembers(channelId);
-  const createSession = useCreateSession(channelId);
+  const { data: members = EMPTY_AGENTS } = useChannelMembers(workspaceId);
+  const createChannel = useCreateChannel(workspaceId);
 
-  const isChild = !!parentSessionId;
-  const isDm = channelKind === 'dm';
+  const isChild = !!parentChannelId;
+  const isDm = workspaceKind === 'dm';
 
-  // Default a fresh root session to inheriting every channel member.
-  // The channel itself is the membership pool; making the user re-pick
+  // Default a fresh root channel to inheriting every workspace member.
+  // The workspace itself is the membership pool; making the user re-pick
   // would be busywork. They can still drop members via the chip Xs.
-  // Child sessions intentionally start empty — their value is a focused
+  // Child channels intentionally start empty — their value is a focused
   // subset, so the user picks the contributors deliberately.
   //
   // Only seed once per "open" cycle so a re-fetch of `members` (e.g. a
   // background invalidation) doesn't clobber the user's deselections.
   const seededOnceRef = useRef(false);
   useEffect(() => {
-    if (!open) {
-      setTitle('');
-      setContextSummary('');
-      setSelectedAgents([]);
-      setError(null);
-      seededOnceRef.current = false;
-      return;
-    }
+    if (open) return;
+    setTitle('');
+    setContextSummary('');
+    setSelectedAgents([]);
+    setError(null);
+    seededOnceRef.current = false;
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
     if (seededOnceRef.current) return;
     if (isChild || isDm) return;
     if (members.length === 0) return; // wait for the query to land
@@ -85,29 +88,23 @@ export function CreateSessionDialog({
     e.preventDefault();
     setError(null);
     if (!title.trim()) {
-      setError('请填写会话标题');
+      setError('请填写 Channel 标题');
       return;
     }
     if (isChild && !contextSummary.trim()) {
-      setError('子会话需要填写上下文摘要');
+      setError('Thread 需要填写上下文摘要');
       return;
     }
-    // DM sessions are always 1:1 with the DM agent — auto-include them
-    // so the user doesn't have to. Falls back to whatever the user
-    // explicitly picked if dmAgentId is missing for some reason.
-    const memberIds = isDm
-      ? dmAgentId
-        ? [dmAgentId]
-        : []
-      : selectedAgents;
+    // DM channels are always 1:1 — no member selection needed.
+    const memberIds = isDm ? [] : selectedAgents;
     try {
-      const session = await createSession.mutateAsync({
+      const channel = await createChannel.mutateAsync({
         title: title.trim(),
         member_agent_ids: memberIds,
-        parent_session_id: parentSessionId ?? undefined,
+        parent_session_id: parentChannelId ?? undefined,
         context_summary: isChild ? contextSummary.trim() : undefined,
       });
-      onCreated?.(session.id);
+      onCreated?.(channel.id);
       onOpenChange(false);
     } catch (err) {
       setError(String(err));
@@ -118,13 +115,13 @@ export function CreateSessionDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{isChild ? '新建子会话' : '新建会话'}</DialogTitle>
+          <DialogTitle>{isChild ? '新建 Thread' : '新建 Channel'}</DialogTitle>
           <DialogDescription>
             {isChild
-              ? `从「${parentSessionTitle ?? 'parent'}」分支出独立讨论。子会话拥有独立上下文。`
+              ? `从「${parentChannelTitle ?? 'parent'}」分支出独立讨论。Thread 拥有独立上下文。`
               : isDm
-                ? `在 DM 频道里开一个新的会话上下文。`
-                : '一个会话是一组成员 agent 的协作空间，拥有独立上下文。'}
+                ? `在 DM Workspace 里开一个新的 Channel 上下文。`
+                : '一个 Channel 是一组成员 agent 的协作空间，拥有独立上下文。'}
           </DialogDescription>
         </DialogHeader>
 
@@ -147,16 +144,16 @@ export function CreateSessionDialog({
                 id="se-ctx"
                 value={contextSummary}
                 onChange={e => setContextSummary(e.target.value)}
-                placeholder="父会话里讨论到的 / 子会话需要知道的关键信息"
+                placeholder="父 Channel 里讨论到的 / Thread 需要知道的关键信息"
               />
               <span className="text-xs text-text-muted">
-                作为子会话第一条 system 消息发给成员。
+                作为 Thread 第一条 system 消息发给成员。
               </span>
             </div>
           ) : null}
 
           {isDm ? (
-            <DmMemberHint dmAgentName={dmAgentId ? nameById.get(dmAgentId) ?? null : null} />
+            <DmMemberHint />
           ) : (
             <RegularMemberPicker
               members={members}
@@ -175,8 +172,8 @@ export function CreateSessionDialog({
             >
               取消
             </Button>
-            <Button type="submit" disabled={createSession.isPending}>
-              {createSession.isPending ? '创建中…' : '创建'}
+            <Button type="submit" disabled={createChannel.isPending}>
+              {createChannel.isPending ? '创建中…' : '创建'}
             </Button>
           </DialogFooter>
         </form>
@@ -185,12 +182,10 @@ export function CreateSessionDialog({
   );
 }
 
-function DmMemberHint({ dmAgentName }: { dmAgentName: string | null }): JSX.Element {
+function DmMemberHint(): JSX.Element {
   return (
     <div className="rounded-md border border-border-subtle bg-bg-floating px-3 py-2 text-xs text-text-secondary">
-      {dmAgentName
-        ? `DM 会话会自动包含 @${dmAgentName}，无需选择成员。`
-        : 'DM 会话会自动包含频道对应的 agent，无需选择成员。'}
+      DM Channel 会自动包含 Workspace 对应的 agent，无需选择成员。
     </div>
   );
 }
@@ -207,9 +202,9 @@ function RegularMemberPicker({
   if (members.length === 0) {
     return (
       <div className="flex flex-col gap-1.5">
-        <Label>成员（频道内的 agent）</Label>
+        <Label>成员（Workspace 内的 agent）</Label>
         <span className="text-xs text-text-muted">
-          这个频道还没有 agent 成员。先去 Members 面板加。
+          这个 Workspace 还没有 agent 成员。先去 Members 面板加。
         </span>
       </div>
     );

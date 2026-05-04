@@ -11,8 +11,8 @@ import type { AgentDto, ChannelDto } from '@silverhand/shared';
 import { Button } from '@/components/ui/button';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { useAgents } from '@/features/agents/hooks';
-import { useChannels } from '@/features/channels/hooks';
-import { useSendMessage } from '@/features/sessions/hooks';
+import { useWorkspaces } from '@/features/workspaces/hooks';
+import { useSendMessage } from '@/features/channels/hooks';
 
 interface ComposerProps {
   sessionId: string;
@@ -59,7 +59,7 @@ export function Composer({ sessionId, disabled }: ComposerProps): JSX.Element {
   }, [draft]);
 
   const { data: agents = [] } = useAgents();
-  const { data: channels = [] } = useChannels();
+  const { data: workspaces = [] } = useWorkspaces();
 
   const trigger = useMemo(
     () => (composing ? null : detectTrigger(draft, caret)),
@@ -71,8 +71,8 @@ export function Composer({ sessionId, disabled }: ComposerProps): JSX.Element {
     if (trigger.kind === '@') {
       return filterAgents(agents, trigger.query);
     }
-    return filterChannels(channels, trigger.query);
-  }, [trigger, agents, channels]);
+    return filterWorkspaces(workspaces, trigger.query);
+  }, [trigger, agents, workspaces]);
 
   const [active, setActive] = useState(0);
   // Keep the highlight in range as the candidate list shrinks/grows.
@@ -88,7 +88,7 @@ export function Composer({ sessionId, disabled }: ComposerProps): JSX.Element {
 
   const insertPick = (item: PickerItem): void => {
     if (!trigger) return;
-    const handle = item.kind === 'agent' ? item.agent.name : item.channel.name;
+    const handle = item.kind === 'agent' ? item.agent.name : item.workspace.name;
     const before = draft.slice(0, trigger.pos);
     const after = draft.slice(trigger.pos + 1 + trigger.query.length);
     // Trailing space so the next keystroke isn't immediately treated
@@ -286,7 +286,7 @@ function detectTrigger(text: string, caret: number): ActiveTrigger | null {
 
 type PickerItem =
   | { kind: 'agent'; agent: AgentDto }
-  | { kind: 'channel'; channel: ChannelDto };
+  | { kind: 'workspace'; workspace: ChannelDto };
 
 function filterAgents(agents: AgentDto[], query: string): PickerItem[] {
   const q = query.toLowerCase();
@@ -301,12 +301,12 @@ function filterAgents(agents: AgentDto[], query: string): PickerItem[] {
   return matched.slice(0, 8).map(agent => ({ kind: 'agent', agent }));
 }
 
-function filterChannels(channels: ChannelDto[], query: string): PickerItem[] {
+function filterWorkspaces(workspaces: ChannelDto[], query: string): PickerItem[] {
   const q = query.toLowerCase();
   const matched = q
-    ? channels.filter(c => c.name.toLowerCase().includes(q))
-    : channels;
-  return matched.slice(0, 8).map(channel => ({ kind: 'channel', channel }));
+    ? workspaces.filter(w => w.name.toLowerCase().includes(q))
+    : workspaces;
+  return matched.slice(0, 8).map(workspace => ({ kind: 'workspace', workspace }));
 }
 
 // ── menu ──────────────────────────────────────────────────────────
@@ -384,9 +384,9 @@ function Row({
       ) : (
         <>
           <Hash className="size-4 text-text-muted" />
-          <span className="truncate font-medium">#{item.channel.name}</span>
+          <span className="truncate font-medium">#{item.workspace.name}</span>
           <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wider text-text-muted">
-            {item.channel.kind}
+            {item.workspace.kind}
           </span>
         </>
       )}
@@ -397,5 +397,5 @@ function Row({
 function rowKey(item: PickerItem): string {
   return item.kind === 'agent'
     ? `a:${item.agent.id}`
-    : `c:${item.channel.id}`;
+    : `w:${item.workspace.id}`;
 }

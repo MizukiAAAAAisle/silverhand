@@ -5,9 +5,9 @@ import { ChevronDown, Trash2, UserPlus } from 'lucide-react';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { useAgents } from '@/features/agents/hooks';
 import {
-  useAddChannelMember,
-  useChannelMembers,
-  useRemoveChannelMember,
+  useAddWorkspaceMember,
+  useWorkspaceMembers,
+  useRemoveWorkspaceMember,
 } from './hooks';
 
 interface ManageMembersPopoverProps {
@@ -18,7 +18,7 @@ interface ManageMembersPopoverProps {
 }
 
 /**
- * Anchored member-management surface for a channel — shadcn-style.
+ * Anchored member-management surface for a workspace — shadcn-style.
  * Top: a selector that immediately enrolls the picked agent; below
  * that, AGENTS lists current agent members (with remove), HUMANS is
  * a stub section (no human-member concept in the data model yet).
@@ -51,10 +51,10 @@ export function ManageMembersPopover({
 // popover actually opens (Radix unmounts Content when closed).
 function PopoverBody({ channelId }: { channelId: string }): JSX.Element {
   const { data: members = [], isLoading: membersLoading } =
-    useChannelMembers(channelId);
+    useWorkspaceMembers(channelId);
   const { data: agents = [] } = useAgents();
-  const addMember = useAddChannelMember(channelId);
-  const removeMember = useRemoveChannelMember(channelId);
+  const addMember = useAddWorkspaceMember(channelId);
+  const removeMember = useRemoveWorkspaceMember(channelId);
   const [error, setError] = useState<string | null>(null);
 
   const memberIds = useMemo(() => new Set(members.map(m => m.id)), [members]);
@@ -111,7 +111,7 @@ function PopoverBody({ channelId }: { channelId: string }): JSX.Element {
             <Select.Viewport className="p-1">
               {candidates.length === 0 ? (
                 <div className="px-2 py-2 text-center text-xs italic text-text-muted">
-                  所有 agent 都已经在频道里
+                  所有 agent 都已经在 Workspace 里
                 </div>
               ) : (
                 candidates.map(a => (

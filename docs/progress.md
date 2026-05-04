@@ -1041,3 +1041,34 @@ URL scheme：
 
 - cursor oneShot respawn 端到端集成测试（需要先写 mock-cursor）
 - 一些零散的 nice-to-have（AgentView Restart 按钮、ChannelMembers popover 跳转、DM 短链 `/dm/:agentName`、jumpTarget URL 化、Settings sub-tab 路由、done task 清理策略、NavRail Tasks active 数 badge）
+
+---
+
+## 2026-05-05 — workspace/channel/thread 术语重命名（文档更新）
+
+完成三轮 PR（backend #62、MCP/prompts #64、frontend #67）的代码重命名后，更新所有权威设计文档，使文档与代码保持一致。
+
+### 术语映射
+
+| 旧术语 | 新术语 | 说明 |
+|--------|--------|------|
+| `channel`（外层容器，含成员/agents）| `workspace` | DB 表 `channels` → `workspaces` |
+| `session`（对话流）| `channel` | DB 表 `sessions` → `conversations` |
+| `child session` / 嵌套讨论 | `thread` | 已在代码侧早期重命名 |
+| `SessionManager` | `ConversationManager` | 后端核心类 |
+| `/api/channels` | `/api/workspaces` | HTTP 路由前缀 |
+| `/api/sessions/:id` | `/api/channels/:id` | HTTP 路由前缀 |
+| `/c/:channelId/s/:sessionId` | `/w/:workspaceId/c/:channelId` | URL scheme |
+| `session_agents` 表 | `conversation_agents` 表 | DB join 表 |
+| `channel_members` 表 | `workspace_members` 表 | DB join 表 |
+
+### 修改文件
+
+- **`docs/core-design.md`**：更新 §2 实体模型（ER 图、§2.4 Workspace、§2.5 Channel）、§3 多 agent 协作机制（§3.1 投递逻辑、§3.4 chat-bridge 参数、§3.5 ConversationManager、§3.6 Thread）、§4 三层知识（文件路径、onboarding 流程、系统 prompt 模板）、§5 用户操作流、§6 v2 演进、§7 非目标、§8 已废弃设计、§9/§10 待决策 + Deferred design、§11 Attachments。文档底部版本行更新。
+- **`docs/app-layout.md`**：更新 §0 设计原则、§1 整体布局图、§2 Titlebar、§3 Sidebar（channels→workspaces）、§4 SessionsSidebar→ChannelsSidebar、§6 Save（DB schema + 跳转逻辑）、§7 Thread（API 路径 + 实现要点）、§10 一致性约定、§11 Open questions。
+- **`CLAUDE.md`**：更新 "What this is" 段（Channel+Multi-Session → Workspace+Multi-Channel）、workspace layout 中 `SessionManager` → `ConversationManager`、"Architecture in five facts" 全部 5 条（workspace/channel 两层、ConversationManager、provisionWorkspace/joinWorkspace 等）、logging 段（log 文件名模式）。
+
+### 原则
+
+- 只更新术语，不更改技术细节或实现逻辑。
+- 未接触：`docs/workspace-channel-thread-rename.md`（重命名计划文档本身）、`docs/progress.md`（此条之前的历史）、所有代码文件。

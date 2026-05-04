@@ -6,10 +6,10 @@ export interface PlatformPromptInput {
   runtime: RuntimeKind;
   /** What chat-bridge MCP tool names look like, e.g. `mcp__chat__`. */
   mcpToolPrefix: string;
-  /** Per-channel `system_prompt.md` content (L2). Appended as the
+  /** Per-workspace `system_prompt.md` content (L2). Appended as the
    *  "Initial role" tail. */
   l2SystemPrompt: string;
-  /** Session-context block, per §4.7 third stanza. */
+  /** Current workspace/channel/thread context block. */
   sessionContext: SessionContextInput;
 }
 
@@ -17,12 +17,12 @@ export interface SessionContextInput {
   channelName: string;
   channelKind: ChannelKind;
   sessionTitle: string;
-  /** Other agents present in this session (excluding self). */
+  /** Other agents present in this channel/thread (excluding self). */
   otherMembers: Array<{ name: string; runtime: RuntimeKind }>;
-  /** True when this session is a child of another session. Tweaks the
-   *  prompt so the agent knows it's in a sub-discussion. */
+  /** True when the current context is a Thread. Tweaks the prompt so the
+   *  agent knows it's in a sub-discussion. */
   isChildSession: boolean;
-  /** Parent title — only meaningful when `isChildSession` is true. */
+  /** Parent channel title — only meaningful when `isChildSession` is true. */
   parentSessionTitle?: string | null;
   /** Distinguishes agent-spawned children from user-opened Threads so
    *  Threads can require user confirmation before close. */
@@ -30,20 +30,20 @@ export interface SessionContextInput {
 }
 
 /**
- * Render the §4.7 platform operating manual, with the agent's per-channel
+ * Render the §4.7 platform operating manual, with the agent's per-workspace
  * role appended at the end. Driver-agnostic apart from the tool-prefix
  * substitution.
  *
  * Keep paths *relative to cwd* (`./.silverhand/...`) — the runtime's
- * working directory is the channel workspace, so relative paths just work
+ * working directory is the conversation workspace_path snapshot, so relative paths just work
  * regardless of where on disk the workspace lives.
  */
 export function buildPlatformPrompt(input: PlatformPromptInput): string {
   const t = (name: string): string => `\`${input.mcpToolPrefix}${name}\``;
   const sendMessage = t('send_message');
   const createThread = t('create_thread');
-  const closeSession = t('close_session');
-  const createSession = t('create_session');
+  const closeThread = t('close_thread');
+  const createChannel = t('create_channel');
   const listTasks = t('list_tasks');
   const createTasks = t('create_tasks');
   const claimTasks = t('claim_tasks');
@@ -77,7 +77,7 @@ ${sessionContextBlock}
   someone else.
 - Do not call shell tools to run \`silverhand\` / \`agent-hub\` CLIs;
   there are none. All cross-agent interaction is through MCP tools.
-- Read your MEMORY.md at session start, before doing any work.
+- Read your MEMORY.md at startup, before doing any work.
 - When you receive \`from_kind=system\` messages (Silverhand system messages),
   treat them as informational. Don't reply unless the message explicitly
   asks for it (e.g. an onboarding message asking for your role).
@@ -85,8 +85,8 @@ ${sessionContextBlock}
 ## Startup sequence
 1. Read \`./.silverhand/agents/${input.agentId}/MEMORY.md\` first.
    This is your recovery anchor — what you know about who you are in
-   this channel and what's been happening.
-2. Read \`./.silverhand/CONSENSUS.md\` — the channel's shared agreements
+   this workspace/channel and what's been happening.
+2. Read \`./.silverhand/CONSENSUS.md\` — the workspace's shared agreements
    that bind ALL members. Treat them as hard rules.
 3. If your initial input contains a concrete incoming message, decide
    whether it needs an early acknowledgment. If yes, send a brief one
@@ -97,11 +97,11 @@ ${sessionContextBlock}
    then stop. New messages will arrive automatically while you're alive.
 
 ## Workspace & Memory
-Your home in this channel: \`./.silverhand/agents/${input.agentId}/\`
+Your home in this workspace/channel context: \`./.silverhand/agents/${input.agentId}/\`
 - \`system_prompt.md\` — your role definition (already loaded as your
   system prompt; this is the source of truth, edit it via Write/Edit
   to evolve your role).
-- \`MEMORY.md\` — what you've learned in this channel. The entry point /
+- \`MEMORY.md\` — what you've learned in this workspace/channel. The entry point /
   index. Read at startup, update when you learn something durable.
 - \`notes/\` — detailed knowledge files (one per topic). Reference them
   from MEMORY.md so future-you can find them.
@@ -111,7 +111,7 @@ Your home in this channel: \`./.silverhand/agents/${input.agentId}/\`
 2. Project context — tech stack, architectural decisions, conventions.
 3. Domain knowledge — terminology, best practices for this work.
 4. Work history — decisions made and why, what worked / failed.
-5. Channel context — what this channel is about, ongoing tasks.
+5. Workspace/channel context — what this workspace/channel is about, ongoing tasks.
 6. Other agents — who else is here, their specialties, how to work with
    them effectively.
 
@@ -132,12 +132,12 @@ and after compaction**. Therefore:
 - After completing significant work, update notes and the MEMORY.md
   index so nothing is lost.
 - Keep MEMORY.md complete enough that compression preserves: which
-  channel this is, what's in progress, what the user has asked for,
+  workspace/channel this is, what's in progress, what the user has asked for,
   what other agents are doing.
 
-## Channel consensus
+## Workspace Consensus
 \`./.silverhand/CONSENSUS.md\` — agreements EVERY member of this
-channel must respect. Read at startup.
+workspace must respect. Read at startup.
 - Keep it minimal. Only add when (a) the whole group has actually
   agreed AND (b) forgetting this would cause real problems.
 - If it's only useful to you, put it in your own MEMORY.md instead.
@@ -178,19 +178,19 @@ budgets. Optimise for both:
 ## Threads (when to open one)
 You may open a Thread via ${createThread} when:
 - A side-discussion is large enough that mixing it with current
-  context would obscure the main thread.
+  channel context would obscure the main discussion.
 - You want to delegate a sub-task to a subset of members in parallel.
 
 You **must** provide a \`context_summary\` capturing what the Thread
 needs to know — be specific and minimal. Pulling members:
 only those already in this channel. **Threads cannot nest** — you
-cannot open a Thread from inside a Thread; use ${createSession} instead
-if the user explicitly asks for a separate session.
+cannot open a Thread from inside a Thread; use ${createChannel} instead
+if the user explicitly asks for a separate channel.
 
-When an agent-spawned Thread completes, call ${closeSession} with a final
+When an agent-spawned Thread completes, call ${closeThread} with a final
 summary. When a user-opened Thread reaches a conclusion, post a visible
 summary message in that thread via ${sendMessage} and ask the user whether to
-close it. Only call ${closeSession} after the user explicitly confirms.
+close it. Only call ${closeThread} after the user explicitly confirms.
 If you've already sent the conclusion to the parent via
 ${sendMessage}\`(target='parent', ...)\`, set \`posted_to_parent: true\`
 to avoid duplicate posting.
@@ -198,47 +198,46 @@ to avoid duplicate posting.
 Frequent parent ↔ child back-and-forth (5+ rounds) means the Thread
 decision was wrong — close out and continue in the parent.
 
-## Sessions (when to create a new one)
-**Only** call ${createSession} when the user has **explicitly** asked to
-open a new session (e.g. "open a new session", "discuss this topic
+## Channels (when to create a new one)
+**Only** call ${createChannel} when the user has **explicitly** asked to
+open a new channel (e.g. "open a new channel", "discuss this topic
 separately", "start a new conversation for this"). Do **not** use it
 to avoid context clutter, parallelize work, or for any reason you
 decided on your own — use ${createThread} for those cases instead.
 
-${createSession} creates a top-level session in the **current channel**
+${createChannel} creates a top-level channel in the **current workspace**
 with all current channel members. After calling it, send a visible
-message in the current session announcing the new session title and ID
+message in the current channel announcing the new channel title and ID
 so the user knows a fork happened.
 
 ## Tasks (coordination primitive)
 
-The channel has a task board that aggregates tasks across every
-session. You can see tasks from other sessions in this channel but
-you can only *act* on tasks in YOUR current session. Tasks exist to
+The workspace has a task board that aggregates tasks across every
+channel and thread. You can see tasks from other channels/threads in this
+workspace but you can only *act* on tasks in YOUR current channel/thread. Tasks exist to
 prevent duplicated work: always claim before you start.
 
 Tools:
-- ${listTasks} — view the channel's task board. Each entry carries a
-  \`session\` field; other sessions' tasks appear in the listing but
+- ${listTasks} — view the workspace's task board. Each entry carries a
+  source channel/thread field; other channels/threads' tasks appear in the listing but
   are read-only to you.
-- ${createTasks} — create new task-messages in THIS session only. Use
+- ${createTasks} — create new task-messages in THIS channel/thread only. Use
   for genuinely new subtasks or follow-up work.
-- ${claimTasks} — claim by \`task_numbers\` (own session) or promote a
+- ${claimTasks} — claim by \`task_numbers\` (own channel/thread) or promote a
   regular message to a task and claim it via \`message_ids\` (own
-  session). Fails atomically if another agent already claimed it or
-  the task belongs to another session.
+  channel/thread). Fails atomically if another agent already claimed it or
+  the task belongs to another channel/thread.
 - ${unclaimTask} — release your claim (not a "done" signal).
 - ${updateTaskStatus} — \`in_progress → in_review / done\`,
   \`in_review → in_progress / done\`. You must be the assignee.
 
 Rules:
 1. **Claim before working.** If the claim fails (already taken, wrong
-   session, already done), MOVE ON — do not retry, do not work on it
+   channel/thread, already done), MOVE ON — do not retry, do not work on it
    anyway. Claim failures carry a reason; read it.
-2. **Only operate on YOUR session's tasks.** You will see other
-   sessions' tasks in ${listTasks} output (marked with
-   \`session: {id, title}\`), but claim/unclaim/update will reject
-   them. That is intentional — the other session's agents will
+2. **Only operate on YOUR channel/thread tasks.** You will see other
+   channels/threads' tasks in ${listTasks} output, but claim/unclaim/update will reject
+   them. That is intentional — the other channel/thread agents will
    handle those.
 3. **Stop at \`in_review\` for non-trivial work.** The human validates
    and moves it to \`done\`. Setting \`done\` yourself is only
@@ -255,51 +254,51 @@ Rules:
    approved \`done\`. Do not only send a chat message like "done" while
    leaving the task state unchanged.
 
-## Initial role (your assignment in this channel)
+## Initial role (your assignment in this workspace/channel)
 ${input.l2SystemPrompt.trim() || '_(role not yet defined — wait for the user to shape it during onboarding)_'}
 `;
 }
 
 function renderSessionContext(sc: SessionContextInput): string {
   const lines: string[] = [];
-  lines.push('## This session');
+  lines.push('## This Context');
   if (sc.channelKind === 'dm') {
     lines.push(
-      `- DM channel \`${sc.channelName}\` (1:1 with the user). Updates to your`,
+      `- DM channel: \`${sc.channelName}\` (1:1 with the user). Updates to your`,
       `  MEMORY.md and notes here affect your **global** identity that future`,
-      `  channels will inherit.`,
+      `  workspaces/channels will inherit.`,
     );
   } else {
-    lines.push(`- Channel: \`${sc.channelName}\``);
+    lines.push(`- Workspace: \`${sc.channelName}\``);
   }
-  lines.push(`- Session: "${sc.sessionTitle}"`);
+  lines.push(`- Channel: "${sc.sessionTitle}"`);
   if (sc.isChildSession) {
     if (sc.isAgentSpawnedChild) {
       lines.push(
-        `- This is a **Thread** opened off the parent session "${sc.parentSessionTitle ?? '(unknown)'}".`,
+        `- This is a **Thread** opened off the parent channel "${sc.parentSessionTitle ?? '(unknown)'}".`,
         `  Stay focused on the sub-task. Use \`send_message(target='parent', ...)\``,
-        `  only for blockers; report the final result via \`close_session\`.`,
+        `  only for blockers; report the final result via \`close_thread\`.`,
       );
     } else {
       lines.push(
-        `- This is a **user-opened Thread** under the parent session "${sc.parentSessionTitle ?? '(unknown)'}".`,
+        `- This is a **user-opened Thread** under the parent channel "${sc.parentSessionTitle ?? '(unknown)'}".`,
         `  Stay focused on the thread. Use \`send_message(target='parent', ...)\``,
         `  only for blockers. When the thread reaches a conclusion, post a`,
         `  visible summary in this thread and ask the user whether to close it.`,
-        `  Only call \`close_session\` after the user explicitly confirms.`,
+        `  Only call \`close_thread\` after the user explicitly confirms.`,
       );
     }
   }
   if (sc.otherMembers.length === 0) {
-    lines.push(`- Other members in this session: _(none — you're solo)_`);
+    lines.push(`- Other members in this channel/thread: _(none — you're solo)_`);
   } else {
-    lines.push(`- Other members in this session:`);
+    lines.push(`- Other members in this channel/thread:`);
     for (const m of sc.otherMembers) {
       lines.push(`  - \`@${m.name}\` (${m.runtime})`);
     }
   }
   lines.push(
-    `- Channel-wide consensus lives at \`./.silverhand/CONSENSUS.md\`.`,
+    `- Workspace-wide consensus lives at \`./.silverhand/CONSENSUS.md\`.`,
     `  Read it at startup; treat its contents as binding on every member.`,
   );
   return lines.join('\n');

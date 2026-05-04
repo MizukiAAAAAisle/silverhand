@@ -9,6 +9,12 @@ export type HostKind = z.infer<typeof HostKindSchema>;
 export const ChannelKindSchema = z.enum(['regular', 'dm']);
 export type ChannelKind = z.infer<typeof ChannelKindSchema>;
 
+export const WorkspaceKindSchema = z.enum(['regular', 'system_dm']);
+export type WorkspaceKind = z.infer<typeof WorkspaceKindSchema>;
+
+export const ConversationKindSchema = z.enum(['channel', 'dm_channel', 'thread']);
+export type ConversationKind = z.infer<typeof ConversationKindSchema>;
+
 export const SessionStatusSchema = z.enum([
   'starting',
   'active',
@@ -92,12 +98,46 @@ export interface ChannelMemberRow {
   joined_at: number;
 }
 
+export interface WorkspaceRow {
+  id: string;
+  name: string;
+  description: string | null;
+  workspace_kind: WorkspaceKind;
+  workspace_path: string;
+  workspace_host_id: string;
+  archived_at: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface WorkspaceMemberRow {
+  workspace_id: string;
+  agent_id: string;
+  joined_at: number;
+}
+
 export interface SessionRow {
   id: string;
   channel_id: string;
   title: string;
   status: SessionStatus;
   parent_session_id: string | null;
+  spawned_by_agent_id: string | null;
+  closed_at: number | null;
+  close_summary: string | null;
+  pinned_at: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ConversationRow {
+  id: string;
+  workspace_id: string;
+  workspace_path: string;
+  kind: ConversationKind;
+  parent_conversation_id: string | null;
+  title: string;
+  status: SessionStatus;
   spawned_by_agent_id: string | null;
   closed_at: number | null;
   close_summary: string | null;
@@ -115,9 +155,19 @@ export interface SessionAgentRow {
   joined_at: number;
 }
 
+export interface ConversationAgentRow {
+  conversation_id: string;
+  agent_id: string;
+  cli_session_id: string | null;
+  pid: number | null;
+  status: SessionAgentStatus;
+  joined_at: number;
+}
+
 export interface MessageRow {
   id: string;
   session_id: string;
+  conversation_id: string | null;
   from_kind: FromKind;
   from_agent_id: string | null;
   from_user_id: string | null;
@@ -131,6 +181,7 @@ export interface MessageRow {
   task_assignee_user_id: string | null;
   task_title: string | null;
   task_channel_id: string | null;
+  task_workspace_id: string | null;
 }
 
 export interface SessionReadRow {
@@ -140,9 +191,17 @@ export interface SessionReadRow {
   read_at: number;
 }
 
+export interface ConversationReadRow {
+  user_id: string;
+  conversation_id: string;
+  last_read_seq: number;
+  read_at: number;
+}
+
 export interface AgentInboxRow {
   id: number;
   session_id: string;
+  conversation_id: string | null;
   agent_id: string;
   message_id: string;
   delivered_at: number | null;
@@ -152,6 +211,7 @@ export interface AgentInboxRow {
 export interface SessionEventRow {
   id: number;
   session_id: string;
+  conversation_id: string | null;
   agent_id: string | null;
   kind: SessionEventKind;
   payload: string | null;
@@ -162,7 +222,9 @@ export interface SavedMessageRow {
   id: string;
   message_id: string;
   session_id: string;
+  conversation_id: string | null;
   channel_id: string;
+  workspace_id: string | null;
   saved_at: number;
 }
 

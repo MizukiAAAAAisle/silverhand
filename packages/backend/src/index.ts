@@ -1,10 +1,10 @@
 import { Hono } from 'hono';
-import { cors } from 'hono/cors';
 import { serve } from '@hono/node-server';
 import type { AddressInfo } from 'node:net';
 import { isAbsolute, join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { silverhandCors } from './cors.js';
 import { openDatabase } from './db.js';
 import { createApiRouter, createInternalRouter } from './routes.js';
 import {
@@ -71,7 +71,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   ctx.sessionManager.reconcileOnBoot();
 
   const app = new Hono();
-  app.use('*', cors({ origin: '*', allowHeaders: ['Authorization', 'Content-Type'] }));
+  app.use('*', silverhandCors());
   app.route('/', createApiRouter(ctx));
   app.route('/', createInternalRouter(ctx));
 

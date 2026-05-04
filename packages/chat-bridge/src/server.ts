@@ -11,16 +11,16 @@ import { log } from './logger.js';
  *
  * Tool surface deliberately minimal per core-design §3.6 / §4.6:
  *   - send_message: primary chat tool, with target= to reach parent /
- *                   child sessions
- *   - create_thread: open an isolated sub-discussion (child session /
- *                    Thread) off the current session
- *   - close_session: end the current (sub-)session, optionally posting
- *                    summary back to parent
- *   - create_session: open a new top-level session in the same channel;
+ *                   child Threads
+ *   - create_thread: open an isolated sub-discussion (Thread) off the
+ *                    current channel
+ *   - close_thread: end the current Thread, optionally posting summary
+ *                   back to parent
+ *   - create_channel: open a new top-level channel in the same workspace;
  *                     use only when the user explicitly requests it
  *
  * Memory / consensus reads/writes use the agent's own Read/Write tools
- * (cwd is the channel workspace) — no MCP tool wrapper needed.
+ * (cwd is the conversation workspace_path snapshot) — no MCP wrapper needed.
  */
 export async function startBridge(args: BridgeArgs): Promise<void> {
   const client = new BackendClient(args);
@@ -32,22 +32,22 @@ export async function startBridge(args: BridgeArgs): Promise<void> {
 
   server.tool(
     'send_message',
-    'Send a chat message in the current session, or to the parent / a specific child session.',
+    'Send a chat message in the current channel/thread, or to the parent / a specific child Thread.',
     {
       content: z.string().min(1).describe('Message body.'),
       target: z
         .union([
-          z.literal('self').describe('Current session (default).'),
-          z.literal('parent').describe('Parent session of the current sub-session.'),
+          z.literal('self').describe('Current channel/thread (default).'),
+          z.literal('parent').describe('Parent channel of the current Thread.'),
           z
-            .object({ child_session_id: z.string().min(1) })
-            .describe('A sub-session you spawned off the current session.'),
+            .object({ thread_id: z.string().min(1) })
+            .describe('A direct child Thread you opened from the current channel.'),
         ])
         .optional()
         .describe(
-          'Where to send. Defaults to "self" (current session). ' +
-            'Use "parent" only from a child session. ' +
-            'Use {child_session_id} to message a sub-session you spawned.',
+          'Where to send. Defaults to "self" (current channel/thread). ' +
+            'Use "parent" only from a Thread. ' +
+            'Use {thread_id} to message a direct child Thread you opened.',
         ),
     },
     async ({ content, target }) => {
@@ -71,8 +71,8 @@ export async function startBridge(args: BridgeArgs): Promise<void> {
 
   server.tool(
     'create_thread',
-    'Open an isolated Thread (sub-discussion) off the current session. Use when a side-topic ' +
-      'is large enough that mixing it with the main session would obscure the context, or when ' +
+    'Open an isolated Thread (sub-discussion) off the current channel. Use when a side-topic ' +
+      'is large enough that mixing it with the main channel would obscure the context, or when ' +
       'you want to delegate a sub-task to a subset of members in parallel. ' +
       'Cannot be used inside a Thread — Threads cannot nest further.',
     {
@@ -85,7 +85,7 @@ export async function startBridge(args: BridgeArgs): Promise<void> {
         .string()
         .min(1)
         .describe(
-          'Concise summary of what the Thread needs to know from this session. ' +
+          'Concise summary of what the Thread needs to know from this channel. ' +
             'Be specific and minimal — this is your forcing function for deciding ' +
             'whether opening a Thread is actually warranted.',
         ),
@@ -98,7 +98,7 @@ export async function startBridge(args: BridgeArgs): Promise<void> {
       log('info', { title: input.title, memberCount: input.members.length }, 'tool: create_thread invoked');
       try {
         const r = await client.createThread(input);
-        log('info', { childSessionId: r.child_session_id }, 'tool: create_thread ok');
+        log('info', { threadId: r.thread_id }, 'tool: create_thread ok');
         return { content: [{ type: 'text', text: JSON.stringify(r) }] };
       } catch (err) {
         log('error', { err }, 'tool: create_thread failed');
@@ -108,14 +108,14 @@ export async function startBridge(args: BridgeArgs): Promise<void> {
   );
 
   server.tool(
-    'close_session',
-    'Mark the current session as closed and (optionally) post a summary to the parent. ' +
-      'Use only on a sub-session you are wrapping up.',
+    'close_thread',
+    'Mark the current Thread as closed and (optionally) post a summary to the parent channel. ' +
+      'Use only when you are currently inside a Thread.',
     {
       summary: z
         .string()
         .min(1)
-        .describe('Final summary of the sub-session outcome.'),
+        .describe('Final summary of the Thread outcome.'),
       posted_to_parent: z
         .boolean()
         .optional()
@@ -126,52 +126,52 @@ export async function startBridge(args: BridgeArgs): Promise<void> {
         ),
     },
     async input => {
-      log('info', { summaryBytes: input.summary.length, postedToParent: !!input.posted_to_parent }, 'tool: close_session invoked');
+      log('info', { summaryBytes: input.summary.length, postedToParent: !!input.posted_to_parent }, 'tool: close_thread invoked');
       try {
-        await client.closeSession(input);
-        log('info', {}, 'tool: close_session ok');
+        await client.closeThread(input);
+        log('info', {}, 'tool: close_thread ok');
         return { content: [{ type: 'text', text: 'ok' }] };
       } catch (err) {
-        log('error', { err }, 'tool: close_session failed');
+        log('error', { err }, 'tool: close_thread failed');
         throw err;
       }
     },
   );
 
   server.tool(
-    'create_session',
-    'Create a new top-level session in the same channel. ' +
-      'ONLY use this when the user has explicitly requested opening a new session ' +
-      '(e.g. "open a new session", "discuss this separately", "start a new conversation"). ' +
+    'create_channel',
+    'Create a new top-level channel in the same workspace. ' +
+      'ONLY use this when the user has explicitly requested opening a separate channel ' +
+      '(e.g. "open a new channel", "discuss this separately", "start a new conversation"). ' +
       'Do NOT use it to avoid context clutter or for parallel sub-tasks — use create_thread instead. ' +
-      'The new session is created in the current channel with all current channel members. ' +
-      'After creation, post a visible message in this session announcing the new session ID ' +
+      'The new channel is created in the current workspace with the current channel members. ' +
+      'After creation, post a visible message in the current channel announcing the new channel ID ' +
       'so the user knows a fork happened.',
     {
-      title: z.string().min(1).describe('Short title for the new session.'),
+      title: z.string().min(1).describe('Short title for the new channel.'),
       context_summary: z
         .string()
         .min(1)
         .describe(
-          'Explain why this new session is being created and what user intent it serves. ' +
+          'Explain why this new channel is being created and what user intent it serves. ' +
             'This is stored for audit and recovery — be explicit that the user requested it.',
         ),
       initial_prompt: z
         .string()
         .min(1)
         .describe(
-          'First message posted into the new session. Should clearly state what this ' +
-            'session is for and what participants should do next.',
+          'First message posted into the new channel. Should clearly state what this ' +
+            'channel is for and what participants should do next.',
         ),
     },
     async input => {
-      log('info', { title: input.title }, 'tool: create_session invoked');
+      log('info', { title: input.title }, 'tool: create_channel invoked');
       try {
-        const r = await client.createSession(input);
-        log('info', { sessionId: r.session_id }, 'tool: create_session ok');
+        const r = await client.createChannel(input);
+        log('info', { channelId: r.channel_id }, 'tool: create_channel ok');
         return { content: [{ type: 'text', text: JSON.stringify(r) }] };
       } catch (err) {
-        log('error', { err }, 'tool: create_session failed');
+        log('error', { err }, 'tool: create_channel failed');
         throw err;
       }
     },
@@ -179,17 +179,16 @@ export async function startBridge(args: BridgeArgs): Promise<void> {
 
   // ── Tasks ────────────────────────────────────────────────────────
   // See docs/tasks-design.md §5. Tasks are message metadata; numbering
-  // space is per-channel, operation scope is per-session. These tools
-  // aggregate at channel level (you'll see other sessions' tasks in
-  // list_tasks output) but only accept mutations on tasks that belong
-  // to YOUR session — cross-session claim/unclaim/update fails with
-  // `owner_session` in the failure reason.
+  // space is per-workspace, operation scope is per-channel/thread.
+  // These tools aggregate at workspace level (you'll see other
+  // channels/threads' tasks in list_tasks output) but only accept
+  // mutations on tasks that belong to YOUR current channel/thread.
 
   server.tool(
     'list_tasks',
-    'View the task board for the current channel. Aggregates tasks from EVERY session ' +
-      'in this channel — each entry carries a `session` field pointing to the session it ' +
-      'belongs to. You can only claim/update tasks in YOUR own session (see reason field ' +
+    'View the task board for the current workspace. Aggregates tasks from every channel ' +
+      'and thread in this workspace — each entry carries a source field pointing to the ' +
+      'channel/thread it belongs to. You can only claim/update tasks in YOUR current channel/thread (see reason field ' +
       'on claim failures).',
     {
       status: z
@@ -211,7 +210,7 @@ export async function startBridge(args: BridgeArgs): Promise<void> {
 
   server.tool(
     'create_tasks',
-    'Create one or more task-messages in the current session. Use for genuinely new work; ' +
+    'Create one or more task-messages in the current channel/thread. Use for genuinely new work; ' +
       'if the work already exists as a message, use claim_tasks with message_ids instead ' +
       '(promotes the existing message to a task and claims it). Does NOT auto-claim — call ' +
       'claim_tasks afterward if you intend to work on them yourself.',
@@ -249,7 +248,7 @@ export async function startBridge(args: BridgeArgs): Promise<void> {
       '2. message_ids: promote a regular message to a task and claim it (use the message\n' +
       '   id from chat). Thread / system messages cannot become tasks.\n' +
       'Claim is atomic: if another agent already claimed it OR the task belongs to a\n' +
-      'different session, the result entry has success=false with a reason. ALWAYS move ' +
+      'different channel/thread, the result entry has success=false with a reason. ALWAYS move ' +
       'on when a claim fails — do not retry, do not work on it anyway. Claiming a `todo` ' +
       'task auto-advances it to `in_progress`.',
     {
@@ -261,7 +260,7 @@ export async function startBridge(args: BridgeArgs): Promise<void> {
         .array(z.string().min(1))
         .optional()
         .describe(
-          'Message ids to promote-and-claim. Message must be in your session and not be ' +
+          'Message ids to promote-and-claim. Message must be in your current channel/thread and not be ' +
             'a system / thread message.',
         ),
     },

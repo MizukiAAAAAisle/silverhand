@@ -26,22 +26,22 @@ import { SystemMessage } from '@/components/chat/SystemMessage';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
 import { useAgents } from '@/features/agents/hooks';
-import { useChannels } from '@/features/channels/hooks';
+import { useWorkspaces } from '@/features/workspaces/hooks';
 import {
-  useSessionThreads,
+  useChannelThreads,
   useStartThread,
   type ThreadSummary,
-} from '@/features/thread/hooks';
+} from '@/features/threads/hooks';
 import { useSavedMessageIds, useToggleSave } from '@/features/saved/hooks';
 import {
-  useSessionAgents,
-  useSessionMessages,
+  useChannelAgents,
+  useChannelMessages,
   useAgentRunStates,
-  useMarkMessageSessionRead,
-} from '@/features/sessions/hooks';
+  useMarkMessageChannelRead,
+} from '@/features/channels/hooks';
 import { useSessionStream } from '@/hooks/useSessionStream';
 
-interface SessionDescriptor {
+interface ChannelDescriptor {
   id: string;
   title: string;
   parent_session_id: string | null;
@@ -49,33 +49,33 @@ interface SessionDescriptor {
   channel_id: string;
 }
 
-interface SessionViewProps {
-  /** Kind of the parent channel. DM and regular sessions diverge in
-   *  several places (agent strip, sub-session affordances, member
+interface ChannelViewProps {
+  /** Kind of the parent workspace. DM and regular channels diverge in
+   *  several places (agent strip, sub-thread affordances, member
    *  management). Threaded as a prop so the divergences stay local. */
   channelKind: ChannelKind | null;
-  session: SessionDescriptor | null;
+  session: ChannelDescriptor | null;
   parentTitle?: string | null;
   /** One-shot scroll-to target. When set and the target message is in
-   *  the current session, MessageList scrolls + flashes it, then calls
+   *  the current channel, MessageList scrolls + flashes it, then calls
    *  `onJumped` so the parent can clear the target (otherwise switching
-   *  channels and back would re-trigger the scroll). */
+   *  workspaces and back would re-trigger the scroll). */
   jumpTarget?: { sessionId: string; messageId: string } | null;
   onJumped?: () => void;
   /** Called when the user clicks Thread on a message. The parent owns
-   *  child-pane state — receives the freshly-created child session id
+   *  thread-pane state — receives the freshly-created thread id
    *  and the session DTO (if available) for optimistic rendering.
-   *  When this is undefined the Thread action is hidden (child sessions
-   *  can't spawn grandchildren). */
-  onThreadCreated?: (childSessionId: string, session?: SessionDto) => void;
+   *  When this is undefined the Thread action is hidden (threads
+   *  can't spawn sub-threads). */
+  onThreadCreated?: (threadId: string, session?: SessionDto) => void;
   /** When set, renders an X button in the header that calls this back.
-   *  Used by the right-side child pane to close itself. */
+   *  Used by the right-side thread pane to close itself. */
   onCloseChild?: () => void;
-  /** "View in session" handler — for thread children, jumps the parent
+  /** "View in channel" handler — for thread panes, jumps the parent
    *  pane to the original anchor message. Receives the original
    *  message id (which lives in the thread_anchor system message). */
   onJumpToOriginal?: (messageId: string) => void;
-  /** Reports this session's thread anchor target back up so the caller
+  /** Reports this channel's thread anchor target back up so the caller
    *  can persistently highlight that message in the parent pane while
    *  this view is open. Fires with the id when known, null otherwise. */
   onThreadAnchorResolved?: (originalMessageId: string | null) => void;
@@ -85,20 +85,20 @@ interface SessionViewProps {
   highlightedMessageId?: string | null;
 }
 
-export function SessionView(props: SessionViewProps): JSX.Element {
+export function ChannelView(props: ChannelViewProps): JSX.Element {
   if (!props.session) {
     return (
       <main className="flex h-full min-w-0 flex-1 items-center justify-center bg-bg-chat text-sm text-text-muted">
-        从左侧侧栏选择一个会话
+        从左侧选择一个 Channel
       </main>
     );
   }
-  return <ActiveSessionView {...props} session={props.session} />;
+  return <ActiveChannelView {...props} session={props.session} />;
 }
 
-// Split out so the React-Query hooks below only mount once a session
+// Split out so the React-Query hooks below only mount once a channel
 // exists — keeps hook order stable across the null transition.
-function ActiveSessionView({
+function ActiveChannelView({
   channelKind,
   session,
   parentTitle,
@@ -109,20 +109,20 @@ function ActiveSessionView({
   onJumpToOriginal,
   onThreadAnchorResolved,
   highlightedMessageId,
-}: SessionViewProps & { session: SessionDescriptor }): JSX.Element {
+}: ChannelViewProps & { session: ChannelDescriptor }): JSX.Element {
   const {
     data: messages = [],
     isLoading,
     hasPreviousPage,
     isFetchingPreviousPage,
     fetchPreviousPage,
-  } = useSessionMessages(session.id);
+  } = useChannelMessages(session.id);
 
   // Advance the message read cursor in real-time as new messages arrive via
-  // SSE. SessionView is only rendered when the session is visible, so any
+  // SSE. ChannelView is only rendered when the channel is visible, so any
   // SSE message that lands here should be marked read immediately — no need
   // to wait for the 5 s polling window in App.tsx.
-  const markRead = useMarkMessageSessionRead();
+  const markRead = useMarkMessageChannelRead();
   const onStreamEvent = useCallback(
     (e: { kind: string }) => {
       if (e.kind === 'message') markRead.mutate(session.id);
@@ -171,18 +171,18 @@ function ActiveSessionView({
 
   // Resolve the prop-driven jump target — fires when the global Saved
   // view or the Tasks panel hands us a `{sessionId, messageId}` for a
-  // message inside this session. Cleared by `onJumped` once the
+  // message inside this channel. Cleared by `onJumped` once the
   // message-list scroll completes.
   const effectiveJumpMessageId =
     jumpTarget && jumpTarget.sessionId === session.id
       ? jumpTarget.messageId
       : null;
 
-  // Open-thread summary for this session — only fetched on parent
-  // panes (where Thread is actionable). Child panes can't have
-  // grandchildren so the query is gated and stays disabled there.
+  // Open-thread summary for this channel — only fetched on parent
+  // panes (where Thread is actionable). Thread panes can't have
+  // sub-threads so the query is gated and stays disabled there.
   const isParentPane = !!onThreadCreated;
-  const { data: threads = [] } = useSessionThreads(
+  const { data: threads = [] } = useChannelThreads(
     isParentPane ? session.id : null,
     isParentPane ? session.channel_id : null,
   );
@@ -211,7 +211,7 @@ function ActiveSessionView({
                 className="text-xs text-accent hover:underline"
                 title="跳转到原消息"
               >
-                view in session
+                view in channel
               </button>
             ) : null}
           </>
@@ -221,7 +221,7 @@ function ActiveSessionView({
               {session.title}
             </span>
             {parentTitle ? (
-              <span className="min-w-0 truncate text-xs text-text-muted">↳ child of {parentTitle}</span>
+              <span className="min-w-0 truncate text-xs text-text-muted">↳ thread of {parentTitle}</span>
             ) : null}
           </>
         )}
@@ -231,20 +231,20 @@ function ActiveSessionView({
           </span>
         ) : null}
 
-        {/* Right-aligned cluster: agent roster + close-child. The chips
+        {/* Right-aligned cluster: agent roster + close-thread. The chips
           * sit inline so the standalone strip below the header is gone
-          * — DM channels still skip them since the sole agent is in
-          * the channel name. */}
+          * — DM workspaces still skip them since the sole agent is in
+          * the workspace name. */}
         <div className="ml-auto flex min-w-0 items-center gap-1.5">
           {isDm ? null : (
-            <AgentStrip sessionId={session.id} disabled={closed} />
+            <AgentStrip channelId={session.id} disabled={closed} />
           )}
           {onCloseChild ? (
             <button
               type="button"
               onClick={onCloseChild}
-              aria-label="关闭子会话"
-              title="关闭子会话"
+              aria-label="关闭 Thread"
+              title="关闭 Thread"
               className="flex size-6 shrink-0 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
             >
               <X className="size-3.5" />
@@ -255,8 +255,8 @@ function ActiveSessionView({
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <MessageList
-          sessionId={session.id}
-          channelId={session.channel_id}
+          channelId={session.id}
+          workspaceId={session.channel_id}
           messages={visibleMessages}
           isLoading={isLoading}
           hasMoreBefore={!!hasPreviousPage}
@@ -291,15 +291,15 @@ function ActiveSessionView({
 // ── Agent strip ─────────────────────────────────────────────────────────
 
 function AgentStrip({
-  sessionId,
+  channelId,
 }: {
-  sessionId: string;
+  channelId: string;
   /** Reserved for future close-state UI. The retry affordance for
    *  crashed agents now lives inside the AgentInfoPopover so the
    *  stacked-avatar surface stays purely informational. */
   disabled: boolean;
 }): JSX.Element {
-  const { data: sa = [] } = useSessionAgents(sessionId);
+  const { data: sa = [] } = useChannelAgents(channelId);
   const { data: agents = [] } = useAgents();
   const agentById = useMemo(() => {
     const m = new Map<string, AgentDto>();
@@ -310,12 +310,12 @@ function AgentStrip({
   if (sa.length === 0) {
     return (
       <span className="shrink-0 text-[10px] italic text-text-muted">
-        会话还没有成员
+        Channel 还没有成员
       </span>
     );
   }
   // Overlapping avatar stack — each tile hover-opens the agent info
-  // popover (with per-session presence). Status is communicated via
+  // popover (with per-channel presence). Status is communicated via
   // a small dot at the bottom-right of each avatar so the row stays
   // readable at-a-glance without text labels.
   return (
@@ -327,7 +327,7 @@ function AgentStrip({
           <AgentInfoPopover
             key={s.agent_id}
             agent={agent}
-            sessionId={sessionId}
+            sessionId={channelId}
             trigger="hover"
             side="bottom"
             align="end"
@@ -369,8 +369,8 @@ const STATUS_DOT: Record<SessionAgentDto['status'], string> = {
 // ── Message list ────────────────────────────────────────────────────────
 
 function MessageList({
-  sessionId,
   channelId,
+  workspaceId,
   messages,
   isLoading,
   hasMoreBefore,
@@ -384,8 +384,8 @@ function MessageList({
   threadByAnchor,
   activeRunStates,
 }: {
-  sessionId: string;
   channelId: string;
+  workspaceId: string;
   messages: MessageDto[];
   isLoading: boolean;
   hasMoreBefore: boolean;
@@ -395,9 +395,9 @@ function MessageList({
   highlightedMessageId?: string | null;
   jumpToMessageId: string | null;
   onJumped?: () => void;
-  onThreadCreated?: (childSessionId: string, session?: SessionDto) => void;
+  onThreadCreated?: (threadId: string, session?: SessionDto) => void;
   /** Map of `original message id → open-thread summary` for the parent
-   *  pane. Empty / absent on child panes. Drives the per-message
+   *  pane. Empty / absent on thread panes. Drives the per-message
    *  "{count} Reply" badge and short-circuits the POST when a thread
    *  already exists (just opens it). */
   threadByAnchor?: Map<string, ThreadSummary>;
@@ -406,14 +406,14 @@ function MessageList({
   activeRunStates?: AgentRunState[];
 }): JSX.Element {
   const { data: agents = [] } = useAgents();
-  const { data: channels = [] } = useChannels();
+  const { data: workspaces = [] } = useWorkspaces();
   const savedIds = useSavedMessageIds();
   const { toggle: toggleSave } = useToggleSave();
-  const startThread = useStartThread(channelId);
+  const startThread = useStartThread(workspaceId);
   // Three lookup maps used by the message renderer:
   //  - `agentsById`   → message author (avatar + display name)
   //  - `agentsByName` → inline `@handle` mention pills
-  //  - `channelsByName` → inline `#name` channel ref pills
+  //  - `channelsByName` → inline `#name` channel ref pills (workspaces mapped to ChannelDto shape)
   const { agentsById, agentsByName } = useMemo(() => {
     const byId = new Map<string, AgentDto>();
     const byName = new Map<string, AgentDto>();
@@ -425,9 +425,12 @@ function MessageList({
   }, [agents]);
   const channelsByName = useMemo(() => {
     const m = new Map<string, ChannelDto>();
-    for (const c of channels) m.set(c.name, c);
+    for (const w of workspaces) {
+      // Workspaces are already ChannelDto-shaped (backed by /api/channels).
+      m.set(w.name, w);
+    }
     return m;
-  }, [channels]);
+  }, [workspaces]);
 
   const handleStartThread = (msg: MessageDto): void => {
     if (!onThreadCreated) return;
@@ -453,9 +456,9 @@ function MessageList({
   // would mis-classify a user sitting at the old bottom as "not near bottom".
   // The ref is initialised to `true` so the very first render scrolls down.
   //
-  // On session switch, MessageList may not remount (React reuses the instance).
-  // Reset to `true` whenever `sessionId` changes so switching to a new session
-  // always starts in "follow bottom" mode regardless of the previous session's
+  // On channel switch, MessageList may not remount (React reuses the instance).
+  // Reset to `true` whenever `channelId` changes so switching to a new channel
+  // always starts in "follow bottom" mode regardless of the previous channel's
   // scroll position.
   //
   // Jump sets `jumpToMessageId`, which bypasses auto-scroll entirely while
@@ -481,7 +484,7 @@ function MessageList({
   const loadEarlierInFlightRef = useRef(false);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
 
-  // Reset "near bottom" whenever the session changes so every new session
+  // Reset "near bottom" whenever the channel changes so every new channel
   // opens in follow-bottom mode regardless of the previous scroll position.
   useEffect(() => {
     wasNearBottomRef.current = true;
@@ -498,7 +501,7 @@ function MessageList({
         programmaticBottomTimerRef.current = null;
       }
     };
-  }, [sessionId]);
+  }, [channelId]);
 
   useEffect(() => {
     if (!isFetchingEarlier) {
@@ -580,7 +583,7 @@ function MessageList({
     if (!el) return;
     el.scrollTop = el.scrollHeight;
     setShowScrollBottom(false);
-  }, [messages, jumpToMessageId, activeRunIds, sessionId]);
+  }, [messages, jumpToMessageId, activeRunIds, channelId]);
 
   // Jump to a specific message (typically from Saved view). Waits for
   // the message to be in the DOM, scrolls into view, briefly highlights
@@ -637,7 +640,7 @@ function MessageList({
                 ) : (
                   <MessageItem
                     message={m}
-                    sessionId={sessionId}
+                    sessionId={channelId}
                     agentsById={agentsById}
                     agentsByName={agentsByName}
                     channelsByName={channelsByName}

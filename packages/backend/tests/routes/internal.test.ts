@@ -141,14 +141,14 @@ describe('POST /internal/.../send-message', () => {
       `/internal/sessions/${sessionId}/agents/${agentIds.alice}/send-message`,
       {
         content: 'down',
-        target: { child_session_id: sibling.session.id },
+        target: { thread_id: sibling.session.id },
       },
       { headers: authHeaders(t.authToken) },
     );
     expect(r.status).toBe(400);
   });
 
-  it('writes to a real child session via { child_session_id }', async () => {
+  it('writes to a real thread via { thread_id }', async () => {
     t = buildTestApp();
     const { sessionId, agentIds, channelId } = await setupSession(t, ['alice']);
     const child = await (
@@ -162,7 +162,7 @@ describe('POST /internal/.../send-message', () => {
       `/internal/sessions/${sessionId}/agents/${agentIds.alice}/send-message`,
       {
         content: 'down to child',
-        target: { child_session_id: child.session.id },
+        target: { thread_id: child.session.id },
       },
       { headers: authHeaders(t.authToken) },
     );
@@ -176,6 +176,7 @@ describe('POST /internal/.../send-message', () => {
       ),
     ).toBe(true);
   });
+
 });
 
 describe('POST /internal/.../spawn-child', () => {
@@ -219,10 +220,10 @@ describe('POST /internal/.../spawn-child', () => {
     );
     expect(r.status).toBe(200);
     const body = await r.json() as any;
-    expect(typeof body.child_session_id).toBe('string');
+    expect(typeof body.thread_id).toBe('string');
 
     const msgs = await (
-      await http(t.app).get(`/api/sessions/${body.child_session_id}/messages`)
+      await http(t.app).get(`/api/sessions/${body.thread_id}/messages`)
     ).json() as any;
     expect(msgs.messages).toHaveLength(2);
     expect(msgs.messages[0].from_kind).toBe('system');
@@ -233,7 +234,7 @@ describe('POST /internal/.../spawn-child', () => {
 
     // bob is the only member
     const childAgents = await (
-      await http(t.app).get(`/api/sessions/${body.child_session_id}/agents`)
+      await http(t.app).get(`/api/sessions/${body.thread_id}/agents`)
     ).json() as any;
     expect(childAgents.agents.map((a: any) => a.agent_id)).toEqual([agentIds.bob]);
   });
@@ -367,7 +368,7 @@ describe('POST /internal/.../create-session', () => {
     ).json() as any;
 
     const r = await http(t.app).post(
-      `/internal/sessions/${child.child_session_id}/agents/${agentIds.alice}/create-session`,
+      `/internal/sessions/${child.thread_id}/agents/${agentIds.alice}/create-session`,
       {
         title: 'sibling topic',
         context_summary: 'user asked for a separate top-level session',
@@ -428,7 +429,7 @@ describe('POST /internal/.../close', () => {
     const unsub = t.ctx.events.subscribe(sessionId, e => events.push(e));
 
     const close = await http(t.app).post(
-      `/internal/sessions/${child.child_session_id}/agents/${agentIds.bob}/close`,
+      `/internal/sessions/${child.thread_id}/agents/${agentIds.bob}/close`,
       { summary: 'done' },
       { headers: authHeaders(t.authToken) },
     );
@@ -449,14 +450,14 @@ describe('POST /internal/.../close', () => {
     // Every member of the closed session got stop() called
     expect(
       t.fake.stops.some(
-        s => s.sessionId === child.child_session_id && s.agentId === agentIds.bob,
+        s => s.sessionId === child.thread_id && s.agentId === agentIds.bob,
       ),
     ).toBe(true);
 
     const threadUpdated = events.find(e => e.kind === 'thread_updated')?.payload as any;
     expect(threadUpdated).toMatchObject({
       parent_session_id: sessionId,
-      child_session_id: child.child_session_id,
+      child_session_id: child.thread_id,
     });
   });
 });

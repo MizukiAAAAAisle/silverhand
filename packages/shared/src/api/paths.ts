@@ -13,6 +13,22 @@ export const apiPaths = {
   agentStop: (id: string) => `/api/agents/${id}/stop`,
   agentDeleteImpact: (id: string) => `/api/agents/${id}/delete-impact`,
 
+  // workspaces / conversations (new workspace -> channel -> thread model)
+  workspaces: '/api/workspaces',
+  workspace: (id: string) => `/api/workspaces/${id}`,
+  workspaceMembers: (id: string) => `/api/workspaces/${id}/members`,
+  workspaceMember: (id: string, agentId: string) =>
+    `/api/workspaces/${id}/members/${agentId}`,
+  workspaceChannels: (id: string) => `/api/workspaces/${id}/channels`,
+  workspaceDmChannels: '/api/workspaces/system/dm-channels',
+  conversationChannel: (id: string) => `/api/channels/${id}`,
+  conversationChannelMessages: (id: string) => `/api/channels/${id}/messages`,
+  conversationChannelAgents: (id: string) => `/api/channels/${id}/agents`,
+  conversationChannelThreads: (id: string) => `/api/channels/${id}/threads`,
+  thread: (id: string) => `/api/threads/${id}`,
+  threadMessages: (id: string) => `/api/threads/${id}/messages`,
+  threadAgents: (id: string) => `/api/threads/${id}/agents`,
+
   // channels
   channels: '/api/channels',
   channel: (id: string) => `/api/channels/${id}`,

@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Check, CheckSquare } from 'lucide-react';
 import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
-import { useChannels } from '@/features/channels/hooks';
+import { useWorkspaces } from '@/features/workspaces/hooks';
 import { useTasks, useUpdateTaskStatus } from '@/features/tasks/hooks';
 
 /**
@@ -20,8 +20,8 @@ import { useTasks, useUpdateTaskStatus } from '@/features/tasks/hooks';
  */
 export interface TasksSectionProps {
   onJump: (params: {
+    workspaceId?: string;
     channelId: string;
-    sessionId: string;
     messageId: string;
   }) => void;
 }
@@ -33,7 +33,7 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
   const { data: tasks = [] } = useTasks({
     channel_id: channelFilter ?? undefined,
   });
-  const { data: channels = [] } = useChannels();
+  const { data: workspaces = [] } = useWorkspaces();
 
   // Per-channel active counts drive both the chip badges and the
   // sort order — channels with active work float to the front so
@@ -60,10 +60,10 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
       if (ac !== bc) return bc - ac;
       return a.name.localeCompare(b.name);
     };
-    const regular = channels.filter(c => c.kind === 'regular').sort(sortByActivity);
-    const dm = channels.filter(c => c.kind === 'dm').sort(sortByActivity);
+    const regular = workspaces.filter(w => w.kind !== 'dm').map(w => ({ id: w.id, name: w.name, kind: 'regular' as const })).sort(sortByActivity);
+    const dm = workspaces.filter(w => w.kind === 'dm').map(w => ({ id: w.id, name: w.name, kind: 'dm' as const })).sort(sortByActivity);
     return { regular, dm };
-  }, [channels, channelActiveCounts]);
+  }, [workspaces, channelActiveCounts]);
 
   const grouped = useMemo(() => groupByStatus(tasks), [tasks]);
 
@@ -73,7 +73,7 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
         <CheckSquare className="size-4 text-text-muted" />
         <span className="font-serif text-sm font-semibold text-text-primary">
           {channelFilter
-            ? `Tasks in #${channels.find(c => c.id === channelFilter)?.name ?? '…'}`
+            ? `Tasks in #${workspaces.find(w => w.id === channelFilter)?.name ?? '…'}`
             : 'All Tasks'}
         </span>
         <span className="text-xs text-text-muted">· {tasks.length}</span>
@@ -99,8 +99,7 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
             tasks={grouped[col.status]}
             onCardClick={t =>
               onJump({
-                channelId: t.channel_id,
-                sessionId: t.session.id,
+                channelId: t.session.id,
                 messageId: t.message_id,
               })
             }

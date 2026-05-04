@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   ChannelKindSchema,
+  ConversationKindSchema,
   FromKindSchema,
   HostKindSchema,
   NotificationKindSchema,
@@ -9,6 +10,7 @@ import {
   SessionStatusSchema,
   TaskAssigneeTypeSchema,
   TaskStatusSchema,
+  WorkspaceKindSchema,
 } from '../db/schema.js';
 
 // ── Host ─────────────────────────────────────────────────────────
@@ -149,6 +151,102 @@ export const DeleteAgentInputSchema = z.object({
   confirm: z.literal(true),
 });
 export type DeleteAgentInput = z.infer<typeof DeleteAgentInputSchema>;
+
+// ── Workspace / Conversation model ───────────────────────────────
+//
+// New naming model for workspace -> channel/dm_channel/thread. The
+// legacy Channel/Session DTOs below remain during the transition so the
+// existing renderer can keep compiling until it is renamed.
+
+export const WorkspaceDtoSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().nullable(),
+  workspace_kind: WorkspaceKindSchema,
+  workspace_path: z.string(),
+  workspace_host_id: z.string(),
+  archived_at: z.number().nullable(),
+  created_at: z.number(),
+  updated_at: z.number(),
+});
+export type WorkspaceDto = z.infer<typeof WorkspaceDtoSchema>;
+
+export const WorkspaceMemberDtoSchema = z.object({
+  workspace_id: z.string(),
+  agent_id: z.string(),
+  joined_at: z.number(),
+});
+export type WorkspaceMemberDto = z.infer<typeof WorkspaceMemberDtoSchema>;
+
+export const CreateWorkspaceInputSchema = z.object({
+  name: z
+    .string()
+    .min(1)
+    .max(64)
+    .regex(/^[a-zA-Z0-9_\-]+$/, 'name must be alphanumeric / dash / underscore'),
+  description: z.string().optional(),
+  workspace_path: z.string().optional(),
+  workspace_host_id: z.string().optional(),
+  member_agent_ids: z.array(z.string()).default([]),
+});
+export type CreateWorkspaceInput = z.infer<typeof CreateWorkspaceInputSchema>;
+
+export const UpdateWorkspaceInputSchema = z.object({
+  name: z
+    .string()
+    .min(1)
+    .max(64)
+    .regex(/^[a-zA-Z0-9_\-]+$/, 'name must be alphanumeric / dash / underscore')
+    .optional(),
+  description: z.string().nullable().optional(),
+}).refine(v => Object.keys(v).length > 0, { message: 'no fields to update' });
+export type UpdateWorkspaceInput = z.infer<typeof UpdateWorkspaceInputSchema>;
+
+export const ConversationDtoSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  workspace_path: z.string(),
+  kind: ConversationKindSchema,
+  parent_conversation_id: z.string().nullable(),
+  title: z.string(),
+  status: SessionStatusSchema,
+  spawned_by_agent_id: z.string().nullable(),
+  closed_at: z.number().nullable(),
+  close_summary: z.string().nullable(),
+  pinned_at: z.number().nullable(),
+  created_at: z.number(),
+  updated_at: z.number(),
+});
+export type ConversationDto = z.infer<typeof ConversationDtoSchema>;
+
+export const ChannelConversationDtoSchema = ConversationDtoSchema.extend({
+  kind: z.literal('channel'),
+  parent_conversation_id: z.null(),
+});
+export type ChannelConversationDto = z.infer<typeof ChannelConversationDtoSchema>;
+
+export const DmChannelDtoSchema = ConversationDtoSchema.extend({
+  kind: z.literal('dm_channel'),
+  parent_conversation_id: z.null(),
+});
+export type DmChannelDto = z.infer<typeof DmChannelDtoSchema>;
+
+export const ThreadDtoSchema = ConversationDtoSchema.extend({
+  kind: z.literal('thread'),
+  channel_id: z.string(),
+  anchor_message_id: z.string().nullable(),
+});
+export type ThreadDto = z.infer<typeof ThreadDtoSchema>;
+
+export const ConversationAgentDtoSchema = z.object({
+  conversation_id: z.string(),
+  agent_id: z.string(),
+  cli_session_id: z.string().nullable(),
+  pid: z.number().nullable(),
+  status: SessionAgentStatusSchema,
+  joined_at: z.number(),
+});
+export type ConversationAgentDto = z.infer<typeof ConversationAgentDtoSchema>;
 
 // ── Channel ──────────────────────────────────────────────────────
 export const ChannelDtoSchema = z.object({
@@ -526,7 +624,7 @@ export const ClaimResultEntrySchema = z.object({
   task_number: z.number().optional(),
   message_id: z.string().optional(),
   reason: z.string().optional(),
-  /** If the task belongs to a different session, its id+title surface
+  /** If the task belongs to a different channel/thread, its id+title surface
    *  here so the caller can explain to the agent why claim failed. */
   owner_session: TaskSessionRefSchema.optional(),
 });
@@ -591,7 +689,7 @@ export type TaskChangedEvent = z.infer<typeof TaskChangedEventSchema>;
 export const SendMessageTargetSchema = z.union([
   z.literal('self'),
   z.literal('parent'),
-  z.object({ child_session_id: z.string().min(1) }),
+  z.object({ thread_id: z.string().min(1) }),
 ]);
 export type SendMessageTarget = z.infer<typeof SendMessageTargetSchema>;
 

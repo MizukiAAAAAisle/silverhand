@@ -298,4 +298,462 @@ export const migrations: Migration[] = [
        GROUP BY s.id;
     `,
   },
+  {
+    version: 11,
+    name: 'workspace_conversation_shadow_schema',
+    // Add the new workspace/conversation model alongside the legacy
+    // channels/sessions schema. This is intentionally a shadow schema:
+    // old tables remain in place until the frontend/backend rename can
+    // switch atomically. The triggers keep new writes through legacy
+    // routes mirrored well enough for transition testing, but live app
+    // cutover still requires the documented stop + backup + restart flow.
+    up: `
+      CREATE TABLE workspaces (
+        id                 TEXT PRIMARY KEY,
+        name               TEXT NOT NULL UNIQUE,
+        description        TEXT,
+        workspace_kind     TEXT NOT NULL DEFAULT 'regular'
+          CHECK (workspace_kind IN ('regular', 'system_dm')),
+        workspace_path     TEXT NOT NULL,
+        workspace_host_id  TEXT NOT NULL REFERENCES hosts(id) ON DELETE RESTRICT,
+        archived_at        INTEGER,
+        created_at         INTEGER NOT NULL,
+        updated_at         INTEGER NOT NULL
+      );
+
+      CREATE TABLE workspace_members (
+        workspace_id  TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        agent_id      TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+        joined_at     INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, agent_id)
+      );
+
+      CREATE INDEX idx_workspace_members_agent ON workspace_members(agent_id);
+
+      CREATE TABLE conversations (
+        id                      TEXT PRIMARY KEY,
+        workspace_id            TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        workspace_path          TEXT NOT NULL,
+        kind                    TEXT NOT NULL CHECK (kind IN ('channel', 'dm_channel', 'thread')),
+        parent_conversation_id  TEXT REFERENCES conversations(id) ON DELETE CASCADE,
+        title                   TEXT NOT NULL,
+        status                  TEXT NOT NULL,
+        spawned_by_agent_id     TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        closed_at               INTEGER,
+        close_summary           TEXT,
+        pinned_at               INTEGER,
+        created_at              INTEGER NOT NULL,
+        updated_at              INTEGER NOT NULL,
+        CHECK (
+          (kind = 'channel' AND parent_conversation_id IS NULL)
+          OR
+          (kind = 'dm_channel' AND parent_conversation_id IS NULL)
+          OR
+          (kind = 'thread' AND parent_conversation_id IS NOT NULL)
+        )
+      );
+
+      CREATE INDEX idx_conversations_workspace
+        ON conversations(workspace_id, kind, updated_at DESC);
+      CREATE INDEX idx_conversations_parent
+        ON conversations(parent_conversation_id, created_at ASC);
+      CREATE INDEX idx_conversations_status
+        ON conversations(status);
+
+      CREATE TRIGGER conversations_thread_parent_insert
+      BEFORE INSERT ON conversations
+      WHEN NEW.kind = 'thread'
+      BEGIN
+        SELECT CASE
+          WHEN COALESCE((SELECT kind FROM conversations WHERE id = NEW.parent_conversation_id), '') NOT IN ('channel', 'dm_channel')
+          THEN RAISE(ABORT, 'thread parent must be a channel-like conversation')
+        END;
+        SELECT CASE
+          WHEN COALESCE((SELECT workspace_id FROM conversations WHERE id = NEW.parent_conversation_id), '') != NEW.workspace_id
+          THEN RAISE(ABORT, 'thread workspace must match parent channel')
+        END;
+      END;
+
+      CREATE TRIGGER conversations_thread_parent_update
+      BEFORE UPDATE OF kind, parent_conversation_id, workspace_id ON conversations
+      WHEN NEW.kind = 'thread'
+      BEGIN
+        SELECT CASE
+          WHEN COALESCE((SELECT kind FROM conversations WHERE id = NEW.parent_conversation_id), '') NOT IN ('channel', 'dm_channel')
+          THEN RAISE(ABORT, 'thread parent must be a channel-like conversation')
+        END;
+        SELECT CASE
+          WHEN COALESCE((SELECT workspace_id FROM conversations WHERE id = NEW.parent_conversation_id), '') != NEW.workspace_id
+          THEN RAISE(ABORT, 'thread workspace must match parent channel')
+        END;
+      END;
+
+      CREATE TABLE conversation_agents (
+        conversation_id  TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        agent_id         TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+        cli_session_id   TEXT,
+        pid              INTEGER,
+        status           TEXT NOT NULL,
+        joined_at        INTEGER NOT NULL,
+        PRIMARY KEY (conversation_id, agent_id)
+      );
+
+      CREATE INDEX idx_conversation_agents_agent
+        ON conversation_agents(agent_id);
+
+      CREATE TABLE conversation_reads (
+        user_id          TEXT NOT NULL,
+        conversation_id  TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        last_read_seq    INTEGER NOT NULL DEFAULT 0,
+        read_at          INTEGER NOT NULL,
+        PRIMARY KEY (user_id, conversation_id)
+      );
+
+      CREATE INDEX idx_conversation_reads_conversation
+        ON conversation_reads(conversation_id);
+
+      CREATE TABLE conversation_inboxes (
+        id               INTEGER PRIMARY KEY,
+        conversation_id  TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        agent_id         TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+        message_id       TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        delivered_at     INTEGER,
+        created_at       INTEGER NOT NULL
+      );
+
+      CREATE INDEX idx_conversation_inbox_pending
+        ON conversation_inboxes(conversation_id, agent_id, delivered_at);
+
+      CREATE TABLE conversation_events (
+        id               INTEGER PRIMARY KEY,
+        conversation_id  TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        agent_id         TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        kind             TEXT NOT NULL,
+        payload          TEXT,
+        created_at       INTEGER NOT NULL
+      );
+
+      CREATE INDEX idx_conversation_events
+        ON conversation_events(conversation_id, id);
+
+      INSERT INTO workspaces
+        (id, name, description, workspace_kind, workspace_path, workspace_host_id,
+         archived_at, created_at, updated_at)
+      SELECT id, name, description, 'regular', workspace_path, workspace_host_id,
+             archived_at, created_at, updated_at
+        FROM channels
+       WHERE kind != 'dm';
+
+      INSERT OR IGNORE INTO workspaces
+        (id, name, description, workspace_kind, workspace_path, workspace_host_id,
+         archived_at, created_at, updated_at)
+      SELECT '__system_dm_workspace__',
+             'Direct Messages',
+             'Hidden workspace for direct message conversations',
+             'system_dm',
+             (SELECT workspace_path FROM channels WHERE kind = 'dm' ORDER BY created_at ASC LIMIT 1),
+             (SELECT workspace_host_id FROM channels WHERE kind = 'dm' ORDER BY created_at ASC LIMIT 1),
+             NULL,
+             COALESCE((SELECT MIN(created_at) FROM channels WHERE kind = 'dm'), CAST(strftime('%s', 'now') AS INTEGER) * 1000),
+             COALESCE((SELECT MAX(updated_at) FROM channels WHERE kind = 'dm'), CAST(strftime('%s', 'now') AS INTEGER) * 1000)
+       WHERE EXISTS (SELECT 1 FROM channels WHERE kind = 'dm');
+
+      INSERT INTO workspace_members (workspace_id, agent_id, joined_at)
+      SELECT cm.channel_id, cm.agent_id, cm.joined_at
+        FROM channel_members cm
+        JOIN channels c ON c.id = cm.channel_id
+       WHERE c.kind != 'dm';
+
+      INSERT INTO conversations
+        (id, workspace_id, workspace_path, kind, parent_conversation_id,
+         title, status, spawned_by_agent_id, closed_at, close_summary,
+         pinned_at, created_at, updated_at)
+      SELECT s.id,
+             CASE WHEN c.kind = 'dm' THEN '__system_dm_workspace__' ELSE s.channel_id END,
+             c.workspace_path,
+             CASE WHEN c.kind = 'dm' THEN 'dm_channel' ELSE 'channel' END,
+             NULL,
+             s.title,
+             s.status,
+             s.spawned_by_agent_id,
+             s.closed_at,
+             s.close_summary,
+             s.pinned_at,
+             s.created_at,
+             s.updated_at
+        FROM sessions s
+        JOIN channels c ON c.id = s.channel_id
+       WHERE s.parent_session_id IS NULL;
+
+      INSERT INTO conversations
+        (id, workspace_id, workspace_path, kind, parent_conversation_id,
+         title, status, spawned_by_agent_id, closed_at, close_summary,
+         pinned_at, created_at, updated_at)
+      SELECT s.id,
+             p.workspace_id,
+             p.workspace_path,
+             'thread',
+             s.parent_session_id,
+             s.title,
+             s.status,
+             s.spawned_by_agent_id,
+             s.closed_at,
+             s.close_summary,
+             s.pinned_at,
+             s.created_at,
+             s.updated_at
+        FROM sessions s
+        JOIN conversations p ON p.id = s.parent_session_id
+       WHERE s.parent_session_id IS NOT NULL;
+
+      INSERT INTO conversation_agents
+        (conversation_id, agent_id, cli_session_id, pid, status, joined_at)
+      SELECT session_id, agent_id, cli_session_id, pid, status, joined_at
+        FROM session_agents;
+
+      INSERT INTO conversation_reads
+        (user_id, conversation_id, last_read_seq, read_at)
+      SELECT user_id, session_id, last_read_seq, read_at
+        FROM session_reads;
+
+      INSERT INTO conversation_inboxes
+        (id, conversation_id, agent_id, message_id, delivered_at, created_at)
+      SELECT id, session_id, agent_id, message_id, delivered_at, created_at
+        FROM agent_inboxes;
+
+      INSERT INTO conversation_events
+        (id, conversation_id, agent_id, kind, payload, created_at)
+      SELECT id, session_id, agent_id, kind, payload, created_at
+        FROM session_events;
+
+      ALTER TABLE messages ADD COLUMN conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE;
+      ALTER TABLE messages ADD COLUMN task_workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE;
+
+      UPDATE messages
+         SET conversation_id = session_id;
+
+      UPDATE messages
+         SET task_workspace_id = (
+           SELECT workspace_id FROM conversations c WHERE c.id = messages.session_id
+         )
+       WHERE task_number IS NOT NULL;
+
+      CREATE INDEX idx_messages_conversation
+        ON messages(conversation_id, seq);
+
+      CREATE UNIQUE INDEX uniq_messages_task_workspace_number
+        ON messages(task_workspace_id, task_number)
+        WHERE task_number IS NOT NULL;
+
+      CREATE INDEX idx_messages_task_workspace
+        ON messages(task_workspace_id, task_status)
+        WHERE task_workspace_id IS NOT NULL;
+
+      ALTER TABLE agent_inboxes ADD COLUMN conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE;
+      UPDATE agent_inboxes SET conversation_id = session_id;
+      CREATE INDEX idx_inbox_conversation_pending
+        ON agent_inboxes(conversation_id, agent_id, delivered_at);
+
+      ALTER TABLE session_events ADD COLUMN conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE;
+      UPDATE session_events SET conversation_id = session_id;
+      CREATE INDEX idx_events_conversation
+        ON session_events(conversation_id, id);
+
+      ALTER TABLE saved_messages ADD COLUMN conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE;
+      ALTER TABLE saved_messages ADD COLUMN workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE;
+      UPDATE saved_messages
+         SET conversation_id = session_id,
+             workspace_id = (
+               SELECT workspace_id FROM conversations c WHERE c.id = saved_messages.session_id
+             );
+      CREATE INDEX idx_saved_messages_workspace
+        ON saved_messages(workspace_id, saved_at DESC);
+
+      CREATE TRIGGER legacy_channels_to_workspaces_insert
+      AFTER INSERT ON channels
+      BEGIN
+        INSERT INTO workspaces
+          (id, name, description, workspace_kind, workspace_path, workspace_host_id,
+           archived_at, created_at, updated_at)
+        SELECT NEW.id, NEW.name, NEW.description, 'regular', NEW.workspace_path,
+               NEW.workspace_host_id, NEW.archived_at, NEW.created_at, NEW.updated_at
+         WHERE NEW.kind != 'dm';
+
+        INSERT OR IGNORE INTO workspaces
+          (id, name, description, workspace_kind, workspace_path, workspace_host_id,
+           archived_at, created_at, updated_at)
+        SELECT '__system_dm_workspace__',
+               'Direct Messages',
+               'Hidden workspace for direct message conversations',
+               'system_dm',
+               NEW.workspace_path,
+               NEW.workspace_host_id,
+               NULL,
+               NEW.created_at,
+               NEW.updated_at
+         WHERE NEW.kind = 'dm';
+      END;
+
+      CREATE TRIGGER legacy_channels_to_workspaces_update
+      AFTER UPDATE OF name, description, archived_at, updated_at ON channels
+      WHEN NEW.kind != 'dm'
+      BEGIN
+        UPDATE workspaces
+           SET name = NEW.name,
+               description = NEW.description,
+               archived_at = NEW.archived_at,
+               updated_at = NEW.updated_at
+         WHERE id = NEW.id;
+      END;
+
+      CREATE TRIGGER legacy_channels_to_workspaces_delete
+      AFTER DELETE ON channels
+      WHEN OLD.kind != 'dm'
+      BEGIN
+        DELETE FROM workspaces WHERE id = OLD.id;
+      END;
+
+      CREATE TRIGGER legacy_channel_members_to_workspace_members_insert
+      AFTER INSERT ON channel_members
+      WHEN EXISTS (SELECT 1 FROM channels WHERE id = NEW.channel_id AND kind != 'dm')
+      BEGIN
+        INSERT OR IGNORE INTO workspace_members (workspace_id, agent_id, joined_at)
+        VALUES (NEW.channel_id, NEW.agent_id, NEW.joined_at);
+      END;
+
+      CREATE TRIGGER legacy_channel_members_to_workspace_members_delete
+      AFTER DELETE ON channel_members
+      BEGIN
+        DELETE FROM workspace_members
+         WHERE workspace_id = OLD.channel_id AND agent_id = OLD.agent_id;
+      END;
+
+      CREATE TRIGGER legacy_sessions_to_conversations_insert
+      AFTER INSERT ON sessions
+      BEGIN
+        INSERT INTO conversations
+          (id, workspace_id, workspace_path, kind, parent_conversation_id,
+           title, status, spawned_by_agent_id, closed_at, close_summary,
+           pinned_at, created_at, updated_at)
+        SELECT NEW.id,
+               CASE
+                 WHEN NEW.parent_session_id IS NOT NULL THEN p.workspace_id
+                 WHEN c.kind = 'dm' THEN '__system_dm_workspace__'
+                 ELSE NEW.channel_id
+               END,
+               CASE
+                 WHEN NEW.parent_session_id IS NOT NULL THEN p.workspace_path
+                 ELSE c.workspace_path
+               END,
+               CASE
+                 WHEN NEW.parent_session_id IS NOT NULL THEN 'thread'
+                 WHEN c.kind = 'dm' THEN 'dm_channel'
+                 ELSE 'channel'
+               END,
+               NEW.parent_session_id,
+               NEW.title,
+               NEW.status,
+               NEW.spawned_by_agent_id,
+               NEW.closed_at,
+               NEW.close_summary,
+               NEW.pinned_at,
+               NEW.created_at,
+               NEW.updated_at
+          FROM channels c
+          LEFT JOIN conversations p ON p.id = NEW.parent_session_id
+         WHERE c.id = NEW.channel_id;
+      END;
+
+      CREATE TRIGGER legacy_sessions_to_conversations_update
+      AFTER UPDATE OF title, status, closed_at, close_summary, pinned_at, updated_at ON sessions
+      BEGIN
+        UPDATE conversations
+           SET title = NEW.title,
+               status = NEW.status,
+               closed_at = NEW.closed_at,
+               close_summary = NEW.close_summary,
+               pinned_at = NEW.pinned_at,
+               updated_at = NEW.updated_at
+         WHERE id = NEW.id;
+      END;
+
+      CREATE TRIGGER legacy_sessions_to_conversations_delete
+      AFTER DELETE ON sessions
+      BEGIN
+        DELETE FROM conversations WHERE id = OLD.id;
+      END;
+
+      CREATE TRIGGER legacy_session_agents_to_conversation_agents_insert
+      AFTER INSERT ON session_agents
+      BEGIN
+        INSERT OR IGNORE INTO conversation_agents
+          (conversation_id, agent_id, cli_session_id, pid, status, joined_at)
+        VALUES (NEW.session_id, NEW.agent_id, NEW.cli_session_id, NEW.pid, NEW.status, NEW.joined_at);
+      END;
+
+      CREATE TRIGGER legacy_session_agents_to_conversation_agents_update
+      AFTER UPDATE OF cli_session_id, pid, status ON session_agents
+      BEGIN
+        UPDATE conversation_agents
+           SET cli_session_id = NEW.cli_session_id,
+               pid = NEW.pid,
+               status = NEW.status
+         WHERE conversation_id = NEW.session_id AND agent_id = NEW.agent_id;
+      END;
+
+      CREATE TRIGGER legacy_session_agents_to_conversation_agents_delete
+      AFTER DELETE ON session_agents
+      BEGIN
+        DELETE FROM conversation_agents
+         WHERE conversation_id = OLD.session_id AND agent_id = OLD.agent_id;
+      END;
+
+      CREATE TRIGGER legacy_messages_conversation_insert
+      AFTER INSERT ON messages
+      BEGIN
+        UPDATE messages
+           SET conversation_id = NEW.session_id,
+               task_workspace_id = CASE
+                 WHEN NEW.task_number IS NULL THEN NULL
+                 ELSE (SELECT workspace_id FROM conversations WHERE id = NEW.session_id)
+               END
+         WHERE id = NEW.id;
+      END;
+
+      CREATE TRIGGER legacy_messages_task_workspace_update
+      AFTER UPDATE OF task_number, task_channel_id ON messages
+      BEGIN
+        UPDATE messages
+           SET task_workspace_id = CASE
+             WHEN NEW.task_number IS NULL THEN NULL
+             ELSE (SELECT workspace_id FROM conversations WHERE id = NEW.session_id)
+           END
+         WHERE id = NEW.id;
+      END;
+
+      CREATE TRIGGER legacy_session_reads_to_conversation_reads_insert
+      AFTER INSERT ON session_reads
+      BEGIN
+        INSERT OR REPLACE INTO conversation_reads
+          (user_id, conversation_id, last_read_seq, read_at)
+        VALUES (NEW.user_id, NEW.session_id, NEW.last_read_seq, NEW.read_at);
+      END;
+
+      CREATE TRIGGER legacy_session_reads_to_conversation_reads_update
+      AFTER UPDATE OF last_read_seq, read_at ON session_reads
+      BEGIN
+        UPDATE conversation_reads
+           SET last_read_seq = NEW.last_read_seq,
+               read_at = NEW.read_at
+         WHERE user_id = NEW.user_id AND conversation_id = NEW.session_id;
+      END;
+
+      CREATE TRIGGER legacy_session_reads_to_conversation_reads_delete
+      AFTER DELETE ON session_reads
+      BEGIN
+        DELETE FROM conversation_reads
+         WHERE user_id = OLD.user_id AND conversation_id = OLD.session_id;
+      END;
+    `,
+  },
 ];

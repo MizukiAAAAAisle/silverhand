@@ -62,15 +62,16 @@ describe('buildPlatformPrompt', () => {
     expect(text).toContain('leaving the task state unchanged');
   });
 
-  it('uses Thread terminology and gates agent-created top-level sessions', () => {
+  it('uses Thread/channel terminology and gates agent-created top-level channels', () => {
     const text = prompt();
     expect(text).toContain('Threads (when to open one)');
     expect(text).toContain('`mcp__chat__create_thread`');
-    expect(text).toContain('`mcp__chat__create_session`');
-    expect(text).toContain('**Only** call `mcp__chat__create_session`');
+    expect(text).toContain('`mcp__chat__create_channel`');
+    expect(text).toContain('**Only** call `mcp__chat__create_channel`');
     expect(text).toContain('explicitly');
-    expect(text).toContain('current channel');
+    expect(text).toContain('current workspace');
     expect(text).not.toContain('`mcp__chat__spawn_child_session`');
+    expect(text).not.toContain('`mcp__chat__create_session`');
   });
 
   it('requires visible in-thread summary before closing user-opened threads', () => {
@@ -98,9 +99,10 @@ describe('buildPlatformPrompt', () => {
     expect(text).not.toContain('do not close this thread unless');
     expect(text).not.toContain('User-opened Threads should remain open');
     expect(text).not.toContain('then call `close_session`');
+    expect(text).toContain('close_thread');
   });
 
-  it('keeps close_session guidance for agent-spawned sub-sessions', () => {
+  it('keeps close_thread guidance for agent-spawned Threads', () => {
     const text = buildPlatformPrompt({
       agentId: 'agent-1',
       agentName: 'Cindy',
@@ -118,6 +120,6 @@ describe('buildPlatformPrompt', () => {
       },
     });
 
-    expect(text).toContain('report the final result via `close_session`');
+    expect(text).toContain('report the final result via `close_thread`');
   });
 });

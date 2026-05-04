@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Silverhand is an Electron desktop app that orchestrates multiple coding-agent CLIs (currently `claude`) as participants in chat-style channels. It's modeled on `@slock-ai/daemon`'s process orchestration but introduces a two-tier **Channel + Multi-Session** structure on top of slock's flat agent list. The reference slock implementation lives at `/Users/shiki/.npm/_npx/277f35d2ed0078b9/node_modules/@slock-ai/daemon/` and is consulted whenever spawn/IO behavior diverges.
+Silverhand is an Electron desktop app that orchestrates multiple coding-agent CLIs (currently `claude`) as participants in chat-style channels. It's modeled on `@slock-ai/daemon`'s process orchestration but introduces a two-tier **Workspace + Multi-Channel** structure on top of slock's flat agent list. The reference slock implementation lives at `/Users/shiki/.npm/_npx/277f35d2ed0078b9/node_modules/@slock-ai/daemon/` and is consulted whenever spawn/IO behavior diverges.
 
 Authoritative design docs:
 - `docs/core-design.md` — current architecture, especially §10 "Deferred design".
@@ -30,17 +30,17 @@ The ABI swap is essential: `better-sqlite3` ships a single `.node` binding compi
 pnpm workspaces, all `workspace:*` linked:
 
 - `packages/shared` — DTOs, zod schemas, SQLite migrations, driver interfaces. Host-agnostic.
-- `packages/backend` — Hono HTTP server, `better-sqlite3` (WAL), `SessionManager`, provisioning helpers. Host-agnostic; consumed by both the Electron main process and `dev:headless`.
+- `packages/backend` — Hono HTTP server, `better-sqlite3` (WAL), `ConversationManager`, provisioning helpers. Host-agnostic; consumed by both the Electron main process and `dev:headless`.
 - `packages/chat-bridge` — MCP stdio server (`@modelcontextprotocol/sdk`) bridging the spawned `claude` CLI's `mcp__chat__send_message` calls back to backend HTTP.
 - `apps/desktop` — Electron 33 main + React renderer (electron-vite, React Query + SSE, Tailwind v4, Radix UI).
 
 ## Architecture in five facts
 
-1. **Channels and sessions are two tiers.** A `channel` (regular or DM) groups agents and metadata; a `session` is one running conversation inside a channel. DM channels (`kind = 'dm'`) auto-provision with a single agent and skip member-picker UI. Regular channels can have multiple member agents; sessions inherit a snapshot of the channel's agents at creation time.
+1. **Workspaces and channels are two tiers.** A `workspace` (regular or DM) groups agents and metadata; a `channel` is one running conversation inside a workspace. DM workspaces (`kind = 'dm'`) auto-provision with a single agent and skip member-picker UI. Regular workspaces can have multiple member agents; channels inherit a snapshot of the workspace's agents at creation time.
 
-2. **Each (session, agent) pair is a child process.** `SessionManager` (`packages/backend/src/session-manager.ts`) spawns the agent's CLI per session-agent pair, wires `stdin`/`stdout` as `stream-json`, and tracks lifecycle. Agents reply by calling the `mcp__chat__send_message` tool exposed by chat-bridge. **Critical**: `claude --input-format stream-json` hangs intermittently if stdin starts empty, so `start()` schedules `drainInbox(handle)` immediately after spawn. A `drainChain` promise on each `AgentHandle` serializes concurrent drains (spawn-time vs. `session_init` event), so the same inbox row never gets written twice.
+2. **Each (channel, agent) pair is a child process.** `ConversationManager` (`packages/backend/src/conversation-manager.ts`) spawns the agent's CLI per channel-agent pair, wires `stdin`/`stdout` as `stream-json`, and tracks lifecycle. Agents reply by calling the `mcp__chat__send_message` tool exposed by chat-bridge. **Critical**: `claude --input-format stream-json` hangs intermittently if stdin starts empty, so `start()` schedules `drainInbox(handle)` immediately after spawn. A `drainChain` promise on each `AgentHandle` serializes concurrent drains (spawn-time vs. `session_init` event), so the same inbox row never gets written twice.
 
-3. **L1 vs L2 agent state.** Each agent has L1 files at `~/.silverhand/agents/<id>/` (the canonical `system_prompt.md`, `MEMORY.md`, `notes/`) and L2 working copies at `<workspace>/.silverhand/agents/<id>/` (per-channel). `provisionChannel` / `provisionDmChannel` / `joinChannel` / `leaveChannel` in `packages/backend/src/provision.ts` are the single source of truth for the L1 ↔ L2 lifecycle. **Adding a member must call `joinChannel`** — it seeds L2, calls `addAgent` on every open session in that channel, broadcasts a system message, and spawns the new agent. Bypassing it leaves agents with missing L2 files.
+3. **L1 vs L2 agent state.** Each agent has L1 files at `~/.silverhand/agents/<id>/` (the canonical `system_prompt.md`, `MEMORY.md`, `notes/`) and L2 working copies at `<workspace>/.silverhand/agents/<id>/` (per-workspace). `provisionWorkspace` / `provisionDmWorkspace` / `joinWorkspace` / `leaveWorkspace` in `packages/backend/src/provision.ts` are the single source of truth for the L1 ↔ L2 lifecycle. **Adding a member must call `joinWorkspace`** — it seeds L2, calls `addAgent` on every open channel in that workspace, broadcasts a system message, and spawns the new agent. Bypassing it leaves agents with missing L2 files.
 
 4. **Inbox flow when an agent is offline.** Messages arriving while an agent isn't running are persisted to the inbox. On the next spawn, `drainInbox` formats them as `stream-json` user messages and writes them to stdin. Re-delivery is idempotent via `markDelivered`.
 
@@ -50,8 +50,8 @@ pnpm workspaces, all `workspace:*` linked:
 
 - File logger writes JSONL to `~/.silverhand/logs/`:
   - `backend-<utc>.log` — backend events (spawns, drains, errors, HTTP errors).
-  - `chat-bridge-<sessionId>-<agentId>.log` — per-bridge child output. The backend passes `SILVERHAND_LOG_DIR` via env when spawning chat-bridge.
-- When a session never emits `session_init`, the most likely culprits in order: (a) stdin not primed at spawn time (verify `drainChain` ran), (b) launcher not on PATH, (c) `system-prompt-file` / `mcp-config` arg malformed. Inspect `argv` of the suspect `claude` pid — silverhand-spawned ones carry `--system-prompt-file /var/folders/.../<sessionId>/<agentId>/system-prompt.md` which uniquely distinguishes them from user-interactive `claude` invocations.
+  - `chat-bridge-<channelId>-<agentId>.log` — per-bridge child output. The backend passes `SILVERHAND_LOG_DIR` via env when spawning chat-bridge.
+- When a channel never emits `session_init`, the most likely culprits in order: (a) stdin not primed at spawn time (verify `drainChain` ran), (b) launcher not on PATH, (c) `system-prompt-file` / `mcp-config` arg malformed. Inspect `argv` of the suspect `claude` pid — silverhand-spawned ones carry `--system-prompt-file /var/folders/.../<channelId>/<agentId>/system-prompt.md` which uniquely distinguishes them from user-interactive `claude` invocations.
 
 ## Conventions worth knowing
 

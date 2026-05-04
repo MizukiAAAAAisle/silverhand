@@ -1,6 +1,6 @@
 import { Settings, MessageSquarePlus, Users, CheckSquare } from 'lucide-react';
 import type { ChannelKind } from '@silverhand/shared';
-import { ManageMembersPopover } from '@/features/channels/ManageMembersPopover';
+import { ManageMembersPopover } from '@/features/workspaces/ManageMembersPopover';
 
 interface TitlebarProps {
   channelId: string | null;
@@ -79,8 +79,8 @@ export function Titlebar({
         <button
           type="button"
           onClick={onCreateSession}
-          aria-label="新建会话"
-          title="新建会话"
+          aria-label="新建 Channel"
+          title="新建 Channel"
           className="no-drag flex size-6 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
         >
           <MessageSquarePlus className="size-3.5" />
@@ -118,11 +118,11 @@ export function Titlebar({
       ) : null}
 
       {showSettings ? (
-        <button
-          type="button"
-          onClick={onOpenChannelSettings}
-          aria-label="频道设置"
-          title="频道设置"
+          <button
+            type="button"
+            onClick={onOpenChannelSettings}
+          aria-label="Workspace 设置"
+          title="Workspace 设置"
           className="no-drag flex size-6 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
         >
           <Settings className="size-3.5" />

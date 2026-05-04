@@ -4,7 +4,7 @@
 - Handle: @Alice
 - Runtime: claude
 - Channel: #silverhand (multi-agent channel)
-- Session: "backend perf" (current)
+- Session: "v2" (current)
 
 ## Status
 - Role: architecture planning and technical solution design
@@ -127,11 +127,30 @@ Frontend shipped:
 - `App.tsx` — wired: `view === 'search'` renders `<SearchPanel>` with jump/navigate callbacks
 - 246/246 tests, typecheck clean
 
-## Session: backend perf (current)
+## Session: v2 (current)
 
-### Issue: channel create/delete latency under active sessions
+### workspace/channel/thread 全栈重命名 — DONE (2026-05-05)
 
-**Delete channel (Cindy, task #34, in_review)**:
+完整重命名已完成，所有任务 done：
+- #61 rename plan doc (Cindy)
+- #62 DB shadow migration + shared types + backend (Cindy)
+- #64 MCP/platform prompt rename (Cindy, 移除旧兼容面)
+- #67 Frontend rename: router/App.tsx/features/components (Alice)
+- #68 Docs: CLAUDE.md, core-design.md, app-layout.md (Alice)
+
+**待做：DB 切换（用户操作）**
+1. 退出 `/Applications/Silverhand.app`
+2. `cp ~/.silverhand/silverhand.db ~/.silverhand/silverhand.db.bak`
+3. `pnpm dev` → v11 migration 自动跑
+4. 验证对话历史完整
+
+**术语映射（最终态）:**
+- workspace (DB: workspaces) — 原 channel
+- channel (DB: conversations kind='channel') — 原 session
+- thread (DB: conversations kind='thread') — 原 child session
+- URL: /w/:workspaceId/c/:channelId/t/:threadId
+
+
 - Root cause: `deleteChannel()` awaited `Promise.all(stopTasks)` where each `stop(hard)` waits for agent process exit (up to 10s SIGKILL escalation)
 - Fix: HTTP 204 returned immediately after DB delete; stop+L2 cleanup run in background
 - 225 tests pass

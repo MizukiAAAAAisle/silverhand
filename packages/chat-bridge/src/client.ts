@@ -77,25 +77,25 @@ export class BackendClient {
     members: string[];
     context_summary: string;
     initial_prompt: string;
-  }): Promise<{ child_session_id: string }> {
+  }): Promise<{ thread_id: string }> {
     return this.post(
       internalPaths.agentSpawnChild(this.args.sessionId, this.args.agentId),
       input,
     );
   }
 
-  createSession(input: {
+  createChannel(input: {
     title: string;
     context_summary: string;
     initial_prompt: string;
-  }): Promise<{ session_id: string }> {
-    return this.post(
+  }): Promise<{ channel_id: string }> {
+    return this.post<{ session_id: string }>(
       internalPaths.agentCreateSession(this.args.sessionId, this.args.agentId),
       input,
-    );
+    ).then(r => ({ channel_id: r.session_id }));
   }
 
-  closeSession(input: {
+  closeThread(input: {
     summary: string;
     posted_to_parent?: boolean;
   }): Promise<{ session: unknown }> {

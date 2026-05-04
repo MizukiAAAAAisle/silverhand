@@ -25,4 +25,23 @@ describe('route harness smoke', () => {
     expect(body.hosts).toHaveLength(1);
     expect(body.hosts[0].kind).toBe('local');
   });
+
+  it('allows renderer viewer identity header in CORS preflight', async () => {
+    t = buildTestApp();
+    const res = await t.app.fetch(
+      new Request('http://localhost/api/notifications?unread=1', {
+        method: 'OPTIONS',
+        headers: {
+          origin: 'http://localhost:5173',
+          'access-control-request-method': 'GET',
+          'access-control-request-headers': 'x-silverhand-user-id',
+        },
+      }),
+    );
+    expect(res.status).toBe(204);
+    expect(res.headers.get('access-control-allow-origin')).toBe('*');
+    expect(res.headers.get('access-control-allow-headers')).toMatch(
+      /x-silverhand-user-id/i,
+    );
+  });
 });

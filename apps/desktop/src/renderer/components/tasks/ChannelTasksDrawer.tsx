@@ -26,8 +26,8 @@ export interface ChannelTasksDrawerProps {
   /** Initially-selected session for the filter. null → All sessions. */
   defaultSessionId: string | null;
   onJumpToMessage?: (params: {
+    workspaceId?: string;
     channelId: string;
-    sessionId: string;
     messageId: string;
   }) => void;
 }
@@ -148,8 +148,8 @@ export function ChannelTasksDrawer({
 
   const handleCardClick = (t: TaskSummaryDto): void => {
     onJumpToMessage?.({
-      channelId: t.channel_id,
-      sessionId: t.session.id,
+      workspaceId: t.channel_id,
+      channelId: t.session.id,
       messageId: t.message_id,
     });
     onOpenChange(false);

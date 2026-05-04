@@ -12,26 +12,26 @@ import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { useAgents } from '@/features/agents/hooks';
 import { AgentPicker } from './AgentPicker';
-import { useCreateChannel } from './hooks';
+import { useCreateWorkspace } from './hooks';
 
-interface CreateChannelDialogProps {
+interface CreateWorkspaceDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCreated?: (created: { channelId: string; sessionId: string }) => void;
+  onCreated?: (created: { workspaceId: string; channelId: string }) => void;
 }
 
-export function CreateChannelDialog({
+export function CreateWorkspaceDialog({
   open,
   onOpenChange,
   onCreated,
-}: CreateChannelDialogProps): JSX.Element {
+}: CreateWorkspaceDialogProps): JSX.Element {
   const [name, setName] = useState('');
   const [workspacePath, setWorkspacePath] = useState('');
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const { data: agents = [] } = useAgents();
-  const createChannel = useCreateChannel();
+  const createWorkspace = useCreateWorkspace();
 
   const reset = () => {
     setName('');
@@ -44,18 +44,18 @@ export function CreateChannelDialog({
     e.preventDefault();
     setError(null);
     if (!name.trim()) {
-      setError('请填写频道名');
+      setError('请填写 Workspace 名称');
       return;
     }
     try {
-      const res = await createChannel.mutateAsync({
+      const res = await createWorkspace.mutateAsync({
         name: name.trim(),
         workspace_path: workspacePath.trim() || undefined,
         member_agent_ids: selectedAgents,
       });
       onCreated?.({
-        channelId: res.channel.id,
-        sessionId: res.onboarding_session_id,
+        workspaceId: res.channel.id,
+        channelId: res.onboarding_session_id,
       });
       reset();
       onOpenChange(false);
@@ -73,9 +73,9 @@ export function CreateChannelDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>新建频道</DialogTitle>
+          <DialogTitle>新建 Workspace</DialogTitle>
           <DialogDescription>
-            一个频道是一个本地工作目录上的多 agent 协作空间。创建后会自动开一个 Onboarding 会话，你在里面通过对话塑造每个 agent 的角色。
+            一个 Workspace 是一个本地工作目录上的多 agent 协作空间。创建后会自动开一个 Onboarding Channel，你在里面通过对话塑造每个 agent 的角色。
           </DialogDescription>
         </DialogHeader>
 
@@ -145,8 +145,8 @@ export function CreateChannelDialog({
             >
               取消
             </Button>
-            <Button type="submit" disabled={createChannel.isPending}>
-              {createChannel.isPending ? '创建中…' : '创建'}
+            <Button type="submit" disabled={createWorkspace.isPending}>
+              {createWorkspace.isPending ? '创建中…' : '创建'}
             </Button>
           </DialogFooter>
         </form>

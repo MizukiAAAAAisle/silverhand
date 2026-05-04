@@ -8,12 +8,12 @@ import { formatUserDisplayName } from '@/lib/current-user';
 
 interface SavedListViewProps {
   /** Called when the user clicks a saved entry. The parent owns view
-   *  routing — flips back to channel view, selects the channel +
-   *  session, and forwards the message id to the next SessionView
+   *  routing — flips back to channel view, selects the workspace +
+   *  channel, and forwards the message id to the next ChannelView
    *  render so it can scroll + flash. */
   onJump: (params: {
+    workspaceId?: string;
     channelId: string;
-    sessionId: string;
     messageId: string;
   }) => void;
 }
@@ -49,8 +49,8 @@ export function SavedListView({ onJump }: SavedListViewProps): JSX.Element {
                 item={item}
                 onJump={() =>
                   onJump({
-                    channelId: item.channel_id,
-                    sessionId: item.session_id,
+                    workspaceId: item.channel_id,
+                    channelId: item.session_id,
                     messageId: item.message.id,
                   })
                 }

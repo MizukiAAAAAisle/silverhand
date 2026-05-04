@@ -2,13 +2,13 @@ import { useMemo } from 'react';
 import { Bookmark, Search } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { CURRENT_USER_ID, formatUserDisplayName } from '@/lib/current-user';
-import { ChannelGroup, type ChannelItem } from './ChannelsPanel';
+import { WorkspaceGroup, type WorkspaceItem } from './WorkspacesPanel';
 
 interface SidebarProps {
-  channels: ChannelItem[];
-  selectedChannelId: string | null;
-  onSelectChannel: (id: string) => void;
-  onCreateChannel: () => void;
+  workspaces: WorkspaceItem[];
+  selectedWorkspaceId: string | null;
+  onSelectWorkspace: (id: string) => void;
+  onCreateWorkspace: () => void;
   /** When true, the Saved view is the active main view — channel rows
    *  appear unselected and the Saved entry highlights instead. */
   savedActive: boolean;
@@ -24,21 +24,21 @@ interface SidebarProps {
 
 export function Sidebar(props: SidebarProps): JSX.Element {
   const { dms, regular, archived } = useMemo(() => {
-    const dms: ChannelItem[] = [];
-    const regular: ChannelItem[] = [];
-    const archived: ChannelItem[] = [];
-    for (const c of props.channels) {
-      if (c.archived) archived.push(c);
-      else if (c.kind === 'dm') dms.push(c);
-      else regular.push(c);
+    const dms: WorkspaceItem[] = [];
+    const regular: WorkspaceItem[] = [];
+    const archived: WorkspaceItem[] = [];
+    for (const w of props.workspaces) {
+      if (w.archived) archived.push(w);
+      else if (w.kind === 'dm') dms.push(w);
+      else regular.push(w);
     }
     return { dms, regular, archived };
-  }, [props.channels]);
+  }, [props.workspaces]);
 
-  // While the Saved view is active, suppress channel highlighting so
+  // While the Saved view is active, suppress workspace highlighting so
   // the Saved entry visually owns selection.
-  const channelHighlight =
-    props.savedActive || props.searchActive ? null : props.selectedChannelId;
+  const workspaceHighlight =
+    props.savedActive || props.searchActive ? null : props.selectedWorkspaceId;
 
   return (
     <aside className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]">
@@ -86,35 +86,35 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           ) : null}
         </button>
 
-        <ChannelGroup
+        <WorkspaceGroup
           label="DM"
           kind="dm"
-          channels={dms}
-          selectedChannelId={channelHighlight}
-          onSelectChannel={props.onSelectChannel}
+          workspaces={dms}
+          selectedWorkspaceId={workspaceHighlight}
+          onSelectWorkspace={props.onSelectWorkspace}
           emptyHint="新建 agent 时会自动创建 DM"
         />
-        <ChannelGroup
-          label="CHANNELS"
+        <WorkspaceGroup
+          label="WORKSPACES"
           kind="regular"
-          channels={regular}
-          selectedChannelId={channelHighlight}
-          onSelectChannel={props.onSelectChannel}
-          onAdd={props.onCreateChannel}
+          workspaces={regular}
+          selectedWorkspaceId={workspaceHighlight}
+          onSelectWorkspace={props.onSelectWorkspace}
+          onAdd={props.onCreateWorkspace}
           emptyHint={
             <>
-              还没有频道。点{' '}
+              还没有工作区。点{' '}
               <kbd className="rounded bg-bg-elevated px-1 py-0.5">+</kbd> 新建。
             </>
           }
         />
         {archived.length > 0 ? (
-          <ChannelGroup
+          <WorkspaceGroup
             label="ARCHIVED"
             kind="regular"
-            channels={archived}
-            selectedChannelId={channelHighlight}
-            onSelectChannel={props.onSelectChannel}
+            workspaces={archived}
+            selectedWorkspaceId={workspaceHighlight}
+            onSelectWorkspace={props.onSelectWorkspace}
             defaultExpanded={false}
           />
         ) : null}

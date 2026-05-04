@@ -6,17 +6,21 @@ import type { AppSection } from '@/components/layout/NavRail';
  * Single source of truth for our URL scheme. Keep all path templates
  * here so callers don't sprinkle string concatenation across the
  * codebase.
+ *
+ * Naming: workspace (outer container) → channel (conversation) → thread (nested).
+ * Old: /chat/c/:channelId/s/:sessionId/t/:childSessionId
+ * New: /chat/w/:workspaceId/c/:channelId/t/:threadId
  */
 export const routes = {
   home: () => '/',
   chat: () => '/chat',
   chatSearch: () => '/chat/search',
   chatSaved: () => '/chat/saved',
-  chatChannel: (channelId: string) => `/chat/c/${channelId}`,
-  chatSession: (channelId: string, sessionId: string) =>
-    `/chat/c/${channelId}/s/${sessionId}`,
-  chatThread: (channelId: string, sessionId: string, childSessionId: string) =>
-    `/chat/c/${channelId}/s/${sessionId}/t/${childSessionId}`,
+  chatWorkspace: (workspaceId: string) => `/chat/w/${workspaceId}`,
+  chatChannel: (workspaceId: string, channelId: string) =>
+    `/chat/w/${workspaceId}/c/${channelId}`,
+  chatThread: (workspaceId: string, channelId: string, threadId: string) =>
+    `/chat/w/${workspaceId}/c/${channelId}/t/${threadId}`,
   members: () => '/members',
   membersAgent: (agentId: string) => `/members/${agentId}`,
   computers: () => '/computers',
@@ -25,9 +29,9 @@ export const routes = {
 } as const;
 
 export const routePatterns = {
-  chatThread: '/chat/c/:channelId/s/:sessionId/t/:childSessionId',
-  chatSession: '/chat/c/:channelId/s/:sessionId',
-  chatChannel: '/chat/c/:channelId',
+  chatThread: '/chat/w/:workspaceId/c/:channelId/t/:threadId',
+  chatChannel: '/chat/w/:workspaceId/c/:channelId',
+  chatWorkspace: '/chat/w/:workspaceId',
   chatSearch: '/chat/search',
   chatSaved: '/chat/saved',
   chat: '/chat',
@@ -48,30 +52,30 @@ export interface RouteState {
   section: AppSection;
   /** Within the chat section: 'channel' or 'saved'. */
   chatView: ChatView;
+  workspaceId: string | null;
   channelId: string | null;
-  sessionId: string | null;
-  childSessionId: string | null;
+  threadId: string | null;
   agentId: string | null;
 }
 
 export function useRouteState(): RouteState {
   const { pathname } = useLocation();
   // useMatch is order-independent — we evaluate the longest patterns
-  // first and use the deepest non-null result so /chat/c/x/s/y/t/z
-  // doesn't get masked by /chat/c/x.
+  // first and use the deepest non-null result so /chat/w/x/c/y/t/z
+  // doesn't get masked by /chat/w/x.
   const mThread = useMatch(routePatterns.chatThread);
-  const mSession = useMatch(routePatterns.chatSession);
   const mChannel = useMatch(routePatterns.chatChannel);
+  const mWorkspace = useMatch(routePatterns.chatWorkspace);
   const mAgent = useMatch(routePatterns.membersAgent);
 
-  const channelId =
-    mThread?.params.channelId ??
-    mSession?.params.channelId ??
-    mChannel?.params.channelId ??
+  const workspaceId =
+    mThread?.params.workspaceId ??
+    mChannel?.params.workspaceId ??
+    mWorkspace?.params.workspaceId ??
     null;
-  const sessionId =
-    mThread?.params.sessionId ?? mSession?.params.sessionId ?? null;
-  const childSessionId = mThread?.params.childSessionId ?? null;
+  const channelId =
+    mThread?.params.channelId ?? mChannel?.params.channelId ?? null;
+  const threadId = mThread?.params.threadId ?? null;
 
   let section: AppSection = 'chat';
   if (pathname.startsWith('/members')) section = 'members';
@@ -88,9 +92,9 @@ export function useRouteState(): RouteState {
   return {
     section,
     chatView,
+    workspaceId,
     channelId,
-    sessionId,
-    childSessionId,
+    threadId,
     agentId: mAgent?.params.agentId ?? null,
   };
 }
@@ -105,9 +109,9 @@ export function useNav(): {
   toChat: () => void;
   toChatSearch: () => void;
   toChatSaved: () => void;
-  toChannel: (channelId: string) => void;
-  toSession: (channelId: string, sessionId: string) => void;
-  toThread: (channelId: string, sessionId: string, childSessionId: string) => void;
+  toWorkspace: (workspaceId: string) => void;
+  toChannel: (workspaceId: string, channelId: string) => void;
+  toThread: (workspaceId: string, channelId: string, threadId: string) => void;
   toMembers: (agentId?: string) => void;
   toComputers: () => void;
   toTasks: () => void;
@@ -124,13 +128,13 @@ export function useNav(): {
     toChat: useCallback(() => go(routes.chat()), [go]),
     toChatSearch: useCallback(() => go(routes.chatSearch()), [go]),
     toChatSaved: useCallback(() => go(routes.chatSaved()), [go]),
-    toChannel: useCallback((id: string) => go(routes.chatChannel(id)), [go]),
-    toSession: useCallback(
-      (cid: string, sid: string) => go(routes.chatSession(cid, sid)),
+    toWorkspace: useCallback((id: string) => go(routes.chatWorkspace(id)), [go]),
+    toChannel: useCallback(
+      (wid: string, cid: string) => go(routes.chatChannel(wid, cid)),
       [go],
     ),
     toThread: useCallback(
-      (cid: string, sid: string, tid: string) => go(routes.chatThread(cid, sid, tid)),
+      (wid: string, cid: string, tid: string) => go(routes.chatThread(wid, cid, tid)),
       [go],
     ),
     toMembers: useCallback(

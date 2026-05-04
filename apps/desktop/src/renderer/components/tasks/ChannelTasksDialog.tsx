@@ -45,8 +45,8 @@ export interface ChannelTasksDialogProps {
   /** Click on a task card. Caller is responsible for closing the dialog
    *  if it wants the chat to take focus. */
   onJumpToMessage?: (params: {
+    workspaceId?: string;
     channelId: string;
-    sessionId: string;
     messageId: string;
   }) => void;
 }
@@ -98,8 +98,8 @@ export function ChannelTasksDialog({
 
   const handleClick = (t: TaskSummaryDto): void => {
     onJumpToMessage?.({
-      channelId: t.channel_id,
-      sessionId: t.session.id,
+      workspaceId: t.channel_id,
+      channelId: t.session.id,
       messageId: t.message_id,
     });
     onOpenChange(false);
