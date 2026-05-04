@@ -299,38 +299,37 @@ function TaskCard({
   onStatusChange: (next: TaskStatus) => void;
 }): JSX.Element {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="group flex w-full flex-col gap-1.5 rounded-md border border-border-subtle bg-bg-primary p-2 text-left transition-colors hover:border-accent hover:bg-bg-hover"
-    >
-      <div className="flex items-start gap-1.5">
+    <div className="group flex w-full items-stretch rounded-md border border-border-subtle bg-bg-primary transition-colors hover:border-accent hover:bg-bg-hover">
+      {/* Jump button: covers the content area, drives navigation */}
+      <button
+        type="button"
+        onClick={onClick}
+        className="flex min-w-0 flex-1 flex-col gap-1 p-2 text-left"
+      >
         <span className="shrink-0 font-mono text-[10px] text-text-muted">
           #{task.task_number}
         </span>
-        <span className="min-w-0 flex-1 text-xs text-text-primary">
+        <span className="min-w-0 break-words text-xs text-text-primary">
           {task.title}
         </span>
-      </div>
-      <div
-        className="flex items-center gap-2"
-        onClick={e => e.stopPropagation()}
-      >
-        {task.assignee ? (
-          <span className="text-[10px] text-text-muted">
-            @{task.assignee.name}
+        <div className="flex items-center gap-1.5 text-[10px] text-text-muted">
+          {task.assignee ? (
+            <span>@{task.assignee.name}</span>
+          ) : (
+            <span className="italic">unassigned</span>
+          )}
+          <span
+            className="ml-auto max-w-[100px] truncate"
+            title={task.session.title}
+          >
+            {task.session.title}
           </span>
-        ) : (
-          <span className="text-[10px] italic text-text-muted">unassigned</span>
-        )}
-        <span
-          className="ml-auto max-w-[120px] truncate text-[10px] text-text-muted"
-          title={task.session.title}
-        >
-          {task.session.title}
-        </span>
+        </div>
+      </button>
+      {/* Status pill: sibling button — never nested, never overflows */}
+      <div className="flex shrink-0 items-start p-2 pl-0">
         <TaskStatusPill status={task.status} size="sm" onChange={onStatusChange} />
       </div>
-    </button>
+    </div>
   );
 }

@@ -408,13 +408,71 @@ if (HEADLESS) {
   }
 }
 
-app.on('before-quit', async () => {
-  if (backend) {
-    await backend.close();
-    backend = null;
+// Set true once we've started the async shutdown path so a re-fire of
+// `before-quit` (Electron may emit it again after `app.exit`/`app.quit`
+// in some platform sequences) doesn't restart the work or loop.
+let isShuttingDown = false;
+
+async function shutdown(): Promise<void> {
+  // Notify the renderer so it can show a progress overlay while we
+  // clean up — prevents the window from looking frozen.
+  const pushProgress = (step: string): void => {
+    try {
+      mainWindow?.webContents.send('shutdown:progress', step);
+    } catch {
+      /* window may already be destroyed — ignore */
+    }
+  };
+
+  try {
+    if (backend) {
+      pushProgress('正在停止 agents…');
+      await backend.close();
+      pushProgress('清理完成');
+      backend = null;
+    }
+  } catch (err) {
+    console.error('[main] backend.close() failed:', err);
   }
-  if (logger) {
-    await logger.close();
-    logger = null;
+  try {
+    if (logger) {
+      await logger.close();
+      logger = null;
+    }
+  } catch (err) {
+    console.error('[main] logger.close() failed:', err);
   }
+}
+
+app.on('before-quit', event => {
+  // Async work in `before-quit` is silently dropped by Electron unless
+  // we preventDefault and re-quit ourselves: the handler's returned
+  // Promise is NOT awaited by the quit sequence, so without this guard
+  // the main process exits while `backend.close()` is still running and
+  // every spawned agent / chat-bridge child is left orphaned. We saw
+  // this in practice — claude/codex/chat-bridge processes survived an
+  // app close, then the next launch spawned duplicates and codex's
+  // resume failed with `thread not found` because the orphan still
+  // owned the thread server-side.
+  if (isShuttingDown) return;
+  event.preventDefault();
+  isShuttingDown = true;
+
+  // Hard ceiling so a wedged shutdown can't hang the app forever.
+  // SessionManager.stop already escalates to SIGKILL after 10s; this
+  // is the safety net for everything around it (driver bugs, hung
+  // logger flushes, etc.). Kept above 10s so the normal SIGTERM/SIGKILL
+  // cascade gets to run before we force-exit.
+  const watchdog = setTimeout(() => {
+    console.error('[main] shutdown watchdog fired; forcing exit');
+    app.exit(1);
+  }, 15_000);
+  watchdog.unref();
+
+  void shutdown().finally(() => {
+    clearTimeout(watchdog);
+    // app.exit (not app.quit) — we've already done the cleanup; quit()
+    // would re-fire before-quit and loop through this handler.
+    app.exit(0);
+  });
 });

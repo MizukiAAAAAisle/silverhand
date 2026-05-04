@@ -162,6 +162,51 @@ export class NotificationRepo {
     return out;
   }
 
+  /**
+   * Aggregate unread counts grouped by `session_id` for a single
+   * channel. Used by the sessions sidebar to show per-session badges
+   * without scanning all channels.
+   */
+  unreadCountsBySessionForChannel(
+    channelId: string,
+    userId?: string | null,
+  ): Map<string, number> {
+    const userPredicate =
+      userId === undefined || userId === null ? 'user_id IS NULL' : 'user_id = ?';
+    const args = userId == null ? [channelId] : [userId, channelId];
+    const rows = this.db
+      .prepare<typeof args, { session_id: string; c: number }>(
+        `SELECT session_id, COUNT(*) AS c
+         FROM notifications
+         WHERE ${userPredicate}
+           AND read_at IS NULL
+           AND channel_id = ?
+           AND session_id IS NOT NULL
+         GROUP BY session_id`,
+      )
+      .all(...args);
+    const out = new Map<string, number>();
+    for (const r of rows) out.set(r.session_id, r.c);
+    return out;
+  }
+
+  /** Mark all unread notifications for a session as read. */
+  markSessionRead(sessionId: string, userId?: string | null): number {
+    const now = Date.now();
+    const userPredicate =
+      userId === undefined || userId === null ? 'user_id IS NULL' : 'user_id = ?';
+    const args =
+      userId == null ? [now, sessionId] : [now, userId, sessionId];
+    const r = this.db
+      .prepare(
+        `UPDATE notifications
+         SET read_at = ?
+         WHERE ${userPredicate} AND session_id = ? AND read_at IS NULL`,
+      )
+      .run(...args);
+    return r.changes;
+  }
+
   unreadCount(userId?: string | null): number {
     const userPredicate =
       userId === undefined || userId === null ? 'user_id IS NULL' : 'user_id = ?';

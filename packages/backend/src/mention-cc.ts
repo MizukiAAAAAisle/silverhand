@@ -117,6 +117,8 @@ async function deliverOne(
       source_session_id: opts.sourceSession.id,
       source_session_title: opts.sourceSession.title,
       source_message_id: opts.message.id,
+      source_from_kind: opts.message.from_kind,
+      source_from_user_id: opts.message.from_user_id,
       // Mirror the original content so the UI can render a compact
       // card without re-fetching. The wrapped `content` field stays
       // verbose for the agent's benefit (see renderMentionWrap).

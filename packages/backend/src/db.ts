@@ -6,6 +6,10 @@ export function openDatabase(filepath: string): Db {
   const db = new Database(filepath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
+  // Retry for up to 5 s when another connection holds a write lock.
+  // Unlikely in the single-process WAL setup but prevents SQLITE_BUSY
+  // errors if the user opens the DB with an external tool concurrently.
+  db.pragma('busy_timeout = 5000');
   runMigrations(db);
   return db;
 }

@@ -13,6 +13,7 @@
   --bg-active: #D4D4CD;
   --bg-selected: #FFFFFF;
   --bg-floating: #FFFFFF;
+  --bg-chat: #F9F9F7;
 
   /* ── Sidebar (no special accent — falls back to primary) ── */
   --bg-nav-rail: var(--bg-primary);

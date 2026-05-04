@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
@@ -6,6 +6,7 @@ import {
   apiPaths,
   AddChannelMemberInputSchema,
   AgentCloseSessionInputSchema,
+  AgentCreateSessionInputSchema,
   AgentSendMessageInputSchema,
   AgentSpawnChildInputSchema,
   ClaimTasksInputSchema,
@@ -18,7 +19,9 @@ import {
   HumanClaimTaskInputSchema,
   HumanUpdateTaskStatusInputSchema,
   ListTasksQuerySchema,
+  MarkSessionReadInputSchema,
   MarkNotificationsReadInputSchema,
+  SearchQueryInputSchema,
   SendMessageInputSchema,
   UnclaimTaskInputSchema,
   UpdateAgentInputSchema,
@@ -37,6 +40,8 @@ import { MembershipRepo } from './repos/membership-repo.js';
 import { MessageRepo } from './repos/message-repo.js';
 import { NotificationRepo } from './repos/notification-repo.js';
 import { SavedMessageRepo } from './repos/saved-message-repo.js';
+import { SearchRepo } from './repos/search-repo.js';
+import { SessionReadRepo } from './repos/session-read-repo.js';
 import { SessionRepo, type RepoError } from './repos/session-repo.js';
 import { SettingsRepo, SETTINGS_KEYS } from './repos/settings-repo.js';
 import { provisionChannel, provisionDmChannel, joinChannel, leaveChannel, deleteChannel } from './provision.js';
@@ -67,6 +72,25 @@ const repoErrorStatusMap: Record<string, 400 | 404 | 409 | 429> = {
   spawn_cooldown: 429,
 };
 
+const VIEWER_USER_ID_HEADER = 'x-silverhand-user-id';
+
+function resolveViewerUserId(c: Context, ctx: BackendContext): string | null {
+  const headerValue = c.req.header(VIEWER_USER_ID_HEADER)?.trim();
+  return headerValue || ctx.serverConfig.user_id || null;
+}
+
+function requireViewerUserId(c: Context, ctx: BackendContext): string | Response {
+  const viewerUserId = resolveViewerUserId(c, ctx);
+  if (!viewerUserId) {
+    return c.json({ error: 'viewer user id required' }, 400);
+  }
+  return viewerUserId;
+}
+
+function userLabel(userId: string | null | undefined): string {
+  return userId ?? 'user';
+}
+
 export function createApiRouter(ctx: BackendContext): Hono {
   const app = new Hono();
   const hosts = new HostRepo(ctx.db);
@@ -76,9 +100,11 @@ export function createApiRouter(ctx: BackendContext): Hono {
   const sessions = new SessionRepo(ctx.db);
   const messages = new MessageRepo(ctx.db);
   const saved = new SavedMessageRepo(ctx.db);
+  const search = new SearchRepo(ctx.db);
   const settings = new SettingsRepo(ctx.db);
   const inboxes = new InboxRepo(ctx.db);
   const notifications = new NotificationRepo(ctx.db);
+  const sessionReads = new SessionReadRepo(ctx.db);
 
   const localHost = hosts.ensureLocal();
 
@@ -353,7 +379,7 @@ export function createApiRouter(ctx: BackendContext): Hono {
   });
 
   app.delete('/api/channels/:id', async c => {
-    await deleteChannel(c.req.param('id'), provisionOpts);
+    await deleteChannel(c.req.param('id'), provisionOpts, { awaitCleanup: false });
     return c.body(null, 204);
   });
 
@@ -489,6 +515,34 @@ export function createApiRouter(ctx: BackendContext): Hono {
     return c.json({ sessions: sessions.listForChannel(channel.id) });
   });
 
+  // Per-session unread notification counts for the sessions sidebar badge.
+  app.get('/api/channels/:id/unread-by-session', c => {
+    const channel = channels.get(c.req.param('id'));
+    if (!channel) return c.json({ error: 'channel not found' }, 404);
+    const countsMap = notifications.unreadCountsBySessionForChannel(channel.id);
+    const counts: Record<string, number> = {};
+    for (const [sid, n] of countsMap) counts[sid] = n;
+    return c.json({ counts });
+  });
+
+  app.get(apiPaths.messageUnreadSummary, c => {
+    const viewerUserId = requireViewerUserId(c, ctx);
+    if (typeof viewerUserId !== 'string') return viewerUserId;
+    return c.json({
+      by_channel: sessionReads.unreadCountsByChannel(viewerUserId),
+    });
+  });
+
+  app.get('/api/channels/:id/message-unread', c => {
+    const channel = channels.get(c.req.param('id'));
+    if (!channel) return c.json({ error: 'channel not found' }, 404);
+    const viewerUserId = requireViewerUserId(c, ctx);
+    if (typeof viewerUserId !== 'string') return viewerUserId;
+    return c.json(
+      sessionReads.unreadCountsBySessionForChannel(channel.id, viewerUserId),
+    );
+  });
+
   app.post('/api/channels/:id/sessions', async c => {
     const channel = channels.get(c.req.param('id'));
     if (!channel) return c.json({ error: 'channel not found' }, 404);
@@ -563,10 +617,26 @@ export function createApiRouter(ctx: BackendContext): Hono {
     return c.json({ agents: sessions.listAgents(session.id) });
   });
 
+  app.get('/api/sessions/:id/agent-run-states', c => {
+    const session = sessions.get(c.req.param('id'));
+    if (!session) return c.json({ error: 'not found' }, 404);
+    return c.json({ states: ctx.sessionManager.getAgentRunStates(session.id) });
+  });
+
   app.get('/api/sessions/:id/messages', c => {
     const session = sessions.get(c.req.param('id'));
     if (!session) return c.json({ error: 'not found' }, 404);
-    return c.json({ messages: messages.listForSession(session.id) });
+    const limit = parseLimit(c.req.query('limit'), 200);
+    const beforeSeq = parseBeforeSeq(c.req.query('before_seq'));
+    if (beforeSeq === 'invalid') {
+      return c.json({ error: 'before_seq must be a positive integer' }, 400);
+    }
+    return c.json(
+      messages.listWindowForSession(session.id, {
+        limit,
+        beforeSeq,
+      }),
+    );
   });
 
   // Human user posts a message into a session from the UI compose form.
@@ -586,6 +656,7 @@ export function createApiRouter(ctx: BackendContext): Hono {
     const msg = messages.insert({
       sessionId: session.id,
       fromKind: 'user',
+      fromUserId: resolveViewerUserId(c, ctx),
       content: parsed.data.content,
     });
 
@@ -677,6 +748,24 @@ export function createApiRouter(ctx: BackendContext): Hono {
     return c.json({ sessions: sessions.listChildren(session.id) });
   });
 
+  app.post('/api/sessions/:id/mark-read', async c => {
+    const session = sessions.get(c.req.param('id'));
+    if (!session) return c.json({ error: 'not found' }, 404);
+    const viewerUserId = requireViewerUserId(c, ctx);
+    if (typeof viewerUserId !== 'string') return viewerUserId;
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = MarkSessionReadInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    const row = sessionReads.markRead({
+      viewerUserId,
+      sessionId: session.id,
+      seq: parsed.data.seq,
+    });
+    return c.json({ last_read_seq: row.last_read_seq });
+  });
+
   // Open-thread summary under a parent — one row per open child + its
   // anchor message id + reply count. Renderer uses this to render the
   // "{count} Reply" badge on the parent's chat view; one bulk fetch
@@ -754,6 +843,7 @@ export function createApiRouter(ctx: BackendContext): Hono {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
     const closed = sessions.close(session.id, parsed.data.summary);
+    ctx.sessionManager.resolveSessionRuns(session.id, 'session_closed');
 
     // Auto-post summary to parent if requested and parent exists.
     if (
@@ -773,18 +863,75 @@ export function createApiRouter(ctx: BackendContext): Hono {
       }
     }
 
+    // Closing a thread drops it from the parent's open-threads summary
+    // and changes the child row's closed_at state in the session list.
+    // Notify the parent's stream so split/thread UI refreshes without
+    // waiting for a full app reload.
+    if (session.parent_session_id) {
+      ctx.events.publish(session.parent_session_id, {
+        kind: 'thread_updated',
+        payload: {
+          parent_session_id: session.parent_session_id,
+          child_session_id: session.id,
+        },
+      });
+    }
+
     return c.json({ session: closed });
   });
 
   app.delete('/api/sessions/:id', c => {
-    sessions.delete(c.req.param('id'));
+    const id = c.req.param('id');
+    ctx.sessionManager.resolveSessionRuns(id, 'session_closed');
+    sessions.delete(id);
     return c.body(null, 204);
+  });
+
+  app.post('/api/sessions/:id/pin', c => {
+    let pinResult: ReturnType<typeof sessions.pin>;
+    try {
+      pinResult = sessions.pin(c.req.param('id'));
+    } catch (err: unknown) {
+      const code = (err as { code?: string }).code;
+      if (code === 'child_session') {
+        return c.json({ error: 'child sessions cannot be pinned' }, 400);
+      }
+      throw err;
+    }
+    if (!pinResult) return c.json({ error: 'session not found' }, 404);
+    return c.json({ session: pinResult });
+  });
+
+  app.delete('/api/sessions/:id/pin', c => {
+    const session = sessions.unpin(c.req.param('id'));
+    if (!session) return c.json({ error: 'session not found' }, 404);
+    return c.json({ session });
   });
 
   // ── Saved messages (bookmarks) ──────────────────────────────────
   // Single global flat list per spec (docs/app-layout.md §6).
 
   app.get(apiPaths.saved, c => c.json({ saved: saved.list() }));
+
+  app.get(apiPaths.search, c => {
+    const parsed = SearchQueryInputSchema.safeParse({
+      q: c.req.query('q') ?? '',
+      scope: c.req.query('scope') || undefined,
+      channel_id: c.req.query('channel_id') || undefined,
+      user_id: c.req.query('user_id') || undefined,
+      agent_id: c.req.query('agent_id') || undefined,
+      from: c.req.query('from') || undefined,
+      to: c.req.query('to') || undefined,
+      limit: c.req.query('limit') || undefined,
+    });
+    if (!parsed.success) {
+      return c.json({ error: 'invalid query', issues: parsed.error.issues }, 400);
+    }
+    return c.json({
+      query: parsed.data,
+      results: search.search(parsed.data),
+    });
+  });
 
   app.get('/api/messages/:id', c => {
     const m = messages.getById(c.req.param('id'));
@@ -816,11 +963,11 @@ export function createApiRouter(ctx: BackendContext): Hono {
 
   // ── Thread → child session (human-triggered) ─────────────────────
   // Per docs/app-layout.md §7. Creates a child session anchored to the
-  // anchor message; default members = only the original sender agent
-  // (or the channel's first agent if the original message was from
-  // the user). Two seed messages are written: a thread_anchor with
-  // metadata pointing back to the original message, then an onboarding
-  // system message imperatively asking the agent to greet briefly.
+  // anchor message; default members = every member currently present in
+  // the parent session. Two seed messages are written: a thread_anchor
+  // with metadata pointing back to the original message, then an
+  // onboarding system message imperatively asking the relevant agent to
+  // greet briefly.
   //
   // The child session process is NOT spawned eagerly — it starts on
   // the first user message in the new pane (same pattern as agent-
@@ -849,29 +996,38 @@ export function createApiRouter(ctx: BackendContext): Hono {
     // is a fresh conversation start.
     const existing = sessions.findOpenThreadChild(parent.id, original.id);
     if (existing) {
-      return c.json({ child_session_id: existing.id, reused: true });
+      return c.json({
+        child_session_id: existing.id,
+        session: existing,
+        reused: true,
+      });
     }
 
     const channel = channels.get(parent.channel_id);
     if (!channel) return c.json({ error: 'channel not found' }, 404);
 
-    // Pick the agent to seed the child session.
-    //   - agent message → that agent
-    //   - user message  → first channel member as a sensible default
-    //                     (DM channels have exactly one; regular channels
-    //                     usually have a single primary member as well —
-    //                     additional members can be added later via
-    //                     Manage Members on the channel)
-    let seedAgentId: string | null = null;
-    if (original.from_kind === 'agent' && original.from_agent_id) {
-      seedAgentId = original.from_agent_id;
-    } else {
-      const channelAgents = members.listForChannel(channel.id);
-      seedAgentId = channelAgents[0]?.id ?? null;
+    // Thread membership follows the current parent session roster, not
+    // just the author of the clicked message. This keeps multi-agent
+    // discussions intact when the user peels off a Thread.
+    const parentAgentIds = sessions.listAgents(parent.id).map(sa => sa.agent_id);
+    const fallbackChannelAgentIds =
+      parentAgentIds.length === 0
+        ? members.listForChannel(channel.id).map(a => a.id)
+        : [];
+    const memberAgentIds = Array.from(
+      new Set([
+        original.from_kind === 'agent' ? original.from_agent_id : null,
+        ...parentAgentIds,
+        ...fallbackChannelAgentIds,
+      ].filter((id): id is string => !!id)),
+    );
+    if (memberAgentIds.length === 0) {
+      return c.json({ error: 'session has no members to start a thread with' }, 400);
     }
-    if (!seedAgentId) {
-      return c.json({ error: 'channel has no members to start a thread with' }, 400);
-    }
+
+    const seedAgentId = original.from_kind === 'agent' && original.from_agent_id
+      ? original.from_agent_id
+      : memberAgentIds[0]!;
     const seedAgent = agents.get(seedAgentId);
     if (!seedAgent) {
       return c.json({ error: 'seed agent not found' }, 404);
@@ -881,7 +1037,7 @@ export function createApiRouter(ctx: BackendContext): Hono {
     let quotedSenderName: string | null = null;
     let quotedSenderLabel: string;
     if (original.from_kind === 'user') {
-      quotedSenderLabel = 'you';
+      quotedSenderLabel = userLabel(original.from_user_id);
     } else if (original.from_agent_id) {
       const a = agents.get(original.from_agent_id);
       quotedSenderName = a?.name ?? null;
@@ -919,7 +1075,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
       throw err;
     }
 
-    sessions.addAgent(child.id, seedAgentId);
+    for (const memberAgentId of memberAgentIds) {
+      sessions.addAgent(child.id, memberAgentId);
+    }
 
     // Seed 1: thread anchor — snapshot the original message's content
     // + sender + timestamp directly into metadata so the UI can render
@@ -942,6 +1100,7 @@ export function createApiRouter(ctx: BackendContext): Hono {
         quoted_content: original.content,
         quoted_from_kind: original.from_kind,
         quoted_from_agent_id: original.from_agent_id,
+        quoted_from_user_id: original.from_user_id,
         quoted_agent_name: quotedSenderName,
         quoted_created_at: original.created_at,
       },
@@ -958,7 +1117,7 @@ export function createApiRouter(ctx: BackendContext): Hono {
       `The user wants to dig deeper into the quoted message above.`,
       ``,
       `Read the quote, send one short greeting acknowledging the topic, then wait for the user.`,
-      `If you need parent context, ask the parent session via \`target='parent'\`. Close this thread with a summary when it reaches a conclusion.`,
+      `If you need parent context, ask the parent session via \`target='parent'\`. When you think the thread has reached a conclusion, post a visible summary in this thread and ask the user whether to close it. Only call \`close_session\` after the user explicitly confirms.`,
     ].join('\n');
     messages.insert({
       sessionId: child.id,
@@ -974,7 +1133,7 @@ export function createApiRouter(ctx: BackendContext): Hono {
       payload: { parent_session_id: parent.id, child_session_id: child.id },
     });
 
-    return c.json({ child_session_id: child.id, reused: false }, 201);
+    return c.json({ child_session_id: child.id, session: child, reused: false }, 201);
   });
 
   // Wake / sleep an agent in a session. Spawning is explicit per
@@ -1073,13 +1232,17 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
-    const { id, channel_id, all } = parsed.data;
+    const { id, channel_id, session_id, all } = parsed.data;
     if (id) {
       const ok = notifications.markRead(id);
       return c.json({ marked: ok ? 1 : 0 });
     }
     if (channel_id) {
       const n = notifications.markChannelRead(channel_id);
+      return c.json({ marked: n });
+    }
+    if (session_id) {
+      const n = notifications.markSessionRead(session_id);
       return c.json({ marked: n });
     }
     if (all) {
@@ -1146,6 +1309,15 @@ function parseLimit(raw: string | undefined, fallback: number): number {
   const n = Number.parseInt(raw, 10);
   if (!Number.isFinite(n) || n <= 0) return fallback;
   return Math.min(n, 500);
+}
+
+function parseBeforeSeq(raw: string | undefined): number | null | 'invalid' {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return 'invalid';
+  const n = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(n) || n <= 0) return 'invalid';
+  return n;
 }
 
 export function createInternalRouter(ctx: BackendContext): Hono {
@@ -1235,6 +1407,7 @@ export function createInternalRouter(ctx: BackendContext): Hono {
       kind: 'message',
       payload: { message: msg },
     });
+    ctx.sessionManager.resolveRun(sid, aid, 'replied');
 
     // If the target is a thread (child), bump the parent's stream so
     // the parent view's reply-count badge can refresh without polling.
@@ -1321,6 +1494,78 @@ export function createInternalRouter(ctx: BackendContext): Hono {
     return c.json({ child_session_id: child.id });
   });
 
+  // ── create_session ─────────────────────────────────────────────
+  app.post('/internal/sessions/:sid/agents/:aid/create-session', async c => {
+    const sid = c.req.param('sid');
+    const aid = c.req.param('aid');
+    const current = sessions.get(sid);
+    if (!current) return c.json({ error: 'session not found' }, 404);
+    if (!agents.get(aid)) return c.json({ error: 'agent not found' }, 404);
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = AgentCreateSessionInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+
+    const channelMembers = members.listForChannel(current.channel_id);
+    let session;
+    try {
+      session = sessions.insert({
+        channelId: current.channel_id,
+        title: parsed.data.title,
+        parentSessionId: null,
+        spawnedByAgentId: aid,
+      });
+    } catch (err) {
+      if (isRepoError(err)) {
+        return c.json(
+          { error: err.message, code: err.code },
+          repoErrorStatusMap[err.code] ?? 400,
+        );
+      }
+      throw err;
+    }
+
+    for (const member of channelMembers) {
+      sessions.addAgent(session.id, member.id);
+    }
+
+    messages.insert({
+      sessionId: session.id,
+      fromKind: 'system',
+      content:
+        `Session created from '${current.title}'. Reason: ${parsed.data.context_summary}`,
+      metadata: {
+        subtype: 'session_context',
+        source_session_id: current.id,
+        created_by_agent_id: aid,
+      },
+    });
+    const prompt = messages.insert({
+      sessionId: session.id,
+      fromKind: 'agent',
+      fromAgentId: aid,
+      content: parsed.data.initial_prompt,
+    });
+
+    await distributeMessage(ctx, sessions, session.id, aid, prompt.id);
+    void Promise.all(
+      sessions
+        .listAgents(session.id)
+        .filter(sa => sa.agent_id !== aid && sa.status !== 'active' && sa.status !== 'starting')
+        .map(sa =>
+          ctx.sessionManager.start(session.id, sa.agent_id).catch(err => {
+            ctx.logger.warn(
+              { sessionId: session.id, agentId: sa.agent_id, err },
+              'internal: auto-start on agent-created session failed',
+            );
+          }),
+        ),
+    );
+
+    return c.json({ session_id: session.id });
+  });
+
   // ── close_session ───────────────────────────────────────────────
   app.post('/internal/sessions/:sid/agents/:aid/close', async c => {
     const sid = c.req.param('sid');
@@ -1344,6 +1589,7 @@ export function createInternalRouter(ctx: BackendContext): Hono {
     }
 
     const closed = sessions.close(session.id, parsed.data.summary);
+    ctx.sessionManager.resolveSessionRuns(session.id, 'session_closed');
     if (!parsed.data.posted_to_parent && session.parent_session_id) {
       const parent = sessions.get(session.parent_session_id);
       if (parent && parent.closed_at === null) {

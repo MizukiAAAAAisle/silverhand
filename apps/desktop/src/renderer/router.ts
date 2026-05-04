@@ -10,6 +10,7 @@ import type { AppSection } from '@/components/layout/NavRail';
 export const routes = {
   home: () => '/',
   chat: () => '/chat',
+  chatSearch: () => '/chat/search',
   chatSaved: () => '/chat/saved',
   chatChannel: (channelId: string) => `/chat/c/${channelId}`,
   chatSession: (channelId: string, sessionId: string) =>
@@ -27,6 +28,7 @@ export const routePatterns = {
   chatThread: '/chat/c/:channelId/s/:sessionId/t/:childSessionId',
   chatSession: '/chat/c/:channelId/s/:sessionId',
   chatChannel: '/chat/c/:channelId',
+  chatSearch: '/chat/search',
   chatSaved: '/chat/saved',
   chat: '/chat',
   membersAgent: '/members/:agentId',
@@ -36,7 +38,7 @@ export const routePatterns = {
   settings: '/settings',
 } as const;
 
-export type ChatView = 'channel' | 'saved';
+export type ChatView = 'channel' | 'saved' | 'search';
 
 /**
  * Resolved view of the current URL. Components read this instead of
@@ -77,7 +79,11 @@ export function useRouteState(): RouteState {
   else if (pathname.startsWith('/tasks')) section = 'tasks';
   else if (pathname.startsWith('/settings')) section = 'settings';
 
-  const chatView: ChatView = pathname.startsWith('/chat/saved') ? 'saved' : 'channel';
+  const chatView: ChatView = pathname.startsWith('/chat/saved')
+    ? 'saved'
+    : pathname.startsWith('/chat/search')
+      ? 'search'
+      : 'channel';
 
   return {
     section,
@@ -97,6 +103,7 @@ export function useRouteState(): RouteState {
 export function useNav(): {
   go: (to: string, opts?: { replace?: boolean }) => void;
   toChat: () => void;
+  toChatSearch: () => void;
   toChatSaved: () => void;
   toChannel: (channelId: string) => void;
   toSession: (channelId: string, sessionId: string) => void;
@@ -115,6 +122,7 @@ export function useNav(): {
   return {
     go,
     toChat: useCallback(() => go(routes.chat()), [go]),
+    toChatSearch: useCallback(() => go(routes.chatSearch()), [go]),
     toChatSaved: useCallback(() => go(routes.chatSaved()), [go]),
     toChannel: useCallback((id: string) => go(routes.chatChannel(id)), [go]),
     toSession: useCallback(

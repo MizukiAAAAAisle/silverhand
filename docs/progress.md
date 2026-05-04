@@ -4,6 +4,36 @@
 
 ---
 
+## 2026-05-04 — codex thread/resume "thread not found" 调查
+
+第三份 incident 文档：`docs/incident-2026-05-04-codex-thread-resume.md`。
+
+dev↔release 切换后 Cindy 首次唤醒会出现 "@Cindy 启动失败：thread not found: \<uuid\>"。结论：task #15 的 fatal-error 识别 + 清 cli_session_id + 下一次走 thread/start 这条恢复链路在 release 是按预期工作的（已验证 Cindy 当前已 active 运行新 thread）；dev 看起来"安静"是因为 dev 跑的 backend 还是 task #15 之前的旧 build，错误事件被 swallow，cli_session_id 不被清。底层"为什么 codex 会丢 thread"是上游行为——磁盘 rollout 和 state\_5.sqlite 的 row 都在，但 codex `thread/resume` 仍然拒绝；最可疑的是客户端身份指纹（VSCODE\_\* env 之类）在 dev / release 之间不一致，codex 内部校验把 release 客户端拒了。文档里给了 4 条按 ROI 排序的缓解措施（最便宜的是改友好那条系统消息文案）和按字段直查的调试小抄。
+
+---
+
+## 2026-05-04 — agent silent-turn 现象总结（独立于生命周期 bug）
+
+补充第二份 incident 文档：`docs/incident-2026-05-04-agent-silent-turn.md`。
+
+跟同日的生命周期 incident 是**两类不同问题**——这一个里 agent 进程一切正常、消息也送达了、turn 也正常 close，但模型自己选择不调 `send_message` 就 stop。共三个观察案例（"全部关闭"漏 task status、PIN sidebar 44 次 tool_call 0 次 send_message、`@Alice 还在工作吗` 直接 turn_end），统一的 fingerprint 是 `agent: turn_end + pendingDeliveries=0 + 0 个 send_message tool_call`。文档里给了跟 lifecycle bug 的判别 checklist、按 ROI 排序的 4 条 follow-up 缓解措施、以及在修复前能让 agent 大概率回话的发问 workaround。task #14 已经修了 UI 不再显示假 thinking，但不能让 agent 回话——真修要走 driver/prompt 层。
+
+---
+
+## 2026-05-04 — agent 生命周期修复（before-quit / resume init / reconcile 探活）
+
+修了三个互相放大的 bug，导致一次 release ↔ dev 切换后 agent 静默挂死、UI 一直显示 connecting。完整事故分析、根因、修复方案、调试小抄见 `docs/incident-2026-05-04-agent-shutdown.md`。
+
+简短摘要：
+
+- **(b) `--resume` 后 status 不会翻 active，watchdog 也不会救** —— `session_init` dedup 用 `cliSessionId` 比较，但 resume 时这个值是预加载的，dedup 误判跳过首发 init 的副作用。watchdog 同样被旁路。修法：加显式 `initObserved: boolean` flag。
+- **(a) `before-quit` 不 await + `stop(hard)` 不等 child exit → 子进程孤儿化** —— Electron 不 await async handler，`.unref()` 的 SIGTERM/SIGKILL timer 在主进程退出时被丢弃。修法：`event.preventDefault()` + 真正 await `child.exit`。
+- **(c) `reconcileOnBoot` 只改 status 不杀孤儿** —— 配合 (a) 留下的孤儿造成 codex thread 抢占。修法：reconcile 时 `process.kill(pid, 0)` 探活 + SIGKILL。
+
+`pnpm typecheck` 全 4 个 workspace 通过；`pnpm test` 196/196（新增 5 条回归覆盖三个修复点）。release dmg 已重新打包待手动验收。
+
+---
+
 ## 2026-04-30 — M1 骨架完成
 
 ### 落地

@@ -1,0 +1,92 @@
+/* ================================================================
+   Theme: Warm Script (warm stone-paper, near-black accent)
+   性格：旧书页灰底（去黄保温）+ 暖近黑 accent + 品牌黄 nav rail。
+   ================================================================ */
+
+[data-theme='warm-script'] {
+  /* ── Backgrounds ── */
+  --bg-base: #F8F6F2;
+  --bg-primary: #F3EFE8;
+  --bg-elevated: #EAE6DE;
+  --bg-surface: #E1DCD3;
+  --bg-hover: #EFECE6;
+  --bg-active: #D5D0C6;
+  --bg-selected: #FFFFFF;
+  --bg-floating: #FFFFFF;
+  --bg-chat: #FFFAEF;
+
+  /* ── Nav rail / sidebar (品牌黄 + oklab 梯度) ── */
+  --bg-nav-rail: #FFD440;
+  --bg-channels-sidebar: color-mix(in oklab, var(--bg-nav-rail) 55%, var(--bg-base));
+  --bg-sessions-sidebar: color-mix(in oklab, var(--bg-nav-rail) 22%, var(--bg-base));
+
+  /* ── Islands ── */
+  --bg-island: #E6E1D5;
+  --bg-island-deep: #DAD4C5;
+
+  /* ── Text ── */
+  --text-primary: #1F1B14;
+  --text-secondary: #56503F;
+  --text-muted: #8A8270;
+  --text-inverse: #F8F6F2;
+  --text-island: #2A2520;
+  --text-inline-code: #7A5C30;  /* 暖琥珀色 — accent 近黑时不再用 color-mix */
+
+  /* ── Accent (暖近黑 — 高对比·低噪音) ──
+     #2D2316 在 #FFFAEF 上对比度 ≈ 15:1（AAA）；
+     亮黄侧栏 + 深黑 accent = 强焦点感，无颜色噪音。 */
+  --accent: #2D2316;
+  --accent-soft: #2D231615;
+  --accent-hover: #1A1510;
+  --accent-glow: #2D231622;
+
+  /* ── Semantic ── */
+  --success: #5A7A3D;
+  --success-soft: #5A7A3D15;
+  --warning: #B07820;
+  --warning-soft: #B0782015;
+  --error: #9A4434;
+  --error-soft: #9A443415;
+
+  /* ── Borders ── */
+  --border: #00000010;
+  --border-subtle: #00000006;
+  --border-island: #6B5A4026;
+  --border-focus: #2D231640;
+
+  /* ── On-color foregrounds ── */
+  --text-on-accent: #FFFFFF;
+  --text-on-success: #FFFFFF;
+  --text-on-warning: #FFFFFF;
+  --text-on-error: #FFFFFF;
+  --text-on-selected: var(--text-primary);
+
+  /* ── Overlay ── */
+  --overlay-backdrop: rgba(31, 27, 20, 0.32);
+
+  /* ── Shadows ── */
+  --shadow-base: 58, 44, 28;
+  --shadow-popover:
+    0 4px 12px -4px rgba(var(--shadow-base), 0.12);
+  --shadow-modal:
+    0 6px 20px -8px rgba(var(--shadow-base), 0.18);
+  --shadow-button: none;
+
+  /* ── Radii ── */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+
+  /* ── Fonts ── */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+  --font-serif: 'New York', 'Charter', 'Iowan Old Style', 'Source Serif Pro', Georgia, serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', 'Sarasa Mono SC', 'Source Han Mono SC', 'Noto Sans Mono CJK SC', 'PingFang SC', monospace;
+
+  /* ── Motion ── */
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --duration: 200ms;
+
+  /* ── Chat default ── */
+  --chat-font-size: 15px;
+}

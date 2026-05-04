@@ -1,4 +1,9 @@
-export const THEME_IDS = ['warm-coral', 'paper-ink'] as const;
+export const THEME_IDS = [
+  'warm-coral',
+  'paper-ink',
+  'porcelain-verdigris',
+  'warm-script',
+] as const;
 export type ThemeId = (typeof THEME_IDS)[number];
 
 export interface AppearanceSettings {

@@ -142,10 +142,18 @@ function joinedToSummary(row: TaskJoinedRow): TaskSummaryDto {
             name: row.creator_agent_name ?? row.from_agent_id,
           }
         : row.from_kind === 'user'
-          ? { type: 'user', id: row.from_user_id, name: 'you' }
+          ? {
+              type: 'user',
+              id: row.from_user_id,
+              name: userDisplayName(row.from_user_id),
+            }
           : { type: 'system', id: null, name: 'system' },
     created_at: row.created_at,
   };
+}
+
+function userDisplayName(userId: string | null | undefined): string {
+  return userId ?? 'user';
 }
 
 function firstLine(s: string): string {

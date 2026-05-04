@@ -3,6 +3,10 @@ import { Bookmark, CornerUpLeft, User } from 'lucide-react';
 import type { AgentDto, ChannelDto, MessageDto } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
+import {
+  formatUserDisplayName,
+  isCurrentUserId,
+} from '@/lib/current-user';
 import { Markdown } from './Markdown';
 import { useMessageLayoutMode } from './useMessageLayoutMode';
 import { useRelativeTime } from './useRelativeTime';
@@ -63,14 +67,17 @@ export function MessageItem({
   highlighted = false,
 }: MessageItemProps): JSX.Element {
   const isUser = message.from_kind === 'user';
+  const isCurrentUser = isUser && isCurrentUserId(message.from_user_id);
   const mode = useMessageLayoutMode();
-  const alignRight = mode === 'user-right' && isUser;
+  const alignRight = mode === 'user-right' && isCurrentUser;
   const agent = !isUser && message.from_agent_id
     ? agentsById.get(message.from_agent_id)
     : undefined;
-  const name = isUser ? 'you' : agent?.name ?? 'agent';
+  const name = isUser
+    ? formatUserDisplayName(message.from_user_id)
+    : agent?.name ?? 'agent';
   const displayLabel = isUser
-    ? 'you'
+    ? name
     : `@${agent?.display_name?.trim() || name}`;
   const { relative, absolute } = useRelativeTime(message.created_at);
   const [hover, setHover] = useState(false);

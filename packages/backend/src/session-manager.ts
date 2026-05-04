@@ -1,9 +1,18 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { createInterface, type Interface as ReadlineInterface } from 'node:readline';
 import { readFile } from 'node:fs/promises';
+import { createWriteStream, type WriteStream } from 'node:fs';
 import { join } from 'node:path';
-import { AUTH_TOKEN_ENV } from '@silverhand/shared';
-import type { AgentDto, FromKind, McpServerConfig } from '@silverhand/shared';
+import { AUTH_TOKEN_ENV, extractMentions } from '@silverhand/shared';
+import type {
+  AgentDto,
+  AgentRunState,
+  AgentRunStatus,
+  AgentRunTerminalReason,
+  FromKind,
+  McpServerConfig,
+} from '@silverhand/shared';
 
 import type { BackendContext } from './context.js';
 import {
@@ -37,6 +46,8 @@ const COMPACTION_STALE_MS = 5 * 60 * 1000;
  * the original spawn-time stdin race that motivated this watchdog.
  */
 const INIT_WATCHDOG_MS = 30 * 1000;
+const AGENT_ACTIVITY_HEARTBEAT_MS = 8 * 1000;
+const ACTIVITY_SNIPPET_MAX_CHARS = 200;
 
 /**
  * One running agent CLI = one AgentHandle. Keyed by `${sessionId}:${agentId}`
@@ -51,8 +62,19 @@ interface AgentHandle {
   rl: ReadlineInterface;
   spawnPrep: SpawnPrepHandle;
   /** Most recent CLI session id from `system.init`. Persisted to
-   *  session_agents on receipt; lets `--resume` recover after restart. */
+   *  session_agents on receipt; lets `--resume` recover after restart.
+   *  May be non-null at spawn time when resuming — see `initObserved`
+   *  for "has the live process actually emitted init yet". */
   cliSessionId: string | null;
+  /** Set true the first time this process emits `session_init`. Used
+   *  to dedupe claude's per-turn re-inits AND to gate the init watchdog.
+   *  Critical to track separately from `cliSessionId`: when resuming,
+   *  cliSessionId is preloaded from DB and matches whatever the
+   *  resumed CLI emits, so equality-on-cliSessionId would (a) skip the
+   *  status→active flip on first init and (b) make the watchdog think
+   *  init had already landed. Both bugs let a wedged resumed agent sit
+   *  in `starting` forever with the UI showing "connecting". */
+  initObserved: boolean;
   /** Gated-steering state — Phase 3E uses this to decide flush timing. */
   busy: { outstandingToolUses: number; compacting: boolean };
   /** Pending deliveries for gated mode. Phase 3E flushes; Phase 2C
@@ -71,6 +93,13 @@ interface AgentHandle {
    *  flips to `crashed` (not `idle`) and oneShot agents don't auto
    *  respawn into the same hang. */
   initTimedOut: boolean;
+  /** Fatal runtime error surfaced before process exit. Used for Codex
+   *  resume failures such as "thread not found" so we can clear stale
+   *  resume state and terminally clear the current activity run. */
+  fatalError: { reason: string; error: string } | null;
+  /** Guards persistent crash notifications when a fatal error is
+   *  surfaced immediately and the exit handler runs shortly after. */
+  crashNotificationRecorded: boolean;
   /** Detached when stop() runs to suppress crash-status updates on
    *  intentional shutdown. */
   intentionallyStopped: boolean;
@@ -109,6 +138,19 @@ export class SessionManager {
   /** Visible-for-testing knob — production code never touches this.
    *  Tests dial it down to avoid waiting INIT_WATCHDOG_MS in real time. */
   initWatchdogMs = INIT_WATCHDOG_MS;
+  /** Visible-for-testing knobs for stop(hard) escalation delays.
+   *  Dialed down in tests so the SIGTERM/SIGKILL fallback path can be
+   *  exercised without waiting 5s/10s in real time. */
+  stopSigtermMs = 5_000;
+  stopSigkillMs = 10_000;
+  /** Visible-for-testing knob for `agent_activity` heartbeat cadence. */
+  activityHeartbeatMs = AGENT_ACTIVITY_HEARTBEAT_MS;
+  private readonly runStates = new Map<string, AgentRunState>();
+  private activityHeartbeat: NodeJS.Timeout | null = null;
+  /** Dedicated JSONL log for agent_activity events — written in addition
+   *  to SSE so release builds leave a paper trail for debugging. Null
+   *  when `ctx.logDir` is not configured (e.g. in tests). */
+  private readonly activityLogStream: WriteStream | null;
 
   constructor(private readonly ctx: BackendContext) {
     this.agents = new AgentRepo(ctx.db);
@@ -118,10 +160,46 @@ export class SessionManager {
     this.messages = new MessageRepo(ctx.db);
     this.notifications = new NotificationRepo(ctx.db);
     this.settings = new SettingsRepo(ctx.db);
+
+    if (ctx.logDir) {
+      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      const logPath = join(ctx.logDir, `agent-activity-${ts}.log`);
+      this.activityLogStream = createWriteStream(logPath, { flags: 'a' });
+      this.activityLogStream.on('error', err => {
+        // Write failures must never crash the backend or block SSE.
+        ctx.logger.warn({ err, logPath }, 'agent-activity log write error');
+      });
+    } else {
+      this.activityLogStream = null;
+    }
   }
 
   isRunning(sessionId: string, agentId: string): boolean {
     return this.handles.has(handleKey(sessionId, agentId));
+  }
+
+  getAgentRunStates(sessionId: string): AgentRunState[] {
+    return Array.from(this.runStates.values()).filter(
+      state => state.sessionId === sessionId,
+    );
+  }
+
+  resolveRun(
+    sessionId: string,
+    agentId: string,
+    reason: AgentRunTerminalReason,
+    runId?: string,
+  ): void {
+    this.resolveRunByKey(handleKey(sessionId, agentId), reason, runId);
+  }
+
+  resolveSessionRuns(
+    sessionId: string,
+    reason: AgentRunTerminalReason = 'session_closed',
+  ): void {
+    for (const state of this.getAgentRunStates(sessionId)) {
+      this.resolveRun(state.sessionId, state.agentId, reason, state.runId);
+    }
   }
 
   /**
@@ -174,11 +252,16 @@ export class SessionManager {
   private recordCrashNotification(
     sessionId: string,
     agentId: string,
-    opts: { initTimedOut: boolean; exitCode: number | null },
+    opts: {
+      initTimedOut: boolean;
+      exitCode: number | null;
+      reason?: string;
+      error?: string;
+    },
   ): void {
     const agent = this.agents.get(agentId);
     const session = this.sessions.get(sessionId);
-    const reason = opts.initTimedOut ? 'init_timeout' : 'runtime_crash';
+    const reason = opts.initTimedOut ? 'init_timeout' : opts.reason ?? 'runtime_crash';
     try {
       this.notifications.insert({
         kind: 'agent_start_failed',
@@ -189,6 +272,7 @@ export class SessionManager {
           agent_name: agent?.name ?? agentId,
           reason,
           exit_code: opts.exitCode,
+          ...(opts.error ? { error: opts.error } : {}),
         },
       });
     } catch (e) {
@@ -198,10 +282,19 @@ export class SessionManager {
 
   /**
    * Reconcile DB state with reality on backend boot. Any session_agent
-   * row marked `starting` / `active` is stale (its child died with the
-   * previous backend process) — flip to `idle`. We keep `cli_session_id`
-   * so a subsequent `start()` call passes `--resume` and the agent
-   * picks up its prior CLI conversation.
+   * row marked `starting` / `active` is stale (its child belonged to
+   * the previous backend process). For each row:
+   *   - if `pid` is non-null AND that pid is still alive, SIGKILL it.
+   *     Until 2026-05 the Electron `before-quit` handler returned its
+   *     async work as a Promise that Electron didn't await, so the
+   *     parent could exit while children were still being asked to
+   *     stop — leaving orphan claude/codex/chat-bridge processes
+   *     alive. Without this kill step a fresh `start()` would spawn
+   *     a duplicate (codex would then fail with `thread not found`
+   *     because the orphan still owns the thread server-side).
+   *   - flip status to `idle`. Keep `cli_session_id` so a subsequent
+   *     `start()` passes `--resume` and the agent picks up its prior
+   *     CLI conversation.
    *
    * No auto-spawn here per §3.1: agents wake only when a user opens the
    * session or sends to them. The UI / route layer triggers `start()`.
@@ -209,14 +302,42 @@ export class SessionManager {
   reconcileOnBoot(): void {
     const stale = this.sessions.listLiveStatusAgents();
     if (stale.length === 0) return;
+    let killed = 0;
     for (const sa of stale) {
+      if (sa.pid !== null && sa.pid > 0) {
+        // PID recycle is a theoretical risk (some unrelated process
+        // could have reused this pid since the prior boot), but in
+        // practice silverhand restarts happen within seconds-to-minutes
+        // and macOS doesn't wrap pids that fast. We accept the risk
+        // for now — a stale-but-alive agent is the higher-frequency,
+        // higher-impact failure mode.
+        try {
+          process.kill(sa.pid, 0); // probe — throws ESRCH if dead
+          process.kill(sa.pid, 'SIGKILL');
+          killed += 1;
+          this.ctx.logger.warn(
+            { sessionId: sa.session_id, agentId: sa.agent_id, pid: sa.pid },
+            'reconcile: SIGKILL\'d orphaned agent process from prior boot',
+          );
+        } catch (err) {
+          // ESRCH = already dead. Anything else (EPERM etc.) we log
+          // and move on — better than letting the boot fail entirely.
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code !== 'ESRCH') {
+            this.ctx.logger.warn(
+              { sessionId: sa.session_id, agentId: sa.agent_id, pid: sa.pid, err },
+              'reconcile: failed to kill orphan pid',
+            );
+          }
+        }
+      }
       this.sessions.updateAgentRuntime(sa.session_id, sa.agent_id, {
         status: 'idle',
         pid: null,
       });
     }
     this.ctx.logger.info(
-      { count: stale.length },
+      { count: stale.length, killed },
       'reconciled stale session_agents from prior boot',
     );
   }
@@ -308,10 +429,18 @@ export class SessionManager {
     if (driver.oneShot) {
       const items = this.inboxes.listPending(sessionId, agentId);
       if (items.length > 0) {
-        initialPrompt = formatInboxBatch(items, id => this.agents.get(id)?.name);
+        initialPrompt = formatInboxBatch(
+          items,
+          id => this.agents.get(id)?.name,
+          agent.name,
+          sendMessageToolName(driver),
+        );
         preDrainedInboxIds = items.map(i => i.inboxId);
       }
     }
+    const hasKickoffInbox =
+      preDrainedInboxIds.length > 0 ||
+      (!driver.oneShot && this.inboxes.listPending(sessionId, agentId).length > 0);
 
     const spawnCtx: DriverSpawnContext = {
       agentId,
@@ -349,11 +478,14 @@ export class SessionManager {
       rl,
       spawnPrep,
       cliSessionId: sessionAgent.cli_session_id,
+      initObserved: false,
       busy: { outstandingToolUses: 0, compacting: false },
       pendingDeliveries: [],
       compactionWatchdog: null,
       initWatchdog: null,
       initTimedOut: false,
+      fatalError: null,
+      crashNotificationRecorded: false,
       intentionallyStopped: false,
       drainChain: Promise.resolve(),
     };
@@ -368,12 +500,16 @@ export class SessionManager {
       status: 'starting',
       pid: child.pid ?? null,
     });
+    if (hasKickoffInbox) {
+      this.startRun(handle, 'starting');
+    }
 
     // Arm before stdin is primed so a child that hangs on the very first
     // read still hits the timeout. Cleared on first session_init / exit.
     this.startInitWatchdog(handle);
 
     rl.on('line', line => {
+      this.touchRunActivity(handle);
       const events = driver.parseLine(line);
       for (const ev of events) this.handleParsedEvent(handle, ev);
     });
@@ -393,14 +529,17 @@ export class SessionManager {
         { sessionId, agentId, code, signal },
         'agent process exited',
       );
-      // initTimedOut wins over intentionallyStopped — we explicitly
-      // killed the child *because* it failed to start, which is a
-      // crash from the user's POV.
-      const status: 'idle' | 'crashed' = handle.initTimedOut
-        ? 'crashed'
-        : handle.intentionallyStopped || code === 0
-          ? 'idle'
-          : 'crashed';
+      // initTimedOut/fatalError win over intentionallyStopped — in
+      // both cases we explicitly killed the child because the runtime
+      // became unusable, which is a crash from the user's POV.
+      const fatalReason = handle.fatalError?.reason;
+      const fatalError = handle.fatalError?.error;
+      const status: 'idle' | 'crashed' =
+        handle.initTimedOut || handle.fatalError
+          ? 'crashed'
+          : handle.intentionallyStopped || code === 0
+            ? 'idle'
+            : 'crashed';
       this.sessions.updateAgentRuntime(sessionId, agentId, {
         status,
         pid: null,
@@ -411,16 +550,34 @@ export class SessionManager {
         exit_code: code,
         signal,
         ...(handle.initTimedOut ? { reason: 'init_timeout' } : {}),
+        ...(fatalReason ? { reason: fatalReason, error: fatalError } : {}),
       });
       // Write a persistent notification for unexpected crashes so the
       // global toast hook can alert the user even if they aren't watching
       // this session's SSE stream.
-      if (status === 'crashed' && !handle.intentionallyStopped) {
+      if (
+        status === 'crashed' &&
+        !handle.intentionallyStopped &&
+        !handle.crashNotificationRecorded
+      ) {
+        handle.crashNotificationRecorded = true;
         this.recordCrashNotification(sessionId, agentId, {
           initTimedOut: handle.initTimedOut,
           exitCode: code,
+          reason: fatalReason,
+          error: fatalError,
         });
       }
+      this.resolveRunByKey(
+        key,
+        handle.initTimedOut
+          ? 'timeout'
+          : status === 'crashed'
+            ? 'crashed'
+            : handle.intentionallyStopped
+              ? 'stopped'
+              : 'replied',
+      );
       this.handles.delete(key);
       this.clearCompactionWatchdog(handle);
       this.clearInitWatchdog(handle);
@@ -436,6 +593,7 @@ export class SessionManager {
         driver.oneShot &&
         !handle.intentionallyStopped &&
         !handle.initTimedOut &&
+        !handle.fatalError &&
         this.inboxes.listPending(sessionId, agentId).length > 0
       ) {
         this.start(sessionId, agentId, opts).catch(err =>
@@ -459,6 +617,7 @@ export class SessionManager {
       // via argv. Mark it delivered so we don't re-deliver on respawn.
       if (preDrainedInboxIds.length > 0) {
         this.inboxes.markDelivered(preDrainedInboxIds);
+        this.markRunThinking(handle);
       }
       return;
     }
@@ -487,6 +646,12 @@ export class SessionManager {
    *   - 'hard': fire driver.encodeInterruptControl() to terminate the
    *             current turn cleanly. If the process is still alive
    *             after 5s, SIGTERM. After another 5s, SIGKILL.
+   *
+   * Hard mode awaits the child's actual `exit` event before returning.
+   * Callers (notably the Electron `before-quit` shutdown path) rely on
+   * this to know the spawn graph is gone — returning before exit was
+   * the bug that left orphan claude/codex/chat-bridge processes alive
+   * across app restarts.
    */
   async stop(
     sessionId: string,
@@ -503,7 +668,7 @@ export class SessionManager {
         softDirective ??
         '[user requested a course correction — pause your current direction and ' +
           'wait for the next instruction]';
-      await this.writeUserMessage(h, directive).catch(err =>
+      await this.writeUserMessage(h, directive, false).catch(err =>
         this.ctx.logger.warn(
           { sessionId, agentId, err },
           'soft interrupt write failed',
@@ -514,30 +679,65 @@ export class SessionManager {
 
     // hard: control_request first, then process signals as fallback.
     h.intentionallyStopped = true;
+    this.resolveRunByKey(key, 'stopped');
     // No point waiting for an init that the user clearly doesn't want.
     this.clearInitWatchdog(h);
-    const interruptLine = h.driver.encodeInterruptControl();
-    if (interruptLine) {
-      try {
-        await this.writeLine(h, interruptLine);
-      } catch (err) {
-        this.ctx.logger.warn(
-          { sessionId, agentId, err },
-          'interrupt control write failed; falling back to signals',
-        );
+
+    // Arm the exit promise and the signal timers BEFORE writing the
+    // control_request. writeLine depends on stdin write callbacks / drain
+    // events — if the child or its stdio is wedged those may never settle,
+    // which would block the timers from firing. By registering timers first
+    // we guarantee the SIGTERM/SIGKILL fallback always runs regardless of
+    // the protocol layer's health.
+    const exited = new Promise<void>(resolve => {
+      if (h.child.exitCode !== null || h.child.signalCode !== null) {
+        resolve();
+        return;
       }
-    }
-    setTimeout(() => {
+      h.child.once('exit', () => resolve());
+    });
+
+    // Escalation timers are NOT `.unref()`'d: we await `exited` below
+    // and the timers must keep the event loop alive long enough to fire.
+    // They self-clear in the finally block (or on child exit the kill
+    // calls are no-ops because the handle is already gone from the map).
+    const sigtermTimer = setTimeout(() => {
       if (!this.handles.has(key)) return;
       this.ctx.logger.info(
         { sessionId, agentId },
         'hard stop: control_request didn\'t exit, sending SIGTERM',
       );
       h.child.kill('SIGTERM');
-      setTimeout(() => {
-        if (this.handles.has(key)) h.child.kill('SIGKILL');
-      }, 5_000).unref();
-    }, 5_000).unref();
+    }, this.stopSigtermMs);
+    const sigkillTimer = setTimeout(() => {
+      if (this.handles.has(key)) {
+        this.ctx.logger.warn(
+          { sessionId, agentId },
+          'hard stop: SIGTERM did not exit, sending SIGKILL',
+        );
+        h.child.kill('SIGKILL');
+      }
+    }, this.stopSigkillMs);
+
+    // Best-effort: send the driver-level interrupt so the CLI can exit
+    // cleanly. Fire-and-forget — we never await this; if stdin is wedged
+    // the timers above take over.
+    const interruptLine = h.driver.encodeInterruptControl();
+    if (interruptLine) {
+      void this.writeLine(h, interruptLine).catch(err =>
+        this.ctx.logger.warn(
+          { sessionId, agentId, err },
+          'interrupt control write failed; signals will handle shutdown',
+        ),
+      );
+    }
+
+    try {
+      await exited;
+    } finally {
+      clearTimeout(sigtermTimer);
+      clearTimeout(sigkillTimer);
+    }
   }
 
   /** Stop every running handle. Used on backend shutdown. Hard mode. */
@@ -550,6 +750,21 @@ export class SessionManager {
     );
   }
 
+  /**
+   * Flush and close the dedicated activity log stream. Must be called
+   * after `stopAll()` so terminal events (idle/failed) are written first.
+   * Safe to call when `logDir` is not configured — resolves immediately.
+   */
+  async closeActivityLog(): Promise<void> {
+    if (!this.activityLogStream) return;
+    return new Promise<void>((resolve, reject) => {
+      this.activityLogStream!.end((err?: Error | null) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+  }
+
   // ── internals ──────────────────────────────────────────────────────
 
   private handleParsedEvent(handle: AgentHandle, ev: ParsedEvent): void {
@@ -558,12 +773,14 @@ export class SessionManager {
       case 'session_init':
         // claude --input-format stream-json emits {type:'system',
         // subtype:'init', session_id} at the start of EVERY user-message
-        // turn cycle, not just once at process startup — and it reuses
-        // the same session_id across turns within one process. So a
-        // repeat with the same id means "next turn started", not "agent
-        // re-initialized": skip the side effects (status flip, publish,
-        // log, drainInbox) which were intended for first-init only.
-        if (handle.cliSessionId === ev.sessionId) break;
+        // turn cycle, not just once at process startup. Dedup by a
+        // per-process flag rather than by cliSessionId equality —
+        // resuming an existing thread preloads cliSessionId from DB,
+        // and the resumed CLI emits the same id, so equality-dedup
+        // would silently skip the first init's side effects and leave
+        // the row in `starting` forever.
+        if (handle.initObserved) break;
+        handle.initObserved = true;
         handle.cliSessionId = ev.sessionId;
         // First init landed → cancel the watchdog. Subsequent inits
         // short-circuit above, so this only fires once.
@@ -592,6 +809,7 @@ export class SessionManager {
         break;
       case 'tool_call':
         handle.busy.outstandingToolUses += 1;
+        this.recordToolCall(handle, ev.name);
         this.ctx.logger.info(
           {
             sessionId,
@@ -608,6 +826,9 @@ export class SessionManager {
           0,
           handle.busy.outstandingToolUses - 1,
         );
+        if (handle.busy.outstandingToolUses === 0) {
+          this.updateRun(handle, { status: 'thinking', detail: undefined });
+        }
         break;
       case 'turn_end':
         handle.busy.outstandingToolUses = 0;
@@ -615,6 +836,9 @@ export class SessionManager {
           { sessionId, agentId, pendingDeliveries: handle.pendingDeliveries.length },
           'agent: turn_end',
         );
+        if (handle.pendingDeliveries.length === 0 && isSafeBoundary(handle)) {
+          this.resolveRunByKey(handleKey(sessionId, agentId), 'turn_ended');
+        }
         void this.flushPending(handle);
         break;
       case 'compaction_started':
@@ -633,9 +857,20 @@ export class SessionManager {
           { sessionId, agentId, event: ev },
           'agent: parsed error event from CLI',
         );
+        if (ev.fatal && ev.code === 'thread_not_found') {
+          this.handleFatalRuntimeError(handle, ev.code, ev.message);
+        }
         break;
       case 'thinking':
+        this.updateRun(handle, {
+          activitySnippet: trimActivitySnippet(ev.text),
+        });
+        break;
       case 'text':
+        this.updateRun(handle, {
+          activitySnippet: trimActivitySnippet(ev.text),
+        });
+        break;
       case 'unknown':
         break;
     }
@@ -643,8 +878,195 @@ export class SessionManager {
     this.publish(sessionId, 'agent_event', { agent_id: agentId, event: ev });
   }
 
+  private handleFatalRuntimeError(
+    handle: AgentHandle,
+    reason: string,
+    error: string,
+  ): void {
+    if (handle.fatalError) return;
+    const { sessionId, agentId } = handle;
+    const key = handleKey(sessionId, agentId);
+
+    handle.fatalError = { reason, error };
+    this.clearInitWatchdog(handle);
+    this.sessions.updateAgentRuntime(sessionId, agentId, {
+      status: 'crashed',
+      pid: null,
+      cliSessionId: null,
+    });
+    this.publish(sessionId, 'agent_status', {
+      agent_id: agentId,
+      status: 'crashed',
+      reason,
+      error,
+    });
+    this.resolveRunByKey(key, 'crashed');
+
+    if (!handle.crashNotificationRecorded) {
+      handle.crashNotificationRecorded = true;
+      this.recordCrashNotification(sessionId, agentId, {
+        initTimedOut: false,
+        exitCode: null,
+        reason,
+        error,
+      });
+    }
+
+    handle.child.kill('SIGTERM');
+    setTimeout(() => {
+      if (this.handles.has(key)) handle.child.kill('SIGKILL');
+    }, 5_000).unref();
+  }
+
   private publish(sessionId: string, kind: string, payload: unknown): void {
     this.ctx.events.publish(sessionId, { kind, payload });
+  }
+
+  private startRun(
+    handle: AgentHandle,
+    status: Extract<AgentRunStatus, 'starting' | 'thinking'>,
+    detail?: string,
+  ): AgentRunState {
+    const now = Date.now();
+    const state: AgentRunState = {
+      runId: randomUUID(),
+      agentId: handle.agentId,
+      sessionId: handle.sessionId,
+      status,
+      startedAt: now,
+      updatedAt: now,
+      lastActivityAt: now,
+      ...(detail ? { detail } : {}),
+    };
+    this.runStates.set(handleKey(handle.sessionId, handle.agentId), state);
+    this.publishAgentActivity(state);
+    this.ensureActivityHeartbeat();
+    return state;
+  }
+
+  private markRunThinking(handle: AgentHandle): void {
+    const key = handleKey(handle.sessionId, handle.agentId);
+    const current = this.runStates.get(key);
+    if (current?.status === 'starting') {
+      this.updateRun(handle, { status: 'thinking' });
+      return;
+    }
+    this.startRun(handle, 'thinking');
+  }
+
+  private touchRunActivity(handle: AgentHandle): void {
+    this.updateRun(handle, { lastActivityAt: Date.now() });
+  }
+
+  private updateRun(
+    handle: AgentHandle,
+    patch: Partial<
+      Pick<
+        AgentRunState,
+        | 'status'
+        | 'detail'
+        | 'lastActivityAt'
+        | 'activitySnippet'
+        | 'toolCallCounts'
+      >
+    >,
+  ): AgentRunState | null {
+    const key = handleKey(handle.sessionId, handle.agentId);
+    const current = this.runStates.get(key);
+    if (!current) return null;
+    const next: AgentRunState = {
+      ...current,
+      ...patch,
+      updatedAt: Date.now(),
+    };
+    this.runStates.set(key, next);
+    this.publishAgentActivity(next);
+    return next;
+  }
+
+  private recordToolCall(handle: AgentHandle, toolName: string): void {
+    const key = handleKey(handle.sessionId, handle.agentId);
+    const current = this.runStates.get(key);
+    const toolCallCounts =
+      toolName === sendMessageToolName(handle.driver)
+        ? current?.toolCallCounts
+        : incrementToolCount(current?.toolCallCounts, toolName);
+    this.updateRun(handle, {
+      status: 'tool_running',
+      detail: toolName,
+      ...(toolCallCounts ? { toolCallCounts } : {}),
+    });
+  }
+
+  private resolveRunByKey(
+    key: string,
+    reason: AgentRunTerminalReason,
+    runId?: string,
+  ): void {
+    const current = this.runStates.get(key);
+    if (!current) return;
+    if (runId && current.runId !== runId) return;
+    const now = Date.now();
+    const terminal: AgentRunState = {
+      ...current,
+      status: reason === 'replied' || reason === 'turn_ended' ? 'idle' : 'failed',
+      updatedAt: now,
+      lastActivityAt: now,
+      terminalReason: reason,
+    };
+    this.publishAgentActivity(terminal);
+    this.runStates.delete(key);
+    this.stopActivityHeartbeatIfIdle();
+  }
+
+  private publishAgentActivity(state: AgentRunState): void {
+    this.publish(state.sessionId, 'agent_activity', state);
+    if (this.activityLogStream) {
+      // Write a compact JSONL entry with the fields most useful for debugging.
+      // Fire-and-forget — stream errors are handled by the 'error' listener
+      // on the stream; we never let a log failure propagate to the caller.
+      const entry = JSON.stringify({
+        ts: new Date().toISOString(),
+        sessionId: state.sessionId,
+        agentId: state.agentId,
+        runId: state.runId,
+        status: state.status,
+        lastActivityAt: state.lastActivityAt,
+        ...(state.toolCallCounts && Object.keys(state.toolCallCounts).length
+          ? { toolCallCounts: state.toolCallCounts }
+          : {}),
+        ...(state.activitySnippet ? { activitySnippet: state.activitySnippet } : {}),
+        ...(state.terminalReason ? { terminalReason: state.terminalReason } : {}),
+      });
+      this.activityLogStream.write(entry + '\n');
+    }
+  }
+
+  private ensureActivityHeartbeat(): void {
+    if (this.activityHeartbeat) return;
+    this.activityHeartbeat = setInterval(() => {
+      const now = Date.now();
+      for (const [key, state] of this.runStates) {
+        // A run state without a live handle should be terminal already.
+        // Resolve it defensively so reconnect snapshots cannot revive a
+        // spinner after the process disappeared through an unexpected path.
+        if (!this.handles.has(key)) {
+          this.resolveRunByKey(key, 'crashed');
+          continue;
+        }
+        const next: AgentRunState = { ...state, updatedAt: now };
+        this.runStates.set(key, next);
+        this.publishAgentActivity(next);
+      }
+      this.stopActivityHeartbeatIfIdle();
+    }, this.activityHeartbeatMs);
+    this.activityHeartbeat.unref?.();
+  }
+
+  private stopActivityHeartbeatIfIdle(): void {
+    if (this.runStates.size > 0 || !this.activityHeartbeat) return;
+    clearInterval(this.activityHeartbeat);
+    this.activityHeartbeat = null;
   }
 
   private async buildPromptContext(
@@ -681,6 +1103,7 @@ export class SessionManager {
       otherMembers: others,
       isChildSession: session.parent_session_id !== null,
       parentSessionTitle,
+      isAgentSpawnedChild: session.spawned_by_agent_id !== null,
     };
 
     return {
@@ -736,7 +1159,12 @@ export class SessionManager {
       );
       return;
     }
-    const text = formatLiveMessage(msg, id => this.agents.get(id)?.name);
+    const text = formatLiveMessage(
+      msg,
+      id => this.agents.get(id)?.name,
+      this.agents.get(agentId)?.name,
+      sendMessageToolName(handle.driver),
+    );
 
     // Drivers that don't accept stdin notifications: enqueue. The
     // oneShot exit handler (or the next manual start) will respawn and
@@ -777,6 +1205,7 @@ export class SessionManager {
         'deliver: writing to agent stdin',
       );
       await this.writeLine(handle, line);
+      this.startRun(handle, 'thinking');
     } else {
       handle.pendingDeliveries.push(text);
       this.ctx.logger.info(
@@ -802,7 +1231,7 @@ export class SessionManager {
     const combined =
       batch.length === 1
         ? batch[0]!
-        : combineGatedBatch(batch);
+        : combineGatedBatch(batch, sendMessageToolName(handle.driver));
     this.ctx.logger.info(
       {
         sessionId: handle.sessionId,
@@ -815,7 +1244,11 @@ export class SessionManager {
     await this.writeUserMessage(handle, combined);
   }
 
-  private writeUserMessage(handle: AgentHandle, content: string): Promise<void> {
+  private async writeUserMessage(
+    handle: AgentHandle,
+    content: string,
+    trackRun = true,
+  ): Promise<void> {
     const line = handle.driver.encodeStdinMessage(content, handle.cliSessionId);
     if (line === null) {
       // Driver doesn't accept stdin notifications. Caller should have
@@ -824,9 +1257,10 @@ export class SessionManager {
         { sessionId: handle.sessionId, agentId: handle.agentId },
         'writeUserMessage: driver returned null encoding; dropped',
       );
-      return Promise.resolve();
+      return;
     }
-    return this.writeLine(handle, line);
+    await this.writeLine(handle, line);
+    if (trackRun) this.startRun(handle, 'thinking');
   }
 
   private startCompactionWatchdog(handle: AgentHandle): void {
@@ -861,7 +1295,7 @@ export class SessionManager {
       // already cleared the handle out of the map. Nothing to do then.
       if (!this.handles.has(handleKey(handle.sessionId, handle.agentId))) return;
       // Race: init landed in the same tick the timer fired. Honor it.
-      if (handle.cliSessionId !== null) return;
+      if (handle.initObserved) return;
       this.ctx.logger.warn(
         {
           sessionId: handle.sessionId,
@@ -955,7 +1389,12 @@ export class SessionManager {
   private async doDrainInbox(handle: AgentHandle): Promise<void> {
     const items = this.inboxes.listPending(handle.sessionId, handle.agentId);
     if (items.length === 0) return;
-    const text = formatInboxBatch(items, id => this.agents.get(id)?.name);
+    const text = formatInboxBatch(
+      items,
+      id => this.agents.get(id)?.name,
+      this.agents.get(handle.agentId)?.name,
+      sendMessageToolName(handle.driver),
+    );
     const line = handle.driver.encodeStdinMessage(text, handle.cliSessionId);
     if (line === null) {
       // Driver isn't ready to accept stdin yet — typical for codex
@@ -983,6 +1422,7 @@ export class SessionManager {
     );
     await this.writeLine(handle, line);
     this.inboxes.markDelivered(items.map(i => i.inboxId));
+    this.markRunThinking(handle);
   }
 
   /** Best-effort write of one JSON line to the agent's stdin. */
@@ -1000,6 +1440,10 @@ function handleKey(sessionId: string, agentId: string): string {
   return `${sessionId}:${agentId}`;
 }
 
+function sendMessageToolName(driver: Driver): string {
+  return `${driver.mcpToolPrefix}send_message`;
+}
+
 /**
  * Format an inbox batch as one human-readable user message. Mirrors §3.1
  * "A 档" payload shape — gives the agent enough metadata to address each
@@ -1008,6 +1452,8 @@ function handleKey(sessionId: string, agentId: string): string {
 function formatInboxBatch(
   items: PendingInboxItem[],
   agentNameById: (id: string) => string | undefined,
+  recipientAgentName: string | undefined,
+  sendMessageTool: string,
 ): string {
   const header =
     items.length === 1
@@ -1019,7 +1465,11 @@ function formatInboxBatch(
       return `[from ${sender}]\n${message.content}`;
     })
     .join('\n\n---\n\n');
-  return `${header}\n\n${body}\n\nRespond as appropriate.`;
+  return `${header}\n\n${body}\n\n${formatDeliveryInstruction(
+    items.map(i => i.message),
+    recipientAgentName,
+    sendMessageTool,
+  )}`;
 }
 
 function describeSender(
@@ -1045,9 +1495,15 @@ function describeSender(
 function formatLiveMessage(
   message: MessageLite,
   agentNameById: (id: string) => string | undefined,
+  recipientAgentName: string | undefined,
+  sendMessageTool: string,
 ): string {
   const sender = describeSender(message, agentNameById);
-  return `New message from ${sender}:\n${message.content}\n\nRespond as appropriate.`;
+  return `New message from ${sender}:\n${message.content}\n\n${formatDeliveryInstruction(
+    [message],
+    recipientAgentName,
+    sendMessageTool,
+  )}`;
 }
 
 /** Minimal projection both InboxRepo's joined rows and MessageRepo
@@ -1060,11 +1516,86 @@ interface MessageLite {
 
 /** When multiple gated deliveries pile up between safe boundaries, we
  *  flush as one combined user message so claude sees them in order. */
-function combineGatedBatch(messages: string[]): string {
+function combineGatedBatch(messages: string[], sendMessageTool: string): string {
   return (
     `You have ${messages.length} new messages that arrived while you were busy ` +
-    `(oldest first):\n\n${messages.join('\n\n---\n\n')}\n\nRespond as appropriate.`
+    `(oldest first):\n\n${messages.join('\n\n---\n\n')}\n\n` +
+    `Review all messages above. If any user message or direct mention expects ` +
+    `a visible response, call \`${sendMessageTool}\` before stopping. ` +
+    `Complete ALL your work before stopping.`
   );
+}
+
+function formatDeliveryInstruction(
+  messages: MessageLite[],
+  recipientAgentName: string | undefined,
+  sendMessageTool: string,
+): string {
+  const nonSystemMentionsRecipient =
+    recipientAgentName !== undefined &&
+    messages.some(
+      m =>
+        m.from_kind !== 'system' &&
+        extractMentions(m.content).includes(recipientAgentName),
+    );
+  const userMessages = messages.filter(m => m.from_kind === 'user');
+  const hasUserMessage = userMessages.length > 0;
+  const hasUserMessageForRecipient = userMessages.some(m => {
+    const mentions = extractMentions(m.content);
+    return (
+      mentions.length === 0 ||
+      (recipientAgentName !== undefined && mentions.includes(recipientAgentName))
+    );
+  });
+  const hasOnlySystemMessages = messages.every(m => m.from_kind === 'system');
+  const hasAgentMessage = messages.some(m => m.from_kind === 'agent');
+
+  if (hasUserMessage && hasUserMessageForRecipient) {
+    const mentionHint = nonSystemMentionsRecipient
+      ? '[user addressed you by name; a visible reply is expected.]\n'
+      : '';
+    return (
+      mentionHint +
+      `Respond as appropriate — call \`${sendMessageTool}\` with a brief reply, ` +
+      `progress update, blocker question, or final summary before stopping. ` +
+      `Complete ALL your work before stopping.`
+    );
+  }
+
+  if (hasUserMessage) {
+    return (
+      `The user message appears addressed to another agent. Do not call ` +
+      `\`${sendMessageTool}\` unless you own or were assigned the relevant ` +
+      `task, or must flag a concrete blocker. Complete ALL work you choose ` +
+      `to take before stopping.`
+    );
+  }
+
+  if (nonSystemMentionsRecipient) {
+    return (
+      `[sender addressed you by name; a visible reply is expected.]\n` +
+      `Respond as appropriate — call \`${sendMessageTool}\` before stopping. ` +
+      `Complete ALL your work before stopping.`
+    );
+  }
+
+  if (hasOnlySystemMessages) {
+    return (
+      `Respond as appropriate. System messages do not require a reply ` +
+      `unless they explicitly ask for one.`
+    );
+  }
+
+  if (hasAgentMessage) {
+    return (
+      `This is an agent message not addressed to you. No reply is needed unless ` +
+      `you own or were assigned the relevant task, or must flag a concrete ` +
+      `blocker. Do not acknowledge, summarize, or restate another agent's work ` +
+      `just to keep the conversation moving.`
+    );
+  }
+
+  return 'Respond as appropriate.';
 }
 
 function isSafeBoundary(h: AgentHandle): boolean {
@@ -1080,4 +1611,22 @@ function parseRuntimeList(raw: string | null): Set<string> {
       .map(s => s.trim())
       .filter(s => s.length > 0),
   );
+}
+
+function incrementToolCount(
+  counts: Record<string, number> | undefined,
+  toolName: string,
+): Record<string, number> {
+  return {
+    ...(counts ?? {}),
+    [toolName]: (counts?.[toolName] ?? 0) + 1,
+  };
+}
+
+function trimActivitySnippet(text: string): string | undefined {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return undefined;
+  return normalized.length <= ACTIVITY_SNIPPET_MAX_CHARS
+    ? normalized
+    : normalized.slice(0, ACTIVITY_SNIPPET_MAX_CHARS);
 }

@@ -256,4 +256,46 @@ export const migrations: Migration[] = [
         WHERE archived_at IS NULL;
     `,
   },
+  {
+    version: 9,
+    name: 'session_pin',
+    // Per-session pin: pinned sessions float to the top of the sidebar.
+    // NULL means unpinned; non-NULL is the timestamp the pin was set
+    // (used for stable ordering when multiple sessions are pinned).
+    up: `
+      ALTER TABLE sessions ADD COLUMN pinned_at INTEGER;
+    `,
+  },
+  {
+    version: 10,
+    name: 'session_reads',
+    // Per-viewer message read cursors. This is intentionally separate
+    // from notifications: notifications are reminder rows; session_reads
+    // is the IM-style unread model for every session/DM.
+    up: `
+      CREATE TABLE session_reads (
+        user_id        TEXT NOT NULL,
+        session_id     TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        last_read_seq  INTEGER NOT NULL DEFAULT 0,
+        read_at        INTEGER NOT NULL,
+        PRIMARY KEY (user_id, session_id)
+      );
+
+      CREATE INDEX idx_session_reads_session
+        ON session_reads(session_id);
+
+      -- Existing v1 history predates the unread cursor feature. Treat those
+      -- rows as already read for the single local viewer so upgrade does not
+      -- light up every old channel. Runtime code remains parameterized by
+      -- viewerUserId and does not depend on this literal.
+      INSERT INTO session_reads (user_id, session_id, last_read_seq, read_at)
+      SELECT 'local',
+             s.id,
+             COALESCE(MAX(m.seq), 0),
+             CAST(strftime('%s', 'now') AS INTEGER) * 1000
+        FROM sessions s
+        LEFT JOIN messages m ON m.session_id = s.id
+       GROUP BY s.id;
+    `,
+  },
 ];

@@ -294,6 +294,8 @@ Codex CLI 有没有等价的 control_request interrupt？slock 源码里对 code
 
 **v1 兜底**（如果实际跑出失控）：每个 session 设 turn 上限——例如连续 N 个 agent reply 没用户消息就强制 pause，等用户介入。**不预先实现**，观察后再说。
 
+> 已知问题与修复方向见 [platform-prompt-known-issues.md §2](./platform-prompt-known-issues.md#2-agent-互相频繁无意义-ping-ping-loop)。
+
 ### 3.4 chat-bridge 启动参数
 
 每个 (session, agent) 对应一个 chat-bridge 子进程：
@@ -791,6 +793,8 @@ DM 平台 prompt 在结构上一致，但 §"Workspace & Memory" / §"Channel co
 
 #### 为什么平台 prompt 要这么长？
 
+> 已知措辞问题（"平台"口头禅）及修复方向见 [platform-prompt-known-issues.md §1](./platform-prompt-known-issues.md#1-agent-频繁使用平台一词)。
+
 可能感觉这一坨"啰嗦"。但 slock 的实际 system prompt 也是这个量级（~3-4K tokens），且每一段都有具体落地的副作用——少了哪段，agent 就会在那个维度出 bug：
 
 - 没有 Critical rules → agent 把 reply 打到 stdout 而不是 send_reply
@@ -941,5 +945,22 @@ DM 平台 prompt 在结构上一致，但 §"Workspace & Memory" / §"Channel co
 
 ---
 
-文档版本：2026-04-30 v1（§10 增补 2026-05-02）
-下次更新：开始 task #10 / #11 实现前如有偏离，回这里改。
+## 11. Deferred design — Attachments（图片 / 文件）
+
+> 2026-05-04 起记录。完整 spec 见 [`attachments-design.md`](./attachments-design.md)；这里只钉方向。
+
+- **资源模型**：新增 `attachments` 表，`channel_id` 鉴权 + `session_id` 溯源，per-channel hash 去重；`messages` 表加一列 `attachments TEXT(JSON)` 存 `[{id, filename}]` 引用，不冗余元数据。
+- **API**：`POST /api/sessions/:sid/attachments`（multipart 上传，反查 channel）+ `GET /api/attachments/:id`（流字节，**不返路径**，保 storage 抽象）。
+- **local/remote 同构**：DB 只存 `storage`(枚举) + `storage_key`(后端逻辑 key)，不存绝对路径或完整 URL。local 模式 blob 落 `~/.silverhand/attachments/<id>`；切到 s3 时新行写 `storage='s3'`，旧 local 行继续工作，message / chat-bridge / renderer 零改动。
+- **chat-bridge MCP**：照搬 slock 的 `upload_file` / `view_file` / `send_message(attachment_ids)` 三件套。**绝不接受 base64**——上传与发消息解耦。
+- **stream-json 不污染**：附件以文本提示 `[id:xxx — use view_file]` 注入 inbox drain，driver 的 `parseLine` / `encodeStdinMessage` 不动。agent 自己决定是否调 `view_file` 拉图（节省 token）。
+- **local 零拷贝**：chat-bridge `view_file` 在 local 模式下经 `GET /internal/attachments/:id/locate` 拿 backend 存储路径直接读盘；remote 模式自动降级到 HTTP+缓存。agent 端代码两种模式相同。
+
+### 暂不做的原因
+
+- 现有 v1 场景（单机单 user 多 agent）纯文本管道够用，多人贴图协作的需求要等远端后端落地后才真正显现。先把 schema 钉死避免未来翻表，但实现可以排到 channel settings / tasks 之后。
+
+---
+
+文档版本：2026-04-30 v1（§10 增补 2026-05-02；§11 增补 2026-05-04）
+下次更新：开始 task #10 / #11 / 附件 实现前如有偏离，回这里改。

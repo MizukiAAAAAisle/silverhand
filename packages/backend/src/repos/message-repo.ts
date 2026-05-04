@@ -11,6 +11,11 @@ function newId(): string {
   return randomBytes(12).toString('base64url');
 }
 
+export interface MessageWindow {
+  messages: MessageDto[];
+  has_more_before: boolean;
+}
+
 export function messageRowToDto(
   row: MessageRow,
   opts?: { assigneeName?: string | null },
@@ -51,12 +56,48 @@ export class MessageRepo {
   constructor(private readonly db: Db) {}
 
   listForSession(sessionId: string, limit = 200): MessageDto[] {
+    return this.listWindowForSession(sessionId, { limit }).messages;
+  }
+
+  listWindowForSession(
+    sessionId: string,
+    opts: { limit?: number; beforeSeq?: number | null } = {},
+  ): MessageWindow {
+    const limit = opts.limit ?? 200;
+    const beforeSeq = opts.beforeSeq ?? null;
     const rows = this.db
-      .prepare<[string, number], MessageRow>(
-        `SELECT * FROM messages WHERE session_id = ? ORDER BY seq ASC LIMIT ?`,
+      .prepare<[string, number | null, number | null, number], MessageRow>(
+        `SELECT *
+           FROM (
+             SELECT *
+               FROM messages
+              WHERE session_id = ?
+                AND (? IS NULL OR seq < ?)
+              ORDER BY seq DESC
+              LIMIT ?
+           )
+          ORDER BY seq ASC`,
       )
-      .all(sessionId, limit);
-    return rows.map(r => messageRowToDto(r));
+      .all(sessionId, beforeSeq, beforeSeq, limit);
+
+    const minSeq = rows[0]?.seq ?? null;
+    const hasMoreBefore =
+      minSeq === null
+        ? false
+        : this.db
+            .prepare<[string, number], { found: 1 }>(
+              `SELECT 1 AS found
+                 FROM messages
+                WHERE session_id = ?
+                  AND seq < ?
+                LIMIT 1`,
+            )
+            .get(sessionId, minSeq) !== undefined;
+
+    return {
+      messages: rows.map(r => messageRowToDto(r)),
+      has_more_before: hasMoreBefore,
+    };
   }
 
   getById(id: string): MessageDto | null {

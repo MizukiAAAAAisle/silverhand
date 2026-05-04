@@ -29,6 +29,14 @@ const api = {
     ipcRenderer.on('active-session:update', listener);
     return () => ipcRenderer.off('active-session:update', listener);
   },
+  /** Subscribe to shutdown progress steps emitted by the main process
+   *  just before and during graceful shutdown. Drives the in-app overlay
+   *  so the user sees what's happening instead of a frozen window. */
+  onShutdownProgress: (handler: (step: string) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, step: string) => handler(step);
+    ipcRenderer.on('shutdown:progress', listener);
+    return () => ipcRenderer.off('shutdown:progress', listener);
+  },
   showSystemNotification: (opts: { title: string; body: string }): Promise<void> =>
     ipcRenderer.invoke('notification:show', opts),
 };

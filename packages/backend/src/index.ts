@@ -88,15 +88,37 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
           url,
           port,
           context: ctx,
-          close: () =>
-            new Promise<void>(res => {
-              void ctx.sessionManager.stopAll().finally(() => {
-                server.close(() => {
-                  db.close();
-                  res();
-                });
-              });
-            }),
+          close: async () => {
+            // Phase 1: stop all agents (must finish before activity-log flush
+            // so terminal events are written before the stream closes).
+            await ctx.sessionManager.stopAll().catch(() => undefined);
+
+            // Phase 2: flush activity log AND drain the HTTP server
+            // concurrently — they are independent of each other.
+            //
+            // Order matters for the server drain:
+            //   1. `server.close()` first — stops accepting new connections
+            //      immediately, so a reconnecting EventSource can't sneak in.
+            //   2. `closeAllConnections()` second — terminates all existing
+            //      sockets (including SSE/EventSource long-lived streams)
+            //      so `server.close()` resolves right away instead of waiting
+            //      for the renderer to unmount.
+            // The `in` guard handles the Http2Server union member which lacks
+            // this method (we always use HTTP/1.1, but the type is a union).
+            const serverDrained = new Promise<void>(res => server.close(() => res()));
+            if ('closeAllConnections' in server) server.closeAllConnections();
+            await Promise.allSettled([
+              ctx.sessionManager.closeActivityLog(),
+              serverDrained,
+            ]);
+
+            // Phase 3: close the DB. At this point all connections —
+            // including in-flight HTTP requests — have been forcibly
+            // terminated by closeAllConnections(). Strict in-flight write
+            // safety is sacrificed for a clean quit; if that becomes a
+            // concern, use SSE-specific tracking/abort before this point.
+            db.close();
+          },
         });
       },
     );

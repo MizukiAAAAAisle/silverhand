@@ -278,6 +278,127 @@ describe('POST /internal/.../spawn-child', () => {
   });
 });
 
+describe('POST /internal/.../create-session', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('creates a top-level session in the current channel with all channel members', async () => {
+    t = buildTestApp();
+    const { sessionId, channelId, agentIds } = await setupSession(t, ['alice', 'bob']);
+    const outsider = await (
+      await http(t.app).post('/api/agents', { name: 'mallory', runtime: 'claude' })
+    ).json() as any;
+    t.fake.starts = [];
+    t.fake.delivered = [];
+
+    const r = await http(t.app).post(
+      `/internal/sessions/${sessionId}/agents/${agentIds.alice}/create-session`,
+      {
+        title: 'release signing',
+        context_summary: 'user explicitly asked to split release signing out',
+        initial_prompt: 'Discuss release signing separately.',
+        channel_id: 'other-channel',
+        members: [outsider.agent.id],
+      },
+      { headers: authHeaders(t.authToken) },
+    );
+    expect(r.status).toBe(200);
+    const body = await r.json() as any;
+    expect(typeof body.session_id).toBe('string');
+    expect(Object.keys(body)).toEqual(['session_id']);
+
+    const created = await (
+      await http(t.app).get(`/api/sessions/${body.session_id}`)
+    ).json() as any;
+    expect(created.session.parent_session_id).toBeNull();
+    expect(created.session.channel_id).toBe(channelId);
+    expect(created.session.spawned_by_agent_id).toBe(agentIds.alice);
+
+    const sessionAgents = await (
+      await http(t.app).get(`/api/sessions/${body.session_id}/agents`)
+    ).json() as any;
+    expect(sessionAgents.agents.map((a: any) => a.agent_id).sort()).toEqual([
+      agentIds.alice,
+      agentIds.bob,
+    ].sort());
+    expect(
+      sessionAgents.agents.map((a: any) => a.agent_id),
+    ).not.toContain(outsider.agent.id);
+
+    const msgs = await (
+      await http(t.app).get(`/api/sessions/${body.session_id}/messages`)
+    ).json() as any;
+    expect(msgs.messages).toHaveLength(2);
+    expect(msgs.messages[0].from_kind).toBe('system');
+    expect(msgs.messages[0].content).toContain('release signing out');
+    expect(msgs.messages[1].from_kind).toBe('agent');
+    expect(msgs.messages[1].from_agent_id).toBe(agentIds.alice);
+    expect(msgs.messages[1].content).toBe('Discuss release signing separately.');
+
+    expect(t.fake.delivered).toEqual([
+      {
+        sessionId: body.session_id,
+        agentId: agentIds.bob,
+        messageId: msgs.messages[1].id,
+      },
+    ]);
+    expect(t.fake.starts).toEqual([
+      { sessionId: body.session_id, agentId: agentIds.bob },
+    ]);
+  });
+
+  it('creates a top-level sibling when invoked from a child session', async () => {
+    t = buildTestApp();
+    const { sessionId, channelId, agentIds } = await setupSession(t, ['alice']);
+    const child = await (
+      await http(t.app).post(
+        `/internal/sessions/${sessionId}/agents/${agentIds.alice}/spawn-child`,
+        {
+          title: 'thread',
+          members: [agentIds.alice],
+          context_summary: 'x',
+          initial_prompt: 'go',
+        },
+        { headers: authHeaders(t.authToken) },
+      )
+    ).json() as any;
+
+    const r = await http(t.app).post(
+      `/internal/sessions/${child.child_session_id}/agents/${agentIds.alice}/create-session`,
+      {
+        title: 'sibling topic',
+        context_summary: 'user asked for a separate top-level session',
+        initial_prompt: 'Continue this topic in a new session.',
+      },
+      { headers: authHeaders(t.authToken) },
+    );
+    expect(r.status).toBe(200);
+    const body = await r.json() as any;
+    const created = await (
+      await http(t.app).get(`/api/sessions/${body.session_id}`)
+    ).json() as any;
+    expect(created.session.channel_id).toBe(channelId);
+    expect(created.session.parent_session_id).toBeNull();
+  });
+
+  it('requires an initial_prompt', async () => {
+    t = buildTestApp();
+    const { sessionId, agentIds } = await setupSession(t, ['alice']);
+    const r = await http(t.app).post(
+      `/internal/sessions/${sessionId}/agents/${agentIds.alice}/create-session`,
+      {
+        title: 'missing prompt',
+        context_summary: 'x',
+      },
+      { headers: authHeaders(t.authToken) },
+    );
+    expect(r.status).toBe(400);
+  });
+});
+
 describe('POST /internal/.../close', () => {
   let t: TestApp | null = null;
   afterEach(() => {
@@ -303,12 +424,15 @@ describe('POST /internal/.../close', () => {
     ).json() as any;
 
     t.fake.stops = [];
+    const events: { kind: string; payload: unknown }[] = [];
+    const unsub = t.ctx.events.subscribe(sessionId, e => events.push(e));
 
     const close = await http(t.app).post(
       `/internal/sessions/${child.child_session_id}/agents/${agentIds.bob}/close`,
       { summary: 'done' },
       { headers: authHeaders(t.authToken) },
     );
+    unsub();
     expect(close.status).toBe(200);
 
     // Parent got an auto-summary system message
@@ -328,6 +452,12 @@ describe('POST /internal/.../close', () => {
         s => s.sessionId === child.child_session_id && s.agentId === agentIds.bob,
       ),
     ).toBe(true);
+
+    const threadUpdated = events.find(e => e.kind === 'thread_updated')?.payload as any;
+    expect(threadUpdated).toMatchObject({
+      parent_session_id: sessionId,
+      child_session_id: child.child_session_id,
+    });
   });
 });
 

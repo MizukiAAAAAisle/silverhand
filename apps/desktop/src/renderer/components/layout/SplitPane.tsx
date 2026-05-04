@@ -79,8 +79,8 @@ export function SplitPane({
   }, []);
 
   return (
-    <div ref={containerRef} className="flex h-full flex-1 overflow-hidden">
-      <div style={{ width: `${ratio * 100}%` }} className="flex h-full overflow-hidden">
+    <div ref={containerRef} className="flex h-full min-w-0 flex-1 overflow-hidden">
+      <div style={{ width: `${ratio * 100}%` }} className="flex h-full min-w-0 overflow-hidden">
         {left}
       </div>
       <div
@@ -95,7 +95,7 @@ export function SplitPane({
         {/* Wider invisible hit-target so users don't need pixel-perfect aim. */}
         <div className="absolute -inset-x-1.5 inset-y-0" />
       </div>
-      <div className="flex h-full flex-1 overflow-hidden">{right}</div>
+      <div className="flex h-full min-w-0 flex-1 overflow-hidden">{right}</div>
     </div>
   );
 }

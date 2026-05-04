@@ -33,6 +33,15 @@ export interface ProvisionOpts {
   logger: BackendLogger;
 }
 
+export interface DeleteChannelOptions {
+  /**
+   * Defaults to true for direct callers. HTTP routes pass false so the
+   * user-visible request returns after the durable DB delete while process
+   * shutdown and filesystem cleanup continue in the background.
+   */
+  awaitCleanup?: boolean;
+}
+
 /**
  * Block dangerous workspace_path values before any filesystem write or
  * delete touches them. Callers should validate at channel-creation time
@@ -218,17 +227,42 @@ export async function provisionChannel(
     dm_agent_id: null,
   });
 
-  // 3. Members + L1↔L2 seeding
+  // 3. Members + L1↔L2 seeding.
+  //
+  // DB writes (members.add) are synchronous and must stay sequential so
+  // better-sqlite3's single-connection writes are never interleaved.
+  // Filesystem work (ensureAgentL1Dir + seedAgentL2) is async I/O with
+  // no cross-agent dependencies, so we fan it out with Promise.allSettled —
+  // this cuts wall time from N×T to T when N agents are joining and each
+  // fs round-trip is slow (e.g. iCloud Drive, Spotlight indexing under
+  // load from concurrent agent MEMORY.md writes). We use allSettled (not
+  // Promise.all) so all seed writes finish before the error is surfaced —
+  // avoiding background fs writes racing with a caller retry after 500.
   const memberAgents: AgentDto[] = [];
+  const seedTasks: Array<{ agent: AgentDto; agentL1Dir: string }> = [];
   for (const agentId of input.member_agent_ids) {
     const agent = opts.agents.get(agentId);
     if (!agent) continue; // silently skip unknown agents (defense)
     opts.members.add(channel.id, agent.id);
     const agentL1Dir = join(opts.silverhandDir, 'agents', agent.id);
-    await ensureAgentL1Dir(agentL1Dir);
-    await seedAgentL2({ workspacePath: safeWorkspacePath, agentId: agent.id, agentL1Dir });
     memberAgents.push(agent);
+    seedTasks.push({ agent, agentL1Dir });
   }
+  // Parallel fs seeding — allSettled so every agent's writes finish before
+  // we inspect results. Promise.all would leave background writes racing if
+  // one task rejects early; allSettled waits for all then re-throws the
+  // first error, keeping the failure path clean.
+  const seedResults = await Promise.allSettled(
+    seedTasks.map(({ agent, agentL1Dir }) =>
+      ensureAgentL1Dir(agentL1Dir).then(() =>
+        seedAgentL2({ workspacePath: safeWorkspacePath, agentId: agent.id, agentL1Dir }),
+      ),
+    ),
+  );
+  const firstFailure = seedResults.find(
+    (r): r is PromiseRejectedResult => r.status === 'rejected',
+  );
+  if (firstFailure) throw firstFailure.reason as Error;
 
   // 4. Auto-create Onboarding session.
   const onboarding = opts.sessions.insert({
@@ -501,12 +535,15 @@ export async function leaveChannel(
  * `.silverhand/` skeleton would otherwise leak.
  *
  * Steps:
- *  1. Stop every running (session, agent) for sessions in the channel
- *     (hard mode — the channel is going away).
- *  2. Snapshot members + workspace path before the DB row disappears.
+ *  1. Snapshot session agents, members, and workspace path before the
+ *     DB row disappears.
+ *  2. Start hard-stopping every running (session, agent) for sessions
+ *     in the channel, but do not require the HTTP caller to wait for
+ *     child-process exit.
  *  3. `channels.delete(id)` — DB cascade handles sessions, messages,
  *     inbox, saved, session_agents, channel_members.
- *  4. Filesystem cleanup (skipped entirely for DM channels — see below).
+ *  4. After all stops finish, perform filesystem cleanup in the
+ *     background for route callers (skipped entirely for DM channels).
  *
  * Filesystem-cleanup safety:
  *  - DM channels point `workspace_path` at the agent's L1 dir
@@ -526,6 +563,7 @@ export async function leaveChannel(
 export async function deleteChannel(
   channelId: string,
   opts: ProvisionOpts,
+  deleteOpts: DeleteChannelOptions = {},
 ): Promise<void> {
   const channel = opts.channels.get(channelId);
   if (!channel) return; // already gone — idempotent
@@ -546,75 +584,85 @@ export async function deleteChannel(
       );
     }
   }
-  await Promise.all(stopTasks);
 
   const memberIds = opts.members.listForChannel(channelId).map(a => a.id);
   const rawWorkspacePath = channel.workspace_path;
   const channelKind = channel.kind;
+  let workspacePath: string | null = null;
 
   // DM channels share their `workspace_path` with the agent's L1 dir
   // (see `provisionDmChannel`). Filesystem cleanup would mean writing
   // into the global silverhand state dir — never safe. Just drop the
   // DB row and stop here. The agent itself is responsible for its L1
   // lifecycle (handled by the agent-delete flow).
-  if (channelKind === 'dm') {
-    opts.channels.delete(channelId);
-    return;
-  }
-
-  // Defense-in-depth: even though `provisionChannel` validates at
-  // create time, a legacy/imported row could have an unsafe path.
-  // Refuse cleanup rather than risk wiping outside the workspace.
-  const validation = validateWorkspacePath(
-    rawWorkspacePath,
-    opts.silverhandDir,
-    opts.workspacesRoot,
-  );
-  if (!validation.ok) {
-    opts.logger.error(
-      { channelId, workspacePath: rawWorkspacePath, reason: validation.reason },
-      'deleteChannel: unsafe workspace_path — dropping DB row, skipping filesystem cleanup',
+  if (channelKind !== 'dm') {
+    // Defense-in-depth: even though `provisionChannel` validates at
+    // create time, a legacy/imported row could have an unsafe path.
+    // Refuse cleanup rather than risk wiping outside the workspace.
+    const validation = validateWorkspacePath(
+      rawWorkspacePath,
+      opts.silverhandDir,
+      opts.workspacesRoot,
     );
-    opts.channels.delete(channelId);
-    return;
+    if (validation.ok) {
+      workspacePath = validation.resolved;
+    } else {
+      opts.logger.error(
+        { channelId, workspacePath: rawWorkspacePath, reason: validation.reason },
+        'deleteChannel: unsafe workspace_path — dropping DB row, skipping filesystem cleanup',
+      );
+    }
   }
-  const workspacePath = validation.resolved;
 
   opts.channels.delete(channelId);
 
-  // Serialize per resolved workspace so concurrent deletes for two
-  // channels sharing a workspace don't race the survivor query.
-  await withWorkspaceLock(workspacePath, async () => {
-    // Re-snapshot survivors INSIDE the lock — the only way a sibling
-    // channel can disappear between here and the wipe is if it also
-    // holds this lock, which serializes after us.
-    const survivingByWorkspace = opts.channels
-      .list()
-      .filter(c => resolve(c.workspace_path) === workspacePath);
+  const cleanup = async (): Promise<void> => {
+    await Promise.all(stopTasks);
+    if (workspacePath === null) return;
 
-    const survivingMembers = new Set<string>();
-    for (const surv of survivingByWorkspace) {
-      for (const a of opts.members.listForChannel(surv.id)) {
-        survivingMembers.add(a.id);
+    // Serialize per resolved workspace so concurrent deletes for two
+    // channels sharing a workspace don't race the survivor query.
+    await withWorkspaceLock(workspacePath, async () => {
+      // Re-snapshot survivors INSIDE the lock — the only way a sibling
+      // channel can disappear between here and the wipe is if it also
+      // holds this lock, which serializes after us.
+      const survivingByWorkspace = opts.channels
+        .list()
+        .filter(c => resolve(c.workspace_path) === workspacePath);
+
+      const survivingMembers = new Set<string>();
+      for (const surv of survivingByWorkspace) {
+        for (const a of opts.members.listForChannel(surv.id)) {
+          survivingMembers.add(a.id);
+        }
       }
-    }
 
-    for (const agentId of memberIds) {
-      if (survivingMembers.has(agentId)) continue;
-      const l2Dir = join(workspacePath, '.silverhand', 'agents', agentId);
-      await safeRemoveSilverhandPath(l2Dir, opts.logger, {
-        op: 'deleteChannel.l2',
-        channelId,
-        agentId,
-      });
-    }
+      for (const agentId of memberIds) {
+        if (survivingMembers.has(agentId)) continue;
+        const l2Dir = join(workspacePath, '.silverhand', 'agents', agentId);
+        await safeRemoveSilverhandPath(l2Dir, opts.logger, {
+          op: 'deleteChannel.l2',
+          channelId,
+          agentId,
+        });
+      }
 
-    if (survivingByWorkspace.length === 0) {
-      const dotDir = join(workspacePath, '.silverhand');
-      await safeRemoveSilverhandPath(dotDir, opts.logger, {
-        op: 'deleteChannel.skeleton',
-        channelId,
-      });
-    }
-  });
+      if (survivingByWorkspace.length === 0) {
+        const dotDir = join(workspacePath, '.silverhand');
+        await safeRemoveSilverhandPath(dotDir, opts.logger, {
+          op: 'deleteChannel.skeleton',
+          channelId,
+        });
+      }
+    });
+  };
+
+  if (deleteOpts.awaitCleanup === false) {
+    void cleanup().catch(err =>
+      opts.logger.error({ channelId, err }, 'deleteChannel: background cleanup failed'),
+    );
+    return;
+  }
+
+  await cleanup();
 }

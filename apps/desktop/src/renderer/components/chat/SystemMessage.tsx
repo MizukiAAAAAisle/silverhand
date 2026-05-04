@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { AtSign, ChevronRight } from 'lucide-react';
 import type { MessageDto } from '@silverhand/shared';
 import { useMessage } from '@/features/messages/hooks';
+import { formatUserDisplayName } from '@/lib/current-user';
 import { Markdown } from './Markdown';
 
 interface SystemMessageProps {
@@ -113,18 +114,28 @@ function MentionCcCard({ message }: { message: MessageDto }): JSX.Element {
   const sourceMessageId = typeof meta['source_message_id'] === 'string'
     ? (meta['source_message_id'] as string)
     : null;
+  const sourceFromKind = typeof meta['source_from_kind'] === 'string'
+    ? (meta['source_from_kind'] as string)
+    : null;
+  const sourceFromUserId = typeof meta['source_from_user_id'] === 'string'
+    ? (meta['source_from_user_id'] as string)
+    : null;
   // Legacy rows (pre-`source_message_content`) fall back to fetching
   // the original message by id. Hook stays disabled when the inline
   // copy is present so we don't pay the round-trip on new rows.
   const { data: fetched } = useMessage(inlineOriginal ? null : sourceMessageId);
   const original = inlineOriginal ?? fetched?.message.content ?? null;
+  const sourceUserLabel =
+    sourceFromKind === 'user' || fetched?.message.from_kind === 'user'
+      ? formatUserDisplayName(sourceFromUserId ?? fetched?.message.from_user_id)
+      : 'user';
 
   return (
     <div className="border-l-2 border-accent/60 bg-bg-floating/60 px-3 py-2">
       <div className="mb-1 flex items-center gap-1.5 text-xs text-text-muted">
         <AtSign className="size-3.5" />
         <span>
-          mentioned by <span className="text-text-secondary">user</span>
+          mentioned by <span className="text-text-secondary">{sourceUserLabel}</span>
           {channelName ? (
             <>
               {' in '}
@@ -149,5 +160,4 @@ function MentionCcCard({ message }: { message: MessageDto }): JSX.Element {
     </div>
   );
 }
-
 

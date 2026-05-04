@@ -1,6 +1,7 @@
 import { CornerDownRight } from 'lucide-react';
 import type { MessageDto } from '@silverhand/shared';
 import { useMessage } from '@/features/messages/hooks';
+import { formatUserDisplayName } from '@/lib/current-user';
 import { Markdown } from './Markdown';
 import { useRelativeTime } from './useRelativeTime';
 
@@ -18,6 +19,7 @@ interface QuotedMessagePreviewProps {
 interface QuotedFields {
   content: string;
   fromKind: string | null;
+  userId: string | null;
   agentName: string | null;
   createdAt: number;
 }
@@ -32,6 +34,10 @@ function readSnapshot(metadata: MessageDto['metadata']): QuotedFields | null {
   return {
     content,
     fromKind: typeof meta['quoted_from_kind'] === 'string' ? meta['quoted_from_kind'] : null,
+    userId:
+      typeof meta['quoted_from_user_id'] === 'string'
+        ? (meta['quoted_from_user_id'] as string)
+        : null,
     agentName:
       typeof meta['quoted_agent_name'] === 'string'
         ? (meta['quoted_agent_name'] as string)
@@ -71,6 +77,7 @@ export function QuotedMessagePreview({
     fields = {
       content: fetched.message.content,
       fromKind: fetched.message.from_kind,
+      userId: fetched.message.from_user_id,
       agentName: fetched.agent_name,
       createdAt: fetched.message.created_at,
     };
@@ -91,7 +98,7 @@ export function QuotedMessagePreview({
 
   const isUser = fields.fromKind === 'user';
   const displayName = isUser
-    ? 'you'
+    ? formatUserDisplayName(fields.userId)
     : fields.agentName
       ? `@${fields.agentName}`
       : '@agent';

@@ -261,7 +261,7 @@ function RuntimeSelect({
               <Select.Item
                 key={rt.value}
                 value={rt.value}
-                className="flex cursor-default items-center gap-2 rounded px-2 py-1.5 text-text-primary outline-none data-[highlighted]:bg-bg-hover"
+                className="flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-text-primary outline-none data-[highlighted]:bg-bg-hover"
               >
                 <Select.ItemText>{rt.label}</Select.ItemText>
               </Select.Item>
@@ -299,7 +299,7 @@ function ReasoningSelect({
               <Select.Item
                 key={opt.value}
                 value={opt.value}
-                className="flex cursor-default items-center gap-2 rounded px-2 py-1.5 text-text-primary outline-none data-[highlighted]:bg-bg-hover"
+                className="flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-text-primary outline-none data-[highlighted]:bg-bg-hover"
               >
                 <Select.ItemText>{opt.label}</Select.ItemText>
               </Select.Item>

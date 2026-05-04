@@ -21,6 +21,10 @@
  *   MOCK_CLAUDE_EMIT_TURN_END     — if "1", emit a `result/success` event
  *                                   right after init (simulates an idle
  *                                   turn boundary so flushPending fires)
+ *   MOCK_CLAUDE_IGNORE_INTERRUPT   — if "1", do NOT exit on control_request
+ *                                   (simulates a wedged CLI that ignores the
+ *                                   driver-level interrupt; SIGTERM/SIGKILL
+ *                                   must then be the actual stopper)
  *   MOCK_CLAUDE_STDIN_LOG         — append every received stdin line to
  *                                   this file path (one JSON line each)
  *
@@ -65,6 +69,11 @@ rl.on('line', line => {
     } catch {}
   }
   if (line.includes('"control_request"')) {
+    if (env.MOCK_CLAUDE_IGNORE_INTERRUPT === '1') {
+      // Simulate a wedged CLI that ignores the driver interrupt.
+      // The SessionManager's SIGTERM/SIGKILL timers must handle shutdown.
+      return;
+    }
     // ack-then-exit so SessionManager's hard-stop completes cleanly
     process.exit(exitCode);
   }

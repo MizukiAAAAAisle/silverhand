@@ -20,6 +20,7 @@ declare global {
       setActiveSession(active: ActiveSessionInfo): Promise<void>;
       onActiveSession(handler: (active: ActiveSessionInfo) => void): () => void;
       showSystemNotification(opts: { title: string; body: string }): Promise<void>;
+      onShutdownProgress(handler: (step: string) => void): () => void;
     };
   }
 }

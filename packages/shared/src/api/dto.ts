@@ -218,6 +218,7 @@ export const SessionDtoSchema = z.object({
   spawned_by_agent_id: z.string().nullable(),
   closed_at: z.number().nullable(),
   close_summary: z.string().nullable(),
+  pinned_at: z.number().nullable(),
   created_at: z.number(),
   updated_at: z.number(),
 });
@@ -248,6 +249,52 @@ export const SessionAgentDtoSchema = z.object({
 });
 export type SessionAgentDto = z.infer<typeof SessionAgentDtoSchema>;
 
+// Ephemeral per-agent run state used by `agent_activity` SSE and
+// reconnect snapshots. These rows are not persisted to the messages DB.
+export const AgentRunStatusSchema = z.enum([
+  'starting',
+  'thinking',
+  'tool_running',
+  'idle',
+  'failed',
+]);
+export type AgentRunStatus = z.infer<typeof AgentRunStatusSchema>;
+
+export const AgentRunTerminalReasonSchema = z.enum([
+  'replied',
+  'turn_ended',
+  'stopped',
+  'crashed',
+  'timeout',
+  'session_closed',
+]);
+export type AgentRunTerminalReason = z.infer<
+  typeof AgentRunTerminalReasonSchema
+>;
+
+export const AgentRunStateSchema = z.object({
+  runId: z.string(),
+  agentId: z.string(),
+  sessionId: z.string(),
+  status: AgentRunStatusSchema,
+  startedAt: z.number(),
+  updatedAt: z.number(),
+  lastActivityAt: z.number(),
+  terminalReason: AgentRunTerminalReasonSchema.optional(),
+  activitySnippet: z.string().optional(),
+  toolCallCounts: z.record(z.string(), z.number()).optional(),
+  detail: z.string().optional(),
+});
+export type AgentRunState = z.infer<typeof AgentRunStateSchema>;
+
+export const AgentActivityEventSchema = AgentRunStateSchema;
+export type AgentActivityEvent = AgentRunState;
+
+export const AgentRunStatesDtoSchema = z.object({
+  states: z.array(AgentRunStateSchema),
+});
+export type AgentRunStatesDto = z.infer<typeof AgentRunStatesDtoSchema>;
+
 // ── Message ──────────────────────────────────────────────────────
 export const TaskAssigneeDtoSchema = z.object({
   type: TaskAssigneeTypeSchema,
@@ -276,10 +323,122 @@ export const MessageDtoSchema = z.object({
 });
 export type MessageDto = z.infer<typeof MessageDtoSchema>;
 
+export const SessionMessagesDtoSchema = z.object({
+  messages: z.array(MessageDtoSchema),
+  has_more_before: z.boolean(),
+});
+export type SessionMessagesDto = z.infer<typeof SessionMessagesDtoSchema>;
+
 export const SendMessageInputSchema = z.object({
   content: z.string().min(1),
 });
 export type SendMessageInput = z.infer<typeof SendMessageInputSchema>;
+
+export const MarkSessionReadInputSchema = z.object({
+  /** Optional explicit target cursor. Omitted = backend uses MAX(messages.seq). */
+  seq: z.number().int().nonnegative().optional(),
+});
+export type MarkSessionReadInput = z.infer<typeof MarkSessionReadInputSchema>;
+
+export const MarkSessionReadDtoSchema = z.object({
+  last_read_seq: z.number(),
+});
+export type MarkSessionReadDto = z.infer<typeof MarkSessionReadDtoSchema>;
+
+export const MessageUnreadBySessionDtoSchema = z.object({
+  by_session: z.record(z.string(), z.number()),
+  total: z.number(),
+});
+export type MessageUnreadBySessionDto = z.infer<
+  typeof MessageUnreadBySessionDtoSchema
+>;
+
+export const MessageUnreadSummaryDtoSchema = z.object({
+  by_channel: z.record(z.string(), z.number()),
+});
+export type MessageUnreadSummaryDto = z.infer<
+  typeof MessageUnreadSummaryDtoSchema
+>;
+
+// ── Global chat search ───────────────────────────────────────────
+
+const SearchOptionalStringSchema = z.preprocess(
+  value => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+  z.string().trim().optional(),
+);
+
+const SearchOptionalMillisSchema = z.preprocess(
+  value => (value === '' || value === undefined ? undefined : value),
+  z.coerce.number().int().nonnegative().optional(),
+);
+
+export const SearchScopeSchema = z.enum(['all', 'regular', 'dm']);
+export type SearchScope = z.infer<typeof SearchScopeSchema>;
+
+export const SearchQueryInputSchema = z
+  .object({
+    q: z.string().trim().max(200).optional().default(''),
+    scope: SearchScopeSchema.optional().default('all'),
+    channel_id: SearchOptionalStringSchema,
+    user_id: SearchOptionalStringSchema,
+    agent_id: SearchOptionalStringSchema,
+    from: SearchOptionalMillisSchema,
+    to: SearchOptionalMillisSchema,
+    limit: z.coerce.number().int().positive().max(200).optional().default(80),
+  })
+  .refine(v => !(v.user_id && v.agent_id), {
+    message: 'user_id and agent_id cannot both be set',
+    path: ['user_id'],
+  });
+export type SearchQueryInput = z.infer<typeof SearchQueryInputSchema>;
+
+export const SearchChannelRefSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  kind: ChannelKindSchema,
+  dm_agent_id: z.string().nullable(),
+});
+export type SearchChannelRef = z.infer<typeof SearchChannelRefSchema>;
+
+export const SearchSessionRefSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  parent_session_id: z.string().nullable(),
+  closed_at: z.number().nullable(),
+  created_at: z.number(),
+});
+export type SearchSessionRef = z.infer<typeof SearchSessionRefSchema>;
+
+export const SearchResultDtoSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('channel'),
+    channel: SearchChannelRefSchema.extend({
+      description: z.string().nullable(),
+      archived_at: z.number().nullable(),
+      created_at: z.number(),
+      updated_at: z.number(),
+    }),
+  }),
+  z.object({
+    type: z.literal('session'),
+    channel: SearchChannelRefSchema,
+    session: SearchSessionRefSchema,
+  }),
+  z.object({
+    type: z.literal('message'),
+    channel: SearchChannelRefSchema,
+    session: SearchSessionRefSchema,
+    message: MessageDtoSchema,
+    agent_name: z.string().nullable(),
+  }),
+]);
+export type SearchResultDto = z.infer<typeof SearchResultDtoSchema>;
+
+export const SearchDtoSchema = z.object({
+  query: SearchQueryInputSchema,
+  results: z.array(SearchResultDtoSchema),
+});
+export type SearchDto = z.infer<typeof SearchDtoSchema>;
 
 // ── Tasks ────────────────────────────────────────────────────────
 //
@@ -468,6 +627,15 @@ export const AgentSpawnChildInputSchema = z.object({
 });
 export type AgentSpawnChildInput = z.infer<typeof AgentSpawnChildInputSchema>;
 
+export const AgentCreateSessionInputSchema = z.object({
+  title: z.string().min(1).max(128),
+  context_summary: z.string().min(1),
+  initial_prompt: z.string().min(1),
+});
+export type AgentCreateSessionInput = z.infer<
+  typeof AgentCreateSessionInputSchema
+>;
+
 export const AgentCloseSessionInputSchema = z.object({
   summary: z.string().min(1),
   posted_to_parent: z.boolean().optional(),
@@ -519,11 +687,13 @@ export const MarkNotificationsReadInputSchema = z
     id: z.string().optional(),
     /** Mark all unread notifications scoped to this channel. */
     channel_id: z.string().optional(),
+    /** Mark all unread notifications scoped to a single session. */
+    session_id: z.string().optional(),
     /** Mark every unread notification (for the current user). */
     all: z.boolean().optional(),
   })
-  .refine(v => !!(v.id || v.channel_id || v.all), {
-    message: 'must specify id, channel_id, or all',
+  .refine(v => !!(v.id || v.channel_id || v.session_id || v.all), {
+    message: 'must specify id, channel_id, session_id, or all',
   });
 export type MarkNotificationsReadInput = z.infer<
   typeof MarkNotificationsReadInputSchema

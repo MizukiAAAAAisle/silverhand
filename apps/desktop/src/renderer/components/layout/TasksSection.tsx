@@ -1,8 +1,7 @@
 import { useMemo, useState } from 'react';
-import { CheckSquare } from 'lucide-react';
+import { Check, CheckSquare } from 'lucide-react';
 import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
-import { TaskStatusPill } from '@/components/tasks/TaskStatusPill';
 import { useChannels } from '@/features/channels/hooks';
 import { useTasks, useUpdateTaskStatus } from '@/features/tasks/hooks';
 
@@ -329,38 +328,79 @@ function TaskCard({
   onStatusChange: (next: TaskStatus) => void;
 }): JSX.Element {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="group flex w-full flex-col gap-1.5 rounded-md border border-border-subtle bg-bg-base p-2 text-left transition-colors hover:border-accent hover:bg-bg-hover"
-    >
-      <div className="flex items-start gap-1.5">
-        <span className="shrink-0 font-mono text-[10px] text-text-muted">
-          #{task.task_number}
-        </span>
-        <span className="min-w-0 flex-1 text-xs text-text-primary">
+    <div className="group relative rounded-md border border-border-subtle bg-bg-base transition-colors hover:border-accent hover:bg-bg-hover">
+      {/* Jump button: covers the content area */}
+      <button
+        type="button"
+        onClick={onClick}
+        className="block w-full p-2 pr-7 text-left"
+      >
+        {/* Row 1: #number + status badge inline */}
+        <div className="flex items-center gap-1.5 pb-0.5">
+          <span className="shrink-0 font-mono text-[10px] text-text-muted">
+            #{task.task_number}
+          </span>
+          <TaskStatusBadge status={task.status} />
+        </div>
+        {/* Row 2: title */}
+        <span className="block min-w-0 break-words text-xs text-text-primary">
           {task.title}
         </span>
-      </div>
-      <div
-        className="flex items-center gap-2"
-        onClick={e => e.stopPropagation()}
-      >
-        {task.assignee ? (
-          <span className="text-[10px] text-text-muted">
-            @{task.assignee.name}
+        {/* Row 3: assignee + session */}
+        <div className="mt-1 flex items-center gap-1.5 text-[10px] text-text-muted">
+          {task.assignee ? (
+            <span>@{task.assignee.name}</span>
+          ) : (
+            <span className="italic">unassigned</span>
+          )}
+          <span
+            className="ml-auto max-w-[100px] truncate"
+            title={task.session.title}
+          >
+            {task.session.title}
           </span>
-        ) : (
-          <span className="text-[10px] italic text-text-muted">unassigned</span>
-        )}
-        <span
-          className="ml-auto max-w-[120px] truncate text-[10px] text-text-muted"
-          title={task.session.title}
+        </div>
+      </button>
+
+      {/* Check button — top-right corner, only for in_review.
+          Ring-only by default; turns green on hover. */}
+      {task.status === 'in_review' ? (
+        <button
+          type="button"
+          aria-label="标记完成"
+          title="标记完成"
+          onClick={() => onStatusChange('done')}
+          className="absolute right-2 top-2 flex size-[18px] items-center justify-center rounded-full border-[1.5px] border-border-subtle bg-white text-transparent shadow-sm transition-all hover:border-success hover:text-success focus-visible:border-success focus-visible:text-success focus-visible:outline-none"
         >
-          {task.session.title}
-        </span>
-        <TaskStatusPill status={task.status} size="sm" onChange={onStatusChange} />
-      </div>
-    </button>
+          <Check className="size-3" />
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+/** Small inline status badge — non-interactive, color-coded by status. */
+function TaskStatusBadge({ status }: { status: TaskStatus }): JSX.Element {
+  const styles: Record<TaskStatus, string> = {
+    todo: 'bg-bg-elevated text-text-muted',
+    in_progress: 'bg-accent/10 text-accent',
+    in_review: 'bg-warning/10 text-warning',
+    done: 'bg-success/10 text-success',
+  };
+  const labels: Record<TaskStatus, string> = {
+    todo: 'todo',
+    in_progress: 'in progress',
+    in_review: 'in review',
+    done: 'done',
+  };
+  return (
+    <span
+      className={cn(
+        'rounded px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide',
+        styles[status],
+      )}
+    >
+      {labels[status]}
+    </span>
   );
 }

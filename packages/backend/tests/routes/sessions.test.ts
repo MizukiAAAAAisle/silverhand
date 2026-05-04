@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { MessageRepo } from '../../src/repos/message-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 async function setupChannel(
@@ -139,12 +140,262 @@ describe('GET /api/sessions/:id/...', () => {
     t = null;
   });
 
-  it('404 on unknown session for /messages, /agents, /children', async () => {
+  it('404 on unknown session for /messages, /agents, /agent-run-states, /children', async () => {
     t = buildTestApp();
-    for (const path of ['messages', 'agents', 'children'] as const) {
+    for (const path of ['messages', 'agents', 'agent-run-states', 'children'] as const) {
       const r = await http(t.app).get(`/api/sessions/unknown/${path}`);
       expect(r.status).toBe(404);
     }
+  });
+
+  it('returns the latest message window and pages earlier history', async () => {
+    t = buildTestApp();
+    const { channelId } = await setupChannel(t, 'history', []);
+    const session = await (
+      await http(t.app).post(`/api/channels/${channelId}/sessions`, {
+        title: 'long chat',
+      })
+    ).json() as any;
+
+    for (let i = 1; i <= 205; i++) {
+      const res = await http(t.app).post(
+        `/api/sessions/${session.session.id}/messages`,
+        { content: `m${i}` },
+      );
+      expect(res.status).toBe(201);
+    }
+
+    const latest = await (
+      await http(t.app).get(`/api/sessions/${session.session.id}/messages`)
+    ).json() as any;
+    expect(latest.messages).toHaveLength(200);
+    expect(latest.messages[0].content).toBe('m6');
+    expect(latest.messages[latest.messages.length - 1].content).toBe('m205');
+    expect(latest.has_more_before).toBe(true);
+
+    const earlier = await (
+      await http(t.app).get(
+        `/api/sessions/${session.session.id}/messages?before_seq=${latest.messages[0].seq}&limit=3`,
+      )
+    ).json() as any;
+    expect(earlier.messages.map((m: any) => m.content)).toEqual([
+      'm3',
+      'm4',
+      'm5',
+    ]);
+    expect(earlier.has_more_before).toBe(true);
+
+    const oldest = await (
+      await http(t.app).get(
+        `/api/sessions/${session.session.id}/messages?before_seq=${earlier.messages[0].seq}&limit=3`,
+      )
+    ).json() as any;
+    expect(oldest.messages.map((m: any) => m.content)).toEqual(['m1', 'm2']);
+    expect(oldest.has_more_before).toBe(false);
+  });
+
+  it('returns current ephemeral agent run states for the session', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await setupChannel(t, 'runstate', ['alice']);
+    const created = await (
+      await http(t.app).post(`/api/channels/${channelId}/sessions`, {
+        title: 'work',
+        member_agent_ids: agentIds,
+      })
+    ).json() as any;
+
+    t.fake.agentRunStates = [
+      {
+        runId: 'run-1',
+        agentId: agentIds[0]!,
+        sessionId: created.session.id,
+        status: 'thinking',
+        startedAt: 100,
+        updatedAt: 120,
+        lastActivityAt: 110,
+      },
+      {
+        runId: 'other',
+        agentId: agentIds[0]!,
+        sessionId: 'different-session',
+        status: 'thinking',
+        startedAt: 1,
+        updatedAt: 1,
+        lastActivityAt: 1,
+      },
+    ];
+
+    const body = await (
+      await http(t.app).get(
+        `/api/sessions/${created.session.id}/agent-run-states`,
+      )
+    ).json() as any;
+    expect(body.states).toEqual([t.fake.agentRunStates[0]]);
+  });
+});
+
+describe('GET /api/search', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('searches channel names, session titles, regular messages, and DM messages', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await setupChannel(t, 'needle_channel', [
+      'alice',
+    ]);
+    const regular = await (
+      await http(t.app).post(`/api/channels/${channelId}/sessions`, {
+        title: 'needle planning',
+        member_agent_ids: agentIds,
+      })
+    ).json() as any;
+    await http(t.app).post(`/api/sessions/${regular.session.id}/messages`, {
+      content: 'regular needle message',
+    });
+
+    const channels = await (
+      await http(t.app).get('/api/channels')
+    ).json() as any;
+    const dm = channels.channels.find(
+      (c: any) => c.kind === 'dm' && c.dm_agent_id === agentIds[0],
+    );
+    expect(dm).toBeDefined();
+    const dmSessions = await (
+      await http(t.app).get(`/api/channels/${dm.id}/sessions`)
+    ).json() as any;
+    await http(t.app).post(`/api/sessions/${dmSessions.sessions[0].id}/messages`, {
+      content: 'dm needle message',
+    });
+
+    const body = await (
+      await http(t.app).get('/api/search?q=needle&limit=20')
+    ).json() as any;
+
+    expect(
+      body.results.some(
+        (r: any) => r.type === 'channel' && r.channel.id === channelId,
+      ),
+    ).toBe(true);
+    expect(
+      body.results.some(
+        (r: any) => r.type === 'session' && r.session.id === regular.session.id,
+      ),
+    ).toBe(true);
+    expect(
+      body.results.some(
+        (r: any) =>
+          r.type === 'message' &&
+          r.channel.kind === 'regular' &&
+          r.message.content === 'regular needle message',
+      ),
+    ).toBe(true);
+    expect(
+      body.results.some(
+        (r: any) =>
+          r.type === 'message' &&
+          r.channel.kind === 'dm' &&
+          r.message.content === 'dm needle message',
+      ),
+    ).toBe(true);
+  });
+
+  it('filters message search by author, channel kind, channel id, and time', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await setupChannel(t, 'filter_channel', [
+      'alice',
+    ]);
+    const regular = await (
+      await http(t.app).post(`/api/channels/${channelId}/sessions`, {
+        title: 'regular',
+        member_agent_ids: agentIds,
+      })
+    ).json() as any;
+
+    const channels = await (
+      await http(t.app).get('/api/channels')
+    ).json() as any;
+    const dm = channels.channels.find(
+      (c: any) => c.kind === 'dm' && c.dm_agent_id === agentIds[0],
+    );
+    const dmSessions = await (
+      await http(t.app).get(`/api/channels/${dm.id}/sessions`)
+    ).json() as any;
+
+    const messages = new MessageRepo(t.ctx.db);
+    const userMsg = messages.insert({
+      sessionId: regular.session.id,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'filter user target',
+    });
+    const agentMsg = messages.insert({
+      sessionId: regular.session.id,
+      fromKind: 'agent',
+      fromAgentId: agentIds[0],
+      content: 'filter agent target',
+    });
+    const dmMsg = messages.insert({
+      sessionId: dmSessions.sessions[0].id,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'filter dm target',
+    });
+    t.ctx.db
+      .prepare('UPDATE messages SET created_at = ? WHERE id = ?')
+      .run(1_000, userMsg.id);
+    t.ctx.db
+      .prepare('UPDATE messages SET created_at = ? WHERE id = ?')
+      .run(2_500, agentMsg.id);
+    t.ctx.db
+      .prepare('UPDATE messages SET created_at = ? WHERE id = ?')
+      .run(3_000, dmMsg.id);
+
+    const userOnly = await (
+      await http(t.app).get('/api/search?q=filter&user_id=local')
+    ).json() as any;
+    expect(userOnly.results.every((r: any) => r.message.from_kind === 'user')).toBe(
+      true,
+    );
+    expect(userOnly.results.some((r: any) => r.message.id === agentMsg.id)).toBe(
+      false,
+    );
+
+    const agentOnly = await (
+      await http(t.app).get(`/api/search?q=filter&agent_id=${agentIds[0]}`)
+    ).json() as any;
+    expect(agentOnly.results.map((r: any) => r.message.id)).toEqual([
+      agentMsg.id,
+    ]);
+
+    const dmOnly = await (
+      await http(t.app).get('/api/search?q=filter&scope=dm')
+    ).json() as any;
+    expect(dmOnly.results.every((r: any) => r.channel.kind === 'dm')).toBe(true);
+
+    const channelOnly = await (
+      await http(t.app).get(`/api/search?q=filter&channel_id=${channelId}`)
+    ).json() as any;
+    expect(
+      channelOnly.results
+        .filter((r: any) => r.type === 'message')
+        .every((r: any) => r.channel.id === channelId),
+    ).toBe(true);
+
+    const timeWindow = await (
+      await http(t.app).get('/api/search?q=filter&from=2000&to=2600')
+    ).json() as any;
+    expect(timeWindow.results.map((r: any) => r.message.id)).toEqual([
+      agentMsg.id,
+    ]);
+  });
+
+  it('rejects conflicting user and agent filters', async () => {
+    t = buildTestApp();
+    const r = await http(t.app).get('/api/search?q=x&user_id=local&agent_id=a1');
+    expect(r.status).toBe(400);
   });
 });
 
@@ -216,11 +467,14 @@ describe('POST /api/sessions/:id/close', () => {
         context_summary: 'looking at bug 42',
       })
     ).json() as any;
+    const events: { kind: string; payload: unknown }[] = [];
+    const unsub = t.ctx.events.subscribe(parent.session.id, e => events.push(e));
 
     const close = await http(t.app).post(
       `/api/sessions/${child.session.id}/close`,
       { summary: 'fixed in PR #99' },
     );
+    unsub();
     expect(close.status).toBe(200);
 
     const parentMsgs = await (
@@ -232,6 +486,12 @@ describe('POST /api/sessions/:id/close', () => {
     );
     expect(summaryMsg).toBeDefined();
     expect(summaryMsg.content).toContain('fixed in PR #99');
+
+    const threadUpdated = events.find(e => e.kind === 'thread_updated')?.payload as any;
+    expect(threadUpdated).toMatchObject({
+      parent_session_id: parent.session.id,
+      child_session_id: child.session.id,
+    });
   });
 
   it('does NOT post to parent when posted_to_parent=true (agent already did)', async () => {
@@ -448,6 +708,92 @@ describe('POST /api/sessions/:id/agents/:aid/stop', () => {
   });
 });
 
+describe('message unread routes', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('requires viewer identity for unread cursor routes', async () => {
+    t = buildTestApp();
+    const { channelId } = await setupChannel(t, 'unread-auth', []);
+    const session = await (
+      await http(t.app).post(`/api/channels/${channelId}/sessions`, {
+        title: 's',
+      })
+    ).json() as any;
+
+    expect((await http(t.app).get('/api/message-unread-summary')).status).toBe(400);
+    expect(
+      (await http(t.app).get(`/api/channels/${channelId}/message-unread`)).status,
+    ).toBe(400);
+    expect(
+      (await http(t.app).post(`/api/sessions/${session.session.id}/mark-read`)).status,
+    ).toBe(400);
+  });
+
+  it('stores viewer id on user messages and clears unread with mark-read', async () => {
+    t = buildTestApp();
+    const viewer = http(t.app, { 'x-silverhand-user-id': 'local' });
+    const { channelId } = await setupChannel(t, 'unread', []);
+    const created = await (
+      await viewer.post(`/api/channels/${channelId}/sessions`, {
+        title: 's',
+      })
+    ).json() as any;
+    const sessionId = created.session.id;
+
+    const own = await (
+      await viewer.post(`/api/sessions/${sessionId}/messages`, {
+        content: 'mine',
+      })
+    ).json() as any;
+    expect(own.message.from_user_id).toBe('local');
+
+    const { MessageRepo } = await import('../../src/repos/message-repo.js');
+    const messages = new MessageRepo(t.ctx.db);
+    messages.insert({ sessionId, fromKind: 'user', content: 'legacy mine' });
+    messages.insert({
+      sessionId,
+      fromKind: 'user',
+      fromUserId: 'alice',
+      content: 'other human',
+    });
+    messages.insert({ sessionId, fromKind: 'agent', content: 'agent' });
+    messages.insert({ sessionId, fromKind: 'system', content: 'system' });
+
+    let perSession = await (
+      await viewer.get(`/api/channels/${channelId}/message-unread`)
+    ).json() as any;
+    expect(perSession).toEqual({
+      by_session: { [sessionId]: 3 },
+      total: 3,
+    });
+    let summary = await (await viewer.get('/api/message-unread-summary')).json() as any;
+    expect(summary).toEqual({ by_channel: { [channelId]: 3 } });
+
+    const marked = await (
+      await viewer.post(`/api/sessions/${sessionId}/mark-read`)
+    ).json() as any;
+    expect(marked.last_read_seq).toBe(5);
+    perSession = await (
+      await viewer.get(`/api/channels/${channelId}/message-unread`)
+    ).json() as any;
+    expect(perSession).toEqual({ by_session: {}, total: 0 });
+
+    messages.insert({ sessionId, fromKind: 'agent', content: 'new agent' });
+    await viewer.post(`/api/sessions/${sessionId}/mark-read`, { seq: 1 });
+    perSession = await (
+      await viewer.get(`/api/channels/${channelId}/message-unread`)
+    ).json() as any;
+    expect(perSession).toEqual({
+      by_session: { [sessionId]: 1 },
+      total: 1,
+    });
+  });
+});
+
 describe('GET /api/sessions/:id/threads', () => {
   let t: TestApp | null = null;
   afterEach(() => {
@@ -513,5 +859,104 @@ describe('GET /api/sessions/:id/threads', () => {
 
     // Second parent message has no thread → still one entry total
     expect(body.threads.find((s: any) => s.anchor_message_id === m2.message.id)).toBeUndefined();
+  });
+
+  it('creates message threads with every current parent-session member', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await setupChannel(t, 'threads-all', [
+      'alice',
+      'bob',
+    ]);
+    const session = await (
+      await http(t.app).post(`/api/channels/${channelId}/sessions`, {
+        title: 's',
+        member_agent_ids: agentIds,
+      })
+    ).json() as any;
+    const viewer = http(t.app, { 'x-silverhand-user-id': 'teammate' });
+    const msg = await (
+      await viewer.post(`/api/sessions/${session.session.id}/messages`, {
+        content: 'topic',
+      })
+    ).json() as any;
+
+    const created = await (
+      await http(t.app).post(`/api/messages/${msg.message.id}/thread`)
+    ).json() as any;
+
+    expect(created.child_session_id).toBe(created.session.id);
+    expect(created.session.parent_session_id).toBe(session.session.id);
+
+    const childAgents = await (
+      await http(t.app).get(`/api/sessions/${created.child_session_id}/agents`)
+    ).json() as any;
+    expect(childAgents.agents.map((a: any) => a.agent_id).sort()).toEqual(
+      [...agentIds].sort(),
+    );
+
+    const childMessages = await (
+      await http(t.app).get(`/api/sessions/${created.child_session_id}/messages`)
+    ).json() as any;
+    const anchor = childMessages.messages.find(
+      (m: any) => m.metadata?.subtype === 'thread_anchor',
+    );
+    expect(anchor.metadata).toMatchObject({
+      quoted_from_kind: 'user',
+      quoted_from_user_id: 'teammate',
+    });
+    expect(anchor.content).toContain('teammate');
+    expect(anchor.content).not.toContain('you');
+    const onboarding = childMessages.messages.find(
+      (m: any) => m.metadata?.subtype === 'onboarding',
+    );
+    expect(onboarding.content).toContain('ask the user whether to close it');
+    expect(onboarding.content).toContain(
+      'Only call `close_session` after the user explicitly confirms',
+    );
+    expect(onboarding.content).not.toContain('then call `close_session`');
+  });
+
+  it('delivers and auto-starts every child-thread member on first user message', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await setupChannel(t, 'threads-start', [
+      'alice',
+      'bob',
+    ]);
+    const parent = await (
+      await http(t.app).post(`/api/channels/${channelId}/sessions`, {
+        title: 'parent',
+        member_agent_ids: agentIds,
+      })
+    ).json() as any;
+    const parentMsg = await (
+      await http(t.app).post(`/api/sessions/${parent.session.id}/messages`, {
+        content: 'topic',
+      })
+    ).json() as any;
+    const created = await (
+      await http(t.app).post(`/api/messages/${parentMsg.message.id}/thread`)
+    ).json() as any;
+
+    t.fake.delivered = [];
+    t.fake.starts = [];
+
+    const res = await http(t.app).post(
+      `/api/sessions/${created.child_session_id}/messages`,
+      { content: 'continue in child' },
+    );
+    expect(res.status).toBe(201);
+
+    expect(
+      t.fake.delivered.every(d => d.sessionId === created.child_session_id),
+    ).toBe(true);
+    expect(t.fake.delivered.map(d => d.agentId).sort()).toEqual(
+      [...agentIds].sort(),
+    );
+    expect(
+      t.fake.starts.every(s => s.sessionId === created.child_session_id),
+    ).toBe(true);
+    expect(t.fake.starts.map(s => s.agentId).sort()).toEqual(
+      [...agentIds].sort(),
+    );
   });
 });

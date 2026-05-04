@@ -72,7 +72,7 @@ export class BackendClient {
     );
   }
 
-  spawnChildSession(input: {
+  createThread(input: {
     title: string;
     members: string[];
     context_summary: string;
@@ -80,6 +80,17 @@ export class BackendClient {
   }): Promise<{ child_session_id: string }> {
     return this.post(
       internalPaths.agentSpawnChild(this.args.sessionId, this.args.agentId),
+      input,
+    );
+  }
+
+  createSession(input: {
+    title: string;
+    context_summary: string;
+    initial_prompt: string;
+  }): Promise<{ session_id: string }> {
+    return this.post(
+      internalPaths.agentCreateSession(this.args.sessionId, this.args.agentId),
       input,
     );
   }

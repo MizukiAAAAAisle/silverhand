@@ -4,6 +4,8 @@
    The default (paper-ink) doubles as :root to avoid FOUC on first paint. */
 @import "./themes/paper-ink.css";
 @import "./themes/warm-coral.css";
+@import "./themes/porcelain-verdigris.css";
+@import "./themes/warm-script.css";
 
 /* Highlight.js theme for fenced code blocks rendered by rehype-highlight.
    Picked the "github" light theme as a neutral baseline — works under
@@ -20,6 +22,7 @@
   --color-bg-active: var(--bg-active);
   --color-bg-selected: var(--bg-selected);
   --color-bg-floating: var(--bg-floating);
+  --color-bg-chat: var(--bg-chat);
   --color-bg-island: var(--bg-island);
   --color-bg-island-deep: var(--bg-island-deep);
 
@@ -112,7 +115,11 @@ button:not(:disabled) { cursor: pointer; }
 button:disabled { cursor: not-allowed; }
 
 /* ── Markdown body — applied to .markdown-body wrapper around <ReactMarkdown> ── */
-.markdown-body { line-height: 1.55; }
+.markdown-body {
+  min-width: 0;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
 .markdown-body > *:first-child { margin-top: 0; }
 .markdown-body > *:last-child { margin-bottom: 0; }
 
@@ -137,6 +144,8 @@ button:disabled { cursor: not-allowed; }
   margin: 0.4em 0;
   padding-left: 1.4em;
 }
+.markdown-body ul { list-style-type: disc; }
+.markdown-body ol { list-style-type: decimal; }
 .markdown-body li { margin: 0.15em 0; }
 .markdown-body li > p { margin: 0.15em 0; }
 
@@ -154,7 +163,10 @@ button:disabled { cursor: not-allowed; }
 }
 
 .markdown-body table {
+  display: block;
+  max-width: 100%;
   margin: 0.5em 0;
+  overflow-x: auto;
   border-collapse: collapse;
   font-size: 0.95em;
 }
@@ -191,6 +203,7 @@ button:disabled { cursor: not-allowed; }
    Background uses the same ink-wash recipe as inline code, just at
    a lighter strength so the block feels like a card on the page. */
 .markdown-body .code-block {
+  max-width: 100%;
   margin: 0.5em 0;
   border: 1px solid color-mix(in srgb, var(--text-primary) 12%, transparent);
   border-radius: var(--radius-md);
@@ -271,4 +284,20 @@ button:disabled { cursor: not-allowed; }
 }
 .msg-jump-flash {
   animation: msg-jump-flash 1.6s ease-in-out;
+}
+
+/* Tool-badge bump — plays when a tool call count increments or a new
+   tool type appears in the activity bubble. Applied to the whole badge
+   span so users get a clear visual signal. Disabled for reduced motion. */
+@keyframes tool-badge-bump {
+  0%   { background-color: var(--accent-soft); transform: scale(1.08); }
+  60%  { background-color: var(--accent-soft); transform: scale(1); }
+  100% { background-color: var(--bg-elevated); transform: scale(1); }
+}
+.tool-badge-bump {
+  display: inline-block;
+  animation: tool-badge-bump 350ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tool-badge-bump { animation: none; }
 }

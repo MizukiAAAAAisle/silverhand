@@ -88,7 +88,10 @@ export class CodexDriver implements Driver {
     ensureGitRepoForCodex(io.spawnCtx.workspacePath);
 
     this.io = io;
-    this.threadId = io.spawnCtx.cliSessionId;
+    // A persisted cliSessionId is only the resume target. The new
+    // app-server cannot accept turn/start for it until thread/resume has
+    // completed and handleThreadReady() has observed the loaded thread.
+    this.threadId = null;
     this.pendingInitialPrompt = io.spawnCtx.initialPrompt || null;
 
     const standingPrompt = readFileSync(io.spawnCtx.systemPromptPath, 'utf-8');
@@ -185,12 +188,14 @@ export class CodexDriver implements Driver {
         this.initializeRequestId = null;
         this.pendingThreadRequest = null;
       }
+      const detail =
+        typeof message.error?.message === 'string'
+          ? message.error.message
+          : 'Codex app-server request failed';
       events.push({
         kind: 'error',
-        message:
-          typeof message.error?.message === 'string'
-            ? message.error.message
-            : 'Codex app-server request failed',
+        message: detail,
+        ...classifyCodexError(detail),
       });
       return events;
     }
@@ -258,7 +263,7 @@ export class CodexDriver implements Driver {
             : typeof params?.error?.message === 'string'
               ? params.error.message
               : 'Unknown Codex app-server error';
-        events.push({ kind: 'error', message: detail });
+        events.push({ kind: 'error', message: detail, ...classifyCodexError(detail) });
         break;
       }
     }
@@ -442,6 +447,13 @@ export class CodexDriver implements Driver {
   private sendNotification(method: string, params: unknown): void {
     void this.io?.writeLine(JSON.stringify({ jsonrpc: '2.0', method, params }));
   }
+}
+
+function classifyCodexError(message: string): { code?: string; fatal?: boolean } {
+  if (/thread not found/i.test(message)) {
+    return { code: 'thread_not_found', fatal: true };
+  }
+  return {};
 }
 
 function joinReasoningText(item: any): string {

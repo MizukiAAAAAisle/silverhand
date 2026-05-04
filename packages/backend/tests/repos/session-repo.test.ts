@@ -433,3 +433,65 @@ describe('SessionRepo: listOpenThreadsForParent', () => {
     expect(sessions.listOpenThreadsForParent(parent.id)).toEqual([]);
   });
 });
+
+describe('SessionRepo: pin / unpin', () => {
+  it('pin sets pinned_at, unpin clears it', () => {
+    const { ch, sessions } = bootstrap();
+    const s = sessions.insert({ channelId: ch.id, title: 'top' });
+    expect(s.pinned_at).toBeNull();
+
+    const pinned = sessions.pin(s.id);
+    expect(pinned?.pinned_at).toBeTypeOf('number');
+
+    const unpinned = sessions.unpin(s.id);
+    expect(unpinned?.pinned_at).toBeNull();
+  });
+
+  it('pin returns null for unknown session', () => {
+    const { sessions } = bootstrap();
+    expect(sessions.pin('nonexistent')).toBeNull();
+  });
+
+  it('rejects pin on a child session', () => {
+    const { ch, sessions } = bootstrap();
+    const parent = sessions.insert({ channelId: ch.id, title: 'parent' });
+    const child = sessions.insert({
+      channelId: ch.id,
+      title: 'child',
+      parentSessionId: parent.id,
+    });
+    expect(() => sessions.pin(child.id)).toThrowError(/only top-level sessions/);
+  });
+
+  it('listForChannel returns pinned sessions before unpinned', () => {
+    const { ch, sessions } = bootstrap();
+    const a = sessions.insert({ channelId: ch.id, title: 'a' });
+    const b = sessions.insert({ channelId: ch.id, title: 'b' });
+    const c = sessions.insert({ channelId: ch.id, title: 'c' });
+
+    // pin b — it should now appear first
+    sessions.pin(b.id);
+
+    const list = sessions.listForChannel(ch.id);
+    const ids = list.map(s => s.id);
+    expect(ids[0]).toBe(b.id);
+    // a and c follow in creation order
+    expect(ids.slice(1)).toEqual([a.id, c.id]);
+  });
+
+  it('multiple pins ordered by pinned_at ASC (earlier pin appears first)', async () => {
+    const { ch, sessions, db } = bootstrap();
+    const a = sessions.insert({ channelId: ch.id, title: 'a' });
+    const b = sessions.insert({ channelId: ch.id, title: 'b' });
+
+    sessions.pin(a.id);
+    // Force a's pinned_at to be earlier than b's by backdating
+    db.prepare(`UPDATE sessions SET pinned_at = pinned_at - 1000 WHERE id = ?`).run(a.id);
+    sessions.pin(b.id);
+
+    const list = sessions.listForChannel(ch.id);
+    const ids = list.map(s => s.id);
+    expect(ids[0]).toBe(a.id);
+    expect(ids[1]).toBe(b.id);
+  });
+});

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Power } from 'lucide-react';
 import { Toaster } from 'sonner';
 import { NavRail } from '@/components/layout/NavRail';
 import { ComputersPanel } from '@/components/layout/ComputersPanel';
@@ -7,6 +8,7 @@ import { Sidebar } from '@/components/layout/Sidebar';
 import { SessionsSidebar } from '@/components/layout/SessionsSidebar';
 import { SessionView } from '@/components/layout/SessionView';
 import { SavedListView } from '@/components/layout/SavedListView';
+import { SearchPanel } from '@/components/layout/SearchPanel';
 import { SplitPane } from '@/components/layout/SplitPane';
 import { TasksSection } from '@/components/layout/TasksSection';
 import { Titlebar } from '@/components/layout/Titlebar';
@@ -16,21 +18,28 @@ import { useResizableWidth } from '@/hooks/useResizableWidth';
 import { CreateChannelDialog } from '@/features/channels/CreateChannelDialog';
 import { CreateSessionDialog } from '@/features/channels/CreateSessionDialog';
 import { ChannelSettingsDialog } from '@/features/channels/ChannelSettingsDialog';
-import { ChannelTasksDialog } from '@/components/tasks/ChannelTasksDialog';
+import { ChannelTasksDrawer } from '@/components/tasks/ChannelTasksDrawer';
 import { useTasks } from '@/features/tasks/hooks';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { AgentView } from '@/features/agents/AgentView';
 import {
   useChannels,
   useSessionsForChannel,
+  usePinSession,
 } from '@/features/channels/hooks';
 import { useSavedMessages } from '@/features/saved/hooks';
 import {
-  useMarkNotificationsRead,
   useNotificationToasts,
   useUnreadCounts,
 } from '@/features/notifications/hooks';
+import {
+  useMarkSessionRead,
+  useMarkMessageSessionRead,
+  useMessageUnreadCounts,
+  useMessageUnreadSummary,
+} from '@/features/sessions/hooks';
 import { useNav, useRouteState } from '@/router';
+import type { SessionDto } from '@silverhand/shared';
 
 export interface MessageJumpTarget {
   sessionId: string;
@@ -39,6 +48,13 @@ export interface MessageJumpTarget {
 
 export function App(): JSX.Element {
   useAppearance();
+
+  // Shutdown overlay — shown when the main process starts its graceful
+  // quit sequence. Steps arrive via IPC; null means not shutting down.
+  const [shutdownStep, setShutdownStep] = useState<string | null>(null);
+  useEffect(() => {
+    return window.agentHub.onShutdownProgress(step => setShutdownStep(step));
+  }, []);
 
   // Sidebar widths persist across launches and mirror into CSS vars so
   // existing `var(--sidebar-width)` consumers (Titlebar pad, Sidebar
@@ -72,12 +88,20 @@ export function App(): JSX.Element {
   const [createChannelOpen, setCreateChannelOpen] = useState(false);
   const [createSessionOpen, setCreateSessionOpen] = useState(false);
   const [channelSettingsOpen, setChannelSettingsOpen] = useState(false);
-  const [tasksDialogOpen, setTasksDialogOpen] = useState(false);
+  const [tasksDrawerOpen, setTasksDrawerOpen] = useState(false);
   // One-shot jump target consumed by SessionView once messages are
   // loaded for the target session. Cleared after handling. Kept in
   // memory rather than the URL because it's truly ephemeral —
   // refresh/back doesn't need to re-trigger the scroll.
   const [jumpTarget, setJumpTarget] = useState<MessageJumpTarget | null>(null);
+
+  // Holds the newly-created child session for the brief window between
+  // nav.toThread() firing and the sessions query refetch completing.
+  // Without this, childSession would be null on the first render after
+  // navigation and the split pane wouldn't appear until the refetch lands.
+  // Keyed by childSessionId so we never leak a stale session into the
+  // wrong split pane.
+  const [ephemeralChildSession, setEphemeralChildSession] = useState<SessionDto | null>(null);
 
   // The original message id anchored by the currently-open thread. Set
   // by the child SessionView via onThreadAnchorResolved; consumed by
@@ -95,12 +119,23 @@ export function App(): JSX.Element {
 
   const { data: channels = [] } = useChannels();
   const { data: sessions = [] } = useSessionsForChannel(selectedChannelId);
+  const pinSession = usePinSession(selectedChannelId ?? null);
   // Shared cache with SavedListView and useToggleSave — invalidations
   // from save/unsave mutations propagate the count update here too.
   const { data: savedItems } = useSavedMessages();
-  // Per-channel unread count for the sidebar badges (5s polling).
+  // Per-channel notification unread count (mention / agent-failure alerts).
   const { data: unreadCounts } = useUnreadCounts();
-  const markRead = useMarkNotificationsRead();
+  // Global message unread summary across all channels — drives channel
+  // sidebar badges via session_reads cursor (not notification system).
+  const { data: messageUnreadSummary } = useMessageUnreadSummary();
+  // Per-session message unread counts for the currently selected channel.
+  // Drives session sidebar badges; replaces the old notification-based counts.
+  const { data: messageUnreadData } = useMessageUnreadCounts(selectedChannelId ?? null);
+  const sessionUnreadCounts = messageUnreadData?.by_session;
+  // Notification-based read marker (mention/agent-failure alerts).
+  const markSessionRead = useMarkSessionRead();
+  // Message-unread read cursor — advances session_reads on navigation.
+  const markMessageSessionRead = useMarkMessageSessionRead();
   // In-app + system notifications for new mentions and agent failures.
   useNotificationToasts(selectedChannelId ?? null);
   // Active-task count for the titlebar Tasks badge — scoped to the
@@ -189,27 +224,32 @@ export function App(): JSX.Element {
     if (!openChildSessionId) setHighlightedParentMessageId(null);
   }, [openChildSessionId]);
 
-  // Auto-mark mention notifications as read when the user opens
-  // their containing channel. Standard IM affordance: opening the
-  // surface IS the acknowledgement. Only fires when there's actually
-  // unread to clear, so it doesn't churn the mutation cache.
-  useEffect(() => {
-    if (!selectedChannelId) return;
-    const unread = unreadCounts?.by_channel?.[selectedChannelId] ?? 0;
-    if (unread > 0 && !markRead.isPending) {
-      markRead.mutate({ channel_id: selectedChannelId });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChannelId, unreadCounts?.by_channel?.[selectedChannelId ?? '']]);
-
   const selectedChannel = channels.find(c => c.id === selectedChannelId) ?? null;
   const selectedSession = sessions.find(s => s.id === selectedSessionId) ?? null;
   const parentSession = selectedSession?.parent_session_id
     ? sessions.find(s => s.id === selectedSession.parent_session_id) ?? null
     : null;
-  const childSession = openChildSessionId
-    ? sessions.find(s => s.id === openChildSessionId) ?? null
-    : null;
+  const childSession =
+    (openChildSessionId
+      ? sessions.find(s => s.id === openChildSessionId) ?? null
+      : null) ??
+    // Ephemeral fallback: the session was just created and isn't in the
+    // sessions cache yet. Used until the invalidateQueries refetch lands.
+    (ephemeralChildSession?.id === openChildSessionId ? ephemeralChildSession : null);
+
+  // Clear ephemeral once the real sessions list includes this child,
+  // or when the URL no longer points at this child.
+  useEffect(() => {
+    if (!ephemeralChildSession) return;
+    if (ephemeralChildSession.id !== openChildSessionId) {
+      setEphemeralChildSession(null);
+      return;
+    }
+    if (sessions.some(s => s.id === ephemeralChildSession.id)) {
+      setEphemeralChildSession(null);
+    }
+  }, [ephemeralChildSession, openChildSessionId, sessions]);
+
   const activeEventSessionId = openChildSessionId ?? selectedSessionId;
 
   useEffect(() => {
@@ -222,6 +262,27 @@ export function App(): JSX.Element {
           : null,
     });
   }, [appSection, view, selectedChannelId, activeEventSessionId]);
+
+  // Auto-advance the message read cursor whenever the user is looking at a
+  // session. In split-view both parent (selectedSessionId) and child
+  // (openChildSessionId) are visible simultaneously, so both cursors must be
+  // advanced — not just the "active event" session.
+  useEffect(() => {
+    if (selectedSessionId) markMessageSessionRead.mutate(selectedSessionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSessionId]);
+  useEffect(() => {
+    if (openChildSessionId) markMessageSessionRead.mutate(openChildSessionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openChildSessionId]);
+
+  // Keep notification badges (mention_external / agent_start_failed) cleared
+  // for whichever session the user is actively viewing.
+  useEffect(() => {
+    if (!activeEventSessionId) return;
+    markSessionRead.mutate(activeEventSessionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeEventSessionId]);
 
   const handleSelectChannel = (id: string): void => {
     // If the channel has unread mentions, jump straight to the latest
@@ -243,6 +304,9 @@ export function App(): JSX.Element {
   const handleSelectSession = (id: string): void => {
     const target = sessions.find(s => s.id === id);
     if (!selectedChannelId) return;
+    // Clear both notification badge and message unread cursor on navigation.
+    markSessionRead.mutate(id);
+    markMessageSessionRead.mutate(id);
     if (target?.parent_session_id) {
       // Picking a child from the sidebar tree opens it as the child pane
       // alongside its parent — not as a top-level selection.
@@ -252,12 +316,24 @@ export function App(): JSX.Element {
     }
   };
 
-  const handleJumpToMessage = (params: {
-    channelId: string;
-    sessionId: string;
-    messageId: string;
-  }): void => {
+  const handleJumpToMessage = (
+    params: {
+      channelId: string;
+      sessionId: string;
+      messageId: string;
+    },
+    options: { preserveThreadLayout?: boolean } = {},
+  ): void => {
     setJumpTarget({ sessionId: params.sessionId, messageId: params.messageId });
+    markSessionRead.mutate(params.sessionId);
+    if (
+      options.preserveThreadLayout &&
+      selectedChannelId === params.channelId &&
+      selectedSessionId === params.sessionId &&
+      openChildSessionId
+    ) {
+      return;
+    }
     nav.toSession(params.channelId, params.sessionId);
   };
 
@@ -318,8 +394,12 @@ export function App(): JSX.Element {
           : null
       }
       onJumped={() => setJumpTarget(null)}
-      onThreadCreated={childId => {
+      onThreadCreated={(childId, session) => {
         if (selectedChannelId && selectedSessionId) {
+          // Optimistically store the session so childSession is non-null
+          // on the very first render after nav.toThread() fires, before
+          // the sessions-list query refetch has a chance to complete.
+          if (session) setEphemeralChildSession(session);
           nav.toThread(selectedChannelId, selectedSessionId, childId);
         }
       }}
@@ -336,11 +416,14 @@ export function App(): JSX.Element {
       parentTitle={selectedSession?.title ?? null}
       onCloseChild={closeChild}
       onJumpToOriginal={messageId => {
-        handleJumpToMessage({
-          channelId: childSession.channel_id,
-          sessionId: childSession.parent_session_id!,
-          messageId,
-        });
+        handleJumpToMessage(
+          {
+            channelId: childSession.channel_id,
+            sessionId: childSession.parent_session_id!,
+            messageId,
+          },
+          { preserveThreadLayout: true },
+        );
       }}
       onThreadAnchorResolved={setHighlightedParentMessageId}
       // No nested Thread: child sessions can't spawn grandchildren
@@ -367,12 +450,12 @@ export function App(): JSX.Element {
         }
         onOpenTasks={
           appSection === 'chat' && view === 'channel' && selectedChannel
-            ? () => setTasksDialogOpen(true)
+            ? () => setTasksDrawerOpen(true)
             : undefined
         }
         taskCount={channelActiveTaskCount}
       />
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex min-w-0 flex-1 overflow-hidden">
         <NavRail
           current={appSection}
           onChange={section => {
@@ -389,7 +472,7 @@ export function App(): JSX.Element {
           <TasksSection onJump={handleJumpToMessage} />
         ) : appSection === 'members' ? (
           <>
-            <aside className="flex h-full w-[var(--sidebar-width)] flex-col bg-[var(--bg-channels-sidebar)]">
+            <aside className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]">
               <nav className="flex-1 overflow-y-auto py-1.5">
                 <MembersPanel
                   selectedAgentId={selectedAgentId}
@@ -415,7 +498,7 @@ export function App(): JSX.Element {
           </>
         ) : appSection === 'computers' ? (
           <>
-            <aside className="flex h-full w-[var(--sidebar-width)] flex-col bg-[var(--bg-channels-sidebar)]">
+            <aside className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]">
               <nav className="flex-1 overflow-y-auto py-1.5">
                 <ComputersPanel />
               </nav>
@@ -432,7 +515,7 @@ export function App(): JSX.Element {
                 name: c.name,
                 kind: c.kind,
                 dm_agent_id: c.dm_agent_id,
-                unread: unreadCounts?.by_channel?.[c.id] ?? 0,
+                unread: messageUnreadSummary?.by_channel?.[c.id] ?? 0,
                 archived: c.archived_at !== null,
               }))}
               selectedChannelId={selectedChannelId}
@@ -440,6 +523,8 @@ export function App(): JSX.Element {
               onCreateChannel={() => setCreateChannelOpen(true)}
               savedActive={view === 'saved'}
               onSelectSaved={() => nav.toChatSaved()}
+              searchActive={view === 'search'}
+              onSelectSearch={() => nav.toChatSearch()}
               savedCount={savedItems?.length}
             />
             <VerticalSplitter
@@ -448,6 +533,15 @@ export function App(): JSX.Element {
             />
             {view === 'saved' ? (
               <SavedListView onJump={handleJumpToMessage} />
+            ) : view === 'search' ? (
+              <SearchPanel
+                channels={channels}
+                onJumpMessage={handleJumpToMessage}
+                onOpenChannel={id => nav.toChannel(id)}
+                onOpenSession={(channelId, sessionId) =>
+                  nav.toSession(channelId, sessionId)
+                }
+              />
             ) : (
               <>
                 <SessionsSidebar
@@ -459,6 +553,7 @@ export function App(): JSX.Element {
                       s.status === 'active' || s.status === 'crashed' ? s.status : 'idle',
                     parent_session_id: s.parent_session_id,
                     closed_at: s.closed_at,
+                    pinned_at: s.pinned_at,
                   }))}
                   // Highlight either the parent (top-level) or — when a child
                   // pane is open — also the child below it via tree indent.
@@ -466,6 +561,10 @@ export function App(): JSX.Element {
                   // points at "what's the active row".
                   selectedSessionId={openChildSessionId ?? selectedSessionId}
                   onSelectSession={handleSelectSession}
+                  onPinSession={(sessionId, pinned) =>
+                    pinSession.mutate({ sessionId, pinned })
+                  }
+                  unreadBySession={sessionUnreadCounts ?? {}}
                 />
                 <VerticalSplitter
                   onPointerDown={sessionsSidebar.startResize}
@@ -514,9 +613,9 @@ export function App(): JSX.Element {
         onDeleted={handleChannelDeleted}
       />
       {selectedChannel ? (
-        <ChannelTasksDialog
-          open={tasksDialogOpen}
-          onOpenChange={setTasksDialogOpen}
+        <ChannelTasksDrawer
+          open={tasksDrawerOpen}
+          onOpenChange={setTasksDrawerOpen}
           channelId={selectedChannel.id}
           channelName={selectedChannel.name}
           sessions={sessions.map(s => ({
@@ -530,6 +629,33 @@ export function App(): JSX.Element {
         />
       ) : null}
       <Toaster position="bottom-right" richColors />
+
+      {/* Shutdown progress overlay — shown during graceful quit so the
+        * user sees activity instead of a frozen window. Rendered above
+        * everything and not dismissible — the app is closing. */}
+      {shutdownStep !== null ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-bg-base/30 backdrop-blur-[1px]">
+          <div className="w-[420px] max-w-[calc(100vw-48px)] rounded-md border border-border bg-bg-floating/95 px-5 py-4 shadow-modal">
+            <div className="flex items-center gap-4">
+              <div className="relative flex size-12 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent">
+                <span
+                  aria-hidden
+                  className="absolute -inset-1 rounded-full border-2 border-accent/25 border-t-accent animate-spin"
+                />
+                <Power className="size-5" strokeWidth={1.8} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-text-primary">
+                  正在安全退出
+                </p>
+                <p className="mt-1 text-xs leading-5 text-text-muted">
+                  {shutdownStep}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

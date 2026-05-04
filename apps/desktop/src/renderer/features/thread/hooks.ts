@@ -1,8 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
 import { api } from '@/lib/api';
-import { apiPaths } from '@silverhand/shared';
+import { apiPaths, type SessionDto } from '@silverhand/shared';
 import { useSessionStream, type SessionStreamEvent } from '@/hooks/useSessionStream';
+
+const channelSessionsKey = (channelId: string) =>
+  ['channels', channelId, 'sessions'] as const;
 
 /**
  * Start a thread on a message → backend creates a child session
@@ -13,16 +16,31 @@ export function useStartThread(channelId: string | null) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (messageId: string) => {
-      const res = await api<{ child_session_id: string }>(
+      const res = await api<{
+        child_session_id: string;
+        session?: SessionDto;
+      }>(
         apiPaths.messageThread(messageId),
         { method: 'POST' },
       );
-      return res.child_session_id;
+      return res;
     },
-    onSuccess: () => {
+    onSuccess: res => {
       if (channelId) {
+        if (res.session) {
+          qc.setQueryData<SessionDto[]>(
+            channelSessionsKey(channelId),
+            prev => {
+              const cur = prev ?? [];
+              if (cur.some(s => s.id === res.session!.id)) {
+                return cur.map(s => (s.id === res.session!.id ? res.session! : s));
+              }
+              return [...cur, res.session!];
+            },
+          );
+        }
         void qc.invalidateQueries({
-          queryKey: ['channels', channelId, 'sessions'],
+          queryKey: channelSessionsKey(channelId),
         });
       }
     },
@@ -45,7 +63,10 @@ const threadsKey = (sid: string) => ['sessions', sid, 'threads'] as const;
  * the parent's SSE `thread_updated` event, which backend publishes on:
  * thread create, child receives a message, child closes.
  */
-export function useSessionThreads(sessionId: string | null) {
+export function useSessionThreads(
+  sessionId: string | null,
+  channelId: string | null,
+) {
   const qc = useQueryClient();
   const query = useQuery({
     queryKey: sessionId
@@ -64,8 +85,13 @@ export function useSessionThreads(sessionId: string | null) {
     (e: SessionStreamEvent) => {
       if (!sessionId || e.kind !== 'thread_updated') return;
       void qc.invalidateQueries({ queryKey: threadsKey(sessionId) });
+      if (channelId) {
+        void qc.invalidateQueries({
+          queryKey: channelSessionsKey(channelId),
+        });
+      }
     },
-    [qc, sessionId],
+    [qc, sessionId, channelId],
   );
   useSessionStream(sessionId, onEvent);
 

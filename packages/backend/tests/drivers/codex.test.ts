@@ -239,6 +239,44 @@ describe('CodexDriver JSON-RPC handshake', () => {
     });
   });
 
+  it('does not send turn/start to a resume target before thread/resume is ready', async () => {
+    const built = makeSpawnCtx({ cliSessionId: 'thread-resumed' });
+    cleanup = built.cleanup;
+    const io = makeIO(built.ctx);
+    const driver = new CodexDriver();
+
+    driver.bindIO(io);
+    await tick();
+    const init = JSON.parse(io.lines[0]!);
+    driver.parseLine(
+      JSON.stringify({ jsonrpc: '2.0', id: init.id, result: {} }),
+    );
+    const resume = JSON.parse(io.lines[2]!);
+    expect(resume.method).toBe('thread/resume');
+
+    expect(driver.encodeStdinMessage('queued while starting', 'thread-resumed')).toBeNull();
+
+    const events = driver.parseLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: resume.id,
+        result: { thread: { id: 'thread-resumed' } },
+      }),
+    );
+    expect(events).toEqual([{ kind: 'session_init', sessionId: 'thread-resumed' }]);
+
+    const line = driver.encodeStdinMessage('after resume', 'thread-resumed');
+    expect(line).not.toBeNull();
+    const turn = JSON.parse(line!);
+    expect(turn).toMatchObject({
+      method: 'turn/start',
+      params: {
+        threadId: 'thread-resumed',
+        input: [{ type: 'text', text: 'after resume' }],
+      },
+    });
+  });
+
   it('fires the initial turn/start automatically when initialPrompt is set', async () => {
     const built = makeSpawnCtx({ initialPrompt: 'hello there' });
     cleanup = built.cleanup;
@@ -288,6 +326,38 @@ describe('CodexDriver JSON-RPC handshake', () => {
     expect(events).toEqual([{ kind: 'error', message: 'bad config' }]);
     // No follow-up requests should be issued.
     expect(io.lines).toHaveLength(1);
+  });
+
+  it('marks thread-not-found resume errors as fatal', async () => {
+    const built = makeSpawnCtx({ cliSessionId: 'thread-stale' });
+    cleanup = built.cleanup;
+    const io = makeIO(built.ctx);
+    const driver = new CodexDriver();
+
+    driver.bindIO(io);
+    await tick();
+    const init = JSON.parse(io.lines[0]!);
+    driver.parseLine(
+      JSON.stringify({ jsonrpc: '2.0', id: init.id, result: {} }),
+    );
+
+    const resume = JSON.parse(io.lines[2]!);
+    expect(resume.method).toBe('thread/resume');
+    const events = driver.parseLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: resume.id,
+        error: { code: -32602, message: 'thread not found: thread-stale' },
+      }),
+    );
+    expect(events).toEqual([
+      {
+        kind: 'error',
+        message: 'thread not found: thread-stale',
+        code: 'thread_not_found',
+        fatal: true,
+      },
+    ]);
   });
 });
 

@@ -19,6 +19,7 @@
   --bg-active: #C5B57F;        /* 按下/激活 */
   --bg-selected: #FFFFFF;      /* 导航激活（warm 派偷懒：纯白从任何一档都跳出） */
   --bg-floating: #FFFFFF;      /* 浮层 / 卡片表面 */
+  --bg-chat: #FFFAEF;          /* chat 主读区：保持老纸感，不随 frame token 调整 */
 
   /* ── Nav rail / sidebar accents (theme-specific) ──
      不再"每区一种独立色"——全部坐落在 nav-rail-yellow 到 bg-base-ivory

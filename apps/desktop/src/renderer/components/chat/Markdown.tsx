@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
+import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { Check, Copy } from 'lucide-react';
@@ -44,7 +45,7 @@ function MarkdownInner({ content, sessionId, agentsByName, channelsByName }: Mar
   // the cost is negligible. Memoizing it doesn't help because react-
   // markdown also memoizes the pipeline by reference equality of the
   // plugins array.
-  const plugins = useMemo(() => [remarkGfm, remarkRefs], []);
+  const plugins = useMemo(() => [remarkGfm, remarkBreaks, remarkRefs], []);
 
   return (
     <div className="markdown-body">

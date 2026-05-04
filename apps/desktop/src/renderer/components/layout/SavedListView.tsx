@@ -4,6 +4,7 @@ import dayjs from 'dayjs';
 import type { SavedMessageDto } from '@silverhand/shared';
 import { Markdown } from '@/components/chat/Markdown';
 import { useSavedMessages, useUnsaveMessage } from '@/features/saved/hooks';
+import { formatUserDisplayName } from '@/lib/current-user';
 
 interface SavedListViewProps {
   /** Called when the user clicks a saved entry. The parent owns view
@@ -22,7 +23,7 @@ export function SavedListView({ onJump }: SavedListViewProps): JSX.Element {
   const unsave = useUnsaveMessage();
 
   return (
-    <main className="flex h-full flex-1 flex-col bg-bg-base">
+    <main className="flex h-full flex-1 flex-col bg-bg-chat">
       <header className="flex h-[var(--titlebar-height)] shrink-0 items-center gap-2 border-b border-border-subtle px-4">
         <Bookmark className="size-3.5 fill-current text-accent" />
         <span className="font-serif text-sm font-semibold text-text-primary">
@@ -74,7 +75,9 @@ function SavedItem({
 }): JSX.Element {
   const [hover, setHover] = useState(false);
   const sender = useMemo(() => {
-    if (item.message.from_kind === 'user') return 'you';
+    if (item.message.from_kind === 'user') {
+      return formatUserDisplayName(item.message.from_user_id);
+    }
     if (item.agent_name) return `@${item.agent_name}`;
     return '@agent';
   }, [item]);

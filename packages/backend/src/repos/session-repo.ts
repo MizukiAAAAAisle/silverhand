@@ -37,7 +37,9 @@ export class SessionRepo {
       .prepare<[string], SessionRow>(
         `SELECT * FROM sessions
          WHERE channel_id = ?
-         ORDER BY (parent_session_id IS NULL) DESC,
+         ORDER BY (pinned_at IS NOT NULL) DESC,
+                  pinned_at ASC,
+                  (parent_session_id IS NULL) DESC,
                   parent_session_id,
                   created_at ASC`,
       )
@@ -228,6 +230,26 @@ export class SessionRepo {
     const row = this.get(id);
     if (!row) throw new Error('insert failed');
     return row;
+  }
+
+  pin(id: string): SessionDto | null {
+    const session = this.get(id);
+    if (!session) return null;
+    if (session.parent_session_id !== null) {
+      throw repoError('child_session', 'only top-level sessions can be pinned');
+    }
+    const now = Date.now();
+    this.db
+      .prepare(`UPDATE sessions SET pinned_at = ? WHERE id = ?`)
+      .run(now, id);
+    return this.get(id);
+  }
+
+  unpin(id: string): SessionDto | null {
+    this.db
+      .prepare(`UPDATE sessions SET pinned_at = NULL WHERE id = ?`)
+      .run(id);
+    return this.get(id);
   }
 
   /**

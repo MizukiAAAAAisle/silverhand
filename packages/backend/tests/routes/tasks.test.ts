@@ -112,8 +112,9 @@ describe('Tasks (PR-T1)', () => {
     const h = http(t.app, auth(t.authToken));
 
     // User posts a normal message; alice promotes it.
+    const viewer = http(t.app, { 'x-silverhand-user-id': 'teammate' });
     const userMsg = await (
-      await http(t.app).post(`/api/sessions/${sessionId}/messages`, {
+      await viewer.post(`/api/sessions/${sessionId}/messages`, {
         content: 'please refactor auth module',
       })
     ).json() as any;
@@ -133,6 +134,12 @@ describe('Tasks (PR-T1)', () => {
     ).json() as any;
     expect(listed.tasks).toHaveLength(1);
     expect(listed.tasks[0].title).toBe('please refactor auth module');
+    expect(listed.tasks[0].creator).toMatchObject({
+      type: 'user',
+      id: 'teammate',
+      name: 'teammate',
+    });
+    expect(listed.tasks[0].creator.name).not.toBe('you');
   });
 
   it('rejects cross-session claim with owner_session in reason', async () => {

@@ -58,6 +58,7 @@ electron/src/renderer/src/
 | `--bg-active` | 按下/激活态、segment control 容器 | 再深一档 |
 | `--bg-selected` | **导航激活态**（sidebar 列表当前项、tab 当前项、segment 当前段） | 必须能从 `--bg-primary` 中明显跳出（≥ 5% 亮度差） |
 | `--bg-floating` | **浮层 / 卡片表面**（popover、菜单、对话框、展开后的卡片） | 永远是"内容表面"，通常是主题里**最亮**的一档 |
+| `--bg-chat` | **Chat 主读区**（会话 / Saved / Search 的 main 区域） | 独立于 `--bg-base`；base 可作为全局 frame，chat 应按阅读舒适度单独取值 |
 | `--bg-island` | 岛屿底色（代码块、JSON、终端、表格） | 中性灰，与 ocean 形成材质对比；warm 是冷中性灰 `#ECEAE5`，shadcn 因为本身灰白可与 `bg-primary` 同值 |
 | `--bg-island-deep` | 表头、嵌套岛屿 | 比 island 略深 |
 | `--bg-nav-rail` | NavRail（最左 icon 栏）底色 | 主题最强的一档信号色，或退化成 `var(--bg-primary)`（详见 §9） |
@@ -186,6 +187,7 @@ electron/src/renderer/src/
   --bg-active: ...;
   --bg-selected: ...;       /* 导航激活：从 bg-primary 跳出 */
   --bg-floating: ...;       /* 浮层 / 卡片表面：通常最亮 */
+  --bg-chat: ...;           /* Chat 主读区：按阅读舒适度独立于 bg-base 取值 */
 
   /* ── Islands ── */
   --bg-island: ...;
@@ -358,3 +360,34 @@ NavRail 项 / channel / DM / session 这种**一级导航 row**，用同一套�
 
 **主题间的退化**：`bg-bg-selected` 和 `border-accent` 都是基础 token，新主题只要把 `--accent` 和 `--bg-selected` 选对，这套状态机自动跨主题工作——**组件层不用判主题**。
 
+---
+
+## 11. 下拉菜单的同心圆原则
+
+下拉框（Select / Combobox / Picker）的容器与内层选项 item 必须遵循**同心圆原则**：
+
+> **inner_radius = outer_radius − inset**
+>
+> 当容器圆角为 R、容器到 item 的内边距为 P 时，item 圆角应取 R − P。
+
+### 11.1 当前标准尺寸（对应 Tailwind token）
+
+| 容器 | 内边距 | item 应用 | 推导 |
+|---|---|---|---|
+| `rounded-md` (10 px) | `p-1` (4 px) | **`rounded-sm` (6 px)** | 10 − 4 = 6 |
+| `rounded-lg` (14 px) | `p-1.5` (6 px) | **`rounded-md` (10 px)** (近似) | 14 − 6 ≈ 8，取最近档 |
+| `rounded-xl` (20 px) | `p-2` (8 px) | **`rounded-lg` (14 px)** (近似) | 20 − 8 = 12，取最近档 |
+
+### 11.2 常见错误
+
+- **`rounded`（无 size 修饰符）**：不走主题 token，固定 `0.25 rem ≈ 4 px`，与 `rounded-md` 容器配用时偏小——视觉上 item 和容器圆角脱节。正确写法是 `rounded-sm`。
+- **item 和容器用相同 `rounded-*`**：容器是 `rounded-md`、item 也是 `rounded-md`，内层圆角大于理论值，item 角会"撑破"容器轮廓感。
+- **item 无圆角（`rounded-none`）**：容器有弧度但 item 是直角，hover 高亮撞墙感。
+
+### 11.3 适用范围
+
+- ✅ Select / Combobox content 容器 + item
+- ✅ 自定义 Picker 菜单 + item（如 Composer PickerMenu）
+- ✅ Popover / DropdownMenu content + menuitem
+- ✅ Command palette content + item
+- ❌ 工具栏 / 行内 chip / tag（独立元素，不存在包含关系，不适用同心圆）

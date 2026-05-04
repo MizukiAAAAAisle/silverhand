@@ -1,6 +1,10 @@
 import { Hono } from 'hono';
 import { mkdirSync } from 'node:fs';
-import type { ServerConfig } from '@silverhand/shared';
+import type {
+  AgentRunState,
+  AgentRunTerminalReason,
+  ServerConfig,
+} from '@silverhand/shared';
 import type { BackendContext, BackendLogger } from '../../src/context.js';
 import { SessionEventBus } from '../../src/event-bus.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
@@ -22,6 +26,14 @@ export class FakeSessionManager {
     directive?: string;
   }> = [];
   delivered: Array<{ sessionId: string; agentId: string; messageId: string }> = [];
+  agentRunStates: AgentRunState[] = [];
+  resolvedRuns: Array<{
+    sessionId: string;
+    agentId: string;
+    reason: AgentRunTerminalReason;
+    runId?: string;
+  }> = [];
+  resolvedSessions: Array<{ sessionId: string; reason: AgentRunTerminalReason }> = [];
   stoppedAll = 0;
   reconciled = 0;
 
@@ -33,6 +45,23 @@ export class FakeSessionManager {
   }
   isRunning(): boolean {
     return false;
+  }
+  getAgentRunStates(sessionId: string): AgentRunState[] {
+    return this.agentRunStates.filter(s => s.sessionId === sessionId);
+  }
+  resolveRun(
+    sessionId: string,
+    agentId: string,
+    reason: AgentRunTerminalReason,
+    runId?: string,
+  ): void {
+    this.resolvedRuns.push({ sessionId, agentId, reason, runId });
+  }
+  resolveSessionRuns(
+    sessionId: string,
+    reason: AgentRunTerminalReason = 'session_closed',
+  ): void {
+    this.resolvedSessions.push({ sessionId, reason });
   }
   async start(sessionId: string, agentId: string): Promise<void> {
     if (this.startError) throw this.startError;

@@ -1,4 +1,5 @@
 import type { BackendInfo } from '../../preload/api';
+import { CURRENT_USER_ID } from './current-user';
 
 let cachedInfo: BackendInfo | null = null;
 
@@ -17,6 +18,10 @@ export async function api<T = unknown>(
   const info = await getInfo();
   const headers = new Headers(init.headers);
   headers.set('Authorization', `Bearer ${info.auth_token}`);
+  // Viewer identity — v1 hardcoded to 'local'; backend resolves this from
+  // the header and passes it to Repo methods. Swap CURRENT_USER_ID when
+  // auth is introduced; no other callsite needs to change.
+  headers.set('X-Silverhand-User-Id', CURRENT_USER_ID);
   if (init.body && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }

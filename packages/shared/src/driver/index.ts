@@ -18,7 +18,7 @@ export type ParsedEvent =
   | { kind: 'turn_end'; sessionId?: string }
   | { kind: 'compaction_started' }
   | { kind: 'compaction_finished' }
-  | { kind: 'error'; message: string }
+  | { kind: 'error'; message: string; code?: string; fatal?: boolean }
   | { kind: 'unknown'; raw: string };
 
 export interface McpServerConfig {

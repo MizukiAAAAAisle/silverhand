@@ -129,6 +129,22 @@ export function useCreateSession(channelId: string | null) {
   });
 }
 
+export function usePinSession(channelId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ sessionId, pinned }: { sessionId: string; pinned: boolean }) => {
+      const res = await api<{ session: SessionDto }>(
+        `/api/sessions/${sessionId}/pin`,
+        { method: pinned ? 'POST' : 'DELETE' },
+      );
+      return res.session;
+    },
+    onSuccess: () => {
+      if (channelId) qc.invalidateQueries({ queryKey: sessionsKey(channelId) });
+    },
+  });
+}
+
 export function useChannelMembers(channelId: string | null) {
   return useQuery({
     queryKey: channelId ? membersKey(channelId) : ['channels', 'none', 'members'],

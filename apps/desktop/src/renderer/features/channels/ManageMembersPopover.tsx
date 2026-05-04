@@ -118,7 +118,7 @@ function PopoverBody({ channelId }: { channelId: string }): JSX.Element {
                   <Select.Item
                     key={a.id}
                     value={a.id}
-                    className="flex cursor-default select-none items-center gap-2 rounded px-2 py-1.5 text-sm text-text-primary outline-none data-[highlighted]:bg-bg-hover"
+                    className="flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-text-primary outline-none data-[highlighted]:bg-bg-hover"
                   >
                     <Select.ItemText>@{a.name}</Select.ItemText>
                     <span className="ml-auto text-[10px] text-text-muted">

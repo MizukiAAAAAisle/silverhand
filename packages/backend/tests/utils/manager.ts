@@ -24,6 +24,7 @@ export interface MockClaudeEnvOverrides {
   MOCK_CLAUDE_EXIT_AFTER_INIT_MS?: string;
   MOCK_CLAUDE_EMIT_TURN_END?: '1';
   MOCK_CLAUDE_STDIN_LOG?: string;
+  MOCK_CLAUDE_IGNORE_INTERRUPT?: '1';
 }
 
 const silentLogger: BackendLogger = {
@@ -54,13 +55,19 @@ export interface ManagerHarness {
   cleanup(): Promise<void>;
 }
 
+export interface BuildManagerHarnessOptions {
+  /** If set, wired into ctx.logDir so the SessionManager writes the
+   *  dedicated agent-activity-*.log file. */
+  logDir?: string;
+}
+
 /**
  * Build a real SessionManager pointed at the mock-claude binary, with all
  * the surrounding fixtures (channel, agent, session) pre-created in an
  * in-memory DB. SessionManager's `binariesPromise` is monkey-patched to
  * map runtime "claude" → MOCK_CLAUDE_PATH so it never calls `which claude`.
  */
-export async function buildManagerHarness(): Promise<ManagerHarness> {
+export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {}): Promise<ManagerHarness> {
   const { db, localHostId } = openTestDb();
   const tmp = makeTempSilverhandDir();
   mkdirSync(tmp.workspacesRoot, { recursive: true });
@@ -110,6 +117,7 @@ export async function buildManagerHarness(): Promise<ManagerHarness> {
     logger: silentLogger,
     silverhandDir: tmp.silverhandDir,
     workspacesRoot: tmp.workspacesRoot,
+    logDir: opts.logDir,
     lastSpawnAtByAgent: new Map(),
     events: new SessionEventBus(),
     chatBridgeLauncher: { command: 'true', args: [] }, // never invoked in L3

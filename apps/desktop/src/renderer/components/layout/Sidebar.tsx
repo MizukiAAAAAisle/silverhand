@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
-import { Bookmark } from 'lucide-react';
+import { Bookmark, Search } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { CURRENT_USER_ID, formatUserDisplayName } from '@/lib/current-user';
 import { ChannelGroup, type ChannelItem } from './ChannelsPanel';
 
 interface SidebarProps {
@@ -12,6 +13,9 @@ interface SidebarProps {
    *  appear unselected and the Saved entry highlights instead. */
   savedActive: boolean;
   onSelectSaved: () => void;
+  /** Dedicated global search view under the chat section. */
+  searchActive: boolean;
+  onSelectSearch: () => void;
   /** Live count from the saved-messages query cache. Pass undefined
    *  on first paint (before the query resolves) so the badge stays
    *  hidden instead of flashing 0. */
@@ -33,19 +37,34 @@ export function Sidebar(props: SidebarProps): JSX.Element {
 
   // While the Saved view is active, suppress channel highlighting so
   // the Saved entry visually owns selection.
-  const channelHighlight = props.savedActive ? null : props.selectedChannelId;
+  const channelHighlight =
+    props.savedActive || props.searchActive ? null : props.selectedChannelId;
 
   return (
-    <aside className="flex h-full w-[var(--sidebar-width)] flex-col bg-[var(--bg-channels-sidebar)]">
+    <aside className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]">
       <nav className="flex-1 overflow-y-auto py-1.5">
+        <button
+          type="button"
+          onClick={props.onSelectSearch}
+          className={cn(
+            'mx-1.5 mb-1 flex w-[calc(100%-0.75rem)] items-center gap-2 border-2 px-2 py-1.5 text-left text-sm transition-colors',
+            props.searchActive
+              ? 'border-accent bg-bg-selected text-text-on-selected'
+              : 'border-transparent text-text-secondary hover:border-accent hover:bg-white/70 hover:text-text-primary',
+          )}
+        >
+          <Search className="size-3.5" />
+          <span>Search</span>
+        </button>
+
         <button
           type="button"
           onClick={props.onSelectSaved}
           className={cn(
-            'mx-1.5 mb-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
+            'mx-1.5 mb-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border-2 px-2 py-1.5 text-left text-sm transition-colors',
             props.savedActive
-              ? 'bg-bg-selected text-text-on-selected'
-              : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary',
+              ? 'border-accent bg-bg-selected text-text-on-selected'
+              : 'border-transparent text-text-secondary hover:border-accent hover:bg-white/70 hover:text-text-primary',
           )}
         >
           <Bookmark
@@ -104,7 +123,9 @@ export function Sidebar(props: SidebarProps): JSX.Element {
       <div className="border-t border-border-subtle px-3 py-2.5">
         <div className="flex items-center gap-2 text-xs text-text-muted">
           <div className="size-7 rounded-full bg-bg-elevated" />
-          <div className="min-w-0 flex-1 truncate text-text-secondary">local</div>
+          <div className="min-w-0 flex-1 truncate text-text-secondary">
+            {formatUserDisplayName(CURRENT_USER_ID)}
+          </div>
         </div>
       </div>
     </aside>

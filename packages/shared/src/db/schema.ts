@@ -101,6 +101,7 @@ export interface SessionRow {
   spawned_by_agent_id: string | null;
   closed_at: number | null;
   close_summary: string | null;
+  pinned_at: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -130,6 +131,13 @@ export interface MessageRow {
   task_assignee_user_id: string | null;
   task_title: string | null;
   task_channel_id: string | null;
+}
+
+export interface SessionReadRow {
+  user_id: string;
+  session_id: string;
+  last_read_seq: number;
+  read_at: number;
 }
 
 export interface AgentInboxRow {

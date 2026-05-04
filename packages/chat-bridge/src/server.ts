@@ -12,9 +12,12 @@ import { log } from './logger.js';
  * Tool surface deliberately minimal per core-design §3.6 / §4.6:
  *   - send_message: primary chat tool, with target= to reach parent /
  *                   child sessions
- *   - spawn_child_session: open an isolated sub-discussion
+ *   - create_thread: open an isolated sub-discussion (child session /
+ *                    Thread) off the current session
  *   - close_session: end the current (sub-)session, optionally posting
  *                    summary back to parent
+ *   - create_session: open a new top-level session in the same channel;
+ *                     use only when the user explicitly requests it
  *
  * Memory / consensus reads/writes use the agent's own Read/Write tools
  * (cwd is the channel workspace) — no MCP tool wrapper needed.
@@ -67,11 +70,13 @@ export async function startBridge(args: BridgeArgs): Promise<void> {
   );
 
   server.tool(
-    'spawn_child_session',
-    'Open an isolated sub-discussion off the current session. Use when a side-topic ' +
-      'would clutter the main thread. Members must already be in the current channel.',
+    'create_thread',
+    'Open an isolated Thread (sub-discussion) off the current session. Use when a side-topic ' +
+      'is large enough that mixing it with the main session would obscure the context, or when ' +
+      'you want to delegate a sub-task to a subset of members in parallel. ' +
+      'Cannot be used inside a Thread — Threads cannot nest further.',
     {
-      title: z.string().min(1).describe('Short title for the sub-session.'),
+      title: z.string().min(1).describe('Short title for the Thread.'),
       members: z
         .array(z.string().min(1))
         .min(1)
@@ -80,23 +85,23 @@ export async function startBridge(args: BridgeArgs): Promise<void> {
         .string()
         .min(1)
         .describe(
-          'Concise summary of what the sub-session needs to know from this session. ' +
+          'Concise summary of what the Thread needs to know from this session. ' +
             'Be specific and minimal — this is your forcing function for deciding ' +
-            'whether the spawn is actually warranted.',
+            'whether opening a Thread is actually warranted.',
         ),
       initial_prompt: z
         .string()
         .min(1)
-        .describe('First message you (the spawning agent) post into the sub-session.'),
+        .describe('First message posted into the Thread to kick off the discussion.'),
     },
     async input => {
-      log('info', { title: input.title, memberCount: input.members.length }, 'tool: spawn_child_session invoked');
+      log('info', { title: input.title, memberCount: input.members.length }, 'tool: create_thread invoked');
       try {
-        const r = await client.spawnChildSession(input);
-        log('info', { childSessionId: r.child_session_id }, 'tool: spawn_child_session ok');
+        const r = await client.createThread(input);
+        log('info', { childSessionId: r.child_session_id }, 'tool: create_thread ok');
         return { content: [{ type: 'text', text: JSON.stringify(r) }] };
       } catch (err) {
-        log('error', { err }, 'tool: spawn_child_session failed');
+        log('error', { err }, 'tool: create_thread failed');
         throw err;
       }
     },
@@ -128,6 +133,45 @@ export async function startBridge(args: BridgeArgs): Promise<void> {
         return { content: [{ type: 'text', text: 'ok' }] };
       } catch (err) {
         log('error', { err }, 'tool: close_session failed');
+        throw err;
+      }
+    },
+  );
+
+  server.tool(
+    'create_session',
+    'Create a new top-level session in the same channel. ' +
+      'ONLY use this when the user has explicitly requested opening a new session ' +
+      '(e.g. "open a new session", "discuss this separately", "start a new conversation"). ' +
+      'Do NOT use it to avoid context clutter or for parallel sub-tasks — use create_thread instead. ' +
+      'The new session is created in the current channel with all current channel members. ' +
+      'After creation, post a visible message in this session announcing the new session ID ' +
+      'so the user knows a fork happened.',
+    {
+      title: z.string().min(1).describe('Short title for the new session.'),
+      context_summary: z
+        .string()
+        .min(1)
+        .describe(
+          'Explain why this new session is being created and what user intent it serves. ' +
+            'This is stored for audit and recovery — be explicit that the user requested it.',
+        ),
+      initial_prompt: z
+        .string()
+        .min(1)
+        .describe(
+          'First message posted into the new session. Should clearly state what this ' +
+            'session is for and what participants should do next.',
+        ),
+    },
+    async input => {
+      log('info', { title: input.title }, 'tool: create_session invoked');
+      try {
+        const r = await client.createSession(input);
+        log('info', { sessionId: r.session_id }, 'tool: create_session ok');
+        return { content: [{ type: 'text', text: JSON.stringify(r) }] };
+      } catch (err) {
+        log('error', { err }, 'tool: create_session failed');
         throw err;
       }
     },

@@ -13,6 +13,24 @@ async function makeAgent(t: TestApp, name: string): Promise<string> {
   return body.agent.id;
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function waitForMissing(path: string, timeoutMs = 500): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    try {
+      await fs.stat(path);
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw err;
+    }
+    await delay(10);
+  }
+  throw new Error(`expected ${path} to be removed`);
+}
+
 describe('POST /api/channels (provision)', () => {
   let t: TestApp | null = null;
   afterEach(() => {
@@ -57,6 +75,47 @@ describe('POST /api/channels (provision)', () => {
     );
   });
 
+  it('parallel L1/L2 seeding: 3-member channel seeds all agents without dropping any', async () => {
+    // Regression guard for the parallelized seedAgentL2 path: Promise.all
+    // across 3 agents must not lose any member compared with the old
+    // sequential loop. We verify both the filesystem artifacts and the
+    // in-memory delivery/start records.
+    t = buildTestApp();
+    const a1 = await makeAgent(t, 'p1');
+    const a2 = await makeAgent(t, 'p2');
+    const a3 = await makeAgent(t, 'p3');
+
+    const res = await http(t.app).post('/api/channels', {
+      name: 'parallel-seed',
+      member_agent_ids: [a1, a2, a3],
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json() as any;
+
+    // All 3 L2 agent dirs must be seeded with system_prompt.md.
+    for (const agentId of [a1, a2, a3]) {
+      const systemPrompt = join(
+        body.channel.workspace_path,
+        '.silverhand', 'agents', agentId, 'system_prompt.md',
+      );
+      expect((await fs.stat(systemPrompt)).isFile()).toBe(true);
+    }
+
+    // All 3 members appear in the channel roster.
+    const members = await (
+      await http(t.app).get(`/api/channels/${body.channel.id}/members`)
+    ).json() as any;
+    expect(members.members.map((m: any) => m.id).sort()).toEqual(
+      [a1, a2, a3].sort(),
+    );
+
+    // All 3 got delivered + started (onboarding).
+    expect(t.fake.starts.map((s: any) => s.agentId).sort()).toEqual(
+      [a1, a2, a3].sort(),
+    );
+    expect(t.fake.delivered).toHaveLength(3);
+  });
+
   it('returns 400 on invalid name (regex)', async () => {
     t = buildTestApp();
     const res = await http(t.app).post('/api/channels', { name: 'has spaces' });
@@ -82,6 +141,61 @@ describe('POST /api/channels (provision)', () => {
       await http(t.app).get(`/api/channels/${body.channel.id}/members`)
     ).json() as any;
     expect(members.members).toHaveLength(0);
+  });
+});
+
+describe('DELETE /api/channels/:id', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('returns after DB deletion without waiting for hard-stop cleanup', async () => {
+    t = buildTestApp();
+    const agentId = await makeAgent(t, 'slow-delete');
+    const ch = await (
+      await http(t.app).post('/api/channels', {
+        name: 'delete-me',
+        member_agent_ids: [agentId],
+      })
+    ).json() as any;
+
+    let releaseStop!: () => void;
+    const stopBlocked = new Promise<void>(resolve => {
+      releaseStop = resolve;
+    });
+    const originalStop = t.fake.stop.bind(t.fake);
+    t.fake.stop = async (...args: Parameters<TestApp['fake']['stop']>) => {
+      await originalStop(...args);
+      await stopBlocked;
+    };
+
+    const dotDir = join(ch.channel.workspace_path, '.silverhand');
+    const deletePromise = http(t.app).del(`/api/channels/${ch.channel.id}`);
+
+    try {
+      const result = await Promise.race([
+        deletePromise,
+        delay(75).then(() => 'timeout' as const),
+      ]);
+      if (result === 'timeout') {
+        throw new Error('delete request waited for hard-stop cleanup');
+      }
+      expect(result.status).toBe(204);
+      expect(t.fake.stops).toMatchObject([
+        { sessionId: ch.onboarding_session_id, agentId, mode: 'hard' },
+      ]);
+
+      const list = await (await http(t.app).get('/api/channels')).json() as any;
+      expect(list.channels.some((c: any) => c.id === ch.channel.id)).toBe(false);
+      expect((await fs.stat(dotDir)).isDirectory()).toBe(true);
+    } finally {
+      releaseStop();
+      await deletePromise.catch(() => undefined);
+    }
+
+    await waitForMissing(dotDir);
   });
 });
 

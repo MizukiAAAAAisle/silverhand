@@ -5,8 +5,30 @@ import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { api } from '@/lib/api';
+import { useAppearance } from '@/hooks/useAppearance';
+import { THEME_IDS, type ThemeId } from '@/settings/types';
 
 const settingsKey = ['settings'] as const;
+
+/** 4-color swatch preview and display name for each theme. */
+const THEME_META: Record<ThemeId, { label: string; bg: string; surface: string; text: string; accent: string }> = {
+  'paper-ink': {
+    label: 'Paper Ink',
+    bg: '#FFFAEF', surface: '#EFE5CE', text: '#1F1B14', accent: '#3F5C6E',
+  },
+  'warm-coral': {
+    label: 'Warm Coral',
+    bg: '#F9F9F7', surface: '#F3F3F0', text: '#1A1A18', accent: '#CC7D5E',
+  },
+  'porcelain-verdigris': {
+    label: 'Mulberry Ink',
+    bg: '#FAF7F8', surface: '#F1ECEE', text: '#241D21', accent: '#8A2F55',
+  },
+  'warm-script': {
+    label: 'Warm Script',
+    bg: '#F8F6F2', surface: '#F3EFE8', text: '#1F1B14', accent: '#2D2316',
+  },
+};
 
 interface SettingsResponse {
   settings: Record<string, string>;
@@ -33,6 +55,7 @@ function parseRuntimes(raw: string | undefined | null): RuntimeKind[] {
 
 export function SettingsPage(): JSX.Element {
   const qc = useQueryClient();
+  const { appearance, setTheme } = useAppearance();
   const settingsQuery = useQuery({
     queryKey: settingsKey,
     queryFn: () => api<SettingsResponse>('/api/settings'),
@@ -120,6 +143,51 @@ export function SettingsPage(): JSX.Element {
           onSubmit={handleSubmit}
           className="mx-auto flex w-full max-w-2xl flex-col gap-6"
         >
+          {/* ── Appearance ── */}
+          <section className="flex flex-col gap-3">
+            <h2 className="font-serif text-base font-semibold text-text-primary">
+              外观 (Appearance)
+            </h2>
+            <div className="flex flex-wrap gap-3">
+              {THEME_IDS.map(id => {
+                const meta = THEME_META[id];
+                const active = appearance.theme === id;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setTheme(id)}
+                    className={`flex flex-col items-start gap-1.5 rounded-lg border-2 p-2.5 transition-colors ${
+                      active
+                        ? 'border-accent'
+                        : 'border-transparent hover:border-border'
+                    }`}
+                    style={{ background: meta.bg }}
+                  >
+                    {/* 4-color swatch row */}
+                    <div className="flex gap-1">
+                      {[meta.bg, meta.surface, meta.text, meta.accent].map((c, i) => (
+                        <span
+                          key={i}
+                          className="h-4 w-4 rounded-full border border-black/10"
+                          style={{ background: c }}
+                        />
+                      ))}
+                    </div>
+                    <span
+                      className="text-xs font-medium"
+                      style={{ color: meta.text }}
+                    >
+                      {meta.label}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+          <div className="border-t border-border-subtle" />
+
           <section className="flex flex-col gap-3">
             <h2 className="font-serif text-base font-semibold text-text-primary">
               代理 (Proxy)

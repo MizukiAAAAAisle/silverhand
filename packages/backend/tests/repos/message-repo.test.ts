@@ -75,7 +75,7 @@ describe('MessageRepo', () => {
     expect(repo.getById(m.id)?.metadata).toEqual(m.metadata);
   });
 
-  it('listForSession returns messages in seq ASC, respects limit', () => {
+  it('listForSession returns the latest limited window in seq ASC', () => {
     const { db, sess } = bootstrapSession();
     const repo = new MessageRepo(db);
     for (let i = 0; i < 5; i++) {
@@ -84,8 +84,34 @@ describe('MessageRepo', () => {
     const all = repo.listForSession(sess.id);
     expect(all.map(m => m.content)).toEqual(['m0', 'm1', 'm2', 'm3', 'm4']);
 
-    const head = repo.listForSession(sess.id, 2);
-    expect(head.map(m => m.content)).toEqual(['m0', 'm1']);
+    const tail = repo.listForSession(sess.id, 2);
+    expect(tail.map(m => m.content)).toEqual(['m3', 'm4']);
+  });
+
+  it('listWindowForSession pages earlier messages and reports has_more_before', () => {
+    const { db, sess } = bootstrapSession();
+    const repo = new MessageRepo(db);
+    for (let i = 0; i < 5; i++) {
+      repo.insert({ sessionId: sess.id, fromKind: 'user', content: `m${i}` });
+    }
+
+    const latest = repo.listWindowForSession(sess.id, { limit: 2 });
+    expect(latest.messages.map(m => m.content)).toEqual(['m3', 'm4']);
+    expect(latest.has_more_before).toBe(true);
+
+    const earlier = repo.listWindowForSession(sess.id, {
+      limit: 2,
+      beforeSeq: latest.messages[0]!.seq,
+    });
+    expect(earlier.messages.map(m => m.content)).toEqual(['m1', 'm2']);
+    expect(earlier.has_more_before).toBe(true);
+
+    const oldest = repo.listWindowForSession(sess.id, {
+      limit: 2,
+      beforeSeq: earlier.messages[0]!.seq,
+    });
+    expect(oldest.messages.map(m => m.content)).toEqual(['m0']);
+    expect(oldest.has_more_before).toBe(false);
   });
 
   it('null metadata round-trips as null, not as the string "null"', () => {

@@ -4,6 +4,11 @@ import { useAgents } from '@/features/agents/hooks';
 import { CreateAgentDialog } from '@/features/agents/CreateAgentDialog';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { Button } from '@/components/ui/button';
+import {
+  CURRENT_USER_ID,
+  CURRENT_USER_SUBTITLE,
+  formatUserDisplayName,
+} from '@/lib/current-user';
 import { SidebarRow, SidebarSection } from './sidebar-shared';
 
 interface MembersPanelProps {
@@ -56,8 +61,8 @@ export function MembersPanel({
       <SidebarSection label="HUMANS" count={1}>
         <SidebarRow
           icon={<User className="size-3.5" />}
-          title="local"
-          subtitle="(you)"
+          title={formatUserDisplayName(CURRENT_USER_ID)}
+          subtitle={CURRENT_USER_SUBTITLE}
         />
       </SidebarSection>
 

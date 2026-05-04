@@ -21,10 +21,20 @@ export const apiPaths = {
   channelMember: (id: string, agentId: string) =>
     `/api/channels/${id}/members/${agentId}`,
   channelSessions: (id: string) => `/api/channels/${id}/sessions`,
+  /** Per-session unread notification counts for a channel.
+   *  GET → `{ counts: Record<sessionId, number> }` */
+  channelUnreadBySession: (id: string) => `/api/channels/${id}/unread-by-session`,
+  /** Per-session message unread counts for a channel (session_reads cursor).
+   *  GET → `{ by_session: Record<sessionId, number>; total: number }` */
+  channelMessageUnread: (id: string) => `/api/channels/${id}/message-unread`,
+  /** Global message unread summary across all channels.
+   *  GET → `{ by_channel: Record<channelId, number> }` */
+  messageUnreadSummary: '/api/message-unread-summary',
 
   // sessions
   session: (id: string) => `/api/sessions/${id}`,
   sessionAgents: (id: string) => `/api/sessions/${id}/agents`,
+  sessionAgentRunStates: (id: string) => `/api/sessions/${id}/agent-run-states`,
   sessionMessages: (id: string) => `/api/sessions/${id}/messages`,
   sessionEvents: (id: string) => `/api/sessions/${id}/events`,
   sessionStream: (id: string) => `/api/sessions/${id}/stream`,
@@ -37,9 +47,13 @@ export const apiPaths = {
   sessionStop: (id: string) => `/api/sessions/${id}/stop`,
   sessionResume: (id: string) => `/api/sessions/${id}/resume`,
   sessionArchive: (id: string) => `/api/sessions/${id}/archive`,
+  /** Advance the viewer's read cursor to the latest message in the session.
+   *  POST (no body required) → `{ last_read_seq: number }` */
+  sessionMarkRead: (id: string) => `/api/sessions/${id}/mark-read`,
 
   // saved messages
   saved: '/api/saved',
+  search: '/api/search',
   messageSave: (id: string) => `/api/messages/${id}/save`,
 
   // single message lookup — used by thread anchor preview to backfill
@@ -77,6 +91,9 @@ export const internalPaths = {
   /** Agent closes the current session (must be a child or own). */
   agentCloseSession: (sid: string, aid: string) =>
     `/internal/sessions/${sid}/agents/${aid}/close`,
+  /** Agent creates a new top-level session in the same channel. */
+  agentCreateSession: (sid: string, aid: string) =>
+    `/internal/sessions/${sid}/agents/${aid}/create-session`,
 
   // ── Task MCP tool endpoints (chat-bridge → backend) ──────────────
   // Scoped under (session_id, agent_id) so the backend can enforce

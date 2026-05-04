@@ -114,10 +114,14 @@ export function Composer({ sessionId, disabled }: ComposerProps): JSX.Element {
   function submit(): void {
     const content = draft.trim();
     if (!content || disabled) return;
+    // Clear immediately — the optimistic update shows the message at once;
+    // on error the mutation rolls back the cache and we restore the draft.
+    setDraft('');
+    setCaret(0);
     send.mutate(content, {
-      onSuccess: () => {
-        setDraft('');
-        setCaret(0);
+      onError: () => {
+        // Restore so the user doesn't lose what they typed.
+        setDraft(content);
       },
     });
   }
@@ -353,7 +357,7 @@ function Row({
   onHover: () => void;
 }): JSX.Element {
   const cls =
-    'flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-left ' +
+    'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-left ' +
     (active ? 'bg-bg-hover text-text-primary' : 'text-text-secondary');
   return (
     <button
