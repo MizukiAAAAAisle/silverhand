@@ -8,8 +8,7 @@ import type { AppSection } from '@/components/layout/NavRail';
  * codebase.
  *
  * Naming: workspace (outer container) → channel (conversation) → thread (nested).
- * Old: /chat/c/:channelId/s/:sessionId/t/:childSessionId
- * New: /chat/w/:workspaceId/c/:channelId/t/:threadId
+ * Route shape: /chat/w/:workspaceId/c/:channelId/t/:threadId
  */
 export const routes = {
   home: () => '/',

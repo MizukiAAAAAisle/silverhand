@@ -20,13 +20,13 @@ describe('test infrastructure smoke', () => {
       expect.arrayContaining([
         'hosts',
         'agents',
-        'channels',
-        'channel_members',
-        'sessions',
-        'session_agents',
+        'workspaces',
+        'workspace_members',
+        'conversations',
+        'conversation_agents',
         'messages',
-        'agent_inboxes',
-        'session_events',
+        'conversation_inboxes',
+        'conversation_events',
       ]),
     );
 

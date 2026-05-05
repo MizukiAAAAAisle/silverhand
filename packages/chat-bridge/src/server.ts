@@ -74,13 +74,17 @@ export async function startBridge(args: BridgeArgs): Promise<void> {
     'Open an isolated Thread (sub-discussion) off the current channel. Use when a side-topic ' +
       'is large enough that mixing it with the main channel would obscure the context, or when ' +
       'you want to delegate a sub-task to a subset of members in parallel. ' +
+      'When members is omitted, all current channel members are pulled in; the caller is always included. ' +
       'Cannot be used inside a Thread — Threads cannot nest further.',
     {
       title: z.string().min(1).describe('Short title for the Thread.'),
       members: z
         .array(z.string().min(1))
-        .min(1)
-        .describe('Agent ids to pull in. Must be a subset of current channel members.'),
+        .optional()
+        .describe(
+          'Optional agent ids to pull in. Must be a subset of current channel members. ' +
+            'Omit to use all current channel members; the caller is always included.',
+        ),
       context_summary: z
         .string()
         .min(1)
@@ -95,7 +99,7 @@ export async function startBridge(args: BridgeArgs): Promise<void> {
         .describe('First message posted into the Thread to kick off the discussion.'),
     },
     async input => {
-      log('info', { title: input.title, memberCount: input.members.length }, 'tool: create_thread invoked');
+      log('info', { title: input.title, memberCount: input.members?.length ?? null }, 'tool: create_thread invoked');
       try {
         const r = await client.createThread(input);
         log('info', { threadId: r.thread_id }, 'tool: create_thread ok');

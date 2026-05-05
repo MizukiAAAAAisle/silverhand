@@ -5,7 +5,7 @@ async function setupSession(
   t: TestApp,
   members: string[] = ['alice', 'bob'],
 ): Promise<{
-  sessionId: string;
+  conversationId: string;
   channelId: string;
   agentIds: Record<string, string>;
 }> {
@@ -16,15 +16,9 @@ async function setupSession(
     ).json() as any;
     agentIds[name] = r.agent.id;
   }
-  const ch = await (
-    await http(t.app).post('/api/channels', {
+  const ws = await (
+    await http(t.app).post('/api/workspaces', {
       name: 'eng',
-      member_agent_ids: Object.values(agentIds),
-    })
-  ).json() as any;
-  const session = await (
-    await http(t.app).post(`/api/channels/${ch.channel.id}/sessions`, {
-      title: 's',
       member_agent_ids: Object.values(agentIds),
     })
   ).json() as any;
@@ -33,8 +27,8 @@ async function setupSession(
   t.fake.delivered = [];
   t.fake.stops = [];
   return {
-    sessionId: session.session.id,
-    channelId: ch.channel.id,
+    conversationId: ws.onboarding_channel_id,
+    channelId: ws.workspace.id,
     agentIds,
   };
 }
@@ -52,9 +46,9 @@ describe('Internal route auth', () => {
 
   it('rejects request with no Authorization header (401)', async () => {
     t = buildTestApp();
-    const { sessionId, agentIds } = await setupSession(t);
+    const { conversationId, agentIds } = await setupSession(t);
     const r = await http(t.app).post(
-      `/internal/sessions/${sessionId}/agents/${agentIds.alice}/send-message`,
+      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
       { content: 'hi' },
     );
     expect(r.status).toBe(401);
@@ -62,9 +56,9 @@ describe('Internal route auth', () => {
 
   it('rejects request with wrong bearer token (401)', async () => {
     t = buildTestApp();
-    const { sessionId, agentIds } = await setupSession(t);
+    const { conversationId, agentIds } = await setupSession(t);
     const r = await http(t.app).post(
-      `/internal/sessions/${sessionId}/agents/${agentIds.alice}/send-message`,
+      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
       { content: 'hi' },
       { headers: authHeaders('wrong') },
     );
@@ -73,9 +67,9 @@ describe('Internal route auth', () => {
 
   it('accepts the configured token', async () => {
     t = buildTestApp();
-    const { sessionId, agentIds } = await setupSession(t);
+    const { conversationId, agentIds } = await setupSession(t);
     const r = await http(t.app).post(
-      `/internal/sessions/${sessionId}/agents/${agentIds.alice}/send-message`,
+      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
       { content: 'hi' },
       { headers: authHeaders(t.authToken) },
     );
@@ -92,9 +86,9 @@ describe('POST /internal/.../send-message', () => {
 
   it('writes the message to self target + distributes to other agents (not the sender)', async () => {
     t = buildTestApp();
-    const { sessionId, agentIds } = await setupSession(t, ['alice', 'bob']);
+    const { conversationId, agentIds } = await setupSession(t, ['alice', 'bob']);
     const r = await http(t.app).post(
-      `/internal/sessions/${sessionId}/agents/${agentIds.alice}/send-message`,
+      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
       { content: 'hello team' },
       { headers: authHeaders(t.authToken) },
     );
@@ -104,10 +98,10 @@ describe('POST /internal/.../send-message', () => {
 
     // Sender (alice) is excluded; bob gets the delivery.
     expect(t.fake.delivered.map(d => d.agentId)).toEqual([agentIds.bob]);
-    expect(t.fake.delivered[0]!.sessionId).toBe(sessionId);
+    expect(t.fake.delivered[0]!.conversationId).toBe(conversationId);
 
     const msgs = await (
-      await http(t.app).get(`/api/sessions/${sessionId}/messages`)
+      await http(t.app).get(`/api/channels/${conversationId}/messages`)
     ).json() as any;
     const inserted = msgs.messages.find((m: any) => m.id === body.message_id);
     expect(inserted.from_kind).toBe('agent');
@@ -117,9 +111,9 @@ describe('POST /internal/.../send-message', () => {
 
   it('rejects parent target when current session has no parent', async () => {
     t = buildTestApp();
-    const { sessionId, agentIds } = await setupSession(t, ['alice']);
+    const { conversationId, agentIds } = await setupSession(t, ['alice']);
     const r = await http(t.app).post(
-      `/internal/sessions/${sessionId}/agents/${agentIds.alice}/send-message`,
+      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
       { content: 'up', target: 'parent' },
       { headers: authHeaders(t.authToken) },
     );
@@ -130,18 +124,18 @@ describe('POST /internal/.../send-message', () => {
 
   it('rejects child target that is not a direct child', async () => {
     t = buildTestApp();
-    const { sessionId, agentIds } = await setupSession(t, ['alice']);
-    // Make a sibling (not a child) session
+    const { conversationId, agentIds, channelId } = await setupSession(t, ['alice']);
+    // Make a sibling top-level channel, not a child thread.
     const sibling = await (
-      await http(t.app).post(`/api/channels/${(await getChannelOf(t, sessionId))}/sessions`, {
+      await http(t.app).post(`/api/workspaces/${channelId}/channels`, {
         title: 'sibling',
       })
     ).json() as any;
     const r = await http(t.app).post(
-      `/internal/sessions/${sessionId}/agents/${agentIds.alice}/send-message`,
+      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
       {
         content: 'down',
-        target: { thread_id: sibling.session.id },
+        target: { thread_id: sibling.channel.id },
       },
       { headers: authHeaders(t.authToken) },
     );
@@ -150,25 +144,30 @@ describe('POST /internal/.../send-message', () => {
 
   it('writes to a real thread via { thread_id }', async () => {
     t = buildTestApp();
-    const { sessionId, agentIds, channelId } = await setupSession(t, ['alice']);
+    const { conversationId, agentIds } = await setupSession(t, ['alice']);
     const child = await (
-      await http(t.app).post(`/api/channels/${channelId}/sessions`, {
+      await http(t.app).post(
+        `/internal/conversations/${conversationId}/agents/${agentIds.alice}/create-thread`,
+        {
         title: 'child',
-        parent_session_id: sessionId,
+        members: [agentIds.alice],
         context_summary: 'x',
-      })
+        initial_prompt: 'seed child',
+      },
+        { headers: authHeaders(t.authToken) },
+      )
     ).json() as any;
     const r = await http(t.app).post(
-      `/internal/sessions/${sessionId}/agents/${agentIds.alice}/send-message`,
+      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
       {
         content: 'down to child',
-        target: { thread_id: child.session.id },
+        target: { thread_id: child.thread_id },
       },
       { headers: authHeaders(t.authToken) },
     );
     expect(r.status).toBe(200);
     const childMsgs = await (
-      await http(t.app).get(`/api/sessions/${child.session.id}/messages`)
+      await http(t.app).get(`/api/threads/${child.thread_id}/messages`)
     ).json() as any;
     expect(
       childMsgs.messages.some(
@@ -179,7 +178,7 @@ describe('POST /internal/.../send-message', () => {
 
 });
 
-describe('POST /internal/.../spawn-child', () => {
+describe('POST /internal/.../create-thread', () => {
   let t: TestApp | null = null;
   afterEach(() => {
     t?.cleanup();
@@ -188,12 +187,12 @@ describe('POST /internal/.../spawn-child', () => {
 
   it('rejects members that are not in the parent channel (400)', async () => {
     t = buildTestApp();
-    const { sessionId, agentIds } = await setupSession(t, ['alice']);
+    const { conversationId, agentIds } = await setupSession(t, ['alice']);
     const outsider = await (
       await http(t.app).post('/api/agents', { name: 'mallory', runtime: 'claude' })
     ).json() as any;
     const r = await http(t.app).post(
-      `/internal/sessions/${sessionId}/agents/${agentIds.alice}/spawn-child`,
+      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/create-thread`,
       {
         title: 'oops',
         members: [outsider.agent.id],
@@ -205,11 +204,13 @@ describe('POST /internal/.../spawn-child', () => {
     expect(r.status).toBe(400);
   });
 
-  it('creates a child session, seeds 2 messages (system + agent prompt)', async () => {
+  it('creates a child thread, lists it without an anchor, and seeds 2 messages', async () => {
     t = buildTestApp();
-    const { sessionId, agentIds } = await setupSession(t, ['alice', 'bob']);
+    const { conversationId, agentIds } = await setupSession(t, ['alice', 'bob']);
+    const events: { kind: string; payload: unknown }[] = [];
+    const unsub = t.ctx.events.subscribe(conversationId, e => events.push(e));
     const r = await http(t.app).post(
-      `/internal/sessions/${sessionId}/agents/${agentIds.alice}/spawn-child`,
+      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/create-thread`,
       {
         title: 'investigate',
         members: [agentIds.bob],
@@ -218,12 +219,29 @@ describe('POST /internal/.../spawn-child', () => {
       },
       { headers: authHeaders(t.authToken) },
     );
+    unsub();
     expect(r.status).toBe(200);
     const body = await r.json() as any;
     expect(typeof body.thread_id).toBe('string');
 
+    const threadSummary = await (
+      await http(t.app).get(`/api/channels/${conversationId}/threads`)
+    ).json() as any;
+    expect(threadSummary.threads).toContainEqual({
+      thread_id: body.thread_id,
+      anchor_message_id: null,
+      reply_count: 1,
+    });
+    expect(events).toContainEqual({
+      kind: 'thread_updated',
+      payload: {
+        parent_conversation_id: conversationId,
+        thread_id: body.thread_id,
+      },
+    });
+
     const msgs = await (
-      await http(t.app).get(`/api/sessions/${body.thread_id}/messages`)
+      await http(t.app).get(`/api/threads/${body.thread_id}/messages`)
     ).json() as any;
     expect(msgs.messages).toHaveLength(2);
     expect(msgs.messages[0].from_kind).toBe('system');
@@ -232,16 +250,40 @@ describe('POST /internal/.../spawn-child', () => {
     expect(msgs.messages[1].from_agent_id).toBe(agentIds.alice);
     expect(msgs.messages[1].content).toBe('profile the hot path');
 
-    // bob is the only member
+    // Explicit subsets are allowed, but the caller is always included.
     const childAgents = await (
-      await http(t.app).get(`/api/sessions/${body.thread_id}/agents`)
+      await http(t.app).get(`/api/threads/${body.thread_id}/agents`)
     ).json() as any;
-    expect(childAgents.agents.map((a: any) => a.agent_id)).toEqual([agentIds.bob]);
+    expect(childAgents.agents.map((a: any) => a.agent_id).sort()).toEqual(
+      [agentIds.alice, agentIds.bob].sort(),
+    );
+  });
+
+  it('defaults create_thread members to all current channel members', async () => {
+    t = buildTestApp();
+    const { conversationId, agentIds } = await setupSession(t, ['alice', 'bob']);
+    const r = await http(t.app).post(
+      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/create-thread`,
+      {
+        title: 'default-members',
+        context_summary: 'x',
+        initial_prompt: 'go',
+      },
+      { headers: authHeaders(t.authToken) },
+    );
+    expect(r.status).toBe(200);
+    const body = await r.json() as any;
+    const childAgents = await (
+      await http(t.app).get(`/api/threads/${body.thread_id}/agents`)
+    ).json() as any;
+    expect(childAgents.agents.map((a: any) => a.agent_id).sort()).toEqual(
+      [agentIds.alice, agentIds.bob].sort(),
+    );
   });
 
   it('surfaces concurrent_limit as 429', async () => {
     t = buildTestApp();
-    const { sessionId, agentIds } = await setupSession(t, ['alice']);
+    const { conversationId, agentIds } = await setupSession(t, ['alice']);
     t.ctx.serverConfig = {
       ...t.ctx.serverConfig,
       child_sessions: {
@@ -252,7 +294,7 @@ describe('POST /internal/.../spawn-child', () => {
     };
 
     const ok = await http(t.app).post(
-      `/internal/sessions/${sessionId}/agents/${agentIds.alice}/spawn-child`,
+      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/create-thread`,
       {
         title: 'c1',
         members: [agentIds.alice],
@@ -264,7 +306,7 @@ describe('POST /internal/.../spawn-child', () => {
     expect(ok.status).toBe(200);
 
     const second = await http(t.app).post(
-      `/internal/sessions/${sessionId}/agents/${agentIds.alice}/spawn-child`,
+      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/create-thread`,
       {
         title: 'c2',
         members: [agentIds.alice],
@@ -279,16 +321,16 @@ describe('POST /internal/.../spawn-child', () => {
   });
 });
 
-describe('POST /internal/.../create-session', () => {
+describe('POST /internal/.../create-channel', () => {
   let t: TestApp | null = null;
   afterEach(() => {
     t?.cleanup();
     t = null;
   });
 
-  it('creates a top-level session in the current channel with all channel members', async () => {
+  it('creates a top-level channel in the current workspace with all current members', async () => {
     t = buildTestApp();
-    const { sessionId, channelId, agentIds } = await setupSession(t, ['alice', 'bob']);
+    const { conversationId, channelId, agentIds } = await setupSession(t, ['alice', 'bob']);
     const outsider = await (
       await http(t.app).post('/api/agents', { name: 'mallory', runtime: 'claude' })
     ).json() as any;
@@ -296,7 +338,7 @@ describe('POST /internal/.../create-session', () => {
     t.fake.delivered = [];
 
     const r = await http(t.app).post(
-      `/internal/sessions/${sessionId}/agents/${agentIds.alice}/create-session`,
+      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/create-channel`,
       {
         title: 'release signing',
         context_summary: 'user explicitly asked to split release signing out',
@@ -308,29 +350,29 @@ describe('POST /internal/.../create-session', () => {
     );
     expect(r.status).toBe(200);
     const body = await r.json() as any;
-    expect(typeof body.session_id).toBe('string');
-    expect(Object.keys(body)).toEqual(['session_id']);
+    expect(typeof body.channel_id).toBe('string');
+    expect(Object.keys(body)).toEqual(['channel_id']);
 
     const created = await (
-      await http(t.app).get(`/api/sessions/${body.session_id}`)
+      await http(t.app).get(`/api/channels/${body.channel_id}`)
     ).json() as any;
-    expect(created.session.parent_session_id).toBeNull();
-    expect(created.session.channel_id).toBe(channelId);
-    expect(created.session.spawned_by_agent_id).toBe(agentIds.alice);
+    expect(created.channel.parent_conversation_id).toBeNull();
+    expect(created.channel.workspace_id).toBe(channelId);
+    expect(created.channel.spawned_by_agent_id).toBe(agentIds.alice);
 
-    const sessionAgents = await (
-      await http(t.app).get(`/api/sessions/${body.session_id}/agents`)
+    const channelAgents = await (
+      await http(t.app).get(`/api/channels/${body.channel_id}/agents`)
     ).json() as any;
-    expect(sessionAgents.agents.map((a: any) => a.agent_id).sort()).toEqual([
+    expect(channelAgents.agents.map((a: any) => a.agent_id).sort()).toEqual([
       agentIds.alice,
       agentIds.bob,
     ].sort());
     expect(
-      sessionAgents.agents.map((a: any) => a.agent_id),
+      channelAgents.agents.map((a: any) => a.agent_id),
     ).not.toContain(outsider.agent.id);
 
     const msgs = await (
-      await http(t.app).get(`/api/sessions/${body.session_id}/messages`)
+      await http(t.app).get(`/api/channels/${body.channel_id}/messages`)
     ).json() as any;
     expect(msgs.messages).toHaveLength(2);
     expect(msgs.messages[0].from_kind).toBe('system');
@@ -341,22 +383,22 @@ describe('POST /internal/.../create-session', () => {
 
     expect(t.fake.delivered).toEqual([
       {
-        sessionId: body.session_id,
+        conversationId: body.channel_id,
         agentId: agentIds.bob,
         messageId: msgs.messages[1].id,
       },
     ]);
     expect(t.fake.starts).toEqual([
-      { sessionId: body.session_id, agentId: agentIds.bob },
+      { conversationId: body.channel_id, agentId: agentIds.bob },
     ]);
   });
 
   it('creates a top-level sibling when invoked from a child session', async () => {
     t = buildTestApp();
-    const { sessionId, channelId, agentIds } = await setupSession(t, ['alice']);
+    const { conversationId, channelId, agentIds } = await setupSession(t, ['alice']);
     const child = await (
       await http(t.app).post(
-        `/internal/sessions/${sessionId}/agents/${agentIds.alice}/spawn-child`,
+        `/internal/conversations/${conversationId}/agents/${agentIds.alice}/create-thread`,
         {
           title: 'thread',
           members: [agentIds.alice],
@@ -368,7 +410,7 @@ describe('POST /internal/.../create-session', () => {
     ).json() as any;
 
     const r = await http(t.app).post(
-      `/internal/sessions/${child.thread_id}/agents/${agentIds.alice}/create-session`,
+      `/internal/conversations/${child.thread_id}/agents/${agentIds.alice}/create-channel`,
       {
         title: 'sibling topic',
         context_summary: 'user asked for a separate top-level session',
@@ -379,17 +421,17 @@ describe('POST /internal/.../create-session', () => {
     expect(r.status).toBe(200);
     const body = await r.json() as any;
     const created = await (
-      await http(t.app).get(`/api/sessions/${body.session_id}`)
+      await http(t.app).get(`/api/channels/${body.channel_id}`)
     ).json() as any;
-    expect(created.session.channel_id).toBe(channelId);
-    expect(created.session.parent_session_id).toBeNull();
+    expect(created.channel.workspace_id).toBe(channelId);
+    expect(created.channel.parent_conversation_id).toBeNull();
   });
 
   it('requires an initial_prompt', async () => {
     t = buildTestApp();
-    const { sessionId, agentIds } = await setupSession(t, ['alice']);
+    const { conversationId, agentIds } = await setupSession(t, ['alice']);
     const r = await http(t.app).post(
-      `/internal/sessions/${sessionId}/agents/${agentIds.alice}/create-session`,
+      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/create-channel`,
       {
         title: 'missing prompt',
         context_summary: 'x',
@@ -400,20 +442,20 @@ describe('POST /internal/.../create-session', () => {
   });
 });
 
-describe('POST /internal/.../close', () => {
+describe('POST /internal/.../close-thread', () => {
   let t: TestApp | null = null;
   afterEach(() => {
     t?.cleanup();
     t = null;
   });
 
-  it('child agent close posts summary to parent + tells SessionManager.stop for every member', async () => {
+  it('child agent close posts summary to parent + tells ConversationManager.stop for every member', async () => {
     t = buildTestApp();
-    const { sessionId, agentIds } = await setupSession(t, ['alice', 'bob']);
+    const { conversationId, agentIds } = await setupSession(t, ['alice', 'bob']);
     // spawn a child via the internal route
     const child = await (
       await http(t.app).post(
-        `/internal/sessions/${sessionId}/agents/${agentIds.alice}/spawn-child`,
+        `/internal/conversations/${conversationId}/agents/${agentIds.alice}/create-thread`,
         {
           title: 'inv',
           members: [agentIds.bob],
@@ -426,10 +468,10 @@ describe('POST /internal/.../close', () => {
 
     t.fake.stops = [];
     const events: { kind: string; payload: unknown }[] = [];
-    const unsub = t.ctx.events.subscribe(sessionId, e => events.push(e));
+    const unsub = t.ctx.events.subscribe(conversationId, e => events.push(e));
 
     const close = await http(t.app).post(
-      `/internal/sessions/${child.thread_id}/agents/${agentIds.bob}/close`,
+      `/internal/conversations/${child.thread_id}/agents/${agentIds.bob}/close-thread`,
       { summary: 'done' },
       { headers: authHeaders(t.authToken) },
     );
@@ -438,7 +480,7 @@ describe('POST /internal/.../close', () => {
 
     // Parent got an auto-summary system message
     const parentMsgs = await (
-      await http(t.app).get(`/api/sessions/${sessionId}/messages`)
+      await http(t.app).get(`/api/channels/${conversationId}/messages`)
     ).json() as any;
     const summary = parentMsgs.messages.find(
       (m: any) => m.from_kind === 'system' && m.content.includes('inv'),
@@ -450,19 +492,14 @@ describe('POST /internal/.../close', () => {
     // Every member of the closed session got stop() called
     expect(
       t.fake.stops.some(
-        s => s.sessionId === child.thread_id && s.agentId === agentIds.bob,
+        s => s.conversationId === child.thread_id && s.agentId === agentIds.bob,
       ),
     ).toBe(true);
 
     const threadUpdated = events.find(e => e.kind === 'thread_updated')?.payload as any;
     expect(threadUpdated).toMatchObject({
-      parent_session_id: sessionId,
-      child_session_id: child.thread_id,
+      parent_conversation_id: conversationId,
+      thread_id: child.thread_id,
     });
   });
 });
-
-async function getChannelOf(t: TestApp, sessionId: string): Promise<string> {
-  const s = await (await http(t.app).get(`/api/sessions/${sessionId}`)).json() as any;
-  return s.session.channel_id;
-}

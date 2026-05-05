@@ -16,6 +16,16 @@ export interface MessageWindow {
   has_more_before: boolean;
 }
 
+type MessageRowWithTaskAssignee = MessageRow & {
+  task_assignee_name: string | null;
+};
+
+function messageRowWithTaskAssigneeToDto(
+  row: MessageRowWithTaskAssignee,
+): MessageDto {
+  return messageRowToDto(row, { assigneeName: row.task_assignee_name });
+}
+
 export function messageRowToDto(
   row: MessageRow,
   opts?: { assigneeName?: string | null },
@@ -36,7 +46,7 @@ export function messageRowToDto(
   }
   return {
     id: row.id,
-    session_id: row.session_id,
+    conversation_id: row.conversation_id,
     from_kind: row.from_kind,
     from_agent_id: row.from_agent_id,
     from_user_id: row.from_user_id,
@@ -47,7 +57,7 @@ export function messageRowToDto(
     task_number: row.task_number,
     task_status: row.task_status,
     task_title: row.task_title,
-    task_channel_id: row.task_channel_id,
+    task_workspace_id: row.task_workspace_id,
     task_assignee: assignee,
   };
 }
@@ -55,30 +65,34 @@ export function messageRowToDto(
 export class MessageRepo {
   constructor(private readonly db: Db) {}
 
-  listForSession(sessionId: string, limit = 200): MessageDto[] {
-    return this.listWindowForSession(sessionId, { limit }).messages;
+  listForConversation(conversationId: string, limit = 200): MessageDto[] {
+    return this.listWindowForConversation(conversationId, { limit }).messages;
   }
 
-  listWindowForSession(
-    sessionId: string,
+  listWindowForConversation(
+    conversationId: string,
     opts: { limit?: number; beforeSeq?: number | null } = {},
   ): MessageWindow {
     const limit = opts.limit ?? 200;
     const beforeSeq = opts.beforeSeq ?? null;
     const rows = this.db
-      .prepare<[string, number | null, number | null, number], MessageRow>(
-        `SELECT *
+      .prepare<
+        [string, number | null, number | null, number],
+        MessageRowWithTaskAssignee
+      >(
+        `SELECT m.*, aa.display_name AS task_assignee_name
            FROM (
              SELECT *
                FROM messages
-              WHERE session_id = ?
+              WHERE conversation_id = ?
                 AND (? IS NULL OR seq < ?)
               ORDER BY seq DESC
               LIMIT ?
-           )
-          ORDER BY seq ASC`,
+           ) m
+          LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
+          ORDER BY m.seq ASC`,
       )
-      .all(sessionId, beforeSeq, beforeSeq, limit);
+      .all(conversationId, beforeSeq, beforeSeq, limit);
 
     const minSeq = rows[0]?.seq ?? null;
     const hasMoreBefore =
@@ -88,27 +102,32 @@ export class MessageRepo {
             .prepare<[string, number], { found: 1 }>(
               `SELECT 1 AS found
                  FROM messages
-                WHERE session_id = ?
+                WHERE conversation_id = ?
                   AND seq < ?
                 LIMIT 1`,
             )
-            .get(sessionId, minSeq) !== undefined;
+            .get(conversationId, minSeq) !== undefined;
 
     return {
-      messages: rows.map(r => messageRowToDto(r)),
+      messages: rows.map(r => messageRowWithTaskAssigneeToDto(r)),
       has_more_before: hasMoreBefore,
     };
   }
 
   getById(id: string): MessageDto | null {
     const row = this.db
-      .prepare<[string], MessageRow>('SELECT * FROM messages WHERE id = ?')
+      .prepare<[string], MessageRowWithTaskAssignee>(
+        `SELECT m.*, aa.display_name AS task_assignee_name
+           FROM messages m
+           LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
+          WHERE m.id = ?`,
+      )
       .get(id);
-    return row ? messageRowToDto(row) : null;
+    return row ? messageRowWithTaskAssigneeToDto(row) : null;
   }
 
-  insert(params: {
-    sessionId: string;
+  insertForConversation(params: {
+    conversationId: string;
     fromKind: FromKind;
     fromAgentId?: string | null;
     fromUserId?: string | null;
@@ -119,20 +138,22 @@ export class MessageRepo {
     const now = Date.now();
     const seqRow = this.db
       .prepare<[string], { next_seq: number }>(
-        `SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM messages WHERE session_id = ?`,
+        `SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq
+           FROM messages
+          WHERE conversation_id = ?`,
       )
-      .get(params.sessionId);
+      .get(params.conversationId);
     const seq = seqRow?.next_seq ?? 1;
     this.db
       .prepare(
         `INSERT INTO messages
-         (id, session_id, from_kind, from_agent_id, from_user_id,
+         (id, conversation_id, from_kind, from_agent_id, from_user_id,
           content, metadata, seq, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
-        params.sessionId,
+        params.conversationId,
         params.fromKind,
         params.fromAgentId ?? null,
         params.fromUserId ?? null,

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AgentDto } from '@silverhand/shared';
 import {
-  useSessionStream,
-  type SessionStreamEvent,
-} from '@/hooks/useSessionStream';
+  useConversationStream,
+  type ConversationStreamEvent,
+} from '@/hooks/useConversationStream';
 
 const MAX_EVENTS = 200;
 
@@ -15,28 +15,30 @@ interface LoggedEvent {
 }
 
 /**
- * Renders a scrolling, ring-buffered log of SSE events for one session.
+ * Renders a scrolling, ring-buffered log of SSE events for one channel.
  * Used by the dev-only Events window (`renderer/events/EventsApp.tsx`)
  * — extracted out of the previous in-app `EventPanel` so the same
  * markup serves both the standalone window and any future embedded
  * use. Skips `ping` keepalives.
  */
 export function EventStream({
-  sessionId,
+  conversationId,
+  scope,
   agentsById,
 }: {
-  sessionId: string | null;
+  conversationId: string | null;
+  scope: 'channel' | 'thread';
   agentsById: Map<string, AgentDto>;
 }): JSX.Element {
   const [events, setEvents] = useState<LoggedEvent[]>([]);
   const seq = useRef(0);
 
-  // Reset log when switching sessions.
+  // Reset log when switching conversations.
   useEffect(() => {
     setEvents([]);
-  }, [sessionId]);
+  }, [conversationId, scope]);
 
-  const onEvent = useCallback((e: SessionStreamEvent) => {
+  const onEvent = useCallback((e: ConversationStreamEvent) => {
     if (e.kind === 'ping') return; // noisy keepalive
     setEvents(prev => {
       const next: LoggedEvent = {
@@ -51,7 +53,7 @@ export function EventStream({
         : merged;
     });
   }, []);
-  useSessionStream(sessionId, onEvent);
+  useConversationStream(conversationId, onEvent, scope);
 
   const visibleEvents = useMemo(() => [...events].reverse(), [events]);
 
@@ -59,11 +61,11 @@ export function EventStream({
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-border-subtle px-3 py-1.5 text-[10px] uppercase tracking-wider text-text-muted">
         <span>Stream</span>
-        <span>{sessionId ? `${events.length}/${MAX_EVENTS}` : 'no session'}</span>
+        <span>{conversationId ? `${events.length}/${MAX_EVENTS}` : 'no conversation'}</span>
       </div>
       <div className="flex flex-1 flex-col gap-1 overflow-y-auto px-2 py-2 text-[11px]">
-        {!sessionId ? (
-          <div className="px-1 py-2 text-text-muted">选择一个会话以查看事件流</div>
+        {!conversationId ? (
+          <div className="px-1 py-2 text-text-muted">选择一个 channel 以查看事件流</div>
         ) : events.length === 0 ? (
           <div className="px-1 py-2 text-text-muted">等待事件…</div>
         ) : (

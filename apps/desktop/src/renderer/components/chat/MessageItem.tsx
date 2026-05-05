@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Bookmark, CornerUpLeft, User } from 'lucide-react';
-import type { AgentDto, ChannelDto, MessageDto } from '@silverhand/shared';
+import { Bookmark, CornerUpLeft, ListTodo, User } from 'lucide-react';
+import type { AgentDto, MessageDto } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
 import {
@@ -8,14 +8,16 @@ import {
   isCurrentUserId,
 } from '@/lib/current-user';
 import { Markdown } from './Markdown';
+import type { WorkspaceReference } from './ChannelRef';
 import { useMessageLayoutMode } from './useMessageLayoutMode';
 import { useRelativeTime } from './useRelativeTime';
 
 interface MessageItemProps {
   message: MessageDto;
-  /** Session this message belongs to. Forwarded to AgentInfoPopover so
-   *  the author/avatar popover can show per-session presence + retry. */
-  sessionId: string;
+  /** Conversation this message belongs to. Forwarded to AgentInfoPopover so
+   *  the author/avatar popover can show per-conversation presence + retry. */
+  conversationId: string;
+  routeKind?: 'channel' | 'thread';
   /** Looked up by `from_agent_id` to resolve display name + runtime
    *  (avatar) and also by mention name (via `agentsByName`). */
   agentsById: Map<string, AgentDto>;
@@ -25,7 +27,7 @@ interface MessageItemProps {
   /** Lookup by `channel.name` (the #channel handle). Threaded to
    *  the Markdown component so inline `#name` references render
    *  as styled pills. */
-  channelsByName: Map<string, ChannelDto>;
+  channelsByName: Map<string, WorkspaceReference>;
   onStartThread?: (msg: MessageDto) => void;
   /** When this message has an open thread anchored to it, the count of
    *  non-system replies in that thread. Drives the button label
@@ -56,7 +58,8 @@ interface MessageItemProps {
  */
 export function MessageItem({
   message,
-  sessionId,
+  conversationId,
+  routeKind = 'channel',
   agentsById,
   agentsByName,
   channelsByName,
@@ -80,6 +83,7 @@ export function MessageItem({
     ? name
     : `@${agent?.display_name?.trim() || name}`;
   const { relative, absolute } = useRelativeTime(message.created_at);
+  const taskTag = <TaskMetaTag message={message} agentsById={agentsById} />;
   const [hover, setHover] = useState(false);
   // Visual-only: highlight forces the framed look; only real hover
   // reveals the action bar.
@@ -91,7 +95,7 @@ export function MessageItem({
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       className={
-        'flex items-start gap-3 border-2 px-4 py-2 transition-colors ' +
+        'flex items-start gap-3 border-2 px-2 py-1.5 transition-colors ' +
         (alignRight ? 'flex-row-reverse' : 'flex-row') +
         ' ' +
         (framed
@@ -99,7 +103,12 @@ export function MessageItem({
           : 'border-transparent')
       }
     >
-      <Avatar isUser={isUser} agent={agent} sessionId={sessionId} />
+      <Avatar
+        isUser={isUser}
+        agent={agent}
+        conversationId={conversationId}
+        routeKind={routeKind}
+      />
       <div className="min-w-0 max-w-[85%]">
         <header className={'mb-1 text-xs ' + (alignRight ? 'text-right' : '')}>
           {alignRight ? (
@@ -107,7 +116,7 @@ export function MessageItem({
               <time
                 dateTime={new Date(message.created_at).toISOString()}
                 title={absolute}
-                className="text-text-muted"
+                className="text-[11px] text-text-muted"
               >
                 {relative}
               </time>
@@ -119,11 +128,16 @@ export function MessageItem({
               >
                 {displayLabel}
               </span>
+              {taskTag}
             </>
           ) : (
             <>
               {agent ? (
-                <AgentInfoPopover agent={agent} sessionId={sessionId}>
+                <AgentInfoPopover
+                  agent={agent}
+                  conversationId={conversationId}
+                  routeKind={routeKind}
+                >
                   <button
                     type="button"
                     className="rounded font-medium text-accent hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
@@ -144,10 +158,11 @@ export function MessageItem({
               <time
                 dateTime={new Date(message.created_at).toISOString()}
                 title={absolute}
-                className="ml-2 text-text-muted"
+                className="ml-2 text-[11px] text-text-muted"
               >
                 {relative}
               </time>
+              {taskTag}
             </>
           )}
         </header>
@@ -159,7 +174,7 @@ export function MessageItem({
         >
           <Markdown
             content={message.content}
-            sessionId={sessionId}
+            conversationId={conversationId}
             agentsByName={agentsByName}
             channelsByName={channelsByName}
           />
@@ -205,14 +220,78 @@ export function MessageItem({
   );
 }
 
+const TASK_STATUS_LABELS: Record<NonNullable<MessageDto['task_status']>, string> = {
+  todo: 'todo',
+  in_progress: 'doing',
+  in_review: 'review',
+  done: 'done',
+};
+
+function TaskMetaTag({
+  message,
+  agentsById,
+}: {
+  message: MessageDto;
+  agentsById: Map<string, AgentDto>;
+}): JSX.Element | null {
+  if (message.task_number === null) return null;
+
+  const assignee = message.task_assignee
+    ? formatTaskAssignee(message.task_assignee, agentsById)
+    : null;
+  const status = message.task_status
+    ? TASK_STATUS_LABELS[message.task_status]
+    : null;
+  const label = assignee
+    ? `#${message.task_number} · ${assignee}`
+    : `#${message.task_number}`;
+  const title = [
+    `Task #${message.task_number}`,
+    status,
+    assignee,
+    message.task_title,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  return (
+    <span
+      title={title}
+      className="ml-2 inline-flex h-5 max-w-[200px] items-center gap-1 bg-warning px-1.5 align-middle text-[11px] font-semibold leading-none text-text-on-warning shadow-sm"
+    >
+      <ListTodo className="size-3 shrink-0" aria-hidden />
+      <span className="min-w-0 truncate">{label}</span>
+    </span>
+  );
+}
+
+function formatTaskAssignee(
+  assignee: NonNullable<MessageDto['task_assignee']>,
+  agentsById: Map<string, AgentDto>,
+): string {
+  if (assignee.type === 'user') {
+    return formatUserDisplayName(assignee.id);
+  }
+  const agent = agentsById.get(assignee.id);
+  const name = (
+    agent?.display_name?.trim() ||
+    agent?.name ||
+    assignee.name.trim() ||
+    assignee.id
+  ).replace(/^@/, '');
+  return `@${name}`;
+}
+
 function Avatar({
   isUser,
   agent,
-  sessionId,
+  conversationId,
+  routeKind,
 }: {
   isUser: boolean;
   agent: AgentDto | undefined;
-  sessionId: string;
+  conversationId: string;
+  routeKind: 'channel' | 'thread';
 }): JSX.Element {
   if (isUser) {
     return (
@@ -226,7 +305,11 @@ function Avatar({
   }
   if (agent) {
     return (
-      <AgentInfoPopover agent={agent} sessionId={sessionId}>
+      <AgentInfoPopover
+        agent={agent}
+        conversationId={conversationId}
+        routeKind={routeKind}
+      >
         <button
           type="button"
           aria-label={`@${agent.name}`}

@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { isAbsolute, join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { performance } from 'node:perf_hooks';
 import { silverhandCors } from './cors.js';
 import { openDatabase } from './db.js';
 import { createApiRouter, createInternalRouter } from './routes.js';
@@ -15,8 +16,9 @@ import {
 } from './context.js';
 import { HostRepo } from './repos/host-repo.js';
 import { ensureWorkspacesRoot } from './provision.js';
-import { SessionEventBus } from './event-bus.js';
-import { SessionManager } from './session-manager.js';
+import { ConversationEventBus } from './event-bus.js';
+import { ConversationManager } from './conversation-manager.js';
+import { createLocalBlobFileStorage } from './storage/blob-file-storage.js';
 import type { ServerConfig } from '@silverhand/shared';
 
 export interface CreateBackendOptions {
@@ -41,7 +43,9 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   const logger = opts.logger ?? consoleLogger;
   const db = openDatabase(opts.dbPath);
   const workspacesRoot = join(opts.silverhandDir, 'workspaces');
+  const blobStorage = createLocalBlobFileStorage({ silverhandDir: opts.silverhandDir });
   await ensureWorkspacesRoot(workspacesRoot);
+  await blobStorage.ensureReady();
 
   // Fail loudly if the chat-bridge launcher is bogus. claude silently
   // continues without MCP tools when it can't spawn the server, which
@@ -61,14 +65,16 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     silverhandDir: opts.silverhandDir,
     workspacesRoot,
     logDir: opts.logDir,
+    blobStorage,
     lastSpawnAtByAgent: new Map(),
-    events: new SessionEventBus(),
+    events: new ConversationEventBus(),
     chatBridgeLauncher: opts.chatBridgeLauncher,
-    // Placeholder; replaced immediately below (SessionManager needs ctx).
-    sessionManager: undefined as unknown as SessionManager,
+    // Placeholder; replaced immediately below (ConversationManager needs ctx).
+    conversationManager: undefined as unknown as ConversationManager,
   };
-  ctx.sessionManager = new SessionManager(ctx);
-  ctx.sessionManager.reconcileOnBoot();
+  ctx.conversationManager = new ConversationManager(ctx);
+  ctx.conversationManager.reconcileOnBoot();
+  const stopEventLoopLagProbe = startEventLoopLagProbe(logger);
 
   const app = new Hono();
   app.use('*', silverhandCors());
@@ -89,9 +95,10 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
           port,
           context: ctx,
           close: async () => {
+            stopEventLoopLagProbe();
             // Phase 1: stop all agents (must finish before activity-log flush
             // so terminal events are written before the stream closes).
-            await ctx.sessionManager.stopAll().catch(() => undefined);
+            await ctx.conversationManager.stopAll().catch(() => undefined);
 
             // Phase 2: flush activity log AND drain the HTTP server
             // concurrently — they are independent of each other.
@@ -108,7 +115,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
             const serverDrained = new Promise<void>(res => server.close(() => res()));
             if ('closeAllConnections' in server) server.closeAllConnections();
             await Promise.allSettled([
-              ctx.sessionManager.closeActivityLog(),
+              ctx.conversationManager.closeActivityLog(),
               serverDrained,
             ]);
 
@@ -151,4 +158,32 @@ function assertLauncherResolvable(command: string): void {
         `Without it claude can't spawn the MCP server and agents won't be able to reply.`,
     );
   }
+}
+
+const EVENT_LOOP_LAG_INTERVAL_MS = 500;
+const EVENT_LOOP_LAG_WARN_MS = 250;
+
+function startEventLoopLagProbe(logger: BackendLogger): () => void {
+  let expectedAt = performance.now() + EVENT_LOOP_LAG_INTERVAL_MS;
+  const timer = setInterval(() => {
+    const now = performance.now();
+    const lagMs = now - expectedAt;
+    expectedAt = now + EVENT_LOOP_LAG_INTERVAL_MS;
+    if (lagMs >= EVENT_LOOP_LAG_WARN_MS) {
+      logger.warn(
+        {
+          lagMs: roundMs(lagMs),
+          intervalMs: EVENT_LOOP_LAG_INTERVAL_MS,
+          thresholdMs: EVENT_LOOP_LAG_WARN_MS,
+        },
+        'backend: event loop lag detected',
+      );
+    }
+  }, EVENT_LOOP_LAG_INTERVAL_MS);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
+
+function roundMs(ms: number): number {
+  return Math.round(ms * 10) / 10;
 }

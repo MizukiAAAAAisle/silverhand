@@ -4,17 +4,17 @@ import { TaskStatusPill } from './TaskStatusPill';
 
 /**
  * One row in any task list (drawer, channel tab, global view). Compact
- * layout: `#N` · title · status pill, with assignee + session as muted
+ * layout: `#N` · title · status pill, with assignee + conversation as muted
  * tail.
  *
  * `onClick` is the row-level click — typically "scroll to the task's
  * source message". `onStatusChange` powers the pill dropdown; omit to
- * render a read-only pill (used in cross-session aggregate views where
+ * render a read-only pill (used in cross-conversation aggregate views where
  * the human shouldn't edit other sessions' tasks from this row… though
  * v1 does allow it; left as a hook for future tightening).
  *
  * `showSession` is on by default for aggregate views and turned off
- * inside the per-session drawer (where it would be redundant).
+ * inside the per-conversation drawer (where it would be redundant).
  */
 export interface TaskRowProps {
   task: TaskSummaryDto;
@@ -64,9 +64,9 @@ export function TaskRow({
         {showSession ? (
           <span
             className="max-w-[120px] truncate text-[10px] text-text-muted"
-            title={task.session.title}
+            title={task.conversation.title}
           >
-            · {task.session.title}
+            · {task.conversation.title}
           </span>
         ) : null}
         <TaskStatusPill

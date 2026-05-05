@@ -21,6 +21,16 @@ export const apiPaths = {
     `/api/workspaces/${id}/members/${agentId}`,
   workspaceChannels: (id: string) => `/api/workspaces/${id}/channels`,
   workspaceDmChannels: '/api/workspaces/system/dm-channels',
+  channelMessages: (id: string) => `/api/channels/${id}/messages`,
+  channelAgents: (id: string) => `/api/channels/${id}/agents`,
+  channelAgentRunStates: (id: string) => `/api/channels/${id}/agent-run-states`,
+  channelEvents: (id: string) => `/api/channels/${id}/events`,
+  channelStream: (id: string) => `/api/channels/${id}/stream`,
+  channelClose: (id: string) => `/api/channels/${id}/close`,
+  channelThreads: (id: string) => `/api/channels/${id}/threads`,
+  channelStop: (id: string) => `/api/channels/${id}/stop`,
+  channelResume: (id: string) => `/api/channels/${id}/resume`,
+  channelMarkRead: (id: string) => `/api/channels/${id}/mark-read`,
   conversationChannel: (id: string) => `/api/channels/${id}`,
   conversationChannelMessages: (id: string) => `/api/channels/${id}/messages`,
   conversationChannelAgents: (id: string) => `/api/channels/${id}/agents`,
@@ -28,44 +38,17 @@ export const apiPaths = {
   thread: (id: string) => `/api/threads/${id}`,
   threadMessages: (id: string) => `/api/threads/${id}/messages`,
   threadAgents: (id: string) => `/api/threads/${id}/agents`,
+  threadAgentRunStates: (id: string) => `/api/threads/${id}/agent-run-states`,
+  threadEvents: (id: string) => `/api/threads/${id}/events`,
+  threadStream: (id: string) => `/api/threads/${id}/stream`,
+  threadClose: (id: string) => `/api/threads/${id}/close`,
+  threadStop: (id: string) => `/api/threads/${id}/stop`,
+  threadResume: (id: string) => `/api/threads/${id}/resume`,
+  threadMarkRead: (id: string) => `/api/threads/${id}/mark-read`,
 
-  // channels
-  channels: '/api/channels',
-  channel: (id: string) => `/api/channels/${id}`,
-  channelArchive: (id: string) => `/api/channels/${id}/archive`,
-  channelMembers: (id: string) => `/api/channels/${id}/members`,
-  channelMember: (id: string, agentId: string) =>
-    `/api/channels/${id}/members/${agentId}`,
-  channelSessions: (id: string) => `/api/channels/${id}/sessions`,
-  /** Per-session unread notification counts for a channel.
-   *  GET → `{ counts: Record<sessionId, number> }` */
-  channelUnreadBySession: (id: string) => `/api/channels/${id}/unread-by-session`,
-  /** Per-session message unread counts for a channel (session_reads cursor).
-   *  GET → `{ by_session: Record<sessionId, number>; total: number }` */
-  channelMessageUnread: (id: string) => `/api/channels/${id}/message-unread`,
-  /** Global message unread summary across all channels.
-   *  GET → `{ by_channel: Record<channelId, number> }` */
+  /** Global message unread summary across all workspace/sidebar items.
+   *  GET -> `{ by_workspace: Record<workspaceOrDmChannelId, number> }` */
   messageUnreadSummary: '/api/message-unread-summary',
-
-  // sessions
-  session: (id: string) => `/api/sessions/${id}`,
-  sessionAgents: (id: string) => `/api/sessions/${id}/agents`,
-  sessionAgentRunStates: (id: string) => `/api/sessions/${id}/agent-run-states`,
-  sessionMessages: (id: string) => `/api/sessions/${id}/messages`,
-  sessionEvents: (id: string) => `/api/sessions/${id}/events`,
-  sessionStream: (id: string) => `/api/sessions/${id}/stream`,
-  sessionClose: (id: string) => `/api/sessions/${id}/close`,
-  sessionChildren: (id: string) => `/api/sessions/${id}/children`,
-  /** Open-thread summary under a parent session — one row per open
-   *  child with its anchor message id and reply count. Used by the UI
-   *  to render the per-message "{count} Reply" badge. */
-  sessionThreads: (id: string) => `/api/sessions/${id}/threads`,
-  sessionStop: (id: string) => `/api/sessions/${id}/stop`,
-  sessionResume: (id: string) => `/api/sessions/${id}/resume`,
-  sessionArchive: (id: string) => `/api/sessions/${id}/archive`,
-  /** Advance the viewer's read cursor to the latest message in the session.
-   *  POST (no body required) → `{ last_read_seq: number }` */
-  sessionMarkRead: (id: string) => `/api/sessions/${id}/mark-read`,
 
   // saved messages
   saved: '/api/saved',
@@ -76,7 +59,7 @@ export const apiPaths = {
   // old rows whose metadata snapshot is missing (pre-PR4-fix data).
   message: (id: string) => `/api/messages/${id}`,
 
-  // human-triggered child session ("Thread" on a chat message).
+  // human-triggered child conversation ("Thread" on a chat message).
   // Per docs/app-layout.md §7.
   messageThread: (id: string) => `/api/messages/${id}/thread`,
 
@@ -99,30 +82,28 @@ export const apiPaths = {
 
 export const internalPaths = {
   /** Agent posts a chat message; backend writes + distributes. */
-  agentSendMessage: (sid: string, aid: string) =>
-    `/internal/sessions/${sid}/agents/${aid}/send-message`,
-  /** Agent spawns a child session off the current one. */
-  agentSpawnChild: (sid: string, aid: string) =>
-    `/internal/sessions/${sid}/agents/${aid}/spawn-child`,
-  /** Agent closes the current session (must be a child or own). */
-  agentCloseSession: (sid: string, aid: string) =>
-    `/internal/sessions/${sid}/agents/${aid}/close`,
-  /** Agent creates a new top-level session in the same channel. */
-  agentCreateSession: (sid: string, aid: string) =>
-    `/internal/sessions/${sid}/agents/${aid}/create-session`,
+  agentSendConversationMessage: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/send-message`,
+  /** Agent spawns a Thread off the current channel. */
+  agentCreateThread: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/create-thread`,
+  /** Agent closes the current Thread. */
+  agentCloseThread: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/close-thread`,
+  /** Agent creates a new top-level channel in the same workspace. */
+  agentCreateChannel: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/create-channel`,
 
-  // ── Task MCP tool endpoints (chat-bridge → backend) ──────────────
-  // Scoped under (session_id, agent_id) so the backend can enforce
-  // "you may only operate on your own session's tasks". See
-  // docs/tasks-design.md §6.1.
-  agentListTasks: (sid: string, aid: string) =>
-    `/internal/sessions/${sid}/agents/${aid}/tasks`,
-  agentCreateTasks: (sid: string, aid: string) =>
-    `/internal/sessions/${sid}/agents/${aid}/tasks/create`,
-  agentClaimTasks: (sid: string, aid: string) =>
-    `/internal/sessions/${sid}/agents/${aid}/tasks/claim`,
-  agentUnclaimTask: (sid: string, aid: string) =>
-    `/internal/sessions/${sid}/agents/${aid}/tasks/unclaim`,
-  agentUpdateTaskStatus: (sid: string, aid: string) =>
-    `/internal/sessions/${sid}/agents/${aid}/tasks/update-status`,
+  // Canonical task MCP endpoints (chat-bridge → backend).
+  agentListConversationTasks: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/tasks`,
+  agentCreateConversationTasks: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/tasks/create`,
+  agentClaimConversationTasks: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/tasks/claim`,
+  agentUnclaimConversationTask: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/tasks/unclaim`,
+  agentUpdateConversationTaskStatus: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/tasks/update-status`,
+
 } as const;

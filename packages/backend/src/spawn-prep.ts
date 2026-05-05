@@ -9,11 +9,11 @@ import type { McpConfigFile, McpServerConfig } from '@silverhand/shared';
  * these as `--system-prompt-file <path>` / `--mcp-config <path>` only —
  * none of them take inline strings (see core-design §4.2).
  *
- * Layout under `<os.tmpdir()>/silverhand/<sessionId>/<agentId>/`:
+ * Layout under `<os.tmpdir()>/silverhand/<conversationId>/<agentId>/`:
  *   - system-prompt.md   driver.buildSystemPrompt() output
  *   - mcp.json           single `chat` server pointing at chat-bridge
  *
- * Lifecycle: SessionManager calls `prepareSpawnFiles` before spawning
+ * Lifecycle: ConversationManager calls `prepareSpawnFiles` before spawning
  * the agent CLI, then `cleanup()` after the child exits. Crashed leaves
  * stragglers — fine, OS tmp gets reaped eventually.
  */
@@ -21,10 +21,10 @@ import type { McpConfigFile, McpServerConfig } from '@silverhand/shared';
 export interface ChatBridgeServerConfig extends McpServerConfig {}
 
 export interface SpawnPrepInput {
-  sessionId: string;
+  conversationId: string;
   agentId: string;
   systemPromptText: string;
-  /** Single MCP server entry that runs chat-bridge for this (session,
+  /** Single MCP server entry that runs chat-bridge for this (conversation,
    *  agent). Caller assembles command/args/env. */
   chatBridge: ChatBridgeServerConfig;
 }
@@ -38,7 +38,7 @@ export interface SpawnPrepHandle {
 export async function prepareSpawnFiles(
   input: SpawnPrepInput,
 ): Promise<SpawnPrepHandle> {
-  const dir = join(tmpdir(), 'silverhand', input.sessionId, input.agentId);
+  const dir = join(tmpdir(), 'silverhand', input.conversationId, input.agentId);
   await mkdir(dir, { recursive: true });
 
   const systemPromptPath = join(dir, 'system-prompt.md');

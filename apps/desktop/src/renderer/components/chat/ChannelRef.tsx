@@ -1,12 +1,16 @@
 import { Hash } from 'lucide-react';
-import type { ChannelDto } from '@silverhand/shared';
+
+export interface WorkspaceReference {
+  name: string;
+  description: string | null;
+}
 
 interface ChannelRefProps {
   /** The handle as it appeared in the source text (without `#`). */
   name: string;
   /** Resolved channel — undefined when the name doesn't match any
    *  known channel. */
-  channel: ChannelDto | undefined;
+  channel: WorkspaceReference | undefined;
 }
 
 /**

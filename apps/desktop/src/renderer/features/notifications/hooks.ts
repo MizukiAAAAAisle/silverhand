@@ -12,9 +12,9 @@ const listKey = ['notifications', 'list'] as const;
 
 export interface UnreadCounts {
   total: number;
-  by_channel: Record<string, number>;
-  /** Most-recent unread pointer per channel — drives DM-click jump. */
-  latest_by_channel: Record<string, { session_id: string; message_id: string }>;
+  by_workspace: Record<string, number>;
+  /** Most-recent unread pointer per workspace/sidebar item — drives badge-click jump. */
+  latest_by_workspace: Record<string, { conversation_id: string; message_id: string }>;
 }
 
 /**
@@ -103,7 +103,11 @@ export function useNotificationToasts(activeChannelId: string | null) {
       const isAgentFailure = n.kind === 'agent_start_failed';
 
       // Suppress channel-match notifications unless it's an error.
-      if (!isAgentFailure && n.channel_id && n.channel_id === activeChannelId) {
+      if (
+        !isAgentFailure &&
+        n.conversation_id &&
+        n.conversation_id === activeChannelId
+      ) {
         continue;
       }
 
@@ -149,7 +153,7 @@ function buildToastLabel(n: NotificationDto): string {
     return `@${name} 启动失败：${error}`;
   }
   if (n.kind === 'mention_external') {
-    const channelName = (n.payload?.['source_channel_name'] as string | undefined);
+    const channelName = n.payload?.['source_workspace_name'] as string | undefined;
     return channelName ? `你在 #${channelName} 有新提及` : '新提及消息';
   }
   return '新通知';

@@ -4,7 +4,6 @@ import type {
   AgentDto,
   AgentRuntimeStateDto,
   AgentWorkspaceDto,
-  ChannelMemberDto,
   CreateAgentInput,
   UpdateAgentInput,
 } from '@silverhand/shared';
@@ -15,9 +14,6 @@ const agentKey = (id: string) => ['agents', id] as const;
 const agentWorkspaceKey = (id: string) => ['agents', id, 'workspace'] as const;
 const agentRuntimeStateKey = (id: string) => ['agents', id, 'runtime-state'] as const;
 const agentDeleteImpactKey = (id: string) => ['agents', id, 'delete-impact'] as const;
-const channelMembersKey = (channelId: string) =>
-  ['channels', channelId, 'members'] as const;
-
 export function useAgents() {
   return useQuery({
     queryKey: agentsKey,
@@ -104,7 +100,7 @@ export function useAgentRuntimeState(agentId: string | null) {
       );
       return res;
     },
-    // Status / pid change as soon as the user clicks Stop or a session
+    // Status / pid change as soon as the user clicks Stop or a conversation
     // spawns, so refetch on focus + every 5s while mounted.
     staleTime: 2_000,
     refetchInterval: 5_000,
@@ -157,36 +153,6 @@ export function useDeleteAgent() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: agentsKey });
       qc.invalidateQueries({ queryKey: ['channels'] });
-    },
-  });
-}
-
-export function useChannelMembers(channelId: string | null) {
-  return useQuery({
-    queryKey: channelId ? channelMembersKey(channelId) : ['channels', 'none', 'members'],
-    enabled: !!channelId,
-    queryFn: async () => {
-      const res = await api<{ members: AgentDto[] }>(
-        `/api/channels/${channelId}/members`,
-      );
-      return res.members;
-    },
-  });
-}
-
-export function useAddChannelMember(channelId: string | null) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async (agentId: string) => {
-      if (!channelId) throw new Error('no channel selected');
-      const res = await api<{ member: ChannelMemberDto }>(
-        `/api/channels/${channelId}/members`,
-        { method: 'POST', body: JSON.stringify({ agent_id: agentId }) },
-      );
-      return res.member;
-    },
-    onSuccess: () => {
-      if (channelId) qc.invalidateQueries({ queryKey: channelMembersKey(channelId) });
     },
   });
 }

@@ -1,13 +1,12 @@
 import { z } from 'zod';
 import {
-  ChannelKindSchema,
+  ConversationAgentStatusSchema,
   ConversationKindSchema,
+  ConversationStatusSchema,
   FromKindSchema,
   HostKindSchema,
   NotificationKindSchema,
   RuntimeKindSchema,
-  SessionAgentStatusSchema,
-  SessionStatusSchema,
   TaskAssigneeTypeSchema,
   TaskStatusSchema,
   WorkspaceKindSchema,
@@ -94,23 +93,29 @@ export const AgentWorkspaceDtoSchema = z.object({
 });
 export type AgentWorkspaceDto = z.infer<typeof AgentWorkspaceDtoSchema>;
 
-// GET /api/agents/:id/runtime-state — every (session, agent) pair
-// involving this agent, with channel/session names denormalized so
+// GET /api/agents/:id/runtime-state — every (conversation, agent) pair
+// involving this agent, with workspace/channel/thread names denormalized so
 // the UI can render the "where it runs" table without N+1 queries.
-export const AgentRuntimeSessionSchema = z.object({
-  session_id: z.string(),
+export const AgentRuntimeConversationSchema = z.object({
+  conversation_id: z.string(),
+  workspace_id: z.string(),
+  workspace_name: z.string(),
+  workspace_kind: WorkspaceKindSchema,
+  conversation_kind: ConversationKindSchema,
   channel_id: z.string(),
-  channel_name: z.string(),
-  channel_kind: ChannelKindSchema,
-  session_title: z.string(),
-  status: SessionAgentStatusSchema,
+  thread_id: z.string().nullable(),
+  channel_title: z.string(),
+  thread_title: z.string().nullable(),
+  status: ConversationAgentStatusSchema,
   pid: z.number().nullable(),
   closed_at: z.number().nullable(),
 });
-export type AgentRuntimeSession = z.infer<typeof AgentRuntimeSessionSchema>;
+export type AgentRuntimeConversation = z.infer<
+  typeof AgentRuntimeConversationSchema
+>;
 
 export const AgentRuntimeStateDtoSchema = z.object({
-  session_agents: z.array(AgentRuntimeSessionSchema),
+  conversation_agents: z.array(AgentRuntimeConversationSchema),
 });
 export type AgentRuntimeStateDto = z.infer<typeof AgentRuntimeStateDtoSchema>;
 
@@ -125,22 +130,14 @@ export const AgentDeleteImpactDtoSchema = z.object({
     .object({
       id: z.string(),
       name: z.string(),
-      session_count: z.number(),
+      conversation_count: z.number(),
       message_count: z.number(),
     })
     .nullable(),
-  regular_channels: z.array(
+  regular_workspaces: z.array(
     z.object({ id: z.string(), name: z.string() }),
   ),
-  running_session_agents: z.array(
-    z.object({
-      session_id: z.string(),
-      channel_name: z.string(),
-      session_title: z.string(),
-      status: SessionAgentStatusSchema,
-      pid: z.number().nullable(),
-    }),
-  ),
+  running_conversation_agents: z.array(AgentRuntimeConversationSchema),
   pending_inbox_count: z.number(),
   l1_path: z.string(),
   l2_paths: z.array(z.string()),
@@ -155,7 +152,7 @@ export type DeleteAgentInput = z.infer<typeof DeleteAgentInputSchema>;
 // ── Workspace / Conversation model ───────────────────────────────
 //
 // New naming model for workspace -> channel/dm_channel/thread. The
-// legacy Channel/Session DTOs below remain during the transition so the
+// legacy Channel/Conversation DTOs below remain during the transition so the
 // existing renderer can keep compiling until it is renamed.
 
 export const WorkspaceDtoSchema = z.object({
@@ -209,7 +206,7 @@ export const ConversationDtoSchema = z.object({
   kind: ConversationKindSchema,
   parent_conversation_id: z.string().nullable(),
   title: z.string(),
-  status: SessionStatusSchema,
+  status: ConversationStatusSchema,
   spawned_by_agent_id: z.string().nullable(),
   closed_at: z.number().nullable(),
   close_summary: z.string().nullable(),
@@ -231,6 +228,14 @@ export const DmChannelDtoSchema = ConversationDtoSchema.extend({
 });
 export type DmChannelDto = z.infer<typeof DmChannelDtoSchema>;
 
+export const CreateConversationChannelInputSchema = z.object({
+  title: z.string().min(1).max(128),
+  member_agent_ids: z.array(z.string()).default([]),
+});
+export type CreateConversationChannelInput = z.infer<
+  typeof CreateConversationChannelInputSchema
+>;
+
 export const ThreadDtoSchema = ConversationDtoSchema.extend({
   kind: z.literal('thread'),
   channel_id: z.string(),
@@ -243,109 +248,27 @@ export const ConversationAgentDtoSchema = z.object({
   agent_id: z.string(),
   cli_session_id: z.string().nullable(),
   pid: z.number().nullable(),
-  status: SessionAgentStatusSchema,
+  status: ConversationAgentStatusSchema,
   joined_at: z.number(),
 });
 export type ConversationAgentDto = z.infer<typeof ConversationAgentDtoSchema>;
 
-// ── Channel ──────────────────────────────────────────────────────
-export const ChannelDtoSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  description: z.string().nullable(),
-  kind: ChannelKindSchema,
-  workspace_path: z.string(),
-  workspace_host_id: z.string(),
-  dm_agent_id: z.string().nullable(),
-  archived_at: z.number().nullable(),
-  created_at: z.number(),
-  updated_at: z.number(),
-});
-export type ChannelDto = z.infer<typeof ChannelDtoSchema>;
+export const ChannelDtoSchema = ChannelConversationDtoSchema;
+export type ChannelDto = ChannelConversationDto;
 
-export const CreateChannelInputSchema = z.object({
-  name: z
-    .string()
-    .min(1)
-    .max(64)
-    .regex(/^[a-zA-Z0-9_\-]+$/, 'name must be alphanumeric / dash / underscore'),
-  description: z.string().optional(),
-  workspace_path: z.string().optional(), // backend auto-generates if absent
-  workspace_host_id: z.string().optional(), // defaults to local
-  member_agent_ids: z.array(z.string()).default([]),
-});
-export type CreateChannelInput = z.infer<typeof CreateChannelInputSchema>;
-
-export const UpdateChannelInputSchema = z.object({
-  name: z
-    .string()
-    .min(1)
-    .max(64)
-    .regex(/^[a-zA-Z0-9_\-]+$/, 'name must be alphanumeric / dash / underscore'),
-});
-export type UpdateChannelInput = z.infer<typeof UpdateChannelInputSchema>;
-
-/** Body for `PATCH /api/channels/:id/archive`. Toggle-shaped instead of
+/** Body for `PATCH /api/workspaces/:id/archive`. Toggle-shaped instead of
  *  separate archive / unarchive endpoints — the UI flips a flag, the
  *  backend looks at the boolean. */
-export const ArchiveChannelInputSchema = z.object({
+export const ArchiveWorkspaceInputSchema = z.object({
   archived: z.boolean(),
 });
-export type ArchiveChannelInput = z.infer<typeof ArchiveChannelInputSchema>;
+export type ArchiveWorkspaceInput = z.infer<typeof ArchiveWorkspaceInputSchema>;
 
-// ── Channel membership ───────────────────────────────────────────
-export const ChannelMemberDtoSchema = z.object({
-  channel_id: z.string(),
-  agent_id: z.string(),
-  joined_at: z.number(),
-});
-export type ChannelMemberDto = z.infer<typeof ChannelMemberDtoSchema>;
-
-export const AddChannelMemberInputSchema = z.object({
+// ── Workspace membership ─────────────────────────────────────────
+export const AddWorkspaceMemberInputSchema = z.object({
   agent_id: z.string(),
 });
-export type AddChannelMemberInput = z.infer<typeof AddChannelMemberInputSchema>;
-
-// ── Session ──────────────────────────────────────────────────────
-export const SessionDtoSchema = z.object({
-  id: z.string(),
-  channel_id: z.string(),
-  title: z.string(),
-  status: SessionStatusSchema,
-  parent_session_id: z.string().nullable(),
-  spawned_by_agent_id: z.string().nullable(),
-  closed_at: z.number().nullable(),
-  close_summary: z.string().nullable(),
-  pinned_at: z.number().nullable(),
-  created_at: z.number(),
-  updated_at: z.number(),
-});
-export type SessionDto = z.infer<typeof SessionDtoSchema>;
-
-export const CreateSessionInputSchema = z.object({
-  title: z.string().min(1).max(128),
-  member_agent_ids: z.array(z.string()).default([]),
-  parent_session_id: z.string().optional(),
-  context_summary: z.string().optional(), // required when parent_session_id present
-});
-export type CreateSessionInput = z.infer<typeof CreateSessionInputSchema>;
-
-export const CloseSessionInputSchema = z.object({
-  summary: z.string().min(1),
-  posted_to_parent: z.boolean().optional().default(false),
-});
-export type CloseSessionInput = z.infer<typeof CloseSessionInputSchema>;
-
-// ── Session agents (per-session per-agent runtime state) ─────────
-export const SessionAgentDtoSchema = z.object({
-  session_id: z.string(),
-  agent_id: z.string(),
-  cli_session_id: z.string().nullable(),
-  pid: z.number().nullable(),
-  status: SessionAgentStatusSchema,
-  joined_at: z.number(),
-});
-export type SessionAgentDto = z.infer<typeof SessionAgentDtoSchema>;
+export type AddWorkspaceMemberInput = z.infer<typeof AddWorkspaceMemberInputSchema>;
 
 // Ephemeral per-agent run state used by `agent_activity` SSE and
 // reconnect snapshots. These rows are not persisted to the messages DB.
@@ -364,7 +287,7 @@ export const AgentRunTerminalReasonSchema = z.enum([
   'stopped',
   'crashed',
   'timeout',
-  'session_closed',
+  'conversation_closed',
 ]);
 export type AgentRunTerminalReason = z.infer<
   typeof AgentRunTerminalReasonSchema
@@ -373,7 +296,7 @@ export type AgentRunTerminalReason = z.infer<
 export const AgentRunStateSchema = z.object({
   runId: z.string(),
   agentId: z.string(),
-  sessionId: z.string(),
+  conversationId: z.string(),
   status: AgentRunStatusSchema,
   startedAt: z.number(),
   updatedAt: z.number(),
@@ -404,7 +327,7 @@ export type TaskAssigneeDto = z.infer<typeof TaskAssigneeDtoSchema>;
 
 export const MessageDtoSchema = z.object({
   id: z.string(),
-  session_id: z.string(),
+  conversation_id: z.string(),
   from_kind: FromKindSchema,
   from_agent_id: z.string().nullable(),
   from_user_id: z.string().nullable(),
@@ -416,43 +339,45 @@ export const MessageDtoSchema = z.object({
   task_number: z.number().nullable(),
   task_status: TaskStatusSchema.nullable(),
   task_title: z.string().nullable(),
-  task_channel_id: z.string().nullable(),
+  task_workspace_id: z.string().nullable(),
   task_assignee: TaskAssigneeDtoSchema.nullable(),
 });
 export type MessageDto = z.infer<typeof MessageDtoSchema>;
 
-export const SessionMessagesDtoSchema = z.object({
+export const ConversationMessagesDtoSchema = z.object({
   messages: z.array(MessageDtoSchema),
   has_more_before: z.boolean(),
 });
-export type SessionMessagesDto = z.infer<typeof SessionMessagesDtoSchema>;
+export type ConversationMessagesDto = z.infer<typeof ConversationMessagesDtoSchema>;
 
 export const SendMessageInputSchema = z.object({
   content: z.string().min(1),
 });
 export type SendMessageInput = z.infer<typeof SendMessageInputSchema>;
 
-export const MarkSessionReadInputSchema = z.object({
+export const MarkConversationReadInputSchema = z.object({
   /** Optional explicit target cursor. Omitted = backend uses MAX(messages.seq). */
   seq: z.number().int().nonnegative().optional(),
 });
-export type MarkSessionReadInput = z.infer<typeof MarkSessionReadInputSchema>;
+export type MarkConversationReadInput = z.infer<
+  typeof MarkConversationReadInputSchema
+>;
 
-export const MarkSessionReadDtoSchema = z.object({
+export const MarkConversationReadDtoSchema = z.object({
   last_read_seq: z.number(),
 });
-export type MarkSessionReadDto = z.infer<typeof MarkSessionReadDtoSchema>;
+export type MarkConversationReadDto = z.infer<typeof MarkConversationReadDtoSchema>;
 
-export const MessageUnreadBySessionDtoSchema = z.object({
-  by_session: z.record(z.string(), z.number()),
+export const MessageUnreadByConversationDtoSchema = z.object({
+  by_conversation: z.record(z.string(), z.number()),
   total: z.number(),
 });
-export type MessageUnreadBySessionDto = z.infer<
-  typeof MessageUnreadBySessionDtoSchema
+export type MessageUnreadByConversationDto = z.infer<
+  typeof MessageUnreadByConversationDtoSchema
 >;
 
 export const MessageUnreadSummaryDtoSchema = z.object({
-  by_channel: z.record(z.string(), z.number()),
+  by_workspace: z.record(z.string(), z.number()),
 });
 export type MessageUnreadSummaryDto = z.infer<
   typeof MessageUnreadSummaryDtoSchema
@@ -477,7 +402,8 @@ export const SearchQueryInputSchema = z
   .object({
     q: z.string().trim().max(200).optional().default(''),
     scope: SearchScopeSchema.optional().default('all'),
-    channel_id: SearchOptionalStringSchema,
+    workspace_id: SearchOptionalStringSchema,
+    conversation_id: SearchOptionalStringSchema,
     user_id: SearchOptionalStringSchema,
     agent_id: SearchOptionalStringSchema,
     from: SearchOptionalMillisSchema,
@@ -490,27 +416,29 @@ export const SearchQueryInputSchema = z
   });
 export type SearchQueryInput = z.infer<typeof SearchQueryInputSchema>;
 
-export const SearchChannelRefSchema = z.object({
+export const SearchWorkspaceRefSchema = z.object({
   id: z.string(),
   name: z.string(),
-  kind: ChannelKindSchema,
-  dm_agent_id: z.string().nullable(),
+  kind: z.enum(['regular', 'dm']),
 });
-export type SearchChannelRef = z.infer<typeof SearchChannelRefSchema>;
+export type SearchWorkspaceRef = z.infer<typeof SearchWorkspaceRefSchema>;
 
-export const SearchSessionRefSchema = z.object({
+export const SearchConversationRefSchema = z.object({
   id: z.string(),
   title: z.string(),
-  parent_session_id: z.string().nullable(),
+  kind: ConversationKindSchema,
+  channel_id: z.string(),
+  thread_id: z.string().nullable(),
+  parent_conversation_id: z.string().nullable(),
   closed_at: z.number().nullable(),
   created_at: z.number(),
 });
-export type SearchSessionRef = z.infer<typeof SearchSessionRefSchema>;
+export type SearchConversationRef = z.infer<typeof SearchConversationRefSchema>;
 
 export const SearchResultDtoSchema = z.discriminatedUnion('type', [
   z.object({
-    type: z.literal('channel'),
-    channel: SearchChannelRefSchema.extend({
+    type: z.literal('workspace'),
+    workspace: SearchWorkspaceRefSchema.extend({
       description: z.string().nullable(),
       archived_at: z.number().nullable(),
       created_at: z.number(),
@@ -518,14 +446,14 @@ export const SearchResultDtoSchema = z.discriminatedUnion('type', [
     }),
   }),
   z.object({
-    type: z.literal('session'),
-    channel: SearchChannelRefSchema,
-    session: SearchSessionRefSchema,
+    type: z.literal('conversation'),
+    workspace: SearchWorkspaceRefSchema,
+    conversation: SearchConversationRefSchema,
   }),
   z.object({
     type: z.literal('message'),
-    channel: SearchChannelRefSchema,
-    session: SearchSessionRefSchema,
+    workspace: SearchWorkspaceRefSchema,
+    conversation: SearchConversationRefSchema,
     message: MessageDtoSchema,
     agent_name: z.string().nullable(),
   }),
@@ -542,15 +470,15 @@ export type SearchDto = z.infer<typeof SearchDtoSchema>;
 //
 // Per docs/tasks-design.md. A task == a message with task metadata.
 // Numbering space is per-channel (#1 monotonic across all sessions of
-// the channel); ownership/operation scope is per-session (only agents
-// in the task's session may claim/unclaim/update; other sessions get
+// the channel); ownership/operation scope is per-conversation (only agents
+// in the task's conversation may claim/unclaim/update; other sessions get
 // read-only aggregate visibility). Human UI is not assignee-restricted.
 
-export const TaskSessionRefSchema = z.object({
+export const TaskConversationRefSchema = z.object({
   id: z.string(),
   title: z.string(),
 });
-export type TaskSessionRef = z.infer<typeof TaskSessionRefSchema>;
+export type TaskConversationRef = z.infer<typeof TaskConversationRefSchema>;
 
 export const TaskCreatorDtoSchema = z.object({
   type: z.enum(['agent', 'user', 'system']),
@@ -562,9 +490,12 @@ export type TaskCreatorDto = z.infer<typeof TaskCreatorDtoSchema>;
 export const TaskSummaryDtoSchema = z.object({
   message_id: z.string(),
   task_number: z.number(),
+  workspace_id: z.string(),
+  workspace_name: z.string(),
   channel_id: z.string(),
   channel_name: z.string(),
-  session: TaskSessionRefSchema,
+  thread_id: z.string().nullable(),
+  conversation: TaskConversationRefSchema,
   status: TaskStatusSchema,
   title: z.string(),
   assignee: TaskAssigneeDtoSchema.nullable(),
@@ -575,8 +506,8 @@ export type TaskSummaryDto = z.infer<typeof TaskSummaryDtoSchema>;
 
 // GET /api/tasks (human) / /internal/agent/:aid/tasks (agent)
 export const ListTasksQuerySchema = z.object({
-  channel_id: z.string().optional(),
-  session_id: z.string().optional(),
+  workspace_id: z.string().optional(),
+  conversation_id: z.string().optional(),
   status: z
     .union([TaskStatusSchema, z.literal('all')])
     .optional()
@@ -626,7 +557,7 @@ export const ClaimResultEntrySchema = z.object({
   reason: z.string().optional(),
   /** If the task belongs to a different channel/thread, its id+title surface
    *  here so the caller can explain to the agent why claim failed. */
-  owner_session: TaskSessionRefSchema.optional(),
+  owner_conversation: TaskConversationRefSchema.optional(),
 });
 export type ClaimResultEntry = z.infer<typeof ClaimResultEntrySchema>;
 
@@ -671,11 +602,13 @@ export type HumanClaimTaskInput = z.infer<typeof HumanClaimTaskInputSchema>;
 
 // SSE payload — published on every task mutation (create / claim /
 // unclaim / status change). Consumers refresh the list + any open
-// session's inline task drawer.
+// conversation's inline task drawer.
 export const TaskChangedEventSchema = z.object({
   kind: z.enum(['create', 'claim', 'unclaim', 'status']),
+  workspace_id: z.string(),
   channel_id: z.string(),
-  session_id: z.string(),
+  thread_id: z.string().nullable(),
+  conversation_id: z.string(),
   task_number: z.number(),
   message_id: z.string(),
   status: TaskStatusSchema,
@@ -702,15 +635,17 @@ export type AgentSendMessageInput = z.infer<typeof AgentSendMessageInputSchema>;
 // ── Saved messages (bookmarks) ───────────────────────────────────
 //
 // One global flat list — no per-channel grouping, no tags. Each entry
-// joins back to the source message + its channel/session so the Saved
+// joins back to the source message + its workspace/conversation so the Saved
 // view can render content + jump back to the conversation.
 export const SavedMessageDtoSchema = z.object({
   id: z.string(),
   message: MessageDtoSchema,
+  workspace_id: z.string(),
+  workspace_name: z.string(),
+  conversation_id: z.string(),
+  conversation_title: z.string(),
   channel_id: z.string(),
-  channel_name: z.string(),
-  session_id: z.string(),
-  session_title: z.string(),
+  thread_id: z.string().nullable(),
   /** Display name of the message author at save time. `null` for user messages. */
   agent_name: z.string().nullable(),
   saved_at: z.number(),
@@ -719,26 +654,26 @@ export type SavedMessageDto = z.infer<typeof SavedMessageDtoSchema>;
 
 export const AgentSpawnChildInputSchema = z.object({
   title: z.string().min(1),
-  members: z.array(z.string().min(1)).min(1),
+  members: z.array(z.string().min(1)).optional(),
   context_summary: z.string().min(1),
   initial_prompt: z.string().min(1),
 });
 export type AgentSpawnChildInput = z.infer<typeof AgentSpawnChildInputSchema>;
 
-export const AgentCreateSessionInputSchema = z.object({
+export const AgentCreateChannelInputSchema = z.object({
   title: z.string().min(1).max(128),
   context_summary: z.string().min(1),
   initial_prompt: z.string().min(1),
 });
-export type AgentCreateSessionInput = z.infer<
-  typeof AgentCreateSessionInputSchema
+export type AgentCreateChannelInput = z.infer<
+  typeof AgentCreateChannelInputSchema
 >;
 
-export const AgentCloseSessionInputSchema = z.object({
+export const AgentCloseThreadInputSchema = z.object({
   summary: z.string().min(1),
   posted_to_parent: z.boolean().optional(),
 });
-export type AgentCloseSessionInput = z.infer<typeof AgentCloseSessionInputSchema>;
+export type AgentCloseThreadInput = z.infer<typeof AgentCloseThreadInputSchema>;
 
 // ── Runtime info (binary detection) ──────────────────────────────
 export const RuntimeInfoSchema = z.object({
@@ -752,14 +687,14 @@ export type RuntimeInfo = z.infer<typeof RuntimeInfoSchema>;
 // ── Notifications ────────────────────────────────────────────────
 //
 // v1 only emits `mention_external`: a user @-mentioned an agent who
-// wasn't a member of the originating session. The mention was CC'd
-// into that agent's DM channel (a dedicated `Mentions` session); a
+// wasn't a member of the originating conversation. The mention was CC'd
+// into that agent's DM channel (a dedicated `Mentions` conversation); a
 // notification points the user at it.
 //
 // `payload` is open-ended JSON for kind-specific extras. For
 // mention_external we stash:
-//   - source_channel_name: string  (denormalized for list rendering)
-//   - source_session_title: string
+//   - source_workspace_name: string  (denormalized for list rendering)
+//   - source_conversation_title: string
 //   - mention_excerpt: string  (first ~120 chars of the original)
 
 export const NotificationDtoSchema = z.object({
@@ -767,11 +702,11 @@ export const NotificationDtoSchema = z.object({
   kind: NotificationKindSchema,
   user_id: z.string().nullable(),
   agent_id: z.string().nullable(),
-  channel_id: z.string().nullable(),
-  session_id: z.string().nullable(),
+  workspace_id: z.string().nullable(),
+  conversation_id: z.string().nullable(),
   message_id: z.string().nullable(),
-  source_channel_id: z.string().nullable(),
-  source_session_id: z.string().nullable(),
+  source_workspace_id: z.string().nullable(),
+  source_conversation_id: z.string().nullable(),
   source_message_id: z.string().nullable(),
   payload: z.record(z.unknown()).nullable(),
   read_at: z.number().nullable(),
@@ -783,15 +718,15 @@ export const MarkNotificationsReadInputSchema = z
   .object({
     /** Mark a specific id; omit to use channel/all selectors. */
     id: z.string().optional(),
-    /** Mark all unread notifications scoped to this channel. */
-    channel_id: z.string().optional(),
-    /** Mark all unread notifications scoped to a single session. */
-    session_id: z.string().optional(),
+    /** Mark all unread notifications scoped to this workspace/sidebar item. */
+    workspace_id: z.string().optional(),
+    /** Mark all unread notifications scoped to a single conversation. */
+    conversation_id: z.string().optional(),
     /** Mark every unread notification (for the current user). */
     all: z.boolean().optional(),
   })
-  .refine(v => !!(v.id || v.channel_id || v.session_id || v.all), {
-    message: 'must specify id, channel_id, session_id, or all',
+  .refine(v => !!(v.id || v.workspace_id || v.conversation_id || v.all), {
+    message: 'must specify id, workspace_id, conversation_id, or all',
   });
 export type MarkNotificationsReadInput = z.infer<
   typeof MarkNotificationsReadInputSchema

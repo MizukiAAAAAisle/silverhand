@@ -22,7 +22,7 @@ import { buildPlatformPrompt } from './platform-prompt.js';
  *    JSON-RPC 2.0 over stdio via `codex app-server --listen stdio://`.
  *    The driver must perform an `initialize` → `initialized` →
  *    `thread/start` (or `thread/resume`) handshake before the agent is
- *    usable. We do this in `bindIO`, called by SessionManager once
+ *    usable. We do this in `bindIO`, called by ConversationManager once
  *    after spawn.
  *
  * 2. **MCP wiring.** Codex doesn't take `--mcp-config <path>`; servers
@@ -97,7 +97,7 @@ export class CodexDriver implements Driver {
     const standingPrompt = readFileSync(io.spawnCtx.systemPromptPath, 'utf-8');
     this.pendingThreadRequest = this.buildThreadRequest(io.spawnCtx, standingPrompt);
 
-    // Defer until next microtask so SessionManager has finished wiring
+    // Defer until next microtask so ConversationManager has finished wiring
     // the readline / event handlers — matches slock's `queueMicrotask`.
     queueMicrotask(() => {
       this.initializeRequestId = this.sendRequest('initialize', {
@@ -135,7 +135,7 @@ export class CodexDriver implements Driver {
   encodeInterruptControl(): string | null {
     // Codex app-server doesn't expose a clean turn-cancel RPC at the
     // moment slock targeted (and slock itself relies on signals).
-    // Returning null tells SessionManager to fall through to SIGTERM.
+    // Returning null tells ConversationManager to fall through to SIGTERM.
     return null;
   }
 

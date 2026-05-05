@@ -6,7 +6,7 @@ const savedKey = ['saved'] as const;
 
 /**
  * Returns the global flat saved-message list. The API ships everything
- * pre-joined (channel/session/agent names + full message body).
+ * pre-joined (channel/conversation/agent names + full message body).
  */
 export function useSavedMessages() {
   return useQuery({

@@ -6,7 +6,7 @@
  */
 
 /**
- * Unified event union emitted by a driver's `parseLine`. SessionManager
+ * Unified event union emitted by a driver's `parseLine`. ConversationManager
  * converts these to UI broadcasts (SSE) and `session_events` rows.
  */
 export type ParsedEvent =

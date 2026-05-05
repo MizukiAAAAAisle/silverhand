@@ -5,7 +5,7 @@ import { join } from 'node:path';
  * Tiny file logger for chat-bridge — runs as a child process spawned by
  * the agent CLI, so it has no shared logger with the backend. We write
  * to the same `<silverhandDir>/logs/` directory the backend writes to,
- * gated by the `SILVERHAND_LOG_DIR` env var (set by SessionManager).
+ * gated by the `SILVERHAND_LOG_DIR` env var (set by ConversationManager).
  *
  * Format: one JSON object per line. No-op when the env var is unset
  * (e.g. running standalone for local debugging).
@@ -22,7 +22,7 @@ export function initBridgeLogger(bindings: Record<string, unknown>): void {
   } catch {
     // best-effort
   }
-  const sid = String(bindings.sessionId ?? 'unknown');
+  const sid = String(bindings.conversationId ?? 'unknown');
   const aid = String(bindings.agentId ?? 'unknown');
   filePath = join(dir, `chat-bridge-${sid}-${aid}.log`);
   base = { pid: process.pid, ...bindings };

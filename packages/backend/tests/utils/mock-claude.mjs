@@ -2,7 +2,7 @@
 /* eslint-disable */
 // @ts-nocheck
 /**
- * mock-claude: a tiny stand-in for the `claude` CLI used by L3 SessionManager
+ * mock-claude: a tiny stand-in for the `claude` CLI used by L3 ConversationManager
  * tests. Speaks just enough of the stream-json protocol for ClaudeDriver.
  *
  * Behavior is driven by env vars (so the test can configure each spawn
@@ -71,10 +71,10 @@ rl.on('line', line => {
   if (line.includes('"control_request"')) {
     if (env.MOCK_CLAUDE_IGNORE_INTERRUPT === '1') {
       // Simulate a wedged CLI that ignores the driver interrupt.
-      // The SessionManager's SIGTERM/SIGKILL timers must handle shutdown.
+      // The ConversationManager's SIGTERM/SIGKILL timers must handle shutdown.
       return;
     }
-    // ack-then-exit so SessionManager's hard-stop completes cleanly
+    // ack-then-exit so ConversationManager's hard-stop completes cleanly
     process.exit(exitCode);
   }
 });

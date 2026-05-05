@@ -67,19 +67,22 @@ export class BackendClient {
     target?: SendMessageTarget;
   }): Promise<{ message_id: string }> {
     return this.post(
-      internalPaths.agentSendMessage(this.args.sessionId, this.args.agentId),
+      internalPaths.agentSendConversationMessage(
+        this.args.conversationId,
+        this.args.agentId,
+      ),
       input,
     );
   }
 
   createThread(input: {
     title: string;
-    members: string[];
+    members?: string[];
     context_summary: string;
     initial_prompt: string;
   }): Promise<{ thread_id: string }> {
     return this.post(
-      internalPaths.agentSpawnChild(this.args.sessionId, this.args.agentId),
+      internalPaths.agentCreateThread(this.args.conversationId, this.args.agentId),
       input,
     );
   }
@@ -89,33 +92,36 @@ export class BackendClient {
     context_summary: string;
     initial_prompt: string;
   }): Promise<{ channel_id: string }> {
-    return this.post<{ session_id: string }>(
-      internalPaths.agentCreateSession(this.args.sessionId, this.args.agentId),
+    return this.post<{ channel_id: string }>(
+      internalPaths.agentCreateChannel(this.args.conversationId, this.args.agentId),
       input,
-    ).then(r => ({ channel_id: r.session_id }));
+    );
   }
 
   closeThread(input: {
     summary: string;
     posted_to_parent?: boolean;
-  }): Promise<{ session: unknown }> {
+  }): Promise<{ thread: unknown }> {
     return this.post(
-      internalPaths.agentCloseSession(this.args.sessionId, this.args.agentId),
+      internalPaths.agentCloseThread(this.args.conversationId, this.args.agentId),
       input,
     );
   }
 
   // ── Task tools ──────────────────────────────────────────────────
   listTasks(filters: {
-    channel_id?: string;
-    session_id?: string;
+    workspace_id?: string;
+    conversation_id?: string;
     status?: TaskStatus | 'all';
   }): Promise<{ tasks: TaskSummaryDto[] }> {
     return this.get(
-      internalPaths.agentListTasks(this.args.sessionId, this.args.agentId),
+      internalPaths.agentListConversationTasks(
+        this.args.conversationId,
+        this.args.agentId,
+      ),
       {
-        channel_id: filters.channel_id,
-        session_id: filters.session_id,
+        workspace_id: filters.workspace_id,
+        conversation_id: filters.conversation_id,
         status: filters.status,
       },
     );
@@ -123,21 +129,30 @@ export class BackendClient {
 
   createTasks(input: CreateTasksInput): Promise<CreateTasksResult> {
     return this.post(
-      internalPaths.agentCreateTasks(this.args.sessionId, this.args.agentId),
+      internalPaths.agentCreateConversationTasks(
+        this.args.conversationId,
+        this.args.agentId,
+      ),
       input,
     );
   }
 
   claimTasks(input: ClaimTasksInput): Promise<ClaimTasksResult> {
     return this.post(
-      internalPaths.agentClaimTasks(this.args.sessionId, this.args.agentId),
+      internalPaths.agentClaimConversationTasks(
+        this.args.conversationId,
+        this.args.agentId,
+      ),
       input,
     );
   }
 
   unclaimTask(task_number: number): Promise<TaskMutationResult> {
     return this.post(
-      internalPaths.agentUnclaimTask(this.args.sessionId, this.args.agentId),
+      internalPaths.agentUnclaimConversationTask(
+        this.args.conversationId,
+        this.args.agentId,
+      ),
       { task_number },
     );
   }
@@ -147,7 +162,10 @@ export class BackendClient {
     status: TaskStatus;
   }): Promise<TaskMutationResult> {
     return this.post(
-      internalPaths.agentUpdateTaskStatus(this.args.sessionId, this.args.agentId),
+      internalPaths.agentUpdateConversationTaskStatus(
+        this.args.conversationId,
+        this.args.agentId,
+      ),
       input,
     );
   }

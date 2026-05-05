@@ -51,10 +51,10 @@ export function AgentProfileCard({
   useEffect(() => setDescription(agent.description ?? ''), [agent.description, agent.id]);
   useEffect(() => setModel(agent.model ?? ''), [agent.model, agent.id]);
 
-  // Runtime change is blocked by the backend (409) when any session_agent
+  // Runtime change is blocked by the backend (409) when any conversation_agent
   // is starting/active. Mirror that locally so the select looks disabled
   // instead of producing a confusing toast on click.
-  const hasRunning = (runtimeState?.session_agents ?? []).some(
+  const hasRunning = (runtimeState?.conversation_agents ?? []).some(
     s => s.status === 'starting' || s.status === 'active',
   );
 

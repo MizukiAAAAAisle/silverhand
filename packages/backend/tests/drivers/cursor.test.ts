@@ -12,10 +12,10 @@ import type { DriverSpawnContext } from '../../src/drivers/index.js';
  *  - `buildArgs` writes `<workspace>/.cursor/mcp.json` and packs the
  *    standing prompt into the trailing argv string
  *  - `parseLine` translates cursor-agent's stream-json frames
- *  - `encodeStdinMessage` returns null (oneShot, see SessionManager)
+ *  - `encodeStdinMessage` returns null (oneShot, see ConversationManager)
  *
  * The "respawn-on-pending-inbox" behaviour itself lives in
- * SessionManager and is exercised by the smoke harness once a mock
+ * ConversationManager and is exercised by the smoke harness once a mock
  * cursor is added — out of scope for this driver-level suite.
  */
 

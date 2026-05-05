@@ -5,8 +5,8 @@ import { queryClient } from '@/lib/queryClient';
 export const AGENT_RUN_STATES_GC_MS = 30 * 60_000;
 const TERMINAL_RUN_TOMBSTONE_TTL_MS = 5 * 60_000;
 
-export const agentRunStatesKey = (sessionId: string) =>
-  ['sessions', sessionId, 'agent-run-states'] as const;
+export const agentRunStatesKey = (conversationId: string) =>
+  ['conversations', conversationId, 'agent-run-states'] as const;
 
 const terminalRunUpdatedAtByKey = new Map<string, number>();
 
@@ -15,7 +15,7 @@ function isTerminalRunState(state: AgentRunState): boolean {
 }
 
 function terminalRunKey(state: AgentRunState): string {
-  return `${state.sessionId}:${state.agentId}:${state.runId}`;
+  return `${state.conversationId}:${state.agentId}:${state.runId}`;
 }
 
 function pruneTerminalRunStates(now: number): void {
@@ -77,13 +77,13 @@ export function reconcileAgentRunStateSnapshot(
 }
 
 export function applyAgentRunStateToCache(
-  sessionId: string,
+  conversationId: string,
   state: AgentRunState | undefined,
   client: QueryClient = queryClient,
 ): void {
-  if (!state?.runId || state.sessionId !== sessionId) return;
+  if (!state?.runId || state.conversationId !== conversationId) return;
 
-  const key = agentRunStatesKey(sessionId);
+  const key = agentRunStatesKey(conversationId);
   const hasCachedState = client.getQueryData<AgentRunState[]>(key) !== undefined;
   if (isTerminalRunState(state)) {
     recordTerminalRunState(state);

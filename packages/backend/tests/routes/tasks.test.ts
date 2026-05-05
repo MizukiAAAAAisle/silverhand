@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 interface SetupResult {
+  workspaceId: string;
+  conversationId: string;
+  /** Legacy aliases retained inside this test file while nearby cases are converted. */
   channelId: string;
   sessionId: string;
   agentIds: Record<string, string>;
@@ -16,21 +19,21 @@ async function setup(t: TestApp, members = ['alice', 'bob']): Promise<SetupResul
     ).json()) as any;
     agentIds[name] = r.agent.id;
   }
-  const ch = (await (
-    await h.post('/api/channels', {
+  const ws = (await (
+    await h.post('/api/workspaces', {
       name: 'eng',
-      member_agent_ids: Object.values(agentIds),
-    })
-  ).json()) as any;
-  const ses = (await (
-    await h.post(`/api/channels/${ch.channel.id}/sessions`, {
-      title: 'main',
       member_agent_ids: Object.values(agentIds),
     })
   ).json()) as any;
   t.fake.starts = [];
   t.fake.delivered = [];
-  return { channelId: ch.channel.id, sessionId: ses.session.id, agentIds };
+  return {
+    workspaceId: ws.workspace.id,
+    conversationId: ws.onboarding_channel_id,
+    channelId: ws.workspace.id,
+    sessionId: ws.onboarding_channel_id,
+    agentIds,
+  };
 }
 
 function auth(token: string) {
@@ -44,14 +47,14 @@ describe('Tasks (PR-T1)', () => {
     t = null;
   });
 
-  it('create_tasks allocates monotonic per-channel task_numbers', async () => {
+  it('create_tasks allocates monotonic per-workspace task_numbers', async () => {
     t = buildTestApp();
-    const { sessionId, agentIds, channelId } = await setup(t);
+    const { conversationId, agentIds, workspaceId } = await setup(t);
     const h = http(t.app, auth(t.authToken));
 
     const r1 = await (
       await h.post(
-        `/internal/sessions/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+        `/internal/conversations/${conversationId}/agents/${agentIds.alice}/tasks/create`,
         { tasks: [{ title: 'fix login' }, { title: 'add logout' }] },
       )
     ).json() as any;
@@ -59,12 +62,13 @@ describe('Tasks (PR-T1)', () => {
     expect(r1.tasks[0].task_number).toBe(1);
     expect(r1.tasks[1].task_number).toBe(2);
 
-    // Human list view picks up both, with correct channel/session refs.
+    // Human list view picks up both, with correct workspace/channel refs.
     const h2 = http(t.app);
     const all = await (await h2.get('/api/tasks')).json() as any;
     expect(all.tasks).toHaveLength(2);
-    expect(all.tasks[0].channel_id).toBe(channelId);
-    expect(all.tasks[0].session.id).toBe(sessionId);
+    expect(all.tasks[0].workspace_id).toBe(workspaceId);
+    expect(all.tasks[0].channel_id).toBe(conversationId);
+    expect(all.tasks[0].conversation.id).toBe(conversationId);
     expect(all.tasks[0].status).toBe('todo');
     expect(all.tasks[0].assignee).toBeNull();
     expect(all.tasks[0].title).toBe('fix login');
@@ -76,13 +80,13 @@ describe('Tasks (PR-T1)', () => {
     const h = http(t.app, auth(t.authToken));
 
     await h.post(
-      `/internal/sessions/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
       { tasks: [{ title: 'shared work' }] },
     );
 
     const aliceClaim = await (
       await h.post(
-        `/internal/sessions/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
+        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
         { task_numbers: [1] },
       )
     ).json() as any;
@@ -90,7 +94,7 @@ describe('Tasks (PR-T1)', () => {
 
     const bobClaim = await (
       await h.post(
-        `/internal/sessions/${sessionId}/agents/${agentIds.bob}/tasks/claim`,
+        `/internal/conversations/${sessionId}/agents/${agentIds.bob}/tasks/claim`,
         { task_numbers: [1] },
       )
     ).json() as any;
@@ -114,14 +118,14 @@ describe('Tasks (PR-T1)', () => {
     // User posts a normal message; alice promotes it.
     const viewer = http(t.app, { 'x-silverhand-user-id': 'teammate' });
     const userMsg = await (
-      await viewer.post(`/api/sessions/${sessionId}/messages`, {
+      await viewer.post(`/api/channels/${sessionId}/messages`, {
         content: 'please refactor auth module',
       })
     ).json() as any;
 
     const claim = await (
       await h.post(
-        `/internal/sessions/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
+        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
         { message_ids: [userMsg.message.id] },
       )
     ).json() as any;
@@ -142,43 +146,43 @@ describe('Tasks (PR-T1)', () => {
     expect(listed.tasks[0].creator.name).not.toBe('you');
   });
 
-  it('rejects cross-session claim with owner_session in reason', async () => {
+  it('rejects cross-conversation claim with owner_conversation in reason', async () => {
     t = buildTestApp();
     const s1 = await setup(t);
     // Second session in same channel.
     const ses2 = (await (
-      await http(t.app).post(`/api/channels/${s1.channelId}/sessions`, {
+      await http(t.app).post(`/api/workspaces/${s1.channelId}/channels`, {
         title: 'parallel',
         member_agent_ids: Object.values(s1.agentIds),
       })
     ).json()) as any;
-    const sessionId2 = ses2.session.id;
+    const sessionId2 = ses2.channel.id;
 
     const h = http(t.app, auth(t.authToken));
     // Create in session 1, try to claim from session 2.
     await h.post(
-      `/internal/sessions/${s1.sessionId}/agents/${s1.agentIds.alice}/tasks/create`,
+      `/internal/conversations/${s1.sessionId}/agents/${s1.agentIds.alice}/tasks/create`,
       { tasks: [{ title: 'in session 1' }] },
     );
     const wrongClaim = await (
       await h.post(
-        `/internal/sessions/${sessionId2}/agents/${s1.agentIds.bob}/tasks/claim`,
+        `/internal/conversations/${sessionId2}/agents/${s1.agentIds.bob}/tasks/claim`,
         { task_numbers: [1] },
       )
     ).json() as any;
     expect(wrongClaim.results[0].success).toBe(false);
-    expect(wrongClaim.results[0].reason).toMatch(/another session/);
-    expect(wrongClaim.results[0].owner_session?.id).toBe(s1.sessionId);
+    expect(wrongClaim.results[0].reason).toMatch(/another conversation/);
+    expect(wrongClaim.results[0].owner_conversation?.id).toBe(s1.sessionId);
 
     // But it IS visible in list_tasks from session 2 (channel-level
     // aggregation).
     const listed = await (
       await h.get(
-        `/internal/sessions/${sessionId2}/agents/${s1.agentIds.bob}/tasks`,
+        `/internal/conversations/${sessionId2}/agents/${s1.agentIds.bob}/tasks`,
       )
     ).json() as any;
     expect(listed.tasks).toHaveLength(1);
-    expect(listed.tasks[0].session.id).toBe(s1.sessionId);
+    expect(listed.tasks[0].conversation.id).toBe(s1.sessionId);
   });
 
   it('update_status: assignee-only + transition rules', async () => {
@@ -187,18 +191,18 @@ describe('Tasks (PR-T1)', () => {
     const h = http(t.app, auth(t.authToken));
 
     await h.post(
-      `/internal/sessions/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
       { tasks: [{ title: 'ship' }] },
     );
     await h.post(
-      `/internal/sessions/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
+      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
       { task_numbers: [1] },
     );
 
     // bob (not assignee) can't update.
     const bobUpdate = await (
       await h.post(
-        `/internal/sessions/${sessionId}/agents/${agentIds.bob}/tasks/update-status`,
+        `/internal/conversations/${sessionId}/agents/${agentIds.bob}/tasks/update-status`,
         { task_number: 1, status: 'in_review' },
       )
     ).json() as any;
@@ -208,7 +212,7 @@ describe('Tasks (PR-T1)', () => {
     // alice in_progress → in_review OK.
     const ok = await (
       await h.post(
-        `/internal/sessions/${sessionId}/agents/${agentIds.alice}/tasks/update-status`,
+        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/update-status`,
         { task_number: 1, status: 'in_review' },
       )
     ).json() as any;
@@ -217,7 +221,7 @@ describe('Tasks (PR-T1)', () => {
     // in_review → todo rejected (not in VALID_TRANSITIONS).
     const bad = await (
       await h.post(
-        `/internal/sessions/${sessionId}/agents/${agentIds.alice}/tasks/update-status`,
+        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/update-status`,
         { task_number: 1, status: 'todo' },
       )
     ).json() as any;
@@ -232,17 +236,17 @@ describe('Tasks (PR-T1)', () => {
 
     const created = (await (
       await h.post(
-        `/internal/sessions/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
         { tasks: [{ title: 'review me' }] },
       )
     ).json()) as any;
     const messageId = created.tasks[0].message_id;
     await h.post(
-      `/internal/sessions/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
+      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
       { task_numbers: [1] },
     );
     await h.post(
-      `/internal/sessions/${sessionId}/agents/${agentIds.alice}/tasks/update-status`,
+      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/update-status`,
       { task_number: 1, status: 'in_review' },
     );
 
@@ -266,11 +270,11 @@ describe('Tasks (PR-T1)', () => {
     const unsub = t.ctx.events.subscribe(sessionId, e => received.push(e));
 
     await h.post(
-      `/internal/sessions/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
       { tasks: [{ title: 'x' }] },
     );
     await h.post(
-      `/internal/sessions/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
+      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
       { task_numbers: [1] },
     );
 
@@ -291,7 +295,7 @@ describe('Tasks (PR-T1)', () => {
     t.fake.delivered = []; // clear setup noise
 
     await h.post(
-      `/internal/sessions/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
       { tasks: [{ title: 'shared work' }] },
     );
     // Both alice and bob should receive the system message via inbox.

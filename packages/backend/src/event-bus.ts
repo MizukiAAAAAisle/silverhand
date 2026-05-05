@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 
 /**
- * Per-session in-process pub/sub. SSE handlers subscribe; SessionManager
+ * Per-conversation in-process pub/sub. SSE handlers subscribe; ConversationManager
  * and route handlers publish. Single instance per backend, held in
  * BackendContext.
  *
@@ -9,28 +9,28 @@ import { EventEmitter } from 'node:events';
  * `agent_status`, `compaction`). `payload` is JSON-serializable and
  * goes verbatim into the SSE `data:` field.
  */
-export interface SessionBusEvent {
+export interface ConversationBusEvent {
   kind: string;
   payload: unknown;
 }
 
-export type SessionBusHandler = (event: SessionBusEvent) => void;
+export type ConversationBusHandler = (event: ConversationBusEvent) => void;
 
-export class SessionEventBus {
+export class ConversationEventBus {
   private readonly emitter = new EventEmitter();
 
   constructor() {
-    // SessionManager + many SSE subscribers per session — bump the cap
+    // ConversationManager + many SSE subscribers per conversation — bump the cap
     // so node doesn't print spurious warnings.
     this.emitter.setMaxListeners(0);
   }
 
-  publish(sessionId: string, event: SessionBusEvent): void {
-    this.emitter.emit(channel(sessionId), event);
+  publish(conversationId: string, event: ConversationBusEvent): void {
+    this.emitter.emit(channel(conversationId), event);
   }
 
-  subscribe(sessionId: string, handler: SessionBusHandler): () => void {
-    const ch = channel(sessionId);
+  subscribe(conversationId: string, handler: ConversationBusHandler): () => void {
+    const ch = channel(conversationId);
     this.emitter.on(ch, handler);
     return () => {
       this.emitter.off(ch, handler);
@@ -38,6 +38,6 @@ export class SessionEventBus {
   }
 }
 
-function channel(sessionId: string): string {
-  return `session:${sessionId}`;
+function channel(conversationId: string): string {
+  return `conversation:${conversationId}`;
 }

@@ -3,14 +3,15 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ServerConfig } from '@silverhand/shared';
 import type { BackendContext, BackendLogger } from '../../src/context.js';
-import { SessionEventBus, type SessionBusEvent } from '../../src/event-bus.js';
+import { ConversationEventBus, type ConversationBusEvent } from '../../src/event-bus.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
-import { ChannelRepo } from '../../src/repos/channel-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
-import { SessionRepo } from '../../src/repos/session-repo.js';
-import { SessionManager } from '../../src/session-manager.js';
-import { initWorkspaceDir } from '../../src/repos/channel-repo.js';
+import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
+import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { ConversationManager } from '../../src/conversation-manager.js';
+import { initWorkspaceDir } from '../../src/workspace-files.js';
+import { createLocalBlobFileStorage } from '../../src/storage/blob-file-storage.js';
 import { makeTempSilverhandDir, openTestDb } from './db.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -35,7 +36,7 @@ const silentLogger: BackendLogger = {
 
 export interface ManagerHarness {
   ctx: BackendContext;
-  manager: SessionManager;
+  manager: ConversationManager;
   silverhandDir: string;
   workspacePath: string;
   channelId: string;
@@ -44,27 +45,27 @@ export interface ManagerHarness {
   /** Path the mock-claude appends every received stdin line to. */
   stdinLog: string;
   /** Subscribe to all SSE events for the session. */
-  on(handler: (e: SessionBusEvent) => void): () => void;
+  on(handler: (e: ConversationBusEvent) => void): () => void;
   /** Wait until `predicate(events)` returns truthy, or reject after `timeoutMs`. */
   waitForEvent(
-    predicate: (e: SessionBusEvent) => boolean,
+    predicate: (e: ConversationBusEvent) => boolean,
     timeoutMs?: number,
-  ): Promise<SessionBusEvent>;
+  ): Promise<ConversationBusEvent>;
   /** Mutate the env that the next mock-claude spawn will inherit. */
   setMockEnv(overrides: MockClaudeEnvOverrides): void;
   cleanup(): Promise<void>;
 }
 
 export interface BuildManagerHarnessOptions {
-  /** If set, wired into ctx.logDir so the SessionManager writes the
+  /** If set, wired into ctx.logDir so the ConversationManager writes the
    *  dedicated agent-activity-*.log file. */
   logDir?: string;
 }
 
 /**
- * Build a real SessionManager pointed at the mock-claude binary, with all
+ * Build a real ConversationManager pointed at the mock-claude binary, with all
  * the surrounding fixtures (channel, agent, session) pre-created in an
- * in-memory DB. SessionManager's `binariesPromise` is monkey-patched to
+ * in-memory DB. ConversationManager's `binariesPromise` is monkey-patched to
  * map runtime "claude" → MOCK_CLAUDE_PATH so it never calls `which claude`.
  */
 export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {}): Promise<ManagerHarness> {
@@ -72,25 +73,28 @@ export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {})
   const tmp = makeTempSilverhandDir();
   mkdirSync(tmp.workspacesRoot, { recursive: true });
 
-  // Channel + workspace dir
-  const channels = new ChannelRepo(db, { workspacesRoot: tmp.workspacesRoot });
-  const workspacePath = channels.workspacePathFor('test-ch');
+  // Workspace + channel conversation dir
+  const workspaces = new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot });
+  const workspacePath = workspaces.workspacePathFor('test-ch');
   await initWorkspaceDir(workspacePath);
-  const channel = channels.insert({
+  const workspace = workspaces.insert({
     name: 'test-ch',
     description: null,
-    kind: 'regular',
-    workspace_path: workspacePath,
-    workspace_host_id: localHostId,
-    dm_agent_id: null,
+    workspacePath,
+    workspaceHostId: localHostId,
   });
 
   const agents = new AgentRepo(db);
   const agent = agents.create({ name: 'mock', runtime: 'claude' }, localHostId);
+  workspaces.addMember(workspace.id, agent.id);
 
-  const sessions = new SessionRepo(db);
-  const session = sessions.insert({ channelId: channel.id, title: 't' });
-  sessions.addAgent(session.id, agent.id);
+  const conversations = new ConversationRepo(db);
+  const session = conversations.insertChannel({
+    workspaceId: workspace.id,
+    workspacePath,
+    title: 't',
+  });
+  conversations.addAgent(session.id, agent.id);
 
   // Per-test env overrides; we mutate this reference and the manager picks
   // it up because spawn() reads env at call time.
@@ -118,23 +122,24 @@ export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {})
     silverhandDir: tmp.silverhandDir,
     workspacesRoot: tmp.workspacesRoot,
     logDir: opts.logDir,
+    blobStorage: createLocalBlobFileStorage({ silverhandDir: tmp.silverhandDir }),
     lastSpawnAtByAgent: new Map(),
-    events: new SessionEventBus(),
+    events: new ConversationEventBus(),
     chatBridgeLauncher: { command: 'true', args: [] }, // never invoked in L3
-    sessionManager: undefined as unknown as SessionManager,
+    conversationManager: undefined as unknown as ConversationManager,
   };
   // Bootstrap local host (matches what startBackend would do)
   new HostRepo(db).ensureLocal();
 
-  const manager = new SessionManager(ctx);
-  ctx.sessionManager = manager;
+  const manager = new ConversationManager(ctx);
+  ctx.conversationManager = manager;
 
   // Inject mock binary so resolveBinary returns it without `which claude`.
   (manager as unknown as {
     binariesPromise: Promise<Map<string, string>>;
   }).binariesPromise = Promise.resolve(new Map([['claude', MOCK_CLAUDE_PATH]]));
 
-  // Wrap process.spawn invocation indirectly: SessionManager calls
+  // Wrap process.spawn invocation indirectly: ConversationManager calls
   // driver.applyEnv(process.env) and then spawn(binary, args, { env }).
   // We can't intercept spawn, but we CAN inject MOCK_CLAUDE_* into
   // process.env before each start() call via setMockEnv.
@@ -149,14 +154,14 @@ export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {})
   applyMockEnv();
 
   // Event subscription helpers
-  function on(handler: (e: SessionBusEvent) => void): () => void {
+  function on(handler: (e: ConversationBusEvent) => void): () => void {
     return ctx.events.subscribe(session.id, handler);
   }
 
   function waitForEvent(
-    predicate: (e: SessionBusEvent) => boolean,
+    predicate: (e: ConversationBusEvent) => boolean,
     timeoutMs = 3000,
-  ): Promise<SessionBusEvent> {
+  ): Promise<ConversationBusEvent> {
     return new Promise((resolve, reject) => {
       const unsub = on(e => {
         if (predicate(e)) {
@@ -177,7 +182,7 @@ export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {})
     manager,
     silverhandDir: tmp.silverhandDir,
     workspacePath,
-    channelId: channel.id,
+    channelId: workspace.id,
     agentId: agent.id,
     sessionId: session.id,
     stdinLog: mockEnvOverrides.MOCK_CLAUDE_STDIN_LOG!,

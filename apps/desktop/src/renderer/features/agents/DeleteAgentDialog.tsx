@@ -123,28 +123,28 @@ function ImpactList({ impact }: { impact: AgentDeleteImpactDto }): JSX.Element {
       {impact.dm_channel ? (
         <Item>
           <strong className="font-mono">{impact.dm_channel.name}</strong> (DM):{' '}
-          {impact.dm_channel.session_count} session
-          {impact.dm_channel.session_count === 1 ? '' : 's'},{' '}
+          {impact.dm_channel.conversation_count} conversation
+          {impact.dm_channel.conversation_count === 1 ? '' : 's'},{' '}
           {impact.dm_channel.message_count} message
           {impact.dm_channel.message_count === 1 ? '' : 's'} — content lost
         </Item>
       ) : null}
 
-      {impact.regular_channels.length > 0 ? (
+      {impact.regular_workspaces.length > 0 ? (
         <Item>
-          Member of {impact.regular_channels.length} channel
-          {impact.regular_channels.length === 1 ? '' : 's'}:{' '}
+          Member of {impact.regular_workspaces.length} workspace
+          {impact.regular_workspaces.length === 1 ? '' : 's'}:{' '}
           <span className="text-text-secondary">
-            {impact.regular_channels.map(c => `#${c.name}`).join(', ')}
+            {impact.regular_workspaces.map(c => `#${c.name}`).join(', ')}
           </span>{' '}
           — others see <code className="font-mono text-xs">@{impact.agent_name} left</code>
         </Item>
       ) : null}
 
-      {impact.running_session_agents.length > 0 ? (
+      {impact.running_conversation_agents.length > 0 ? (
         <Item warn>
-          Currently running in {impact.running_session_agents.length} session
-          {impact.running_session_agents.length === 1 ? '' : 's'} — will be
+          Currently running in {impact.running_conversation_agents.length} conversation
+          {impact.running_conversation_agents.length === 1 ? '' : 's'} — will be
           hard-stopped first
         </Item>
       ) : null}

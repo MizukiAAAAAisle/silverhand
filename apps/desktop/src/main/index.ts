@@ -8,7 +8,7 @@ let backend: RunningBackend | null = null;
 let logger: FileLogger | null = null;
 let mainWindow: BrowserWindow | null = null;
 let eventsWindow: BrowserWindow | null = null;
-let activeSession: ActiveSessionInfo = { channelId: null, sessionId: null };
+let activeConversation: ActiveConversationInfo = { workspaceId: null, conversationId: null };
 
 /** Set `SILVERHAND_HEADLESS=1` to boot the backend without a window.
  *  Useful for curl-driven smoke tests and integration scripts — see
@@ -16,9 +16,9 @@ let activeSession: ActiveSessionInfo = { channelId: null, sessionId: null };
  *  SIGINT / SIGTERM. */
 const HEADLESS = process.env.SILVERHAND_HEADLESS === '1';
 
-interface ActiveSessionInfo {
-  channelId: string | null;
-  sessionId: string | null;
+interface ActiveConversationInfo {
+  workspaceId: string | null;
+  conversationId: string | null;
 }
 
 /**
@@ -194,7 +194,7 @@ function showEventsWindow(): void {
   if (eventsWindow && !eventsWindow.isDestroyed()) {
     eventsWindow.show();
     eventsWindow.focus();
-    pushActiveSessionToEvents();
+    pushActiveConversationToEvents();
     return;
   }
   const win = new BrowserWindow({
@@ -217,30 +217,30 @@ function showEventsWindow(): void {
 
   if (process.env['ELECTRON_RENDERER_URL']) {
     const url = new URL('events.html', process.env['ELECTRON_RENDERER_URL']);
-    for (const [key, value] of Object.entries(activeSessionQuery())) {
+    for (const [key, value] of Object.entries(activeConversationQuery())) {
       url.searchParams.set(key, value);
     }
     win.loadURL(url.toString());
   } else {
     win.loadFile(join(__dirname, '../renderer/events.html'), {
-      query: activeSessionQuery(),
+      query: activeConversationQuery(),
     });
   }
 }
 
-function activeSessionQuery(): Record<string, string> {
+function activeConversationQuery(): Record<string, string> {
   const query: Record<string, string> = {};
-  if (activeSession.channelId) query.channelId = activeSession.channelId;
-  if (activeSession.sessionId) query.sessionId = activeSession.sessionId;
+  if (activeConversation.workspaceId) query.workspaceId = activeConversation.workspaceId;
+  if (activeConversation.conversationId) query.conversationId = activeConversation.conversationId;
   return query;
 }
 
-function pushActiveSessionToEvents(): void {
+function pushActiveConversationToEvents(): void {
   const win = eventsWindow;
   if (!win || win.isDestroyed()) return;
   const send = () => {
     if (!win.isDestroyed()) {
-      win.webContents.send('active-session:update', activeSession);
+      win.webContents.send('active-conversation:update', activeConversation);
     }
   };
   if (win.webContents.isLoading()) {
@@ -339,9 +339,9 @@ ipcMain.handle('window:setAlwaysOnTop', (event, pinned: boolean) => {
   win?.setAlwaysOnTop(!!pinned);
 });
 
-ipcMain.handle('active-session:set', (_event, next: unknown) => {
-  activeSession = normalizeActiveSession(next);
-  pushActiveSessionToEvents();
+ipcMain.handle('active-conversation:set', (_event, next: unknown) => {
+  activeConversation = normalizeActiveConversation(next);
+  pushActiveConversationToEvents();
 });
 
 ipcMain.handle('notification:show', (_event, opts: unknown) => {
@@ -357,14 +357,14 @@ ipcMain.handle('notification:show', (_event, opts: unknown) => {
   n.show();
 });
 
-function normalizeActiveSession(value: unknown): ActiveSessionInfo {
+function normalizeActiveConversation(value: unknown): ActiveConversationInfo {
   if (!value || typeof value !== 'object') {
-    return { channelId: null, sessionId: null };
+    return { workspaceId: null, conversationId: null };
   }
-  const v = value as Partial<Record<keyof ActiveSessionInfo, unknown>>;
+  const v = value as Partial<Record<keyof ActiveConversationInfo, unknown>>;
   return {
-    channelId: typeof v.channelId === 'string' ? v.channelId : null,
-    sessionId: typeof v.sessionId === 'string' ? v.sessionId : null,
+    workspaceId: typeof v.workspaceId === 'string' ? v.workspaceId : null,
+    conversationId: typeof v.conversationId === 'string' ? v.conversationId : null,
   };
 }
 
@@ -459,7 +459,7 @@ app.on('before-quit', event => {
   isShuttingDown = true;
 
   // Hard ceiling so a wedged shutdown can't hang the app forever.
-  // SessionManager.stop already escalates to SIGKILL after 10s; this
+  // ConversationManager.stop already escalates to SIGKILL after 10s; this
   // is the safety net for everything around it (driver bugs, hung
   // logger flushes, etc.). Kept above 10s so the normal SIGTERM/SIGKILL
   // cascade gets to run before we force-exit.

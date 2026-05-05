@@ -268,14 +268,14 @@ GET    /api/saved                 → SavedMessageDto[]
 
 参考 [`core-design.md` §3.6](./core-design.md#36-thread--取代-slock-thread-的真隔离方案)。原方案只支持 agent 通过 MCP 工具 spawn；本节扩展 **human 可以从 UI 触发**。
 
-> 命名说明：UI 概念叫 **Thread**（IM 中广泛使用的"在某条消息上展开子讨论"的术语）。底层落到 `conversations` 表的 child channel 上 —— 所有 Thread 都是 child channel，但 agent 通过 `spawn_child_session` MCP 工具自己开的 child channel **不是 Thread**（没有 `thread_anchor`）。
+> 命名说明：UI 概念叫 **Thread**（IM 中广泛使用的"在某条消息上展开子讨论"的术语）。底层落到 `conversations` 表的 child conversation 上 —— 所有 Thread 都是 child conversation（`kind='thread'`），但 agent 通过 `create_thread` MCP 工具自己开的 child conversation **不是 Thread**（没有 `thread_anchor`）。
 
 ### 7.1 后端 API
 
 ```
 POST /api/messages/:id/thread
   Body: {}  （目前无参数；将来可加 initial_prompt override）
-  Returns: { child_session_id: string }
+  Returns: { thread_id: string }
 ```
 
 实现要点（对应 `routes.ts` 中 `POST /api/messages/:id/thread` 路由）：
@@ -283,9 +283,9 @@ POST /api/messages/:id/thread
 1. 找到原 message + 其 channel + workspace
 2. 拒绝条件：
    - 原 channel 已 `closed_at != null` → 409
-   - 原 channel 已经是 thread (`parent_channel_id != null`) → 400（硬限 1 层）
+   - 原 channel 已经是 thread (`parent_conversation_id != null`) → 400（硬限 1 层）
 3. 幂等：同源 message 已有未关闭 thread → 复用（`findOpenThreadChild`）
-4. INSERT `conversations`：`parent_channel_id = 原 channel.id`，`spawned_by_agent_id = null`（human spawn 标识；schema 已允许 null），`title = "Thread: " + 截短(原 message body, 50)`
+4. INSERT `conversations`：`parent_conversation_id = 原 channel.id`，`spawned_by_agent_id = null`（human spawn 标识；schema 已允许 null），`title = "Thread: " + 截短(原 message body, 50)`
 5. members：默认**只拉发件 agent**（如果原 message `from_kind='agent'` 且 `from_agent_id` 非空）。如果原 message 是 user 发的，先用父 workspace 的 default agent（dm_agent_id 或第一个 member）兜底——这个 case 实际是"我（user）想就自己刚才说的话开个 thread"，需要 v1 时具体测下手感。
 6. 写两条初始消息：
    - **第一条 system（带 metadata）—— thread anchor**：
@@ -309,18 +309,18 @@ POST /api/messages/:id/thread
         2) Send one short greeting via mcp__chat__send_message acknowledging the topic.
         3) Then await user input.
         You can call mcp__chat__send_message with target='parent' to ask the parent channel for context if needed.
-        Call close_session(summary) when this thread reaches a conclusion.'
+        Call close_thread(summary) when this thread reaches a conclusion.'
      metadata: { subtype: 'onboarding' }
      ```
 7. **不主动 spawn thread 进程**——等用户在 UI thread pane 第一次发消息或显式 start 时再 spawn（同 §3.6 第 5 步）。
-8. 返回 `child_session_id`。
+8. 返回 `thread_id`。
 
 后续追加 member：复用现有 `Manage Members` 对话框（PR4 顺便扩展使其支持 thread，或 v1 阶段只能从 workspace level 加，加进 workspace 后 thread 自动可见）。**MVP 版本只允许默认成员**，"后加 member" 留 v1.1。
 
 ### 7.2 前端
 
 - App.tsx 新增 state `openThreadId: string | null`
-- `MessageItem.onStartThread` → POST `/thread` → `setOpenThreadId(child_session_id)` + 切到该 workspace 下也包含 thread 的 channel list
+- `MessageItem.onStartThread` → POST `/thread` → `setOpenThreadId(thread_id)` + 切到该 workspace 下也包含 thread 的 channel list
 - Main view 改成：
   ```tsx
   <SplitPane
@@ -330,7 +330,7 @@ POST /api/messages/:id/thread
     storageKey="silverhand.layout.split-ratio"
   />
   ```
-- 关闭 thread（点 thread 头部的 ✕，或 thread 自己 close_session）→ split 收回，parent 占满
+- 关闭 thread（点 thread 头部的 ✕，或 thread 自己 close_thread）→ split 收回，parent 占满
 - thread 已经在 ChannelsSidebar tree 里也能看到（缩进显示），点击 sidebar 里的 thread 等价于触发 `setOpenThreadId(id)` + parent 自动选中
 - 同一时间只允许一个 thread pane：再点别的 message 的 Thread，提示"关闭当前 thread 才能开新 thread"或直接替换（v1 暂定**直接替换**+ confirm）
 
@@ -387,7 +387,7 @@ PR3 / 4 / 5 / 6 / 7 之间互相不阻塞，可以并行 review；按 PR# 顺序
 - **CSS color/spacing 永远走 token**，不写裸色值（`design-new-theme.md` §3）
 - **Markdown 容器最大宽度** 与现有气泡保持一致（`max-w-[75%]`），避免在宽屏 workspace 里横到 2000px 难读
 - **每条 message 必须有稳定 DOM id**（`msg-<id>`），用于 saved view 跳转 + 未来 anchor 复制
-- **thread 永远只有一层**（schema + UI 双重保险）；UI 在 Thread button 上根据 `parent_channel_id != null` 隐藏
+- **thread 永远只有一层**（schema + UI 双重保险）；UI 在 Thread button 上根据 `parent_conversation_id != null` 隐藏
 - **dev-only feature 的入口** 只在 macOS 应用菜单 → Developer 子菜单下；不出现在用户视野中其他地方
 - **每个 PR 完成后追加 `docs/progress.md`** 一段，记下：动机、关键决策、踩坑、验证（typecheck / test / 手测）
 

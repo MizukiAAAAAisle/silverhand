@@ -2,7 +2,7 @@ import type { MessageDto } from '@silverhand/shared';
 
 /**
  * Pull the (single) thread_anchor system message out of a messages list.
- * Returns null when the session isn't a thread child.
+ * Returns null when the conversation isn't a thread child.
  */
 export function findThreadAnchor(messages: MessageDto[]): MessageDto | null {
   for (const m of messages) {

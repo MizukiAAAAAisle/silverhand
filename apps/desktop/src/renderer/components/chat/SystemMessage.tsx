@@ -11,7 +11,8 @@ interface SystemMessageProps {
 
 /**
  * System messages (onboarding, join/leave, child summaries) render as
- * a left-aligned secondary line — not a centered italic banner.
+ * a centered italic narration line — IM-convention so they don't read
+ * as messages from an unnamed participant.
  *
  * Onboarding (and similarly long subtypes like child_summary, thread_anchor)
  * collapse to one line by default and expand on click. The subtype lives
@@ -30,8 +31,9 @@ export function SystemMessage({ message }: SystemMessageProps): JSX.Element {
 
   if (!collapsible) {
     // join/leave/etc. are typically a single line — no need for a toggle.
+    // Centered + italic so they read as narration, not a participant message.
     return (
-      <div className="px-2 py-1 text-xs text-text-muted">
+      <div className="px-4 py-1.5 text-center text-xs italic text-text-muted">
         <Markdown content={message.content} />
       </div>
     );
@@ -96,17 +98,17 @@ function firstLine(text: string): string {
 
 /**
  * Compact render for `mention_cc` system messages: source line
- * (user · #channel · session) plus the original message body.
+ * (user · workspace · conversation) plus the original message body.
  * The verbose imperative wrap stays in `message.content` for the
  * agent's stdin only.
  */
 function MentionCcCard({ message }: { message: MessageDto }): JSX.Element {
   const meta = (message.metadata ?? {}) as Record<string, unknown>;
-  const channelName = typeof meta['source_channel_name'] === 'string'
-    ? (meta['source_channel_name'] as string)
+  const channelName = typeof meta['source_workspace_name'] === 'string'
+    ? (meta['source_workspace_name'] as string)
     : null;
-  const sessionTitle = typeof meta['source_session_title'] === 'string'
-    ? (meta['source_session_title'] as string)
+  const conversationTitle = typeof meta['source_conversation_title'] === 'string'
+    ? (meta['source_conversation_title'] as string)
     : null;
   const inlineOriginal = typeof meta['source_message_content'] === 'string'
     ? (meta['source_message_content'] as string)
@@ -142,10 +144,10 @@ function MentionCcCard({ message }: { message: MessageDto }): JSX.Element {
               <span className="text-text-secondary">#{channelName}</span>
             </>
           ) : null}
-          {sessionTitle ? (
+          {conversationTitle ? (
             <>
               {' · '}
-              <span className="text-text-secondary">{sessionTitle}</span>
+              <span className="text-text-secondary">{conversationTitle}</span>
             </>
           ) : null}
         </span>
@@ -160,4 +162,3 @@ function MentionCcCard({ message }: { message: MessageDto }): JSX.Element {
     </div>
   );
 }
-

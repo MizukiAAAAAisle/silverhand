@@ -7,12 +7,12 @@ import { useTasks, useUpdateTaskStatus } from '@/features/tasks/hooks';
 
 /**
  * NavRail "Tasks" section — global aggregate view across every channel
- * and session, rendered as a four-column kanban (Todo / In progress /
+ * and conversation, rendered as a four-column kanban (Todo / In progress /
  * In review / Done) so the layout matches the channel-scoped dialog
  * surfaced from the titlebar.
  *
  * Channel filter sits in a chip strip below the header (parallel to
- * the session strip in `ChannelTasksDialog`) — no separate sidebar,
+ * the conversation strip in `ChannelTasksDialog`) — no separate sidebar,
  * which gives the kanban the full window width.
  *
  * Click a card → onJump scrolls back into chat at the source message
@@ -22,6 +22,7 @@ export interface TasksSectionProps {
   onJump: (params: {
     workspaceId?: string;
     channelId: string;
+    threadId?: string | null;
     messageId: string;
   }) => void;
 }
@@ -31,7 +32,7 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
   const updateStatus = useUpdateTaskStatus();
 
   const { data: tasks = [] } = useTasks({
-    channel_id: channelFilter ?? undefined,
+    workspace_id: channelFilter ?? undefined,
   });
   const { data: workspaces = [] } = useWorkspaces();
 
@@ -42,7 +43,9 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
   const channelActiveCounts = useMemo(() => {
     const m = new Map<string, number>();
     for (const t of allTasksForCounts) {
-      if (t.status !== 'done') m.set(t.channel_id, (m.get(t.channel_id) ?? 0) + 1);
+      if (t.status !== 'done') {
+        m.set(t.workspace_id, (m.get(t.workspace_id) ?? 0) + 1);
+      }
     }
     return m;
   }, [allTasksForCounts]);
@@ -99,7 +102,9 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
             tasks={grouped[col.status]}
             onCardClick={t =>
               onJump({
-                channelId: t.session.id,
+                workspaceId: t.workspace_id,
+                channelId: t.channel_id,
+                threadId: t.thread_id,
                 messageId: t.message_id,
               })
             }
@@ -345,7 +350,7 @@ function TaskCard({
         <span className="block min-w-0 break-words text-xs text-text-primary">
           {task.title}
         </span>
-        {/* Row 3: assignee + session */}
+        {/* Row 3: assignee + conversation */}
         <div className="mt-1 flex items-center gap-1.5 text-[10px] text-text-muted">
           {task.assignee ? (
             <span>@{task.assignee.name}</span>
@@ -354,9 +359,9 @@ function TaskCard({
           )}
           <span
             className="ml-auto max-w-[100px] truncate"
-            title={task.session.title}
+            title={task.conversation.title}
           >
-            {task.session.title}
+            {task.conversation.title}
           </span>
         </div>
       </button>

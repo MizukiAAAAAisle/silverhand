@@ -1,4 +1,6 @@
-import type { ChannelKind, RuntimeKind } from '@silverhand/shared';
+import type { RuntimeKind } from '@silverhand/shared';
+
+type WorkspaceUiKind = 'regular' | 'dm';
 
 export interface PlatformPromptInput {
   agentId: string;
@@ -15,7 +17,7 @@ export interface PlatformPromptInput {
 
 export interface SessionContextInput {
   channelName: string;
-  channelKind: ChannelKind;
+  channelKind: WorkspaceUiKind;
   sessionTitle: string;
   /** Other agents present in this channel/thread (excluding self). */
   otherMembers: Array<{ name: string; runtime: RuntimeKind }>;
@@ -182,8 +184,10 @@ You may open a Thread via ${createThread} when:
 - You want to delegate a sub-task to a subset of members in parallel.
 
 You **must** provide a \`context_summary\` capturing what the Thread
-needs to know — be specific and minimal. Pulling members:
-only those already in this channel. **Threads cannot nest** — you
+needs to know — be specific and minimal. By default the Thread uses
+all current channel members; if you pass a narrower \`members\` list,
+it must contain only agents already in this channel and you will still
+be included. **Threads cannot nest** — you
 cannot open a Thread from inside a Thread; use ${createChannel} instead
 if the user explicitly asks for a separate channel.
 

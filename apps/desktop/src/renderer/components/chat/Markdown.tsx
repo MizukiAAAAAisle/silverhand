@@ -4,22 +4,22 @@ import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { Check, Copy } from 'lucide-react';
-import type { AgentDto, ChannelDto } from '@silverhand/shared';
+import type { AgentDto } from '@silverhand/shared';
 import { Mention } from './Mention';
-import { ChannelRef } from './ChannelRef';
+import { ChannelRef, type WorkspaceReference } from './ChannelRef';
 
 interface MarkdownProps {
   content: string;
   /** Forwarded to inline `<Mention>` so the agent popover can show
-   *  per-session presence + retry. Optional — system messages outside
+   *  per-conversation presence + retry. Optional — system messages outside
    *  a chat context omit it. */
-  sessionId?: string | null;
+  conversationId?: string | null;
   /** Lookup by agent `name` (the handle used in @mentions). When
    *  absent, mentions render as plain accent-colored text without the
    *  popover. */
   agentsByName?: Map<string, AgentDto>;
   /** Lookup by channel `name` (the handle used in #refs). */
-  channelsByName?: Map<string, ChannelDto>;
+  channelsByName?: Map<string, WorkspaceReference>;
 }
 
 const MENTION_PREFIX = 'silverhand-mention:';
@@ -39,7 +39,12 @@ const CHANNEL_PREFIX = 'silverhand-channel:';
  * instead of a normal link, so the agent map only needs to be threaded
  * one place.
  */
-function MarkdownInner({ content, sessionId, agentsByName, channelsByName }: MarkdownProps): JSX.Element {
+function MarkdownInner({
+  content,
+  conversationId,
+  agentsByName,
+  channelsByName,
+}: MarkdownProps): JSX.Element {
   // Plugin instance is recreated per render but is a thin closure;
   // remark instantiates the transformer once per `process` call so
   // the cost is negligible. Memoizing it doesn't help because react-
@@ -69,7 +74,7 @@ function MarkdownInner({ content, sessionId, agentsByName, channelsByName }: Mar
                 <Mention
                   name={name}
                   agent={agentsByName?.get(name)}
-                  sessionId={sessionId ?? null}
+                  conversationId={conversationId ?? null}
                 />
               );
             }

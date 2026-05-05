@@ -5,7 +5,7 @@ import {
   type ManagerHarness,
 } from '../utils/manager.js';
 
-describe('SessionManager smoke (mock-claude)', () => {
+describe('ConversationManager smoke (mock-claude)', () => {
   let h: ManagerHarness | null = null;
   afterEach(async () => {
     await h?.cleanup();
@@ -28,8 +28,8 @@ describe('SessionManager smoke (mock-claude)', () => {
     // DB row reflects active + cli_session_id
     const row = h.ctx.db
       .prepare<[string, string], { status: string; cli_session_id: string | null }>(
-        `SELECT status, cli_session_id FROM session_agents
-         WHERE session_id = ? AND agent_id = ?`,
+        `SELECT status, cli_session_id FROM conversation_agents
+         WHERE conversation_id = ? AND agent_id = ?`,
       )
       .get(h.sessionId, h.agentId);
     expect(row?.status).toBe('active');

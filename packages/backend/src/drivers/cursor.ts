@@ -18,7 +18,7 @@ import { buildPlatformPrompt } from './platform-prompt.js';
  *
  * 1. **One-shot.** `cursor-agent --print` processes a single positional
  *    prompt then exits — there's no persistent stdin loop. Therefore
- *    `oneShot = true`, `busyDeliveryMode = 'none'`. SessionManager
+ *    `oneShot = true`, `busyDeliveryMode = 'none'`. ConversationManager
  *    drains the inbox synchronously *before* spawn (into
  *    `spawnCtx.initialPrompt`) and respawns the process when more
  *    messages arrive.
@@ -92,13 +92,13 @@ export class CursorDriver implements Driver {
   }
 
   encodeStdinMessage(_text: string, _cliSessionId: string | null): string | null {
-    // Cursor doesn't accept stdin notifications. SessionManager treats
+    // Cursor doesn't accept stdin notifications. ConversationManager treats
     // null as "queue to inbox; respawn for next kickoff".
     return null;
   }
 
   encodeInterruptControl(): string | null {
-    // No protocol-level cancel; SessionManager falls through to SIGTERM.
+    // No protocol-level cancel; ConversationManager falls through to SIGTERM.
     return null;
   }
 
@@ -192,6 +192,6 @@ function buildKickoffPrompt(ctx: DriverSpawnContext): string {
   const standingPrompt = readFileSync(ctx.systemPromptPath, 'utf-8');
   const initial =
     ctx.initialPrompt.trim() ||
-    'You are now active in this session. Read your MEMORY.md and stand by for further instructions.';
+    'You are now active in this channel. Read your MEMORY.md and stand by for further instructions.';
   return `${standingPrompt}\n\n---\n\n${initial}`;
 }

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { join } from 'node:path';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
-describe('workspace/conversation additive routes', () => {
+describe('workspace/conversation routes', () => {
   let t: TestApp | null = null;
   afterEach(() => {
     t?.cleanup();
@@ -14,8 +14,8 @@ describe('workspace/conversation additive routes', () => {
     const agentBody = await (
       await http(t.app).post('/api/agents', { name: 'alice', runtime: 'claude' })
     ).json() as any;
-    const channelBody = await (
-      await http(t.app).post('/api/channels', {
+    const workspaceBody = await (
+      await http(t.app).post('/api/workspaces', {
         name: 'eng',
         member_agent_ids: [agentBody.agent.id],
       })
@@ -25,18 +25,18 @@ describe('workspace/conversation additive routes', () => {
       await http(t.app).get('/api/workspaces')
     ).json() as any;
     expect(workspaces.workspaces.map((w: any) => w.id)).toEqual([
-      channelBody.channel.id,
+      workspaceBody.workspace.id,
     ]);
 
     const channels = await (
-      await http(t.app).get(`/api/workspaces/${channelBody.channel.id}/channels`)
+      await http(t.app).get(`/api/workspaces/${workspaceBody.workspace.id}/channels`)
     ).json() as any;
     expect(channels.channels).toHaveLength(1);
     expect(channels.channels[0]).toMatchObject({
-      id: channelBody.onboarding_session_id,
-      workspace_id: channelBody.channel.id,
+      id: workspaceBody.onboarding_channel_id,
+      workspace_id: workspaceBody.workspace.id,
       kind: 'channel',
-      workspace_path: channelBody.channel.workspace_path,
+      workspace_path: workspaceBody.workspace.workspace_path,
     });
 
     const dms = await (
@@ -54,36 +54,32 @@ describe('workspace/conversation additive routes', () => {
     const agentBody = await (
       await http(t.app).post('/api/agents', { name: 'bob', runtime: 'claude' })
     ).json() as any;
-    const channelBody = await (
-      await http(t.app).post('/api/channels', {
+    const workspaceBody = await (
+      await http(t.app).post('/api/workspaces', {
         name: 'guards',
         member_agent_ids: [agentBody.agent.id],
       })
     ).json() as any;
 
-    const rootId = channelBody.onboarding_session_id;
-    expect((await http(t.app).get(`/api/channels/${rootId}/messages`)).status).toBe(
-      200,
-    );
-    expect((await http(t.app).get(`/api/threads/${rootId}/messages`)).status).toBe(
-      404,
-    );
+    const channelId = workspaceBody.onboarding_channel_id;
+    expect((await http(t.app).get(`/api/channels/${channelId}/messages`)).status)
+      .toBe(200);
+    expect((await http(t.app).get(`/api/threads/${channelId}/messages`)).status)
+      .toBe(404);
 
     const msgBody = await (
-      await http(t.app).post(`/api/sessions/${rootId}/messages`, {
+      await http(t.app).post(`/api/channels/${channelId}/messages`, {
         content: 'start a thread here',
       })
     ).json() as any;
     const threadBody = await (
       await http(t.app).post(`/api/messages/${msgBody.message.id}/thread`)
     ).json() as any;
-    const threadId = threadBody.session.id;
+    const threadId = threadBody.thread_id;
 
-    expect((await http(t.app).get(`/api/channels/${threadId}/messages`)).status).toBe(
-      404,
-    );
-    expect((await http(t.app).get(`/api/threads/${threadId}/messages`)).status).toBe(
-      200,
-    );
+    expect((await http(t.app).get(`/api/channels/${threadId}/messages`)).status)
+      .toBe(404);
+    expect((await http(t.app).get(`/api/threads/${threadId}/messages`)).status)
+      .toBe(200);
   });
 });

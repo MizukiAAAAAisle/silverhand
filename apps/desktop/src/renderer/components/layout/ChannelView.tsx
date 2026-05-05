@@ -11,11 +11,9 @@ import { ArrowDown, X } from 'lucide-react';
 import type {
   AgentDto,
   AgentRunState,
-  ChannelDto,
-  ChannelKind,
+  ConversationAgentDto,
   MessageDto,
-  SessionAgentDto,
-  SessionDto,
+  ThreadDto,
 } from '@silverhand/shared';
 import { Composer } from '@/components/chat/Composer';
 import { MessageItem } from '@/components/chat/MessageItem';
@@ -39,35 +37,38 @@ import {
   useAgentRunStates,
   useMarkMessageChannelRead,
 } from '@/features/channels/hooks';
-import { useSessionStream } from '@/hooks/useSessionStream';
+import { useConversationStream } from '@/hooks/useConversationStream';
+import type { WorkspaceReference } from '@/components/chat/ChannelRef';
+
+type WorkspaceUiKind = 'regular' | 'dm';
 
 interface ChannelDescriptor {
   id: string;
   title: string;
-  parent_session_id: string | null;
+  parent_conversation_id: string | null;
   closed_at: number | null;
-  channel_id: string;
+  workspace_id: string;
 }
 
 interface ChannelViewProps {
   /** Kind of the parent workspace. DM and regular channels diverge in
    *  several places (agent strip, sub-thread affordances, member
    *  management). Threaded as a prop so the divergences stay local. */
-  channelKind: ChannelKind | null;
-  session: ChannelDescriptor | null;
+  channelKind: WorkspaceUiKind | null;
+  conversation: ChannelDescriptor | null;
   parentTitle?: string | null;
   /** One-shot scroll-to target. When set and the target message is in
    *  the current channel, MessageList scrolls + flashes it, then calls
    *  `onJumped` so the parent can clear the target (otherwise switching
    *  workspaces and back would re-trigger the scroll). */
-  jumpTarget?: { sessionId: string; messageId: string } | null;
+  jumpTarget?: { channelId: string; messageId: string } | null;
   onJumped?: () => void;
   /** Called when the user clicks Thread on a message. The parent owns
    *  thread-pane state — receives the freshly-created thread id
-   *  and the session DTO (if available) for optimistic rendering.
+   *  and the conversation DTO (if available) for optimistic rendering.
    *  When this is undefined the Thread action is hidden (threads
    *  can't spawn sub-threads). */
-  onThreadCreated?: (threadId: string, session?: SessionDto) => void;
+  onThreadCreated?: (threadId: string, thread?: ThreadDto) => void;
   /** When set, renders an X button in the header that calls this back.
    *  Used by the right-side thread pane to close itself. */
   onCloseChild?: () => void;
@@ -86,21 +87,21 @@ interface ChannelViewProps {
 }
 
 export function ChannelView(props: ChannelViewProps): JSX.Element {
-  if (!props.session) {
+  if (!props.conversation) {
     return (
       <main className="flex h-full min-w-0 flex-1 items-center justify-center bg-bg-chat text-sm text-text-muted">
         从左侧选择一个 Channel
       </main>
     );
   }
-  return <ActiveChannelView {...props} session={props.session} />;
+  return <ActiveChannelView {...props} conversation={props.conversation} />;
 }
 
 // Split out so the React-Query hooks below only mount once a channel
 // exists — keeps hook order stable across the null transition.
 function ActiveChannelView({
   channelKind,
-  session,
+  conversation,
   parentTitle,
   jumpTarget,
   onJumped,
@@ -109,14 +110,15 @@ function ActiveChannelView({
   onJumpToOriginal,
   onThreadAnchorResolved,
   highlightedMessageId,
-}: ChannelViewProps & { session: ChannelDescriptor }): JSX.Element {
+}: ChannelViewProps & { conversation: ChannelDescriptor }): JSX.Element {
+  const routeKind = conversation.parent_conversation_id ? 'thread' : 'channel';
   const {
     data: messages = [],
     isLoading,
     hasPreviousPage,
     isFetchingPreviousPage,
     fetchPreviousPage,
-  } = useChannelMessages(session.id);
+  } = useChannelMessages(conversation.id, routeKind);
 
   // Advance the message read cursor in real-time as new messages arrive via
   // SSE. ChannelView is only rendered when the channel is visible, so any
@@ -125,14 +127,14 @@ function ActiveChannelView({
   const markRead = useMarkMessageChannelRead();
   const onStreamEvent = useCallback(
     (e: { kind: string }) => {
-      if (e.kind === 'message') markRead.mutate(session.id);
+      if (e.kind === 'message') markRead.mutate({ id: conversation.id, kind: routeKind });
     },
-    // markRead.mutate is stable; session.id drives re-subscription.
+    // markRead.mutate is stable; conversation.id drives re-subscription.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [session.id],
+    [conversation.id, routeKind],
   );
-  useSessionStream(session.id, onStreamEvent);
-  const { data: runStates = [] } = useAgentRunStates(session.id);
+  useConversationStream(conversation.id, onStreamEvent, routeKind);
+  const { data: runStates = [] } = useAgentRunStates(conversation.id, routeKind);
 
   // Active = non-terminal states only (idle/failed are removed by the hook).
   // Guard defensively in case a terminal event arrives just before re-render.
@@ -141,7 +143,7 @@ function ActiveChannelView({
     [runStates],
   );
 
-  const closed = session.closed_at !== null;
+  const closed = conversation.closed_at !== null;
   const isDm = channelKind === 'dm';
 
   // Thread children carry a single thread_anchor system message — the
@@ -170,11 +172,11 @@ function ActiveChannelView({
   }, [fetchPreviousPage, hasPreviousPage, isFetchingPreviousPage]);
 
   // Resolve the prop-driven jump target — fires when the global Saved
-  // view or the Tasks panel hands us a `{sessionId, messageId}` for a
+  // view or the Tasks panel hands us a `{channelId, messageId}` for a
   // message inside this channel. Cleared by `onJumped` once the
   // message-list scroll completes.
   const effectiveJumpMessageId =
-    jumpTarget && jumpTarget.sessionId === session.id
+    jumpTarget && jumpTarget.channelId === conversation.id
       ? jumpTarget.messageId
       : null;
 
@@ -183,12 +185,14 @@ function ActiveChannelView({
   // sub-threads so the query is gated and stays disabled there.
   const isParentPane = !!onThreadCreated;
   const { data: threads = [] } = useChannelThreads(
-    isParentPane ? session.id : null,
-    isParentPane ? session.channel_id : null,
+    isParentPane ? conversation.id : null,
+    isParentPane ? conversation.workspace_id : null,
   );
   const threadByAnchor = useMemo(() => {
     const m = new Map<string, ThreadSummary>();
-    for (const t of threads) m.set(t.anchor_message_id, t);
+    for (const t of threads) {
+      if (t.anchor_message_id) m.set(t.anchor_message_id, t);
+    }
     return m;
   }, [threads]);
 
@@ -202,7 +206,7 @@ function ActiveChannelView({
             </span>
             <span className="text-text-muted">—</span>
             <span className="min-w-0 truncate font-serif text-sm font-semibold text-text-primary">
-              #{parentTitle ?? session.title}
+              #{parentTitle ?? conversation.title}
             </span>
             {onJumpToOriginal && anchorMessageId ? (
               <button
@@ -218,7 +222,7 @@ function ActiveChannelView({
         ) : (
           <>
             <span className="min-w-0 truncate font-serif text-sm font-semibold text-text-primary">
-              {session.title}
+              {conversation.title}
             </span>
             {parentTitle ? (
               <span className="min-w-0 truncate text-xs text-text-muted">↳ thread of {parentTitle}</span>
@@ -237,7 +241,11 @@ function ActiveChannelView({
           * the workspace name. */}
         <div className="ml-auto flex min-w-0 items-center gap-1.5">
           {isDm ? null : (
-            <AgentStrip channelId={session.id} disabled={closed} />
+            <AgentStrip
+              channelId={conversation.id}
+              routeKind={routeKind}
+              disabled={closed}
+            />
           )}
           {onCloseChild ? (
             <button
@@ -255,8 +263,8 @@ function ActiveChannelView({
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <MessageList
-          channelId={session.id}
-          workspaceId={session.channel_id}
+          channelId={conversation.id}
+          workspaceId={conversation.workspace_id}
           messages={visibleMessages}
           isLoading={isLoading}
           hasMoreBefore={!!hasPreviousPage}
@@ -280,9 +288,10 @@ function ActiveChannelView({
           onThreadCreated={onThreadCreated}
           threadByAnchor={threadByAnchor}
           activeRunStates={activeRunStates}
+          routeKind={routeKind}
         />
 
-        <Composer sessionId={session.id} disabled={closed} />
+        <Composer conversationId={conversation.id} routeKind={routeKind} disabled={closed} />
       </div>
     </main>
   );
@@ -292,14 +301,16 @@ function ActiveChannelView({
 
 function AgentStrip({
   channelId,
+  routeKind,
 }: {
   channelId: string;
+  routeKind: 'channel' | 'thread';
   /** Reserved for future close-state UI. The retry affordance for
    *  crashed agents now lives inside the AgentInfoPopover so the
    *  stacked-avatar surface stays purely informational. */
   disabled: boolean;
 }): JSX.Element {
-  const { data: sa = [] } = useChannelAgents(channelId);
+  const { data: sa = [] } = useChannelAgents(channelId, routeKind);
   const { data: agents = [] } = useAgents();
   const agentById = useMemo(() => {
     const m = new Map<string, AgentDto>();
@@ -327,7 +338,8 @@ function AgentStrip({
           <AgentInfoPopover
             key={s.agent_id}
             agent={agent}
-            sessionId={channelId}
+            conversationId={channelId}
+            routeKind={routeKind}
             trigger="hover"
             side="bottom"
             align="end"
@@ -359,7 +371,7 @@ function AgentStrip({
   );
 }
 
-const STATUS_DOT: Record<SessionAgentDto['status'], string> = {
+const STATUS_DOT: Record<ConversationAgentDto['status'], string> = {
   active: 'bg-success',
   starting: 'bg-warning',
   crashed: 'bg-error',
@@ -383,6 +395,7 @@ function MessageList({
   onThreadCreated,
   threadByAnchor,
   activeRunStates,
+  routeKind,
 }: {
   channelId: string;
   workspaceId: string;
@@ -395,7 +408,7 @@ function MessageList({
   highlightedMessageId?: string | null;
   jumpToMessageId: string | null;
   onJumped?: () => void;
-  onThreadCreated?: (threadId: string, session?: SessionDto) => void;
+  onThreadCreated?: (threadId: string, thread?: ThreadDto) => void;
   /** Map of `original message id → open-thread summary` for the parent
    *  pane. Empty / absent on thread panes. Drives the per-message
    *  "{count} Reply" badge and short-circuits the POST when a thread
@@ -404,6 +417,7 @@ function MessageList({
   /** In-flight agent run states — rendered as activity bubbles below the
    *  last message so the user can see which agents are still working. */
   activeRunStates?: AgentRunState[];
+  routeKind: 'channel' | 'thread';
 }): JSX.Element {
   const { data: agents = [] } = useAgents();
   const { data: workspaces = [] } = useWorkspaces();
@@ -413,7 +427,7 @@ function MessageList({
   // Three lookup maps used by the message renderer:
   //  - `agentsById`   → message author (avatar + display name)
   //  - `agentsByName` → inline `@handle` mention pills
-  //  - `channelsByName` → inline `#name` channel ref pills (workspaces mapped to ChannelDto shape)
+  //  - `channelsByName` → inline `#name` workspace/channel ref pills
   const { agentsById, agentsByName } = useMemo(() => {
     const byId = new Map<string, AgentDto>();
     const byName = new Map<string, AgentDto>();
@@ -424,10 +438,9 @@ function MessageList({
     return { agentsById: byId, agentsByName: byName };
   }, [agents]);
   const channelsByName = useMemo(() => {
-    const m = new Map<string, ChannelDto>();
+    const m = new Map<string, WorkspaceReference>();
     for (const w of workspaces) {
-      // Workspaces are already ChannelDto-shaped (backed by /api/channels).
-      m.set(w.name, w);
+      m.set(w.name, { name: w.name, description: w.description });
     }
     return m;
   }, [workspaces]);
@@ -437,12 +450,12 @@ function MessageList({
     // Already a thread on this message → just open it; no POST needed.
     const existing = threadByAnchor?.get(msg.id);
     if (existing) {
-      onThreadCreated(existing.child_session_id);
+      onThreadCreated(existing.thread_id);
       return;
     }
     if (startThread.isPending) return;
     startThread.mutate(msg.id, {
-      onSuccess: res => onThreadCreated(res.child_session_id, res.session),
+      onSuccess: res => onThreadCreated(res.thread_id, res.thread),
     });
   };
 
@@ -624,7 +637,7 @@ function MessageList({
             加载更早消息…
           </div>
         ) : null}
-        {leadingSlot ? <div className="mb-1">{leadingSlot}</div> : null}
+        {leadingSlot ? <div className="mx-auto mb-1 max-w-[1200px]">{leadingSlot}</div> : null}
         {isLoading ? (
           <div className="text-sm text-text-muted">加载消息…</div>
         ) : messages.length === 0 ? (
@@ -632,7 +645,7 @@ function MessageList({
             <div className="text-sm text-text-muted">还没有消息。在下方输入。</div>
           )
         ) : (
-          <ol className="space-y-1">
+          <ol className="mx-auto max-w-[1200px] space-y-1">
             {messages.map(m => (
               <li key={m.id}>
                 {m.from_kind === 'system' ? (
@@ -640,7 +653,8 @@ function MessageList({
                 ) : (
                   <MessageItem
                     message={m}
-                    sessionId={channelId}
+                    conversationId={channelId}
+                    routeKind={routeKind}
                     agentsById={agentsById}
                     agentsByName={agentsByName}
                     channelsByName={channelsByName}

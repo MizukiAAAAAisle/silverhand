@@ -4,9 +4,9 @@ export interface BackendInfo {
   auth_token: string;
 }
 
-export interface ActiveSessionInfo {
-  channelId: string | null;
-  sessionId: string | null;
+export interface ActiveConversationInfo {
+  workspaceId: string | null;
+  conversationId: string | null;
 }
 
 declare global {
@@ -17,8 +17,8 @@ declare global {
       openExternal(url: string): Promise<void>;
       showItemInFolder(path: string): Promise<void>;
       setWindowAlwaysOnTop(pinned: boolean): Promise<void>;
-      setActiveSession(active: ActiveSessionInfo): Promise<void>;
-      onActiveSession(handler: (active: ActiveSessionInfo) => void): () => void;
+      setActiveConversation(active: ActiveConversationInfo): Promise<void>;
+      onActiveConversation(handler: (active: ActiveConversationInfo) => void): () => void;
       showSystemNotification(opts: { title: string; body: string }): Promise<void>;
       onShutdownProgress(handler: (step: string) => void): () => void;
     };

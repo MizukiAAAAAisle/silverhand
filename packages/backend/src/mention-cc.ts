@@ -1,11 +1,16 @@
 import { extractMentions } from '@silverhand/shared';
-import type { AgentDto, ChannelDto, MessageDto, SessionDto } from '@silverhand/shared';
+import type {
+  AgentDto,
+  ConversationDto,
+  DmChannelDto,
+  MessageDto,
+  WorkspaceDto,
+} from '@silverhand/shared';
 import type { AgentRepo } from './repos/agent-repo.js';
-import type { ChannelRepo } from './repos/channel-repo.js';
+import type { ConversationRepo } from './repos/conversation-repo.js';
 import type { MessageRepo } from './repos/message-repo.js';
 import type { NotificationRepo } from './repos/notification-repo.js';
-import type { SessionRepo } from './repos/session-repo.js';
-import type { SessionManager } from './session-manager.js';
+import type { ConversationManager } from './conversation-manager.js';
 import type { BackendLogger } from './context.js';
 
 export interface MentionCcOpts {
@@ -14,40 +19,39 @@ export interface MentionCcOpts {
    *  mentions are intentionally not fanned out (per spec, agents not in
    *  the channel cannot see / reach into it). */
   message: MessageDto;
-  /** Source session the message was posted in. */
-  sourceSession: SessionDto;
-  /** Source channel for context surfacing (channel name in the wrap). */
-  sourceChannel: ChannelDto;
+  /** Source conversation the message was posted in. */
+  sourceConversation: ConversationDto;
+  /** Source workspace for context surfacing. */
+  sourceWorkspace: WorkspaceDto;
   agents: AgentRepo;
-  channels: ChannelRepo;
-  sessions: SessionRepo;
+  conversations: ConversationRepo;
   messages: MessageRepo;
   notifications: NotificationRepo;
-  sessionManager: SessionManager;
+  conversationManager: ConversationManager;
   logger: BackendLogger;
 }
 
-const MENTIONS_SESSION_TITLE = 'Mentions';
+const MENTIONS_CHANNEL_TITLE = 'Mentions';
 const EXCERPT_LIMIT = 160;
 
 /**
  * Fan a user-authored message out to the DM channels of any
- * @-mentioned agents that aren't members of the source session.
+ * @-mentioned agents that aren't members of the source conversation.
  *
  * Side effects per delivered mention:
- *  - Lazily creates a `Mentions` session in the recipient's DM channel
+ *  - Lazily creates a `Mentions` DM channel for the recipient
  *    (idempotent — re-uses an existing one).
- *  - Adds the agent as a member of that session (also idempotent).
- *  - Inserts a wrapped system message in the Mentions session.
+ *  - Adds the agent as a member of that conversation (also idempotent).
+ *  - Inserts a wrapped system message in the Mentions conversation.
  *  - Auto-starts the agent if not running, then delivers the wrapped
  *    message to its inbox / stdin.
  *  - Inserts a `mention_external` notification row scoped to the
- *    recipient's DM channel.
- *  - Publishes an SSE event for the Mentions session.
+ *    recipient's DM scope.
+ *  - Publishes an SSE event for the Mentions conversation.
  *
  * Skipped silently when:
  *  - mention handle doesn't resolve to an agent
- *  - the agent IS a member of the source session (they got the
+ *  - the agent IS a member of the source conversation (they got the
  *    original — no DM duplicate needed)
  *  - the agent has no DM channel (legacy agents from before
  *    auto-DM provisioning); a warn is logged
@@ -59,9 +63,9 @@ export async function ccMentionsFromUserMessage(opts: MentionCcOpts): Promise<vo
   const handles = extractMentions(opts.message.content);
   if (handles.length === 0) return;
 
-  // Pre-resolve session membership so we don't query per-handle.
+  // Pre-resolve conversation membership so we don't query per-handle.
   const sourceMembers = new Set(
-    opts.sessions.listAgents(opts.sourceSession.id).map(sa => sa.agent_id),
+    opts.conversations.listAgents(opts.sourceConversation.id).map(ca => ca.agent_id),
   );
 
   for (const handle of handles) {
@@ -71,7 +75,7 @@ export async function ccMentionsFromUserMessage(opts: MentionCcOpts): Promise<vo
       opts.logger.warn(
         {
           handle,
-          sourceSessionId: opts.sourceSession.id,
+          sourceConversationId: opts.sourceConversation.id,
           sourceMessageId: opts.message.id,
           err,
         },
@@ -89,10 +93,10 @@ async function deliverOne(
   const agent = opts.agents.getByName(handle);
   if (!agent) return; // unknown handle, just text
 
-  // Already a session member → they received the original directly.
+  // Already a conversation member → they received the original directly.
   if (sourceMembers.has(agent.id)) return;
 
-  const dm = opts.channels.findDmByAgentId(agent.id);
+  const dm = opts.conversations.findDmChannelForAgent(agent.id);
   if (!dm) {
     opts.logger.warn(
       { handle, agentId: agent.id },
@@ -101,21 +105,25 @@ async function deliverOne(
     return;
   }
 
-  const mentionsSession = getOrCreateMentionsSession(dm.id, opts.sessions);
-  // Make sure the agent is a member of the Mentions session — addAgent
+  const mentionsConversation = getOrCreateMentionsConversation(
+    dm,
+    agent.id,
+    opts.conversations,
+  );
+  // Make sure the agent is a member of the Mentions conversation — addAgent
   // is INSERT OR IGNORE, so re-running is a no-op.
-  opts.sessions.addAgent(mentionsSession.id, agent.id);
+  opts.conversations.addAgent(mentionsConversation.id, agent.id);
 
-  const wrapped = opts.messages.insert({
-    sessionId: mentionsSession.id,
+  const wrapped = opts.messages.insertForConversation({
+    conversationId: mentionsConversation.id,
     fromKind: 'system',
     content: renderMentionWrap(agent, opts),
     metadata: {
       subtype: 'mention_cc',
-      source_channel_id: opts.sourceChannel.id,
-      source_channel_name: opts.sourceChannel.name,
-      source_session_id: opts.sourceSession.id,
-      source_session_title: opts.sourceSession.title,
+      source_workspace_id: opts.sourceWorkspace.id,
+      source_workspace_name: opts.sourceWorkspace.name,
+      source_conversation_id: opts.sourceConversation.id,
+      source_conversation_title: opts.sourceConversation.title,
       source_message_id: opts.message.id,
       source_from_kind: opts.message.from_kind,
       source_from_user_id: opts.message.from_user_id,
@@ -128,52 +136,59 @@ async function deliverOne(
 
   // Fire-and-forget start; deliverMessage tolerates "not yet running"
   // by enqueueing to the inbox, so we don't need to await ordering.
-  opts.sessionManager
-    .start(mentionsSession.id, agent.id)
+  opts.conversationManager
+    .start(mentionsConversation.id, agent.id)
     .catch(err =>
       opts.logger.warn(
-        { sessionId: mentionsSession.id, agentId: agent.id, err },
+        { conversationId: mentionsConversation.id, agentId: agent.id, err },
         'mention-cc: auto-start failed (will still inbox-deliver)',
       ),
     );
-  await opts.sessionManager.deliverMessage(mentionsSession.id, agent.id, wrapped.id);
+  await opts.conversationManager.deliverMessage(mentionsConversation.id, agent.id, wrapped.id);
 
   opts.notifications.insert({
     kind: 'mention_external',
     // v1 single-user; multi-user migration will backfill 'local'.
     userId: null,
     agentId: agent.id,
-    channelId: dm.id,
-    sessionId: mentionsSession.id,
+    workspaceId: mentionsConversation.workspace_id,
+    conversationId: mentionsConversation.id,
     messageId: wrapped.id,
-    sourceChannelId: opts.sourceChannel.id,
-    sourceSessionId: opts.sourceSession.id,
+    sourceWorkspaceId: opts.sourceWorkspace.id,
+    sourceConversationId: opts.sourceConversation.id,
     sourceMessageId: opts.message.id,
     payload: {
-      source_channel_name: opts.sourceChannel.name,
-      source_session_title: opts.sourceSession.title,
+      source_workspace_name: opts.sourceWorkspace.name,
+      source_conversation_title: opts.sourceConversation.title,
       mention_excerpt: excerpt(opts.message.content),
     },
   });
 }
 
 /**
- * Find the channel's `Mentions` session, or create one if absent.
+ * Find the agent's `Mentions` DM conversation, or create one if absent.
  * Title-based lookup keeps the schema unchanged. Single-process writes
  * + WAL means no race here in practice; if two concurrent mentions to
- * the same DM both miss the lookup, the second insert just creates a
- * second session with the same title — annoying but not broken (the
+ * the same DM both miss the lookup, the second insert just creates a second
+ * conversation with the same title — annoying but not broken (the
  * lookup picks the oldest going forward via ORDER BY created_at ASC).
  */
-function getOrCreateMentionsSession(
-  dmChannelId: string,
-  sessions: SessionRepo,
-): SessionDto {
-  const existing = sessions
-    .listForChannel(dmChannelId)
-    .filter(s => s.parent_session_id === null && s.title === MENTIONS_SESSION_TITLE);
-  if (existing.length > 0) return existing[0]!;
-  return sessions.insert({ channelId: dmChannelId, title: MENTIONS_SESSION_TITLE });
+function getOrCreateMentionsConversation(
+  dm: DmChannelDto,
+  agentId: string,
+  conversations: ConversationRepo,
+): DmChannelDto {
+  const existing = conversations.findDmChannelForAgent(
+    agentId,
+    { title: MENTIONS_CHANNEL_TITLE },
+  );
+  if (existing) return existing;
+  return conversations.insertDmChannel({
+    workspaceId: dm.workspace_id,
+    workspacePath: dm.workspace_path,
+    title: MENTIONS_CHANNEL_TITLE,
+    agentId,
+  });
 }
 
 function renderMentionWrap(agent: { name: string }, opts: MentionCcOpts): string {
@@ -183,7 +198,7 @@ function renderMentionWrap(agent: { name: string }, opts: MentionCcOpts): string
   // platform prompt covers send_message mechanics and the from_kind=system
   // framing, and surfacing them again leaks impl into the chat UI.
   return [
-    `The user @-mentioned you (@${agent.name}) in #${opts.sourceChannel.name} · ${opts.sourceSession.title}.`,
+    `The user @-mentioned you (@${agent.name}) in #${opts.sourceWorkspace.name} · ${opts.sourceConversation.title}.`,
     `You're not a member of that channel — you can't see or reply there directly.`,
     ``,
     `Original message:`,

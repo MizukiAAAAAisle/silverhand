@@ -1,54 +1,55 @@
 import { Settings, MessageSquarePlus, Users, CheckSquare } from 'lucide-react';
-import type { ChannelKind } from '@silverhand/shared';
 import { ManageMembersPopover } from '@/features/workspaces/ManageMembersPopover';
 
+type WorkspaceUiKind = 'regular' | 'dm';
+
 interface TitlebarProps {
-  channelId: string | null;
-  channelName: string | null;
-  channelKind: ChannelKind | null;
+  workspaceId: string | null;
+  workspaceName: string | null;
+  workspaceKind: WorkspaceUiKind | null;
   workspacePath: string | null;
-  /** epoch ms when the channel was archived; null for active channels.
+  /** epoch ms when the workspace was archived; null for active workspaces.
    *  Drives the inline `Archived` pill so the user knows why this
-   *  channel is missing from the main sidebar list. */
-  channelArchivedAt: number | null;
-  onOpenChannelSettings?: () => void;
-  onCreateSession?: () => void;
-  /** Tasks panel trigger. Provided only when a chat channel is selected.
-   *  Click opens the channel-wide tasks dialog (4-column kanban). */
+   *  workspace is missing from the main sidebar list. */
+  workspaceArchivedAt: number | null;
+  onOpenWorkspaceSettings?: () => void;
+  onCreateChannel?: () => void;
+  /** Tasks panel trigger. Provided only when a chat workspace is selected.
+   *  Click opens the workspace-wide tasks drawer (4-column kanban). */
   onOpenTasks?: () => void;
-  /** Active-task count for the channel — drives the small badge next to
+  /** Active-task count for the workspace — drives the small badge next to
    *  the Tasks button. Hidden when 0 / undefined. */
   taskCount?: number;
 }
 
 /**
- * Window-wide titlebar — drag region with the current channel's name,
- * its primary actions (Settings, Manage Members, New Session), and the
+ * Window-wide titlebar — drag region with the current workspace's name,
+ * its primary actions (Settings, Manage Members, New Channel), and the
  * workspace path right-aligned with rtl ellipsis so the path tail
- * stays visible. Channel info starts at `--sidebar-width` so it sits
- * directly above the SessionsSidebar column it describes (the leftmost
+ * stays visible. Workspace info starts at `--sidebar-width` so it sits
+ * directly above the ChannelsSidebar column it describes (the leftmost
  * Sidebar column gets an empty drag area that also doubles as the
  * macOS traffic-lights inset). Spans the full window so it doubles as
  * the native title bar (`titleBarStyle: 'hiddenInset'` on macOS — see
  * main/index.ts).
  */
 export function Titlebar({
-  channelId,
-  channelName,
-  channelKind,
+  workspaceId,
+  workspaceName,
+  workspaceKind,
   workspacePath,
-  channelArchivedAt,
-  onOpenChannelSettings,
-  onCreateSession,
+  workspaceArchivedAt,
+  onOpenWorkspaceSettings,
+  onCreateChannel,
   onOpenTasks,
   taskCount,
 }: TitlebarProps): JSX.Element {
-  const hasChannel = channelName !== null;
-  const showManageMembers = hasChannel && channelKind !== 'dm' && !!channelId;
-  const showCreateSession = hasChannel && !!onCreateSession;
-  const showSettings = hasChannel && !!onOpenChannelSettings;
-  const showTasks = hasChannel && !!onOpenTasks;
-  const isArchived = channelArchivedAt !== null;
+  const hasWorkspace = workspaceName !== null;
+  const showManageMembers = hasWorkspace && workspaceKind !== 'dm' && !!workspaceId;
+  const showCreateChannel = hasWorkspace && !!onCreateChannel;
+  const showSettings = hasWorkspace && !!onOpenWorkspaceSettings;
+  const showTasks = hasWorkspace && !!onOpenTasks;
+  const isArchived = workspaceArchivedAt !== null;
 
   return (
     <header
@@ -57,14 +58,14 @@ export function Titlebar({
         'gap-2 border-b border-border-subtle bg-bg-primary text-xs'
       }
     >
-      {/* Spacer matches the leftmost NavRail + channels Sidebar so the
-        * channel info that follows lines up with the SessionsSidebar
+      {/* Spacer matches the leftmost NavRail + workspaces Sidebar so the
+        * workspace info that follows lines up with the ChannelsSidebar
         * boundary. The macOS traffic-lights sit inside this region. */}
       <div className="w-[calc(var(--nav-rail-width)+var(--sidebar-width))] shrink-0" />
 
       <span className="truncate font-serif text-sm font-semibold text-text-primary">
-        {hasChannel ? channelName : '—'}
-        {channelKind === 'dm' && hasChannel ? (
+        {hasWorkspace ? workspaceName : '—'}
+        {workspaceKind === 'dm' && hasWorkspace ? (
           <span className="ml-1 text-text-muted">· DM</span>
         ) : null}
       </span>
@@ -75,10 +76,10 @@ export function Titlebar({
         </span>
       ) : null}
 
-      {showCreateSession ? (
+      {showCreateChannel ? (
         <button
           type="button"
-          onClick={onCreateSession}
+          onClick={onCreateChannel}
           aria-label="新建 Channel"
           title="新建 Channel"
           className="no-drag flex size-6 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
@@ -105,7 +106,7 @@ export function Titlebar({
       ) : null}
 
       {showManageMembers ? (
-        <ManageMembersPopover channelId={channelId!}>
+        <ManageMembersPopover workspaceId={workspaceId!}>
           <button
             type="button"
             aria-label="管理成员"
@@ -118,9 +119,9 @@ export function Titlebar({
       ) : null}
 
       {showSettings ? (
-          <button
-            type="button"
-            onClick={onOpenChannelSettings}
+        <button
+          type="button"
+          onClick={onOpenWorkspaceSettings}
           aria-label="Workspace 设置"
           title="Workspace 设置"
           className="no-drag flex size-6 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"

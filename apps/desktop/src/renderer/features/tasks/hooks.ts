@@ -3,30 +3,29 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
-import { useCallback } from 'react';
 import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
 import { api } from '@/lib/api';
-import { useSessionStream, type SessionStreamEvent } from '@/hooks/useSessionStream';
 
 /**
  * Tasks live in /api/tasks (per docs/tasks-design.md §6.2). The list is
- * filterable by channel / session / status; fetched once per filter
- * combination, kept fresh via SSE `task_changed` events on the matching
- * session stream.
+ * filterable by channel / conversation / status; fetched once per filter
+ * combination. Mutations invalidate this cache; channel/global task views
+ * also poll lightly because agent-side task updates can occur from any
+ * conversation in the workspace.
  */
 export interface TaskFilter {
-  channel_id?: string;
-  session_id?: string;
+  workspace_id?: string;
+  conversation_id?: string;
   status?: TaskStatus | 'all';
 }
 
 export const tasksKey = (f: TaskFilter) =>
-  ['tasks', f.channel_id ?? '*', f.session_id ?? '*', f.status ?? 'all'] as const;
+  ['tasks', f.workspace_id ?? '*', f.conversation_id ?? '*', f.status ?? 'all'] as const;
 
 function buildQs(f: TaskFilter): string {
   const params = new URLSearchParams();
-  if (f.channel_id) params.set('channel_id', f.channel_id);
-  if (f.session_id) params.set('session_id', f.session_id);
+  if (f.workspace_id) params.set('workspace_id', f.workspace_id);
+  if (f.conversation_id) params.set('conversation_id', f.conversation_id);
   if (f.status && f.status !== 'all') params.set('status', f.status);
   const qs = params.toString();
   return qs ? `?${qs}` : '';
@@ -44,23 +43,8 @@ export function useTasks(filter: TaskFilter, opts?: { enabled?: boolean }) {
       return res.tasks;
     },
     enabled,
+    refetchInterval: 5_000,
   });
-
-  // Subscribe to session stream when scope is a single session — backend
-  // only publishes task_changed on the owning session's bus, so this is
-  // the right granularity. For channel/global views we fall back to
-  // periodic refetch (acceptable: tasks change at human pace).
-  const onEvent = useCallback(
-    (e: SessionStreamEvent) => {
-      if (e.kind !== 'task_changed') return;
-      // Cheapest correct refresh: invalidate everything under tasks/.
-      // Granular cache patching is possible but adds bug surface for
-      // limited gain — task views are tiny and refetch is fast.
-      void qc.invalidateQueries({ queryKey: ['tasks'] });
-    },
-    [qc],
-  );
-  useSessionStream(filter.session_id ?? null, onEvent);
 
   return query;
 }

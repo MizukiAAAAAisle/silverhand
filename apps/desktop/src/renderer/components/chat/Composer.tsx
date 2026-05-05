@@ -7,15 +7,16 @@ import {
   type KeyboardEvent,
 } from 'react';
 import { Hash, Send } from 'lucide-react';
-import type { AgentDto, ChannelDto } from '@silverhand/shared';
+import type { AgentDto } from '@silverhand/shared';
 import { Button } from '@/components/ui/button';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { useAgents } from '@/features/agents/hooks';
-import { useWorkspaces } from '@/features/workspaces/hooks';
+import { useWorkspaces, type WorkspaceListItem } from '@/features/workspaces/hooks';
 import { useSendMessage } from '@/features/channels/hooks';
 
 interface ComposerProps {
-  sessionId: string;
+  conversationId: string;
+  routeKind?: 'channel' | 'thread';
   disabled: boolean;
 }
 
@@ -41,7 +42,11 @@ const MAX_TEXTAREA_HEIGHT = 192; // Mirrors Tailwind max-h-48.
  *    body matches what the existing `<Markdown>` mention pipeline
  *    already parses on the render side.
  */
-export function Composer({ sessionId, disabled }: ComposerProps): JSX.Element {
+export function Composer({
+  conversationId,
+  routeKind = 'channel',
+  disabled,
+}: ComposerProps): JSX.Element {
   const [draft, setDraft] = useState('');
   const [caret, setCaret] = useState(0);
   // Track IME composition explicitly. `e.nativeEvent.isComposing` is
@@ -51,7 +56,7 @@ export function Composer({ sessionId, disabled }: ComposerProps): JSX.Element {
   // events + a one-tick guard avoids accidentally sending the partial
   // text on candidate selection.
   const [composing, setComposing] = useState(false);
-  const send = useSendMessage(sessionId);
+  const send = useSendMessage(conversationId, routeKind);
   const ref = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -286,7 +291,7 @@ function detectTrigger(text: string, caret: number): ActiveTrigger | null {
 
 type PickerItem =
   | { kind: 'agent'; agent: AgentDto }
-  | { kind: 'workspace'; workspace: ChannelDto };
+  | { kind: 'workspace'; workspace: WorkspaceListItem };
 
 function filterAgents(agents: AgentDto[], query: string): PickerItem[] {
   const q = query.toLowerCase();
@@ -301,7 +306,10 @@ function filterAgents(agents: AgentDto[], query: string): PickerItem[] {
   return matched.slice(0, 8).map(agent => ({ kind: 'agent', agent }));
 }
 
-function filterWorkspaces(workspaces: ChannelDto[], query: string): PickerItem[] {
+function filterWorkspaces(
+  workspaces: WorkspaceListItem[],
+  query: string,
+): PickerItem[] {
   const q = query.toLowerCase();
   const matched = q
     ? workspaces.filter(w => w.name.toLowerCase().includes(q))

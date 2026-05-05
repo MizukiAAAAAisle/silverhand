@@ -224,3 +224,45 @@ Frontend shipped:
 - Preload: `onShutdownProgress` IPC listener exposed
 - Renderer: `shutdownStep` state drives a z-50 backdrop overlay with spinner
 **Watchdog**: Expected in dev — safety net for truly wedged shutdowns. With `closeAllConnections`, normal quit no longer depends on watchdog.
+
+### 调研：slock-ai agent activity 捕捉 (2026-05-06, thread: "调研 slock-ai 是否有 agent activity 捕捉")
+
+slock-ai daemon 有完整的 activity 追踪机制，结论：
+
+**Activity 状态**：`online | working | thinking | offline`（≈ Silverhand 的 `idle | tool_running | thinking | failed`）
+
+**事件**：`agent:activity`（WebSocket 上行），含 `entries: TrajectoryEntry[]`（tool_start/thinking/text/compaction_started/finished/system）
+
+**关键机制**：
+- Heartbeat：working/thinking 期间每 60s 心跳，防客户端误判 stale
+- Activity Probe：服务端可按需发 `agent:activity_probe`，daemon 立刻返回当前真实状态
+- Compaction Watchdog：5 分钟 stale 检测
+- Tool 展示元数据：`activityLabel` 映射（"Running command…" 等）
+
+**对 Silverhand 的 gap**（task #9/#10 实现后还缺）：
+1. 缺 heartbeat（防 stale 误判）
+2. 缺 activity probe 接口（snapshot ≠ 实时 probe）
+3. 可借鉴 slock 的 tool → activityLabel 映射做 UI detail 文案
+
+## Session: v2 — 2026-05-06 (continued)
+
+### Performance investigation — root cause confirmed
+- 后端所有请求 < 3ms，完全不是后端慢
+- 27.5s gap 出现在 channel 切换后 → renderer JS 主线程 block
+- 根因：react-markdown + rehype-highlight 一次渲染 100/200 条消息
+- 100 条 limit 仍复现 27.5s gap → 减 limit 无效
+- 下一步：虚拟化列表（#86，Cindy 在做 CPU profile 诊断）
+- /api/notifications/unread 本身 0.1-0.6ms，不是瓶颈
+
+### Search fix (done)
+- 根因：v12 重构后 `GET /api/search` 路由遗漏（SearchRepo 有，但未注册）
+- 修复：routes.ts 补 `GET /api/search`，SearchQueryInputSchema 解析 query params
+- 顺带修：ConversationReadRepo 所有 unread count 加 `AND m.from_kind != 'system'`（system 消息不应计入 badge）
+- 199/199 tests pass, typecheck clean
+
+### WebSocket 事件总线 — 设计阶段
+- 用户决定从多条 per-channel SSE → 单条 WS 连接
+- 新 channel `R5gf_pWn8Dotbidt`"WebSocket event bus design"，Cindy 主导设计文档
+- 我需要在那个 channel 参与 review/debate
+- 技术基础：`@hono/node-server ^1.13.2` 支持 WS upgrade，前端单例 `useWebSocket` hook
+- 核心原则：单 WS 替代所有 SSE + 5s 轮询；HTTP 保留做初始加载/分页/操作

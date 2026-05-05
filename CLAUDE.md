@@ -4,11 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Silverhand is an Electron desktop app that orchestrates multiple coding-agent CLIs (currently `claude`) as participants in chat-style channels. It's modeled on `@slock-ai/daemon`'s process orchestration but introduces a two-tier **Workspace + Multi-Channel** structure on top of slock's flat agent list. The reference slock implementation lives at `/Users/shiki/.npm/_npx/277f35d2ed0078b9/node_modules/@slock-ai/daemon/` and is consulted whenever spawn/IO behavior diverges.
+Silverhand is an Electron desktop app that orchestrates multiple coding-agent CLIs (currently `claude`) as participants in chat-style channels. It's modeled on `@slock-ai/daemon`'s process orchestration but introduces a three-tier **Workspace → Channel → Thread** structure on top of slock's flat agent list. The reference slock implementation lives at `/Users/shiki/.npm/_npx/277f35d2ed0078b9/node_modules/@slock-ai/daemon/` and is consulted whenever spawn/IO behavior diverges.
 
 Authoritative design docs:
 - `docs/core-design.md` — current architecture, especially §10 "Deferred design".
 - `docs/app-layout.md` — UI structure, message rendering, Save, Reply/child-session, titlebar, sidebars, events window. Layout + interaction spec; pairs with the theme guide below.
+- `docs/mcp-system.md` — current `mcp__chat__*` tool surface, schemas, side effects, and maintenance checklist.
+- `docs/workspace-channel-thread-hard-cutover.md` — remaining work to finish the DB/backend/shared/frontend hard cutover from legacy `channels/sessions` runtime to canonical `workspaces/conversations`.
 - `docs/design-new-theme.md` — theme/token guide (colors, spacing, typography per theme).
 - `docs/progress.md` — append-only history; add a dated section after meaningful changes.
 - `docs/electron-agent-hub.md` — original product/architecture brief.
@@ -50,7 +52,7 @@ pnpm workspaces, all `workspace:*` linked:
 
 - File logger writes JSONL to `~/.silverhand/logs/`:
   - `backend-<utc>.log` — backend events (spawns, drains, errors, HTTP errors).
-  - `chat-bridge-<channelId>-<agentId>.log` — per-bridge child output. The backend passes `SILVERHAND_LOG_DIR` via env when spawning chat-bridge.
+  - `chat-bridge-<conversationId>-<agentId>.log` — per-bridge child output. The backend passes `SILVERHAND_LOG_DIR` via env when spawning chat-bridge.
 - When a channel never emits `session_init`, the most likely culprits in order: (a) stdin not primed at spawn time (verify `drainChain` ran), (b) launcher not on PATH, (c) `system-prompt-file` / `mcp-config` arg malformed. Inspect `argv` of the suspect `claude` pid — silverhand-spawned ones carry `--system-prompt-file /var/folders/.../<channelId>/<agentId>/system-prompt.md` which uniquely distinguishes them from user-interactive `claude` invocations.
 
 ## Conventions worth knowing
@@ -60,4 +62,5 @@ pnpm workspaces, all `workspace:*` linked:
 - **No "stop" affordance in the composer.** Per IM design, message sending is one-shot; agent execution control belongs elsewhere (TBD). Don't reintroduce it.
 - **Renderer composer is IME-safe.** Enter sends, Shift+Enter newlines, but `onCompositionStart/End` + `e.nativeEvent.isComposing` must guard against firing during CJK input.
 - **Driver platform prompt** (`packages/backend/src/drivers/platform-prompt.ts`) prescribes a terse communication style: one-or-two-sentence default, no filler acknowledgments, no idle narration, no echoing of tool calls. Keep edits to it consistent with that voice.
+- **MCP system changes must update `docs/mcp-system.md`.** Any change to `packages/chat-bridge/src/server.ts`, chat-bridge client calls, agent-facing DTO schemas, internal MCP routes, task-tool behavior, or `platform-prompt.ts` rules must keep the MCP system document in sync in the same change.
 - **Better-sqlite3** is used synchronously; backend code assumes WAL mode and single-process writes. No connection pooling.

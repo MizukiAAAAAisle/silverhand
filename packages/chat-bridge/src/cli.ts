@@ -5,7 +5,11 @@ import { initBridgeLogger, log } from './logger.js';
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
-  initBridgeLogger({ sessionId: args.sessionId, agentId: args.agentId, runtime: args.runtime });
+  initBridgeLogger({
+    conversationId: args.conversationId,
+    agentId: args.agentId,
+    runtime: args.runtime,
+  });
   try {
     await startBridge(args);
   } catch (err) {

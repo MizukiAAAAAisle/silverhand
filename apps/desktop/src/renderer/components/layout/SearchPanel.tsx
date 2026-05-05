@@ -14,25 +14,31 @@ import {
   User,
   X,
 } from 'lucide-react';
-import type { AgentDto, ChannelDto, SearchResultDto } from '@silverhand/shared';
+import type { AgentDto, SearchResultDto } from '@silverhand/shared';
 import { Input, Label } from '@/components/ui/input';
 import { useAgents } from '@/features/agents/hooks';
 import { useMessageSearch } from '@/features/search/hooks';
+import type { WorkspaceListItem } from '@/features/workspaces/hooks';
 import { CURRENT_USER_ID, formatUserDisplayName } from '@/lib/current-user';
 import { cn } from '@/lib/cn';
 
 interface SearchPanelProps {
-  channels: ChannelDto[];
+  workspaces: WorkspaceListItem[];
   onJumpMessage: (params: {
     workspaceId?: string;
     channelId: string;
+    threadId?: string | null;
     messageId: string;
   }) => void;
-  onOpenChannel: (workspaceId: string) => void;
-  onOpenSession: (workspaceId: string, channelId: string) => void;
+  onOpenWorkspace: (workspaceId: string) => void;
+  onOpenConversation: (
+    workspaceId: string,
+    channelId: string,
+    threadId?: string | null,
+  ) => void;
 }
 
-type ChannelFilter = 'all' | 'scope:dm' | 'scope:regular' | `channel:${string}`;
+type WorkspaceFilter = 'all' | 'scope:dm' | 'scope:regular' | `workspace:${string}`;
 type SenderFilter = 'all' | `user:${string}` | `agent:${string}`;
 type TimeRange = 'all' | 'today' | 'week1' | 'week2' | 'month';
 
@@ -53,20 +59,20 @@ const SELECT_ITEM_CLASS =
   'relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 pr-7 text-xs text-text-primary outline-none data-[highlighted]:bg-bg-hover data-[highlighted]:text-text-primary';
 
 export function SearchPanel({
-  channels,
+  workspaces,
   onJumpMessage,
-  onOpenChannel,
-  onOpenSession,
+  onOpenWorkspace,
+  onOpenConversation,
 }: SearchPanelProps): JSX.Element {
   const [query, setQuery] = useState('');
-  const [channelFilter, setChannelFilter] = useState<ChannelFilter>('all');
+  const [workspaceFilter, setWorkspaceFilter] = useState<WorkspaceFilter>('all');
   const [senderFilter, setSenderFilter] = useState<SenderFilter>('all');
   const [timeRange, setTimeRange] = useState<TimeRange>('all');
   const { data: agents = [] } = useAgents();
 
   const channelQuery = useMemo(
-    () => parseChannelFilter(channelFilter),
-    [channelFilter],
+    () => parseWorkspaceFilter(workspaceFilter),
+    [workspaceFilter],
   );
   const senderQuery = useMemo(() => parseSenderFilter(senderFilter), [senderFilter]);
   const timeQuery = useMemo(() => timeRangeBounds(timeRange), [timeRange]);
@@ -75,7 +81,7 @@ export function SearchPanel({
     () => ({
       q: query,
       scope: channelQuery.scope,
-      channel_id: channelQuery.channelId,
+      workspace_id: channelQuery.workspaceId,
       user_id: senderQuery.userId,
       agent_id: senderQuery.agentId,
       from: timeQuery.from,
@@ -83,7 +89,7 @@ export function SearchPanel({
       limit: 100,
     }),
     [
-      channelQuery.channelId,
+      channelQuery.workspaceId,
       channelQuery.scope,
       query,
       senderQuery.agentId,
@@ -95,7 +101,7 @@ export function SearchPanel({
 
   const hasIntent =
     query.trim().length > 0 ||
-    channelFilter !== 'all' ||
+    workspaceFilter !== 'all' ||
     senderFilter !== 'all' ||
     timeRange !== 'all';
   const { data, isFetching, isLoading } = useMessageSearch(filters);
@@ -108,7 +114,7 @@ export function SearchPanel({
 
   const resetFilters = (): void => {
     setQuery('');
-    setChannelFilter('all');
+    setWorkspaceFilter('all');
     setSenderFilter('all');
     setTimeRange('all');
   };
@@ -142,7 +148,7 @@ export function SearchPanel({
                 resetFilters();
               }
             }}
-            placeholder="Search messages, sessions, channels"
+            placeholder="Search messages, channels, threads"
             className="h-10 pl-9 pr-20"
           />
           <button
@@ -157,11 +163,11 @@ export function SearchPanel({
         </div>
 
         <div className="mt-3 flex flex-wrap items-end gap-3">
-          <FilterBlock label="Channel" className="w-full sm:w-72">
-            <ChannelFilterSelect
-              value={channelFilter}
-              channels={channels}
-              onChange={setChannelFilter}
+          <FilterBlock label="Workspace" className="w-full sm:w-72">
+            <WorkspaceFilterSelect
+              value={workspaceFilter}
+              workspaces={workspaces}
+              onChange={setWorkspaceFilter}
             />
           </FilterBlock>
 
@@ -212,14 +218,19 @@ export function SearchPanel({
                       query={query}
                       agentsById={agentsById}
                       onClick={() => {
-                        if (result.type === 'channel') {
-                          onOpenChannel(result.channel.id);
-                        } else if (result.type === 'session') {
-                          onOpenSession(result.channel.id, result.session.id);
+                        if (result.type === 'workspace') {
+                          onOpenWorkspace(result.workspace.id);
+                        } else if (result.type === 'conversation') {
+                          onOpenConversation(
+                            result.workspace.id,
+                            result.conversation.channel_id,
+                            result.conversation.thread_id,
+                          );
                         } else {
                           onJumpMessage({
-                            workspaceId: result.channel.id,
-                            channelId: result.session.id,
+                            workspaceId: result.workspace.id,
+                            channelId: result.conversation.channel_id,
+                            threadId: result.conversation.thread_id,
                             messageId: result.message.id,
                           });
                         }
@@ -253,22 +264,22 @@ function FilterBlock({
   );
 }
 
-function ChannelFilterSelect({
+function WorkspaceFilterSelect({
   value,
-  channels,
+  workspaces,
   onChange,
 }: {
-  value: ChannelFilter;
-  channels: ChannelDto[];
-  onChange: (value: ChannelFilter) => void;
+  value: WorkspaceFilter;
+  workspaces: WorkspaceListItem[];
+  onChange: (value: WorkspaceFilter) => void;
 }): JSX.Element {
-  const dms = channels.filter(channel => channel.kind === 'dm');
-  const regular = channels.filter(channel => channel.kind === 'regular');
-  const selected = channelFilterLabel(value, channels);
+  const dms = workspaces.filter(workspace => workspace.kind === 'dm');
+  const regular = workspaces.filter(workspace => workspace.kind === 'regular');
+  const selected = workspaceFilterLabel(value, workspaces);
 
   return (
-    <Select.Root value={value} onValueChange={v => onChange(v as ChannelFilter)}>
-      <Select.Trigger aria-label="Channel filter" className={SELECT_TRIGGER_CLASS}>
+    <Select.Root value={value} onValueChange={v => onChange(v as WorkspaceFilter)}>
+      <Select.Trigger aria-label="Workspace filter" className={SELECT_TRIGGER_CLASS}>
         <span className="flex min-w-0 items-center gap-1.5">
           {selected.icon}
           <span className="truncate">{selected.label}</span>
@@ -297,13 +308,13 @@ function ChannelFilterSelect({
               >
                 All DMs
               </SelectItem>
-              {dms.map(channel => (
+              {dms.map(workspace => (
                 <SelectItem
-                  key={channel.id}
-                  value={`channel:${channel.id}`}
+                  key={workspace.id}
+                  value={`workspace:${workspace.id}`}
                   icon={<MessageCircle className="size-3.5" />}
                 >
-                  {formatChannelName(channel)}
+                  {formatWorkspaceName(workspace)}
                 </SelectItem>
               ))}
             </Select.Group>
@@ -317,13 +328,13 @@ function ChannelFilterSelect({
               >
                 All channels
               </SelectItem>
-              {regular.map(channel => (
+              {regular.map(workspace => (
                 <SelectItem
-                  key={channel.id}
-                  value={`channel:${channel.id}`}
+                  key={workspace.id}
+                  value={`workspace:${workspace.id}`}
                   icon={<Hash className="size-3.5" />}
                 >
-                  {formatChannelName(channel)}
+                  {formatWorkspaceName(workspace)}
                 </SelectItem>
               ))}
             </Select.Group>
@@ -541,27 +552,27 @@ function EmptyState({
 }
 
 function groupResults(results: SearchResultDto[]): ResultGroup[] {
-  const channels = results.filter(
-    result => result.type === 'channel' && result.channel.kind === 'regular',
+  const workspaces = results.filter(
+    result => result.type === 'workspace' && result.workspace.kind === 'regular',
   );
-  const sessions = results.filter(result => result.type === 'session');
+  const conversations = results.filter(result => result.type === 'conversation');
   const dms = results.filter(
-    result => result.type === 'channel' && result.channel.kind === 'dm',
+    result => result.type === 'workspace' && result.workspace.kind === 'dm',
   );
   const messages = results.filter(result => result.type === 'message');
 
   return [
     {
-      key: 'channels',
-      label: 'Channels',
+      key: 'workspaces',
+      label: 'Workspaces',
       icon: <Hash className="size-3" />,
-      results: channels,
+      results: workspaces,
     },
     {
-      key: 'sessions',
-      label: 'Sessions',
+      key: 'conversations',
+      label: 'Channels / Threads',
       icon: <MessageSquare className="size-3" />,
-      results: sessions,
+      results: conversations,
     },
     {
       key: 'dms',
@@ -579,14 +590,14 @@ function groupResults(results: SearchResultDto[]): ResultGroup[] {
 }
 
 function resultIcon(result: SearchResultDto): JSX.Element {
-  if (result.type === 'channel') {
-    return result.channel.kind === 'dm' ? (
+  if (result.type === 'workspace') {
+    return result.workspace.kind === 'dm' ? (
       <MessageCircle className="size-4" />
     ) : (
       <Hash className="size-4" />
     );
   }
-  if (result.type === 'session') return <MessageSquare className="size-4" />;
+  if (result.type === 'conversation') return <MessageSquare className="size-4" />;
   return <MessageSquareText className="size-4" />;
 }
 
@@ -594,14 +605,14 @@ function resultMeta(
   result: SearchResultDto,
   agentsById: Map<string, AgentDto>,
 ): string[] {
-  if (result.type === 'channel') {
-    return [result.channel.kind === 'dm' ? 'DM' : 'Channel'];
+  if (result.type === 'workspace') {
+    return [result.workspace.kind === 'dm' ? 'DM' : 'Workspace'];
   }
-  if (result.type === 'session') {
+  if (result.type === 'conversation') {
     return [
-      'Session',
-      formatChannelName(result.channel),
-      dayjs(result.session.created_at).format('YYYY-MM-DD HH:mm'),
+      result.conversation.kind === 'thread' ? 'Thread' : 'Channel',
+      formatWorkspaceName(result.workspace),
+      dayjs(result.conversation.created_at).format('YYYY-MM-DD HH:mm'),
     ];
   }
   const sender = result.message.from_kind === 'agent'
@@ -610,29 +621,31 @@ function resultMeta(
       ? formatUserDisplayName(result.message.from_user_id)
       : 'system';
   return [
-    result.channel.kind === 'dm' ? 'DM message' : 'Message',
-    formatChannelName(result.channel),
-    result.session.title,
+    result.workspace.kind === 'dm' ? 'DM message' : 'Message',
+    formatWorkspaceName(result.workspace),
+    result.conversation.title,
     sender,
     dayjs(result.message.created_at).format('YYYY-MM-DD HH:mm'),
   ];
 }
 
 function resultTitle(result: SearchResultDto): string {
-  if (result.type === 'channel') return formatChannelName(result.channel);
-  if (result.type === 'session') return result.session.title;
-  return result.session.title;
+  if (result.type === 'workspace') return formatWorkspaceName(result.workspace);
+  if (result.type === 'conversation') return result.conversation.title;
+  return result.conversation.title;
 }
 
 function resultExcerpt(result: SearchResultDto, query: string): string | null {
-  if (result.type === 'channel') return result.channel.description;
-  if (result.type === 'session') return formatChannelName(result.channel);
+  if (result.type === 'workspace') return result.workspace.description;
+  if (result.type === 'conversation') return formatWorkspaceName(result.workspace);
   return buildExcerpt(result.message.content, query);
 }
 
 function resultKey(result: SearchResultDto): string {
-  if (result.type === 'channel') return `channel:${result.channel.id}`;
-  if (result.type === 'session') return `session:${result.session.id}`;
+  if (result.type === 'workspace') return `workspace:${result.workspace.id}`;
+  if (result.type === 'conversation') {
+    return `conversation:${result.conversation.id}`;
+  }
   return `message:${result.message.id}`;
 }
 
@@ -646,12 +659,14 @@ function formatAgentName(
   return `@${agent?.display_name?.trim() || fallback || agentId}`;
 }
 
-function formatChannelName(channel: {
+function formatWorkspaceName(workspace: {
   name: string;
   kind: 'regular' | 'dm';
 }): string {
-  if (channel.kind !== 'dm') return `#${channel.name}`;
-  return channel.name.startsWith('dm-') ? `@${channel.name.slice(3)}` : channel.name;
+  if (workspace.kind !== 'dm') return workspace.name;
+  return workspace.name.startsWith('dm-')
+    ? `@${workspace.name.slice(3)}`
+    : workspace.name;
 }
 
 function buildExcerpt(content: string, query: string): string {
@@ -682,14 +697,14 @@ function highlightText(text: string, query: string): ReactNode {
   );
 }
 
-function parseChannelFilter(value: ChannelFilter): {
+function parseWorkspaceFilter(value: WorkspaceFilter): {
   scope: 'all' | 'regular' | 'dm';
-  channelId?: string;
+  workspaceId?: string;
 } {
   if (value === 'scope:dm') return { scope: 'dm' };
   if (value === 'scope:regular') return { scope: 'regular' };
-  if (value.startsWith('channel:')) {
-    return { scope: 'all', channelId: value.slice('channel:'.length) };
+  if (value.startsWith('workspace:')) {
+    return { scope: 'all', workspaceId: value.slice('workspace:'.length) };
   }
   return { scope: 'all' };
 }
@@ -703,9 +718,9 @@ function parseSenderFilter(value: SenderFilter): {
   return {};
 }
 
-function channelFilterLabel(
-  value: ChannelFilter,
-  channels: ChannelDto[],
+function workspaceFilterLabel(
+  value: WorkspaceFilter,
+  workspaces: WorkspaceListItem[],
 ): { label: string; icon: JSX.Element } {
   if (value === 'scope:dm') {
     return { label: 'All DMs', icon: <MessageCircle className="size-3.5" /> };
@@ -713,14 +728,14 @@ function channelFilterLabel(
   if (value === 'scope:regular') {
     return { label: 'All channels', icon: <Hash className="size-3.5" /> };
   }
-  if (value.startsWith('channel:')) {
-    const channelId = value.slice('channel:'.length);
-    const channel = channels.find(c => c.id === channelId);
-    if (channel) {
+  if (value.startsWith('workspace:')) {
+    const workspaceId = value.slice('workspace:'.length);
+    const workspace = workspaces.find(w => w.id === workspaceId);
+    if (workspace) {
       return {
-        label: formatChannelName(channel),
+        label: formatWorkspaceName(workspace),
         icon:
-          channel.kind === 'dm' ? (
+          workspace.kind === 'dm' ? (
             <MessageCircle className="size-3.5" />
           ) : (
             <Hash className="size-3.5" />

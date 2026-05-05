@@ -6,9 +6,9 @@ export interface BackendInfo {
   auth_token: string;
 }
 
-export interface ActiveSessionInfo {
-  channelId: string | null;
-  sessionId: string | null;
+export interface ActiveConversationInfo {
+  workspaceId: string | null;
+  conversationId: string | null;
 }
 
 const api = {
@@ -20,14 +20,14 @@ const api = {
     ipcRenderer.invoke('shell:showItemInFolder', path),
   setWindowAlwaysOnTop: (pinned: boolean): Promise<void> =>
     ipcRenderer.invoke('window:setAlwaysOnTop', pinned),
-  setActiveSession: (active: ActiveSessionInfo): Promise<void> =>
-    ipcRenderer.invoke('active-session:set', active),
-  onActiveSession: (handler: (active: ActiveSessionInfo) => void): (() => void) => {
-    const listener = (_event: IpcRendererEvent, active: ActiveSessionInfo) => {
+  setActiveConversation: (active: ActiveConversationInfo): Promise<void> =>
+    ipcRenderer.invoke('active-conversation:set', active),
+  onActiveConversation: (handler: (active: ActiveConversationInfo) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, active: ActiveConversationInfo) => {
       handler(active);
     };
-    ipcRenderer.on('active-session:update', listener);
-    return () => ipcRenderer.off('active-session:update', listener);
+    ipcRenderer.on('active-conversation:update', listener);
+    return () => ipcRenderer.off('active-conversation:update', listener);
   },
   /** Subscribe to shutdown progress steps emitted by the main process
    *  just before and during graceful shutdown. Drives the in-app overlay

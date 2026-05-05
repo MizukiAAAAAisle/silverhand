@@ -3,11 +3,12 @@ import { randomBytes } from 'node:crypto';
 import type {
   AgentDto,
   AgentRow,
-  AgentRuntimeSession,
-  ChannelKind,
+  AgentRuntimeConversation,
+  ConversationAgentStatus,
+  ConversationKind,
   CreateAgentInput,
-  SessionAgentStatus,
   UpdateAgentInput,
+  WorkspaceKind,
 } from '@silverhand/shared';
 
 function newId(): string {
@@ -116,39 +117,52 @@ export class AgentRepo {
   }
 
   /**
-   * Every (session, agent) pair this agent participates in, joined to
-   * channel + session metadata. Single SQL — drives both the agent
+   * Every (conversation, agent) pair this agent participates in, joined to
+   * workspace/channel/thread metadata. Single SQL — drives both the agent
    * profile "where it runs" table and the delete-impact preview.
-   * Includes closed sessions so the UI can show full history; the
+   * Includes closed conversations so the UI can show full history; the
    * caller filters by `closed_at` if needed.
    */
-  listRuntimeSessions(agentId: string): AgentRuntimeSession[] {
+  listRuntimeConversations(agentId: string): AgentRuntimeConversation[] {
     type Row = {
-      session_id: string;
+      conversation_id: string;
+      workspace_id: string;
+      workspace_name: string;
+      workspace_kind: WorkspaceKind;
+      conversation_kind: ConversationKind;
       channel_id: string;
-      channel_name: string;
-      channel_kind: ChannelKind;
-      session_title: string;
-      status: SessionAgentStatus;
+      thread_id: string | null;
+      channel_title: string;
+      thread_title: string | null;
+      status: ConversationAgentStatus;
       pid: number | null;
       closed_at: number | null;
     };
     const rows = this.db
       .prepare<[string], Row>(
         `SELECT
-           sa.session_id   AS session_id,
-           c.id            AS channel_id,
-           c.name          AS channel_name,
-           c.kind          AS channel_kind,
-           s.title         AS session_title,
-           sa.status       AS status,
-           sa.pid          AS pid,
-           s.closed_at     AS closed_at
-         FROM session_agents sa
-         JOIN sessions s ON s.id = sa.session_id
-         JOIN channels c ON c.id = s.channel_id
-         WHERE sa.agent_id = ?
-         ORDER BY s.closed_at IS NULL DESC, s.updated_at DESC`,
+           ca.conversation_id AS conversation_id,
+           c.workspace_id     AS workspace_id,
+           w.name             AS workspace_name,
+           w.workspace_kind   AS workspace_kind,
+           c.kind             AS conversation_kind,
+           CASE WHEN c.kind = 'thread' THEN parent.id ELSE c.id END
+                              AS channel_id,
+           CASE WHEN c.kind = 'thread' THEN c.id ELSE NULL END
+                              AS thread_id,
+           CASE WHEN c.kind = 'thread' THEN parent.title ELSE c.title END
+                              AS channel_title,
+           CASE WHEN c.kind = 'thread' THEN c.title ELSE NULL END
+                              AS thread_title,
+           ca.status          AS status,
+           ca.pid             AS pid,
+           c.closed_at        AS closed_at
+         FROM conversation_agents ca
+         JOIN conversations c ON c.id = ca.conversation_id
+         JOIN workspaces w ON w.id = c.workspace_id
+         LEFT JOIN conversations parent ON parent.id = c.parent_conversation_id
+         WHERE ca.agent_id = ?
+         ORDER BY c.closed_at IS NULL DESC, c.updated_at DESC`,
       )
       .all(agentId);
     return rows;

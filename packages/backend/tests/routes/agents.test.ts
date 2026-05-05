@@ -20,7 +20,7 @@ describe('POST /api/agents', () => {
     expect(Array.isArray(body.issues)).toBe(true);
   });
 
-  it('creates an agent + auto-DM channel + onboarding session, fans out to SessionManager', async () => {
+  it('creates an agent + auto-DM channel + onboarding session, fans out to ConversationManager', async () => {
     t = buildTestApp();
     const res = await http(t.app).post('/api/agents', {
       name: 'alice',
@@ -32,12 +32,14 @@ describe('POST /api/agents', () => {
     expect(body.agent.host_id).toBeTypeOf('string');
     expect(typeof body.dm_channel_id).toBe('string');
 
-    // auto-DM channel exists with kind=dm
-    const channels = await (await http(t.app).get('/api/channels')).json() as any;
-    const dm = channels.channels.find((c: any) => c.id === body.dm_channel_id);
-    expect(dm.kind).toBe('dm');
-    expect(dm.dm_agent_id).toBe(body.agent.id);
-    expect(dm.name).toBe('dm-alice');
+    // auto-DM channel exists as a canonical dm_channel conversation.
+    const channels = await (
+      await http(t.app).get('/api/workspaces/system/dm-channels')
+    ).json() as any;
+    const dm = channels.dm_channels.find((c: any) => c.id === body.dm_channel_id);
+    expect(dm.kind).toBe('dm_channel');
+    expect(dm.title).toBe('dm-alice');
+    expect(dm.workspace_path).toContain(body.agent.id);
 
     // provision should have spawned the onboarding session for the DM
     expect(t.fake.starts).toHaveLength(1);
@@ -147,25 +149,29 @@ describe('PATCH /api/agents/:id', () => {
     expect(res.status).toBe(400);
   });
 
-  it('rejects runtime change while a session_agent is starting/active (409)', async () => {
+  it('rejects runtime change while a conversation_agent is starting/active (409)', async () => {
     t = buildTestApp();
     const created = await (
       await http(t.app).post('/api/agents', { name: 'alice', runtime: 'claude' })
     ).json() as any;
-    // Provisioning auto-starts the DM onboarding session — force a
-    // running status row by writing to session_agents directly so the
+    // Provisioning auto-starts the DM onboarding channel — force a
+    // running status row by writing to conversation_agents directly so the
     // test doesn't depend on a real spawn.
-    const dmId = created.dm_channel_id;
-    const dmSessions = t.ctx.db
-      .prepare(`SELECT id FROM sessions WHERE channel_id = ?`)
-      .all(dmId) as { id: string }[];
-    expect(dmSessions.length).toBe(1);
+    const dmConversations = t.ctx.db
+      .prepare(
+        `SELECT conversation_id AS id
+           FROM conversation_agents ca
+           JOIN conversations c ON c.id = ca.conversation_id
+          WHERE ca.agent_id = ? AND c.kind = 'dm_channel'`,
+      )
+      .all(created.agent.id) as { id: string }[];
+    expect(dmConversations.length).toBe(1);
     t.ctx.db
       .prepare(
-        `UPDATE session_agents SET status = 'active'
-         WHERE session_id = ? AND agent_id = ?`,
+        `UPDATE conversation_agents SET status = 'active'
+         WHERE conversation_id = ? AND agent_id = ?`,
       )
-      .run(dmSessions[0]!.id, created.agent.id);
+      .run(dmConversations[0]!.id, created.agent.id);
 
     const res = await http(t.app).patch(`/api/agents/${created.agent.id}`, {
       runtime: 'codex',
@@ -214,7 +220,7 @@ describe('GET /api/agents/:id/runtime-state', () => {
   let t: TestApp | null = null;
   afterEach(() => { t?.cleanup(); t = null; });
 
-  it('lists every session_agent for the agent with channel/session names denormalized', async () => {
+  it('lists every conversation_agent for the agent with workspace/channel/thread names denormalized', async () => {
     t = buildTestApp();
     const created = await (
       await http(t.app).post('/api/agents', { name: 'alice', runtime: 'claude' })
@@ -222,12 +228,15 @@ describe('GET /api/agents/:id/runtime-state', () => {
     const res = await (
       await http(t.app).get(`/api/agents/${created.agent.id}/runtime-state`)
     ).json() as any;
-    expect(Array.isArray(res.session_agents)).toBe(true);
-    expect(res.session_agents.length).toBeGreaterThan(0);
-    const dm = res.session_agents.find((s: any) => s.channel_kind === 'dm');
-    expect(dm.channel_name).toBe('dm-alice');
-    expect(dm.session_title).toBe('Onboarding');
-    expect(dm.status).toBe('idle'); // FakeSessionManager doesn't flip status
+    expect(Array.isArray(res.conversation_agents)).toBe(true);
+    expect(res.conversation_agents.length).toBeGreaterThan(0);
+    const dm = res.conversation_agents.find(
+      (s: any) => s.conversation_kind === 'dm_channel',
+    );
+    expect(dm.workspace_kind).toBe('system_dm');
+    expect(dm.channel_title).toBe('dm-alice');
+    expect(dm.thread_title).toBeNull();
+    expect(dm.status).toBe('idle'); // FakeConversationManager doesn't flip status
   });
 });
 
@@ -235,21 +244,26 @@ describe('POST /api/agents/:id/stop', () => {
   let t: TestApp | null = null;
   afterEach(() => { t?.cleanup(); t = null; });
 
-  it('hard-stops every running session_agent for this agent', async () => {
+  it('hard-stops every running conversation_agent for this agent', async () => {
     t = buildTestApp();
     const created = await (
       await http(t.app).post('/api/agents', { name: 'alice', runtime: 'claude' })
     ).json() as any;
-    // mark the onboarding session_agent as active
-    const dmSessions = t.ctx.db
-      .prepare(`SELECT id FROM sessions WHERE channel_id = ?`)
-      .all(created.dm_channel_id) as { id: string }[];
+    // mark the onboarding conversation_agent as active
+    const dmConversations = t.ctx.db
+      .prepare(
+        `SELECT conversation_id AS id
+           FROM conversation_agents ca
+           JOIN conversations c ON c.id = ca.conversation_id
+          WHERE ca.agent_id = ? AND c.kind = 'dm_channel'`,
+      )
+      .all(created.agent.id) as { id: string }[];
     t.ctx.db
       .prepare(
-        `UPDATE session_agents SET status = 'active'
-         WHERE session_id = ? AND agent_id = ?`,
+        `UPDATE conversation_agents SET status = 'active'
+         WHERE conversation_id = ? AND agent_id = ?`,
       )
-      .run(dmSessions[0]!.id, created.agent.id);
+      .run(dmConversations[0]!.id, created.agent.id);
 
     t.fake.stops = [];
     const res = await http(t.app).post(`/api/agents/${created.agent.id}/stop`);
@@ -282,9 +296,9 @@ describe('GET /api/agents/:id/delete-impact', () => {
     const created = await (
       await http(t.app).post('/api/agents', { name: 'alice', runtime: 'claude' })
     ).json() as any;
-    // join alice to a regular channel
-    const ch = await (
-      await http(t.app).post('/api/channels', {
+    // join alice to a regular workspace
+    const ws = await (
+      await http(t.app).post('/api/workspaces', {
         name: 'engineering',
         member_agent_ids: [created.agent.id],
       })
@@ -295,8 +309,8 @@ describe('GET /api/agents/:id/delete-impact', () => {
     ).json() as any;
     expect(res.impact.agent_name).toBe('alice');
     expect(res.impact.dm_channel.name).toBe('dm-alice');
-    expect(res.impact.dm_channel.session_count).toBe(1);
-    expect(res.impact.regular_channels).toEqual([{ id: ch.channel.id, name: 'engineering' }]);
+    expect(res.impact.dm_channel.conversation_count).toBe(1);
+    expect(res.impact.regular_workspaces).toEqual([{ id: ws.workspace.id, name: 'engineering' }]);
     expect(res.impact.l1_path).toContain(created.agent.id);
     expect(res.impact.l2_paths).toHaveLength(1);
     expect(res.impact.l2_paths[0]).toContain(created.agent.id);
@@ -312,21 +326,26 @@ describe('DELETE /api/agents/:id (full flow)', () => {
     const created = await (
       await http(t.app).post('/api/agents', { name: 'alice', runtime: 'claude' })
     ).json() as any;
-    await http(t.app).post('/api/channels', {
+    await http(t.app).post('/api/workspaces', {
       name: 'engineering',
       member_agent_ids: [created.agent.id],
     });
 
-    // mark DM session_agent as active so the stop path is exercised
-    const dmSessions = t.ctx.db
-      .prepare(`SELECT id FROM sessions WHERE channel_id = ?`)
-      .all(created.dm_channel_id) as { id: string }[];
+    // mark DM conversation_agent as active so the stop path is exercised
+    const dmConversations = t.ctx.db
+      .prepare(
+        `SELECT conversation_id AS id
+           FROM conversation_agents ca
+           JOIN conversations c ON c.id = ca.conversation_id
+          WHERE ca.agent_id = ? AND c.kind = 'dm_channel'`,
+      )
+      .all(created.agent.id) as { id: string }[];
     t.ctx.db
       .prepare(
-        `UPDATE session_agents SET status = 'active'
-         WHERE session_id = ? AND agent_id = ?`,
+        `UPDATE conversation_agents SET status = 'active'
+         WHERE conversation_id = ? AND agent_id = ?`,
       )
-      .run(dmSessions[0]!.id, created.agent.id);
+      .run(dmConversations[0]!.id, created.agent.id);
 
     t.fake.stops = [];
     const del = await http(t.app).del(
@@ -340,12 +359,17 @@ describe('DELETE /api/agents/:id (full flow)', () => {
     expect(get.status).toBe(404);
 
     // DM channel gone
-    const channels = await (await http(t.app).get('/api/channels')).json() as any;
-    expect(channels.channels.find((c: any) => c.id === created.dm_channel_id)).toBeUndefined();
-    // engineering channel still exists (agent was leaved out, channel stays)
-    expect(channels.channels.find((c: any) => c.name === 'engineering')).toBeDefined();
+    const dmChannels = await (
+      await http(t.app).get('/api/workspaces/system/dm-channels')
+    ).json() as any;
+    expect(
+      dmChannels.dm_channels.find((c: any) => c.id === created.dm_channel_id),
+    ).toBeUndefined();
+    // engineering workspace still exists (agent was removed, workspace stays)
+    const workspaces = await (await http(t.app).get('/api/workspaces')).json() as any;
+    expect(workspaces.workspaces.find((w: any) => w.name === 'engineering')).toBeDefined();
 
-    // running session_agent was stopped (hard) — at least one stop call
+    // running conversation_agent was stopped (hard) — at least one stop call
     expect(t.fake.stops.some(s => s.agentId === created.agent.id && s.mode === 'hard')).toBe(true);
   });
 });

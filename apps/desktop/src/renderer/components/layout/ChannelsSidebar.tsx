@@ -5,7 +5,7 @@ interface ChannelNode {
   id: string;
   title: string;
   status: 'active' | 'idle' | 'crashed';
-  parent_session_id: string | null;
+  parent_channel_id: string | null;
   closed_at: number | null;
   pinned_at: number | null;
 }
@@ -34,15 +34,15 @@ export function ChannelsSidebar({
   // Pinned top-level channels float above unpinned ones. The backend
   // already returns them sorted correctly, but we split here so we can
   // render an optional separator between the two groups.
-  const topLevel = channels.filter(s => s.parent_session_id === null);
+  const topLevel = channels.filter(s => s.parent_channel_id === null);
   const pinnedTop = topLevel.filter(s => s.pinned_at !== null);
   const unpinnedTop = topLevel.filter(s => s.pinned_at === null);
   const childrenByParent = new Map<string, ChannelNode[]>();
   for (const s of channels) {
-    if (s.parent_session_id) {
-      const list = childrenByParent.get(s.parent_session_id) ?? [];
+    if (s.parent_channel_id) {
+      const list = childrenByParent.get(s.parent_channel_id) ?? [];
       list.push(s);
-      childrenByParent.set(s.parent_session_id, list);
+      childrenByParent.set(s.parent_channel_id, list);
     }
   }
 

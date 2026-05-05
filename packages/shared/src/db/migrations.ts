@@ -756,4 +756,253 @@ export const migrations: Migration[] = [
       END;
     `,
   },
+  {
+    version: 12,
+    name: 'workspace_conversation_hard_cutover',
+    up: `
+      CREATE TEMP TABLE _v12_zero_check (
+        name TEXT NOT NULL,
+        count INTEGER NOT NULL CHECK (count = 0)
+      );
+
+      INSERT INTO _v12_zero_check
+      SELECT 'missing_conversations', COUNT(*)
+        FROM sessions
+       WHERE id NOT IN (SELECT id FROM conversations);
+
+      INSERT INTO _v12_zero_check
+      SELECT 'missing_message_conversation', COUNT(*)
+        FROM messages
+       WHERE conversation_id IS NULL
+          OR conversation_id != session_id;
+
+      INSERT INTO _v12_zero_check
+      SELECT 'missing_task_workspace', COUNT(*)
+        FROM messages
+       WHERE task_number IS NOT NULL
+         AND task_workspace_id IS NULL;
+
+      INSERT INTO _v12_zero_check
+      SELECT 'nested_threads', COUNT(*)
+        FROM conversations child
+        JOIN conversations parent ON parent.id = child.parent_conversation_id
+       WHERE child.kind = 'thread'
+         AND parent.kind = 'thread';
+
+      INSERT INTO _v12_zero_check
+      SELECT 'thread_workspace_mismatch', COUNT(*)
+        FROM conversations child
+        JOIN conversations parent ON parent.id = child.parent_conversation_id
+       WHERE child.kind = 'thread'
+         AND child.workspace_id != parent.workspace_id;
+
+      DROP TABLE _v12_zero_check;
+
+      DROP TRIGGER IF EXISTS legacy_channels_to_workspaces_insert;
+      DROP TRIGGER IF EXISTS legacy_channels_to_workspaces_update;
+      DROP TRIGGER IF EXISTS legacy_channels_to_workspaces_delete;
+      DROP TRIGGER IF EXISTS legacy_channel_members_to_workspace_members_insert;
+      DROP TRIGGER IF EXISTS legacy_channel_members_to_workspace_members_delete;
+      DROP TRIGGER IF EXISTS legacy_sessions_to_conversations_insert;
+      DROP TRIGGER IF EXISTS legacy_sessions_to_conversations_update;
+      DROP TRIGGER IF EXISTS legacy_sessions_to_conversations_delete;
+      DROP TRIGGER IF EXISTS legacy_session_agents_to_conversation_agents_insert;
+      DROP TRIGGER IF EXISTS legacy_session_agents_to_conversation_agents_update;
+      DROP TRIGGER IF EXISTS legacy_session_agents_to_conversation_agents_delete;
+      DROP TRIGGER IF EXISTS legacy_messages_conversation_insert;
+      DROP TRIGGER IF EXISTS legacy_messages_task_workspace_update;
+      DROP TRIGGER IF EXISTS legacy_session_reads_to_conversation_reads_insert;
+      DROP TRIGGER IF EXISTS legacy_session_reads_to_conversation_reads_update;
+      DROP TRIGGER IF EXISTS legacy_session_reads_to_conversation_reads_delete;
+
+      ALTER TABLE conversation_inboxes RENAME TO conversation_inboxes_legacy_v12;
+      ALTER TABLE messages RENAME TO messages_legacy_v12;
+
+      CREATE TABLE messages (
+        id                      TEXT PRIMARY KEY,
+        conversation_id         TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        from_kind               TEXT NOT NULL,
+        from_agent_id           TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        from_user_id            TEXT,
+        content                 TEXT NOT NULL,
+        metadata                TEXT,
+        seq                     INTEGER NOT NULL,
+        created_at              INTEGER NOT NULL,
+        task_number             INTEGER,
+        task_status             TEXT,
+        task_assignee_agent_id  TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        task_assignee_user_id   TEXT,
+        task_title              TEXT,
+        task_workspace_id       TEXT REFERENCES workspaces(id) ON DELETE CASCADE
+      );
+
+      INSERT INTO messages
+        (id, conversation_id, from_kind, from_agent_id, from_user_id,
+         content, metadata, seq, created_at, task_number, task_status,
+         task_assignee_agent_id, task_assignee_user_id, task_title,
+         task_workspace_id)
+      SELECT id, conversation_id, from_kind, from_agent_id, from_user_id,
+             content, metadata, seq, created_at, task_number, task_status,
+             task_assignee_agent_id, task_assignee_user_id, task_title,
+             task_workspace_id
+        FROM messages_legacy_v12;
+
+      DROP TABLE messages_legacy_v12;
+
+      CREATE INDEX idx_messages_conversation
+        ON messages(conversation_id, seq);
+      CREATE UNIQUE INDEX uniq_messages_task_workspace_number
+        ON messages(task_workspace_id, task_number)
+        WHERE task_number IS NOT NULL;
+      CREATE INDEX idx_messages_task_workspace
+        ON messages(task_workspace_id, task_status)
+        WHERE task_workspace_id IS NOT NULL;
+
+      CREATE TABLE conversation_inboxes (
+        id               INTEGER PRIMARY KEY,
+        conversation_id  TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        agent_id         TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+        message_id       TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        delivered_at     INTEGER,
+        created_at       INTEGER NOT NULL
+      );
+
+      INSERT INTO conversation_inboxes
+        (id, conversation_id, agent_id, message_id, delivered_at, created_at)
+      SELECT id, conversation_id, agent_id, message_id, delivered_at, created_at
+        FROM conversation_inboxes_legacy_v12;
+
+      DROP TABLE conversation_inboxes_legacy_v12;
+
+      CREATE INDEX idx_conversation_inbox_pending
+        ON conversation_inboxes(conversation_id, agent_id, delivered_at);
+
+      ALTER TABLE saved_messages RENAME TO saved_messages_legacy_v12;
+
+      CREATE TABLE saved_messages (
+        id               TEXT PRIMARY KEY,
+        message_id       TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        conversation_id  TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        workspace_id     TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        saved_at         INTEGER NOT NULL
+      );
+
+      INSERT INTO saved_messages
+        (id, message_id, conversation_id, workspace_id, saved_at)
+      SELECT id, message_id, conversation_id, workspace_id, saved_at
+        FROM saved_messages_legacy_v12;
+
+      DROP TABLE saved_messages_legacy_v12;
+
+      CREATE UNIQUE INDEX uniq_saved_messages_message
+        ON saved_messages(message_id);
+      CREATE INDEX idx_saved_messages_workspace
+        ON saved_messages(workspace_id, saved_at DESC);
+
+      ALTER TABLE notifications RENAME TO notifications_legacy_v12;
+
+      CREATE TABLE notifications (
+        id                      TEXT PRIMARY KEY,
+        kind                    TEXT NOT NULL,
+        user_id                 TEXT,
+        agent_id                TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        workspace_id            TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
+        conversation_id         TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+        message_id              TEXT REFERENCES messages(id) ON DELETE SET NULL,
+        source_workspace_id     TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
+        source_conversation_id  TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+        source_message_id       TEXT REFERENCES messages(id) ON DELETE SET NULL,
+        payload                 TEXT,
+        read_at                 INTEGER,
+        created_at              INTEGER NOT NULL
+      );
+
+      INSERT INTO notifications
+        (id, kind, user_id, agent_id, workspace_id, conversation_id, message_id,
+         source_workspace_id, source_conversation_id, source_message_id,
+         payload, read_at, created_at)
+      SELECT n.id,
+             n.kind,
+             n.user_id,
+             n.agent_id,
+             CASE
+               WHEN n.session_id IS NOT NULL
+                 THEN (SELECT workspace_id FROM conversations WHERE id = n.session_id)
+               WHEN n.channel_id IS NOT NULL
+                    AND EXISTS (SELECT 1 FROM conversations WHERE id = n.channel_id)
+                 THEN (SELECT workspace_id FROM conversations WHERE id = n.channel_id)
+               WHEN n.channel_id IS NOT NULL
+                    AND EXISTS (SELECT 1 FROM workspaces WHERE id = n.channel_id)
+                 THEN n.channel_id
+               ELSE NULL
+             END AS workspace_id,
+             CASE
+               WHEN n.session_id IS NOT NULL
+                 THEN n.session_id
+               WHEN n.channel_id IS NOT NULL
+                    AND EXISTS (SELECT 1 FROM conversations WHERE id = n.channel_id)
+                 THEN n.channel_id
+               ELSE NULL
+             END AS conversation_id,
+             n.message_id,
+             CASE
+               WHEN n.source_session_id IS NOT NULL
+                 THEN (SELECT workspace_id FROM conversations WHERE id = n.source_session_id)
+               WHEN n.source_channel_id IS NOT NULL
+                    AND EXISTS (SELECT 1 FROM conversations WHERE id = n.source_channel_id)
+                 THEN (SELECT workspace_id FROM conversations WHERE id = n.source_channel_id)
+               WHEN n.source_channel_id IS NOT NULL
+                    AND EXISTS (SELECT 1 FROM workspaces WHERE id = n.source_channel_id)
+                 THEN n.source_channel_id
+               ELSE NULL
+             END AS source_workspace_id,
+             CASE
+               WHEN n.source_session_id IS NOT NULL
+                 THEN n.source_session_id
+               WHEN n.source_channel_id IS NOT NULL
+                    AND EXISTS (SELECT 1 FROM conversations WHERE id = n.source_channel_id)
+                 THEN n.source_channel_id
+               ELSE NULL
+             END AS source_conversation_id,
+             n.source_message_id,
+             n.payload,
+             n.read_at,
+             n.created_at
+        FROM notifications_legacy_v12 n;
+
+      DROP TABLE notifications_legacy_v12;
+
+      CREATE INDEX idx_notifications_unread
+        ON notifications(user_id, read_at, created_at DESC);
+      CREATE INDEX idx_notifications_conversation_unread
+        ON notifications(conversation_id, read_at, created_at DESC);
+      CREATE INDEX idx_notifications_source_conversation
+        ON notifications(source_conversation_id, created_at DESC);
+
+      DROP TABLE IF EXISTS agent_inboxes;
+      DROP TABLE IF EXISTS session_events;
+      DROP TABLE IF EXISTS session_reads;
+      DROP TABLE IF EXISTS session_agents;
+      DROP TABLE IF EXISTS sessions;
+      DROP TABLE IF EXISTS channel_members;
+      DROP TABLE IF EXISTS channels;
+
+      CREATE TEMP TABLE _v12_fk_check (
+        table_name TEXT CHECK (table_name IS NULL),
+        rowid INTEGER,
+        parent TEXT,
+        fkid INTEGER
+      );
+      INSERT INTO _v12_fk_check SELECT * FROM pragma_foreign_key_check;
+      DROP TABLE _v12_fk_check;
+    `,
+  },
+  {
+    version: 13,
+    name: 'messages_conversation_from_kind_index',
+    up: `
+      CREATE INDEX IF NOT EXISTS idx_messages_conversation_from_kind
+        ON messages(conversation_id, from_kind, seq);
+    `,
+  },
 ];

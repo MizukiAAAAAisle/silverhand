@@ -18,7 +18,7 @@ import { useResizableWidth } from '@/hooks/useResizableWidth';
 import { CreateWorkspaceDialog } from '@/features/workspaces/CreateWorkspaceDialog';
 import { CreateChannelDialog } from '@/features/workspaces/CreateChannelDialog';
 import { WorkspaceSettingsDialog } from '@/features/workspaces/WorkspaceSettingsDialog';
-import { ChannelTasksDrawer } from '@/components/tasks/ChannelTasksDrawer';
+import { WorkspaceTasksDrawer } from '@/components/tasks/WorkspaceTasksDrawer';
 import { useTasks } from '@/features/tasks/hooks';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { AgentView } from '@/features/agents/AgentView';
@@ -26,6 +26,7 @@ import {
   useWorkspaces,
   useChannelsForWorkspace,
   usePinChannel,
+  type ChannelListItem,
 } from '@/features/workspaces/hooks';
 import { useSavedMessages } from '@/features/saved/hooks';
 import {
@@ -39,10 +40,11 @@ import {
   useMessageUnreadSummary,
 } from '@/features/channels/hooks';
 import { useNav, useRouteState } from '@/router';
-import type { SessionDto } from '@silverhand/shared';
 
 export interface MessageJumpTarget {
+  workspaceId?: string;
   channelId: string;
+  threadId?: string | null;
   messageId: string;
 }
 
@@ -67,11 +69,11 @@ export function App(): JSX.Element {
     cssVar: '--sidebar-width',
   });
   const channelsSidebar = useResizableWidth({
-    storageKey: 'silverhand.layout.sessions-sidebar-width',
+    storageKey: 'silverhand.layout.channels-sidebar-width',
     defaultWidth: 240,
     min: 200,
     max: 400,
-    cssVar: '--sessions-sidebar-width',
+    cssVar: '--channels-sidebar-width',
   });
 
   const route = useRouteState();
@@ -84,6 +86,7 @@ export function App(): JSX.Element {
     threadId: openThreadId,
     agentId: selectedAgentId,
   } = route;
+  const activeEventChannelId = openThreadId ?? selectedChannelId;
 
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
   const [createChannelOpen, setCreateChannelOpen] = useState(false);
@@ -101,7 +104,7 @@ export function App(): JSX.Element {
   // navigation and the split pane wouldn't appear until the refetch lands.
   // Keyed by threadId so we never leak a stale channel into the
   // wrong split pane.
-  const [ephemeralThread, setEphemeralThread] = useState<SessionDto | null>(null);
+  const [ephemeralThread, setEphemeralThread] = useState<ChannelListItem | null>(null);
 
   // The original message id anchored by the currently-open thread. Set
   // by the child ChannelView via onThreadAnchorResolved; consumed by
@@ -113,12 +116,16 @@ export function App(): JSX.Element {
   >(null);
 
   // Per-workspace "last viewed channel" memory. Lives in-memory only —
-  // resetting on app restart is fine; workspace switches inside one session
+  // resetting on app restart is fine; workspace switches inside one app run
   // shouldn't lose their place.
   const lastChannelByWorkspace = useRef<Map<string, string>>(new Map());
 
   const { data: workspaces = [] } = useWorkspaces();
-  const { data: channels = [] } = useChannelsForWorkspace(selectedWorkspaceId);
+  const selectedWorkspace = workspaces.find(w => w.id === selectedWorkspaceId) ?? null;
+  const { data: channels = [] } = useChannelsForWorkspace(
+    selectedWorkspaceId,
+    selectedWorkspace?.kind ?? null,
+  );
   const pinChannel = usePinChannel(selectedWorkspaceId ?? null);
   // Shared cache with SavedListView and useToggleSave — invalidations
   // from save/unsave mutations propagate the count update here too.
@@ -126,29 +133,55 @@ export function App(): JSX.Element {
   // Per-workspace notification unread count (mention / agent-failure alerts).
   const { data: unreadCounts } = useUnreadCounts();
   // Global message unread summary across all workspaces — drives workspace
-  // sidebar badges via session_reads cursor (not notification system).
+  // sidebar badges via conversation_reads cursor (not notification system).
   const { data: messageUnreadSummary } = useMessageUnreadSummary();
   // Per-channel message unread counts for the currently selected workspace.
   // Drives channel sidebar badges; replaces the old notification-based counts.
-  const { data: messageUnreadData } = useMessageUnreadCounts(selectedWorkspaceId ?? null);
-  const channelUnreadCounts = messageUnreadData?.by_session;
+  const { data: messageUnreadData } = useMessageUnreadCounts(
+    selectedWorkspace?.kind === 'regular' ? selectedWorkspaceId : null,
+    selectedWorkspace?.kind === 'regular' ? 'regular' : null,
+  );
+  const channelUnreadCounts =
+    selectedWorkspace?.kind === 'dm'
+      ? Object.fromEntries(
+          selectedWorkspace.dm_channel_ids.map(id => [
+            id,
+            messageUnreadSummary?.by_workspace?.[id] ?? 0,
+          ]),
+        )
+      : messageUnreadData?.by_conversation;
   // Notification-based read marker (mention/agent-failure alerts).
   const markChannelRead = useMarkChannelRead();
-  // Message-unread read cursor — advances session_reads on navigation.
+  // Message-unread read cursor — advances conversation_reads on navigation.
   const markMessageChannelRead = useMarkMessageChannelRead();
   // In-app + system notifications for new mentions and agent failures.
-  useNotificationToasts(selectedWorkspaceId ?? null);
+  useNotificationToasts(activeEventChannelId);
   // Active-task count for the titlebar Tasks badge — scoped to the
   // current workspace so the number matches what the panel will show
   // when opened (default filter = current channel, but the badge is
   // workspace-aggregate to match where the entry lives).
   const { data: workspaceTasks = [] } = useTasks(
-    selectedWorkspaceId ? { channel_id: selectedWorkspaceId } : {},
+    selectedWorkspaceId ? { workspace_id: selectedWorkspaceId } : {},
     { enabled: !!selectedWorkspaceId },
   );
   const workspaceActiveTaskCount = workspaceTasks.filter(
     t => t.status !== 'done',
   ).length;
+
+  const resolveNavWorkspaceId = (
+    workspaceId: string | undefined,
+    channelId?: string | null,
+  ): string | null => {
+    if (!workspaceId) return selectedWorkspaceId;
+    if (workspaces.some(w => w.id === workspaceId)) return workspaceId;
+    const dmWorkspace = workspaces.find(
+      w =>
+        w.kind === 'dm' &&
+        (w.dm_channel_ids.includes(workspaceId) ||
+          (!!channelId && w.dm_channel_ids.includes(channelId))),
+    );
+    return dmWorkspace?.id ?? workspaceId;
+  };
 
   // Auto-select first workspace when chat is open without a workspace id.
   // Replace so the bare /chat URL doesn't pile up in history.
@@ -205,7 +238,7 @@ export function App(): JSX.Element {
   useEffect(() => {
     if (!openThreadId || !selectedWorkspaceId || !selectedChannelId) return;
     const thread = channels.find(s => s.id === openThreadId);
-    if (thread && thread.parent_session_id !== selectedChannelId) {
+    if (thread?.kind === 'thread' && thread.parent_conversation_id !== selectedChannelId) {
       nav.go(`/chat/w/${selectedWorkspaceId}/c/${selectedChannelId}`, {
         replace: true,
       });
@@ -224,10 +257,12 @@ export function App(): JSX.Element {
     if (!openThreadId) setHighlightedParentMessageId(null);
   }, [openThreadId]);
 
-  const selectedWorkspace = workspaces.find(w => w.id === selectedWorkspaceId) ?? null;
   const selectedChannel = channels.find(s => s.id === selectedChannelId) ?? null;
-  const parentChannel = selectedChannel?.parent_session_id
-    ? channels.find(s => s.id === selectedChannel.parent_session_id) ?? null
+  const selectedChannelResolvedId = selectedChannel?.id ?? null;
+  const selectedChannelRouteKind =
+    selectedChannel?.kind === 'thread' ? 'thread' : 'channel';
+  const parentChannel = selectedChannel?.kind === 'thread'
+    ? channels.find(s => s.id === selectedChannel.parent_conversation_id) ?? null
     : null;
   const threadChannel =
     (openThreadId
@@ -250,13 +285,11 @@ export function App(): JSX.Element {
     }
   }, [ephemeralThread, openThreadId, channels]);
 
-  const activeEventChannelId = openThreadId ?? selectedChannelId;
-
   useEffect(() => {
-    void window.agentHub.setActiveSession({
-      channelId:
+    void window.agentHub.setActiveConversation({
+      workspaceId:
         appSection === 'chat' && view === 'channel' ? selectedWorkspaceId : null,
-      sessionId:
+      conversationId:
         appSection === 'chat' && view === 'channel'
           ? activeEventChannelId
           : null,
@@ -268,11 +301,16 @@ export function App(): JSX.Element {
   // (openThreadId) are visible simultaneously, so both cursors must be
   // advanced — not just the "active event" channel.
   useEffect(() => {
-    if (selectedChannelId) markMessageChannelRead.mutate(selectedChannelId);
+    if (selectedChannelId && selectedChannelResolvedId) {
+      markMessageChannelRead.mutate({
+        id: selectedChannelId,
+        kind: selectedChannelRouteKind,
+      });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChannelId]);
+  }, [selectedChannelId, selectedChannelResolvedId, selectedChannelRouteKind]);
   useEffect(() => {
-    if (openThreadId) markMessageChannelRead.mutate(openThreadId);
+    if (openThreadId) markMessageChannelRead.mutate({ id: openThreadId, kind: 'thread' });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openThreadId]);
 
@@ -289,10 +327,16 @@ export function App(): JSX.Element {
     // one (typically the Mentions channel in a DM) — that's what the
     // user clicked the badge to see. Falls back to the
     // remembered/default channel pick when there's no pointer.
-    const pointer = unreadCounts?.latest_by_channel?.[id];
+    const workspace = workspaces.find(w => w.id === id);
+    const pointer =
+      workspace?.kind === 'dm'
+        ? workspace.dm_channel_ids
+            .map(channelId => unreadCounts?.latest_by_workspace?.[channelId])
+            .find(Boolean)
+        : unreadCounts?.latest_by_workspace?.[id];
     if (pointer) {
       handleJumpToMessage({
-        channelId: pointer.session_id,
+        channelId: pointer.conversation_id,
         messageId: pointer.message_id,
         workspaceId: id,
       });
@@ -304,13 +348,12 @@ export function App(): JSX.Element {
   const handleSelectChannel = (id: string): void => {
     const target = channels.find(s => s.id === id);
     if (!selectedWorkspaceId) return;
-    // Clear both notification badge and message unread cursor on navigation.
-    markChannelRead.mutate(id);
-    markMessageChannelRead.mutate(id);
-    if (target?.parent_session_id) {
+    // Read cursors are advanced by the navigation effects above. Keeping
+    // this handler side-effect free avoids duplicate mark-read/refetch storms.
+    if (target?.kind === 'thread') {
       // Picking a thread from the sidebar tree opens it as the thread pane
       // alongside its parent — not as a top-level selection.
-      nav.toThread(selectedWorkspaceId, target.parent_session_id, id);
+      nav.toThread(selectedWorkspaceId, target.channel_id, id);
     } else {
       nav.toChannel(selectedWorkspaceId, id);
     }
@@ -320,13 +363,20 @@ export function App(): JSX.Element {
     params: {
       workspaceId?: string;
       channelId: string;
+      threadId?: string | null;
       messageId: string;
     },
     options: { preserveThreadLayout?: boolean } = {},
   ): void => {
-    setJumpTarget({ channelId: params.channelId, messageId: params.messageId });
-    markChannelRead.mutate(params.channelId);
-    const wid = params.workspaceId ?? selectedWorkspaceId;
+    const targetConversationId = params.threadId ?? params.channelId;
+    setJumpTarget({
+      workspaceId: params.workspaceId,
+      channelId: params.channelId,
+      threadId: params.threadId ?? null,
+      messageId: params.messageId,
+    });
+    markChannelRead.mutate(targetConversationId);
+    const wid = resolveNavWorkspaceId(params.workspaceId, params.channelId);
     if (!wid) return;
     if (
       options.preserveThreadLayout &&
@@ -336,7 +386,11 @@ export function App(): JSX.Element {
     ) {
       return;
     }
-    nav.toChannel(wid, params.channelId);
+    if (params.threadId) {
+      nav.toThread(wid, params.channelId, params.threadId);
+    } else {
+      nav.toChannel(wid, params.channelId);
+    }
   };
 
   const handleWorkspaceDeleted = (): void => {
@@ -368,14 +422,14 @@ export function App(): JSX.Element {
     }
   };
 
-  const buildChannelDescriptor = (s: typeof selectedChannel) =>
+  const buildChannelDescriptor = (s: ChannelListItem | null) =>
     s
       ? {
           id: s.id,
           title: s.title,
-          parent_session_id: s.parent_session_id,
+          parent_conversation_id: s.kind === 'thread' ? s.parent_conversation_id : null,
           closed_at: s.closed_at,
-          channel_id: s.channel_id,
+          workspace_id: s.workspace_id,
         }
       : null;
 
@@ -388,20 +442,20 @@ export function App(): JSX.Element {
   const parentView = (
     <ChannelView
       channelKind={selectedWorkspace?.kind === 'dm' ? 'dm' : (selectedWorkspace ? 'regular' : null)}
-      session={buildChannelDescriptor(selectedChannel)}
+      conversation={buildChannelDescriptor(selectedChannel)}
       parentTitle={parentChannel?.title ?? null}
       jumpTarget={
-        jumpTarget && jumpTarget.channelId === selectedChannelId
-          ? { sessionId: jumpTarget.channelId, messageId: jumpTarget.messageId }
+        jumpTarget && !jumpTarget.threadId && jumpTarget.channelId === selectedChannelId
+          ? { channelId: jumpTarget.channelId, messageId: jumpTarget.messageId }
           : null
       }
       onJumped={() => setJumpTarget(null)}
-      onThreadCreated={(threadId, session) => {
+      onThreadCreated={(threadId, thread) => {
         if (selectedWorkspaceId && selectedChannelId) {
-          // Optimistically store the session so threadChannel is non-null
+          // Optimistically store the thread so threadChannel is non-null
           // on the very first render after nav.toThread() fires, before
           // the channels-list query refetch has a chance to complete.
-          if (session) setEphemeralThread(session);
+          if (thread) setEphemeralThread(thread);
           nav.toThread(selectedWorkspaceId, selectedChannelId, threadId);
         }
       }}
@@ -414,13 +468,23 @@ export function App(): JSX.Element {
   const threadView = threadChannel ? (
     <ChannelView
       channelKind={selectedWorkspace?.kind === 'dm' ? 'dm' : (selectedWorkspace ? 'regular' : null)}
-      session={buildChannelDescriptor(threadChannel)}
+      conversation={buildChannelDescriptor(threadChannel)}
       parentTitle={selectedChannel?.title ?? null}
+      jumpTarget={
+        jumpTarget?.threadId === threadChannel.id
+          ? { channelId: threadChannel.id, messageId: jumpTarget.messageId }
+          : null
+      }
+      onJumped={() => setJumpTarget(null)}
       onCloseChild={closeThread}
       onJumpToOriginal={messageId => {
         handleJumpToMessage(
           {
-            channelId: threadChannel.channel_id,
+            workspaceId: selectedWorkspaceId ?? undefined,
+            channelId:
+              threadChannel.kind === 'thread'
+                ? threadChannel.channel_id
+                : threadChannel.id,
             messageId,
           },
           { preserveThreadLayout: true },
@@ -436,15 +500,15 @@ export function App(): JSX.Element {
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden">
       <Titlebar
-        channelId={selectedWorkspace?.id ?? null}
-        channelName={selectedWorkspace?.name ?? null}
-        channelKind={selectedWorkspace?.kind === 'dm' ? 'dm' : (selectedWorkspace ? 'regular' : null)}
+        workspaceId={selectedWorkspace?.id ?? null}
+        workspaceName={selectedWorkspace?.name ?? null}
+        workspaceKind={selectedWorkspace?.kind === 'dm' ? 'dm' : (selectedWorkspace ? 'regular' : null)}
         workspacePath={selectedWorkspace?.workspace_path ?? null}
-        channelArchivedAt={selectedWorkspace?.archived_at ?? null}
-        onOpenChannelSettings={
+        workspaceArchivedAt={selectedWorkspace?.archived_at ?? null}
+        onOpenWorkspaceSettings={
           selectedWorkspace ? () => setWorkspaceSettingsOpen(true) : undefined
         }
-        onCreateSession={
+        onCreateChannel={
           appSection === 'chat' && view === 'channel' && selectedWorkspace
             ? () => setCreateChannelOpen(true)
             : undefined
@@ -486,9 +550,18 @@ export function App(): JSX.Element {
                 key={selectedAgentId}
                 agentId={selectedAgentId}
                 onDeleted={() => nav.toMembers()}
-                onOpenSession={s => {
-                  // Jump back to chat view, focus the agent's session.
-                  nav.toChannel(s.channel_id, s.session_id);
+                onOpenConversation={s => {
+                  // Jump back to chat view, focusing the agent's channel/thread.
+                  const workspaceId =
+                    s.workspace_kind === 'system_dm'
+                      ? resolveNavWorkspaceId(s.channel_id, s.channel_id)
+                      : s.workspace_id;
+                  if (!workspaceId) return;
+                  if (s.thread_id) {
+                    nav.toThread(workspaceId, s.channel_id, s.thread_id);
+                  } else {
+                    nav.toChannel(workspaceId, s.channel_id);
+                  }
                 }}
               />
             ) : (
@@ -515,8 +588,14 @@ export function App(): JSX.Element {
                 id: w.id,
                 name: w.name,
                 kind: w.kind === 'dm' ? 'dm' as const : 'regular' as const,
-                dm_agent_id: null,
-                unread: messageUnreadSummary?.by_channel?.[w.id] ?? 0,
+                dm_agent_id: w.dm_agent_id,
+                unread:
+                  w.kind === 'dm'
+                    ? w.dm_channel_ids.reduce(
+                        (sum, id) => sum + (messageUnreadSummary?.by_workspace?.[id] ?? 0),
+                        0,
+                      )
+                    : messageUnreadSummary?.by_workspace?.[w.id] ?? 0,
                 archived: w.archived_at !== null,
               }))}
               selectedWorkspaceId={selectedWorkspaceId}
@@ -536,23 +615,15 @@ export function App(): JSX.Element {
               <SavedListView onJump={params => handleJumpToMessage(params)} />
             ) : view === 'search' ? (
               <SearchPanel
-                channels={workspaces.map(w => ({
-                  id: w.id,
-                  name: w.name,
-                  kind: w.kind === 'dm' ? 'dm' as const : 'regular' as const,
-                  dm_agent_id: null,
-                  workspace_path: w.workspace_path,
-                  workspace_host_id: w.workspace_host_id,
-                  archived_at: w.archived_at,
-                  created_at: w.created_at,
-                  updated_at: w.updated_at,
-                  description: w.description,
-                }))}
+                workspaces={workspaces}
                 onJumpMessage={params => handleJumpToMessage(params)}
-                onOpenChannel={id => nav.toWorkspace(id)}
-                onOpenSession={(workspaceId, channelId) =>
-                  nav.toChannel(workspaceId, channelId)
-                }
+                onOpenWorkspace={id => nav.toWorkspace(id)}
+                onOpenConversation={(workspaceId, channelId, threadId) => {
+                  const navWorkspaceId = resolveNavWorkspaceId(workspaceId, channelId);
+                  if (!navWorkspaceId) return;
+                  if (threadId) nav.toThread(navWorkspaceId, channelId, threadId);
+                  else nav.toChannel(navWorkspaceId, channelId);
+                }}
               />
             ) : (
               <>
@@ -563,7 +634,7 @@ export function App(): JSX.Element {
                     title: s.title,
                     status:
                       s.status === 'active' || s.status === 'crashed' ? s.status : 'idle',
-                    parent_session_id: s.parent_session_id,
+                    parent_channel_id: s.kind === 'thread' ? s.parent_conversation_id : null,
                     closed_at: s.closed_at,
                     pinned_at: s.pinned_at,
                   }))}
@@ -574,7 +645,7 @@ export function App(): JSX.Element {
                   selectedChannelId={openThreadId ?? selectedChannelId}
                   onSelectChannel={handleSelectChannel}
                   onPinChannel={(channelId, pinned) =>
-                    pinChannel.mutate({ sessionId: channelId, pinned })
+                    pinChannel.mutate({ channelId, pinned })
                   }
                   unreadByChannel={channelUnreadCounts ?? {}}
                 />
@@ -624,18 +695,18 @@ export function App(): JSX.Element {
         onDeleted={handleWorkspaceDeleted}
       />
       {selectedWorkspace ? (
-        <ChannelTasksDrawer
+        <WorkspaceTasksDrawer
           open={tasksDrawerOpen}
           onOpenChange={setTasksDrawerOpen}
-          channelId={selectedWorkspace.id}
-          channelName={selectedWorkspace.name}
-          sessions={channels.map(s => ({
+          workspaceId={selectedWorkspace.id}
+          workspaceName={selectedWorkspace.name}
+          conversations={channels.map(s => ({
             id: s.id,
             title: s.title,
             closed_at: s.closed_at,
             created_at: s.created_at,
           }))}
-          defaultSessionId={selectedChannelId}
+          defaultConversationId={selectedChannelId}
           onJumpToMessage={params => handleJumpToMessage(params)}
         />
       ) : null}

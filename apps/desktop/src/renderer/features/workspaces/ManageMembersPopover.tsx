@@ -11,7 +11,7 @@ import {
 } from './hooks';
 
 interface ManageMembersPopoverProps {
-  channelId: string;
+  workspaceId: string;
   /** The clickable element that triggers the popover (rendered as the
    *  Radix Trigger via `asChild`, so callers control the visual). */
   children: ReactNode;
@@ -27,7 +27,7 @@ interface ManageMembersPopoverProps {
  * stays anchored to its trigger in the titlebar.
  */
 export function ManageMembersPopover({
-  channelId,
+  workspaceId,
   children,
 }: ManageMembersPopoverProps): JSX.Element {
   return (
@@ -40,7 +40,7 @@ export function ManageMembersPopover({
           collisionPadding={8}
           className="z-50 w-[260px] rounded-md border border-border bg-bg-floating p-3 shadow-lg outline-none"
         >
-          <PopoverBody channelId={channelId} />
+          <PopoverBody workspaceId={workspaceId} />
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
@@ -49,12 +49,12 @@ export function ManageMembersPopover({
 
 // Split body out so the React-Query hooks below only mount once the
 // popover actually opens (Radix unmounts Content when closed).
-function PopoverBody({ channelId }: { channelId: string }): JSX.Element {
+function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
   const { data: members = [], isLoading: membersLoading } =
-    useWorkspaceMembers(channelId);
+    useWorkspaceMembers(workspaceId);
   const { data: agents = [] } = useAgents();
-  const addMember = useAddWorkspaceMember(channelId);
-  const removeMember = useRemoveWorkspaceMember(channelId);
+  const addMember = useAddWorkspaceMember(workspaceId);
+  const removeMember = useRemoveWorkspaceMember(workspaceId);
   const [error, setError] = useState<string | null>(null);
 
   const memberIds = useMemo(() => new Set(members.map(m => m.id)), [members]);

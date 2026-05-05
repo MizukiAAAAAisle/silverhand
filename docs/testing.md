@@ -9,7 +9,7 @@
 ```bash
 pnpm test                    # 默认：跑 backend 全部测试
 pnpm test -- --watch         # watch 模式
-pnpm test -- repos/session   # 只跑匹配文件
+pnpm test -- repos/conversation   # 只跑匹配文件
 ```
 
 底层就是 `./scripts/test.sh`，它会：
@@ -49,27 +49,33 @@ packages/backend/
 ├── tests/
 │   ├── utils/
 │   │   ├── db.ts             # in-memory DB + temp dir 夹具
-│   │   ├── app.ts            # Hono app + 假 SessionManager + http() 包装
-│   │   ├── manager.ts        # 真 SessionManager + 注入 mock-claude 二进制
+│   │   ├── app.ts            # Hono app + 假 ConversationManager + http() 包装
+│   │   ├── manager.ts        # 真 ConversationManager + 注入 mock-claude 二进制
 │   │   └── mock-claude.mjs   # 假 claude CLI（chmod +x，env 配置行为）
 │   ├── smoke.test.ts         # 验证测试基建本身
 │   ├── repos/                # L1：仓储层（直接打 in-memory SQLite）
 │   │   ├── host-repo.test.ts
 │   │   ├── agent-repo.test.ts
-│   │   ├── channel-repo.test.ts
-│   │   ├── membership-repo.test.ts
-│   │   ├── message-repo.test.ts
-│   │   ├── session-repo.test.ts
-│   │   └── inbox-repo.test.ts
-│   ├── routes/               # L2：HTTP 层（app.fetch + 假 SessionManager）
+│   │   ├── conversation-repo.test.ts
+│   │   ├── conversation-read-repo.test.ts
+│   │   ├── conversation-inbox-repo.test.ts
+│   │   ├── workspace-repo.test.ts
+│   │   ├── workspace-files.test.ts
+│   │   └── message-repo.test.ts
+│   ├── routes/               # L2：HTTP 层（app.fetch + 假 ConversationManager）
 │   │   ├── smoke.test.ts
 │   │   ├── agents.test.ts
 │   │   ├── channels.test.ts
-│   │   ├── sessions.test.ts
+│   │   ├── workspace-conversation-routes.test.ts
+│   │   ├── tasks.test.ts
 │   │   └── internal.test.ts  # 含 auth-token 校验
-│   └── manager/              # L3：SessionManager + 真子进程（mock-claude）
-│       ├── smoke.test.ts
-│       └── lifecycle.test.ts # start / stop / exit / inbox drain / reconcile
+│   ├── manager/              # L3：ConversationManager + 真子进程（mock-claude）
+│   │   ├── smoke.test.ts
+│   │   └── lifecycle.test.ts # start / stop / exit / inbox drain / reconcile
+│   └── drivers/              # Driver 单元测试
+│       ├── codex.test.ts
+│       ├── cursor.test.ts
+│       └── platform-prompt.test.ts
 └── vitest.config.ts
 ```
 
@@ -78,8 +84,8 @@ packages/backend/
 | 层 | 范围 | 状态 |
 |---|---|---|
 | **L1 Repos** | 单个 repo 直连 in-memory SQLite，验证 SQL / FK / 边界条件 | ✅ |
-| **L2 Routes** | `app.fetch(req)` 对真实 Hono 路由打请求，验证 HTTP 行为；SessionManager 用假实现避免真 spawn | ✅ |
-| **L3 SessionManager** | 用 `mock-claude` 假二进制走 spawn → stdin → SSE → DB 全链路 | ✅ |
+| **L2 Routes** | `app.fetch(req)` 对真实 Hono 路由打请求，验证 HTTP 行为；ConversationManager 用假实现避免真 spawn | ✅ |
+| **L3 ConversationManager** | 用 `mock-claude` 假二进制走 spawn → stdin → SSE → DB 全链路 | ✅ |
 
 ---
 
@@ -101,34 +107,34 @@ afterEach(() => t.cleanup());
 L2 路由测试用 `tests/utils/app.ts`：
 
 ```ts
-const t = buildTestApp();          // Hono app + 假 SessionManager + 临时 dir
+const t = buildTestApp();          // Hono app + 假 ConversationManager + 临时 dir
 const h = http(t.app);             // get/post/del/json 包装
 const res = await h.post('/api/agents', { name: 'a', runtime: 'claude' });
 expect(res.status).toBe(201);
 
-// 检查路由对 SessionManager 的副作用
+// 检查路由对 ConversationManager 的副作用
 expect(t.fake.starts).toHaveLength(1);
 expect(t.fake.delivered[0]!.agentId).toBe(...);
 
 afterEach(() => t.cleanup());      // 关 DB + 删临时 dir
 ```
 
-`FakeSessionManager` 记录所有 `start` / `stop` / `deliverMessage` / `stopAll` 调用，但不会真的 spawn 子进程——L2 测的是路由本身，不是 SessionManager。
+`FakeConversationManager` 记录所有 `start` / `stop` / `deliverMessage` / `stopAll` 调用，但不会真的 spawn 子进程——L2 测的是路由本身，不是 ConversationManager。
 
 L3 测试用 `tests/utils/manager.ts` + `mock-claude.mjs`：
 
 ```ts
-const h = await buildManagerHarness();    // 真 SessionManager + 预建 channel/agent/session
+const h = await buildManagerHarness();    // 真 ConversationManager + 预建 workspace/channel/agent
 h.setMockEnv({ MOCK_CLAUDE_EXIT_CODE: '7', MOCK_CLAUDE_EXIT_AFTER_INIT_MS: '20' });
 
-await h.manager.start(h.sessionId, h.agentId);
+await h.manager.start(h.conversationId, h.agentId);
 await h.waitForEvent(e => e.kind === 'agent_status' && (e.payload as any).status === 'crashed');
 
 const lines = await readStdinLog(h.stdinLog);  // 检查 mock 收到了哪些 stdin 行
 afterEach(() => h.cleanup());
 ```
 
-`mock-claude.mjs` 是一个 chmod +x 的 node 脚本，行为由 env 控制：`MOCK_CLAUDE_INIT_SESSION_ID`、`MOCK_CLAUDE_NO_INIT`、`MOCK_CLAUDE_EXIT_CODE`、`MOCK_CLAUDE_EXIT_AFTER_INIT_MS`、`MOCK_CLAUDE_EMIT_TURN_END`、`MOCK_CLAUDE_STDIN_LOG`。`SessionManager` 内部的 `binariesPromise` 被 monkey-patch 直接指向这个脚本，绕过 `which claude` 检测——这样 L3 测试在 CI 上也能跑（不需要真装 Claude）。
+`mock-claude.mjs` 是一个 chmod +x 的 node 脚本，行为由 env 控制：`MOCK_CLAUDE_INIT_SESSION_ID`、`MOCK_CLAUDE_NO_INIT`、`MOCK_CLAUDE_EXIT_CODE`、`MOCK_CLAUDE_EXIT_AFTER_INIT_MS`、`MOCK_CLAUDE_EMIT_TURN_END`、`MOCK_CLAUDE_STDIN_LOG`。`ConversationManager` 内部的 `binariesPromise` 被 monkey-patch 直接指向这个脚本，绕过 `which claude` 检测——这样 L3 测试在 CI 上也能跑（不需要真装 Claude）。
 
 读取 `"control_request"` 行时 mock 会立即按 `MOCK_CLAUDE_EXIT_CODE` 退出，模拟真 claude 收到 interrupt 后的行为。
 
@@ -136,7 +142,7 @@ afterEach(() => h.cleanup());
 
 ## 新增测试时的约定
 
-1. **FK 是真的开着的**（`PRAGMA foreign_keys = ON`）。涉及 `agent_id`、`session_id`、`message_id` 的字段必须用真实的行 id，不能传字符串字面量。需要 agent/session/message 时通过对应 repo 创建。
+1. **FK 是真的开着的**（`PRAGMA foreign_keys = ON`）。涉及 `agent_id`、`conversation_id`、`message_id` 的字段必须用真实的行 id，不能传字符串字面量。需要 agent/conversation/message 时通过对应 repo 创建。
 2. **不要 mock SQLite**。`better-sqlite3` 同步、快、够用，mock 反而会掩盖 SQL 错误。
 3. **文件系统副作用**用 `makeTempSilverhandDir()`，`afterEach` 清理；不要写到真实 `~/.silverhand/`。
 4. **避免依赖 random id 的字典序**。base64url 随机 id 跨次运行排序不稳定，要断言顺序就显式控制（如 `UPDATE ... SET updated_at = updated_at - 1000`），或断言相对位置（`indexOf(parent) < indexOf(child)`）。

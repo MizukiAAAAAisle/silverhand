@@ -14,6 +14,7 @@ interface SavedListViewProps {
   onJump: (params: {
     workspaceId?: string;
     channelId: string;
+    threadId?: string | null;
     messageId: string;
   }) => void;
 }
@@ -49,8 +50,9 @@ export function SavedListView({ onJump }: SavedListViewProps): JSX.Element {
                 item={item}
                 onJump={() =>
                   onJump({
-                    workspaceId: item.channel_id,
-                    channelId: item.session_id,
+                    workspaceId: item.workspace_id,
+                    channelId: item.channel_id,
+                    threadId: item.thread_id,
                     messageId: item.message.id,
                   })
                 }
@@ -108,9 +110,9 @@ function SavedItem({
         }
       >
         <header className="mb-2 flex items-center gap-2 text-xs text-text-muted">
-          <span className="font-medium text-text-primary">#{item.channel_name}</span>
+          <span className="font-medium text-text-primary">#{item.workspace_name}</span>
           <span>·</span>
-          <span className="truncate">{item.session_title}</span>
+          <span className="truncate">{item.conversation_title}</span>
           <span>·</span>
           <span>{sender}</span>
           <span>·</span>

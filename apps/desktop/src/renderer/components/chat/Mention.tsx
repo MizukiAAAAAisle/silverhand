@@ -7,10 +7,10 @@ interface MentionProps {
   /** Resolved agent — undefined when the name doesn't match any known
    *  agent (typo, deleted agent, or just a stray "@word"). */
   agent: AgentDto | undefined;
-  /** Session this mention is rendered inside. Forwarded to the
-   *  popover so it can show per-session presence. Null when the
-   *  mention isn't tied to a session (legacy paths). */
-  sessionId: string | null;
+  /** Conversation this mention is rendered inside. Forwarded to the
+   *  popover so it can show per-conversation presence. Null when the
+   *  mention isn't tied to a conversation (legacy paths). */
+  conversationId: string | null;
 }
 
 /**
@@ -23,13 +23,13 @@ interface MentionProps {
  * Unresolved → render plain text (no popover) so a stray `@todo` or
  * `@2025` doesn't look like a broken interactive control.
  */
-export function Mention({ name, agent, sessionId }: MentionProps): JSX.Element {
+export function Mention({ name, agent, conversationId }: MentionProps): JSX.Element {
   if (!agent) {
     return <span className="text-text-muted">@{name}</span>;
   }
   const label = agent.display_name?.trim() || agent.name;
   return (
-    <AgentInfoPopover agent={agent} sessionId={sessionId}>
+    <AgentInfoPopover agent={agent} conversationId={conversationId}>
       <button
         type="button"
         className="rounded px-1 -mx-0.5 font-medium text-accent transition-colors hover:bg-accent-soft focus-visible:bg-accent-soft focus-visible:outline-none"

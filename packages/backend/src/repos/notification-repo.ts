@@ -18,11 +18,11 @@ export interface InsertNotificationParams {
   /** v1 single-user app passes NULL. Migration to multi-user backfills 'local'. */
   userId?: string | null;
   agentId?: string | null;
-  channelId?: string | null;
-  sessionId?: string | null;
+  workspaceId?: string | null;
+  conversationId?: string | null;
   messageId?: string | null;
-  sourceChannelId?: string | null;
-  sourceSessionId?: string | null;
+  sourceWorkspaceId?: string | null;
+  sourceConversationId?: string | null;
   sourceMessageId?: string | null;
   payload?: Record<string, unknown> | null;
 }
@@ -36,8 +36,8 @@ export class NotificationRepo {
     this.db
       .prepare(
         `INSERT INTO notifications
-         (id, kind, user_id, agent_id, channel_id, session_id, message_id,
-          source_channel_id, source_session_id, source_message_id,
+         (id, kind, user_id, agent_id, workspace_id, conversation_id, message_id,
+          source_workspace_id, source_conversation_id, source_message_id,
           payload, read_at, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
       )
@@ -46,11 +46,11 @@ export class NotificationRepo {
         params.kind,
         params.userId ?? null,
         params.agentId ?? null,
-        params.channelId ?? null,
-        params.sessionId ?? null,
+        params.workspaceId ?? null,
+        params.conversationId ?? null,
         params.messageId ?? null,
-        params.sourceChannelId ?? null,
-        params.sourceSessionId ?? null,
+        params.sourceWorkspaceId ?? null,
+        params.sourceConversationId ?? null,
         params.sourceMessageId ?? null,
         params.payload ? JSON.stringify(params.payload) : null,
         now,
@@ -98,110 +98,104 @@ export class NotificationRepo {
   }
 
   /**
-   * Aggregate unread counts grouped by `channel_id` so the sidebar
-   * can render per-DM badges in a single round-trip. NULL channel_id
-   * (none currently emitted, but possible) is dropped.
+   * Aggregate unread counts by sidebar scope: regular conversations roll up
+   * to their workspace, while DM conversations show as their own item.
    */
-  unreadCountsByChannel(userId?: string | null): Map<string, number> {
+  unreadCountsByWorkspace(userId?: string | null): Map<string, number> {
     const userPredicate =
       userId === undefined || userId === null ? 'user_id IS NULL' : 'user_id = ?';
     const args = userId == null ? [] : [userId];
     const rows = this.db
-      .prepare<typeof args, { channel_id: string; c: number }>(
-        `SELECT channel_id, COUNT(*) AS c
-         FROM notifications
+      .prepare<typeof args, { scope_id: string; c: number }>(
+        `SELECT
+           CASE
+             WHEN c.kind = 'dm_channel' THEN c.id
+             ELSE COALESCE(n.workspace_id, c.workspace_id)
+           END AS scope_id,
+           COUNT(*) AS c
+         FROM notifications n
+         LEFT JOIN conversations c ON c.id = n.conversation_id
          WHERE ${userPredicate}
-           AND read_at IS NULL
-           AND channel_id IS NOT NULL
-         GROUP BY channel_id`,
+           AND n.read_at IS NULL
+           AND scope_id IS NOT NULL
+         GROUP BY scope_id`,
       )
       .all(...args);
     const out = new Map<string, number>();
-    for (const r of rows) out.set(r.channel_id, r.c);
+    for (const r of rows) out.set(r.scope_id, r.c);
     return out;
   }
 
   /**
-   * Per-channel pointer to the most recent unread notification, so
-   * the renderer can jump straight to it when the user clicks a DM
-   * with the unread badge. Skips rows missing session/message ids.
+   * Per-sidebar-scope pointer to the most recent unread notification.
+   * Skips rows missing conversation/message ids.
    */
-  latestUnreadByChannel(
+  latestUnreadByWorkspace(
     userId?: string | null,
-  ): Map<string, { session_id: string; message_id: string }> {
+  ): Map<string, { conversation_id: string; message_id: string }> {
     const userPredicate =
       userId === undefined || userId === null ? 'user_id IS NULL' : 'user_id = ?';
     const args = userId == null ? [] : [userId];
     const rows = this.db
       .prepare<
         typeof args,
-        { channel_id: string; session_id: string; message_id: string }
+        { scope_id: string; conversation_id: string; message_id: string }
       >(
-        `SELECT n.channel_id, n.session_id, n.message_id
+        `SELECT
+           CASE
+             WHEN c.kind = 'dm_channel' THEN c.id
+             ELSE COALESCE(n.workspace_id, c.workspace_id)
+           END AS scope_id,
+           n.conversation_id,
+           n.message_id
          FROM notifications n
+         JOIN conversations c ON c.id = n.conversation_id
          JOIN (
-           SELECT channel_id, MAX(created_at) AS mx
-           FROM notifications
+           SELECT
+             CASE
+               WHEN c2.kind = 'dm_channel' THEN c2.id
+               ELSE COALESCE(n2.workspace_id, c2.workspace_id)
+             END AS scope_id,
+             MAX(n2.created_at) AS mx
+           FROM notifications n2
+           JOIN conversations c2 ON c2.id = n2.conversation_id
            WHERE ${userPredicate}
-             AND read_at IS NULL
-             AND channel_id IS NOT NULL
-             AND session_id IS NOT NULL
-             AND message_id IS NOT NULL
-           GROUP BY channel_id
+             AND n2.read_at IS NULL
+             AND n2.conversation_id IS NOT NULL
+             AND n2.message_id IS NOT NULL
+           GROUP BY scope_id
          ) latest
-           ON latest.channel_id = n.channel_id
+           ON latest.scope_id = CASE
+             WHEN c.kind = 'dm_channel' THEN c.id
+             ELSE COALESCE(n.workspace_id, c.workspace_id)
+           END
           AND latest.mx = n.created_at
          WHERE ${userPredicate}
            AND n.read_at IS NULL`,
       )
       .all(...args, ...args);
-    const out = new Map<string, { session_id: string; message_id: string }>();
+    const out = new Map<string, { conversation_id: string; message_id: string }>();
     for (const r of rows) {
-      out.set(r.channel_id, { session_id: r.session_id, message_id: r.message_id });
+      out.set(r.scope_id, {
+        conversation_id: r.conversation_id,
+        message_id: r.message_id,
+      });
     }
     return out;
   }
 
-  /**
-   * Aggregate unread counts grouped by `session_id` for a single
-   * channel. Used by the sessions sidebar to show per-session badges
-   * without scanning all channels.
-   */
-  unreadCountsBySessionForChannel(
-    channelId: string,
-    userId?: string | null,
-  ): Map<string, number> {
-    const userPredicate =
-      userId === undefined || userId === null ? 'user_id IS NULL' : 'user_id = ?';
-    const args = userId == null ? [channelId] : [userId, channelId];
-    const rows = this.db
-      .prepare<typeof args, { session_id: string; c: number }>(
-        `SELECT session_id, COUNT(*) AS c
-         FROM notifications
-         WHERE ${userPredicate}
-           AND read_at IS NULL
-           AND channel_id = ?
-           AND session_id IS NOT NULL
-         GROUP BY session_id`,
-      )
-      .all(...args);
-    const out = new Map<string, number>();
-    for (const r of rows) out.set(r.session_id, r.c);
-    return out;
-  }
-
-  /** Mark all unread notifications for a session as read. */
-  markSessionRead(sessionId: string, userId?: string | null): number {
+  /** Mark all unread notifications for a conversation as read. */
+  markConversationRead(conversationId: string, userId?: string | null): number {
     const now = Date.now();
     const userPredicate =
       userId === undefined || userId === null ? 'user_id IS NULL' : 'user_id = ?';
     const args =
-      userId == null ? [now, sessionId] : [now, userId, sessionId];
+      userId == null ? [now, conversationId] : [now, userId, conversationId];
     const r = this.db
       .prepare(
         `UPDATE notifications
          SET read_at = ?
-         WHERE ${userPredicate} AND session_id = ? AND read_at IS NULL`,
+         WHERE ${userPredicate} AND conversation_id = ? AND read_at IS NULL`,
       )
       .run(...args);
     return r.changes;
@@ -228,17 +222,17 @@ export class NotificationRepo {
     return r.changes > 0;
   }
 
-  markChannelRead(channelId: string, userId?: string | null): number {
+  markWorkspaceRead(workspaceId: string, userId?: string | null): number {
     const now = Date.now();
     const userPredicate =
       userId === undefined || userId === null ? 'user_id IS NULL' : 'user_id = ?';
     const args =
-      userId == null ? [now, channelId] : [now, userId, channelId];
+      userId == null ? [now, workspaceId] : [now, userId, workspaceId];
     const r = this.db
       .prepare(
         `UPDATE notifications
          SET read_at = ?
-         WHERE ${userPredicate} AND channel_id = ? AND read_at IS NULL`,
+         WHERE ${userPredicate} AND workspace_id = ? AND read_at IS NULL`,
       )
       .run(...args);
     return r.changes;

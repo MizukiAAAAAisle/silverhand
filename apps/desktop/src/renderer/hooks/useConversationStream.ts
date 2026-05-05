@@ -4,11 +4,11 @@ import { getBackendInfo } from '@/lib/api';
 import type { AgentRunState } from '@silverhand/shared';
 
 /**
- * Per-session SSE event payload. Mirrors what backend's SessionEventBus
+ * Per-conversation SSE event payload. Mirrors what backend's ConversationEventBus
  * publishes — see packages/backend/src/event-bus.ts and routes.ts'
- * `/api/sessions/:id/stream` handler.
+ * channel/thread stream handlers.
  */
-export interface SessionStreamEvent {
+export interface ConversationStreamEvent {
   /** SSE `event:` field. Known values: `connected`, `ping`, `message`,
    *  `agent_status`, `agent_event`, `agent_activity`, `compaction_stale`,
    *  `thread_updated`, `task_changed`. */
@@ -17,9 +17,15 @@ export interface SessionStreamEvent {
   payload: any;
 }
 
-type Handler = (event: SessionStreamEvent) => void;
+export type SessionStreamEvent = ConversationStreamEvent;
 
-const STREAM_CLOSE_GRACE_MS = 30_000;
+type Handler = (event: ConversationStreamEvent) => void;
+type StreamScope = 'channel' | 'thread';
+
+// Keep this short: every inactive EventSource still occupies a browser
+// connection slot to the local backend. A long grace period makes rapid
+// channel switching queue subsequent fetches behind stale SSE sockets.
+const STREAM_CLOSE_GRACE_MS = 500;
 
 const KNOWN_EVENTS = [
   'connected',
@@ -40,7 +46,16 @@ interface StreamEntry {
   closeTimer: ReturnType<typeof setTimeout> | null;
 }
 
-const streamsBySession = new Map<string, StreamEntry>();
+const streamsByConversation = new Map<string, StreamEntry>();
+
+function streamKey(scope: StreamScope, id: string): string {
+  return `${scope}:${id}`;
+}
+
+function streamPath(scope: StreamScope, id: string): string {
+  if (scope === 'channel') return `/api/channels/${id}/stream`;
+  return `/api/threads/${id}/stream`;
+}
 
 function clearCloseTimer(entry: StreamEntry): void {
   if (!entry.closeTimer) return;
@@ -48,44 +63,58 @@ function clearCloseTimer(entry: StreamEntry): void {
   entry.closeTimer = null;
 }
 
-function closeStream(sessionId: string, entry: StreamEntry): void {
-  if (streamsBySession.get(sessionId) !== entry) return;
+function closeStream(key: string, entry: StreamEntry): void {
+  if (streamsByConversation.get(key) !== entry) return;
   clearCloseTimer(entry);
   entry.closed = true;
   entry.eventSource?.close();
   entry.eventSource = null;
-  streamsBySession.delete(sessionId);
+  streamsByConversation.delete(key);
 }
 
-function scheduleCloseStream(sessionId: string, entry: StreamEntry): void {
+function scheduleCloseStream(key: string, entry: StreamEntry): void {
   if (entry.handlers.size > 0) return;
   clearCloseTimer(entry);
   entry.closeTimer = setTimeout(() => {
     if (entry.handlers.size > 0) return;
-    closeStream(sessionId, entry);
+    closeStream(key, entry);
   }, STREAM_CLOSE_GRACE_MS);
 }
 
-function emitToHandlers(entry: StreamEntry, event: SessionStreamEvent): void {
+function emitToHandlers(entry: StreamEntry, event: ConversationStreamEvent): void {
   for (const handler of Array.from(entry.handlers)) {
     handler(event);
   }
 }
 
-function ingestSessionEvent(sessionId: string, event: SessionStreamEvent): void {
+function ingestConversationEvent(
+  conversationId: string,
+  event: ConversationStreamEvent,
+): void {
   if (event.kind !== 'agent_activity') return;
-  applyAgentRunStateToCache(sessionId, event.payload as AgentRunState | undefined);
+  applyAgentRunStateToCache(
+    conversationId,
+    event.payload as AgentRunState | undefined,
+  );
 }
 
-function syntheticConnectedEvent(sessionId: string): SessionStreamEvent {
+function syntheticConnectedEvent(
+  conversationId: string,
+  scope: StreamScope,
+): ConversationStreamEvent {
   return {
     kind: 'connected',
-    payload: { session_id: sessionId, client_synthetic: true },
+    payload: {
+      conversation_id: conversationId,
+      scope,
+      client_synthetic: true,
+    },
   };
 }
 
-function getOrCreateStream(sessionId: string): StreamEntry {
-  const existing = streamsBySession.get(sessionId);
+function getOrCreateStream(conversationId: string, scope: StreamScope): StreamEntry {
+  const key = streamKey(scope, conversationId);
+  const existing = streamsByConversation.get(key);
   if (existing) {
     clearCloseTimer(existing);
     return existing;
@@ -97,13 +126,13 @@ function getOrCreateStream(sessionId: string): StreamEntry {
     closed: false,
     closeTimer: null,
   };
-  streamsBySession.set(sessionId, entry);
+  streamsByConversation.set(key, entry);
 
   void (async () => {
     const info = await getBackendInfo();
     if (entry.closed) return;
 
-    const es = new EventSource(`${info.url}/api/sessions/${sessionId}/stream`);
+    const es = new EventSource(`${info.url}${streamPath(scope, conversationId)}`);
     entry.eventSource = es;
 
     // The backend sends a custom `connected` event immediately after the
@@ -113,7 +142,7 @@ function getOrCreateStream(sessionId: string): StreamEntry {
     // named listeners below.
     es.addEventListener('open', () => {
       if (entry.closed) return;
-      emitToHandlers(entry, syntheticConnectedEvent(sessionId));
+      emitToHandlers(entry, syntheticConnectedEvent(conversationId, scope));
     });
 
     for (const kind of KNOWN_EVENTS) {
@@ -124,8 +153,8 @@ function getOrCreateStream(sessionId: string): StreamEntry {
         } catch {
           payload = raw.data;
         }
-        const event: SessionStreamEvent = { kind, payload };
-        ingestSessionEvent(sessionId, event);
+        const event: ConversationStreamEvent = { kind, payload };
+        ingestConversationEvent(conversationId, event);
         emitToHandlers(entry, event);
       });
     }
@@ -135,18 +164,19 @@ function getOrCreateStream(sessionId: string): StreamEntry {
 }
 
 /**
- * Subscribe to /api/sessions/:id/stream. The handler is called for every
+ * Subscribe to a channel/thread stream. The handler is called for every
  * named SSE event that arrives (including `connected` / `ping` — caller
- * filters). All subscribers for the same `sessionId` share one EventSource,
- * then the stream auto-closes after a short grace period once the last
- * subscriber unmounts.
+ * filters). All subscribers for the same conversation id + scope share one
+ * EventSource, then the stream auto-closes after a short grace period once
+ * the last subscriber unmounts.
  *
  * Heads-up: backend's API routes have no auth middleware, so we connect
  * with a bare URL — `EventSource` doesn't support custom headers anyway.
  */
-export function useSessionStream(
-  sessionId: string | null,
+export function useConversationStream(
+  conversationId: string | null,
   onEvent: Handler,
+  scope: StreamScope = 'channel',
 ): void {
   // Keep the latest handler in a ref so we don't tear down the EventSource
   // every time the parent re-renders with a new closure.
@@ -154,8 +184,9 @@ export function useSessionStream(
   handlerRef.current = onEvent;
 
   useEffect(() => {
-    if (!sessionId) return;
-    const entry = getOrCreateStream(sessionId);
+    if (!conversationId) return;
+    const key = streamKey(scope, conversationId);
+    const entry = getOrCreateStream(conversationId, scope);
     const handler: Handler = event => handlerRef.current(event);
     entry.handlers.add(handler);
 
@@ -164,14 +195,14 @@ export function useSessionStream(
     // subscriber to run its normal reconnect/snapshot reconciliation path.
     queueMicrotask(() => {
       if (entry.closed || !entry.handlers.has(handler)) return;
-      handler(syntheticConnectedEvent(sessionId));
+      handler(syntheticConnectedEvent(conversationId, scope));
     });
 
     return () => {
       entry.handlers.delete(handler);
       if (entry.handlers.size === 0) {
-        scheduleCloseStream(sessionId, entry);
+        scheduleCloseStream(key, entry);
       }
     };
-  }, [sessionId]);
+  }, [conversationId, scope]);
 }

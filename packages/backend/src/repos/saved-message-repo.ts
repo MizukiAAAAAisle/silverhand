@@ -15,7 +15,7 @@ function newId(): string {
 interface JoinedRow extends SavedMessageRow {
   // Message columns (prefixed in SELECT alias)
   m_id: string;
-  m_session_id: string;
+  m_conversation_id: string;
   m_from_kind: MessageRow['from_kind'];
   m_from_agent_id: string | null;
   m_from_user_id: string | null;
@@ -26,13 +26,14 @@ interface JoinedRow extends SavedMessageRow {
   m_task_number: number | null;
   m_task_status: TaskStatus | null;
   m_task_title: string | null;
-  m_task_channel_id: string | null;
+  m_task_workspace_id: string | null;
   m_task_assignee_agent_id: string | null;
   m_task_assignee_user_id: string | null;
   m_task_assignee_name: string | null;
-  // Channel + session + agent
-  channel_name: string;
-  session_title: string;
+  workspace_name: string;
+  conversation_title: string;
+  channel_id: string;
+  thread_id: string | null;
   agent_name: string | null;
 }
 
@@ -54,14 +55,16 @@ function rowToDto(row: JoinedRow): SavedMessageDto {
   return {
     id: row.id,
     saved_at: row.saved_at,
+    workspace_id: row.workspace_id!,
+    workspace_name: row.workspace_name,
+    conversation_id: row.conversation_id!,
+    conversation_title: row.conversation_title,
     channel_id: row.channel_id,
-    channel_name: row.channel_name,
-    session_id: row.session_id,
-    session_title: row.session_title,
+    thread_id: row.thread_id,
     agent_name: row.agent_name,
     message: {
       id: row.m_id,
-      session_id: row.m_session_id,
+      conversation_id: row.m_conversation_id,
       from_kind: row.m_from_kind,
       from_agent_id: row.m_from_agent_id,
       from_user_id: row.m_from_user_id,
@@ -74,7 +77,7 @@ function rowToDto(row: JoinedRow): SavedMessageDto {
       task_number: row.m_task_number,
       task_status: row.m_task_status,
       task_title: row.m_task_title,
-      task_channel_id: row.m_task_channel_id,
+      task_workspace_id: row.m_task_workspace_id,
       task_assignee: assignee,
     },
   };
@@ -84,11 +87,14 @@ const SELECT_JOINED = `
   SELECT
     sm.id              AS id,
     sm.message_id      AS message_id,
-    sm.session_id      AS session_id,
-    sm.channel_id      AS channel_id,
+    sm.conversation_id AS conversation_id,
+    CASE
+      WHEN root.kind = 'dm_channel' THEN root.id
+      ELSE sm.workspace_id
+    END                AS workspace_id,
     sm.saved_at        AS saved_at,
     m.id               AS m_id,
-    m.session_id       AS m_session_id,
+    m.conversation_id  AS m_conversation_id,
     m.from_kind        AS m_from_kind,
     m.from_agent_id    AS m_from_agent_id,
     m.from_user_id     AS m_from_user_id,
@@ -99,17 +105,29 @@ const SELECT_JOINED = `
     m.task_number             AS m_task_number,
     m.task_status             AS m_task_status,
     m.task_title              AS m_task_title,
-    m.task_channel_id         AS m_task_channel_id,
+    m.task_workspace_id       AS m_task_workspace_id,
     m.task_assignee_agent_id  AS m_task_assignee_agent_id,
     m.task_assignee_user_id   AS m_task_assignee_user_id,
     ta.display_name           AS m_task_assignee_name,
-    c.name             AS channel_name,
-    s.title            AS session_title,
+    CASE
+      WHEN root.kind = 'dm_channel' THEN root.title
+      ELSE w.name
+    END                AS workspace_name,
+    conv.title         AS conversation_title,
+    root.id            AS channel_id,
+    CASE
+      WHEN conv.kind = 'thread' THEN conv.id
+      ELSE NULL
+    END                AS thread_id,
     a.name             AS agent_name
   FROM saved_messages sm
   JOIN messages m ON m.id = sm.message_id
-  JOIN channels c ON c.id = sm.channel_id
-  JOIN sessions s ON s.id = sm.session_id
+  JOIN conversations conv ON conv.id = sm.conversation_id
+  JOIN workspaces w ON w.id = conv.workspace_id
+  JOIN conversations root ON root.id = CASE
+    WHEN conv.kind = 'thread' THEN conv.parent_conversation_id
+    ELSE conv.id
+  END
   LEFT JOIN agents a  ON a.id  = m.from_agent_id
   LEFT JOIN agents ta ON ta.id = m.task_assignee_agent_id
 `;
@@ -131,12 +149,21 @@ export class SavedMessageRepo {
   /** Returns the existing row when the message was already saved
    *  (UNIQUE(message_id) makes this idempotent on the client). */
   save(messageId: string): SavedMessageDto | null {
-    // Resolve session_id + channel_id from the message; INSERT OR IGNORE
-    // makes save() idempotent (returns the existing row on duplicate).
+    // Resolve canonical conversation/workspace from the message; INSERT OR
+    // IGNORE makes save() idempotent (returns the existing row on duplicate).
     const ctx = this.db
-      .prepare<[string], { session_id: string; channel_id: string }>(
-        `SELECT m.session_id AS session_id, s.channel_id AS channel_id
-         FROM messages m JOIN sessions s ON s.id = m.session_id
+      .prepare<
+        [string],
+        {
+          conversation_id: string;
+          workspace_id: string;
+        }
+      >(
+        `SELECT
+           m.conversation_id AS conversation_id,
+           conv.workspace_id AS workspace_id
+         FROM messages m
+         JOIN conversations conv ON conv.id = m.conversation_id
          WHERE m.id = ?`,
       )
       .get(messageId);
@@ -146,10 +173,16 @@ export class SavedMessageRepo {
     this.db
       .prepare(
         `INSERT OR IGNORE INTO saved_messages
-         (id, message_id, session_id, channel_id, saved_at)
+         (id, message_id, conversation_id, workspace_id, saved_at)
          VALUES (?, ?, ?, ?, ?)`,
       )
-      .run(id, messageId, ctx.session_id, ctx.channel_id, now);
+      .run(
+        id,
+        messageId,
+        ctx.conversation_id,
+        ctx.workspace_id,
+        now,
+      );
     return this.getByMessageId(messageId);
   }
 

@@ -1,4 +1,4 @@
-import type { AgentRuntimeSession } from '@silverhand/shared';
+import type { AgentRuntimeConversation } from '@silverhand/shared';
 import { AgentHeader } from './AgentHeader';
 import { AgentProfileCard } from './AgentProfileCard';
 import { AgentWorkspaceCard } from './AgentWorkspaceCard';
@@ -14,16 +14,16 @@ interface AgentViewProps {
   /** Called after a successful delete so the parent can navigate
    *  away (back to channels, typically). */
   onDeleted: () => void;
-  /** Click "Open" on a session row → switch the main view to that
-   *  channel/session. Optional: if not provided, the column is
+  /** Click "Open" on a conversation row → switch the main view to that
+   *  channel/thread. Optional: if not provided, the column is
    *  still shown but rows aren't actionable. */
-  onOpenSession?: (s: AgentRuntimeSession) => void;
+  onOpenConversation?: (s: AgentRuntimeConversation) => void;
 }
 
 export function AgentView({
   agentId,
   onDeleted,
-  onOpenSession,
+  onOpenConversation,
 }: AgentViewProps): JSX.Element {
   const agentQuery = useAgent(agentId);
   const workspaceQuery = useAgentWorkspace(agentId);
@@ -65,7 +65,7 @@ export function AgentView({
           </div>
           <AgentRuntimeTable
             state={runtimeQuery.data}
-            onOpenSession={onOpenSession}
+            onOpenConversation={onOpenConversation}
           />
         </div>
       </div>

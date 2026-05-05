@@ -4,6 +4,24 @@
 
 ---
 
+## 2026-05-06 — 架构文档同步 hard cutover 术语
+
+将 `docs/core-design.md`、`docs/app-layout.md`、`CLAUDE.md` 与 #79 hard cutover 代码改动对齐：
+
+- `core-design.md`：§3.4 chat-bridge 启动参数改为 `--conversation-id`，内部路由 `/internal/conversations/...`；§3.6 MCP 工具名全部换成最终名称（`spawn_child_session` → `create_thread`，`close_session` → `close_thread`，`child_session_id` → `thread_id`，`parent_channel_id` → `parent_conversation_id`）；日志/边角 case 文案同步。
+- `app-layout.md`：§7 Thread 节 API 返回 `thread_id`，`parent_conversation_id` 替代 `parent_channel_id`，`close_thread` 替代 `close_session`。
+- `CLAUDE.md`：产品描述改为"三层 Workspace → Channel → Thread"，日志文件名用 `conversationId`。
+
+---
+
+## 2026-05-05 — Workspace/Channel/Thread hard cutover 剩余工作梳理
+
+补充 `docs/workspace-channel-thread-hard-cutover.md`，明确当前 v11 只是 shadow schema：`workspaces/conversations` 已存在并可承载新语义，但 backend/runtime/frontend 仍有不少 legacy `channels/sessions` 读写路径。文档把彻底对齐所需的 DB v12 迁移、shared DTO/path cleanup、backend repo/route/ConversationManager 切换、frontend hook/query key 清理、MCP internal route 更新、测试矩阵和真实 DB 切换安全步骤列成 checklist。
+
+同时在 `CLAUDE.md` 的 authoritative docs 索引中挂上该文档，避免后续把当前 shadow 状态误认为已经完成全量切换。
+
+---
+
 ## 2026-05-04 — codex thread/resume "thread not found" 调查
 
 第三份 incident 文档：`docs/incident-2026-05-04-codex-thread-resume.md`。
@@ -1072,3 +1090,14 @@ URL scheme：
 
 - 只更新术语，不更改技术细节或实现逻辑。
 - 未接触：`docs/workspace-channel-thread-rename.md`（重命名计划文档本身）、`docs/progress.md`（此条之前的历史）、所有代码文件。
+
+---
+
+## 2026-05-05 — MCP system 文档化
+
+新增 `docs/mcp-system.md`，把当前 `mcp__chat__*` tool surface 固化成维护文档：
+
+- 核对来源：`packages/chat-bridge/src/server.ts`、`packages/chat-bridge/src/client.ts`、`packages/shared/src/api/dto.ts`、`packages/backend/src/routes.ts`。
+- 覆盖工具：`send_message`、`create_thread`、`close_thread`、`create_channel`、`list_tasks`、`create_tasks`、`claim_tasks`、`unclaim_task`、`update_task_status`。
+- 明确缺席工具：旧 `create_session` / `close_session`、history pull、memory/consensus、attachments。
+- 在 `CLAUDE.md` 增加维护约定：后续 MCP tool、schema、internal route、task 行为或 `platform-prompt.ts` 规则改动，必须同步 `docs/mcp-system.md`。

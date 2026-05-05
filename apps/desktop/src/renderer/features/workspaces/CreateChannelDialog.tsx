@@ -10,9 +10,8 @@ import {
 } from '@/components/ui/dialog';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { useChannelMembers } from '@/features/agents/hooks';
 import { AgentPicker } from './AgentPicker';
-import { useCreateChannel } from './hooks';
+import { useCreateChannel, useWorkspaceMembers } from './hooks';
 
 // Stable empty array so the useEffect dependency on `members` doesn't
 // create a new reference every render when the query hasn't resolved yet.
@@ -26,8 +25,6 @@ interface CreateChannelDialogProps {
    *  several places (agent strip, sub-channel affordances, member
    *  management). */
   workspaceKind: string | null;
-  parentChannelId?: string | null;
-  parentChannelTitle?: string | null;
   onCreated?: (id: string) => void;
 }
 
@@ -36,26 +33,20 @@ export function CreateChannelDialog({
   onOpenChange,
   workspaceId,
   workspaceKind,
-  parentChannelId,
-  parentChannelTitle,
   onCreated,
 }: CreateChannelDialogProps): JSX.Element {
   const [title, setTitle] = useState('');
-  const [contextSummary, setContextSummary] = useState('');
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const { data: members = EMPTY_AGENTS } = useChannelMembers(workspaceId);
+  const { data: members = EMPTY_AGENTS } = useWorkspaceMembers(workspaceId);
   const createChannel = useCreateChannel(workspaceId);
 
-  const isChild = !!parentChannelId;
   const isDm = workspaceKind === 'dm';
 
   // Default a fresh root channel to inheriting every workspace member.
   // The workspace itself is the membership pool; making the user re-pick
   // would be busywork. They can still drop members via the chip Xs.
-  // Child channels intentionally start empty — their value is a focused
-  // subset, so the user picks the contributors deliberately.
   //
   // Only seed once per "open" cycle so a re-fetch of `members` (e.g. a
   // background invalidation) doesn't clobber the user's deselections.
@@ -63,7 +54,6 @@ export function CreateChannelDialog({
   useEffect(() => {
     if (open) return;
     setTitle('');
-    setContextSummary('');
     setSelectedAgents([]);
     setError(null);
     seededOnceRef.current = false;
@@ -72,11 +62,11 @@ export function CreateChannelDialog({
   useEffect(() => {
     if (!open) return;
     if (seededOnceRef.current) return;
-    if (isChild || isDm) return;
+    if (isDm) return;
     if (members.length === 0) return; // wait for the query to land
     setSelectedAgents(members.map(m => m.id));
     seededOnceRef.current = true;
-  }, [open, isChild, isDm, members]);
+  }, [open, isDm, members]);
 
   const nameById = useMemo(() => {
     const m = new Map<string, string>();
@@ -91,18 +81,12 @@ export function CreateChannelDialog({
       setError('请填写 Channel 标题');
       return;
     }
-    if (isChild && !contextSummary.trim()) {
-      setError('Thread 需要填写上下文摘要');
-      return;
-    }
     // DM channels are always 1:1 — no member selection needed.
     const memberIds = isDm ? [] : selectedAgents;
     try {
       const channel = await createChannel.mutateAsync({
         title: title.trim(),
         member_agent_ids: memberIds,
-        parent_session_id: parentChannelId ?? undefined,
-        context_summary: isChild ? contextSummary.trim() : undefined,
       });
       onCreated?.(channel.id);
       onOpenChange(false);
@@ -115,13 +99,11 @@ export function CreateChannelDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{isChild ? '新建 Thread' : '新建 Channel'}</DialogTitle>
+          <DialogTitle>新建 Channel</DialogTitle>
           <DialogDescription>
-            {isChild
-              ? `从「${parentChannelTitle ?? 'parent'}」分支出独立讨论。Thread 拥有独立上下文。`
-              : isDm
-                ? `在 DM Workspace 里开一个新的 Channel 上下文。`
-                : '一个 Channel 是一组成员 agent 的协作空间，拥有独立上下文。'}
+            {isDm
+              ? `在 DM Workspace 里开一个新的 Channel 上下文。`
+              : '一个 Channel 是一组成员 agent 的协作空间，拥有独立上下文。'}
           </DialogDescription>
         </DialogHeader>
 
@@ -132,25 +114,10 @@ export function CreateChannelDialog({
               id="se-title"
               value={title}
               onChange={e => setTitle(e.target.value)}
-              placeholder={isChild ? '深入排查 login 502' : '修复 login bug'}
+              placeholder="修复 login bug"
               autoFocus
             />
           </div>
-
-          {isChild ? (
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="se-ctx">上下文摘要</Label>
-              <Input
-                id="se-ctx"
-                value={contextSummary}
-                onChange={e => setContextSummary(e.target.value)}
-                placeholder="父 Channel 里讨论到的 / Thread 需要知道的关键信息"
-              />
-              <span className="text-xs text-text-muted">
-                作为 Thread 第一条 system 消息发给成员。
-              </span>
-            </div>
-          ) : null}
 
           {isDm ? (
             <DmMemberHint />

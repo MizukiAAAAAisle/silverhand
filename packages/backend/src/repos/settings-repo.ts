@@ -5,7 +5,7 @@ import { RuntimeKindSchema, type RuntimeKind } from '@silverhand/shared';
  * `app_settings` is a flat key/value store for host-wide preferences.
  * Currently used for:
  *
- *   - `proxy_url` — when non-empty, SessionManager injects HTTP_PROXY /
+ *   - `proxy_url` — when non-empty, ConversationManager injects HTTP_PROXY /
  *     HTTPS_PROXY / ALL_PROXY (uppercase + lowercase) into every spawned
  *     agent process whose runtime is in the `proxy_runtimes` allowlist.
  *     Lets users with corporate firewalls / local proxies point per-runtime

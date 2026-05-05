@@ -47,8 +47,8 @@ function dbStatus(
       [string, string],
       { status: string; cli_session_id: string | null; pid: number | null }
     >(
-      `SELECT status, cli_session_id, pid FROM session_agents
-       WHERE session_id = ? AND agent_id = ?`,
+      `SELECT status, cli_session_id, pid FROM conversation_agents
+       WHERE conversation_id = ? AND agent_id = ?`,
     )
     .get(h.sessionId, h.agentId)!;
 }
@@ -61,7 +61,7 @@ function insertUserMessage(
 ): void {
   h.ctx.db
     .prepare(
-      `INSERT INTO messages (id, session_id, from_kind, from_agent_id,
+      `INSERT INTO messages (id, conversation_id, from_kind, from_agent_id,
           from_user_id, content, metadata, seq, created_at)
        VALUES (?, ?, 'user', NULL, NULL, ?, NULL, ?, ?)`,
     )
@@ -76,7 +76,7 @@ function insertSystemMessage(
 ): void {
   h.ctx.db
     .prepare(
-      `INSERT INTO messages (id, session_id, from_kind, from_agent_id,
+      `INSERT INTO messages (id, conversation_id, from_kind, from_agent_id,
           from_user_id, content, metadata, seq, created_at)
        VALUES (?, ?, 'system', NULL, NULL, ?, NULL, ?, ?)`,
     )
@@ -91,7 +91,7 @@ function insertAgentMessage(
 ): void {
   h.ctx.db
     .prepare(
-      `INSERT INTO messages (id, session_id, from_kind, from_agent_id,
+      `INSERT INTO messages (id, conversation_id, from_kind, from_agent_id,
           from_user_id, content, metadata, seq, created_at)
        VALUES (?, ?, 'agent', ?, NULL, ?, NULL, ?, ?)`,
     )
@@ -112,7 +112,7 @@ function feedParsedEvent(h: ManagerHarness, event: unknown): void {
   }).handleParsedEvent(handle, event);
 }
 
-describe('SessionManager.start', () => {
+describe('ConversationManager.start', () => {
   let h: ManagerHarness | null = null;
   afterEach(async () => {
     await h?.cleanup();
@@ -162,10 +162,10 @@ describe('SessionManager.start', () => {
     expect(starts).toBe(1);
   });
 
-  it('throws when session is closed', async () => {
+  it('throws when conversation is closed', async () => {
     h = await buildManagerHarness();
     h.ctx.db
-      .prepare(`UPDATE sessions SET closed_at = ? WHERE id = ?`)
+      .prepare(`UPDATE conversations SET closed_at = ? WHERE id = ?`)
       .run(Date.now(), h.sessionId);
     await expect(h.manager.start(h.sessionId, h.agentId)).rejects.toThrow(
       /closed/,
@@ -173,7 +173,7 @@ describe('SessionManager.start', () => {
   });
 });
 
-describe('SessionManager exit handling', () => {
+describe('ConversationManager exit handling', () => {
   let h: ManagerHarness | null = null;
   afterEach(async () => {
     await h?.cleanup();
@@ -204,7 +204,7 @@ describe('SessionManager exit handling', () => {
   });
 });
 
-describe('SessionManager.stop', () => {
+describe('ConversationManager.stop', () => {
   let h: ManagerHarness | null = null;
   afterEach(async () => {
     await h?.cleanup();
@@ -310,7 +310,7 @@ describe('SessionManager.stop', () => {
   });
 });
 
-describe('SessionManager.deliverMessage', () => {
+describe('ConversationManager.deliverMessage', () => {
   let h: ManagerHarness | null = null;
   afterEach(async () => {
     await h?.cleanup();
@@ -322,7 +322,7 @@ describe('SessionManager.deliverMessage', () => {
     // insert a message row to deliver
     const msg = h.ctx.db
       .prepare<[string, string, string, number], { id: string }>(
-        `INSERT INTO messages (id, session_id, from_kind, from_agent_id,
+        `INSERT INTO messages (id, conversation_id, from_kind, from_agent_id,
             from_user_id, content, metadata, seq, created_at)
          VALUES (?, ?, 'user', NULL, NULL, ?, NULL, 1, ?)
          RETURNING id`,
@@ -333,8 +333,8 @@ describe('SessionManager.deliverMessage', () => {
 
     const pending = h.ctx.db
       .prepare<[string, string], { c: number }>(
-        `SELECT COUNT(*) AS c FROM agent_inboxes
-         WHERE session_id = ? AND agent_id = ? AND delivered_at IS NULL`,
+        `SELECT COUNT(*) AS c FROM conversation_inboxes
+         WHERE conversation_id = ? AND agent_id = ? AND delivered_at IS NULL`,
       )
       .get(h.sessionId, h.agentId);
     expect(pending?.c).toBe(1);
@@ -347,7 +347,7 @@ describe('SessionManager.deliverMessage', () => {
 
     h.ctx.db
       .prepare(
-        `INSERT INTO messages (id, session_id, from_kind, from_agent_id,
+        `INSERT INTO messages (id, conversation_id, from_kind, from_agent_id,
             from_user_id, content, metadata, seq, created_at)
          VALUES (?, ?, 'user', NULL, NULL, ?, NULL, 1, ?)`,
       )
@@ -496,7 +496,7 @@ describe('SessionManager.deliverMessage', () => {
   });
 });
 
-describe('SessionManager agent run activity', () => {
+describe('ConversationManager agent run activity', () => {
   let h: ManagerHarness | null = null;
   afterEach(async () => {
     await h?.cleanup();
@@ -514,7 +514,7 @@ describe('SessionManager agent run activity', () => {
     const run = await thinking;
 
     expect(run.agentId).toBe(h.agentId);
-    expect(run.sessionId).toBe(h.sessionId);
+    expect(run.conversationId).toBe(h.sessionId);
     expect(typeof run.runId).toBe('string');
     expect(h.manager.getAgentRunStates(h.sessionId)).toHaveLength(1);
 
@@ -699,7 +699,7 @@ describe('SessionManager agent run activity', () => {
   });
 });
 
-describe('SessionManager inbox drain on init', () => {
+describe('ConversationManager inbox drain on init', () => {
   let h: ManagerHarness | null = null;
   afterEach(async () => {
     await h?.cleanup();
@@ -715,14 +715,14 @@ describe('SessionManager inbox drain on init', () => {
       seq++;
       h.ctx.db
         .prepare(
-          `INSERT INTO messages (id, session_id, from_kind, from_agent_id,
+          `INSERT INTO messages (id, conversation_id, from_kind, from_agent_id,
               from_user_id, content, metadata, seq, created_at)
            VALUES (?, ?, 'user', NULL, NULL, ?, NULL, ?, ?)`,
         )
         .run(id, h.sessionId, `queued-${id}`, seq, Date.now());
       h.ctx.db
         .prepare(
-          `INSERT INTO agent_inboxes (session_id, agent_id, message_id,
+          `INSERT INTO conversation_inboxes (conversation_id, agent_id, message_id,
               delivered_at, created_at)
            VALUES (?, ?, ?, NULL, ?)`,
         )
@@ -749,28 +749,28 @@ describe('SessionManager inbox drain on init', () => {
     // Both inbox rows are now delivered_at = some timestamp
     const remaining = h.ctx.db
       .prepare<[string, string], { c: number }>(
-        `SELECT COUNT(*) AS c FROM agent_inboxes
-         WHERE session_id = ? AND agent_id = ? AND delivered_at IS NULL`,
+        `SELECT COUNT(*) AS c FROM conversation_inboxes
+         WHERE conversation_id = ? AND agent_id = ? AND delivered_at IS NULL`,
       )
       .get(h.sessionId, h.agentId);
     expect(remaining?.c).toBe(0);
   });
 });
 
-describe('SessionManager.reconcileOnBoot', () => {
+describe('ConversationManager.reconcileOnBoot', () => {
   let h: ManagerHarness | null = null;
   afterEach(async () => {
     await h?.cleanup();
     h = null;
   });
 
-  it('flips orphaned starting/active session_agents rows back to idle (preserves cli_session_id)', async () => {
+  it('flips orphaned starting/active conversation_agents rows back to idle (preserves cli_session_id)', async () => {
     h = await buildManagerHarness();
     h.ctx.db
       .prepare(
-        `UPDATE session_agents
+        `UPDATE conversation_agents
          SET status = 'active', pid = 99999, cli_session_id = 'cli-stale'
-         WHERE session_id = ? AND agent_id = ?`,
+         WHERE conversation_id = ? AND agent_id = ?`,
       )
       .run(h.sessionId, h.agentId);
 
@@ -816,8 +816,8 @@ describe('SessionManager.reconcileOnBoot', () => {
 
     h.ctx.db
       .prepare(
-        `UPDATE session_agents SET status = 'starting', pid = ?
-         WHERE session_id = ? AND agent_id = ?`,
+        `UPDATE conversation_agents SET status = 'starting', pid = ?
+         WHERE conversation_id = ? AND agent_id = ?`,
       )
       .run(orphanPid, h.sessionId, h.agentId);
 
@@ -833,8 +833,8 @@ describe('SessionManager.reconcileOnBoot', () => {
     h = await buildManagerHarness();
     h.ctx.db
       .prepare(
-        `UPDATE session_agents SET status = 'starting', pid = 999999
-         WHERE session_id = ? AND agent_id = ?`,
+        `UPDATE conversation_agents SET status = 'starting', pid = 999999
+         WHERE conversation_id = ? AND agent_id = ?`,
       )
       .run(h.sessionId, h.agentId);
     // Should NOT throw on ESRCH from the probe.
@@ -845,7 +845,7 @@ describe('SessionManager.reconcileOnBoot', () => {
   });
 });
 
-describe('SessionManager init watchdog', () => {
+describe('ConversationManager init watchdog', () => {
   let h: ManagerHarness | null = null;
   afterEach(async () => {
     await h?.cleanup();
@@ -928,8 +928,8 @@ describe('SessionManager init watchdog', () => {
     h = await buildManagerHarness();
     h.ctx.db
       .prepare(
-        `UPDATE session_agents SET cli_session_id = ?
-         WHERE session_id = ? AND agent_id = ?`,
+        `UPDATE conversation_agents SET cli_session_id = ?
+         WHERE conversation_id = ? AND agent_id = ?`,
       )
       .run('cli-resumed-1', h.sessionId, h.agentId);
     // Mock emits an init with the SAME id the resumed CLI would.
@@ -951,8 +951,8 @@ describe('SessionManager init watchdog', () => {
     h = await buildManagerHarness();
     h.ctx.db
       .prepare(
-        `UPDATE session_agents SET cli_session_id = ?
-         WHERE session_id = ? AND agent_id = ?`,
+        `UPDATE conversation_agents SET cli_session_id = ?
+         WHERE conversation_id = ? AND agent_id = ?`,
       )
       .run('cli-resumed-2', h.sessionId, h.agentId);
     h.setMockEnv({ MOCK_CLAUDE_NO_INIT: '1' });
@@ -968,7 +968,7 @@ describe('SessionManager init watchdog', () => {
   });
 });
 
-describe('SessionManager activity log', () => {
+describe('ConversationManager activity log', () => {
   let h: ManagerHarness | null = null;
   let logDir: string;
 
@@ -986,14 +986,14 @@ describe('SessionManager activity log', () => {
     const msgId = 'actlog-test-msg-1';
     h.ctx.db
       .prepare(
-        `INSERT INTO messages (id, session_id, from_kind, from_agent_id,
+        `INSERT INTO messages (id, conversation_id, from_kind, from_agent_id,
             from_user_id, content, metadata, seq, created_at)
          VALUES (?, ?, 'user', NULL, NULL, ?, NULL, 1, ?)`,
       )
       .run(msgId, h.sessionId, 'hello', Date.now());
     h.ctx.db
       .prepare(
-        `INSERT INTO agent_inboxes (session_id, agent_id, message_id,
+        `INSERT INTO conversation_inboxes (conversation_id, agent_id, message_id,
             delivered_at, created_at)
          VALUES (?, ?, ?, NULL, ?)`,
       )
@@ -1026,7 +1026,7 @@ describe('SessionManager activity log', () => {
       (l: any) => l.status === 'idle' && l.terminalReason !== undefined,
     );
     expect(terminal).toBeDefined();
-    expect(terminal.sessionId).toBe(h.sessionId);
+    expect(terminal.conversationId).toBe(h.sessionId);
     expect(terminal.agentId).toBe(h.agentId);
     expect(typeof terminal.runId).toBe('string');
     expect(typeof terminal.lastActivityAt).toBe('number');

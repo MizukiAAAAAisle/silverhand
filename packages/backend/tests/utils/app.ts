@@ -7,34 +7,35 @@ import type {
 } from '@silverhand/shared';
 import type { BackendContext, BackendLogger } from '../../src/context.js';
 import { silverhandCors } from '../../src/cors.js';
-import { SessionEventBus } from '../../src/event-bus.js';
+import { ConversationEventBus } from '../../src/event-bus.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { createApiRouter, createInternalRouter } from '../../src/routes.js';
-import type { SessionManager } from '../../src/session-manager.js';
+import type { ConversationManager } from '../../src/conversation-manager.js';
+import { createLocalBlobFileStorage } from '../../src/storage/blob-file-storage.js';
 import { makeTempSilverhandDir, openTestDb } from './db.js';
 
 /**
- * Records every call routes / provision make into SessionManager. Routes
+ * Records every call routes / provision make into ConversationManager. Routes
  * use `.start`, `.stop`, `.deliverMessage`, `.stopAll`, `.reconcileOnBoot`,
  * `.isRunning` — none of which can be allowed to spawn real CLIs in tests.
  */
-export class FakeSessionManager {
-  starts: Array<{ sessionId: string; agentId: string }> = [];
+export class FakeConversationManager {
+  starts: Array<{ conversationId: string; agentId: string }> = [];
   stops: Array<{
-    sessionId: string;
+    conversationId: string;
     agentId: string;
     mode: 'soft' | 'hard';
     directive?: string;
   }> = [];
-  delivered: Array<{ sessionId: string; agentId: string; messageId: string }> = [];
+  delivered: Array<{ conversationId: string; agentId: string; messageId: string }> = [];
   agentRunStates: AgentRunState[] = [];
   resolvedRuns: Array<{
-    sessionId: string;
+    conversationId: string;
     agentId: string;
     reason: AgentRunTerminalReason;
     runId?: string;
   }> = [];
-  resolvedSessions: Array<{ sessionId: string; reason: AgentRunTerminalReason }> = [];
+  resolvedConversations: Array<{ conversationId: string; reason: AgentRunTerminalReason }> = [];
   stoppedAll = 0;
   reconciled = 0;
 
@@ -47,44 +48,44 @@ export class FakeSessionManager {
   isRunning(): boolean {
     return false;
   }
-  getAgentRunStates(sessionId: string): AgentRunState[] {
-    return this.agentRunStates.filter(s => s.sessionId === sessionId);
+  getAgentRunStates(conversationId: string): AgentRunState[] {
+    return this.agentRunStates.filter(s => s.conversationId === conversationId);
   }
   resolveRun(
-    sessionId: string,
+    conversationId: string,
     agentId: string,
     reason: AgentRunTerminalReason,
     runId?: string,
   ): void {
-    this.resolvedRuns.push({ sessionId, agentId, reason, runId });
+    this.resolvedRuns.push({ conversationId, agentId, reason, runId });
   }
-  resolveSessionRuns(
-    sessionId: string,
-    reason: AgentRunTerminalReason = 'session_closed',
+  resolveConversationRuns(
+    conversationId: string,
+    reason: AgentRunTerminalReason = 'conversation_closed',
   ): void {
-    this.resolvedSessions.push({ sessionId, reason });
+    this.resolvedConversations.push({ conversationId, reason });
   }
-  async start(sessionId: string, agentId: string): Promise<void> {
+  async start(conversationId: string, agentId: string): Promise<void> {
     if (this.startError) throw this.startError;
-    this.starts.push({ sessionId, agentId });
+    this.starts.push({ conversationId, agentId });
   }
   async stop(
-    sessionId: string,
+    conversationId: string,
     agentId: string,
     mode: 'soft' | 'hard' = 'hard',
     directive?: string,
   ): Promise<void> {
-    this.stops.push({ sessionId, agentId, mode, directive });
+    this.stops.push({ conversationId, agentId, mode, directive });
   }
   async stopAll(): Promise<void> {
     this.stoppedAll++;
   }
   async deliverMessage(
-    sessionId: string,
+    conversationId: string,
     agentId: string,
     messageId: string,
   ): Promise<void> {
-    this.delivered.push({ sessionId, agentId, messageId });
+    this.delivered.push({ conversationId, agentId, messageId });
   }
 }
 
@@ -97,14 +98,14 @@ const silentLogger: BackendLogger = {
 export interface TestApp {
   app: Hono;
   ctx: BackendContext;
-  fake: FakeSessionManager;
+  fake: FakeConversationManager;
   authToken: string;
   cleanup: () => void;
 }
 
 /**
  * Build a Hono app + BackendContext suitable for in-process testing
- * (`app.fetch(req)`). No port is opened. SessionManager is a fake — the
+ * (`app.fetch(req)`). No port is opened. ConversationManager is a fake — the
  * real one would try to spawn agent CLI subprocesses on every channel
  * provision, which we don't want in unit tests.
  */
@@ -114,7 +115,7 @@ export function buildTestApp(): TestApp {
   // The real `startBackend` mkdirs workspacesRoot before mounting routes.
   mkdirSync(tmp.workspacesRoot, { recursive: true });
 
-  const fake = new FakeSessionManager();
+  const fake = new FakeConversationManager();
   const authToken = 'a'.repeat(32);
   const serverConfig: ServerConfig = {
     mode: 'embedded',
@@ -135,10 +136,11 @@ export function buildTestApp(): TestApp {
     logger: silentLogger,
     silverhandDir: tmp.silverhandDir,
     workspacesRoot: tmp.workspacesRoot,
+    blobStorage: createLocalBlobFileStorage({ silverhandDir: tmp.silverhandDir }),
     lastSpawnAtByAgent: new Map(),
-    events: new SessionEventBus(),
+    events: new ConversationEventBus(),
     chatBridgeLauncher: { command: 'noop', args: [] },
-    sessionManager: fake as unknown as SessionManager,
+    conversationManager: fake as unknown as ConversationManager,
   };
 
   // routes.ts calls hosts.ensureLocal() at construction; openTestDb() does

@@ -5,29 +5,30 @@ import { cn } from '@/lib/cn';
 import { useTasks, useUpdateTaskStatus } from '@/features/tasks/hooks';
 
 /**
- * Channel-wide tasks panel — a floating right-side drawer that overlays
+ * Workspace-wide tasks panel — a floating right-side drawer that overlays
  * the main layout without displacing it. Width is user-adjustable via a
  * drag handle on the left edge and persisted in localStorage.
  *
- * Content is identical to `ChannelTasksDialog`: four-column kanban,
- * session strip, and card → jump navigation.
+ * Content is a four-column kanban with a conversation filter strip and
+ * card → jump navigation.
  */
-export interface ChannelTasksDrawerProps {
+export interface WorkspaceTasksDrawerProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  channelId: string;
-  channelName: string | null;
-  sessions: Array<{
+  workspaceId: string;
+  workspaceName: string | null;
+  conversations: Array<{
     id: string;
     title: string;
     closed_at: number | null;
     created_at: number;
   }>;
-  /** Initially-selected session for the filter. null → All sessions. */
-  defaultSessionId: string | null;
+  /** Initially-selected conversation for the filter. null → all conversations. */
+  defaultConversationId: string | null;
   onJumpToMessage?: (params: {
     workspaceId?: string;
     channelId: string;
+    threadId?: string | null;
     messageId: string;
   }) => void;
 }
@@ -93,24 +94,24 @@ function useDrawerWidth() {
 
 // ── Main component ───────────────────────────────────────────────────
 
-export function ChannelTasksDrawer({
+export function WorkspaceTasksDrawer({
   open,
   onOpenChange,
-  channelId,
-  channelName,
-  sessions,
-  defaultSessionId,
+  workspaceId,
+  workspaceName,
+  conversations,
+  defaultConversationId,
   onJumpToMessage,
-}: ChannelTasksDrawerProps): JSX.Element {
+}: WorkspaceTasksDrawerProps): JSX.Element {
   const { width: drawerWidth, startResize } = useDrawerWidth();
 
-  const [sessionFilter, setSessionFilter] = useState<string | null>(
-    defaultSessionId,
+  const [conversationFilter, setConversationFilter] = useState<string | null>(
+    defaultConversationId,
   );
-  // Re-sync to the active session every time the drawer opens.
+  // Re-sync to the active conversation every time the drawer opens.
   useEffect(() => {
-    if (open) setSessionFilter(defaultSessionId);
-  }, [open, defaultSessionId]);
+    if (open) setConversationFilter(defaultConversationId);
+  }, [open, defaultConversationId]);
 
   const closeDrawer = useCallback(
     (event?: React.SyntheticEvent): void => {
@@ -132,24 +133,25 @@ export function ChannelTasksDrawer({
   }, [open, closeDrawer]);
 
   const { data: tasks = [], isLoading } = useTasks(
-    sessionFilter
-      ? { session_id: sessionFilter }
-      : { channel_id: channelId },
+    conversationFilter
+      ? { conversation_id: conversationFilter }
+      : { workspace_id: workspaceId },
   );
   const updateStatus = useUpdateTaskStatus();
 
-  // All sessions sorted newest-first — no cap so every session is reachable.
-  const stripSessions = useMemo(
-    () => [...sessions].sort((a, b) => b.created_at - a.created_at),
-    [sessions],
+  // All conversations sorted newest-first — no cap so every conversation is reachable.
+  const stripConversations = useMemo(
+    () => [...conversations].sort((a, b) => b.created_at - a.created_at),
+    [conversations],
   );
 
   const grouped = groupByStatus(tasks);
 
   const handleCardClick = (t: TaskSummaryDto): void => {
     onJumpToMessage?.({
-      workspaceId: t.channel_id,
-      channelId: t.session.id,
+      workspaceId: t.workspace_id,
+      channelId: t.channel_id,
+      threadId: t.thread_id,
       messageId: t.message_id,
     });
     onOpenChange(false);
@@ -211,9 +213,9 @@ export function ChannelTasksDrawer({
           <div className="flex shrink-0 items-center gap-3 border-b border-border-subtle px-4 py-3">
             <span className="font-serif text-base font-semibold text-text-primary">
               Tasks
-              {channelName ? (
+              {workspaceName ? (
                 <span className="ml-2 text-sm font-normal text-text-muted">
-                  · #{channelName}
+                  · #{workspaceName}
                 </span>
               ) : null}
             </span>
@@ -228,12 +230,12 @@ export function ChannelTasksDrawer({
             </button>
           </div>
 
-          {/* Session filter strip */}
+          {/* Conversation filter strip */}
           <div className="shrink-0 border-b border-border-subtle px-4 py-2">
-            <SessionStrip
-              value={sessionFilter}
-              sessions={stripSessions}
-              onChange={setSessionFilter}
+            <ConversationStrip
+              value={conversationFilter}
+              conversations={stripConversations}
+              onChange={setConversationFilter}
             />
           </div>
 
@@ -279,38 +281,38 @@ function groupByStatus(
   return out;
 }
 
-// ── Session strip ────────────────────────────────────────────────────
+// ── Conversation strip ───────────────────────────────────────────────
 
-function SessionStrip({
+function ConversationStrip({
   value,
-  sessions,
+  conversations,
   onChange,
 }: {
   value: string | null;
-  sessions: Array<{ id: string; title: string; closed_at: number | null }>;
+  conversations: Array<{ id: string; title: string; closed_at: number | null }>;
   onChange: (id: string | null) => void;
 }): JSX.Element {
   return (
     <div className="flex flex-wrap items-center gap-1">
-      <SessionChip selected={value === null} onClick={() => onChange(null)}>
+      <ConversationChip selected={value === null} onClick={() => onChange(null)}>
         All
-      </SessionChip>
-      {sessions.map(s => (
-        <SessionChip
-          key={s.id}
-          selected={value === s.id}
-          dim={s.closed_at !== null}
-          onClick={() => onChange(s.id)}
-          title={s.title}
+      </ConversationChip>
+      {conversations.map(c => (
+        <ConversationChip
+          key={c.id}
+          selected={value === c.id}
+          dim={c.closed_at !== null}
+          onClick={() => onChange(c.id)}
+          title={c.title}
         >
-          {s.title}
-        </SessionChip>
+          {c.title}
+        </ConversationChip>
       ))}
     </div>
   );
 }
 
-function SessionChip({
+function ConversationChip({
   selected,
   dim = false,
   onClick,
@@ -430,7 +432,7 @@ function TaskCard({
         <span className="block min-w-0 break-words text-xs text-text-primary">
           {task.title}
         </span>
-        {/* Row 3: assignee + session */}
+        {/* Row 3: assignee + conversation */}
         <div className="mt-1 flex items-center gap-1.5 text-[10px] text-text-muted">
           {task.assignee ? (
             <span>@{task.assignee.name}</span>
@@ -439,9 +441,9 @@ function TaskCard({
           )}
           <span
             className="ml-auto max-w-[80px] truncate"
-            title={task.session.title}
+            title={task.conversation.title}
           >
-            {task.session.title}
+            {task.conversation.title}
           </span>
         </div>
       </button>

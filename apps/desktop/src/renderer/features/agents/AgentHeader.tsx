@@ -23,7 +23,7 @@ export function AgentHeader({
 }: AgentHeaderProps): JSX.Element {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const stopAgent = useStopAgent(agent.id);
-  const running = (runtimeState?.session_agents ?? []).filter(
+  const running = (runtimeState?.conversation_agents ?? []).filter(
     s => s.status === 'starting' || s.status === 'active',
   );
   const runningCount = running.length;
@@ -53,8 +53,8 @@ export function AgentHeader({
         </div>
         <div className="mt-1 text-xs text-text-secondary">
           {runningCount === 0
-            ? 'Idle in every session'
-            : `${runningCount} running session${runningCount === 1 ? '' : 's'}`}
+            ? 'Idle in every conversation'
+            : `${runningCount} running conversation${runningCount === 1 ? '' : 's'}`}
         </div>
       </div>
 
@@ -67,7 +67,7 @@ export function AgentHeader({
           title={
             runningCount === 0
               ? 'Nothing is running'
-              : `Hard-stop ${runningCount} running session${runningCount === 1 ? '' : 's'}`
+              : `Hard-stop ${runningCount} running conversation${runningCount === 1 ? '' : 's'}`
           }
         >
           <Power className="size-3.5" />

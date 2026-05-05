@@ -13,10 +13,10 @@ interface AgentPickerProps {
 }
 
 /**
- * Shared channel/session agent picker: selected agents render as
+ * Shared channel/conversation agent picker: selected agents render as
  * removable chips, while the Select only offers not-yet-selected agents.
  * The caller owns filtering the candidate pool (all agents for channel
- * creation, channel members for session creation).
+ * creation, channel members for conversation creation).
  */
 export function AgentPicker({
   candidates,

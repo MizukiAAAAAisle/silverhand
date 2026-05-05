@@ -6,31 +6,28 @@ export type RuntimeKind = z.infer<typeof RuntimeKindSchema>;
 export const HostKindSchema = z.enum(['local', 'remote']);
 export type HostKind = z.infer<typeof HostKindSchema>;
 
-export const ChannelKindSchema = z.enum(['regular', 'dm']);
-export type ChannelKind = z.infer<typeof ChannelKindSchema>;
-
 export const WorkspaceKindSchema = z.enum(['regular', 'system_dm']);
 export type WorkspaceKind = z.infer<typeof WorkspaceKindSchema>;
 
 export const ConversationKindSchema = z.enum(['channel', 'dm_channel', 'thread']);
 export type ConversationKind = z.infer<typeof ConversationKindSchema>;
 
-export const SessionStatusSchema = z.enum([
+export const ConversationStatusSchema = z.enum([
   'starting',
   'active',
   'idle',
   'archived',
   'crashed',
 ]);
-export type SessionStatus = z.infer<typeof SessionStatusSchema>;
+export type ConversationStatus = z.infer<typeof ConversationStatusSchema>;
 
-export const SessionAgentStatusSchema = z.enum([
+export const ConversationAgentStatusSchema = z.enum([
   'idle',
   'starting',
   'active',
   'crashed',
 ]);
-export type SessionAgentStatus = z.infer<typeof SessionAgentStatusSchema>;
+export type ConversationAgentStatus = z.infer<typeof ConversationAgentStatusSchema>;
 
 export const FromKindSchema = z.enum(['user', 'agent', 'system']);
 export type FromKind = z.infer<typeof FromKindSchema>;
@@ -46,7 +43,7 @@ export type TaskStatus = z.infer<typeof TaskStatusSchema>;
 export const TaskAssigneeTypeSchema = z.enum(['agent', 'user']);
 export type TaskAssigneeType = z.infer<typeof TaskAssigneeTypeSchema>;
 
-export const SessionEventKindSchema = z.enum([
+export const ConversationEventKindSchema = z.enum([
   'session_init',
   'tool_call',
   'tool_output',
@@ -57,7 +54,7 @@ export const SessionEventKindSchema = z.enum([
   'compaction_finished',
   'turn_end',
 ]);
-export type SessionEventKind = z.infer<typeof SessionEventKindSchema>;
+export type ConversationEventKind = z.infer<typeof ConversationEventKindSchema>;
 
 export interface HostRow {
   id: string;
@@ -79,25 +76,6 @@ export interface AgentRow {
   updated_at: number;
 }
 
-export interface ChannelRow {
-  id: string;
-  name: string;
-  description: string | null;
-  kind: ChannelKind;
-  workspace_path: string;
-  workspace_host_id: string;
-  dm_agent_id: string | null;
-  archived_at: number | null;
-  created_at: number;
-  updated_at: number;
-}
-
-export interface ChannelMemberRow {
-  channel_id: string;
-  agent_id: string;
-  joined_at: number;
-}
-
 export interface WorkspaceRow {
   id: string;
   name: string;
@@ -116,20 +94,6 @@ export interface WorkspaceMemberRow {
   joined_at: number;
 }
 
-export interface SessionRow {
-  id: string;
-  channel_id: string;
-  title: string;
-  status: SessionStatus;
-  parent_session_id: string | null;
-  spawned_by_agent_id: string | null;
-  closed_at: number | null;
-  close_summary: string | null;
-  pinned_at: number | null;
-  created_at: number;
-  updated_at: number;
-}
-
 export interface ConversationRow {
   id: string;
   workspace_id: string;
@@ -137,7 +101,7 @@ export interface ConversationRow {
   kind: ConversationKind;
   parent_conversation_id: string | null;
   title: string;
-  status: SessionStatus;
+  status: ConversationStatus;
   spawned_by_agent_id: string | null;
   closed_at: number | null;
   close_summary: string | null;
@@ -146,28 +110,18 @@ export interface ConversationRow {
   updated_at: number;
 }
 
-export interface SessionAgentRow {
-  session_id: string;
-  agent_id: string;
-  cli_session_id: string | null;
-  pid: number | null;
-  status: SessionAgentStatus;
-  joined_at: number;
-}
-
 export interface ConversationAgentRow {
   conversation_id: string;
   agent_id: string;
   cli_session_id: string | null;
   pid: number | null;
-  status: SessionAgentStatus;
+  status: ConversationAgentStatus;
   joined_at: number;
 }
 
 export interface MessageRow {
   id: string;
-  session_id: string;
-  conversation_id: string | null;
+  conversation_id: string;
   from_kind: FromKind;
   from_agent_id: string | null;
   from_user_id: string | null;
@@ -180,15 +134,7 @@ export interface MessageRow {
   task_assignee_agent_id: string | null;
   task_assignee_user_id: string | null;
   task_title: string | null;
-  task_channel_id: string | null;
   task_workspace_id: string | null;
-}
-
-export interface SessionReadRow {
-  user_id: string;
-  session_id: string;
-  last_read_seq: number;
-  read_at: number;
 }
 
 export interface ConversationReadRow {
@@ -200,8 +146,7 @@ export interface ConversationReadRow {
 
 export interface AgentInboxRow {
   id: number;
-  session_id: string;
-  conversation_id: string | null;
+  conversation_id: string;
   agent_id: string;
   message_id: string;
   delivered_at: number | null;
@@ -210,10 +155,9 @@ export interface AgentInboxRow {
 
 export interface SessionEventRow {
   id: number;
-  session_id: string;
-  conversation_id: string | null;
+  conversation_id: string;
   agent_id: string | null;
-  kind: SessionEventKind;
+  kind: ConversationEventKind;
   payload: string | null;
   created_at: number;
 }
@@ -221,17 +165,15 @@ export interface SessionEventRow {
 export interface SavedMessageRow {
   id: string;
   message_id: string;
-  session_id: string;
-  conversation_id: string | null;
-  channel_id: string;
-  workspace_id: string | null;
+  conversation_id: string;
+  workspace_id: string;
   saved_at: number;
 }
 
 export const NotificationKindSchema = z.enum([
   'mention_external',
   /** An agent failed to start before its process was even spawned
-   *  (e.g. runtime binary not on PATH). Inserted by SessionManager. */
+   *  (e.g. runtime binary not on PATH). Inserted by ConversationManager. */
   'agent_start_failed',
 ]);
 export type NotificationKind = z.infer<typeof NotificationKindSchema>;
@@ -243,16 +185,15 @@ export interface NotificationRow {
   user_id: string | null;
   /** The agent the notification is *about* (e.g. mentioned agent). */
   agent_id: string | null;
-  /** Where the notification "lives" — for mention_external this is
-   *  the recipient agent's DM channel. */
-  channel_id: string | null;
-  /** Session where the notification's CC message lives. */
-  session_id: string | null;
+  /** Sidebar/workspace scope where the notification lives. */
+  workspace_id: string | null;
+  /** Conversation where the notification's message lives. */
+  conversation_id: string | null;
   /** The CC message itself. */
   message_id: string | null;
   /** Origin pointers (where the user actually typed the mention). */
-  source_channel_id: string | null;
-  source_session_id: string | null;
+  source_workspace_id: string | null;
+  source_conversation_id: string | null;
   source_message_id: string | null;
   /** JSON; kind-specific extra fields. */
   payload: string | null;

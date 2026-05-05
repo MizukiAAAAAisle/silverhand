@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { AUTH_TOKEN_ENV } from '@silverhand/shared';
 
 const ArgsSchema = z.object({
-  sessionId: z.string().min(1),
+  conversationId: z.string().min(1),
   agentId: z.string().min(1),
   serverUrl: z.string().url(),
   runtime: z.string().default('claude'),
@@ -27,7 +27,7 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
   }
 
   return ArgsSchema.parse({
-    sessionId: map['session-id'],
+    conversationId: map['conversation-id'],
     agentId: map['agent-id'],
     serverUrl: map['server-url'],
     runtime: map['runtime'] ?? 'claude',

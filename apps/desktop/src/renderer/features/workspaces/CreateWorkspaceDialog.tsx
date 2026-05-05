@@ -54,8 +54,8 @@ export function CreateWorkspaceDialog({
         member_agent_ids: selectedAgents,
       });
       onCreated?.({
-        workspaceId: res.channel.id,
-        channelId: res.onboarding_session_id,
+        workspaceId: res.workspace.id,
+        channelId: res.onboarding_channel_id,
       });
       reset();
       onOpenChange(false);

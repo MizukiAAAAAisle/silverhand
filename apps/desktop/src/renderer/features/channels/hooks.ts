@@ -8,10 +8,10 @@ import {
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import type {
   AgentRunStatesDto,
+  ConversationAgentDto,
+  ConversationMessagesDto,
   MessageDto,
-  SessionMessagesDto,
-  SessionAgentDto,
-  SessionDto,
+  TaskChangedEvent,
 } from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
 import { api } from '@/lib/api';
@@ -21,21 +21,25 @@ import {
   agentRunStatesKey,
   reconcileAgentRunStateSnapshot,
 } from '@/lib/agentRunStateCache';
-import { useSessionStream, type SessionStreamEvent } from '@/hooks/useSessionStream';
+import {
+  useConversationStream,
+  type ConversationStreamEvent,
+} from '@/hooks/useConversationStream';
 
 const messagesKey = (cid: string) => ['channels', cid, 'messages'] as const;
 const agentsKey = (cid: string) => ['channels', cid, 'agents'] as const;
-const MESSAGE_PAGE_LIMIT = 200;
+const MESSAGE_PAGE_LIMIT = 100;
+type ConversationRouteKind = 'channel' | 'thread';
 
-type MessagesCache = InfiniteData<SessionMessagesDto, number | undefined>;
+type MessagesCache = InfiniteData<ConversationMessagesDto, number | undefined>;
 
-type SessionAgentStatusPatch = Pick<SessionAgentDto, 'agent_id'> &
-  Partial<Pick<SessionAgentDto, 'status' | 'pid' | 'cli_session_id'>>;
+type ConversationAgentStatusPatch = Pick<ConversationAgentDto, 'agent_id'> &
+  Partial<Pick<ConversationAgentDto, 'status' | 'pid' | 'cli_session_id'>>;
 
 function applySessionAgentPatch(
-  agent: SessionAgentDto,
-  patch: SessionAgentStatusPatch,
-): SessionAgentDto {
+  agent: ConversationAgentDto,
+  patch: ConversationAgentStatusPatch,
+): ConversationAgentDto {
   if (agent.agent_id !== patch.agent_id) return agent;
   return {
     ...agent,
@@ -48,9 +52,9 @@ function applySessionAgentPatch(
 }
 
 function applyPendingSessionAgentPatches(
-  agents: SessionAgentDto[],
-  pending: Map<string, SessionAgentStatusPatch>,
-): SessionAgentDto[] {
+  agents: ConversationAgentDto[],
+  pending: Map<string, ConversationAgentStatusPatch>,
+): ConversationAgentDto[] {
   if (pending.size === 0) return agents;
   return agents.map(agent => {
     const patch = pending.get(agent.agent_id);
@@ -59,7 +63,7 @@ function applyPendingSessionAgentPatches(
 }
 
 function makeMessagesCache(
-  page: SessionMessagesDto,
+  page: ConversationMessagesDto,
   pageParam: number | undefined = undefined,
 ): MessagesCache {
   return { pages: [page], pageParams: [pageParam] };
@@ -128,13 +132,42 @@ function replacePendingMessageInCache(
   return appendMessageToCache(withoutTempAndDuplicate, msg);
 }
 
+function applyTaskChangedToCache(
+  data: MessagesCache | undefined,
+  task: TaskChangedEvent,
+): MessagesCache | undefined {
+  if (!data) return data;
+  let changed = false;
+  const pages = data.pages.map(page => {
+    let pageChanged = false;
+    const messages = page.messages.map(message => {
+      if (message.id !== task.message_id) return message;
+      changed = true;
+      pageChanged = true;
+      return {
+        ...message,
+        task_number: task.task_number,
+        task_status: task.status,
+        task_title: task.title,
+        task_workspace_id: task.workspace_id,
+        task_assignee: task.assignee,
+      };
+    });
+    return pageChanged ? { ...page, messages } : page;
+  });
+  return changed ? { ...data, pages } : data;
+}
+
 /** Initial latest-window GET + previous-page fetch + live append on SSE. */
-export function useChannelMessages(channelId: string | null) {
+export function useChannelMessages(
+  channelId: string | null,
+  routeKind: ConversationRouteKind = 'channel',
+) {
   const qc = useQueryClient();
   const query = useInfiniteQuery<
-    SessionMessagesDto,
+    ConversationMessagesDto,
     Error,
-    InfiniteData<SessionMessagesDto, number | undefined>,
+    InfiniteData<ConversationMessagesDto, number | undefined>,
     ReturnType<typeof messagesKey>,
     number | undefined
   >({
@@ -148,9 +181,11 @@ export function useChannelMessages(channelId: string | null) {
       if (typeof pageParam === 'number') {
         params.set('before_seq', String(pageParam));
       }
-      return api<SessionMessagesDto>(
-        `${apiPaths.sessionMessages(channelId!)}?${params.toString()}`,
-      );
+      const path =
+        routeKind === 'thread'
+          ? apiPaths.threadMessages(channelId!)
+          : apiPaths.channelMessages(channelId!);
+      return api<ConversationMessagesDto>(`${path}?${params.toString()}`);
     },
     getNextPageParam: () => undefined,
     getPreviousPageParam: firstPage =>
@@ -162,25 +197,37 @@ export function useChannelMessages(channelId: string | null) {
   );
 
   const onEvent = useCallback(
-    (e: SessionStreamEvent) => {
-      if (!channelId || e.kind !== 'message') return;
-      const msg = e.payload?.message as MessageDto | undefined;
-      if (!msg) return;
-      qc.setQueryData<MessagesCache>(messagesKey(channelId), prev =>
-        appendMessageToCache(prev, msg),
-      );
+    (e: ConversationStreamEvent) => {
+      if (!channelId) return;
+      if (e.kind === 'message') {
+        const msg = e.payload?.message as MessageDto | undefined;
+        if (!msg) return;
+        qc.setQueryData<MessagesCache>(messagesKey(channelId), prev =>
+          appendMessageToCache(prev, msg),
+        );
+      }
+      if (e.kind === 'task_changed') {
+        const task = e.payload as TaskChangedEvent | undefined;
+        if (!task?.message_id) return;
+        qc.setQueryData<MessagesCache>(messagesKey(channelId), prev =>
+          applyTaskChangedToCache(prev, task),
+        );
+      }
     },
     [qc, channelId],
   );
-  useSessionStream(channelId, onEvent);
+  useConversationStream(channelId, onEvent, routeKind);
 
   return { ...query, data: messages };
 }
 
 /** Initial GET + live update on `agent_status` SSE events. */
-export function useChannelAgents(channelId: string | null) {
+export function useChannelAgents(
+  channelId: string | null,
+  routeKind: ConversationRouteKind = 'channel',
+) {
   const qc = useQueryClient();
-  const pendingStatusPatches = useRef<Map<string, SessionAgentStatusPatch>>(
+  const pendingStatusPatches = useRef<Map<string, ConversationAgentStatusPatch>>(
     new Map(),
   );
 
@@ -192,8 +239,10 @@ export function useChannelAgents(channelId: string | null) {
     queryKey: channelId ? agentsKey(channelId) : ['channels', 'none', 'agents'],
     enabled: !!channelId,
     queryFn: async () => {
-      const res = await api<{ agents: SessionAgentDto[] }>(
-        `/api/sessions/${channelId}/agents`,
+      const res = await api<{ agents: ConversationAgentDto[] }>(
+        routeKind === 'thread'
+          ? apiPaths.threadAgents(channelId!)
+          : apiPaths.channelAgents(channelId!),
       );
       return applyPendingSessionAgentPatches(
         res.agents,
@@ -203,7 +252,7 @@ export function useChannelAgents(channelId: string | null) {
   });
 
   const onEvent = useCallback(
-    (e: SessionStreamEvent) => {
+    (e: ConversationStreamEvent) => {
       if (channelId && e.kind === 'connected') {
         pendingStatusPatches.current.clear();
         void qc.invalidateQueries({ queryKey: agentsKey(channelId) });
@@ -211,7 +260,7 @@ export function useChannelAgents(channelId: string | null) {
       }
 
       if (!channelId || e.kind !== 'agent_status') return;
-      const p = e.payload as SessionAgentStatusPatch;
+      const p = e.payload as ConversationAgentStatusPatch;
       if (!p?.agent_id) return;
 
       const prevPatch = pendingStatusPatches.current.get(p.agent_id);
@@ -221,10 +270,10 @@ export function useChannelAgents(channelId: string | null) {
       });
 
       const key = agentsKey(channelId);
-      const current = qc.getQueryData<SessionAgentDto[]>(key);
+      const current = qc.getQueryData<ConversationAgentDto[]>(key);
       const hasCurrentRow = current?.some(a => a.agent_id === p.agent_id) ?? false;
 
-      qc.setQueryData<SessionAgentDto[]>(key, prev =>
+      qc.setQueryData<ConversationAgentDto[]>(key, prev =>
         prev ? prev.map(a => applySessionAgentPatch(a, p)) : prev,
       );
 
@@ -234,18 +283,25 @@ export function useChannelAgents(channelId: string | null) {
     },
     [qc, channelId],
   );
-  useSessionStream(channelId, onEvent);
+  useConversationStream(channelId, onEvent, routeKind);
 
   return query;
 }
 
-export function useSendMessage(channelId: string | null) {
+export function useSendMessage(
+  channelId: string | null,
+  routeKind: ConversationRouteKind = 'channel',
+) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (content: string) => {
       if (!channelId) throw new Error('no channel selected');
+      const path =
+        routeKind === 'thread'
+          ? apiPaths.threadMessages(channelId)
+          : apiPaths.channelMessages(channelId);
       const res = await api<{ message: MessageDto }>(
-        `/api/sessions/${channelId}/messages`,
+        path,
         { method: 'POST', body: JSON.stringify({ content }) },
       );
       return res.message;
@@ -262,7 +318,7 @@ export function useSendMessage(channelId: string | null) {
       const tempId = `pending-${crypto.randomUUID()}`;
       const tempMsg: MessageDto = {
         id: tempId,
-        session_id: channelId,
+        conversation_id: channelId,
         from_kind: 'user',
         from_agent_id: null,
         from_user_id: CURRENT_USER_ID,
@@ -274,7 +330,7 @@ export function useSendMessage(channelId: string | null) {
         task_status: null,
         task_assignee: null,
         task_title: null,
-        task_channel_id: null,
+        task_workspace_id: null,
       };
       qc.setQueryData<MessagesCache>(key, cur =>
         appendMessageToCache(cur, tempMsg),
@@ -303,26 +359,34 @@ export function useSendMessage(channelId: string | null) {
   });
 }
 
-export function useStartAgent(channelId: string | null) {
+export function useStartAgent(
+  channelId: string | null,
+  routeKind: ConversationRouteKind = 'channel',
+) {
   return useMutation({
     mutationFn: async (agentId: string) => {
       if (!channelId) throw new Error('no channel selected');
-      await api(`/api/sessions/${channelId}/agents/${agentId}/start`, {
+      const base = routeKind === 'thread' ? 'threads' : 'channels';
+      await api(`/api/${base}/${channelId}/agents/${agentId}/start`, {
         method: 'POST',
       });
     },
   });
 }
 
-export function useStopAgent(channelId: string | null) {
+export function useStopAgent(
+  channelId: string | null,
+  routeKind: ConversationRouteKind = 'channel',
+) {
   return useMutation({
     mutationFn: async (params: {
       agentId: string;
       mode?: 'soft' | 'hard';
       directive?: string;
-    }) => {
+      }) => {
       if (!channelId) throw new Error('no channel selected');
-      await api(`/api/sessions/${channelId}/agents/${params.agentId}/stop`, {
+      const base = routeKind === 'thread' ? 'threads' : 'channels';
+      await api(`/api/${base}/${channelId}/agents/${params.agentId}/stop`, {
         method: 'POST',
         body: JSON.stringify({
           mode: params.mode ?? 'hard',
@@ -333,35 +397,18 @@ export function useStopAgent(channelId: string | null) {
   });
 }
 
-export function useCloseChannel(channelId: string | null) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async (summary: string) => {
-      if (!channelId) throw new Error('no channel selected');
-      const res = await api<{ session: SessionDto }>(
-        `/api/sessions/${channelId}/close`,
-        { method: 'POST', body: JSON.stringify({ summary }) },
-      );
-      return res.session;
-    },
-    onSuccess: (s) => {
-      // Bump the workspace channels list so the sidebar reflects archived state.
-      qc.invalidateQueries({
-        queryKey: ['workspaces', s.channel_id, 'channels'],
-      });
-    },
-  });
-}
-
 /**
  * Ephemeral per-agent run states for the current channel.
  *
- * - Initial GET from `/api/sessions/:id/agent-run-states` (snapshot on
+ * - Initial GET from the channel/thread run-state endpoint (snapshot on
  *   mount / reconnect — returns all currently in-flight states).
- * - Live `agent_activity` events are ingested by the shared session stream
+ * - Live `agent_activity` events are ingested by the shared conversation stream
  *   layer so the cache stays warm even during the stream close grace period.
  */
-export function useAgentRunStates(channelId: string | null) {
+export function useAgentRunStates(
+  channelId: string | null,
+  routeKind: ConversationRouteKind = 'channel',
+) {
   const qc = useQueryClient();
   const key = channelId
     ? agentRunStatesKey(channelId)
@@ -371,8 +418,12 @@ export function useAgentRunStates(channelId: string | null) {
     enabled: !!channelId,
     queryFn: async () => {
       const requestedAt = Date.now();
+      const path =
+        routeKind === 'thread'
+          ? apiPaths.threadAgentRunStates(channelId!)
+          : apiPaths.channelAgentRunStates(channelId!);
       const res = await api<AgentRunStatesDto>(
-        `/api/sessions/${channelId}/agent-run-states`,
+        path,
       );
       return reconcileAgentRunStateSnapshot(
         qc.getQueryData(channelId ? agentRunStatesKey(channelId) : key),
@@ -388,7 +439,7 @@ export function useAgentRunStates(channelId: string | null) {
   });
 
   const onEvent = useCallback(
-    (e: SessionStreamEvent) => {
+    (e: ConversationStreamEvent) => {
       // On (re)connect, snapshot may have drifted — runs may have ended or
       // started while the SSE was down. Refetch the snapshot to reconcile;
       // the query function merges any newer SSE updates that arrived while
@@ -399,7 +450,7 @@ export function useAgentRunStates(channelId: string | null) {
     },
     [qc, channelId],
   );
-  useSessionStream(channelId, onEvent);
+  useConversationStream(channelId, onEvent, routeKind);
 
   return query;
 }
@@ -419,7 +470,7 @@ export function useChannelUnreadCounts(workspaceId: string | null) {
     refetchInterval: 5_000,
     queryFn: async () => {
       const res = await api<{ counts: Record<string, number> }>(
-        `/api/channels/${workspaceId}/unread-by-session`,
+        `/api/channels/${workspaceId}/unread-by-conversation`,
       );
       return res.counts;
     },
@@ -428,17 +479,24 @@ export function useChannelUnreadCounts(workspaceId: string | null) {
 
 /**
  * Per-channel message unread counts for the channels sidebar badge.
- * Backed by the session_reads cursor system — counts any message with
+ * Backed by the conversation_reads cursor system — counts any message with
  * seq > viewer's last_read_seq. Polls every 5 s.
  */
-export function useMessageUnreadCounts(workspaceId: string | null) {
+export function useMessageUnreadCounts(
+  workspaceId: string | null,
+  workspaceKind: 'regular' | 'dm' | null = 'regular',
+) {
   return useQuery({
-    queryKey: ['workspaces', workspaceId, 'message-unread'],
-    enabled: !!workspaceId,
+    queryKey: ['workspaces', workspaceId, workspaceKind, 'message-unread'],
+    enabled: !!workspaceId && workspaceKind !== null,
     refetchInterval: 5_000,
     queryFn: async () => {
-      const res = await api<{ by_session: Record<string, number>; total: number }>(
-        `/api/channels/${workspaceId}/message-unread`,
+      const path =
+        workspaceKind === 'dm'
+          ? `/api/channels/${workspaceId}/message-unread`
+          : `/api/workspaces/${workspaceId}/message-unread`;
+      const res = await api<{ by_conversation: Record<string, number>; total: number }>(
+        path,
       );
       return res;
     },
@@ -450,7 +508,7 @@ export function useMessageUnreadCounts(workspaceId: string | null) {
  * Called whenever the user navigates to a channel so the badge clears.
  *
  * @deprecated Clears notification-based badges only. Use
- * useMarkMessageChannelRead for the session_reads cursor system.
+ * useMarkMessageChannelRead for the conversation_reads cursor system.
  */
 export function useMarkChannelRead() {
   const qc = useQueryClient();
@@ -458,14 +516,10 @@ export function useMarkChannelRead() {
     mutationFn: async (channelId: string) => {
       await api('/api/notifications/read', {
         method: 'POST',
-        body: JSON.stringify({ session_id: channelId }),
+        body: JSON.stringify({ conversation_id: channelId }),
       });
     },
     onSuccess: () => {
-      // Invalidate per-channel caches AND the workspace-level unread summary
-      // so the left sidebar workspace badge shrinks immediately rather than
-      // waiting for the next 5 s polling cycle.
-      void qc.invalidateQueries({ queryKey: ['workspaces'] });
       void qc.invalidateQueries({ queryKey: ['notifications', 'unread'] });
     },
   });
@@ -473,21 +527,36 @@ export function useMarkChannelRead() {
 
 /**
  * Advance the viewer's read cursor for a channel to its latest message.
- * Backed by the session_reads cursor — clears message unread badges.
+ * Backed by the conversation_reads cursor — clears message unread badges.
  * The backend resolves the viewer's user id from X-Silverhand-User-Id
  * (injected by api()) so no body is required.
  */
 export function useMarkMessageChannelRead() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (channelId: string) => {
-      await api(`/api/sessions/${channelId}/mark-read`, { method: 'POST' });
+    mutationFn: async (params: string | { id: string; kind?: ConversationRouteKind }) => {
+      const channelId = typeof params === 'string' ? params : params.id;
+      const kind = typeof params === 'string' ? 'channel' : params.kind ?? 'channel';
+      const path =
+        kind === 'thread'
+          ? apiPaths.threadMarkRead(channelId)
+          : apiPaths.channelMarkRead(channelId);
+      await api(path, { method: 'POST' });
     },
     onSuccess: () => {
-      // TanStack Query v5 prefix-matches ['workspaces', ...] so this also
-      // hits ['workspaces', workspaceId, 'message-unread'] and
-      // ['message-unread', 'summary'].
-      void qc.invalidateQueries({ queryKey: ['workspaces'] });
+      // Only unread counters need to refresh after marking a conversation
+      // read. Invalidating ['workspaces'] also refetches the channel/tree
+      // data, which makes every channel click redo the sidebar thread load.
+      void qc.invalidateQueries({
+        predicate: query => {
+          const key = query.queryKey;
+          return (
+            Array.isArray(key) &&
+            key[0] === 'workspaces' &&
+            key[key.length - 1] === 'message-unread'
+          );
+        },
+      });
       void qc.invalidateQueries({ queryKey: ['message-unread', 'summary'] });
     },
   });
@@ -495,7 +564,7 @@ export function useMarkMessageChannelRead() {
 
 /**
  * Global message unread summary across ALL workspaces.
- * Backed by session_reads — returns total unread message count per workspace.
+ * Backed by conversation_reads — returns total unread message count per workspace.
  * Used by the workspace sidebar to show per-workspace unread badges.
  * Polls every 5 s alongside the per-channel hook.
  */
@@ -504,6 +573,6 @@ export function useMessageUnreadSummary() {
     queryKey: ['message-unread', 'summary'],
     refetchInterval: 5_000,
     queryFn: () =>
-      api<{ by_channel: Record<string, number> }>(apiPaths.messageUnreadSummary),
+      api<{ by_workspace: Record<string, number> }>(apiPaths.messageUnreadSummary),
   });
 }

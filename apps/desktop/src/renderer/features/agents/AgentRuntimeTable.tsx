@@ -1,20 +1,20 @@
 import { ArrowRight, MessageCircle, MessageSquare } from 'lucide-react';
 import type {
-  AgentRuntimeSession,
+  AgentRuntimeConversation,
   AgentRuntimeStateDto,
 } from '@silverhand/shared';
 
 interface AgentRuntimeTableProps {
   state: AgentRuntimeStateDto | undefined;
-  /** Click handler — switch the main view to this channel/session. */
-  onOpenSession?: (s: AgentRuntimeSession) => void;
+  /** Click handler — switch the main view to this channel/thread. */
+  onOpenConversation?: (s: AgentRuntimeConversation) => void;
 }
 
 export function AgentRuntimeTable({
   state,
-  onOpenSession,
+  onOpenConversation,
 }: AgentRuntimeTableProps): JSX.Element {
-  const rows = state?.session_agents ?? [];
+  const rows = state?.conversation_agents ?? [];
   return (
     <section className="flex flex-col gap-3 rounded-lg border border-border bg-bg-floating p-4">
       <header>
@@ -22,13 +22,13 @@ export function AgentRuntimeTable({
           Where this agent runs
         </h2>
         <p className="mt-0.5 text-[11px] text-text-muted">
-          Every (channel, session) pair this agent participates in.
+          Every channel or thread this agent participates in.
         </p>
       </header>
 
       {rows.length === 0 ? (
         <div className="rounded-md border border-dashed border-border-subtle px-4 py-6 text-center text-xs text-text-muted">
-          Not in any session yet.
+          Not in any conversation yet.
         </div>
       ) : (
         <div className="overflow-hidden rounded-md border border-border-subtle">
@@ -36,7 +36,7 @@ export function AgentRuntimeTable({
             <thead>
               <tr className="border-b border-border-subtle bg-bg-base text-left text-[11px] uppercase tracking-wide text-text-muted">
                 <th className="px-3 py-2 font-medium">Channel</th>
-                <th className="px-3 py-2 font-medium">Session</th>
+                <th className="px-3 py-2 font-medium">Thread</th>
                 <th className="px-3 py-2 font-medium">Status</th>
                 <th className="px-3 py-2 font-medium">PID</th>
                 <th className="px-3 py-2"></th>
@@ -45,25 +45,25 @@ export function AgentRuntimeTable({
             <tbody>
               {rows.map(row => (
                 <tr
-                  key={`${row.session_id}`}
+                  key={row.conversation_id}
                   className="border-t border-border-subtle first:border-t-0 hover:bg-bg-hover"
                 >
                   <td className="px-3 py-1.5">
                     <div className="flex items-center gap-1.5">
-                      {row.channel_kind === 'dm' ? (
+                      {row.conversation_kind === 'dm_channel' || row.workspace_kind === 'system_dm' ? (
                         <MessageCircle className="size-3 text-text-muted" />
                       ) : (
                         <MessageSquare className="size-3 text-text-muted" />
                       )}
                       <span className="text-text-primary">
-                        {row.channel_kind === 'dm'
-                          ? row.channel_name.replace(/^dm-/, '')
-                          : `#${row.channel_name}`}
+                        {row.workspace_kind === 'system_dm'
+                          ? row.channel_title
+                          : `${row.workspace_name} / ${row.channel_title}`}
                       </span>
                     </div>
                   </td>
                   <td className="px-3 py-1.5 text-text-primary">
-                    {row.session_title}
+                    {row.thread_title ?? '—'}
                     {row.closed_at !== null ? (
                       <span className="ml-1 text-[10px] uppercase tracking-wide text-text-muted">
                         closed
@@ -77,10 +77,10 @@ export function AgentRuntimeTable({
                     {row.pid ?? '—'}
                   </td>
                   <td className="px-3 py-1.5 text-right">
-                    {onOpenSession ? (
+                    {onOpenConversation ? (
                       <button
                         type="button"
-                        onClick={() => onOpenSession(row)}
+                        onClick={() => onOpenConversation(row)}
                         className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-text-muted hover:bg-bg-hover hover:text-text-primary"
                         title="Open"
                       >
@@ -103,7 +103,7 @@ function StatusPill({
   status,
   closed,
 }: {
-  status: AgentRuntimeSession['status'];
+  status: AgentRuntimeConversation['status'];
   closed: boolean;
 }): JSX.Element {
   if (closed) {

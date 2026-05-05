@@ -2,10 +2,10 @@
  * Tasks — per docs/tasks-design.md.
  *
  * A task is a `messages` row with task_* metadata populated. Numbering
- * space is per-channel (monotonic #1..N across all sessions of the
- * channel), operation scope is per-session (only agents in the task's
- * session may claim/unclaim/update). Human UI bypasses the
- * session-scope check.
+ * space is per-workspace (monotonic #1..N across all conversations in the
+ * workspace), operation scope is per-conversation (only agents in the task's
+ * conversation may claim/unclaim/update). Human UI bypasses the
+ * conversation-scope check.
  *
  * This module hosts:
  *   - Pure DB atomics (claim UPDATE-with-WHERE, next-number allocation)
@@ -20,6 +20,7 @@ import type { Database as Db } from 'better-sqlite3';
 import type {
   ClaimResultEntry,
   ClaimTasksResult,
+  ConversationDto,
   CreateTasksResult,
   MessageRow,
   TaskAssigneeDto,
@@ -30,31 +31,29 @@ import type {
 } from '@silverhand/shared';
 import type { BackendContext } from './context.js';
 import type { AgentRepo } from './repos/agent-repo.js';
-import type { ChannelRepo } from './repos/channel-repo.js';
+import type { ConversationRepo } from './repos/conversation-repo.js';
 import type { MessageRepo } from './repos/message-repo.js';
-import type { SessionRepo } from './repos/session-repo.js';
 
 export type TaskOpError =
-  | 'session_not_found'
-  | 'session_closed'
+  | 'conversation_not_found'
+  | 'conversation_closed'
   | 'message_not_found'
-  | 'message_not_in_session'
+  | 'message_not_in_conversation'
   | 'not_a_task'
-  | 'wrong_session'
+  | 'wrong_conversation'
   | 'already_task'
   | 'already_claimed'
   | 'already_done'
   | 'invalid_transition'
   | 'not_assignee'
-  | 'not_session_member'
+  | 'not_conversation_member'
   | 'system_message_not_allowed'
   | 'thread_message_not_allowed';
 
 export interface TaskDeps {
   ctx: BackendContext;
   agents: AgentRepo;
-  channels: ChannelRepo;
-  sessions: SessionRepo;
+  conversations: ConversationRepo;
   messages: MessageRepo;
 }
 
@@ -63,7 +62,7 @@ export interface TaskDeps {
 interface TaskJoinedRow {
   // messages
   id: string;
-  session_id: string;
+  conversation_id: string;
   from_kind: MessageRow['from_kind'];
   from_agent_id: string | null;
   from_user_id: string | null;
@@ -71,14 +70,15 @@ interface TaskJoinedRow {
   task_number: number;
   task_status: TaskStatus;
   task_title: string | null;
-  task_channel_id: string;
+  workspace_id: string;
+  workspace_name: string;
+  channel_id: string;
+  channel_name: string;
+  thread_id: string | null;
   task_assignee_agent_id: string | null;
   task_assignee_user_id: string | null;
   created_at: number;
-  // sessions
-  session_title: string;
-  // channels
-  channel_name: string;
+  conversation_title: string;
   // denormalized names
   assignee_agent_name: string | null;
   creator_agent_name: string | null;
@@ -87,7 +87,7 @@ interface TaskJoinedRow {
 const SELECT_TASK_JOINED = `
   SELECT
     m.id                       AS id,
-    m.session_id               AS session_id,
+    m.conversation_id          AS conversation_id,
     m.from_kind                AS from_kind,
     m.from_agent_id            AS from_agent_id,
     m.from_user_id             AS from_user_id,
@@ -95,17 +95,36 @@ const SELECT_TASK_JOINED = `
     m.task_number              AS task_number,
     m.task_status              AS task_status,
     m.task_title               AS task_title,
-    m.task_channel_id          AS task_channel_id,
+    CASE
+      WHEN root.kind = 'dm_channel' THEN root.id
+      ELSE COALESCE(m.task_workspace_id, conv.workspace_id)
+    END                        AS workspace_id,
+    CASE
+      WHEN root.kind = 'thread' THEN root.parent_conversation_id
+      ELSE root.id
+    END                        AS channel_id,
+    root.title                 AS channel_name,
+    CASE
+      WHEN conv.kind = 'thread' THEN conv.id
+      ELSE NULL
+    END                        AS thread_id,
     m.task_assignee_agent_id   AS task_assignee_agent_id,
     m.task_assignee_user_id    AS task_assignee_user_id,
     m.created_at               AS created_at,
-    s.title                    AS session_title,
-    c.name                     AS channel_name,
+    conv.title                 AS conversation_title,
+    CASE
+      WHEN root.kind = 'dm_channel' THEN root.title
+      ELSE w.name
+    END                        AS workspace_name,
     aa.display_name            AS assignee_agent_name,
     ca.display_name            AS creator_agent_name
   FROM messages m
-  JOIN sessions s ON s.id = m.session_id
-  JOIN channels c ON c.id = m.task_channel_id
+  JOIN conversations conv ON conv.id = m.conversation_id
+  JOIN workspaces w ON w.id = conv.workspace_id
+  JOIN conversations root ON root.id = CASE
+    WHEN conv.kind = 'thread' THEN conv.parent_conversation_id
+    ELSE conv.id
+  END
   LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
   LEFT JOIN agents ca ON ca.id = m.from_agent_id
 `;
@@ -128,9 +147,12 @@ function joinedToSummary(row: TaskJoinedRow): TaskSummaryDto {
   return {
     message_id: row.id,
     task_number: row.task_number,
-    channel_id: row.task_channel_id,
+    workspace_id: row.workspace_id,
+    workspace_name: row.workspace_name,
+    channel_id: row.channel_id,
     channel_name: row.channel_name,
-    session: { id: row.session_id, title: row.session_title },
+    thread_id: row.thread_id,
+    conversation: { id: row.conversation_id, title: row.conversation_title },
     status: row.task_status,
     title: row.task_title ?? firstLine(row.content),
     assignee,
@@ -166,20 +188,22 @@ function firstLine(s: string): string {
 export function listTasks(
   deps: TaskDeps,
   filters: {
-    channel_id?: string;
-    session_id?: string;
+    workspace_id?: string;
+    conversation_id?: string;
     status?: TaskStatus | 'all';
   },
 ): TaskSummaryDto[] {
   const clauses: string[] = ['m.task_number IS NOT NULL'];
   const args: (string | number)[] = [];
-  if (filters.channel_id) {
-    clauses.push('m.task_channel_id = ?');
-    args.push(filters.channel_id);
+  if (filters.workspace_id) {
+    clauses.push(
+      `(m.task_workspace_id = ? OR root.id = ?)`,
+    );
+    args.push(filters.workspace_id, filters.workspace_id);
   }
-  if (filters.session_id) {
-    clauses.push('m.session_id = ?');
-    args.push(filters.session_id);
+  if (filters.conversation_id) {
+    clauses.push('m.conversation_id = ?');
+    args.push(filters.conversation_id);
   }
   if (filters.status && filters.status !== 'all') {
     clauses.push('m.task_status = ?');
@@ -207,19 +231,19 @@ export function getTaskByMessageId(
 export async function createTasksByAgent(
   deps: TaskDeps,
   args: {
-    sessionId: string;
+    conversationId: string;
     agentId: string;
     tasks: { title: string; body?: string }[];
   },
 ): Promise<CreateTasksResult | { error: TaskOpError }> {
-  const session = deps.sessions.get(args.sessionId);
-  if (!session) return { error: 'session_not_found' };
-  if (session.closed_at !== null) return { error: 'session_closed' };
-  if (!isSessionMember(deps, args.sessionId, args.agentId)) {
-    return { error: 'not_session_member' };
+  const conversation = deps.conversations.get(args.conversationId);
+  if (!conversation) return { error: 'conversation_not_found' };
+  if (conversation.closed_at !== null) return { error: 'conversation_closed' };
+  if (!isConversationMember(deps, args.conversationId, args.agentId)) {
+    return { error: 'not_conversation_member' };
   }
 
-  const channelId = session.channel_id;
+  const taskWorkspaceId = conversation.workspace_id;
   const db = deps.ctx.db;
   const created: { message_id: string; task_number: number; title: string }[] = [];
 
@@ -227,21 +251,21 @@ export async function createTasksByAgent(
   // on task_number allocation.
   const tx = db.transaction(() => {
     for (const t of args.tasks) {
-      const msg = deps.messages.insert({
-        sessionId: args.sessionId,
+      const msg = deps.messages.insertForConversation({
+        conversationId: args.conversationId,
         fromKind: 'agent',
         fromAgentId: args.agentId,
         content: t.body && t.body.length > 0 ? t.body : t.title,
       });
-      const nextNumber = allocateTaskNumber(db, channelId);
+      const nextNumber = allocateTaskNumber(db, taskWorkspaceId);
       db.prepare(
         `UPDATE messages
          SET task_number = ?,
              task_status = 'todo',
              task_title = ?,
-             task_channel_id = ?
+             task_workspace_id = ?
          WHERE id = ?`,
-      ).run(nextNumber, t.title, channelId, msg.id);
+      ).run(nextNumber, t.title, taskWorkspaceId, msg.id);
       created.push({ message_id: msg.id, task_number: nextNumber, title: t.title });
     }
   });
@@ -253,8 +277,7 @@ export async function createTasksByAgent(
   const actorLabel = agent ? `@${agent.name}` : 'agent';
   for (const t of created) {
     await broadcast(deps, {
-      sessionId: args.sessionId,
-      channelId,
+      conversation,
       kind: 'create',
       messageId: t.message_id,
       taskNumber: t.task_number,
@@ -268,13 +291,13 @@ export async function createTasksByAgent(
   return { tasks: created };
 }
 
-function allocateTaskNumber(db: Db, channelId: string): number {
+function allocateTaskNumber(db: Db, workspaceId: string): number {
   const row = db
     .prepare<[string], { next: number }>(
       `SELECT COALESCE(MAX(task_number), 0) + 1 AS next
-       FROM messages WHERE task_channel_id = ?`,
+       FROM messages WHERE task_workspace_id = ?`,
     )
-    .get(channelId);
+    .get(workspaceId);
   return row?.next ?? 1;
 }
 
@@ -283,18 +306,18 @@ function allocateTaskNumber(db: Db, channelId: string): number {
 export async function claimTasksByAgent(
   deps: TaskDeps,
   args: {
-    sessionId: string;
+    conversationId: string;
     agentId: string;
     task_numbers?: number[];
     message_ids?: string[];
   },
 ): Promise<ClaimTasksResult | { error: TaskOpError }> {
-  const session = deps.sessions.get(args.sessionId);
-  if (!session) return { error: 'session_not_found' };
-  if (!isSessionMember(deps, args.sessionId, args.agentId)) {
-    return { error: 'not_session_member' };
+  const conversation = deps.conversations.get(args.conversationId);
+  if (!conversation) return { error: 'conversation_not_found' };
+  if (!isConversationMember(deps, args.conversationId, args.agentId)) {
+    return { error: 'not_conversation_member' };
   }
-
+  const taskWorkspaceId = conversation.workspace_id;
   const results: ClaimResultEntry[] = [];
   const agent = deps.agents.get(args.agentId);
   const assigneeName = agent?.display_name ?? agent?.name ?? args.agentId;
@@ -302,16 +325,15 @@ export async function claimTasksByAgent(
 
   for (const taskNumber of args.task_numbers ?? []) {
     const out = claimByNumber(deps, {
-      channelId: session.channel_id,
-      sessionId: args.sessionId,
+      workspaceId: taskWorkspaceId,
+      conversationId: args.conversationId,
       agentId: args.agentId,
       taskNumber,
     });
     results.push(out.entry);
     if (out.entry.success && out.sysMessage) {
       await broadcast(deps, {
-        sessionId: args.sessionId,
-        channelId: session.channel_id,
+        conversation,
         kind: 'claim',
         messageId: out.messageId!,
         taskNumber,
@@ -325,16 +347,15 @@ export async function claimTasksByAgent(
 
   for (const messageId of args.message_ids ?? []) {
     const out = claimByMessageId(deps, {
-      channelId: session.channel_id,
-      sessionId: args.sessionId,
+      workspaceId: taskWorkspaceId,
+      conversationId: args.conversationId,
       agentId: args.agentId,
       messageId,
     });
     results.push(out.entry);
     if (out.entry.success && out.sysMessage) {
       await broadcast(deps, {
-        sessionId: args.sessionId,
-        channelId: session.channel_id,
+        conversation,
         kind: 'claim',
         messageId,
         taskNumber: out.entry.task_number!,
@@ -360,8 +381,8 @@ interface ClaimOutcome {
 function claimByNumber(
   deps: TaskDeps,
   args: {
-    channelId: string;
-    sessionId: string;
+    workspaceId: string;
+    conversationId: string;
     agentId: string;
     taskNumber: number;
   },
@@ -370,19 +391,25 @@ function claimByNumber(
   const row = db
     .prepare<[string, number], {
       id: string;
-      session_id: string;
+      conversation_id: string;
       task_status: TaskStatus;
       task_assignee_agent_id: string | null;
       task_title: string | null;
       content: string;
-      owner_session_title: string;
+      owner_conversation_title: string;
     }>(
-      `SELECT m.id, m.session_id, m.task_status, m.task_assignee_agent_id,
-              m.task_title, m.content, s.title AS owner_session_title
-       FROM messages m JOIN sessions s ON s.id = m.session_id
-       WHERE m.task_channel_id = ? AND m.task_number = ?`,
+      `SELECT m.id,
+              m.conversation_id AS conversation_id,
+              m.task_status,
+              m.task_assignee_agent_id,
+              m.task_title,
+              m.content,
+              c.title AS owner_conversation_title
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+       WHERE m.task_workspace_id = ? AND m.task_number = ?`,
     )
-    .get(args.channelId, args.taskNumber);
+    .get(args.workspaceId, args.taskNumber);
   if (!row) {
     return {
       entry: {
@@ -392,13 +419,16 @@ function claimByNumber(
       },
     };
   }
-  if (row.session_id !== args.sessionId) {
+  if (row.conversation_id !== args.conversationId) {
     return {
       entry: {
         success: false,
         task_number: args.taskNumber,
-        reason: 'task belongs to another session; you cannot claim across sessions',
-        owner_session: { id: row.session_id, title: row.owner_session_title },
+        reason: 'task belongs to another conversation; you cannot claim across conversations',
+        owner_conversation: {
+          id: row.conversation_id,
+          title: row.owner_conversation_title,
+        },
       },
     };
   }
@@ -454,8 +484,8 @@ function claimByNumber(
 function claimByMessageId(
   deps: TaskDeps,
   args: {
-    channelId: string;
-    sessionId: string;
+    workspaceId: string;
+    conversationId: string;
     agentId: string;
     messageId: string;
   },
@@ -464,7 +494,7 @@ function claimByMessageId(
   const msg = db
     .prepare<[string], {
       id: string;
-      session_id: string;
+      conversation_id: string;
       from_kind: MessageRow['from_kind'];
       metadata: string | null;
       content: string;
@@ -473,7 +503,8 @@ function claimByMessageId(
       task_status: TaskStatus | null;
       task_title: string | null;
     }>(
-      `SELECT id, session_id, from_kind, metadata, content,
+      `SELECT id, conversation_id AS conversation_id,
+              from_kind, metadata, content,
               task_number, task_assignee_agent_id, task_status, task_title
        FROM messages WHERE id = ?`,
     )
@@ -483,12 +514,12 @@ function claimByMessageId(
       entry: { success: false, message_id: args.messageId, reason: 'message not found' },
     };
   }
-  if (msg.session_id !== args.sessionId) {
+  if (msg.conversation_id !== args.conversationId) {
     return {
       entry: {
         success: false,
         message_id: args.messageId,
-        reason: 'message belongs to another session',
+        reason: 'message belongs to another conversation',
       },
     };
   }
@@ -504,7 +535,7 @@ function claimByMessageId(
   // Thread messages are identified via metadata.thread_anchor or
   // subtype. v1 uses child sessions (not inline threads), but we still
   // reject any message whose metadata flags it as thread-internal —
-  // the whole-session-as-child model already covers sub-conversation
+  // the whole-conversation-as-child model already covers sub-conversation
   // task ownership.
   const md = msg.metadata ? (JSON.parse(msg.metadata) as Record<string, unknown>) : null;
   if (md && typeof md['subtype'] === 'string' && md['subtype'] === 'thread_anchor') {
@@ -521,8 +552,8 @@ function claimByMessageId(
   // existing task_number. Treat as a normal claim attempt.
   if (msg.task_number !== null) {
     return claimByNumber(deps, {
-      channelId: args.channelId,
-      sessionId: args.sessionId,
+      workspaceId: args.workspaceId,
+      conversationId: args.conversationId,
       agentId: args.agentId,
       taskNumber: msg.task_number,
     });
@@ -530,16 +561,24 @@ function claimByMessageId(
 
   // Promote + claim atomically.
   const tx = db.transaction(() => {
-    const nextNumber = allocateTaskNumber(db, args.channelId);
+    const conversation = deps.conversations.get(args.conversationId);
+    if (!conversation) throw new Error('conversation not found');
+    const nextNumber = allocateTaskNumber(db, args.workspaceId);
     db.prepare(
       `UPDATE messages
        SET task_number = ?,
            task_status = 'in_progress',
            task_title = ?,
-           task_channel_id = ?,
+           task_workspace_id = ?,
            task_assignee_agent_id = ?
        WHERE id = ? AND task_number IS NULL`,
-    ).run(nextNumber, firstLine(msg.content), args.channelId, args.agentId, msg.id);
+    ).run(
+      nextNumber,
+      firstLine(msg.content),
+      args.workspaceId,
+      args.agentId,
+      msg.id,
+    );
     return nextNumber;
   });
   const newNumber = tx();
@@ -561,33 +600,34 @@ function claimByMessageId(
 
 export async function unclaimTaskByAgent(
   deps: TaskDeps,
-  args: { sessionId: string; agentId: string; taskNumber: number },
+  args: { conversationId: string; agentId: string; taskNumber: number },
 ): Promise<TaskMutationResult | { error: TaskOpError }> {
-  const session = deps.sessions.get(args.sessionId);
-  if (!session) return { error: 'session_not_found' };
-  if (!isSessionMember(deps, args.sessionId, args.agentId)) {
-    return { error: 'not_session_member' };
+  const conversation = deps.conversations.get(args.conversationId);
+  if (!conversation) return { error: 'conversation_not_found' };
+  if (!isConversationMember(deps, args.conversationId, args.agentId)) {
+    return { error: 'not_conversation_member' };
   }
 
   const db = deps.ctx.db;
   const row = db
     .prepare<[string, number], {
       id: string;
-      session_id: string;
+      conversation_id: string;
       task_status: TaskStatus;
       task_assignee_agent_id: string | null;
       task_title: string | null;
       content: string;
     }>(
-      `SELECT id, session_id, task_status, task_assignee_agent_id,
+      `SELECT id, conversation_id AS conversation_id,
+              task_status, task_assignee_agent_id,
               task_title, content
        FROM messages
-       WHERE task_channel_id = ? AND task_number = ?`,
+       WHERE task_workspace_id = ? AND task_number = ?`,
     )
-    .get(session.channel_id, args.taskNumber);
+    .get(conversation.workspace_id, args.taskNumber);
   if (!row) return { success: false, reason: 'task not found' };
-  if (row.session_id !== args.sessionId) {
-    return { success: false, reason: 'task belongs to another session' };
+  if (row.conversation_id !== args.conversationId) {
+    return { success: false, reason: 'task belongs to another conversation' };
   }
   if (row.task_assignee_agent_id !== args.agentId) {
     return { success: false, reason: 'not the assignee' };
@@ -605,8 +645,7 @@ export async function unclaimTaskByAgent(
 
   const agent = deps.agents.get(args.agentId);
   await broadcast(deps, {
-    sessionId: args.sessionId,
-    channelId: session.channel_id,
+    conversation,
     kind: 'unclaim',
     messageId: row.id,
     taskNumber: args.taskNumber,
@@ -631,37 +670,38 @@ const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
 export async function updateTaskStatusByAgent(
   deps: TaskDeps,
   args: {
-    sessionId: string;
+    conversationId: string;
     agentId: string;
     taskNumber: number;
     status: TaskStatus;
   },
 ): Promise<TaskMutationResult | { error: TaskOpError }> {
-  const session = deps.sessions.get(args.sessionId);
-  if (!session) return { error: 'session_not_found' };
-  if (!isSessionMember(deps, args.sessionId, args.agentId)) {
-    return { error: 'not_session_member' };
+  const conversation = deps.conversations.get(args.conversationId);
+  if (!conversation) return { error: 'conversation_not_found' };
+  if (!isConversationMember(deps, args.conversationId, args.agentId)) {
+    return { error: 'not_conversation_member' };
   }
 
   const db = deps.ctx.db;
   const row = db
     .prepare<[string, number], {
       id: string;
-      session_id: string;
+      conversation_id: string;
       task_status: TaskStatus;
       task_assignee_agent_id: string | null;
       task_title: string | null;
       content: string;
     }>(
-      `SELECT id, session_id, task_status, task_assignee_agent_id,
+      `SELECT id, conversation_id AS conversation_id,
+              task_status, task_assignee_agent_id,
               task_title, content
        FROM messages
-       WHERE task_channel_id = ? AND task_number = ?`,
+       WHERE task_workspace_id = ? AND task_number = ?`,
     )
-    .get(session.channel_id, args.taskNumber);
+    .get(conversation.workspace_id, args.taskNumber);
   if (!row) return { success: false, reason: 'task not found' };
-  if (row.session_id !== args.sessionId) {
-    return { success: false, reason: 'task belongs to another session' };
+  if (row.conversation_id !== args.conversationId) {
+    return { success: false, reason: 'task belongs to another conversation' };
   }
   if (row.task_assignee_agent_id !== args.agentId) {
     return { success: false, reason: 'only the assignee can update status' };
@@ -680,8 +720,7 @@ export async function updateTaskStatusByAgent(
 
   const agent = deps.agents.get(args.agentId);
   await broadcast(deps, {
-    sessionId: args.sessionId,
-    channelId: session.channel_id,
+    conversation,
     kind: 'status',
     messageId: row.id,
     taskNumber: args.taskNumber,
@@ -711,28 +750,32 @@ export async function humanClaim(
   const row = db
     .prepare<[string], {
       id: string;
-      session_id: string;
+      conversation_id: string;
       task_number: number | null;
-      task_channel_id: string | null;
+      task_workspace_id: string | null;
       task_status: TaskStatus | null;
       task_assignee_agent_id: string | null;
     }>(
-      `SELECT id, session_id, task_number, task_channel_id, task_status,
+      `SELECT id,
+              conversation_id AS conversation_id,
+              task_number,
+              task_workspace_id,
+              task_status,
               task_assignee_agent_id
        FROM messages WHERE id = ?`,
     )
     .get(args.messageId);
-  if (!row || row.task_number === null || !row.task_channel_id) {
+  if (!row || row.task_number === null || !row.task_workspace_id) {
     return { success: false, reason: 'not a task' };
   }
   if (row.task_status === 'done') {
     return { success: false, reason: 'task is done' };
   }
   if (args.agentId) {
-    // Assignee must be a member of the task's session — prevent
-    // "cross-session assignment" from the human side too.
-    if (!isSessionMember(deps, row.session_id, args.agentId)) {
-      return { success: false, reason: 'agent is not a member of this task\'s session' };
+    // Assignee must be a member of the task's conversation — prevent
+    // cross-conversation assignment from the human side too.
+    if (!isConversationMember(deps, row.conversation_id, args.agentId)) {
+      return { success: false, reason: 'agent is not a member of this task\'s conversation' };
     }
   }
   db.prepare(
@@ -745,8 +788,10 @@ export async function humanClaim(
   const fresh = refetchTaskForBroadcast(deps, row.id);
   if (fresh) {
     await broadcast(deps, {
-      sessionId: fresh.session_id,
-      channelId: fresh.task_channel_id!,
+      conversationId: fresh.conversation_id,
+      workspaceId: fresh.workspace_id,
+      channelId: fresh.channel_id,
+      threadId: fresh.thread_id,
       kind: 'claim',
       messageId: fresh.id,
       taskNumber: fresh.task_number!,
@@ -788,8 +833,10 @@ export async function humanUnclaim(
   const fresh = refetchTaskForBroadcast(deps, row.id);
   if (fresh) {
     await broadcast(deps, {
-      sessionId: fresh.session_id,
-      channelId: fresh.task_channel_id!,
+      conversationId: fresh.conversation_id,
+      workspaceId: fresh.workspace_id,
+      channelId: fresh.channel_id,
+      threadId: fresh.thread_id,
       kind: 'unclaim',
       messageId: fresh.id,
       taskNumber: fresh.task_number!,
@@ -831,8 +878,10 @@ export async function humanUpdateStatus(
   const fresh = refetchTaskForBroadcast(deps, row.id);
   if (fresh) {
     await broadcast(deps, {
-      sessionId: fresh.session_id,
-      channelId: fresh.task_channel_id!,
+      conversationId: fresh.conversation_id,
+      workspaceId: fresh.workspace_id,
+      channelId: fresh.channel_id,
+      threadId: fresh.thread_id,
       kind: 'status',
       messageId: fresh.id,
       taskNumber: fresh.task_number!,
@@ -847,19 +896,23 @@ export async function humanUpdateStatus(
 
 // ── helpers ────────────────────────────────────────────────────────
 
-function isSessionMember(
+function isConversationMember(
   deps: TaskDeps,
-  sessionId: string,
+  conversationId: string,
   agentId: string,
 ): boolean {
-  return deps.sessions.listAgents(sessionId).some(sa => sa.agent_id === agentId);
+  return deps.conversations
+    .listAgents(conversationId)
+    .some(ca => ca.agent_id === agentId);
 }
 
 interface TaskSnapshotForBroadcast {
   id: string;
-  session_id: string;
+  conversation_id: string;
+  workspace_id: string;
+  channel_id: string;
+  thread_id: string | null;
   task_number: number | null;
-  task_channel_id: string | null;
   task_status: TaskStatus | null;
   title: string;
   assignee: TaskAssigneeDto | null;
@@ -872,21 +925,46 @@ function refetchTaskForBroadcast(
   const row = deps.ctx.db
     .prepare<[string], {
       id: string;
-      session_id: string;
+      conversation_id: string;
       content: string;
       task_number: number | null;
-      task_channel_id: string | null;
+      workspace_id: string;
+      channel_id: string;
+      thread_id: string | null;
+      task_workspace_id: string | null;
       task_status: TaskStatus | null;
       task_title: string | null;
       task_assignee_agent_id: string | null;
       task_assignee_user_id: string | null;
       assignee_agent_name: string | null;
     }>(
-      `SELECT m.id, m.session_id, m.content,
-              m.task_number, m.task_channel_id, m.task_status, m.task_title,
+      `SELECT m.id,
+              m.conversation_id AS conversation_id,
+              m.content,
+              m.task_number,
+              CASE
+                WHEN root.kind = 'dm_channel' THEN root.id
+                ELSE COALESCE(m.task_workspace_id, conv.workspace_id)
+              END AS workspace_id,
+              CASE
+                WHEN conv.kind = 'thread' THEN conv.parent_conversation_id
+                ELSE conv.id
+              END AS channel_id,
+              CASE
+                WHEN conv.kind = 'thread' THEN conv.id
+                ELSE NULL
+              END AS thread_id,
+              m.task_workspace_id,
+              m.task_status,
+              m.task_title,
               m.task_assignee_agent_id, m.task_assignee_user_id,
               aa.display_name AS assignee_agent_name
        FROM messages m
+       JOIN conversations conv ON conv.id = m.conversation_id
+       JOIN conversations root ON root.id = CASE
+         WHEN conv.kind = 'thread' THEN conv.parent_conversation_id
+         ELSE conv.id
+       END
        LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
        WHERE m.id = ?`,
     )
@@ -908,9 +986,11 @@ function refetchTaskForBroadcast(
   }
   return {
     id: row.id,
-    session_id: row.session_id,
+    conversation_id: row.conversation_id,
+    workspace_id: row.workspace_id,
+    channel_id: row.channel_id,
+    thread_id: row.thread_id,
     task_number: row.task_number,
-    task_channel_id: row.task_channel_id,
     task_status: row.task_status,
     title: row.task_title ?? firstLine(row.content),
     assignee,
@@ -920,8 +1000,11 @@ function refetchTaskForBroadcast(
 async function broadcast(
   deps: TaskDeps,
   args: {
-    sessionId: string;
-    channelId: string;
+    conversation?: ConversationDto;
+    conversationId?: string;
+    workspaceId?: string;
+    channelId?: string;
+    threadId?: string | null;
     kind: TaskChangedEvent['kind'];
     messageId: string;
     taskNumber: number;
@@ -931,11 +1014,24 @@ async function broadcast(
     sysMessage: string;
   },
 ): Promise<void> {
+  const conversationId = args.conversation?.id ?? args.conversationId;
+  const workspaceId = args.conversation
+    ? taskWorkspaceScopeId(args.conversation)
+    : args.workspaceId;
+  const channelId = args.conversation
+    ? taskChannelId(args.conversation)
+    : args.channelId;
+  const threadId = args.conversation
+    ? taskThreadId(args.conversation)
+    : args.threadId ?? null;
+  if (!conversationId || !workspaceId || !channelId) {
+    throw new Error('task broadcast missing conversation scope');
+  }
   // 1. Write the system message. Follows the same pattern as
-  //    provision.ts's join/leave announces — so the inbox drain picks
+  //    workspace membership announces — so the inbox drain picks
   //    it up for any idle agent on next spawn.
-  const sysMsg = deps.messages.insert({
-    sessionId: args.sessionId,
+  const sysMsg = deps.messages.insertForConversation({
+    conversationId,
     fromKind: 'system',
     content: args.sysMessage,
     metadata: {
@@ -944,11 +1040,11 @@ async function broadcast(
       task_status: args.status,
     },
   });
-  const recipients = deps.sessions.listAgents(args.sessionId);
-  for (const sa of recipients) {
-    await deps.ctx.sessionManager.deliverMessage(args.sessionId, sa.agent_id, sysMsg.id);
+  const recipients = deps.conversations.listAgents(conversationId);
+  for (const ca of recipients) {
+    await deps.ctx.conversationManager.deliverMessage(conversationId, ca.agent_id, sysMsg.id);
   }
-  deps.ctx.events.publish(args.sessionId, {
+  deps.ctx.events.publish(conversationId, {
     kind: 'message',
     payload: { message: sysMsg },
   });
@@ -958,13 +1054,28 @@ async function broadcast(
   //    global task list.
   const event: TaskChangedEvent = {
     kind: args.kind,
-    channel_id: args.channelId,
-    session_id: args.sessionId,
+    workspace_id: workspaceId,
+    channel_id: channelId,
+    thread_id: threadId,
+    conversation_id: conversationId,
     task_number: args.taskNumber,
     message_id: args.messageId,
     status: args.status,
     assignee: args.assignee,
     title: args.title,
   };
-  deps.ctx.events.publish(args.sessionId, { kind: 'task_changed', payload: event });
+  deps.ctx.events.publish(conversationId, { kind: 'task_changed', payload: event });
+}
+
+function taskWorkspaceScopeId(conversation: ConversationDto): string {
+  if (conversation.kind === 'dm_channel') return conversation.id;
+  return conversation.workspace_id;
+}
+
+function taskChannelId(conversation: ConversationDto): string {
+  return conversation.parent_conversation_id ?? conversation.id;
+}
+
+function taskThreadId(conversation: ConversationDto): string | null {
+  return conversation.parent_conversation_id ? conversation.id : null;
 }

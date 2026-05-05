@@ -1,7 +1,8 @@
 import type { Database as Db } from 'better-sqlite3';
 import type { ServerConfig } from '@silverhand/shared';
-import type { SessionEventBus } from './event-bus.js';
-import type { SessionManager } from './session-manager.js';
+import type { ConversationEventBus } from './event-bus.js';
+import type { ConversationManager } from './conversation-manager.js';
+import type { BlobFileStorage } from './storage/blob-file-storage.js';
 
 export interface BackendLogger {
   info(obj: unknown, msg?: string): void;
@@ -15,7 +16,7 @@ export interface BackendLogger {
  * in a packaged Electron build it's a node + bundled JS path. The host
  * supplies this when calling `startBackend`.
  *
- * SessionManager appends `--session-id`, `--agent-id`, `--server-url`
+ * ConversationManager appends `--conversation-id`, `--agent-id`, `--server-url`
  * arguments and the auth-token env var on top of these baseline args.
  * `env` is merged in alongside the auth token / log dir — used by the
  * Electron host to set `ELECTRON_RUN_AS_NODE=1` when `command` points
@@ -39,15 +40,18 @@ export interface BackendContext {
    *  via `SILVERHAND_LOG_DIR` so spawned bridges land in the same place.
    *  Optional — undefined when no file logger is in use (e.g. in tests). */
   logDir?: string;
-  /** Per-process state: last child-session spawn timestamp per agent (cooldown). */
+  /** Shared blob/file storage infra used by application layers like
+   *  message attachments and future profile avatars. */
+  blobStorage: BlobFileStorage;
+  /** Per-process state: last child-conversation spawn timestamp per agent (cooldown). */
   lastSpawnAtByAgent: Map<string, number>;
   /** In-process pub/sub for live UI updates (SSE). */
-  events: SessionEventBus;
+  events: ConversationEventBus;
   /** How to spawn the chat-bridge MCP server (host-supplied). */
   chatBridgeLauncher: ChatBridgeLauncher;
   /** Owns running agent CLI child processes. Initialized after the
    *  context object is built (circular dep otherwise). */
-  sessionManager: SessionManager;
+  conversationManager: ConversationManager;
 }
 
 export const consoleLogger: BackendLogger = {

@@ -10,8 +10,10 @@ import type {
   AgentRunState,
   AgentRunStatus,
   AgentRunTerminalReason,
+  ConversationDto,
   FromKind,
   McpServerConfig,
+  WorkspaceDto,
 } from '@silverhand/shared';
 
 import type { BackendContext } from './context.js';
@@ -27,12 +29,15 @@ import { detectRuntimes } from './runtimes.js';
 import { expandProxyEnv } from './proxy.js';
 import { prepareSpawnFiles, type SpawnPrepHandle } from './spawn-prep.js';
 import { AgentRepo } from './repos/agent-repo.js';
-import { ChannelRepo } from './repos/channel-repo.js';
-import { InboxRepo, type PendingInboxItem } from './repos/inbox-repo.js';
+import {
+  ConversationInboxRepo,
+  type PendingConversationInboxItem,
+} from './repos/conversation-inbox-repo.js';
+import { ConversationRepo } from './repos/conversation-repo.js';
 import { MessageRepo } from './repos/message-repo.js';
 import { NotificationRepo } from './repos/notification-repo.js';
-import { SessionRepo } from './repos/session-repo.js';
 import { SettingsRepo, SETTINGS_KEYS } from './repos/settings-repo.js';
+import { WorkspaceRepo } from './repos/workspace-repo.js';
 
 /** §3.5 watchdog window. Slock's `COMPACTION_STALE_MS` = 5 min. */
 const COMPACTION_STALE_MS = 5 * 60 * 1000;
@@ -50,19 +55,19 @@ const AGENT_ACTIVITY_HEARTBEAT_MS = 8 * 1000;
 const ACTIVITY_SNIPPET_MAX_CHARS = 200;
 
 /**
- * One running agent CLI = one AgentHandle. Keyed by `${sessionId}:${agentId}`
- * in SessionManager.handles. Owns: child process, temp file scaffolding,
+ * One running agent CLI = one AgentHandle. Keyed by `${conversationId}:${agentId}`
+ * in ConversationManager.handles. Owns: child process, temp file scaffolding,
  * driver, observed runtime state for gated steering.
  */
 interface AgentHandle {
-  sessionId: string;
+  conversationId: string;
   agentId: string;
   driver: Driver;
   child: ChildProcessWithoutNullStreams;
   rl: ReadlineInterface;
   spawnPrep: SpawnPrepHandle;
-  /** Most recent CLI session id from `system.init`. Persisted to
-   *  session_agents on receipt; lets `--resume` recover after restart.
+  /** Most recent CLI conversation id from `system.init`. Persisted to
+   *  conversation_agents on receipt; lets `--resume` recover after restart.
    *  May be non-null at spawn time when resuming — see `initObserved`
    *  for "has the live process actually emitted init yet". */
   cliSessionId: string | null;
@@ -125,12 +130,12 @@ export interface StartOptions {
  * Phase 3E adds delivery scheduling, 3F adds soft+hard interrupt,
  * 3G adds compaction watchdog. The skeleton accommodates all of those.
  */
-export class SessionManager {
+export class ConversationManager {
   private readonly handles = new Map<string, AgentHandle>();
   private readonly agents: AgentRepo;
-  private readonly channels: ChannelRepo;
-  private readonly sessions: SessionRepo;
-  private readonly inboxes: InboxRepo;
+  private readonly workspaces: WorkspaceRepo;
+  private readonly conversations: ConversationRepo;
+  private readonly inboxes: ConversationInboxRepo;
   private readonly messages: MessageRepo;
   private readonly notifications: NotificationRepo;
   private readonly settings: SettingsRepo;
@@ -154,9 +159,9 @@ export class SessionManager {
 
   constructor(private readonly ctx: BackendContext) {
     this.agents = new AgentRepo(ctx.db);
-    this.channels = new ChannelRepo(ctx.db, { workspacesRoot: ctx.workspacesRoot });
-    this.sessions = new SessionRepo(ctx.db);
-    this.inboxes = new InboxRepo(ctx.db);
+    this.workspaces = new WorkspaceRepo(ctx.db, { workspacesRoot: ctx.workspacesRoot });
+    this.conversations = new ConversationRepo(ctx.db);
+    this.inboxes = new ConversationInboxRepo(ctx.db);
     this.messages = new MessageRepo(ctx.db);
     this.notifications = new NotificationRepo(ctx.db);
     this.settings = new SettingsRepo(ctx.db);
@@ -174,55 +179,55 @@ export class SessionManager {
     }
   }
 
-  isRunning(sessionId: string, agentId: string): boolean {
-    return this.handles.has(handleKey(sessionId, agentId));
+  isRunning(conversationId: string, agentId: string): boolean {
+    return this.handles.has(handleKey(conversationId, agentId));
   }
 
-  getAgentRunStates(sessionId: string): AgentRunState[] {
+  getAgentRunStates(conversationId: string): AgentRunState[] {
     return Array.from(this.runStates.values()).filter(
-      state => state.sessionId === sessionId,
+      state => state.conversationId === conversationId,
     );
   }
 
   resolveRun(
-    sessionId: string,
+    conversationId: string,
     agentId: string,
     reason: AgentRunTerminalReason,
     runId?: string,
   ): void {
-    this.resolveRunByKey(handleKey(sessionId, agentId), reason, runId);
+    this.resolveRunByKey(handleKey(conversationId, agentId), reason, runId);
   }
 
-  resolveSessionRuns(
-    sessionId: string,
-    reason: AgentRunTerminalReason = 'session_closed',
+  resolveConversationRuns(
+    conversationId: string,
+    reason: AgentRunTerminalReason = 'conversation_closed',
   ): void {
-    for (const state of this.getAgentRunStates(sessionId)) {
-      this.resolveRun(state.sessionId, state.agentId, reason, state.runId);
+    for (const state of this.getAgentRunStates(conversationId)) {
+      this.resolveRun(state.conversationId, state.agentId, reason, state.runId);
     }
   }
 
   /**
    * Record a pre-spawn failure (before the child process is created).
-   * Writes a notification row, flips session_agent status to `crashed`,
+   * Writes a notification row, flips conversation_agent status to `crashed`,
    * and publishes an `agent_status` SSE event so the renderer can show
    * an error badge and — once useNotificationToasts is wired — a toast.
    */
-  private recordStartFailure(sessionId: string, agentId: string, error: Error): void {
+  private recordStartFailure(conversationId: string, agentId: string, error: Error): void {
     const agent = this.agents.get(agentId);
-    const session = this.sessions.get(sessionId);
-    // Ensure the session_agent row exists so we can update its status.
-    let sa = this.sessions.getAgent(sessionId, agentId);
-    if (!sa) sa = this.sessions.addAgent(sessionId, agentId);
+    const conversation = this.conversations.get(conversationId);
+    // Ensure the conversation_agent row exists so we can update its status.
+    let sa = this.conversations.getAgent(conversationId, agentId);
+    if (!sa) sa = this.conversations.addAgent(conversationId, agentId);
 
-    this.sessions.updateAgentRuntime(sessionId, agentId, { status: 'crashed', pid: null });
+    this.conversations.updateAgentRuntime(conversationId, agentId, { status: 'crashed', pid: null });
 
     try {
       this.notifications.insert({
         kind: 'agent_start_failed',
         agentId,
-        sessionId,
-        channelId: session?.channel_id ?? null,
+        conversationId: conversationId,
+        workspaceId: conversation?.workspace_id ?? null,
         payload: {
           agent_name: agent?.name ?? agentId,
           error: error.message,
@@ -230,10 +235,10 @@ export class SessionManager {
         },
       });
     } catch (e) {
-      this.ctx.logger.error({ sessionId, agentId, e }, 'session: failed to insert start-failure notification');
+      this.ctx.logger.error({ conversationId, agentId, e }, 'conversation: failed to insert start-failure notification');
     }
 
-    this.ctx.events.publish(sessionId, {
+    this.ctx.events.publish(conversationId, {
       kind: 'agent_status',
       payload: {
         agent_id: agentId,
@@ -246,11 +251,11 @@ export class SessionManager {
 
   /**
    * Record a runtime crash from the exit handler (process died with non-zero
-   * exit or init watchdog timeout). Does NOT update session_agent status —
+   * exit or init watchdog timeout). Does NOT update conversation_agent status —
    * the exit handler already does that. Just writes the notification row.
    */
   private recordCrashNotification(
-    sessionId: string,
+    conversationId: string,
     agentId: string,
     opts: {
       initTimedOut: boolean;
@@ -260,14 +265,14 @@ export class SessionManager {
     },
   ): void {
     const agent = this.agents.get(agentId);
-    const session = this.sessions.get(sessionId);
+    const conversation = this.conversations.get(conversationId);
     const reason = opts.initTimedOut ? 'init_timeout' : opts.reason ?? 'runtime_crash';
     try {
       this.notifications.insert({
         kind: 'agent_start_failed',
         agentId,
-        sessionId,
-        channelId: session?.channel_id ?? null,
+        conversationId: conversationId,
+        workspaceId: conversation?.workspace_id ?? null,
         payload: {
           agent_name: agent?.name ?? agentId,
           reason,
@@ -276,12 +281,12 @@ export class SessionManager {
         },
       });
     } catch (e) {
-      this.ctx.logger.error({ sessionId, agentId, e }, 'session: failed to insert crash notification');
+      this.ctx.logger.error({ conversationId, agentId, e }, 'conversation: failed to insert crash notification');
     }
   }
 
   /**
-   * Reconcile DB state with reality on backend boot. Any session_agent
+   * Reconcile DB state with reality on backend boot. Any conversation_agent
    * row marked `starting` / `active` is stale (its child belonged to
    * the previous backend process). For each row:
    *   - if `pid` is non-null AND that pid is still alive, SIGKILL it.
@@ -297,10 +302,10 @@ export class SessionManager {
    *     CLI conversation.
    *
    * No auto-spawn here per §3.1: agents wake only when a user opens the
-   * session or sends to them. The UI / route layer triggers `start()`.
+   * conversation or sends to them. The UI / route layer triggers `start()`.
    */
   reconcileOnBoot(): void {
-    const stale = this.sessions.listLiveStatusAgents();
+    const stale = this.conversations.listLiveStatusAgents();
     if (stale.length === 0) return;
     let killed = 0;
     for (const sa of stale) {
@@ -316,7 +321,7 @@ export class SessionManager {
           process.kill(sa.pid, 'SIGKILL');
           killed += 1;
           this.ctx.logger.warn(
-            { sessionId: sa.session_id, agentId: sa.agent_id, pid: sa.pid },
+            { conversationId: sa.conversation_id, agentId: sa.agent_id, pid: sa.pid },
             'reconcile: SIGKILL\'d orphaned agent process from prior boot',
           );
         } catch (err) {
@@ -325,57 +330,57 @@ export class SessionManager {
           const code = (err as NodeJS.ErrnoException).code;
           if (code !== 'ESRCH') {
             this.ctx.logger.warn(
-              { sessionId: sa.session_id, agentId: sa.agent_id, pid: sa.pid, err },
+              { conversationId: sa.conversation_id, agentId: sa.agent_id, pid: sa.pid, err },
               'reconcile: failed to kill orphan pid',
             );
           }
         }
       }
-      this.sessions.updateAgentRuntime(sa.session_id, sa.agent_id, {
+      this.conversations.updateAgentRuntime(sa.conversation_id, sa.agent_id, {
         status: 'idle',
         pid: null,
       });
     }
     this.ctx.logger.info(
       { count: stale.length, killed },
-      'reconciled stale session_agents from prior boot',
+      'reconciled stale conversation_agents from prior boot',
     );
   }
 
   /**
-   * Spawn the (session, agent) CLI. Idempotent: returns silently if
+   * Spawn the (conversation, agent) CLI. Idempotent: returns silently if
    * already running. Throws on missing entities or uninstalled runtime.
    *
    * Lifecycle wiring:
-   *  - session_agents row is upserted (status: starting → active on
+   *  - conversation_agents row is upserted (status: starting → active on
    *    `system.init`, → idle/crashed on exit)
    *  - stdout lines flow through driver.parseLine; events fan out to
-   *    ctx.events keyed by sessionId
+   *    ctx.events keyed by conversationId
    *  - On exit, handle is removed and temp files are cleaned up
    */
-  async start(sessionId: string, agentId: string, opts: StartOptions = {}): Promise<void> {
-    const key = handleKey(sessionId, agentId);
+  async start(conversationId: string, agentId: string, opts: StartOptions = {}): Promise<void> {
+    const key = handleKey(conversationId, agentId);
     if (this.handles.has(key)) {
       this.ctx.logger.info(
-        { sessionId, agentId },
-        'session: start no-op, already running',
+        { conversationId, agentId },
+        'conversation: start no-op, already running',
       );
       return;
     }
 
-    const session = this.sessions.get(sessionId);
-    if (!session) throw new Error(`session ${sessionId} not found`);
-    if (session.closed_at !== null) {
-      throw new Error(`session ${sessionId} is closed`);
+    const conversation = this.conversations.get(conversationId);
+    if (!conversation) throw new Error(`conversation ${conversationId} not found`);
+    if (conversation.closed_at !== null) {
+      throw new Error(`conversation ${conversationId} is closed`);
     }
     const agent = this.agents.get(agentId);
     if (!agent) throw new Error(`agent ${agentId} not found`);
-    const channel = this.channels.get(session.channel_id);
-    if (!channel) throw new Error(`channel ${session.channel_id} not found`);
+    const workspace = this.workspaces.get(conversation.workspace_id);
+    if (!workspace) throw new Error(`workspace ${conversation.workspace_id} not found`);
 
     // Make sure the join row exists (callers may have skipped addAgent).
-    let sessionAgent = this.sessions.getAgent(sessionId, agentId);
-    if (!sessionAgent) sessionAgent = this.sessions.addAgent(sessionId, agentId);
+    let sessionAgent = this.conversations.getAgent(conversationId, agentId);
+    if (!sessionAgent) sessionAgent = this.conversations.addAgent(conversationId, agentId);
 
     const driver = getDriver(agent.runtime);
     const binary = await this.resolveBinary(agent.runtime);
@@ -384,22 +389,22 @@ export class SessionManager {
         `runtime '${agent.runtime}' is not installed (no binary on PATH)`,
       );
       this.ctx.logger.error(
-        { sessionId, agentId, runtime: agent.runtime },
-        "session: runtime binary not found on PATH",
+        { conversationId, agentId, runtime: agent.runtime },
+        "conversation: runtime binary not found on PATH",
       );
-      this.recordStartFailure(sessionId, agentId, err);
+      this.recordStartFailure(conversationId, agentId, err);
       throw err;
     }
 
     // Synthesize prompt + write spawn files.
-    const promptCtx = await this.buildPromptContext(session, channel, agent);
+    const promptCtx = await this.buildPromptContext(conversation, workspace, agent);
     const systemPromptText = driver.buildSystemPrompt(promptCtx);
     const chatBridge: McpServerConfig = {
       command: this.ctx.chatBridgeLauncher.command,
       args: [
         ...this.ctx.chatBridgeLauncher.args,
-        '--session-id',
-        sessionId,
+        '--conversation-id',
+        conversationId,
         '--agent-id',
         agentId,
         '--server-url',
@@ -414,7 +419,7 @@ export class SessionManager {
       },
     };
     const spawnPrep = await prepareSpawnFiles({
-      sessionId,
+      conversationId,
       agentId,
       systemPromptText,
       chatBridge,
@@ -427,7 +432,7 @@ export class SessionManager {
     let initialPrompt = '';
     let preDrainedInboxIds: number[] = [];
     if (driver.oneShot) {
-      const items = this.inboxes.listPending(sessionId, agentId);
+      const items = this.inboxes.listPending(conversationId, agentId);
       if (items.length > 0) {
         initialPrompt = formatInboxBatch(
           items,
@@ -440,12 +445,12 @@ export class SessionManager {
     }
     const hasKickoffInbox =
       preDrainedInboxIds.length > 0 ||
-      (!driver.oneShot && this.inboxes.listPending(sessionId, agentId).length > 0);
+      (!driver.oneShot && this.inboxes.listPending(conversationId, agentId).length > 0);
 
     const spawnCtx: DriverSpawnContext = {
       agentId,
       agentName: agent.name,
-      workspacePath: channel.workspace_path,
+      workspacePath: conversation.workspace_path,
       cliSessionId: sessionAgent.cli_session_id,
       model: opts.model ?? agent.model,
       mcpConfigPath: spawnPrep.mcpConfigPath,
@@ -458,12 +463,12 @@ export class SessionManager {
     const env = this.applyProxySetting(driver.applyEnv(process.env), agent.runtime);
 
     this.ctx.logger.info(
-      { sessionId, agentId, runtime: agent.runtime, binary, args },
-      'session: spawning agent',
+      { conversationId, agentId, runtime: agent.runtime, binary, args },
+      'conversation: spawning agent',
     );
 
     const child = spawn(binary, args, {
-      cwd: channel.workspace_path,
+      cwd: conversation.workspace_path,
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
     }) as ChildProcessWithoutNullStreams;
@@ -471,7 +476,7 @@ export class SessionManager {
     const rl = createInterface({ input: child.stdout });
 
     const handle: AgentHandle = {
-      sessionId,
+      conversationId,
       agentId,
       driver,
       child,
@@ -491,11 +496,11 @@ export class SessionManager {
     };
     this.handles.set(key, handle);
 
-    this.sessions.updateAgentRuntime(sessionId, agentId, {
+    this.conversations.updateAgentRuntime(conversationId, agentId, {
       status: 'starting',
       pid: child.pid ?? null,
     });
-    this.publish(sessionId, 'agent_status', {
+    this.publish(conversationId, 'agent_status', {
       agent_id: agentId,
       status: 'starting',
       pid: child.pid ?? null,
@@ -517,16 +522,16 @@ export class SessionManager {
     child.stderr.on('data', (chunk: Buffer) => {
       const text = chunk.toString();
       // Surface stderr to logs; not modeled as a chat event.
-      this.ctx.logger.warn({ sessionId, agentId, text }, 'agent stderr');
+      this.ctx.logger.warn({ conversationId, agentId, text }, 'agent stderr');
     });
 
     child.on('error', err => {
-      this.ctx.logger.error({ sessionId, agentId, err }, 'agent process error');
+      this.ctx.logger.error({ conversationId, agentId, err }, 'agent process error');
     });
 
     child.on('exit', (code, signal) => {
       this.ctx.logger.info(
-        { sessionId, agentId, code, signal },
+        { conversationId, agentId, code, signal },
         'agent process exited',
       );
       // initTimedOut/fatalError win over intentionallyStopped — in
@@ -540,11 +545,11 @@ export class SessionManager {
           : handle.intentionallyStopped || code === 0
             ? 'idle'
             : 'crashed';
-      this.sessions.updateAgentRuntime(sessionId, agentId, {
+      this.conversations.updateAgentRuntime(conversationId, agentId, {
         status,
         pid: null,
       });
-      this.publish(sessionId, 'agent_status', {
+      this.publish(conversationId, 'agent_status', {
         agent_id: agentId,
         status,
         exit_code: code,
@@ -554,14 +559,14 @@ export class SessionManager {
       });
       // Write a persistent notification for unexpected crashes so the
       // global toast hook can alert the user even if they aren't watching
-      // this session's SSE stream.
+      // this conversation's SSE stream.
       if (
         status === 'crashed' &&
         !handle.intentionallyStopped &&
         !handle.crashNotificationRecorded
       ) {
         handle.crashNotificationRecorded = true;
-        this.recordCrashNotification(sessionId, agentId, {
+        this.recordCrashNotification(conversationId, agentId, {
           initTimedOut: handle.initTimedOut,
           exitCode: code,
           reason: fatalReason,
@@ -594,11 +599,11 @@ export class SessionManager {
         !handle.intentionallyStopped &&
         !handle.initTimedOut &&
         !handle.fatalError &&
-        this.inboxes.listPending(sessionId, agentId).length > 0
+        this.inboxes.listPending(conversationId, agentId).length > 0
       ) {
-        this.start(sessionId, agentId, opts).catch(err =>
+        this.start(conversationId, agentId, opts).catch(err =>
           this.ctx.logger.error(
-            { sessionId, agentId, err },
+            { conversationId, agentId, err },
             'oneShot: auto-respawn after exit failed',
           ),
         );
@@ -633,7 +638,7 @@ export class SessionManager {
     // safe — see drainInbox / doDrainInbox.
     this.drainInbox(handle).catch(err =>
       this.ctx.logger.error(
-        { sessionId, agentId, err },
+        { conversationId, agentId, err },
         'spawn-time inbox drain failed',
       ),
     );
@@ -654,12 +659,12 @@ export class SessionManager {
    * across app restarts.
    */
   async stop(
-    sessionId: string,
+    conversationId: string,
     agentId: string,
     mode: 'soft' | 'hard' = 'hard',
     softDirective?: string,
   ): Promise<void> {
-    const key = handleKey(sessionId, agentId);
+    const key = handleKey(conversationId, agentId);
     const h = this.handles.get(key);
     if (!h) return;
 
@@ -670,7 +675,7 @@ export class SessionManager {
           'wait for the next instruction]';
       await this.writeUserMessage(h, directive, false).catch(err =>
         this.ctx.logger.warn(
-          { sessionId, agentId, err },
+          { conversationId, agentId, err },
           'soft interrupt write failed',
         ),
       );
@@ -704,7 +709,7 @@ export class SessionManager {
     const sigtermTimer = setTimeout(() => {
       if (!this.handles.has(key)) return;
       this.ctx.logger.info(
-        { sessionId, agentId },
+        { conversationId, agentId },
         'hard stop: control_request didn\'t exit, sending SIGTERM',
       );
       h.child.kill('SIGTERM');
@@ -712,7 +717,7 @@ export class SessionManager {
     const sigkillTimer = setTimeout(() => {
       if (this.handles.has(key)) {
         this.ctx.logger.warn(
-          { sessionId, agentId },
+          { conversationId, agentId },
           'hard stop: SIGTERM did not exit, sending SIGKILL',
         );
         h.child.kill('SIGKILL');
@@ -726,7 +731,7 @@ export class SessionManager {
     if (interruptLine) {
       void this.writeLine(h, interruptLine).catch(err =>
         this.ctx.logger.warn(
-          { sessionId, agentId, err },
+          { conversationId, agentId, err },
           'interrupt control write failed; signals will handle shutdown',
         ),
       );
@@ -768,7 +773,7 @@ export class SessionManager {
   // ── internals ──────────────────────────────────────────────────────
 
   private handleParsedEvent(handle: AgentHandle, ev: ParsedEvent): void {
-    const { sessionId, agentId } = handle;
+    const { conversationId, agentId } = handle;
     switch (ev.kind) {
       case 'session_init':
         // claude --input-format stream-json emits {type:'system',
@@ -785,24 +790,24 @@ export class SessionManager {
         // First init landed → cancel the watchdog. Subsequent inits
         // short-circuit above, so this only fires once.
         this.clearInitWatchdog(handle);
-        this.sessions.updateAgentRuntime(sessionId, agentId, {
+        this.conversations.updateAgentRuntime(conversationId, agentId, {
           status: 'active',
           cliSessionId: ev.sessionId,
         });
-        this.publish(sessionId, 'agent_status', {
+        this.publish(conversationId, 'agent_status', {
           agent_id: agentId,
           status: 'active',
           cli_session_id: ev.sessionId,
         });
         this.ctx.logger.info(
-          { sessionId, agentId, cliSessionId: ev.sessionId },
+          { conversationId, agentId, cliSessionId: ev.sessionId },
           'agent: session_init received, status → active',
         );
         // §3.1 C: spawn-time inbox drain. Anything queued while the
         // agent was asleep gets injected now as one stdin user message.
         this.drainInbox(handle).catch(err =>
           this.ctx.logger.error(
-            { sessionId, agentId, err },
+            { conversationId, agentId, err },
             'inbox drain failed',
           ),
         );
@@ -812,7 +817,7 @@ export class SessionManager {
         this.recordToolCall(handle, ev.name);
         this.ctx.logger.info(
           {
-            sessionId,
+            conversationId,
             agentId,
             tool: ev.name,
             toolCallId: ev.toolCallId,
@@ -833,28 +838,28 @@ export class SessionManager {
       case 'turn_end':
         handle.busy.outstandingToolUses = 0;
         this.ctx.logger.info(
-          { sessionId, agentId, pendingDeliveries: handle.pendingDeliveries.length },
+          { conversationId, agentId, pendingDeliveries: handle.pendingDeliveries.length },
           'agent: turn_end',
         );
         if (handle.pendingDeliveries.length === 0 && isSafeBoundary(handle)) {
-          this.resolveRunByKey(handleKey(sessionId, agentId), 'turn_ended');
+          this.resolveRunByKey(handleKey(conversationId, agentId), 'turn_ended');
         }
         void this.flushPending(handle);
         break;
       case 'compaction_started':
         handle.busy.compacting = true;
-        this.ctx.logger.info({ sessionId, agentId }, 'agent: compaction_started');
+        this.ctx.logger.info({ conversationId, agentId }, 'agent: compaction_started');
         this.startCompactionWatchdog(handle);
         break;
       case 'compaction_finished':
         handle.busy.compacting = false;
-        this.ctx.logger.info({ sessionId, agentId }, 'agent: compaction_finished');
+        this.ctx.logger.info({ conversationId, agentId }, 'agent: compaction_finished');
         this.clearCompactionWatchdog(handle);
         void this.flushPending(handle);
         break;
       case 'error':
         this.ctx.logger.warn(
-          { sessionId, agentId, event: ev },
+          { conversationId, agentId, event: ev },
           'agent: parsed error event from CLI',
         );
         if (ev.fatal && ev.code === 'thread_not_found') {
@@ -875,7 +880,7 @@ export class SessionManager {
         break;
     }
     // Fan out everything (including state-affecting events) to UI.
-    this.publish(sessionId, 'agent_event', { agent_id: agentId, event: ev });
+    this.publish(conversationId, 'agent_event', { agent_id: agentId, event: ev });
   }
 
   private handleFatalRuntimeError(
@@ -884,17 +889,17 @@ export class SessionManager {
     error: string,
   ): void {
     if (handle.fatalError) return;
-    const { sessionId, agentId } = handle;
-    const key = handleKey(sessionId, agentId);
+    const { conversationId, agentId } = handle;
+    const key = handleKey(conversationId, agentId);
 
     handle.fatalError = { reason, error };
     this.clearInitWatchdog(handle);
-    this.sessions.updateAgentRuntime(sessionId, agentId, {
+    this.conversations.updateAgentRuntime(conversationId, agentId, {
       status: 'crashed',
       pid: null,
       cliSessionId: null,
     });
-    this.publish(sessionId, 'agent_status', {
+    this.publish(conversationId, 'agent_status', {
       agent_id: agentId,
       status: 'crashed',
       reason,
@@ -904,7 +909,7 @@ export class SessionManager {
 
     if (!handle.crashNotificationRecorded) {
       handle.crashNotificationRecorded = true;
-      this.recordCrashNotification(sessionId, agentId, {
+      this.recordCrashNotification(conversationId, agentId, {
         initTimedOut: false,
         exitCode: null,
         reason,
@@ -918,8 +923,8 @@ export class SessionManager {
     }, 5_000).unref();
   }
 
-  private publish(sessionId: string, kind: string, payload: unknown): void {
-    this.ctx.events.publish(sessionId, { kind, payload });
+  private publish(conversationId: string, kind: string, payload: unknown): void {
+    this.ctx.events.publish(conversationId, { kind, payload });
   }
 
   private startRun(
@@ -931,21 +936,21 @@ export class SessionManager {
     const state: AgentRunState = {
       runId: randomUUID(),
       agentId: handle.agentId,
-      sessionId: handle.sessionId,
+      conversationId: handle.conversationId,
       status,
       startedAt: now,
       updatedAt: now,
       lastActivityAt: now,
       ...(detail ? { detail } : {}),
     };
-    this.runStates.set(handleKey(handle.sessionId, handle.agentId), state);
+    this.runStates.set(handleKey(handle.conversationId, handle.agentId), state);
     this.publishAgentActivity(state);
     this.ensureActivityHeartbeat();
     return state;
   }
 
   private markRunThinking(handle: AgentHandle): void {
-    const key = handleKey(handle.sessionId, handle.agentId);
+    const key = handleKey(handle.conversationId, handle.agentId);
     const current = this.runStates.get(key);
     if (current?.status === 'starting') {
       this.updateRun(handle, { status: 'thinking' });
@@ -971,7 +976,7 @@ export class SessionManager {
       >
     >,
   ): AgentRunState | null {
-    const key = handleKey(handle.sessionId, handle.agentId);
+    const key = handleKey(handle.conversationId, handle.agentId);
     const current = this.runStates.get(key);
     if (!current) return null;
     const next: AgentRunState = {
@@ -985,7 +990,7 @@ export class SessionManager {
   }
 
   private recordToolCall(handle: AgentHandle, toolName: string): void {
-    const key = handleKey(handle.sessionId, handle.agentId);
+    const key = handleKey(handle.conversationId, handle.agentId);
     const current = this.runStates.get(key);
     const toolCallCounts =
       toolName === sendMessageToolName(handle.driver)
@@ -1020,14 +1025,14 @@ export class SessionManager {
   }
 
   private publishAgentActivity(state: AgentRunState): void {
-    this.publish(state.sessionId, 'agent_activity', state);
+    this.publish(state.conversationId, 'agent_activity', state);
     if (this.activityLogStream) {
       // Write a compact JSONL entry with the fields most useful for debugging.
       // Fire-and-forget — stream errors are handled by the 'error' listener
       // on the stream; we never let a log failure propagate to the caller.
       const entry = JSON.stringify({
         ts: new Date().toISOString(),
-        sessionId: state.sessionId,
+        conversationId: state.conversationId,
         agentId: state.agentId,
         runId: state.runId,
         status: state.status,
@@ -1070,40 +1075,41 @@ export class SessionManager {
   }
 
   private async buildPromptContext(
-    session: ReturnType<SessionRepo['get']> & {},
-    channel: ReturnType<ChannelRepo['get']> & {},
+    conversation: ConversationDto,
+    workspace: WorkspaceDto,
     agent: AgentDto,
   ): Promise<DriverPromptContext> {
-    const others = this.sessions
-      .listAgents(session.id)
+    const others = this.conversations
+      .listAgents(conversation.id)
       .filter(sa => sa.agent_id !== agent.id)
       .map(sa => this.agents.get(sa.agent_id))
       .filter((a): a is AgentDto => a !== null)
       .map(a => ({ name: a.name, runtime: a.runtime }));
 
     let parentSessionTitle: string | null = null;
-    if (session.parent_session_id) {
-      const parent = this.sessions.get(session.parent_session_id);
+    if (conversation.parent_conversation_id) {
+      const parent = this.conversations.get(conversation.parent_conversation_id);
       parentSessionTitle = parent?.title ?? null;
     }
 
     const l2Path = join(
-      channel.workspace_path,
+      conversation.workspace_path,
       '.silverhand',
       'agents',
       agent.id,
       'system_prompt.md',
     );
     const l2SystemPrompt = await readFile(l2Path, 'utf-8').catch(() => '');
+    const isThread = conversation.kind === 'thread';
 
     const sessionContext: SessionContextInput = {
-      channelName: channel.name,
-      channelKind: channel.kind,
-      sessionTitle: session.title,
+      channelName: conversation.kind === 'dm_channel' ? conversation.title : workspace.name,
+      channelKind: conversation.kind === 'dm_channel' ? 'dm' : 'regular',
+      sessionTitle: conversation.title,
       otherMembers: others,
-      isChildSession: session.parent_session_id !== null,
+      isChildSession: isThread,
       parentSessionTitle,
-      isAgentSpawnedChild: session.spawned_by_agent_id !== null,
+      isAgentSpawnedChild: conversation.spawned_by_agent_id !== null,
     };
 
     return {
@@ -1116,7 +1122,7 @@ export class SessionManager {
 
   /**
    * Deliver a message that already exists in the `messages` table to one
-   * specific (session, agent). The caller wrote the row + decided this
+   * specific (conversation, agent). The caller wrote the row + decided this
    * agent should see it. We pick the path:
    *
    *   - agent not running       → enqueue to `agent_inboxes` (drained on
@@ -1126,12 +1132,12 @@ export class SessionManager {
    *   - gated mode mid-turn     → push to handle.pendingDeliveries; flush
    *                               at next safe boundary
    */
-  async deliverMessage(sessionId: string, agentId: string, messageId: string): Promise<void> {
-    const handle = this.handles.get(handleKey(sessionId, agentId));
+  async deliverMessage(conversationId: string, agentId: string, messageId: string): Promise<void> {
+    const handle = this.handles.get(handleKey(conversationId, agentId));
     if (!handle) {
-      this.inboxes.enqueue(sessionId, agentId, messageId);
+      this.inboxes.enqueue(conversationId, agentId, messageId);
       this.ctx.logger.info(
-        { sessionId, agentId, messageId },
+        { conversationId, agentId, messageId },
         'deliver: agent not running, enqueued to inbox',
       );
       // Look up the agent to decide if we need to wake it up: oneShot
@@ -1141,9 +1147,9 @@ export class SessionManager {
       if (agent) {
         const driver = getDriver(agent.runtime);
         if (driver.oneShot) {
-          this.start(sessionId, agentId).catch(err =>
+          this.start(conversationId, agentId).catch(err =>
             this.ctx.logger.error(
-              { sessionId, agentId, err },
+              { conversationId, agentId, err },
               'oneShot: auto-start on deliverMessage failed',
             ),
           );
@@ -1154,7 +1160,7 @@ export class SessionManager {
     const msg = this.messages.getById(messageId);
     if (!msg) {
       this.ctx.logger.warn(
-        { sessionId, agentId, messageId },
+        { conversationId, agentId, messageId },
         'deliver: messageId not found in messages table',
       );
       return;
@@ -1172,9 +1178,9 @@ export class SessionManager {
     // we don't double-start here — the exit handler covers the
     // race-with-just-finishing case.
     if (handle.driver.busyDeliveryMode === 'none') {
-      this.inboxes.enqueue(sessionId, agentId, messageId);
+      this.inboxes.enqueue(conversationId, agentId, messageId);
       this.ctx.logger.info(
-        { sessionId, agentId, messageId },
+        { conversationId, agentId, messageId },
         'deliver: oneShot agent running; queued for next respawn',
       );
       return;
@@ -1187,16 +1193,16 @@ export class SessionManager {
       // catches up.
       const line = handle.driver.encodeStdinMessage(text, handle.cliSessionId);
       if (line === null) {
-        this.inboxes.enqueue(sessionId, agentId, messageId);
+        this.inboxes.enqueue(conversationId, agentId, messageId);
         this.ctx.logger.info(
-          { sessionId, agentId, messageId },
+          { conversationId, agentId, messageId },
           'deliver: driver not yet ready (e.g. codex pre-thread); enqueued to inbox',
         );
         return;
       }
       this.ctx.logger.info(
         {
-          sessionId,
+          conversationId,
           agentId,
           messageId,
           mode: handle.driver.busyDeliveryMode,
@@ -1210,7 +1216,7 @@ export class SessionManager {
       handle.pendingDeliveries.push(text);
       this.ctx.logger.info(
         {
-          sessionId,
+          conversationId,
           agentId,
           messageId,
           pendingCount: handle.pendingDeliveries.length,
@@ -1234,7 +1240,7 @@ export class SessionManager {
         : combineGatedBatch(batch, sendMessageToolName(handle.driver));
     this.ctx.logger.info(
       {
-        sessionId: handle.sessionId,
+        conversationId: handle.conversationId,
         agentId: handle.agentId,
         batchSize: batch.length,
         bytes: combined.length,
@@ -1254,7 +1260,7 @@ export class SessionManager {
       // Driver doesn't accept stdin notifications. Caller should have
       // routed via the inbox path; getting here is a bug.
       this.ctx.logger.warn(
-        { sessionId: handle.sessionId, agentId: handle.agentId },
+        { conversationId: handle.conversationId, agentId: handle.agentId },
         'writeUserMessage: driver returned null encoding; dropped',
       );
       return;
@@ -1268,12 +1274,12 @@ export class SessionManager {
     handle.compactionWatchdog = setTimeout(() => {
       handle.compactionWatchdog = null;
       // Per slock §3.5: stale, but don't kill — just surface it.
-      this.publish(handle.sessionId, 'compaction_stale', {
+      this.publish(handle.conversationId, 'compaction_stale', {
         agent_id: handle.agentId,
         elapsed_ms: COMPACTION_STALE_MS,
       });
       this.ctx.logger.warn(
-        { sessionId: handle.sessionId, agentId: handle.agentId },
+        { conversationId: handle.conversationId, agentId: handle.agentId },
         'compaction has been running for 5min with no finish event',
       );
     }, COMPACTION_STALE_MS);
@@ -1293,12 +1299,12 @@ export class SessionManager {
       handle.initWatchdog = null;
       // Defensive: another path (e.g. `stop()`) may have raced and
       // already cleared the handle out of the map. Nothing to do then.
-      if (!this.handles.has(handleKey(handle.sessionId, handle.agentId))) return;
+      if (!this.handles.has(handleKey(handle.conversationId, handle.agentId))) return;
       // Race: init landed in the same tick the timer fired. Honor it.
       if (handle.initObserved) return;
       this.ctx.logger.warn(
         {
-          sessionId: handle.sessionId,
+          conversationId: handle.conversationId,
           agentId: handle.agentId,
           elapsedMs: timeoutMs,
         },
@@ -1309,13 +1315,13 @@ export class SessionManager {
       // distinguish "child crashed naturally" from "we killed it because
       // it never initialized". The exit handler will publish the usual
       // `agent_status: crashed` shortly after.
-      this.publish(handle.sessionId, 'agent_init_timeout', {
+      this.publish(handle.conversationId, 'agent_init_timeout', {
         agent_id: handle.agentId,
         elapsed_ms: timeoutMs,
       });
       handle.child.kill('SIGTERM');
       setTimeout(() => {
-        if (this.handles.has(handleKey(handle.sessionId, handle.agentId))) {
+        if (this.handles.has(handleKey(handle.conversationId, handle.agentId))) {
           handle.child.kill('SIGKILL');
         }
       }, 5_000).unref();
@@ -1387,7 +1393,7 @@ export class SessionManager {
   }
 
   private async doDrainInbox(handle: AgentHandle): Promise<void> {
-    const items = this.inboxes.listPending(handle.sessionId, handle.agentId);
+    const items = this.inboxes.listPending(handle.conversationId, handle.agentId);
     if (items.length === 0) return;
     const text = formatInboxBatch(
       items,
@@ -1403,7 +1409,7 @@ export class SessionManager {
       // retry will pick the items up once the driver flips to ready.
       this.ctx.logger.info(
         {
-          sessionId: handle.sessionId,
+          conversationId: handle.conversationId,
           agentId: handle.agentId,
           itemCount: items.length,
         },
@@ -1413,7 +1419,7 @@ export class SessionManager {
     }
     this.ctx.logger.info(
       {
-        sessionId: handle.sessionId,
+        conversationId: handle.conversationId,
         agentId: handle.agentId,
         itemCount: items.length,
         bytes: text.length,
@@ -1436,8 +1442,8 @@ export class SessionManager {
   }
 }
 
-function handleKey(sessionId: string, agentId: string): string {
-  return `${sessionId}:${agentId}`;
+function handleKey(conversationId: string, agentId: string): string {
+  return `${conversationId}:${agentId}`;
 }
 
 function sendMessageToolName(driver: Driver): string {
@@ -1450,7 +1456,7 @@ function sendMessageToolName(driver: Driver): string {
  * sender appropriately. Order = enqueue order.
  */
 function formatInboxBatch(
-  items: PendingInboxItem[],
+  items: PendingConversationInboxItem[],
   agentNameById: (id: string) => string | undefined,
   recipientAgentName: string | undefined,
   sendMessageTool: string,

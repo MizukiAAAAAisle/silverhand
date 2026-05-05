@@ -1,12 +1,13 @@
 import type { ReactNode } from 'react';
-import type { ChannelKind } from '@silverhand/shared';
 import { Hash, MessageCircle } from 'lucide-react';
 import { SidebarRow, SidebarSection } from './sidebar-shared';
+
+type WorkspaceUiKind = 'regular' | 'dm';
 
 export interface WorkspaceItem {
   id: string;
   name: string;
-  kind: ChannelKind;
+  kind: WorkspaceUiKind;
   dm_agent_id: string | null;
   active?: boolean;
   /** Unread mention notifications scoped to this workspace. Falsy / 0
@@ -22,7 +23,7 @@ interface WorkspaceGroupProps {
   /** Default kind for icon picking when a row's `kind` is the same.
    *  For mixed groups (e.g. Archived combines DM + regular) the per-row
    *  `w.kind` wins. Kept on the group for the empty-state messaging. */
-  kind: ChannelKind;
+  kind: WorkspaceUiKind;
   workspaces: WorkspaceItem[];
   selectedWorkspaceId: string | null;
   onSelectWorkspace: (id: string) => void;
@@ -36,7 +37,7 @@ interface WorkspaceGroupProps {
   defaultExpanded?: boolean;
 }
 
-const ICON_BY_KIND: Record<ChannelKind, JSX.Element> = {
+const ICON_BY_KIND: Record<WorkspaceUiKind, JSX.Element> = {
   regular: <Hash className="size-3.5" />,
   dm: <MessageCircle className="size-3.5" />,
 };

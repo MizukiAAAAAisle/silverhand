@@ -1,38 +1,53 @@
 import type { Database as Db } from 'better-sqlite3';
 import type {
-  ChannelKind,
-  ChannelRow,
   MessageRow,
-  SearchChannelRef,
+  ConversationKind,
+  SearchConversationRef,
   SearchQueryInput,
   SearchResultDto,
-  SearchSessionRef,
+  SearchWorkspaceRef,
 } from '@silverhand/shared';
 import { messageRowToDto } from './message-repo.js';
 
 type SqlValue = string | number | null;
 
-interface SessionSearchRow {
-  session_id: string;
-  session_title: string;
-  parent_session_id: string | null;
-  closed_at: number | null;
-  session_created_at: number;
+type SearchWorkspaceKind = 'regular' | 'dm';
+
+interface ConversationSearchRow {
+  conversation_id: string;
+  conversation_title: string;
+  conversation_kind: ConversationKind;
   channel_id: string;
-  channel_name: string;
-  channel_kind: ChannelKind;
-  dm_agent_id: string | null;
+  thread_id: string | null;
+  parent_conversation_id: string | null;
+  closed_at: number | null;
+  conversation_created_at: number;
+  workspace_id: string;
+  workspace_name: string;
+  workspace_kind: SearchWorkspaceKind;
+}
+
+interface WorkspaceSearchRow {
+  workspace_id: string;
+  workspace_name: string;
+  workspace_kind: SearchWorkspaceKind;
+  description: string | null;
+  archived_at: number | null;
+  created_at: number;
+  updated_at: number;
 }
 
 type MessageSearchRow = MessageRow & {
-  session_title: string;
-  parent_session_id: string | null;
-  closed_at: number | null;
-  session_created_at: number;
+  conversation_title: string;
+  conversation_kind: ConversationKind;
   channel_id: string;
-  channel_name: string;
-  channel_kind: ChannelKind;
-  dm_agent_id: string | null;
+  thread_id: string | null;
+  parent_conversation_id: string | null;
+  closed_at: number | null;
+  conversation_created_at: number;
+  workspace_id: string;
+  workspace_name: string;
+  workspace_kind: SearchWorkspaceKind;
   agent_name: string | null;
 };
 
@@ -44,33 +59,37 @@ function likeNeedle(query: string): string {
   return `%${escapeLike(query)}%`;
 }
 
-function channelRef(row: {
-  channel_id: string;
-  channel_name: string;
-  channel_kind: ChannelKind;
-  dm_agent_id: string | null;
-}): SearchChannelRef {
+function workspaceRef(row: {
+  workspace_id: string;
+  workspace_name: string;
+  workspace_kind: SearchWorkspaceKind;
+}): SearchWorkspaceRef {
   return {
-    id: row.channel_id,
-    name: row.channel_name,
-    kind: row.channel_kind,
-    dm_agent_id: row.dm_agent_id,
+    id: row.workspace_id,
+    name: row.workspace_name,
+    kind: row.workspace_kind,
   };
 }
 
-function sessionRef(row: {
-  session_id: string;
-  session_title: string;
-  parent_session_id: string | null;
+function conversationRef(row: {
+  conversation_id: string;
+  conversation_title: string;
+  conversation_kind: ConversationKind;
+  channel_id: string;
+  thread_id: string | null;
+  parent_conversation_id: string | null;
   closed_at: number | null;
-  session_created_at: number;
-}): SearchSessionRef {
+  conversation_created_at: number;
+}): SearchConversationRef {
   return {
-    id: row.session_id,
-    title: row.session_title,
-    parent_session_id: row.parent_session_id,
+    id: row.conversation_id,
+    title: row.conversation_title,
+    kind: row.conversation_kind,
+    channel_id: row.channel_id,
+    thread_id: row.thread_id,
+    parent_conversation_id: row.parent_conversation_id,
     closed_at: row.closed_at,
-    created_at: row.session_created_at,
+    created_at: row.conversation_created_at,
   };
 }
 
@@ -82,7 +101,8 @@ export class SearchRepo {
     const hasAuthorFilter = !!input.user_id || !!input.agent_id;
     const hasSearchIntent =
       query.length > 0 ||
-      !!input.channel_id ||
+      !!input.workspace_id ||
+      !!input.conversation_id ||
       input.scope !== 'all' ||
       !!input.user_id ||
       !!input.agent_id ||
@@ -97,8 +117,8 @@ export class SearchRepo {
 
     if (includeNamedEntities) {
       results.push(
-        ...this.searchChannels(input, query, Math.min(20, limit)),
-        ...this.searchSessions(input, query, Math.min(30, limit)),
+        ...this.searchWorkspaces(input, query, Math.min(20, limit)),
+        ...this.searchConversations(input, query, Math.min(30, limit)),
       );
     }
 
@@ -106,36 +126,57 @@ export class SearchRepo {
     return results.slice(0, limit);
   }
 
-  private searchChannels(
+  private searchWorkspaces(
     input: SearchQueryInput,
     query: string,
     limit: number,
   ): SearchResultDto[] {
     const where: string[] = [
-      `(c.name LIKE ? ESCAPE '\\' OR c.description LIKE ? ESCAPE '\\')`,
+      `(channel_name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\')`,
     ];
     const params: SqlValue[] = [likeNeedle(query), likeNeedle(query)];
-    applyChannelFilters(where, params, input, 'c');
-    applyTimeFilters(where, params, input, 'c.created_at');
+    applyNamedScopeFilters(where, params, input);
+    applyTimeFilters(where, params, input, 'created_at');
     params.push(limit);
 
     const rows = this.db
       .prepare(
         `SELECT *
-           FROM channels c
+           FROM (
+             SELECT
+               w.id AS workspace_id,
+               w.name AS workspace_name,
+               'regular' AS workspace_kind,
+               w.description AS description,
+               w.archived_at AS archived_at,
+               w.created_at AS created_at,
+               w.updated_at AS updated_at
+             FROM workspaces w
+             WHERE w.workspace_kind = 'regular'
+             UNION ALL
+             SELECT
+               c.id AS workspace_id,
+               c.title AS workspace_name,
+               'dm' AS workspace_kind,
+               NULL AS description,
+               c.closed_at AS archived_at,
+               c.created_at AS created_at,
+               c.updated_at AS updated_at
+             FROM conversations c
+             WHERE c.kind = 'dm_channel'
+           )
           WHERE ${where.join(' AND ')}
-          ORDER BY c.updated_at DESC
+          ORDER BY updated_at DESC
           LIMIT ?`,
       )
-      .all(...params) as ChannelRow[];
+      .all(...params) as WorkspaceSearchRow[];
 
     return rows.map(row => ({
-      type: 'channel',
-      channel: {
-        id: row.id,
-        name: row.name,
-        kind: row.kind,
-        dm_agent_id: row.dm_agent_id,
+      type: 'workspace',
+      workspace: {
+        id: row.workspace_id,
+        name: row.workspace_name,
+        kind: row.workspace_kind,
         description: row.description,
         archived_at: row.archived_at,
         created_at: row.created_at,
@@ -144,41 +185,47 @@ export class SearchRepo {
     }));
   }
 
-  private searchSessions(
+  private searchConversations(
     input: SearchQueryInput,
     query: string,
     limit: number,
   ): SearchResultDto[] {
-    const where: string[] = [`s.title LIKE ? ESCAPE '\\'`];
+    const where: string[] = [`conv.title LIKE ? ESCAPE '\\'`];
     const params: SqlValue[] = [likeNeedle(query)];
-    applyChannelFilters(where, params, input, 'c');
-    applyTimeFilters(where, params, input, 's.created_at');
+    applyConversationScopeFilters(where, params, input, 'conv', 'root', 'w');
+    applyTimeFilters(where, params, input, 'conv.created_at');
     params.push(limit);
 
     const rows = this.db
       .prepare(
         `SELECT
-            s.id AS session_id,
-            s.title AS session_title,
-            s.parent_session_id AS parent_session_id,
-            s.closed_at AS closed_at,
-            s.created_at AS session_created_at,
-            c.id AS channel_id,
-            c.name AS channel_name,
-            c.kind AS channel_kind,
-            c.dm_agent_id AS dm_agent_id
-           FROM sessions s
-           JOIN channels c ON c.id = s.channel_id
+            conv.id AS conversation_id,
+            conv.title AS conversation_title,
+            conv.kind AS conversation_kind,
+            root.id AS channel_id,
+            CASE WHEN conv.kind = 'thread' THEN conv.id ELSE NULL END AS thread_id,
+            conv.parent_conversation_id AS parent_conversation_id,
+            conv.closed_at AS closed_at,
+            conv.created_at AS conversation_created_at,
+            CASE WHEN root.kind = 'dm_channel' THEN root.id ELSE w.id END AS workspace_id,
+            CASE WHEN root.kind = 'dm_channel' THEN root.title ELSE w.name END AS workspace_name,
+            CASE WHEN root.kind = 'dm_channel' THEN 'dm' ELSE 'regular' END AS workspace_kind
+           FROM conversations conv
+           JOIN workspaces w ON w.id = conv.workspace_id
+           JOIN conversations root ON root.id = CASE
+             WHEN conv.kind = 'thread' THEN conv.parent_conversation_id
+             ELSE conv.id
+           END
           WHERE ${where.join(' AND ')}
-          ORDER BY s.updated_at DESC
+          ORDER BY conv.updated_at DESC
           LIMIT ?`,
       )
-      .all(...params) as SessionSearchRow[];
+      .all(...params) as ConversationSearchRow[];
 
     return rows.map(row => ({
-      type: 'session',
-      channel: channelRef(row),
-      session: sessionRef(row),
+      type: 'conversation',
+      workspace: workspaceRef(row),
+      conversation: conversationRef(row),
     }));
   }
 
@@ -193,7 +240,7 @@ export class SearchRepo {
       where.push(`m.content LIKE ? ESCAPE '\\'`);
       params.push(likeNeedle(query));
     }
-    applyChannelFilters(where, params, input, 'c');
+    applyConversationScopeFilters(where, params, input, 'conv', 'root', 'w');
     applyTimeFilters(where, params, input, 'm.created_at');
     if (input.user_id) {
       where.push(`m.from_kind = 'user'`);
@@ -216,18 +263,24 @@ export class SearchRepo {
       .prepare(
         `SELECT
             m.*,
-            s.title AS session_title,
-            s.parent_session_id AS parent_session_id,
-            s.closed_at AS closed_at,
-            s.created_at AS session_created_at,
-            c.id AS channel_id,
-            c.name AS channel_name,
-            c.kind AS channel_kind,
-            c.dm_agent_id AS dm_agent_id,
+            conv.title AS conversation_title,
+            conv.kind AS conversation_kind,
+            root.id AS channel_id,
+            CASE WHEN conv.kind = 'thread' THEN conv.id ELSE NULL END AS thread_id,
+            conv.parent_conversation_id AS parent_conversation_id,
+            conv.closed_at AS closed_at,
+            conv.created_at AS conversation_created_at,
+            CASE WHEN root.kind = 'dm_channel' THEN root.id ELSE w.id END AS workspace_id,
+            CASE WHEN root.kind = 'dm_channel' THEN root.title ELSE w.name END AS workspace_name,
+            CASE WHEN root.kind = 'dm_channel' THEN 'dm' ELSE 'regular' END AS workspace_kind,
             a.name AS agent_name
            FROM messages m
-           JOIN sessions s ON s.id = m.session_id
-           JOIN channels c ON c.id = s.channel_id
+           JOIN conversations conv ON conv.id = m.conversation_id
+           JOIN workspaces w ON w.id = conv.workspace_id
+           JOIN conversations root ON root.id = CASE
+             WHEN conv.kind = 'thread' THEN conv.parent_conversation_id
+             ELSE conv.id
+           END
            LEFT JOIN agents a ON a.id = m.from_agent_id
           WHERE ${whereSql}
           ORDER BY m.created_at DESC, m.seq DESC
@@ -237,27 +290,51 @@ export class SearchRepo {
 
     return rows.map(row => ({
       type: 'message',
-      channel: channelRef(row),
-      session: sessionRef(row),
+      workspace: workspaceRef(row),
+      conversation: conversationRef(row),
       message: messageRowToDto(row),
       agent_name: row.agent_name,
     }));
   }
 }
 
-function applyChannelFilters(
+function applyNamedScopeFilters(
   where: string[],
   params: SqlValue[],
   input: SearchQueryInput,
-  alias: string,
 ): void {
   if (input.scope !== 'all') {
-    where.push(`${alias}.kind = ?`);
+    where.push(`workspace_kind = ?`);
     params.push(input.scope);
   }
-  if (input.channel_id) {
-    where.push(`${alias}.id = ?`);
-    params.push(input.channel_id);
+  if (input.workspace_id) {
+    where.push(`workspace_id = ?`);
+    params.push(input.workspace_id);
+  }
+}
+
+function applyConversationScopeFilters(
+  where: string[],
+  params: SqlValue[],
+  input: SearchQueryInput,
+  conversationAlias: string,
+  rootAlias: string,
+  workspaceAlias: string,
+): void {
+  if (input.scope === 'regular') {
+    where.push(`${rootAlias}.kind = 'channel'`);
+  } else if (input.scope === 'dm') {
+    where.push(`${rootAlias}.kind = 'dm_channel'`);
+  }
+  if (input.workspace_id) {
+    where.push(
+      `(CASE WHEN ${rootAlias}.kind = 'dm_channel' THEN ${rootAlias}.id ELSE ${workspaceAlias}.id END) = ?`,
+    );
+    params.push(input.workspace_id);
+  }
+  if (input.conversation_id) {
+    where.push(`(${rootAlias}.id = ? OR ${conversationAlias}.id = ?)`);
+    params.push(input.conversation_id, input.conversation_id);
   }
 }
 

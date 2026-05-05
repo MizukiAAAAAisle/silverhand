@@ -23,7 +23,7 @@ export interface DriverPromptContext {
 
 /**
  * Spawn-time context handed to a driver's `buildArgs` / `applyEnv`.
- * SessionManager builds this after `buildSystemPrompt` ran and the
+ * ConversationManager builds this after `buildSystemPrompt` ran and the
  * temp files were written.
  */
 export interface DriverSpawnContext {
@@ -47,7 +47,7 @@ export interface DriverSpawnContext {
   /** Inbox content drained synchronously *before* spawn. Used by
    *  `oneShot` drivers (cursor) which can't accept stdin notifications
    *  and must receive their kickoff message via argv. Streaming drivers
-   *  (claude, codex) ignore this and let SessionManager post-drain via
+   *  (claude, codex) ignore this and let ConversationManager post-drain via
    *  stdin after `session_init`. */
   initialPrompt: string;
 }
@@ -62,7 +62,7 @@ export interface DriverIO {
 
 export interface Driver {
   readonly kind: RuntimeKind;
-  /** Bare command name; SessionManager resolves the actual binary path. */
+  /** Bare command name; ConversationManager resolves the actual binary path. */
   readonly binary: string;
   /**
    * How busy-time deliveries from chat-bridge to this driver are routed:
@@ -94,14 +94,14 @@ export interface Driver {
   buildSystemPrompt(ctx: DriverPromptContext): string;
   /** Encode one notification message for the agent's stdin. Returns
    *  null when the runtime doesn't accept stdin notifications (oneShot
-   *  drivers) — SessionManager treats null as "queue to inbox instead". */
+   *  drivers) — ConversationManager treats null as "queue to inbox instead". */
   encodeStdinMessage(content: string, cliSessionId: string | null): string | null;
   /** Encode a clean-cancel control message. Null = no protocol-level
-   *  interrupt; SessionManager falls through to SIGTERM/SIGKILL. */
+   *  interrupt; ConversationManager falls through to SIGTERM/SIGKILL. */
   encodeInterruptControl(): string | null;
   parseLine(line: string): ParsedEvent[];
 
-  /** Optional: called once after spawn, before SessionManager's first
+  /** Optional: called once after spawn, before ConversationManager's first
    *  drainInbox. Lets stateful drivers (codex) start their JSON-RPC
    *  handshake. No-op for stateless drivers. */
   bindIO?(io: DriverIO): void;

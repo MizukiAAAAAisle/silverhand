@@ -12,7 +12,7 @@ interface QuotedMessagePreviewProps {
    *  `quoted_message_id`. */
   quoteMessage: MessageDto;
   /** Click handler — caller can route a click to "jump back to the
-   *  original message in the parent session". Undefined disables. */
+   *  original message in the parent conversation". Undefined disables. */
   onJumpToOriginal?: () => void;
 }
 
@@ -53,7 +53,7 @@ function readQuotedMessageId(metadata: MessageDto['metadata']): string | null {
 }
 
 /**
- * Renders the message that anchored a thread child session as the first
+ * Renders the message that anchored a thread child conversation as the first
  * row in the child's chat scroll area. Mirrors `MessageItem`'s frame
  * (white background, 2px subtle border, full width) so it reads as
  * "the original message" — a small "↳ thread from" hint signals intent.
