@@ -55,12 +55,46 @@ Captured 2026-05-06 in "Attachment 鉴权讨论" channel. Awaiting user review.
 
 ## v1 implementation plan (4 slices, increasing risk)
 
-**Slice A — naming + structure (zero behavior change)**
-- Introduce `Principal` type + `resolvePrincipal()` middleware in `shared`.
-- Rename header to `X-Silverhand-Principal` (`human:local` / `agent:<id>`),
-  keep old header for one-version compat.
-- All `canView*` functions take `Principal` instead of `viewerUserId: string`.
-- Ship `docs/permissions.md`.
+**Slice A' — Principal unification (post-isomorphism refactor)**
+- Refactor `0ca99ce` already extracted per-service `*Actor` unions
+  (`SendMessageActor`, `ChannelActor`, `TaskActor`, `ThreadActor`) and made
+  human/agent paths share service methods. Each service has its own actor union.
+- Fold all `*Actor` unions into one `Principal` type **kept in backend, not
+  shared**:
+  `{kind:'user',userId} | {kind:'agent',agentId,conversationId?} | {kind:'system'}`.
+  Shared only exports the header constant + encode/decode helpers
+  (`encodeUserPrincipalHeader('local') → 'user:local'`); the union stays
+  server-side so future session-claim logic stays inside the backend.
+- Routes get a `resolvePrincipal()` middleware that produces `c.var.principal`
+  from token + header + URL path. Handlers stop hand-constructing actors.
+- Public router middleware: principal kind constrained to `'user'` (or
+  future session). Reads `X-Silverhand-Principal` header.
+- Internal router middleware: **principal MUST come from URL + bearer +
+  `conversations.getAgent(cid, aid)`. Header is rejected with 400 if
+  present** — not silently ignored, so misuse fails loudly in tests.
+- Fold `AttachmentService.createdByKind/createdById` into Principal too.
+- **Hard scope guard**: Slice A' does NOT mount `requireBearer` on `/api/*`.
+  That's Slice B. If a PR labelled A' touches the public Bearer surface, it
+  is rejected — the "zero behavior change" claim only holds when A' stays
+  structural.
+- Behavior delta is zero for legitimate clients; the only new rejection
+  surface is the principal-validation middleware (forged agent claims
+  blocked). Document this in the PR description.
+- `agent_home` workspace rules: NOT implemented in A'. v1 stays
+  exists-check for all workspaces. `docs/permissions.md` documents the
+  future rule (owner agent + local human / future human admin) so
+  implementation has a target.
+- **Hard acceptance tests** (regression guards for slice scope):
+  - `test_public_no_bearer_unchanged` — pick 2–3 non-attachment `/api/*`
+    paths (`GET /api/workspaces`, `GET /api/runtimes`, etc.); assert no-Bearer
+    requests still return 200. Catches accidental Slice B bleed-through.
+  - `test_internal_rejects_principal_header` — any `/internal/.../:cid/:aid/...`
+    route with `X-Silverhand-Principal: agent:foo` returns 400. Catches
+    silent-ignore of the header.
+  - **Failure interpretation**: if `test_public_no_bearer_unchanged` fails,
+    treat it as scope creep (Slice B bleeding into A'). **Do not "fix" by
+    adding Bearer/token plumbing in A'**; revert the offending change and
+    leave Bearer rollout to Slice B.
 
 **Slice B — Bearer rollout**
 - Mount `requireBearer` on `/api/*`, allowlist `/api/health`.
@@ -68,12 +102,19 @@ Captured 2026-05-06 in "Attachment 鉴权讨论" channel. Awaiting user review.
 - Tests: 401/200 across public routes.
 
 **Slice C — Attachment ACL (the locked plan from this channel)**
-- Per `attachment-auth.md`.
+- Per `attachment-auth.md`. Note the refactor's comment in
+  `attachment-service.ts:137-143` claims "caller has already passed
+  channel-membership / viewer auth at the route layer" but the route
+  (`routes.ts:1043-1049`) does neither — comment is a placeholder, not a fact.
 
 **Slice D — Public CRUD ACL placeholder**
 - Workspace CRUD / member add/remove gain `requireWorkspaceMutate(principal, ws)`.
-- v1 implementation: `principal.kind === 'human'` (permissive). Multi-user
+- v1 implementation: `principal.kind === 'user'` (permissive). Multi-user
   swaps implementation only.
+
+**Recommended order**: A' → C → B → D → docs/permissions.md.
+A' first because B/C/D all depend on the Principal abstraction; doing C first
+would require reworking the attachment route again when A' lands.
 
 ## Deferred (multi-user / remote)
 

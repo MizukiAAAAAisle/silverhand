@@ -466,7 +466,7 @@ export function Composer({
               ? '会话已关闭，无法发送'
               : 'Enter 发送，Shift + Enter 换行；@ 提到 agent，# 引用 channel；附件按钮 / 拖拽 / Cmd+V 粘贴上传文件'
           }
-          className="block max-h-48 min-h-[60px] w-full resize-none rounded-md border border-border-subtle bg-bg-floating px-3 py-2 pl-10 pr-12 text-sm text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none focus:ring-2 focus:ring-border-focus disabled:cursor-not-allowed disabled:opacity-60"
+          className="block max-h-48 min-h-[60px] w-full resize-none rounded-md border border-border-subtle bg-bg-floating px-3 py-2 pb-11 pr-12 text-sm text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none focus:ring-2 focus:ring-border-focus disabled:cursor-not-allowed disabled:opacity-60"
         />
         <input
           ref={fileInputRef}
