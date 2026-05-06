@@ -19,10 +19,12 @@
     "@silverhand/shared": "workspace:*",
     "better-sqlite3": "^11.3.0",
     "hono": "^4.6.5",
+    "ws": "^8.20.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",
+    "@types/ws": "^8.18.1",
     "typescript": "^5.6.3",
     "vitest": "^2.1.5"
   }

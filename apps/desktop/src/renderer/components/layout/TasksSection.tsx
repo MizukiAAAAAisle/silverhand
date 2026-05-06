@@ -30,16 +30,31 @@ export interface TasksSectionProps {
 export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
   const [channelFilter, setChannelFilter] = useState<string | null>(null);
   const updateStatus = useUpdateTaskStatus();
+  const { data: workspaces = [] } = useWorkspaces();
+  const taskWorkspaceScopeIds = useMemo(
+    () => [...new Set(workspaces.flatMap(workspace => workspace.workspace_scope_ids))],
+    [workspaces],
+  );
+  const filteredWorkspaceScopeIds = useMemo(
+    () => workspaces.find(workspace => workspace.id === channelFilter)?.workspace_scope_ids ?? [],
+    [channelFilter, workspaces],
+  );
 
   const { data: tasks = [] } = useTasks({
     workspace_id: channelFilter ?? undefined,
+  }, {
+    workspaceScopeIds: channelFilter
+      ? filteredWorkspaceScopeIds
+      : taskWorkspaceScopeIds,
   });
-  const { data: workspaces = [] } = useWorkspaces();
 
   // Per-channel active counts drive both the chip badges and the
   // sort order — channels with active work float to the front so
   // the chips that matter are visible without scanning.
-  const allTasksForCounts = useTasks({}).data ?? [];
+  const allTasksForCounts = useTasks(
+    {},
+    { workspaceScopeIds: taskWorkspaceScopeIds },
+  ).data ?? [];
   const channelActiveCounts = useMemo(() => {
     const m = new Map<string, number>();
     for (const t of allTasksForCounts) {

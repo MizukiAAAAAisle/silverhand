@@ -120,9 +120,9 @@ function ActiveChannelView({
     fetchPreviousPage,
   } = useChannelMessages(conversation.id, routeKind);
 
-  // Advance the message read cursor in real-time as new messages arrive via
-  // SSE. ChannelView is only rendered when the channel is visible, so any
-  // SSE message that lands here should be marked read immediately — no need
+  // Advance the message read cursor in real-time as new messages arrive.
+  // ChannelView is only rendered when the channel is visible, so any
+  // live message that lands here should be marked read immediately — no need
   // to wait for the 5 s polling window in App.tsx.
   const markRead = useMarkMessageChannelRead();
   const onStreamEvent = useCallback(
@@ -145,6 +145,9 @@ function ActiveChannelView({
 
   const closed = conversation.closed_at !== null;
   const isDm = channelKind === 'dm';
+  const memberStrip = isDm ? null : (
+    <AgentStrip channelId={conversation.id} routeKind={routeKind} />
+  );
 
   // Thread children carry a single thread_anchor system message — the
   // header surfaces it as "Thread — #parent" + jump-back. The row
@@ -208,6 +211,7 @@ function ActiveChannelView({
             <span className="min-w-0 truncate font-serif text-sm font-semibold text-text-primary">
               #{parentTitle ?? conversation.title}
             </span>
+            {memberStrip}
             {onJumpToOriginal && anchorMessageId ? (
               <button
                 type="button"
@@ -224,6 +228,7 @@ function ActiveChannelView({
             <span className="min-w-0 truncate font-serif text-sm font-semibold text-text-primary">
               {conversation.title}
             </span>
+            {memberStrip}
             {parentTitle ? (
               <span className="min-w-0 truncate text-xs text-text-muted">↳ thread of {parentTitle}</span>
             ) : null}
@@ -235,18 +240,7 @@ function ActiveChannelView({
           </span>
         ) : null}
 
-        {/* Right-aligned cluster: agent roster + close-thread. The chips
-          * sit inline so the standalone strip below the header is gone
-          * — DM workspaces still skip them since the sole agent is in
-          * the workspace name. */}
-        <div className="ml-auto flex min-w-0 items-center gap-1.5">
-          {isDm ? null : (
-            <AgentStrip
-              channelId={conversation.id}
-              routeKind={routeKind}
-              disabled={closed}
-            />
-          )}
+        <div className="ml-auto flex shrink-0 items-center">
           {onCloseChild ? (
             <button
               type="button"
@@ -305,10 +299,6 @@ function AgentStrip({
 }: {
   channelId: string;
   routeKind: 'channel' | 'thread';
-  /** Reserved for future close-state UI. The retry affordance for
-   *  crashed agents now lives inside the AgentInfoPopover so the
-   *  stacked-avatar surface stays purely informational. */
-  disabled: boolean;
 }): JSX.Element {
   const { data: sa = [] } = useChannelAgents(channelId, routeKind);
   const { data: agents = [] } = useAgents();
@@ -321,17 +311,15 @@ function AgentStrip({
   if (sa.length === 0) {
     return (
       <span className="shrink-0 text-[10px] italic text-text-muted">
-        Channel 还没有成员
+        {routeKind === 'thread' ? 'Thread' : 'Channel'} 还没有成员
       </span>
     );
   }
-  // Overlapping avatar stack — each tile hover-opens the agent info
-  // popover (with per-channel presence). Status is communicated via
-  // a small dot at the bottom-right of each avatar so the row stays
-  // readable at-a-glance without text labels.
+  // Plain inline roster: members sit beside the name. Each avatar keeps
+  // its own presence dot and border, without overlapping the next member.
   return (
-    <div className="flex shrink-0 items-center pl-1">
-      {sa.map((s, i) => {
+    <div className="flex shrink-0 items-center gap-1.5">
+      {sa.map(s => {
         const agent = agentById.get(s.agent_id);
         if (!agent) return null;
         return (
@@ -347,19 +335,12 @@ function AgentStrip({
             <button
               type="button"
               aria-label={`@${agent.name}`}
-              // Negative margin overlaps each subsequent avatar onto the
-              // previous one. The white ring separates them visually so
-              // the stack reads as discrete heads, not a smear.
-              className={
-                'relative rounded-full ring-2 ring-bg-primary transition-transform hover:z-10 hover:scale-110 focus-visible:z-10 focus-visible:outline-none ' +
-                (i === 0 ? '' : '-ml-2')
-              }
-              style={{ zIndex: i }}
+              className="relative rounded-full border border-[#9ca3af] bg-bg-floating p-px shadow-sm transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
             >
               <AgentAvatar runtime={agent.runtime} size={22} />
               <span
                 className={
-                  'absolute -bottom-0.5 -right-0.5 size-2 rounded-full ring-2 ring-bg-primary ' +
+                  'absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full border border-bg-floating shadow-sm ' +
                   STATUS_DOT[s.status]
                 }
               />

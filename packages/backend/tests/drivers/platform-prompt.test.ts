@@ -55,6 +55,22 @@ describe('buildPlatformPrompt', () => {
     expect(text).not.toContain('unique value to add');
   });
 
+  it('keeps MEMORY.md as a compact index and sends detailed history to notes', () => {
+    const text = prompt();
+    expect(text).toContain('Keep it compact: role, Key Knowledge links');
+    expect(text).toContain('target under 10KB');
+    expect(text).toContain('It is an index, not the detailed work log');
+    expect(text).toContain('run a memory checkpoint');
+    expect(text).toContain('update the relevant notes file');
+    expect(text).toContain('Otherwise leave MEMORY.md unchanged');
+    expect(text).toContain('notes/work-log.md');
+    expect(text).toContain('Do not append long per-task bullets to MEMORY.md');
+    expect(text).not.toContain(
+      "Keep MEMORY.md complete enough that compression preserves",
+    );
+    expect(text).not.toContain('After completing significant work, update notes');
+  });
+
   it('requires task state updates before reporting completion', () => {
     const text = prompt();
     expect(text).toContain('Close the loop on tasks you own');

@@ -1,6 +1,200 @@
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 
+// ---------------------------------------------------------------------------
+// Onboarding seed note content
+// ---------------------------------------------------------------------------
+
+const ONBOARDING_GUIDE_MD = `# Silverhand Onboarding Guide
+
+## What Silverhand Is
+Silverhand is a desktop app where humans and AI agents collaborate in shared
+chat-style workspaces. Agents are persistent teammates: they keep memory, claim
+tasks, and hand off work.
+
+Key model:
+- **Workspace** — a group of humans and agents sharing context.
+- **Channel** — a running conversation inside a workspace; agents run per channel.
+- **Thread** — a focused sub-discussion spawned from a channel message.
+- **Task** — a claimable work unit tracked on the channel task board.
+- **MEMORY.md / notes/** — per-agent memory that persists across restarts.
+
+## How to Help a New User Get Started
+
+### Step 1: Open practical
+Start warm and brief. Ask what the user is working on — not a product tour.
+One sentence from the user is enough to propose something concrete.
+
+### Step 2: Propose a structure
+Based on what the user shares:
+- Suggest a channel per workstream (e.g. #backend, #design, #general).
+- Propose a starter team of 2–3 agents with different focus areas.
+- Give the user a first concrete task to send to an agent.
+
+Unspecialized start is valid: if the user is unsure, start general and let
+specialization emerge through real work. Do not force a perfect setup upfront.
+
+### Step 3: End every turn with one next step
+Each reply should close with one clear, immediately executable action.
+Do not leave the user with a list of options to decide between.
+
+## Collaboration Patterns
+- **Claim tasks before starting** — prevents duplicate work.
+- **Update relevant notes** after meaningful interactions: user preferences
+  learned, decisions made, work completed. Update MEMORY.md only when the
+  Key Knowledge index or current active handoff changes — not after every task.
+
+## Onboarding Behavioral Rules
+- Do not optimize for reply count. Optimize for first useful action.
+- Be concise; expand only when the user asks.
+- If the user's request is outside current capabilities, pivot immediately to
+  the nearest useful alternative — do not dwell on limitations.
+- Channel silence is not failure. If the user is active elsewhere, follow
+  the work there.
+`;
+
+const ONBOARDING_FAQ_MD = `# Silverhand Onboarding FAQ
+
+Reference answers to common user questions.
+Understand the core idea and guardrail for each item, then answer in your own
+words based on the user's context. Do not copy these answers verbatim.
+
+## FAQ 1: What is Silverhand? What can agents do here?
+### Answer idea
+- Silverhand is a desktop workspace where you work with persistent AI agents
+  in shared channels — like a team chat, but agents are real collaborators.
+- Agents keep memory, claim tasks, and hand off work to each other.
+### Next step
+- Ask what the user is working on and propose a starter setup.
+### Guardrail
+- One differentiator, then move to the user's actual work immediately.
+
+## FAQ 2: How do channels, threads, and tasks work?
+### Answer idea
+- Channels are workstreams. Threads are focused discussions tied to a message.
+  Tasks are claimable work units with status tracking.
+- Common pattern: post work in channel → convert to task → agent claims it →
+  progress in task's thread → mark in_review → user approves.
+### Next step
+- Help the user create their first channel and send their first task message.
+### Guardrail
+- These are tools, not rules. Match to the user's actual workflow.
+
+## FAQ 3: How do I add agents to a workspace or channel?
+### Answer idea
+- Agents are created from the Agents section (People tab → + button).
+- Once created, add them to channels during channel creation or via Channel
+  Settings → Members.
+### Next step
+- Give the user a copyable agent name and role description, then guide them to
+  the + button.
+### Guardrail
+- Do not imply you created an agent unless it actually happened.
+
+## FAQ 4: How does agent memory work?
+### Answer idea
+- Each agent keeps MEMORY.md and a notes/ folder that persist across restarts.
+- Agents update their notes proactively after meaningful interactions.
+- Users can explicitly ask an agent to remember something important.
+### Next step
+- If the user wants to check what an agent knows, suggest asking the agent
+  directly or asking it to show its memory/notes.
+### Guardrail
+- Do not promise perfect recall; important items should be explicit in notes.
+
+## FAQ 5: Agent not responding or seems stuck
+### Answer idea
+- Could be a long-running task, a spawn/connection issue, or context pressure.
+- Try @mentioning the agent to prompt a response.
+### Next step
+- Ask the user to @mention the agent and describe what they were doing last.
+### Guardrail
+- Acknowledge the friction directly; do not blame the user.
+
+## FAQ 6: Why use multiple agents?
+### Answer idea
+- Agents handle one major task at a time; multiple agents parallelize work.
+- Different agents can have different specializations — these emerge naturally.
+- A common starter: 2–3 general agents; let roles emerge through real work.
+### Next step
+- Ask for 2–3 recurring work types and map each to an agent.
+### Guardrail
+- Start simple. Unspecialized start is valid; avoid over-scaling early.
+`;
+
+const USER_PREFERENCES_MD = `# User Preferences
+
+Record durable preferences that should shape future work.
+
+Examples:
+- Communication style and language preferences.
+- Coding, testing, and review conventions the user repeats or corrects.
+- Product and design preferences that apply across tasks.
+
+Keep this file concise. Prefer editing existing bullets over appending duplicates.
+`;
+
+const PROJECT_MD = `# Project Notes
+
+Record durable project context and architecture facts.
+
+Examples:
+- Tech stack, important modules, and ownership boundaries.
+- Stable terminology and data-model decisions.
+- Invariants or guardrails that future work must preserve.
+
+Keep transient task status in work-log.md instead.
+`;
+
+const WORK_LOG_MD = `# Work Log
+
+Record significant completed work, decisions, and follow-ups.
+
+Use this for detail that would make MEMORY.md too large:
+- What changed and why.
+- Verification commands or evidence.
+- Follow-up risks that are not active blockers.
+
+Keep entries compact and merge related updates when a task iterates.
+`;
+
+const INITIAL_MEMORY_MD = [
+  '# Memory',
+  '',
+  '## Key Knowledge',
+  '- Read [notes/onboarding-guide.md](notes/onboarding-guide.md) for Silverhand workspace patterns and onboarding guidance',
+  '- Read [notes/onboarding-faq.md](notes/onboarding-faq.md) for common user questions and reference answers',
+  '- Read [notes/user-preferences.md](notes/user-preferences.md) for durable user preferences',
+  '- Read [notes/project.md](notes/project.md) for durable project context and invariants',
+  '- Read [notes/work-log.md](notes/work-log.md) for significant work history and follow-ups',
+  '',
+  '## Active Context',
+  '_Keep only the current handoff here. Detailed history belongs in notes/work-log.md._',
+  '',
+].join('\n');
+
+const SEED_NOTES = [
+  ['onboarding-guide.md', ONBOARDING_GUIDE_MD],
+  ['onboarding-faq.md', ONBOARDING_FAQ_MD],
+  ['user-preferences.md', USER_PREFERENCES_MD],
+  ['project.md', PROJECT_MD],
+  ['work-log.md', WORK_LOG_MD],
+] as const;
+
+async function seedNotesIfMissing(notesDir: string): Promise<void> {
+  await fs.mkdir(notesDir, { recursive: true });
+  // Seed onboarding and memory notes if not already present. These give agents
+  // a concrete knowledge skeleton from day 1 while preserving agent edits.
+  for (const [noteName, content] of SEED_NOTES) {
+    const dst = join(notesDir, noteName);
+    try {
+      await fs.access(dst);
+    } catch {
+      await fs.writeFile(dst, content);
+    }
+  }
+}
+
 /**
  * Initialize a workspace directory's `.silverhand/` skeleton:
  *   <workspace>/.silverhand/CONSENSUS.md
@@ -35,7 +229,8 @@ export async function seedAgentL2(params: {
   agentL1Dir: string;
 }): Promise<void> {
   const l2Dir = join(params.workspacePath, '.silverhand', 'agents', params.agentId);
-  await fs.mkdir(join(l2Dir, 'notes'), { recursive: true });
+  const notesDir = join(l2Dir, 'notes');
+  await seedNotesIfMissing(notesDir);
 
   for (const filename of ['system_prompt.md', 'MEMORY.md']) {
     const src = join(params.agentL1Dir, filename);
@@ -53,7 +248,7 @@ export async function seedAgentL2(params: {
       const placeholder =
         filename === 'system_prompt.md'
           ? `# Role\n\n_To be defined via the workspace's onboarding conversation._\n`
-          : `# Memory\n\n_What I have learned in this workspace. Updated by the agent._\n`;
+          : INITIAL_MEMORY_MD;
       await fs.writeFile(dst, placeholder);
     }
   }
@@ -61,10 +256,11 @@ export async function seedAgentL2(params: {
 
 /** Ensure agent L1 directory exists (`~/.silverhand/agents/<id>/`). */
 export async function ensureAgentL1Dir(agentL1Dir: string): Promise<void> {
-  await fs.mkdir(join(agentL1Dir, 'notes'), { recursive: true });
+  await fs.mkdir(agentL1Dir, { recursive: true });
+  await seedNotesIfMissing(join(agentL1Dir, 'notes'));
   for (const [filename, body] of [
     ['system_prompt.md', '# Global role\n\n_To be shaped via DM._\n'],
-    ['MEMORY.md', '# Global memory\n\n_Cross-workspace knowledge anchor._\n'],
+    ['MEMORY.md', INITIAL_MEMORY_MD],
   ] as const) {
     const path = join(agentL1Dir, filename);
     try {
@@ -74,4 +270,3 @@ export async function ensureAgentL1Dir(agentL1Dir: string): Promise<void> {
     }
   }
 }
-

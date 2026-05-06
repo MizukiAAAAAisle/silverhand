@@ -16,10 +16,15 @@ import {
 } from './context.js';
 import { HostRepo } from './repos/host-repo.js';
 import { ensureWorkspacesRoot } from './provision.js';
-import { ConversationEventBus } from './event-bus.js';
+import { ScopeEventBus } from './ws/scope-event-bus.js';
+import {
+  installEventWebSocketServer,
+  type EventWsServerController,
+} from './ws/ws-server.js';
 import { ConversationManager } from './conversation-manager.js';
 import { createLocalBlobFileStorage } from './storage/blob-file-storage.js';
 import type { ServerConfig } from '@silverhand/shared';
+import type { Server as HttpServer } from 'node:http';
 
 export interface CreateBackendOptions {
   dbPath: string;
@@ -67,7 +72,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     logDir: opts.logDir,
     blobStorage,
     lastSpawnAtByAgent: new Map(),
-    events: new ConversationEventBus(),
+    events: new ScopeEventBus(),
     chatBridgeLauncher: opts.chatBridgeLauncher,
     // Placeholder; replaced immediately below (ConversationManager needs ctx).
     conversationManager: undefined as unknown as ConversationManager,
@@ -82,6 +87,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   app.route('/', createInternalRouter(ctx));
 
   return new Promise<RunningBackend>((resolve, reject) => {
+    let eventWs: EventWsServerController | null = null;
     const server = serve(
       { fetch: app.fetch, hostname: '127.0.0.1', port: 0 },
       info => {
@@ -100,16 +106,17 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
             // so terminal events are written before the stream closes).
             await ctx.conversationManager.stopAll().catch(() => undefined);
 
-            // Phase 2: flush activity log AND drain the HTTP server
+            // Phase 2: close WS lifecycle before the HTTP drain removes sockets.
+            await eventWs?.close();
+
+            // Phase 3: flush activity log AND drain the HTTP server
             // concurrently — they are independent of each other.
             //
             // Order matters for the server drain:
             //   1. `server.close()` first — stops accepting new connections
-            //      immediately, so a reconnecting EventSource can't sneak in.
+            //      immediately, so no new HTTP work can sneak in.
             //   2. `closeAllConnections()` second — terminates all existing
-            //      sockets (including SSE/EventSource long-lived streams)
-            //      so `server.close()` resolves right away instead of waiting
-            //      for the renderer to unmount.
+            //      sockets so `server.close()` resolves right away.
             // The `in` guard handles the Http2Server union member which lacks
             // this method (we always use HTTP/1.1, but the type is a union).
             const serverDrained = new Promise<void>(res => server.close(() => res()));
@@ -119,16 +126,17 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
               serverDrained,
             ]);
 
-            // Phase 3: close the DB. At this point all connections —
+            // Phase 4: close the DB. At this point all connections —
             // including in-flight HTTP requests — have been forcibly
             // terminated by closeAllConnections(). Strict in-flight write
             // safety is sacrificed for a clean quit; if that becomes a
-            // concern, use SSE-specific tracking/abort before this point.
+            // concern, use route-specific request tracking before this point.
             db.close();
           },
         });
       },
     );
+    eventWs = installEventWebSocketServer(server as HttpServer, ctx);
     server.on('error', reject);
   });
 }

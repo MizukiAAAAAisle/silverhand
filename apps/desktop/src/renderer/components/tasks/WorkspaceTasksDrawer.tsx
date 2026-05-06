@@ -17,6 +17,7 @@ export interface WorkspaceTasksDrawerProps {
   onOpenChange: (open: boolean) => void;
   workspaceId: string;
   workspaceName: string | null;
+  workspaceScopeIds?: readonly string[];
   conversations: Array<{
     id: string;
     title: string;
@@ -99,6 +100,7 @@ export function WorkspaceTasksDrawer({
   onOpenChange,
   workspaceId,
   workspaceName,
+  workspaceScopeIds,
   conversations,
   defaultConversationId,
   onJumpToMessage,
@@ -134,8 +136,9 @@ export function WorkspaceTasksDrawer({
 
   const { data: tasks = [], isLoading } = useTasks(
     conversationFilter
-      ? { conversation_id: conversationFilter }
+      ? { workspace_id: workspaceId, conversation_id: conversationFilter }
       : { workspace_id: workspaceId },
+    { workspaceScopeIds },
   );
   const updateStatus = useUpdateTaskStatus();
 

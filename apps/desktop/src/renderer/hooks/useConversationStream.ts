@@ -1,19 +1,17 @@
 import { useEffect, useRef } from 'react';
 import { applyAgentRunStateToCache } from '@/lib/agentRunStateCache';
-import { getBackendInfo } from '@/lib/api';
-import type { AgentRunState } from '@silverhand/shared';
+import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
+import type { AgentRunState, ServerFrame } from '@silverhand/shared';
 
 /**
- * Per-conversation SSE event payload. Mirrors what backend's ConversationEventBus
- * publishes — see packages/backend/src/event-bus.ts and routes.ts'
- * channel/thread stream handlers.
+ * Per-conversation realtime event payload. The transport is now the shared
+ * WebSocket event bus, but callers keep the legacy event shape.
  */
 export interface ConversationStreamEvent {
-  /** SSE `event:` field. Known values: `connected`, `ping`, `message`,
-   *  `agent_status`, `agent_event`, `agent_activity`, `compaction_stale`,
-   *  `thread_updated`, `task_changed`. */
+  /** Known values: `connected`, `ping`, `message`, `agent_status`, `agent_event`,
+   *  `agent_activity`, `compaction_stale`, `thread_updated`, `task_changed`. */
   kind: string;
-  /** Parsed JSON payload from SSE `data:` field. */
+  /** Event payload from the backend, or local metadata for `connected`. */
   payload: any;
 }
 
@@ -22,69 +20,8 @@ export type SessionStreamEvent = ConversationStreamEvent;
 type Handler = (event: ConversationStreamEvent) => void;
 type StreamScope = 'channel' | 'thread';
 
-// Keep this short: every inactive EventSource still occupies a browser
-// connection slot to the local backend. A long grace period makes rapid
-// channel switching queue subsequent fetches behind stale SSE sockets.
-const STREAM_CLOSE_GRACE_MS = 500;
-
-const KNOWN_EVENTS = [
-  'connected',
-  'ping',
-  'message',
-  'agent_status',
-  'agent_event',
-  'agent_activity',
-  'compaction_stale',
-  'thread_updated',
-  'task_changed',
-] as const;
-
-interface StreamEntry {
-  eventSource: EventSource | null;
-  handlers: Set<Handler>;
-  closed: boolean;
-  closeTimer: ReturnType<typeof setTimeout> | null;
-}
-
-const streamsByConversation = new Map<string, StreamEntry>();
-
-function streamKey(scope: StreamScope, id: string): string {
-  return `${scope}:${id}`;
-}
-
-function streamPath(scope: StreamScope, id: string): string {
-  if (scope === 'channel') return `/api/channels/${id}/stream`;
-  return `/api/threads/${id}/stream`;
-}
-
-function clearCloseTimer(entry: StreamEntry): void {
-  if (!entry.closeTimer) return;
-  clearTimeout(entry.closeTimer);
-  entry.closeTimer = null;
-}
-
-function closeStream(key: string, entry: StreamEntry): void {
-  if (streamsByConversation.get(key) !== entry) return;
-  clearCloseTimer(entry);
-  entry.closed = true;
-  entry.eventSource?.close();
-  entry.eventSource = null;
-  streamsByConversation.delete(key);
-}
-
-function scheduleCloseStream(key: string, entry: StreamEntry): void {
-  if (entry.handlers.size > 0) return;
-  clearCloseTimer(entry);
-  entry.closeTimer = setTimeout(() => {
-    if (entry.handlers.size > 0) return;
-    closeStream(key, entry);
-  }, STREAM_CLOSE_GRACE_MS);
-}
-
-function emitToHandlers(entry: StreamEntry, event: ConversationStreamEvent): void {
-  for (const handler of Array.from(entry.handlers)) {
-    handler(event);
-  }
+function wsConversationScope(conversationId: string): string {
+  return `conversation:${conversationId}`;
 }
 
 function ingestConversationEvent(
@@ -98,111 +35,100 @@ function ingestConversationEvent(
   );
 }
 
-function syntheticConnectedEvent(
+function connectedEvent(
   conversationId: string,
   scope: StreamScope,
+  extra: Record<string, unknown> = {},
 ): ConversationStreamEvent {
   return {
     kind: 'connected',
     payload: {
       conversation_id: conversationId,
       scope,
-      client_synthetic: true,
+      transport: 'ws',
+      ...extra,
     },
   };
 }
 
-function getOrCreateStream(conversationId: string, scope: StreamScope): StreamEntry {
-  const key = streamKey(scope, conversationId);
-  const existing = streamsByConversation.get(key);
-  if (existing) {
-    clearCloseTimer(existing);
-    return existing;
+function streamEventFromFrame(
+  frame: ServerFrame,
+  expectedScope: string,
+  conversationId: string,
+  routeScope: StreamScope,
+): ConversationStreamEvent | null {
+  if (frame.type === 'ping') {
+    return { kind: 'ping', payload: Date.now() };
   }
 
-  const entry: StreamEntry = {
-    eventSource: null,
-    handlers: new Set(),
-    closed: false,
-    closeTimer: null,
-  };
-  streamsByConversation.set(key, entry);
+  if (frame.type === 'event') {
+    if (frame.scope !== expectedScope) return null;
+    return { kind: frame.kind, payload: frame.payload };
+  }
 
-  void (async () => {
-    const info = await getBackendInfo();
-    if (entry.closed) return;
-
-    const es = new EventSource(`${info.url}${streamPath(scope, conversationId)}`);
-    entry.eventSource = es;
-
-    // The backend sends a custom `connected` event immediately after the
-    // stream opens. Native EventSource starts connecting as soon as it is
-    // constructed, so use the native `open` event as an additional local
-    // reconnect signal in case that first custom event races ahead of the
-    // named listeners below.
-    es.addEventListener('open', () => {
-      if (entry.closed) return;
-      emitToHandlers(entry, syntheticConnectedEvent(conversationId, scope));
+  if (frame.type === 'subscribed') {
+    if (frame.scope !== expectedScope) return null;
+    return connectedEvent(conversationId, routeScope, {
+      epoch: frame.epoch,
+      seq: frame.seq,
+      subscribed: true,
     });
+  }
 
-    for (const kind of KNOWN_EVENTS) {
-      es.addEventListener(kind, (raw: MessageEvent) => {
-        let payload: unknown;
-        try {
-          payload = JSON.parse(raw.data);
-        } catch {
-          payload = raw.data;
-        }
-        const event: ConversationStreamEvent = { kind, payload };
-        ingestConversationEvent(conversationId, event);
-        emitToHandlers(entry, event);
-      });
-    }
-  })();
+  if (frame.type === 'snapshot_required') {
+    if (frame.scope !== expectedScope) return null;
+    return connectedEvent(conversationId, routeScope, {
+      snapshot_required: true,
+      reason: frame.reason,
+    });
+  }
 
-  return entry;
+  return null;
 }
 
 /**
- * Subscribe to a channel/thread stream. The handler is called for every
- * named SSE event that arrives (including `connected` / `ping` — caller
- * filters). All subscribers for the same conversation id + scope share one
- * EventSource, then the stream auto-closes after a short grace period once
- * the last subscriber unmounts.
- *
- * Heads-up: backend's API routes have no auth middleware, so we connect
- * with a bare URL — `EventSource` doesn't support custom headers anyway.
+ * Subscribe to a channel/thread realtime stream. The public API intentionally
+ * matches the old stream hook so message, agent, task, and thread hooks
+ * can switch transports without changing their own logic.
  */
 export function useConversationStream(
   conversationId: string | null,
   onEvent: Handler,
   scope: StreamScope = 'channel',
 ): void {
-  // Keep the latest handler in a ref so we don't tear down the EventSource
-  // every time the parent re-renders with a new closure.
+  // Keep the latest handler in a ref so we don't resubscribe every time the
+  // parent re-renders with a new closure.
   const handlerRef = useRef(onEvent);
   handlerRef.current = onEvent;
 
   useEffect(() => {
     if (!conversationId) return;
-    const key = streamKey(scope, conversationId);
-    const entry = getOrCreateStream(conversationId, scope);
-    const handler: Handler = event => handlerRef.current(event);
-    entry.handlers.add(handler);
 
-    // New subscribers may attach after the shared EventSource has already
-    // opened and consumed the backend's initial `connected` event. Tell the
-    // subscriber to run its normal reconnect/snapshot reconciliation path.
+    let active = true;
+    const wsScope = wsConversationScope(conversationId);
+    const subscription = subscribeWsScope(wsScope);
+    const offFrame = onWsFrame(frame => {
+      if (!active) return;
+      const event = streamEventFromFrame(frame, wsScope, conversationId, scope);
+      if (!event) return;
+      ingestConversationEvent(conversationId, event);
+      handlerRef.current(event);
+    });
+
+    // Preserve the previous hook's reconciliation behavior for late
+    // subscribers. Business hooks that need a snapshot already key off the
+    // synthetic `connected` event.
     queueMicrotask(() => {
-      if (entry.closed || !entry.handlers.has(handler)) return;
-      handler(syntheticConnectedEvent(conversationId, scope));
+      if (!active) return;
+      handlerRef.current(
+        connectedEvent(conversationId, scope, { client_synthetic: true }),
+      );
     });
 
     return () => {
-      entry.handlers.delete(handler);
-      if (entry.handlers.size === 0) {
-        scheduleCloseStream(key, entry);
-      }
+      active = false;
+      offFrame();
+      subscription.unsubscribe();
     };
   }, [conversationId, scope]);
 }

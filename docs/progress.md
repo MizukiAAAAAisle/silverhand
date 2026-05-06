@@ -755,7 +755,7 @@ stderr：`invalid type: string ..., expected a map in mcp_servers.chat.env`。co
 
 per-agent 的 opt-in 粒度（不按 runtime）是因为：codex 需要 proxy 不代表所有 codex agent 都需要；用户可能有些 agent 跑本地 model 不需要走代理。
 
-### codex reasoning_effort（待实现）
+### codex reasoning_effort
 
 调研：slock daemon 这块只是字段透传。slock 的"web 上调 effort"是 slock.ai 云端做的，daemon 代码里看不到 UI 实现。
 
@@ -765,11 +765,11 @@ slock 的字段透传：
 - 传给 copilot CLI：`--effort <value>`
 - 不传则用 codex 自己 config.toml 默认（用户当前 `xhigh` 推理一次 ~22s）
 
-我们要做的话：
-- `agents` 表加 `reasoning_effort TEXT NULL`
-- codex driver `buildThreadRequest` 里有就塞进 `params.config.model_reasoning_effort`，没有就不动
-- 前端 agent 创建/编辑表单：runtime=codex 时显示 select（low/medium/high/xhigh）；其他 runtime 隐藏
-- 顺带可以把 `model` 字段的 UI 也补上（目前 NULL，根据 runtime 显示对应可选 model 列表）
+当前实现：
+- `agents.reasoning_effort` 通过 DTO/zod 限定为当前 Codex catalog 支持的 `low | medium | high | xhigh`
+- `ConversationManager` 透传 per-agent `reasoning_effort` 到 `DriverSpawnContext.reasoningEffort`
+- `CodexDriver.buildArgs` 通过 `-c model_reasoning_effort=<value>` 覆盖 Codex config；未设置则用 Codex 自己 config.toml 默认
+- 前端 agent profile 仅在 runtime=codex 时显示 select；Claude Code 暂不接入，按其全局配置/模型自身行为处理
 
 
 

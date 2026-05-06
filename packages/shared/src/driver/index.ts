@@ -7,7 +7,7 @@
 
 /**
  * Unified event union emitted by a driver's `parseLine`. ConversationManager
- * converts these to UI broadcasts (SSE) and `session_events` rows.
+ * converts these to realtime UI broadcasts and `session_events` rows.
  */
 export type ParsedEvent =
   | { kind: 'session_init'; sessionId: string }

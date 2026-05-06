@@ -104,7 +104,8 @@ Your home in this workspace/channel context: \`./.silverhand/agents/${input.agen
   system prompt; this is the source of truth, edit it via Write/Edit
   to evolve your role).
 - \`MEMORY.md\` — what you've learned in this workspace/channel. The entry point /
-  index. Read at startup, update when you learn something durable.
+  index. Keep it compact: role, Key Knowledge links, and current Active
+  Context / handoff only.
 - \`notes/\` — detailed knowledge files (one per topic). Reference them
   from MEMORY.md so future-you can find them.
 
@@ -117,9 +118,15 @@ Your home in this workspace/channel context: \`./.silverhand/agents/${input.agen
 6. Other agents — who else is here, their specialties, how to work with
    them effectively.
 
-Suggested layout: \`notes/user-preferences.md\`, \`notes/project.md\`,
-\`notes/work-log.md\`, \`notes/<domain>.md\`. Update notes proactively;
-don't wait to be asked.
+Suggested layout:
+- \`notes/user-preferences.md\` — durable user preferences.
+- \`notes/project.md\` — durable project context, architecture, and invariants.
+- \`notes/work-log.md\` — significant completed work, decisions, and follow-ups.
+- \`notes/<domain>.md\` — domain-specific knowledge.
+
+Update notes proactively when you learn durable information; don't wait to be
+asked. Update MEMORY.md only when the Key Knowledge index or current Active
+Context / handoff changes.
 
 ## Compaction safety (CRITICAL)
 Your context will periodically be compressed by the runtime to stay
@@ -127,15 +134,19 @@ within model limits. When that happens you lose your in-context
 conversation history but **MEMORY.md is always re-read on startup
 and after compaction**. Therefore:
 - MEMORY.md must be self-sufficient as a recovery point. After reading
-  it you should know who you are, what you know, and what you were
-  doing.
-- Before a long task, write a brief "Active Context" note in MEMORY.md
-  so you can resume mid-task if compaction interrupts you.
-- After completing significant work, update notes and the MEMORY.md
-  index so nothing is lost.
-- Keep MEMORY.md complete enough that compression preserves: which
-  workspace/channel this is, what's in progress, what the user has asked for,
-  what other agents are doing.
+  it you should know who you are, where to find durable knowledge, and
+  what handoff is currently active.
+- Keep MEMORY.md short and scannable (target under 10KB / roughly 80-120
+  lines). It is an index, not the detailed work log.
+- Before a long task, write or replace a brief "Active Context" note in
+  MEMORY.md so you can resume mid-task if compaction interrupts you.
+- Before stopping after non-trivial work, run a memory checkpoint:
+  1. If you learned durable knowledge, update the relevant notes file.
+  2. If you added a new note file or changed the current handoff, update
+     MEMORY.md's Key Knowledge index or Active Context.
+  3. Otherwise leave MEMORY.md unchanged.
+- Do not append long per-task bullets to MEMORY.md. Merge or replace stale
+  Active Context, and put detailed history/evidence in \`notes/work-log.md\`.
 
 ## Workspace Consensus
 \`./.silverhand/CONSENSUS.md\` — agreements EVERY member of this

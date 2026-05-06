@@ -119,6 +119,9 @@ export function App(): JSX.Element {
   // resetting on app restart is fine; workspace switches inside one app run
   // shouldn't lose their place.
   const lastChannelByWorkspace = useRef<Map<string, string>>(new Map());
+  const lastSelectedMessageReadKey = useRef<string | null>(null);
+  const lastThreadMessageReadKey = useRef<string | null>(null);
+  const lastNotificationReadId = useRef<string | null>(null);
 
   const { data: workspaces = [] } = useWorkspaces();
   const selectedWorkspace = workspaces.find(w => w.id === selectedWorkspaceId) ?? null;
@@ -162,7 +165,10 @@ export function App(): JSX.Element {
   // workspace-aggregate to match where the entry lives).
   const { data: workspaceTasks = [] } = useTasks(
     selectedWorkspaceId ? { workspace_id: selectedWorkspaceId } : {},
-    { enabled: !!selectedWorkspaceId },
+    {
+      enabled: !!selectedWorkspaceId,
+      workspaceScopeIds: selectedWorkspace?.workspace_scope_ids,
+    },
   );
   const workspaceActiveTaskCount = workspaceTasks.filter(
     t => t.status !== 'done',
@@ -301,7 +307,14 @@ export function App(): JSX.Element {
   // (openThreadId) are visible simultaneously, so both cursors must be
   // advanced — not just the "active event" channel.
   useEffect(() => {
+    if (!selectedChannelId) {
+      lastSelectedMessageReadKey.current = null;
+      return;
+    }
     if (selectedChannelId && selectedChannelResolvedId) {
+      const readKey = `${selectedChannelRouteKind}:${selectedChannelId}`;
+      if (lastSelectedMessageReadKey.current === readKey) return;
+      lastSelectedMessageReadKey.current = readKey;
       markMessageChannelRead.mutate({
         id: selectedChannelId,
         kind: selectedChannelRouteKind,
@@ -310,14 +323,26 @@ export function App(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedChannelId, selectedChannelResolvedId, selectedChannelRouteKind]);
   useEffect(() => {
-    if (openThreadId) markMessageChannelRead.mutate({ id: openThreadId, kind: 'thread' });
+    if (!openThreadId) {
+      lastThreadMessageReadKey.current = null;
+      return;
+    }
+    const readKey = `thread:${openThreadId}`;
+    if (lastThreadMessageReadKey.current === readKey) return;
+    lastThreadMessageReadKey.current = readKey;
+    markMessageChannelRead.mutate({ id: openThreadId, kind: 'thread' });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openThreadId]);
 
   // Keep notification badges (mention_external / agent_start_failed) cleared
   // for whichever channel the user is actively viewing.
   useEffect(() => {
-    if (!activeEventChannelId) return;
+    if (!activeEventChannelId) {
+      lastNotificationReadId.current = null;
+      return;
+    }
+    if (lastNotificationReadId.current === activeEventChannelId) return;
+    lastNotificationReadId.current = activeEventChannelId;
     markChannelRead.mutate(activeEventChannelId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeEventChannelId]);
@@ -700,6 +725,7 @@ export function App(): JSX.Element {
           onOpenChange={setTasksDrawerOpen}
           workspaceId={selectedWorkspace.id}
           workspaceName={selectedWorkspace.name}
+          workspaceScopeIds={selectedWorkspace.workspace_scope_ids}
           conversations={channels.map(s => ({
             id: s.id,
             title: s.title,

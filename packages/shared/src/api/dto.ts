@@ -6,6 +6,7 @@ import {
   FromKindSchema,
   HostKindSchema,
   NotificationKindSchema,
+  ReasoningEffortSchema,
   RuntimeKindSchema,
   TaskAssigneeTypeSchema,
   TaskStatusSchema,
@@ -28,7 +29,7 @@ export const AgentDtoSchema = z.object({
   display_name: z.string(),
   runtime: RuntimeKindSchema,
   model: z.string().nullable(),
-  reasoning_effort: z.string().nullable(),
+  reasoning_effort: ReasoningEffortSchema.nullable(),
   host_id: z.string(),
   description: z.string().nullable(),
   created_at: z.number(),
@@ -44,7 +45,7 @@ export const CreateAgentInputSchema = z.object({
     .regex(/^[a-zA-Z0-9_\-]+$/, 'name must be alphanumeric / dash / underscore'),
   runtime: RuntimeKindSchema,
   model: z.string().optional(),
-  reasoning_effort: z.string().optional(),
+  reasoning_effort: ReasoningEffortSchema.optional(),
   host_id: z.string().optional(), // defaults to local
   description: z.string().optional(),
 });
@@ -60,7 +61,7 @@ export const UpdateAgentInputSchema = z
     description: z.string().max(2000).nullable().optional(),
     runtime: RuntimeKindSchema.optional(),
     model: z.string().nullable().optional(),
-    reasoning_effort: z.string().nullable().optional(),
+    reasoning_effort: ReasoningEffortSchema.nullable().optional(),
   })
   .refine(v => Object.keys(v).length > 0, { message: 'no fields to update' });
 export type UpdateAgentInput = z.infer<typeof UpdateAgentInputSchema>;
@@ -270,7 +271,7 @@ export const AddWorkspaceMemberInputSchema = z.object({
 });
 export type AddWorkspaceMemberInput = z.infer<typeof AddWorkspaceMemberInputSchema>;
 
-// Ephemeral per-agent run state used by `agent_activity` SSE and
+// Ephemeral per-agent run state used by `agent_activity` realtime events and
 // reconnect snapshots. These rows are not persisted to the messages DB.
 export const AgentRunStatusSchema = z.enum([
   'starting',
@@ -600,7 +601,7 @@ export const HumanClaimTaskInputSchema = z.object({
 });
 export type HumanClaimTaskInput = z.infer<typeof HumanClaimTaskInputSchema>;
 
-// SSE payload — published on every task mutation (create / claim /
+// Realtime payload — published on every task mutation (create / claim /
 // unclaim / status change). Consumers refresh the list + any open
 // conversation's inline task drawer.
 export const TaskChangedEventSchema = z.object({

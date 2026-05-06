@@ -1,5 +1,4 @@
 import { Hono, type Context } from 'hono';
-import { streamSSE } from 'hono/streaming';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -118,40 +117,33 @@ function installApiTimingMiddleware(app: Hono, ctx: BackendContext): void {
   app.use('*', async (c, next) => {
     const url = new URL(c.req.url);
     const path = url.pathname;
-    const isStream = path.endsWith('/stream');
-    const isDiagnosticPath = !isStream && isChannelSwitchDiagnosticPath(path);
-    const shouldLogRequest = !isStream;
-    const requestId = shouldLogRequest ? nextApiRequestId() : null;
+    const isDiagnosticPath = isChannelSwitchDiagnosticPath(path);
+    const requestId = nextApiRequestId();
     const startedAt = performance.now();
-    if (shouldLogRequest) {
+    ctx.logger.info(
+      {
+        requestId,
+        method: c.req.method,
+        path,
+        query: url.search || null,
+      },
+      'api: request start',
+    );
+    try {
+      await next();
+    } finally {
+      const elapsedMs = elapsedSince(startedAt);
       ctx.logger.info(
         {
           requestId,
           method: c.req.method,
           path,
           query: url.search || null,
+          status: c.res.status,
+          elapsedMs,
         },
-        'api: request start',
+        'api: request complete',
       );
-    }
-    try {
-      await next();
-    } finally {
-      if (isStream) return;
-      const elapsedMs = elapsedSince(startedAt);
-      if (shouldLogRequest) {
-        ctx.logger.info(
-          {
-            requestId,
-            method: c.req.method,
-            path,
-            query: url.search || null,
-            status: c.res.status,
-            elapsedMs,
-          },
-          'api: request complete',
-        );
-      }
       if (
         elapsedMs >= SLOW_REQUEST_MS ||
         (isDiagnosticPath && elapsedMs >= DIAGNOSTIC_REQUEST_MS)
@@ -472,8 +464,16 @@ export function createApiRouter(ctx: BackendContext): Hono {
       () => conversations.listChannelsForWorkspace(workspace.id),
       result => ({ channelCount: result.length }),
     );
+    const threads = timedRouteSpan(
+      ctx,
+      'workspace.threads.list',
+      { workspaceId: workspace.id },
+      () => conversations.listThreadsForWorkspace(workspace.id),
+      result => ({ threadCount: result.length }),
+    );
     return c.json({
       channels,
+      threads,
     });
   });
 
@@ -836,6 +836,8 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!id) return c.json({ error: 'message id required' }, 400);
     const row = saved.save(id);
     if (!row) return c.json({ error: 'message not found' }, 404);
+    // Notify viewer so the saved list invalidates without polling.
+    ctx.events.publishToScope('viewer:local', 'saved_changed', { message_id: id, action: 'save' });
     return c.json({ saved: row }, 201);
   });
 
@@ -843,6 +845,8 @@ export function createApiRouter(ctx: BackendContext): Hono {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'message id required' }, 400);
     saved.remove(id);
+    // Notify viewer so the saved list invalidates without polling.
+    ctx.events.publishToScope('viewer:local', 'saved_changed', { message_id: id, action: 'unsave' });
     return c.body(null, 204);
   });
 
@@ -855,7 +859,7 @@ export function createApiRouter(ctx: BackendContext): Hono {
     return c.json({ query: parsed.data, results });
   });
 
-  app.post(apiPaths.messageThread(':id'), c => {
+  app.post(apiPaths.messageThread(':id'), async c => {
     const messageId = c.req.param('id');
     if (!messageId) return c.json({ error: 'message id required' }, 400);
     const original = messages.getById(messageId);
@@ -976,11 +980,18 @@ export function createApiRouter(ctx: BackendContext): Hono {
       `Read the quote, send one short greeting acknowledging the topic, then wait for the user.`,
       `If you need parent context, ask the parent channel via \`target='parent'\`. When you think the thread has reached a conclusion, post a visible summary in this thread and ask the user whether to close it. Only call \`close_thread\` after the user explicitly confirms.`,
     ].join('\n');
-    messages.insertForConversation({
+    const onboardingMsg = messages.insertForConversation({
       conversationId: thread.id,
       fromKind: 'system',
       content: onboarding,
       metadata: { subtype: 'onboarding' },
+    });
+    await ctx.conversationManager.deliverMessage(thread.id, seedAgent.id, onboardingMsg.id);
+    void ctx.conversationManager.start(thread.id, seedAgent.id).catch(err => {
+      ctx.logger.warn(
+        { conversationId: thread.id, agentId: seedAgent.id, err },
+        'api: auto-start on user-created thread failed',
+      );
     });
 
     ctx.events.publish(parent.id, {
@@ -992,22 +1003,6 @@ export function createApiRouter(ctx: BackendContext): Hono {
     });
 
     return c.json({ thread_id: thread.id, thread, reused: false }, 201);
-  });
-
-  app.get(apiPaths.channelStream(':id'), c => {
-    const id = c.req.param('id');
-    if (!id) return c.json({ error: 'channel id required' }, 400);
-    const channel = conversations.getChannelLike(id);
-    if (!channel) return c.json({ error: 'channel not found' }, 404);
-    return streamConversation(channel.id, c);
-  });
-
-  app.get(apiPaths.threadStream(':id'), c => {
-    const id = c.req.param('id');
-    if (!id) return c.json({ error: 'thread id required' }, 400);
-    const thread = conversations.getThread(id);
-    if (!thread) return c.json({ error: 'thread not found' }, 404);
-    return streamConversation(thread.id, c);
   });
 
   app.post('/api/channels/:id/agents/:aid/start', async c => {
@@ -1085,6 +1080,10 @@ export function createApiRouter(ctx: BackendContext): Hono {
       kind: 'message',
       payload: { message: msg },
     });
+    // v1 has a single human viewer, so this event is just an invalidation
+    // pointer. Multi-user support should fan this out to all eligible viewers
+    // except the sender once human membership tables exist.
+    publishUnreadUpdated(ctx, conversation.id);
 
     if (conversation.parent_conversation_id) {
       ctx.events.publish(conversation.parent_conversation_id, {
@@ -1108,6 +1107,7 @@ export function createApiRouter(ctx: BackendContext): Hono {
         notifications,
         conversationManager: ctx.conversationManager,
         logger: ctx.logger,
+        events: ctx.events,
       });
     }
 
@@ -1140,56 +1140,25 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
+    const unreadBefore = conversationReads.unreadCountForConversation(
+      conversationId,
+      viewerUserId,
+    );
     const row = conversationReads.markRead({
       viewerUserId,
       conversationId,
       seq: parsed.data.seq,
     });
+    const unreadAfter =
+      unreadBefore > 0
+        ? conversationReads.unreadCountForConversation(conversationId, viewerUserId)
+        : unreadBefore;
+    // Notify viewer scope only when unread counters changed. Repeated
+    // mark-read calls happen during focus/channel effects and should be no-ops.
+    if (unreadAfter !== unreadBefore) {
+      publishUnreadUpdated(ctx, conversationId, viewerUserId);
+    }
     return c.json({ last_read_seq: row.last_read_seq });
-  }
-
-  function streamConversation(conversationId: string, c: Context): Response {
-    return streamSSE(c, async stream => {
-      const queue: { kind: string; payload: unknown }[] = [];
-      let wake: (() => void) | null = null;
-      let aborted = false;
-
-      const unsub = ctx.events.subscribe(conversationId, e => {
-        queue.push(e);
-        wake?.();
-      });
-      stream.onAbort(() => {
-        aborted = true;
-        unsub();
-        wake?.();
-      });
-
-      await stream.writeSSE({
-        event: 'connected',
-        data: JSON.stringify({ conversation_id: conversationId }),
-      });
-
-      while (!aborted) {
-        if (queue.length > 0) {
-          const e = queue.shift()!;
-          await stream.writeSSE({
-            event: e.kind,
-            data: JSON.stringify(e.payload),
-          });
-          continue;
-        }
-        await new Promise<void>(resolve => {
-          wake = resolve;
-          setTimeout(() => {
-            wake = null;
-            resolve();
-          }, 30_000);
-        });
-        if (queue.length === 0 && !aborted) {
-          await stream.writeSSE({ event: 'ping', data: String(Date.now()) });
-        }
-      }
-    });
   }
 
   async function startConversationAgent(
@@ -1588,24 +1557,26 @@ export function createApiRouter(ctx: BackendContext): Hono {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
     const { id, workspace_id, conversation_id, all } = parsed.data;
+    let marked = 0;
     if (id) {
       const ok = notifications.markRead(id);
-      return c.json({ marked: ok ? 1 : 0 });
+      marked = ok ? 1 : 0;
+    } else if (workspace_id) {
+      marked = notifications.markWorkspaceRead(workspace_id);
+    } else if (conversation_id) {
+      marked = notifications.markConversationRead(conversation_id);
+    } else if (all) {
+      marked = notifications.markAllRead();
+    } else {
+      // Unreachable thanks to the schema refine, but TS doesn't narrow.
+      return c.json({ error: 'invalid input' }, 400);
     }
-    if (workspace_id) {
-      const n = notifications.markWorkspaceRead(workspace_id);
-      return c.json({ marked: n });
+    // Push viewer:local only when unread notification counters changed.
+    // v1 single-user: userId='local'.
+    if (marked > 0) {
+      ctx.events.publishToScope('viewer:local', 'unread_updated', { marked });
     }
-    if (conversation_id) {
-      const n = notifications.markConversationRead(conversation_id);
-      return c.json({ marked: n });
-    }
-    if (all) {
-      const n = notifications.markAllRead();
-      return c.json({ marked: n });
-    }
-    // Unreachable thanks to the schema refine, but TS doesn't narrow.
-    return c.json({ error: 'invalid input' }, 400);
+    return c.json({ marked });
   });
 
   // ── Tasks (human-facing list + overrides) ────────────────────────
@@ -1673,6 +1644,16 @@ function parseBeforeSeq(raw: string | undefined): number | null | 'invalid' {
   const n = Number.parseInt(trimmed, 10);
   if (!Number.isFinite(n) || n <= 0) return 'invalid';
   return n;
+}
+
+function publishUnreadUpdated(
+  ctx: BackendContext,
+  conversationId: string,
+  viewerUserId = 'local',
+): void {
+  ctx.events.publishToScope(`viewer:${viewerUserId}`, 'unread_updated', {
+    conversation_id: conversationId,
+  });
 }
 
 export function createInternalRouter(ctx: BackendContext): Hono {
@@ -1769,6 +1750,7 @@ export function createInternalRouter(ctx: BackendContext): Hono {
       kind: 'message',
       payload: { message: msg },
     });
+    publishUnreadUpdated(ctx, targetConversation.id);
     ctx.conversationManager.resolveRun(cid, aid, 'replied');
 
     if (targetConversation.parent_conversation_id) {
@@ -1844,18 +1826,23 @@ export function createInternalRouter(ctx: BackendContext): Hono {
       conversations.addAgent(thread.id, memberId);
     }
 
-    messages.insertForConversation({
+    const contextMsg = messages.insertForConversation({
       conversationId: thread.id,
       fromKind: 'system',
       content:
         `Inherited context from parent channel '${parent.title}': ${parsed.data.context_summary}`,
       metadata: { subtype: 'child_context' },
     });
-    messages.insertForConversation({
+    const prompt = messages.insertForConversation({
       conversationId: thread.id,
       fromKind: 'agent',
       fromAgentId: aid,
       content: parsed.data.initial_prompt,
+    });
+    await ctx.conversationManager.deliverMessage(thread.id, aid, contextMsg.id);
+    await distributeConversationMessage(ctx, conversations, thread.id, aid, prompt.id);
+    void startConversationAgents(ctx, conversations, thread.id, {
+      reason: 'internal: auto-start on agent-created thread failed',
     });
 
     ctx.events.publish(parent.id, {
@@ -1895,7 +1882,7 @@ export function createInternalRouter(ctx: BackendContext): Hono {
       conversations.addAgent(channel.id, member.agent_id);
     }
 
-    messages.insertForConversation({
+    const contextMsg = messages.insertForConversation({
       conversationId: channel.id,
       fromKind: 'system',
       content:
@@ -1913,20 +1900,11 @@ export function createInternalRouter(ctx: BackendContext): Hono {
       content: parsed.data.initial_prompt,
     });
 
+    await ctx.conversationManager.deliverMessage(channel.id, aid, contextMsg.id);
     await distributeConversationMessage(ctx, conversations, channel.id, aid, prompt.id);
-    void Promise.all(
-      conversations
-        .listAgents(channel.id)
-        .filter(ca => ca.agent_id !== aid && ca.status !== 'active' && ca.status !== 'starting')
-        .map(ca =>
-          ctx.conversationManager.start(channel.id, ca.agent_id).catch(err => {
-            ctx.logger.warn(
-              { conversationId: channel.id, agentId: ca.agent_id, err },
-              'internal: auto-start on agent-created channel failed',
-            );
-          }),
-        ),
-    );
+    void startConversationAgents(ctx, conversations, channel.id, {
+      reason: 'internal: auto-start on agent-created channel failed',
+    });
 
     return c.json({ channel_id: channel.id });
   });
@@ -2142,6 +2120,27 @@ async function distributeConversationMessage(
   await Promise.all(
     recipients.map(ca =>
       ctx.conversationManager.deliverMessage(conversationId, ca.agent_id, messageId),
+    ),
+  );
+}
+
+async function startConversationAgents(
+  ctx: BackendContext,
+  conversations: ConversationRepo,
+  conversationId: string,
+  opts: { reason: string },
+): Promise<void> {
+  const recipients = conversations
+    .listAgents(conversationId)
+    .filter(ca => ca.status !== 'active' && ca.status !== 'starting');
+  await Promise.all(
+    recipients.map(ca =>
+      ctx.conversationManager.start(conversationId, ca.agent_id).catch(err => {
+        ctx.logger.warn(
+          { conversationId, agentId: ca.agent_id, err },
+          opts.reason,
+        );
+      }),
     ),
   );
 }

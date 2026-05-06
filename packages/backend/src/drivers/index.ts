@@ -32,6 +32,7 @@ export interface DriverSpawnContext {
   workspacePath: string;
   cliSessionId: string | null; // when resuming
   model: string | null;
+  reasoningEffort: string | null;
   /** Path to the materialized `system-prompt.md`. Drivers that accept a
    *  CLI flag for it (claude) point at this; drivers that don't (codex,
    *  cursor) read the file's contents into their own protocol payload. */

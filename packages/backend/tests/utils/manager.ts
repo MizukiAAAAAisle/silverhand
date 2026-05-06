@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ServerConfig } from '@silverhand/shared';
 import type { BackendContext, BackendLogger } from '../../src/context.js';
-import { ConversationEventBus, type ConversationBusEvent } from '../../src/event-bus.js';
+import { ScopeEventBus, type ConversationBusEvent } from '../../src/ws/scope-event-bus.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
@@ -44,7 +44,7 @@ export interface ManagerHarness {
   sessionId: string;
   /** Path the mock-claude appends every received stdin line to. */
   stdinLog: string;
-  /** Subscribe to all SSE events for the session. */
+  /** Subscribe to all realtime events for the session. */
   on(handler: (e: ConversationBusEvent) => void): () => void;
   /** Wait until `predicate(events)` returns truthy, or reject after `timeoutMs`. */
   waitForEvent(
@@ -124,7 +124,7 @@ export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {})
     logDir: opts.logDir,
     blobStorage: createLocalBlobFileStorage({ silverhandDir: tmp.silverhandDir }),
     lastSpawnAtByAgent: new Map(),
-    events: new ConversationEventBus(),
+    events: new ScopeEventBus(),
     chatBridgeLauncher: { command: 'true', args: [] }, // never invoked in L3
     conversationManager: undefined as unknown as ConversationManager,
   };

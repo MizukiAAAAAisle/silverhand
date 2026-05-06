@@ -183,6 +183,32 @@ export class ConversationRepo {
     return rows.map(r => rowToThread(r, this.findThreadAnchorMessageId(r.id)));
   }
 
+  listThreadsForWorkspace(workspaceId: string): ThreadDto[] {
+    const rows = this.db
+      .prepare<
+        [string],
+        ConversationRow & { anchor_message_id: string | null }
+      >(
+        `SELECT c.*,
+                json_extract(m.metadata, '$.quoted_message_id') AS anchor_message_id
+           FROM conversations c
+           LEFT JOIN messages m
+             ON m.id = (
+               SELECT m2.id
+                 FROM messages m2
+                WHERE m2.conversation_id = c.id
+                  AND m2.from_kind = 'system'
+                  AND json_extract(m2.metadata, '$.subtype') = 'thread_anchor'
+                ORDER BY m2.created_at ASC
+                LIMIT 1
+             )
+          WHERE c.workspace_id = ? AND c.kind = 'thread'
+          ORDER BY c.created_at ASC`,
+      )
+      .all(workspaceId);
+    return rows.map(r => rowToThread(r, r.anchor_message_id));
+  }
+
   listChildren(parentId: string): ThreadDto[] {
     return this.listThreadsForChannel(parentId);
   }

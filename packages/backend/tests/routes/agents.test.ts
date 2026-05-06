@@ -211,8 +211,10 @@ describe('GET /api/agents/:id/workspace', () => {
     expect(res.workspace.system_prompt).not.toBeNull();
     expect(res.workspace.memory).not.toBeNull();
     expect(res.workspace.system_prompt.content).toContain('Global role');
-    expect(res.workspace.memory.content).toContain('Global memory');
+    expect(res.workspace.memory.content).toContain('Key Knowledge');
+    expect(res.workspace.memory.content).toContain('notes/work-log.md');
     expect(Array.isArray(res.workspace.notes)).toBe(true);
+    expect(res.workspace.notes.map((n: any) => n.name)).toContain('work-log.md');
   });
 });
 

@@ -52,7 +52,7 @@ export class ClaudeDriver implements Driver {
       '--input-format',
       'stream-json',
       '--model',
-      ctx.model || 'sonnet',
+      ctx.model || 'opus',
       '--disallowed-tools',
       DISALLOWED_TOOLS,
       '--system-prompt-file',

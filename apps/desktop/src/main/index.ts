@@ -16,9 +16,50 @@ let activeConversation: ActiveConversationInfo = { workspaceId: null, conversati
  *  SIGINT / SIGTERM. */
 const HEADLESS = process.env.SILVERHAND_HEADLESS === '1';
 
+interface DevRemoteDebuggingConfig {
+  enabled: boolean;
+  port: number | null;
+  reason?: string;
+}
+
+const devRemoteDebugging = configureDevRemoteDebugging();
+
 interface ActiveConversationInfo {
   workspaceId: string | null;
   conversationId: string | null;
+}
+
+/**
+ * In `pnpm dev`, expose Electron's renderer targets over CDP so browser
+ * DevTools / VS Code can inspect Network, WS frames, console, and React state
+ * without relying on the in-window DevTools UI.
+ */
+function configureDevRemoteDebugging(): DevRemoteDebuggingConfig {
+  if (app.isPackaged) return { enabled: false, port: null, reason: 'packaged' };
+  if (!process.env['ELECTRON_RENDERER_URL']) {
+    return { enabled: false, port: null, reason: 'no_renderer_dev_server' };
+  }
+
+  const raw =
+    process.env.SILVERHAND_CDP_PORT ??
+    process.env.SILVERHAND_REMOTE_DEBUGGING_PORT ??
+    '9222';
+  const value = raw.trim();
+  if (/^(0|false|off|disabled)$/i.test(value)) {
+    return { enabled: false, port: null, reason: 'disabled_by_env' };
+  }
+
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    console.warn(
+      `[main] invalid SILVERHAND_CDP_PORT/SILVERHAND_REMOTE_DEBUGGING_PORT=${JSON.stringify(raw)}; CDP remote debugging disabled`,
+    );
+    return { enabled: false, port: null, reason: 'invalid_port' };
+  }
+
+  app.commandLine.appendSwitch('remote-debugging-address', '127.0.0.1');
+  app.commandLine.appendSwitch('remote-debugging-port', String(port));
+  return { enabled: true, port };
 }
 
 /**
@@ -127,6 +168,16 @@ async function bootstrap(): Promise<void> {
       { logFile: logger.filePath, path: process.env.PATH, pathPatch: pathResult },
       'logger initialized',
     );
+    if (devRemoteDebugging.enabled) {
+      logger.info(
+        {
+          port: devRemoteDebugging.port,
+          url: `http://127.0.0.1:${devRemoteDebugging.port}`,
+          env: 'SILVERHAND_CDP_PORT',
+        },
+        'dev CDP remote debugging enabled',
+      );
+    }
     backend = await startBackend({
       dbPath: databasePath(),
       silverhandDir: silverhandDir(),

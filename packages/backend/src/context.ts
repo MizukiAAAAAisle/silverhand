@@ -1,6 +1,6 @@
 import type { Database as Db } from 'better-sqlite3';
 import type { ServerConfig } from '@silverhand/shared';
-import type { ConversationEventBus } from './event-bus.js';
+import type { ScopeEventBus } from './ws/scope-event-bus.js';
 import type { ConversationManager } from './conversation-manager.js';
 import type { BlobFileStorage } from './storage/blob-file-storage.js';
 
@@ -45,8 +45,8 @@ export interface BackendContext {
   blobStorage: BlobFileStorage;
   /** Per-process state: last child-conversation spawn timestamp per agent (cooldown). */
   lastSpawnAtByAgent: Map<string, number>;
-  /** In-process pub/sub for live UI updates (SSE). */
-  events: ConversationEventBus;
+  /** In-process pub/sub for live UI updates. */
+  events: ScopeEventBus;
   /** How to spawn the chat-bridge MCP server (host-supplied). */
   chatBridgeLauncher: ChatBridgeLauncher;
   /** Owns running agent CLI child processes. Initialized after the

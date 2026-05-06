@@ -1,14 +1,51 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from '@tanstack/react-query';
+import { useEffect } from 'react';
 import type { SavedMessageDto } from '@silverhand/shared';
 import { api } from '@/lib/api';
+import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
 
 const savedKey = ['saved'] as const;
+const savedInvalidationTimers = new WeakMap<
+  QueryClient,
+  ReturnType<typeof setTimeout>
+>();
+
+function invalidateSavedDebounced(qc: QueryClient): void {
+  const existing = savedInvalidationTimers.get(qc);
+  if (existing) clearTimeout(existing);
+  const timer = setTimeout(() => {
+    savedInvalidationTimers.delete(qc);
+    void qc.invalidateQueries({ queryKey: savedKey });
+  }, 100);
+  savedInvalidationTimers.set(qc, timer);
+}
 
 /**
  * Returns the global flat saved-message list. The API ships everything
  * pre-joined (channel/conversation/agent names + full message body).
+ * Invalidated by WS `viewer:local` `saved_changed` events so the list
+ * stays in sync without polling.
  */
 export function useSavedMessages() {
+  const qc = useQueryClient();
+
+  useEffect(() => {
+    const sub = subscribeWsScope('viewer:local');
+    const unsub = onWsFrame(frame => {
+      if (frame.type === 'event' && frame.scope === 'viewer:local' && frame.kind === 'saved_changed') {
+        invalidateSavedDebounced(qc);
+      } else if (frame.type === 'snapshot_required' && frame.scope === 'viewer:local') {
+        invalidateSavedDebounced(qc);
+      }
+    });
+    return () => { sub.unsubscribe(); unsub(); };
+  }, [qc]);
+
   return useQuery({
     queryKey: savedKey,
     queryFn: async () => {
@@ -37,7 +74,7 @@ export function useSaveMessage() {
       return res.saved;
     },
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: savedKey });
+      invalidateSavedDebounced(qc);
     },
   });
 }
@@ -49,7 +86,7 @@ export function useUnsaveMessage() {
       await api(`/api/messages/${messageId}/save`, { method: 'DELETE' });
     },
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: savedKey });
+      invalidateSavedDebounced(qc);
     },
   });
 }

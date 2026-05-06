@@ -15,7 +15,7 @@ interface LoggedEvent {
 }
 
 /**
- * Renders a scrolling, ring-buffered log of SSE events for one channel.
+ * Renders a scrolling, ring-buffered log of realtime events for one channel.
  * Used by the dev-only Events window (`renderer/events/EventsApp.tsx`)
  * — extracted out of the previous in-app `EventPanel` so the same
  * markup serves both the standalone window and any future embedded

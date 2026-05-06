@@ -87,11 +87,16 @@ describe('POST /internal/.../send-message', () => {
   it('writes the message to self target + distributes to other agents (not the sender)', async () => {
     t = buildTestApp();
     const { conversationId, agentIds } = await setupSession(t, ['alice', 'bob']);
+    const viewerEvents: Array<{ kind: string; payload: unknown }> = [];
+    const unsubViewer = t.ctx.events.subscribeScope('viewer:local', e => {
+      viewerEvents.push({ kind: e.kind, payload: e.payload });
+    });
     const r = await http(t.app).post(
       `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
       { content: 'hello team' },
       { headers: authHeaders(t.authToken) },
     );
+    unsubViewer();
     expect(r.status).toBe(200);
     const body = await r.json() as any;
     expect(typeof body.message_id).toBe('string');
@@ -107,6 +112,10 @@ describe('POST /internal/.../send-message', () => {
     expect(inserted.from_kind).toBe('agent');
     expect(inserted.from_agent_id).toBe(agentIds.alice);
     expect(inserted.content).toBe('hello team');
+    expect(viewerEvents).toContainEqual({
+      kind: 'unread_updated',
+      payload: { conversation_id: conversationId },
+    });
   });
 
   it('rejects parent target when current session has no parent', async () => {
@@ -250,6 +259,24 @@ describe('POST /internal/.../create-thread', () => {
     expect(msgs.messages[1].from_agent_id).toBe(agentIds.alice);
     expect(msgs.messages[1].content).toBe('profile the hot path');
 
+    expect(t.fake.delivered).toEqual([
+      {
+        conversationId: body.thread_id,
+        agentId: agentIds.alice,
+        messageId: msgs.messages[0].id,
+      },
+      {
+        conversationId: body.thread_id,
+        agentId: agentIds.bob,
+        messageId: msgs.messages[1].id,
+      },
+    ]);
+    expect(t.fake.starts).toHaveLength(2);
+    expect(t.fake.starts).toEqual(expect.arrayContaining([
+      { conversationId: body.thread_id, agentId: agentIds.alice },
+      { conversationId: body.thread_id, agentId: agentIds.bob },
+    ]));
+
     // Explicit subsets are allowed, but the caller is always included.
     const childAgents = await (
       await http(t.app).get(`/api/threads/${body.thread_id}/agents`)
@@ -384,13 +411,20 @@ describe('POST /internal/.../create-channel', () => {
     expect(t.fake.delivered).toEqual([
       {
         conversationId: body.channel_id,
+        agentId: agentIds.alice,
+        messageId: msgs.messages[0].id,
+      },
+      {
+        conversationId: body.channel_id,
         agentId: agentIds.bob,
         messageId: msgs.messages[1].id,
       },
     ]);
-    expect(t.fake.starts).toEqual([
+    expect(t.fake.starts).toHaveLength(2);
+    expect(t.fake.starts).toEqual(expect.arrayContaining([
+      { conversationId: body.channel_id, agentId: agentIds.alice },
       { conversationId: body.channel_id, agentId: agentIds.bob },
-    ]);
+    ]));
   });
 
   it('creates a top-level sibling when invoked from a child session', async () => {

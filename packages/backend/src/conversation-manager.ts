@@ -51,7 +51,7 @@ const COMPACTION_STALE_MS = 5 * 60 * 1000;
  * the original spawn-time stdin race that motivated this watchdog.
  */
 const INIT_WATCHDOG_MS = 30 * 1000;
-const AGENT_ACTIVITY_HEARTBEAT_MS = 8 * 1000;
+const AGENT_ACTIVITY_HEARTBEAT_MS = 2 * 1000;
 const ACTIVITY_SNIPPET_MAX_CHARS = 200;
 
 /**
@@ -153,7 +153,7 @@ export class ConversationManager {
   private readonly runStates = new Map<string, AgentRunState>();
   private activityHeartbeat: NodeJS.Timeout | null = null;
   /** Dedicated JSONL log for agent_activity events — written in addition
-   *  to SSE so release builds leave a paper trail for debugging. Null
+   *  to realtime broadcasts so release builds leave a paper trail for debugging. Null
    *  when `ctx.logDir` is not configured (e.g. in tests). */
   private readonly activityLogStream: WriteStream | null;
 
@@ -171,7 +171,7 @@ export class ConversationManager {
       const logPath = join(ctx.logDir, `agent-activity-${ts}.log`);
       this.activityLogStream = createWriteStream(logPath, { flags: 'a' });
       this.activityLogStream.on('error', err => {
-        // Write failures must never crash the backend or block SSE.
+        // Write failures must never crash the backend or block realtime broadcasts.
         ctx.logger.warn({ err, logPath }, 'agent-activity log write error');
       });
     } else {
@@ -210,7 +210,7 @@ export class ConversationManager {
   /**
    * Record a pre-spawn failure (before the child process is created).
    * Writes a notification row, flips conversation_agent status to `crashed`,
-   * and publishes an `agent_status` SSE event so the renderer can show
+   * and publishes an `agent_status` realtime event so the renderer can show
    * an error badge and — once useNotificationToasts is wired — a toast.
    */
   private recordStartFailure(conversationId: string, agentId: string, error: Error): void {
@@ -233,6 +233,12 @@ export class ConversationManager {
           error: error.message,
           reason: 'spawn_error',
         },
+      });
+      // v1 single-user: notify viewer:local so notification hooks invalidate without polling.
+      // Multi-user: replace 'local' with the actual viewer/user_id.
+      this.ctx.events.publishToScope('viewer:local', 'notification', {
+        kind: 'agent_start_failed',
+        conversation_id: conversationId,
       });
     } catch (e) {
       this.ctx.logger.error({ conversationId, agentId, e }, 'conversation: failed to insert start-failure notification');
@@ -279,6 +285,11 @@ export class ConversationManager {
           exit_code: opts.exitCode,
           ...(opts.error ? { error: opts.error } : {}),
         },
+      });
+      // v1 single-user: notify viewer:local so notification hooks invalidate without polling.
+      this.ctx.events.publishToScope('viewer:local', 'notification', {
+        kind: 'agent_start_failed',
+        conversation_id: conversationId,
       });
     } catch (e) {
       this.ctx.logger.error({ conversationId, agentId, e }, 'conversation: failed to insert crash notification');
@@ -453,6 +464,7 @@ export class ConversationManager {
       workspacePath: conversation.workspace_path,
       cliSessionId: sessionAgent.cli_session_id,
       model: opts.model ?? agent.model,
+      reasoningEffort: agent.reasoning_effort,
       mcpConfigPath: spawnPrep.mcpConfigPath,
       systemPromptPath: spawnPrep.systemPromptPath,
       chatBridge,
@@ -559,7 +571,7 @@ export class ConversationManager {
       });
       // Write a persistent notification for unexpected crashes so the
       // global toast hook can alert the user even if they aren't watching
-      // this conversation's SSE stream.
+      // this conversation's realtime stream.
       if (
         status === 'crashed' &&
         !handle.intentionallyStopped &&

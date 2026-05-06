@@ -4,6 +4,7 @@ import {
   useQuery,
   useQueryClient,
   type InfiniteData,
+  type QueryClient,
 } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import type {
@@ -16,6 +17,7 @@ import type {
 import { apiPaths } from '@silverhand/shared';
 import { api } from '@/lib/api';
 import { CURRENT_USER_ID } from '@/lib/current-user';
+import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
 import {
   AGENT_RUN_STATES_GC_MS,
   agentRunStatesKey,
@@ -32,6 +34,39 @@ const MESSAGE_PAGE_LIMIT = 100;
 type ConversationRouteKind = 'channel' | 'thread';
 
 type MessagesCache = InfiniteData<ConversationMessagesDto, number | undefined>;
+
+function invalidateMessageUnreadQueries(qc: QueryClient): void {
+  const existing = messageUnreadInvalidationTimers.get(qc);
+  if (existing) clearTimeout(existing);
+  const timer = setTimeout(() => {
+    messageUnreadInvalidationTimers.delete(qc);
+    void qc.invalidateQueries({
+      predicate: query => {
+        const key = query.queryKey;
+        return (
+          Array.isArray(key) &&
+          key[0] === 'workspaces' &&
+          key[key.length - 1] === 'message-unread'
+        );
+      },
+    });
+    void qc.invalidateQueries({ queryKey: ['message-unread', 'summary'] });
+  }, 100);
+  messageUnreadInvalidationTimers.set(qc, timer);
+}
+
+const messageUnreadInvalidationTimers = new WeakMap<
+  QueryClient,
+  ReturnType<typeof setTimeout>
+>();
+
+function isMessageUnreadUpdatedPayload(payload: unknown): boolean {
+  return (
+    typeof payload === 'object' &&
+    payload !== null &&
+    typeof (payload as { conversation_id?: unknown }).conversation_id === 'string'
+  );
+}
 
 type ConversationAgentStatusPatch = Pick<ConversationAgentDto, 'agent_id'> &
   Partial<Pick<ConversationAgentDto, 'status' | 'pid' | 'cli_session_id'>>;
@@ -158,7 +193,7 @@ function applyTaskChangedToCache(
   return changed ? { ...data, pages } : data;
 }
 
-/** Initial latest-window GET + previous-page fetch + live append on SSE. */
+/** Initial latest-window GET + previous-page fetch + live append on realtime events. */
 export function useChannelMessages(
   channelId: string | null,
   routeKind: ConversationRouteKind = 'channel',
@@ -221,7 +256,7 @@ export function useChannelMessages(
   return { ...query, data: messages };
 }
 
-/** Initial GET + live update on `agent_status` SSE events. */
+/** Initial GET + live update on `agent_status` realtime events. */
 export function useChannelAgents(
   channelId: string | null,
   routeKind: ConversationRouteKind = 'channel',
@@ -255,7 +290,9 @@ export function useChannelAgents(
     (e: ConversationStreamEvent) => {
       if (channelId && e.kind === 'connected') {
         pendingStatusPatches.current.clear();
-        void qc.invalidateQueries({ queryKey: agentsKey(channelId) });
+        if (e.payload?.snapshot_required) {
+          void qc.invalidateQueries({ queryKey: agentsKey(channelId) });
+        }
         return;
       }
 
@@ -308,7 +345,7 @@ export function useSendMessage(
     },
     // Optimistic update: show the message immediately on Enter, before
     // the HTTP response arrives. The temp message uses a `pending-` id;
-    // onSuccess replaces it with the real row (SSE's de-dup prevents a
+    // onSuccess replaces it with the real row (live de-dupe prevents a
     // second append when the event arrives after onSuccess).
     onMutate: async (content: string) => {
       if (!channelId) return undefined;
@@ -403,7 +440,7 @@ export function useStopAgent(
  * - Initial GET from the channel/thread run-state endpoint (snapshot on
  *   mount / reconnect — returns all currently in-flight states).
  * - Live `agent_activity` events are ingested by the shared conversation stream
- *   layer so the cache stays warm even during the stream close grace period.
+ *   layer so the cache stays warm across quick channel/thread navigation.
  */
 export function useAgentRunStates(
   channelId: string | null,
@@ -431,9 +468,8 @@ export function useAgentRunStates(
         requestedAt,
       );
     },
-    // Don't stale-refetch automatically — SSE keeps this up-to-date.
+    // Don't stale-refetch automatically — realtime events keep this up-to-date.
     staleTime: Infinity,
-    refetchOnMount: 'always',
     // Keep recent activity visible across quick channel/thread navigation.
     gcTime: AGENT_RUN_STATES_GC_MS,
   });
@@ -441,10 +477,10 @@ export function useAgentRunStates(
   const onEvent = useCallback(
     (e: ConversationStreamEvent) => {
       // On (re)connect, snapshot may have drifted — runs may have ended or
-      // started while the SSE was down. Refetch the snapshot to reconcile;
-      // the query function merges any newer SSE updates that arrived while
+      // started while the transport was down. Refetch the snapshot to reconcile;
+      // the query function merges any newer live updates that arrived while
       // the snapshot request was in flight.
-      if (channelId && e.kind === 'connected') {
+      if (channelId && e.kind === 'connected' && e.payload?.snapshot_required) {
         void qc.invalidateQueries({ queryKey: agentRunStatesKey(channelId) });
       }
     },
@@ -456,18 +492,35 @@ export function useAgentRunStates(
 }
 
 /**
- * Per-channel unread notification counts for the channels sidebar badge.
- * Polls every 5 s so badges update without requiring a manual refresh.
+ * Notification-backed unread counts per channel. Invalidated by WS
+ * `viewer:local` `unread_updated` events — no polling.
  *
  * @deprecated Backed by the notification system (mention_external /
  * agent_start_failed only). Use useMessageUnreadCounts for IM-style
  * message unread badges.
  */
 export function useChannelUnreadCounts(workspaceId: string | null) {
+  const qc = useQueryClient();
+  const queryKey = ['workspaces', workspaceId, 'unread-by-channel'] as const;
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    const sub = subscribeWsScope('viewer:local');
+    const unsub = onWsFrame(frame => {
+      if (frame.type !== 'event') return;
+      if (frame.scope !== 'viewer:local') return;
+      if (frame.kind === 'unread_updated' && isMessageUnreadUpdatedPayload(frame.payload)) {
+        return;
+      }
+      if (frame.kind !== 'notification' && frame.kind !== 'unread_updated') return;
+      qc.invalidateQueries({ queryKey });
+    });
+    return () => { sub.unsubscribe(); unsub(); };
+  }, [qc, workspaceId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   return useQuery({
-    queryKey: ['workspaces', workspaceId, 'unread-by-channel'],
+    queryKey,
     enabled: !!workspaceId,
-    refetchInterval: 5_000,
     queryFn: async () => {
       const res = await api<{ counts: Record<string, number> }>(
         `/api/channels/${workspaceId}/unread-by-conversation`,
@@ -479,17 +532,37 @@ export function useChannelUnreadCounts(workspaceId: string | null) {
 
 /**
  * Per-channel message unread counts for the channels sidebar badge.
- * Backed by the conversation_reads cursor system — counts any message with
- * seq > viewer's last_read_seq. Polls every 5 s.
+ * Backed by the conversation_reads cursor system. Invalidated by WS
+ * `viewer:local` `unread_updated` events — no polling.
  */
 export function useMessageUnreadCounts(
   workspaceId: string | null,
   workspaceKind: 'regular' | 'dm' | null = 'regular',
 ) {
+  const qc = useQueryClient();
+  const queryKey = ['workspaces', workspaceId, workspaceKind, 'message-unread'] as const;
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    const sub = subscribeWsScope('viewer:local');
+    const unsub = onWsFrame(frame => {
+      if (frame.type === 'snapshot_required') {
+        if (frame.scope !== 'viewer:local') return;
+        invalidateMessageUnreadQueries(qc);
+        return;
+      }
+      if (frame.type !== 'event') return;
+      if (frame.scope !== 'viewer:local') return;
+      if (frame.kind !== 'unread_updated') return;
+      if (!isMessageUnreadUpdatedPayload(frame.payload)) return;
+      invalidateMessageUnreadQueries(qc);
+    });
+    return () => { sub.unsubscribe(); unsub(); };
+  }, [qc, workspaceId]);
+
   return useQuery({
-    queryKey: ['workspaces', workspaceId, workspaceKind, 'message-unread'],
+    queryKey,
     enabled: !!workspaceId && workspaceKind !== null,
-    refetchInterval: 5_000,
     queryFn: async () => {
       const path =
         workspaceKind === 'dm'
@@ -511,16 +584,12 @@ export function useMessageUnreadCounts(
  * useMarkMessageChannelRead for the conversation_reads cursor system.
  */
 export function useMarkChannelRead() {
-  const qc = useQueryClient();
   return useMutation({
     mutationFn: async (channelId: string) => {
       await api('/api/notifications/read', {
         method: 'POST',
         body: JSON.stringify({ conversation_id: channelId }),
       });
-    },
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['notifications', 'unread'] });
     },
   });
 }
@@ -547,17 +616,7 @@ export function useMarkMessageChannelRead() {
       // Only unread counters need to refresh after marking a conversation
       // read. Invalidating ['workspaces'] also refetches the channel/tree
       // data, which makes every channel click redo the sidebar thread load.
-      void qc.invalidateQueries({
-        predicate: query => {
-          const key = query.queryKey;
-          return (
-            Array.isArray(key) &&
-            key[0] === 'workspaces' &&
-            key[key.length - 1] === 'message-unread'
-          );
-        },
-      });
-      void qc.invalidateQueries({ queryKey: ['message-unread', 'summary'] });
+      invalidateMessageUnreadQueries(qc);
     },
   });
 }
@@ -566,12 +625,31 @@ export function useMarkMessageChannelRead() {
  * Global message unread summary across ALL workspaces.
  * Backed by conversation_reads — returns total unread message count per workspace.
  * Used by the workspace sidebar to show per-workspace unread badges.
- * Polls every 5 s alongside the per-channel hook.
+ * Invalidated by WS `viewer:local` `unread_updated` events — no polling.
  */
 export function useMessageUnreadSummary() {
+  const qc = useQueryClient();
+  const queryKey = ['message-unread', 'summary'] as const;
+
+  useEffect(() => {
+    const sub = subscribeWsScope('viewer:local');
+    const unsub = onWsFrame(frame => {
+      if (frame.type === 'snapshot_required') {
+        if (frame.scope !== 'viewer:local') return;
+        invalidateMessageUnreadQueries(qc);
+        return;
+      }
+      if (frame.type !== 'event') return;
+      if (frame.scope !== 'viewer:local') return;
+      if (frame.kind !== 'unread_updated') return;
+      if (!isMessageUnreadUpdatedPayload(frame.payload)) return;
+      invalidateMessageUnreadQueries(qc);
+    });
+    return () => { sub.unsubscribe(); unsub(); };
+  }, [qc]);
+
   return useQuery({
-    queryKey: ['message-unread', 'summary'],
-    refetchInterval: 5_000,
+    queryKey,
     queryFn: () =>
       api<{ by_workspace: Record<string, number> }>(apiPaths.messageUnreadSummary),
   });

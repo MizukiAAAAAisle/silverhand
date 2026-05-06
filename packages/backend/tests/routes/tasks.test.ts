@@ -262,7 +262,7 @@ describe('Tasks (PR-T1)', () => {
     expect(listed.tasks[0].status).toBe('done');
   });
 
-  it('publishes task_changed SSE events on claim', async () => {
+  it('publishes task_changed realtime events on claim', async () => {
     t = buildTestApp();
     const { sessionId, agentIds } = await setup(t);
     const h = http(t.app, auth(t.authToken));

@@ -48,6 +48,7 @@ function makeSpawnCtx(overrides: Partial<DriverSpawnContext> = {}): {
     workspacePath: tmp,
     cliSessionId: null,
     model: null,
+    reasoningEffort: null,
     systemPromptPath,
     mcpConfigPath: join(tmp, 'mcp.json'),
     chatBridge: {
@@ -140,6 +141,17 @@ describe('CodexDriver.buildArgs', () => {
       cleanup();
     }
   });
+
+  it('passes reasoning effort as a codex config override when set', () => {
+    const { ctx, cleanup } = makeSpawnCtx({ reasoningEffort: 'xhigh' });
+    try {
+      const args = new CodexDriver().buildArgs(ctx);
+      const kv = collectCArgs(args);
+      expect(kv.get('model_reasoning_effort')).toBe('"xhigh"');
+    } finally {
+      cleanup();
+    }
+  });
 });
 
 describe('CodexDriver JSON-RPC handshake', () => {
@@ -193,6 +205,7 @@ describe('CodexDriver JSON-RPC handshake', () => {
         approvalPolicy: 'never',
         sandbox: 'danger-full-access',
         developerInstructions: 'STANDING PROMPT\n',
+        model: 'gpt-5.5',
       },
     });
 
@@ -236,6 +249,29 @@ describe('CodexDriver JSON-RPC handshake', () => {
     expect(threadCall.params).toMatchObject({
       threadId: 'thread-resumed',
       cwd: built.ctx.workspacePath,
+      model: 'gpt-5.5',
+    });
+  });
+
+  it('uses an explicitly configured model for thread/start', async () => {
+    const built = makeSpawnCtx({ model: 'gpt-5.4' });
+    cleanup = built.cleanup;
+    const io = makeIO(built.ctx);
+    const driver = new CodexDriver();
+
+    driver.bindIO(io);
+    await tick();
+    const init = JSON.parse(io.lines[0]!);
+
+    driver.parseLine(
+      JSON.stringify({ jsonrpc: '2.0', id: init.id, result: {} }),
+    );
+    const threadCall = JSON.parse(io.lines[2]!);
+    expect(threadCall).toMatchObject({
+      method: 'thread/start',
+      params: {
+        model: 'gpt-5.4',
+      },
     });
   });
 

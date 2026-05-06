@@ -18,8 +18,8 @@ interface AgentInfoPopoverProps {
   /** `'click'` (default) opens on click — used by mention pills /
    *  message author labels. `'hover'` opens on pointer-enter and
    *  closes on pointer-leave with a small grace window so the user
-   *  can move into the popover content. Used by the avatar stack
-   *  in the conversation header. */
+   *  can move into the popover content. Used by the member strip in
+   *  the conversation header. */
   trigger?: 'click' | 'hover';
 }
 
@@ -32,7 +32,7 @@ const HOVER_CLOSE_DELAY_MS = 120;
  * affordance when the agent has crashed in this conversation.
  *
  * Two trigger modes: click (mention pills, message author) and hover
- * (avatar stack in conversation header). Hover mode is implemented via
+ * (member strip in conversation header). Hover mode is implemented via
  * controlled `open` rather than a separate Radix HoverCard primitive
  * to keep the dep surface narrow.
  */

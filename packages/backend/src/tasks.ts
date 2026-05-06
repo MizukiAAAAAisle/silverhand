@@ -9,7 +9,7 @@
  *
  * This module hosts:
  *   - Pure DB atomics (claim UPDATE-with-WHERE, next-number allocation)
- *   - Fan-out: system-message broadcast + SSE `task_changed` event
+ *   - Fan-out: system-message broadcast + realtime `task_changed` event
  *
  * It does NOT handle HTTP; routes.ts wires the endpoints to these
  * functions. Keeps transaction boundaries + side-effects in one place,
@@ -271,7 +271,7 @@ export async function createTasksByAgent(
   });
   tx();
 
-  // Post-transaction: system messages + SSE. Keep these out of the TX
+  // Post-transaction: system messages + realtime events. Keep these out of the TX
   // so publish doesn't happen on rollback.
   const agent = deps.agents.get(args.agentId);
   const actorLabel = agent ? `@${agent.name}` : 'agent';
@@ -1065,10 +1065,14 @@ async function broadcast(
     title: args.title,
   };
   deps.ctx.events.publish(conversationId, { kind: 'task_changed', payload: event });
+  // Also publish to workspace scope so global task views (badge, drawer)
+  // can invalidate without polling. WS workspace scopes always use the real
+  // DB workspace id, including the hidden system workspace that owns DM
+  // conversations.
+  deps.ctx.events.publishToScope(`workspace:${workspaceId}`, 'task_changed', event);
 }
 
 function taskWorkspaceScopeId(conversation: ConversationDto): string {
-  if (conversation.kind === 'dm_channel') return conversation.id;
   return conversation.workspace_id;
 }
 

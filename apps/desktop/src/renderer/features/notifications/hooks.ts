@@ -6,9 +6,33 @@ import type {
   NotificationDto,
 } from '@silverhand/shared';
 import { api } from '@/lib/api';
+import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
 
 const unreadKey = ['notifications', 'unread'] as const;
 const listKey = ['notifications', 'list'] as const;
+const invalidationTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function invalidateQueryDebounced(
+  qc: ReturnType<typeof useQueryClient>,
+  queryKey: readonly unknown[],
+): void {
+  const key = JSON.stringify(queryKey);
+  const existing = invalidationTimers.get(key);
+  if (existing) clearTimeout(existing);
+  const timer = setTimeout(() => {
+    invalidationTimers.delete(key);
+    void qc.invalidateQueries({ queryKey });
+  }, 100);
+  invalidationTimers.set(key, timer);
+}
+
+function isMessageUnreadUpdatedPayload(payload: unknown): boolean {
+  return (
+    typeof payload === 'object' &&
+    payload !== null &&
+    typeof (payload as { conversation_id?: unknown }).conversation_id === 'string'
+  );
+}
 
 export interface UnreadCounts {
   total: number;
@@ -18,16 +42,35 @@ export interface UnreadCounts {
 }
 
 /**
- * Polled summary of unread notifications. Refreshes every 5s while
- * mounted so the sidebar dot appears within ~one polling window of
- * the underlying CC happening — no SSE channel exists yet for this
- * (would need a per-user multiplexed stream; out of scope for v1).
+ * Unread notification counts. Subscribes to the WS `viewer:local` scope and
+ * invalidates on `notification` events — no more 5 s polling.
  */
 export function useUnreadCounts() {
+  const qc = useQueryClient();
+
+  useEffect(() => {
+    const sub = subscribeWsScope('viewer:local');
+    const unsub = onWsFrame(frame => {
+      if (frame.type === 'event' && frame.scope === 'viewer:local') {
+        if (
+          frame.kind === 'notification' ||
+          (frame.kind === 'unread_updated' && !isMessageUnreadUpdatedPayload(frame.payload))
+        ) {
+          invalidateQueryDebounced(qc, unreadKey);
+        }
+      } else if (frame.type === 'snapshot_required' && frame.scope === 'viewer:local') {
+        invalidateQueryDebounced(qc, unreadKey);
+      }
+    });
+    return () => {
+      sub.unsubscribe();
+      unsub();
+    };
+  }, [qc]);
+
   return useQuery<UnreadCounts>({
     queryKey: unreadKey,
     queryFn: () => api<UnreadCounts>('/api/notifications/unread'),
-    refetchInterval: 5_000,
     staleTime: 2_000,
   });
 }
@@ -52,19 +95,19 @@ export function useMarkNotificationsRead() {
         method: 'POST',
         body: JSON.stringify(input),
       }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: unreadKey });
-      qc.invalidateQueries({ queryKey: listKey });
+    onSuccess: data => {
+      if (data.marked > 0) {
+        qc.invalidateQueries({ queryKey: listKey });
+      }
     },
   });
 }
 
 /**
- * Mount this once at the App root. Polls unread notifications every 5s,
- * deduplicates by notification id, and fires:
+ * Mount this once at the App root. Listens for WS `viewer:local` notification
+ * events (replacing the previous 5 s poll) and fires:
  *  - an in-app toast (sonner) for every new notification
  *  - a system notification via IPC when the app is not in the foreground
- *    (main process guards on isFocused() to avoid double-alerting)
  *
  * Suppresses toasts for the currently active channel (user can already
  * see it) unless the kind is `agent_start_failed` (always shown — it's
@@ -75,12 +118,32 @@ export function useNotificationToasts(activeChannelId: string | null) {
   const { data } = useQuery<{ notifications: NotificationDto[] }>({
     queryKey: [...listKey, { unread: true, toasts: true }],
     queryFn: () => api<{ notifications: NotificationDto[] }>('/api/notifications?unread=1'),
-    refetchInterval: 5_000,
     staleTime: 2_000,
   });
 
   const seenIds = useRef<Set<string>>(new Set());
   const initialized = useRef(false);
+
+  // Toasts need the latest notification rows only when a new notification
+  // arrives. `unread_updated` is a badge/read-cursor signal and would make
+  // every channel switch refetch the toast list.
+  useEffect(() => {
+    const sub = subscribeWsScope('viewer:local');
+    const toastKey = [...listKey, { unread: true, toasts: true }] as const;
+    const unsub = onWsFrame(frame => {
+      if (frame.type === 'event' && frame.scope === 'viewer:local') {
+        if (frame.kind === 'notification') {
+          invalidateQueryDebounced(qc, toastKey);
+        }
+      } else if (frame.type === 'snapshot_required' && frame.scope === 'viewer:local') {
+        invalidateQueryDebounced(qc, toastKey);
+      }
+    });
+    return () => {
+      sub.unsubscribe();
+      unsub();
+    };
+  }, [qc]);
 
   useEffect(() => {
     if (!data) return;

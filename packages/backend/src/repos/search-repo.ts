@@ -132,7 +132,7 @@ export class SearchRepo {
     limit: number,
   ): SearchResultDto[] {
     const where: string[] = [
-      `(channel_name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\')`,
+      `(workspace_name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\')`,
     ];
     const params: SqlValue[] = [likeNeedle(query), likeNeedle(query)];
     applyNamedScopeFilters(where, params, input);

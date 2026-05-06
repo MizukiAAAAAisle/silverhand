@@ -7,7 +7,7 @@ import type {
 } from '@silverhand/shared';
 import type { BackendContext, BackendLogger } from '../../src/context.js';
 import { silverhandCors } from '../../src/cors.js';
-import { ConversationEventBus } from '../../src/event-bus.js';
+import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { createApiRouter, createInternalRouter } from '../../src/routes.js';
 import type { ConversationManager } from '../../src/conversation-manager.js';
@@ -138,7 +138,7 @@ export function buildTestApp(): TestApp {
     workspacesRoot: tmp.workspacesRoot,
     blobStorage: createLocalBlobFileStorage({ silverhandDir: tmp.silverhandDir }),
     lastSpawnAtByAgent: new Map(),
-    events: new ConversationEventBus(),
+    events: new ScopeEventBus(),
     chatBridgeLauncher: { command: 'noop', args: [] },
     conversationManager: fake as unknown as ConversationManager,
   };

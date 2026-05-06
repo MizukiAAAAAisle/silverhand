@@ -33,6 +33,7 @@ function makeSpawnCtx(overrides: Partial<DriverSpawnContext> = {}): {
     workspacePath: tmp,
     cliSessionId: null,
     model: null,
+    reasoningEffort: null,
     systemPromptPath,
     mcpConfigPath: join(tmp, 'mcp.json'),
     chatBridge: {

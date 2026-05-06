@@ -38,7 +38,7 @@ interface ConversationGroup {
 
 /**
  * Standalone window root for the dev-only events viewer. Picks one
- * channel/thread at a time and pipes its SSE feed through `<EventStream>`.
+ * channel/thread at a time and pipes its realtime events through `<EventStream>`.
  */
 export function EventsApp(): JSX.Element {
   useAppearance();

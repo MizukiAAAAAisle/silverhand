@@ -3,6 +3,9 @@ import { z } from 'zod';
 export const RuntimeKindSchema = z.enum(['claude', 'codex', 'cursor', 'gemini']);
 export type RuntimeKind = z.infer<typeof RuntimeKindSchema>;
 
+export const ReasoningEffortSchema = z.enum(['low', 'medium', 'high', 'xhigh']);
+export type ReasoningEffort = z.infer<typeof ReasoningEffortSchema>;
+
 export const HostKindSchema = z.enum(['local', 'remote']);
 export type HostKind = z.infer<typeof HostKindSchema>;
 
@@ -69,7 +72,7 @@ export interface AgentRow {
   display_name: string;
   runtime: RuntimeKind;
   model: string | null;
-  reasoning_effort: string | null;
+  reasoning_effort: ReasoningEffort | null;
   host_id: string;
   description: string | null;
   created_at: number;

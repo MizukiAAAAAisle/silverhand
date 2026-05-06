@@ -66,6 +66,9 @@ export class CodexDriver implements Driver {
   buildArgs(ctx: DriverSpawnContext): string[] {
     const args = ['app-server', '--listen', 'stdio://'];
     args.push(...this.buildMcpConfigArgs(ctx));
+    if (ctx.reasoningEffort) {
+      args.push('-c', `model_reasoning_effort=${JSON.stringify(ctx.reasoningEffort)}`);
+    }
     return args;
   }
 
@@ -391,6 +394,7 @@ export class CodexDriver implements Driver {
       developerInstructions: standingPrompt,
     };
     if (ctx.model) params.model = ctx.model;
+    else params.model = 'gpt-5.5';
     if (ctx.cliSessionId) {
       return {
         method: 'thread/resume',

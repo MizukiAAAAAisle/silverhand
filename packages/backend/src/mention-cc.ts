@@ -12,6 +12,7 @@ import type { MessageRepo } from './repos/message-repo.js';
 import type { NotificationRepo } from './repos/notification-repo.js';
 import type { ConversationManager } from './conversation-manager.js';
 import type { BackendLogger } from './context.js';
+import type { ScopeEventBus } from './ws/scope-event-bus.js';
 
 export interface MentionCcOpts {
   /** The user message that triggered this CC pass. Only `from_kind='user'`
@@ -29,6 +30,8 @@ export interface MentionCcOpts {
   notifications: NotificationRepo;
   conversationManager: ConversationManager;
   logger: BackendLogger;
+  /** Event bus for WS push — publish viewer:local notification after insert. */
+  events: ScopeEventBus;
 }
 
 const MENTIONS_CHANNEL_TITLE = 'Mentions';
@@ -47,7 +50,7 @@ const EXCERPT_LIMIT = 160;
  *    message to its inbox / stdin.
  *  - Inserts a `mention_external` notification row scoped to the
  *    recipient's DM scope.
- *  - Publishes an SSE event for the Mentions conversation.
+ *  - Publishes a realtime event for the Mentions conversation.
  *
  * Skipped silently when:
  *  - mention handle doesn't resolve to an agent
@@ -162,6 +165,11 @@ async function deliverOne(
       source_conversation_title: opts.sourceConversation.title,
       mention_excerpt: excerpt(opts.message.content),
     },
+  });
+  // v1 single-user: push viewer:local so notification hooks invalidate without polling.
+  opts.events.publishToScope('viewer:local', 'notification', {
+    kind: 'mention_external',
+    conversation_id: mentionsConversation.id,
   });
 }
 

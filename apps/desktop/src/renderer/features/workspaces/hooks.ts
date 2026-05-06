@@ -18,6 +18,7 @@ export type WorkspaceListItem = {
   name: string;
   description: string | null;
   kind: 'regular' | 'dm';
+  workspace_scope_ids: string[];
   workspace_path: string;
   workspace_host_id: string;
   dm_agent_id: string | null;
@@ -39,6 +40,7 @@ function workspaceToListItem(workspace: WorkspaceDto): WorkspaceListItem {
     name: workspace.name,
     description: workspace.description,
     kind: 'regular',
+    workspace_scope_ids: [workspace.id],
     workspace_path: workspace.workspace_path,
     workspace_host_id: workspace.workspace_host_id,
     dm_agent_id: null,
@@ -78,6 +80,7 @@ function dmChannelsToWorkspaceItems(
       name: agent ? `dm-${agent.name}` : first.title,
       description: null,
       kind: 'dm',
+      workspace_scope_ids: [...new Set(group.map(channel => channel.workspace_id))],
       workspace_path: first.workspace_path,
       workspace_host_id: 'local',
       dm_agent_id: agent?.id ?? key,
@@ -97,31 +100,6 @@ function dmChannelBelongsToWorkspace(channel: DmChannelDto, workspaceId: string)
   const agentId = dmWorkspaceAgentId(workspaceId);
   if (agentId) return agentIdFromDmChannel(channel) === agentId;
   return channel.id === workspaceId;
-}
-
-async function listThreadsForChannels(channels: ChannelConversationDto[]): Promise<ThreadDto[]> {
-  const summaries = await Promise.allSettled(
-    channels.map(channel =>
-      api<{ threads: Array<{ thread_id: string }> }>(
-        apiPaths.channelThreads(channel.id),
-      ),
-    ),
-  );
-  const threadIds = [
-    ...new Set(
-      summaries.flatMap(result =>
-        result.status === 'fulfilled'
-          ? result.value.threads.map(thread => thread.thread_id)
-          : [],
-      ),
-    ),
-  ];
-  const details = await Promise.allSettled(
-    threadIds.map(id => api<{ thread: ThreadDto }>(apiPaths.thread(id))),
-  );
-  return details.flatMap(result =>
-    result.status === 'fulfilled' ? [result.value.thread] : [],
-  );
 }
 
 function sortConversationList(items: ChannelListItem[]): ChannelListItem[] {
@@ -248,11 +226,13 @@ export function useChannelsForWorkspace(
           dmChannelBelongsToWorkspace(channel, workspaceId!),
         );
       }
-      const res = await api<{ channels: ChannelConversationDto[] }>(
+      const res = await api<{
+        channels: ChannelConversationDto[];
+        threads: ThreadDto[];
+      }>(
         apiPaths.workspaceChannels(workspaceId!),
       );
-      const threads = await listThreadsForChannels(res.channels);
-      return sortConversationList([...res.channels, ...threads]);
+      return sortConversationList([...res.channels, ...res.threads]);
     },
   });
 }

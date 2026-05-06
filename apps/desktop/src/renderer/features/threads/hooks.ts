@@ -65,7 +65,7 @@ const threadsKey = (cid: string) => ['channels', cid, 'threads'] as const;
  * of non-system replies.
  *
  * One bulk fetch per channel (no N+1 per message). Live-refreshed via
- * the parent's SSE `thread_updated` event, which backend publishes on:
+ * the parent's realtime `thread_updated` event, which backend publishes on:
  * thread create, thread receives a message, thread closes.
  */
 export function useChannelThreads(
@@ -90,10 +90,28 @@ export function useChannelThreads(
     (e: ConversationStreamEvent) => {
       if (!channelId || e.kind !== 'thread_updated') return;
       void qc.invalidateQueries({ queryKey: threadsKey(channelId) });
-      if (workspaceId) {
-        void qc.invalidateQueries({
-          queryKey: workspaceChannelsKey(workspaceId),
-        });
+      const threadId = (e.payload as { thread_id?: string } | undefined)?.thread_id;
+      if (workspaceId && threadId) {
+        void api<{ thread: ThreadDto }>(apiPaths.thread(threadId))
+          .then(res => {
+            qc.setQueryData<ChannelListItem[]>(
+              workspaceChannelsKey(workspaceId),
+              prev => {
+                if (!prev) return prev;
+                if (prev.some(item => item.id === res.thread.id)) {
+                  return prev.map(item =>
+                    item.id === res.thread.id ? res.thread : item,
+                  );
+                }
+                return [...prev, res.thread];
+              },
+            );
+          })
+          .catch(() => {
+            void qc.invalidateQueries({
+              queryKey: workspaceChannelsKey(workspaceId),
+            });
+          });
       }
     },
     [qc, channelId, workspaceId],
