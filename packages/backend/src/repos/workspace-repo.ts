@@ -1,6 +1,6 @@
 import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
-import { join } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import type {
   AgentDto,
   AgentRow,
@@ -15,11 +15,67 @@ function newId(): string {
   return randomBytes(12).toString('base64url');
 }
 
-function rowToDto(row: WorkspaceRow): WorkspaceDto {
-  return { ...row };
+type WorkspaceSelectRow = WorkspaceRow & {
+  dm_channel_id: string | null;
+  dm_channel_ids_json: string | null;
+};
+
+function rowToDto(
+  row: WorkspaceSelectRow & { sort_group?: number; sort_name?: string },
+): WorkspaceDto {
+  const {
+    dm_channel_ids_json: _dmChannelIdsJson,
+    sort_group: _sortGroup,
+    sort_name: _sortName,
+    ...workspace
+  } = row;
+  const dmChannelIds =
+    typeof row.dm_channel_ids_json === 'string'
+      ? (JSON.parse(row.dm_channel_ids_json) as string[])
+      : [];
+  return {
+    ...workspace,
+    owner_agent_id: row.owner_agent_id ?? null,
+    dm_channel_id: row.dm_channel_id ?? null,
+    dm_channel_ids: dmChannelIds,
+  };
 }
 
-export const SYSTEM_DM_WORKSPACE_ID = '__system_dm_workspace__';
+const WORKSPACE_SELECT = `
+  SELECT
+    w.*,
+    CASE WHEN w.workspace_kind = 'agent_home' THEN (
+      SELECT c.id
+        FROM conversations c
+        LEFT JOIN agents owner ON owner.id = w.owner_agent_id
+       WHERE c.workspace_id = w.id
+         AND c.kind = 'dm_channel'
+       ORDER BY CASE
+                  WHEN c.title = 'Onboarding' THEN 0
+                  WHEN owner.id IS NOT NULL AND c.title = 'dm-' || owner.name THEN 1
+                  ELSE 2
+                END,
+                c.created_at ASC
+       LIMIT 1
+    ) ELSE NULL END AS dm_channel_id,
+    CASE WHEN w.workspace_kind = 'agent_home' THEN (
+      SELECT COALESCE(json_group_array(id), '[]')
+        FROM (
+          SELECT c.id
+            FROM conversations c
+            LEFT JOIN agents owner ON owner.id = w.owner_agent_id
+           WHERE c.workspace_id = w.id
+             AND c.kind = 'dm_channel'
+           ORDER BY CASE
+                      WHEN c.title = 'Onboarding' THEN 0
+                      WHEN owner.id IS NOT NULL AND c.title = 'dm-' || owner.name THEN 1
+                      ELSE 2
+                    END,
+                    c.created_at ASC
+        )
+    ) ELSE '[]' END AS dm_channel_ids_json
+  FROM workspaces w
+`;
 
 export interface WorkspaceRepoOptions {
   workspacesRoot: string;
@@ -31,48 +87,96 @@ export class WorkspaceRepo {
     private readonly opts: WorkspaceRepoOptions,
   ) {}
 
-  list(opts: { includeSystem?: boolean } = {}): WorkspaceDto[] {
-    const rows = opts.includeSystem
-      ? this.db
-          .prepare<[], WorkspaceRow>(
-            `SELECT * FROM workspaces ORDER BY updated_at DESC`,
-          )
-          .all()
-      : this.db
-          .prepare<[], WorkspaceRow>(
-            `SELECT * FROM workspaces
-             WHERE workspace_kind = 'regular'
-             ORDER BY updated_at DESC`,
-          )
-          .all();
+  list(_opts: { includeSystem?: boolean } = {}): WorkspaceDto[] {
+    const rows = this.db
+      .prepare<[], WorkspaceSelectRow>(
+        `${WORKSPACE_SELECT}
+         WHERE w.workspace_kind IN ('regular', 'agent_home')
+         ORDER BY CASE w.workspace_kind WHEN 'regular' THEN 0 ELSE 1 END,
+                  w.updated_at DESC`,
+      )
+      .all();
     return rows.map(rowToDto);
   }
 
   get(id: string): WorkspaceDto | null {
     const row = this.db
-      .prepare<[string], WorkspaceRow>('SELECT * FROM workspaces WHERE id = ?')
+      .prepare<[string], WorkspaceSelectRow>(
+        `${WORKSPACE_SELECT}
+         WHERE w.id = ?`,
+      )
       .get(id);
     return row ? rowToDto(row) : null;
   }
 
   getByName(name: string): WorkspaceDto | null {
     const row = this.db
-      .prepare<[string], WorkspaceRow>('SELECT * FROM workspaces WHERE name = ?')
+      .prepare<[string], WorkspaceSelectRow>(
+        `${WORKSPACE_SELECT}
+         WHERE w.name = ?
+           AND w.workspace_kind = 'regular'`,
+      )
       .get(name);
     return row ? rowToDto(row) : null;
   }
 
   listForAgent(agentId: string): WorkspaceDto[] {
     return this.db
-      .prepare<[string], WorkspaceRow>(
-        `SELECT w.*
-           FROM workspaces w
-           JOIN workspace_members wm ON wm.workspace_id = w.id
-          WHERE wm.agent_id = ?
-            AND w.workspace_kind = 'regular'
-          ORDER BY wm.joined_at ASC`,
+      .prepare<[string, string], WorkspaceSelectRow & { sort_group: number; sort_name: string }>(
+        `SELECT *
+           FROM (
+             SELECT
+               w.*,
+               NULL AS dm_channel_id,
+               '[]' AS dm_channel_ids_json,
+               0 AS sort_group,
+               w.name AS sort_name
+              FROM workspaces w
+              JOIN workspace_members wm ON wm.workspace_id = w.id
+             WHERE wm.agent_id = ?
+               AND w.workspace_kind = 'regular'
+             UNION ALL
+             SELECT
+               w.*,
+               (
+                 SELECT c.id
+                   FROM conversations c
+                   LEFT JOIN agents owner ON owner.id = w.owner_agent_id
+                  WHERE c.workspace_id = w.id
+                    AND c.kind = 'dm_channel'
+                  ORDER BY CASE
+                             WHEN c.title = 'Onboarding' THEN 0
+                             WHEN owner.id IS NOT NULL AND c.title = 'dm-' || owner.name THEN 1
+                             ELSE 2
+                           END,
+                           c.created_at ASC
+                  LIMIT 1
+               ) AS dm_channel_id,
+               (
+                 SELECT COALESCE(json_group_array(id), '[]')
+                   FROM (
+                     SELECT c.id
+                       FROM conversations c
+                       LEFT JOIN agents owner ON owner.id = w.owner_agent_id
+                      WHERE c.workspace_id = w.id
+                        AND c.kind = 'dm_channel'
+                      ORDER BY CASE
+                                 WHEN c.title = 'Onboarding' THEN 0
+                                 WHEN owner.id IS NOT NULL AND c.title = 'dm-' || owner.name THEN 1
+                                 ELSE 2
+                               END,
+                               c.created_at ASC
+                   )
+               ) AS dm_channel_ids_json,
+               1 AS sort_group,
+               w.name AS sort_name
+              FROM workspaces w
+             WHERE w.owner_agent_id = ?
+               AND w.workspace_kind = 'agent_home'
+           )
+          ORDER BY sort_group ASC, sort_name COLLATE NOCASE ASC`,
       )
-      .all(agentId)
+      .all(agentId, agentId)
       .map(rowToDto);
   }
 
@@ -83,20 +187,25 @@ export class WorkspaceRepo {
     workspacePath: string;
     workspaceHostId: string;
   }): WorkspaceDto {
+    if (params.workspaceKind && params.workspaceKind !== 'regular') {
+      throw new Error('use insertAgentHome for agent_home workspaces');
+    }
+    if (isUnderAgentHomeRoot(params.workspacePath, this.opts.workspacesRoot)) {
+      throw new Error('regular workspace_path cannot be under agent home root');
+    }
     const id = newId();
     const now = Date.now();
     this.db
       .prepare(
         `INSERT INTO workspaces
          (id, name, description, workspace_kind, workspace_path, workspace_host_id,
-          archived_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+          owner_agent_id, archived_at, created_at, updated_at)
+         VALUES (?, ?, ?, 'regular', ?, ?, NULL, NULL, ?, ?)`,
       )
       .run(
         id,
         params.name,
         params.description,
-        params.workspaceKind ?? 'regular',
         params.workspacePath,
         params.workspaceHostId,
         now,
@@ -107,29 +216,47 @@ export class WorkspaceRepo {
     return row;
   }
 
-  ensureSystemDmWorkspace(params: {
+  insertAgentHome(params: {
+    agent: Pick<AgentDto, 'id' | 'name' | 'host_id'>;
     workspacePath: string;
-    workspaceHostId: string;
   }): WorkspaceDto {
+    const id = agentHomeWorkspaceId(params.agent.id);
     const now = Date.now();
     this.db
       .prepare(
-        `INSERT OR IGNORE INTO workspaces
+        `INSERT INTO workspaces
          (id, name, description, workspace_kind, workspace_path, workspace_host_id,
-          archived_at, created_at, updated_at)
-         VALUES (?, 'Direct Messages', 'Hidden workspace for direct message conversations',
-                 'system_dm', ?, ?, NULL, ?, ?)`,
+          owner_agent_id, archived_at, created_at, updated_at)
+         VALUES (?, ?, ?, 'agent_home', ?, ?, ?, NULL, ?, ?)`,
       )
       .run(
-        SYSTEM_DM_WORKSPACE_ID,
+        id,
+        params.agent.name,
+        `Personal home workspace for ${params.agent.name}`,
         params.workspacePath,
-        params.workspaceHostId,
+        params.agent.host_id,
+        params.agent.id,
         now,
         now,
       );
-    const row = this.get(SYSTEM_DM_WORKSPACE_ID);
-    if (!row) throw new Error('system DM workspace insert failed');
+    const row = this.get(id);
+    if (!row) throw new Error('agent_home workspace insert failed');
     return row;
+  }
+
+  findAgentHome(agentId: string): WorkspaceDto | null {
+    return this.getAgentHomeByOwner(agentId);
+  }
+
+  getAgentHomeByOwner(agentId: string): WorkspaceDto | null {
+    const row = this.db
+      .prepare<[string], WorkspaceSelectRow>(
+        `${WORKSPACE_SELECT}
+         WHERE w.owner_agent_id = ?
+           AND w.workspace_kind = 'agent_home'`,
+      )
+      .get(agentId);
+    return row ? rowToDto(row) : null;
   }
 
   updateMutableMetadata(
@@ -239,4 +366,16 @@ export class WorkspaceRepo {
   workspacePathFor(name: string): string {
     return join(this.opts.workspacesRoot, name);
   }
+}
+
+export function agentHomeWorkspaceId(agentId: string): string {
+  return `wsah_${agentId}`;
+}
+
+function isUnderAgentHomeRoot(workspacePath: string, workspacesRoot: string): boolean {
+  const silverhandDir = dirname(resolve(workspacesRoot));
+  const agentHomeRoot = resolve(silverhandDir, 'agents');
+  const target = resolve(workspacePath);
+  const rel = relative(agentHomeRoot, target);
+  return rel === '' || (!!rel && !rel.startsWith('..') && !rel.startsWith('/'));
 }

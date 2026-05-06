@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect } from 'react';
 import type {
   AgentDto,
   ChannelConversationDto,
-  DmChannelDto,
+  ChannelLikeDto,
   CreateConversationChannelInput,
   CreateWorkspaceInput,
+  DmChannelDto,
   ThreadDto,
   UpdateWorkspaceInput,
   WorkspaceDto,
@@ -12,6 +14,7 @@ import type {
 } from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
 import { api } from '@/lib/api';
+import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
 
 export type WorkspaceListItem = {
   id: string;
@@ -35,71 +38,22 @@ const channelsKey = (workspaceId: string) => ['workspaces', workspaceId, 'channe
 const membersKey = (workspaceId: string) => ['workspaces', workspaceId, 'members'] as const;
 
 function workspaceToListItem(workspace: WorkspaceDto): WorkspaceListItem {
+  const isDm = workspace.workspace_kind === 'agent_home';
   return {
     id: workspace.id,
-    name: workspace.name,
+    name: isDm ? `dm-${workspace.name}` : workspace.name,
     description: workspace.description,
-    kind: 'regular',
+    kind: isDm ? 'dm' : 'regular',
     workspace_scope_ids: [workspace.id],
     workspace_path: workspace.workspace_path,
     workspace_host_id: workspace.workspace_host_id,
-    dm_agent_id: null,
-    dm_channel_ids: [],
+    dm_agent_id: workspace.owner_agent_id,
+    dm_channel_ids:
+      workspace.dm_channel_ids ?? (workspace.dm_channel_id ? [workspace.dm_channel_id] : []),
     archived_at: workspace.archived_at,
     created_at: workspace.created_at,
     updated_at: workspace.updated_at,
   };
-}
-
-function agentIdFromDmChannel(channel: DmChannelDto): string | null {
-  const parts = channel.workspace_path.split(/[\\/]/).filter(Boolean);
-  const agentsIdx = parts.lastIndexOf('agents');
-  return agentsIdx >= 0 ? parts[agentsIdx + 1] ?? null : null;
-}
-
-function dmChannelsToWorkspaceItems(
-  channels: DmChannelDto[],
-  agents: AgentDto[],
-): WorkspaceListItem[] {
-  const agentsById = new Map(agents.map(agent => [agent.id, agent]));
-  const grouped = new Map<string, DmChannelDto[]>();
-  for (const channel of channels) {
-    const agentId = agentIdFromDmChannel(channel);
-    const key = agentId ?? channel.workspace_path;
-    grouped.set(key, [...(grouped.get(key) ?? []), channel]);
-  }
-
-  return [...grouped.entries()].map(([key, group]) => {
-    const first = group[0]!;
-    const agent = agentsById.get(key);
-    const createdAt = Math.min(...group.map(channel => channel.created_at));
-    const updatedAt = Math.max(...group.map(channel => channel.updated_at));
-    const allClosed = group.every(channel => channel.closed_at !== null);
-    return {
-      id: agent ? `dm:${agent.id}` : `dm:${key}`,
-      name: agent ? `dm-${agent.name}` : first.title,
-      description: null,
-      kind: 'dm',
-      workspace_scope_ids: [...new Set(group.map(channel => channel.workspace_id))],
-      workspace_path: first.workspace_path,
-      workspace_host_id: 'local',
-      dm_agent_id: agent?.id ?? key,
-      dm_channel_ids: group.map(channel => channel.id),
-      archived_at: allClosed ? Math.max(...group.map(channel => channel.closed_at ?? 0)) : null,
-      created_at: createdAt,
-      updated_at: updatedAt,
-    };
-  });
-}
-
-function dmWorkspaceAgentId(workspaceId: string): string | null {
-  return workspaceId.startsWith('dm:') ? workspaceId.slice(3) : null;
-}
-
-function dmChannelBelongsToWorkspace(channel: DmChannelDto, workspaceId: string): boolean {
-  const agentId = dmWorkspaceAgentId(workspaceId);
-  if (agentId) return agentIdFromDmChannel(channel) === agentId;
-  return channel.id === workspaceId;
 }
 
 function sortConversationList(items: ChannelListItem[]): ChannelListItem[] {
@@ -116,17 +70,8 @@ export function useWorkspaces() {
   return useQuery({
     queryKey: workspacesKey,
     queryFn: async () => {
-      const [regular, dm] = await Promise.all([
-        api<{ workspaces: WorkspaceDto[] }>(apiPaths.workspaces),
-        api<{ dm_channels: DmChannelDto[] }>(apiPaths.workspaceDmChannels),
-      ]);
-      const agents = await api<{ agents: AgentDto[] }>(apiPaths.agents).catch(
-        () => ({ agents: [] }),
-      );
-      return [
-        ...regular.workspaces.map(workspaceToListItem),
-        ...dmChannelsToWorkspaceItems(dm.dm_channels, agents.agents),
-      ];
+      const res = await api<{ workspaces: WorkspaceDto[] }>(apiPaths.workspaces);
+      return res.workspaces.map(workspaceToListItem);
     },
   });
 }
@@ -214,20 +159,31 @@ export function useChannelsForWorkspace(
   workspaceId: string | null,
   workspaceKind: 'regular' | 'dm' | null = 'regular',
 ) {
+  const qc = useQueryClient();
+  useEffect(() => {
+    if (!workspaceId || workspaceKind === null) return;
+    const scope = `workspace:${workspaceId}`;
+    const sub = subscribeWsScope(scope);
+    const unsub = onWsFrame(frame => {
+      if (frame.type === 'event') {
+        if (frame.scope !== scope || frame.kind !== 'workspace_channels_changed') return;
+        void qc.invalidateQueries({ queryKey: channelsKey(workspaceId) });
+      } else if (frame.type === 'snapshot_required' && frame.scope === scope) {
+        void qc.invalidateQueries({ queryKey: channelsKey(workspaceId) });
+      }
+    });
+    return () => {
+      sub.unsubscribe();
+      unsub();
+    };
+  }, [qc, workspaceId, workspaceKind]);
+
   return useQuery<ChannelListItem[]>({
     queryKey: workspaceId ? channelsKey(workspaceId) : ['workspaces', 'none', 'channels'],
     enabled: !!workspaceId && workspaceKind !== null,
     queryFn: async () => {
-      if (workspaceKind === 'dm') {
-        const res = await api<{ dm_channels: DmChannelDto[] }>(
-          apiPaths.workspaceDmChannels,
-        );
-        return res.dm_channels.filter(channel =>
-          dmChannelBelongsToWorkspace(channel, workspaceId!),
-        );
-      }
       const res = await api<{
-        channels: ChannelConversationDto[];
+        channels: ChannelLikeDto[];
         threads: ThreadDto[];
       }>(
         apiPaths.workspaceChannels(workspaceId!),
@@ -242,7 +198,7 @@ export function useCreateChannel(workspaceId: string | null) {
   return useMutation({
     mutationFn: async (input: CreateConversationChannelInput) => {
       if (!workspaceId) throw new Error('no workspace selected');
-      const res = await api<{ channel: ChannelConversationDto }>(
+      const res = await api<{ channel: ChannelLikeDto }>(
         apiPaths.workspaceChannels(workspaceId),
         { method: 'POST', body: JSON.stringify(input) },
       );

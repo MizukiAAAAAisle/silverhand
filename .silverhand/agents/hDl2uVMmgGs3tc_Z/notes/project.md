@@ -35,4 +35,31 @@
 - `local` is a viewer/API boundary detail, not a DB/model concept to spread.
 - Existing notification `user_id IS NULL` behavior is legacy and separate from
   message unread identity.
+- Agent DMs are modeled as per-agent `agent_home` workspaces. An agent_home
+  may contain multiple `dm_channel` roots; `owner_agent_id` is the ownership
+  link, `workspace_members` remains regular-only, and `WorkspaceDto.dm_channel_id`
+  is only a default landing channel pointer. New agent homes create an
+  `Onboarding` default channel; migrated legacy `dm-<name>` channel titles are
+  preserved for continuity. `WorkspaceDto.dm_channel_ids` carries every
+  dm_channel id in the home as a navigation alias list for legacy callers.
 - Avoid broad format churn and unrelated refactors when making narrow fixes.
+
+## Application Service Direction
+- Human HTTP routes and agent internal/MCP routes should not duplicate the same
+  business side effects. Routes own auth and parameter translation; application
+  services own inserts, fan-out, realtime publish, agent delivery/start, and
+  notification-like side effects.
+- Current extraction order: ChannelService including pin/unpin, then
+  ConversationMessageService, ThreadService, attachment locate unification after
+  task #110, and TaskService caller-kind consolidation.
+- ChannelService PR-1 contract: regular workspaces only, agent actor must be a
+  member of its source conversation in the same workspace, agent-created channel
+  members are explicitly snapshotted from the current conversation by the route,
+  seed messages are agent-only, and `workspace_channels_changed` must be
+  published after commit for create/pin/unpin.
+- ThreadService PR-3 contract: public wrappers are `createThreadFromMessage`,
+  `createThreadFromAgent`, and `closeThread`; routes never call the private
+  core or assemble seed side effects. Threads do not nest. Seed delivery/fanout
+  is explicit per seed, DB mutations are transactional, realtime publish happens
+  post-commit before best-effort delivery/start/stop, and agent close-thread
+  requires the caller agent to be a member of the thread.

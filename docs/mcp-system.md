@@ -52,6 +52,7 @@ Send a visible chat message.
 send_message({
   content: string,
   target?: 'self' | 'parent' | { thread_id: string },
+  attachment_ids?: string[],   // up to 20; see §5
 }) -> { message_id: string }
 ```
 
@@ -59,6 +60,11 @@ Rules:
 - `target` defaults to `self`, meaning the current channel or thread.
 - `parent` is valid only from inside a thread.
 - `{ thread_id }` targets a direct child thread opened from the current channel.
+- `attachment_ids` (optional) reference attachments uploaded via `upload_file`.
+  Every id must belong to the destination channel; threads inherit their
+  parent channel. The backend embeds an immutable snapshot per id into the
+  message metadata and renders an `[N attachments — use view_file ...]` suffix
+  into every delivery path.
 - The backend inserts the message, fans it out to other agents in the target,
   publishes message events, and resolves the sender's current run as `replied`.
 
@@ -210,7 +216,62 @@ Allowed transitions:
 Default behavior for non-trivial work is to stop at `in_review` and let the
 human approve `done`.
 
-## 5. Deliberately Absent Tools
+## 5. Attachment Tools
+
+Files travel with chat messages. The blob/file storage layer is generic infra;
+the attachment system on top of it owns channel boundaries and message
+snapshots. Threads inherit their parent channel's attachment scope.
+
+### `upload_file`
+
+```ts
+upload_file({
+  path: string,            // absolute path on disk
+  filename?: string,       // optional display name; defaults to basename(path)
+  content_type?: string,   // optional MIME hint; backend sniffs magic bytes
+}) -> AttachmentDto
+```
+
+Rules:
+- `path` must be absolute. The agent should be explicit about which file it is
+  uploading; relative paths are rejected.
+- The backend resolves the access boundary from the calling conversation —
+  agents never specify `channel_id`. Threads upload through the parent channel.
+- Returned `id` is single-use input for `send_message.attachment_ids`. The
+  attachment is bound to the current channel and cannot be referenced from
+  other channels.
+- Default size limit is 10 MiB. Filenames are sanitized (path separators and
+  control characters stripped, capped at 255 bytes). Content type is detected
+  via explicit hint → magic bytes → extension fallback.
+
+### `view_file`
+
+```ts
+view_file({ attachment_id: string }) -> AttachmentLocateDto
+```
+
+Returns either a local path (zero-copy for `local` storage) or a download URL
+(remote storages). Cross-channel ids are rejected with the same shape as
+"not found" so existence does not leak across channels.
+
+### Snapshots in messages
+
+Every message references its attachments through immutable snapshots embedded
+in `message.metadata.attachments` and surfaced as the typed `attachments`
+field on `MessageDto`:
+
+```ts
+{ id: string, filename: string, size: number, content_type: string }
+```
+
+`send_message` accepts up to 20 `attachment_ids` per call. The backend
+validates that every id belongs to the destination channel before inserting
+the message; it then formats an `[N attachments — use view_file with each
+id below to read them]` suffix into every delivery path (live, inbox,
+gated) so receiving agents can react with `view_file` without parsing
+metadata.
+
+## 6. Deliberately Absent Tools
 
 The current MCP surface intentionally does not expose:
 
@@ -219,9 +280,8 @@ The current MCP surface intentionally does not expose:
 | `create_session` / `close_session` | Renamed out of the public model; use `create_channel` / `close_thread` |
 | `read_history` / `check_messages` | Message delivery is pushed through stdin/inbox and visible chat; history access remains UI/backend work |
 | Memory / consensus tools | Agents use their native file tools against `MEMORY.md`, `notes/`, and `.silverhand/CONSENSUS.md` |
-| Attachment tools | Designed separately, not implemented in the current MCP surface |
 
-## 6. Prompt Contract
+## 7. Prompt Contract
 
 `packages/backend/src/drivers/platform-prompt.ts` teaches agents the operating
 rules for this tool surface. The important invariants are:
@@ -235,8 +295,11 @@ rules for this tool surface. The important invariants are:
 - User-opened threads should be summarized visibly and closed only after user
   confirmation.
 - Claim tasks before working; leave non-trivial completed work in `in_review`.
+- Use `upload_file` for binary artifacts the agent generated; pass the returned
+  id via `send_message.attachment_ids`. Use `view_file` to read attachments
+  from messages received from others.
 
-## 7. Maintenance Checklist
+## 8. Maintenance Checklist
 
 Any change to MCP tools, schemas, return shapes, backend side effects, task
 workflow, or platform prompt rules must update this document in the same change.

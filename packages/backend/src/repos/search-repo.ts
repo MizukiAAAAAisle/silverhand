@@ -146,24 +146,14 @@ export class SearchRepo {
              SELECT
                w.id AS workspace_id,
                w.name AS workspace_name,
-               'regular' AS workspace_kind,
+               CASE WHEN w.workspace_kind = 'agent_home' THEN 'dm' ELSE 'regular' END
+                 AS workspace_kind,
                w.description AS description,
                w.archived_at AS archived_at,
                w.created_at AS created_at,
                w.updated_at AS updated_at
-             FROM workspaces w
-             WHERE w.workspace_kind = 'regular'
-             UNION ALL
-             SELECT
-               c.id AS workspace_id,
-               c.title AS workspace_name,
-               'dm' AS workspace_kind,
-               NULL AS description,
-               c.closed_at AS archived_at,
-               c.created_at AS created_at,
-               c.updated_at AS updated_at
-             FROM conversations c
-             WHERE c.kind = 'dm_channel'
+              FROM workspaces w
+             WHERE w.workspace_kind IN ('regular', 'agent_home')
            )
           WHERE ${where.join(' AND ')}
           ORDER BY updated_at DESC
@@ -207,9 +197,9 @@ export class SearchRepo {
             conv.parent_conversation_id AS parent_conversation_id,
             conv.closed_at AS closed_at,
             conv.created_at AS conversation_created_at,
-            CASE WHEN root.kind = 'dm_channel' THEN root.id ELSE w.id END AS workspace_id,
-            CASE WHEN root.kind = 'dm_channel' THEN root.title ELSE w.name END AS workspace_name,
-            CASE WHEN root.kind = 'dm_channel' THEN 'dm' ELSE 'regular' END AS workspace_kind
+            w.id AS workspace_id,
+            w.name AS workspace_name,
+            CASE WHEN w.workspace_kind = 'agent_home' THEN 'dm' ELSE 'regular' END AS workspace_kind
            FROM conversations conv
            JOIN workspaces w ON w.id = conv.workspace_id
            JOIN conversations root ON root.id = CASE
@@ -270,9 +260,9 @@ export class SearchRepo {
             conv.parent_conversation_id AS parent_conversation_id,
             conv.closed_at AS closed_at,
             conv.created_at AS conversation_created_at,
-            CASE WHEN root.kind = 'dm_channel' THEN root.id ELSE w.id END AS workspace_id,
-            CASE WHEN root.kind = 'dm_channel' THEN root.title ELSE w.name END AS workspace_name,
-            CASE WHEN root.kind = 'dm_channel' THEN 'dm' ELSE 'regular' END AS workspace_kind,
+            w.id AS workspace_id,
+            w.name AS workspace_name,
+            CASE WHEN w.workspace_kind = 'agent_home' THEN 'dm' ELSE 'regular' END AS workspace_kind,
             a.name AS agent_name
            FROM messages m
            JOIN conversations conv ON conv.id = m.conversation_id
@@ -322,14 +312,12 @@ function applyConversationScopeFilters(
   workspaceAlias: string,
 ): void {
   if (input.scope === 'regular') {
-    where.push(`${rootAlias}.kind = 'channel'`);
+    where.push(`${workspaceAlias}.workspace_kind = 'regular'`);
   } else if (input.scope === 'dm') {
-    where.push(`${rootAlias}.kind = 'dm_channel'`);
+    where.push(`${workspaceAlias}.workspace_kind = 'agent_home'`);
   }
   if (input.workspace_id) {
-    where.push(
-      `(CASE WHEN ${rootAlias}.kind = 'dm_channel' THEN ${rootAlias}.id ELSE ${workspaceAlias}.id END) = ?`,
-    );
+    where.push(`${workspaceAlias}.id = ?`);
     params.push(input.workspace_id);
   }
   if (input.conversation_id) {

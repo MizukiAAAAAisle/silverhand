@@ -1,12 +1,18 @@
-import { useState } from 'react';
-import { Bookmark, CornerUpLeft, ListTodo, User } from 'lucide-react';
-import type { AgentDto, MessageDto } from '@silverhand/shared';
+import { useEffect, useState } from 'react';
+import { Bookmark, CornerUpLeft, FileText, ListTodo, User } from 'lucide-react';
+import type { AgentDto, AttachmentSnapshot, MessageDto } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
+import { fetchAttachmentBlob } from '@/lib/api';
+import {
+  getAttachmentBlobUrl,
+  loadAttachmentBlobUrl,
+} from '@/lib/attachment-blob-cache';
 import {
   formatUserDisplayName,
   isCurrentUserId,
 } from '@/lib/current-user';
+import { Lightbox } from './Lightbox';
 import { Markdown } from './Markdown';
 import type { WorkspaceReference } from './ChannelRef';
 import { useMessageLayoutMode } from './useMessageLayoutMode';
@@ -178,6 +184,9 @@ export function MessageItem({
             agentsByName={agentsByName}
             channelsByName={channelsByName}
           />
+          {message.attachments && message.attachments.length > 0 ? (
+            <AttachmentList attachments={message.attachments} alignRight={alignRight} />
+          ) : null}
         </div>
 
         {/* Action bar — flat, inline below the content. Mirrors to the
@@ -369,4 +378,129 @@ function ActionButton({
       <span>{label}</span>
     </button>
   );
+}
+
+function AttachmentList({
+  attachments,
+  alignRight,
+}: {
+  attachments: AttachmentSnapshot[];
+  alignRight: boolean;
+}): JSX.Element {
+  return (
+    <div
+      className={
+        'mt-2 flex flex-wrap gap-2 ' + (alignRight ? 'justify-end' : 'justify-start')
+      }
+    >
+      {attachments.map(att => (
+        <AttachmentTile key={att.id} attachment={att} />
+      ))}
+    </div>
+  );
+}
+
+function AttachmentTile({ attachment }: { attachment: AttachmentSnapshot }): JSX.Element {
+  const isImage = attachment.content_type.startsWith('image/');
+  // Synchronous cache hit covers both the optimistic-message render
+  // (Composer pre-populated the cache from the local File) and any
+  // later viewer who has already fetched this attachment in this
+  // session — so the swap from optimistic → real message never goes
+  // through a "loading" frame.
+  const [imageUrl, setImageUrl] = useState<string | null>(() =>
+    isImage ? getAttachmentBlobUrl(attachment.id) ?? null : null,
+  );
+  const [error, setError] = useState<string | null>(null);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+
+  useEffect(() => {
+    if (!isImage || imageUrl) return;
+    let cancelled = false;
+    loadAttachmentBlobUrl(attachment.id)
+      .then(url => {
+        if (!cancelled) setImageUrl(url);
+      })
+      .catch(err => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : String(err));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [attachment.id, isImage, imageUrl]);
+
+  // Recover from an evicted-and-revoked URL: drop our stale value
+  // and let the effect above re-fetch through loadAttachmentBlobUrl.
+  function onImgError(): void {
+    setImageUrl(null);
+  }
+
+  async function downloadAndOpen(): Promise<void> {
+    // Non-image fallback: fetch the bytes once and open in a new
+    // window. Image preview goes through the in-app Lightbox below.
+    try {
+      const res = await fetchAttachmentBlob(attachment.id);
+      window.open(res.url, '_blank', 'noopener');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  if (isImage) {
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => imageUrl && setLightboxOpen(true)}
+          disabled={!imageUrl}
+          className="block overflow-hidden rounded-md border border-border-subtle bg-bg-floating focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+          title={`${attachment.filename} (${formatBytes(attachment.size)})`}
+        >
+          {imageUrl ? (
+            <img
+              src={imageUrl}
+              alt={attachment.filename}
+              onError={onImgError}
+              className="block max-h-64 max-w-[320px] cursor-zoom-in object-contain"
+            />
+          ) : (
+            <div className="flex h-32 w-48 items-center justify-center text-xs text-text-muted">
+              {error ?? '加载中…'}
+            </div>
+          )}
+        </button>
+        {imageUrl ? (
+          <Lightbox
+            open={lightboxOpen}
+            onOpenChange={setLightboxOpen}
+            src={imageUrl}
+            alt={attachment.filename}
+          />
+        ) : null}
+      </>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={downloadAndOpen}
+      className="flex max-w-[280px] items-center gap-2 rounded-md border border-border-subtle bg-bg-floating px-2 py-1.5 text-xs text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+      title={error ?? `${attachment.filename} (${formatBytes(attachment.size)})`}
+    >
+      <FileText className="size-4 shrink-0 text-text-muted" />
+      <span className="min-w-0 truncate">{attachment.filename}</span>
+      <span className="shrink-0 text-[10px] text-text-muted">
+        {formatBytes(attachment.size)}
+      </span>
+    </button>
+  );
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }

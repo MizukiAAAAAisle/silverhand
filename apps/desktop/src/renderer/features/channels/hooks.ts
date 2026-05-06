@@ -9,13 +9,15 @@ import {
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import type {
   AgentRunStatesDto,
+  AttachmentDto,
+  AttachmentSnapshot,
   ConversationAgentDto,
   ConversationMessagesDto,
   MessageDto,
   TaskChangedEvent,
 } from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
-import { api } from '@/lib/api';
+import { api, apiUpload } from '@/lib/api';
 import { CURRENT_USER_ID } from '@/lib/current-user';
 import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
 import {
@@ -325,21 +327,32 @@ export function useChannelAgents(
   return query;
 }
 
+export interface SendMessageInput {
+  content: string;
+  attachments?: AttachmentDto[];
+}
+
 export function useSendMessage(
   channelId: string | null,
   routeKind: ConversationRouteKind = 'channel',
 ) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (content: string) => {
+    mutationFn: async (input: SendMessageInput) => {
       if (!channelId) throw new Error('no channel selected');
       const path =
         routeKind === 'thread'
           ? apiPaths.threadMessages(channelId)
           : apiPaths.channelMessages(channelId);
+      const body: { content: string; attachment_ids?: string[] } = {
+        content: input.content,
+      };
+      if (input.attachments && input.attachments.length > 0) {
+        body.attachment_ids = input.attachments.map(a => a.id);
+      }
       const res = await api<{ message: MessageDto }>(
         path,
-        { method: 'POST', body: JSON.stringify({ content }) },
+        { method: 'POST', body: JSON.stringify(body) },
       );
       return res.message;
     },
@@ -347,20 +360,30 @@ export function useSendMessage(
     // the HTTP response arrives. The temp message uses a `pending-` id;
     // onSuccess replaces it with the real row (live de-dupe prevents a
     // second append when the event arrives after onSuccess).
-    onMutate: async (content: string) => {
+    onMutate: async (input: SendMessageInput) => {
       if (!channelId) return undefined;
       const key = messagesKey(channelId);
       await qc.cancelQueries({ queryKey: key });
       const prev = qc.getQueryData<MessagesCache>(key);
       const tempId = `pending-${crypto.randomUUID()}`;
+      const snapshots: AttachmentSnapshot[] | null =
+        input.attachments && input.attachments.length > 0
+          ? input.attachments.map(a => ({
+              id: a.id,
+              filename: a.filename,
+              size: a.size,
+              content_type: a.content_type,
+            }))
+          : null;
       const tempMsg: MessageDto = {
         id: tempId,
         conversation_id: channelId,
         from_kind: 'user',
         from_agent_id: null,
         from_user_id: CURRENT_USER_ID,
-        content,
+        content: input.content,
         metadata: null,
+        attachments: snapshots,
         seq: Date.now(),
         created_at: Date.now(),
         task_number: null,
@@ -374,14 +397,14 @@ export function useSendMessage(
       );
       return { prev, tempId };
     },
-    onSuccess: (msg, _content, ctx) => {
+    onSuccess: (msg, _input, ctx) => {
       if (!channelId || !ctx) return;
       const key = messagesKey(channelId);
       qc.setQueryData<MessagesCache>(key, cur =>
         replacePendingMessageInCache(cur, ctx.tempId, msg),
       );
     },
-    onError: (_err, _content, ctx) => {
+    onError: (_err, _input, ctx) => {
       if (!channelId || !ctx) return;
       const key = messagesKey(channelId);
       // Roll back optimistic message so the user doesn't see a ghost.
@@ -392,6 +415,26 @@ export function useSendMessage(
           removeMessageFromCache(cur, ctx.tempId),
         );
       }
+    },
+  });
+}
+
+/** Upload one file to the active channel/thread. Returns the
+ *  AttachmentDto whose id can be passed to `useSendMessage`. */
+export function useUploadAttachment(
+  channelId: string | null,
+  routeKind: ConversationRouteKind = 'channel',
+) {
+  return useMutation({
+    mutationFn: async (file: File): Promise<AttachmentDto> => {
+      if (!channelId) throw new Error('no channel selected');
+      const path =
+        routeKind === 'thread'
+          ? apiPaths.threadAttachments(channelId)
+          : apiPaths.channelAttachments(channelId);
+      const form = new FormData();
+      form.append('file', file, file.name);
+      return apiUpload<AttachmentDto>(path, form);
     },
   });
 }
@@ -564,12 +607,8 @@ export function useMessageUnreadCounts(
     queryKey,
     enabled: !!workspaceId && workspaceKind !== null,
     queryFn: async () => {
-      const path =
-        workspaceKind === 'dm'
-          ? `/api/channels/${workspaceId}/message-unread`
-          : `/api/workspaces/${workspaceId}/message-unread`;
       const res = await api<{ by_conversation: Record<string, number>; total: number }>(
-        path,
+        `/api/workspaces/${workspaceId}/message-unread`,
       );
       return res;
     },

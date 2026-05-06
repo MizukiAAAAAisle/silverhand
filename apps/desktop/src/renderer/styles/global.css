@@ -77,7 +77,8 @@
   --titlebar-height: 36px;
   --nav-rail-width: 52px;
   --sidebar-width: 240px;
-  --sessions-sidebar-width: 240px;
+  --channels-sidebar-width: 240px;
+  --sessions-sidebar-width: var(--channels-sidebar-width);
 }
 
 html, body, #root {

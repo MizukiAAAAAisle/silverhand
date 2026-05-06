@@ -6,10 +6,16 @@ export type RuntimeKind = z.infer<typeof RuntimeKindSchema>;
 export const ReasoningEffortSchema = z.enum(['low', 'medium', 'high', 'xhigh']);
 export type ReasoningEffort = z.infer<typeof ReasoningEffortSchema>;
 
+/** Tri-state fast_mode for the codex driver: NULL = use codex's own
+ *  default (currently enabled by the catalog), true = `--enable
+ *  fast_mode`, false = `--disable fast_mode`. */
+export const FastModeSchema = z.boolean();
+export type FastMode = z.infer<typeof FastModeSchema>;
+
 export const HostKindSchema = z.enum(['local', 'remote']);
 export type HostKind = z.infer<typeof HostKindSchema>;
 
-export const WorkspaceKindSchema = z.enum(['regular', 'system_dm']);
+export const WorkspaceKindSchema = z.enum(['regular', 'agent_home']);
 export type WorkspaceKind = z.infer<typeof WorkspaceKindSchema>;
 
 export const ConversationKindSchema = z.enum(['channel', 'dm_channel', 'thread']);
@@ -73,6 +79,7 @@ export interface AgentRow {
   runtime: RuntimeKind;
   model: string | null;
   reasoning_effort: ReasoningEffort | null;
+  fast_mode: FastMode | null;
   host_id: string;
   description: string | null;
   created_at: number;
@@ -86,6 +93,9 @@ export interface WorkspaceRow {
   workspace_kind: WorkspaceKind;
   workspace_path: string;
   workspace_host_id: string;
+  owner_agent_id: string | null;
+  dm_channel_id?: string | null;
+  dm_channel_ids?: string[];
   archived_at: number | null;
   created_at: number;
   updated_at: number;
@@ -171,6 +181,35 @@ export interface SavedMessageRow {
   conversation_id: string;
   workspace_id: string;
   saved_at: number;
+}
+
+export const StorageKindSchema = z.enum(['local', 's3', 'oss']);
+export type StorageKind = z.infer<typeof StorageKindSchema>;
+
+export const AttachmentCreatorKindSchema = z.enum(['user', 'agent']);
+export type AttachmentCreatorKind = z.infer<typeof AttachmentCreatorKindSchema>;
+
+/**
+ * One uploaded blob, scoped to a channel for access control. Threads upload
+ * via their parent channel — `source_conversation_id` keeps the lineage.
+ *
+ * No de-duplication: every upload creates a new row + new blob, so each
+ * filename/source/creator is preserved cleanly.
+ */
+export interface AttachmentRow {
+  id: string;
+  /** channel/dm_channel that owns this blob (access boundary). */
+  channel_id: string;
+  /** channel or thread that originated the upload (audit / lineage). */
+  source_conversation_id: string | null;
+  filename: string;
+  size: number;
+  content_type: string;
+  storage: StorageKind;
+  storage_key: string;
+  created_by_kind: AttachmentCreatorKind;
+  created_by_id: string;
+  created_at: number;
 }
 
 export const NotificationKindSchema = z.enum([

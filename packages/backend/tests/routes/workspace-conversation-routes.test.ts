@@ -9,7 +9,7 @@ describe('workspace/conversation routes', () => {
     t = null;
   });
 
-  it('lists regular workspaces and their channel conversations without exposing the DM workspace', async () => {
+  it('lists regular and agent_home workspaces with their channel conversations', async () => {
     t = buildTestApp();
     const agentBody = await (
       await http(t.app).post('/api/agents', { name: 'alice', runtime: 'claude' })
@@ -24,9 +24,13 @@ describe('workspace/conversation routes', () => {
     const workspaces = await (
       await http(t.app).get('/api/workspaces')
     ).json() as any;
-    expect(workspaces.workspaces.map((w: any) => w.id)).toEqual([
-      workspaceBody.workspace.id,
-    ]);
+    const regular = workspaces.workspaces.find((w: any) => w.id === workspaceBody.workspace.id);
+    const home = workspaces.workspaces.find(
+      (w: any) => w.workspace_kind === 'agent_home' && w.owner_agent_id === agentBody.agent.id,
+    );
+    expect(regular).toBeDefined();
+    expect(home).toBeDefined();
+    expect(home.dm_channel_ids).toEqual([home.dm_channel_id]);
 
     const channels = await (
       await http(t.app).get(`/api/workspaces/${workspaceBody.workspace.id}/channels`)
@@ -40,13 +44,42 @@ describe('workspace/conversation routes', () => {
     });
 
     const dms = await (
-      await http(t.app).get('/api/workspaces/system/dm-channels')
+      await http(t.app).get(`/api/workspaces/${home.id}/channels`)
     ).json() as any;
-    expect(dms.dm_channels).toHaveLength(1);
-    expect(dms.dm_channels[0]).toMatchObject({
+    expect(dms.channels).toHaveLength(1);
+    expect(dms.channels[0]).toMatchObject({
       kind: 'dm_channel',
+      workspace_id: home.id,
       workspace_path: join(t.ctx.silverhandDir, 'agents', agentBody.agent.id),
     });
+
+    const secondary = await (
+      await http(t.app).post(`/api/workspaces/${home.id}/channels`, {
+        title: 'Mentions',
+        member_agent_ids: [],
+      })
+    ).json() as any;
+    expect(secondary.channel).toMatchObject({
+      kind: 'dm_channel',
+      workspace_id: home.id,
+      title: 'Mentions',
+    });
+    const dmsAfter = await (
+      await http(t.app).get(`/api/workspaces/${home.id}/channels`)
+    ).json() as any;
+    expect(dmsAfter.channels.map((c: any) => c.id)).toEqual([
+      dms.channels[0].id,
+      secondary.channel.id,
+    ]);
+    const workspacesAfter = await (
+      await http(t.app).get('/api/workspaces')
+    ).json() as any;
+    const homeAfter = workspacesAfter.workspaces.find((w: any) => w.id === home.id);
+    expect(homeAfter.dm_channel_id).toBe(dms.channels[0].id);
+    expect(homeAfter.dm_channel_ids).toEqual([
+      dms.channels[0].id,
+      secondary.channel.id,
+    ]);
   });
 
   it('enforces channel/thread kind guards on message routes', async () => {

@@ -128,23 +128,37 @@ describe('POST /internal/.../send-message', () => {
     );
     expect(r.status).toBe(400);
     const body = await r.json() as any;
-    expect(body.code).toBe('target_unreachable');
+    expect(body.code).toBe('no_parent');
   });
 
   it('rejects child target that is not a direct child', async () => {
     t = buildTestApp();
     const { conversationId, agentIds, channelId } = await setupSession(t, ['alice']);
-    // Make a sibling top-level channel, not a child thread.
+    // Make a sibling top-level channel with its own thread, not a direct
+    // child of the current conversation.
     const sibling = await (
       await http(t.app).post(`/api/workspaces/${channelId}/channels`, {
         title: 'sibling',
+        member_agent_ids: [agentIds.alice],
       })
+    ).json() as any;
+    const siblingThread = await (
+      await http(t.app).post(
+        `/internal/conversations/${sibling.channel.id}/agents/${agentIds.alice}/create-thread`,
+        {
+          title: 'sibling child',
+          members: [agentIds.alice],
+          context_summary: 'x',
+          initial_prompt: 'seed',
+        },
+        { headers: authHeaders(t.authToken) },
+      )
     ).json() as any;
     const r = await http(t.app).post(
       `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
       {
         content: 'down',
-        target: { thread_id: sibling.channel.id },
+        target: { thread_id: siblingThread.thread_id },
       },
       { headers: authHeaders(t.authToken) },
     );
@@ -271,11 +285,9 @@ describe('POST /internal/.../create-thread', () => {
         messageId: msgs.messages[1].id,
       },
     ]);
-    expect(t.fake.starts).toHaveLength(2);
-    expect(t.fake.starts).toEqual(expect.arrayContaining([
-      { conversationId: body.thread_id, agentId: agentIds.alice },
+    expect(t.fake.starts).toEqual([
       { conversationId: body.thread_id, agentId: agentIds.bob },
-    ]));
+    ]);
 
     // Explicit subsets are allowed, but the caller is always included.
     const childAgents = await (
@@ -363,6 +375,11 @@ describe('POST /internal/.../create-channel', () => {
     ).json() as any;
     t.fake.starts = [];
     t.fake.delivered = [];
+    const workspaceEvents: Array<{ kind: string; payload: any }> = [];
+    const unsubscribe = t.ctx.events.subscribeScope(
+      `workspace:${channelId}`,
+      e => workspaceEvents.push({ kind: e.kind, payload: e.payload }),
+    );
 
     const r = await http(t.app).post(
       `/internal/conversations/${conversationId}/agents/${agentIds.alice}/create-channel`,
@@ -375,6 +392,7 @@ describe('POST /internal/.../create-channel', () => {
       },
       { headers: authHeaders(t.authToken) },
     );
+    unsubscribe();
     expect(r.status).toBe(200);
     const body = await r.json() as any;
     expect(typeof body.channel_id).toBe('string');
@@ -386,6 +404,13 @@ describe('POST /internal/.../create-channel', () => {
     expect(created.channel.parent_conversation_id).toBeNull();
     expect(created.channel.workspace_id).toBe(channelId);
     expect(created.channel.spawned_by_agent_id).toBe(agentIds.alice);
+    expect(workspaceEvents).toContainEqual({
+      kind: 'workspace_channels_changed',
+      payload: {
+        workspace_id: channelId,
+        channel_id: body.channel_id,
+      },
+    });
 
     const channelAgents = await (
       await http(t.app).get(`/api/channels/${body.channel_id}/agents`)
@@ -461,6 +486,39 @@ describe('POST /internal/.../create-channel', () => {
     expect(created.channel.parent_conversation_id).toBeNull();
   });
 
+  it('uses current thread members, not parent channel members, when creating a channel from a thread', async () => {
+    t = buildTestApp();
+    const { conversationId, agentIds } = await setupSession(t, ['alice', 'bob']);
+    const child = await (
+      await http(t.app).post(
+        `/internal/conversations/${conversationId}/agents/${agentIds.alice}/create-thread`,
+        {
+          title: 'alice-only-thread',
+          members: [agentIds.alice],
+          context_summary: 'x',
+          initial_prompt: 'go',
+        },
+        { headers: authHeaders(t.authToken) },
+      )
+    ).json() as any;
+
+    const created = await (
+      await http(t.app).post(
+        `/internal/conversations/${child.thread_id}/agents/${agentIds.alice}/create-channel`,
+        {
+          title: 'thread-member-snapshot',
+          context_summary: 'from thread',
+          initial_prompt: 'continue here',
+        },
+        { headers: authHeaders(t.authToken) },
+      )
+    ).json() as any;
+    const channelAgents = await (
+      await http(t.app).get(`/api/channels/${created.channel_id}/agents`)
+    ).json() as any;
+    expect(channelAgents.agents.map((a: any) => a.agent_id)).toEqual([agentIds.alice]);
+  });
+
   it('requires an initial_prompt', async () => {
     t = buildTestApp();
     const { conversationId, agentIds } = await setupSession(t, ['alice']);
@@ -473,6 +531,21 @@ describe('POST /internal/.../create-channel', () => {
       { headers: authHeaders(t.authToken) },
     );
     expect(r.status).toBe(400);
+  });
+
+  it('returns not found for a missing actor agent', async () => {
+    t = buildTestApp();
+    const { conversationId } = await setupSession(t, ['alice']);
+    const r = await http(t.app).post(
+      `/internal/conversations/${conversationId}/agents/missing-agent/create-channel`,
+      {
+        title: 'missing actor',
+        context_summary: 'x',
+        initial_prompt: 'go',
+      },
+      { headers: authHeaders(t.authToken) },
+    );
+    expect(r.status).toBe(404);
   });
 });
 

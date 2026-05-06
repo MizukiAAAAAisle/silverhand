@@ -57,6 +57,27 @@ describe('AgentRepo', () => {
     const a = repo.create({ name: 'alice', runtime: 'codex' }, localHostId);
     expect(a.display_name).toBe('alice');
     expect(a.reasoning_effort).toBeNull();
+    expect(a.fast_mode).toBeNull();
+  });
+
+  it('round-trips fast_mode boolean through SQLite as a real boolean', () => {
+    const { db, localHostId } = openTestDb();
+    const repo = new AgentRepo(db);
+
+    const enabled = repo.create(
+      { name: 'fast-on', runtime: 'codex', fast_mode: true },
+      localHostId,
+    );
+    expect(enabled.fast_mode).toBe(true);
+
+    const disabled = repo.create(
+      { name: 'fast-off', runtime: 'codex', fast_mode: false },
+      localHostId,
+    );
+    expect(disabled.fast_mode).toBe(false);
+
+    const cleared = repo.update(enabled.id, { fast_mode: null })!;
+    expect(cleared.fast_mode).toBeNull();
   });
 
   it('update only writes provided keys; bumps updated_at', async () => {

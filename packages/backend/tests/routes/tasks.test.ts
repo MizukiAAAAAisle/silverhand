@@ -303,4 +303,110 @@ describe('Tasks (PR-T1)', () => {
     expect(recipients.has(agentIds.alice!)).toBe(true);
     expect(recipients.has(agentIds.bob!)).toBe(true);
   });
+
+  it('bulk agent claim mixes task_numbers + message_ids into aggregated results', async () => {
+    t = buildTestApp();
+    const { sessionId, agentIds } = await setup(t);
+    const h = http(t.app, auth(t.authToken));
+
+    // create one task by agent
+    await h.post(
+      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+      { tasks: [{ title: 'numbered task' }] },
+    );
+    // post a regular message for promote-and-claim
+    const viewer = http(t.app, { 'x-silverhand-user-id': 'teammate' });
+    const userMsg = await (
+      await viewer.post(`/api/channels/${sessionId}/messages`, {
+        content: 'please look into the deadlock',
+      })
+    ).json() as any;
+
+    const claim = await (
+      await h.post(
+        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
+        { task_numbers: [1], message_ids: [userMsg.message.id] },
+      )
+    ).json() as any;
+    expect(claim.results).toHaveLength(2);
+    expect(claim.results[0].success).toBe(true);
+    expect(claim.results[0].task_number).toBe(1);
+    expect(claim.results[1].success).toBe(true);
+    expect(claim.results[1].task_number).toBe(2);
+  });
+
+  it('human POST /api/tasks/:messageId/claim with no agent_id lifts todo→in_progress, leaves assignee null', async () => {
+    t = buildTestApp();
+    const { sessionId, agentIds } = await setup(t);
+    const h = http(t.app, auth(t.authToken));
+
+    const created = (await (
+      await h.post(
+        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+        { tasks: [{ title: 'plain' }] },
+      )
+    ).json()) as any;
+    const messageId = created.tasks[0].message_id;
+
+    const claim = (await (
+      await http(t.app).post(`/api/tasks/${messageId}/claim`, {})
+    ).json()) as any;
+    expect(claim.success).toBe(true);
+
+    const listed = (await (await http(t.app).get('/api/tasks')).json()) as any;
+    expect(listed.tasks[0].status).toBe('in_progress');
+    expect(listed.tasks[0].assignee).toBeNull();
+  });
+
+  it('human POST /api/tasks/:messageId/unclaim forces status=todo even from in_review', async () => {
+    t = buildTestApp();
+    const { sessionId, agentIds } = await setup(t);
+    const h = http(t.app, auth(t.authToken));
+
+    const created = (await (
+      await h.post(
+        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+        { tasks: [{ title: 'review me' }] },
+      )
+    ).json()) as any;
+    const messageId = created.tasks[0].message_id;
+    await h.post(
+      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
+      { task_numbers: [1] },
+    );
+    await h.post(
+      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/update-status`,
+      { task_number: 1, status: 'in_review' },
+    );
+
+    const unclaim = (await (
+      await http(t.app).post(`/api/tasks/${messageId}/unclaim`)
+    ).json()) as any;
+    expect(unclaim.success).toBe(true);
+
+    const listed = (await (await http(t.app).get('/api/tasks')).json()) as any;
+    expect(listed.tasks[0].status).toBe('todo');
+    expect(listed.tasks[0].assignee).toBeNull();
+  });
+
+  it('human POST /api/tasks/:messageId/status can jump to any non-current status', async () => {
+    t = buildTestApp();
+    const { sessionId, agentIds } = await setup(t);
+    const h = http(t.app, auth(t.authToken));
+
+    const created = (await (
+      await h.post(
+        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+        { tasks: [{ title: 'shortcut' }] },
+      )
+    ).json()) as any;
+    const messageId = created.tasks[0].message_id;
+
+    const direct = (await (
+      await http(t.app).post(`/api/tasks/${messageId}/status`, { status: 'done' })
+    ).json()) as any;
+    expect(direct.success).toBe(true);
+    const listed = (await (await http(t.app).get('/api/tasks')).json()) as any;
+    expect(listed.tasks[0].status).toBe('done');
+  });
 });

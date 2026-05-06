@@ -137,6 +137,47 @@ export class ConversationRepo {
     return rows.map(rowToDmChannel);
   }
 
+  listDmChannelForWorkspace(workspaceId: string): DmChannelDto | null {
+    const row = this.db
+      .prepare<[string], ConversationRow>(
+        `SELECT c.*
+           FROM conversations c
+           JOIN workspaces w ON w.id = c.workspace_id
+           LEFT JOIN agents owner ON owner.id = w.owner_agent_id
+          WHERE c.workspace_id = ?
+            AND c.kind = 'dm_channel'
+          ORDER BY CASE
+                     WHEN c.title = 'Onboarding' THEN 0
+                     WHEN owner.id IS NOT NULL AND c.title = 'dm-' || owner.name THEN 1
+                     ELSE 2
+                   END,
+                   c.created_at ASC
+          LIMIT 1`,
+      )
+      .get(workspaceId);
+    return row ? rowToDmChannel(row) : null;
+  }
+
+  listDmChannelsForWorkspace(workspaceId: string): DmChannelDto[] {
+    const rows = this.db
+      .prepare<[string], ConversationRow>(
+        `SELECT c.*
+           FROM conversations c
+           JOIN workspaces w ON w.id = c.workspace_id
+           LEFT JOIN agents owner ON owner.id = w.owner_agent_id
+          WHERE c.workspace_id = ?
+            AND c.kind = 'dm_channel'
+          ORDER BY CASE
+                     WHEN c.title = 'Onboarding' THEN 0
+                     WHEN owner.id IS NOT NULL AND c.title = 'dm-' || owner.name THEN 1
+                     ELSE 2
+                   END,
+                   c.created_at ASC`,
+      )
+      .all(workspaceId);
+    return rows.map(rowToDmChannel);
+  }
+
   findDmChannelForAgent(
     agentId: string,
     opts: { title?: string } = {},

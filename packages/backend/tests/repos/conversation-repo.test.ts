@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
-import { WorkspaceRepo, SYSTEM_DM_WORKSPACE_ID } from '../../src/repos/workspace-repo.js';
+import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { makeTempSilverhandDir, openTestDb } from '../utils/db.js';
 
 function bootstrap() {
@@ -100,40 +100,50 @@ describe('ConversationRepo canonical schema', () => {
     }
   });
 
-  it('keeps DM channels under the hidden system workspace with agent L1 path snapshots', () => {
+  it('keeps DM channels under the agent_home workspace with agent L1 path snapshots', () => {
     const t = bootstrap();
     try {
       const agent = t.agents.create({ name: 'cindy', runtime: 'codex' }, t.localHostId);
       const agentWorkspacePath = join(t.tmp.silverhandDir, 'agents', agent.id);
-      const system = t.workspaces.ensureSystemDmWorkspace({
+      const home = t.workspaces.insertAgentHome({
+        agent,
         workspacePath: agentWorkspacePath,
-        workspaceHostId: t.localHostId,
       });
       const dm = t.conversations.insertDmChannel({
-        workspaceId: system.id,
+        workspaceId: home.id,
         workspacePath: agentWorkspacePath,
         title: 'dm-cindy',
         agentId: agent.id,
       });
       t.conversations.addAgent(dm.id, agent.id);
+      const mentions = t.conversations.insertDmChannel({
+        workspaceId: home.id,
+        workspacePath: agentWorkspacePath,
+        title: 'Mentions',
+        agentId: agent.id,
+      });
+      t.conversations.addAgent(mentions.id, agent.id);
       const thread = t.conversations.insertThread({
         channelId: dm.id,
         title: 'Thread in DM',
       });
 
-      expect(t.workspaces.list().map(w => w.id)).not.toContain(SYSTEM_DM_WORKSPACE_ID);
-      expect(t.workspaces.get(SYSTEM_DM_WORKSPACE_ID)).toMatchObject({
-        workspace_kind: 'system_dm',
+      expect(t.workspaces.get(home.id)).toMatchObject({
+        workspace_kind: 'agent_home',
+        owner_agent_id: agent.id,
+        dm_channel_id: dm.id,
       });
+      expect(t.conversations.listDmChannelsForWorkspace(home.id).map(c => c.id))
+        .toEqual([dm.id, mentions.id]);
       expect(t.conversations.getDmChannel(dm.id)).toMatchObject({
         id: dm.id,
-        workspace_id: SYSTEM_DM_WORKSPACE_ID,
+        workspace_id: home.id,
         workspace_path: agentWorkspacePath,
         kind: 'dm_channel',
       });
       expect(t.conversations.getThread(thread.id)).toMatchObject({
         id: thread.id,
-        workspace_id: SYSTEM_DM_WORKSPACE_ID,
+        workspace_id: home.id,
         channel_id: dm.id,
         workspace_path: agentWorkspacePath,
         kind: 'thread',

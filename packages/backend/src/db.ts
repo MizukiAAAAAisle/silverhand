@@ -14,7 +14,7 @@ export function openDatabase(filepath: string): Db {
   return db;
 }
 
-function runMigrations(db: Db): void {
+export function runMigrations(db: Db): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS _migrations (
       version INTEGER PRIMARY KEY,
@@ -33,9 +33,29 @@ function runMigrations(db: Db): void {
 
   for (const m of migrations) {
     if (applied.has(m.version)) continue;
-    db.transaction(() => {
-      db.exec(m.up);
-      insertMigration.run(m.version, m.name, Date.now());
-    })();
+    if (m.foreignKeyEscape) {
+      db.pragma('foreign_keys = OFF');
+      db.pragma('legacy_alter_table = ON');
+      try {
+        db.transaction(() => {
+          db.exec(m.up);
+          const violations = db.pragma('foreign_key_check') as unknown[];
+          if (violations.length > 0) {
+            throw new Error(
+              `migration v${m.version}: foreign_key_check found ${violations.length} violations: ${JSON.stringify(violations)}`,
+            );
+          }
+          insertMigration.run(m.version, m.name, Date.now());
+        })();
+      } finally {
+        db.pragma('legacy_alter_table = OFF');
+        db.pragma('foreign_keys = ON');
+      }
+    } else {
+      db.transaction(() => {
+        db.exec(m.up);
+        insertMigration.run(m.version, m.name, Date.now());
+      })();
+    }
   }
 }

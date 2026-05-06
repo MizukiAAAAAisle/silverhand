@@ -1,0 +1,161 @@
+import { afterEach, describe, expect, it } from 'vitest';
+import { buildTestApp, http, type TestApp } from '../utils/app.js';
+
+async function makeAgent(t: TestApp, name: string): Promise<string> {
+  const created = await (
+    await http(t.app).post('/api/agents', { name, runtime: 'claude' })
+  ).json() as any;
+  return created.agent.id;
+}
+
+async function createWorkspaceChannel(
+  t: TestApp,
+  names: string[],
+): Promise<{ workspaceId: string; channelId: string; agentIds: Record<string, string> }> {
+  const agentIds: Record<string, string> = {};
+  for (const name of names) {
+    agentIds[name] = await makeAgent(t, name);
+  }
+  const workspace = await (
+    await http(t.app).post('/api/workspaces', {
+      name: `ws-${names.join('-')}`,
+      member_agent_ids: Object.values(agentIds),
+    })
+  ).json() as any;
+  t.fake.starts = [];
+  t.fake.delivered = [];
+  t.fake.resolvedRuns = [];
+  return {
+    workspaceId: workspace.workspace.id,
+    channelId: workspace.onboarding_channel_id,
+    agentIds,
+  };
+}
+
+function authHeaders(token: string): Record<string, string> {
+  return { authorization: `Bearer ${token}` };
+}
+
+describe('message routes', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('human channel and thread message routes publish message and unread events', async () => {
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t, ['alice']);
+    const channelEvents: Array<{ kind: string; payload: any }> = [];
+    const viewerEvents: Array<{ kind: string; payload: any }> = [];
+    const unsubChannel = t.ctx.events.subscribe(channelId, e => {
+      channelEvents.push({ kind: e.kind, payload: e.payload });
+    });
+    const unsubViewer = t.ctx.events.subscribeScope('viewer:local', e => {
+      viewerEvents.push({ kind: e.kind, payload: e.payload });
+    });
+
+    const channelPost = await (
+      await http(t.app).post(`/api/channels/${channelId}/messages`, {
+        content: 'topic',
+      })
+    ).json() as any;
+    const thread = await (
+      await http(t.app).post(`/api/messages/${channelPost.message.id}/thread`)
+    ).json() as any;
+    const threadPost = await (
+      await http(t.app).post(`/api/threads/${thread.thread_id}/messages`, {
+        content: 'thread reply',
+      })
+    ).json() as any;
+    unsubChannel();
+    unsubViewer();
+
+    expect(channelEvents).toEqual(
+      expect.arrayContaining([
+        {
+          kind: 'message',
+          payload: { message: expect.objectContaining({ id: channelPost.message.id }) },
+        },
+        {
+          kind: 'thread_updated',
+          payload: {
+            parent_conversation_id: channelId,
+            thread_id: thread.thread_id,
+          },
+        },
+      ]),
+    );
+    expect(viewerEvents).toEqual(
+      expect.arrayContaining([
+        { kind: 'unread_updated', payload: { conversation_id: channelId } },
+        {
+          kind: 'unread_updated',
+          payload: { conversation_id: threadPost.message.conversation_id },
+        },
+      ]),
+    );
+  });
+
+  it('agent target parent lands in the parent conversation', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice', 'bob']);
+    const thread = await (
+      await http(t.app).post(
+        `/internal/conversations/${channelId}/agents/${agentIds.alice}/create-thread`,
+        {
+          title: 'child',
+          members: [agentIds.alice, agentIds.bob],
+          context_summary: 'x',
+          initial_prompt: 'seed child',
+        },
+        { headers: authHeaders(t.authToken) },
+      )
+    ).json() as any;
+    t.fake.delivered = [];
+    t.fake.resolvedRuns = [];
+
+    const send = await http(t.app).post(
+      `/internal/conversations/${thread.thread_id}/agents/${agentIds.alice}/send-message`,
+      { content: 'up to parent', target: 'parent' },
+      { headers: authHeaders(t.authToken) },
+    );
+
+    expect(send.status).toBe(200);
+    const parentMessages = await (
+      await http(t.app).get(`/api/channels/${channelId}/messages`)
+    ).json() as any;
+    expect(parentMessages.messages.map((m: any) => m.content)).toContain('up to parent');
+    expect(t.fake.resolvedRuns).toEqual([
+      { conversationId: thread.thread_id, agentId: agentIds.alice, reason: 'replied' },
+    ]);
+  });
+
+  it('agent send-message into a closed target returns 409', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
+    const thread = await (
+      await http(t.app).post(
+        `/internal/conversations/${channelId}/agents/${agentIds.alice}/create-thread`,
+        {
+          title: 'child',
+          members: [agentIds.alice],
+          context_summary: 'x',
+          initial_prompt: 'seed child',
+        },
+        { headers: authHeaders(t.authToken) },
+      )
+    ).json() as any;
+    t.ctx.db
+      .prepare(`UPDATE conversations SET closed_at = ?, status = 'archived' WHERE id = ?`)
+      .run(Date.now(), thread.thread_id);
+
+    const send = await http(t.app).post(
+      `/internal/conversations/${channelId}/agents/${agentIds.alice}/send-message`,
+      { content: 'down', target: { thread_id: thread.thread_id } },
+      { headers: authHeaders(t.authToken) },
+    );
+
+    expect(send.status).toBe(409);
+  });
+});

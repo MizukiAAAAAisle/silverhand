@@ -20,7 +20,6 @@ export const apiPaths = {
   workspaceMember: (id: string, agentId: string) =>
     `/api/workspaces/${id}/members/${agentId}`,
   workspaceChannels: (id: string) => `/api/workspaces/${id}/channels`,
-  workspaceDmChannels: '/api/workspaces/system/dm-channels',
   channelMessages: (id: string) => `/api/channels/${id}/messages`,
   channelAgents: (id: string) => `/api/channels/${id}/agents`,
   channelAgentRunStates: (id: string) => `/api/channels/${id}/agent-run-states`,
@@ -42,8 +41,14 @@ export const apiPaths = {
   threadResume: (id: string) => `/api/threads/${id}/resume`,
   threadMarkRead: (id: string) => `/api/threads/${id}/mark-read`,
 
+  // attachments — upload via channel/thread context, download by id.
+  // Each upload creates an independent blob (no de-dup).
+  channelAttachments: (id: string) => `/api/channels/${id}/attachments`,
+  threadAttachments: (id: string) => `/api/threads/${id}/attachments`,
+  attachment: (id: string) => `/api/attachments/${id}`,
+
   /** Global message unread summary across all workspace/sidebar items.
-   *  GET -> `{ by_workspace: Record<workspaceOrDmChannelId, number> }` */
+   *  GET -> `{ by_workspace: Record<workspaceId, number> }` */
   messageUnreadSummary: '/api/message-unread-summary',
 
   // saved messages
@@ -101,5 +106,14 @@ export const internalPaths = {
     `/internal/conversations/${cid}/agents/${aid}/tasks/unclaim`,
   agentUpdateConversationTaskStatus: (cid: string, aid: string) =>
     `/internal/conversations/${cid}/agents/${aid}/tasks/update-status`,
+
+  /** Agent uploads a local file from its current channel/thread context.
+   *  Backend resolves channel ownership from `cid`. */
+  agentUploadAttachment: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/attachments`,
+  /** Agent asks the backend where/how to read an attachment. Returns
+   *  either a local path (zero-copy) or a download URL. */
+  agentLocateAttachment: (cid: string, aid: string, attachmentId: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/attachments/${attachmentId}/locate`,
 
 } as const;

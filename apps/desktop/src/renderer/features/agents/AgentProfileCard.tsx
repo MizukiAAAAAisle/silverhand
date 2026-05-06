@@ -5,6 +5,7 @@ import dayjs from 'dayjs';
 import type {
   AgentDto,
   AgentRuntimeStateDto,
+  ReasoningEffort,
   RuntimeKind,
   UpdateAgentInput,
 } from '@silverhand/shared';
@@ -27,6 +28,15 @@ const CODEX_REASONING: { value: string; label: string }[] = [
   { value: 'medium', label: 'medium' },
   { value: 'high', label: 'high' },
   { value: 'xhigh', label: 'xhigh' },
+];
+
+// codex feature flag `fast_mode`. Tri-state so the user can pin
+// either side or fall back to the catalog default (currently `true`).
+// Stored as boolean | null on the agent row.
+const CODEX_FAST_MODE: { value: string; label: string }[] = [
+  { value: '__default__', label: 'Use codex default' },
+  { value: 'true', label: 'Enabled' },
+  { value: 'false', label: 'Disabled' },
 ];
 
 interface AgentProfileCardProps {
@@ -79,6 +89,12 @@ export function AgentProfileCard({
 
   const isCodex = agent.runtime === 'codex';
   const reasoningValue = agent.reasoning_effort ?? '__default__';
+  const fastModeValue =
+    agent.fast_mode === null || agent.fast_mode === undefined
+      ? '__default__'
+      : agent.fast_mode
+      ? 'true'
+      : 'false';
 
   return (
     <section className="flex flex-col gap-4 rounded-lg border border-border bg-bg-floating p-4">
@@ -109,7 +125,7 @@ export function AgentProfileCard({
             <Lock className="ml-1 inline size-3 text-text-muted" />
           </>
         }
-        hint="Used in @mentions, dm-<name> channel, and L2 file paths. Can't be changed in v1."
+        hint="Used in @mentions, the agent home workspace, and L2 file paths. Can't be changed in v1."
       >
         <Input
           value={`@${agent.name}`}
@@ -162,7 +178,27 @@ export function AgentProfileCard({
           <ReasoningSelect
             value={reasoningValue}
             onChange={value =>
-              commit({ reasoning_effort: value === '__default__' ? null : value })
+              commit({
+                reasoning_effort:
+                  value === '__default__' ? null : (value as ReasoningEffort),
+              })
+            }
+          />
+        </Field>
+      ) : null}
+
+      {isCodex ? (
+        <Field
+          label="Fast mode"
+          hint="codex feature flag. Default leaves the catalog setting in place."
+        >
+          <FastModeSelect
+            value={fastModeValue}
+            onChange={value =>
+              commit({
+                fast_mode:
+                  value === '__default__' ? null : value === 'true',
+              })
             }
           />
         </Field>
@@ -296,6 +332,44 @@ function ReasoningSelect({
         >
           <Select.Viewport>
             {CODEX_REASONING.map(opt => (
+              <Select.Item
+                key={opt.value}
+                value={opt.value}
+                className="flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-text-primary outline-none data-[highlighted]:bg-bg-hover"
+              >
+                <Select.ItemText>{opt.label}</Select.ItemText>
+              </Select.Item>
+            ))}
+          </Select.Viewport>
+        </Select.Content>
+      </Select.Portal>
+    </Select.Root>
+  );
+}
+
+function FastModeSelect({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}): JSX.Element {
+  return (
+    <Select.Root value={value} onValueChange={onChange}>
+      <Select.Trigger className="flex h-9 w-full items-center justify-between rounded-md border border-border bg-bg-floating px-3 text-sm text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus">
+        <Select.Value />
+        <Select.Icon>
+          <ChevronDown className="size-3.5 text-text-muted" />
+        </Select.Icon>
+      </Select.Trigger>
+      <Select.Portal>
+        <Select.Content
+          position="popper"
+          sideOffset={4}
+          className="z-50 min-w-[var(--radix-select-trigger-width)] rounded-md border border-border bg-bg-floating p-1 text-sm shadow-lg"
+        >
+          <Select.Viewport>
+            {CODEX_FAST_MODE.map(opt => (
               <Select.Item
                 key={opt.value}
                 value={opt.value}

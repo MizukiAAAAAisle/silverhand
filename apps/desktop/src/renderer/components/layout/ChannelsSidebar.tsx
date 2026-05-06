@@ -47,7 +47,7 @@ export function ChannelsSidebar({
   }
 
   return (
-    <aside className="flex h-full w-[var(--sessions-sidebar-width)] shrink-0 flex-col border-r border-border-subtle bg-[var(--bg-sessions-sidebar)]">
+    <aside className="flex h-full w-[var(--channels-sidebar-width)] shrink-0 flex-col border-r border-border-subtle bg-[var(--bg-sessions-sidebar)]">
       <div className="flex-1 overflow-y-auto px-1.5 py-1.5">
         {!workspaceName ? (
           <EmptyHint message="选择左侧 Workspace" />

@@ -2,6 +2,7 @@ export interface Migration {
   version: number;
   name: string;
   up: string;
+  foreignKeyEscape?: true;
 }
 
 export const migrations: Migration[] = [
@@ -1003,6 +1004,227 @@ export const migrations: Migration[] = [
     up: `
       CREATE INDEX IF NOT EXISTS idx_messages_conversation_from_kind
         ON messages(conversation_id, from_kind, seq);
+    `,
+  },
+  {
+    version: 14,
+    name: 'agent_fast_mode',
+    // Tri-state codex feature toggle: NULL = use codex's own default
+    // (the catalog currently ships it as `stable / true`), 1 = pass
+    // `--enable fast_mode` at spawn, 0 = pass `--disable fast_mode`.
+    // Other runtimes ignore the column.
+    up: `
+      ALTER TABLE agents ADD COLUMN fast_mode INTEGER;
+    `,
+  },
+  {
+    version: 15,
+    name: 'attachments',
+    // Attachment application schema. Backed by the blob/file storage infra
+    // (`packages/backend/src/storage/blob-file-storage.ts`).
+    //
+    // Boundaries (see docs/attachments-design.md §3):
+    //   - channel_id   = access boundary. Must reference a channel-like
+    //                    conversation (`kind IN ('channel','dm_channel')`);
+    //                    enforced at the application layer (no SQLite
+    //                    partial-FK syntax). ON DELETE CASCADE so dropping
+    //                    a channel sweeps its attachments too.
+    //   - source_conversation_id = lineage tag. May be the channel itself
+    //                    or a thread under it. ON DELETE SET NULL so
+    //                    closing a thread keeps the blob.
+    //   - No hash, no UNIQUE: every upload creates a new row + new blob,
+    //                    so filename/source/creator never get clobbered.
+    up: `
+      CREATE TABLE attachments (
+        id                     TEXT PRIMARY KEY,
+        channel_id             TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        source_conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+        filename               TEXT NOT NULL,
+        size                   INTEGER NOT NULL,
+        content_type           TEXT NOT NULL,
+        storage                TEXT NOT NULL,
+        storage_key            TEXT NOT NULL,
+        created_by_kind        TEXT NOT NULL,
+        created_by_id          TEXT NOT NULL,
+        created_at             INTEGER NOT NULL
+      );
+
+      CREATE INDEX idx_attachments_channel
+        ON attachments(channel_id, created_at DESC);
+      CREATE INDEX idx_attachments_source_conversation
+        ON attachments(source_conversation_id, created_at DESC);
+    `,
+  },
+  {
+    version: 16,
+    name: 'agent_home_workspaces',
+    foreignKeyEscape: true,
+    up: `
+      ALTER TABLE workspaces RENAME TO workspaces_legacy_v16;
+
+      CREATE TABLE workspaces (
+        id                 TEXT PRIMARY KEY,
+        name               TEXT NOT NULL,
+        description        TEXT,
+        workspace_kind     TEXT NOT NULL
+          CHECK (workspace_kind IN ('regular', 'agent_home')),
+        workspace_path     TEXT NOT NULL,
+        workspace_host_id  TEXT NOT NULL REFERENCES hosts(id) ON DELETE RESTRICT,
+        owner_agent_id     TEXT UNIQUE REFERENCES agents(id) ON DELETE CASCADE,
+        archived_at        INTEGER,
+        created_at         INTEGER NOT NULL,
+        updated_at         INTEGER NOT NULL,
+        CHECK (
+          (workspace_kind = 'agent_home' AND owner_agent_id IS NOT NULL)
+          OR
+          (workspace_kind = 'regular' AND owner_agent_id IS NULL)
+        )
+      );
+
+      CREATE UNIQUE INDEX workspaces_regular_name_unique
+        ON workspaces(name) WHERE workspace_kind = 'regular';
+
+      INSERT INTO workspaces
+        (id, name, description, workspace_kind, workspace_path, workspace_host_id,
+         owner_agent_id, archived_at, created_at, updated_at)
+      SELECT id, name, description, 'regular', workspace_path, workspace_host_id,
+             NULL, archived_at, created_at, updated_at
+        FROM workspaces_legacy_v16
+       WHERE workspace_kind = 'regular';
+
+      INSERT INTO workspaces
+        (id, name, description, workspace_kind, workspace_path, workspace_host_id,
+         owner_agent_id, archived_at, created_at, updated_at)
+      SELECT 'wsah_' || a.id,
+             a.name,
+             'Personal home workspace for ' || a.name,
+             'agent_home',
+             (
+               SELECT c.workspace_path
+                 FROM conversations c
+                 JOIN conversation_agents ca ON ca.conversation_id = c.id
+                WHERE c.kind = 'dm_channel'
+                  AND c.workspace_id = '__system_dm_workspace__'
+                  AND ca.agent_id = a.id
+                ORDER BY CASE
+                           WHEN c.title = 'dm-' || (SELECT name FROM agents WHERE id = ca.agent_id)
+                             THEN 0
+                           ELSE 1
+                         END,
+                         c.created_at ASC
+                LIMIT 1
+             ),
+             a.host_id,
+             a.id,
+             NULL,
+             (
+               SELECT c.created_at
+                 FROM conversations c
+                 JOIN conversation_agents ca ON ca.conversation_id = c.id
+                WHERE c.kind = 'dm_channel'
+                  AND c.workspace_id = '__system_dm_workspace__'
+                  AND ca.agent_id = a.id
+                ORDER BY CASE
+                           WHEN c.title = 'dm-' || (SELECT name FROM agents WHERE id = ca.agent_id)
+                             THEN 0
+                           ELSE 1
+                         END,
+                         c.created_at ASC
+                LIMIT 1
+             ),
+             (
+               SELECT c.updated_at
+                 FROM conversations c
+                 JOIN conversation_agents ca ON ca.conversation_id = c.id
+                WHERE c.kind = 'dm_channel'
+                  AND c.workspace_id = '__system_dm_workspace__'
+                  AND ca.agent_id = a.id
+                ORDER BY CASE
+                           WHEN c.title = 'dm-' || (SELECT name FROM agents WHERE id = ca.agent_id)
+                             THEN 0
+                           ELSE 1
+                         END,
+                         c.created_at ASC
+                LIMIT 1
+             )
+        FROM agents a
+       WHERE EXISTS (
+             SELECT 1
+               FROM conversations c
+               JOIN conversation_agents ca ON ca.conversation_id = c.id
+              WHERE c.kind = 'dm_channel'
+                AND c.workspace_id = '__system_dm_workspace__'
+                AND ca.agent_id = a.id
+       );
+
+      UPDATE conversations
+         SET workspace_id =
+           'wsah_' || (
+             SELECT ca.agent_id
+               FROM conversation_agents ca
+              WHERE ca.conversation_id = conversations.id
+              LIMIT 1
+           )
+       WHERE kind = 'dm_channel'
+         AND workspace_id = '__system_dm_workspace__';
+
+      UPDATE conversations
+         SET workspace_id = (
+           SELECT root.workspace_id
+             FROM conversations root
+            WHERE root.id = conversations.parent_conversation_id
+         )
+       WHERE kind = 'thread'
+         AND workspace_id = '__system_dm_workspace__';
+
+      UPDATE messages
+         SET task_workspace_id = (
+           SELECT c.workspace_id
+             FROM conversations c
+            WHERE c.id = messages.conversation_id
+         )
+       WHERE task_workspace_id = '__system_dm_workspace__';
+
+      UPDATE saved_messages
+         SET workspace_id = (
+           SELECT c.workspace_id
+             FROM messages m
+             JOIN conversations c ON c.id = m.conversation_id
+            WHERE m.id = saved_messages.message_id
+         )
+       WHERE workspace_id = '__system_dm_workspace__';
+
+      UPDATE notifications
+         SET workspace_id = (
+           SELECT c.workspace_id
+             FROM conversations c
+            WHERE c.id = notifications.conversation_id
+         )
+       WHERE workspace_id = '__system_dm_workspace__';
+
+      UPDATE notifications
+         SET source_workspace_id = (
+           SELECT c.workspace_id
+             FROM conversations c
+            WHERE c.id = notifications.source_conversation_id
+         )
+       WHERE source_workspace_id = '__system_dm_workspace__';
+
+      DROP TABLE workspaces_legacy_v16;
+
+      CREATE TRIGGER workspace_members_no_agent_home_insert
+      BEFORE INSERT ON workspace_members
+      WHEN (SELECT workspace_kind FROM workspaces WHERE id = NEW.workspace_id) = 'agent_home'
+      BEGIN
+        SELECT RAISE(ABORT, 'workspace_members rows must reference regular workspaces only');
+      END;
+
+      CREATE TRIGGER workspace_members_no_agent_home_update
+      BEFORE UPDATE OF workspace_id ON workspace_members
+      WHEN (SELECT workspace_kind FROM workspaces WHERE id = NEW.workspace_id) = 'agent_home'
+      BEGIN
+        SELECT RAISE(ABORT, 'workspace_members rows must reference regular workspaces only');
+      END;
     `,
   },
 ];

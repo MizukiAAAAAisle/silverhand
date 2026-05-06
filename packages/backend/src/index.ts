@@ -22,6 +22,17 @@ import {
   type EventWsServerController,
 } from './ws/ws-server.js';
 import { ConversationManager } from './conversation-manager.js';
+import { AgentRepo } from './repos/agent-repo.js';
+import { AttachmentRepo } from './repos/attachment-repo.js';
+import { ConversationRepo } from './repos/conversation-repo.js';
+import { MessageRepo } from './repos/message-repo.js';
+import { NotificationRepo } from './repos/notification-repo.js';
+import { WorkspaceRepo } from './repos/workspace-repo.js';
+import { AttachmentService } from './services/attachment-service.js';
+import { ChannelService } from './services/channel-service.js';
+import { ConversationMessageService } from './services/conversation-message-service.js';
+import { ThreadService } from './services/thread-service.js';
+import { TaskService } from './services/task-service.js';
 import { createLocalBlobFileStorage } from './storage/blob-file-storage.js';
 import type { ServerConfig } from '@silverhand/shared';
 import type { Server as HttpServer } from 'node:http';
@@ -63,6 +74,12 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   // Bootstrap: ensure 'local' host exists.
   new HostRepo(db).ensureLocal();
 
+  const attachmentService = new AttachmentService({
+    storage: blobStorage,
+    attachments: new AttachmentRepo(db),
+    conversations: new ConversationRepo(db),
+  });
+
   const ctx: BackendContext = {
     db,
     serverConfig: opts.serverConfig,
@@ -71,6 +88,11 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     workspacesRoot,
     logDir: opts.logDir,
     blobStorage,
+    attachmentService,
+    channelService: undefined as unknown as ChannelService,
+    conversationMessageService: undefined as unknown as ConversationMessageService,
+    threadService: undefined as unknown as ThreadService,
+    taskService: undefined as unknown as TaskService,
     lastSpawnAtByAgent: new Map(),
     events: new ScopeEventBus(),
     chatBridgeLauncher: opts.chatBridgeLauncher,
@@ -78,6 +100,49 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     conversationManager: undefined as unknown as ConversationManager,
   };
   ctx.conversationManager = new ConversationManager(ctx);
+  ctx.channelService = new ChannelService({
+    db,
+    conversations: new ConversationRepo(db),
+    workspaces: new WorkspaceRepo(db, { workspacesRoot }),
+    agents: new AgentRepo(db),
+    messages: new MessageRepo(db),
+    events: ctx.events,
+    conversationManager: ctx.conversationManager,
+    logger,
+  });
+  ctx.conversationMessageService = new ConversationMessageService({
+    db,
+    conversations: new ConversationRepo(db),
+    messages: new MessageRepo(db),
+    agents: new AgentRepo(db),
+    notifications: new NotificationRepo(db),
+    workspaces: new WorkspaceRepo(db, { workspacesRoot }),
+    attachmentService,
+    conversationManager: ctx.conversationManager,
+    events: ctx.events,
+    logger,
+  });
+  ctx.threadService = new ThreadService({
+    db,
+    conversations: new ConversationRepo(db),
+    messages: new MessageRepo(db),
+    agents: new AgentRepo(db),
+    workspaces: new WorkspaceRepo(db, { workspacesRoot }),
+    conversationManager: ctx.conversationManager,
+    events: ctx.events,
+    logger,
+    serverConfig: () => ctx.serverConfig,
+    lastSpawnAtByAgent: ctx.lastSpawnAtByAgent,
+  });
+  ctx.taskService = new TaskService({
+    db,
+    conversations: new ConversationRepo(db),
+    messages: new MessageRepo(db),
+    agents: new AgentRepo(db),
+    conversationManager: ctx.conversationManager,
+    events: ctx.events,
+    logger,
+  });
   ctx.conversationManager.reconcileOnBoot();
   const stopEventLoopLagProbe = startEventLoopLagProbe(logger);
 

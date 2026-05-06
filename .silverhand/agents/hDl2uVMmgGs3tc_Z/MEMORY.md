@@ -20,9 +20,12 @@
   diagnostics and Slock comparisons.
 
 ## Active Context
-- 2026-05-06 task #105: compacted current Silverhand agent MEMORY.md files and
-  moved durable details into notes. Ready for user review.
+- 2026-05-07 #122: PR-6 per-agent `agent_home` is done and the user has cut
+  over to the new release. A read-only live DB check of
+  `~/.silverhand/silverhand.db` passed: schema version 16, quick_check ok,
+  foreign_key_check 0, no legacy system_dm rows/references, every agent has an
+  agent_home, and DM/task/saved/notification scopes are retagged.
 - Recent prompt work: task #103 seeded onboarding notes; task #104 tightened
-  Silverhand prompt memory behavior and L1/L2 seed structure. Both are in review.
+  Silverhand prompt memory behavior and L1/L2 seed structure.
 - Current memory rule: update notes for durable details; update MEMORY.md only
   when Key Knowledge links or this Active Context changes.

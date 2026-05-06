@@ -16,7 +16,13 @@ function newId(): string {
 }
 
 function rowToDto(row: AgentRow): AgentDto {
-  return { ...row };
+  // SQLite stores booleans as 0/1; coerce back to boolean | null.
+  const fast = row.fast_mode as unknown as number | boolean | null;
+  return {
+    ...row,
+    fast_mode:
+      fast === null || fast === undefined ? null : Boolean(fast),
+  };
 }
 
 export class AgentRepo {
@@ -52,9 +58,9 @@ export class AgentRepo {
     this.db
       .prepare(
         `INSERT INTO agents
-         (id, name, display_name, runtime, model, reasoning_effort,
+         (id, name, display_name, runtime, model, reasoning_effort, fast_mode,
           host_id, description, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -63,6 +69,7 @@ export class AgentRepo {
         input.runtime,
         input.model ?? null,
         input.reasoning_effort ?? null,
+        input.fast_mode === undefined ? null : input.fast_mode ? 1 : 0,
         input.host_id ?? defaultHostId,
         input.description ?? null,
         now,
@@ -82,7 +89,7 @@ export class AgentRepo {
   update(id: string, input: UpdateAgentInput): AgentDto | null {
     if (!this.get(id)) return null;
     const sets: string[] = [];
-    const values: (string | null)[] = [];
+    const values: (string | number | null)[] = [];
     if (input.display_name !== undefined) {
       sets.push('display_name = ?');
       values.push(input.display_name);
@@ -102,6 +109,10 @@ export class AgentRepo {
     if (input.reasoning_effort !== undefined) {
       sets.push('reasoning_effort = ?');
       values.push(input.reasoning_effort);
+    }
+    if (input.fast_mode !== undefined) {
+      sets.push('fast_mode = ?');
+      values.push(input.fast_mode === null ? null : input.fast_mode ? 1 : 0);
     }
     if (sets.length === 0) return this.get(id);
     sets.push('updated_at = ?');

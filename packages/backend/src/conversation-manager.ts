@@ -10,6 +10,7 @@ import type {
   AgentRunState,
   AgentRunStatus,
   AgentRunTerminalReason,
+  AttachmentSnapshot,
   ConversationDto,
   FromKind,
   McpServerConfig,
@@ -35,6 +36,7 @@ import {
 } from './repos/conversation-inbox-repo.js';
 import { ConversationRepo } from './repos/conversation-repo.js';
 import { MessageRepo } from './repos/message-repo.js';
+import { extractAttachmentSnapshotsFromRow } from './repos/message-repo.js';
 import { NotificationRepo } from './repos/notification-repo.js';
 import { SettingsRepo, SETTINGS_KEYS } from './repos/settings-repo.js';
 import { WorkspaceRepo } from './repos/workspace-repo.js';
@@ -465,6 +467,7 @@ export class ConversationManager {
       cliSessionId: sessionAgent.cli_session_id,
       model: opts.model ?? agent.model,
       reasoningEffort: agent.reasoning_effort,
+      fastMode: agent.fast_mode,
       mcpConfigPath: spawnPrep.mcpConfigPath,
       systemPromptPath: spawnPrep.systemPromptPath,
       chatBridge,
@@ -1480,7 +1483,8 @@ function formatInboxBatch(
   const body = items
     .map(({ message }) => {
       const sender = describeSender(message, agentNameById);
-      return `[from ${sender}]\n${message.content}`;
+      const suffix = formatAttachmentSuffix(extractAttachmentSnapshotsFromRow(message));
+      return `[from ${sender}]\n${message.content}${suffix}`;
     })
     .join('\n\n---\n\n');
   return `${header}\n\n${body}\n\n${formatDeliveryInstruction(
@@ -1517,7 +1521,8 @@ function formatLiveMessage(
   sendMessageTool: string,
 ): string {
   const sender = describeSender(message, agentNameById);
-  return `New message from ${sender}:\n${message.content}\n\n${formatDeliveryInstruction(
+  const suffix = formatAttachmentSuffix(message.attachments);
+  return `New message from ${sender}:\n${message.content}${suffix}\n\n${formatDeliveryInstruction(
     [message],
     recipientAgentName,
     sendMessageTool,
@@ -1530,6 +1535,25 @@ interface MessageLite {
   from_kind: FromKind;
   from_agent_id: string | null;
   content: string;
+  attachments?: AttachmentSnapshot[] | null;
+}
+
+/** Render attachments as a short, deterministic suffix the agent can
+ *  parse. Keep this format stable: it's what every delivery path (live,
+ *  inbox, gated) appends, and it's the only signal an agent has that
+ *  files are attached to a message. */
+export function formatAttachmentSuffix(
+  attachments: AttachmentSnapshot[] | null | undefined,
+): string {
+  if (!attachments || attachments.length === 0) return '';
+  const lines = attachments.map(
+    a => `  - id=${a.id} filename=${JSON.stringify(a.filename)} ` +
+         `size=${a.size} content_type=${a.content_type}`,
+  );
+  const header = attachments.length === 1
+    ? '[1 attachment — use view_file with the id below to read it]'
+    : `[${attachments.length} attachments — use view_file with each id below to read them]`;
+  return `\n\n${header}\n${lines.join('\n')}`;
 }
 
 /** When multiple gated deliveries pile up between safe boundaries, we

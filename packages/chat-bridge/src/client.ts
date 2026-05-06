@@ -1,5 +1,7 @@
 import {
   internalPaths,
+  type AttachmentDto,
+  type AttachmentLocateDto,
   type ClaimTasksInput,
   type ClaimTasksResult,
   type CreateTasksInput,
@@ -65,6 +67,7 @@ export class BackendClient {
   sendMessage(input: {
     content: string;
     target?: SendMessageTarget;
+    attachment_ids?: string[];
   }): Promise<{ message_id: string }> {
     return this.post(
       internalPaths.agentSendConversationMessage(
@@ -167,6 +170,61 @@ export class BackendClient {
         this.args.agentId,
       ),
       input,
+    );
+  }
+
+  // ── Attachment tools ────────────────────────────────────────────
+  /** Upload a file the agent has on disk. Backend derives channel
+   *  ownership from the calling conversation; agents never specify
+   *  channel_id directly. */
+  async uploadAttachment(input: {
+    filename: string;
+    contentType: string | null;
+    buffer: Buffer;
+  }): Promise<AttachmentDto> {
+    const url =
+      this.args.serverUrl
+      + internalPaths.agentUploadAttachment(
+        this.args.conversationId,
+        this.args.agentId,
+      );
+    const form = new FormData();
+    const blob = new Blob([input.buffer], {
+      type: input.contentType ?? 'application/octet-stream',
+    });
+    form.append('file', blob, input.filename);
+    let res: Response;
+    try {
+      // Bearer auth only — Content-Type is set automatically by FormData.
+      res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.args.authToken}`,
+          'X-Agent-Hub-Caller': 'chat-bridge',
+        },
+        body: form,
+      });
+    } catch (err) {
+      log('error', { url, err }, 'http: upload fetch threw (network unreachable?)');
+      throw err;
+    }
+    if (!res.ok) {
+      const text = await res.text();
+      log('error', { url, status: res.status, body: text }, 'http: upload non-2xx');
+      throw new Error(`POST upload_file failed: ${res.status} ${text}`);
+    }
+    return (await res.json()) as AttachmentDto;
+  }
+
+  /** Locate an attachment by id. Backend enforces the attachment must
+   *  belong to the agent's current channel; cross-channel ids return 404. */
+  locateAttachment(attachmentId: string): Promise<AttachmentLocateDto> {
+    return this.get(
+      internalPaths.agentLocateAttachment(
+        this.args.conversationId,
+        this.args.agentId,
+        attachmentId,
+      ),
     );
   }
 }

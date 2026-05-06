@@ -1,6 +1,6 @@
 # Silverhand — Attachments 设计
 
-> **Status**: Spec（2026-05-04 起草，2026-05-05 按 Workspace / Channel / Thread 语义修订）。未实现；落地前如果与现实偏离，回这里改，不要让代码和文档分叉。
+> **Status**: Phase 1 + Phase 2 已落地（2026-05-06）。Phase 3/4 仍是 spec。如发现实际实现与本文档不符，回这里改，不要让代码和文档分叉。
 >
 > 与 [`core-design.md`](./core-design.md) 的消息流水对齐——本 doc 在 message 旁边新增 attachment 资源，message DTO 增加 `attachments` 引用字段。
 >
@@ -568,40 +568,34 @@ profile asset application
 
 ## 12. 落地分阶段
 
-### Phase 1: local mode v1（最小可用）
+### Phase 1: local mode v1（最小可用）— ✅ 2026-05-06 落地
 
-1. 新增 `attachments` 表 + migration
-2. `messages.attachments` 列 + DTO 字段
-3. local blob storage backend（`~/.silverhand/blobs/`）
-4. `POST /api/channels/:cid/attachments` / `POST /api/threads/:tid/attachments`（multipart）
-5. `GET /api/attachments/:id`（stream）
-6. `MessageItem.tsx` 渲染图片 / 文件附件
-7. `Composer.tsx` 上传 UI
-8. channel/thread message send API 和 `useSendMessage` hook 接受 `attachment_ids`
-9. channel delete 路径显式清理该 channel 的 attachment physical blobs
+1. ✅ 新增 `attachments` 表 + migration
+2. ✅ `messages.attachments` 列 + DTO 字段
+3. ✅ local blob storage backend（`~/.silverhand/blobs/`）
+4. ✅ `POST /api/channels/:cid/attachments` / `POST /api/threads/:tid/attachments`（multipart）
+5. ✅ `GET /api/attachments/:id`（stream）
+6. ✅ `MessageItem.tsx` 渲染图片 / 文件附件 + 点击居中 modal 预览
+7. ✅ `Composer.tsx` 上传 UI（按钮 + 拖拽 + Cmd+V 粘贴 + 缩略图 chip）
+8. ✅ channel/thread message send API 和 `useSendMessage` hook 接受 `attachment_ids`
+9. ✅ workspace delete / agent delete 路径显式清理 attachment physical blobs（`AttachmentService.sweepForChannel`）
 
-到这一步 human 之间能在同一 channel/thread 里互相贴图。agent 还看不见。
+### Phase 2: agent 互通 — ✅ 2026-05-06 落地
 
-### Phase 2: agent 互通
-
-10. chat-bridge 加 `upload_file` / `view_file` 工具
-11. chat-bridge `send_message` 扩展 `attachment_ids` 参数
-12. backend agent send-message 内部路由接 `attachmentIds`
-13. `formatLiveMessage()` / `combineGatedBatch()` / `formatInboxBatch()` / history/read 输出共用 `formatAttachmentSuffix()`
-14. `GET /internal/conversations/:cid/agents/:aid/attachments/:id/locate`（local 模式零拷贝，带 scope 校验）
-15. driver platform-prompt 补附件用法说明
-
-到这一步 agent 能看图、能发图、能在 thread 转发。
+10. ✅ chat-bridge 加 `upload_file` / `view_file` 工具
+11. ✅ chat-bridge `send_message` 扩展 `attachment_ids` 参数
+12. ✅ backend agent send-message 内部路由接 `attachmentIds` + membership 校验
+13. ✅ `formatLiveMessage()` / `formatInboxBatch()` 共用 `formatAttachmentSuffix()`
+14. ✅ `GET /internal/conversations/:cid/agents/:aid/attachments/:id/locate`（local 模式零拷贝，带 scope 校验）
+15. ✅ driver platform-prompt 补附件用法说明
 
 ### Phase 3: 远端后端落地（未来）
 
-16. 实现 s3/oss storage backend dispatch
+16. s3/oss storage backend dispatch
 17. 配置项：默认 storage、s3 bucket / region / 凭证
 18. `GET /api/attachments/:id` remote/multi-user 鉴权中间件（caller 必须是 attachment parent channel 成员）
 19. chat-bridge `view_file` 缓存目录策略（清理、上限）
 20. 旧 local 数据迁移脚本（可选；通常 grandfather 即可）
-
-到这一步多人多机也能用。
 
 ### Phase 4: 优化（按需）
 
@@ -610,3 +604,17 @@ profile asset application
 - 跨 channel 引用策略（如果产品有需求）
 - 配额管理（per-user / per-channel）
 - 病毒扫描（remote 模式）
+
+---
+
+## 13. Phase 1+2 落地后的已知 gap（待排）
+
+落地阶段刻意收口、留给后续的工作（不影响 v1 单机 happy path）：
+
+- **`GET /api/attachments/:id` 缺 channel membership 鉴权**——目前任何登录用户拿到 id 即可读。单机自用语义可接受；多人/远端模式必须补上（属于 Phase 3 第 18 项的前置）。设计讨论在独立频道进行。
+
+> 已在 2026-05-06 后续补上：
+> - `DELETE /api/attachments/:id`（orphan-only：被任何 message snapshot 引用就 409；非自己上传 403；已删 404；blob best-effort sweep）。
+> - Composer unmount / removePending(state='done') 调 `deleteAttachmentBestEffort` + `releaseAttachmentPreview`，把上传成功但未发送的孤儿物理清掉，cache URL 也释放。
+>
+> Avatar / profile asset 的 storage 复用见 §10，独立主题，不算 attachment gap。

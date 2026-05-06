@@ -134,10 +134,7 @@ export class ConversationReadRepo {
     const rows = this.db
       .prepare<[string, string], { scope_id: string; c: number }>(
         `SELECT
-            CASE
-              WHEN c.kind = 'dm_channel' THEN c.id
-              ELSE c.workspace_id
-            END AS scope_id,
+            c.workspace_id AS scope_id,
             COUNT(m.id) AS c
            FROM conversations c
            JOIN messages m
@@ -156,7 +153,7 @@ export class ConversationReadRepo {
               m.from_kind = 'user'
               AND (m.from_user_id = ? OR m.from_user_id IS NULL)
             )
-          GROUP BY scope_id`,
+          GROUP BY c.workspace_id`,
       )
       .all(viewerUserId, viewerUserId);
 

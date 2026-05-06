@@ -1,13 +1,16 @@
 import { z } from 'zod';
 import {
+  AttachmentCreatorKindSchema,
   ConversationAgentStatusSchema,
   ConversationKindSchema,
   ConversationStatusSchema,
+  FastModeSchema,
   FromKindSchema,
   HostKindSchema,
   NotificationKindSchema,
   ReasoningEffortSchema,
   RuntimeKindSchema,
+  StorageKindSchema,
   TaskAssigneeTypeSchema,
   TaskStatusSchema,
   WorkspaceKindSchema,
@@ -30,6 +33,7 @@ export const AgentDtoSchema = z.object({
   runtime: RuntimeKindSchema,
   model: z.string().nullable(),
   reasoning_effort: ReasoningEffortSchema.nullable(),
+  fast_mode: FastModeSchema.nullable(),
   host_id: z.string(),
   description: z.string().nullable(),
   created_at: z.number(),
@@ -46,6 +50,7 @@ export const CreateAgentInputSchema = z.object({
   runtime: RuntimeKindSchema,
   model: z.string().optional(),
   reasoning_effort: ReasoningEffortSchema.optional(),
+  fast_mode: FastModeSchema.optional(),
   host_id: z.string().optional(), // defaults to local
   description: z.string().optional(),
 });
@@ -62,6 +67,7 @@ export const UpdateAgentInputSchema = z
     runtime: RuntimeKindSchema.optional(),
     model: z.string().nullable().optional(),
     reasoning_effort: ReasoningEffortSchema.nullable().optional(),
+    fast_mode: FastModeSchema.nullable().optional(),
   })
   .refine(v => Object.keys(v).length > 0, { message: 'no fields to update' });
 export type UpdateAgentInput = z.infer<typeof UpdateAgentInputSchema>;
@@ -138,6 +144,26 @@ export const AgentDeleteImpactDtoSchema = z.object({
   regular_workspaces: z.array(
     z.object({ id: z.string(), name: z.string() }),
   ),
+  regular_memberships: z.array(
+    z.object({ id: z.string(), name: z.string() }),
+  ),
+  owned_home: z
+    .object({
+      id: z.string(),
+      name: z.string(),
+      description: z.string().nullable(),
+      workspace_kind: WorkspaceKindSchema,
+      workspace_path: z.string(),
+      workspace_host_id: z.string(),
+      owner_agent_id: z.string().nullable(),
+      dm_channel_id: z.string().nullable(),
+      dm_channel_ids: z.array(z.string()),
+      archived_at: z.number().nullable(),
+      created_at: z.number(),
+      updated_at: z.number(),
+    })
+    .nullable(),
+  attachments_count: z.number(),
   running_conversation_agents: z.array(AgentRuntimeConversationSchema),
   pending_inbox_count: z.number(),
   l1_path: z.string(),
@@ -163,6 +189,9 @@ export const WorkspaceDtoSchema = z.object({
   workspace_kind: WorkspaceKindSchema,
   workspace_path: z.string(),
   workspace_host_id: z.string(),
+  owner_agent_id: z.string().nullable(),
+  dm_channel_id: z.string().nullable(),
+  dm_channel_ids: z.array(z.string()),
   archived_at: z.number().nullable(),
   created_at: z.number(),
   updated_at: z.number(),
@@ -257,6 +286,12 @@ export type ConversationAgentDto = z.infer<typeof ConversationAgentDtoSchema>;
 export const ChannelDtoSchema = ChannelConversationDtoSchema;
 export type ChannelDto = ChannelConversationDto;
 
+export const ChannelLikeDtoSchema = z.union([
+  ChannelConversationDtoSchema,
+  DmChannelDtoSchema,
+]);
+export type ChannelLikeDto = z.infer<typeof ChannelLikeDtoSchema>;
+
 /** Body for `PATCH /api/workspaces/:id/archive`. Toggle-shaped instead of
  *  separate archive / unarchive endpoints — the UI flips a flag, the
  *  backend looks at the boolean. */
@@ -326,6 +361,41 @@ export const TaskAssigneeDtoSchema = z.object({
 });
 export type TaskAssigneeDto = z.infer<typeof TaskAssigneeDtoSchema>;
 
+// ── Attachments ──────────────────────────────────────────────────
+//
+// Two shapes:
+//   - AttachmentDto: full row, returned by upload/get-by-id endpoints.
+//   - AttachmentSnapshot: the immutable subset embedded into a message
+//     when the message references the attachment. Lives under
+//     `metadata.attachments` so renderers can render image/file cells
+//     without an extra round-trip.
+//
+// No de-duplication: every upload creates a new row + new blob, so the
+// snapshot/source row never drift.
+
+export const AttachmentDtoSchema = z.object({
+  id: z.string(),
+  channel_id: z.string(),
+  source_conversation_id: z.string().nullable(),
+  filename: z.string(),
+  size: z.number(),
+  content_type: z.string(),
+  storage: StorageKindSchema,
+  created_by_kind: AttachmentCreatorKindSchema,
+  created_by_id: z.string(),
+  created_at: z.number(),
+});
+export type AttachmentDto = z.infer<typeof AttachmentDtoSchema>;
+
+/** Minimal immutable subset embedded into a message's metadata. */
+export const AttachmentSnapshotSchema = z.object({
+  id: z.string(),
+  filename: z.string(),
+  size: z.number(),
+  content_type: z.string(),
+});
+export type AttachmentSnapshot = z.infer<typeof AttachmentSnapshotSchema>;
+
 export const MessageDtoSchema = z.object({
   id: z.string(),
   conversation_id: z.string(),
@@ -334,6 +404,9 @@ export const MessageDtoSchema = z.object({
   from_user_id: z.string().nullable(),
   content: z.string(),
   metadata: z.record(z.unknown()).nullable(),
+  /** Attachment snapshots attached to this message (null when none).
+   *  Mirrored from `metadata.attachments` for typed access. */
+  attachments: z.array(AttachmentSnapshotSchema).nullable(),
   seq: z.number(),
   created_at: z.number(),
   /** Task metadata — all null when this message is not a task. */
@@ -353,8 +426,33 @@ export type ConversationMessagesDto = z.infer<typeof ConversationMessagesDtoSche
 
 export const SendMessageInputSchema = z.object({
   content: z.string().min(1),
+  /** Optional attachment ids previously returned by the upload endpoint.
+   *  Server validates each id belongs to the same channel as the
+   *  destination conversation. */
+  attachment_ids: z.array(z.string().min(1)).max(20).optional(),
 });
 export type SendMessageInput = z.infer<typeof SendMessageInputSchema>;
+
+/** Upload endpoint response — same shape as AttachmentDto today. */
+export const AttachmentUploadResponseSchema = AttachmentDtoSchema;
+export type AttachmentUploadResponse = z.infer<typeof AttachmentUploadResponseSchema>;
+
+/** chat-bridge `view_file` locate response. */
+export const AttachmentLocateDtoSchema = z.union([
+  z.object({
+    storage: z.literal('local'),
+    local_path: z.string(),
+    filename: z.string(),
+    content_type: z.string(),
+  }),
+  z.object({
+    storage: z.enum(['s3', 'oss']),
+    download_url: z.string(),
+    filename: z.string(),
+    content_type: z.string(),
+  }),
+]);
+export type AttachmentLocateDto = z.infer<typeof AttachmentLocateDtoSchema>;
 
 export const MarkConversationReadInputSchema = z.object({
   /** Optional explicit target cursor. Omitted = backend uses MAX(messages.seq). */
@@ -529,7 +627,16 @@ export const CreateTasksInputSchema = z.object({
 });
 export type CreateTasksInput = z.infer<typeof CreateTasksInputSchema>;
 
-export const CreateTasksResultSchema = z.object({
+export const CreateTasksOpErrorSchema = z.enum([
+  'conversation_not_found',
+  'conversation_closed',
+  'not_conversation_member',
+  'agent_not_found',
+  'actor_conversation_mismatch',
+]);
+export type CreateTasksOpError = z.infer<typeof CreateTasksOpErrorSchema>;
+
+export const CreateTasksSuccessSchema = z.object({
   tasks: z.array(
     z.object({
       message_id: z.string(),
@@ -538,6 +645,13 @@ export const CreateTasksResultSchema = z.object({
     }),
   ),
 });
+export const CreateTasksFailureSchema = z.object({
+  error: CreateTasksOpErrorSchema,
+});
+export const CreateTasksResultSchema = z.union([
+  CreateTasksSuccessSchema,
+  CreateTasksFailureSchema,
+]);
 export type CreateTasksResult = z.infer<typeof CreateTasksResultSchema>;
 
 // POST /internal/agent/:aid/tasks/claim — claim_tasks MCP tool
@@ -551,11 +665,33 @@ export const ClaimTasksInputSchema = z
   });
 export type ClaimTasksInput = z.infer<typeof ClaimTasksInputSchema>;
 
+/** Typed code for claim-tool failures. `wrong_conversation`,
+ *  `task_done`, `already_claimed` etc. are stable; the older free-form
+ *  `reason` string is preserved alongside `code` for tool consumers. */
+export const ClaimErrorCodeSchema = z.enum([
+  'task_not_found',
+  'message_not_found',
+  'wrong_conversation',
+  'cannot_promote_system_message',
+  'cannot_promote_anchor',
+  'task_done',
+  'already_claimed',
+  'not_self_assignment',
+  'assignee_not_conversation_member',
+  'conversation_not_found',
+  'not_conversation_member',
+  'agent_not_found',
+  'not_a_task',
+]);
+export type ClaimErrorCode = z.infer<typeof ClaimErrorCodeSchema>;
+
 export const ClaimResultEntrySchema = z.object({
   success: z.boolean(),
   task_number: z.number().optional(),
   message_id: z.string().optional(),
   reason: z.string().optional(),
+  /** Typed failure code; present whenever `success === false`. */
+  code: ClaimErrorCodeSchema.optional(),
   /** If the task belongs to a different channel/thread, its id+title surface
    *  here so the caller can explain to the agent why claim failed. */
   owner_conversation: TaskConversationRefSchema.optional(),
@@ -580,10 +716,27 @@ export const UpdateTaskStatusInputSchema = z.object({
 });
 export type UpdateTaskStatusInput = z.infer<typeof UpdateTaskStatusInputSchema>;
 
+/** Typed code for unclaim / status mutation failures. */
+export const TaskMutationErrorCodeSchema = z.enum([
+  'not_a_task',
+  'task_not_found',
+  'task_done',
+  'wrong_conversation',
+  'not_assignee',
+  'invalid_transition',
+  'already_at_status',
+  'conversation_not_found',
+  'not_conversation_member',
+  'agent_not_found',
+]);
+export type TaskMutationErrorCode = z.infer<typeof TaskMutationErrorCodeSchema>;
+
 // Simple success/failure envelope reused by unclaim / update-status.
 export const TaskMutationResultSchema = z.object({
   success: z.boolean(),
   reason: z.string().optional(),
+  /** Typed failure code; present whenever `success === false`. */
+  code: TaskMutationErrorCodeSchema.optional(),
 });
 export type TaskMutationResult = z.infer<typeof TaskMutationResultSchema>;
 
@@ -630,6 +783,10 @@ export type SendMessageTarget = z.infer<typeof SendMessageTargetSchema>;
 export const AgentSendMessageInputSchema = z.object({
   content: z.string().min(1),
   target: SendMessageTargetSchema.optional(),
+  /** Optional attachment ids previously returned by `upload_file`.
+   *  Server validates each id belongs to the same channel as the
+   *  resolved target conversation. */
+  attachment_ids: z.array(z.string().min(1)).max(20).optional(),
 });
 export type AgentSendMessageInput = z.infer<typeof AgentSendMessageInputSchema>;
 

@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { ArrowDown, X } from 'lucide-react';
+import { ArrowDown, Maximize2, Minimize2, X } from 'lucide-react';
 import type {
   AgentDto,
   AgentRunState,
@@ -84,6 +84,12 @@ interface ChannelViewProps {
    *  frame — used by the parent pane to surface "the message a thread
    *  is anchored to". */
   highlightedMessageId?: string | null;
+  /** Toggle thread fullscreen (parent pane hidden). Only meaningful
+   *  alongside `onCloseChild` (i.e. when this view is the thread pane). */
+  onToggleFullscreen?: () => void;
+  /** Whether the thread pane is currently fullscreen. Drives the icon
+   *  toggle (Maximize2 ↔ Minimize2). */
+  isFullscreen?: boolean;
 }
 
 export function ChannelView(props: ChannelViewProps): JSX.Element {
@@ -110,6 +116,8 @@ function ActiveChannelView({
   onJumpToOriginal,
   onThreadAnchorResolved,
   highlightedMessageId,
+  onToggleFullscreen,
+  isFullscreen,
 }: ChannelViewProps & { conversation: ChannelDescriptor }): JSX.Element {
   const routeKind = conversation.parent_conversation_id ? 'thread' : 'channel';
   const {
@@ -241,6 +249,21 @@ function ActiveChannelView({
         ) : null}
 
         <div className="ml-auto flex shrink-0 items-center">
+          {onToggleFullscreen ? (
+            <button
+              type="button"
+              onClick={onToggleFullscreen}
+              aria-label={isFullscreen ? '退出全屏' : '全屏'}
+              title={isFullscreen ? '退出全屏' : '全屏'}
+              className="flex size-6 shrink-0 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
+            >
+              {isFullscreen ? (
+                <Minimize2 className="size-3.5" />
+              ) : (
+                <Maximize2 className="size-3.5" />
+              )}
+            </button>
+          ) : null}
           {onCloseChild ? (
             <button
               type="button"

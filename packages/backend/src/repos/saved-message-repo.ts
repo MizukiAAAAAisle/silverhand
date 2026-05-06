@@ -72,6 +72,7 @@ function rowToDto(row: JoinedRow): SavedMessageDto {
       metadata: row.m_metadata
         ? (JSON.parse(row.m_metadata) as Record<string, unknown>)
         : null,
+      attachments: extractAttachmentSnapshots(row.m_metadata),
       seq: row.m_seq,
       created_at: row.m_created_at,
       task_number: row.m_task_number,
@@ -83,15 +84,47 @@ function rowToDto(row: JoinedRow): SavedMessageDto {
   };
 }
 
+function extractAttachmentSnapshots(
+  rawMetadata: string | null,
+): SavedMessageDto['message']['attachments'] {
+  if (!rawMetadata) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawMetadata);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+  const list = (parsed as { attachments?: unknown }).attachments;
+  if (!Array.isArray(list) || list.length === 0) return null;
+  const out: NonNullable<SavedMessageDto['message']['attachments']> = [];
+  for (const item of list) {
+    if (
+      item
+      && typeof item === 'object'
+      && typeof (item as { id?: unknown }).id === 'string'
+      && typeof (item as { filename?: unknown }).filename === 'string'
+      && typeof (item as { size?: unknown }).size === 'number'
+      && typeof (item as { content_type?: unknown }).content_type === 'string'
+    ) {
+      const a = item as { id: string; filename: string; size: number; content_type: string };
+      out.push({
+        id: a.id,
+        filename: a.filename,
+        size: a.size,
+        content_type: a.content_type,
+      });
+    }
+  }
+  return out.length > 0 ? out : null;
+}
+
 const SELECT_JOINED = `
   SELECT
     sm.id              AS id,
     sm.message_id      AS message_id,
     sm.conversation_id AS conversation_id,
-    CASE
-      WHEN root.kind = 'dm_channel' THEN root.id
-      ELSE sm.workspace_id
-    END                AS workspace_id,
+    sm.workspace_id    AS workspace_id,
     sm.saved_at        AS saved_at,
     m.id               AS m_id,
     m.conversation_id  AS m_conversation_id,
@@ -109,10 +142,7 @@ const SELECT_JOINED = `
     m.task_assignee_agent_id  AS m_task_assignee_agent_id,
     m.task_assignee_user_id   AS m_task_assignee_user_id,
     ta.display_name           AS m_task_assignee_name,
-    CASE
-      WHEN root.kind = 'dm_channel' THEN root.title
-      ELSE w.name
-    END                AS workspace_name,
+    w.name             AS workspace_name,
     conv.title         AS conversation_title,
     root.id            AS channel_id,
     CASE

@@ -19,7 +19,7 @@ function bootstrapWorkspaceAndAgents() {
   });
   const a = agents.create({ name: 'a', runtime: 'claude' }, localHostId);
   const b = agents.create({ name: 'b', runtime: 'claude' }, localHostId);
-  return { workspace, a, b, workspaces };
+  return { db, localHostId, workspace, a, b, workspaces };
 }
 
 describe('WorkspaceRepo', () => {
@@ -54,5 +54,44 @@ describe('WorkspaceRepo', () => {
     expect(workspaces.isMember(workspace.id, a.id)).toBe(false);
     expect(workspaces.isMember(workspace.id, b.id)).toBe(true);
   });
-});
 
+  it('models agent_home ownership separately from regular workspace membership', () => {
+    const { db, localHostId, workspace, a, workspaces } =
+      bootstrapWorkspaceAndAgents();
+    workspaces.addMember(workspace.id, a.id);
+    const home = workspaces.insertAgentHome({
+      agent: a,
+      workspacePath: join(tmpdir(), 'agents', a.id),
+    });
+
+    expect(home).toMatchObject({
+      name: a.name,
+      workspace_kind: 'agent_home',
+      owner_agent_id: a.id,
+    });
+    expect(workspaces.listForAgent(a.id).map(w => w.id)).toEqual([
+      workspace.id,
+      home.id,
+    ]);
+    expect(() => workspaces.addMember(home.id, a.id)).toThrow(
+      /regular workspaces only/,
+    );
+
+    const sameNameRegular = workspaces.insert({
+      name: a.name,
+      description: null,
+      workspacePath: workspaces.workspacePathFor(a.name),
+      workspaceHostId: localHostId,
+    });
+    expect(sameNameRegular.workspace_kind).toBe('regular');
+    expect(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS c
+             FROM workspaces
+            WHERE name = ?`,
+        )
+        .get(a.name),
+    ).toEqual({ c: 2 });
+  });
+});

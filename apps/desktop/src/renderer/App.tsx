@@ -114,6 +114,7 @@ export function App(): JSX.Element {
   const [highlightedParentMessageId, setHighlightedParentMessageId] = useState<
     string | null
   >(null);
+  const [threadFullscreen, setThreadFullscreen] = useState(false);
 
   // Per-workspace "last viewed channel" memory. Lives in-memory only —
   // resetting on app restart is fine; workspace switches inside one app run
@@ -141,18 +142,10 @@ export function App(): JSX.Element {
   // Per-channel message unread counts for the currently selected workspace.
   // Drives channel sidebar badges; replaces the old notification-based counts.
   const { data: messageUnreadData } = useMessageUnreadCounts(
-    selectedWorkspace?.kind === 'regular' ? selectedWorkspaceId : null,
-    selectedWorkspace?.kind === 'regular' ? 'regular' : null,
+    selectedWorkspaceId,
+    selectedWorkspace?.kind ?? null,
   );
-  const channelUnreadCounts =
-    selectedWorkspace?.kind === 'dm'
-      ? Object.fromEntries(
-          selectedWorkspace.dm_channel_ids.map(id => [
-            id,
-            messageUnreadSummary?.by_workspace?.[id] ?? 0,
-          ]),
-        )
-      : messageUnreadData?.by_conversation;
+  const channelUnreadCounts = messageUnreadData?.by_conversation;
   // Notification-based read marker (mention/agent-failure alerts).
   const markChannelRead = useMarkChannelRead();
   // Message-unread read cursor — advances conversation_reads on navigation.
@@ -180,12 +173,11 @@ export function App(): JSX.Element {
   ): string | null => {
     if (!workspaceId) return selectedWorkspaceId;
     if (workspaces.some(w => w.id === workspaceId)) return workspaceId;
-    const dmWorkspace = workspaces.find(
-      w =>
-        w.kind === 'dm' &&
-        (w.dm_channel_ids.includes(workspaceId) ||
-          (!!channelId && w.dm_channel_ids.includes(channelId))),
-    );
+    const dmWorkspace = workspaces.find(w => {
+      if (w.kind !== 'dm') return false;
+      if (w.dm_channel_ids.includes(workspaceId)) return true;
+      return !!channelId && w.dm_channel_ids.includes(channelId);
+    });
     return dmWorkspace?.id ?? workspaceId;
   };
 
@@ -261,6 +253,12 @@ export function App(): JSX.Element {
   // — the highlight only makes sense alongside an open thread.
   useEffect(() => {
     if (!openThreadId) setHighlightedParentMessageId(null);
+  }, [openThreadId]);
+
+  // Reset fullscreen when switching threads or closing the thread pane:
+  // fullscreen is a per-open-thread interaction state, not a sticky preference.
+  useEffect(() => {
+    setThreadFullscreen(false);
   }, [openThreadId]);
 
   const selectedChannel = channels.find(s => s.id === selectedChannelId) ?? null;
@@ -353,12 +351,7 @@ export function App(): JSX.Element {
     // user clicked the badge to see. Falls back to the
     // remembered/default channel pick when there's no pointer.
     const workspace = workspaces.find(w => w.id === id);
-    const pointer =
-      workspace?.kind === 'dm'
-        ? workspace.dm_channel_ids
-            .map(channelId => unreadCounts?.latest_by_workspace?.[channelId])
-            .find(Boolean)
-        : unreadCounts?.latest_by_workspace?.[id];
+    const pointer = unreadCounts?.latest_by_workspace?.[id];
     if (pointer) {
       handleJumpToMessage({
         channelId: pointer.conversation_id,
@@ -516,6 +509,8 @@ export function App(): JSX.Element {
         );
       }}
       onThreadAnchorResolved={setHighlightedParentMessageId}
+      onToggleFullscreen={() => setThreadFullscreen(v => !v)}
+      isFullscreen={threadFullscreen}
       // No nested Thread: thread channels can't spawn sub-threads
       // (1-layer hard limit, schema-enforced too).
       onThreadCreated={undefined}
@@ -577,10 +572,7 @@ export function App(): JSX.Element {
                 onDeleted={() => nav.toMembers()}
                 onOpenConversation={s => {
                   // Jump back to chat view, focusing the agent's channel/thread.
-                  const workspaceId =
-                    s.workspace_kind === 'system_dm'
-                      ? resolveNavWorkspaceId(s.channel_id, s.channel_id)
-                      : s.workspace_id;
+                  const workspaceId = resolveNavWorkspaceId(s.workspace_id, s.channel_id);
                   if (!workspaceId) return;
                   if (s.thread_id) {
                     nav.toThread(workspaceId, s.channel_id, s.thread_id);
@@ -614,13 +606,7 @@ export function App(): JSX.Element {
                 name: w.name,
                 kind: w.kind === 'dm' ? 'dm' as const : 'regular' as const,
                 dm_agent_id: w.dm_agent_id,
-                unread:
-                  w.kind === 'dm'
-                    ? w.dm_channel_ids.reduce(
-                        (sum, id) => sum + (messageUnreadSummary?.by_workspace?.[id] ?? 0),
-                        0,
-                      )
-                    : messageUnreadSummary?.by_workspace?.[w.id] ?? 0,
+                unread: messageUnreadSummary?.by_workspace?.[w.id] ?? 0,
                 archived: w.archived_at !== null,
               }))}
               selectedWorkspaceId={selectedWorkspaceId}
@@ -679,11 +665,15 @@ export function App(): JSX.Element {
                   active={channelsSidebar.isDragging}
                 />
                 {threadView ? (
-                  <SplitPane
-                    left={parentView}
-                    right={threadView}
-                    storageKey="silverhand.layout.split-ratio"
-                  />
+                  threadFullscreen ? (
+                    threadView
+                  ) : (
+                    <SplitPane
+                      left={parentView}
+                      right={threadView}
+                      storageKey="silverhand.layout.split-ratio"
+                    />
+                  )
                 ) : (
                   parentView
                 )}

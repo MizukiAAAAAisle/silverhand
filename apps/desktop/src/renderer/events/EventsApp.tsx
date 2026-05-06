@@ -63,23 +63,13 @@ export function EventsApp(): JSX.Element {
       return res.workspaces;
     },
   });
-  const dmChannelsQuery = useQuery({
-    queryKey: ['events', 'dm-channels'],
-    queryFn: async () => {
-      const res = await api<{ dm_channels: DmChannelDto[] }>(
-        '/api/workspaces/system/dm-channels',
-      );
-      return res.dm_channels;
-    },
-  });
   const workspaces = workspacesQuery.data ?? [];
-  const dmChannels = dmChannelsQuery.data ?? [];
 
   const channelQueries = useQueries({
     queries: workspaces.map(w => ({
       queryKey: ['events', 'workspaces', w.id, 'channels'] as const,
       queryFn: async () => {
-        const res = await api<{ channels: ChannelConversationDto[] }>(
+        const res = await api<{ channels: ChannelLike[] }>(
           `/api/workspaces/${w.id}/channels`,
         );
         return res.channels;
@@ -132,17 +122,8 @@ export function EventsApp(): JSX.Element {
       if (conversations.length > 0) out.push({ workspace, conversations });
     }
 
-    if (dmChannels.length > 0) {
-      out.push({
-        workspace: { id: '__dm__', name: 'Direct Messages' },
-        conversations: dmChannels
-          .map(channel => optionFromChannel(channel))
-          .sort((a, b) => b.created_at - a.created_at),
-      });
-    }
-
     return out;
-  }, [channelQueries, dmChannels, workspaces]);
+  }, [channelQueries, workspaces]);
 
   const allOptions = useMemo<ConversationOption[]>(
     () => groups.flatMap(g => g.conversations),
@@ -174,12 +155,10 @@ export function EventsApp(): JSX.Element {
 
   const pickerLoading =
     workspacesQuery.isLoading ||
-    dmChannelsQuery.isLoading ||
     channelQueries.some(q => q.isLoading) ||
     activeConversationQuery.isLoading;
   const pickerError =
     workspacesQuery.isError ||
-    dmChannelsQuery.isError ||
     channelQueries.some(q => q.isError);
   const triggerLabel =
     selectedOption

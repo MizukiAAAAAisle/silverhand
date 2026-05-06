@@ -1,5 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { readFile } from 'node:fs/promises';
+import { basename, isAbsolute } from 'node:path';
 import { z } from 'zod';
 import type { BridgeArgs } from './args.js';
 import { BackendClient } from './client.js';
@@ -49,15 +51,28 @@ export async function startBridge(args: BridgeArgs): Promise<void> {
             'Use "parent" only from a Thread. ' +
             'Use {thread_id} to message a direct child Thread you opened.',
         ),
+      attachment_ids: z
+        .array(z.string().min(1))
+        .max(20)
+        .optional()
+        .describe(
+          'Attachment ids returned by `upload_file`. Each must belong to the ' +
+            'current channel (threads inherit their parent channel). ' +
+            'Up to 20 per message; omit when sending a plain text message.',
+        ),
     },
-    async ({ content, target }) => {
+    async ({ content, target, attachment_ids }) => {
       log(
         'info',
-        { contentBytes: content.length, target: target ?? 'self' },
+        {
+          contentBytes: content.length,
+          target: target ?? 'self',
+          attachmentCount: attachment_ids?.length ?? 0,
+        },
         'tool: send_message invoked',
       );
       try {
-        const r = await client.sendMessage({ content, target });
+        const r = await client.sendMessage({ content, target, attachment_ids });
         log('info', { messageId: r.message_id }, 'tool: send_message ok');
         return {
           content: [{ type: 'text', text: JSON.stringify(r) }],
@@ -236,6 +251,10 @@ export async function startBridge(args: BridgeArgs): Promise<void> {
       log('info', { count: input.tasks.length }, 'tool: create_tasks invoked');
       try {
         const r = await client.createTasks(input);
+        if ('error' in r) {
+          log('warn', { error: r.error }, 'tool: create_tasks rejected');
+          return { content: [{ type: 'text', text: JSON.stringify(r) }] };
+        }
         log('info', { created: r.tasks.length }, 'tool: create_tasks ok');
         return { content: [{ type: 'text', text: JSON.stringify(r) }] };
       } catch (err) {
@@ -329,6 +348,102 @@ export async function startBridge(args: BridgeArgs): Promise<void> {
         return { content: [{ type: 'text', text: JSON.stringify(r) }] };
       } catch (err) {
         log('error', { err }, 'tool: update_task_status failed');
+        throw err;
+      }
+    },
+  );
+
+  // ── Attachments ──────────────────────────────────────────────────
+  // Files are scoped to the calling channel/thread; the backend derives
+  // ownership from the current conversation and rejects cross-channel
+  // reads. Keep tool descriptions terse: agents need to know when these
+  // exist, not how the storage layer works.
+
+  server.tool(
+    'upload_file',
+    'Upload a local file you have on disk so it can be attached to a `send_message` ' +
+      'call. Use when you have generated a binary artifact (image, PDF, archive, etc.) ' +
+      'and want chat participants to see it. The returned `id` is single-use input for ' +
+      '`send_message.attachment_ids`; the file is bound to the current channel and ' +
+      'cannot be referenced from other channels.',
+    {
+      path: z
+        .string()
+        .min(1)
+        .describe(
+          'Absolute path to the file on disk. Relative paths are rejected so the agent ' +
+            'is forced to be explicit about which file it is uploading.',
+        ),
+      filename: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          'Optional display filename. Defaults to the basename of `path`. The backend ' +
+            'sanitizes path separators and control characters.',
+        ),
+      content_type: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          'Optional MIME type hint. The backend will sniff magic bytes and fall back to ' +
+            'the file extension when omitted.',
+        ),
+    },
+    async ({ path, filename, content_type }) => {
+      log('info', { path, hasFilename: !!filename, hasType: !!content_type }, 'tool: upload_file invoked');
+      if (!isAbsolute(path)) {
+        throw new Error('upload_file: `path` must be absolute');
+      }
+      let buffer: Buffer;
+      try {
+        buffer = await readFile(path);
+      } catch (err) {
+        log('error', { path, err }, 'tool: upload_file read failed');
+        throw new Error(
+          `upload_file: could not read ${path}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      try {
+        const dto = await client.uploadAttachment({
+          filename: filename ?? basename(path),
+          contentType: content_type ?? null,
+          buffer,
+        });
+        log('info', { id: dto.id, size: dto.size }, 'tool: upload_file ok');
+        return { content: [{ type: 'text', text: JSON.stringify(dto) }] };
+      } catch (err) {
+        log('error', { err }, 'tool: upload_file failed');
+        throw err;
+      }
+    },
+  );
+
+  server.tool(
+    'view_file',
+    'Resolve an attachment id to a local path (or download URL for remote storages) so ' +
+      'you can read its contents with your normal file tools. Useful when another ' +
+      'participant attached a file via `send_message` and you need to inspect it. ' +
+      'Cross-channel ids are rejected.',
+    {
+      attachment_id: z
+        .string()
+        .min(1)
+        .describe('Attachment id from a message snapshot or `upload_file` result.'),
+    },
+    async ({ attachment_id }) => {
+      log('info', { attachment_id }, 'tool: view_file invoked');
+      try {
+        const located = await client.locateAttachment(attachment_id);
+        log(
+          'info',
+          { storage: located.storage, filename: located.filename },
+          'tool: view_file ok',
+        );
+        return { content: [{ type: 'text', text: JSON.stringify(located) }] };
+      } catch (err) {
+        log('error', { err }, 'tool: view_file failed');
         throw err;
       }
     },

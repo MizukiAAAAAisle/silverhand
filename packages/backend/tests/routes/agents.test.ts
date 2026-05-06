@@ -33,12 +33,18 @@ describe('POST /api/agents', () => {
     expect(typeof body.dm_channel_id).toBe('string');
 
     // auto-DM channel exists as a canonical dm_channel conversation.
+    const workspaces = await (await http(t.app).get('/api/workspaces')).json() as any;
+    const home = workspaces.workspaces.find(
+      (w: any) => w.workspace_kind === 'agent_home' && w.owner_agent_id === body.agent.id,
+    );
+    expect(home).toBeDefined();
+    expect(home.dm_channel_id).toBe(body.dm_channel_id);
     const channels = await (
-      await http(t.app).get('/api/workspaces/system/dm-channels')
+      await http(t.app).get(`/api/workspaces/${home.id}/channels`)
     ).json() as any;
-    const dm = channels.dm_channels.find((c: any) => c.id === body.dm_channel_id);
+    const dm = channels.channels.find((c: any) => c.id === body.dm_channel_id);
     expect(dm.kind).toBe('dm_channel');
-    expect(dm.title).toBe('dm-alice');
+    expect(dm.title).toBe('Onboarding');
     expect(dm.workspace_path).toContain(body.agent.id);
 
     // provision should have spawned the onboarding session for the DM
@@ -235,8 +241,8 @@ describe('GET /api/agents/:id/runtime-state', () => {
     const dm = res.conversation_agents.find(
       (s: any) => s.conversation_kind === 'dm_channel',
     );
-    expect(dm.workspace_kind).toBe('system_dm');
-    expect(dm.channel_title).toBe('dm-alice');
+    expect(dm.workspace_kind).toBe('agent_home');
+    expect(dm.channel_title).toBe('Onboarding');
     expect(dm.thread_title).toBeNull();
     expect(dm.status).toBe('idle'); // FakeConversationManager doesn't flip status
   });
@@ -310,9 +316,12 @@ describe('GET /api/agents/:id/delete-impact', () => {
       await http(t.app).get(`/api/agents/${created.agent.id}/delete-impact`)
     ).json() as any;
     expect(res.impact.agent_name).toBe('alice');
-    expect(res.impact.dm_channel.name).toBe('dm-alice');
+    expect(res.impact.dm_channel.name).toBe('Onboarding');
     expect(res.impact.dm_channel.conversation_count).toBe(1);
+    expect(res.impact.owned_home.workspace_kind).toBe('agent_home');
+    expect(res.impact.owned_home.owner_agent_id).toBe(created.agent.id);
     expect(res.impact.regular_workspaces).toEqual([{ id: ws.workspace.id, name: 'engineering' }]);
+    expect(res.impact.regular_memberships).toEqual([{ id: ws.workspace.id, name: 'engineering' }]);
     expect(res.impact.l1_path).toContain(created.agent.id);
     expect(res.impact.l2_paths).toHaveLength(1);
     expect(res.impact.l2_paths[0]).toContain(created.agent.id);
@@ -361,12 +370,8 @@ describe('DELETE /api/agents/:id (full flow)', () => {
     expect(get.status).toBe(404);
 
     // DM channel gone
-    const dmChannels = await (
-      await http(t.app).get('/api/workspaces/system/dm-channels')
-    ).json() as any;
-    expect(
-      dmChannels.dm_channels.find((c: any) => c.id === created.dm_channel_id),
-    ).toBeUndefined();
+    expect((await http(t.app).get(`/api/channels/${created.dm_channel_id}`)).status)
+      .toBe(404);
     // engineering workspace still exists (agent was removed, workspace stays)
     const workspaces = await (await http(t.app).get('/api/workspaces')).json() as any;
     expect(workspaces.workspaces.find((w: any) => w.name === 'engineering')).toBeDefined();

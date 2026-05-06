@@ -153,6 +153,11 @@ describe('workspace channel routes', () => {
         member_agent_ids: [agentId],
       })
     ).json() as any;
+    const workspaceEvents: Array<{ kind: string; payload: any }> = [];
+    const unsubscribe = t.ctx.events.subscribeScope(
+      `workspace:${workspace.workspace.id}`,
+      e => workspaceEvents.push({ kind: e.kind, payload: e.payload }),
+    );
 
     const created = await (
       await http(t.app).post(`/api/workspaces/${workspace.workspace.id}/channels`, {
@@ -160,16 +165,77 @@ describe('workspace channel routes', () => {
         member_agent_ids: [agentId],
       })
     ).json() as any;
+    unsubscribe();
     expect(created.channel).toMatchObject({
       kind: 'channel',
       workspace_id: workspace.workspace.id,
       title: 'planning',
+    });
+    expect(workspaceEvents).toContainEqual({
+      kind: 'workspace_channels_changed',
+      payload: {
+        workspace_id: workspace.workspace.id,
+        channel_id: created.channel.id,
+      },
     });
 
     const list = await (
       await http(t.app).get(`/api/workspaces/${workspace.workspace.id}/channels`)
     ).json() as any;
     expect(list.channels.map((c: any) => c.id)).toContain(created.channel.id);
+  });
+
+  it('publishes workspace_channels_changed for human and internal channel creation', async () => {
+    t = buildTestApp();
+    const aliceId = await makeAgent(t, 'alice');
+    const bobId = await makeAgent(t, 'bob');
+    const workspace = await (
+      await http(t.app).post('/api/workspaces', {
+        name: 'events',
+        member_agent_ids: [aliceId, bobId],
+      })
+    ).json() as any;
+
+    const workspaceEvents: Array<{ kind: string; payload: any }> = [];
+    const unsubscribe = t.ctx.events.subscribeScope(
+      `workspace:${workspace.workspace.id}`,
+      e => workspaceEvents.push({ kind: e.kind, payload: e.payload }),
+    );
+
+    const human = await (
+      await http(t.app).post(`/api/workspaces/${workspace.workspace.id}/channels`, {
+        title: 'human-created',
+        member_agent_ids: [aliceId],
+      })
+    ).json() as any;
+    const internal = await (
+      await http(t.app, { authorization: `Bearer ${t.authToken}` }).post(
+        `/internal/conversations/${workspace.onboarding_channel_id}/agents/${aliceId}/create-channel`,
+        {
+          title: 'agent-created',
+          context_summary: 'split out',
+          initial_prompt: 'continue here',
+        },
+      )
+    ).json() as any;
+    unsubscribe();
+
+    expect(workspaceEvents).toEqual([
+      {
+        kind: 'workspace_channels_changed',
+        payload: {
+          workspace_id: workspace.workspace.id,
+          channel_id: human.channel.id,
+        },
+      },
+      {
+        kind: 'workspace_channels_changed',
+        payload: {
+          workspace_id: workspace.workspace.id,
+          channel_id: internal.channel_id,
+        },
+      },
+    ]);
   });
 
   it('rejects adding a non-workspace member to a channel', async () => {

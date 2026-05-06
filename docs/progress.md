@@ -4,6 +4,56 @@
 
 ---
 
+## 2026-05-06 — Attachment 单条 DELETE + Composer orphan cleanup
+
+补完 attachment Phase 2 收尾两项（GET 鉴权另开频道讨论，暂未做）：
+
+- **Backend**：
+  - `AttachmentRepo.isReferencedByMessage(id)` 走 SQLite JSON1 (`json_each` over `metadata.attachments`) 判断是否被任何 persisted message snapshot 引用。
+  - `AttachmentService.deleteOrphan(id, viewer)` 三段校验：row 存在 / viewer 是 user-uploader / 未被引用，通过则删 DB row + best-effort sweep blob。
+  - `DELETE /api/attachments/:id` 路由：404 / 403 / 409 / 204 四态。
+- **Renderer**：
+  - `api.ts` 加 `deleteAttachmentBestEffort(id)` fire-and-forget helper。
+  - Composer 用 `uploadedIds` ref 跟踪上传成功但未发送的 attachment id：onSuccess 加入 / submit 清空 / onError 还原 / removePending(state='done') 即时 DELETE + `releaseAttachmentPreview` / 组件 unmount 时全部 best-effort DELETE + release。`releaseAttachmentPreview` 终于有了真实调用方。
+- **测试**：4 个新增路由测试覆盖 204 happy path、409 referenced、404 unknown、403 agent-uploaded by user。`pnpm test` 19 passed；typecheck 全 4 个 workspace 通过。
+
+GET 鉴权设计讨论挪到 #attachment 鉴权讨论 频道，避免阻塞本批改动。
+
+---
+
+## 2026-05-06 — Attachment 系统 Phase 1 + Phase 2 落地
+
+按 `docs/attachments-design.md` 把 attachment 全链路落到 single-machine local 模式。task #77 关闭。
+
+**Backend**:
+- v12 migration: `attachments` 表（`channel_id` 鉴权根 + `source_conversation_id` 溯源）+ `messages.attachments` JSON 列。
+- `LocalBlobStorage` + `BlobFileStorage` interface 抽象，blob 落 `~/.silverhand/blobs/`，DB 只存 `storage_key`。
+- `AttachmentService`：上传（multipart + 文件头 sniff + 扩展名兜底 + 10MB 上限）、scope 校验（thread → parent channel）、`sweepForChannel` 物理清理。
+- public 路由 `POST /api/channels/:cid/attachments` / `POST /api/threads/:tid/attachments` / `GET /api/attachments/:id`。
+- 内部路由 `POST /internal/conversations/:cid/agents/:aid/attachments` + `/locate` + 在 `agentSendConversationMessage` 接 `attachmentIds`，全部带 membership 校验。
+- workspace DELETE / agent DELETE 在 cascade 前先 `sweepForChannel`，避免 row 没了 blob 还在。Agent DELETE 修了一个排序 bug：`listDmChannelsForAgent` 必须在 `removeAgent` 之前抓取，否则 join 表已被清空返回空列表。
+
+**chat-bridge**:
+- 新增 MCP 工具 `upload_file(file_path)` / `view_file(id) → { path }`。
+- `send_message` schema 加 `attachment_ids?: string[]`（cap 20）。
+- `view_file` 走 locate 拿本地路径零拷贝（local 模式），未来远端模式 fallback 到 HTTP 下载到 `~/.silverhand/attachments-cache/`。
+
+**Renderer**:
+- `MessageItem` 渲染附件：image 用居中 modal lightbox（`max-w: min(920px, 88vw)` × `max-h: 82vh`），non-image 用 `window.open` 下载。
+- `Composer` 加按钮 + 拖拽 + Cmd+V 粘贴，image chip 显示缩略图（点击进 lightbox），非 image 显示文件名。
+- `attachment-blob-cache` 提供渲染端 LRU（cap=128）：Composer 上传成功时 `setAttachmentBlobUrl(id, previewUrl)` 把 ownership 移交给 cache；MessageItem 同步命中 cache 避免 optimistic→真实消息切换时闪屏。`<img onError>` 处理 LRU 撤销后的 stale URL，回退到 `loadAttachmentBlobUrl` 重新拉。
+- 完整的 URL 生命周期：addFiles 创建 → onSuccess 移交 cache → onError/removePending(non-done)/Composer unmount cleanup 撤销。
+
+**Driver/格式化**:
+- `formatAttachmentSuffix` 在 `formatLiveMessage` / `formatInboxBatch` 共用，给 agent 的文本里追加 `[N attachments — use view_file with the id below to read]`，不污染 stream-json。
+- `platform-prompt.ts` 加 `## Attachments` 段说明工具用法。
+
+**测试**: 30+ 新增测试覆盖 repo / service / 公共路由 / 内部路由 / 删除 sweep / DM 删除排序回归 / `formatAttachmentSuffix` 单测。`pnpm typecheck` 4 个 workspace 全过；`pnpm test` 全绿。
+
+**已知 gap**（详见 `attachments-design.md` §13）：`GET /api/attachments/:id` 还没有 channel membership 鉴权（多人/远端时必须补）；composer 上传后未发送的 orphan 没有 TTL 清理；缺单条 attachment DELETE 接口。这些都属于 Phase 3 范围，不影响 v1 单机 happy path。
+
+---
+
 ## 2026-05-06 — 架构文档同步 hard cutover 术语
 
 将 `docs/core-design.md`、`docs/app-layout.md`、`CLAUDE.md` 与 #79 hard cutover 代码改动对齐：

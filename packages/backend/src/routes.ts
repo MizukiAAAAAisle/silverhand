@@ -30,8 +30,7 @@ import {
   UpdateTaskStatusInputSchema,
   type AgentDto,
   type AgentDeleteImpactDto,
-  type ConversationDto,
-  type SendMessageTarget,
+  type CreateAgentInput,
 } from '@silverhand/shared';
 import type { BackendContext } from './context.js';
 import { AgentRepo } from './repos/agent-repo.js';
@@ -47,19 +46,30 @@ import { WorkspaceRepo } from './repos/workspace-repo.js';
 import { ConversationRepo, type RepoError } from './repos/conversation-repo.js';
 import { validateWorkspacePath } from './provision.js';
 import { ensureAgentL1Dir, initWorkspaceDir, seedAgentL2 } from './workspace-files.js';
-import { ccMentionsFromUserMessage } from './mention-cc.js';
 import { detectRuntimes } from './runtimes.js';
 import { buildAgentWorkspaceDto } from './agent-workspace.js';
+import { AttachmentRejection } from './services/attachment-service.js';
 import {
-  claimTasksByAgent,
-  createTasksByAgent,
-  humanClaim,
-  humanUnclaim,
-  humanUpdateStatus,
-  listTasks,
-  unclaimTaskByAgent,
-  updateTaskStatusByAgent,
-} from './tasks.js';
+  ActorError as ChannelActorError,
+  MemberError,
+  SeedError,
+  WorkspaceUnsuitableError,
+} from './services/channel-service.js';
+import {
+  ActorError as MessageActorError,
+  AttachmentError as MessageAttachmentError,
+  ConversationError,
+  PolicyError,
+  TargetError,
+} from './services/conversation-message-service.js';
+import {
+  ActorError as ThreadActorError,
+  MembershipError as ThreadMembershipError,
+  MessageError as ThreadMessageError,
+  ParentError as ThreadParentError,
+  SeedAgentError,
+  ThreadError,
+} from './services/thread-service.js';
 
 function isRepoError(err: unknown): err is RepoError {
   return err instanceof Error && typeof (err as RepoError).code === 'string';
@@ -72,7 +82,105 @@ const repoErrorStatusMap: Record<string, 400 | 404 | 409 | 429> = {
   max_depth_exceeded: 400,
   concurrent_limit: 429,
   spawn_cooldown: 429,
+  not_found: 404,
+  thread: 400,
 };
+
+function channelServiceErrorResponse(c: Context, err: unknown): Response | null {
+  if (err instanceof WorkspaceUnsuitableError) {
+    return c.json(
+      { error: err.message, code: err.code },
+      err.code === 'workspace_not_found' ? 404 : 400,
+    );
+  }
+  if (err instanceof MemberError || err instanceof SeedError) {
+    return c.json({ error: err.message, code: err.code }, 400);
+  }
+  if (err instanceof ChannelActorError) {
+    const status =
+      err.code === 'source_conversation_not_found' || err.code === 'agent_not_found'
+        ? 404
+        : 403;
+    return c.json({ error: err.message, code: err.code }, status);
+  }
+  if (isRepoError(err)) {
+    return c.json(
+      { error: err.message, code: err.code },
+      repoErrorStatusMap[err.code] ?? 400,
+    );
+  }
+  return null;
+}
+
+function conversationMessageServiceErrorResponse(
+  c: Context,
+  err: unknown,
+): Response | null {
+  if (err instanceof ConversationError) {
+    const status = err.code === 'conversation_not_found' ? 404 : 409;
+    return c.json({ error: err.message, code: err.code }, status);
+  }
+  if (err instanceof MessageActorError) {
+    const status = err.code === 'agent_not_found' ? 404 : 403;
+    return c.json({ error: err.message, code: err.code }, status);
+  }
+  if (err instanceof TargetError) {
+    const status = err.code === 'thread_not_found' ? 404 : err.code === 'target_closed' ? 409 : 400;
+    return c.json({ error: err.message, code: err.code }, status);
+  }
+  if (err instanceof PolicyError) {
+    return c.json({ error: err.message, code: err.code }, 400);
+  }
+  if (err instanceof MessageAttachmentError) {
+    return c.json(
+      {
+        error: err.message,
+        code: err.code,
+        ...(err.attachmentId ? { attachment_id: err.attachmentId } : {}),
+      },
+      400,
+    );
+  }
+  return null;
+}
+
+function threadServiceErrorResponse(c: Context, err: unknown): Response | null {
+  if (err instanceof ThreadMessageError) {
+    return c.json({ error: err.message, code: err.code }, 404);
+  }
+  if (err instanceof ThreadParentError) {
+    const status = err.code === 'parent_not_found' ? 404 : 409;
+    return c.json({ error: err.message, code: err.code }, status);
+  }
+  if (err instanceof ThreadMembershipError) {
+    return c.json(
+      {
+        error: err.message,
+        code: err.code,
+        ...(err.agentId ? { agent_id: err.agentId } : {}),
+      },
+      400,
+    );
+  }
+  if (err instanceof ThreadActorError) {
+    const status = err.code === 'agent_not_found' ? 404 : 403;
+    return c.json({ error: err.message, code: err.code }, status);
+  }
+  if (err instanceof SeedAgentError) {
+    return c.json({ error: err.message, code: err.code }, 404);
+  }
+  if (err instanceof ThreadError) {
+    const status = err.code === 'thread_not_found' ? 404 : 409;
+    return c.json({ error: err.message, code: err.code }, status);
+  }
+  if (isRepoError(err)) {
+    return c.json(
+      { error: err.message, code: err.code },
+      repoErrorStatusMap[err.code] ?? 400,
+    );
+  }
+  return null;
+}
 
 const VIEWER_USER_ID_HEADER = 'x-silverhand-user-id';
 
@@ -87,10 +195,6 @@ function requireViewerUserId(c: Context, ctx: BackendContext): string | Response
     return c.json({ error: 'viewer user id required' }, 400);
   }
   return viewerUserId;
-}
-
-function userLabel(userId: string | null | undefined): string {
-  return userId ?? 'user';
 }
 
 function onboardingBody(
@@ -170,7 +274,7 @@ function nextApiRequestId(): string {
 }
 
 function isChannelSwitchDiagnosticPath(path: string): boolean {
-  if (path === apiPaths.messageUnreadSummary || path === apiPaths.workspaceDmChannels) {
+  if (path === apiPaths.messageUnreadSummary) {
     return true;
   }
   if (/^\/api\/workspaces\/[^/]+\/channels$/.test(path)) return true;
@@ -354,7 +458,7 @@ export function createApiRouter(ctx: BackendContext): Hono {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'workspace id required' }, 400);
     const workspace = workspaces.get(id);
-    if (!workspace || workspace.workspace_kind !== 'regular') {
+    if (!workspace) {
       return c.json({ error: 'workspace not found' }, 404);
     }
     return c.json({ workspace });
@@ -446,6 +550,22 @@ export function createApiRouter(ctx: BackendContext): Hono {
         void ctx.conversationManager.stop(conversation.id, ca.agent_id, 'hard');
       }
     }
+    // Sweep physical attachment blobs for every top-level channel before
+    // dropping the workspace. attachments.channel_id only points at
+    // channel/dm_channel rows (threads upload via parent), so iterate
+    // those — DB rows go via CASCADE, blobs need an explicit delete.
+    for (const conversation of workspaceConversations) {
+      if (conversation.kind === 'channel' || conversation.kind === 'dm_channel') {
+        await ctx.attachmentService
+          .sweepForChannel(conversation.id)
+          .catch(err =>
+            ctx.logger.warn(
+              { workspaceId: workspace.id, conversationId: conversation.id, err },
+              'delete workspace: attachment sweep failed (continuing)',
+            ),
+          );
+      }
+    }
     workspaces.delete(workspace.id);
     return c.body(null, 204);
   });
@@ -454,16 +574,25 @@ export function createApiRouter(ctx: BackendContext): Hono {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'workspace id required' }, 400);
     const workspace = workspaces.get(id);
-    if (!workspace || workspace.workspace_kind !== 'regular') {
+    if (!workspace) {
       return c.json({ error: 'workspace not found' }, 404);
     }
-    const channels = timedRouteSpan(
-      ctx,
-      'workspace.channels.list',
-      { workspaceId: workspace.id },
-      () => conversations.listChannelsForWorkspace(workspace.id),
-      result => ({ channelCount: result.length }),
-    );
+    const channels =
+      workspace.workspace_kind === 'regular'
+        ? timedRouteSpan(
+            ctx,
+            'workspace.channels.list',
+            { workspaceId: workspace.id },
+            () => conversations.listChannelsForWorkspace(workspace.id),
+            result => ({ channelCount: result.length }),
+          )
+        : timedRouteSpan(
+            ctx,
+            'workspace.dm_channel.list',
+            { workspaceId: workspace.id },
+            () => conversations.listDmChannelsForWorkspace(workspace.id),
+            result => ({ channelCount: result.length }),
+          );
     const threads = timedRouteSpan(
       ctx,
       'workspace.threads.list',
@@ -480,32 +609,59 @@ export function createApiRouter(ctx: BackendContext): Hono {
   app.post(apiPaths.workspaceChannels(':id'), async c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'workspace id required' }, 400);
-    const workspace = workspaces.get(id);
-    if (!workspace || workspace.workspace_kind !== 'regular') {
-      return c.json({ error: 'workspace not found' }, 404);
-    }
     const body = await c.req.json().catch(() => ({}));
     const parsed = CreateConversationChannelInputSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
-    for (const aid of parsed.data.member_agent_ids) {
-      if (!workspaces.isMember(workspace.id, aid)) {
+    const workspace = workspaces.get(id);
+    if (!workspace) {
+      return c.json({ error: 'workspace not found' }, 404);
+    }
+    if (workspace.workspace_kind === 'agent_home') {
+      if (parsed.data.member_agent_ids.length > 0) {
         return c.json(
-          { error: `agent ${aid} is not a member of this workspace` },
+          { error: 'agent_home channels always use the home owner as member' },
           400,
         );
       }
+      if (!workspace.owner_agent_id) {
+        return c.json({ error: 'agent_home workspace missing owner' }, 500);
+      }
+      const owner = agents.get(workspace.owner_agent_id);
+      if (!owner) return c.json({ error: 'agent_home owner not found' }, 404);
+      const channel = ctx.db.transaction(() => {
+        const dm = conversations.insertDmChannel({
+          workspaceId: workspace.id,
+          workspacePath: workspace.workspace_path,
+          title: parsed.data.title,
+          agentId: owner.id,
+        });
+        conversations.addAgent(dm.id, owner.id);
+        return dm;
+      })();
+      ctx.events.publishToScope(`workspace:${workspace.id}`, 'workspace_channels_changed', {
+        workspace_id: workspace.id,
+        channel_id: channel.id,
+      });
+      return c.json({ channel }, 201);
     }
-    const channel = conversations.insertChannel({
-      workspaceId: workspace.id,
-      workspacePath: workspace.workspace_path,
-      title: parsed.data.title,
-    });
-    for (const aid of parsed.data.member_agent_ids) {
-      conversations.addAgent(channel.id, aid);
+    try {
+      const result = await ctx.channelService.createChannel({
+        workspaceId: id,
+        title: parsed.data.title,
+        memberAgentIds: parsed.data.member_agent_ids,
+        actor: {
+          kind: 'user',
+          userId: resolveViewerUserId(c, ctx) ?? 'local',
+        },
+      });
+      return c.json({ channel: result.channel }, 201);
+    } catch (err) {
+      const mapped = channelServiceErrorResponse(c, err);
+      if (mapped) return mapped;
+      throw err;
     }
-    return c.json({ channel }, 201);
   });
 
   app.get(apiPaths.workspaceMembers(':id'), c => {
@@ -513,6 +669,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!id) return c.json({ error: 'workspace id required' }, 400);
     const workspace = workspaces.get(id);
     if (!workspace) return c.json({ error: 'workspace not found' }, 404);
+    if (workspace.workspace_kind === 'agent_home') {
+      return c.json({ members: [] });
+    }
     return c.json({ members: workspaces.listMembers(workspace.id) });
   });
 
@@ -548,7 +707,7 @@ export function createApiRouter(ctx: BackendContext): Hono {
       return c.json({ error: 'workspace id and agent id required' }, 400);
     }
     const workspace = workspaces.get(id);
-    if (!workspace) return c.body(null, 204);
+    if (!workspace || workspace.workspace_kind !== 'regular') return c.body(null, 204);
     for (const conversation of conversations.list()) {
       if (conversation.workspace_id !== workspace.id) continue;
       await ctx.conversationManager
@@ -565,22 +724,11 @@ export function createApiRouter(ctx: BackendContext): Hono {
     return c.body(null, 204);
   });
 
-  app.get(apiPaths.workspaceDmChannels, c => {
-    const dmChannels = timedRouteSpan(
-      ctx,
-      'workspace.dm_channels.list',
-      {},
-      () => conversations.listDmChannels(),
-      result => ({ channelCount: result.length }),
-    );
-    return c.json({ dm_channels: dmChannels });
-  });
-
   app.get('/api/workspaces/:id/message-unread', c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'workspace id required' }, 400);
     const workspace = workspaces.get(id);
-    if (!workspace || workspace.workspace_kind !== 'regular') {
+    if (!workspace) {
       return c.json({ error: 'workspace not found' }, 404);
     }
     const viewerUserId = requireViewerUserId(c, ctx);
@@ -727,29 +875,30 @@ export function createApiRouter(ctx: BackendContext): Hono {
     return c.json({ agents: threadAgents });
   });
 
-  app.post('/api/channels/:id/pin', c => {
+  app.post('/api/channels/:id/pin', async c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'channel id required' }, 400);
-    let channel;
     try {
-      channel = conversations.pin(id);
-    } catch (err: unknown) {
-      const code = (err as { code?: string }).code;
-      if (code === 'thread') {
-        return c.json({ error: 'threads cannot be pinned' }, 400);
-      }
+      const result = await ctx.channelService.setPinned({ channelId: id, pinned: true });
+      return c.json({ channel: result.channel });
+    } catch (err) {
+      const mapped = channelServiceErrorResponse(c, err);
+      if (mapped) return mapped;
       throw err;
     }
-    if (!channel) return c.json({ error: 'channel not found' }, 404);
-    return c.json({ channel });
   });
 
-  app.delete('/api/channels/:id/pin', c => {
+  app.delete('/api/channels/:id/pin', async c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'channel id required' }, 400);
-    const channel = conversations.unpin(id);
-    if (!channel) return c.json({ error: 'channel not found' }, 404);
-    return c.json({ channel });
+    try {
+      const result = await ctx.channelService.setPinned({ channelId: id, pinned: false });
+      return c.json({ channel: result.channel });
+    } catch (err) {
+      const mapped = channelServiceErrorResponse(c, err);
+      if (mapped) return mapped;
+      throw err;
+    }
   });
 
   app.get(apiPaths.channelAgentRunStates(':id'), c => {
@@ -787,7 +936,24 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!id) return c.json({ error: 'channel id required' }, 400);
     const channel = conversations.getChannelLike(id);
     if (!channel) return c.json({ error: 'channel not found' }, 404);
-    return postUserMessage(channel.id, c);
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = SendMessageInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    try {
+      const result = await ctx.conversationMessageService.sendMessage({
+        conversationId: channel.id,
+        actor: { kind: 'user', userId: resolveViewerUserId(c, ctx) },
+        content: parsed.data.content,
+        attachmentIds: parsed.data.attachment_ids ?? [],
+      });
+      return c.json({ message: result.message }, 201);
+    } catch (err) {
+      const mapped = conversationMessageServiceErrorResponse(c, err);
+      if (mapped) return mapped;
+      throw err;
+    }
   });
 
   app.post(apiPaths.threadMessages(':id'), async c => {
@@ -795,7 +961,24 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!id) return c.json({ error: 'thread id required' }, 400);
     const thread = conversations.getThread(id);
     if (!thread) return c.json({ error: 'thread not found' }, 404);
-    return postUserMessage(thread.id, c);
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = SendMessageInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    try {
+      const result = await ctx.conversationMessageService.sendMessage({
+        conversationId: thread.id,
+        actor: { kind: 'user', userId: resolveViewerUserId(c, ctx) },
+        content: parsed.data.content,
+        attachmentIds: parsed.data.attachment_ids ?? [],
+      });
+      return c.json({ message: result.message }, 201);
+    } catch (err) {
+      const mapped = conversationMessageServiceErrorResponse(c, err);
+      if (mapped) return mapped;
+      throw err;
+    }
   });
 
   app.post(apiPaths.channelMarkRead(':id'), async c => {
@@ -831,6 +1014,63 @@ export function createApiRouter(ctx: BackendContext): Hono {
 
   app.get(apiPaths.saved, c => c.json({ saved: saved.list() }));
 
+  // ── Attachments ──────────────────────────────────────────────────
+  // Upload via channel/thread context so the server resolves the access
+  // boundary; clients never specify channel_id directly. Download is
+  // by id — auth is bearer (renderer) or v1-permissive (TODO when DM
+  // membership is enforceable per blob).
+
+  app.post(apiPaths.channelAttachments(':id'), async c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'channel id required' }, 400);
+    const channel = conversations.getChannelLike(id);
+    if (!channel) return c.json({ error: 'channel not found' }, 404);
+    const viewerUserId = requireViewerUserId(c, ctx);
+    if (typeof viewerUserId !== 'string') return viewerUserId;
+    return uploadAttachment(ctx, c, channel.id, 'user', viewerUserId);
+  });
+
+  app.post(apiPaths.threadAttachments(':id'), async c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'thread id required' }, 400);
+    const thread = conversations.getThread(id);
+    if (!thread) return c.json({ error: 'thread not found' }, 404);
+    const viewerUserId = requireViewerUserId(c, ctx);
+    if (typeof viewerUserId !== 'string') return viewerUserId;
+    return uploadAttachment(ctx, c, thread.id, 'user', viewerUserId);
+  });
+
+  app.get(apiPaths.attachment(':id'), async c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'attachment id required' }, 400);
+    const response = await ctx.attachmentService.serve(id);
+    if (!response) return c.json({ error: 'attachment not found' }, 404);
+    return response;
+  });
+
+  app.delete(apiPaths.attachment(':id'), async c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'attachment id required' }, 400);
+    const viewerUserId = requireViewerUserId(c, ctx);
+    if (typeof viewerUserId !== 'string') return viewerUserId;
+    const result = await ctx.attachmentService.deleteOrphan(id, {
+      kind: 'user',
+      userId: viewerUserId,
+    });
+    if (result.ok) return c.body(null, 204);
+    if (result.error === 'not_found') {
+      return c.json({ error: 'attachment not found' }, 404);
+    }
+    if (result.error === 'forbidden') {
+      return c.json({ error: 'cannot delete attachment owned by another uploader' }, 403);
+    }
+    // 'in_use' — at least one persisted message still references this id.
+    return c.json(
+      { error: 'attachment is referenced by a message and cannot be deleted' },
+      409,
+    );
+  });
+
   app.post(apiPaths.messageSave(':id'), c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'message id required' }, 400);
@@ -862,147 +1102,20 @@ export function createApiRouter(ctx: BackendContext): Hono {
   app.post(apiPaths.messageThread(':id'), async c => {
     const messageId = c.req.param('id');
     if (!messageId) return c.json({ error: 'message id required' }, 400);
-    const original = messages.getById(messageId);
-    if (!original) return c.json({ error: 'message not found' }, 404);
-
-    const parentConversationId = original.conversation_id;
-    const parent = conversations.getChannelLike(parentConversationId);
-    if (!parent) return c.json({ error: 'parent channel not found' }, 404);
-    if (parent.closed_at !== null) {
-      return c.json({ error: 'parent channel is closed' }, 409);
-    }
-
-    const existing = conversations.findOpenThreadChild(parent.id, original.id);
-    if (existing) {
-      return c.json({
-        thread_id: existing.id,
-        thread: existing,
-        reused: true,
-      });
-    }
-
-    const parentAgentIds = conversations
-      .listAgents(parent.id)
-      .map(ca => ca.agent_id);
-    const fallbackWorkspaceAgentIds =
-      parentAgentIds.length === 0
-        ? workspaces.listMemberAgents(parent.workspace_id)
-        : [];
-    const memberAgentIds = Array.from(
-      new Set([
-        original.from_kind === 'agent' ? original.from_agent_id : null,
-        ...parentAgentIds,
-        ...fallbackWorkspaceAgentIds,
-      ].filter((id): id is string => !!id)),
-    );
-    if (memberAgentIds.length === 0) {
-      return c.json({ error: 'channel has no members to start a thread with' }, 400);
-    }
-
-    const seedAgentId =
-      original.from_kind === 'agent' && original.from_agent_id
-        ? original.from_agent_id
-        : memberAgentIds[0]!;
-    const seedAgent = agents.get(seedAgentId);
-    if (!seedAgent) {
-      return c.json({ error: 'seed agent not found' }, 404);
-    }
-
-    let quotedSenderName: string | null = null;
-    let quotedSenderLabel: string;
-    if (original.from_kind === 'user') {
-      quotedSenderLabel = userLabel(original.from_user_id);
-    } else if (original.from_agent_id) {
-      const a = agents.get(original.from_agent_id);
-      quotedSenderName = a?.name ?? null;
-      quotedSenderLabel = a ? `@${a.name}` : '@agent';
-    } else {
-      quotedSenderLabel = '@agent';
-    }
-
-    const flat = original.content.replace(/\s+/g, ' ').trim();
-    const title =
-      'Thread: ' + (flat.length > 50 ? flat.slice(0, 50) + '…' : flat);
-
-    let thread;
     try {
-      thread = conversations.insertThread({
-        channelId: parent.id,
-        title,
-        spawnedByAgentId: null,
-        spawnCtx: {
-          limits: ctx.serverConfig.child_sessions,
-          lastSpawnAtByAgent: ctx.lastSpawnAtByAgent,
-        },
+      const result = await ctx.threadService.createThreadFromMessage({
+        messageId,
+        viewer: { userId: resolveViewerUserId(c, ctx) },
       });
+      return c.json(
+        { thread_id: result.thread.id, thread: result.thread, reused: result.reused },
+        result.reused ? 200 : 201,
+      );
     } catch (err) {
-      if (isRepoError(err)) {
-        return c.json(
-          { error: err.message, code: err.code },
-          repoErrorStatusMap[err.code] ?? 400,
-        );
-      }
+      const mapped = threadServiceErrorResponse(c, err);
+      if (mapped) return mapped;
       throw err;
     }
-
-    for (const memberAgentId of memberAgentIds) {
-      conversations.addAgent(thread.id, memberAgentId);
-    }
-
-    const workspace = workspaces.get(parent.workspace_id);
-    const quoteText = [
-      `Quoted from #${workspace?.name ?? parent.title} · ${quotedSenderLabel}:`,
-      ``,
-      ...original.content.split('\n').map(line => `> ${line}`),
-    ].join('\n');
-    messages.insertForConversation({
-      conversationId: thread.id,
-      fromKind: 'system',
-      content: quoteText,
-      metadata: {
-        subtype: 'thread_anchor',
-        quoted_message_id: original.id,
-        quoted_conversation_id: parent.id,
-        quoted_channel_name: workspace?.name ?? parent.title,
-        quoted_content: original.content,
-        quoted_from_kind: original.from_kind,
-        quoted_from_agent_id: original.from_agent_id,
-        quoted_from_user_id: original.from_user_id,
-        quoted_agent_name: quotedSenderName,
-        quoted_created_at: original.created_at,
-      },
-    });
-
-    const onboarding = [
-      `You (@${seedAgent.name}) just joined a thread in #${workspace?.name ?? parent.title}.`,
-      `The user wants to dig deeper into the quoted message above.`,
-      ``,
-      `Read the quote, send one short greeting acknowledging the topic, then wait for the user.`,
-      `If you need parent context, ask the parent channel via \`target='parent'\`. When you think the thread has reached a conclusion, post a visible summary in this thread and ask the user whether to close it. Only call \`close_thread\` after the user explicitly confirms.`,
-    ].join('\n');
-    const onboardingMsg = messages.insertForConversation({
-      conversationId: thread.id,
-      fromKind: 'system',
-      content: onboarding,
-      metadata: { subtype: 'onboarding' },
-    });
-    await ctx.conversationManager.deliverMessage(thread.id, seedAgent.id, onboardingMsg.id);
-    void ctx.conversationManager.start(thread.id, seedAgent.id).catch(err => {
-      ctx.logger.warn(
-        { conversationId: thread.id, agentId: seedAgent.id, err },
-        'api: auto-start on user-created thread failed',
-      );
-    });
-
-    ctx.events.publish(parent.id, {
-      kind: 'thread_updated',
-      payload: {
-        parent_conversation_id: parent.id,
-        thread_id: thread.id,
-      },
-    });
-
-    return c.json({ thread_id: thread.id, thread, reused: false }, 201);
   });
 
   app.post('/api/channels/:id/agents/:aid/start', async c => {
@@ -1040,94 +1153,6 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!thread) return c.json({ error: 'thread not found' }, 404);
     return stopConversationAgent(thread.id, aid, c);
   });
-
-  async function postUserMessage(conversationId: string, c: Context): Promise<Response> {
-    const conversation = conversations.get(conversationId);
-    if (!conversation) return c.json({ error: 'conversation not found' }, 404);
-    if (conversation.closed_at !== null) {
-      return c.json({ error: 'conversation is closed' }, 409);
-    }
-    const body = await c.req.json().catch(() => ({}));
-    const parsed = SendMessageInputSchema.safeParse(body);
-    if (!parsed.success) {
-      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
-    }
-
-    const msg = messages.insertForConversation({
-      conversationId: conversation.id,
-      fromKind: 'user',
-      fromUserId: resolveViewerUserId(c, ctx),
-      content: parsed.data.content,
-    });
-
-    const recipients = conversations.listAgents(conversation.id);
-    ctx.logger.info(
-      {
-        conversationId: conversation.id,
-        messageId: msg.id,
-        contentBytes: parsed.data.content.length,
-        recipientCount: recipients.length,
-        recipients: recipients.map(r => r.agent_id),
-      },
-      'api: user message accepted, distributing',
-    );
-
-    for (const ca of recipients) {
-      void ctx.conversationManager.deliverMessage(conversation.id, ca.agent_id, msg.id);
-    }
-
-    ctx.events.publish(conversation.id, {
-      kind: 'message',
-      payload: { message: msg },
-    });
-    // v1 has a single human viewer, so this event is just an invalidation
-    // pointer. Multi-user support should fan this out to all eligible viewers
-    // except the sender once human membership tables exist.
-    publishUnreadUpdated(ctx, conversation.id);
-
-    if (conversation.parent_conversation_id) {
-      ctx.events.publish(conversation.parent_conversation_id, {
-        kind: 'thread_updated',
-        payload: {
-          parent_conversation_id: conversation.parent_conversation_id,
-          thread_id: conversation.id,
-        },
-      });
-    }
-
-    const sourceWorkspace = workspaces.get(conversation.workspace_id);
-    if (sourceWorkspace) {
-      void ccMentionsFromUserMessage({
-        message: msg,
-        sourceConversation: conversation,
-        sourceWorkspace,
-        agents,
-        conversations,
-        messages,
-        notifications,
-        conversationManager: ctx.conversationManager,
-        logger: ctx.logger,
-        events: ctx.events,
-      });
-    }
-
-    const result = c.json({ message: msg }, 201);
-
-    void Promise.all(
-      recipients
-        .filter(r => r.status !== 'active' && r.status !== 'starting')
-        .map(r =>
-          ctx.conversationManager.start(conversation.id, r.agent_id).catch(err => {
-            ctx.logger.warn(
-              { conversationId: conversation.id, agentId: r.agent_id, err },
-              'api: auto-start on message send failed',
-            );
-          }),
-        ),
-    );
-
-    return result;
-  }
 
   async function markConversationRead(
     conversationId: string,
@@ -1204,42 +1229,32 @@ export function createApiRouter(ctx: BackendContext): Hono {
     return c.json({ ok: true });
   }
 
-  async function provisionAgentDmChannel(agent: AgentDto) {
-    const agentL1Dir = join(ctx.silverhandDir, 'agents', agent.id);
-    await ensureAgentL1Dir(agentL1Dir);
-    const systemWorkspace = workspaces.ensureSystemDmWorkspace({
-      workspacePath: agentL1Dir,
-      workspaceHostId: localHost.id,
-    });
-    const existing = conversations.findDmChannelForAgent(agent.id);
-    if (existing) return existing;
-
-    const dm = conversations.insertDmChannel({
-      workspaceId: systemWorkspace.id,
-      workspacePath: agentL1Dir,
-      title: `dm-${agent.name}`,
-      agentId: agent.id,
-    });
-    conversations.addAgent(dm.id, agent.id);
-    const onboardingMsg = messages.insertForConversation({
-      conversationId: dm.id,
-      fromKind: 'system',
-      content: [
-        `You (@${agent.name}) are now in your personal DM with the user.`,
-        `Send one short greeting — say hi by name and ask what role the user would like you to play. Then wait for their reply.`,
-      ].join('\n'),
-      metadata: { subtype: 'onboarding' },
-    });
-    await ctx.conversationManager.deliverMessage(dm.id, agent.id, onboardingMsg.id);
-    ctx.conversationManager
-      .start(dm.id, agent.id)
-      .catch(err =>
-        ctx.logger.error(
-          { conversationId: dm.id, agentId: agent.id, err },
-          'dm onboarding spawn failed',
-        ),
-      );
-    return dm;
+  function createAgentWithHome(input: CreateAgentInput) {
+    return ctx.db.transaction(() => {
+      const agent = agents.create(input, localHost.id);
+      const agentL1Dir = join(ctx.silverhandDir, 'agents', agent.id);
+      const home = workspaces.insertAgentHome({
+        agent,
+        workspacePath: agentL1Dir,
+      });
+      const dm = conversations.insertDmChannel({
+        workspaceId: home.id,
+        workspacePath: agentL1Dir,
+        title: 'Onboarding',
+        agentId: agent.id,
+      });
+      conversations.addAgent(dm.id, agent.id);
+      const onboardingMsg = messages.insertForConversation({
+        conversationId: dm.id,
+        fromKind: 'system',
+        content: [
+          `You (@${agent.name}) are now in your personal DM with the user.`,
+          `Send one short greeting — say hi by name and ask what role the user would like you to play. Then wait for their reply.`,
+        ].join('\n'),
+        metadata: { subtype: 'onboarding' },
+      });
+      return { agent, home, dm, onboardingMsg, agentL1Dir };
+    })();
   }
 
   // ── Agents ───────────────────────────────────────────────────────
@@ -1254,9 +1269,17 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (agents.getByName(parsed.data.name)) {
       return c.json({ error: 'agent name already exists' }, 409);
     }
-    const agent = agents.create(parsed.data, localHost.id);
-    // Auto-create the agent's DM channel + onboarding conversation.
-    const dm = await provisionAgentDmChannel(agent);
+    const { agent, dm, onboardingMsg, agentL1Dir } = createAgentWithHome(parsed.data);
+    await ensureAgentL1Dir(agentL1Dir);
+    await ctx.conversationManager.deliverMessage(dm.id, agent.id, onboardingMsg.id);
+    ctx.conversationManager
+      .start(dm.id, agent.id)
+      .catch(err =>
+        ctx.logger.error(
+          { conversationId: dm.id, agentId: agent.id, err },
+          'dm onboarding spawn failed',
+        ),
+      );
     return c.json({ agent, dm_channel_id: dm.id }, 201);
   });
 
@@ -1268,8 +1291,8 @@ export function createApiRouter(ctx: BackendContext): Hono {
 
   // PATCH — partial update. `name` and `host_id` are intentionally not
   // patchable here: `name` is the immutable handle (renaming would
-  // ripple through dm-<name>, every @mention in history, every L2
-  // file path), and host swap is out of v1 scope. Runtime change is
+  // ripple through the agent_home workspace, every @mention in history,
+  // every L2 file path), and host swap is out of v1 scope. Runtime change is
   // refused while any conversation_agent for this agent is starting/active
   // — otherwise the next event from the in-flight CLI would be parsed
   // by the wrong driver.
@@ -1374,7 +1397,7 @@ export function createApiRouter(ctx: BackendContext): Hono {
     }
 
     // 2. Remove from every regular workspace and its conversations.
-    for (const ws of impact.regular_workspaces) {
+    for (const ws of impact.regular_memberships) {
       const workspace = workspaces.get(ws.id);
       if (!workspace) continue;
       for (const conversation of conversations.list()) {
@@ -1385,13 +1408,24 @@ export function createApiRouter(ctx: BackendContext): Hono {
       workspaces.removeMember(workspace.id, id);
     }
 
-    // 3. Drop every DM conversation for the agent.
-    for (const dm of conversations.listDmChannelsForAgent(id)) {
-      conversations.delete(dm.id);
+    // 3. Sweep DM blobs before deleting the agent. DB rows cascade through
+    //    agent -> agent_home -> conversations, but physical files need an
+    //    explicit pass. Thread uploads are channel-scoped to the dm channel.
+    const dmChannels = impact.owned_home
+      ? conversations.listDmChannelsForWorkspace(impact.owned_home.id)
+      : [];
+    for (const dm of dmChannels) {
+      await ctx.attachmentService.sweepForChannel(dm.id).catch(err =>
+        ctx.logger.warn(
+          { agentId: id, conversationId: dm.id, err },
+          'delete agent: DM attachment sweep failed (continuing)',
+        ),
+      );
     }
 
-    // 4. Drop the agent (CASCADEs remaining conversation_agents/inbox rows;
-    //    SET NULL on messages.from_agent_id).
+    // 4. Drop the agent. owner_agent_id ON DELETE CASCADE removes its
+    //    agent_home subtree; regular conversation history keeps deleted
+    //    sender rows via SET NULL on messages.from_agent_id.
     agents.delete(id);
 
     // 5. Wipe L1 — the agent's global memory/notes/system_prompt.
@@ -1413,7 +1447,7 @@ export function createApiRouter(ctx: BackendContext): Hono {
         agentId: id,
         agentName: agent.name,
         dmChannelId: impact.dm_channel?.id ?? null,
-        regularWorkspaces: impact.regular_workspaces.length,
+        regularWorkspaces: impact.regular_memberships.length,
         stoppedConversations: impact.running_conversation_agents.length,
       },
       'agent deleted',
@@ -1429,13 +1463,23 @@ export function createApiRouter(ctx: BackendContext): Hono {
   function computeDeleteImpact(agentId: string): AgentDeleteImpactDto {
     const agent = agents.get(agentId);
     if (!agent) throw new Error('agent not found'); // guarded by callers
-    const regulars = workspaces.listForAgent(agentId);
-    const dmConversations = conversations.listDmChannelsForAgent(agentId);
-    const dm = dmConversations[0] ?? null;
+    const ownedHome = workspaces.getAgentHomeByOwner(agentId);
+    const regulars = workspaces
+      .listForAgent(agentId)
+      .filter(w => w.workspace_kind === 'regular');
+    const dmChannels = ownedHome
+      ? conversations.listDmChannelsForWorkspace(ownedHome.id)
+      : conversations.listDmChannelsForAgent(agentId);
+    const dm = dmChannels[0] ?? null;
 
     let dmChannel: AgentDeleteImpactDto['dm_channel'] = null;
+    let attachmentsCount = 0;
     if (dm) {
-      const ids = dmConversations.map(c => c.id);
+      const rootIds = dmChannels.map(c => c.id);
+      const threadIds = rootIds.flatMap(channelId =>
+        conversations.listThreadsForChannel(channelId).map(t => t.id),
+      );
+      const ids = [...rootIds, ...threadIds];
       const placeholders = ids.map(() => '?').join(',');
       const messageCount =
         ids.length === 0
@@ -1447,10 +1491,18 @@ export function createApiRouter(ctx: BackendContext): Hono {
 	                  WHERE conversation_id IN (${placeholders})`,
 	              )
               .get(...ids)?.c ?? 0;
+      attachmentsCount =
+        ctx.db
+          .prepare<string[], { c: number }>(
+            `SELECT COUNT(*) AS c
+               FROM attachments
+              WHERE channel_id IN (${rootIds.map(() => '?').join(',')})`,
+          )
+          .get(...rootIds)?.c ?? 0;
       dmChannel = {
         id: dm.id,
         name: dm.title,
-        conversation_count: dmConversations.length,
+        conversation_count: ids.length,
         message_count: messageCount,
       };
     }
@@ -1470,6 +1522,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
       agent_display_name: agent.display_name,
       dm_channel: dmChannel,
       regular_workspaces: regulars.map(c => ({ id: c.id, name: c.name })),
+      regular_memberships: regulars.map(c => ({ id: c.id, name: c.name })),
+      owned_home: ownedHome,
+      attachments_count: attachmentsCount,
       running_conversation_agents: running,
       pending_inbox_count: conversationInboxes.countPendingForAgent(agentId),
       l1_path: l1Path,
@@ -1580,8 +1635,6 @@ export function createApiRouter(ctx: BackendContext): Hono {
   });
 
   // ── Tasks (human-facing list + overrides) ────────────────────────
-  const taskDeps = { ctx, agents, conversations, messages };
-
   app.get(apiPaths.tasks, c => {
     const parsed = ListTasksQuerySchema.safeParse({
       workspace_id: c.req.query('workspace_id') || undefined,
@@ -1591,7 +1644,14 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!parsed.success) {
       return c.json({ error: 'invalid query', issues: parsed.error.issues }, 400);
     }
-    return c.json({ tasks: listTasks(taskDeps, parsed.data) });
+    return c.json({
+      tasks: ctx.taskService.list({
+        actor: { kind: 'user', userId: ctx.serverConfig.user_id ?? null },
+        workspaceId: parsed.data.workspace_id,
+        conversationId: parsed.data.conversation_id,
+        status: parsed.data.status,
+      }),
+    });
   });
 
   app.post('/api/tasks/:messageId/claim', async c => {
@@ -1600,16 +1660,18 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
-    const result = await humanClaim(taskDeps, {
-      messageId: c.req.param('messageId'),
-      agentId: parsed.data.agent_id,
+    const result = await ctx.taskService.claimTask({
+      actor: { kind: 'user', userId: ctx.serverConfig.user_id ?? null },
+      by: { messageId: c.req.param('messageId') },
+      assignee: parsed.data.agent_id ? { agentId: parsed.data.agent_id } : undefined,
     });
     return c.json(result, result.success ? 200 : 409);
   });
 
   app.post('/api/tasks/:messageId/unclaim', async c => {
-    const result = await humanUnclaim(taskDeps, {
-      messageId: c.req.param('messageId'),
+    const result = await ctx.taskService.unclaimTask({
+      actor: { kind: 'user', userId: ctx.serverConfig.user_id ?? null },
+      by: { messageId: c.req.param('messageId') },
     });
     return c.json(result, result.success ? 200 : 409);
   });
@@ -1620,8 +1682,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
-    const result = await humanUpdateStatus(taskDeps, {
-      messageId: c.req.param('messageId'),
+    const result = await ctx.taskService.updateStatus({
+      actor: { kind: 'user', userId: ctx.serverConfig.user_id ?? null },
+      by: { messageId: c.req.param('messageId') },
       status: parsed.data.status,
     });
     return c.json(result, result.success ? 200 : 409);
@@ -1688,10 +1751,6 @@ export function createInternalRouter(ctx: BackendContext): Hono {
     if (!cid || !aid) {
       return c.json({ error: 'conversation id and agent id required' }, 400);
     }
-    const conversation = conversations.get(cid);
-    if (!conversation) return c.json({ error: 'conversation not found' }, 404);
-    const agent = agents.get(aid);
-    if (!agent) return c.json({ error: 'agent not found' }, 404);
     const body = await c.req.json().catch(() => ({}));
     const parsed = AgentSendMessageInputSchema.safeParse(body);
     if (!parsed.success) {
@@ -1701,69 +1760,20 @@ export function createInternalRouter(ctx: BackendContext): Hono {
       );
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
-
-    const target = parsed.data.target ?? 'self';
-    const targetConversation = resolveConversationTarget(conversation, target, conversations);
-    if (typeof targetConversation === 'string') {
-      ctx.logger.warn(
-        { conversationId: cid, agentId: aid, target, reason: targetConversation },
-        'internal: agent send-message target unreachable',
-      );
-      return c.json({ error: targetConversation, code: 'target_unreachable' }, 400);
-    }
-    if (targetConversation.closed_at !== null) {
-      ctx.logger.warn(
-        { conversationId: cid, agentId: aid, targetConversationId: targetConversation.id },
-        'internal: agent send-message into closed conversation',
-      );
-      return c.json({ error: 'target conversation is closed' }, 409);
-    }
-
-    const msg = messages.insertForConversation({
-      conversationId: targetConversation.id,
-      fromKind: 'agent',
-      fromAgentId: aid,
-      content: parsed.data.content,
-    });
-
-    ctx.logger.info(
-      {
+    try {
+      const result = await ctx.conversationMessageService.sendMessage({
         conversationId: cid,
-        agentId: aid,
-        targetConversationId: targetConversation.id,
-        messageId: msg.id,
-        contentBytes: parsed.data.content.length,
-        target,
-      },
-      'internal: agent send-message inserted, distributing',
-    );
-
-    await distributeConversationMessage(
-      ctx,
-      conversations,
-      targetConversation.id,
-      aid,
-      msg.id,
-    );
-
-    ctx.events.publish(targetConversation.id, {
-      kind: 'message',
-      payload: { message: msg },
-    });
-    publishUnreadUpdated(ctx, targetConversation.id);
-    ctx.conversationManager.resolveRun(cid, aid, 'replied');
-
-    if (targetConversation.parent_conversation_id) {
-      ctx.events.publish(targetConversation.parent_conversation_id, {
-        kind: 'thread_updated',
-        payload: {
-          parent_conversation_id: targetConversation.parent_conversation_id,
-          thread_id: targetConversation.id,
-        },
+        actor: { kind: 'agent', agentId: aid },
+        content: parsed.data.content,
+        attachmentIds: parsed.data.attachment_ids ?? [],
+        target: parsed.data.target,
       });
+      return c.json({ message_id: result.message.id });
+    } catch (err) {
+      const mapped = conversationMessageServiceErrorResponse(c, err);
+      if (mapped) return mapped;
+      throw err;
     }
-
-    return c.json({ message_id: msg.id });
   });
 
   app.post(internalPaths.agentCreateThread(':cid', ':aid'), async c => {
@@ -1772,88 +1782,26 @@ export function createInternalRouter(ctx: BackendContext): Hono {
     if (!cid || !aid) {
       return c.json({ error: 'conversation id and agent id required' }, 400);
     }
-    const parent = conversations.getChannelLike(cid);
-    if (!parent) return c.json({ error: 'parent channel not found' }, 404);
-    if (!agents.get(aid)) return c.json({ error: 'agent not found' }, 404);
     const body = await c.req.json().catch(() => ({}));
     const parsed = AgentSpawnChildInputSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
-
-    const parentMembers = new Set(
-      conversations.listAgents(parent.id).map(member => member.agent_id),
-    );
-    if (!parentMembers.has(aid)) {
-      return c.json({ error: 'agent is not a member of the parent channel' }, 400);
-    }
-    const requestedMembers =
-      parsed.data.members && parsed.data.members.length > 0
-        ? parsed.data.members
-        : [...parentMembers];
-    for (const memberId of requestedMembers) {
-      if (!parentMembers.has(memberId)) {
-        return c.json(
-          { error: `agent ${memberId} is not a member of the parent channel` },
-          400,
-        );
-      }
-    }
-    const threadMemberIds = Array.from(new Set([...requestedMembers, aid]));
-
-    let thread;
     try {
-      thread = conversations.insertThread({
-        channelId: parent.id,
+      const result = await ctx.threadService.createThreadFromAgent({
+        parentConversationId: cid,
+        spawnerAgentId: aid,
         title: parsed.data.title,
-        spawnedByAgentId: aid,
-        spawnCtx: {
-          limits: ctx.serverConfig.child_sessions,
-          lastSpawnAtByAgent: ctx.lastSpawnAtByAgent,
-        },
+        contextSummary: parsed.data.context_summary,
+        initialPrompt: parsed.data.initial_prompt,
+        requestedMembers: parsed.data.members,
       });
+      return c.json({ thread_id: result.thread.id });
     } catch (err) {
-      if (isRepoError(err)) {
-        return c.json(
-          { error: err.message, code: err.code },
-          repoErrorStatusMap[err.code] ?? 400,
-        );
-      }
+      const mapped = threadServiceErrorResponse(c, err);
+      if (mapped) return mapped;
       throw err;
     }
-
-    for (const memberId of threadMemberIds) {
-      conversations.addAgent(thread.id, memberId);
-    }
-
-    const contextMsg = messages.insertForConversation({
-      conversationId: thread.id,
-      fromKind: 'system',
-      content:
-        `Inherited context from parent channel '${parent.title}': ${parsed.data.context_summary}`,
-      metadata: { subtype: 'child_context' },
-    });
-    const prompt = messages.insertForConversation({
-      conversationId: thread.id,
-      fromKind: 'agent',
-      fromAgentId: aid,
-      content: parsed.data.initial_prompt,
-    });
-    await ctx.conversationManager.deliverMessage(thread.id, aid, contextMsg.id);
-    await distributeConversationMessage(ctx, conversations, thread.id, aid, prompt.id);
-    void startConversationAgents(ctx, conversations, thread.id, {
-      reason: 'internal: auto-start on agent-created thread failed',
-    });
-
-    ctx.events.publish(parent.id, {
-      kind: 'thread_updated',
-      payload: {
-        parent_conversation_id: parent.id,
-        thread_id: thread.id,
-      },
-    });
-
-    return c.json({ thread_id: thread.id });
   });
 
   app.post(internalPaths.agentCreateChannel(':cid', ':aid'), async c => {
@@ -1862,51 +1810,37 @@ export function createInternalRouter(ctx: BackendContext): Hono {
     if (!cid || !aid) {
       return c.json({ error: 'conversation id and agent id required' }, 400);
     }
-    const current = conversations.get(cid);
-    if (!current) return c.json({ error: 'conversation not found' }, 404);
-    if (!agents.get(aid)) return c.json({ error: 'agent not found' }, 404);
     const body = await c.req.json().catch(() => ({}));
     const parsed = AgentCreateChannelInputSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
 
-    const channel = conversations.insertChannel({
-      workspaceId: current.workspace_id,
-      workspacePath: current.workspace_path,
-      title: parsed.data.title,
-      spawnedByAgentId: aid,
-    });
+    const current = conversations.get(cid);
+    if (!current) return c.json({ error: 'conversation not found' }, 404);
+    const memberAgentIds = conversations
+      .listAgents(current.id)
+      .map(member => member.agent_id);
 
-    for (const member of conversations.listAgents(current.id)) {
-      conversations.addAgent(channel.id, member.agent_id);
+    try {
+      const result = await ctx.channelService.createChannel({
+        workspaceId: current.workspace_id,
+        title: parsed.data.title,
+        memberAgentIds,
+        actor: { kind: 'agent', agentId: aid, conversationId: cid },
+        seed: {
+          systemMessageBody:
+            `Channel created from '${current.title}'. Reason: ${parsed.data.context_summary}`,
+          initialPrompt: parsed.data.initial_prompt,
+          autoStartMembers: 'all',
+        },
+      });
+      return c.json({ channel_id: result.channel.id });
+    } catch (err) {
+      const mapped = channelServiceErrorResponse(c, err);
+      if (mapped) return mapped;
+      throw err;
     }
-
-    const contextMsg = messages.insertForConversation({
-      conversationId: channel.id,
-      fromKind: 'system',
-      content:
-        `Channel created from '${current.title}'. Reason: ${parsed.data.context_summary}`,
-      metadata: {
-        subtype: 'channel_context',
-        source_conversation_id: current.id,
-        created_by_agent_id: aid,
-      },
-    });
-    const prompt = messages.insertForConversation({
-      conversationId: channel.id,
-      fromKind: 'agent',
-      fromAgentId: aid,
-      content: parsed.data.initial_prompt,
-    });
-
-    await ctx.conversationManager.deliverMessage(channel.id, aid, contextMsg.id);
-    await distributeConversationMessage(ctx, conversations, channel.id, aid, prompt.id);
-    void startConversationAgents(ctx, conversations, channel.id, {
-      reason: 'internal: auto-start on agent-created channel failed',
-    });
-
-    return c.json({ channel_id: channel.id });
   });
 
   app.post(internalPaths.agentCloseThread(':cid', ':aid'), async c => {
@@ -1915,61 +1849,24 @@ export function createInternalRouter(ctx: BackendContext): Hono {
     if (!cid || !aid) {
       return c.json({ error: 'conversation id and agent id required' }, 400);
     }
-    const thread = conversations.getThread(cid);
-    if (!thread) return c.json({ error: 'thread not found' }, 404);
-    if (!agents.get(aid)) return c.json({ error: 'agent not found' }, 404);
-    if (thread.closed_at !== null) {
-      return c.json({ error: 'already closed' }, 409);
-    }
-    if (conversations.countActiveChildren(thread.id) > 0) {
-      return c.json(
-        { error: 'close all child threads first', code: 'has_active_children' },
-        409,
-      );
-    }
     const body = await c.req.json().catch(() => ({}));
     const parsed = AgentCloseThreadInputSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
-
-    const closed = conversations.close(thread.id, parsed.data.summary);
-    ctx.conversationManager.resolveConversationRuns(thread.id, 'conversation_closed');
-    if (!parsed.data.posted_to_parent && thread.parent_conversation_id) {
-      const parent = conversations.get(thread.parent_conversation_id);
-      if (parent && parent.closed_at === null) {
-        const agent = agents.get(aid);
-        const summaryMsg = messages.insertForConversation({
-          conversationId: parent.id,
-          fromKind: 'system',
-          content:
-            `Thread '${thread.title}' closed by @${agent?.name ?? 'agent'}. ` +
-            `Summary: ${parsed.data.summary}`,
-          metadata: { subtype: 'thread_summary' },
-        });
-        await distributeConversationMessage(ctx, conversations, parent.id, null, summaryMsg.id);
-        ctx.events.publish(parent.id, {
-          kind: 'message',
-          payload: { message: summaryMsg },
-        });
-      }
-    }
-
-    if (thread.parent_conversation_id) {
-      ctx.events.publish(thread.parent_conversation_id, {
-        kind: 'thread_updated',
-        payload: {
-          parent_conversation_id: thread.parent_conversation_id,
-          thread_id: thread.id,
-        },
+    try {
+      const result = await ctx.threadService.closeThread({
+        threadId: cid,
+        actor: { kind: 'agent', agentId: aid },
+        summary: parsed.data.summary,
+        postedToParent: parsed.data.posted_to_parent ?? false,
       });
+      return c.json({ thread: result.thread });
+    } catch (err) {
+      const mapped = threadServiceErrorResponse(c, err);
+      if (mapped) return mapped;
+      throw err;
     }
-
-    for (const ca of conversations.listAgents(thread.id)) {
-      void ctx.conversationManager.stop(thread.id, ca.agent_id, 'hard');
-    }
-
-    return c.json({ thread: closed });
   });
 
   app.get(internalPaths.agentListConversationTasks(':cid', ':aid'), c => {
@@ -1982,14 +1879,20 @@ export function createInternalRouter(ctx: BackendContext): Hono {
     if (!conversation) return c.json({ error: 'conversation not found' }, 404);
     if (!agents.get(aid)) return c.json({ error: 'agent not found' }, 404);
     const parsed = ListTasksQuerySchema.safeParse({
-      workspace_id: c.req.query('workspace_id') || conversation.workspace_id,
+      workspace_id: c.req.query('workspace_id') || undefined,
       conversation_id: c.req.query('conversation_id') || undefined,
       status: c.req.query('status') || undefined,
     });
     if (!parsed.success) {
       return c.json({ error: 'invalid query', issues: parsed.error.issues }, 400);
     }
-    return c.json({ tasks: listTasks(taskDeps, parsed.data) });
+    return c.json({
+      tasks: ctx.taskService.list({
+        actor: { kind: 'agent', agentId: aid, conversationId: cid },
+        conversationId: parsed.data.conversation_id,
+        status: parsed.data.status,
+      }),
+    });
   });
 
   app.post(internalPaths.agentCreateConversationTasks(':cid', ':aid'), async c => {
@@ -2003,9 +1906,9 @@ export function createInternalRouter(ctx: BackendContext): Hono {
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
-    const result = await createTasksByAgent(taskDeps, {
+    const result = await ctx.taskService.createTasks({
       conversationId: cid,
-      agentId: aid,
+      actor: { kind: 'agent', agentId: aid, conversationId: cid },
       tasks: parsed.data.tasks,
     });
     if ('error' in result) {
@@ -2025,16 +1928,15 @@ export function createInternalRouter(ctx: BackendContext): Hono {
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
-    const result = await claimTasksByAgent(taskDeps, {
-      conversationId: cid,
-      agentId: aid,
-      task_numbers: parsed.data.task_numbers,
-      message_ids: parsed.data.message_ids,
-    });
-    if ('error' in result) {
-      return c.json({ error: result.error }, 400);
+    const actor = { kind: 'agent' as const, agentId: aid, conversationId: cid };
+    const results = [];
+    for (const taskNumber of parsed.data.task_numbers ?? []) {
+      results.push(await ctx.taskService.claimTask({ actor, by: { taskNumber } }));
     }
-    return c.json(result);
+    for (const messageId of parsed.data.message_ids ?? []) {
+      results.push(await ctx.taskService.claimTask({ actor, by: { messageId } }));
+    }
+    return c.json({ results });
   });
 
   app.post(internalPaths.agentUnclaimConversationTask(':cid', ':aid'), async c => {
@@ -2048,14 +1950,10 @@ export function createInternalRouter(ctx: BackendContext): Hono {
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
-    const result = await unclaimTaskByAgent(taskDeps, {
-      conversationId: cid,
-      agentId: aid,
-      taskNumber: parsed.data.task_number,
+    const result = await ctx.taskService.unclaimTask({
+      actor: { kind: 'agent', agentId: aid, conversationId: cid },
+      by: { taskNumber: parsed.data.task_number },
     });
-    if ('error' in result) {
-      return c.json({ error: result.error }, 400);
-    }
     return c.json(result);
   });
 
@@ -2070,77 +1968,105 @@ export function createInternalRouter(ctx: BackendContext): Hono {
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
-    const result = await updateTaskStatusByAgent(taskDeps, {
-      conversationId: cid,
-      agentId: aid,
-      taskNumber: parsed.data.task_number,
+    const result = await ctx.taskService.updateStatus({
+      actor: { kind: 'agent', agentId: aid, conversationId: cid },
+      by: { taskNumber: parsed.data.task_number },
       status: parsed.data.status,
     });
-    if ('error' in result) {
-      return c.json({ error: result.error }, 400);
-    }
     return c.json(result);
   });
+
+  // ── Agent-initiated attachments (chat-bridge → backend) ────────────
+  // Agents never specify channel_id; the backend derives it from the
+  // calling conversation (cid) so the access boundary is fixed by the
+  // agent's runtime context. locateForAgent additionally enforces that
+  // the requested attachment belongs to the same channel.
+
+  app.post(internalPaths.agentUploadAttachment(':cid', ':aid'), async c => {
+    const cid = c.req.param('cid');
+    const aid = c.req.param('aid');
+    if (!cid || !aid) {
+      return c.json({ error: 'conversation id and agent id required' }, 400);
+    }
+    const conversation = conversations.get(cid);
+    if (!conversation) return c.json({ error: 'conversation not found' }, 404);
+    if (!agents.get(aid)) return c.json({ error: 'agent not found' }, 404);
+    if (!conversations.getAgent(cid, aid)) {
+      return c.json({ error: 'agent is not a member of this conversation' }, 403);
+    }
+    return uploadAttachment(ctx, c, conversation.id, 'agent', aid);
+  });
+
+  app.get(
+    internalPaths.agentLocateAttachment(':cid', ':aid', ':attachmentId'),
+    async c => {
+      const cid = c.req.param('cid');
+      const aid = c.req.param('aid');
+      const attachmentId = c.req.param('attachmentId');
+      if (!cid || !aid || !attachmentId) {
+        return c.json(
+          { error: 'conversation id, agent id, and attachment id required' },
+          400,
+        );
+      }
+      if (!conversations.get(cid)) return c.json({ error: 'conversation not found' }, 404);
+      if (!agents.get(aid)) return c.json({ error: 'agent not found' }, 404);
+      if (!conversations.getAgent(cid, aid)) {
+        return c.json({ error: 'agent is not a member of this conversation' }, 403);
+      }
+      const located = await ctx.attachmentService.locateForAgent(attachmentId, cid);
+      if (!located) {
+        // Either does not exist or belongs to a different channel — same
+        // shape on purpose so we don't leak existence across channels.
+        return c.json({ error: 'attachment not found' }, 404);
+      }
+      return c.json(located.locate);
+    },
+  );
 
   return app;
 }
 
-function resolveConversationTarget(
-  current: ConversationDto,
-  target: SendMessageTarget,
-  conversations: ConversationRepo,
-): ConversationDto | string {
-  if (target === 'self') return current;
-  if (target === 'parent') {
-    if (!current.parent_conversation_id) {
-      return 'no parent channel — current channel is top-level';
+/** Parse multipart/form-data and hand the file to AttachmentService.
+ *  Shared between public (channel/thread) and internal (agent) upload
+ *  routes so the response shape and error mapping stay identical. */
+async function uploadAttachment(
+  ctx: BackendContext,
+  c: Context,
+  sourceConversationId: string,
+  createdByKind: 'user' | 'agent',
+  createdById: string,
+): Promise<Response> {
+  let form: FormData;
+  try {
+    form = await c.req.formData();
+  } catch (err) {
+    ctx.logger.warn(
+      { sourceConversationId, err },
+      'api: attachment upload — multipart parse failed',
+    );
+    return c.json({ error: 'multipart/form-data required' }, 400);
+  }
+  const file = form.get('file');
+  if (!(file instanceof File)) {
+    return c.json({ error: 'file field required' }, 400);
+  }
+  const buffer = Buffer.from(await file.arrayBuffer());
+  try {
+    const dto = await ctx.attachmentService.upload({
+      sourceConversationId,
+      filename: file.name,
+      contentType: file.type || null,
+      buffer,
+      createdByKind,
+      createdById,
+    });
+    return c.json(dto, 201);
+  } catch (err) {
+    if (err instanceof AttachmentRejection) {
+      const status = err.failure.kind === 'too_large' ? 413 : 400;
+      return c.json({ error: err.message, code: err.failure.kind }, status);
     }
-    const parent = conversations.get(current.parent_conversation_id);
-    if (!parent) return 'parent channel not found';
-    return parent;
+    throw err;
   }
-  const thread = conversations.getThread(target.thread_id);
-  if (!thread) return 'thread not found';
-  if (thread.parent_conversation_id !== current.id) {
-    return 'target is not a direct thread of current channel';
-  }
-  return thread;
-}
-
-async function distributeConversationMessage(
-  ctx: BackendContext,
-  conversations: ConversationRepo,
-  conversationId: string,
-  excludeAgentId: string | null,
-  messageId: string,
-): Promise<void> {
-  const recipients = conversations
-    .listAgents(conversationId)
-    .filter(ca => ca.agent_id !== excludeAgentId);
-  await Promise.all(
-    recipients.map(ca =>
-      ctx.conversationManager.deliverMessage(conversationId, ca.agent_id, messageId),
-    ),
-  );
-}
-
-async function startConversationAgents(
-  ctx: BackendContext,
-  conversations: ConversationRepo,
-  conversationId: string,
-  opts: { reason: string },
-): Promise<void> {
-  const recipients = conversations
-    .listAgents(conversationId)
-    .filter(ca => ca.status !== 'active' && ca.status !== 'starting');
-  await Promise.all(
-    recipients.map(ca =>
-      ctx.conversationManager.start(conversationId, ca.agent_id).catch(err => {
-        ctx.logger.warn(
-          { conversationId, agentId: ca.agent_id, err },
-          opts.reason,
-        );
-      }),
-    ),
-  );
 }

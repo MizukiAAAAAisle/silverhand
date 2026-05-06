@@ -50,13 +50,13 @@ export function AgentRuntimeTable({
                 >
                   <td className="px-3 py-1.5">
                     <div className="flex items-center gap-1.5">
-                      {row.conversation_kind === 'dm_channel' || row.workspace_kind === 'system_dm' ? (
+                      {row.conversation_kind === 'dm_channel' || row.workspace_kind === 'agent_home' ? (
                         <MessageCircle className="size-3 text-text-muted" />
                       ) : (
                         <MessageSquare className="size-3 text-text-muted" />
                       )}
                       <span className="text-text-primary">
-                        {row.workspace_kind === 'system_dm'
+                        {row.workspace_kind === 'agent_home'
                           ? row.channel_title
                           : `${row.workspace_name} / ${row.channel_title}`}
                       </span>

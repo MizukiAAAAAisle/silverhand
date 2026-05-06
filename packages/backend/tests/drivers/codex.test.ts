@@ -49,6 +49,7 @@ function makeSpawnCtx(overrides: Partial<DriverSpawnContext> = {}): {
     cliSessionId: null,
     model: null,
     reasoningEffort: null,
+    fastMode: null,
     systemPromptPath,
     mcpConfigPath: join(tmp, 'mcp.json'),
     chatBridge: {
@@ -148,6 +149,43 @@ describe('CodexDriver.buildArgs', () => {
       const args = new CodexDriver().buildArgs(ctx);
       const kv = collectCArgs(args);
       expect(kv.get('model_reasoning_effort')).toBe('"xhigh"');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('omits fast_mode flags when fastMode is null', () => {
+    const { ctx, cleanup } = makeSpawnCtx();
+    try {
+      const args = new CodexDriver().buildArgs(ctx);
+      expect(args).not.toContain('--enable');
+      expect(args).not.toContain('--disable');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('passes --enable fast_mode when fastMode is true', () => {
+    const { ctx, cleanup } = makeSpawnCtx({ fastMode: true });
+    try {
+      const args = new CodexDriver().buildArgs(ctx);
+      const enableIdx = args.indexOf('--enable');
+      expect(enableIdx).toBeGreaterThan(-1);
+      expect(args[enableIdx + 1]).toBe('fast_mode');
+      expect(args).not.toContain('--disable');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('passes --disable fast_mode when fastMode is false', () => {
+    const { ctx, cleanup } = makeSpawnCtx({ fastMode: false });
+    try {
+      const args = new CodexDriver().buildArgs(ctx);
+      const disableIdx = args.indexOf('--disable');
+      expect(disableIdx).toBeGreaterThan(-1);
+      expect(args[disableIdx + 1]).toBe('fast_mode');
+      expect(args).not.toContain('--enable');
     } finally {
       cleanup();
     }

@@ -97,10 +97,7 @@ export class NotificationRepo {
     return rows.map(rowToDto);
   }
 
-  /**
-   * Aggregate unread counts by sidebar scope: regular conversations roll up
-   * to their workspace, while DM conversations show as their own item.
-   */
+  /** Aggregate unread counts by natural workspace/sidebar scope. */
   unreadCountsByWorkspace(userId?: string | null): Map<string, number> {
     const userPredicate =
       userId === undefined || userId === null ? 'user_id IS NULL' : 'user_id = ?';
@@ -108,10 +105,7 @@ export class NotificationRepo {
     const rows = this.db
       .prepare<typeof args, { scope_id: string; c: number }>(
         `SELECT
-           CASE
-             WHEN c.kind = 'dm_channel' THEN c.id
-             ELSE COALESCE(n.workspace_id, c.workspace_id)
-           END AS scope_id,
+           COALESCE(n.workspace_id, c.workspace_id) AS scope_id,
            COUNT(*) AS c
          FROM notifications n
          LEFT JOIN conversations c ON c.id = n.conversation_id
@@ -142,20 +136,14 @@ export class NotificationRepo {
         { scope_id: string; conversation_id: string; message_id: string }
       >(
         `SELECT
-           CASE
-             WHEN c.kind = 'dm_channel' THEN c.id
-             ELSE COALESCE(n.workspace_id, c.workspace_id)
-           END AS scope_id,
+           COALESCE(n.workspace_id, c.workspace_id) AS scope_id,
            n.conversation_id,
            n.message_id
          FROM notifications n
          JOIN conversations c ON c.id = n.conversation_id
          JOIN (
            SELECT
-             CASE
-               WHEN c2.kind = 'dm_channel' THEN c2.id
-               ELSE COALESCE(n2.workspace_id, c2.workspace_id)
-             END AS scope_id,
+             COALESCE(n2.workspace_id, c2.workspace_id) AS scope_id,
              MAX(n2.created_at) AS mx
            FROM notifications n2
            JOIN conversations c2 ON c2.id = n2.conversation_id
@@ -165,10 +153,7 @@ export class NotificationRepo {
              AND n2.message_id IS NOT NULL
            GROUP BY scope_id
          ) latest
-           ON latest.scope_id = CASE
-             WHEN c.kind = 'dm_channel' THEN c.id
-             ELSE COALESCE(n.workspace_id, c.workspace_id)
-           END
+           ON latest.scope_id = COALESCE(n.workspace_id, c.workspace_id)
           AND latest.mx = n.created_at
          WHERE ${userPredicate}
            AND n.read_at IS NULL`,

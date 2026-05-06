@@ -1,6 +1,7 @@
 import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
 import type {
+  AttachmentSnapshot,
   FromKind,
   MessageDto,
   MessageRow,
@@ -44,6 +45,9 @@ export function messageRowToDto(
       name: opts?.assigneeName ?? row.task_assignee_user_id,
     };
   }
+  const metadata = row.metadata
+    ? (JSON.parse(row.metadata) as Record<string, unknown>)
+    : null;
   return {
     id: row.id,
     conversation_id: row.conversation_id,
@@ -51,7 +55,8 @@ export function messageRowToDto(
     from_agent_id: row.from_agent_id,
     from_user_id: row.from_user_id,
     content: row.content,
-    metadata: row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : null,
+    metadata,
+    attachments: extractAttachmentSnapshots(metadata),
     seq: row.seq,
     created_at: row.created_at,
     task_number: row.task_number,
@@ -60,6 +65,51 @@ export function messageRowToDto(
     task_workspace_id: row.task_workspace_id,
     task_assignee: assignee,
   };
+}
+
+/** Pull attachment snapshots out of message metadata, defensively. */
+export function extractAttachmentSnapshots(
+  metadata: Record<string, unknown> | null,
+): AttachmentSnapshot[] | null {
+  if (!metadata || typeof metadata !== 'object') return null;
+  const raw = (metadata as { attachments?: unknown }).attachments;
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const snapshots: AttachmentSnapshot[] = [];
+  for (const item of raw) {
+    if (
+      item
+      && typeof item === 'object'
+      && typeof (item as { id?: unknown }).id === 'string'
+      && typeof (item as { filename?: unknown }).filename === 'string'
+      && typeof (item as { size?: unknown }).size === 'number'
+      && typeof (item as { content_type?: unknown }).content_type === 'string'
+    ) {
+      const a = item as AttachmentSnapshot;
+      snapshots.push({
+        id: a.id,
+        filename: a.filename,
+        size: a.size,
+        content_type: a.content_type,
+      });
+    }
+  }
+  return snapshots.length > 0 ? snapshots : null;
+}
+
+/** Convenience: parse-and-extract from a raw MessageRow, since callers
+ *  outside the DTO mapper (e.g. the conversation-manager formatters that
+ *  receive MessageRow from the inbox repo) want the typed list directly. */
+export function extractAttachmentSnapshotsFromRow(
+  row: { metadata: string | null },
+): AttachmentSnapshot[] | null {
+  if (!row.metadata) return null;
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    parsed = JSON.parse(row.metadata) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  return extractAttachmentSnapshots(parsed);
 }
 
 export class MessageRepo {
@@ -133,6 +183,10 @@ export class MessageRepo {
     fromUserId?: string | null;
     content: string;
     metadata?: Record<string, unknown> | null;
+    /** Attachment snapshots to embed under `metadata.attachments`.
+     *  Caller is responsible for resolving ids → snapshots and verifying
+     *  channel ownership before passing them in. */
+    attachments?: AttachmentSnapshot[] | null;
   }): MessageDto {
     const id = newId();
     const now = Date.now();
@@ -144,6 +198,10 @@ export class MessageRepo {
       )
       .get(params.conversationId);
     const seq = seqRow?.next_seq ?? 1;
+    const mergedMetadata = mergeMetadataWithAttachments(
+      params.metadata ?? null,
+      params.attachments ?? null,
+    );
     this.db
       .prepare(
         `INSERT INTO messages
@@ -158,7 +216,7 @@ export class MessageRepo {
         params.fromAgentId ?? null,
         params.fromUserId ?? null,
         params.content,
-        params.metadata ? JSON.stringify(params.metadata) : null,
+        mergedMetadata ? JSON.stringify(mergedMetadata) : null,
         seq,
         now,
       );
@@ -168,4 +226,13 @@ export class MessageRepo {
     if (!row) throw new Error('message insert failed');
     return messageRowToDto(row);
   }
+}
+
+function mergeMetadataWithAttachments(
+  metadata: Record<string, unknown> | null,
+  attachments: AttachmentSnapshot[] | null,
+): Record<string, unknown> | null {
+  if (!attachments || attachments.length === 0) return metadata;
+  // Defensive copy: don't mutate caller's metadata object.
+  return { ...(metadata ?? {}), attachments };
 }

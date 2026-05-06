@@ -5,11 +5,18 @@ import type { ServerConfig } from '@silverhand/shared';
 import type { BackendContext, BackendLogger } from '../../src/context.js';
 import { ScopeEventBus, type ConversationBusEvent } from '../../src/ws/scope-event-bus.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
+import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
+import { NotificationRepo } from '../../src/repos/notification-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { ConversationManager } from '../../src/conversation-manager.js';
+import { AttachmentService } from '../../src/services/attachment-service.js';
+import { ChannelService } from '../../src/services/channel-service.js';
+import { ConversationMessageService } from '../../src/services/conversation-message-service.js';
+import { ThreadService } from '../../src/services/thread-service.js';
+import { TaskService } from '../../src/services/task-service.js';
 import { initWorkspaceDir } from '../../src/workspace-files.js';
 import { createLocalBlobFileStorage } from '../../src/storage/blob-file-storage.js';
 import { makeTempSilverhandDir, openTestDb } from './db.js';
@@ -115,6 +122,13 @@ export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {})
     },
   };
 
+  const blobStorage = createLocalBlobFileStorage({ silverhandDir: tmp.silverhandDir });
+  const attachmentService = new AttachmentService({
+    storage: blobStorage,
+    attachments: new AttachmentRepo(db),
+    conversations: new ConversationRepo(db),
+  });
+
   const ctx: BackendContext = {
     db,
     serverConfig,
@@ -122,7 +136,12 @@ export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {})
     silverhandDir: tmp.silverhandDir,
     workspacesRoot: tmp.workspacesRoot,
     logDir: opts.logDir,
-    blobStorage: createLocalBlobFileStorage({ silverhandDir: tmp.silverhandDir }),
+    blobStorage,
+    attachmentService,
+    channelService: undefined as unknown as ChannelService,
+    conversationMessageService: undefined as unknown as ConversationMessageService,
+    threadService: undefined as unknown as ThreadService,
+    taskService: undefined as unknown as TaskService,
     lastSpawnAtByAgent: new Map(),
     events: new ScopeEventBus(),
     chatBridgeLauncher: { command: 'true', args: [] }, // never invoked in L3
@@ -133,6 +152,49 @@ export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {})
 
   const manager = new ConversationManager(ctx);
   ctx.conversationManager = manager;
+  ctx.channelService = new ChannelService({
+    db,
+    conversations: new ConversationRepo(db),
+    workspaces: new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot }),
+    agents: new AgentRepo(db),
+    messages: new MessageRepo(db),
+    events: ctx.events,
+    conversationManager: ctx.conversationManager,
+    logger: silentLogger,
+  });
+  ctx.conversationMessageService = new ConversationMessageService({
+    db,
+    conversations: new ConversationRepo(db),
+    messages: new MessageRepo(db),
+    agents: new AgentRepo(db),
+    notifications: new NotificationRepo(db),
+    workspaces: new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot }),
+    attachmentService,
+    conversationManager: ctx.conversationManager,
+    events: ctx.events,
+    logger: silentLogger,
+  });
+  ctx.threadService = new ThreadService({
+    db,
+    conversations: new ConversationRepo(db),
+    messages: new MessageRepo(db),
+    agents: new AgentRepo(db),
+    workspaces: new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot }),
+    conversationManager: ctx.conversationManager,
+    events: ctx.events,
+    logger: silentLogger,
+    serverConfig: () => ctx.serverConfig,
+    lastSpawnAtByAgent: ctx.lastSpawnAtByAgent,
+  });
+  ctx.taskService = new TaskService({
+    db,
+    conversations: new ConversationRepo(db),
+    messages: new MessageRepo(db),
+    agents: new AgentRepo(db),
+    conversationManager: ctx.conversationManager,
+    events: ctx.events,
+    logger: silentLogger,
+  });
 
   // Inject mock binary so resolveBinary returns it without `which claude`.
   (manager as unknown as {

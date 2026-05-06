@@ -24,3 +24,30 @@ describe('agent reasoning_effort validation', () => {
     ).toBe(false);
   });
 });
+
+describe('agent fast_mode validation', () => {
+  it('accepts boolean fast_mode on create / update', () => {
+    expect(
+      CreateAgentInputSchema.safeParse({
+        name: 'with-fast',
+        runtime: 'codex',
+        fast_mode: true,
+      }).success,
+    ).toBe(true);
+    expect(
+      UpdateAgentInputSchema.safeParse({ fast_mode: false }).success,
+    ).toBe(true);
+    expect(
+      UpdateAgentInputSchema.safeParse({ fast_mode: null }).success,
+    ).toBe(true);
+  });
+
+  it('rejects non-boolean fast_mode values', () => {
+    expect(
+      UpdateAgentInputSchema.safeParse({ fast_mode: 'on' }).success,
+    ).toBe(false);
+    expect(
+      UpdateAgentInputSchema.safeParse({ fast_mode: 1 }).success,
+    ).toBe(false);
+  });
+});

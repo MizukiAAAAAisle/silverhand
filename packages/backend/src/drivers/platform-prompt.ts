@@ -51,9 +51,11 @@ export function buildPlatformPrompt(input: PlatformPromptInput): string {
   const claimTasks = t('claim_tasks');
   const unclaimTask = t('unclaim_task');
   const updateTaskStatus = t('update_task_status');
+  const uploadFile = t('upload_file');
+  const viewFile = t('view_file');
   const sessionContextBlock = renderSessionContext(input.sessionContext);
 
-  return `# Silverhand platform manual
+  return `# Silverhand app manual
 
 You are **@${input.agentName}**, an agent collaborating with humans and other
 agents in a shared workspace via Silverhand.
@@ -268,6 +270,22 @@ Rules:
    non-trivial work goes to \`in_review\` unless the human explicitly
    approved \`done\`. Do not only send a chat message like "done" while
    leaving the task state unchanged.
+
+## Attachments
+
+Files travel with chat messages, scoped to the current channel
+(threads inherit their parent channel's attachments).
+
+- ${uploadFile} — upload an absolute local path. Returns an \`id\` you
+  pass to ${sendMessage} via \`attachment_ids\`. Use it when you have
+  generated a binary artifact (image, PDF, archive) and want others to
+  see it. Don't use it to share short text — paste it inline instead.
+- ${viewFile} — given an attachment id from a message you received, ask
+  the backend to resolve a local path (or download URL) so you can read
+  the bytes with your normal file tools.
+
+Cross-channel ids are rejected. Snapshots embedded in messages are
+immutable: \`{id, filename, size, content_type}\`.
 
 ## Initial role (your assignment in this workspace/channel)
 ${input.l2SystemPrompt.trim() || '_(role not yet defined — wait for the user to shape it during onboarding)_'}
