@@ -14,6 +14,11 @@ import type { NotificationRepo } from '../repos/notification-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { AttachmentService } from './attachment-service.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
+import {
+  assertActorConversationMatch,
+  type AgentPrincipal,
+  type UserPrincipal,
+} from '../auth/principal.js';
 
 /**
  * ConversationMessageService is the single owner of send-message business
@@ -35,8 +40,8 @@ import type { ScopeEventBus } from '../ws/scope-event-bus.js';
  */
 
 export type SendMessageActor =
-  | { kind: 'user'; userId: string | null }
-  | { kind: 'agent'; agentId: string };
+  | UserPrincipal
+  | AgentPrincipal;
 
 export interface SendMessageInput {
   conversationId: string;
@@ -198,6 +203,7 @@ export class ConversationMessageService {
   }
 
   async sendMessage(input: SendMessageInput): Promise<SendMessageResult> {
+    assertActorConversationMatch(input.actor, input.conversationId);
     const policy = POLICIES[input.actor.kind];
     const target = input.target ?? 'self';
     if (!policy.allowTarget && target !== 'self') {

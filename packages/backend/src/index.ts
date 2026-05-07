@@ -8,6 +8,7 @@ import { performance } from 'node:perf_hooks';
 import { silverhandCors } from './cors.js';
 import { openDatabase } from './db.js';
 import { createApiRouter, createInternalRouter } from './routes.js';
+import type { AppEnv } from './auth/principal.js';
 import {
   consoleLogger,
   type BackendContext,
@@ -146,7 +147,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   ctx.conversationManager.reconcileOnBoot();
   const stopEventLoopLagProbe = startEventLoopLagProbe(logger);
 
-  const app = new Hono();
+  const app = new Hono<AppEnv>();
   app.use('*', silverhandCors());
   app.route('/', createApiRouter(ctx));
   app.route('/', createInternalRouter(ctx));

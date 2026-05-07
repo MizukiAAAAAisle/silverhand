@@ -5,6 +5,7 @@ import { HostRepo } from '../../src/repos/host-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { TaskService } from '../../src/services/task-service.js';
+import { PrincipalConversationMismatchError } from '../../src/auth/principal.js';
 import type { BackendLogger } from '../../src/context.js';
 import type { ConversationManager } from '../../src/conversation-manager.js';
 import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
@@ -1043,7 +1044,7 @@ describe('TaskService.list / getByMessageId', () => {
 });
 
 describe('TaskService agent-actor validation', () => {
-  it('createTasks: actor.conversationId mismatch → actor_conversation_mismatch (no insert)', async () => {
+  it('createTasks: actor.conversationId mismatch → PrincipalConversationMismatchError (no insert)', async () => {
     const t = bootstrap();
     try {
       const other = t.conversations.insertChannel({
@@ -1051,12 +1052,13 @@ describe('TaskService agent-actor validation', () => {
         workspacePath: t.workspace.workspace_path,
         title: 'other',
       });
-      const result = await t.service.createTasks({
-        conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: other.id },
-        tasks: [{ title: 'x' }],
-      });
-      expect(result).toEqual({ error: 'actor_conversation_mismatch' });
+      await expect(
+        t.service.createTasks({
+          conversationId: t.channel.id,
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: other.id },
+          tasks: [{ title: 'x' }],
+        }),
+      ).rejects.toBeInstanceOf(PrincipalConversationMismatchError);
       expect(t.service.list({ actor: { kind: 'user', userId: null } })).toEqual([]);
     } finally {
       t.cleanup();

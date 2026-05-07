@@ -632,7 +632,6 @@ export const CreateTasksOpErrorSchema = z.enum([
   'conversation_closed',
   'not_conversation_member',
   'agent_not_found',
-  'actor_conversation_mismatch',
 ]);
 export type CreateTasksOpError = z.infer<typeof CreateTasksOpErrorSchema>;
 

@@ -636,7 +636,7 @@ export function useMarkChannelRead() {
 /**
  * Advance the viewer's read cursor for a channel to its latest message.
  * Backed by the conversation_reads cursor — clears message unread badges.
- * The backend resolves the viewer's user id from X-Silverhand-User-Id
+ * The backend resolves the viewer principal from X-Silverhand-Principal
  * (injected by api()) so no body is required.
  */
 export function useMarkMessageChannelRead() {

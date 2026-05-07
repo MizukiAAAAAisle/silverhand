@@ -20,6 +20,7 @@ import type { ConversationManager } from '../../src/conversation-manager.js';
 import { createLocalBlobFileStorage } from '../../src/storage/blob-file-storage.js';
 import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
 import { ccMentionsFromUserMessage } from '../../src/mention-cc.js';
+import { PrincipalConversationMismatchError } from '../../src/auth/principal.js';
 import { makeTempSilverhandDir, openTestDb } from '../utils/db.js';
 
 vi.mock('../../src/mention-cc.js', () => ({
@@ -241,10 +242,31 @@ describe('ConversationMessageService.sendMessage', () => {
       await expect(
         t.service.sendMessage({
           conversationId: 'missing-conversation',
-          actor: { kind: 'agent', agentId: t.alice.id },
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: 'missing-conversation' },
           content: 'missing',
         }),
       ).rejects.toBeInstanceOf(ConversationError);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('rejects agent principal conversation mismatch before inserting', async () => {
+    const t = bootstrap();
+    try {
+      const other = t.conversations.insertChannel({
+        workspaceId: t.workspace.id,
+        workspacePath: t.workspace.workspace_path,
+        title: 'other',
+      });
+      await expect(
+        t.service.sendMessage({
+          conversationId: t.channel.id,
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: other.id },
+          content: 'mismatch',
+        }),
+      ).rejects.toBeInstanceOf(PrincipalConversationMismatchError);
+      expect(t.messages.listForConversation(t.channel.id)).toEqual([]);
     } finally {
       t.cleanup();
     }
@@ -351,7 +373,7 @@ describe('ConversationMessageService.sendMessage', () => {
     try {
       const result = await t.service.sendMessage({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id },
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         content: 'agent reply',
       });
 
@@ -379,7 +401,7 @@ describe('ConversationMessageService.sendMessage', () => {
 
       const result = await t.service.sendMessage({
         conversationId: thread.id,
-        actor: { kind: 'agent', agentId: t.alice.id },
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: thread.id },
         content: 'parent update',
         target: 'parent',
       });
@@ -407,7 +429,7 @@ describe('ConversationMessageService.sendMessage', () => {
 
       const result = await t.service.sendMessage({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id },
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         content: 'down',
         target: { thread_id: thread.id },
       });
@@ -427,7 +449,7 @@ describe('ConversationMessageService.sendMessage', () => {
       await expect(
         t.service.sendMessage({
           conversationId: t.channel.id,
-          actor: { kind: 'agent', agentId: t.alice.id },
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
           content: 'up',
           target: 'parent',
         }),
@@ -446,7 +468,7 @@ describe('ConversationMessageService.sendMessage', () => {
       await expect(
         t.service.sendMessage({
           conversationId: t.channel.id,
-          actor: { kind: 'agent', agentId: t.alice.id },
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
           content: 'sideways',
           target: { thread_id: siblingThread.id },
         }),
@@ -457,7 +479,7 @@ describe('ConversationMessageService.sendMessage', () => {
       await expect(
         t.service.sendMessage({
           conversationId: siblingParent.id,
-          actor: { kind: 'agent', agentId: t.alice.id },
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: siblingParent.id },
           content: 'closed',
           target: { thread_id: siblingThread.id },
         }),
@@ -473,7 +495,7 @@ describe('ConversationMessageService.sendMessage', () => {
       await expect(
         t.service.sendMessage({
           conversationId: t.channel.id,
-          actor: { kind: 'agent', agentId: 'missing-agent' },
+          actor: { kind: 'agent', agentId: 'missing-agent', conversationId: t.channel.id },
           content: 'x',
         }),
       ).rejects.toMatchObject({ code: 'agent_not_found' });
@@ -485,7 +507,7 @@ describe('ConversationMessageService.sendMessage', () => {
       await expect(
         t.service.sendMessage({
           conversationId: t.channel.id,
-          actor: { kind: 'agent', agentId: outsider.id },
+          actor: { kind: 'agent', agentId: outsider.id, conversationId: t.channel.id },
           content: 'x',
         }),
       ).rejects.toBeInstanceOf(ActorError);
@@ -506,7 +528,7 @@ describe('ConversationMessageService.sendMessage', () => {
 
       const result = await t.service.sendMessage({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id },
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         content: 'still returns',
       });
       unsub();
@@ -526,7 +548,7 @@ describe('ConversationMessageService.sendMessage', () => {
       await expect(
         t.service.sendMessage({
           conversationId: t.channel.id,
-          actor: { kind: 'agent', agentId: t.alice.id },
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
           content: 'deliver fail',
         }),
       ).resolves.toMatchObject({ message: { content: 'deliver fail' } });

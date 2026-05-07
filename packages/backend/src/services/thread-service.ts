@@ -12,6 +12,11 @@ import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
+import {
+  assertActorConversationMatch,
+  type AgentPrincipal,
+  type UserPrincipal,
+} from '../auth/principal.js';
 
 /**
  * ThreadService is the single owner of thread create / close business side
@@ -31,8 +36,8 @@ import type { ScopeEventBus } from '../ws/scope-event-bus.js';
  */
 
 export type ThreadActor =
-  | { kind: 'user'; userId: string | null }
-  | { kind: 'agent'; agentId: string };
+  | UserPrincipal
+  | AgentPrincipal;
 
 export type MessageErrorCode = 'message_not_found';
 
@@ -198,7 +203,7 @@ export class ThreadService {
 
   async createThreadFromMessage(input: {
     messageId: string;
-    viewer: { userId: string | null };
+    actor: UserPrincipal;
   }): Promise<{ thread: ThreadDto; reused: boolean }> {
     const original = this.messages.getById(input.messageId);
     if (!original) {
@@ -311,23 +316,25 @@ export class ThreadService {
 
   async createThreadFromAgent(input: {
     parentConversationId: string;
-    spawnerAgentId: string;
+    actor: AgentPrincipal;
     title: string;
     contextSummary: string;
     initialPrompt: string;
     requestedMembers?: string[];
   }): Promise<{ thread: ThreadDto }> {
+    assertActorConversationMatch(input.actor, input.parentConversationId);
     const parent = this.conversations.getChannelLike(input.parentConversationId);
     if (!parent) {
       throw new ParentError('parent_not_found', 'parent channel not found');
     }
-    if (!this.agents.get(input.spawnerAgentId)) {
+    const spawnerAgentId = input.actor.agentId;
+    if (!this.agents.get(spawnerAgentId)) {
       throw new ActorError('agent_not_found', 'agent not found');
     }
     const parentMembers = new Set(
       this.conversations.listAgents(parent.id).map(member => member.agent_id),
     );
-    if (!parentMembers.has(input.spawnerAgentId)) {
+    if (!parentMembers.has(spawnerAgentId)) {
       throw new MembershipError(
         'agent_not_member_of_parent',
         'agent is not a member of the parent channel',
@@ -349,24 +356,24 @@ export class ThreadService {
     const thread = await this.createThreadCore({
       parentChannelId: parent.id,
       title: input.title,
-      spawnedByAgentId: input.spawnerAgentId,
-      memberAgentIds: dedupe([...requestedMembers, input.spawnerAgentId]),
+      spawnedByAgentId: spawnerAgentId,
+      memberAgentIds: dedupe([...requestedMembers, spawnerAgentId]),
       seedMessages: [
         {
           fromKind: 'system',
           content:
             `Inherited context from parent channel '${parent.title}': ${input.contextSummary}`,
           metadata: { subtype: 'child_context' },
-          deliverTo: input.spawnerAgentId,
+          deliverTo: spawnerAgentId,
         },
         {
           fromKind: 'agent',
-          fromAgentId: input.spawnerAgentId,
+          fromAgentId: spawnerAgentId,
           content: input.initialPrompt,
-          distributeToOthers: { excludeAgentId: input.spawnerAgentId },
+          distributeToOthers: { excludeAgentId: spawnerAgentId },
         },
       ],
-      autoStart: { mode: 'all', excludeAgentId: input.spawnerAgentId },
+      autoStart: { mode: 'all', excludeAgentId: spawnerAgentId },
     });
     return { thread };
   }
@@ -377,6 +384,7 @@ export class ThreadService {
     summary: string;
     postedToParent: boolean;
   }): Promise<{ thread: ThreadDto }> {
+    assertActorConversationMatch(input.actor, input.threadId);
     const thread = this.conversations.getThread(input.threadId);
     if (!thread) {
       throw new ThreadError('thread_not_found', 'thread not found');

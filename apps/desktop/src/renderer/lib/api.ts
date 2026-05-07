@@ -1,3 +1,7 @@
+import {
+  encodeUserPrincipalHeader,
+  X_SILVERHAND_PRINCIPAL_HEADER,
+} from '@silverhand/shared';
 import type { BackendInfo } from '../../preload/api';
 import { CURRENT_USER_ID } from './current-user';
 
@@ -18,10 +22,12 @@ async function fetchWithInfo(
 ): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set('Authorization', `Bearer ${info.auth_token}`);
-  // Viewer identity — v1 hardcoded to 'local'; backend resolves this from
-  // the header and passes it to Repo methods. Swap CURRENT_USER_ID when
-  // auth is introduced; no other callsite needs to change.
-  headers.set('X-Silverhand-User-Id', CURRENT_USER_ID);
+  // Viewer principal — v1 hardcoded to user:local. When auth is introduced,
+  // replace CURRENT_USER_ID/session resolution here; callsites stay unchanged.
+  headers.set(
+    X_SILVERHAND_PRINCIPAL_HEADER,
+    encodeUserPrincipalHeader(CURRENT_USER_ID),
+  );
   if (init.body && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
@@ -74,7 +80,10 @@ export async function apiUpload<T = unknown>(
   const send = async (i: BackendInfo): Promise<Response> => {
     const headers = new Headers();
     headers.set('Authorization', `Bearer ${i.auth_token}`);
-    headers.set('X-Silverhand-User-Id', CURRENT_USER_ID);
+    headers.set(
+      X_SILVERHAND_PRINCIPAL_HEADER,
+      encodeUserPrincipalHeader(CURRENT_USER_ID),
+    );
     return fetch(`${i.url}${path}`, { method: 'POST', headers, body: formData });
   };
   let res: Response;
@@ -120,7 +129,10 @@ export async function fetchAttachmentBlob(attachmentId: string): Promise<{
   const url = `${info.url}/api/attachments/${encodeURIComponent(attachmentId)}`;
   const headers = new Headers();
   headers.set('Authorization', `Bearer ${info.auth_token}`);
-  headers.set('X-Silverhand-User-Id', CURRENT_USER_ID);
+  headers.set(
+    X_SILVERHAND_PRINCIPAL_HEADER,
+    encodeUserPrincipalHeader(CURRENT_USER_ID),
+  );
   const res = await fetch(url, { headers });
   if (!res.ok) {
     const text = await res.text().catch(() => '');

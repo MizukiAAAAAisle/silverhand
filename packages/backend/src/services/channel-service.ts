@@ -11,6 +11,7 @@ import type { ConversationRepo, RepoError } from '../repos/conversation-repo.js'
 import type { MessageRepo } from '../repos/message-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
+import type { AgentPrincipal, UserPrincipal } from '../auth/principal.js';
 
 /**
  * ChannelService is the single owner of channel create / pin / unpin
@@ -32,8 +33,8 @@ import type { ScopeEventBus } from '../ws/scope-event-bus.js';
  */
 
 export type ChannelActor =
-  | { kind: 'user'; userId: string }
-  | { kind: 'agent'; agentId: string; conversationId: string };
+  | UserPrincipal
+  | AgentPrincipal;
 
 export interface CreateChannelInput {
   workspaceId: string;

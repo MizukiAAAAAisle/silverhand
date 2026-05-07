@@ -19,6 +19,11 @@ import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
+import {
+  assertActorConversationMatch,
+  type AgentPrincipal,
+  type UserPrincipal,
+} from '../auth/principal.js';
 
 /**
  * TaskService is the single owner of task create / claim / unclaim /
@@ -48,8 +53,8 @@ import type { ScopeEventBus } from '../ws/scope-event-bus.js';
  */
 
 export type TaskActor =
-  | { kind: 'user'; userId: string | null }
-  | { kind: 'agent'; agentId: string; conversationId: string };
+  | UserPrincipal
+  | AgentPrincipal;
 
 type UserActor = Extract<TaskActor, { kind: 'user' }>;
 type AgentActor = Extract<TaskActor, { kind: 'agent' }>;
@@ -261,12 +266,7 @@ export class TaskService {
   // ── Create ──────────────────────────────────────────────────────
 
   async createTasks(input: CreateTasksInput): Promise<CreateTasksResult> {
-    if (
-      input.actor.kind === 'agent' &&
-      input.actor.conversationId !== input.conversationId
-    ) {
-      return { error: 'actor_conversation_mismatch' };
-    }
+    assertActorConversationMatch(input.actor, input.conversationId);
     const conversation = this.conversations.get(input.conversationId);
     if (!conversation) return { error: 'conversation_not_found' };
     if (conversation.closed_at !== null) return { error: 'conversation_closed' };

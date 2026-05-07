@@ -19,6 +19,7 @@ import {
 import type { BackendLogger } from '../../src/context.js';
 import type { ConversationManager } from '../../src/conversation-manager.js';
 import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
+import { PrincipalConversationMismatchError } from '../../src/auth/principal.js';
 import { makeTempSilverhandDir, openTestDb } from '../utils/db.js';
 
 class FakeConversationManager {
@@ -171,7 +172,7 @@ describe('ThreadService.createThreadFromMessage', () => {
 
       const result = await t.service.createThreadFromMessage({
         messageId: original.id,
-        viewer: { userId: 'local' },
+        actor: { kind: 'user', userId: 'local' },
       });
       unsub();
 
@@ -212,7 +213,7 @@ describe('ThreadService.createThreadFromMessage', () => {
       });
       const first = await t.service.createThreadFromMessage({
         messageId: original.id,
-        viewer: { userId: 'local' },
+        actor: { kind: 'user', userId: 'local' },
       });
       t.fake.delivered = [];
       t.fake.starts = [];
@@ -221,7 +222,7 @@ describe('ThreadService.createThreadFromMessage', () => {
 
       const second = await t.service.createThreadFromMessage({
         messageId: original.id,
-        viewer: { userId: 'local' },
+        actor: { kind: 'user', userId: 'local' },
       });
       unsub();
 
@@ -252,7 +253,7 @@ describe('ThreadService.createThreadFromMessage', () => {
 
       const result = await t.service.createThreadFromMessage({
         messageId: original.id,
-        viewer: { userId: 'local' },
+        actor: { kind: 'user', userId: 'local' },
       });
 
       expect(t.conversations.listAgents(result.thread.id).map(a => a.agent_id).sort())
@@ -282,7 +283,7 @@ describe('ThreadService.createThreadFromMessage', () => {
       await expect(
         t.service.createThreadFromMessage({
           messageId: msg.id,
-          viewer: { userId: 'local' },
+          actor: { kind: 'user', userId: 'local' },
         }),
       ).rejects.toBeInstanceOf(SeedAgentError);
     } finally {
@@ -292,6 +293,29 @@ describe('ThreadService.createThreadFromMessage', () => {
 });
 
 describe('ThreadService.createThreadFromAgent', () => {
+  it('rejects agent principal conversation mismatch before inserting', async () => {
+    const t = bootstrap();
+    try {
+      const other = t.conversations.insertChannel({
+        workspaceId: t.workspace.id,
+        workspacePath: t.workspace.workspace_path,
+        title: 'other',
+      });
+      await expect(
+        t.service.createThreadFromAgent({
+          parentConversationId: t.channel.id,
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: other.id },
+          title: 'bad',
+          contextSummary: 'x',
+          initialPrompt: 'go',
+        }),
+      ).rejects.toBeInstanceOf(PrincipalConversationMismatchError);
+      expect(t.conversations.listChildren(t.channel.id)).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
   it('creates an agent thread, publishes before delivery, distributes prompt, and starts non-spawners', async () => {
     const t = bootstrap();
     try {
@@ -303,7 +327,7 @@ describe('ThreadService.createThreadFromAgent', () => {
 
       const result = await t.service.createThreadFromAgent({
         parentConversationId: t.channel.id,
-        spawnerAgentId: t.alice.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         title: 'investigate',
         contextSummary: 'perf regression',
         initialPrompt: 'profile the hot path',
@@ -344,7 +368,7 @@ describe('ThreadService.createThreadFromAgent', () => {
     try {
       const result = await t.service.createThreadFromAgent({
         parentConversationId: t.channel.id,
-        spawnerAgentId: t.alice.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         title: 'all',
         contextSummary: 'x',
         initialPrompt: 'go',
@@ -355,7 +379,7 @@ describe('ThreadService.createThreadFromAgent', () => {
       await expect(
         t.service.createThreadFromAgent({
           parentConversationId: t.channel.id,
-          spawnerAgentId: t.alice.id,
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
           title: 'bad',
           contextSummary: 'x',
           initialPrompt: 'go',
@@ -377,7 +401,7 @@ describe('ThreadService.createThreadFromAgent', () => {
       await expect(
         t.service.createThreadFromAgent({
           parentConversationId: thread.id,
-          spawnerAgentId: t.alice.id,
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: thread.id },
           title: 'bad',
           contextSummary: 'x',
           initialPrompt: 'go',
@@ -387,7 +411,7 @@ describe('ThreadService.createThreadFromAgent', () => {
       await expect(
         t.service.createThreadFromAgent({
           parentConversationId: t.channel.id,
-          spawnerAgentId: t.carol.id,
+          actor: { kind: 'agent', agentId: t.carol.id, conversationId: t.channel.id },
           title: 'bad',
           contextSummary: 'x',
           initialPrompt: 'go',
@@ -400,12 +424,37 @@ describe('ThreadService.createThreadFromAgent', () => {
 });
 
 describe('ThreadService.closeThread', () => {
+  it('rejects agent principal conversation mismatch before closing', async () => {
+    const t = bootstrap();
+    try {
+      const created = await t.service.createThreadFromAgent({
+        parentConversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        title: 'inv',
+        contextSummary: 'x',
+        initialPrompt: 'go',
+        requestedMembers: [t.bob.id],
+      });
+      await expect(
+        t.service.closeThread({
+          threadId: created.thread.id,
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+          summary: 'done',
+          postedToParent: false,
+        }),
+      ).rejects.toBeInstanceOf(PrincipalConversationMismatchError);
+      expect(t.conversations.getThread(created.thread.id)?.closed_at).toBe(null);
+    } finally {
+      t.cleanup();
+    }
+  });
+
   it('closes a thread, publishes summary before delivery, resolves runs, and stops members', async () => {
     const t = bootstrap();
     try {
       const created = await t.service.createThreadFromAgent({
         parentConversationId: t.channel.id,
-        spawnerAgentId: t.alice.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         title: 'inv',
         contextSummary: 'x',
         initialPrompt: 'go',
@@ -422,7 +471,7 @@ describe('ThreadService.closeThread', () => {
 
       const closed = await t.service.closeThread({
         threadId: created.thread.id,
-        actor: { kind: 'agent', agentId: t.bob.id },
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: created.thread.id },
         summary: 'done',
         postedToParent: false,
       });
@@ -453,7 +502,7 @@ describe('ThreadService.closeThread', () => {
     try {
       const created = await t.service.createThreadFromAgent({
         parentConversationId: t.channel.id,
-        spawnerAgentId: t.alice.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         title: 'inv',
         contextSummary: 'x',
         initialPrompt: 'go',
@@ -463,7 +512,7 @@ describe('ThreadService.closeThread', () => {
 
       await t.service.closeThread({
         threadId: created.thread.id,
-        actor: { kind: 'agent', agentId: t.alice.id },
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: created.thread.id },
         summary: 'already posted',
         postedToParent: true,
       });
@@ -479,7 +528,7 @@ describe('ThreadService.closeThread', () => {
     try {
       const created = await t.service.createThreadFromAgent({
         parentConversationId: t.channel.id,
-        spawnerAgentId: t.alice.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         title: 'inv',
         contextSummary: 'x',
         initialPrompt: 'go',
@@ -489,7 +538,7 @@ describe('ThreadService.closeThread', () => {
       await expect(
         t.service.closeThread({
           threadId: created.thread.id,
-          actor: { kind: 'agent', agentId: t.carol.id },
+          actor: { kind: 'agent', agentId: t.carol.id, conversationId: created.thread.id },
           summary: 'done',
           postedToParent: false,
         }),
@@ -506,7 +555,7 @@ describe('ThreadService.closeThread', () => {
     try {
       const created = await t.service.createThreadFromAgent({
         parentConversationId: t.channel.id,
-        spawnerAgentId: t.alice.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         title: 'inv',
         contextSummary: 'x',
         initialPrompt: 'go',
@@ -514,7 +563,7 @@ describe('ThreadService.closeThread', () => {
       });
       await t.service.closeThread({
         threadId: created.thread.id,
-        actor: { kind: 'agent', agentId: t.alice.id },
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: created.thread.id },
         summary: 'done',
         postedToParent: true,
       });
@@ -522,7 +571,7 @@ describe('ThreadService.closeThread', () => {
       await expect(
         t.service.closeThread({
           threadId: created.thread.id,
-          actor: { kind: 'agent', agentId: t.alice.id },
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: created.thread.id },
           summary: 'again',
           postedToParent: true,
         }),
