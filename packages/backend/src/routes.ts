@@ -34,6 +34,7 @@ import {
 } from '@silverhand/shared';
 import type { BackendContext } from './context.js';
 import { AgentRepo } from './repos/agent-repo.js';
+import { AttachmentRepo } from './repos/attachment-repo.js';
 import { HostRepo } from './repos/host-repo.js';
 import { MessageRepo } from './repos/message-repo.js';
 import { NotificationRepo } from './repos/notification-repo.js';
@@ -70,6 +71,24 @@ import {
   SeedAgentError,
   ThreadError,
 } from './services/thread-service.js';
+import {
+  type AppEnv,
+  getAgentPrincipal,
+  getUserPrincipal,
+  installInternalPrincipalMiddleware,
+  installPublicPrincipalMiddleware,
+} from './auth/principal.js';
+import { installPublicBearerMiddleware } from './auth/bearer.js';
+import {
+  canDeleteAttachment,
+  canManageMembers,
+  canMutateWorkspace,
+  canPostToConversation,
+  canViewAttachment,
+  canViewConversation,
+  canViewOwnedState,
+  canViewWorkspace,
+} from './permissions.js';
 
 function isRepoError(err: unknown): err is RepoError {
   return err instanceof Error && typeof (err as RepoError).code === 'string';
@@ -182,11 +201,9 @@ function threadServiceErrorResponse(c: Context, err: unknown): Response | null {
   return null;
 }
 
-const VIEWER_USER_ID_HEADER = 'x-silverhand-user-id';
-
 function resolveViewerUserId(c: Context, ctx: BackendContext): string | null {
-  const headerValue = c.req.header(VIEWER_USER_ID_HEADER)?.trim();
-  return headerValue || ctx.serverConfig.user_id || null;
+  const user = getUserPrincipal(c);
+  return user.userId || ctx.serverConfig.user_id || null;
 }
 
 function requireViewerUserId(c: Context, ctx: BackendContext): string | Response {
@@ -217,7 +234,7 @@ const DIAGNOSTIC_REQUEST_MS = 100;
 const SLOW_ROUTE_SPAN_MS = 100;
 let apiRequestSequence = 0;
 
-function installApiTimingMiddleware(app: Hono, ctx: BackendContext): void {
+function installApiTimingMiddleware(app: Hono<AppEnv>, ctx: BackendContext): void {
   app.use('*', async (c, next) => {
     const url = new URL(c.req.url);
     const path = url.pathname;
@@ -332,14 +349,21 @@ function elapsedSince(startedAt: number): number {
   return Math.round((performance.now() - startedAt) * 10) / 10;
 }
 
-export function createApiRouter(ctx: BackendContext): Hono {
-  const app = new Hono();
+export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
+  const app = new Hono<AppEnv>();
   installApiTimingMiddleware(app, ctx);
+  installPublicBearerMiddleware(app, ctx, {
+    // Liveness probe stays open so a process supervisor can health-check
+    // without holding the auth token.
+    allowlist: [apiPaths.health],
+  });
+  installPublicPrincipalMiddleware(app, ctx);
   const hosts = new HostRepo(ctx.db);
   const agents = new AgentRepo(ctx.db);
   const workspaces = new WorkspaceRepo(ctx.db, { workspacesRoot: ctx.workspacesRoot });
   const conversations = new ConversationRepo(ctx.db);
   const messages = new MessageRepo(ctx.db);
+  const attachments = new AttachmentRepo(ctx.db);
   const saved = new SavedMessageRepo(ctx.db);
   const search = new SearchRepo(ctx.db);
   const settings = new SettingsRepo(ctx.db);
@@ -368,7 +392,11 @@ export function createApiRouter(ctx: BackendContext): Hono {
   // passing as a channel id.
 
   app.get(apiPaths.workspaces, c =>
-    c.json({ workspaces: workspaces.list() }),
+    c.json({
+      workspaces: workspaces
+        .list()
+        .filter(workspace => canViewWorkspace(ctx, getUserPrincipal(c), workspace.id)),
+    }),
   );
 
   app.post(apiPaths.workspaces, async c => {
@@ -461,6 +489,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!workspace) {
       return c.json({ error: 'workspace not found' }, 404);
     }
+    if (!canViewWorkspace(ctx, getUserPrincipal(c), workspace.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     return c.json({ workspace });
   });
 
@@ -470,6 +501,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     const workspace = workspaces.get(id);
     if (!workspace || workspace.workspace_kind !== 'regular') {
       return c.json({ error: 'workspace not found' }, 404);
+    }
+    if (!canMutateWorkspace(ctx, getUserPrincipal(c), workspace.id)) {
+      return c.json({ error: 'forbidden' }, 403);
     }
     const body = await c.req.json().catch(() => ({}));
     const parsed = UpdateWorkspaceInputSchema.safeParse(body);
@@ -524,6 +558,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!workspace || workspace.workspace_kind !== 'regular') {
       return c.json({ error: 'workspace not found' }, 404);
     }
+    if (!canMutateWorkspace(ctx, getUserPrincipal(c), workspace.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const body = await c.req.json().catch(() => ({}));
     const parsed = ArchiveWorkspaceInputSchema.safeParse(body);
     if (!parsed.success) {
@@ -540,6 +577,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     const workspace = workspaces.get(id);
     if (!workspace || workspace.workspace_kind !== 'regular') {
       return c.body(null, 204);
+    }
+    if (!canMutateWorkspace(ctx, getUserPrincipal(c), workspace.id)) {
+      return c.json({ error: 'forbidden' }, 403);
     }
     const workspaceConversations = conversations
       .list()
@@ -576,6 +616,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     const workspace = workspaces.get(id);
     if (!workspace) {
       return c.json({ error: 'workspace not found' }, 404);
+    }
+    if (!canViewWorkspace(ctx, getUserPrincipal(c), workspace.id)) {
+      return c.json({ error: 'forbidden' }, 403);
     }
     const channels =
       workspace.workspace_kind === 'regular'
@@ -618,6 +661,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!workspace) {
       return c.json({ error: 'workspace not found' }, 404);
     }
+    if (!canMutateWorkspace(ctx, getUserPrincipal(c), workspace.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     if (workspace.workspace_kind === 'agent_home') {
       if (parsed.data.member_agent_ids.length > 0) {
         return c.json(
@@ -651,10 +697,7 @@ export function createApiRouter(ctx: BackendContext): Hono {
         workspaceId: id,
         title: parsed.data.title,
         memberAgentIds: parsed.data.member_agent_ids,
-        actor: {
-          kind: 'user',
-          userId: resolveViewerUserId(c, ctx) ?? 'local',
-        },
+        actor: getUserPrincipal(c),
       });
       return c.json({ channel: result.channel }, 201);
     } catch (err) {
@@ -669,6 +712,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!id) return c.json({ error: 'workspace id required' }, 400);
     const workspace = workspaces.get(id);
     if (!workspace) return c.json({ error: 'workspace not found' }, 404);
+    if (!canViewWorkspace(ctx, getUserPrincipal(c), workspace.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     if (workspace.workspace_kind === 'agent_home') {
       return c.json({ members: [] });
     }
@@ -681,6 +727,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     const workspace = workspaces.get(id);
     if (!workspace || workspace.workspace_kind !== 'regular') {
       return c.json({ error: 'workspace not found' }, 404);
+    }
+    if (!canManageMembers(ctx, getUserPrincipal(c), workspace.id)) {
+      return c.json({ error: 'forbidden' }, 403);
     }
     const body = await c.req.json().catch(() => ({}));
     const parsed = AddWorkspaceMemberInputSchema.safeParse(body);
@@ -708,6 +757,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     }
     const workspace = workspaces.get(id);
     if (!workspace || workspace.workspace_kind !== 'regular') return c.body(null, 204);
+    if (!canManageMembers(ctx, getUserPrincipal(c), workspace.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     for (const conversation of conversations.list()) {
       if (conversation.workspace_id !== workspace.id) continue;
       await ctx.conversationManager
@@ -731,6 +783,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!workspace) {
       return c.json({ error: 'workspace not found' }, 404);
     }
+    if (!canViewWorkspace(ctx, getUserPrincipal(c), workspace.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const viewerUserId = requireViewerUserId(c, ctx);
     if (typeof viewerUserId !== 'string') return viewerUserId;
     const unread = timedRouteSpan(
@@ -753,6 +808,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
   app.get(apiPaths.messageUnreadSummary, c => {
     const viewerUserId = requireViewerUserId(c, ctx);
     if (typeof viewerUserId !== 'string') return viewerUserId;
+    if (!canViewOwnedState(ctx, getUserPrincipal(c), viewerUserId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const byWorkspace = timedRouteSpan(
       ctx,
       'workspace.message_unread.summary',
@@ -770,8 +828,14 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!id) return c.json({ error: 'channel id required' }, 400);
     const channel = conversations.getChannelLike(id);
     if (!channel) return c.json({ error: 'channel not found' }, 404);
+    if (!canViewConversation(ctx, getUserPrincipal(c), channel.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const viewerUserId = requireViewerUserId(c, ctx);
     if (typeof viewerUserId !== 'string') return viewerUserId;
+    if (!canViewOwnedState(ctx, getUserPrincipal(c), viewerUserId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const count = timedRouteSpan(
       ctx,
       'conversation.message_unread.count',
@@ -790,6 +854,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!id) return c.json({ error: 'channel id required' }, 400);
     const channel = conversations.getChannelLike(id);
     if (!channel) return c.json({ error: 'channel not found' }, 404);
+    if (!canViewConversation(ctx, getUserPrincipal(c), channel.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const parsedLimit = Number(c.req.query('limit') ?? 200);
     const parsedBefore = c.req.query('before_seq');
     const limit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 500) : 200;
@@ -812,6 +879,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!id) return c.json({ error: 'channel id required' }, 400);
     const channel = conversations.getChannelLike(id);
     if (!channel) return c.json({ error: 'channel not found' }, 404);
+    if (!canViewConversation(ctx, getUserPrincipal(c), channel.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     return c.json({ channel });
   });
 
@@ -820,6 +890,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!id) return c.json({ error: 'thread id required' }, 400);
     const thread = conversations.getThread(id);
     if (!thread) return c.json({ error: 'thread not found' }, 404);
+    if (!canViewConversation(ctx, getUserPrincipal(c), thread.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     return c.json({ thread });
   });
 
@@ -828,6 +901,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!id) return c.json({ error: 'thread id required' }, 400);
     const thread = conversations.getThread(id);
     if (!thread) return c.json({ error: 'thread not found' }, 404);
+    if (!canViewConversation(ctx, getUserPrincipal(c), thread.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const parsedLimit = Number(c.req.query('limit') ?? 200);
     const parsedBefore = c.req.query('before_seq');
     const limit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 500) : 200;
@@ -850,6 +926,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!id) return c.json({ error: 'channel id required' }, 400);
     const channel = conversations.getChannelLike(id);
     if (!channel) return c.json({ error: 'channel not found' }, 404);
+    if (!canViewConversation(ctx, getUserPrincipal(c), channel.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const channelAgents = timedRouteSpan(
       ctx,
       'conversation.agents.list',
@@ -865,6 +944,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!id) return c.json({ error: 'thread id required' }, 400);
     const thread = conversations.getThread(id);
     if (!thread) return c.json({ error: 'thread not found' }, 404);
+    if (!canViewConversation(ctx, getUserPrincipal(c), thread.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const threadAgents = timedRouteSpan(
       ctx,
       'conversation.agents.list',
@@ -878,6 +960,11 @@ export function createApiRouter(ctx: BackendContext): Hono {
   app.post('/api/channels/:id/pin', async c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'channel id required' }, 400);
+    const channel = conversations.getChannelLike(id);
+    if (!channel) return c.json({ error: 'channel not found' }, 404);
+    if (!canMutateWorkspace(ctx, getUserPrincipal(c), channel.workspace_id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     try {
       const result = await ctx.channelService.setPinned({ channelId: id, pinned: true });
       return c.json({ channel: result.channel });
@@ -891,6 +978,11 @@ export function createApiRouter(ctx: BackendContext): Hono {
   app.delete('/api/channels/:id/pin', async c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'channel id required' }, 400);
+    const channel = conversations.getChannelLike(id);
+    if (!channel) return c.json({ error: 'channel not found' }, 404);
+    if (!canMutateWorkspace(ctx, getUserPrincipal(c), channel.workspace_id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     try {
       const result = await ctx.channelService.setPinned({ channelId: id, pinned: false });
       return c.json({ channel: result.channel });
@@ -906,6 +998,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!id) return c.json({ error: 'channel id required' }, 400);
     const channel = conversations.getChannelLike(id);
     if (!channel) return c.json({ error: 'channel not found' }, 404);
+    if (!canViewConversation(ctx, getUserPrincipal(c), channel.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const states = timedRouteSpan(
       ctx,
       'conversation.agent_run_states.snapshot',
@@ -921,6 +1016,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!id) return c.json({ error: 'thread id required' }, 400);
     const thread = conversations.getThread(id);
     if (!thread) return c.json({ error: 'thread not found' }, 404);
+    if (!canViewConversation(ctx, getUserPrincipal(c), thread.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const states = timedRouteSpan(
       ctx,
       'conversation.agent_run_states.snapshot',
@@ -936,6 +1034,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!id) return c.json({ error: 'channel id required' }, 400);
     const channel = conversations.getChannelLike(id);
     if (!channel) return c.json({ error: 'channel not found' }, 404);
+    if (!canPostToConversation(ctx, getUserPrincipal(c), channel.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const body = await c.req.json().catch(() => ({}));
     const parsed = SendMessageInputSchema.safeParse(body);
     if (!parsed.success) {
@@ -944,7 +1045,7 @@ export function createApiRouter(ctx: BackendContext): Hono {
     try {
       const result = await ctx.conversationMessageService.sendMessage({
         conversationId: channel.id,
-        actor: { kind: 'user', userId: resolveViewerUserId(c, ctx) },
+        actor: getUserPrincipal(c),
         content: parsed.data.content,
         attachmentIds: parsed.data.attachment_ids ?? [],
       });
@@ -961,6 +1062,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!id) return c.json({ error: 'thread id required' }, 400);
     const thread = conversations.getThread(id);
     if (!thread) return c.json({ error: 'thread not found' }, 404);
+    if (!canPostToConversation(ctx, getUserPrincipal(c), thread.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const body = await c.req.json().catch(() => ({}));
     const parsed = SendMessageInputSchema.safeParse(body);
     if (!parsed.success) {
@@ -969,7 +1073,7 @@ export function createApiRouter(ctx: BackendContext): Hono {
     try {
       const result = await ctx.conversationMessageService.sendMessage({
         conversationId: thread.id,
-        actor: { kind: 'user', userId: resolveViewerUserId(c, ctx) },
+        actor: getUserPrincipal(c),
         content: parsed.data.content,
         attachmentIds: parsed.data.attachment_ids ?? [],
       });
@@ -986,6 +1090,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!id) return c.json({ error: 'channel id required' }, 400);
     const channel = conversations.getChannelLike(id);
     if (!channel) return c.json({ error: 'channel not found' }, 404);
+    if (!canViewConversation(ctx, getUserPrincipal(c), channel.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     return markConversationRead(channel.id, c);
   });
 
@@ -994,6 +1101,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!id) return c.json({ error: 'thread id required' }, 400);
     const thread = conversations.getThread(id);
     if (!thread) return c.json({ error: 'thread not found' }, 404);
+    if (!canViewConversation(ctx, getUserPrincipal(c), thread.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     return markConversationRead(thread.id, c);
   });
 
@@ -1002,6 +1112,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!id) return c.json({ error: 'channel id required' }, 400);
     const channel = conversations.getChannelLike(id);
     if (!channel) return c.json({ error: 'channel not found' }, 404);
+    if (!canViewConversation(ctx, getUserPrincipal(c), channel.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const threads = timedRouteSpan(
       ctx,
       'conversation.threads.summary',
@@ -1027,6 +1140,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!channel) return c.json({ error: 'channel not found' }, 404);
     const viewerUserId = requireViewerUserId(c, ctx);
     if (typeof viewerUserId !== 'string') return viewerUserId;
+    if (!canPostToConversation(ctx, getUserPrincipal(c), channel.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     return uploadAttachment(ctx, c, channel.id, 'user', viewerUserId);
   });
 
@@ -1037,13 +1153,21 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!thread) return c.json({ error: 'thread not found' }, 404);
     const viewerUserId = requireViewerUserId(c, ctx);
     if (typeof viewerUserId !== 'string') return viewerUserId;
+    if (!canPostToConversation(ctx, getUserPrincipal(c), thread.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     return uploadAttachment(ctx, c, thread.id, 'user', viewerUserId);
   });
 
   app.get(apiPaths.attachment(':id'), async c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'attachment id required' }, 400);
-    const response = await ctx.attachmentService.serve(id);
+    const viewerUserId = requireViewerUserId(c, ctx);
+    if (typeof viewerUserId !== 'string') return viewerUserId;
+    const principal = getUserPrincipal(c);
+    const response = await ctx.attachmentService.serveForViewer(id, row =>
+      canViewAttachment(ctx, principal, row),
+    );
     if (!response) return c.json({ error: 'attachment not found' }, 404);
     return response;
   });
@@ -1053,6 +1177,11 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!id) return c.json({ error: 'attachment id required' }, 400);
     const viewerUserId = requireViewerUserId(c, ctx);
     if (typeof viewerUserId !== 'string') return viewerUserId;
+    const attachment = attachments.getById(id);
+    if (!attachment) return c.json({ error: 'attachment not found' }, 404);
+    if (!canDeleteAttachment(ctx, getUserPrincipal(c), attachment)) {
+      return c.json({ error: 'cannot delete attachment owned by another uploader' }, 403);
+    }
     const result = await ctx.attachmentService.deleteOrphan(id, {
       kind: 'user',
       userId: viewerUserId,
@@ -1102,10 +1231,15 @@ export function createApiRouter(ctx: BackendContext): Hono {
   app.post(apiPaths.messageThread(':id'), async c => {
     const messageId = c.req.param('id');
     if (!messageId) return c.json({ error: 'message id required' }, 400);
+    const message = messages.getById(messageId);
+    if (!message) return c.json({ error: 'message not found' }, 404);
+    if (!canPostToConversation(ctx, getUserPrincipal(c), message.conversation_id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     try {
       const result = await ctx.threadService.createThreadFromMessage({
         messageId,
-        viewer: { userId: resolveViewerUserId(c, ctx) },
+        actor: getUserPrincipal(c),
       });
       return c.json(
         { thread_id: result.thread.id, thread: result.thread, reused: result.reused },
@@ -1160,6 +1294,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
   ): Promise<Response> {
     const viewerUserId = requireViewerUserId(c, ctx);
     if (typeof viewerUserId !== 'string') return viewerUserId;
+    if (!canViewOwnedState(ctx, getUserPrincipal(c), viewerUserId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const body = await c.req.json().catch(() => ({}));
     const parsed = MarkConversationReadInputSchema.safeParse(body);
     if (!parsed.success) {
@@ -1195,6 +1332,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     if (!conversations.getAgent(conversationId, agentId)) {
       return c.json({ error: 'agent is not a member of this conversation' }, 400);
     }
+    if (!canPostToConversation(ctx, getUserPrincipal(c), conversationId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     ctx.logger.info(
       { conversationId, agentId },
       'api: start agent requested',
@@ -1217,6 +1357,9 @@ export function createApiRouter(ctx: BackendContext): Hono {
     agentId: string,
     c: Context,
   ): Promise<Response> {
+    if (!canPostToConversation(ctx, getUserPrincipal(c), conversationId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const body = await c.req.json().catch(() => ({}));
     const mode: 'soft' | 'hard' = body?.mode === 'soft' ? 'soft' : 'hard';
     const directive =
@@ -1646,7 +1789,7 @@ export function createApiRouter(ctx: BackendContext): Hono {
     }
     return c.json({
       tasks: ctx.taskService.list({
-        actor: { kind: 'user', userId: ctx.serverConfig.user_id ?? null },
+        actor: getUserPrincipal(c),
         workspaceId: parsed.data.workspace_id,
         conversationId: parsed.data.conversation_id,
         status: parsed.data.status,
@@ -1661,7 +1804,7 @@ export function createApiRouter(ctx: BackendContext): Hono {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
     const result = await ctx.taskService.claimTask({
-      actor: { kind: 'user', userId: ctx.serverConfig.user_id ?? null },
+      actor: getUserPrincipal(c),
       by: { messageId: c.req.param('messageId') },
       assignee: parsed.data.agent_id ? { agentId: parsed.data.agent_id } : undefined,
     });
@@ -1670,7 +1813,7 @@ export function createApiRouter(ctx: BackendContext): Hono {
 
   app.post('/api/tasks/:messageId/unclaim', async c => {
     const result = await ctx.taskService.unclaimTask({
-      actor: { kind: 'user', userId: ctx.serverConfig.user_id ?? null },
+      actor: getUserPrincipal(c),
       by: { messageId: c.req.param('messageId') },
     });
     return c.json(result, result.success ? 200 : 409);
@@ -1683,7 +1826,7 @@ export function createApiRouter(ctx: BackendContext): Hono {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
     const result = await ctx.taskService.updateStatus({
-      actor: { kind: 'user', userId: ctx.serverConfig.user_id ?? null },
+      actor: getUserPrincipal(c),
       by: { messageId: c.req.param('messageId') },
       status: parsed.data.status,
     });
@@ -1719,8 +1862,8 @@ function publishUnreadUpdated(
   });
 }
 
-export function createInternalRouter(ctx: BackendContext): Hono {
-  const app = new Hono();
+export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
+  const app = new Hono<AppEnv>();
   const agents = new AgentRepo(ctx.db);
   const conversations = new ConversationRepo(ctx.db);
   const messages = new MessageRepo(ctx.db);
@@ -1743,6 +1886,7 @@ export function createInternalRouter(ctx: BackendContext): Hono {
     }
     await next();
   });
+  installInternalPrincipalMiddleware(app, { agents, conversations });
 
   // ── canonical conversation-scoped MCP routes ───────────────────
   app.post(internalPaths.agentSendConversationMessage(':cid', ':aid'), async c => {
@@ -1760,10 +1904,14 @@ export function createInternalRouter(ctx: BackendContext): Hono {
       );
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
+    const principal = getAgentPrincipal(c);
+    if (!canPostToConversation(ctx, principal, principal.conversationId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     try {
       const result = await ctx.conversationMessageService.sendMessage({
-        conversationId: cid,
-        actor: { kind: 'agent', agentId: aid },
+        conversationId: principal.conversationId,
+        actor: principal,
         content: parsed.data.content,
         attachmentIds: parsed.data.attachment_ids ?? [],
         target: parsed.data.target,
@@ -1787,10 +1935,14 @@ export function createInternalRouter(ctx: BackendContext): Hono {
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
+    const principal = getAgentPrincipal(c);
+    if (!canPostToConversation(ctx, principal, principal.conversationId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     try {
       const result = await ctx.threadService.createThreadFromAgent({
-        parentConversationId: cid,
-        spawnerAgentId: aid,
+        parentConversationId: principal.conversationId,
+        actor: principal,
         title: parsed.data.title,
         contextSummary: parsed.data.context_summary,
         initialPrompt: parsed.data.initial_prompt,
@@ -1816,8 +1968,12 @@ export function createInternalRouter(ctx: BackendContext): Hono {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
 
-    const current = conversations.get(cid);
+    const principal = getAgentPrincipal(c);
+    const current = conversations.get(principal.conversationId);
     if (!current) return c.json({ error: 'conversation not found' }, 404);
+    if (!canPostToConversation(ctx, principal, current.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const memberAgentIds = conversations
       .listAgents(current.id)
       .map(member => member.agent_id);
@@ -1827,7 +1983,7 @@ export function createInternalRouter(ctx: BackendContext): Hono {
         workspaceId: current.workspace_id,
         title: parsed.data.title,
         memberAgentIds,
-        actor: { kind: 'agent', agentId: aid, conversationId: cid },
+        actor: principal,
         seed: {
           systemMessageBody:
             `Channel created from '${current.title}'. Reason: ${parsed.data.context_summary}`,
@@ -1854,10 +2010,14 @@ export function createInternalRouter(ctx: BackendContext): Hono {
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
+    const principal = getAgentPrincipal(c);
+    if (!canPostToConversation(ctx, principal, principal.conversationId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     try {
       const result = await ctx.threadService.closeThread({
-        threadId: cid,
-        actor: { kind: 'agent', agentId: aid },
+        threadId: principal.conversationId,
+        actor: principal,
         summary: parsed.data.summary,
         postedToParent: parsed.data.posted_to_parent ?? false,
       });
@@ -1886,9 +2046,13 @@ export function createInternalRouter(ctx: BackendContext): Hono {
     if (!parsed.success) {
       return c.json({ error: 'invalid query', issues: parsed.error.issues }, 400);
     }
+    const principal = getAgentPrincipal(c);
+    if (!canViewConversation(ctx, principal, principal.conversationId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     return c.json({
       tasks: ctx.taskService.list({
-        actor: { kind: 'agent', agentId: aid, conversationId: cid },
+        actor: principal,
         conversationId: parsed.data.conversation_id,
         status: parsed.data.status,
       }),
@@ -1906,9 +2070,13 @@ export function createInternalRouter(ctx: BackendContext): Hono {
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
+    const principal = getAgentPrincipal(c);
+    if (!canPostToConversation(ctx, principal, principal.conversationId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const result = await ctx.taskService.createTasks({
-      conversationId: cid,
-      actor: { kind: 'agent', agentId: aid, conversationId: cid },
+      conversationId: principal.conversationId,
+      actor: principal,
       tasks: parsed.data.tasks,
     });
     if ('error' in result) {
@@ -1928,7 +2096,10 @@ export function createInternalRouter(ctx: BackendContext): Hono {
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
-    const actor = { kind: 'agent' as const, agentId: aid, conversationId: cid };
+    const actor = getAgentPrincipal(c);
+    if (!canPostToConversation(ctx, actor, actor.conversationId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const results = [];
     for (const taskNumber of parsed.data.task_numbers ?? []) {
       results.push(await ctx.taskService.claimTask({ actor, by: { taskNumber } }));
@@ -1950,8 +2121,12 @@ export function createInternalRouter(ctx: BackendContext): Hono {
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
+    const principal = getAgentPrincipal(c);
+    if (!canPostToConversation(ctx, principal, principal.conversationId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const result = await ctx.taskService.unclaimTask({
-      actor: { kind: 'agent', agentId: aid, conversationId: cid },
+      actor: principal,
       by: { taskNumber: parsed.data.task_number },
     });
     return c.json(result);
@@ -1968,8 +2143,12 @@ export function createInternalRouter(ctx: BackendContext): Hono {
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
+    const principal = getAgentPrincipal(c);
+    if (!canPostToConversation(ctx, principal, principal.conversationId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const result = await ctx.taskService.updateStatus({
-      actor: { kind: 'agent', agentId: aid, conversationId: cid },
+      actor: principal,
       by: { taskNumber: parsed.data.task_number },
       status: parsed.data.status,
     });
@@ -1994,7 +2173,17 @@ export function createInternalRouter(ctx: BackendContext): Hono {
     if (!conversations.getAgent(cid, aid)) {
       return c.json({ error: 'agent is not a member of this conversation' }, 403);
     }
-    return uploadAttachment(ctx, c, conversation.id, 'agent', aid);
+    const principal = getAgentPrincipal(c);
+    if (!canPostToConversation(ctx, principal, principal.conversationId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    return uploadAttachment(
+      ctx,
+      c,
+      principal.conversationId,
+      'agent',
+      principal.agentId,
+    );
   });
 
   app.get(
@@ -2014,7 +2203,14 @@ export function createInternalRouter(ctx: BackendContext): Hono {
       if (!conversations.getAgent(cid, aid)) {
         return c.json({ error: 'agent is not a member of this conversation' }, 403);
       }
-      const located = await ctx.attachmentService.locateForAgent(attachmentId, cid);
+      const principal = getAgentPrincipal(c);
+      if (!canViewConversation(ctx, principal, principal.conversationId)) {
+        return c.json({ error: 'forbidden' }, 403);
+      }
+      const located = await ctx.attachmentService.locateForAgent(
+        attachmentId,
+        principal.conversationId,
+      );
       if (!located) {
         // Either does not exist or belongs to a different channel — same
         // shape on purpose so we don't leak existence across channels.
