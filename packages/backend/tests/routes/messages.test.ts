@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import {
+  encodeUserPrincipalHeader,
+  X_SILVERHAND_PRINCIPAL_HEADER,
+} from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 async function makeAgent(t: TestApp, name: string): Promise<string> {
   const created = await (
-    await http(t.app).post('/api/agents', { name, runtime: 'claude' })
+    await http(t).post('/api/agents', { name, runtime: 'claude' })
   ).json() as any;
   return created.agent.id;
 }
@@ -17,7 +21,7 @@ async function createWorkspaceChannel(
     agentIds[name] = await makeAgent(t, name);
   }
   const workspace = await (
-    await http(t.app).post('/api/workspaces', {
+    await http(t).post('/api/workspaces', {
       name: `ws-${names.join('-')}`,
       member_agent_ids: Object.values(agentIds),
     })
@@ -56,15 +60,15 @@ describe('message routes', () => {
     });
 
     const channelPost = await (
-      await http(t.app).post(`/api/channels/${channelId}/messages`, {
+      await http(t).post(`/api/channels/${channelId}/messages`, {
         content: 'topic',
       })
     ).json() as any;
     const thread = await (
-      await http(t.app).post(`/api/messages/${channelPost.message.id}/thread`)
+      await http(t).post(`/api/messages/${channelPost.message.id}/thread`)
     ).json() as any;
     const threadPost = await (
-      await http(t.app).post(`/api/threads/${thread.thread_id}/messages`, {
+      await http(t).post(`/api/threads/${thread.thread_id}/messages`, {
         content: 'thread reply',
       })
     ).json() as any;
@@ -97,11 +101,28 @@ describe('message routes', () => {
     );
   });
 
+  it('accepts the public principal header for user routes', async () => {
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t, ['alice']);
+    const post = await http(t).post(
+      `/api/channels/${channelId}/messages`,
+      { content: 'from teammate' },
+      {
+        headers: {
+          [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
+        },
+      },
+    );
+    expect(post.status).toBe(201);
+    const body = await post.json() as any;
+    expect(body.message.from_user_id).toBe('teammate');
+  });
+
   it('agent target parent lands in the parent conversation', async () => {
     t = buildTestApp();
     const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice', 'bob']);
     const thread = await (
-      await http(t.app).post(
+      await http(t).post(
         `/internal/conversations/${channelId}/agents/${agentIds.alice}/create-thread`,
         {
           title: 'child',
@@ -115,7 +136,7 @@ describe('message routes', () => {
     t.fake.delivered = [];
     t.fake.resolvedRuns = [];
 
-    const send = await http(t.app).post(
+    const send = await http(t).post(
       `/internal/conversations/${thread.thread_id}/agents/${agentIds.alice}/send-message`,
       { content: 'up to parent', target: 'parent' },
       { headers: authHeaders(t.authToken) },
@@ -123,7 +144,7 @@ describe('message routes', () => {
 
     expect(send.status).toBe(200);
     const parentMessages = await (
-      await http(t.app).get(`/api/channels/${channelId}/messages`)
+      await http(t).get(`/api/channels/${channelId}/messages`)
     ).json() as any;
     expect(parentMessages.messages.map((m: any) => m.content)).toContain('up to parent');
     expect(t.fake.resolvedRuns).toEqual([
@@ -135,7 +156,7 @@ describe('message routes', () => {
     t = buildTestApp();
     const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
     const thread = await (
-      await http(t.app).post(
+      await http(t).post(
         `/internal/conversations/${channelId}/agents/${agentIds.alice}/create-thread`,
         {
           title: 'child',
@@ -150,7 +171,7 @@ describe('message routes', () => {
       .prepare(`UPDATE conversations SET closed_at = ?, status = 'archived' WHERE id = ?`)
       .run(Date.now(), thread.thread_id);
 
-    const send = await http(t.app).post(
+    const send = await http(t).post(
       `/internal/conversations/${channelId}/agents/${agentIds.alice}/send-message`,
       { content: 'down', target: { thread_id: thread.thread_id } },
       { headers: authHeaders(t.authToken) },

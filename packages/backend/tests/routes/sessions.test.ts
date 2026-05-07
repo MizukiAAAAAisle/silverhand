@@ -10,12 +10,12 @@ async function createWorkspaceChannel(
   const agentIds: Record<string, string> = {};
   for (const name of members) {
     const body = await (
-      await http(t.app).post('/api/agents', { name, runtime: 'claude' })
+      await http(t).post('/api/agents', { name, runtime: 'claude' })
     ).json() as any;
     agentIds[name] = body.agent.id;
   }
   const workspaceBody = await (
-    await http(t.app).post('/api/workspaces', {
+    await http(t).post('/api/workspaces', {
       name: `ws-${crypto.randomUUID().slice(0, 8)}`,
       member_agent_ids: Object.values(agentIds),
     })
@@ -41,18 +41,18 @@ describe('canonical channel/thread routes', () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t, ['alice']);
     const legacyBase = ['/api', 'sessions', channelId, 'messages'].join('/');
-    expect((await http(t.app).get(legacyBase)).ok).toBe(false);
-    expect((await http(t.app).post(legacyBase, {
+    expect((await http(t).get(legacyBase)).ok).toBe(false);
+    expect((await http(t).post(legacyBase, {
       content: 'legacy',
     })).ok).toBe(false);
 
     const msg = await (
-      await http(t.app).post(`/api/channels/${channelId}/messages`, {
+      await http(t).post(`/api/channels/${channelId}/messages`, {
         content: 'thread anchor',
       })
     ).json() as any;
     const created = await (
-      await http(t.app).post(`/api/messages/${msg.message.id}/thread`)
+      await http(t).post(`/api/messages/${msg.message.id}/thread`)
     ).json() as any;
 
     for (const path of [
@@ -61,7 +61,7 @@ describe('canonical channel/thread routes', () => {
       `/api/threads/${created.thread_id}/stream`,
       `/api/threads/${created.thread_id}/events`,
     ]) {
-      expect((await http(t.app).get(path)).ok).toBe(false);
+      expect((await http(t).get(path)).ok).toBe(false);
     }
   });
 
@@ -69,20 +69,20 @@ describe('canonical channel/thread routes', () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t, ['alice']);
     for (let i = 0; i < 5; i++) {
-      const res = await http(t.app).post(`/api/channels/${channelId}/messages`, {
+      const res = await http(t).post(`/api/channels/${channelId}/messages`, {
         content: `m${i}`,
       });
       expect(res.status).toBe(201);
     }
 
     const latest = await (
-      await http(t.app).get(`/api/channels/${channelId}/messages?limit=2`)
+      await http(t).get(`/api/channels/${channelId}/messages?limit=2`)
     ).json() as any;
     expect(latest.messages.map((m: any) => m.content)).toEqual(['m3', 'm4']);
     expect(latest.has_more_before).toBe(true);
 
     const earlier = await (
-      await http(t.app).get(
+      await http(t).get(
         `/api/channels/${channelId}/messages?limit=2&before_seq=${latest.messages[0].seq}`,
       )
     ).json() as any;
@@ -94,7 +94,7 @@ describe('canonical channel/thread routes', () => {
     t = buildTestApp();
     const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
     const msg = await (
-      await http(t.app).post(`/api/channels/${channelId}/messages`, {
+      await http(t).post(`/api/channels/${channelId}/messages`, {
         content: 'start a thread here',
       })
     ).json() as any;
@@ -102,21 +102,21 @@ describe('canonical channel/thread routes', () => {
     t.fake.delivered = [];
 
     const created = await (
-      await http(t.app).post(`/api/messages/${msg.message.id}/thread`)
+      await http(t).post(`/api/messages/${msg.message.id}/thread`)
     ).json() as any;
     expect(typeof created.thread_id).toBe('string');
     expect(created.thread.id).toBe(created.thread_id);
     expect(created.thread.channel_id).toBe(channelId);
     expect(created.thread.parent_conversation_id).toBe(channelId);
 
-    expect((await http(t.app).get(`/api/channels/${created.thread_id}/messages`)).status)
+    expect((await http(t).get(`/api/channels/${created.thread_id}/messages`)).status)
       .toBe(404);
-    expect((await http(t.app).get(`/api/threads/${channelId}/messages`)).status)
+    expect((await http(t).get(`/api/threads/${channelId}/messages`)).status)
       .toBe(404);
-    expect((await http(t.app).get(`/api/threads/${created.thread_id}/messages`)).status)
+    expect((await http(t).get(`/api/threads/${created.thread_id}/messages`)).status)
       .toBe(200);
     const threadMessages = await (
-      await http(t.app).get(`/api/threads/${created.thread_id}/messages`)
+      await http(t).get(`/api/threads/${created.thread_id}/messages`)
     ).json() as any;
     const onboarding = threadMessages.messages.find(
       (m: any) => m.metadata?.subtype === 'onboarding',
@@ -138,20 +138,20 @@ describe('canonical channel/thread routes', () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t, ['alice']);
     const msg = await (
-      await http(t.app).post(`/api/channels/${channelId}/messages`, {
+      await http(t).post(`/api/channels/${channelId}/messages`, {
         content: 'topic',
       })
     ).json() as any;
     const created = await (
-      await http(t.app).post(`/api/messages/${msg.message.id}/thread`)
+      await http(t).post(`/api/messages/${msg.message.id}/thread`)
     ).json() as any;
 
-    const post = await http(t.app).post(`/api/threads/${created.thread_id}/messages`, {
+    const post = await http(t).post(`/api/threads/${created.thread_id}/messages`, {
       content: 'thread reply',
     });
     expect(post.status).toBe(201);
     const threads = await (
-      await http(t.app).get(`/api/channels/${channelId}/threads`)
+      await http(t).get(`/api/channels/${channelId}/threads`)
     ).json() as any;
     expect(threads.threads).toMatchObject([
       {
@@ -165,7 +165,7 @@ describe('canonical channel/thread routes', () => {
       .prepare(`UPDATE conversations SET closed_at = ?, status = 'archived' WHERE id = ?`)
       .run(Date.now(), created.thread_id);
     const closedThreads = await (
-      await http(t.app).get(`/api/channels/${channelId}/threads`)
+      await http(t).get(`/api/channels/${channelId}/threads`)
     ).json() as any;
     expect(closedThreads.threads.map((thread: any) => thread.thread_id))
       .toContain(created.thread_id);
@@ -188,7 +188,7 @@ describe('canonical channel/thread routes', () => {
       content: 'mine',
     });
 
-    const res = await http(t.app, { 'x-silverhand-user-id': 'local' })
+    const res = await http(t, { 'x-silverhand-user-id': 'local' })
       .get('/api/message-unread-summary');
     expect(res.status).toBe(200);
     const body = await res.json() as any;
@@ -199,47 +199,47 @@ describe('canonical channel/thread routes', () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t, ['alice']);
     const msg = await (
-      await http(t.app).post(`/api/channels/${channelId}/messages`, {
+      await http(t).post(`/api/channels/${channelId}/messages`, {
         content: 'save me',
       })
     ).json() as any;
 
-    expect((await (await http(t.app).get('/api/saved')).json() as any).saved)
+    expect((await (await http(t).get('/api/saved')).json() as any).saved)
       .toEqual([]);
 
     const saved = await (
-      await http(t.app).post(`/api/messages/${msg.message.id}/save`)
+      await http(t).post(`/api/messages/${msg.message.id}/save`)
     ).json() as any;
     expect(saved.saved.message.id).toBe(msg.message.id);
 
-    const listed = await (await http(t.app).get('/api/saved')).json() as any;
+    const listed = await (await http(t).get('/api/saved')).json() as any;
     expect(listed.saved).toHaveLength(1);
     expect(listed.saved[0].message.id).toBe(msg.message.id);
 
-    const deleted = await http(t.app).del(`/api/messages/${msg.message.id}/save`);
+    const deleted = await http(t).del(`/api/messages/${msg.message.id}/save`);
     expect(deleted.status).toBe(204);
-    const afterDelete = await (await http(t.app).get('/api/saved')).json() as any;
+    const afterDelete = await (await http(t).get('/api/saved')).json() as any;
     expect(afterDelete.saved).toEqual([]);
   });
 
   it('starts and stops channel/thread agents through canonical routes', async () => {
     t = buildTestApp();
     const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
-    const start = await http(t.app).post(
+    const start = await http(t).post(
       `/api/channels/${channelId}/agents/${agentIds.alice}/start`,
     );
     expect(start.status).toBe(200);
     expect(t.fake.starts).toEqual([{ conversationId: channelId, agentId: agentIds.alice }]);
 
     const msg = await (
-      await http(t.app).post(`/api/channels/${channelId}/messages`, {
+      await http(t).post(`/api/channels/${channelId}/messages`, {
         content: 'topic',
       })
     ).json() as any;
     const created = await (
-      await http(t.app).post(`/api/messages/${msg.message.id}/thread`)
+      await http(t).post(`/api/messages/${msg.message.id}/thread`)
     ).json() as any;
-    const stop = await http(t.app).post(
+    const stop = await http(t).post(
       `/api/threads/${created.thread_id}/agents/${agentIds.alice}/stop`,
       { mode: 'soft', directive: 'pause' },
     );
@@ -254,7 +254,7 @@ describe('canonical channel/thread routes', () => {
 
   it('marks channel and thread read cursors through canonical routes', async () => {
     t = buildTestApp();
-    const viewer = http(t.app, { 'X-Silverhand-User-Id': 'local' });
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
     const { channelId } = await createWorkspaceChannel(t, ['alice']);
     await viewer.post(`/api/channels/${channelId}/messages`, {
       content: 'from user',
@@ -281,7 +281,7 @@ describe('canonical channel/thread routes', () => {
 
   it('publishes message unread updates only when unread counts change', async () => {
     t = buildTestApp();
-    const viewer = http(t.app, { 'X-Silverhand-User-Id': 'local' });
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
     const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
     const messages = new MessageRepo(t.ctx.db);
     messages.insertForConversation({
@@ -322,7 +322,7 @@ describe('canonical channel/thread routes', () => {
     const unsub = t.ctx.events.subscribeScope('viewer:local', e => {
       events.push({ kind: e.kind, payload: e.payload });
     });
-    const first = await http(t.app).post('/api/notifications/read', {
+    const first = await http(t).post('/api/notifications/read', {
       conversation_id: channelId,
     });
     expect(first.status).toBe(200);
@@ -330,7 +330,7 @@ describe('canonical channel/thread routes', () => {
     expect(events).toEqual([{ kind: 'unread_updated', payload: { marked: 1 } }]);
 
     events.length = 0;
-    const second = await http(t.app).post('/api/notifications/read', {
+    const second = await http(t).post('/api/notifications/read', {
       conversation_id: channelId,
     });
     unsub();

@@ -174,7 +174,7 @@ describe('event WebSocket server', () => {
     });
 
     const eventFrame = readFrame(ws);
-    const post = await http(t.app, { 'X-Silverhand-User-Id': 'local' }).post(
+    const post = await http(t, { 'X-Silverhand-User-Id': 'local' }).post(
       `/api/channels/${conversationId}/messages`,
       { content: 'hello over http' },
     );
@@ -330,7 +330,7 @@ async function openServer(
 }
 
 async function createWorkspaceAndConversation(t: TestApp): Promise<string> {
-  const res = await http(t.app).post('/api/workspaces', {
+  const res = await http(t).post('/api/workspaces', {
     name: `ws-${randomUUID().slice(0, 8)}`,
   });
   expect(res.status).toBe(201);

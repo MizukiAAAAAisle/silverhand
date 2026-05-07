@@ -7,6 +7,7 @@ import type {
 } from '@silverhand/shared';
 import type { BackendContext, BackendLogger } from '../../src/context.js';
 import { silverhandCors } from '../../src/cors.js';
+import type { AppEnv } from '../../src/auth/principal.js';
 import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
@@ -107,7 +108,7 @@ const silentLogger: BackendLogger = {
 };
 
 export interface TestApp {
-  app: Hono;
+  app: Hono<AppEnv>;
   ctx: BackendContext;
   fake: FakeConversationManager;
   authToken: string;
@@ -213,7 +214,7 @@ export function buildTestApp(): TestApp {
   // the same — this is a safety net if anyone changes the helper later.
   new HostRepo(db).ensureLocal();
 
-  const app = new Hono();
+  const app = new Hono<AppEnv>();
   app.use('*', silverhandCors());
   app.route('/', createApiRouter(ctx));
   app.route('/', createInternalRouter(ctx));
@@ -243,11 +244,20 @@ export interface HttpHelper {
   json<T = any>(res: Promise<Response> | Response): Promise<T>;
 }
 
-export function http(app: Hono, defaultHeaders: Record<string, string> = {}): HttpHelper {
+export function http(
+  target: Hono<AppEnv> | TestApp,
+  defaultHeaders: Record<string, string> = {},
+): HttpHelper {
+  const isTestApp = (value: unknown): value is TestApp =>
+    typeof value === 'object' && value !== null && 'authToken' in value && 'app' in value;
+  const app = isTestApp(target) ? target.app : target;
+  const headers: Record<string, string> = isTestApp(target)
+    ? { authorization: `Bearer ${target.authToken}`, ...defaultHeaders }
+    : { ...defaultHeaders };
   const base = 'http://localhost';
   const merge = (init?: RequestInit): RequestInit => ({
     ...init,
-    headers: { ...defaultHeaders, ...(init?.headers as Record<string, string> | undefined) },
+    headers: { ...headers, ...(init?.headers as Record<string, string> | undefined) },
   });
   const jsonReq = (method: 'POST' | 'PATCH', body: unknown, init?: RequestInit) =>
     merge({

@@ -11,22 +11,22 @@ describe('GET /api/search', () => {
   it('returns matching messages for a non-empty keyword', async () => {
     t = buildTestApp();
     const agent = await (
-      await http(t.app).post('/api/agents', { name: 'alice', runtime: 'claude' })
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
     ).json() as any;
     const workspace = await (
-      await http(t.app).post('/api/workspaces', {
+      await http(t).post('/api/workspaces', {
         name: 'eng',
         member_agent_ids: [agent.agent.id],
       })
     ).json() as any;
 
-    const message = await http(t.app).post(
+    const message = await http(t).post(
       `/api/channels/${workspace.onboarding_channel_id}/messages`,
       { content: 'needle phrase for search' },
     );
     expect(message.status).toBe(201);
 
-    const res = await http(t.app).get('/api/search?q=needle');
+    const res = await http(t).get('/api/search?q=needle');
     expect(res.status).toBe(200);
     const body = await res.json() as any;
     expect(body.results).toEqual(
@@ -43,12 +43,12 @@ describe('GET /api/search', () => {
 
   it('searches workspace names without using legacy channel aliases', async () => {
     t = buildTestApp();
-    await http(t.app).post('/api/workspaces', {
+    await http(t).post('/api/workspaces', {
       name: 'needle-workspace',
       description: 'engineering',
     });
 
-    const res = await http(t.app).get('/api/search?q=needle-workspace');
+    const res = await http(t).get('/api/search?q=needle-workspace');
     expect(res.status).toBe(200);
     const body = await res.json() as any;
     expect(body.results).toEqual(

@@ -3,7 +3,7 @@ import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 async function makeAgent(t: TestApp, name: string): Promise<string> {
   const created = await (
-    await http(t.app).post('/api/agents', { name, runtime: 'claude' })
+    await http(t).post('/api/agents', { name, runtime: 'claude' })
   ).json() as any;
   return created.agent.id;
 }
@@ -17,7 +17,7 @@ async function createWorkspaceChannel(
     agentIds[name] = await makeAgent(t, name);
   }
   const workspace = await (
-    await http(t.app).post('/api/workspaces', {
+    await http(t).post('/api/workspaces', {
       name: `thread-ws-${names.join('-')}`,
       member_agent_ids: Object.values(agentIds),
     })
@@ -48,7 +48,7 @@ describe('thread routes', () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t, ['alice']);
     const posted = await (
-      await http(t.app).post(`/api/channels/${channelId}/messages`, {
+      await http(t).post(`/api/channels/${channelId}/messages`, {
         content: 'open a focused thread',
       })
     ).json() as any;
@@ -57,9 +57,9 @@ describe('thread routes', () => {
       if (e.kind === 'thread_updated') events.push({ kind: e.kind, payload: e.payload });
     });
 
-    const first = await http(t.app).post(`/api/messages/${posted.message.id}/thread`);
+    const first = await http(t).post(`/api/messages/${posted.message.id}/thread`);
     const firstBody = await first.json() as any;
-    const second = await http(t.app).post(`/api/messages/${posted.message.id}/thread`);
+    const second = await http(t).post(`/api/messages/${posted.message.id}/thread`);
     const secondBody = await second.json() as any;
     unsub();
 
@@ -83,7 +83,7 @@ describe('thread routes', () => {
     t = buildTestApp();
     const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice', 'bob']);
 
-    const response = await http(t.app).post(
+    const response = await http(t).post(
       `/internal/conversations/${channelId}/agents/${agentIds.alice}/create-thread`,
       {
         title: 'investigate',
@@ -96,7 +96,7 @@ describe('thread routes', () => {
     expect(response.status).toBe(200);
     const body = await response.json() as any;
     const messages = await (
-      await http(t.app).get(`/api/threads/${body.thread_id}/messages`)
+      await http(t).get(`/api/threads/${body.thread_id}/messages`)
     ).json() as any;
 
     expect(messages.messages).toHaveLength(2);
@@ -122,7 +122,7 @@ describe('thread routes', () => {
     const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice', 'bob']);
     const carolId = await makeAgent(t, 'carol');
     const child = await (
-      await http(t.app).post(
+      await http(t).post(
         `/internal/conversations/${channelId}/agents/${agentIds.alice}/create-thread`,
         {
           title: 'inv',
@@ -134,7 +134,7 @@ describe('thread routes', () => {
       )
     ).json() as any;
 
-    const forged = await http(t.app).post(
+    const forged = await http(t).post(
       `/internal/conversations/${child.thread_id}/agents/${carolId}/close-thread`,
       { summary: 'not allowed' },
       { headers: authHeaders(t.authToken) },
@@ -145,7 +145,7 @@ describe('thread routes', () => {
     const unsub = t.ctx.events.subscribe(channelId, e => {
       events.push({ kind: e.kind, payload: e.payload });
     });
-    const close = await http(t.app).post(
+    const close = await http(t).post(
       `/internal/conversations/${child.thread_id}/agents/${agentIds.bob}/close-thread`,
       { summary: 'done' },
       { headers: authHeaders(t.authToken) },
@@ -154,7 +154,7 @@ describe('thread routes', () => {
 
     expect(close.status).toBe(200);
     const parentMessages = await (
-      await http(t.app).get(`/api/channels/${channelId}/messages`)
+      await http(t).get(`/api/channels/${channelId}/messages`)
     ).json() as any;
     const summary = parentMessages.messages.find(
       (m: any) => m.metadata?.subtype === 'thread_summary',

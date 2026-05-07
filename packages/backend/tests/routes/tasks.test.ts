@@ -11,7 +11,7 @@ interface SetupResult {
 }
 
 async function setup(t: TestApp, members = ['alice', 'bob']): Promise<SetupResult> {
-  const h = http(t.app);
+  const h = http(t);
   const agentIds: Record<string, string> = {};
   for (const name of members) {
     const r = (await (
@@ -63,7 +63,7 @@ describe('Tasks (PR-T1)', () => {
     expect(r1.tasks[1].task_number).toBe(2);
 
     // Human list view picks up both, with correct workspace/channel refs.
-    const h2 = http(t.app);
+    const h2 = http(t);
     const all = await (await h2.get('/api/tasks')).json() as any;
     expect(all.tasks).toHaveLength(2);
     expect(all.tasks[0].workspace_id).toBe(workspaceId);
@@ -103,7 +103,7 @@ describe('Tasks (PR-T1)', () => {
 
     // After claim, status has auto-advanced to in_progress.
     const listed = await (
-      await http(t.app).get('/api/tasks')
+      await http(t).get('/api/tasks')
     ).json() as any;
     expect(listed.tasks[0].status).toBe('in_progress');
     expect(listed.tasks[0].assignee?.type).toBe('agent');
@@ -116,7 +116,7 @@ describe('Tasks (PR-T1)', () => {
     const h = http(t.app, auth(t.authToken));
 
     // User posts a normal message; alice promotes it.
-    const viewer = http(t.app, { 'x-silverhand-user-id': 'teammate' });
+    const viewer = http(t, { 'x-silverhand-user-id': 'teammate' });
     const userMsg = await (
       await viewer.post(`/api/channels/${sessionId}/messages`, {
         content: 'please refactor auth module',
@@ -134,7 +134,7 @@ describe('Tasks (PR-T1)', () => {
 
     // The promoted message now lists as a task, title from first line.
     const listed = await (
-      await http(t.app).get('/api/tasks')
+      await http(t).get('/api/tasks')
     ).json() as any;
     expect(listed.tasks).toHaveLength(1);
     expect(listed.tasks[0].title).toBe('please refactor auth module');
@@ -151,7 +151,7 @@ describe('Tasks (PR-T1)', () => {
     const s1 = await setup(t);
     // Second session in same channel.
     const ses2 = (await (
-      await http(t.app).post(`/api/workspaces/${s1.channelId}/channels`, {
+      await http(t).post(`/api/workspaces/${s1.channelId}/channels`, {
         title: 'parallel',
         member_agent_ids: Object.values(s1.agentIds),
       })
@@ -252,12 +252,12 @@ describe('Tasks (PR-T1)', () => {
 
     // Human approve.
     const approve = await (
-      await http(t.app).post(`/api/tasks/${messageId}/status`, { status: 'done' })
+      await http(t).post(`/api/tasks/${messageId}/status`, { status: 'done' })
     ).json() as any;
     expect(approve.success).toBe(true);
 
     const listed = await (
-      await http(t.app).get('/api/tasks')
+      await http(t).get('/api/tasks')
     ).json() as any;
     expect(listed.tasks[0].status).toBe('done');
   });
@@ -315,7 +315,7 @@ describe('Tasks (PR-T1)', () => {
       { tasks: [{ title: 'numbered task' }] },
     );
     // post a regular message for promote-and-claim
-    const viewer = http(t.app, { 'x-silverhand-user-id': 'teammate' });
+    const viewer = http(t, { 'x-silverhand-user-id': 'teammate' });
     const userMsg = await (
       await viewer.post(`/api/channels/${sessionId}/messages`, {
         content: 'please look into the deadlock',
@@ -349,11 +349,11 @@ describe('Tasks (PR-T1)', () => {
     const messageId = created.tasks[0].message_id;
 
     const claim = (await (
-      await http(t.app).post(`/api/tasks/${messageId}/claim`, {})
+      await http(t).post(`/api/tasks/${messageId}/claim`, {})
     ).json()) as any;
     expect(claim.success).toBe(true);
 
-    const listed = (await (await http(t.app).get('/api/tasks')).json()) as any;
+    const listed = (await (await http(t).get('/api/tasks')).json()) as any;
     expect(listed.tasks[0].status).toBe('in_progress');
     expect(listed.tasks[0].assignee).toBeNull();
   });
@@ -380,11 +380,11 @@ describe('Tasks (PR-T1)', () => {
     );
 
     const unclaim = (await (
-      await http(t.app).post(`/api/tasks/${messageId}/unclaim`)
+      await http(t).post(`/api/tasks/${messageId}/unclaim`)
     ).json()) as any;
     expect(unclaim.success).toBe(true);
 
-    const listed = (await (await http(t.app).get('/api/tasks')).json()) as any;
+    const listed = (await (await http(t).get('/api/tasks')).json()) as any;
     expect(listed.tasks[0].status).toBe('todo');
     expect(listed.tasks[0].assignee).toBeNull();
   });
@@ -403,10 +403,10 @@ describe('Tasks (PR-T1)', () => {
     const messageId = created.tasks[0].message_id;
 
     const direct = (await (
-      await http(t.app).post(`/api/tasks/${messageId}/status`, { status: 'done' })
+      await http(t).post(`/api/tasks/${messageId}/status`, { status: 'done' })
     ).json()) as any;
     expect(direct.success).toBe(true);
-    const listed = (await (await http(t.app).get('/api/tasks')).json()) as any;
+    const listed = (await (await http(t).get('/api/tasks')).json()) as any;
     expect(listed.tasks[0].status).toBe('done');
   });
 });

@@ -10,7 +10,7 @@ describe('POST /api/agents', () => {
 
   it('rejects invalid name (returns 400 with zod issues)', async () => {
     t = buildTestApp();
-    const res = await http(t.app).post('/api/agents', {
+    const res = await http(t).post('/api/agents', {
       name: 'has spaces',
       runtime: 'claude',
     });
@@ -22,7 +22,7 @@ describe('POST /api/agents', () => {
 
   it('creates an agent + auto-DM channel + onboarding session, fans out to ConversationManager', async () => {
     t = buildTestApp();
-    const res = await http(t.app).post('/api/agents', {
+    const res = await http(t).post('/api/agents', {
       name: 'alice',
       runtime: 'claude',
     });
@@ -33,14 +33,14 @@ describe('POST /api/agents', () => {
     expect(typeof body.dm_channel_id).toBe('string');
 
     // auto-DM channel exists as a canonical dm_channel conversation.
-    const workspaces = await (await http(t.app).get('/api/workspaces')).json() as any;
+    const workspaces = await (await http(t).get('/api/workspaces')).json() as any;
     const home = workspaces.workspaces.find(
       (w: any) => w.workspace_kind === 'agent_home' && w.owner_agent_id === body.agent.id,
     );
     expect(home).toBeDefined();
     expect(home.dm_channel_id).toBe(body.dm_channel_id);
     const channels = await (
-      await http(t.app).get(`/api/workspaces/${home.id}/channels`)
+      await http(t).get(`/api/workspaces/${home.id}/channels`)
     ).json() as any;
     const dm = channels.channels.find((c: any) => c.id === body.dm_channel_id);
     expect(dm.kind).toBe('dm_channel');
@@ -56,8 +56,8 @@ describe('POST /api/agents', () => {
 
   it('returns 409 on duplicate name', async () => {
     t = buildTestApp();
-    await http(t.app).post('/api/agents', { name: 'bob', runtime: 'claude' });
-    const dup = await http(t.app).post('/api/agents', {
+    await http(t).post('/api/agents', { name: 'bob', runtime: 'claude' });
+    const dup = await http(t).post('/api/agents', {
       name: 'bob',
       runtime: 'claude',
     });
@@ -74,27 +74,27 @@ describe('GET/DELETE /api/agents', () => {
 
   it('GET lists agents in created_at order', async () => {
     t = buildTestApp();
-    await http(t.app).post('/api/agents', { name: 'a', runtime: 'claude' });
-    await http(t.app).post('/api/agents', { name: 'b', runtime: 'claude' });
-    const list = await (await http(t.app).get('/api/agents')).json() as any;
+    await http(t).post('/api/agents', { name: 'a', runtime: 'claude' });
+    await http(t).post('/api/agents', { name: 'b', runtime: 'claude' });
+    const list = await (await http(t).get('/api/agents')).json() as any;
     expect(list.agents.map((a: any) => a.name)).toEqual(['a', 'b']);
   });
 
   it('DELETE without confirm flag is rejected (400)', async () => {
     t = buildTestApp();
     const created = await (
-      await http(t.app).post('/api/agents', { name: 'tmp', runtime: 'claude' })
+      await http(t).post('/api/agents', { name: 'tmp', runtime: 'claude' })
     ).json() as any;
-    const del = await http(t.app).del(`/api/agents/${created.agent.id}`);
+    const del = await http(t).del(`/api/agents/${created.agent.id}`);
     expect(del.status).toBe(400);
     // agent still present
-    const get = await http(t.app).get(`/api/agents/${created.agent.id}`);
+    const get = await http(t).get(`/api/agents/${created.agent.id}`);
     expect(get.status).toBe(200);
   });
 
   it('DELETE on unknown id returns 204 (idempotent)', async () => {
     t = buildTestApp();
-    const del = await http(t.app).del(`/api/agents/does-not-exist`);
+    const del = await http(t).del(`/api/agents/does-not-exist`);
     expect(del.status).toBe(204);
   });
 });
@@ -106,9 +106,9 @@ describe('GET /api/agents/:id', () => {
   it('returns the full DTO including display_name + reasoning_effort defaults', async () => {
     t = buildTestApp();
     const created = await (
-      await http(t.app).post('/api/agents', { name: 'alice', runtime: 'codex' })
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'codex' })
     ).json() as any;
-    const got = await (await http(t.app).get(`/api/agents/${created.agent.id}`)).json() as any;
+    const got = await (await http(t).get(`/api/agents/${created.agent.id}`)).json() as any;
     expect(got.agent.display_name).toBe('alice');
     expect(got.agent.reasoning_effort).toBeNull();
     expect(got.agent.runtime).toBe('codex');
@@ -116,7 +116,7 @@ describe('GET /api/agents/:id', () => {
 
   it('404 on unknown id', async () => {
     t = buildTestApp();
-    const res = await http(t.app).get('/api/agents/does-not-exist');
+    const res = await http(t).get('/api/agents/does-not-exist');
     expect(res.status).toBe(404);
   });
 });
@@ -128,14 +128,14 @@ describe('PATCH /api/agents/:id', () => {
   it('updates display_name + model; leaves untouched fields alone', async () => {
     t = buildTestApp();
     const created = await (
-      await http(t.app).post('/api/agents', {
+      await http(t).post('/api/agents', {
         name: 'alice',
         runtime: 'claude',
         model: 'sonnet',
       })
     ).json() as any;
     const patched = await (
-      await http(t.app).patch(`/api/agents/${created.agent.id}`, {
+      await http(t).patch(`/api/agents/${created.agent.id}`, {
         display_name: 'Alice (reviewer)',
         model: 'opus',
       })
@@ -149,16 +149,16 @@ describe('PATCH /api/agents/:id', () => {
   it('400 on empty body (refines noop)', async () => {
     t = buildTestApp();
     const created = await (
-      await http(t.app).post('/api/agents', { name: 'alice', runtime: 'claude' })
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
     ).json() as any;
-    const res = await http(t.app).patch(`/api/agents/${created.agent.id}`, {});
+    const res = await http(t).patch(`/api/agents/${created.agent.id}`, {});
     expect(res.status).toBe(400);
   });
 
   it('rejects runtime change while a conversation_agent is starting/active (409)', async () => {
     t = buildTestApp();
     const created = await (
-      await http(t.app).post('/api/agents', { name: 'alice', runtime: 'claude' })
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
     ).json() as any;
     // Provisioning auto-starts the DM onboarding channel — force a
     // running status row by writing to conversation_agents directly so the
@@ -179,7 +179,7 @@ describe('PATCH /api/agents/:id', () => {
       )
       .run(dmConversations[0]!.id, created.agent.id);
 
-    const res = await http(t.app).patch(`/api/agents/${created.agent.id}`, {
+    const res = await http(t).patch(`/api/agents/${created.agent.id}`, {
       runtime: 'codex',
     });
     expect(res.status).toBe(409);
@@ -190,9 +190,9 @@ describe('PATCH /api/agents/:id', () => {
   it('allows runtime change when nothing is running', async () => {
     t = buildTestApp();
     const created = await (
-      await http(t.app).post('/api/agents', { name: 'alice', runtime: 'claude' })
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
     ).json() as any;
-    const res = await http(t.app).patch(`/api/agents/${created.agent.id}`, {
+    const res = await http(t).patch(`/api/agents/${created.agent.id}`, {
       runtime: 'codex',
     });
     expect(res.status).toBe(200);
@@ -208,10 +208,10 @@ describe('GET /api/agents/:id/workspace', () => {
   it('returns L1 path + seeded system_prompt + memory previews', async () => {
     t = buildTestApp();
     const created = await (
-      await http(t.app).post('/api/agents', { name: 'alice', runtime: 'claude' })
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
     ).json() as any;
     const res = await (
-      await http(t.app).get(`/api/agents/${created.agent.id}/workspace`)
+      await http(t).get(`/api/agents/${created.agent.id}/workspace`)
     ).json() as any;
     expect(res.workspace.l1_path).toContain(created.agent.id);
     expect(res.workspace.system_prompt).not.toBeNull();
@@ -231,10 +231,10 @@ describe('GET /api/agents/:id/runtime-state', () => {
   it('lists every conversation_agent for the agent with workspace/channel/thread names denormalized', async () => {
     t = buildTestApp();
     const created = await (
-      await http(t.app).post('/api/agents', { name: 'alice', runtime: 'claude' })
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
     ).json() as any;
     const res = await (
-      await http(t.app).get(`/api/agents/${created.agent.id}/runtime-state`)
+      await http(t).get(`/api/agents/${created.agent.id}/runtime-state`)
     ).json() as any;
     expect(Array.isArray(res.conversation_agents)).toBe(true);
     expect(res.conversation_agents.length).toBeGreaterThan(0);
@@ -255,7 +255,7 @@ describe('POST /api/agents/:id/stop', () => {
   it('hard-stops every running conversation_agent for this agent', async () => {
     t = buildTestApp();
     const created = await (
-      await http(t.app).post('/api/agents', { name: 'alice', runtime: 'claude' })
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
     ).json() as any;
     // mark the onboarding conversation_agent as active
     const dmConversations = t.ctx.db
@@ -274,7 +274,7 @@ describe('POST /api/agents/:id/stop', () => {
       .run(dmConversations[0]!.id, created.agent.id);
 
     t.fake.stops = [];
-    const res = await http(t.app).post(`/api/agents/${created.agent.id}/stop`);
+    const res = await http(t).post(`/api/agents/${created.agent.id}/stop`);
     expect(res.status).toBe(200);
     const body = await res.json() as any;
     expect(body.stopped).toBe(1);
@@ -285,10 +285,10 @@ describe('POST /api/agents/:id/stop', () => {
   it('no-op (200, stopped:0) when nothing is running', async () => {
     t = buildTestApp();
     const created = await (
-      await http(t.app).post('/api/agents', { name: 'alice', runtime: 'claude' })
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
     ).json() as any;
     t.fake.stops = [];
-    const res = await http(t.app).post(`/api/agents/${created.agent.id}/stop`);
+    const res = await http(t).post(`/api/agents/${created.agent.id}/stop`);
     const body = await res.json() as any;
     expect(body.stopped).toBe(0);
     expect(t.fake.stops).toHaveLength(0);
@@ -302,18 +302,18 @@ describe('GET /api/agents/:id/delete-impact', () => {
   it('summarizes DM channel + regular channel membership + l1/l2 paths', async () => {
     t = buildTestApp();
     const created = await (
-      await http(t.app).post('/api/agents', { name: 'alice', runtime: 'claude' })
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
     ).json() as any;
     // join alice to a regular workspace
     const ws = await (
-      await http(t.app).post('/api/workspaces', {
+      await http(t).post('/api/workspaces', {
         name: 'engineering',
         member_agent_ids: [created.agent.id],
       })
     ).json() as any;
 
     const res = await (
-      await http(t.app).get(`/api/agents/${created.agent.id}/delete-impact`)
+      await http(t).get(`/api/agents/${created.agent.id}/delete-impact`)
     ).json() as any;
     expect(res.impact.agent_name).toBe('alice');
     expect(res.impact.dm_channel.name).toBe('Onboarding');
@@ -335,9 +335,9 @@ describe('DELETE /api/agents/:id (full flow)', () => {
   it('hard-stops running, leaves regular channels (broadcast + wipe L2), drops DM, removes agent', async () => {
     t = buildTestApp();
     const created = await (
-      await http(t.app).post('/api/agents', { name: 'alice', runtime: 'claude' })
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
     ).json() as any;
-    await http(t.app).post('/api/workspaces', {
+    await http(t).post('/api/workspaces', {
       name: 'engineering',
       member_agent_ids: [created.agent.id],
     });
@@ -359,21 +359,21 @@ describe('DELETE /api/agents/:id (full flow)', () => {
       .run(dmConversations[0]!.id, created.agent.id);
 
     t.fake.stops = [];
-    const del = await http(t.app).del(
+    const del = await http(t).del(
       `/api/agents/${created.agent.id}`,
       { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirm: true }) },
     );
     expect(del.status).toBe(204);
 
     // agent gone
-    const get = await http(t.app).get(`/api/agents/${created.agent.id}`);
+    const get = await http(t).get(`/api/agents/${created.agent.id}`);
     expect(get.status).toBe(404);
 
     // DM channel gone
-    expect((await http(t.app).get(`/api/channels/${created.dm_channel_id}`)).status)
+    expect((await http(t).get(`/api/channels/${created.dm_channel_id}`)).status)
       .toBe(404);
     // engineering workspace still exists (agent was removed, workspace stays)
-    const workspaces = await (await http(t.app).get('/api/workspaces')).json() as any;
+    const workspaces = await (await http(t).get('/api/workspaces')).json() as any;
     expect(workspaces.workspaces.find((w: any) => w.name === 'engineering')).toBeDefined();
 
     // running conversation_agent was stopped (hard) — at least one stop call

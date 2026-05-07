@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 async function makeAgent(t: TestApp, name: string): Promise<string> {
-  const r = await http(t.app).post('/api/agents', { name, runtime: 'claude' });
+  const r = await http(t).post('/api/agents', { name, runtime: 'claude' });
   expect(r.status).toBe(201);
   const body = await r.json() as any;
   t.fake.starts = [];
@@ -24,7 +24,7 @@ describe('POST /api/workspaces', () => {
     const aliceId = await makeAgent(t, 'alice');
     const bobId = await makeAgent(t, 'bob');
 
-    const res = await http(t.app).post('/api/workspaces', {
+    const res = await http(t).post('/api/workspaces', {
       name: 'eng',
       description: 'engineering',
       member_agent_ids: [aliceId, bobId],
@@ -45,7 +45,7 @@ describe('POST /api/workspaces', () => {
       .toBe(true);
 
     const members = await (
-      await http(t.app).get(`/api/workspaces/${body.workspace.id}/members`)
+      await http(t).get(`/api/workspaces/${body.workspace.id}/members`)
     ).json() as any;
     expect(members.members.map((m: any) => m.id).sort()).toEqual(
       [aliceId, bobId].sort(),
@@ -54,11 +54,11 @@ describe('POST /api/workspaces', () => {
 
   it('rejects invalid and duplicate workspace names', async () => {
     t = buildTestApp();
-    expect((await http(t.app).post('/api/workspaces', { name: 'has spaces' })).status)
+    expect((await http(t).post('/api/workspaces', { name: 'has spaces' })).status)
       .toBe(400);
-    expect((await http(t.app).post('/api/workspaces', { name: 'eng' })).status)
+    expect((await http(t).post('/api/workspaces', { name: 'eng' })).status)
       .toBe(201);
-    expect((await http(t.app).post('/api/workspaces', { name: 'eng' })).status)
+    expect((await http(t).post('/api/workspaces', { name: 'eng' })).status)
       .toBe(409);
   });
 });
@@ -74,14 +74,14 @@ describe('workspace metadata and membership routes', () => {
     t = buildTestApp();
     const aliceId = await makeAgent(t, 'alice');
     const created = await (
-      await http(t.app).post('/api/workspaces', {
+      await http(t).post('/api/workspaces', {
         name: 'old',
         member_agent_ids: [aliceId],
       })
     ).json() as any;
     t.fake.delivered = [];
 
-    const res = await http(t.app).patch(`/api/workspaces/${created.workspace.id}`, {
+    const res = await http(t).patch(`/api/workspaces/${created.workspace.id}`, {
       name: 'newname',
     });
     expect(res.status).toBe(200);
@@ -89,7 +89,7 @@ describe('workspace metadata and membership routes', () => {
     expect(body.workspace.name).toBe('newname');
 
     const msgs = await (
-      await http(t.app).get(`/api/channels/${created.onboarding_channel_id}/messages`)
+      await http(t).get(`/api/channels/${created.onboarding_channel_id}/messages`)
     ).json() as any;
     const renameMsg = msgs.messages.find((m: any) => m.metadata?.subtype === 'rename');
     expect(renameMsg).toBeTruthy();
@@ -101,9 +101,9 @@ describe('workspace metadata and membership routes', () => {
   it('does not allow workspace_path mutation after creation', async () => {
     t = buildTestApp();
     const created = await (
-      await http(t.app).post('/api/workspaces', { name: 'immutable-path' })
+      await http(t).post('/api/workspaces', { name: 'immutable-path' })
     ).json() as any;
-    const res = await http(t.app).patch(`/api/workspaces/${created.workspace.id}`, {
+    const res = await http(t).patch(`/api/workspaces/${created.workspace.id}`, {
       workspace_path: '/tmp/other',
     });
     expect(res.status).toBe(400);
@@ -112,26 +112,26 @@ describe('workspace metadata and membership routes', () => {
   it('adds and removes workspace members', async () => {
     t = buildTestApp();
     const workspace = await (
-      await http(t.app).post('/api/workspaces', { name: 'ops' })
+      await http(t).post('/api/workspaces', { name: 'ops' })
     ).json() as any;
     const agentId = await makeAgent(t, 'carol');
 
-    const add = await http(t.app).post(
+    const add = await http(t).post(
       `/api/workspaces/${workspace.workspace.id}/members`,
       { agent_id: agentId },
     );
     expect(add.status).toBe(201);
     const list1 = await (
-      await http(t.app).get(`/api/workspaces/${workspace.workspace.id}/members`)
+      await http(t).get(`/api/workspaces/${workspace.workspace.id}/members`)
     ).json() as any;
     expect(list1.members.map((m: any) => m.id)).toContain(agentId);
 
-    const rm = await http(t.app).del(
+    const rm = await http(t).del(
       `/api/workspaces/${workspace.workspace.id}/members/${agentId}`,
     );
     expect(rm.status).toBe(204);
     const list2 = await (
-      await http(t.app).get(`/api/workspaces/${workspace.workspace.id}/members`)
+      await http(t).get(`/api/workspaces/${workspace.workspace.id}/members`)
     ).json() as any;
     expect(list2.members.map((m: any) => m.id)).not.toContain(agentId);
   });
@@ -148,7 +148,7 @@ describe('workspace channel routes', () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     const workspace = await (
-      await http(t.app).post('/api/workspaces', {
+      await http(t).post('/api/workspaces', {
         name: 'product',
         member_agent_ids: [agentId],
       })
@@ -160,7 +160,7 @@ describe('workspace channel routes', () => {
     );
 
     const created = await (
-      await http(t.app).post(`/api/workspaces/${workspace.workspace.id}/channels`, {
+      await http(t).post(`/api/workspaces/${workspace.workspace.id}/channels`, {
         title: 'planning',
         member_agent_ids: [agentId],
       })
@@ -180,7 +180,7 @@ describe('workspace channel routes', () => {
     });
 
     const list = await (
-      await http(t.app).get(`/api/workspaces/${workspace.workspace.id}/channels`)
+      await http(t).get(`/api/workspaces/${workspace.workspace.id}/channels`)
     ).json() as any;
     expect(list.channels.map((c: any) => c.id)).toContain(created.channel.id);
   });
@@ -190,7 +190,7 @@ describe('workspace channel routes', () => {
     const aliceId = await makeAgent(t, 'alice');
     const bobId = await makeAgent(t, 'bob');
     const workspace = await (
-      await http(t.app).post('/api/workspaces', {
+      await http(t).post('/api/workspaces', {
         name: 'events',
         member_agent_ids: [aliceId, bobId],
       })
@@ -203,7 +203,7 @@ describe('workspace channel routes', () => {
     );
 
     const human = await (
-      await http(t.app).post(`/api/workspaces/${workspace.workspace.id}/channels`, {
+      await http(t).post(`/api/workspaces/${workspace.workspace.id}/channels`, {
         title: 'human-created',
         member_agent_ids: [aliceId],
       })
@@ -241,10 +241,10 @@ describe('workspace channel routes', () => {
   it('rejects adding a non-workspace member to a channel', async () => {
     t = buildTestApp();
     const workspace = await (
-      await http(t.app).post('/api/workspaces', { name: 'scope' })
+      await http(t).post('/api/workspaces', { name: 'scope' })
     ).json() as any;
     const outsider = await makeAgent(t, 'outsider');
-    const res = await http(t.app).post(
+    const res = await http(t).post(
       `/api/workspaces/${workspace.workspace.id}/channels`,
       {
         title: 'bad',
