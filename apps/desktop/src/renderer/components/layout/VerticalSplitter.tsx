@@ -18,9 +18,14 @@ export function VerticalSplitter({
       role="separator"
       aria-orientation="vertical"
       onPointerDown={onPointerDown}
+      style={{
+        marginInline: 'var(--splitter-offset, 0)',
+      }}
       className={
         'relative w-1 shrink-0 cursor-col-resize transition-colors ' +
-        (active ? 'bg-accent' : 'bg-border-subtle hover:bg-accent')
+        (active
+          ? 'bg-accent'
+          : 'bg-[var(--splitter-bg,var(--border-subtle))] hover:bg-accent')
       }
     >
       <div className="absolute -inset-x-1.5 inset-y-0" />

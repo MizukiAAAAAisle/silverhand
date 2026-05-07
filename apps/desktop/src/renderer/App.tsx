@@ -540,7 +540,14 @@ export function App(): JSX.Element {
         }
         taskCount={workspaceActiveTaskCount}
       />
-      <div className="flex min-w-0 flex-1 overflow-hidden">
+      <div
+        className="flex min-w-0 flex-1 overflow-hidden"
+        style={{
+          background: 'var(--bg-app, transparent)',
+          padding: 'var(--frame-padding, 0)',
+          gap: 'var(--frame-padding, 0)',
+        }}
+      >
         <NavRail
           current={appSection}
           onChange={section => {

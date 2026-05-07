@@ -107,8 +107,8 @@ export function SidebarRow({
         className={
           'flex w-full items-center gap-2 border-2 px-2 py-1.5 text-left text-sm transition-colors ' +
           (selected
-            ? 'border-accent bg-bg-selected text-text-on-selected'
-            : 'border-transparent text-text-secondary hover:border-accent hover:bg-white/70 hover:text-text-primary')
+            ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
+            : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary')
         }
       >
         {icon ? <span className="shrink-0 text-text-muted">{icon}</span> : null}

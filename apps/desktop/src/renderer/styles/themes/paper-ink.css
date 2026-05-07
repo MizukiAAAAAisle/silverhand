@@ -21,12 +21,38 @@
   --bg-floating: #FFFFFF;      /* 浮层 / 卡片表面 */
   --bg-chat: #FFFAEF;          /* chat 主读区：保持老纸感，不随 frame token 调整 */
 
+  /* ── Card-style frame ──
+     统一使用「frame + panel cards」布局。frame 是各 card 之间露出的底色，
+     比 sidebar 再沉一档；splitter 落在 gap 中心，不额外撑宽列间距。 */
+  --bg-app: #E8DDC0;
+  --frame-padding: 8px;
+  --card-radius: 8px;
+  --card-shadow: 0 1px 2px rgba(var(--shadow-base), 0.06);
+  --splitter-bg: transparent;
+  --splitter-offset: calc((var(--frame-padding) + 4px) / -2);
+  --titlebar-border: transparent;
+
   /* ── Nav rail / sidebar accents (theme-specific) ──
      不再"每区一种独立色"——全部坐落在 nav-rail-yellow 到 bg-base-ivory
      的 oklab 色线上，按 100% / 55% / 22% / 0% 逐档稀释。眼睛看到的是从
      饱和黄 → 蜂蜜麦色 → 淡奶黄 → ivory 的连续过渡，不再有 hue 跳。
      非 paper-ink 主题里这三个 token 退化为 var(--bg-primary)。 */
-  --bg-nav-rail: #FFD440;
+  /* ── Brand identity ──
+     `--brand-primary` 是品牌色源头（paper-ink 用品牌黄 #FFD440）；其它
+     UI 想引用品牌身份（NavRail 背景、selected row 等）都通过这个 token，
+     和具体组件位置 token 解耦。`--text-on-brand` 和 brand 配对，避免日后
+     brand 偏移时文字对比度悄悄崩。 */
+  --brand-primary: #FFD440;
+  --text-on-brand: #1F1B14;
+
+  /* Sidebar row state — selected borrows the brand yellow so the current
+     workspace/channel has the same high-salience identity cue as NavRail.
+     Hover stays in the same yellow family but is diluted into the sidebar
+     surface to avoid noisy list scanning. */
+  --bg-row-selected: var(--brand-primary);
+  --bg-row-hover: color-mix(in oklab, var(--brand-primary) 24%, var(--bg-channels-sidebar));
+
+  --bg-nav-rail: var(--brand-primary);
   --bg-channels-sidebar: color-mix(in oklab, var(--bg-nav-rail) 55%, var(--bg-base));
   --bg-sessions-sidebar: color-mix(in oklab, var(--bg-nav-rail) 22%, var(--bg-base));
 

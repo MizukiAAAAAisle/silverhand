@@ -110,6 +110,10 @@ html, body, #root {
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--bg-active); }
 
+/* Opt-in: hide the scrollbar entirely while keeping the area scrollable. */
+.scrollbar-hide { scrollbar-width: none; }
+.scrollbar-hide::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
 ::selection { background: var(--accent-soft); color: var(--text-primary); }
 
 button:not(:disabled) { cursor: pointer; }

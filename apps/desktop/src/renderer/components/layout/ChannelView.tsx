@@ -95,7 +95,13 @@ interface ChannelViewProps {
 export function ChannelView(props: ChannelViewProps): JSX.Element {
   if (!props.conversation) {
     return (
-      <main className="flex h-full min-w-0 flex-1 items-center justify-center bg-bg-chat text-sm text-text-muted">
+      <main
+        className="flex h-full min-w-0 flex-1 items-center justify-center bg-bg-chat text-sm text-text-muted"
+        style={{
+          borderRadius: 'var(--card-radius, 0)',
+          boxShadow: 'var(--card-shadow, none)',
+        }}
+      >
         从左侧选择一个 Channel
       </main>
     );
@@ -208,7 +214,13 @@ function ActiveChannelView({
   }, [threads]);
 
   return (
-    <main className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-chat">
+    <main
+      className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-chat"
+      style={{
+        borderRadius: 'var(--card-radius, 0)',
+        boxShadow: 'var(--card-shadow, none)',
+      }}
+    >
       <header className="flex h-[var(--titlebar-height)] min-w-0 shrink-0 items-center gap-2 border-b border-border-subtle px-4">
         {showThreadHeader ? (
           <>

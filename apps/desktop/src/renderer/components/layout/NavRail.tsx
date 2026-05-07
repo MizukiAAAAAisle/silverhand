@@ -36,6 +36,11 @@ export function NavRail({ current, onChange }: NavRailProps): JSX.Element {
     <nav
       aria-label="App sections"
       className="flex h-full w-[var(--nav-rail-width)] shrink-0 flex-col items-center gap-1 bg-[var(--bg-nav-rail)] py-2"
+      style={{
+        borderRadius: 'var(--card-radius, 0)',
+        boxShadow: 'var(--card-shadow, none)',
+        overflow: 'hidden',
+      }}
     >
       {ITEMS.map(item => {
         const selected = item.id === current;

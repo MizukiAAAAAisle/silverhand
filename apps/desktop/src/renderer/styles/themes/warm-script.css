@@ -15,10 +15,41 @@
   --bg-floating: #FFFFFF;
   --bg-chat: #FFFAEF;
 
-  /* ── Nav rail / sidebar (品牌黄 + oklab 梯度) ── */
-  --bg-nav-rail: #FFD440;
-  --bg-channels-sidebar: color-mix(in oklab, var(--bg-nav-rail) 55%, var(--bg-base));
-  --bg-sessions-sidebar: color-mix(in oklab, var(--bg-nav-rail) 22%, var(--bg-base));
+  /* ── Card-style frame ──
+     warm-script 的 frame 比 sidebar 深一档，每个 panel 圆角+阴影浮在
+     frame 上；splitter 落在 gap 中心，不额外撑宽列间距。 */
+  --bg-app: #ECE9E2;
+  --frame-padding: 8px;
+  --card-radius: 8px;
+  --card-shadow: 0 1px 2px rgba(var(--shadow-base), 0.06);
+  --splitter-bg: transparent;
+  --splitter-offset: calc((var(--frame-padding) + 4px) / -2);
+  --titlebar-border: transparent;
+
+  /* ── Brand identity ──
+     `--brand-primary` 是品牌色源头，独立于"NavRail 这个组件长什么样"。所有
+     需要引用品牌身份的 UI（NavRail 背景、selected/hover row 等）都走这个
+     token，方便日后 NavRail 换深色而品牌黄保留不变。 */
+  --brand-primary: #FFD440;
+  --text-on-brand: #1F1B14;
+
+  /* Sidebar row state — selected borrows the brand yellow so the chosen
+     workspace/channel reads as "this is where you are" with brand-level
+     salience. Hover is a soft yellow veil mixed with the sidebar
+     background so scanning a list doesn't strobe — clearly in the same
+     colour family, obviously a hint rather than a commit. Dark text on
+     the yellow holds ≈14:1 contrast. */
+  --bg-row-selected: var(--brand-primary);
+  --bg-row-hover: color-mix(in oklab, var(--brand-primary) 22%, var(--bg-channels-sidebar));
+
+  /* ── Nav rail / sidebar ──
+     Card mode (warm-script) 下放弃 oklab 黄色梯度，改为：
+     - nav-rail 保留品牌黄（唯一彩色 card）
+     - workspace/channel sidebar 用近白（不和 nav rail 抢色）
+     - chat 是 #FFFAEF 纸色（在主区已定义） */
+  --bg-nav-rail: var(--brand-primary);
+  --bg-channels-sidebar: #FCFBF8;
+  --bg-sessions-sidebar: #F7F4ED;
 
   /* ── Islands ── */
   --bg-island: #E6E1D5;

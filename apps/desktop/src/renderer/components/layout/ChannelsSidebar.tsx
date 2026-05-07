@@ -47,8 +47,15 @@ export function ChannelsSidebar({
   }
 
   return (
-    <aside className="flex h-full w-[var(--channels-sidebar-width)] shrink-0 flex-col border-r border-border-subtle bg-[var(--bg-sessions-sidebar)]">
-      <div className="flex-1 overflow-y-auto px-1.5 py-1.5">
+    <aside
+      className="flex h-full w-[var(--channels-sidebar-width)] shrink-0 flex-col border-r border-border-subtle bg-[var(--bg-sessions-sidebar)]"
+      style={{
+        borderRadius: 'var(--card-radius, 0)',
+        boxShadow: 'var(--card-shadow, none)',
+        overflow: 'hidden',
+      }}
+    >
+      <div className="scrollbar-hide flex-1 overflow-y-auto px-1.5 py-1.5">
         {!workspaceName ? (
           <EmptyHint message="选择左侧 Workspace" />
         ) : topLevel.length === 0 ? (
@@ -167,8 +174,8 @@ function ChannelRow({
   const showPin = depth === 0 && (hovered || isPinned);
 
   const rowBg = selected
-    ? 'border-accent bg-bg-selected text-text-on-selected'
-    : 'border-transparent text-text-secondary hover:border-accent hover:bg-white/70 hover:text-text-primary';
+    ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
+    : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary';
 
   return (
     <div

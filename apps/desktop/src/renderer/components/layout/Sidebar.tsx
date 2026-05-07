@@ -41,7 +41,14 @@ export function Sidebar(props: SidebarProps): JSX.Element {
     props.savedActive || props.searchActive ? null : props.selectedWorkspaceId;
 
   return (
-    <aside className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]">
+    <aside
+      className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]"
+      style={{
+        borderRadius: 'var(--card-radius, 0)',
+        boxShadow: 'var(--card-shadow, none)',
+        overflow: 'hidden',
+      }}
+    >
       <nav className="flex-1 overflow-y-auto py-1.5">
         <button
           type="button"
@@ -49,8 +56,8 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           className={cn(
             'mx-1.5 mb-1 flex w-[calc(100%-0.75rem)] items-center gap-2 border-2 px-2 py-1.5 text-left text-sm transition-colors',
             props.searchActive
-              ? 'border-accent bg-bg-selected text-text-on-selected'
-              : 'border-transparent text-text-secondary hover:border-accent hover:bg-white/70 hover:text-text-primary',
+              ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
+              : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
           )}
         >
           <Search className="size-3.5" />
@@ -63,8 +70,8 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           className={cn(
             'mx-1.5 mb-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border-2 px-2 py-1.5 text-left text-sm transition-colors',
             props.savedActive
-              ? 'border-accent bg-bg-selected text-text-on-selected'
-              : 'border-transparent text-text-secondary hover:border-accent hover:bg-white/70 hover:text-text-primary',
+              ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
+              : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
           )}
         >
           <Bookmark

@@ -24,7 +24,14 @@ export function SavedListView({ onJump }: SavedListViewProps): JSX.Element {
   const unsave = useUnsaveMessage();
 
   return (
-    <main className="flex h-full flex-1 flex-col bg-bg-chat">
+    <main
+      className="flex h-full flex-1 flex-col bg-bg-chat"
+      style={{
+        borderRadius: 'var(--card-radius, 0)',
+        boxShadow: 'var(--card-shadow, none)',
+        overflow: 'hidden',
+      }}
+    >
       <header className="flex h-[var(--titlebar-height)] shrink-0 items-center gap-2 border-b border-border-subtle px-4">
         <Bookmark className="size-3.5 fill-current text-accent" />
         <span className="font-serif text-sm font-semibold text-text-primary">

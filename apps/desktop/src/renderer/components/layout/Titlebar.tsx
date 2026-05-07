@@ -55,13 +55,23 @@ export function Titlebar({
     <header
       className={
         'drag-region flex h-[var(--titlebar-height)] shrink-0 items-center ' +
-        'gap-2 border-b border-border-subtle bg-bg-primary text-xs'
+        'gap-2 border-b text-xs ' +
+        'bg-[var(--bg-app,var(--bg-primary))] ' +
+        'border-[var(--titlebar-border,var(--border-subtle))]'
       }
     >
-      {/* Spacer matches the leftmost NavRail + workspaces Sidebar so the
-        * workspace info that follows lines up with the ChannelsSidebar
-        * boundary. The macOS traffic-lights sit inside this region. */}
-      <div className="w-[calc(var(--nav-rail-width)+var(--sidebar-width))] shrink-0" />
+      {/* Spacer matches the leftmost NavRail + workspaces Sidebar (plus
+        * the frame paddings/gaps in card mode) so the workspace info
+        * that follows lines up with the ChannelsSidebar boundary. The
+        * macOS traffic-lights sit inside this region. */}
+      <div
+        className="shrink-0"
+        style={{
+          width:
+            'calc(var(--nav-rail-width) + var(--sidebar-width) ' +
+            '+ var(--frame-padding, 0px) * 3)',
+        }}
+      />
 
       <span className="truncate font-serif text-sm font-semibold text-text-primary">
         {hasWorkspace ? workspaceName : '—'}
