@@ -134,11 +134,17 @@ export class AttachmentService {
     return row;
   }
 
-  /** Public download — caller has already passed channel-membership /
-   *  viewer auth at the route layer. The storage backend streams. */
-  async serve(id: string): Promise<Response | null> {
+  /** Public download with route-supplied ACL.
+   *
+   *  Missing rows and ACL denials are both folded to null so callers can
+   *  return the same 404 shape and avoid an existence oracle. */
+  async serveForViewer(
+    id: string,
+    canView: (row: AttachmentRow) => boolean,
+  ): Promise<Response | null> {
     const row = this.attachments.getById(id);
     if (!row) return null;
+    if (!canView(row)) return null;
     return this.storage.serve(refOf(row), serveHeadersOf(row));
   }
 

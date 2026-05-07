@@ -9,12 +9,12 @@ async function createWorkspaceChannel(t: TestApp, members: string[] = ['alice'])
   const agentIds: Record<string, string> = {};
   for (const name of members) {
     const body = await (
-      await http(t.app).post('/api/agents', { name, runtime: 'claude' })
+      await http(t).post('/api/agents', { name, runtime: 'claude' })
     ).json() as any;
     agentIds[name] = body.agent.id;
   }
   const workspaceBody = await (
-    await http(t.app).post('/api/workspaces', {
+    await http(t).post('/api/workspaces', {
       name: `ws-${crypto.randomUUID().slice(0, 8)}`,
       member_agent_ids: Object.values(agentIds),
     })
@@ -42,14 +42,18 @@ async function uploadFile(
   filename: string,
   contentType: string,
   bytes: Buffer,
-  extraHeaders: Record<string, string> = { 'X-Silverhand-User-Id': 'local' },
+  extraHeaders?: Record<string, string>,
 ): Promise<Response> {
   const form = new FormData();
   form.append('file', new Blob([bytes], { type: contentType }), filename);
+  const headers: Record<string, string> = extraHeaders ?? {
+    'X-Silverhand-User-Id': 'local',
+    authorization: `Bearer ${t.authToken}`,
+  };
   return t.app.fetch(
     new Request(`http://localhost${path}`, {
       method: 'POST',
-      headers: extraHeaders,
+      headers,
       body: form,
     }),
   );
@@ -69,7 +73,7 @@ describe('Attachment routes', () => {
 
   it('uploads through the channel route and the row resolves to the channel', async () => {
     t = buildTestApp();
-    const viewer = http(t.app, { 'X-Silverhand-User-Id': 'local' });
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
     const { channelId } = await createWorkspaceChannel(t);
     const res = await uploadFile(
       t,
@@ -92,6 +96,71 @@ describe('Attachment routes', () => {
     expect(bytes[0]).toBe(0x89);
   });
 
+  it('rejects attachment download without or with the wrong bearer token', async () => {
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t);
+    const dto = await (
+      await uploadFile(
+        t,
+        `/api/channels/${channelId}/attachments`,
+        'shot.png',
+        'image/png',
+        PNG_BYTES,
+      )
+    ).json() as any;
+
+    const noBearer = await t.app.fetch(
+      new Request(`http://localhost/api/attachments/${dto.id}`, {
+        headers: { 'X-Silverhand-User-Id': 'local' },
+      }),
+    );
+    expect(noBearer.status).toBe(401);
+
+    const wrongBearer = await t.app.fetch(
+      new Request(`http://localhost/api/attachments/${dto.id}`, {
+        headers: {
+          'X-Silverhand-User-Id': 'local',
+          authorization: 'Bearer wrong',
+        },
+      }),
+    );
+    expect(wrongBearer.status).toBe(401);
+  });
+
+  it('returns the same 404 body for missing and ACL-denied downloads', async () => {
+    t = buildTestApp();
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
+    const { channelId } = await createWorkspaceChannel(t);
+    const dto = await (
+      await uploadFile(
+        t,
+        `/api/channels/${channelId}/attachments`,
+        'shot.png',
+        'image/png',
+        PNG_BYTES,
+      )
+    ).json() as any;
+
+    const missing = await viewer.get('/api/attachments/does-not-exist');
+    expect(missing.status).toBe(404);
+    const missingBody = await missing.json() as any;
+
+    // Simulate an ACL denial without adding a second human user yet: keep the
+    // row and blob, but make the channel boundary unreadable.
+    t.ctx.db.pragma('foreign_keys = OFF');
+    try {
+      t.ctx.db
+        .prepare('UPDATE attachments SET channel_id = ? WHERE id = ?')
+        .run('missing-channel', dto.id);
+    } finally {
+      t.ctx.db.pragma('foreign_keys = ON');
+    }
+
+    const denied = await viewer.get(`/api/attachments/${dto.id}`);
+    expect(denied.status).toBe(404);
+    expect(await denied.json()).toEqual(missingBody);
+  });
+
   it('rejects multipart payloads without a `file` field', async () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t);
@@ -100,7 +169,10 @@ describe('Attachment routes', () => {
     const res = await t.app.fetch(
       new Request(`http://localhost/api/channels/${channelId}/attachments`, {
         method: 'POST',
-        headers: { 'X-Silverhand-User-Id': 'local' },
+        headers: {
+          'X-Silverhand-User-Id': 'local',
+          authorization: `Bearer ${t.authToken}`,
+        },
         body: form,
       }),
     );
@@ -109,7 +181,7 @@ describe('Attachment routes', () => {
 
   it('embeds the snapshot when a user message references the attachment id', async () => {
     t = buildTestApp();
-    const viewer = http(t.app, { 'X-Silverhand-User-Id': 'local' });
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
     const { channelId } = await createWorkspaceChannel(t);
     const dto = await (
       await uploadFile(
@@ -137,7 +209,7 @@ describe('Attachment routes', () => {
 
   it('rejects send-message with an attachment that belongs to a different channel', async () => {
     t = buildTestApp();
-    const viewer = http(t.app, { 'X-Silverhand-User-Id': 'local' });
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
     const a = await createWorkspaceChannel(t, ['alice']);
     const b = await createWorkspaceChannel(t, ['bob']);
     const aDto = await (
@@ -257,7 +329,7 @@ describe('Internal agent attachment routes', () => {
       )
     ).json() as any;
 
-    const send = await http(t.app).post(
+    const send = await http(t).post(
       `/internal/conversations/${channelId}/agents/${aliceId}/send-message`,
       { content: 'with file', attachment_ids: [dto.id] },
       { headers: authHeaders(t.authToken) },
@@ -269,7 +341,7 @@ describe('Internal agent attachment routes', () => {
     // Confirm the snapshot landed on the persisted message via the
     // public messages route.
     const messages = await (
-      await http(t.app).get(`/api/channels/${channelId}/messages`, {
+      await http(t).get(`/api/channels/${channelId}/messages`, {
         headers: { 'X-Silverhand-User-Id': 'local' },
       })
     ).json() as any;
@@ -299,7 +371,7 @@ describe('Internal agent attachment routes', () => {
       )
     ).json() as any;
 
-    const res = await http(t.app).post(
+    const res = await http(t).post(
       `/internal/conversations/${b.channelId}/agents/${aliceB}/send-message`,
       { content: 'cross', attachment_ids: [foreign.id] },
       { headers: authHeaders(t.authToken) },
@@ -313,7 +385,7 @@ describe('Internal agent attachment routes', () => {
     t = buildTestApp();
     const a = await createWorkspaceChannel(t, ['alice']);
     const b = await createWorkspaceChannel(t, ['bob']);
-    const res = await http(t.app).post(
+    const res = await http(t).post(
       `/internal/conversations/${a.channelId}/agents/${b.agentIds.bob}/send-message`,
       { content: 'forged' },
       { headers: authHeaders(t.authToken) },
@@ -349,7 +421,7 @@ describe('Attachment lifecycle on workspace delete', () => {
     const localPath = join(t.ctx.silverhandDir, 'blobs', row!.storage_key);
     expect(existsSync(localPath)).toBe(true);
 
-    const del = await http(t.app).del(`/api/workspaces/${workspaceId}`);
+    const del = await http(t).del(`/api/workspaces/${workspaceId}`);
     expect(del.status).toBe(204);
 
     expect(existsSync(localPath)).toBe(false);
@@ -359,7 +431,7 @@ describe('Attachment lifecycle on workspace delete', () => {
     t = buildTestApp();
     // Auto-creates a DM channel.
     const created = await (
-      await http(t.app).post('/api/agents', { name: 'alice', runtime: 'claude' })
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
     ).json() as any;
     const dmChannelId = created.dm_channel_id as string;
 
@@ -383,7 +455,10 @@ describe('Attachment lifecycle on workspace delete', () => {
     const del = await t.app.fetch(
       new Request(`http://localhost/api/agents/${created.agent.id}`, {
         method: 'DELETE',
-        headers: { 'content-type': 'application/json' },
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${t.authToken}`,
+        },
         body: JSON.stringify({ confirm: true }),
       }),
     );
@@ -405,7 +480,7 @@ describe('Single attachment DELETE (orphan-only)', () => {
 
   it('deletes an unsent upload and removes the blob (204)', async () => {
     t = buildTestApp();
-    const viewer = http(t.app, { 'X-Silverhand-User-Id': 'local' });
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
     const { channelId } = await createWorkspaceChannel(t);
     const dto = await (
       await uploadFile(
@@ -428,7 +503,7 @@ describe('Single attachment DELETE (orphan-only)', () => {
 
   it('rejects DELETE of an attachment referenced by a message (409)', async () => {
     t = buildTestApp();
-    const viewer = http(t.app, { 'X-Silverhand-User-Id': 'local' });
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
     const { channelId } = await createWorkspaceChannel(t);
     const dto = await (
       await uploadFile(
@@ -452,14 +527,14 @@ describe('Single attachment DELETE (orphan-only)', () => {
 
   it('returns 404 when the attachment id is unknown', async () => {
     t = buildTestApp();
-    const viewer = http(t.app, { 'X-Silverhand-User-Id': 'local' });
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
     const del = await viewer.del('/api/attachments/does-not-exist');
     expect(del.status).toBe(404);
   });
 
   it('rejects DELETE for an agent-uploaded attachment from a user (403)', async () => {
     t = buildTestApp();
-    const viewer = http(t.app, { 'X-Silverhand-User-Id': 'local' });
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
     const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
     const aliceId = agentIds.alice!;
     const dto = await (
@@ -507,4 +582,3 @@ describe('formatAttachmentSuffix', () => {
     expect(out).toContain('id=att-2');
   });
 });
-

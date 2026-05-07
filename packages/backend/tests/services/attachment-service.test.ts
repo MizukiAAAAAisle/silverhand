@@ -214,6 +214,54 @@ describe('AttachmentService.locateForAgent', () => {
   });
 });
 
+describe('AttachmentService.serveForViewer', () => {
+  it('streams when the attachment exists and ACL callback allows', async () => {
+    const { service, channel, cleanup } = bootstrap();
+    try {
+      const dto = await service.upload({
+        sourceConversationId: channel.id,
+        filename: 'x.txt',
+        contentType: 'text/plain',
+        buffer: Buffer.from('hello'),
+        createdByKind: 'user',
+        createdById: 'local',
+      });
+      const res = await service.serveForViewer(dto.id, row => row.channel_id === channel.id);
+      expect(res).not.toBeNull();
+      expect(res!.headers.get('content-type')).toBe('text/plain');
+      expect(await res!.text()).toBe('hello');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('folds missing rows and ACL denied into null', async () => {
+    const { service, channel, cleanup } = bootstrap();
+    try {
+      let callbackCalls = 0;
+      const missing = await service.serveForViewer('missing', () => {
+        callbackCalls += 1;
+        return true;
+      });
+      expect(missing).toBeNull();
+      expect(callbackCalls).toBe(0);
+
+      const dto = await service.upload({
+        sourceConversationId: channel.id,
+        filename: 'x.txt',
+        contentType: 'text/plain',
+        buffer: Buffer.from('hello'),
+        createdByKind: 'user',
+        createdById: 'local',
+      });
+      const denied = await service.serveForViewer(dto.id, () => false);
+      expect(denied).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+});
+
 describe('AttachmentService.resolveSnapshotsForChannel', () => {
   it('returns snapshots when all ids belong to the channel', async () => {
     const { service, channel, cleanup } = bootstrap();
