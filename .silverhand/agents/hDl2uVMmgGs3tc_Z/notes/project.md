@@ -29,12 +29,28 @@
   events.
 - Viewer-private state such as notifications and unread belongs under
   `viewer:{viewerId}`.
+- `agent_event` is the raw parsed driver event firehose. `agent_activity` is
+  the derived per-agent run-state projection. Activity must materialize from
+  state-affecting raw events (`thinking`, `text`, `tool_call`, `tool_output`,
+  `compaction_started`) as well as delivery-start paths, otherwise Codex
+  self-driven turns can continue producing raw events after `turn_end` has
+  cleared the previous run.
 
 ## Durable UI / Backend Invariants
 - Public API, UI, and prompt terminology should use workspace/channel/thread.
 - `local` is a viewer/API boundary detail, not a DB/model concept to spread.
 - Existing notification `user_id IS NULL` behavior is legacy and separate from
   message unread identity.
+- Auth model direction: Principal is the permission subject, token is the entry
+  credential, and ACL functions decide what that subject may do to a resource.
+  In v1 the public renderer route resolves a user principal from
+  `X-Silverhand-Principal: user:<id>` with legacy `X-Silverhand-User-Id`
+  compatibility; internal agent routes must derive agent principal from
+  Bearer + URL `(conversationId, agentId)` + repo membership, and reject
+  `X-Silverhand-Principal` instead of treating it as an agent-controlled input.
+  Because Hono sub-app middleware mounted with `app.route('/', sub)` can still
+  see sibling paths, public principal middleware must explicitly skip
+  `/internal/` before parsing principal headers.
 - Agent DMs are modeled as per-agent `agent_home` workspaces. An agent_home
   may contain multiple `dm_channel` roots; `owner_agent_id` is the ownership
   link, `workspace_members` remains regular-only, and `WorkspaceDto.dm_channel_id`

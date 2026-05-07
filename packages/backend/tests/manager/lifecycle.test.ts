@@ -600,6 +600,73 @@ describe('ConversationManager agent run activity', () => {
     expect(h.manager.getAgentRunStates(h.sessionId)).toEqual([]);
   });
 
+  it('materializes a new run from raw activity after a turn_end cleared the previous run', async () => {
+    h = await buildManagerHarness();
+    await h.manager.start(h.sessionId, h.agentId);
+    await waitInit(h);
+    insertUserMessage(h, 'msg-run-rematerialize', 'finish then keep working');
+
+    const firstP = waitActivity(h, p => p.status === 'thinking');
+    await h.manager.deliverMessage(
+      h.sessionId,
+      h.agentId,
+      'msg-run-rematerialize',
+    );
+    const first = await firstP;
+
+    const idle = waitActivity(
+      h,
+      p =>
+        p.runId === first.runId &&
+        p.status === 'idle' &&
+        p.terminalReason === 'turn_ended',
+    );
+    feedParsedEvent(h, { kind: 'turn_end' });
+    await idle;
+    expect(h.manager.getAgentRunStates(h.sessionId)).toEqual([]);
+
+    const rematerializedP = waitActivity(
+      h,
+      p => p.status === 'thinking' && p.runId !== first.runId,
+    );
+    feedParsedEvent(h, { kind: 'thinking', text: '' });
+    const rematerialized = await rematerializedP;
+    expect(h.manager.getAgentRunStates(h.sessionId)[0]?.runId).toBe(
+      rematerialized.runId,
+    );
+
+    const toolP = waitActivity(
+      h,
+      p =>
+        p.runId === rematerialized.runId &&
+        p.status === 'tool_running' &&
+        p.toolCallCounts?.Bash === 1,
+    );
+    feedParsedEvent(h, { kind: 'tool_call', name: 'Bash', input: {} });
+    await toolP;
+
+    const secondIdle = waitActivity(
+      h,
+      p =>
+        p.runId === rematerialized.runId &&
+        p.status === 'idle' &&
+        p.terminalReason === 'turn_ended',
+    );
+    feedParsedEvent(h, { kind: 'turn_end' });
+    await secondIdle;
+    expect(h.manager.getAgentRunStates(h.sessionId)).toEqual([]);
+
+    const outputP = waitActivity(
+      h,
+      p => p.status === 'thinking' && p.runId !== rematerialized.runId,
+    );
+    feedParsedEvent(h, { kind: 'tool_output', name: 'Bash' });
+    const outputRun = await outputP;
+    expect(h.manager.getAgentRunStates(h.sessionId)[0]?.runId).toBe(
+      outputRun.runId,
+    );
+  });
+
   it('turns fatal Codex resume errors into a crashed status and clears stale cli_session_id', async () => {
     h = await buildManagerHarness();
     await h.manager.start(h.sessionId, h.agentId);

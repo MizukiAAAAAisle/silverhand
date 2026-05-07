@@ -846,9 +846,7 @@ export class ConversationManager {
           0,
           handle.busy.outstandingToolUses - 1,
         );
-        if (handle.busy.outstandingToolUses === 0) {
-          this.updateRun(handle, { status: 'thinking', detail: undefined });
-        }
+        this.recordToolOutput(handle);
         break;
       case 'turn_end':
         handle.busy.outstandingToolUses = 0;
@@ -863,6 +861,7 @@ export class ConversationManager {
         break;
       case 'compaction_started':
         handle.busy.compacting = true;
+        this.ensureRunForActivityEvent(handle);
         this.ctx.logger.info({ conversationId, agentId }, 'agent: compaction_started');
         this.startCompactionWatchdog(handle);
         break;
@@ -882,14 +881,10 @@ export class ConversationManager {
         }
         break;
       case 'thinking':
-        this.updateRun(handle, {
-          activitySnippet: trimActivitySnippet(ev.text),
-        });
+        this.recordActivitySnippet(handle, ev.text);
         break;
       case 'text':
-        this.updateRun(handle, {
-          activitySnippet: trimActivitySnippet(ev.text),
-        });
+        this.recordActivitySnippet(handle, ev.text);
         break;
       case 'unknown':
         break;
@@ -974,6 +969,11 @@ export class ConversationManager {
     this.startRun(handle, 'thinking');
   }
 
+  private ensureRunForActivityEvent(handle: AgentHandle): AgentRunState {
+    const key = handleKey(handle.conversationId, handle.agentId);
+    return this.runStates.get(key) ?? this.startRun(handle, 'thinking');
+  }
+
   private touchRunActivity(handle: AgentHandle): void {
     this.updateRun(handle, { lastActivityAt: Date.now() });
   }
@@ -1006,7 +1006,8 @@ export class ConversationManager {
 
   private recordToolCall(handle: AgentHandle, toolName: string): void {
     const key = handleKey(handle.conversationId, handle.agentId);
-    const current = this.runStates.get(key);
+    const current =
+      this.runStates.get(key) ?? this.ensureRunForActivityEvent(handle);
     const toolCallCounts =
       toolName === sendMessageToolName(handle.driver)
         ? current?.toolCallCounts
@@ -1016,6 +1017,21 @@ export class ConversationManager {
       detail: toolName,
       ...(toolCallCounts ? { toolCallCounts } : {}),
     });
+  }
+
+  private recordToolOutput(handle: AgentHandle): void {
+    if (handle.busy.outstandingToolUses !== 0) return;
+    this.ensureRunForActivityEvent(handle);
+    this.updateRun(handle, { status: 'thinking', detail: undefined });
+  }
+
+  private recordActivitySnippet(handle: AgentHandle, text: string): void {
+    const activitySnippet = trimActivitySnippet(text);
+    this.ensureRunForActivityEvent(handle);
+    this.updateRun(
+      handle,
+      activitySnippet ? { activitySnippet } : { status: 'thinking' },
+    );
   }
 
   private resolveRunByKey(

@@ -129,3 +129,70 @@
   workspace_members row points at agent_home, all DM channels are under
   agent_home, and task/saved/notification workspace scopes have no legacy or
   mismatch rows.
+- Implemented #125 auth infra Slice A' and moved it to review: added backend
+  Principal types/resolvers, shared `X-Silverhand-Principal` header helpers,
+  public user-principal resolution with legacy user-id compatibility, internal
+  agent principal derivation from URL membership plus rejection of principal
+  headers, and folded message/channel/thread/task service actor shapes onto
+  the Principal variants. Scope intentionally did not add public Bearer gates,
+  ACL skeletons, or attachment GET authorization. Verification used the repo
+  ABI-aware `pnpm test -- ...` path and `pnpm typecheck`; backend vitest ran
+  39 files / 390 tests passing and typecheck was green across workspaces.
+- Fixed Alice's #125 review blocker: public principal middleware now skips
+  `/internal/` paths before parsing headers, and internal route tests assert the
+  exact rejection body for both `agent:*` and `user:*` principal headers.
+  Re-verification: repo ABI-aware `pnpm test -- ...` reported backend vitest
+  39 files / 391 tests passing, and `pnpm typecheck` was green.
+- Implemented #126 cleanup after A' review nits: introduced typed Hono
+  `AppEnv`/`AppContext` for principal storage, removed principal helper casts,
+  added `PrincipalConversationMismatchError` plus agent conversation invariant
+  guards in ConversationMessageService, TaskService.createTasks,
+  ThreadService.createThreadFromAgent, and ThreadService.closeThread. Added
+  service regression tests for mismatch rejection. Verification: repo
+  ABI-aware `pnpm test -- ...` reported backend vitest 39 files / 394 tests
+  passing, and `pnpm typecheck` was green.
+- Fixed Alice's #126 cleanup nit by removing the dead
+  `actor_conversation_mismatch` value from `CreateTasksOpErrorSchema`; service
+  mismatch now throws `PrincipalConversationMismatchError` instead of returning
+  that op error. Re-verification: backend vitest 39 files / 394 tests passing
+  via `pnpm test -- ...`, and `pnpm typecheck` was green.
+- Reviewed Alice's Slice B (#127) Bearer sweep and found no blocker: public
+  Bearer middleware is mounted on `/api/*` before principal resolution, health
+  is exact-allowlisted, test helpers inject Bearer only when passed a `TestApp`,
+  and the new auth-bearer tests cover missing/wrong/correct token plus health.
+  Combined verification after #128 changes: backend vitest 41 files / 405 tests
+  passing via `pnpm test -- ...`, and `pnpm typecheck` was green.
+- Implemented Slice D-skeleton (#128): moved WS permission helpers behind a new
+  backend-level `permissions.ts`, added the ACL family
+  `canViewWorkspace/canMutateWorkspace/canManageMembers/canViewConversation/
+  canPostToConversation/canViewAttachment/canDeleteAttachment/canViewOwnedState`,
+  and wired route placeholder callsites across workspace, conversation,
+  viewer-state, attachment upload/delete, thread creation, and internal agent
+  paths. Attachment GET ACL remains untouched for the later explicit task.
+- Alice reviewed #128 and passed it. The only noted deferred item is expected:
+  `GET /api/attachments/:id` still waits for Slice C / explicit user
+  instruction before wiring `canViewAttachment`.
+- Implemented #110 attachment GET auth v1 after user approval: public GET now
+  inherits `/api/*` Bearer, requires a viewer principal, delegates row lookup
+  and ACL folding to `AttachmentService.serveForViewer`, and passes
+  `canViewAttachment(ctx, principal, row)` as the route-supplied ACL. Removed
+  the unauthenticated service `serve` method. Tests cover missing/wrong Bearer,
+  successful download, same-shape 404 for missing vs ACL-denied, and service
+  callback-denied folding. Verification: backend vitest 41 files / 409 tests
+  passing via `pnpm test -- ...`, and `pnpm typecheck` was green.
+- The user manually smoke-verified the auth sequence: uploading an
+  image/file in a channel still previews/downloads, and unauthenticated
+  `/api/attachments/:id` returns 401. Auth infra v1 is closed; deferred items
+  remain multi-human membership, signed URL helpers, and avatar/profile ACL.
+- Investigated #129 in the `agent_activity` / `agent_event` thread after the
+  user observed many Codex raw events but no stable activity events. Root cause:
+  runState lifecycle was coupled to delivery, so `turn_end` could clear the run
+  and later Codex self-driven raw events would hit `updateRun` with no current
+  state and produce no `agent_activity`. Fixed backend aggregation so
+  state-affecting parsed events materialize a thinking run before updating
+  snippet/tool counts/tool-output transitions. Alice reviewed the first pass and
+  noted `tool_output` should use the same materialization path; added that
+  edge-case coverage before returning to review. Verification:
+  `pnpm -r typecheck` passed, and
+  `./scripts/test.sh tests/manager/lifecycle.test.ts` passed 41 tests including
+  the new rematerialization regression.

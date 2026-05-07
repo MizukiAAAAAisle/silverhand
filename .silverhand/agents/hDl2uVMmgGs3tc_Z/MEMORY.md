@@ -20,11 +20,11 @@
   diagnostics and Slock comparisons.
 
 ## Active Context
-- 2026-05-07 #122: PR-6 per-agent `agent_home` is done and the user has cut
-  over to the new release. A read-only live DB check of
-  `~/.silverhand/silverhand.db` passed: schema version 16, quick_check ok,
-  foreign_key_check 0, no legacy system_dm rows/references, every agent has an
-  agent_home, and DM/task/saved/notification scopes are retagged.
+- 2026-05-07 task #129 is implemented and ready for user review: Codex raw
+  `agent_event` now rematerializes `agent_activity` run state from
+  state-affecting parsed events after `turn_end` clears a previous run,
+  including the `tool_output` edge Alice flagged in review. Verification:
+  backend lifecycle test file and workspace typecheck passed.
 - Recent prompt work: task #103 seeded onboarding notes; task #104 tightened
   Silverhand prompt memory behavior and L1/L2 seed structure.
 - Current memory rule: update notes for durable details; update MEMORY.md only
