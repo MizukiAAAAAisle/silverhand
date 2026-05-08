@@ -1,4 +1,13 @@
-import { Settings, MessageSquarePlus, Users, CheckSquare } from 'lucide-react';
+import {
+  CheckSquare,
+  Columns2,
+  MessageSquarePlus,
+  PanelLeft,
+  PanelLeftDashed,
+  Settings,
+  Square,
+  Users,
+} from 'lucide-react';
 import { ManageMembersPopover } from '@/features/workspaces/ManageMembersPopover';
 
 type WorkspaceUiKind = 'regular' | 'dm';
@@ -20,6 +29,10 @@ interface TitlebarProps {
   /** Active-task count for the workspace — drives the small badge next to
    *  the Tasks button. Hidden when 0 / undefined. */
   taskCount?: number;
+  workspaceSidebarVisible: boolean;
+  channelSidebarVisible: boolean;
+  onToggleWorkspaceSidebar: () => void;
+  onToggleChannelSidebar: () => void;
 }
 
 /**
@@ -43,6 +56,10 @@ export function Titlebar({
   onCreateChannel,
   onOpenTasks,
   taskCount,
+  workspaceSidebarVisible,
+  channelSidebarVisible,
+  onToggleWorkspaceSidebar,
+  onToggleChannelSidebar,
 }: TitlebarProps): JSX.Element {
   const hasWorkspace = workspaceName !== null;
   const showManageMembers = hasWorkspace && workspaceKind !== 'dm' && !!workspaceId;
@@ -50,6 +67,11 @@ export function Titlebar({
   const showSettings = hasWorkspace && !!onOpenWorkspaceSettings;
   const showTasks = hasWorkspace && !!onOpenTasks;
   const isArchived = workspaceArchivedAt !== null;
+  const chromeWidth = `calc(var(--nav-rail-width) + ${
+    workspaceSidebarVisible ? 'var(--sidebar-width)' : '0px'
+  } + var(--frame-padding, 0px) * 3)`;
+  const toggleButton =
+    'no-drag flex size-6 items-center justify-center rounded-[6px] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus';
 
   return (
     <header
@@ -60,25 +82,71 @@ export function Titlebar({
         'border-[var(--titlebar-border,var(--border-subtle))]'
       }
     >
-      {/* Spacer matches the leftmost NavRail + workspaces Sidebar (plus
-        * the frame paddings/gaps in card mode) so the workspace info
-        * that follows lines up with the ChannelsSidebar boundary. The
-        * macOS traffic-lights sit inside this region. */}
+      {/* Spacer matches the visible left chrome so the workspace info
+        * lines up with the next column. The native macOS traffic-lights
+        * and sidebar toggles live inside this region. */}
       <div
-        className="shrink-0"
+        className="relative h-full shrink-0"
         style={{
-          width:
-            'calc(var(--nav-rail-width) + var(--sidebar-width) ' +
-            '+ var(--frame-padding, 0px) * 3)',
+          width: `max(var(--titlebar-controls-safe-width), ${chromeWidth})`,
         }}
-      />
+      >
+        <div className="absolute left-[var(--titlebar-sidebar-toggle-left)] top-1/2 flex -translate-y-1/2 items-center gap-1">
+          {/* Workspace toggle uses the Panel-* family so it's visually
+            * distinct from the Channel toggle's Columns/Square family.
+            * State is communicated by *icon shape*, not background colour:
+            * solid panel = visible; dashed panel = hidden. */}
+          <button
+            type="button"
+            onClick={onToggleWorkspaceSidebar}
+            aria-label={
+              workspaceSidebarVisible
+                ? 'Hide workspace sidebar'
+                : 'Show workspace sidebar'
+            }
+            aria-pressed={workspaceSidebarVisible}
+            title="Workspace sidebar (⌘⇧\\)"
+            className={toggleButton}
+          >
+            {workspaceSidebarVisible ? (
+              <PanelLeft className="size-3.5" />
+            ) : (
+              <PanelLeftDashed className="size-3.5" />
+            )}
+          </button>
+          {/* Channel toggle uses Columns2 (two-column layout visible) ↔
+            * Square (single-column collapsed). Different glyph family
+            * from the workspace toggle so the user can tell them apart
+            * without reading labels. */}
+          <button
+            type="button"
+            onClick={onToggleChannelSidebar}
+            aria-label={
+              channelSidebarVisible
+                ? 'Hide channel sidebar'
+                : 'Show channel sidebar'
+            }
+            aria-pressed={channelSidebarVisible}
+            title="Channel sidebar (⌘\\)"
+            className={toggleButton}
+          >
+            {channelSidebarVisible ? (
+              <Columns2 className="size-3.5" />
+            ) : (
+              <Square className="size-3.5" />
+            )}
+          </button>
+        </div>
+      </div>
 
-      <span className="truncate font-serif text-sm font-semibold text-text-primary">
-        {hasWorkspace ? workspaceName : '—'}
-        {workspaceKind === 'dm' && hasWorkspace ? (
-          <span className="ml-1 text-text-muted">· DM</span>
-        ) : null}
-      </span>
+      {hasWorkspace ? (
+        <span className="truncate font-serif text-sm font-semibold text-text-primary">
+          {workspaceName}
+          {workspaceKind === 'dm' ? (
+            <span className="ml-1 text-text-muted">· DM</span>
+          ) : null}
+        </span>
+      ) : null}
 
       {isArchived ? (
         <span className="rounded-full bg-bg-elevated px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-text-muted">

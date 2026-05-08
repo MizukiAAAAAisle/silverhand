@@ -32,6 +32,12 @@
      token，方便日后 NavRail 换深色而品牌黄保留不变。 */
   --brand-primary: #FFD440;
   --text-on-brand: #1F1B14;
+  --text-nav-rail: #4F4318;
+  --text-nav-rail-hover: #1F1B14;
+  --bg-nav-rail-hover: color-mix(in oklab, var(--brand-primary) 72%, var(--bg-floating));
+  --bg-task-tag: var(--brand-primary);
+  --text-on-task-tag: var(--text-on-brand);
+  --border-task-tag: color-mix(in oklab, var(--text-on-brand) 16%, var(--brand-primary));
 
   /* Sidebar row state — selected borrows the brand yellow so the chosen
      workspace/channel reads as "this is where you are" with brand-level
@@ -39,6 +45,7 @@
      background so scanning a list doesn't strobe — clearly in the same
      colour family, obviously a hint rather than a commit. Dark text on
      the yellow holds ≈14:1 contrast. */
+  --sidebar-row-border-width: 2px;
   --bg-row-selected: var(--brand-primary);
   --bg-row-hover: color-mix(in oklab, var(--brand-primary) 22%, var(--bg-channels-sidebar));
 

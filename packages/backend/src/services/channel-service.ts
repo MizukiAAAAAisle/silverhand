@@ -57,6 +57,11 @@ export interface SetPinnedInput {
   pinned: boolean;
 }
 
+export interface SetArchivedInput {
+  channelId: string;
+  archived: boolean;
+}
+
 export type WorkspaceUnsuitableCode =
   | 'workspace_not_found'
   | 'workspace_not_regular';
@@ -300,6 +305,25 @@ export class ChannelService {
     const channel = input.pinned
       ? this.conversations.pin(input.channelId)
       : this.conversations.unpin(input.channelId);
+    if (!channel) {
+      throw repoError('not_found', 'channel not found');
+    }
+    this.publishWorkspaceChannelsChanged(channel.workspace_id, channel.id);
+    return { channel };
+  }
+
+  async setArchived(
+    input: SetArchivedInput,
+  ): Promise<{ channel: ChannelConversationDto }> {
+    const existing = this.conversations.get(input.channelId);
+    if (!existing) {
+      throw repoError('not_found', 'channel not found');
+    }
+    if (existing.kind !== 'channel') {
+      throw repoError('not_archivable', 'only top-level channels can be archived');
+    }
+
+    const channel = this.conversations.setArchived(input.channelId, input.archived);
     if (!channel) {
       throw repoError('not_found', 'channel not found');
     }

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 
 async function makeAgent(t: TestApp, name: string): Promise<string> {
   const r = await http(t).post('/api/agents', { name, runtime: 'claude' });
@@ -43,6 +44,22 @@ describe('POST /api/workspaces', () => {
     expect(t.fake.delivered).toHaveLength(2);
     expect(t.fake.delivered.every(d => d.conversationId === body.onboarding_channel_id))
       .toBe(true);
+    const msgs = await (
+      await http(t).get(`/api/channels/${body.onboarding_channel_id}/messages`)
+    ).json() as any;
+    const onboardingMessages = msgs.messages.filter(
+      (m: any) => m.metadata?.subtype === 'onboarding',
+    );
+    expect(onboardingMessages).toHaveLength(2);
+    expect(onboardingMessages[0].content).toContain(
+      'read the seeded onboarding guide note',
+    );
+    expect(onboardingMessages[0].content).toContain(
+      'do not mention internal file paths',
+    );
+    expect(onboardingMessages[0].content).not.toContain('system_prompt.md');
+    expect(onboardingMessages[0].content).not.toContain('MEMORY.md');
+    expect(onboardingMessages[0].content).not.toContain('.silverhand/agents');
 
     const members = await (
       await http(t).get(`/api/workspaces/${body.workspace.id}/members`)
@@ -252,5 +269,359 @@ describe('workspace channel routes', () => {
       },
     );
     expect(res.status).toBe(400);
+  });
+});
+
+describe('PATCH /api/channels/:id/archive', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('archives and unarchives a regular channel without touching status, closed_at, or agent lifecycle', async () => {
+    t = buildTestApp();
+    const aliceId = await makeAgent(t, 'alice');
+    const workspace = await (
+      await http(t).post('/api/workspaces', {
+        name: 'archtest',
+        member_agent_ids: [aliceId],
+      })
+    ).json() as any;
+    const created = await (
+      await http(t).post(
+        `/api/workspaces/${workspace.workspace.id}/channels`,
+        { title: 'planning', member_agent_ids: [aliceId] },
+      )
+    ).json() as any;
+    const channelId: string = created.channel.id;
+    t.fake.starts = [];
+    t.fake.delivered = [];
+    const events: Array<{ kind: string }> = [];
+    const unsub = t.ctx.events.subscribeScope(
+      `workspace:${workspace.workspace.id}`,
+      e => events.push({ kind: e.kind }),
+    );
+
+    const archived = await http(t).patch(
+      `/api/channels/${channelId}/archive`,
+      { archived: true },
+    );
+    expect(archived.status).toBe(200);
+    const archivedBody = await archived.json() as any;
+    expect(archivedBody.channel.archived_at).not.toBeNull();
+    expect(archivedBody.channel.status).toBe(created.channel.status);
+    expect(archivedBody.channel.closed_at).toBeNull();
+    expect(archivedBody.channel.close_summary).toBeNull();
+
+    const unarchived = await http(t).patch(
+      `/api/channels/${channelId}/archive`,
+      { archived: false },
+    );
+    expect(unarchived.status).toBe(200);
+    const unarchivedBody = await unarchived.json() as any;
+    expect(unarchivedBody.channel.archived_at).toBeNull();
+
+    unsub();
+    expect(events.map(e => e.kind)).toEqual([
+      'workspace_channels_changed',
+      'workspace_channels_changed',
+    ]);
+    // Archive must not nudge agent runtime — no fresh start/deliver calls.
+    expect(t.fake.starts).toEqual([]);
+    expect(t.fake.delivered).toEqual([]);
+  });
+
+  it('rejects threads and dm_channels with 400 not_archivable', async () => {
+    t = buildTestApp();
+    const aliceId = await makeAgent(t, 'alice');
+    const workspace = await (
+      await http(t).post('/api/workspaces', {
+        name: 'reject',
+        member_agent_ids: [aliceId],
+      })
+    ).json() as any;
+    const created = await (
+      await http(t).post(
+        `/api/workspaces/${workspace.workspace.id}/channels`,
+        { title: 'planning', member_agent_ids: [aliceId] },
+      )
+    ).json() as any;
+    const conversations = new ConversationRepo(t.ctx.db);
+    const thread = conversations.insertThread({
+      channelId: created.channel.id,
+      title: 'thread',
+    });
+    const threadRes = await http(t).patch(
+      `/api/channels/${thread.id}/archive`,
+      { archived: true },
+    );
+    expect(threadRes.status).toBe(400);
+    expect(((await threadRes.json()) as any).code).toBe('not_archivable');
+
+    const dmChannel = conversations.listDmChannels()[0];
+    expect(dmChannel).toBeTruthy();
+    const dmRes = await http(t).patch(
+      `/api/channels/${dmChannel!.id}/archive`,
+      { archived: true },
+    );
+    expect(dmRes.status).toBe(400);
+    expect(((await dmRes.json()) as any).code).toBe('not_archivable');
+  });
+
+  it('returns 404 for unknown ids and 400 for invalid bodies', async () => {
+    t = buildTestApp();
+    const missing = await http(t).patch('/api/channels/missing/archive', {
+      archived: true,
+    });
+    expect(missing.status).toBe(404);
+
+    const aliceId = await makeAgent(t, 'alice');
+    const workspace = await (
+      await http(t).post('/api/workspaces', {
+        name: 'badbody',
+        member_agent_ids: [aliceId],
+      })
+    ).json() as any;
+    const created = await (
+      await http(t).post(
+        `/api/workspaces/${workspace.workspace.id}/channels`,
+        { title: 'planning', member_agent_ids: [aliceId] },
+      )
+    ).json() as any;
+    const bad = await http(t).patch(
+      `/api/channels/${created.channel.id}/archive`,
+      { archived: 'yes' },
+    );
+    expect(bad.status).toBe(400);
+  });
+});
+
+describe('GET /api/workspaces/:id/channels (active vs archived split)', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('active list excludes archived channels and threads under archived parents; archived list includes them', async () => {
+    t = buildTestApp();
+    const aliceId = await makeAgent(t, 'alice');
+    const workspace = await (
+      await http(t).post('/api/workspaces', {
+        name: 'split',
+        member_agent_ids: [aliceId],
+      })
+    ).json() as any;
+    const wsId: string = workspace.workspace.id;
+
+    const live = await (
+      await http(t).post(
+        `/api/workspaces/${wsId}/channels`,
+        { title: 'live', member_agent_ids: [aliceId] },
+      )
+    ).json() as any;
+    const cold = await (
+      await http(t).post(
+        `/api/workspaces/${wsId}/channels`,
+        { title: 'cold', member_agent_ids: [aliceId] },
+      )
+    ).json() as any;
+    const conversations = new ConversationRepo(t.ctx.db);
+    const liveThread = conversations.insertThread({
+      channelId: live.channel.id,
+      title: 'live-thread',
+    });
+    const coldThread = conversations.insertThread({
+      channelId: cold.channel.id,
+      title: 'cold-thread',
+    });
+
+    const archived = await http(t).patch(
+      `/api/channels/${cold.channel.id}/archive`,
+      { archived: true },
+    );
+    expect(archived.status).toBe(200);
+
+    const active = await (await http(t).get(`/api/workspaces/${wsId}/channels`)).json() as any;
+    const activeChannelIds = active.channels.map((c: any) => c.id);
+    const activeThreadIds = active.threads.map((c: any) => c.id);
+    expect(activeChannelIds).toContain(live.channel.id);
+    expect(activeChannelIds).not.toContain(cold.channel.id);
+    expect(activeThreadIds).toContain(liveThread.id);
+    expect(activeThreadIds).not.toContain(coldThread.id);
+
+    const archivedRes = await (
+      await http(t).get(`/api/workspaces/${wsId}/channels/archived`)
+    ).json() as any;
+    const archivedChannelIds = archivedRes.channels.map((c: any) => c.id);
+    const archivedThreadIds = archivedRes.threads.map((c: any) => c.id);
+    expect(archivedChannelIds).toEqual([cold.channel.id]);
+    expect(archivedThreadIds).toEqual([coldThread.id]);
+
+    // Round-trip: unarchive moves the channel back into the active list.
+    const unarchived = await http(t).patch(
+      `/api/channels/${cold.channel.id}/archive`,
+      { archived: false },
+    );
+    expect(unarchived.status).toBe(200);
+    const active2 = await (await http(t).get(`/api/workspaces/${wsId}/channels`)).json() as any;
+    expect(active2.channels.map((c: any) => c.id)).toContain(cold.channel.id);
+    expect(active2.threads.map((c: any) => c.id)).toContain(coldThread.id);
+    const archived2 = await (
+      await http(t).get(`/api/workspaces/${wsId}/channels/archived`)
+    ).json() as any;
+    expect(archived2.channels).toEqual([]);
+    expect(archived2.threads).toEqual([]);
+  });
+
+  it('agent_home workspaces return empty archived tree without erroring', async () => {
+    t = buildTestApp();
+    const aliceId = await makeAgent(t, 'alice');
+    // Onboarding provisioning auto-creates an agent_home workspace per agent.
+    const wsList = await (await http(t).get('/api/workspaces')).json() as any;
+    const home = wsList.workspaces.find(
+      (w: any) => w.workspace_kind === 'agent_home' && w.owner_agent_id === aliceId,
+    );
+    expect(home).toBeTruthy();
+    const res = await http(t).get(`/api/workspaces/${home.id}/channels/archived`);
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body).toEqual({ channels: [], threads: [] });
+  });
+});
+
+describe('GET /api/archived-channels (cross-workspace aggregate)', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('returns channels across workspaces with workspace name + thread_count, sorted by archived_at DESC', async () => {
+    t = buildTestApp();
+    const aliceId = await makeAgent(t, 'alice');
+    const ws1 = await (
+      await http(t).post('/api/workspaces', {
+        name: 'one',
+        member_agent_ids: [aliceId],
+      })
+    ).json() as any;
+    const ws2 = await (
+      await http(t).post('/api/workspaces', {
+        name: 'two',
+        member_agent_ids: [aliceId],
+      })
+    ).json() as any;
+
+    const c1 = await (
+      await http(t).post(`/api/workspaces/${ws1.workspace.id}/channels`, {
+        title: 'a',
+        member_agent_ids: [aliceId],
+      })
+    ).json() as any;
+    const c2 = await (
+      await http(t).post(`/api/workspaces/${ws2.workspace.id}/channels`, {
+        title: 'b',
+        member_agent_ids: [aliceId],
+      })
+    ).json() as any;
+    const conversations = new ConversationRepo(t.ctx.db);
+    conversations.insertThread({ channelId: c1.channel.id, title: 't1' });
+    conversations.insertThread({ channelId: c1.channel.id, title: 't2' });
+
+    // Active channels must not appear.
+    const active = await (
+      await http(t).post(`/api/workspaces/${ws1.workspace.id}/channels`, {
+        title: 'still-active',
+        member_agent_ids: [aliceId],
+      })
+    ).json() as any;
+    expect(active.channel.archived_at).toBeNull();
+
+    expect((await http(t).patch(`/api/channels/${c1.channel.id}/archive`, { archived: true })).status).toBe(200);
+    // Force a measurable gap so DESC ordering is unambiguous.
+    await new Promise(r => setTimeout(r, 5));
+    expect((await http(t).patch(`/api/channels/${c2.channel.id}/archive`, { archived: true })).status).toBe(200);
+
+    const list = await (await http(t).get('/api/archived-channels')).json() as any;
+    expect(list.channels).toHaveLength(2);
+    // c2 archived later -> first.
+    expect(list.channels[0].channel.id).toBe(c2.channel.id);
+    expect(list.channels[0].workspace).toMatchObject({
+      id: ws2.workspace.id,
+      name: 'two',
+      archived_at: null,
+    });
+    expect(list.channels[0].thread_count).toBe(0);
+    expect(list.channels[1].channel.id).toBe(c1.channel.id);
+    expect(list.channels[1].workspace.name).toBe('one');
+    expect(list.channels[1].thread_count).toBe(2);
+  });
+
+  it('filters by workspace_id and since (epoch ms)', async () => {
+    t = buildTestApp();
+    const aliceId = await makeAgent(t, 'alice');
+    const ws1 = await (
+      await http(t).post('/api/workspaces', {
+        name: 'alpha',
+        member_agent_ids: [aliceId],
+      })
+    ).json() as any;
+    const ws2 = await (
+      await http(t).post('/api/workspaces', {
+        name: 'beta',
+        member_agent_ids: [aliceId],
+      })
+    ).json() as any;
+
+    const c1 = await (
+      await http(t).post(`/api/workspaces/${ws1.workspace.id}/channels`, {
+        title: 'old',
+        member_agent_ids: [aliceId],
+      })
+    ).json() as any;
+    const c2 = await (
+      await http(t).post(`/api/workspaces/${ws2.workspace.id}/channels`, {
+        title: 'new',
+        member_agent_ids: [aliceId],
+      })
+    ).json() as any;
+
+    expect((await http(t).patch(`/api/channels/${c1.channel.id}/archive`, { archived: true })).status).toBe(200);
+    await new Promise(r => setTimeout(r, 10));
+    const cutoff = Date.now();
+    await new Promise(r => setTimeout(r, 10));
+    expect((await http(t).patch(`/api/channels/${c2.channel.id}/archive`, { archived: true })).status).toBe(200);
+
+    // workspace_id filter narrows to one row.
+    const ws1Only = await (
+      await http(t).get(`/api/archived-channels?workspace_id=${ws1.workspace.id}`)
+    ).json() as any;
+    expect(ws1Only.channels.map((r: any) => r.channel.id)).toEqual([c1.channel.id]);
+
+    // since filter excludes anything archived before the cutoff.
+    const recent = await (
+      await http(t).get(`/api/archived-channels?since=${cutoff}`)
+    ).json() as any;
+    expect(recent.channels.map((r: any) => r.channel.id)).toEqual([c2.channel.id]);
+
+    // Both filters together can narrow to empty.
+    const both = await (
+      await http(t).get(
+        `/api/archived-channels?workspace_id=${ws1.workspace.id}&since=${cutoff}`,
+      )
+    ).json() as any;
+    expect(both.channels).toEqual([]);
+  });
+
+  it('rejects unknown workspace_id with 404, invalid since with 400', async () => {
+    t = buildTestApp();
+    expect(
+      (await http(t).get('/api/archived-channels?workspace_id=missing')).status,
+    ).toBe(404);
+    expect(
+      (await http(t).get('/api/archived-channels?since=not-a-number')).status,
+    ).toBe(400);
   });
 });

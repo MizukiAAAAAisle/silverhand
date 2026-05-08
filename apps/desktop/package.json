@@ -10,6 +10,7 @@
     "dev:headless": "SILVERHAND_HEADLESS=1 electron-vite dev",
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test": "vitest run",
     "start": "electron-vite preview",
     "start:headless": "electron-vite build && SILVERHAND_HEADLESS=1 electron ./out/main/index.js",
     "package": "electron-builder --mac --config electron-builder.yml",
@@ -17,6 +18,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.13.2",
+    "@radix-ui/react-context-menu": "^2.2.16",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-dropdown-menu": "^2.1.16",
     "@radix-ui/react-popover": "^1.1.15",
@@ -55,6 +57,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "typescript": "^5.6.3",
-    "vite": "^5.4.9"
+    "vite": "^5.4.9",
+    "vitest": "^2.1.5"
   }
 }

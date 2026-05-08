@@ -81,8 +81,10 @@ describe('seedAgentL2 + ensureAgentL1Dir', () => {
     const workLog = await fs.readFile(workLogPath, 'utf8');
 
     expect(memory).toContain('Key Knowledge');
+    expect(memory).toContain('Role source: system_prompt.md');
     expect(memory).toContain('work-log.md');
     expect(memory).toContain('current handoff');
+    expect(memory).not.toContain('## Role');
     expect(workLog).toContain('Work Log');
 
     await fs.writeFile(memoryPath, 'L1-EDITED');
@@ -167,11 +169,13 @@ describe('seedAgentL2 + ensureAgentL1Dir', () => {
       'utf8',
     );
     expect(memory).toContain('Key Knowledge');
+    expect(memory).toContain('Role source: system_prompt.md');
     expect(memory).toContain('onboarding-guide.md');
     expect(memory).toContain('onboarding-faq.md');
     expect(memory).toContain('user-preferences.md');
     expect(memory).toContain('project.md');
     expect(memory).toContain('work-log.md');
     expect(memory).toContain('current handoff');
+    expect(memory).not.toContain('## Role');
   });
 });

@@ -48,18 +48,55 @@ export function useResizableWidth({
     return defaultWidth;
   });
 
-  useEffect(() => {
+  const widthRef = useRef(width);
+  const frameRef = useRef<number | null>(null);
+
+  const persistWidth = useCallback((next: number): void => {
     try {
-      localStorage.setItem(storageKey, String(width));
+      localStorage.setItem(storageKey, String(next));
     } catch {
       /* quota or private mode — in-memory is fine */
     }
-  }, [width, storageKey]);
+  }, [storageKey]);
 
   useLayoutEffect(() => {
+    widthRef.current = width;
     if (!cssVar) return;
     document.documentElement.style.setProperty(cssVar, `${width}px`);
   }, [width, cssVar]);
+
+  useEffect(() => {
+    return () => {
+      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+    };
+  }, []);
+
+  const scheduleCssWidth = useCallback((next: number): void => {
+    widthRef.current = next;
+
+    if (!cssVar) {
+      setWidth(next);
+      return;
+    }
+
+    if (frameRef.current !== null) return;
+    frameRef.current = requestAnimationFrame(() => {
+      frameRef.current = null;
+      document.documentElement.style.setProperty(
+        cssVar,
+        `${widthRef.current}px`,
+      );
+    });
+  }, [cssVar]);
+
+  const flushCssWidth = useCallback((): void => {
+    if (!cssVar) return;
+    if (frameRef.current !== null) {
+      cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+    }
+    document.documentElement.style.setProperty(cssVar, `${widthRef.current}px`);
+  }, [cssVar]);
 
   const dragOriginX = useRef(0);
   const dragOriginWidth = useRef(0);
@@ -69,7 +106,7 @@ export function useResizableWidth({
     (e: React.PointerEvent) => {
       e.preventDefault();
       dragOriginX.current = e.clientX;
-      dragOriginWidth.current = width;
+      dragOriginWidth.current = widthRef.current;
       setDragging(true);
 
       const onMove = (ev: PointerEvent): void => {
@@ -78,9 +115,13 @@ export function useResizableWidth({
           min,
           Math.min(max, dragOriginWidth.current + dx),
         );
-        setWidth(next);
+        scheduleCssWidth(next);
       };
       const onUp = (): void => {
+        flushCssWidth();
+        const next = widthRef.current;
+        setWidth(next);
+        persistWidth(next);
         setDragging(false);
         document.removeEventListener('pointermove', onMove);
         document.removeEventListener('pointerup', onUp);
@@ -95,7 +136,7 @@ export function useResizableWidth({
       document.body.style.cursor = 'col-resize';
       document.body.style.userSelect = 'none';
     },
-    [width, min, max],
+    [flushCssWidth, max, min, persistWidth, scheduleCssWidth],
   );
 
   return { width, startResize, isDragging: dragging };

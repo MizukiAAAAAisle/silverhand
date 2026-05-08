@@ -1227,4 +1227,18 @@ export const migrations: Migration[] = [
       END;
     `,
   },
+  {
+    version: 17,
+    name: 'conversation_archive',
+    // Soft archive flag for top-level channels. Independent of `closed_at`
+    // / `status` — archive is purely organizational (sidebar grouping) and
+    // does not stop agents or block delivery. Application layer enforces
+    // that only `kind = 'channel'` rows get this set.
+    up: `
+      ALTER TABLE conversations ADD COLUMN archived_at INTEGER;
+      CREATE INDEX idx_conversations_archived_at
+        ON conversations(workspace_id)
+        WHERE archived_at IS NOT NULL;
+    `,
+  },
 ];

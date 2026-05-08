@@ -66,3 +66,27 @@ describe('ClaudeDriver.buildArgs', () => {
     expect(args[idx + 1]).toBe('sonnet');
   });
 });
+
+describe('ClaudeDriver.classifyInitProgress', () => {
+  it('treats any complete stream-json frame as protocol-ready', () => {
+    const d = new ClaudeDriver();
+    expect(
+      d.classifyInitProgress(
+        JSON.stringify({ type: 'system', subtype: 'status', status: 'warming' }),
+      ),
+    ).toBe('protocol_ready');
+  });
+
+  it('treats system init as session-ready', () => {
+    const d = new ClaudeDriver();
+    expect(
+      d.classifyInitProgress(
+        JSON.stringify({ type: 'system', subtype: 'init', session_id: 'cli-1' }),
+      ),
+    ).toBe('session_ready');
+  });
+
+  it('ignores non-json lines', () => {
+    expect(new ClaudeDriver().classifyInitProgress('not json')).toBeNull();
+  });
+});

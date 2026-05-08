@@ -52,6 +52,16 @@ describe('POST /api/agents', () => {
     expect(t.fake.starts[0]!.agentId).toBe(body.agent.id);
     expect(t.fake.delivered).toHaveLength(1);
     expect(t.fake.delivered[0]!.agentId).toBe(body.agent.id);
+
+    const msgs = await (
+      await http(t).get(`/api/channels/${body.dm_channel_id}/messages`)
+    ).json() as any;
+    const onboarding = msgs.messages.find((m: any) => m.metadata?.subtype === 'onboarding');
+    expect(onboarding.content).toContain('read the seeded onboarding guide note');
+    expect(onboarding.content).toContain('do not mention internal file paths');
+    expect(onboarding.content).not.toContain('system_prompt.md');
+    expect(onboarding.content).not.toContain('MEMORY.md');
+    expect(onboarding.content).not.toContain('.silverhand/agents');
   });
 
   it('returns 409 on duplicate name', async () => {

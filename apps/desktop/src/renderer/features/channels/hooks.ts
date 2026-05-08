@@ -17,7 +17,7 @@ import type {
   TaskChangedEvent,
 } from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
-import { api, apiUpload } from '@/lib/api';
+import { api } from '@/lib/api';
 import { CURRENT_USER_ID } from '@/lib/current-user';
 import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
 import {
@@ -419,26 +419,6 @@ export function useSendMessage(
   });
 }
 
-/** Upload one file to the active channel/thread. Returns the
- *  AttachmentDto whose id can be passed to `useSendMessage`. */
-export function useUploadAttachment(
-  channelId: string | null,
-  routeKind: ConversationRouteKind = 'channel',
-) {
-  return useMutation({
-    mutationFn: async (file: File): Promise<AttachmentDto> => {
-      if (!channelId) throw new Error('no channel selected');
-      const path =
-        routeKind === 'thread'
-          ? apiPaths.threadAttachments(channelId)
-          : apiPaths.channelAttachments(channelId);
-      const form = new FormData();
-      form.append('file', file, file.name);
-      return apiUpload<AttachmentDto>(path, form);
-    },
-  });
-}
-
 export function useStartAgent(
   channelId: string | null,
   routeKind: ConversationRouteKind = 'channel',
@@ -513,6 +493,9 @@ export function useAgentRunStates(
     },
     // Don't stale-refetch automatically — realtime events keep this up-to-date.
     staleTime: Infinity,
+    // Returning to a channel/thread after unsubscribing can miss terminal
+    // activity events; always reconcile against the backend snapshot on mount.
+    refetchOnMount: 'always',
     // Keep recent activity visible across quick channel/thread navigation.
     gcTime: AGENT_RUN_STATES_GC_MS,
   });

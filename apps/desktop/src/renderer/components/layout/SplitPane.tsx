@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from 'react';
 
 interface SplitPaneProps {
   left: React.ReactNode;
@@ -39,21 +46,65 @@ export function SplitPane({
     return defaultRatio;
   });
 
-  // Persist on change.
-  useEffect(() => {
+  const ratioRef = useRef(ratio);
+  const frameRef = useRef<number | null>(null);
+
+  const persistRatio = useCallback((next: number): void => {
     if (!storageKey) return;
     try {
-      localStorage.setItem(storageKey, String(ratio));
+      localStorage.setItem(storageKey, String(next));
     } catch {
       /* quota or private mode — fall back to in-memory */
     }
-  }, [ratio, storageKey]);
+  }, [storageKey]);
+
+  useLayoutEffect(() => {
+    ratioRef.current = ratio;
+    containerRef.current?.style.setProperty(
+      '--split-left-width',
+      `${ratio * 100}%`,
+    );
+  }, [ratio]);
+
+  useEffect(() => {
+    return () => {
+      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+    };
+  }, []);
+
+  const scheduleRatio = useCallback((next: number): void => {
+    ratioRef.current = next;
+    const container = containerRef.current;
+    if (!container) return;
+
+    if (frameRef.current !== null) return;
+    frameRef.current = requestAnimationFrame(() => {
+      frameRef.current = null;
+      container.style.setProperty(
+        '--split-left-width',
+        `${ratioRef.current * 100}%`,
+      );
+    });
+  }, []);
+
+  const flushRatio = useCallback((): void => {
+    const container = containerRef.current;
+    if (!container) return;
+    if (frameRef.current !== null) {
+      cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+    }
+    container.style.setProperty(
+      '--split-left-width',
+      `${ratioRef.current * 100}%`,
+    );
+  }, []);
 
   const dragging = useRef(false);
 
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     dragging.current = true;
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    e.currentTarget.setPointerCapture(e.pointerId);
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
   }, []);
@@ -65,22 +116,38 @@ export function SplitPane({
       if (!rect) return;
       const next = (e.clientX - rect.left) / rect.width;
       const clamped = Math.min(maxRatio, Math.max(minRatio, next));
-      setRatio(clamped);
+      scheduleRatio(clamped);
     },
-    [minRatio, maxRatio],
+    [minRatio, maxRatio, scheduleRatio],
   );
 
-  const onPointerUp = useCallback((e: React.PointerEvent) => {
-    if (!dragging.current) return;
-    dragging.current = false;
-    (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
-  }, []);
+  const onPointerUp = useCallback(
+    (e: React.PointerEvent) => {
+      if (!dragging.current) return;
+      dragging.current = false;
+      flushRatio();
+      const next = ratioRef.current;
+      setRatio(next);
+      persistRatio(next);
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      }
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    },
+    [flushRatio, persistRatio],
+  );
 
   return (
-    <div ref={containerRef} className="flex h-full min-w-0 flex-1 overflow-hidden">
-      <div style={{ width: `${ratio * 100}%` }} className="flex h-full min-w-0 overflow-hidden">
+    <div
+      ref={containerRef}
+      className="flex h-full min-w-0 flex-1 overflow-hidden"
+      style={{ '--split-left-width': `${ratio * 100}%` } as CSSProperties}
+    >
+      <div
+        style={{ width: 'var(--split-left-width)' }}
+        className="flex h-full min-w-0 overflow-hidden"
+      >
         {left}
       </div>
       <div

@@ -113,17 +113,108 @@ export class ConversationRepo {
     return row ? assertChannelLike(row) : null;
   }
 
-  listChannelsForWorkspace(workspaceId: string): ChannelConversationDto[] {
+  /** Active (non-archived) channels for a workspace. Pinned-first sort,
+   *  consumed by the workspace channels list endpoint. */
+  listActiveChannelsForWorkspace(workspaceId: string): ChannelConversationDto[] {
     const rows = this.db
       .prepare<[string], ConversationRow>(
         `SELECT * FROM conversations
-         WHERE workspace_id = ? AND kind = 'channel'
+         WHERE workspace_id = ? AND kind = 'channel' AND archived_at IS NULL
          ORDER BY (pinned_at IS NOT NULL) DESC,
                   pinned_at ASC,
                   created_at ASC`,
       )
       .all(workspaceId);
     return rows.map(rowToChannel);
+  }
+
+  listArchivedChannelsForWorkspace(workspaceId: string): ChannelConversationDto[] {
+    const rows = this.db
+      .prepare<[string], ConversationRow>(
+        `SELECT * FROM conversations
+         WHERE workspace_id = ? AND kind = 'channel' AND archived_at IS NOT NULL
+         ORDER BY archived_at DESC, created_at ASC`,
+      )
+      .all(workspaceId);
+    return rows.map(rowToChannel);
+  }
+
+  /** All `kind='channel'` conversations for a workspace regardless of
+   *  archive state. Used when callers need to fan out (e.g. workspace
+   *  rename announce) and shouldn't silently skip archived channels. */
+  listAllChannelsForWorkspace(workspaceId: string): ChannelConversationDto[] {
+    const rows = this.db
+      .prepare<[string], ConversationRow>(
+        `SELECT * FROM conversations
+         WHERE workspace_id = ? AND kind = 'channel'
+         ORDER BY created_at ASC`,
+      )
+      .all(workspaceId);
+    return rows.map(rowToChannel);
+  }
+
+  /** Flat archived-channel list across all workspaces, with the parent
+   *  workspace's name + a `thread_count` (number of threads under this
+   *  channel regardless of their own archive state). Drives the global
+   *  Archived chat-tool page. Sorted by `archived_at DESC, created_at
+   *  ASC`. Filters: optional workspace narrowing and `since` (inclusive
+   *  lower bound on archived_at, epoch ms). */
+  listArchivedChannelsAggregate(opts: {
+    workspaceId?: string;
+    since?: number;
+  } = {}): ArchivedAggregateRow[] {
+    const where: string[] = [
+      `c.kind = 'channel'`,
+      `c.archived_at IS NOT NULL`,
+    ];
+    const args: Array<string | number> = [];
+    if (opts.workspaceId !== undefined) {
+      where.push('c.workspace_id = ?');
+      args.push(opts.workspaceId);
+    }
+    if (opts.since !== undefined) {
+      where.push('c.archived_at >= ?');
+      args.push(opts.since);
+    }
+    const rows = this.db
+      .prepare<typeof args, ConversationRow & {
+        workspace_name: string;
+        workspace_archived_at: number | null;
+        thread_count: number;
+      }>(
+        `SELECT
+           c.*,
+           w.name AS workspace_name,
+           w.archived_at AS workspace_archived_at,
+           (
+             SELECT COUNT(*)
+               FROM conversations t
+              WHERE t.parent_conversation_id = c.id
+                AND t.kind = 'thread'
+           ) AS thread_count
+         FROM conversations c
+         JOIN workspaces w ON w.id = c.workspace_id
+         WHERE ${where.join(' AND ')}
+         ORDER BY c.archived_at DESC, c.created_at ASC`,
+      )
+      .all(...args);
+    return rows.map(r => {
+      const {
+        workspace_name,
+        workspace_archived_at,
+        thread_count,
+        ...conversation
+      } = r;
+      return {
+        channel: rowToChannel(conversation),
+        workspace: {
+          id: conversation.workspace_id,
+          name: workspace_name,
+          archived_at: workspace_archived_at,
+        },
+        thread_count,
+      };
+    });
   }
 
   listDmChannels(): DmChannelDto[] {
@@ -224,7 +315,20 @@ export class ConversationRepo {
     return rows.map(r => rowToThread(r, this.findThreadAnchorMessageId(r.id)));
   }
 
-  listThreadsForWorkspace(workspaceId: string): ThreadDto[] {
+  listThreadsForWorkspace(
+    workspaceId: string,
+    opts: { parentArchived?: boolean } = {},
+  ): ThreadDto[] {
+    // Threads always render under their parent. Splitting active vs
+    // archived at the SQL layer (rather than in the route) keeps the
+    // response self-consistent — any thread we return belongs to a
+    // channel in the same response.
+    let parentClause = '';
+    if (opts.parentArchived === true) {
+      parentClause = `AND p.archived_at IS NOT NULL`;
+    } else if (opts.parentArchived === false) {
+      parentClause = `AND p.archived_at IS NULL`;
+    }
     const rows = this.db
       .prepare<
         [string],
@@ -233,6 +337,7 @@ export class ConversationRepo {
         `SELECT c.*,
                 json_extract(m.metadata, '$.quoted_message_id') AS anchor_message_id
            FROM conversations c
+           JOIN conversations p ON p.id = c.parent_conversation_id
            LEFT JOIN messages m
              ON m.id = (
                SELECT m2.id
@@ -243,7 +348,7 @@ export class ConversationRepo {
                 ORDER BY m2.created_at ASC
                 LIMIT 1
              )
-          WHERE c.workspace_id = ? AND c.kind = 'thread'
+          WHERE c.workspace_id = ? AND c.kind = 'thread' ${parentClause}
           ORDER BY c.created_at ASC`,
       )
       .all(workspaceId);
@@ -433,6 +538,23 @@ export class ConversationRepo {
     return assertChannelLike(row);
   }
 
+  setArchived(
+    id: string,
+    archived: boolean,
+  ): ChannelConversationDto | null {
+    const now = Date.now();
+    const result = this.db
+      .prepare(
+        `UPDATE conversations
+         SET archived_at = ?, updated_at = ?
+         WHERE id = ? AND kind = 'channel'`,
+      )
+      .run(archived ? now : null, now, id);
+    if (result.changes === 0) return null;
+    const row = this.getRaw(id);
+    return row ? rowToChannel(row) : null;
+  }
+
   close(id: string, summary: string): ConversationDto | null {
     const now = Date.now();
     this.db
@@ -605,6 +727,16 @@ export interface SpawnLimitContext {
   limits: ChildSessionLimits;
   /** Last spawn timestamps per agent — maintained in-process. */
   lastSpawnAtByAgent: Map<string, number>;
+}
+
+export interface ArchivedAggregateRow {
+  channel: ChannelConversationDto;
+  workspace: {
+    id: string;
+    name: string;
+    archived_at: number | null;
+  };
+  thread_count: number;
 }
 
 export interface RepoError extends Error {

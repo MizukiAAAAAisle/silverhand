@@ -100,11 +100,7 @@ export function CreateChannelDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>新建 Channel</DialogTitle>
-          <DialogDescription>
-            {isDm
-              ? `在 DM Workspace 里开一个新的 Channel 上下文。`
-              : '一个 Channel 是一组成员 agent 的协作空间，拥有独立上下文。'}
-          </DialogDescription>
+          <DialogDescription>Channel 拥有独立上下文</DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">

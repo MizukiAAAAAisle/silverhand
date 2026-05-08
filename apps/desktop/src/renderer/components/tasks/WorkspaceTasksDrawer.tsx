@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from 'react';
 import { Check, X } from 'lucide-react';
 import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
@@ -41,7 +49,7 @@ const DEFAULT_WIDTH = 520;
 
 // ── Drawer width hook ────────────────────────────────────────────────
 
-function useDrawerWidth() {
+function useDrawerWidth(shellRef: RefObject<HTMLDivElement | null>) {
   const [width, setWidth] = useState<number>(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -53,27 +61,67 @@ function useDrawerWidth() {
     return DEFAULT_WIDTH;
   });
 
-  useEffect(() => {
+  const widthRef = useRef(width);
+  const frameRef = useRef<number | null>(null);
+
+  const persistWidth = useCallback((next: number): void => {
     try {
-      localStorage.setItem(STORAGE_KEY, String(width));
+      localStorage.setItem(STORAGE_KEY, String(next));
     } catch {
       // quota or private mode
     }
-  }, [width]);
+  }, []);
+
+  useLayoutEffect(() => {
+    widthRef.current = width;
+    if (shellRef.current) shellRef.current.style.width = `${width}px`;
+  }, [shellRef, width]);
+
+  useEffect(() => {
+    return () => {
+      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+    };
+  }, []);
+
+  const scheduleWidth = useCallback((next: number): void => {
+    widthRef.current = next;
+    const shell = shellRef.current;
+    if (!shell) return;
+
+    if (frameRef.current !== null) return;
+    frameRef.current = requestAnimationFrame(() => {
+      frameRef.current = null;
+      shell.style.width = `${widthRef.current}px`;
+    });
+  }, [shellRef]);
+
+  const flushWidth = useCallback((): void => {
+    const shell = shellRef.current;
+    if (!shell) return;
+    if (frameRef.current !== null) {
+      cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+    }
+    shell.style.width = `${widthRef.current}px`;
+  }, [shellRef]);
 
   const startResize = useCallback(
     (e: React.PointerEvent) => {
       e.preventDefault();
       const originX = e.clientX;
-      const originWidth = width;
+      const originWidth = widthRef.current;
 
       const onMove = (ev: PointerEvent): void => {
         // Left-edge handle: drag left = wider (negate dx).
         const dx = ev.clientX - originX;
         const next = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, originWidth - dx));
-        setWidth(next);
+        scheduleWidth(next);
       };
       const onUp = (): void => {
+        flushWidth();
+        const next = widthRef.current;
+        setWidth(next);
+        persistWidth(next);
         document.removeEventListener('pointermove', onMove);
         document.removeEventListener('pointerup', onUp);
         document.removeEventListener('pointercancel', onUp);
@@ -87,7 +135,7 @@ function useDrawerWidth() {
       document.body.style.cursor = 'col-resize';
       document.body.style.userSelect = 'none';
     },
-    [width],
+    [flushWidth, persistWidth, scheduleWidth],
   );
 
   return { width, startResize };
@@ -105,7 +153,8 @@ export function WorkspaceTasksDrawer({
   defaultConversationId,
   onJumpToMessage,
 }: WorkspaceTasksDrawerProps): JSX.Element {
-  const { width: drawerWidth, startResize } = useDrawerWidth();
+  const drawerShellRef = useRef<HTMLDivElement>(null);
+  const { width: drawerWidth, startResize } = useDrawerWidth(drawerShellRef);
 
   const [conversationFilter, setConversationFilter] = useState<string | null>(
     defaultConversationId,
@@ -182,6 +231,7 @@ export function WorkspaceTasksDrawer({
           the inner panel is mid-animation. pointer-events toggle ensures
           the closed drawer doesn't intercept clicks behind it. */}
       <div
+        ref={drawerShellRef}
         className={cn(
           'fixed inset-y-0 right-0 z-50',
           // Only opt out of the Electron drag region while the drawer is

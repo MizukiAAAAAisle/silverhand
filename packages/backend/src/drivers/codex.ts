@@ -44,12 +44,24 @@ import { buildPlatformPrompt } from './platform-prompt.js';
 export class CodexDriver implements Driver {
   readonly kind = 'codex' as const;
   readonly binary = 'codex';
+  readonly kickoffMode = 'self_inits' as const;
   readonly busyDeliveryMode = 'direct' as const;
   readonly oneShot = false;
   readonly supportsNativeStandingPrompt = true;
   /** Codex flattens MCP server name + tool with underscore: `mcp__` is
    *  not its convention. Slock uses `mcp_chat_` here. */
   readonly mcpToolPrefix = 'mcp_chat_';
+  readonly initLivenessSilenceMs = 60 * 1000;
+  readonly initPreProtocolCapMs = 5 * 60 * 1000;
+  // 60s post-protocol budget. Codex's `app-server` happy-path completes
+  // initialize → thread/started in ~4s with proxy / ~11s without. The wider
+  // window absorbs proxy half-up flakes (e.g. `socks5://127.0.0.1:7897`
+  // momentarily refusing connections) where codex still emits its first
+  // protocol frame promptly but stalls on `thread/start` while the MCP
+  // chat client retries connecting back to silverhand. See
+  // docs/incident-2026-05-08-codex-init-watchdog.md and
+  // docs/incident-2026-05-08-codex-startup-proxy-flake.md.
+  readonly initPostProtocolMs = 60 * 1000;
 
   private io: DriverIO | null = null;
   private requestId = 0;
@@ -62,6 +74,14 @@ export class CodexDriver implements Driver {
   private sessionAnnounced = false;
   private streamedAgentMessageIds = new Set<string>();
   private streamedReasoningIds = new Set<string>();
+  /** Per-item count of tool_calls emitted on item/started for fileChange.
+   *  Keyed by item.id so item/completed knows how many tool_outputs to
+   *  emit back. Without this, `outstandingToolUses` stays > 0 mid-turn
+   *  and `recordToolOutput` never flips status back to thinking. */
+  private pendingFileChangeCounts = new Map<string, number>();
+  /** Set of webSearch item ids that opened a tool_call on item/started.
+   *  item/completed pops the id and emits the matching tool_output. */
+  private pendingWebSearchIds = new Set<string>();
 
   buildArgs(ctx: DriverSpawnContext): string[] {
     const args = ['app-server', '--listen', 'stdio://'];
@@ -90,7 +110,8 @@ export class CodexDriver implements Driver {
       agentName: ctx.agentName,
       runtime: 'codex',
       mcpToolPrefix: this.mcpToolPrefix,
-      l2SystemPrompt: ctx.l2SystemPrompt,
+      activeProfileDir: ctx.activeProfileDir,
+      roleSystemPrompt: ctx.roleSystemPrompt,
       sessionContext: ctx.sessionContext,
     });
   }
@@ -260,6 +281,8 @@ export class CodexDriver implements Driver {
         this.activeTurnId = null;
         this.streamedAgentMessageIds.clear();
         this.streamedReasoningIds.clear();
+        this.pendingFileChangeCounts.clear();
+        this.pendingWebSearchIds.clear();
         events.push({
           kind: 'turn_end',
           sessionId: this.threadId ?? undefined,
@@ -280,6 +303,30 @@ export class CodexDriver implements Driver {
     }
 
     return events;
+  }
+
+  classifyInitProgress(line: string): 'protocol_ready' | 'session_ready' | null {
+    const trimmed = line.trim();
+    if (!trimmed) return null;
+
+    let message: any;
+    try {
+      message = JSON.parse(trimmed);
+    } catch {
+      return null;
+    }
+
+    if (!message || typeof message !== 'object') return null;
+    if (message.jsonrpc !== '2.0' && !('method' in message) && !('result' in message) && !('error' in message)) {
+      return null;
+    }
+
+    const thread = message.result?.thread;
+    if (thread && typeof thread.id === 'string') return 'session_ready';
+    if (message.method === 'thread/started' && typeof message.params?.thread?.id === 'string') {
+      return 'session_ready';
+    }
+    return 'protocol_ready';
   }
 
   // ── internals ──────────────────────────────────────────────────────
@@ -342,6 +389,21 @@ export class CodexDriver implements Driver {
               input: { path: change?.path, kind: change?.kind },
             });
           }
+          if (typeof item.id === 'string') {
+            this.pendingFileChangeCounts.set(item.id, item.changes.length);
+          }
+        }
+        if (isCompleted && typeof item.id === 'string') {
+          // Only emit tool_outputs we explicitly remembered from item/started.
+          // Late item/completed events that arrive after turn/completed
+          // (which clears the map) emit nothing — by then the manager has
+          // already reset outstandingToolUses on turn_end, and a phantom
+          // tool_output here would resurrect a resolved run.
+          const count = this.pendingFileChangeCounts.get(item.id) ?? 0;
+          for (let i = 0; i < count; i += 1) {
+            events.push({ kind: 'tool_output', name: 'file_change' });
+          }
+          this.pendingFileChangeCounts.delete(item.id);
         }
         break;
       case 'mcpToolCall': {
@@ -364,6 +426,15 @@ export class CodexDriver implements Driver {
             name: 'web_search',
             input: { query: item.query },
           });
+          if (typeof item.id === 'string') this.pendingWebSearchIds.add(item.id);
+        }
+        if (isCompleted) {
+          // Drop the event silently if we never saw the matching started
+          // (e.g. cleared by turn/completed) — see fileChange comment above.
+          const id = typeof item.id === 'string' ? item.id : null;
+          if (id && this.pendingWebSearchIds.delete(id)) {
+            events.push({ kind: 'tool_output', name: 'web_search' });
+          }
         }
         break;
     }

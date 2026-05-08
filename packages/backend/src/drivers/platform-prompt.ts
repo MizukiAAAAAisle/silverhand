@@ -8,9 +8,11 @@ export interface PlatformPromptInput {
   runtime: RuntimeKind;
   /** What chat-bridge MCP tool names look like, e.g. `mcp__chat__`. */
   mcpToolPrefix: string;
-  /** Per-workspace `system_prompt.md` content (L2). Appended as the
-   *  "Initial role" tail. */
-  l2SystemPrompt: string;
+  /** Current active profile directory, relative to the runtime cwd. */
+  activeProfileDir: string;
+  /** Current active `system_prompt.md` content. Appended as the "Initial role"
+   *  tail. */
+  roleSystemPrompt: string;
   /** Current workspace/channel/thread context block. */
   sessionContext: SessionContextInput;
 }
@@ -32,13 +34,13 @@ export interface SessionContextInput {
 }
 
 /**
- * Render the §4.7 platform operating manual, with the agent's per-workspace
- * role appended at the end. Driver-agnostic apart from the tool-prefix
+ * Render the §4.7 operating manual, with the agent's active role appended at
+ * the end. Driver-agnostic apart from the tool-prefix
  * substitution.
  *
- * Keep paths *relative to cwd* (`./.silverhand/...`) — the runtime's
- * working directory is the conversation workspace_path snapshot, so relative paths just work
- * regardless of where on disk the workspace lives.
+ * Keep paths relative to cwd. The runtime's working directory is the
+ * conversation workspace_path snapshot, so relative paths point at the active
+ * profile without exposing L1/L2 layering to the agent.
  */
 export function buildPlatformPrompt(input: PlatformPromptInput): string {
   const t = (name: string): string => `\`${input.mcpToolPrefix}${name}\``;
@@ -54,6 +56,10 @@ export function buildPlatformPrompt(input: PlatformPromptInput): string {
   const uploadFile = t('upload_file');
   const viewFile = t('view_file');
   const sessionContextBlock = renderSessionContext(input.sessionContext);
+  const profileDir = normalizeProfileDir(input.activeProfileDir);
+  const systemPromptPath = profilePath(profileDir, 'system_prompt.md');
+  const memoryPath = profilePath(profileDir, 'MEMORY.md');
+  const notesDir = profilePath(profileDir, 'notes');
 
   return `# Silverhand app manual
 
@@ -81,15 +87,16 @@ ${sessionContextBlock}
   someone else.
 - Do not call shell tools to run \`silverhand\` / \`agent-hub\` CLIs;
   there are none. All cross-agent interaction is through MCP tools.
-- Read your MEMORY.md at startup, before doing any work.
+- Read your active profile's MEMORY.md at startup, before doing any work.
 - When you receive \`from_kind=system\` messages (Silverhand system messages),
   treat them as informational. Don't reply unless the message explicitly
   asks for it (e.g. an onboarding message asking for your role).
 
 ## Startup sequence
-1. Read \`./.silverhand/agents/${input.agentId}/MEMORY.md\` first.
-   This is your recovery anchor — what you know about who you are in
-   this workspace/channel and what's been happening.
+1. Read \`${memoryPath}\` first.
+   This is your recovery anchor — where durable knowledge lives and what
+   handoff is currently active. Your role contract is already loaded from
+   \`${systemPromptPath}\`; do not duplicate it in MEMORY.md.
 2. Read \`./.silverhand/CONSENSUS.md\` — the workspace's shared agreements
    that bind ALL members. Treat them as hard rules.
 3. If your initial input contains a concrete incoming message, decide
@@ -100,15 +107,19 @@ ${sessionContextBlock}
    multi-step (research → code → test), do all steps, report results,
    then stop. New messages will arrive automatically while you're alive.
 
-## Workspace & Memory
-Your home in this workspace/channel context: \`./.silverhand/agents/${input.agentId}/\`
-- \`system_prompt.md\` — your role definition (already loaded as your
-  system prompt; this is the source of truth, edit it via Write/Edit
-  to evolve your role).
-- \`MEMORY.md\` — what you've learned in this workspace/channel. The entry point /
-  index. Keep it compact: role, Key Knowledge links, and current Active
-  Context / handoff only.
-- \`notes/\` — detailed knowledge files (one per topic). Reference them
+## Active Profile Files
+Your active profile in this context: \`${profileDir}\`
+These file paths are internal working context. Do not mention them to the user
+unless they ask.
+- \`${systemPromptPath}\` — your canonical role contract. It is already
+  loaded into this system prompt. Edit it when the user gives durable role
+  guidance about your responsibilities, working style, boundaries, or
+  collaboration rules. Do not copy the role contract into MEMORY.md.
+- \`${memoryPath}\` — your compact recovery index. Keep only Key Knowledge
+  links and the current Active Context / handoff here. It may include a short
+  identity line and "Role source: system_prompt.md"; it must not duplicate the
+  role contract.
+- \`${notesDir}/\` — detailed knowledge files (one per topic). Reference them
   from MEMORY.md so future-you can find them.
 
 ### What to memorize (observe and record proactively)
@@ -121,10 +132,10 @@ Your home in this workspace/channel context: \`./.silverhand/agents/${input.agen
    them effectively.
 
 Suggested layout:
-- \`notes/user-preferences.md\` — durable user preferences.
-- \`notes/project.md\` — durable project context, architecture, and invariants.
-- \`notes/work-log.md\` — significant completed work, decisions, and follow-ups.
-- \`notes/<domain>.md\` — domain-specific knowledge.
+- \`${notesDir}/user-preferences.md\` — durable user preferences.
+- \`${notesDir}/project.md\` — durable project context, architecture, and invariants.
+- \`${notesDir}/work-log.md\` — significant completed work, decisions, and follow-ups.
+- \`${notesDir}/<domain>.md\` — domain-specific knowledge.
 
 Update notes proactively when you learn durable information; don't wait to be
 asked. Update MEMORY.md only when the Key Knowledge index or current Active
@@ -135,9 +146,9 @@ Your context will periodically be compressed by the runtime to stay
 within model limits. When that happens you lose your in-context
 conversation history but **MEMORY.md is always re-read on startup
 and after compaction**. Therefore:
-- MEMORY.md must be self-sufficient as a recovery point. After reading
-  it you should know who you are, where to find durable knowledge, and
-  what handoff is currently active.
+- MEMORY.md must be self-sufficient as a recovery point for knowledge and
+  handoff. Your role is loaded from \`${systemPromptPath}\`; MEMORY.md should
+  point to that source, not repeat it.
 - Keep MEMORY.md short and scannable (target under 10KB / roughly 80-120
   lines). It is an index, not the detailed work log.
 - Before a long task, write or replace a brief "Active Context" note in
@@ -148,7 +159,7 @@ and after compaction**. Therefore:
      MEMORY.md's Key Knowledge index or Active Context.
   3. Otherwise leave MEMORY.md unchanged.
 - Do not append long per-task bullets to MEMORY.md. Merge or replace stale
-  Active Context, and put detailed history/evidence in \`notes/work-log.md\`.
+  Active Context, and put detailed history/evidence in \`${notesDir}/work-log.md\`.
 
 ## Workspace Consensus
 \`./.silverhand/CONSENSUS.md\` — agreements EVERY member of this
@@ -288,8 +299,20 @@ Cross-channel ids are rejected. Snapshots embedded in messages are
 immutable: \`{id, filename, size, content_type}\`.
 
 ## Initial role (your assignment in this workspace/channel)
-${input.l2SystemPrompt.trim() || '_(role not yet defined — wait for the user to shape it during onboarding)_'}
+${input.roleSystemPrompt.trim() || '_(role not yet defined — wait for the user to shape it during onboarding)_'}
 `;
+}
+
+function normalizeProfileDir(dir: string): string {
+  const trimmed = dir.trim();
+  if (!trimmed || trimmed === '.') return '.';
+  const normalized = trimmed.replace(/\/{2,}/g, '/');
+  if (normalized.startsWith('./')) return normalized.replace(/\/+$/, '');
+  return `./${normalized.replace(/^\/+/, '').replace(/\/+$/, '')}`;
+}
+
+function profilePath(profileDir: string, name: string): string {
+  return profileDir === '.' ? `./${name}` : `${profileDir}/${name}`;
 }
 
 function renderSessionContext(sc: SessionContextInput): string {

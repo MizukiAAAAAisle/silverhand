@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Loader2 } from 'lucide-react';
+import { AlertTriangle, Layers, Loader2 } from 'lucide-react';
 import type { AgentDto, AgentRunState } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 
@@ -26,37 +26,66 @@ function useLiveMs(epochMs: number): number {
 // ── Status label ─────────────────────────────────────────────────────────
 
 const STATUS_LABEL: Record<string, string> = {
-  starting: '正在启动…',
-  thinking: '正在思考…',
-  tool_running: '正在思考…',
+  starting: 'Starting…',
+  thinking: 'Thinking…',
+  tool_running: 'Thinking…',
   // idle / failed are terminal; should not reach here.
 };
 
 // ── Component ────────────────────────────────────────────────────────────
 
-interface AgentActivityBubbleProps {
-  state: AgentRunState;
+interface AgentActivityStripProps {
+  states: AgentRunState[];
   /** Resolved from agentsById — may be absent if the agent list hasn't
    *  loaded yet (renders a generic placeholder in that case). */
-  agent: AgentDto | undefined;
+  agentsById: Map<string, AgentDto>;
+  anchorMessageId: string | null;
+  onJumpToAnchor: () => void;
 }
 
 /**
- * A compact two-row activity indicator rendered below the message list
- * while an agent is running (status = `starting | thinking | tool_running`).
- *
- * Row 1 — Progress line:
- *   spinner + latest `activitySnippet`, falling back to the status label
- *   when no text is available.
- *
- * Row 2 — Tool calls (hidden when `toolCallCounts` is empty/absent):
- *   `3 Read  5 Write` — per-tool invocation counts for the current run.
+ * Live channel-level activity strip rendered above the composer. It is
+ * outside the message scroller so "who is running now" remains visible
+ * while the user reads earlier history.
  */
-export function AgentActivityBubble({
+export function AgentActivityStrip({
+  states,
+  agentsById,
+  anchorMessageId,
+  onJumpToAnchor,
+}: AgentActivityStripProps): JSX.Element {
+  if (states.length === 0) return <></>;
+
+  return (
+    <div className="shrink-0 border-t border-border-subtle/60 bg-bg-chat px-4 py-2">
+      <div className="mx-auto flex max-w-[1200px] flex-col gap-1">
+        {states.map(state => (
+          <AgentActivityRow
+            key={state.runId}
+            state={state}
+            agent={agentsById.get(state.agentId)}
+            anchorMessageId={anchorMessageId}
+            onJumpToAnchor={onJumpToAnchor}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AgentActivityRow({
   state,
   agent,
-}: AgentActivityBubbleProps): JSX.Element {
+  anchorMessageId,
+  onJumpToAnchor,
+}: {
+  state: AgentRunState;
+  agent: AgentDto | undefined;
+  anchorMessageId: string | null;
+  onJumpToAnchor: () => void;
+}): JSX.Element {
   const elapsedMs = useLiveMs(state.startedAt);
+  const compactionElapsedMs = useLiveMs(state.compactingSince ?? state.startedAt);
 
   const runtime = agent?.runtime ?? 'claude';
   const displayName = agent
@@ -67,49 +96,79 @@ export function AgentActivityBubble({
   const progressText =
     state.activitySnippet || STATUS_LABEL[state.status] || state.status;
 
-  const toolCallEntries = Object.entries(state.toolCallCounts ?? {});
+  const toolCallEntries = Object.entries(state.toolCallCounts ?? {}).filter(
+    ([, count]) => count > 0,
+  );
+  const compactionText = state.compactionStale
+    ? 'Compaction is taking unusually long'
+    : 'Compacting context…';
+  const CompactionIcon = state.compactionStale ? AlertTriangle : Layers;
+  const canJump = anchorMessageId !== null;
 
   return (
-    <div className="flex items-start gap-2 px-4 py-1 text-xs text-text-muted">
-      {/* Avatar — aligns with row 1 */}
-      <div className="mt-0.5 shrink-0">
+    <button
+      type="button"
+      disabled={!canJump}
+      onClick={onJumpToAnchor}
+      aria-label={
+        canJump
+          ? `${displayName} activity, jump to latest user message`
+          : `${displayName} activity`
+      }
+      title={
+        canJump
+          ? `${displayName}: ${progressText} · jump to latest user message`
+          : `${displayName}: ${progressText}`
+      }
+      className={
+        'group flex w-full min-w-0 items-start gap-2 rounded-[6px] border border-transparent px-2 py-1 text-left text-xs text-text-muted transition-colors ' +
+        (canJump
+          ? 'hover:border-border-subtle/70 hover:bg-bg-hover/60 hover:text-text-primary'
+          : 'cursor-default')
+      }
+    >
+      <span className="pt-0.5">
         <AgentAvatar runtime={runtime} size={16} />
-      </div>
-
-      <div className="min-w-0 flex-1">
-        {/* Row 1: progress */}
-        <div className="flex items-center gap-1.5">
+      </span>
+      <span className="min-w-0 flex-1 space-y-1">
+        <span className="flex min-w-0 items-center gap-1.5 leading-5">
           <span className="shrink-0 font-medium text-accent">{displayName}</span>
-
           <Loader2 className="size-3 shrink-0 animate-spin" />
-          <span className="truncate">{progressText}</span>
-
-          <span className="ml-auto shrink-0 tabular-nums text-text-muted/50">
+          <span className="min-w-0 flex-1 truncate text-text-secondary">
+            {progressText}
+          </span>
+          <span className="shrink-0 tabular-nums text-text-muted/50">
             {formatMs(elapsedMs)}
           </span>
-        </div>
-
-        {/* Row 2: all per-tool counts for the current run. */}
+        </span>
+        {state.compacting ? (
+          <span
+            className={
+              'flex min-w-0 items-center gap-1.5 leading-5 ' +
+              (state.compactionStale ? 'text-warning' : 'text-text-muted')
+            }
+          >
+            <CompactionIcon className="size-3 shrink-0" />
+            <span className="truncate">{compactionText}</span>
+            <span className="shrink-0 tabular-nums text-current/70">
+              {formatMs(compactionElapsedMs)}
+            </span>
+          </span>
+        ) : null}
         {toolCallEntries.length > 0 ? (
-          <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-text-muted/60">
-            {toolCallEntries.map(([name, count]) => (
-              // Outer span keyed by name — stable position in the list.
-              // Inner span keyed by count — remounts on each increment,
-              // triggering the tool-badge-bump entrance animation without
-              // disrupting React's reconciliation of the surrounding row.
-              <span key={name} className="inline-block">
-                <span
-                  key={count}
-                  className="tool-badge-bump min-w-0 max-w-full rounded bg-bg-elevated px-1 py-px font-mono text-[10px]"
-                >
-                  <span className="tabular-nums">{count}</span>{' '}
-                  {name}
-                </span>
+          <span className="flex min-w-0 flex-wrap items-center gap-1">
+            {toolCallEntries.map(([toolName, count]) => (
+              <span
+                key={`${toolName}:${count}`}
+                className="tool-badge-bump rounded border border-border-subtle/70 px-1.5 py-px font-mono text-[10px] leading-4 text-text-muted"
+              >
+                {toolName}
+                <span className="ml-1 text-text-muted/70">×{count}</span>
               </span>
             ))}
-          </div>
+          </span>
         ) : null}
-      </div>
-    </div>
+      </span>
+    </button>
   );
 }

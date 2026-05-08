@@ -9,17 +9,26 @@ import {
   type KeyboardEvent,
 } from 'react';
 import { Hash, Paperclip, Send, X } from 'lucide-react';
-import type { AgentDto, AttachmentDto } from '@silverhand/shared';
+import type { AgentDto } from '@silverhand/shared';
 import { Button } from '@/components/ui/button';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { useAgents } from '@/features/agents/hooks';
 import { useWorkspaces, type WorkspaceListItem } from '@/features/workspaces/hooks';
-import { useSendMessage, useUploadAttachment } from '@/features/channels/hooks';
-import { deleteAttachmentBestEffort } from '@/lib/api';
+import { useSendMessage } from '@/features/channels/hooks';
 import {
-  releaseAttachmentPreview,
-  setAttachmentBlobUrl,
-} from '@/lib/attachment-blob-cache';
+  clearComposerDraft,
+  dropSentAttachmentsFromDraft,
+  hasComposerDraftInFlightUpload,
+  patchComposerDraftText,
+  readComposerDraft,
+  removeComposerDraftAttachment,
+  startComposerDraftAttachmentUpload,
+  subscribeComposerDraft,
+  upsertComposerDraftAttachment,
+  writeComposerDraft,
+  type CachedPendingAttachment,
+  type ComposerDraftSnapshot,
+} from '@/lib/composer-draft-cache';
 import { Lightbox } from './Lightbox';
 
 interface ComposerProps {
@@ -30,25 +39,12 @@ interface ComposerProps {
 
 const MAX_TEXTAREA_HEIGHT = 192; // Mirrors Tailwind max-h-48.
 const MAX_ATTACHMENTS = 20; // Matches backend SendMessageInputSchema cap.
-
-interface PendingAttachment {
-  /** Stable key per file so React reconciliation doesn't reuse a row
-   *  when an upload completes mid-render. */
-  key: string;
-  filename: string;
-  size: number;
-  contentType: string;
-  state: 'uploading' | 'done' | 'error';
-  /** Local object URL for in-Composer preview. Populated for image
-   *  attachments only; revoked when the chip is removed or the
-   *  Composer unmounts. Once the upload succeeds the same URL is
-   *  registered into the renderer-wide attachment-blob-cache so the
-   *  optimistic message renders without a re-fetch. */
-  previewUrl?: string;
-  /** Server-issued attachment id once the upload succeeds. */
-  attachment?: AttachmentDto;
-  error?: string;
-}
+type PendingAttachment = CachedPendingAttachment;
+type SubmittingSnapshot = {
+  snapshot: ComposerDraftSnapshot;
+  editGeneration: number;
+  sentAttachmentIds: string[];
+};
 
 /**
  * Message composer with @-mention / #-channel autocomplete.
@@ -75,8 +71,18 @@ export function Composer({
   routeKind = 'channel',
   disabled,
 }: ComposerProps): JSX.Element {
-  const [draft, setDraft] = useState('');
-  const [caret, setCaret] = useState(0);
+  const [initialDraft] = useState(() => readComposerDraft(conversationId));
+  const [draft, setDraftState] = useState(initialDraft?.text ?? '');
+  const [caret, setCaretState] = useState(initialDraft?.caret ?? 0);
+  const [pending, setPendingState] = useState<PendingAttachment[]>(
+    () => initialDraft?.pending ?? [],
+  );
+  const draftRef = useRef(draft);
+  const caretRef = useRef(caret);
+  const pendingRef = useRef<PendingAttachment[]>(pending);
+  const editGenerationRef = useRef(0);
+  const mountedRef = useRef(true);
+  const submittingSnapshotRef = useRef<SubmittingSnapshot | null>(null);
   // Track IME composition explicitly. `e.nativeEvent.isComposing` is
   // unreliable on some Chinese/Japanese IMEs (the final Enter that
   // confirms a candidate fires with isComposing=false on the same
@@ -85,49 +91,128 @@ export function Composer({
   // text on candidate selection.
   const [composing, setComposing] = useState(false);
   const send = useSendMessage(conversationId, routeKind);
-  const upload = useUploadAttachment(conversationId, routeKind);
   const ref = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [pending, setPending] = useState<PendingAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
-  // Mirror of pending preview URLs that haven't been transferred to
-  // the global attachment cache yet. We need a ref (not pending state)
-  // because the unmount cleanup runs after the last render and can't
-  // see fresh setPending updates.
-  const pendingUrls = useRef<Map<string, string>>(new Map());
-  // Server-issued attachment ids for chips that uploaded successfully
-  // but haven't been sent in a message yet. We DELETE these on chip
-  // removal and on Composer unmount so abandoned uploads don't pile up
-  // as orphan blobs. Submission clears the map (the message that just
-  // went out anchors them; backend then rejects DELETE with 409).
-  const uploadedIds = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     resizeTextarea(ref.current);
   }, [draft]);
 
-  // On unmount, revoke any preview URLs still owned by Composer (i.e.
-  // not yet handed to the cache via upload success). Uploads still in
-  // flight won't fire setAttachmentBlobUrl because we revoke here —
-  // but the image blob is gone with the Composer anyway, so there's
-  // no display to break.
   useEffect(() => {
-    const owned = pendingUrls.current;
-    const orphans = uploadedIds.current;
     return () => {
-      for (const url of owned.values()) URL.revokeObjectURL(url);
-      owned.clear();
-      // Best-effort orphan delete for unsent uploads. Fire-and-forget;
-      // we deliberately don't await — Composer is unmounting and there's
-      // no UI left to surface failures. Backend returns 409 if the id
-      // ended up referenced by a message that raced the unmount.
-      for (const id of orphans.values()) {
-        releaseAttachmentPreview(id);
-        void deleteAttachmentBestEffort(id);
-      }
-      orphans.clear();
+      mountedRef.current = false;
     };
   }, []);
+
+  function setPendingValue(
+    next:
+      | PendingAttachment[]
+      | ((current: PendingAttachment[]) => PendingAttachment[]),
+  ): void {
+    const value =
+      typeof next === 'function' ? next(pendingRef.current) : next;
+    pendingRef.current = value;
+    setPendingState(value);
+  }
+
+  function updateDraft(nextDraft: string, nextCaret: number): void {
+    detachSubmittingDraftForEdit();
+    editGenerationRef.current += 1;
+    draftRef.current = nextDraft;
+    caretRef.current = nextCaret;
+    setDraftState(nextDraft);
+    setCaretState(nextCaret);
+    patchComposerDraftText(conversationId, routeKind, nextDraft, nextCaret);
+  }
+
+  function updateCaret(nextCaret: number): void {
+    caretRef.current = nextCaret;
+    setCaretState(nextCaret);
+    patchComposerDraftText(conversationId, routeKind, draftRef.current, nextCaret);
+  }
+
+  function detachSubmittingDraftForEdit(): void {
+    const submitting = submittingSnapshotRef.current;
+    if (!submitting) return;
+    dropSentAttachmentsFromDraft(
+      conversationId,
+      submitting.snapshot.pending.map(item => item.key),
+    );
+    submittingSnapshotRef.current = null;
+    patchComposerDraftText(
+      conversationId,
+      routeKind,
+      draftRef.current,
+      caretRef.current,
+    );
+  }
+
+  useEffect(() => {
+    for (const item of pendingRef.current) {
+      if (
+        item.state === 'uploading'
+        && item.file
+        && !hasComposerDraftInFlightUpload(conversationId, item.key)
+      ) {
+        void startComposerDraftAttachmentUpload({
+          conversationId,
+          routeKind,
+          attachmentKey: item.key,
+          file: item.file,
+          previewUrl: item.previewUrl,
+        });
+      }
+    }
+  }, [conversationId, routeKind]);
+
+  useEffect(() => {
+    return subscribeComposerDraft(conversationId, event => {
+      if (event.type === 'clear') {
+        draftRef.current = '';
+        caretRef.current = 0;
+        pendingRef.current = [];
+        setDraftState('');
+        setCaretState(0);
+        setPendingState([]);
+        return;
+      }
+      if (event.type === 'attachment-remove') {
+        setPendingValue(curr =>
+          curr.filter(item => item.key !== event.attachmentKey),
+        );
+        return;
+      }
+      setPendingValue(curr =>
+        curr.map(item =>
+          item.key === event.attachmentKey
+            ? { ...item, ...event.patch }
+            : item,
+        ),
+      );
+    });
+  }, [conversationId]);
+
+  useEffect(() => {
+    return () => {
+      const submitting = submittingSnapshotRef.current;
+      const snapshot =
+        submitting && editGenerationRef.current === submitting.editGeneration
+          ? submitting.snapshot
+          : {
+              conversationId,
+              routeKind,
+              text: draftRef.current,
+              caret: caretRef.current,
+              pending: pendingRef.current,
+              updatedAt: Date.now(),
+            };
+      writeComposerDraft({
+        ...snapshot,
+        updatedAt: Date.now(),
+      });
+    };
+  }, [conversationId, routeKind]);
 
   const { data: agents = [] } = useAgents();
   const { data: workspaces = [] } = useWorkspaces();
@@ -168,7 +253,7 @@ export function Composer({
     const insertion = `${trigger.kind}${handle} `;
     const nextDraft = before + insertion + after;
     const nextCaret = (before + insertion).length;
-    setDraft(nextDraft);
+    updateDraft(nextDraft, nextCaret);
     // Defer caret update until React applies the value — selection
     // setters before that get blown away by the controlled re-render.
     requestAnimationFrame(() => {
@@ -176,7 +261,7 @@ export function Composer({
       if (!el) return;
       el.focus();
       el.setSelectionRange(nextCaret, nextCaret);
-      setCaret(nextCaret);
+      updateCaret(nextCaret);
     });
   };
 
@@ -193,122 +278,99 @@ export function Composer({
       .map(p => p.attachment!);
     if ((!content && ready.length === 0) || disabled) return;
     if (pending.some(p => p.state === 'uploading')) return;
-    // Preview URLs for the chips we are about to clear are now owned by
-    // the attachment-blob-cache (registered on upload success), so we
-    // do NOT revoke them here — the same URL will render the optimistic
-    // message and persist for any later viewer of the message.
-    const carriedOver = pending.filter(p => p.state === 'done' && p.attachment);
-    // Snapshot the (key → id) pairs being sent so we can restore the
-    // orphan-cleanup tracking on send failure.
-    const sentEntries = carriedOver
-      .map(p => [p.key, uploadedIds.current.get(p.key)] as const)
-      .filter((e): e is readonly [string, string] => typeof e[1] === 'string');
-    for (const [key] of sentEntries) uploadedIds.current.delete(key);
-    setDraft('');
-    setCaret(0);
-    setPending([]);
-    send.mutate(
-      { content, attachments: ready },
-      {
-        onError: () => {
-          // Restore so the user doesn't lose what they typed.
-          setDraft(content);
-          // Restore the chips so the user can retry without re-uploading.
-          setPending(carriedOver);
-          // And put the ids back under orphan-cleanup tracking — if the
-          // user closes the composer instead of retrying, the unmount
-          // hook will DELETE them.
-          for (const [key, id] of sentEntries) uploadedIds.current.set(key, id);
-        },
-      },
-    );
+    const submittedPending = pending.filter(p => p.state === 'done' && p.attachment);
+    const sentAttachmentIds = ready.map(item => item.id);
+    const submittedSnapshot: ComposerDraftSnapshot = {
+      conversationId,
+      routeKind,
+      text: content,
+      caret: content.length,
+      pending: submittedPending,
+      updatedAt: Date.now(),
+    };
+    const editGeneration = editGenerationRef.current;
+    submittingSnapshotRef.current = {
+      snapshot: submittedSnapshot,
+      editGeneration,
+      sentAttachmentIds,
+    };
+    draftRef.current = '';
+    caretRef.current = 0;
+    pendingRef.current = [];
+    setDraftState('');
+    setCaretState(0);
+    setPendingState([]);
+    void send
+      .mutateAsync({ content, attachments: ready })
+      .then(() => {
+        const submitting = submittingSnapshotRef.current;
+        if (submitting?.editGeneration !== editGeneration) return;
+        clearComposerDraft(conversationId, { sentAttachmentIds });
+        submittingSnapshotRef.current = null;
+      })
+      .catch(() => {
+        const submitting = submittingSnapshotRef.current;
+        if (submitting?.editGeneration !== editGeneration) return;
+        submittingSnapshotRef.current = null;
+        if (mountedRef.current) {
+          draftRef.current = submittedSnapshot.text;
+          caretRef.current = submittedSnapshot.caret;
+          pendingRef.current = submittedSnapshot.pending;
+          setDraftState(submittedSnapshot.text);
+          setCaretState(submittedSnapshot.caret);
+          setPendingState(submittedSnapshot.pending);
+        }
+        patchComposerDraftText(
+          conversationId,
+          routeKind,
+          submittedSnapshot.text,
+          submittedSnapshot.caret,
+        );
+        for (const item of submittedSnapshot.pending) {
+          upsertComposerDraftAttachment(conversationId, routeKind, item);
+        }
+      });
   }
 
   function addFiles(files: FileList | File[]): void {
     const list = Array.from(files);
     if (list.length === 0) return;
-    const slotsLeft = MAX_ATTACHMENTS - pending.length;
+    const slotsLeft = MAX_ATTACHMENTS - pendingRef.current.length;
     if (slotsLeft <= 0) return;
     for (const file of list.slice(0, slotsLeft)) {
       const key = `att-${crypto.randomUUID()}`;
       const isImage = file.type.startsWith('image/');
       const previewUrl = isImage ? URL.createObjectURL(file) : undefined;
-      if (previewUrl) pendingUrls.current.set(key, previewUrl);
-      setPending(curr => [
+      const item: PendingAttachment = {
+        key,
+        filename: file.name,
+        size: file.size,
+        contentType: file.type || 'application/octet-stream',
+        state: 'uploading',
+        file,
+        previewUrl,
+      };
+      detachSubmittingDraftForEdit();
+      editGenerationRef.current += 1;
+      setPendingValue(curr => [
         ...curr,
-        {
-          key,
-          filename: file.name,
-          size: file.size,
-          contentType: file.type || 'application/octet-stream',
-          state: 'uploading',
-          previewUrl,
-        },
+        item,
       ]);
-      upload.mutate(file, {
-        onSuccess: dto => {
-          // Hand the local object URL to the renderer-wide cache so
-          // both the optimistic message AND any future MessageItem
-          // mounts skip the network round-trip. Owner of the URL
-          // transfers from this Composer's pending row to the cache.
-          if (previewUrl) {
-            setAttachmentBlobUrl(dto.id, previewUrl);
-            pendingUrls.current.delete(key);
-          }
-          // Track for orphan cleanup until either submitted or removed.
-          uploadedIds.current.set(key, dto.id);
-          setPending(curr =>
-            curr.map(p =>
-              p.key === key
-                ? { ...p, state: 'done', attachment: dto }
-                : p,
-            ),
-          );
-        },
-        onError: err => {
-          // Upload failed — the URL never made it to the cache, so
-          // we own it and must revoke.
-          if (previewUrl) {
-            URL.revokeObjectURL(previewUrl);
-            pendingUrls.current.delete(key);
-          }
-          setPending(curr =>
-            curr.map(p =>
-              p.key === key
-                ? {
-                    ...p,
-                    state: 'error',
-                    previewUrl: undefined,
-                    error: err instanceof Error ? err.message : String(err),
-                  }
-                : p,
-            ),
-          );
-        },
+      void startComposerDraftAttachmentUpload({
+        conversationId,
+        routeKind,
+        attachmentKey: key,
+        file,
+        previewUrl,
       });
     }
   }
 
   function removePending(key: string): void {
-    setPending(curr => {
-      const target = curr.find(p => p.key === key);
-      if (target?.previewUrl && target.state !== 'done') {
-        // Done items already handed ownership to the blob cache;
-        // revoking here would orphan future viewers.
-        URL.revokeObjectURL(target.previewUrl);
-        pendingUrls.current.delete(key);
-      }
-      // Successfully-uploaded but never-sent: tell the backend to
-      // delete the orphan blob and drop the cached preview URL. Done
-      // best-effort — backend returns 404 if it's already gone.
-      const orphanId = uploadedIds.current.get(key);
-      if (orphanId) {
-        uploadedIds.current.delete(key);
-        releaseAttachmentPreview(orphanId);
-        void deleteAttachmentBestEffort(orphanId);
-      }
-      return curr.filter(p => p.key !== key);
-    });
+    detachSubmittingDraftForEdit();
+    editGenerationRef.current += 1;
+    setPendingValue(curr => curr.filter(p => p.key !== key));
+    removeComposerDraftAttachment(conversationId, key);
   }
 
   // Composer-level lightbox: shown when the user clicks an image chip.
@@ -450,12 +512,14 @@ export function Composer({
           ref={ref}
           value={draft}
           onChange={e => {
-            setDraft(e.target.value);
-            setCaret(e.target.selectionStart ?? e.target.value.length);
+            updateDraft(
+              e.target.value,
+              e.target.selectionStart ?? e.target.value.length,
+            );
           }}
-          onKeyUp={e => setCaret(e.currentTarget.selectionStart ?? 0)}
-          onClick={e => setCaret(e.currentTarget.selectionStart ?? 0)}
-          onSelect={e => setCaret(e.currentTarget.selectionStart ?? 0)}
+          onKeyUp={e => updateCaret(e.currentTarget.selectionStart ?? 0)}
+          onClick={e => updateCaret(e.currentTarget.selectionStart ?? 0)}
+          onSelect={e => updateCaret(e.currentTarget.selectionStart ?? 0)}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
           onCompositionStart={() => setComposing(true)}
@@ -464,7 +528,7 @@ export function Composer({
           placeholder={
             disabled
               ? '会话已关闭，无法发送'
-              : 'Enter 发送，Shift + Enter 换行；@ 提到 agent，# 引用 channel；附件按钮 / 拖拽 / Cmd+V 粘贴上传文件'
+              : 'Enter 发送，Shift + Enter 换行，@agent，#channel'
           }
           className="block max-h-48 min-h-[60px] w-full resize-none rounded-md border border-border-subtle bg-bg-floating px-3 py-2 pb-11 pr-12 text-sm text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none focus:ring-2 focus:ring-border-focus disabled:cursor-not-allowed disabled:opacity-60"
         />

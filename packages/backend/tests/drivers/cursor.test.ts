@@ -81,6 +81,30 @@ describe('CursorDriver static config', () => {
   });
 });
 
+describe('CursorDriver.classifyInitProgress', () => {
+  it('treats any complete stream-json frame as protocol-ready', () => {
+    const d = new CursorDriver();
+    expect(
+      d.classifyInitProgress(
+        JSON.stringify({ type: 'assistant', message: { content: [] } }),
+      ),
+    ).toBe('protocol_ready');
+  });
+
+  it('treats system init as session-ready', () => {
+    const d = new CursorDriver();
+    expect(
+      d.classifyInitProgress(
+        JSON.stringify({ type: 'system', subtype: 'init', session_id: 'cli-1' }),
+      ),
+    ).toBe('session_ready');
+  });
+
+  it('ignores non-json lines', () => {
+    expect(new CursorDriver().classifyInitProgress('not json')).toBeNull();
+  });
+});
+
 describe('CursorDriver.buildArgs', () => {
   let cleanup: (() => void) | null = null;
   afterEach(() => {

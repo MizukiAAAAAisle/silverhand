@@ -17,7 +17,8 @@ export type { SessionContextInput };
 export interface DriverPromptContext {
   agentId: string;
   agentName: string;
-  l2SystemPrompt: string;
+  activeProfileDir: string;
+  roleSystemPrompt: string;
   sessionContext: SessionContextInput;
 }
 
@@ -70,6 +71,23 @@ export interface Driver {
   /** Bare command name; ConversationManager resolves the actual binary path. */
   readonly binary: string;
   /**
+   * How the runtime reaches its first session-ready event:
+   *  - `self_inits`: spawn can complete protocol/session init without user stdin.
+   *  - `requires_first_message`: init is tied to the first real stdin user turn.
+   *    Empty-inbox spawns may be marked active with a real pid while
+   *    `initObserved=false`; ConversationManager defers the init watchdog until
+   *    it actually writes a user message to stdin.
+   *
+   * A future runtime can opt into `requires_first_message` without adding a
+   * manager-level runtime branch only if its driver keeps the boundary intact:
+   * `encodeStdinMessage` must send the real kickoff user turn, and `parseLine`
+   * must emit a reliable first `session_init` once the runtime has actually
+   * accepted that turn. If either side is missing, implement it in the driver
+   * first; otherwise the manager cannot know when a pre-init inbox row is safe
+   * to mark delivered.
+   */
+  readonly kickoffMode: 'self_inits' | 'requires_first_message';
+  /**
    * How busy-time deliveries from chat-bridge to this driver are routed:
    *  - `gated`:  push only at safe boundaries (Claude — no outstanding
    *              tool_uses + non-compacting state)
@@ -91,6 +109,12 @@ export interface Driver {
    *  e.g. `mcp__chat__` for Claude Code. Used by `buildSystemPrompt` to
    *  reference tool names in the prompt. */
   readonly mcpToolPrefix: string;
+  /** Pre-protocol silence window. Raw stdout/stderr bytes reset this. */
+  readonly initLivenessSilenceMs: number;
+  /** Absolute cap before the first complete protocol frame is observed. */
+  readonly initPreProtocolCapMs: number;
+  /** Window from first protocol frame to session-ready init. */
+  readonly initPostProtocolMs: number;
 
   buildArgs(ctx: DriverSpawnContext): string[];
   /** Returns a derived env: copy of base with driver-specific tweaks
@@ -105,6 +129,9 @@ export interface Driver {
    *  interrupt; ConversationManager falls through to SIGTERM/SIGKILL. */
   encodeInterruptControl(): string | null;
   parseLine(line: string): ParsedEvent[];
+  /** Pure line classifier for init watchdog progress. Must not mutate
+   *  driver protocol state; `session_ready` implies `protocol_ready`. */
+  classifyInitProgress(line: string): 'protocol_ready' | 'session_ready' | null;
 
   /** Optional: called once after spawn, before ConversationManager's first
    *  drainInbox. Lets stateful drivers (codex) start their JSON-RPC

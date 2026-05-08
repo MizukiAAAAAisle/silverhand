@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Bookmark, CornerUpLeft, FileText, ListTodo, User } from 'lucide-react';
 import type { AgentDto, AttachmentSnapshot, MessageDto } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
+import { useNav } from '@/router';
 import { fetchAttachmentBlob } from '@/lib/api';
 import {
   getAttachmentBlobUrl,
@@ -89,6 +90,11 @@ export function MessageItem({
     ? name
     : `@${agent?.display_name?.trim() || name}`;
   const { relative, absolute } = useRelativeTime(message.created_at);
+  const { toMembers } = useNav();
+  const navigateToAgent = useCallback(
+    (agentId: string) => toMembers(agentId),
+    [toMembers],
+  );
   const taskTag = <TaskMetaTag message={message} agentsById={agentsById} />;
   const [hover, setHover] = useState(false);
   // Visual-only: highlight forces the framed look; only real hover
@@ -114,6 +120,7 @@ export function MessageItem({
         agent={agent}
         conversationId={conversationId}
         routeKind={routeKind}
+        onNavigateAgent={navigateToAgent}
       />
       <div className="min-w-0 max-w-[85%]">
         <header className={'mb-1 text-xs ' + (alignRight ? 'text-right' : '')}>
@@ -143,10 +150,15 @@ export function MessageItem({
                   agent={agent}
                   conversationId={conversationId}
                   routeKind={routeKind}
+                  trigger="hover"
                 >
                   <button
                     type="button"
-                    className="rounded font-medium text-accent hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+                    onClick={event => {
+                      event.preventDefault();
+                      navigateToAgent(agent.id);
+                    }}
+                    className="rounded font-medium text-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
                   >
                     {displayLabel}
                   </button>
@@ -266,7 +278,7 @@ function TaskMetaTag({
   return (
     <span
       title={title}
-      className="ml-2 inline-flex h-5 max-w-[200px] items-center gap-1 bg-warning px-1.5 align-middle text-[11px] font-semibold leading-none text-text-on-warning shadow-sm"
+      className="ml-2 inline-flex h-5 max-w-[200px] items-center gap-1 border border-[var(--border-task-tag)] bg-[var(--bg-task-tag)] px-1.5 align-middle text-[11px] font-semibold leading-none text-[var(--text-on-task-tag)]"
     >
       <ListTodo className="size-3 shrink-0" aria-hidden />
       <span className="min-w-0 truncate">{label}</span>
@@ -296,11 +308,13 @@ function Avatar({
   agent,
   conversationId,
   routeKind,
+  onNavigateAgent,
 }: {
   isUser: boolean;
   agent: AgentDto | undefined;
   conversationId: string;
   routeKind: 'channel' | 'thread';
+  onNavigateAgent: (agentId: string) => void;
 }): JSX.Element {
   if (isUser) {
     return (
@@ -318,10 +332,15 @@ function Avatar({
         agent={agent}
         conversationId={conversationId}
         routeKind={routeKind}
+        trigger="hover"
       >
         <button
           type="button"
           aria-label={`@${agent.name}`}
+          onClick={event => {
+            event.preventDefault();
+            onNavigateAgent(agent.id);
+          }}
           className="mt-0.5 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
         >
           <AgentAvatar runtime={agent.runtime} size={32} />

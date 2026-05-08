@@ -31,14 +31,28 @@ export function AgentView({
 
   if (agentQuery.isLoading) {
     return (
-      <main className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted">
+      <main
+        className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
+        style={{
+          borderRadius: 'var(--card-radius, 0)',
+          boxShadow: 'var(--card-shadow, none)',
+          overflow: 'hidden',
+        }}
+      >
         Loading agent…
       </main>
     );
   }
   if (agentQuery.isError || !agentQuery.data) {
     return (
-      <main className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted">
+      <main
+        className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
+        style={{
+          borderRadius: 'var(--card-radius, 0)',
+          boxShadow: 'var(--card-shadow, none)',
+          overflow: 'hidden',
+        }}
+      >
         Agent not found.
       </main>
     );
@@ -47,7 +61,13 @@ export function AgentView({
   const agent = agentQuery.data;
 
   return (
-    <main className="flex h-full flex-1 flex-col overflow-hidden bg-bg-base">
+    <main
+      className="flex h-full flex-1 flex-col overflow-hidden bg-bg-base"
+      style={{
+        borderRadius: 'var(--card-radius, 0)',
+        boxShadow: 'var(--card-shadow, none)',
+      }}
+    >
       <AgentHeader
         agent={agent}
         runtimeState={runtimeQuery.data}

@@ -86,7 +86,14 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
   const grouped = useMemo(() => groupByStatus(tasks), [tasks]);
 
   return (
-    <main className="flex h-full flex-1 flex-col bg-bg-base">
+    <main
+      className="flex h-full flex-1 flex-col bg-bg-base"
+      style={{
+        borderRadius: 'var(--card-radius, 0)',
+        boxShadow: 'var(--card-shadow, none)',
+        overflow: 'hidden',
+      }}
+    >
       <header className="flex h-[var(--titlebar-height)] shrink-0 items-center gap-2 border-b border-border-subtle px-4">
         <CheckSquare className="size-4 text-text-muted" />
         <span className="font-serif text-sm font-semibold text-text-primary">

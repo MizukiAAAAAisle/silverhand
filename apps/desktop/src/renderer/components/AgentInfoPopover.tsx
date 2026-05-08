@@ -15,11 +15,11 @@ interface AgentInfoPopoverProps {
    *  IM-style presence line + (when crashed) a retry action. */
   conversationId?: string | null;
   routeKind?: 'channel' | 'thread';
-  /** `'click'` (default) opens on click — used by mention pills /
-   *  message author labels. `'hover'` opens on pointer-enter and
+  /** `'click'` (default) opens on click for standalone controls.
+   *  `'hover'` opens on pointer-enter and
    *  closes on pointer-leave with a small grace window so the user
-   *  can move into the popover content. Used by the member strip in
-   *  the conversation header. */
+   *  can move into the popover content. Used by inline mention pills,
+   *  message author/avatar controls, and the member strip. */
   trigger?: 'click' | 'hover';
 }
 
@@ -31,8 +31,8 @@ const HOVER_CLOSE_DELAY_MS = 120;
  * runtime/model, presence (per-conversation), and an optional retry
  * affordance when the agent has crashed in this conversation.
  *
- * Two trigger modes: click (mention pills, message author) and hover
- * (member strip in conversation header). Hover mode is implemented via
+ * Two trigger modes: click (standalone controls) and hover
+ * (inline mentions, message author/avatar, and member strip in conversation header). Hover mode is implemented via
  * controlled `open` rather than a separate Radix HoverCard primitive
  * to keep the dep surface narrow.
  */

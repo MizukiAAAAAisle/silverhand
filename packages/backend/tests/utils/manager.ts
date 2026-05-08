@@ -31,6 +31,10 @@ export interface MockClaudeEnvOverrides {
   MOCK_CLAUDE_EXIT_CODE?: string;
   MOCK_CLAUDE_EXIT_AFTER_INIT_MS?: string;
   MOCK_CLAUDE_EMIT_TURN_END?: '1';
+  MOCK_CLAUDE_PROTOCOL_EVENT_DELAY_MS?: string;
+  MOCK_CLAUDE_STDERR_INTERVAL_MS?: string;
+  MOCK_CLAUDE_FAIL_FIRST_INITS?: string;
+  MOCK_CLAUDE_SPAWN_COUNT_FILE?: string;
   MOCK_CLAUDE_STDIN_LOG?: string;
   MOCK_CLAUDE_IGNORE_INTERRUPT?: '1';
 }
@@ -106,6 +110,7 @@ export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {})
   // Per-test env overrides; we mutate this reference and the manager picks
   // it up because spawn() reads env at call time.
   const mockEnvOverrides: MockClaudeEnvOverrides = {
+    MOCK_CLAUDE_INIT_DELAY_MS: '20',
     MOCK_CLAUDE_STDIN_LOG: join(tmp.silverhandDir, 'stdin.log'),
   };
 

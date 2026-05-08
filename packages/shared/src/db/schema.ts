@@ -119,6 +119,7 @@ export interface ConversationRow {
   closed_at: number | null;
   close_summary: string | null;
   pinned_at: number | null;
+  archived_at: number | null;
   created_at: number;
   updated_at: number;
 }

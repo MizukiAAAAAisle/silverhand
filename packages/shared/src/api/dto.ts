@@ -241,6 +241,7 @@ export const ConversationDtoSchema = z.object({
   closed_at: z.number().nullable(),
   close_summary: z.string().nullable(),
   pinned_at: z.number().nullable(),
+  archived_at: z.number().nullable(),
   created_at: z.number(),
   updated_at: z.number(),
 });
@@ -300,6 +301,59 @@ export const ArchiveWorkspaceInputSchema = z.object({
 });
 export type ArchiveWorkspaceInput = z.infer<typeof ArchiveWorkspaceInputSchema>;
 
+/** Body for `PATCH /api/channels/:id/archive`. Same toggle shape as the
+ *  workspace archive endpoint. Archive is purely organizational — agents
+ *  keep running, delivery keeps working; the sidebar groups archived
+ *  channels under a collapsible Archived section. */
+export const ArchiveChannelInputSchema = z.object({
+  archived: z.boolean(),
+});
+export type ArchiveChannelInput = z.infer<typeof ArchiveChannelInputSchema>;
+
+/** Query for `GET /api/archived-channels`. `since` is epoch ms (inclusive
+ *  lower bound on `archived_at`); the frontend converts 30d/14d/7d
+ *  presets to a timestamp client-side. `workspace_id` narrows the list
+ *  to a single workspace, omitted = all workspaces visible to the
+ *  caller. */
+export const ArchivedChannelsQueryInputSchema = z.object({
+  workspace_id: z
+    .preprocess(
+      v => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      z.string().optional(),
+    ),
+  since: z
+    .preprocess(
+      v => (v === '' || v === undefined ? undefined : v),
+      z.coerce.number().int().nonnegative().optional(),
+    ),
+});
+export type ArchivedChannelsQueryInput = z.infer<
+  typeof ArchivedChannelsQueryInputSchema
+>;
+
+/** Row in the global archived-channels list. `workspace.archived_at`
+ *  is included so the UI can flag rows whose workspace itself is
+ *  archived without a second lookup. `thread_count` is computed
+ *  server-side so the row can render "N threads" without requesting
+ *  the threads themselves. */
+export const ArchivedChannelListItemDtoSchema = z.object({
+  channel: ChannelConversationDtoSchema,
+  workspace: z.object({
+    id: z.string(),
+    name: z.string(),
+    archived_at: z.number().nullable(),
+  }),
+  thread_count: z.number().int().nonnegative(),
+});
+export type ArchivedChannelListItemDto = z.infer<
+  typeof ArchivedChannelListItemDtoSchema
+>;
+
+export const ArchivedChannelsDtoSchema = z.object({
+  channels: z.array(ArchivedChannelListItemDtoSchema),
+});
+export type ArchivedChannelsDto = z.infer<typeof ArchivedChannelsDtoSchema>;
+
 // ── Workspace membership ─────────────────────────────────────────
 export const AddWorkspaceMemberInputSchema = z.object({
   agent_id: z.string(),
@@ -320,6 +374,7 @@ export type AgentRunStatus = z.infer<typeof AgentRunStatusSchema>;
 export const AgentRunTerminalReasonSchema = z.enum([
   'replied',
   'turn_ended',
+  'replaced',
   'stopped',
   'crashed',
   'timeout',
@@ -340,6 +395,9 @@ export const AgentRunStateSchema = z.object({
   terminalReason: AgentRunTerminalReasonSchema.optional(),
   activitySnippet: z.string().optional(),
   toolCallCounts: z.record(z.string(), z.number()).optional(),
+  compacting: z.boolean().optional(),
+  compactingSince: z.number().optional(),
+  compactionStale: z.boolean().optional(),
   detail: z.string().optional(),
 });
 export type AgentRunState = z.infer<typeof AgentRunStateSchema>;

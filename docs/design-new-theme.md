@@ -59,15 +59,46 @@ electron/src/renderer/src/
 | `--bg-selected` | **导航激活态**（sidebar 列表当前项、tab 当前项、segment 当前段） | 必须能从 `--bg-primary` 中明显跳出（≥ 5% 亮度差） |
 | `--bg-floating` | **浮层 / 卡片表面**（popover、菜单、对话框、展开后的卡片） | 永远是"内容表面"，通常是主题里**最亮**的一档 |
 | `--bg-chat` | **Chat 主读区**（会话 / Saved / Search 的 main 区域） | 独立于 `--bg-base`；base 可作为全局 frame，chat 应按阅读舒适度单独取值 |
+| `--bg-app` | App frame 底色（panel card 之间露出的底） | 比 sidebar/card 表面沉一档；必须与 titlebar 背景协调 |
 | `--bg-island` | 岛屿底色（代码块、JSON、终端、表格） | 中性灰，与 ocean 形成材质对比；warm 是冷中性灰 `#ECEAE5`，shadcn 因为本身灰白可与 `bg-primary` 同值 |
 | `--bg-island-deep` | 表头、嵌套岛屿 | 比 island 略深 |
 | `--bg-nav-rail` | NavRail（最左 icon 栏）底色 | 主题最强的一档信号色，或退化成 `var(--bg-primary)`（详见 §9） |
 | `--bg-channels-sidebar` | 频道列表栏底色 | 与 nav-rail 同色家族、saturation 低一档；或退化 |
 | `--bg-sessions-sidebar` | 会话列表栏底色 | 同色系最浅；或退化 |
+| `--bg-nav-rail-hover` | NavRail icon hover 底色 | 与 `--bg-nav-rail` 成对；深色 nav 用浅混色，浅色 nav 用深混色 |
+| `--bg-row-selected` | Workspace / Channel / Search / Saved row 选中底色 | 主题化替代硬编码 `--bg-selected`；必须从 sidebar 底色中跳出 |
+| `--bg-row-hover` | 同一组 row 的 hover 底色 | selected 的弱一级，不应比 selected 更抢眼 |
 
 **关键：`--bg-selected` ≠ `--bg-floating`**。这是踩过坑的拆分（详见主文档 §9.5）。warm 下两者凑巧都是 `#FFFFFF`，shadcn 下必须分别给值（selected `#F3F3F3`、floating `#FFFFFF`），否则 `bg-elevated` 容器里的激活态会消失。
 
 **关键 2：三个 sidebar token 是 per-theme 可选项**。warm-coral 这种"留白派"主题让它们全部 `var(--bg-primary)`，左侧 chrome 一片同色。paper-ink 这种"梯度派"主题让它们沿一条 oklab 色线递减——见 §9。**新主题里这三个 token 必须给值**（哪怕都退化到 `var(--bg-primary)`），否则切换主题时 NavRail / sidebar 会瞬变成透明黑。
+
+**关键 3：默认主题同时挂在 `:root` 上，新增 token 不能依赖 fallback。** 只要组件开始读取新的 CSS var，其它主题也必须显式定义同名 token；否则会继承默认主题值，出现"切主题后还用 paper-ink 的 1px row border / 纸白 NavRail icon"这类泄漏。
+
+### 3.1.1 App frame / panel card 几何
+
+| Token | 用途 | 选值原则 |
+|---|---|---|
+| `--frame-padding` | App frame 左右/底部 padding，也是 panel 之间的视觉 gap | 当前标准 `8px`；titlebar 下方 top padding 在组件层固定为 0 |
+| `--card-radius` | NavRail / sidebar / chat panel 圆角 | 当前标准 `8px`；旧直角主题也要显式写值 |
+| `--card-shadow` | panel card 阴影 | 轻阴影即可，避免卡片变成浮层 |
+| `--splitter-bg` | resize splitter 的静态底色 | card frame 中通常 `transparent`，由 gap 表达分隔 |
+| `--splitter-offset` | 抵消 splitter 作为 flex item 产生的额外列间距 | 当前 `calc((var(--frame-padding) + 4px) / -2)`，让视觉 gap 仍等于 `--frame-padding` |
+| `--titlebar-border` | titlebar 下边线 | card frame 主题通常 `transparent`，避免 titlebar 和 body 断层 |
+
+### 3.1.2 Brand / NavRail / row state
+
+| Token | 用途 | 选值原则 |
+|---|---|---|
+| `--brand-primary` | 主题身份色源头 | NavRail、row selected/hover、badge 等需要"品牌身份"的地方从这里派生 |
+| `--text-on-brand` | `--brand-primary` 背景上的文字 / icon | 与 brand 成对维护对比度 |
+| `--text-nav-rail` | NavRail 默认 icon 色 | 深色 nav 用浅字，浅色 nav 用深字；必须显式定义，避免继承默认主题 |
+| `--text-nav-rail-hover` | NavRail hover icon 色 | 通常比默认更实 |
+| `--bg-nav-rail-hover` | NavRail icon hover 底色 | 与 NavRail 底色、icon 色一起按主题成组定义 |
+| `--bg-task-tag` | Message header 后的 task tag 底色 | 主题化的高显著 chip，通常从 `--brand-primary` 派生，不要复用 warning |
+| `--text-on-task-tag` | task tag 上的文字 / icon | 与 `--bg-task-tag` 成对维护对比度 |
+| `--border-task-tag` | task tag 描边 | 与 task tag 底色同族，提供边缘清晰度 |
+| `--sidebar-row-border-width` | Workspace / Channel / Search / Saved row 描边宽度 | 默认视觉标准 `2px`；paper-ink 这类淡墨晕 selected 可降到 `1px` |
 
 ### 3.2 文字
 
@@ -189,6 +220,31 @@ electron/src/renderer/src/
   --bg-floating: ...;       /* 浮层 / 卡片表面：通常最亮 */
   --bg-chat: ...;           /* Chat 主读区：按阅读舒适度独立于 bg-base 取值 */
 
+  /* ── Card frame ── */
+  --bg-app: ...;
+  --frame-padding: 8px;
+  --card-radius: 8px;
+  --card-shadow: ...;
+  --splitter-bg: transparent;
+  --splitter-offset: calc((var(--frame-padding) + 4px) / -2);
+  --titlebar-border: transparent;
+
+  /* ── Brand / NavRail / sidebar row state ── */
+  --brand-primary: ...;
+  --text-on-brand: ...;
+  --text-nav-rail: ...;
+  --text-nav-rail-hover: ...;
+  --bg-nav-rail-hover: ...;
+  --bg-task-tag: ...;
+  --text-on-task-tag: ...;
+  --border-task-tag: ...;
+  --sidebar-row-border-width: 2px;
+  --bg-row-selected: ...;
+  --bg-row-hover: ...;
+  --bg-nav-rail: var(--brand-primary);
+  --bg-channels-sidebar: ...;
+  --bg-sessions-sidebar: ...;
+
   /* ── Islands ── */
   --bg-island: ...;
   --bg-island-deep: ...;
@@ -302,29 +358,30 @@ NavRail  →  Sidebar (channels) → SessionsSidebar  →  ChatArea
 
 主题对这 4 块的色彩处理可以走两条路：
 
-### 9.1 平铺派（默认 / warm-coral）
+### 9.1 平铺派（可选退化）
 
-NavRail / channels / sessions 三块 chrome 全部 `var(--bg-primary)`，跟 chat 主区 `var(--bg-base)` 形成"框 vs 内容"的二分。简单、安全，但当 4 块同色时**眼睛抓不住焦点**——这是 paper-ink 早期实测的真实 bug。
+NavRail / channels / sessions 三块 chrome 全部 `var(--bg-primary)`，跟 chat 主区 `var(--bg-base)` 形成"框 vs 内容"的二分。简单、安全，但当 4 块同色时**眼睛抓不住焦点**——这是早期实测过的真实问题。
 
 适用：极简、低饱和、想让 chrome 完全隐形的主题。
 
-### 9.2 梯度派（推荐 / paper-ink）
+### 9.2 梯度派（当前推荐）
 
 把 4 块安排在一条 oklab 色线上，每往内一档稀释一次。NavRail 是色线最饱和端（"主信号"），chat 主区是另一端（最浅，读区），中间两档用 `color-mix` 自动派生：
 
 ```css
---bg-nav-rail: #FFD440;
---bg-channels-sidebar:  color-mix(in oklab, var(--bg-nav-rail) 55%, var(--bg-base));
---bg-sessions-sidebar:  color-mix(in oklab, var(--bg-nav-rail) 22%, var(--bg-base));
+--brand-primary: <theme identity color>;
+--bg-nav-rail: var(--brand-primary);
+--bg-channels-sidebar: color-mix(in oklab, var(--brand-primary) 30%, var(--bg-base));
+--bg-sessions-sidebar: color-mix(in oklab, var(--brand-primary) 12%, var(--bg-base));
 /* chat 主区使用 var(--bg-base) */
 ```
 
-视觉效果：从饱和黄 → 蜂蜜麦色 → 淡奶黄 → ivory 的连续过渡，**没有 hue 跳**，只有 saturation + lightness 同步衰减。
+视觉效果：从主题身份色 → 低饱和 sidebar → 更浅 sidebar → 读区纸色的连续过渡，**没有 hue 跳**，只有 saturation + lightness 同步衰减。
 
 为什么用 `color-mix(in oklab, ...)`：oklab 是感知均匀色空间，比 sRGB 插值出的中间色更"自然"——尤其是亮色到深色之间的过渡不会出灰泥色。
 
 **调节口子**：
-- 想换 base hue（橘 / 蓝 / 绿），改 `--bg-nav-rail` 一个值，三档全部跟着重算
+- 想换 base hue（橘 / 蓝 / 绿），改 `--brand-primary` 一个值，三档全部跟着重算
 - 想 channels 更柔，把 `55%` 调到 `45%` / `40%`
 - 想 sessions 几乎隐形，把 `22%` 调到 `15%`
 - 整体加深，两个百分比一起往上提（如 `70%` / `35%`）
@@ -337,18 +394,19 @@ NavRail / channels / sessions 三块 chrome 全部 `var(--bg-primary)`，跟 cha
 
 ## 10. 选中态 / hover 态状态机（跨组件统一）
 
-NavRail 项 / channel / DM / session 这种**一级导航 row**，用同一套三档状态机，不要每个组件各发明一套：
+NavRail 项 / channel / DM / session 这种**一级导航 row**，用同一套三档状态机，不要每个组件各发明一套。现在 workspace/channel/sidebar row 的状态已经主题化：
 
 | 状态 | border | background | 视觉读法 |
 |---|---|---|---|
-| default | `border-2 border-transparent` | 无 | 占位 2px 边但不可见 |
-| hover | `border-2 border-accent` | `bg-white/70` | accent 边 + 半透白底——"selected 的预演幽灵" |
-| selected | `border-2 border-accent` | `bg-bg-selected` | accent 边 + 实白底 |
+| default | `border-transparent` + `--sidebar-row-border-width` | 无 | 占位边但不可见 |
+| hover | `border-accent` + `--sidebar-row-border-width` | `--bg-row-hover` | selected 的弱一级预演 |
+| selected | `border-accent` + `--sidebar-row-border-width` | `--bg-row-selected` | 当前所在 |
 
 **两个关键设计点**：
 
-1. **`border-2` 在 default 上就占位**（用 `border-transparent`），避免 hover/selected 切换时整行向内推 2px——这是非常常见的低级 layout shift bug。
-2. **border-color 从 hover 到 selected 完全一致**（都是 `border-accent`），只在 bg opacity 上递进。视觉语义：边出现 = 候选，底变实 = 确定。早期版本让 hover 用减弱的 `border-accent/40`，看起来像"两种不同的状态"而不是"同一种渐进确认"。
+1. **default 上也占位**（用 `border-transparent`），避免 hover/selected 切换时整行向内推——这是非常常见的低级 layout shift bug。
+2. **border width 必须主题化但显式定义**。默认视觉标准是 `2px`；paper-ink 这种 selected 是淡墨晕的主题可以用 `1px`。因为默认主题同时挂在 `:root`，其它主题必须显式写 `--sidebar-row-border-width: 2px`，不能指望 fallback。
+3. **border-color 从 hover 到 selected 完全一致**（都是 `border-accent`），只在 bg opacity 上递进。视觉语义：边出现 = 候选，底变实 = 确定。早期版本让 hover 用减弱的 `border-accent/40`，看起来像"两种不同的状态"而不是"同一种渐进确认"。
 
 **适用范围**：
 - ✅ NavRail 项（icon 导航）
@@ -358,7 +416,7 @@ NavRail 项 / channel / DM / session 这种**一级导航 row**，用同一套�
 - ❌ 行内按钮 / toolbar / dropdown trigger（用各自的状态系统）
 - ❌ Saved / 分组 header 等"动作"性质而非"导航选中"性质的按钮（继续用 `bg-bg-hover`）
 
-**主题间的退化**：`bg-bg-selected` 和 `border-accent` 都是基础 token，新主题只要把 `--accent` 和 `--bg-selected` 选对，这套状态机自动跨主题工作——**组件层不用判主题**。
+**主题间的退化**：组件层读取 `--bg-row-selected` / `--bg-row-hover` / `--sidebar-row-border-width`。新主题必须显式定义这三个 token；如果想沿用旧视觉，就把 selected 设为 `var(--bg-selected)`，hover 设为 `rgba(255,255,255,0.7)` 或本主题等价值，border width 设为 `2px`。
 
 ---
 

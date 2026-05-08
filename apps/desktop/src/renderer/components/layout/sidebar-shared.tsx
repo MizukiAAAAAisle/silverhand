@@ -1,4 +1,9 @@
-import { useState, type ReactNode } from 'react';
+import {
+  forwardRef,
+  useState,
+  type ButtonHTMLAttributes,
+  type ReactNode,
+} from 'react';
 import { ChevronDown, ChevronRight, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
@@ -73,7 +78,7 @@ export function SidebarSection({
   );
 }
 
-interface RowProps {
+interface RowProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onClick' | 'title'> {
   icon?: ReactNode;
   title: ReactNode;
   subtitle?: ReactNode;
@@ -90,7 +95,7 @@ const STATUS_DOT: Record<NonNullable<RowProps['status']>, string> = {
   crashed: 'bg-error',
 };
 
-export function SidebarRow({
+export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function SidebarRow({
   icon,
   title,
   subtitle,
@@ -98,17 +103,22 @@ export function SidebarRow({
   status,
   badge,
   onClick,
-}: RowProps): JSX.Element {
+  className,
+  ...buttonProps
+}: RowProps, ref): JSX.Element {
   return (
     <li>
       <button
+        ref={ref}
+        {...buttonProps}
         type="button"
         onClick={onClick}
         className={
-          'flex w-full items-center gap-2 border-2 px-2 py-1.5 text-left text-sm transition-colors ' +
+          'sidebar-row-border flex w-full items-center gap-2 border px-2 py-1.5 text-left text-sm transition-colors ' +
           (selected
             ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
-            : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary')
+            : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary') +
+          (className ? ` ${className}` : '')
         }
       >
         {icon ? <span className="shrink-0 text-text-muted">{icon}</span> : null}
@@ -139,4 +149,4 @@ export function SidebarRow({
       </button>
     </li>
   );
-}
+});

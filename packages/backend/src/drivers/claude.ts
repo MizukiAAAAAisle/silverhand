@@ -35,10 +35,19 @@ const DISALLOWED_TOOLS = [
 export class ClaudeDriver implements Driver {
   readonly kind = 'claude' as const;
   readonly binary = 'claude';
+  readonly kickoffMode = 'requires_first_message' as const;
   readonly busyDeliveryMode = 'gated' as const;
   readonly oneShot = false;
   readonly supportsNativeStandingPrompt = true;
   readonly mcpToolPrefix = 'mcp__chat__';
+  readonly initLivenessSilenceMs = 30 * 1000;
+  readonly initPreProtocolCapMs = 5 * 60 * 1000;
+  // 60s post-protocol budget. Aligned with codex driver — the post-protocol
+  // window measures time from first well-formed JSON frame to `system.init`,
+  // and we want all runtimes to share a single recovery budget so PR-A
+  // failure-mode triage (`reason=post_protocol`) doesn't depend on driver.
+  // See docs/incident-2026-05-08-codex-init-watchdog.md.
+  readonly initPostProtocolMs = 60 * 1000;
 
   buildArgs(ctx: DriverSpawnContext): string[] {
     const args = [
@@ -79,7 +88,8 @@ export class ClaudeDriver implements Driver {
       agentName: ctx.agentName,
       runtime: 'claude',
       mcpToolPrefix: this.mcpToolPrefix,
-      l2SystemPrompt: ctx.l2SystemPrompt,
+      activeProfileDir: ctx.activeProfileDir,
+      roleSystemPrompt: ctx.roleSystemPrompt,
       sessionContext: ctx.sessionContext,
     });
   }
@@ -219,6 +229,23 @@ export class ClaudeDriver implements Driver {
     }
 
     return events;
+  }
+
+  classifyInitProgress(line: string): 'protocol_ready' | 'session_ready' | null {
+    const trimmed = line.trim();
+    if (!trimmed) return null;
+
+    let event: any;
+    try {
+      event = JSON.parse(trimmed);
+    } catch {
+      return null;
+    }
+
+    if (event?.type === 'system' && event.subtype === 'init' && typeof event.session_id === 'string') {
+      return 'session_ready';
+    }
+    return event && typeof event === 'object' ? 'protocol_ready' : null;
   }
 }
 

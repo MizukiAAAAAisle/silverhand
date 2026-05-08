@@ -12,6 +12,7 @@ coverage
 release/
 
 # Local data
+.silverhand
 *.db
 *.db-journal
 *.db-wal

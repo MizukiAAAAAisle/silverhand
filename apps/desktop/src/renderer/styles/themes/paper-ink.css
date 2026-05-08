@@ -1,111 +1,117 @@
 /* ================================================================
-   Theme: Paper Ink (warm ivory paper, dusk-blue ink accent)
-   性格：暖象牙基底 + 暮霭蓝墨色 accent，留白派——靠色温过渡而非描边。
+   Theme: Paper Ink (warm aged paper + black-green ink)
+   性格：暖黄象牙纸 + 黑青墨——单一陈述：纸为底、墨为身份。
+   NavRail 是一方"墨砖"，selected 是落在纸上的淡墨晕；sidebar 只
+   带一丝几乎不可见的墨气，让纸自己发声。彻底放弃之前作为 brand 的
+   亮黄——黄是文具品牌色，不是 paper-ink 该有的语义。
    Default theme — also serves as :root so first paint has tokens.
    See docs/design-new-theme.md for the full token contract.
    ================================================================ */
 
 :root,
 [data-theme='paper-ink'] {
-  /* ── Backgrounds (warm ivory ladder) ──
-     base = chat 主区（最亮、读区）；primary = sidebar/composer 等"框"
-     surface，刻意拉深 ~6%，让导航沉下去、内容浮起来。elevated 比之前
-     再深一档，chat 区里的 card / 代码块更可见。 */
-  --bg-base: #FFFAEF;          /* chat 主区 / 全局窗口底色 —— 老纸感 */
-  --bg-primary: #EFE5CE;       /* sidebar、composer、main column 容器 —— 框 */
-  --bg-elevated: #E8DDC0;      /* 卡片休眠、segment 容器、设置面板小块 */
-  --bg-surface: #DCD0A8;       /* 嵌套面板 */
-  --bg-hover: #D2C595;         /* 通用 hover 反馈（比 primary 深 ~7%） */
-  --bg-active: #C5B57F;        /* 按下/激活 */
-  --bg-selected: #FFFFFF;      /* 导航激活（warm 派偷懒：纯白从任何一档都跳出） */
-  --bg-floating: #FFFFFF;      /* 浮层 / 卡片表面 */
-  --bg-chat: #FFFAEF;          /* chat 主读区：保持老纸感，不随 frame token 调整 */
+  /* ── Backgrounds (aged-paper ladder) ──
+     base = chat 主区/全局窗口；primary = sidebar/composer，比 base 沉
+     一档；elevated/surface 给嵌套面板。整体向"陈年纸"压一档暖黄但去
+     饱和，避免之前的橙黄感。 */
+  --bg-base: #FAF4E4;
+  --bg-primary: #F2EAD2;
+  --bg-elevated: #E8DDC0;
+  --bg-surface: #DCD0AE;
+  --bg-hover: #EAE0C5;
+  --bg-active: #D5C8A6;
+  --bg-selected: #FFFFFF;
+  --bg-floating: #FFFFFF;
+  --bg-chat: #FAF4E4;
 
   /* ── Card-style frame ──
-     统一使用「frame + panel cards」布局。frame 是各 card 之间露出的底色，
-     比 sidebar 再沉一档；splitter 落在 gap 中心，不额外撑宽列间距。 */
-  --bg-app: #E8DDC0;
+     frame 是各 card 之间露出的"纸边"——比 sidebar 再沉一档暖灰，
+     splitter 落在 gap 中心，不额外撑宽列间距。 */
+  --bg-app: #DACEB0;
   --frame-padding: 8px;
   --card-radius: 8px;
-  --card-shadow: 0 1px 2px rgba(var(--shadow-base), 0.06);
+  --card-shadow: 0 1px 2px rgba(var(--shadow-base), 0.08);
   --splitter-bg: transparent;
   --splitter-offset: calc((var(--frame-padding) + 4px) / -2);
   --titlebar-border: transparent;
 
-  /* ── Nav rail / sidebar accents (theme-specific) ──
-     不再"每区一种独立色"——全部坐落在 nav-rail-yellow 到 bg-base-ivory
-     的 oklab 色线上，按 100% / 55% / 22% / 0% 逐档稀释。眼睛看到的是从
-     饱和黄 → 蜂蜜麦色 → 淡奶黄 → ivory 的连续过渡，不再有 hue 跳。
-     非 paper-ink 主题里这三个 token 退化为 var(--bg-primary)。 */
   /* ── Brand identity ──
-     `--brand-primary` 是品牌色源头（paper-ink 用品牌黄 #FFD440）；其它
-     UI 想引用品牌身份（NavRail 背景、selected row 等）都通过这个 token，
-     和具体组件位置 token 解耦。`--text-on-brand` 和 brand 配对，避免日后
-     brand 偏移时文字对比度悄悄崩。 */
-  --brand-primary: #FFD440;
-  --text-on-brand: #1F1B14;
+     paper-ink 的"品牌"是墨本身——一种黑青墨色。NavRail 用它做整
+     张墨砖，selected 则降为纸上的淡墨晕，避免左侧出现多块满墨。
+     这一改让主题从"黄底暮蓝点缀"变成"纸 + 墨"的单一陈述。 */
+  --brand-primary: #263A42;
+  --text-on-brand: #FAF4E4;
+  --text-nav-rail: #FAF4E4CC;
+  --text-nav-rail-hover: #FAF4E4;
+  --bg-nav-rail-hover: color-mix(in oklab, var(--text-on-brand) 14%, var(--brand-primary));
+  --bg-task-tag: var(--brand-primary);
+  --text-on-task-tag: var(--text-on-brand);
+  --border-task-tag: color-mix(in oklab, var(--text-on-brand) 18%, var(--brand-primary));
 
-  /* Sidebar row state — selected borrows the brand yellow so the current
-     workspace/channel has the same high-salience identity cue as NavRail.
-     Hover stays in the same yellow family but is diluted into the sidebar
-     surface to avoid noisy list scanning. */
-  --bg-row-selected: var(--brand-primary);
-  --bg-row-hover: color-mix(in oklab, var(--brand-primary) 24%, var(--bg-channels-sidebar));
+  /* Sidebar row state — selected 是淡墨晕，hover 是更轻的未干墨痕。
+     NavRail 独占满墨身份；row 只用纸面上的墨迹表达当前所在。 */
+  --sidebar-row-border-width: 1px;
+  --bg-row-selected: color-mix(in oklab, var(--brand-primary) 30%, var(--bg-floating));
+  --bg-row-hover: color-mix(in oklab, var(--brand-primary) 12%, var(--bg-channels-sidebar));
 
+  /* ── Nav rail / sidebar ──
+     纸不该被墨染——sidebar 只带极轻墨晕（6%/3%），人眼几乎察觉不到
+     hue 变化，但能保留"靠近 NavRail 的一侧略冷"的方向感。彻底放弃
+     之前 55%/22% 的黄色梯度。 */
   --bg-nav-rail: var(--brand-primary);
-  --bg-channels-sidebar: color-mix(in oklab, var(--bg-nav-rail) 55%, var(--bg-base));
-  --bg-sessions-sidebar: color-mix(in oklab, var(--bg-nav-rail) 22%, var(--bg-base));
+  --bg-channels-sidebar: color-mix(in oklab, var(--brand-primary) 6%, var(--bg-base));
+  --bg-sessions-sidebar: color-mix(in oklab, var(--brand-primary) 3%, var(--bg-base));
 
   /* ── Islands (代码块、JSON、终端) ──
      冷暖中性灰，与 ivory 形成"另一种材质"的对比，
-     避免代码块看起来像"另一张纸" */
-  --bg-island: #E8E5DC;
-  --bg-island-deep: #DCD9CD;
+     避免代码块看起来像"另一张纸"。 */
+  --bg-island: #E5E0D2;
+  --bg-island-deep: #D8D2C0;
 
   /* ── Text — 暖深棕近黑（墨色） ── */
-  --text-primary: #1F1B14;
-  --text-secondary: #56503F;
-  --text-muted: #8A8270;
-  --text-inverse: #FFFAEF;
+  --text-primary: #1A1611;
+  --text-secondary: #4F4838;
+  --text-muted: #847B66;
+  --text-inverse: #FAF4E4;
   --text-island: #2A2520;
   --text-inline-code: color-mix(in srgb, var(--accent) 55%, var(--text-primary));
 
-  /* ── Accent (dusk-blue ink) ── */
-  --accent: #3F5C6E;
-  --accent-soft: #3F5C6E26;    /* ~15% alpha — selected item 填充 / selection bg */
-  --accent-hover: #344B5A;
-  --accent-glow: #3F5C6E33;    /* ~20% alpha — focus ring / resize handle glow */
+  /* ── Accent (black-green ink，与 brand 同源 / 略深) ── */
+  --accent: #263A42;
+  --accent-soft: #263A421F;
+  --accent-hover: #1A2B31;
+  --accent-glow: #263A4238;
 
-  /* ── Semantic (与暖底协调，避免与 accent 撞色) ── */
+  /* ── Semantic (与暖底协调，避免与 ink 撞色) ── */
   --success: #5A7A3D;
-  --success-soft: #5A7A3D15;
+  --success-soft: #5A7A3D18;
   --warning: #B07820;
-  --warning-soft: #B0782015;
+  --warning-soft: #B0782018;
   --error: #9A4434;
-  --error-soft: #9A443415;
+  --error-soft: #9A443418;
 
   /* ── Borders (留白派：几乎不可见) ── */
   --border: #00000010;
   --border-subtle: #0000001a;
   --border-island: #6B5A4026;
-  --border-focus: #3F5C6E40;
+  --border-focus: #263A4240;
 
   /* ── On-color foregrounds ── */
-  --text-on-accent: #FFFFFF;
+  --text-on-accent: #FAF4E4;
   --text-on-success: #FFFFFF;
   --text-on-warning: #FFFFFF;
   --text-on-error: #FFFFFF;
   --text-on-selected: var(--text-primary);
 
   /* ── Overlay ── */
-  --overlay-backdrop: rgba(31, 27, 20, 0.32);
+  --overlay-backdrop: rgba(26, 22, 17, 0.34);
 
   /* ── Shadows (暖 umber 基色，避免黑阴影在暖底上发青) ── */
-  --shadow-base: 58, 44, 28;
+  --shadow-base: 50, 38, 24;
   --shadow-popover:
-    0 4px 12px -4px rgba(var(--shadow-base), 0.12);
+    0 4px 12px -4px rgba(var(--shadow-base), 0.14);
   --shadow-modal:
-    0 6px 20px -8px rgba(var(--shadow-base), 0.18);
+    0 6px 20px -8px rgba(var(--shadow-base), 0.20);
   --shadow-button: none;
 
   /* ── Radii ── */

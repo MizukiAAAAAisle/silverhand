@@ -20,6 +20,13 @@ export const apiPaths = {
   workspaceMember: (id: string, agentId: string) =>
     `/api/workspaces/${id}/members/${agentId}`,
   workspaceChannels: (id: string) => `/api/workspaces/${id}/channels`,
+  workspaceArchivedChannels: (id: string) =>
+    `/api/workspaces/${id}/channels/archived`,
+  /** Global flat archived-channel list across every workspace the
+   *  caller can view. Backs the "Archived" chat-tool page (filters:
+   *  workspace, archived date). Per-workspace endpoint above is still
+   *  used by the workspace-scoped query path. */
+  archivedChannels: '/api/archived-channels',
   channelMessages: (id: string) => `/api/channels/${id}/messages`,
   channelAgents: (id: string) => `/api/channels/${id}/agents`,
   channelAgentRunStates: (id: string) => `/api/channels/${id}/agent-run-states`,
@@ -28,6 +35,7 @@ export const apiPaths = {
   channelStop: (id: string) => `/api/channels/${id}/stop`,
   channelResume: (id: string) => `/api/channels/${id}/resume`,
   channelMarkRead: (id: string) => `/api/channels/${id}/mark-read`,
+  channelArchive: (id: string) => `/api/channels/${id}/archive`,
   conversationChannel: (id: string) => `/api/channels/${id}`,
   conversationChannelMessages: (id: string) => `/api/channels/${id}/messages`,
   conversationChannelAgents: (id: string) => `/api/channels/${id}/agents`,

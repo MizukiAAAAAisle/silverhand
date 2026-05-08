@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import type {
   AgentDto,
+  ArchivedChannelListItemDto,
   ChannelConversationDto,
   ChannelLikeDto,
   CreateConversationChannelInput,
@@ -35,6 +36,10 @@ export type ChannelListItem = ChannelConversationDto | DmChannelDto | ThreadDto;
 
 const workspacesKey = ['workspaces'] as const;
 const channelsKey = (workspaceId: string) => ['workspaces', workspaceId, 'channels'] as const;
+const archivedChannelsKey = (workspaceId: string) =>
+  ['workspaces', workspaceId, 'channels', 'archived'] as const;
+const archivedChannelsIndexKey = (workspaceId: string | null, since: number | null) =>
+  ['archived-channels', { workspaceId, since }] as const;
 const membersKey = (workspaceId: string) => ['workspaces', workspaceId, 'members'] as const;
 
 function workspaceToListItem(workspace: WorkspaceDto): WorkspaceListItem {
@@ -168,8 +173,12 @@ export function useChannelsForWorkspace(
       if (frame.type === 'event') {
         if (frame.scope !== scope || frame.kind !== 'workspace_channels_changed') return;
         void qc.invalidateQueries({ queryKey: channelsKey(workspaceId) });
+        void qc.invalidateQueries({ queryKey: archivedChannelsKey(workspaceId) });
+        void qc.invalidateQueries({ queryKey: ['archived-channels'] });
       } else if (frame.type === 'snapshot_required' && frame.scope === scope) {
         void qc.invalidateQueries({ queryKey: channelsKey(workspaceId) });
+        void qc.invalidateQueries({ queryKey: archivedChannelsKey(workspaceId) });
+        void qc.invalidateQueries({ queryKey: ['archived-channels'] });
       }
     });
     return () => {
@@ -189,6 +198,76 @@ export function useChannelsForWorkspace(
         apiPaths.workspaceChannels(workspaceId!),
       );
       return sortConversationList([...res.channels, ...res.threads]);
+    },
+  });
+}
+
+/** Archived channels (and their threads) for a regular workspace.
+ *  Backed by `GET /api/workspaces/:id/channels/archived`. agent_home /
+ *  DM workspaces always return an empty list. WS invalidation lives on
+ *  `useChannelsForWorkspace` — both queries share the same trigger. */
+export function useArchivedChannelsForWorkspace(
+  workspaceId: string | null,
+  workspaceKind: 'regular' | 'dm' | null = 'regular',
+) {
+  return useQuery<ChannelListItem[]>({
+    queryKey: workspaceId
+      ? archivedChannelsKey(workspaceId)
+      : ['workspaces', 'none', 'channels', 'archived'],
+    enabled: !!workspaceId && workspaceKind === 'regular',
+    queryFn: async () => {
+      const res = await api<{
+        channels: ChannelLikeDto[];
+        threads: ThreadDto[];
+      }>(apiPaths.workspaceArchivedChannels(workspaceId!));
+      return sortConversationList([...res.channels, ...res.threads]);
+    },
+  });
+}
+
+export function useArchivedChannelsIndex({
+  workspaceId,
+  since,
+  workspaceScopeIds,
+}: {
+  workspaceId: string | null;
+  since: number | null;
+  workspaceScopeIds: string[];
+}) {
+  const qc = useQueryClient();
+  useEffect(() => {
+    const scopeIds = workspaceId ? [workspaceId] : workspaceScopeIds;
+    if (scopeIds.length === 0) return;
+    const subscriptions = scopeIds.map(id => subscribeWsScope(`workspace:${id}`));
+    const unsub = onWsFrame(frame => {
+      if (frame.type === 'event') {
+        if (frame.kind !== 'workspace_channels_changed') return;
+        if (!scopeIds.some(id => frame.scope === `workspace:${id}`)) return;
+        void qc.invalidateQueries({ queryKey: ['archived-channels'] });
+      } else if (
+        frame.type === 'snapshot_required' &&
+        scopeIds.some(id => frame.scope === `workspace:${id}`)
+      ) {
+        void qc.invalidateQueries({ queryKey: ['archived-channels'] });
+      }
+    });
+    return () => {
+      for (const sub of subscriptions) sub.unsubscribe();
+      unsub();
+    };
+  }, [qc, workspaceId, workspaceScopeIds]);
+
+  return useQuery<ArchivedChannelListItemDto[]>({
+    queryKey: archivedChannelsIndexKey(workspaceId, since),
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (workspaceId) params.set('workspace_id', workspaceId);
+      if (since !== null) params.set('since', String(since));
+      const suffix = params.toString();
+      const res = await api<{ channels: ArchivedChannelListItemDto[] }>(
+        suffix ? `${apiPaths.archivedChannels}?${suffix}` : apiPaths.archivedChannels,
+      );
+      return res.channels;
     },
   });
 }
@@ -222,6 +301,37 @@ export function usePinChannel(workspaceId: string | null) {
     },
     onSuccess: () => {
       if (workspaceId) qc.invalidateQueries({ queryKey: channelsKey(workspaceId) });
+    },
+  });
+}
+
+export function useArchiveChannel(workspaceId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      channelId,
+      archived,
+    }: {
+      channelId: string;
+      archived: boolean;
+      workspaceId?: string;
+    }) => {
+      const res = await api<{ channel: ChannelConversationDto }>(
+        apiPaths.channelArchive(channelId),
+        { method: 'PATCH', body: JSON.stringify({ archived }) },
+      );
+      return res.channel;
+    },
+    onSuccess: (channel, vars) => {
+      const targetWorkspaceId = vars.workspaceId ?? channel.workspace_id ?? workspaceId;
+      // Active and archived lists are disjoint contracts on the server;
+      // refresh both so the row leaves one and appears in the other
+      // immediately, even before the WS event arrives.
+      if (targetWorkspaceId) {
+        qc.invalidateQueries({ queryKey: channelsKey(targetWorkspaceId) });
+        qc.invalidateQueries({ queryKey: archivedChannelsKey(targetWorkspaceId) });
+      }
+      qc.invalidateQueries({ queryKey: ['archived-channels'] });
     },
   });
 }

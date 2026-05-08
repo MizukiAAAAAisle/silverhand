@@ -7,8 +7,6 @@ import {
   ChevronDown,
   Clock,
   Hash,
-  MessageCircle,
-  MessageSquare,
   MessageSquareText,
   Search as SearchIcon,
   User,
@@ -57,6 +55,21 @@ const SELECT_CONTENT_CLASS =
 
 const SELECT_ITEM_CLASS =
   'relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 pr-7 text-xs text-text-primary outline-none data-[highlighted]:bg-bg-hover data-[highlighted]:text-text-primary';
+
+/** Workspace glyph — a serif "W" matching the icon column width. Used
+ *  wherever a workspace (regular kind) needs a marker; mirrors the
+ *  WorkspacesPanel sidebar. Sizes line up with Lucide `size-3/3.5/4`. */
+function WorkspaceGlyph({ size = 3.5 }: { size?: 3 | 3.5 | 4 }): JSX.Element {
+  const px = size * 4;
+  return (
+    <span
+      className="inline-flex shrink-0 items-center justify-center font-serif font-semibold leading-none"
+      style={{ width: `${px}px`, height: `${px}px`, fontSize: `${px}px` }}
+    >
+      W
+    </span>
+  );
+}
 
 export function SearchPanel({
   workspaces,
@@ -311,7 +324,7 @@ function WorkspaceFilterSelect({
               </Select.Label>
               <SelectItem
                 value="scope:dm"
-                icon={<MessageCircle className="size-3.5" />}
+                icon={<User className="size-3.5" />}
               >
                 All DMs
               </SelectItem>
@@ -319,7 +332,7 @@ function WorkspaceFilterSelect({
                 <SelectItem
                   key={workspace.id}
                   value={`workspace:${workspace.id}`}
-                  icon={<MessageCircle className="size-3.5" />}
+                  icon={<User className="size-3.5" />}
                 >
                   {formatWorkspaceName(workspace)}
                 </SelectItem>
@@ -331,7 +344,7 @@ function WorkspaceFilterSelect({
               </Select.Label>
               <SelectItem
                 value="scope:regular"
-                icon={<Hash className="size-3.5" />}
+                icon={<WorkspaceGlyph />}
               >
                 All channels
               </SelectItem>
@@ -339,7 +352,7 @@ function WorkspaceFilterSelect({
                 <SelectItem
                   key={workspace.id}
                   value={`workspace:${workspace.id}`}
-                  icon={<Hash className="size-3.5" />}
+                  icon={<WorkspaceGlyph />}
                 >
                   {formatWorkspaceName(workspace)}
                 </SelectItem>
@@ -572,19 +585,19 @@ function groupResults(results: SearchResultDto[]): ResultGroup[] {
     {
       key: 'workspaces',
       label: 'Workspaces',
-      icon: <Hash className="size-3" />,
+      icon: <WorkspaceGlyph size={3} />,
       results: workspaces,
     },
     {
       key: 'conversations',
       label: 'Channels / Threads',
-      icon: <MessageSquare className="size-3" />,
+      icon: <Hash className="size-3" />,
       results: conversations,
     },
     {
       key: 'dms',
       label: 'DMs',
-      icon: <MessageCircle className="size-3" />,
+      icon: <User className="size-3" />,
       results: dms,
     },
     {
@@ -599,12 +612,18 @@ function groupResults(results: SearchResultDto[]): ResultGroup[] {
 function resultIcon(result: SearchResultDto): JSX.Element {
   if (result.type === 'workspace') {
     return result.workspace.kind === 'dm' ? (
-      <MessageCircle className="size-4" />
+      <User className="size-4" />
+    ) : (
+      <WorkspaceGlyph size={4} />
+    );
+  }
+  if (result.type === 'conversation') {
+    return result.conversation.kind === 'thread' ? (
+      <MessageSquareText className="size-4" />
     ) : (
       <Hash className="size-4" />
     );
   }
-  if (result.type === 'conversation') return <MessageSquare className="size-4" />;
   return <MessageSquareText className="size-4" />;
 }
 
@@ -730,10 +749,10 @@ function workspaceFilterLabel(
   workspaces: WorkspaceListItem[],
 ): { label: string; icon: JSX.Element } {
   if (value === 'scope:dm') {
-    return { label: 'All DMs', icon: <MessageCircle className="size-3.5" /> };
+    return { label: 'All DMs', icon: <User className="size-3.5" /> };
   }
   if (value === 'scope:regular') {
-    return { label: 'All channels', icon: <Hash className="size-3.5" /> };
+    return { label: 'All channels', icon: <WorkspaceGlyph /> };
   }
   if (value.startsWith('workspace:')) {
     const workspaceId = value.slice('workspace:'.length);
@@ -743,9 +762,9 @@ function workspaceFilterLabel(
         label: formatWorkspaceName(workspace),
         icon:
           workspace.kind === 'dm' ? (
-            <MessageCircle className="size-3.5" />
+            <User className="size-3.5" />
           ) : (
-            <Hash className="size-3.5" />
+            <WorkspaceGlyph />
           ),
       };
     }

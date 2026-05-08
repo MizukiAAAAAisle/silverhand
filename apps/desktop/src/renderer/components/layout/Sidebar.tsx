@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Bookmark, Search } from 'lucide-react';
+import { Archive, Bookmark, Search } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { CURRENT_USER_ID, formatUserDisplayName } from '@/lib/current-user';
 import { WorkspaceGroup, type WorkspaceItem } from './WorkspacesPanel';
@@ -13,6 +13,9 @@ interface SidebarProps {
    *  appear unselected and the Saved entry highlights instead. */
   savedActive: boolean;
   onSelectSaved: () => void;
+  /** Dedicated archived-channel index view under the chat section. */
+  archivedActive: boolean;
+  onSelectArchived: () => void;
   /** Dedicated global search view under the chat section. */
   searchActive: boolean;
   onSelectSearch: () => void;
@@ -38,7 +41,9 @@ export function Sidebar(props: SidebarProps): JSX.Element {
   // While the Saved view is active, suppress workspace highlighting so
   // the Saved entry visually owns selection.
   const workspaceHighlight =
-    props.savedActive || props.searchActive ? null : props.selectedWorkspaceId;
+    props.savedActive || props.searchActive || props.archivedActive
+      ? null
+      : props.selectedWorkspaceId;
 
   return (
     <aside
@@ -54,7 +59,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           type="button"
           onClick={props.onSelectSearch}
           className={cn(
-            'mx-1.5 mb-1 flex w-[calc(100%-0.75rem)] items-center gap-2 border-2 px-2 py-1.5 text-left text-sm transition-colors',
+            'sidebar-row-border mx-1.5 mb-1 flex w-[calc(100%-0.75rem)] items-center gap-2 border px-2 py-1.5 text-left text-sm transition-colors',
             props.searchActive
               ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
               : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
@@ -68,7 +73,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           type="button"
           onClick={props.onSelectSaved}
           className={cn(
-            'mx-1.5 mb-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border-2 px-2 py-1.5 text-left text-sm transition-colors',
+            'sidebar-row-border mx-1.5 mb-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border px-2 py-1.5 text-left text-sm transition-colors',
             props.savedActive
               ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
               : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
@@ -91,6 +96,20 @@ export function Sidebar(props: SidebarProps): JSX.Element {
               {props.savedCount}
             </span>
           ) : null}
+        </button>
+
+        <button
+          type="button"
+          onClick={props.onSelectArchived}
+          className={cn(
+            'sidebar-row-border mx-1.5 mb-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border px-2 py-1.5 text-left text-sm transition-colors',
+            props.archivedActive
+              ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
+              : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
+          )}
+        >
+          <Archive className="size-3.5" />
+          <span>Archived</span>
         </button>
 
         <WorkspaceGroup

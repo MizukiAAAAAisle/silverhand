@@ -35,10 +35,17 @@ import { buildPlatformPrompt } from './platform-prompt.js';
 export class CursorDriver implements Driver {
   readonly kind = 'cursor' as const;
   readonly binary = 'cursor-agent';
+  readonly kickoffMode = 'self_inits' as const;
   readonly busyDeliveryMode = 'none' as const;
   readonly oneShot = true;
   readonly supportsNativeStandingPrompt = false;
   readonly mcpToolPrefix = 'mcp__chat__';
+  readonly initLivenessSilenceMs = 30 * 1000;
+  readonly initPreProtocolCapMs = 5 * 60 * 1000;
+  // 60s post-protocol budget. Aligned with codex / claude drivers so PR-A
+  // post-protocol watchdog timing is uniform across runtimes; cursor
+  // oneShot spawns rarely hit this path but we keep parity for triage.
+  readonly initPostProtocolMs = 60 * 1000;
 
   buildArgs(ctx: DriverSpawnContext): string[] {
     const cursorDir = join(ctx.workspacePath, '.cursor');
@@ -86,7 +93,8 @@ export class CursorDriver implements Driver {
       agentName: ctx.agentName,
       runtime: 'cursor',
       mcpToolPrefix: this.mcpToolPrefix,
-      l2SystemPrompt: ctx.l2SystemPrompt,
+      activeProfileDir: ctx.activeProfileDir,
+      roleSystemPrompt: ctx.roleSystemPrompt,
       sessionContext: ctx.sessionContext,
     });
   }
@@ -182,6 +190,23 @@ export class CursorDriver implements Driver {
     }
 
     return events;
+  }
+
+  classifyInitProgress(line: string): 'protocol_ready' | 'session_ready' | null {
+    const trimmed = line.trim();
+    if (!trimmed) return null;
+
+    let event: any;
+    try {
+      event = JSON.parse(trimmed);
+    } catch {
+      return null;
+    }
+
+    if (event?.type === 'system' && event.subtype === 'init' && typeof event.session_id === 'string') {
+      return 'session_ready';
+    }
+    return event && typeof event === 'object' ? 'protocol_ready' : null;
   }
 }
 

@@ -28,6 +28,7 @@ import {
 } from './drivers/index.js';
 import { detectRuntimes } from './runtimes.js';
 import { expandProxyEnv } from './proxy.js';
+import { activeAgentProfileDir } from './agent-profile.js';
 import { prepareSpawnFiles, type SpawnPrepHandle } from './spawn-prep.js';
 import { AgentRepo } from './repos/agent-repo.js';
 import {
@@ -44,17 +45,41 @@ import { WorkspaceRepo } from './repos/workspace-repo.js';
 /** §3.5 watchdog window. Slock's `COMPACTION_STALE_MS` = 5 min. */
 const COMPACTION_STALE_MS = 5 * 60 * 1000;
 
-/**
- * If the agent CLI doesn't emit `session_init` within this window we
- * assume it's wedged (claude with empty stdin, codex JSON-RPC dead,
- * cursor child crashed silently, etc.) and kill it. The exit handler
- * flips status to `crashed` so the UI shows the failure instead of
- * sitting on `starting` forever — see 2026-05-02 progress note about
- * the original spawn-time stdin race that motivated this watchdog.
- */
-const INIT_WATCHDOG_MS = 30 * 1000;
+/** Fallbacks for drivers that do not override init watchdog windows. */
+const DEFAULT_INIT_LIVENESS_SILENCE_MS = 30 * 1000;
+const DEFAULT_INIT_PRE_PROTOCOL_CAP_MS = 5 * 60 * 1000;
+const DEFAULT_INIT_POST_PROTOCOL_MS = 30 * 1000;
+const INIT_TIMEOUT_MAX_RETRIES = 1;
+const INIT_FAILURE_COOLDOWN_THRESHOLD = 3;
+const INIT_FAILURE_COOLDOWN_MS = 5 * 60 * 1000;
 const AGENT_ACTIVITY_HEARTBEAT_MS = 2 * 1000;
 const ACTIVITY_SNIPPET_MAX_CHARS = 200;
+const ACTIVITY_SNIPPET_BUFFER_MAX_CHARS = ACTIVITY_SNIPPET_MAX_CHARS * 4;
+const RAW_AGENT_EVENT_STRING_MAX_CHARS = 500;
+const RAW_AGENT_EVENT_ARRAY_MAX_ITEMS = 20;
+const RAW_AGENT_EVENT_OBJECT_MAX_KEYS = 40;
+const RAW_AGENT_EVENT_MAX_DEPTH = 4;
+
+type ActivitySnippetKind = 'thinking' | 'text';
+type InitTimeoutReason =
+  | 'silence'
+  | 'pre_protocol_cap'
+  | 'post_protocol';
+type InitTimeoutField =
+  | 'initLivenessSilenceMs'
+  | 'initPreProtocolCapMs'
+  | 'initPostProtocolMs';
+
+interface ActivitySnippetBuffer {
+  runId: string;
+  kind: ActivitySnippetKind;
+  text: string;
+}
+
+interface InitRetryState {
+  failures: number;
+  cooldownUntil: number;
+}
 
 /**
  * One running agent CLI = one AgentHandle. Keyed by `${conversationId}:${agentId}`
@@ -74,16 +99,24 @@ interface AgentHandle {
    *  for "has the live process actually emitted init yet". */
   cliSessionId: string | null;
   /** Set true the first time this process emits `session_init`. Used
-   *  to dedupe claude's per-turn re-inits AND to gate the init watchdog.
+   *  to dedupe claude's per-turn re-inits AND to gate init completion.
    *  Critical to track separately from `cliSessionId`: when resuming,
    *  cliSessionId is preloaded from DB and matches whatever the
    *  resumed CLI emits, so equality-on-cliSessionId would (a) skip the
    *  status→active flip on first init and (b) make the watchdog think
    *  init had already landed. Both bugs let a wedged resumed agent sit
-   *  in `starting` forever with the UI showing "connecting". */
+   *  in `starting` forever with the UI showing "connecting".
+   *
+   *  For drivers with `kickoffMode='requires_first_message'`, an empty-inbox
+   *  spawn may deliberately be `status='active'` while `initObserved=false`:
+   *  the process is alive and can receive stdin, but the runtime will not emit
+   *  init until the first real user message is written. */
   initObserved: boolean;
   /** Gated-steering state — Phase 3E uses this to decide flush timing. */
   busy: { outstandingToolUses: number; compacting: boolean };
+  /** A turn_end arrived while the run could not be resolved yet, usually
+   *  because compaction was still active or pending deliveries need flush. */
+  pendingTurnEnd: boolean;
   /** Pending deliveries for gated mode. Phase 3E flushes; Phase 2C
    *  just appends. */
   pendingDeliveries: string[];
@@ -91,10 +124,18 @@ interface AgentHandle {
    *  `compaction_finished`. Fires once after 5min if compaction never
    *  reports completion (slock's `COMPACTION_STALE_MS`). */
   compactionWatchdog: NodeJS.Timeout | null;
-  /** Watchdog timer started on spawn; cleared on first `session_init`
-   *  (or exit / stop). Fires once if the agent never initializes —
-   *  see INIT_WATCHDOG_MS doc comment. */
-  initWatchdog: NodeJS.Timeout | null;
+  /** Init watchdog timers. Pre-protocol silence/cap run from spawn
+   *  until the first driver-classified protocol frame; the post-protocol
+   *  timer then waits for the real session-ready init. */
+  initLivenessSilenceWatchdog: NodeJS.Timeout | null;
+  initPreProtocolCapWatchdog: NodeJS.Timeout | null;
+  initPostProtocolWatchdog: NodeJS.Timeout | null;
+  initWatchdogArmed: boolean;
+  initStartedAt: number;
+  initProtocolObserved: boolean;
+  initAttempt: number;
+  initRetryPlanned: boolean;
+  initTimeoutReason: InitTimeoutReason | null;
   /** Set by the init watchdog when it kills the child. Takes precedence
    *  over `intentionallyStopped` in the exit handler so the status
    *  flips to `crashed` (not `idle`) and oneShot agents don't auto
@@ -116,6 +157,13 @@ interface AgentHandle {
    *  twice. The chain ensures each drain awaits the previous one's
    *  `markDelivered` before its own `listPending`. */
   drainChain: Promise<void>;
+  /** Inbox rows written to stdin before a first session_init for drivers with
+   *  `kickoffMode='requires_first_message'`. Write success only proves the OS
+   *  pipe accepted bytes; if the process never reaches init, retry/restart must
+   *  replay those rows rather than losing the user's message. We mark them
+   *  delivered only once the driver's parsed session_init proves the runtime
+   *  actually consumed the kickoff turn. */
+  initPendingInboxIds: number[];
 }
 
 export interface StartOptions {
@@ -142,9 +190,15 @@ export class ConversationManager {
   private readonly notifications: NotificationRepo;
   private readonly settings: SettingsRepo;
   private binariesPromise: Promise<Map<string, string>> | null = null;
-  /** Visible-for-testing knob — production code never touches this.
-   *  Tests dial it down to avoid waiting INIT_WATCHDOG_MS in real time. */
-  initWatchdogMs = INIT_WATCHDOG_MS;
+  /** Legacy test override for all init watchdog windows. Prefer the
+   *  phase-specific knobs below in new tests. */
+  initWatchdogMs: number | null = null;
+  initLivenessSilenceMs: number | null = null;
+  initPreProtocolCapMs: number | null = null;
+  initPostProtocolMs: number | null = null;
+  initMaxRetries = INIT_TIMEOUT_MAX_RETRIES;
+  initFailureCooldownThreshold = INIT_FAILURE_COOLDOWN_THRESHOLD;
+  initFailureCooldownMs = INIT_FAILURE_COOLDOWN_MS;
   /** Visible-for-testing knobs for stop(hard) escalation delays.
    *  Dialed down in tests so the SIGTERM/SIGKILL fallback path can be
    *  exercised without waiting 5s/10s in real time. */
@@ -152,7 +206,9 @@ export class ConversationManager {
   stopSigkillMs = 10_000;
   /** Visible-for-testing knob for `agent_activity` heartbeat cadence. */
   activityHeartbeatMs = AGENT_ACTIVITY_HEARTBEAT_MS;
+  private readonly initRetryStates = new Map<string, InitRetryState>();
   private readonly runStates = new Map<string, AgentRunState>();
+  private readonly activitySnippetBuffers = new Map<string, ActivitySnippetBuffer>();
   private activityHeartbeat: NodeJS.Timeout | null = null;
   /** Dedicated JSONL log for agent_activity events — written in addition
    *  to realtime broadcasts so release builds leave a paper trail for debugging. Null
@@ -372,12 +428,26 @@ export class ConversationManager {
    *  - On exit, handle is removed and temp files are cleaned up
    */
   async start(conversationId: string, agentId: string, opts: StartOptions = {}): Promise<void> {
+    return this.startInternal(conversationId, agentId, opts, 0);
+  }
+
+  private async startInternal(
+    conversationId: string,
+    agentId: string,
+    opts: StartOptions = {},
+    initAttempt = 0,
+  ): Promise<void> {
     const key = handleKey(conversationId, agentId);
     if (this.handles.has(key)) {
       this.ctx.logger.info(
         { conversationId, agentId },
         'conversation: start no-op, already running',
       );
+      return;
+    }
+
+    if (initAttempt === 0 && this.isInitCoolingDown(conversationId, agentId)) {
+      this.publishInitCooldown(conversationId, agentId);
       return;
     }
 
@@ -459,6 +529,18 @@ export class ConversationManager {
     const hasKickoffInbox =
       preDrainedInboxIds.length > 0 ||
       (!driver.oneShot && this.inboxes.listPending(conversationId, agentId).length > 0);
+    // Claude Code's stream-json init is tied to the first real user turn:
+    // with empty stdin it may emit protocol noise such as `hook_started`, but
+    // it will not emit `system.init`. Sending an artificial primer would create
+    // a real API turn and transcript entry, so empty-inbox Claude starts as a
+    // live process and arms the init watchdog only when we later write a real
+    // inbox/direct message. If a timeout retry gets here, keep the watchdog
+    // armed even with an empty inbox; otherwise a failed first-use attempt could
+    // silently turn into an unguarded active process.
+    const deferInitWatchdog =
+      initAttempt === 0 &&
+      driver.kickoffMode === 'requires_first_message' &&
+      !hasKickoffInbox;
 
     const spawnCtx: DriverSpawnContext = {
       agentId,
@@ -500,41 +582,73 @@ export class ConversationManager {
       cliSessionId: sessionAgent.cli_session_id,
       initObserved: false,
       busy: { outstandingToolUses: 0, compacting: false },
+      pendingTurnEnd: false,
       pendingDeliveries: [],
       compactionWatchdog: null,
-      initWatchdog: null,
+      initLivenessSilenceWatchdog: null,
+      initPreProtocolCapWatchdog: null,
+      initPostProtocolWatchdog: null,
+      initWatchdogArmed: false,
+      initStartedAt: Date.now(),
+      initProtocolObserved: false,
+      initAttempt,
+      initRetryPlanned: false,
+      initTimeoutReason: null,
       initTimedOut: false,
       fatalError: null,
       crashNotificationRecorded: false,
       intentionallyStopped: false,
       drainChain: Promise.resolve(),
+      initPendingInboxIds: [],
     };
     this.handles.set(key, handle);
 
+    const spawnStatus = deferInitWatchdog ? 'active' : 'starting';
     this.conversations.updateAgentRuntime(conversationId, agentId, {
-      status: 'starting',
+      status: spawnStatus,
       pid: child.pid ?? null,
     });
     this.publish(conversationId, 'agent_status', {
       agent_id: agentId,
-      status: 'starting',
+      status: spawnStatus,
       pid: child.pid ?? null,
+      ...(deferInitWatchdog
+        ? {
+            reason: 'awaiting_first_message',
+          }
+        : {}),
+      ...(!deferInitWatchdog && initAttempt > 0
+        ? {
+            reason: 'init_timeout_retrying',
+            retry_attempt: initAttempt,
+            max_retries: this.initMaxRetries,
+          }
+        : {}),
     });
     if (hasKickoffInbox) {
       this.startRun(handle, 'starting');
     }
 
     // Arm before stdin is primed so a child that hangs on the very first
-    // read still hits the timeout. Cleared on first session_init / exit.
-    this.startInitWatchdog(handle);
+    // read still hits the timeout. Runtimes that require a first user message
+    // (Claude stream-json) defer this until ConversationManager actually
+    // writes a real stdin message; their empty-inbox armed state is a live
+    // process waiting for input, not an init failure.
+    if (!deferInitWatchdog) this.startInitWatchdog(handle);
+
+    child.stdout.on('data', () => {
+      this.refreshInitLiveness(handle);
+    });
 
     rl.on('line', line => {
       this.touchRunActivity(handle);
+      this.observeInitProgress(handle, line);
       const events = driver.parseLine(line);
       for (const ev of events) this.handleParsedEvent(handle, ev);
     });
 
     child.stderr.on('data', (chunk: Buffer) => {
+      this.refreshInitLiveness(handle);
       const text = chunk.toString();
       // Surface stderr to logs; not modeled as a chat event.
       this.ctx.logger.warn({ conversationId, agentId, text }, 'agent stderr');
@@ -549,6 +663,39 @@ export class ConversationManager {
         { conversationId, agentId, code, signal },
         'agent process exited',
       );
+      if (
+        handle.initTimedOut &&
+        handle.initRetryPlanned &&
+        !handle.intentionallyStopped &&
+        !handle.fatalError
+      ) {
+        this.conversations.updateAgentRuntime(conversationId, agentId, {
+          status: 'starting',
+          pid: null,
+        });
+        this.publish(conversationId, 'agent_status', {
+          agent_id: agentId,
+          status: 'starting',
+          pid: null,
+          reason: 'init_timeout_retrying',
+          retry_attempt: handle.initAttempt + 1,
+          max_retries: this.initMaxRetries,
+          timeout_reason: handle.initTimeoutReason,
+        });
+        this.handles.delete(key);
+        this.clearCompactionWatchdog(handle);
+        this.clearInitWatchdog(handle);
+        rl.close();
+        void spawnPrep.cleanup();
+        this.startInternal(conversationId, agentId, opts, handle.initAttempt + 1).catch(
+          err =>
+            this.ctx.logger.error(
+              { conversationId, agentId, err },
+              'init watchdog retry failed to start agent',
+            ),
+        );
+        return;
+      }
       // initTimedOut/fatalError win over intentionallyStopped — in
       // both cases we explicitly killed the child because the runtime
       // became unusable, which is a crash from the user's POV.
@@ -569,7 +716,15 @@ export class ConversationManager {
         status,
         exit_code: code,
         signal,
-        ...(handle.initTimedOut ? { reason: 'init_timeout' } : {}),
+        ...(handle.initTimedOut
+          ? {
+              reason: 'init_timeout',
+              timeout_reason: handle.initTimeoutReason,
+              ...(this.isInitCoolingDown(conversationId, agentId)
+                ? { cooldown_until: this.initRetryStates.get(key)?.cooldownUntil }
+                : {}),
+            }
+          : {}),
         ...(fatalReason ? { reason: fatalReason, error: fatalError } : {}),
       });
       // Write a persistent notification for unexpected crashes so the
@@ -802,6 +957,7 @@ export class ConversationManager {
         if (handle.initObserved) break;
         handle.initObserved = true;
         handle.cliSessionId = ev.sessionId;
+        this.clearInitRetryState(conversationId, agentId);
         // First init landed → cancel the watchdog. Subsequent inits
         // short-circuit above, so this only fires once.
         this.clearInitWatchdog(handle);
@@ -818,6 +974,7 @@ export class ConversationManager {
           { conversationId, agentId, cliSessionId: ev.sessionId },
           'agent: session_init received, status → active',
         );
+        this.markInitPendingInboxDelivered(handle);
         // §3.1 C: spawn-time inbox drain. Anything queued while the
         // agent was asleep gets injected now as one stdin user message.
         this.drainInbox(handle).catch(err =>
@@ -850,18 +1007,17 @@ export class ConversationManager {
         break;
       case 'turn_end':
         handle.busy.outstandingToolUses = 0;
+        handle.pendingTurnEnd = true;
         this.ctx.logger.info(
           { conversationId, agentId, pendingDeliveries: handle.pendingDeliveries.length },
           'agent: turn_end',
         );
-        if (handle.pendingDeliveries.length === 0 && isSafeBoundary(handle)) {
-          this.resolveRunByKey(handleKey(conversationId, agentId), 'turn_ended');
-        }
+        this.tryResolveTurnEndAtBoundary(handle);
         void this.flushPending(handle);
         break;
       case 'compaction_started':
         handle.busy.compacting = true;
-        this.ensureRunForActivityEvent(handle);
+        this.recordCompactionStarted(handle);
         this.ctx.logger.info({ conversationId, agentId }, 'agent: compaction_started');
         this.startCompactionWatchdog(handle);
         break;
@@ -869,6 +1025,8 @@ export class ConversationManager {
         handle.busy.compacting = false;
         this.ctx.logger.info({ conversationId, agentId }, 'agent: compaction_finished');
         this.clearCompactionWatchdog(handle);
+        this.recordCompactionFinished(handle);
+        this.tryResolveTurnEndAtBoundary(handle);
         void this.flushPending(handle);
         break;
       case 'error':
@@ -881,16 +1039,21 @@ export class ConversationManager {
         }
         break;
       case 'thinking':
-        this.recordActivitySnippet(handle, ev.text);
+        this.recordActivitySnippet(handle, 'thinking', ev.text);
         break;
       case 'text':
-        this.recordActivitySnippet(handle, ev.text);
+        this.recordActivitySnippet(handle, 'text', ev.text);
         break;
       case 'unknown':
         break;
     }
-    // Fan out everything (including state-affecting events) to UI.
-    this.publish(conversationId, 'agent_event', { agent_id: agentId, event: ev });
+    // Fan out everything (including state-affecting events) to UI. Keep the
+    // raw event useful for diagnostics, but do not let large tool inputs sit in
+    // the WS replay buffer / Events window.
+    this.publish(conversationId, 'agent_event', {
+      agent_id: agentId,
+      event: sanitizeParsedEventForBroadcast(ev),
+    });
   }
 
   private handleFatalRuntimeError(
@@ -942,6 +1105,14 @@ export class ConversationManager {
     status: Extract<AgentRunStatus, 'starting' | 'thinking'>,
     detail?: string,
   ): AgentRunState {
+    const key = handleKey(handle.conversationId, handle.agentId);
+    const previous = this.runStates.get(key);
+    if (previous) {
+      this.publishTerminalRunState(previous, 'replaced');
+      this.clearActivitySnippetBuffer(key, previous.runId);
+    }
+    handle.pendingTurnEnd = false;
+
     const now = Date.now();
     const state: AgentRunState = {
       runId: randomUUID(),
@@ -953,7 +1124,7 @@ export class ConversationManager {
       lastActivityAt: now,
       ...(detail ? { detail } : {}),
     };
-    this.runStates.set(handleKey(handle.conversationId, handle.agentId), state);
+    this.runStates.set(key, state);
     this.publishAgentActivity(state);
     this.ensureActivityHeartbeat();
     return state;
@@ -962,8 +1133,12 @@ export class ConversationManager {
   private markRunThinking(handle: AgentHandle): void {
     const key = handleKey(handle.conversationId, handle.agentId);
     const current = this.runStates.get(key);
-    if (current?.status === 'starting') {
-      this.updateRun(handle, { status: 'thinking' });
+    if (current) {
+      this.updateRun(handle, {
+        status: 'thinking',
+        detail: undefined,
+        lastActivityAt: Date.now(),
+      });
       return;
     }
     this.startRun(handle, 'thinking');
@@ -988,6 +1163,9 @@ export class ConversationManager {
         | 'lastActivityAt'
         | 'activitySnippet'
         | 'toolCallCounts'
+        | 'compacting'
+        | 'compactingSince'
+        | 'compactionStale'
       >
     >,
   ): AgentRunState | null {
@@ -1023,15 +1201,107 @@ export class ConversationManager {
     if (handle.busy.outstandingToolUses !== 0) return;
     this.ensureRunForActivityEvent(handle);
     this.updateRun(handle, { status: 'thinking', detail: undefined });
+    this.tryResolveTurnEndAtBoundary(handle);
   }
 
-  private recordActivitySnippet(handle: AgentHandle, text: string): void {
-    const activitySnippet = trimActivitySnippet(text);
+  private recordCompactionStarted(handle: AgentHandle): void {
     this.ensureRunForActivityEvent(handle);
+    this.updateRun(handle, {
+      compacting: true,
+      compactingSince: Date.now(),
+      compactionStale: false,
+      lastActivityAt: Date.now(),
+    });
+  }
+
+  private recordCompactionFinished(handle: AgentHandle): void {
+    this.updateRun(handle, {
+      compacting: false,
+      compactingSince: undefined,
+      compactionStale: false,
+      lastActivityAt: Date.now(),
+    });
+  }
+
+  private recordCompactionStale(handle: AgentHandle): void {
+    this.updateRun(handle, {
+      compactionStale: true,
+      lastActivityAt: Date.now(),
+    });
+  }
+
+  private recordActivitySnippet(
+    handle: AgentHandle,
+    kind: ActivitySnippetKind,
+    text: string,
+  ): void {
+    const state = this.ensureRunForActivityEvent(handle);
+    const key = handleKey(handle.conversationId, handle.agentId);
+    const activitySnippet = this.appendActivitySnippetBuffer(
+      key,
+      state.runId,
+      kind,
+      text,
+    );
     this.updateRun(
       handle,
       activitySnippet ? { activitySnippet } : { status: 'thinking' },
     );
+  }
+
+  private appendActivitySnippetBuffer(
+    key: string,
+    runId: string,
+    kind: ActivitySnippetKind,
+    text: string,
+  ): string | undefined {
+    const current = this.activitySnippetBuffers.get(key);
+    const nextText =
+      current?.runId === runId && current.kind === kind
+        ? `${current.text}${text}`
+        : text;
+    const boundedText =
+      nextText.length <= ACTIVITY_SNIPPET_BUFFER_MAX_CHARS
+        ? nextText
+        : nextText.slice(-ACTIVITY_SNIPPET_BUFFER_MAX_CHARS);
+    this.activitySnippetBuffers.set(key, { runId, kind, text: boundedText });
+    return trimActivitySnippet(boundedText);
+  }
+
+  private clearActivitySnippetBuffer(key: string, runId?: string): void {
+    const current = this.activitySnippetBuffers.get(key);
+    if (!current) return;
+    if (runId && current.runId !== runId) return;
+    this.activitySnippetBuffers.delete(key);
+  }
+
+  private publishTerminalRunState(
+    state: AgentRunState,
+    reason: AgentRunTerminalReason,
+  ): AgentRunState {
+    const now = Date.now();
+    const terminal: AgentRunState = {
+      ...state,
+      status: terminalStatus(reason),
+      updatedAt: now,
+      lastActivityAt: now,
+      terminalReason: reason,
+    };
+    this.publishAgentActivity(terminal);
+    return terminal;
+  }
+
+  private tryResolveTurnEndAtBoundary(handle: AgentHandle): boolean {
+    if (!handle.pendingTurnEnd) return false;
+    if (handle.pendingDeliveries.length > 0 || !isSafeBoundary(handle)) {
+      return false;
+    }
+    handle.pendingTurnEnd = false;
+    this.resolveRunByKey(
+      handleKey(handle.conversationId, handle.agentId),
+      'turn_ended',
+    );
+    return true;
   }
 
   private resolveRunByKey(
@@ -1042,16 +1312,11 @@ export class ConversationManager {
     const current = this.runStates.get(key);
     if (!current) return;
     if (runId && current.runId !== runId) return;
-    const now = Date.now();
-    const terminal: AgentRunState = {
-      ...current,
-      status: reason === 'replied' || reason === 'turn_ended' ? 'idle' : 'failed',
-      updatedAt: now,
-      lastActivityAt: now,
-      terminalReason: reason,
-    };
-    this.publishAgentActivity(terminal);
+    this.publishTerminalRunState(current, reason);
     this.runStates.delete(key);
+    this.clearActivitySnippetBuffer(key, current.runId);
+    const handle = this.handles.get(key);
+    if (handle) handle.pendingTurnEnd = false;
     this.stopActivityHeartbeatIfIdle();
   }
 
@@ -1072,6 +1337,9 @@ export class ConversationManager {
           ? { toolCallCounts: state.toolCallCounts }
           : {}),
         ...(state.activitySnippet ? { activitySnippet: state.activitySnippet } : {}),
+        ...(state.compacting ? { compacting: state.compacting } : {}),
+        ...(state.compactingSince ? { compactingSince: state.compactingSince } : {}),
+        ...(state.compactionStale ? { compactionStale: state.compactionStale } : {}),
         ...(state.terminalReason ? { terminalReason: state.terminalReason } : {}),
       });
       this.activityLogStream.write(entry + '\n');
@@ -1123,14 +1391,11 @@ export class ConversationManager {
       parentSessionTitle = parent?.title ?? null;
     }
 
-    const l2Path = join(
-      conversation.workspace_path,
-      '.silverhand',
-      'agents',
-      agent.id,
-      'system_prompt.md',
-    );
-    const l2SystemPrompt = await readFile(l2Path, 'utf-8').catch(() => '');
+    const profile = activeAgentProfileDir(conversation, workspace, agent.id);
+    const roleSystemPrompt = await readFile(
+      join(profile.absoluteDir, 'system_prompt.md'),
+      'utf-8',
+    ).catch(() => '');
     const isThread = conversation.kind === 'thread';
 
     const sessionContext: SessionContextInput = {
@@ -1146,7 +1411,8 @@ export class ConversationManager {
     return {
       agentId: agent.id,
       agentName: agent.name,
-      l2SystemPrompt,
+      activeProfileDir: profile.promptDir,
+      roleSystemPrompt,
       sessionContext,
     };
   }
@@ -1241,8 +1507,13 @@ export class ConversationManager {
         },
         'deliver: writing to agent stdin',
       );
+      this.ensureInitWatchdogArmed(handle);
       await this.writeLine(handle, line);
-      this.startRun(handle, 'thinking');
+      if (handle.driver.busyDeliveryMode === 'direct') {
+        this.markRunThinking(handle);
+      } else {
+        this.startRun(handle, 'thinking');
+      }
     } else {
       handle.pendingDeliveries.push(text);
       this.ctx.logger.info(
@@ -1296,6 +1567,7 @@ export class ConversationManager {
       );
       return;
     }
+    this.ensureInitWatchdogArmed(handle);
     await this.writeLine(handle, line);
     if (trackRun) this.startRun(handle, 'thinking');
   }
@@ -1304,6 +1576,7 @@ export class ConversationManager {
     this.clearCompactionWatchdog(handle);
     handle.compactionWatchdog = setTimeout(() => {
       handle.compactionWatchdog = null;
+      this.recordCompactionStale(handle);
       // Per slock §3.5: stale, but don't kill — just surface it.
       this.publish(handle.conversationId, 'compaction_stale', {
         agent_id: handle.agentId,
@@ -1325,45 +1598,213 @@ export class ConversationManager {
 
   private startInitWatchdog(handle: AgentHandle): void {
     this.clearInitWatchdog(handle);
-    const timeoutMs = this.initWatchdogMs;
-    handle.initWatchdog = setTimeout(() => {
-      handle.initWatchdog = null;
-      // Defensive: another path (e.g. `stop()`) may have raced and
-      // already cleared the handle out of the map. Nothing to do then.
-      if (!this.handles.has(handleKey(handle.conversationId, handle.agentId))) return;
-      // Race: init landed in the same tick the timer fired. Honor it.
-      if (handle.initObserved) return;
-      this.ctx.logger.warn(
-        {
-          conversationId: handle.conversationId,
-          agentId: handle.agentId,
-          elapsedMs: timeoutMs,
-        },
-        'agent: session_init watchdog fired; killing child',
-      );
-      handle.initTimedOut = true;
-      // Surface the timeout reason as a separate event so the UI can
-      // distinguish "child crashed naturally" from "we killed it because
-      // it never initialized". The exit handler will publish the usual
-      // `agent_status: crashed` shortly after.
-      this.publish(handle.conversationId, 'agent_init_timeout', {
-        agent_id: handle.agentId,
-        elapsed_ms: timeoutMs,
-      });
-      handle.child.kill('SIGTERM');
-      setTimeout(() => {
-        if (this.handles.has(handleKey(handle.conversationId, handle.agentId))) {
-          handle.child.kill('SIGKILL');
-        }
-      }, 5_000).unref();
+    handle.initWatchdogArmed = true;
+    handle.initStartedAt = Date.now();
+    this.armInitLivenessSilenceWatchdog(handle);
+    const timeoutMs = this.initTimeoutFor(
+      handle.driver,
+      'initPreProtocolCapMs',
+      DEFAULT_INIT_PRE_PROTOCOL_CAP_MS,
+    );
+    handle.initPreProtocolCapWatchdog = setTimeout(() => {
+      handle.initPreProtocolCapWatchdog = null;
+      this.failInitWatchdog(handle, 'pre_protocol_cap', timeoutMs);
     }, timeoutMs);
   }
 
   private clearInitWatchdog(handle: AgentHandle): void {
-    if (handle.initWatchdog) {
-      clearTimeout(handle.initWatchdog);
-      handle.initWatchdog = null;
+    if (handle.initLivenessSilenceWatchdog) {
+      clearTimeout(handle.initLivenessSilenceWatchdog);
+      handle.initLivenessSilenceWatchdog = null;
     }
+    if (handle.initPreProtocolCapWatchdog) {
+      clearTimeout(handle.initPreProtocolCapWatchdog);
+      handle.initPreProtocolCapWatchdog = null;
+    }
+    if (handle.initPostProtocolWatchdog) {
+      clearTimeout(handle.initPostProtocolWatchdog);
+      handle.initPostProtocolWatchdog = null;
+    }
+  }
+
+  private armInitLivenessSilenceWatchdog(handle: AgentHandle): void {
+    if (handle.initLivenessSilenceWatchdog) {
+      clearTimeout(handle.initLivenessSilenceWatchdog);
+      handle.initLivenessSilenceWatchdog = null;
+    }
+    const timeoutMs = this.initTimeoutFor(
+      handle.driver,
+      'initLivenessSilenceMs',
+      DEFAULT_INIT_LIVENESS_SILENCE_MS,
+    );
+    handle.initLivenessSilenceWatchdog = setTimeout(() => {
+      handle.initLivenessSilenceWatchdog = null;
+      this.failInitWatchdog(handle, 'silence', timeoutMs);
+    }, timeoutMs);
+  }
+
+  private refreshInitLiveness(handle: AgentHandle): void {
+    if (!handle.initWatchdogArmed) return;
+    if (handle.initObserved || handle.initProtocolObserved || handle.initTimedOut) return;
+    this.armInitLivenessSilenceWatchdog(handle);
+  }
+
+  private observeInitProgress(handle: AgentHandle, line: string): void {
+    if (!handle.initWatchdogArmed) return;
+    if (handle.initObserved || handle.initTimedOut) return;
+    const progress = handle.driver.classifyInitProgress(line);
+    if (!progress) return;
+
+    this.markInitProtocolReady(handle);
+    if (progress === 'session_ready') this.clearInitWatchdog(handle);
+  }
+
+  private markInitProtocolReady(handle: AgentHandle): void {
+    if (handle.initProtocolObserved) return;
+    handle.initProtocolObserved = true;
+    if (handle.initLivenessSilenceWatchdog) {
+      clearTimeout(handle.initLivenessSilenceWatchdog);
+      handle.initLivenessSilenceWatchdog = null;
+    }
+    if (handle.initPreProtocolCapWatchdog) {
+      clearTimeout(handle.initPreProtocolCapWatchdog);
+      handle.initPreProtocolCapWatchdog = null;
+    }
+
+    const timeoutMs = this.initTimeoutFor(
+      handle.driver,
+      'initPostProtocolMs',
+      DEFAULT_INIT_POST_PROTOCOL_MS,
+    );
+    handle.initPostProtocolWatchdog = setTimeout(() => {
+      handle.initPostProtocolWatchdog = null;
+      this.failInitWatchdog(handle, 'post_protocol', timeoutMs);
+    }, timeoutMs);
+  }
+
+  private failInitWatchdog(
+    handle: AgentHandle,
+    reason: InitTimeoutReason,
+    timeoutMs: number,
+  ): void {
+    const key = handleKey(handle.conversationId, handle.agentId);
+    if (!this.handles.has(key) || handle.initObserved || handle.initTimedOut) return;
+
+    this.clearInitWatchdog(handle);
+    handle.initTimedOut = true;
+    handle.initTimeoutReason = reason;
+    handle.initRetryPlanned = this.recordInitTimeoutAndShouldRetry(handle);
+
+    const elapsedMs = Date.now() - handle.initStartedAt;
+    this.ctx.logger.warn(
+      {
+        conversationId: handle.conversationId,
+        agentId: handle.agentId,
+        reason,
+        elapsedMs,
+        timeoutMs,
+        retrying: handle.initRetryPlanned,
+      },
+      'agent: init watchdog fired; killing child',
+    );
+    this.publish(handle.conversationId, 'agent_init_timeout', {
+      agent_id: handle.agentId,
+      reason,
+      elapsed_ms: elapsedMs,
+      timeout_ms: timeoutMs,
+      retrying: handle.initRetryPlanned,
+      retry_attempt: handle.initAttempt,
+      max_retries: this.initMaxRetries,
+      ...(this.isInitCoolingDown(handle.conversationId, handle.agentId)
+        ? { cooldown_until: this.initRetryStates.get(key)?.cooldownUntil }
+        : {}),
+    });
+    if (handle.initRetryPlanned) {
+      this.publish(handle.conversationId, 'agent_status', {
+        agent_id: handle.agentId,
+        status: 'starting',
+        reason: 'init_timeout_retrying',
+        retry_attempt: handle.initAttempt + 1,
+        max_retries: this.initMaxRetries,
+        timeout_reason: reason,
+      });
+    }
+    handle.child.kill('SIGTERM');
+    setTimeout(() => {
+      if (this.handles.has(key)) handle.child.kill('SIGKILL');
+    }, 5_000).unref();
+  }
+
+  private ensureInitWatchdogArmed(handle: AgentHandle): void {
+    if (handle.initWatchdogArmed || handle.initObserved || handle.initTimedOut) return;
+    // This is the deferred-init transition for runtimes whose first session
+    // init is causally downstream of a real stdin user message. Arm before the
+    // write so a runtime that accepts the message but never reaches init is
+    // still covered by the same liveness/protocol/session timers as spawn-time
+    // kickoff inboxes.
+    this.startInitWatchdog(handle);
+  }
+
+  private markInitPendingInboxDelivered(handle: AgentHandle): void {
+    if (handle.initPendingInboxIds.length === 0) return;
+    this.inboxes.markDelivered(handle.initPendingInboxIds.splice(0));
+  }
+
+  private initTimeoutFor(
+    driver: Driver,
+    field: InitTimeoutField,
+    fallback: number,
+  ): number {
+    return this.initWatchdogMs ?? this[field] ?? driver[field] ?? fallback;
+  }
+
+  private recordInitTimeoutAndShouldRetry(handle: AgentHandle): boolean {
+    const key = handleKey(handle.conversationId, handle.agentId);
+    const state = this.initRetryStates.get(key) ?? { failures: 0, cooldownUntil: 0 };
+    // Failure count is intentionally sticky until a successful init clears it:
+    // cooldown expiry permits one more probe, but a fresh failure immediately
+    // re-enters cooldown instead of resetting the incident window.
+    state.failures += 1;
+    if (state.failures >= this.initFailureCooldownThreshold) {
+      state.cooldownUntil = Date.now() + this.initFailureCooldownMs;
+    }
+    this.initRetryStates.set(key, state);
+    return (
+      state.cooldownUntil <= Date.now() &&
+      handle.initAttempt < this.initMaxRetries &&
+      !handle.fatalError &&
+      !handle.intentionallyStopped
+    );
+  }
+
+  private clearInitRetryState(conversationId: string, agentId: string): void {
+    this.initRetryStates.delete(handleKey(conversationId, agentId));
+  }
+
+  private isInitCoolingDown(conversationId: string, agentId: string): boolean {
+    const state = this.initRetryStates.get(handleKey(conversationId, agentId));
+    if (!state || state.cooldownUntil <= Date.now()) return false;
+    return true;
+  }
+
+  private publishInitCooldown(conversationId: string, agentId: string): void {
+    const key = handleKey(conversationId, agentId);
+    const state = this.initRetryStates.get(key);
+    const cooldownUntil = state?.cooldownUntil ?? Date.now();
+    this.conversations.updateAgentRuntime(conversationId, agentId, {
+      status: 'crashed',
+      pid: null,
+    });
+    this.publish(conversationId, 'agent_status', {
+      agent_id: agentId,
+      status: 'crashed',
+      reason: 'init_cooldown',
+      cooldown_until: cooldownUntil,
+    });
+    this.ctx.logger.warn(
+      { conversationId, agentId, cooldownUntil },
+      'conversation: init cooldown active; start suppressed',
+    );
   }
 
   private async resolveBinary(runtime: string): Promise<string | null> {
@@ -1457,8 +1898,14 @@ export class ConversationManager {
       },
       'inbox: draining queued items into agent stdin',
     );
+    this.ensureInitWatchdogArmed(handle);
     await this.writeLine(handle, line);
-    this.inboxes.markDelivered(items.map(i => i.inboxId));
+    const inboxIds = items.map(i => i.inboxId);
+    if (!handle.initObserved && handle.driver.kickoffMode === 'requires_first_message') {
+      handle.initPendingInboxIds.push(...inboxIds);
+    } else {
+      this.inboxes.markDelivered(inboxIds);
+    }
     this.markRunThinking(handle);
   }
 
@@ -1681,10 +2128,71 @@ function incrementToolCount(
   };
 }
 
+function terminalStatus(reason: AgentRunTerminalReason): AgentRunStatus {
+  return ['replied', 'turn_ended', 'replaced'].includes(reason)
+    ? 'idle'
+    : 'failed';
+}
+
+function sanitizeParsedEventForBroadcast(ev: ParsedEvent): ParsedEvent {
+  if (ev.kind !== 'tool_call') return ev;
+  return {
+    ...ev,
+    input: sanitizeRawAgentEventValue(ev.input),
+  };
+}
+
+function sanitizeRawAgentEventValue(
+  value: unknown,
+  depth = 0,
+  seen = new WeakSet<object>(),
+): unknown {
+  if (typeof value === 'string') return truncateRawAgentEventString(value);
+  if (
+    value === null ||
+    typeof value === 'number' ||
+    typeof value === 'boolean' ||
+    typeof value === 'undefined'
+  ) {
+    return value;
+  }
+  if (typeof value === 'bigint') return value.toString();
+  if (typeof value !== 'object') return String(value);
+  if (seen.has(value)) return '[Circular]';
+  if (depth >= RAW_AGENT_EVENT_MAX_DEPTH) return '[Truncated object]';
+
+  seen.add(value);
+  if (Array.isArray(value)) {
+    const items = value
+      .slice(0, RAW_AGENT_EVENT_ARRAY_MAX_ITEMS)
+      .map(item => sanitizeRawAgentEventValue(item, depth + 1, seen));
+    const omitted = value.length - items.length;
+    if (omitted > 0) items.push({ __truncatedItems: omitted });
+    seen.delete(value);
+    return items;
+  }
+
+  const out: Record<string, unknown> = {};
+  const entries = Object.entries(value);
+  for (const [key, entryValue] of entries.slice(0, RAW_AGENT_EVENT_OBJECT_MAX_KEYS)) {
+    out[key] = sanitizeRawAgentEventValue(entryValue, depth + 1, seen);
+  }
+  const omitted = entries.length - Object.keys(out).length;
+  if (omitted > 0) out.__truncatedKeys = omitted;
+  seen.delete(value);
+  return out;
+}
+
+function truncateRawAgentEventString(value: string): string {
+  if (value.length <= RAW_AGENT_EVENT_STRING_MAX_CHARS) return value;
+  const omitted = value.length - RAW_AGENT_EVENT_STRING_MAX_CHARS;
+  return `${value.slice(0, RAW_AGENT_EVENT_STRING_MAX_CHARS)}...<truncated ${omitted} chars>`;
+}
+
 function trimActivitySnippet(text: string): string | undefined {
   const normalized = text.replace(/\s+/g, ' ').trim();
   if (!normalized) return undefined;
   return normalized.length <= ACTIVITY_SNIPPET_MAX_CHARS
     ? normalized
-    : normalized.slice(0, ACTIVITY_SNIPPET_MAX_CHARS);
+    : normalized.slice(-ACTIVITY_SNIPPET_MAX_CHARS);
 }

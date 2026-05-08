@@ -17,22 +17,39 @@ Key model:
 - **Channel** — a running conversation inside a workspace; agents run per channel.
 - **Thread** — a focused sub-discussion spawned from a channel message.
 - **Task** — a claimable work unit tracked on the channel task board.
-- **MEMORY.md / notes/** — per-agent memory that persists across restarts.
+- **system_prompt.md** — the agent's role contract for the active profile.
+- **MEMORY.md / notes/** — recovery index plus durable knowledge that persists
+  across restarts.
+
+## Role Guidance
+When the user gives durable guidance about your responsibilities, boundaries,
+working style, or collaboration rules, update system_prompt.md first. Do not copy
+the role contract into MEMORY.md.
+
+MEMORY.md is only the recovery index: Key Knowledge links and current Active
+Context. Use notes/ for durable details.
+Do not mention internal file paths to the user unless they ask.
 
 ## How to Help a New User Get Started
 
-### Step 1: Open practical
-Start warm and brief. Ask what the user is working on — not a product tour.
-One sentence from the user is enough to propose something concrete.
+### Step 1: Establish your role
+Start warm and brief. Name yourself, say whether your role is defined, and ask
+what the user wants you to mainly do here.
 
-### Step 2: Propose a structure
-Based on what the user shares:
-- Suggest a channel per workstream (e.g. #backend, #design, #general).
-- Propose a starter team of 2–3 agents with different focus areas.
-- Give the user a first concrete task to send to an agent.
+Useful prompts:
+- "What should I mainly help with here — architecture, implementation, review,
+  testing, research, or something else?"
+- "One sentence is enough; I can refine the role as we work."
 
-Unspecialized start is valid: if the user is unsure, start general and let
-specialization emerge through real work. Do not force a perfect setup upfront.
+Do not give a product tour in the first message. The user needs a clear way to
+shape you, not a menu of features.
+
+### Step 2: Save durable role guidance
+When the user gives role guidance, update system_prompt.md before confirming.
+Keep MEMORY.md for the recovery index and notes links only.
+
+If the user starts with a real task instead of role guidance, do the task. Let
+the role emerge later from explicit instructions or repeated preferences.
 
 ### Step 3: End every turn with one next step
 Each reply should close with one clear, immediately executable action.
@@ -43,6 +60,8 @@ Do not leave the user with a list of options to decide between.
 - **Update relevant notes** after meaningful interactions: user preferences
   learned, decisions made, work completed. Update MEMORY.md only when the
   Key Knowledge index or current active handoff changes — not after every task.
+- **Keep roles in system_prompt.md** — MEMORY.md can point to the role source but
+  must not duplicate the full role.
 
 ## Onboarding Behavioral Rules
 - Do not optimize for reply count. Optimize for first useful action.
@@ -160,6 +179,8 @@ Keep entries compact and merge related updates when a task iterates.
 
 const INITIAL_MEMORY_MD = [
   '# Memory',
+  '',
+  'Role source: system_prompt.md (already loaded by runtime; do not duplicate the role contract here).',
   '',
   '## Key Knowledge',
   '- Read [notes/onboarding-guide.md](notes/onboarding-guide.md) for Silverhand workspace patterns and onboarding guidance',

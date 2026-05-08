@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Power } from 'lucide-react';
 import { Toaster } from 'sonner';
 import { NavRail } from '@/components/layout/NavRail';
@@ -9,11 +9,13 @@ import { ChannelsSidebar } from '@/components/layout/ChannelsSidebar';
 import { ChannelView } from '@/components/layout/ChannelView';
 import { SavedListView } from '@/components/layout/SavedListView';
 import { SearchPanel } from '@/components/layout/SearchPanel';
+import { ArchivedChannelsPanel } from '@/components/layout/ArchivedChannelsPanel';
 import { SplitPane } from '@/components/layout/SplitPane';
 import { TasksSection } from '@/components/layout/TasksSection';
 import { Titlebar } from '@/components/layout/Titlebar';
 import { VerticalSplitter } from '@/components/layout/VerticalSplitter';
 import { useAppearance } from '@/hooks/useAppearance';
+import { useLayoutSettings } from '@/hooks/useLayoutSettings';
 import { useResizableWidth } from '@/hooks/useResizableWidth';
 import { CreateWorkspaceDialog } from '@/features/workspaces/CreateWorkspaceDialog';
 import { CreateChannelDialog } from '@/features/workspaces/CreateChannelDialog';
@@ -22,10 +24,13 @@ import { WorkspaceTasksDrawer } from '@/components/tasks/WorkspaceTasksDrawer';
 import { useTasks } from '@/features/tasks/hooks';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { AgentView } from '@/features/agents/AgentView';
+import { useAgents } from '@/features/agents/hooks';
 import {
   useWorkspaces,
   useChannelsForWorkspace,
+  useArchivedChannelsForWorkspace,
   usePinChannel,
+  useArchiveChannel,
   type ChannelListItem,
 } from '@/features/workspaces/hooks';
 import { useSavedMessages } from '@/features/saved/hooks';
@@ -39,7 +44,8 @@ import {
   useMessageUnreadCounts,
   useMessageUnreadSummary,
 } from '@/features/channels/hooks';
-import { useNav, useRouteState } from '@/router';
+import { cleanupAllComposerDrafts } from '@/lib/composer-draft-cache';
+import { routes, useNav, useRouteState } from '@/router';
 
 export interface MessageJumpTarget {
   workspaceId?: string;
@@ -50,12 +56,25 @@ export interface MessageJumpTarget {
 
 export function App(): JSX.Element {
   useAppearance();
+  const {
+    layout,
+    toggleWorkspaceSidebar,
+    toggleChannelSidebar,
+  } = useLayoutSettings();
 
   // Shutdown overlay — shown when the main process starts its graceful
   // quit sequence. Steps arrive via IPC; null means not shutting down.
   const [shutdownStep, setShutdownStep] = useState<string | null>(null);
   useEffect(() => {
     return window.agentHub.onShutdownProgress(step => setShutdownStep(step));
+  }, []);
+
+  useEffect(() => {
+    const cleanup = (): void => cleanupAllComposerDrafts();
+    window.addEventListener('beforeunload', cleanup);
+    return () => {
+      window.removeEventListener('beforeunload', cleanup);
+    };
   }, []);
 
   // Sidebar widths persist across launches and mirror into CSS vars so
@@ -87,6 +106,10 @@ export function App(): JSX.Element {
     agentId: selectedAgentId,
   } = route;
   const activeEventChannelId = openThreadId ?? selectedChannelId;
+  const workspaceSidebarPane = layout.workspaceSidebar;
+  const channelSidebarPane = layout.channelSidebar;
+  const workspaceSidebarVisible = workspaceSidebarPane.visible;
+  const channelSidebarVisible = channelSidebarPane.visible;
 
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
   const [createChannelOpen, setCreateChannelOpen] = useState(false);
@@ -116,21 +139,53 @@ export function App(): JSX.Element {
   >(null);
   const [threadFullscreen, setThreadFullscreen] = useState(false);
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (!event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.code !== 'Backslash') return;
+      event.preventDefault();
+      if (event.shiftKey) {
+        toggleWorkspaceSidebar();
+      } else {
+        toggleChannelSidebar();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [toggleChannelSidebar, toggleWorkspaceSidebar]);
+
   // Per-workspace "last viewed channel" memory. Lives in-memory only —
   // resetting on app restart is fine; workspace switches inside one app run
   // shouldn't lose their place.
   const lastChannelByWorkspace = useRef<Map<string, string>>(new Map());
+  const lastSelectedAgentId = useRef<string | null>(null);
   const lastSelectedMessageReadKey = useRef<string | null>(null);
   const lastThreadMessageReadKey = useRef<string | null>(null);
   const lastNotificationReadId = useRef<string | null>(null);
 
   const { data: workspaces = [] } = useWorkspaces();
+  const { data: agents = [] } = useAgents();
   const selectedWorkspace = workspaces.find(w => w.id === selectedWorkspaceId) ?? null;
-  const { data: channels = [] } = useChannelsForWorkspace(
+  const { data: activeChannels = [] as ChannelListItem[] } = useChannelsForWorkspace(
     selectedWorkspaceId,
     selectedWorkspace?.kind ?? null,
   );
+  const { data: archivedChannels = [] as ChannelListItem[] } = useArchivedChannelsForWorkspace(
+    selectedWorkspaceId,
+    selectedWorkspace?.kind ?? null,
+  );
+  // Union for URL/jump/search resolution. The sidebar gets active and
+  // archived as separate props (so it can render the Archived group with
+  // its own sort order), but anything that asks "does channel X exist in
+  // this workspace" — selectedChannel lookup, jump targets, breadcrumbs,
+  // tasks drawer — needs to consider both.
+  const channels = useMemo<ChannelListItem[]>(
+    () => [...activeChannels, ...archivedChannels],
+    [activeChannels, archivedChannels],
+  );
   const pinChannel = usePinChannel(selectedWorkspaceId ?? null);
+  const archiveChannel = useArchiveChannel(selectedWorkspaceId ?? null);
   // Shared cache with SavedListView and useToggleSave — invalidations
   // from save/unsave mutations propagate the count update here too.
   const { data: savedItems } = useSavedMessages();
@@ -216,9 +271,19 @@ export function App(): JSX.Element {
     }
     const remembered = lastChannelByWorkspace.current.get(selectedWorkspaceId);
     const stillExists = remembered && channels.some(s => s.id === remembered);
-    const target = stillExists ? remembered! : channels[0]!.id;
-    nav.go(`/chat/w/${selectedWorkspaceId}/c/${target}`, { replace: true });
-  }, [selectedWorkspaceId, selectedChannelId, channels, jumpTarget, nav]);
+    if (stillExists) {
+      nav.go(`/chat/w/${selectedWorkspaceId}/c/${remembered}`, { replace: true });
+      return;
+    }
+    // Default: pick the first ACTIVE top-level channel. We deliberately
+    // don't fall through to archivedChannels[0] — opening an archived
+    // channel that lives in the (default-collapsed) Archived group would
+    // be invisible to the user. With no active channels, leave selection
+    // empty and let the chat pane render an empty state.
+    const fallback = activeChannels.find(s => s.parent_conversation_id === null);
+    if (!fallback) return;
+    nav.go(`/chat/w/${selectedWorkspaceId}/c/${fallback.id}`, { replace: true });
+  }, [selectedWorkspaceId, selectedChannelId, channels, activeChannels, jumpTarget, nav]);
 
   // Record the user's selection so we can restore it next time they
   // come back to this workspace.
@@ -227,6 +292,26 @@ export function App(): JSX.Element {
       lastChannelByWorkspace.current.set(selectedWorkspaceId, selectedChannelId);
     }
   }, [selectedWorkspaceId, selectedChannelId]);
+
+  // Members panel defaults to a concrete agent: restore the last selected one
+  // for this app run, or fall back to the first agent in the list.
+  useEffect(() => {
+    if (!selectedAgentId) return;
+    if (!agents.some(a => a.id === selectedAgentId)) return;
+    lastSelectedAgentId.current = selectedAgentId;
+  }, [agents, selectedAgentId]);
+
+  useEffect(() => {
+    if (appSection !== 'members') return;
+    if (agents.length === 0) return;
+    if (selectedAgentId && agents.some(a => a.id === selectedAgentId)) return;
+
+    const remembered = lastSelectedAgentId.current;
+    const target = remembered && agents.some(a => a.id === remembered)
+      ? remembered
+      : agents[0]!.id;
+    nav.go(routes.membersAgent(target), { replace: true });
+  }, [agents, appSection, nav, selectedAgentId]);
 
   // If the open thread is loaded and its parent doesn't match the current
   // selection, drop it. Don't drop on "missing from list" — that fires
@@ -445,8 +530,10 @@ export function App(): JSX.Element {
       ? {
           id: s.id,
           title: s.title,
+          kind: s.kind,
           parent_conversation_id: s.kind === 'thread' ? s.parent_conversation_id : null,
           closed_at: s.closed_at,
+          archived_at: s.archived_at,
           workspace_id: s.workspace_id,
         }
       : null;
@@ -480,6 +567,14 @@ export function App(): JSX.Element {
       highlightedMessageId={
         openThreadId ? highlightedParentMessageId : null
       }
+      onArchiveChannel={(channelId, archived) => {
+        archiveChannel.mutate({
+          channelId,
+          archived,
+          workspaceId: selectedWorkspaceId ?? undefined,
+        });
+      }}
+      archivePending={archiveChannel.isPending}
     />
   );
 
@@ -489,7 +584,7 @@ export function App(): JSX.Element {
       conversation={buildChannelDescriptor(threadChannel)}
       parentTitle={selectedChannel?.title ?? null}
       jumpTarget={
-        jumpTarget?.threadId === threadChannel.id
+        jumpTarget && jumpTarget.threadId === threadChannel.id
           ? { channelId: threadChannel.id, messageId: jumpTarget.messageId }
           : null
       }
@@ -511,6 +606,14 @@ export function App(): JSX.Element {
       onThreadAnchorResolved={setHighlightedParentMessageId}
       onToggleFullscreen={() => setThreadFullscreen(v => !v)}
       isFullscreen={threadFullscreen}
+      onArchiveChannel={(channelId, archived) => {
+        archiveChannel.mutate({
+          channelId,
+          archived,
+          workspaceId: selectedWorkspaceId ?? undefined,
+        });
+      }}
+      archivePending={archiveChannel.isPending}
       // No nested Thread: thread channels can't spawn sub-threads
       // (1-layer hard limit, schema-enforced too).
       onThreadCreated={undefined}
@@ -539,12 +642,16 @@ export function App(): JSX.Element {
             : undefined
         }
         taskCount={workspaceActiveTaskCount}
+        workspaceSidebarVisible={workspaceSidebarVisible}
+        channelSidebarVisible={channelSidebarVisible}
+        onToggleWorkspaceSidebar={toggleWorkspaceSidebar}
+        onToggleChannelSidebar={toggleChannelSidebar}
       />
       <div
         className="flex min-w-0 flex-1 overflow-hidden"
         style={{
           background: 'var(--bg-app, transparent)',
-          padding: 'var(--frame-padding, 0)',
+          padding: '0 var(--frame-padding, 0) var(--frame-padding, 0)',
           gap: 'var(--frame-padding, 0)',
         }}
       >
@@ -564,7 +671,14 @@ export function App(): JSX.Element {
           <TasksSection onJump={params => handleJumpToMessage(params)} />
         ) : appSection === 'members' ? (
           <>
-            <aside className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]">
+            <aside
+              className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]"
+              style={{
+                borderRadius: 'var(--card-radius, 0)',
+                boxShadow: 'var(--card-shadow, none)',
+                overflow: 'hidden',
+              }}
+            >
               <nav className="flex-1 overflow-y-auto py-1.5">
                 <MembersPanel
                   selectedAgentId={selectedAgentId}
@@ -589,46 +703,98 @@ export function App(): JSX.Element {
                 }}
               />
             ) : (
-              <main className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted">
+              <main
+                className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
+                style={{
+                  borderRadius: 'var(--card-radius, 0)',
+                  boxShadow: 'var(--card-shadow, none)',
+                  overflow: 'hidden',
+                }}
+              >
                 选一个 agent 看详情
               </main>
             )}
           </>
         ) : appSection === 'computers' ? (
           <>
-            <aside className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]">
+            <aside
+              className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]"
+              style={{
+                borderRadius: 'var(--card-radius, 0)',
+                boxShadow: 'var(--card-shadow, none)',
+                overflow: 'hidden',
+              }}
+            >
               <nav className="flex-1 overflow-y-auto py-1.5">
                 <ComputersPanel />
               </nav>
             </aside>
-            <main className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted">
+            <main
+              className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
+              style={{
+                borderRadius: 'var(--card-radius, 0)',
+                boxShadow: 'var(--card-shadow, none)',
+                overflow: 'hidden',
+              }}
+            >
               选一台 computer 看详情
             </main>
           </>
         ) : (
           <>
-            <Sidebar
-              workspaces={workspaces.map(w => ({
-                id: w.id,
-                name: w.name,
-                kind: w.kind === 'dm' ? 'dm' as const : 'regular' as const,
-                dm_agent_id: w.dm_agent_id,
-                unread: messageUnreadSummary?.by_workspace?.[w.id] ?? 0,
-                archived: w.archived_at !== null,
-              }))}
-              selectedWorkspaceId={selectedWorkspaceId}
-              onSelectWorkspace={handleSelectWorkspace}
-              onCreateWorkspace={() => setCreateWorkspaceOpen(true)}
-              savedActive={view === 'saved'}
-              onSelectSaved={() => nav.toChatSaved()}
-              searchActive={view === 'search'}
-              onSelectSearch={() => nav.toChatSearch()}
-              savedCount={savedItems?.length}
-            />
-            <VerticalSplitter
-              onPointerDown={sidebar.startResize}
-              active={sidebar.isDragging}
-            />
+            {workspaceSidebarPane.present ? (
+              <>
+                <div
+                  className="sidebar-slot"
+                  style={{
+                    flexBasis: workspaceSidebarVisible
+                      ? 'var(--sidebar-width)'
+                      : '0px',
+                    width: workspaceSidebarVisible
+                      ? 'var(--sidebar-width)'
+                      : '0px',
+                  }}
+                  // hidden subtree must not steal focus or grab pointer events
+                  // mid-slide; `inert` removes it from the a11y tree too.
+                  {...(workspaceSidebarVisible ? {} : { inert: '' })}
+                  aria-hidden={workspaceSidebarVisible ? undefined : true}
+                >
+                  <div
+                    className="sidebar-surface"
+                    data-state={workspaceSidebarPane.surfaceState}
+                    style={{ width: 'var(--sidebar-width)' }}
+                  >
+                    <Sidebar
+                      workspaces={workspaces.map(w => ({
+                        id: w.id,
+                        name: w.name,
+                        kind: w.kind === 'dm' ? 'dm' as const : 'regular' as const,
+                        workspace_path: w.workspace_path,
+                        dm_agent_id: w.dm_agent_id,
+                        unread: messageUnreadSummary?.by_workspace?.[w.id] ?? 0,
+                        archived: w.archived_at !== null,
+                      }))}
+                      selectedWorkspaceId={selectedWorkspaceId}
+                      onSelectWorkspace={handleSelectWorkspace}
+                      onCreateWorkspace={() => setCreateWorkspaceOpen(true)}
+                      savedActive={view === 'saved'}
+                      onSelectSaved={() => nav.toChatSaved()}
+                      archivedActive={view === 'archived'}
+                      onSelectArchived={() => nav.toChatArchived()}
+                      searchActive={view === 'search'}
+                      onSelectSearch={() => nav.toChatSearch()}
+                      savedCount={savedItems?.length}
+                    />
+                  </div>
+                </div>
+                {workspaceSidebarVisible ? (
+                  <VerticalSplitter
+                    onPointerDown={sidebar.startResize}
+                    active={sidebar.isDragging}
+                  />
+                ) : null}
+              </>
+            ) : null}
             {view === 'saved' ? (
               <SavedListView onJump={params => handleJumpToMessage(params)} />
             ) : view === 'search' ? (
@@ -643,34 +809,78 @@ export function App(): JSX.Element {
                   else nav.toChannel(navWorkspaceId, channelId);
                 }}
               />
+            ) : view === 'archived' ? (
+              <ArchivedChannelsPanel
+                workspaces={workspaces}
+                onOpenChannel={(workspaceId, channelId) =>
+                  nav.toChannel(workspaceId, channelId)
+                }
+              />
             ) : (
               <>
-                <ChannelsSidebar
-                  workspaceName={selectedWorkspace?.name ?? null}
-                  channels={channels.map(s => ({
-                    id: s.id,
-                    title: s.title,
-                    status:
-                      s.status === 'active' || s.status === 'crashed' ? s.status : 'idle',
-                    parent_channel_id: s.kind === 'thread' ? s.parent_conversation_id : null,
-                    closed_at: s.closed_at,
-                    pinned_at: s.pinned_at,
-                  }))}
-                  // Highlight either the parent (top-level) or — when a thread
-                  // pane is open — also the thread below it via tree indent.
-                  // ChannelsSidebar already renders the tree; selection just
-                  // points at "what's the active row".
-                  selectedChannelId={openThreadId ?? selectedChannelId}
-                  onSelectChannel={handleSelectChannel}
-                  onPinChannel={(channelId, pinned) =>
-                    pinChannel.mutate({ channelId, pinned })
-                  }
-                  unreadByChannel={channelUnreadCounts ?? {}}
-                />
-                <VerticalSplitter
-                  onPointerDown={channelsSidebar.startResize}
-                  active={channelsSidebar.isDragging}
-                />
+                {channelSidebarPane.present ? (
+                  <>
+                    <div
+                      className="sidebar-slot"
+                      style={{
+                        flexBasis: channelSidebarVisible
+                          ? 'var(--channels-sidebar-width)'
+                          : '0px',
+                        width: channelSidebarVisible
+                          ? 'var(--channels-sidebar-width)'
+                          : '0px',
+                      }}
+                      {...(channelSidebarVisible ? {} : { inert: '' })}
+                      aria-hidden={channelSidebarVisible ? undefined : true}
+                    >
+                      <div
+                        className="sidebar-surface"
+                        data-state={channelSidebarPane.surfaceState}
+                        style={{ width: 'var(--channels-sidebar-width)' }}
+                      >
+                        <ChannelsSidebar
+                          workspaceName={selectedWorkspace?.name ?? null}
+                          channels={activeChannels.map(s => ({
+                            id: s.id,
+                            title: s.title,
+                            kind: s.kind,
+                            status:
+                              s.status === 'active' || s.status === 'crashed' ? s.status : 'idle',
+                            parent_channel_id: s.kind === 'thread' ? s.parent_conversation_id : null,
+                            closed_at: s.closed_at,
+                            pinned_at: s.pinned_at,
+                            archived_at: s.archived_at,
+                          }))}
+                          workspaceKind={selectedWorkspace?.kind === 'dm' ? 'dm' : (selectedWorkspace ? 'regular' : null)}
+                          // Highlight either the parent (top-level) or — when a thread
+                          // pane is open — also the thread below it via tree indent.
+                          // ChannelsSidebar already renders the tree; selection just
+                          // points at "what's the active row".
+                          selectedChannelId={openThreadId ?? selectedChannelId}
+                          onSelectChannel={handleSelectChannel}
+                          onPinChannel={(channelId, pinned) =>
+                            pinChannel.mutate({ channelId, pinned })
+                          }
+                          onArchiveChannel={(channelId, archived) => {
+                            archiveChannel.mutate({
+                              channelId,
+                              archived,
+                              workspaceId: selectedWorkspaceId ?? undefined,
+                            });
+                          }}
+                          archivePending={archiveChannel.isPending}
+                          unreadByChannel={channelUnreadCounts ?? {}}
+                        />
+                      </div>
+                    </div>
+                    {channelSidebarVisible ? (
+                      <VerticalSplitter
+                        onPointerDown={channelsSidebar.startResize}
+                        active={channelsSidebar.isDragging}
+                      />
+                    ) : null}
+                  </>
+                ) : null}
                 {threadView ? (
                   threadFullscreen ? (
                     threadView

@@ -16,9 +16,9 @@
   --bg-chat: #F9F9F7;
 
   /* ── Card-style frame ──
-     Neutral gray frame keeps warm-coral quiet and tool-like, while the
-     card layout remains consistent with the other themes. */
-  --bg-app: #E7E7E1;
+     Slightly deeper neutral so the four cards visibly float on the
+     frame instead of melting into it. */
+  --bg-app: #DCD9D2;
   --frame-padding: 8px;
   --card-radius: 8px;
   --card-shadow: 0 1px 2px rgba(var(--shadow-base), 0.06);
@@ -27,21 +27,29 @@
   --titlebar-border: transparent;
 
   /* ── Brand identity ──
-     warm-coral 走中性极简风，没有强品牌色——brand-primary 就退回 bg-primary，
-     和现状一致；保留 token 是为了和其它主题语义对齐，未来想改也只动这里。 */
-  --brand-primary: var(--bg-primary);
-  --text-on-brand: var(--text-primary);
+     Terracotta clay — brown-orange, not coral pink. Because this brand is
+     darker than the old pale coral, NavRail gets explicit on-brand icon and
+     hover tokens instead of relying on generic muted text. */
+  --brand-primary: #B5651D;
+  --text-on-brand: #FFF8EE;
+  --text-nav-rail: #FFF8EECC;
+  --text-nav-rail-hover: #FFF8EE;
+  --bg-nav-rail-hover: color-mix(in oklab, var(--text-on-brand) 18%, var(--brand-primary));
+  --bg-task-tag: var(--brand-primary);
+  --text-on-task-tag: var(--text-on-brand);
+  --border-task-tag: color-mix(in oklab, var(--text-on-brand) 16%, var(--brand-primary));
 
-  /* Sidebar row state — warm-coral has no strong brand chip, so selected rows
-     use a coral ink wash instead of brand-primary. That keeps the neutral
-     chrome intact while making the current workspace/channel visibly active. */
-  --bg-row-selected: color-mix(in oklab, var(--accent) 20%, var(--bg-floating));
-  --bg-row-hover: color-mix(in oklab, var(--accent) 10%, var(--bg-floating));
+  /* Sidebar row state — light clay wash for selected/hover. It stays in the
+     same terracotta family but avoids repainting the whole sidebar pink. */
+  --sidebar-row-border-width: 2px;
+  --bg-row-selected: color-mix(in oklab, var(--brand-primary) 24%, var(--bg-floating));
+  --bg-row-hover: color-mix(in oklab, var(--brand-primary) 10%, var(--bg-floating));
 
-  /* ── Sidebar (no special accent — falls back to primary) ── */
+  /* ── Sidebar — coral identity ladders from NavRail down through
+     channels/sessions, paralleling paper-ink's yellow gradient. */
   --bg-nav-rail: var(--brand-primary);
-  --bg-channels-sidebar: var(--bg-primary);
-  --bg-sessions-sidebar: var(--bg-primary);
+  --bg-channels-sidebar: color-mix(in oklab, var(--brand-primary) 18%, var(--bg-base));
+  --bg-sessions-sidebar: color-mix(in oklab, var(--brand-primary) 8%, var(--bg-base));
 
   /* ── Islands (code) ── */
   --bg-island: #EFEFEC;
@@ -55,11 +63,11 @@
   --text-island: #2A2A2A;
   --text-inline-code: color-mix(in srgb, var(--accent) 50%, var(--text-primary));
 
-  /* ── Accent (coral terracotta) ── */
-  --accent: #CC7D5E;
-  --accent-soft: #CC7D5E15;
-  --accent-hover: #B36849;
-  --accent-glow: #CC7D5E20;
+  /* ── Accent (deep fired clay) ── */
+  --accent: #874713;
+  --accent-soft: #87471315;
+  --accent-hover: #6F390E;
+  --accent-glow: #87471320;
 
   /* ── Semantic ── */
   --success: #6B7C3F;
@@ -73,7 +81,7 @@
   --border: #00000010;
   --border-subtle: #0000001a;
   --border-island: #88858026;
-  --border-focus: #CC7D5E40;
+  --border-focus: #87471340;
 
   /* ── On-color foregrounds ── */
   --text-on-accent: #FFFFFF;

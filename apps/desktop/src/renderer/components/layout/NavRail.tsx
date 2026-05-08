@@ -56,7 +56,7 @@ export function NavRail({ current, onChange }: NavRailProps): JSX.Element {
               'flex size-9 items-center justify-center border-2 transition-colors',
               selected
                 ? 'border-accent bg-bg-selected text-text-on-selected'
-                : 'border-transparent text-text-secondary hover:border-accent hover:bg-white/70 hover:text-text-primary',
+                : 'border-transparent text-[var(--text-nav-rail,var(--text-secondary))] hover:border-accent hover:bg-[var(--bg-nav-rail-hover,rgba(255,255,255,0.7))] hover:text-[var(--text-nav-rail-hover,var(--text-primary))]',
             )}
           >
             {item.icon}
@@ -74,7 +74,7 @@ export function NavRail({ current, onChange }: NavRailProps): JSX.Element {
           'mt-auto flex size-9 items-center justify-center border-2 transition-colors',
           settingsSelected
             ? 'border-accent bg-bg-selected text-text-on-selected'
-            : 'border-transparent text-text-secondary hover:border-accent hover:bg-white/70 hover:text-text-primary',
+            : 'border-transparent text-[var(--text-nav-rail,var(--text-secondary))] hover:border-accent hover:bg-[var(--bg-nav-rail-hover,rgba(255,255,255,0.7))] hover:text-[var(--text-nav-rail-hover,var(--text-primary))]',
         )}
       >
         <Settings className="size-4" />

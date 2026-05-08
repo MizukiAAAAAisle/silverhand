@@ -39,6 +39,22 @@ function waitActivity(
     .then(e => e.payload as any);
 }
 
+async function waitForStdinLines(
+  h: ManagerHarness,
+  predicate: (lines: string[]) => boolean,
+  timeoutMs = 2_000,
+): Promise<string[]> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const lines = await readStdinLog(h.stdinLog);
+    if (predicate(lines)) return lines;
+    await new Promise(r => setTimeout(r, 10));
+  }
+  const lines = await readStdinLog(h.stdinLog);
+  expect(lines).toSatisfy(predicate);
+  return lines;
+}
+
 function dbStatus(
   h: ManagerHarness,
 ): { status: string; cli_session_id: string | null; pid: number | null } {
@@ -66,6 +82,22 @@ function insertUserMessage(
        VALUES (?, ?, 'user', NULL, NULL, ?, NULL, ?, ?)`,
     )
     .run(id, h.sessionId, content, seq, Date.now());
+}
+
+function enqueuePendingUserMessage(
+  h: ManagerHarness,
+  id: string,
+  content: string,
+  seq = 1,
+): void {
+  insertUserMessage(h, id, content, seq);
+  h.ctx.db
+    .prepare(
+      `INSERT INTO conversation_inboxes (conversation_id, agent_id, message_id,
+          delivered_at, created_at)
+       VALUES (?, ?, ?, NULL, ?)`,
+    )
+    .run(h.sessionId, h.agentId, id, Date.now());
 }
 
 function insertSystemMessage(
@@ -121,6 +153,7 @@ describe('ConversationManager.start', () => {
 
   it('publishes status=starting before init, then status=active on init', async () => {
     h = await buildManagerHarness();
+    enqueuePendingUserMessage(h, 'start-kickoff-1', 'kickoff');
     const seen: string[] = [];
     h.on(e => {
       if (e.kind === 'agent_status') seen.push((e.payload as any).status);
@@ -149,6 +182,7 @@ describe('ConversationManager.start', () => {
 
   it('is idempotent — second start while running is a no-op', async () => {
     h = await buildManagerHarness();
+    enqueuePendingUserMessage(h, 'start-idempotent-1', 'kickoff');
     let starts = 0;
     h.on(e => {
       if (e.kind === 'agent_status' && (e.payload as any).status === 'starting') {
@@ -538,15 +572,51 @@ describe('ConversationManager agent run activity', () => {
     await h.manager.deliverMessage(h.sessionId, h.agentId, 'msg-run-old');
     const first = await firstP;
 
+    const replacedP = waitActivity(
+      h,
+      p =>
+        p.runId === first.runId &&
+        p.status === 'idle' &&
+        p.terminalReason === 'replaced',
+    );
     const secondP = waitActivity(
       h,
       p => p.status === 'thinking' && p.runId !== first.runId,
     );
     await h.manager.deliverMessage(h.sessionId, h.agentId, 'msg-run-new');
     const second = await secondP;
+    await replacedP;
 
     h.manager.resolveRun(h.sessionId, h.agentId, 'replied', first.runId);
     expect(h.manager.getAgentRunStates(h.sessionId)[0]?.runId).toBe(second.runId);
+  });
+
+  it('preserves the current direct-mode run when steering an active agent', async () => {
+    h = await buildManagerHarness();
+    await h.manager.start(h.sessionId, h.agentId);
+    await waitInit(h);
+    insertUserMessage(h, 'msg-run-direct-1', 'first', 1);
+    insertUserMessage(h, 'msg-run-direct-2', 'steer', 2);
+
+    const handle = liveHandle(h) as {
+      driver: { busyDeliveryMode: 'gated' | 'direct' | 'none' };
+    };
+    handle.driver.busyDeliveryMode = 'direct';
+
+    const firstP = waitActivity(h, p => p.status === 'thinking');
+    await h.manager.deliverMessage(h.sessionId, h.agentId, 'msg-run-direct-1');
+    const first = await firstP;
+
+    feedParsedEvent(h, { kind: 'tool_call', name: 'Read', input: {} });
+    expect(h.manager.getAgentRunStates(h.sessionId)[0]?.toolCallCounts).toEqual({
+      Read: 1,
+    });
+
+    await h.manager.deliverMessage(h.sessionId, h.agentId, 'msg-run-direct-2');
+    const state = h.manager.getAgentRunStates(h.sessionId)[0]!;
+    expect(state.runId).toBe(first.runId);
+    expect(state.status).toBe('thinking');
+    expect(state.toolCallCounts).toEqual({ Read: 1 });
   });
 
   it('clears a thinking run as failed when hard stop is requested', async () => {
@@ -596,6 +666,34 @@ describe('ConversationManager agent run activity', () => {
       p => p.status === 'idle' && p.terminalReason === 'turn_ended',
     );
     feedParsedEvent(h, { kind: 'turn_end' });
+    await idle;
+    expect(h.manager.getAgentRunStates(h.sessionId)).toEqual([]);
+  });
+
+  it('defers turn_end cleanup until compaction reaches a safe boundary', async () => {
+    h = await buildManagerHarness();
+    await h.manager.start(h.sessionId, h.agentId);
+    await waitInit(h);
+    insertUserMessage(h, 'msg-run-compact-turn-end', 'compact then finish');
+    await h.manager.deliverMessage(
+      h.sessionId,
+      h.agentId,
+      'msg-run-compact-turn-end',
+    );
+
+    feedParsedEvent(h, { kind: 'compaction_started' });
+    const compacting = h.manager.getAgentRunStates(h.sessionId)[0]!;
+    expect(compacting.compacting).toBe(true);
+    expect(compacting.compactingSince).toEqual(expect.any(Number));
+    expect(compacting.compactionStale).toBe(false);
+    feedParsedEvent(h, { kind: 'turn_end' });
+    expect(h.manager.getAgentRunStates(h.sessionId)).toHaveLength(1);
+
+    const idle = waitActivity(
+      h,
+      p => p.status === 'idle' && p.terminalReason === 'turn_ended',
+    );
+    feedParsedEvent(h, { kind: 'compaction_finished' });
     await idle;
     expect(h.manager.getAgentRunStates(h.sessionId)).toEqual([]);
   });
@@ -725,14 +823,16 @@ describe('ConversationManager agent run activity', () => {
     expect(heartbeat.lastActivityAt).toBe(thinking.lastActivityAt);
   });
 
-  it('exposes latest thinking/text as a truncated activitySnippet', async () => {
+  it('accumulates thinking/text deltas as a latest-window activitySnippet', async () => {
     h = await buildManagerHarness();
     await h.manager.start(h.sessionId, h.agentId);
     await waitInit(h);
     insertUserMessage(h, 'msg-run-snippet', 'long work');
     await h.manager.deliverMessage(h.sessionId, h.agentId, 'msg-run-snippet');
 
-    feedParsedEvent(h, { kind: 'thinking', text: 'raw reasoning token' });
+    feedParsedEvent(h, { kind: 'thinking', text: 'raw ' });
+    feedParsedEvent(h, { kind: 'thinking', text: 'reasoning' });
+    feedParsedEvent(h, { kind: 'thinking', text: ' token' });
     expect(h.manager.getAgentRunStates(h.sessionId)[0]?.activitySnippet).toBe(
       'raw reasoning token',
     );
@@ -740,10 +840,11 @@ describe('ConversationManager agent run activity', () => {
     const text =
       'visible answer delta with enough text to exceed the activity snippet limit '.repeat(2);
     feedParsedEvent(h, { kind: 'text', text });
+    feedParsedEvent(h, { kind: 'text', text: 'tail' });
 
     const state = h.manager.getAgentRunStates(h.sessionId)[0]!;
     expect(state.activitySnippet).toBe(
-      text.replace(/\s+/g, ' ').trim().slice(0, 200),
+      `${text}tail`.replace(/\s+/g, ' ').trim().slice(-200),
     );
   });
 
@@ -763,6 +864,50 @@ describe('ConversationManager agent run activity', () => {
     expect(state.status).toBe('tool_running');
     expect(state.detail).toBe('mcp__chat__send_message');
     expect(state.toolCallCounts).toEqual({ Bash: 2, Read: 1 });
+  });
+
+  it('sanitizes large tool_call inputs before raw agent_event broadcast', async () => {
+    h = await buildManagerHarness();
+    await h.manager.start(h.sessionId, h.agentId);
+    await waitInit(h);
+    insertUserMessage(h, 'msg-run-raw-tool', 'write a large file');
+    await h.manager.deliverMessage(h.sessionId, h.agentId, 'msg-run-raw-tool');
+
+    const largeContent = 'x'.repeat(5_000);
+    const toolEvent = {
+      kind: 'tool_call',
+      name: 'Write',
+      input: {
+        file_path: 'src/large.ts',
+        content: largeContent,
+        nested: { old_string: largeContent },
+        chunks: Array.from({ length: 25 }, (_, i) => `${i}:${largeContent}`),
+      },
+    };
+    const rawEventP = h.waitForEvent(
+      e =>
+        e.kind === 'agent_event' &&
+        (e.payload as any)?.event?.kind === 'tool_call' &&
+        (e.payload as any)?.event?.name === 'Write',
+    );
+    const activityP = waitActivity(
+      h,
+      p => p.status === 'tool_running' && p.toolCallCounts?.Write === 1,
+    );
+
+    feedParsedEvent(h, toolEvent);
+
+    const raw = (await rawEventP).payload as any;
+    const input = raw.event.input;
+    expect(input.file_path).toBe('src/large.ts');
+    expect(input.content).not.toBe(largeContent);
+    expect(input.content.length).toBeLessThan(600);
+    expect(input.content).toContain('<truncated 4500 chars>');
+    expect(input.nested.old_string).toContain('<truncated 4500 chars>');
+    expect(input.chunks).toHaveLength(21);
+    expect(input.chunks.at(-1)).toEqual({ __truncatedItems: 5 });
+    expect((toolEvent.input as any).content).toBe(largeContent);
+    await activityP;
   });
 });
 
@@ -919,10 +1064,155 @@ describe('ConversationManager init watchdog', () => {
     h = null;
   });
 
-  it('fires when session_init never arrives → publishes init_timeout + crashes the agent', async () => {
+  it('defers Claude init watchdog on empty-inbox spawn until the first real stdin write', async () => {
+    h = await buildManagerHarness();
+    h.setMockEnv({
+      MOCK_CLAUDE_NO_INIT: '1',
+      MOCK_CLAUDE_PROTOCOL_EVENT_DELAY_MS: '20',
+    });
+    h.manager.initWatchdogMs = 80;
+    h.manager.initMaxRetries = 0;
+
+    let timedOut = false;
+    h.on(e => {
+      if (e.kind === 'agent_init_timeout') timedOut = true;
+    });
+
+    const active = h.waitForEvent(
+      e =>
+        e.kind === 'agent_status' &&
+        (e.payload as any).status === 'active' &&
+        (e.payload as any).reason === 'awaiting_first_message',
+    );
+    await h.manager.start(h.sessionId, h.agentId);
+    await active;
+
+    await new Promise(r => setTimeout(r, 160));
+    const armed = dbStatus(h);
+    expect(timedOut).toBe(false);
+    expect(armed.status).toBe('active');
+    expect(armed.pid).toBeGreaterThan(0);
+    expect(h.manager.isRunning(h.sessionId, h.agentId)).toBe(true);
+
+    insertUserMessage(h, 'deferred-first-message-1', 'first real message');
+    const timeout = h.waitForEvent(e => e.kind === 'agent_init_timeout');
+    const crashed = waitStatus(h, 'crashed');
+    await h.manager.deliverMessage(
+      h.sessionId,
+      h.agentId,
+      'deferred-first-message-1',
+    );
+    const ev = await timeout;
+    expect((ev.payload as any).reason).toBe('silence');
+    await crashed;
+    expect(dbStatus(h).status).toBe('crashed');
+  });
+
+  it('hard-stops a deferred Claude armed process as idle, not crashed', async () => {
     h = await buildManagerHarness();
     h.setMockEnv({ MOCK_CLAUDE_NO_INIT: '1' });
+    h.manager.initWatchdogMs = 80;
+
+    let timedOut = false;
+    h.on(e => {
+      if (e.kind === 'agent_init_timeout') timedOut = true;
+    });
+
+    const active = h.waitForEvent(
+      e =>
+        e.kind === 'agent_status' &&
+        (e.payload as any).status === 'active' &&
+        (e.payload as any).reason === 'awaiting_first_message',
+    );
+    await h.manager.start(h.sessionId, h.agentId);
+    await active;
+    expect(dbStatus(h).status).toBe('active');
+
+    const idle = waitStatus(h, 'idle');
+    await h.manager.stop(h.sessionId, h.agentId, 'hard');
+    await idle;
+    await new Promise(r => setTimeout(r, 120));
+
+    expect(timedOut).toBe(false);
+    expect(dbStatus(h).status).toBe('idle');
+    expect(dbStatus(h).pid).toBeNull();
+    expect(h.manager.isRunning(h.sessionId, h.agentId)).toBe(false);
+  });
+
+  it('marks a deferred Claude armed process crashed on unexpected SIGKILL', async () => {
+    h = await buildManagerHarness();
+    h.setMockEnv({ MOCK_CLAUDE_NO_INIT: '1' });
+    h.manager.initWatchdogMs = 80;
+
+    const active = h.waitForEvent(
+      e =>
+        e.kind === 'agent_status' &&
+        (e.payload as any).status === 'active' &&
+        (e.payload as any).reason === 'awaiting_first_message',
+    );
+    await h.manager.start(h.sessionId, h.agentId);
+    await active;
+
+    const handle = liveHandle(h) as {
+      child: { kill(signal: NodeJS.Signals): boolean };
+    };
+    const crashed = waitStatus(h, 'crashed');
+    handle.child.kill('SIGKILL');
+    const ev = await crashed;
+
+    expect((ev as any).payload.signal).toBe('SIGKILL');
+    expect(dbStatus(h).status).toBe('crashed');
+    expect(dbStatus(h).pid).toBeNull();
+    expect(h.manager.isRunning(h.sessionId, h.agentId)).toBe(false);
+  });
+
+  it('keeps pre-init Claude inbox rows pending when init fails so restart replays them', async () => {
+    h = await buildManagerHarness();
+    enqueuePendingUserMessage(h, 'watchdog-replay-1', 'replay after failed init');
+    h.setMockEnv({ MOCK_CLAUDE_NO_INIT: '1' });
+    h.manager.initWatchdogMs = 1_500;
+    h.manager.initMaxRetries = 0;
+
+    await h.manager.start(h.sessionId, h.agentId);
+    await waitForStdinLines(
+      h,
+      lines =>
+        lines.filter(l => l.includes('replay after failed init')).length === 1,
+    );
+    await waitStatus(h, 'crashed');
+
+    const afterFailure = h.ctx.db
+      .prepare<[string, string], { delivered_at: number | null }>(
+        `SELECT delivered_at FROM conversation_inboxes
+         WHERE conversation_id = ? AND message_id = ?`,
+      )
+      .get(h.sessionId, 'watchdog-replay-1')!;
+    expect(afterFailure.delivered_at).toBeNull();
+
+    h.setMockEnv({ MOCK_CLAUDE_NO_INIT: undefined });
+    await h.manager.start(h.sessionId, h.agentId);
+    await waitInit(h);
+    await waitForStdinLines(
+      h,
+      lines =>
+        lines.filter(l => l.includes('replay after failed init')).length === 2,
+    );
+
+    const afterReplay = h.ctx.db
+      .prepare<[string, string], { delivered_at: number | null }>(
+        `SELECT delivered_at FROM conversation_inboxes
+         WHERE conversation_id = ? AND message_id = ?`,
+      )
+      .get(h.sessionId, 'watchdog-replay-1')!;
+    expect(afterReplay.delivered_at).toBeTypeOf('number');
+  });
+
+  it('fires when session_init never arrives → publishes init_timeout + crashes the agent', async () => {
+    h = await buildManagerHarness();
+    enqueuePendingUserMessage(h, 'watchdog-kickoff-1', 'kickoff');
+    h.setMockEnv({ MOCK_CLAUDE_NO_INIT: '1' });
     h.manager.initWatchdogMs = 150;
+    h.manager.initMaxRetries = 0;
 
     const timeout = h.waitForEvent(e => e.kind === 'agent_init_timeout');
     const crashed = waitStatus(h, 'crashed');
@@ -930,10 +1220,12 @@ describe('ConversationManager init watchdog', () => {
     await h.manager.start(h.sessionId, h.agentId);
     const ev = await timeout;
     expect((ev.payload as any).agent_id).toBe(h.agentId);
-    expect((ev.payload as any).elapsed_ms).toBe(150);
+    expect((ev.payload as any).reason).toBe('silence');
+    expect((ev.payload as any).timeout_ms).toBe(150);
 
     const exit = await crashed;
     expect((exit as any).payload.reason).toBe('init_timeout');
+    expect((exit as any).payload.timeout_reason).toBe('silence');
     expect(dbStatus(h).status).toBe('crashed');
     expect(dbStatus(h).pid).toBeNull();
     expect(h.manager.isRunning(h.sessionId, h.agentId)).toBe(false);
@@ -941,6 +1233,7 @@ describe('ConversationManager init watchdog', () => {
 
   it('does NOT fire when session_init lands in time', async () => {
     h = await buildManagerHarness();
+    enqueuePendingUserMessage(h, 'watchdog-healthy-1', 'kickoff');
     // Pick a window comfortably above mock-claude's spawn + init time
     // (~100ms in CI) so a healthy startup doesn't race the timer.
     h.manager.initWatchdogMs = 1_000;
@@ -962,6 +1255,7 @@ describe('ConversationManager init watchdog', () => {
 
   it('hard-stop before init clears the watchdog (no spurious init_timeout)', async () => {
     h = await buildManagerHarness();
+    enqueuePendingUserMessage(h, 'watchdog-hard-stop-1', 'kickoff');
     h.setMockEnv({ MOCK_CLAUDE_NO_INIT: '1' });
     h.manager.initWatchdogMs = 200;
 
@@ -986,6 +1280,117 @@ describe('ConversationManager init watchdog', () => {
     expect(dbStatus(h).status).toBe('idle');
   });
 
+  it('raw stderr bytes refresh liveness silence, but pre-protocol cap still fires', async () => {
+    h = await buildManagerHarness();
+    enqueuePendingUserMessage(h, 'watchdog-stderr-1', 'kickoff');
+    h.setMockEnv({
+      MOCK_CLAUDE_NO_INIT: '1',
+      MOCK_CLAUDE_STDERR_INTERVAL_MS: '10',
+    });
+    h.manager.initLivenessSilenceMs = 500;
+    h.manager.initPreProtocolCapMs = 360;
+    h.manager.initPostProtocolMs = 1_000;
+    h.manager.initMaxRetries = 0;
+
+    const timeout = h.waitForEvent(e => e.kind === 'agent_init_timeout');
+    const crashed = waitStatus(h, 'crashed');
+
+    await h.manager.start(h.sessionId, h.agentId);
+    const ev = await timeout;
+    expect((ev.payload as any).reason).toBe('pre_protocol_cap');
+    expect((ev.payload as any).timeout_ms).toBe(360);
+    const exit = await crashed;
+    expect((exit as any).payload.timeout_reason).toBe('pre_protocol_cap');
+  });
+
+  it('after a protocol frame, post-protocol session timeout replaces liveness timeout', async () => {
+    h = await buildManagerHarness();
+    enqueuePendingUserMessage(h, 'watchdog-protocol-1', 'kickoff');
+    h.setMockEnv({
+      MOCK_CLAUDE_NO_INIT: '1',
+      MOCK_CLAUDE_PROTOCOL_EVENT_DELAY_MS: '200',
+    });
+    h.manager.initLivenessSilenceMs = 1_000;
+    h.manager.initPreProtocolCapMs = 1_000;
+    h.manager.initPostProtocolMs = 120;
+    h.manager.initMaxRetries = 0;
+
+    const timeout = h.waitForEvent(e => e.kind === 'agent_init_timeout');
+    const crashed = waitStatus(h, 'crashed');
+
+    await h.manager.start(h.sessionId, h.agentId);
+    const ev = await timeout;
+    expect((ev.payload as any).reason).toBe('post_protocol');
+    expect((ev.payload as any).timeout_ms).toBe(120);
+    const exit = await crashed;
+    expect((exit as any).payload.timeout_reason).toBe('post_protocol');
+  });
+
+  it('retries one transient init timeout without publishing crashed in between', async () => {
+    h = await buildManagerHarness();
+    enqueuePendingUserMessage(h, 'watchdog-retry-1', 'kickoff');
+    const spawnCountFile = join(h.silverhandDir, 'spawn-count.txt');
+    h.setMockEnv({
+      MOCK_CLAUDE_FAIL_FIRST_INITS: '1',
+      MOCK_CLAUDE_SPAWN_COUNT_FILE: spawnCountFile,
+    });
+    h.manager.initLivenessSilenceMs = 1_000;
+    h.manager.initPreProtocolCapMs = 1_000;
+    h.manager.initPostProtocolMs = 1_000;
+    h.manager.initMaxRetries = 1;
+
+    const statuses: string[] = [];
+    const timeouts: any[] = [];
+    h.on(e => {
+      if (e.kind === 'agent_status') statuses.push((e.payload as any).status);
+      if (e.kind === 'agent_init_timeout') timeouts.push(e.payload as any);
+    });
+
+    const timeout = h.waitForEvent(e => e.kind === 'agent_init_timeout');
+    await h.manager.start(h.sessionId, h.agentId);
+    await timeout;
+    expect(readFileSync(spawnCountFile, 'utf-8')).toBe('1');
+    await waitStatus(h, 'active');
+
+    expect(statuses).not.toContain('crashed');
+    expect(statuses.filter(s => s === 'starting').length).toBeGreaterThanOrEqual(2);
+    expect(timeouts).toHaveLength(1);
+    expect(timeouts[0].retrying).toBe(true);
+    expect(readFileSync(spawnCountFile, 'utf-8')).toBe('2');
+    expect(dbStatus(h).status).toBe('active');
+  });
+
+  it('suppresses new starts during in-memory init cooldown after repeated failures', async () => {
+    h = await buildManagerHarness();
+    enqueuePendingUserMessage(h, 'watchdog-cooldown-1', 'kickoff');
+    h.setMockEnv({ MOCK_CLAUDE_NO_INIT: '1' });
+    h.manager.initLivenessSilenceMs = 100;
+    h.manager.initPreProtocolCapMs = 1_000;
+    h.manager.initPostProtocolMs = 1_000;
+    h.manager.initMaxRetries = 1;
+    h.manager.initFailureCooldownThreshold = 3;
+    h.manager.initFailureCooldownMs = 1_000;
+
+    await h.manager.start(h.sessionId, h.agentId);
+    await waitStatus(h, 'crashed');
+
+    enqueuePendingUserMessage(h, 'watchdog-cooldown-2', 'kickoff again', 2);
+    await h.manager.start(h.sessionId, h.agentId);
+    const crashedAfterThreshold = await waitStatus(h, 'crashed');
+    expect((crashedAfterThreshold as any).payload.reason).toBe('init_timeout');
+    expect((crashedAfterThreshold as any).payload.cooldown_until).toBeTypeOf('number');
+
+    const cooldown = h.waitForEvent(
+      e =>
+        e.kind === 'agent_status' &&
+        (e.payload as any).status === 'crashed' &&
+        (e.payload as any).reason === 'init_cooldown',
+    );
+    await h.manager.start(h.sessionId, h.agentId);
+    await cooldown;
+    expect(h.manager.isRunning(h.sessionId, h.agentId)).toBe(false);
+  });
+
   // Regression: resuming a thread preloads cli_session_id from DB. Before
   // the fix, the dedup in handleParsedEvent compared cliSessionId to the
   // event's id and short-circuited the first init's side effects (status
@@ -993,6 +1398,7 @@ describe('ConversationManager init watchdog', () => {
   // sat in `starting` forever and the UI rendered "connecting".
   it('flips status to active on first init even when cli_session_id is preloaded (resume)', async () => {
     h = await buildManagerHarness();
+    enqueuePendingUserMessage(h, 'watchdog-resume-active-1', 'kickoff');
     h.ctx.db
       .prepare(
         `UPDATE conversation_agents SET cli_session_id = ?
@@ -1014,8 +1420,9 @@ describe('ConversationManager init watchdog', () => {
   // landed" — true by accident on every resume since cliSessionId is
   // preloaded. A wedged resumed CLI then escaped the watchdog and the
   // process was left running with status stuck at `starting`.
-  it('still fires when the resumed CLI never re-emits init', async () => {
+  it('still fires when a resumed CLI with kickoff inbox never re-emits init', async () => {
     h = await buildManagerHarness();
+    enqueuePendingUserMessage(h, 'watchdog-resume-timeout-1', 'kickoff');
     h.ctx.db
       .prepare(
         `UPDATE conversation_agents SET cli_session_id = ?

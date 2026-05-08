@@ -313,8 +313,8 @@ describe('ChannelService.createChannel', () => {
       ).rejects.toThrow('bus failed');
       publish.mockRestore();
       expect(
-        t.conversations.listChannelsForWorkspace(t.workspace.id).some(
-          c => c.title === 'committed-before-bus',
+        t.conversations.listActiveChannelsForWorkspace(t.workspace.id).some(
+          (c: { title: string }) => c.title === 'committed-before-bus',
         ),
       ).toBe(true);
     } finally {
@@ -355,6 +355,55 @@ describe('ChannelService.setPinned', () => {
       await expect(
         t.service.setPinned({ channelId: thread.id, pinned: false }),
       ).rejects.toMatchObject({ code: 'thread' });
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
+describe('ChannelService.setArchived', () => {
+  it('archives and unarchives top-level channels with workspace publish', async () => {
+    const t = bootstrap();
+    try {
+      const events: string[] = [];
+      const unsub = t.events.subscribeScope(`workspace:${t.workspace.id}`, e => {
+        events.push(e.kind);
+      });
+      const archived = await t.service.setArchived({
+        channelId: t.source.id,
+        archived: true,
+      });
+      expect(archived.channel.archived_at).not.toBeNull();
+      expect(t.conversations.get(t.source.id)?.archived_at).not.toBeNull();
+      const unarchived = await t.service.setArchived({
+        channelId: t.source.id,
+        archived: false,
+      });
+      unsub();
+      expect(unarchived.channel.archived_at).toBeNull();
+      expect(t.conversations.get(t.source.id)?.archived_at).toBeNull();
+      expect(events).toEqual([
+        'workspace_channels_changed',
+        'workspace_channels_changed',
+      ]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('rejects threads and missing ids with not_archivable / not_found', async () => {
+    const t = bootstrap();
+    try {
+      await expect(
+        t.service.setArchived({ channelId: 'missing', archived: true }),
+      ).rejects.toMatchObject({ code: 'not_found' });
+      const thread = t.conversations.insertThread({
+        channelId: t.source.id,
+        title: 'thread',
+      });
+      await expect(
+        t.service.setArchived({ channelId: thread.id, archived: true }),
+      ).rejects.toMatchObject({ code: 'not_archivable' });
     } finally {
       t.cleanup();
     }

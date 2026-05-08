@@ -12,7 +12,7 @@
 
 1. **IM 直觉优先**：参考 Slack / Discord 的核心心智模型——左侧 workspace 列表、中间 channel 列表 + 消息流、消息可 hover/save/thread。不引入任何"agent runtime"概念到普通用户视野（events、debug、process status 都属于开发者面板）。
 2. **窗口就是工具**：主窗口给最终用户；调试用的 Events Panel 拆成独立窗口（可 pin 到最前）。
-3. **状态最小化持久层**：用户偏好（sidebar 宽度、theme）走 `localStorage`，跨进程/跨重启的领域状态走 SQLite，不混。
+3. **状态最小化持久层**：用户偏好（sidebar 宽度、sidebar 显隐、theme）走 `localStorage`，跨进程/跨重启的领域状态走 SQLite，不混。
 4. **拒绝乐观跳层**：每个交互都从一个明确的"当前位置"出发——currentWorkspace × currentChannel × currentThread（最多一层）。`Saved` 视图是一个例外的"fly-out"，进入后退出回到上次的 channel。
 5. **平台范围 = macOS**：v1 只目标 macOS，渲染 / 布局 / 自绘 titlebar 都按 mac 优先打磨。**不要为 Win/Linux 写兼容分支**（`frame: false`、自绘窗控按钮、平台 sniff fallback 等等都不要），后面如果要支持，开新分支统一处理，避免主线代码到处 `process.platform !== 'darwin'` 污染。
 
@@ -22,7 +22,7 @@
 
 ```
 ┌──────────────────── Custom Titlebar (drag region) ───────────────────────────┐
-│  [traffic-lights]  workspace-name  ⋯   [icons]      workspace-path …         │
+│  [traffic-lights] [WS] [CH] workspace-name  ⋯  [icons] workspace-path …       │
 ├────┬──────────┬──────────────┬─────────────────────────┬────────────────────┤
 │    │          │              │                         │                    │
 │ Nav│          │              │   Parent ChannelView    │  Thread View       │
@@ -35,9 +35,9 @@
         ↑resize     ↑resize                  ↑split-resize (only when thread open)
 ```
 
-- **NavRail（最左 icon 列）**：宽度固定 `--nav-rail-width: 52px`，不可拖拽。Top-level section 切换：`chat` / `members` / `computers`。底部一个 settings 按钮（独立 action）。当前 section 决定后面三列显示什么——见 §3。
-- **Titlebar**：跨整个窗口宽度。`-webkit-app-region: drag`，按钮 `no-drag`。macOS 用 `titleBarStyle: 'hiddenInset'` + 自绘内容。**Win/Linux 暂不支持**（v1 平台仅 macOS，详见 §0 与 §11），无需为其做兼容处理。
-- **Sidebar / Channels Sidebar**：宽度可拖拽，`localStorage` 持久化。每个有右边一条 4px 的 splitter（hover 时变色）。仅在 NavRail = `chat` 时显示。
+- **NavRail（最左 icon 列）**：宽度固定 `--nav-rail-width: 48px`，不可拖拽。Top-level section 切换：`chat` / `members` / `computers`。底部一个 settings 按钮（独立 action）。当前 section 决定后面三列显示什么——见 §3。
+- **Titlebar**：跨整个窗口宽度。`-webkit-app-region: drag`，按钮 `no-drag`。macOS 用 `titleBarStyle: 'hiddenInset'` + 自绘内容。红绿灯右侧固定放 workspace/channel 两个 sidebar toggle。**Win/Linux 暂不支持**（v1 平台仅 macOS，详见 §0 与 §11），无需为其做兼容处理。
+- **Sidebar / Channels Sidebar**：宽度可拖拽，显隐和宽度都 `localStorage` 持久化。每个可见 sidebar 有右边一条 4px 的 splitter（hover 时变色）。仅在 NavRail = `chat` 时显示；两列都隐藏时进入 chat-only zen，但 NavRail 作为 section 切换器常驻，titlebar toggle 仍是恢复 sidebar 的唯一入口。
 - **Main view（Parent + Thread split）**：默认只有 parent 占满；user 在某条 message 上点 Thread 后才出现 right pane。thread 永远只有一个（再点 Thread 替换当前 thread + 用户确认）。
 - **Events Panel** 不再嵌入主窗口（见 §8）。
 
@@ -55,15 +55,17 @@ CSS variable 仍保留 `--titlebar-height` 和 `--nav-rail-width`（不可主题
 
 | 段 | 内容 | 区域 |
 |----|------|------|
-| traffic-lights 占位 | 80px padding（macOS） | drag |
+| traffic-lights + sidebar toggles | native traffic lights；右侧约 12px 放 workspace / channel 两个独立按钮 | mixed：空区 drag，按钮 no-drag |
 | workspace name | 当前选中 workspace 的 name；ellipsis | drag |
 | more icon | `⋯` 按钮，菜单：Rename / Manage Members / Copy Workspace Path / Delete Workspace | no-drag |
 | icons slot | 预留：theme toggle、help、events window 切换（debug 用，最终走 menu） | no-drag |
 | workspace_path | 右侧 ellipsis + `dir="rtl"`（保留路径尾部） | drag |
 
+> `trafficLightPosition: { x: 12, y: 11 }` 负责红绿灯安全区；toggle group 使用 `--titlebar-sidebar-toggle-left` / `--titlebar-controls-safe-width`，按钮必须带 `no-drag`，避免吃掉原生拖拽/双击最大化。  
+> **Toggle 视觉**（task #171 改）：状态用图标形状表达，不用激活背景色。Workspace toggle 用 `PanelLeft`（visible）↔ `PanelLeftDashed`（hidden）；Channel toggle 用 `Columns2`（visible）↔ `Square`（hidden）。两个按钮使用不同 lucide 家族，便于一眼区分；hover 仅淡化背景，移除原 `bg-row-selected` 选中态。  
 > **More 菜单的 Rename / Delete** 沿用 ChannelsSidebar 现有逻辑（移过来即可），不是新功能。  
 > **Manage Members** 在 DM workspace 下隐藏（同现状）。  
-> 没有 workspace 选中时，titlebar 只显示 traffic-lights + 空 drag 区。
+> 没有 workspace 选中时，titlebar 仍显示 traffic-lights + sidebar toggles + 空 drag 区。
 
 **main 进程改动**：
 
@@ -104,6 +106,8 @@ new BrowserWindow({
 ```
 
 - **Sidebar 仅在 NavRail = `chat` 时显示**。NavRail = `members` / `computers` 时，本列被相应的 MembersPanel / ComputersPanel 替换（仍占同样的 `--sidebar-width`，仍用 `--bg-channels-sidebar` 底色）。
+- 显隐是全局 layout preference：`silverhand:layout.workspace-sidebar-visible` / `silverhand:layout.channel-sidebar-visible`（task #171 改成 per-key 简单 `'1'/'0'`），不随 workspace 切换。titlebar 按钮和 `⌘⇧\` / `⌘\` 双向同步；隐藏时 splitter 也跟着卸载。
+- **Slide 动画**（task #171）：每个 sidebar 是 `.sidebar-slot`（layout/`flex-basis` + `width` 收缩到 0）+ 内层 `.sidebar-surface`（paint/`transform: translate3d` 滑出）的两层结构，240ms `cubic-bezier(0.32, 0.72, 0, 1)` apple-feel 缓动。状态机在 `useSidebarPane`：四态 `closed → opening → open → closing → closed`，open 走 `flushSync` + 双 rAF（保证从 -100% 起跑），close 走 setTimeout 240ms 后卸载 surface；rapid toggle 自动 cancel 旧 timer/rAF；reverse mid-closing 直接翻回 `open` 让 CSS 反向插值。隐藏的 surface 加 `inert` 属性 + `aria-hidden="true"`，移出 a11y 树并禁焦。`prefers-reduced-motion` 同时关 CSS transition 和 JS 状态机的延迟（短路到同步 mount/unmount）。
 - Saved 是**全局唯一入口**（不分 workspace），点击进入 §6 的 Saved List View。
 - 选中 Saved 时 ChannelsSidebar 隐藏或灰显（待定，倾向**整体改成 list 视图**，workspace sidebar 仍然显示让用户能切回去）。
 - **Group header 整行可点击**（含 chevron + label + count），右侧的 `+` action 是独立按钮——避免点错触发折叠。
@@ -111,9 +115,10 @@ new BrowserWindow({
 **宽度持久化（PR6）**：
 
 - 新建 `apps/desktop/src/renderer/hooks/useResizableWidth.ts`
-- localStorage key：`silverhand.layout.sidebar-width` / `silverhand.layout.channels-sidebar-width` / `silverhand.layout.split-ratio`
+- 宽度 localStorage key：`silverhand.layout.sidebar-width` / `silverhand.layout.channels-sidebar-width` / `silverhand.layout.split-ratio`
+- 显隐 localStorage key（task #171 收敛）：`silverhand:layout.workspace-sidebar-visible` / `silverhand:layout.channel-sidebar-visible`，每个独立的 `'1'`/`'0'`，global，不 per-workspace。
 - min/max：`Sidebar` 200–360；`ChannelsSidebar` 200–400；split ratio 0.25–0.75
-- splitter：4px 可点击区，hover 时变 `--accent`，drag 时整个文档加 `cursor: col-resize` + `user-select: none`
+- splitter：4px 可点击区，hover 时变 `--accent`，drag 时整个文档加 `cursor: col-resize` + `user-select: none`。slot/surface 宽度通过 `var(--sidebar-width)` / `var(--channels-sidebar-width)` 引用，drag 期间 CSS var 改值不会触发 transition（CSS 规范），所以 resize 不需要额外抑制。
 
 ---
 
@@ -126,6 +131,44 @@ new BrowserWindow({
 1. **顶部 workspace info block 删除**——内容已迁移到 titlebar（§2）。ChannelsSidebar 顶部只保留 `+` 新建会话按钮和（regular workspace）`Manage Members`。
 2. channel tree 当前实现保留：top-level + thread indent。thread 节点状态：`closed` 删除线 + 灰；`active` 绿点；`crashed` 红点。
 3. 选中 thread 时左侧高亮**也包括其 parent**（视觉提示"你正在看一对"）——split view 下两边各对应一个高亮节点。
+4. 显隐是全局 layout preference：`silverhand:layout.channel-sidebar-visible`（task #171 改成独立 key），titlebar 按钮和 `⌘\` 双向同步；隐藏过程走 §3 的 slot/surface slide 动画，结束后 splitter 卸载。workspace + channel 都隐藏时不做 hover 边缘弹出，NavRail 仍常驻。
+
+---
+
+## 4.5 Context menus
+
+**Status**: Done @ task #170
+
+右键菜单使用 Radix `@radix-ui/react-context-menu`，不使用原生菜单。菜单 token 统一收敛到 `components/menus/AppContextMenu.tsx`：
+
+- 容器：`min-w-[180px] rounded-md border border-border bg-bg-floating p-1 text-xs text-text-primary shadow-lg`
+- item：左侧固定 `size-3.5` icon slot，label `flex-1 truncate`，hover 使用 `data-[highlighted]:bg-bg-hover`
+- separator：`my-1 h-px bg-border-subtle/60`
+
+同文件也导出 `AppDropdownMenu`，用于需要点击打开但应共享同一套 token 的 action menu，例如 ChannelView header 的 `MoreHorizontal`。
+
+### Workspace row
+
+所有 workspace 行一致，包括 regular workspace、DM workspace、archived workspace。DM workspace 也有 `workspace_path`（agent workspace path），不做 disabled 分支。
+
+| Item | Icon | 行为 |
+|---|---|---|
+| Open in Finder | `FolderOpen` | `window.agentHub.showItemInFolder(workspace_path)` |
+| Copy path | `Copy` | `navigator.clipboard.writeText(workspace_path)` + toast |
+
+### Channel row
+
+| Item | Icon | 行为 | 范围 |
+|---|---|---|---|
+| Pin / Unpin | `Pin` / `PinOff` | `pinChannel.mutate({ channelId, pinned: !pinned })` | top-level channel / dm_channel；thread 隐藏 |
+| Archive / Restore | `Archive` / `ArchiveRestore` | `archiveChannel.mutate({ channelId, archived: !archived })` | regular workspace 的 top-level `channel`；DM channel 与 thread 隐藏 |
+| Copy name | `Copy` | `navigator.clipboard.writeText(channel.title)` + toast | channel / dm_channel / thread 全部可用 |
+
+Thread 行本批只提供 `Copy name`，不扩展 pin/archive 语义，保持 top-level-only 规则。
+
+### ChannelView header More
+
+ChannelView 头部的 `MoreHorizontal` 点击菜单继续保持 dropdown 交互，不改成右键；但样式迁到 `AppDropdownMenu` 同一套 token。当前条目为 Archive / Restore（沿用 `canToggleArchive`：regular workspace、top-level channel）。
 
 ---
 

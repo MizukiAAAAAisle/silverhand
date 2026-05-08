@@ -27,6 +27,8 @@ import {
   UpdateAgentInputSchema,
   UpdateWorkspaceInputSchema,
   ArchiveWorkspaceInputSchema,
+  ArchiveChannelInputSchema,
+  ArchivedChannelsQueryInputSchema,
   UpdateTaskStatusInputSchema,
   type AgentDto,
   type AgentDeleteImpactDto,
@@ -103,6 +105,7 @@ const repoErrorStatusMap: Record<string, 400 | 404 | 409 | 429> = {
   spawn_cooldown: 429,
   not_found: 404,
   thread: 400,
+  not_archivable: 400,
 };
 
 function channelServiceErrorResponse(c: Context, err: unknown): Response | null {
@@ -225,7 +228,8 @@ function onboardingBody(
       ? `You're the only agent here right now.`
       : `Other agents in this workspace:\n${others.map(m => `- @${m.name} (${m.runtime})`).join('\n')}`,
     ``,
-    `Send one short greeting — name yourself and, in one sentence, say what your current role looks like (or note that it's not yet defined). Then wait for the user.`,
+    `This is your first onboarding message in this workspace. Before replying, read the seeded onboarding guide note for internal guidance; do not mention internal file paths unless the user asks.`,
+    `Send one short greeting: name yourself, state your current workspace role briefly (or say it is not defined yet), and ask what the user wants you to mainly do here (architecture, implementation, review, testing, or research are all valid).`,
   ].join('\n');
 }
 
@@ -294,7 +298,7 @@ function isChannelSwitchDiagnosticPath(path: string): boolean {
   if (path === apiPaths.messageUnreadSummary) {
     return true;
   }
-  if (/^\/api\/workspaces\/[^/]+\/channels$/.test(path)) return true;
+  if (/^\/api\/workspaces\/[^/]+\/channels(\/archived)?$/.test(path)) return true;
   if (
     /^\/api\/channels\/[^/]+\/(messages|agents|agent-run-states|threads|mark-read|message-unread)$/.test(
       path,
@@ -520,7 +524,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!updated) return c.json({ error: 'workspace update failed' }, 500);
 
     if (parsed.data.name && parsed.data.name !== workspace.name) {
-      for (const channel of conversations.listChannelsForWorkspace(workspace.id)) {
+      for (const channel of conversations.listAllChannelsForWorkspace(workspace.id)) {
         if (channel.closed_at !== null) continue;
         const announce = messages.insertForConversation({
           conversationId: channel.id,
@@ -624,9 +628,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       workspace.workspace_kind === 'regular'
         ? timedRouteSpan(
             ctx,
-            'workspace.channels.list',
+            'workspace.channels.list_active',
             { workspaceId: workspace.id },
-            () => conversations.listChannelsForWorkspace(workspace.id),
+            () => conversations.listActiveChannelsForWorkspace(workspace.id),
             result => ({ channelCount: result.length }),
           )
         : timedRouteSpan(
@@ -636,17 +640,109 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
             () => conversations.listDmChannelsForWorkspace(workspace.id),
             result => ({ channelCount: result.length }),
           );
-    const threads = timedRouteSpan(
-      ctx,
-      'workspace.threads.list',
-      { workspaceId: workspace.id },
-      () => conversations.listThreadsForWorkspace(workspace.id),
-      result => ({ threadCount: result.length }),
-    );
+    // Active endpoint only returns threads whose parent is also active —
+    // the response is a self-contained tree, no orphan threads.
+    const threads =
+      workspace.workspace_kind === 'regular'
+        ? timedRouteSpan(
+            ctx,
+            'workspace.threads.list_active',
+            { workspaceId: workspace.id },
+            () =>
+              conversations.listThreadsForWorkspace(workspace.id, {
+                parentArchived: false,
+              }),
+            result => ({ threadCount: result.length }),
+          )
+        : timedRouteSpan(
+            ctx,
+            'workspace.threads.list',
+            { workspaceId: workspace.id },
+            () => conversations.listThreadsForWorkspace(workspace.id),
+            result => ({ threadCount: result.length }),
+          );
     return c.json({
       channels,
       threads,
     });
+  });
+
+  app.get(apiPaths.workspaceArchivedChannels(':id'), c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'workspace id required' }, 400);
+    const workspace = workspaces.get(id);
+    if (!workspace) {
+      return c.json({ error: 'workspace not found' }, 404);
+    }
+    if (!canViewWorkspace(ctx, getUserPrincipal(c), workspace.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    // agent_home workspaces don't support channel archive (their only
+    // conversation is the dm_channel). Return an empty tree so the
+    // frontend can call this hook unconditionally.
+    if (workspace.workspace_kind !== 'regular') {
+      return c.json({ channels: [], threads: [] });
+    }
+    const channels = timedRouteSpan(
+      ctx,
+      'workspace.channels.list_archived',
+      { workspaceId: workspace.id },
+      () => conversations.listArchivedChannelsForWorkspace(workspace.id),
+      result => ({ channelCount: result.length }),
+    );
+    const threads = timedRouteSpan(
+      ctx,
+      'workspace.threads.list_archived',
+      { workspaceId: workspace.id },
+      () =>
+        conversations.listThreadsForWorkspace(workspace.id, {
+          parentArchived: true,
+        }),
+      result => ({ threadCount: result.length }),
+    );
+    return c.json({ channels, threads });
+  });
+
+  app.get(apiPaths.archivedChannels, c => {
+    const principal = getUserPrincipal(c);
+    const parsed = ArchivedChannelsQueryInputSchema.safeParse({
+      workspace_id: c.req.query('workspace_id'),
+      since: c.req.query('since'),
+    });
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    if (
+      parsed.data.workspace_id !== undefined &&
+      !canViewWorkspace(ctx, principal, parsed.data.workspace_id)
+    ) {
+      // Mirror the workspace-scoped endpoint: 404 when the workspace
+      // doesn't exist, 403 when the caller can't see it. v1 user can
+      // see every workspace, so this is mostly future-proofing.
+      const exists = workspaces.get(parsed.data.workspace_id);
+      return c.json(
+        { error: exists ? 'forbidden' : 'workspace not found' },
+        exists ? 403 : 404,
+      );
+    }
+    const rows = timedRouteSpan(
+      ctx,
+      'archived_channels.list',
+      {
+        workspaceFilter: parsed.data.workspace_id ?? null,
+        since: parsed.data.since ?? null,
+      },
+      () =>
+        conversations.listArchivedChannelsAggregate({
+          workspaceId: parsed.data.workspace_id,
+          since: parsed.data.since,
+        }),
+      result => ({ rowCount: result.length }),
+    );
+    // v1 user can view every workspace, so we don't need to filter `rows`
+    // here. Once a real workspace ACL exists this filter will be the
+    // single chokepoint that enforces it.
+    return c.json({ channels: rows });
   });
 
   app.post(apiPaths.workspaceChannels(':id'), async c => {
@@ -985,6 +1081,32 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     }
     try {
       const result = await ctx.channelService.setPinned({ channelId: id, pinned: false });
+      return c.json({ channel: result.channel });
+    } catch (err) {
+      const mapped = channelServiceErrorResponse(c, err);
+      if (mapped) return mapped;
+      throw err;
+    }
+  });
+
+  app.patch(apiPaths.channelArchive(':id'), async c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'channel id required' }, 400);
+    const conversation = conversations.get(id);
+    if (!conversation) return c.json({ error: 'channel not found' }, 404);
+    if (!canMutateWorkspace(ctx, getUserPrincipal(c), conversation.workspace_id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = ArchiveChannelInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    try {
+      const result = await ctx.channelService.setArchived({
+        channelId: id,
+        archived: parsed.data.archived,
+      });
       return c.json({ channel: result.channel });
     } catch (err) {
       const mapped = channelServiceErrorResponse(c, err);
@@ -1392,7 +1514,8 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
         fromKind: 'system',
         content: [
           `You (@${agent.name}) are now in your personal DM with the user.`,
-          `Send one short greeting — say hi by name and ask what role the user would like you to play. Then wait for their reply.`,
+          `Before replying, read the seeded onboarding guide note for internal guidance; do not mention internal file paths unless the user asks.`,
+          `Send one short greeting: say hi by name, state your current global role briefly (or say it is not defined yet), and ask what role the user would like you to play.`,
         ].join('\n'),
         metadata: { subtype: 'onboarding' },
       });

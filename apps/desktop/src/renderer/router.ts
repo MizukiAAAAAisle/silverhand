@@ -15,6 +15,7 @@ export const routes = {
   chat: () => '/chat',
   chatSearch: () => '/chat/search',
   chatSaved: () => '/chat/saved',
+  chatArchived: () => '/chat/archived',
   chatWorkspace: (workspaceId: string) => `/chat/w/${workspaceId}`,
   chatChannel: (workspaceId: string, channelId: string) =>
     `/chat/w/${workspaceId}/c/${channelId}`,
@@ -31,6 +32,7 @@ export const routePatterns = {
   chatThread: '/chat/w/:workspaceId/c/:channelId/t/:threadId',
   chatChannel: '/chat/w/:workspaceId/c/:channelId',
   chatWorkspace: '/chat/w/:workspaceId',
+  chatArchived: '/chat/archived',
   chatSearch: '/chat/search',
   chatSaved: '/chat/saved',
   chat: '/chat',
@@ -41,7 +43,7 @@ export const routePatterns = {
   settings: '/settings',
 } as const;
 
-export type ChatView = 'channel' | 'saved' | 'search';
+export type ChatView = 'channel' | 'saved' | 'search' | 'archived';
 
 /**
  * Resolved view of the current URL. Components read this instead of
@@ -86,7 +88,9 @@ export function useRouteState(): RouteState {
     ? 'saved'
     : pathname.startsWith('/chat/search')
       ? 'search'
-      : 'channel';
+      : pathname.startsWith('/chat/archived')
+        ? 'archived'
+        : 'channel';
 
   return {
     section,
@@ -108,6 +112,7 @@ export function useNav(): {
   toChat: () => void;
   toChatSearch: () => void;
   toChatSaved: () => void;
+  toChatArchived: () => void;
   toWorkspace: (workspaceId: string) => void;
   toChannel: (workspaceId: string, channelId: string) => void;
   toThread: (workspaceId: string, channelId: string, threadId: string) => void;
@@ -127,6 +132,7 @@ export function useNav(): {
     toChat: useCallback(() => go(routes.chat()), [go]),
     toChatSearch: useCallback(() => go(routes.chatSearch()), [go]),
     toChatSaved: useCallback(() => go(routes.chatSaved()), [go]),
+    toChatArchived: useCallback(() => go(routes.chatArchived()), [go]),
     toWorkspace: useCallback((id: string) => go(routes.chatWorkspace(id)), [go]),
     toChannel: useCallback(
       (wid: string, cid: string) => go(routes.chatChannel(wid, cid)),

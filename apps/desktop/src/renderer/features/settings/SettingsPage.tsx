@@ -1,32 +1,49 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  Check,
+  CheckCircle2,
+  Loader2,
+  Network,
+  Palette,
+  Save,
+} from 'lucide-react';
 import type { RuntimeKind } from '@silverhand/shared';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { api } from '@/lib/api';
+import { cn } from '@/lib/cn';
 import { useAppearance } from '@/hooks/useAppearance';
 import { THEME_IDS, type ThemeId } from '@/settings/types';
 
 const settingsKey = ['settings'] as const;
 
 /** 4-color swatch preview and display name for each theme. */
-const THEME_META: Record<ThemeId, { label: string; bg: string; surface: string; text: string; accent: string }> = {
+const THEME_META: Record<
+  ThemeId,
+  { label: string; bg: string; surface: string; text: string; accent: string }
+> = {
   'paper-ink': {
     label: 'Paper Ink',
-    bg: '#FFFAEF', surface: '#EFE5CE', text: '#1F1B14', accent: '#3F5C6E',
+    bg: '#FAF4E4',
+    surface: '#F2EAD2',
+    text: '#1A1611',
+    accent: '#263A42',
   },
   'warm-coral': {
     label: 'Warm Coral',
-    bg: '#F9F9F7', surface: '#F3F3F0', text: '#1A1A18', accent: '#CC7D5E',
-  },
-  'porcelain-verdigris': {
-    label: 'Mulberry Ink',
-    bg: '#FAF7F8', surface: '#F1ECEE', text: '#241D21', accent: '#8A2F55',
+    bg: '#F9F9F7',
+    surface: '#F3F3F0',
+    text: '#1A1A18',
+    accent: '#B5651D',
   },
   'warm-script': {
     label: 'Warm Script',
-    bg: '#F8F6F2', surface: '#F3EFE8', text: '#1F1B14', accent: '#2D2316',
+    bg: '#F8F6F2',
+    surface: '#F3EFE8',
+    text: '#1F1B14',
+    accent: '#FFD440',
   },
 };
 
@@ -128,154 +145,268 @@ export function SettingsPage(): JSX.Element {
   );
 
   return (
-    <main className="flex h-full flex-1 flex-col bg-bg-base">
-      <header className="flex h-[var(--titlebar-height)] shrink-0 items-center gap-2 border-b border-border-subtle px-4">
-        <span className="font-serif text-sm font-semibold text-text-primary">
-          Settings
-        </span>
-        <span className="text-xs text-text-muted">
-          主机级设置；只对未来 spawn 的 agent 进程生效
+    <main
+      className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-chat"
+      style={{
+        borderRadius: 'var(--card-radius, 0)',
+        boxShadow: 'var(--card-shadow, none)',
+      }}
+    >
+      <header className="flex h-[var(--titlebar-height)] shrink-0 items-center justify-between gap-3 border-b border-border-subtle px-5">
+        <div className="flex min-w-0 items-baseline gap-2">
+          <span className="font-serif text-sm font-semibold text-text-primary">
+            Settings
+          </span>
+          <span className="truncate text-xs text-text-muted">
+            Host-level preferences for future agent processes
+          </span>
+        </div>
+        <span className="shrink-0 text-[11px] font-medium text-text-muted">
+          Local
         </span>
       </header>
 
-      <div className="flex-1 overflow-y-auto px-6 py-6">
-        <form
-          onSubmit={handleSubmit}
-          className="mx-auto flex w-full max-w-2xl flex-col gap-6"
-        >
-          {/* ── Appearance ── */}
-          <section className="flex flex-col gap-3">
-            <h2 className="font-serif text-base font-semibold text-text-primary">
-              外观 (Appearance)
-            </h2>
-            <div className="flex flex-wrap gap-3">
-              {THEME_IDS.map(id => {
-                const meta = THEME_META[id];
-                const active = appearance.theme === id;
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => setTheme(id)}
-                    className={`flex flex-col items-start gap-1.5 rounded-lg border-2 p-2.5 transition-colors ${
-                      active
-                        ? 'border-accent'
-                        : 'border-transparent hover:border-border'
-                    }`}
-                    style={{ background: meta.bg }}
-                  >
-                    {/* 4-color swatch row */}
-                    <div className="flex gap-1">
-                      {[meta.bg, meta.surface, meta.text, meta.accent].map((c, i) => (
-                        <span
-                          key={i}
-                          className="h-4 w-4 rounded-full border border-black/10"
-                          style={{ background: c }}
-                        />
-                      ))}
-                    </div>
-                    <span
-                      className="text-xs font-medium"
-                      style={{ color: meta.text }}
-                    >
-                      {meta.label}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-
-          <div className="border-t border-border-subtle" />
-
-          <section className="flex flex-col gap-3">
-            <h2 className="font-serif text-base font-semibold text-text-primary">
-              代理 (Proxy)
-            </h2>
-
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="proxy-url">Proxy URL</Label>
-              <Input
-                id="proxy-url"
-                value={proxyUrl}
-                onChange={e => setProxyUrl(e.target.value)}
-                placeholder="127.0.0.1:7897 / http://… / socks5://…"
-                disabled={settingsQuery.isLoading}
-              />
-              <p className="text-xs text-text-muted">
-                注入到下方勾选 runtime 的 agent 子进程，会自动展开成{' '}
-                <code>http_proxy</code> / <code>https_proxy</code> /{' '}
-                <code>all_proxy</code>（含大写）。bare host:port 或{' '}
-                <code>http://</code> 假设是 Clash 这类 mixed-port，HTTP 用{' '}
-                <code>http://</code>、<code>all_proxy</code> 用{' '}
-                <code>socks5://</code>；填 <code>socks5://</code> 则只设{' '}
-                <code>all_proxy</code>。
-              </p>
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <div className="flex items-center justify-between">
-                <Label>对哪些 runtime 生效</Label>
-                <button
-                  type="button"
-                  className="text-xs text-text-muted hover:text-text-primary"
-                  onClick={() => {
-                    if (allChecked) setProxyRuntimes(new Set());
-                    else
-                      setProxyRuntimes(new Set(ALL_RUNTIMES.map(r => r.kind)));
-                  }}
-                >
-                  {allChecked ? '全不选' : '全选'}
-                </button>
-              </div>
-              <div
-                className={`flex flex-col gap-1 rounded-md border border-border-subtle p-2 ${
-                  proxyEnabled ? '' : 'opacity-50'
-                }`}
+      <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
+          <div className="mx-auto w-full max-w-3xl">
+            <div className="min-w-0 space-y-8">
+              <SettingsSection
+                id="settings-appearance"
+                icon={<Palette className="size-4" />}
+                title="Appearance"
+                description="Choose the visual theme used across the workspace shell and chat UI."
               >
-                {ALL_RUNTIMES.map(runtime => (
-                  <label
-                    key={runtime.kind}
-                    className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 hover:bg-bg-hover"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={proxyRuntimes.has(runtime.kind)}
-                      onChange={e =>
-                        toggleRuntime(runtime.kind, e.target.checked)
-                      }
-                      disabled={!proxyEnabled}
-                    />
-                    <AgentAvatar runtime={runtime.kind} size={20} />
-                    <span className="text-sm">{runtime.label}</span>
-                    <span className="text-xs text-text-muted">
-                      ({runtime.kind})
-                    </span>
-                  </label>
-                ))}
-              </div>
-              {!proxyEnabled ? (
-                <p className="text-xs text-text-muted">
-                  填了 Proxy URL 后才能勾选。
-                </p>
-              ) : null}
-            </div>
-          </section>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {THEME_IDS.map(id => {
+                    const meta = THEME_META[id];
+                    const active = appearance.theme === id;
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() => setTheme(id)}
+                        className={cn(
+                          'group relative flex min-h-[92px] flex-col items-start justify-between overflow-hidden rounded-[10px] border-2 p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus',
+                          active
+                            ? 'border-accent'
+                            : 'border-border-subtle hover:border-accent',
+                        )}
+                        style={{
+                          background: `linear-gradient(135deg, ${meta.bg}, ${meta.surface})`,
+                        }}
+                      >
+                        <div className="flex gap-1">
+                          {[meta.bg, meta.surface, meta.text, meta.accent].map(
+                            c => (
+                              <span
+                                key={c}
+                                className="size-4 rounded-full border border-black/10"
+                                style={{ background: c }}
+                              />
+                            ),
+                          )}
+                        </div>
+                        <div className="mt-4 flex w-full items-center justify-between gap-2">
+                          <span
+                            className="min-w-0 truncate text-xs font-semibold"
+                            style={{ color: meta.text }}
+                          >
+                            {meta.label}
+                          </span>
+                          {active ? (
+                            <span
+                              className="flex size-5 shrink-0 items-center justify-center rounded-full"
+                              style={{
+                                background: meta.accent,
+                                color: meta.bg,
+                              }}
+                              aria-label="Current theme"
+                            >
+                              <Check className="size-3" />
+                            </span>
+                          ) : null}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </SettingsSection>
 
-          <div className="flex items-center gap-3 border-t border-border-subtle pt-4">
+              <SettingsSection
+                id="settings-proxy"
+                icon={<Network className="size-4" />}
+                title="Proxy"
+                description="Proxy configuration is injected only into newly spawned agent processes."
+              >
+                <div className="grid gap-5">
+                  <div className="grid gap-2">
+                    <Label htmlFor="proxy-url">Proxy URL</Label>
+                    <Input
+                      id="proxy-url"
+                      value={proxyUrl}
+                      onChange={e => setProxyUrl(e.target.value)}
+                      placeholder="127.0.0.1:7897 / http://... / socks5://..."
+                      disabled={settingsQuery.isLoading}
+                    />
+                    <p className="text-xs leading-relaxed text-text-muted">
+                      Expands into <code>http_proxy</code>,{' '}
+                      <code>https_proxy</code>, and <code>all_proxy</code> for
+                      selected runtimes. A bare host:port or <code>http://</code>{' '}
+                      value is treated as a mixed-port proxy;{' '}
+                      <code>socks5://</code> only sets <code>all_proxy</code>.
+                    </p>
+                  </div>
+
+                  <div className="grid gap-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <Label>Enabled runtimes</Label>
+                      <button
+                        type="button"
+                        disabled={!proxyEnabled}
+                        className="text-xs font-medium text-text-muted hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+                        onClick={() => {
+                          if (allChecked) setProxyRuntimes(new Set());
+                          else {
+                            setProxyRuntimes(
+                              new Set(ALL_RUNTIMES.map(r => r.kind)),
+                            );
+                          }
+                        }}
+                      >
+                        {allChecked ? 'Clear all' : 'Select all'}
+                      </button>
+                    </div>
+
+                    <div
+                      className={cn(
+                        'grid gap-2 sm:grid-cols-2',
+                        !proxyEnabled && 'opacity-55',
+                      )}
+                    >
+                      {ALL_RUNTIMES.map(runtime => {
+                        const checked = proxyRuntimes.has(runtime.kind);
+                        return (
+                          <label
+                            key={runtime.kind}
+                            className={cn(
+                              'flex min-w-0 items-center gap-3 rounded-[6px] border px-3 py-2 transition-colors',
+                              proxyEnabled
+                                ? 'cursor-pointer'
+                                : 'cursor-not-allowed',
+                              checked
+                                ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))]'
+                                : 'border-border-subtle bg-bg-floating hover:bg-[var(--bg-row-hover,var(--bg-hover))]',
+                            )}
+                          >
+                            <input
+                              type="checkbox"
+                              className="sr-only"
+                              checked={checked}
+                              onChange={e =>
+                                toggleRuntime(runtime.kind, e.target.checked)
+                              }
+                              disabled={!proxyEnabled}
+                            />
+                            <span
+                              className={cn(
+                                'flex size-4 shrink-0 items-center justify-center rounded-[4px] border',
+                                checked
+                                  ? 'border-accent bg-accent text-text-on-accent'
+                                  : 'border-border-subtle bg-bg-floating text-transparent',
+                              )}
+                              aria-hidden
+                            >
+                              <Check className="size-3" />
+                            </span>
+                            <AgentAvatar runtime={runtime.kind} size={22} />
+                            <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
+                              {runtime.label}
+                            </span>
+                            <span className="shrink-0 font-mono text-[11px] text-text-muted">
+                              {runtime.kind}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    {!proxyEnabled ? (
+                      <p className="text-xs text-text-muted">
+                        Add a Proxy URL before selecting runtimes.
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+              </SettingsSection>
+            </div>
+          </div>
+        </div>
+
+        <footer className="shrink-0 border-t border-border-subtle bg-bg-chat px-6 py-3">
+          <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-4">
+            <div className="min-w-0 text-xs">
+              {error ? (
+                <span className="text-error">{error}</span>
+              ) : saved ? (
+                <span className="inline-flex items-center gap-1.5 text-success">
+                  <CheckCircle2 className="size-3.5" />
+                  Saved
+                </span>
+              ) : (
+                <span className="text-text-muted">
+                  Changes are saved to host settings.
+                </span>
+              )}
+            </div>
             <Button
               type="submit"
               disabled={save.isPending || settingsQuery.isLoading}
             >
-              {save.isPending ? '保存中…' : '保存'}
+              {save.isPending ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Save className="size-3.5" />
+              )}
+              {save.isPending ? 'Saving...' : 'Save settings'}
             </Button>
-            {saved ? (
-              <span className="text-xs text-success">已保存</span>
-            ) : null}
-            {error ? <span className="text-xs text-error">{error}</span> : null}
           </div>
-        </form>
-      </div>
+        </footer>
+      </form>
     </main>
+  );
+}
+
+function SettingsSection({
+  id,
+  icon,
+  title,
+  description,
+  children,
+}: {
+  id: string;
+  icon: ReactNode;
+  title: string;
+  description: string;
+  children: ReactNode;
+}): JSX.Element {
+  return (
+    <section
+      id={id}
+      className="scroll-mt-6 grid gap-4 border-b border-border-subtle pb-8 last:border-b-0 last:pb-0"
+    >
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-[6px] bg-bg-elevated text-text-secondary">
+          {icon}
+        </span>
+        <div className="min-w-0">
+          <h2 className="font-serif text-base font-semibold text-text-primary">
+            {title}
+          </h2>
+          <p className="mt-0.5 text-xs leading-relaxed text-text-muted">
+            {description}
+          </p>
+        </div>
+      </div>
+      <div className="min-w-0">{children}</div>
+    </section>
   );
 }

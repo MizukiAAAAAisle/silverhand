@@ -1,23 +1,48 @@
 import { useState } from 'react';
-import { MessageSquare, Pin, PinOff } from 'lucide-react';
+import {
+  Archive,
+  ArchiveRestore,
+  Copy,
+  CornerDownRight,
+  Hash,
+  MessageSquareText,
+  Pin,
+  PinOff,
+} from 'lucide-react';
+import { toast } from 'sonner';
+import {
+  AppContextMenu,
+  AppContextMenuItem,
+  AppContextMenuSeparator,
+} from '@/components/menus/AppContextMenu';
+
+type WorkspaceUiKind = 'regular' | 'dm';
 
 interface ChannelNode {
   id: string;
   title: string;
+  kind: 'channel' | 'dm_channel' | 'thread';
   status: 'active' | 'idle' | 'crashed';
   parent_channel_id: string | null;
   closed_at: number | null;
   pinned_at: number | null;
+  archived_at: number | null;
 }
 
 interface ChannelsSidebarProps {
   /** null when no workspace is selected — used only to choose the empty
    *  hint copy. Workspace name + actions live in the titlebar now. */
   workspaceName: string | null;
+  /** Active (non-archived) channels and their threads, server-filtered.
+   *  Archived channels live on a dedicated chat tool page; the workspace
+   *  channel tree only shows active rows. */
   channels: ChannelNode[];
+  workspaceKind: WorkspaceUiKind | null;
   selectedChannelId: string | null;
   onSelectChannel: (id: string) => void;
   onPinChannel: (channelId: string, pinned: boolean) => void;
+  onArchiveChannel: (channelId: string, archived: boolean) => void;
+  archivePending?: boolean;
   /** Unread notification counts keyed by channel id. Used to render
    *  per-channel badges. Missing key ≡ zero. */
   unreadByChannel?: Record<string, number>;
@@ -26,9 +51,12 @@ interface ChannelsSidebarProps {
 export function ChannelsSidebar({
   workspaceName,
   channels,
+  workspaceKind,
   selectedChannelId,
   onSelectChannel,
   onPinChannel,
+  onArchiveChannel,
+  archivePending = false,
   unreadByChannel = {},
 }: ChannelsSidebarProps): JSX.Element {
   // Pinned top-level channels float above unpinned ones. The backend
@@ -70,6 +98,9 @@ export function ChannelsSidebar({
                 selectedChannelId={selectedChannelId}
                 onSelect={onSelectChannel}
                 onPin={onPinChannel}
+                onArchive={onArchiveChannel}
+                archivePending={archivePending}
+                workspaceKind={workspaceKind}
                 unreadByChannel={unreadByChannel}
               />
             ))}
@@ -86,6 +117,9 @@ export function ChannelsSidebar({
                 selectedChannelId={selectedChannelId}
                 onSelect={onSelectChannel}
                 onPin={onPinChannel}
+                onArchive={onArchiveChannel}
+                archivePending={archivePending}
+                workspaceKind={workspaceKind}
                 unreadByChannel={unreadByChannel}
               />
             ))}
@@ -108,6 +142,9 @@ function ChannelTreeItem({
   selectedChannelId,
   onSelect,
   onPin,
+  onArchive,
+  archivePending,
+  workspaceKind,
   unreadByChannel,
 }: {
   channel: ChannelNode;
@@ -115,6 +152,9 @@ function ChannelTreeItem({
   selectedChannelId: string | null;
   onSelect: (id: string) => void;
   onPin: (channelId: string, pinned: boolean) => void;
+  onArchive: (channelId: string, archived: boolean) => void;
+  archivePending: boolean;
+  workspaceKind: WorkspaceUiKind | null;
   unreadByChannel: Record<string, number>;
 }): JSX.Element {
   return (
@@ -125,6 +165,9 @@ function ChannelTreeItem({
         selected={channel.id === selectedChannelId}
         onClick={() => onSelect(channel.id)}
         onPin={onPin}
+        onArchive={onArchive}
+        archivePending={archivePending}
+        workspaceKind={workspaceKind}
         unreadCount={unreadByChannel[channel.id] ?? 0}
       />
       {childChannels.length > 0 ? (
@@ -137,6 +180,9 @@ function ChannelTreeItem({
                 selected={child.id === selectedChannelId}
                 onClick={() => onSelect(child.id)}
                 onPin={onPin}
+                onArchive={onArchive}
+                archivePending={archivePending}
+                workspaceKind={workspaceKind}
                 unreadCount={unreadByChannel[child.id] ?? 0}
               />
             </li>
@@ -153,6 +199,9 @@ function ChannelRow({
   selected,
   onClick,
   onPin,
+  onArchive,
+  archivePending,
+  workspaceKind,
   unreadCount,
 }: {
   channel: ChannelNode;
@@ -160,10 +209,14 @@ function ChannelRow({
   selected: boolean;
   onClick: () => void;
   onPin: (channelId: string, pinned: boolean) => void;
+  onArchive: (channelId: string, archived: boolean) => void;
+  archivePending: boolean;
+  workspaceKind: WorkspaceUiKind | null;
   unreadCount: number;
 }): JSX.Element {
   const isClosed = channel.closed_at !== null;
   const isPinned = channel.pinned_at !== null;
+  const isArchived = channel.archived_at !== null;
   const [hovered, setHovered] = useState(false);
 
   // Show the pin control only for top-level channels (threads can't be
@@ -172,14 +225,18 @@ function ChannelRow({
   // semantics are correct. stopPropagation prevents the row click handler
   // from firing when the pin button is activated.
   const showPin = depth === 0 && (hovered || isPinned);
+  const showPinMenu = depth === 0;
+  const showArchiveMenu =
+    depth === 0 && workspaceKind === 'regular' && channel.kind === 'channel';
+  const hasManagementMenu = showPinMenu || showArchiveMenu;
 
   const rowBg = selected
     ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
     : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary';
 
-  return (
+  const row = (
     <div
-      className={'flex w-full items-stretch border-2 transition-colors ' + rowBg}
+      className={'sidebar-row-border flex w-full items-stretch border transition-colors ' + rowBg}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
@@ -193,26 +250,23 @@ function ChannelRow({
         }
       >
         {depth === 1 ? (
-          <span className="text-text-muted/60">↳</span>
+          <CornerDownRight className="size-3 shrink-0 text-text-muted/60" />
         ) : null}
-        <MessageSquare
-          className={
-            'size-3.5 shrink-0 ' +
-            (isClosed ? 'text-text-muted/50' : 'text-text-muted')
-          }
-        />
-        <span
-          className={
-            'size-1.5 shrink-0 rounded-full ' +
-            (isClosed
-              ? 'bg-text-muted/30'
-              : channel.status === 'active'
-                ? 'bg-success'
-                : channel.status === 'crashed'
-                  ? 'bg-error'
-                  : 'bg-text-muted/50')
-          }
-        />
+        {depth === 1 ? (
+          <MessageSquareText
+            className={
+              'size-3.5 shrink-0 ' +
+              (isClosed ? 'text-text-muted/50' : 'text-text-muted')
+            }
+          />
+        ) : (
+          <Hash
+            className={
+              'size-3.5 shrink-0 ' +
+              (isClosed ? 'text-text-muted/50' : 'text-text-muted')
+            }
+          />
+        )}
         <span
           className={
             'min-w-0 truncate ' + (isClosed ? 'line-through text-text-muted' : '')
@@ -260,4 +314,56 @@ function ChannelRow({
       ) : null}
     </div>
   );
+
+  return (
+    <AppContextMenu trigger={row}>
+      {showPinMenu ? (
+        <AppContextMenuItem
+          icon={
+            isPinned ? (
+              <PinOff className="size-3.5" />
+            ) : (
+              <Pin className="size-3.5" />
+            )
+          }
+          onSelect={() => onPin(channel.id, !isPinned)}
+        >
+          {isPinned ? 'Unpin' : 'Pin'}
+        </AppContextMenuItem>
+      ) : null}
+      {showArchiveMenu ? (
+        <AppContextMenuItem
+          icon={
+            isArchived ? (
+              <ArchiveRestore className="size-3.5" />
+            ) : (
+              <Archive className="size-3.5" />
+            )
+          }
+          disabled={archivePending}
+          onSelect={() => onArchive(channel.id, !isArchived)}
+        >
+          {isArchived ? 'Restore channel' : 'Archive channel'}
+        </AppContextMenuItem>
+      ) : null}
+      {hasManagementMenu ? <AppContextMenuSeparator /> : null}
+      <AppContextMenuItem
+        icon={<Copy className="size-3.5" />}
+        onSelect={() => {
+          void copyChannelName(channel.title);
+        }}
+      >
+        Copy name
+      </AppContextMenuItem>
+    </AppContextMenu>
+  );
+}
+
+async function copyChannelName(name: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(name);
+    toast.success('已复制名称');
+  } catch {
+    toast.error('复制名称失败');
+  }
 }

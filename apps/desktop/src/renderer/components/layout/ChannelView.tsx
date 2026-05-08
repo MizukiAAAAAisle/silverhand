@@ -7,7 +7,18 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { ArrowDown, Maximize2, Minimize2, X } from 'lucide-react';
+import {
+  Archive,
+  ArchiveRestore,
+  ArrowDown,
+  CornerDownRight,
+  Maximize2,
+  Minimize2,
+  MoreHorizontal,
+  Power,
+  RefreshCw,
+  X,
+} from 'lucide-react';
 import type {
   AgentDto,
   AgentRunState,
@@ -17,12 +28,16 @@ import type {
 } from '@silverhand/shared';
 import { Composer } from '@/components/chat/Composer';
 import { MessageItem } from '@/components/chat/MessageItem';
-import { AgentActivityBubble } from '@/components/chat/AgentActivityBubble';
+import { AgentActivityStrip } from '@/components/chat/AgentActivityBubble';
 import { QuotedMessagePreview } from '@/components/chat/QuotedMessagePreview';
 import { findThreadAnchor, readAnchorMessageId } from '@/components/chat/threadAnchor';
 import { SystemMessage } from '@/components/chat/SystemMessage';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
+import {
+  AppDropdownMenu,
+  AppDropdownMenuItem,
+} from '@/components/menus/AppContextMenu';
 import { useAgents } from '@/features/agents/hooks';
 import { useWorkspaces } from '@/features/workspaces/hooks';
 import {
@@ -36,6 +51,8 @@ import {
   useChannelMessages,
   useAgentRunStates,
   useMarkMessageChannelRead,
+  useStartAgent,
+  useStopAgent,
 } from '@/features/channels/hooks';
 import { useConversationStream } from '@/hooks/useConversationStream';
 import type { WorkspaceReference } from '@/components/chat/ChannelRef';
@@ -45,8 +62,10 @@ type WorkspaceUiKind = 'regular' | 'dm';
 interface ChannelDescriptor {
   id: string;
   title: string;
+  kind: 'channel' | 'dm_channel' | 'thread';
   parent_conversation_id: string | null;
   closed_at: number | null;
+  archived_at: number | null;
   workspace_id: string;
 }
 
@@ -90,6 +109,10 @@ interface ChannelViewProps {
   /** Whether the thread pane is currently fullscreen. Drives the icon
    *  toggle (Maximize2 ↔ Minimize2). */
   isFullscreen?: boolean;
+  /** Toggle archive state for top-level regular channels. Archive is
+   *  organizational only — it does not disable messaging or agents. */
+  onArchiveChannel?: (channelId: string, archived: boolean) => void;
+  archivePending?: boolean;
 }
 
 export function ChannelView(props: ChannelViewProps): JSX.Element {
@@ -124,6 +147,8 @@ function ActiveChannelView({
   highlightedMessageId,
   onToggleFullscreen,
   isFullscreen,
+  onArchiveChannel,
+  archivePending = false,
 }: ChannelViewProps & { conversation: ChannelDescriptor }): JSX.Element {
   const routeKind = conversation.parent_conversation_id ? 'thread' : 'channel';
   const {
@@ -156,11 +181,62 @@ function ActiveChannelView({
     () => runStates.filter(s => s.status !== 'idle' && s.status !== 'failed'),
     [runStates],
   );
+  const { data: agents = [] } = useAgents();
+  const activityAgentsById = useMemo(() => {
+    const m = new Map<string, AgentDto>();
+    for (const agent of agents) m.set(agent.id, agent);
+    return m;
+  }, [agents]);
 
   const closed = conversation.closed_at !== null;
+  const isArchived = conversation.archived_at !== null;
   const isDm = channelKind === 'dm';
+  const canToggleArchive =
+    channelKind === 'regular' &&
+    conversation.kind === 'channel' &&
+    conversation.parent_conversation_id === null &&
+    !!onArchiveChannel;
+  const { data: channelAgents = [] } = useChannelAgents(conversation.id, routeKind);
+  const startAgent = useStartAgent(conversation.id, routeKind);
+  const stopAgent = useStopAgent(conversation.id, routeKind);
+  const agentIds = useMemo(
+    () => channelAgents.map(agent => agent.agent_id),
+    [channelAgents],
+  );
+  const agentActionDisabled =
+    closed ||
+    agentIds.length === 0 ||
+    startAgent.isPending ||
+    stopAgent.isPending;
+  const restartTitle =
+    agentIds.length === 0
+      ? 'No agents to restart'
+      : `Restart ${routeKind === 'thread' ? 'Thread' : 'Channel'} agents`;
+  const stopTitle =
+    agentIds.length === 0
+      ? 'No agents to stop'
+      : `Stop ${routeKind === 'thread' ? 'Thread' : 'Channel'} agents`;
+  const restartAgents = useCallback(async () => {
+    if (agentActionDisabled) return;
+    for (const agentId of agentIds) {
+      await stopAgent.mutateAsync({ agentId, mode: 'hard' });
+    }
+    for (const agentId of agentIds) {
+      await startAgent.mutateAsync(agentId);
+    }
+  }, [agentActionDisabled, agentIds, startAgent, stopAgent]);
+  const stopAgents = useCallback(async () => {
+    if (agentActionDisabled) return;
+    for (const agentId of agentIds) {
+      await stopAgent.mutateAsync({ agentId, mode: 'hard' });
+    }
+  }, [agentActionDisabled, agentIds, stopAgent]);
   const memberStrip = isDm ? null : (
-    <AgentStrip channelId={conversation.id} routeKind={routeKind} />
+    <AgentStrip
+      channelId={conversation.id}
+      routeKind={routeKind}
+      conversationAgents={channelAgents}
+    />
   );
 
   // Thread children carry a single thread_anchor system message — the
@@ -183,6 +259,17 @@ function ActiveChannelView({
     () => (anchor ? messages.filter(m => m.id !== anchor.id) : messages),
     [messages, anchor],
   );
+  const activityAnchorMessageId = useMemo(() => {
+    for (let i = visibleMessages.length - 1; i >= 0; i -= 1) {
+      const message = visibleMessages[i]!;
+      if (message.from_kind === 'user') return message.id;
+    }
+    return null;
+  }, [visibleMessages]);
+  const [activityJumpMessageId, setActivityJumpMessageId] = useState<string | null>(null);
+  useEffect(() => {
+    setActivityJumpMessageId(null);
+  }, [conversation.id]);
   const loadEarlierMessages = useCallback(() => {
     if (!hasPreviousPage || isFetchingPreviousPage) return;
     void fetchPreviousPage();
@@ -195,7 +282,14 @@ function ActiveChannelView({
   const effectiveJumpMessageId =
     jumpTarget && jumpTarget.channelId === conversation.id
       ? jumpTarget.messageId
-      : null;
+      : activityJumpMessageId;
+  const handleMessageJumped = useCallback(() => {
+    if (jumpTarget && jumpTarget.channelId === conversation.id) {
+      onJumped?.();
+      return;
+    }
+    setActivityJumpMessageId(null);
+  }, [conversation.id, jumpTarget, onJumped]);
 
   // Open-thread summary for this channel — only fetched on parent
   // panes (where Thread is actionable). Thread panes can't have
@@ -224,10 +318,7 @@ function ActiveChannelView({
       <header className="flex h-[var(--titlebar-height)] min-w-0 shrink-0 items-center gap-2 border-b border-border-subtle px-4">
         {showThreadHeader ? (
           <>
-            <span className="text-[10px] uppercase tracking-wider text-text-muted">
-              Thread
-            </span>
-            <span className="text-text-muted">—</span>
+            <CornerDownRight className="size-3.5 shrink-0 text-text-muted" />
             <span className="min-w-0 truncate font-serif text-sm font-semibold text-text-primary">
               #{parentTitle ?? conversation.title}
             </span>
@@ -250,7 +341,10 @@ function ActiveChannelView({
             </span>
             {memberStrip}
             {parentTitle ? (
-              <span className="min-w-0 truncate text-xs text-text-muted">↳ thread of {parentTitle}</span>
+              <span className="flex min-w-0 items-center gap-1 truncate text-xs text-text-muted">
+                <CornerDownRight className="size-3 shrink-0 text-text-muted/60" />
+                <span className="truncate">thread of {parentTitle}</span>
+              </span>
             ) : null}
           </>
         )}
@@ -259,8 +353,61 @@ function ActiveChannelView({
             closed
           </span>
         ) : null}
+        {isArchived ? (
+          <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[10px] uppercase tracking-wider text-accent">
+            archived
+          </span>
+        ) : null}
 
-        <div className="ml-auto flex shrink-0 items-center">
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={() => void restartAgents()}
+            disabled={agentActionDisabled}
+            aria-label={restartTitle}
+            title={restartTitle}
+            className="flex size-6 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-35"
+          >
+            <RefreshCw className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => void stopAgents()}
+            disabled={agentActionDisabled}
+            aria-label={stopTitle}
+            title={stopTitle}
+            className="flex size-6 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-35"
+          >
+            <Power className="size-3.5" />
+          </button>
+          {canToggleArchive ? (
+            <AppDropdownMenu
+              trigger={
+                <button
+                  type="button"
+                  aria-label="Channel actions"
+                  title="Channel actions"
+                  className="flex size-6 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary"
+                >
+                  <MoreHorizontal className="size-3.5" />
+                </button>
+              }
+            >
+              <AppDropdownMenuItem
+                disabled={archivePending}
+                icon={
+                  isArchived ? (
+                    <ArchiveRestore className="size-3.5" />
+                  ) : (
+                    <Archive className="size-3.5" />
+                  )
+                }
+                onSelect={() => onArchiveChannel?.(conversation.id, !isArchived)}
+              >
+                {isArchived ? 'Restore channel' : 'Archive channel'}
+              </AppDropdownMenuItem>
+            </AppDropdownMenu>
+          ) : null}
           {onToggleFullscreen ? (
             <button
               type="button"
@@ -313,14 +460,32 @@ function ActiveChannelView({
           }
           highlightedMessageId={highlightedMessageId ?? null}
           jumpToMessageId={effectiveJumpMessageId}
-          onJumped={() => onJumped?.()}
+          onJumped={handleMessageJumped}
           onThreadCreated={onThreadCreated}
           threadByAnchor={threadByAnchor}
           activeRunStates={activeRunStates}
           routeKind={routeKind}
         />
 
-        <Composer conversationId={conversation.id} routeKind={routeKind} disabled={closed} />
+        {activeRunStates.length > 0 ? (
+          <AgentActivityStrip
+            states={activeRunStates}
+            agentsById={activityAgentsById}
+            anchorMessageId={activityAnchorMessageId}
+            onJumpToAnchor={() => {
+              if (activityAnchorMessageId) {
+                setActivityJumpMessageId(activityAnchorMessageId);
+              }
+            }}
+          />
+        ) : null}
+
+        <Composer
+          key={conversation.id}
+          conversationId={conversation.id}
+          routeKind={routeKind}
+          disabled={closed}
+        />
       </div>
     </main>
   );
@@ -331,11 +496,12 @@ function ActiveChannelView({
 function AgentStrip({
   channelId,
   routeKind,
+  conversationAgents,
 }: {
   channelId: string;
   routeKind: 'channel' | 'thread';
+  conversationAgents: ConversationAgentDto[];
 }): JSX.Element {
-  const { data: sa = [] } = useChannelAgents(channelId, routeKind);
   const { data: agents = [] } = useAgents();
   const agentById = useMemo(() => {
     const m = new Map<string, AgentDto>();
@@ -343,7 +509,7 @@ function AgentStrip({
     return m;
   }, [agents]);
 
-  if (sa.length === 0) {
+  if (conversationAgents.length === 0) {
     return (
       <span className="shrink-0 text-[10px] italic text-text-muted">
         {routeKind === 'thread' ? 'Thread' : 'Channel'} 还没有成员
@@ -354,7 +520,7 @@ function AgentStrip({
   // its own presence dot and border, without overlapping the next member.
   return (
     <div className="flex shrink-0 items-center gap-1.5">
-      {sa.map(s => {
+      {conversationAgents.map(s => {
         const agent = agentById.get(s.agent_id);
         if (!agent) return null;
         return (
@@ -430,8 +596,9 @@ function MessageList({
    *  "{count} Reply" badge and short-circuits the POST when a thread
    *  already exists (just opens it). */
   threadByAnchor?: Map<string, ThreadSummary>;
-  /** In-flight agent run states — rendered as activity bubbles below the
-   *  last message so the user can see which agents are still working. */
+  /** In-flight agent run states. The fixed strip renders outside this
+   *  scroller; MessageList only uses runId changes to keep bottom-following
+   *  stable when the strip appears. */
   activeRunStates?: AgentRunState[];
   routeKind: 'channel' | 'thread';
 }): JSX.Element {
@@ -688,23 +855,6 @@ function MessageList({
             ))}
           </ol>
         )}
-
-        {/* Activity bubbles — one per agent with an in-flight run. Rendered
-          * after messages so they naturally anchor to the bottom of the list.
-          * A new runId in `activeRunIds` triggers the scroll-to-bottom effect
-          * above, so the bubble is visible when it first appears. Heartbeat
-          * updates (same runId) do not re-trigger the scroll. */}
-        {activeRunStates && activeRunStates.length > 0 ? (
-          <div className="mt-1 -mx-4 border-t border-border-subtle/50 pt-1">
-            {activeRunStates.map(state => (
-              <AgentActivityBubble
-                key={state.runId}
-                state={state}
-                agent={agentsById.get(state.agentId)}
-              />
-            ))}
-          </div>
-        ) : null}
       </div>
 
       {showScrollBottom ? (

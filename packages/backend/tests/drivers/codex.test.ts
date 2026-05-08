@@ -99,6 +99,41 @@ describe('CodexDriver static config', () => {
   });
 });
 
+describe('CodexDriver.classifyInitProgress', () => {
+  it('treats the initialize response as protocol-ready', () => {
+    const d = new CodexDriver();
+    expect(
+      d.classifyInitProgress(JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} })),
+    ).toBe('protocol_ready');
+  });
+
+  it('treats thread/started as session-ready', () => {
+    const d = new CodexDriver();
+    expect(
+      d.classifyInitProgress(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'thread/started',
+          params: { thread: { id: 'thread-1' } },
+        }),
+      ),
+    ).toBe('session_ready');
+  });
+
+  it('treats result.thread as session-ready', () => {
+    const d = new CodexDriver();
+    expect(
+      d.classifyInitProgress(
+        JSON.stringify({ jsonrpc: '2.0', id: 2, result: { thread: { id: 'thread-1' } } }),
+      ),
+    ).toBe('session_ready');
+  });
+
+  it('ignores non-json lines', () => {
+    expect(new CodexDriver().classifyInitProgress('not json')).toBeNull();
+  });
+});
+
 describe('CodexDriver.buildArgs', () => {
   it('passes app-server stdio + one -c per env var', () => {
     const { ctx, cleanup } = makeSpawnCtx();
@@ -611,6 +646,118 @@ describe('CodexDriver.parseLine event mapping', () => {
       { kind: 'error', message: 'rate limited' },
       { kind: 'turn_end', sessionId: 'thread-q' },
     ]);
+  });
+
+  it('pairs webSearch start with a tool_output on completion', () => {
+    const driver = new CodexDriver();
+    const start = driver.parseLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'item/started',
+        params: { item: { type: 'webSearch', id: 'ws-1', query: 'silverhand' } },
+      }),
+    );
+    expect(start).toEqual([
+      { kind: 'tool_call', name: 'web_search', input: { query: 'silverhand' } },
+    ]);
+
+    const end = driver.parseLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'item/completed',
+        params: { item: { type: 'webSearch', id: 'ws-1' } },
+      }),
+    );
+    expect(end).toEqual([{ kind: 'tool_output', name: 'web_search' }]);
+  });
+
+  it('emits one tool_output per fileChange entry on completion', () => {
+    const driver = new CodexDriver();
+    const start = driver.parseLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'item/started',
+        params: {
+          item: {
+            type: 'fileChange',
+            id: 'fc-1',
+            changes: [
+              { path: 'a.ts', kind: 'modify' },
+              { path: 'b.ts', kind: 'create' },
+            ],
+          },
+        },
+      }),
+    );
+    expect(start).toEqual([
+      { kind: 'tool_call', name: 'file_change', input: { path: 'a.ts', kind: 'modify' } },
+      { kind: 'tool_call', name: 'file_change', input: { path: 'b.ts', kind: 'create' } },
+    ]);
+
+    const end = driver.parseLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'item/completed',
+        params: { item: { type: 'fileChange', id: 'fc-1' } },
+      }),
+    );
+    expect(end).toEqual([
+      { kind: 'tool_output', name: 'file_change' },
+      { kind: 'tool_output', name: 'file_change' },
+    ]);
+  });
+
+  it('clears pending tool counts on turn/completed to bound state across turns', () => {
+    const driver = new CodexDriver();
+    driver.parseLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'thread/started',
+        params: { thread: { id: 'thread-clean' } },
+      }),
+    );
+    driver.parseLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'item/started',
+        params: { item: { type: 'webSearch', id: 'ws-leak', query: 'q' } },
+      }),
+    );
+    driver.parseLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'item/started',
+        params: {
+          item: { type: 'fileChange', id: 'fc-leak', changes: [{ path: 'x.ts' }] },
+        },
+      }),
+    );
+    driver.parseLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'turn/completed',
+        params: { turn: { id: 't-clean', status: 'completed' } },
+      }),
+    );
+
+    // Re-firing item/completed for the same ids should not re-emit tool_output;
+    // the pending counts were cleared when the turn ended.
+    const reCompleted = driver.parseLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'item/completed',
+        params: { item: { type: 'webSearch', id: 'ws-leak' } },
+      }),
+    );
+    expect(reCompleted).toEqual([]);
+    const reCompletedFc = driver.parseLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'item/completed',
+        params: { item: { type: 'fileChange', id: 'fc-leak' } },
+      }),
+    );
+    expect(reCompletedFc).toEqual([]);
   });
 });
 

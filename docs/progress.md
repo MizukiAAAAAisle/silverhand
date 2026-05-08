@@ -4,6 +4,130 @@
 
 ---
 
+## 2026-05-09 — mention-targeted dispatch 讨论收敛、延后实现
+
+频道 "agent activity 问题排查" 里围绕"我 @Cindy 提问,正在干活的 Claude 也被打断重新 thinking"这件事跑了一轮设计讨论(@Alice / @Cindy / 用户)。结论：**不实现**,只把决议沉淀进文档。
+
+- 当前 dispatch：`ConversationMessageService.sendMessage` 给 user 消息选 recipients = 该 conversation 全员,逐个 `deliverMessage` + `startIdleRecipientsBestEffort`。语义上"群发"覆盖"被点名"。
+- 备选方案(已设计未实现)：解析 `extractMentions(content)` ∩ members,非空只 active deliver/auto-start 集合内成员;非集合成员走 passive enqueue + active-drain 钩子保留历史可见性。
+- 二阶问题：passive enqueue 修"看得到",但 drain 时 token 仍可能爆,需要截断/折叠/用户可选三种策略之一,这是产品决策不该跟 dispatch refactor 揉一起。
+- 延后理由:当下伤害可控(activity bubble 闪一下,不是数据错误);回归面大;更适合作为 workspace/channel settings 里的用户可选策略。
+
+完整方案 + 触发再评估的条件 → `docs/agent-run-state.md` §12;`docs/agent-run-state.md` §8 已加条目链回。
+
+---
+
+## 2026-05-08 — `initPostProtocolMs` 统一抬到 60s（task #174）
+
+针对 channel `m73dqSY6mNS4lSpY` 那次 codex 启动失败的复盘（详见即将归档的 `docs/incident-2026-05-08-codex-init-watchdog.md` §post-mortem 与 work-log）：实测有 proxy 的 silverhand-style spawn `initialize → thread/started` 仅 ~3.84s、无 proxy ~10.48s，远在原 30s `initPostProtocolMs` 内。但当 proxy（用户机器是 `socks5://127.0.0.1:7897`）短时间半瘫时，codex 第一帧 protocol 还能很快冒出来，`thread/start` 却卡在 MCP 子链路上，30s 窗一击即中。
+
+变更：把三个 driver 的 `initPostProtocolMs` 从 `30 * 1000` 统一抬到 `60 * 1000`：
+
+- `packages/backend/src/drivers/codex.ts` — 加注释，链回 incident 文档；
+- `packages/backend/src/drivers/claude.ts` — 同步 60s，注释强调 PR-A 三层 watchdog `reason=post_protocol` 的 triage 不应依赖 driver；
+- `packages/backend/src/drivers/cursor.ts` — 同步 60s 保持 parity，cursor oneShot 极少撞这条路径。
+
+`initLivenessSilenceMs` / `initPreProtocolCapMs` 不动；测试侧 `lifecycle.test.ts` 使用 manager 上的覆盖字段，与生产常量解耦，无需调整。
+
+`docs/incident-2026-05-08-codex-init-watchdog.md` §「driver 接口（新增）」表格内常量同步成 `60s`。
+
+
+
+@Cindy 修完 #169/#170 后两个 sidebar 仍是直切显隐，没有过渡。本批由 @Alice 实现。
+
+变化：
+
+- **Toggle 视觉去激活色**。删除 `toggleButtonActive` 那套 selected border + bg；按钮只剩 hover 状态，状态信号完全交给图标形状：workspace 用 `PanelLeft`（visible）↔ `PanelLeftDashed`（hidden），channel 用 `Columns2`（visible）↔ `Square`（hidden）。两个 toggle 使用不同 lucide 家族（Panel-* vs Columns/Square），形状差异足以一眼区分。
+- **Sidebar slide 动画**。新增 `apps/desktop/src/renderer/hooks/useSidebarPane.ts`，把每个 sidebar 包装成四态机器 `closed → opening → open → closing`，配合 CSS `.sidebar-slot`（layout 收缩 width/flex-basis）+ `.sidebar-surface`（paint `transform: translate3d(±100%, 0, 0)`）双层结构，240ms `cubic-bezier(0.32, 0.72, 0, 1)` apple-feel 缓动。`useLayoutSettings` 退化成 thin 组合层。
+- **`flushSync` + 双 rAF**。show 时 `flushSync(setState 'opening')` 强制 React 18 同步 commit，再 `requestAnimationFrame(() => requestAnimationFrame(...))` 保证浏览器至少绘了一帧 closed-state 才翻 `open`，CSS transition 一定从 `translate3d(-100%,0,0)` 起跑而不是被合帧成零帧跳。close 时直接 setState `closing`（surface 已挂着，CSS 直接反向插值）+ setTimeout 240ms 卸载 surface。
+- **Reverse mid-animation**。toggle 在 closing 中触发 show 时直接翻 `open`，cancel 在飞的 setTimeout，CSS 自动从当前 transform 中点反向插值回 0；rapid toggle 永不漏 timer/rAF（每次 setVisible 都先 cancel 全部）。
+- **`prefers-reduced-motion` 短路**。reduce 模式下不仅 CSS transition 关闭，JS 状态机也直接 `setState({phase: 'open'/'closed', visible: …})` 同步收口，避免 reduce-motion 用户仍要等 240ms 才看到 surface mount/unmount。
+- **`inert` + `aria-hidden`**。隐藏中的 slot 加 `inert` 属性 + `aria-hidden="true"`，移出 a11y 树并禁焦，Tab 键不会跑进看不见的按钮（`pointer-events: none` 只能挡鼠标，不挡 focus）。
+- **CSS var 而非 React state 控宽**。slot/surface 的 width 用 `var(--sidebar-width)` / `var(--channels-sidebar-width)` 而非 `${sidebar.width}px`，让 `useResizableWidth` 在 splitter drag 期间 rAF 写 CSS var 时 sidebar 也即时跟随；CSS 规范下 var 改值不触发引用方的 transition，所以 drag 不会触发 240ms 平滑（不需要额外 `--resizing` 抑制）。
+- **localStorage 收敛**。把原来的 `silverhand:layout-settings` 单 JSON 拆成 `silverhand:layout.workspace-sidebar-visible` / `.channel-sidebar-visible` 两个独立 `'1'`/`'0'`，每个 sidebar 自己持久化，不互相耦合。
+
+文档：[`app-layout.md`](./app-layout.md) §2 toggle 视觉行 + §3 slide 动画段 + §4 channel sidebar 段同步。验证：`pnpm --filter @silverhand/desktop typecheck` ✓、`test` ✓ (12)、`build` ✓。
+
+---
+
+## 2026-05-08 — Workspace / Channel row context menus（task #170）
+
+新增非原生右键菜单基座 `components/menus/AppContextMenu.tsx`，基于 Radix Context Menu，并统一容器、item、icon slot、separator token。
+
+- Workspace / DM workspace / archived workspace 行右键一致：`Open in Finder`（`FolderOpen`）和 `Copy path`（`Copy`）。DM workspace 已确认也有 `workspace_path`，不做 disabled 分支。
+- Follow-up：workspace/DM 右键触发修复为 `SidebarRow` forwardRef 到真实 `button` 并透传 Radix `ContextMenu.Trigger asChild` 的 props；此前 channel 行有效是因为它直接把原生 `div` 作为 trigger。
+- Channel sidebar 行右键：top-level channel/dm_channel 可 `Pin` / `Unpin`；regular workspace 的 top-level channel 可 `Archive channel` / `Restore channel`；channel/thread 全部可 `Copy name`。Thread 行本批只保留 `Copy name`，不扩展 pin/archive。
+- ChannelView header 的 `MoreHorizontal` 点击菜单同步迁到同一套 `AppDropdownMenu` token，交互语义仍是点击打开 dropdown。
+- 复制成功/失败用 sonner toast；菜单样式走 `bg-bg-floating` / `border-border` / `bg-bg-hover` 等主题 token，不使用原生 context menu。
+
+---
+
+## 2026-05-08 — UI batch: sidebar toggles + fixed Agent Activity strip（task #169）
+
+本批收敛两个 layout 决策：
+
+- Titlebar 红绿灯右侧新增两个独立 toggle：workspace sidebar (`⌘⇧\`) 与 channel sidebar (`⌘\`)。显隐状态存到全局 `silverhand:layout-settings`，不按 workspace 分叉；隐藏的 sidebar 连同 splitter 一起不渲染。workspace + channel 都隐藏时进入 chat-only zen，但 NavRail 作为 section 切换器常驻，titlebar toggle 是恢复 sidebar 的唯一入口。
+- Agent Activity 从消息流尾部移到 Composer 上方的 fixed live strip。idle 时 0 高度；有活动时每个 agent 一行，透明底（仅 hover 轻微显底色），保留 phase snippet / elapsed；tool 调用按工具名分别展示计数（如 `Bash ×2` / `Read ×1`），不合并成 `{total} tools`；compacting 作为第二状态行展示，和 thinking/tool 文本并存。activity row 点击跳到当前 view 最近一条 user message，补回触发上下文。
+
+同步更新 [`app-layout.md`](./app-layout.md) 的 titlebar/sidebar 章节与 [`agent-run-state.md`](./agent-run-state.md) 的 UI 章节。
+
+---
+
+## 2026-05-08 — Activity Bubble / `AgentRunState` 重构（task #159）
+
+@Cindy 实施、@Alice 协助排查与 review，把 thinking 闪烁与"agent 完成后 activity 不消失"两个长期问题一次性收口。设计与修复细节迁到新文档 [`agent-run-state.md`](./agent-run-state.md)；要点：
+
+- 修复 4 个根因：snippet 逐 delta 覆盖（Codex 闪烁）、direct-mode steer 换 runId、旧 run 无 `replaced` 终态、`turn_end` 落在 compaction 中无人补 resolve。
+- 新增 `pendingTurnEnd` + `tryResolveTurnEndAtBoundary`，从 `turn_end` / `recordToolOutput` / `compaction_finished` 三入口汇入。
+- `AgentRunState` 加 `compacting` / `compactingSince` / `compactionStale` 字段（与 `status` 正交），`AgentActivityBubble` 在 thinking 行之前独立渲染 compaction 行，stale 时 warning 配色。
+- `AgentRunTerminalReason` 新增 `replaced`，`startRun` 覆盖时旧 runId 走终态广播，前端 tombstone 闭环。
+- 前端 `useAgentRunStates` 加 `refetchOnMount: 'always'` 兜底 mount/reconnect race。
+- 新增 `agentRunStateCache.test.ts` + `lifecycle.test.ts` 用例覆盖 snippet 累积、direct steer、deferred turn_end。
+
+---
+
+## 2026-05-08 — Claude `--resume` 大 jsonl 撞 init-watchdog（incident 记录）
+
+UI 频道 `PxD4nCvw5mi-kbPG` 重启 agents 后 claude (`Z18wRZX6Uhsoa2tw`) 一直 "connecting"。排查结论写到 [`incident-2026-05-08-claude-resume-init-watchdog.md`](./incident-2026-05-08-claude-resume-init-watchdog.md)：
+
+- 不是 MCP 启动卡住——chat-bridge `connected to MCP transport` 已打。
+- 真因：claude 用 `--resume ff971918-…` 加载 5.6 MB / 3501 行 jsonl，超过 30s 没发 `session_init`，被部署版本的旧单层 watchdog SIGTERM。
+- 跟同一天的 codex incident 同根（都是 30s 单层硬超时太严），不同的是触发面是 claude resume 大会话。
+- P1 三层 watchdog + retry-once 已经在 `refactor/ws` 上落地，但桌面 app 还跑旧编译产物——重新打包是当前最高优 follow-up。
+- 临时恢复：DB 把 `cli_session_id` 置空走全新会话（牺牲 claude 端 context），或改 `status='idle'` 多试几次。
+
+---
+
+## 2026-05-08 — Claude resume incident 真因锁定 + 修复方案敲定
+
+跟 @Cindy 在 `code start` 频道经过完整四象限 probe（jsonl 大小 × stdin 是否预热）+ 5 种 priming payload 实测 + 同一 session 历史日志对照，把 `incident-2026-05-08-claude-resume-init-watchdog.md` 的根因从「大 jsonl resume 慢」纠正为：
+
+- **根因**：`claude --input-format stream-json` **deterministically** 不发 `system.init`，直到收到第一条真实 user message（与 jsonl 体量、--resume 流程通通无关）。
+- **触发条件**：silverhand `doDrainInbox` 在 inbox 空时 return 不写 stdin；`start()` 注释里的「prime stdin 兜底」在 empty inbox 路径下是 no-op。
+- **PR-A 三层 watchdog 不修这个 incident**：spawn 后 ~1.1s 收 `system.hook_started` → manager 进入 post-protocol → 30s 后 `reason=post_protocol` SIGTERM；retry-once 同样空 stdin。
+- **修复方案（task #167，@Cindy 实施）**：driver `kickoffMode = 'self_inits' | 'requires_first_message'` + manager **deferred init watchdog**。claude empty-inbox spawn 后正常拿 pid 并标 `active`（不撒谎，process 真在跑），但**不 arm** init watchdog；等第一条真实 user message 写 stdin 时再 arm。`active` 语义从「init observed」松绑到「process 已存活、可接收 stdin」。
+- **不能做**：(a) stdin priming（任何 well-formed payload 都触发 chargeable Anthropic turn + transcript 落盘 + UI 可见消息，5 种变体已穷举验证）；(b) silverhand 自管 claude history（用户已否决，成本太高、break 太多）；(c) 写假 active（`active ⇔ live handle/pid` 是 manager / stop / restart / exit handler 的核心不变量，写假会破坏一连串）。
+
+文档重写（task #168，本提交）覆盖：
+- `docs/incident-2026-05-08-claude-resume-init-watchdog.md` §0/§3/§5/§7 重写，附完整实验数据表 + 同 session 对照 + manager smoking gun 行号。
+- `CLAUDE.md` §2 把「hangs intermittently if stdin starts empty」改成「deterministically withholds system.init until first real message」+ 指向 incident 文档 + 明确 deferred init watchdog 修复方向 + 显式禁止 stdin priming。
+
+实验文件留在 `/tmp/silverhand-claude-probe/`，含 probe.mjs / probe-payload.mjs 和所有 cell 原始日志可复盘。
+
+---
+
+
+
+跟 @Cindy 在 `code start` 频道讨论收敛 [`incident-2026-05-08-codex-init-watchdog.md`](./incident-2026-05-08-codex-init-watchdog.md) 的修复方案，锁定三段：
+
+- **PR-A（task #163, @Cindy）**：把 `INIT_WATCHDOG_MS` 拆成三层 timer（byte liveness + pre-protocol cap + post-protocol session）+ driver `classifyInitProgress` hook + retry-once / cooldown。driver 接口 side-effect-free，retry/cooldown 全部走 manager 内存态，不动 DB enum / DTO。
+- **PR-B（task #164, @Alice，本提交）**：`packages/backend/src/runtimes.ts` 在 macOS 上把 `/Applications/Codex.app/Contents/Resources/codex` 排在 `which codex` 之前（不做版本号一致校验）；`probeVersion` 超时 3s → 30s，避免 wrapper 冷启动被探测误报成未安装。新增 `PLATFORM_CANDIDATES` 表 + `resolveBinary(kind, bin)` 逻辑，结构上为其他 runtime 的同类优化预留口子。`pnpm typecheck` 通过；现有 `tests/manager/lifecycle.test.ts` 失败属 PR-A 未落地的预期红，与本 PR 无关。
+- **Doc rewrite（task #165, @Alice）**：incident §5/§7 改写到与上面对齐，§5 顶部加 `session_init` 语义澄清 callout（强调 `session_init` 是 thread-ready 信号，**不是**「进程活着」也**不是**「app-server 已 handshake」）。
+
+P3（`-c model_reasoning_effort`）verified-keep：bundle alpha 与 npm CLI 都通过 codex-rs config 层支持 `-c key=value`，行为等价，driver 不动。
+
+---
+
 ## 2026-05-06 — Attachment 单条 DELETE + Composer orphan cleanup
 
 补完 attachment Phase 2 收尾两项（GET 鉴权另开频道讨论，暂未做）：
