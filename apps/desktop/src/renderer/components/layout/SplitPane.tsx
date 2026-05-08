@@ -101,9 +101,15 @@ export function SplitPane({
   }, []);
 
   const dragging = useRef(false);
+  // Mirror dragging-as-state so the divider can paint with the accent
+  // colour during the drag (matches the sidebar splitter's `active`
+  // affordance via VerticalSplitter). Pointer move stays driven by
+  // refs/rAF — the state only flips on down/up, no per-move re-renders.
+  const [isDragging, setIsDragging] = useState(false);
 
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     dragging.current = true;
+    setIsDragging(true);
     e.currentTarget.setPointerCapture(e.pointerId);
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
@@ -125,6 +131,7 @@ export function SplitPane({
     (e: React.PointerEvent) => {
       if (!dragging.current) return;
       dragging.current = false;
+      setIsDragging(false);
       flushRatio();
       const next = ratioRef.current;
       setRatio(next);
@@ -155,7 +162,17 @@ export function SplitPane({
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
-        className="group/split relative w-1 shrink-0 cursor-col-resize bg-border-subtle hover:bg-accent"
+        // Same paint vocabulary as VerticalSplitter — the track is
+        // transparent by default (themes set --splitter-bg: transparent),
+        // tints with --accent on hover, and stays accent-coloured for
+        // the duration of an active drag. `transition-colors` smooths
+        // the hover fade so the divider doesn't pop in/out.
+        className={
+          'group/split relative w-1 shrink-0 cursor-col-resize transition-colors ' +
+          (isDragging
+            ? 'bg-accent'
+            : 'bg-[var(--splitter-bg,var(--border-subtle))] hover:bg-accent')
+        }
         role="separator"
         aria-orientation="vertical"
       >

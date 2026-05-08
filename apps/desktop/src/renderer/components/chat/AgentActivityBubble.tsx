@@ -123,7 +123,7 @@ function AgentActivityRow({
       className={
         'group flex w-full min-w-0 items-start gap-2 rounded-[6px] border border-transparent px-2 py-1 text-left text-xs text-text-muted transition-colors ' +
         (canJump
-          ? 'hover:border-border-subtle/70 hover:bg-bg-hover/60 hover:text-text-primary'
+          ? 'hover:bg-bg-hover/60 hover:text-text-primary'
           : 'cursor-default')
       }
     >
@@ -162,8 +162,8 @@ function AgentActivityRow({
                 key={`${toolName}:${count}`}
                 className="tool-badge-bump rounded border border-border-subtle/70 px-1.5 py-px font-mono text-[10px] leading-4 text-text-muted"
               >
+                <span className="ml-1 text-text-muted/70">{count} </span>
                 {toolName}
-                <span className="ml-1 text-text-muted/70">×{count}</span>
               </span>
             ))}
           </span>

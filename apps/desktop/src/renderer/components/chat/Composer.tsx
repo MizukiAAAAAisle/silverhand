@@ -35,6 +35,10 @@ interface ComposerProps {
   conversationId: string;
   routeKind?: 'channel' | 'thread';
   disabled: boolean;
+  /** When true, composer is disabled with an "archived" placeholder.
+   *  Independent of `disabled` (closed) so we can distinguish the reason
+   *  in the placeholder copy without losing other disabled paths. */
+  archived?: boolean;
 }
 
 const MAX_TEXTAREA_HEIGHT = 192; // Mirrors Tailwind max-h-48.
@@ -69,8 +73,12 @@ type SubmittingSnapshot = {
 export function Composer({
   conversationId,
   routeKind = 'channel',
-  disabled,
+  disabled: disabledProp,
+  archived = false,
 }: ComposerProps): JSX.Element {
+  // Treat archived as another flavor of disabled so every send/attach
+  // path is gated identically. Placeholder below distinguishes the copy.
+  const disabled = disabledProp || archived;
   const [initialDraft] = useState(() => readComposerDraft(conversationId));
   const [draft, setDraftState] = useState(initialDraft?.text ?? '');
   const [caret, setCaretState] = useState(initialDraft?.caret ?? 0);
@@ -526,9 +534,11 @@ export function Composer({
           onCompositionEnd={() => setComposing(false)}
           disabled={disabled}
           placeholder={
-            disabled
-              ? '会话已关闭，无法发送'
-              : 'Enter 发送，Shift + Enter 换行，@agent，#channel'
+            archived
+              ? '会话已归档，无法发送'
+              : disabled
+                ? '会话已关闭，无法发送'
+                : 'Enter 发送，Shift + Enter 换行，@agent，#channel'
           }
           className="block max-h-48 min-h-[60px] w-full resize-none rounded-md border border-border-subtle bg-bg-floating px-3 py-2 pb-11 pr-12 text-sm text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none focus:ring-2 focus:ring-border-focus disabled:cursor-not-allowed disabled:opacity-60"
         />

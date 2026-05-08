@@ -86,7 +86,8 @@ const POLICIES: Record<SendMessageActor['kind'], SendMessagePolicy> = {
 
 export type ConversationErrorCode =
   | 'conversation_not_found'
-  | 'conversation_closed';
+  | 'conversation_closed'
+  | 'conversation_archived';
 
 export class ConversationError extends Error {
   constructor(
@@ -116,7 +117,8 @@ export type TargetErrorCode =
   | 'no_parent'
   | 'thread_not_found'
   | 'thread_not_child'
-  | 'target_closed';
+  | 'target_closed'
+  | 'target_archived';
 
 export class TargetError extends Error {
   constructor(
@@ -225,6 +227,12 @@ export class ConversationMessageService {
         throw new ConversationError(
           'conversation_closed',
           'conversation is closed',
+        );
+      }
+      if (sourceConversation.archived_at !== null) {
+        throw new ConversationError(
+          'conversation_archived',
+          'conversation is archived',
         );
       }
       this.validateActor(input.actor, policy, sourceConversation.id);
@@ -346,6 +354,9 @@ export class ConversationMessageService {
       if (parent.closed_at !== null) {
         throw new TargetError('target_closed', 'target conversation is closed');
       }
+      if (parent.archived_at !== null) {
+        throw new TargetError('target_archived', 'target conversation is archived');
+      }
       return parent;
     }
 
@@ -361,6 +372,9 @@ export class ConversationMessageService {
     }
     if (thread.closed_at !== null) {
       throw new TargetError('target_closed', 'target conversation is closed');
+    }
+    if (thread.archived_at !== null) {
+      throw new TargetError('target_archived', 'target conversation is archived');
     }
     return thread;
   }

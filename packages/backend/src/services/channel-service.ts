@@ -323,12 +323,43 @@ export class ChannelService {
       throw repoError('not_archivable', 'only top-level channels can be archived');
     }
 
-    const channel = this.conversations.setArchived(input.channelId, input.archived);
-    if (!channel) {
-      throw repoError('not_found', 'channel not found');
+    // Cascade to child threads in the same transaction so a partial
+    // failure can't leave the channel and its threads with diverging
+    // archive state. Unarchive only clears `archived_at`; threads that
+    // were independently closed stay closed.
+    const result = this.db.transaction(
+      (): { channel: ChannelConversationDto; affectedThreadIds: string[] } => {
+        const updated = this.conversations.setArchived(
+          input.channelId,
+          input.archived,
+        );
+        if (!updated) {
+          throw repoError('not_found', 'channel not found');
+        }
+        const affectedThreadIds = this.conversations.setArchivedForChildThreads(
+          input.channelId,
+          input.archived,
+        );
+        return { channel: updated, affectedThreadIds };
+      },
+    )();
+
+    // Notify any open Thread views so their cached `archived_at` flips.
+    // The channel-list refetch below covers the parent channel itself.
+    for (const threadId of result.affectedThreadIds) {
+      this.events.publish(result.channel.id, {
+        kind: 'thread_updated',
+        payload: {
+          parent_conversation_id: result.channel.id,
+          thread_id: threadId,
+        },
+      });
     }
-    this.publishWorkspaceChannelsChanged(channel.workspace_id, channel.id);
-    return { channel };
+    this.publishWorkspaceChannelsChanged(
+      result.channel.workspace_id,
+      result.channel.id,
+    );
+    return { channel: result.channel };
   }
 
   private publishWorkspaceChannelsChanged(workspaceId: string, channelId: string): void {

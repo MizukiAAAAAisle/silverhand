@@ -147,7 +147,7 @@ function conversationMessageServiceErrorResponse(
     return c.json({ error: err.message, code: err.code }, status);
   }
   if (err instanceof TargetError) {
-    const status = err.code === 'thread_not_found' ? 404 : err.code === 'target_closed' ? 409 : 400;
+    const status = err.code === 'thread_not_found' ? 404 : err.code === 'target_closed' || err.code === 'target_archived' ? 409 : 400;
     return c.json({ error: err.message, code: err.code }, status);
   }
   if (err instanceof PolicyError) {

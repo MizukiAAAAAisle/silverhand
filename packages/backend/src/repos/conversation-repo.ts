@@ -555,6 +555,35 @@ export class ConversationRepo {
     return row ? rowToChannel(row) : null;
   }
 
+  /** Cascade archive state to every thread under a channel. Mirrors
+   *  Slack/Discord semantics: archiving a channel freezes all its
+   *  threads; unarchiving releases only the archive flag (a thread
+   *  that was independently `closed` stays closed). Only flips threads
+   *  whose `archived_at` differs from the target state, so re-running
+   *  is a no-op. Returns the ids of threads actually updated so the
+   *  caller can publish `thread_updated` events for live UIs. */
+  setArchivedForChildThreads(
+    channelId: string,
+    archived: boolean,
+  ): string[] {
+    const now = Date.now();
+    // SQLite returns 1 for TRUE / 0 for FALSE on boolean expressions.
+    // Select the threads whose current archive state mismatches the
+    // target, update them, then return their ids. RETURNING keeps it a
+    // single statement.
+    const rows = this.db
+      .prepare<[number | null, number, string, number], { id: string }>(
+        `UPDATE conversations
+         SET archived_at = ?, updated_at = ?
+         WHERE parent_conversation_id = ?
+           AND kind = 'thread'
+           AND (archived_at IS NULL) = ?
+         RETURNING id`,
+      )
+      .all(archived ? now : null, now, channelId, archived ? 1 : 0);
+    return rows.map(r => r.id);
+  }
+
   close(id: string, summary: string): ConversationDto | null {
     const now = Date.now();
     this.db

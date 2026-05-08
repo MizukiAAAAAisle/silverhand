@@ -5,12 +5,46 @@ import {
   PanelLeft,
   PanelLeftDashed,
   Settings,
-  Square,
   Users,
 } from 'lucide-react';
 import { ManageMembersPopover } from '@/features/workspaces/ManageMembersPopover';
 
 type WorkspaceUiKind = 'regular' | 'dm';
+
+/**
+ * Mirror of `Columns2` with the central divider drawn as four short
+ * dashes — same stylistic family as lucide's `PanelLeftDashed`. Used as
+ * the "channel sidebar hidden" glyph so the channel toggle communicates
+ * its state through the same solid-vs-dashed-divider vocabulary as the
+ * workspace toggle (PanelLeft ↔ PanelLeftDashed), just with the divider
+ * placed at the center to indicate the SECOND column instead of the
+ * first.
+ */
+function Columns2Dashed(props: React.SVGProps<SVGSVGElement>): JSX.Element {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <rect width="18" height="18" x="3" y="3" rx="2" />
+      {/* Dashed divider at x=12 — segment positions copied from
+        * `PanelLeftDashed` so the visual rhythm matches. */}
+      <path d="M12 3v2" />
+      <path d="M12 9v1" />
+      <path d="M12 14v1" />
+      <path d="M12 19v2" />
+    </svg>
+  );
+}
 
 interface TitlebarProps {
   workspaceId: string | null;
@@ -114,10 +148,12 @@ export function Titlebar({
               <PanelLeftDashed className="size-3.5" />
             )}
           </button>
-          {/* Channel toggle uses Columns2 (two-column layout visible) ↔
-            * Square (single-column collapsed). Different glyph family
-            * from the workspace toggle so the user can tell them apart
-            * without reading labels. */}
+          {/* Channel toggle mirrors the workspace toggle's vocabulary:
+            * solid divider = visible, dashed divider = hidden. The
+            * difference is divider POSITION — workspace's lives at x=9
+            * (first column boundary), channel's lives at x=12 (second
+            * column boundary), so the two toggles read as "first / second
+            * sidebar" without needing a label. */}
           <button
             type="button"
             onClick={onToggleChannelSidebar}
@@ -133,7 +169,7 @@ export function Titlebar({
             {channelSidebarVisible ? (
               <Columns2 className="size-3.5" />
             ) : (
-              <Square className="size-3.5" />
+              <Columns2Dashed className="size-3.5" />
             )}
           </button>
         </div>

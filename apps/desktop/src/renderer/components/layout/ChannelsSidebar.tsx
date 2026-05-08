@@ -8,6 +8,7 @@ import {
   MessageSquareText,
   Pin,
   PinOff,
+  X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -43,6 +44,10 @@ interface ChannelsSidebarProps {
   onPinChannel: (channelId: string, pinned: boolean) => void;
   onArchiveChannel: (channelId: string, archived: boolean) => void;
   archivePending?: boolean;
+  /** Close the currently-open thread pane. Mirrors the X button in the
+   *  thread header — surfaced via the thread row's right-click menu so
+   *  the user can dismiss it without first focusing the thread pane. */
+  onCloseThread?: () => void;
   /** Unread notification counts keyed by channel id. Used to render
    *  per-channel badges. Missing key ≡ zero. */
   unreadByChannel?: Record<string, number>;
@@ -57,6 +62,7 @@ export function ChannelsSidebar({
   onPinChannel,
   onArchiveChannel,
   archivePending = false,
+  onCloseThread,
   unreadByChannel = {},
 }: ChannelsSidebarProps): JSX.Element {
   // Pinned top-level channels float above unpinned ones. The backend
@@ -101,6 +107,7 @@ export function ChannelsSidebar({
                 onArchive={onArchiveChannel}
                 archivePending={archivePending}
                 workspaceKind={workspaceKind}
+                onCloseThread={onCloseThread}
                 unreadByChannel={unreadByChannel}
               />
             ))}
@@ -120,6 +127,7 @@ export function ChannelsSidebar({
                 onArchive={onArchiveChannel}
                 archivePending={archivePending}
                 workspaceKind={workspaceKind}
+                onCloseThread={onCloseThread}
                 unreadByChannel={unreadByChannel}
               />
             ))}
@@ -145,6 +153,7 @@ function ChannelTreeItem({
   onArchive,
   archivePending,
   workspaceKind,
+  onCloseThread,
   unreadByChannel,
 }: {
   channel: ChannelNode;
@@ -155,6 +164,7 @@ function ChannelTreeItem({
   onArchive: (channelId: string, archived: boolean) => void;
   archivePending: boolean;
   workspaceKind: WorkspaceUiKind | null;
+  onCloseThread?: () => void;
   unreadByChannel: Record<string, number>;
 }): JSX.Element {
   return (
@@ -183,6 +193,7 @@ function ChannelTreeItem({
                 onArchive={onArchive}
                 archivePending={archivePending}
                 workspaceKind={workspaceKind}
+                onCloseThread={onCloseThread}
                 unreadCount={unreadByChannel[child.id] ?? 0}
               />
             </li>
@@ -202,6 +213,7 @@ function ChannelRow({
   onArchive,
   archivePending,
   workspaceKind,
+  onCloseThread,
   unreadCount,
 }: {
   channel: ChannelNode;
@@ -212,6 +224,7 @@ function ChannelRow({
   onArchive: (channelId: string, archived: boolean) => void;
   archivePending: boolean;
   workspaceKind: WorkspaceUiKind | null;
+  onCloseThread?: () => void;
   unreadCount: number;
 }): JSX.Element {
   const isClosed = channel.closed_at !== null;
@@ -228,7 +241,14 @@ function ChannelRow({
   const showPinMenu = depth === 0;
   const showArchiveMenu =
     depth === 0 && workspaceKind === 'regular' && channel.kind === 'channel';
-  const hasManagementMenu = showPinMenu || showArchiveMenu;
+  // Close-thread item shows on EVERY thread row, not just the currently
+  // open one. Hiding it conditionally on `selected` looks like a bug
+  // (the menu silently changes shape based on which thread the pane is
+  // displaying). The callback itself short-circuits when no thread pane
+  // is open, so the item is safe to always render.
+  const showCloseThreadMenu =
+    depth === 1 && channel.kind === 'thread' && !!onCloseThread;
+  const hasManagementMenu = showPinMenu || showArchiveMenu || showCloseThreadMenu;
 
   const rowBg = selected
     ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
@@ -344,6 +364,14 @@ function ChannelRow({
           onSelect={() => onArchive(channel.id, !isArchived)}
         >
           {isArchived ? 'Restore channel' : 'Archive channel'}
+        </AppContextMenuItem>
+      ) : null}
+      {showCloseThreadMenu ? (
+        <AppContextMenuItem
+          icon={<X className="size-3.5" />}
+          onSelect={() => onCloseThread?.()}
+        >
+          Close thread
         </AppContextMenuItem>
       ) : null}
       {hasManagementMenu ? <AppContextMenuSeparator /> : null}

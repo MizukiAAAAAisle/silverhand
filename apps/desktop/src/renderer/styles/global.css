@@ -314,10 +314,10 @@ button:disabled { cursor: not-allowed; }
 }
 
 /* ── Sidebar slide animation ──────────────────────────────────────────
-   Two-layer pattern (slot + surface) so width and transform animate on
-   independent properties. The slot owns layout (`flex-basis` / `width`
-   collapse to 0 when hidden, so the main column reflows). The surface
-   owns paint (`transform: translate3d(...)` slides off-screen) — paint
+   Two-layer pattern (slot + surface) so layout and paint animate on
+   independent properties. The slot owns layout (`flex-basis` collapses
+   to 0 when hidden, so the main column reflows). The surface owns
+   paint (`transform: translate3d(...)` slides off-screen) — paint
    is GPU-promoted by `will-change: transform`, so the slide stays
    smooth even while the slot is reflowing.
 
@@ -329,25 +329,48 @@ button:disabled { cursor: not-allowed; }
    - Combining the two in one element would force layout on every frame
      of the transform animation. Decoupling preserves the perf win.
 
-   Apple-feel easing (cubic-bezier(0.32, 0.72, 0, 1)) and 240 ms
-   duration approximate the macOS native sidebar collapse cadence.
+   Why only `flex-basis` (not also `width`):
+   - The slot is `flex-shrink: 0`, so `flex-basis` alone determines the
+     main-axis size in the parent flex row. Animating both `flex-basis`
+     and `width` doubles the per-frame layout work for no visual gain
+     (and made hide noticeably janky once the main view started
+     carrying a ChannelView + MessageList with hundreds of messages).
+   - `will-change: flex-basis` hints the browser to keep the layout
+     pipeline warm so the reflow cascade into the main view stays
+     within the 16 ms frame budget.
+
+   `backface-visibility: hidden` on the surface forces it onto its own
+   compositor layer regardless of what its content does, so the slot's
+   per-frame layout pass doesn't drag the surface's paint with it.
+
+   Material standard easing (cubic-bezier(0.4, 0, 0.2, 1)) and 220 ms
+   duration. The earlier Apple curve concentrated motion in the second
+   half — visually fine for a 400px native sidebar, but read as
+   "stop-then-snap" on these 240 px panels. Standard ease distributes
+   motion uniformly so the slide feels continuous all the way through.
 
    `prefers-reduced-motion` removes both transitions; the React state
    machine in `useSidebarPane` separately collapses the four-phase
    open/close lifecycle to a synchronous mount/unmount so the user
-   never waits 240 ms for the surface to (in)appear. */
+   never waits 220 ms for the surface to (in)appear. */
 :root {
-  --sidebar-anim-ms: 240ms;
-  --sidebar-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --sidebar-anim-ms: 220ms;
+  /* Material standard ease — smooth, evenly distributed motion. The
+     punchier `cubic-bezier(0.32, 0.72, 0, 1)` Apple curve concentrates
+     ~70% of motion in the second half, which reads as "stop-then-snap"
+     on small (240px) panels even though it works well for large native
+     sidebars. Standard ease keeps the slide perceptually uniform. */
+  --sidebar-ease: cubic-bezier(0.4, 0, 0.2, 1);
 }
 .sidebar-slot {
   position: relative;
   flex-shrink: 0;
   height: 100%;
   overflow: hidden;
+  will-change: flex-basis, margin-right;
   transition:
     flex-basis var(--sidebar-anim-ms) var(--sidebar-ease),
-    width var(--sidebar-anim-ms) var(--sidebar-ease);
+    margin-right var(--sidebar-anim-ms) var(--sidebar-ease);
 }
 .sidebar-surface {
   height: 100%;
@@ -355,6 +378,7 @@ button:disabled { cursor: not-allowed; }
   transition: transform var(--sidebar-anim-ms) var(--sidebar-ease);
   contain: layout paint;
   will-change: transform;
+  backface-visibility: hidden;
   pointer-events: none;
 }
 .sidebar-surface[data-state='open'] {

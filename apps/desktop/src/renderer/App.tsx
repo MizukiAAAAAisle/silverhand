@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Power } from 'lucide-react';
 import { Toaster } from 'sonner';
 import { NavRail } from '@/components/layout/NavRail';
@@ -525,94 +525,144 @@ export function App(): JSX.Element {
     }
   };
 
-  const buildChannelDescriptor = (s: ChannelListItem | null) =>
-    s
-      ? {
-          id: s.id,
-          title: s.title,
-          kind: s.kind,
-          parent_conversation_id: s.kind === 'thread' ? s.parent_conversation_id : null,
-          closed_at: s.closed_at,
-          archived_at: s.archived_at,
-          workspace_id: s.workspace_id,
-        }
-      : null;
+  const buildChannelDescriptor = useCallback(
+    (s: ChannelListItem | null) =>
+      s
+        ? {
+            id: s.id,
+            title: s.title,
+            kind: s.kind,
+            parent_conversation_id:
+              s.kind === 'thread' ? s.parent_conversation_id : null,
+            closed_at: s.closed_at,
+            archived_at: s.archived_at,
+            workspace_id: s.workspace_id,
+          }
+        : null,
+    [],
+  );
 
-  const closeThread = (): void => {
+  const closeThread = useCallback((): void => {
     if (selectedWorkspaceId && selectedChannelId) {
       nav.toChannel(selectedWorkspaceId, selectedChannelId);
     }
-  };
+  }, [nav, selectedWorkspaceId, selectedChannelId]);
+
+  // ── Stable refs for ChannelView (so React.memo can short-circuit when
+  //    only sidebar visibility flips). Recompute deliberately when the
+  //    underlying nav / channel / mutation identity changes. ──────────────
+  const handleJumped = useCallback(() => setJumpTarget(null), []);
+
+  const handleThreadCreated = useCallback(
+    (threadId: string, thread?: ChannelListItem) => {
+      if (selectedWorkspaceId && selectedChannelId) {
+        // Optimistically store the thread so threadChannel is non-null
+        // on the very first render after nav.toThread() fires, before
+        // the channels-list query refetch has a chance to complete.
+        if (thread) setEphemeralThread(thread);
+        nav.toThread(selectedWorkspaceId, selectedChannelId, threadId);
+      }
+    },
+    [nav, selectedWorkspaceId, selectedChannelId],
+  );
+
+  const handleArchiveChannelMutation = useCallback(
+    (channelId: string, archived: boolean) => {
+      archiveChannel.mutate({
+        channelId,
+        archived,
+        workspaceId: selectedWorkspaceId ?? undefined,
+      });
+    },
+    [archiveChannel, selectedWorkspaceId],
+  );
+
+  const handleToggleFullscreen = useCallback(
+    () => setThreadFullscreen(v => !v),
+    [],
+  );
+
+  // Captured by handleJumpToOriginal below — must be stable so the thread
+  // ChannelView's onJumpToOriginal prop doesn't churn each render.
+  const handleJumpToOriginal = useCallback(
+    (messageId: string) => {
+      if (!threadChannel) return;
+      handleJumpToMessage(
+        {
+          workspaceId: selectedWorkspaceId ?? undefined,
+          channelId:
+            threadChannel.kind === 'thread'
+              ? threadChannel.channel_id
+              : threadChannel.id,
+          messageId,
+        },
+        { preserveThreadLayout: true },
+      );
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selectedWorkspaceId, threadChannel?.id, threadChannel?.kind],
+  );
+
+  // Memoize the descriptor objects so ChannelView's `conversation` prop
+  // keeps the same identity unless the underlying channel actually changes.
+  const parentDescriptor = useMemo(
+    () => buildChannelDescriptor(selectedChannel),
+    [buildChannelDescriptor, selectedChannel],
+  );
+  const threadDescriptor = useMemo(
+    () => buildChannelDescriptor(threadChannel),
+    [buildChannelDescriptor, threadChannel],
+  );
+
+  // Same for the per-pane jumpTarget — the inline ternary recreated the
+  // object each render, breaking memoization down the tree.
+  const parentJumpTarget = useMemo(
+    () =>
+      jumpTarget && !jumpTarget.threadId && jumpTarget.channelId === selectedChannelId
+        ? { channelId: jumpTarget.channelId, messageId: jumpTarget.messageId }
+        : null,
+    [jumpTarget, selectedChannelId],
+  );
+  const threadJumpTarget = useMemo(
+    () =>
+      jumpTarget && threadChannel && jumpTarget.threadId === threadChannel.id
+        ? { channelId: threadChannel.id, messageId: jumpTarget.messageId }
+        : null,
+    [jumpTarget, threadChannel],
+  );
+
+  const channelKindForView = selectedWorkspace?.kind === 'dm'
+    ? 'dm'
+    : (selectedWorkspace ? 'regular' : null);
+  const highlightedMessageIdForParent = openThreadId ? highlightedParentMessageId : null;
 
   const parentView = (
     <ChannelView
-      channelKind={selectedWorkspace?.kind === 'dm' ? 'dm' : (selectedWorkspace ? 'regular' : null)}
-      conversation={buildChannelDescriptor(selectedChannel)}
+      channelKind={channelKindForView}
+      conversation={parentDescriptor}
       parentTitle={parentChannel?.title ?? null}
-      jumpTarget={
-        jumpTarget && !jumpTarget.threadId && jumpTarget.channelId === selectedChannelId
-          ? { channelId: jumpTarget.channelId, messageId: jumpTarget.messageId }
-          : null
-      }
-      onJumped={() => setJumpTarget(null)}
-      onThreadCreated={(threadId, thread) => {
-        if (selectedWorkspaceId && selectedChannelId) {
-          // Optimistically store the thread so threadChannel is non-null
-          // on the very first render after nav.toThread() fires, before
-          // the channels-list query refetch has a chance to complete.
-          if (thread) setEphemeralThread(thread);
-          nav.toThread(selectedWorkspaceId, selectedChannelId, threadId);
-        }
-      }}
-      highlightedMessageId={
-        openThreadId ? highlightedParentMessageId : null
-      }
-      onArchiveChannel={(channelId, archived) => {
-        archiveChannel.mutate({
-          channelId,
-          archived,
-          workspaceId: selectedWorkspaceId ?? undefined,
-        });
-      }}
+      jumpTarget={parentJumpTarget}
+      onJumped={handleJumped}
+      onThreadCreated={handleThreadCreated}
+      highlightedMessageId={highlightedMessageIdForParent}
+      onArchiveChannel={handleArchiveChannelMutation}
       archivePending={archiveChannel.isPending}
     />
   );
 
   const threadView = threadChannel ? (
     <ChannelView
-      channelKind={selectedWorkspace?.kind === 'dm' ? 'dm' : (selectedWorkspace ? 'regular' : null)}
-      conversation={buildChannelDescriptor(threadChannel)}
+      channelKind={channelKindForView}
+      conversation={threadDescriptor}
       parentTitle={selectedChannel?.title ?? null}
-      jumpTarget={
-        jumpTarget && jumpTarget.threadId === threadChannel.id
-          ? { channelId: threadChannel.id, messageId: jumpTarget.messageId }
-          : null
-      }
-      onJumped={() => setJumpTarget(null)}
+      jumpTarget={threadJumpTarget}
+      onJumped={handleJumped}
       onCloseChild={closeThread}
-      onJumpToOriginal={messageId => {
-        handleJumpToMessage(
-          {
-            workspaceId: selectedWorkspaceId ?? undefined,
-            channelId:
-              threadChannel.kind === 'thread'
-                ? threadChannel.channel_id
-                : threadChannel.id,
-            messageId,
-          },
-          { preserveThreadLayout: true },
-        );
-      }}
+      onJumpToOriginal={handleJumpToOriginal}
       onThreadAnchorResolved={setHighlightedParentMessageId}
-      onToggleFullscreen={() => setThreadFullscreen(v => !v)}
+      onToggleFullscreen={handleToggleFullscreen}
       isFullscreen={threadFullscreen}
-      onArchiveChannel={(channelId, archived) => {
-        archiveChannel.mutate({
-          channelId,
-          archived,
-          workspaceId: selectedWorkspaceId ?? undefined,
-        });
-      }}
+      onArchiveChannel={handleArchiveChannelMutation}
       archivePending={archiveChannel.isPending}
       // No nested Thread: thread channels can't spawn sub-threads
       // (1-layer hard limit, schema-enforced too).
@@ -742,58 +792,67 @@ export function App(): JSX.Element {
           </>
         ) : (
           <>
-            {workspaceSidebarPane.present ? (
-              <>
+            <div
+              className="sidebar-slot"
+              style={{
+                flexBasis: workspaceSidebarVisible
+                  ? 'var(--sidebar-width)'
+                  : '0px',
+                // When hidden, eat the right-side flex gap so the parent's
+                // `gap: var(--frame-padding)` doesn't render twice (once on
+                // each side of the 0-width slot). Animates alongside
+                // flex-basis so the collapse stays smooth end-to-end.
+                marginRight: workspaceSidebarVisible
+                  ? '0px'
+                  : 'calc(-1 * var(--frame-padding, 0px))',
+              }}
+              // hidden subtree must not steal focus or grab pointer events
+              // mid-slide; `inert` removes it from the a11y tree too.
+              {...(workspaceSidebarVisible ? {} : { inert: '' })}
+              aria-hidden={workspaceSidebarVisible ? undefined : true}
+            >
+              {workspaceSidebarPane.present ? (
                 <div
-                  className="sidebar-slot"
-                  style={{
-                    flexBasis: workspaceSidebarVisible
-                      ? 'var(--sidebar-width)'
-                      : '0px',
-                    width: workspaceSidebarVisible
-                      ? 'var(--sidebar-width)'
-                      : '0px',
-                  }}
-                  // hidden subtree must not steal focus or grab pointer events
-                  // mid-slide; `inert` removes it from the a11y tree too.
-                  {...(workspaceSidebarVisible ? {} : { inert: '' })}
-                  aria-hidden={workspaceSidebarVisible ? undefined : true}
+                  className="sidebar-surface"
+                  data-state={workspaceSidebarPane.surfaceState}
+                  style={{ width: 'var(--sidebar-width)' }}
                 >
-                  <div
-                    className="sidebar-surface"
-                    data-state={workspaceSidebarPane.surfaceState}
-                    style={{ width: 'var(--sidebar-width)' }}
-                  >
-                    <Sidebar
-                      workspaces={workspaces.map(w => ({
-                        id: w.id,
-                        name: w.name,
-                        kind: w.kind === 'dm' ? 'dm' as const : 'regular' as const,
-                        workspace_path: w.workspace_path,
-                        dm_agent_id: w.dm_agent_id,
-                        unread: messageUnreadSummary?.by_workspace?.[w.id] ?? 0,
-                        archived: w.archived_at !== null,
-                      }))}
-                      selectedWorkspaceId={selectedWorkspaceId}
-                      onSelectWorkspace={handleSelectWorkspace}
-                      onCreateWorkspace={() => setCreateWorkspaceOpen(true)}
-                      savedActive={view === 'saved'}
-                      onSelectSaved={() => nav.toChatSaved()}
-                      archivedActive={view === 'archived'}
-                      onSelectArchived={() => nav.toChatArchived()}
-                      searchActive={view === 'search'}
-                      onSelectSearch={() => nav.toChatSearch()}
-                      savedCount={savedItems?.length}
-                    />
-                  </div>
-                </div>
-                {workspaceSidebarVisible ? (
-                  <VerticalSplitter
-                    onPointerDown={sidebar.startResize}
-                    active={sidebar.isDragging}
+                  <Sidebar
+                    workspaces={workspaces.map(w => ({
+                      id: w.id,
+                      name: w.name,
+                      kind: w.kind === 'dm' ? 'dm' as const : 'regular' as const,
+                      workspace_path: w.workspace_path,
+                      dm_agent_id: w.dm_agent_id,
+                      unread: messageUnreadSummary?.by_workspace?.[w.id] ?? 0,
+                      archived: w.archived_at !== null,
+                    }))}
+                    selectedWorkspaceId={selectedWorkspaceId}
+                    onSelectWorkspace={handleSelectWorkspace}
+                    onCreateWorkspace={() => setCreateWorkspaceOpen(true)}
+                    savedActive={view === 'saved'}
+                    onSelectSaved={() => nav.toChatSaved()}
+                    archivedActive={view === 'archived'}
+                    onSelectArchived={() => nav.toChatArchived()}
+                    searchActive={view === 'search'}
+                    onSelectSearch={() => nav.toChatSearch()}
+                    savedCount={savedItems?.length}
                   />
-                ) : null}
-              </>
+                </div>
+              ) : null}
+            </div>
+            {/* Splitter stays mounted for the entire animation lifecycle —
+              * keying it to `present` (not `visible`) avoids the 4 px
+              * layout snap that happens if the splitter unmounts at frame
+              * zero of the hide animation while the slot is still 220 ms
+              * away from finishing its collapse. The splitter slides
+              * leftward in lockstep with the slot's right edge and
+              * unmounts together with the surface at the end. */}
+            {workspaceSidebarPane.present ? (
+              <VerticalSplitter
+                onPointerDown={sidebar.startResize}
+                active={sidebar.isDragging}
+              />
             ) : null}
             {view === 'saved' ? (
               <SavedListView onJump={params => handleJumpToMessage(params)} />
@@ -818,68 +877,73 @@ export function App(): JSX.Element {
               />
             ) : (
               <>
-                {channelSidebarPane.present ? (
-                  <>
+                <div
+                  className="sidebar-slot"
+                  style={{
+                    flexBasis: channelSidebarVisible
+                      ? 'var(--channels-sidebar-width)'
+                      : '0px',
+                    marginRight: channelSidebarVisible
+                      ? '0px'
+                      : 'calc(-1 * var(--frame-padding, 0px))',
+                  }}
+                  {...(channelSidebarVisible ? {} : { inert: '' })}
+                  aria-hidden={channelSidebarVisible ? undefined : true}
+                >
+                  {channelSidebarPane.present ? (
                     <div
-                      className="sidebar-slot"
-                      style={{
-                        flexBasis: channelSidebarVisible
-                          ? 'var(--channels-sidebar-width)'
-                          : '0px',
-                        width: channelSidebarVisible
-                          ? 'var(--channels-sidebar-width)'
-                          : '0px',
-                      }}
-                      {...(channelSidebarVisible ? {} : { inert: '' })}
-                      aria-hidden={channelSidebarVisible ? undefined : true}
+                      className="sidebar-surface"
+                      data-state={channelSidebarPane.surfaceState}
+                      style={{ width: 'var(--channels-sidebar-width)' }}
                     >
-                      <div
-                        className="sidebar-surface"
-                        data-state={channelSidebarPane.surfaceState}
-                        style={{ width: 'var(--channels-sidebar-width)' }}
-                      >
-                        <ChannelsSidebar
-                          workspaceName={selectedWorkspace?.name ?? null}
-                          channels={activeChannels.map(s => ({
-                            id: s.id,
-                            title: s.title,
-                            kind: s.kind,
-                            status:
-                              s.status === 'active' || s.status === 'crashed' ? s.status : 'idle',
-                            parent_channel_id: s.kind === 'thread' ? s.parent_conversation_id : null,
-                            closed_at: s.closed_at,
-                            pinned_at: s.pinned_at,
-                            archived_at: s.archived_at,
-                          }))}
-                          workspaceKind={selectedWorkspace?.kind === 'dm' ? 'dm' : (selectedWorkspace ? 'regular' : null)}
-                          // Highlight either the parent (top-level) or — when a thread
-                          // pane is open — also the thread below it via tree indent.
-                          // ChannelsSidebar already renders the tree; selection just
-                          // points at "what's the active row".
-                          selectedChannelId={openThreadId ?? selectedChannelId}
-                          onSelectChannel={handleSelectChannel}
-                          onPinChannel={(channelId, pinned) =>
-                            pinChannel.mutate({ channelId, pinned })
-                          }
-                          onArchiveChannel={(channelId, archived) => {
-                            archiveChannel.mutate({
-                              channelId,
-                              archived,
-                              workspaceId: selectedWorkspaceId ?? undefined,
-                            });
-                          }}
-                          archivePending={archiveChannel.isPending}
-                          unreadByChannel={channelUnreadCounts ?? {}}
-                        />
-                      </div>
-                    </div>
-                    {channelSidebarVisible ? (
-                      <VerticalSplitter
-                        onPointerDown={channelsSidebar.startResize}
-                        active={channelsSidebar.isDragging}
+                      <ChannelsSidebar
+                        workspaceName={selectedWorkspace?.name ?? null}
+                        channels={activeChannels.map(s => ({
+                          id: s.id,
+                          title: s.title,
+                          kind: s.kind,
+                          status:
+                            s.status === 'active' || s.status === 'crashed' ? s.status : 'idle',
+                          parent_channel_id: s.kind === 'thread' ? s.parent_conversation_id : null,
+                          closed_at: s.closed_at,
+                          pinned_at: s.pinned_at,
+                          archived_at: s.archived_at,
+                        }))}
+                        workspaceKind={selectedWorkspace?.kind === 'dm' ? 'dm' : (selectedWorkspace ? 'regular' : null)}
+                        // Highlight either the parent (top-level) or — when a thread
+                        // pane is open — also the thread below it via tree indent.
+                        // ChannelsSidebar already renders the tree; selection just
+                        // points at "what's the active row".
+                        selectedChannelId={openThreadId ?? selectedChannelId}
+                        onSelectChannel={handleSelectChannel}
+                        onPinChannel={(channelId, pinned) =>
+                          pinChannel.mutate({ channelId, pinned })
+                        }
+                        onArchiveChannel={(channelId, archived) => {
+                          archiveChannel.mutate({
+                            channelId,
+                            archived,
+                            workspaceId: selectedWorkspaceId ?? undefined,
+                          });
+                        }}
+                        archivePending={archiveChannel.isPending}
+                        // Always wired — closeThread no-ops when there's
+                        // no open thread pane (re-navigates to the same
+                        // channel). Keeping the menu item shape constant
+                        // avoids a "now you see it, now you don't" feel.
+                        onCloseThread={closeThread}
+                        unreadByChannel={channelUnreadCounts ?? {}}
                       />
-                    ) : null}
-                  </>
+                    </div>
+                  ) : null}
+                </div>
+                {/* Splitter mounted across the full present lifecycle (see
+                  * the workspace-sidebar block for rationale). */}
+                {channelSidebarPane.present ? (
+                  <VerticalSplitter
+                    onPointerDown={channelsSidebar.startResize}
+                    active={channelsSidebar.isDragging}
+                  />
                 ) : null}
                 {threadView ? (
                   threadFullscreen ? (

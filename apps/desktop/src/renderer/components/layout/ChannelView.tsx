@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -115,7 +116,7 @@ interface ChannelViewProps {
   archivePending?: boolean;
 }
 
-export function ChannelView(props: ChannelViewProps): JSX.Element {
+export const ChannelView = memo(function ChannelView(props: ChannelViewProps): JSX.Element {
   if (!props.conversation) {
     return (
       <main
@@ -130,7 +131,7 @@ export function ChannelView(props: ChannelViewProps): JSX.Element {
     );
   }
   return <ActiveChannelView {...props} conversation={props.conversation} />;
-}
+});
 
 // Split out so the React-Query hooks below only mount once a channel
 // exists — keeps hook order stable across the null transition.
@@ -485,6 +486,7 @@ function ActiveChannelView({
           conversationId={conversation.id}
           routeKind={routeKind}
           disabled={closed}
+          archived={isArchived}
         />
       </div>
     </main>

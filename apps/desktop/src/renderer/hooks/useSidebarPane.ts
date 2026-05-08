@@ -30,13 +30,13 @@ import { flushSync } from 'react-dom';
  *     value back to 0 because the surface stays mounted the whole time.
  *   - **`prefers-reduced-motion`** short-circuits both directions to
  *     `open`/`closed` synchronously (no rAF, no setTimeout), so the
- *     surface mounts/unmounts without any 240 ms wait.
+ *     surface mounts/unmounts without any 220 ms wait.
  *   - **Timer cleanup**: every transition cancels any in-flight rAF or
  *     setTimeout from the previous transition, so rapid toggles don't leak
  *     ghost events that would resurrect the wrong phase later.
  */
 
-const SIDEBAR_ANIM_MS = 240;
+const SIDEBAR_ANIM_MS = 220;
 
 type Phase = 'closed' | 'opening' | 'open' | 'closing';
 
@@ -135,7 +135,7 @@ export function useSidebarPane({
       }
 
       // prefers-reduced-motion: snap to terminal phase synchronously so
-      // the surface mounts/unmounts without the 240ms perceptual delay.
+      // the surface mounts/unmounts without the 220ms perceptual delay.
       if (prefersReducedMotion()) {
         setState({ phase: next ? 'open' : 'closed', visible: next });
         return;
