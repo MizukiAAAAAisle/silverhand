@@ -1241,4 +1241,59 @@ export const migrations: Migration[] = [
         WHERE archived_at IS NOT NULL;
     `,
   },
+  {
+    version: 18,
+    name: 'schedules',
+    // Agent-owned cron-like scheduler. Schedules are private to the owning
+    // agent (no cross-agent visibility), have ZERO coupling to channels /
+    // tasks / messages — context, if any, lives inside the free-text
+    // `message` field. Wake fires by enqueuing a `from_kind='system'`
+    // message into the owner agent's agent_home primary dm_channel and
+    // delivering only to the owner.
+    //
+    // `spec_json` holds a discriminated union:
+    //   { kind: 'once', fire_at }                              // one-shot
+    //   { kind: 'interval', every_seconds, start_at? }         // fixed interval
+    //   { kind: 'cron', expression, timezone }                 // 5-field UNIX cron
+    // `next_fire_at` is a denormalized epoch-ms cache of the spec's next
+    // due time — service is responsible for keeping it in sync after
+    // every fire (always advanced from `actual_fire_at`, NOT from old
+    // `next_fire_at`).
+    //
+    // Status lifecycle:
+    //   pending → firing (CAS lease at scheduler tick)
+    //   firing → pending (repeat: advance next_fire_at)
+    //   firing → done    (one-shot terminal | repeat hit max_occurrences/until_at)
+    //   firing → failed  (enqueue/wake failure; terminal for v1)
+    //   pending|firing → cancelled (agent cancelled; terminal)
+    // App startup resets stale `firing` rows back to `pending` so a
+    // crash mid-fire doesn't lose the schedule.
+    up: `
+      CREATE TABLE schedules (
+        id              TEXT NOT NULL PRIMARY KEY,
+        owner_agent_id  TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+        message         TEXT NOT NULL,
+        spec_json       TEXT NOT NULL,
+        next_fire_at    INTEGER NOT NULL,
+        status          TEXT NOT NULL
+                        CHECK (status IN ('pending','firing','done','cancelled','failed')),
+        fired_count     INTEGER NOT NULL DEFAULT 0,
+        last_fired_at   INTEGER,
+        max_occurrences INTEGER,
+        until_at        INTEGER,
+        failure_reason  TEXT,
+        cancelled_at    INTEGER,
+        created_at      INTEGER NOT NULL,
+        updated_at      INTEGER NOT NULL
+      );
+
+      -- Scheduler tick scans due rows: WHERE status='pending' AND next_fire_at<=now
+      CREATE INDEX idx_schedules_due
+        ON schedules(status, next_fire_at);
+
+      -- list_schedules / quota counts: WHERE owner_agent_id=? AND status IN (...)
+      CREATE INDEX idx_schedules_owner
+        ON schedules(owner_agent_id, status);
+    `,
+  },
 ];

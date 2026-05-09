@@ -1,0 +1,1137 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  SCHEDULE_MAX_ACTIVE_PER_AGENT,
+  SCHEDULE_MIN_DELAY_SECONDS,
+  type ScheduleCreateInput,
+  type ScheduleDto,
+} from '@silverhand/shared';
+import { AgentRepo } from '../../src/repos/agent-repo.js';
+import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { HostRepo } from '../../src/repos/host-repo.js';
+import { MessageRepo } from '../../src/repos/message-repo.js';
+import { ScheduleRepo } from '../../src/repos/schedule-repo.js';
+import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
+import {
+  ScheduleError,
+  ScheduleService,
+} from '../../src/services/schedule-service.js';
+import type { BackendLogger } from '../../src/context.js';
+import type { ConversationManager } from '../../src/conversation-manager.js';
+import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
+import { makeTempSilverhandDir, openTestDb } from '../utils/db.js';
+
+class FakeConversationManager {
+  starts: Array<{ conversationId: string; agentId: string }> = [];
+  delivered: Array<{
+    conversationId: string;
+    agentId: string;
+    messageId: string;
+  }> = [];
+  deliverError: Error | null = null;
+
+  async start(conversationId: string, agentId: string): Promise<void> {
+    this.starts.push({ conversationId, agentId });
+  }
+
+  async deliverMessage(
+    conversationId: string,
+    agentId: string,
+    messageId: string,
+  ): Promise<void> {
+    if (this.deliverError) throw this.deliverError;
+    this.delivered.push({ conversationId, agentId, messageId });
+  }
+}
+
+interface Fixture {
+  service: ScheduleService;
+  schedules: ScheduleRepo;
+  agents: AgentRepo;
+  workspaces: WorkspaceRepo;
+  messages: MessageRepo;
+  conversations: ConversationRepo;
+  events: ScopeEventBus;
+  fake: FakeConversationManager;
+  ownerAgentId: string;
+  otherAgentId: string;
+  homeDmId: string;
+  setNow: (ts: number) => void;
+  cleanup: () => void;
+}
+
+let currentNow = 0;
+
+function bootstrap(): Fixture {
+  const { db, localHostId } = openTestDb();
+  const tmp = makeTempSilverhandDir();
+  const hosts = new HostRepo(db);
+  hosts.ensureLocal();
+  const agents = new AgentRepo(db);
+  const workspaces = new WorkspaceRepo(db, {
+    workspacesRoot: tmp.workspacesRoot,
+  });
+  const conversations = new ConversationRepo(db);
+  const messages = new MessageRepo(db);
+  const schedules = new ScheduleRepo(db);
+  const events = new ScopeEventBus('test-epoch');
+  const fake = new FakeConversationManager();
+  const logger: BackendLogger = {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  };
+
+  // Owner + a second agent for permission-boundary tests.
+  const owner = agents.create(
+    { name: 'alice', runtime: 'claude' },
+    localHostId,
+  );
+  const other = agents.create(
+    { name: 'bob', runtime: 'claude' },
+    localHostId,
+  );
+
+  // Provision agent_home + dm_channel for the owner. Tests need this so
+  // the wake delivery has a real target.
+  const home = workspaces.insertAgentHome({
+    agent: owner,
+    workspacePath: tmp.workspacesRoot,
+  });
+  const dm = conversations.insertDmChannel({
+    workspaceId: home.id,
+    workspacePath: home.workspace_path,
+    title: `dm-${owner.name}`,
+  });
+  conversations.addAgent(dm.id, owner.id);
+
+  // bob has no agent_home so we can test the agent_home_not_found path.
+
+  currentNow = 1_700_000_000_000;
+  const setNow = (ts: number) => {
+    currentNow = ts;
+  };
+
+  const service = new ScheduleService({
+    schedules,
+    workspaces,
+    messages,
+    agents,
+    conversationManager: fake as unknown as ConversationManager,
+    events,
+    logger,
+    now: () => currentNow,
+    disableAutoTick: true,
+  });
+
+  return {
+    service,
+    schedules,
+    agents,
+    workspaces,
+    messages,
+    conversations,
+    events,
+    fake,
+    ownerAgentId: owner.id,
+    otherAgentId: other.id,
+    homeDmId: dm.id,
+    setNow,
+    cleanup: tmp.cleanup,
+  };
+}
+
+let fixturesToCleanup: Fixture[] = [];
+function setup(): Fixture {
+  const f = bootstrap();
+  fixturesToCleanup.push(f);
+  return f;
+}
+
+afterEach(() => {
+  for (const f of fixturesToCleanup) f.cleanup();
+  fixturesToCleanup = [];
+});
+
+describe('ScheduleService.create', () => {
+  it('canonicalizes once delay_seconds → fire_at and sets next_fire_at', () => {
+    const f = setup();
+    const created = f.service.create(
+      {
+        message: 'check the build',
+        spec: { kind: 'once', delay_seconds: 60 },
+      },
+      f.ownerAgentId,
+    );
+    expect(created.spec.kind).toBe('once');
+    if (created.spec.kind === 'once') {
+      expect(created.spec.fire_at).toBe(currentNow + 60_000);
+    }
+    expect(created.next_fire_at).toBe(currentNow + 60_000);
+    expect(created.status).toBe('pending');
+    expect(created.fired_count).toBe(0);
+  });
+
+  it('rejects once when both fire_at and delay_seconds are missing', () => {
+    const f = setup();
+    expect(() =>
+      f.service.create(
+        { message: 'm', spec: { kind: 'once' } as ScheduleCreateInput['spec'] },
+        f.ownerAgentId,
+      ),
+    ).toThrow(ScheduleError);
+  });
+
+  it('rejects once that fires sooner than the min delay', () => {
+    const f = setup();
+    let err: ScheduleError | undefined;
+    try {
+      f.service.create(
+        {
+          message: 'm',
+          spec: { kind: 'once', delay_seconds: SCHEDULE_MIN_DELAY_SECONDS - 1 },
+        },
+        f.ownerAgentId,
+      );
+    } catch (e) {
+      err = e as ScheduleError;
+    }
+    expect(err?.code).toBe('fire_at_too_soon');
+  });
+
+  it('rejects once that fires further than the max delay', () => {
+    const f = setup();
+    let err: ScheduleError | undefined;
+    try {
+      f.service.create(
+        {
+          message: 'm',
+          spec: {
+            kind: 'once',
+            fire_at: currentNow + 91 * 24 * 60 * 60 * 1000,
+          },
+        },
+        f.ownerAgentId,
+      );
+    } catch (e) {
+      err = e as ScheduleError;
+    }
+    expect(err?.code).toBe('fire_at_too_far');
+  });
+
+  it('rejects unbounded interval without explicit allow_unbounded', () => {
+    const f = setup();
+    let err: ScheduleError | undefined;
+    try {
+      f.service.create(
+        {
+          message: 'm',
+          spec: { kind: 'interval', every_seconds: 60 },
+        },
+        f.ownerAgentId,
+      );
+    } catch (e) {
+      err = e as ScheduleError;
+    }
+    expect(err?.code).toBe('unbounded_repeat_requires_explicit_limit');
+  });
+
+  it('accepts interval with allow_unbounded=true', () => {
+    const f = setup();
+    const created = f.service.create(
+      {
+        message: 'poll every minute',
+        spec: { kind: 'interval', every_seconds: 60 },
+        allow_unbounded: true,
+      },
+      f.ownerAgentId,
+    );
+    expect(created.spec.kind).toBe('interval');
+    expect(created.next_fire_at).toBe(currentNow + 60_000);
+  });
+
+  it('accepts interval bounded by max_occurrences', () => {
+    const f = setup();
+    const created = f.service.create(
+      {
+        message: 'three checks',
+        spec: { kind: 'interval', every_seconds: 60 },
+        max_occurrences: 3,
+      },
+      f.ownerAgentId,
+    );
+    expect(created.max_occurrences).toBe(3);
+  });
+
+  it('rejects invalid cron expression', () => {
+    const f = setup();
+    let err: ScheduleError | undefined;
+    try {
+      f.service.create(
+        {
+          message: 'm',
+          spec: {
+            kind: 'cron',
+            expression: 'definitely not cron',
+            timezone: 'UTC',
+          },
+          max_occurrences: 5,
+        },
+        f.ownerAgentId,
+      );
+    } catch (e) {
+      err = e as ScheduleError;
+    }
+    expect(err?.code).toBe('invalid_cron_expression');
+  });
+
+  it('rejects invalid IANA timezone', () => {
+    const f = setup();
+    let err: ScheduleError | undefined;
+    try {
+      f.service.create(
+        {
+          message: 'm',
+          spec: {
+            kind: 'cron',
+            expression: '0 9 * * *',
+            timezone: 'Mars/Olympus_Mons',
+          },
+          max_occurrences: 5,
+        },
+        f.ownerAgentId,
+      );
+    } catch (e) {
+      err = e as ScheduleError;
+    }
+    expect(err?.code).toBe('invalid_timezone');
+  });
+
+  it('computes next_fire_at for cron in the given timezone', () => {
+    const f = setup();
+    // Fix "now" to 2024-03-09 12:00:00 UTC; with NYC (UTC-5 standard
+    // time, before DST starts on 03-10 at 02:00 local), 09:00 NYC =
+    // 14:00 UTC. So the next "9am NYC" occurrence after 12:00 UTC is
+    // the same calendar day at 14:00 UTC.
+    const fixedNow = Date.UTC(2024, 2, 9, 12, 0, 0); // 2024-03-09T12:00:00Z
+    f.setNow(fixedNow);
+    const created = f.service.create(
+      {
+        message: 'daily 9am NYC',
+        spec: {
+          kind: 'cron',
+          expression: '0 9 * * *',
+          timezone: 'America/New_York',
+        },
+        allow_unbounded: true,
+      },
+      f.ownerAgentId,
+    );
+    expect(created.next_fire_at).toBe(Date.UTC(2024, 2, 9, 14, 0, 0));
+  });
+
+  it('rejects when owner agent does not exist', () => {
+    const f = setup();
+    let err: ScheduleError | undefined;
+    try {
+      f.service.create(
+        { message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
+        'nonexistent',
+      );
+    } catch (e) {
+      err = e as ScheduleError;
+    }
+    expect(err?.code).toBe('agent_not_found');
+  });
+
+  it('rejects when owner has no agent_home dm_channel', () => {
+    const f = setup();
+    let err: ScheduleError | undefined;
+    try {
+      f.service.create(
+        { message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
+        f.otherAgentId,
+      );
+    } catch (e) {
+      err = e as ScheduleError;
+    }
+    expect(err?.code).toBe('agent_home_not_found');
+  });
+
+  it('enforces per-agent active quota', () => {
+    const f = setup();
+    for (let i = 0; i < SCHEDULE_MAX_ACTIVE_PER_AGENT; i++) {
+      f.service.create(
+        {
+          message: `m${i}`,
+          spec: { kind: 'once', delay_seconds: 60 + i },
+        },
+        f.ownerAgentId,
+      );
+    }
+    let err: ScheduleError | undefined;
+    try {
+      f.service.create(
+        { message: 'overflow', spec: { kind: 'once', delay_seconds: 9999 } },
+        f.ownerAgentId,
+      );
+    } catch (e) {
+      err = e as ScheduleError;
+    }
+    expect(err?.code).toBe('too_many_active_schedules');
+  });
+
+  it('rejects until_at that precedes the first fire', () => {
+    const f = setup();
+    let err: ScheduleError | undefined;
+    try {
+      f.service.create(
+        {
+          message: 'm',
+          spec: { kind: 'interval', every_seconds: 600 },
+          until_at: currentNow + 60_000, // before first fire (currentNow + 600_000)
+        },
+        f.ownerAgentId,
+      );
+    } catch (e) {
+      err = e as ScheduleError;
+    }
+    expect(err?.code).toBe('invalid_input');
+  });
+
+  // Once-spec strict-reject for repeat-only knobs. Silent-ignoring would
+  // surface a non-canonical DTO (e.g. `max_occurrences=3` on a row that
+  // can only ever fire once); reject at the input-schema layer so the
+  // contract stays "those fields exist on repeat specs only".
+  it.each(['max_occurrences', 'until_at', 'allow_unbounded'] as const)(
+    'rejects once spec carrying repeat-only field %s',
+    field => {
+      const f = setup();
+      const input: ScheduleCreateInput = {
+        message: 'm',
+        spec: { kind: 'once', delay_seconds: 600 },
+      };
+      if (field === 'max_occurrences') {
+        (input as { max_occurrences?: number }).max_occurrences = 3;
+      } else if (field === 'until_at') {
+        (input as { until_at?: number }).until_at = currentNow + 24 * 60 * 60 * 1000;
+      } else {
+        (input as { allow_unbounded?: boolean }).allow_unbounded = true;
+      }
+      let err: ScheduleError | undefined;
+      try {
+        f.service.create(input, f.ownerAgentId);
+      } catch (e) {
+        err = e as ScheduleError;
+      }
+      expect(err?.code).toBe('invalid_input');
+    },
+  );
+});
+
+describe('ScheduleService.list', () => {
+  it('filters by status with active alias expanding to pending|firing', async () => {
+    const f = setup();
+    const due = f.service.create(
+      { message: 'soon', spec: { kind: 'once', delay_seconds: 60 } },
+      f.ownerAgentId,
+    );
+    const later = f.service.create(
+      { message: 'later', spec: { kind: 'once', delay_seconds: 600 } },
+      f.ownerAgentId,
+    );
+    // Cancel one to verify it's filtered out by status='active'.
+    f.service.cancel(later.id, f.ownerAgentId);
+
+    const active = f.service.list(f.ownerAgentId, 'active', undefined);
+    expect(active.map(s => s.id)).toEqual([due.id]);
+
+    const all = f.service.list(f.ownerAgentId, 'all', undefined);
+    expect(all.length).toBe(2);
+  });
+
+  it('returns schedules owned by the agent only', () => {
+    const f = setup();
+    const mine = f.service.create(
+      { message: 'mine', spec: { kind: 'once', delay_seconds: 60 } },
+      f.ownerAgentId,
+    );
+    // bob has no agent_home so we can't service.create for him; insert
+    // directly via repo to fake a stray row that our list must ignore.
+    f.schedules.insert({
+      ownerAgentId: f.otherAgentId,
+      message: 'theirs',
+      spec: { kind: 'once', fire_at: currentNow + 60_000 },
+      nextFireAt: currentNow + 60_000,
+    });
+    const list = f.service.list(f.ownerAgentId, undefined, undefined);
+    expect(list.map(s => s.id)).toEqual([mine.id]);
+  });
+});
+
+describe('ScheduleService.cancel', () => {
+  it('cancels a pending schedule when called by owner', () => {
+    const f = setup();
+    const s = f.service.create(
+      { message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
+      f.ownerAgentId,
+    );
+    const after = f.service.cancel(s.id, f.ownerAgentId);
+    expect(after.status).toBe('cancelled');
+    expect(after.cancelled_at).not.toBeNull();
+  });
+
+  it('rejects cancel from a non-owner agent', () => {
+    const f = setup();
+    const s = f.service.create(
+      { message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
+      f.ownerAgentId,
+    );
+    let err: ScheduleError | undefined;
+    try {
+      f.service.cancel(s.id, f.otherAgentId);
+    } catch (e) {
+      err = e as ScheduleError;
+    }
+    expect(err?.code).toBe('not_owner');
+    expect(f.schedules.get(s.id)?.status).toBe('pending');
+  });
+
+  it('rejects cancel when schedule already done', async () => {
+    const f = setup();
+    const s = f.service.create(
+      { message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
+      f.ownerAgentId,
+    );
+    f.setNow(currentNow + 70_000);
+    await f.service.tick();
+    expect(f.schedules.get(s.id)?.status).toBe('done');
+    let err: ScheduleError | undefined;
+    try {
+      f.service.cancel(s.id, f.ownerAgentId);
+    } catch (e) {
+      err = e as ScheduleError;
+    }
+    expect(err?.code).toBe('not_cancellable');
+  });
+});
+
+describe('ScheduleService.tick — fire & advance', () => {
+  it('one-shot fires once then transitions to done', async () => {
+    const f = setup();
+    const s = f.service.create(
+      { message: 'follow up', spec: { kind: 'once', delay_seconds: 60 } },
+      f.ownerAgentId,
+    );
+    f.setNow(currentNow + 60_000);
+    await f.service.tick();
+    const after = f.schedules.get(s.id);
+    expect(after?.status).toBe('done');
+    expect(after?.fired_count).toBe(1);
+    expect(f.fake.delivered.length).toBe(1);
+    expect(f.fake.delivered[0]?.conversationId).toBe(f.homeDmId);
+    expect(f.fake.delivered[0]?.agentId).toBe(f.ownerAgentId);
+  });
+
+  it('wake message lands in agent_home dm_channel with imperative body', async () => {
+    const f = setup();
+    f.service.create(
+      { message: 'review the deploy', spec: { kind: 'once', delay_seconds: 60 } },
+      f.ownerAgentId,
+    );
+    f.setNow(currentNow + 60_000);
+    await f.service.tick();
+    const messageId = f.fake.delivered[0]?.messageId;
+    expect(messageId).toBeDefined();
+    const msg = f.messages.getById(messageId!);
+    expect(msg?.from_kind).toBe('system');
+    expect(msg?.content).toContain('Schedule fired');
+    expect(msg?.content).toContain('review the deploy');
+    expect(msg?.content).toContain('"noted, no action"');
+    // Renderer/reviewer can identify reminder messages by metadata
+    // subtype — keep this stable so future filtering works.
+    const meta = msg?.metadata as Record<string, unknown> | null;
+    expect(meta?.subtype).toBe('schedule_fire');
+  });
+
+  it('does not deliver before next_fire_at', async () => {
+    const f = setup();
+    f.service.create(
+      { message: 'm', spec: { kind: 'once', delay_seconds: 600 } },
+      f.ownerAgentId,
+    );
+    f.setNow(currentNow + 60_000); // not yet due
+    await f.service.tick();
+    expect(f.fake.delivered.length).toBe(0);
+  });
+
+  it('interval fires repeatedly, advances next_fire_at from actual_fire_at', async () => {
+    const f = setup();
+    const s = f.service.create(
+      {
+        message: 'tick',
+        spec: { kind: 'interval', every_seconds: 60 },
+        max_occurrences: 3,
+      },
+      f.ownerAgentId,
+    );
+
+    // First fire at exactly the planned time — next should be t+60s.
+    const planned1 = s.next_fire_at;
+    f.setNow(planned1);
+    await f.service.tick();
+    let row = f.schedules.get(s.id)!;
+    expect(row.fired_count).toBe(1);
+    expect(row.status).toBe('pending');
+    expect(row.next_fire_at).toBe(planned1 + 60_000);
+
+    // Simulate "scheduler woke up late" — actual fire 90s past the
+    // planned time. Next fire must advance from actual, not planned.
+    const planned2 = row.next_fire_at;
+    const actual2 = planned2 + 90_000;
+    f.setNow(actual2);
+    await f.service.tick();
+    row = f.schedules.get(s.id)!;
+    expect(row.fired_count).toBe(2);
+    expect(row.next_fire_at).toBe(actual2 + 60_000);
+
+    // Third fire hits max_occurrences → terminal done.
+    f.setNow(row.next_fire_at);
+    await f.service.tick();
+    row = f.schedules.get(s.id)!;
+    expect(row.fired_count).toBe(3);
+    expect(row.status).toBe('done');
+  });
+
+  it('interval terminates when next fire would exceed until_at', async () => {
+    const f = setup();
+    const s = f.service.create(
+      {
+        message: 'tick until',
+        spec: { kind: 'interval', every_seconds: 60 },
+        until_at: currentNow + 65_000, // covers the first fire only
+      },
+      f.ownerAgentId,
+    );
+    f.setNow(s.next_fire_at);
+    await f.service.tick();
+    const after = f.schedules.get(s.id)!;
+    expect(after.fired_count).toBe(1);
+    expect(after.status).toBe('done');
+  });
+
+  it('marks schedule failed when wake delivery throws', async () => {
+    const f = setup();
+    f.fake.deliverError = new Error('mcp dead');
+    const s = f.service.create(
+      { message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
+      f.ownerAgentId,
+    );
+    f.setNow(currentNow + 60_000);
+    await f.service.tick();
+    const after = f.schedules.get(s.id)!;
+    expect(after.status).toBe('failed');
+    expect(after.failure_reason).toBe('mcp dead');
+  });
+});
+
+describe('ScheduleService.tick — concurrency and recovery', () => {
+  it('CAS prevents two parallel ticks from firing the same row twice', async () => {
+    const f = setup();
+    const s = f.service.create(
+      { message: 'racy', spec: { kind: 'once', delay_seconds: 60 } },
+      f.ownerAgentId,
+    );
+    f.setNow(currentNow + 60_000);
+    // Fire both ticks "simultaneously" — Promise.all → JS event loop
+    // interleaves them, but the CAS is single-threaded SQLite so only
+    // one can claim.
+    await Promise.all([f.service.tick(), f.service.tick()]);
+    expect(f.fake.delivered.length).toBe(1);
+    expect(f.schedules.get(s.id)?.fired_count).toBe(1);
+  });
+
+  it('start() resets stale firing rows from a prior process', () => {
+    const f = setup();
+    const s = f.service.create(
+      { message: 'crashed mid-fire', spec: { kind: 'once', delay_seconds: 60 } },
+      f.ownerAgentId,
+    );
+    // Simulate crash: the prior process left this row in 'firing'.
+    f.schedules.tryClaim(s.id);
+    expect(f.schedules.get(s.id)?.status).toBe('firing');
+    // disableAutoTick is true so start() does nothing except recovery.
+    f.service.start();
+    expect(f.schedules.get(s.id)?.status).toBe('pending');
+  });
+
+  it('repeat schedule missed multiple intervals only fires once and advances', async () => {
+    const f = setup();
+    const s = f.service.create(
+      {
+        message: 'every minute',
+        spec: { kind: 'interval', every_seconds: 60 },
+        allow_unbounded: true,
+      },
+      f.ownerAgentId,
+    );
+    // Jump forward 10 minutes — by old "catch-up" logic, this would
+    // fire 10 times. Locked design says: fire once, advance from
+    // actual_fire_at (now), so next is now+60s.
+    const farFuture = currentNow + 10 * 60_000;
+    f.setNow(farFuture);
+    await f.service.tick();
+    expect(f.fake.delivered.length).toBe(1);
+    const row = f.schedules.get(s.id)!;
+    expect(row.fired_count).toBe(1);
+    expect(row.next_fire_at).toBe(farFuture + 60_000);
+    expect(row.status).toBe('pending');
+  });
+});
+
+describe('ScheduleService.tick — cron + DST', () => {
+  // For DST tests we lean on cron-parser's Luxon-backed timezone math
+  // and assert the higher-level invariant: next_fire_at must always be
+  // strictly greater than actual_fire_at, no matter how the wall-clock
+  // jumps. We don't hardcode wall-clock times because the underlying
+  // library decides how to handle skipped/repeated hours.
+
+  it('spring-forward: schedule firing across the missing 02:00-03:00 hour advances strictly forward', async () => {
+    const f = setup();
+    // 2024-03-10 02:00 → 03:00 jump in America/New_York.
+    // Start "now" at 2024-03-09 23:00 UTC = 18:00 EST so we have a
+    // few daily fires before, during, and after the transition.
+    f.setNow(Date.UTC(2024, 2, 9, 23, 0, 0));
+    const s = f.service.create(
+      {
+        message: 'daily 8am NYC',
+        spec: {
+          kind: 'cron',
+          expression: '0 8 * * *',
+          timezone: 'America/New_York',
+        },
+        max_occurrences: 5,
+      },
+      f.ownerAgentId,
+    );
+    let prev = s.next_fire_at;
+    for (let i = 0; i < 5; i++) {
+      const row = f.schedules.get(s.id)!;
+      const planned = row.next_fire_at;
+      // Fire at the planned time exactly.
+      f.setNow(planned);
+      await f.service.tick();
+      const after = f.schedules.get(s.id)!;
+      if (i < 4) {
+        expect(after.status).toBe('pending');
+        expect(after.next_fire_at).toBeGreaterThan(planned);
+        expect(after.next_fire_at).toBeGreaterThan(prev);
+      } else {
+        expect(after.status).toBe('done');
+      }
+      prev = planned;
+    }
+    // Sanity: no failures.
+    expect(f.schedules.get(s.id)?.failure_reason).toBeNull();
+  });
+
+  it('fall-back: schedule firing across the repeated 01:00-02:00 hour advances strictly forward', async () => {
+    const f = setup();
+    // 2024-11-03 02:00 → 01:00 jump in America/New_York.
+    f.setNow(Date.UTC(2024, 10, 2, 23, 0, 0));
+    const s = f.service.create(
+      {
+        message: 'every hour at :30',
+        spec: {
+          kind: 'cron',
+          expression: '30 * * * *',
+          timezone: 'America/New_York',
+        },
+        max_occurrences: 8,
+      },
+      f.ownerAgentId,
+    );
+    let prev = s.next_fire_at;
+    for (let i = 0; i < 8; i++) {
+      const row = f.schedules.get(s.id)!;
+      const planned = row.next_fire_at;
+      f.setNow(planned);
+      await f.service.tick();
+      const after = f.schedules.get(s.id)!;
+      if (i < 7) {
+        expect(after.status).toBe('pending');
+        // Strict forward progress is the only invariant the library
+        // is required to uphold across DST repetition.
+        expect(after.next_fire_at).toBeGreaterThan(planned);
+        expect(after.next_fire_at).toBeGreaterThan(prev);
+      } else {
+        expect(after.status).toBe('done');
+      }
+      prev = planned;
+    }
+    expect(f.schedules.get(s.id)?.failure_reason).toBeNull();
+  });
+});
+
+describe('ScheduleService renders wake body', () => {
+  it('publishes the wake message to the agent_home dm_channel for live UI', async () => {
+    const f = setup();
+    const conversationEvents: Array<{ kind: string; payload: unknown }> = [];
+    const viewerEvents: Array<{ kind: string; payload: unknown }> = [];
+    const unsubConversation = f.events.subscribe(f.homeDmId, event => {
+      conversationEvents.push(event);
+    });
+    const unsubViewer = f.events.subscribeScope('viewer:local', event => {
+      viewerEvents.push({ kind: event.kind, payload: event.payload });
+    });
+    try {
+      const s = f.service.create(
+        { message: 'show in ui', spec: { kind: 'once', delay_seconds: 60 } },
+        f.ownerAgentId,
+      );
+      f.setNow(s.next_fire_at);
+      await f.service.tick();
+    } finally {
+      unsubConversation();
+      unsubViewer();
+    }
+
+    const msgId = f.fake.delivered[0]!.messageId;
+    expect(conversationEvents).toHaveLength(1);
+    expect(conversationEvents[0]!.kind).toBe('message');
+    expect((conversationEvents[0]!.payload as any).message.id).toBe(msgId);
+    expect((conversationEvents[0]!.payload as any).message.metadata.subtype).toBe(
+      'schedule_fire',
+    );
+    expect(viewerEvents).toContainEqual({
+      kind: 'unread_updated',
+      payload: { conversation_id: f.homeDmId },
+    });
+  });
+
+  it('includes repeat metadata when fired_count is non-terminal', async () => {
+    const f = setup();
+    const s = f.service.create(
+      {
+        message: 'metric check',
+        spec: { kind: 'interval', every_seconds: 60 },
+        max_occurrences: 3,
+      },
+      f.ownerAgentId,
+    );
+    f.setNow(s.next_fire_at);
+    await f.service.tick();
+    const msgId = f.fake.delivered[0]!.messageId;
+    const msg = f.messages.getById(msgId)!;
+    expect(msg.content).toContain('Next fire at');
+    expect(msg.content).toContain('1/3');
+  });
+
+  it('reports late delivery in human-readable form', async () => {
+    const f = setup();
+    const s = f.service.create(
+      { message: 'morning', spec: { kind: 'once', delay_seconds: 60 } },
+      f.ownerAgentId,
+    );
+    // Fire 10 minutes after the planned time.
+    f.setNow(s.next_fire_at + 10 * 60_000);
+    await f.service.tick();
+    const msgId = f.fake.delivered[0]!.messageId;
+    const msg = f.messages.getById(msgId)!;
+    expect(msg.content).toMatch(/fired \d+m late/);
+  });
+});
+
+describe('ScheduleService dispose', () => {
+  it('start + stop are idempotent and do not leak timers', () => {
+    const f = setup();
+    f.service.start();
+    f.service.stop();
+    f.service.stop();
+    f.service.start();
+    f.service.stop();
+    // No assertion beyond "no throw"; vitest catches lingering timers
+    // via process exit hooks if any timer was missed.
+    expect(true).toBe(true);
+  });
+});
+
+// ── Review fixes (Cindy r1) ───────────────────────────────────────
+
+describe('ScheduleService — cron 5-field strictness', () => {
+  it('rejects 6-field (seconds) cron expressions at create time', () => {
+    const f = setup();
+    let err: ScheduleError | undefined;
+    try {
+      f.service.create(
+        {
+          message: 'sub-minute is not allowed',
+          // cron-parser would happily accept this 6-field form,
+          // but our v1 contract is 5-field UNIX cron.
+          spec: { kind: 'cron', expression: '0 0 9 * * *', timezone: 'UTC' },
+          max_occurrences: 5,
+        },
+        f.ownerAgentId,
+      );
+    } catch (e) {
+      err = e as ScheduleError;
+    }
+    expect(err?.code).toBe('invalid_cron_expression');
+    expect(err?.message).toContain('5 fields');
+  });
+
+  it('rejects @daily / @hourly / @reboot aliases', () => {
+    const f = setup();
+    for (const alias of ['@daily', '@hourly', '@reboot', '@yearly']) {
+      let err: ScheduleError | undefined;
+      try {
+        f.service.create(
+          {
+            message: 'aliases blocked',
+            spec: { kind: 'cron', expression: alias, timezone: 'UTC' },
+            max_occurrences: 5,
+          },
+          f.ownerAgentId,
+        );
+      } catch (e) {
+        err = e as ScheduleError;
+      }
+      expect(err?.code, `alias ${alias} should be rejected`).toBe(
+        'invalid_cron_expression',
+      );
+      expect(err?.message).toContain('alias');
+    }
+  });
+
+  it('accepts the canonical 5-field form', () => {
+    const f = setup();
+    expect(() =>
+      f.service.create(
+        {
+          message: 'fine',
+          spec: { kind: 'cron', expression: '0 9 * * *', timezone: 'UTC' },
+          max_occurrences: 5,
+        },
+        f.ownerAgentId,
+      ),
+    ).not.toThrow();
+  });
+});
+
+describe('ScheduleService — cancel-during-firing race', () => {
+  it('cancel that wins between CAS and completion is preserved', async () => {
+    const f = setup();
+    const s = f.service.create(
+      { message: 'racy', spec: { kind: 'once', delay_seconds: 60 } },
+      f.ownerAgentId,
+    );
+
+    // Simulate the race: tick() begins, CAS-claims into 'firing',
+    // then a cancel arrives (here we just call schedules.cancel
+    // directly — that's what the future MCP route would do via
+    // service.cancel) BEFORE the wake completes. We model "wake
+    // completes after cancel" by hooking into the fake CM.
+    let cancelDuringDeliver = false;
+    f.fake.deliverMessage = async (cid, aid, mid) => {
+      f.fake.delivered.push({ conversationId: cid, agentId: aid, messageId: mid });
+      // Inject the race: cancel races in here.
+      if (!cancelDuringDeliver) {
+        cancelDuringDeliver = true;
+        // service.cancel rejects pending|firing only; here it's firing.
+        f.service.cancel(s.id, f.ownerAgentId);
+      }
+    };
+
+    f.setNow(currentNow + 60_000);
+    await f.service.tick();
+
+    // Wake was delivered (CAS won, message was inserted) — that's OK,
+    // cancel only promises "no future fires", it doesn't undeliver.
+    expect(f.fake.delivered.length).toBe(1);
+    // Cancel must remain the terminal state — completion path must NOT
+    // overwrite cancelled with done/pending.
+    const after = f.schedules.get(s.id)!;
+    expect(after.status).toBe('cancelled');
+    expect(after.cancelled_at).not.toBeNull();
+  });
+
+  it('cancel race on a repeat schedule blocks the rearm', async () => {
+    const f = setup();
+    const s = f.service.create(
+      {
+        message: 'repeating racy',
+        spec: { kind: 'interval', every_seconds: 60 },
+        max_occurrences: 5,
+      },
+      f.ownerAgentId,
+    );
+    f.fake.deliverMessage = async (cid, aid, mid) => {
+      f.fake.delivered.push({ conversationId: cid, agentId: aid, messageId: mid });
+      f.service.cancel(s.id, f.ownerAgentId);
+    };
+    f.setNow(s.next_fire_at);
+    await f.service.tick();
+    const after = f.schedules.get(s.id)!;
+    expect(after.status).toBe('cancelled');
+    // The rearm path tried to bump fired_count + push next_fire_at —
+    // it must have been a no-op because of the status='firing' guard.
+    expect(after.fired_count).toBe(0);
+    expect(after.next_fire_at).toBe(s.next_fire_at);
+  });
+});
+
+describe('ScheduleService — start() failure marks the schedule failed', () => {
+  it('treats a ConversationManager.start rejection as a wake failure', async () => {
+    const f = setup();
+    // deliver succeeds so the message is persisted, but start throws
+    // — modeling a runtime that fails to spawn (PATH issue, missing
+    // binary, init watchdog timeout, etc).
+    f.fake.start = async () => {
+      throw new Error('runtime spawn failed');
+    };
+    const s = f.service.create(
+      { message: 'wake me', spec: { kind: 'once', delay_seconds: 60 } },
+      f.ownerAgentId,
+    );
+    f.setNow(currentNow + 60_000);
+    await f.service.tick();
+    const after = f.schedules.get(s.id)!;
+    expect(after.status).toBe('failed');
+    expect(after.failure_reason).toContain('runtime spawn failed');
+    // The message DID get inserted — that's an inbox liability we
+    // accept (the agent will see it next time it starts via some
+    // other path), but the schedule itself is terminal-failed so it
+    // won't re-fire.
+    expect(f.fake.delivered.length).toBe(1);
+  });
+});
+
+describe('ScheduleService — wake body advancement details', () => {
+  it('reports missed_count for interval schedules that caught up late', async () => {
+    const f = setup();
+    const s = f.service.create(
+      {
+        message: 'every 60s',
+        spec: { kind: 'interval', every_seconds: 60 },
+        allow_unbounded: true,
+      },
+      f.ownerAgentId,
+    );
+    // Skip 5 minutes — 5 occurrences elapsed since the planned fire
+    // time. We catch up with a single fire; missed_count = 5.
+    f.setNow(s.next_fire_at + 5 * 60_000);
+    await f.service.tick();
+    const msgId = f.fake.delivered[0]!.messageId;
+    const msg = f.messages.getById(msgId)!;
+    expect(msg.content).toContain('Missed 5 prior occurrence');
+    const meta = msg.metadata as Record<string, unknown>;
+    expect(meta.missed_count).toBe(5);
+    // next_fire_at metadata also surfaced for downstream consumers.
+    expect(meta.next_fire_at).toBe(s.next_fire_at + 5 * 60_000 + 60_000);
+  });
+
+  it('renders next_fire_at ISO timestamp for non-terminal repeat fires', async () => {
+    const f = setup();
+    const s = f.service.create(
+      {
+        message: 'tick',
+        spec: { kind: 'interval', every_seconds: 60 },
+        max_occurrences: 3,
+      },
+      f.ownerAgentId,
+    );
+    f.setNow(s.next_fire_at);
+    await f.service.tick();
+    const msgId = f.fake.delivered[0]!.messageId;
+    const msg = f.messages.getById(msgId)!;
+    // Format is `Next fire at <ISO>.`
+    expect(msg.content).toMatch(/Next fire at \d{4}-\d{2}-\d{2}T/);
+  });
+
+  it('renders "final fire" hint when repeat hits max_occurrences', async () => {
+    const f = setup();
+    const s = f.service.create(
+      {
+        message: 'last tick',
+        spec: { kind: 'interval', every_seconds: 60 },
+        max_occurrences: 1,
+      },
+      f.ownerAgentId,
+    );
+    f.setNow(s.next_fire_at);
+    await f.service.tick();
+    const msgId = f.fake.delivered[0]!.messageId;
+    const msg = f.messages.getById(msgId)!;
+    expect(msg.content).toContain('final fire');
+    // Schedule must be terminal `done`, not pending.
+    expect(f.schedules.get(s.id)?.status).toBe('done');
+  });
+
+  it('one-shot wake never includes next_fire_at or missed_count copy', async () => {
+    const f = setup();
+    const s = f.service.create(
+      { message: 'just once', spec: { kind: 'once', delay_seconds: 60 } },
+      f.ownerAgentId,
+    );
+    f.setNow(s.next_fire_at);
+    await f.service.tick();
+    const msgId = f.fake.delivered[0]!.messageId;
+    const msg = f.messages.getById(msgId)!;
+    expect(msg.content).not.toContain('Next fire at');
+    expect(msg.content).not.toContain('Missed');
+    expect(msg.content).not.toContain('final fire');
+    const meta = msg.metadata as Record<string, unknown>;
+    expect(meta.missed_count).toBe(0);
+    expect(meta.next_fire_at).toBeNull();
+  });
+});
+
+describe('ScheduleSchedule isolation', () => {
+  it('listForAgent excludes other agents and orders by next_fire_at asc', () => {
+    const f = setup();
+    const a = f.service.create(
+      { message: 'second', spec: { kind: 'once', delay_seconds: 600 } },
+      f.ownerAgentId,
+    );
+    const b = f.service.create(
+      { message: 'first', spec: { kind: 'once', delay_seconds: 60 } },
+      f.ownerAgentId,
+    );
+    const list = f.service.list(f.ownerAgentId, 'pending', undefined);
+    expect(list.map(s => s.id)).toEqual([b.id, a.id]);
+  });
+
+  it('does not validate workspace path / settings of other agents', () => {
+    const f = setup();
+    f.service.create(
+      { message: 'mine', spec: { kind: 'once', delay_seconds: 60 } },
+      f.ownerAgentId,
+    );
+    // Listing under a foreign agent returns nothing — no error.
+    const list = f.service.list(f.otherAgentId, 'all', undefined);
+    expect(list).toEqual([]);
+  });
+});
+
+describe('ScheduleDto round-trip', () => {
+  it('preserves spec_json across insert + read', () => {
+    const f = setup();
+    const created = f.service.create(
+      {
+        message: 'cron readback',
+        spec: {
+          kind: 'cron',
+          expression: '*/15 * * * *',
+          timezone: 'UTC',
+        },
+        allow_unbounded: true,
+      },
+      f.ownerAgentId,
+    );
+    const reread: ScheduleDto = f.schedules.get(created.id)!;
+    expect(reread.spec.kind).toBe('cron');
+    if (reread.spec.kind === 'cron') {
+      expect(reread.spec.expression).toBe('*/15 * * * *');
+      expect(reread.spec.timezone).toBe('UTC');
+    }
+  });
+});

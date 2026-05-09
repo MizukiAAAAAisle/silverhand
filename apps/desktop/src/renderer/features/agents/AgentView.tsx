@@ -1,6 +1,7 @@
 import type { AgentRuntimeConversation } from '@silverhand/shared';
 import { AgentHeader } from './AgentHeader';
 import { AgentProfileCard } from './AgentProfileCard';
+import { AgentSchedulesCard } from './AgentSchedulesCard';
 import { AgentWorkspaceCard } from './AgentWorkspaceCard';
 import { AgentRuntimeTable } from './AgentRuntimeTable';
 import {
@@ -87,6 +88,7 @@ export function AgentView({
             state={runtimeQuery.data}
             onOpenConversation={onOpenConversation}
           />
+          <AgentSchedulesCard agentId={agent.id} />
         </div>
       </div>
     </main>

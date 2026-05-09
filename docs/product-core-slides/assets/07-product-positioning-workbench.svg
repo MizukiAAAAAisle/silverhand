@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 680" role="img" aria-labelledby="title desc">
+  <title id="title">Silverhand 协作工作台</title>
+  <desc id="desc">一个工作台把智能体、讨论区、任务、历史和验证组织到同一个产品界面中。</desc>
+  <defs>
+    <style>
+      .bg { fill: #fbfaf7; }
+      .ink { stroke: #1f2937; }
+      .soft { stroke: #8a93a1; }
+      .blue { stroke: #3b82f6; }
+      .green { stroke: #10b981; }
+      .amber { stroke: #f59e0b; }
+      .red { stroke: #ef4444; }
+      .fill-white { fill: #ffffff; }
+      .fill-blue { fill: #dbeafe; }
+      .fill-green { fill: #d1fae5; }
+      .fill-amber { fill: #fef3c7; }
+      .fill-red { fill: #fee2e2; }
+      .text { fill: #1f2937; font: 600 28px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .small { fill: #4b5563; font: 500 18px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .line { fill: none; stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; }
+      .thin { fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1200" height="680"/>
+  <text class="text" x="84" y="76">Silverhand：让智能体组成团队，帮助人做决定</text>
+  <text class="small" x="86" y="112">一个界面承载上下文、角色、任务、讨论和验证。</text>
+
+  <g transform="translate(104 166)">
+    <rect class="fill-white ink" x="0" y="0" width="992" height="412" rx="30" stroke-width="4"/>
+    <rect class="fill-blue blue" x="30" y="34" width="172" height="344" rx="20" stroke-width="3"/>
+    <path class="thin blue" d="M64 78 H168 M64 116 H148 M64 154 H164 M64 192 H136"/>
+    <circle class="fill-white green" cx="70" cy="278" r="18" stroke-width="3"/>
+    <circle class="fill-white amber" cx="116" cy="278" r="18" stroke-width="3"/>
+    <circle class="fill-white red" cx="162" cy="278" r="18" stroke-width="3"/>
+    <text class="small" x="58" y="330">智能体团队</text>
+
+    <rect class="fill-white soft" x="236" y="34" width="436" height="344" rx="20" stroke-width="3"/>
+    <rect class="fill-green green" x="270" y="72" width="204" height="44" rx="14" stroke-width="3"/>
+    <rect class="fill-amber amber" x="408" y="146" width="210" height="44" rx="14" stroke-width="3"/>
+    <rect class="fill-red red" x="270" y="220" width="260" height="44" rx="14" stroke-width="3"/>
+    <rect class="fill-white soft" x="306" y="300" width="284" height="40" rx="14" stroke-width="3"/>
+    <path class="thin soft" d="M340 320 H554"/>
+    <text class="small" x="364" y="406">讨论区 / 分支</text>
+
+    <rect class="fill-amber amber" x="708" y="34" width="254" height="156" rx="20" stroke-width="3"/>
+    <path class="thin amber" d="M744 78 L758 92 L786 64 M744 122 H916 M744 156 H884"/>
+    <text class="small" x="766" y="230">任务</text>
+
+    <rect class="fill-green green" x="708" y="222" width="254" height="156" rx="20" stroke-width="3"/>
+    <path class="thin green" d="M748 270 H922 M748 312 H890"/>
+    <circle class="fill-white green" cx="916" cy="324" r="20" stroke-width="3"/>
+    <path class="thin green" d="M906 324 L914 332 L928 316"/>
+    <text class="small" x="750" y="418">验证</text>
+  </g>
+
+  <g transform="translate(278 602)">
+    <path class="line ink" d="M0 0 H644"/>
+    <circle class="fill-blue blue" cx="54" cy="0" r="14" stroke-width="3"/>
+    <circle class="fill-green green" cx="246" cy="0" r="14" stroke-width="3"/>
+    <circle class="fill-amber amber" cx="438" cy="0" r="14" stroke-width="3"/>
+    <circle class="fill-red red" cx="630" cy="0" r="14" stroke-width="3"/>
+    <text class="small" x="16" y="48">共享</text>
+    <text class="small" x="210" y="48">可见</text>
+    <text class="small" x="394" y="48">可控</text>
+    <text class="small" x="590" y="48">可查</text>
+  </g>
+</svg>

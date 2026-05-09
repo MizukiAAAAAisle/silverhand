@@ -89,6 +89,29 @@ export function canViewWorkspace(
   ) !== null;
 }
 
+/**
+ * Cross-conversation workspace access for agent principals. Unlike
+ * `canViewWorkspace`, this does NOT require the principal's source
+ * conversation to belong to the queried workspace — it answers the
+ * broader "is this agent a member of this workspace at all?"
+ * question. Used by cross-workspace MCP tools (`list_workspaces`,
+ * `list_channels?workspace_id=…`).
+ *
+ * Truth source: `WorkspaceRepo.listForAgent` (regular workspaces via
+ * `workspace_members` ∪ owned `agent_home`). The v17 trigger already
+ * keeps `workspace_members` agent_home-free, so ownership is the only
+ * way an agent reaches its own home.
+ */
+export function canAgentAccessWorkspace(
+  ctx: BackendContext,
+  agentId: string,
+  workspaceId: string,
+): boolean {
+  return workspaceRepo(ctx)
+    .listForAgent(agentId)
+    .some(w => w.id === workspaceId);
+}
+
 export function canMutateWorkspace(
   ctx: BackendContext,
   principal: Principal,

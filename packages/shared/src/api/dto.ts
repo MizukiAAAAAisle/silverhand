@@ -890,6 +890,220 @@ export const AgentCloseThreadInputSchema = z.object({
 });
 export type AgentCloseThreadInput = z.infer<typeof AgentCloseThreadInputSchema>;
 
+// ── Agent read_history MCP tool ───────────────────────────────────
+
+const ReadHistoryOptionalSeqSchema = z.preprocess(
+  value => (value === '' || value === undefined ? undefined : value),
+  z.coerce.number().int().nonnegative().optional(),
+);
+
+const ReadHistoryOptionalLimitSchema = z.preprocess(
+  value => (value === '' || value === undefined ? undefined : value),
+  z.coerce.number().int().positive().max(100).optional().default(50),
+);
+
+/** read_history target. Deliberately decoupled from
+ *  `SendMessageTargetSchema` so adding read-only cross-conversation
+ *  navigation here does NOT silently widen the surface that allows
+ *  cross-conversation message posting. The `{ conversation_id }`
+ *  form is membership-gated server-side via `conversation_agents`. */
+export const ReadHistoryTargetSchema = z.union([
+  z.literal('self'),
+  z.literal('parent'),
+  z.object({ thread_id: z.string().min(1) }),
+  z.object({ conversation_id: z.string().min(1) }),
+]);
+export type ReadHistoryTarget = z.infer<typeof ReadHistoryTargetSchema>;
+
+export const AgentReadHistoryInputSchema = z
+  .object({
+    target: ReadHistoryTargetSchema.optional(),
+    before_seq: ReadHistoryOptionalSeqSchema,
+    after_seq: ReadHistoryOptionalSeqSchema,
+    around_message_id: z.string().min(1).optional(),
+    include_content: z.boolean().optional().default(false),
+    include_system: z.boolean().optional().default(true),
+    limit: ReadHistoryOptionalLimitSchema,
+  })
+  .refine(
+    value =>
+      [value.before_seq, value.after_seq, value.around_message_id].filter(
+        v => v !== undefined,
+      ).length === 1,
+    {
+      message: 'anchor required: pass exactly one of before_seq, after_seq, or around_message_id',
+      path: ['before_seq'],
+    },
+  );
+export type AgentReadHistoryInput = z.infer<typeof AgentReadHistoryInputSchema>;
+
+export const MessageRefSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  conversation_id: z.string(),
+  conversation_kind: ConversationKindSchema,
+  channel_id: z.string(),
+  thread_id: z.string().nullable(),
+  seq: z.number(),
+  created_at: z.number(),
+});
+export type MessageRef = z.infer<typeof MessageRefSchema>;
+
+export const MessageSenderRefSchema = z.object({
+  kind: FromKindSchema,
+  agent_id: z.string().nullable(),
+  user_id: z.string().nullable(),
+  display_name: z.string().nullable(),
+});
+export type MessageSenderRef = z.infer<typeof MessageSenderRefSchema>;
+
+export const ReadHistoryTargetRefSchema = z.object({
+  conversation_id: z.string(),
+  conversation_kind: ConversationKindSchema,
+  channel_id: z.string(),
+  thread_id: z.string().nullable(),
+  workspace_id: z.string(),
+  title: z.string(),
+});
+export type ReadHistoryTargetRef = z.infer<typeof ReadHistoryTargetRefSchema>;
+
+export const ReadHistoryMessageSchema = z.object({
+  message_ref: MessageRefSchema,
+  sender: MessageSenderRefSchema,
+  snippet: z.string(),
+  metadata: z.record(z.unknown()).nullable(),
+  attachments: z.array(AttachmentSnapshotSchema).nullable(),
+  content: z.string().optional(),
+});
+export type ReadHistoryMessage = z.infer<typeof ReadHistoryMessageSchema>;
+
+export const ReadHistoryAnchorSchema = z.union([
+  z.object({ type: z.literal('before_seq'), seq: z.number() }),
+  z.object({ type: z.literal('after_seq'), seq: z.number() }),
+  z.object({ type: z.literal('around_message_id'), message_id: z.string() }),
+]);
+export type ReadHistoryAnchor = z.infer<typeof ReadHistoryAnchorSchema>;
+
+export const AgentReadHistoryDtoSchema = z.object({
+  target: ReadHistoryTargetRefSchema,
+  anchor: ReadHistoryAnchorSchema,
+  limit: z.number(),
+  include_content: z.boolean(),
+  include_system: z.boolean(),
+  messages: z.array(ReadHistoryMessageSchema),
+  has_more_before: z.boolean(),
+  has_more_after: z.boolean(),
+});
+export type AgentReadHistoryDto = z.infer<typeof AgentReadHistoryDtoSchema>;
+
+// ── Agent list_workspaces / list_channels / search_messages MCP tools ──
+
+/** One workspace the calling agent currently has member access to.
+ *  `kind` mirrors DB truth (`'regular' | 'agent_home'`); 'dm' is a
+ *  conversation-level concept and is intentionally not synthesized
+ *  here. `agent_dir` is the agent's working directory inside this
+ *  workspace — for `agent_home` this is the workspace root itself,
+ *  for `regular` it is the nested `.silverhand/agents/<agent_id>`
+ *  L2 profile dir. */
+export const AgentListedWorkspaceSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  kind: WorkspaceKindSchema,
+  archived: z.boolean(),
+  updated_at: z.number(),
+  agent_dir: z.string(),
+});
+export type AgentListedWorkspace = z.infer<typeof AgentListedWorkspaceSchema>;
+
+export const AgentListWorkspacesDtoSchema = z.object({
+  workspaces: z.array(AgentListedWorkspaceSchema),
+});
+export type AgentListWorkspacesDto = z.infer<typeof AgentListWorkspacesDtoSchema>;
+
+/** Optional query for `list_channels`. When `workspace_id` is omitted,
+ *  the route defaults to the source conversation's workspace. */
+export const AgentListChannelsQuerySchema = z.object({
+  workspace_id: z.string().min(1).optional(),
+});
+export type AgentListChannelsQuery = z.infer<typeof AgentListChannelsQuerySchema>;
+
+export const AgentListedChannelSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  kind: z.enum(['channel', 'dm_channel']),
+  archived: z.boolean(),
+  updated_at: z.number(),
+});
+export type AgentListedChannel = z.infer<typeof AgentListedChannelSchema>;
+
+export const AgentListChannelsDtoSchema = z.object({
+  workspace_id: z.string(),
+  channels: z.array(AgentListedChannelSchema),
+});
+export type AgentListChannelsDto = z.infer<typeof AgentListChannelsDtoSchema>;
+
+export const AgentSearchMessagesScopeSchema = z.enum([
+  'current',
+  'workspace',
+  'channel',
+]);
+export type AgentSearchMessagesScope = z.infer<
+  typeof AgentSearchMessagesScopeSchema
+>;
+
+const AgentSearchMessagesLimitSchema = z.preprocess(
+  value => (value === '' || value === undefined ? undefined : value),
+  z.coerce.number().int().positive().max(100).optional().default(50),
+);
+
+export const AgentSearchMessagesInputSchema = z
+  .object({
+    q: z.string().trim().min(1).max(200),
+    scope: AgentSearchMessagesScopeSchema.optional().default('current'),
+    workspace_id: z.string().min(1).optional(),
+    channel_id: SearchOptionalStringSchema,
+    include_system: z.boolean().optional().default(true),
+    limit: AgentSearchMessagesLimitSchema,
+  })
+  .superRefine((v, ctx) => {
+    if ((v.scope === 'channel') !== !!v.channel_id) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'channel_id is required only when scope is channel',
+        path: ['channel_id'],
+      });
+    }
+    if (v.workspace_id && v.scope !== 'workspace') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'workspace_id is only valid with scope=workspace',
+        path: ['workspace_id'],
+      });
+    }
+  });
+export type AgentSearchMessagesInput = z.infer<
+  typeof AgentSearchMessagesInputSchema
+>;
+
+export const AgentSearchMessageHitSchema = z.object({
+  message_ref: MessageRefSchema,
+  sender: MessageSenderRefSchema,
+  excerpt: z.string(),
+  match_offset: z.number().int().nonnegative(),
+});
+export type AgentSearchMessageHit = z.infer<typeof AgentSearchMessageHitSchema>;
+
+export const AgentSearchMessagesDtoSchema = z.object({
+  query: z.string(),
+  scope: AgentSearchMessagesScopeSchema,
+  workspace_id: z.string().nullable(),
+  channel_id: z.string().nullable(),
+  include_system: z.boolean(),
+  limit: z.number(),
+  hits: z.array(AgentSearchMessageHitSchema),
+});
+export type AgentSearchMessagesDto = z.infer<typeof AgentSearchMessagesDtoSchema>;
+
 // ── Runtime info (binary detection) ──────────────────────────────
 export const RuntimeInfoSchema = z.object({
   kind: RuntimeKindSchema,
@@ -971,3 +1185,208 @@ export function extractMentions(text: string): string[] {
   }
   return out;
 }
+
+// ── Schedules ────────────────────────────────────────────────────
+//
+// Agent-owned cron-like scheduler. A schedule is a self-driven
+// reminder for ONE agent — it has zero coupling to channels, tasks,
+// or other agents. The agent picks a time policy (`spec`) and the
+// service wakes the agent at the next due time by inserting a
+// `from_kind='system'` message into the agent's agent_home primary
+// dm_channel and delivering it only to the owner.
+//
+// Specs are a discriminated union:
+//   - `once`     : single fire at `fire_at` (or now+`delay_seconds`)
+//   - `interval` : fire every `every_seconds` (>=60); `start_at`
+//                  optional (defaults to now+every_seconds)
+//   - `cron`     : 5-field UNIX cron expression evaluated in the
+//                  given IANA timezone
+//
+// `until_at` and `max_occurrences` are independent caps; either ends
+// a repeating schedule. Repeats with neither cap MUST set
+// `allow_unbounded: true` on the input — otherwise the request is
+// rejected to prevent accidental forever-runs.
+//
+// Quotas (server-enforced):
+//   - per agent: at most 50 active (`pending`+`firing`)
+//   - one-shot delay window: [30s, 90d]
+//   - interval `every_seconds` >= 60 (aligned to scheduler tick)
+//
+// All times are epoch-ms UTC.
+
+export const SCHEDULE_MIN_DELAY_SECONDS = 30;
+export const SCHEDULE_MAX_DELAY_SECONDS = 90 * 24 * 60 * 60; // 90 days
+export const SCHEDULE_MIN_INTERVAL_SECONDS = 60;
+export const SCHEDULE_MAX_ACTIVE_PER_AGENT = 50;
+export const SCHEDULE_MESSAGE_MAX_LEN = 500;
+
+export const ScheduleStatusSchema = z.enum([
+  'pending',
+  'firing',
+  'done',
+  'cancelled',
+  'failed',
+]);
+export type ScheduleStatus = z.infer<typeof ScheduleStatusSchema>;
+
+export const ScheduleSpecOnceSchema = z.object({
+  kind: z.literal('once'),
+  fire_at: z.number().int().positive(),
+});
+export type ScheduleSpecOnce = z.infer<typeof ScheduleSpecOnceSchema>;
+
+export const ScheduleSpecIntervalSchema = z.object({
+  kind: z.literal('interval'),
+  every_seconds: z.number().int().min(SCHEDULE_MIN_INTERVAL_SECONDS),
+  start_at: z.number().int().positive().optional(),
+});
+export type ScheduleSpecInterval = z.infer<typeof ScheduleSpecIntervalSchema>;
+
+export const ScheduleSpecCronSchema = z.object({
+  kind: z.literal('cron'),
+  // 5-field UNIX cron expression. Validated at schedule time via
+  // cron-parser; minute granularity, no seconds field.
+  expression: z.string().min(1).max(200),
+  // IANA timezone name (e.g., 'Asia/Shanghai', 'America/New_York').
+  // Required so DST behavior is explicit and stable across hosts.
+  timezone: z.string().min(1).max(64),
+});
+export type ScheduleSpecCron = z.infer<typeof ScheduleSpecCronSchema>;
+
+export const ScheduleSpecSchema = z.discriminatedUnion('kind', [
+  ScheduleSpecOnceSchema,
+  ScheduleSpecIntervalSchema,
+  ScheduleSpecCronSchema,
+]);
+export type ScheduleSpec = z.infer<typeof ScheduleSpecSchema>;
+
+export const ScheduleDtoSchema = z.object({
+  id: z.string(),
+  owner_agent_id: z.string(),
+  message: z.string(),
+  spec: ScheduleSpecSchema,
+  next_fire_at: z.number(),
+  status: ScheduleStatusSchema,
+  fired_count: z.number(),
+  last_fired_at: z.number().nullable(),
+  max_occurrences: z.number().nullable(),
+  until_at: z.number().nullable(),
+  failure_reason: z.string().nullable(),
+  cancelled_at: z.number().nullable(),
+  created_at: z.number(),
+  updated_at: z.number(),
+});
+export type ScheduleDto = z.infer<typeof ScheduleDtoSchema>;
+
+// MCP `schedule` input. `delay_seconds` is a convenience for one-shot
+// callers — server canonicalizes to `fire_at = now + delay_seconds*1000`
+// before persisting; only one of `fire_at`/`delay_seconds` may be set on
+// a `once` spec.
+export const ScheduleCreateOnceInputSchema = z.object({
+  kind: z.literal('once'),
+  fire_at: z.number().int().positive().optional(),
+  delay_seconds: z.number().int().positive().optional(),
+});
+export type ScheduleCreateOnceInput = z.infer<
+  typeof ScheduleCreateOnceInputSchema
+>;
+
+export const ScheduleCreateInputSchema = z
+  .object({
+    message: z.string().min(1).max(SCHEDULE_MESSAGE_MAX_LEN),
+    spec: z.discriminatedUnion('kind', [
+      ScheduleCreateOnceInputSchema,
+      ScheduleSpecIntervalSchema,
+      ScheduleSpecCronSchema,
+    ]),
+    /** Optional epoch-ms termination for repeat specs. REJECTED on `once`. */
+    until_at: z.number().int().positive().optional(),
+    /** Optional max-fire-count cap for repeat specs. REJECTED on `once`. */
+    max_occurrences: z.number().int().positive().optional(),
+    /** Required `true` for repeat specs without `until_at`/`max_occurrences`.
+     *  REJECTED on `once` (one-shots fire exactly once and don't need
+     *  a "no upper bound" opt-in). */
+    allow_unbounded: z.boolean().optional(),
+  })
+  .superRefine((v, ctx) => {
+    if (v.spec.kind === 'once') {
+      // Strict-reject (vs silent-ignore) for repeat-only knobs on a one-shot.
+      // Silent-ignore would let the agent see a non-canonical DTO that
+      // claims `max_occurrences=N` for a row that can only ever fire once,
+      // which is worse than a clear 400.
+      if (v.until_at !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['until_at'],
+          message: 'until_at is not valid on a `once` schedule',
+        });
+      }
+      if (v.max_occurrences !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['max_occurrences'],
+          message: 'max_occurrences is not valid on a `once` schedule',
+        });
+      }
+      if (v.allow_unbounded !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['allow_unbounded'],
+          message: 'allow_unbounded is not valid on a `once` schedule',
+        });
+      }
+      if (!!v.spec.fire_at === !!v.spec.delay_seconds) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['spec', 'fire_at'],
+          message: 'once spec requires exactly one of fire_at or delay_seconds',
+        });
+      }
+    }
+  });
+export type ScheduleCreateInput = z.infer<typeof ScheduleCreateInputSchema>;
+
+// MCP `list_schedules` input. `status='active'` is a query-side alias
+// for "pending OR firing" — the DB never persists the literal `active`.
+export const ScheduleListStatusFilterSchema = z.enum([
+  'pending',
+  'firing',
+  'active',
+  'done',
+  'cancelled',
+  'failed',
+  'all',
+]);
+export type ScheduleListStatusFilter = z.infer<
+  typeof ScheduleListStatusFilterSchema
+>;
+
+export const ScheduleListInputSchema = z.object({
+  status: ScheduleListStatusFilterSchema.optional(),
+  limit: z.number().int().min(1).max(200).optional(),
+});
+export type ScheduleListInput = z.infer<typeof ScheduleListInputSchema>;
+
+export const ScheduleCancelInputSchema = z.object({
+  schedule_id: z.string(),
+});
+export type ScheduleCancelInput = z.infer<typeof ScheduleCancelInputSchema>;
+
+// MCP / internal-route output DTOs. Single-row responses wrap the full
+// `ScheduleDto` so the agent always sees the canonical row (e.g. the
+// canonicalized `fire_at` after a `delay_seconds` create), and so the
+// list response stays consistent with create/cancel output.
+export const ScheduleCreateOutputSchema = z.object({
+  schedule: ScheduleDtoSchema,
+});
+export type ScheduleCreateOutput = z.infer<typeof ScheduleCreateOutputSchema>;
+
+export const ScheduleListOutputSchema = z.object({
+  schedules: z.array(ScheduleDtoSchema),
+});
+export type ScheduleListOutput = z.infer<typeof ScheduleListOutputSchema>;
+
+export const ScheduleCancelOutputSchema = z.object({
+  schedule: ScheduleDtoSchema,
+});
+export type ScheduleCancelOutput = z.infer<typeof ScheduleCancelOutputSchema>;

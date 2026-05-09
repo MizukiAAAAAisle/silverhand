@@ -1947,7 +1947,7 @@ function formatInboxBatch(
     .map(({ message }) => {
       const sender = describeSender(message, agentNameById);
       const suffix = formatAttachmentSuffix(extractAttachmentSnapshotsFromRow(message));
-      return `[from ${sender}]\n${message.content}${suffix}`;
+      return `[from ${sender}]\nmessage_id=${message.id}\n${message.content}${suffix}`;
     })
     .join('\n\n---\n\n');
   return `${header}\n\n${body}\n\n${formatDeliveryInstruction(
@@ -1985,7 +1985,7 @@ function formatLiveMessage(
 ): string {
   const sender = describeSender(message, agentNameById);
   const suffix = formatAttachmentSuffix(message.attachments);
-  return `New message from ${sender}:\n${message.content}${suffix}\n\n${formatDeliveryInstruction(
+  return `New message from ${sender}:\nmessage_id=${message.id}\n${message.content}${suffix}\n\n${formatDeliveryInstruction(
     [message],
     recipientAgentName,
     sendMessageTool,
@@ -1995,6 +1995,7 @@ function formatLiveMessage(
 /** Minimal projection both InboxRepo's joined rows and MessageRepo
  *  DTOs satisfy — the formatters only need these three fields. */
 interface MessageLite {
+  id: string;
   from_kind: FromKind;
   from_agent_id: string | null;
   content: string;

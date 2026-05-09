@@ -12,6 +12,19 @@ export const apiPaths = {
   agentRuntimeState: (id: string) => `/api/agents/${id}/runtime-state`,
   agentStop: (id: string) => `/api/agents/${id}/stop`,
   agentDeleteImpact: (id: string) => `/api/agents/${id}/delete-impact`,
+  /** Per-agent schedule list for the user-facing Agent panel. Backed by
+   *  `ScheduleService.list` — same data the agent sees via the MCP
+   *  `list_schedules` tool, but reachable from the host UI without an
+   *  agent-principal context. */
+  agentSchedules: (id: string) => `/api/agents/${id}/schedules`,
+  /** User-initiated cancel of one of the agent's schedules. Cancel is
+   *  legal from `pending` or `firing`; the route validates ownership by
+   *  passing both ids into `ScheduleService.cancel(scheduleId, agentId)`,
+   *  which surfaces `not_owner` (403) when the schedule belongs to a
+   *  different agent — preventing UI mis-drag from cancelling somebody
+   *  else's row. */
+  agentScheduleCancel: (agentId: string, scheduleId: string) =>
+    `/api/agents/${agentId}/schedules/${scheduleId}/cancel`,
 
   // workspaces / conversations (new workspace -> channel -> thread model)
   workspaces: '/api/workspaces',
@@ -102,6 +115,21 @@ export const internalPaths = {
   /** Agent creates a new top-level channel in the same workspace. */
   agentCreateChannel: (cid: string, aid: string) =>
     `/internal/conversations/${cid}/agents/${aid}/create-channel`,
+  /** Agent reads anchored message history in its current/target conversation. */
+  agentReadHistory: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/read-history`,
+  /** Agent lists workspaces it currently has member access to (regular
+   *  workspaces via `workspace_members` ∪ its own `agent_home`). */
+  agentListWorkspaces: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/list-workspaces`,
+  /** Agent lists channels of a workspace it is currently a member of.
+   *  Defaults to the source conversation's workspace when no
+   *  `workspace_id` query param is supplied. */
+  agentListChannels: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/list-channels`,
+  /** Agent searches messages visible from current/workspace/channel scope. */
+  agentSearchMessages: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/search-messages`,
 
   // Canonical task MCP endpoints (chat-bridge → backend).
   agentListConversationTasks: (cid: string, aid: string) =>
@@ -114,6 +142,18 @@ export const internalPaths = {
     `/internal/conversations/${cid}/agents/${aid}/tasks/unclaim`,
   agentUpdateConversationTaskStatus: (cid: string, aid: string) =>
     `/internal/conversations/${cid}/agents/${aid}/tasks/update-status`,
+
+  // Agent-owned schedules (cron-like reminders). Per-agent surface — no
+  // channel/thread coupling — but the route is still hung off the
+  // calling conversation so the agent principal middleware (which
+  // resolves cid+aid → principal) can authenticate the request without
+  // a second auth path.
+  agentScheduleCreate: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/schedules`,
+  agentScheduleList: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/schedules/list`,
+  agentScheduleCancel: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/schedules/cancel`,
 
   /** Agent uploads a local file from its current channel/thread context.
    *  Backend resolves channel ownership from `cid`. */

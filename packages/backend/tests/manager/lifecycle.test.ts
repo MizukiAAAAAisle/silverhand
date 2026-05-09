@@ -397,6 +397,7 @@ describe('ConversationManager.deliverMessage', () => {
     expect(parsed.type).toBe('user');
     expect(parsed.message.content[0].text).toContain('live ping');
     expect(parsed.message.content[0].text).toContain('New message from user');
+    expect(parsed.message.content[0].text).toContain('message_id=msg-live-1');
     expect(parsed.message.content[0].text).toContain('mcp__chat__send_message');
     expect(parsed.message.content[0].text).toContain(
       'Complete ALL your work before stopping',
@@ -954,6 +955,8 @@ describe('ConversationManager inbox drain on init', () => {
     const text = parsed.message.content[0].text;
     expect(text).toContain('queued-m1');
     expect(text).toContain('queued-m2');
+    expect(text).toContain('message_id=m1');
+    expect(text).toContain('message_id=m2');
     expect(text).toContain('2 messages waiting');
     expect(text).toContain('mcp__chat__send_message');
     expect(text).toContain('Complete ALL your work before stopping');

@@ -158,6 +158,236 @@ export async function startBridge(args: BridgeArgs): Promise<void> {
   );
 
   server.tool(
+    'read_history',
+    'Read anchored chat history from the current channel/thread, parent, a direct child Thread, or any conversation you are a current member of (use {conversation_id} from list_channels to reach a different workspace). ' +
+      'Requires exactly one anchor: before_seq, after_seq, or around_message_id. ' +
+      'Returns snippets and metadata by default; set include_content=true only when full text is needed.',
+    {
+      target: z
+        .union([
+          z.literal('self').describe('Current channel/thread (default).'),
+          z.literal('parent').describe('Parent channel of the current Thread.'),
+          z
+            .object({ thread_id: z.string().min(1) })
+            .describe('A direct child Thread of the current channel.'),
+          z
+            .object({ conversation_id: z.string().min(1) })
+            .describe(
+              'Any conversation (channel / dm_channel / thread) you are a current member of. ' +
+                'Use this with ids from list_channels to read history of channels in another workspace.',
+            ),
+        ])
+        .optional()
+        .describe(
+          'Where to read. Defaults to "self". Use "parent" only from a Thread, ' +
+            '{thread_id} for a direct child Thread you can access, or {conversation_id} ' +
+            'for any conversation you are a current member of.',
+        ),
+      before_seq: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe('Read messages with seq lower than this value.'),
+      after_seq: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe('Read messages with seq greater than this value.'),
+      around_message_id: z
+        .string()
+        .min(1)
+        .optional()
+        .describe('Read a window centered on this message id.'),
+      include_content: z
+        .boolean()
+        .optional()
+        .describe('When true, include full message content. Default false returns snippets only.'),
+      include_system: z
+        .boolean()
+        .optional()
+        .describe('When false, omit system messages. Default true.'),
+      limit: z
+        .number()
+        .int()
+        .positive()
+        .max(100)
+        .optional()
+        .describe('Maximum messages to return. Default 50, max 100.'),
+    },
+    async input => {
+      const anchorCount = [
+        input.before_seq,
+        input.after_seq,
+        input.around_message_id,
+      ].filter(v => v !== undefined).length;
+      if (anchorCount !== 1) {
+        throw new Error(
+          'read_history: anchor required; pass exactly one of before_seq, after_seq, or around_message_id',
+        );
+      }
+      log(
+        'info',
+        {
+          target: input.target ?? 'self',
+          limit: input.limit ?? 50,
+          includeContent: !!input.include_content,
+        },
+        'tool: read_history invoked',
+      );
+      try {
+        const r = await client.readHistory({
+          ...input,
+          include_content: input.include_content ?? false,
+          include_system: input.include_system ?? true,
+          limit: input.limit ?? 50,
+        });
+        log(
+          'info',
+          {
+            messageCount: r.messages.length,
+            targetConversationId: r.target.conversation_id,
+          },
+          'tool: read_history ok',
+        );
+        return { content: [{ type: 'text', text: JSON.stringify(r) }] };
+      } catch (err) {
+        log('error', { err }, 'tool: read_history failed');
+        throw err;
+      }
+    },
+  );
+
+  server.tool(
+    'list_workspaces',
+    'List every workspace this agent is currently a member of: regular workspaces it has been added to, plus its own personal home workspace. ' +
+      'Each entry includes `agent_dir` — the absolute path to the agent\'s working directory inside that workspace (use it to read your own MEMORY.md / notes / logs there for self-correction). ' +
+      'Use this before list_channels({workspace_id}) so workspace_id values come from the tool surface.',
+    {},
+    async () => {
+      log('info', {}, 'tool: list_workspaces invoked');
+      try {
+        const r = await client.listWorkspaces();
+        log(
+          'info',
+          { workspaceCount: r.workspaces.length },
+          'tool: list_workspaces ok',
+        );
+        return { content: [{ type: 'text', text: JSON.stringify(r) }] };
+      } catch (err) {
+        log('error', { err }, 'tool: list_workspaces failed');
+        throw err;
+      }
+    },
+  );
+
+  server.tool(
+    'list_channels',
+    'List top-level channels of a workspace where this agent is currently a member. ' +
+      'Defaults to the current workspace; pass `workspace_id` (from list_workspaces) to list channels of another workspace you have access to. ' +
+      'Use this before search_messages(scope="channel") so channel_id values come from the tool surface.',
+    {
+      workspace_id: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          'Optional workspace id from list_workspaces. Defaults to the current workspace when omitted.',
+        ),
+    },
+    async input => {
+      log(
+        'info',
+        { workspaceId: input.workspace_id ?? null },
+        'tool: list_channels invoked',
+      );
+      try {
+        const r = await client.listChannels({ workspace_id: input.workspace_id });
+        log('info', { channelCount: r.channels.length }, 'tool: list_channels ok');
+        return { content: [{ type: 'text', text: JSON.stringify(r) }] };
+      } catch (err) {
+        log('error', { err }, 'tool: list_channels failed');
+        throw err;
+      }
+    },
+  );
+
+  server.tool(
+    'search_messages',
+    'Search message text visible to this agent. scope defaults to "current" (current channel/thread only). ' +
+      'Use scope="workspace" for all conversations in this workspace where the agent is a current member; pass an explicit `workspace_id` (from list_workspaces) to search a different workspace you have access to. ' +
+      'Use scope="channel" with a channel_id returned by list_channels (in any workspace you can access) to search that channel and visible child Threads. ' +
+      'Returns message_ref + sender + a short excerpt only. To fetch the full body of a hit, call read_history with `target: { conversation_id: hit.message_ref.conversation_id }, around_message_id: hit.message_ref.id` — using the default `self` target will 404 on remote hits.',
+    {
+      q: z.string().trim().min(1).max(200).describe('Search text. Required.'),
+      scope: z
+        .enum(['current', 'workspace', 'channel'])
+        .optional()
+        .describe('Search scope. Default current.'),
+      workspace_id: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          'Optional workspace id from list_workspaces. Only valid when scope is workspace; defaults to the current workspace.',
+        ),
+      channel_id: z
+        .string()
+        .min(1)
+        .optional()
+        .describe('Required only when scope is channel; must come from list_channels.'),
+      include_system: z
+        .boolean()
+        .optional()
+        .describe('When false, omit system messages. Default true.'),
+      limit: z
+        .number()
+        .int()
+        .positive()
+        .max(100)
+        .optional()
+        .describe('Maximum hits to return. Default 50, max 100.'),
+    },
+    async input => {
+      const scope = input.scope ?? 'current';
+      if ((scope === 'channel') !== !!input.channel_id) {
+        throw new Error(
+          'search_messages: channel_id is required only when scope is channel',
+        );
+      }
+      if (input.workspace_id && scope !== 'workspace') {
+        throw new Error(
+          'search_messages: workspace_id is only valid with scope=workspace',
+        );
+      }
+      log(
+        'info',
+        {
+          scope,
+          workspaceId: input.workspace_id ?? null,
+          channelId: input.channel_id ?? null,
+          limit: input.limit ?? 50,
+        },
+        'tool: search_messages invoked',
+      );
+      try {
+        const r = await client.searchMessages({
+          ...input,
+          scope,
+          include_system: input.include_system ?? true,
+          limit: input.limit ?? 50,
+        });
+        log('info', { hitCount: r.hits.length }, 'tool: search_messages ok');
+        return { content: [{ type: 'text', text: JSON.stringify(r) }] };
+      } catch (err) {
+        log('error', { err }, 'tool: search_messages failed');
+        throw err;
+      }
+    },
+  );
+
+  server.tool(
     'create_channel',
     'Create a new top-level channel in the same workspace. ' +
       'ONLY use this when the user has explicitly requested opening a separate channel ' +
@@ -348,6 +578,190 @@ export async function startBridge(args: BridgeArgs): Promise<void> {
         return { content: [{ type: 'text', text: JSON.stringify(r) }] };
       } catch (err) {
         log('error', { err }, 'tool: update_task_status failed');
+        throw err;
+      }
+    },
+  );
+
+  // ── Schedules ────────────────────────────────────────────────────
+  // Agent-owned cron-like scheduler: the agent picks a time policy,
+  // the backend wakes the agent at the next due time by inserting a
+  // `from_kind='system'` message into the agent's agent_home primary
+  // dm_channel. Schedules are scoped to the calling agent — there is
+  // no channel/thread coupling. See `docs/mcp-system.md` §6 for the
+  // complete contract; the descriptions below are what the model sees
+  // at tool-listing time, so they must be self-sufficient.
+
+  server.tool(
+    'schedule',
+    'Create a self-wake schedule for this agent. Three spec kinds: ' +
+      '`once` (single fire at fire_at OR delay_seconds from now), ' +
+      '`interval` (every every_seconds, >=60), or ' +
+      '`cron` (5-field UNIX cron in an IANA timezone). ' +
+      'When the schedule fires, the platform inserts a system message into your ' +
+      'agent_home dm_channel; treat it as your own task to act on. ' +
+      'Repeat schedules without max_occurrences/until_at must set allow_unbounded=true. ' +
+      'Quotas: ≤50 active per agent; one-shot delay ∈ [30s, 90d]; interval every_seconds ≥ 60.',
+    {
+      message: z
+        .string()
+        .min(1)
+        .max(500)
+        .describe(
+          'Free-text payload echoed in the wake message. Write the actual instruction ' +
+            'to your future self here (e.g. "check task #42 status and report").',
+        ),
+      spec: z
+        .discriminatedUnion('kind', [
+          z
+            .object({
+              kind: z.literal('once'),
+              fire_at: z
+                .number()
+                .int()
+                .positive()
+                .optional()
+                .describe('Absolute epoch-ms UTC fire time. Mutually exclusive with delay_seconds.'),
+              delay_seconds: z
+                .number()
+                .int()
+                .positive()
+                .optional()
+                .describe('Convenience: fire now + delay_seconds. Mutually exclusive with fire_at.'),
+            })
+            .describe('One-shot fire. Specify exactly one of fire_at or delay_seconds.'),
+          z
+            .object({
+              kind: z.literal('interval'),
+              every_seconds: z
+                .number()
+                .int()
+                .min(60)
+                .describe('Fire cadence in seconds. Minimum 60 (aligned to scheduler tick).'),
+              start_at: z
+                .number()
+                .int()
+                .positive()
+                .optional()
+                .describe('Absolute epoch-ms UTC for the first fire. Defaults to now+every_seconds.'),
+            })
+            .describe('Repeat at a fixed interval.'),
+          z
+            .object({
+              kind: z.literal('cron'),
+              expression: z
+                .string()
+                .min(1)
+                .max(200)
+                .describe('5-field UNIX cron expression (minute granularity). No seconds, no @aliases.'),
+              timezone: z
+                .string()
+                .min(1)
+                .max(64)
+                .describe('IANA timezone name, e.g. "Asia/Shanghai" or "America/New_York".'),
+            })
+            .describe('Repeat on a cron schedule in an explicit timezone (DST-aware).'),
+        ])
+        .describe('Time policy. Discriminated by `kind`.'),
+      until_at: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe(
+          'Optional epoch-ms UTC end time for repeat specs. ' +
+            'Rejected on `once` (a one-shot fires exactly once and has no end-time concept).',
+        ),
+      max_occurrences: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe(
+          'Optional max number of fires for repeat specs. ' +
+            'Rejected on `once` (a one-shot always fires exactly once).',
+        ),
+      allow_unbounded: z
+        .boolean()
+        .optional()
+        .describe(
+          'Required `true` when a repeat spec sets neither max_occurrences nor until_at. ' +
+            'Rejected on `once`. Forces explicit opt-in to forever-runs.',
+        ),
+    },
+    async input => {
+      log(
+        'info',
+        { kind: input.spec.kind, hasUntil: !!input.until_at, hasMax: !!input.max_occurrences },
+        'tool: schedule invoked',
+      );
+      try {
+        const r = await client.createSchedule(input);
+        log(
+          'info',
+          { id: r.schedule.id, nextFireAt: r.schedule.next_fire_at },
+          'tool: schedule ok',
+        );
+        return { content: [{ type: 'text', text: JSON.stringify(r) }] };
+      } catch (err) {
+        log('error', { err }, 'tool: schedule failed');
+        throw err;
+      }
+    },
+  );
+
+  server.tool(
+    'list_schedules',
+    'List this agent\'s schedules. Default returns all statuses; pass status="active" for ' +
+      'pending+firing only (the common case for "what do I still have on the books"). ' +
+      'Returns an array of full schedule rows ordered by next_fire_at ASC. ' +
+      'No cross-agent visibility — only schedules you own.',
+    {
+      status: z
+        .enum(['pending', 'firing', 'active', 'done', 'cancelled', 'failed', 'all'])
+        .optional()
+        .describe(
+          'Filter by status. "active" = pending+firing (sugar; the DB never persists "active"). ' +
+            'Default "all".',
+        ),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(200)
+        .optional()
+        .describe('Max rows to return. Default 100, max 200.'),
+    },
+    async input => {
+      log('info', { status: input.status ?? 'all', limit: input.limit ?? 100 }, 'tool: list_schedules invoked');
+      try {
+        const r = await client.listSchedules(input);
+        log('info', { count: r.schedules.length }, 'tool: list_schedules ok');
+        return { content: [{ type: 'text', text: JSON.stringify(r) }] };
+      } catch (err) {
+        log('error', { err }, 'tool: list_schedules failed');
+        throw err;
+      }
+    },
+  );
+
+  server.tool(
+    'cancel_schedule',
+    'Cancel one of your schedules by id. Only `pending` or `firing` rows are cancellable; ' +
+      'terminal states (done, cancelled, failed) return `not_cancellable`. ' +
+      'Cancel races with an in-flight fire are accepted: if cancel arrives after CAS-claim ' +
+      'the wake may still be delivered, but no further fires will occur.',
+    {
+      schedule_id: z.string().min(1).describe('id from a prior schedule/list_schedules result.'),
+    },
+    async ({ schedule_id }) => {
+      log('info', { schedule_id }, 'tool: cancel_schedule invoked');
+      try {
+        const r = await client.cancelSchedule({ schedule_id });
+        log('info', { id: r.schedule.id, status: r.schedule.status }, 'tool: cancel_schedule ok');
+        return { content: [{ type: 'text', text: JSON.stringify(r) }] };
+      } catch (err) {
+        log('error', { err }, 'tool: cancel_schedule failed');
         throw err;
       }
     },

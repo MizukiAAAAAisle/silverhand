@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 680" role="img" aria-labelledby="title desc">
+  <title id="title">共享项目上下文</title>
+  <desc id="desc">项目空间、讨论区、分支、文件、任务和历史记录，组成多个智能体共享的上下文。</desc>
+  <defs>
+    <style>
+      .bg { fill: #fbfaf7; }
+      .ink { stroke: #1f2937; }
+      .soft { stroke: #8a93a1; }
+      .blue { stroke: #3b82f6; }
+      .green { stroke: #10b981; }
+      .amber { stroke: #f59e0b; }
+      .red { stroke: #ef4444; }
+      .fill-white { fill: #ffffff; }
+      .fill-blue { fill: #dbeafe; }
+      .fill-green { fill: #d1fae5; }
+      .fill-amber { fill: #fef3c7; }
+      .fill-red { fill: #fee2e2; }
+      .text { fill: #1f2937; font: 600 28px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .small { fill: #4b5563; font: 500 18px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .line { fill: none; stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; }
+      .thin { fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1200" height="680"/>
+  <text class="text" x="84" y="76">产品要提供共享空间，而不是多个窗口</text>
+  <text class="small" x="86" y="112">多个智能体需要看到同一份历史、任务、文件和决策。</text>
+
+  <g transform="translate(122 172)">
+    <rect class="fill-white ink" x="0" y="0" width="956" height="404" rx="28" stroke-width="4"/>
+    <text class="small" x="38" y="48">项目空间</text>
+    <rect class="fill-blue blue" x="42" y="78" width="244" height="274" rx="18" stroke-width="3"/>
+    <text class="small" x="72" y="118">文件</text>
+    <path class="thin blue" d="M82 150 H236 M82 188 H210 M82 226 H236 M82 264 H190"/>
+    <rect class="fill-green green" x="356" y="78" width="244" height="274" rx="18" stroke-width="3"/>
+    <text class="small" x="386" y="118">讨论区 / 分支</text>
+    <rect class="fill-white green" x="388" y="148" width="178" height="42" rx="12" stroke-width="3"/>
+    <rect class="fill-white green" x="388" y="212" width="126" height="42" rx="12" stroke-width="3"/>
+    <rect class="fill-white green" x="388" y="276" width="162" height="42" rx="12" stroke-width="3"/>
+    <rect class="fill-amber amber" x="670" y="78" width="244" height="274" rx="18" stroke-width="3"/>
+    <text class="small" x="700" y="118">任务 + 决策</text>
+    <path class="thin amber" d="M710 158 L724 172 L748 144"/>
+    <path class="thin amber" d="M710 216 L724 230 L748 202"/>
+    <path class="thin amber" d="M710 274 H868"/>
+  </g>
+
+  <g transform="translate(188 570)">
+    <circle class="fill-blue blue" cx="0" cy="0" r="34" stroke-width="4"/>
+    <text class="small" x="-18" y="62">规划</text>
+  </g>
+  <g transform="translate(452 596)">
+    <circle class="fill-green green" cx="0" cy="0" r="34" stroke-width="4"/>
+    <text class="small" x="-18" y="62">实现</text>
+  </g>
+  <g transform="translate(718 596)">
+    <circle class="fill-amber amber" cx="0" cy="0" r="34" stroke-width="4"/>
+    <text class="small" x="-18" y="62">评审</text>
+  </g>
+  <g transform="translate(984 570)">
+    <circle class="fill-red red" cx="0" cy="0" r="34" stroke-width="4"/>
+    <text class="small" x="-18" y="62">总结</text>
+  </g>
+
+  <path class="line soft" d="M188 536 C222 476 274 468 376 524"/>
+  <path class="line soft" d="M452 562 C470 514 482 490 492 524"/>
+  <path class="line soft" d="M718 562 C704 510 700 486 674 524"/>
+  <path class="line soft" d="M984 536 C934 476 878 466 824 524"/>
+</svg>

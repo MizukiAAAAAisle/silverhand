@@ -197,4 +197,94 @@ describe('database migrations', () => {
       db.close();
     }
   });
+
+  it('v18 creates the schedules table with the agent-owned shape', () => {
+    const db = openDbAt(17);
+    try {
+      runMigrations(db);
+      // Migration registered.
+      expect(
+        db.prepare(`SELECT version FROM _migrations WHERE version = 18`).get(),
+      ).toBeDefined();
+
+      // Schema columns: every field the design locked, in the right
+      // shape. Names matter — repos query by exact column.
+      const cols = (db.pragma('table_info(schedules)') as Array<{
+        name: string;
+        notnull: number;
+      }>).reduce<Record<string, { notnull: number }>>((acc, c) => {
+        acc[c.name] = { notnull: c.notnull };
+        return acc;
+      }, {});
+      const expectedNotNull = [
+        'id',
+        'owner_agent_id',
+        'message',
+        'spec_json',
+        'next_fire_at',
+        'status',
+        'fired_count',
+        'created_at',
+        'updated_at',
+      ];
+      for (const col of expectedNotNull) {
+        expect(cols[col]?.notnull, `${col} should be NOT NULL`).toBe(1);
+      }
+      const expectedNullable = [
+        'last_fired_at',
+        'max_occurrences',
+        'until_at',
+        'failure_reason',
+        'cancelled_at',
+      ];
+      for (const col of expectedNullable) {
+        expect(cols[col]?.notnull, `${col} should be nullable`).toBe(0);
+      }
+      // Importantly NOT present (the design forbids any conversation /
+      // message / task linkage).
+      expect(cols['conversation_id']).toBeUndefined();
+      expect(cols['source_conversation_id']).toBeUndefined();
+      expect(cols['source_message_id']).toBeUndefined();
+      expect(cols['source_task_message_id']).toBeUndefined();
+
+      // Indexes the scheduler depends on.
+      const indexes = (db.pragma('index_list(schedules)') as Array<{
+        name: string;
+      }>).map(r => r.name);
+      expect(indexes).toContain('idx_schedules_due');
+      expect(indexes).toContain('idx_schedules_owner');
+
+      // CASCADE on owner_agent_id: agent delete must remove schedules.
+      const fks = (db.pragma('foreign_key_list(schedules)') as Array<{
+        table: string;
+        from: string;
+        on_delete: string;
+      }>);
+      const ownerFk = fks.find(fk => fk.from === 'owner_agent_id');
+      expect(ownerFk?.table).toBe('agents');
+      expect(ownerFk?.on_delete).toBe('CASCADE');
+
+      // Status CHECK enforces the locked enum.
+      db.exec(`
+        INSERT INTO hosts (id, name, kind, created_at)
+          VALUES ('h', 'local', 'local', 1);
+        INSERT INTO agents
+          (id, name, runtime, model, host_id, description,
+           created_at, updated_at, display_name, reasoning_effort, fast_mode)
+          VALUES ('ag', 'a', 'claude', NULL, 'h', NULL, 1, 1, 'A', NULL, NULL);
+      `);
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO schedules
+               (id, owner_agent_id, message, spec_json, next_fire_at, status,
+                fired_count, created_at, updated_at)
+             VALUES ('s1','ag','hi','{}',1,'bogus',0,1,1)`,
+          )
+          .run(),
+      ).toThrow(/CHECK/);
+    } finally {
+      db.close();
+    }
+  });
 });

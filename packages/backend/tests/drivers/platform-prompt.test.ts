@@ -132,6 +132,20 @@ describe('buildPlatformPrompt', () => {
     expect(text).toContain('leaving the task state unchanged');
   });
 
+  it('includes schedule tool usage guidance and wake handling', () => {
+    const text = prompt();
+    expect(text).toContain('## Schedules');
+    expect(text).toContain('`mcp__chat__schedule`');
+    expect(text).toContain('`mcp__chat__list_schedules`');
+    expect(text).toContain('`mcp__chat__cancel_schedule`');
+    expect(text).toContain('future time');
+    expect(text).toContain('exactly one of `fire_at` or `delay_seconds`');
+    expect(text).toContain('strict 5-field UNIX syntax');
+    expect(text).toContain('IANA timezone');
+    expect(text).toContain("metadata.subtype = 'schedule_fire'");
+    expect(text).toMatch(/report via\s+`mcp__chat__send_message`/);
+  });
+
   it('uses Thread/channel terminology and gates agent-created top-level channels', () => {
     const text = prompt();
     expect(text).toContain('Threads (when to open one)');

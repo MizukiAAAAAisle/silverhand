@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 680" role="img" aria-labelledby="title desc">
+  <title id="title">人类决策层</title>
+  <desc id="desc">智能体整理证据、降低不确定性，人保留方向和最终决定的责任。</desc>
+  <defs>
+    <style>
+      .bg { fill: #fbfaf7; }
+      .ink { stroke: #1f2937; }
+      .soft { stroke: #8a93a1; }
+      .blue { stroke: #3b82f6; }
+      .green { stroke: #10b981; }
+      .amber { stroke: #f59e0b; }
+      .red { stroke: #ef4444; }
+      .fill-white { fill: #ffffff; }
+      .fill-blue { fill: #dbeafe; }
+      .fill-green { fill: #d1fae5; }
+      .fill-amber { fill: #fef3c7; }
+      .fill-red { fill: #fee2e2; }
+      .text { fill: #1f2937; font: 600 28px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .small { fill: #4b5563; font: 500 18px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .line { fill: none; stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; }
+      .thin { fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+    </style>
+    <marker id="arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" orient="auto-start-reverse">
+      <path d="M2 2 L10 6 L2 10" fill="none" stroke="#1f2937" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" width="1200" height="680"/>
+  <text class="text" x="84" y="76">人没有退出，只是不再盯每一步</text>
+  <text class="small" x="86" y="112">智能体降低跟进负担，人保留目标、边界和责任。</text>
+
+  <g transform="translate(126 186)">
+    <rect class="fill-white soft" x="0" y="0" width="200" height="72" rx="18" stroke-width="3"/>
+    <rect class="fill-white soft" x="0" y="102" width="200" height="72" rx="18" stroke-width="3"/>
+    <rect class="fill-white soft" x="0" y="204" width="200" height="72" rx="18" stroke-width="3"/>
+    <path class="thin blue" d="M36 28 H160 M36 50 H126 M36 130 H156 M36 152 H114 M36 232 H158 M36 254 H132"/>
+    <text class="small" x="24" y="332">原始上下文</text>
+  </g>
+
+  <path class="line ink" marker-end="url(#arrow)" d="M350 326 H448"/>
+
+  <g transform="translate(454 166)">
+    <rect class="fill-blue blue" x="0" y="0" width="292" height="320" rx="28" stroke-width="4"/>
+    <circle class="fill-white green" cx="74" cy="82" r="34" stroke-width="3"/>
+    <circle class="fill-white amber" cx="146" cy="132" r="34" stroke-width="3"/>
+    <circle class="fill-white red" cx="218" cy="82" r="34" stroke-width="3"/>
+    <circle class="fill-white blue" cx="146" cy="216" r="34" stroke-width="3"/>
+    <path class="thin ink" d="M103 100 L118 114 M174 114 L190 100 M146 166 V182 M116 214 H74 M176 214 H218"/>
+    <text class="small" x="76" y="282">智能体协作</text>
+  </g>
+
+  <path class="line ink" marker-end="url(#arrow)" d="M764 326 H866"/>
+
+  <g transform="translate(874 188)">
+    <circle class="fill-amber ink" cx="92" cy="80" r="58" stroke-width="4"/>
+    <path class="thin ink" d="M92 138 V184 M52 208 C74 178 112 178 134 208"/>
+    <rect class="fill-white ink" x="28" y="244" width="240" height="88" rx="18" stroke-width="4"/>
+    <path class="line green" d="M70 288 L104 316 L164 262"/>
+    <text class="small" x="78" y="382">最终决定</text>
+  </g>
+
+  <g transform="translate(272 562)">
+    <rect class="fill-white soft" x="0" y="0" width="656" height="58" rx="18" stroke-width="3"/>
+    <text class="small" x="46" y="37">智能体整理证据，人做关键决定。</text>
+  </g>
+</svg>

@@ -28,10 +28,12 @@ import { AttachmentRepo } from './repos/attachment-repo.js';
 import { ConversationRepo } from './repos/conversation-repo.js';
 import { MessageRepo } from './repos/message-repo.js';
 import { NotificationRepo } from './repos/notification-repo.js';
+import { ScheduleRepo } from './repos/schedule-repo.js';
 import { WorkspaceRepo } from './repos/workspace-repo.js';
 import { AttachmentService } from './services/attachment-service.js';
 import { ChannelService } from './services/channel-service.js';
 import { ConversationMessageService } from './services/conversation-message-service.js';
+import { ScheduleService } from './services/schedule-service.js';
 import { ThreadService } from './services/thread-service.js';
 import { TaskService } from './services/task-service.js';
 import { createLocalBlobFileStorage } from './storage/blob-file-storage.js';
@@ -94,6 +96,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     conversationMessageService: undefined as unknown as ConversationMessageService,
     threadService: undefined as unknown as ThreadService,
     taskService: undefined as unknown as TaskService,
+    scheduleService: undefined as unknown as ScheduleService,
     lastSpawnAtByAgent: new Map(),
     events: new ScopeEventBus(),
     chatBridgeLauncher: opts.chatBridgeLauncher,
@@ -144,7 +147,19 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     events: ctx.events,
     logger,
   });
+  ctx.scheduleService = new ScheduleService({
+    schedules: new ScheduleRepo(db),
+    workspaces: new WorkspaceRepo(db, { workspacesRoot }),
+    messages: new MessageRepo(db),
+    agents: new AgentRepo(db),
+    conversationManager: ctx.conversationManager,
+    events: ctx.events,
+    logger,
+  });
   ctx.conversationManager.reconcileOnBoot();
+  // Boot recovery + start scheduling AFTER reconcile so any handles the
+  // CM brings back are visible to the first wake delivery.
+  ctx.scheduleService.start();
   const stopEventLoopLagProbe = startEventLoopLagProbe(logger);
 
   const app = new Hono<AppEnv>();
@@ -168,6 +183,9 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
           context: ctx,
           close: async () => {
             stopEventLoopLagProbe();
+            // Stop the scheduler before any agent shutdown so we don't
+            // race a fire mid-teardown (would write to a dying CM).
+            ctx.scheduleService.stop();
             // Phase 1: stop all agents (must finish before activity-log flush
             // so terminal events are written before the stream closes).
             await ctx.conversationManager.stopAll().catch(() => undefined);

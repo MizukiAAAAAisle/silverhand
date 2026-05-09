@@ -55,6 +55,13 @@ export function buildPlatformPrompt(input: PlatformPromptInput): string {
   const updateTaskStatus = t('update_task_status');
   const uploadFile = t('upload_file');
   const viewFile = t('view_file');
+  const readHistory = t('read_history');
+  const listWorkspaces = t('list_workspaces');
+  const listChannels = t('list_channels');
+  const searchMessages = t('search_messages');
+  const schedule = t('schedule');
+  const listSchedules = t('list_schedules');
+  const cancelSchedule = t('cancel_schedule');
   const sessionContextBlock = renderSessionContext(input.sessionContext);
   const profileDir = normalizeProfileDir(input.activeProfileDir);
   const systemPromptPath = profilePath(profileDir, 'system_prompt.md');
@@ -297,6 +304,81 @@ Files travel with chat messages, scoped to the current channel
 
 Cross-channel ids are rejected. Snapshots embedded in messages are
 immutable: \`{id, filename, size, content_type}\`.
+
+## History and search
+
+You receive new messages automatically via stdin push — **do not poll**.
+These tools are for digging back into history when you actually need it.
+
+- ${readHistory} — read a window of messages by anchor. Pass exactly one of
+  \`before_seq\` / \`after_seq\` / \`around_message_id\`; there is no "give
+  me the latest N" mode. Every pushed message you receive carries a
+  \`message_id=<id>\` line — that id is the natural \`around_message_id\`
+  anchor when something later asks "what was the context around X?". Default
+  output is snippet+metadata; pass \`include_content: true\` only when you
+  actually need full bodies. Defaults to the current conversation; use
+  \`target: 'parent'\` from a thread, \`target: { thread_id }\` for a direct
+  child thread, or \`target: { conversation_id }\` for any conversation
+  (channel / dm_channel / thread) you are currently a member of — the
+  \`conversation_id\` value comes from a search hit
+  (\`hit.message_ref.conversation_id\`) or from ${listChannels}. Reading by
+  \`{ conversation_id }\` does **not** widen what you can post to; it is a
+  read-only navigation form.
+- ${listWorkspaces} — list every workspace you currently have member access
+  to (regular workspaces plus your own personal home). Each entry includes
+  \`agent_dir\` — the absolute path to your working directory inside that
+  workspace; use it with your file tools to read your own MEMORY/notes/logs
+  there for self-correction across workspaces. Call this **before**
+  ${listChannels} when you need channel ids from a workspace other than
+  the current one.
+- ${listChannels} — list top-level channels you are currently a member of.
+  Defaults to the current workspace; pass \`workspace_id\` (from
+  ${listWorkspaces}) to list channels of another workspace you have access
+  to. Call this **before** ${searchMessages} with \`scope: 'channel'\` so
+  the channel id comes from the tool surface; never invent or guess channel
+  ids.
+- ${searchMessages} — full-text search you can scope three ways:
+  \`'current'\` (default, this conversation only), \`'workspace'\` (every
+  conversation in this workspace where you're currently a member; pass an
+  explicit \`workspace_id\` from ${listWorkspaces} to search a different
+  workspace you have access to), or \`'channel'\` with a \`channel_id\`
+  from ${listChannels} (the \`channel_id\` is global — it can come from
+  any workspace you can access). Returns excerpts with a \`match_offset\`
+  only — when you need the full body of a hit, call ${readHistory} with
+  \`target: { conversation_id: hit.message_ref.conversation_id },
+  around_message_id: hit.message_ref.id, include_content: true\`. Do not
+  pass the default \`target: 'self'\` for remote hits — it will 404.
+
+Cross-workspace recipe: call ${listWorkspaces} to discover the workspaces you
+can reach, then ${listChannels} with \`{ workspace_id }\` to list the target
+workspace's channels, then either ${searchMessages} (with \`scope: 'workspace'\`
+plus \`workspace_id\`, or \`scope: 'channel'\` plus a \`channel_id\` from any
+workspace you can access) or ${readHistory} with \`target: { conversation_id }\`
+to read a specific conversation.
+
+## Schedules
+
+Use ${schedule} when you need to wake yourself at a future time and no
+human message is likely to trigger the follow-up. Good uses include
+polling, deadline checks, periodic review, and delayed verification.
+Do not create a schedule for work that can wait for the user's next
+message, or for work that needs fresh instructions before it can proceed.
+
+- Before creating a new repeating schedule, call ${listSchedules} with
+  \`{status:'active'}\` when duplication is possible.
+- \`once\` requires exactly one of \`fire_at\` or \`delay_seconds\`.
+- \`interval\` repeats every \`every_seconds\` and must be at least 60s.
+- \`cron\` uses strict 5-field UNIX syntax plus an IANA timezone; no
+  seconds field and no \`@daily\`-style aliases.
+- Repeating schedules must set \`max_occurrences\` or \`until_at\`, unless
+  you explicitly pass \`allow_unbounded: true\`.
+- Cancel schedules you no longer need with ${cancelSchedule}; only active
+  schedules are cancellable.
+
+When a schedule fires, you receive a system message with
+\`metadata.subtype = 'schedule_fire'\`. Treat it as an actionable wake:
+decide whether work is still needed, do the work, and report via
+${sendMessage}. If no action is needed, send a brief no-op reply and stop.
 
 ## Initial role (your assignment in this workspace/channel)
 ${input.roleSystemPrompt.trim() || '_(role not yet defined — wait for the user to shape it during onboarding)_'}

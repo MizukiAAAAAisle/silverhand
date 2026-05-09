@@ -1,11 +1,23 @@
 import {
   internalPaths,
+  type AgentListChannelsDto,
+  type AgentListWorkspacesDto,
+  type AgentReadHistoryDto,
+  type AgentReadHistoryInput,
+  type AgentSearchMessagesDto,
+  type AgentSearchMessagesInput,
   type AttachmentDto,
   type AttachmentLocateDto,
   type ClaimTasksInput,
   type ClaimTasksResult,
   type CreateTasksInput,
   type CreateTasksResult,
+  type ScheduleCancelInput,
+  type ScheduleCancelOutput,
+  type ScheduleCreateInput,
+  type ScheduleCreateOutput,
+  type ScheduleListInput,
+  type ScheduleListOutput,
   type SendMessageTarget,
   type TaskMutationResult,
   type TaskStatus,
@@ -111,6 +123,35 @@ export class BackendClient {
     );
   }
 
+  readHistory(input: AgentReadHistoryInput): Promise<AgentReadHistoryDto> {
+    return this.post(
+      internalPaths.agentReadHistory(this.args.conversationId, this.args.agentId),
+      input,
+    );
+  }
+
+  listWorkspaces(): Promise<AgentListWorkspacesDto> {
+    return this.get(
+      internalPaths.agentListWorkspaces(this.args.conversationId, this.args.agentId),
+    );
+  }
+
+  listChannels(input: { workspace_id?: string } = {}): Promise<AgentListChannelsDto> {
+    return this.get(
+      internalPaths.agentListChannels(this.args.conversationId, this.args.agentId),
+      { workspace_id: input.workspace_id },
+    );
+  }
+
+  searchMessages(
+    input: AgentSearchMessagesInput,
+  ): Promise<AgentSearchMessagesDto> {
+    return this.post(
+      internalPaths.agentSearchMessages(this.args.conversationId, this.args.agentId),
+      input,
+    );
+  }
+
   // ── Task tools ──────────────────────────────────────────────────
   listTasks(filters: {
     workspace_id?: string;
@@ -169,6 +210,30 @@ export class BackendClient {
         this.args.conversationId,
         this.args.agentId,
       ),
+      input,
+    );
+  }
+
+  // ── Schedule tools ──────────────────────────────────────────────
+  // Per-agent surface; routes hang off the calling conversation only
+  // for principal resolution, not for schedule ownership.
+  createSchedule(input: ScheduleCreateInput): Promise<ScheduleCreateOutput> {
+    return this.post(
+      internalPaths.agentScheduleCreate(this.args.conversationId, this.args.agentId),
+      input,
+    );
+  }
+
+  listSchedules(input: ScheduleListInput): Promise<ScheduleListOutput> {
+    return this.post(
+      internalPaths.agentScheduleList(this.args.conversationId, this.args.agentId),
+      input,
+    );
+  }
+
+  cancelSchedule(input: ScheduleCancelInput): Promise<ScheduleCancelOutput> {
+    return this.post(
+      internalPaths.agentScheduleCancel(this.args.conversationId, this.args.agentId),
       input,
     );
   }

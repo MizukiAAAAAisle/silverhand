@@ -9,12 +9,14 @@ import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { NotificationRepo } from '../../src/repos/notification-repo.js';
+import { ScheduleRepo } from '../../src/repos/schedule-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { ConversationManager } from '../../src/conversation-manager.js';
 import { AttachmentService } from '../../src/services/attachment-service.js';
 import { ChannelService } from '../../src/services/channel-service.js';
 import { ConversationMessageService } from '../../src/services/conversation-message-service.js';
+import { ScheduleService } from '../../src/services/schedule-service.js';
 import { ThreadService } from '../../src/services/thread-service.js';
 import { TaskService } from '../../src/services/task-service.js';
 import { initWorkspaceDir } from '../../src/workspace-files.js';
@@ -147,6 +149,7 @@ export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {})
     conversationMessageService: undefined as unknown as ConversationMessageService,
     threadService: undefined as unknown as ThreadService,
     taskService: undefined as unknown as TaskService,
+    scheduleService: undefined as unknown as ScheduleService,
     lastSpawnAtByAgent: new Map(),
     events: new ScopeEventBus(),
     chatBridgeLauncher: { command: 'true', args: [] }, // never invoked in L3
@@ -199,6 +202,16 @@ export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {})
     conversationManager: ctx.conversationManager,
     events: ctx.events,
     logger: silentLogger,
+  });
+  ctx.scheduleService = new ScheduleService({
+    schedules: new ScheduleRepo(db),
+    workspaces: new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot }),
+    messages: new MessageRepo(db),
+    agents: new AgentRepo(db),
+    conversationManager: ctx.conversationManager,
+    events: ctx.events,
+    logger: silentLogger,
+    disableAutoTick: true,
   });
 
   // Inject mock binary so resolveBinary returns it without `which claude`.
@@ -260,6 +273,7 @@ export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {})
       applyMockEnv();
     },
     cleanup: async () => {
+      ctx.scheduleService.stop();
       try {
         await manager.stopAll();
       } catch {}

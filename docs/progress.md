@@ -4,6 +4,297 @@
 
 ---
 
+## 2026-05-09 — Cross-workspace history/search: list_workspaces + 跨 workspace read/search + 文档/prompt 同步（PR-A #180 / PR-B #181 / PR-C #185）
+
+PR-1/PR-2 把 `read_history` / `list_channels` / `search_messages` 在当前 workspace 跑通后,出现新场景:agent 被 schedule wake 在自己的 `agent_home` DM 里,需要去其它 workspace 翻历史/查上下文,但根本没有"我有哪些 workspace 可去、那个 workspace 有哪些 channel"的入口。这一刀加 cross-workspace discovery + 跨 workspace 读/搜,并把"读"和"发"的权限模型彻底分开。@Alice 实现,@Cindy review。
+
+**PR-A(#180,DONE)— Cross-workspace discovery**
+
+- 新 `list_workspaces({})` MCP tool:返回 caller agent 当前可访问的 workspace 列表(regular workspace 通过 `workspace_members` JOIN ∪ 自己的 `agent_home` 通过 `owner_agent_id`),每行带 `id / name / kind / archived / updated_at / agent_dir`。
+- `kind` 用 DB truth(`'regular' | 'agent_home'`),不造合成的 `'dm'`(DM 是 conversation kind,不是 workspace kind)。
+- `agent_dir` 按 kind 分支,跟 `activeAgentProfileDir` 完全一致:`agent_home` → `workspace_path` 本身(agent 的 L1 根);`regular` → `${workspace_path}/.silverhand/agents/${agent_id}`(L2 profile 嵌套目录)。设计目的:让 agent 用自己的 file 工具去读自己的 MEMORY/notes/logs 做自纠/清理。
+- `list_channels` 扩展可选 `workspace_id` query。默认仍是 source workspace(`workspace_id == source` 时跳过 access check 走 fast-path);跨 workspace 时强制 `canAgentAccessWorkspace`,失败 403。
+- 新 helper `canAgentAccessWorkspace(ctx, agentId, workspaceId)` 落在 `permissions.ts`,真值来源是 `WorkspaceRepo.listForAgent(agentId)`。v17 trigger 让 `workspace_members` 不存 agent_home 关系,所以 ownership 是访问自己 home 的唯一路径,其他 agent 的 home 自然不会出现。
+- **新数据真值入口**:`WorkspaceRepo.listForAgent` 是 cross-workspace 权限的 single source of truth。任何"agent 看得到哪些 workspace"的问题都走这里,不要再手写 SQL JOIN。
+- 8 cases 测试覆盖:regular + own home 出现、其他 home 不出现、agent_dir 两种形状、list_channels(workspace_id) 跨 workspace 成功 / 403 (陌生 regular) / 403 (别人 home) / 同 source workspace explicit 不需要 access check。
+
+**PR-B(#181,DONE)— 跨 workspace 读/搜**
+
+- 新 `ReadHistoryTargetSchema = 'self' | 'parent' | { thread_id } | { conversation_id }`,**与 `SendMessageTargetSchema` 完全解耦**。这是设计核心 invariant:加 read 时不能偷偷 widen send 权限。后续如果想再扩 cross-conversation read 的形式,只动这个 union;cross-conversation **post** 必须另起单独权限审计。
+- `read_history({target:{conversation_id}})` 走 `conversation_agents` 单一 bottom guard:workspace 级访问不够,必须 channel/thread 级成员。kind 白名单:`channel | dm_channel | thread`,workspace id 当 conversation id 传 → 404。
+- `search_messages` 加可选 `workspace_id`,`superRefine` 强制只能与 `scope='workspace'` 同时出现。跨 workspace 时顶层 `canAgentAccessWorkspace`,SQL JOIN `conversation_agents` 仍是 bottom guard,所以 alice 在 team-x 即使有 workspace 级访问,在 bob-only channel 里也搜不到任何东西。
+- `search_messages(scope='channel')` 把 `channel_id` 当**全局唯一** conversation id —— 删掉旧的 `channel.workspace_id !== sourceConversation.workspace_id` 守卫(那是 PR-B 之前的"只能搜本 workspace channel"姿态,跟新的 navigation 模型矛盾);bottom guard 仍是 `conversations.getAgent(channel.id, agentId)`,SQL JOIN 仍兜底 child thread 成员判定。
+- `AgentSearchMessagesDtoSchema` 加 `workspace_id` 字段(nullable),`'workspace'` scope 时填实际命中的 workspace,其它 scope 为 null。
+- chat-bridge `read_history` target 增 `{conversation_id}` 描述;`search_messages` 加 `workspace_id` + runtime XOR 校验,描述末尾把"用 read_history around hit.message_ref.id"改成显式的 `read_history({ target: { conversation_id: hit.message_ref.conversation_id }, around_message_id: hit.message_ref.id })`,避免 agent 默认 `self` 在远端 hit 上 404。
+- 14 cases 新测试覆盖:cross-ws channel 读、parent-not-member 的 thread 也能读(用 ConversationRepo 直接 seed 构造 topology)、403 非成员、404 不存在、self/parent/{thread_id} 回归、workspace id 当 conversation id 拒绝;cross-ws workspace 搜、403 陌生 ws、403 别人 home、400 workspace_id 配错 scope、默认 back-compat、conversation_agents 兜底、cross-ws channel scope 成功(含 visible child thread + 同 token 在 source DM 不混入)、cross-ws channel scope 非 channel 成员仍 403。
+- `pnpm test` 全套 570/570 pass。`pnpm typecheck` clean × 4 workspaces。
+
+**PR-C(#185)— docs/prompt 同步**
+
+- `docs/mcp-system.md` §4 重写:`read_history` target 加 `{conversation_id}` + 错误码列表更新(`conversation_not_found` 404, `unsupported_conversation_kind` 400, `not_target_conversation_member` 403);新 `### list_workspaces` section 全签名 + agent_dir 分支规则 + 排序 + workspace_members ∪ owned home 真值说明;`list_channels` 加 `workspace_id?` 参数 + `canAgentAccessWorkspace` 守卫;`search_messages` 加 `workspace_id?` + 输出 schema 增字段 + scope=channel 全局 channel_id 改述 + remote hit 取全文规范;新 §4.4 cross-workspace navigation 写出 `list_workspaces → list_channels → search_messages | read_history` 标准链路,并明确"读不通向写"。
+- `docs/mcp-system.md` §9 Prompt Contract 加一条 cross-workspace navigation chain bullet,显式写"never widens posting"。
+- `packages/backend/src/drivers/platform-prompt.ts` "History and search" section 重写:加 `list_workspaces`(包含 `agent_dir` 用来读自己的 MEMORY/notes/logs),`list_channels` 写明 `workspace_id` 默认与 cross-workspace 用法,`search_messages` 写出 cross-workspace + 显式跟 `read_history({ target: { conversation_id } })` 配套,末尾给一个标准 cross-workspace recipe 一行。
+
+**Out of scope(明确不动)**
+
+- `check_messages`:仍待 delivery ledger refactor(PR-3 in 主 thread)。
+- cross-conversation **send_message**:`SendMessageTargetSchema` 不动,继续 `'self' | 'parent' | { thread_id }`。
+- 多用户/多 host 权限:跟 attachment-auth、permission-system PR 一起整体落。
+
+**实现位置**
+
+- PR-A: `packages/shared/src/api/paths.ts`(+`agentListWorkspaces`、`agentListChannels` 文档更新),`packages/shared/src/api/dto.ts`(+`AgentListedWorkspaceSchema` / `AgentListWorkspacesDtoSchema` / `AgentListChannelsQuerySchema`),`packages/backend/src/permissions.ts`(+`canAgentAccessWorkspace`),`packages/backend/src/routes.ts`(+`buildAgentListWorkspacesDto` + 新 `agentListWorkspaces` GET 路由,`agentListChannels` GET 加 `?workspace_id=`,`listAgentVisibleChannels` 签名改 `workspaceId: string`),`packages/chat-bridge/src/server.ts`(+`list_workspaces` tool、`list_channels` 加 `workspace_id`),`packages/chat-bridge/src/client.ts`(+`listWorkspaces` / `listChannels({workspace_id?})`),`packages/backend/tests/routes/list-workspaces.test.ts`(8 cases,新文件)。
+- PR-B: `packages/shared/src/api/dto.ts`(+`ReadHistoryTargetSchema`、`AgentReadHistoryInputSchema.target` 切到新类型、`AgentSearchMessagesInputSchema` +`workspace_id` + superRefine、`AgentSearchMessagesDtoSchema` +`workspace_id`),`packages/backend/src/routes.ts`(`resolveAgentReadHistoryTarget` 加 `{conversation_id}` 分支、`buildAgentSearchMessagesDto` 接受 `workspace_id` 并删掉 channel scope 的 workspace 守卫、search_messages 路由 `canAgentAccessWorkspace` 守卫),`packages/chat-bridge/src/server.ts`(read_history target 加 `{conversation_id}`、search_messages 加 `workspace_id` + runtime 校验 + 描述更新),`packages/backend/tests/routes/cross-workspace-read-search.test.ts`(14 cases,新文件)。
+- PR-C: `docs/mcp-system.md` §4/§9,`packages/backend/src/drivers/platform-prompt.ts` History and search section,本节(`docs/progress.md`)。
+
+---
+
+## 2026-05-09 — Agent panel: Schedules tab（PR-3a, task #183）
+
+PR-1 + PR-2 把 schedule 工具面跑通后,user 这边只能靠 agent 主动 list / 报告才能看见自己创建的 wake plan;面板上没有审计入口。这一刀给 Agent 详情页加 Schedules card,后台加 user-principal 的 list/cancel HTTP 路由,数据走 PR-1 已有的 `ScheduleService`,不再做新业务逻辑。@Alice 实现,@Cindy review。
+
+**新接口(public,user principal)**
+
+- `GET /api/agents/:id/schedules?status=&limit=` → `{ schedules: ScheduleDto[] }`。`status` 接 `pending|firing|active|done|cancelled|failed|all`(`active` = pending+firing 别名,跟 MCP 一致),`limit` 默认 100、max 200,`?limit=` 字符串通过 `Number(...)` 强转后再喂 `ScheduleListInputSchema.safeParse`。
+- `POST /api/agents/:id/schedules/:scheduleId/cancel` → `{ schedule: ScheduleDto }`。路由把 `agentId` + `scheduleId` 一起喂 `ScheduleService.cancel`,所以传错 agent 只会拿到 `not_owner` (403),UI 误点不会跨 agent cancel。Cancel 成功后写一条 `logger.info({user_id, agent_id, schedule_id})`,作为 v1 的审计日志(没有单独的 audit 基础设施,Cindy review 时也确认过不为这个 PR 起架构)。
+- 路径表:`apiPaths.agentSchedules(id)` / `apiPaths.agentScheduleCancel(agentId, scheduleId)`(放在 `agents` 段、紧挨 `agentRuntimeState`/`agentDeleteImpact`)。
+
+**权限模型**:沿用现有 `/api/agents/:id/*` 的"agent 存在即可访问"姿态(host 单用户模型)。后续等多用户权限层落,这两条路由跟其它 agent 路由一起继承新姿态,不需要单独改。
+
+**Frontend**
+
+- `useAgentSchedules(agentId, status='active')`:`['agents', id, 'schedules', status]` query key,30s `refetchInterval`(scheduler tick + sweep 60s,30s 给"最差 30s 滞后"的 UI 体感,不烧 HTTP)。`useCancelAgentSchedule(agentId)` 成功后 `invalidateQueries({ queryKey: ['agents', agentId, 'schedules'] })`,所有 status filter 一起刷。
+- `AgentSchedulesCard`:卡片放 `AgentView` 最底,跟 `AgentRuntimeTable` 同级。表头列 `Kind | Next fire (relative + ISO hover) | Status | Fired count(/max if 有) | Message | Cancel 按钮(仅 pending/firing 行)`。Filter tabs:Active / All / Done / Cancelled / Failed。空态、loading、error 三态都给独立提示。
+- 故意**不**给 UI 创建入口:create 是 agent 自服务,用户造 wake 会破坏"agent 拥有自己 wake 计划"的语义,跟 Cindy 核过。
+- 故意**不**走 SSE:row 字段(fired_count / next_fire_at / status)只在 fire / cancel 时变,30s polling 能 cover;给 SSE 加 schedule 频道得改 events bus + scope schema,不值得。
+
+**Tests**
+
+- `tests/routes/agent-schedules.test.ts`(11 cases,新文件):list 排序 by next_fire_at、agent 隔离、`active` 别名 filter、`cancelled` filter、`?limit=2` 字符串 coerce、bogus status enum → 400、未知 agent → 404;cancel 成功 + cancelled_at 写入、`not_owner` (403) 跨 agent 路径、`schedule_not_found` (404)、agent 不存在 (404)、`not_cancellable` (409) 终态。
+- 复用现成 `ScheduleRepo` 直接 seed 行(不绕弯过 agent-principal 路径),独立验证 user-side 入口。
+- 全套:`./scripts/test.sh` 总数从 535 升到 546(+11)。`pnpm typecheck` clean × 4 workspaces。
+
+**Out of scope(明确不动)**
+
+- `ScheduleService` / `ScheduleRepo` / migration:PR-1 完成后冻结,PR-3a 只加 HTTP/UI。
+- 平台 prompt:`PR-3b`(task #182,@Cindy 实现中)负责。
+- realtime wake 消息显示:#184(@Cindy 实现中)负责 — 跟我的卡片是互补关系(卡片给的是行级状态,#184 给的是 chat 流里 system message 实时显示)。
+- 多用户权限:整个 `/api/agents/:id/*` 段都还没接,等专门的权限 PR。
+
+**实现位置**
+
+- `packages/shared/src/api/paths.ts` 加 `agentSchedules` / `agentScheduleCancel`
+- `packages/backend/src/routes.ts` 加两条路由(GET + POST)+ logger 审计行
+- `packages/backend/tests/routes/agent-schedules.test.ts`(11 cases,新文件)
+- `apps/desktop/src/renderer/features/agents/hooks.ts` 加 `useAgentSchedules` / `useCancelAgentSchedule`
+- `apps/desktop/src/renderer/features/agents/AgentSchedulesCard.tsx`(新文件)
+- `apps/desktop/src/renderer/features/agents/AgentView.tsx` mount Schedules card
+- 本节(`docs/progress.md`)
+
+---
+
+## 2026-05-09 — Schedule MCP 工具与文档（PR-2，task #179）
+
+PR-1(#177)落地 backend service / scheduler / migration / 36 个 service 单测后的"上层一刀":接 chat-bridge MCP 工具与 backend internal 路由,加 route 级集成测试,并把 schedule 这个新概念写进 `docs/mcp-system.md` / `docs/agent-run-state.md` / `docs/progress.md`。本 PR **不动** PR-1 已经冻结的 service / scheduler / migration / repo —— 只在它们之上铺一层 HTTP/MCP 路由 + 文档。@Alice 实现,@Cindy review。
+
+**PR-2 范围**:
+
+- chat-bridge MCP 工具 3 个,描述里包含限额 / spec 三种 kind / `allow_unbounded` 必须显式 / cron 必须 5 字段 + IANA tz 等关键约束,让 LLM 在 tool listing 阶段就能正确拼参:
+  - `schedule(message, spec, until_at?, max_occurrences?, allow_unbounded?)` → `{ schedule: ScheduleDto }`
+  - `list_schedules(status?, limit?)` → `{ schedules: ScheduleDto[] }`
+  - `cancel_schedule(schedule_id)` → `{ schedule: ScheduleDto }`
+- chat-bridge `BackendClient` 加 `createSchedule` / `listSchedules` / `cancelSchedule`,统一走 `post()` 反序列化共享 DTO。
+- `internalPaths.agentScheduleCreate / List / Cancel`(三条路径都挂在 `/internal/conversations/:cid/agents/:aid/schedules*` 下,**仅** 复用 internal principal middleware 做认证;schedule 自身的归属看 `principal.agentId`,跟 cid 无关 —— 注释里明说,避免后续误以为 schedule 跟 conversation 有关联)。
+- `routes.ts` 加 3 条 POST 路由 + `scheduleServiceErrorResponse(c, err)` 错误映射器。`ScheduleErrorCode` → HTTP 状态对照表锁在 `scheduleErrorStatusMap`,任何 service 端新增 code 都得在这里显式补上(否则 fallback 400)。
+- `ScheduleCreateOutputSchema` / `ScheduleListOutputSchema` / `ScheduleCancelOutputSchema` 加进 `packages/shared/src/api/dto.ts`,所有路径返回都包成 `{ schedule }` / `{ schedules }`,与 PR-1 设计的"create 返回 canonicalized 行"配合(client 侧不用再二次 fetch 拿 `next_fire_at`)。
+
+**route 级集成测试**(`tests/routes/schedules.test.ts`,22 cases):
+
+- happy path:once `delay_seconds` → canonical `fire_at`、interval `allow_unbounded`、cron expression+timezone round-trip、list owner 隔离、status `active` 别名、cancel 落 `cancelled` + `cancelled_at`。
+- 错误码逐个钉:每个 `ScheduleErrorCode` 至少一个用例,锁住 `code → HTTP status` 映射:
+  `invalid_input` ×2(message 空、once 既缺 fire_at 又缺 delay_seconds)、`invalid_cron_expression` ×2(`@daily`、6 字段)、`invalid_timezone`、`fire_at_too_soon`、`fire_at_too_far`、`unbounded_repeat_requires_explicit_limit`、`too_many_active_schedules`(填满 50 active)、`schedule_not_found`、`not_owner`(bob 取消 alice 的 schedule)、`not_cancellable`(已 cancelled 再 cancel)、`agent_home_not_found`(SQL 直接删 alice 的 agent_home + dm)。
+- 边界:internal middleware 拒绝未知 agent (404)、非 conversation 成员 (403)、缺 bearer (401)。这三条是 `principal middleware` 的护城河,任何"忘记走 middleware"的 regression 会立刻在这里翻车。
+
+**文档同步**:
+
+- `docs/mcp-system.md` 加 §6 "Schedules":三条工具的完整 signature、`ScheduleDto` 形状、所有 rule(canonicalization / 5-field cron / IANA tz / unbounded 必须显式 / next_fire_at 不 backfill / agent_home wake target),以及错误码 → HTTP 表格。原 §6/§7/§8 (Attachments / Deliberately Absent / Prompt Contract) 顺位 +1 → §7/§8/§9,Maintenance Checklist 升 §10。
+- `docs/agent-run-state.md` 新加 §13 "Schedule wake (`metadata.subtype = 'schedule_fire'`)":写明 wake 走普通 `messages.insertForConversation + deliverMessage + start`,跟用户消息共享 run-state / Activity Strip / inbox 路径;§12 mention-targeted 讨论不适用(wake 永远只有 owner agent 一个 recipient,`from_kind='system'` 不参与 mention 解析);PR-2 不引入新 `agent_*` 事件,不改任何 run-state 字段。
+- `docs/progress.md`(本节)。
+
+**Out of scope(明确不动)**:
+
+- 任何 `ScheduleService` / `ScheduleRepo` / migration v18 的修改 —— PR-1 已 review 通过、tests 绿,改动会让两轮 review 重复劳动。如果 PR-2 的 route/MCP 暴露 service 端真问题,再单独开 PR。
+- 平台 prompt(`packages/backend/src/drivers/platform-prompt.ts`)对 schedule 工具的"什么时候用"高层引导。当前 prompt 已经讲了通用 tool surface 的克制原则;schedule 何时该自调与否更像产品决策而不是平台决策,等真实用例铺开后再补 prompt 行,避免现在写一段空洞的 "考虑用 schedule" 引导。
+
+**实现位置**:
+
+- `packages/shared/src/api/dto.ts` 加 `ScheduleCreateOutput / ListOutput / CancelOutput` schemas
+- `packages/shared/src/api/paths.ts` 加 `agentScheduleCreate / List / Cancel`
+- `packages/chat-bridge/src/server.ts` 加三个 MCP 工具
+- `packages/chat-bridge/src/client.ts` 加三个 BackendClient 方法
+- `packages/backend/src/routes.ts` 加 3 条 internal POST 路由 + `scheduleServiceErrorResponse` + `scheduleErrorStatusMap` + `ScheduleError` 导入
+- `packages/backend/tests/routes/schedules.test.ts`(22 cases,新文件)
+- `docs/mcp-system.md` §6 加 Schedules 一整节,后续小节顺位下移
+- `docs/agent-run-state.md` §13 加 wake-path 说明
+- 本节(`docs/progress.md`)
+
+**验证**: `pnpm typecheck` clean across all 4 workspaces; `./scripts/test.sh tests/routes/schedules.test.ts` 22/22 绿;PR-1 service/migration 测试不受影响。
+
+**Round 1 review fix(2026-05-09,Cindy 提出 blocker,Alice 修)**:
+
+- **问题**:`ScheduleCreateInputSchema` 把 `until_at` / `max_occurrences` / `allow_unbounded` 标 "Ignored for `once`",但 service 实际把它们写进 one-shot row,且 `until_at` 校验对所有 spec 都跑。结果 `schedule({ spec:{kind:'once', delay_seconds:60}, max_occurrences:3 })` 会回一个 `max_occurrences=3` 的 one-shot DTO,跟文档/contract 对不上。
+- **修法**:input schema 层 strict-reject(选择拒绝而不是 silent-ignore,语义更干净):`ScheduleCreateInputSchema.superRefine` 加分支,`spec.kind === 'once'` 时显式 reject `until_at|max_occurrences|allow_unbounded` 任一,字段级 `addIssue`。Service 层不变(`until_at` 校验只对 repeat 跑就足够了,因为 schema 已经把 once 路径滤掉了)。
+- **测试**:service 加 `it.each` 三个字段 → `invalid_input`,route 同样加 `it.each` 三个字段 → 400 + `code='invalid_input'`。
+- **Doc**:`docs/mcp-system.md` §6 把 "Ignored for `once`" 改成 "rejected on `once` (→ `invalid_input`)" + 一句 "silent-ignore 会让 agent 看到非 canonical 行" 的解释;chat-bridge 工具描述同步。
+- **回归**: `./scripts/test.sh tests/routes/schedules.test.ts tests/services/schedule-service.test.ts` 25 + 49 = 74 绿;`pnpm typecheck` clean。
+
+---
+
+## 2026-05-09 — Schedule 后端骨架（PR-1，task #177）
+
+Thread "Reminders 工具设计" 收敛后的实现一刀。设计反复迭代过：从 reminder one-shot → 含 repeat 的 cron-like scheduler；命名 reminder → schedule；主归属从 conversation-bound → 纯 agent-owned，无 task/channel/message link。@Cindy 设计协作 + review，@Alice 设计 + 实现 PR-1。详细设计与决策路径见 MEMORY Active Context。
+
+**范围**（本 PR）：
+
+- `migration v18`（`schedules` 表 + `idx_schedules_due` / `idx_schedules_owner`）。`owner_agent_id` CASCADE 跟 `agents`。
+- `ScheduleRepo` —— 包括 `tryClaim` 的 CAS lease（`UPDATE ... WHERE status='pending' RETURNING id`，唯一胜出者）和 `resetStaleFiring` crash recovery。
+- `ScheduleService` —— 校验、quota、cron-parser 集成（IANA timezone 必填，DST 完全交给库）、`pending|firing|done|cancelled|failed` 状态机、due tick + 60s 兜底 sweep + 60s 内 setTimeout 优化、wake 投递到 owner agent 的 agent_home primary dm_channel。
+- `cron-parser ^4.9.0` 加为 backend dep。
+- `BackendContext.scheduleService` 注入 `index.ts`，`start()` 在 `reconcileOnBoot` 后跑（先 reset stale firing,再立即 tick + 启动 sweep），`stop()` 在 `close()` 第一步触发，避免 fire 期间 CM 被拆。
+
+**v1 不在 PR-1 范围**（留给 PR-2）：MCP 工具（`schedule` / `list_schedules` / `cancel_schedule`）和文档同步（`docs/mcp-system.md` / `docs/agent-run-state.md` / 平台 prompt）。后端能力已经齐全，PR-2 只是 HTTP/MCP 路由。
+
+**关键不变量**（review 时重点验证）：
+
+- **零耦合**。`schedules` 表没有 `conversation_id` / `source_*` / `task_*` 任何字段;agent 想保留上下文就写进 free-text `message`,平台不建结构化关联。`docs/mcp-system.md` 在 PR-2 里要明写。
+- **next_fire_at 永远从 actual_fire_at 推进**,不从 old `next_fire_at` 循环 catch up。missed-on-restart 只补一次,然后跳到下一次未来时间;`fired_count` 反映实际 fire 次数,不是计划次数。
+- **CAS 是唯一并发屏障**。dev hot-reload 双 scheduler、sweep 与 near-timer race、test 并发 tick —— 所有路径都先调 `tryClaim`,SQLite 的 RETURNING 保证最多一胜。`disposeTimers()` 不能依赖,DB 才是 truth。
+- **wake 落 agent_home dm_channel**,owner-only deliver(虽然 agent_home 只有 owner 一个 member,这层 deliver-to-owner 写法保留语义清晰)。complemented by `start(home_dm, owner)` 触发非 oneShot driver 的进程 spawn,两个调用都 idempotent。
+- **DST**: `cron-parser`(用 Luxon)处理 spring-forward / fall-back;tests 覆盖 NYC `0 8 * * *`(穿越 03-10 02:00→03:00)和 `30 * * * *`(穿越 11-03 02:00→01:00)各 5-8 次连续 fire,断言 `next_fire_at > actual_fire_at` 严格单调。
+
+**Quota / 边界**:
+
+- 每 owner_agent_id active(`pending|firing`)≤ 50,超限返回 `too_many_active_schedules`。
+- one-shot delay ∈ [30s, 90 天];interval `every_seconds >= 60`(对齐 sweep tick)。
+- repeat schedule **必须** 显式给 `max_occurrences` / `until_at` 之一,或显式 `allow_unbounded: true`,否则 `unbounded_repeat_requires_explicit_limit`。
+- `until_at` 不能在第一次 fire 之前,否则 `invalid_input`(创建一个永远不会 fire 的 schedule 是 bug 不是 feature)。
+
+**测试覆盖**(`tests/services/schedule-service.test.ts`,36 cases):
+
+- create 路径:once 二选一 canonicalization、min/max delay、unbounded check、interval 边界、cron expr/timezone 校验、agent_home 缺失、quota 上限、until_at 顺序。
+- list:`active` 别名展开为 `['pending','firing']`;owner 隔离;`next_fire_at` 升序。
+- cancel:owner 校验、终态拒绝。
+- tick:one-shot → done;interval 推进 + 终态;until_at 截断;wake 失败 → failed + reason。
+- 并发:`Promise.all([tick, tick])` 只 fire 一次。
+- recovery:start() reset stale firing。
+- missed:跳 10 分钟仍只 fire 一次,next 从 actual+60s 起。
+- DST:NYC spring-forward + fall-back 各连续 5-8 次,严格单调推进。
+- wake body:repeat 元数据(`fired_count/n`)、迟到提示(`fired Xm late`)、`subtype='schedule_fire'` metadata。
+
+`tests/db-migrations.test.ts` 加 v18 case:NOT NULL 列、nullable 列、禁止字段(conversation_id / source_*),index、CASCADE FK、status CHECK。
+
+**实现位置**:
+- `packages/shared/src/db/migrations.ts` v18
+- `packages/shared/src/api/dto.ts` `Schedule*` schemas + 常量
+- `packages/backend/src/repos/schedule-repo.ts`
+- `packages/backend/src/services/schedule-service.ts`
+- `packages/backend/src/context.ts` 加 `scheduleService` 字段
+- `packages/backend/src/index.ts` 构造 + start + stop wiring
+- `packages/backend/package.json` 加 `cron-parser ^4.9.0`
+- `packages/backend/tests/services/schedule-service.test.ts`(36 cases)
+- `packages/backend/tests/db-migrations.test.ts` v18 case
+
+`pnpm typecheck` 全绿;`./scripts/test.sh` 497/497 通过。
+
+**Review round 1(@Cindy)收 3 blocker + 1 medium 全部修完**:
+
+1. **cancel-during-firing race**(blocker)。`ScheduleRepo.markDone/markFiredAndRearm/markFailed` 全部加 `WHERE id=? AND status='firing'` 谓词,改返回 `boolean`。如果 cancel 在 CAS 之后、completion 之前抢先成功,后续完成更新会 0-row 静默 no-op,`cancelled` 状态保留为终态。语义:cancel 不撤回已经发出的 wake,只阻止未来 fire。新增 2 个测试覆盖 one-shot 和 repeat 两种 race 场景。
+2. **cron 5-field 强制**(blocker)。新增 `assertFiveFieldCron()` 在 `computeCronNext` 入口运行,显式拒绝 `@daily`/`@hourly` 等 alias 和 6-field(seconds-precision)形式 —— `cron-parser` 默认会接受这两种,违反 v1 "5-field UNIX 分钟粒度" 契约。新增 3 个测试覆盖 alias、6-field、5-field positive。
+3. **start() 失败被吞掉**(blocker)。`deliverWake` 不再 `.catch(warn)` `start()` 调用,直接 `await` 让异常上抛。`processOne` 已有 `markFailed` 兜底,运行时 spawn 失败(claude PATH 缺失、init watchdog 超时)会让 schedule 进入终态 `failed` 而不是错误地 `done`/重排。inbox 行已经写入,agent 下次任意路径启动仍会拿到 wake;但 schedule 状态如实反映"这次唤醒未完成"。新增 1 个测试。
+4. **wake body 加 missed_count + next_fire_at**(medium)。新增 `Advancement` 类型在 `processOne` 里预计算 terminal/nextFireAt/missedCount,传给 `renderWakeBody`。 文案新增:
+   - missed_count > 0 时:`Missed N prior occurrence(s) while offline; this is a single catch-up — not a backfill.`
+   - 非终态 repeat:`Next fire at <ISO> (fired_count: <n>/<m|∞>).`
+   - 终态 repeat:`This was the final fire of the schedule.`
+   `interval` missed_count = `floor(delta/everyMs)` 精确;cron missed_count = `cron-parser` iterate `(planned, actual)` 区间(硬上限 1000 防 runaway);one-shot 恒为 0。metadata 也新增 `missed_count` / `next_fire_at` 字段。新增 4 个测试。
+
+最终 49 / 507 测试通过(46 schedule + 3 migration);`pnpm typecheck` 全绿。
+
+**等待 @Cindy round 2 review。**
+
+---
+
+## 2026-05-09 — `read_history` MCP 工具（PR-1，task #175）
+
+Thread "主动读历史/搜索/拉新消息工具设计" 收敛后的第一刀。@Cindy 实现，@Alice 设计 + review。设计协商记录见 `.silverhand/agents/Z18wRZX6Uhsoa2tw/notes/agent-history-tools-v1.md`。
+
+**v1 工具面定调**：补 `read_history` + `search_messages`，砍 `check_messages`（后者依赖一次 delivery ledger 重构，PR-3 单独评估）。
+
+**`read_history` 行为锁**：
+
+- 强制 anchor。`before_seq` / `after_seq` / `around_message_id` 三选一，缺/混传一律 400 with `anchor required`。没有"给我最新 N 条"模式 — push 已覆盖。
+- 默认 snippet（≤160 字符 whitespace-collapse 截断）+ metadata + attachments，正文必须显式 `include_content=true`。`include_system` 默认 true。`limit` 默认 50 / 上限 100。
+- `target` 复用 `send_message.target`：`self` / `parent`（仅 thread 内）/ `{thread_id}`（仅当前 channel 的 direct child）。**target 解析后再校验当前 `conversation_agents` membership**（即使 source 是 member，target 也必须现仍是 member）。
+- `around_message_id` 是 conversation-scoped 查找：`WHERE id=? AND conversation_id=target_id`，跨 conversation 的 id 猜测返回 404 不泄露存在性。
+- **永不写 `conversation_inboxes.delivered_at`** — 只读，不消费 push 队列。
+
+**stdin push 文案改动**：`formatLiveMessage` / `formatInboxBatch` / 直接走 stdin 的 gated batch 全部加 `message_id=<id>` 行（live + inbox drain + safe-boundary queued + one-shot kickoff 四条路径），让 agent 任何时候都能拿到 anchor 种子。只塞 id 不塞 seq — `seq` 在 `read_history` / 未来 `search_messages` 响应里通过 `MessageRef` 自然带回。
+
+**故意不实现**：
+
+- `delivery_cursor` 字段：原计划"返回但不驱动默认"，最终砍掉。理由：current direct-stdin push 路径不写 inbox row，cursor 会是 lossy 的；shipped 一个有缺口的 cursor 比没有 cursor 更危险。等 PR-3 ledger 重构后再补。
+- `around_message_id` 三选一窗口里 `floor((limit-1)/2)` 偏后 — 偶数 limit 略向后倾斜，可接受。
+- 用户 sender `display_name` fallback 到 `from_user_id`。
+
+**实现位置**：
+
+- `packages/shared/src/api/dto.ts` — `AgentReadHistoryInputSchema` (zod refine 强制 anchor 唯一)、`MessageRef`、`MessageSenderRef`、`ReadHistoryTargetRef`、`ReadHistoryMessage`、`ReadHistoryAnchor`、`AgentReadHistoryDto`。
+- `packages/shared/src/api/paths.ts` — `internalPaths.agentReadHistory(cid, aid)`。
+- `packages/backend/src/routes.ts` — internal route + `resolveAgentReadHistoryTarget` + `buildReadHistoryDto` + `historySelectSql` 帮手。
+- `packages/backend/src/conversation-manager.ts` — `formatLiveMessage` / `formatInboxBatch` 加 `message_id=<id>`，`MessageLite` 接口加 `id` 字段。
+- `packages/chat-bridge/src/server.ts` + `client.ts` — `read_history` MCP 工具 + bridge 调用。
+- 测试：`packages/backend/tests/routes/read-history.test.ts`（5 tests，覆盖强制 anchor、`delivered_at` 不动、around+system filter、target=parent、跨 thread 拒绝）+ `lifecycle.test.ts` 加 `message_id=` 断言。
+
+**docs**：`docs/mcp-system.md` §4 新增；§7 absent 表移除 `read_history`、把 `check_messages` 单独保留并说明依赖 ledger refactor、增加 `search_messages`/`list_channels` planned 占位。
+
+**PR-2 进行中**（task #178，@Cindy）：`search_messages` + `list_channels`，按已锁的三档 scope（current/workspace/channel）+ MessageRef 形状 + ±80 字符 excerpt + match_offset。
+
+---
+
+## 2026-05-09 — `search_messages` + `list_channels` MCP 工具（PR-2，task #178）
+
+Thread "主动读历史/搜索/拉新消息工具设计" 的 PR-2，紧跟 PR-1 落地。@Cindy 实现，@Alice 设计 + review。两个工具共同把 v1 主动检索面补齐：`list_channels` 给 channel id 枚举，`search_messages` 给三档 scope 的全文检索，配合 PR-1 的 `read_history` 完成"发现 → 检索 → 取上下文 → 取正文"完整链路。
+
+**`list_channels` 行为锁**：
+
+- 入参为空。返回当前 conversation 所在 workspace 内、调用 agent 当前是 `conversation_agents` 成员的 `channel`/`dm_channel` 列表，**不返回 thread**。
+- 字段：`{id, title, kind, archived, updated_at}`。archived channel 仍返回但排序到底。
+- 设计意图：让 agent 永远只引用工具发现来的 channel id（而不是猜或自造），是 `search_messages(scope='channel', channel_id=...)` 的前置工具。
+
+**`search_messages` 行为锁**：
+
+- `scope ∈ {'current', 'workspace', 'channel'}`，默认 `current`。schema 用 refine 强制 `scope='channel' ⇔ channel_id` 互生（缺/混传 400）。
+- **所有 scope 都走 `JOIN conversation_agents ca ON ca.conversation_id = conv.id AND ca.agent_id = ?` 硬过滤**，membership 取**当前**快照（不看消息产生时的历史 membership）。离开 workspace 后历史一并不可搜。
+- `scope='workspace'`：搜源 conversation 所在 workspace 内 agent 当前是 member 的所有 conversations（含 channels / dm_channels / threads）。
+- `scope='channel'`：SQL `(conv.id = ? OR conv.parent_conversation_id = ?)` 覆盖该 channel 本身和它的 child threads；child thread 仍走 `conversation_agents` JOIN，所以 agent 没加入的 thread 不会泄露。channel scope 还在路由层做 `channel.workspace_id` 同 workspace + `getAgent` 双重防御（防 cross-workspace id 猜测 → 403 `not_channel_member`；thread id 当 channel id → 404 `channel_not_found`）。
+- 输出只给 `{message_ref, sender, excerpt, match_offset}`，**没有 full content**。正文由 agent 自行 `read_history({around_message_id: hit.message_ref.id, include_content: true})` 拉。
+- excerpt：±80 字符上下文（`SEARCH_EXCERPT_CONTEXT_CHARS = 80`），whitespace 折叠，前后 `...` ellipsis；`match_offset` 0-based 指向 excerpt 内匹配位置。LIKE 命中但 JS `indexOf` 找不到（理论上的非 ASCII case 边界）时 fallback 到首 160 char。
+- 后端走独立 internal route，**不**复用 UI `/api/search`（避免人类 search 的 user-scope 跟 agent membership 混；另外 agent 路由必须服务端注入 actor scope，输入信任面更窄）。
+- `q` 长度 1..200，`limit` 默认 50 / 上限 100，`include_system` 默认 true（跟 `read_history` 对齐）。
+
+**实现位置**：
+
+- `packages/shared/src/api/dto.ts` — `AgentListedChannel`、`AgentListChannelsDto`、`AgentSearchMessagesScope`、`AgentSearchMessagesInput`（含 refine）、`AgentSearchMessageHit`、`AgentSearchMessagesDto`。
+- `packages/shared/src/api/paths.ts` — `internalPaths.agentListChannels` + `agentSearchMessages`。
+- `packages/backend/src/routes.ts` — 三个 internal route + `listAgentVisibleChannels`、`buildAgentSearchMessagesDto`、`searchExcerptFor`、`searchMessageRef` 帮手；复用 PR-1 的 `senderRef` / `historySelectSql` 套件。
+- `packages/chat-bridge/src/server.ts` + `client.ts` — `list_channels` / `search_messages` MCP 工具 + bridge 调用。
+- 测试：`packages/backend/tests/routes/search-messages.test.ts`（6 tests，覆盖：membership-filtered list / 当前 scope excerpt+match_offset 验证 / workspace scope 跨 channel 仅返回 agent member 的 / channel scope 含 child thread 但仍走 membership / scope×channel_id 三种非法组合 / `include_system=false` 过滤）。
+
+**docs**：`docs/mcp-system.md` §4 标题改为 "Read & Search History"，新增 `list_channels` + `search_messages` 完整签名 + 行为合约；§7 absent 表移除 "search_messages / list_channels planned" 占位（v1 已落）。
+
+**PR-3（非阻塞，单独 issue）**：delivery ledger 重构 + `check_messages`。等真有需求时再启动。本 thread "主动读历史/搜索/拉新消息工具设计" v1 主动检索工具面到此完整。
+
+---
+
 ## 2026-05-09 — mention-targeted dispatch 讨论收敛、延后实现
 
 频道 "agent activity 问题排查" 里围绕"我 @Cindy 提问,正在干活的 Claude 也被打断重新 thinking"这件事跑了一轮设计讨论(@Alice / @Cindy / 用户)。结论：**不实现**,只把决议沉淀进文档。

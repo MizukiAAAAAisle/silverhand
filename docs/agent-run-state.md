@@ -397,3 +397,38 @@ passive enqueue 修好了"看得到",没修"塞得动"。如果用户跟 A 聊�
 - 实现 workspace/channel settings 时,顺便接入 dispatch 策略选项。
 
 再评估时建议直接以 §12.2 + §12.3 + §12.4 为起点,不要重开讨论。
+
+---
+
+## 13. Schedule wake (`metadata.subtype = 'schedule_fire'`)
+
+`ScheduleService` 在到点时把 wake 写到 owner agent 的 agent_home
+primary `dm_channel`,**走的是普通的 `messages.insertForConversation`
++ `ConversationManager.deliverMessage` + `start`** —— 没有第二条 inbox
+路径,也没有"特殊 wake 总线"。这条决策是 PR-1 锁的(见
+`docs/mcp-system.md` §6 与 `progress.md` 2026-05-09 PR-1
+section),目的是让 schedule wake 在 run-state 维度上和任何用户消息
+没有区别,Activity Strip / activity bubble / inbox 全部自动复用。
+
+对 run-state 的影响:
+
+- wake 消息 `from_kind = 'system'`,`metadata = { subtype:
+  'schedule_fire', schedule_id, spec_kind, actual_fire_at,
+  planned_fire_at, missed_count, next_fire_at }`。
+- 投递方式:`deliverMessage` 把 inbox 行写好,然后 `start()` 唤起
+  agent。如果 owner agent 此时 idle,直接走 spawn-time `drainInbox`,
+  正常进入 `startRun`(新 runId);如果已经在跑,则按 driver 的现有规
+  则(direct = 立刻写 stdin + `markRunThinking`,gated = `pendingDeliveries`
+  + safe boundary `flushPending`)。
+- §12 的 mention-targeted 讨论不适用 —— wake 永远只有一个 recipient
+  (owner agent)。`from_kind='system'` 也不参与 mention 解析,不会
+  误唤醒其他 channel 成员。
+- Activity Strip 表现:wake 触发的 run 与正常 user-triggered run 走
+  同一条 `agent_run_state` 路径。如果 wake 落在 agent 已经在干别的事
+  的 `firing` 期内,gated 路径会出现 `replaced` 终态切 runId 的视觉重置
+  (与 §11 已知现象一致),不需要单独处理。
+
+PR-2 落地的 MCP 路由(`schedule` / `list_schedules` /
+`cancel_schedule`)只动 schedule 自己的状态机,**不改任何
+run-state 字段、不发任何 `agent_*` 事件**;UI 第一次看到 wake 是
+agent_home dm_channel 收到那条 system 消息时的常规消息事件。

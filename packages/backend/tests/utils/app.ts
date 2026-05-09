@@ -15,12 +15,14 @@ import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { NotificationRepo } from '../../src/repos/notification-repo.js';
+import { ScheduleRepo } from '../../src/repos/schedule-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { createApiRouter, createInternalRouter } from '../../src/routes.js';
 import type { ConversationManager } from '../../src/conversation-manager.js';
 import { AttachmentService } from '../../src/services/attachment-service.js';
 import { ChannelService } from '../../src/services/channel-service.js';
 import { ConversationMessageService } from '../../src/services/conversation-message-service.js';
+import { ScheduleService } from '../../src/services/schedule-service.js';
 import { TaskService } from '../../src/services/task-service.js';
 import { ThreadService } from '../../src/services/thread-service.js';
 import { createLocalBlobFileStorage } from '../../src/storage/blob-file-storage.js';
@@ -161,6 +163,7 @@ export function buildTestApp(): TestApp {
     conversationMessageService: undefined as unknown as ConversationMessageService,
     threadService: undefined as unknown as ThreadService,
     taskService: undefined as unknown as TaskService,
+    scheduleService: undefined as unknown as ScheduleService,
     lastSpawnAtByAgent: new Map(),
     events: new ScopeEventBus(),
     chatBridgeLauncher: { command: 'noop', args: [] },
@@ -209,6 +212,16 @@ export function buildTestApp(): TestApp {
     events: ctx.events,
     logger: silentLogger,
   });
+  ctx.scheduleService = new ScheduleService({
+    schedules: new ScheduleRepo(db),
+    workspaces: new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot }),
+    messages: new MessageRepo(db),
+    agents: new AgentRepo(db),
+    conversationManager: ctx.conversationManager,
+    events: ctx.events,
+    logger: silentLogger,
+    disableAutoTick: true,
+  });
 
   // routes.ts calls hosts.ensureLocal() at construction; openTestDb() does
   // the same — this is a safety net if anyone changes the helper later.
@@ -225,6 +238,7 @@ export function buildTestApp(): TestApp {
     fake,
     authToken,
     cleanup: () => {
+      ctx.scheduleService.stop();
       try {
         db.close();
       } catch {}
