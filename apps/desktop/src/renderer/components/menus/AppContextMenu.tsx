@@ -7,7 +7,12 @@ const MENU_CONTENT_CLASS =
   'z-[80] min-w-[180px] rounded-md border border-border bg-bg-floating p-1 text-xs text-text-primary shadow-lg outline-none';
 
 const MENU_ITEM_CLASS = cn(
-  'flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 outline-none transition-colors',
+  // `cursor-pointer` on hover so the menu reads as actionable; Radix's
+  // default `cursor: default` made these feel like read-only labels.
+  // Disabled items downgrade to `not-allowed` via the data-disabled
+  // selector below so the affordance still tracks the actual state.
+  'flex select-none items-center gap-2 rounded-sm px-2 py-1.5 outline-none transition-colors',
+  'cursor-pointer data-[disabled]:cursor-not-allowed',
   'data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
   'data-[highlighted]:bg-bg-hover data-[highlighted]:text-text-primary',
 );

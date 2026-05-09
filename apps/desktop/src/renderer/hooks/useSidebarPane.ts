@@ -61,6 +61,12 @@ export interface SidebarPane {
   /** Drives the slot's `data-state` for slide animation. `open` while
    *  visible (and during the brief closing tail), `closed` while hidden. */
   surfaceState: 'open' | 'closed';
+  /** True only while the open/close transition is in flight. Consumers
+   *  use this to gate CSS transitions on layout properties (slot
+   *  flex-basis, margin-right) so a drag-resize that updates
+   *  `--sidebar-width` doesn't get animated through 220 ms — that
+   *  reads as severe input lag during pointermove. */
+  transitioning: boolean;
   /** Set the persisted intent; runs the appropriate animation. */
   setVisible: (next: boolean) => void;
   /** Convenience flip of `visible`. */
@@ -203,6 +209,7 @@ export function useSidebarPane({
     visible: state.visible,
     present: state.phase !== 'closed',
     surfaceState: state.phase === 'open' ? 'open' : 'closed',
+    transitioning: state.phase === 'opening' || state.phase === 'closing',
     setVisible,
     toggle,
   };

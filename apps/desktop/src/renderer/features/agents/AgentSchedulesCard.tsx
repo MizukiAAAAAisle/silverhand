@@ -44,18 +44,11 @@ export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps): JSX.El
   const rows = useMemo(() => query.data ?? [], [query.data]);
 
   return (
-    <section className="flex flex-col gap-3 rounded-lg border border-border bg-bg-floating p-4">
+    <div className="flex flex-col gap-3">
       <header className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <h2 className="font-serif text-sm font-semibold text-text-primary">
-            Schedules
-          </h2>
-          <p className="mt-0.5 text-[11px] text-text-muted">
-            Wakes the agent created for itself. Created via the
-            <code className="mx-1 rounded bg-bg-base px-1 text-[10px]">schedule</code>
-            MCP tool — only the agent can add new entries.
-          </p>
-        </div>
+        <p className="min-w-0 text-xs text-text-muted">
+          Self-scheduled wakes. Read-only here, cancel only.
+        </p>
         <div className="flex items-center gap-1">
           <FilterTabs value={filter} onChange={setFilter} />
           <button
@@ -112,7 +105,7 @@ export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps): JSX.El
           </table>
         </div>
       )}
-    </section>
+    </div>
   );
 }
 
@@ -133,7 +126,7 @@ function ScheduleRow({
   // minutes" forever.
   const hasFutureFire = row.status === 'pending' || row.status === 'firing';
   return (
-    <tr className="border-t border-border-subtle first:border-t-0 hover:bg-bg-hover">
+    <tr className="border-t border-border-subtle align-middle first:border-t-0 hover:bg-bg-hover">
       <td className="px-3 py-1.5">
         <KindCell row={row} />
       </td>
@@ -180,10 +173,10 @@ function KindCell({ row }: { row: ScheduleDto }): JSX.Element {
     return `${row.spec.expression} (${row.spec.timezone})`;
   })();
   return (
-    <div className="flex items-center gap-1.5">
-      <Calendar className="size-3 text-text-muted" />
+    <div className="flex items-center gap-1.5 whitespace-nowrap text-xs leading-5">
+      <Calendar className="size-3.5 shrink-0 text-text-muted" />
       <span className="text-text-primary">{row.spec.kind}</span>
-      <span className="font-mono text-[10px] text-text-muted">{detail}</span>
+      <span className="font-mono text-text-muted">{detail}</span>
     </div>
   );
 }

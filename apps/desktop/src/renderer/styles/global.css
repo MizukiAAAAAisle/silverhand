@@ -367,6 +367,14 @@ button:disabled { cursor: not-allowed; }
   flex-shrink: 0;
   height: 100%;
   overflow: hidden;
+}
+/* Layout transition is OFF by default so a drag-resize that updates
+   `--sidebar-width` (and therefore the slot's `flex-basis`) reflows
+   instantly under the pointer. The hook flips `data-animating` on
+   only during the open/close phases — that's when we actually want
+   the 220 ms slide to play. Without this gate the drag stutters
+   because every pointermove kicks off a fresh 220 ms transition. */
+.sidebar-slot[data-animating='true'] {
   will-change: flex-basis, margin-right;
   transition:
     flex-basis var(--sidebar-anim-ms) var(--sidebar-ease),

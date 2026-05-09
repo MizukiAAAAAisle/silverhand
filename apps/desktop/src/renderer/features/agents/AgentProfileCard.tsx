@@ -1,6 +1,13 @@
-import { useEffect, useState } from 'react';
+import {
+  forwardRef,
+  useEffect,
+  useState,
+  type InputHTMLAttributes,
+  type ReactNode,
+  type TextareaHTMLAttributes,
+} from 'react';
 import * as Select from '@radix-ui/react-select';
-import { ChevronDown, Lock, Pencil } from 'lucide-react';
+import { ChevronDown, Lock } from 'lucide-react';
 import dayjs from 'dayjs';
 import type {
   AgentDto,
@@ -9,8 +16,8 @@ import type {
   RuntimeKind,
   UpdateAgentInput,
 } from '@silverhand/shared';
-import { Input, Label, Textarea } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
+import { AgentAvatar } from '@/components/AgentAvatar';
+import { cn } from '@/lib/cn';
 import { useUpdateAgent } from './hooks';
 
 const RUNTIMES: { value: RuntimeKind; label: string }[] = [
@@ -21,7 +28,7 @@ const RUNTIMES: { value: RuntimeKind; label: string }[] = [
 ];
 
 // codex maps `reasoning_effort` to its `model_reasoning_effort` config
-// key. Other runtimes ignore the field — UI hides it for them.
+// key. Other runtimes ignore the field — UI hides the row for them.
 const CODEX_REASONING: { value: string; label: string }[] = [
   { value: '__default__', label: 'Use codex default' },
   { value: 'low', label: 'low' },
@@ -44,15 +51,23 @@ interface AgentProfileCardProps {
   runtimeState: AgentRuntimeStateDto | undefined;
 }
 
+/**
+ * Settings-style agent profile view. Replaces the previous form-heavy
+ * card (stacked labels above bordered inputs) with a two-column row
+ * layout: label on the left, ghost-input value on the right that only
+ * paints its chrome on hover/focus. Reads as a profile sheet first and
+ * an editor second — which matches how the user actually interacts with
+ * it (mostly viewing, occasionally tweaking).
+ */
 export function AgentProfileCard({
   agent,
   runtimeState,
 }: AgentProfileCardProps): JSX.Element {
   const update = useUpdateAgent(agent.id);
 
-  // Local draft; commits on blur for text fields, immediately for selects.
-  // Keeps the input responsive and avoids fighting React Query's optimistic
-  // re-renders if you type into a field while a previous PATCH is in flight.
+  // Local drafts; commit on blur for text fields, immediately for selects.
+  // Avoids fighting React Query's optimistic re-renders if the user types
+  // into a field while a previous PATCH is still in flight.
   const [displayName, setDisplayName] = useState(agent.display_name);
   const [description, setDescription] = useState(agent.description ?? '');
   const [model, setModel] = useState(agent.model ?? '');
@@ -72,16 +87,15 @@ export function AgentProfileCard({
     update.mutate(patch);
   };
 
-  const onBlurDisplayName = () => {
+  const onCommitDisplayName = () => {
     const next = displayName.trim();
     if (next && next !== agent.display_name) commit({ display_name: next });
   };
-  const onBlurDescription = () => {
-    const next = description;
-    if (next === (agent.description ?? '')) return;
-    commit({ description: next === '' ? null : next });
+  const onCommitDescription = () => {
+    if (description === (agent.description ?? '')) return;
+    commit({ description: description === '' ? null : description });
   };
-  const onBlurModel = () => {
+  const onCommitModel = () => {
     const next = model.trim();
     if (next === (agent.model ?? '')) return;
     commit({ model: next === '' ? null : next });
@@ -93,172 +107,262 @@ export function AgentProfileCard({
     agent.fast_mode === null || agent.fast_mode === undefined
       ? '__default__'
       : agent.fast_mode
-      ? 'true'
-      : 'false';
+        ? 'true'
+        : 'false';
 
   return (
-    <section className="flex flex-col gap-4 rounded-lg border border-border bg-bg-floating p-4">
-      <h2 className="font-serif text-sm font-semibold text-text-primary">
-        Profile
-      </h2>
-
-      <Field
-        label={
-          <>
-            Display name
-            <Pencil className="ml-1 inline size-3 text-text-muted" />
-          </>
-        }
-      >
-        <Input
-          value={displayName}
-          onChange={e => setDisplayName(e.target.value)}
-          onBlur={onBlurDisplayName}
-          placeholder={agent.name}
-        />
-      </Field>
-
-      <Field
-        label={
-          <>
-            Handle
-            <Lock className="ml-1 inline size-3 text-text-muted" />
-          </>
-        }
-        hint="Used in @mentions, the agent home workspace, and L2 file paths. Can't be changed in v1."
-      >
-        <Input
-          value={`@${agent.name}`}
-          readOnly
-          className="cursor-not-allowed bg-bg-base font-mono text-text-secondary"
-        />
-      </Field>
-
-      <Field label="Description">
-        <Textarea
-          rows={3}
-          value={description}
-          onChange={e => setDescription(e.target.value)}
-          onBlur={onBlurDescription}
-          placeholder="optional — what is this agent for?"
-        />
-      </Field>
-
-      <hr className="border-border-subtle" />
-
-      <Field
-        label="Runtime"
-        hint={
-          hasRunning
-            ? 'Stop the agent before changing runtime.'
-            : 'CLI used to spawn this agent.'
-        }
-      >
-        <RuntimeSelect
-          value={agent.runtime}
-          disabled={hasRunning}
-          onChange={value => commit({ runtime: value })}
-        />
-      </Field>
-
-      <Field label="Model" hint="Optional. Leave blank to use the driver default.">
-        <Input
-          value={model}
-          onChange={e => setModel(e.target.value)}
-          onBlur={onBlurModel}
-          placeholder={runtimePlaceholder(agent.runtime)}
-        />
-      </Field>
-
-      {isCodex ? (
-        <Field
-          label="Reasoning effort"
-          hint="codex only. Higher = slower but more thorough."
-        >
-          <ReasoningSelect
-            value={reasoningValue}
-            onChange={value =>
-              commit({
-                reasoning_effort:
-                  value === '__default__' ? null : (value as ReasoningEffort),
-              })
-            }
+    <div className="mx-auto flex max-w-3xl flex-col gap-8">
+      {/* Identity strip — large avatar paired with display name + handle.
+        * Reads as a profile masthead rather than a labeled form row. */}
+      <section className="flex items-center gap-4">
+        <AgentAvatar runtime={agent.runtime} size={56} />
+        <div className="min-w-0 flex-1">
+          <GhostInput
+            value={displayName}
+            onChange={e => setDisplayName(e.target.value)}
+            onBlur={onCommitDisplayName}
+            placeholder={agent.name}
+            className="font-serif text-lg font-semibold leading-tight"
           />
-        </Field>
-      ) : null}
+          <div className="mt-1 flex items-center gap-1.5 px-2 text-xs text-text-muted">
+            <span className="font-mono">@{agent.name}</span>
+            <Lock className="size-3" />
+            <span>handle is locked in v1</span>
+          </div>
+        </div>
+      </section>
 
-      {isCodex ? (
-        <Field
-          label="Fast mode"
-          hint="codex feature flag. Default leaves the catalog setting in place."
-        >
-          <FastModeSelect
-            value={fastModeValue}
-            onChange={value =>
-              commit({
-                fast_mode:
-                  value === '__default__' ? null : value === 'true',
-              })
-            }
+      <Group title="About">
+        <Row label="Description" align="top">
+          <GhostTextarea
+            rows={3}
+            value={description}
+            onChange={e => setDescription(e.target.value)}
+            onBlur={onCommitDescription}
+            placeholder="Optional — what is this agent for?"
           />
-        </Field>
-      ) : null}
+        </Row>
+      </Group>
 
-      <hr className="border-border-subtle" />
+      <Group title="Runtime">
+        <Row
+          label="CLI"
+          hint={hasRunning ? 'Stop the agent before changing.' : undefined}
+        >
+          <RuntimeSelect
+            value={agent.runtime}
+            disabled={hasRunning}
+            onChange={value => commit({ runtime: value })}
+          />
+        </Row>
+        <Row label="Model" hint={runtimeHint(agent.runtime)}>
+          <GhostInput
+            value={model}
+            onChange={e => setModel(e.target.value)}
+            onBlur={onCommitModel}
+            placeholder="driver default"
+          />
+        </Row>
+        {isCodex ? (
+          <Row label="Reasoning" hint="Higher = slower but more thorough.">
+            <PickerSelect
+              value={reasoningValue}
+              options={CODEX_REASONING}
+              onChange={value =>
+                commit({
+                  reasoning_effort:
+                    value === '__default__' ? null : (value as ReasoningEffort),
+                })
+              }
+            />
+          </Row>
+        ) : null}
+        {isCodex ? (
+          <Row label="Fast mode" hint="Default keeps the catalog setting.">
+            <PickerSelect
+              value={fastModeValue}
+              options={CODEX_FAST_MODE}
+              onChange={value =>
+                commit({
+                  fast_mode: value === '__default__' ? null : value === 'true',
+                })
+              }
+            />
+          </Row>
+        ) : null}
+      </Group>
 
-      <div className="grid grid-cols-2 gap-3 text-xs text-text-muted">
-        <Meta label="Host">{agent.host_id}</Meta>
-        <Meta label="Created" title={dayjs(agent.created_at).format('YYYY-MM-DD HH:mm:ss')}>
-          {dayjs(agent.created_at).format('YYYY-MM-DD')}
-        </Meta>
-        <Meta label="Updated" title={dayjs(agent.updated_at).format('YYYY-MM-DD HH:mm:ss')}>
-          {dayjs(agent.updated_at).format('YYYY-MM-DD HH:mm')}
-        </Meta>
-        <Meta label="Agent ID">
-          <span className="font-mono">{agent.id}</span>
-        </Meta>
-      </div>
+      <Group title="Metadata" muted>
+        <MetaList
+          items={[
+            { label: 'Host', value: agent.host_id },
+            {
+              label: 'Created',
+              value: dayjs(agent.created_at).format('YYYY-MM-DD'),
+              title: dayjs(agent.created_at).format('YYYY-MM-DD HH:mm:ss'),
+            },
+            {
+              label: 'Updated',
+              value: dayjs(agent.updated_at).format('YYYY-MM-DD HH:mm'),
+              title: dayjs(agent.updated_at).format('YYYY-MM-DD HH:mm:ss'),
+            },
+            { label: 'Agent ID', value: agent.id, mono: true },
+          ]}
+        />
+      </Group>
 
       {update.isError ? (
         <div className="text-xs text-error">{String(update.error)}</div>
       ) : null}
+    </div>
+  );
+}
+
+// ── Layout primitives ────────────────────────────────────────────────────
+
+function Group({
+  title,
+  children,
+  muted = false,
+}: {
+  title: string;
+  children: ReactNode;
+  muted?: boolean;
+}): JSX.Element {
+  return (
+    <section className="flex flex-col">
+      <h3
+        className={cn(
+          'mb-2 font-serif text-[13px] font-semibold uppercase tracking-wider',
+          muted ? 'text-text-muted' : 'text-text-secondary',
+        )}
+      >
+        {title}
+      </h3>
+      <div className="divide-y divide-border-subtle/60 rounded-md border border-border-subtle/60 bg-bg-floating/50">
+        {children}
+      </div>
     </section>
   );
 }
 
-function Field({
+function Row({
   label,
   hint,
+  align = 'center',
   children,
 }: {
-  label: React.ReactNode;
+  label: string;
   hint?: string;
-  children: React.ReactNode;
+  align?: 'center' | 'top';
+  children: ReactNode;
 }): JSX.Element {
   return (
-    <div className="flex flex-col gap-1.5">
-      <Label>{label}</Label>
-      {children}
-      {hint ? <span className="text-[11px] text-text-muted">{hint}</span> : null}
+    <div
+      className={cn(
+        'grid grid-cols-[120px_1fr] gap-3 px-3 py-2.5',
+        align === 'top' ? 'items-start' : 'items-center',
+      )}
+    >
+      <div className={cn('min-w-0', align === 'top' ? 'pt-1.5' : '')}>
+        <div className="text-xs font-medium text-text-secondary">{label}</div>
+        {hint ? (
+          <div className="mt-0.5 text-[11px] leading-snug text-text-muted">
+            {hint}
+          </div>
+        ) : null}
+      </div>
+      <div className="min-w-0">{children}</div>
     </div>
   );
 }
 
-function Meta({
-  label,
-  title,
-  children,
-}: {
+interface MetaItem {
   label: string;
+  value: string;
   title?: string;
-  children: React.ReactNode;
-}): JSX.Element {
+  mono?: boolean;
+}
+
+function MetaList({ items }: { items: MetaItem[] }): JSX.Element {
   return (
-    <div className="flex flex-col gap-0.5" title={title}>
-      <span className="text-[11px] uppercase tracking-wide text-text-muted">{label}</span>
-      <span className="text-text-primary">{children}</span>
-    </div>
+    <dl className="divide-y divide-border-subtle/60">
+      {items.map(item => (
+        <div
+          key={item.label}
+          className="flex items-baseline justify-between gap-3 px-3 py-1.5"
+          title={item.title}
+        >
+          <dt className="text-[11px] uppercase tracking-wider text-text-muted">
+            {item.label}
+          </dt>
+          <dd
+            className={cn(
+              'min-w-0 truncate text-xs text-text-primary',
+              item.mono ? 'font-mono' : '',
+            )}
+          >
+            {item.value}
+          </dd>
+        </div>
+      ))}
+    </dl>
   );
+}
+
+// ── Ghost inputs (transparent until hover/focus) ─────────────────────────
+
+const GhostInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
+  ({ className, ...props }, ref) => (
+    <input
+      ref={ref}
+      className={cn(
+        'w-full rounded-md border border-transparent bg-transparent px-2 py-1 text-sm text-text-primary placeholder:text-text-muted',
+        'transition-colors hover:border-border-subtle hover:bg-bg-base/40',
+        'focus:border-border focus:bg-bg-floating focus:outline-none focus:ring-2 focus:ring-border-focus',
+        className,
+      )}
+      {...props}
+    />
+  ),
+);
+GhostInput.displayName = 'GhostInput';
+
+const GhostTextarea = forwardRef<
+  HTMLTextAreaElement,
+  TextareaHTMLAttributes<HTMLTextAreaElement>
+>(({ className, ...props }, ref) => (
+  <textarea
+    ref={ref}
+    className={cn(
+      'w-full resize-none rounded-md border border-transparent bg-transparent px-2 py-1.5 text-sm leading-relaxed text-text-primary placeholder:text-text-muted',
+      'transition-colors hover:border-border-subtle hover:bg-bg-base/40',
+      'focus:border-border focus:bg-bg-floating focus:outline-none focus:ring-2 focus:ring-border-focus',
+      className,
+    )}
+    {...props}
+  />
+));
+GhostTextarea.displayName = 'GhostTextarea';
+
+// ── Selects (Radix Select with the same low-chrome trigger) ─────────────
+
+function selectTriggerClass(disabled: boolean): string {
+  return cn(
+    'flex h-8 w-full items-center justify-between rounded-md border border-transparent bg-transparent px-2 text-sm text-text-primary',
+    'transition-colors hover:border-border-subtle hover:bg-bg-base/40',
+    'data-[state=open]:border-border data-[state=open]:bg-bg-floating',
+    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus',
+    disabled ? 'cursor-not-allowed opacity-50 hover:border-transparent hover:bg-transparent' : '',
+  );
+}
+
+function selectContentClass(): string {
+  return 'z-50 min-w-[var(--radix-select-trigger-width)] rounded-md border border-border bg-bg-floating p-1 text-sm shadow-popover';
+}
+
+function selectItemClass(): string {
+  return 'flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-text-primary outline-none data-[highlighted]:bg-bg-hover';
 }
 
 function RuntimeSelect({
@@ -276,11 +380,7 @@ function RuntimeSelect({
       disabled={disabled}
       onValueChange={v => onChange(v as RuntimeKind)}
     >
-      <Select.Trigger
-        className={
-          'flex h-9 w-full items-center justify-between rounded-md border border-border bg-bg-floating px-3 text-sm text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus disabled:cursor-not-allowed disabled:opacity-50'
-        }
-      >
+      <Select.Trigger className={selectTriggerClass(disabled)}>
         <Select.Value />
         <Select.Icon>
           <ChevronDown className="size-3.5 text-text-muted" />
@@ -290,14 +390,14 @@ function RuntimeSelect({
         <Select.Content
           position="popper"
           sideOffset={4}
-          className="z-50 min-w-[var(--radix-select-trigger-width)] rounded-md border border-border bg-bg-floating p-1 text-sm shadow-lg"
+          className={selectContentClass()}
         >
           <Select.Viewport>
             {RUNTIMES.map(rt => (
               <Select.Item
                 key={rt.value}
                 value={rt.value}
-                className="flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-text-primary outline-none data-[highlighted]:bg-bg-hover"
+                className={selectItemClass()}
               >
                 <Select.ItemText>{rt.label}</Select.ItemText>
               </Select.Item>
@@ -309,16 +409,18 @@ function RuntimeSelect({
   );
 }
 
-function ReasoningSelect({
+function PickerSelect({
   value,
+  options,
   onChange,
 }: {
   value: string;
+  options: { value: string; label: string }[];
   onChange: (v: string) => void;
 }): JSX.Element {
   return (
     <Select.Root value={value} onValueChange={onChange}>
-      <Select.Trigger className="flex h-9 w-full items-center justify-between rounded-md border border-border bg-bg-floating px-3 text-sm text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus">
+      <Select.Trigger className={selectTriggerClass(false)}>
         <Select.Value />
         <Select.Icon>
           <ChevronDown className="size-3.5 text-text-muted" />
@@ -328,14 +430,14 @@ function ReasoningSelect({
         <Select.Content
           position="popper"
           sideOffset={4}
-          className="z-50 min-w-[var(--radix-select-trigger-width)] rounded-md border border-border bg-bg-floating p-1 text-sm shadow-lg"
+          className={selectContentClass()}
         >
           <Select.Viewport>
-            {CODEX_REASONING.map(opt => (
+            {options.map(opt => (
               <Select.Item
                 key={opt.value}
                 value={opt.value}
-                className="flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-text-primary outline-none data-[highlighted]:bg-bg-hover"
+                className={selectItemClass()}
               >
                 <Select.ItemText>{opt.label}</Select.ItemText>
               </Select.Item>
@@ -347,53 +449,15 @@ function ReasoningSelect({
   );
 }
 
-function FastModeSelect({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-}): JSX.Element {
-  return (
-    <Select.Root value={value} onValueChange={onChange}>
-      <Select.Trigger className="flex h-9 w-full items-center justify-between rounded-md border border-border bg-bg-floating px-3 text-sm text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus">
-        <Select.Value />
-        <Select.Icon>
-          <ChevronDown className="size-3.5 text-text-muted" />
-        </Select.Icon>
-      </Select.Trigger>
-      <Select.Portal>
-        <Select.Content
-          position="popper"
-          sideOffset={4}
-          className="z-50 min-w-[var(--radix-select-trigger-width)] rounded-md border border-border bg-bg-floating p-1 text-sm shadow-lg"
-        >
-          <Select.Viewport>
-            {CODEX_FAST_MODE.map(opt => (
-              <Select.Item
-                key={opt.value}
-                value={opt.value}
-                className="flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-text-primary outline-none data-[highlighted]:bg-bg-hover"
-              >
-                <Select.ItemText>{opt.label}</Select.ItemText>
-              </Select.Item>
-            ))}
-          </Select.Viewport>
-        </Select.Content>
-      </Select.Portal>
-    </Select.Root>
-  );
-}
-
-function runtimePlaceholder(runtime: RuntimeKind): string {
+function runtimeHint(runtime: RuntimeKind): string {
   switch (runtime) {
     case 'claude':
-      return 'sonnet / opus / claude-opus-4-7';
+      return 'e.g. sonnet · opus · claude-opus-4-7';
     case 'codex':
-      return 'o1 / o1-mini / gpt-5 / ...';
+      return 'e.g. o1 · o1-mini · gpt-5';
     case 'cursor':
-      return '(cursor uses its own selection)';
+      return 'cursor uses its own selection';
     case 'gemini':
-      return 'gemini-2.5-pro';
+      return 'e.g. gemini-2.5-pro';
   }
 }

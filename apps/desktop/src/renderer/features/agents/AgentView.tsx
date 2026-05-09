@@ -1,14 +1,36 @@
+import { useEffect, useState } from 'react';
 import type { AgentRuntimeConversation } from '@silverhand/shared';
 import { AgentHeader } from './AgentHeader';
 import { AgentProfileCard } from './AgentProfileCard';
 import { AgentSchedulesCard } from './AgentSchedulesCard';
 import { AgentWorkspaceCard } from './AgentWorkspaceCard';
 import { AgentRuntimeTable } from './AgentRuntimeTable';
+import { AgentSidebar, type AgentSection } from './AgentSidebar';
 import {
   useAgent,
   useAgentRuntimeState,
   useAgentWorkspace,
 } from './hooks';
+
+const SECTION_STORAGE_KEY = 'silverhand:layout.agent-section';
+const VALID_SECTIONS: ReadonlyArray<AgentSection> = [
+  'profile',
+  'workspace',
+  'runtime',
+  'schedules',
+];
+
+function readSection(): AgentSection {
+  try {
+    const raw = localStorage.getItem(SECTION_STORAGE_KEY);
+    if (raw && (VALID_SECTIONS as readonly string[]).includes(raw)) {
+      return raw as AgentSection;
+    }
+  } catch {
+    /* private mode / quota — fall back to default */
+  }
+  return 'profile';
+}
 
 interface AgentViewProps {
   agentId: string;
@@ -29,6 +51,18 @@ export function AgentView({
   const agentQuery = useAgent(agentId);
   const workspaceQuery = useAgentWorkspace(agentId);
   const runtimeQuery = useAgentRuntimeState(agentId);
+
+  // Selected section persists globally (not per-agent) so the user
+  // doesn't have to re-pick after switching agents — the more common
+  // case is repeatedly viewing the same section across different agents.
+  const [section, setSection] = useState<AgentSection>(() => readSection());
+  useEffect(() => {
+    try {
+      localStorage.setItem(SECTION_STORAGE_KEY, section);
+    } catch {
+      /* ignore */
+    }
+  }, [section]);
 
   if (agentQuery.isLoading) {
     return (
@@ -75,20 +109,30 @@ export function AgentView({
         onDeleted={onDeleted}
       />
 
-      <div className="flex-1 overflow-y-auto px-6 py-5">
-        <div className="mx-auto flex max-w-5xl flex-col gap-4">
-          <div className="grid gap-4 lg:grid-cols-2">
-            <AgentProfileCard agent={agent} runtimeState={runtimeQuery.data} />
-            <AgentWorkspaceCard
-              workspace={workspaceQuery.data}
-              isLoading={workspaceQuery.isLoading}
-            />
+      <div className="flex min-h-0 flex-1">
+        <AgentSidebar active={section} onChange={setSection} />
+
+        <div className="min-w-0 flex-1 overflow-y-auto">
+          <div className="px-8 py-6">
+            {section === 'profile' ? (
+              <AgentProfileCard agent={agent} runtimeState={runtimeQuery.data} />
+            ) : null}
+            {section === 'workspace' ? (
+              <AgentWorkspaceCard
+                workspace={workspaceQuery.data}
+                isLoading={workspaceQuery.isLoading}
+              />
+            ) : null}
+            {section === 'runtime' ? (
+              <AgentRuntimeTable
+                state={runtimeQuery.data}
+                onOpenConversation={onOpenConversation}
+              />
+            ) : null}
+            {section === 'schedules' ? (
+              <AgentSchedulesCard agentId={agent.id} />
+            ) : null}
           </div>
-          <AgentRuntimeTable
-            state={runtimeQuery.data}
-            onOpenConversation={onOpenConversation}
-          />
-          <AgentSchedulesCard agentId={agent.id} />
         </div>
       </div>
     </main>

@@ -159,6 +159,12 @@ export function App(): JSX.Element {
   // resetting on app restart is fine; workspace switches inside one app run
   // shouldn't lose their place.
   const lastChannelByWorkspace = useRef<Map<string, string>>(new Map());
+  // Per-channel "last open thread" memory. Lets us preserve the
+  // split-pane layout across nav-away → nav-back (e.g. user opens a
+  // thread, jumps to /tasks, comes back: the thread should still be
+  // mounted in the right pane). Cleared whenever the user explicitly
+  // closes the thread via X / context menu.
+  const lastThreadByChannel = useRef<Map<string, string>>(new Map());
   const lastSelectedAgentId = useRef<string | null>(null);
   const lastSelectedMessageReadKey = useRef<string | null>(null);
   const lastThreadMessageReadKey = useRef<string | null>(null);
@@ -261,6 +267,25 @@ export function App(): JSX.Element {
     if (!selectedWorkspaceId) return;
     if (selectedChannelId) return;
     if (channels.length === 0) return;
+    // Helper: pick the right URL for the restored channel — if we
+    // remember an open thread for it that still exists in the channels
+    // cache, restore the split layout too. Otherwise just open the
+    // channel. Threads opened from a different parent are ignored
+    // defensively (parent mismatch effect would close them anyway).
+    const navForRestoredChannel = (channelId: string): string => {
+      const rememberedThread = lastThreadByChannel.current.get(channelId);
+      const thread = rememberedThread
+        ? channels.find(s => s.id === rememberedThread)
+        : null;
+      if (
+        thread &&
+        thread.kind === 'thread' &&
+        thread.parent_conversation_id === channelId
+      ) {
+        return `/chat/w/${selectedWorkspaceId}/c/${channelId}/t/${thread.id}`;
+      }
+      return `/chat/w/${selectedWorkspaceId}/c/${channelId}`;
+    };
     // If a jump asked for a specific channel, honor it instead of the
     // remembered/default — Saved → jump shouldn't snap back.
     if (jumpTarget && channels.some(s => s.id === jumpTarget.channelId)) {
@@ -272,7 +297,7 @@ export function App(): JSX.Element {
     const remembered = lastChannelByWorkspace.current.get(selectedWorkspaceId);
     const stillExists = remembered && channels.some(s => s.id === remembered);
     if (stillExists) {
-      nav.go(`/chat/w/${selectedWorkspaceId}/c/${remembered}`, { replace: true });
+      nav.go(navForRestoredChannel(remembered), { replace: true });
       return;
     }
     // Default: pick the first ACTIVE top-level channel. We deliberately
@@ -282,7 +307,7 @@ export function App(): JSX.Element {
     // empty and let the chat pane render an empty state.
     const fallback = activeChannels.find(s => s.parent_conversation_id === null);
     if (!fallback) return;
-    nav.go(`/chat/w/${selectedWorkspaceId}/c/${fallback.id}`, { replace: true });
+    nav.go(navForRestoredChannel(fallback.id), { replace: true });
   }, [selectedWorkspaceId, selectedChannelId, channels, activeChannels, jumpTarget, nav]);
 
   // Record the user's selection so we can restore it next time they
@@ -292,6 +317,18 @@ export function App(): JSX.Element {
       lastChannelByWorkspace.current.set(selectedWorkspaceId, selectedChannelId);
     }
   }, [selectedWorkspaceId, selectedChannelId]);
+
+  // Same for the open thread within a channel — recorded so leaving the
+  // chat section (NavRail → Tasks / Members / Settings) and coming back
+  // re-mounts the split pane instead of dropping it. Cleared explicitly
+  // by `closeThread` when the user dismisses the pane on purpose; we
+  // intentionally do NOT clear here on null, because that would erase
+  // the memo every time the app section flips.
+  useEffect(() => {
+    if (selectedChannelId && openThreadId) {
+      lastThreadByChannel.current.set(selectedChannelId, openThreadId);
+    }
+  }, [selectedChannelId, openThreadId]);
 
   // Members panel defaults to a concrete agent: restore the last selected one
   // for this app run, or fall back to the first agent in the list.
@@ -544,6 +581,11 @@ export function App(): JSX.Element {
 
   const closeThread = useCallback((): void => {
     if (selectedWorkspaceId && selectedChannelId) {
+      // Explicit close clears the per-channel memo so navigating away
+      // and back doesn't re-open the just-dismissed thread. The
+      // recording effect only writes when openThreadId is truthy, so
+      // deleting here is safe.
+      lastThreadByChannel.current.delete(selectedChannelId);
       nav.toChannel(selectedWorkspaceId, selectedChannelId);
     }
   }, [nav, selectedWorkspaceId, selectedChannelId]);
@@ -794,6 +836,7 @@ export function App(): JSX.Element {
           <>
             <div
               className="sidebar-slot"
+              data-animating={workspaceSidebarPane.transitioning ? 'true' : undefined}
               style={{
                 flexBasis: workspaceSidebarVisible
                   ? 'var(--sidebar-width)'
@@ -879,6 +922,7 @@ export function App(): JSX.Element {
               <>
                 <div
                   className="sidebar-slot"
+                  data-animating={channelSidebarPane.transitioning ? 'true' : undefined}
                   style={{
                     flexBasis: channelSidebarVisible
                       ? 'var(--channels-sidebar-width)'

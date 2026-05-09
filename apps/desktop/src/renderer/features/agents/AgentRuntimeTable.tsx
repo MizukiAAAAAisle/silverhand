@@ -1,4 +1,4 @@
-import { ArrowRight, MessageCircle, MessageSquare } from 'lucide-react';
+import { ArrowRight, AtSign, Hash, MessageSquareText } from 'lucide-react';
 import type {
   AgentRuntimeConversation,
   AgentRuntimeStateDto,
@@ -16,15 +16,11 @@ export function AgentRuntimeTable({
 }: AgentRuntimeTableProps): JSX.Element {
   const rows = state?.conversation_agents ?? [];
   return (
-    <section className="flex flex-col gap-3 rounded-lg border border-border bg-bg-floating p-4">
-      <header>
-        <h2 className="font-serif text-sm font-semibold text-text-primary">
-          Where this agent runs
-        </h2>
-        <p className="mt-0.5 text-[11px] text-text-muted">
-          Every channel or thread this agent participates in.
-        </p>
-      </header>
+    <div className="flex flex-col gap-3">
+      <p className="text-xs leading-relaxed text-text-muted">
+        Every channel or thread this agent participates in. Status is
+        live — restart or hard-stop from the channel header.
+      </p>
 
       {rows.length === 0 ? (
         <div className="rounded-md border border-dashed border-border-subtle px-4 py-6 text-center text-xs text-text-muted">
@@ -46,15 +42,14 @@ export function AgentRuntimeTable({
               {rows.map(row => (
                 <tr
                   key={row.conversation_id}
-                  className="border-t border-border-subtle first:border-t-0 hover:bg-bg-hover"
+                  className="border-t border-border-subtle align-middle first:border-t-0 hover:bg-bg-hover"
                 >
                   <td className="px-3 py-1.5">
                     <div className="flex items-center gap-1.5">
-                      {row.conversation_kind === 'dm_channel' || row.workspace_kind === 'agent_home' ? (
-                        <MessageCircle className="size-3 text-text-muted" />
-                      ) : (
-                        <MessageSquare className="size-3 text-text-muted" />
-                      )}
+                      <ConversationIcon
+                        kind={row.conversation_kind}
+                        workspaceKind={row.workspace_kind}
+                      />
                       <span className="text-text-primary">
                         {row.workspace_kind === 'agent_home'
                           ? row.channel_title
@@ -63,12 +58,14 @@ export function AgentRuntimeTable({
                     </div>
                   </td>
                   <td className="px-3 py-1.5 text-text-primary">
-                    {row.thread_title ?? '—'}
-                    {row.closed_at !== null ? (
-                      <span className="ml-1 text-[10px] uppercase tracking-wide text-text-muted">
-                        closed
-                      </span>
-                    ) : null}
+                    <span className="inline-flex items-center gap-1.5">
+                      {row.closed_at !== null ? (
+                        <span className="rounded bg-bg-base px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-text-muted">
+                          closed
+                        </span>
+                      ) : null}
+                      <span>{row.thread_title ?? '—'}</span>
+                    </span>
                   </td>
                   <td className="px-3 py-1.5">
                     <StatusPill status={row.status} closed={row.closed_at !== null} />
@@ -95,7 +92,7 @@ export function AgentRuntimeTable({
           </table>
         </div>
       )}
-    </section>
+    </div>
   );
 }
 
@@ -126,4 +123,25 @@ function StatusPill({
       {status}
     </span>
   );
+}
+
+/**
+ * One unified glyph family at one size so the leading column doesn't
+ * jitter between an `MessageCircle` (visually compact circle) and an
+ * `MessageSquare` (visually larger filled rect). Mirrors the channel
+ * sidebar's vocabulary: Hash for top-level channels, MessageSquareText
+ * for threads, AtSign for DM-style surfaces (DM channel + agent home).
+ */
+function ConversationIcon({
+  kind,
+  workspaceKind,
+}: {
+  kind: AgentRuntimeConversation['conversation_kind'];
+  workspaceKind: AgentRuntimeConversation['workspace_kind'];
+}): JSX.Element {
+  const cls = 'size-3.5 shrink-0 text-text-muted';
+  if (kind === 'thread') return <MessageSquareText className={cls} />;
+  if (kind === 'dm_channel' || workspaceKind === 'agent_home')
+    return <AtSign className={cls} />;
+  return <Hash className={cls} />;
 }

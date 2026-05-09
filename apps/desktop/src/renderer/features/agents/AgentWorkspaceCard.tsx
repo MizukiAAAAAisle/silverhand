@@ -17,19 +17,13 @@ export function AgentWorkspaceCard({
   isLoading,
 }: AgentWorkspaceCardProps): JSX.Element {
   return (
-    <section className="flex flex-col gap-3 rounded-lg border border-border bg-bg-floating p-4">
-      <header className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <h2 className="font-serif text-sm font-semibold text-text-primary">
-            Workspace
-          </h2>
-          <p className="mt-0.5 text-[11px] text-text-muted">
-            L1 (global) — what's here is shared across every channel.
-          </p>
-        </div>
-        {workspace ? (
-          <PathBar path={workspace.l1_path} />
-        ) : null}
+    <div className="flex flex-col gap-4">
+      <header className="flex items-start justify-between gap-3">
+        <p className="text-xs leading-relaxed text-text-muted">
+          L1 (global) — what's here is shared across every channel this
+          agent participates in.
+        </p>
+        {workspace ? <PathBar path={workspace.l1_path} /> : null}
       </header>
 
       {isLoading ? (
@@ -45,7 +39,7 @@ export function AgentWorkspaceCard({
           <NotesBlock notes={workspace.notes} />
         </div>
       ) : null}
-    </section>
+    </div>
   );
 }
 
