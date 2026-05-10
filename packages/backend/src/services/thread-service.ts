@@ -420,13 +420,25 @@ export class ThreadService {
       const parentOpen = parent !== null && parent.closed_at === null;
       let summaryMessage: MessageDto | null = null;
       if (!input.postedToParent && parentOpen && parent) {
+        const closedBy = this.actorLabel(input.actor);
+        // The summary is user/agent-supplied markdown, often with
+        // headings, lists or code. Put it on its own line(s) so block
+        // markdown parses, and ship the raw fields in metadata so the
+        // renderer can lay it out as a structured card without having
+        // to re-parse the prose header.
         summaryMessage = this.messages.insertForConversation({
           conversationId: parent.id,
           fromKind: 'system',
           content:
-            `Thread '${thread.title}' closed by ${this.actorLabel(input.actor)}. ` +
-            `Summary: ${input.summary}`,
-          metadata: { subtype: 'thread_summary' },
+            `Thread "${thread.title}" closed by ${closedBy}.\n\n` +
+            input.summary,
+          metadata: {
+            subtype: 'thread_summary',
+            thread_id: thread.id,
+            thread_title: thread.title,
+            closed_by: closedBy,
+            summary: input.summary,
+          },
         });
       }
       return {

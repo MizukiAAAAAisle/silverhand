@@ -363,7 +363,7 @@ function ChannelRow({
           disabled={archivePending}
           onSelect={() => onArchive(channel.id, !isArchived)}
         >
-          {isArchived ? 'Restore channel' : 'Archive channel'}
+          {isArchived ? 'Restore' : 'Archive'}
         </AppContextMenuItem>
       ) : null}
       {showCloseThreadMenu ? (

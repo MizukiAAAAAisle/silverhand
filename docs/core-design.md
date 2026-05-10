@@ -5,6 +5,8 @@
 > 多轮对话形成的所有共识、设计权衡、隐含约束都写在这里。代码与本文档冲突时，**以本文档为准**，代码必须改回来。
 >
 > 写作规则：每条决策旁边记一句"为什么"。新决策追加节，旧决策不改写（可"作废"标注）。
+>
+> **新功能 / 新 service / 新 DB 表 / 新 migration 设计前必读**：[`architecture-principles.md`](./architecture-principles.md)（Human/Agent 同构强制 checklist + 反模式）。鉴权细节见 [`permissions.md`](./permissions.md)。
 
 ---
 

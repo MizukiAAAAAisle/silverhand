@@ -405,7 +405,7 @@ function ActiveChannelView({
                 }
                 onSelect={() => onArchiveChannel?.(conversation.id, !isArchived)}
               >
-                {isArchived ? 'Restore channel' : 'Archive channel'}
+                {isArchived ? 'Restore' : 'Archive'}
               </AppDropdownMenuItem>
             </AppDropdownMenu>
           ) : null}

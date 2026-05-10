@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AtSign, ChevronRight } from 'lucide-react';
+import { AtSign, CheckCircle2, ChevronRight } from 'lucide-react';
 import type { MessageDto } from '@silverhand/shared';
 import { useMessage } from '@/features/messages/hooks';
 import { formatUserDisplayName } from '@/lib/current-user';
@@ -27,6 +27,10 @@ export function SystemMessage({ message }: SystemMessageProps): JSX.Element {
 
   if (subtype === 'mention_cc') {
     return <MentionCcCard message={message} />;
+  }
+
+  if (subtype === 'thread_summary') {
+    return <ThreadSummaryCard message={message} />;
   }
 
   if (!collapsible) {
@@ -159,6 +163,55 @@ function MentionCcCard({ message }: { message: MessageDto }): JSX.Element {
       ) : (
         <div className="text-xs text-text-muted">(loading original…)</div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Compact render for `thread_summary` system messages — emitted to the
+ * parent channel when a thread is closed. The summary itself is
+ * markdown (often headings + lists + code), so we surface it as a
+ * left-aligned card with full markdown rendering rather than the
+ * centered-italic narration treatment that suits one-liners. Header
+ * line shows "Thread closed: <title> · by <actor>"; body renders the
+ * raw `summary` from metadata so we don't have to re-parse the prose
+ * prefix that's also baked into `content`.
+ */
+function ThreadSummaryCard({ message }: { message: MessageDto }): JSX.Element {
+  const meta = (message.metadata ?? {}) as Record<string, unknown>;
+  const threadTitle = typeof meta['thread_title'] === 'string'
+    ? (meta['thread_title'] as string)
+    : null;
+  const closedBy = typeof meta['closed_by'] === 'string'
+    ? (meta['closed_by'] as string)
+    : null;
+  const summary = typeof meta['summary'] === 'string'
+    ? (meta['summary'] as string)
+    : message.content;
+
+  return (
+    <div className="border-l-2 border-accent/60 bg-bg-floating/60 px-3 py-2">
+      <div className="mb-1 flex items-center gap-1.5 text-xs text-text-muted">
+        <CheckCircle2 className="size-3.5" />
+        <span>
+          Thread closed
+          {threadTitle ? (
+            <>
+              {' · '}
+              <span className="text-text-secondary">{threadTitle}</span>
+            </>
+          ) : null}
+          {closedBy ? (
+            <>
+              {' · by '}
+              <span className="text-text-secondary">{closedBy}</span>
+            </>
+          ) : null}
+        </span>
+      </div>
+      <div className="text-sm text-text-primary">
+        <Markdown content={summary} />
+      </div>
     </div>
   );
 }

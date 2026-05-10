@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Silverhand is an Electron desktop app that orchestrates multiple coding-agent CLIs (currently `claude`) as participants in chat-style channels. It's modeled on `@slock-ai/daemon`'s process orchestration but introduces a three-tier **Workspace → Channel → Thread** structure on top of slock's flat agent list. The reference slock implementation lives at `/Users/shiki/.npm/_npx/277f35d2ed0078b9/node_modules/@slock-ai/daemon/` and is consulted whenever spawn/IO behavior diverges.
 
 Authoritative design docs:
+- `docs/architecture-principles.md` — **MUST-READ before any new service / route / DB table / migration**. Human/Agent isomorphism checklist, anti-patterns, known-vuln list.
 - `docs/core-design.md` — current architecture, especially §10 "Deferred design".
 - `docs/app-layout.md` — UI structure, message rendering, Save, Reply/child-session, titlebar, sidebars, events window. Layout + interaction spec; pairs with the theme guide below.
 - `docs/mcp-system.md` — current `mcp__chat__*` tool surface, schemas, side effects, and maintenance checklist.
