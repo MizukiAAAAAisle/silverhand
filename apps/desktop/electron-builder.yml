@@ -49,15 +49,16 @@ files:
 asarUnpack:
   - node_modules/better-sqlite3/**/*
 
-# Ship chat-bridge's bundled dist/cli.js outside the asar as a
-# resource. main/index.ts resolves it via process.resourcesPath when
-# packaged. The source `from` is relative to apps/desktop/.
-# Renamed to `.mjs` because esbuild emits ESM (import statements) and
-# Node treats `.js` as CommonJS unless a sibling package.json declares
-# `"type": "module"` — `.mjs` skips that song and dance entirely.
+# Ship the esbuild-bundled Silverhand CLI outside the asar so the per-spawn
+# `bin/silverhand` PATH shim can forward to it through Electron's Node runtime
+# (ELECTRON_RUN_AS_NODE=1). Renamed to `.mjs` so Node treats it as ESM without
+# needing a sibling `package.json` type=module — the esbuild bundle is emitted
+# as ESM. We used to ship a bun-compiled single-file binary here; the reusable
+# Electron runtime is already in the package, so bundling a second (~60MB)
+# runtime was pure overhead. See docs/build-release.md.
 extraResources:
-  - from: ../../packages/chat-bridge/dist/cli.js
-    to: chat-bridge/cli.mjs
+  - from: ../../packages/cli/dist/cli.js
+    to: silverhand-cli/cli.mjs
 
 mac:
   category: public.app-category.developer-tools

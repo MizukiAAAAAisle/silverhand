@@ -12,16 +12,16 @@ import { buildTestApp, http, type TestApp } from '../utils/app.js';
  * User-facing public routes for the agent panel's Schedules tab.
  *
  * These are thin wrappers over `ScheduleService` (same code path the
- * agent's MCP `list_schedules` / `cancel_schedule` tools use). Service-
+ * agent's CLI `schedule list` / `schedule cancel` commands use). Service-
  * level behavior is covered by tests/services/schedule-service.test.ts;
- * agent-side MCP routes by tests/routes/schedules.test.ts. This file
+ * agent-side internal routes by tests/routes/schedules.test.ts. This file
  * specifically verifies the user-principal entry points behind
  * `/api/agents/:id/schedules` and `/api/agents/:id/schedules/:sid/cancel`.
  *
  * Why a separate user-side route at all (vs. reusing the internal
  * agent-principal path)? The internal route requires an agent
  * principal — i.e. a `(conversation_id, agent_id)` pair authenticated
- * by chat-bridge's bearer. The desktop UI runs as the user principal
+ * by the per-agent CLI bearer. The desktop UI runs as the user principal
  * and has no agent context, so we expose a public agent-scoped route
  * with the same backing service.
  */

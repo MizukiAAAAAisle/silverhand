@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import {
   buildManagerHarness,
   readStdinLog,
@@ -178,6 +178,37 @@ describe('ConversationManager.start', () => {
     const after = dbStatus(h);
     expect(after.pid).toBeNull();
     expect(after.status).toBe('idle');
+  });
+
+  it('injects silverhand CLI env/PATH and revokes the scoped token on exit', async () => {
+    h = await buildManagerHarness();
+    const envLog = join(h.silverhandDir, 'mock-env.json');
+    h.setMockEnv({
+      MOCK_CLAUDE_ENV_LOG: envLog,
+      MOCK_CLAUDE_EXIT_AFTER_INIT_MS: '50',
+    });
+
+    await h.manager.start(h.sessionId, h.agentId);
+    await waitInit(h);
+
+    const env = JSON.parse(readFileSync(envLog, 'utf-8')) as Record<string, string>;
+    const binDir = env.PATH!.split(delimiter)[0]!;
+    expect(env.SILVERHAND_CONVERSATION_ID).toBe(h.sessionId);
+    expect(env.SILVERHAND_AGENT_ID).toBe(h.agentId);
+    expect(env.SILVERHAND_SERVER_URL).toBe(h.ctx.serverConfig.url);
+    expect(env.SILVERHAND_AUTH_TOKEN).toBeTruthy();
+    expect(binDir).toContain(join(tmpdir(), 'silverhand', h.sessionId, h.agentId, 'spawn-'));
+    expect(readFileSync(join(binDir, 'silverhand'), 'utf-8')).toContain(
+      "exec 'true' \"$@\"",
+    );
+    expect(
+      h.ctx.agentTokens.verify(env.SILVERHAND_AUTH_TOKEN, h.sessionId, h.agentId),
+    ).toEqual({ ok: true });
+
+    await waitStatus(h, 'idle');
+    expect(
+      h.ctx.agentTokens.verify(env.SILVERHAND_AUTH_TOKEN, h.sessionId, h.agentId),
+    ).toEqual({ ok: false, reason: 'revoked' });
   });
 
   it('is idempotent — second start while running is a no-op', async () => {
@@ -398,7 +429,7 @@ describe('ConversationManager.deliverMessage', () => {
     expect(parsed.message.content[0].text).toContain('live ping');
     expect(parsed.message.content[0].text).toContain('New message from user');
     expect(parsed.message.content[0].text).toContain('message_id=msg-live-1');
-    expect(parsed.message.content[0].text).toContain('mcp__chat__send_message');
+    expect(parsed.message.content[0].text).toContain('silverhand message send');
     expect(parsed.message.content[0].text).toContain(
       'Complete ALL your work before stopping',
     );
@@ -420,10 +451,10 @@ describe('ConversationManager.deliverMessage', () => {
     expect(text).toContain(
       '[user addressed you by name; a visible reply is expected.]',
     );
-    expect(text).toContain('mcp__chat__send_message');
+    expect(text).toContain('silverhand message send');
   });
 
-  it('does not inject reply pressure for plain agent messages', async () => {
+  it('allows plain agent messages to use the neutral default instruction', async () => {
     h = await buildManagerHarness();
     await h.manager.start(h.sessionId, h.agentId);
     await waitInit(h);
@@ -440,13 +471,9 @@ describe('ConversationManager.deliverMessage', () => {
     const live = lines.find(l => l.includes('implementation slice'));
     expect(live).toBeDefined();
     const text = JSON.parse(live!).message.content[0].text;
-    expect(text).toContain('This is an agent message not addressed to you');
-    expect(text).toContain('No reply is needed unless');
-    expect(text).toContain(
-      "Do not acknowledge, summarize, or restate another agent's work",
-    );
-    expect(text).not.toContain('mcp__chat__send_message');
-    expect(text).not.toContain('Respond as appropriate');
+    expect(text).toContain('Respond as appropriate.');
+    expect(text).not.toContain('This is an agent message not addressed to you');
+    expect(text).not.toContain('No reply is needed unless');
   });
 
   it('still requires a visible reply when an agent @mentions the recipient', async () => {
@@ -465,7 +492,7 @@ describe('ConversationManager.deliverMessage', () => {
     expect(text).toContain(
       '[sender addressed you by name; a visible reply is expected.]',
     );
-    expect(text).toContain('mcp__chat__send_message');
+    expect(text).toContain('silverhand message send');
   });
 
   it('narrows user messages addressed to another agent to owner/blocker replies', async () => {
@@ -483,7 +510,7 @@ describe('ConversationManager.deliverMessage', () => {
     const text = JSON.parse(live!).message.content[0].text;
     expect(text).toContain('The user message appears addressed to another agent');
     expect(text).toContain(
-      'Do not call `mcp__chat__send_message` unless you own or were assigned',
+      'Do not call `silverhand message send` unless you own or were assigned',
     );
     expect(text).toContain('must flag a concrete blocker');
     expect(text).not.toContain('unique value to add');
@@ -526,7 +553,7 @@ describe('ConversationManager.deliverMessage', () => {
     const text = JSON.parse(batch!).message.content[0].text;
     expect(text).toContain('first busy message');
     expect(text).toContain('second busy message');
-    expect(text).toContain('mcp__chat__send_message');
+    expect(text).toContain('silverhand message send');
     expect(text).toContain('Complete ALL your work before stopping');
   });
 });
@@ -859,11 +886,11 @@ describe('ConversationManager agent run activity', () => {
     feedParsedEvent(h, { kind: 'tool_call', name: 'Bash', input: {} });
     feedParsedEvent(h, { kind: 'tool_call', name: 'Read', input: {} });
     feedParsedEvent(h, { kind: 'tool_call', name: 'Bash', input: {} });
-    feedParsedEvent(h, { kind: 'tool_call', name: 'mcp__chat__send_message', input: {} });
+    feedParsedEvent(h, { kind: 'tool_call', name: 'silverhand message send', input: {} });
 
     const state = h.manager.getAgentRunStates(h.sessionId)[0]!;
     expect(state.status).toBe('tool_running');
-    expect(state.detail).toBe('mcp__chat__send_message');
+    expect(state.detail).toBe('silverhand message send');
     expect(state.toolCallCounts).toEqual({ Bash: 2, Read: 1 });
   });
 
@@ -958,7 +985,7 @@ describe('ConversationManager inbox drain on init', () => {
     expect(text).toContain('message_id=m1');
     expect(text).toContain('message_id=m2');
     expect(text).toContain('2 messages waiting');
-    expect(text).toContain('mcp__chat__send_message');
+    expect(text).toContain('silverhand message send');
     expect(text).toContain('Complete ALL your work before stopping');
 
     // Both inbox rows are now delivered_at = some timestamp

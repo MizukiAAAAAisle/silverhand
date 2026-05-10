@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { prepareSpawnFiles } from '../src/spawn-prep.js';
@@ -11,36 +11,34 @@ describe('prepareSpawnFiles', () => {
       conversationId: 'conversation-1',
       agentId: 'agent-1',
       systemPromptText: 'STANDING PROMPT\n',
-      chatBridge: {
-        command: 'node',
-        args: ['chat-bridge.js'],
-        env: { TOKEN: 'secret' },
+      silverhandCli: {
+        command: '/usr/bin/node',
+        args: ['/path with spaces/silverhand-cli.mjs', '--from-launcher'],
+        env: { ELECTRON_RUN_AS_NODE: '1' },
       },
     });
 
-    expect(handle.systemPromptPath).toBe(
-      join(tmpdir(), 'silverhand', 'conversation-1', 'agent-1', 'system-prompt.md'),
+    const spawnDir = dirname(handle.systemPromptPath);
+    expect(spawnDir).toContain(
+      join(tmpdir(), 'silverhand', 'conversation-1', 'agent-1', 'spawn-'),
     );
-    expect(handle.mcpConfigPath).toBe(
-      join(tmpdir(), 'silverhand', 'conversation-1', 'agent-1', 'mcp.json'),
-    );
+    expect(handle.systemPromptPath).toBe(join(spawnDir, 'system-prompt.md'));
+    expect(handle.binDir).toBe(join(spawnDir, 'bin'));
     expect(await fs.readFile(handle.systemPromptPath, 'utf8')).toBe(
       'STANDING PROMPT\n',
     );
-
-    const mcpConfig = JSON.parse(await fs.readFile(handle.mcpConfigPath, 'utf8'));
-    expect(mcpConfig).toEqual({
-      mcpServers: {
-        chat: {
-          command: 'node',
-          args: ['chat-bridge.js'],
-          env: { TOKEN: 'secret' },
-        },
-      },
+    await expect(fs.readFile(join(spawnDir, 'mcp.json'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
     });
 
+    const shim = await fs.readFile(join(handle.binDir, 'silverhand'), 'utf8');
+    expect(shim).toContain('export ELECTRON_RUN_AS_NODE=');
+    expect(shim).toContain(
+      "exec '/usr/bin/node' '/path with spaces/silverhand-cli.mjs' '--from-launcher' \"$@\"",
+    );
+
     await handle.cleanup();
-    await expect(fs.readFile(handle.mcpConfigPath, 'utf8')).rejects.toMatchObject({
+    await expect(fs.readFile(handle.systemPromptPath, 'utf8')).rejects.toMatchObject({
       code: 'ENOENT',
     });
   });

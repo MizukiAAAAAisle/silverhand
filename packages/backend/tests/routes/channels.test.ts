@@ -226,7 +226,7 @@ describe('workspace channel routes', () => {
       })
     ).json() as any;
     const internal = await (
-      await http(t.app, { authorization: `Bearer ${t.authToken}` }).post(
+      await http(t).post(
         `/internal/conversations/${workspace.onboarding_channel_id}/agents/${aliceId}/create-channel`,
         {
           title: 'agent-created',

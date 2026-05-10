@@ -36,10 +36,6 @@ async function setup(t: TestApp, members = ['alice', 'bob']): Promise<SetupResul
   };
 }
 
-function auth(token: string) {
-  return { authorization: `Bearer ${token}` };
-}
-
 describe('Tasks (PR-T1)', () => {
   let t: TestApp | null = null;
   afterEach(() => {
@@ -50,7 +46,7 @@ describe('Tasks (PR-T1)', () => {
   it('create_tasks allocates monotonic per-workspace task_numbers', async () => {
     t = buildTestApp();
     const { conversationId, agentIds, workspaceId } = await setup(t);
-    const h = http(t.app, auth(t.authToken));
+    const h = http(t);
 
     const r1 = await (
       await h.post(
@@ -77,7 +73,7 @@ describe('Tasks (PR-T1)', () => {
   it('claim_tasks wins the race once + second claimer fails', async () => {
     t = buildTestApp();
     const { sessionId, agentIds } = await setup(t);
-    const h = http(t.app, auth(t.authToken));
+    const h = http(t);
 
     await h.post(
       `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
@@ -113,7 +109,7 @@ describe('Tasks (PR-T1)', () => {
   it('claim by message_id promotes a regular message to a task', async () => {
     t = buildTestApp();
     const { sessionId, agentIds } = await setup(t);
-    const h = http(t.app, auth(t.authToken));
+    const h = http(t);
 
     // User posts a normal message; alice promotes it.
     const viewer = http(t, { 'x-silverhand-user-id': 'teammate' });
@@ -158,7 +154,7 @@ describe('Tasks (PR-T1)', () => {
     ).json()) as any;
     const sessionId2 = ses2.channel.id;
 
-    const h = http(t.app, auth(t.authToken));
+    const h = http(t);
     // Create in session 1, try to claim from session 2.
     await h.post(
       `/internal/conversations/${s1.sessionId}/agents/${s1.agentIds.alice}/tasks/create`,
@@ -188,7 +184,7 @@ describe('Tasks (PR-T1)', () => {
   it('update_status: assignee-only + transition rules', async () => {
     t = buildTestApp();
     const { sessionId, agentIds } = await setup(t);
-    const h = http(t.app, auth(t.authToken));
+    const h = http(t);
 
     await h.post(
       `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
@@ -232,7 +228,7 @@ describe('Tasks (PR-T1)', () => {
   it('human can approve in_review → done via /api/tasks/:id/status', async () => {
     t = buildTestApp();
     const { sessionId, agentIds } = await setup(t);
-    const h = http(t.app, auth(t.authToken));
+    const h = http(t);
 
     const created = (await (
       await h.post(
@@ -265,7 +261,7 @@ describe('Tasks (PR-T1)', () => {
   it('publishes task_changed realtime events on claim', async () => {
     t = buildTestApp();
     const { sessionId, agentIds } = await setup(t);
-    const h = http(t.app, auth(t.authToken));
+    const h = http(t);
     const received: { kind: string; payload: unknown }[] = [];
     const unsub = t.ctx.events.subscribe(sessionId, e => received.push(e));
 
@@ -290,7 +286,7 @@ describe('Tasks (PR-T1)', () => {
   it('system messages fan out to every session member\'s inbox', async () => {
     t = buildTestApp();
     const { sessionId, agentIds } = await setup(t);
-    const h = http(t.app, auth(t.authToken));
+    const h = http(t);
 
     t.fake.delivered = []; // clear setup noise
 
@@ -307,7 +303,7 @@ describe('Tasks (PR-T1)', () => {
   it('bulk agent claim mixes task_numbers + message_ids into aggregated results', async () => {
     t = buildTestApp();
     const { sessionId, agentIds } = await setup(t);
-    const h = http(t.app, auth(t.authToken));
+    const h = http(t);
 
     // create one task by agent
     await h.post(
@@ -338,7 +334,7 @@ describe('Tasks (PR-T1)', () => {
   it('human POST /api/tasks/:messageId/claim with no agent_id lifts todo→in_progress, leaves assignee null', async () => {
     t = buildTestApp();
     const { sessionId, agentIds } = await setup(t);
-    const h = http(t.app, auth(t.authToken));
+    const h = http(t);
 
     const created = (await (
       await h.post(
@@ -361,7 +357,7 @@ describe('Tasks (PR-T1)', () => {
   it('human POST /api/tasks/:messageId/unclaim forces status=todo even from in_review', async () => {
     t = buildTestApp();
     const { sessionId, agentIds } = await setup(t);
-    const h = http(t.app, auth(t.authToken));
+    const h = http(t);
 
     const created = (await (
       await h.post(
@@ -392,7 +388,7 @@ describe('Tasks (PR-T1)', () => {
   it('human POST /api/tasks/:messageId/status can jump to any non-current status', async () => {
     t = buildTestApp();
     const { sessionId, agentIds } = await setup(t);
-    const h = http(t.app, auth(t.authToken));
+    const h = http(t);
 
     const created = (await (
       await h.post(

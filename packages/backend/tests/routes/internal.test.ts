@@ -66,15 +66,28 @@ describe('Internal route auth', () => {
     expect(r.status).toBe(401);
   });
 
-  it('accepts the configured token', async () => {
+  it('accepts a token scoped to the URL conversation and agent', async () => {
     t = buildTestApp();
     const { conversationId, agentIds } = await setupSession(t);
+    const token = t.ctx.agentTokens.issue(conversationId, agentIds.alice!);
     const r = await http(t).post(
       `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
       { content: 'hi' },
-      { headers: authHeaders(t.authToken) },
+      { headers: authHeaders(token) },
     );
     expect(r.status).toBe(200);
+  });
+
+  it('rejects a token scoped to a different agent URL (401)', async () => {
+    t = buildTestApp();
+    const { conversationId, agentIds } = await setupSession(t, ['alice', 'bob']);
+    const aliceToken = t.ctx.agentTokens.issue(conversationId, agentIds.alice!);
+    const r = await http(t).post(
+      `/internal/conversations/${conversationId}/agents/${agentIds.bob}/send-message`,
+      { content: 'hi' },
+      { headers: authHeaders(aliceToken) },
+    );
+    expect(r.status).toBe(401);
   });
 
   it.each(['agent:forged', 'user:local'])(

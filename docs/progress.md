@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-05-10 — MCP → Silverhand CLI hard cutover（#190 / #192 / #193 / #194 / #195 / #196 / #197）
+
+本轮把 agent-facing 能力从 `mcp__chat__*` 工具面切到 `silverhand` CLI：agent 只依赖命令名 `silverhand` 和后端注入的 `SILVERHAND_CONVERSATION_ID / SILVERHAND_AGENT_ID / SILVERHAND_SERVER_URL / SILVERHAND_AUTH_TOKEN`。业务实现仍走 `/internal/conversations/:cid/agents/:aid/...`，route/service/ACL 复用。
+
+- #190：`platform-prompt.ts` 改为 CLI-only 指南，新增 `## Silverhand CLI` 章节，列出 message/task/thread/channel/workspace/schedule/file 命令；stderr/exit-code 契约写进 prompt。
+- #192：新增 `packages/cli`，18 个子命令对齐原内部能力，纯 fetch + shared DTO，无 SQLite/native 依赖；错误契约稳定为 `{code,message,retriable}` + exit 1/2/3。
+- #193：后端签发 per-launch `(conversationId, agentId)` token，spawn 时注入 `SILVERHAND_*`，并写 per-spawn `bin/silverhand` shim 后 prepend `PATH`；token 在 agent 退出时 revoke。
+- #194：Codex cutover，删 inline `mcp_servers.chat.*` 配置；inbox/live delivery 文案改 `silverhand message send`。
+- #195：Claude cutover，删 `--mcp-config / --strict-mcp-config`；spawn-prep 不再生成临时 `mcp.json`；`DriverSpawnContext.mcpConfigPath` 删除。
+- #196：Cursor cutover，删 `<workspace>/.cursor/mcp.json` 写入和 `--approve-mcps`；`DriverSpawnContext.chatBridge` 删除。
+- #197：删除 `packages/chat-bridge` 与 backend/desktop 的 `chatBridgeLauncher` 接线；`docs/mcp-system.md` 替换为 `docs/cli-system.md`；shared MCP config types / `AUTH_TOKEN_ENV` 清理。
+
+设计边界：保留 internal HTTP routes，不删除业务 endpoint；CLI 只是 transport 换皮。未来多 host / sandbox 只需要 host adapter 保证 `silverhand` 在 PATH 中可达，并提供 sandbox 可访问的 `SILVERHAND_SERVER_URL`，agent prompt/命令面不变。
+
 ## 2026-05-09 — Cross-workspace history/search: list_workspaces + 跨 workspace read/search + 文档/prompt 同步（PR-A #180 / PR-B #181 / PR-C #185）
 
 PR-1/PR-2 把 `read_history` / `list_channels` / `search_messages` 在当前 workspace 跑通后,出现新场景:agent 被 schedule wake 在自己的 `agent_home` DM 里,需要去其它 workspace 翻历史/查上下文,但根本没有"我有哪些 workspace 可去、那个 workspace 有哪些 channel"的入口。这一刀加 cross-workspace discovery + 跨 workspace 读/搜,并把"读"和"发"的权限模型彻底分开。@Alice 实现,@Cindy review。

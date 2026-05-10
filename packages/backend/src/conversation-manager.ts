@@ -3,8 +3,14 @@ import { randomUUID } from 'node:crypto';
 import { createInterface, type Interface as ReadlineInterface } from 'node:readline';
 import { readFile } from 'node:fs/promises';
 import { createWriteStream, type WriteStream } from 'node:fs';
-import { join } from 'node:path';
-import { AUTH_TOKEN_ENV, extractMentions } from '@silverhand/shared';
+import { delimiter, join } from 'node:path';
+import {
+  SILVERHAND_AGENT_ID_ENV,
+  SILVERHAND_AUTH_TOKEN_ENV,
+  SILVERHAND_CONVERSATION_ID_ENV,
+  SILVERHAND_SERVER_URL_ENV,
+  extractMentions,
+} from '@silverhand/shared';
 import type {
   AgentDto,
   AgentRunState,
@@ -13,7 +19,6 @@ import type {
   AttachmentSnapshot,
   ConversationDto,
   FromKind,
-  McpServerConfig,
   WorkspaceDto,
 } from '@silverhand/shared';
 
@@ -93,6 +98,7 @@ interface AgentHandle {
   child: ChildProcessWithoutNullStreams;
   rl: ReadlineInterface;
   spawnPrep: SpawnPrepHandle;
+  agentToken: string;
   /** Most recent CLI conversation id from `system.init`. Persisted to
    *  conversation_agents on receipt; lets `--resume` recover after restart.
    *  May be non-null at spawn time when resuming — see `initObserved`
@@ -362,7 +368,7 @@ export class ConversationManager {
    *     Until 2026-05 the Electron `before-quit` handler returned its
    *     async work as a Promise that Electron didn't await, so the
    *     parent could exit while children were still being asked to
-   *     stop — leaving orphan claude/codex/chat-bridge processes
+   *     stop — leaving orphan claude/codex processes
    *     alive. Without this kill step a fresh `start()` would spawn
    *     a duplicate (codex would then fail with `thread not found`
    *     because the orphan still owns the thread server-side).
@@ -480,32 +486,14 @@ export class ConversationManager {
     }
 
     // Synthesize prompt + write spawn files.
+    const agentToken = this.ctx.agentTokens.issue(conversationId, agentId);
     const promptCtx = await this.buildPromptContext(conversation, workspace, agent);
     const systemPromptText = driver.buildSystemPrompt(promptCtx);
-    const chatBridge: McpServerConfig = {
-      command: this.ctx.chatBridgeLauncher.command,
-      args: [
-        ...this.ctx.chatBridgeLauncher.args,
-        '--conversation-id',
-        conversationId,
-        '--agent-id',
-        agentId,
-        '--server-url',
-        this.ctx.serverConfig.url,
-      ],
-      env: {
-        [AUTH_TOKEN_ENV]: this.ctx.serverConfig.auth_token,
-        // Pass through so chat-bridge writes its own JSONL alongside ours.
-        ...(this.ctx.logDir ? { SILVERHAND_LOG_DIR: this.ctx.logDir } : {}),
-        // Host-supplied env (e.g. ELECTRON_RUN_AS_NODE=1 in packaged builds).
-        ...(this.ctx.chatBridgeLauncher.env ?? {}),
-      },
-    };
     const spawnPrep = await prepareSpawnFiles({
       conversationId,
       agentId,
       systemPromptText,
-      chatBridge,
+      silverhandCli: this.ctx.silverhandCliLauncher,
     });
 
     // For oneShot drivers, the inbox can't be drained over stdin —
@@ -550,14 +538,21 @@ export class ConversationManager {
       model: opts.model ?? agent.model,
       reasoningEffort: agent.reasoning_effort,
       fastMode: agent.fast_mode,
-      mcpConfigPath: spawnPrep.mcpConfigPath,
       systemPromptPath: spawnPrep.systemPromptPath,
-      chatBridge,
       initialPrompt,
     };
 
     const args = driver.buildArgs(spawnCtx);
-    const env = this.applyProxySetting(driver.applyEnv(process.env), agent.runtime);
+    const env = this.withSilverhandCliEnv(
+      this.applyProxySetting(driver.applyEnv(process.env), agent.runtime),
+      {
+        conversationId,
+        agentId,
+        serverUrl: this.ctx.serverConfig.url,
+        token: agentToken,
+        binDir: spawnPrep.binDir,
+      },
+    );
 
     this.ctx.logger.info(
       { conversationId, agentId, runtime: agent.runtime, binary, args },
@@ -579,6 +574,7 @@ export class ConversationManager {
       child,
       rl,
       spawnPrep,
+      agentToken,
       cliSessionId: sessionAgent.cli_session_id,
       initObserved: false,
       busy: { outstandingToolUses: 0, compacting: false },
@@ -683,6 +679,7 @@ export class ConversationManager {
           timeout_reason: handle.initTimeoutReason,
         });
         this.handles.delete(key);
+        this.ctx.agentTokens.revoke(handle.agentToken);
         this.clearCompactionWatchdog(handle);
         this.clearInitWatchdog(handle);
         rl.close();
@@ -754,6 +751,7 @@ export class ConversationManager {
               : 'replied',
       );
       this.handles.delete(key);
+      this.ctx.agentTokens.revoke(handle.agentToken);
       this.clearCompactionWatchdog(handle);
       this.clearInitWatchdog(handle);
       rl.close();
@@ -825,7 +823,7 @@ export class ConversationManager {
    * Hard mode awaits the child's actual `exit` event before returning.
    * Callers (notably the Electron `before-quit` shutdown path) rely on
    * this to know the spawn graph is gone — returning before exit was
-   * the bug that left orphan claude/codex/chat-bridge processes alive
+   * the bug that left orphan claude/codex processes alive
    * across app restarts.
    */
   async stop(
@@ -1849,6 +1847,27 @@ export class ConversationManager {
     return { ...env, ...expanded };
   }
 
+  private withSilverhandCliEnv(
+    env: NodeJS.ProcessEnv,
+    input: {
+      conversationId: string;
+      agentId: string;
+      serverUrl: string;
+      token: string;
+      binDir: string;
+    },
+  ): NodeJS.ProcessEnv {
+    const currentPath = env.PATH ?? process.env.PATH ?? '';
+    return {
+      ...env,
+      [SILVERHAND_CONVERSATION_ID_ENV]: input.conversationId,
+      [SILVERHAND_AGENT_ID_ENV]: input.agentId,
+      [SILVERHAND_SERVER_URL_ENV]: input.serverUrl,
+      [SILVERHAND_AUTH_TOKEN_ENV]: input.token,
+      PATH: currentPath ? `${input.binDir}${delimiter}${currentPath}` : input.binDir,
+    };
+  }
+
   /** Fetch + format pending inbox items, write one combined stdin user
    *  message, mark delivered. No-op when inbox is empty.
    *
@@ -1924,8 +1943,8 @@ function handleKey(conversationId: string, agentId: string): string {
   return `${conversationId}:${agentId}`;
 }
 
-function sendMessageToolName(driver: Driver): string {
-  return `${driver.mcpToolPrefix}send_message`;
+function sendMessageToolName(_driver: Driver): string {
+  return 'silverhand message send';
 }
 
 /**
@@ -2015,8 +2034,8 @@ export function formatAttachmentSuffix(
          `size=${a.size} content_type=${a.content_type}`,
   );
   const header = attachments.length === 1
-    ? '[1 attachment — use view_file with the id below to read it]'
-    : `[${attachments.length} attachments — use view_file with each id below to read them]`;
+    ? '[1 attachment — use `silverhand file view --attachment-id <id>` with the id below to read it]'
+    : `[${attachments.length} attachments — use \`silverhand file view --attachment-id <id>\` with each id below to read them]`;
   return `\n\n${header}\n${lines.join('\n')}`;
 }
 
@@ -2054,7 +2073,6 @@ function formatDeliveryInstruction(
     );
   });
   const hasOnlySystemMessages = messages.every(m => m.from_kind === 'system');
-  const hasAgentMessage = messages.some(m => m.from_kind === 'agent');
 
   if (hasUserMessage && hasUserMessageForRecipient) {
     const mentionHint = nonSystemMentionsRecipient
@@ -2089,15 +2107,6 @@ function formatDeliveryInstruction(
     return (
       `Respond as appropriate. System messages do not require a reply ` +
       `unless they explicitly ask for one.`
-    );
-  }
-
-  if (hasAgentMessage) {
-    return (
-      `This is an agent message not addressed to you. No reply is needed unless ` +
-      `you own or were assigned the relevant task, or must flag a concrete ` +
-      `blocker. Do not acknowledge, summarize, or restate another agent's work ` +
-      `just to keep the conversation moving.`
     );
   }
 

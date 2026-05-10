@@ -1,5 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
 
 import {
   type Driver,
@@ -28,9 +27,6 @@ import { buildPlatformPrompt } from './platform-prompt.js';
  *    pre-written `systemPromptPath`, prepend it to `initialPrompt`,
  *    and pass the combined string as the final argv. (This is the same
  *    trick slock uses, just packaged differently.)
- *
- * MCP wiring: `cursor-agent` reads `<workspace>/.cursor/mcp.json`. We
- * write that file at spawn time from the supplied `chatBridge` config.
  */
 export class CursorDriver implements Driver {
   readonly kind = 'cursor' as const;
@@ -39,7 +35,6 @@ export class CursorDriver implements Driver {
   readonly busyDeliveryMode = 'none' as const;
   readonly oneShot = true;
   readonly supportsNativeStandingPrompt = false;
-  readonly mcpToolPrefix = 'mcp__chat__';
   readonly initLivenessSilenceMs = 30 * 1000;
   readonly initPreProtocolCapMs = 5 * 60 * 1000;
   // 60s post-protocol budget. Aligned with codex / claude drivers so PR-A
@@ -48,32 +43,11 @@ export class CursorDriver implements Driver {
   readonly initPostProtocolMs = 60 * 1000;
 
   buildArgs(ctx: DriverSpawnContext): string[] {
-    const cursorDir = join(ctx.workspacePath, '.cursor');
-    mkdirSync(cursorDir, { recursive: true });
-    writeFileSync(
-      join(cursorDir, 'mcp.json'),
-      JSON.stringify(
-        {
-          mcpServers: {
-            chat: {
-              command: ctx.chatBridge.command,
-              args: ctx.chatBridge.args,
-              ...(ctx.chatBridge.env ? { env: ctx.chatBridge.env } : {}),
-            },
-          },
-        },
-        null,
-        2,
-      ),
-      'utf-8',
-    );
-
     const args = [
       '--print',
       '--output-format',
       'stream-json',
       '--yolo',
-      '--approve-mcps',
       '--trust',
     ];
     if (ctx.model) args.push('--model', ctx.model);
@@ -92,7 +66,6 @@ export class CursorDriver implements Driver {
       agentId: ctx.agentId,
       agentName: ctx.agentName,
       runtime: 'cursor',
-      mcpToolPrefix: this.mcpToolPrefix,
       activeProfileDir: ctx.activeProfileDir,
       roleSystemPrompt: ctx.roleSystemPrompt,
       sessionContext: ctx.sessionContext,

@@ -1,0 +1,241 @@
+/**
+ * CLI error contract — the single source of truth for what stderr looks
+ * like, what exit codes mean, and how HTTP failures from the backend
+ * map onto stable, agent-readable error codes.
+ *
+ * Scope:
+ * - `code`: a short, stable identifier from `ERROR_CODES`. Backend
+ *   `internal/*` routes either return one of these directly in
+ *   `{error: {code, message}}` shape, or the CLI infers it from the
+ *   HTTP status. Either way, the agent gets the same code.
+ * - `retriable`: whether the agent can retry without changing input.
+ *   Validation/auth/not-found are NOT retriable; rate-limit and
+ *   upstream-unavailable are.
+ * - exit codes:
+ *     0 = ok
+ *     1 = user/input error (do not retry)
+ *     2 = transient (may retry with backoff)
+ *     3 = auth (stop, report to caller)
+ * - stderr line:
+ *     One short, friendly, action-oriented line. Never a stack trace,
+ *     never a raw HTTP status string.
+ *     In `--json` mode (default), the stderr line is a one-line JSON
+ *     `{error: {code, message, retriable}}` object so the agent can
+ *     parse and branch.
+ *
+ * The contract is exercised by `tests/errors.test.ts` and is the
+ * agreement Cindy's backend slice (#193) maps backend errors onto.
+ */
+
+export const ERROR_CODES = [
+  'not_found',
+  'forbidden',
+  'unauthorized',
+  'validation_error',
+  'conflict',
+  'rate_limited',
+  'upstream_unavailable',
+  'internal',
+] as const;
+
+export type ErrorCode = (typeof ERROR_CODES)[number];
+
+export interface CliErrorPayload {
+  code: ErrorCode;
+  message: string;
+  retriable: boolean;
+}
+
+export class CliError extends Error {
+  public readonly code: ErrorCode;
+  public readonly retriable: boolean;
+
+  constructor(payload: CliErrorPayload) {
+    super(payload.message);
+    this.code = payload.code;
+    this.retriable = payload.retriable;
+  }
+
+  toPayload(): CliErrorPayload {
+    return { code: this.code, message: this.message, retriable: this.retriable };
+  }
+}
+
+/** Map an HTTP status + optional `{error:{code,message}}` body from the
+ *  backend onto a `CliError` with a stable code. The CLI's job is to
+ *  hide raw HTTP from the agent; if the backend already supplies a
+ *  stable code we use it, otherwise we infer from status.
+ *
+ *  The `bodyText` parameter is the raw response body (already read
+ *  upstream). We try JSON-parse defensively — backends sometimes return
+ *  HTML for proxy errors. */
+export function mapHttpError(status: number, bodyText: string): CliError {
+  const parsed = safeParseErrorBody(bodyText);
+
+  // Trust an explicit backend code only when it's in our enum.
+  if (parsed?.code && (ERROR_CODES as readonly string[]).includes(parsed.code)) {
+    const code = parsed.code as ErrorCode;
+    return new CliError({
+      code,
+      message: parsed.message ?? defaultMessageForCode(code),
+      retriable: isRetriableCode(code),
+    });
+  }
+
+  const code = inferCodeFromStatus(status);
+  return new CliError({
+    code,
+    message: parsed?.message ?? defaultMessageForStatus(status, code),
+    retriable: isRetriableCode(code),
+  });
+}
+
+/** Wrap a low-level fetch / network failure (TCP refused, DNS fail,
+ *  abort) as a transient error so the agent can retry. */
+export function fromNetworkError(err: unknown): CliError {
+  const reason = err instanceof Error ? err.message : String(err);
+  return new CliError({
+    code: 'upstream_unavailable',
+    message: `cannot reach silverhand backend: ${reason}`,
+    retriable: true,
+  });
+}
+
+/** Map an unknown thrown value (zod parse failure, programmer error,
+ *  etc.) to a `CliError`. Programmer errors land as `internal` so we
+ *  don't leak stack traces; zod errors land as `validation_error`. */
+export function fromUnknown(err: unknown): CliError {
+  if (err instanceof CliError) return err;
+  if (isZodError(err)) {
+    return new CliError({
+      code: 'validation_error',
+      message: formatZodError(err),
+      retriable: false,
+    });
+  }
+  const reason = err instanceof Error ? err.message : String(err);
+  return new CliError({
+    code: 'internal',
+    message: `internal cli error: ${reason}`,
+    retriable: false,
+  });
+}
+
+export function exitCodeFor(code: ErrorCode): 1 | 2 | 3 {
+  switch (code) {
+    case 'unauthorized':
+    case 'forbidden':
+      return 3;
+    case 'rate_limited':
+    case 'upstream_unavailable':
+      return 2;
+    default:
+      return 1;
+  }
+}
+
+/** Write a `CliError` to stderr per the contract.
+ *  - `human` mode: one short line.
+ *  - `json` mode (default): one-line JSON `{error:{code,message,retriable}}`.
+ *  Never logs stack traces. The exit code is the caller's responsibility
+ *  (use `exitCodeFor`). */
+export function writeError(
+  err: CliError,
+  opts: { json: boolean; stderr?: { write(s: string): unknown } } = { json: true },
+): void {
+  const out = opts.stderr ?? process.stderr;
+  if (opts.json) {
+    out.write(JSON.stringify({ error: err.toPayload() }) + '\n');
+  } else {
+    out.write(`silverhand: ${err.code}: ${err.message}\n`);
+  }
+}
+
+// ── internals ────────────────────────────────────────────────────
+
+function inferCodeFromStatus(status: number): ErrorCode {
+  if (status === 400 || status === 422) return 'validation_error';
+  if (status === 401) return 'unauthorized';
+  if (status === 403) return 'forbidden';
+  if (status === 404) return 'not_found';
+  if (status === 409) return 'conflict';
+  if (status === 429) return 'rate_limited';
+  if (status >= 500 && status < 600) return 'upstream_unavailable';
+  // 4xx without a more specific mapping — treat as validation so the
+  // agent doesn't blindly retry.
+  if (status >= 400 && status < 500) return 'validation_error';
+  return 'internal';
+}
+
+function isRetriableCode(code: ErrorCode): boolean {
+  return code === 'rate_limited' || code === 'upstream_unavailable';
+}
+
+function defaultMessageForCode(code: ErrorCode): string {
+  switch (code) {
+    case 'not_found':
+      return 'resource not found';
+    case 'forbidden':
+      return 'forbidden';
+    case 'unauthorized':
+      return 'auth token rejected by backend';
+    case 'validation_error':
+      return 'request rejected: invalid input';
+    case 'conflict':
+      return 'request conflicts with current state';
+    case 'rate_limited':
+      return 'rate limited; back off and retry';
+    case 'upstream_unavailable':
+      return 'silverhand backend is unreachable';
+    case 'internal':
+      return 'silverhand backend reported an internal error';
+  }
+}
+
+function defaultMessageForStatus(status: number, code: ErrorCode): string {
+  return `${defaultMessageForCode(code)} (HTTP ${status})`;
+}
+
+interface ParsedErrorBody {
+  code?: string;
+  message?: string;
+}
+
+function safeParseErrorBody(bodyText: string): ParsedErrorBody | null {
+  if (!bodyText) return null;
+  try {
+    const parsed = JSON.parse(bodyText) as unknown;
+    if (parsed && typeof parsed === 'object') {
+      const obj = parsed as Record<string, unknown>;
+      // Accept either `{error: {code, message}}` or a flat `{code, message}`.
+      const inner =
+        obj.error && typeof obj.error === 'object'
+          ? (obj.error as Record<string, unknown>)
+          : obj;
+      const code = typeof inner.code === 'string' ? inner.code : undefined;
+      const message =
+        typeof inner.message === 'string' ? inner.message : undefined;
+      if (code || message) return { code, message };
+    }
+  } catch {
+    // not JSON; fall through and let the caller use default messages.
+  }
+  return null;
+}
+
+function isZodError(err: unknown): err is { errors: Array<{ path: Array<string | number>; message: string }> } {
+  return (
+    !!err &&
+    typeof err === 'object' &&
+    'name' in err &&
+    (err as { name: unknown }).name === 'ZodError' &&
+    Array.isArray((err as { errors?: unknown }).errors)
+  );
+}
+
+function formatZodError(err: { errors: Array<{ path: Array<string | number>; message: string }> }): string {
+  const first = err.errors[0];
+  if (!first) return 'request rejected: invalid input';
+  const path = first.path.length > 0 ? first.path.join('.') : '<root>';
+  return `invalid argument \`${path}\`: ${first.message}`;
+}

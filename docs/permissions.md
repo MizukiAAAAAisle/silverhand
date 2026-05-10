@@ -4,7 +4,7 @@
 >
 > 与 [`core-design.md`](./core-design.md) 的产品/数据模型对齐——本 doc 在数据模型旁定义"谁能对资源做什么"。
 >
-> 与 [`mcp-system.md`](./mcp-system.md) 的 MCP 工具表面对齐——本 doc 定义 chat-bridge → backend 调用的身份与边界。
+> 与 [`cli-system.md`](./cli-system.md) 的 CLI 工具表面对齐——本 doc 定义 `silverhand` CLI → backend 调用的身份与边界。
 >
 > 与 [`attachments-design.md`](./attachments-design.md) 的资源生命周期对齐——附件 ACL 是本 doc §6.3 的一个具体实例。
 
@@ -61,7 +61,8 @@ Request
 ### 3.1 Authentication
 
 - 共享 `auth_token`：backend 启动时随机生成，写入 `~/.silverhand/server-config.json`。
-- renderer 和 chat-bridge 启动时都拿到这个 token。
+- renderer 启动时拿到共享 token；agent CLI 请求使用 per-launch
+  `SILVERHAND_AUTH_TOKEN`。
 - `/internal/*` 路由强制 Bearer 校验；`/api/*` 路由**不校验**（已知缺口，归 Slice B）。
 - WebSocket 第一帧 `{type:'auth', token}` 校验 token，否则关闭 1008。
 
@@ -92,7 +93,7 @@ type ThreadActor = ...
 // /api/* —— 信任 X-Silverhand-User-Id 头（可被任意持 token 进程伪造）
 actor: { kind: 'user', userId: resolveViewerUserId(c, ctx) }
 
-// /internal/.../:cid/:aid/* —— agent 身份从 URL 路径取（chat-bridge spawn 时锁定，可信）
+// /internal/.../:cid/:aid/* —— agent 身份从 URL 路径取（token 绑定到该路径）
 actor: { kind: 'agent', agentId: aid }
 ```
 
@@ -160,7 +161,7 @@ export function decodeUserPrincipalHeader(value: string): { userId: string } | n
 | 路由 | Principal kind | 输入来源 | 为什么 |
 |---|---|---|---|
 | `/api/*` | `user` | `X-Silverhand-Principal` header | URL 不含身份；v1 单用户由 renderer 声明，未来换 session token claims |
-| `/internal/.../:cid/:aid/*` | `agent` | URL 路径 + Bearer + `conversations.getAgent(cid, aid)` | URL 在 chat-bridge spawn 时锁死，是绑定关系而非声明 |
+| `/internal/.../:cid/:aid/*` | `agent` | URL 路径 + Bearer + `conversations.getAgent(cid, aid)` | Bearer token 与 URL 中的 `(cid, aid)` 绑定，是绑定关系而非声明 |
 | backend 内部代码 | `system` | 不来自 HTTP | onboarding / lifecycle / provision 等内部触发 |
 
 **为什么 internal 必须 reject `X-Silverhand-Principal` header**：
@@ -309,7 +310,7 @@ v1 实现都是 placeholder（详见 §6），但**所有路由 handler 必须�
 **硬不变量**（必须在 repo 层断言，不能依赖路由层守卫）：
 
 1. `from_kind = 'system'` 的消息**不可由外部 HTTP 注入**。任何 `messageRepo.insert` 调用方传 `from_kind = 'system'` 时，stack 必须能追溯到 backend 内部代码（onboarding / lifecycle / provision），不能来自 HTTP handler。
-2. agent 的 `agentId` 和 `conversationId` 在 chat-bridge spawn 时由 URL 参数锁定，**不可由请求 body / header 覆盖**。Principal middleware 通过 URL 推断这两个字段，请求方无 say。
+2. agent 的 `agentId` 和 `conversationId` 由 URL 参数与 per-launch token 共同绑定，**不可由请求 body / header 覆盖**。Principal middleware 通过 URL 推断这两个字段，请求方无 say。
 3. agent 永远看不到非本 conversation 的消息——不是因为路由禁止，而是 agent 根本没有"读消息"路由。drainInbox 只把它自己 conversation 的消息写入 stdin。这是结构性隔离，不是策略性隔离。
 
 ---

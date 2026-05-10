@@ -51,12 +51,6 @@ function makeSpawnCtx(overrides: Partial<DriverSpawnContext> = {}): {
     reasoningEffort: null,
     fastMode: null,
     systemPromptPath,
-    mcpConfigPath: join(tmp, 'mcp.json'),
-    chatBridge: {
-      command: '/usr/bin/env',
-      args: ['node', '/path/to/chat-bridge/cli.js'],
-      env: { SILVERHAND_BACKEND_URL: 'http://127.0.0.1:0' },
-    },
     initialPrompt: '',
     ...overrides,
   };
@@ -82,7 +76,6 @@ describe('CodexDriver static config', () => {
     expect(d.busyDeliveryMode).toBe('direct');
     expect(d.oneShot).toBe(false);
     expect(d.supportsNativeStandingPrompt).toBe(true);
-    expect(d.mcpToolPrefix).toBe('mcp_chat_');
   });
 
   it('applyEnv adds NO_COLOR without mutating the input', () => {
@@ -135,44 +128,13 @@ describe('CodexDriver.classifyInitProgress', () => {
 });
 
 describe('CodexDriver.buildArgs', () => {
-  it('passes app-server stdio + one -c per env var', () => {
+  it('passes app-server stdio without inline MCP server config', () => {
     const { ctx, cleanup } = makeSpawnCtx();
     try {
       const args = new CodexDriver().buildArgs(ctx);
       expect(args.slice(0, 3)).toEqual(['app-server', '--listen', 'stdio://']);
-      // Each `-c key=value` entry comes in pairs.
       const kv = collectCArgs(args);
-      expect(kv.get('mcp_servers.chat.command')).toBe(
-        JSON.stringify(ctx.chatBridge.command),
-      );
-      expect(kv.get('mcp_servers.chat.args')).toBe(
-        JSON.stringify(ctx.chatBridge.args),
-      );
-      expect(kv.get('mcp_servers.chat.enabled')).toBe('true');
-      expect(kv.get('mcp_servers.chat.required')).toBe('true');
-      expect(kv.get('mcp_servers.chat.env.SILVERHAND_BACKEND_URL')).toBe(
-        JSON.stringify(ctx.chatBridge.env!.SILVERHAND_BACKEND_URL),
-      );
-    } finally {
-      cleanup();
-    }
-  });
-
-  it('quotes env keys that aren\'t TOML-bare-key safe', () => {
-    const { ctx, cleanup } = makeSpawnCtx({
-      chatBridge: {
-        command: 'node',
-        args: ['cli.js'],
-        env: { 'with.dot': 'v' },
-      },
-    });
-    try {
-      const args = new CodexDriver().buildArgs(ctx);
-      const kv = collectCArgs(args);
-      // Quoted-key form: mcp_servers.chat.env."with.dot"
-      const found = [...kv.keys()].find(k => k.endsWith('."with.dot"'));
-      expect(found).toBeDefined();
-      expect(kv.get(found!)).toBe('"v"');
+      expect([...kv.keys()].some(k => k.startsWith('mcp_servers.chat'))).toBe(false);
     } finally {
       cleanup();
     }

@@ -34,6 +34,8 @@
  *                                   must then be the actual stopper)
  *   MOCK_CLAUDE_STDIN_LOG         — append every received stdin line to
  *                                   this file path (one JSON line each)
+ *   MOCK_CLAUDE_ENV_LOG           — write selected process env vars to this
+ *                                   file path at startup
  *
  * Stdin protocol: any line containing `"control_request"` causes the mock
  * to exit immediately with MOCK_CLAUDE_EXIT_CODE (default 0). Other lines
@@ -47,7 +49,28 @@ import { createInterface } from 'node:readline';
 const env = process.env;
 const exitCode = Number(env.MOCK_CLAUDE_EXIT_CODE ?? 0);
 const stdinLog = env.MOCK_CLAUDE_STDIN_LOG ?? null;
+const envLog = env.MOCK_CLAUDE_ENV_LOG ?? null;
 let spawnOrdinal = 1;
+
+if (envLog) {
+  try {
+    writeFileSync(
+      envLog,
+      JSON.stringify(
+        {
+          PATH: env.PATH ?? null,
+          SILVERHAND_CONVERSATION_ID: env.SILVERHAND_CONVERSATION_ID ?? null,
+          SILVERHAND_AGENT_ID: env.SILVERHAND_AGENT_ID ?? null,
+          SILVERHAND_SERVER_URL: env.SILVERHAND_SERVER_URL ?? null,
+          SILVERHAND_AUTH_TOKEN: env.SILVERHAND_AUTH_TOKEN ?? null,
+          AGENT_HUB_AUTH_TOKEN: env.AGENT_HUB_AUTH_TOKEN ?? null,
+        },
+        null,
+        2,
+      ),
+    );
+  } catch {}
+}
 
 if (env.MOCK_CLAUDE_SPAWN_COUNT_FILE) {
   try {

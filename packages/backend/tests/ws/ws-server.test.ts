@@ -287,7 +287,7 @@ describe('event WebSocket server', () => {
       dbPath: join(tmp, 'silverhand.db'),
       silverhandDir: tmp,
       serverConfig: config,
-      chatBridgeLauncher: { command: 'true', args: [] },
+      silverhandCliLauncher: { command: 'true', args: [] },
       logger: { info() {}, warn() {}, error() {} },
     });
 

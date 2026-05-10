@@ -19,6 +19,7 @@ import { ScheduleRepo } from '../../src/repos/schedule-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { createApiRouter, createInternalRouter } from '../../src/routes.js';
 import type { ConversationManager } from '../../src/conversation-manager.js';
+import { AgentTokenStore } from '../../src/auth/agent-token-store.js';
 import { AttachmentService } from '../../src/services/attachment-service.js';
 import { ChannelService } from '../../src/services/channel-service.js';
 import { ConversationMessageService } from '../../src/services/conversation-message-service.js';
@@ -166,7 +167,8 @@ export function buildTestApp(): TestApp {
     scheduleService: undefined as unknown as ScheduleService,
     lastSpawnAtByAgent: new Map(),
     events: new ScopeEventBus(),
-    chatBridgeLauncher: { command: 'noop', args: [] },
+    silverhandCliLauncher: { command: 'noop', args: [] },
+    agentTokens: new AgentTokenStore(),
     conversationManager: fake as unknown as ConversationManager,
   };
   ctx.channelService = new ChannelService({
@@ -265,16 +267,31 @@ export function http(
   const isTestApp = (value: unknown): value is TestApp =>
     typeof value === 'object' && value !== null && 'authToken' in value && 'app' in value;
   const app = isTestApp(target) ? target.app : target;
-  const headers: Record<string, string> = isTestApp(target)
-    ? { authorization: `Bearer ${target.authToken}`, ...defaultHeaders }
-    : { ...defaultHeaders };
+  const publicAuthHeaders: Record<string, string> = isTestApp(target)
+    ? { authorization: `Bearer ${target.authToken}` }
+    : {};
+  const headers: Record<string, string> = { ...publicAuthHeaders, ...defaultHeaders };
   const base = 'http://localhost';
-  const merge = (init?: RequestInit): RequestInit => ({
-    ...init,
-    headers: { ...headers, ...(init?.headers as Record<string, string> | undefined) },
-  });
-  const jsonReq = (method: 'POST' | 'PATCH', body: unknown, init?: RequestInit) =>
-    merge({
+  const merge = (path: string, init?: RequestInit): RequestInit => {
+    const mergedHeaders = {
+      ...headers,
+      ...(init?.headers as Record<string, string> | undefined),
+    };
+    if (isTestApp(target)) {
+      patchInternalAuthHeader(target, path, mergedHeaders);
+    }
+    return {
+      ...init,
+      headers: mergedHeaders,
+    };
+  };
+  const jsonReq = (
+    path: string,
+    method: 'POST' | 'PATCH',
+    body: unknown,
+    init?: RequestInit,
+  ) =>
+    merge(path, {
       method,
       headers: { 'content-type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -282,16 +299,39 @@ export function http(
     });
   return {
     get: async (p, init) =>
-      app.fetch(new Request(base + p, merge({ method: 'GET', ...init }))),
+      app.fetch(new Request(base + p, merge(p, { method: 'GET', ...init }))),
     post: async (p, body, init) =>
-      app.fetch(new Request(base + p, jsonReq('POST', body, init))),
+      app.fetch(new Request(base + p, jsonReq(p, 'POST', body, init))),
     patch: async (p, body, init) =>
-      app.fetch(new Request(base + p, jsonReq('PATCH', body, init))),
+      app.fetch(new Request(base + p, jsonReq(p, 'PATCH', body, init))),
     del: async (p, init) =>
-      app.fetch(new Request(base + p, merge({ method: 'DELETE', ...init }))),
+      app.fetch(new Request(base + p, merge(p, { method: 'DELETE', ...init }))),
     json: async <T = any>(res: Promise<Response> | Response): Promise<T> => {
       const r = await res;
       return r.json() as Promise<T>;
     },
   };
+}
+
+function patchInternalAuthHeader(
+  target: TestApp,
+  path: string,
+  headers: Record<string, string>,
+): void {
+  const match = path.match(
+    /^\/internal\/conversations\/([^/?#]+)\/agents\/([^/?#]+)(?:[/?#]|$)/,
+  );
+  if (!match) return;
+  const current = headers.authorization ?? headers.Authorization;
+  const publicBearer = `Bearer ${target.authToken}`;
+  // Most route tests were written before internal tokens became scoped and
+  // used the public bearer by default. Preserve their intent by translating
+  // the default/public bearer to a valid per-agent token; explicit wrong
+  // tokens remain wrong so auth tests still exercise rejection.
+  if (current && current !== publicBearer) return;
+  const [, conversationId, agentId] = match as [string, string, string];
+  headers.authorization = `Bearer ${target.ctx.agentTokens.issue(
+    decodeURIComponent(conversationId),
+    decodeURIComponent(agentId),
+  )}`;
 }

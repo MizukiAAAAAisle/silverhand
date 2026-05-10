@@ -349,9 +349,9 @@ POST /api/messages/:id/thread
        'Onboarding task (system-triggered): You (@<agent>) just joined a thread in #<workspace>.
         Context: the user wants to dig deeper into the quoted message above.
         1) Read the quoted message.
-        2) Send one short greeting via mcp__chat__send_message acknowledging the topic.
+        2) Send one short greeting via silverhand message send acknowledging the topic.
         3) Then await user input.
-        You can call mcp__chat__send_message with target='parent' to ask the parent channel for context if needed.
+        You can call silverhand message send --target parent to ask the parent channel for context if needed.
         Call close_thread(summary) when this thread reaches a conclusion.'
      metadata: { subtype: 'onboarding' }
      ```

@@ -33,6 +33,14 @@ function authHeaders(token: string): Record<string, string> {
   return { authorization: `Bearer ${token}` };
 }
 
+function internalAuthHeaders(
+  t: TestApp,
+  conversationId: string,
+  agentId: string,
+): Record<string, string> {
+  return authHeaders(t.ctx.agentTokens.issue(conversationId, agentId));
+}
+
 /** Direct multipart upload — bypasses the JSON-shaped `http().post`
  *  helper because FormData needs to set its own Content-Type with
  *  boundary. */
@@ -250,7 +258,7 @@ describe('Internal agent attachment routes', () => {
       'agent.png',
       'image/png',
       PNG_BYTES,
-      authHeaders(t.authToken),
+      internalAuthHeaders(t, channelId, aliceId),
     );
     expect(upload.status).toBe(201);
     const dto = await upload.json() as any;
@@ -261,7 +269,7 @@ describe('Internal agent attachment routes', () => {
     const locate = await t.app.fetch(
       new Request(
         `http://localhost/internal/conversations/${channelId}/agents/${aliceId}/attachments/${dto.id}/locate`,
-        { headers: authHeaders(t.authToken) },
+        { headers: internalAuthHeaders(t, channelId, aliceId) },
       ),
     );
     expect(locate.status).toBe(200);
@@ -285,14 +293,14 @@ describe('Internal agent attachment routes', () => {
         'a.png',
         'image/png',
         PNG_BYTES,
-        authHeaders(t.authToken),
+        internalAuthHeaders(t, a.channelId, aliceA),
       )
     ).json() as any;
 
     const cross = await t.app.fetch(
       new Request(
         `http://localhost/internal/conversations/${b.channelId}/agents/${aliceB}/attachments/${dto.id}/locate`,
-        { headers: authHeaders(t.authToken) },
+        { headers: internalAuthHeaders(t, b.channelId, aliceB) },
       ),
     );
     expect(cross.status).toBe(404);
@@ -309,7 +317,7 @@ describe('Internal agent attachment routes', () => {
       'x.png',
       'image/png',
       PNG_BYTES,
-      authHeaders(t.authToken),
+      internalAuthHeaders(t, a.channelId, b.agentIds.bob!),
     );
     expect(res.status).toBe(403);
   });
@@ -325,14 +333,14 @@ describe('Internal agent attachment routes', () => {
         'a.png',
         'image/png',
         PNG_BYTES,
-        authHeaders(t.authToken),
+        internalAuthHeaders(t, channelId, aliceId),
       )
     ).json() as any;
 
     const send = await http(t).post(
       `/internal/conversations/${channelId}/agents/${aliceId}/send-message`,
       { content: 'with file', attachment_ids: [dto.id] },
-      { headers: authHeaders(t.authToken) },
+      { headers: internalAuthHeaders(t, channelId, aliceId) },
     );
     expect(send.status).toBe(200);
     const body = await send.json() as any;
@@ -367,14 +375,14 @@ describe('Internal agent attachment routes', () => {
         'x.png',
         'image/png',
         PNG_BYTES,
-        authHeaders(t.authToken),
+        internalAuthHeaders(t, a.channelId, aliceA),
       )
     ).json() as any;
 
     const res = await http(t).post(
       `/internal/conversations/${b.channelId}/agents/${aliceB}/send-message`,
       { content: 'cross', attachment_ids: [foreign.id] },
-      { headers: authHeaders(t.authToken) },
+      { headers: internalAuthHeaders(t, b.channelId, aliceB) },
     );
     expect(res.status).toBe(400);
     const body = await res.json() as any;
@@ -388,7 +396,7 @@ describe('Internal agent attachment routes', () => {
     const res = await http(t).post(
       `/internal/conversations/${a.channelId}/agents/${b.agentIds.bob}/send-message`,
       { content: 'forged' },
-      { headers: authHeaders(t.authToken) },
+      { headers: internalAuthHeaders(t, a.channelId, b.agentIds.bob!) },
     );
     expect(res.status).toBe(403);
   });
@@ -544,7 +552,7 @@ describe('Single attachment DELETE (orphan-only)', () => {
         'a.png',
         'image/png',
         PNG_BYTES,
-        authHeaders(t.authToken),
+        internalAuthHeaders(t, channelId, aliceId),
       )
     ).json() as any;
 
@@ -561,12 +569,12 @@ describe('formatAttachmentSuffix', () => {
     expect(formatAttachmentSuffix(undefined)).toBe('');
   });
 
-  it('renders a deterministic, view_file-pointing block for one attachment', () => {
+  it('renders a deterministic silverhand file view block for one attachment', () => {
     const out = formatAttachmentSuffix([
       { id: 'att-1', filename: 'a.png', size: 12, content_type: 'image/png' },
     ]);
     expect(out).toContain('1 attachment');
-    expect(out).toContain('view_file');
+    expect(out).toContain('silverhand file view --attachment-id <id>');
     expect(out).toContain('id=att-1');
     expect(out).toContain('filename="a.png"');
     expect(out).toContain('content_type=image/png');

@@ -78,4 +78,5 @@ if [[ -n "$ELECTRON_PKG_DIR" ]] && [[ ! -e "$ELECTRON_PKG_DIR/dist/Electron.app"
 fi
 
 echo "[dev] starting electron-vite"
+pnpm --filter @silverhand/cli build
 exec pnpm --filter @silverhand/desktop dev

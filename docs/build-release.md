@@ -38,7 +38,7 @@ Artifacts land in `apps/desktop/release/`:
 
 ```
 scripts/package.sh
-   ├── pnpm -r build              # tsc + esbuild for backend / shared / chat-bridge
+   ├── pnpm -r build              # tsc + esbuild for backend / shared / CLI
    ├── pnpm --filter @silverhand/desktop build   # electron-vite → out/{main,preload,renderer}
    ├── ensure_binding ELECTRON_ABI ...           # swap better-sqlite3 .node to electron ABI
    └── electron-builder --mac --config electron-builder.yml
@@ -59,14 +59,19 @@ Three things this dance handles that electron-builder alone can't:
    packaged app crashes on launch with "wrong ELF class" /
    "NODE_MODULE_VERSION mismatch" the first time it touches the DB.
 
-2. **chat-bridge bundling.** chat-bridge is built by esbuild as a
-   single ESM file (`packages/chat-bridge/dist/cli.js`). It's
-   shipped via `extraResources` to
-   `<app>/Contents/Resources/chat-bridge/cli.mjs` (renamed `.js →
-   .mjs` so Node always treats it as ESM — without `.mjs` Node
-   parses it as CJS and dies on the first `import`). Spawned via
-   `process.execPath + ELECTRON_RUN_AS_NODE=1`, i.e. the Electron
-   binary doubles as node.
+2. **Silverhand CLI bundling.** `packages/cli` produces a single
+   esbuild bundle at `dist/cli.js` (≈200KB, emitted as ESM).
+   electron-builder ships it outside the asar as
+   `<app>/Contents/Resources/silverhand-cli/cli.mjs` — the `.mjs`
+   rename is important: without a sibling `package.json` type=module
+   Node would otherwise parse it as CommonJS and choke on `import`.
+   In dev the repo file is loaded directly because
+   `packages/cli/package.json` already sets `type: module`. Both paths
+   invoke it through Electron's own Node runtime (`process.execPath`
+   + `ELECTRON_RUN_AS_NODE=1`) so no extra Node or Bun runtime is
+   bundled. The backend exposes it to spawned agents by writing a
+   per-spawn `bin/silverhand` shim and prepending that `bin/` to
+   `PATH`.
 
 3. **PATH from login shell.** GUI-launched .app's inherit
    launchd's minimal `/usr/bin:/bin:/usr/sbin:/sbin` — they do NOT
@@ -88,7 +93,7 @@ Three things this dance handles that electron-builder alone can't:
 | 1 | `EOF` / `bad file descriptor` downloading `electron-v33.x.x-darwin-x64.zip` | github.com/electron/electron releases unreliable from CN | `scripts/package.sh` exports `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/` |
 | 2 | `ERR_ELECTRON_BUILDER` "must be under apps/desktop/" walking into `packages/backend/dist/...` | electron-builder follows the pnpm symlink for workspace deps | `@silverhand/backend` + `@silverhand/shared` moved to `devDependencies` (electron-vite bundles them at build time, no runtime require). electron-builder by default only walks production deps |
 | 3 | "runtime 'codex' is not installed (no binary on PATH)" only in packaged build, fine in dev | macOS GUI apps inherit launchd PATH, not the shell PATH | login-shell PATH probe in `main/index.ts` (see point 3 above) |
-| 4 | `SyntaxError: Cannot use import statement outside a module` from chat-bridge, no chat-bridge log file at all | esbuild emits ESM, file has `.js` extension, no sibling `package.json` declares `"type": "module"` | rename to `cli.mjs` in `extraResources` mapping |
+| 4 | `silverhand: command not found` inside an agent | CLI bundle missing from the packaged resources, or the per-spawn PATH shim was not prepended | ensure `pnpm --filter @silverhand/cli build` runs before packaging and `extraResources` copies to `silverhand-cli/cli.mjs` (the `.mjs` rename is required — Node rejects ESM `.js` without a sibling `package.json` type=module) |
 | 5 | codex spawns OK but can't reach chatgpt.com | proxy URL had `https://` scheme; almost all local proxies (Clash/mihomo) speak plain HTTP CONNECT | `expandProxyEnv()` in `packages/backend/src/proxy.ts` rewrites `https://` → `http://` and derives `socks5://` for `all_proxy` |
 
 ---
@@ -152,5 +157,5 @@ electron-builder cache (`~/Library/Caches/electron/`) then retry.
 | `apps/desktop/electron-builder.yml` | files / asarUnpack / extraResources / mac config |
 | `apps/desktop/build/` | icon + README with `sips` recipe |
 | `apps/desktop/build/icon.icns` | gets baked into `Contents/Resources/icon.icns` |
-| `apps/desktop/src/main/index.ts` | `patchPathFromLoginShell()` + `resolveChatBridgeLauncher()` packaged-build path |
+| `apps/desktop/src/main/index.ts` | `patchPathFromLoginShell()` + `resolveSilverhandCliLauncher()` packaged-build path |
 | `packages/backend/src/proxy.ts` | one-URL → three env-vars expansion |

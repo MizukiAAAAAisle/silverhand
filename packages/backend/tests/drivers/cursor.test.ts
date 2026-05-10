@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -9,8 +9,7 @@ import type { DriverSpawnContext } from '../../src/drivers/index.js';
 /**
  * Pure unit tests for CursorDriver. Cursor is the simpler protocol —
  * the interesting bits are:
- *  - `buildArgs` writes `<workspace>/.cursor/mcp.json` and packs the
- *    standing prompt into the trailing argv string
+ *  - `buildArgs` packs the standing prompt into the trailing argv string
  *  - `parseLine` translates cursor-agent's stream-json frames
  *  - `encodeStdinMessage` returns null (oneShot, see ConversationManager)
  *
@@ -36,12 +35,6 @@ function makeSpawnCtx(overrides: Partial<DriverSpawnContext> = {}): {
     reasoningEffort: null,
     fastMode: null,
     systemPromptPath,
-    mcpConfigPath: join(tmp, 'mcp.json'),
-    chatBridge: {
-      command: 'node',
-      args: ['/abs/path/cli.js'],
-      env: { SILVERHAND_BACKEND_URL: 'http://127.0.0.1:0' },
-    },
     initialPrompt: '',
     ...overrides,
   };
@@ -59,7 +52,6 @@ describe('CursorDriver static config', () => {
     expect(d.busyDeliveryMode).toBe('none');
     expect(d.oneShot).toBe(true);
     expect(d.supportsNativeStandingPrompt).toBe(false);
-    expect(d.mcpToolPrefix).toBe('mcp__chat__');
   });
 
   it('applyEnv disables color without mutating the input', () => {
@@ -112,39 +104,27 @@ describe('CursorDriver.buildArgs', () => {
     cleanup = null;
   });
 
-  it('writes .cursor/mcp.json and emits the expected positional argv', () => {
+  it('does not write MCP config and emits the expected positional argv', () => {
     const built = makeSpawnCtx({ initialPrompt: 'do the thing' });
     cleanup = built.cleanup;
     const args = new CursorDriver().buildArgs(built.ctx);
 
     // Fixed prefix.
-    expect(args.slice(0, 6)).toEqual([
+    expect(args.slice(0, 5)).toEqual([
       '--print',
       '--output-format',
       'stream-json',
       '--yolo',
-      '--approve-mcps',
       '--trust',
     ]);
+    expect(args).not.toContain('--approve-mcps');
 
     // Last arg is the combined kickoff prompt.
     const kickoff = args[args.length - 1];
     expect(kickoff).toContain('STANDING PROMPT');
     expect(kickoff).toContain('do the thing');
 
-    // .cursor/mcp.json was written with the chat-bridge config.
-    const mcpJson = JSON.parse(
-      readFileSync(join(built.ctx.workspacePath, '.cursor', 'mcp.json'), 'utf-8'),
-    );
-    expect(mcpJson).toEqual({
-      mcpServers: {
-        chat: {
-          command: 'node',
-          args: ['/abs/path/cli.js'],
-          env: { SILVERHAND_BACKEND_URL: 'http://127.0.0.1:0' },
-        },
-      },
-    });
+    expect(existsSync(join(built.ctx.workspacePath, '.cursor', 'mcp.json'))).toBe(false);
   });
 
   it('falls back to a stand-by nudge when initialPrompt is empty', () => {
@@ -171,18 +151,6 @@ describe('CursorDriver.buildArgs', () => {
     const idx = args.indexOf('--model');
     expect(idx).toBeGreaterThanOrEqual(0);
     expect(args[idx + 1]).toBe('sonnet-4.6');
-  });
-
-  it('omits the env block from mcp.json when chatBridge.env is undefined', () => {
-    const built = makeSpawnCtx({
-      chatBridge: { command: 'node', args: ['cli.js'] },
-    });
-    cleanup = built.cleanup;
-    new CursorDriver().buildArgs(built.ctx);
-    const mcpJson = JSON.parse(
-      readFileSync(join(built.ctx.workspacePath, '.cursor', 'mcp.json'), 'utf-8'),
-    );
-    expect(mcpJson.mcpServers.chat.env).toBeUndefined();
   });
 });
 

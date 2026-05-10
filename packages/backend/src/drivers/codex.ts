@@ -25,10 +25,10 @@ import { buildPlatformPrompt } from './platform-prompt.js';
  *    usable. We do this in `bindIO`, called by ConversationManager once
  *    after spawn.
  *
- * 2. **MCP wiring.** Codex doesn't take `--mcp-config <path>`; servers
- *    must be passed inline via `-c mcp_servers.<name>.command=<json>`
- *    config args. So `mcpConfigPath` from spawn-prep is unused; we
- *    consume the raw `chatBridge` config from spawn context instead.
+ * 2. **Silverhand tools.** Codex uses the injected `silverhand` CLI on
+ *    PATH for chat/task/schedule/file actions. Older MCP config args are
+ *    intentionally not passed here; phase 2 starts the MCP removal with
+ *    Codex because it owned the least amount of driver-specific wiring.
  *
  * 3. **Standing prompt.** Goes into `developerInstructions` on the
  *    `thread/start` JSON-RPC params, not a CLI flag. Read from the
@@ -48,9 +48,6 @@ export class CodexDriver implements Driver {
   readonly busyDeliveryMode = 'direct' as const;
   readonly oneShot = false;
   readonly supportsNativeStandingPrompt = true;
-  /** Codex flattens MCP server name + tool with underscore: `mcp__` is
-   *  not its convention. Slock uses `mcp_chat_` here. */
-  readonly mcpToolPrefix = 'mcp_chat_';
   readonly initLivenessSilenceMs = 60 * 1000;
   readonly initPreProtocolCapMs = 5 * 60 * 1000;
   // 60s post-protocol budget. Codex's `app-server` happy-path completes
@@ -85,7 +82,6 @@ export class CodexDriver implements Driver {
 
   buildArgs(ctx: DriverSpawnContext): string[] {
     const args = ['app-server', '--listen', 'stdio://'];
-    args.push(...this.buildMcpConfigArgs(ctx));
     if (ctx.reasoningEffort) {
       args.push('-c', `model_reasoning_effort=${JSON.stringify(ctx.reasoningEffort)}`);
     }
@@ -109,7 +105,6 @@ export class CodexDriver implements Driver {
       agentId: ctx.agentId,
       agentName: ctx.agentName,
       runtime: 'codex',
-      mcpToolPrefix: this.mcpToolPrefix,
       activeProfileDir: ctx.activeProfileDir,
       roleSystemPrompt: ctx.roleSystemPrompt,
       sessionContext: ctx.sessionContext,
@@ -409,8 +404,8 @@ export class CodexDriver implements Driver {
       case 'mcpToolCall': {
         const toolName =
           item.server === 'chat'
-            ? `${this.mcpToolPrefix}${item.tool}`
-            : `${this.mcpToolPrefix.replace(/_$/, '')}_${item.server}_${item.tool}`;
+            ? `mcp_chat_${item.tool}`
+            : `mcp_${item.server}_${item.tool}`;
         if (isStarted) {
           events.push({ kind: 'tool_call', name: toolName, input: item.arguments });
         }
@@ -481,39 +476,6 @@ export class CodexDriver implements Driver {
       };
     }
     return { method: 'thread/start', params };
-  }
-
-  private buildMcpConfigArgs(ctx: DriverSpawnContext): string[] {
-    const { command, args } = ctx.chatBridge;
-    const env = ctx.chatBridge.env ?? {};
-    const cfg: string[] = [
-      '-c',
-      `mcp_servers.chat.command=${JSON.stringify(command)}`,
-      '-c',
-      `mcp_servers.chat.args=${JSON.stringify(args)}`,
-      '-c',
-      'mcp_servers.chat.startup_timeout_sec=30',
-      '-c',
-      'mcp_servers.chat.tool_timeout_sec=120',
-      '-c',
-      'mcp_servers.chat.enabled=true',
-      '-c',
-      'mcp_servers.chat.required=true',
-    ];
-    // Codex parses each `-c key=value` as TOML. Arrays/strings round-trip
-    // fine through JSON.stringify (TOML accepts the JSON-array syntax
-    // and double-quoted strings), but maps need TOML inline-table
-    // syntax — JSON `{"k":"v"}` is rejected with `expected a map`.
-    // Sidestep the syntax issue by emitting one `-c` per env key.
-    for (const [key, val] of Object.entries(env)) {
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
-        // TOML bare-key chars only; quote if needed
-        cfg.push('-c', `mcp_servers.chat.env.${JSON.stringify(key)}=${JSON.stringify(val)}`);
-      } else {
-        cfg.push('-c', `mcp_servers.chat.env.${key}=${JSON.stringify(val)}`);
-      }
-    }
-    return cfg;
   }
 
   private nextRequestId(): number {

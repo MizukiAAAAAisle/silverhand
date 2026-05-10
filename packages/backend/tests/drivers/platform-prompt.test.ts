@@ -6,7 +6,6 @@ function prompt(): string {
     agentId: 'agent-1',
     agentName: 'Cindy',
     runtime: 'claude',
-    mcpToolPrefix: 'mcp__chat__',
     activeProfileDir: './.silverhand/agents/agent-1',
     roleSystemPrompt: '_role_',
     sessionContext: {
@@ -20,12 +19,12 @@ function prompt(): string {
 }
 
 describe('buildPlatformPrompt', () => {
-  it('requires visible replies for user messages and direct mentions', () => {
+  it('requires visible replies through the silverhand CLI', () => {
     const text = prompt();
-    expect(text).toContain('When a user message is for you');
-    expect(text).toContain('directly @mentioned by name');
-    expect(text).toContain('mcp__chat__send_message');
-    expect(text).toContain('Short status-check');
+    expect(text).toContain('Never');
+    expect(text).toContain('put chat replies in your normal output');
+    expect(text).toContain('When you receive a message, reply via');
+    expect(text).toContain('silverhand message send');
   });
 
   it('keeps system announcements informational unless explicitly requested', () => {
@@ -38,7 +37,6 @@ describe('buildPlatformPrompt', () => {
     const text = prompt();
     expect(text).toContain('via Silverhand');
     expect(text).toContain('Silverhand system messages');
-    expect(text).toContain('The chat UI shows what you did');
     expect(text).not.toContain('via the Silverhand chat platform');
     expect(text).not.toContain('platform announcements');
     expect(text).not.toContain('The platform shows what you did');
@@ -46,13 +44,12 @@ describe('buildPlatformPrompt', () => {
 
   it('hardens multi-agent etiquette against ping loops', () => {
     const text = prompt();
-    expect(text).toContain('Messages from other agents are not invitations to chat');
-    expect(text).toContain('you own or were');
-    expect(text).toContain('assigned the relevant task');
-    expect(text).toContain('must flag a concrete blocker');
+    expect(text).toContain('## Conversation etiquette');
+    expect(text).toContain('Never reply to your own agent message');
     expect(text).toContain(
       "Do not acknowledge, summarize, or restate another agent's work",
     );
+    expect(text).toContain('Only send messages when you have actionable content');
     expect(text).not.toContain('unique value to add');
   });
 
@@ -87,7 +84,6 @@ describe('buildPlatformPrompt', () => {
       agentId: 'agent-1',
       agentName: 'Cindy',
       runtime: 'claude',
-      mcpToolPrefix: 'mcp__chat__',
       activeProfileDir: '.',
       roleSystemPrompt: '_role_',
       sessionContext: {
@@ -108,7 +104,6 @@ describe('buildPlatformPrompt', () => {
       agentId: 'agent-1',
       agentName: 'Cindy',
       runtime: 'claude',
-      mcpToolPrefix: 'mcp__chat__',
       activeProfileDir: './.silverhand//agents///agent-1/',
       roleSystemPrompt: '_role_',
       sessionContext: {
@@ -128,30 +123,73 @@ describe('buildPlatformPrompt', () => {
   it('requires task state updates before reporting completion', () => {
     const text = prompt();
     expect(text).toContain('Close the loop on tasks you own');
-    expect(text).toContain('call `mcp__chat__update_task_status` first');
+    expect(text).toContain('call `silverhand task status` first');
     expect(text).toContain('leaving the task state unchanged');
   });
 
   it('includes schedule tool usage guidance and wake handling', () => {
     const text = prompt();
     expect(text).toContain('## Schedules');
-    expect(text).toContain('`mcp__chat__schedule`');
-    expect(text).toContain('`mcp__chat__list_schedules`');
-    expect(text).toContain('`mcp__chat__cancel_schedule`');
+    expect(text).toContain('`silverhand schedule create`');
+    expect(text).toContain('`silverhand schedule list`');
+    expect(text).toContain('`silverhand schedule cancel`');
     expect(text).toContain('future time');
     expect(text).toContain('exactly one of `fire_at` or `delay_seconds`');
     expect(text).toContain('strict 5-field UNIX syntax');
     expect(text).toContain('IANA timezone');
     expect(text).toContain("metadata.subtype = 'schedule_fire'");
-    expect(text).toMatch(/report via\s+`mcp__chat__send_message`/);
+    expect(text).toMatch(/report via\s+`silverhand message send`/);
+  });
+
+  it('renders the silverhand CLI command manual', () => {
+    const text = buildPlatformPrompt({
+      agentId: 'agent-1',
+      agentName: 'Cindy',
+      runtime: 'codex',
+      activeProfileDir: './.silverhand/agents/agent-1',
+      roleSystemPrompt: '_role_',
+      sessionContext: {
+        channelName: 'silverhand',
+        channelKind: 'regular',
+        sessionTitle: 'member activity',
+        otherMembers: [],
+        isChildSession: false,
+      },
+    });
+
+    expect(text).toContain('## Communication by silverhand CLI');
+    expect(text).toContain(
+      'You should use the silverhand CLI for all chat / task / workspace',
+    );
+    expect(text).toMatch(/Subcommands default\s+to `--json`/);
+    expect(text).toContain('stderr is the primary failure context for you');
+    expect(text).toContain('with a non-zero code');
+    expect(text).toContain('stable `code` and `retriable` flag');
+    expect(text).toContain('exit code 1 as a user/input');
+    expect(text).toContain('2 as a temporary error');
+    expect(text).toContain('3 as an auth failure');
+    expect(text).toContain('silverhand <noun> <verb> --help');
+    expect(text).toContain('**`silverhand message send`**: Send a message');
+    expect(text).toContain(
+      '**`silverhand task list`**: View the workspace task board',
+    );
+    expect(text).toContain(
+      '**`silverhand schedule create`**: Schedule a self-wake',
+    );
+    expect(text).toContain('**`silverhand file upload`**: Upload a local file');
+    expect(text).toContain('via `silverhand message send` before');
+    expect(text).toContain('call `silverhand task status` first');
+    expect(text).not.toContain('mcp_chat_send_message');
+    expect(text).not.toContain('mcp__chat__');
+    expect(text).not.toContain('All cross-agent interaction is through MCP tools');
   });
 
   it('uses Thread/channel terminology and gates agent-created top-level channels', () => {
     const text = prompt();
     expect(text).toContain('Threads (when to open one)');
-    expect(text).toContain('`mcp__chat__create_thread`');
-    expect(text).toContain('`mcp__chat__create_channel`');
-    expect(text).toContain('**Only** call `mcp__chat__create_channel`');
+    expect(text).toContain('`silverhand thread create`');
+    expect(text).toContain('`silverhand channel create`');
+    expect(text).toContain('**Only** call `silverhand channel create`');
     expect(text).toContain('explicitly');
     expect(text).toContain('current workspace');
     expect(text).not.toContain('`mcp__chat__spawn_child_session`');
@@ -163,7 +201,6 @@ describe('buildPlatformPrompt', () => {
       agentId: 'agent-1',
       agentName: 'Cindy',
       runtime: 'claude',
-      mcpToolPrefix: 'mcp__chat__',
       activeProfileDir: './.silverhand/agents/agent-1',
       roleSystemPrompt: '_role_',
       sessionContext: {
@@ -184,7 +221,10 @@ describe('buildPlatformPrompt', () => {
     expect(text).not.toContain('do not close this thread unless');
     expect(text).not.toContain('User-opened Threads should remain open');
     expect(text).not.toContain('then call `close_session`');
-    expect(text).toContain('close_thread');
+    expect(text).toContain('silverhand thread close');
+    expect(text).toContain('pass `--posted-to-parent`');
+    expect(text).not.toContain('target=parent');
+    expect(text).not.toContain('posted_to_parent: true');
   });
 
   it('keeps close_thread guidance for agent-spawned Threads', () => {
@@ -192,7 +232,6 @@ describe('buildPlatformPrompt', () => {
       agentId: 'agent-1',
       agentName: 'Cindy',
       runtime: 'claude',
-      mcpToolPrefix: 'mcp__chat__',
       activeProfileDir: './.silverhand/agents/agent-1',
       roleSystemPrompt: '_role_',
       sessionContext: {
@@ -206,6 +245,6 @@ describe('buildPlatformPrompt', () => {
       },
     });
 
-    expect(text).toContain('report the final result via `close_thread`');
+    expect(text).toContain('report the final result via `silverhand thread close`');
   });
 });

@@ -175,7 +175,7 @@ export class AttachmentService {
         },
       };
     }
-    // Remote storages return a download URL; the caller (chat-bridge) will
+    // Remote storages return a download URL; the caller will
     // fetch + cache locally. The URL form is owned by the storage backend
     // when it lands.
     throw new BlobFileStorageError(

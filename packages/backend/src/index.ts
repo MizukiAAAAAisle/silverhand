@@ -13,8 +13,9 @@ import {
   consoleLogger,
   type BackendContext,
   type BackendLogger,
-  type ChatBridgeLauncher,
+  type SilverhandCliLauncher,
 } from './context.js';
+import { AgentTokenStore } from './auth/agent-token-store.js';
 import { HostRepo } from './repos/host-repo.js';
 import { ensureWorkspacesRoot } from './provision.js';
 import { ScopeEventBus } from './ws/scope-event-bus.js';
@@ -44,10 +45,9 @@ export interface CreateBackendOptions {
   dbPath: string;
   silverhandDir: string;
   serverConfig: ServerConfig;
-  chatBridgeLauncher: ChatBridgeLauncher;
+  silverhandCliLauncher: SilverhandCliLauncher;
   logger?: BackendLogger;
-  /** Where the file logger writes — passed through to chat-bridge child
-   *  processes via `SILVERHAND_LOG_DIR`. Optional. */
+  /** Where the file logger writes. Optional. */
   logDir?: string;
 }
 
@@ -66,13 +66,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   await ensureWorkspacesRoot(workspacesRoot);
   await blobStorage.ensureReady();
 
-  // Fail loudly if the chat-bridge launcher is bogus. claude silently
-  // continues without MCP tools when it can't spawn the server, which
-  // makes every agent reply "invisible" (text only, no send_message).
-  // Absolute path → check it exists. Bare name (e.g. `npx`) → resolve
-  // through PATH; missing PATH binaries surface as ENOENT only when the
-  // first agent spawns, which is too late.
-  assertLauncherResolvable(opts.chatBridgeLauncher.command);
+  assertLauncherResolvable(opts.silverhandCliLauncher.command, 'silverhand CLI');
 
   // Bootstrap: ensure 'local' host exists.
   new HostRepo(db).ensureLocal();
@@ -99,7 +93,8 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     scheduleService: undefined as unknown as ScheduleService,
     lastSpawnAtByAgent: new Map(),
     events: new ScopeEventBus(),
-    chatBridgeLauncher: opts.chatBridgeLauncher,
+    silverhandCliLauncher: opts.silverhandCliLauncher,
+    agentTokens: new AgentTokenStore(),
     // Placeholder; replaced immediately below (ConversationManager needs ctx).
     conversationManager: undefined as unknown as ConversationManager,
   };
@@ -228,12 +223,12 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
 export type { BackendContext, BackendLogger } from './context.js';
 export { createFileLogger, type FileLogger, type FileLoggerOptions } from './logger.js';
 
-function assertLauncherResolvable(command: string): void {
+function assertLauncherResolvable(command: string, label = 'launcher'): void {
   if (isAbsolute(command)) {
     if (!existsSync(command)) {
       throw new Error(
-        `chat-bridge launcher not found: ${command}. ` +
-          `Without it claude can't spawn the MCP server and agents won't be able to reply.`,
+        `${label} not found: ${command}. ` +
+          `Without it agents may be unable to use Silverhand runtime actions.`,
       );
     }
     return;
@@ -246,8 +241,8 @@ function assertLauncherResolvable(command: string): void {
     execFileSync(probe, [command], { stdio: 'ignore' });
   } catch {
     throw new Error(
-      `chat-bridge launcher \`${command}\` is not on PATH. ` +
-        `Without it claude can't spawn the MCP server and agents won't be able to reply.`,
+      `${label} \`${command}\` is not on PATH. ` +
+        `Without it agents may be unable to use Silverhand runtime actions.`,
     );
   }
 }

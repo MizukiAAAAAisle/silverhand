@@ -1,6 +1,6 @@
 # Agent Run State 与 Activity Strip 设计
 
-> 配套文档：`core-design.md`（§3 进程编排）、`electron-agent-hub-compaction.md`（compaction 总论）、`mcp-system.md`。
+> 配套文档：`core-design.md`（§3 进程编排）、`electron-agent-hub-compaction.md`（compaction 总论）、`cli-system.md`。
 > 本文聚焦"agent 在某个 channel/thread 里正在做什么"这一**临时运行态**的端到端模型——driver 输出 → ConversationManager 聚合 → WS scope 分发 → 前端 cache → Activity Strip 渲染——以及 2026-05-08 task #159 / #169 的修复点。
 
 ---
@@ -100,7 +100,7 @@ pendingDeliveries: string[];      // 仅 gated 模式
 | `deliverMessage`（agent idle） | inbox enqueue 或 direct write → `startRun(handle, 'thinking')` 创建新 runId |
 | `deliverMessage`（agent busy, direct mode = codex `turn/steer`） | write → `markRunThinking(handle)`：保留当前 runId，只切 status |
 | `deliverMessage`（agent busy, gated mode = claude） | push 到 `pendingDeliveries`，等下个 safe boundary `flushPending` |
-| `tool_call` | `outstandingToolUses += 1`；`recordToolCall` → status `tool_running`，`toolCallCounts[name] += 1`（`mcp__chat__send_message` 类工具不计入计数） |
+| `tool_call` | `outstandingToolUses += 1`；`recordToolCall` → status `tool_running`，`toolCallCounts[name] += 1` |
 | `tool_output` | `outstandingToolUses -= 1`；若降到 0 则 `recordToolOutput` → status 切回 `thinking`，**调用 `tryResolveTurnEndAtBoundary`** |
 | `thinking` / `text` | `recordActivitySnippet(handle, kind, text)` → 见 §5 |
 | `compaction_started` | `busy.compacting = true`；`recordCompactionStarted` → `compacting=true, compactingSince=now`；启动 5min watchdog |
@@ -302,7 +302,7 @@ useConversationStream(conversationId, onEvent, scope)
 
 - 后端 activity JSONL：`<logDir>/agent-activity-*.log`，包含 `conversationId` / `agentId` / `runId` / `status` / `activitySnippet` / `compacting*` / `terminalReason`。
 - backend 主日志：看 `agent: turn_end`、`agent: compaction_started`、`agent: compaction_finished`、`agent: tool_call`、`compaction has been running for 5min...`。
-- chat-bridge 日志：只用于确认 agent 自己通过 MCP 发消息是否真正到达 backend；不要把 runtime 的 tool_use 意图误认为 Silverhand 已收到消息。
+- CLI stderr/stdout 和 backend internal-route 日志：用于确认 agent 自己通过 `silverhand` 命令是否真正到达 backend；不要把 runtime 的 tool_use 意图误认为 Silverhand 已收到消息。
 
 ### 10.3 回归命令
 
@@ -406,7 +406,7 @@ passive enqueue 修好了"看得到",没修"塞得动"。如果用户跟 A 聊�
 primary `dm_channel`,**走的是普通的 `messages.insertForConversation`
 + `ConversationManager.deliverMessage` + `start`** —— 没有第二条 inbox
 路径,也没有"特殊 wake 总线"。这条决策是 PR-1 锁的(见
-`docs/mcp-system.md` §6 与 `progress.md` 2026-05-09 PR-1
+`docs/cli-system.md` 与 `progress.md` 2026-05-09 PR-1
 section),目的是让 schedule wake 在 run-state 维度上和任何用户消息
 没有区别,Activity Strip / activity bubble / inbox 全部自动复用。
 

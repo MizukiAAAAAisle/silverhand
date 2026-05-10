@@ -20,13 +20,3 @@ export type ParsedEvent =
   | { kind: 'compaction_finished' }
   | { kind: 'error'; message: string; code?: string; fatal?: boolean }
   | { kind: 'unknown'; raw: string };
-
-export interface McpServerConfig {
-  command: string;
-  args: string[];
-  env?: Record<string, string>;
-}
-
-export interface McpConfigFile {
-  mcpServers: Record<string, McpServerConfig>;
-}

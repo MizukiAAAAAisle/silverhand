@@ -2,10 +2,10 @@
 # One-shot release packager for Silverhand (macOS-only).
 #
 # Steps:
-#   1. Build all workspace packages (`pnpm -r build`) — chat-bridge needs
-#      its esbuild bundle, backend/shared need their tsc output (though
-#      desktop main bundles them via electron-vite, so this is mostly
-#      defensive), and apps/desktop needs `out/` populated.
+#   1. Build all workspace packages (`pnpm -r build`) — backend/shared need
+#      their tsc output and `packages/cli` produces the esbuild bundle
+#      (`dist/cli.js`) that electron-builder ships outside the asar;
+#      apps/desktop needs `out/` populated.
 #   2. Swap better-sqlite3's binding to the Electron ABI (cached, see
 #      _native.sh). electron-builder won't rebuild it for us — we set
 #      npmRebuild: false in the config because builder would otherwise

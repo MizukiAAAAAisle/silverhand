@@ -131,7 +131,7 @@ export const internalPaths = {
   agentSearchMessages: (cid: string, aid: string) =>
     `/internal/conversations/${cid}/agents/${aid}/search-messages`,
 
-  // Canonical task MCP endpoints (chat-bridge → backend).
+  // Canonical task endpoints used by the Silverhand CLI.
   agentListConversationTasks: (cid: string, aid: string) =>
     `/internal/conversations/${cid}/agents/${aid}/tasks`,
   agentCreateConversationTasks: (cid: string, aid: string) =>

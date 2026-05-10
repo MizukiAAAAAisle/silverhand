@@ -24,7 +24,7 @@ const STATUS_FILTERS: Array<{ value: ScheduleListStatusFilter; label: string }> 
 ];
 
 /**
- * User-facing surface for an agent's `mcp__chat__schedule` rows.
+ * User-facing surface for an agent's schedule rows.
  *
  * This card is the primary audit/observability surface for schedules
  * — the agent creates them via the MCP tool but cannot show them to

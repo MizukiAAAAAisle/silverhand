@@ -1,0 +1,68 @@
+/**
+ * `silverhand channel` — create, list.
+ */
+import { CliError } from '../errors.js';
+import { flagString } from '../parse.js';
+import type { Command } from './index.js';
+
+const createCommand: Command = {
+  verb: 'create',
+  summary: 'Create a new top-level channel in the current workspace.',
+  help: `silverhand channel create --title <title> --context-summary <text>
+                           --initial-prompt <text>
+
+ONLY use this when the user has explicitly requested a new top-level
+channel. For sub-discussions or parallel sub-tasks, use
+\`silverhand thread create\`.
+
+After creation, you should announce the new channel id in the current
+channel via \`silverhand message send\` so the user knows a fork happened.
+
+Flags:
+  --title              Required. Short title for the new channel.
+  --context-summary    Required. Why this channel exists; states the user
+                       intent it serves. Stored for audit and recovery.
+  --initial-prompt     Required. First message posted into the new channel.
+
+stdout: { "channel_id": "<id>" }`,
+  async run({ client, args }) {
+    const title = flagString(args, 'title');
+    const contextSummary = flagString(args, 'context-summary');
+    const initialPrompt = flagString(args, 'initial-prompt');
+    if (!title || !contextSummary || !initialPrompt) {
+      throw new CliError({
+        code: 'validation_error',
+        message:
+          'channel create requires --title, --context-summary, and --initial-prompt',
+        retriable: false,
+      });
+    }
+    return client.createChannel({
+      title,
+      context_summary: contextSummary,
+      initial_prompt: initialPrompt,
+    });
+  },
+};
+
+const listCommand: Command = {
+  verb: 'list',
+  summary: 'List top-level channels of a workspace.',
+  help: `silverhand channel list [--workspace-id <id>]
+
+Lists channels of a workspace where this agent is currently a member.
+Defaults to the current workspace.
+
+Flags:
+  --workspace-id   Optional. From \`silverhand workspace list\`.
+
+stdout: AgentListChannelsDto JSON.`,
+  async run({ client, args }) {
+    const workspaceId = flagString(args, 'workspace-id');
+    return client.listChannels({
+      ...(workspaceId ? { workspace_id: workspaceId } : {}),
+    });
+  },
+};
+
+export const channelCommands: readonly Command[] = [createCommand, listCommand];

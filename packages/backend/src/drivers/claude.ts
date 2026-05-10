@@ -39,7 +39,6 @@ export class ClaudeDriver implements Driver {
   readonly busyDeliveryMode = 'gated' as const;
   readonly oneShot = false;
   readonly supportsNativeStandingPrompt = true;
-  readonly mcpToolPrefix = 'mcp__chat__';
   readonly initLivenessSilenceMs = 30 * 1000;
   readonly initPreProtocolCapMs = 5 * 60 * 1000;
   // 60s post-protocol budget. Aligned with codex driver — the post-protocol
@@ -66,9 +65,6 @@ export class ClaudeDriver implements Driver {
       DISALLOWED_TOOLS,
       '--system-prompt-file',
       ctx.systemPromptPath,
-      '--mcp-config',
-      ctx.mcpConfigPath,
-      '--strict-mcp-config',
     ];
     if (ctx.cliSessionId) {
       args.push('--resume', ctx.cliSessionId);
@@ -87,7 +83,6 @@ export class ClaudeDriver implements Driver {
       agentId: ctx.agentId,
       agentName: ctx.agentName,
       runtime: 'claude',
-      mcpToolPrefix: this.mcpToolPrefix,
       activeProfileDir: ctx.activeProfileDir,
       roleSystemPrompt: ctx.roleSystemPrompt,
       sessionContext: ctx.sessionContext,

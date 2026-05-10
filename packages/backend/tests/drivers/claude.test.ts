@@ -23,8 +23,6 @@ function makeSpawnCtx(overrides: Partial<DriverSpawnContext> = {}): {
     reasoningEffort: null,
     fastMode: null,
     systemPromptPath,
-    mcpConfigPath: join(tmp, 'mcp.json'),
-    chatBridge: { command: 'node', args: ['cli.js'] },
     initialPrompt: '',
     ...overrides,
   };
@@ -64,6 +62,18 @@ describe('ClaudeDriver.buildArgs', () => {
 
     expect(idx).toBeGreaterThanOrEqual(0);
     expect(args[idx + 1]).toBe('sonnet');
+  });
+
+  it('does not pass an MCP config after the CLI cutover', () => {
+    const built = makeSpawnCtx();
+    cleanup = built.cleanup;
+
+    const args = new ClaudeDriver().buildArgs(built.ctx);
+
+    expect(args).not.toContain('--mcp-config');
+    expect(args).not.toContain('--strict-mcp-config');
+    expect(args).toContain('--system-prompt-file');
+    expect(args).toContain(built.ctx.systemPromptPath);
   });
 });
 

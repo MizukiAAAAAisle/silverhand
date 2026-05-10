@@ -495,7 +495,7 @@ export type SendMessageInput = z.infer<typeof SendMessageInputSchema>;
 export const AttachmentUploadResponseSchema = AttachmentDtoSchema;
 export type AttachmentUploadResponse = z.infer<typeof AttachmentUploadResponseSchema>;
 
-/** chat-bridge `view_file` locate response. */
+/** `silverhand file view` locate response. */
 export const AttachmentLocateDtoSchema = z.union([
   z.object({
     storage: z.literal('local'),
@@ -828,7 +828,7 @@ export const TaskChangedEventSchema = z.object({
 });
 export type TaskChangedEvent = z.infer<typeof TaskChangedEventSchema>;
 
-// ── Internal API (chat-bridge → backend) ─────────────────────────
+// ── Internal API (silverhand CLI → backend) ──────────────────────
 
 export const SendMessageTargetSchema = z.union([
   z.literal('self'),

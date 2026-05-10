@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ServerConfig } from '@silverhand/shared';
 import type { BackendContext, BackendLogger } from '../../src/context.js';
+import { AgentTokenStore } from '../../src/auth/agent-token-store.js';
 import { ScopeEventBus, type ConversationBusEvent } from '../../src/ws/scope-event-bus.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
@@ -39,6 +40,7 @@ export interface MockClaudeEnvOverrides {
   MOCK_CLAUDE_SPAWN_COUNT_FILE?: string;
   MOCK_CLAUDE_STDIN_LOG?: string;
   MOCK_CLAUDE_IGNORE_INTERRUPT?: '1';
+  MOCK_CLAUDE_ENV_LOG?: string;
 }
 
 const silentLogger: BackendLogger = {
@@ -152,7 +154,8 @@ export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {})
     scheduleService: undefined as unknown as ScheduleService,
     lastSpawnAtByAgent: new Map(),
     events: new ScopeEventBus(),
-    chatBridgeLauncher: { command: 'true', args: [] }, // never invoked in L3
+    silverhandCliLauncher: { command: 'true', args: [] },
+    agentTokens: new AgentTokenStore(),
     conversationManager: undefined as unknown as ConversationManager,
   };
   // Bootstrap local host (matches what startBackend would do)

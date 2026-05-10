@@ -2761,15 +2761,21 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
   const messages = new MessageRepo(ctx.db);
   const taskDeps = { ctx, agents, conversations, messages };
 
-  app.use('*', async (c, next) => {
+  app.use('/internal/conversations/:cid/agents/:aid/*', async (c, next) => {
     const header = c.req.header('authorization') ?? '';
     const token = header.replace(/^Bearer\s+/i, '').trim();
-    if (!token || token !== ctx.serverConfig.auth_token) {
+    const cid = c.req.param('cid');
+    const aid = c.req.param('aid');
+    const verified = ctx.agentTokens.verify(token, cid, aid);
+    if (!verified.ok) {
       ctx.logger.warn(
         {
           path: c.req.path,
           hasHeader: !!header,
           tokenLen: token.length,
+          reason: verified.reason,
+          conversationId: cid,
+          agentId: aid,
           caller: c.req.header('x-agent-hub-caller') ?? 'unknown',
         },
         'internal: unauthorized request',
@@ -3223,7 +3229,7 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
     return c.json(result);
   });
 
-  // ── Agent-initiated attachments (chat-bridge → backend) ────────────
+  // ── Agent-initiated attachments (silverhand CLI → backend) ────────
   // Agents never specify channel_id; the backend derives it from the
   // calling conversation (cid) so the access boundary is fixed by the
   // agent's runtime context. locateForAgent additionally enforces that
@@ -3288,7 +3294,7 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
     },
   );
 
-  // ── Agent-owned schedules (chat-bridge → backend) ─────────────────
+  // ── Agent-owned schedules (silverhand CLI → backend) ──────────────
   // Per-agent surface — no channel/thread coupling. The route still
   // hangs off the calling conversation so the existing internal
   // principal middleware (cid+aid → AgentPrincipal) authenticates the

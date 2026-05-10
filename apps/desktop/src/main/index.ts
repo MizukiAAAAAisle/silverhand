@@ -114,40 +114,26 @@ function patchPathFromLoginShell(): { ok: boolean; detail: string } {
 }
 
 /**
- * Resolve how to spawn the chat-bridge MCP server.
+ * Resolve how to launch the `silverhand` CLI exposed to agents on PATH.
  *
- * Dev: spawn the workspace-local `tsx` binary directly with the raw `.ts`
- *   entry as its only arg. We use an absolute path so the chat-bridge
- *   doesn't depend on the spawn cwd — agent processes have their cwd set
- *   to the channel's workspace_path (e.g. `~/.silverhand/workspaces/foo`),
- *   which is outside this monorepo, so a bare `npx tsx` walking up from
- *   that cwd can't find our locally-installed tsx and silently fails to
- *   launch the MCP server. The result is exactly the kind of "agent runs
- *   tools but never replies" symptom we have to debug from logs.
- *
- *   slock-ai uses `npx <pkg>` because its daemon is npm-installed at an
- *   unpredictable location; we know exactly where tsx lives in dev, so
- *   we resolve once at startup and pass the absolute path.
- *
- * Release: re-use the Electron binary as a node host via
- *   `ELECTRON_RUN_AS_NODE=1` (otherwise spawning `process.execPath`
- *   would re-launch the GUI). chat-bridge is bundled (esbuild --bundle)
- *   to a single `dist/cli.js` and shipped as `chat-bridge/cli.js` under
- *   `process.resourcesPath` via electron-builder's `extraResources` —
- *   see `apps/desktop/electron-builder.yml`.
+ * ConversationManager writes a per-spawn `bin/silverhand` shim that forwards
+ * here. In both dev and release we reuse the Electron binary as a Node host
+ * via `ELECTRON_RUN_AS_NODE=1`; the only difference is where the esbuild
+ * bundle lives on disk. The release copy is renamed to `.mjs` so Node treats
+ * it as ESM without a sibling `package.json` type=module (dev works as-is
+ * because `packages/cli/package.json` provides that). We used to ship a
+ * bun-compiled single-file binary in release — that pulled in the Bun
+ * runtime (~60MB) for no benefit, because the package already contains a
+ * full Node runtime inside Electron.
  */
-function resolveChatBridgeLauncher(): {
+function resolveSilverhandCliLauncher(): {
   command: string;
   args: string[];
   env?: Record<string, string>;
 } {
-  if (!app.isPackaged) {
-    const repoRoot = resolve(app.getAppPath(), '../..');
-    const tsxBin = join(repoRoot, 'packages/chat-bridge/node_modules/.bin/tsx');
-    const entry = join(repoRoot, 'packages/chat-bridge/src/cli.ts');
-    return { command: tsxBin, args: [entry] };
-  }
-  const entry = join(process.resourcesPath, 'chat-bridge', 'cli.mjs');
+  const entry = app.isPackaged
+    ? join(process.resourcesPath, 'silverhand-cli', 'cli.mjs')
+    : join(resolve(app.getAppPath(), '../..'), 'packages/cli/dist/cli.js');
   return {
     command: process.execPath,
     args: [entry],
@@ -182,7 +168,7 @@ async function bootstrap(): Promise<void> {
       dbPath: databasePath(),
       silverhandDir: silverhandDir(),
       serverConfig: config,
-      chatBridgeLauncher: resolveChatBridgeLauncher(),
+      silverhandCliLauncher: resolveSilverhandCliLauncher(),
       logger,
       logDir: join(silverhandDir(), 'logs'),
     });
@@ -500,9 +486,9 @@ app.on('before-quit', event => {
   // we preventDefault and re-quit ourselves: the handler's returned
   // Promise is NOT awaited by the quit sequence, so without this guard
   // the main process exits while `backend.close()` is still running and
-  // every spawned agent / chat-bridge child is left orphaned. We saw
-  // this in practice — claude/codex/chat-bridge processes survived an
-  // app close, then the next launch spawned duplicates and codex's
+  // every spawned agent child is left orphaned. We saw this in practice —
+  // claude/codex processes survived an app close, then the next launch
+  // spawned duplicates and codex's
   // resume failed with `thread not found` because the orphan still
   // owned the thread server-side.
   if (isShuttingDown) return;

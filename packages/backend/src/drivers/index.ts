@@ -1,12 +1,8 @@
-import type {
-  McpConfigFile,
-  McpServerConfig,
-  ParsedEvent,
-} from '@silverhand/shared';
+import type { ParsedEvent } from '@silverhand/shared';
 import type { RuntimeKind } from '@silverhand/shared';
 import type { SessionContextInput } from './platform-prompt.js';
 
-export type { ParsedEvent, McpConfigFile, McpServerConfig };
+export type { ParsedEvent };
 export type { SessionContextInput };
 
 /**
@@ -42,14 +38,6 @@ export interface DriverSpawnContext {
    *  CLI flag for it (claude) point at this; drivers that don't (codex,
    *  cursor) read the file's contents into their own protocol payload. */
   systemPromptPath: string;
-  /** Path to a temp `mcp.json` already populated with the chat-bridge
-   *  server. Useful only for drivers that take `--mcp-config <path>`
-   *  (claude). Codex/cursor wire MCP differently and ignore this. */
-  mcpConfigPath: string;
-  /** Underlying chat-bridge launcher. Drivers that wire MCP outside of
-   *  the temp `mcp.json` (codex via `-c mcp_servers.chat.command=...`,
-   *  cursor by writing `<workspace>/.cursor/mcp.json`) consume this. */
-  chatBridge: McpServerConfig;
   /** Inbox content drained synchronously *before* spawn. Used by
    *  `oneShot` drivers (cursor) which can't accept stdin notifications
    *  and must receive their kickoff message via argv. Streaming drivers
@@ -88,7 +76,7 @@ export interface Driver {
    */
   readonly kickoffMode: 'self_inits' | 'requires_first_message';
   /**
-   * How busy-time deliveries from chat-bridge to this driver are routed:
+   * How busy-time deliveries to this driver are routed:
    *  - `gated`:  push only at safe boundaries (Claude — no outstanding
    *              tool_uses + non-compacting state)
    *  - `direct`: push immediately, runtime is forgiving (Codex steers
@@ -105,10 +93,6 @@ export interface Driver {
   /** True if the runtime supports a long-lived "standing" system prompt
    *  across turns (Claude does; some don't). Informational. */
   readonly supportsNativeStandingPrompt: boolean;
-  /** What prefix the runtime exposes our chat-bridge MCP tools under,
-   *  e.g. `mcp__chat__` for Claude Code. Used by `buildSystemPrompt` to
-   *  reference tool names in the prompt. */
-  readonly mcpToolPrefix: string;
   /** Pre-protocol silence window. Raw stdout/stderr bytes reset this. */
   readonly initLivenessSilenceMs: number;
   /** Absolute cap before the first complete protocol frame is observed. */
