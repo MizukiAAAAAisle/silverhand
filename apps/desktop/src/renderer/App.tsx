@@ -1112,6 +1112,9 @@ export function App(): JSX.Element {
           conversations={channels.map(s => ({
             id: s.id,
             title: s.title,
+            kind: s.kind,
+            parent_channel_id:
+              s.kind === 'thread' ? s.parent_conversation_id : null,
             closed_at: s.closed_at,
             created_at: s.created_at,
           }))}

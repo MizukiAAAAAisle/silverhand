@@ -7,7 +7,17 @@ import {
   useState,
   type RefObject,
 } from 'react';
-import { Check, X } from 'lucide-react';
+import {
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  Circle,
+  CircleDashed,
+  CircleEllipsis,
+  X,
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
 import { useTasks, useUpdateTaskStatus } from '@/features/tasks/hooks';
@@ -29,6 +39,9 @@ export interface WorkspaceTasksDrawerProps {
   conversations: Array<{
     id: string;
     title: string;
+    kind: 'channel' | 'dm_channel' | 'thread';
+    /** Parent channel id if this is a thread; null for top-level channels. */
+    parent_channel_id: string | null;
     closed_at: number | null;
     created_at: number;
   }>;
@@ -44,8 +57,21 @@ export interface WorkspaceTasksDrawerProps {
 
 const STORAGE_KEY = 'silverhand.layout.tasks-drawer-width';
 const MIN_WIDTH = 340;
-const MAX_WIDTH = 900;
-const DEFAULT_WIDTH = 520;
+// Cap the drawer at 80% of the viewport. The state always holds the
+// user's preferred width (from drag or persisted storage); the visual
+// cap is enforced by an inline `maxWidth: '80vw'` on the shell so a
+// shrunk window doesn't get to mutate that preference, and `getMaxWidth`
+// is only consulted while a drag is in flight.
+const getMaxWidth = (): number =>
+  Math.max(MIN_WIDTH, Math.floor(window.innerWidth * 0.8));
+// First-launch default — 50% of the viewport, clamped to the
+// [MIN_WIDTH, getMaxWidth()] band. Overridden by any persisted user
+// width.
+const getDefaultWidth = (): number =>
+  Math.max(
+    MIN_WIDTH,
+    Math.min(getMaxWidth(), Math.floor(window.innerWidth * 0.5)),
+  );
 
 // ── Drawer width hook ────────────────────────────────────────────────
 
@@ -54,11 +80,18 @@ function useDrawerWidth(shellRef: RefObject<HTMLDivElement | null>) {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       const n = raw !== null ? Number(raw) : NaN;
-      if (Number.isFinite(n) && n >= MIN_WIDTH && n <= MAX_WIDTH) return n;
+      // Keep the persisted preference as-is; the CSS `maxWidth: '80vw'`
+      // cap on the shell handles any over-cap value visually without
+      // mutating the user's saved width. Same reason as the missing
+      // resize listener below.
+      if (Number.isFinite(n) && n >= MIN_WIDTH) return n;
     } catch {
       // private mode — fall through
     }
-    return DEFAULT_WIDTH;
+    // No persisted width — fall back to the 50%-viewport default. Both
+    // sides of the band (MIN_WIDTH / getMaxWidth) are already enforced
+    // inside getDefaultWidth.
+    return getDefaultWidth();
   });
 
   const widthRef = useRef(width);
@@ -82,6 +115,12 @@ function useDrawerWidth(shellRef: RefObject<HTMLDivElement | null>) {
       if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
     };
   }, []);
+
+  // No resize listener on purpose: when the viewport shrinks below the
+  // user's preferred width we want to *visually* cap to 80vw (handled
+  // by the inline `maxWidth: '80vw'` on the shell) without overwriting
+  // the persisted preference. Re-clamping state here would make a
+  // temporary shrink permanently downsize the user's saved width.
 
   const scheduleWidth = useCallback((next: number): void => {
     widthRef.current = next;
@@ -114,7 +153,10 @@ function useDrawerWidth(shellRef: RefObject<HTMLDivElement | null>) {
       const onMove = (ev: PointerEvent): void => {
         // Left-edge handle: drag left = wider (negate dx).
         const dx = ev.clientX - originX;
-        const next = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, originWidth - dx));
+        const next = Math.max(
+          MIN_WIDTH,
+          Math.min(getMaxWidth(), originWidth - dx),
+        );
         scheduleWidth(next);
       };
       const onUp = (): void => {
@@ -156,12 +198,24 @@ export function WorkspaceTasksDrawer({
   const drawerShellRef = useRef<HTMLDivElement>(null);
   const { width: drawerWidth, startResize } = useDrawerWidth(drawerShellRef);
 
-  const [conversationFilter, setConversationFilter] = useState<string | null>(
-    defaultConversationId,
+  // Filter is a discriminated union so we can distinguish:
+  //  - `null`            → all tasks in the workspace
+  //  - `{ channel, id }` → all tasks under that channel (incl. its threads)
+  //  - `{ thread, id }`  → only tasks in that one thread
+  // The previous shape (`conversation_id` only) treated "channel" as
+  // strictly that conversation row, which excluded thread tasks even
+  // when the dropdown said "All". That made the All option look broken
+  // — see #214.
+  const [conversationFilter, setConversationFilter] = useState<TaskFilterValue>(
+    defaultConversationId ? { kind: 'channel', id: defaultConversationId } : null,
   );
   // Re-sync to the active conversation every time the drawer opens.
   useEffect(() => {
-    if (open) setConversationFilter(defaultConversationId);
+    if (open) {
+      setConversationFilter(
+        defaultConversationId ? { kind: 'channel', id: defaultConversationId } : null,
+      );
+    }
   }, [open, defaultConversationId]);
 
   const closeDrawer = useCallback(
@@ -183,17 +237,29 @@ export function WorkspaceTasksDrawer({
     return () => document.removeEventListener('keydown', handler);
   }, [open, closeDrawer]);
 
-  const { data: tasks = [], isLoading } = useTasks(
-    conversationFilter
-      ? { workspace_id: workspaceId, conversation_id: conversationFilter }
-      : { workspace_id: workspaceId },
+  // Always fetch the workspace-wide list, then narrow client-side.
+  // Channel-mode filtering needs `task.channel_id === id`, which spans
+  // the channel row + all its thread rows; the API's single
+  // `conversation_id` filter can't express that, so we drop the
+  // server-side filter entirely and let the renderer slice. Workspace
+  // task counts here are small enough that the extra payload is fine.
+  const { data: allTasks = [], isLoading } = useTasks(
+    { workspace_id: workspaceId },
     { workspaceScopeIds },
+  );
+  const tasks = useMemo(
+    () => filterTasks(allTasks, conversationFilter),
+    [allTasks, conversationFilter],
   );
   const updateStatus = useUpdateTaskStatus();
 
-  // All conversations sorted newest-first — no cap so every conversation is reachable.
-  const stripConversations = useMemo(
-    () => [...conversations].sort((a, b) => b.created_at - a.created_at),
+  // Channels with their threads grouped underneath. Threads attach to
+  // their parent via `parent_channel_id`; orphaned threads (parent
+  // missing for any reason) are surfaced as their own chip so the user
+  // can still filter to them. Top-level channels are sorted newest-first;
+  // threads inside each channel mirror that ordering.
+  const channelGroups = useMemo<ChannelGroup[]>(
+    () => buildChannelGroups(conversations),
     [conversations],
   );
 
@@ -240,7 +306,7 @@ export function WorkspaceTasksDrawer({
           open && 'no-drag',
           open ? 'pointer-events-auto' : 'pointer-events-none',
         )}
-        style={{ width: drawerWidth }}
+        style={{ width: drawerWidth, maxWidth: '80vw' }}
       >
         {/* Inner panel — slides in/out; all visual chrome lives here */}
         <div
@@ -287,18 +353,22 @@ export function WorkspaceTasksDrawer({
           <div className="shrink-0 border-b border-border-subtle px-4 py-2">
             <ConversationStrip
               value={conversationFilter}
-              conversations={stripConversations}
+              groups={channelGroups}
               onChange={setConversationFilter}
             />
           </div>
 
-          {/* Kanban board */}
-          <div className="grid min-h-0 flex-1 grid-cols-4 items-start gap-3 overflow-y-auto p-4">
+          {/* Kanban board — flex row of columns. Each column hugs its
+              own content height (items-start) but caps at `max-h-full`,
+              so a sparse column doesn't claim 100% of the page. */}
+          <div className="flex min-h-0 flex-1 items-start gap-3 overflow-hidden p-4">
             {COLUMNS.map(col => (
               <KanbanColumn
                 key={col.status}
                 title={col.label}
                 status={col.status}
+                icon={col.icon}
+                iconClass={col.iconClass}
                 tasks={grouped[col.status]}
                 isLoading={isLoading}
                 onCardClick={handleCardClick}
@@ -314,11 +384,35 @@ export function WorkspaceTasksDrawer({
   );
 }
 
-const COLUMNS: ReadonlyArray<{ status: TaskStatus; label: string }> = [
-  { status: 'todo', label: 'Todo' },
-  { status: 'in_progress', label: 'In progress' },
-  { status: 'in_review', label: 'In review' },
-  { status: 'done', label: 'Done' },
+interface ColumnSpec {
+  status: TaskStatus;
+  label: string;
+  icon: LucideIcon;
+  /** Color token for the icon — kept in sync with TasksSection so both
+   *  surfaces share one status vocabulary. */
+  iconClass: string;
+}
+
+const COLUMNS: ReadonlyArray<ColumnSpec> = [
+  { status: 'todo', label: 'Todo', icon: Circle, iconClass: 'text-text-muted' },
+  {
+    status: 'in_progress',
+    label: 'In progress',
+    icon: CircleDashed,
+    iconClass: 'text-accent',
+  },
+  {
+    status: 'in_review',
+    label: 'In review',
+    icon: CircleEllipsis,
+    iconClass: 'text-warning',
+  },
+  {
+    status: 'done',
+    label: 'Done',
+    icon: CheckCircle2,
+    iconClass: 'text-success',
+  },
 ];
 
 function groupByStatus(
@@ -336,32 +430,266 @@ function groupByStatus(
 
 // ── Conversation strip ───────────────────────────────────────────────
 
+/**
+ * Drawer-local filter shape. Distinguishes "all tasks under this
+ * channel including its threads" from "tasks in exactly this thread";
+ * see the dispatch comment on `setConversationFilter` for why the API
+ * `conversation_id` parameter alone can't express the channel form.
+ */
+export type TaskFilterValue =
+  | { kind: 'channel'; id: string }
+  | { kind: 'thread'; id: string }
+  | null;
+
+function filterTasks(
+  tasks: TaskSummaryDto[],
+  filter: TaskFilterValue,
+): TaskSummaryDto[] {
+  if (filter === null) return tasks;
+  if (filter.kind === 'channel') {
+    // Tasks created in a thread carry the parent channel's id in
+    // `channel_id` (and the thread id in `thread_id`), so this single
+    // predicate captures both channel-direct and thread tasks.
+    return tasks.filter(t => t.channel_id === filter.id);
+  }
+  return tasks.filter(t => t.thread_id === filter.id);
+}
+
+interface StripConversation {
+  id: string;
+  title: string;
+  closed_at: number | null;
+  created_at: number;
+}
+
+interface ChannelGroup {
+  channel: StripConversation;
+  threads: StripConversation[];
+}
+
+/**
+ * Build a channels-with-threads tree from the flat conversation list.
+ * Threads collapse under their parent so the strip reads as one chip
+ * per channel (with a thread dropdown when relevant), matching how the
+ * sidebar already organizes the same data.
+ */
+function buildChannelGroups(
+  conversations: WorkspaceTasksDrawerProps['conversations'],
+): ChannelGroup[] {
+  const channels = conversations.filter(c => c.kind !== 'thread');
+  const threads = conversations.filter(c => c.kind === 'thread');
+  const byParent = new Map<string, StripConversation[]>();
+  for (const t of threads) {
+    if (!t.parent_channel_id) continue;
+    const arr = byParent.get(t.parent_channel_id) ?? [];
+    arr.push({
+      id: t.id,
+      title: t.title,
+      closed_at: t.closed_at,
+      created_at: t.created_at,
+    });
+    byParent.set(t.parent_channel_id, arr);
+  }
+  // Sort threads inside each channel newest-first to match the channel
+  // ordering.
+  for (const arr of byParent.values()) {
+    arr.sort((a, b) => b.created_at - a.created_at);
+  }
+  const channelGroups: ChannelGroup[] = channels
+    .map(c => ({
+      channel: {
+        id: c.id,
+        title: c.title,
+        closed_at: c.closed_at,
+        created_at: c.created_at,
+      },
+      threads: byParent.get(c.id) ?? [],
+    }))
+    .sort((a, b) => b.channel.created_at - a.channel.created_at);
+
+  // Orphaned threads — parent missing from the list. Render as their
+  // own chips after the channel groups so the user can still filter to
+  // them. This is defensive; the data should normally always include
+  // the parent.
+  const orphanThreads: ChannelGroup[] = [];
+  const knownChannelIds = new Set(channels.map(c => c.id));
+  for (const t of threads) {
+    if (t.parent_channel_id && knownChannelIds.has(t.parent_channel_id)) continue;
+    orphanThreads.push({
+      channel: {
+        id: t.id,
+        title: t.title,
+        closed_at: t.closed_at,
+        created_at: t.created_at,
+      },
+      threads: [],
+    });
+  }
+  orphanThreads.sort((a, b) => b.channel.created_at - a.channel.created_at);
+
+  return [...channelGroups, ...orphanThreads];
+}
+
 function ConversationStrip({
   value,
-  conversations,
+  groups,
   onChange,
 }: {
-  value: string | null;
-  conversations: Array<{ id: string; title: string; closed_at: number | null }>;
-  onChange: (id: string | null) => void;
+  value: TaskFilterValue;
+  groups: ChannelGroup[];
+  onChange: (next: TaskFilterValue) => void;
 }): JSX.Element {
   return (
     <div className="flex flex-wrap items-center gap-1">
       <ConversationChip selected={value === null} onClick={() => onChange(null)}>
         All
       </ConversationChip>
-      {conversations.map(c => (
-        <ConversationChip
-          key={c.id}
-          selected={value === c.id}
-          dim={c.closed_at !== null}
-          onClick={() => onChange(c.id)}
-          title={c.title}
-        >
-          {c.title}
-        </ConversationChip>
+      {groups.map(group => (
+        <ChannelChip
+          key={group.channel.id}
+          group={group}
+          value={value}
+          onChange={onChange}
+        />
       ))}
     </div>
+  );
+}
+
+/**
+ * One chip per channel. When the channel has threads, a small caret
+ * splits the chip into a button + dropdown trigger. Selecting "All"
+ * filters by the channel scope (channel + its threads); selecting a
+ * thread narrows to that thread alone. The chip body shows
+ * `Channel › Thread` while a thread is active so the breadcrumb stays
+ * visible.
+ */
+function ChannelChip({
+  group,
+  value,
+  onChange,
+}: {
+  group: ChannelGroup;
+  value: TaskFilterValue;
+  onChange: (next: TaskFilterValue) => void;
+}): JSX.Element {
+  const { channel, threads } = group;
+  const isChannelSelected =
+    value !== null && value.kind === 'channel' && value.id === channel.id;
+  const activeThread =
+    value !== null && value.kind === 'thread'
+      ? threads.find(t => t.id === value.id) ?? null
+      : null;
+  const isBranchSelected = isChannelSelected || activeThread !== null;
+  const dim = channel.closed_at !== null;
+  const hasThreads = threads.length > 0;
+
+  if (!hasThreads) {
+    return (
+      <ConversationChip
+        selected={isChannelSelected}
+        dim={dim}
+        onClick={() => onChange({ kind: 'channel', id: channel.id })}
+        title={channel.title}
+      >
+        {channel.title}
+      </ConversationChip>
+    );
+  }
+
+  // Split-button form: chip body + caret. Same border/typography as the
+  // plain ConversationChip so the strip stays visually uniform; the
+  // internal divider is a 1px subtle line that matches whichever side
+  // is currently active.
+  const baseSelected =
+    'border-accent bg-accent text-text-on-accent hover:bg-accent';
+  const baseIdle =
+    'border-border-subtle bg-bg-primary text-text-secondary hover:border-accent hover:text-text-primary';
+  const groupBaseClass = cn(
+    'inline-flex items-stretch overflow-hidden rounded-full border text-[11px] transition-colors',
+    isBranchSelected ? baseSelected : baseIdle,
+    dim && !isBranchSelected && 'opacity-60',
+  );
+  const dividerClass = isBranchSelected
+    ? 'border-text-on-accent/40'
+    : 'border-border-subtle';
+
+  const labelText = activeThread
+    ? `${channel.title} › ${activeThread.title}`
+    : channel.title;
+
+  return (
+    <span className={groupBaseClass} title={labelText}>
+      <button
+        type="button"
+        onClick={() => onChange({ kind: 'channel', id: channel.id })}
+        className="max-w-[200px] truncate px-2.5 py-0.5 outline-none"
+      >
+        {labelText}
+      </button>
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger asChild>
+          <button
+            type="button"
+            aria-label="Filter by thread"
+            className={cn(
+              'flex items-center justify-center border-l px-1.5 outline-none transition-colors',
+              dividerClass,
+              // Lighten the trigger half a touch so the user sees the
+              // split affordance even on the selected (filled) variant.
+              isBranchSelected
+                ? 'hover:bg-accent/80'
+                : 'hover:bg-bg-hover hover:text-text-primary',
+            )}
+          >
+            <ChevronDown className="size-3" />
+          </button>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content
+            align="start"
+            sideOffset={4}
+            className="z-[80] min-w-[200px] rounded-md border border-border bg-bg-floating p-1 text-xs text-text-primary shadow-lg outline-none"
+          >
+            <DropdownMenu.Item
+              onSelect={() => onChange({ kind: 'channel', id: channel.id })}
+              className={cn(
+                'flex cursor-pointer select-none items-center justify-between gap-2 rounded-sm px-2 py-1.5 outline-none transition-colors',
+                'data-[highlighted]:bg-bg-hover data-[highlighted]:text-text-primary',
+              )}
+            >
+              <span className="truncate">All</span>
+              {isChannelSelected ? (
+                <Check className="size-3 shrink-0 text-accent" />
+              ) : null}
+            </DropdownMenu.Item>
+            <DropdownMenu.Separator className="my-1 h-px bg-border-subtle/60" />
+            {threads.map(t => {
+              const selected = activeThread?.id === t.id;
+              const tDim = t.closed_at !== null;
+              return (
+                <DropdownMenu.Item
+                  key={t.id}
+                  onSelect={() => onChange({ kind: 'thread', id: t.id })}
+                  className={cn(
+                    'flex cursor-pointer select-none items-center justify-between gap-2 rounded-sm px-2 py-1.5 outline-none transition-colors',
+                    'data-[highlighted]:bg-bg-hover data-[highlighted]:text-text-primary',
+                    tDim && 'opacity-60',
+                  )}
+                >
+                  <span className="truncate" title={t.title}>
+                    {t.title}
+                  </span>
+                  {selected ? (
+                    <Check className="size-3 shrink-0 text-accent" />
+                  ) : null}
+                </DropdownMenu.Item>
+              );
+            })}
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+    </span>
   );
 }
 
@@ -401,6 +729,8 @@ function ConversationChip({
 function KanbanColumn({
   title,
   status,
+  icon: Icon,
+  iconClass,
   tasks,
   isLoading,
   onCardClick,
@@ -408,6 +738,8 @@ function KanbanColumn({
 }: {
   title: string;
   status: TaskStatus;
+  icon: LucideIcon;
+  iconClass: string;
   tasks: TaskSummaryDto[];
   isLoading: boolean;
   onCardClick: (t: TaskSummaryDto) => void;
@@ -416,11 +748,14 @@ function KanbanColumn({
   return (
     <section
       className={cn(
-        'flex flex-col rounded-md border border-border-subtle bg-bg-base',
+        // Mirrors TasksSection — column hugs content height with a
+        // `max-h-full` cap; body scrolls inside when content overflows.
+        'flex min-h-0 max-h-full flex-1 flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-base',
         status === 'done' && 'opacity-80',
       )}
     >
       <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-3 py-2">
+        <Icon className={cn('size-3.5 shrink-0', iconClass)} aria-hidden />
         <span className="text-[11px] font-medium uppercase tracking-wider text-text-secondary">
           {title}
         </span>
@@ -428,7 +763,7 @@ function KanbanColumn({
           {tasks.length}
         </span>
       </header>
-      <div className="p-2">
+      <div className="min-h-0 flex-auto overflow-y-auto p-2">
         {isLoading ? (
           <p className="px-2 py-3 text-center text-[11px] text-text-muted">
             加载中…

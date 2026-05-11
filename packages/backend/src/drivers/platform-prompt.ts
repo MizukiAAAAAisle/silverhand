@@ -236,6 +236,7 @@ workspace must respect. Read at startup.
 
 ## Conversation etiquette
 
+- **Respect ongoing conversations.** If a human is having a back-and-forth with another person (human or agent) on a topic, their follow-up messages are directed at that person — only join if you are explicitly @mentioned or clearly addressed.
 - Messages you receive carry a \`from\` field (human / agent / system).
   Address replies appropriately. Never reply to your own agent message — that's an echo loop.
 - Do not acknowledge, summarize, or restate another agent's work just

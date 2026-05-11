@@ -1,5 +1,13 @@
 import { useMemo, useState } from 'react';
-import { Check, CheckSquare } from 'lucide-react';
+import {
+  Check,
+  CheckCircle2,
+  CheckSquare,
+  Circle,
+  CircleDashed,
+  CircleEllipsis,
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
 import { useWorkspaces } from '@/features/workspaces/hooks';
@@ -115,12 +123,18 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
         onChange={setChannelFilter}
       />
 
-      <div className="grid min-h-0 flex-1 grid-cols-4 items-start gap-3 overflow-y-auto p-4">
+      {/* Switched from grid to flex so columns size to their content
+        * (height = content) while staying capped at the available height
+        * via `max-h-full`. `items-start` keeps short columns hugging the
+        * top instead of stretching to the tallest column. */}
+      <div className="flex min-h-0 flex-1 items-start gap-3 overflow-hidden p-4">
         {COLUMNS.map(col => (
           <KanbanColumn
             key={col.status}
             title={col.label}
             status={col.status}
+            icon={col.icon}
+            iconClass={col.iconClass}
             tasks={grouped[col.status]}
             onCardClick={t =>
               onJump({
@@ -142,11 +156,35 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
 
 // ── helpers ────────────────────────────────────────────────────────
 
-const COLUMNS: ReadonlyArray<{ status: TaskStatus; label: string }> = [
-  { status: 'todo', label: 'Todo' },
-  { status: 'in_progress', label: 'In progress' },
-  { status: 'in_review', label: 'In review' },
-  { status: 'done', label: 'Done' },
+interface ColumnSpec {
+  status: TaskStatus;
+  label: string;
+  icon: LucideIcon;
+  /** Color token for the icon — mirrors TaskStatusBadge so the column
+   *  header and the inline badge read as the same vocabulary. */
+  iconClass: string;
+}
+
+const COLUMNS: ReadonlyArray<ColumnSpec> = [
+  { status: 'todo', label: 'Todo', icon: Circle, iconClass: 'text-text-muted' },
+  {
+    status: 'in_progress',
+    label: 'In progress',
+    icon: CircleDashed,
+    iconClass: 'text-accent',
+  },
+  {
+    status: 'in_review',
+    label: 'In review',
+    icon: CircleEllipsis,
+    iconClass: 'text-warning',
+  },
+  {
+    status: 'done',
+    label: 'Done',
+    icon: CheckCircle2,
+    iconClass: 'text-success',
+  },
 ];
 
 function groupByStatus(
@@ -294,12 +332,16 @@ function Chip({
 function KanbanColumn({
   title,
   status,
+  icon: Icon,
+  iconClass,
   tasks,
   onCardClick,
   onStatusChange,
 }: {
   title: string;
   status: TaskStatus;
+  icon: LucideIcon;
+  iconClass: string;
   tasks: TaskSummaryDto[];
   onCardClick: (t: TaskSummaryDto) => void;
   onStatusChange: (messageId: string, next: TaskStatus) => void;
@@ -307,11 +349,17 @@ function KanbanColumn({
   return (
     <section
       className={cn(
-        'flex flex-col rounded-md border border-border-subtle bg-bg-primary',
+        // Each column hugs its own content height (cross-axis auto via
+        // `items-start` on the row), but caps at the parent height with
+        // `max-h-full`. When content overflows that cap, the body
+        // (`flex-auto + overflow-y-auto`) handles scrolling so the page
+        // itself never scrolls.
+        'flex min-h-0 max-h-full flex-1 flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-primary',
         status === 'done' && 'opacity-80',
       )}
     >
       <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-3 py-2">
+        <Icon className={cn('size-3.5 shrink-0', iconClass)} aria-hidden />
         <span className="text-[11px] font-medium uppercase tracking-wider text-text-secondary">
           {title}
         </span>
@@ -319,7 +367,7 @@ function KanbanColumn({
           {tasks.length}
         </span>
       </header>
-      <div className="p-2">
+      <div className="min-h-0 flex-auto overflow-y-auto p-2">
         {tasks.length === 0 ? (
           <p className="px-2 py-3 text-center text-[11px] italic text-text-muted">
             No {title.toLowerCase()} tasks
