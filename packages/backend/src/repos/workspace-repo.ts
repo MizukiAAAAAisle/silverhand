@@ -93,6 +93,8 @@ export class WorkspaceRepo {
         `${WORKSPACE_SELECT}
          WHERE w.workspace_kind IN ('regular', 'agent_home')
          ORDER BY CASE w.workspace_kind WHEN 'regular' THEN 0 ELSE 1 END,
+                  (w.pinned_at IS NOT NULL) DESC,
+                  w.pinned_at ASC,
                   w.updated_at DESC`,
       )
       .all();
@@ -291,6 +293,18 @@ export class WorkspaceRepo {
          WHERE id = ? AND workspace_kind = 'regular'`,
       )
       .run(archived ? now : null, now, id);
+    return this.get(id);
+  }
+
+  setPinned(id: string, pinned: boolean): WorkspaceDto | null {
+    const now = Date.now();
+    this.db
+      .prepare(
+        `UPDATE workspaces
+         SET pinned_at = ?, updated_at = ?
+         WHERE id = ? AND workspace_kind = 'regular'`,
+      )
+      .run(pinned ? now : null, now, id);
     return this.get(id);
   }
 

@@ -55,6 +55,25 @@ describe('WorkspaceRepo', () => {
     expect(workspaces.isMember(workspace.id, b.id)).toBe(true);
   });
 
+  it('pins regular workspaces and lists pinned rows first', () => {
+    const { localHostId, workspace, workspaces } = bootstrapWorkspaceAndAgents();
+    const second = workspaces.insert({
+      name: 'infra',
+      description: null,
+      workspacePath: workspaces.workspacePathFor('infra'),
+      workspaceHostId: localHostId,
+    });
+
+    expect(workspaces.get(workspace.id)?.pinned_at).toBeNull();
+    expect(workspaces.setPinned(workspace.id, true)?.pinned_at).not.toBeNull();
+    expect(workspaces.list().map(w => w.id).slice(0, 2)).toEqual([
+      workspace.id,
+      second.id,
+    ]);
+
+    expect(workspaces.setPinned(workspace.id, false)?.pinned_at).toBeNull();
+  });
+
   it('models agent_home ownership separately from regular workspace membership', () => {
     const { db, localHostId, workspace, a, workspaces } =
       bootstrapWorkspaceAndAgents();

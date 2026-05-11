@@ -1384,9 +1384,11 @@ export class ConversationManager {
       .map(a => ({ name: a.name, runtime: a.runtime }));
 
     let parentSessionTitle: string | null = null;
+    let parentChannelConversationId: string | null = null;
     if (conversation.parent_conversation_id) {
       const parent = this.conversations.get(conversation.parent_conversation_id);
       parentSessionTitle = parent?.title ?? null;
+      parentChannelConversationId = parent?.id ?? conversation.parent_conversation_id;
     }
 
     const profile = activeAgentProfileDir(conversation, workspace, agent.id);
@@ -1397,12 +1399,14 @@ export class ConversationManager {
     const isThread = conversation.kind === 'thread';
 
     const sessionContext: SessionContextInput = {
+      conversationId: conversation.id,
       channelName: conversation.kind === 'dm_channel' ? conversation.title : workspace.name,
       channelKind: conversation.kind === 'dm_channel' ? 'dm' : 'regular',
       sessionTitle: conversation.title,
       otherMembers: others,
       isChildSession: isThread,
       parentSessionTitle,
+      parentChannelConversationId,
       isAgentSpawnedChild: conversation.spawned_by_agent_id !== null,
     };
 

@@ -1,11 +1,12 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell, type MenuItemConstructorOptions } from 'electron';
 import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
-import { startBackend, createFileLogger, type RunningBackend, type FileLogger } from '@silverhand/backend';
+import { startBackend, createCategorizedLoggers, type CategorizedLoggers, type RunningBackend, type FileLogger } from '@silverhand/backend';
 import { loadOrCreateServerConfig, databasePath, silverhandDir, writeServerConfig } from './config.js';
 
 let backend: RunningBackend | null = null;
 let logger: FileLogger | null = null;
+let loggers: CategorizedLoggers | null = null;
 let mainWindow: BrowserWindow | null = null;
 let eventsWindow: BrowserWindow | null = null;
 let activeConversation: ActiveConversationInfo = { workspaceId: null, conversationId: null };
@@ -145,13 +146,22 @@ async function bootstrap(): Promise<void> {
   try {
     const pathResult = patchPathFromLoginShell();
     const config = await loadOrCreateServerConfig();
-    logger = createFileLogger({
+    loggers = createCategorizedLoggers({
       dir: join(silverhandDir(), 'logs'),
       alsoConsole: !app.isPackaged,
       base: { app: 'silverhand-desktop' },
     });
+    // Historical `logger` is just an alias for the system sink so we
+    // don't double-create a `backend-<utc>.log` file.
+    logger = loggers.system as FileLogger;
     logger.info(
-      { logFile: logger.filePath, path: process.env.PATH, pathPatch: pathResult },
+      {
+        logFile: logger.filePath,
+        agentLogFile: loggers.agent.filePath,
+        cliLogFile: loggers.cli.filePath,
+        path: process.env.PATH,
+        pathPatch: pathResult,
+      },
       'logger initialized',
     );
     if (devRemoteDebugging.enabled) {
@@ -170,6 +180,7 @@ async function bootstrap(): Promise<void> {
       serverConfig: config,
       silverhandCliLauncher: resolveSilverhandCliLauncher(),
       logger,
+      loggers: loggers ?? undefined,
       logDir: join(silverhandDir(), 'logs'),
     });
     await writeServerConfig(backend.context.serverConfig);
@@ -472,7 +483,17 @@ async function shutdown(): Promise<void> {
     console.error('[main] backend.close() failed:', err);
   }
   try {
-    if (logger) {
+    // `logger` is just an alias for `loggers.system`; close it via the
+    // categorized triple to avoid double-close.
+    if (loggers) {
+      await Promise.allSettled([
+        loggers.system.close(),
+        loggers.agent.close(),
+        loggers.cli.close(),
+      ]);
+      loggers = null;
+      logger = null;
+    } else if (logger) {
       await logger.close();
       logger = null;
     }

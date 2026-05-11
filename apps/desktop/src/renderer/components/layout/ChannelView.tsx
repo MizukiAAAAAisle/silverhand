@@ -791,8 +791,17 @@ function MessageList({
     if (messages.length === 0) return; // wait for load
     const target = document.getElementById(`msg-${jumpToMessageId}`);
     if (!target) {
-      // Message might have been deleted; clear the target so we don't
-      // loop forever.
+      // The target may live in an older page. Keep paging backward
+      // before giving up; Saved and Tasks can point well outside the
+      // latest message window.
+      if (hasMoreBefore) {
+        if (!isFetchingEarlier) {
+          onLoadEarlier();
+        }
+        return;
+      }
+      // Message might have been deleted; clear the target once there is
+      // no older history left to search.
       onJumped?.();
       return;
     }
@@ -808,7 +817,14 @@ function MessageList({
       onJumped?.();
     }, 1600);
     return () => clearTimeout(t);
-  }, [jumpToMessageId, messages, onJumped]);
+  }, [
+    hasMoreBefore,
+    isFetchingEarlier,
+    jumpToMessageId,
+    messages,
+    onLoadEarlier,
+    onJumped,
+  ]);
 
   return (
     <div className="relative min-h-0 min-w-0 flex-1">

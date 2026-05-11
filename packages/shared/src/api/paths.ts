@@ -29,6 +29,7 @@ export const apiPaths = {
   // workspaces / conversations (new workspace -> channel -> thread model)
   workspaces: '/api/workspaces',
   workspace: (id: string) => `/api/workspaces/${id}`,
+  workspacePin: (id: string) => `/api/workspaces/${id}/pin`,
   workspaceMembers: (id: string) => `/api/workspaces/${id}/members`,
   workspaceMember: (id: string, agentId: string) =>
     `/api/workspaces/${id}/members/${agentId}`,
@@ -163,5 +164,13 @@ export const internalPaths = {
    *  either a local path (zero-copy) or a download URL. */
   agentLocateAttachment: (cid: string, aid: string, attachmentId: string) =>
     `/internal/conversations/${cid}/agents/${aid}/attachments/${attachmentId}/locate`,
+
+  /** Observability-only: CLI fire-and-forget upload of a pre-flight
+   *  failure (parse / strict-flag / unknown-noun) that never reached
+   *  any other internal route. Logged as `cli.preflight_failure` and
+   *  excluded from the `cli.invoke` success-rate stats. Best-effort:
+   *  CLI does not retry and does not surface failures from this call. */
+  agentCliTrace: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/cli-trace`,
 
 } as const;

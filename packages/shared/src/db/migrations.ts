@@ -1296,4 +1296,18 @@ export const migrations: Migration[] = [
         ON schedules(owner_agent_id, status);
     `,
   },
+  {
+    version: 19,
+    name: 'workspace_pin',
+    // Per-workspace pin: pinned regular workspaces float above unpinned
+    // regular workspaces in the sidebar. NULL means unpinned; non-NULL
+    // is the pin timestamp and gives stable ordering across multiple
+    // pinned workspaces.
+    up: `
+      ALTER TABLE workspaces ADD COLUMN pinned_at INTEGER;
+      CREATE INDEX idx_workspaces_pinned_at
+        ON workspaces(workspace_kind, pinned_at)
+        WHERE pinned_at IS NOT NULL;
+    `,
+  },
 ];

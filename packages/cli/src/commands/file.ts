@@ -23,6 +23,7 @@ Flags:
                    falls back to file extension when omitted.
 
 stdout: AttachmentDto JSON.`,
+  flags: ['path', 'filename', 'content-type'] as const,
   async run({ client, args }) {
     const path = flagString(args, 'path');
     if (!path) {
@@ -55,6 +56,7 @@ stdout: AttachmentLocateDto JSON. Either:
   { storage: "local", local_path, filename, content_type }
 or:
   { storage: "s3" | "oss", download_url, filename, content_type }`,
+  flags: ['attachment-id'] as const,
   async run({ client, args }) {
     const attachmentId = flagString(args, 'attachment-id');
     if (!attachmentId) {

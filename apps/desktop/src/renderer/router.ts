@@ -2,6 +2,10 @@ import { useCallback } from 'react';
 import { useLocation, useMatch, useNavigate } from 'react-router-dom';
 import type { AppSection } from '@/components/layout/NavRail';
 
+interface ThreadRouteOptions {
+  fullscreen?: boolean;
+}
+
 /**
  * Single source of truth for our URL scheme. Keep all path templates
  * here so callers don't sprinkle string concatenation across the
@@ -19,8 +23,15 @@ export const routes = {
   chatWorkspace: (workspaceId: string) => `/chat/w/${workspaceId}`,
   chatChannel: (workspaceId: string, channelId: string) =>
     `/chat/w/${workspaceId}/c/${channelId}`,
-  chatThread: (workspaceId: string, channelId: string, threadId: string) =>
-    `/chat/w/${workspaceId}/c/${channelId}/t/${threadId}`,
+  chatThread: (
+    workspaceId: string,
+    channelId: string,
+    threadId: string,
+    options: ThreadRouteOptions = {},
+  ) => {
+    const path = `/chat/w/${workspaceId}/c/${channelId}/t/${threadId}`;
+    return options.fullscreen ? `${path}?fullscreen=1` : path;
+  },
   members: () => '/members',
   membersAgent: (agentId: string) => `/members/${agentId}`,
   computers: () => '/computers',
@@ -56,11 +67,12 @@ export interface RouteState {
   workspaceId: string | null;
   channelId: string | null;
   threadId: string | null;
+  threadFullscreen: boolean;
   agentId: string | null;
 }
 
 export function useRouteState(): RouteState {
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   // useMatch is order-independent — we evaluate the longest patterns
   // first and use the deepest non-null result so /chat/w/x/c/y/t/z
   // doesn't get masked by /chat/w/x.
@@ -77,6 +89,8 @@ export function useRouteState(): RouteState {
   const channelId =
     mThread?.params.channelId ?? mChannel?.params.channelId ?? null;
   const threadId = mThread?.params.threadId ?? null;
+  const searchParams = new URLSearchParams(search);
+  const threadFullscreen = !!threadId && searchParams.get('fullscreen') === '1';
 
   let section: AppSection = 'chat';
   if (pathname.startsWith('/members')) section = 'members';
@@ -98,6 +112,7 @@ export function useRouteState(): RouteState {
     workspaceId,
     channelId,
     threadId,
+    threadFullscreen,
     agentId: mAgent?.params.agentId ?? null,
   };
 }
@@ -115,7 +130,12 @@ export function useNav(): {
   toChatArchived: () => void;
   toWorkspace: (workspaceId: string) => void;
   toChannel: (workspaceId: string, channelId: string) => void;
-  toThread: (workspaceId: string, channelId: string, threadId: string) => void;
+  toThread: (
+    workspaceId: string,
+    channelId: string,
+    threadId: string,
+    opts?: ThreadRouteOptions & { replace?: boolean },
+  ) => void;
   toMembers: (agentId?: string) => void;
   toComputers: () => void;
   toTasks: () => void;
@@ -139,7 +159,8 @@ export function useNav(): {
       [go],
     ),
     toThread: useCallback(
-      (wid: string, cid: string, tid: string) => go(routes.chatThread(wid, cid, tid)),
+      (wid: string, cid: string, tid: string, opts = {}) =>
+        go(routes.chatThread(wid, cid, tid, opts), { replace: opts.replace }),
       [go],
     ),
     toMembers: useCallback(

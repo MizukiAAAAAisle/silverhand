@@ -8,6 +8,7 @@ interface SidebarProps {
   workspaces: WorkspaceItem[];
   selectedWorkspaceId: string | null;
   onSelectWorkspace: (id: string) => void;
+  onPinWorkspace: (workspaceId: string, pinned: boolean) => void;
   onCreateWorkspace: () => void;
   /** When true, the Saved view is the active main view — channel rows
    *  appear unselected and the Saved entry highlights instead. */
@@ -126,6 +127,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           workspaces={regular}
           selectedWorkspaceId={workspaceHighlight}
           onSelectWorkspace={props.onSelectWorkspace}
+          onPinWorkspace={props.onPinWorkspace}
           onAdd={props.onCreateWorkspace}
           emptyHint={
             <>

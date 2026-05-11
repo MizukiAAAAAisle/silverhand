@@ -27,6 +27,7 @@ export type WorkspaceListItem = {
   workspace_host_id: string;
   dm_agent_id: string | null;
   dm_channel_ids: string[];
+  pinned_at: number | null;
   archived_at: number | null;
   created_at: number;
   updated_at: number;
@@ -55,6 +56,7 @@ function workspaceToListItem(workspace: WorkspaceDto): WorkspaceListItem {
     dm_agent_id: workspace.owner_agent_id,
     dm_channel_ids:
       workspace.dm_channel_ids ?? (workspace.dm_channel_id ? [workspace.dm_channel_id] : []),
+    pinned_at: workspace.pinned_at,
     archived_at: workspace.archived_at,
     created_at: workspace.created_at,
     updated_at: workspace.updated_at,
@@ -151,6 +153,22 @@ export function useArchiveWorkspace() {
           method: 'PATCH',
           body: JSON.stringify({ archived: vars.archived }),
         },
+      );
+      return workspaceToListItem(res.workspace);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: workspacesKey });
+    },
+  });
+}
+
+export function usePinWorkspace() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, pinned }: { id: string; pinned: boolean }) => {
+      const res = await api<{ workspace: WorkspaceDto }>(
+        apiPaths.workspacePin(id),
+        { method: pinned ? 'POST' : 'DELETE' },
       );
       return workspaceToListItem(res.workspace);
     },

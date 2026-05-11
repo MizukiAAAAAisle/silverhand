@@ -101,7 +101,7 @@ function AgentActivityRow({
   );
   const compactionText = state.compactionStale
     ? 'Compaction is taking unusually long'
-    : 'Compacting context…';
+    : 'Compacting…';
   const CompactionIcon = state.compactionStale ? AlertTriangle : Layers;
   const canJump = anchorMessageId !== null;
 

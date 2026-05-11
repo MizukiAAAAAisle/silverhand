@@ -25,6 +25,7 @@ Flags:
   --initial-prompt     Required. First message posted into the new channel.
 
 stdout: { "channel_id": "<id>" }`,
+  flags: ['title', 'context-summary', 'initial-prompt'] as const,
   async run({ client, args }) {
     const title = flagString(args, 'title');
     const contextSummary = flagString(args, 'context-summary');
@@ -57,6 +58,7 @@ Flags:
   --workspace-id   Optional. From \`silverhand workspace list\`.
 
 stdout: AgentListChannelsDto JSON.`,
+  flags: ['workspace-id'] as const,
   async run({ client, args }) {
     const workspaceId = flagString(args, 'workspace-id');
     return client.listChannels({

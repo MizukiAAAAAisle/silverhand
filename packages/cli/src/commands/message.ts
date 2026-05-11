@@ -31,6 +31,7 @@ Flags:
                         the current channel.
 
 stdout: { "message_id": "<id>" }`,
+  flags: ['content', 'target', 'attachment'] as const,
   async run({ client, args }) {
     const content = flagString(args, 'content');
     if (!content) {
@@ -77,6 +78,7 @@ Flags:
   --limit N             Max messages. Default 50, max 100.
 
 stdout: full AgentReadHistoryDto JSON.`,
+  flags: ['before-seq', 'after-seq', 'around', 'target', 'limit'] as const,
   booleanFlags: ['include-content', 'include-system'],
   async run({ client, args }) {
     const before = flagNumber(args, 'before-seq');
@@ -130,6 +132,7 @@ Flags:
   --limit N            Max hits. Default 50, max 100.
 
 stdout: AgentSearchMessagesDto JSON.`,
+  flags: ['q', 'scope', 'workspace-id', 'channel-id', 'limit'] as const,
   booleanFlags: ['include-system'],
   async run({ client, args }) {
     const q = flagString(args, 'q');

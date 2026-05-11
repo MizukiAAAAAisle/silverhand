@@ -62,3 +62,15 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): CliEnv {
     authToken: authToken!,
   };
 }
+
+/** Like `loadEnv` but returns `null` instead of throwing when env is
+ *  incomplete. Used by best-effort observability paths
+ *  (`cli-trace.ts`) that must never escalate a missing-env condition
+ *  into a visible failure. */
+export function tryLoadEnv(env: NodeJS.ProcessEnv = process.env): CliEnv | null {
+  try {
+    return loadEnv(env);
+  } catch {
+    return null;
+  }
+}

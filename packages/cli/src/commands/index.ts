@@ -31,8 +31,16 @@ export interface Command {
   /** Multi-line usage block, including flag descriptions. Printed by
    *  `silverhand <noun> <verb> --help`. */
   help: string;
-  /** Boolean flag names used by this command, so the parser doesn't
-   *  consume the next token as a value. */
+  /** Value-bearing flag names this command accepts (e.g. `--task-number`,
+   *  `--status`). The dispatcher rejects any flag not listed here or in
+   *  `booleanFlags` with a `validation_error` so silent typos never
+   *  silently widen the request. Including `--help` is unnecessary —
+   *  the dispatcher handles it before it reaches `parseArgs`. */
+  flags?: readonly string[];
+  /** Boolean flag names used by this command. Listed here so:
+   *  (1) the parser doesn't consume the next token as a value;
+   *  (2) the dispatcher can include them in the known-flag set used
+   *      by strict validation. */
   booleanFlags?: readonly string[];
   /** Run the command. Return value (or null) is written to stdout
    *  as a JSON line. Throw `CliError` (or anything else — fromUnknown

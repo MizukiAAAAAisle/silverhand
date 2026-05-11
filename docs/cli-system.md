@@ -53,7 +53,7 @@ All commands default to machine-readable JSON on stdout. Use
 | `silverhand message send` | Send a visible message to the current channel/thread, parent, or direct child thread. |
 | `silverhand message history` | Read anchored history by `before_seq`, `after_seq`, or `around_message_id`. |
 | `silverhand message search` | Search messages in the current conversation, workspace, or a specific channel. |
-| `silverhand task list` | View the workspace task board. |
+| `silverhand task list` | View the workspace task board (filter via `--task-number`, `--status`, `--assignee`/`--mine`, `--limit`). |
 | `silverhand task create` | Create tasks in the current channel/thread. |
 | `silverhand task claim` | Claim tasks by task number or promote-and-claim messages. |
 | `silverhand task unclaim` | Release a task claim. |
@@ -102,6 +102,19 @@ a structured error body. Normal route errors should return structured
 `{ error: { code, message } }` bodies so the CLI can preserve the stable code
 and user-facing message.
 
+### Strict flag validation
+
+Every command declares the flags it accepts (`flags` for value-bearing,
+`booleanFlags` for switches in `packages/cli/src/commands/`). The dispatcher
+rejects any flag the command did NOT declare with `validation_error`,
+including a did-you-mean suggestion when the typo is within Levenshtein
+distance 2 of a known flag. The intent is to fail loudly on agent-typed
+typos like `--task-numbers 191` (typo for `--task-number`) rather than
+silently dropping them and returning the unfiltered result.
+
+When you add a flag to a command, declare it in the command's `flags`
+or `booleanFlags` list — otherwise the dispatcher will reject it.
+
 ## 5. Security
 
 The CLI reads bearer auth from `SILVERHAND_AUTH_TOKEN`. The backend verifies
@@ -139,7 +152,56 @@ per-spawn `bin/silverhand` shim that forwards to that launcher, so agents
 always call the same command name. No separate Node or Bun runtime is
 shipped.
 
-## 7. Maintenance Checklist
+## 7. Observability
+
+The backend writes three categorized JSONL logs under
+`~/.silverhand/logs/`, one file per backend boot:
+
+| File | Sink | Contents |
+|---|---|---|
+| `backend-<utc>.log` | `loggers.system` | HTTP server lifecycle, scheduler, ws, auth, DB. |
+| `agent-<utc>.log` | `loggers.agent` | ConversationManager spawn / drain / exit / compaction. |
+| `cli-<utc>.log` | `loggers.cli` | Every `silverhand` CLI invocation + CLI-side pre-flight failures. |
+
+`cli-<utc>.log` carries two distinct categories:
+
+- `cli.invoke` — one line per call against any
+  `/internal/conversations/:cid/agents/:aid/...` route. Emitted by the
+  Hono middleware in
+  `packages/backend/src/observability/cli-invoke-middleware.ts`. Fields:
+  `{ts, level, category, request_id, cid, aid, noun, verb, method, route_suffix, query_keys, http_status, duration_ms, status, error_code?}`.
+  `route_suffix` is the *matched route pattern* — never the raw URL
+  path — so wildcard segments like `attachments/<id>/locate` collapse
+  to `attachments/*/locate` and ids never leak. The `query_keys` array
+  is the *sorted set of query-string keys* — values are never recorded.
+- `cli.preflight_failure` — one line per CLI invocation that errors
+  out before reaching any business route (`unknown noun`, strict-flag
+  rejection, etc.). Reported by the CLI itself via
+  `POST /internal/conversations/:cid/agents/:aid/cli-trace` and logged
+  by the trace handler. Best-effort: 50ms timeout, no retry, never
+  affects the CLI's exit code or stderr. Excluded from
+  `cli.invoke` aggregations.
+
+Privacy contract:
+
+- No request bodies are logged (message content, attachment bytes,
+  task titles, etc.).
+- No flag values are logged — only flag names (`flags_seen`) and
+  query-string keys (`query_keys`).
+- The bearer token is never logged.
+
+Adding a new internal route requires two parallel updates:
+
+1. Add the route to `internalPaths` in `packages/shared/src/api/paths.ts`.
+2. Add the matching `(method, suffix, noun, verb)` entry to
+   `CLI_INVOKE_ROUTES` in
+   `packages/backend/src/observability/cli-route-map.ts`.
+
+The drift-guard test in
+`packages/backend/tests/observability/cli-route-map.test.ts` will
+fail loudly if either side is forgotten.
+
+## 8. Maintenance Checklist
 
 When changing agent-facing behavior, update these together:
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { COMMAND_GROUPS } from '@silverhand/cli';
 import { buildPlatformPrompt } from '../../src/drivers/platform-prompt.js';
 
 function prompt(): string {
@@ -9,6 +10,7 @@ function prompt(): string {
     activeProfileDir: './.silverhand/agents/agent-1',
     roleSystemPrompt: '_role_',
     sessionContext: {
+      conversationId: 'conv-channel-1',
       channelName: 'silverhand',
       channelKind: 'regular',
       sessionTitle: 'member activity',
@@ -31,6 +33,34 @@ describe('buildPlatformPrompt', () => {
     const text = prompt();
     expect(text).toContain('from_kind=system');
     expect(text).toContain("Don't reply unless the message explicitly");
+  });
+
+  it('renders conversation ids in the context block', () => {
+    const regular = prompt();
+    expect(regular).toContain('Conversation id: `conv-channel-1`');
+    expect(regular).not.toContain('Parent channel conversation id');
+
+    const thread = buildPlatformPrompt({
+      agentId: 'agent-1',
+      agentName: 'Cindy',
+      runtime: 'claude',
+      activeProfileDir: './.silverhand/agents/agent-1',
+      roleSystemPrompt: '_role_',
+      sessionContext: {
+        conversationId: 'thread-1',
+        channelName: 'silverhand',
+        channelKind: 'regular',
+        sessionTitle: 'Thread: topic',
+        otherMembers: [],
+        isChildSession: true,
+        parentSessionTitle: 'member activity',
+        parentChannelConversationId: 'channel-1',
+        isAgentSpawnedChild: false,
+      },
+    });
+
+    expect(thread).toContain('Conversation id: `thread-1`');
+    expect(thread).toContain('Parent channel conversation id: `channel-1`');
   });
 
   it('avoids generic platform wording in the rendered agent manual', () => {
@@ -87,6 +117,7 @@ describe('buildPlatformPrompt', () => {
       activeProfileDir: '.',
       roleSystemPrompt: '_role_',
       sessionContext: {
+        conversationId: 'dm-conv-1',
         channelName: 'Onboarding',
         channelKind: 'dm',
         sessionTitle: 'Onboarding',
@@ -107,6 +138,7 @@ describe('buildPlatformPrompt', () => {
       activeProfileDir: './.silverhand//agents///agent-1/',
       roleSystemPrompt: '_role_',
       sessionContext: {
+        conversationId: 'conv-channel-1',
         channelName: 'silverhand',
         channelKind: 'regular',
         sessionTitle: 'member activity',
@@ -122,6 +154,9 @@ describe('buildPlatformPrompt', () => {
 
   it('requires task state updates before reporting completion', () => {
     const text = prompt();
+    expect(text).toContain('claim the task first');
+    expect(text).toContain('silverhand task claim --message-id <message_id>');
+    expect(text).toContain('claim it before doing that work');
     expect(text).toContain('Close the loop on tasks you own');
     expect(text).toContain('call `silverhand task status` first');
     expect(text).toContain('leaving the task state unchanged');
@@ -134,9 +169,7 @@ describe('buildPlatformPrompt', () => {
     expect(text).toContain('`silverhand schedule list`');
     expect(text).toContain('`silverhand schedule cancel`');
     expect(text).toContain('future time');
-    expect(text).toContain('exactly one of `fire_at` or `delay_seconds`');
     expect(text).toContain('strict 5-field UNIX syntax');
-    expect(text).toContain('IANA timezone');
     expect(text).toContain("metadata.subtype = 'schedule_fire'");
     expect(text).toMatch(/report via\s+`silverhand message send`/);
   });
@@ -149,6 +182,7 @@ describe('buildPlatformPrompt', () => {
       activeProfileDir: './.silverhand/agents/agent-1',
       roleSystemPrompt: '_role_',
       sessionContext: {
+        conversationId: 'conv-channel-1',
         channelName: 'silverhand',
         channelKind: 'regular',
         sessionTitle: 'member activity',
@@ -167,7 +201,7 @@ describe('buildPlatformPrompt', () => {
     expect(text).toContain('stable `code` and `retriable` flag');
     expect(text).toContain('exit code 1 as a user/input');
     expect(text).toContain('2 as a temporary error');
-    expect(text).toContain('3 as an auth failure');
+    expect(text).toContain('3 as a failure');
     expect(text).toContain('silverhand <noun> <verb> --help');
     expect(text).toContain('**`silverhand message send`**: Send a message');
     expect(text).toContain(
@@ -182,6 +216,8 @@ describe('buildPlatformPrompt', () => {
     expect(text).not.toContain('mcp_chat_send_message');
     expect(text).not.toContain('mcp__chat__');
     expect(text).not.toContain('All cross-agent interaction is through MCP tools');
+    expect(text).not.toContain('SILVERHAND_');
+    expect(text).not.toContain('auth failure');
   });
 
   it('uses Thread/channel terminology and gates agent-created top-level channels', () => {
@@ -204,12 +240,14 @@ describe('buildPlatformPrompt', () => {
       activeProfileDir: './.silverhand/agents/agent-1',
       roleSystemPrompt: '_role_',
       sessionContext: {
+        conversationId: 'thread-1',
         channelName: 'silverhand',
         channelKind: 'regular',
         sessionTitle: 'Thread: topic',
         otherMembers: [],
         isChildSession: true,
         parentSessionTitle: 'member activity',
+        parentChannelConversationId: 'channel-1',
         isAgentSpawnedChild: false,
       },
     });
@@ -235,16 +273,105 @@ describe('buildPlatformPrompt', () => {
       activeProfileDir: './.silverhand/agents/agent-1',
       roleSystemPrompt: '_role_',
       sessionContext: {
+        conversationId: 'thread-1',
         channelName: 'silverhand',
         channelKind: 'regular',
         sessionTitle: 'debug branch',
         otherMembers: [],
         isChildSession: true,
         parentSessionTitle: 'member activity',
+        parentChannelConversationId: 'channel-1',
         isAgentSpawnedChild: true,
       },
     });
 
     expect(text).toContain('report the final result via `silverhand thread close`');
+  });
+
+  // ── Drift guard ───────────────────────────────────────────────────────
+  //
+  // The platform prompt teaches agents to invoke the `silverhand` CLI by
+  // exact flag name. If a flag in the prompt does not exist in any real
+  // CLI command's `--help`, agents will hit a validation_error or
+  // mis-route on first call. Rather than enumerate flags by hand, derive
+  // the truth from `packages/cli`'s `COMMAND_GROUPS` and assert prompt
+  // flags ⊆ CLI flags.
+  //
+  // Non-flag mentions (decision rules, anti-patterns, semantic guidance)
+  // are still verified by the per-section `it()` blocks above. The
+  // guard here only blocks pure flag-name drift, which is the failure
+  // mode that surfaced in the May 2026 review.
+
+  /** Extract every `--xxx` token from a string. Word-bounded so we
+   *  don't pick up `--<placeholder>` markdown nor stray double dashes. */
+  function extractFlags(s: string): Set<string> {
+    const out = new Set<string>();
+    const re = /--[a-z][a-z0-9-]+/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(s)) !== null) out.add(m[0]);
+    return out;
+  }
+
+  /** Build the union of every flag mentioned in any CLI command's
+   *  `help` text. The CLI source is the single source of truth.
+   *  Adds the global flags handled by the dispatcher (not per-command). */
+  function cliFlagUniverse(): Set<string> {
+    const out = new Set<string>([
+      // Global flags — handled in cli.ts before dispatch, so they don't
+      // appear in any per-command `help` block.
+      '--help',
+      '--json',
+    ]);
+    for (const group of COMMAND_GROUPS) {
+      for (const command of group.commands) {
+        for (const flag of extractFlags(command.help)) {
+          out.add(flag);
+        }
+      }
+    }
+    return out;
+  }
+
+  it('only references CLI flags that exist in some command help', () => {
+    const text = prompt();
+    const promptFlags = extractFlags(text);
+    const cliFlags = cliFlagUniverse();
+    const missing = [...promptFlags].filter(f => !cliFlags.has(f)).sort();
+    expect(missing, `prompt mentions flags not in any CLI help: ${missing.join(', ')}`)
+      .toEqual([]);
+  });
+
+  it('does not reuse JSON-body parameter names where a CLI flag exists', () => {
+    // Pre-CLI-migration the prompt referred to backend JSON shapes
+    // (`task_numbers`, `attachment_ids`, `before_seq`, …). Agents will
+    // copy whatever the prompt says and pass it as a CLI flag, hitting
+    // validation_error. These names have CLI flag equivalents now and
+    // must never reappear in the prompt.
+    const text = prompt();
+    const forbidden = [
+      'task_numbers',
+      'message_ids',
+      'attachment_ids',
+      'before_seq',
+      'after_seq',
+      'around_message_id',
+      'include_content',
+      'include_system',
+      'every_seconds',
+      'fire_at',
+      'delay_seconds',
+      'start_at',
+      'max_occurrences',
+      'until_at',
+      'allow_unbounded',
+      'context_summary',
+      'initial_prompt',
+      'posted_to_parent',
+      'schedule_id',
+    ];
+    for (const name of forbidden) {
+      expect(text, `prompt should reference CLI flag, not JSON field "${name}"`)
+        .not.toContain(name);
+    }
   });
 });

@@ -192,6 +192,7 @@ export const WorkspaceDtoSchema = z.object({
   owner_agent_id: z.string().nullable(),
   dm_channel_id: z.string().nullable(),
   dm_channel_ids: z.array(z.string()),
+  pinned_at: z.number().nullable(),
   archived_at: z.number().nullable(),
   created_at: z.number(),
   updated_at: z.number(),
@@ -665,10 +666,16 @@ export type TaskSummaryDto = z.infer<typeof TaskSummaryDtoSchema>;
 export const ListTasksQuerySchema = z.object({
   workspace_id: z.string().optional(),
   conversation_id: z.string().optional(),
-  status: z
-    .union([TaskStatusSchema, z.literal('all')])
-    .optional()
-    .default('all'),
+  /** Filter by status. Empty / omitted = no filter. Multiple values are
+   *  OR-ed (e.g. `?status=in_progress&status=in_review`). */
+  status: z.array(TaskStatusSchema).optional(),
+  /** Filter by task number. Multiple values are OR-ed
+   *  (e.g. `?task_number=190&task_number=191`). */
+  task_number: z.array(z.coerce.number().int().positive()).optional(),
+  /** Filter by assignee agent id. Single-valued. */
+  assignee_id: z.string().optional(),
+  /** Cap the number of rows returned (server-side LIMIT). */
+  limit: z.coerce.number().int().positive().max(500).optional(),
 });
 export type ListTasksQuery = z.infer<typeof ListTasksQuerySchema>;
 
@@ -1390,3 +1397,35 @@ export const ScheduleCancelOutputSchema = z.object({
   schedule: ScheduleDtoSchema,
 });
 export type ScheduleCancelOutput = z.infer<typeof ScheduleCancelOutputSchema>;
+
+// ── CLI observability ────────────────────────────────────────────────
+//
+// The CLI fires a one-shot trace at the cli-trace endpoint when it
+// fails BEFORE any business HTTP call (parse / strict-flag / unknown
+// noun). Backend logs it as `cli.preflight_failure` so we can see the
+// typo Top-N without the agent ever realizing the trace exists.
+//
+// Strict but lenient: every field is optional so a half-formed CLI
+// invocation can still be reported. The backend never echoes anything
+// back beyond `{ ok: true }`.
+
+export const CliTraceInputSchema = z
+  .object({
+    /** `silverhand <noun>...` if the noun parsed. */
+    noun: z.string().max(64).optional(),
+    /** `silverhand <noun> <verb>...` if both parsed. */
+    verb: z.string().max(64).optional(),
+    /** Names of the flags observed on the command line. NEVER values. */
+    flags_seen: z.array(z.string().max(64)).max(64).optional(),
+    /** Stable error code from the CLI, e.g. `validation_error`. */
+    error_code: z.string().max(64).optional(),
+    /** First line of the user-facing error message (truncated). */
+    error_message: z.string().max(500).optional(),
+    /** Wall time from CLI start to error throw, in milliseconds. */
+    duration_ms: z.number().nonnegative().optional(),
+  })
+  .strict();
+export type CliTraceInput = z.infer<typeof CliTraceInputSchema>;
+
+export const CliTraceOutputSchema = z.object({ ok: z.literal(true) });
+export type CliTraceOutput = z.infer<typeof CliTraceOutputSchema>;

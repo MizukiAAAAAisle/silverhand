@@ -13,6 +13,7 @@ import {
   consoleLogger,
   type BackendContext,
   type BackendLogger,
+  type BackendLoggers,
   type SilverhandCliLauncher,
 } from './context.js';
 import { AgentTokenStore } from './auth/agent-token-store.js';
@@ -47,6 +48,10 @@ export interface CreateBackendOptions {
   serverConfig: ServerConfig;
   silverhandCliLauncher: SilverhandCliLauncher;
   logger?: BackendLogger;
+  /** Categorized loggers (system + agent + cli sinks). When provided
+   *  this overrides whatever `logger` was passed; missing categories
+   *  fall back to `logger` so callers can opt in incrementally. */
+  loggers?: Partial<BackendLoggers>;
   /** Where the file logger writes. Optional. */
   logDir?: string;
 }
@@ -60,6 +65,11 @@ export interface RunningBackend {
 
 export async function startBackend(opts: CreateBackendOptions): Promise<RunningBackend> {
   const logger = opts.logger ?? consoleLogger;
+  const loggers: BackendLoggers = {
+    system: opts.loggers?.system ?? logger,
+    agent: opts.loggers?.agent ?? logger,
+    cli: opts.loggers?.cli ?? logger,
+  };
   const db = openDatabase(opts.dbPath);
   const workspacesRoot = join(opts.silverhandDir, 'workspaces');
   const blobStorage = createLocalBlobFileStorage({ silverhandDir: opts.silverhandDir });
@@ -81,6 +91,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     db,
     serverConfig: opts.serverConfig,
     logger,
+    loggers,
     silverhandDir: opts.silverhandDir,
     workspacesRoot,
     logDir: opts.logDir,
@@ -220,8 +231,14 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   });
 }
 
-export type { BackendContext, BackendLogger } from './context.js';
-export { createFileLogger, type FileLogger, type FileLoggerOptions } from './logger.js';
+export type { BackendContext, BackendLogger, BackendLoggers } from './context.js';
+export {
+  createCategorizedLoggers,
+  createFileLogger,
+  type CategorizedLoggers,
+  type FileLogger,
+  type FileLoggerOptions,
+} from './logger.js';
 
 function assertLauncherResolvable(command: string, label = 'launcher'): void {
   if (isAbsolute(command)) {

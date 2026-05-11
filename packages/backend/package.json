@@ -24,6 +24,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@silverhand/cli": "workspace:*",
     "@types/better-sqlite3": "^7.6.11",
     "@types/ws": "^8.18.1",
     "typescript": "^5.6.3",

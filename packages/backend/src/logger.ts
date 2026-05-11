@@ -9,6 +9,10 @@ export interface FileLoggerOptions {
   alsoConsole?: boolean;
   /** Static fields included on every line (e.g. process pid). */
   base?: Record<string, unknown>;
+  /** Filename prefix; the file is `<dir>/<prefix>-<utc>.log`. Defaults
+   *  to `backend` so existing callers continue writing to
+   *  `backend-<utc>.log`. */
+  filenamePrefix?: string;
 }
 
 export interface FileLogger extends BackendLogger {
@@ -21,8 +25,9 @@ export interface FileLogger extends BackendLogger {
 }
 
 /**
- * One JSONL file per backend boot under `<dir>/backend-<utc>.log`.
- * Format: one JSON object per line — `{ ts, level, msg, ...fields }`.
+ * One JSONL file per backend boot under `<dir>/<prefix>-<utc>.log`
+ * (default `prefix = backend`). Format: one JSON object per line —
+ * `{ ts, level, msg, ...fields }`.
  *
  * Level is info|warn|error. We expose a separate `debug` mirror that
  * only writes when `SILVERHAND_LOG_DEBUG=1` so high-volume parser
@@ -31,12 +36,46 @@ export interface FileLogger extends BackendLogger {
 export function createFileLogger(opts: FileLoggerOptions): FileLogger {
   mkdirSync(opts.dir, { recursive: true });
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
-  const filePath = join(opts.dir, `backend-${ts}.log`);
+  const prefix = opts.filenamePrefix ?? 'backend';
+  const filePath = join(opts.dir, `${prefix}-${ts}.log`);
   const stream = createWriteStream(filePath, { flags: 'a' });
   const alsoConsole = opts.alsoConsole ?? true;
   const base: Record<string, unknown> = { pid: process.pid, ...(opts.base ?? {}) };
 
   return makeLogger(stream, filePath, alsoConsole, base);
+}
+
+/**
+ * Categorized logger triple — three independent JSONL files under the
+ * same `<dir>` so events from different concerns can be queried
+ * separately:
+ *
+ *   - `system`: backend HTTP server lifecycle, scheduler, ws, auth, DB.
+ *     Writes `backend-<utc>.log` (historical name preserved).
+ *   - `agent`:  ConversationManager spawn / drain / exit / compaction.
+ *     Writes `agent-<utc>.log`.
+ *   - `cli`:    every `silverhand` CLI invocation (success + failure)
+ *     plus pre-flight failures reported by the CLI itself.
+ *     Writes `cli-<utc>.log`.
+ *
+ * All three share the same JSONL format and base fields. The split is
+ * by sink only — callers route events to the appropriate logger via
+ * `ctx.loggers.system|agent|cli` instead of `ctx.logger`.
+ */
+export interface CategorizedLoggers {
+  system: FileLogger;
+  agent: FileLogger;
+  cli: FileLogger;
+}
+
+export function createCategorizedLoggers(
+  opts: Omit<FileLoggerOptions, 'filenamePrefix'>,
+): CategorizedLoggers {
+  return {
+    system: createFileLogger({ ...opts, filenamePrefix: 'backend' }),
+    agent: createFileLogger({ ...opts, filenamePrefix: 'agent' }),
+    cli: createFileLogger({ ...opts, filenamePrefix: 'cli' }),
+  };
 }
 
 function makeLogger(

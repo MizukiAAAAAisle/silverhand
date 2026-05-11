@@ -86,7 +86,15 @@ export interface ListTasksFilters {
    *  physical workspace from actor.conversationId). */
   workspaceId?: string;
   conversationId?: string;
-  status?: TaskStatus | 'all';
+  /** OR-ed status filter. Empty array or undefined = no filter.
+   *  Single-element array is the legacy single-value form. */
+  status?: readonly TaskStatus[];
+  /** OR-ed task-number filter. Empty array or undefined = no filter. */
+  taskNumbers?: readonly number[];
+  /** Filter by assignee agent id. Single-valued. */
+  assigneeAgentId?: string;
+  /** Cap the number of rows returned. */
+  limit?: number;
 }
 
 export interface TaskServiceOptions {
@@ -233,12 +241,26 @@ export class TaskService {
       clauses.push('m.conversation_id = ?');
       args.push(filters.conversationId);
     }
-    if (filters.status && filters.status !== 'all') {
-      clauses.push('m.task_status = ?');
-      args.push(filters.status);
+    if (filters.status && filters.status.length > 0) {
+      const placeholders = filters.status.map(() => '?').join(',');
+      clauses.push(`m.task_status IN (${placeholders})`);
+      args.push(...filters.status);
+    }
+    if (filters.taskNumbers && filters.taskNumbers.length > 0) {
+      const placeholders = filters.taskNumbers.map(() => '?').join(',');
+      clauses.push(`m.task_number IN (${placeholders})`);
+      args.push(...filters.taskNumbers);
+    }
+    if (filters.assigneeAgentId) {
+      clauses.push('m.task_assignee_agent_id = ?');
+      args.push(filters.assigneeAgentId);
     }
 
-    const sql = `${SELECT_TASK_JOINED} WHERE ${clauses.join(' AND ')} ORDER BY m.task_number ASC`;
+    let sql = `${SELECT_TASK_JOINED} WHERE ${clauses.join(' AND ')} ORDER BY m.task_number ASC`;
+    if (filters.limit && filters.limit > 0) {
+      sql += ' LIMIT ?';
+      args.push(filters.limit);
+    }
     const rows = this.db.prepare<typeof args, TaskJoinedRow>(sql).all(...args);
     return rows.map(r => this.joinedToSummary(r));
   }

@@ -4,6 +4,7 @@
 import type { TaskStatus } from '@silverhand/shared';
 import { CliError } from '../errors.js';
 import {
+  flagBool,
   flagNumber,
   flagNumberArray,
   flagString,
@@ -11,39 +12,91 @@ import {
 } from '../parse.js';
 import type { Command } from './index.js';
 
+const VALID_STATUSES: readonly TaskStatus[] = ['todo', 'in_progress', 'in_review', 'done'];
+
 const listCommand: Command = {
   verb: 'list',
   summary: 'View the workspace task board.',
-  help: `silverhand task list [--status all|todo|in_progress|in_review|done]
+  help: `silverhand task list [--task-number N [--task-number N ...]]
+                       [--status STATUS [--status STATUS ...]]
+                       [--assignee <agent_id>] [--mine]
                        [--workspace-id <id>] [--conversation-id <id>]
+                       [--limit N]
 
-Returns aggregated tasks across the current workspace. You can only
-mutate tasks that belong to your current channel/thread; others are
-returned read-only.
+Returns aggregated tasks across the current workspace, with server-side
+filtering. You can only mutate tasks that belong to your current
+channel/thread; others are returned read-only.
+
+Without filters this returns the entire board, which can be large — pass
+--task-number / --status / --mine / --limit to narrow.
 
 Flags:
-  --status              Filter. Default "all".
-  --workspace-id        Optional filter to a specific workspace.
-  --conversation-id     Optional filter to a specific conversation.
+  --task-number N      Repeatable. Filter to specific task numbers.
+                       Last-wins is NOT used; values OR together.
+  --status STATUS      Repeatable. Filter by status. Valid:
+                       todo | in_progress | in_review | done.
+                       Multiple values OR together.
+  --assignee <id>      Filter by assignee agent id.
+  --mine               Shortcut for --assignee=<your agent id>.
+                       Resolves locally to this agent.
+  --workspace-id <id>  Optional filter to a specific workspace.
+  --conversation-id <id>  Optional filter to a specific conversation.
+  --limit N            Cap rows returned (max 500). Useful with status
+                       filters to peek the board.
 
 stdout: { "tasks": [TaskSummaryDto, ...] }`,
-  async run({ client, args }) {
-    const status = flagString(args, 'status') as TaskStatus | 'all' | undefined;
-    if (status && !['all', 'todo', 'in_progress', 'in_review', 'done'].includes(status)) {
+  flags: [
+    'task-number',
+    'status',
+    'assignee',
+    'workspace-id',
+    'conversation-id',
+    'limit',
+  ] as const,
+  booleanFlags: ['mine'] as const,
+  async run({ client, env, args }) {
+    const taskNumbers = flagNumberArray(args, 'task-number');
+    const statusValues = flagStringArray(args, 'status');
+    if (statusValues) {
+      for (const s of statusValues) {
+        if (!VALID_STATUSES.includes(s as TaskStatus)) {
+          throw new CliError({
+            code: 'validation_error',
+            message: `--status must be one of ${VALID_STATUSES.join('|')}; got ${s}`,
+            retriable: false,
+          });
+        }
+      }
+    }
+    const explicitAssignee = flagString(args, 'assignee');
+    const mine = flagBool(args, 'mine');
+    if (mine && explicitAssignee) {
       throw new CliError({
         code: 'validation_error',
-        message: `--status must be one of all|todo|in_progress|in_review|done; got ${status}`,
+        message: '--mine and --assignee are mutually exclusive',
+        retriable: false,
+      });
+    }
+    const assigneeId = mine ? env.agentId : explicitAssignee;
+    const limit = flagNumber(args, 'limit');
+    if (limit !== undefined && (limit < 1 || limit > 500)) {
+      throw new CliError({
+        code: 'validation_error',
+        message: '--limit must be between 1 and 500',
         retriable: false,
       });
     }
     return client.listTasks({
-      ...(status ? { status } : {}),
+      ...(taskNumbers ? { task_number: taskNumbers } : {}),
+      ...(statusValues ? { status: statusValues as TaskStatus[] } : {}),
+      ...(assigneeId ? { assignee_id: assigneeId } : {}),
       ...(flagString(args, 'workspace-id')
         ? { workspace_id: flagString(args, 'workspace-id') }
         : {}),
       ...(flagString(args, 'conversation-id')
         ? { conversation_id: flagString(args, 'conversation-id') }
         : {}),
+      ...(limit !== undefined ? { limit } : {}),
     });
   },
 };
@@ -62,6 +115,7 @@ If you intend to work on these immediately, follow up with
 \`silverhand task claim --task-number <n>\`.
 
 stdout: CreateTasksResult JSON.`,
+  flags: ['title', 'body'] as const,
   async run({ client, args }) {
     const titles = flagStringArray(args, 'title');
     if (!titles || titles.length === 0) {
@@ -93,6 +147,7 @@ reason. Always move on when a claim fails — do not retry.
 Claiming a "todo" task auto-advances it to "in_progress".
 
 stdout: ClaimTasksResult JSON.`,
+  flags: ['task-number', 'message-id'] as const,
   async run({ client, args }) {
     const taskNumbers = flagNumberArray(args, 'task-number');
     const messageIds = flagStringArray(args, 'message-id');
@@ -120,6 +175,7 @@ use \`silverhand task status --task-number N --status in_review\` (or
 done if explicitly approved) instead.
 
 stdout: TaskMutationResult JSON.`,
+  flags: ['task-number'] as const,
   async run({ client, args }) {
     const n = flagNumber(args, 'task-number');
     if (n === undefined) {
@@ -145,6 +201,7 @@ Allowed transitions (you must be the assignee):
   in_review   → in_progress : if you need to iterate
 
 stdout: TaskMutationResult JSON.`,
+  flags: ['task-number', 'status'] as const,
   async run({ client, args }) {
     const n = flagNumber(args, 'task-number');
     const status = flagString(args, 'status') as TaskStatus | undefined;

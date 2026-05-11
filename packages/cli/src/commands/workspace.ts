@@ -17,6 +17,7 @@ Use the returned ids with --workspace-id on \`silverhand channel list\`
 or \`silverhand message search --scope workspace\`.
 
 stdout: AgentListWorkspacesDto JSON.`,
+  flags: [] as const,
   async run({ client }) {
     return client.listWorkspaces();
   },

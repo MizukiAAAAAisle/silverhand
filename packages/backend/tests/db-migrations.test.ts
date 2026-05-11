@@ -287,4 +287,30 @@ describe('database migrations', () => {
       db.close();
     }
   });
+
+  it('v19 adds nullable workspace pin timestamps', () => {
+    const db = openDbAt(18);
+    try {
+      runMigrations(db);
+      expect(
+        db.prepare(`SELECT version FROM _migrations WHERE version = 19`).get(),
+      ).toBeDefined();
+
+      const cols = (db.pragma('table_info(workspaces)') as Array<{
+        name: string;
+        notnull: number;
+      }>).reduce<Record<string, { notnull: number }>>((acc, c) => {
+        acc[c.name] = { notnull: c.notnull };
+        return acc;
+      }, {});
+      expect(cols.pinned_at?.notnull).toBe(0);
+
+      const indexes = (db.pragma('index_list(workspaces)') as Array<{
+        name: string;
+      }>).map(r => r.name);
+      expect(indexes).toContain('idx_workspaces_pinned_at');
+    } finally {
+      db.close();
+    }
+  });
 });

@@ -12,17 +12,18 @@ export function topLevelHelp(): string {
   lines.push('');
   lines.push('Usage: silverhand <noun> <verb> [flags...]');
   lines.push('');
-  lines.push('All chat, task, schedule, history, thread, channel, workspace, and');
-  lines.push('file actions for spawned Silverhand agents. Reads SILVERHAND_*');
-  lines.push('env vars (CONVERSATION_ID / AGENT_ID / SERVER_URL / AUTH_TOKEN)');
-  lines.push('— do not pass them as flags.');
+  lines.push('All chat, task, schedule, history, thread, channel, workspace,');
+  lines.push('and file actions for spawned Silverhand agents. The CLI is already');
+  lines.push('configured for the current session; do not pass connection details');
+  lines.push('as flags.');
   lines.push('');
-  lines.push('Output: machine-readable JSON on stdout.');
+  lines.push('Output: machine-readable JSON on stdout. (--json is the default and');
+  lines.push('is accepted as a no-op on every subcommand.)');
   lines.push('Errors: one-line JSON on stderr ({ "error": { code, message,');
   lines.push('        retriable } }) plus a non-zero exit code:');
   lines.push('  1 = user/input error  (do not retry)');
   lines.push('  2 = transient         (may retry with backoff)');
-  lines.push('  3 = auth              (stop and report)');
+  lines.push('  3 = fatal             (stop and report)');
   lines.push('');
   lines.push('Nouns:');
   for (const g of COMMAND_GROUPS) {

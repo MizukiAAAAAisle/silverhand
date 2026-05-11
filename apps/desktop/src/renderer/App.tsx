@@ -29,6 +29,7 @@ import {
   useWorkspaces,
   useChannelsForWorkspace,
   useArchivedChannelsForWorkspace,
+  usePinWorkspace,
   usePinChannel,
   useArchiveChannel,
   type ChannelListItem,
@@ -53,6 +54,46 @@ export interface MessageJumpTarget {
   threadId?: string | null;
   messageId: string;
 }
+
+// Per-workspace "last viewed channel" + per-channel "last open thread"
+// memory. Persisted to localStorage so that quitting and relaunching the
+// app restores the user's place. Both maps are small (one entry per
+// workspace / channel ever visited) and entries self-heal: stale ids
+// that no longer exist in the channels query are simply ignored by the
+// restore effect.
+const LAST_CHANNEL_KEY = 'silverhand:layout.last-channel-by-workspace';
+const LAST_THREAD_KEY = 'silverhand:layout.last-thread-by-channel';
+
+function loadStringMap(key: string): Map<string, string> {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return new Map();
+    const obj = JSON.parse(raw) as Record<string, string>;
+    if (!obj || typeof obj !== 'object') return new Map();
+    return new Map(
+      Object.entries(obj).filter(
+        ([k, v]) => typeof k === 'string' && typeof v === 'string',
+      ),
+    );
+  } catch {
+    return new Map();
+  }
+}
+
+function saveStringMap(key: string, map: Map<string, string>): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(Object.fromEntries(map)));
+  } catch {
+    // Quota / disabled storage — fall back to in-memory only.
+  }
+}
+
+// Module-level singletons: app-global state, hydrated once on module
+// load, persisted on every mutation. Living outside the component
+// avoids the `useRef(loadStringMap())` re-eval-on-render footgun and
+// the `Map | null` typing dance.
+const lastChannelByWorkspace = loadStringMap(LAST_CHANNEL_KEY);
+const lastThreadByChannel = loadStringMap(LAST_THREAD_KEY);
 
 export function App(): JSX.Element {
   useAppearance();
@@ -103,6 +144,7 @@ export function App(): JSX.Element {
     workspaceId: selectedWorkspaceId,
     channelId: selectedChannelId,
     threadId: openThreadId,
+    threadFullscreen,
     agentId: selectedAgentId,
   } = route;
   const activeEventChannelId = openThreadId ?? selectedChannelId;
@@ -137,8 +179,6 @@ export function App(): JSX.Element {
   const [highlightedParentMessageId, setHighlightedParentMessageId] = useState<
     string | null
   >(null);
-  const [threadFullscreen, setThreadFullscreen] = useState(false);
-
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent): void => {
       if (!event.metaKey || event.ctrlKey || event.altKey) return;
@@ -155,16 +195,11 @@ export function App(): JSX.Element {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [toggleChannelSidebar, toggleWorkspaceSidebar]);
 
-  // Per-workspace "last viewed channel" memory. Lives in-memory only —
-  // resetting on app restart is fine; workspace switches inside one app run
-  // shouldn't lose their place.
-  const lastChannelByWorkspace = useRef<Map<string, string>>(new Map());
-  // Per-channel "last open thread" memory. Lets us preserve the
-  // split-pane layout across nav-away → nav-back (e.g. user opens a
-  // thread, jumps to /tasks, comes back: the thread should still be
-  // mounted in the right pane). Cleared whenever the user explicitly
-  // closes the thread via X / context menu.
-  const lastThreadByChannel = useRef<Map<string, string>>(new Map());
+  // Per-workspace "last viewed channel" memory and per-channel "last
+  // open thread" memory both live as module singletons above (persisted
+  // via localStorage). The recording effects below write through to
+  // storage on every mutation; the restore effect reads from them when
+  // hydrating from a workspaceId-only URL.
   const lastSelectedAgentId = useRef<string | null>(null);
   const lastSelectedMessageReadKey = useRef<string | null>(null);
   const lastThreadMessageReadKey = useRef<string | null>(null);
@@ -190,6 +225,7 @@ export function App(): JSX.Element {
     () => [...activeChannels, ...archivedChannels],
     [activeChannels, archivedChannels],
   );
+  const pinWorkspace = usePinWorkspace();
   const pinChannel = usePinChannel(selectedWorkspaceId ?? null);
   const archiveChannel = useArchiveChannel(selectedWorkspaceId ?? null);
   // Shared cache with SavedListView and useToggleSave — invalidations
@@ -273,7 +309,7 @@ export function App(): JSX.Element {
     // channel. Threads opened from a different parent are ignored
     // defensively (parent mismatch effect would close them anyway).
     const navForRestoredChannel = (channelId: string): string => {
-      const rememberedThread = lastThreadByChannel.current.get(channelId);
+      const rememberedThread = lastThreadByChannel.get(channelId);
       const thread = rememberedThread
         ? channels.find(s => s.id === rememberedThread)
         : null;
@@ -294,7 +330,7 @@ export function App(): JSX.Element {
       });
       return;
     }
-    const remembered = lastChannelByWorkspace.current.get(selectedWorkspaceId);
+    const remembered = lastChannelByWorkspace.get(selectedWorkspaceId);
     const stillExists = remembered && channels.some(s => s.id === remembered);
     if (stillExists) {
       nav.go(navForRestoredChannel(remembered), { replace: true });
@@ -311,10 +347,13 @@ export function App(): JSX.Element {
   }, [selectedWorkspaceId, selectedChannelId, channels, activeChannels, jumpTarget, nav]);
 
   // Record the user's selection so we can restore it next time they
-  // come back to this workspace.
+  // come back to this workspace. Persist on every change so quitting
+  // mid-session doesn't lose the entry.
   useEffect(() => {
     if (selectedWorkspaceId && selectedChannelId) {
-      lastChannelByWorkspace.current.set(selectedWorkspaceId, selectedChannelId);
+      if (lastChannelByWorkspace.get(selectedWorkspaceId) === selectedChannelId) return;
+      lastChannelByWorkspace.set(selectedWorkspaceId, selectedChannelId);
+      saveStringMap(LAST_CHANNEL_KEY, lastChannelByWorkspace);
     }
   }, [selectedWorkspaceId, selectedChannelId]);
 
@@ -326,7 +365,9 @@ export function App(): JSX.Element {
   // the memo every time the app section flips.
   useEffect(() => {
     if (selectedChannelId && openThreadId) {
-      lastThreadByChannel.current.set(selectedChannelId, openThreadId);
+      if (lastThreadByChannel.get(selectedChannelId) === openThreadId) return;
+      lastThreadByChannel.set(selectedChannelId, openThreadId);
+      saveStringMap(LAST_THREAD_KEY, lastThreadByChannel);
     }
   }, [selectedChannelId, openThreadId]);
 
@@ -377,12 +418,6 @@ export function App(): JSX.Element {
     if (!openThreadId) setHighlightedParentMessageId(null);
   }, [openThreadId]);
 
-  // Reset fullscreen when switching threads or closing the thread pane:
-  // fullscreen is a per-open-thread interaction state, not a sticky preference.
-  useEffect(() => {
-    setThreadFullscreen(false);
-  }, [openThreadId]);
-
   const selectedChannel = channels.find(s => s.id === selectedChannelId) ?? null;
   const selectedChannelResolvedId = selectedChannel?.id ?? null;
   const selectedChannelRouteKind =
@@ -425,9 +460,14 @@ export function App(): JSX.Element {
   // Auto-advance the message read cursor whenever the user is looking at a
   // channel. In split-view both parent (selectedChannelId) and thread
   // (openThreadId) are visible simultaneously, so both cursors must be
-  // advanced — not just the "active event" channel.
+  // advanced. In thread fullscreen, the parent pane is not open, so do
+  // not mark the parent channel read.
   useEffect(() => {
     if (!selectedChannelId) {
+      lastSelectedMessageReadKey.current = null;
+      return;
+    }
+    if (threadFullscreen && openThreadId) {
       lastSelectedMessageReadKey.current = null;
       return;
     }
@@ -441,7 +481,13 @@ export function App(): JSX.Element {
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChannelId, selectedChannelResolvedId, selectedChannelRouteKind]);
+  }, [
+    selectedChannelId,
+    selectedChannelResolvedId,
+    selectedChannelRouteKind,
+    threadFullscreen,
+    openThreadId,
+  ]);
   useEffect(() => {
     if (!openThreadId) {
       lastThreadMessageReadKey.current = null;
@@ -506,7 +552,7 @@ export function App(): JSX.Element {
       threadId?: string | null;
       messageId: string;
     },
-    options: { preserveThreadLayout?: boolean } = {},
+    options: { preserveThreadLayout?: boolean; threadFullscreen?: boolean } = {},
   ): void => {
     const targetConversationId = params.threadId ?? params.channelId;
     setJumpTarget({
@@ -527,7 +573,9 @@ export function App(): JSX.Element {
       return;
     }
     if (params.threadId) {
-      nav.toThread(wid, params.channelId, params.threadId);
+      nav.toThread(wid, params.channelId, params.threadId, {
+        fullscreen: options.threadFullscreen,
+      });
     } else {
       nav.toChannel(wid, params.channelId);
     }
@@ -581,11 +629,12 @@ export function App(): JSX.Element {
 
   const closeThread = useCallback((): void => {
     if (selectedWorkspaceId && selectedChannelId) {
-      // Explicit close clears the per-channel memo so navigating away
-      // and back doesn't re-open the just-dismissed thread. The
-      // recording effect only writes when openThreadId is truthy, so
-      // deleting here is safe.
-      lastThreadByChannel.current.delete(selectedChannelId);
+      // Explicit close clears the per-channel memo (and persists the
+      // deletion) so navigating away and back doesn't re-open the
+      // just-dismissed thread, even across an app restart.
+      if (lastThreadByChannel.delete(selectedChannelId)) {
+        saveStringMap(LAST_THREAD_KEY, lastThreadByChannel);
+      }
       nav.toChannel(selectedWorkspaceId, selectedChannelId);
     }
   }, [nav, selectedWorkspaceId, selectedChannelId]);
@@ -619,10 +668,19 @@ export function App(): JSX.Element {
     [archiveChannel, selectedWorkspaceId],
   );
 
-  const handleToggleFullscreen = useCallback(
-    () => setThreadFullscreen(v => !v),
-    [],
-  );
+  const handleToggleFullscreen = useCallback(() => {
+    if (!selectedWorkspaceId || !selectedChannelId || !openThreadId) return;
+    nav.toThread(selectedWorkspaceId, selectedChannelId, openThreadId, {
+      fullscreen: !threadFullscreen,
+      replace: true,
+    });
+  }, [
+    nav,
+    selectedWorkspaceId,
+    selectedChannelId,
+    openThreadId,
+    threadFullscreen,
+  ]);
 
   // Captured by handleJumpToOriginal below — must be stable so the thread
   // ChannelView's onJumpToOriginal prop doesn't churn each render.
@@ -868,10 +926,14 @@ export function App(): JSX.Element {
                       workspace_path: w.workspace_path,
                       dm_agent_id: w.dm_agent_id,
                       unread: messageUnreadSummary?.by_workspace?.[w.id] ?? 0,
+                      pinned_at: w.pinned_at,
                       archived: w.archived_at !== null,
                     }))}
                     selectedWorkspaceId={selectedWorkspaceId}
                     onSelectWorkspace={handleSelectWorkspace}
+                    onPinWorkspace={(workspaceId, pinned) =>
+                      pinWorkspace.mutate({ id: workspaceId, pinned })
+                    }
                     onCreateWorkspace={() => setCreateWorkspaceOpen(true)}
                     savedActive={view === 'saved'}
                     onSelectSaved={() => nav.toChatSaved()}
@@ -898,7 +960,13 @@ export function App(): JSX.Element {
               />
             ) : null}
             {view === 'saved' ? (
-              <SavedListView onJump={params => handleJumpToMessage(params)} />
+              <SavedListView
+                onJump={params =>
+                  handleJumpToMessage(params, {
+                    threadFullscreen: !!params.threadId,
+                  })
+                }
+              />
             ) : view === 'search' ? (
               <SearchPanel
                 workspaces={workspaces}

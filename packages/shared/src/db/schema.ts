@@ -96,6 +96,7 @@ export interface WorkspaceRow {
   owner_agent_id: string | null;
   dm_channel_id?: string | null;
   dm_channel_ids?: string[];
+  pinned_at: number | null;
   archived_at: number | null;
   created_at: number;
   updated_at: number;

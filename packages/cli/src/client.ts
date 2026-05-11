@@ -36,6 +36,7 @@ import {
 import { readFile } from 'node:fs/promises';
 import { basename, isAbsolute } from 'node:path';
 import { CliError, fromNetworkError, mapHttpError } from './errors.js';
+import { markRequestAttempted } from './cli-trace.js';
 import type { CliEnv } from './env.js';
 
 export class BackendClient {
@@ -53,15 +54,13 @@ export class BackendClient {
     method: 'GET' | 'POST',
     path: string,
     body?: unknown,
-    query?: Record<string, string | undefined>,
+    query?: Record<string, string | number | readonly string[] | readonly number[] | undefined>,
   ): Promise<T> {
-    const qs = query
-      ? '?' +
-        Object.entries(query)
-          .filter((entry): entry is [string, string] => entry[1] !== undefined)
-          .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-          .join('&')
-      : '';
+    // Mark BEFORE the network call so any in-flight error is treated
+    // as a backend-originated failure (already logged server-side as
+    // `cli.invoke`) and the pre-flight tracer stays silent.
+    markRequestAttempted();
+    const qs = query ? buildQueryString(query) : '';
     const url = `${this.env.serverUrl}${path}${qs}`;
     let res: Response;
     try {
@@ -167,7 +166,12 @@ export class BackendClient {
   listTasks(filters: {
     workspace_id?: string;
     conversation_id?: string;
-    status?: TaskStatus | 'all';
+    /** Multi-value: passed as repeated query keys. */
+    status?: readonly TaskStatus[];
+    /** Multi-value: passed as repeated query keys. */
+    task_number?: readonly number[];
+    assignee_id?: string;
+    limit?: number;
   }): Promise<{ tasks: TaskSummaryDto[] }> {
     return this.request(
       'GET',
@@ -177,6 +181,9 @@ export class BackendClient {
         workspace_id: filters.workspace_id,
         conversation_id: filters.conversation_id,
         status: filters.status,
+        task_number: filters.task_number,
+        assignee_id: filters.assignee_id,
+        limit: filters.limit,
       },
     );
   }
@@ -277,6 +284,7 @@ export class BackendClient {
     });
     form.append('file', blob, input.filename ?? basename(input.path));
     let res: Response;
+    markRequestAttempted();
     try {
       res = await fetch(url, {
         method: 'POST',
@@ -310,4 +318,25 @@ async function safeReadText(res: Response): Promise<string> {
   } catch {
     return '';
   }
+}
+
+/** Encode a query map to a URL string. Array values become repeated keys
+ *  (`?key=a&key=b`), the canonical multi-value form Hono's
+ *  `c.req.queries(name)` reads. Skip undefined and empty arrays. */
+function buildQueryString(
+  query: Record<string, string | number | readonly string[] | readonly number[] | undefined>,
+): string {
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(query)) {
+    if (value === undefined) continue;
+    if (Array.isArray(value)) {
+      if (value.length === 0) continue;
+      for (const v of value) {
+        parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(v))}`);
+      }
+    } else {
+      parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);
+    }
+  }
+  return parts.length === 0 ? '' : `?${parts.join('&')}`;
 }

@@ -18,6 +18,24 @@ export interface BackendLogger {
 }
 
 /**
+ * Categorized backend loggers. Each logger writes to its own JSONL
+ * file so events from different concerns can be queried separately:
+ *
+ *   - `system`: HTTP server, scheduler, ws, auth, DB.
+ *   - `agent`:  ConversationManager spawn / drain / exit / compaction.
+ *   - `cli`:    every CLI invocation + CLI-side pre-flight failures.
+ *
+ * Existing call sites keep using `ctx.logger` (the historical "system"
+ * sink) until the per-call-site sweep in PR-B routes them to the right
+ * category.
+ */
+export interface BackendLoggers {
+  system: BackendLogger;
+  agent: BackendLogger;
+  cli: BackendLogger;
+}
+
+/**
  * Host-supplied way to launch the `silverhand` CLI.
  *
  * ConversationManager creates a per-spawn `bin/silverhand` shim that forwards
@@ -34,6 +52,10 @@ export interface BackendContext {
   db: Db;
   serverConfig: ServerConfig;
   logger: BackendLogger;
+  /** Categorized sinks. Always present; defaults to `{ system, agent,
+   *  cli } = { logger, logger, logger }` when no file logger is in use
+   *  (e.g. tests). */
+  loggers: BackendLoggers;
   /** Root for all silverhand state (`~/.silverhand`). */
   silverhandDir: string;
   /** `<silverhandDir>/workspaces/` — root for auto-generated channel workspaces. */

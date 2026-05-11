@@ -126,6 +126,55 @@ describe('workspace metadata and membership routes', () => {
     expect(res.status).toBe(400);
   });
 
+  it('pins and unpins regular workspaces', async () => {
+    t = buildTestApp();
+    const first = await (
+      await http(t).post('/api/workspaces', { name: 'pin-first' })
+    ).json() as any;
+    const second = await (
+      await http(t).post('/api/workspaces', { name: 'pin-second' })
+    ).json() as any;
+
+    const pin = await http(t).post(
+      `/api/workspaces/${first.workspace.id}/pin`,
+    );
+    expect(pin.status).toBe(200);
+    const pinned = await pin.json() as any;
+    expect(pinned.workspace.pinned_at).not.toBeNull();
+
+    const listed = await (await http(t).get('/api/workspaces')).json() as any;
+    expect(listed.workspaces.map((w: any) => w.id).slice(0, 2)).toEqual([
+      first.workspace.id,
+      second.workspace.id,
+    ]);
+
+    const unpin = await http(t).del(
+      `/api/workspaces/${first.workspace.id}/pin`,
+    );
+    expect(unpin.status).toBe(200);
+    const unpinned = await unpin.json() as any;
+    expect(unpinned.workspace.pinned_at).toBeNull();
+  });
+
+  it('rejects pinning archived workspaces', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/workspaces', { name: 'archived-pin' })
+    ).json() as any;
+    const archive = await http(t).patch(
+      `/api/workspaces/${created.workspace.id}/archive`,
+      { archived: true },
+    );
+    expect(archive.status).toBe(200);
+
+    expect(
+      (await http(t).post(`/api/workspaces/${created.workspace.id}/pin`)).status,
+    ).toBe(404);
+    expect(
+      (await http(t).del(`/api/workspaces/${created.workspace.id}/pin`)).status,
+    ).toBe(404);
+  });
+
   it('adds and removes workspace members', async () => {
     t = buildTestApp();
     const workspace = await (

@@ -60,8 +60,14 @@ pnpm workspaces, all `workspace:*` linked:
 
 ## Logging and debugging
 
-- File logger writes JSONL to `~/.silverhand/logs/`:
-  - `backend-<utc>.log` — backend events (spawns, drains, errors, HTTP errors).
+- File logger writes JSONL to `~/.silverhand/logs/`, one file per
+  backend boot, three categories:
+  - `backend-<utc>.log` — system events (HTTP, scheduler, ws, auth, DB).
+  - `agent-<utc>.log` — ConversationManager spawn / drain / exit / compaction.
+  - `cli-<utc>.log` — every `silverhand` CLI invocation tagged
+    `cli.invoke` (success or failure) plus `cli.preflight_failure`
+    lines for CLI-side errors (parse / strict-flag / unknown noun)
+    that never reach a business route. See `docs/cli-system.md` §7.
 - When a channel never emits `session_init`, the most likely culprits in order: (a) stdin not primed at spawn time (verify `drainChain` ran), (b) runtime launcher not on PATH, (c) `system-prompt-file` arg malformed. Inspect `argv` of the suspect `claude` pid — silverhand-spawned ones carry `--system-prompt-file /var/folders/.../<channelId>/<agentId>/spawn-*/system-prompt.md` which uniquely distinguishes them from user-interactive `claude` invocations.
 
 ## Conventions worth knowing
@@ -71,5 +77,5 @@ pnpm workspaces, all `workspace:*` linked:
 - **No "stop" affordance in the composer.** Per IM design, message sending is one-shot; agent execution control belongs elsewhere (TBD). Don't reintroduce it.
 - **Renderer composer is IME-safe.** Enter sends, Shift+Enter newlines, but `onCompositionStart/End` + `e.nativeEvent.isComposing` must guard against firing during CJK input.
 - **Driver platform prompt** (`packages/backend/src/drivers/platform-prompt.ts`) prescribes a terse communication style: one-or-two-sentence default, no filler acknowledgments, no idle narration, no echoing of tool calls. Keep edits to it consistent with that voice.
-- **CLI system changes must update `docs/cli-system.md`.** Any change to `packages/cli`, agent-facing DTO schemas, internal agent routes, task behavior, or `platform-prompt.ts` command rules must keep the CLI system document in sync in the same change.
+- **CLI system changes must update both `docs/cli-system.md` and the platform prompt.** Any change to `packages/cli`, agent-facing DTO schemas, internal agent routes, task behavior, or `silverhand` command guidance must keep `docs/cli-system.md` and `packages/backend/src/drivers/platform-prompt.ts` in sync in the same change.
 - **Better-sqlite3** is used synchronously; backend code assumes WAL mode and single-process writes. No connection pooling.

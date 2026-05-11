@@ -8,7 +8,9 @@
  * not touch SQLite (no native deps, no ABI swap), does not serve as a
  * long-lived process, and does not coordinate with runtime drivers.
  */
+import { performance } from 'node:perf_hooks';
 import { BackendClient } from './client.js';
+import { reportPreflightFailure, wasRequestAttempted } from './cli-trace.js';
 import { findCommand, findGroup } from './commands/index.js';
 import { loadEnv } from './env.js';
 import {
@@ -20,6 +22,20 @@ import {
 import { nounHelp, topLevelHelp, verbHelp } from './help.js';
 import { writeJson } from './output.js';
 import { parseArgs } from './parse.js';
+import { assertKnownFlags } from './strict-flags.js';
+
+/**
+ * Per-process trace context populated as the dispatcher resolves
+ * noun → verb → flags. The error handler reads this so the
+ * `cli.preflight_failure` payload is as informative as possible
+ * (typo telemetry should always show what the agent actually typed).
+ */
+interface TraceContext {
+  noun?: string;
+  verb?: string;
+  flagsSeen?: string[];
+}
+const traceCtx: TraceContext = {};
 
 async function main(argv: string[]): Promise<number> {
   // Top-level help / version handling. These never need env, so they
@@ -35,6 +51,7 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const noun = argv[0]!;
+  traceCtx.noun = noun;
   const group = findGroup(noun);
   if (!group) {
     throw new CliError({
@@ -59,6 +76,7 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const verb = argv[1]!;
+  traceCtx.verb = verb;
   const cmd = findCommand(noun, verb);
   if (!cmd) {
     throw new CliError({
@@ -77,6 +95,22 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const args = parseArgs(tail, { booleanFlags: cmd.booleanFlags });
+  traceCtx.flagsSeen = Object.keys(args.flags).sort();
+
+  // Strict flag validation: reject any flag the command did not declare.
+  // We do this AFTER parseArgs so the parser still records every observed
+  // flag — that way the dispatcher can produce a meaningful "unknown flag"
+  // error including a did-you-mean suggestion. Without this step, an
+  // unknown flag like `--task-numbers 191` (typo for `--task-number`) is
+  // silently dropped and the agent thinks it filtered when it didn't.
+  // Global flags (e.g. `--json`) are accepted transparently inside
+  // `assertKnownFlags` itself.
+  assertKnownFlags(args.flags, {
+    noun,
+    verb,
+    flags: cmd.flags,
+    booleanFlags: cmd.booleanFlags,
+  });
 
   // Lazy: only load env when we're actually about to make a request.
   // Help/version never reach this line.
@@ -89,13 +123,29 @@ async function main(argv: string[]): Promise<number> {
   return 0;
 }
 
+const startedAt = performance.now();
 void main(process.argv.slice(2)).then(
   code => {
     process.exit(code);
   },
-  err => {
+  async err => {
     const cliErr = fromUnknown(err);
     writeError(cliErr, { json: true });
+    // Best-effort: tell the backend about a CLI-side failure that
+    // never reached an internal route, so `cli-*.log` shows the
+    // typo / missing-flag pattern. Suppressed when a business
+    // request was already attempted (the backend has its own
+    // `cli.invoke` line for that case).
+    if (!wasRequestAttempted()) {
+      await reportPreflightFailure({
+        noun: traceCtx.noun,
+        verb: traceCtx.verb,
+        flags_seen: traceCtx.flagsSeen,
+        error_code: cliErr.code,
+        error_message: cliErr.message.split('\n', 1)[0]?.slice(0, 500),
+        duration_ms: Math.round((performance.now() - startedAt) * 1000) / 1000,
+      });
+    }
     process.exit(exitCodeFor(cliErr.code));
   },
 );

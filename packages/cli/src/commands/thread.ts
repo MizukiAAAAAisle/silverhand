@@ -27,6 +27,7 @@ Flags:
                        the caller is always included.
 
 stdout: { "thread_id": "<id>" }`,
+  flags: ['title', 'context-summary', 'initial-prompt', 'member'] as const,
   async run({ client, args }) {
     const title = flagString(args, 'title');
     const contextSummary = flagString(args, 'context-summary');
@@ -65,6 +66,7 @@ Flags:
                         Avoids duplicate posting.
 
 stdout: { "thread": ... }`,
+  flags: ['summary'] as const,
   booleanFlags: ['posted-to-parent'],
   async run({ client, args }) {
     const summary = flagString(args, 'summary');

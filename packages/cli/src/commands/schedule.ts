@@ -43,6 +43,18 @@ Repeat-only options (rejected on once):
                            --until-at nor --max-occurrences set.
 
 stdout: { "schedule": ScheduleDto }`,
+  flags: [
+    'message',
+    'kind',
+    'fire-at',
+    'delay-seconds',
+    'every-seconds',
+    'start-at',
+    'expression',
+    'timezone',
+    'until-at',
+    'max-occurrences',
+  ] as const,
   booleanFlags: ['allow-unbounded'],
   async run({ client, args }) {
     const message = flagString(args, 'message');
@@ -137,6 +149,7 @@ Flags:
   --limit N  Default 100, max 200.
 
 stdout: ScheduleListOutput JSON.`,
+  flags: ['status', 'limit'] as const,
   async run({ client, args }) {
     const status = flagString(args, 'status') as
       | ScheduleListStatusFilter
@@ -172,6 +185,7 @@ failed) are not cancellable. Cancel races with an in-flight fire are
 accepted: the wake may still be delivered, but no further fires occur.
 
 stdout: { "schedule": ScheduleDto }`,
+  flags: ['schedule-id'] as const,
   async run({ client, args }) {
     const scheduleId = flagString(args, 'schedule-id');
     if (!scheduleId) {

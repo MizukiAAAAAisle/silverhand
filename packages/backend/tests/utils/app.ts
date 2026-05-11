@@ -156,6 +156,7 @@ export function buildTestApp(): TestApp {
     db,
     serverConfig,
     logger: silentLogger,
+    loggers: { system: silentLogger, agent: silentLogger, cli: silentLogger },
     silverhandDir: tmp.silverhandDir,
     workspacesRoot: tmp.workspacesRoot,
     blobStorage,

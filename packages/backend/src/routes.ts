@@ -26,6 +26,7 @@ import {
   MarkNotificationsReadInputSchema,
   ScheduleCancelInputSchema,
   ScheduleCreateInputSchema,
+  CliTraceInputSchema,
   ScheduleListInputSchema,
   SearchQueryInputSchema,
   SendMessageInputSchema,
@@ -55,6 +56,7 @@ import {
   type SendMessageTarget,
 } from '@silverhand/shared';
 import type { BackendContext } from './context.js';
+import { createCliInvokeMiddleware } from './observability/cli-invoke-middleware.js';
 import { AgentRepo } from './repos/agent-repo.js';
 import { AttachmentRepo } from './repos/attachment-repo.js';
 import { HostRepo } from './repos/host-repo.js';
@@ -620,6 +622,44 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     }
     const updated = workspaces.setArchived(workspace.id, parsed.data.archived);
     if (!updated) return c.json({ error: 'archive update failed' }, 500);
+    return c.json({ workspace: updated });
+  });
+
+  app.post(apiPaths.workspacePin(':id'), c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'workspace id required' }, 400);
+    const workspace = workspaces.get(id);
+    if (
+      !workspace ||
+      workspace.workspace_kind !== 'regular' ||
+      workspace.archived_at !== null
+    ) {
+      return c.json({ error: 'workspace not found' }, 404);
+    }
+    if (!canMutateWorkspace(ctx, getUserPrincipal(c), workspace.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    const updated = workspaces.setPinned(workspace.id, true);
+    if (!updated) return c.json({ error: 'workspace pin failed' }, 500);
+    return c.json({ workspace: updated });
+  });
+
+  app.delete(apiPaths.workspacePin(':id'), c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'workspace id required' }, 400);
+    const workspace = workspaces.get(id);
+    if (
+      !workspace ||
+      workspace.workspace_kind !== 'regular' ||
+      workspace.archived_at !== null
+    ) {
+      return c.json({ error: 'workspace not found' }, 404);
+    }
+    if (!canMutateWorkspace(ctx, getUserPrincipal(c), workspace.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    const updated = workspaces.setPinned(workspace.id, false);
+    if (!updated) return c.json({ error: 'workspace unpin failed' }, 500);
     return c.json({ workspace: updated });
   });
 
@@ -2011,10 +2051,15 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
 
   // ── Tasks (human-facing list + overrides) ────────────────────────
   app.get(apiPaths.tasks, c => {
+    const statusValues = (c.req.queries('status') ?? []).filter(s => s !== 'all');
+    const taskNumberValues = c.req.queries('task_number') ?? [];
     const parsed = ListTasksQuerySchema.safeParse({
       workspace_id: c.req.query('workspace_id') || undefined,
       conversation_id: c.req.query('conversation_id') || undefined,
-      status: c.req.query('status') || undefined,
+      status: statusValues.length > 0 ? statusValues : undefined,
+      task_number: taskNumberValues.length > 0 ? taskNumberValues : undefined,
+      assignee_id: c.req.query('assignee_id') || undefined,
+      limit: c.req.query('limit') || undefined,
     });
     if (!parsed.success) {
       return c.json({ error: 'invalid query', issues: parsed.error.issues }, 400);
@@ -2025,6 +2070,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
         workspaceId: parsed.data.workspace_id,
         conversationId: parsed.data.conversation_id,
         status: parsed.data.status,
+        taskNumbers: parsed.data.task_number,
+        assigneeAgentId: parsed.data.assignee_id,
+        limit: parsed.data.limit,
       }),
     });
   });
@@ -2786,6 +2834,42 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
   });
   installInternalPrincipalMiddleware(app, { agents, conversations });
 
+  // CLI invocation logging — must run after auth so we only emit lines
+  // for verified principals, but before route handlers so handler
+  // throws/short-circuits still produce one line per call.
+  app.use(
+    '/internal/conversations/:cid/agents/:aid/*',
+    createCliInvokeMiddleware(ctx),
+  );
+
+  // Observability-only: CLI fire-and-forget pre-flight failure trace.
+  // Excluded from the cli.invoke middleware (the middleware checks the
+  // suffix and skips it); logged here as `cli.preflight_failure`.
+  app.post(internalPaths.agentCliTrace(':cid', ':aid'), async c => {
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = CliTraceInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    const principal = getAgentPrincipal(c);
+    ctx.loggers.cli.info(
+      {
+        category: 'cli.preflight_failure',
+        cid: principal.conversationId,
+        aid: principal.agentId,
+        noun: parsed.data.noun ?? null,
+        verb: parsed.data.verb ?? null,
+        flags_seen: parsed.data.flags_seen ?? [],
+        error_code: parsed.data.error_code ?? null,
+        error_message: parsed.data.error_message ?? null,
+        duration_ms: parsed.data.duration_ms ?? null,
+        status: 'failure',
+      },
+      'cli.preflight_failure',
+    );
+    return c.json({ ok: true });
+  });
+
   // ── canonical conversation-scoped MCP routes ───────────────────
   app.post(internalPaths.agentSendConversationMessage(':cid', ':aid'), async c => {
     const cid = c.req.param('cid');
@@ -3112,10 +3196,18 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
     const conversation = conversations.get(cid);
     if (!conversation) return c.json({ error: 'conversation not found' }, 404);
     if (!agents.get(aid)) return c.json({ error: 'agent not found' }, 404);
+    // status / task_number are repeatable; `?status=in_progress&status=in_review`
+    // and `?task_number=190&task_number=191` are the canonical multi-value form.
+    // 'all' is a legacy alias for no-filter — drop it before validation.
+    const statusValues = (c.req.queries('status') ?? []).filter(s => s !== 'all');
+    const taskNumberValues = c.req.queries('task_number') ?? [];
     const parsed = ListTasksQuerySchema.safeParse({
       workspace_id: c.req.query('workspace_id') || undefined,
       conversation_id: c.req.query('conversation_id') || undefined,
-      status: c.req.query('status') || undefined,
+      status: statusValues.length > 0 ? statusValues : undefined,
+      task_number: taskNumberValues.length > 0 ? taskNumberValues : undefined,
+      assignee_id: c.req.query('assignee_id') || undefined,
+      limit: c.req.query('limit') || undefined,
     });
     if (!parsed.success) {
       return c.json({ error: 'invalid query', issues: parsed.error.issues }, 400);
@@ -3129,6 +3221,9 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
         actor: principal,
         conversationId: parsed.data.conversation_id,
         status: parsed.data.status,
+        taskNumbers: parsed.data.task_number,
+        assigneeAgentId: parsed.data.assignee_id,
+        limit: parsed.data.limit,
       }),
     });
   });

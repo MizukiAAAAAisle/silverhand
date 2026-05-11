@@ -405,4 +405,81 @@ describe('Tasks (PR-T1)', () => {
     const listed = (await (await http(t).get('/api/tasks')).json()) as any;
     expect(listed.tasks[0].status).toBe('done');
   });
+
+  it('agent task list filters by repeated --task-number / --status / --assignee + --limit', async () => {
+    t = buildTestApp();
+    const { sessionId, agentIds } = await setup(t);
+    const h = http(t);
+
+    // Seed 5 tasks created by alice. Claim #2 + #3 (alice in_progress),
+    // claim+in_review #4 (alice).
+    await h.post(
+      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+      {
+        tasks: [
+          { title: 't1' },
+          { title: 't2' },
+          { title: 't3' },
+          { title: 't4' },
+          { title: 't5' },
+        ],
+      },
+    );
+    await h.post(
+      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
+      { task_numbers: [2, 3, 4] },
+    );
+    await h.post(
+      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/update-status`,
+      { task_number: 4, status: 'in_review' },
+    );
+
+    const listPath = `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks`;
+
+    // Repeated task_number (the regression we are fixing).
+    const byNumbers = (await (
+      await h.get(`${listPath}?task_number=2&task_number=4`)
+    ).json()) as any;
+    expect(byNumbers.tasks.map((x: any) => x.task_number).sort()).toEqual([2, 4]);
+
+    // Repeated status: in_progress OR in_review picks #2, #3, #4.
+    const byStatuses = (await (
+      await h.get(`${listPath}?status=in_progress&status=in_review`)
+    ).json()) as any;
+    expect(byStatuses.tasks.map((x: any) => x.task_number).sort()).toEqual([
+      2,
+      3,
+      4,
+    ]);
+
+    // assignee_id narrows to alice (which is everyone we just claimed),
+    // status=todo narrows to #1, #5 (unclaimed).
+    const todos = (await (await h.get(`${listPath}?status=todo`)).json()) as any;
+    expect(todos.tasks.map((x: any) => x.task_number).sort()).toEqual([1, 5]);
+
+    const aliceClaimed = (await (
+      await h.get(`${listPath}?assignee_id=${agentIds.alice}`)
+    ).json()) as any;
+    expect(aliceClaimed.tasks.map((x: any) => x.task_number).sort()).toEqual([
+      2,
+      3,
+      4,
+    ]);
+
+    // limit caps the row count without changing the ORDER (task_number ASC).
+    const limited = (await (await h.get(`${listPath}?limit=2`)).json()) as any;
+    expect(limited.tasks.map((x: any) => x.task_number)).toEqual([1, 2]);
+
+    // Legacy single-value status query continues to work.
+    const onlyDone = (await (
+      await h.get(`${listPath}?status=in_review`)
+    ).json()) as any;
+    expect(onlyDone.tasks.map((x: any) => x.task_number)).toEqual([4]);
+
+    // Legacy 'all' alias is treated as no-filter on the route side.
+    const allViaLegacy = (await (
+      await h.get(`${listPath}?status=all`)
+    ).json()) as any;
+    expect(allViaLegacy.tasks.length).toBe(5);
+  });
 });

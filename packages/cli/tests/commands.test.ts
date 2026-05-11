@@ -59,4 +59,36 @@ describe('command catalogue', () => {
     expect(findGroup('bogus')).toBeUndefined();
     expect(findCommand('message', 'bogus')).toBeUndefined();
   });
+
+  it('every command declares its allowed flags so the dispatcher can reject typos', () => {
+    // Strict-flag validation lives in cli.ts but it consumes the
+    // `flags` + `booleanFlags` arrays declared on each command. If a
+    // command doesn't declare them, the dispatcher would silently accept
+    // any flag and re-introduce the "agent typed a typo, got the full
+    // board" footgun. Workspace.list legitimately takes nothing — it
+    // declares an empty `flags: []`.
+    for (const g of COMMAND_GROUPS) {
+      for (const c of g.commands) {
+        expect(c.flags, `${g.noun} ${c.verb} missing flags declaration`).toBeDefined();
+      }
+    }
+  });
+
+  it('command help blocks do not leak transport/credential semantics to agents', () => {
+    // The CLI is already configured for the current session by the
+    // backend. Help text the agent reads must not mention SILVERHAND_*
+    // env vars, AUTH_TOKEN, or "auth"-flavored exit-code descriptions —
+    // the prompt explicitly keeps these layers transparent.
+    const forbidden = [/SILVERHAND_/, /AUTH_TOKEN/, /\bauth failure\b/i];
+    for (const g of COMMAND_GROUPS) {
+      for (const c of g.commands) {
+        for (const re of forbidden) {
+          expect(
+            c.help,
+            `${g.noun} ${c.verb} help leaks "${re}"`,
+          ).not.toMatch(re);
+        }
+      }
+    }
+  });
 });
