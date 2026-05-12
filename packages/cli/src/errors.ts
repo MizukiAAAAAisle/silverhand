@@ -55,7 +55,8 @@ export type ErrorSubkind =
   | 'flag_removed'
   | 'unexpected_arguments'
   | 'stdin_is_tty'
-  | 'empty_stdin';
+  | 'empty_stdin'
+  | 'invalid_utf8';
 
 export interface CliErrorPayload {
   code: ErrorCode;

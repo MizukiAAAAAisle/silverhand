@@ -52,6 +52,7 @@ Pre-flight failures (exit 1):
   --content was supplied → flag_removed (use stdin instead)
   stdin is a TTY         → stdin_is_tty (no body provided)
   stdin is empty         → empty_stdin
+  stdin is not UTF-8     → invalid_utf8 (re-encode upstream)
 
 stdout: { "message_id": "<id>" }`,
   flags: ['target', 'attachment'] as const,
@@ -99,6 +100,27 @@ stdout: { "message_id": "<id>" }`,
     // does NOT strip a BOM; does NOT translate CR/LF; does NOT trim.
     // The backend / DB stores the bytes the agent wrote, period.
     const content = buffer.toString('utf8');
+
+    // Round-trip sanity. `toString('utf8')` silently substitutes any
+    // invalid byte sequence with U+FFFD (REPLACEMENT CHARACTER); if
+    // we accepted that, the DB would store a string whose bytes do
+    // NOT equal the agent's input — exactly the silent-corruption
+    // failure mode this command's stdin-only design exists to
+    // prevent. Reject explicitly so the agent re-encodes upstream.
+    // `details` is bytes-free (Cindy review): `{encoding: 'utf8'}`
+    // is enough context, raw bytes never enter stderr or cli-trace.
+    if (!Buffer.from(content, 'utf8').equals(buffer)) {
+      throw new CliError({
+        code: 'validation_error',
+        subkind: 'invalid_utf8',
+        message:
+          'message body must be valid UTF-8 ' +
+          '(stdin contained byte sequences that are not a UTF-8 string). ' +
+          'Re-encode your input as UTF-8 before piping.',
+        retriable: false,
+        details: { encoding: 'utf8' },
+      });
+    }
 
     const target = parseTarget(flagString(args, 'target'));
     const attachmentIds = flagStringArray(args, 'attachment');

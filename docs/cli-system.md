@@ -103,6 +103,7 @@ Pre-flight failures (exit 1, code `validation_error`):
 | `flag_removed` | The legacy `--content` flag was supplied. |
 | `stdin_is_tty` | `process.stdin.isTTY` is true (no body was piped in). |
 | `empty_stdin` | Stdin closed with 0 bytes. |
+| `invalid_utf8` | Stdin contained byte sequences that are not valid UTF-8. The CLI does NOT silently substitute U+FFFD — re-encode upstream and retry. |
 | `unexpected_arguments` | Any positional argument or `--`-trailing token (rejected globally; see §4.1). |
 
 ## 4. Error Contract
@@ -142,6 +143,7 @@ Current `subkind` values (CLI-side enum is the source of truth):
 - `unexpected_arguments` — any positional / `--`-trailing token.
 - `stdin_is_tty` — `silverhand message send` invoked without a piped body.
 - `empty_stdin` — `silverhand message send` invoked with 0-byte stdin.
+- `invalid_utf8` — `silverhand message send` stdin contained non-UTF-8 bytes.
 
 `subkind` and `details` are stderr-only. The fire-and-forget
 `cli-trace` reporter never carries `details` (or any raw value-bearing

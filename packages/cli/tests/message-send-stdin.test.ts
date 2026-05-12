@@ -184,6 +184,23 @@ describe('silverhand message send (stdin-only, real subprocess)', () => {
     expect(body.error.subkind).toBe('empty_stdin');
   });
 
+  it('rejects invalid UTF-8 bytes with subkind=invalid_utf8 (no silent U+FFFD substitution)', async () => {
+    // 0xff / 0xfe / 0xfd are not valid stand-alone bytes in any UTF-8
+    // sequence. `Buffer.toString('utf8')` would silently replace them
+    // with U+FFFD, breaking the "stdin bytes == DB bytes" contract.
+    // The CLI must reject explicitly so the agent re-encodes upstream.
+    const r = await runSend({ stdin: Buffer.from([0xff, 0xfe, 0xfd]) });
+    expect(r.code).toBe(1);
+    const body = parseStderrJson(r.stderr);
+    expect(body.error.code).toBe('validation_error');
+    expect(body.error.subkind).toBe('invalid_utf8');
+    expect(body.error.message).toContain('valid UTF-8');
+    // details must NOT carry raw bytes (Cindy review): a bytes-free
+    // `{encoding: 'utf8'}` is the entire payload.
+    const details = (body.error as { details?: Record<string, unknown> }).details;
+    expect(details).toEqual({ encoding: 'utf8' });
+  });
+
   // macOS-only: BSD `script -q /dev/null` provides a pty. Linux's
   // util-linux `script` has different semantics; v1 is mac-only.
   const ttySuite = process.platform === 'darwin' ? it : it.skip;
