@@ -320,9 +320,12 @@ describe('POST /internal/.../create-thread', () => {
         messageId: msgs.messages[1].id,
       },
     ]);
-    expect(t.fake.starts).toEqual([
-      { conversationId: body.thread_id, agentId: agentIds.bob },
-    ]);
+    expect(
+      t.fake.starts
+        .filter(s => s.conversationId === body.thread_id)
+        .map(s => s.agentId)
+        .sort(),
+    ).toEqual([agentIds.alice, agentIds.bob].sort());
 
     // Explicit subsets are allowed, but the caller is always included.
     const childAgents = await (

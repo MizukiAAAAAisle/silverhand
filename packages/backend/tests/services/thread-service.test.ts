@@ -316,7 +316,7 @@ describe('ThreadService.createThreadFromAgent', () => {
     }
   });
 
-  it('creates an agent thread, publishes before delivery, distributes prompt, and starts non-spawners', async () => {
+  it('creates an agent thread, publishes before delivery, distributes prompt, and starts all members including the spawner', async () => {
     const t = bootstrap();
     try {
       const order: string[] = [];
@@ -355,9 +355,16 @@ describe('ThreadService.createThreadFromAgent', () => {
           messageId: seeded[1]!.id,
         },
       ]);
-      expect(t.fake.starts).toEqual([
-        { conversationId: result.thread.id, agentId: t.bob.id },
-      ]);
+      // The spawner needs its own (thread, agent) process to receive
+      // future thread messages and the inherited-context system message
+      // (delivered to the spawner). Without this start, the spawner
+      // stays 'idle' in the thread and shows as 'away' in the UI.
+      expect(
+        t.fake.starts
+          .filter(s => s.conversationId === result.thread.id)
+          .map(s => s.agentId)
+          .sort(),
+      ).toEqual([t.alice.id, t.bob.id].sort());
     } finally {
       t.cleanup();
     }

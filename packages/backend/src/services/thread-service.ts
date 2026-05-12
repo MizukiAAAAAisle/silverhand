@@ -373,7 +373,7 @@ export class ThreadService {
           distributeToOthers: { excludeAgentId: spawnerAgentId },
         },
       ],
-      autoStart: { mode: 'all', excludeAgentId: spawnerAgentId },
+      autoStart: { mode: 'all' },
     });
     return { thread };
   }

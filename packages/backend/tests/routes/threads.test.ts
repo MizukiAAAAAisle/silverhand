@@ -112,9 +112,12 @@ describe('thread routes', () => {
         messageId: messages.messages[1].id,
       },
     ]);
-    expect(t.fake.starts).toEqual([
-      { conversationId: body.thread_id, agentId: agentIds.bob },
-    ]);
+    expect(
+      t.fake.starts
+        .filter(s => s.conversationId === body.thread_id)
+        .map(s => s.agentId)
+        .sort(),
+    ).toEqual([agentIds.alice, agentIds.bob].sort());
   });
 
   it('internal close-thread validates actor membership and posts parent summary', async () => {
