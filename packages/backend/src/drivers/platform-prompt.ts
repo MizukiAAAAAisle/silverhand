@@ -261,8 +261,8 @@ history pointers, a Thread you just opened, the location of a Saved
 message — write the conversation id as \`#~<conversation_id>\` (literal
 \`#~\` followed by the 16-character id from \`conversation_id\` /
 \`thread_id\` / \`hit.message_ref.conversation_id\`). The recipient can
-click it to open the target as a side pane **without losing their
-current view**; bare ids without \`#~\` are inert text.
+click it to open the target as a side pane **without taking them away
+from their primary pane**; bare ids without \`#~\` are inert text.
 
 Example:
 

@@ -243,9 +243,15 @@ describe('buildPlatformPrompt', () => {
     expect(text).toContain('## Referencing conversations in chat');
     expect(text).toContain('`#~<conversation_id>`');
     expect(text).toMatch(/#~qdQwBXDqcq_GE63-/);
-    // Behavioral promise: side pane, not main-view replacement.
+    // Behavioral promise: side pane, primary pane survives. Wording
+    // tightened per Cindy nit on `1a395ab` — say "primary pane" not
+    // "current view" because the user's existing side pane CAN be
+    // replaced by a new one (only one side at a time); the guarantee
+    // is specifically about the primary.
     expect(text).toMatch(/side pane/);
-    expect(text).toMatch(/without losing their\s+current view/);
+    expect(text).toMatch(/without taking them away\s+from their primary pane/);
+    // Pre-polish wording — too broad, must be gone.
+    expect(text).not.toMatch(/without losing their\s+current view/);
     // Channel-create handoff explicitly uses the sigil.
     expect(text).toContain('announcing the new channel as');
     expect(text).toContain('`#~<channel_id>`');
