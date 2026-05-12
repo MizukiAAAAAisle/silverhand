@@ -237,6 +237,26 @@ describe('buildPlatformPrompt', () => {
     expect(text).not.toContain('`mcp__chat__create_session`');
   });
 
+  it('teaches the #~<id> sigil for inline conversation references', () => {
+    const text = prompt();
+    // Section anchor + syntax statement.
+    expect(text).toContain('## Referencing conversations in chat');
+    expect(text).toContain('`#~<conversation_id>`');
+    expect(text).toMatch(/#~qdQwBXDqcq_GE63-/);
+    // Behavioral promise: side pane, not main-view replacement.
+    expect(text).toMatch(/side pane/);
+    expect(text).toContain('without losing their current view');
+    // Channel-create handoff explicitly uses the sigil.
+    expect(text).toContain('announcing the new channel as');
+    expect(text).toContain('`#~<channel_id>`');
+    // History/search wrap-up also nudges sigil use.
+    expect(text).toContain(
+      'When you cite a search hit or history pointer back in chat',
+    );
+    // Pre-PR-4 wording — must be gone so we don't tell agents to paste raw ids.
+    expect(text).not.toContain('announcing the new channel title\nand ID');
+  });
+
   it('requires visible in-thread summary before closing user-opened threads', () => {
     const text = buildPlatformPrompt({
       agentId: 'agent-1',

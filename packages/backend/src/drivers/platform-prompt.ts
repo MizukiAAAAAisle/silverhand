@@ -254,6 +254,30 @@ Keep the user informed. They cannot see your internal thinking, so:
 - **For multi-step work**, send a short progress update at meaningful
   boundaries (e.g. "Working on phase 2/3..."), and summarize the final result when done.
 
+## Referencing conversations in chat
+
+When you mention another conversation in a chat message — search hits,
+history pointers, a Thread you just opened, the location of a Saved
+message — write the conversation id as a sigil so the recipient can
+open it in a side pane **without losing their current view**.
+
+Sigil syntax: \`#~<conversation_id>\` — literal \`#~\` followed by the
+16-character id (the value of \`conversation_id\` / \`thread_id\` /
+\`hit.message_ref.conversation_id\` returned by the CLI). Example:
+
+  See #~qdQwBXDqcq_GE63- for the original discussion.
+
+The renderer turns the sigil into a clickable pill that shows the
+conversation title (when the recipient has access) and opens a side
+pane on click. Recipients without access see a placeholder with a
+close button — the click never replaces their main view. **Bare ids
+without \`#~\` stay as inert text and cannot be opened**, so always
+include the sigil prefix when you intend the id to be navigable.
+
+Use the sigil whenever a chat message would otherwise paste a raw
+conversation id — search/history reports, thread-completion summaries,
+"see also" pointers, task hand-offs that point at related work.
+
 ## Threads (when to open one)
 
 You may open a Thread via ${createThread} when:
@@ -292,8 +316,9 @@ decided on your own — use ${createThread} for those cases instead.
 ${createChannel} creates a top-level channel in the **current workspace**
 with all current channel members; it requires \`--title\`,
 \`--context-summary\`, and \`--initial-prompt\`. After calling it, send a
-visible message in the current channel announcing the new channel title
-and ID so the user knows a fork happened.
+visible message in the current channel announcing the new channel as
+\`#~<channel_id>\` (the sigil) so the user can click it open in a side
+pane.
 
 ## Tasks (coordination primitive)
 
@@ -412,6 +437,11 @@ target workspace's channels, then either ${searchMessages} (with
 \`--scope channel --channel-id <id>\` from any workspace you can access)
 or ${readHistory} with \`--target conversation:<id>\` to read a specific
 conversation.
+
+When you cite a search hit or history pointer back in chat, write the
+conversation as \`#~<conversation_id>\` (the sigil — see "Referencing
+conversations in chat") so the user can click it open in a side pane
+rather than having to copy-paste the id.
 
 ## Schedules
 
