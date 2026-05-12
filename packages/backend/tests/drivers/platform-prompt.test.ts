@@ -243,31 +243,55 @@ describe('buildPlatformPrompt', () => {
     expect(text).toContain('## Referencing conversations in chat');
     expect(text).toContain('`#~<conversation_id>`');
     expect(text).toMatch(/#~qdQwBXDqcq_GE63-/);
-    // Behavioral semantics only — the agent needs to know that the
-    // sigil is clickable for the recipient and that bare ids are not.
-    // It does NOT need to know about the renderer's UI model (pill,
-    // placeholder, side pane, primary pane). User feedback on
-    // `8f2f046`: those are interaction details that don't help the
-    // agent decide what to write.
-    expect(text).toMatch(/click it to open/);
-    expect(text).toMatch(/bare ids/);
-    expect(text).not.toMatch(/\bside pane\b/i);
-    expect(text).not.toMatch(/\bprimary pane\b/i);
+
+    // The prompt is a pure output-format contract, not a UI behavior
+    // explanation. Per @shiki + @Cindy reviews on `8f2f046` / `d4fbf1c`,
+    // the agent doesn't need to know how the recipient's UI renders
+    // the sigil — it only needs to know which token to write where.
+    // Forbid every interaction-leaning verb that snuck in earlier
+    // drafts. NOTE: use `\s+` not a literal space so line-wrapped
+    // matches like "side\npane" still trip the guard.
+    expect(text).not.toMatch(/\bside\s+pane\b/i);
+    expect(text).not.toMatch(/\bprimary\s+pane\b/i);
     expect(text).not.toContain('clickable pill');
     expect(text).not.toContain('placeholder with a');
     expect(text).not.toContain('Recipients without access');
-    // Channel-create handoff explicitly uses the sigil.
+    expect(text).not.toMatch(/can click it open/);
+    expect(text).not.toMatch(/click it to open/);
+    expect(text).not.toMatch(/without losing their\s+current view/);
+    expect(text).not.toMatch(/without taking them away\s+from their primary pane/);
+
+    // Lists every CLI field that returns a conversation-shaped id, so
+    // the agent doesn't have to guess (channel_id was missing in
+    // earlier drafts even though `silverhand channel create` returns it).
+    expect(text).toContain('`conversation_id`');
+    expect(text).toContain('`channel_id`');
+    expect(text).toContain('`thread_id`');
+    expect(text).toContain('`hit.message_ref.conversation_id`');
+
+    // Hard scope boundary: chat text only. Without this an agent will
+    // happily write `--target conversation:#~<id>` and 404.
+    expect(text).toMatch(/Do not.*use.*`#~`.*in CLI arguments/i);
+    // And the explicit "what NOT to wrap" list — message ids are the
+    // most likely confusion since they appear right next to
+    // conversation ids in CLI output.
+    expect(text).toMatch(/do not wrap message ids/i);
+
+    // Application points across the rest of the prompt.
     expect(text).toContain('announcing the new channel as');
     expect(text).toContain('`#~<channel_id>`');
-    // History/search wrap-up also nudges sigil use.
     expect(text).toContain(
       'When you cite a search hit or history pointer back in chat',
     );
-    // Pre-PR-4 wording — must be gone so we don't tell agents to paste raw ids.
+    expect(text).toContain('`#~<hit.message_ref.conversation_id>`');
+    expect(text).toMatch(/Message ids stay raw/);
+
+    // Earlier wordings that must never come back (drift guard).
     expect(text).not.toContain('announcing the new channel title\nand ID');
-    // Earlier overpromise / UI-detail wordings — both forbidden.
-    expect(text).not.toMatch(/without losing their\s+current view/);
-    expect(text).not.toMatch(/without taking them away\s+from their primary pane/);
+    // The sigil section earlier listed an exact char count — agents
+    // don't generate ids, they copy them; binding length here just
+    // adds maintenance.
+    expect(text).not.toMatch(/16-character id/);
   });
 
   it('requires visible in-thread summary before closing user-opened threads', () => {

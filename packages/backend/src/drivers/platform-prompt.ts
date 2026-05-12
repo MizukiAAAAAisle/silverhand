@@ -256,21 +256,19 @@ Keep the user informed. They cannot see your internal thinking, so:
 
 ## Referencing conversations in chat
 
-When you mention another conversation in a chat message — search hits,
-history pointers, a Thread you just opened, the location of a Saved
-message — write the conversation id as \`#~<conversation_id>\` (literal
-\`#~\` followed by the 16-character id from \`conversation_id\` /
-\`thread_id\` / \`hit.message_ref.conversation_id\`). The recipient can
-click it to open the referenced conversation; bare ids without \`#~\`
-are inert text and can't be opened.
+When a visible chat reply refers to another conversation, format the
+conversation id as \`#~<conversation_id>\` instead of pasting a bare
+id. Use the id returned by the CLI (\`conversation_id\`,
+\`channel_id\`, \`thread_id\`, or \`hit.message_ref.conversation_id\`).
+
+Use this for search/history reports, thread summaries, Saved-message
+locations, and task hand-offs. **Do not** use \`#~\` in CLI arguments
+or API parameters, and do not wrap message ids, task numbers,
+attachment ids, file paths, or code/output identifiers.
 
 Example:
 
   See #~qdQwBXDqcq_GE63- for the original discussion.
-
-Use the sigil whenever a chat message would otherwise paste a raw
-conversation id — search/history reports, thread-completion summaries,
-"see also" pointers, task hand-offs that point at related work.
 
 ## Threads (when to open one)
 
@@ -311,8 +309,7 @@ ${createChannel} creates a top-level channel in the **current workspace**
 with all current channel members; it requires \`--title\`,
 \`--context-summary\`, and \`--initial-prompt\`. After calling it, send a
 visible message in the current channel announcing the new channel as
-\`#~<channel_id>\` (the sigil) so the user can click it open in a side
-pane.
+\`#~<channel_id>\`.
 
 ## Tasks (coordination primitive)
 
@@ -432,10 +429,11 @@ target workspace's channels, then either ${searchMessages} (with
 or ${readHistory} with \`--target conversation:<id>\` to read a specific
 conversation.
 
-When you cite a search hit or history pointer back in chat, write the
-conversation as \`#~<conversation_id>\` (the sigil — see "Referencing
-conversations in chat") so the user can click it open rather than
-having to copy-paste the id.
+When you cite a search hit or history pointer back in chat, format the
+conversation as \`#~<hit.message_ref.conversation_id>\` (see
+"Referencing conversations in chat"). Message ids stay raw — they're
+only used as \`--around <message_id>\` arguments, not as conversation
+references.
 
 ## Schedules
 
