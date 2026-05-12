@@ -243,15 +243,19 @@ describe('buildPlatformPrompt', () => {
     expect(text).toContain('## Referencing conversations in chat');
     expect(text).toContain('`#~<conversation_id>`');
     expect(text).toMatch(/#~qdQwBXDqcq_GE63-/);
-    // Behavioral promise: side pane, primary pane survives. Wording
-    // tightened per Cindy nit on `1a395ab` — say "primary pane" not
-    // "current view" because the user's existing side pane CAN be
-    // replaced by a new one (only one side at a time); the guarantee
-    // is specifically about the primary.
-    expect(text).toMatch(/side pane/);
-    expect(text).toMatch(/without taking them away\s+from their primary pane/);
-    // Pre-polish wording — too broad, must be gone.
-    expect(text).not.toMatch(/without losing their\s+current view/);
+    // Behavioral semantics only — the agent needs to know that the
+    // sigil is clickable for the recipient and that bare ids are not.
+    // It does NOT need to know about the renderer's UI model (pill,
+    // placeholder, side pane, primary pane). User feedback on
+    // `8f2f046`: those are interaction details that don't help the
+    // agent decide what to write.
+    expect(text).toMatch(/click it to open/);
+    expect(text).toMatch(/bare ids/);
+    expect(text).not.toMatch(/\bside pane\b/i);
+    expect(text).not.toMatch(/\bprimary pane\b/i);
+    expect(text).not.toContain('clickable pill');
+    expect(text).not.toContain('placeholder with a');
+    expect(text).not.toContain('Recipients without access');
     // Channel-create handoff explicitly uses the sigil.
     expect(text).toContain('announcing the new channel as');
     expect(text).toContain('`#~<channel_id>`');
@@ -261,13 +265,9 @@ describe('buildPlatformPrompt', () => {
     );
     // Pre-PR-4 wording — must be gone so we don't tell agents to paste raw ids.
     expect(text).not.toContain('announcing the new channel title\nand ID');
-    // PR-4 follow-up: the prompt should NOT explain renderer internals
-    // (pill rendering, placeholder, no-access UI). Those are the
-    // recipient app's concern; mentioning them here adds noise without
-    // helping the agent decide what to write. Keep semantics, drop UI.
-    expect(text).not.toContain('clickable pill');
-    expect(text).not.toContain('placeholder with a');
-    expect(text).not.toContain('Recipients without access');
+    // Earlier overpromise / UI-detail wordings — both forbidden.
+    expect(text).not.toMatch(/without losing their\s+current view/);
+    expect(text).not.toMatch(/without taking them away\s+from their primary pane/);
   });
 
   it('requires visible in-thread summary before closing user-opened threads', () => {

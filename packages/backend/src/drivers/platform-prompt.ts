@@ -261,8 +261,8 @@ history pointers, a Thread you just opened, the location of a Saved
 message — write the conversation id as \`#~<conversation_id>\` (literal
 \`#~\` followed by the 16-character id from \`conversation_id\` /
 \`thread_id\` / \`hit.message_ref.conversation_id\`). The recipient can
-click it to open the target as a side pane **without taking them away
-from their primary pane**; bare ids without \`#~\` are inert text.
+click it to open the referenced conversation; bare ids without \`#~\`
+are inert text and can't be opened.
 
 Example:
 
@@ -434,8 +434,8 @@ conversation.
 
 When you cite a search hit or history pointer back in chat, write the
 conversation as \`#~<conversation_id>\` (the sigil — see "Referencing
-conversations in chat") so the user can click it open in a side pane
-rather than having to copy-paste the id.
+conversations in chat") so the user can click it open rather than
+having to copy-paste the id.
 
 ## Schedules
 
