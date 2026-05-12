@@ -146,4 +146,53 @@ describe('writeError', () => {
     expect(writes[0]).not.toContain(' at ');
     expect(writes[0]).not.toContain('\n    at ');
   });
+
+  it('includes optional subkind and details in JSON mode when provided', () => {
+    const writes: string[] = [];
+    const err = new CliError({
+      code: 'validation_error',
+      subkind: 'unexpected_arguments',
+      message: 'flags only',
+      retriable: false,
+      details: { positional: ['stray'], rest: [] },
+    });
+    writeError(err, { json: true, stderr: { write: s => writes.push(s) } });
+    const parsed = JSON.parse(writes[0]!);
+    expect(parsed).toEqual({
+      error: {
+        code: 'validation_error',
+        subkind: 'unexpected_arguments',
+        message: 'flags only',
+        retriable: false,
+        details: { positional: ['stray'], rest: [] },
+      },
+    });
+  });
+
+  it('omits subkind/details from JSON when not set (back-compat)', () => {
+    const writes: string[] = [];
+    const err = new CliError({
+      code: 'validation_error',
+      message: 'plain old',
+      retriable: false,
+    });
+    writeError(err, { json: true, stderr: { write: s => writes.push(s) } });
+    const parsed = JSON.parse(writes[0]!);
+    expect(parsed.error).not.toHaveProperty('subkind');
+    expect(parsed.error).not.toHaveProperty('details');
+  });
+
+  it('includes subkind in the human prefix as `code/subkind`', () => {
+    const writes: string[] = [];
+    const err = new CliError({
+      code: 'validation_error',
+      subkind: 'flag_removed',
+      message: 'use stdin',
+      retriable: false,
+    });
+    writeError(err, { json: false, stderr: { write: s => writes.push(s) } });
+    expect(writes[0]).toBe(
+      'silverhand: validation_error/flag_removed: use stdin\n',
+    );
+  });
 });

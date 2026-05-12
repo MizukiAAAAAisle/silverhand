@@ -77,7 +77,7 @@ describe('buildPlatformPrompt', () => {
     expect(text).toContain('## Conversation etiquette');
     expect(text).toContain('Never reply to your own agent message');
     expect(text).toContain(
-      "Do not acknowledge, summarize, or restate another agent's work",
+      "Do not acknowledge, summarize, echo or restate another agent's work",
     );
     expect(text).toContain('Only send messages when you have actionable content');
     expect(text).not.toContain('unique value to add');

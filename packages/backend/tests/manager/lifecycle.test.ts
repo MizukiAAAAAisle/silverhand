@@ -490,7 +490,7 @@ describe('ConversationManager.deliverMessage', () => {
     expect(live).toBeDefined();
     const text = JSON.parse(live!).message.content[0].text;
     expect(text).toContain(
-      '[sender addressed you by name; a visible reply is expected.]',
+      '[sender addressed you by name]',
     );
     expect(text).toContain('silverhand message send');
   });

@@ -138,6 +138,42 @@ describe('cli-trace fire-and-forget reporter', () => {
     expect(body.error_message).not.toContain('token.txt');
     expect(body.error_message).toContain('--path');
   });
+
+  it('forwards error_subkind through to the trace body when supplied', async () => {
+    await reportPreflightFailure({
+      noun: 'message',
+      verb: 'send',
+      flags_seen: ['content', 'target'],
+      error_code: 'validation_error',
+      error_subkind: 'flag_removed',
+      error_message: '--content was removed; pipe content via stdin',
+    });
+    const [, init] = fetchMock.mock.calls[0]!;
+    const body = JSON.parse(init.body as string);
+    expect(body.error_subkind).toBe('flag_removed');
+  });
+
+  it('NEVER carries a `details` key — privacy contract bound at the CLI source', async () => {
+    // Even if a future caller tried to attach details, the
+    // `CliTraceInput` type lacks a slot for them, so this should not
+    // compile. The runtime check below double-locks: regardless of
+    // schema-strictness on the backend, the CLI never sends the field.
+    await reportPreflightFailure({
+      noun: 'message',
+      verb: 'send',
+      error_code: 'validation_error',
+      error_subkind: 'unexpected_arguments',
+      error_message: 'flags only',
+      // Intentionally NOT passing details — `CliTraceInput` doesn't have
+      // such a field. This is the contract: positional/rest/raw values
+      // must not leave the local process.
+    });
+    const [, init] = fetchMock.mock.calls[0]!;
+    const body = JSON.parse(init.body as string);
+    expect(body).not.toHaveProperty('details');
+    expect(body).not.toHaveProperty('positional');
+    expect(body).not.toHaveProperty('rest');
+  });
 });
 
 describe('sanitizeTraceErrorMessage', () => {

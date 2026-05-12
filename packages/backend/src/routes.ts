@@ -2861,6 +2861,7 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
         verb: parsed.data.verb ?? null,
         flags_seen: parsed.data.flags_seen ?? [],
         error_code: parsed.data.error_code ?? null,
+        error_subkind: parsed.data.error_subkind ?? null,
         error_message: parsed.data.error_message ?? null,
         duration_ms: parsed.data.duration_ms ?? null,
         status: 'failure',

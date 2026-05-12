@@ -105,12 +105,50 @@ async function main(argv: string[]): Promise<number> {
   // silently dropped and the agent thinks it filtered when it didn't.
   // Global flags (e.g. `--json`) are accepted transparently inside
   // `assertKnownFlags` itself.
+  //
+  // Error priority inside `assertKnownFlags`:
+  //   (1) `flag_removed` — most actionable (tells the agent how to migrate)
+  //   (2) generic `unknown flag` — typo suggestion
+  // Both run BEFORE the positional/rest guard below, so a deprecated
+  // `--content x extra` reports `flag_removed` (not `unexpected_arguments`).
   assertKnownFlags(args.flags, {
     noun,
     verb,
     flags: cmd.flags,
     booleanFlags: cmd.booleanFlags,
+    removedFlags: cmd.removedFlags,
   });
+
+  // Dispatcher-level hard guard (A1): no command in the catalogue
+  // currently consumes positional arguments or `--`-trailing tokens.
+  // The original product-base bug was a `silverhand message send
+  // --content "..."` where bash word-split on an unescaped `"` and the
+  // tail got dropped silently into `args.positional`. Rejecting both
+  // here turns that into an explicit `unexpected_arguments` failure
+  // every agent can see. Both arrays are surfaced in `details` so the
+  // agent can echo back exactly which token tripped the check.
+  if (args.positional.length > 0 || args.rest.length > 0) {
+    const parts: string[] = [];
+    if (args.positional.length > 0) {
+      parts.push(`positional ${JSON.stringify(args.positional)}`);
+    }
+    if (args.rest.length > 0) {
+      parts.push(`after-\`--\` ${JSON.stringify(args.rest)}`);
+    }
+    throw new CliError({
+      code: 'validation_error',
+      subkind: 'unexpected_arguments',
+      message:
+        `silverhand ${noun} ${verb} accepts flags only; ` +
+        `got unexpected ${parts.join(' and ')}. ` +
+        `If a value contains spaces or quotes, pipe it via stdin or use a quoted heredoc.`,
+      retriable: false,
+      details: {
+        positional: args.positional,
+        rest: args.rest,
+      },
+    });
+  }
 
   // Lazy: only load env when we're actually about to make a request.
   // Help/version never reach this line.
@@ -142,6 +180,7 @@ void main(process.argv.slice(2)).then(
         verb: traceCtx.verb,
         flags_seen: traceCtx.flagsSeen,
         error_code: cliErr.code,
+        ...(cliErr.subkind ? { error_subkind: cliErr.subkind } : {}),
         error_message: cliErr.message.split('\n', 1)[0]?.slice(0, 500),
         duration_ms: Math.round((performance.now() - startedAt) * 1000) / 1000,
       });

@@ -40,24 +40,58 @@ export const ERROR_CODES = [
 
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
+/**
+ * Optional, descriptive sub-classification of a `validation_error`.
+ * `code` remains the stable behavioral contract (drives `exitCodeFor`
+ * and `retriable`); `subkind` lets agents and telemetry distinguish
+ * input-shape variants without enlarging the closed `code` enum.
+ *
+ * The CLI-side union below is the source of truth. The shared
+ * `CliTraceInputSchema.error_subkind` field is a wide
+ * `string().max(64)` so adding a new subkind here does not require a
+ * shared schema bump.
+ */
+export type ErrorSubkind =
+  | 'flag_removed'
+  | 'unexpected_arguments'
+  | 'stdin_is_tty'
+  | 'empty_stdin';
+
 export interface CliErrorPayload {
   code: ErrorCode;
+  /** Optional descriptive sub-classification of `code`. */
+  subkind?: ErrorSubkind;
   message: string;
   retriable: boolean;
+  /** Optional structured context for the agent reading stderr. NEVER
+   *  forwarded to `cli-trace` — see `cli-trace.ts` for the privacy
+   *  contract. Typical contents: `{flag, replacement}` for
+   *  `flag_removed`, `{positional, rest}` for `unexpected_arguments`. */
+  details?: Record<string, unknown>;
 }
 
 export class CliError extends Error {
   public readonly code: ErrorCode;
+  public readonly subkind?: ErrorSubkind;
   public readonly retriable: boolean;
+  public readonly details?: Record<string, unknown>;
 
   constructor(payload: CliErrorPayload) {
     super(payload.message);
     this.code = payload.code;
+    this.subkind = payload.subkind;
     this.retriable = payload.retriable;
+    this.details = payload.details;
   }
 
   toPayload(): CliErrorPayload {
-    return { code: this.code, message: this.message, retriable: this.retriable };
+    return {
+      code: this.code,
+      ...(this.subkind ? { subkind: this.subkind } : {}),
+      message: this.message,
+      retriable: this.retriable,
+      ...(this.details ? { details: this.details } : {}),
+    };
   }
 }
 
@@ -136,7 +170,7 @@ export function exitCodeFor(code: ErrorCode): 1 | 2 | 3 {
 
 /** Write a `CliError` to stderr per the contract.
  *  - `human` mode: one short line.
- *  - `json` mode (default): one-line JSON `{error:{code,message,retriable}}`.
+ *  - `json` mode (default): one-line JSON `{error:{code,subkind?,message,retriable,details?}}`.
  *  Never logs stack traces. The exit code is the caller's responsibility
  *  (use `exitCodeFor`). */
 export function writeError(
@@ -147,7 +181,8 @@ export function writeError(
   if (opts.json) {
     out.write(JSON.stringify({ error: err.toPayload() }) + '\n');
   } else {
-    out.write(`silverhand: ${err.code}: ${err.message}\n`);
+    const tag = err.subkind ? `${err.code}/${err.subkind}` : err.code;
+    out.write(`silverhand: ${tag}: ${err.message}\n`);
   }
 }
 

@@ -15,6 +15,7 @@
 import type { ParsedArgs } from '../parse.js';
 import type { BackendClient } from '../client.js';
 import type { CliEnv } from '../env.js';
+import type { RemovedFlagSpec } from '../strict-flags.js';
 import { messageCommands } from './message.js';
 import { taskCommands } from './task.js';
 import { threadCommands } from './thread.js';
@@ -42,6 +43,12 @@ export interface Command {
    *  (2) the dispatcher can include them in the known-flag set used
    *      by strict validation. */
   booleanFlags?: readonly string[];
+  /** Flags this command USED to accept but no longer does. When the
+   *  agent supplies one, the dispatcher throws `validation_error` with
+   *  `subkind: 'flag_removed'` and the supplied migration `hint`,
+   *  BEFORE the unknown-flag / positional-rest guards run. Use this
+   *  when removing a flag in a backwards-incompatible way. */
+  removedFlags?: Readonly<Record<string, RemovedFlagSpec>>;
   /** Run the command. Return value (or null) is written to stdout
    *  as a JSON line. Throw `CliError` (or anything else — fromUnknown
    *  will normalize) on failure. */

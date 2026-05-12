@@ -121,6 +121,114 @@ describe('strict flag validation', () => {
   });
 });
 
+describe('removed-flag handling', () => {
+  it('throws flag_removed with replacement and hint when a removed flag is supplied', () => {
+    let caught: unknown;
+    try {
+      assertKnownFlags(
+        { content: 'hello' },
+        {
+          noun: 'message',
+          verb: 'send',
+          flags: ['target'],
+          removedFlags: {
+            content: {
+              replacement: 'stdin',
+              hint: 'pipe content via stdin',
+            },
+          },
+        },
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(CliError);
+    const e = caught as CliError;
+    expect(e.code).toBe('validation_error');
+    expect(e.subkind).toBe('flag_removed');
+    expect(e.retriable).toBe(false);
+    expect(e.message).toContain('--content was removed');
+    expect(e.message).toContain('pipe content via stdin');
+    expect(e.details).toEqual({ flag: 'content', replacement: 'stdin' });
+  });
+
+  it('flag_removed wins over the unknown-flag check (priority guarantee)', () => {
+    let caught: unknown;
+    try {
+      assertKnownFlags(
+        { content: 'hello', bogus: 'x' },
+        {
+          noun: 'message',
+          verb: 'send',
+          flags: ['target'],
+          removedFlags: {
+            content: { replacement: 'stdin', hint: 'use stdin' },
+          },
+        },
+      );
+    } catch (err) {
+      caught = err;
+    }
+    const e = caught as CliError;
+    // `flag_removed` for the deprecated `--content` must win even
+    // though `--bogus` is also unknown — that's the migration UX
+    // contract Cindy and Alice locked in.
+    expect(e.subkind).toBe('flag_removed');
+    expect(e.message).toContain('--content was removed');
+  });
+
+  it('falls through to unknown-flag handling when no removed flag matched', () => {
+    let caught: unknown;
+    try {
+      assertKnownFlags(
+        { 'task-numbers': '191' },
+        {
+          noun: 'task',
+          verb: 'list',
+          flags: ['task-number'],
+          removedFlags: {
+            content: { replacement: 'stdin', hint: 'use stdin' },
+          },
+        },
+      );
+    } catch (err) {
+      caught = err;
+    }
+    const e = caught as CliError;
+    expect(e.subkind).toBeUndefined();
+    expect(e.message).toContain('unknown flag --task-numbers');
+  });
+
+  it('treats removedFlags as known so they do NOT also trip unknown-flag', () => {
+    // If `removedFlags` weren't merged into the known set, supplying
+    // a removed flag together with another removed flag would fall
+    // through to "unknown" for the second one. We verify both branches
+    // are protected: only the first removed flag throws (loop break).
+    let caught: unknown;
+    try {
+      assertKnownFlags(
+        { content: 'a', 'another-old-flag': 'b' },
+        {
+          noun: 'message',
+          verb: 'send',
+          flags: ['target'],
+          removedFlags: {
+            content: { replacement: 'stdin', hint: 'use stdin' },
+            'another-old-flag': {
+              replacement: 'something',
+              hint: 'use something',
+            },
+          },
+        },
+      );
+    } catch (err) {
+      caught = err;
+    }
+    const e = caught as CliError;
+    expect(e.subkind).toBe('flag_removed');
+  });
+});
+
 describe('closestFlag (Levenshtein-bounded suggester)', () => {
   it('returns the closest candidate within edit distance 2', () => {
     const known = new Set(['task-number', 'status', 'limit']);

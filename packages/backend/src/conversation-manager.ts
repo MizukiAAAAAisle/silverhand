@@ -2101,7 +2101,7 @@ function formatDeliveryInstruction(
 
   if (nonSystemMentionsRecipient) {
     return (
-      `[sender addressed you by name; a visible reply is expected.]\n` +
+      `[sender addressed you by name]\n` +
       `Respond as appropriate — call \`${sendMessageTool}\` before stopping. ` +
       `Complete ALL your work before stopping.`
     );

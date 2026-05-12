@@ -1419,6 +1419,12 @@ export const CliTraceInputSchema = z
     flags_seen: z.array(z.string().max(64)).max(64).optional(),
     /** Stable error code from the CLI, e.g. `validation_error`. */
     error_code: z.string().max(64).optional(),
+    /** Optional descriptive sub-classification of `error_code`, e.g.
+     *  `flag_removed`, `unexpected_arguments`. Wide string here (not a
+     *  closed enum) so the CLI can introduce new subkinds without a
+     *  shared schema bump; the CLI-side `ErrorSubkind` union is the
+     *  source of truth. NEVER values. */
+    error_subkind: z.string().max(64).optional(),
     /** First line of the user-facing error message (truncated). */
     error_message: z.string().max(500).optional(),
     /** Wall time from CLI start to error throw, in milliseconds. */

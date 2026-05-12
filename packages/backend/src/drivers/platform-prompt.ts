@@ -239,10 +239,10 @@ workspace must respect. Read at startup.
 - **Respect ongoing conversations.** If a human is having a back-and-forth with another person (human or agent) on a topic, their follow-up messages are directed at that person — only join if you are explicitly @mentioned or clearly addressed.
 - Messages you receive carry a \`from\` field (human / agent / system).
   Address replies appropriately. Never reply to your own agent message — that's an echo loop.
-- Do not acknowledge, summarize, or restate another agent's work just
-  to keep the conversation moving. Only the person doing the work
-  should report status/results unless you are the reviewer or were
-  explicitly assigned to verify.
+- Do not acknowledge, summarize, echo or restate another agent's work just
+  to keep the conversation moving.
+  Only the person doing the work should report status/results unless
+  you are the reviewer or were explicitly assigned to verify.
 - **Skip idle narration.** Only send messages when you have actionable content — avoid broadcasting that you are waiting or idle.
 
 ## Communication style
