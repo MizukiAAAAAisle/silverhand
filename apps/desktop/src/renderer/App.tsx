@@ -51,6 +51,7 @@ import {
   selectFocusedConversation,
   selectSecondaryDescriptor,
   selectVisibleConversations,
+  shouldSecondaryFullscreen,
   type ConversationPointer,
   type SecondaryDescriptor,
 } from '@/lib/secondary-pane';
@@ -897,6 +898,11 @@ export function App(): JSX.Element {
           jumpTarget={secondaryJumpTarget}
           onJumped={handleJumped}
           onCloseChild={closeSecondary}
+          // Cindy review of e9278a7 bug 2: previously hard-coded
+          // "关闭 Thread", which read wrong on `?side=<channel>` panes.
+          // Side-thread (legacy /t/ or `?side=<thread>`) keeps the old
+          // wording; channel/dm sides use a generic "关闭侧栏".
+          closeLabel={secondaryIsThread ? '关闭 Thread' : '关闭侧栏'}
           onJumpToOriginal={
             secondaryIsThread ? handleJumpToOriginal : undefined
           }
@@ -1218,7 +1224,10 @@ export function App(): JSX.Element {
                   />
                 ) : null}
                 {secondaryView ? (
-                  routeFullscreen ? (
+                  shouldSecondaryFullscreen(
+                    secondaryDescriptor,
+                    routeFullscreen,
+                  ) ? (
                     secondaryView
                   ) : (
                     <SplitPane

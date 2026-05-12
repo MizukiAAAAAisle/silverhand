@@ -239,3 +239,27 @@ export function selectFocusedConversation(
   }
   return null;
 }
+
+/**
+ * Should the right pane fully cover the viewport (hiding primary)?
+ *
+ * Only `?fullscreen=1` *with a resolved secondary* collapses to a
+ * single-pane render. Unresolved-side + fullscreen falls back to the
+ * split view (primary + placeholder) so what's on screen matches the
+ * `visibleConversations` / `focusedConversation` selectors above —
+ * those keep primary in the visible/focused set whenever secondary is
+ * unresolved (a placeholder has no conversation to mark read or
+ * silence toasts for). Without this gate, fullscreen + unresolved
+ * would hide primary in the DOM while still advancing primary's read
+ * cursor and clearing primary's notification badge — Cindy review of
+ * commit `e9278a7` flagged this as a state/render fork.
+ *
+ * Pure helper so the render-time decision can be unit-tested without
+ * mounting React.
+ */
+export function shouldSecondaryFullscreen(
+  secondary: SecondaryDescriptor | null,
+  fullscreen: boolean,
+): boolean {
+  return fullscreen && secondary?.status === 'resolved';
+}

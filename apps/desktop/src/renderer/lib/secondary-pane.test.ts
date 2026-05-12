@@ -3,6 +3,7 @@ import {
   selectFocusedConversation,
   selectSecondaryDescriptor,
   selectVisibleConversations,
+  shouldSecondaryFullscreen,
   type SecondaryDescriptor,
   type SecondaryLookupChannel,
 } from './secondary-pane';
@@ -305,5 +306,34 @@ describe('selectFocusedConversation — single-id focus rule', () => {
     });
     expect(out?.id).toBe('c-other');
     expect(out?.kind).toBe('channel');
+  });
+});
+
+describe('shouldSecondaryFullscreen — render-time fullscreen gate', () => {
+  it('false when there is no secondary at all', () => {
+    expect(shouldSecondaryFullscreen(null, true)).toBe(false);
+    expect(shouldSecondaryFullscreen(null, false)).toBe(false);
+  });
+
+  it('false when fullscreen flag is off (split / overlay render)', () => {
+    expect(shouldSecondaryFullscreen(sideChannelDescriptor, false)).toBe(false);
+    expect(shouldSecondaryFullscreen(threadPathDescriptor, false)).toBe(false);
+    expect(shouldSecondaryFullscreen(unresolvedSide, false)).toBe(false);
+  });
+
+  it('true only when secondary is resolved AND fullscreen is set', () => {
+    expect(shouldSecondaryFullscreen(sideChannelDescriptor, true)).toBe(true);
+    expect(shouldSecondaryFullscreen(sideThreadDescriptor, true)).toBe(true);
+    expect(shouldSecondaryFullscreen(threadPathDescriptor, true)).toBe(true);
+  });
+
+  it('false for unresolved + fullscreen — DOM falls back to split, no state/render fork', () => {
+    // This is the bug Cindy flagged in commit `e9278a7`. Without the
+    // gate, `routeFullscreen && secondaryView` rendered only the
+    // placeholder while `selectVisibleConversations` /
+    // `selectFocusedConversation` kept primary in the visible/focused
+    // set — primary's read cursor and notification badge advanced
+    // even though the user never saw it.
+    expect(shouldSecondaryFullscreen(unresolvedSide, true)).toBe(false);
   });
 });

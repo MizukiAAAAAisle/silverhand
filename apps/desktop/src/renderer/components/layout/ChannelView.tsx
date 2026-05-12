@@ -90,8 +90,14 @@ interface ChannelViewProps {
    *  can't spawn sub-threads). */
   onThreadCreated?: (threadId: string, thread?: ThreadDto) => void;
   /** When set, renders an X button in the header that calls this back.
-   *  Used by the right-side thread pane to close itself. */
+   *  Used by the right-side secondary pane to close itself. */
   onCloseChild?: () => void;
+  /** Localized aria/title text for the close button. Defaults to
+   *  `'关闭 Thread'` for back-compat. PR-1 secondary pane is generic
+   *  (channel/thread/dm), so the caller decides — `'关闭 Thread'` for
+   *  thread panes, `'关闭侧栏'` for `?side=<channel>` panes. Ignored
+   *  when `onCloseChild` is undefined. */
+  closeLabel?: string;
   /** "View in channel" handler — for thread panes, jumps the parent
    *  pane to the original anchor message. Receives the original
    *  message id (which lives in the thread_anchor system message). */
@@ -143,6 +149,7 @@ function ActiveChannelView({
   onJumped,
   onThreadCreated,
   onCloseChild,
+  closeLabel = '关闭 Thread',
   onJumpToOriginal,
   onThreadAnchorResolved,
   highlightedMessageId,
@@ -428,8 +435,8 @@ function ActiveChannelView({
             <button
               type="button"
               onClick={onCloseChild}
-              aria-label="关闭 Thread"
-              title="关闭 Thread"
+              aria-label={closeLabel}
+              title={closeLabel}
               className="flex size-6 shrink-0 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
             >
               <X className="size-3.5" />
