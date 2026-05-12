@@ -24,6 +24,7 @@ import { WorkspaceTasksDrawer } from '@/components/tasks/WorkspaceTasksDrawer';
 import { useTasks } from '@/features/tasks/hooks';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { AgentView } from '@/features/agents/AgentView';
+import { SideUnresolvedPlaceholder } from '@/components/layout/SideUnresolvedPlaceholder';
 import { useAgents } from '@/features/agents/hooks';
 import {
   useWorkspaces,
@@ -46,6 +47,13 @@ import {
   useMessageUnreadSummary,
 } from '@/features/channels/hooks';
 import { cleanupAllComposerDrafts } from '@/lib/composer-draft-cache';
+import {
+  selectFocusedConversation,
+  selectSecondaryDescriptor,
+  selectVisibleConversations,
+  type ConversationPointer,
+  type SecondaryDescriptor,
+} from '@/lib/secondary-pane';
 import { routes, useNav, useRouteState } from '@/router';
 
 export interface MessageJumpTarget {
@@ -144,10 +152,11 @@ export function App(): JSX.Element {
     workspaceId: selectedWorkspaceId,
     channelId: selectedChannelId,
     threadId: openThreadId,
+    sideConversationId,
+    fullscreen: routeFullscreen,
     threadFullscreen,
     agentId: selectedAgentId,
   } = route;
-  const activeEventChannelId = openThreadId ?? selectedChannelId;
   const workspaceSidebarPane = layout.workspaceSidebar;
   const channelSidebarPane = layout.channelSidebar;
   const workspaceSidebarVisible = workspaceSidebarPane.visible;
@@ -243,12 +252,71 @@ export function App(): JSX.Element {
     selectedWorkspace?.kind ?? null,
   );
   const channelUnreadCounts = messageUnreadData?.by_conversation;
+  // ── Secondary pane state (PR-1) ───────────────────────────────────────
+  // The right-hand pane is no longer thread-only. URL state combines
+  // `?side=<id>` (overlay) with the legacy `/t/<tid>` path; selectors
+  // in `lib/secondary-pane` resolve them into:
+  //   - `secondaryDescriptor`  what the right pane renders (resolved
+  //     channel/thread, an unresolved placeholder, or null).
+  //   - `visibleConversations` { primary, secondary } drives message
+  //     read-cursor advancement.
+  //   - `focusedConversation`  single id for toast suppression / IPC
+  //     setActiveConversation / notification badge clearing. Preserves
+  //     the legacy `openThreadId ?? selectedChannelId` semantic by
+  //     letting a resolved secondary win over primary.
+  //
+  // Ephemeral threads (just created via "Reply" — not yet in the
+  // channels cache for the brief window before invalidateQueries lands)
+  // are folded into the lookup so the secondary pane appears
+  // immediately rather than blinking in a frame later.
+  const channelsForLookup = useMemo<ChannelListItem[]>(() => {
+    if (!ephemeralThread) return channels;
+    if (channels.some(c => c.id === ephemeralThread.id)) return channels;
+    return [...channels, ephemeralThread];
+  }, [channels, ephemeralThread]);
+  const primaryPointer = useMemo<ConversationPointer | null>(() => {
+    if (!selectedChannelId) return null;
+    const hit = channels.find(c => c.id === selectedChannelId);
+    if (!hit) return null;
+    return { id: hit.id, kind: hit.kind };
+  }, [channels, selectedChannelId]);
+  const secondaryDescriptor = useMemo<SecondaryDescriptor | null>(
+    () =>
+      selectSecondaryDescriptor(
+        { sideConversationId, threadId: openThreadId },
+        channelsForLookup,
+      ),
+    [sideConversationId, openThreadId, channelsForLookup],
+  );
+  const visibleConversations = useMemo(
+    () =>
+      selectVisibleConversations({
+        primary: primaryPointer,
+        secondary: secondaryDescriptor,
+        fullscreen: routeFullscreen,
+      }),
+    [primaryPointer, secondaryDescriptor, routeFullscreen],
+  );
+  const focusedConversation = useMemo(
+    () =>
+      selectFocusedConversation({
+        primary: primaryPointer,
+        primaryWorkspaceId: selectedWorkspaceId,
+        secondary: secondaryDescriptor,
+        fullscreen: routeFullscreen,
+      }),
+    [primaryPointer, selectedWorkspaceId, secondaryDescriptor, routeFullscreen],
+  );
   // Notification-based read marker (mention/agent-failure alerts).
   const markChannelRead = useMarkChannelRead();
   // Message-unread read cursor — advances conversation_reads on navigation.
   const markMessageChannelRead = useMarkMessageChannelRead();
   // In-app + system notifications for new mentions and agent failures.
-  useNotificationToasts(activeEventChannelId);
+  // Suppression is focused-only on purpose — even when both primary and
+  // secondary are visible, only the user-attentive pane (= focused) gets
+  // toasts silenced. Improving to "any visible pane silences" is a
+  // future polish.
+  useNotificationToasts(focusedConversation?.id ?? null);
   // Active-task count for the titlebar Tasks badge — scoped to the
   // current workspace so the number matches what the panel will show
   // when opened (default filter = current channel, but the badge is
@@ -412,26 +480,37 @@ export function App(): JSX.Element {
     nav,
   ]);
 
-  // Clear the parent-message highlight whenever the thread pane closes
-  // — the highlight only makes sense alongside an open thread.
+  // Clear the parent-message highlight whenever the thread side pane
+  // closes — the highlight only makes sense alongside an open thread.
+  // Channel-typed `?side` panes never anchor to a parent message, so
+  // this also fires when secondary flips from thread to channel.
+  const secondaryDescriptorKind =
+    secondaryDescriptor?.status === 'resolved' ? secondaryDescriptor.kind : null;
   useEffect(() => {
-    if (!openThreadId) setHighlightedParentMessageId(null);
-  }, [openThreadId]);
+    if (secondaryDescriptorKind !== 'thread') setHighlightedParentMessageId(null);
+  }, [secondaryDescriptorKind]);
 
   const selectedChannel = channels.find(s => s.id === selectedChannelId) ?? null;
-  const selectedChannelResolvedId = selectedChannel?.id ?? null;
-  const selectedChannelRouteKind =
-    selectedChannel?.kind === 'thread' ? 'thread' : 'channel';
   const parentChannel = selectedChannel?.kind === 'thread'
     ? channels.find(s => s.id === selectedChannel.parent_conversation_id) ?? null
     : null;
-  const threadChannel =
-    (openThreadId
-      ? channels.find(s => s.id === openThreadId) ?? null
-      : null) ??
-    // Ephemeral fallback: the channel was just created and isn't in the
-    // channels cache yet. Used until the invalidateQueries refetch lands.
-    (ephemeralThread?.id === openThreadId ? ephemeralThread : null);
+  // Secondary pane: resolved channel object for ChannelView. Pulled
+  // from `channelsForLookup` (which already folds in `ephemeralThread`),
+  // so a freshly-created thread renders immediately rather than blinking
+  // until the channels query refetch lands.
+  const secondaryChannel = useMemo<ChannelListItem | null>(() => {
+    if (!secondaryDescriptor || secondaryDescriptor.status !== 'resolved') {
+      return null;
+    }
+    return channelsForLookup.find(c => c.id === secondaryDescriptor.id) ?? null;
+  }, [secondaryDescriptor, channelsForLookup]);
+  const secondaryIsThread = secondaryChannel?.kind === 'thread';
+  // PR-1: only enable the fullscreen toggle for the legacy thread-path
+  // source. `?side` panes don't get fullscreen toggle yet — that lives
+  // in a follow-up that needs to teach `useNav` to write `?fullscreen=1`
+  // alongside `?side`.
+  const secondarySupportsFullscreenToggle =
+    secondaryDescriptor?.source === 'thread-path';
 
   // Clear ephemeral once the real channels list includes this thread,
   // or when the URL no longer points at this thread.
@@ -446,72 +525,66 @@ export function App(): JSX.Element {
     }
   }, [ephemeralThread, openThreadId, channels]);
 
+  // IPC: tell the main process which conversation the user is focused
+  // on. Drives tray/dock badging and the events window. Schema is
+  // single-id (`{workspaceId, conversationId}`); we feed it the focused
+  // selector. Nulls out when the chat view isn't active so the events
+  // window doesn't keep highlighting a stale row after the user
+  // navigates to Members/Tasks/Settings.
+  const focusedActive =
+    appSection === 'chat' && view === 'channel' ? focusedConversation : null;
   useEffect(() => {
     void window.agentHub.setActiveConversation({
-      workspaceId:
-        appSection === 'chat' && view === 'channel' ? selectedWorkspaceId : null,
-      conversationId:
-        appSection === 'chat' && view === 'channel'
-          ? activeEventChannelId
-          : null,
+      workspaceId: focusedActive?.workspaceId ?? null,
+      conversationId: focusedActive?.id ?? null,
     });
-  }, [appSection, view, selectedWorkspaceId, activeEventChannelId]);
+  }, [focusedActive?.workspaceId, focusedActive?.id]);
 
-  // Auto-advance the message read cursor whenever the user is looking at a
-  // channel. In split-view both parent (selectedChannelId) and thread
-  // (openThreadId) are visible simultaneously, so both cursors must be
-  // advanced. In thread fullscreen, the parent pane is not open, so do
-  // not mark the parent channel read.
+  // Auto-advance the message read cursor for every visible pane. The
+  // `visibleConversations` selector already handles the "fullscreen
+  // hides primary" case and the "unresolved side has no id to mark
+  // read" case — the effects below just plumb the resulting pointers
+  // into the markRead mutation.
+  const visiblePrimary = visibleConversations.primary;
+  const visibleSecondary = visibleConversations.secondary;
   useEffect(() => {
-    if (!selectedChannelId) {
+    if (!visiblePrimary) {
       lastSelectedMessageReadKey.current = null;
       return;
     }
-    if (threadFullscreen && openThreadId) {
-      lastSelectedMessageReadKey.current = null;
-      return;
-    }
-    if (selectedChannelId && selectedChannelResolvedId) {
-      const readKey = `${selectedChannelRouteKind}:${selectedChannelId}`;
-      if (lastSelectedMessageReadKey.current === readKey) return;
-      lastSelectedMessageReadKey.current = readKey;
-      markMessageChannelRead.mutate({
-        id: selectedChannelId,
-        kind: selectedChannelRouteKind,
-      });
-    }
+    const kind = visiblePrimary.kind === 'thread' ? 'thread' : 'channel';
+    const readKey = `${kind}:${visiblePrimary.id}`;
+    if (lastSelectedMessageReadKey.current === readKey) return;
+    lastSelectedMessageReadKey.current = readKey;
+    markMessageChannelRead.mutate({ id: visiblePrimary.id, kind });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    selectedChannelId,
-    selectedChannelResolvedId,
-    selectedChannelRouteKind,
-    threadFullscreen,
-    openThreadId,
-  ]);
+  }, [visiblePrimary?.id, visiblePrimary?.kind]);
   useEffect(() => {
-    if (!openThreadId) {
+    if (!visibleSecondary) {
       lastThreadMessageReadKey.current = null;
       return;
     }
-    const readKey = `thread:${openThreadId}`;
+    const kind = visibleSecondary.kind === 'thread' ? 'thread' : 'channel';
+    const readKey = `${kind}:${visibleSecondary.id}`;
     if (lastThreadMessageReadKey.current === readKey) return;
     lastThreadMessageReadKey.current = readKey;
-    markMessageChannelRead.mutate({ id: openThreadId, kind: 'thread' });
+    markMessageChannelRead.mutate({ id: visibleSecondary.id, kind });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openThreadId]);
+  }, [visibleSecondary?.id, visibleSecondary?.kind]);
 
   // Keep notification badges (mention_external / agent_start_failed) cleared
-  // for whichever channel the user is actively viewing.
+  // for whichever channel the user is actively focused on.
   useEffect(() => {
-    if (!activeEventChannelId) {
+    const focusedId = focusedConversation?.id ?? null;
+    if (!focusedId) {
       lastNotificationReadId.current = null;
       return;
     }
-    if (lastNotificationReadId.current === activeEventChannelId) return;
-    lastNotificationReadId.current = activeEventChannelId;
-    markChannelRead.mutate(activeEventChannelId);
+    if (lastNotificationReadId.current === focusedId) return;
+    lastNotificationReadId.current = focusedId;
+    markChannelRead.mutate(focusedId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeEventChannelId]);
+  }, [focusedConversation?.id]);
 
   const handleSelectWorkspace = (id: string): void => {
     // If the workspace has unread mentions, jump straight to the latest
@@ -639,6 +712,22 @@ export function App(): JSX.Element {
     }
   }, [nav, selectedWorkspaceId, selectedChannelId]);
 
+  // Dispatching close handler for the secondary pane's X button. Routes
+  // by the descriptor's source so a `?side` overlay closes via
+  // `nav.closeSide()` (clears query, leaves any path-thread underneath
+  // untouched — the overlay semantic), while a legacy `/t/<tid>` path
+  // closes via `closeThread` (clears the path AND the per-channel
+  // memo). PR-1 keeps both paths so existing thread close affordances
+  // (sidebar context menu, etc.) continue to work unchanged.
+  const closeSecondary = useCallback((): void => {
+    if (!secondaryDescriptor) return;
+    if (secondaryDescriptor.source === 'side') {
+      nav.closeSide();
+      return;
+    }
+    closeThread();
+  }, [secondaryDescriptor, nav, closeThread]);
+
   // ── Stable refs for ChannelView (so React.memo can short-circuit when
   //    only sidebar visibility flips). Recompute deliberately when the
   //    underlying nav / channel / mutation identity changes. ──────────────
@@ -647,9 +736,9 @@ export function App(): JSX.Element {
   const handleThreadCreated = useCallback(
     (threadId: string, thread?: ChannelListItem) => {
       if (selectedWorkspaceId && selectedChannelId) {
-        // Optimistically store the thread so threadChannel is non-null
-        // on the very first render after nav.toThread() fires, before
-        // the channels-list query refetch has a chance to complete.
+        // Optimistically store the thread so the secondary pane is
+        // non-null on the very first render after nav.toThread() fires,
+        // before the channels-list query refetch has a chance to complete.
         if (thread) setEphemeralThread(thread);
         nav.toThread(selectedWorkspaceId, selectedChannelId, threadId);
       }
@@ -668,6 +757,12 @@ export function App(): JSX.Element {
     [archiveChannel, selectedWorkspaceId],
   );
 
+  // Fullscreen toggle for the secondary pane. PR-1 only enables it for
+  // the legacy thread-path source (the original IM affordance);
+  // `?side` panes don't get a fullscreen toggle yet — wiring that
+  // requires teaching `useNav` to write `?fullscreen=1` alongside
+  // `?side`. Tracked as deferred; the toggle button is hidden via
+  // `secondarySupportsFullscreenToggle` below.
   const handleToggleFullscreen = useCallback(() => {
     if (!selectedWorkspaceId || !selectedChannelId || !openThreadId) return;
     nav.toThread(selectedWorkspaceId, selectedChannelId, openThreadId, {
@@ -682,25 +777,40 @@ export function App(): JSX.Element {
     threadFullscreen,
   ]);
 
-  // Captured by handleJumpToOriginal below — must be stable so the thread
-  // ChannelView's onJumpToOriginal prop doesn't churn each render.
+  // "View in channel" — only meaningful when the secondary pane is a
+  // thread (channel-typed sides have no parent to jump to). For PR-1
+  // the parent must live in the current workspace (cross-workspace
+  // resolution is PR-2), so the parent_channel_id from the descriptor
+  // is the jump target; preserveThreadLayout keeps the side overlay
+  // open after the primary jump.
   const handleJumpToOriginal = useCallback(
     (messageId: string) => {
-      if (!threadChannel) return;
+      if (!secondaryDescriptor || secondaryDescriptor.status !== 'resolved') {
+        return;
+      }
+      if (secondaryDescriptor.kind !== 'thread') return;
+      const parentChannelId = secondaryDescriptor.parentChannelId;
+      if (!parentChannelId) return;
       handleJumpToMessage(
         {
           workspaceId: selectedWorkspaceId ?? undefined,
-          channelId:
-            threadChannel.kind === 'thread'
-              ? threadChannel.channel_id
-              : threadChannel.id,
+          channelId: parentChannelId,
           messageId,
         },
         { preserveThreadLayout: true },
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectedWorkspaceId, threadChannel?.id, threadChannel?.kind],
+    [
+      selectedWorkspaceId,
+      secondaryDescriptor?.status,
+      secondaryDescriptor?.status === 'resolved'
+        ? secondaryDescriptor.kind
+        : null,
+      secondaryDescriptor?.status === 'resolved'
+        ? secondaryDescriptor.parentChannelId
+        : null,
+    ],
   );
 
   // Memoize the descriptor objects so ChannelView's `conversation` prop
@@ -709,13 +819,15 @@ export function App(): JSX.Element {
     () => buildChannelDescriptor(selectedChannel),
     [buildChannelDescriptor, selectedChannel],
   );
-  const threadDescriptor = useMemo(
-    () => buildChannelDescriptor(threadChannel),
-    [buildChannelDescriptor, threadChannel],
+  const secondaryConversationDescriptor = useMemo(
+    () => buildChannelDescriptor(secondaryChannel),
+    [buildChannelDescriptor, secondaryChannel],
   );
 
   // Same for the per-pane jumpTarget — the inline ternary recreated the
-  // object each render, breaking memoization down the tree.
+  // object each render, breaking memoization down the tree. The
+  // secondary jumpTarget matches when the jump's threadId equals the
+  // secondary pane's id (legacy "jump to thread" lands here).
   const parentJumpTarget = useMemo(
     () =>
       jumpTarget && !jumpTarget.threadId && jumpTarget.channelId === selectedChannelId
@@ -723,18 +835,23 @@ export function App(): JSX.Element {
         : null,
     [jumpTarget, selectedChannelId],
   );
-  const threadJumpTarget = useMemo(
+  const secondaryJumpTarget = useMemo(
     () =>
-      jumpTarget && threadChannel && jumpTarget.threadId === threadChannel.id
-        ? { channelId: threadChannel.id, messageId: jumpTarget.messageId }
+      jumpTarget && secondaryChannel && jumpTarget.threadId === secondaryChannel.id
+        ? { channelId: secondaryChannel.id, messageId: jumpTarget.messageId }
         : null,
-    [jumpTarget, threadChannel],
+    [jumpTarget, secondaryChannel],
   );
 
   const channelKindForView = selectedWorkspace?.kind === 'dm'
     ? 'dm'
     : (selectedWorkspace ? 'regular' : null);
-  const highlightedMessageIdForParent = openThreadId ? highlightedParentMessageId : null;
+  // Parent-message highlight only renders alongside an open thread
+  // (channel-typed sides aren't anchored to a parent message). Side
+  // threads from PR-3 sigil clicks will fire `onThreadAnchorResolved`
+  // with their own anchor, so the highlight follows them too.
+  const highlightedMessageIdForParent =
+    secondaryIsThread ? highlightedParentMessageId : null;
 
   const parentView = (
     <ChannelView
@@ -750,25 +867,63 @@ export function App(): JSX.Element {
     />
   );
 
-  const threadView = threadChannel ? (
-    <ChannelView
-      channelKind={channelKindForView}
-      conversation={threadDescriptor}
-      parentTitle={selectedChannel?.title ?? null}
-      jumpTarget={threadJumpTarget}
-      onJumped={handleJumped}
-      onCloseChild={closeThread}
-      onJumpToOriginal={handleJumpToOriginal}
-      onThreadAnchorResolved={setHighlightedParentMessageId}
-      onToggleFullscreen={handleToggleFullscreen}
-      isFullscreen={threadFullscreen}
-      onArchiveChannel={handleArchiveChannelMutation}
-      archivePending={archiveChannel.isPending}
-      // No nested Thread: thread channels can't spawn sub-threads
-      // (1-layer hard limit, schema-enforced too).
-      onThreadCreated={undefined}
-    />
-  ) : null;
+  // Secondary pane render. Three shapes:
+  //   - resolved channel/thread → real ChannelView with thread-only
+  //     props gated on `secondaryIsThread` (Cindy review point 5/6:
+  //     "thread 特有能力要降级为条件能力", "View in channel"
+  //     thread-only).
+  //   - unresolved (`?side` id we couldn't find in the current
+  //     workspace) → SideUnresolvedPlaceholder so the user knows the
+  //     reference is broken and can dismiss it. PR-2 will replace this
+  //     with cross-workspace fetch via `useConversationById`.
+  //   - null → no secondary, render only `parentView`.
+  let secondaryView: JSX.Element | null = null;
+  if (secondaryDescriptor) {
+    if (secondaryDescriptor.status === 'unresolved') {
+      secondaryView = (
+        <SideUnresolvedPlaceholder
+          conversationId={secondaryDescriptor.id}
+          onClose={closeSecondary}
+        />
+      );
+    } else if (secondaryChannel) {
+      secondaryView = (
+        <ChannelView
+          channelKind={channelKindForView}
+          conversation={secondaryConversationDescriptor}
+          parentTitle={
+            secondaryIsThread ? selectedChannel?.title ?? null : null
+          }
+          jumpTarget={secondaryJumpTarget}
+          onJumped={handleJumped}
+          onCloseChild={closeSecondary}
+          onJumpToOriginal={
+            secondaryIsThread ? handleJumpToOriginal : undefined
+          }
+          onThreadAnchorResolved={
+            secondaryIsThread ? setHighlightedParentMessageId : undefined
+          }
+          onToggleFullscreen={
+            secondarySupportsFullscreenToggle
+              ? handleToggleFullscreen
+              : undefined
+          }
+          isFullscreen={
+            secondarySupportsFullscreenToggle ? threadFullscreen : false
+          }
+          onArchiveChannel={handleArchiveChannelMutation}
+          archivePending={archiveChannel.isPending}
+          // No nested Thread from the secondary pane: thread sides can't
+          // spawn sub-threads (1-layer hard limit, schema-enforced); for
+          // channel sides, sub-thread creation would target the side's
+          // parent rather than the user's primary, which is confusing —
+          // disabled for PR-1 and revisited per real UX feedback.
+          onThreadCreated={undefined}
+        />
+      );
+    }
+  }
+
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden">
@@ -1022,11 +1177,16 @@ export function App(): JSX.Element {
                           archived_at: s.archived_at,
                         }))}
                         workspaceKind={selectedWorkspace?.kind === 'dm' ? 'dm' : (selectedWorkspace ? 'regular' : null)}
-                        // Highlight either the parent (top-level) or — when a thread
-                        // pane is open — also the thread below it via tree indent.
-                        // ChannelsSidebar already renders the tree; selection just
-                        // points at "what's the active row".
-                        selectedChannelId={openThreadId ?? selectedChannelId}
+                        // Highlight the active row: when a secondary
+                        // pane is open, the sidebar follows it (so a
+                        // thread or `?side` channel both light up
+                        // their row); otherwise the primary selection
+                        // is the active row.
+                        selectedChannelId={
+                          secondaryDescriptor?.status === 'resolved'
+                            ? secondaryDescriptor.id
+                            : selectedChannelId
+                        }
                         onSelectChannel={handleSelectChannel}
                         onPinChannel={(channelId, pinned) =>
                           pinChannel.mutate({ channelId, pinned })
@@ -1057,13 +1217,13 @@ export function App(): JSX.Element {
                     active={channelsSidebar.isDragging}
                   />
                 ) : null}
-                {threadView ? (
-                  threadFullscreen ? (
-                    threadView
+                {secondaryView ? (
+                  routeFullscreen ? (
+                    secondaryView
                   ) : (
                     <SplitPane
                       left={parentView}
-                      right={threadView}
+                      right={secondaryView}
                       storageKey="silverhand.layout.split-ratio"
                     />
                   )
