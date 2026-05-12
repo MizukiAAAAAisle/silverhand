@@ -50,7 +50,7 @@ All commands default to machine-readable JSON on stdout. Use
 
 | Command | Purpose |
 |---|---|
-| `silverhand message send` | Send a visible message to the current channel/thread, parent, or direct child thread. |
+| `silverhand message send` | Send a visible message to the current channel/thread, parent, or direct child thread. **Body comes from STDIN** — see §3.1. |
 | `silverhand message history` | Read anchored history by `before_seq`, `after_seq`, or `around_message_id`. |
 | `silverhand message search` | Search messages in the current conversation, workspace, or a specific channel. |
 | `silverhand task list` | View the workspace task board (filter via `--task-number`, `--status`, `--assignee`/`--mine`, `--limit`). |
@@ -68,6 +68,42 @@ All commands default to machine-readable JSON on stdout. Use
 | `silverhand schedule cancel` | Cancel a schedule. |
 | `silverhand file upload` | Upload a local file and return an attachment id. |
 | `silverhand file view` | Resolve an attachment id to a local path or download location. |
+
+### 3.1 `silverhand message send` is stdin-only
+
+The body of a sent message is read from **STDIN**. The original
+`--content <text>` flag was removed because shell quoting silently
+truncated bodies whenever the value contained `"`, `` ` ``, or `$` —
+bash word-split at the first unescaped `"` and the tail landed in
+`args.positional`, which the dispatcher used to discard silently. See
+the incident note linked in `docs/progress.md` for the original repro.
+
+Two recommended call shapes:
+
+```bash
+# short body
+printf "%s" "hello" | silverhand message send
+
+# multi-line / contains quotes / contains $/backticks
+silverhand message send --target parent <<'SILVERHAND_EOF'
+Any text. Quotes, backticks, $vars, multi-line markdown — all safe.
+SILVERHAND_EOF
+```
+
+The single-quoted heredoc delimiter (`<<'SILVERHAND_EOF'`) disables
+shell expansion of `$`, backticks, and `\`. The CLI reads the raw
+bytes and decodes them as UTF-8 with **no normalization** — no BOM
+stripping, no CRLF→LF translation, no trim. The bytes the agent wrote
+are the bytes that reach the database.
+
+Pre-flight failures (exit 1, code `validation_error`):
+
+| `subkind` | When |
+|---|---|
+| `flag_removed` | The legacy `--content` flag was supplied. |
+| `stdin_is_tty` | `process.stdin.isTTY` is true (no body was piped in). |
+| `empty_stdin` | Stdin closed with 0 bytes. |
+| `unexpected_arguments` | Any positional argument or `--`-trailing token (rejected globally; see §4.1). |
 
 ## 4. Error Contract
 
@@ -89,6 +125,36 @@ Stable codes:
 - `rate_limited`
 - `upstream_unavailable`
 - `internal`
+
+Stable codes are intentionally a closed enum — they drive
+`exitCodeFor` and the retriable contract. For descriptive
+sub-classification, JSON-mode stderr may carry an optional
+`subkind` and a free-form `details` object alongside the canonical
+fields:
+
+```json
+{"error":{"code":"validation_error","subkind":"flag_removed","message":"--content was removed; pipe content via stdin","retriable":false,"details":{"flag":"content","replacement":"stdin"}}}
+```
+
+Current `subkind` values (CLI-side enum is the source of truth):
+
+- `flag_removed` — a flag the command used to accept.
+- `unexpected_arguments` — any positional / `--`-trailing token.
+- `stdin_is_tty` — `silverhand message send` invoked without a piped body.
+- `empty_stdin` — `silverhand message send` invoked with 0-byte stdin.
+
+`subkind` and `details` are stderr-only. The fire-and-forget
+`cli-trace` reporter never carries `details` (or any raw value-bearing
+field) — see §7.
+
+### 4.1 Dispatcher hard guard
+
+Every command in this catalogue accepts flags only — no positional
+arguments, no `--`-trailing rest tokens. The dispatcher rejects both
+with `subkind: 'unexpected_arguments'` after `assertKnownFlags` runs,
+so an agent who shell-word-splits a flag value and accidentally feeds
+the dispatcher stray positional tokens sees an explicit failure
+instead of a silent drop.
 
 Exit code policy:
 
@@ -176,11 +242,14 @@ The backend writes three categorized JSONL logs under
   is the *sorted set of query-string keys* — values are never recorded.
 - `cli.preflight_failure` — one line per CLI invocation that errors
   out before reaching any business route (`unknown noun`, strict-flag
-  rejection, etc.). Reported by the CLI itself via
+  rejection, removed-flag use, dispatcher hard-guard rejection,
+  message-send stdin pre-flight). Reported by the CLI itself via
   `POST /internal/conversations/:cid/agents/:aid/cli-trace` and logged
   by the trace handler. Best-effort: 50ms timeout, no retry, never
   affects the CLI's exit code or stderr. Excluded from
-  `cli.invoke` aggregations.
+  `cli.invoke` aggregations. Carries `error_code`, optional
+  `error_subkind`, sanitized `error_message`, `flags_seen`, and
+  timing — but **never** `details` / positional / rest / raw values.
 
 Privacy contract:
 
@@ -188,6 +257,9 @@ Privacy contract:
   task titles, etc.).
 - No flag values are logged — only flag names (`flags_seen`) and
   query-string keys (`query_keys`).
+- The CLI's `details` payload (e.g. `{positional, rest}` for
+  `unexpected_arguments`) stays in local stderr and is **never**
+  forwarded to the backend `cli-trace` reporter.
 - The bearer token is never logged.
 
 Adding a new internal route requires two parallel updates:

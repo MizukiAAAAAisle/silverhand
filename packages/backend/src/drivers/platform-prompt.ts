@@ -480,6 +480,20 @@ error, 2 as a temporary error that may be retried, and 3 as a failure that
 should stop and be reported.
 
 - **\`silverhand message send\`**: Send a message to the current target.
+  Body comes from STDIN — the old \`--content\` flag was removed
+  because shell quoting silently truncated bodies containing \`"\`,
+  backticks, or \`$\`. Use a quoted heredoc for any non-trivial body:
+
+  \`\`\`bash
+  silverhand message send --target self <<'SILVERHAND_EOF'
+  Any text. Quotes, backticks, $vars, multi-line markdown — all safe.
+  SILVERHAND_EOF
+  \`\`\`
+
+  The single-quoted delimiter (\`<<'SILVERHAND_EOF'\`) disables shell
+  expansion so \`$\`, backticks, and \`\\\` reach the body verbatim.
+  For short single-line bodies, \`printf "%s" "hello" | silverhand message send\`
+  is equivalent.
 - **\`silverhand message history\`**: Read an anchored history window.
 - **\`silverhand message search\`**: Search visible message text.
 - **\`silverhand task list\`**: View the workspace task board.

@@ -216,7 +216,12 @@ describe('buildPlatformPrompt', () => {
     expect(text).not.toContain('mcp_chat_send_message');
     expect(text).not.toContain('mcp__chat__');
     expect(text).not.toContain('All cross-agent interaction is through MCP tools');
-    expect(text).not.toContain('SILVERHAND_');
+    // Check the four real env-var names by name. A bare `SILVERHAND_`
+    // prefix would falsely flag the recommended heredoc delimiter
+    // `SILVERHAND_EOF` in the message-send section.
+    expect(text).not.toMatch(
+      /SILVERHAND_(?:AUTH_TOKEN|CONVERSATION_ID|AGENT_ID|SERVER_URL)\b/,
+    );
     expect(text).not.toContain('auth failure');
   });
 

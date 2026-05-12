@@ -14,33 +14,92 @@ import type { Command } from './index.js';
 const sendCommand: Command = {
   verb: 'send',
   summary: 'Send a message to the current channel/thread.',
-  help: `silverhand message send --content <text> [--target self|parent|<thread_id>]
+  help: `silverhand message send [--target self|parent|<thread_id>]
                           [--attachment <id> ...]
 
-Sends a message to the current conversation (channel or thread).
+Reads the message body from STDIN and sends it to the current
+conversation (channel or thread). Always pipe content via stdin —
+the old \`--content <text>\` flag was removed because shell quoting
+of a value containing \`"\`, backticks, or \`$\` silently truncated
+the body before reaching this CLI.
+
+Two recommended call shapes:
+
+  # short body
+  printf "%s" "hello" | silverhand message send
+
+  # multi-line / contains quotes / contains $/backticks
+  silverhand message send --target parent <<'SILVERHAND_EOF'
+  Any text. Quotes, backticks, $vars, multi-line markdown — all safe.
+  SILVERHAND_EOF
+
+The single-quoted heredoc delimiter (\`<<'SILVERHAND_EOF'\`) disables
+shell expansion of \`$\`, backticks, and \`\\\`. The body is read as
+raw bytes, decoded as UTF-8, and posted to the backend with **no
+normalization** — no BOM stripping, no CRLF→LF, no trim.
 
 Flags:
-  --content <text>      Required. The message body. Use quoting for spaces.
   --target self|parent  Optional. "self" (default) sends to the current
-                        conversation. "parent" requires you to be inside a
-                        Thread; sends to that Thread's parent channel.
+                        conversation. "parent" requires you to be inside
+                        a Thread; sends to that Thread's parent channel.
                         Any other value is treated as a child Thread id
                         you opened from this channel.
   --attachment <id>     Optional, repeatable. Attachment ids returned by
-                        \`silverhand file upload\`. All ids must belong to
-                        the current channel.
+                        \`silverhand file upload\`. All ids must belong
+                        to the current channel.
+
+Pre-flight failures (exit 1):
+  --content was supplied → flag_removed (use stdin instead)
+  stdin is a TTY         → stdin_is_tty (no body provided)
+  stdin is empty         → empty_stdin
 
 stdout: { "message_id": "<id>" }`,
-  flags: ['content', 'target', 'attachment'] as const,
+  flags: ['target', 'attachment'] as const,
+  removedFlags: {
+    content: {
+      replacement: 'stdin',
+      hint:
+        "pipe the body via stdin instead — e.g. " +
+        "`silverhand message send <<'SILVERHAND_EOF' ... SILVERHAND_EOF` " +
+        "or `printf \"%s\" \"...\" | silverhand message send`",
+    },
+  },
   async run({ client, args }) {
-    const content = flagString(args, 'content');
-    if (!content) {
+    // Pre-flight: a TTY on stdin means the agent forgot to pipe a body.
+    // Failing fast (rather than blocking on a read that will never
+    // arrive) keeps the agent's exit path predictable.
+    if (process.stdin.isTTY) {
       throw new CliError({
         code: 'validation_error',
-        message: '--content is required',
+        subkind: 'stdin_is_tty',
+        message:
+          'silverhand message send reads the body from stdin, but stdin is a TTY. ' +
+          "Pipe the body — e.g. `printf \"%s\" \"hello\" | silverhand message send` " +
+          "or `silverhand message send <<'SILVERHAND_EOF' ... SILVERHAND_EOF`.",
         retriable: false,
       });
     }
+
+    // Read raw bytes; do NOT setEncoding so any UTF-8 surrogate pairs
+    // / multi-byte sequences cross chunk boundaries cleanly.
+    const buffer = await readAllStdin();
+
+    if (buffer.byteLength === 0) {
+      throw new CliError({
+        code: 'validation_error',
+        subkind: 'empty_stdin',
+        message:
+          'silverhand message send received 0 bytes on stdin. ' +
+          'Pipe a non-empty body, or use a heredoc.',
+        retriable: false,
+      });
+    }
+
+    // UTF-8 decode + zero normalization. `Buffer.toString('utf8')`
+    // does NOT strip a BOM; does NOT translate CR/LF; does NOT trim.
+    // The backend / DB stores the bytes the agent wrote, period.
+    const content = buffer.toString('utf8');
+
     const target = parseTarget(flagString(args, 'target'));
     const attachmentIds = flagStringArray(args, 'attachment');
     return client.sendMessage({
@@ -193,6 +252,19 @@ function parseTarget(raw: string | undefined): SendMessageTarget | undefined {
   if (raw === undefined) return undefined;
   if (raw === 'self' || raw === 'parent') return raw;
   return { thread_id: raw };
+}
+
+/** Read every byte off `process.stdin` into a single Buffer. Does NOT
+ *  set an encoding — chunks are raw `Buffer`s, so multi-byte UTF-8
+ *  sequences crossing chunk boundaries are preserved bit-for-bit.
+ *  Returns an empty Buffer on EOF without bytes (the empty-stdin
+ *  preflight in `send` decides how to react). */
+async function readAllStdin(): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
 }
 
 function parseHistoryTarget(

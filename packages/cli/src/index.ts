@@ -16,7 +16,7 @@ export {
   mapHttpError,
   writeError,
 } from './errors.js';
-export type { CliErrorPayload, ErrorCode } from './errors.js';
+export type { CliErrorPayload, ErrorCode, ErrorSubkind } from './errors.js';
 export { nounHelp, topLevelHelp, verbHelp } from './help.js';
 export {
   flagBool,

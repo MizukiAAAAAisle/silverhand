@@ -78,8 +78,16 @@ describe('command catalogue', () => {
     // The CLI is already configured for the current session by the
     // backend. Help text the agent reads must not mention SILVERHAND_*
     // env vars, AUTH_TOKEN, or "auth"-flavored exit-code descriptions —
-    // the prompt explicitly keeps these layers transparent.
-    const forbidden = [/SILVERHAND_/, /AUTH_TOKEN/, /\bauth failure\b/i];
+    // the prompt explicitly keeps these layers transparent. We match
+    // the four known env vars by name (rather than `SILVERHAND_` as a
+    // bare prefix) so unrelated tokens like the heredoc delimiter
+    // `SILVERHAND_EOF` recommended in `silverhand message send` help
+    // are not falsely flagged.
+    const forbidden = [
+      /SILVERHAND_(?:AUTH_TOKEN|CONVERSATION_ID|AGENT_ID|SERVER_URL)\b/,
+      /AUTH_TOKEN/,
+      /\bauth failure\b/i,
+    ];
     for (const g of COMMAND_GROUPS) {
       for (const c of g.commands) {
         for (const re of forbidden) {
