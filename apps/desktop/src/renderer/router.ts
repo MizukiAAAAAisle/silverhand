@@ -207,6 +207,59 @@ export function withSideQuery(
 }
 
 /**
+ * Build a base-path navigation URL that preserves the current `?side`
+ * overlay. Used by "View in channel" on the secondary pane so jumping
+ * the *primary* to the foreign-workspace parent doesn't drop the side
+ * thread the user is reading.
+ *
+ * Rationale: `nav.toChannel(wid, cid)` calls `routes.chatChannel(...)`
+ * which hands `navigate()` a fresh path with no query string, stripping
+ * `?side`. For the cross-workspace `?side=<thread>` flow, the user's
+ * intent is "show me the parent channel of this thread" — the side
+ * overlay must survive. PR-2 fix per Cindy review of msg
+ * `tEZtWtHiHzpq8PxC`: previously this case closed the side because
+ * `handleJumpToMessage`'s preserveThreadLayout early-return only fires
+ * for same-workspace + same-channel + open path-thread.
+ *
+ * `?fullscreen` is intentionally NOT preserved — fullscreen + visible
+ * primary is contradictory, and the user just asked to see the primary.
+ */
+export function buildChannelPathPreservingSide(
+  workspaceId: string,
+  channelId: string,
+  sideConversationId: string,
+): string {
+  const params = new URLSearchParams();
+  params.set('side', sideConversationId);
+  return `${routes.chatChannel(workspaceId, channelId)}?${params.toString()}`;
+}
+
+/**
+ * Build the URL written by `openSide(conversationId)`. Sets `?side=<id>`
+ * AND strips `?fullscreen=1` — sigil clicks promise "side pane, doesn't
+ * replace your main view" (see platform-prompt's "Referencing
+ * conversations in chat"). If we let openSide inherit a previous
+ * fullscreen flag (e.g. user was in a fullscreen thread),
+ * `shouldSecondaryFullscreen` would render ONLY the side, hiding both
+ * the channel and the thread the user was reading. PR-4 review finding
+ * by @Cindy.
+ *
+ * Other params (including `/t/<tid>` on the path) are preserved so
+ * closeSide falls back to whatever was below.
+ */
+export function buildSideOpenUrl(
+  pathname: string,
+  search: string,
+  conversationId: string,
+): string {
+  const params = new URLSearchParams(search);
+  params.set('side', conversationId);
+  params.delete('fullscreen');
+  const qs = params.toString();
+  return qs ? `${pathname}?${qs}` : pathname;
+}
+
+/**
  * Typed navigation helpers. All call sites that previously did
  * `setSelectedX` go through these — keeps URL construction in one
  * place and gives the call sites a self-documenting API.
@@ -250,7 +303,7 @@ export function useNav(): {
   );
   const openSide = useCallback(
     (conversationId: string) => {
-      const next = withSideQuery(
+      const next = buildSideOpenUrl(
         location.pathname,
         location.search,
         conversationId,

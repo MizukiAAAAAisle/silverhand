@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { parseRouteState, withSideQuery } from './router';
+import {
+  buildChannelPathPreservingSide,
+  buildSideOpenUrl,
+  parseRouteState,
+  withSideQuery,
+} from './router';
 
 // Tests focus on the URL → state matrix introduced by PR-1: how the new
 // `?side=<id>` query param interacts with the legacy `/t/<tid>` path
@@ -152,5 +157,85 @@ describe('withSideQuery — URL writer for openSide / closeSide', () => {
       null,
     );
     expect(closed).toBe('/chat/w/w-1/c/c-a?utm_source=test');
+  });
+});
+
+describe('buildSideOpenUrl — openSide URL writer (PR-4 follow-up)', () => {
+  // The whole point: sigil clicks promise "side pane, doesn't replace
+  // your main view". If openSide inherited a stale `?fullscreen=1`,
+  // `shouldSecondaryFullscreen` would render only the side and HIDE the
+  // primary + path-thread the user was reading. Locking this behavior
+  // here so a future refactor can't silently regress the prompt promise.
+
+  it('writes ?side=<id> on a bare path', () => {
+    expect(buildSideOpenUrl('/chat/w/w-1/c/c-a', '', 'c-other')).toBe(
+      '/chat/w/w-1/c/c-a?side=c-other',
+    );
+  });
+
+  it('strips ?fullscreen when opening side from a fullscreen thread', () => {
+    // User was at /chat/w/w-1/c/c-a/t/t-1?fullscreen=1 (thread fullscreen).
+    // Clicking #~<id> must NOT inherit fullscreen — that would hide both
+    // the channel and the thread under a fullscreen side pane.
+    const out = buildSideOpenUrl(
+      '/chat/w/w-1/c/c-a/t/t-1',
+      '?fullscreen=1',
+      'c-other',
+    );
+    expect(out).toBe('/chat/w/w-1/c/c-a/t/t-1?side=c-other');
+    expect(out).not.toContain('fullscreen');
+  });
+
+  it('preserves /t/<tid> on the path so closeSide falls back to thread', () => {
+    const out = buildSideOpenUrl(
+      '/chat/w/w-1/c/c-a/t/t-1',
+      '',
+      'c-other',
+    );
+    expect(out).toBe('/chat/w/w-1/c/c-a/t/t-1?side=c-other');
+  });
+
+  it('preserves unrelated query params and overwrites stale ?side', () => {
+    const out = buildSideOpenUrl(
+      '/chat/w/w-1/c/c-a',
+      '?utm_source=test&side=c-old&fullscreen=1',
+      'c-new',
+    );
+    expect(out).toContain('utm_source=test');
+    expect(out).toContain('side=c-new');
+    expect(out).not.toContain('side=c-old');
+    expect(out).not.toContain('fullscreen');
+  });
+});
+
+describe('buildChannelPathPreservingSide — view-in-channel keeps side overlay', () => {
+  // PR-2 blocker per Cindy review of msg `tEZtWtHiHzpq8PxC`: clicking
+  // "View in channel" on a cross-workspace `?side=<thread>` previously
+  // navigated primary via `nav.toChannel(wid, cid)`, which writes a
+  // bare path and silently drops `?side`. The user's open thread
+  // disappears even though they only asked to see its parent. This
+  // helper builds the URL with `?side` preserved, and is wired into
+  // `handleJumpToOriginal` for the `?side` source.
+  it('writes /chat/w/<wid>/c/<cid>?side=<sideId> for cross-workspace parent jump', () => {
+    expect(
+      buildChannelPathPreservingSide('w-other', 'c-parent', 't-side-thread'),
+    ).toBe('/chat/w/w-other/c/c-parent?side=t-side-thread');
+  });
+
+  it('keeps the side overlay even when destination workspace differs from the side', () => {
+    // The helper is intentionally indifferent to workspace alignment —
+    // `?side=<id>` resolves through `useConversationById` server-side,
+    // so any conversation id is legal regardless of the primary's
+    // workspace. The helper just writes the URL.
+    const out = buildChannelPathPreservingSide('w-A', 'c-A', 't-in-w-B');
+    expect(out).toBe('/chat/w/w-A/c/c-A?side=t-in-w-B');
+  });
+
+  it('does not propagate ?fullscreen — view-in-channel implies the user wants primary visible', () => {
+    // Hard contract: the helper takes only (workspaceId, channelId,
+    // sideId). It never reads or writes `?fullscreen`. Asserting via
+    // shape — output never contains the substring.
+    const out = buildChannelPathPreservingSide('w-1', 'c-1', 't-1');
+    expect(out).not.toContain('fullscreen');
   });
 });

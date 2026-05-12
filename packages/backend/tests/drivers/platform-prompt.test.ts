@@ -239,13 +239,13 @@ describe('buildPlatformPrompt', () => {
 
   it('teaches the #~<id> sigil for inline conversation references', () => {
     const text = prompt();
-    // Section anchor + syntax statement.
+    // Section anchor + sigil syntax + concrete example.
     expect(text).toContain('## Referencing conversations in chat');
     expect(text).toContain('`#~<conversation_id>`');
     expect(text).toMatch(/#~qdQwBXDqcq_GE63-/);
     // Behavioral promise: side pane, not main-view replacement.
     expect(text).toMatch(/side pane/);
-    expect(text).toContain('without losing their current view');
+    expect(text).toMatch(/without losing their\s+current view/);
     // Channel-create handoff explicitly uses the sigil.
     expect(text).toContain('announcing the new channel as');
     expect(text).toContain('`#~<channel_id>`');
@@ -255,6 +255,13 @@ describe('buildPlatformPrompt', () => {
     );
     // Pre-PR-4 wording — must be gone so we don't tell agents to paste raw ids.
     expect(text).not.toContain('announcing the new channel title\nand ID');
+    // PR-4 follow-up: the prompt should NOT explain renderer internals
+    // (pill rendering, placeholder, no-access UI). Those are the
+    // recipient app's concern; mentioning them here adds noise without
+    // helping the agent decide what to write. Keep semantics, drop UI.
+    expect(text).not.toContain('clickable pill');
+    expect(text).not.toContain('placeholder with a');
+    expect(text).not.toContain('Recipients without access');
   });
 
   it('requires visible in-thread summary before closing user-opened threads', () => {

@@ -258,21 +258,15 @@ Keep the user informed. They cannot see your internal thinking, so:
 
 When you mention another conversation in a chat message — search hits,
 history pointers, a Thread you just opened, the location of a Saved
-message — write the conversation id as a sigil so the recipient can
-open it in a side pane **without losing their current view**.
+message — write the conversation id as \`#~<conversation_id>\` (literal
+\`#~\` followed by the 16-character id from \`conversation_id\` /
+\`thread_id\` / \`hit.message_ref.conversation_id\`). The recipient can
+click it to open the target as a side pane **without losing their
+current view**; bare ids without \`#~\` are inert text.
 
-Sigil syntax: \`#~<conversation_id>\` — literal \`#~\` followed by the
-16-character id (the value of \`conversation_id\` / \`thread_id\` /
-\`hit.message_ref.conversation_id\` returned by the CLI). Example:
+Example:
 
   See #~qdQwBXDqcq_GE63- for the original discussion.
-
-The renderer turns the sigil into a clickable pill that shows the
-conversation title (when the recipient has access) and opens a side
-pane on click. Recipients without access see a placeholder with a
-close button — the click never replaces their main view. **Bare ids
-without \`#~\` stay as inert text and cannot be opened**, so always
-include the sigil prefix when you intend the id to be navigable.
 
 Use the sigil whenever a chat message would otherwise paste a raw
 conversation id — search/history reports, thread-completion summaries,
