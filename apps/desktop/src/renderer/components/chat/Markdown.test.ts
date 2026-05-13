@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Markdown } from './Markdown';
+import { SystemMessage } from './SystemMessage';
 import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
 import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
@@ -58,6 +59,88 @@ function renderWithTaskCtx(
     ),
   );
 }
+
+describe('SystemMessage channel refs', () => {
+  // Construct a minimal MessageDto. Only the fields SystemMessage /
+  // its inner cards read need realistic values; the rest are filled
+  // with type-correct stubs.
+  function makeSystemMessage(
+    subtype: string,
+    metadata: Record<string, unknown>,
+    content = '',
+  ): import('@silverhand/shared').MessageDto {
+    return {
+      id: 'sys-1',
+      conversation_id: 'conv-1',
+      from_kind: 'system',
+      from_agent_id: null,
+      from_user_id: null,
+      content,
+      metadata: { subtype, ...metadata },
+      attachments: null,
+      seq: 1,
+      created_at: 0,
+      task_number: null,
+      task_status: null,
+      task_title: null,
+      task_workspace_id: null,
+      task_assignee: null,
+    };
+  }
+
+  function renderSystem(
+    msg: import('@silverhand/shared').MessageDto,
+    channelsByName: Map<string, ChannelReference | null>,
+  ): string {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return renderToStaticMarkup(
+      React.createElement(
+        QueryClientProvider,
+        { client: qc },
+        React.createElement(SystemMessage, {
+          message: msg,
+          channelsByName,
+          onOpenChannelRef: () => undefined,
+        }),
+      ),
+    );
+  }
+
+  it('resolves #<channel_name> inside a thread_summary card body', () => {
+    // thread_summary cards render `metadata.summary` through Markdown —
+    // the previous gap was that `MessageList` only forwarded
+    // `conversationRefsById`, so summaries that mention `#version3`
+    // got the unresolved branch even when the title existed in the
+    // workspace's channel map.
+    const channels = new Map<string, ChannelReference | null>([
+      ['version3', { id: 'ch-v3', title: 'version3' }],
+    ]);
+    const msg = makeSystemMessage('thread_summary', {
+      thread_title: 't1',
+      summary: 'see #version3 for context',
+    });
+    const html = renderSystem(msg, channels);
+    expect(html).toContain('data-channel-ref-state="resolved"');
+    expect(html).toContain('data-channel-ref-id="ch-v3"');
+  });
+
+  it('resolves #<channel_name> inside a non-collapsible system narration', () => {
+    // join/leave / generic system messages render `message.content`
+    // through Markdown directly. Use an unknown subtype to land in the
+    // !collapsible branch.
+    const channels = new Map<string, ChannelReference | null>([
+      ['version3', { id: 'ch-v3', title: 'version3' }],
+    ]);
+    const msg = makeSystemMessage(
+      'unknown',
+      {},
+      'broadcast — #version3 archived',
+    );
+    const html = renderSystem(msg, channels);
+    expect(html).toContain('data-channel-ref-state="resolved"');
+    expect(html).toContain('data-channel-ref-id="ch-v3"');
+  });
+});
 
 describe('Markdown channel refs', () => {
   function renderWithChannels(

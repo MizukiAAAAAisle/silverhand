@@ -710,8 +710,16 @@ function MessageList({
   // ambiguity sentinel `null` so `<ChannelRef>` degrades to inert text
   // — picking a destination silently is worse than asking the user to
   // disambiguate.
+  //
+  // Short-circuit when workspaces haven't hydrated yet (`workspaceKind
+  // === null`): both channel queries are `enabled: false` in that
+  // window, so they emit empty arrays. Returning the empty map directly
+  // skips a wasted iteration and signals "still resolving" to
+  // `<ChannelRef>`, which renders unresolved → inert text — same
+  // observable outcome, one fewer allocation.
   const channelsByName = useMemo(() => {
     const m = new Map<string, ChannelReference | null>();
+    if (workspaceKind === null) return m;
     const consider = (c: ChannelListItem): void => {
       if (c.kind === 'thread') return;
       const title = c.title;
@@ -729,7 +737,7 @@ function MessageList({
     for (const c of liveChannels) consider(c);
     for (const c of archivedChannels) consider(c);
     return m;
-  }, [liveChannels, archivedChannels]);
+  }, [workspaceKind, liveChannels, archivedChannels]);
 
   const handleStartThread = (msg: MessageDto): void => {
     if (!onThreadCreated) return;
@@ -955,6 +963,8 @@ function MessageList({
                     message={m}
                     conversationRefsById={conversationRefsById}
                     onOpenConversationRef={onOpenConversationRef}
+                    channelsByName={channelsByName}
+                    onOpenChannelRef={onOpenChannelRef}
                   />
                 ) : (
                   <MessageItem

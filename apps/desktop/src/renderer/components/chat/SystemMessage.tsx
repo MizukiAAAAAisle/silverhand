@@ -4,12 +4,15 @@ import type { MessageDto } from '@silverhand/shared';
 import { useMessage } from '@/features/messages/hooks';
 import { formatUserDisplayName } from '@/lib/current-user';
 import { Markdown } from './Markdown';
+import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
 
 interface SystemMessageProps {
   message: MessageDto;
   conversationRefsById?: Map<string, ConversationReference>;
   onOpenConversationRef?: (id: string) => void;
+  channelsByName?: Map<string, ChannelReference | null>;
+  onOpenChannelRef?: (channelId: string) => void;
 }
 
 /**
@@ -27,6 +30,8 @@ export function SystemMessage({
   message,
   conversationRefsById,
   onOpenConversationRef,
+  channelsByName,
+  onOpenChannelRef,
 }: SystemMessageProps): JSX.Element {
   const subtype = readSubtype(message.metadata) ?? inferSubtype(message.content);
   const collapsible = COLLAPSIBLE_SUBTYPES.has(subtype ?? '');
@@ -38,6 +43,8 @@ export function SystemMessage({
         message={message}
         conversationRefsById={conversationRefsById}
         onOpenConversationRef={onOpenConversationRef}
+        channelsByName={channelsByName}
+        onOpenChannelRef={onOpenChannelRef}
       />
     );
   }
@@ -48,6 +55,8 @@ export function SystemMessage({
         message={message}
         conversationRefsById={conversationRefsById}
         onOpenConversationRef={onOpenConversationRef}
+        channelsByName={channelsByName}
+        onOpenChannelRef={onOpenChannelRef}
       />
     );
   }
@@ -61,6 +70,8 @@ export function SystemMessage({
           content={message.content}
           conversationRefsById={conversationRefsById}
           onOpenConversationRef={onOpenConversationRef}
+          channelsByName={channelsByName}
+          onOpenChannelRef={onOpenChannelRef}
         />
       </div>
     );
@@ -88,6 +99,8 @@ export function SystemMessage({
             content={message.content}
             conversationRefsById={conversationRefsById}
             onOpenConversationRef={onOpenConversationRef}
+            channelsByName={channelsByName}
+            onOpenChannelRef={onOpenChannelRef}
           />
         ) : (
           // Keep collapsed view as plain text — markdown leaks block elements
@@ -137,10 +150,14 @@ function MentionCcCard({
   message,
   conversationRefsById,
   onOpenConversationRef,
+  channelsByName,
+  onOpenChannelRef,
 }: {
   message: MessageDto;
   conversationRefsById?: Map<string, ConversationReference>;
   onOpenConversationRef?: (id: string) => void;
+  channelsByName?: Map<string, ChannelReference | null>;
+  onOpenChannelRef?: (channelId: string) => void;
 }): JSX.Element {
   const meta = (message.metadata ?? {}) as Record<string, unknown>;
   const channelName = typeof meta['source_workspace_name'] === 'string'
@@ -197,6 +214,8 @@ function MentionCcCard({
             content={original}
             conversationRefsById={conversationRefsById}
             onOpenConversationRef={onOpenConversationRef}
+            channelsByName={channelsByName}
+            onOpenChannelRef={onOpenChannelRef}
           />
         </div>
       ) : (
@@ -220,10 +239,14 @@ function ThreadSummaryCard({
   message,
   conversationRefsById,
   onOpenConversationRef,
+  channelsByName,
+  onOpenChannelRef,
 }: {
   message: MessageDto;
   conversationRefsById?: Map<string, ConversationReference>;
   onOpenConversationRef?: (id: string) => void;
+  channelsByName?: Map<string, ChannelReference | null>;
+  onOpenChannelRef?: (channelId: string) => void;
 }): JSX.Element {
   const meta = (message.metadata ?? {}) as Record<string, unknown>;
   const threadTitle = typeof meta['thread_title'] === 'string'
@@ -261,6 +284,8 @@ function ThreadSummaryCard({
           content={summary}
           conversationRefsById={conversationRefsById}
           onOpenConversationRef={onOpenConversationRef}
+          channelsByName={channelsByName}
+          onOpenChannelRef={onOpenChannelRef}
         />
       </div>
     </div>
