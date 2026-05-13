@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   buildChannelPathPreservingSide,
   buildSideOpenUrl,
+  buildTaskOpenUrl,
   parseRouteState,
   withSideQuery,
+  withTaskQuery,
 } from './router';
 
 // Tests focus on the URL → state matrix introduced by PR-1: how the new
@@ -237,5 +239,121 @@ describe('buildChannelPathPreservingSide — view-in-channel keeps side overlay'
     // shape — output never contains the substring.
     const out = buildChannelPathPreservingSide('w-1', 'c-1', 't-1');
     expect(out).not.toContain('fullscreen');
+  });
+});
+
+describe('parseRouteState — ?task=<n> focused-task pointer (PR-4 commit 2)', () => {
+  // The drawer reads `focusedTaskNumber` to scroll-and-highlight the
+  // target row. Validation lives here so the drawer stays dumb: it only
+  // ever sees a positive integer or null. Anything else (NaN, zero,
+  // negative, alphanumeric, empty) coerces to null so we never try to
+  // focus a row that can't exist.
+  it('parses a positive integer from ?task=<n>', () => {
+    const r = parseRouteState('/chat/w/w-1/c/c-a', '?task=42');
+    expect(r.focusedTaskNumber).toBe(42);
+  });
+
+  it('coerces non-numeric / zero / negative / empty to null', () => {
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '?task=').focusedTaskNumber).toBeNull();
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '?task=abc').focusedTaskNumber).toBeNull();
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '?task=0').focusedTaskNumber).toBeNull();
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '?task=-3').focusedTaskNumber).toBeNull();
+  });
+
+  it('omits ?task entirely → null', () => {
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '').focusedTaskNumber).toBeNull();
+  });
+
+  it('coexists with ?side and ?fullscreen — independent dimensions', () => {
+    // Drawer focus and side overlay are orthogonal URL dimensions; both
+    // must survive parsing. The drawer auto-opens via App.tsx based on
+    // `focusedTaskNumber`, the side pane via `sideConversationId`.
+    const r = parseRouteState(
+      '/chat/w/w-1/c/c-a/t/t-1',
+      '?side=c-other&task=7&fullscreen=1',
+    );
+    expect(r.focusedTaskNumber).toBe(7);
+    expect(r.sideConversationId).toBe('c-other');
+    expect(r.fullscreen).toBe(true);
+  });
+});
+
+describe('withTaskQuery — URL writer for openTask / closeTask', () => {
+  it('writes ?task=<n> on a bare path', () => {
+    expect(withTaskQuery('/chat/w/w-1/c/c-a', '', 5)).toBe(
+      '/chat/w/w-1/c/c-a?task=5',
+    );
+  });
+
+  it('overwrites an existing ?task', () => {
+    expect(withTaskQuery('/chat/w/w-1/c/c-a', '?task=3', 9)).toBe(
+      '/chat/w/w-1/c/c-a?task=9',
+    );
+  });
+
+  it('strips ?task on close, leaving other params intact', () => {
+    // closeTask must drop only `?task` — `?side`, `?fullscreen`, and
+    // any unrelated params keep their state. The drawer's open/closed
+    // status is React state, decoupled from this URL pointer.
+    const out = withTaskQuery(
+      '/chat/w/w-1/c/c-a/t/t-1',
+      '?side=c-other&task=12&fullscreen=1',
+      null,
+    );
+    expect(out).toContain('side=c-other');
+    expect(out).toContain('fullscreen=1');
+    expect(out).not.toContain('task=');
+  });
+
+  it('returns the bare path when no params remain after close', () => {
+    expect(withTaskQuery('/chat/w/w-1/c/c-a', '?task=7', null)).toBe(
+      '/chat/w/w-1/c/c-a',
+    );
+  });
+
+  it('preserves unrelated query params on open', () => {
+    const out = withTaskQuery(
+      '/chat/w/w-1/c/c-a',
+      '?utm_source=test',
+      4,
+    );
+    expect(out).toContain('utm_source=test');
+    expect(out).toContain('task=4');
+  });
+});
+
+describe('buildTaskOpenUrl — openTask URL writer', () => {
+  // Mirrors `buildSideOpenUrl` for sigil clicks: additive write of
+  // `?task=<n>` with everything else preserved. Unlike `openSide` we
+  // do NOT strip `?fullscreen` — focusing a task in the drawer is
+  // independent of whichever pane is fullscreen, and stripping it
+  // would yank the user out of a fullscreen view they were reading.
+
+  it('writes ?task=<n> on a bare path', () => {
+    expect(buildTaskOpenUrl('/chat/w/w-1/c/c-a', '', 7)).toBe(
+      '/chat/w/w-1/c/c-a?task=7',
+    );
+  });
+
+  it('preserves ?side and ?fullscreen — drawer focus is orthogonal', () => {
+    const out = buildTaskOpenUrl(
+      '/chat/w/w-1/c/c-a/t/t-1',
+      '?side=c-other&fullscreen=1',
+      11,
+    );
+    expect(out).toContain('side=c-other');
+    expect(out).toContain('fullscreen=1');
+    expect(out).toContain('task=11');
+  });
+
+  it('overwrites a stale ?task', () => {
+    const out = buildTaskOpenUrl(
+      '/chat/w/w-1/c/c-a',
+      '?task=3&utm_source=test',
+      8,
+    );
+    expect(out).toContain('task=8');
+    expect(out).not.toContain('task=3');
+    expect(out).toContain('utm_source=test');
   });
 });

@@ -8,6 +8,7 @@ import type { AgentDto } from '@silverhand/shared';
 import { Mention } from './Mention';
 import { ChannelRef, type WorkspaceReference } from './ChannelRef';
 import { ConversationRef, type ConversationReference } from './ConversationRef';
+import { TaskRef } from './TaskRef';
 
 interface MarkdownProps {
   content: string;
@@ -31,6 +32,7 @@ interface MarkdownProps {
 const MENTION_PREFIX = 'silverhand-mention:';
 const CHANNEL_PREFIX = 'silverhand-channel:';
 const CONVERSATION_PREFIX = 'silverhand-conversation:';
+const TASK_PREFIX = 'silverhand-task:';
 
 /**
  * Renders message body as Markdown.
@@ -73,7 +75,8 @@ function MarkdownInner({
         urlTransform={url =>
           url.startsWith(MENTION_PREFIX) ||
           url.startsWith(CHANNEL_PREFIX) ||
-          url.startsWith(CONVERSATION_PREFIX)
+          url.startsWith(CONVERSATION_PREFIX) ||
+          url.startsWith(TASK_PREFIX)
             ? url
             : defaultUrlTransform(url)
         }
@@ -107,6 +110,20 @@ function MarkdownInner({
                   onOpen={onOpenConversationRef}
                 />
               );
+            }
+            if (
+              typeof href === 'string' &&
+              href.startsWith(TASK_PREFIX)
+            ) {
+              // The tokenizer guarantees the slice is a positive
+              // integer string; parseInt + finite check is defensive.
+              const raw = href.slice(TASK_PREFIX.length);
+              const taskNumber = Number.parseInt(raw, 10);
+              if (Number.isFinite(taskNumber) && taskNumber > 0) {
+                return <TaskRef taskNumber={taskNumber} />;
+              }
+              // Pathological — fall through to plain link rendering
+              // so we don't crash on a malformed href.
             }
             return (
               <a
@@ -189,13 +206,15 @@ function walk(node: MdastNode): void {
 // yielding exactly 16 chars. The trailing negative lookahead prevents
 // matching a valid-looking prefix inside a longer id-like token.
 //
-// Typed sigil grammar: `#<type>:<value>`. We currently recognize
-// `#conv:<id>` (16-char base64url conversation id). The channel branch
-// explicitly excludes `#conv:` and `#task:` prefixes via negative
-// lookahead so a malformed `#conv:bad` doesn't fall back to matching
-// `#conv` as a stray channel reference.
+// Typed sigil grammar: `#<type>:<value>`. We currently recognize:
+//  - `#conv:<id>`  — 16-char base64url conversation id
+//  - `#task:<n>`   — workspace-scoped positive integer task number
+// The channel branch explicitly excludes `#conv:` and `#task:`
+// prefixes via negative lookahead so a malformed `#conv:bad` /
+// `#task:abc` doesn't fall back to matching `#conv` / `#task` as a
+// stray channel reference.
 const REF_RE =
-  /(?<![\w/])(?:#conv:([A-Za-z0-9_-]{16})(?![A-Za-z0-9_-])|@([a-zA-Z][a-zA-Z0-9_-]*)|#(?!conv:|task:)([a-zA-Z][a-zA-Z0-9_-]*))/g;
+  /(?<![\w/])(?:#conv:([A-Za-z0-9_-]{16})(?![A-Za-z0-9_-])|#task:(\d+)(?!\d)|@([a-zA-Z][a-zA-Z0-9_-]*)|#(?!conv:|task:)([a-zA-Z][a-zA-Z0-9_-]*))/g;
 
 function pushSplit(text: string, out: MdastNode[]): void {
   let last = 0;
@@ -218,7 +237,17 @@ function pushSplit(text: string, out: MdastNode[]): void {
       last = m.index + m[0].length;
       continue;
     }
-    const mentionName = m[2];
+    const taskNumber = m[2];
+    if (taskNumber) {
+      out.push({
+        type: 'link',
+        url: `${TASK_PREFIX}${taskNumber}`,
+        children: [{ type: 'text', value: `#task:${taskNumber}` }],
+      });
+      last = m.index + m[0].length;
+      continue;
+    }
+    const mentionName = m[3];
     if (mentionName) {
       out.push({
         type: 'link',
@@ -228,7 +257,7 @@ function pushSplit(text: string, out: MdastNode[]): void {
       last = m.index + m[0].length;
       continue;
     }
-    const channelName = m[3]!;
+    const channelName = m[4]!;
     out.push({
       type: 'link',
       url: `${CHANNEL_PREFIX}${channelName}`,

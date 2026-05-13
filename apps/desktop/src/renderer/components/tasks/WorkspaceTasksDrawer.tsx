@@ -47,6 +47,17 @@ export interface WorkspaceTasksDrawerProps {
   }>;
   /** Initially-selected conversation for the filter. null → all conversations. */
   defaultConversationId: string | null;
+  /** Workspace-scoped task number to focus. When set (sourced from
+   *  `?task=<n>` URL state), the drawer overrides the conversation
+   *  filter to "all" so the target row is reachable, scrolls it into
+   *  view, and applies a brief highlight. Cleared by `onClearFocus` so
+   *  the URL writer (`closeTask`) and the drawer state stay in sync. */
+  focusedTaskNumber?: number | null;
+  /** Called after the drawer has scrolled-and-highlighted the focused
+   *  row. Wired to `nav.closeTask` so the URL drops `?task=<n>` once the
+   *  visual focus has been delivered, preventing a stale highlight on
+   *  next open. */
+  onClearFocus?: () => void;
   onJumpToMessage?: (params: {
     workspaceId?: string;
     channelId: string;
@@ -193,6 +204,8 @@ export function WorkspaceTasksDrawer({
   workspaceScopeIds,
   conversations,
   defaultConversationId,
+  focusedTaskNumber = null,
+  onClearFocus,
   onJumpToMessage,
 }: WorkspaceTasksDrawerProps): JSX.Element {
   const drawerShellRef = useRef<HTMLDivElement>(null);
@@ -210,13 +223,20 @@ export function WorkspaceTasksDrawer({
     defaultConversationId ? { kind: 'channel', id: defaultConversationId } : null,
   );
   // Re-sync to the active conversation every time the drawer opens.
+  // When a `?task=<n>` focus is in flight, override the filter to "all"
+  // so the focused row is in the rendered tree (the channel filter
+  // would silently hide it if the task lives in a different channel).
   useEffect(() => {
     if (open) {
-      setConversationFilter(
-        defaultConversationId ? { kind: 'channel', id: defaultConversationId } : null,
-      );
+      if (focusedTaskNumber !== null) {
+        setConversationFilter(null);
+      } else {
+        setConversationFilter(
+          defaultConversationId ? { kind: 'channel', id: defaultConversationId } : null,
+        );
+      }
     }
-  }, [open, defaultConversationId]);
+  }, [open, defaultConversationId, focusedTaskNumber]);
 
   const closeDrawer = useCallback(
     (event?: React.SyntheticEvent): void => {
@@ -277,6 +297,56 @@ export function WorkspaceTasksDrawer({
 
   // Focus trap: keep focus inside drawer while open.
   const drawerRef = useRef<HTMLDivElement>(null);
+
+  // Visual highlight for the focused-task row. Distinct from
+  // `focusedTaskNumber` (the URL-driven *intent* — "scroll me here"):
+  // once delivered, we clear the URL pointer via `onClearFocus` but
+  // keep the highlight on for ~1.4s so a quick second click on the
+  // same chip still produces a perceptible flash.
+  const [highlightedTaskNumber, setHighlightedTaskNumber] = useState<number | null>(
+    null,
+  );
+  // Scroll-and-highlight on focused-task arrival. We wait one
+  // animation frame so the filter override committed in the effect
+  // above has a chance to flush — the matching row may have just
+  // appeared in the DOM. Once we find the element we scroll it into
+  // view and immediately call `onClearFocus` so the URL drops the
+  // pointer; the highlight outlives the URL state via
+  // `highlightedTaskNumber` to keep visual feedback uncoupled from
+  // navigation.
+  useEffect(() => {
+    if (!open) return;
+    if (focusedTaskNumber == null) return;
+    if (isLoading) return; // tasks list not ready yet — wait for fetch
+    let cancelled = false;
+    const handle = requestAnimationFrame(() => {
+      if (cancelled) return;
+      const root = drawerRef.current;
+      if (!root) return;
+      const el = root.querySelector<HTMLElement>(
+        `[data-task-number="${focusedTaskNumber}"]`,
+      );
+      if (el) {
+        el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        setHighlightedTaskNumber(focusedTaskNumber);
+      }
+      onClearFocus?.();
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(handle);
+    };
+  }, [open, focusedTaskNumber, isLoading, onClearFocus]);
+
+  // Auto-clear the highlight ring after a short pulse so the row
+  // settles back into the column visually. Independent of the URL —
+  // re-clicking the same chip refreshes `focusedTaskNumber` (no-op if
+  // unchanged), so the effect above re-arms the highlight.
+  useEffect(() => {
+    if (highlightedTaskNumber == null) return;
+    const t = setTimeout(() => setHighlightedTaskNumber(null), 1400);
+    return () => clearTimeout(t);
+  }, [highlightedTaskNumber]);
 
   return (
     <>
@@ -375,6 +445,7 @@ export function WorkspaceTasksDrawer({
                 onStatusChange={(messageId, status) =>
                   updateStatus.mutate({ messageId, status })
                 }
+                highlightedTaskNumber={highlightedTaskNumber}
               />
             ))}
           </div>
@@ -735,6 +806,7 @@ function KanbanColumn({
   isLoading,
   onCardClick,
   onStatusChange,
+  highlightedTaskNumber,
 }: {
   title: string;
   status: TaskStatus;
@@ -744,6 +816,7 @@ function KanbanColumn({
   isLoading: boolean;
   onCardClick: (t: TaskSummaryDto) => void;
   onStatusChange: (messageId: string, next: TaskStatus) => void;
+  highlightedTaskNumber: number | null;
 }): JSX.Element {
   return (
     <section
@@ -778,6 +851,7 @@ function KanbanColumn({
               <li key={t.message_id}>
                 <TaskCard
                   task={t}
+                  highlighted={highlightedTaskNumber === t.task_number}
                   onClick={() => onCardClick(t)}
                   onStatusChange={next => onStatusChange(t.message_id, next)}
                 />
@@ -794,15 +868,27 @@ function KanbanColumn({
 
 function TaskCard({
   task,
+  highlighted,
   onClick,
   onStatusChange,
 }: {
   task: TaskSummaryDto;
+  highlighted: boolean;
   onClick: () => void;
   onStatusChange: (next: TaskStatus) => void;
 }): JSX.Element {
   return (
-    <div className="group relative rounded-md border border-border-subtle bg-bg-primary transition-colors hover:border-accent hover:bg-bg-hover">
+    <div
+      data-task-number={task.task_number}
+      className={cn(
+        'group relative rounded-md border border-border-subtle bg-bg-primary transition-all hover:border-accent hover:bg-bg-hover',
+        // Brief ring pulse when this card is the focused-task target.
+        // Cleared by the drawer's setTimeout (~1.4s) so the highlight
+        // doesn't linger on next open. `transition-all` lets the ring
+        // fade in/out smoothly without a custom keyframe.
+        highlighted && 'ring-2 ring-accent ring-offset-1 ring-offset-bg-base',
+      )}
+    >
       {/* Jump to message — full card content area */}
       <button
         type="button"

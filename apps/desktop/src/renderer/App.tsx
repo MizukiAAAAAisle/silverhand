@@ -162,6 +162,7 @@ export function App(): JSX.Element {
     channelId: selectedChannelId,
     threadId: openThreadId,
     sideConversationId,
+    focusedTaskNumber,
     fullscreen: routeFullscreen,
     threadFullscreen,
     agentId: selectedAgentId,
@@ -671,6 +672,34 @@ export function App(): JSX.Element {
     }
   };
 
+  // Open the workspace tasks drawer focused on a specific task. Wired
+  // to inline `#task:<n>` chips via `TaskRefContextProvider` inside
+  // ChannelView. The chip's workspace is the message's workspace —
+  // when that differs from the primary-selected workspace (cross-
+  // workspace `?side` panes), we navigate to the foreign workspace's
+  // top-level path with `?task=<n>` attached so the drawer opens
+  // against the right task list.
+  const handleOpenTask = useCallback(
+    (taskNumber: number, workspaceId: string) => {
+      if (selectedWorkspaceId === workspaceId) {
+        nav.openTask(taskNumber);
+      } else {
+        nav.go(`${routes.chatWorkspace(workspaceId)}?task=${taskNumber}`);
+      }
+    },
+    [selectedWorkspaceId, nav],
+  );
+
+  // Auto-open the tasks drawer when `?task=<n>` lands in the URL. The
+  // drawer's own scroll/highlight effect reacts to `focusedTaskNumber`;
+  // we just need to make it visible. `?task` clears once the highlight
+  // has been delivered (drawer fires `onClearFocus` → `nav.closeTask`).
+  useEffect(() => {
+    if (focusedTaskNumber !== null && !tasksDrawerOpen) {
+      setTasksDrawerOpen(true);
+    }
+  }, [focusedTaskNumber, tasksDrawerOpen]);
+
   const handleJumpToMessage = (
     params: {
       workspaceId?: string;
@@ -995,6 +1024,7 @@ export function App(): JSX.Element {
       archivePending={archiveChannel.isPending}
       conversationRefsById={conversationRefsById}
       onOpenConversationRef={nav.openSide}
+      onOpenTask={handleOpenTask}
     />
   );
 
@@ -1060,6 +1090,7 @@ export function App(): JSX.Element {
           archivePending={archiveChannel.isPending}
           conversationRefsById={conversationRefsById}
           onOpenConversationRef={nav.openSide}
+          onOpenTask={handleOpenTask}
           // No nested Thread from the secondary pane: thread sides can't
           // spawn sub-threads (1-layer hard limit, schema-enforced); for
           // channel sides, sub-thread creation would target the side's
@@ -1434,6 +1465,8 @@ export function App(): JSX.Element {
             created_at: s.created_at,
           }))}
           defaultConversationId={selectedChannelId}
+          focusedTaskNumber={focusedTaskNumber}
+          onClearFocus={nav.closeTask}
           onJumpToMessage={params => handleJumpToMessage(params)}
         />
       ) : null}

@@ -107,6 +107,11 @@ export interface RouteState {
    *  exist in the current workspace's channels union; cross-workspace
    *  resolution lands in PR-2 with `useConversationById`. */
   sideConversationId: string | null;
+  /** Tasks-drawer focus pointer (`?task=<task_number>`). When set, the
+   *  drawer opens to "all" filter and scrolls/highlights the row. The
+   *  number is workspace-scoped — resolution uses the workspace of the
+   *  message the sigil appears in (see `TaskRefContext`). PR-4. */
+  focusedTaskNumber: number | null;
   /** Raw `?fullscreen=1` flag. Applies to whichever pane is secondary
    *  by the side > thread priority. */
   fullscreen: boolean;
@@ -143,6 +148,13 @@ export function parseRouteState(pathname: string, search: string): RouteState {
   // Defensive: empty string treated as unset; prevents `?side=` from
   // forcing an "unresolved secondary" placeholder.
   const sideConversationId = rawSide && rawSide.length > 0 ? rawSide : null;
+  const rawTask = searchParams.get('task');
+  // Defensive: only positive integers count. `?task=0` / `?task=abc` /
+  // empty string all coerce to null so the drawer never tries to focus
+  // a non-existent row.
+  const taskAsNumber = rawTask !== null ? Number.parseInt(rawTask, 10) : NaN;
+  const focusedTaskNumber =
+    Number.isFinite(taskAsNumber) && taskAsNumber > 0 ? taskAsNumber : null;
   const threadFullscreen =
     fullscreen && !!threadId && !sideConversationId;
 
@@ -167,6 +179,7 @@ export function parseRouteState(pathname: string, search: string): RouteState {
     channelId: channelId ?? null,
     threadId: threadId ?? null,
     sideConversationId,
+    focusedTaskNumber,
     fullscreen,
     threadFullscreen,
     agentId: mAgent?.params.agentId ?? null,
@@ -235,6 +248,51 @@ export function buildChannelPathPreservingSide(
 }
 
 /**
+ * Build a URL with `?task` written or cleared. Pure helper so the nav
+ * hook can stay tiny and tests can assert URL shape without React.
+ *
+ * Rules:
+ *  - `taskNumber == null` → strip `?task`. Other params (`side`,
+ *    `fullscreen`, …) are preserved verbatim.
+ *  - `taskNumber !== null` → set `?task=<n>`. Validation (positive
+ *    integer, exists in workspace) lives in `parseRouteState` and the
+ *    drawer's focus effect; this writer is dumb on purpose.
+ */
+export function withTaskQuery(
+  pathname: string,
+  search: string,
+  taskNumber: number | null,
+): string {
+  const params = new URLSearchParams(search);
+  if (taskNumber == null) {
+    params.delete('task');
+  } else {
+    params.set('task', String(taskNumber));
+  }
+  const next = params.toString();
+  return next ? `${pathname}?${next}` : pathname;
+}
+
+/**
+ * Build the URL written by `openTask(taskNumber)`. Sets `?task=<n>` on
+ * the current location, preserving any base path and other query params
+ * (`side`, `fullscreen`). The drawer reads `focusedTaskNumber` from the
+ * resulting RouteState and uses it to (a) override its conversation
+ * filter to "all" so the row is reachable and (b) scroll-and-highlight
+ * the target row.
+ *
+ * Mirrors `buildSideOpenUrl` in spirit — purely additive on the URL,
+ * with closing handled by `withTaskQuery(..., null)`.
+ */
+export function buildTaskOpenUrl(
+  pathname: string,
+  search: string,
+  taskNumber: number,
+): string {
+  return withTaskQuery(pathname, search, taskNumber);
+}
+
+/**
  * Build the URL written by `openSide(conversationId)`. Sets `?side=<id>`
  * AND strips `?fullscreen=1` — sigil clicks promise "side pane, doesn't
  * replace your main view" (see platform-prompt's "Referencing
@@ -293,6 +351,15 @@ export function useNav(): {
    *  again. `replace` so the user's back button doesn't have to step
    *  through every overlay open/close. */
   closeSide: () => void;
+  /** Focus a task in the workspace tasks drawer by writing `?task=<n>`.
+   *  The drawer auto-opens, switches to "all" filter, scrolls the row
+   *  into view, and applies a brief highlight. `replace` so re-clicking
+   *  task chips doesn't pile history entries. */
+  openTask: (taskNumber: number) => void;
+  /** Clear the focused-task pointer (`?task`). Drawer can stay open via
+   *  its own React state — closing the URL focus is independent of
+   *  open/close. */
+  closeTask: () => void;
 } {
   const navigate = useNavigate();
   const location = useLocation();
@@ -314,6 +381,21 @@ export function useNav(): {
   );
   const closeSide = useCallback(() => {
     const next = withSideQuery(location.pathname, location.search, null);
+    navigate(next, { replace: true });
+  }, [navigate, location.pathname, location.search]);
+  const openTask = useCallback(
+    (taskNumber: number) => {
+      const next = buildTaskOpenUrl(
+        location.pathname,
+        location.search,
+        taskNumber,
+      );
+      navigate(next, { replace: true });
+    },
+    [navigate, location.pathname, location.search],
+  );
+  const closeTask = useCallback(() => {
+    const next = withTaskQuery(location.pathname, location.search, null);
     navigate(next, { replace: true });
   }, [navigate, location.pathname, location.search]);
   return {
@@ -342,5 +424,7 @@ export function useNav(): {
     toSettings: useCallback(() => go(routes.settings()), [go]),
     openSide,
     closeSide,
+    openTask,
+    closeTask,
   };
 }

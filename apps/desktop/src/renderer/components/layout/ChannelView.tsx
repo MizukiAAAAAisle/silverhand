@@ -35,6 +35,7 @@ import { findThreadAnchor, readAnchorMessageId } from '@/components/chat/threadA
 import { SystemMessage } from '@/components/chat/SystemMessage';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
+import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
 import {
   AppDropdownMenu,
   AppDropdownMenuItem,
@@ -124,6 +125,12 @@ interface ChannelViewProps {
   /** Current-workspace top-level conversation id map for inline `#conv:<id>` refs. */
   conversationRefsById?: Map<string, ConversationReference>;
   onOpenConversationRef?: (id: string) => void;
+  /** Click handler for inline `#task:<n>` chips. Receives both the
+   *  numeric task and the workspace it should resolve against — that's
+   *  always the conversation's workspace, since task numbers are
+   *  workspace-scoped. App.tsx switches the selected workspace when
+   *  needed (cross-workspace `?side` panes) and writes `?task=<n>`. */
+  onOpenTask?: (taskNumber: number, workspaceId: string) => void;
 }
 
 export const ChannelView = memo(function ChannelView(props: ChannelViewProps): JSX.Element {
@@ -163,6 +170,7 @@ function ActiveChannelView({
   archivePending = false,
   conversationRefsById,
   onOpenConversationRef,
+  onOpenTask,
 }: ChannelViewProps & { conversation: ChannelDescriptor }): JSX.Element {
   const routeKind = conversation.parent_conversation_id ? 'thread' : 'channel';
   const {
@@ -321,7 +329,24 @@ function ActiveChannelView({
     return m;
   }, [threads]);
 
+  // Bind a TaskRefContext to this conversation's workspace. Inline
+  // `#task:<n>` chips inside this pane resolve their numeric reference
+  // against `conversation.workspace_id` — the message's workspace, not
+  // the primary-selected workspace. Cross-workspace `?side` panes
+  // therefore look up tasks in the foreign workspace transparently.
+  const taskRefContext = useMemo(
+    () => ({
+      workspaceId: conversation.workspace_id,
+      onOpenTask: onOpenTask
+        ? (taskNumber: number) =>
+            onOpenTask(taskNumber, conversation.workspace_id)
+        : undefined,
+    }),
+    [conversation.workspace_id, onOpenTask],
+  );
+
   return (
+    <TaskRefContextProvider value={taskRefContext}>
     <main
       className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-chat"
       style={{
@@ -505,6 +530,7 @@ function ActiveChannelView({
         />
       </div>
     </main>
+    </TaskRefContextProvider>
   );
 }
 
