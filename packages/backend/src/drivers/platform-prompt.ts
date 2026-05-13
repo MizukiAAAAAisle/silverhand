@@ -272,6 +272,11 @@ Example:
 
 ## Threads (when to open one)
 
+Threads run as separate agent sessions with their own context. The
+Thread's (conversation, agent) process accumulates the Thread's
+discussion, decisions, and review state — the parent channel's process
+does not see any of that.
+
 You may open a Thread via ${createThread} when:
 - A side-discussion is large enough that mixing it with current
   channel context would obscure the main discussion.
@@ -285,6 +290,13 @@ narrow to a subset of agents already in this channel — you are always
 included regardless. **Threads cannot nest** — you
 cannot open a Thread from inside a Thread; use ${createChannel} instead
 if the user explicitly asks for a separate channel.
+
+If follow-up work depends on a Thread's accumulated discussion or
+review state, the Thread session should own that work: create or claim
+the task in the Thread, post progress in the Thread, and let the
+parent channel carry only a short pointer or final summary. Do not
+@-mention an executor in the parent while saying the work should
+happen in the Thread — mention or task them inside the Thread instead.
 
 When an agent-spawned Thread completes, call ${closeThread} with a final
 \`--summary\`. When a user-opened Thread reaches a conclusion, post a

@@ -237,6 +237,59 @@ describe('buildPlatformPrompt', () => {
     expect(text).not.toContain('`mcp__chat__create_session`');
   });
 
+  it('teaches that Threads are independent agent sessions and own their follow-up work', () => {
+    // Two facts the agent must internalize without us teaching them
+    // about runtime delivery:
+    //   1. A Thread is a *separate* (conversation, agent) process —
+    //      not a chat-organization layer. The parent channel's process
+    //      does NOT see Thread content. This justifies "if the work
+    //      depends on Thread context, do it inside the Thread".
+    //   2. Work-log ownership: when follow-up depends on a Thread's
+    //      accumulated state, the Thread session creates/claims and
+    //      drives the task; parent stays a pointer. Don't @-mention
+    //      executors in parent while delegating "to the Thread" —
+    //      that splits the log between two sessions.
+    //
+    // We deliberately do NOT mention auto-wake / `--no-wake` / runtime
+    // delivery semantics. That's a backend transport guarantee
+    // (cross-target sends wake idle target members); the agent should
+    // default-assume "the message reaches the target" and not have to
+    // know about it. Per @shiki review of msg `Va7npVrVTFMQpGFQ`.
+    const text = prompt();
+    expect(text).toContain('separate agent sessions');
+    expect(text).toContain('with their own context');
+    expect(text).toContain(
+      "(conversation, agent) process accumulates the Thread's",
+    );
+    expect(text).toContain('parent channel');
+    expect(text).toContain('does not see any of that');
+
+    // Work-log ownership clauses.
+    expect(text).toContain(
+      "follow-up work depends on a Thread's accumulated discussion",
+    );
+    expect(text).toContain('the Thread session should own that work');
+    expect(text).toMatch(/create or\s+claim\s+the task in the Thread/);
+    expect(text).toMatch(/post progress\s+in the Thread/);
+    expect(text).toMatch(
+      /let the\s+parent channel carry only a short pointer or final\s+summary/,
+    );
+    expect(text).toMatch(/Do not\s+@-mention an executor in the parent/);
+    expect(text).toMatch(
+      /mention or task them inside\s+the Thread instead/,
+    );
+
+    // Drift guard: never reintroduce wake/runtime-delivery vocabulary.
+    // Agents must not be taught to think about runtime delivery state.
+    expect(text).not.toContain('auto-wake');
+    expect(text).not.toContain('auto-start');
+    expect(text).not.toMatch(/woken automatically/i);
+    expect(text).not.toContain('--no-wake');
+    expect(text).not.toContain('--wake');
+    expect(text).not.toContain('idle members are woken');
+    expect(text).not.toContain('idle recipients');
+  });
+
   it('teaches the #~<id> sigil for inline conversation references', () => {
     const text = prompt();
     // Section anchor + sigil syntax + concrete example.
