@@ -7,12 +7,26 @@ import type { ConversationReference } from './ConversationRef';
 import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
 
 function render(content: string, refs?: Map<string, ConversationReference>): string {
+  // PR-4 commit 5 (Cindy review of `45fca42`): ConversationRef now
+  // calls `useConversationById` so it can resolve cross-workspace
+  // refs that the synchronous `conversationRefsById` map can't see.
+  // That hook requires a QueryClient context — wrap every render
+  // in one. SSR doesn't drive the query lifecycle so the prop path
+  // (`conversationRefsById` resolved entries) still produces the
+  // resolved markup the assertions check; missing entries land in
+  // `loading` and the popover stays skeleton (caller asserts
+  // chip-level data attributes only).
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return renderToStaticMarkup(
-    React.createElement(Markdown, {
-      content,
-      conversationRefsById: refs,
-      onOpenConversationRef: () => undefined,
-    }),
+    React.createElement(
+      QueryClientProvider,
+      { client: qc },
+      React.createElement(Markdown, {
+        content,
+        conversationRefsById: refs,
+        onOpenConversationRef: () => undefined,
+      }),
+    ),
   );
 }
 
@@ -122,6 +136,93 @@ describe('Markdown conversation refs', () => {
     const html = render('See #~AbC123_-xyZ789qR for details.');
     expect(html).not.toContain('data-conversation-ref="AbC123_-xyZ789qR"');
     expect(html).toContain('#~AbC123_-xyZ789qR');
+  });
+
+  it('resolves cross-workspace #conv: via useConversationById when prop is missing', () => {
+    // Cindy review of commit 3 (`45fca42`): the original implementation
+    // only used the synchronous `conversationRefsById` map, which is
+    // workspace-scoped — any `#conv:<id>` pointing at a foreign
+    // workspace would render permanently as `#conv:<short>` and the
+    // popover would skeleton forever. ConversationRef now also calls
+    // `useConversationById(id)` so cross-workspace refs resolve. We
+    // pre-seed React Query's cache with the resolved payload so SSR
+    // observes it as `resolved` without hitting the network.
+    const id = 'CrossWsRef12345_';
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(['conversation-ref', id], {
+      ref: {
+        id,
+        kind: 'channel',
+        title: 'foreign-channel',
+        workspace_id: 'ws-foreign',
+        workspace_kind: 'regular',
+        workspace_path: '/tmp/ws-foreign',
+        parent_channel_id: null,
+        parent_title: null,
+        closed_at: null,
+        archived_at: null,
+      },
+    });
+    const html = renderToStaticMarkup(
+      React.createElement(
+        QueryClientProvider,
+        { client: qc },
+        React.createElement(Markdown, {
+          content: `See #conv:${id}.`,
+          // Intentionally omit `conversationRefsById` so the hook is
+          // the only resolution path — exercises the cross-workspace
+          // case end-to-end.
+          onOpenConversationRef: () => undefined,
+        }),
+      ),
+    );
+    expect(html).toContain(`data-conversation-ref="${id}"`);
+    // Resolved title from the hook surfaces on the chip — proves the
+    // hook→prop fallback chain works and the chip didn't get stuck
+    // on the `#conv:<short>` placeholder.
+    expect(html).toContain('foreign-channel');
+    expect(html).not.toContain(`#conv:${id.slice(0, 6)}`);
+  });
+});
+
+describe('Markdown task refs — loading-state hover popover', () => {
+  it('wraps the loading chip in HoverPopover so 500ms hover reveals a skeleton', () => {
+    // Cindy review of commit 3 (`45fca42`): the original loading
+    // branch returned a bare `<span>` with no HoverPopover wrapper,
+    // so a hover ≥500ms while the fetch was in flight produced
+    // nothing — violating the "no spinner, but DO show a non-spinner
+    // loading state after 500ms" spec.
+    //
+    // SSR can't drive HoverCard's open state but we CAN verify that
+    // the chip carries the `loading` state attribute and that the
+    // HoverCard.Root structure is in place around it (radix renders
+    // a `data-state` on the trigger element). The key regression
+    // is: chip-state="loading" must be present, distinguishing it
+    // from the no-context / missing branches that stay tooltip-only.
+    const html = renderWithTaskCtx('Working on #task:5 now.', 'w-eng', () => {});
+    expect(html).toContain('data-task-ref="5"');
+    expect(html).toContain('data-task-ref-state="loading"');
+    // HoverCard.Trigger forwards `data-state="closed"` onto the
+    // wrapped chip element so the radix popover styling can hook
+    // into it. Its presence on the loading-state chip confirms the
+    // chip went through HoverPopover (the no-context / missing
+    // branches return a bare `<span>` without that attribute).
+    expect(html).toMatch(
+      /data-task-ref-state="loading"[^>]*data-state="closed"|data-state="closed"[^>]*data-task-ref-state="loading"/,
+    );
+  });
+
+  it('keeps no-context and missing states tooltip-only (no HoverPopover wrap)', () => {
+    // Inverse of the above: states with nothing meaningful to show
+    // in a popover stay bare so a hover doesn't open an empty card.
+    // No-context (no workspace anchor) is tested via `null` workspace.
+    const html = renderWithTaskCtx('See #task:42.', null);
+    expect(html).toContain('data-task-ref-state="no-context"');
+    // No `data-state="closed"` adjacent to the no-context chip
+    // because it never went through HoverCard.
+    expect(html).not.toMatch(
+      /data-task-ref-state="no-context"[^>]*data-state="closed"|data-state="closed"[^>]*data-task-ref-state="no-context"/,
+    );
   });
 });
 

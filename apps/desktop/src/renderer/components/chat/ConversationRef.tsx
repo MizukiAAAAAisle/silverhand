@@ -1,5 +1,9 @@
 import { AtSign, CornerDownRight, Hash } from 'lucide-react';
 import { HoverPopover } from './HoverPopover';
+import {
+  useConversationById,
+  type ConversationByIdStatus,
+} from '@/features/conversations/useConversationById';
 
 export interface ConversationReference {
   id: string;
@@ -12,9 +16,11 @@ export interface ConversationReference {
 interface ConversationRefProps {
   /** Raw conversation id from `#conv:<id>`. */
   id: string;
-  /** Current-workspace metadata when available. Cross-workspace refs
-   *  are resolved in PR-2; until then they still open the side pane as
-   *  an unresolved placeholder. */
+  /** Current-workspace metadata when available. Acts as a synchronous
+   *  fast path — avoids a brief loading flash on chips that point at a
+   *  channel/thread already in the current workspace's lookup map. The
+   *  authoritative source is `useConversationById(id)` below, which
+   *  also handles cross-workspace refs the lookup map can't see. */
   conversation: ConversationReference | undefined;
   onOpen?: (id: string) => void;
 }
@@ -26,22 +32,59 @@ interface ConversationRefProps {
  * when metadata is unavailable: the side pane can surface the unresolved
  * placeholder instead of silently dropping a reference.
  *
+ * Resolution: `useConversationById(id)` is the authoritative source of
+ * conversation metadata. The optional `conversation` prop is a
+ * synchronous fast path that avoids a loading flash when the id is
+ * already in the current-workspace channels map (PR-2 review by
+ * @Cindy on commit 3 — the prop alone fails for any cross-workspace
+ * `#conv:<id>` since the map is workspace-scoped). React Query
+ * dedupes the underlying GET so adding this hook to every chip
+ * doesn't multiply network calls.
+ *
  * Hover ≥500ms surfaces a popover with the conversation's full
- * metadata — kind, parent (for threads), and id. Falls back to a
- * skeleton when the chip rendered before its metadata resolved.
+ * metadata. Loading shows a skeleton; 403/404 from the cross-
+ * workspace endpoint render an explicit "unavailable" body so we
+ * never sit on a forever-skeleton popover.
  */
 export function ConversationRef({
   id,
   conversation,
   onOpen,
 }: ConversationRefProps): JSX.Element {
-  const label = conversation
-    ? conversationDisplayName(conversation)
+  const hookResult = useConversationById(id);
+  // Prefer the prop (current-workspace fast path) over the hook
+  // result; both shapes are fine, the prop just avoids a loading
+  // flash for the common case.
+  const resolved: ConversationReference | null =
+    conversation ??
+    (hookResult.status === 'resolved' && hookResult.ref
+      ? {
+          id: hookResult.ref.id,
+          kind: hookResult.ref.kind,
+          title: hookResult.ref.title,
+          parent_channel_id: hookResult.ref.parent_channel_id,
+          parent_title: hookResult.ref.parent_title,
+        }
+      : null);
+  // Three-state for popover purposes:
+  //   - 'resolved'    → render real metadata
+  //   - 'unavailable' → 403 / 404, render explicit body (NOT skeleton —
+  //                     a forever-skeleton popover is what Cindy review
+  //                     of `45fca42` flagged on cross-workspace ids)
+  //   - 'loading'     → skeleton via HoverPopover.isContentReady=false
+  const popoverStatus: 'resolved' | 'unavailable' | 'loading' = resolved
+    ? 'resolved'
+    : hookResult.status === 'not_found' || hookResult.status === 'unauthorized'
+      ? 'unavailable'
+      : 'loading';
+
+  const label = resolved
+    ? conversationDisplayName(resolved)
     : `#conv:${shortConversationId(id)}`;
-  const tooltip = conversation
-    ? `${kindLabel(conversation.kind)} · ${conversationDisplayName(conversation)}`
+  const tooltip = resolved
+    ? `${kindLabel(resolved.kind)} · ${conversationDisplayName(resolved)}`
     : `Open conversation #conv:${id}`;
-  const icon = conversationIcon(conversation?.kind);
+  const icon = conversationIcon(resolved?.kind);
   const chipBody = (
     <>
       {icon}
@@ -82,17 +125,21 @@ export function ConversationRef({
     </span>
   );
 
+  const popoverContent =
+    popoverStatus === 'resolved' && resolved ? (
+      <ConversationPopoverBody id={id} conversation={resolved} />
+    ) : popoverStatus === 'unavailable' ? (
+      <UnresolvedConversationPopoverBody
+        id={id}
+        reason={hookResult.status as ConversationByIdStatus}
+      />
+    ) : null;
+
   return (
     <HoverPopover
       trigger={onOpen ? interactiveChip : inertChip}
-      content={
-        conversation ? (
-          <ConversationPopoverBody id={id} conversation={conversation} />
-        ) : (
-          <UnresolvedConversationPopoverBody id={id} />
-        )
-      }
-      isContentReady={!!conversation}
+      content={popoverContent}
+      isContentReady={popoverStatus !== 'loading'}
     />
   );
 }
@@ -141,16 +188,29 @@ function ConversationPopoverBody({
 }
 
 /**
- * Popover for refs we couldn't resolve — clicking the chip still
- * opens the side pane (which renders its own unresolved placeholder),
- * so the popover only documents the id we *do* have.
+ * Popover for refs where the backend said 403 or 404 — clicking the
+ * chip still opens the side pane (which renders its own placeholder),
+ * so the popover only documents the id and the reason we couldn't
+ * resolve. Visible state is "decided" — `isContentReady=true` — so
+ * the user gets a clear "unavailable" message instead of a forever-
+ * skeleton. Cindy review of commit 3.
  */
-function UnresolvedConversationPopoverBody({ id }: { id: string }): JSX.Element {
+function UnresolvedConversationPopoverBody({
+  id,
+  reason,
+}: {
+  id: string;
+  reason: ConversationByIdStatus;
+}): JSX.Element {
+  const message =
+    reason === 'unauthorized'
+      ? "You don't have access to this conversation in its workspace."
+      : reason === 'not_found'
+        ? 'Conversation not found — it may have been deleted.'
+        : 'Conversation metadata not available.';
   return (
     <div className="space-y-2">
-      <p className="text-xs text-text-muted">
-        Conversation metadata not available in this workspace.
-      </p>
+      <p className="text-xs text-text-muted">{message}</p>
       <p
         className="truncate font-mono text-[10px] text-text-muted"
         title={id}

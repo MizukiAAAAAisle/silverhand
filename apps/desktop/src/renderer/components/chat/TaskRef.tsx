@@ -41,23 +41,58 @@ export function TaskRef({ taskNumber }: TaskRefProps): JSX.Element {
   const onOpenTask = ctx?.onOpenTask;
   const inertLabel = `#task:${taskNumber}`;
 
-  // Inert paths (no context, resolved-missing) render the same plain
-  // pill so layout doesn't reflow on resolution. Loading also lands
-  // here so the chip itself never blinks; the popover is the place
-  // we surface lookup state visibly.
-  if (!workspaceId || result.isLoading || !task) {
+  // No-context (saved/preview surfaces) and resolved-missing (task
+  // deleted or never existed in this workspace) render a tooltip-only
+  // pill with no popover — there's nothing meaningful to surface on
+  // hover for either case. Loading WITH workspace context goes through
+  // HoverPopover with `isContentReady=false` so a hover ≥500ms while
+  // the fetch is still in flight gets a skeleton (Cindy review of
+  // commit 3 — previously the loading branch returned a bare span,
+  // missing the 500ms→skeleton spec entirely).
+  if (!workspaceId) {
     return (
       <span
         className="inline-flex max-w-[220px] items-center gap-0.5 rounded bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
         title={`Task ${inertLabel}`}
         data-task-ref={String(taskNumber)}
-        data-task-ref-state={
-          !workspaceId
-            ? 'no-context'
-            : result.isLoading
-              ? 'loading'
-              : 'missing'
-        }
+        data-task-ref-state="no-context"
+      >
+        <ClipboardCheck className="size-3 shrink-0 self-center" />
+        <span className="truncate">{inertLabel}</span>
+      </span>
+    );
+  }
+
+  if (result.isLoading) {
+    const loadingChip = (
+      <span
+        className="inline-flex max-w-[220px] items-center gap-0.5 rounded bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
+        title={`Task ${inertLabel}`}
+        data-task-ref={String(taskNumber)}
+        data-task-ref-state="loading"
+      >
+        <ClipboardCheck className="size-3 shrink-0 self-center" />
+        <span className="truncate">{inertLabel}</span>
+      </span>
+    );
+    return (
+      <HoverPopover
+        trigger={loadingChip}
+        content={null}
+        isContentReady={false}
+      />
+    );
+  }
+
+  if (!task) {
+    // Resolved-missing — tooltip only, no popover. A "task not found"
+    // popover doesn't add information beyond the inert pill.
+    return (
+      <span
+        className="inline-flex max-w-[220px] items-center gap-0.5 rounded bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
+        title={`Task ${inertLabel}`}
+        data-task-ref={String(taskNumber)}
+        data-task-ref-state="missing"
       >
         <ClipboardCheck className="size-3 shrink-0 self-center" />
         <span className="truncate">{inertLabel}</span>
