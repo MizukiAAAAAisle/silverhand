@@ -89,7 +89,7 @@ export function SideUnresolvedPlaceholder({
           <Loader2 className="size-5 animate-spin text-text-disabled" />
         ) : null}
         <p>{copy.body}</p>
-        <p className="font-mono text-xs text-text-disabled">#~{shortId}</p>
+        <p className="font-mono text-xs text-text-disabled">#conv:{shortId}</p>
         <p className="text-xs text-text-disabled">{copy.hint}</p>
       </div>
     </main>

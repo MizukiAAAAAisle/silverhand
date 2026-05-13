@@ -9,7 +9,7 @@ export interface ConversationReference {
 }
 
 interface ConversationRefProps {
-  /** Raw conversation id from `#~<id>`. */
+  /** Raw conversation id from `#conv:<id>`. */
   id: string;
   /** Current-workspace metadata when available. Cross-workspace refs
    *  are resolved in PR-2; until then they still open the side pane as
@@ -19,7 +19,7 @@ interface ConversationRefProps {
 }
 
 /**
- * Inline rendering of a `#~<conversation_id>` reference.
+ * Inline rendering of a `#conv:<conversation_id>` reference.
  *
  * Unlike `#name`, this is id-addressed and intentionally clickable even
  * when metadata is unavailable: the side pane can surface the unresolved
@@ -32,10 +32,10 @@ export function ConversationRef({
 }: ConversationRefProps): JSX.Element {
   const label = conversation
     ? conversationDisplayName(conversation)
-    : `#~${shortConversationId(id)}`;
+    : `#conv:${shortConversationId(id)}`;
   const tooltip = conversation
     ? `${kindLabel(conversation.kind)} · ${conversationDisplayName(conversation)}`
-    : `Open conversation #~${id}`;
+    : `Open conversation #conv:${id}`;
   const icon = conversationIcon(conversation?.kind);
   const content = (
     <>

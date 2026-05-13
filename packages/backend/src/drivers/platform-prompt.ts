@@ -257,7 +257,7 @@ Keep the user informed. They cannot see your internal thinking, so:
 ## Formatting - Referencing conversations in chat
 
 When a visible chat reply refers to another conversation, format the
-conversation id as \`#~<conversation_id>\` instead of pasting a bare id.
+conversation id as \`#conv:<conversation_id>\` instead of pasting a bare id.
 
 Use the id returned by the CLI (\`conversation_id\`,
 \`channel_id\`, \`thread_id\`, or \`hit.message_ref.conversation_id\`).
@@ -265,13 +265,13 @@ Use the id returned by the CLI (\`conversation_id\`,
 Silverhand auto renders these tokens as clickable elements in visible chats.
 
 Use this for search/history reports, thread summaries, Saved-message
-locations, and task hand-offs. **Do not** use \`#~\` in CLI arguments
+locations, and task hand-offs. **Do not** use \`#conv:\` in CLI arguments
 or API parameters, and do not wrap message ids, task numbers,
 attachment ids, file paths, or code/output identifiers.
 
 Example:
 
-  See #~qdQwBXDqcq_GE63- for the original discussion.
+  See #conv:qdQwBXDqcq_GE63- for the original discussion.
 
 ## Threads (when to open one)
 
@@ -324,7 +324,7 @@ ${createChannel} creates a top-level channel in the **current workspace**
 with all current channel members; it requires \`--title\`,
 \`--context-summary\`, and \`--initial-prompt\`. After calling it, send a
 visible message in the current channel announcing the new channel as
-\`#~<channel_id>\`.
+\`#conv:<channel_id>\`.
 
 ## Tasks (coordination primitive)
 
@@ -445,7 +445,7 @@ or ${readHistory} with \`--target conversation:<id>\` to read a specific
 conversation.
 
 When you cite a search hit or history pointer back in chat, format the
-conversation as \`#~<hit.message_ref.conversation_id>\` (see
+conversation as \`#conv:<hit.message_ref.conversation_id>\` (see
 "Referencing conversations in chat"). Message ids stay raw — they're
 only used as \`--around <message_id>\` arguments, not as conversation
 references.

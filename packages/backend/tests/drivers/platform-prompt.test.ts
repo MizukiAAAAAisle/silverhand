@@ -290,14 +290,14 @@ describe('buildPlatformPrompt', () => {
     expect(text).not.toContain('idle recipients');
   });
 
-  it('teaches the #~<id> sigil for inline conversation references', () => {
+  it('teaches the #conv:<id> sigil for inline conversation references', () => {
     const text = prompt();
     // Section anchor + sigil syntax + concrete example. Heading shape
     // is matched on the trailing portion to allow optional "Formatting -"
     // section prefix that lives in the prompt.
     expect(text).toMatch(/^## .*Referencing conversations in chat\b/m);
-    expect(text).toContain('`#~<conversation_id>`');
-    expect(text).toMatch(/#~qdQwBXDqcq_GE63-/);
+    expect(text).toContain('`#conv:<conversation_id>`');
+    expect(text).toMatch(/#conv:qdQwBXDqcq_GE63-/);
 
     // The prompt is a pure output-format contract, not a UI behavior
     // explanation. Per @shiki + @Cindy reviews on `8f2f046` / `d4fbf1c`,
@@ -325,8 +325,8 @@ describe('buildPlatformPrompt', () => {
     expect(text).toContain('`hit.message_ref.conversation_id`');
 
     // Hard scope boundary: chat text only. Without this an agent will
-    // happily write `--target conversation:#~<id>` and 404.
-    expect(text).toMatch(/Do not.*use.*`#~`.*in CLI arguments/i);
+    // happily write `--target conversation:#conv:<id>` and 404.
+    expect(text).toMatch(/Do not.*use.*`#conv:`.*in CLI arguments/i);
     // And the explicit "what NOT to wrap" list — message ids are the
     // most likely confusion since they appear right next to
     // conversation ids in CLI output.
@@ -334,11 +334,11 @@ describe('buildPlatformPrompt', () => {
 
     // Application points across the rest of the prompt.
     expect(text).toContain('announcing the new channel as');
-    expect(text).toContain('`#~<channel_id>`');
+    expect(text).toContain('`#conv:<channel_id>`');
     expect(text).toContain(
       'When you cite a search hit or history pointer back in chat',
     );
-    expect(text).toContain('`#~<hit.message_ref.conversation_id>`');
+    expect(text).toContain('`#conv:<hit.message_ref.conversation_id>`');
     expect(text).toMatch(/Message ids stay raw/);
 
     // Earlier wordings that must never come back (drift guard).
@@ -347,6 +347,11 @@ describe('buildPlatformPrompt', () => {
     // don't generate ids, they copy them; binding length here just
     // adds maintenance.
     expect(text).not.toMatch(/16-character id/);
+
+    // Hard cutover: the legacy `#~<id>` form must not appear anywhere
+    // in the rendered prompt. We dropped backward-compat alias support
+    // in PR-4 commit 1 per @shiki direction.
+    expect(text).not.toContain('#~');
   });
 
   it('requires visible in-thread summary before closing user-opened threads', () => {

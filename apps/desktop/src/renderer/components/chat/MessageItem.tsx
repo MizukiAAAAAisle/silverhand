@@ -36,7 +36,7 @@ interface MessageItemProps {
    *  the Markdown component so inline `#name` references render
    *  as styled pills. */
   channelsByName: Map<string, WorkspaceReference>;
-  /** Lookup by conversation id for inline `#~<id>` references. */
+  /** Lookup by conversation id for inline `#conv:<id>` references. */
   conversationRefsById?: Map<string, ConversationReference>;
   onOpenConversationRef?: (id: string) => void;
   onStartThread?: (msg: MessageDto) => void;

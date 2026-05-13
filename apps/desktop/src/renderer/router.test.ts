@@ -175,7 +175,7 @@ describe('buildSideOpenUrl — openSide URL writer (PR-4 follow-up)', () => {
 
   it('strips ?fullscreen when opening side from a fullscreen thread', () => {
     // User was at /chat/w/w-1/c/c-a/t/t-1?fullscreen=1 (thread fullscreen).
-    // Clicking #~<id> must NOT inherit fullscreen — that would hide both
+    // Clicking #conv:<id> must NOT inherit fullscreen — that would hide both
     // the channel and the thread under a fullscreen side pane.
     const out = buildSideOpenUrl(
       '/chat/w/w-1/c/c-a/t/t-1',

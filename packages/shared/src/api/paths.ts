@@ -65,7 +65,7 @@ export const apiPaths = {
 
   /** Identity + routing metadata for ANY conversation by id (channel /
    *  dm_channel / thread). Backs cross-workspace secondary-pane
-   *  resolution and the `#~<id>` sigil renderer. Returns
+   *  resolution and the `#conv:<id>` sigil renderer. Returns
    *  `ConversationRefResponse`; does NOT include messages or per-user
    *  unread state. Permission: workspace member of the target
    *  conversation's workspace. */

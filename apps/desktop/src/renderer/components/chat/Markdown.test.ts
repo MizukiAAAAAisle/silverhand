@@ -15,7 +15,7 @@ function render(content: string, refs?: Map<string, ConversationReference>): str
 }
 
 describe('Markdown conversation refs', () => {
-  it('renders #~<conversation_id> as a clickable conversation pill', () => {
+  it('renders #conv:<conversation_id> as a clickable conversation pill', () => {
     const id = 'AbC123_-xyZ789qR';
     const refs = new Map<string, ConversationReference>([
       [
@@ -28,13 +28,13 @@ describe('Markdown conversation refs', () => {
       ],
     ]);
 
-    const html = render(`See #~${id} for details.`, refs);
+    const html = render(`See #conv:${id} for details.`, refs);
 
     expect(html).toContain(`data-conversation-ref="${id}"`);
     expect(html).toContain('bg-accent-soft');
     expect(html).toContain('version3');
     expect(html).not.toContain('#version3');
-    expect(html).not.toContain(`#~${id}`);
+    expect(html).not.toContain(`#conv:${id}`);
   });
 
   it('renders resolved thread refs with parent channel display name', () => {
@@ -52,7 +52,7 @@ describe('Markdown conversation refs', () => {
       ],
     ]);
 
-    const html = render(`See #~${id}.`, refs);
+    const html = render(`See #conv:${id}.`, refs);
 
     expect(html).toContain(`data-conversation-ref="${id}"`);
     expect(html).toContain('debug:thread 1');
@@ -60,20 +60,20 @@ describe('Markdown conversation refs', () => {
   });
 
   it('keeps unresolved refs clickable by id', () => {
-    const html = render('Open #~foreignRef123456.');
+    const html = render('Open #conv:foreignRef123456.');
 
     expect(html).toContain('data-conversation-ref="foreignRef123456"');
-    expect(html).toContain('#~foreignRef123456');
+    expect(html).toContain('#conv:foreignRef123456');
   });
 
   it('does not parse short refs, longer id-like tokens, code, or existing links', () => {
     const html = render(
       [
-        'short #~foo',
-        'long #~foreignRef12345678x',
-        '`#~codeRef12345678`',
-        '[#~linkedRef123456](https://example.com)',
-        '#~realRef123456789.bar',
+        'short #conv:foo',
+        'long #conv:foreignRef12345678x',
+        '`#conv:codeRef12345678`',
+        '[#conv:linkedRef123456](https://example.com)',
+        '#conv:realRef123456789.bar',
       ].join(' '),
     );
 
@@ -83,5 +83,14 @@ describe('Markdown conversation refs', () => {
     expect(html).not.toContain('data-conversation-ref="codeRef12345678"');
     expect(html).not.toContain('data-conversation-ref="linkedRef123456"');
     expect(html).toContain('.bar');
+  });
+
+  it('does not parse legacy `#~<id>` form (hard cutover, no alias)', () => {
+    // Ensure the pre-cutover sigil shape is silently demoted to inert
+    // text. Hard cutover per @shiki direction: legacy form had only a
+    // few days of usage and no production references depend on it.
+    const html = render('See #~AbC123_-xyZ789qR for details.');
+    expect(html).not.toContain('data-conversation-ref="AbC123_-xyZ789qR"');
+    expect(html).toContain('#~AbC123_-xyZ789qR');
   });
 });

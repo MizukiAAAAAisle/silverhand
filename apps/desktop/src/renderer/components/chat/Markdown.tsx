@@ -21,7 +21,7 @@ interface MarkdownProps {
   agentsByName?: Map<string, AgentDto>;
   /** Lookup by channel `name` (the handle used in #refs). */
   channelsByName?: Map<string, WorkspaceReference>;
-  /** Lookup by conversation id for `#~<id>` refs in the current
+  /** Lookup by conversation id for `#conv:<id>` refs in the current
    *  workspace. Missing entries still render as clickable id refs when
    *  `onOpenConversationRef` is supplied. */
   conversationRefsById?: Map<string, ConversationReference>;
@@ -138,7 +138,7 @@ function MarkdownInner({
 export const Markdown = memo(MarkdownInner);
 
 // Walks the mdast tree and replaces inline `@handle`, `#handle`, and
-// `#~<conversation_id>` substrings inside text nodes with link nodes
+// `#conv:<conversation_id>` substrings inside text nodes with link nodes
 // that carry our internal silverhand-* URL schemes.
 // Skipped containers: `inlineCode`, `code`, and existing `link`
 // nodes (so a hand-written `[#foo](https://…)` stays intact, and a
@@ -188,8 +188,14 @@ function walk(node: MdastNode): void {
 // Conversation ids are generated from 12 random bytes as base64url,
 // yielding exactly 16 chars. The trailing negative lookahead prevents
 // matching a valid-looking prefix inside a longer id-like token.
+//
+// Typed sigil grammar: `#<type>:<value>`. We currently recognize
+// `#conv:<id>` (16-char base64url conversation id). The channel branch
+// explicitly excludes `#conv:` and `#task:` prefixes via negative
+// lookahead so a malformed `#conv:bad` doesn't fall back to matching
+// `#conv` as a stray channel reference.
 const REF_RE =
-  /(?<![\w/])(?:#~([A-Za-z0-9_-]{16})(?![A-Za-z0-9_-])|([@#])([a-zA-Z][a-zA-Z0-9_-]*))/g;
+  /(?<![\w/])(?:#conv:([A-Za-z0-9_-]{16})(?![A-Za-z0-9_-])|@([a-zA-Z][a-zA-Z0-9_-]*)|#(?!conv:|task:)([a-zA-Z][a-zA-Z0-9_-]*))/g;
 
 function pushSplit(text: string, out: MdastNode[]): void {
   let last = 0;
@@ -207,19 +213,26 @@ function pushSplit(text: string, out: MdastNode[]): void {
         // mdast `link` uses `url`, not `href`. mdast-util-to-hast maps
         // it to the `href` attribute on the rendered `<a>`.
         url: `${CONVERSATION_PREFIX}${conversationId}`,
-        children: [{ type: 'text', value: `#~${conversationId}` }],
+        children: [{ type: 'text', value: `#conv:${conversationId}` }],
       });
       last = m.index + m[0].length;
       continue;
     }
-    const sigil = m[2]!;
-    const name = m[3]!;
+    const mentionName = m[2];
+    if (mentionName) {
+      out.push({
+        type: 'link',
+        url: `${MENTION_PREFIX}${mentionName}`,
+        children: [{ type: 'text', value: `@${mentionName}` }],
+      });
+      last = m.index + m[0].length;
+      continue;
+    }
+    const channelName = m[3]!;
     out.push({
       type: 'link',
-      // mdast `link` uses `url`, not `href`. mdast-util-to-hast maps
-      // it to the `href` attribute on the rendered `<a>`.
-      url: `${sigil === '@' ? MENTION_PREFIX : CHANNEL_PREFIX}${name}`,
-      children: [{ type: 'text', value: `${sigil}${name}` }],
+      url: `${CHANNEL_PREFIX}${channelName}`,
+      children: [{ type: 'text', value: `#${channelName}` }],
     });
     last = m.index + m[0].length;
   }

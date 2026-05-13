@@ -1085,7 +1085,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
    *
    * Identity + routing metadata for any conversation (channel /
    * dm_channel / thread) by id. Designed to back cross-workspace
-   * secondary-pane resolution and the `#~<id>` sigil renderer (PR-3).
+   * secondary-pane resolution and the `#conv:<id>` sigil renderer (PR-3).
    *
    * Permission: `canViewWorkspace(user, workspace_id)` only — the
    * caller must be allowed to *see* the conversation's workspace.

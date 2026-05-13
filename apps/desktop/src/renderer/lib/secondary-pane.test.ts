@@ -182,7 +182,7 @@ describe('selectSecondaryDescriptor — URL × ref-hook matrix', () => {
   });
 
   it('?side loading produces a loading descriptor that still carries the id', () => {
-    // Placeholder/skeleton needs the id to render `#~<id>` and offer
+    // Placeholder/skeleton needs the id to render `#conv:<id>` and offer
     // a Close button while the ref hook is in-flight.
     const out = selectSecondaryDescriptor(
       { sideConversationId: 'c-foreign', threadId: null },

@@ -109,7 +109,7 @@ export interface SecondaryRouteInputs {
  * (Cindy review point 6: never silently drop `?side`). The selector
  * never produces a descriptor that requires "loading + null id" —
  * loading/unauthorized/not_found descriptors always carry the id so
- * the placeholder can render `#~<id>` and offer a Close button.
+ * the placeholder can render `#conv:<id>` and offer a Close button.
  *
  * Cross-workspace `?side` ids resolve through the ref hook
  * (`useConversationById`); the resolved branch carries workspace

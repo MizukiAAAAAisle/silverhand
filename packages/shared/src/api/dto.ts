@@ -279,7 +279,7 @@ export type ThreadDto = z.infer<typeof ThreadDtoSchema>;
 //
 // Identity + routing metadata for a conversation, returned by
 // `GET /api/conversations/:id/ref`. Designed to back cross-workspace
-// secondary-pane resolution and the `#~<id>` sigil renderer (PR-3).
+// secondary-pane resolution and the `#conv:<id>` sigil renderer (PR-3).
 //
 // Hard contract:
 //   - `workspace_kind` is the *external* projection — `agent_home` is

@@ -121,7 +121,7 @@ interface ChannelViewProps {
    *  organizational only — it does not disable messaging or agents. */
   onArchiveChannel?: (channelId: string, archived: boolean) => void;
   archivePending?: boolean;
-  /** Current-workspace top-level conversation id map for inline `#~<id>` refs. */
+  /** Current-workspace top-level conversation id map for inline `#conv:<id>` refs. */
   conversationRefsById?: Map<string, ConversationReference>;
   onOpenConversationRef?: (id: string) => void;
 }
