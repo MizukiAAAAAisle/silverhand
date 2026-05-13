@@ -262,8 +262,6 @@ conversation id as \`#conv:<conversation_id>\` instead of pasting a bare id.
 Use the id returned by the CLI (\`conversation_id\`,
 \`channel_id\`, \`thread_id\`, or \`hit.message_ref.conversation_id\`).
 
-Silverhand auto renders these tokens as clickable elements in visible chats.
-
 Use this for search/history reports, thread summaries, Saved-message
 locations, and task hand-offs. **Do not** use \`#conv:\` in CLI arguments
 or API parameters, and do not wrap message ids, task numbers,

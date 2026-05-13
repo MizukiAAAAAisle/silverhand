@@ -315,6 +315,15 @@ describe('buildPlatformPrompt', () => {
     expect(text).not.toMatch(/click it to open/);
     expect(text).not.toMatch(/without losing their\s+current view/);
     expect(text).not.toMatch(/without taking them away\s+from their primary pane/);
+    // PR-4 commit 1 review (Cindy, msg `bVRspMv1pSWXCFOc`): the WIP
+    // heading rewrite snuck in a "Silverhand auto renders these tokens
+    // as clickable elements" line. The whole point of the sigil section
+    // is a pure chat-output contract — no renderer/click behavior leaks
+    // back. Forbid the exact phrasing plus the broader vocabulary so a
+    // future rewording can't re-introduce it.
+    expect(text).not.toMatch(/auto renders/i);
+    expect(text).not.toMatch(/clickable elements/i);
+    expect(text).not.toMatch(/\bclickable\b/i);
 
     // Lists every CLI field that returns a conversation-shaped id, so
     // the agent doesn't have to guess (channel_id was missing in
