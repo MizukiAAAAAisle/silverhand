@@ -417,6 +417,43 @@ describe('ConversationMessageService.sendMessage', () => {
     }
   });
 
+  it('agent cross-target send to parent auto-starts target idle members including the sender session in the target', async () => {
+    // Regression for the "thread → parent forward did not wake parent
+    // members" bug. The (thread, alice) process is the sender. The
+    // target is the parent channel where another (channel, alice)
+    // session exists alongside (channel, bob). Both must be woken;
+    // wake must NOT exclude the sender's identity in the target — the
+    // (channel, alice) session is a *different* process from the
+    // (thread, alice) sender and only it will see the inbox arriving
+    // in the channel.
+    const t = bootstrap();
+    try {
+      const thread = t.conversations.insertThread({
+        channelId: t.channel.id,
+        title: 'thread',
+      });
+      t.conversations.addAgent(thread.id, t.alice.id);
+
+      await t.service.sendMessage({
+        conversationId: thread.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: thread.id },
+        content: 'forward to parent',
+        target: 'parent',
+      });
+
+      expect(t.fake.starts.map(s => ({ c: s.conversationId, a: s.agentId })).sort(
+        (x, y) => (x.c + x.a).localeCompare(y.c + y.a),
+      )).toEqual(
+        [
+          { c: t.channel.id, a: t.alice.id },
+          { c: t.channel.id, a: t.bob.id },
+        ].sort((x, y) => (x.c + x.a).localeCompare(y.c + y.a)),
+      );
+    } finally {
+      t.cleanup();
+    }
+  });
+
   it('sends an agent message to a direct child thread', async () => {
     const t = bootstrap();
     try {
@@ -438,6 +475,41 @@ describe('ConversationMessageService.sendMessage', () => {
       expect(t.messages.listForConversation(thread.id).map(m => m.content))
         .toContain('down');
       expect(t.fake.delivered.map(d => d.agentId)).toEqual([t.bob.id]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('agent cross-target send to a child thread auto-starts the thread members including the sender session in the thread', async () => {
+    // Mirror of the parent-direction test, for the more common case:
+    // channel agent forwards work into a thread. The (thread, alice)
+    // session and the (thread, bob) session both must wake, even
+    // though alice is also the sender — sender exclusion applies to
+    // delivery (don't echo to source-conversation sender), not to wake.
+    const t = bootstrap();
+    try {
+      const thread = t.conversations.insertThread({
+        channelId: t.channel.id,
+        title: 'thread',
+      });
+      t.conversations.addAgent(thread.id, t.alice.id);
+      t.conversations.addAgent(thread.id, t.bob.id);
+
+      await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'down to thread',
+        target: { thread_id: thread.id },
+      });
+
+      expect(t.fake.starts.map(s => ({ c: s.conversationId, a: s.agentId })).sort(
+        (x, y) => (x.c + x.a).localeCompare(y.c + y.a),
+      )).toEqual(
+        [
+          { c: thread.id, a: t.alice.id },
+          { c: thread.id, a: t.bob.id },
+        ].sort((x, y) => (x.c + x.a).localeCompare(y.c + y.a)),
+      );
     } finally {
       t.cleanup();
     }

@@ -60,6 +60,16 @@ interface SendMessagePolicy {
   requireSenderMembership: boolean;
   allowTarget: boolean;
   distributeExcludeSender: boolean;
+  /**
+   * Default auto-start behavior for the actor. The runtime decision in
+   * `sendMessage` overrides this for agent cross-target sends — see the
+   * `shouldAutoStartIdle` derivation. Agents sending to their own
+   * conversation (`target = self`) keep this `false` so in-channel
+   * back-and-forth does not ping-pong every idle member; agents sending
+   * across conversations (`target = parent` or `target = <thread_id>`)
+   * always auto-start the target's idle members so the receiving session
+   * can take over the work.
+   */
   autoStartIdleRecipients: boolean;
   ccMentions: boolean;
   resolveRun: boolean;
@@ -78,6 +88,8 @@ const POLICIES: Record<SendMessageActor['kind'], SendMessagePolicy> = {
     requireSenderMembership: true,
     allowTarget: true,
     distributeExcludeSender: true,
+    // Same-target (self) baseline: no auto-start. Cross-target sends are
+    // promoted to auto-start at runtime in `sendMessage`.
     autoStartIdleRecipients: false,
     ccMentions: false,
     resolveRun: true,
@@ -305,7 +317,27 @@ export class ConversationMessageService {
     if (policy.ccMentions) {
       void this.ccMentionsBestEffort(txResult.sourceConversation, txResult.message);
     }
-    if (policy.autoStartIdleRecipients) {
+    // Auto-start policy:
+    //  - User send: always (policy.autoStartIdleRecipients = true).
+    //  - Agent send to self: never — prevents same-conversation ping-pong
+    //    where every reply would wake every other idle member.
+    //  - Agent cross-target send (`--target parent` / `<thread_id>`):
+    //    always wake the target's idle members. Cross-target send is an
+    //    explicit hand-off; if the receiving session is idle, the message
+    //    just sits in inbox and "delivery" is a no-op for collaboration
+    //    purposes. Cross-conversation traffic does not ping-pong because
+    //    target replies stay scoped to the target's own member set.
+    //  Wake intentionally does NOT exclude the sender's session in the
+    //  target conversation: when Cindy@channel sends to a thread where a
+    //  separate Cindy@thread session exists, the thread session must be
+    //  woken — they are independent (conversation, agent) processes with
+    //  independent context.
+    const targetIsCrossConversation =
+      txResult.targetConversation.id !== txResult.sourceConversation.id;
+    const shouldAutoStartIdle =
+      policy.autoStartIdleRecipients
+      || (input.actor.kind === 'agent' && targetIsCrossConversation);
+    if (shouldAutoStartIdle) {
       void this.startIdleRecipientsBestEffort(
         txResult.targetConversation.id,
         txResult.recipients,
