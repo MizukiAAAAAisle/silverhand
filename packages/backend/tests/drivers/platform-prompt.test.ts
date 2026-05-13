@@ -424,6 +424,14 @@ describe('buildPlatformPrompt', () => {
 
     // Cross-grammar summary picks the right form for the right job.
     expect(text).toMatch(/Pick the most precise form available/i);
+
+    // Channel-name semantics: scope = current workspace, ambiguous
+    // names render inert (frontend keys lookup by channel `title` and
+    // surfaces a sentinel for duplicate titles). The prompt should
+    // describe the contract without leaning on UI-shape vocabulary;
+    // "inert text" is the output contract the renderer enforces.
+    expect(text).toMatch(/ambiguous/i);
+    expect(text).toMatch(/inert text/i);
   });
 
   it('requires visible in-thread summary before closing user-opened threads', () => {

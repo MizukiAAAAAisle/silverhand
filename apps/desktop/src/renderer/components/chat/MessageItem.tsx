@@ -15,7 +15,7 @@ import {
 } from '@/lib/current-user';
 import { Lightbox } from './Lightbox';
 import { Markdown } from './Markdown';
-import type { WorkspaceReference } from './ChannelRef';
+import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
 import { useMessageLayoutMode } from './useMessageLayoutMode';
 import { useRelativeTime } from './useRelativeTime';
@@ -32,10 +32,15 @@ interface MessageItemProps {
   /** Lookup by `agent.name` (the @mention handle). Threaded to the
    *  Markdown component so inline `@handle` references can resolve. */
   agentsByName: Map<string, AgentDto>;
-  /** Lookup by `channel.name` (the #channel handle). Threaded to
-   *  the Markdown component so inline `#name` references render
-   *  as styled pills. */
-  channelsByName: Map<string, WorkspaceReference>;
+  /** Lookup by `channel.title` (the #handle used in inline refs).
+   *  `null` value = ambiguity sentinel (multiple channels share that
+   *  title in this workspace) → chip degrades to inert text. Threaded
+   *  to the Markdown component so inline `#name` references render
+   *  as clickable pills when unique. */
+  channelsByName: Map<string, ChannelReference | null>;
+  /** Click handler for resolved channel refs. Wired by the parent
+   *  to navigate the right workspace via `nav.toChannel`. */
+  onOpenChannelRef?: (channelId: string) => void;
   /** Lookup by conversation id for inline `#conv:<id>` references. */
   conversationRefsById?: Map<string, ConversationReference>;
   onOpenConversationRef?: (id: string) => void;
@@ -74,6 +79,7 @@ export function MessageItem({
   agentsById,
   agentsByName,
   channelsByName,
+  onOpenChannelRef,
   conversationRefsById,
   onOpenConversationRef,
   onStartThread,
@@ -201,6 +207,7 @@ export function MessageItem({
             conversationId={conversationId}
             agentsByName={agentsByName}
             channelsByName={channelsByName}
+            onOpenChannelRef={onOpenChannelRef}
             conversationRefsById={conversationRefsById}
             onOpenConversationRef={onOpenConversationRef}
           />

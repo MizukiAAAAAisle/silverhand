@@ -6,7 +6,7 @@ import rehypeHighlight from 'rehype-highlight';
 import { Check, Copy } from 'lucide-react';
 import type { AgentDto } from '@silverhand/shared';
 import { Mention } from './Mention';
-import { ChannelRef, type WorkspaceReference } from './ChannelRef';
+import { ChannelRef, type ChannelReference } from './ChannelRef';
 import { ConversationRef, type ConversationReference } from './ConversationRef';
 import { TaskRef } from './TaskRef';
 
@@ -20,8 +20,19 @@ interface MarkdownProps {
    *  absent, mentions render as plain accent-colored text without the
    *  popover. */
   agentsByName?: Map<string, AgentDto>;
-  /** Lookup by channel `name` (the handle used in #refs). */
-  channelsByName?: Map<string, WorkspaceReference>;
+  /** Lookup by channel `title` for `#<channel_name>` refs in the
+   *  message's workspace.
+   *  - `ChannelReference` → unique match in this workspace
+   *  - `null`             → ambiguity sentinel (multiple channels share
+   *                         this title) — chip degrades to inert text
+   *                         rather than guess a destination
+   *  - missing entry      → no match in this workspace
+   */
+  channelsByName?: Map<string, ChannelReference | null>;
+  /** Click handler for resolved channel refs. Receives the resolved
+   *  channel id; the caller is responsible for binding it to the
+   *  message's workspace via `nav.toChannel(workspaceId, channelId)`. */
+  onOpenChannelRef?: (channelId: string) => void;
   /** Lookup by conversation id for `#conv:<id>` refs in the current
    *  workspace. Missing entries still render as clickable id refs when
    *  `onOpenConversationRef` is supplied. */
@@ -53,6 +64,7 @@ function MarkdownInner({
   conversationId,
   agentsByName,
   channelsByName,
+  onOpenChannelRef,
   conversationRefsById,
   onOpenConversationRef,
 }: MarkdownProps): JSX.Element {
@@ -95,7 +107,11 @@ function MarkdownInner({
             if (typeof href === 'string' && href.startsWith(CHANNEL_PREFIX)) {
               const name = href.slice(CHANNEL_PREFIX.length);
               return (
-                <ChannelRef name={name} channel={channelsByName?.get(name)} />
+                <ChannelRef
+                  name={name}
+                  channel={channelsByName?.get(name)}
+                  onOpen={onOpenChannelRef}
+                />
               );
             }
             if (

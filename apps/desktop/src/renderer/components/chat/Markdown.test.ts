@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Markdown } from './Markdown';
+import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
 import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
 
@@ -57,6 +58,69 @@ function renderWithTaskCtx(
     ),
   );
 }
+
+describe('Markdown channel refs', () => {
+  function renderWithChannels(
+    content: string,
+    channelsByName: Map<string, ChannelReference | null>,
+    onOpenChannelRef?: (channelId: string) => void,
+  ): string {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return renderToStaticMarkup(
+      React.createElement(
+        QueryClientProvider,
+        { client: qc },
+        React.createElement(Markdown, {
+          content,
+          channelsByName,
+          onOpenChannelRef,
+        }),
+      ),
+    );
+  }
+
+  it('renders #<channel_name> as a clickable accent pill when uniquely resolved', () => {
+    const channels = new Map<string, ChannelReference | null>([
+      ['version3', { id: 'ch-v3-id', title: 'version3' }],
+    ]);
+    const html = renderWithChannels('See #version3 for context.', channels, () => undefined);
+    expect(html).toContain('data-channel-ref-state="resolved"');
+    expect(html).toContain('data-channel-ref-id="ch-v3-id"');
+    // The chip displays the channel title; the bare `#version3` literal
+    // shouldn't survive (since the chip prefixes the icon, not text).
+    expect(html).toContain('version3');
+    expect(html).not.toContain('>#version3<');
+  });
+
+  it('renders ambiguous #<channel_name> as inert muted text', () => {
+    // Sentinel `null` value = two channels in the workspace share this
+    // title; the renderer must not silently pick one.
+    const channels = new Map<string, ChannelReference | null>([
+      ['general', null],
+    ]);
+    const html = renderWithChannels('See #general here.', channels, () => undefined);
+    expect(html).toContain('data-channel-ref-state="ambiguous"');
+    expect(html).toContain('#general');
+    expect(html).not.toContain('data-channel-ref-id');
+  });
+
+  it('renders unresolved #<channel_name> as inert muted text', () => {
+    // Empty map → no entry for `version3` → unresolved branch.
+    const html = renderWithChannels('See #unknown here.', new Map(), () => undefined);
+    expect(html).toContain('data-channel-ref-state="unresolved"');
+    expect(html).toContain('#unknown');
+    expect(html).not.toContain('data-channel-ref-id');
+  });
+
+  it('still renders inert (no role=button) when click handler is omitted', () => {
+    const channels = new Map<string, ChannelReference | null>([
+      ['version3', { id: 'ch-v3-id', title: 'version3' }],
+    ]);
+    const html = renderWithChannels('See #version3.', channels);
+    expect(html).toContain('data-channel-ref-state="resolved-no-handler"');
+    expect(html).not.toContain('role="button"');
+  });
+});
 
 describe('Markdown conversation refs', () => {
   it('renders #conv:<conversation_id> as a clickable conversation pill', () => {

@@ -41,7 +41,12 @@ import {
   AppDropdownMenuItem,
 } from '@/components/menus/AppContextMenu';
 import { useAgents } from '@/features/agents/hooks';
-import { useWorkspaces } from '@/features/workspaces/hooks';
+import {
+  useWorkspaces,
+  useChannelsForWorkspace,
+  useArchivedChannelsForWorkspace,
+  type ChannelListItem,
+} from '@/features/workspaces/hooks';
 import {
   useChannelThreads,
   useStartThread,
@@ -57,7 +62,7 @@ import {
   useStopAgent,
 } from '@/features/channels/hooks';
 import { useConversationStream } from '@/hooks/useConversationStream';
-import type { WorkspaceReference } from '@/components/chat/ChannelRef';
+import type { ChannelReference } from '@/components/chat/ChannelRef';
 import type { ConversationReference } from '@/components/chat/ConversationRef';
 
 type WorkspaceUiKind = 'regular' | 'dm';
@@ -125,6 +130,10 @@ interface ChannelViewProps {
   /** Current-workspace top-level conversation id map for inline `#conv:<id>` refs. */
   conversationRefsById?: Map<string, ConversationReference>;
   onOpenConversationRef?: (id: string) => void;
+  /** Click handler for inline `#<channel_name>` chips. The chip's
+   *  resolution scope is this conversation's workspace, so the caller
+   *  binds the workspace id and we hand it the resolved channel id. */
+  onOpenChannelRef?: (workspaceId: string, channelId: string) => void;
   /** Click handler for inline `#task:<n>` chips. Receives both the
    *  numeric task and the workspace it should resolve against — that's
    *  always the conversation's workspace, since task numbers are
@@ -170,6 +179,7 @@ function ActiveChannelView({
   archivePending = false,
   conversationRefsById,
   onOpenConversationRef,
+  onOpenChannelRef,
   onOpenTask,
 }: ChannelViewProps & { conversation: ChannelDescriptor }): JSX.Element {
   const routeKind = conversation.parent_conversation_id ? 'thread' : 'channel';
@@ -506,6 +516,12 @@ function ActiveChannelView({
           routeKind={routeKind}
           conversationRefsById={conversationRefsById}
           onOpenConversationRef={onOpenConversationRef}
+          onOpenChannelRef={
+            onOpenChannelRef
+              ? (channelId: string) =>
+                  onOpenChannelRef(conversation.workspace_id, channelId)
+              : undefined
+          }
         />
 
         {activeRunStates.length > 0 ? (
@@ -623,6 +639,7 @@ function MessageList({
   routeKind,
   conversationRefsById,
   onOpenConversationRef,
+  onOpenChannelRef,
 }: {
   channelId: string;
   workspaceId: string;
@@ -648,16 +665,35 @@ function MessageList({
   routeKind: 'channel' | 'thread';
   conversationRefsById?: Map<string, ConversationReference>;
   onOpenConversationRef?: (id: string) => void;
+  /** Pre-bound (workspace already resolved) click handler for inline
+   *  `#<channel_name>` chips. */
+  onOpenChannelRef?: (channelId: string) => void;
 }): JSX.Element {
   const { data: agents = [] } = useAgents();
   const { data: workspaces = [] } = useWorkspaces();
+  // Resolve `#<channel_name>` against the message's workspace — not the
+  // primary-selected workspace — so cross-workspace `?side` panes still
+  // resolve refs that exist in their own workspace. Both the active
+  // and archived channel lists feed the lookup so an archived channel's
+  // name still resolves to a clickable chip (the chip dims via
+  // `closed_at` for closed channels).
+  const workspaceKind: 'regular' | 'dm' | null =
+    workspaces.find(w => w.id === workspaceId)?.kind ?? null;
+  const { data: liveChannels = [] } = useChannelsForWorkspace(
+    workspaceId,
+    workspaceKind,
+  );
+  const { data: archivedChannels = [] } = useArchivedChannelsForWorkspace(
+    workspaceId,
+    workspaceKind,
+  );
   const savedIds = useSavedMessageIds();
   const { toggle: toggleSave } = useToggleSave();
   const startThread = useStartThread(workspaceId);
   // Three lookup maps used by the message renderer:
   //  - `agentsById`   → message author (avatar + display name)
   //  - `agentsByName` → inline `@handle` mention pills
-  //  - `channelsByName` → inline `#name` workspace/channel ref pills
+  //  - `channelsByName` → inline `#<channel_name>` ref pills
   const { agentsById, agentsByName } = useMemo(() => {
     const byId = new Map<string, AgentDto>();
     const byName = new Map<string, AgentDto>();
@@ -667,13 +703,33 @@ function MessageList({
     }
     return { agentsById: byId, agentsByName: byName };
   }, [agents]);
+  // Build the channel-name lookup keyed by channel `title`. Threads
+  // aren't addressable by `#<name>` (use `#conv:<id>` for threads), so
+  // we filter to top-level channels (`channel` / `dm_channel`). When
+  // two channels in the same workspace share a title we record the
+  // ambiguity sentinel `null` so `<ChannelRef>` degrades to inert text
+  // — picking a destination silently is worse than asking the user to
+  // disambiguate.
   const channelsByName = useMemo(() => {
-    const m = new Map<string, WorkspaceReference>();
-    for (const w of workspaces) {
-      m.set(w.name, { name: w.name, description: w.description });
-    }
+    const m = new Map<string, ChannelReference | null>();
+    const consider = (c: ChannelListItem): void => {
+      if (c.kind === 'thread') return;
+      const title = c.title;
+      if (m.has(title)) {
+        m.set(title, null);
+        return;
+      }
+      m.set(title, {
+        id: c.id,
+        title: c.title,
+        closed_at: c.closed_at ?? null,
+        archived_at: c.archived_at ?? null,
+      });
+    };
+    for (const c of liveChannels) consider(c);
+    for (const c of archivedChannels) consider(c);
     return m;
-  }, [workspaces]);
+  }, [liveChannels, archivedChannels]);
 
   const handleStartThread = (msg: MessageDto): void => {
     if (!onThreadCreated) return;
@@ -908,6 +964,7 @@ function MessageList({
                     agentsById={agentsById}
                     agentsByName={agentsByName}
                     channelsByName={channelsByName}
+                    onOpenChannelRef={onOpenChannelRef}
                     conversationRefsById={conversationRefsById}
                     onOpenConversationRef={onOpenConversationRef}
                     saved={savedIds.has(m.id)}

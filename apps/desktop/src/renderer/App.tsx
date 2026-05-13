@@ -690,6 +690,17 @@ export function App(): JSX.Element {
     [selectedWorkspaceId, nav],
   );
 
+  // Open a `#<channel_name>` chip click. The chip's resolution scope is
+  // the message's workspace (so cross-workspace `?side` panes can still
+  // click their own refs), so we navigate the right workspace explicitly
+  // even when it doesn't match the primary selection.
+  const handleOpenChannelByName = useCallback(
+    (workspaceId: string, channelId: string) => {
+      nav.toChannel(workspaceId, channelId);
+    },
+    [nav],
+  );
+
   // Auto-open the tasks drawer when `?task=<n>` lands in the URL. The
   // drawer's own scroll/highlight effect reacts to `focusedTaskNumber`;
   // we just need to make it visible. `?task` clears once the highlight
@@ -1024,6 +1035,7 @@ export function App(): JSX.Element {
       archivePending={archiveChannel.isPending}
       conversationRefsById={conversationRefsById}
       onOpenConversationRef={nav.openSide}
+      onOpenChannelRef={handleOpenChannelByName}
       onOpenTask={handleOpenTask}
     />
   );
@@ -1090,6 +1102,7 @@ export function App(): JSX.Element {
           archivePending={archiveChannel.isPending}
           conversationRefsById={conversationRefsById}
           onOpenConversationRef={nav.openSide}
+          onOpenChannelRef={handleOpenChannelByName}
           onOpenTask={handleOpenTask}
           // No nested Thread from the secondary pane: thread sides can't
           // spawn sub-threads (1-layer hard limit, schema-enforced); for

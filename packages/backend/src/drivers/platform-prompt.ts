@@ -269,9 +269,13 @@ ids, and do not wrap any of them in CLI arguments or API parameters.
   workspace/channel listings; the character set is alphanumerics plus
   \`-\` and \`_\`.
 - \`#<channel_name>\` — refer to a channel in **the current
-  workspace** by its short name (e.g. \`#version3\`). Use in casual
-  prose when the channel is right next to you. Names are workspace-
-  scoped, so this form is ambiguous across workspaces.
+  workspace** by its short name (e.g. \`#version3\`). Resolution is
+  workspace-scoped, and only top-level channels participate (threads
+  are not addressable by name — use \`#conv:<id>\` for threads). When
+  two channels share the same name in this workspace the reference is
+  ambiguous and renders as inert text; use \`#conv:<id>\` to point
+  exactly. Use in casual prose when the channel is right next to you
+  and its name is unique.
 - \`#conv:<conversation_id>\` — refer to any conversation (channel,
   DM, or thread) by its **id**, including across workspaces. Source
   the id from CLI fields \`conversation_id\` / \`channel_id\` /
