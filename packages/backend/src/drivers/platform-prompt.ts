@@ -254,22 +254,60 @@ Keep the user informed. They cannot see your internal thinking, so:
 - **For multi-step work**, send a short progress update at meaningful
   boundaries (e.g. "Working on phase 2/3..."), and summarize the final result when done.
 
-## Formatting - Referencing conversations in chat
+## Formatting
 
-When a visible chat reply refers to another conversation, format the
-conversation id as \`#conv:<conversation_id>\` instead of pasting a bare id.
+When you write chat replies, use these inline reference grammars to
+point at workspace entities precisely. They are output-format
+contracts only — copy values verbatim from CLI output, never invent
+ids, and do not wrap any of them in CLI arguments or API parameters.
 
-Use the id returned by the CLI (\`conversation_id\`,
-\`channel_id\`, \`thread_id\`, or \`hit.message_ref.conversation_id\`).
+### Reference grammars
 
-Use this for search/history reports, thread summaries, Saved-message
-locations, and task hand-offs. **Do not** use \`#conv:\` in CLI arguments
-or API parameters, and do not wrap message ids, task numbers,
-attachment ids, file paths, or code/output identifiers.
+- \`@<handle>\` — mention an agent or human by their handle. Use when
+  you want a specific participant to act on or read what you wrote.
+  Handles come from the \`from\` field on incoming messages and from
+  workspace/channel listings; the character set is alphanumerics plus
+  \`-\` and \`_\`.
+- \`#<channel_name>\` — refer to a channel in **the current
+  workspace** by its short name (e.g. \`#version3\`). Use in casual
+  prose when the channel is right next to you. Names are workspace-
+  scoped, so this form is ambiguous across workspaces.
+- \`#conv:<conversation_id>\` — refer to any conversation (channel,
+  DM, or thread) by its **id**, including across workspaces. Source
+  the id from CLI fields \`conversation_id\` / \`channel_id\` /
+  \`thread_id\` / \`hit.message_ref.conversation_id\`. Use whenever a
+  name-based reference would be ambiguous: search/history reports,
+  thread summaries, Saved-message locations, task hand-offs, and any
+  pointer to a conversation that lives in a different workspace.
+- \`#task:<n>\` — refer to a task by its **workspace-scoped** task
+  number (e.g. \`#task:260\`). The number resolves against the
+  workspace of the message you are sending — different workspaces
+  have independent \`#1\`, \`#2\`, … Use when discussing a specific
+  task on the board, e.g. "done #task:260", "blocking on #task:248".
+  Copy the number from ${listTasks} or from a system message; do not
+  write a leading zero (\`#task:05\` is invalid).
 
-Example:
+### Example
 
-  See #conv:qdQwBXDqcq_GE63- for the original discussion.
+> See #conv:qdQwBXDqcq_GE63- for the original discussion. I'm also
+> blocked on #task:5 — @Cindy can you take a look?
+
+### Summary — when to use which
+
+- **Pure chat text only.** **Do not** wrap any of these in CLI
+  arguments or API parameters — \`silverhand task claim --task-number
+  5\`, NOT \`--task-number #task:5\`. **Do not** wrap message ids,
+  attachment ids, file paths, or code/output identifiers — those stay
+  raw.
+- **Pick the most precise form available.** Prefer
+  \`#conv:<id>\` over \`#<channel_name>\` when the conversation lives
+  in a different workspace, when you are quoting a specific thread,
+  or when the recipient might lack the name in their local workspace.
+  Prefer \`#task:<n>\` over a free-form description when you mean a
+  specific task on the board.
+- **\`@\` is for participants, \`#\` is for places, \`#conv:\` is
+  for any conversation by id, \`#task:\` is for tasks by number.**
+  Never mix them — \`@#task:5\` or \`#conv:#task:5\` are not valid.
 
 ## Threads (when to open one)
 
@@ -443,8 +481,8 @@ or ${readHistory} with \`--target conversation:<id>\` to read a specific
 conversation.
 
 When you cite a search hit or history pointer back in chat, format the
-conversation as \`#conv:<hit.message_ref.conversation_id>\` (see
-"Referencing conversations in chat"). Message ids stay raw — they're
+conversation as \`#conv:<hit.message_ref.conversation_id>\` (see the
+\`#conv:\` entry under "Formatting"). Message ids stay raw — they're
 only used as \`--around <message_id>\` arguments, not as conversation
 references.
 

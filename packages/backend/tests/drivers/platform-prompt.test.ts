@@ -292,10 +292,15 @@ describe('buildPlatformPrompt', () => {
 
   it('teaches the #conv:<id> sigil for inline conversation references', () => {
     const text = prompt();
-    // Section anchor + sigil syntax + concrete example. Heading shape
-    // is matched on the trailing portion to allow optional "Formatting -"
-    // section prefix that lives in the prompt.
-    expect(text).toMatch(/^## .*Referencing conversations in chat\b/m);
+    // PR-4 commit 4 unified the sigil docs under a single Formatting
+    // heading per @shiki direction (msg `gTMLaOKaVGwhatkj`). Section
+    // anchor pins that heading shape so future rewrites can't silently
+    // reintroduce a per-sigil heading.
+    expect(text).toMatch(/^## Formatting\s*$/m);
+    // Each grammar must keep its sub-heading anchor; tests below
+    // assert the per-grammar bullets and the closing summary.
+    expect(text).toMatch(/^### Reference grammars\s*$/m);
+    expect(text).toMatch(/^### Summary — when to use which\s*$/m);
     expect(text).toContain('`#conv:<conversation_id>`');
     expect(text).toMatch(/#conv:qdQwBXDqcq_GE63-/);
 
@@ -334,12 +339,19 @@ describe('buildPlatformPrompt', () => {
     expect(text).toContain('`hit.message_ref.conversation_id`');
 
     // Hard scope boundary: chat text only. Without this an agent will
-    // happily write `--target conversation:#conv:<id>` and 404.
-    expect(text).toMatch(/Do not.*use.*`#conv:`.*in CLI arguments/i);
+    // happily write `--target conversation:#conv:<id>` and 404. The
+    // unified Formatting section enforces this for ALL grammars via
+    // a "do not wrap any of them in CLI arguments" clause; we still
+    // assert that `#conv:` is one of the grammars covered by that
+    // boundary so a future rewrite can't silently drop coverage.
+    expect(text).toMatch(/Do not.*wrap.*in CLI arguments/i);
+    expect(text).toContain('`#conv:<conversation_id>`');
     // And the explicit "what NOT to wrap" list — message ids are the
     // most likely confusion since they appear right next to
-    // conversation ids in CLI output.
-    expect(text).toMatch(/do not wrap message ids/i);
+    // conversation ids in CLI output. The phrase shows up inside a
+    // bold-marked clause (`**Do not**\s+wrap…`) so we tolerate
+    // markdown emphasis between the words.
+    expect(text).toMatch(/do not\W+wrap message ids/i);
 
     // Application points across the rest of the prompt.
     expect(text).toContain('announcing the new channel as');
@@ -361,6 +373,57 @@ describe('buildPlatformPrompt', () => {
     // in the rendered prompt. We dropped backward-compat alias support
     // in PR-4 commit 1 per @shiki direction.
     expect(text).not.toContain('#~');
+  });
+
+  it('teaches the #task:<n> sigil and groups all grammars under Formatting', () => {
+    const text = prompt();
+    // Same-section neighbor of `#conv:<id>`. PR-4 commit 4: unified
+    // Formatting section enumerates all four reference grammars
+    // (`@<handle>`, `#<channel_name>`, `#conv:<id>`, `#task:<n>`)
+    // with per-form scenarios and a closing summary.
+    expect(text).toMatch(/^## Formatting\s*$/m);
+    expect(text).toContain('`#task:<n>`');
+    // Concrete example uses a real task number alongside #conv: so
+    // both grammars reinforce each other in one mental model.
+    expect(text).toMatch(/#task:5/);
+    // Each of the four grammars gets its own bullet under Reference
+    // grammars; assert they're all present.
+    expect(text).toContain('`@<handle>`');
+    expect(text).toContain('`#<channel_name>`');
+    expect(text).toContain('`#conv:<conversation_id>`');
+    expect(text).toContain('`#task:<n>`');
+    // Workspace-scoped invariant — prevents agents from assuming task
+    // numbers are global like message ids.
+    expect(text).toMatch(/workspace-scoped/i);
+    // Leading-zero rejection mirrors the tokenizer/URL parser
+    // contract; surfacing it here keeps the prompt and the renderer
+    // aligned.
+    expect(text).toMatch(/leading zero|#task:05 is invalid/i);
+
+    // Pure output-contract drift guards — same vocabulary blocks the
+    // sigil section now applies to the whole Formatting section.
+    // No UI behavior, no rendered shape, no click affordance.
+    expect(text).not.toMatch(/\bclickable\b/i);
+    expect(text).not.toMatch(/\bdrawer\b/i);
+    expect(text).not.toMatch(/\bpopover\b/i);
+    expect(text).not.toMatch(/\bhover\b/i);
+    expect(text).not.toMatch(/\bskeleton\b/i);
+    expect(text).not.toMatch(/scroll(s|ed)?\s+(into\s+view|to)/i);
+    expect(text).not.toMatch(/auto renders/i);
+    expect(text).not.toMatch(/clickable elements/i);
+
+    // Boundary clauses: pure-text-only and don't-mix. The summary
+    // contrasts the chat sigil against the canonical CLI flag form
+    // so the agent doesn't write `--task-number #task:5`. The flag
+    // example wraps onto a new line in the rendered prompt
+    // (`--task-number\n  5`), so we allow whitespace between flag
+    // and value.
+    expect(text).toMatch(/Do not.*wrap.*in CLI arguments/i);
+    expect(text).toContain('#task:5');
+    expect(text).toMatch(/--task-number\s+5\b/);
+
+    // Cross-grammar summary picks the right form for the right job.
+    expect(text).toMatch(/Pick the most precise form available/i);
   });
 
   it('requires visible in-thread summary before closing user-opened threads', () => {
