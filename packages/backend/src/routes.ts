@@ -1080,6 +1080,66 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     return c.json({ thread });
   });
 
+  /**
+   * GET /api/conversations/:id/ref
+   *
+   * Identity + routing metadata for any conversation (channel /
+   * dm_channel / thread) by id. Designed to back cross-workspace
+   * secondary-pane resolution and the `#~<id>` sigil renderer (PR-3).
+   *
+   * Permission: `canViewWorkspace(user, workspace_id)` only — the
+   * caller must be allowed to *see* the conversation's workspace.
+   * This route is on the user-facing surface only (no `/internal`
+   * twin), so agent principals never reach it. Do NOT generalise to
+   * agents without a dedicated ACL helper.
+   *
+   * Response intentionally excludes messages and per-user unread
+   * state — those go through the existing window/cursor endpoints.
+   * `workspace_kind` is projected `agent_home → 'dm'` so the
+   * renderer never sees a third kind.
+   */
+  app.get(apiPaths.conversationRef(':id'), c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'conversation id required' }, 400);
+    const conversation = conversations.get(id);
+    if (!conversation) return c.json({ error: 'conversation not found' }, 404);
+    if (!canViewWorkspace(ctx, getUserPrincipal(c), conversation.workspace_id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    const workspace = workspaces.get(conversation.workspace_id);
+    if (!workspace) return c.json({ error: 'conversation not found' }, 404);
+
+    const parentChannelId =
+      conversation.kind === 'thread' ? conversation.parent_conversation_id : null;
+    let parentTitle: string | null = null;
+    if (parentChannelId) {
+      const parent = conversations.get(parentChannelId);
+      // Parent missing implies a stale row; we still return ref but
+      // leave parent_title null so the renderer falls back to "thread"
+      // instead of crashing.
+      parentTitle = parent ? parent.title : null;
+    }
+
+    const ref = {
+      id: conversation.id,
+      kind: conversation.kind,
+      title: conversation.title,
+      workspace_id: conversation.workspace_id,
+      // External projection: agents see `agent_home` internally; users
+      // see `dm`. The renderer/UI uses regular|dm exclusively.
+      workspace_kind:
+        workspace.workspace_kind === 'agent_home'
+          ? ('dm' as const)
+          : ('regular' as const),
+      workspace_path: conversation.workspace_path,
+      parent_channel_id: parentChannelId,
+      parent_title: parentTitle,
+      closed_at: conversation.closed_at,
+      archived_at: conversation.archived_at,
+    };
+    return c.json({ ref });
+  });
+
   app.get(apiPaths.threadMessages(':id'), c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'thread id required' }, 400);

@@ -25,6 +25,8 @@ import { useTasks } from '@/features/tasks/hooks';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { AgentView } from '@/features/agents/AgentView';
 import { SideUnresolvedPlaceholder } from '@/components/layout/SideUnresolvedPlaceholder';
+import type { ConversationReference } from '@/components/chat/ConversationRef';
+import { useConversationById } from '@/features/conversations/useConversationById';
 import { useAgents } from '@/features/agents/hooks';
 import {
   useWorkspaces,
@@ -50,12 +52,18 @@ import { cleanupAllComposerDrafts } from '@/lib/composer-draft-cache';
 import {
   selectFocusedConversation,
   selectSecondaryDescriptor,
+  selectSecondaryViewInputs,
   selectVisibleConversations,
   shouldSecondaryFullscreen,
   type ConversationPointer,
   type SecondaryDescriptor,
 } from '@/lib/secondary-pane';
-import { routes, useNav, useRouteState } from '@/router';
+import {
+  buildChannelPathPreservingSide,
+  routes,
+  useNav,
+  useRouteState,
+} from '@/router';
 
 export interface MessageJumpTarget {
   workspaceId?: string;
@@ -281,14 +289,26 @@ export function App(): JSX.Element {
     if (!hit) return null;
     return { id: hit.id, kind: hit.kind };
   }, [channels, selectedChannelId]);
+  // PR-2: cross-workspace `?side=<id>` resolution. The ref hook is the
+  // single source of truth for the right pane's identity & workspace —
+  // same-workspace and cross-workspace ids both flow through it. The
+  // fetch is React-Query–cached (30s stale, 5min gc) so navigating
+  // back to a recently-opened side hits the cache without a round-trip.
+  const sideRef = useConversationById(sideConversationId);
   const secondaryDescriptor = useMemo<SecondaryDescriptor | null>(
     () =>
       selectSecondaryDescriptor(
         { sideConversationId, threadId: openThreadId },
         channelsForLookup,
+        sideRef,
       ),
-    [sideConversationId, openThreadId, channelsForLookup],
+    [sideConversationId, openThreadId, channelsForLookup, sideRef],
   );
+  // Workspace metadata for a `?side` resolved descriptor flows through
+  // `secondaryViewInputs` below — no separate memo needed. The four
+  // cross-workspace wiring sites (channelKind, archive invalidation,
+  // handleJumpToOriginal parent navigation, sidebar selected-row gate)
+  // each pull what they need straight from the descriptor.
   const visibleConversations = useMemo(
     () =>
       selectVisibleConversations({
@@ -499,19 +519,51 @@ export function App(): JSX.Element {
   // from `channelsForLookup` (which already folds in `ephemeralThread`),
   // so a freshly-created thread renders immediately rather than blinking
   // until the channels query refetch lands.
+  // PR-1: thread-path source resolves through `channelsForLookup`. PR-2:
+  // `?side` source resolves through the ref hook — secondaryChannel is
+  // null in that case (the lookup may not contain a cross-workspace
+  // conversation), and the secondary ChannelDescriptor is built from
+  // the ref data instead (see `secondaryConversationDescriptor` below).
   const secondaryChannel = useMemo<ChannelListItem | null>(() => {
     if (!secondaryDescriptor || secondaryDescriptor.status !== 'resolved') {
       return null;
     }
+    if (secondaryDescriptor.source !== 'thread-path') return null;
     return channelsForLookup.find(c => c.id === secondaryDescriptor.id) ?? null;
   }, [secondaryDescriptor, channelsForLookup]);
-  const secondaryIsThread = secondaryChannel?.kind === 'thread';
   // PR-1: only enable the fullscreen toggle for the legacy thread-path
   // source. `?side` panes don't get fullscreen toggle yet — that lives
   // in a follow-up that needs to teach `useNav` to write `?fullscreen=1`
   // alongside `?side`.
   const secondarySupportsFullscreenToggle =
     secondaryDescriptor?.source === 'thread-path';
+  const conversationRefsById = useMemo(() => {
+    const m = new Map<string, ConversationReference>();
+    const topLevelById = new Map(
+      channelsForLookup
+        .filter(item => item.kind !== 'thread')
+        .map(item => [item.id, item] as const),
+    );
+    for (const item of channelsForLookup) {
+      if (item.kind === 'thread') {
+        const parent = topLevelById.get(item.channel_id);
+        m.set(item.id, {
+          id: item.id,
+          kind: item.kind,
+          title: item.title,
+          parent_channel_id: item.channel_id,
+          parent_title: parent?.title ?? null,
+        });
+      } else {
+        m.set(item.id, {
+          id: item.id,
+          kind: item.kind,
+          title: item.title,
+        });
+      }
+    }
+    return m;
+  }, [channelsForLookup]);
 
   // Clear ephemeral once the real channels list includes this thread,
   // or when the URL no longer points at this thread.
@@ -779,11 +831,23 @@ export function App(): JSX.Element {
   ]);
 
   // "View in channel" — only meaningful when the secondary pane is a
-  // thread (channel-typed sides have no parent to jump to). For PR-1
-  // the parent must live in the current workspace (cross-workspace
-  // resolution is PR-2), so the parent_channel_id from the descriptor
-  // is the jump target; preserveThreadLayout keeps the side overlay
-  // open after the primary jump.
+  // thread (channel-typed sides have no parent to jump to). PR-2:
+  // cross-workspace threads jump primary to the *foreign* workspace's
+  // parent channel — `secondaryDescriptor.workspaceId` carries the
+  // truth for both `?side` (set from the ref payload) and
+  // `thread-path` (set from the channels lookup).
+  //
+  // For `?side` source, we navigate via `buildChannelPathPreservingSide`
+  // so the side overlay (`?side=<thread>`) survives the primary jump —
+  // the user's intent is "show me the parent channel"; closing the
+  // thread they're reading would defeat that. `handleJumpToMessage`'s
+  // existing preserveThreadLayout early-return only fires for
+  // same-workspace + same-channel + open path-thread, which doesn't
+  // hold cross-workspace.
+  //
+  // For `thread-path` source (legacy same-workspace `/t/<tid>`), we
+  // still go through `handleJumpToMessage` so the existing
+  // preserveThreadLayout no-op fires when applicable.
   const handleJumpToOriginal = useCallback(
     (messageId: string) => {
       if (!secondaryDescriptor || secondaryDescriptor.status !== 'resolved') {
@@ -792,9 +856,28 @@ export function App(): JSX.Element {
       if (secondaryDescriptor.kind !== 'thread') return;
       const parentChannelId = secondaryDescriptor.parentChannelId;
       if (!parentChannelId) return;
+      if (secondaryDescriptor.source === 'side') {
+        const wid = secondaryDescriptor.workspaceId;
+        setJumpTarget({
+          workspaceId: wid,
+          channelId: parentChannelId,
+          threadId: null,
+          messageId,
+        });
+        markChannelRead.mutate(parentChannelId);
+        nav.go(
+          buildChannelPathPreservingSide(
+            wid,
+            parentChannelId,
+            secondaryDescriptor.id,
+          ),
+          { replace: true },
+        );
+        return;
+      }
       handleJumpToMessage(
         {
-          workspaceId: selectedWorkspaceId ?? undefined,
+          workspaceId: secondaryDescriptor.workspaceId,
           channelId: parentChannelId,
           messageId,
         },
@@ -803,14 +886,25 @@ export function App(): JSX.Element {
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
-      selectedWorkspaceId,
       secondaryDescriptor?.status,
+      secondaryDescriptor?.status === 'resolved'
+        ? secondaryDescriptor.source
+        : null,
       secondaryDescriptor?.status === 'resolved'
         ? secondaryDescriptor.kind
         : null,
       secondaryDescriptor?.status === 'resolved'
+        ? secondaryDescriptor.workspaceId
+        : null,
+      secondaryDescriptor?.status === 'resolved'
         ? secondaryDescriptor.parentChannelId
         : null,
+      secondaryDescriptor?.status === 'resolved' &&
+      secondaryDescriptor.source === 'side'
+        ? secondaryDescriptor.id
+        : null,
+      nav,
+      markChannelRead,
     ],
   );
 
@@ -820,9 +914,46 @@ export function App(): JSX.Element {
     () => buildChannelDescriptor(selectedChannel),
     [buildChannelDescriptor, selectedChannel],
   );
-  const secondaryConversationDescriptor = useMemo(
-    () => buildChannelDescriptor(secondaryChannel),
-    [buildChannelDescriptor, secondaryChannel],
+  const channelKindForView = selectedWorkspace?.kind === 'dm'
+    ? 'dm'
+    : (selectedWorkspace ? 'regular' : null);
+  // PR-2: single pure mapping from `secondaryDescriptor` (+ primary
+  // fallbacks for thread-path source) into the props ChannelView
+  // consumes for the secondary pane. Keeps the cross-workspace wiring
+  // (foreign workspace_id / workspace_kind / parent_title / archive
+  // invalidation target) end-to-end testable without renderHook.
+  const secondaryViewInputs = useMemo(
+    () =>
+      selectSecondaryViewInputs({
+        secondary: secondaryDescriptor,
+        pathThreadChannel: secondaryChannel,
+        primaryChannelKind: channelKindForView,
+        primaryChannelTitle: selectedChannel?.title ?? null,
+        primaryWorkspaceId: selectedWorkspaceId,
+      }),
+    [
+      secondaryDescriptor,
+      secondaryChannel,
+      channelKindForView,
+      selectedChannel,
+      selectedWorkspaceId,
+    ],
+  );
+  const secondaryConversationDescriptor = secondaryViewInputs.conversationDescriptor;
+
+  // PR-2: secondary pane's archive callback. When the secondary pane
+  // is a cross-workspace `?side` resolved descriptor, the mutation's
+  // invalidation must target the *foreign* workspace's channels list,
+  // not the primary's. `secondaryViewInputs.archiveWorkspaceId` carries
+  // the right workspace id for both `?side` (foreign or same) and
+  // legacy `/t/<tid>` (always same-workspace) sources.
+  const handleArchiveSecondaryChannelMutation = useCallback(
+    (channelId: string, archived: boolean) => {
+      const wid =
+        secondaryViewInputs.archiveWorkspaceId ?? selectedWorkspaceId ?? undefined;
+      archiveChannel.mutate({ channelId, archived, workspaceId: wid });
+    },
+    [archiveChannel, secondaryViewInputs.archiveWorkspaceId, selectedWorkspaceId],
   );
 
   // Same for the per-pane jumpTarget — the inline ternary recreated the
@@ -838,21 +969,18 @@ export function App(): JSX.Element {
   );
   const secondaryJumpTarget = useMemo(
     () =>
-      jumpTarget && secondaryChannel && jumpTarget.threadId === secondaryChannel.id
-        ? { channelId: secondaryChannel.id, messageId: jumpTarget.messageId }
+      jumpTarget && secondaryConversationDescriptor && jumpTarget.threadId === secondaryConversationDescriptor.id
+        ? { channelId: secondaryConversationDescriptor.id, messageId: jumpTarget.messageId }
         : null,
-    [jumpTarget, secondaryChannel],
+    [jumpTarget, secondaryConversationDescriptor],
   );
 
-  const channelKindForView = selectedWorkspace?.kind === 'dm'
-    ? 'dm'
-    : (selectedWorkspace ? 'regular' : null);
   // Parent-message highlight only renders alongside an open thread
   // (channel-typed sides aren't anchored to a parent message). Side
   // threads from PR-3 sigil clicks will fire `onThreadAnchorResolved`
   // with their own anchor, so the highlight follows them too.
   const highlightedMessageIdForParent =
-    secondaryIsThread ? highlightedParentMessageId : null;
+    secondaryViewInputs.isThread ? highlightedParentMessageId : null;
 
   const parentView = (
     <ChannelView
@@ -865,49 +993,56 @@ export function App(): JSX.Element {
       highlightedMessageId={highlightedMessageIdForParent}
       onArchiveChannel={handleArchiveChannelMutation}
       archivePending={archiveChannel.isPending}
+      conversationRefsById={conversationRefsById}
+      onOpenConversationRef={nav.openSide}
     />
   );
 
-  // Secondary pane render. Three shapes:
-  //   - resolved channel/thread → real ChannelView with thread-only
-  //     props gated on `secondaryIsThread` (Cindy review point 5/6:
-  //     "thread 特有能力要降级为条件能力", "View in channel"
-  //     thread-only).
-  //   - unresolved (`?side` id we couldn't find in the current
-  //     workspace) → SideUnresolvedPlaceholder so the user knows the
-  //     reference is broken and can dismiss it. PR-2 will replace this
-  //     with cross-workspace fetch via `useConversationById`.
+  // Secondary pane render. PR-2 shapes:
+  //   - Resolved channel/thread (same- or cross-workspace) → real
+  //     ChannelView. Thread-only props (`onJumpToOriginal`,
+  //     `onThreadAnchorResolved`, `parentTitle`) gate on
+  //     `secondaryIsThread`. The conversation descriptor's
+  //     `workspace_id` carries the *foreign* workspace for cross-
+  //     workspace `?side`, so ChannelView's workspace-scoped hooks
+  //     (`useChannelThreads`, `useStartThread` via MessageList)
+  //     auto-target the right cache without a separate prop.
+  //   - Loading / unauthorized / not_found (`?side` ref hook didn't
+  //     return a usable conversation) → SidePlaceholder (the renamed
+  //     PR-1 component now keyed on the three non-resolved statuses).
   //   - null → no secondary, render only `parentView`.
   let secondaryView: JSX.Element | null = null;
   if (secondaryDescriptor) {
-    if (secondaryDescriptor.status === 'unresolved') {
+    if (
+      secondaryDescriptor.source === 'side' &&
+      secondaryDescriptor.status !== 'resolved'
+    ) {
       secondaryView = (
         <SideUnresolvedPlaceholder
           conversationId={secondaryDescriptor.id}
+          status={secondaryDescriptor.status}
           onClose={closeSecondary}
         />
       );
-    } else if (secondaryChannel) {
+    } else if (secondaryConversationDescriptor) {
       secondaryView = (
         <ChannelView
-          channelKind={channelKindForView}
+          channelKind={secondaryViewInputs.channelKind}
           conversation={secondaryConversationDescriptor}
-          parentTitle={
-            secondaryIsThread ? selectedChannel?.title ?? null : null
-          }
+          parentTitle={secondaryViewInputs.parentTitle}
           jumpTarget={secondaryJumpTarget}
           onJumped={handleJumped}
           onCloseChild={closeSecondary}
           // Cindy review of e9278a7 bug 2: previously hard-coded
-          // "关闭 Thread", which read wrong on `?side=<channel>` panes.
+          // "关闭 Thread", which read wrong on `?side=<channel>" panes.
           // Side-thread (legacy /t/ or `?side=<thread>`) keeps the old
           // wording; channel/dm sides use a generic "关闭侧栏".
-          closeLabel={secondaryIsThread ? '关闭 Thread' : '关闭侧栏'}
+          closeLabel={secondaryViewInputs.isThread ? '关闭 Thread' : '关闭侧栏'}
           onJumpToOriginal={
-            secondaryIsThread ? handleJumpToOriginal : undefined
+            secondaryViewInputs.isThread ? handleJumpToOriginal : undefined
           }
           onThreadAnchorResolved={
-            secondaryIsThread ? setHighlightedParentMessageId : undefined
+            secondaryViewInputs.isThread ? setHighlightedParentMessageId : undefined
           }
           onToggleFullscreen={
             secondarySupportsFullscreenToggle
@@ -917,8 +1052,14 @@ export function App(): JSX.Element {
           isFullscreen={
             secondarySupportsFullscreenToggle ? threadFullscreen : false
           }
-          onArchiveChannel={handleArchiveChannelMutation}
+          // PR-2: cross-workspace archive invalidation — the secondary
+          // pane uses a dedicated callback so the React Query
+          // invalidation targets the foreign workspace's channels list,
+          // not the primary's.
+          onArchiveChannel={handleArchiveSecondaryChannelMutation}
           archivePending={archiveChannel.isPending}
+          conversationRefsById={conversationRefsById}
+          onOpenConversationRef={nav.openSide}
           // No nested Thread from the secondary pane: thread sides can't
           // spawn sub-threads (1-layer hard limit, schema-enforced); for
           // channel sides, sub-thread creation would target the side's
@@ -1183,13 +1324,18 @@ export function App(): JSX.Element {
                           archived_at: s.archived_at,
                         }))}
                         workspaceKind={selectedWorkspace?.kind === 'dm' ? 'dm' : (selectedWorkspace ? 'regular' : null)}
-                        // Highlight the active row: when a secondary
-                        // pane is open, the sidebar follows it (so a
-                        // thread or `?side` channel both light up
-                        // their row); otherwise the primary selection
-                        // is the active row.
+                        // PR-2: highlight the secondary pane's row in
+                        // the sidebar ONLY when the secondary lives in
+                        // the currently selected workspace. Cross-
+                        // workspace `?side` ids (different workspace
+                        // than the primary's sidebar shows) leave the
+                        // primary's row highlighted instead — otherwise
+                        // we'd ghost-highlight a row that doesn't exist
+                        // in this sidebar, or worse, highlight a
+                        // same-id-different-workspace row.
                         selectedChannelId={
-                          secondaryDescriptor?.status === 'resolved'
+                          secondaryDescriptor?.status === 'resolved' &&
+                          secondaryDescriptor.workspaceId === selectedWorkspaceId
                             ? secondaryDescriptor.id
                             : selectedChannelId
                         }

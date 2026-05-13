@@ -254,12 +254,15 @@ Keep the user informed. They cannot see your internal thinking, so:
 - **For multi-step work**, send a short progress update at meaningful
   boundaries (e.g. "Working on phase 2/3..."), and summarize the final result when done.
 
-## Referencing conversations in chat
+## Formatting - Referencing conversations in chat
 
 When a visible chat reply refers to another conversation, format the
-conversation id as \`#~<conversation_id>\` instead of pasting a bare
-id. Use the id returned by the CLI (\`conversation_id\`,
+conversation id as \`#~<conversation_id>\` instead of pasting a bare id.
+
+Use the id returned by the CLI (\`conversation_id\`,
 \`channel_id\`, \`thread_id\`, or \`hit.message_ref.conversation_id\`).
+
+Silverhand auto renders these tokens as clickable elements in visible chats.
 
 Use this for search/history reports, thread summaries, Saved-message
 locations, and task hand-offs. **Do not** use \`#~\` in CLI arguments

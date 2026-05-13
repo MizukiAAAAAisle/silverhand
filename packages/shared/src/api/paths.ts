@@ -63,6 +63,14 @@ export const apiPaths = {
   threadResume: (id: string) => `/api/threads/${id}/resume`,
   threadMarkRead: (id: string) => `/api/threads/${id}/mark-read`,
 
+  /** Identity + routing metadata for ANY conversation by id (channel /
+   *  dm_channel / thread). Backs cross-workspace secondary-pane
+   *  resolution and the `#~<id>` sigil renderer. Returns
+   *  `ConversationRefResponse`; does NOT include messages or per-user
+   *  unread state. Permission: workspace member of the target
+   *  conversation's workspace. */
+  conversationRef: (id: string) => `/api/conversations/${id}/ref`,
+
   // attachments — upload via channel/thread context, download by id.
   // Each upload creates an independent blob (no de-dup).
   channelAttachments: (id: string) => `/api/channels/${id}/attachments`,

@@ -292,8 +292,10 @@ describe('buildPlatformPrompt', () => {
 
   it('teaches the #~<id> sigil for inline conversation references', () => {
     const text = prompt();
-    // Section anchor + sigil syntax + concrete example.
-    expect(text).toContain('## Referencing conversations in chat');
+    // Section anchor + sigil syntax + concrete example. Heading shape
+    // is matched on the trailing portion to allow optional "Formatting -"
+    // section prefix that lives in the prompt.
+    expect(text).toMatch(/^## .*Referencing conversations in chat\b/m);
     expect(text).toContain('`#~<conversation_id>`');
     expect(text).toMatch(/#~qdQwBXDqcq_GE63-/);
 

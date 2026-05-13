@@ -7,6 +7,29 @@ import { CURRENT_USER_ID } from './current-user';
 
 let cachedInfo: BackendInfo | null = null;
 
+/**
+ * Structured HTTP error thrown by `api()` / `apiUpload()` so callers
+ * can branch on `status` (e.g. 403 vs 404) without parsing the
+ * Error message.
+ *
+ * Pre-PR-2 callers used to read `(err as Error).message` (a string of
+ * the form `"403 Forbidden: {body}"`); that still works because the
+ * `message` field keeps the same shape. New code should switch to
+ * `err instanceof ApiError && err.status === 404` instead.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly statusText: string;
+  readonly body: string;
+  constructor(status: number, statusText: string, body: string) {
+    super(`${status} ${statusText}: ${body}`);
+    this.name = 'ApiError';
+    this.status = status;
+    this.statusText = statusText;
+    this.body = body;
+  }
+}
+
 async function getInfo(forceRefresh = false): Promise<BackendInfo> {
   if (cachedInfo && !forceRefresh) return cachedInfo;
   const info = await window.agentHub.getBackendInfo();
@@ -59,7 +82,7 @@ export async function api<T = unknown>(
   }
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new Error(`${res.status} ${res.statusText}: ${text}`);
+    throw new ApiError(res.status, res.statusText, text);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -101,7 +124,7 @@ export async function apiUpload<T = unknown>(
   }
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new Error(`${res.status} ${res.statusText}: ${text}`);
+    throw new ApiError(res.status, res.statusText, text);
   }
   return (await res.json()) as T;
 }
@@ -136,7 +159,7 @@ export async function fetchAttachmentBlob(attachmentId: string): Promise<{
   const res = await fetch(url, { headers });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new Error(`${res.status} ${res.statusText}: ${text}`);
+    throw new ApiError(res.status, res.statusText, text);
   }
   const contentType = res.headers.get('content-type') ?? 'application/octet-stream';
   const disposition = res.headers.get('content-disposition');

@@ -57,6 +57,7 @@ import {
 } from '@/features/channels/hooks';
 import { useConversationStream } from '@/hooks/useConversationStream';
 import type { WorkspaceReference } from '@/components/chat/ChannelRef';
+import type { ConversationReference } from '@/components/chat/ConversationRef';
 
 type WorkspaceUiKind = 'regular' | 'dm';
 
@@ -120,6 +121,9 @@ interface ChannelViewProps {
    *  organizational only — it does not disable messaging or agents. */
   onArchiveChannel?: (channelId: string, archived: boolean) => void;
   archivePending?: boolean;
+  /** Current-workspace top-level conversation id map for inline `#~<id>` refs. */
+  conversationRefsById?: Map<string, ConversationReference>;
+  onOpenConversationRef?: (id: string) => void;
 }
 
 export const ChannelView = memo(function ChannelView(props: ChannelViewProps): JSX.Element {
@@ -157,6 +161,8 @@ function ActiveChannelView({
   isFullscreen,
   onArchiveChannel,
   archivePending = false,
+  conversationRefsById,
+  onOpenConversationRef,
 }: ChannelViewProps & { conversation: ChannelDescriptor }): JSX.Element {
   const routeKind = conversation.parent_conversation_id ? 'thread' : 'channel';
   const {
@@ -473,6 +479,8 @@ function ActiveChannelView({
           threadByAnchor={threadByAnchor}
           activeRunStates={activeRunStates}
           routeKind={routeKind}
+          conversationRefsById={conversationRefsById}
+          onOpenConversationRef={onOpenConversationRef}
         />
 
         {activeRunStates.length > 0 ? (
@@ -587,6 +595,8 @@ function MessageList({
   threadByAnchor,
   activeRunStates,
   routeKind,
+  conversationRefsById,
+  onOpenConversationRef,
 }: {
   channelId: string;
   workspaceId: string;
@@ -610,6 +620,8 @@ function MessageList({
    *  stable when the strip appears. */
   activeRunStates?: AgentRunState[];
   routeKind: 'channel' | 'thread';
+  conversationRefsById?: Map<string, ConversationReference>;
+  onOpenConversationRef?: (id: string) => void;
 }): JSX.Element {
   const { data: agents = [] } = useAgents();
   const { data: workspaces = [] } = useWorkspaces();
@@ -857,7 +869,11 @@ function MessageList({
             {messages.map(m => (
               <li key={m.id}>
                 {m.from_kind === 'system' ? (
-                  <SystemMessage message={m} />
+                  <SystemMessage
+                    message={m}
+                    conversationRefsById={conversationRefsById}
+                    onOpenConversationRef={onOpenConversationRef}
+                  />
                 ) : (
                   <MessageItem
                     message={m}
@@ -866,6 +882,8 @@ function MessageList({
                     agentsById={agentsById}
                     agentsByName={agentsByName}
                     channelsByName={channelsByName}
+                    conversationRefsById={conversationRefsById}
+                    onOpenConversationRef={onOpenConversationRef}
                     saved={savedIds.has(m.id)}
                     onSave={msg => toggleSave(msg.id)}
                     onStartThread={onThreadCreated ? handleStartThread : undefined}

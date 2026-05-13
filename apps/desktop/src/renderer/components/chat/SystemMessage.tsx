@@ -4,9 +4,12 @@ import type { MessageDto } from '@silverhand/shared';
 import { useMessage } from '@/features/messages/hooks';
 import { formatUserDisplayName } from '@/lib/current-user';
 import { Markdown } from './Markdown';
+import type { ConversationReference } from './ConversationRef';
 
 interface SystemMessageProps {
   message: MessageDto;
+  conversationRefsById?: Map<string, ConversationReference>;
+  onOpenConversationRef?: (id: string) => void;
 }
 
 /**
@@ -20,17 +23,33 @@ interface SystemMessageProps {
  * inserted before metadata existed, we also fall back to detecting the
  * onboarding template by content prefix.
  */
-export function SystemMessage({ message }: SystemMessageProps): JSX.Element {
+export function SystemMessage({
+  message,
+  conversationRefsById,
+  onOpenConversationRef,
+}: SystemMessageProps): JSX.Element {
   const subtype = readSubtype(message.metadata) ?? inferSubtype(message.content);
   const collapsible = COLLAPSIBLE_SUBTYPES.has(subtype ?? '');
   const [expanded, setExpanded] = useState(false);
 
   if (subtype === 'mention_cc') {
-    return <MentionCcCard message={message} />;
+    return (
+      <MentionCcCard
+        message={message}
+        conversationRefsById={conversationRefsById}
+        onOpenConversationRef={onOpenConversationRef}
+      />
+    );
   }
 
   if (subtype === 'thread_summary') {
-    return <ThreadSummaryCard message={message} />;
+    return (
+      <ThreadSummaryCard
+        message={message}
+        conversationRefsById={conversationRefsById}
+        onOpenConversationRef={onOpenConversationRef}
+      />
+    );
   }
 
   if (!collapsible) {
@@ -38,7 +57,11 @@ export function SystemMessage({ message }: SystemMessageProps): JSX.Element {
     // Centered + italic so they read as narration, not a participant message.
     return (
       <div className="px-4 py-1.5 text-center text-xs italic text-text-muted">
-        <Markdown content={message.content} />
+        <Markdown
+          content={message.content}
+          conversationRefsById={conversationRefsById}
+          onOpenConversationRef={onOpenConversationRef}
+        />
       </div>
     );
   }
@@ -61,7 +84,11 @@ export function SystemMessage({ message }: SystemMessageProps): JSX.Element {
       />
       <div className={'min-w-0 flex-1 ' + (expanded ? '' : 'truncate')}>
         {expanded ? (
-          <Markdown content={message.content} />
+          <Markdown
+            content={message.content}
+            conversationRefsById={conversationRefsById}
+            onOpenConversationRef={onOpenConversationRef}
+          />
         ) : (
           // Keep collapsed view as plain text — markdown leaks block elements
           // that break a single-line clamp.
@@ -106,7 +133,15 @@ function firstLine(text: string): string {
  * The verbose imperative wrap stays in `message.content` for the
  * agent's stdin only.
  */
-function MentionCcCard({ message }: { message: MessageDto }): JSX.Element {
+function MentionCcCard({
+  message,
+  conversationRefsById,
+  onOpenConversationRef,
+}: {
+  message: MessageDto;
+  conversationRefsById?: Map<string, ConversationReference>;
+  onOpenConversationRef?: (id: string) => void;
+}): JSX.Element {
   const meta = (message.metadata ?? {}) as Record<string, unknown>;
   const channelName = typeof meta['source_workspace_name'] === 'string'
     ? (meta['source_workspace_name'] as string)
@@ -158,7 +193,11 @@ function MentionCcCard({ message }: { message: MessageDto }): JSX.Element {
       </div>
       {original ? (
         <div className="text-sm text-text-primary">
-          <Markdown content={original} />
+          <Markdown
+            content={original}
+            conversationRefsById={conversationRefsById}
+            onOpenConversationRef={onOpenConversationRef}
+          />
         </div>
       ) : (
         <div className="text-xs text-text-muted">(loading original…)</div>
@@ -177,7 +216,15 @@ function MentionCcCard({ message }: { message: MessageDto }): JSX.Element {
  * raw `summary` from metadata so we don't have to re-parse the prose
  * prefix that's also baked into `content`.
  */
-function ThreadSummaryCard({ message }: { message: MessageDto }): JSX.Element {
+function ThreadSummaryCard({
+  message,
+  conversationRefsById,
+  onOpenConversationRef,
+}: {
+  message: MessageDto;
+  conversationRefsById?: Map<string, ConversationReference>;
+  onOpenConversationRef?: (id: string) => void;
+}): JSX.Element {
   const meta = (message.metadata ?? {}) as Record<string, unknown>;
   const threadTitle = typeof meta['thread_title'] === 'string'
     ? (meta['thread_title'] as string)
@@ -210,7 +257,11 @@ function ThreadSummaryCard({ message }: { message: MessageDto }): JSX.Element {
         </span>
       </div>
       <div className="text-sm text-text-primary">
-        <Markdown content={summary} />
+        <Markdown
+          content={summary}
+          conversationRefsById={conversationRefsById}
+          onOpenConversationRef={onOpenConversationRef}
+        />
       </div>
     </div>
   );

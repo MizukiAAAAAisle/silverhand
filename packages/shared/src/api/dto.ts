@@ -275,6 +275,49 @@ export const ThreadDtoSchema = ConversationDtoSchema.extend({
 });
 export type ThreadDto = z.infer<typeof ThreadDtoSchema>;
 
+// ── ConversationRef ──────────────────────────────────────────────
+//
+// Identity + routing metadata for a conversation, returned by
+// `GET /api/conversations/:id/ref`. Designed to back cross-workspace
+// secondary-pane resolution and the `#~<id>` sigil renderer (PR-3).
+//
+// Hard contract:
+//   - `workspace_kind` is the *external* projection — `agent_home` is
+//     mapped to `'dm'` here so the renderer never sees a third kind.
+//   - For threads, `parent_channel_id` and `parent_title` are
+//     denormalised so the placeholder/sigil can render the parent
+//     channel name without an extra round-trip.
+//   - Does NOT include unread count, last_seq, message previews, or
+//     any per-user state — those go through the existing read-cursor
+//     and message-window endpoints. Keep this endpoint identity-only.
+//   - Permission: `canViewWorkspace(user, workspace_id)` only. This
+//     route is mounted on the user-facing surface only — agents do
+//     NOT get a path to call it. If we ever expose to agents, write a
+//     dedicated ACL helper; do not relax this one.
+export const ConversationRefWorkspaceKindSchema = z.enum(['regular', 'dm']);
+export type ConversationRefWorkspaceKind = z.infer<
+  typeof ConversationRefWorkspaceKindSchema
+>;
+
+export const ConversationRefSchema = z.object({
+  id: z.string(),
+  kind: ConversationKindSchema,
+  title: z.string(),
+  workspace_id: z.string(),
+  workspace_kind: ConversationRefWorkspaceKindSchema,
+  workspace_path: z.string(),
+  parent_channel_id: z.string().nullable(),
+  parent_title: z.string().nullable(),
+  closed_at: z.number().nullable(),
+  archived_at: z.number().nullable(),
+});
+export type ConversationRef = z.infer<typeof ConversationRefSchema>;
+
+export const ConversationRefResponseSchema = z.object({
+  ref: ConversationRefSchema,
+});
+export type ConversationRefResponse = z.infer<typeof ConversationRefResponseSchema>;
+
 export const ConversationAgentDtoSchema = z.object({
   conversation_id: z.string(),
   agent_id: z.string(),

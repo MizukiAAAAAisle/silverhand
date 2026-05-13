@@ -16,6 +16,7 @@ import {
 import { Lightbox } from './Lightbox';
 import { Markdown } from './Markdown';
 import type { WorkspaceReference } from './ChannelRef';
+import type { ConversationReference } from './ConversationRef';
 import { useMessageLayoutMode } from './useMessageLayoutMode';
 import { useRelativeTime } from './useRelativeTime';
 
@@ -35,6 +36,9 @@ interface MessageItemProps {
    *  the Markdown component so inline `#name` references render
    *  as styled pills. */
   channelsByName: Map<string, WorkspaceReference>;
+  /** Lookup by conversation id for inline `#~<id>` references. */
+  conversationRefsById?: Map<string, ConversationReference>;
+  onOpenConversationRef?: (id: string) => void;
   onStartThread?: (msg: MessageDto) => void;
   /** When this message has an open thread anchored to it, the count of
    *  non-system replies in that thread. Drives the button label
@@ -70,6 +74,8 @@ export function MessageItem({
   agentsById,
   agentsByName,
   channelsByName,
+  conversationRefsById,
+  onOpenConversationRef,
   onStartThread,
   threadReplyCount,
   onSave,
@@ -195,6 +201,8 @@ export function MessageItem({
             conversationId={conversationId}
             agentsByName={agentsByName}
             channelsByName={channelsByName}
+            conversationRefsById={conversationRefsById}
+            onOpenConversationRef={onOpenConversationRef}
           />
           {message.attachments && message.attachments.length > 0 ? (
             <AttachmentList attachments={message.attachments} alignRight={alignRight} />

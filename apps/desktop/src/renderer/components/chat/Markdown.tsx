@@ -7,6 +7,7 @@ import { Check, Copy } from 'lucide-react';
 import type { AgentDto } from '@silverhand/shared';
 import { Mention } from './Mention';
 import { ChannelRef, type WorkspaceReference } from './ChannelRef';
+import { ConversationRef, type ConversationReference } from './ConversationRef';
 
 interface MarkdownProps {
   content: string;
@@ -20,10 +21,16 @@ interface MarkdownProps {
   agentsByName?: Map<string, AgentDto>;
   /** Lookup by channel `name` (the handle used in #refs). */
   channelsByName?: Map<string, WorkspaceReference>;
+  /** Lookup by conversation id for `#~<id>` refs in the current
+   *  workspace. Missing entries still render as clickable id refs when
+   *  `onOpenConversationRef` is supplied. */
+  conversationRefsById?: Map<string, ConversationReference>;
+  onOpenConversationRef?: (id: string) => void;
 }
 
 const MENTION_PREFIX = 'silverhand-mention:';
 const CHANNEL_PREFIX = 'silverhand-channel:';
+const CONVERSATION_PREFIX = 'silverhand-conversation:';
 
 /**
  * Renders message body as Markdown.
@@ -44,6 +51,8 @@ function MarkdownInner({
   conversationId,
   agentsByName,
   channelsByName,
+  conversationRefsById,
+  onOpenConversationRef,
 }: MarkdownProps): JSX.Element {
   // Plugin instance is recreated per render but is a thin closure;
   // remark instantiates the transformer once per `process` call so
@@ -62,7 +71,9 @@ function MarkdownInner({
         // into an empty string), which would cause the `a` override
         // below to miss the prefix check and render an inert link.
         urlTransform={url =>
-          url.startsWith(MENTION_PREFIX) || url.startsWith(CHANNEL_PREFIX)
+          url.startsWith(MENTION_PREFIX) ||
+          url.startsWith(CHANNEL_PREFIX) ||
+          url.startsWith(CONVERSATION_PREFIX)
             ? url
             : defaultUrlTransform(url)
         }
@@ -82,6 +93,19 @@ function MarkdownInner({
               const name = href.slice(CHANNEL_PREFIX.length);
               return (
                 <ChannelRef name={name} channel={channelsByName?.get(name)} />
+              );
+            }
+            if (
+              typeof href === 'string' &&
+              href.startsWith(CONVERSATION_PREFIX)
+            ) {
+              const id = href.slice(CONVERSATION_PREFIX.length);
+              return (
+                <ConversationRef
+                  id={id}
+                  conversation={conversationRefsById?.get(id)}
+                  onOpen={onOpenConversationRef}
+                />
               );
             }
             return (
@@ -113,9 +137,9 @@ function MarkdownInner({
 
 export const Markdown = memo(MarkdownInner);
 
-// Walks the mdast tree and replaces inline `@handle` / `#handle`
-// substrings inside text nodes with link nodes that carry our
-// internal `silverhand-mention:` / `silverhand-channel:` schemes.
+// Walks the mdast tree and replaces inline `@handle`, `#handle`, and
+// `#~<conversation_id>` substrings inside text nodes with link nodes
+// that carry our internal silverhand-* URL schemes.
 // Skipped containers: `inlineCode`, `code`, and existing `link`
 // nodes (so a hand-written `[#foo](https://…)` stays intact, and a
 // literal `@x` inside `\`@bob\`` doesn't fire). Heading text is
@@ -161,7 +185,11 @@ function walk(node: MdastNode): void {
 // — alpha-first below filters those) out. Handle character class
 // mirrors `CreateAgentInputSchema` / `CreateChannelInputSchema` in
 // `packages/shared/src/api/dto.ts` (alphanumerics, `-`, `_`).
-const REF_RE = /(?<![\w/])([@#])([a-zA-Z][a-zA-Z0-9_-]*)/g;
+// Conversation ids are generated from 12 random bytes as base64url,
+// yielding exactly 16 chars. The trailing negative lookahead prevents
+// matching a valid-looking prefix inside a longer id-like token.
+const REF_RE =
+  /(?<![\w/])(?:#~([A-Za-z0-9_-]{16})(?![A-Za-z0-9_-])|([@#])([a-zA-Z][a-zA-Z0-9_-]*))/g;
 
 function pushSplit(text: string, out: MdastNode[]): void {
   let last = 0;
@@ -172,8 +200,20 @@ function pushSplit(text: string, out: MdastNode[]): void {
     if (m.index > last) {
       out.push({ type: 'text', value: text.slice(last, m.index) });
     }
-    const sigil = m[1]!;
-    const name = m[2]!;
+    const conversationId = m[1];
+    if (conversationId) {
+      out.push({
+        type: 'link',
+        // mdast `link` uses `url`, not `href`. mdast-util-to-hast maps
+        // it to the `href` attribute on the rendered `<a>`.
+        url: `${CONVERSATION_PREFIX}${conversationId}`,
+        children: [{ type: 'text', value: `#~${conversationId}` }],
+      });
+      last = m.index + m[0].length;
+      continue;
+    }
+    const sigil = m[2]!;
+    const name = m[3]!;
     out.push({
       type: 'link',
       // mdast `link` uses `url`, not `href`. mdast-util-to-hast maps
