@@ -306,13 +306,30 @@ export class ConversationMessageService {
       );
     }
 
+    // Cross-target identity flag — controls both delivery sender-exclusion
+    // and idle auto-start policies below. Computed once.
+    const targetIsCrossConversation =
+      txResult.targetConversation.id !== txResult.sourceConversation.id;
+
+    // Delivery sender-exclusion only fires for same-conversation send.
+    // Cross-conversation send is a hand-off between *different*
+    // (conversation, agent) processes: when Cindy@channel sends to a
+    // thread where a separate Cindy@thread session exists, the thread
+    // session is the actual recipient and must receive the message in
+    // its inbox. Excluding by agent id would deliver to nobody and the
+    // started session would wake without a message to process — exactly
+    // the bug @Cindy caught on `f28ed08` review.
+    const deliveryExcludeAgentId =
+      policy.distributeExcludeSender
+      && input.actor.kind === 'agent'
+      && !targetIsCrossConversation
+        ? input.actor.agentId
+        : null;
     void this.deliverBestEffort(
       txResult.targetConversation.id,
       txResult.message.id,
       txResult.recipients,
-      policy.distributeExcludeSender && input.actor.kind === 'agent'
-        ? input.actor.agentId
-        : null,
+      deliveryExcludeAgentId,
     );
     if (policy.ccMentions) {
       void this.ccMentionsBestEffort(txResult.sourceConversation, txResult.message);
@@ -332,8 +349,6 @@ export class ConversationMessageService {
     //  separate Cindy@thread session exists, the thread session must be
     //  woken — they are independent (conversation, agent) processes with
     //  independent context.
-    const targetIsCrossConversation =
-      txResult.targetConversation.id !== txResult.sourceConversation.id;
     const shouldAutoStartIdle =
       policy.autoStartIdleRecipients
       || (input.actor.kind === 'agent' && targetIsCrossConversation);

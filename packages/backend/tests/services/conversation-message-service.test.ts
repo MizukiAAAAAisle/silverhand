@@ -421,8 +421,9 @@ describe('ConversationMessageService.sendMessage', () => {
     // Regression for the "thread → parent forward did not wake parent
     // members" bug. The (thread, alice) process is the sender. The
     // target is the parent channel where another (channel, alice)
-    // session exists alongside (channel, bob). Both must be woken;
-    // wake must NOT exclude the sender's identity in the target — the
+    // session exists alongside (channel, bob). Both must be woken AND
+    // both must receive the message in their inbox; sender exclusion
+    // is a same-conversation echo guard and does not apply here. The
     // (channel, alice) session is a *different* process from the
     // (thread, alice) sender and only it will see the inbox arriving
     // in the channel.
@@ -442,6 +443,14 @@ describe('ConversationMessageService.sendMessage', () => {
       });
 
       expect(t.fake.starts.map(s => ({ c: s.conversationId, a: s.agentId })).sort(
+        (x, y) => (x.c + x.a).localeCompare(y.c + y.a),
+      )).toEqual(
+        [
+          { c: t.channel.id, a: t.alice.id },
+          { c: t.channel.id, a: t.bob.id },
+        ].sort((x, y) => (x.c + x.a).localeCompare(y.c + y.a)),
+      );
+      expect(t.fake.delivered.map(d => ({ c: d.conversationId, a: d.agentId })).sort(
         (x, y) => (x.c + x.a).localeCompare(y.c + y.a),
       )).toEqual(
         [
@@ -474,7 +483,13 @@ describe('ConversationMessageService.sendMessage', () => {
       expect(result.targetConversationId).toBe(thread.id);
       expect(t.messages.listForConversation(thread.id).map(m => m.content))
         .toContain('down');
-      expect(t.fake.delivered.map(d => d.agentId)).toEqual([t.bob.id]);
+      // Cross-target send: delivery does NOT exclude the sender's agent id.
+      // (channel, alice) and (thread, alice) are different processes;
+      // (thread, alice) must receive the message in its inbox or it
+      // wakes without anything to process. See @Cindy review of `f28ed08`.
+      expect(t.fake.delivered.map(d => d.agentId).sort()).toEqual(
+        [t.alice.id, t.bob.id].sort(),
+      );
     } finally {
       t.cleanup();
     }
@@ -483,9 +498,9 @@ describe('ConversationMessageService.sendMessage', () => {
   it('agent cross-target send to a child thread auto-starts the thread members including the sender session in the thread', async () => {
     // Mirror of the parent-direction test, for the more common case:
     // channel agent forwards work into a thread. The (thread, alice)
-    // session and the (thread, bob) session both must wake, even
-    // though alice is also the sender — sender exclusion applies to
-    // delivery (don't echo to source-conversation sender), not to wake.
+    // session and the (thread, bob) session both must wake AND receive
+    // the message — sender exclusion is a same-conversation echo
+    // guard and must not apply here.
     const t = bootstrap();
     try {
       const thread = t.conversations.insertThread({
@@ -503,6 +518,14 @@ describe('ConversationMessageService.sendMessage', () => {
       });
 
       expect(t.fake.starts.map(s => ({ c: s.conversationId, a: s.agentId })).sort(
+        (x, y) => (x.c + x.a).localeCompare(y.c + y.a),
+      )).toEqual(
+        [
+          { c: thread.id, a: t.alice.id },
+          { c: thread.id, a: t.bob.id },
+        ].sort((x, y) => (x.c + x.a).localeCompare(y.c + y.a)),
+      );
+      expect(t.fake.delivered.map(d => ({ c: d.conversationId, a: d.agentId })).sort(
         (x, y) => (x.c + x.a).localeCompare(y.c + y.a),
       )).toEqual(
         [
