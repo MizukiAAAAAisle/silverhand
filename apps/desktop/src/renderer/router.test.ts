@@ -260,6 +260,22 @@ describe('parseRouteState — ?task=<n> focused-task pointer (PR-4 commit 2)', (
     expect(parseRouteState('/chat/w/w-1/c/c-a', '?task=-3').focusedTaskNumber).toBeNull();
   });
 
+  it('rejects mixed-suffix / decimal / leading-zero forms (Cindy review of 80f544e)', () => {
+    // `parseInt` would silently turn `12abc` into 12 and `1.5` into 1,
+    // both pointing at a row the user did not ask for. Strict
+    // `/^[1-9]\d*$/` validation refuses anything that isn't a clean
+    // positive-integer string. `01` rejects so URLs round-trip
+    // unambiguously with the `String(taskNumber)` writer.
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '?task=12abc').focusedTaskNumber)
+      .toBeNull();
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '?task=1.5').focusedTaskNumber)
+      .toBeNull();
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '?task=01').focusedTaskNumber)
+      .toBeNull();
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '?task=  7  ').focusedTaskNumber)
+      .toBeNull();
+  });
+
   it('omits ?task entirely → null', () => {
     expect(parseRouteState('/chat/w/w-1/c/c-a', '').focusedTaskNumber).toBeNull();
   });

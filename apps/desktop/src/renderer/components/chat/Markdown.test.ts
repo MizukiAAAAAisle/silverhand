@@ -158,7 +158,6 @@ describe('Markdown task refs', () => {
         'PR #123',          // bare # + number is *issue ref*, not task
         'see#1',             // attached to word — `?<![\\w/]` blocks
         '#task:abc',         // non-numeric value
-        '#task:0',           // zero is not a valid task number (still emits chip — number itself is fine, allow rendering and the caller filters)
         '`#task:99`',        // inside inline code
         '[#task:7](https://example.com)', // inside existing link
       ].join(' '),
@@ -174,6 +173,35 @@ describe('Markdown task refs', () => {
     // fallback is excluded by `(?!conv:|task:)` lookahead → plain text.
     expect(html).not.toContain('silverhand-task:abc');
     expect(html).not.toContain('silverhand-channel:task');
+  });
+
+  it('rejects #task:0 / leading-zero / mixed-suffix forms (Cindy review of 80f544e)', () => {
+    // The tokenizer regex tightened from `#task:(\d+)(?!\d)` to
+    // `#task:([1-9]\d*)(?!\w)` so `#task:0` is silently demoted to
+    // text and never reaches the renderer's `silverhand-task:0`
+    // branch. Also asserts no internal scheme leaks into the rendered
+    // HTML — previously the malformed path could fall through to a
+    // plain `<a href="silverhand-task:0">`, which on click would call
+    // `window.agentHub.openExternal` and shell out our internal URL.
+    //
+    // Note: `#task:1.5` is intentionally NOT tested here. By markdown
+    // convention (matches `#conv:` behavior), the period terminates
+    // the match — `#task:1` becomes a chip, `.5` is trailing text.
+    // The decimal-rejection contract is enforced at the URL parser
+    // (`?task=1.5` → null) where it actually matters; in prose
+    // there's no way to *write* the user's intent unambiguously.
+    const html = renderWithTaskCtx(
+      ['#task:0', '#task:01', '#task:12abc'].join(' '),
+      'w-eng',
+      () => {},
+    );
+    expect(html).not.toContain('data-task-ref="0"');
+    expect(html).not.toContain('data-task-ref="01"');
+    expect(html).not.toContain('data-task-ref="12"');
+    expect(html).not.toContain('silverhand-task:0');
+    expect(html).not.toContain('silverhand-task:12');
+    // The literal text should survive as prose.
+    expect(html).toContain('#task:0');
   });
 
   it('mixes #task and #conv sigils in the same paragraph', () => {

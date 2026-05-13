@@ -115,15 +115,28 @@ function MarkdownInner({
               typeof href === 'string' &&
               href.startsWith(TASK_PREFIX)
             ) {
-              // The tokenizer guarantees the slice is a positive
-              // integer string; parseInt + finite check is defensive.
+              // The tokenizer guarantees the slice is `[1-9]\d*` —
+              // positive integer with no leading zero. parseInt + finite
+              // check is defensive belt-and-suspenders for the case
+              // where someone hand-authors `[label](silverhand-task:0)`
+              // through agent-supplied markdown the tokenizer never
+              // touched. Render the original child text inertly rather
+              // than fall through to the plain-link branch — that branch
+              // calls `window.agentHub.openExternal(href)` on click,
+              // which would shell out our internal scheme.
               const raw = href.slice(TASK_PREFIX.length);
               const taskNumber = Number.parseInt(raw, 10);
-              if (Number.isFinite(taskNumber) && taskNumber > 0) {
+              if (
+                /^[1-9]\d*$/.test(raw) &&
+                Number.isFinite(taskNumber) &&
+                taskNumber > 0
+              ) {
                 return <TaskRef taskNumber={taskNumber} />;
               }
-              // Pathological — fall through to plain link rendering
-              // so we don't crash on a malformed href.
+              // Pathological — render as plain text so we don't crash
+              // on a malformed href and don't hand our internal scheme
+              // to the OS handler.
+              return <span>{children}</span>;
             }
             return (
               <a
@@ -208,13 +221,19 @@ function walk(node: MdastNode): void {
 //
 // Typed sigil grammar: `#<type>:<value>`. We currently recognize:
 //  - `#conv:<id>`  — 16-char base64url conversation id
-//  - `#task:<n>`   — workspace-scoped positive integer task number
+//  - `#task:<n>`   — workspace-scoped positive integer task number;
+//                    `[1-9]\d*` rejects zero AND leading zeros so the
+//                    chip never points at a row that can't exist. The
+//                    `(?!\w)` boundary prevents `#task:12abc` from
+//                    swallowing `12` as a task — same strict tail
+//                    Cindy review of `80f544e` flagged on the URL
+//                    parser.
 // The channel branch explicitly excludes `#conv:` and `#task:`
 // prefixes via negative lookahead so a malformed `#conv:bad` /
 // `#task:abc` doesn't fall back to matching `#conv` / `#task` as a
 // stray channel reference.
 const REF_RE =
-  /(?<![\w/])(?:#conv:([A-Za-z0-9_-]{16})(?![A-Za-z0-9_-])|#task:(\d+)(?!\d)|@([a-zA-Z][a-zA-Z0-9_-]*)|#(?!conv:|task:)([a-zA-Z][a-zA-Z0-9_-]*))/g;
+  /(?<![\w/])(?:#conv:([A-Za-z0-9_-]{16})(?![A-Za-z0-9_-])|#task:([1-9]\d*)(?!\w)|@([a-zA-Z][a-zA-Z0-9_-]*)|#(?!conv:|task:)([a-zA-Z][a-zA-Z0-9_-]*))/g;
 
 function pushSplit(text: string, out: MdastNode[]): void {
   let last = 0;

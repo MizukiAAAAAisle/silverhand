@@ -149,12 +149,15 @@ export function parseRouteState(pathname: string, search: string): RouteState {
   // forcing an "unresolved secondary" placeholder.
   const sideConversationId = rawSide && rawSide.length > 0 ? rawSide : null;
   const rawTask = searchParams.get('task');
-  // Defensive: only positive integers count. `?task=0` / `?task=abc` /
-  // empty string all coerce to null so the drawer never tries to focus
-  // a non-existent row.
-  const taskAsNumber = rawTask !== null ? Number.parseInt(rawTask, 10) : NaN;
+  // Defensive: positive-integer-string only — no leading zeros, no
+  // decimals, no trailing garbage. `parseInt` would silently accept
+  // `12abc` as 12 and `1.5` as 1, both of which point at a row the
+  // user did not ask for. The strict regex matches the contract that
+  // `?task=<n>` came from `nav.openTask(n)` writing
+  // `String(taskNumber)` against an integer task_number, with a hand-
+  // typed/foreign URL falling through to null.
   const focusedTaskNumber =
-    Number.isFinite(taskAsNumber) && taskAsNumber > 0 ? taskAsNumber : null;
+    rawTask !== null && /^[1-9]\d*$/.test(rawTask) ? Number(rawTask) : null;
   const threadFullscreen =
     fullscreen && !!threadId && !sideConversationId;
 
