@@ -21,6 +21,7 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
 import { useTasks, useUpdateTaskStatus } from '@/features/tasks/hooks';
+import { useRelativeTime } from '@/components/chat/useRelativeTime';
 
 /**
  * Workspace-wide tasks panel — a floating right-side drawer that overlays
@@ -877,6 +878,7 @@ function TaskCard({
   onClick: () => void;
   onStatusChange: (next: TaskStatus) => void;
 }): JSX.Element {
+  const { relative, absolute } = useRelativeTime(task.created_at);
   return (
     <div
       data-task-number={task.task_number}
@@ -906,19 +908,27 @@ function TaskCard({
         <span className="block min-w-0 break-words text-xs text-text-primary">
           {task.title}
         </span>
-        {/* Row 3: assignee + conversation */}
-        <div className="mt-1 flex items-center gap-1.5 text-[10px] text-text-muted">
-          {task.assignee ? (
-            <span>@{task.assignee.name}</span>
-          ) : (
-            <span className="italic">unassigned</span>
-          )}
+        {/* Row 3: assignee · in conversation · created (inline meta,
+            mirrors the popover layout — see TaskRef.TaskPopoverBody).
+            Single-line layout: only the conversation name shrinks /
+            ellipsizes when the row overflows, keeping assignee & time
+            anchored. Wrapping was tried but broke the card grid's
+            vertical rhythm (@shiki feedback `idpLhTxbhKQDy--j`). */}
+        <div className="mt-1 flex items-baseline gap-1.5 text-[10px] text-text-muted">
+          <span className="shrink-0 text-text-secondary">
+            {task.assignee ? `@${task.assignee.name}` : (
+              <span className="italic">unassigned</span>
+            )}
+          </span>
+          <span aria-hidden className="shrink-0 text-text-muted/60">·</span>
           <span
-            className="ml-auto max-w-[80px] truncate"
+            className="min-w-0 truncate text-text-secondary"
             title={task.conversation.title}
           >
-            {task.conversation.title}
+            in {task.conversation.title}
           </span>
+          <span aria-hidden className="shrink-0 text-text-muted/60">·</span>
+          <span className="shrink-0" title={absolute}>{relative}</span>
         </div>
       </button>
 

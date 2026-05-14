@@ -2,6 +2,7 @@ import { ClipboardCheck } from 'lucide-react';
 import { useTaskByNumber } from '@/features/tasks/useTaskByNumber';
 import { useTaskRefContext } from '@/features/tasks/TaskRefContext';
 import { HoverPopover } from './HoverPopover';
+import { useRelativeTime } from './useRelativeTime';
 import type { TaskSummaryDto, TaskStatus } from '@silverhand/shared';
 
 interface TaskRefProps {
@@ -169,12 +170,15 @@ export function TaskRef({ taskNumber }: TaskRefProps): JSX.Element {
 }
 
 /**
- * Popover body — minimal facts the user typically wants without
- * leaving the conversation: status (color-coded), assignee, source
- * conversation, creation time. Title is the first line and wraps to
- * 2 lines max so a long task title doesn't blow up the popover.
+ * Popover body — full title (no clamp) with a single inline meta row
+ * for assignee · created · conversation. Earlier this was a `dl` with
+ * three labelled rows; @shiki feedback (`WlIwDhmrbu6_azy1`) was that
+ * the form-style layout felt heavy in such a small surface. Inline
+ * meta keeps the popover scannable: title dominates, meta sits as one
+ * subtle muted line that wraps if it has to.
  */
 function TaskPopoverBody({ task }: { task: TaskSummaryDto }): JSX.Element {
+  const { relative, absolute } = useRelativeTime(task.created_at);
   return (
     <div className="space-y-2">
       <div className="flex items-baseline gap-2">
@@ -183,22 +187,23 @@ function TaskPopoverBody({ task }: { task: TaskSummaryDto }): JSX.Element {
         </span>
         <TaskStatusBadge status={task.status} />
       </div>
-      <p className="line-clamp-2 break-words text-xs font-medium text-text-primary">
+      <p className="break-words text-xs font-medium text-text-primary">
         {task.title}
       </p>
-      <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-[11px]">
-        <dt className="text-text-muted">Assignee</dt>
-        <dd className="truncate text-text-secondary">
+      <p className="flex items-baseline gap-1.5 text-[11px] text-text-muted">
+        <span className="shrink-0 text-text-secondary">
           {task.assignee ? `@${task.assignee.name}` : <em>unassigned</em>}
-        </dd>
-        <dt className="text-text-muted">In</dt>
-        <dd
-          className="truncate text-text-secondary"
-          aria-label={task.conversation.title}
+        </span>
+        <span aria-hidden className="shrink-0 text-text-muted/60">·</span>
+        <span
+          className="min-w-0 truncate text-text-secondary"
+          title={task.conversation.title}
         >
-          {task.conversation.title}
-        </dd>
-      </dl>
+          in {task.conversation.title}
+        </span>
+        <span aria-hidden className="shrink-0 text-text-muted/60">·</span>
+        <span className="shrink-0" title={absolute}>{relative}</span>
+      </p>
     </div>
   );
 }
