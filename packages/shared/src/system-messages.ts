@@ -268,3 +268,42 @@ export function readTaskSystemMetadataPartial(
   const parsed = TaskSystemMetadataPartialSchema.safeParse(metadata);
   return parsed.success ? parsed.data : null;
 }
+
+// ── session_cleared metadata ─────────────────────────────────────────
+
+/**
+ * Metadata shape for `session_cleared` system messages — emitted when
+ * a user clears a (conversation, agent)'s CLI session via the
+ * `/clear-session` route. Renderers draw a compact audit row off
+ * these fields without re-parsing `message.content`.
+ *
+ *  - `agent_id` / `agent_name`: which agent's session was reset.
+ *  - `actor_user_id`: who triggered it; `null` for legacy v1 rows
+ *    where principal info wasn't stored.
+ *  - `previous_cli_session_id_prefix`: short id (~8 chars) of the
+ *    session that was cleared, surfaced as a `prev <id>` chip;
+ *    `null` if the agent had no prior session (cold path).
+ *  - `was_running`: true if the agent process was live at clear time.
+ *    Renderer surfaces "was running" / "was idle" so the audit row
+ *    captures whether this clear interrupted active work.
+ */
+export const SessionClearedMetadataSchema = z.object({
+  subtype: z.literal('session_cleared'),
+  agent_id: z.string(),
+  agent_name: z.string(),
+  actor_user_id: z.string().nullable(),
+  previous_cli_session_id_prefix: z.string().nullable(),
+  was_running: z.boolean(),
+});
+export type SessionClearedMetadata = z.infer<typeof SessionClearedMetadataSchema>;
+
+/** Defensive parse for session_cleared metadata. Returns `null` for
+ *  legacy rows whose metadata predates this schema; renderer falls
+ *  back to a generic audit row reading `message.content`. */
+export function readSessionClearedMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+): SessionClearedMetadata | null {
+  if (!metadata) return null;
+  const parsed = SessionClearedMetadataSchema.safeParse(metadata);
+  return parsed.success ? parsed.data : null;
+}

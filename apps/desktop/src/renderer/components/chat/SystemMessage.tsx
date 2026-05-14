@@ -1,12 +1,14 @@
 import { useState, type ComponentType } from 'react';
-import { AtSign, CheckCircle2, ChevronRight, ClipboardCheck, Eraser } from 'lucide-react';
+import { AtSign, CheckCircle2, ChevronRight, ClipboardCheck, RotateCcw } from 'lucide-react';
 import {
   type MessageDto,
+  type SessionClearedMetadata,
   type SystemSubtype,
   type TaskStatus,
   type TaskSubtype,
   type TaskSystemMetadata,
   type TaskSystemMetadataPartial,
+  readSessionClearedMetadata,
   readTaskSystemMetadata,
   readTaskSystemMetadataPartial,
   resolveSubtype,
@@ -242,8 +244,25 @@ function MentionCcCard({
   );
 }
 
-// ─── session_cleared card ──────────────────────────────────────────────
+// ─── session_cleared audit row ────────────────────────────────────────
 
+/**
+ * `session_cleared` is an audit event ("user reset @Alice's CLI session
+ * context"). The previous renderer wrapped it as a destructive toast
+ * (red border + bg-error tint + Eraser icon), which clashed with the
+ * message stream's IM aesthetic — sessions don't get *deleted*, they
+ * get *reset*. PR-3 swaps the toast for a single muted inline row
+ * with a `RotateCcw` (counter-clockwise reset arrow) icon and
+ * structured metadata pieces (actor · agent · prev session prefix ·
+ * was-running flag) so the row reads as a one-line audit entry, not a
+ * warning popup.
+ *
+ * Renderer chain:
+ *  - Full metadata (`SessionClearedMetadata`): structured row.
+ *  - Missing/legacy metadata: degraded muted row carrying
+ *    `message.content` so legacy DB rows still display something
+ *    sensible.
+ */
 function SessionClearedCard({
   message,
   conversationRefsById,
@@ -251,20 +270,58 @@ function SessionClearedCard({
   channelsByName,
   onOpenChannelRef,
 }: RendererProps): JSX.Element {
+  const meta = readSessionClearedMetadata(message.metadata);
+  if (meta) return <SessionClearedRow meta={meta} />;
   return (
-    <div className="mx-4 my-1.5 rounded-md border border-error/25 bg-error/5 px-3 py-2">
-      <div className="flex items-start gap-2 text-xs text-text-secondary">
-        <Eraser className="mt-0.5 size-3.5 shrink-0 text-error" />
-        <div className="min-w-0 flex-1">
-          <Markdown
-            content={message.content}
-            conversationRefsById={conversationRefsById}
-            onOpenConversationRef={onOpenConversationRef}
-            channelsByName={channelsByName}
-            onOpenChannelRef={onOpenChannelRef}
-          />
-        </div>
+    <div
+      className="flex items-center gap-2 px-4 py-1 text-xs text-text-muted"
+      data-session-cleared-legacy="1"
+    >
+      <RotateCcw aria-hidden className="size-3.5 shrink-0 opacity-60" />
+      <div className="min-w-0 flex-1">
+        <Markdown
+          content={message.content}
+          conversationRefsById={conversationRefsById}
+          onOpenConversationRef={onOpenConversationRef}
+          channelsByName={channelsByName}
+          onOpenChannelRef={onOpenChannelRef}
+        />
       </div>
+    </div>
+  );
+}
+
+function SessionClearedRow({
+  meta,
+}: {
+  meta: SessionClearedMetadata;
+}): JSX.Element {
+  const actorLabel = `@${formatUserDisplayName(meta.actor_user_id) || 'user'}`;
+  return (
+    <div
+      className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 px-4 py-1 text-xs text-text-muted"
+      data-session-cleared="1"
+    >
+      <RotateCcw aria-hidden className="size-3.5 shrink-0 opacity-60" />
+      <span className="text-text-secondary">{actorLabel}</span>
+      <span>reset</span>
+      <span className="font-medium text-text-primary">@{meta.agent_name}</span>
+      <span>'s session context</span>
+      {meta.previous_cli_session_id_prefix ? (
+        <>
+          <span aria-hidden className="text-text-muted/60">·</span>
+          <span>
+            prev{' '}
+            <code className="rounded bg-bg-elevated px-1 font-mono text-[11px] text-text-secondary">
+              {meta.previous_cli_session_id_prefix}
+            </code>
+          </span>
+        </>
+      ) : null}
+      <span aria-hidden className="text-text-muted/60">·</span>
+      <span data-session-cleared-running={meta.was_running ? '1' : '0'}>
+        was {meta.was_running ? 'running' : 'idle'}
+      </span>
     </div>
   );
 }
@@ -632,7 +689,7 @@ const systemMessageRenderers: Record<SystemSubtype, SystemMessageRenderer> = {
   task_claim: TaskEventRow,
   task_unclaim: TaskEventRow,
   task_status: TaskEventRow,
-  // P0 (PR-3): becomes inline audit row.
+  // P0 (PR-3): inline audit row + RotateCcw icon (no longer a toast).
   session_cleared: SessionClearedCard,
   // P1 (PR-4): becomes a flat banner.
   schedule_fire: GenericNarrationFallback,

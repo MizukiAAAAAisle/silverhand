@@ -146,16 +146,63 @@ describe('SystemMessage channel refs', () => {
     expect(html).toContain('data-channel-ref-id="ch-v3"');
   });
 
-  it('renders session_cleared as a destructive audit card', () => {
+  it('renders session_cleared full metadata as inline audit row (no toast styling)', () => {
     const msg = makeSystemMessage(
       'session_cleared',
-      { agent_name: 'alice' },
+      {
+        agent_id: 'a-alice',
+        agent_name: 'Alice',
+        actor_user_id: 'local',
+        previous_cli_session_id_prefix: 'fbe21c8a',
+        was_running: true,
+      },
       "@local cleared @alice's CLI session context",
     );
     const html = renderSystem(msg, new Map());
-    expect(html).toContain('lucide-eraser');
-    expect(html).toContain('border-error/25');
-    expect(html).toContain('CLI session context');
+    expect(html).toContain('data-session-cleared="1"');
+    expect(html).toContain('lucide-rotate-ccw');
+    // RotateCcw, not the destructive Eraser.
+    expect(html).not.toContain('lucide-eraser');
+    // No toast container colors.
+    expect(html).not.toContain('border-error');
+    expect(html).not.toContain('bg-error');
+    // Structured pieces visible.
+    expect(html).toContain('@you');
+    expect(html).toContain('reset');
+    expect(html).toContain('@Alice');
+    expect(html).toContain('fbe21c8a');
+    expect(html).toContain('was running');
+  });
+
+  it('session_cleared was_running=false renders "was idle"', () => {
+    const msg = makeSystemMessage(
+      'session_cleared',
+      {
+        agent_id: 'a-bob',
+        agent_name: 'Bob',
+        actor_user_id: 'local',
+        previous_cli_session_id_prefix: null,
+        was_running: false,
+      },
+    );
+    const html = renderSystem(msg, new Map());
+    expect(html).toContain('data-session-cleared-running="0"');
+    expect(html).toContain('was idle');
+    // No `prev <hash>` chip when previous_cli_session_id_prefix is null.
+    expect(html).not.toContain('prev ');
+  });
+
+  it('session_cleared with no metadata falls back to legacy audit row + RotateCcw', () => {
+    const msg = makeSystemMessage(
+      'session_cleared',
+      {},
+      "@local cleared @alice's CLI session context (prev fbe21c8a)",
+    );
+    const html = renderSystem(msg, new Map());
+    expect(html).toContain('data-session-cleared-legacy="1"');
+    expect(html).toContain('lucide-rotate-ccw');
+    expect(html).not.toContain('border-error');
+    expect(html).toContain("CLI session context");
   });
 
   // PR-1 added three-state subtype resolution. Legacy DB-resident

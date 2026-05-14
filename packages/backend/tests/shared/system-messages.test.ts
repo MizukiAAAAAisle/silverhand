@@ -4,6 +4,7 @@ import {
   SYSTEM_SUBTYPES,
   TASK_MUTATION_KINDS,
   TASK_SUBTYPES,
+  readSessionClearedMetadata,
   readSubtype,
   readTaskSystemMetadata,
   readTaskSystemMetadataPartial,
@@ -179,5 +180,63 @@ describe('readTaskSystemMetadata + readTaskSystemMetadataPartial', () => {
     expect(readTaskSystemMetadata(undefined)).toBeNull();
     expect(readTaskSystemMetadataPartial(null)).toBeNull();
     expect(readTaskSystemMetadataPartial(undefined)).toBeNull();
+  });
+});
+
+describe('readSessionClearedMetadata', () => {
+  it('parses full session_cleared metadata', () => {
+    const m = readSessionClearedMetadata({
+      subtype: 'session_cleared',
+      agent_id: 'a-alice',
+      agent_name: 'Alice',
+      actor_user_id: 'local',
+      previous_cli_session_id_prefix: 'fbe21c8a',
+      was_running: true,
+    });
+    expect(m).not.toBeNull();
+    expect(m!.agent_name).toBe('Alice');
+    expect(m!.was_running).toBe(true);
+    expect(m!.previous_cli_session_id_prefix).toBe('fbe21c8a');
+  });
+
+  it('accepts null prev session prefix and null actor', () => {
+    const m = readSessionClearedMetadata({
+      subtype: 'session_cleared',
+      agent_id: 'a-bob',
+      agent_name: 'Bob',
+      actor_user_id: null,
+      previous_cli_session_id_prefix: null,
+      was_running: false,
+    });
+    expect(m).not.toBeNull();
+    expect(m!.actor_user_id).toBeNull();
+    expect(m!.previous_cli_session_id_prefix).toBeNull();
+  });
+
+  it('rejects rows missing required fields', () => {
+    expect(
+      readSessionClearedMetadata({
+        subtype: 'session_cleared',
+        agent_name: 'Alice',
+      }),
+    ).toBeNull();
+  });
+
+  it('rejects rows with wrong subtype literal', () => {
+    expect(
+      readSessionClearedMetadata({
+        subtype: 'mention_cc',
+        agent_id: 'a',
+        agent_name: 'A',
+        actor_user_id: null,
+        previous_cli_session_id_prefix: null,
+        was_running: false,
+      }),
+    ).toBeNull();
+  });
+
+  it('returns null for null/undefined metadata', () => {
+    expect(readSessionClearedMetadata(null)).toBeNull();
+    expect(readSessionClearedMetadata(undefined)).toBeNull();
   });
 });

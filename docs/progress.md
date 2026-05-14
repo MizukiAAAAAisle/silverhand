@@ -1658,3 +1658,34 @@ DB 1646 条 task_* 系统消息（占系统消息总量约 95%）从居中斜体
 - 无 DB 迁移——metadata 是 message row 的 free-form JSON 列，新字段直接写。
 - 无 task_events 表——每条 task system message 本身就是事件记录，`created_at` = 事件时间，靠 metadata.task_message_id 反查同 task 历史已经够用。
 
+
+## 2026-05-15 — System message UI redesign · PR-3（session_cleared 退 toast → inline audit row）
+
+`session_cleared` 现状是消息流里唯一一处 toast 风格（red border + bg-error tint + Eraser destructive icon），跟 IM 的整体 chat 风格违和；图标 `Eraser` 还隐含"删除"语义，而实际行为是"重置 session 上下文"，不是删除任何持久数据。本 PR 改成消息流里的轻量 inline audit 行，图标换 `RotateCcw`（逆时针重置箭头）。
+
+**Schema**（`packages/shared/src/system-messages.ts`）：
+
+- 新 `SessionClearedMetadataSchema`：`{subtype:'session_cleared', agent_id, agent_name, actor_user_id:nullable, previous_cli_session_id_prefix:nullable, was_running}`。原 producer（`conversation-manager.ts:1104`）已经在写这些字段，只是没有 schema 锁定；本 PR 补上。
+- `readSessionClearedMetadata` defensive parse；缺字段 → null → renderer 走 legacy fallback。
+
+**Renderer**（`apps/desktop/src/renderer/components/chat/SystemMessage.tsx`）：
+
+- 重写 `SessionClearedCard`：完整 metadata 走 `SessionClearedRow`（结构化），缺字段走 legacy muted row（`message.content` markdown）。
+- 删 toast 容器（`mx-4 my-1.5 rounded-md border border-error/25 bg-error/5 px-3 py-2`），row 退化为单行 `flex items-center gap-2 px-4 py-1 text-xs text-text-muted`。
+- 图标 `Eraser`（destructive）→ `RotateCcw`（reset），不再用 error color；仅 `opacity-60` muted。
+- 结构化 row 形态：`[↻] @user reset @AgentName's session context · prev <8-char hash> · was running|idle`。
+  - actor user → `formatUserDisplayName` 投影（current viewer = `@you`）。
+  - prev session prefix 用 `<code class="bg-bg-elevated">` mono chip，无前缀时整段省略。
+  - `was_running` 翻成 "was running" / "was idle"，`data-session-cleared-running` 钉视觉测试。
+
+**测试**：
+
+- shared `system-messages.test.ts` +5：full parse / nullable 字段 / 缺字段拒绝 / 错 subtype literal 拒绝 / null+undefined 处理。
+- desktop `Markdown.test.ts` 改 1 + 加 2：原 destructive card 测试改写为新 inline audit row（钉 `data-session-cleared`、`lucide-rotate-ccw`、不含 `border-error`/`lucide-eraser`、含结构化 actor/agent/prev/was-running）；`was_running=false` 走 "was idle" 分支 + 无 prev chip；缺 metadata 走 `data-session-cleared-legacy` 兼容 row。
+
+**质量门**：4 包 typecheck ✅；backend 653/653（+11）；desktop 144/144（+5 / -1 改 1）。
+
+**未变**：producer 一字未改（metadata 字段早就齐了，只是没 schema 锁）。`Eraser` 图标 import 删除。
+
+后续 PR：PR-4 schedule_fire 扁平 banner；PR-5 channel_context / child_context / thread_anchor 统一 quote-card 系列；PR-6 onboarding badge / rename ↻ icon。
+
