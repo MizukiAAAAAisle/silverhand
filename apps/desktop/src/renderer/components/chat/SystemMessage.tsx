@@ -1,9 +1,10 @@
 import { useState, type ComponentType } from 'react';
-import { AtSign, CheckCircle2, ChevronRight, ClipboardCheck, Clock, Quote, RotateCcw, Sprout } from 'lucide-react';
+import { AtSign, CheckCircle2, ChevronRight, ClipboardCheck, Clock, Quote, RotateCcw, RotateCw, Sprout } from 'lucide-react';
 import {
   type ChannelContextMetadata,
   type ChildContextMetadata,
   type MessageDto,
+  type RenameMetadata,
   type ScheduleFireMetadata,
   type SessionClearedMetadata,
   type SystemSubtype,
@@ -14,6 +15,7 @@ import {
   type ThreadAnchorMetadata,
   readChannelContextMetadata,
   readChildContextMetadata,
+  readRenameMetadata,
   readScheduleFireMetadata,
   readSessionClearedMetadata,
   readTaskSystemMetadata,
@@ -1200,6 +1202,98 @@ function channelContextModel(
   };
 }
 
+// ─── onboarding row (PR-6) ─────────────────────────────────────────────
+//
+// Onboarding messages used to render via `CollapsibleNarration` —
+// chevron + first-line preview, no kind identification. PR-6 keeps
+// the same collapsible affordance but adds an explicit "Onboarding"
+// badge so the row is recognisable at a glance even when the prose
+// has been rewritten. No metadata enrichment needed: the body itself
+// is the onboarding instruction (different shape per call site:
+// workspace join, agent DM, thread spawn).
+
+function OnboardingRow({
+  message,
+  conversationRefsById,
+  onOpenConversationRef,
+  channelsByName,
+  onOpenChannelRef,
+}: RendererProps): JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={() => setExpanded((v) => !v)}
+      className={
+        'group flex w-full items-center gap-2 px-2 py-1 text-left text-xs text-text-muted ' +
+        (expanded ? 'bg-bg-floating' : 'rounded hover:bg-bg-hover')
+      }
+      aria-expanded={expanded}
+      data-onboarding-row="1"
+    >
+      <ChevronRight
+        className={
+          'size-3 shrink-0 text-text-muted/60 transition-transform ' +
+          (expanded ? 'rotate-90' : '')
+        }
+      />
+      <span
+        className="inline-flex shrink-0 items-center rounded px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-accent bg-accent-soft"
+        data-onboarding-badge="1"
+      >
+        Onboarding
+      </span>
+      <div className={'min-w-0 flex-1 ' + (expanded ? '' : 'truncate')}>
+        {expanded ? (
+          <Markdown
+            content={message.content}
+            conversationRefsById={conversationRefsById}
+            onOpenConversationRef={onOpenConversationRef}
+            channelsByName={channelsByName}
+            onOpenChannelRef={onOpenChannelRef}
+          />
+        ) : (
+          <span>{firstLine(message.content)}</span>
+        )}
+      </div>
+    </button>
+  );
+}
+
+// ─── rename row (PR-6) ─────────────────────────────────────────────────
+//
+// Rename messages carry `{old_name, new_name}` in metadata since
+// PR-6's predecessor — the renderer parses them into a compact
+// audit row (`↻ workspace renamed #old → #new`) so the prose body
+// (which exists for the agent-stdin imperative wrap) doesn't have
+// to be the user-visible surface. Legacy rows without metadata fall
+// through to generic narration.
+
+function RenameRow(props: RendererProps): JSX.Element {
+  const meta = readRenameMetadata(
+    (props.message.metadata ?? null) as Record<string, unknown> | null,
+  );
+  if (!meta) {
+    return <GenericNarrationFallback {...props} />;
+  }
+  return (
+    <div
+      data-rename-row="1"
+      className="flex flex-wrap items-center justify-center gap-1.5 px-4 py-1 text-xs italic text-text-muted"
+    >
+      <RotateCw aria-hidden className="size-3.5 shrink-0 not-italic opacity-60" />
+      <span>workspace renamed</span>
+      <code className="not-italic rounded bg-bg-elevated px-1 font-mono text-text-secondary">
+        #{meta.old_name}
+      </code>
+      <span aria-hidden className="not-italic">→</span>
+      <code className="not-italic rounded bg-bg-elevated px-1 font-mono text-text-primary">
+        #{meta.new_name}
+      </code>
+    </div>
+  );
+}
+
 // ─── Registry ──────────────────────────────────────────────────────────
 
 /**
@@ -1236,9 +1330,12 @@ const systemMessageRenderers: Record<SystemSubtype, SystemMessageRenderer> = {
   child_context: ChildContextCard,
   thread_anchor: ThreadAnchorCard,
   // P2 (PR-6): minor polish (badge, icon).
-  onboarding: CollapsibleNarration,
-  rename: GenericNarrationFallback,
-  // KEEP: existing cards untouched.
+  // P2 (PR-6): minor polish — onboarding gets an explicit badge in
+  // its collapsible header; rename reads `{old_name, new_name}` and
+  // draws a compact `↻ #old → #new` audit row (legacy rows without
+  // metadata fall through to generic italic narration).
+  onboarding: OnboardingRow,
+  rename: RenameRow,
   mention_cc: MentionCcCard,
   thread_summary: ThreadSummaryCard,
 };

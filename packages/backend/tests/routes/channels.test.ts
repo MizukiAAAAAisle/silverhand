@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
+import { readRenameMetadata } from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 
@@ -112,6 +113,13 @@ describe('workspace metadata and membership routes', () => {
     expect(renameMsg).toBeTruthy();
     expect(renameMsg.metadata.old_name).toBe('old');
     expect(renameMsg.metadata.new_name).toBe('newname');
+    // PR-6 producer round-trip: rename metadata must satisfy
+    // RenameMetadataSchema so the renderer can draw a structured
+    // audit row without re-parsing message.content.
+    const renameParsed = readRenameMetadata(renameMsg.metadata);
+    expect(renameParsed).not.toBeNull();
+    expect(renameParsed!.old_name).toBe('old');
+    expect(renameParsed!.new_name).toBe('newname');
     expect(t.fake.delivered.some(d => d.messageId === renameMsg.id)).toBe(true);
   });
 

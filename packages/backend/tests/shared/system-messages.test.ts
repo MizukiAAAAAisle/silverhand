@@ -6,6 +6,7 @@ import {
   TASK_SUBTYPES,
   readChannelContextMetadata,
   readChildContextMetadata,
+  readRenameMetadata,
   readScheduleFireMetadata,
   readSessionClearedMetadata,
   readSubtype,
@@ -434,5 +435,42 @@ describe('readChannelContextMetadata', () => {
   it('returns null for null/undefined', () => {
     expect(readChannelContextMetadata(null)).toBeNull();
     expect(readChannelContextMetadata(undefined)).toBeNull();
+  });
+});
+
+describe('readRenameMetadata', () => {
+  it('parses full rename metadata', () => {
+    const m = readRenameMetadata({
+      subtype: 'rename',
+      old_name: 'version2',
+      new_name: 'version3',
+    });
+    expect(m).not.toBeNull();
+    expect(m!.old_name).toBe('version2');
+    expect(m!.new_name).toBe('version3');
+  });
+
+  it('rejects rows missing old_name or new_name', () => {
+    expect(
+      readRenameMetadata({ subtype: 'rename', old_name: 'a' }),
+    ).toBeNull();
+    expect(
+      readRenameMetadata({ subtype: 'rename', new_name: 'b' }),
+    ).toBeNull();
+  });
+
+  it('rejects rows with wrong subtype literal', () => {
+    expect(
+      readRenameMetadata({
+        subtype: 'mention_cc',
+        old_name: 'a',
+        new_name: 'b',
+      }),
+    ).toBeNull();
+  });
+
+  it('returns null for null/undefined', () => {
+    expect(readRenameMetadata(null)).toBeNull();
+    expect(readRenameMetadata(undefined)).toBeNull();
   });
 });

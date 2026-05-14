@@ -1766,3 +1766,29 @@ DB 1646 条 task_* 系统消息（占系统消息总量约 95%）从居中斜体
 
 后续 PR：PR-6 onboarding badge / rename ↻ icon。
 
+## 2026-05-15 — System message UI redesign · PR-6（onboarding badge + rename ↻ icon）
+
+System-message UI redesign 系列的最后一个 PR。两件相对小的事一起做：onboarding 行加 "Onboarding" 徽章让 collapsible row 一眼可识别；rename 走结构化 metadata 渲染 `↻ #old → #new` 审计行，不再依赖 prose 文案肉眼解析。
+
+**Schema 扩展**（`packages/shared/src/system-messages.ts`）：
+
+- 新 `RenameMetadataSchema`：`{subtype: 'rename', old_name: string, new_name: string}`。原 producer 已经写完整字段（routes.ts:587），本 PR 只是套 zod schema + 加 `readRenameMetadata` defensive parse。
+- 没有 `actor_user_id`——v1 user-principal-only，actor 隐式；如果未来 multi-user 上线和 auth 模型一起加。
+- onboarding 不需要 schema：body 本身是 onboarding 指令，不同调用点（workspace join / agent DM / thread spawn）prose 形状不同，结构化反而失真。
+
+**Renderer 改造**（`apps/desktop/src/renderer/components/chat/SystemMessage.tsx`）：
+
+- `OnboardingRow` 替换 registry 里的 `CollapsibleNarration` 入口：保留 chevron + 第一行 truncate 的 collapsible 模式，加 inline `Onboarding` badge（accent-soft bg + accent text + uppercase）。`data-onboarding-row="1"` / `data-onboarding-badge="1"` 作 stable test selector。
+- `RenameRow` 替换 registry 里的 `GenericNarrationFallback` 入口：parse metadata，缺则 fallthrough 到 `GenericNarrationFallback`（legacy 行兜底）。布局 `flex items-center justify-center gap-1.5`，`<RotateCw>` 图标 + `workspace renamed` + 两个 `<code>` chip 显示 `#old`/`#new` + `→` 分隔。
+- 视觉权重：和 PR-3 SessionClearedRow 一致——单行 audit row，不挤兑常规消息。
+
+**测试**：
+
+- shared `system-messages.test.ts` +4：rename 完整 parse / 缺字段拒绝 / 错 subtype 拒绝 / null+undefined。
+- backend `routes/channels.test.ts` 现有 rename test 加 `readRenameMetadata` round-trip（producer drift 直接破在 route test 层）。
+- desktop `Markdown.test.ts` +3：onboarding badge + chevron + 第一行 preview；rename 完整 metadata `↻ #old → #new`；rename 缺 metadata fallthrough 到 italic narration。
+
+**质量门**：4 包 typecheck ✅；backend 676/676（+4）；desktop 158/158（+3）。
+
+System-message UI redesign 系列 6 个 PR 全部落地（PR-1 registry+drift guard / PR-2 task event row / PR-3 session_cleared inline audit / PR-4 schedule_fire 扁平 banner / PR-5 context-card 系列 / PR-6 onboarding badge + rename ↻）。等用户最终验收后整体 ship。
+

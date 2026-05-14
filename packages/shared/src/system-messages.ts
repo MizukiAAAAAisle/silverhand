@@ -508,3 +508,36 @@ export function readChannelContextMetadata(
   const parsed = ChannelContextMetadataSchema.safeParse(metadata);
   return parsed.success ? parsed.data : null;
 }
+
+// ── rename metadata (PR-6) ───────────────────────────────────────────
+
+/**
+ * Metadata shape for `rename` system messages — emitted into every
+ * open channel of a workspace when its display name changes. The
+ * renderer uses the structured names to draw a compact audit row
+ * (`↻ workspace renamed #old → #new`) without re-parsing the prose.
+ *
+ *  - `old_name` / `new_name`: the workspace name before and after
+ *    the change. Both are plain workspace handles (no `#` prefix).
+ *
+ * Note: there is no `actor_user_id` field. The route is user-principal
+ * only (single-user v1) so the actor is implicit. If multi-user
+ * arrives, add an actor field at the same time as the auth model.
+ */
+export const RenameMetadataSchema = z.object({
+  subtype: z.literal('rename'),
+  old_name: z.string(),
+  new_name: z.string(),
+});
+export type RenameMetadata = z.infer<typeof RenameMetadataSchema>;
+
+/** Defensive parse for rename metadata. Returns `null` for legacy
+ *  rows that predate this schema; renderer falls back to generic
+ *  italic narration over `message.content`. */
+export function readRenameMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+): RenameMetadata | null {
+  if (!metadata) return null;
+  const parsed = RenameMetadataSchema.safeParse(metadata);
+  return parsed.success ? parsed.data : null;
+}

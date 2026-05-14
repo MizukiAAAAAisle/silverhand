@@ -517,6 +517,65 @@ describe('SystemMessage channel refs', () => {
     expect(html).not.toContain('aria-expanded');
     expect(html).toContain('italic');
   });
+
+  // PR-6: onboarding gets an explicit "Onboarding" badge alongside
+  // the chevron + first-line preview. Same collapsible affordance as
+  // PR-1's `CollapsibleNarration`, but the row is now recognisable
+  // as an onboarding instruction at a glance.
+
+  it('renders onboarding with badge + chevron + first-line preview (collapsed)', () => {
+    const msg = makeSystemMessage(
+      'onboarding',
+      {},
+      'Onboarding task: you (@Alice) joined #version3.\n1) Send greeting.\n2) Stop.',
+    );
+    const html = renderSystem(msg, new Map());
+    expect(html).toContain('data-onboarding-row="1"');
+    expect(html).toContain('data-onboarding-badge="1"');
+    expect(html).toContain('Onboarding');
+    expect(html).toContain('bg-accent-soft');
+    // First-line preview only when collapsed (default state in SSR).
+    expect(html).toContain('Onboarding task: you (@Alice) joined #version3.');
+    expect(html).not.toContain('Send greeting');
+    expect(html).toContain('aria-expanded="false"');
+  });
+
+  // PR-6: rename reads `{old_name, new_name}` and draws a compact
+  // audit row (`↻ workspace renamed #old → #new`) instead of relying
+  // on the prose body. Legacy rows without metadata fall through to
+  // generic italic narration.
+
+  it('renders rename with ↻ icon + old → new code chips when metadata is present', () => {
+    const msg = makeSystemMessage(
+      'rename',
+      { old_name: 'version2', new_name: 'version3' },
+      'This workspace was renamed from #version2 to #version3.',
+    );
+    const html = renderSystem(msg, new Map());
+    expect(html).toContain('data-rename-row="1"');
+    expect(html).toContain('lucide-rotate-cw');
+    expect(html).toContain('#version2');
+    expect(html).toContain('#version3');
+    expect(html).toContain('→');
+    // Old-name and new-name both rendered as <code> chips.
+    expect(html).toMatch(/<code[^>]*>#version2<\/code>/);
+    expect(html).toMatch(/<code[^>]*>#version3<\/code>/);
+  });
+
+  it('renames without enriched metadata fall back to generic italic narration', () => {
+    const msg = makeSystemMessage(
+      'rename',
+      {},
+      'This workspace was renamed from #legacy-old to #legacy-new.',
+    );
+    const html = renderSystem(msg, new Map());
+    expect(html).not.toContain('data-rename-row="1"');
+    // Generic narration is centered italic muted text.
+    expect(html).toContain('italic');
+    expect(html).toContain('text-text-muted');
+    expect(html).toContain('legacy-old');
+    expect(html).toContain('legacy-new');
+  });
 });
 
 describe('SystemMessage task event rows (PR-2)', () => {
