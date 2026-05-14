@@ -4,6 +4,7 @@ import {
   SCHEDULE_MIN_DELAY_SECONDS,
   type ScheduleCreateInput,
   type ScheduleDto,
+  readScheduleFireMetadata,
 } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
@@ -551,6 +552,17 @@ describe('ScheduleService.tick — fire & advance', () => {
     // subtype — keep this stable so future filtering works.
     const meta = msg?.metadata as Record<string, unknown> | null;
     expect(meta?.subtype).toBe('schedule_fire');
+
+    // Producer-side schema round-trip — every wake's metadata must
+    // satisfy `ScheduleFireMetadataSchema` so renderers can rely on
+    // the structured fields without re-parsing message.content.
+    const parsed = readScheduleFireMetadata(meta);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.spec_kind).toBe('once');
+    expect(parsed!.spec_summary).toBe('once');
+    expect(parsed!.body).toBe('review the deploy');
+    expect(parsed!.missed_count).toBe(0);
+    expect(typeof parsed!.actual_fire_at).toBe('number');
   });
 
   it('does not deliver before next_fire_at', async () => {

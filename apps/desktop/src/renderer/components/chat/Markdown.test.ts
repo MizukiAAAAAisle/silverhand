@@ -228,6 +228,96 @@ describe('SystemMessage channel refs', () => {
     expect(html).toContain("CLI session context");
   });
 
+  it('renders schedule_fire as a flat banner with header + pills + body', () => {
+    const now = Date.now();
+    const planned = now - 2_000; // 2s ago: wake fired 2s late
+    const next = now + 5 * 60_000; // 5m from now
+    const msg = makeSystemMessage(
+      'schedule_fire',
+      {
+        schedule_id: 's-1',
+        spec_kind: 'cron',
+        spec_summary: 'cron */5 9-18 * * 1-5',
+        body: 'Reminder: review #task:294 status, ping @shiki if still in_review.',
+        actual_fire_at: now,
+        planned_fire_at: planned,
+        missed_count: 0,
+        next_fire_at: next,
+      },
+    );
+    const html = renderSystem(msg, new Map());
+    expect(html).toContain('data-schedule-fire="1"');
+    expect(html).toContain('lucide-clock');
+    expect(html).toContain('border-l-warning');
+    // Header spec summary surfaced.
+    expect(html).toContain('cron */5 9-18 * * 1-5');
+    // All four pills present, in order.
+    expect(html).toContain('data-pill="fired"');
+    expect(html).toContain('data-pill="planned"');
+    expect(html).toContain('data-pill="missed"');
+    expect(html).toContain('data-pill="next"');
+    expect(html).toContain('data-missed-count="0"');
+    // Body surfaced (not the producer scaffolding).
+    expect(html).toContain('Reminder');
+    expect(html).toContain('review');
+  });
+
+  it('schedule_fire missed_count > 0 highlights the missed pill', () => {
+    const msg = makeSystemMessage(
+      'schedule_fire',
+      {
+        schedule_id: 's-2',
+        spec_kind: 'interval',
+        spec_summary: 'interval 60s',
+        body: 'Poll deploy status; alert if still pending.',
+        actual_fire_at: Date.now(),
+        planned_fire_at: Date.now() - 4 * 60_000,
+        missed_count: 4,
+        next_fire_at: Date.now() + 60_000,
+      },
+    );
+    const html = renderSystem(msg, new Map());
+    expect(html).toContain('data-missed-count="4"');
+    expect(html).toContain('bg-warning/10');
+    expect(html).toContain('text-warning');
+    expect(html).toContain('interval 60s');
+  });
+
+  it('schedule_fire one-shot (planned_fire_at + next_fire_at null) suppresses planned/next pills', () => {
+    const msg = makeSystemMessage(
+      'schedule_fire',
+      {
+        schedule_id: 's-3',
+        spec_kind: 'once',
+        spec_summary: 'once',
+        body: 'Final reminder before deploy window closes.',
+        actual_fire_at: Date.now(),
+        planned_fire_at: null,
+        missed_count: 0,
+        next_fire_at: null,
+      },
+    );
+    const html = renderSystem(msg, new Map());
+    expect(html).toContain('data-pill="fired"');
+    expect(html).toContain('data-pill="missed"');
+    expect(html).not.toContain('data-pill="planned"');
+    expect(html).not.toContain('data-pill="next"');
+  });
+
+  it('schedule_fire without metadata still renders the banner with raw content', () => {
+    const msg = makeSystemMessage(
+      'schedule_fire',
+      {},
+      'Schedule fired (kind: cron, planned 2026-05-15T...): legacy body text.',
+    );
+    const html = renderSystem(msg, new Map());
+    expect(html).toContain('data-schedule-fire="0"');
+    expect(html).toContain('Scheduled wake');
+    expect(html).toContain('legacy body text');
+    // No pills when metadata is absent.
+    expect(html).not.toContain('data-pill="fired"');
+  });
+
   // PR-1 added three-state subtype resolution. Legacy DB-resident
   // subtypes (`join`, `session_context`, `child_summary`) and unknown
   // strings both fall through to generic narration — neither pretends

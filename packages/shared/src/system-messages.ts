@@ -307,3 +307,57 @@ export function readSessionClearedMetadata(
   const parsed = SessionClearedMetadataSchema.safeParse(metadata);
   return parsed.success ? parsed.data : null;
 }
+
+// ── schedule_fire metadata ───────────────────────────────────────────
+
+/**
+ * Metadata shape for `schedule_fire` system messages — emitted by
+ * the scheduler when a wake fires for an agent. Renderers read the
+ * structured fields to draw a flat banner with header + status pills
+ * + the original wake body, without re-parsing `message.content`.
+ *
+ *  - `schedule_id`: stable id of the underlying schedule row.
+ *  - `spec_kind`: `'once' | 'interval' | 'cron'` — drives the header
+ *    spec pill grouping.
+ *  - `spec_summary`: pre-rendered human label
+ *    (e.g. `"cron *\/5 9-18 * * 1-5"`, `"interval 60s"`, `"once"`).
+ *    Optional — legacy rows without it fall back to `spec_kind` alone.
+ *  - `body`: the user's reminder text (`schedule.message`) without
+ *    the producer's "Schedule fired (kind: …)" / "Next fire at …" /
+ *    "If nothing to do, reply 'noted, no action'" scaffolding. The
+ *    scaffolding is for the agent's stdin; humans reading the banner
+ *    only need the reminder. Optional — legacy rows fall back to
+ *    rendering full `message.content`.
+ *  - `actual_fire_at`: epoch ms when the wake actually fired.
+ *  - `planned_fire_at`: epoch ms the wake was originally scheduled
+ *    for. Difference vs. actual surfaces as the "planned <Δ ago/late>"
+ *    pill. `null` for one-shot schedules.
+ *  - `missed_count`: how many planned fires were skipped before this
+ *    one (catch-up semantic). `0` is common; non-zero highlights as
+ *    a warning pill.
+ *  - `next_fire_at`: epoch ms of the next scheduled fire. `null` for
+ *    one-shot or expired repeating schedules — pill is suppressed.
+ */
+export const ScheduleFireMetadataSchema = z.object({
+  subtype: z.literal('schedule_fire'),
+  schedule_id: z.string(),
+  spec_kind: z.enum(['once', 'interval', 'cron']),
+  spec_summary: z.string().optional(),
+  body: z.string().optional(),
+  actual_fire_at: z.number(),
+  planned_fire_at: z.number().nullable(),
+  missed_count: z.number(),
+  next_fire_at: z.number().nullable(),
+});
+export type ScheduleFireMetadata = z.infer<typeof ScheduleFireMetadataSchema>;
+
+/** Defensive parse for schedule_fire metadata. Returns `null` for
+ *  legacy rows or malformed metadata; renderer falls back to a
+ *  muted banner that reads `message.content` as a single-line body. */
+export function readScheduleFireMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+): ScheduleFireMetadata | null {
+  if (!metadata) return null;
+  const parsed = ScheduleFireMetadataSchema.safeParse(metadata);
+  return parsed.success ? parsed.data : null;
+}

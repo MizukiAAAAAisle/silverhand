@@ -4,6 +4,7 @@ import {
   SYSTEM_SUBTYPES,
   TASK_MUTATION_KINDS,
   TASK_SUBTYPES,
+  readScheduleFireMetadata,
   readSessionClearedMetadata,
   readSubtype,
   readTaskSystemMetadata,
@@ -238,5 +239,73 @@ describe('readSessionClearedMetadata', () => {
   it('returns null for null/undefined metadata', () => {
     expect(readSessionClearedMetadata(null)).toBeNull();
     expect(readSessionClearedMetadata(undefined)).toBeNull();
+  });
+});
+
+describe('readScheduleFireMetadata', () => {
+  it('parses full schedule_fire metadata', () => {
+    const m = readScheduleFireMetadata({
+      subtype: 'schedule_fire',
+      schedule_id: 's-1',
+      spec_kind: 'cron',
+      spec_summary: 'cron */5 9-18 * * 1-5',
+      body: 'review #task:294 status',
+      actual_fire_at: 1_700_000_000_000,
+      planned_fire_at: 1_700_000_000_000,
+      missed_count: 0,
+      next_fire_at: 1_700_000_300_000,
+    });
+    expect(m).not.toBeNull();
+    expect(m!.spec_kind).toBe('cron');
+    expect(m!.spec_summary).toBe('cron */5 9-18 * * 1-5');
+    expect(m!.body).toBe('review #task:294 status');
+  });
+
+  it('accepts metadata without spec_summary or body (legacy rows)', () => {
+    const m = readScheduleFireMetadata({
+      subtype: 'schedule_fire',
+      schedule_id: 's-1',
+      spec_kind: 'once',
+      actual_fire_at: 1_700_000_000_000,
+      planned_fire_at: null,
+      missed_count: 0,
+      next_fire_at: null,
+    });
+    expect(m).not.toBeNull();
+    expect(m!.spec_summary).toBeUndefined();
+    expect(m!.body).toBeUndefined();
+  });
+
+  it('rejects bad spec_kind', () => {
+    expect(
+      readScheduleFireMetadata({
+        subtype: 'schedule_fire',
+        schedule_id: 's-1',
+        spec_kind: 'weekly',
+        actual_fire_at: 1,
+        planned_fire_at: null,
+        missed_count: 0,
+        next_fire_at: null,
+      }),
+    ).toBeNull();
+  });
+
+  it('rejects rows missing required numeric fields', () => {
+    expect(
+      readScheduleFireMetadata({
+        subtype: 'schedule_fire',
+        schedule_id: 's-1',
+        spec_kind: 'interval',
+        actual_fire_at: 1,
+        planned_fire_at: null,
+        missed_count: 0,
+        // next_fire_at missing
+      }),
+    ).toBeNull();
+  });
+
+  it('returns null for null/undefined', () => {
+    expect(readScheduleFireMetadata(null)).toBeNull();
+    expect(readScheduleFireMetadata(undefined)).toBeNull();
   });
 });

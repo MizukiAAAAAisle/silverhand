@@ -519,6 +519,14 @@ export class ScheduleService {
         subtype: systemSubtype('schedule_fire'),
         schedule_id: dto.id,
         spec_kind: dto.spec.kind,
+        // Pre-rendered human spec label so the renderer can show
+        // `cron */5 9-18 * * 1-5` / `interval 60s` / `once` without
+        // re-encoding ScheduleSpec shape on the client.
+        spec_summary: renderSpecSummary(dto.spec),
+        // The user's reminder text (no producer scaffolding). Lets
+        // the renderer surface a clean banner body while
+        // `message.content` retains the agent-stdin instruction wrap.
+        body: dto.message,
         actual_fire_at: actualFireAt,
         planned_fire_at: dto.next_fire_at,
         missed_count: advancement.missedCount,
@@ -674,6 +682,20 @@ export class ScheduleService {
     if (typeof this.nearTimer.unref === 'function') {
       this.nearTimer.unref();
     }
+  }
+}
+
+/** Pre-render the schedule spec into a single human-readable label
+ *  embedded in `schedule_fire` system metadata. Renderers display
+ *  it on the wake banner header. */
+function renderSpecSummary(spec: ScheduleSpec): string {
+  switch (spec.kind) {
+    case 'once':
+      return 'once';
+    case 'interval':
+      return `interval ${spec.every_seconds}s`;
+    case 'cron':
+      return `cron ${spec.expression}`;
   }
 }
 

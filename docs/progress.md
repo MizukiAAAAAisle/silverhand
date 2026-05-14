@@ -1689,3 +1689,43 @@ DB 1646 条 task_* 系统消息（占系统消息总量约 95%）从居中斜体
 
 后续 PR：PR-4 schedule_fire 扁平 banner；PR-5 channel_context / child_context / thread_anchor 统一 quote-card 系列；PR-6 onboarding badge / rename ↻ icon。
 
+
+## 2026-05-15 — System message UI redesign · PR-4（schedule_fire 扁平 banner）
+
+`schedule_fire` 现状是居中 italic narration（fallthrough），actionable 信息全在 `message.content` 里靠肉眼解析；metadata 已经记了 `schedule_id` / `spec_kind` / `actual_fire_at` / `planned_fire_at` / `missed_count` / `next_fire_at`，但 UI 没用上。本 PR 把它升级为消息流里的扁平 banner——左侧 warning 色 accent 线、header 显示 `Scheduled wake` + spec 标签、四个 status pill（fired / planned Δ / missed / next）、body 只显示用户原始 reminder。
+
+**Schema 扩展**（`packages/shared/src/system-messages.ts`）：
+
+- 新 `ScheduleFireMetadataSchema`：`{subtype, schedule_id, spec_kind: 'once'|'interval'|'cron', spec_summary?: string, body?: string, actual_fire_at, planned_fire_at: nullable, missed_count, next_fire_at: nullable}`。
+- `spec_summary` 和 `body` optional，兼容 PR-4 之前的 DB 老行——renderer fallback 到 `spec_kind` / `message.content`。
+- `readScheduleFireMetadata` defensive parse；缺字段 → null → renderer 走 muted banner（保留 banner chrome，不画 pills）。
+
+**Producer 改造**（`packages/backend/src/services/schedule-service.ts`）：
+
+- `deliverWake` 在 metadata 里加两个新字段：
+  - `spec_summary: renderSpecSummary(dto.spec)` — 预渲染人类可读 spec 标签：`once` / `interval 60s` / `cron */5 9-18 * * 1-5`。renderer 不需要再编码 `ScheduleSpec` 的 union 形状。
+  - `body: dto.message` — 用户原始 reminder 文本，没有 producer 的 "Schedule fired (kind: ...)" / "Next fire at ..." / "If nothing to do, reply 'noted, no action'" 包装。包装是给 agent stdin 看的；人类只看 reminder。
+- `message.content` 不变（agent 仍然收到完整 imperative body），只是元数据多了两个字段。
+
+**Renderer**（`apps/desktop/src/renderer/components/chat/SystemMessage.tsx`）：
+
+- 新 `ScheduleFireBanner`：替换 schedule_fire 的 `GenericNarrationFallback`。
+- Layout：`border-y border-border-subtle border-l-[3px] border-l-warning bg-bg-floating px-4 py-2`（无 rounded，与 chat 拉开层级又不像 toast）。header `[clock] Scheduled wake ... <spec_summary mono>`；pills 行使用 `bg-bg-elevated` muted 风格；body 渲染 `meta.body ?? message.content` 的 markdown。
+- 4 个 pill 子组件：
+  - `ScheduleFireFiredPill`：`fired <relative>` (使用 `useRelativeTime`)。
+  - `ScheduleFirePlannedPill`：`planned <Δ ago|in Δ>`，正/负 delta 自动反映 late/early 语义。
+  - `ScheduleFireMissedPill`：`missed N`。`N=0` 用 muted 色；`N>0` 切 `bg-warning/10 text-warning` 警示。
+  - `ScheduleFireNextPill`：`next <relative>`；`next_fire_at=null`（一次性 / 已 done）整段省略。
+- 缺 metadata 的老行走 muted fallback：`data-schedule-fire="0"`，仍渲染 banner chrome 但不画 pills，body fallback 到 `message.content`。
+- 钉视觉测试用 `data-pill` / `data-missed-count` / `data-schedule-fire` 数据属性。
+
+**测试**：
+
+- shared `system-messages.test.ts` +5：full parse / spec_summary+body 缺省（legacy）容忍 / 错 spec_kind 拒绝 / 缺必填 numeric 拒绝 / null+undefined。
+- backend `schedule-service.test.ts` 现有 test 加 5 行 producer-side schema round-trip：`readScheduleFireMetadata(meta)` 验证 spec_kind/spec_summary/body/missed_count/actual_fire_at 全字段——producer drift 会从 service test 直接破。
+- desktop `Markdown.test.ts` +4：full metadata banner 含 4 pills + spec_summary + body；`missed_count > 0` warning 高亮；`once` 一次性省略 planned/next pills；缺 metadata fallback `data-schedule-fire="0"` 无 pills。
+
+**质量门**：4 包 typecheck ✅；backend 658/658（+5）；desktop 149/149（+5）。
+
+后续 PR：PR-5 channel_context / child_context / thread_anchor 统一 quote-card 系列；PR-6 onboarding badge / rename ↻ icon。
+
