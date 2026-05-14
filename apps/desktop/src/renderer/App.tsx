@@ -708,7 +708,7 @@ export function App(): JSX.Element {
         nav.go(`${routes.chatWorkspace(workspaceId)}?task=${taskNumber}`);
       }
     },
-    [selectedWorkspaceId, nav],
+    [selectedWorkspaceId, nav.go, nav.openTask],
   );
 
   // Open a `#<channel_name>` chip click. The chip's resolution scope is
@@ -719,7 +719,7 @@ export function App(): JSX.Element {
     (workspaceId: string, channelId: string) => {
       nav.toChannel(workspaceId, channelId);
     },
-    [nav],
+    [nav.toChannel],
   );
 
   // Auto-open the tasks drawer when `?task=<n>` lands in the URL. The

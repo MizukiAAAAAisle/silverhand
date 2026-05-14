@@ -354,6 +354,12 @@ function ActiveChannelView({
     }),
     [conversation.workspace_id, onOpenTask],
   );
+  const handleOpenChannelRef = useCallback(
+    (channelId: string) => {
+      onOpenChannelRef?.(conversation.workspace_id, channelId);
+    },
+    [conversation.workspace_id, onOpenChannelRef],
+  );
 
   return (
     <TaskRefContextProvider value={taskRefContext}>
@@ -516,12 +522,7 @@ function ActiveChannelView({
           routeKind={routeKind}
           conversationRefsById={conversationRefsById}
           onOpenConversationRef={onOpenConversationRef}
-          onOpenChannelRef={
-            onOpenChannelRef
-              ? (channelId: string) =>
-                  onOpenChannelRef(conversation.workspace_id, channelId)
-              : undefined
-          }
+          onOpenChannelRef={onOpenChannelRef ? handleOpenChannelRef : undefined}
         />
 
         {activeRunStates.length > 0 ? (
