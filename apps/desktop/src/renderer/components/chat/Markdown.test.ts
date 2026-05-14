@@ -1,5 +1,6 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { StaticRouter } from 'react-router-dom/server';
 import { describe, expect, it } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Markdown } from './Markdown';
@@ -95,13 +96,17 @@ describe('SystemMessage channel refs', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     return renderToStaticMarkup(
       React.createElement(
-        QueryClientProvider,
-        { client: qc },
-        React.createElement(SystemMessage, {
-          message: msg,
-          channelsByName,
-          onOpenChannelRef: () => undefined,
-        }),
+        StaticRouter,
+        { location: '/' },
+        React.createElement(
+          QueryClientProvider,
+          { client: qc },
+          React.createElement(SystemMessage, {
+            message: msg,
+            channelsByName,
+            onOpenChannelRef: () => undefined,
+          }),
+        ),
       ),
     );
   }
@@ -139,6 +144,18 @@ describe('SystemMessage channel refs', () => {
     const html = renderSystem(msg, channels);
     expect(html).toContain('data-channel-ref-state="resolved"');
     expect(html).toContain('data-channel-ref-id="ch-v3"');
+  });
+
+  it('renders session_cleared as a destructive audit card', () => {
+    const msg = makeSystemMessage(
+      'session_cleared',
+      { agent_name: 'alice' },
+      "@local cleared @alice's CLI session context",
+    );
+    const html = renderSystem(msg, new Map());
+    expect(html).toContain('lucide-eraser');
+    expect(html).toContain('border-error/25');
+    expect(html).toContain('CLI session context');
   });
 });
 

@@ -12,18 +12,43 @@ export interface PendingConversationInboxItem {
 }
 
 type JoinedRow = MessageRow & { inbox_id: number };
+type DeliveryRow = {
+  id: number;
+  delivered_at: number | null;
+};
+
+export interface ConversationDeliveryRecord {
+  inboxId: number;
+  deliveredAt: number | null;
+}
 
 export class ConversationInboxRepo {
   constructor(private readonly db: Db) {}
 
-  enqueue(conversationId: string, agentId: string, messageId: string): void {
+  enqueue(
+    conversationId: string,
+    agentId: string,
+    messageId: string,
+  ): ConversationDeliveryRecord {
+    return this.ensureDelivery(conversationId, agentId, messageId);
+  }
+
+  ensureDelivery(
+    conversationId: string,
+    agentId: string,
+    messageId: string,
+  ): ConversationDeliveryRecord {
     this.db
       .prepare(
         `INSERT INTO conversation_inboxes
          (conversation_id, agent_id, message_id, delivered_at, created_at)
-         VALUES (?, ?, ?, NULL, ?)`,
+         VALUES (?, ?, ?, NULL, ?)
+         ON CONFLICT(conversation_id, agent_id, message_id) DO NOTHING`,
       )
       .run(conversationId, agentId, messageId, Date.now());
+    const row = this.deliveryRow(conversationId, agentId, messageId);
+    if (!row) throw new Error('conversation inbox delivery lookup failed');
+    return { inboxId: row.id, deliveredAt: row.delivered_at };
   }
 
   listPending(
@@ -68,5 +93,22 @@ export class ConversationInboxRepo {
       )
       .get(agentId);
     return row?.c ?? 0;
+  }
+
+  private deliveryRow(
+    conversationId: string,
+    agentId: string,
+    messageId: string,
+  ): DeliveryRow | null {
+    const row = this.db
+      .prepare<[string, string, string], DeliveryRow>(
+        `SELECT id, delivered_at
+         FROM conversation_inboxes
+         WHERE conversation_id = ?
+           AND agent_id = ?
+           AND message_id = ?`,
+      )
+      .get(conversationId, agentId, messageId);
+    return row ?? null;
   }
 }

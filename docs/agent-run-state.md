@@ -88,8 +88,20 @@ activitySnippetBuffers: Map<key, { runId, kind: 'thinking' | 'text', text: strin
 // per AgentHandle
 busy: { outstandingToolUses: number; compacting: boolean };
 pendingTurnEnd: boolean;          // turn_end 到达但未到 safe boundary
-pendingDeliveries: string[];      // 仅 gated 模式
+pendingDeliveries: PendingDelivery[]; // 仅 gated 模式，当前进程的 formatted batch cache
+
+// per (conversationId, agentId)
+lifecycleQueue: Promise<void>;    // 串行化 start / stop / clearSession
 ```
+
+`conversation_inboxes` 是 delivery queue 的 durable source of truth；
+`pendingDeliveries` 只缓存当前进程已经 format 好、等待 safe boundary 合并写入的内容。
+进程被 hard stop 时内存 cache 可以丢，pending DB row 会在下次 start 后重新 drain。
+
+`start` / `stop` / `clearSession` 以及 init timeout retry、oneShot auto-start
+共享同一个 per-(conversation, agent) lifecycle lock。公共方法只负责拿锁，
+锁内实现用 `startUnlocked` / `stopUnlocked`，避免 `clearSession` 这类编排动作
+在锁内再调用公共方法造成自排队。
 
 **`isSafeBoundary(handle)` ≜ `outstandingToolUses === 0 && !compacting`**
 
@@ -109,6 +121,12 @@ pendingDeliveries: string[];      // 仅 gated 模式
 | `turn_end` | `outstandingToolUses = 0`；`pendingTurnEnd = true`；`tryResolveTurnEndAtBoundary`；再 `flushPending` |
 | 进程退出 | `resolveRunByKey(key, 'replied' / 'crashed' / 'stopped' / 'timeout')` |
 | `stop()` | `resolveRunByKey(key, 'stopped')` |
+| `clearSession()` | lifecycle lock 内 hard stop live process → `conversation_agents.cli_session_id = NULL` → publish `agent_status` → 写 `session_cleared` audit；不自动 restart，pending inbox row 保留 |
+
+`clearSession()` 清的是 CLI resume handle，不清 MEMORY/notes、不删底层 CLI
+jsonl、不清 `conversation_inboxes`。audit message 只在实际清理时写；它会广播给 UI
+并投递给同 conversation 的其它 agent，但跳过被清 agent，避免 fresh session 把
+"自己被清了"当成新用户意图处理。
 
 ### 4.3 `tryResolveTurnEndAtBoundary`（**根因 A 修复**）
 

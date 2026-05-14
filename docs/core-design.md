@@ -171,6 +171,11 @@ fs.mkdir(workspace_path, { recursive: true });
 | `status` | `starting` / `active` / `idle` / `crashed` |
 | `joined_at` | |
 
+`cli_session_id` 是 **resume handle**，不是 agent 记忆本身。Stop / Restart
+默认保留它，因此下一次启动会 resume 同一个底层 CLI session；Clear session
+只清这个字段，让下一次启动使用 fresh CLI session。MEMORY.md / notes /
+messages / inbox delivery row 都不随之删除。
+
 **channel.members = workspace.members 的快照**：
 - channel 创建那一刻，复制当时的 workspace.members 进 conversation_agents
 - 之后 workspace 加 / 减成员**不影响**已有 channel（避免 mid-channel 改 spawn 集合）
@@ -219,6 +224,24 @@ Claude Code 在 turn 进行中，stdin 不是任何时刻都能塞东西的（�
 - 没到 boundary 时（gated 分支 return），消息留 inbox 等下个 boundary
 
 所以 `busyDeliveryMode` 的 `gated`（Claude）vs `direct`（codex 等）不是"全推/降级推"，而是"**等机会推/立刻推**"。两者最终都走 A 档。
+
+#### Lifecycle lock 与 Clear session
+
+ConversationManager 对每个 `(conversation, agent)` 维护一个 lifecycle queue，
+串行化 `start` / `stop` / `clearSession`，也覆盖 init timeout retry 和
+oneShot auto-start。锁的边界在 lifecycle 公共方法外层；锁内编排使用
+`startUnlocked` / `stopUnlocked`，避免 clear 这类复合动作自排队。
+
+Clear session 是 per-agent destructive action，顺序固定：
+
+1. 如果进程正在跑，先 hard stop，等待进程真正退出。
+2. 把 `conversation_agents.cli_session_id` 置 `NULL`。
+3. 广播 `agent_status`，写一条 `session_cleared` system audit。
+4. audit 投递给同 conversation 的其它 agent，跳过被清 agent。
+
+它不自动 restart；用户显式 Start/Restart 后，新进程因为 `cli_session_id=NULL`
+不会带 `--resume`。`conversation_inboxes` pending row 保留，下一次 start 会照常
+drain，所以清 session 不会丢尚未送达的用户意图。
 
 #### `check_messages` 工具的真实定位
 

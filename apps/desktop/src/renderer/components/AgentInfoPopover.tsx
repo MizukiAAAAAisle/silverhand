@@ -1,7 +1,22 @@
 import * as Popover from '@radix-ui/react-popover';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { AlertTriangle, Eraser, Power, RefreshCw } from 'lucide-react';
 import type { AgentDto, ConversationAgentStatus } from '@silverhand/shared';
-import { useChannelAgents, useStartAgent } from '@/features/channels/hooks';
+import {
+  useChannelAgents,
+  useClearAgentSession,
+  useStartAgent,
+  useStopAgent,
+} from '@/features/channels/hooks';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { AgentAvatar } from './AgentAvatar';
 
 interface AgentInfoPopoverProps {
@@ -21,6 +36,9 @@ interface AgentInfoPopoverProps {
    *  can move into the popover content. Used by inline mention pills,
    *  message author/avatar controls, and the member strip. */
   trigger?: 'click' | 'hover';
+  /** Header member chips can expose per-agent controls; inline mentions
+   *  and message avatars keep the popover informational. */
+  management?: boolean;
 }
 
 const HOVER_OPEN_DELAY_MS = 80;
@@ -44,8 +62,10 @@ export function AgentInfoPopover({
   conversationId,
   routeKind = 'channel',
   trigger = 'click',
+  management = false,
 }: AgentInfoPopoverProps): JSX.Element {
   const [hoverOpen, setHoverOpen] = useState(false);
+  const [managementDialogOpen, setManagementDialogOpen] = useState(false);
   // Single timer reused for both open and close so consecutive
   // pointer transitions cancel each other out cleanly.
   const timerRef = useRef<number | null>(null);
@@ -70,7 +90,7 @@ export function AgentInfoPopover({
 
   const rootProps =
     trigger === 'hover'
-      ? { open: hoverOpen, onOpenChange: setHoverOpen }
+      ? { open: hoverOpen || managementDialogOpen, onOpenChange: setHoverOpen }
       : {};
 
   return (
@@ -136,6 +156,14 @@ export function AgentInfoPopover({
               agentId={agent.id}
               conversationId={conversationId}
               routeKind={routeKind}
+            />
+          ) : null}
+          {management && conversationId ? (
+            <AgentManagementActions
+              agent={agent}
+              conversationId={conversationId}
+              routeKind={routeKind}
+              onDialogOpenChange={setManagementDialogOpen}
             />
           ) : null}
         </Popover.Content>
@@ -208,6 +236,119 @@ function RetryRow({
       >
         {start.isPending ? '启动中…' : '重新启动'}
       </button>
+    </div>
+  );
+}
+
+function AgentManagementActions({
+  agent,
+  conversationId,
+  routeKind = 'channel',
+  onDialogOpenChange,
+}: {
+  agent: AgentDto;
+  conversationId: string;
+  routeKind?: 'channel' | 'thread';
+  onDialogOpenChange: (open: boolean) => void;
+}): JSX.Element | null {
+  const { data: conversationAgents = [] } = useChannelAgents(conversationId, routeKind);
+  const start = useStartAgent(conversationId, routeKind);
+  const stop = useStopAgent(conversationId, routeKind);
+  const clearSession = useClearAgentSession(conversationId, routeKind);
+  const [clearOpen, setClearOpen] = useState(false);
+  const row = conversationAgents.find(s => s.agent_id === agent.id);
+  if (!row) return null;
+
+  const pending = start.isPending || stop.isPending || clearSession.isPending;
+  const agentLabel = `@${agent.name}`;
+  const setDialogOpen = (open: boolean): void => {
+    setClearOpen(open);
+    onDialogOpenChange(open);
+  };
+  const restart = async (): Promise<void> => {
+    if (pending) return;
+    await stop.mutateAsync({ agentId: agent.id, mode: 'hard' });
+    await start.mutateAsync(agent.id);
+  };
+  const stopAgent = (): void => {
+    if (pending) return;
+    stop.mutate({ agentId: agent.id, mode: 'hard' });
+  };
+  const clear = async (): Promise<void> => {
+    await clearSession.mutateAsync(agent.id);
+    setDialogOpen(false);
+  };
+
+  return (
+    <div className="mt-3 border-t border-border-subtle pt-2">
+      <div className="mb-2 text-[11px] font-medium uppercase text-text-muted">
+        Actions
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        <button
+          type="button"
+          onClick={restart}
+          disabled={pending}
+          className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary disabled:opacity-50"
+          title={`Restart ${agentLabel}`}
+        >
+          <RefreshCw className="size-3.5" />
+          Restart
+        </button>
+        <button
+          type="button"
+          onClick={stopAgent}
+          disabled={pending || row.status === 'idle'}
+          className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary disabled:opacity-50"
+          title={`Stop ${agentLabel}`}
+        >
+          <Power className="size-3.5" />
+          Stop
+        </button>
+        <button
+          type="button"
+          onClick={() => setDialogOpen(true)}
+          disabled={pending}
+          className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-error hover:bg-error/10 disabled:opacity-50"
+          title={`Clear ${agentLabel} session`}
+        >
+          <Eraser className="size-3.5" />
+          Clear session
+        </button>
+      </div>
+      <Dialog open={clearOpen} onOpenChange={setDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-error">
+              <AlertTriangle className="size-4" />
+              Clear session for {agentLabel}
+            </DialogTitle>
+            <DialogDescription>
+              This removes only this conversation's CLI resume session for{' '}
+              {agentLabel}. MEMORY, notes, and queued deliveries are kept. The
+              next start will begin with a fresh CLI session.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setDialogOpen(false)}
+              disabled={clearSession.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              onClick={clear}
+              disabled={clearSession.isPending}
+            >
+              {clearSession.isPending ? 'Clearing...' : 'Clear session'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

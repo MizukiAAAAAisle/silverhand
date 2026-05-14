@@ -70,6 +70,37 @@ describe('ConversationInboxRepo', () => {
     expect(inbox.listPending(channel.id, agentB)).toHaveLength(0);
   });
 
+  it('ensureDelivery is idempotent per (conversation, agent, message)', () => {
+    const { channel, messages, inbox, agentA } = bootstrap();
+    const m = messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      content: 'same delivery',
+    });
+
+    const first = inbox.ensureDelivery(channel.id, agentA, m.id);
+    const second = inbox.ensureDelivery(channel.id, agentA, m.id);
+
+    expect(second.inboxId).toBe(first.inboxId);
+    expect(second.deliveredAt).toBeNull();
+    expect(inbox.listPending(channel.id, agentA)).toHaveLength(1);
+  });
+
+  it('enqueue is idempotent under the delivery uniqueness constraint', () => {
+    const { channel, messages, inbox, agentA } = bootstrap();
+    const m = messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      content: 'same enqueue',
+    });
+
+    const first = inbox.enqueue(channel.id, agentA, m.id);
+    const second = inbox.enqueue(channel.id, agentA, m.id);
+
+    expect(second.inboxId).toBe(first.inboxId);
+    expect(inbox.listPending(channel.id, agentA)).toHaveLength(1);
+  });
+
   it('markDelivered removes items from listPending; empty input is a no-op', () => {
     const { channel, messages, inbox, agentA } = bootstrap();
     const m1 = messages.insertForConversation({
@@ -95,4 +126,3 @@ describe('ConversationInboxRepo', () => {
     expect(remaining[0]!.message.content).toBe('2');
   });
 });
-

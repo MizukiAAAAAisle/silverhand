@@ -34,6 +34,8 @@
  *                                   must then be the actual stopper)
  *   MOCK_CLAUDE_STDIN_LOG         — append every received stdin line to
  *                                   this file path (one JSON line each)
+ *   MOCK_CLAUDE_ARGV_LOG          — write process argv to this file path
+ *                                   at startup (JSON array)
  *   MOCK_CLAUDE_ENV_LOG           — write selected process env vars to this
  *                                   file path at startup
  *
@@ -49,8 +51,15 @@ import { createInterface } from 'node:readline';
 const env = process.env;
 const exitCode = Number(env.MOCK_CLAUDE_EXIT_CODE ?? 0);
 const stdinLog = env.MOCK_CLAUDE_STDIN_LOG ?? null;
+const argvLog = env.MOCK_CLAUDE_ARGV_LOG ?? null;
 const envLog = env.MOCK_CLAUDE_ENV_LOG ?? null;
 let spawnOrdinal = 1;
+
+if (argvLog) {
+  try {
+    writeFileSync(argvLog, JSON.stringify(process.argv.slice(2), null, 2));
+  } catch {}
+}
 
 if (envLog) {
   try {

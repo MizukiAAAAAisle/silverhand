@@ -222,7 +222,6 @@ function ActiveChannelView({
 
   const closed = conversation.closed_at !== null;
   const isArchived = conversation.archived_at !== null;
-  const isDm = channelKind === 'dm';
   const canToggleArchive =
     channelKind === 'regular' &&
     conversation.kind === 'channel' &&
@@ -263,7 +262,7 @@ function ActiveChannelView({
       await stopAgent.mutateAsync({ agentId, mode: 'hard' });
     }
   }, [agentActionDisabled, agentIds, stopAgent]);
-  const memberStrip = isDm ? null : (
+  const memberStrip = (
     <AgentStrip
       channelId={conversation.id}
       routeKind={routeKind}
@@ -592,6 +591,7 @@ function AgentStrip({
             trigger="hover"
             side="bottom"
             align="end"
+            management
           >
             <button
               type="button"

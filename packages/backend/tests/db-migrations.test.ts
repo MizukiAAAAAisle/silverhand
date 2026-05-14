@@ -19,10 +19,22 @@ function openDbAt(version: number): Database.Database {
   );
   for (const migration of migrations) {
     if (migration.version > version) break;
-    db.transaction(() => {
+    const apply = () => {
       db.exec(migration.up);
       insertMigration.run(migration.version, migration.name, Date.now());
-    })();
+    };
+    if (migration.foreignKeyEscape) {
+      db.pragma('foreign_keys = OFF');
+      db.pragma('legacy_alter_table = ON');
+      try {
+        db.transaction(apply)();
+      } finally {
+        db.pragma('legacy_alter_table = OFF');
+        db.pragma('foreign_keys = ON');
+      }
+    } else {
+      db.transaction(apply)();
+    }
   }
   return db;
 }
@@ -309,6 +321,90 @@ describe('database migrations', () => {
         name: string;
       }>).map(r => r.name);
       expect(indexes).toContain('idx_workspaces_pinned_at');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('v20 makes conversation inbox delivery rows unique', () => {
+    const db = openDbAt(19);
+    try {
+      db.exec(`
+        INSERT INTO hosts (id, name, kind, created_at)
+        VALUES ('host_local', 'local', 'local', 1);
+
+        INSERT INTO agents
+          (id, name, runtime, model, host_id, description, created_at, updated_at,
+           display_name, reasoning_effort, fast_mode)
+        VALUES
+          ('agent_a', 'alice', 'claude', NULL, 'host_local', NULL, 1, 1,
+           'alice', NULL, NULL);
+
+        INSERT INTO workspaces
+          (id, name, description, workspace_kind, workspace_path, workspace_host_id,
+           owner_agent_id, archived_at, pinned_at, created_at, updated_at)
+        VALUES
+          ('ws', 'Workspace', NULL, 'regular', '/tmp/ws', 'host_local',
+           NULL, NULL, NULL, 1, 1);
+
+        INSERT INTO conversations
+          (id, workspace_id, workspace_path, kind, parent_conversation_id, title,
+           status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
+           archived_at, created_at, updated_at)
+        VALUES
+          ('conv', 'ws', '/tmp/ws', 'channel', NULL, 'Channel',
+           'idle', NULL, NULL, NULL, NULL, NULL, 1, 1);
+
+        INSERT INTO messages
+          (id, conversation_id, from_kind, from_agent_id, from_user_id, content,
+           metadata, seq, created_at)
+        VALUES
+          ('msg', 'conv', 'user', NULL, 'local', 'hello', NULL, 1, 1);
+
+        INSERT INTO conversation_inboxes
+          (id, conversation_id, agent_id, message_id, delivered_at, created_at)
+        VALUES
+          (1, 'conv', 'agent_a', 'msg', 10, 1),
+          (2, 'conv', 'agent_a', 'msg', NULL, 2),
+          (3, 'conv', 'agent_a', 'msg', NULL, 3);
+      `);
+
+      runMigrations(db);
+
+      expect(
+        db.prepare(`SELECT version FROM _migrations WHERE version = 20`).get(),
+      ).toBeDefined();
+      const rows = db
+        .prepare(
+          `SELECT id, delivered_at
+             FROM conversation_inboxes
+            WHERE conversation_id = 'conv'
+              AND agent_id = 'agent_a'
+              AND message_id = 'msg'`,
+        )
+        .all();
+      expect(rows).toEqual([{ id: 2, delivered_at: null }]);
+      const indexes = (db.pragma('index_list(conversation_inboxes)') as Array<{
+        name: string;
+        unique: number;
+      }>);
+      expect(indexes).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: 'uniq_conversation_inbox_delivery',
+            unique: 1,
+          }),
+        ]),
+      );
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO conversation_inboxes
+               (conversation_id, agent_id, message_id, delivered_at, created_at)
+             VALUES ('conv', 'agent_a', 'msg', NULL, 4)`,
+          )
+          .run(),
+      ).toThrow(/UNIQUE/);
     } finally {
       db.close();
     }

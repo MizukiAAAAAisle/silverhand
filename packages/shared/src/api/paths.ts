@@ -43,6 +43,12 @@ export const apiPaths = {
   archivedChannels: '/api/archived-channels',
   channelMessages: (id: string) => `/api/channels/${id}/messages`,
   channelAgents: (id: string) => `/api/channels/${id}/agents`,
+  channelAgentStart: (id: string, agentId: string) =>
+    `/api/channels/${id}/agents/${agentId}/start`,
+  channelAgentStop: (id: string, agentId: string) =>
+    `/api/channels/${id}/agents/${agentId}/stop`,
+  channelAgentClearSession: (id: string, agentId: string) =>
+    `/api/channels/${id}/agents/${agentId}/clear-session`,
   channelAgentRunStates: (id: string) => `/api/channels/${id}/agent-run-states`,
   channelClose: (id: string) => `/api/channels/${id}/close`,
   channelThreads: (id: string) => `/api/channels/${id}/threads`,
@@ -57,6 +63,12 @@ export const apiPaths = {
   thread: (id: string) => `/api/threads/${id}`,
   threadMessages: (id: string) => `/api/threads/${id}/messages`,
   threadAgents: (id: string) => `/api/threads/${id}/agents`,
+  threadAgentStart: (id: string, agentId: string) =>
+    `/api/threads/${id}/agents/${agentId}/start`,
+  threadAgentStop: (id: string, agentId: string) =>
+    `/api/threads/${id}/agents/${agentId}/stop`,
+  threadAgentClearSession: (id: string, agentId: string) =>
+    `/api/threads/${id}/agents/${agentId}/clear-session`,
   threadAgentRunStates: (id: string) => `/api/threads/${id}/agent-run-states`,
   threadClose: (id: string) => `/api/threads/${id}/close`,
   threadStop: (id: string) => `/api/threads/${id}/stop`,

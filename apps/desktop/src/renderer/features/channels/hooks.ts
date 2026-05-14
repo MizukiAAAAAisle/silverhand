@@ -11,6 +11,7 @@ import type {
   AgentRunStatesDto,
   AttachmentDto,
   AttachmentSnapshot,
+  ClearSessionResponse,
   ConversationAgentDto,
   ConversationMessagesDto,
   MessageDto,
@@ -428,8 +429,11 @@ export function useStartAgent(
   return useMutation({
     mutationFn: async (agentId: string) => {
       if (!channelId) throw new Error('no channel selected');
-      const base = routeKind === 'thread' ? 'threads' : 'channels';
-      await api(`/api/${base}/${channelId}/agents/${agentId}/start`, {
+      const path =
+        routeKind === 'thread'
+          ? apiPaths.threadAgentStart(channelId, agentId)
+          : apiPaths.channelAgentStart(channelId, agentId);
+      await api(path, {
         method: 'POST',
       });
     },
@@ -447,14 +451,50 @@ export function useStopAgent(
       directive?: string;
       }) => {
       if (!channelId) throw new Error('no channel selected');
-      const base = routeKind === 'thread' ? 'threads' : 'channels';
-      await api(`/api/${base}/${channelId}/agents/${params.agentId}/stop`, {
+      const path =
+        routeKind === 'thread'
+          ? apiPaths.threadAgentStop(channelId, params.agentId)
+          : apiPaths.channelAgentStop(channelId, params.agentId);
+      await api(path, {
         method: 'POST',
         body: JSON.stringify({
           mode: params.mode ?? 'hard',
           ...(params.directive ? { directive: params.directive } : {}),
         }),
       });
+    },
+  });
+}
+
+export function useClearAgentSession(
+  channelId: string | null,
+  routeKind: ConversationRouteKind = 'channel',
+) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (agentId: string) => {
+      if (!channelId) throw new Error('no channel selected');
+      const path =
+        routeKind === 'thread'
+          ? apiPaths.threadAgentClearSession(channelId, agentId)
+          : apiPaths.channelAgentClearSession(channelId, agentId);
+      return api<ClearSessionResponse>(path, { method: 'POST' });
+    },
+    onSuccess: (res, agentId) => {
+      if (!channelId) return;
+      qc.setQueryData<ConversationAgentDto[]>(agentsKey(channelId), prev =>
+        prev
+          ? prev.map(agent =>
+              agent.agent_id === agentId
+                ? {
+                    ...agent,
+                    cli_session_id: null,
+                    ...(res.was_running ? { status: 'idle' as const, pid: null } : {}),
+                  }
+                : agent,
+            )
+          : prev,
+      );
     },
   });
 }

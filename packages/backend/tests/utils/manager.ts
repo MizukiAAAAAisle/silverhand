@@ -39,6 +39,7 @@ export interface MockClaudeEnvOverrides {
   MOCK_CLAUDE_FAIL_FIRST_INITS?: string;
   MOCK_CLAUDE_SPAWN_COUNT_FILE?: string;
   MOCK_CLAUDE_STDIN_LOG?: string;
+  MOCK_CLAUDE_ARGV_LOG?: string;
   MOCK_CLAUDE_IGNORE_INTERRUPT?: '1';
   MOCK_CLAUDE_ENV_LOG?: string;
 }

@@ -1558,6 +1558,24 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     return stopConversationAgent(thread.id, aid, c);
   });
 
+  app.post('/api/channels/:id/agents/:aid/clear-session', async c => {
+    const id = c.req.param('id');
+    const aid = c.req.param('aid');
+    if (!id || !aid) return c.json({ error: 'channel id and agent id required' }, 400);
+    const channel = conversations.getChannelLike(id);
+    if (!channel) return c.json({ error: 'channel not found' }, 404);
+    return clearConversationAgentSession(channel.id, aid, c);
+  });
+
+  app.post('/api/threads/:id/agents/:aid/clear-session', async c => {
+    const id = c.req.param('id');
+    const aid = c.req.param('aid');
+    if (!id || !aid) return c.json({ error: 'thread id and agent id required' }, 400);
+    const thread = conversations.getThread(id);
+    if (!thread) return c.json({ error: 'thread not found' }, 404);
+    return clearConversationAgentSession(thread.id, aid, c);
+  });
+
   async function markConversationRead(
     conversationId: string,
     c: Context,
@@ -1640,6 +1658,44 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     );
     await ctx.conversationManager.stop(conversationId, agentId, mode, directive);
     return c.json({ ok: true });
+  }
+
+  async function clearConversationAgentSession(
+    conversationId: string,
+    agentId: string,
+    c: Context,
+  ): Promise<Response> {
+    if (!agents.get(agentId)) return c.json({ error: 'agent not found' }, 404);
+    if (!conversations.getAgent(conversationId, agentId)) {
+      return c.json({ error: 'agent is not a member of this conversation' }, 400);
+    }
+    const principal = getUserPrincipal(c);
+    if (!canPostToConversation(ctx, principal, conversationId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    ctx.logger.info(
+      { conversationId, agentId },
+      'api: clear agent session requested',
+    );
+    try {
+      const result = await ctx.conversationManager.clearSession(
+        conversationId,
+        agentId,
+        principal.userId,
+      );
+      return c.json({
+        ok: true,
+        prev_cli_session_id: result.prevCliSessionId,
+        was_running: result.wasRunning,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      ctx.logger.error(
+        { conversationId, agentId, err },
+        'api: clear agent session failed',
+      );
+      return c.json({ error: msg }, 400);
+    }
   }
 
   function createAgentWithHome(input: CreateAgentInput) {

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AtSign, CheckCircle2, ChevronRight } from 'lucide-react';
+import { AtSign, CheckCircle2, ChevronRight, Eraser } from 'lucide-react';
 import type { MessageDto } from '@silverhand/shared';
 import { useMessage } from '@/features/messages/hooks';
 import { formatUserDisplayName } from '@/lib/current-user';
@@ -52,6 +52,18 @@ export function SystemMessage({
   if (subtype === 'thread_summary') {
     return (
       <ThreadSummaryCard
+        message={message}
+        conversationRefsById={conversationRefsById}
+        onOpenConversationRef={onOpenConversationRef}
+        channelsByName={channelsByName}
+        onOpenChannelRef={onOpenChannelRef}
+      />
+    );
+  }
+
+  if (subtype === 'session_cleared') {
+    return (
+      <SessionClearedCard
         message={message}
         conversationRefsById={conversationRefsById}
         onOpenConversationRef={onOpenConversationRef}
@@ -221,6 +233,37 @@ function MentionCcCard({
       ) : (
         <div className="text-xs text-text-muted">(loading original…)</div>
       )}
+    </div>
+  );
+}
+
+function SessionClearedCard({
+  message,
+  conversationRefsById,
+  onOpenConversationRef,
+  channelsByName,
+  onOpenChannelRef,
+}: {
+  message: MessageDto;
+  conversationRefsById?: Map<string, ConversationReference>;
+  onOpenConversationRef?: (id: string) => void;
+  channelsByName?: Map<string, ChannelReference | null>;
+  onOpenChannelRef?: (channelId: string) => void;
+}): JSX.Element {
+  return (
+    <div className="mx-4 my-1.5 rounded-md border border-error/25 bg-error/5 px-3 py-2">
+      <div className="flex items-start gap-2 text-xs text-text-secondary">
+        <Eraser className="mt-0.5 size-3.5 shrink-0 text-error" />
+        <div className="min-w-0 flex-1">
+          <Markdown
+            content={message.content}
+            conversationRefsById={conversationRefsById}
+            onOpenConversationRef={onOpenConversationRef}
+            channelsByName={channelsByName}
+            onOpenChannelRef={onOpenChannelRef}
+          />
+        </div>
+      </div>
     </div>
   );
 }

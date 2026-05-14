@@ -328,6 +328,13 @@ export const ConversationAgentDtoSchema = z.object({
 });
 export type ConversationAgentDto = z.infer<typeof ConversationAgentDtoSchema>;
 
+export const ClearSessionResponseSchema = z.object({
+  ok: z.literal(true),
+  prev_cli_session_id: z.string().nullable(),
+  was_running: z.boolean(),
+});
+export type ClearSessionResponse = z.infer<typeof ClearSessionResponseSchema>;
+
 export const ChannelDtoSchema = ChannelConversationDtoSchema;
 export type ChannelDto = ChannelConversationDto;
 

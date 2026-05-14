@@ -19,6 +19,7 @@ import type {
   AttachmentSnapshot,
   ConversationDto,
   FromKind,
+  MessageDto,
   WorkspaceDto,
 } from '@silverhand/shared';
 
@@ -123,9 +124,12 @@ interface AgentHandle {
   /** A turn_end arrived while the run could not be resolved yet, usually
    *  because compaction was still active or pending deliveries need flush. */
   pendingTurnEnd: boolean;
-  /** Pending deliveries for gated mode. Phase 3E flushes; Phase 2C
-   *  just appends. */
-  pendingDeliveries: string[];
+  /** Pending deliveries for gated mode. The durable source of truth is
+   *  `conversation_inboxes`; this in-memory list only remembers the already
+   *  formatted messages for the currently running process so a safe boundary
+   *  can flush them without re-querying. If the process is hard-stopped,
+   *  these entries may disappear, but their inbox rows remain pending. */
+  pendingDeliveries: PendingDelivery[];
   /** Watchdog timer started on `compaction_started`; cleared on
    *  `compaction_finished`. Fires once after 5min if compaction never
    *  reports completion (slock's `COMPACTION_STALE_MS`). */
@@ -172,9 +176,20 @@ interface AgentHandle {
   initPendingInboxIds: number[];
 }
 
+interface PendingDelivery {
+  inboxId: number;
+  messageId: string;
+  text: string;
+}
+
 export interface StartOptions {
   /** Override the model (e.g. `sonnet-4-6`). Falls back to agent.model. */
   model?: string | null;
+}
+
+export interface ClearSessionResult {
+  prevCliSessionId: string | null;
+  wasRunning: boolean;
 }
 
 /**
@@ -215,6 +230,7 @@ export class ConversationManager {
   private readonly initRetryStates = new Map<string, InitRetryState>();
   private readonly runStates = new Map<string, AgentRunState>();
   private readonly activitySnippetBuffers = new Map<string, ActivitySnippetBuffer>();
+  private readonly lifecycleTails = new Map<string, Promise<void>>();
   private activityHeartbeat: NodeJS.Timeout | null = null;
   /** Dedicated JSONL log for agent_activity events — written in addition
    *  to realtime broadcasts so release builds leave a paper trail for debugging. Null
@@ -245,6 +261,31 @@ export class ConversationManager {
 
   isRunning(conversationId: string, agentId: string): boolean {
     return this.handles.has(handleKey(conversationId, agentId));
+  }
+
+  private async withLifecycleLock<T>(
+    conversationId: string,
+    agentId: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const key = handleKey(conversationId, agentId);
+    const prev = this.lifecycleTails.get(key) ?? Promise.resolve();
+    let release: () => void = () => {};
+    const current = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const next = prev.catch(() => undefined).then(() => current);
+    this.lifecycleTails.set(key, next);
+
+    await prev.catch(() => undefined);
+    try {
+      return await fn();
+    } finally {
+      release();
+      if (this.lifecycleTails.get(key) === next) {
+        this.lifecycleTails.delete(key);
+      }
+    }
   }
 
   getAgentRunStates(conversationId: string): AgentRunState[] {
@@ -434,10 +475,21 @@ export class ConversationManager {
    *  - On exit, handle is removed and temp files are cleaned up
    */
   async start(conversationId: string, agentId: string, opts: StartOptions = {}): Promise<void> {
-    return this.startInternal(conversationId, agentId, opts, 0);
+    return this.startWithLifecycleLock(conversationId, agentId, opts, 0);
   }
 
-  private async startInternal(
+  private async startWithLifecycleLock(
+    conversationId: string,
+    agentId: string,
+    opts: StartOptions = {},
+    initAttempt = 0,
+  ): Promise<void> {
+    return this.withLifecycleLock(conversationId, agentId, () =>
+      this.startUnlocked(conversationId, agentId, opts, initAttempt),
+    );
+  }
+
+  private async startUnlocked(
     conversationId: string,
     agentId: string,
     opts: StartOptions = {},
@@ -684,7 +736,12 @@ export class ConversationManager {
         this.clearInitWatchdog(handle);
         rl.close();
         void spawnPrep.cleanup();
-        this.startInternal(conversationId, agentId, opts, handle.initAttempt + 1).catch(
+        this.startWithLifecycleLock(
+          conversationId,
+          agentId,
+          opts,
+          handle.initAttempt + 1,
+        ).catch(
           err =>
             this.ctx.logger.error(
               { conversationId, agentId, err },
@@ -832,6 +889,17 @@ export class ConversationManager {
     mode: 'soft' | 'hard' = 'hard',
     softDirective?: string,
   ): Promise<void> {
+    return this.withLifecycleLock(conversationId, agentId, () =>
+      this.stopUnlocked(conversationId, agentId, mode, softDirective),
+    );
+  }
+
+  private async stopUnlocked(
+    conversationId: string,
+    agentId: string,
+    mode: 'soft' | 'hard' = 'hard',
+    softDirective?: string,
+  ): Promise<void> {
     const key = handleKey(conversationId, agentId);
     const h = this.handles.get(key);
     if (!h) return;
@@ -913,6 +981,77 @@ export class ConversationManager {
     }
   }
 
+  async clearSession(
+    conversationId: string,
+    agentId: string,
+    actorUserId: string | null = null,
+  ): Promise<ClearSessionResult> {
+    return this.withLifecycleLock(conversationId, agentId, () =>
+      this.clearSessionUnlocked(conversationId, agentId, actorUserId),
+    );
+  }
+
+  private async clearSessionUnlocked(
+    conversationId: string,
+    agentId: string,
+    actorUserId: string | null,
+  ): Promise<ClearSessionResult> {
+    const conversation = this.conversations.get(conversationId);
+    if (!conversation) throw new Error(`conversation ${conversationId} not found`);
+    const agent = this.agents.get(agentId);
+    if (!agent) throw new Error(`agent ${agentId} not found`);
+    const existing = this.conversations.getAgent(conversationId, agentId);
+    if (!existing) {
+      throw new Error(`agent ${agentId} is not a member of conversation ${conversationId}`);
+    }
+
+    const wasRunning = this.handles.has(handleKey(conversationId, agentId));
+    if (wasRunning) {
+      await this.stopUnlocked(conversationId, agentId, 'hard');
+    }
+
+    const beforeClear = this.conversations.getAgent(conversationId, agentId) ?? existing;
+    const prevCliSessionId = beforeClear.cli_session_id;
+    const shouldAudit = wasRunning || prevCliSessionId !== null;
+    const { updated, auditMessage } = this.ctx.db.transaction(() => {
+      const updated = this.conversations.updateAgentRuntime(conversationId, agentId, {
+        cliSessionId: null,
+      });
+      if (!updated) {
+        throw new Error(
+          `agent ${agentId} is not a member of conversation ${conversationId}`,
+        );
+      }
+      const auditMessage = shouldAudit
+        ? this.insertSessionClearedAuditMessage({
+            conversationId,
+            agentId,
+            agentName: agent.name,
+            actorUserId,
+            prevCliSessionId,
+            wasRunning,
+          })
+        : null;
+      return { updated, auditMessage };
+    })();
+    this.publish(conversationId, 'agent_status', {
+      agent_id: agentId,
+      status: updated.status,
+      pid: updated.pid,
+      cli_session_id: null,
+    });
+
+    if (auditMessage) {
+      await this.publishAndDeliverSessionClearedAudit(
+        conversationId,
+        agentId,
+        auditMessage,
+      );
+    }
+
+    return { prevCliSessionId, wasRunning };
+  }
+
   /** Stop every running handle. Used on backend shutdown. Hard mode. */
   async stopAll(): Promise<void> {
     await Promise.all(
@@ -939,6 +1078,56 @@ export class ConversationManager {
   }
 
   // ── internals ──────────────────────────────────────────────────────
+
+  private insertSessionClearedAuditMessage(params: {
+    conversationId: string;
+    agentId: string;
+    agentName: string;
+    actorUserId: string | null;
+    prevCliSessionId: string | null;
+    wasRunning: boolean;
+  }): MessageDto {
+    const actor = params.actorUserId ? `@${params.actorUserId}` : 'A user';
+    const prevLabel = params.prevCliSessionId
+      ? `${params.prevCliSessionId.slice(0, 8)}...`
+      : 'none';
+    return this.messages.insertForConversation({
+      conversationId: params.conversationId,
+      fromKind: 'system',
+      fromUserId: params.actorUserId,
+      content:
+        `${actor} cleared @${params.agentName}'s CLI session context ` +
+        `(prev session: ${prevLabel}). Next start will use a fresh session; ` +
+        'pending deliveries remain queued.',
+      metadata: {
+        subtype: 'session_cleared',
+        agent_id: params.agentId,
+        agent_name: params.agentName,
+        actor_user_id: params.actorUserId,
+        previous_cli_session_id_prefix: params.prevCliSessionId
+          ? params.prevCliSessionId.slice(0, 8)
+          : null,
+        was_running: params.wasRunning,
+      },
+    });
+  }
+
+  private async publishAndDeliverSessionClearedAudit(
+    conversationId: string,
+    clearedAgentId: string,
+    message: MessageDto,
+  ): Promise<void> {
+    this.publish(conversationId, 'message', { message });
+    for (const ca of this.conversations.listAgents(conversationId)) {
+      if (ca.agent_id === clearedAgentId) continue;
+      await this.deliverMessage(conversationId, ca.agent_id, message.id).catch(err =>
+        this.ctx.logger.warn(
+          { conversationId, agentId: ca.agent_id, messageId: message.id, err },
+          'session clear audit delivery failed',
+        ),
+      );
+    }
+  }
 
   private handleParsedEvent(handle: AgentHandle, ev: ParsedEvent): void {
     const { conversationId, agentId } = handle;
@@ -1424,19 +1613,40 @@ export class ConversationManager {
    * specific (conversation, agent). The caller wrote the row + decided this
    * agent should see it. We pick the path:
    *
-   *   - agent not running       → enqueue to `agent_inboxes` (drained on
+   *   - agent not running       → enqueue to `conversation_inboxes` (drained on
    *                               next spawn, §3.1 C 档)
    *   - direct mode             → write immediately (§3.1 A 档)
    *   - gated mode at boundary  → write immediately
    *   - gated mode mid-turn     → push to handle.pendingDeliveries; flush
    *                               at next safe boundary
+   *
+   * Caller contract: this method is not safe to call concurrently for the
+   * same (conversationId, agentId, messageId). Sync-ordered redelivery is
+   * deduped via DB + handle-local checks; interleaved awaits may still race.
    */
   async deliverMessage(conversationId: string, agentId: string, messageId: string): Promise<void> {
+    const msg = this.messages.getById(messageId);
+    if (!msg) {
+      this.ctx.logger.warn(
+        { conversationId, agentId, messageId },
+        'deliver: messageId not found in messages table',
+      );
+      return;
+    }
+
+    const delivery = this.inboxes.ensureDelivery(conversationId, agentId, messageId);
+    if (delivery.deliveredAt !== null) {
+      this.ctx.logger.info(
+        { conversationId, agentId, messageId, inboxId: delivery.inboxId },
+        'deliver: message already delivered to agent; skipping',
+      );
+      return;
+    }
+
     const handle = this.handles.get(handleKey(conversationId, agentId));
     if (!handle) {
-      this.inboxes.enqueue(conversationId, agentId, messageId);
       this.ctx.logger.info(
-        { conversationId, agentId, messageId },
+        { conversationId, agentId, messageId, inboxId: delivery.inboxId },
         'deliver: agent not running, enqueued to inbox',
       );
       // Look up the agent to decide if we need to wake it up: oneShot
@@ -1456,11 +1666,10 @@ export class ConversationManager {
       }
       return;
     }
-    const msg = this.messages.getById(messageId);
-    if (!msg) {
-      this.ctx.logger.warn(
-        { conversationId, agentId, messageId },
-        'deliver: messageId not found in messages table',
+    if (handle.initPendingInboxIds.includes(delivery.inboxId)) {
+      this.ctx.logger.info(
+        { conversationId, agentId, messageId, inboxId: delivery.inboxId },
+        'deliver: message already written to agent stdin; waiting for init acknowledgement',
       );
       return;
     }
@@ -1477,9 +1686,8 @@ export class ConversationManager {
     // we don't double-start here — the exit handler covers the
     // race-with-just-finishing case.
     if (handle.driver.busyDeliveryMode === 'none') {
-      this.inboxes.enqueue(conversationId, agentId, messageId);
       this.ctx.logger.info(
-        { conversationId, agentId, messageId },
+        { conversationId, agentId, messageId, inboxId: delivery.inboxId },
         'deliver: oneShot agent running; queued for next respawn',
       );
       return;
@@ -1492,9 +1700,8 @@ export class ConversationManager {
       // catches up.
       const line = handle.driver.encodeStdinMessage(text, handle.cliSessionId);
       if (line === null) {
-        this.inboxes.enqueue(conversationId, agentId, messageId);
         this.ctx.logger.info(
-          { conversationId, agentId, messageId },
+          { conversationId, agentId, messageId, inboxId: delivery.inboxId },
           'deliver: driver not yet ready (e.g. codex pre-thread); enqueued to inbox',
         );
         return;
@@ -1511,13 +1718,26 @@ export class ConversationManager {
       );
       this.ensureInitWatchdogArmed(handle);
       await this.writeLine(handle, line);
+      if (!handle.initObserved && handle.driver.kickoffMode === 'requires_first_message') {
+        if (!handle.initPendingInboxIds.includes(delivery.inboxId)) {
+          handle.initPendingInboxIds.push(delivery.inboxId);
+        }
+      } else {
+        this.inboxes.markDelivered([delivery.inboxId]);
+      }
       if (handle.driver.busyDeliveryMode === 'direct') {
         this.markRunThinking(handle);
       } else {
         this.startRun(handle, 'thinking');
       }
     } else {
-      handle.pendingDeliveries.push(text);
+      if (!handle.pendingDeliveries.some(item => item.messageId === messageId)) {
+        handle.pendingDeliveries.push({
+          inboxId: delivery.inboxId,
+          messageId,
+          text,
+        });
+      }
       this.ctx.logger.info(
         {
           conversationId,
@@ -1538,10 +1758,11 @@ export class ConversationManager {
     if (!isSafeBoundary(handle)) return;
     if (handle.pendingDeliveries.length === 0) return;
     const batch = handle.pendingDeliveries.splice(0);
+    const texts = batch.map(item => item.text);
     const combined =
-      batch.length === 1
-        ? batch[0]!
-        : combineGatedBatch(batch, sendMessageToolName(handle.driver));
+      texts.length === 1
+        ? texts[0]!
+        : combineGatedBatch(texts, sendMessageToolName(handle.driver));
     this.ctx.logger.info(
       {
         conversationId: handle.conversationId,
@@ -1552,6 +1773,7 @@ export class ConversationManager {
       'deliver: flushing pending batch at safe boundary',
     );
     await this.writeUserMessage(handle, combined);
+    this.inboxes.markDelivered(batch.map(item => item.inboxId));
   }
 
   private async writeUserMessage(

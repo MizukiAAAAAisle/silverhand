@@ -42,6 +42,11 @@ export class FakeConversationManager {
     mode: 'soft' | 'hard';
     directive?: string;
   }> = [];
+  clearedSessions: Array<{
+    conversationId: string;
+    agentId: string;
+    actorUserId: string | null;
+  }> = [];
   delivered: Array<{ conversationId: string; agentId: string; messageId: string }> = [];
   agentRunStates: AgentRunState[] = [];
   resolvedRuns: Array<{
@@ -56,6 +61,7 @@ export class FakeConversationManager {
 
   /** Override to make `.start` reject. */
   startError: Error | null = null;
+  clearSessionResult = { prevCliSessionId: 'prev-session-1', wasRunning: false };
 
   reconcileOnBoot(): void {
     this.reconciled++;
@@ -91,6 +97,14 @@ export class FakeConversationManager {
     directive?: string,
   ): Promise<void> {
     this.stops.push({ conversationId, agentId, mode, directive });
+  }
+  async clearSession(
+    conversationId: string,
+    agentId: string,
+    actorUserId: string | null = null,
+  ): Promise<{ prevCliSessionId: string | null; wasRunning: boolean }> {
+    this.clearedSessions.push({ conversationId, agentId, actorUserId });
+    return this.clearSessionResult;
   }
   async stopAll(): Promise<void> {
     this.stoppedAll++;

@@ -4,6 +4,14 @@
 
 ---
 
+## 2026-05-15 — Clear CLI session + delivery queue 收敛
+
+- **delivery queue DB-first**：`conversation_inboxes` 加 `(conversation_id, agent_id, message_id)` unique；`ensureDelivery` 幂等写入；`pendingDeliveries` 改成带 `inboxId/messageId/text` 的当前进程 formatted batch cache。hard stop 时内存可丢，pending DB row 保留，下次 start drain。
+- **per-agent clear session**：新增 `POST /api/channels/:cid/agents/:aid/clear-session` / `POST /api/threads/:tid/agents/:aid/clear-session`。语义固定为 hard stop live process → `conversation_agents.cli_session_id = NULL` → publish `agent_status` → 写 `session_cleared` audit；不自动 restart，不清 MEMORY/notes，不清 pending inbox。
+- **lifecycle lock**：ConversationManager 增 per-(conversation, agent) lifecycle queue，串行化 `start` / `stop` / `clearSession`，并覆盖 init retry / oneShot auto-start，避免 clear 与 queued start 竞态带旧 `--resume`。
+- **UI**：AgentStrip 的 `AgentInfoPopover` footer 增 per-agent Restart / Stop / Clear session；Clear 有确认 dialog。DM 也显示单 agent chip，统一入口。`session_cleared` system message 用 destructive audit card 渲染。
+- **验证**：`pnpm --filter @silverhand/{shared,backend,desktop} typecheck` 通过；full `./scripts/test.sh` 53 files / 619 tests 通过。
+
 ## 2026-05-10 — MCP → Silverhand CLI hard cutover（#190 / #192 / #193 / #194 / #195 / #196 / #197）
 
 本轮把 agent-facing 能力从 `mcp__chat__*` 工具面切到 `silverhand` CLI：agent 只依赖命令名 `silverhand` 和后端注入的 `SILVERHAND_CONVERSATION_ID / SILVERHAND_AGENT_ID / SILVERHAND_SERVER_URL / SILVERHAND_AUTH_TOKEN`。业务实现仍走 `/internal/conversations/:cid/agents/:aid/...`，route/service/ACL 复用。
@@ -833,12 +841,12 @@ task #11 SessionManager：
 - `start(sessionId, agentId)`：组 `DriverPromptContext` → `driver.buildSystemPrompt` → `prepareSpawnFiles` → `spawn(binary, driver.buildArgs(spawnCtx), {cwd: workspace_path, env: driver.applyEnv(process.env)})` → `readline` 包 stdout → 每行 `driver.parseLine` → `handleParsedEvent` 分发；同时 `session_agents.status` 走 `idle → starting → active`，`pid` 跟着进程
 - `handleParsedEvent`：`session_init` 落 `cli_session_id` + 触发 inbox drain；`tool_call` `outstandingToolUses++`；`tool_output` `--`；`turn_end` 清零 + flush；`compaction_started/finished` 切 `compacting` flag + 启停 5min watchdog；所有事件原样 `publish('agent_event', {agent_id, event})` 给 SSE
 - 子进程退出：`status` 设 `idle`（intentional/exit 0）或 `crashed`，pid=null，handle map 删除，watchdog 清，spawn-prep cleanup
-- **`InboxRepo`** —— `agent_inboxes` CRUD：`enqueue` / `listPending(sid, aid)` JOIN messages / `markDelivered`
+- **`InboxRepo`** —— `conversation_inboxes` durable delivery queue：`ensureDelivery` / `enqueue` / `listPending(sid, aid)` JOIN messages / `markDelivered`
 - **inbox drain**：`session_init` 时拉 pending → `formatInboxBatch(items, agentNameById)` 拼成 "You have N messages waiting…[from @x]\n…\n---\n[from @y]\n…" → `driver.encodeStdinMessage` → `child.stdin.write` → `markDelivered`
 
 ### Phase 3：投递 + 控制
 
-- **`deliverMessage(sid, aid, messageId)`**：handle 不在 → `inboxes.enqueue`；存在 + `direct` 或 `isSafeBoundary` → 立刻 `writeUserMessage`；存在 + `gated` 中段 → 进 `pendingDeliveries`，`turn_end`/`compaction_finished` 时 `flushPending` 一次性 combined push
+- **`deliverMessage(sid, aid, messageId)`**：先 `ensureDelivery` 写入 `conversation_inboxes` durable row；handle 不在 → 保持 pending 等下次 spawn drain；存在 + `direct` 或 `isSafeBoundary` → 立刻 `writeUserMessage`；存在 + `gated` 中段 → 进 `pendingDeliveries` 当前进程 cache，`turn_end`/`compaction_finished` 时 `flushPending` 一次性 combined push，成功写入后再 `markDelivered`
 - **soft / hard interrupt**：`stop(sid, aid, mode='soft'|'hard', directive?)` —— soft 写一条 directive user message；hard `intentionallyStopped=true` → `encodeInterruptControl` 写 stdin → 5s 后 SIGTERM → 再 5s SIGKILL（unref 不阻塞退出）
 - **`POST /api/sessions/:id/agents/:aid/{start,stop}`**：UI 控制；stop body 接 `{mode, directive}`
 - **5min compaction watchdog**：`COMPACTION_STALE_MS = 5 * 60_000`；超时只 `publish('compaction_stale', {agent_id, elapsed_ms})` + warn log，不 kill（slock 同款）

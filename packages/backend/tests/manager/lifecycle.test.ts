@@ -7,6 +7,8 @@ import {
   readStdinLog,
   type ManagerHarness,
 } from '../utils/manager.js';
+import { AgentRepo } from '../../src/repos/agent-repo.js';
+import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 
 function waitInit(h: ManagerHarness): Promise<void> {
   return h
@@ -128,6 +130,19 @@ function insertAgentMessage(
        VALUES (?, ?, 'agent', ?, NULL, ?, NULL, ?, ?)`,
     )
     .run(id, h.sessionId, h.agentId, content, seq, Date.now());
+}
+
+function addOtherConversationAgent(h: ManagerHarness, name = 'other'): string {
+  const host = h.ctx.db
+    .prepare<[], { id: string }>(`SELECT id FROM hosts LIMIT 1`)
+    .get();
+  expect(host).toBeDefined();
+  const agent = new AgentRepo(h.ctx.db).create(
+    { name, runtime: 'claude' },
+    host!.id,
+  );
+  new ConversationRepo(h.ctx.db).addAgent(h.sessionId, agent.id);
+  return agent.id;
 }
 
 function liveHandle(h: ManagerHarness): unknown {
@@ -375,6 +390,121 @@ describe('ConversationManager.stop', () => {
   });
 });
 
+describe('ConversationManager.clearSession', () => {
+  let h: ManagerHarness | null = null;
+  afterEach(async () => {
+    await h?.cleanup();
+    h = null;
+  });
+
+  it('hard-stops a running agent, clears only cli_session_id, and skips audit delivery to that agent', async () => {
+    h = await buildManagerHarness();
+    const otherAgentId = addOtherConversationAgent(h);
+    h.setMockEnv({
+      MOCK_CLAUDE_INIT_SESSION_ID: 'cli-abcdefgh123456',
+    });
+    await h.manager.start(h.sessionId, h.agentId);
+    await waitInit(h);
+
+    const events: Array<{ kind: string; payload: any }> = [];
+    h.on(e => events.push({ kind: e.kind, payload: e.payload }));
+
+    const result = await h.manager.clearSession(h.sessionId, h.agentId, 'local');
+
+    expect(result).toEqual({
+      prevCliSessionId: 'cli-abcdefgh123456',
+      wasRunning: true,
+    });
+    expect(h.manager.isRunning(h.sessionId, h.agentId)).toBe(false);
+    expect(dbStatus(h)).toMatchObject({
+      status: 'idle',
+      cli_session_id: null,
+      pid: null,
+    });
+    expect(events).toContainEqual({
+      kind: 'agent_status',
+      payload: {
+        agent_id: h.agentId,
+        status: 'idle',
+        pid: null,
+        cli_session_id: null,
+      },
+    });
+
+    const audit = h.ctx.db
+      .prepare<
+        [string],
+        { id: string; content: string; metadata: string | null }
+      >(
+        `SELECT id, content, metadata
+           FROM messages
+          WHERE conversation_id = ?
+            AND from_kind = 'system'
+            AND json_extract(metadata, '$.subtype') = 'session_cleared'
+          ORDER BY created_at DESC
+          LIMIT 1`,
+      )
+      .get(h.sessionId);
+    expect(audit).toBeDefined();
+    expect(audit!.content).toContain('@local cleared @mock');
+    expect(audit!.content).toContain('cli-abcd...');
+    expect(audit!.content).not.toContain('cli-abcdefgh123456');
+    expect(events.some(e => e.kind === 'message' && e.payload?.message?.id === audit!.id))
+      .toBe(true);
+
+    const deliveredAgentIds = h.ctx.db
+      .prepare<[string], { agent_id: string }>(
+        `SELECT agent_id FROM conversation_inboxes WHERE message_id = ?`,
+      )
+      .all(audit!.id)
+      .map(row => row.agent_id);
+    expect(deliveredAgentIds).toEqual([otherAgentId]);
+  });
+
+  it('is a quiet no-op when the agent is stopped and has no cli session', async () => {
+    h = await buildManagerHarness();
+
+    const result = await h.manager.clearSession(h.sessionId, h.agentId, 'local');
+
+    expect(result).toEqual({ prevCliSessionId: null, wasRunning: false });
+    expect(dbStatus(h).cli_session_id).toBeNull();
+    const auditCount = h.ctx.db
+      .prepare<[string], { c: number }>(
+        `SELECT COUNT(*) AS c
+           FROM messages
+          WHERE conversation_id = ?
+            AND json_extract(metadata, '$.subtype') = 'session_cleared'`,
+      )
+      .get(h.sessionId);
+    expect(auditCount?.c).toBe(0);
+  });
+
+  it('serializes clear before a queued start so the next spawn does not resume', async () => {
+    h = await buildManagerHarness();
+    const argvLog = join(h.silverhandDir, 'argv.json');
+    h.ctx.db
+      .prepare(
+        `UPDATE conversation_agents SET cli_session_id = ?
+         WHERE conversation_id = ? AND agent_id = ?`,
+      )
+      .run('cli-stale-resume', h.sessionId, h.agentId);
+    h.setMockEnv({
+      MOCK_CLAUDE_ARGV_LOG: argvLog,
+      MOCK_CLAUDE_INIT_SESSION_ID: 'cli-fresh-after-clear',
+    });
+
+    const clearPromise = h.manager.clearSession(h.sessionId, h.agentId, 'local');
+    const startPromise = h.manager.start(h.sessionId, h.agentId);
+    await Promise.all([clearPromise, startPromise]);
+    await waitInit(h);
+
+    const args = JSON.parse(readFileSync(argvLog, 'utf-8')) as string[];
+    expect(args).not.toContain('--resume');
+    expect(args).not.toContain('cli-stale-resume');
+    expect(dbStatus(h).cli_session_id).toBe('cli-fresh-after-clear');
+  });
+});
+
 describe('ConversationManager.deliverMessage', () => {
   let h: ManagerHarness | null = null;
   afterEach(async () => {
@@ -555,6 +685,54 @@ describe('ConversationManager.deliverMessage', () => {
     expect(text).toContain('second busy message');
     expect(text).toContain('silverhand message send');
     expect(text).toContain('Complete ALL your work before stopping');
+    const pending = h.ctx.db
+      .prepare<[string, string], { c: number }>(
+        `SELECT COUNT(*) AS c FROM conversation_inboxes
+         WHERE conversation_id = ? AND agent_id = ? AND delivered_at IS NULL`,
+      )
+      .get(h.sessionId, h.agentId);
+    expect(pending?.c).toBe(0);
+  });
+
+  it('keeps busy gated deliveries pending in DB across hard stop and drains them on restart', async () => {
+    h = await buildManagerHarness();
+    await h.manager.start(h.sessionId, h.agentId);
+    await waitInit(h);
+    feedParsedEvent(h, { kind: 'tool_call', name: 'Bash', input: {} });
+    insertUserMessage(h, 'msg-stop-pending-1', 'persist across hard stop', 1);
+
+    await h.manager.deliverMessage(h.sessionId, h.agentId, 'msg-stop-pending-1');
+
+    const pendingBeforeStop = h.ctx.db
+      .prepare<[string, string], { c: number }>(
+        `SELECT COUNT(*) AS c FROM conversation_inboxes
+         WHERE conversation_id = ? AND agent_id = ? AND delivered_at IS NULL`,
+      )
+      .get(h.sessionId, h.agentId);
+    expect(pendingBeforeStop?.c).toBe(1);
+
+    await h.manager.stop(h.sessionId, h.agentId, 'hard');
+    const pendingAfterStop = h.ctx.db
+      .prepare<[string, string], { c: number }>(
+        `SELECT COUNT(*) AS c FROM conversation_inboxes
+         WHERE conversation_id = ? AND agent_id = ? AND delivered_at IS NULL`,
+      )
+      .get(h.sessionId, h.agentId);
+    expect(pendingAfterStop?.c).toBe(1);
+
+    await h.manager.start(h.sessionId, h.agentId);
+    await waitInit(h);
+    await waitForStdinLines(h, lines =>
+      lines.some(line => line.includes('persist across hard stop')),
+    );
+
+    const pendingAfterRestart = h.ctx.db
+      .prepare<[string, string], { c: number }>(
+        `SELECT COUNT(*) AS c FROM conversation_inboxes
+         WHERE conversation_id = ? AND agent_id = ? AND delivered_at IS NULL`,
+      )
+      .get(h.sessionId, h.agentId);
+    expect(pendingAfterRestart?.c).toBe(0);
   });
 });
 

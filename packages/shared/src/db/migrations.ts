@@ -1310,4 +1310,27 @@ export const migrations: Migration[] = [
         WHERE pinned_at IS NOT NULL;
     `,
   },
+  {
+    version: 20,
+    name: 'unique_conversation_inbox_deliveries',
+    // `conversation_inboxes` is the durable delivery queue for
+    // (conversation, agent, message). A message should be delivered to a
+    // given agent at most once; pending rows survive stop/restart/clear and
+    // are marked delivered only after the runtime accepts the input.
+    up: `
+      DELETE FROM conversation_inboxes
+       WHERE id NOT IN (
+         SELECT CASE
+                  WHEN SUM(CASE WHEN delivered_at IS NULL THEN 1 ELSE 0 END) > 0
+                    THEN MIN(CASE WHEN delivered_at IS NULL THEN id END)
+                  ELSE MIN(id)
+                END
+           FROM conversation_inboxes
+          GROUP BY conversation_id, agent_id, message_id
+       );
+
+      CREATE UNIQUE INDEX uniq_conversation_inbox_delivery
+        ON conversation_inboxes(conversation_id, agent_id, message_id);
+    `,
+  },
 ];

@@ -23,6 +23,7 @@ async function createWorkspaceChannel(
   t.fake.starts = [];
   t.fake.delivered = [];
   t.fake.stops = [];
+  t.fake.clearedSessions = [];
   return {
     workspace: workspaceBody.workspace,
     channelId: workspaceBody.onboarding_channel_id as string,
@@ -249,6 +250,25 @@ describe('canonical channel/thread routes', () => {
       agentId: agentIds.alice,
       mode: 'soft',
       directive: 'pause',
+    });
+
+    t.fake.clearSessionResult = {
+      prevCliSessionId: 'cli-prev-route',
+      wasRunning: true,
+    };
+    const clear = await http(t, { 'X-Silverhand-User-Id': 'local' }).post(
+      `/api/channels/${channelId}/agents/${agentIds.alice}/clear-session`,
+    );
+    expect(clear.status).toBe(200);
+    expect(await clear.json()).toEqual({
+      ok: true,
+      prev_cli_session_id: 'cli-prev-route',
+      was_running: true,
+    });
+    expect(t.fake.clearedSessions).toContainEqual({
+      conversationId: channelId,
+      agentId: agentIds.alice,
+      actorUserId: 'local',
     });
   });
 
