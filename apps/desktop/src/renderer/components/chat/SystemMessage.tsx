@@ -25,6 +25,7 @@ import { useMessage } from '@/features/messages/hooks';
 import { useTaskRefContext } from '@/features/tasks/TaskRefContext';
 import { formatUserDisplayName } from '@/lib/current-user';
 import { Markdown } from './Markdown';
+import { ConversationRef } from './ConversationRef';
 import { useRelativeTime } from './useRelativeTime';
 import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
@@ -860,8 +861,17 @@ interface ContextCardModel {
   kind: ContextCardKind;
   /** uppercase tag label: "Quoted" / "Inherited" / "Spawned-from" */
   tagLabel: string;
-  /** source chip text — pre-formatted, no further interpolation */
-  sourceLabel: string;
+  /** Optional small phrase rendered before the source chip (e.g.
+   *  "from " for `child_context`). Empty for the other kinds. */
+  sourcePrefix: string;
+  /** Conversation id of the source — rendered as a clickable
+   *  `ConversationRef` chip so the reader can jump to the original
+   *  conversation (cross-workspace safe via `useConversationById`). */
+  sourceConversationId: string;
+  /** Optional secondary label appended after the chip with a `·`
+   *  separator (e.g. "@shiki", "by @Cindy"). Empty when the source
+   *  has no companion identity to surface. */
+  sourceAuthorLabel: string;
   /** raw body text rendered through Markdown when expanded */
   body: string;
   /** epoch ms of the original event, surfaced as relative time on
@@ -947,7 +957,19 @@ function ContextCardShell({
           {CONTEXT_KIND_TAG_ICON[model.kind]}
           {model.tagLabel}
         </span>
-        <span className="text-text-secondary">{model.sourceLabel}</span>
+        {model.sourcePrefix ? (
+          <span className="text-text-secondary">{model.sourcePrefix}</span>
+        ) : null}
+        <ConversationRef
+          id={model.sourceConversationId}
+          conversation={conversationRefsById?.get(model.sourceConversationId)}
+          onOpen={onOpenConversationRef}
+        />
+        {model.sourceAuthorLabel ? (
+          <span className="text-text-secondary">
+            · {model.sourceAuthorLabel}
+          </span>
+        ) : null}
         {model.timestamp !== null ? (
           <ContextCardRelativeTime epochMs={model.timestamp} />
         ) : null}
@@ -987,11 +1009,18 @@ function ContextCardShell({
   );
 }
 
-/** Muted fallback for legacy rows lacking enriched metadata. Single
- *  line of `message.content` plus a tiny kind tag so the reader still
- *  sees what flavor of context this was — strictly less informative
- *  than the enriched card but still distinguishable from generic
- *  narration. */
+/** Muted fallback for legacy rows lacking enriched metadata. Preserves
+ *  the kind tag + left accent line so the reader can still tell what
+ *  flavor of context this was — strictly less informative than the
+ *  enriched card (no clickable source chip, no toggle / blockquote /
+ *  timestamp) but still distinguishable from generic narration.
+ *
+ *  Layout note: tag goes on its own row above the body. The body is a
+ *  block `<div>` because `Markdown` renders block-level elements
+ *  (`<p>`, lists, etc.) — wrapping it in an inline `<span>` produces
+ *  invalid DOM that browsers silently restructure (PR-5 review by
+ *  @Cindy on commit 3236554).
+ */
 function ContextCardLegacyFallback({
   kind,
   tagLabel,
@@ -1018,15 +1047,17 @@ function ContextCardLegacyFallback({
         CONTEXT_KIND_BORDER[kind]
       }
     >
-      <span
-        className={
-          'mr-1.5 inline-flex items-center gap-1 rounded-sm px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider ' +
-          CONTEXT_KIND_TAG_BG[kind]
-        }
-      >
-        {tagLabel}
-      </span>
-      <span className="italic">
+      <div className="mb-1">
+        <span
+          className={
+            'inline-flex items-center gap-1 rounded-sm px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider ' +
+            CONTEXT_KIND_TAG_BG[kind]
+          }
+        >
+          {tagLabel}
+        </span>
+      </div>
+      <div className="italic">
         <Markdown
           content={message.content}
           conversationRefsById={conversationRefsById}
@@ -1034,7 +1065,7 @@ function ContextCardLegacyFallback({
           channelsByName={channelsByName}
           onOpenChannelRef={onOpenChannelRef}
         />
-      </span>
+      </div>
     </div>
   );
 }
@@ -1077,7 +1108,9 @@ function threadAnchorModel(meta: ThreadAnchorMetadata): ContextCardModel {
   return {
     kind: 'quoted',
     tagLabel: 'Quoted',
-    sourceLabel: `#${meta.quoted_channel_name} · ${authorLabel}`,
+    sourcePrefix: '',
+    sourceConversationId: meta.quoted_conversation_id,
+    sourceAuthorLabel: authorLabel,
     body: meta.quoted_content,
     timestamp: meta.quoted_created_at,
     defaultExpanded: true,
@@ -1113,7 +1146,9 @@ function childContextModel(meta: ChildContextMetadata): ContextCardModel {
   return {
     kind: 'inherited',
     tagLabel: 'Inherited',
-    sourceLabel: `from #${meta.parent_title}`,
+    sourcePrefix: 'from ',
+    sourceConversationId: meta.parent_conversation_id,
+    sourceAuthorLabel: '',
     body: meta.summary,
     timestamp: null,
     defaultExpanded: false,
@@ -1149,14 +1184,15 @@ function channelContextModel(
   meta: ChannelContextMetadata,
   content: string,
 ): ContextCardModel {
-  const sourceTitle = meta.source_conversation_title ?? 'another conversation';
   const agentLabel = meta.created_by_agent_name
-    ? `@${meta.created_by_agent_name}`
-    : 'an agent';
+    ? `by @${meta.created_by_agent_name}`
+    : 'by an agent';
   return {
     kind: 'spawned',
     tagLabel: 'Spawned-from',
-    sourceLabel: `#${sourceTitle} · by ${agentLabel}`,
+    sourcePrefix: '',
+    sourceConversationId: meta.source_conversation_id,
+    sourceAuthorLabel: agentLabel,
     body: content,
     timestamp: null,
     defaultExpanded: false,

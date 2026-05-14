@@ -92,6 +92,7 @@ describe('SystemMessage channel refs', () => {
   function renderSystem(
     msg: import('@silverhand/shared').MessageDto,
     channelsByName: Map<string, ChannelReference | null>,
+    conversationRefsById?: Map<string, ConversationReference>,
   ): string {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     return renderToStaticMarkup(
@@ -104,6 +105,8 @@ describe('SystemMessage channel refs', () => {
           React.createElement(SystemMessage, {
             message: msg,
             channelsByName,
+            conversationRefsById,
+            onOpenConversationRef: () => undefined,
             onOpenChannelRef: () => undefined,
           }),
         ),
@@ -343,14 +346,21 @@ describe('SystemMessage channel refs', () => {
       quoted_agent_name: null,
       quoted_created_at: Date.now() - 2 * 60_000,
     });
-    const html = renderSystem(msg, new Map());
+    const refs = new Map<string, ConversationReference>([
+      ['conv-parent', { id: 'conv-parent', kind: 'channel', title: 'version3' }],
+    ]);
+    const html = renderSystem(msg, new Map(), refs);
     expect(html).toContain('data-context-card="quoted"');
     expect(html).toContain('border-l-accent');
     // Kind tag uppercase + colored bg.
     expect(html).toContain('Quoted');
     expect(html).toContain('bg-accent');
-    // Source chip embeds parent channel + author.
-    expect(html).toContain('#version3');
+    // Source chip is a clickable ConversationRef pointing at the
+    // parent conversation; the prop fast path resolves to the channel
+    // title so the chip shows "version3" (the leading # is rendered
+    // as a separate Hash icon).
+    expect(html).toContain('data-conversation-ref="conv-parent"');
+    expect(html).toContain('>version3<');
     // Default expanded → blockquote rendered, no toggle.
     expect(html).toContain('<blockquote');
     expect(html).toContain('我们的 system message');
@@ -364,21 +374,27 @@ describe('SystemMessage channel refs', () => {
       summary:
         'PR-1 design discussed in 5 rounds; PR-A registry + drift guard is structural prelude.',
     });
-    const html = renderSystem(msg, new Map());
+    const refs = new Map<string, ConversationReference>([
+      [
+        'conv-parent',
+        { id: 'conv-parent', kind: 'channel', title: 'feature/cli design' },
+      ],
+    ]);
+    const html = renderSystem(msg, new Map(), refs);
     expect(html).toContain('data-context-card="inherited"');
     expect(html).toContain('border-l-success');
     expect(html).toContain('Inherited');
     expect(html).toContain('bg-success');
-    // Source chip says "from #<parent_title>".
-    expect(html).toContain('from #feature/cli design');
+    // Source chip "from " prefix + clickable ConversationRef.
+    expect(html).toContain('from ');
+    expect(html).toContain('data-conversation-ref="conv-parent"');
+    expect(html).toContain('>feature/cli design<');
     // Default collapsed → expand toggle present.
     expect(html).toContain('data-context-toggle="expand"');
-    // Collapsed body uses muted text-secondary.
-    expect(html).toContain('text-text-secondary');
     expect(html).not.toContain('<blockquote');
   });
 
-  it('renders channel_context as a Spawned-from card with source chip', () => {
+  it('renders channel_context as a Spawned-from card with clickable source chip', () => {
     const msg = makeSystemMessage(
       'channel_context',
       {
@@ -389,20 +405,27 @@ describe('SystemMessage channel refs', () => {
       },
       'Continue the system-message redesign discussion in a focused channel.',
     );
-    const html = renderSystem(msg, new Map());
+    const refs = new Map<string, ConversationReference>([
+      ['conv-source', { id: 'conv-source', kind: 'channel', title: 'version3' }],
+    ]);
+    const html = renderSystem(msg, new Map(), refs);
     expect(html).toContain('data-context-card="spawned"');
     expect(html).toContain('border-l-warning');
     expect(html).toContain('Spawned-from');
     expect(html).toContain('bg-warning');
-    expect(html).toContain('#version3');
-    expect(html).toContain('@Cindy');
+    expect(html).toContain('data-conversation-ref="conv-source"');
+    expect(html).toContain('>version3<');
+    expect(html).toContain('by @Cindy');
     expect(html).toContain('data-context-toggle="expand"');
   });
 
-  it('channel_context falls back gracefully when source_conversation_title / agent_name are absent', () => {
-    // Pre-PR-5 producer rows only have id pairs. The renderer should
-    // still pick the spawned card and use generic source labels rather
-    // than degrading to legacy fallback.
+  it('channel_context falls back gracefully when source title / agent_name are absent', () => {
+    // Pre-PR-5 producer rows only have id pairs (no snapshot title /
+    // agent_name). The renderer still keeps the spawned card chrome:
+    // ConversationRef itself handles title resolution via
+    // useConversationById — under SSR with no map and no resolved
+    // hook, it falls back to the `#conv:<short>` short label, so the
+    // chip stays clickable. The agent suffix degrades to "by an agent".
     const msg = makeSystemMessage(
       'channel_context',
       {
@@ -414,8 +437,9 @@ describe('SystemMessage channel refs', () => {
     const html = renderSystem(msg, new Map());
     expect(html).toContain('data-context-card="spawned"');
     expect(html).toContain('Spawned-from');
-    expect(html).toContain('another conversation');
-    expect(html).toContain('an agent');
+    // Chip is still present + clickable, just shows the short id.
+    expect(html).toContain('data-conversation-ref="conv-source"');
+    expect(html).toContain('by an agent');
   });
 
   it('thread_anchor without enriched metadata falls back to legacy muted row', () => {
