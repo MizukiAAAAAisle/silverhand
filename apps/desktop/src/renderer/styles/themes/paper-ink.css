@@ -4,11 +4,9 @@
    NavRail 是一方"墨砖"，selected 是落在纸上的淡墨晕；sidebar 只
    带一丝几乎不可见的墨气，让纸自己发声。彻底放弃之前作为 brand 的
    亮黄——黄是文具品牌色，不是 paper-ink 该有的语义。
-   Default theme — also serves as :root so first paint has tokens.
    See docs/design-new-theme.md for the full token contract.
    ================================================================ */
 
-:root,
 [data-theme='paper-ink'] {
   /* ── Backgrounds (aged-paper ladder) ──
      base = chat 主区/全局窗口；primary = sidebar/composer，比 base 沉

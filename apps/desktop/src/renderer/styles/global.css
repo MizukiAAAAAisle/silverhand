@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /* Themes — each one defines the full token contract.
-   The default (paper-ink) doubles as :root to avoid FOUC on first paint. */
+   The default (warm-script) doubles as :root to avoid FOUC on first paint. */
 @import "./themes/paper-ink.css";
 @import "./themes/warm-coral.css";
 @import "./themes/warm-script.css";

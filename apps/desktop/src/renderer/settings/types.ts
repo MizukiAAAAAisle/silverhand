@@ -10,7 +10,7 @@ export interface AppearanceSettings {
 }
 
 export const DEFAULT_APPEARANCE: AppearanceSettings = {
-  theme: 'paper-ink',
+  theme: 'warm-script',
 };
 
 export interface LayoutSettings {
