@@ -364,7 +364,12 @@ export class ThreadService {
           fromKind: 'system',
           content:
             `Inherited context from parent channel '${parent.title}': ${input.contextSummary}`,
-          metadata: { subtype: systemSubtype('child_context') },
+          metadata: {
+            subtype: systemSubtype('child_context'),
+            parent_conversation_id: parent.id,
+            parent_title: parent.title,
+            summary: input.contextSummary,
+          },
           deliverTo: spawnerAgentId,
         },
         {

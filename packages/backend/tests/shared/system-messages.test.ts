@@ -4,11 +4,14 @@ import {
   SYSTEM_SUBTYPES,
   TASK_MUTATION_KINDS,
   TASK_SUBTYPES,
+  readChannelContextMetadata,
+  readChildContextMetadata,
   readScheduleFireMetadata,
   readSessionClearedMetadata,
   readSubtype,
   readTaskSystemMetadata,
   readTaskSystemMetadataPartial,
+  readThreadAnchorMetadata,
   resolveSubtype,
   systemSubtype,
   taskSystemSubtype,
@@ -307,5 +310,129 @@ describe('readScheduleFireMetadata', () => {
   it('returns null for null/undefined', () => {
     expect(readScheduleFireMetadata(null)).toBeNull();
     expect(readScheduleFireMetadata(undefined)).toBeNull();
+  });
+});
+
+describe('readThreadAnchorMetadata', () => {
+  const valid = {
+    subtype: 'thread_anchor',
+    quoted_message_id: 'msg-1',
+    quoted_conversation_id: 'conv-1',
+    quoted_channel_name: 'version3',
+    quoted_content: 'Quoted body text',
+    quoted_from_kind: 'user' as const,
+    quoted_from_agent_id: null,
+    quoted_from_user_id: 'local',
+    quoted_agent_name: null,
+    quoted_created_at: 1_700_000_000_000,
+  };
+
+  it('parses full thread_anchor metadata', () => {
+    const m = readThreadAnchorMetadata(valid);
+    expect(m).not.toBeNull();
+    expect(m!.quoted_channel_name).toBe('version3');
+    expect(m!.quoted_from_kind).toBe('user');
+  });
+
+  it('accepts agent-authored quotes (agent id + name set, user id null)', () => {
+    const m = readThreadAnchorMetadata({
+      ...valid,
+      quoted_from_kind: 'agent',
+      quoted_from_agent_id: 'a-alice',
+      quoted_from_user_id: null,
+      quoted_agent_name: 'Alice',
+    });
+    expect(m).not.toBeNull();
+    expect(m!.quoted_from_kind).toBe('agent');
+    expect(m!.quoted_agent_name).toBe('Alice');
+  });
+
+  it('rejects unsupported quoted_from_kind values', () => {
+    expect(
+      readThreadAnchorMetadata({ ...valid, quoted_from_kind: 'bot' }),
+    ).toBeNull();
+  });
+
+  it('rejects rows missing required fields', () => {
+    const { quoted_content: _, ...stripped } = valid;
+    expect(readThreadAnchorMetadata(stripped)).toBeNull();
+  });
+
+  it('returns null for null/undefined', () => {
+    expect(readThreadAnchorMetadata(null)).toBeNull();
+    expect(readThreadAnchorMetadata(undefined)).toBeNull();
+  });
+});
+
+describe('readChildContextMetadata', () => {
+  const valid = {
+    subtype: 'child_context',
+    parent_conversation_id: 'conv-parent',
+    parent_title: 'feature/cli design',
+    summary: 'PR-1 design discussed in 5 rounds...',
+  };
+
+  it('parses full child_context metadata', () => {
+    const m = readChildContextMetadata(valid);
+    expect(m).not.toBeNull();
+    expect(m!.parent_title).toBe('feature/cli design');
+  });
+
+  it('rejects rows missing summary (legacy pre-PR-5)', () => {
+    const { summary: _, ...stripped } = valid;
+    expect(readChildContextMetadata(stripped)).toBeNull();
+  });
+
+  it('rejects rows with wrong subtype', () => {
+    expect(
+      readChildContextMetadata({ ...valid, subtype: 'thread_anchor' }),
+    ).toBeNull();
+  });
+
+  it('returns null for null/undefined', () => {
+    expect(readChildContextMetadata(null)).toBeNull();
+    expect(readChildContextMetadata(undefined)).toBeNull();
+  });
+});
+
+describe('readChannelContextMetadata', () => {
+  const valid = {
+    subtype: 'channel_context',
+    source_conversation_id: 'conv-source',
+    source_conversation_title: 'version3',
+    created_by_agent_id: 'a-cindy',
+    created_by_agent_name: 'Cindy',
+  };
+
+  it('parses full channel_context metadata', () => {
+    const m = readChannelContextMetadata(valid);
+    expect(m).not.toBeNull();
+    expect(m!.source_conversation_title).toBe('version3');
+    expect(m!.created_by_agent_name).toBe('Cindy');
+  });
+
+  it('accepts legacy rows missing source_conversation_title / agent name', () => {
+    const m = readChannelContextMetadata({
+      subtype: 'channel_context',
+      source_conversation_id: 'conv-source',
+      created_by_agent_id: 'a-cindy',
+    });
+    expect(m).not.toBeNull();
+    expect(m!.source_conversation_title).toBeUndefined();
+    expect(m!.created_by_agent_name).toBeUndefined();
+  });
+
+  it('rejects rows missing required source_conversation_id', () => {
+    expect(
+      readChannelContextMetadata({
+        subtype: 'channel_context',
+        created_by_agent_id: 'a-cindy',
+      }),
+    ).toBeNull();
+  });
+
+  it('returns null for null/undefined', () => {
+    expect(readChannelContextMetadata(null)).toBeNull();
+    expect(readChannelContextMetadata(undefined)).toBeNull();
   });
 });

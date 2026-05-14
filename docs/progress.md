@@ -1729,3 +1729,40 @@ DB 1646 条 task_* 系统消息（占系统消息总量约 95%）从居中斜体
 
 后续 PR：PR-5 channel_context / child_context / thread_anchor 统一 quote-card 系列；PR-6 onboarding badge / rename ↻ icon。
 
+## 2026-05-15 — System message UI redesign · PR-5（context-card 系列统一）
+
+`channel_context` / `child_context` / `thread_anchor` 三个 subtype 现状渲染不一致——`channel_context` 走居中 italic narration，另外两个走 `CollapsibleNarration`（chevron + 第一行 truncate）。视觉无差，用户分不清"这是 quoted message" vs "inherited context" vs "spawned-from origin"。本 PR 把三种合并成一套 context-card 系列：左侧 2px accent 线（kind 不同色）+ kind tag（uppercase 小标签）+ source chip + collapsible body，与现有 `MentionCcCard` / `ThreadSummaryCard` 视觉同源（共用 `bg-bg-floating` + 左侧 accent 线模式）。
+
+**Schema 扩展**（`packages/shared/src/system-messages.ts`）：
+
+- 新 `ThreadAnchorMetadataSchema`：discriminated `quoted_from_kind: user|agent|system` + `quoted_message_id` / `quoted_conversation_id` / `quoted_channel_name` / `quoted_content` / `quoted_from_agent_id` (nullable) / `quoted_from_user_id` (nullable) / `quoted_agent_name` (nullable) / `quoted_created_at`。原 producer 已经写完整字段，PR-5 只是套上 zod schema。
+- 新 `ChildContextMetadataSchema`：`{subtype, parent_conversation_id, parent_title, summary}`。原 producer 只写 `subtype`，本 PR 加三字段；`message.content` 仍保留 `Inherited context from parent channel '<title>': <summary>` 的 imperative prose（agent stdin 读它）。
+- 新 `ChannelContextMetadataSchema`：`{subtype, source_conversation_id, source_conversation_title?, created_by_agent_id, created_by_agent_name?}`。原 producer 已写 id 对，本 PR 加 snapshot 的 title + agent name。`source_conversation_title` 和 `created_by_agent_name` optional，兼容 PR-5 之前的老行——缺时 renderer 用 `another conversation` / `an agent` 兜底，不退化到 legacy fallback。
+- 三个 `read*Metadata` 防御解析；`safeParse` fail → null → renderer 走 legacy fallback（左 accent 线 + kind tag + 一行 italic content，丢失 source chip / blockquote / collapsible 行为）。
+
+**Producer 改造**：
+
+- `thread-service.ts:createThreadFromAgent` 给 `child_context` metadata 加 `parent_conversation_id` / `parent_title` / `summary`（同 input 拿）。
+- `channel-service.ts:createChannel` seed 路径在事务里 `this.conversations.get(input.actor.conversationId)` + `this.agents.get(input.actor.agentId)`，把 `source_conversation_title` 和 `created_by_agent_name` snapshot 进 metadata（之后 source 改名/归档不影响 chip 显示）。
+- `thread-service.ts:createThreadFromMessage` 的 `thread_anchor` metadata 不动——本来就齐全。
+
+**Renderer 改造**（`apps/desktop/src/renderer/components/chat/SystemMessage.tsx`）：
+
+- 三个 registry entry（`channel_context` / `child_context` / `thread_anchor`）从 `GenericNarrationFallback` / `CollapsibleNarration` 切到独立的 `ChannelContextCard` / `ChildContextCard` / `ThreadAnchorCard`。
+- 每个 card 解析自己的 metadata，构造 `ContextCardModel`（kind + tagLabel + sourceLabel + body + timestamp + defaultExpanded + blockquote），调 `ContextCardShell` 出 chrome；解析 fail → `ContextCardLegacyFallback`。
+- `ContextCardShell` 三种 kind 走不同 accent 色：`quoted = bg-accent` (ink)、`inherited = bg-success` (green)、`spawned = bg-warning` (amber)。Cindy 视觉规范（msg `AjrWQyiFyq08zMya`）严格执行：accent 色仅出现在 2px 左线 + kind tag 的 bg，body 全部 neutral text。
+- `thread_anchor` defaultExpanded=true + `<blockquote>` 包正文（quote IS the point of the row）；其余两种默认 collapsed，header 右侧 `expand/collapse` toggle。
+- 时间戳用 `useRelativeTime`（hook 调用必须无条件，所以 `ContextCardRelativeTime` 子组件包一层，仅在 `model.timestamp !== null` 时挂载）。
+- `data-context-card={kind}` / `data-context-card-legacy="1"` / `data-context-toggle={'expand'|'collapse'}` 作 stable test selector。
+
+**测试**：
+
+- shared `system-messages.test.ts` +14：thread_anchor full parse + agent-quote variant + 拒绝 wrong from_kind + 拒绝缺必填 + null/undefined；child_context 4 测；channel_context 4 测（含 legacy 行 title/name 缺省容忍）。
+- backend `thread-service.test.ts` `createThreadFromMessage` test 加 thread_anchor producer round-trip（`readThreadAnchorMetadata` 验证 `quoted_message_id` / `quoted_conversation_id` / `quoted_content` / `quoted_from_kind`）；`createThreadFromAgent` test 加 child_context producer round-trip（验证 `parent_conversation_id` / `parent_title` / `summary`）。
+- backend `channel-service.test.ts` seed 路径加 channel_context producer round-trip（验证 `source_conversation_id` / `source_conversation_title` / `created_by_agent_id` / `created_by_agent_name` 全字段）。
+- desktop `Markdown.test.ts` +6：thread_anchor 默认展开 blockquote 无 toggle；child_context inherited tag + collapsed + expand toggle；channel_context spawned tag + source chip 完整；channel_context legacy（缺 title/name）兜底 `another conversation` / `an agent`；thread_anchor legacy fallback `data-context-card-legacy="1"` 无 blockquote；child_context legacy fallback。
+
+**质量门**：4 包 typecheck ✅；backend 672/672（+14）；desktop 155/155（+6）。
+
+后续 PR：PR-6 onboarding badge / rename ↻ icon。
+

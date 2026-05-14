@@ -325,6 +325,127 @@ describe('SystemMessage channel refs', () => {
     expect(html).not.toContain('data-pill="fired"');
   });
 
+  // PR-5: thread_anchor / child_context / channel_context unified
+  // context-card series. Each renders with a left-accent border per
+  // kind, an uppercase kind tag, a source chip, and a body that's
+  // collapsible (default-expanded only for thread_anchor — the quote
+  // body IS the point of the row).
+
+  it('renders thread_anchor as a Quoted card with default-expanded blockquote', () => {
+    const msg = makeSystemMessage('thread_anchor', {
+      quoted_message_id: 'msg-orig',
+      quoted_conversation_id: 'conv-parent',
+      quoted_channel_name: 'version3',
+      quoted_content: '我们的 system message 渲染太朴素了，能不能优化下 UI？',
+      quoted_from_kind: 'user',
+      quoted_from_agent_id: null,
+      quoted_from_user_id: 'local',
+      quoted_agent_name: null,
+      quoted_created_at: Date.now() - 2 * 60_000,
+    });
+    const html = renderSystem(msg, new Map());
+    expect(html).toContain('data-context-card="quoted"');
+    expect(html).toContain('border-l-accent');
+    // Kind tag uppercase + colored bg.
+    expect(html).toContain('Quoted');
+    expect(html).toContain('bg-accent');
+    // Source chip embeds parent channel + author.
+    expect(html).toContain('#version3');
+    // Default expanded → blockquote rendered, no toggle.
+    expect(html).toContain('<blockquote');
+    expect(html).toContain('我们的 system message');
+    expect(html).not.toContain('data-context-toggle="expand"');
+  });
+
+  it('renders child_context as an Inherited card collapsed by default', () => {
+    const msg = makeSystemMessage('child_context', {
+      parent_conversation_id: 'conv-parent',
+      parent_title: 'feature/cli design',
+      summary:
+        'PR-1 design discussed in 5 rounds; PR-A registry + drift guard is structural prelude.',
+    });
+    const html = renderSystem(msg, new Map());
+    expect(html).toContain('data-context-card="inherited"');
+    expect(html).toContain('border-l-success');
+    expect(html).toContain('Inherited');
+    expect(html).toContain('bg-success');
+    // Source chip says "from #<parent_title>".
+    expect(html).toContain('from #feature/cli design');
+    // Default collapsed → expand toggle present.
+    expect(html).toContain('data-context-toggle="expand"');
+    // Collapsed body uses muted text-secondary.
+    expect(html).toContain('text-text-secondary');
+    expect(html).not.toContain('<blockquote');
+  });
+
+  it('renders channel_context as a Spawned-from card with source chip', () => {
+    const msg = makeSystemMessage(
+      'channel_context',
+      {
+        source_conversation_id: 'conv-source',
+        source_conversation_title: 'version3',
+        created_by_agent_id: 'a-cindy',
+        created_by_agent_name: 'Cindy',
+      },
+      'Continue the system-message redesign discussion in a focused channel.',
+    );
+    const html = renderSystem(msg, new Map());
+    expect(html).toContain('data-context-card="spawned"');
+    expect(html).toContain('border-l-warning');
+    expect(html).toContain('Spawned-from');
+    expect(html).toContain('bg-warning');
+    expect(html).toContain('#version3');
+    expect(html).toContain('@Cindy');
+    expect(html).toContain('data-context-toggle="expand"');
+  });
+
+  it('channel_context falls back gracefully when source_conversation_title / agent_name are absent', () => {
+    // Pre-PR-5 producer rows only have id pairs. The renderer should
+    // still pick the spawned card and use generic source labels rather
+    // than degrading to legacy fallback.
+    const msg = makeSystemMessage(
+      'channel_context',
+      {
+        source_conversation_id: 'conv-source',
+        created_by_agent_id: 'a-cindy',
+      },
+      'seed body',
+    );
+    const html = renderSystem(msg, new Map());
+    expect(html).toContain('data-context-card="spawned"');
+    expect(html).toContain('Spawned-from');
+    expect(html).toContain('another conversation');
+    expect(html).toContain('an agent');
+  });
+
+  it('thread_anchor without enriched metadata falls back to legacy muted row', () => {
+    const msg = makeSystemMessage(
+      'thread_anchor',
+      {},
+      'Quoted from #version3 · @shiki: legacy quote body text.',
+    );
+    const html = renderSystem(msg, new Map());
+    expect(html).toContain('data-context-card-legacy="1"');
+    expect(html).toContain('border-l-accent');
+    expect(html).toContain('Quoted');
+    expect(html).toContain('legacy quote body text');
+    // No structured chip / blockquote.
+    expect(html).not.toContain('<blockquote');
+  });
+
+  it('child_context without summary metadata falls back to legacy muted row', () => {
+    const msg = makeSystemMessage(
+      'child_context',
+      {},
+      "Inherited context from parent channel 'feature/cli design': legacy summary",
+    );
+    const html = renderSystem(msg, new Map());
+    expect(html).toContain('data-context-card-legacy="1"');
+    expect(html).toContain('border-l-success');
+    expect(html).toContain('Inherited');
+    expect(html).toContain('legacy summary');
+  });
+
   // PR-1 added three-state subtype resolution. Legacy DB-resident
   // subtypes (`join`, `session_context`, `child_summary`) and unknown
   // strings both fall through to generic narration — neither pretends

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readChannelContextMetadata } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
@@ -229,6 +230,18 @@ describe('ChannelService.createChannel', () => {
 
       const msgs = t.messages.listForConversation(result.channel.id);
       expect(msgs.map(m => m.content)).toEqual(['context', 'initial']);
+      // PR-5 producer round-trip: channel_context metadata must
+      // satisfy ChannelContextMetadataSchema and snapshot the source
+      // conversation title + creator agent name so the renderer can
+      // pull a Spawned-from chip without re-querying.
+      const channelCtxParsed = readChannelContextMetadata(
+        msgs[0]!.metadata as Record<string, unknown>,
+      );
+      expect(channelCtxParsed).not.toBeNull();
+      expect(channelCtxParsed!.source_conversation_id).toBe(t.source.id);
+      expect(channelCtxParsed!.source_conversation_title).toBe(t.source.title);
+      expect(channelCtxParsed!.created_by_agent_id).toBe(t.alice.id);
+      expect(channelCtxParsed!.created_by_agent_name).toBe(t.alice.name);
       expect(t.fake.delivered).toEqual([
         { conversationId: result.channel.id, agentId: t.alice.id, messageId: msgs[0]!.id },
         { conversationId: result.channel.id, agentId: t.bob.id, messageId: msgs[1]!.id },

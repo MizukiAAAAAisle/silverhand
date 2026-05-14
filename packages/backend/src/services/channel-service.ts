@@ -234,6 +234,11 @@ export class ChannelService {
       let contextMsg: MessageDto | null = null;
       let promptMsg: MessageDto | null = null;
       if (input.seed && input.actor.kind === 'agent') {
+        // Snapshot source identity at insert time so the renderer can
+        // draw the Spawned-from chip without a follow-up join, even if
+        // the source conversation or agent is later renamed/archived.
+        const sourceConv = this.conversations.get(input.actor.conversationId);
+        const sourceAgent = this.agents.get(input.actor.agentId);
         contextMsg = this.messages.insertForConversation({
           conversationId: channel.id,
           fromKind: 'system',
@@ -241,7 +246,9 @@ export class ChannelService {
           metadata: {
             subtype: systemSubtype('channel_context'),
             source_conversation_id: input.actor.conversationId,
+            source_conversation_title: sourceConv?.title ?? undefined,
             created_by_agent_id: input.actor.agentId,
+            created_by_agent_name: sourceAgent?.name ?? undefined,
           },
         });
         promptMsg = this.messages.insertForConversation({

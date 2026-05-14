@@ -366,3 +366,145 @@ export function readScheduleFireMetadata(
   const parsed = ScheduleFireMetadataSchema.safeParse(metadata);
   return parsed.success ? parsed.data : null;
 }
+
+// ── context-card series (PR-5) ───────────────────────────────────────
+//
+// `thread_anchor`, `child_context`, and `channel_context` form a
+// unified context-card series. Their producer-visible difference is
+// the relationship to a parent conversation:
+//
+//  - `thread_anchor` ("Quoted"):     the new thread quotes a single
+//    message from the parent channel — body = the quoted text.
+//  - `child_context` ("Inherited"):  a sub-thread inherits a free-form
+//    summary the spawner wrote about the parent's prior context.
+//  - `channel_context` ("Spawned-from"): a new top-level channel
+//    inherits a seed body authored by the spawning agent in another
+//    conversation.
+//
+// All three share the same render shape (left accent line, kind tag,
+// source chip, collapsible body) but with different accent colors and
+// tag labels. Each carries enough metadata that the renderer never
+// has to re-parse `message.content` to identify the source — the
+// content remains intact for agent stdin (which reads imperative
+// prose), while metadata feeds the human banner.
+
+/** Allowed `from_kind` values for the message a `thread_anchor`
+ *  quotes. `system` is included because edge cases — a thread spawned
+ *  off a system message — are technically reachable. */
+export const QuotedFromKindSchema = z.enum(['user', 'agent', 'system']);
+export type QuotedFromKind = z.infer<typeof QuotedFromKindSchema>;
+
+/**
+ * Metadata shape for `thread_anchor` system messages — emitted as the
+ * first seed when a thread is created off a specific parent message
+ * (right-click "Reply as thread" / "Discuss in thread").
+ *
+ *  - `quoted_message_id` / `quoted_conversation_id`: pointer at the
+ *    original message + parent conversation; lets the renderer offer
+ *    "jump to original" without re-querying.
+ *  - `quoted_channel_name`: pre-rendered parent label (workspace name
+ *    or channel title) for the source chip.
+ *  - `quoted_content`: full text of the original message, preserved
+ *    inline so the body stays visible after the parent is archived
+ *    or the original message is later edited.
+ *  - `quoted_from_kind` / `quoted_from_agent_id` / `quoted_from_user_id`
+ *    / `quoted_agent_name`: identity of the original author. Agent
+ *    rows carry both id+name; user rows carry id (legacy rows may
+ *    have null id).
+ *  - `quoted_created_at`: epoch ms of the original message — surfaced
+ *    as the "<X ago>" right-aligned timestamp.
+ */
+export const ThreadAnchorMetadataSchema = z.object({
+  subtype: z.literal('thread_anchor'),
+  quoted_message_id: z.string(),
+  quoted_conversation_id: z.string(),
+  quoted_channel_name: z.string(),
+  quoted_content: z.string(),
+  quoted_from_kind: QuotedFromKindSchema,
+  quoted_from_agent_id: z.string().nullable(),
+  quoted_from_user_id: z.string().nullable(),
+  quoted_agent_name: z.string().nullable(),
+  quoted_created_at: z.number(),
+});
+export type ThreadAnchorMetadata = z.infer<typeof ThreadAnchorMetadataSchema>;
+
+/** Defensive parse for thread_anchor metadata. Returns `null` for
+ *  legacy rows whose metadata predates this schema; renderer falls
+ *  back to muted narration over `message.content`. */
+export function readThreadAnchorMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+): ThreadAnchorMetadata | null {
+  if (!metadata) return null;
+  const parsed = ThreadAnchorMetadataSchema.safeParse(metadata);
+  return parsed.success ? parsed.data : null;
+}
+
+/**
+ * Metadata shape for `child_context` system messages — emitted as the
+ * first seed when an agent spawns a sub-thread with a free-form
+ * `contextSummary`. `message.content` keeps the imperative prose
+ * (`Inherited context from parent channel '<title>': <summary>`)
+ * because the spawner agent's stdin reads it; renderers consume the
+ * structured triple instead.
+ *
+ *  - `parent_conversation_id`: pointer at the parent channel for
+ *    "jump to original" affordances.
+ *  - `parent_title`: pre-rendered parent label for the source chip.
+ *  - `summary`: the agent-authored context blurb, without the
+ *    `Inherited context from parent channel '...': ` scaffolding.
+ */
+export const ChildContextMetadataSchema = z.object({
+  subtype: z.literal('child_context'),
+  parent_conversation_id: z.string(),
+  parent_title: z.string(),
+  summary: z.string(),
+});
+export type ChildContextMetadata = z.infer<typeof ChildContextMetadataSchema>;
+
+/** Defensive parse for child_context metadata. */
+export function readChildContextMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+): ChildContextMetadata | null {
+  if (!metadata) return null;
+  const parsed = ChildContextMetadataSchema.safeParse(metadata);
+  return parsed.success ? parsed.data : null;
+}
+
+/**
+ * Metadata shape for `channel_context` system messages — emitted as the
+ * first seed when an agent calls `silverhand channel create` and the
+ * service inserts the agent-authored `systemMessageBody` as the new
+ * channel's initial context. Renderer surfaces it as a Spawned-from
+ * card with a chip pointing back at the source conversation.
+ *
+ *  - `source_conversation_id`: pointer at the conversation the agent
+ *    spawned this channel from.
+ *  - `source_conversation_title`: pre-rendered source label for the
+ *    chip; legacy rows may omit it (renderer falls back to "another
+ *    conversation").
+ *  - `created_by_agent_id` / `created_by_agent_name`: identity of the
+ *    spawning agent. `created_by_agent_name` is new in PR-5 — legacy
+ *    rows fall back to "an agent" in the source chip.
+ *
+ * Note: the seed body lives in `message.content`. We do NOT mirror it
+ * into metadata — there's no producer-side scaffolding to strip (the
+ * agent wrote the body to stdout-cleanly), and duplicating it would
+ * just bloat the row.
+ */
+export const ChannelContextMetadataSchema = z.object({
+  subtype: z.literal('channel_context'),
+  source_conversation_id: z.string(),
+  source_conversation_title: z.string().optional(),
+  created_by_agent_id: z.string(),
+  created_by_agent_name: z.string().optional(),
+});
+export type ChannelContextMetadata = z.infer<typeof ChannelContextMetadataSchema>;
+
+/** Defensive parse for channel_context metadata. */
+export function readChannelContextMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+): ChannelContextMetadata | null {
+  if (!metadata) return null;
+  const parsed = ChannelContextMetadataSchema.safeParse(metadata);
+  return parsed.success ? parsed.data : null;
+}

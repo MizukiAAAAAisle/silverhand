@@ -3,6 +3,10 @@ import type {
   AgentRunTerminalReason,
   ServerConfig,
 } from '@silverhand/shared';
+import {
+  readChildContextMetadata,
+  readThreadAnchorMetadata,
+} from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
@@ -184,6 +188,17 @@ describe('ThreadService.createThreadFromMessage', () => {
         from_kind: 'system',
         metadata: expect.objectContaining({ subtype: 'thread_anchor' }),
       });
+      // PR-5 producer round-trip: thread_anchor metadata must satisfy
+      // ThreadAnchorMetadataSchema so the renderer can pull a Quoted
+      // card without re-parsing message.content.
+      const anchorParsed = readThreadAnchorMetadata(
+        seeded[0]!.metadata as Record<string, unknown>,
+      );
+      expect(anchorParsed).not.toBeNull();
+      expect(anchorParsed!.quoted_message_id).toBe(original.id);
+      expect(anchorParsed!.quoted_conversation_id).toBe(t.channel.id);
+      expect(anchorParsed!.quoted_content).toBe('Please inspect\nthis regression');
+      expect(anchorParsed!.quoted_from_kind).toBe('user');
       expect(seeded[1]).toMatchObject({
         from_kind: 'system',
         metadata: { subtype: 'onboarding' },
@@ -343,6 +358,16 @@ describe('ThreadService.createThreadFromAgent', () => {
         "Inherited context from parent channel 'source': perf regression",
         'profile the hot path',
       ]);
+      // PR-5 producer round-trip: child_context metadata must satisfy
+      // ChildContextMetadataSchema so the renderer can pull an
+      // Inherited card without re-parsing message.content.
+      const childParsed = readChildContextMetadata(
+        seeded[0]!.metadata as Record<string, unknown>,
+      );
+      expect(childParsed).not.toBeNull();
+      expect(childParsed!.parent_conversation_id).toBe(t.channel.id);
+      expect(childParsed!.parent_title).toBe('source');
+      expect(childParsed!.summary).toBe('perf regression');
       expect(t.fake.delivered).toEqual([
         {
           conversationId: result.thread.id,

@@ -1,6 +1,8 @@
 import { useState, type ComponentType } from 'react';
-import { AtSign, CheckCircle2, ChevronRight, ClipboardCheck, Clock, RotateCcw } from 'lucide-react';
+import { AtSign, CheckCircle2, ChevronRight, ClipboardCheck, Clock, Quote, RotateCcw, Sprout } from 'lucide-react';
 import {
+  type ChannelContextMetadata,
+  type ChildContextMetadata,
   type MessageDto,
   type ScheduleFireMetadata,
   type SessionClearedMetadata,
@@ -9,10 +11,14 @@ import {
   type TaskSubtype,
   type TaskSystemMetadata,
   type TaskSystemMetadataPartial,
+  type ThreadAnchorMetadata,
+  readChannelContextMetadata,
+  readChildContextMetadata,
   readScheduleFireMetadata,
   readSessionClearedMetadata,
   readTaskSystemMetadata,
   readTaskSystemMetadataPartial,
+  readThreadAnchorMetadata,
   resolveSubtype,
 } from '@silverhand/shared';
 import { useMessage } from '@/features/messages/hooks';
@@ -835,6 +841,329 @@ function ThreadSummaryCard({
   );
 }
 
+// ─── context-card series (PR-5) ───────────────────────────────────────
+//
+// `thread_anchor`, `child_context`, and `channel_context` share the
+// same render shape: left accent line (color per kind), kind tag,
+// source chip, collapsible body. Three thin subtype-specific shells
+// pull their metadata, normalize it into a `ContextCardModel`, and
+// hand off to `ContextCardShell` for the chrome.
+//
+// Cindy's visual rule (msg AjrWQyiFyq08zMya): kind accent color is
+// confined to the 2px left line + the small kind tag. The body itself
+// stays neutral text-primary so multiple stacked context cards don't
+// shout at the reader.
+
+type ContextCardKind = 'quoted' | 'inherited' | 'spawned';
+
+interface ContextCardModel {
+  kind: ContextCardKind;
+  /** uppercase tag label: "Quoted" / "Inherited" / "Spawned-from" */
+  tagLabel: string;
+  /** source chip text — pre-formatted, no further interpolation */
+  sourceLabel: string;
+  /** raw body text rendered through Markdown when expanded */
+  body: string;
+  /** epoch ms of the original event, surfaced as relative time on
+   *  the right of the header. `null` to suppress. */
+  timestamp: number | null;
+  /** when true, body opens expanded by default and the toggle is
+   *  hidden — used for `thread_anchor` since the quoted text IS the
+   *  point of the row. */
+  defaultExpanded: boolean;
+  /** when true, render the body inside a blockquote — currently only
+   *  `thread_anchor` (visually echoes "this is quoted text"). */
+  blockquote: boolean;
+}
+
+const CONTEXT_KIND_BORDER: Record<ContextCardKind, string> = {
+  quoted: 'border-l-accent',
+  inherited: 'border-l-success',
+  spawned: 'border-l-warning',
+};
+
+const CONTEXT_KIND_TAG_BG: Record<ContextCardKind, string> = {
+  quoted: 'bg-accent text-text-on-accent',
+  inherited: 'bg-success text-white',
+  spawned: 'bg-warning text-white',
+};
+
+const CONTEXT_KIND_TAG_ICON: Record<ContextCardKind, JSX.Element> = {
+  quoted: <Quote className="size-3" />,
+  inherited: <ChevronRight className="size-3" />,
+  spawned: <Sprout className="size-3" />,
+};
+
+/** Tiny wrapper so `useRelativeTime` only fires when there's a real
+ *  timestamp to render — keeps the hook call site unconditional. */
+function ContextCardRelativeTime({ epochMs }: { epochMs: number }): JSX.Element {
+  const { relative } = useRelativeTime(epochMs);
+  return <span className="text-text-muted">{relative}</span>;
+}
+
+/** Shared chrome for the three context-card subtypes. Renders
+ *  registry-flagged kind tag + source chip + optional timestamp on
+ *  the header line, then a collapsible body underneath. */
+function ContextCardShell({
+  model,
+  conversationRefsById,
+  onOpenConversationRef,
+  channelsByName,
+  onOpenChannelRef,
+}: {
+  model: ContextCardModel;
+  conversationRefsById?: Map<string, ConversationReference>;
+  onOpenConversationRef?: (id: string) => void;
+  channelsByName?: Map<string, ChannelReference | null>;
+  onOpenChannelRef?: (channelId: string) => void;
+}): JSX.Element {
+  const [expanded, setExpanded] = useState(model.defaultExpanded);
+  const collapsible = !model.defaultExpanded;
+  const bodyMarkdown = (
+    <Markdown
+      content={model.body}
+      conversationRefsById={conversationRefsById}
+      onOpenConversationRef={onOpenConversationRef}
+      channelsByName={channelsByName}
+      onOpenChannelRef={onOpenChannelRef}
+    />
+  );
+
+  return (
+    <div
+      data-context-card={model.kind}
+      className={
+        'mx-4 my-1 border-l-2 bg-bg-floating px-3 py-2 ' +
+        CONTEXT_KIND_BORDER[model.kind]
+      }
+    >
+      <div className="mb-1 flex items-center gap-1.5 text-xs text-text-muted">
+        <span
+          className={
+            'inline-flex items-center gap-1 rounded-sm px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider ' +
+            CONTEXT_KIND_TAG_BG[model.kind]
+          }
+        >
+          {CONTEXT_KIND_TAG_ICON[model.kind]}
+          {model.tagLabel}
+        </span>
+        <span className="text-text-secondary">{model.sourceLabel}</span>
+        {model.timestamp !== null ? (
+          <ContextCardRelativeTime epochMs={model.timestamp} />
+        ) : null}
+        {collapsible ? (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="ml-auto text-text-muted hover:text-text-secondary"
+            aria-expanded={expanded}
+            data-context-toggle={expanded ? 'collapse' : 'expand'}
+          >
+            {expanded ? 'collapse' : 'expand'}
+          </button>
+        ) : null}
+      </div>
+      <div
+        className={
+          'text-sm ' +
+          (expanded ? 'text-text-primary' : 'truncate text-text-secondary')
+        }
+      >
+        {expanded ? (
+          model.blockquote ? (
+            <blockquote className="border-l-2 border-border pl-2 text-text-secondary">
+              {bodyMarkdown}
+            </blockquote>
+          ) : (
+            bodyMarkdown
+          )
+        ) : (
+          // Plain text first line so markdown blocks (lists, headings)
+          // don't break the single-line clamp.
+          <span>{firstLine(model.body)}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Muted fallback for legacy rows lacking enriched metadata. Single
+ *  line of `message.content` plus a tiny kind tag so the reader still
+ *  sees what flavor of context this was — strictly less informative
+ *  than the enriched card but still distinguishable from generic
+ *  narration. */
+function ContextCardLegacyFallback({
+  kind,
+  tagLabel,
+  message,
+  conversationRefsById,
+  onOpenConversationRef,
+  channelsByName,
+  onOpenChannelRef,
+}: {
+  kind: ContextCardKind;
+  tagLabel: string;
+  message: MessageDto;
+  conversationRefsById?: Map<string, ConversationReference>;
+  onOpenConversationRef?: (id: string) => void;
+  channelsByName?: Map<string, ChannelReference | null>;
+  onOpenChannelRef?: (channelId: string) => void;
+}): JSX.Element {
+  return (
+    <div
+      data-context-card={kind}
+      data-context-card-legacy="1"
+      className={
+        'mx-4 my-1 border-l-2 bg-bg-floating px-3 py-2 text-xs text-text-muted ' +
+        CONTEXT_KIND_BORDER[kind]
+      }
+    >
+      <span
+        className={
+          'mr-1.5 inline-flex items-center gap-1 rounded-sm px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider ' +
+          CONTEXT_KIND_TAG_BG[kind]
+        }
+      >
+        {tagLabel}
+      </span>
+      <span className="italic">
+        <Markdown
+          content={message.content}
+          conversationRefsById={conversationRefsById}
+          onOpenConversationRef={onOpenConversationRef}
+          channelsByName={channelsByName}
+          onOpenChannelRef={onOpenChannelRef}
+        />
+      </span>
+    </div>
+  );
+}
+
+function ThreadAnchorCard(props: RendererProps): JSX.Element {
+  const meta = readThreadAnchorMetadata(
+    (props.message.metadata ?? null) as Record<string, unknown> | null,
+  );
+  if (!meta) {
+    return (
+      <ContextCardLegacyFallback
+        kind="quoted"
+        tagLabel="Quoted"
+        {...props}
+      />
+    );
+  }
+  return (
+    <ContextCardShell
+      model={threadAnchorModel(meta)}
+      conversationRefsById={props.conversationRefsById}
+      onOpenConversationRef={props.onOpenConversationRef}
+      channelsByName={props.channelsByName}
+      onOpenChannelRef={props.onOpenChannelRef}
+    />
+  );
+}
+
+function threadAnchorModel(meta: ThreadAnchorMetadata): ContextCardModel {
+  let authorLabel: string;
+  if (meta.quoted_from_kind === 'agent') {
+    authorLabel = meta.quoted_agent_name
+      ? `@${meta.quoted_agent_name}`
+      : '@agent';
+  } else if (meta.quoted_from_kind === 'user') {
+    authorLabel = `@${formatUserDisplayName(meta.quoted_from_user_id)}`;
+  } else {
+    authorLabel = 'system';
+  }
+  return {
+    kind: 'quoted',
+    tagLabel: 'Quoted',
+    sourceLabel: `#${meta.quoted_channel_name} · ${authorLabel}`,
+    body: meta.quoted_content,
+    timestamp: meta.quoted_created_at,
+    defaultExpanded: true,
+    blockquote: true,
+  };
+}
+
+function ChildContextCard(props: RendererProps): JSX.Element {
+  const meta = readChildContextMetadata(
+    (props.message.metadata ?? null) as Record<string, unknown> | null,
+  );
+  if (!meta) {
+    return (
+      <ContextCardLegacyFallback
+        kind="inherited"
+        tagLabel="Inherited"
+        {...props}
+      />
+    );
+  }
+  return (
+    <ContextCardShell
+      model={childContextModel(meta)}
+      conversationRefsById={props.conversationRefsById}
+      onOpenConversationRef={props.onOpenConversationRef}
+      channelsByName={props.channelsByName}
+      onOpenChannelRef={props.onOpenChannelRef}
+    />
+  );
+}
+
+function childContextModel(meta: ChildContextMetadata): ContextCardModel {
+  return {
+    kind: 'inherited',
+    tagLabel: 'Inherited',
+    sourceLabel: `from #${meta.parent_title}`,
+    body: meta.summary,
+    timestamp: null,
+    defaultExpanded: false,
+    blockquote: false,
+  };
+}
+
+function ChannelContextCard(props: RendererProps): JSX.Element {
+  const meta = readChannelContextMetadata(
+    (props.message.metadata ?? null) as Record<string, unknown> | null,
+  );
+  if (!meta) {
+    return (
+      <ContextCardLegacyFallback
+        kind="spawned"
+        tagLabel="Spawned-from"
+        {...props}
+      />
+    );
+  }
+  return (
+    <ContextCardShell
+      model={channelContextModel(meta, props.message.content)}
+      conversationRefsById={props.conversationRefsById}
+      onOpenConversationRef={props.onOpenConversationRef}
+      channelsByName={props.channelsByName}
+      onOpenChannelRef={props.onOpenChannelRef}
+    />
+  );
+}
+
+function channelContextModel(
+  meta: ChannelContextMetadata,
+  content: string,
+): ContextCardModel {
+  const sourceTitle = meta.source_conversation_title ?? 'another conversation';
+  const agentLabel = meta.created_by_agent_name
+    ? `@${meta.created_by_agent_name}`
+    : 'an agent';
+  return {
+    kind: 'spawned',
+    tagLabel: 'Spawned-from',
+    sourceLabel: `#${sourceTitle} · by ${agentLabel}`,
+    body: content,
+    timestamp: null,
+    defaultExpanded: false,
+    blockquote: false,
+  };
+}
+
 // ─── Registry ──────────────────────────────────────────────────────────
 
 /**
@@ -862,10 +1191,14 @@ const systemMessageRenderers: Record<SystemSubtype, SystemMessageRenderer> = {
   session_cleared: SessionClearedCard,
   // P1 (PR-4): flat banner with left warning accent + actionable pills.
   schedule_fire: ScheduleFireBanner,
-  // P1 (PR-5): unified context-card series.
-  channel_context: GenericNarrationFallback,
-  child_context: CollapsibleNarration,
-  thread_anchor: CollapsibleNarration,
+  // P1 (PR-5): unified context-card series — shared chrome (left
+  // accent line + kind tag + source chip + collapsible body), color
+  // per kind. Each subtype renderer parses its enriched metadata and
+  // falls back to a tagged single-line muted row when the row predates
+  // PR-5's metadata enrichment.
+  channel_context: ChannelContextCard,
+  child_context: ChildContextCard,
+  thread_anchor: ThreadAnchorCard,
   // P2 (PR-6): minor polish (badge, icon).
   onboarding: CollapsibleNarration,
   rename: GenericNarrationFallback,
