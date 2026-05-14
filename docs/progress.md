@@ -1588,3 +1588,29 @@ URL scheme：
 - 覆盖工具：`send_message`、`create_thread`、`close_thread`、`create_channel`、`list_tasks`、`create_tasks`、`claim_tasks`、`unclaim_task`、`update_task_status`。
 - 明确缺席工具：旧 `create_session` / `close_session`、history pull、memory/consensus、attachments。
 - 在 `CLAUDE.md` 增加维护约定：后续 MCP tool、schema、internal route、task 行为或 `platform-prompt.ts` 规则改动，必须同步 `docs/mcp-system.md`。
+
+---
+
+## 2026-05-15 — System message UI redesign · PR-1（subtype registry + drift guard）
+
+第一轮 UI 优化的结构前置。把"哪些 system message subtype 存在"从弱契约（producer 各自硬编码字符串、metadata 自由 JSON）抬到 shared 类型层 + 静态 drift guard，为后续 PR-2..PR-6 各自做 subtype-specific UI 改造铺路。**无视觉变更**——本 PR 只迁移渲染逻辑到 registry，沿用现有 3 卡 + 4 折叠 + 其余 narration。
+
+- **新文件 `packages/shared/src/system-messages.ts`**：单一来源。
+  - `SYSTEM_SUBTYPES`（13 项 const tuple）+ `SystemSubtype` union；`LEGACY_SUBTYPES`（3 项历史 DB 残留：`join` / `session_context` / `child_summary`）+ `LegacySystemSubtype`。
+  - `TASK_MUTATION_KINDS` + `TASK_SUBTYPES` 显式 4 元 tuple；`TaskSubtype` union。Pure-type `Assert<T extends true>` 双向断言钉死 `TaskSubtype === \`task_${TaskMutationKind}\``——加 kind 漏 subtype 字面量（或反之）会 typecheck fail。
+  - 两个 helper：`systemSubtype(name)`（identity，narrow argument 给 drift test grep）和 `taskSystemSubtype(kind)`（template-literal `task_${kind}` 唯一入口）。
+  - `resolveSubtype(raw)` 三态：`current`（registry 处理）/ `legacy`（fallback）/ `unknown`（fallback）。`null` / 缺失 metadata 归 unknown，不归 legacy。
+- **producer 改造**（11 个 call site，全部改用 helper）：
+  - `conversation-manager.ts:1103`（session_cleared）、`mention-cc.ts:125`（mention_cc）、`channel-service.ts:241`（channel_context）、`thread-service.ts:292/307/366/436`（thread_anchor / onboarding / child_context / thread_summary）、`schedule-service.ts:518`（schedule_fire）、`task-service.ts:1141`（`taskSystemSubtype(args.kind)` 替换 `task_${args.kind}` 模板字面量）、`routes.ts:516/586/1724`（onboarding / rename / 二次 onboarding）。
+- **renderer registry**：`apps/desktop/src/renderer/components/chat/SystemMessage.tsx` 重写。
+  - `systemMessageRenderers: Record<SystemSubtype, ComponentType<RendererProps>>`——TS exhaustiveness 钉死，新增 subtype 必须配对 renderer。
+  - 现有 3 卡（`MentionCcCard` / `SessionClearedCard` / `ThreadSummaryCard`）保留视觉、迁入 registry。现有 4 折叠（`onboarding` / `child_context` / `thread_anchor`）+ 1 已 retire 的 `child_summary` 简化为 `CollapsibleNarration` 组件。其余（`channel_context` / `schedule_fire` / `rename` / `task_*`）暂时落 `GenericNarrationFallback`，PR-2..PR-6 各自替换。
+  - **删 `inferSubtype`**——历史 onboarding 老 row 不再靠 content 前缀回退（用户确认丢）。legacy 与 unknown 都走 generic narration，不伪装。
+- **测试**：
+  - `packages/backend/tests/shared/system-messages.test.ts`（13 测）：常量唯一性、`taskSystemSubtype` 映射完整、`resolveSubtype` 三态、`readSubtype` metadata 防御解析。
+  - `packages/backend/tests/observability/system-message-drift.test.ts`（4 测）：静态扫描 backend src 里 `systemSubtype('…')` / `taskSystemSubtype('…')` 字面量参数，与 `SYSTEM_SUBTYPES`/`TASK_MUTATION_KINDS` 双向 diff，发现 producer 写未注册 subtype 或 registry 多余 entry 直接 fail。也容忍 `taskSystemSubtype(args.kind)` 这种动态调用（task-service.ts 实际用法）——只要存在动态调用就视为覆盖全部 `TASK_SUBTYPES`。
+  - `apps/desktop/src/renderer/components/chat/Markdown.test.ts` 加 3 测：legacy `child_summary` / `join` 走 generic narration（非 collapsible），pre-metadata 老 onboarding row（content 前缀但无 subtype）也走 generic narration（钉删 `inferSubtype` 的语义）。
+- **质量门**：4 包 typecheck 全绿；backend 636/636 pass（+17 新测）；desktop 132/132 pass（+3 新测）。
+
+后续 PR：PR-2 task event row + metadata schema 扩展（`task_message_id` / `actor` / `task_title` / `task_assignee`）；PR-3 session_cleared 退 toast；PR-4 schedule_fire 扁平 banner；PR-5 channel_context / child_context / thread_anchor 统一 quote-card 系列；PR-6 onboarding badge / rename ↻ icon。
+

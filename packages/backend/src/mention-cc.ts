@@ -1,4 +1,4 @@
-import { extractMentions } from '@silverhand/shared';
+import { extractMentions, systemSubtype } from '@silverhand/shared';
 import type {
   AgentDto,
   ConversationDto,
@@ -122,7 +122,7 @@ async function deliverOne(
     fromKind: 'system',
     content: renderMentionWrap(agent, opts),
     metadata: {
-      subtype: 'mention_cc',
+      subtype: systemSubtype('mention_cc'),
       source_workspace_id: opts.sourceWorkspace.id,
       source_workspace_name: opts.sourceWorkspace.name,
       source_conversation_id: opts.sourceConversation.id,

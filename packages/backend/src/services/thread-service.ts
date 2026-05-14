@@ -1,9 +1,10 @@
 import type { Database as Db } from 'better-sqlite3';
-import type {
-  AgentRunTerminalReason,
-  MessageDto,
-  ServerConfig,
-  ThreadDto,
+import {
+  type AgentRunTerminalReason,
+  type MessageDto,
+  type ServerConfig,
+  type ThreadDto,
+  systemSubtype,
 } from '@silverhand/shared';
 import type { BackendLogger } from '../context.js';
 import type { ConversationManager } from '../conversation-manager.js';
@@ -289,7 +290,7 @@ export class ThreadService {
           fromKind: 'system',
           content: quoteText,
           metadata: {
-            subtype: 'thread_anchor',
+            subtype: systemSubtype('thread_anchor'),
             quoted_message_id: original.id,
             quoted_conversation_id: parent.id,
             quoted_channel_name: parentLabel,
@@ -304,7 +305,7 @@ export class ThreadService {
         {
           fromKind: 'system',
           content: onboarding,
-          metadata: { subtype: 'onboarding' },
+          metadata: { subtype: systemSubtype('onboarding') },
           deliverTo: seedAgentId,
         },
       ],
@@ -363,7 +364,7 @@ export class ThreadService {
           fromKind: 'system',
           content:
             `Inherited context from parent channel '${parent.title}': ${input.contextSummary}`,
-          metadata: { subtype: 'child_context' },
+          metadata: { subtype: systemSubtype('child_context') },
           deliverTo: spawnerAgentId,
         },
         {
@@ -433,7 +434,7 @@ export class ThreadService {
             `Thread "${thread.title}" closed by ${closedBy}.\n\n` +
             input.summary,
           metadata: {
-            subtype: 'thread_summary',
+            subtype: systemSubtype('thread_summary'),
             thread_id: thread.id,
             thread_title: thread.title,
             closed_by: closedBy,

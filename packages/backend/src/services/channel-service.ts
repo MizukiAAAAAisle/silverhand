@@ -1,8 +1,9 @@
 import type { Database as Db } from 'better-sqlite3';
-import type {
-  ChannelConversationDto,
-  DmChannelDto,
-  MessageDto,
+import {
+  type ChannelConversationDto,
+  type DmChannelDto,
+  type MessageDto,
+  systemSubtype,
 } from '@silverhand/shared';
 import type { BackendLogger } from '../context.js';
 import type { ConversationManager } from '../conversation-manager.js';
@@ -238,7 +239,7 @@ export class ChannelService {
           fromKind: 'system',
           content: input.seed.systemMessageBody,
           metadata: {
-            subtype: 'channel_context',
+            subtype: systemSubtype('channel_context'),
             source_conversation_id: input.actor.conversationId,
             created_by_agent_id: input.actor.agentId,
           },

@@ -10,6 +10,7 @@ import {
   type ScheduleListStatusFilter,
   type ScheduleSpec,
   type ScheduleStatus,
+  systemSubtype,
 } from '@silverhand/shared';
 import type { BackendLogger } from '../context.js';
 import type { ConversationManager } from '../conversation-manager.js';
@@ -515,7 +516,7 @@ export class ScheduleService {
       fromKind: 'system',
       content: body,
       metadata: {
-        subtype: 'schedule_fire',
+        subtype: systemSubtype('schedule_fire'),
         schedule_id: dto.id,
         spec_kind: dto.spec.kind,
         actual_fire_at: actualFireAt,

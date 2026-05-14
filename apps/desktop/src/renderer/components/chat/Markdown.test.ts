@@ -157,6 +157,54 @@ describe('SystemMessage channel refs', () => {
     expect(html).toContain('border-error/25');
     expect(html).toContain('CLI session context');
   });
+
+  // PR-1 added three-state subtype resolution. Legacy DB-resident
+  // subtypes (`join`, `session_context`, `child_summary`) and unknown
+  // strings both fall through to generic narration — neither pretends
+  // to be a current subtype's custom card.
+  it('renders legacy `child_summary` rows as generic narration, not collapsible', () => {
+    const msg = makeSystemMessage(
+      'child_summary',
+      {},
+      'Sub-session 8c2a closed; transcript saved',
+    );
+    const html = renderSystem(msg, new Map());
+    // The collapsible component renders a `<button>` with `aria-expanded`;
+    // generic narration renders a centered italic `<div>` instead.
+    expect(html).not.toContain('aria-expanded');
+    expect(html).toContain('italic');
+    expect(html).toContain('Sub-session 8c2a closed');
+  });
+
+  it('renders legacy `join` rows as generic narration', () => {
+    const msg = makeSystemMessage('join', {}, '@old-agent joined #version3');
+    const html = renderSystem(msg, new Map());
+    expect(html).not.toContain('aria-expanded');
+    expect(html).toContain('italic');
+    expect(html).toContain('@old-agent');
+    expect(html).toContain('joined');
+  });
+
+  // PR-1 dropped the `inferSubtype` content-prefix backfill. Old rows
+  // whose metadata never carried `subtype` no longer get retroactively
+  // mapped to `onboarding` based on their content prefix — they
+  // resolve to `unknown` and render as generic narration instead.
+  it('does NOT collapse pre-metadata onboarding rows by content prefix', () => {
+    const msg = makeSystemMessage(
+      // No subtype field at all in metadata.
+      // @ts-expect-error: deliberately testing the missing-subtype path.
+      undefined,
+      {},
+      'Onboarding task (system-triggered): you joined #foo. Send greeting.',
+    );
+    // Strip the test helper's auto-injected `subtype` since we want the
+    // raw metadata to NOT have one. makeSystemMessage spreads {subtype, ...}
+    // so we override here.
+    msg.metadata = {};
+    const html = renderSystem(msg, new Map());
+    expect(html).not.toContain('aria-expanded');
+    expect(html).toContain('italic');
+  });
 });
 
 describe('Markdown channel refs', () => {

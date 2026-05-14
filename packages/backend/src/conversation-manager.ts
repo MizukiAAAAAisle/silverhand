@@ -10,6 +10,7 @@ import {
   SILVERHAND_CONVERSATION_ID_ENV,
   SILVERHAND_SERVER_URL_ENV,
   extractMentions,
+  systemSubtype,
 } from '@silverhand/shared';
 import type {
   AgentDto,
@@ -1100,7 +1101,7 @@ export class ConversationManager {
         `(prev session: ${prevLabel}). Next start will use a fresh session; ` +
         'pending deliveries remain queued.',
       metadata: {
-        subtype: 'session_cleared',
+        subtype: systemSubtype('session_cleared'),
         agent_id: params.agentId,
         agent_name: params.agentName,
         actor_user_id: params.actorUserId,

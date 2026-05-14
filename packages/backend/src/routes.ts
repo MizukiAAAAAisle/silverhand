@@ -54,6 +54,7 @@ import {
   type ReadHistoryTarget,
   type ReadHistoryTargetRef,
   type SendMessageTarget,
+  systemSubtype,
 } from '@silverhand/shared';
 import type { BackendContext } from './context.js';
 import { createCliInvokeMiddleware } from './observability/cli-invoke-middleware.js';
@@ -513,7 +514,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
         conversationId: onboarding.id,
         fromKind: 'system',
         content: onboardingBody(workspace.name, agent, others),
-        metadata: { subtype: 'onboarding' },
+        metadata: { subtype: systemSubtype('onboarding') },
       });
       await ctx.conversationManager.deliverMessage(
         onboarding.id,
@@ -583,7 +584,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
             `This workspace was renamed from #${workspace.name} to #${parsed.data.name}. ` +
             `Update any references in your MEMORY.md when you next edit it.`,
           metadata: {
-            subtype: 'rename',
+            subtype: systemSubtype('rename'),
             old_name: workspace.name,
             new_name: parsed.data.name,
           },
@@ -1721,7 +1722,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
           `Before replying, read the seeded onboarding guide note for internal guidance; do not mention internal file paths unless the user asks.`,
           `Send one short greeting: say hi by name, state your current global role briefly (or say it is not defined yet), and ask what role the user would like you to play.`,
         ].join('\n'),
-        metadata: { subtype: 'onboarding' },
+        metadata: { subtype: systemSubtype('onboarding') },
       });
       return { agent, home, dm, onboardingMsg, agentL1Dir };
     })();

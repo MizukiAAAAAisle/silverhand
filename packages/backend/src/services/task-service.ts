@@ -1,17 +1,18 @@
 import type { Database as Db } from 'better-sqlite3';
-import type {
-  ClaimErrorCode,
-  ClaimResultEntry,
-  ConversationDto,
-  CreateTasksOpError,
-  CreateTasksResult,
-  MessageRow,
-  TaskAssigneeDto,
-  TaskChangedEvent,
-  TaskMutationErrorCode,
-  TaskMutationResult,
-  TaskStatus,
-  TaskSummaryDto,
+import {
+  type ClaimErrorCode,
+  type ClaimResultEntry,
+  type ConversationDto,
+  type CreateTasksOpError,
+  type CreateTasksResult,
+  type MessageRow,
+  type TaskAssigneeDto,
+  type TaskChangedEvent,
+  type TaskMutationErrorCode,
+  type TaskMutationResult,
+  type TaskStatus,
+  type TaskSummaryDto,
+  taskSystemSubtype,
 } from '@silverhand/shared';
 import type { BackendLogger } from '../context.js';
 import type { ConversationManager } from '../conversation-manager.js';
@@ -1138,7 +1139,7 @@ export class TaskService {
         fromKind: 'system',
         content: args.sysMessage,
         metadata: {
-          subtype: `task_${args.kind}`,
+          subtype: taskSystemSubtype(args.kind),
           task_number: args.taskNumber,
           task_status: args.status,
         },
