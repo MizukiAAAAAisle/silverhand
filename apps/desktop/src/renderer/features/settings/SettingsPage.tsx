@@ -1,12 +1,22 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type FormEvent,
+  type ReactNode,
+} from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Check,
   CheckCircle2,
+  Code2,
   Loader2,
   Network,
   Palette,
+  RotateCcw,
   Save,
+  Type,
 } from 'lucide-react';
 import type { RuntimeKind } from '@silverhand/shared';
 import { Input, Label } from '@/components/ui/input';
@@ -15,7 +25,19 @@ import { AgentAvatar } from '@/components/AgentAvatar';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { useAppearance } from '@/hooks/useAppearance';
-import { THEME_IDS, type ThemeId } from '@/settings/types';
+import {
+  DEFAULT_MARKDOWN_FONT_SIZE,
+  FONT_SIZE_MAX,
+  FONT_SIZE_MIN,
+  THEME_IDS,
+  type MarkdownTextSettings,
+  type ThemeId,
+} from '@/settings/types';
+import {
+  CODE_FONT_PRESETS,
+  PROSE_FONT_PRESETS,
+  type FontPreset,
+} from '@/settings/font-presets';
 
 const settingsKey = ['settings'] as const;
 
@@ -72,7 +94,8 @@ function parseRuntimes(raw: string | undefined | null): RuntimeKind[] {
 
 export function SettingsPage(): JSX.Element {
   const qc = useQueryClient();
-  const { appearance, setTheme } = useAppearance();
+  const { appearance, setTheme, setMarkdownText, resetMarkdownText } =
+    useAppearance();
   const settingsQuery = useQuery({
     queryKey: settingsKey,
     queryFn: () => api<SettingsResponse>('/api/settings'),
@@ -233,6 +256,45 @@ export function SettingsPage(): JSX.Element {
               </SettingsSection>
 
               <SettingsSection
+                id="settings-markdown-text"
+                icon={<Type className="size-4" />}
+                title="Markdown Text"
+                description="Customize message body typography without changing the rest of the app chrome."
+              >
+                <div className="grid gap-4">
+                  <MarkdownTextControl
+                    title="Prose"
+                    icon={<Type className="size-4" />}
+                    value={appearance.prose}
+                    presets={PROSE_FONT_PRESETS}
+                    sample="正文预览 / Markdown body text"
+                    onFontChange={value =>
+                      setMarkdownText('prose', 'fontFamily', value || undefined)
+                    }
+                    onSizeChange={value =>
+                      setMarkdownText('prose', 'fontSize', value)
+                    }
+                    onReset={() => resetMarkdownText('prose')}
+                  />
+                  <MarkdownTextControl
+                    title="Code"
+                    icon={<Code2 className="size-4" />}
+                    value={appearance.code}
+                    presets={CODE_FONT_PRESETS}
+                    sample="const size = 12"
+                    onFontChange={value =>
+                      setMarkdownText('code', 'fontFamily', value || undefined)
+                    }
+                    onSizeChange={value =>
+                      setMarkdownText('code', 'fontSize', value)
+                    }
+                    onReset={() => resetMarkdownText('code')}
+                    code
+                  />
+                </div>
+              </SettingsSection>
+
+              <SettingsSection
                 id="settings-proxy"
                 icon={<Network className="size-4" />}
                 title="Proxy"
@@ -353,7 +415,7 @@ export function SettingsPage(): JSX.Element {
                 </span>
               ) : (
                 <span className="text-text-muted">
-                  Changes are saved to host settings.
+                  Appearance saves locally; proxy changes save to host settings.
                 </span>
               )}
             </div>
@@ -372,6 +434,140 @@ export function SettingsPage(): JSX.Element {
         </footer>
       </form>
     </main>
+  );
+}
+
+function MarkdownTextControl({
+  title,
+  icon,
+  value,
+  presets,
+  sample,
+  onFontChange,
+  onSizeChange,
+  onReset,
+  code = false,
+}: {
+  title: string;
+  icon: ReactNode;
+  value: MarkdownTextSettings | undefined;
+  presets: ReadonlyArray<FontPreset>;
+  sample: string;
+  onFontChange: (value: string) => void;
+  onSizeChange: (value: number) => void;
+  onReset: () => void;
+  code?: boolean;
+}): JSX.Element {
+  const fontValue = value?.fontFamily ?? '';
+  const sizeValue = value?.fontSize ?? DEFAULT_MARKDOWN_FONT_SIZE;
+  const progress =
+    ((sizeValue - FONT_SIZE_MIN) / (FONT_SIZE_MAX - FONT_SIZE_MIN)) * 100;
+  const sampleStyle: CSSProperties = {
+    fontFamily:
+      fontValue ||
+      (code
+        ? 'var(--md-code-font, var(--font-mono))'
+        : 'var(--md-prose-font, var(--font-sans))'),
+    fontSize: `${sizeValue}px`,
+  };
+  const sliderStyle = {
+    '--font-size-progress': `${progress}%`,
+  } as CSSProperties;
+
+  return (
+    <div className="grid gap-3 rounded-[8px] border border-border-subtle bg-bg-floating p-3">
+      <div className="flex min-w-0 items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="flex size-7 shrink-0 items-center justify-center rounded-[6px] bg-bg-elevated text-text-secondary">
+            {icon}
+          </span>
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-text-primary">{title}</h3>
+            <p className="truncate text-xs text-text-muted">
+              {fontValue || 'Theme default font'} · {sizeValue}px
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onReset}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-[6px] border border-border-subtle bg-bg-primary px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-accent hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+        >
+          <RotateCcw className="size-3.5" />
+          Reset
+        </button>
+      </div>
+
+      <div className="grid gap-2">
+        <Label htmlFor={`markdown-${title.toLowerCase()}-font`}>
+          Font family
+        </Label>
+        <Input
+          id={`markdown-${title.toLowerCase()}-font`}
+          value={fontValue}
+          onChange={e => onFontChange(e.target.value)}
+          placeholder="Theme default"
+          spellCheck={false}
+        />
+        <div className="flex flex-wrap gap-1.5">
+          {presets.map(preset => (
+            <button
+              key={`${title}-${preset.label}`}
+              type="button"
+              onClick={() => onFontChange(preset.value)}
+              className={cn(
+                'rounded-[999px] border px-2 py-1 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus',
+                fontValue === preset.value
+                  ? 'border-accent bg-accent text-text-on-accent'
+                  : 'border-border-subtle bg-bg-primary text-text-secondary hover:border-accent hover:text-text-primary',
+              )}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid gap-2">
+        <div className="flex items-center justify-between gap-3">
+          <Label htmlFor={`markdown-${title.toLowerCase()}-size`}>
+            Font size
+          </Label>
+          <span className="rounded-[999px] bg-bg-elevated px-2 py-0.5 font-mono text-[11px] text-text-secondary">
+            {sizeValue}px
+          </span>
+        </div>
+        <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3">
+          <span className="font-mono text-[11px] text-text-muted">
+            {FONT_SIZE_MIN}px
+          </span>
+          <input
+            id={`markdown-${title.toLowerCase()}-size`}
+            type="range"
+            min={FONT_SIZE_MIN}
+            max={FONT_SIZE_MAX}
+            step={1}
+            value={sizeValue}
+            onChange={e => onSizeChange(Number(e.target.value))}
+            className="settings-font-size-slider"
+            style={sliderStyle}
+          />
+          <span className="font-mono text-[11px] text-text-muted">
+            {FONT_SIZE_MAX}px
+          </span>
+        </div>
+      </div>
+
+      <div
+        className={cn(
+          'rounded-[6px] border border-border-subtle bg-bg-primary px-3 py-2 text-text-primary',
+          code ? 'font-mono' : '',
+        )}
+        style={sampleStyle}
+      >
+        {sample}
+      </div>
+    </div>
   );
 }
 

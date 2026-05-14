@@ -123,6 +123,14 @@
   --font-serif: 'New York', 'Charter', 'Iowan Old Style', 'Source Serif Pro', Georgia, serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', 'Sarasa Mono SC', 'Source Han Mono SC', 'Noto Sans Mono CJK SC', 'PingFang SC', monospace;
 
+  /* ── Markdown body defaults (consumed by `.markdown-body`) ──
+     User-level overrides land as inline style on `<html>` and beat
+     this rule. See settings/apply.ts. */
+  --md-prose-font: var(--font-sans);
+  --md-prose-size: 12px;
+  --md-code-font: var(--font-mono);
+  --md-code-size: 12px;
+
   /* ── Motion ── */
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
   --duration: 200ms;

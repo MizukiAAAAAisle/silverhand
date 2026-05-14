@@ -1,10 +1,16 @@
 @import "tailwindcss";
 
 /* Themes — each one defines the full token contract.
-   The default (warm-script) doubles as :root to avoid FOUC on first paint. */
+   The default theme MUST be imported FIRST: it doubles as `:root` so
+   first paint (before React mounts and sets `<html data-theme=...>`)
+   has full token coverage. Other themes import AFTER, where their
+   `[data-theme=…]` rules — equal CSS specificity to `:root` — win
+   purely by source order. Reordering imports without also updating
+   `DEFAULT_APPEARANCE` (or vice versa) silently leaks the late
+   default's tokens into other themes; do both together. */
+@import "./themes/warm-script.css";
 @import "./themes/paper-ink.css";
 @import "./themes/warm-coral.css";
-@import "./themes/warm-script.css";
 
 /* Highlight.js theme for fenced code blocks rendered by rehype-highlight.
    Picked the "github" light theme as a neutral baseline — works under
@@ -126,11 +132,79 @@ html, body, #root {
 button:not(:disabled) { cursor: pointer; }
 button:disabled { cursor: not-allowed; }
 
+.settings-font-size-slider {
+  width: 100%;
+  height: 20px;
+  appearance: none;
+  background: transparent;
+}
+.settings-font-size-slider:focus-visible {
+  outline: none;
+}
+.settings-font-size-slider::-webkit-slider-runnable-track {
+  height: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in oklab, var(--accent) 22%, transparent) 0 var(--font-size-progress),
+      transparent var(--font-size-progress) 100%
+    ),
+    linear-gradient(
+      90deg,
+      color-mix(in oklab, var(--text-muted) 20%, var(--bg-elevated)),
+      color-mix(in oklab, var(--brand-primary) 44%, var(--bg-floating)) 52%,
+      var(--accent)
+    );
+}
+.settings-font-size-slider::-webkit-slider-thumb {
+  width: 18px;
+  height: 18px;
+  margin-top: -6px;
+  appearance: none;
+  border: 2px solid var(--accent);
+  border-radius: 999px;
+  background: var(--bg-floating);
+  box-shadow: 0 1px 4px rgba(var(--shadow-base), 0.22);
+}
+.settings-font-size-slider:focus-visible::-webkit-slider-thumb {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+.settings-font-size-slider::-moz-range-track {
+  height: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in oklab, var(--accent) 22%, transparent) 0 var(--font-size-progress),
+      transparent var(--font-size-progress) 100%
+    ),
+    linear-gradient(
+      90deg,
+      color-mix(in oklab, var(--text-muted) 20%, var(--bg-elevated)),
+      color-mix(in oklab, var(--brand-primary) 44%, var(--bg-floating)) 52%,
+      var(--accent)
+    );
+}
+.settings-font-size-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--accent);
+  border-radius: 999px;
+  background: var(--bg-floating);
+  box-shadow: 0 1px 4px rgba(var(--shadow-base), 0.22);
+}
+
 /* ── Markdown body — applied to .markdown-body wrapper around <ReactMarkdown> ── */
 .markdown-body {
   min-width: 0;
   line-height: 1.55;
   overflow-wrap: anywhere;
+  font-family: var(--md-prose-font, var(--font-sans));
+  font-size: var(--md-prose-size, 12px);
 }
 .markdown-body > *:first-child { margin-top: 0; }
 .markdown-body > *:last-child { margin-bottom: 0; }
@@ -199,8 +273,8 @@ button:disabled { cursor: not-allowed; }
   display: inline;
   padding: 0.08em 0.36em;
   margin-inline: 0.15em;
-  font-family: var(--font-mono);
-  font-size: 0.92em;
+  font-family: var(--md-code-font, var(--font-mono));
+  font-size: var(--md-code-size, 12px);
   color: var(--text-inline-code);
   background: color-mix(in srgb, var(--text-primary) 14%, var(--bg-base));
   border-radius: var(--radius-sm);
@@ -254,8 +328,8 @@ button:disabled { cursor: not-allowed; }
   background: transparent;
   border: 0;
   border-radius: 0;
-  font-family: var(--font-mono);
-  font-size: 0.9em;
+  font-family: var(--md-code-font, var(--font-mono));
+  font-size: var(--md-code-size, 12px);
   line-height: 1.5;
 }
 .markdown-body .code-block--expanded pre {
