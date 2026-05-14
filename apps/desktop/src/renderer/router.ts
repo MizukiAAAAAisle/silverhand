@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
 import { matchPath, useLocation, useNavigate } from 'react-router-dom';
 import type { AppSection } from '@/components/layout/NavRail';
 
@@ -401,33 +401,67 @@ export function useNav(): {
     const next = withTaskQuery(location.pathname, location.search, null);
     navigate(next, { replace: true });
   }, [navigate, location.pathname, location.search]);
-  return {
+  const toChat = useCallback(() => go(routes.chat()), [go]);
+  const toChatSearch = useCallback(() => go(routes.chatSearch()), [go]);
+  const toChatSaved = useCallback(() => go(routes.chatSaved()), [go]);
+  const toChatArchived = useCallback(() => go(routes.chatArchived()), [go]);
+  const toWorkspace = useCallback((id: string) => go(routes.chatWorkspace(id)), [go]);
+  const toChannel = useCallback(
+    (wid: string, cid: string) => go(routes.chatChannel(wid, cid)),
+    [go],
+  );
+  const toThread = useCallback(
+    (
+      wid: string,
+      cid: string,
+      tid: string,
+      opts: ThreadRouteOptions & { replace?: boolean } = {},
+    ) =>
+      go(routes.chatThread(wid, cid, tid, opts), { replace: opts.replace }),
+    [go],
+  );
+  const toMembers = useCallback(
+    (agentId?: string) =>
+      go(agentId ? routes.membersAgent(agentId) : routes.members()),
+    [go],
+  );
+  const toComputers = useCallback(() => go(routes.computers()), [go]);
+  const toTasks = useCallback(() => go(routes.tasks()), [go]);
+  const toSettings = useCallback(() => go(routes.settings()), [go]);
+
+  return useMemo(() => ({
     go,
-    toChat: useCallback(() => go(routes.chat()), [go]),
-    toChatSearch: useCallback(() => go(routes.chatSearch()), [go]),
-    toChatSaved: useCallback(() => go(routes.chatSaved()), [go]),
-    toChatArchived: useCallback(() => go(routes.chatArchived()), [go]),
-    toWorkspace: useCallback((id: string) => go(routes.chatWorkspace(id)), [go]),
-    toChannel: useCallback(
-      (wid: string, cid: string) => go(routes.chatChannel(wid, cid)),
-      [go],
-    ),
-    toThread: useCallback(
-      (wid: string, cid: string, tid: string, opts = {}) =>
-        go(routes.chatThread(wid, cid, tid, opts), { replace: opts.replace }),
-      [go],
-    ),
-    toMembers: useCallback(
-      (agentId?: string) =>
-        go(agentId ? routes.membersAgent(agentId) : routes.members()),
-      [go],
-    ),
-    toComputers: useCallback(() => go(routes.computers()), [go]),
-    toTasks: useCallback(() => go(routes.tasks()), [go]),
-    toSettings: useCallback(() => go(routes.settings()), [go]),
+    toChat,
+    toChatSearch,
+    toChatSaved,
+    toChatArchived,
+    toWorkspace,
+    toChannel,
+    toThread,
+    toMembers,
+    toComputers,
+    toTasks,
+    toSettings,
     openSide,
     closeSide,
     openTask,
     closeTask,
-  };
+  }), [
+    go,
+    toChat,
+    toChatSearch,
+    toChatSaved,
+    toChatArchived,
+    toWorkspace,
+    toChannel,
+    toThread,
+    toMembers,
+    toComputers,
+    toTasks,
+    toSettings,
+    openSide,
+    closeSide,
+    openTask,
+    closeTask,
+  ]);
 }

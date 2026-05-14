@@ -396,7 +396,7 @@ export function App(): JSX.Element {
     if (selectedWorkspaceId) return;
     if (workspaces.length === 0) return;
     nav.go(`/chat/w/${workspaces[0]!.id}`, { replace: true });
-  }, [appSection, view, selectedWorkspaceId, workspaces, nav]);
+  }, [appSection, view, selectedWorkspaceId, workspaces, nav.go]);
 
   // If the URL's workspaceId no longer exists (deleted in another window,
   // bad bookmark), bounce to /chat so the auto-pick effect can take over.
@@ -405,7 +405,7 @@ export function App(): JSX.Element {
     if (!workspaces.some(w => w.id === selectedWorkspaceId)) {
       nav.go('/chat', { replace: true });
     }
-  }, [selectedWorkspaceId, workspaces, nav]);
+  }, [selectedWorkspaceId, workspaces, nav.go]);
 
   // When switching workspaces (or when channels arrive for the current
   // workspace), restore the last-viewed channel, fall back to the first one.
@@ -455,7 +455,14 @@ export function App(): JSX.Element {
     const fallback = activeChannels.find(s => s.parent_conversation_id === null);
     if (!fallback) return;
     nav.go(navForRestoredChannel(fallback.id), { replace: true });
-  }, [selectedWorkspaceId, selectedChannelId, channels, activeChannels, jumpTarget, nav]);
+  }, [
+    selectedWorkspaceId,
+    selectedChannelId,
+    channels,
+    activeChannels,
+    jumpTarget,
+    nav.go,
+  ]);
 
   // Record the user's selection so we can restore it next time they
   // come back to this workspace. Persist on every change so quitting
@@ -824,7 +831,7 @@ export function App(): JSX.Element {
       }
       nav.toChannel(selectedWorkspaceId, selectedChannelId);
     }
-  }, [nav, selectedWorkspaceId, selectedChannelId]);
+  }, [nav.toChannel, selectedWorkspaceId, selectedChannelId]);
 
   // Dispatching close handler for the secondary pane's X button. Routes
   // by the descriptor's source so a `?side` overlay closes via
@@ -840,7 +847,7 @@ export function App(): JSX.Element {
       return;
     }
     closeThread();
-  }, [secondaryDescriptor, nav, closeThread]);
+  }, [secondaryDescriptor, nav.closeSide, closeThread]);
 
   // ── Stable refs for ChannelView (so React.memo can short-circuit when
   //    only sidebar visibility flips). Recompute deliberately when the
@@ -857,7 +864,7 @@ export function App(): JSX.Element {
         nav.toThread(selectedWorkspaceId, selectedChannelId, threadId);
       }
     },
-    [nav, selectedWorkspaceId, selectedChannelId],
+    [nav.toThread, selectedWorkspaceId, selectedChannelId],
   );
 
   const handleArchiveChannelMutation = useCallback(
@@ -884,7 +891,7 @@ export function App(): JSX.Element {
       replace: true,
     });
   }, [
-    nav,
+    nav.toThread,
     selectedWorkspaceId,
     selectedChannelId,
     openThreadId,
@@ -964,7 +971,7 @@ export function App(): JSX.Element {
       secondaryDescriptor.source === 'side'
         ? secondaryDescriptor.id
         : null,
-      nav,
+      nav.go,
       markChannelRead,
     ],
   );

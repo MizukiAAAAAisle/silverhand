@@ -44,7 +44,7 @@ export function Mention({ name, agent, conversationId }: MentionProps): JSX.Elem
           nav.toMembers(agent.id);
         }}
         className="rounded px-1 -mx-0.5 font-medium text-accent transition-colors hover:bg-accent-soft focus-visible:bg-accent-soft focus-visible:outline-none"
-        title={`@${agent.name}`}
+        aria-label={`@${agent.name}`}
       >
         @{label}
       </button>
