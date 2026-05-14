@@ -4,9 +4,10 @@ import {
   useQueryClient,
 } from '@tanstack/react-query';
 import { useEffect } from 'react';
-import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
+import type { TaskChangedEvent, TaskStatus, TaskSummaryDto } from '@silverhand/shared';
 import { api } from '@/lib/api';
 import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
+import { applyTaskChangedToTaskByNumberCache } from './useTaskByNumber';
 
 /**
  * Tasks live in /api/tasks (per docs/tasks-design.md §6.2). The list is
@@ -56,8 +57,10 @@ export function useTasks(filter: TaskFilter, opts?: UseTasksOptions) {
     const unsub = onWsFrame(frame => {
       if (frame.type === 'event') {
         if (frame.kind !== 'task_changed' || !scopes.has(frame.scope)) return;
+        applyTaskChangedToTaskByNumberCache(qc, frame.payload as TaskChangedEvent);
         void qc.invalidateQueries({ queryKey: ['tasks'] });
       } else if (frame.type === 'snapshot_required' && scopes.has(frame.scope)) {
+        void qc.invalidateQueries({ queryKey: ['task-by-number'] });
         void qc.invalidateQueries({ queryKey: ['tasks'] });
       }
     });

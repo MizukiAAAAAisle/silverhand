@@ -29,6 +29,7 @@ import {
   useConversationStream,
   type ConversationStreamEvent,
 } from '@/hooks/useConversationStream';
+import { applyTaskChangedToTaskByNumberCache } from '@/features/tasks/useTaskByNumber';
 
 const messagesKey = (cid: string) => ['channels', cid, 'messages'] as const;
 const agentsKey = (cid: string) => ['channels', cid, 'agents'] as const;
@@ -246,6 +247,7 @@ export function useChannelMessages(
       if (e.kind === 'task_changed') {
         const task = e.payload as TaskChangedEvent | undefined;
         if (!task?.message_id) return;
+        applyTaskChangedToTaskByNumberCache(qc, task);
         qc.setQueryData<MessagesCache>(messagesKey(channelId), prev =>
           applyTaskChangedToCache(prev, task),
         );
