@@ -67,7 +67,14 @@ export function TaskRef({ taskNumber }: TaskRefProps): JSX.Element {
     const loadingChip = (
       <span
         className="inline-flex max-w-[220px] items-center gap-0.5 rounded bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
-        title={`Task ${inertLabel}`}
+        // Wrapped in HoverPopover below — use aria-label, not the
+        // native `title` attribute. macOS browsers schedule the native
+        // tooltip on a 2-3s cycle that competes with Radix HoverCard
+        // (mouse "leaves" the trigger when the OS tooltip overlays
+        // it, which closes the popover; then mouseenter reopens after
+        // the 500ms grace, producing a periodic flicker — @shiki
+        // report `NbcXUOnFDKfXYRxV`).
+        aria-label={`Task ${inertLabel}`}
         data-task-ref={String(taskNumber)}
         data-task-ref-state="loading"
       >
@@ -112,7 +119,10 @@ export function TaskRef({ taskNumber }: TaskRefProps): JSX.Element {
   const inertChip = (
     <span
       className="inline-flex max-w-[220px] items-center gap-0.5 rounded bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
-      title={tooltip}
+      // Wrapped in HoverPopover below — `aria-label` instead of the
+      // native `title` attribute (see loading branch comment above
+      // for the flicker rationale).
+      aria-label={tooltip}
       data-task-ref={String(taskNumber)}
       data-task-ref-state="resolved-no-handler"
     >
@@ -125,7 +135,7 @@ export function TaskRef({ taskNumber }: TaskRefProps): JSX.Element {
       role="button"
       tabIndex={0}
       className="inline-flex max-w-[220px] cursor-pointer items-center gap-0.5 rounded bg-accent-soft px-1.5 -mx-0.5 font-medium text-accent transition-colors hover:bg-accent hover:text-text-on-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
-      title={tooltip}
+      aria-label={tooltip}
       data-task-ref={String(taskNumber)}
       data-task-ref-state="resolved"
       onClick={event => {

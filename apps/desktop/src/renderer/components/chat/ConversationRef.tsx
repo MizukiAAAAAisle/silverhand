@@ -95,7 +95,14 @@ export function ConversationRef({
   const inertChip = (
     <span
       className="inline-flex max-w-[220px] items-center gap-0.5 rounded bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
-      title={tooltip}
+      // Wrapped in HoverPopover below — `aria-label` instead of the
+      // native `title` attribute. macOS browsers schedule the native
+      // tooltip on a 2-3s cycle that competes with Radix HoverCard
+      // (the OS tooltip overlays the trigger area, mouse "leaves" the
+      // trigger → popover closes; mouseenter reopens after the 500ms
+      // grace, producing a periodic flicker — @shiki report
+      // `NbcXUOnFDKfXYRxV`).
+      aria-label={tooltip}
       data-conversation-ref={id}
     >
       {chipBody}
@@ -107,7 +114,7 @@ export function ConversationRef({
       role="button"
       tabIndex={0}
       className="inline-flex max-w-[220px] cursor-pointer items-center gap-0.5 rounded bg-accent-soft px-1.5 -mx-0.5 font-medium text-accent transition-colors hover:bg-accent hover:text-text-on-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
-      title={tooltip}
+      aria-label={tooltip}
       data-conversation-ref={id}
       onClick={event => {
         event.preventDefault();
