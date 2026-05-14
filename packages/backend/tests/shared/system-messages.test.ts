@@ -248,7 +248,7 @@ describe('readScheduleFireMetadata', () => {
       subtype: 'schedule_fire',
       schedule_id: 's-1',
       spec_kind: 'cron',
-      spec_summary: 'cron */5 9-18 * * 1-5',
+      spec_summary: 'cron */5 9-18 * * 1-5 (Asia/Shanghai)',
       body: 'review #task:294 status',
       actual_fire_at: 1_700_000_000_000,
       planned_fire_at: 1_700_000_000_000,
@@ -257,7 +257,7 @@ describe('readScheduleFireMetadata', () => {
     });
     expect(m).not.toBeNull();
     expect(m!.spec_kind).toBe('cron');
-    expect(m!.spec_summary).toBe('cron */5 9-18 * * 1-5');
+    expect(m!.spec_summary).toBe('cron */5 9-18 * * 1-5 (Asia/Shanghai)');
     expect(m!.body).toBe('review #task:294 status');
   });
 

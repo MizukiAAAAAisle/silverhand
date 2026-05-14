@@ -565,6 +565,37 @@ describe('ScheduleService.tick — fire & advance', () => {
     expect(typeof parsed!.actual_fire_at).toBe('number');
   });
 
+  it('cron wake metadata embeds the timezone in spec_summary', async () => {
+    // Cron expressions resolve to different wall-clock times across
+    // zones, so the renderer banner needs the timezone next to the
+    // expression. Pin the producer here so it never silently drops.
+    const f = setup();
+    const fixedNow = Date.UTC(2024, 2, 9, 12, 0, 0);
+    f.setNow(fixedNow);
+    f.service.create(
+      {
+        message: 'daily 9am NYC reminder',
+        spec: {
+          kind: 'cron',
+          expression: '0 9 * * *',
+          timezone: 'America/New_York',
+        },
+        allow_unbounded: true,
+      },
+      f.ownerAgentId,
+    );
+    f.setNow(Date.UTC(2024, 2, 9, 14, 0, 0));
+    await f.service.tick();
+    const messageId = f.fake.delivered[0]?.messageId;
+    expect(messageId).toBeDefined();
+    const msg = f.messages.getById(messageId!);
+    const meta = msg?.metadata as Record<string, unknown> | null;
+    const parsed = readScheduleFireMetadata(meta);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.spec_kind).toBe('cron');
+    expect(parsed!.spec_summary).toBe('cron 0 9 * * * (America/New_York)');
+  });
+
   it('does not deliver before next_fire_at', async () => {
     const f = setup();
     f.service.create(

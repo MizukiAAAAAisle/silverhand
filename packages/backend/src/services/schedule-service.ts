@@ -695,7 +695,7 @@ function renderSpecSummary(spec: ScheduleSpec): string {
     case 'interval':
       return `interval ${spec.every_seconds}s`;
     case 'cron':
-      return `cron ${spec.expression}`;
+      return `cron ${spec.expression} (${spec.timezone})`;
   }
 }
 

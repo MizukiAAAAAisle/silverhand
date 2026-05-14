@@ -237,7 +237,7 @@ describe('SystemMessage channel refs', () => {
       {
         schedule_id: 's-1',
         spec_kind: 'cron',
-        spec_summary: 'cron */5 9-18 * * 1-5',
+        spec_summary: 'cron */5 9-18 * * 1-5 (Asia/Shanghai)',
         body: 'Reminder: review #task:294 status, ping @shiki if still in_review.',
         actual_fire_at: now,
         planned_fire_at: planned,
@@ -250,7 +250,7 @@ describe('SystemMessage channel refs', () => {
     expect(html).toContain('lucide-clock');
     expect(html).toContain('border-l-warning');
     // Header spec summary surfaced.
-    expect(html).toContain('cron */5 9-18 * * 1-5');
+    expect(html).toContain('cron */5 9-18 * * 1-5 (Asia/Shanghai)');
     // All four pills present, in order.
     expect(html).toContain('data-pill="fired"');
     expect(html).toContain('data-pill="planned"');
@@ -283,7 +283,14 @@ describe('SystemMessage channel refs', () => {
     expect(html).toContain('interval 60s');
   });
 
-  it('schedule_fire one-shot (planned_fire_at + next_fire_at null) suppresses planned/next pills', () => {
+  it('schedule_fire one-shot keeps planned pill but suppresses next pill', () => {
+    // The producer writes `planned_fire_at: dto.next_fire_at` on every
+    // fire including one-shot, so the planned pill IS drawn (it carries
+    // late/on-time info even for `once`). Only `next_fire_at` flips to
+    // null after a one-shot's last fire — so only the `next` pill is
+    // suppressed. Schema keeps `planned_fire_at` nullable just to absorb
+    // pre-PR-4 legacy rows.
+    const planned = Date.now() - 1_000;
     const msg = makeSystemMessage(
       'schedule_fire',
       {
@@ -292,15 +299,15 @@ describe('SystemMessage channel refs', () => {
         spec_summary: 'once',
         body: 'Final reminder before deploy window closes.',
         actual_fire_at: Date.now(),
-        planned_fire_at: null,
+        planned_fire_at: planned,
         missed_count: 0,
         next_fire_at: null,
       },
     );
     const html = renderSystem(msg, new Map());
     expect(html).toContain('data-pill="fired"');
+    expect(html).toContain('data-pill="planned"');
     expect(html).toContain('data-pill="missed"');
-    expect(html).not.toContain('data-pill="planned"');
     expect(html).not.toContain('data-pill="next"');
   });
 

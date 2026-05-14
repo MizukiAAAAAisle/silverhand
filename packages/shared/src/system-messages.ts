@@ -320,7 +320,9 @@ export function readSessionClearedMetadata(
  *  - `spec_kind`: `'once' | 'interval' | 'cron'` — drives the header
  *    spec pill grouping.
  *  - `spec_summary`: pre-rendered human label
- *    (e.g. `"cron *\/5 9-18 * * 1-5"`, `"interval 60s"`, `"once"`).
+ *    (e.g. `"cron *\/5 9-18 * * 1-5 (Asia/Shanghai)"`, `"interval 60s"`,
+ *    `"once"`). Cron summaries embed the timezone because the same
+ *    expression resolves to different wall-clock times across zones.
  *    Optional — legacy rows without it fall back to `spec_kind` alone.
  *  - `body`: the user's reminder text (`schedule.message`) without
  *    the producer's "Schedule fired (kind: …)" / "Next fire at …" /
@@ -331,7 +333,10 @@ export function readSessionClearedMetadata(
  *  - `actual_fire_at`: epoch ms when the wake actually fired.
  *  - `planned_fire_at`: epoch ms the wake was originally scheduled
  *    for. Difference vs. actual surfaces as the "planned <Δ ago/late>"
- *    pill. `null` for one-shot schedules.
+ *    pill. Set on every fire, including one-shot — the producer always
+ *    writes `dto.next_fire_at` here. Schema keeps it nullable to absorb
+ *    pre-PR-4 rows that lacked the field; renderers should suppress
+ *    the pill only when the value is `null`.
  *  - `missed_count`: how many planned fires were skipped before this
  *    one (catch-up semantic). `0` is common; non-zero highlights as
  *    a warning pill.
