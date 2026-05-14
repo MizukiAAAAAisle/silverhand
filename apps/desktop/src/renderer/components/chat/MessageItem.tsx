@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Bookmark, CornerUpLeft, FileText, ListTodo, User } from 'lucide-react';
+import { Bookmark, ClipboardCheck, CornerUpLeft, FileText, User } from 'lucide-react';
 import type { AgentDto, AttachmentSnapshot, MessageDto } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
@@ -295,7 +295,7 @@ function TaskMetaTag({
       title={title}
       className="ml-2 inline-flex h-5 max-w-[200px] items-center gap-1 border border-[var(--border-task-tag)] bg-[var(--bg-task-tag)] px-1.5 align-middle text-[11px] font-semibold leading-none text-[var(--text-on-task-tag)]"
     >
-      <ListTodo className="size-3 shrink-0" aria-hidden />
+      <ClipboardCheck className="size-3 shrink-0" aria-hidden />
       <span className="min-w-0 truncate">{label}</span>
     </span>
   );
