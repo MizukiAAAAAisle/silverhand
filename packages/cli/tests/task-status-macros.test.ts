@@ -120,7 +120,13 @@ describe('task list --status filter macros', () => {
     expect(capture()!.status).toEqual(['todo']);
   });
 
-  it('expands `all` to every canonical status', async () => {
+  it('treats `all` as a no-filter sentinel (status field is omitted from the request)', async () => {
+    // `all` semantically means "do not narrow the board" — NOT
+    // "include every status currently in the enum". Treating it as
+    // the latter would still emit a `status` query key (polluting
+    // cli-*.log) AND silently exclude any new canonical status added
+    // in the future. The contract: `all` short-circuits the expansion
+    // and the request omits the filter entirely.
     const { client, capture } = fakeListClient();
     await list.run({
       env,
@@ -128,12 +134,21 @@ describe('task list --status filter macros', () => {
       client: client as any,
       args: parsedFlags({ status: ['all'] }),
     });
-    expect(capture()!.status).toEqual([
-      'todo',
-      'in_progress',
-      'in_review',
-      'done',
-    ]);
+    expect(capture()!.status).toBeUndefined();
+  });
+
+  it('lets `all` override narrower tokens supplied alongside it', async () => {
+    // `--status all,done` is contradictory ("everything" + "only
+    // done"). The broadest token wins so an agent typing `all`
+    // anywhere in the list reliably gets the no-filter view.
+    const { client, capture } = fakeListClient();
+    await list.run({
+      env,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      client: client as any,
+      args: parsedFlags({ status: ['done', 'all', 'active'] }),
+    });
+    expect(capture()!.status).toBeUndefined();
   });
 
   it('splits comma-joined values', async () => {

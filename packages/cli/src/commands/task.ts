@@ -23,6 +23,13 @@ const VALID_UPDATE_STATUSES: readonly TaskStatus[] = ['in_progress', 'in_review'
  * to match common natural-language asks ("show me active work", "show
  * everything") with the ergonomic words agents reach for first.
  *
+ * `all` is special: its semantic is **"do not filter"**, NOT "include
+ * every currently-known status". Treating it as the latter would (a)
+ * still emit a `status` query key into `cli-*.log`, and (b) silently
+ * exclude any new canonical status added in the future. So `all`
+ * short-circuits to `null` and overrides every other token in the same
+ * `--status` invocation.
+ *
  * `task status --status` (the mutation) MUST NOT accept these — see
  * `LIST_ONLY_STATUS_MACROS` enforcement below.
  */
@@ -30,24 +37,34 @@ const STATUS_FILTER_MACROS: Readonly<Record<string, readonly TaskStatus[]>> = {
   active: ['todo', 'in_progress', 'in_review'],
   open: ['todo', 'in_progress', 'in_review'],
   pending: ['todo'],
-  all: ['todo', 'in_progress', 'in_review', 'done'],
 };
-const LIST_ONLY_STATUS_MACROS = new Set(Object.keys(STATUS_FILTER_MACROS));
+const NO_FILTER_MACRO = 'all';
+/** Every token `task status --status` must reject as a list-only macro
+ *  (the `STATUS_FILTER_MACROS` keys plus the no-filter sentinel). */
+const LIST_ONLY_STATUS_MACROS = new Set([
+  ...Object.keys(STATUS_FILTER_MACROS),
+  NO_FILTER_MACRO,
+]);
 
-/** Expand a single `--status` value (or comma-joined list) into one or
- *  more canonical statuses. Throws `enum_invalid` on any unknown token.
- *  Used only by `task list`; `task status` uses the stricter
- *  `assertSingleUpdateStatus` instead.
+/** Expand `--status` values into a list of canonical statuses to filter
+ *  by, OR `null` if the agent asked for `all` (no filter). Throws
+ *  `enum_invalid` on any unknown token. Used only by `task list`;
+ *  `task status` uses the stricter `assertSingleUpdateStatus` path.
  *
  *  Why comma split: agents reach for `--status active,in_review` because
  *  every other CLI in their training data does it. Without explicit
  *  support each token would be passed verbatim (`'active,in_review'`)
  *  and fail validation as a single unknown enum.
- */
-function expandFilterStatuses(raw: readonly string[]): TaskStatus[] {
+ *
+ *  Why `all` overrides: mixing the no-filter sentinel with narrower
+ *  filters (`--status all,done`) is contradictory; the broadest token
+ *  wins. Lets the agent express "I just want everything" without
+ *  worrying about other tokens already in the call. */
+function expandFilterStatuses(raw: readonly string[]): TaskStatus[] | null {
   const out = new Set<TaskStatus>();
   for (const value of raw) {
     for (const part of value.split(',').map(s => s.trim()).filter(s => s.length > 0)) {
+      if (part === NO_FILTER_MACRO) return null;
       const macro = STATUS_FILTER_MACROS[part];
       if (macro) {
         for (const m of macro) out.add(m);
@@ -59,12 +76,12 @@ function expandFilterStatuses(raw: readonly string[]): TaskStatus[] {
           subkind: 'enum_invalid',
           message:
             `--status must be one of ${VALID_STATUSES.join('|')} ` +
-            `or a list-only filter macro (${Object.keys(STATUS_FILTER_MACROS).join('|')}); got "${part}"`,
+            `or a list-only filter macro (${[...LIST_ONLY_STATUS_MACROS].join('|')}); got "${part}"`,
           retriable: false,
           details: {
             flag: 'status',
             value: part,
-            allowed: [...VALID_STATUSES, ...Object.keys(STATUS_FILTER_MACROS)],
+            allowed: [...VALID_STATUSES, ...LIST_ONLY_STATUS_MACROS],
           },
         });
       }
@@ -98,7 +115,9 @@ Flags:
                        List-only filter macros (NOT writable states):
                          active|open  → todo + in_progress + in_review
                          pending      → todo
-                         all          → no filter
+                         all          → no filter (status field omitted
+                                        from the request; overrides any
+                                        narrower token in the same call)
                        Comma-joined values are accepted, e.g.
                        "--status active,done". Multiple values OR
                        together. Macros are list-only — passing them to

@@ -118,10 +118,14 @@ before the request is sent:
 |---|---|
 | `active` / `open` | `todo + in_progress + in_review` |
 | `pending` | `todo` |
-| `all` | no filter (all four statuses) |
+| `all` | no filter — the request omits the `status` field entirely |
 
 Comma-joined values are also accepted (`--status active,done`); each
-token is independently expanded and deduplicated.
+token is independently expanded and deduplicated. `all` is a
+no-filter sentinel: if it appears anywhere in the `--status` list
+the request omits the `status` field entirely (so `cli-*.log` does
+not record a `status` query key, and any future canonical status
+is included automatically).
 
 `silverhand task status --status` is the **mutation** verb — it writes
 one concrete status onto a task. It explicitly rejects:
