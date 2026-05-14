@@ -178,7 +178,7 @@ function ConversationPopoverBody({
           <dt className="text-text-muted">In</dt>
           <dd
             className="truncate text-text-secondary"
-            title={conversation.parent_title}
+            aria-label={conversation.parent_title}
           >
             #{conversation.parent_title}
           </dd>
@@ -186,7 +186,7 @@ function ConversationPopoverBody({
       ) : null}
       <p
         className="truncate font-mono text-[10px] text-text-muted"
-        title={id}
+        aria-label={id}
       >
         {id}
       </p>
@@ -220,7 +220,7 @@ function UnresolvedConversationPopoverBody({
       <p className="text-xs text-text-muted">{message}</p>
       <p
         className="truncate font-mono text-[10px] text-text-muted"
-        title={id}
+        aria-label={id}
       >
         {id}
       </p>

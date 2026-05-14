@@ -20,6 +20,9 @@ import { api } from '@/lib/api';
  */
 export type UseTaskByNumberResult = UseQueryResult<TaskSummaryDto | null>;
 
+const TASK_REF_GC_MS = 5 * 60 * 1000;
+const TASK_REF_STALE_MS = 30 * 1000;
+
 export function useTaskByNumber(
   workspaceId: string | null | undefined,
   taskNumber: number | null | undefined,
@@ -47,5 +50,7 @@ export function useTaskByNumber(
       return res.tasks[0] ?? null;
     },
     enabled,
+    staleTime: TASK_REF_STALE_MS,
+    gcTime: TASK_REF_GC_MS,
   });
 }

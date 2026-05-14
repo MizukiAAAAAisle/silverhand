@@ -194,7 +194,7 @@ function TaskPopoverBody({ task }: { task: TaskSummaryDto }): JSX.Element {
         <dt className="text-text-muted">In</dt>
         <dd
           className="truncate text-text-secondary"
-          title={task.conversation.title}
+          aria-label={task.conversation.title}
         >
           {task.conversation.title}
         </dd>
