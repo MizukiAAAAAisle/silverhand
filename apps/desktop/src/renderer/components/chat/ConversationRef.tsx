@@ -1,11 +1,9 @@
-import { useEffect } from 'react';
 import { AtSign, CornerDownRight, Hash } from 'lucide-react';
 import { HoverPopover } from './HoverPopover';
 import {
   useConversationById,
   type ConversationByIdStatus,
 } from '@/features/conversations/useConversationById';
-import { isRefHoverDebugEnabled, logRefHoverDebug } from '@/lib/refHoverDebug';
 
 export interface ConversationReference {
   id: string;
@@ -54,7 +52,6 @@ export function ConversationRef({
   onOpen,
 }: ConversationRefProps): JSX.Element {
   const hookResult = useConversationById(id);
-  const debugEnabled = isRefHoverDebugEnabled();
   // Prefer the prop (current-workspace fast path) over the hook
   // result; both shapes are fine, the prop just avoids a loading
   // flash for the common case.
@@ -80,40 +77,6 @@ export function ConversationRef({
     : hookResult.status === 'not_found' || hookResult.status === 'unauthorized'
       ? 'unavailable'
       : 'loading';
-  const debugBase = debugEnabled
-    ? {
-        kind: 'conversation' as const,
-        label: `conversation:${id}`,
-        details: {
-          id,
-          hookStatus: hookResult.status,
-          popoverStatus,
-          hasProp: conversation != null,
-          hasResolved: resolved != null,
-          hasOpenHandler: onOpen != null,
-        },
-      }
-    : undefined;
-
-  useEffect(() => {
-    if (!debugEnabled) return;
-    logRefHoverDebug('conversation-ref:render', {
-      id,
-      hookStatus: hookResult.status,
-      popoverStatus,
-      hasProp: conversation != null,
-      hasResolved: resolved != null,
-      hasOpenHandler: onOpen != null,
-    });
-  }, [
-    conversation,
-    debugEnabled,
-    hookResult.status,
-    id,
-    onOpen,
-    popoverStatus,
-    resolved,
-  ]);
 
   const label = resolved
     ? conversationDisplayName(resolved)
@@ -184,7 +147,6 @@ export function ConversationRef({
       trigger={onOpen ? interactiveChip : inertChip}
       content={popoverContent}
       isContentReady={popoverStatus !== 'loading'}
-      debug={debugBase ? { ...debugBase, state: popoverStatus } : undefined}
     />
   );
 }

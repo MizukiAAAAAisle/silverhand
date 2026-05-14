@@ -1,15 +1,5 @@
 import * as HoverCard from '@radix-ui/react-hover-card';
-import {
-  cloneElement,
-  isValidElement,
-  useEffect,
-  useState,
-  type AnimationEvent,
-  type PointerEvent,
-  type ReactElement,
-  type ReactNode,
-} from 'react';
-import { isRefHoverDebugEnabled, logRefHoverDebug } from '@/lib/refHoverDebug';
+import type { ReactNode } from 'react';
 
 /**
  * Hover-triggered popover used by inline reference chips.
@@ -48,20 +38,6 @@ export interface HoverPopoverProps {
   /** Optional override of the standard 500ms grace. Only the test
    *  harness uses this — production callers should leave it default. */
   openDelayMs?: number;
-  /** Optional debug label and context for temporary flicker diagnostics. */
-  debug?: HoverPopoverDebugInfo;
-}
-
-export interface HoverPopoverDebugInfo {
-  kind: 'conversation' | 'task';
-  label: string;
-  state: string;
-  details?: Record<string, unknown>;
-}
-
-interface TriggerDebugProps {
-  onPointerEnter?: (event: PointerEvent<HTMLElement>) => void;
-  onPointerLeave?: (event: PointerEvent<HTMLElement>) => void;
 }
 
 export function HoverPopover({
@@ -70,97 +46,16 @@ export function HoverPopover({
   skeleton,
   isContentReady,
   openDelayMs = 500,
-  debug,
 }: HoverPopoverProps): JSX.Element {
-  const [open, setOpen] = useState(false);
-  const debugEnabled = isRefHoverDebugEnabled() && debug != null;
-
-  const logDebug = (
-    event: string,
-    extra?: Record<string, unknown>,
-  ): void => {
-    if (!debugEnabled || !debug) return;
-    logRefHoverDebug(event, {
-      component: 'HoverPopover',
-      kind: debug.kind,
-      label: debug.label,
-      state: debug.state,
-      open,
-      isContentReady,
-      ...debug.details,
-      ...extra,
-    });
-  };
-
-  const triggerForRender =
-    debugEnabled && isValidElement<TriggerDebugProps>(trigger)
-      ? cloneElement(trigger as ReactElement<TriggerDebugProps>, {
-          onPointerEnter: event => {
-            logDebug('trigger:pointer-enter', {
-              pointerType: event.pointerType,
-            });
-            trigger.props.onPointerEnter?.(event);
-          },
-          onPointerLeave: event => {
-            logDebug('trigger:pointer-leave', {
-              pointerType: event.pointerType,
-            });
-            trigger.props.onPointerLeave?.(event);
-          },
-        })
-      : trigger;
-
-  const handleOpenChange = (nextOpen: boolean): void => {
-    logDebug('root:open-change', { nextOpen });
-    setOpen(nextOpen);
-  };
-
-  const handleContentPointerEnter = (
-    event: PointerEvent<HTMLDivElement>,
-  ): void => {
-    logDebug('content:pointer-enter', { pointerType: event.pointerType });
-  };
-
-  const handleContentPointerLeave = (
-    event: PointerEvent<HTMLDivElement>,
-  ): void => {
-    logDebug('content:pointer-leave', { pointerType: event.pointerType });
-  };
-
-  const handleContentAnimationStart = (
-    event: AnimationEvent<HTMLDivElement>,
-  ): void => {
-    logDebug('content:animation-start', { animationName: event.animationName });
-  };
-
-  const handleContentAnimationEnd = (
-    event: AnimationEvent<HTMLDivElement>,
-  ): void => {
-    logDebug('content:animation-end', { animationName: event.animationName });
-  };
-
-  useEffect(() => {
-    logDebug('render-state', {});
-  });
-
   return (
-    <HoverCard.Root
-      open={open}
-      onOpenChange={handleOpenChange}
-      openDelay={openDelayMs}
-      closeDelay={120}
-    >
-      <HoverCard.Trigger asChild>{triggerForRender}</HoverCard.Trigger>
+    <HoverCard.Root openDelay={openDelayMs} closeDelay={120}>
+      <HoverCard.Trigger asChild>{trigger}</HoverCard.Trigger>
       <HoverCard.Portal>
         <HoverCard.Content
           align="start"
           sideOffset={6}
           collisionPadding={8}
           className="z-[80] w-[260px] max-w-[calc(100vw-32px)] rounded-md border border-border bg-bg-floating p-3 text-xs text-text-primary shadow-lg outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
-          onPointerEnter={handleContentPointerEnter}
-          onPointerLeave={handleContentPointerLeave}
-          onAnimationStart={handleContentAnimationStart}
-          onAnimationEnd={handleContentAnimationEnd}
         >
           {isContentReady ? content : skeleton ?? <DefaultSkeleton />}
         </HoverCard.Content>
