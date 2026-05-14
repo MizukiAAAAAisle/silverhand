@@ -296,14 +296,27 @@ function SessionClearedRow({
 }: {
   meta: SessionClearedMetadata;
 }): JSX.Element {
-  const actorLabel = `@${formatUserDisplayName(meta.actor_user_id) || 'user'}`;
+  // `actor_user_id: null` in this metadata means "principal info wasn't
+  // recorded at insert time" (per shared schema docstring), NOT "current
+  // viewer" — the latter is the v1 message-row convention used by
+  // `formatUserDisplayName`. Run the helper only when the id is set;
+  // otherwise render a generic "a user" so the audit row doesn't
+  // misattribute the action to the current viewer.
+  const actorLabel = meta.actor_user_id
+    ? `@${formatUserDisplayName(meta.actor_user_id)}`
+    : 'a user';
   return (
     <div
       className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 px-4 py-1 text-xs text-text-muted"
       data-session-cleared="1"
     >
       <RotateCcw aria-hidden className="size-3.5 shrink-0 opacity-60" />
-      <span className="text-text-secondary">{actorLabel}</span>
+      <span
+        className="text-text-secondary"
+        data-session-cleared-actor={meta.actor_user_id ?? 'unknown'}
+      >
+        {actorLabel}
+      </span>
       <span>reset</span>
       <span className="font-medium text-text-primary">@{meta.agent_name}</span>
       <span>'s session context</span>

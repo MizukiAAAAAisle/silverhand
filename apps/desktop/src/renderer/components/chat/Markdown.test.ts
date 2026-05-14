@@ -192,6 +192,29 @@ describe('SystemMessage channel refs', () => {
     expect(html).not.toContain('prev ');
   });
 
+  it('session_cleared with actor_user_id=null renders "a user", NOT @you', () => {
+    // Schema docstring (`packages/shared/src/system-messages.ts`):
+    // null = principal info wasn't recorded at insert time. This is the
+    // OPPOSITE of the v1 message-row convention where null = current
+    // viewer. Renderer must NOT route null through
+    // `formatUserDisplayName` (which would produce `@you`) here.
+    const msg = makeSystemMessage(
+      'session_cleared',
+      {
+        agent_id: 'a-bob',
+        agent_name: 'Bob',
+        actor_user_id: null,
+        previous_cli_session_id_prefix: 'aabbccdd',
+        was_running: true,
+      },
+    );
+    const html = renderSystem(msg, new Map());
+    expect(html).toContain('data-session-cleared="1"');
+    expect(html).toContain('data-session-cleared-actor="unknown"');
+    expect(html).toContain('a user');
+    expect(html).not.toContain('@you');
+  });
+
   it('session_cleared with no metadata falls back to legacy audit row + RotateCcw', () => {
     const msg = makeSystemMessage(
       'session_cleared',

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
+import { readSessionClearedMetadata } from '@silverhand/shared';
 import {
   buildManagerHarness,
   readStdinLog,
@@ -449,6 +450,19 @@ describe('ConversationManager.clearSession', () => {
     expect(audit!.content).toContain('@local cleared @mock');
     expect(audit!.content).toContain('cli-abcd...');
     expect(audit!.content).not.toContain('cli-abcdefgh123456');
+
+    // Producer-side schema round-trip — metadata must satisfy the
+    // shared `SessionClearedMetadataSchema`. Catches drift if a
+    // producer field is renamed or dropped without updating the schema.
+    const parsedMeta = readSessionClearedMetadata(
+      audit!.metadata ? (JSON.parse(audit!.metadata) as Record<string, unknown>) : null,
+    );
+    expect(parsedMeta).not.toBeNull();
+    expect(parsedMeta!.agent_id).toBe(h.agentId);
+    expect(parsedMeta!.actor_user_id).toBe('local');
+    expect(parsedMeta!.previous_cli_session_id_prefix).toBe('cli-abcd');
+    expect(parsedMeta!.was_running).toBe(true);
+
     expect(events.some(e => e.kind === 'message' && e.payload?.message?.id === audit!.id))
       .toBe(true);
 
