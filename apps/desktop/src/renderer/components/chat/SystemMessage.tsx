@@ -1,11 +1,16 @@
 import { useState, type ComponentType } from 'react';
-import { AtSign, CheckCircle2, ChevronRight, Eraser } from 'lucide-react';
+import { AtSign, CheckCircle2, ChevronRight, ClipboardCheck, Eraser } from 'lucide-react';
 import {
   type MessageDto,
   type SystemSubtype,
+  type TaskStatus,
+  type TaskSubtype,
+  type TaskSystemMetadata,
+  readTaskSystemMetadata,
   resolveSubtype,
 } from '@silverhand/shared';
 import { useMessage } from '@/features/messages/hooks';
+import { useTaskRefContext } from '@/features/tasks/TaskRefContext';
 import { formatUserDisplayName } from '@/lib/current-user';
 import { Markdown } from './Markdown';
 import type { ChannelReference } from './ChannelRef';
@@ -262,6 +267,224 @@ function SessionClearedCard({
   );
 }
 
+// ─── task event row ───────────────────────────────────────────────────
+
+/**
+ * Inline row for `task_create` / `task_claim` / `task_unclaim` /
+ * `task_status` system messages. Each row appears at its real position
+ * in the message stream — same-task events are NOT connected by a
+ * line; visual continuity comes from the `#task:N` chip identity and
+ * its hover popover (already wired in PR-4 infra).
+ *
+ * Three sub-shapes:
+ *  - `create` / `claim` / `unclaim`: `<dot> <actor> <verb> <chip>`
+ *  - `status`: `<dot> <chip> → <status pill> by <actor>`
+ *  - missing/legacy metadata: degraded fallback — chip + status pill
+ *    + `message.content` as muted narration.
+ *
+ * Status colors stay subtle (the row is muted overall — quieter than a
+ * real chat message). Cindy's PR-2 visual norms (msg `AjrWQyiFyq08zMya`):
+ *  - row baseline = `text-text-secondary`
+ *  - status colors only on the dot + the pill, not on row body.
+ */
+function TaskEventRow({ message }: RendererProps): JSX.Element {
+  const meta = readTaskSystemMetadata(message.metadata);
+  if (!meta) {
+    // Legacy task row (pre-PR-2): no enriched metadata. Renderer falls
+    // back to muted narration — agent can still read the audit text,
+    // we just lose the structured pill/chip presentation.
+    return <TaskEventLegacyFallback content={message.content} />;
+  }
+  return <TaskEventRowEnriched meta={meta} />;
+}
+
+function TaskEventRowEnriched({
+  meta,
+}: {
+  meta: TaskSystemMetadata;
+}): JSX.Element {
+  const actorLabel = meta.actor.kind === 'user'
+    ? `@${formatUserDisplayName(meta.actor.id) || meta.actor.name || 'user'}`
+    : `@${meta.actor.name}`;
+
+  const dotKind: TaskEventDotKind =
+    meta.subtype === 'task_unclaim' ? 'unclaim' : meta.task_status;
+
+  return (
+    <div className="flex items-center gap-2.5 px-4 py-1.5 text-xs text-text-secondary">
+      <TaskEventDot kind={dotKind} />
+      <TaskEventBody subtype={meta.subtype} actorLabel={actorLabel} meta={meta} />
+    </div>
+  );
+}
+
+function TaskEventBody({
+  subtype,
+  actorLabel,
+  meta,
+}: {
+  subtype: TaskSubtype;
+  actorLabel: string;
+  meta: TaskSystemMetadata;
+}): JSX.Element {
+  if (subtype === 'task_status') {
+    return (
+      <>
+        <TaskEventChip
+          taskNumber={meta.task_number}
+          title={meta.task_title}
+        />
+        <span className="text-text-muted" aria-hidden>→</span>
+        <TaskStatusPill status={meta.task_status} />
+        <span className="text-text-muted">by {actorLabel}</span>
+      </>
+    );
+  }
+  const verb =
+    subtype === 'task_create'
+      ? 'created'
+      : subtype === 'task_claim'
+        ? 'claimed'
+        : 'unclaimed';
+  return (
+    <>
+      <span className="font-medium text-text-primary">{actorLabel}</span>
+      <span className="text-text-muted">{verb}</span>
+      <TaskEventChip
+        taskNumber={meta.task_number}
+        title={subtype === 'task_create' ? meta.task_title : null}
+      />
+    </>
+  );
+}
+
+type TaskEventDotKind = TaskStatus | 'unclaim';
+
+function TaskEventDot({ kind }: { kind: TaskEventDotKind }): JSX.Element {
+  const cls: Record<TaskEventDotKind, string> = {
+    todo: 'bg-text-muted/60',
+    in_progress: 'bg-accent',
+    in_review: 'bg-warning',
+    done: 'bg-success',
+    unclaim: 'border border-dashed border-text-muted/60 bg-transparent',
+  };
+  return (
+    <span
+      aria-hidden
+      className={`size-2 shrink-0 rounded-full ${cls[kind]}`}
+      data-task-event-dot={kind}
+    />
+  );
+}
+
+/**
+ * Static chip rendering for the task event row. Mirrors `TaskRef`'s
+ * resolved-state shape but reads `task_number` / `title` straight from
+ * metadata — no fetch, no skeleton, no hover popover. The popover and
+ * deep linking on the chip stay on `#task:N` sigils inside chat
+ * messages where the user is reading prose; the event row is itself
+ * the audit record, so the chip's job is just to label the row.
+ */
+function TaskEventChip({
+  taskNumber,
+  title,
+}: {
+  taskNumber: number;
+  title: string | null;
+}): JSX.Element {
+  const ctx = useTaskRefContext();
+  const onOpenTask = ctx?.onOpenTask;
+  const label = `#task:${taskNumber}`;
+  const baseClass =
+    'inline-flex max-w-[260px] items-center gap-0.5 rounded bg-bg-elevated px-1.5 font-mono text-[11px]';
+  const content = (
+    <>
+      <ClipboardCheck className="size-3 shrink-0 self-center text-accent" />
+      <span className="truncate font-semibold text-accent">{label}</span>
+      {title ? (
+        <span className="truncate font-sans font-normal text-text-secondary">
+          {title}
+        </span>
+      ) : null}
+    </>
+  );
+  if (!onOpenTask) {
+    return (
+      <span
+        className={baseClass + ' text-text-secondary'}
+        title={title ? `${label} · ${title}` : label}
+        data-task-event-chip={String(taskNumber)}
+        data-task-event-chip-state="inert"
+      >
+        {content}
+      </span>
+    );
+  }
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      className={
+        baseClass +
+        ' cursor-pointer text-text-secondary transition-colors hover:bg-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus'
+      }
+      aria-label={title ? `${label} · ${title}` : label}
+      data-task-event-chip={String(taskNumber)}
+      data-task-event-chip-state="clickable"
+      onClick={event => {
+        event.preventDefault();
+        event.stopPropagation();
+        onOpenTask(taskNumber);
+      }}
+      onKeyDown={event => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        event.stopPropagation();
+        onOpenTask(taskNumber);
+      }}
+    >
+      {content}
+    </span>
+  );
+}
+
+function TaskStatusPill({ status }: { status: TaskStatus }): JSX.Element {
+  const styles: Record<TaskStatus, string> = {
+    todo: 'bg-bg-elevated text-text-muted',
+    in_progress: 'bg-accent/10 text-accent',
+    in_review: 'bg-warning/10 text-warning',
+    done: 'bg-success/10 text-success',
+  };
+  const labels: Record<TaskStatus, string> = {
+    todo: 'todo',
+    in_progress: 'in progress',
+    in_review: 'in review',
+    done: 'done',
+  };
+  return (
+    <span
+      data-task-event-status={status}
+      className={
+        'inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ' +
+        styles[status]
+      }
+    >
+      {labels[status]}
+    </span>
+  );
+}
+
+function TaskEventLegacyFallback({ content }: { content: string }): JSX.Element {
+  return (
+    <div
+      className="px-4 py-1.5 text-center text-xs italic text-text-muted"
+      data-task-event-legacy="1"
+    >
+      {content}
+    </div>
+  );
+}
+
 // ─── thread_summary card ───────────────────────────────────────────────
 
 /**
@@ -341,11 +564,13 @@ function ThreadSummaryCard({
  * by one in subsequent PRs (PR-2..PR-6).
  */
 const systemMessageRenderers: Record<SystemSubtype, SystemMessageRenderer> = {
-  // P0 (PR-2): becomes a task event row.
-  task_create: GenericNarrationFallback,
-  task_claim: GenericNarrationFallback,
-  task_unclaim: GenericNarrationFallback,
-  task_status: GenericNarrationFallback,
+  // P0 (PR-2): task event row reads enriched metadata; legacy rows
+  // (no actor / task_title / task_message_id metadata) fall back to
+  // muted narration without the structured chip/pill presentation.
+  task_create: TaskEventRow,
+  task_claim: TaskEventRow,
+  task_unclaim: TaskEventRow,
+  task_status: TaskEventRow,
   // P0 (PR-3): becomes inline audit row.
   session_cleared: SessionClearedCard,
   // P1 (PR-4): becomes a flat banner.

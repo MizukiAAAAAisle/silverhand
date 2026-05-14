@@ -1614,3 +1614,47 @@ URL scheme：
 
 后续 PR：PR-2 task event row + metadata schema 扩展（`task_message_id` / `actor` / `task_title` / `task_assignee`）；PR-3 session_cleared 退 toast；PR-4 schedule_fire 扁平 banner；PR-5 channel_context / child_context / thread_anchor 统一 quote-card 系列；PR-6 onboarding badge / rename ↻ icon。
 
+## 2026-05-15 — System message UI redesign · PR-2（task event row + metadata enrichment）
+
+DB 1646 条 task_* 系统消息（占系统消息总量约 95%）从居中斜体 narration 升级为 **task event row**——同一 task 的事件不连线（mocking 时已验证：同一 task 的 mutation 之间往往隔了大量对话，timeline 视图是错觉），靠 `#task:N` chip 视觉标识 + hover popover（PR-4 落地）聚合。
+
+**Schema 扩展**（`packages/shared/src/system-messages.ts`）：
+
+- 新增 `TaskSystemActorSchema`（discriminated union: `user{id:string|null,name}` / `agent{id,name}`）+ `TaskSystemActor` 类型。`id` 在 user 分支允许 `null`（兼容 v1 legacy 无 userId 的写入）。
+- 新增 `TaskSystemMetadataSchema`（zod object，`.safeParse` 兼容老行）：
+  ```
+  { subtype, task_number, task_status (after-state), task_message_id,
+    task_title, task_assignee, actor }
+  ```
+  `task_status` 是 mutation **之后**的状态快照（`task_create → todo`、`task_unclaim → todo`、`task_status → status`），事件类型由 `subtype` 决定，不需要 prior-state 字段；schema docstring + `TaskStatusAfterMutation` type alias 把语义钉到读端。
+- 新增 `readTaskSystemMetadata(metadata)` 防御解析——legacy row（PR-2 之前只写 `task_number` + `task_status`）`safeParse` fail → 返回 `null`，renderer 走 degraded fallback（content as muted narration），不抛。
+
+**Producer 改造**（`packages/backend/src/services/task-service.ts`）：
+
+- 新私有方法 `taskSystemActor(actor: TaskActor): TaskSystemActor`：把 `UserPrincipal | AgentPrincipal` 投到结构化 actor 元数据；agent 优先取 `display_name`，回落 `name` / id。
+- `broadcast()` 签名加 `actor: TaskActor`，metadata 现在写 `{subtype, task_number, task_status, task_message_id, task_title, task_assignee, actor}`——renderer 不再从 `message.content` 解析 actor / verb / status。
+- `claimTaskUser` / `unclaimTaskUser` / `updateStatusUser` 三个 user-driven 内部方法 dispatcher 改为接受 `actor: UserActor`，全部 7 个 `broadcast()` call site 都传 actor。
+
+**Renderer**（`apps/desktop/src/renderer/components/chat/SystemMessage.tsx`）：
+
+- 新 `TaskEventRow` 组件，4 个 `task_*` registry entry 全部指向它。
+- 三个子形态：
+  - `task_create` / `task_claim` / `task_unclaim`：`<dot> <actor> <verb> <chip>`
+  - `task_status`：`<dot> <chip> → <status pill> by <actor>`
+  - 缺 metadata（legacy row）：`<TaskEventLegacyFallback>` muted italic content
+- 状态色仅用于 dot + status pill；row 整体 baseline = `text-text-secondary`（比真消息弱），符合 Cindy 的视觉规范要求（msg `AjrWQyiFyq08zMya`）。
+- `TaskEventChip` 是静态版的 `#task:N` chip——直接用 metadata 的 number/title 渲染，不 fetch、不 skeleton；通过 `useTaskRefContext().onOpenTask` 接管点击；无 context 时 inert。
+- `unclaim` 用虚线圆圈 dot 区分（unclaim 后 status=todo，但视觉语义不是"重新待领"，是"前一个 assignee 退出"）。
+
+**测试**：
+
+- `packages/backend/tests/services/task-service.test.ts` 加 6 测：4 个 subtype 各验证 metadata 完整字段（subtype / task_message_id / task_title / task_status after-state / task_assignee / actor）；user actor `id=null/name='user'` 路径；agent actor `display_name` 优先级。
+- `apps/desktop/src/renderer/components/chat/Markdown.test.ts` 加 7 测：`task_create/claim/unclaim/status` 4 形态各自 dot 颜色 + verb / pill / by-actor 文案；user actor 渲染 `@you`（formatUserDisplayName 投影）；no-handler 时 chip inert；legacy row（少字段）回落 muted narration `data-task-event-legacy="1"`。
+
+**质量门**：4 包 typecheck 全绿；backend 642/642（+6）；desktop 139/139（+7）。
+
+**未变（按设计跳过）**：
+
+- 无 DB 迁移——metadata 是 message row 的 free-form JSON 列，新字段直接写。
+- 无 task_events 表——每条 task system message 本身就是事件记录，`created_at` = 事件时间，靠 metadata.task_message_id 反查同 task 历史已经够用。
+

@@ -35,6 +35,9 @@
  *
  * Both `legacy` and `unknown` are first-class fallback states, NOT errors.
  */
+import { z } from 'zod';
+import { TaskAssigneeDtoSchema } from './api/dto.js';
+import { TaskStatusSchema } from './db/schema.js';
 
 /** Live subtypes — every entry must have a renderer in the registry. */
 export const SYSTEM_SUBTYPES = [
@@ -156,4 +159,85 @@ export function readSubtype(
   if (!metadata) return { kind: 'unknown' };
   const v = metadata['subtype'];
   return resolveSubtype(typeof v === 'string' ? v : null);
+}
+
+// ── Per-subtype metadata schemas ─────────────────────────────────────
+//
+// Producers and renderers stay loose at the message-row boundary
+// (`metadata: Record<string, unknown>` in the message DTO), but each
+// subtype with structured fields owns a zod schema below so producers
+// can lock the shape on insert and renderers can defensively parse on
+// read. Renderers do NOT throw on missing fields — they fall back to a
+// degraded display (typically: drop the structured pieces and render
+// `message.content` as narration). This is the "legacy task row" path
+// from the PR-2 design discussion.
+
+/** Actor on a task system event — derived from the `TaskActor` that
+ *  triggered the mutation. `id` is `null` only for legacy user actors
+ *  whose `userId` was unknown at insert time; new producers set
+ *  `id = 'local'` (or whatever the principal carries). */
+export const TaskSystemActorSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('user'),
+    id: z.string().nullable(),
+    name: z.string(),
+  }),
+  z.object({
+    kind: z.literal('agent'),
+    id: z.string(),
+    name: z.string(),
+  }),
+]);
+export type TaskSystemActor = z.infer<typeof TaskSystemActorSchema>;
+
+/**
+ * Metadata shape for `task_create` / `task_claim` / `task_unclaim` /
+ * `task_status` system messages. The `task_status` field is the status
+ * snapshot AFTER this mutation — the event TYPE is `subtype`. Examples:
+ *
+ *  - `subtype = task_create`: genesis event; `task_status = 'todo'`.
+ *  - `subtype = task_claim`: prior state was `todo` (claim's domain);
+ *    `task_status = 'in_progress'` (the post-state).
+ *  - `subtype = task_unclaim`: prior state was `in_progress`;
+ *    `task_status = 'todo'` (the post-state).
+ *  - `subtype = task_status`: arbitrary transition; the prior state is
+ *    NOT in metadata — needs back-reference to the previous task system
+ *    message if a future view wants to render a `before → after` diff.
+ *
+ * `task_message_id` points at the canonical task body row (the
+ * `task_create` system message; same id for every later mutation event
+ * on this task), enabling per-task event lookup without relying on
+ * workspace-scoped `task_number` ambiguity.
+ */
+export const TaskSystemMetadataSchema = z.object({
+  subtype: z.enum(TASK_SUBTYPES),
+  task_number: z.number(),
+  /** Status snapshot AFTER this mutation. The event type is `subtype`,
+   *  not this field — see schema docstring for prior-state semantics. */
+  task_status: TaskStatusSchema,
+  task_message_id: z.string(),
+  task_title: z.string(),
+  task_assignee: TaskAssigneeDtoSchema.nullable(),
+  actor: TaskSystemActorSchema,
+});
+export type TaskSystemMetadata = z.infer<typeof TaskSystemMetadataSchema>;
+
+/** TS alias to flag the `task_status` field as the after-state snapshot.
+ *  Read sites can write `const status: TaskStatusAfterMutation = m.task_status`
+ *  to make the semantic explicit at the call site. */
+export type TaskStatusAfterMutation = TaskSystemMetadata['task_status'];
+
+/**
+ * Defensive parse of a system-message metadata object into a fully
+ * enriched `TaskSystemMetadata`. Returns `null` if any required field is
+ * missing or malformed — renderers should fall back to a degraded
+ * display (chip + status pill + raw `message.content`) for legacy rows
+ * inserted before PR-2 added the enrichment.
+ */
+export function readTaskSystemMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+): TaskSystemMetadata | null {
+  if (!metadata) return null;
+  const parsed = TaskSystemMetadataSchema.safeParse(metadata);
+  return parsed.success ? parsed.data : null;
 }

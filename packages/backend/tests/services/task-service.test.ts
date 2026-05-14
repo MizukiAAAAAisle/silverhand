@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readTaskSystemMetadata } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
@@ -1301,3 +1302,168 @@ async function firstMsgId(t: ReturnType<typeof bootstrap>): Promise<string> {
   if (!row) throw new Error('no task message found');
   return row.id;
 }
+
+function fetchSystemMetadata(
+  t: ReturnType<typeof bootstrap>,
+  subtype: string,
+): Record<string, unknown>[] {
+  const rows = t.db
+    .prepare<[], { metadata: string | null }>(
+      `SELECT metadata FROM messages WHERE from_kind = 'system' ORDER BY created_at ASC, id ASC`,
+    )
+    .all();
+  return rows
+    .map(r => (r.metadata ? (JSON.parse(r.metadata) as Record<string, unknown>) : null))
+    .filter((m): m is Record<string, unknown> =>
+      m !== null && (m as { subtype?: string }).subtype === subtype,
+    );
+}
+
+describe('TaskService system message metadata enrichment (PR-2)', () => {
+  it('task_create writes full enriched metadata: subtype, task_message_id, title, status, assignee, actor', async () => {
+    const t = bootstrap();
+    try {
+      const result = await t.service.createTasks({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        tasks: [{ title: 'task-create-meta' }],
+      });
+      if (!('tasks' in result)) throw new Error();
+      const created = result.tasks[0]!;
+
+      const rows = fetchSystemMetadata(t, 'task_create');
+      expect(rows.length).toBe(1);
+      const meta = readTaskSystemMetadata(rows[0]!);
+      expect(meta).not.toBeNull();
+      expect(meta!.subtype).toBe('task_create');
+      expect(meta!.task_number).toBe(created.task_number);
+      expect(meta!.task_message_id).toBe(created.message_id);
+      expect(meta!.task_title).toBe('task-create-meta');
+      expect(meta!.task_status).toBe('todo');
+      expect(meta!.task_assignee).toBeNull();
+      expect(meta!.actor.kind).toBe('agent');
+      if (meta!.actor.kind !== 'agent') throw new Error();
+      expect(meta!.actor.id).toBe(t.alice.id);
+      expect(meta!.actor.name).toBeTypeOf('string');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('task_claim writes after-state status=in_progress + assignee snapshot', async () => {
+    const t = bootstrap();
+    try {
+      await createTask(t, t.bob.id, 'task-claim-meta');
+      await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+      });
+      const rows = fetchSystemMetadata(t, 'task_claim');
+      expect(rows.length).toBe(1);
+      const meta = readTaskSystemMetadata(rows[0]!);
+      expect(meta).not.toBeNull();
+      expect(meta!.subtype).toBe('task_claim');
+      expect(meta!.task_status).toBe('in_progress');
+      expect(meta!.task_assignee).not.toBeNull();
+      expect(meta!.task_assignee!.id).toBe(t.alice.id);
+      expect(meta!.actor.kind).toBe('agent');
+      if (meta!.actor.kind !== 'agent') throw new Error();
+      expect(meta!.actor.id).toBe(t.alice.id);
+      expect(meta!.task_message_id).toBeTypeOf('string');
+      expect(meta!.task_title).toBe('task-claim-meta');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('task_unclaim writes after-state status=todo + assignee=null', async () => {
+    const t = bootstrap();
+    try {
+      await createTask(t, t.alice.id, 'task-unclaim-meta');
+      await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+      });
+      await t.service.unclaimTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+      });
+      const rows = fetchSystemMetadata(t, 'task_unclaim');
+      expect(rows.length).toBe(1);
+      const meta = readTaskSystemMetadata(rows[0]!);
+      expect(meta).not.toBeNull();
+      expect(meta!.subtype).toBe('task_unclaim');
+      expect(meta!.task_status).toBe('todo');
+      expect(meta!.task_assignee).toBeNull();
+      expect(meta!.actor.kind).toBe('agent');
+      if (meta!.actor.kind !== 'agent') throw new Error();
+      expect(meta!.actor.id).toBe(t.alice.id);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('task_status writes after-state status snapshot from agent transition', async () => {
+    const t = bootstrap();
+    try {
+      await createTask(t, t.alice.id, 'task-status-meta');
+      await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+      });
+      await t.service.updateStatus({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+        status: 'in_review',
+      });
+      const rows = fetchSystemMetadata(t, 'task_status');
+      expect(rows.length).toBe(1);
+      const meta = readTaskSystemMetadata(rows[0]!);
+      expect(meta).not.toBeNull();
+      expect(meta!.subtype).toBe('task_status');
+      expect(meta!.task_status).toBe('in_review');
+      expect(meta!.actor.kind).toBe('agent');
+      if (meta!.actor.kind !== 'agent') throw new Error();
+      expect(meta!.actor.id).toBe(t.alice.id);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('user actor produces actor.kind=user (id=null for legacy) on user-driven mutations', async () => {
+    const t = bootstrap();
+    try {
+      await createTask(t, t.alice.id, 'user-actor-meta');
+      const msgId = await firstMsgId(t);
+      await t.service.unclaimTask({
+        actor: { kind: 'user', userId: null },
+        by: { messageId: msgId },
+      });
+      const rows = fetchSystemMetadata(t, 'task_unclaim');
+      expect(rows.length).toBe(1);
+      const meta = readTaskSystemMetadata(rows[0]!);
+      expect(meta).not.toBeNull();
+      expect(meta!.actor.kind).toBe('user');
+      if (meta!.actor.kind !== 'user') throw new Error();
+      expect(meta!.actor.id).toBeNull();
+      expect(meta!.actor.name).toBe('user');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('agent actor uses display_name when set', async () => {
+    const t = bootstrap();
+    try {
+      t.agents.update(t.alice.id, { display_name: 'Alice the Architect' });
+      await createTask(t, t.alice.id, 'display-name-meta');
+      const rows = fetchSystemMetadata(t, 'task_create');
+      const meta = readTaskSystemMetadata(rows[0]!);
+      expect(meta!.actor.kind).toBe('agent');
+      if (meta!.actor.kind !== 'agent') throw new Error();
+      expect(meta!.actor.name).toBe('Alice the Architect');
+    } finally {
+      t.cleanup();
+    }
+  });
+});

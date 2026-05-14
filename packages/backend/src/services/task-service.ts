@@ -12,6 +12,7 @@ import {
   type TaskMutationResult,
   type TaskStatus,
   type TaskSummaryDto,
+  type TaskSystemActor,
   taskSystemSubtype,
 } from '@silverhand/shared';
 import type { BackendLogger } from '../context.js';
@@ -340,6 +341,7 @@ export class TaskService {
         title: t.title,
         status: 'todo',
         assignee: null,
+        actor: input.actor,
         sysMessage: `${actorLabel} created task #${t.task_number} "${t.title}"`,
       });
     }
@@ -353,7 +355,7 @@ export class TaskService {
     if (input.actor.kind === 'agent') {
       return this.claimTaskAgent(input.actor, input.by as AgentTaskRef, input.assignee);
     }
-    return this.claimTaskUser(input.by as UserTaskRef, input.assignee);
+    return this.claimTaskUser(input.actor, input.by as UserTaskRef, input.assignee);
   }
 
   private async claimTaskAgent(
@@ -517,6 +519,7 @@ export class TaskService {
       title: txOut.title,
       status: txOut.status,
       assignee: this.assigneeDtoForAgent(actor.agentId),
+      actor,
       sysMessage: `${this.actorLabel(actor)} claimed task #${txOut.taskNumber}`,
     });
 
@@ -528,6 +531,7 @@ export class TaskService {
   }
 
   private async claimTaskUser(
+    actor: UserActor,
     by: UserTaskRef,
     assignee: { agentId: string } | undefined,
   ): Promise<ClaimResultEntry> {
@@ -607,6 +611,7 @@ export class TaskService {
         title: fresh?.title ?? firstLine(txOut.content),
         status: fresh?.task_status ?? 'in_progress',
         assignee: fresh?.assignee ?? null,
+        actor,
         sysMessage,
       });
     }
@@ -624,7 +629,7 @@ export class TaskService {
     if (input.actor.kind === 'agent') {
       return this.unclaimTaskAgent(input.actor, input.by as AgentTaskRef);
     }
-    return this.unclaimTaskUser(input.by as UserTaskRef);
+    return this.unclaimTaskUser(input.actor, input.by as UserTaskRef);
   }
 
   private async unclaimTaskAgent(
@@ -708,13 +713,17 @@ export class TaskService {
       title: txOut.title,
       status: 'todo',
       assignee: null,
+      actor,
       sysMessage: `task #${txOut.taskNumber} unclaimed (was @${this.agentName(actor.agentId)})`,
     });
 
     return { success: true };
   }
 
-  private async unclaimTaskUser(by: UserTaskRef): Promise<TaskMutationResult> {
+  private async unclaimTaskUser(
+    actor: UserActor,
+    by: UserTaskRef,
+  ): Promise<TaskMutationResult> {
     type UnclaimUserTxOut =
       | { failure: TaskMutationResult }
       | {
@@ -760,6 +769,7 @@ export class TaskService {
         title: fresh?.title ?? firstLine(txOut.content),
         status: 'todo',
         assignee: null,
+        actor,
         sysMessage: `task #${txOut.taskNumber} unclaimed (by user)`,
       });
     }
@@ -773,7 +783,7 @@ export class TaskService {
     if (input.actor.kind === 'agent') {
       return this.updateStatusAgent(input.actor, input.by as AgentTaskRef, input.status);
     }
-    return this.updateStatusUser(input.by as UserTaskRef, input.status);
+    return this.updateStatusUser(input.actor, input.by as UserTaskRef, input.status);
   }
 
   private async updateStatusAgent(
@@ -865,6 +875,7 @@ export class TaskService {
       assignee: txOut.assigneeAgentId
         ? this.assigneeDtoForAgent(txOut.assigneeAgentId)
         : null,
+      actor,
       sysMessage: `task #${txOut.taskNumber} → ${status} (by @${this.agentName(actor.agentId)})`,
     });
 
@@ -872,6 +883,7 @@ export class TaskService {
   }
 
   private async updateStatusUser(
+    actor: UserActor,
     by: UserTaskRef,
     status: TaskStatus,
   ): Promise<TaskMutationResult> {
@@ -922,6 +934,7 @@ export class TaskService {
         title: fresh?.title ?? firstLine(txOut.content),
         status,
         assignee: fresh?.assignee ?? null,
+        actor,
         sysMessage: `task #${txOut.taskNumber} → ${status} (by user)`,
       });
     }
@@ -1104,6 +1117,22 @@ export class TaskService {
     return agent ? `@${agent.name}` : 'agent';
   }
 
+  /** Render a `TaskActor` (UserPrincipal | AgentPrincipal) into the
+   *  structured `TaskSystemActor` we embed in task system metadata.
+   *  Renderers read this to draw an actor pill without parsing
+   *  `message.content`. */
+  private taskSystemActor(actor: TaskActor): TaskSystemActor {
+    if (actor.kind === 'user') {
+      return { kind: 'user', id: actor.userId, name: 'user' };
+    }
+    const agent = this.agents.get(actor.agentId);
+    return {
+      kind: 'agent',
+      id: actor.agentId,
+      name: agent?.display_name ?? agent?.name ?? actor.agentId,
+    };
+  }
+
   private agentName(agentId: string): string {
     const agent = this.agents.get(agentId);
     return agent?.name ?? agentId;
@@ -1121,11 +1150,19 @@ export class TaskService {
   private async broadcast(args: {
     conversation: ConversationDto;
     kind: TaskChangedEvent['kind'];
+    /** Canonical task body message id — same value for every mutation
+     *  on a given task (the row created by `task_create`). Used to
+     *  anchor cross-thread / cross-workspace task lookups without
+     *  relying on the workspace-scoped `task_number`. */
     messageId: string;
     taskNumber: number;
     title: string;
+    /** Status snapshot AFTER this mutation. */
     status: TaskStatus;
     assignee: TaskAssigneeDto | null;
+    /** Who triggered the mutation. Rendered as an actor pill on the
+     *  task event row instead of being parsed back out of `sysMessage`. */
+    actor: TaskActor;
     sysMessage: string;
   }): Promise<void> {
     const conversationId = args.conversation.id;
@@ -1133,6 +1170,7 @@ export class TaskService {
     const channelId = args.conversation.parent_conversation_id ?? args.conversation.id;
     const threadId = args.conversation.parent_conversation_id ? args.conversation.id : null;
 
+    const systemActor: TaskSystemActor = this.taskSystemActor(args.actor);
     const sysMsg = this.db.transaction(() =>
       this.messages.insertForConversation({
         conversationId,
@@ -1142,6 +1180,10 @@ export class TaskService {
           subtype: taskSystemSubtype(args.kind),
           task_number: args.taskNumber,
           task_status: args.status,
+          task_message_id: args.messageId,
+          task_title: args.title,
+          task_assignee: args.assignee,
+          actor: systemActor,
         },
       }),
     )();

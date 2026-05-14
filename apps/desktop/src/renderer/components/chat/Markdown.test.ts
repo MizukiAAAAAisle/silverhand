@@ -207,6 +207,150 @@ describe('SystemMessage channel refs', () => {
   });
 });
 
+describe('SystemMessage task event rows (PR-2)', () => {
+  function makeSystemMessage(
+    subtype: string,
+    metadata: Record<string, unknown>,
+    content = '',
+  ): import('@silverhand/shared').MessageDto {
+    return {
+      id: 'sys-task-1',
+      conversation_id: 'conv-1',
+      from_kind: 'system',
+      from_agent_id: null,
+      from_user_id: null,
+      content,
+      metadata: { subtype, ...metadata },
+      attachments: null,
+      seq: 1,
+      created_at: 0,
+      task_number: null,
+      task_status: null,
+      task_title: null,
+      task_workspace_id: null,
+      task_assignee: null,
+    };
+  }
+
+  function renderTaskEvent(
+    msg: import('@silverhand/shared').MessageDto,
+    onOpenTask?: (n: number) => void,
+  ): string {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return renderToStaticMarkup(
+      React.createElement(
+        StaticRouter,
+        { location: '/' },
+        React.createElement(
+          QueryClientProvider,
+          { client: qc },
+          React.createElement(
+            TaskRefContextProvider,
+            { value: { workspaceId: 'ws-1', onOpenTask } },
+            React.createElement(SystemMessage, {
+              message: msg,
+              channelsByName: new Map(),
+              onOpenChannelRef: () => undefined,
+            }),
+          ),
+        ),
+      ),
+    );
+  }
+
+  const fullMeta = (overrides: Record<string, unknown>): Record<string, unknown> => ({
+    task_number: 42,
+    task_status: 'todo',
+    task_message_id: 'msg-task-42',
+    task_title: 'wire registry',
+    task_assignee: null,
+    actor: { kind: 'agent', id: 'a-alice', name: 'Alice' },
+    ...overrides,
+  });
+
+  it('task_create renders actor + verb + chip with title + todo dot', () => {
+    const msg = makeSystemMessage('task_create', fullMeta({}));
+    const html = renderTaskEvent(msg, () => undefined);
+    expect(html).toContain('@Alice');
+    expect(html).toContain('created');
+    expect(html).toContain('#task:42');
+    expect(html).toContain('wire registry');
+    expect(html).toContain('data-task-event-dot="todo"');
+    expect(html).toContain('data-task-event-chip-state="clickable"');
+  });
+
+  it('task_claim renders verb=claimed + chip + in_progress dot', () => {
+    const msg = makeSystemMessage(
+      'task_claim',
+      fullMeta({
+        task_status: 'in_progress',
+        task_assignee: { type: 'agent', id: 'a-alice', name: 'Alice' },
+      }),
+    );
+    const html = renderTaskEvent(msg, () => undefined);
+    expect(html).toContain('claimed');
+    expect(html).toContain('data-task-event-dot="in_progress"');
+  });
+
+  it('task_unclaim uses dashed-border dot (no fill)', () => {
+    const msg = makeSystemMessage(
+      'task_unclaim',
+      fullMeta({ task_status: 'todo', task_assignee: null }),
+    );
+    const html = renderTaskEvent(msg, () => undefined);
+    expect(html).toContain('unclaimed');
+    expect(html).toContain('data-task-event-dot="unclaim"');
+    expect(html).toContain('border-dashed');
+  });
+
+  it('task_status renders chip → status pill by actor (no verb word)', () => {
+    const msg = makeSystemMessage('task_status', fullMeta({ task_status: 'in_review' }));
+    const html = renderTaskEvent(msg, () => undefined);
+    expect(html).toContain('#task:42');
+    expect(html).toContain('data-task-event-status="in_review"');
+    expect(html).toContain('in review');
+    expect(html).toContain('by @Alice');
+  });
+
+  it('user actor renders the viewer-friendly @you handle for current user', () => {
+    const msg = makeSystemMessage(
+      'task_status',
+      fullMeta({
+        task_status: 'done',
+        actor: { kind: 'user', id: null, name: 'user' },
+      }),
+    );
+    const html = renderTaskEvent(msg, () => undefined);
+    expect(html).toContain('data-task-event-status="done"');
+    expect(html).toContain('by @you');
+  });
+
+  it('chip is inert when no onOpenTask handler is supplied', () => {
+    const msg = makeSystemMessage('task_create', fullMeta({}));
+    const html = renderTaskEvent(msg, undefined);
+    expect(html).toContain('data-task-event-chip-state="inert"');
+    expect(html).not.toContain('data-task-event-chip-state="clickable"');
+  });
+
+  it('legacy row (missing metadata fields) falls back to muted narration', () => {
+    // Pre-PR-2 task system message — only subtype + task_number + task_status
+    // in metadata. Renderer must NOT throw on Zod failure; degraded fallback
+    // surfaces `message.content` in muted italic.
+    const msg = makeSystemMessage(
+      'task_create',
+      { task_number: 9, task_status: 'todo' },
+      '@alice created task #9 "old format"',
+    );
+    const html = renderTaskEvent(msg, () => undefined);
+    expect(html).toContain('data-task-event-legacy="1"');
+    expect(html).toContain('italic');
+    expect(html).toContain('old format');
+    // No structured pieces.
+    expect(html).not.toContain('data-task-event-dot');
+    expect(html).not.toContain('data-task-event-chip');
+  });
+});
+
 describe('Markdown channel refs', () => {
   function renderWithChannels(
     content: string,
