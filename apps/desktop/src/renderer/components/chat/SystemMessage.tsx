@@ -1225,7 +1225,14 @@ function OnboardingRow({
       type="button"
       onClick={() => setExpanded((v) => !v)}
       className={
-        'group flex w-full items-center gap-2 px-2 py-1 text-left text-xs text-text-muted ' +
+        // `items-start` (not `items-center`) so when expanded — body
+        // becomes multi-line Markdown (paragraphs / lists / code) —
+        // the chevron and badge stay anchored at the top instead of
+        // floating to the vertical center of the rendered block.
+        // Tiny per-element top offsets line them up visually against
+        // the first line of the body. PR-6 follow-up review by
+        // @Cindy on `6f15d96`.
+        'group flex w-full items-start gap-2 px-2 py-1 text-left text-xs text-text-muted ' +
         (expanded ? 'bg-bg-floating' : 'rounded hover:bg-bg-hover')
       }
       aria-expanded={expanded}
@@ -1233,12 +1240,12 @@ function OnboardingRow({
     >
       <ChevronRight
         className={
-          'size-3 shrink-0 text-text-muted/60 transition-transform ' +
+          'mt-[3px] size-3 shrink-0 text-text-muted/60 transition-transform ' +
           (expanded ? 'rotate-90' : '')
         }
       />
       <span
-        className="inline-flex shrink-0 items-center rounded px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-accent bg-accent-soft"
+        className="mt-0.5 inline-flex shrink-0 items-center rounded px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-accent bg-accent-soft"
         data-onboarding-badge="1"
       >
         Onboarding

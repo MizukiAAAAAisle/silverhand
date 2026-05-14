@@ -540,6 +540,29 @@ describe('SystemMessage channel refs', () => {
     expect(html).toContain('aria-expanded="false"');
   });
 
+  it('onboarding row uses items-start so chevron/badge stay top-aligned when expanded', () => {
+    // Drift guard for PR-6 follow-up review by @Cindy: a previous
+    // version used `items-center`, which floated the chevron and
+    // badge into the vertical middle of the expanded multi-line
+    // body. The button must use `items-start`, the chevron
+    // `mt-[3px]`, and the badge `mt-0.5` so all three line up
+    // against the first line of the body.
+    const msg = makeSystemMessage(
+      'onboarding',
+      {},
+      'Onboarding task: greet then stop.',
+    );
+    const html = renderSystem(msg, new Map());
+    expect(html).toContain('items-start');
+    expect(html).not.toMatch(/data-onboarding-row="1"[^>]*items-center/);
+    expect(html).toContain('mt-[3px]');
+    // Badge gets a small top offset of its own for first-line baseline.
+    // SSR emits class= before data-onboarding-badge=, so match the
+    // element directly to lock the pairing without depending on attr
+    // order.
+    expect(html).toMatch(/<span class="[^"]*mt-0\.5[^"]*"[^>]*data-onboarding-badge="1"/);
+  });
+
   // PR-6: rename reads `{old_name, new_name}` and draws a compact
   // audit row (`↻ workspace renamed #old → #new`) instead of relying
   // on the prose body. Legacy rows without metadata fall through to
