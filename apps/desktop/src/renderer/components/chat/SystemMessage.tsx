@@ -278,11 +278,19 @@ function SessionClearedCard({
  * line; visual continuity comes from the `#task:N` chip identity and
  * its hover popover (already wired in PR-4 infra).
  *
- * Three sub-shapes:
- *  - `create` / `claim` / `unclaim`: `<dot> <actor> <verb> <chip>`
- *  - `status`: `<dot> <chip> → <status pill> by <actor>`
- *  - missing/legacy metadata: degraded fallback — chip + status pill
- *    + `message.content` as muted narration.
+ * Three sub-shapes (chosen by a defensive metadata cascade —
+ * `readTaskSystemMetadata` → `readTaskSystemMetadataPartial` →
+ * total fallback):
+ *  - Full enriched metadata: `<dot> <actor> <verb> <chip>` for
+ *    create/claim/unclaim; `<dot> <chip> → <status pill> by <actor>`
+ *    for status transitions.
+ *  - Partial legacy metadata (pre-PR-2 rows: subtype + task_number +
+ *    task_status only): degraded row keeps the dot + chip + verb (or
+ *    `→ pill` for status), drops the actor pill / inline title — we
+ *    have no metadata for them and we deliberately do NOT re-parse
+ *    `message.content`.
+ *  - No usable metadata: centered muted-italic narration showing
+ *    `message.content` verbatim, as a true bottom fallback.
  *
  * Status colors stay subtle (the row is muted overall — quieter than a
  * real chat message). Cindy's PR-2 visual norms (msg `AjrWQyiFyq08zMya`):
@@ -294,9 +302,10 @@ function TaskEventRow({ message }: RendererProps): JSX.Element {
   if (meta) return <TaskEventRowEnriched meta={meta} />;
   // Mid-tier degradation for legacy rows that carry the minimal
   // `(subtype, task_number, task_status)` triple but no actor /
-  // title / message_id enrichment. Render chip + pill so the audit
-  // entry still self-identifies; otherwise the agent reads
-  // `message.content` (centered narration) and we lose the chip.
+  // title / message_id enrichment. Render chip + dot + pill (or
+  // chip + verb) so the audit entry still self-identifies. We do
+  // NOT promote `message.content` here — it was the old narration
+  // string, not structured data.
   const partial = readTaskSystemMetadataPartial(message.metadata);
   if (partial) return <TaskEventRowDegraded meta={partial} />;
   // Total degradation — metadata is missing even subtype/task_number
@@ -496,12 +505,11 @@ function TaskEventLegacyFallback({ content }: { content: string }): JSX.Element 
  * Mid-tier degraded row for legacy task system messages (pre-PR-2 DB
  * rows). Metadata only carries `(subtype, task_number, task_status)`;
  * we have no actor / title / message_id, so:
- *  - dot uses the after-state status (not the unclaim ring — we can't
- *    distinguish a real unclaim from a status=todo write without the
- *    subtype semantic, but `subtype = task_unclaim` IS still in
- *    metadata, so use it).
+ *  - dot uses `subtype === 'task_unclaim' ? 'unclaim' : task_status`
+ *    — same rule as the enriched row; `subtype` is in legacy metadata.
  *  - chip is just `#task:N` (no inline title).
- *  - body says "{verb}" or "→ {pill}" with no actor pill.
+ *  - body shows `{verb}` (create/claim/unclaim) or `→ {pill}`
+ *    (status); no actor pill.
  */
 function TaskEventRowDegraded({
   meta,

@@ -230,9 +230,10 @@ export type TaskStatusAfterMutation = TaskSystemMetadata['task_status'];
 /**
  * Defensive parse of a system-message metadata object into a fully
  * enriched `TaskSystemMetadata`. Returns `null` if any required field is
- * missing or malformed — renderers should fall back to a degraded
- * display (chip + status pill + raw `message.content`) for legacy rows
- * inserted before PR-2 added the enrichment.
+ * missing or malformed — renderers should chain into
+ * `readTaskSystemMetadataPartial` for legacy rows inserted before
+ * PR-2 added the enrichment, and only drop to raw `message.content`
+ * narration when even the partial schema fails.
  */
 export function readTaskSystemMetadata(
   metadata: Record<string, unknown> | null | undefined,
