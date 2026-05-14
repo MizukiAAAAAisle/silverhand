@@ -1,8 +1,10 @@
+import { useEffect } from 'react';
 import { ClipboardCheck } from 'lucide-react';
 import { useTaskByNumber } from '@/features/tasks/useTaskByNumber';
 import { useTaskRefContext } from '@/features/tasks/TaskRefContext';
 import { HoverPopover } from './HoverPopover';
 import type { TaskSummaryDto, TaskStatus } from '@silverhand/shared';
+import { isRefHoverDebugEnabled, logRefHoverDebug } from '@/lib/refHoverDebug';
 
 interface TaskRefProps {
   /** Raw `<n>` from the `#task:<n>` sigil — already validated as a
@@ -40,6 +42,57 @@ export function TaskRef({ taskNumber }: TaskRefProps): JSX.Element {
   const task = result.data ?? null;
   const onOpenTask = ctx?.onOpenTask;
   const inertLabel = `#task:${taskNumber}`;
+  const debugEnabled = isRefHoverDebugEnabled();
+  const debugQueryStatus = debugEnabled ? result.status : undefined;
+  const debugFetchStatus = debugEnabled ? result.fetchStatus : undefined;
+  const debugIsLoading = debugEnabled ? result.isLoading : undefined;
+  const debugIsFetching = debugEnabled ? result.isFetching : undefined;
+  const debugDataUpdatedAt = debugEnabled ? result.dataUpdatedAt : undefined;
+  const debugBase = debugEnabled && workspaceId
+    ? {
+        kind: 'task' as const,
+        label: `task:${workspaceId}:${taskNumber}`,
+        details: {
+          workspaceId,
+          taskNumber,
+          queryStatus: debugQueryStatus,
+          fetchStatus: debugFetchStatus,
+          isLoading: debugIsLoading,
+          isFetching: debugIsFetching,
+          dataUpdatedAt: debugDataUpdatedAt,
+          hasTask: task != null,
+          taskStatus: task?.status ?? null,
+          hasOpenHandler: onOpenTask != null,
+        },
+      }
+    : undefined;
+
+  useEffect(() => {
+    if (!debugEnabled || !workspaceId) return;
+    logRefHoverDebug('task-ref:render', {
+      workspaceId,
+      taskNumber,
+      queryStatus: debugQueryStatus,
+      fetchStatus: debugFetchStatus,
+      isLoading: debugIsLoading,
+      isFetching: debugIsFetching,
+      dataUpdatedAt: debugDataUpdatedAt,
+      hasTask: task != null,
+      taskStatus: task?.status ?? null,
+      hasOpenHandler: onOpenTask != null,
+    });
+  }, [
+    debugDataUpdatedAt,
+    debugEnabled,
+    debugFetchStatus,
+    debugIsFetching,
+    debugIsLoading,
+    debugQueryStatus,
+    onOpenTask,
+    task,
+    taskNumber,
+    workspaceId,
+  ]);
 
   // No-context (saved/preview surfaces) and resolved-missing (task
   // deleted or never existed in this workspace) render a tooltip-only
@@ -87,6 +140,7 @@ export function TaskRef({ taskNumber }: TaskRefProps): JSX.Element {
         trigger={loadingChip}
         content={null}
         isContentReady={false}
+        debug={debugBase ? { ...debugBase, state: 'loading' } : undefined}
       />
     );
   }
@@ -164,6 +218,14 @@ export function TaskRef({ taskNumber }: TaskRefProps): JSX.Element {
       trigger={onOpenTask ? interactiveChip : inertChip}
       content={<TaskPopoverBody task={task} />}
       isContentReady={true}
+      debug={
+        debugBase
+          ? {
+              ...debugBase,
+              state: onOpenTask ? 'resolved' : 'resolved-no-handler',
+            }
+          : undefined
+      }
     />
   );
 }

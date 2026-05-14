@@ -1,6 +1,7 @@
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 import { apiPaths, type ConversationRef } from '@silverhand/shared';
 import { ApiError, api } from '@/lib/api';
+import { logRefHoverDebug } from '@/lib/refHoverDebug';
 
 export type ConversationByIdStatus =
   | 'loading'
@@ -80,7 +81,27 @@ export function useConversationById(
     enabled: !!id,
     staleTime: REF_STALE_MS,
     gcTime: REF_GC_MS,
-    queryFn: () => api<ConversationRefResponse>(apiPaths.conversationRef(id!)),
+    queryFn: async () => {
+      logRefHoverDebug('conversation-query:start', { id });
+      try {
+        const res = await api<ConversationRefResponse>(
+          apiPaths.conversationRef(id!),
+        );
+        logRefHoverDebug('conversation-query:success', {
+          id,
+          kind: res.ref.kind,
+          workspaceId: res.ref.workspace_id,
+        });
+        return res;
+      } catch (err) {
+        logRefHoverDebug('conversation-query:error', {
+          id,
+          status: err instanceof ApiError ? err.status : null,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
+      }
+    },
     // Don't auto-retry 403/404 — they are terminal states for this hook.
     retry: (failureCount, err) => {
       if (err instanceof ApiError) {

@@ -1,6 +1,7 @@
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 import type { TaskSummaryDto } from '@silverhand/shared';
 import { api } from '@/lib/api';
+import { logRefHoverDebug } from '@/lib/refHoverDebug';
 
 /**
  * Fetch a single task by its workspace-scoped task_number for inline
@@ -44,10 +45,30 @@ export function useTaskByNumber(
       params.set('workspace_id', workspaceId as string);
       params.set('task_number', String(taskNumber));
       params.set('limit', '1');
-      const res = await api<{ tasks: TaskSummaryDto[] }>(
-        `/api/tasks?${params.toString()}`,
-      );
-      return res.tasks[0] ?? null;
+      logRefHoverDebug('task-query:start', {
+        workspaceId,
+        taskNumber,
+      });
+      try {
+        const res = await api<{ tasks: TaskSummaryDto[] }>(
+          `/api/tasks?${params.toString()}`,
+        );
+        const task = res.tasks[0] ?? null;
+        logRefHoverDebug('task-query:success', {
+          workspaceId,
+          taskNumber,
+          found: task != null,
+          status: task?.status ?? null,
+        });
+        return task;
+      } catch (err) {
+        logRefHoverDebug('task-query:error', {
+          workspaceId,
+          taskNumber,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
+      }
     },
     enabled,
     staleTime: TASK_REF_STALE_MS,
