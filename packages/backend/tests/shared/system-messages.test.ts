@@ -5,6 +5,8 @@ import {
   TASK_MUTATION_KINDS,
   TASK_SUBTYPES,
   readSubtype,
+  readTaskSystemMetadata,
+  readTaskSystemMetadataPartial,
   resolveSubtype,
   systemSubtype,
   taskSystemSubtype,
@@ -119,5 +121,63 @@ describe('readSubtype', () => {
       kind: 'unknown',
     });
     expect(readSubtype({ other: 'mention_cc' })).toEqual({ kind: 'unknown' });
+  });
+});
+
+describe('readTaskSystemMetadata + readTaskSystemMetadataPartial', () => {
+  const validFull = {
+    subtype: 'task_create',
+    task_number: 1,
+    task_status: 'todo',
+    task_message_id: 'msg-1',
+    task_title: 'wire it up',
+    task_assignee: null,
+    actor: { kind: 'agent' as const, id: 'a-1', name: 'Alice' },
+  };
+
+  it('full parse passes for enriched metadata', () => {
+    const m = readTaskSystemMetadata(validFull);
+    expect(m).not.toBeNull();
+    expect(m!.task_number).toBe(1);
+    expect(m!.actor.kind).toBe('agent');
+  });
+
+  it('full parse fails when actor is missing', () => {
+    const partial = { ...validFull, actor: undefined };
+    expect(readTaskSystemMetadata(partial)).toBeNull();
+  });
+
+  it('partial parse passes on legacy {subtype, task_number, task_status} triple', () => {
+    const legacy = {
+      subtype: 'task_claim',
+      task_number: 9,
+      task_status: 'in_progress',
+    };
+    const p = readTaskSystemMetadataPartial(legacy);
+    expect(p).toEqual(legacy);
+    expect(readTaskSystemMetadata(legacy)).toBeNull();
+  });
+
+  it('partial parse fails when task_status is missing', () => {
+    expect(
+      readTaskSystemMetadataPartial({ subtype: 'task_create', task_number: 1 }),
+    ).toBeNull();
+  });
+
+  it('partial parse rejects non-task subtypes', () => {
+    expect(
+      readTaskSystemMetadataPartial({
+        subtype: 'mention_cc',
+        task_number: 1,
+        task_status: 'todo',
+      }),
+    ).toBeNull();
+  });
+
+  it('both parsers return null for null/undefined', () => {
+    expect(readTaskSystemMetadata(null)).toBeNull();
+    expect(readTaskSystemMetadata(undefined)).toBeNull();
+    expect(readTaskSystemMetadataPartial(null)).toBeNull();
+    expect(readTaskSystemMetadataPartial(undefined)).toBeNull();
   });
 });

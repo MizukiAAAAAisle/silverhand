@@ -6,7 +6,9 @@ import {
   type TaskStatus,
   type TaskSubtype,
   type TaskSystemMetadata,
+  type TaskSystemMetadataPartial,
   readTaskSystemMetadata,
+  readTaskSystemMetadataPartial,
   resolveSubtype,
 } from '@silverhand/shared';
 import { useMessage } from '@/features/messages/hooks';
@@ -289,13 +291,18 @@ function SessionClearedCard({
  */
 function TaskEventRow({ message }: RendererProps): JSX.Element {
   const meta = readTaskSystemMetadata(message.metadata);
-  if (!meta) {
-    // Legacy task row (pre-PR-2): no enriched metadata. Renderer falls
-    // back to muted narration — agent can still read the audit text,
-    // we just lose the structured pill/chip presentation.
-    return <TaskEventLegacyFallback content={message.content} />;
-  }
-  return <TaskEventRowEnriched meta={meta} />;
+  if (meta) return <TaskEventRowEnriched meta={meta} />;
+  // Mid-tier degradation for legacy rows that carry the minimal
+  // `(subtype, task_number, task_status)` triple but no actor /
+  // title / message_id enrichment. Render chip + pill so the audit
+  // entry still self-identifies; otherwise the agent reads
+  // `message.content` (centered narration) and we lose the chip.
+  const partial = readTaskSystemMetadataPartial(message.metadata);
+  if (partial) return <TaskEventRowDegraded meta={partial} />;
+  // Total degradation — metadata is missing even subtype/task_number
+  // (shouldn't happen for current producers, but bare belt+suspenders
+  // for unknown malformed rows).
+  return <TaskEventLegacyFallback content={message.content} />;
 }
 
 function TaskEventRowEnriched({
@@ -481,6 +488,52 @@ function TaskEventLegacyFallback({ content }: { content: string }): JSX.Element 
       data-task-event-legacy="1"
     >
       {content}
+    </div>
+  );
+}
+
+/**
+ * Mid-tier degraded row for legacy task system messages (pre-PR-2 DB
+ * rows). Metadata only carries `(subtype, task_number, task_status)`;
+ * we have no actor / title / message_id, so:
+ *  - dot uses the after-state status (not the unclaim ring — we can't
+ *    distinguish a real unclaim from a status=todo write without the
+ *    subtype semantic, but `subtype = task_unclaim` IS still in
+ *    metadata, so use it).
+ *  - chip is just `#task:N` (no inline title).
+ *  - body says "{verb}" or "→ {pill}" with no actor pill.
+ */
+function TaskEventRowDegraded({
+  meta,
+}: {
+  meta: TaskSystemMetadataPartial;
+}): JSX.Element {
+  const dotKind: TaskEventDotKind =
+    meta.subtype === 'task_unclaim' ? 'unclaim' : meta.task_status;
+  return (
+    <div
+      className="flex items-center gap-2.5 px-4 py-1.5 text-xs text-text-secondary"
+      data-task-event-degraded="1"
+    >
+      <TaskEventDot kind={dotKind} />
+      {meta.subtype === 'task_status' ? (
+        <>
+          <TaskEventChip taskNumber={meta.task_number} title={null} />
+          <span className="text-text-muted" aria-hidden>→</span>
+          <TaskStatusPill status={meta.task_status} />
+        </>
+      ) : (
+        <>
+          <span className="text-text-muted">
+            {meta.subtype === 'task_create'
+              ? 'created'
+              : meta.subtype === 'task_claim'
+                ? 'claimed'
+                : 'unclaimed'}
+          </span>
+          <TaskEventChip taskNumber={meta.task_number} title={null} />
+        </>
+      )}
     </div>
   );
 }

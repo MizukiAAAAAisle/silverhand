@@ -332,22 +332,64 @@ describe('SystemMessage task event rows (PR-2)', () => {
     expect(html).not.toContain('data-task-event-chip-state="clickable"');
   });
 
-  it('legacy row (missing metadata fields) falls back to muted narration', () => {
+  it('legacy row with partial metadata (subtype + task_number + task_status) renders degraded chip + pill', () => {
     // Pre-PR-2 task system message — only subtype + task_number + task_status
-    // in metadata. Renderer must NOT throw on Zod failure; degraded fallback
-    // surfaces `message.content` in muted italic.
+    // in metadata. Renderer must NOT throw on Zod (full) failure; mid-tier
+    // degraded fallback surfaces a chip + status pill so the audit entry
+    // is still self-identifying without re-parsing content.
     const msg = makeSystemMessage(
       'task_create',
       { task_number: 9, task_status: 'todo' },
       '@alice created task #9 "old format"',
     );
     const html = renderTaskEvent(msg, () => undefined);
+    expect(html).toContain('data-task-event-degraded="1"');
+    expect(html).toContain('data-task-event-dot="todo"');
+    expect(html).toContain('#task:9');
+    expect(html).toContain('created');
+    // Title not in legacy metadata → chip has no inline title.
+    expect(html).not.toContain('old format');
+    expect(html).not.toContain('data-task-event-legacy');
+  });
+
+  it('legacy task_status row renders chip → pill in degraded form (no by-actor)', () => {
+    const msg = makeSystemMessage('task_status', {
+      task_number: 12,
+      task_status: 'in_review',
+    });
+    const html = renderTaskEvent(msg, () => undefined);
+    expect(html).toContain('data-task-event-degraded="1"');
+    expect(html).toContain('data-task-event-status="in_review"');
+    expect(html).toContain('#task:12');
+    expect(html).not.toContain('by @');
+  });
+
+  it('legacy task_unclaim still uses dashed dot in degraded form', () => {
+    const msg = makeSystemMessage('task_unclaim', {
+      task_number: 4,
+      task_status: 'todo',
+    });
+    const html = renderTaskEvent(msg, () => undefined);
+    expect(html).toContain('data-task-event-degraded="1"');
+    expect(html).toContain('data-task-event-dot="unclaim"');
+    expect(html).toContain('unclaimed');
+  });
+
+  it('total fallback (metadata missing even task_number) → muted narration', () => {
+    // Belt+suspenders: metadata so malformed even the partial schema
+    // can't parse it. Renderer drops to italic-content narration.
+    const msg = makeSystemMessage(
+      'task_create',
+      {
+        // Force a schema mismatch — task_status omitted entirely.
+      },
+      'broken task row content',
+    );
+    const html = renderTaskEvent(msg, () => undefined);
     expect(html).toContain('data-task-event-legacy="1"');
     expect(html).toContain('italic');
-    expect(html).toContain('old format');
-    // No structured pieces.
-    expect(html).not.toContain('data-task-event-dot');
-    expect(html).not.toContain('data-task-event-chip');
+    expect(html).toContain('broken task row content');
+    expect(html).not.toContain('data-task-event-degraded');
   });
 });
 

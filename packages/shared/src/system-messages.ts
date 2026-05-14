@@ -241,3 +241,29 @@ export function readTaskSystemMetadata(
   const parsed = TaskSystemMetadataSchema.safeParse(metadata);
   return parsed.success ? parsed.data : null;
 }
+
+/**
+ * Partial schema for legacy task system metadata. Pre-PR-2 producers
+ * only wrote `subtype` + `task_number` + `task_status`, with no actor /
+ * task_title / task_assignee / task_message_id enrichment. Renderers
+ * use this as a midway fallback: if the full schema fails but the
+ * partial one passes, draw a degraded row (chip + status pill, no
+ * actor pill / verb / title) instead of dropping all the way to
+ * narration. There are ~1646 such rows in production DBs as of PR-2.
+ */
+export const TaskSystemMetadataPartialSchema = z.object({
+  subtype: z.enum(TASK_SUBTYPES),
+  task_number: z.number(),
+  task_status: TaskStatusSchema,
+});
+export type TaskSystemMetadataPartial = z.infer<typeof TaskSystemMetadataPartialSchema>;
+
+/** Defensive partial parse — returns `null` if even the minimal
+ *  `(subtype, task_number, task_status)` triple is unparseable. */
+export function readTaskSystemMetadataPartial(
+  metadata: Record<string, unknown> | null | undefined,
+): TaskSystemMetadataPartial | null {
+  if (!metadata) return null;
+  const parsed = TaskSystemMetadataPartialSchema.safeParse(metadata);
+  return parsed.success ? parsed.data : null;
+}
