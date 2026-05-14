@@ -262,6 +262,27 @@ export function App(): JSX.Element {
     selectedWorkspace?.kind ?? null,
   );
   const channelUnreadCounts = messageUnreadData?.by_conversation;
+
+  // ── Dock badge sync ────────────────────────────────────────────────────
+  // macOS dock icon shows total unread messages across every workspace.
+  // `useMessageUnreadSummary` already aggregates `conversation_reads`
+  // globally and self-invalidates on `viewer:local` `unread_updated`,
+  // so summing here gives a reactive total without any extra wiring.
+  // Notification unread (mentions / agent_start_failed) is intentionally
+  // excluded — it's a different concept and would double-count mentions
+  // that are also unread messages.
+  const dockBadgeCount = useMemo(() => {
+    if (!messageUnreadSummary) return 0;
+    let total = 0;
+    for (const n of Object.values(messageUnreadSummary.by_workspace)) {
+      total += n;
+    }
+    return total;
+  }, [messageUnreadSummary]);
+  useEffect(() => {
+    void window.agentHub.setBadgeCount(dockBadgeCount);
+  }, [dockBadgeCount]);
+
   // ── Secondary pane state (PR-1) ───────────────────────────────────────
   // The right-hand pane is no longer thread-only. URL state combines
   // `?side=<id>` (overlay) with the legacy `/t/<tid>` path; selectors

@@ -39,6 +39,8 @@ const api = {
   },
   showSystemNotification: (opts: { title: string; body: string }): Promise<void> =>
     ipcRenderer.invoke('notification:show', opts),
+  setBadgeCount: (count: number): Promise<void> =>
+    ipcRenderer.invoke('badge:setCount', count),
 };
 
 contextBridge.exposeInMainWorld('agentHub', api);

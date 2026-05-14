@@ -20,6 +20,7 @@ declare global {
       setActiveConversation(active: ActiveConversationInfo): Promise<void>;
       onActiveConversation(handler: (active: ActiveConversationInfo) => void): () => void;
       showSystemNotification(opts: { title: string; body: string }): Promise<void>;
+      setBadgeCount(count: number): Promise<void>;
       onShutdownProgress(handler: (step: string) => void): () => void;
     };
   }

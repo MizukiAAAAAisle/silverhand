@@ -392,6 +392,18 @@ ipcMain.handle('active-conversation:set', (_event, next: unknown) => {
   pushActiveConversationToEvents();
 });
 
+ipcMain.handle('badge:setCount', (_event, value: unknown) => {
+  // macOS dock badge. n=0 clears it; non-finite / negative values are
+  // coerced to 0 so a buggy renderer can't paint nonsense on the icon.
+  // Renderer drives this from `useMessageUnreadSummary` (sum across
+  // workspaces) — no other source feeds the badge.
+  const count =
+    typeof value === 'number' && Number.isFinite(value) && value >= 0
+      ? Math.floor(value)
+      : 0;
+  app.setBadgeCount(count);
+});
+
 ipcMain.handle('notification:show', (_event, opts: unknown) => {
   // Fire a system notification only when no Electron window is focused.
   // `BrowserWindow.getFocusedWindow()` returns null when the app is in
@@ -515,6 +527,12 @@ app.on('before-quit', event => {
   if (isShuttingDown) return;
   event.preventDefault();
   isShuttingDown = true;
+
+  // Clear the dock badge synchronously before any async shutdown work —
+  // otherwise a stale unread number lingers on the dock icon for the
+  // ~10s the shutdown takes, which looks like the app is still alive
+  // with new messages waiting.
+  app.setBadgeCount(0);
 
   // Hard ceiling so a wedged shutdown can't hang the app forever.
   // ConversationManager.stop already escalates to SIGKILL after 10s; this
