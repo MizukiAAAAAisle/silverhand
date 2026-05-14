@@ -49,10 +49,13 @@ Flags:
                         to the current channel.
 
 Pre-flight failures (exit 1):
-  --content was supplied → flag_removed (use stdin instead)
-  stdin is a TTY         → stdin_is_tty (no body provided)
-  stdin is empty         → empty_stdin
-  stdin is not UTF-8     → invalid_utf8 (re-encode upstream)
+  --content was supplied         → flag_removed (use stdin instead)
+  --text / --message was supplied → flag_removed (use stdin instead;
+                                    these were never accepted but are
+                                    intercepted with a stdin template)
+  stdin is a TTY                 → stdin_is_tty (no body provided)
+  stdin is empty                 → empty_stdin
+  stdin is not UTF-8             → invalid_utf8 (re-encode upstream)
 
 stdout: { "message_id": "<id>" }`,
   flags: ['target', 'attachment'] as const,
@@ -61,6 +64,28 @@ stdout: { "message_id": "<id>" }`,
       replacement: 'stdin',
       hint:
         "pipe the body via stdin instead — e.g. " +
+        "`silverhand message send <<'SILVERHAND_EOF' ... SILVERHAND_EOF` " +
+        "or `printf \"%s\" \"...\" | silverhand message send`",
+    },
+    // `--text` / `--message` were never accepted, but agents reach for
+    // them by default (every other CLI in their training data uses one
+    // of these names). Routing them through the `flag_removed` hint
+    // path turns the failure into an actionable migration line that
+    // shows the heredoc template — much better than a generic
+    // unknown-flag typo suggestion.
+    text: {
+      replacement: 'stdin',
+      hint:
+        "silverhand message send only accepts the body on stdin. " +
+        "Use a heredoc — e.g. " +
+        "`silverhand message send <<'SILVERHAND_EOF' ... SILVERHAND_EOF` " +
+        "or `printf \"%s\" \"...\" | silverhand message send`",
+    },
+    message: {
+      replacement: 'stdin',
+      hint:
+        "silverhand message send only accepts the body on stdin. " +
+        "Use a heredoc — e.g. " +
         "`silverhand message send <<'SILVERHAND_EOF' ... SILVERHAND_EOF` " +
         "or `printf \"%s\" \"...\" | silverhand message send`",
     },
@@ -193,14 +218,19 @@ stdout: full AgentReadHistoryDto JSON.`,
 const searchCommand: Command = {
   verb: 'search',
   summary: 'Search visible message text.',
-  help: `silverhand message search --q <text> [--scope current|workspace|channel]
+  help: `silverhand message search (--q <text> | --query <text>)
+                            [--scope current|workspace|channel]
                             [--workspace-id <id>] [--channel-id <id>]
                             [--no-include-system] [--limit N]
 
 Full-text search over messages this agent can see.
 
 Flags:
-  --q <text>           Required. Search query. 1..200 chars.
+  --q <text>           Required (mutually exclusive with --query).
+                       Search query. 1..200 chars.
+  --query <text>       Alias for --q. Same length limit. Passing both
+                       --q and --query at once fails with
+                       mutually_exclusive — pick one form per call.
   --scope              Default "current". One of:
                          current   — only the current channel/thread
                          workspace — every conv in this workspace (or one
@@ -213,14 +243,27 @@ Flags:
   --limit N            Max hits. Default 50, max 100.
 
 stdout: AgentSearchMessagesDto JSON.`,
-  flags: ['q', 'scope', 'workspace-id', 'channel-id', 'limit'] as const,
+  flags: ['q', 'query', 'scope', 'workspace-id', 'channel-id', 'limit'] as const,
   booleanFlags: ['include-system'],
   async run({ client, args }) {
-    const q = flagString(args, 'q');
+    const qShort = flagString(args, 'q');
+    const qLong = flagString(args, 'query');
+    if (qShort !== undefined && qLong !== undefined) {
+      throw new CliError({
+        code: 'validation_error',
+        subkind: 'mutually_exclusive',
+        message:
+          '--q and --query are mutually exclusive (they are aliases). ' +
+          'Pass exactly one.',
+        retriable: false,
+        details: { flags: ['q', 'query'] },
+      });
+    }
+    const q = qShort ?? qLong;
     if (!q) {
       throw new CliError({
         code: 'validation_error',
-        message: '--q is required',
+        message: '--q (or --query) is required',
         retriable: false,
       });
     }
@@ -231,8 +274,14 @@ stdout: AgentSearchMessagesDto JSON.`,
     if (!['current', 'workspace', 'channel'].includes(scope)) {
       throw new CliError({
         code: 'validation_error',
-        message: `--scope must be current, workspace, or channel; got ${scope}`,
+        subkind: 'enum_invalid',
+        message: `--scope must be current|workspace|channel; got "${scope}"`,
         retriable: false,
+        details: {
+          flag: 'scope',
+          value: scope,
+          allowed: ['current', 'workspace', 'channel'],
+        },
       });
     }
     const workspaceId = flagString(args, 'workspace-id');

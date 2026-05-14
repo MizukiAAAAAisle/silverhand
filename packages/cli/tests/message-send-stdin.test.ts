@@ -176,6 +176,30 @@ describe('silverhand message send (stdin-only, real subprocess)', () => {
     expect(body.error.message).toContain("SILVERHAND_EOF");
   });
 
+  // The agent never had `--text` or `--message` available — but the CLI
+  // intercepts them with the same `flag_removed` machinery so the
+  // failure is a stdin-template guidance line instead of a generic
+  // typo-suggestion fallback. This is the difference between an agent
+  // self-correcting on the next call and an agent re-trying with
+  // `--message` after `--text` failed.
+  it.each(['text', 'message'] as const)(
+    'rejects --%s with flag_removed pointing at stdin/heredoc',
+    async flag => {
+      const r = await runSend({
+        argv: [`--${flag}`, 'hello'],
+        stdin: 'irrelevant',
+      });
+      expect(r.code).toBe(1);
+      const body = parseStderrJson(r.stderr);
+      expect(body.error.code).toBe('validation_error');
+      expect(body.error.subkind).toBe('flag_removed');
+      // Message must show the heredoc pattern so the agent can
+      // copy-paste the next attempt without hunting through --help.
+      expect(body.error.message).toContain('SILVERHAND_EOF');
+      expect(body.error.message).toContain('stdin');
+    },
+  );
+
   it('rejects empty stdin with subkind=empty_stdin', async () => {
     const r = await runSend({ stdin: '' });
     expect(r.code).toBe(1);

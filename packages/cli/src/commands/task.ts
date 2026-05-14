@@ -13,6 +13,66 @@ import {
 import type { Command } from './index.js';
 
 const VALID_STATUSES: readonly TaskStatus[] = ['todo', 'in_progress', 'in_review', 'done'];
+const VALID_UPDATE_STATUSES: readonly TaskStatus[] = ['in_progress', 'in_review', 'done'];
+
+/**
+ * List-only filter macros for `task list --status`. Each macro expands
+ * to one or more canonical `TaskStatus` values that the agent passes to
+ * the backend filter. Macros are NOT new task states: a task in the DB
+ * is always one of `todo|in_progress|in_review|done`. They exist purely
+ * to match common natural-language asks ("show me active work", "show
+ * everything") with the ergonomic words agents reach for first.
+ *
+ * `task status --status` (the mutation) MUST NOT accept these — see
+ * `LIST_ONLY_STATUS_MACROS` enforcement below.
+ */
+const STATUS_FILTER_MACROS: Readonly<Record<string, readonly TaskStatus[]>> = {
+  active: ['todo', 'in_progress', 'in_review'],
+  open: ['todo', 'in_progress', 'in_review'],
+  pending: ['todo'],
+  all: ['todo', 'in_progress', 'in_review', 'done'],
+};
+const LIST_ONLY_STATUS_MACROS = new Set(Object.keys(STATUS_FILTER_MACROS));
+
+/** Expand a single `--status` value (or comma-joined list) into one or
+ *  more canonical statuses. Throws `enum_invalid` on any unknown token.
+ *  Used only by `task list`; `task status` uses the stricter
+ *  `assertSingleUpdateStatus` instead.
+ *
+ *  Why comma split: agents reach for `--status active,in_review` because
+ *  every other CLI in their training data does it. Without explicit
+ *  support each token would be passed verbatim (`'active,in_review'`)
+ *  and fail validation as a single unknown enum.
+ */
+function expandFilterStatuses(raw: readonly string[]): TaskStatus[] {
+  const out = new Set<TaskStatus>();
+  for (const value of raw) {
+    for (const part of value.split(',').map(s => s.trim()).filter(s => s.length > 0)) {
+      const macro = STATUS_FILTER_MACROS[part];
+      if (macro) {
+        for (const m of macro) out.add(m);
+        continue;
+      }
+      if (!VALID_STATUSES.includes(part as TaskStatus)) {
+        throw new CliError({
+          code: 'validation_error',
+          subkind: 'enum_invalid',
+          message:
+            `--status must be one of ${VALID_STATUSES.join('|')} ` +
+            `or a list-only filter macro (${Object.keys(STATUS_FILTER_MACROS).join('|')}); got "${part}"`,
+          retriable: false,
+          details: {
+            flag: 'status',
+            value: part,
+            allowed: [...VALID_STATUSES, ...Object.keys(STATUS_FILTER_MACROS)],
+          },
+        });
+      }
+      out.add(part as TaskStatus);
+    }
+  }
+  return [...out];
+}
 
 const listCommand: Command = {
   verb: 'list',
@@ -33,9 +93,17 @@ Without filters this returns the entire board, which can be large — pass
 Flags:
   --task-number N      Repeatable. Filter to specific task numbers.
                        Last-wins is NOT used; values OR together.
-  --status STATUS      Repeatable. Filter by status. Valid:
+  --status STATUS      Repeatable. Filter by status. Canonical values:
                        todo | in_progress | in_review | done.
-                       Multiple values OR together.
+                       List-only filter macros (NOT writable states):
+                         active|open  → todo + in_progress + in_review
+                         pending      → todo
+                         all          → no filter
+                       Comma-joined values are accepted, e.g.
+                       "--status active,done". Multiple values OR
+                       together. Macros are list-only — passing them to
+                       \`silverhand task status --status\` fails with
+                       enum_invalid.
   --assignee <id>      Filter by assignee agent id.
   --mine               Shortcut for --assignee=<your agent id>.
                        Resolves locally to this agent.
@@ -57,17 +125,9 @@ stdout: { "tasks": [TaskSummaryDto, ...] }`,
   async run({ client, env, args }) {
     const taskNumbers = flagNumberArray(args, 'task-number');
     const statusValues = flagStringArray(args, 'status');
-    if (statusValues) {
-      for (const s of statusValues) {
-        if (!VALID_STATUSES.includes(s as TaskStatus)) {
-          throw new CliError({
-            code: 'validation_error',
-            message: `--status must be one of ${VALID_STATUSES.join('|')}; got ${s}`,
-            retriable: false,
-          });
-        }
-      }
-    }
+    const expandedStatuses = statusValues
+      ? expandFilterStatuses(statusValues)
+      : undefined;
     const explicitAssignee = flagString(args, 'assignee');
     const mine = flagBool(args, 'mine');
     if (mine && explicitAssignee) {
@@ -88,7 +148,9 @@ stdout: { "tasks": [TaskSummaryDto, ...] }`,
     }
     return client.listTasks({
       ...(taskNumbers ? { task_number: taskNumbers } : {}),
-      ...(statusValues ? { status: statusValues as TaskStatus[] } : {}),
+      ...(expandedStatuses && expandedStatuses.length > 0
+        ? { status: expandedStatuses }
+        : {}),
       ...(assigneeId ? { assignee_id: assigneeId } : {}),
       ...(flagString(args, 'workspace-id')
         ? { workspace_id: flagString(args, 'workspace-id') }
@@ -200,6 +262,11 @@ Allowed transitions (you must be the assignee):
   in_review   → done      : after human approval (usually the human does this)
   in_review   → in_progress : if you need to iterate
 
+--status takes a single concrete state. The list-only filter macros
+(active|open|pending|all) accepted by \`silverhand task list --status\`
+are NOT valid here — passing one fails with enum_invalid pointing back
+to \`task list\`.
+
 stdout: TaskMutationResult JSON.`,
   flags: ['task-number', 'status'] as const,
   async run({ client, args }) {
@@ -212,11 +279,35 @@ stdout: TaskMutationResult JSON.`,
         retriable: false,
       });
     }
-    if (!['in_progress', 'in_review', 'done'].includes(status)) {
+    if (LIST_ONLY_STATUS_MACROS.has(status)) {
       throw new CliError({
         code: 'validation_error',
-        message: `--status must be one of in_progress|in_review|done; got ${status}`,
+        subkind: 'enum_invalid',
+        message:
+          `--status "${status}" is a list-only filter macro for ` +
+          '`silverhand task list`, not a writable task status. ' +
+          `task status takes a single concrete state: ${VALID_UPDATE_STATUSES.join('|')}.`,
         retriable: false,
+        details: {
+          flag: 'status',
+          value: status,
+          allowed: VALID_UPDATE_STATUSES,
+          reason: 'list_only_macro',
+        },
+      });
+    }
+    if (!VALID_UPDATE_STATUSES.includes(status)) {
+      throw new CliError({
+        code: 'validation_error',
+        subkind: 'enum_invalid',
+        message:
+          `--status must be one of ${VALID_UPDATE_STATUSES.join('|')}; got "${status}"`,
+        retriable: false,
+        details: {
+          flag: 'status',
+          value: status,
+          allowed: VALID_UPDATE_STATUSES,
+        },
       });
     }
     return client.updateTaskStatus({ task_number: n, status });

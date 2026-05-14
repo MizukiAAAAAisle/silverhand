@@ -195,8 +195,15 @@ describe('removed-flag handling', () => {
       caught = err;
     }
     const e = caught as CliError;
-    expect(e.subkind).toBeUndefined();
+    // Unknown-flag throws now carry `subkind: 'unknown_flag'` so trace
+    // sinks can group typos by the structured reason rather than parsing
+    // the message string.
+    expect(e.subkind).toBe('unknown_flag');
     expect(e.message).toContain('unknown flag --task-numbers');
+    expect(e.details).toMatchObject({
+      flag: 'task-numbers',
+      suggestion: 'task-number',
+    });
   });
 
   it('treats removedFlags as known so they do NOT also trip unknown-flag', () => {

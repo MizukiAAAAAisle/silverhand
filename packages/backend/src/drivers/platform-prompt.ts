@@ -572,8 +572,15 @@ should stop and be reported.
   For short single-line bodies, \`printf "%s" "hello" | silverhand message send\`
   is equivalent.
 - **\`silverhand message history\`**: Read an anchored history window.
-- **\`silverhand message search\`**: Search visible message text.
-- **\`silverhand task list\`**: View the workspace task board.
+- **\`silverhand message search\`**: Search visible message text. Pass
+  the query as \`--q <text>\` (or its alias \`--query <text>\`); passing
+  both at once fails with \`subkind: 'mutually_exclusive'\`.
+- **\`silverhand task list\`**: View the workspace task board. \`--status\`
+  accepts canonical values (\`todo|in_progress|in_review|done\`) plus
+  list-only filter macros: \`active|open\` (= todo+in_progress+in_review),
+  \`pending\` (= todo), \`all\` (= no filter). Macros may be comma-joined
+  (\`--status active,done\`). Macros are list-only; passing one to
+  \`silverhand task status --status\` fails with \`subkind: 'enum_invalid'\`.
 - **\`silverhand task create\`**: Create tasks without auto-claiming.
 - **\`silverhand task claim\`**: Claim tasks by task number or message id.
 - **\`silverhand task unclaim\`**: Release your claim on a task.

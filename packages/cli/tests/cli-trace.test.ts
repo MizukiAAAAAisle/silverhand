@@ -77,6 +77,33 @@ describe('cli-trace fire-and-forget reporter', () => {
     });
   });
 
+  // Subkind is the *structured* failure reason — the daily report
+  // groups by it instead of regex'ing the message string. The trace
+  // payload must round-trip every subkind the CLI emits today.
+  it.each([
+    'flag_removed',
+    'unknown_flag',
+    'enum_invalid',
+    'mutually_exclusive',
+    'unexpected_arguments',
+    'stdin_is_tty',
+    'empty_stdin',
+    'invalid_utf8',
+  ] as const)(
+    'forwards error_subkind=%s verbatim to the trace payload',
+    async subkind => {
+      await reportPreflightFailure({
+        noun: 'task',
+        verb: 'list',
+        error_code: 'validation_error',
+        error_subkind: subkind,
+      });
+      const [, init] = fetchMock.mock.calls.at(-1)!;
+      const body = JSON.parse(init.body as string);
+      expect(body.error_subkind).toBe(subkind);
+    },
+  );
+
   it('is suppressed when a business request was already attempted', async () => {
     markRequestAttempted();
     expect(wasRequestAttempted()).toBe(true);

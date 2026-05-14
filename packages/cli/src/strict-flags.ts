@@ -53,7 +53,9 @@ export const GLOBAL_NOOP_FLAGS: ReadonlySet<string> = new Set(['json']);
  *       guidance instead of a typo suggestion.
  *    2. unknown-flag check — anything not in
  *       `flags ∪ booleanFlags ∪ removedFlags ∪ GLOBAL_NOOP_FLAGS`
- *       throws `validation_error` with no subkind. */
+ *       throws `validation_error` with `subkind: 'unknown_flag'` and
+ *       `details: { flag, suggestion?, other_unknown? }` so the trace
+ *       sink can group typos by their canonical close-match. */
 export function assertKnownFlags(
   observed: Record<string, unknown>,
   opts: StrictFlagOptions,
@@ -93,8 +95,14 @@ export function assertKnownFlags(
       : '';
   throw new CliError({
     code: 'validation_error',
+    subkind: 'unknown_flag',
     message: `unknown flag --${flag}; ${hint}${tail}`,
     retriable: false,
+    details: {
+      flag,
+      ...(suggestion ? { suggestion } : {}),
+      ...(unknown.length > 1 ? { other_unknown: unknown.slice(1) } : {}),
+    },
   });
 }
 

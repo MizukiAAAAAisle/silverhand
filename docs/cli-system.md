@@ -52,12 +52,12 @@ All commands default to machine-readable JSON on stdout. Use
 |---|---|
 | `silverhand message send` | Send a visible message to the current channel/thread, parent, or direct child thread. **Body comes from STDIN** — see §3.1. |
 | `silverhand message history` | Read anchored history by `before_seq`, `after_seq`, or `around_message_id`. |
-| `silverhand message search` | Search messages in the current conversation, workspace, or a specific channel. |
-| `silverhand task list` | View the workspace task board (filter via `--task-number`, `--status`, `--assignee`/`--mine`, `--limit`). |
+| `silverhand message search` | Search messages in the current conversation, workspace, or a specific channel. Query text via `--q <text>` or its alias `--query <text>` (mutually exclusive). |
+| `silverhand task list` | View the workspace task board (filter via `--task-number`, `--status`, `--assignee`/`--mine`, `--limit`). `--status` accepts canonical values plus list-only filter macros — see §3.2. |
 | `silverhand task create` | Create tasks in the current channel/thread. |
 | `silverhand task claim` | Claim tasks by task number or promote-and-claim messages. |
 | `silverhand task unclaim` | Release a task claim. |
-| `silverhand task status` | Move a task through `in_progress`, `in_review`, or `done`. |
+| `silverhand task status` | Move a task through `in_progress`, `in_review`, or `done`. Rejects the list-only filter macros (`active|open|pending|all`) and the initial state `todo` with `subkind: 'enum_invalid'` — see §3.2. |
 | `silverhand thread create` | Open a Thread for a bounded side discussion or delegation. |
 | `silverhand thread close` | Close the current Thread. |
 | `silverhand channel create` | Create a top-level channel only when explicitly requested by the user. |
@@ -100,11 +100,41 @@ Pre-flight failures (exit 1, code `validation_error`):
 
 | `subkind` | When |
 |---|---|
-| `flag_removed` | The legacy `--content` flag was supplied. |
+| `flag_removed` | The legacy `--content`, `--text`, or `--message` flag was supplied. |
 | `stdin_is_tty` | `process.stdin.isTTY` is true (no body was piped in). |
 | `empty_stdin` | Stdin closed with 0 bytes. |
 | `invalid_utf8` | Stdin contained byte sequences that are not valid UTF-8. The CLI does NOT silently substitute U+FFFD — re-encode upstream and retry. |
 | `unexpected_arguments` | Any positional argument or `--`-trailing token (rejected globally; see §4.1). |
+
+### 3.2 `silverhand task list --status` filter macros
+
+The DB-side `tasks.status` column is always one of the four canonical
+values `todo | in_progress | in_review | done`. The list filter accepts
+those values verbatim, plus a small set of **list-only filter macros**
+that expand to one or more canonical statuses on the agent's side
+before the request is sent:
+
+| Macro | Expands to |
+|---|---|
+| `active` / `open` | `todo + in_progress + in_review` |
+| `pending` | `todo` |
+| `all` | no filter (all four statuses) |
+
+Comma-joined values are also accepted (`--status active,done`); each
+token is independently expanded and deduplicated.
+
+`silverhand task status --status` is the **mutation** verb — it writes
+one concrete status onto a task. It explicitly rejects:
+
+- the macros above with `subkind: 'enum_invalid'` and `details.reason
+  = 'list_only_macro'`, and a message pointing at `silverhand task
+  list`;
+- the initial state `todo` with the same `enum_invalid` subkind
+  (mirroring the server-side workflow that forbids transitioning *to*
+  todo).
+
+This boundary is what keeps the macros aliasing-only — the DB never
+stores an aggregate word like `active`.
 
 ## 4. Error Contract
 
@@ -139,7 +169,22 @@ fields:
 
 Current `subkind` values (CLI-side enum is the source of truth):
 
-- `flag_removed` — a flag the command used to accept.
+- `flag_removed` — a flag the command used to accept (or, for
+  `silverhand message send`, a flag agents commonly reach for —
+  `--text` / `--message` — that is intercepted with the same
+  stdin-template hint as the legacy `--content`).
+- `unknown_flag` — flag name not declared by the command. `details`
+  carries `{flag, suggestion?, other_unknown?}` for did-you-mean
+  surfacing in trace aggregations.
+- `enum_invalid` — a flag value is outside the command's allowed
+  enum. `details` carries `{flag, value, allowed[], reason?}`. For
+  `silverhand task status --status`, passing a list-only filter macro
+  (`active|open|pending|all`) sets `reason: 'list_only_macro'` so
+  trace aggregations can distinguish "agent confused list filter with
+  a writable state" from "agent typed a typo".
+- `mutually_exclusive` — two aliased flags supplied together (e.g.
+  `--q` and `--query` on `silverhand message search`). `details`
+  carries `{flags[]}`.
 - `unexpected_arguments` — any positional / `--`-trailing token.
 - `stdin_is_tty` — `silverhand message send` invoked without a piped body.
 - `empty_stdin` — `silverhand message send` invoked with 0-byte stdin.
@@ -174,7 +219,8 @@ and user-facing message.
 
 Every command declares the flags it accepts (`flags` for value-bearing,
 `booleanFlags` for switches in `packages/cli/src/commands/`). The dispatcher
-rejects any flag the command did NOT declare with `validation_error`,
+rejects any flag the command did NOT declare with `validation_error`
+(`subkind: 'unknown_flag'`, `details: {flag, suggestion?, other_unknown?}`),
 including a did-you-mean suggestion when the typo is within Levenshtein
 distance 2 of a known flag. The intent is to fail loudly on agent-typed
 typos like `--task-numbers 191` (typo for `--task-number`) rather than

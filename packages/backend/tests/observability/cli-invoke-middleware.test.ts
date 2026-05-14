@@ -235,6 +235,44 @@ describe('cli-trace endpoint', () => {
     expect(invokes).toHaveLength(0);
   });
 
+  // The daily report groups failures by subkind. Without this round-trip
+  // assertion a renamed subkind on the CLI side would silently fall off
+  // the report and we'd discover it weeks later by noticing aggregate
+  // gaps. Every subkind the CLI may send must appear verbatim in the
+  // logged payload.
+  it.each([
+    'flag_removed',
+    'unknown_flag',
+    'enum_invalid',
+    'mutually_exclusive',
+    'unexpected_arguments',
+    'stdin_is_tty',
+    'empty_stdin',
+    'invalid_utf8',
+  ] as const)(
+    'records error_subkind=%s in the cli.preflight_failure line',
+    async subkind => {
+      const { conversationId, agentId } = await setupAgent(t!);
+      const h = http(t!);
+      const res = await h.post(
+        `/internal/conversations/${conversationId}/agents/${agentId}/cli-trace`,
+        {
+          noun: 'task',
+          verb: 'list',
+          error_code: 'validation_error',
+          error_subkind: subkind,
+        },
+      );
+      expect(res.status).toBe(200);
+      const trace = captured.lines.find(
+        l => l.payload.category === 'cli.preflight_failure',
+      );
+      expect(trace).toBeDefined();
+      expect(trace!.payload.error_subkind).toBe(subkind);
+    },
+  );
+
+
   it('rejects cli-trace bodies that fail schema (400, no log)', async () => {
     const { conversationId, agentId } = await setupAgent(t!);
     const h = http(t!);
