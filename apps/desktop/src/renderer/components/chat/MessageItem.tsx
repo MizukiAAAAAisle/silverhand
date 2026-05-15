@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { type FocusEvent, useCallback, useEffect, useState } from 'react';
 import { Bookmark, ClipboardCheck, CornerUpLeft, FileText, User } from 'lucide-react';
 import type { AgentDto, AttachmentSnapshot, MessageDto } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
@@ -123,6 +123,25 @@ export function MessageItem({
   );
   const taskTag = <TaskMetaTag message={message} agentsById={agentsById} />;
   const [hover, setHover] = useState(false);
+  // React-driven focus-within: tracking it as state and OR-ing into
+  // the visibility class is more reliable than relying on Tailwind's
+  // `focus-within:` utility, which generates a same-specificity rule
+  // (`(0,1,0)`) that loses to a later-declared `opacity-0` in the
+  // compiled CSS — leaving keyboard users tabbing onto invisible
+  // controls. `onFocus`/`onBlur` bubble in React, so we treat any
+  // focus inside the actions wrapper as wrapper focus, and only clear
+  // when focus leaves the wrapper subtree (not when it just hops
+  // between sibling buttons inside).
+  const [focusWithin, setFocusWithin] = useState(false);
+  const handleActionsBlur = useCallback(
+    (event: FocusEvent<HTMLDivElement>) => {
+      const next = event.relatedTarget as Node | null;
+      if (!event.currentTarget.contains(next)) {
+        setFocusWithin(false);
+      }
+    },
+    [],
+  );
   // Visual-only: highlight forces the framed look; only real hover
   // reveals the action bar.
   const framed = hover || highlighted;
@@ -266,20 +285,27 @@ export function MessageItem({
           Visibility: gated by hover OR focus-within so a keyboard
           user can tab to them without sighted-only hover access; on
           either trigger the wrapper flips to opacity-100 +
-          pointer-events-auto. The controls re-use ActionButton so
-          they match the inline "{N} Reply" badge's visual language —
-          icon + small label, color-only hover, no container chrome.
+          pointer-events-auto. Both signals are React state — the
+          Tailwind `focus-within:` utility variant has the same
+          specificity as the base `opacity-0` and loses to it in the
+          compiled CSS, so we drive the class directly from a
+          `focusWithin` state instead. The controls re-use
+          ActionButton so they match the inline "{N} Reply" badge's
+          visual language — icon + small label, color-only hover, no
+          container chrome.
 
           The Thread button is suppressed when `threadReplyCount` is
           already set — the inline "{N} Reply" badge is the discovery
           affordance in that case, so a duplicate "go to thread" icon
           would just be noise. */}
       <div
+        onFocus={() => setFocusWithin(true)}
+        onBlur={handleActionsBlur}
         className={
-          'absolute top-1 z-10 flex items-center gap-3 text-xs transition-opacity focus-within:pointer-events-auto focus-within:opacity-100 ' +
+          'absolute top-1 z-10 flex items-center gap-3 text-xs transition-opacity ' +
           (alignRight ? 'left-2' : 'right-2') +
           ' ' +
-          (hover ? 'opacity-100' : 'pointer-events-none opacity-0')
+          (hover || focusWithin ? 'opacity-100' : 'pointer-events-none opacity-0')
         }
       >
         {onStartThread && threadReplyCount === undefined ? (
