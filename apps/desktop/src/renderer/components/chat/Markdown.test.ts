@@ -864,17 +864,25 @@ describe('SystemMessage task event rows (PR-2)', () => {
     expect(legacyHtml.startsWith('<div class="system-message-row">')).toBe(true);
   });
 
-  it('PR-8 follow-up: TaskStatusPill is chrome (h-[18px] + leading-none + no py-0.5); TaskRef chip in system rows aligns via scoped CSS rather than inline class', () => {
+  it('PR-8 follow-up: TaskStatusPill keeps leading-none + drops py-0.5; both pill and chip get height from `.system-message-row` scoped CSS (no inline h-[18px])', () => {
     // shiki PR-8 feedback: chip + pill ended up on visually different
     // baselines because pill had `py-0.5` (~20px outer) while chip
-    // rendered at the row's natural inline-flex height (~16px). Cindy
-    // PR-8 review #2: locking `h-[18px]` directly on TaskRef would (a)
-    // crop the chip when the user picks a larger theme prose size and
-    // (b) leak into Markdown inline `#task:N` chips that have no pill
-    // sibling. Fix: pill stays chrome (fixed h-[18px]); TaskRef sheds
-    // its inline `h-[18px]`; `.system-message-row [data-task-ref]`
-    // CSS rule in global.css locks the chip to 18px only inside
-    // system audit rows.
+    // rendered at the row's natural inline-flex height (~16px).
+    //
+    // Cindy PR-8 review #2 (msg `0PEPg70b84bxYrlK`): locking `h-[18px]`
+    // directly on TaskRef would (a) crop the chip when the user picks
+    // a larger theme prose size and (b) leak into Markdown inline
+    // `#task:N` chips that have no pill sibling.
+    //
+    // Cindy PR-8 follow-up review #3 (msg `VOGiR_K30xhSOswD`): a fixed
+    // `h-[18px]` on the pill (or a fixed `height: 18px` CSS rule on
+    // the chip) crops at large prose sizes too — the chrome must
+    // grow with the prose size. Fix: both chip and pill get their
+    // height from `.system-message-row { --system-message-control-height:
+    // max(18px, calc(var(--md-prose-size, 12px) * 1.5)) }` applied via
+    // attribute selectors. SSR can't resolve CSS variables, so this
+    // test instead asserts the inline classes are absent — the
+    // CSS-var path is what locks heights together.
     const msg = makeSystemMessage(
       'task_status',
       fullMeta({ task_status: 'in_review' }),
@@ -882,25 +890,32 @@ describe('SystemMessage task event rows (PR-2)', () => {
     const html = renderTaskEvent(msg, () => undefined, [
       seededTask({ status: 'in_review' }),
     ]);
-    expect(html).toMatch(
-      /data-task-event-status="in_review"[^>]*class="[^"]*h-\[18px\][^"]*"|class="[^"]*h-\[18px\][^"]*"[^>]*data-task-event-status="in_review"/,
-    );
+    // Pill keeps `leading-none` so the [10px] text stays vertically
+    // centered inside the CSS-var-driven height regardless of the row's
+    // 1.5 line-height.
     expect(html).toMatch(
       /data-task-event-status="in_review"[^>]*class="[^"]*leading-none[^"]*"|class="[^"]*leading-none[^"]*"[^>]*data-task-event-status="in_review"/,
     );
     // Pill must NOT carry py-0.5 anymore (would re-introduce the
-    // height mismatch).
+    // height mismatch by adding extra vertical padding on top of the
+    // CSS-var height).
     expect(html).not.toMatch(
       /data-task-event-status="in_review"[^>]*class="[^"]*py-0\.5/,
     );
-    // TaskRef chip must NOT carry inline `h-[18px]` — the height
-    // alignment lives in CSS scoped to `.system-message-row` so that
-    // (a) the markup stays small and (b) Markdown inline `#task:N`
-    // chips (outside system rows) keep flowing with surrounding text
-    // size.
+    // Pill must NOT carry inline `h-[18px]` either — height is
+    // CSS-var-driven via `.system-message-row [data-task-event-status]`
+    // so chip + pill grow together at large prose sizes.
+    expect(html).not.toMatch(
+      /data-task-event-status="in_review"[^>]*class="[^"]*h-\[18px\]/,
+    );
+    // TaskRef chip likewise must NOT carry inline `h-[18px]` — the
+    // height alignment lives in CSS scoped to `.system-message-row` so
+    // (a) the markup stays small, (b) Markdown inline `#task:N` chips
+    // (outside system rows) keep flowing with surrounding text size,
+    // and (c) chip + pill share the same theme-aware height token.
     expect(html).not.toMatch(/data-task-ref="42"[^>]*class="[^"]*h-\[18px\]/);
-    // The chip must still be wrapped in `.system-message-row` so the
-    // scoped CSS rule applies.
+    // The chip + pill must still be wrapped in `.system-message-row`
+    // so the scoped CSS rule applies.
     expect(html.startsWith('<div class="system-message-row">')).toBe(true);
   });
 

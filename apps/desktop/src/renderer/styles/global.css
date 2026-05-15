@@ -227,6 +227,16 @@ button:disabled { cursor: not-allowed; }
    and any other monospace ornament without each call site having to
    thread a CSS variable manually. */
 .system-message-row {
+  /* Theme-aware control height for inline chrome inside system audit
+     rows (TaskRef chip + TaskStatusPill on `task_status` rows).
+     `max(18px, …)` keeps the default 12px prose sizing on the existing
+     18px baseline; once the user picks a larger theme prose size,
+     chip + pill grow together (1.5× the prose size, matching the row's
+     line-height) so neither crops its contents and the two stay
+     pixel-aligned. The `1.5` factor matches `line-height: 1.5` below
+     so the chrome's height tracks the row's actual text leading.
+     Cindy PR-8 follow-up #3 (msg `VOGiR_K30xhSOswD`). */
+  --system-message-control-height: max(18px, calc(var(--md-prose-size, 12px) * 1.5));
   font-family: var(--md-prose-font, var(--font-sans));
   font-size: var(--md-prose-size, 12px);
   line-height: 1.5;
@@ -235,13 +245,17 @@ button:disabled { cursor: not-allowed; }
 .system-message-row .font-mono {
   font-family: var(--md-code-font, var(--font-mono));
 }
-/* TaskRef chip inside a system audit row behaves as chrome (fixed
-   18px) so it aligns pixel-for-pixel with the adjacent
-   `TaskStatusPill` on `task_status` rows. Outside `.system-message-row`
-   (Markdown prose), the chip stays text-driven so larger prose sizes
-   don't crop it (Cindy PR-8 review #2). */
-.system-message-row [data-task-ref] {
-  height: 18px;
+/* TaskRef chip + TaskStatusPill inside a system audit row behave as
+   chrome (fixed `--system-message-control-height`) so they align
+   pixel-for-pixel on the same `task_status` row. Outside
+   `.system-message-row` (Markdown prose), the chip stays text-driven
+   so larger prose sizes don't crop it (Cindy PR-8 review #2). The
+   pill is system-row-only, so it has no out-of-system equivalent —
+   defining the rule jointly here keeps both controls tied to the
+   same theme-aware height token. */
+.system-message-row [data-task-ref],
+.system-message-row [data-task-event-status] {
+  height: var(--system-message-control-height);
 }
 
 .markdown-body p { margin: 0.4em 0; }

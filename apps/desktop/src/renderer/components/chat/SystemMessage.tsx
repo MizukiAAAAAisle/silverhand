@@ -527,8 +527,9 @@ function formatScheduleDelta(deltaMs: number): string {
  * `readTaskSystemMetadata` → `readTaskSystemMetadataPartial` →
  * total fallback):
  *  - Full enriched metadata: `<dot> <actor> <verb> <chip>` for
- *    create/claim/unclaim; `<dot> <chip> → <status pill> by <actor>`
- *    for status transitions.
+ *    create/claim/unclaim; `<dot> <actor> moved <chip> → <status pill>`
+ *    for status transitions. PR-9 unified actor position to the front
+ *    across all four subtypes (@shiki feedback msg `UoJ6LPHDpJCHYVFe`).
  *  - Partial legacy metadata (pre-PR-2 rows: subtype + task_number +
  *    task_status only): degraded row keeps the dot + chip + verb (or
  *    `→ pill` for status), drops the actor pill / inline title — we
@@ -644,12 +645,13 @@ function TaskEventDot({ kind }: { kind: TaskEventDotKind }): JSX.Element {
  * pill encodes the after-mutation status snapshot for `task_status`
  * subtype rows.
  *
- * Height is locked to `h-[18px]` + `leading-none` so the pill aligns
- * with the sibling `TaskRef` chip on the same `task_status` row.
- * Without this, `py-0.5` plus the row's inherited 16px line-height
- * left the pill ~20px tall while TaskRef rendered at its natural
- * inline-flex height (~16px), so the chip and pill ended up on
- * visually different baselines (@shiki PR-8 feedback).
+ * Height is driven by the `.system-message-row` scoped CSS rule
+ * (`--system-message-control-height: max(18px, calc(var(--md-prose-size,
+ * 12px) * 1.5))` in `global.css`), which is also applied to the sibling
+ * `TaskRef` chip via `[data-task-ref]`. Both grow together at larger
+ * theme prose sizes so the chip + pill stay pixel-aligned and never
+ * crop their text. `leading-none` keeps the inline content centered
+ * inside that height regardless of the row's `line-height: 1.5`.
  */
 function TaskStatusPill({ status }: { status: TaskStatus }): JSX.Element {
   const styles: Record<TaskStatus, string> = {
@@ -668,7 +670,7 @@ function TaskStatusPill({ status }: { status: TaskStatus }): JSX.Element {
     <span
       data-task-event-status={status}
       className={
-        'inline-flex h-[18px] items-center rounded-full px-1.5 text-[10px] font-semibold uppercase leading-none tracking-wider ' +
+        'inline-flex items-center rounded-full px-1.5 text-[10px] font-semibold uppercase leading-none tracking-wider ' +
         styles[status]
       }
     >
