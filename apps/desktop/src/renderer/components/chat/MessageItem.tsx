@@ -65,13 +65,16 @@ interface MessageItemProps {
  * markdown body, role-name + relative time header, and a Slack-style
  * pair of action affordances:
  *
- * - **Embedded icon controls** (Save + Thread) — absolutely pinned to
- *   the top-right of the content column (mirrored to top-left in
- *   user-right mode), naked icons (no box / border / shadow), revealed
- *   on hover with their own per-icon color hover state. They do not
- *   reserve vertical space, so two consecutive messages now sit tight
- *   against each other instead of being padded apart by an always-on
- *   action row.
+ * - **Frame-corner action controls** (Save + Thread) — absolutely
+ *   pinned to the top-right of the OUTER hover frame (mirrored to
+ *   top-left in user-right mode), each rendered as a small icon +
+ *   label pair using `ActionButton`. They sit on the framed card,
+ *   NOT over the markdown body. Default hidden via
+ *   `pointer-events-none opacity-0`; revealed on row hover OR
+ *   `focus-within`, so a keyboard user can tab to them. They do not
+ *   reserve vertical space, so two consecutive messages now sit
+ *   tight against each other instead of being padded apart by an
+ *   always-on action row.
  * - **Inline "{N} Reply" badge** — rendered below the body only when
  *   the message has an open thread. Carries real information, so it
  *   earns persistent space.
@@ -130,7 +133,7 @@ export function MessageItem({
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       className={
-        'flex items-start gap-3 border-2 px-2 py-1.5 transition-colors ' +
+        'relative flex items-start gap-3 border-2 px-2 py-1.5 transition-colors ' +
         (alignRight ? 'flex-row-reverse' : 'flex-row') +
         ' ' +
         (framed
@@ -145,7 +148,7 @@ export function MessageItem({
         routeKind={routeKind}
         onNavigateAgent={navigateToAgent}
       />
-      <div className="relative min-w-0 max-w-[85%]">
+      <div className="min-w-0 max-w-[85%]">
         <header className={'mb-1 text-xs ' + (alignRight ? 'text-right' : '')}>
           {alignRight ? (
             <>
@@ -227,36 +230,11 @@ export function MessageItem({
           ) : null}
         </div>
 
-        {/* Action affordances — split into two pieces so the row only
-            reserves vertical space when there's persistent information
-            to show (the "{N} Reply" badge for messages that have a
-            thread):
-
-            (a) Inline thread-replies badge — only rendered when
-                `threadReplyCount !== undefined`. It carries real
-                information ("this message has N replies, click to
-                open"), so it earns its space below the bubble and stays
-                visible without hover.
-
-            (b) Embedded icon controls (Save + Thread) — naked icon
-                buttons absolutely pinned to the top-right of the
-                content column (top-left mirrored in user-right mode).
-                NO container chrome (no box, no border, no shadow,
-                no fill) — the icons sit directly on the message
-                canvas. Default hidden via `pointer-events-none
-                opacity-0`; revealed on row hover. Each icon button
-                carries its own tiny color hover state. This is what
-                Slack does when its right-side actions toolbar is
-                styled into the message body — embedded controls, not
-                a popover. Because the controls are absolutely
-                positioned they do NOT push the message body
-                downward; the gap between two consecutive messages
-                shrinks to just the row's `py-1.5`.
-
-            The Thread icon is suppressed when `threadReplyCount` is
-            already set — the inline "{N} Reply" badge is the
-            discovery affordance in that case, so a duplicate "go to
-            thread" icon would just be noise. */}
+        {/* Inline thread-replies badge — only rendered when
+            `threadReplyCount !== undefined`. It carries real
+            information ("this message has N replies, click to open"),
+            so it earns its space below the bubble and stays visible
+            without hover. */}
         {threadReplyCount !== undefined && onStartThread ? (
           <div
             className={
@@ -274,39 +252,53 @@ export function MessageItem({
             />
           </div>
         ) : null}
+      </div>
 
-        <div
-          className={
-            'absolute top-1 z-10 flex items-center gap-2 transition-opacity ' +
-            (alignRight ? 'left-1' : 'right-1') +
-            ' ' +
-            (hover ? 'opacity-100' : 'pointer-events-none opacity-0')
-          }
-        >
-          {onStartThread && threadReplyCount === undefined ? (
-            <button
-              type="button"
-              onClick={() => onStartThread(message)}
-              title="Thread"
-              className="text-text-muted transition-colors hover:text-text-primary"
-            >
-              <CornerUpLeft className="size-3.5" />
-            </button>
-          ) : null}
-          <button
-            type="button"
-            onClick={() => onSave?.(message)}
-            title={saved ? 'Saved' : 'Save'}
-            className={
-              'transition-colors ' +
-              (saved
-                ? 'text-accent'
-                : 'text-text-muted hover:text-text-primary')
-            }
-          >
-            <Bookmark className={'size-3.5 ' + (saved ? 'fill-current' : '')} />
-          </button>
-        </div>
+      {/* Frame-corner action controls (Save + Thread) — absolutely
+          pinned to the top-right of the framed message row (mirrored
+          to top-left in user-right mode so they sit on the side away
+          from the avatar). Anchored to the OUTER row container (which
+          carries the hover frame's `border-accent bg-bg-floating`),
+          NOT to the inner content column — that way the controls
+          visually belong to the "card" instead of floating over the
+          markdown body.
+
+          Visibility: gated by hover OR focus-within so a keyboard
+          user can tab to them without sighted-only hover access; on
+          either trigger the wrapper flips to opacity-100 +
+          pointer-events-auto. The controls re-use ActionButton so
+          they match the inline "{N} Reply" badge's visual language —
+          icon + small label, color-only hover, no container chrome.
+
+          The Thread button is suppressed when `threadReplyCount` is
+          already set — the inline "{N} Reply" badge is the discovery
+          affordance in that case, so a duplicate "go to thread" icon
+          would just be noise. */}
+      <div
+        className={
+          'absolute top-1 z-10 flex items-center gap-3 text-xs transition-opacity focus-within:pointer-events-auto focus-within:opacity-100 ' +
+          (alignRight ? 'left-2' : 'right-2') +
+          ' ' +
+          (hover ? 'opacity-100' : 'pointer-events-none opacity-0')
+        }
+      >
+        {onStartThread && threadReplyCount === undefined ? (
+          <ActionButton
+            icon={<CornerUpLeft className="size-3.5" />}
+            label="Thread"
+            onClick={() => onStartThread(message)}
+            alwaysVisible
+            hovered={hover}
+          />
+        ) : null}
+        <ActionButton
+          icon={<Bookmark className={'size-3.5 ' + (saved ? 'fill-current' : '')} />}
+          label={saved ? 'Saved' : 'Save'}
+          active={saved}
+          onClick={() => onSave?.(message)}
+          alwaysVisible
+          hovered={hover}
+        />
       </div>
     </div>
   );
@@ -455,8 +447,9 @@ function ActionButton({
       type="button"
       onClick={onClick}
       title={label}
+      aria-label={label}
       className={
-        'flex items-center gap-1 transition-colors transition-opacity ' +
+        'flex items-center gap-1 rounded-sm transition-colors transition-opacity focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus ' +
         (visible ? 'opacity-100' : 'pointer-events-none opacity-0') +
         ' ' +
         (active

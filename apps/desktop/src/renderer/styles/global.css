@@ -316,20 +316,21 @@ button:disabled { cursor: not-allowed; }
 /* TaskRef chip — strip the filled `bg-bg-elevated` / `bg-accent-soft`
    variants AND the cluster outline for a fully borderless chip. Inside
    a cluster the chip is just inline text — clickability is conveyed by
-   the `text-accent` color and a soft accent-tinted hover surface, not
-   by a border. (`data-task-ref` is on the chip element itself in
+   the `text-accent` color and a full accent fill on hover, not by a
+   border. (`data-task-ref` is on the chip element itself in
    TaskRef.tsx.) */
 .system-activity-cluster [data-task-ref] {
   background: transparent;
   border: none;
 }
 .system-activity-cluster [data-task-ref]:hover {
-  /* `--accent-soft` is the per-theme low-opacity accent token (e.g.
-     warm-script `#2D231615` ≈ 8% opacity warm-dark). It carries the
-     "this is accent-related" semantic at a feather-light intensity, so
-     the chip stays in the cluster's muted register without falling
-     back to a flat gray surface that mismatches the chat canvas. */
-  background: var(--accent-soft);
+  /* Match the standalone resolved chip's hover (`hover:bg-accent
+     hover:text-text-on-accent`) — fill with full accent, flip text to
+     `--text-on-accent` so the chip stays legible on the saturated
+     background. Lighter alternatives (`--bg-hover`, `--accent-soft`)
+     read as either gray or barely-visible against the chat canvas. */
+  background: var(--accent);
+  color: var(--text-on-accent);
 }
 
 /* TaskStatusPill — same demotion: transparent fill, current-color
