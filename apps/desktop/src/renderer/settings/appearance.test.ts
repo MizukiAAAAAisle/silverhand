@@ -34,17 +34,20 @@ describe('parseAppearance', () => {
     });
   });
 
-  it('normalizes markdown font overrides and clamps font size', () => {
+  it('normalizes shared font size and trims font families', () => {
     expect(
       parseAppearance({
         theme: 'warm-coral',
-        prose: { fontFamily: '  Georgia, serif  ', fontSize: 100 },
-        code: { fontFamily: '   ', fontSize: 4 },
+        fontSize: 100,
+        prose: { fontFamily: '  Georgia, serif  ' },
+        code: { fontFamily: '   ' },
       }),
     ).toEqual({
       theme: 'warm-coral',
-      prose: { fontFamily: 'Georgia, serif', fontSize: 22 },
-      code: { fontSize: 12 },
+      // Clamped to FONT_SIZE_MAX.
+      fontSize: 22,
+      prose: { fontFamily: 'Georgia, serif' },
+      // code's fontFamily was empty after trim, so the slot drops.
     });
   });
 
@@ -52,20 +55,20 @@ describe('parseAppearance', () => {
     expect(
       parseAppearance({
         theme: 'warm-script',
-        prose: { fontSize: '16' },
-        code: { fontSize: Number.NaN },
+        fontSize: '16',
       }),
     ).toEqual({ theme: 'warm-script' });
   });
 });
 
 describe('applyAppearanceOverrides', () => {
-  it('sets prose and code markdown override tokens', () => {
+  it('writes the shared font size into both prose and code tokens', () => {
     const style = new StyleStub();
     applyAppearanceOverrides(style, {
       theme: 'warm-script',
-      prose: { fontFamily: 'Georgia, serif', fontSize: 16 },
-      code: { fontFamily: 'Menlo, monospace', fontSize: 13 },
+      fontSize: 16,
+      prose: { fontFamily: 'Georgia, serif' },
+      code: { fontFamily: 'Menlo, monospace' },
     });
 
     expect(style.values).toEqual(
@@ -73,7 +76,7 @@ describe('applyAppearanceOverrides', () => {
         [MD_TOKENS.PROSE_FONT, 'Georgia, serif'],
         [MD_TOKENS.PROSE_SIZE, '16px'],
         [MD_TOKENS.CODE_FONT, 'Menlo, monospace'],
-        [MD_TOKENS.CODE_SIZE, '13px'],
+        [MD_TOKENS.CODE_SIZE, '16px'],
       ]),
     );
   });

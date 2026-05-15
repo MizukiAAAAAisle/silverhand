@@ -5,7 +5,6 @@ import {
   FONT_SIZE_MIN,
   THEME_IDS,
   type AppearanceSettings,
-  type MarkdownTextSettings,
 } from './types';
 
 /** Internal: font-size schema. Out-of-range values are clamped (not
@@ -23,38 +22,31 @@ const FontFamilySchema = z
   .transform(s => s.trim())
   .refine(s => s.length > 0, { message: 'empty' });
 
-const MarkdownTextSchema = z
+/** Per-slot input shape — only font family. Font size is shared and
+ *  lives at the appearance level. */
+const MarkdownTextInputSchema = z
   .object({
     fontFamily: FontFamilySchema.optional().catch(undefined),
-    fontSize: FontSizeSchema.optional().catch(undefined),
   })
-  .strip()
-  .transform((raw): MarkdownTextSettings => {
-    const out: MarkdownTextSettings = {};
-    if (typeof raw.fontFamily === 'string') out.fontFamily = raw.fontFamily;
-    if (typeof raw.fontSize === 'number') out.fontSize = raw.fontSize;
-    return out;
-  });
+  .strip();
 
 const ThemeIdSchema = z.enum(THEME_IDS).catch(DEFAULT_APPEARANCE.theme);
 
 const AppearanceSchema = z
   .object({
     theme: ThemeIdSchema.optional().catch(DEFAULT_APPEARANCE.theme),
-    prose: MarkdownTextSchema.optional().catch(undefined),
-    code: MarkdownTextSchema.optional().catch(undefined),
+    fontSize: FontSizeSchema.optional().catch(undefined),
+    prose: MarkdownTextInputSchema.optional().catch(undefined),
+    code: MarkdownTextInputSchema.optional().catch(undefined),
   })
   .passthrough()
   .transform((raw): AppearanceSettings => {
     const out: AppearanceSettings = {
       theme: raw.theme ?? DEFAULT_APPEARANCE.theme,
     };
-    if (raw.prose && (raw.prose.fontFamily || typeof raw.prose.fontSize === 'number')) {
-      out.prose = raw.prose;
-    }
-    if (raw.code && (raw.code.fontFamily || typeof raw.code.fontSize === 'number')) {
-      out.code = raw.code;
-    }
+    if (typeof raw.fontSize === 'number') out.fontSize = raw.fontSize;
+    if (raw.prose?.fontFamily) out.prose = { fontFamily: raw.prose.fontFamily };
+    if (raw.code?.fontFamily) out.code = { fontFamily: raw.code.fontFamily };
     return out;
   });
 

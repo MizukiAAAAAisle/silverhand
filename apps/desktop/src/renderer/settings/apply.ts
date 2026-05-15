@@ -27,14 +27,16 @@ export function applyAppearanceOverrides(
   appearance: AppearanceSettings,
 ): void {
   const proseFont = appearance.prose?.fontFamily;
-  const proseSize = appearance.prose?.fontSize;
   const codeFont = appearance.code?.fontFamily;
-  const codeSize = appearance.code?.fontSize;
+  // Shared font size — applied identically to both prose and code so
+  // body text and inline / fenced code line up. `undefined` falls back
+  // to the per-theme default in CSS.
+  const sharedSize = sizePx(appearance.fontSize);
 
   setOrRemove(target, MD_TOKENS.PROSE_FONT, proseFont);
-  setOrRemove(target, MD_TOKENS.PROSE_SIZE, sizePx(proseSize));
+  setOrRemove(target, MD_TOKENS.PROSE_SIZE, sharedSize);
   setOrRemove(target, MD_TOKENS.CODE_FONT, codeFont);
-  setOrRemove(target, MD_TOKENS.CODE_SIZE, sizePx(codeSize));
+  setOrRemove(target, MD_TOKENS.CODE_SIZE, sharedSize);
 }
 
 function setOrRemove(

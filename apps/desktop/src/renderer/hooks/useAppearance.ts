@@ -25,6 +25,7 @@ function applyTheme(theme: ThemeId): void {
  *  `prose: undefined` doesn't round-trip into `prose: {}`. */
 function pruneOverrides(appearance: AppearanceSettings): AppearanceSettings {
   const next: AppearanceSettings = { theme: appearance.theme };
+  if (typeof appearance.fontSize === 'number') next.fontSize = appearance.fontSize;
   if (hasOverride(appearance.prose)) next.prose = appearance.prose;
   if (hasOverride(appearance.code)) next.code = appearance.code;
   return next;
@@ -32,7 +33,7 @@ function pruneOverrides(appearance: AppearanceSettings): AppearanceSettings {
 
 function hasOverride(slot: MarkdownTextSettings | undefined): slot is MarkdownTextSettings {
   if (!slot) return false;
-  return Boolean(slot.fontFamily) || typeof slot.fontSize === 'number';
+  return Boolean(slot.fontFamily);
 }
 
 /** Clamp + round a font-size before persisting so renderer state and
@@ -46,16 +47,22 @@ function clampSize(n: number | undefined): number | undefined {
 export interface UseAppearance {
   appearance: AppearanceSettings;
   setTheme: (theme: ThemeId) => void;
-  /** Set or clear a single field on `prose` or `code`. Pass
-   *  `undefined` to clear that field; the slot is pruned when both
-   *  fields go empty. */
-  setMarkdownText: (
+  /** Set or clear the font family for `prose` or `code`. Pass
+   *  `undefined` to clear; the slot is pruned when its only field
+   *  goes empty. */
+  setMarkdownFont: (
     slot: 'prose' | 'code',
-    field: 'fontFamily' | 'fontSize',
-    value: string | number | undefined,
+    value: string | undefined,
   ) => void;
-  /** Wipe one slot or both slots — falls back to theme defaults. */
+  /** Set or clear the *shared* markdown font size. Pass `undefined`
+   *  to fall back to the theme default. */
+  setMarkdownFontSize: (value: number | undefined) => void;
+  /** Wipe overrides — falls back to theme defaults. With no args,
+   *  clears font size and both font families; with a slot, clears
+   *  just that slot's font family. */
   resetMarkdownText: (slot?: 'prose' | 'code') => void;
+  /** Reset just the shared font size to the theme default. */
+  resetMarkdownFontSize: () => void;
 }
 
 export function useAppearance(): UseAppearance {
@@ -72,22 +79,22 @@ export function useAppearance(): UseAppearance {
   return {
     appearance,
     setTheme: theme => setAppearance(prev => ({ ...prev, theme })),
-    setMarkdownText: (slot, field, value) =>
+    setMarkdownFont: (slot, value) =>
       setAppearance(prev => {
-        const current = prev[slot] ?? {};
-        const nextSlot: MarkdownTextSettings = { ...current };
-        if (field === 'fontFamily') {
-          const trimmed = typeof value === 'string' ? value.trim() : '';
-          if (trimmed) nextSlot.fontFamily = trimmed;
-          else delete nextSlot.fontFamily;
-        } else {
-          const clamped = clampSize(typeof value === 'number' ? value : undefined);
-          if (typeof clamped === 'number') nextSlot.fontSize = clamped;
-          else delete nextSlot.fontSize;
-        }
+        const trimmed = typeof value === 'string' ? value.trim() : '';
+        const nextSlot: MarkdownTextSettings = {};
+        if (trimmed) nextSlot.fontFamily = trimmed;
         const next: AppearanceSettings = { ...prev };
         if (hasOverride(nextSlot)) next[slot] = nextSlot;
         else delete next[slot];
+        return next;
+      }),
+    setMarkdownFontSize: value =>
+      setAppearance(prev => {
+        const clamped = clampSize(value);
+        const next: AppearanceSettings = { ...prev };
+        if (typeof clamped === 'number') next.fontSize = clamped;
+        else delete next.fontSize;
         return next;
       }),
     resetMarkdownText: slot =>
@@ -97,7 +104,13 @@ export function useAppearance(): UseAppearance {
           delete next[slot];
           return next;
         }
-        const next: AppearanceSettings = { theme: prev.theme };
+        // Full wipe: drop both family slots and the shared size.
+        return { theme: prev.theme };
+      }),
+    resetMarkdownFontSize: () =>
+      setAppearance(prev => {
+        const next: AppearanceSettings = { ...prev };
+        delete next.fontSize;
         return next;
       }),
   };

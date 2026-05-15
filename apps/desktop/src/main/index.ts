@@ -317,10 +317,35 @@ function buildAppMenu(): Menu {
     },
   ];
 
+  // macOS convention: "Settings…" lives in the App menu directly under
+  // About, with the standard Cmd+, accelerator. Electron's
+  // `{ role: 'appMenu' }` shortcut omits Settings, so we hand-build the
+  // App submenu here when running on darwin.
+  const appMenuItem: MenuItemConstructorOptions = isMac
+    ? {
+        label: app.name,
+        submenu: [
+          { role: 'about' },
+          { type: 'separator' },
+          {
+            label: 'Settings…',
+            accelerator: 'CmdOrCtrl+,',
+            click: () => openSettings(),
+          },
+          { type: 'separator' },
+          { role: 'services' },
+          { type: 'separator' },
+          { role: 'hide' },
+          { role: 'hideOthers' },
+          { role: 'unhide' },
+          { type: 'separator' },
+          { role: 'quit' },
+        ],
+      }
+    : { role: 'appMenu' };
+
   const template: MenuItemConstructorOptions[] = [
-    ...(isMac
-      ? ([{ role: 'appMenu' }] as MenuItemConstructorOptions[])
-      : []),
+    ...(isMac ? [appMenuItem] : []),
     { role: 'fileMenu' },
     { role: 'editMenu' },
     {
@@ -342,6 +367,31 @@ function buildAppMenu(): Menu {
     { role: 'windowMenu' },
   ];
   return Menu.buildFromTemplate(template);
+}
+
+/**
+ * Show + focus the main window and tell the renderer to navigate to the
+ * Settings page. Triggered by the App menu's "Settings…" item (Cmd+,).
+ * If the window was closed (mac-style background app) we recreate it so
+ * the shortcut also brings the app back from the dock.
+ */
+function openSettings(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+  }
+  const win = mainWindow;
+  if (!win) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+  const send = (): void => {
+    if (!win.isDestroyed()) win.webContents.send('navigate:settings');
+  };
+  if (win.webContents.isLoading()) {
+    win.webContents.once('did-finish-load', send);
+  } else {
+    send();
+  }
 }
 
 ipcMain.handle('backend:info', () => {

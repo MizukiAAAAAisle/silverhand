@@ -142,60 +142,38 @@ button:disabled { cursor: not-allowed; }
   outline: none;
 }
 .settings-font-size-slider::-webkit-slider-runnable-track {
-  height: 8px;
-  border: 1px solid var(--border-subtle);
+  height: 2px;
+  border: 0;
   border-radius: 999px;
-  background:
-    linear-gradient(
-      90deg,
-      color-mix(in oklab, var(--accent) 22%, transparent) 0 var(--font-size-progress),
-      transparent var(--font-size-progress) 100%
-    ),
-    linear-gradient(
-      90deg,
-      color-mix(in oklab, var(--text-muted) 20%, var(--bg-elevated)),
-      color-mix(in oklab, var(--brand-primary) 44%, var(--bg-floating)) 52%,
-      var(--accent)
-    );
+  background: color-mix(in oklab, var(--text-muted) 30%, transparent);
 }
 .settings-font-size-slider::-webkit-slider-thumb {
-  width: 18px;
-  height: 18px;
+  width: 14px;
+  height: 14px;
   margin-top: -6px;
   appearance: none;
-  border: 2px solid var(--accent);
+  border: 1.5px solid var(--accent);
   border-radius: 999px;
   background: var(--bg-floating);
-  box-shadow: 0 1px 4px rgba(var(--shadow-base), 0.22);
+  box-shadow: 0 1px 3px rgba(var(--shadow-base), 0.18);
 }
 .settings-font-size-slider:focus-visible::-webkit-slider-thumb {
   outline: 2px solid var(--border-focus);
   outline-offset: 2px;
 }
 .settings-font-size-slider::-moz-range-track {
-  height: 8px;
-  border: 1px solid var(--border-subtle);
+  height: 2px;
+  border: 0;
   border-radius: 999px;
-  background:
-    linear-gradient(
-      90deg,
-      color-mix(in oklab, var(--accent) 22%, transparent) 0 var(--font-size-progress),
-      transparent var(--font-size-progress) 100%
-    ),
-    linear-gradient(
-      90deg,
-      color-mix(in oklab, var(--text-muted) 20%, var(--bg-elevated)),
-      color-mix(in oklab, var(--brand-primary) 44%, var(--bg-floating)) 52%,
-      var(--accent)
-    );
+  background: color-mix(in oklab, var(--text-muted) 30%, transparent);
 }
 .settings-font-size-slider::-moz-range-thumb {
-  width: 18px;
-  height: 18px;
-  border: 2px solid var(--accent);
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--accent);
   border-radius: 999px;
   background: var(--bg-floating);
-  box-shadow: 0 1px 4px rgba(var(--shadow-base), 0.22);
+  box-shadow: 0 1px 3px rgba(var(--shadow-base), 0.18);
 }
 
 /* ── Markdown body — applied to .markdown-body wrapper around <ReactMarkdown> ── */

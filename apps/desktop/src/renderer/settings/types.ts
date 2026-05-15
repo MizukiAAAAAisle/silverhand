@@ -5,16 +5,20 @@ export const THEME_IDS = [
 ] as const;
 export type ThemeId = (typeof THEME_IDS)[number];
 
-/** Override a theme's default markdown font / size. `undefined` means
+/** Override a theme's default markdown font family. `undefined` means
  *  "inherit from theme". Empty / invalid values are dropped at parse
- *  time, never persisted. */
+ *  time, never persisted. Font size is a single shared knob at the
+ *  appearance level ({@link AppearanceSettings.fontSize}) — prose and
+ *  code always share one size and only differ in font family. */
 export interface MarkdownTextSettings {
   fontFamily?: string;
-  fontSize?: number;
 }
 
 export interface AppearanceSettings {
   theme: ThemeId;
+  /** Override for the shared markdown text size, applied to both prose
+   *  and code. `undefined` means "inherit from theme". */
+  fontSize?: number;
   /** Override for `.markdown-body` prose (paragraphs, headings, lists). */
   prose?: MarkdownTextSettings;
   /** Override for `.markdown-body` inline `code` and fenced `pre`. */
@@ -25,9 +29,9 @@ export const DEFAULT_APPEARANCE: AppearanceSettings = {
   theme: 'warm-script',
 };
 
-/** Allowed font-size range for prose / code overrides. Out-of-range
+/** Allowed font-size range for the shared markdown override. Out-of-range
  *  values are clamped at parse time. Keep in sync with the SettingsPage
- *  sliders. */
+ *  slider. */
 export const FONT_SIZE_MIN = 12;
 export const FONT_SIZE_MAX = 22;
 export const DEFAULT_MARKDOWN_FONT_SIZE = 12;

@@ -12,6 +12,7 @@ coverage
 release/
 
 # Local data
+docs/cli-log-reports
 .silverhand
 *.db
 *.db-journal

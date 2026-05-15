@@ -37,6 +37,14 @@ const api = {
     ipcRenderer.on('shutdown:progress', listener);
     return () => ipcRenderer.off('shutdown:progress', listener);
   },
+  /** Fired by the App menu's "Settings…" item (Cmd+,) so the renderer
+   *  can navigate to the Settings page. The main process also focuses
+   *  the window before emitting, so the handler only needs to navigate. */
+  onNavigateSettings: (handler: () => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent) => handler();
+    ipcRenderer.on('navigate:settings', listener);
+    return () => ipcRenderer.off('navigate:settings', listener);
+  },
   showSystemNotification: (opts: { title: string; body: string }): Promise<void> =>
     ipcRenderer.invoke('notification:show', opts),
   setBadgeCount: (count: number): Promise<void> =>

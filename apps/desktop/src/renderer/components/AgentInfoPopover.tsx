@@ -281,9 +281,6 @@ function AgentManagementActions({
 
   return (
     <div className="mt-3 border-t border-border-subtle pt-2">
-      <div className="mb-2 text-[11px] font-medium uppercase text-text-muted">
-        Actions
-      </div>
       <div className="flex flex-wrap gap-1.5">
         <button
           type="button"

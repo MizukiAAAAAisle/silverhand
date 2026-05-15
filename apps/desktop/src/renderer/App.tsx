@@ -214,6 +214,13 @@ export function App(): JSX.Element {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [toggleChannelSidebar, toggleWorkspaceSidebar]);
 
+  // App menu's "Settings…" item (Cmd+,) — main process focuses the
+  // window and pushes this; renderer just navigates. `nav.toSettings`
+  // is stable across renders (memoized inside `useNav`).
+  useEffect(() => {
+    return window.agentHub.onNavigateSettings(() => nav.toSettings());
+  }, [nav.toSettings]);
+
   // Per-workspace "last viewed channel" memory and per-channel "last
   // open thread" memory both live as module singletons above (persisted
   // via localStorage). The recording effects below write through to
