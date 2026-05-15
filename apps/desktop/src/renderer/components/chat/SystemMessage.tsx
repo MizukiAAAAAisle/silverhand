@@ -114,7 +114,7 @@ function GenericNarrationFallback({
   onOpenChannelRef,
 }: RendererProps): JSX.Element {
   return (
-    <div className="px-4 py-1.5 text-center text-xs italic text-text-muted">
+    <div className="px-4 py-1.5 text-center italic text-text-muted">
       <Markdown
         content={message.content}
         conversationRefsById={conversationRefsById}
@@ -143,7 +143,7 @@ function CollapsibleNarration({
       type="button"
       onClick={() => setExpanded((v) => !v)}
       className={
-        'group flex w-full items-start gap-1 px-2 py-1 text-left text-xs text-text-muted ' +
+        'group flex w-full items-start gap-1 px-2 py-1 text-left text-text-muted ' +
         (expanded ? 'bg-bg-floating' : 'rounded hover:bg-bg-hover')
       }
       aria-expanded={expanded}
@@ -250,7 +250,7 @@ function MentionCcCard({
         </span>
       </div>
       {original ? (
-        <div className="text-sm text-text-primary">
+        <div className="text-text-primary">
           <Markdown
             content={original}
             conversationRefsById={conversationRefsById}
@@ -296,7 +296,7 @@ function SessionClearedCard({
   if (meta) return <SessionClearedRow meta={meta} />;
   return (
     <div
-      className="flex items-center gap-2 px-4 py-1 text-xs text-text-muted"
+      className="flex items-center gap-2 px-4 py-1 text-text-muted"
       data-session-cleared-legacy="1"
     >
       <RotateCcw aria-hidden className="size-3.5 shrink-0 opacity-60" />
@@ -329,7 +329,7 @@ function SessionClearedRow({
     : 'a user';
   return (
     <div
-      className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 px-4 py-1 text-xs text-text-muted"
+      className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 px-4 py-1 text-text-muted"
       data-session-cleared="1"
     >
       <RotateCcw aria-hidden className="size-3.5 shrink-0 opacity-60" />
@@ -393,7 +393,7 @@ function ScheduleFireBanner({
 
   return (
     <div
-      className="border-y border-border-subtle border-l-[3px] border-l-warning bg-bg-floating px-4 py-2 text-sm"
+      className="border-y border-border-subtle border-l-[3px] border-l-warning bg-bg-floating px-4 py-2"
       data-schedule-fire={meta ? '1' : '0'}
     >
       <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-text-secondary">
@@ -572,7 +572,7 @@ function TaskEventRowEnriched({
     meta.subtype === 'task_unclaim' ? 'unclaim' : meta.task_status;
 
   return (
-    <div className="flex items-center gap-2.5 px-4 py-1.5 text-xs text-text-secondary">
+    <div className="flex items-center gap-2.5 px-4 py-1.5 text-text-secondary">
       <TaskEventDot kind={dotKind} />
       <TaskEventBody subtype={meta.subtype} actorLabel={actorLabel} meta={meta} />
     </div>
@@ -674,7 +674,7 @@ function TaskStatusPill({ status }: { status: TaskStatus }): JSX.Element {
 function TaskEventLegacyFallback({ content }: { content: string }): JSX.Element {
   return (
     <div
-      className="px-4 py-1.5 text-center text-xs italic text-text-muted"
+      className="px-4 py-1.5 text-center italic text-text-muted"
       data-task-event-legacy="1"
     >
       {content}
@@ -701,7 +701,7 @@ function TaskEventRowDegraded({
     meta.subtype === 'task_unclaim' ? 'unclaim' : meta.task_status;
   return (
     <div
-      className="flex items-center gap-2.5 px-4 py-1.5 text-xs text-text-secondary"
+      className="flex items-center gap-2.5 px-4 py-1.5 text-text-secondary"
       data-task-event-degraded="1"
     >
       <TaskEventDot kind={dotKind} />
@@ -777,7 +777,7 @@ function ThreadSummaryCard({
           ) : null}
         </span>
       </div>
-      <div className="text-sm text-text-primary">
+      <div className="text-text-primary">
         <Markdown
           content={summary}
           conversationRefsById={conversationRefsById}
@@ -935,7 +935,6 @@ function ContextCardShell({
       </div>
       <div
         className={
-          'text-sm ' +
           (expanded ? 'text-text-primary' : 'truncate text-text-secondary')
         }
       >
@@ -991,7 +990,7 @@ function ContextCardLegacyFallback({
       data-context-card={kind}
       data-context-card-legacy="1"
       className={
-        'mx-4 my-1 border-l-2 bg-bg-floating px-3 py-2 text-xs text-text-muted ' +
+        'mx-4 my-1 border-l-2 bg-bg-floating px-3 py-2 text-text-muted ' +
         CONTEXT_KIND_BORDER[kind]
       }
     >
@@ -1178,7 +1177,7 @@ function OnboardingRow({
         // Tiny per-element top offsets line them up visually against
         // the first line of the body. PR-6 follow-up review by
         // @Cindy on `6f15d96`.
-        'group flex w-full items-start gap-2 px-2 py-1 text-left text-xs text-text-muted ' +
+        'group flex w-full items-start gap-2 px-2 py-1 text-left text-text-muted ' +
         (expanded ? 'bg-bg-floating' : 'rounded hover:bg-bg-hover')
       }
       aria-expanded={expanded}
@@ -1232,7 +1231,7 @@ function RenameRow(props: RendererProps): JSX.Element {
   return (
     <div
       data-rename-row="1"
-      className="flex flex-wrap items-center justify-center gap-1.5 px-4 py-1 text-xs italic text-text-muted"
+      className="flex flex-wrap items-center justify-center gap-1.5 px-4 py-1 italic text-text-muted"
     >
       <RotateCw aria-hidden className="size-3.5 shrink-0 not-italic opacity-60" />
       <span>workspace renamed</span>

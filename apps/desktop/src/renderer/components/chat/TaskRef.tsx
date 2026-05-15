@@ -53,7 +53,7 @@ export function TaskRef({ taskNumber }: TaskRefProps): JSX.Element {
   if (!workspaceId) {
     return (
       <span
-        className="inline-flex h-[18px] max-w-[220px] items-center gap-0.5 rounded bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
+        className="inline-flex max-w-[220px] items-center gap-0.5 rounded bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
         title={`Task ${inertLabel}`}
         data-task-ref={String(taskNumber)}
         data-task-ref-state="no-context"
@@ -67,7 +67,7 @@ export function TaskRef({ taskNumber }: TaskRefProps): JSX.Element {
   if (result.isLoading) {
     const loadingChip = (
       <span
-        className="inline-flex h-[18px] max-w-[220px] items-center gap-0.5 rounded bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
+        className="inline-flex max-w-[220px] items-center gap-0.5 rounded bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
         // Wrapped in HoverPopover below — use aria-label, not the
         // native `title` attribute. macOS browsers schedule the native
         // tooltip on a 2-3s cycle that competes with Radix HoverCard
@@ -97,7 +97,7 @@ export function TaskRef({ taskNumber }: TaskRefProps): JSX.Element {
     // popover doesn't add information beyond the inert pill.
     return (
       <span
-        className="inline-flex h-[18px] max-w-[220px] items-center gap-0.5 rounded bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
+        className="inline-flex max-w-[220px] items-center gap-0.5 rounded bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
         title={`Task ${inertLabel}`}
         data-task-ref={String(taskNumber)}
         data-task-ref-state="missing"
@@ -119,7 +119,7 @@ export function TaskRef({ taskNumber }: TaskRefProps): JSX.Element {
 
   const inertChip = (
     <span
-      className="inline-flex h-[18px] max-w-[220px] items-center gap-0.5 rounded bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
+      className="inline-flex max-w-[220px] items-center gap-0.5 rounded bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
       // Wrapped in HoverPopover below — `aria-label` instead of the
       // native `title` attribute (see loading branch comment above
       // for the flicker rationale).
@@ -135,7 +135,7 @@ export function TaskRef({ taskNumber }: TaskRefProps): JSX.Element {
     <span
       role="button"
       tabIndex={0}
-      className="inline-flex h-[18px] max-w-[220px] cursor-pointer items-center gap-0.5 rounded bg-accent-soft px-1.5 -mx-0.5 font-medium text-accent transition-colors hover:bg-accent hover:text-text-on-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+      className="inline-flex max-w-[220px] cursor-pointer items-center gap-0.5 rounded bg-accent-soft px-1.5 -mx-0.5 font-medium text-accent transition-colors hover:bg-accent hover:text-text-on-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
       aria-label={tooltip}
       data-task-ref={String(taskNumber)}
       data-task-ref-state="resolved"

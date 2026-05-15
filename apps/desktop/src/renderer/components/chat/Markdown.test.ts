@@ -851,12 +851,17 @@ describe('SystemMessage task event rows (PR-2)', () => {
     expect(legacyHtml.startsWith('<div class="system-message-row">')).toBe(true);
   });
 
-  it('PR-8: TaskStatusPill is h-[18px] + leading-none so it aligns with the sibling TaskRef chip on `task_status` rows', () => {
+  it('PR-8 follow-up: TaskStatusPill is chrome (h-[18px] + leading-none + no py-0.5); TaskRef chip in system rows aligns via scoped CSS rather than inline class', () => {
     // shiki PR-8 feedback: chip + pill ended up on visually different
     // baselines because pill had `py-0.5` (~20px outer) while chip
-    // rendered at the row's natural inline-flex height (~16px). The fix
-    // locks both to `h-[18px]` and strips pill's vertical padding so
-    // `flex items-center` on the parent row aligns them pixel-perfect.
+    // rendered at the row's natural inline-flex height (~16px). Cindy
+    // PR-8 review #2: locking `h-[18px]` directly on TaskRef would (a)
+    // crop the chip when the user picks a larger theme prose size and
+    // (b) leak into Markdown inline `#task:N` chips that have no pill
+    // sibling. Fix: pill stays chrome (fixed h-[18px]); TaskRef sheds
+    // its inline `h-[18px]`; `.system-message-row [data-task-ref]`
+    // CSS rule in global.css locks the chip to 18px only inside
+    // system audit rows.
     const msg = makeSystemMessage(
       'task_status',
       fullMeta({ task_status: 'in_review' }),
@@ -875,10 +880,46 @@ describe('SystemMessage task event rows (PR-2)', () => {
     expect(html).not.toMatch(
       /data-task-event-status="in_review"[^>]*class="[^"]*py-0\.5/,
     );
-    // Sibling TaskRef chip must also be h-[18px] for the alignment
-    // contract to hold.
-    expect(html).toMatch(
-      /data-task-ref="42"[^>]*class="[^"]*h-\[18px\]|class="[^"]*h-\[18px\][^"]*"[^>]*data-task-ref="42"/,
+    // TaskRef chip must NOT carry inline `h-[18px]` — the height
+    // alignment lives in CSS scoped to `.system-message-row` so that
+    // (a) the markup stays small and (b) Markdown inline `#task:N`
+    // chips (outside system rows) keep flowing with surrounding text
+    // size.
+    expect(html).not.toMatch(/data-task-ref="42"[^>]*class="[^"]*h-\[18px\]/);
+    // The chip must still be wrapped in `.system-message-row` so the
+    // scoped CSS rule applies.
+    expect(html.startsWith('<div class="system-message-row">')).toBe(true);
+  });
+
+  it('PR-8 follow-up: body containers no longer carry `text-xs`/`text-sm` so theme prose size cascades from `.system-message-row`', () => {
+    // Cindy PR-8 review #1: the wrapper class set `font-size:
+    // var(--md-prose-size)` but children with `text-xs` / `text-sm`
+    // Tailwind utilities won via specificity, so a customized prose
+    // size never reached the body text. Drift guard: the task event
+    // row outer container (the body text wrapper, not chrome chips) is
+    // free of those Tailwind size utilities. Chrome elements that
+    // explicitly set `text-[10px]` / `text-[11px]` (status pill, mono
+    // timestamp) are intentionally fixed and remain.
+    const enriched = makeSystemMessage('task_create', fullMeta({}));
+    const enrichedHtml = renderTaskEvent(enriched, () => undefined, [seededTask()]);
+    // Outer body row of TaskEventRowEnriched — must NOT carry text-xs
+    // (would override inherited `--md-prose-size`).
+    expect(enrichedHtml).toMatch(
+      /<div class="flex items-center gap-2\.5 px-4 py-1\.5 text-text-secondary"/,
+    );
+    expect(enrichedHtml).not.toMatch(
+      /<div class="flex items-center gap-2\.5 px-4 py-1\.5 text-xs/,
+    );
+
+    const legacy = makeSystemMessage(
+      'task_create',
+      { task_number: 9, task_status: 'todo' },
+      '@alice created task #9',
+    );
+    const legacyHtml = renderTaskEvent(legacy, () => undefined);
+    // Same drift guard for the degraded row.
+    expect(legacyHtml).not.toMatch(
+      /<div class="flex items-center gap-2\.5 px-4 py-1\.5 text-xs/,
     );
   });
 });

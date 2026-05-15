@@ -215,21 +215,33 @@ button:disabled { cursor: not-allowed; }
        chips, etc.) inherits the user's chosen prose font + size so
        system rows visually unify with regular messages under the
        active theme.
+   Body containers inside the row must NOT carry their own
+   `text-xs`/`text-sm` Tailwind utilities — those `font-size`
+   declarations win over inheritance and would silently strip the
+   theme-prose-size override (Cindy PR-8 review). Chrome chips/pills
+   that explicitly set `text-[10px]` / `text-[11px]` keep their fixed
+   density; that's intentional.
    Code-flavored leaves inside the row (Tailwind `font-mono`,
    `<code>`) re-resolve to `--md-code-font` so a custom code font in
    the theme settings reaches rename `<code>` chips, mono timestamps,
    and any other monospace ornament without each call site having to
-   thread a CSS variable manually. We do NOT override the explicit
-   Tailwind size utilities (`text-[10px]`, `text-[11px]`) — those are
-   intentional density choices on the chrome (status pill, mono
-   timestamp) and would look squat if scaled to prose size. */
+   thread a CSS variable manually. */
 .system-message-row {
   font-family: var(--md-prose-font, var(--font-sans));
   font-size: var(--md-prose-size, 12px);
+  line-height: 1.5;
 }
 .system-message-row code,
 .system-message-row .font-mono {
   font-family: var(--md-code-font, var(--font-mono));
+}
+/* TaskRef chip inside a system audit row behaves as chrome (fixed
+   18px) so it aligns pixel-for-pixel with the adjacent
+   `TaskStatusPill` on `task_status` rows. Outside `.system-message-row`
+   (Markdown prose), the chip stays text-driven so larger prose sizes
+   don't crop it (Cindy PR-8 review #2). */
+.system-message-row [data-task-ref] {
+  height: 18px;
 }
 
 .markdown-body p { margin: 0.4em 0; }

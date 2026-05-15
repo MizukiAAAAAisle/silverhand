@@ -1845,4 +1845,23 @@ System-message UI redesign 系列 6 个 PR 全部落地（PR-1 registry+drift gu
 
 System-message UI redesign 系列 8 个 PR 全部落地（PR-1..PR-6 主线 + PR-7 task chip 收敛 + PR-8 字体主题 + 高度对齐）。等用户最终验收整体 ship。
 
+## 2026-05-15 — System message UI redesign · PR-8 follow-up（字体级 cascade 修复 + chip 高度退掉全局锁）
+
+@Cindy PR-8 review 两条 blocker（msg `0PEPg70b84bxYrlK`）：
+
+1. **`.system-message-row` 上的 `font-size: var(--md-prose-size)` 没有真正 cascade 到 body 文本**。SystemMessage.tsx 里大量 body 容器仍带 Tailwind `text-xs` / `text-sm`——它们写的是显式 `font-size`，比父级 inherited size specificity 高，把主题字号覆盖回硬编码 12/14px。结果是 font-family 跟主题，font-size 大部分仍然钉死。
+2. **`TaskRef` 全局加 `h-[18px]` 既会和大主题字号冲突（裁/溢出 chip 文字），也会污染 Markdown inline `#task:N` chip**——后者本来应该跟 prose 一起伸缩。
+
+修法：
+
+- **fix 1（cascade）**：从 body 容器删 `text-xs` / `text-sm`，让 `.system-message-row` 的 `--md-prose-size` 自然 inherit。chrome（`text-[10px]` status pill / `text-[11px]` mono timestamp / 小 tag）保留固定密度——按 Cindy 的"body vs chrome"区分。`.system-message-row` 同时加 `line-height: 1.5`，让大字号下行高也跟主题。涉及容器：`GenericNarrationFallback` / `CollapsibleNarration` / `MentionCcCard` body 包装 / `SessionClearedCard`(legacy + main) / `ScheduleFireBanner` 外层 / `TaskEventRow{Enriched,Degraded}` 外层 / `TaskEventLegacyFallback` / `ContextCardShell` body / 其变体里的 `text-sm` / `ContextCardLegacyFallback` / `OnboardingRow` / `RenameRow`。剩下 5 处 `text-xs` 是显式 chrome 元数据条（"From mentioned by ..." / "(loading original...)" / "Scheduled wake" 等小标），保留。
+- **fix 2（chip 高度）**：从 `TaskRef.tsx` 全部 5 个分支退掉 `h-[18px]`——chip 在 Markdown body 场景里恢复纯 text-driven，跟着 prose size 伸缩。chip 在 system 行里要跟 pill 等高的约束改用 scoped CSS 落在 `.system-message-row [data-task-ref] { height: 18px; }`，只锁 system 行内的 chip。pill 自己 `h-[18px] leading-none` 不变（chrome by design）。
+
+测试：
+
+- 既有 PR-8 测试改写：原本断言 chip 持有 `h-[18px]` 内联类，改为断言 chip **不再** 持有该类（CSS scoping 取代），同时仍 assert pill 持有 `h-[18px]` + `leading-none`，且整个 SystemMessage 在 `.system-message-row` 容器里。
+- 新增 1 条 drift guard：task event row 外层容器（enriched + degraded）class 不再含 `text-xs`，确保后续手抖加回 Tailwind size utility 直接红。
+
+**质量门**：`pnpm typecheck` ✅；desktop 162/162（+1）；`./scripts/test.sh` 55 files / 676 tests ✅。
+
 
