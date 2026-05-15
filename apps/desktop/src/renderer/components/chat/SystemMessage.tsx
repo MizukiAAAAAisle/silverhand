@@ -589,12 +589,18 @@ function TaskEventBody({
   meta: TaskSystemMetadata;
 }): JSX.Element {
   if (subtype === 'task_status') {
+    // PR-9 (@shiki feedback msg `UoJ6LPHDpJCHYVFe`): keep actor at the
+    // front like the create/claim/unclaim shape so all four task event
+    // subtypes share an `@actor verb chip [→ pill]` reading order.
+    // Verb is `moved` (Jira convention; covers any todo→in_progress /
+    // in_progress→in_review / *→done transition without naming each).
     return (
       <>
+        <span className="font-medium text-text-primary">{actorLabel}</span>
+        <span className="text-text-muted">moved</span>
         <TaskRef taskNumber={meta.task_number} />
         <span className="text-text-muted" aria-hidden>→</span>
         <TaskStatusPill status={meta.task_status} />
-        <span className="text-text-muted">by {actorLabel}</span>
       </>
     );
   }

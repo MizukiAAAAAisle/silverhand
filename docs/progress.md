@@ -1864,4 +1864,21 @@ System-message UI redesign 系列 8 个 PR 全部落地（PR-1..PR-6 主线 + PR
 
 **质量门**：`pnpm typecheck` ✅；desktop 162/162（+1）；`./scripts/test.sh` 55 files / 676 tests ✅。
 
+## 2026-05-15 — System message UI redesign · PR-9（task_status actor-first 一致化）
+
+@shiki 验收发现 task event 行 actor 位置不一致（msg `UoJ6LPHDpJCHYVFe`）：
+- create / claim / unclaim 行：`@actor verb chip`（actor 在前）
+- task_status 行：`chip → pill by @actor`（actor 在后）
+
+@shiki / @Cindy 都同意 actor-first 方向 + verb 用 `moved`。把 task_status 行改成 `@actor moved chip → pill`，四个 task event subtype 共享同一阅读顺序。`moved` 是 Jira 风格的中性动词，覆盖任意状态变化（todo→in_progress / in_progress→in_review / *→done），不用对每种 transition 起不同 verb。
+
+**实现**（SystemMessage.tsx 一个 branch 改写）：
+```
+@Alice moved #task:42 · title → IN REVIEW
+```
+
+**测试**：原 `task_status renders chip → status pill by actor` 改写成 `task_status renders @actor moved chip → status pill (PR-9 actor-first)`，断言加 `@Alice` / `moved` 在前、`by @Alice` 不再出现，并钉死阅读顺序（actor < moved < chip < pill）。`@you` viewer-friendly 测试也一并改成 actor-first 形态。
+
+**质量门**：typecheck ✅；desktop 162/162（无净变化，1 个测试改写）。
+
 

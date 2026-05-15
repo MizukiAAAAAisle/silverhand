@@ -733,15 +733,25 @@ describe('SystemMessage task event rows (PR-2)', () => {
     expect(html).toContain('data-task-ref="42"');
   });
 
-  it('task_status renders chip → status pill by actor (no verb word)', () => {
+  it('task_status renders @actor moved chip → status pill (PR-9 actor-first)', () => {
     const msg = makeSystemMessage('task_status', fullMeta({ task_status: 'in_review' }));
     const html = renderTaskEvent(msg, () => undefined, [
       seededTask({ status: 'in_review' }),
     ]);
+    expect(html).toContain('@Alice');
+    expect(html).toContain('moved');
     expect(html).toContain('data-task-ref="42"');
     expect(html).toContain('data-task-event-status="in_review"');
     expect(html).toContain('in review');
-    expect(html).toContain('by @Alice');
+    // PR-9: actor is now the first text node, NOT a "by @actor"
+    // suffix. Verify we don't accidentally re-introduce the old form.
+    expect(html).not.toContain('by @Alice');
+    // Reading order: @actor → moved → chip → pill.
+    expect(html.indexOf('@Alice')).toBeLessThan(html.indexOf('moved'));
+    expect(html.indexOf('moved')).toBeLessThan(html.indexOf('data-task-ref="42"'));
+    expect(html.indexOf('data-task-ref="42"')).toBeLessThan(
+      html.indexOf('data-task-event-status="in_review"'),
+    );
   });
 
   it('user actor renders the viewer-friendly @you handle for current user', () => {
@@ -756,7 +766,10 @@ describe('SystemMessage task event rows (PR-2)', () => {
       seededTask({ status: 'done' }),
     ]);
     expect(html).toContain('data-task-event-status="done"');
-    expect(html).toContain('by @you');
+    // PR-9 actor-first: `@you moved ... → DONE`, not `... by @you`.
+    expect(html).toContain('@you');
+    expect(html).toContain('moved');
+    expect(html).not.toContain('by @you');
   });
 
   it('chip is inert (no click handler) when no onOpenTask handler is supplied', () => {
