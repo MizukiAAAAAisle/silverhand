@@ -314,15 +314,19 @@ button:disabled { cursor: not-allowed; }
 }
 
 /* TaskRef chip — strip the filled `bg-bg-elevated` / `bg-accent-soft`
-   variants for a transparent + subtle outlined chip inside cluster
-   rows. (`data-task-ref` is on the chip element itself in TaskRef.tsx.) */
+   variants AND the cluster outline for a fully borderless chip. Inside
+   a cluster the chip is just inline text — clickability is conveyed by
+   the `text-accent` color and a neutral hover surface change, not by a
+   border. (`data-task-ref` is on the chip element itself in TaskRef.tsx.) */
 .system-activity-cluster [data-task-ref] {
   background: transparent;
-  border: 1px solid var(--border-subtle);
+  border: none;
 }
 .system-activity-cluster [data-task-ref]:hover {
-  background: var(--accent-soft);
-  border-color: var(--accent-soft);
+  /* Neutral surface hover instead of accent-soft so the chip stays in
+     the cluster's muted register; the accent text + cursor pointer
+     already carry the clickable affordance. */
+  background: var(--bg-hover);
 }
 
 /* TaskStatusPill — same demotion: transparent fill, current-color

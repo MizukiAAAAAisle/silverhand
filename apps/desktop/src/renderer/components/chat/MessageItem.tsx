@@ -62,8 +62,18 @@ interface MessageItemProps {
 
 /**
  * Renders a non-system message (user or agent) as a hoverable row with
- * markdown body, role-name + relative time header, and a flat Thread / Save
- * action bar that appears on hover at the bottom-left.
+ * markdown body, role-name + relative time header, and a Slack-style
+ * pair of action affordances:
+ *
+ * - **Floating hover toolbar** (Save + Thread) — absolutely positioned
+ *   at the top-right of the content column (top-left in user-right
+ *   mode), revealed on hover with a subtle elevated surface. It does
+ *   not reserve vertical space, so two consecutive messages now sit
+ *   tight against each other instead of being padded apart by an
+ *   always-on action row.
+ * - **Inline "{N} Reply" badge** — rendered below the body only when
+ *   the message has an open thread. Carries real information, so it
+ *   earns persistent space.
  *
  * Hover affordance: `--bg-floating` (pure white in the default theme)
  * background + 1px `--border-subtle` outline, square corners.
@@ -134,7 +144,7 @@ export function MessageItem({
         routeKind={routeKind}
         onNavigateAgent={navigateToAgent}
       />
-      <div className="min-w-0 max-w-[85%]">
+      <div className="relative min-w-0 max-w-[85%]">
         <header className={'mb-1 text-xs ' + (alignRight ? 'text-right' : '')}>
           {alignRight ? (
             <>
@@ -216,30 +226,64 @@ export function MessageItem({
           ) : null}
         </div>
 
-        {/* Action bar — flat, inline below the content. Mirrors to the
-            right edge in user-right mode so it sits under the message
-            instead of jumping to the far left.
+        {/* Action affordances — split into two pieces so the row only
+            reserves vertical space when there's persistent information
+            to show (the "{N} Reply" badge for messages that have a
+            thread):
 
-            Per-item visibility: when the message has an open thread,
-            the "{N} Reply" badge stays visible so the user can see the
-            thread exists without hovering; Save stays hover-only. */}
-        <div
-          className={
-            'mt-1 flex h-5 items-center gap-3 text-xs ' +
-            (alignRight ? 'justify-end' : 'justify-start')
-          }
-        >
-          {onStartThread ? (
+            (a) Inline thread-replies badge — only rendered when
+                `threadReplyCount !== undefined`. It carries real
+                information ("this message has N replies, click to
+                open"), so it earns its space below the bubble and stays
+                visible without hover.
+
+            (b) Floating hover toolbar (Slack-style) — absolutely
+                positioned at the top-right (or top-left in user-right
+                mode) of the content column, raised on a slightly
+                elevated surface with a subtle border + shadow.
+                Visibility is gated by `hover` only; when invisible it
+                also goes `pointer-events-none` so it never captures
+                clicks. Because it's absolutely positioned, it does NOT
+                push the message body downward — the gap between two
+                consecutive messages is now just the row's `py-1.5`,
+                not the previous `mt-1 + h-5 = 24px` always-on footer.
+
+            The floating toolbar contains Save (always) + Thread (only
+            when there are no replies yet — once a thread exists, the
+            inline "{N} Reply" badge is the discovery affordance, so
+            duplicating "Thread" in the toolbar would just be noise). */}
+        {threadReplyCount !== undefined && onStartThread ? (
+          <div
+            className={
+              'mt-1 flex h-5 items-center text-xs ' +
+              (alignRight ? 'justify-end' : 'justify-start')
+            }
+          >
             <ActionButton
               icon={<CornerUpLeft className="size-3.5" />}
-              label={
-                threadReplyCount !== undefined
-                  ? `${threadReplyCount} Reply`
-                  : 'Thread'
-              }
-              active={threadReplyCount !== undefined}
+              label={`${threadReplyCount} Reply`}
+              active
               onClick={() => onStartThread(message)}
-              alwaysVisible={threadReplyCount !== undefined}
+              alwaysVisible
+              hovered={hover}
+            />
+          </div>
+        ) : null}
+
+        <div
+          className={
+            'absolute top-0 z-10 flex items-center gap-2 rounded border border-border-subtle bg-bg-elevated px-2 py-0.5 text-xs shadow-sm transition-opacity ' +
+            (alignRight ? 'left-0' : 'right-0') +
+            ' ' +
+            (hover ? 'opacity-100' : 'pointer-events-none opacity-0')
+          }
+        >
+          {onStartThread && threadReplyCount === undefined ? (
+            <ActionButton
+              icon={<CornerUpLeft className="size-3.5" />}
+              label="Thread"
+              onClick={() => onStartThread(message)}
+              alwaysVisible
               hovered={hover}
             />
           ) : null}
@@ -248,6 +292,7 @@ export function MessageItem({
             label={saved ? 'Saved' : 'Save'}
             active={saved}
             onClick={() => onSave?.(message)}
+            alwaysVisible
             hovered={hover}
           />
         </div>
