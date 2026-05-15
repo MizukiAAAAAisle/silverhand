@@ -1798,3 +1798,29 @@ System-message UI redesign 系列的最后一个 PR。两件相对小的事一�
 
 System-message UI redesign 系列 6 个 PR 全部落地（PR-1 registry+drift guard / PR-2 task event row / PR-3 session_cleared inline audit / PR-4 schedule_fire 扁平 banner / PR-5 context-card 系列 / PR-6 onboarding badge + rename ↻）。等用户最终验收后整体 ship。
 
+## 2026-05-15 — System message UI redesign · PR-7（task chip 收敛到 TaskRef）
+
+最终验收 follow-up。@shiki 反馈两点："task 渲染和 markdown 中的 task 不一致，有两种 UI"——system event 里的静态 `TaskEventChip` 和 markdown 内联 `#task:N`（`TaskRef`）字体/配色/popover/点击行为都不一样；以及 "task 消息渲染缺少 actor 信息"——后者 @shiki 直接判 "不需要兼容了，以后就有了，不要为此做什么"，所以本轮只做前者。
+
+**问题**：PR-2 给 system event row 写了一个独立的 `TaskEventChip`（`apps/desktop/src/renderer/components/chat/SystemMessage.tsx`），用 metadata 里 `task_number/task_title` 静态渲染，理由是"event row 是 audit 记录，不需要 popover 和 deep link"。结果是 chat 里同一个 task 出现两套 UI：
+
+- system event chip：`bg-bg-elevated`、等宽 `#task:42 wire registry`、accent 色文字、无 hover popover、有 click handler。
+- markdown `#task:N` chip：`bg-accent-soft`、`#42 · wire registry`、resolved 时整片是 accent button 色，hover popover 显示 status / assignee / conversation。
+
+**改法**：删 `TaskEventChip`，把 enriched 路径和 degraded 路径里所有的 chip 调用改成 `<TaskRef taskNumber={meta.task_number} />`。`task_title` 不再从 metadata 直传——改由 TaskRef 的 `useTaskByNumber` 自己 resolve；任务被删则 fallback 到 inert "missing" 灰 chip，符合 markdown 里同一逻辑。`useTaskRefContext` import 删除（TaskRef 自己拿 context），`ClipboardCheck` 不再单独 import（TaskRef 内部用）。
+
+**测试调整**（`apps/desktop/src/renderer/components/chat/Markdown.test.ts`）：
+
+- `renderTaskEvent` helper 加 `seededTasks: TaskSummaryDto[]` 参数；测试里 pre-seed `taskByNumberKey('ws-1', 42)` 让 TaskRef SSR 走 resolved 分支而不是 loading（loading 状态下 TaskRef 不渲染 title，标题相关断言会全挂）。
+- 断言 `data-task-event-chip-state="clickable|inert"` → `data-task-ref-state="resolved|resolved-no-handler"`；这是 TaskRef 已有的 state 表达，统一了。
+- legacy degraded 三个测试不 seed（degraded 路径只验证 dot + verb chrome，chip 走 loading 也 OK，标签 `#task:N` 仍然出现）。
+
+**视觉一致性**：system event 行里的 chip 现在和 markdown 里同一颜色、同一字体、同一点击行为；hover 也会出 popover 显示 status / assignee / conversation。`task_status` 行的 chip → status pill 链路保持不变（pill 是 event row 的"after-mutation"snapshot，不是 chip 的 popover 替代品）。
+
+**质量门**：`pnpm typecheck` ✅；`./scripts/test.sh` 55 files / 676 tests ✅。
+
+剩下两件事不在本 PR 范围：
+1. legacy task system 行（pre-PR-2，metadata 只有 partial triple）的 actor 缺失——@shiki 明确说不补。
+2. `MessageItem.tsx` 顶部的 `TaskMetaTag`（原始 task message 的方形 outlined 装饰标签）——位置和定位不一样（消息装饰，不是行内引用），不在"两种 UI"投诉范围内，本轮不动。
+
+

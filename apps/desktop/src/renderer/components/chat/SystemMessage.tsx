@@ -1,5 +1,5 @@
 import { useState, type ComponentType } from 'react';
-import { AtSign, CheckCircle2, ChevronRight, ClipboardCheck, Clock, Quote, RotateCcw, RotateCw, Sprout } from 'lucide-react';
+import { AtSign, CheckCircle2, ChevronRight, Clock, Quote, RotateCcw, RotateCw, Sprout } from 'lucide-react';
 import {
   type ChannelContextMetadata,
   type ChildContextMetadata,
@@ -24,10 +24,10 @@ import {
   resolveSubtype,
 } from '@silverhand/shared';
 import { useMessage } from '@/features/messages/hooks';
-import { useTaskRefContext } from '@/features/tasks/TaskRefContext';
 import { formatUserDisplayName } from '@/lib/current-user';
 import { Markdown } from './Markdown';
 import { ConversationRef } from './ConversationRef';
+import { TaskRef } from './TaskRef';
 import { useRelativeTime } from './useRelativeTime';
 import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
@@ -581,10 +581,7 @@ function TaskEventBody({
   if (subtype === 'task_status') {
     return (
       <>
-        <TaskEventChip
-          taskNumber={meta.task_number}
-          title={meta.task_title}
-        />
+        <TaskRef taskNumber={meta.task_number} />
         <span className="text-text-muted" aria-hidden>→</span>
         <TaskStatusPill status={meta.task_status} />
         <span className="text-text-muted">by {actorLabel}</span>
@@ -601,10 +598,7 @@ function TaskEventBody({
     <>
       <span className="font-medium text-text-primary">{actorLabel}</span>
       <span className="text-text-muted">{verb}</span>
-      <TaskEventChip
-        taskNumber={meta.task_number}
-        title={subtype === 'task_create' ? meta.task_title : null}
-      />
+      <TaskRef taskNumber={meta.task_number} />
     </>
   );
 }
@@ -629,76 +623,11 @@ function TaskEventDot({ kind }: { kind: TaskEventDotKind }): JSX.Element {
 }
 
 /**
- * Static chip rendering for the task event row. Mirrors `TaskRef`'s
- * resolved-state shape but reads `task_number` / `title` straight from
- * metadata — no fetch, no skeleton, no hover popover. The popover and
- * deep linking on the chip stay on `#task:N` sigils inside chat
- * messages where the user is reading prose; the event row is itself
- * the audit record, so the chip's job is just to label the row.
+ * Status pill for task event rows. Stays local to the system event
+ * surface — `TaskRef` already brings the chip + hover popover; the
+ * pill encodes the after-mutation status snapshot for `task_status`
+ * subtype rows.
  */
-function TaskEventChip({
-  taskNumber,
-  title,
-}: {
-  taskNumber: number;
-  title: string | null;
-}): JSX.Element {
-  const ctx = useTaskRefContext();
-  const onOpenTask = ctx?.onOpenTask;
-  const label = `#task:${taskNumber}`;
-  const baseClass =
-    'inline-flex max-w-[260px] items-center gap-0.5 rounded bg-bg-elevated px-1.5 font-mono text-[11px]';
-  const content = (
-    <>
-      <ClipboardCheck className="size-3 shrink-0 self-center text-accent" />
-      <span className="truncate font-semibold text-accent">{label}</span>
-      {title ? (
-        <span className="truncate font-sans font-normal text-text-secondary">
-          {title}
-        </span>
-      ) : null}
-    </>
-  );
-  if (!onOpenTask) {
-    return (
-      <span
-        className={baseClass + ' text-text-secondary'}
-        title={title ? `${label} · ${title}` : label}
-        data-task-event-chip={String(taskNumber)}
-        data-task-event-chip-state="inert"
-      >
-        {content}
-      </span>
-    );
-  }
-  return (
-    <span
-      role="button"
-      tabIndex={0}
-      className={
-        baseClass +
-        ' cursor-pointer text-text-secondary transition-colors hover:bg-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus'
-      }
-      aria-label={title ? `${label} · ${title}` : label}
-      data-task-event-chip={String(taskNumber)}
-      data-task-event-chip-state="clickable"
-      onClick={event => {
-        event.preventDefault();
-        event.stopPropagation();
-        onOpenTask(taskNumber);
-      }}
-      onKeyDown={event => {
-        if (event.key !== 'Enter' && event.key !== ' ') return;
-        event.preventDefault();
-        event.stopPropagation();
-        onOpenTask(taskNumber);
-      }}
-    >
-      {content}
-    </span>
-  );
-}
-
 function TaskStatusPill({ status }: { status: TaskStatus }): JSX.Element {
   const styles: Record<TaskStatus, string> = {
     todo: 'bg-bg-elevated text-text-muted',
@@ -761,7 +690,7 @@ function TaskEventRowDegraded({
       <TaskEventDot kind={dotKind} />
       {meta.subtype === 'task_status' ? (
         <>
-          <TaskEventChip taskNumber={meta.task_number} title={null} />
+          <TaskRef taskNumber={meta.task_number} />
           <span className="text-text-muted" aria-hidden>→</span>
           <TaskStatusPill status={meta.task_status} />
         </>
@@ -774,7 +703,7 @@ function TaskEventRowDegraded({
                 ? 'claimed'
                 : 'unclaimed'}
           </span>
-          <TaskEventChip taskNumber={meta.task_number} title={null} />
+          <TaskRef taskNumber={meta.task_number} />
         </>
       )}
     </div>

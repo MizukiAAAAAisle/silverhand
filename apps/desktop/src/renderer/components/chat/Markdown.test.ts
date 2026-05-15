@@ -3,11 +3,13 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { StaticRouter } from 'react-router-dom/server';
 import { describe, expect, it } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { TaskSummaryDto } from '@silverhand/shared';
 import { Markdown } from './Markdown';
 import { SystemMessage } from './SystemMessage';
 import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
 import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
+import { taskByNumberKey } from '@/features/tasks/useTaskByNumber';
 
 function render(content: string, refs?: Map<string, ConversationReference>): string {
   // PR-4 commit 5 (Cindy review of `45fca42`): ConversationRef now
@@ -629,8 +631,17 @@ describe('SystemMessage task event rows (PR-2)', () => {
   function renderTaskEvent(
     msg: import('@silverhand/shared').MessageDto,
     onOpenTask?: (n: number) => void,
+    seededTasks: TaskSummaryDto[] = [],
   ): string {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // Pre-seed the React Query cache so the embedded `<TaskRef>` chip
+    // resolves to its clickable / inline-title state instead of staying
+    // in the SSR `loading` branch. PR-7 collapsed the standalone
+    // TaskEventChip onto TaskRef — title rendering is now driven by
+    // TaskRef's own `useTaskByNumber` query, so tests must seed it.
+    for (const t of seededTasks) {
+      qc.setQueryData(taskByNumberKey(t.workspace_id, t.task_number), t);
+    }
     return renderToStaticMarkup(
       React.createElement(
         StaticRouter,
@@ -652,6 +663,25 @@ describe('SystemMessage task event rows (PR-2)', () => {
     );
   }
 
+  function seededTask(overrides: Partial<TaskSummaryDto> = {}): TaskSummaryDto {
+    return {
+      message_id: 'msg-task-x',
+      task_number: 42,
+      workspace_id: 'ws-1',
+      workspace_name: 'silverhand',
+      channel_id: 'chan-1',
+      channel_name: 'general',
+      thread_id: null,
+      conversation: { id: 'chan-1', title: 'general' },
+      status: 'todo',
+      title: 'wire registry',
+      assignee: null,
+      creator: { type: 'agent', id: 'a-alice', name: 'Alice' },
+      created_at: 0,
+      ...overrides,
+    };
+  }
+
   const fullMeta = (overrides: Record<string, unknown>): Record<string, unknown> => ({
     task_number: 42,
     task_status: 'todo',
@@ -664,13 +694,15 @@ describe('SystemMessage task event rows (PR-2)', () => {
 
   it('task_create renders actor + verb + chip with title + todo dot', () => {
     const msg = makeSystemMessage('task_create', fullMeta({}));
-    const html = renderTaskEvent(msg, () => undefined);
+    const html = renderTaskEvent(msg, () => undefined, [seededTask()]);
     expect(html).toContain('@Alice');
     expect(html).toContain('created');
-    expect(html).toContain('#task:42');
-    expect(html).toContain('wire registry');
     expect(html).toContain('data-task-event-dot="todo"');
-    expect(html).toContain('data-task-event-chip-state="clickable"');
+    // PR-7: chip is now TaskRef. Resolved+handler state → label
+    // `#42 · wire registry`, attribute `data-task-ref-state="resolved"`.
+    expect(html).toContain('data-task-ref="42"');
+    expect(html).toContain('data-task-ref-state="resolved"');
+    expect(html).toContain('wire registry');
   });
 
   it('task_claim renders verb=claimed + chip + in_progress dot', () => {
@@ -681,9 +713,12 @@ describe('SystemMessage task event rows (PR-2)', () => {
         task_assignee: { type: 'agent', id: 'a-alice', name: 'Alice' },
       }),
     );
-    const html = renderTaskEvent(msg, () => undefined);
+    const html = renderTaskEvent(msg, () => undefined, [
+      seededTask({ status: 'in_progress' }),
+    ]);
     expect(html).toContain('claimed');
     expect(html).toContain('data-task-event-dot="in_progress"');
+    expect(html).toContain('data-task-ref="42"');
   });
 
   it('task_unclaim uses dashed-border dot (no fill)', () => {
@@ -691,16 +726,19 @@ describe('SystemMessage task event rows (PR-2)', () => {
       'task_unclaim',
       fullMeta({ task_status: 'todo', task_assignee: null }),
     );
-    const html = renderTaskEvent(msg, () => undefined);
+    const html = renderTaskEvent(msg, () => undefined, [seededTask()]);
     expect(html).toContain('unclaimed');
     expect(html).toContain('data-task-event-dot="unclaim"');
     expect(html).toContain('border-dashed');
+    expect(html).toContain('data-task-ref="42"');
   });
 
   it('task_status renders chip → status pill by actor (no verb word)', () => {
     const msg = makeSystemMessage('task_status', fullMeta({ task_status: 'in_review' }));
-    const html = renderTaskEvent(msg, () => undefined);
-    expect(html).toContain('#task:42');
+    const html = renderTaskEvent(msg, () => undefined, [
+      seededTask({ status: 'in_review' }),
+    ]);
+    expect(html).toContain('data-task-ref="42"');
     expect(html).toContain('data-task-event-status="in_review"');
     expect(html).toContain('in review');
     expect(html).toContain('by @Alice');
@@ -714,16 +752,22 @@ describe('SystemMessage task event rows (PR-2)', () => {
         actor: { kind: 'user', id: null, name: 'user' },
       }),
     );
-    const html = renderTaskEvent(msg, () => undefined);
+    const html = renderTaskEvent(msg, () => undefined, [
+      seededTask({ status: 'done' }),
+    ]);
     expect(html).toContain('data-task-event-status="done"');
     expect(html).toContain('by @you');
   });
 
-  it('chip is inert when no onOpenTask handler is supplied', () => {
+  it('chip is inert (no click handler) when no onOpenTask handler is supplied', () => {
     const msg = makeSystemMessage('task_create', fullMeta({}));
-    const html = renderTaskEvent(msg, undefined);
-    expect(html).toContain('data-task-event-chip-state="inert"');
-    expect(html).not.toContain('data-task-event-chip-state="clickable"');
+    const html = renderTaskEvent(msg, undefined, [seededTask()]);
+    // PR-7: TaskRef now drives the chip. Without a handler in
+    // TaskRefContext, the resolved chip falls into the
+    // `resolved-no-handler` branch — no `role="button"`.
+    expect(html).toContain('data-task-ref="42"');
+    expect(html).toContain('data-task-ref-state="resolved-no-handler"');
+    expect(html).not.toContain('data-task-ref-state="resolved"');
   });
 
   it('legacy row with partial metadata (subtype + task_number + task_status) renders degraded chip + pill', () => {
