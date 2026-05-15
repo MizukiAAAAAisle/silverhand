@@ -829,6 +829,58 @@ describe('SystemMessage task event rows (PR-2)', () => {
     expect(html).toContain('broken task row content');
     expect(html).not.toContain('data-task-event-degraded');
   });
+
+  it('PR-8: every system message renders inside `.system-message-row` so theme prose font/size cascade', () => {
+    // Drift guard: the SystemMessage entry wraps every per-subtype
+    // renderer in `<div class="system-message-row">`. global.css attaches
+    // `font-family: var(--md-prose-font, ...)` + `font-size:
+    // var(--md-prose-size, ...)` to that class so plain-text system rows
+    // (task events, schedule banners, rename chips) follow the theme's
+    // chosen prose font alongside Markdown bodies. Removing this wrapper
+    // would silently strip system rows out of the theme font cascade.
+    const enriched = makeSystemMessage('task_create', fullMeta({}));
+    const enrichedHtml = renderTaskEvent(enriched, () => undefined, [seededTask()]);
+    expect(enrichedHtml.startsWith('<div class="system-message-row">')).toBe(true);
+
+    const legacy = makeSystemMessage(
+      'task_create',
+      { task_number: 9, task_status: 'todo' },
+      '@alice created task #9',
+    );
+    const legacyHtml = renderTaskEvent(legacy, () => undefined);
+    expect(legacyHtml.startsWith('<div class="system-message-row">')).toBe(true);
+  });
+
+  it('PR-8: TaskStatusPill is h-[18px] + leading-none so it aligns with the sibling TaskRef chip on `task_status` rows', () => {
+    // shiki PR-8 feedback: chip + pill ended up on visually different
+    // baselines because pill had `py-0.5` (~20px outer) while chip
+    // rendered at the row's natural inline-flex height (~16px). The fix
+    // locks both to `h-[18px]` and strips pill's vertical padding so
+    // `flex items-center` on the parent row aligns them pixel-perfect.
+    const msg = makeSystemMessage(
+      'task_status',
+      fullMeta({ task_status: 'in_review' }),
+    );
+    const html = renderTaskEvent(msg, () => undefined, [
+      seededTask({ status: 'in_review' }),
+    ]);
+    expect(html).toMatch(
+      /data-task-event-status="in_review"[^>]*class="[^"]*h-\[18px\][^"]*"|class="[^"]*h-\[18px\][^"]*"[^>]*data-task-event-status="in_review"/,
+    );
+    expect(html).toMatch(
+      /data-task-event-status="in_review"[^>]*class="[^"]*leading-none[^"]*"|class="[^"]*leading-none[^"]*"[^>]*data-task-event-status="in_review"/,
+    );
+    // Pill must NOT carry py-0.5 anymore (would re-introduce the
+    // height mismatch).
+    expect(html).not.toMatch(
+      /data-task-event-status="in_review"[^>]*class="[^"]*py-0\.5/,
+    );
+    // Sibling TaskRef chip must also be h-[18px] for the alignment
+    // contract to hold.
+    expect(html).toMatch(
+      /data-task-ref="42"[^>]*class="[^"]*h-\[18px\]|class="[^"]*h-\[18px\][^"]*"[^>]*data-task-ref="42"/,
+    );
+  });
 });
 
 describe('Markdown channel refs', () => {

@@ -209,6 +209,29 @@ button:disabled { cursor: not-allowed; }
 .markdown-body > *:first-child { margin-top: 0; }
 .markdown-body > *:last-child { margin-bottom: 0; }
 
+/* ── System message row — picks up theme prose font/size like
+       `.markdown-body` does for full message bodies. The plain text
+       inside system audit rows (task events, schedule banners, rename
+       chips, etc.) inherits the user's chosen prose font + size so
+       system rows visually unify with regular messages under the
+       active theme.
+   Code-flavored leaves inside the row (Tailwind `font-mono`,
+   `<code>`) re-resolve to `--md-code-font` so a custom code font in
+   the theme settings reaches rename `<code>` chips, mono timestamps,
+   and any other monospace ornament without each call site having to
+   thread a CSS variable manually. We do NOT override the explicit
+   Tailwind size utilities (`text-[10px]`, `text-[11px]`) — those are
+   intentional density choices on the chrome (status pill, mono
+   timestamp) and would look squat if scaled to prose size. */
+.system-message-row {
+  font-family: var(--md-prose-font, var(--font-sans));
+  font-size: var(--md-prose-size, 12px);
+}
+.system-message-row code,
+.system-message-row .font-mono {
+  font-family: var(--md-code-font, var(--font-mono));
+}
+
 .markdown-body p { margin: 0.4em 0; }
 .markdown-body strong { font-weight: 600; color: var(--text-primary); }
 .markdown-body em { font-style: italic; }

@@ -1823,4 +1823,26 @@ System-message UI redesign 系列 6 个 PR 全部落地（PR-1 registry+drift gu
 1. legacy task system 行（pre-PR-2，metadata 只有 partial triple）的 actor 缺失——@shiki 明确说不补。
 2. `MessageItem.tsx` 顶部的 `TaskMetaTag`（原始 task message 的方形 outlined 装饰标签）——位置和定位不一样（消息装饰，不是行内引用），不在"两种 UI"投诉范围内，本轮不动。
 
+## 2026-05-15 — System message UI redesign · PR-8（system-row 主题字体一致性 + chip/pill 同高）
+
+最终验收 follow-up 第二轮。@shiki 两点反馈：(1) "system event 也需要符合主题设置的字体设置，这样才能统一"；(2) "task event 的高度要和 task status 高度一样，他俩会出现在同一行"。两件事一起做，因为都属 system event 视觉一致性。
+
+**问题 1 — 字体主题一致性**：用户在 settings 里能切换 prose / code 字体（CSS vars `--md-prose-font` / `--md-prose-size` / `--md-code-font` / `--md-code-size`，注入在 `document.documentElement`），但只有 `.markdown-body` 类 explicitly 引用这些变量。所以 Markdown 消息体跟主题，**system event 行（plain text，没走 Markdown 的 task event / rename / schedule pill / session_cleared mono timestamp 等）默认走 `var(--font-sans)`，不跟主题**。
+
+**修法**：global.css 新增 `.system-message-row`，复用 `.markdown-body` 的 prose font/size 引用；嵌套 `code` / `.font-mono` 子元素 re-resolve 到 `--md-code-font`，让 rename `<code>` chip 和 mono timestamp 也跟 code 字体主题。SystemMessage.tsx 的入口函数把所有 per-subtype renderer 输出包一层 `<div class="system-message-row">`。Tailwind 的 `text-[10px]` / `text-[11px]` 显式 size utility 不被覆盖（chrome 的密度选择，scale 到 prose size 会显得空泛）。
+
+**问题 2 — chip/pill 同高**：`task_status` 行布局是 `chip → 状态 pill by actor`。`TaskRef` chip 走父容器 `text-xs` 的自然 inline-flex 高度（~16px），`TaskStatusPill` 自己加 `py-0.5`（垂直 padding 4px → ~20px），同行 `flex items-center` 居中后两者基线视觉错位。
+
+**修法**：把 chip 和 pill 都锁到 `h-[18px]`：
+- `TaskStatusPill`（SystemMessage.tsx）改 `inline-flex h-[18px] items-center rounded-full px-1.5 text-[10px] font-semibold uppercase leading-none tracking-wider`，去掉 `py-0.5`，加 `leading-none` 让 10px text 在 18px 盒子里干净居中。
+- `TaskRef`（TaskRef.tsx）四个状态分支（no-context / loading / missing / resolved-no-handler / resolved）一并加 `h-[18px]`。markdown 内联场景父行通常 `text-sm`（line-height 20px），18px chip 在 20px 行里仍然紧凑；system row 父行 `text-xs`（line-height 16px），18px chip 把行高顶到 18px，与 pill 严格等高。
+
+**测试**（Markdown.test.ts +2）：
+- 一个 drift guard 钉死 SystemMessage 入口必有 `class="system-message-row"` 包裹（enriched + legacy 两路），删了 wrapper 直接挂掉。
+- 一个 drift guard 钉死 TaskStatusPill 同时持有 `h-[18px]` + `leading-none`，且不再持有 `py-0.5`；同时验证同行 TaskRef chip 也持有 `h-[18px]`（高度契约对称地落在两边）。
+
+**质量门**：`pnpm typecheck` ✅；desktop 161/161（+2）；backend `./scripts/test.sh` 55 files / 676 tests ✅。
+
+System-message UI redesign 系列 8 个 PR 全部落地（PR-1..PR-6 主线 + PR-7 task chip 收敛 + PR-8 字体主题 + 高度对齐）。等用户最终验收整体 ship。
+
 

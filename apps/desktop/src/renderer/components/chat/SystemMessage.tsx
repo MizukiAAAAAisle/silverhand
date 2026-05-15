@@ -76,11 +76,21 @@ type SystemMessageRenderer = ComponentType<RendererProps>;
  */
 export function SystemMessage(props: SystemMessageProps): JSX.Element {
   const resolution = resolveSubtype(readRawSubtype(props.message.metadata));
-  if (resolution.kind === 'current') {
-    const Renderer = systemMessageRenderers[resolution.subtype];
-    return <Renderer {...props} />;
-  }
-  return <GenericNarrationFallback {...props} />;
+  const Renderer =
+    resolution.kind === 'current'
+      ? systemMessageRenderers[resolution.subtype]
+      : GenericNarrationFallback;
+  // PR-8: every system message renders inside `.system-message-row` so
+  // the user's theme-level prose font (`--md-prose-font` /
+  // `--md-prose-size`) and code font (`--md-code-font`) reach plain-text
+  // rows that don't go through `<Markdown>` (task event rows, schedule
+  // banner pills, rename chips, etc.). `.markdown-body` already pulls
+  // the same vars; this class is the system-row analogue.
+  return (
+    <div className="system-message-row">
+      <Renderer {...props} />
+    </div>
+  );
 }
 
 function readRawSubtype(
@@ -627,6 +637,13 @@ function TaskEventDot({ kind }: { kind: TaskEventDotKind }): JSX.Element {
  * surface — `TaskRef` already brings the chip + hover popover; the
  * pill encodes the after-mutation status snapshot for `task_status`
  * subtype rows.
+ *
+ * Height is locked to `h-[18px]` + `leading-none` so the pill aligns
+ * with the sibling `TaskRef` chip on the same `task_status` row.
+ * Without this, `py-0.5` plus the row's inherited 16px line-height
+ * left the pill ~20px tall while TaskRef rendered at its natural
+ * inline-flex height (~16px), so the chip and pill ended up on
+ * visually different baselines (@shiki PR-8 feedback).
  */
 function TaskStatusPill({ status }: { status: TaskStatus }): JSX.Element {
   const styles: Record<TaskStatus, string> = {
@@ -645,7 +662,7 @@ function TaskStatusPill({ status }: { status: TaskStatus }): JSX.Element {
     <span
       data-task-event-status={status}
       className={
-        'inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ' +
+        'inline-flex h-[18px] items-center rounded-full px-1.5 text-[10px] font-semibold uppercase leading-none tracking-wider ' +
         styles[status]
       }
     >
