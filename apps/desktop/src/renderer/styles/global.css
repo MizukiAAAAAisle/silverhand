@@ -218,6 +218,33 @@ button:disabled { cursor: not-allowed; }
   font-family: var(--md-prose-font, var(--font-sans));
   font-size: var(--md-prose-size, 12px);
   line-height: 1.5;
+  /* Column alignment with regular MessageItem rows. shiki PR-10
+     follow-up (msg `rhEL2UlGNYG2lgl7`): standalone system messages
+     used to span row-left (`px-4` body) to row-right, so they read
+     visually wider than regular messages, which sit in a content
+     column starting at the avatar+gap offset and capped to
+     `max-w-[85%]`. We anchor `.system-message-row` to that same
+     column:
+       margin-inline-start: 54px = 2 (MessageItem `border-2`)
+                                 + 8 (`px-2`)
+                                 + 32 (avatar `size-8`)
+                                 + 12 (`gap-3`)
+       margin-inline-end:   15% ≈ regular's `max-w-[85%]` right cap
+     Per-renderer body padding (`px-4`/`px-3`/etc.) is intentionally
+     left in place — those provide internal breathing space and gap
+     from per-card left rails (context cards, schedule_fire banner,
+     mention_cc); they don't widen the row, the row's outer bounds
+     are now what defines the column. */
+  margin-inline-start: 54px;
+  margin-inline-end: 15%;
+}
+/* When a system-message-row is INSIDE an activity cluster, the
+   cluster wrapper owns the column alignment (its own margin/border
+   forms the rail). Reset the inner row to no margin so margins don't
+   compound (the override beats the standalone rule by virtue of an
+   extra class in the selector → specificity (0,2,0) > (0,1,0)). */
+.system-activity-cluster .system-message-row {
+  margin-inline: 0;
 }
 .system-message-row code,
 .system-message-row .font-mono {
@@ -261,8 +288,14 @@ button:disabled { cursor: not-allowed; }
      problem PR-10 is meant to undo. */
 .system-activity-cluster {
   margin-block: 7px;
-  margin-inline-start: 56px;
-  margin-inline-end: 16px;
+  /* Match the regular MessageItem content column on both sides — start
+     at the avatar+gap offset (54px, see `.system-message-row` block
+     above for the geometry math), end at 15% (≈ regular's
+     `max-w-[85%]` cap). Standalone system messages were realigned in
+     the same shiki PR-10 follow-up; cluster has to share the same
+     column so both stack visually as one consistent lane. */
+  margin-inline-start: 54px;
+  margin-inline-end: 15%;
   padding-inline-start: 10px;
   border-inline-start: 1px solid var(--border-subtle);
 }
