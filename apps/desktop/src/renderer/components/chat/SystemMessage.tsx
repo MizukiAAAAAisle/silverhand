@@ -86,8 +86,13 @@ export function SystemMessage(props: SystemMessageProps): JSX.Element {
   // rows that don't go through `<Markdown>` (task event rows, schedule
   // banner pills, rename chips, etc.). `.markdown-body` already pulls
   // the same vars; this class is the system-row analogue.
+  // PR-10: also tag with `data-system-event-row="1"` so the activity
+  // cluster CSS in `global.css` (`.system-activity-cluster
+  // [data-system-event-row="1"] > *`) can demote the inner row body's
+  // chunky padding without depending on the row body's exact Tailwind
+  // utility class list.
   return (
-    <div className="system-message-row">
+    <div className="system-message-row" data-system-event-row="1">
       <Renderer {...props} />
     </div>
   );

@@ -853,7 +853,7 @@ describe('SystemMessage task event rows (PR-2)', () => {
     // would silently strip system rows out of the theme font cascade.
     const enriched = makeSystemMessage('task_create', fullMeta({}));
     const enrichedHtml = renderTaskEvent(enriched, () => undefined, [seededTask()]);
-    expect(enrichedHtml.startsWith('<div class="system-message-row">')).toBe(true);
+    expect(enrichedHtml).toMatch(/^<div class="system-message-row" data-system-event-row="1">/);
 
     const legacy = makeSystemMessage(
       'task_create',
@@ -861,7 +861,7 @@ describe('SystemMessage task event rows (PR-2)', () => {
       '@alice created task #9',
     );
     const legacyHtml = renderTaskEvent(legacy, () => undefined);
-    expect(legacyHtml.startsWith('<div class="system-message-row">')).toBe(true);
+    expect(legacyHtml).toMatch(/^<div class="system-message-row" data-system-event-row="1">/);
   });
 
   it('PR-8 follow-up: TaskStatusPill keeps leading-none + drops py-0.5; both pill and chip get height from `.system-message-row` scoped CSS (no inline h-[18px])', () => {
@@ -915,8 +915,10 @@ describe('SystemMessage task event rows (PR-2)', () => {
     // and (c) chip + pill share the same theme-aware height token.
     expect(html).not.toMatch(/data-task-ref="42"[^>]*class="[^"]*h-\[18px\]/);
     // The chip + pill must still be wrapped in `.system-message-row`
-    // so the scoped CSS rule applies.
-    expect(html.startsWith('<div class="system-message-row">')).toBe(true);
+    // so the scoped CSS rule applies. PR-10 added `data-system-event-row="1"`
+    // to the same wrapper so cluster CSS can hook to it; both the
+    // class and the data attribute must be present in the prefix.
+    expect(html).toMatch(/^<div class="system-message-row" data-system-event-row="1">/);
   });
 
   it('PR-8 follow-up: body containers no longer carry `text-xs`/`text-sm` so theme prose size cascades from `.system-message-row`', () => {

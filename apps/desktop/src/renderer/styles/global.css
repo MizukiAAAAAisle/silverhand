@@ -258,6 +258,91 @@ button:disabled { cursor: not-allowed; }
   height: var(--system-message-control-height);
 }
 
+/* ── Activity cluster (PR-10) ──────────────────────────────────────
+   `task_* / session_cleared / rename` lifecycle events get pooled
+   into an `ActivityCluster` (see `groupMessages.ts`). The cluster
+   paints a muted narration strip — content-column aligned (skipping
+   the avatar lane), left rail anchor, tight inner stacking, outer
+   gap from real messages — instead of letting each event compete
+   with chat replies for visual weight.
+
+   Visual layering:
+   - `margin-block: 7px` separates the strip from real messages above
+     and below, so the eye reads it as "one activity segment".
+   - `margin-inline-start: 56px` (16px chat row padding + ~30px avatar
+     + ~10px gap) lines the rail up with the avatar column, content
+     of cluster rows then aligns to the same content column as real
+     replies.
+   - `padding-inline-start: 10px` keeps the rail visually attached but
+     gives the row text breathing space.
+   - `border-inline-start: 1px solid border-subtle` is the single
+     anchor that says "this strip is one segment". No fill bg — cards
+     are reserved for info blocks (schedule_fire, context cards,
+     thread_summary, mention_cc, onboarding); a tinted cluster would
+     compete and re-introduce the "everything is a card" density
+     problem PR-10 is meant to undo. */
+.system-activity-cluster {
+  margin-block: 7px;
+  margin-inline-start: 56px;
+  margin-inline-end: 16px;
+  padding-inline-start: 10px;
+  border-inline-start: 1px solid var(--border-subtle);
+}
+
+/* The wrapper `[data-system-event-row="1"]` div around each renderer
+   has no padding of its own; its child (the actual row body — eg.
+   TaskEventRowEnriched, SessionClearedRow, RenameRow) carries
+   `px-4 py-1.5`-ish utilities to give the standalone row chunky
+   breathing space. Inside a cluster we don't want that — rows must
+   stack tight (2px) so the strip reads as a single segment. The
+   selector `.system-activity-cluster [data-system-event-row="1"] > *`
+   has specificity (0,2,1) — beats every Tailwind utility (0,1,0),
+   so no `!important` needed. */
+.system-activity-cluster [data-system-event-row="1"] > * {
+  padding-block: 2px;
+  padding-inline: 0;
+}
+
+/* Single-row demotion inside cluster ───────────────────────────────
+   Standalone task/session/rename rows mark the actor with
+   `font-medium text-text-primary` (PR-9 actor-first move). Inside
+   a cluster the actor drops to text-secondary muted regular, so the
+   per-row visual weight stays well below a real chat reply. */
+.system-activity-cluster .font-medium.text-text-primary {
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+/* TaskRef chip — strip the filled `bg-bg-elevated` / `bg-accent-soft`
+   variants for a transparent + subtle outlined chip inside cluster
+   rows. (`data-task-ref` is on the chip element itself in TaskRef.tsx.) */
+.system-activity-cluster [data-task-ref] {
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+}
+.system-activity-cluster [data-task-ref]:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent-soft);
+}
+
+/* TaskStatusPill — same demotion: transparent fill, current-color
+   outline. `currentColor` here means the pill's own text color
+   (`text-accent` / `text-warning` / `text-success` / `text-text-muted`
+   per status), so each status keeps its color identity but loses the
+   filled bg that competes with the chip. */
+.system-activity-cluster [data-task-event-status] {
+  background: transparent;
+  border: 1px solid currentColor;
+  opacity: 0.85;
+}
+
+/* TaskEventDot — drops one tier (8px → 6px) so it reads as a status
+   marker rather than a focal point. */
+.system-activity-cluster [data-task-event-dot] {
+  width: 6px;
+  height: 6px;
+}
+
 .markdown-body p { margin: 0.4em 0; }
 .markdown-body strong { font-weight: 600; color: var(--text-primary); }
 .markdown-body em { font-style: italic; }

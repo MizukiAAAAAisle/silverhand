@@ -33,6 +33,8 @@ import { AgentActivityStrip } from '@/components/chat/AgentActivityBubble';
 import { QuotedMessagePreview } from '@/components/chat/QuotedMessagePreview';
 import { findThreadAnchor, readAnchorMessageId } from '@/components/chat/threadAnchor';
 import { SystemMessage } from '@/components/chat/SystemMessage';
+import { SystemActivityCluster } from '@/components/chat/SystemActivityCluster';
+import { groupMessages } from '@/components/chat/groupMessages';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
 import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
@@ -957,7 +959,22 @@ function MessageList({
           )
         ) : (
           <ol className="mx-auto max-w-[1200px] space-y-1">
-            {messages.map(m => (
+            {groupMessages(messages).map(item => {
+              if (item.kind === 'cluster') {
+                return (
+                  <li key={item.id}>
+                    <SystemActivityCluster
+                      messages={item.messages}
+                      conversationRefsById={conversationRefsById}
+                      onOpenConversationRef={onOpenConversationRef}
+                      channelsByName={channelsByName}
+                      onOpenChannelRef={onOpenChannelRef}
+                    />
+                  </li>
+                );
+              }
+              const m = item.message;
+              return (
               <li key={m.id}>
                 {m.from_kind === 'system' ? (
                   <SystemMessage
@@ -989,7 +1006,8 @@ function MessageList({
                   />
                 )}
               </li>
-            ))}
+              );
+            })}
           </ol>
         )}
       </div>

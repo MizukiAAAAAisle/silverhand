@@ -1882,3 +1882,44 @@ System-message UI redesign 系列 8 个 PR 全部落地（PR-1..PR-6 主线 + PR
 **质量门**：typecheck ✅；desktop 162/162（无净变化，1 个测试改写）。
 
 
+## 2026-05-15 — System message UI redesign · PR-10（activity cluster — 视觉分层）
+
+@shiki 验收完 PR-1..9 后给出新反馈（msg `KIUjJY9Vu9YXAcMv` + 截图）："系统消息跟正文在一起显得密集"。@Cindy + @Alice 对照 Slack/Discord 后定方向：问题不在单条 audit row 渲染（PR-1..9 已经收得很干净），而是 `task_*` / `session_cleared` / `rename` 这类高频低权重 lifecycle event 跟正文用了等同的视觉节奏，密度叠加。Slack/Discord 都做成 muted activity narration 而不是迷你消息；PR-10 引入同样的 "activity cluster" 概念。
+
+@shiki 看完 mockup（`docs/mockups/system-message-activity-cluster.html`，4 个场景对照）后拍方向（msg `SVYz6Hl6Ju9r4-iV`）："没问题，@Alice 实现"。
+
+**分类**：
+- **进 cluster**（low-priority activity）：`task_create / task_claim / task_unclaim / task_status / session_cleared / rename`
+- **不进 cluster**（信息块保留分量）：`schedule_fire / thread_anchor / child_context / channel_context / thread_summary / mention_cc / onboarding`
+
+**算法**（`apps/desktop/src/renderer/components/chat/groupMessages.ts` 纯函数）：
+
+```
+messages → activity runs (clusterable subtype + 相邻 + 5min gap) → split by unread boundary → render
+```
+
+四条规则各自独立：subtype 过滤 / stream 相邻 / 5min 时间窗 / unread boundary 二次切分。**不要求同 task / 不要求同 actor** —— 截图里 `#331 claimed` + `#330 moved` 不同 task，但对读者是同一段 noise。Cluster id 用 `activity-cluster:${first.id}` —— 用首条消息 id 作 stable anchor，新消息追加进同一 cluster 时 React key 不变，只 re-render 内部 row 列表，不 remount 整个 cluster；如果 id 用 `first:last:count` 形式，每次追加都改 key，每条新 audit row 都会让 cluster 闪一下。
+
+**视觉**（`SystemActivityCluster.tsx` + scoped CSS in `global.css`）：
+- 整组 `margin-inline-start: 56px`（16px chat row padding + ~30px avatar + 10px gap）跳过 avatar lane，对齐到正文 content column
+- `border-inline-start: 1px solid border-subtle` + `padding-inline-start: 10px`：单一锚点 rail 让"这是 activity 段"立起来
+- `margin-block: 7px` 跟正文上下断开节奏
+- 内部行距压到 2px（`.system-activity-cluster [data-system-event-row="1"] > * { padding-block: 2px; padding-inline: 0; }`）
+- 单条降权（CSS scoped，不改 SystemMessage 内部）：actor 从 `font-medium text-text-primary` → `text-secondary` 普通字重；TaskRef chip → 透明 + `border-subtle`；TaskStatusPill → 透明 + `currentColor` outline；TaskEventDot 从 8px → 6px
+- **背景默认透明**：信息块（`schedule_fire` 等）才用 card 视觉，cluster 用 tint 会跟 card 抢权重
+
+**实现**：
+- `groupMessages.ts` 纯函数 + 21 个测试覆盖（subtype 集合 / 相邻 / 5min 边界 / unread 切分 / cluster id 稳定性 / 不变性 / 确定性）
+- `SystemActivityCluster.tsx` 薄包装（4 个测试 drift guards）—— 复用现有 SystemMessage 渲染，CSS scoping 做视觉降权，per-subtype 渲染器零改动
+- `SystemMessage.tsx` 包装 `<div>` 加 `data-system-event-row="1"` 属性，作为 cluster CSS 的稳定 hook
+- `ChannelView.tsx` 把 `messages.map` 替换成 `groupMessages(messages).map`，cluster 走 `<SystemActivityCluster>`，单条走原来的 `<SystemMessage>` / `<MessageItem>` 路径
+- `global.css` 加 `.system-activity-cluster` 完整样式块
+
+**质量门**：typecheck ✅；desktop 187/187（+25：21 grouping + 4 cluster rendering）；backend 676/676 不退化。
+
+**未做（PR-11 / 后续）**：
+- 同 task 事件折叠（连续多次状态变化压成 `#330 had 2 updates` 或 mini timeline）
+- task drawer timeline view（结构改动，不在视觉分层范围）
+- 配套 mockup `docs/mockups/system-message-activity-cluster.html` 已落盘 + 已发 @shiki 验收。
+
+

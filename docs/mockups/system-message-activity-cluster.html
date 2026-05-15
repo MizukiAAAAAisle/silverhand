@@ -1,0 +1,833 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>PR-10 — Activity Cluster Mockup</title>
+<style>
+  /* warm-script theme tokens (from apps/desktop/src/renderer/styles/themes/warm-script.css) */
+  :root {
+    --bg-base: #F8F6F2;
+    --bg-primary: #F3EFE8;
+    --bg-elevated: #EAE6DE;
+    --bg-hover: #EFECE6;
+    --bg-floating: #FFFFFF;
+    --bg-chat: #FFFAEF;
+    --bg-app: #ECE9E2;
+
+    --text-primary: #1F1B14;
+    --text-secondary: #56503F;
+    --text-muted: #8A8270;
+    --text-inline-code: #7A5C30;
+
+    --accent: #2D2316;
+    --accent-soft: #2D231615;
+
+    --success: #5A7A3D;
+    --success-soft: #5A7A3D15;
+    --warning: #B07820;
+    --warning-soft: #B0782015;
+    --error: #9A4434;
+    --error-soft: #9A443415;
+
+    --border: #00000010;
+    --border-subtle: #0000001a;
+
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+
+    --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "PingFang SC", sans-serif;
+    --font-mono: "JetBrains Mono", "SF Mono", monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg-app); }
+  body {
+    font-family: var(--font-sans);
+    color: var(--text-primary);
+    -webkit-font-smoothing: antialiased;
+    padding: 24px;
+  }
+
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 {
+    font-size: 13px;
+    margin: 0 0 6px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+  }
+  h3 {
+    font-size: 14px;
+    margin: 0 0 4px;
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+  .lede { color: var(--text-muted); font-size: 13px; margin: 0 0 24px; max-width: 760px; }
+
+  .page { max-width: 1280px; margin: 0 auto; }
+  .section {
+    margin-bottom: 22px;
+    background: var(--bg-floating);
+    border-radius: var(--radius-lg);
+    padding: 18px 22px 22px;
+    box-shadow: 0 1px 2px rgba(50, 38, 24, 0.08);
+  }
+  .desc { color: var(--text-muted); font-size: 12px; margin: 4px 0 12px; }
+
+  .row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  .col {
+    background: var(--bg-chat);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 0;
+    overflow: hidden;
+  }
+  .col-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--bg-floating);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .col-label::before {
+    content: "";
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--text-muted);
+  }
+  .col.proposed .col-label::before { background: var(--success); }
+  .col-label .badge {
+    margin-left: auto;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .stream {
+    padding: 8px 0 12px;
+  }
+
+  /* ============================================================
+     === REAL MESSAGE (chat row with avatar + content column) ===
+     ============================================================ */
+  .msg {
+    display: flex;
+    gap: 10px;
+    padding: 6px 16px 8px;
+  }
+  .msg .avatar {
+    flex-shrink: 0;
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    background: var(--accent-soft);
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-size: 12px;
+  }
+  .msg .avatar.user { background: var(--warning-soft); color: var(--warning); }
+  .msg .avatar.cindy { background: var(--success-soft); color: var(--success); }
+  .msg .body { flex: 1; min-width: 0; }
+  .msg .head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 2px;
+  }
+  .msg .name { font-weight: 600; font-size: 13px; color: var(--text-primary); }
+  .msg .ts { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+  .msg .text { font-size: 13px; color: var(--text-primary); line-height: 1.55; }
+
+  /* ============================================================
+     === CURRENT: each system event = independent row ===========
+     ============================================================
+     Mirrors what's on `feature/v1-polish` after PR-9 — the
+     SystemMessage entry wraps in `.system-message-row` and
+     each event renders dot + actor + verb + chip + (pill).
+     Same vertical gap as real messages, no avatar but lives in
+     the same left-aligned content area.                          */
+  .cur-event {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 16px 4px 56px;  /* 16 + 30 (avatar) + 10 (gap) = 56px so it aligns to content column */
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .cur-event .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .cur-event .dot.todo { background: #B5AC95; }
+  .cur-event .dot.in_progress { background: #4A7AA8; }
+  .cur-event .dot.in_review { background: var(--warning); }
+  .cur-event .dot.done { background: var(--success); }
+  .cur-event .dot.unclaim { background: transparent; border: 1.5px dashed #B5AC95; box-sizing: border-box; }
+  .cur-event .actor {
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+  .cur-event .verb { color: var(--text-muted); }
+  .cur-event .arrow { color: var(--text-muted); }
+
+  .task-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 6px 1px 4px;
+    background: var(--bg-elevated);
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-primary);
+    text-decoration: none;
+  }
+  .task-chip .num { color: var(--accent); font-weight: 600; }
+  .task-chip .title {
+    font-family: var(--font-sans);
+    color: var(--text-secondary);
+    margin-left: 2px;
+  }
+
+  /* lighter chip variant for proposed cluster — chip bg drops a tier */
+  .cluster .task-chip {
+    background: transparent;
+    border: 1px solid var(--border-subtle);
+  }
+  .cluster .task-chip .num { color: var(--text-secondary); }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 6px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    line-height: 1.4;
+  }
+  .status-pill.todo { background: var(--bg-elevated); color: var(--text-muted); }
+  .status-pill.in_progress { background: #4A7AA822; color: #2F5680; }
+  .status-pill.in_review { background: var(--warning-soft); color: var(--warning); }
+  .status-pill.done { background: var(--success-soft); color: var(--success); }
+
+  /* current session_cleared / rename audit row (post-PR-3 / PR-6) */
+  .cur-audit {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 16px 4px 56px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .cur-audit .icon { flex-shrink: 0; opacity: 0.6; width: 14px; height: 14px; display: inline-block; }
+  .cur-audit .agent { color: var(--text-primary); font-weight: 500; }
+  .cur-audit code {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    background: var(--bg-elevated);
+    padding: 0 4px;
+    border-radius: 3px;
+    color: var(--text-secondary);
+  }
+
+  /* ============================================================
+     === PROPOSED: activity cluster =============================
+     ============================================================
+     - skip avatar lane: cluster anchor sits at the avatar
+       column, its content aligns to the same content column as
+       real messages.
+     - left rail (1px subtle) + inset 10px so the rail is at the
+       avatar column, content beyond.
+     - outer margin 7px above + below to detach from real msgs.
+     - inner row gap tight (2px) so the cluster reads as a strip,
+       not 5 independent rows.
+     - actor / chip / pill all step down a tier in visual weight.
+     - dot survives as the per-row status marker.                 */
+  .cluster {
+    margin: 7px 16px 7px 56px;        /* outer breathing space; left=56px aligns rail to avatar column */
+    border-left: 1px solid var(--border-subtle);
+    padding-left: 10px;
+  }
+  .cluster .crow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 0;                    /* tight inner gap */
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.45;
+  }
+  .cluster .crow .dot {
+    width: 6px; height: 6px;           /* one notch smaller — it's a marker, not a focal point */
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .cluster .crow .dot.todo { background: #B5AC95; }
+  .cluster .crow .dot.in_progress { background: #4A7AA8; }
+  .cluster .crow .dot.in_review { background: var(--warning); }
+  .cluster .crow .dot.done { background: var(--success); }
+  .cluster .crow .dot.unclaim { background: transparent; border: 1px dashed #B5AC95; box-sizing: border-box; }
+  .cluster .crow .actor {
+    color: var(--text-secondary);     /* drop from text-primary+font-medium → muted secondary */
+    font-weight: 400;
+  }
+  .cluster .crow .verb { color: var(--text-muted); }
+  .cluster .crow .arrow { color: var(--text-muted); }
+  .cluster .crow .icon {
+    width: 12px; height: 12px;
+    color: var(--text-muted);
+    opacity: 0.6;
+    flex-shrink: 0;
+  }
+  .cluster .crow .agent { color: var(--text-secondary); font-weight: 400; }
+  .cluster .crow code {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    background: transparent;
+    border: 1px solid var(--border-subtle);
+    padding: 0 4px;
+    border-radius: 3px;
+    color: var(--text-secondary);
+  }
+  /* status pill in cluster: even more subdued — no bg fill, just a colored letter strip */
+  .cluster .status-pill {
+    background: transparent;
+    border: 1px solid currentColor;
+    opacity: 0.7;
+  }
+  .cluster .status-pill.todo { color: var(--text-muted); }
+  .cluster .status-pill.in_progress { color: #2F5680; }
+  .cluster .status-pill.in_review { color: var(--warning); }
+  .cluster .status-pill.done { color: var(--success); }
+
+  /* unread separator (matches MessageList look) */
+  .unread {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 16px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--error);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .unread::before, .unread::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--error);
+    opacity: 0.5;
+  }
+
+  .legend {
+    margin-top: 14px;
+    padding: 12px 14px;
+    background: var(--bg-base);
+    border-radius: var(--radius-md);
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+  }
+  .legend h4 {
+    margin: 0 0 6px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+  }
+  .legend ul { margin: 0; padding-left: 18px; }
+  .legend li { margin-bottom: 2px; }
+  .legend code {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    background: var(--bg-elevated);
+    padding: 0 4px;
+    border-radius: 3px;
+    color: var(--text-inline-code);
+  }
+
+  .hero {
+    padding: 14px 22px 18px;
+    background: var(--bg-floating);
+    border-radius: var(--radius-lg);
+    margin-bottom: 22px;
+    box-shadow: 0 1px 2px rgba(50, 38, 24, 0.08);
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="hero">
+    <h1>PR-10 — Activity Cluster (mockup)</h1>
+    <p class="lede">
+      把 <code>task_*</code> / <code>session_cleared</code> / <code>rename</code> 这类高频低权重事件，
+      从"独立消息行"降级为"活动注释段"（Slack-style muted activity narration）。规则：
+      <strong>clusterable subtype + 流相邻 + 5min gap</strong> 自然成段，再按 unread boundary 二次切分。
+      视觉：去头像、对齐到正文 content column、整组挂左侧 1px subtle rail、组内行距压缩、组外加 7px gap。
+      左侧是当前 <code>feature/v1-polish</code> PR-9 后的样子，右侧是 PR-10 后的样子。
+    </p>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- Scenario 1: short cluster (2 events between two real messages)        -->
+  <!-- ===================================================================== -->
+  <div class="section">
+    <h3>场景 1 — 短活动段（2 条 audit row 夹在两条正文之间）</h3>
+    <p class="desc">最常见场景：你刚 reply 完，agent claim 了一个 task 然后立刻 move 状态，下一句又是正文。短段的关键是"2 条 noise 不该跟一条 reply 视觉等重"。</p>
+
+    <div class="row">
+
+      <!-- CURRENT -->
+      <div class="col">
+        <div class="col-label">现状（PR-9 / commit fc0009a）<span class="badge">5 行</span></div>
+        <div class="stream">
+          <div class="msg">
+            <div class="avatar user">S</div>
+            <div class="body">
+              <div class="head"><span class="name">@shiki</span><span class="ts">10 分钟前</span></div>
+              <div class="text">现在这些系统消息好像跟正文在一起，显得有点密集。</div>
+            </div>
+          </div>
+
+          <div class="cur-event">
+            <span class="dot in_progress"></span>
+            <span class="actor">@Cindy</span>
+            <span class="verb">claimed</span>
+            <a class="task-chip"><span class="num">#task:331</span><span class="title">activity cluster</span></a>
+          </div>
+          <div class="cur-event">
+            <span class="dot in_review"></span>
+            <span class="actor">@Cindy</span>
+            <span class="verb">moved</span>
+            <a class="task-chip"><span class="num">#task:330</span><span class="title">cascade fix</span></a>
+            <span class="arrow">→</span>
+            <span class="status-pill in_review">in review</span>
+          </div>
+
+          <div class="msg">
+            <div class="avatar cindy">C</div>
+            <div class="body">
+              <div class="head"><span class="name">@Cindy</span><span class="ts">8 分钟前</span></div>
+              <div class="text">我先看你这张截图，再对照 Slack/Discord 的系统事件处理方式给结论。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PROPOSED -->
+      <div class="col proposed">
+        <div class="col-label">PR-10 后<span class="badge">cluster: 2 行</span></div>
+        <div class="stream">
+          <div class="msg">
+            <div class="avatar user">S</div>
+            <div class="body">
+              <div class="head"><span class="name">@shiki</span><span class="ts">10 分钟前</span></div>
+              <div class="text">现在这些系统消息好像跟正文在一起，显得有点密集。</div>
+            </div>
+          </div>
+
+          <div class="cluster">
+            <div class="crow">
+              <span class="dot in_progress"></span>
+              <span class="actor">@Cindy</span>
+              <span class="verb">claimed</span>
+              <a class="task-chip"><span class="num">#task:331</span><span class="title">activity cluster</span></a>
+            </div>
+            <div class="crow">
+              <span class="dot in_review"></span>
+              <span class="actor">@Cindy</span>
+              <span class="verb">moved</span>
+              <a class="task-chip"><span class="num">#task:330</span><span class="title">cascade fix</span></a>
+              <span class="arrow">→</span>
+              <span class="status-pill in_review">in review</span>
+            </div>
+          </div>
+
+          <div class="msg">
+            <div class="avatar cindy">C</div>
+            <div class="body">
+              <div class="head"><span class="name">@Cindy</span><span class="ts">8 分钟前</span></div>
+              <div class="text">我先看你这张截图，再对照 Slack/Discord 的系统事件处理方式给结论。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- Scenario 2: long cluster (mixed task_* / session_cleared / rename)    -->
+  <!-- ===================================================================== -->
+  <div class="section">
+    <h3>场景 2 — 长活动段（6 条混合 task_* + session_cleared + rename）</h3>
+    <p class="desc">极端情况：一段时间内只有 audit event，没有正文。当前每条都跟正文等重叠加，6 行 = 半屏。PR-10 后整段是一个 muted strip，只占应有的视觉重量。</p>
+
+    <div class="row">
+
+      <!-- CURRENT -->
+      <div class="col">
+        <div class="col-label">现状（PR-9）<span class="badge">8 行</span></div>
+        <div class="stream">
+          <div class="msg">
+            <div class="avatar user">S</div>
+            <div class="body">
+              <div class="head"><span class="name">@shiki</span><span class="ts">25 分钟前</span></div>
+              <div class="text">我去吃个饭，回来看看。</div>
+            </div>
+          </div>
+
+          <div class="cur-event">
+            <span class="dot in_progress"></span>
+            <span class="actor">@Cindy</span>
+            <span class="verb">claimed</span>
+            <a class="task-chip"><span class="num">#task:333</span><span class="title">cluster grouping</span></a>
+          </div>
+          <div class="cur-event">
+            <span class="dot in_review"></span>
+            <span class="actor">@Cindy</span>
+            <span class="verb">moved</span>
+            <a class="task-chip"><span class="num">#task:333</span></a>
+            <span class="arrow">→</span>
+            <span class="status-pill in_review">in review</span>
+          </div>
+          <div class="cur-event">
+            <span class="dot todo"></span>
+            <span class="actor">@Alice</span>
+            <span class="verb">created</span>
+            <a class="task-chip"><span class="num">#task:336</span><span class="title">PR-10 mockup</span></a>
+          </div>
+          <div class="cur-event">
+            <span class="dot in_progress"></span>
+            <span class="actor">@Alice</span>
+            <span class="verb">claimed</span>
+            <a class="task-chip"><span class="num">#task:336</span></a>
+          </div>
+          <div class="cur-audit">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+            <span><span class="actor">@you</span> reset <span class="agent">@Alice</span>'s session context · was idle</span>
+          </div>
+          <div class="cur-audit">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+            <span>workspace renamed <code>#version3</code> → <code>#v3-polish</code></span>
+          </div>
+
+          <div class="msg">
+            <div class="avatar user">S</div>
+            <div class="body">
+              <div class="head"><span class="name">@shiki</span><span class="ts">2 分钟前</span></div>
+              <div class="text">回来了，看看 mockup。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PROPOSED -->
+      <div class="col proposed">
+        <div class="col-label">PR-10 后<span class="badge">cluster: 6 行</span></div>
+        <div class="stream">
+          <div class="msg">
+            <div class="avatar user">S</div>
+            <div class="body">
+              <div class="head"><span class="name">@shiki</span><span class="ts">25 分钟前</span></div>
+              <div class="text">我去吃个饭，回来看看。</div>
+            </div>
+          </div>
+
+          <div class="cluster">
+            <div class="crow">
+              <span class="dot in_progress"></span>
+              <span class="actor">@Cindy</span>
+              <span class="verb">claimed</span>
+              <a class="task-chip"><span class="num">#task:333</span><span class="title">cluster grouping</span></a>
+            </div>
+            <div class="crow">
+              <span class="dot in_review"></span>
+              <span class="actor">@Cindy</span>
+              <span class="verb">moved</span>
+              <a class="task-chip"><span class="num">#task:333</span></a>
+              <span class="arrow">→</span>
+              <span class="status-pill in_review">in review</span>
+            </div>
+            <div class="crow">
+              <span class="dot todo"></span>
+              <span class="actor">@Alice</span>
+              <span class="verb">created</span>
+              <a class="task-chip"><span class="num">#task:336</span><span class="title">PR-10 mockup</span></a>
+            </div>
+            <div class="crow">
+              <span class="dot in_progress"></span>
+              <span class="actor">@Alice</span>
+              <span class="verb">claimed</span>
+              <a class="task-chip"><span class="num">#task:336</span></a>
+            </div>
+            <div class="crow">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+              <span><span class="actor">@you</span> <span class="verb">reset</span> <span class="agent">@Alice</span><span class="verb"> session · was idle</span></span>
+            </div>
+            <div class="crow">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+              <span><span class="verb">workspace renamed</span> <code>#version3</code> <span class="arrow">→</span> <code>#v3-polish</code></span>
+            </div>
+          </div>
+
+          <div class="msg">
+            <div class="avatar user">S</div>
+            <div class="body">
+              <div class="head"><span class="name">@shiki</span><span class="ts">2 分钟前</span></div>
+              <div class="text">回来了，看看 mockup。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- Scenario 3: cluster split by unread boundary                          -->
+  <!-- ===================================================================== -->
+  <div class="section">
+    <h3>场景 3 — unread boundary 切 cluster</h3>
+    <p class="desc">activity run 内部跨已读/未读边界时，强制切两段。理由：cluster 是视觉块，不切的话用户会把"是否已读"误归到整组上。切完之后两段 cluster 各自独立闭合，read cursor 移动只会改变 unread UI，不会让 cluster 边界飘。</p>
+
+    <div class="row">
+
+      <!-- CURRENT -->
+      <div class="col">
+        <div class="col-label">现状（PR-9）<span class="badge">unread separator 穿过 5 条独立行</span></div>
+        <div class="stream">
+          <div class="cur-event">
+            <span class="dot in_progress"></span>
+            <span class="actor">@Alice</span>
+            <span class="verb">claimed</span>
+            <a class="task-chip"><span class="num">#task:336</span></a>
+          </div>
+          <div class="cur-event">
+            <span class="dot in_progress"></span>
+            <span class="actor">@Cindy</span>
+            <span class="verb">claimed</span>
+            <a class="task-chip"><span class="num">#task:333</span></a>
+          </div>
+          <div class="unread">未读消息</div>
+          <div class="cur-event">
+            <span class="dot in_review"></span>
+            <span class="actor">@Cindy</span>
+            <span class="verb">moved</span>
+            <a class="task-chip"><span class="num">#task:333</span></a>
+            <span class="arrow">→</span>
+            <span class="status-pill in_review">in review</span>
+          </div>
+          <div class="cur-event">
+            <span class="dot todo"></span>
+            <span class="actor">@Alice</span>
+            <span class="verb">created</span>
+            <a class="task-chip"><span class="num">#task:337</span></a>
+          </div>
+          <div class="cur-event">
+            <span class="dot in_progress"></span>
+            <span class="actor">@Alice</span>
+            <span class="verb">claimed</span>
+            <a class="task-chip"><span class="num">#task:337</span></a>
+          </div>
+        </div>
+      </div>
+
+      <!-- PROPOSED -->
+      <div class="col proposed">
+        <div class="col-label">PR-10 后<span class="badge">2 个 cluster · separator 在缝里</span></div>
+        <div class="stream">
+          <div class="cluster">
+            <div class="crow">
+              <span class="dot in_progress"></span>
+              <span class="actor">@Alice</span>
+              <span class="verb">claimed</span>
+              <a class="task-chip"><span class="num">#task:336</span></a>
+            </div>
+            <div class="crow">
+              <span class="dot in_progress"></span>
+              <span class="actor">@Cindy</span>
+              <span class="verb">claimed</span>
+              <a class="task-chip"><span class="num">#task:333</span></a>
+            </div>
+          </div>
+
+          <div class="unread">未读消息</div>
+
+          <div class="cluster">
+            <div class="crow">
+              <span class="dot in_review"></span>
+              <span class="actor">@Cindy</span>
+              <span class="verb">moved</span>
+              <a class="task-chip"><span class="num">#task:333</span></a>
+              <span class="arrow">→</span>
+              <span class="status-pill in_review">in review</span>
+            </div>
+            <div class="crow">
+              <span class="dot todo"></span>
+              <span class="actor">@Alice</span>
+              <span class="verb">created</span>
+              <a class="task-chip"><span class="num">#task:337</span></a>
+            </div>
+            <div class="crow">
+              <span class="dot in_progress"></span>
+              <span class="actor">@Alice</span>
+              <span class="verb">claimed</span>
+              <a class="task-chip"><span class="num">#task:337</span></a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- Scenario 4: 信息块不进 cluster — schedule_fire / mention_cc 保留分量   -->
+  <!-- ===================================================================== -->
+  <div class="section">
+    <h3>场景 4 — 信息块不进 cluster（schedule_fire / mention_cc / context-card 保留分量）</h3>
+    <p class="desc">PR-10 只对 task_* / session_cleared / rename 这类 lifecycle event 降级；schedule_fire / mention_cc / thread_summary / context-card 是真信息块，保留原本的 banner / card 视觉。即使夹在两个 cluster 之间，信息块也不该被吸附进 cluster。</p>
+
+    <div class="row">
+
+      <!-- CURRENT -->
+      <div class="col">
+        <div class="col-label">现状<span class="badge">所有 system msg 同节奏</span></div>
+        <div class="stream">
+          <div class="cur-event">
+            <span class="dot in_progress"></span>
+            <span class="actor">@Alice</span>
+            <span class="verb">claimed</span>
+            <a class="task-chip"><span class="num">#task:336</span></a>
+          </div>
+          <div class="cur-event">
+            <span class="dot in_review"></span>
+            <span class="actor">@Cindy</span>
+            <span class="verb">moved</span>
+            <a class="task-chip"><span class="num">#task:333</span></a>
+            <span class="arrow">→</span>
+            <span class="status-pill in_review">in review</span>
+          </div>
+
+          <!-- a real schedule_fire banner — already a flat card with left warning rail -->
+          <div style="margin: 4px 16px; border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); border-left: 3px solid var(--warning); background: var(--bg-floating); padding: 10px 14px;">
+            <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);font-weight:600;margin-bottom:4px;">
+              <svg class="icon" style="color:var(--warning);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+              <span>Scheduled wake</span>
+              <span style="margin-left:auto;font-family:var(--font-mono);font-size:11px;font-weight:400;color:var(--text-muted);">cron */5 9-18 * * 1-5 (Asia/Shanghai)</span>
+            </div>
+            <div style="display:flex;gap:6px;margin-bottom:6px;">
+              <span class="status-pill" style="background:var(--bg-elevated);color:var(--text-secondary);font-weight:400;text-transform:none;letter-spacing:0;">fired just now</span>
+              <span class="status-pill" style="background:var(--bg-elevated);color:var(--text-secondary);font-weight:400;text-transform:none;letter-spacing:0;">planned 2s ago</span>
+            </div>
+            <div style="font-size:13px;color:var(--text-primary);">Reminder: review #task:294 status, ping @shiki if still in_review.</div>
+          </div>
+
+          <div class="cur-event">
+            <span class="dot done"></span>
+            <span class="actor">@Cindy</span>
+            <span class="verb">moved</span>
+            <a class="task-chip"><span class="num">#task:333</span></a>
+            <span class="arrow">→</span>
+            <span class="status-pill done">done</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- PROPOSED -->
+      <div class="col proposed">
+        <div class="col-label">PR-10 后<span class="badge">card 分隔两段 cluster</span></div>
+        <div class="stream">
+          <div class="cluster">
+            <div class="crow">
+              <span class="dot in_progress"></span>
+              <span class="actor">@Alice</span>
+              <span class="verb">claimed</span>
+              <a class="task-chip"><span class="num">#task:336</span></a>
+            </div>
+            <div class="crow">
+              <span class="dot in_review"></span>
+              <span class="actor">@Cindy</span>
+              <span class="verb">moved</span>
+              <a class="task-chip"><span class="num">#task:333</span></a>
+              <span class="arrow">→</span>
+              <span class="status-pill in_review">in review</span>
+            </div>
+          </div>
+
+          <!-- schedule_fire banner unchanged — this is a real info block, not activity -->
+          <div style="margin: 8px 16px; border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); border-left: 3px solid var(--warning); background: var(--bg-floating); padding: 10px 14px;">
+            <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);font-weight:600;margin-bottom:4px;">
+              <svg class="icon" style="color:var(--warning);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+              <span>Scheduled wake</span>
+              <span style="margin-left:auto;font-family:var(--font-mono);font-size:11px;font-weight:400;color:var(--text-muted);">cron */5 9-18 * * 1-5 (Asia/Shanghai)</span>
+            </div>
+            <div style="display:flex;gap:6px;margin-bottom:6px;">
+              <span class="status-pill" style="background:var(--bg-elevated);color:var(--text-secondary);font-weight:400;text-transform:none;letter-spacing:0;">fired just now</span>
+              <span class="status-pill" style="background:var(--bg-elevated);color:var(--text-secondary);font-weight:400;text-transform:none;letter-spacing:0;">planned 2s ago</span>
+            </div>
+            <div style="font-size:13px;color:var(--text-primary);">Reminder: review #task:294 status, ping @shiki if still in_review.</div>
+          </div>
+
+          <div class="cluster">
+            <div class="crow">
+              <span class="dot done"></span>
+              <span class="actor">@Cindy</span>
+              <span class="verb">moved</span>
+              <a class="task-chip"><span class="num">#task:333</span></a>
+              <span class="arrow">→</span>
+              <span class="status-pill done">done</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="legend">
+      <h4>分类决策（与 @Cindy 收敛）</h4>
+      <ul>
+        <li><strong>进 cluster（low-priority activity）</strong>：<code>task_create</code>、<code>task_claim</code>、<code>task_unclaim</code>、<code>task_status</code>、<code>session_cleared</code>、<code>rename</code></li>
+        <li><strong>不进 cluster（信息块保留分量）</strong>：<code>schedule_fire</code>、<code>thread_anchor</code>、<code>child_context</code>、<code>channel_context</code>、<code>thread_summary</code>、<code>mention_cc</code>、<code>onboarding</code></li>
+      </ul>
+      <h4 style="margin-top: 10px;">Grouping algorithm</h4>
+      <ul>
+        <li><code>messages → activity runs (subtype/相邻/5min gap) → split by unread boundary → render</code></li>
+        <li>不要求同 task / 不要求同 actor</li>
+        <li>纯函数实现：<code>groupMessages(messages): Array&lt;MessageItem | ActivityCluster&gt;</code>，cluster id <code>activity-cluster:${first.id}:${last.id}:${count}</code> 稳定 reconciliation</li>
+        <li>实现层级：MessageList / MessageStream（只有列表层能看到相邻消息）</li>
+      </ul>
+      <h4 style="margin-top: 10px;">视觉规范</h4>
+      <ul>
+        <li>整组对齐到正文 content column（跳过 avatar lane）</li>
+        <li>整组左侧 1px <code>border-subtle</code> rail + <code>padding-left: 10px</code></li>
+        <li>组外 <code>margin: 7px</code>（上下），跟正文断开节奏</li>
+        <li>组内 <code>padding: 2px 0</code>（紧贴），多条 audit row 视觉聚拢成一段</li>
+        <li>背景默认透明 — 不上 bg tint，避免又变成卡片化</li>
+        <li>单条降权：actor → text-secondary（去 font-medium）；chip → 透明 bg + subtle border；status pill → 透明 bg + 同色 outline；status dot → 8px 缩成 6px</li>
+      </ul>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
