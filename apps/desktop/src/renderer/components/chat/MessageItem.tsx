@@ -65,12 +65,13 @@ interface MessageItemProps {
  * markdown body, role-name + relative time header, and a Slack-style
  * pair of action affordances:
  *
- * - **Floating hover toolbar** (Save + Thread) — absolutely positioned
- *   at the top-right of the content column (top-left in user-right
- *   mode), revealed on hover with a subtle elevated surface. It does
- *   not reserve vertical space, so two consecutive messages now sit
- *   tight against each other instead of being padded apart by an
- *   always-on action row.
+ * - **Embedded icon controls** (Save + Thread) — absolutely pinned to
+ *   the top-right of the content column (mirrored to top-left in
+ *   user-right mode), naked icons (no box / border / shadow), revealed
+ *   on hover with their own per-icon color hover state. They do not
+ *   reserve vertical space, so two consecutive messages now sit tight
+ *   against each other instead of being padded apart by an always-on
+ *   action row.
  * - **Inline "{N} Reply" badge** — rendered below the body only when
  *   the message has an open thread. Carries real information, so it
  *   earns persistent space.
@@ -237,21 +238,25 @@ export function MessageItem({
                 open"), so it earns its space below the bubble and stays
                 visible without hover.
 
-            (b) Floating hover toolbar (Slack-style) — absolutely
-                positioned at the top-right (or top-left in user-right
-                mode) of the content column, raised on a slightly
-                elevated surface with a subtle border + shadow.
-                Visibility is gated by `hover` only; when invisible it
-                also goes `pointer-events-none` so it never captures
-                clicks. Because it's absolutely positioned, it does NOT
-                push the message body downward — the gap between two
-                consecutive messages is now just the row's `py-1.5`,
-                not the previous `mt-1 + h-5 = 24px` always-on footer.
+            (b) Embedded icon controls (Save + Thread) — naked icon
+                buttons absolutely pinned to the top-right of the
+                content column (top-left mirrored in user-right mode).
+                NO container chrome (no box, no border, no shadow,
+                no fill) — the icons sit directly on the message
+                canvas. Default hidden via `pointer-events-none
+                opacity-0`; revealed on row hover. Each icon button
+                carries its own tiny color hover state. This is what
+                Slack does when its right-side actions toolbar is
+                styled into the message body — embedded controls, not
+                a popover. Because the controls are absolutely
+                positioned they do NOT push the message body
+                downward; the gap between two consecutive messages
+                shrinks to just the row's `py-1.5`.
 
-            The floating toolbar contains Save (always) + Thread (only
-            when there are no replies yet — once a thread exists, the
-            inline "{N} Reply" badge is the discovery affordance, so
-            duplicating "Thread" in the toolbar would just be noise). */}
+            The Thread icon is suppressed when `threadReplyCount` is
+            already set — the inline "{N} Reply" badge is the
+            discovery affordance in that case, so a duplicate "go to
+            thread" icon would just be noise. */}
         {threadReplyCount !== undefined && onStartThread ? (
           <div
             className={
@@ -272,29 +277,35 @@ export function MessageItem({
 
         <div
           className={
-            'absolute top-0 z-10 flex items-center gap-2 rounded border border-border-subtle bg-bg-elevated px-2 py-0.5 text-xs shadow-sm transition-opacity ' +
-            (alignRight ? 'left-0' : 'right-0') +
+            'absolute top-1 z-10 flex items-center gap-2 transition-opacity ' +
+            (alignRight ? 'left-1' : 'right-1') +
             ' ' +
             (hover ? 'opacity-100' : 'pointer-events-none opacity-0')
           }
         >
           {onStartThread && threadReplyCount === undefined ? (
-            <ActionButton
-              icon={<CornerUpLeft className="size-3.5" />}
-              label="Thread"
+            <button
+              type="button"
               onClick={() => onStartThread(message)}
-              alwaysVisible
-              hovered={hover}
-            />
+              title="Thread"
+              className="text-text-muted transition-colors hover:text-text-primary"
+            >
+              <CornerUpLeft className="size-3.5" />
+            </button>
           ) : null}
-          <ActionButton
-            icon={<Bookmark className={'size-3.5 ' + (saved ? 'fill-current' : '')} />}
-            label={saved ? 'Saved' : 'Save'}
-            active={saved}
+          <button
+            type="button"
             onClick={() => onSave?.(message)}
-            alwaysVisible
-            hovered={hover}
-          />
+            title={saved ? 'Saved' : 'Save'}
+            className={
+              'transition-colors ' +
+              (saved
+                ? 'text-accent'
+                : 'text-text-muted hover:text-text-primary')
+            }
+          >
+            <Bookmark className={'size-3.5 ' + (saved ? 'fill-current' : '')} />
+          </button>
         </div>
       </div>
     </div>
