@@ -601,6 +601,76 @@ describe('SystemMessage channel refs', () => {
     expect(html).toContain('legacy-old');
     expect(html).toContain('legacy-new');
   });
+
+  it('PR-10 follow-up #7: info-block subtypes get `data-system-layout="info"`; cluster narration does not', () => {
+    // Drift guard for the avatar-column / content-column split in
+    // `SystemMessage.tsx`'s `INFO_BLOCK_SUBTYPES` set, paired with
+    // `.system-message-row[data-system-layout="info"]` in
+    // global.css. Banners + cards (schedule_fire, context cards,
+    // thread_summary, mention_cc, onboarding) must carry the
+    // attribute so the avatar-column alignment kicks in; cluster
+    // narration (task_* / session_cleared / rename) must NOT carry
+    // it because it stays in the regular content column. Adding a
+    // new SystemSubtype without a deliberate decision means it
+    // falls through to the default content column — that's
+    // intentional, the author has to opt the new subtype into the
+    // info layout explicitly.
+    const infoSubtypes: Array<[string, Record<string, unknown>]> = [
+      ['schedule_fire', {
+        kind: 'cron',
+        spec_summary: '0 9 * * *',
+        timezone: 'UTC',
+        message: 'wake',
+        agent_name: 'Alice',
+      }],
+      ['channel_context', { source_conversation_title: 'foo', created_by_agent_name: 'Alice' }],
+      ['child_context', { parent_conversation_id: 'p1', parent_title: 'parent', summary: 's' }],
+      ['thread_anchor', {
+        quoted_message_id: 'm1',
+        quoted_from_kind: 'agent',
+        quoted_from_agent_id: 'a1',
+        quoted_from_agent_name: 'Alice',
+        quoted_content_excerpt: 'hi',
+      }],
+      ['onboarding', {}],
+      ['mention_cc', { source_conversation_id: 'c1', source_user_id: null, source_user_name: 'me' }],
+      ['thread_summary', { thread_title: 't1', summary: 'done' }],
+    ];
+    for (const [subtype, metadata] of infoSubtypes) {
+      const msg = makeSystemMessage(subtype, metadata);
+      const html = renderSystem(msg, new Map());
+      expect(html, `info subtype "${subtype}" should carry data-system-layout="info"`)
+        .toContain('data-system-layout="info"');
+    }
+
+    // Cluster narration subtypes (rendered as standalone here for
+    // the test — grouping is a separate concern) should NOT carry
+    // the layout attribute.
+    const clusterSubtypes: Array<[string, Record<string, unknown>]> = [
+      ['task_create', {
+        task_number: 1,
+        task_status: 'todo',
+        task_message_id: 'mt',
+        task_title: 't',
+        task_assignee: null,
+        actor: { kind: 'agent', id: 'a1', name: 'Alice' },
+      }],
+      ['session_cleared', {
+        agent_id: 'a1',
+        agent_name: 'Alice',
+        actor_user_id: 'u',
+        previous_cli_session_id_prefix: 'abc',
+        was_running: false,
+      }],
+      ['rename', { old_name: 'a', new_name: 'b' }],
+    ];
+    for (const [subtype, metadata] of clusterSubtypes) {
+      const msg = makeSystemMessage(subtype, metadata);
+      const html = renderSystem(msg, new Map());
+      expect(html, `cluster subtype "${subtype}" should NOT carry data-system-layout`)
+        .not.toContain('data-system-layout=');
+    }
+  });
 });
 
 describe('SystemMessage task event rows (PR-2)', () => {

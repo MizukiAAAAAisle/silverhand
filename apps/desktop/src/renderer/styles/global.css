@@ -252,6 +252,22 @@ button:disabled { cursor: not-allowed; }
   margin-inline-end: 16px;
   max-width: 85%;
 }
+/* Info-block subtypes (schedule_fire banner, context cards, thread
+   summary, mention CC, onboarding) read as block-level dividers /
+   banners — not conversational replies — so they align to the avatar
+   column on the LEFT (taking the avatar gutter for themselves, since
+   system messages have no author avatar) and span the full row width
+   minus a small symmetric gutter on the RIGHT. This gives banners
+   and cards the horizontal weight they want, matching Slack/Discord
+   block-level system events. Cluster narration stays at the content
+   column (this attribute is set ONLY on standalone info subtypes by
+   `SystemMessage.tsx`'s `INFO_BLOCK_SUBTYPES`).
+   shiki PR-10 follow-up #7 (msg `M1prpsoXI9rSK6HQ`). */
+.system-message-row[data-system-layout="info"] {
+  margin-inline-start: 10px;
+  margin-inline-end: 10px;
+  max-width: none;
+}
 /* When a system-message-row is INSIDE an activity cluster, the
    cluster wrapper owns the column alignment (its own margin/border
    forms the rail). Reset margin AND max-width so the inner row

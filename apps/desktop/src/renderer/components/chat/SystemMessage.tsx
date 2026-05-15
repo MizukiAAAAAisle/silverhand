@@ -91,8 +91,26 @@ export function SystemMessage(props: SystemMessageProps): JSX.Element {
   // [data-system-event-row="1"] > *`) can demote the inner row body's
   // chunky padding without depending on the row body's exact Tailwind
   // utility class list.
+  // PR-10 follow-up #7 (msg `M1prpsoXI9rSK6HQ`): info-block subtypes
+  // (banners + cards that aren't conversational replies) align to the
+  // avatar column instead of the regular content column, giving them
+  // the full row width minus a small symmetric gutter — matches
+  // Slack/Discord block-level system events. Activity-cluster
+  // narration (task_* / session_cleared / rename) keeps the content
+  // column alignment because it reads as commentary alongside
+  // replies. The split is expressed as `data-system-layout="info"` on
+  // the wrapper; the layout CSS (`.system-message-row[data-system-
+  // layout="info"]` in `global.css`) does the alignment override.
+  const layout =
+    resolution.kind === 'current' && INFO_BLOCK_SUBTYPES.has(resolution.subtype)
+      ? 'info'
+      : undefined;
   return (
-    <div className="system-message-row" data-system-event-row="1">
+    <div
+      className="system-message-row"
+      data-system-event-row="1"
+      data-system-layout={layout}
+    >
       <Renderer {...props} />
     </div>
   );
@@ -1304,3 +1322,28 @@ const systemMessageRenderers: Record<SystemSubtype, SystemMessageRenderer> = {
   mention_cc: MentionCcCard,
   thread_summary: ThreadSummaryCard,
 };
+
+/**
+ * Subtypes that render as block-level "info" — banners, cards, and
+ * dividers that aren't conversational replies. These get the wider
+ * avatar-column alignment in CSS (`.system-message-row[data-system-
+ * layout="info"]`), giving them the full row gutter on both sides
+ * for banner/card visual weight. Cluster narration (`task_*` /
+ * `session_cleared` / `rename`) is intentionally NOT in this set —
+ * those read as conversation-adjacent commentary and stay in the
+ * regular content column. Generic / legacy fallbacks also stay at
+ * content column (default behavior of `.system-message-row`).
+ *
+ * Drift guard: every entry here must be a `SystemSubtype`; new
+ * subtypes added to `@silverhand/shared` won't auto-join — author
+ * gets to decide which lane the new subtype belongs in.
+ */
+const INFO_BLOCK_SUBTYPES: ReadonlySet<SystemSubtype> = new Set<SystemSubtype>([
+  'schedule_fire',
+  'channel_context',
+  'child_context',
+  'thread_anchor',
+  'onboarding',
+  'mention_cc',
+  'thread_summary',
+]);
