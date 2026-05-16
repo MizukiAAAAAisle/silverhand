@@ -5,8 +5,9 @@
 > `adoptLegacyV21`, the `LEGACY_V21_ADOPTION_*` settings keys are
 > gone, and migration v23 (`remove_v21_adoption_bridge`) drops the
 > empty staging tables on every DB / refuses to apply when staging
-> still holds unadopted rows. v21's body is preserved unmodified
-> (mutating an applied migration is forbidden), and its
+> still holds unadopted rows. Migration v24 removes the two historical
+> `legacy_v21_adoption_*` audit rows from `app_settings`. v21's body is
+> preserved unmodified (mutating an applied migration is forbidden), and its
 > staging-creation contract tests stop at v22 to remain meaningful.
 > This file is now historical reference for how the bridge worked
 > and how it was retired.
@@ -84,8 +85,8 @@ The target steady state is:
 - migrations create the final `users` schema;
 - `POST /api/register` only creates the registered viewer and optional profile
   data;
-- historical backup adoption has already completed, with audit evidence kept
-  in `app_settings`;
+- historical backup adoption has already completed and was verified before the
+  final v24 audit-KV cleanup;
 - future V2 multi-human work uses auth/token identity and invite tables, not
   this V1 staging bridge.
 

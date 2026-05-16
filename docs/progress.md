@@ -13,6 +13,7 @@
   - `UserService.register()` 删 `adoptLegacyV21` helper + 调用；`SETTINGS_KEYS.LEGACY_V21_ADOPTION_*` 删；`tests/services/user-service-adoption.test.ts` 删（adoption runtime 不再存在）。
   - `tests/db-migrations.test.ts` 加 `applyMigrationsThrough(db, max)` helper + 3 条 v23 测试（fresh-DB 全跑过 / 非空 staging 拒绝 / post-adoption idempotent）；v16/v20/v21 staging-creation 测试改为 `applyMigrationsThrough(db, 22)` 保留 v21 历史合同。
   - 两篇 `docs/human-identity-*.md` 加 status footer 标记 cleanup landed；cleanup-plan §6 Step 3 修订（不再写 standalone `RAISE()`，给出 `precondition` TS 写法 + 强调 `pragma('foreign_key_check')` 不抛要主动检查）。
+- **Follow-up v24 cleanup**：新增 `remove_legacy_v21_adoption_audit_settings`，只删除 `app_settings` 里的两条历史 `legacy_v21_adoption_*` 审计 KV；v21/v22/v23 migration body 保持不变，Deferred Adoption runtime/staging 仍维持已清理状态。
 - **质量门**：`pnpm -r typecheck` 4/4；`./scripts/test.sh` 58 files / 715 tests；`pnpm --filter @silverhand/desktop test` 12 files / 195 tests；`git diff --check` 干净。
 
 ---
@@ -1994,5 +1995,4 @@ messages → activity runs (clusterable subtype + 相邻 + 5min gap) → split b
 - #task:5 in_review，工作树**未 commit**（按 @shiki 标准纪律）
 - 质量门：`pnpm -r typecheck` ✅ / backend 59 files / 718 tests ✅ / desktop 11 files / 191 tests ✅ / `git diff --check` ✅
 - 等 @shiki 用备份做真实验收 → commit 决定（commit 时倾向拆成 "shared/migrations + backend/adoption" 两个 commit）
-
 

@@ -1821,4 +1821,22 @@ export const migrations: Migration[] = [
       DROP TABLE IF EXISTS legacy_user_attachments_v21;
     `,
   },
+  {
+    version: 24,
+    name: 'remove_legacy_v21_adoption_audit_settings',
+    // The Mode B cleanup removed the Deferred Adoption runtime and v23
+    // removed the staging tables. These two app_settings rows were the
+    // last per-DB evidence written by the old register-time bridge; once
+    // the bridge is retired they are no longer read or written.
+    //
+    // Keep this as its own migration instead of asking operators to edit
+    // app_settings by hand, so every DB reaches the same steady state.
+    up: `
+      DELETE FROM app_settings
+       WHERE key IN (
+         'legacy_v21_adoption_completed_at',
+         'legacy_v21_adoption_counts'
+       );
+    `,
+  },
 ];

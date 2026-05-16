@@ -1244,6 +1244,57 @@ describe('database migrations', () => {
     });
   });
 
+  describe('migration v24 (legacy v21 audit settings cleanup)', () => {
+    it('removes only the retired adoption audit keys from app_settings', () => {
+      const db = new Database(':memory:');
+      try {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS _migrations (
+            version INTEGER PRIMARY KEY,
+            name    TEXT NOT NULL,
+            applied_at INTEGER NOT NULL
+          );
+        `);
+        applyMigrationsThrough(db, 23);
+        db.exec(`
+          INSERT INTO app_settings (key, value) VALUES
+            ('viewer_user_id', 'viewer_1'),
+            ('legacy_v21_adoption_completed_at', '1778956750799'),
+            (
+              'legacy_v21_adoption_counts',
+              '{"messages_from":1019,"messages_task":0,"conversation_reads":71,"attachments":12}'
+            );
+        `);
+
+        runMigrations(db);
+
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 24`).get(),
+        ).toBeDefined();
+        expect(
+          db
+            .prepare(
+              `SELECT key FROM app_settings
+                WHERE key IN (
+                  'legacy_v21_adoption_completed_at',
+                  'legacy_v21_adoption_counts'
+                )`,
+            )
+            .all(),
+        ).toEqual([]);
+        expect(
+          db
+            .prepare<[], { value: string }>(
+              `SELECT value FROM app_settings WHERE key = 'viewer_user_id'`,
+            )
+            .get()?.value,
+        ).toBe('viewer_1');
+      } finally {
+        db.close();
+      }
+    });
+  });
+
   describe('migration v22 (no-op stub)', () => {
     /**
      * The original v22 renamed `users.handle` → `users.name`. The
