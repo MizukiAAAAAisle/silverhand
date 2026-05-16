@@ -53,6 +53,11 @@ interface MessageItemProps {
   threadReplyCount?: number;
   onSave?: (msg: MessageDto) => void;
   saved?: boolean;
+  /** Object URL pointing at the current viewer's avatar blob (or null
+   *  if the viewer has no avatar / isn't loaded yet). Lifted into the
+   *  parent pane so a single fetch drives every message render in the
+   *  list. Resolved by `useViewerAvatarObjectUrl`. */
+  viewerAvatarObjectUrl?: string | null;
   /** Persistently render the hover frame around this row — used by the
    *  parent pane to mark "the message a thread is anchored to" while
    *  the thread pane is open. Doesn't expose the action bar, since the
@@ -101,6 +106,7 @@ export function MessageItem({
   onSave,
   saved = false,
   highlighted = false,
+  viewerAvatarObjectUrl = null,
 }: MessageItemProps): JSX.Element {
   const isUser = message.from_kind === 'user';
   const isCurrentUser = isUser && isCurrentUserId(message.from_user_id);
@@ -162,6 +168,8 @@ export function MessageItem({
     >
       <Avatar
         isUser={isUser}
+        isCurrentUser={isCurrentUser}
+        viewerAvatarObjectUrl={viewerAvatarObjectUrl}
         agent={agent}
         conversationId={conversationId}
         routeKind={routeKind}
@@ -394,18 +402,40 @@ function formatTaskAssignee(
 
 function Avatar({
   isUser,
+  isCurrentUser,
+  viewerAvatarObjectUrl,
   agent,
   conversationId,
   routeKind,
   onNavigateAgent,
 }: {
   isUser: boolean;
+  /** True iff `from_user_id` resolves to the registered viewer (legacy
+   *  null-author rows count as the viewer). Other-user messages would
+   *  fall through to the placeholder. */
+  isCurrentUser: boolean;
+  viewerAvatarObjectUrl: string | null;
   agent: AgentDto | undefined;
   conversationId: string;
   routeKind: 'channel' | 'thread';
   onNavigateAgent: (agentId: string) => void;
 }): JSX.Element {
   if (isUser) {
+    if (isCurrentUser && viewerAvatarObjectUrl) {
+      return (
+        <span
+          className="mt-0.5 inline-block size-8 shrink-0 overflow-hidden rounded-full bg-bg-elevated"
+          aria-hidden
+        >
+          {/* eslint-disable-next-line jsx-a11y/img-redundant-alt */}
+          <img
+            src={viewerAvatarObjectUrl}
+            alt="Your avatar"
+            className="size-full object-cover"
+          />
+        </span>
+      );
+    }
     return (
       <span
         className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-bg-elevated text-text-muted"

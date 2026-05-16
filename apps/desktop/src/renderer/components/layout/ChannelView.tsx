@@ -55,6 +55,7 @@ import {
   type ThreadSummary,
 } from '@/features/threads/hooks';
 import { useSavedMessageIds, useToggleSave } from '@/features/saved/hooks';
+import { useViewerAvatarObjectUrl } from '@/features/me/hooks';
 import {
   useChannelAgents,
   useChannelMessages,
@@ -692,6 +693,7 @@ function MessageList({
   );
   const savedIds = useSavedMessageIds();
   const { toggle: toggleSave } = useToggleSave();
+  const viewerAvatarObjectUrl = useViewerAvatarObjectUrl();
   const startThread = useStartThread(workspaceId);
   // Three lookup maps used by the message renderer:
   //  - `agentsById`   → message author (avatar + display name)
@@ -999,6 +1001,7 @@ function MessageList({
                     onSave={msg => toggleSave(msg.id)}
                     onStartThread={onThreadCreated ? handleStartThread : undefined}
                     threadReplyCount={threadByAnchor?.get(m.id)?.reply_count}
+                    viewerAvatarObjectUrl={viewerAvatarObjectUrl}
                     highlighted={
                       highlightedMessageId != null &&
                       m.id === highlightedMessageId

@@ -22,22 +22,20 @@ import {
 import type { RuntimeKind } from '@silverhand/shared';
 import {
   AVATAR_MAX_SIZE_LABEL,
-  encodeUserPrincipalHeader,
   validateAvatarFile,
-  X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { AgentAvatar } from '@/components/AgentAvatar';
-import { api, getBackendInfo } from '@/lib/api';
+import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { useAppearance } from '@/hooks/useAppearance';
-import { getCurrentUserId } from '@/lib/current-user';
 import {
   isRegistrationRequired,
   useClearAvatar,
   useUpdateProfile,
   useUploadAvatar,
+  useViewerAvatarObjectUrl,
   useViewerUser,
 } from '@/features/me/hooks';
 import {
@@ -476,7 +474,7 @@ function ProfilePane(): JSX.Element {
   const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  const [avatarObjectUrl, setAvatarObjectUrl] = useState<string | null>(null);
+  const avatarObjectUrl = useViewerAvatarObjectUrl();
 
   // Seed local form state from server. Re-runs whenever the cached
   // viewer dto changes (e.g. after a successful PATCH).
@@ -487,44 +485,10 @@ function ProfilePane(): JSX.Element {
     }
   }, [dto]);
 
-  // Avatars require auth headers, so they cannot be dropped straight
-  // into `<img src>`. Mirror the attachment pattern: fetch as a Blob,
-  // make an object URL, revoke it on unmount / update.
-  useEffect(() => {
-    let revoked = false;
-    let objectUrlAtFetchTime: string | null = null;
-    const path = dto?.avatar_url;
-    if (!path) {
-      setAvatarObjectUrl(null);
-      return;
-    }
-    void (async () => {
-      try {
-        const info = await getBackendInfo();
-        const headers = new Headers();
-        headers.set('Authorization', `Bearer ${info.auth_token}`);
-        const id = getCurrentUserId();
-        if (id) {
-          headers.set(
-            X_SILVERHAND_PRINCIPAL_HEADER,
-            encodeUserPrincipalHeader(id),
-          );
-        }
-        const res = await fetch(`${info.url}${path}`, { headers });
-        if (!res.ok) return;
-        const blob = await res.blob();
-        if (revoked) return;
-        objectUrlAtFetchTime = URL.createObjectURL(blob);
-        setAvatarObjectUrl(objectUrlAtFetchTime);
-      } catch {
-        // Best-effort — falls back to the placeholder.
-      }
-    })();
-    return () => {
-      revoked = true;
-      if (objectUrlAtFetchTime) URL.revokeObjectURL(objectUrlAtFetchTime);
-    };
-  }, [dto?.avatar_url]);
+  // Avatar blob → object URL is now lifted into the shared
+  // `useViewerAvatarObjectUrl()` hook above; chat MessageItem also
+  // consumes it so the same fetch result drives every render that
+  // needs the viewer's photo.
 
   const dirty =
     !!dto && displayName !== dto.display_name;

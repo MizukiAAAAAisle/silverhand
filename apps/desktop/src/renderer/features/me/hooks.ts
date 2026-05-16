@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import {
   useMutation,
   useQuery,
@@ -7,14 +7,16 @@ import {
 } from '@tanstack/react-query';
 import {
   apiPaths,
+  encodeUserPrincipalHeader,
+  X_SILVERHAND_PRINCIPAL_HEADER,
   type MeResponse,
   type RegisterUserInput,
   type RegistrationRequired,
   type UpdateUserProfileInput,
   type UserDto,
 } from '@silverhand/shared';
-import { api, apiUpload } from '@/lib/api';
-import { setCurrentUserId } from '@/lib/current-user';
+import { api, apiUpload, getBackendInfo } from '@/lib/api';
+import { getCurrentUserId, setCurrentUserId } from '@/lib/current-user';
 
 const meKey = ['me'] as const;
 
@@ -134,4 +136,61 @@ export function useClearAvatar() {
       cacheViewer(qc, dto);
     },
   });
+}
+
+/**
+ * Resolve the viewer's avatar to a renderable object URL.
+ *
+ * `UserDto.avatar_url` is a backend path that requires an `Authorization`
+ * header to fetch — `<img src>` can't carry headers, so we mirror the
+ * attachment pattern: fetch the blob with auth headers, wrap in
+ * `URL.createObjectURL`, and revoke when the URL changes or the
+ * consumer unmounts.
+ *
+ * Multiple consumers (Settings + each chat MessageItem) call this hook
+ * concurrently. React Query's `useViewerUser` cache already de-dupes
+ * the dto fetch; the blob fetch itself is small and the browser's HTTP
+ * cache handles repeats. If profile loading is null/registration_required,
+ * returns `null` so callers fall back to a placeholder.
+ */
+export function useViewerAvatarObjectUrl(): string | null {
+  const { data } = useViewerUser();
+  const avatarUrl =
+    data && !isRegistrationRequired(data) ? data.avatar_url : null;
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    let createdUrl: string | null = null;
+    if (!avatarUrl) {
+      setObjectUrl(null);
+      return;
+    }
+    void (async () => {
+      try {
+        const info = await getBackendInfo();
+        const headers = new Headers();
+        headers.set('Authorization', `Bearer ${info.auth_token}`);
+        const id = getCurrentUserId();
+        if (id) {
+          headers.set(
+            X_SILVERHAND_PRINCIPAL_HEADER,
+            encodeUserPrincipalHeader(id),
+          );
+        }
+        const res = await fetch(`${info.url}${avatarUrl}`, { headers });
+        if (!res.ok) return;
+        const blob = await res.blob();
+        if (cancelled) return;
+        createdUrl = URL.createObjectURL(blob);
+        setObjectUrl(createdUrl);
+      } catch {
+        // Best-effort — falls back to the placeholder.
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (createdUrl) URL.revokeObjectURL(createdUrl);
+    };
+  }, [avatarUrl]);
+  return objectUrl;
 }
