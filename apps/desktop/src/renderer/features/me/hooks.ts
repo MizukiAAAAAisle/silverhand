@@ -147,7 +147,8 @@ export function useClearAvatar() {
  * `URL.createObjectURL`, and revoke when the URL changes or the
  * consumer unmounts.
  *
- * Multiple consumers (Settings + each chat MessageItem) call this hook
+ * Multiple consumers (SettingsPage + the active ChannelView, which
+ * passes the URL down to every chat MessageItem) call this hook
  * concurrently. React Query's `useViewerUser` cache already de-dupes
  * the dto fetch; the blob fetch itself is small and the browser's HTTP
  * cache handles repeats. If profile loading is null/registration_required,
