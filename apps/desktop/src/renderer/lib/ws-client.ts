@@ -30,7 +30,13 @@ interface ResumePosition {
   lastSeq: number;
 }
 
-class EventWsClient {
+/**
+ * @internal — exported for unit tests so they can construct a fresh
+ * client without sharing state with the module-level `eventWsClient`
+ * singleton. Production code should always use `eventWsClient` (or the
+ * top-level `subscribe*` helpers).
+ */
+export class EventWsClient {
   private ws: WebSocket | null = null;
   private status: WsClientStatus = 'idle';
   private reconnectAttempt = 0;
@@ -41,6 +47,24 @@ class EventWsClient {
   private readonly desiredScopes = new Map<string, number>();
   private readonly positions = new Map<string, ResumePosition>();
   private readonly confirmedScopes = new Set<string>();
+  /**
+   * Live `subscribeViewerScope()` handles. Each holds a deferred inner
+   * subscription that materialises against the canonical
+   * `viewer:{resolvedViewerId}` scope once the server's `authenticated`
+   * frame arrives. Keeping the indirection out of `subscribe()` itself
+   * means `desiredScopes` / `positions` / `confirmedScopes` only ever
+   * see the canonical key, so `resubscribeDesiredScopes()` naturally
+   * carries the viewer's last seq across reconnects.
+   */
+  private readonly viewerSubscribers = new Set<ViewerSubscriber>();
+  /**
+   * Server-resolved viewer id from the `authenticated` frame. Used by
+   * `getResolvedViewerScope()` so callers can match incoming events
+   * scoped to `viewer:{id}` without needing to know the id up front
+   * (clients subscribe via the `viewer:self` alias and the server
+   * canonicalizes both directions).
+   */
+  private resolvedViewerId: string | null = null;
 
   connect(): void {
     this.shouldReconnect = true;
@@ -67,6 +91,13 @@ class EventWsClient {
     const ws = this.ws;
     this.ws = null;
     this.confirmedScopes.clear();
+    this.resolvedViewerId = null;
+    // Detach viewer wrappers so desiredScopes/positions for the canonical
+    // `viewer:<id>` are released. They'll re-attach on the next connect()
+    // → authenticated cycle if the wrapper handle is still live.
+    for (const sub of Array.from(this.viewerSubscribers)) {
+      sub.detach();
+    }
     if (ws && ws.readyState !== WebSocket.CLOSED) {
       ws.close(1000, 'client_disconnect');
     }
@@ -99,6 +130,29 @@ class EventWsClient {
     };
   }
 
+  /**
+   * Subscribe to the resolved viewer's private scope. Returns a handle
+   * that immediately participates in refcounting on the canonical
+   * `viewer:{id}` scope when the viewer id is already resolved, and
+   * otherwise materialises on the next `authenticated` frame. The
+   * caller never sees the alias key — it stays an over-the-wire detail
+   * so `desiredScopes` / `positions` / `confirmedScopes` are
+   * canonical-only and reconnect resume frames can carry the viewer
+   * scope's last seq.
+   */
+  subscribeViewerScope(): WsScopeSubscription {
+    const sub = new ViewerSubscriber(this);
+    this.viewerSubscribers.add(sub);
+    this.connect();
+    sub.attach();
+    return {
+      unsubscribe: () => {
+        sub.detach();
+        this.viewerSubscribers.delete(sub);
+      },
+    };
+  }
+
   resume(scope: string, position: ResumePosition): void {
     this.positions.set(scope, position);
     this.sendResume({ [scope]: position });
@@ -117,6 +171,15 @@ class EventWsClient {
 
   getStatus(): WsClientStatus {
     return this.status;
+  }
+
+  /**
+   * The server-resolved viewer id from the most recent `authenticated`
+   * frame, or null while the connection is establishing. Returned by
+   * `getResolvedViewerScope()` and consumed by `isCurrentViewerScope()`.
+   */
+  getResolvedViewerId(): string | null {
+    return this.resolvedViewerId;
   }
 
   private async openSocket(): Promise<void> {
@@ -168,6 +231,16 @@ class EventWsClient {
     if (frame.type === 'authenticated') {
       this.reconnectAttempt = 0;
       this.confirmedScopes.clear();
+      this.resolvedViewerId = frame.viewerId;
+      // Attach viewer wrappers BEFORE status flips to 'connected'.
+      // `subscribe()` is then refcount-only (sendIfConnected gated on
+      // status==='connected' returns early), so the canonical viewer
+      // scope is added to desiredScopes silently and picked up by the
+      // single `resubscribeDesiredScopes()` pass below — no duplicate
+      // subscribe frames.
+      for (const sub of Array.from(this.viewerSubscribers)) {
+        sub.attach();
+      }
       this.setStatus('connected');
       this.resubscribeDesiredScopes();
     } else if (frame.type === 'ping') {
@@ -270,12 +343,86 @@ class EventWsClient {
 
 export const eventWsClient = new EventWsClient();
 
+/**
+ * Bridges `subscribeViewerScope()` to the canonical `viewer:{id}` key.
+ * Each handle owns at most one inner refcounted subscription. While
+ * the viewer id is unknown the wrapper is "detached" — `attach()` is
+ * a no-op until the next `authenticated` frame supplies the id, at
+ * which point the wrapper materialises an inner `subscribe(canonical)`.
+ *
+ * Idempotency:
+ * - `attach()` does nothing if already attached to the same canonical
+ *   scope. Calling it on every `authenticated` frame is safe.
+ * - `detach()` releases the inner refcount (decrement + possible
+ *   unsubscribe). Calling it twice is safe (second call sees
+ *   `inner === null`).
+ *
+ * The wrapper is not exported — callers receive a plain
+ * `WsScopeSubscription` from `subscribeViewerScope()`.
+ */
+class ViewerSubscriber {
+  private inner: WsScopeSubscription | null = null;
+  private currentScope: string | null = null;
+
+  constructor(private readonly client: EventWsClient) {}
+
+  attach(): void {
+    const id = this.client.getResolvedViewerId();
+    if (!id) return;
+    const scope = `viewer:${id}`;
+    if (this.currentScope === scope) return;
+    if (this.inner) this.inner.unsubscribe();
+    this.inner = this.client.subscribe(scope);
+    this.currentScope = scope;
+  }
+
+  detach(): void {
+    if (this.inner) this.inner.unsubscribe();
+    this.inner = null;
+    this.currentScope = null;
+  }
+}
+
 export function connectEventWs(): void {
   eventWsClient.connect();
 }
 
 export function subscribeWsScope(scope: SubscribeFrame['scope']): WsScopeSubscription {
   return eventWsClient.subscribe(scope);
+}
+
+/**
+ * Subscribe to the authenticated viewer's private scope. Internally
+ * keyed by the canonical `viewer:{resolvedViewerId}` once the server's
+ * `authenticated` frame supplies the id, so disconnects/reconnects
+ * resume against the same scope without losing events. The
+ * `viewer:self` alias is the on-the-wire form only — never written to
+ * the client's `desiredScopes` / `positions` maps. Pair with
+ * `isCurrentViewerScope()` for frame-level filtering.
+ */
+export function subscribeViewerScope(): WsScopeSubscription {
+  return eventWsClient.subscribeViewerScope();
+}
+
+/**
+ * On-the-wire alias the server canonicalises to
+ * `viewer:{resolvedViewerId}`. Exposed for documentation / tests; do
+ * not pass it to `subscribeWsScope()` directly — call
+ * `subscribeViewerScope()` so the client refcounts on the canonical
+ * key.
+ */
+export const VIEWER_SCOPE_ALIAS = 'viewer:self';
+
+/**
+ * True iff `scope` is the current viewer's resolved scope. Hooks call
+ * this on incoming `event`/`snapshot_required` frames so they don't
+ * need to hardcode the viewer's id (it's a random hex written by
+ * `POST /api/register`).
+ */
+export function isCurrentViewerScope(scope: string): boolean {
+  const resolved = eventWsClient.getResolvedViewerId();
+  if (!resolved) return false;
+  return scope === `viewer:${resolved}`;
 }
 
 export function onWsFrame(listener: WsClientListener): () => void {

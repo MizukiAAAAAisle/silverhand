@@ -53,7 +53,10 @@ export const CLI_INVOKE_ROUTES: readonly CliInvokeRoute[] = [
   { method: 'GET', suffix: 'list-workspaces', noun: 'workspace', verb: 'list' },
   // schedule
   { method: 'POST', suffix: 'schedules', noun: 'schedule', verb: 'create' },
-  { method: 'GET', suffix: 'schedules/list', noun: 'schedule', verb: 'list' },
+  // POST (not GET) — `schedules/list` posts a JSON filter body, mirrors
+  // `search-messages`/`read-history`. The drift-guard test below parses
+  // `routes.ts` to verify this method matches the actual registration.
+  { method: 'POST', suffix: 'schedules/list', noun: 'schedule', verb: 'list' },
   { method: 'POST', suffix: 'schedules/cancel', noun: 'schedule', verb: 'cancel' },
   // file
   { method: 'POST', suffix: 'attachments', noun: 'file', verb: 'upload' },

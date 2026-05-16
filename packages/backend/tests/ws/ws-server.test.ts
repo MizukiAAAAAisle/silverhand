@@ -275,7 +275,6 @@ describe('event WebSocket server', () => {
       mode: 'embedded',
       url: 'http://127.0.0.1:0',
       auth_token: 'c'.repeat(32),
-      user_id: null,
       refresh_token: null,
       child_sessions: {
         max_concurrent_per_parent: null,
@@ -290,6 +289,19 @@ describe('event WebSocket server', () => {
       silverhandCliLauncher: { command: 'true', args: [] },
       logger: { info() {}, warn() {}, error() {} },
     });
+
+    // Pre-ship rewrite: a fresh DB has no registered viewer, so the
+    // public WS auth handshake refuses with `auth_failed`. Register
+    // first to seed `app_settings.viewer_user_id`.
+    const regRes = await fetch(`${runningBackend.url}/api/register`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${config.auth_token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ name: 'shiki' }),
+    });
+    expect(regRes.status).toBe(200);
 
     const { ws } = await connectAuthenticated(
       runningBackend.url.replace(/^http:/, 'ws:') + EVENT_WS_PATH,

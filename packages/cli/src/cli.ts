@@ -79,6 +79,21 @@ async function main(argv: string[]): Promise<number> {
   traceCtx.verb = verb;
   const cmd = findCommand(noun, verb);
   if (!cmd) {
+    // Removed-verb migration hint takes priority over the generic
+    // `unknown verb` line. Without this, agents who type
+    // `silverhand message read` (extremely common — every IM CLI in
+    // their training data uses `read`) get a typo error and try
+    // another guess; the hint redirects them to `history` directly.
+    const removed = group.removedVerbs?.[verb];
+    if (removed) {
+      throw new CliError({
+        code: 'validation_error',
+        subkind: 'verb_removed',
+        message: `silverhand ${noun} ${verb} is not a verb; ${removed.hint}`,
+        retriable: false,
+        details: { noun, verb, replacement: removed.replacement },
+      });
+    }
     throw new CliError({
       code: 'validation_error',
       message: `unknown verb "${verb}" under noun "${noun}"; run \`silverhand ${noun} --help\``,

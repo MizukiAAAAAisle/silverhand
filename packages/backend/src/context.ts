@@ -8,6 +8,7 @@ import type { ConversationMessageService } from './services/conversation-message
 import type { ScheduleService } from './services/schedule-service.js';
 import type { TaskService } from './services/task-service.js';
 import type { ThreadService } from './services/thread-service.js';
+import type { UserService } from './services/user-service.js';
 import type { BlobFileStorage } from './storage/blob-file-storage.js';
 import type { AgentTokenStore } from './auth/agent-token-store.js';
 
@@ -69,6 +70,9 @@ export interface BackendContext {
   /** Application layer over `blobStorage` that knows about channels,
    *  threads, message snapshots, and access policy. */
   attachmentService: AttachmentService;
+  /** Application layer that owns user profile reads / updates / avatar
+   *  blob lifecycle. Backed by `UserRepo` + `BlobFileStorage`. */
+  userService: UserService;
   /** Application layer that owns channel create / pin / unpin side effects. */
   channelService: ChannelService;
   /** Application layer that owns user/agent send-message side effects. */

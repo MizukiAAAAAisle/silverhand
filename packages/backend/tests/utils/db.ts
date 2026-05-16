@@ -10,13 +10,76 @@ import type { Database as Db } from 'better-sqlite3';
  * host (matches what `startBackend` does). Tests get a fresh DB per
  * call so they're independent.
  *
- * Caller can `.close()` when done; tests rarely need to since vitest
- * reaps process state between files.
+ * Production identity model (post pre-ship rewrite): the `users` table
+ * is empty after migrations and `app_settings.viewer_user_id` is unset.
+ * The renderer hits the registration gate; tests would have to call
+ * `POST /api/register` for every test.
+ *
+ * Test fixture compatibility: 50+ pre-rewrite route tests assume a
+ * registered viewer with id `'local'` and rely on the principal
+ * middleware resolving without an explicit header. To keep them
+ * working without per-test registration calls, this helper INSERTs a
+ * fixed set of **test fixture registered users** (NOT a product
+ * fallback) and points `app_settings.viewer_user_id` at the `'local'`
+ * row. Tests that need to exercise the registration-required state
+ * should use a fresh DB without calling this helper, or wipe
+ * `app_settings.viewer_user_id` explicitly afterwards.
  */
-export function openTestDb(): { db: Db; localHostId: string } {
+export function openTestDb(): {
+  db: Db;
+  localHostId: string;
+  /** The viewer id resolved by the principal middleware in this
+   *  fixture. Always `'local'` — the test fixture registered user. */
+  viewerUserId: string;
+  /** Legacy fixture user id used by pre-PR1 tests. Always `'local'`. */
+  legacyTestUserId: string;
+} {
   const db = openDatabase(':memory:');
   const local = new HostRepo(db).ensureLocal();
-  return { db, localHostId: local.id };
+
+  // Insert test fixture registered users. These are NOT auto-seeded
+  // by the migration (the post-rewrite migration leaves `users`
+  // empty); they are inserted here purely to keep pre-rewrite route
+  // tests compatible. Names end in `-test` so they cannot collide
+  // with `agents.name` rows via the cross-namespace uniqueness
+  // trigger. The id literal `'local'` is reserved as the primary
+  // viewer for these tests.
+  const now = Date.now();
+  const fixtureUsers: Array<{ id: string; name: string; display: string }> = [
+    { id: 'local', name: 'local-test', display: 'Local Test User' },
+    { id: 'alice', name: 'alice-test', display: 'Alice Test User' },
+    { id: 'bob', name: 'bob-test', display: 'Bob Test User' },
+    { id: 'carol', name: 'carol-test', display: 'Carol Test User' },
+    { id: 'teammate', name: 'teammate-test', display: 'Teammate' },
+    { id: 'other', name: 'other-test', display: 'Other Test User' },
+    { id: 'someone', name: 'someone-test', display: 'Someone' },
+    { id: 'someone-else', name: 'someone-else-test', display: 'Someone Else' },
+  ];
+  const insertUser = db.prepare(
+    `INSERT INTO users (id, name, display_name, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?)`,
+  );
+  for (const u of fixtureUsers) {
+    insertUser.run(u.id, u.name, u.display, now, now);
+  }
+
+  // Point the viewer pointer at the 'local' fixture row so the
+  // principal middleware (which falls back to
+  // `app_settings.viewer_user_id` when no header is supplied)
+  // resolves the legacy id pre-rewrite tests expect. Production
+  // never sees this — `app_settings.viewer_user_id` is written only
+  // by `POST /api/register`.
+  db.prepare(
+    `INSERT INTO app_settings (key, value) VALUES ('viewer_user_id', 'local')
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+  ).run();
+
+  return {
+    db,
+    localHostId: local.id,
+    viewerUserId: 'local',
+    legacyTestUserId: 'local',
+  };
 }
 
 /**

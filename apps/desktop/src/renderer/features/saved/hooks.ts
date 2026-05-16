@@ -7,7 +7,7 @@ import {
 import { useEffect } from 'react';
 import type { SavedMessageDto } from '@silverhand/shared';
 import { api } from '@/lib/api';
-import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
+import { onWsFrame, subscribeViewerScope, isCurrentViewerScope } from '@/lib/ws-client';
 
 const savedKey = ['saved'] as const;
 const savedInvalidationTimers = new WeakMap<
@@ -28,18 +28,18 @@ function invalidateSavedDebounced(qc: QueryClient): void {
 /**
  * Returns the global flat saved-message list. The API ships everything
  * pre-joined (channel/conversation/agent names + full message body).
- * Invalidated by WS `viewer:local` `saved_changed` events so the list
+ * Invalidated by WS viewer-scoped `saved_changed` events so the list
  * stays in sync without polling.
  */
 export function useSavedMessages() {
   const qc = useQueryClient();
 
   useEffect(() => {
-    const sub = subscribeWsScope('viewer:local');
+    const sub = subscribeViewerScope();
     const unsub = onWsFrame(frame => {
-      if (frame.type === 'event' && frame.scope === 'viewer:local' && frame.kind === 'saved_changed') {
+      if (frame.type === 'event' && isCurrentViewerScope(frame.scope) && frame.kind === 'saved_changed') {
         invalidateSavedDebounced(qc);
-      } else if (frame.type === 'snapshot_required' && frame.scope === 'viewer:local') {
+      } else if (frame.type === 'snapshot_required' && isCurrentViewerScope(frame.scope)) {
         invalidateSavedDebounced(qc);
       }
     });

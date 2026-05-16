@@ -32,6 +32,8 @@ import {
   SendMessageInputSchema,
   UnclaimTaskInputSchema,
   UpdateAgentInputSchema,
+  UpdateUserProfileInputSchema,
+  RegisterUserInputSchema,
   UpdateWorkspaceInputSchema,
   ArchiveWorkspaceInputSchema,
   ArchiveChannelInputSchema,
@@ -100,12 +102,14 @@ import {
   ScheduleError,
   type ScheduleErrorCode,
 } from './services/schedule-service.js';
+import { UserServiceError } from './services/user-service.js';
 import {
   type AppEnv,
   getAgentPrincipal,
   getUserPrincipal,
   installInternalPrincipalMiddleware,
   installPublicPrincipalMiddleware,
+  installRequireRegisteredViewerMiddleware,
 } from './auth/principal.js';
 import { installPublicBearerMiddleware } from './auth/bearer.js';
 import {
@@ -232,9 +236,8 @@ function threadServiceErrorResponse(c: Context, err: unknown): Response | null {
   return null;
 }
 
-function resolveViewerUserId(c: Context, ctx: BackendContext): string | null {
-  const user = getUserPrincipal(c);
-  return user.userId || ctx.serverConfig.user_id || null;
+function resolveViewerUserId(c: Context): string {
+  return getUserPrincipal(c).userId;
 }
 
 const scheduleErrorStatusMap: Record<ScheduleErrorCode, 400 | 403 | 404 | 409 | 429> = {
@@ -260,12 +263,35 @@ function scheduleServiceErrorResponse(c: Context, err: unknown): Response | null
   return null;
 }
 
-function requireViewerUserId(c: Context, ctx: BackendContext): string | Response {
-  const viewerUserId = resolveViewerUserId(c, ctx);
-  if (!viewerUserId) {
-    return c.json({ error: 'viewer user id required' }, 400);
+function requireViewerUserId(c: Context): string {
+  return resolveViewerUserId(c);
+}
+
+const userServiceErrorStatusMap: Partial<
+  Record<UserServiceError['code'], 400 | 404 | 409 | 413 | 415>
+> = {
+  user_not_found: 404,
+  name_taken: 409,
+  already_registered: 409,
+  invalid_input: 400,
+  avatar_missing: 400,
+  avatar_too_large: 413,
+  avatar_unsupported_type: 415,
+  avatar_storage_failed: 400,
+};
+
+function userServiceErrorStatus(err: unknown): 400 | 404 | 409 | 413 | 415 | null {
+  if (err instanceof UserServiceError) {
+    return userServiceErrorStatusMap[err.code] ?? 400;
   }
-  return viewerUserId;
+  return null;
+}
+
+function userServiceErrorBody(err: unknown): { error: string; code: string } {
+  if (err instanceof UserServiceError) {
+    return { error: err.message, code: err.code };
+  }
+  return { error: String(err), code: 'unknown_error' };
 }
 
 function onboardingBody(
@@ -413,6 +439,20 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     allowlist: [apiPaths.health],
   });
   installPublicPrincipalMiddleware(app, ctx);
+  // Registration gate: when no viewer is registered yet (no
+  // `app_settings.viewer_user_id`), the principal middleware sets no
+  // principal and this gate refuses every public route except
+  // `GET /api/me` (so the renderer can branch on the
+  // registration-required shape) and `POST /api/register` (the sole
+  // creator of `users` rows). `/api/health` and `/internal/*` are
+  // anonymous / agent-principal and skip both layers. After
+  // registration, the principal is set and the gate is a no-op for the
+  // viewer; under DB corruption (principal set but row missing) it 500s.
+  // Renderer-side `App.tsx` mirrors this by mounting `<RegistrationGate />`
+  // instead of the AppShell while in the registration-required state.
+  installRequireRegisteredViewerMiddleware(app, ctx, {
+    whitelistPaths: [apiPaths.me, apiPaths.register],
+  });
   const hosts = new HostRepo(ctx.db);
   const agents = new AgentRepo(ctx.db);
   const workspaces = new WorkspaceRepo(ctx.db, { workspacesRoot: ctx.workspacesRoot });
@@ -971,8 +1011,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!canViewWorkspace(ctx, getUserPrincipal(c), workspace.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
-    const viewerUserId = requireViewerUserId(c, ctx);
-    if (typeof viewerUserId !== 'string') return viewerUserId;
+    const viewerUserId = requireViewerUserId(c);
     const unread = timedRouteSpan(
       ctx,
       'workspace.message_unread.counts',
@@ -991,8 +1030,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   });
 
   app.get(apiPaths.messageUnreadSummary, c => {
-    const viewerUserId = requireViewerUserId(c, ctx);
-    if (typeof viewerUserId !== 'string') return viewerUserId;
+    const viewerUserId = requireViewerUserId(c);
     if (!canViewOwnedState(ctx, getUserPrincipal(c), viewerUserId)) {
       return c.json({ error: 'forbidden' }, 403);
     }
@@ -1016,8 +1054,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!canViewConversation(ctx, getUserPrincipal(c), channel.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
-    const viewerUserId = requireViewerUserId(c, ctx);
-    if (typeof viewerUserId !== 'string') return viewerUserId;
+    const viewerUserId = requireViewerUserId(c);
     if (!canViewOwnedState(ctx, getUserPrincipal(c), viewerUserId)) {
       return c.json({ error: 'forbidden' }, 403);
     }
@@ -1409,8 +1446,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!id) return c.json({ error: 'channel id required' }, 400);
     const channel = conversations.getChannelLike(id);
     if (!channel) return c.json({ error: 'channel not found' }, 404);
-    const viewerUserId = requireViewerUserId(c, ctx);
-    if (typeof viewerUserId !== 'string') return viewerUserId;
+    const viewerUserId = requireViewerUserId(c);
     if (!canPostToConversation(ctx, getUserPrincipal(c), channel.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
@@ -1422,8 +1458,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!id) return c.json({ error: 'thread id required' }, 400);
     const thread = conversations.getThread(id);
     if (!thread) return c.json({ error: 'thread not found' }, 404);
-    const viewerUserId = requireViewerUserId(c, ctx);
-    if (typeof viewerUserId !== 'string') return viewerUserId;
+    const viewerUserId = requireViewerUserId(c);
     if (!canPostToConversation(ctx, getUserPrincipal(c), thread.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
@@ -1433,8 +1468,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   app.get(apiPaths.attachment(':id'), async c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'attachment id required' }, 400);
-    const viewerUserId = requireViewerUserId(c, ctx);
-    if (typeof viewerUserId !== 'string') return viewerUserId;
+    const viewerUserId = requireViewerUserId(c);
     const principal = getUserPrincipal(c);
     const response = await ctx.attachmentService.serveForViewer(id, row =>
       canViewAttachment(ctx, principal, row),
@@ -1446,8 +1480,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   app.delete(apiPaths.attachment(':id'), async c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'attachment id required' }, 400);
-    const viewerUserId = requireViewerUserId(c, ctx);
-    if (typeof viewerUserId !== 'string') return viewerUserId;
+    const viewerUserId = requireViewerUserId(c);
     const attachment = attachments.getById(id);
     if (!attachment) return c.json({ error: 'attachment not found' }, 404);
     if (!canDeleteAttachment(ctx, getUserPrincipal(c), attachment)) {
@@ -1476,8 +1509,15 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!id) return c.json({ error: 'message id required' }, 400);
     const row = saved.save(id);
     if (!row) return c.json({ error: 'message not found' }, 404);
-    // Notify viewer so the saved list invalidates without polling.
-    ctx.events.publishToScope('viewer:local', 'saved_changed', { message_id: id, action: 'save' });
+    // Notify the resolved viewer's private scope so the saved list
+    // invalidates without polling. Pre-PR1 this was 'viewer:local';
+    // routes now resolve the current viewer principal.
+    const viewerUserId = requireViewerUserId(c);
+    ctx.events.publishToScope(
+      `viewer:${viewerUserId}`,
+      'saved_changed',
+      { message_id: id, action: 'save' },
+    );
     return c.json({ saved: row }, 201);
   });
 
@@ -1485,8 +1525,12 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'message id required' }, 400);
     saved.remove(id);
-    // Notify viewer so the saved list invalidates without polling.
-    ctx.events.publishToScope('viewer:local', 'saved_changed', { message_id: id, action: 'unsave' });
+    const viewerUserId = requireViewerUserId(c);
+    ctx.events.publishToScope(
+      `viewer:${viewerUserId}`,
+      'saved_changed',
+      { message_id: id, action: 'unsave' },
+    );
     return c.body(null, 204);
   });
 
@@ -1495,7 +1539,15 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       Object.fromEntries(new URL(c.req.url).searchParams.entries()),
     );
     if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
-    const results = search.search(parsed.data);
+    // Legacy `messages.from_user_id IS NULL` rows predate the principal
+    // middleware. The renderer treats them as authored by the current
+    // viewer, so when the search filter targets the viewer we widen the
+    // SQL to include NULLs. Done here (not in the repo) so SearchRepo
+    // stays a pure SQL adapter without an implicit settings lookup.
+    const viewerUserId = requireViewerUserId(c);
+    const includeNullAuthor =
+      parsed.data.user_id !== undefined && parsed.data.user_id === viewerUserId;
+    const results = search.search(parsed.data, { includeNullAuthor });
     return c.json({ query: parsed.data, results });
   });
 
@@ -1581,8 +1633,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     conversationId: string,
     c: Context,
   ): Promise<Response> {
-    const viewerUserId = requireViewerUserId(c, ctx);
-    if (typeof viewerUserId !== 'string') return viewerUserId;
+    const viewerUserId = requireViewerUserId(c);
     if (!canViewOwnedState(ctx, getUserPrincipal(c), viewerUserId)) {
       return c.json({ error: 'forbidden' }, 403);
     }
@@ -1847,12 +1898,12 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     try {
       const schedule = ctx.scheduleService.cancel(scheduleId, agent.id);
       // Audit hook (no separate audit infra in v1 — single-host model
-      // means logger is the audit trail). Resolve viewer via the same
-      // helper user routes use, so the principal header (`user:local`
-      // from desktop) wins over a possibly-null `serverConfig.user_id`.
+      // means logger is the audit trail). Resolves the viewer via the
+      // public principal middleware: an explicit principal header wins
+      // over the registered `app_settings.viewer_user_id` lookup.
       ctx.logger.info(
         {
-          user_id: resolveViewerUserId(c, ctx),
+          user_id: resolveViewerUserId(c),
           agent_id: agent.id,
           schedule_id: scheduleId,
         },
@@ -2088,6 +2139,146 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     return c.json({ settings: settings.all() });
   });
 
+  // ── Current viewer (user profile) ────────────────────────────────
+  // GET /api/me is the renderer's first read on boot. It's whitelisted
+  // by the registration gate so it works *before* `POST /api/register`
+  // — in that state it returns `{ registration_required: true,
+  // suggested_name }` so the renderer can mount `<RegistrationGate />`.
+  // Once the viewer is registered the principal middleware sets a
+  // user principal and this returns the resolved UserDto.
+  //
+  // Boundary contract:
+  //   - POST /api/register is the SOLE creator of `users` rows. Called
+  //     once per machine in V1 (per signup in V2); 409 on a second
+  //     call. Whitelisted by the gate so the renderer can reach it
+  //     pre-registration.
+  //   - PATCH /api/me only accepts `display_name`. Renaming is not
+  //     exposed at any service / route surface.
+  //   - Avatar lives on its own routes (POST/DELETE /api/me/avatar)
+  app.get(apiPaths.me, c => {
+    // Whitelisted route — principal may be absent in the
+    // registration-required state. Branch on its presence rather than
+    // calling `requireViewerUserId` (which throws).
+    const principal = c.get('principal');
+    if (!principal || principal.kind !== 'user') {
+      return c.json({
+        registration_required: true,
+        suggested_name: ctx.userService.suggestRegistrationName(),
+      });
+    }
+    const dto = ctx.userService.getDto(principal.userId);
+    if (!dto) {
+      // Principal middleware just validated this; corruption only.
+      return c.json({ error: 'viewer user is missing post-validation' }, 500);
+    }
+    return c.json(dto);
+  });
+
+  app.post(apiPaths.register, async c => {
+    // Whitelisted route — also runs in the registration-required state.
+    // Service layer is the source of truth for "already registered"
+    // (it checks `app_settings.viewer_user_id`); we don't need a
+    // principal here.
+    const body = await c.req.json().catch(() => null);
+    const parsed = RegisterUserInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json(
+        { error: parsed.error.errors[0]?.message ?? 'invalid input' },
+        400,
+      );
+    }
+    try {
+      const dto = ctx.userService.register(parsed.data);
+      return c.json(dto);
+    } catch (err) {
+      const status = userServiceErrorStatus(err);
+      if (status) return c.json(userServiceErrorBody(err), status);
+      throw err;
+    }
+  });
+  //     so we have a single binary upload path the renderer can call
+  //     after registration succeeds.
+  //
+  // V2 multi-user keeps the same endpoints — only the principal
+  // resolution moves from `app_settings` to session/token claims, and
+  // the registration call lands after auth signup instead of on
+  // first launch.
+
+  app.patch(apiPaths.me, async c => {
+    const viewerUserId = requireViewerUserId(c);
+    const body = await c.req.json().catch(() => null);
+    const parsed = UpdateUserProfileInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json(
+        { error: parsed.error.errors[0]?.message ?? 'invalid input' },
+        400,
+      );
+    }
+    try {
+      const dto = ctx.userService.updateProfile(viewerUserId, parsed.data);
+      return c.json(dto);
+    } catch (err) {
+      const status = userServiceErrorStatus(err);
+      if (status) return c.json(userServiceErrorBody(err), status);
+      throw err;
+    }
+  });
+
+  app.post(apiPaths.meAvatar, async c => {
+    const viewerUserId = requireViewerUserId(c);
+    let form: FormData;
+    try {
+      form = await c.req.formData();
+    } catch {
+      return c.json({ error: 'multipart/form-data required' }, 400);
+    }
+    const file = form.get('file');
+    if (!(file instanceof File)) {
+      return c.json({ error: 'file field required' }, 400);
+    }
+    const buffer = Buffer.from(await file.arrayBuffer());
+    try {
+      const dto = await ctx.userService.uploadAvatar(viewerUserId, {
+        buffer,
+        contentType: file.type || 'application/octet-stream',
+        filename: file.name || 'avatar',
+      });
+      return c.json({ avatar_url: dto.avatar_url, user: dto });
+    } catch (err) {
+      const status = userServiceErrorStatus(err);
+      if (status) return c.json(userServiceErrorBody(err), status);
+      throw err;
+    }
+  });
+
+  app.delete(apiPaths.meAvatar, async c => {
+    const viewerUserId = requireViewerUserId(c);
+    try {
+      const dto = await ctx.userService.clearAvatar(viewerUserId);
+      return c.json(dto);
+    } catch (err) {
+      const status = userServiceErrorStatus(err);
+      if (status) return c.json(userServiceErrorBody(err), status);
+      throw err;
+    }
+  });
+
+  // Public-by-id avatar fetch. The renderer never assembles storage
+  // keys; it just GETs this URL with the standard auth headers and
+  // turns the bytes into an object URL (mirrors the attachment
+  // download pattern). Any logged-in viewer can fetch any user's
+  // avatar — there is no hidden-profile concept in V1.
+  app.get(apiPaths.userAvatar(':id'), async c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'user id required' }, 400);
+    const ref = ctx.userService.getAvatarStorageRef(id);
+    if (!ref) return c.json({ error: 'avatar not found' }, 404);
+    return ctx.blobStorage.serve(
+      { storage: ctx.blobStorage.kind, storageKey: ref.storageKey },
+      { contentType: ref.contentType, filename: ref.filename },
+    );
+  });
+
   // ── Notifications ────────────────────────────────────────────────
   // v1 single-user. user_id is always NULL on writes; reads filter on
   // `user_id IS NULL` (see NotificationRepo.list). Multi-user migration
@@ -2158,10 +2349,15 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       // Unreachable thanks to the schema refine, but TS doesn't narrow.
       return c.json({ error: 'invalid input' }, 400);
     }
-    // Push viewer:local only when unread notification counters changed.
-    // v1 single-user: userId='local'.
+    // Push to the resolved viewer's private scope only when unread
+    // notification counters changed.
     if (marked > 0) {
-      ctx.events.publishToScope('viewer:local', 'unread_updated', { marked });
+      const viewerUserId = requireViewerUserId(c);
+      ctx.events.publishToScope(
+        `viewer:${viewerUserId}`,
+        'unread_updated',
+        { marked },
+      );
     }
     return c.json({ marked });
   });
@@ -2912,7 +3108,7 @@ function buildAgentSearchMessagesDto(
 function publishUnreadUpdated(
   ctx: BackendContext,
   conversationId: string,
-  viewerUserId = 'local',
+  viewerUserId: string,
 ): void {
   ctx.events.publishToScope(`viewer:${viewerUserId}`, 'unread_updated', {
     conversation_id: conversationId,

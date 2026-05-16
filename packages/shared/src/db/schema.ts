@@ -86,6 +86,22 @@ export interface AgentRow {
   updated_at: number;
 }
 
+export interface UserRow {
+  id: string;
+  /** Mention name. Decided once at registration (V1 first launch / V2
+   *  signup) and never editable after — no rename endpoint, no service
+   *  method. Globally unique across `users.name` ⊕ `agents.name` — see
+   *  migration v21 cross-namespace uniqueness triggers. */
+  name: string;
+  display_name: string;
+  /** Storage key inside the configured BlobFileStorage; NULL when no
+   *  avatar is set. Coupled with `avatar_content_type` via CHECK. */
+  avatar_storage_key: string | null;
+  avatar_content_type: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
 export interface WorkspaceRow {
   id: string;
   name: string;

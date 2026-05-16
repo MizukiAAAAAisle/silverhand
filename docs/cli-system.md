@@ -176,7 +176,16 @@ Current `subkind` values (CLI-side enum is the source of truth):
 - `flag_removed` — a flag the command used to accept (or, for
   `silverhand message send`, a flag agents commonly reach for —
   `--text` / `--message` — that is intercepted with the same
-  stdin-template hint as the legacy `--content`).
+  stdin-template hint as the legacy `--content`). For `silverhand
+  task create`, supplying `--message` redirects the agent to the
+  canonical `--title` / `--body` shape (`details.replacement =
+  'title+body'`).
+- `verb_removed` — the noun is valid but the verb is one we
+  intercept with a migration hint instead of the generic `unknown
+  verb` line. Example: `silverhand message read` → use
+  `silverhand message history` for an anchored window read or
+  `silverhand message search` for full-text. `details` carries
+  `{noun, verb, replacement}`.
 - `unknown_flag` — flag name not declared by the command. `details`
   carries `{flag, suggestion?, other_unknown?}` for did-you-mean
   surfacing in trace aggregations.
@@ -287,11 +296,16 @@ The backend writes three categorized JSONL logs under
   `/internal/conversations/:cid/agents/:aid/...` route. Emitted by the
   Hono middleware in
   `packages/backend/src/observability/cli-invoke-middleware.ts`. Fields:
-  `{ts, level, category, request_id, cid, aid, noun, verb, method, route_suffix, query_keys, http_status, duration_ms, status, error_code?}`.
+  `{ts, level, category, request_id, cid, aid, noun, verb, method, route_suffix, query_keys, http_status, duration_ms, status, error_code?, error_issues?}`.
   `route_suffix` is the *matched route pattern* — never the raw URL
   path — so wildcard segments like `attachments/<id>/locate` collapse
   to `attachments/*/locate` and ids never leak. The `query_keys` array
   is the *sorted set of query-string keys* — values are never recorded.
+  `error_issues` is the privacy-safe summary of zod schema-validation
+  failures: an array of `{path, code}` (e.g.
+  `[{path: 'every_seconds', code: 'too_small'}]`) — *never* `received`,
+  `minimum`, or `message`, since those can carry user-supplied values.
+  Capped at 16 entries per line.
 - `cli.preflight_failure` — one line per CLI invocation that errors
   out before reaching any business route (`unknown noun`, strict-flag
   rejection, removed-flag use, dispatcher hard-guard rejection,

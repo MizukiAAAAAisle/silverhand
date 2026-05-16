@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Silverhand — Create your account</title>
+<style>
+  /* ───────────────────────── tokens ─────────────────────────
+     Pulled from the existing Silverhand "nature" palette so the
+     gate sits visually inside the app, not as a separate brand
+     surface. Keep the variable names aligned with global.css so
+     a future implementer can drop them straight in.            */
+  :root {
+    --bg: #eef1ed;
+    --surface: #fbfcfa;
+    --surface-muted: #f4f6f2;
+    --ink: #171a16;
+    --ink-soft: #4d544b;
+    --ink-muted: #818879;
+    --line: #d8ded5;
+    --line-strong: #b7c0b1;
+    --accent: #28614a;
+    --accent-strong: #1f4d3a;
+    --accent-soft: #dcebe3;
+    --warning: #8a5b12;
+    --warning-soft: #f4e7c8;
+    --shadow: 0 18px 60px rgba(27, 37, 31, 0.10);
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
+            "PingFang SC", sans-serif;
+    --mono: "JetBrains Mono", "SF Mono", Menlo, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    min-height: 100%;
+    background: var(--bg);
+    font-family: var(--font);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ─────────── full-screen takeover (no app shell behind) ─────────── */
+  .gate {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 56px 24px;
+  }
+
+  .card {
+    width: min(100%, 420px);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+    padding: 28px 26px 24px;
+  }
+
+  /* ─────────── tiny brand mark + title block ─────────── */
+  .head {
+    display: grid;
+    gap: 10px;
+    margin-bottom: 22px;
+  }
+  .mark {
+    width: 26px;
+    height: 26px;
+    border: 1px solid var(--line-strong);
+    background: var(--surface);
+    display: grid;
+    place-items: center;
+    border-radius: 7px;
+  }
+  .mark::before {
+    content: "";
+    width: 11px;
+    height: 11px;
+    border: 2px solid var(--accent);
+    border-left-color: transparent;
+    transform: rotate(-28deg);
+  }
+  h1 {
+    margin: 0;
+    font-size: 19px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    line-height: 1.25;
+  }
+  .head .sub {
+    margin: 0;
+    color: var(--ink-muted);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  /* ─────────── form grid ─────────── */
+  form {
+    display: grid;
+    gap: 16px;
+  }
+
+  .field { display: grid; gap: 6px; }
+  .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  label {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--ink-soft);
+    letter-spacing: 0.01em;
+  }
+  .badge {
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    background: var(--warning-soft);
+    color: var(--warning);
+  }
+  .control {
+    display: flex;
+    align-items: stretch;
+    border: 1px solid var(--line-strong);
+    border-radius: 7px;
+    background: #fff;
+    min-height: 38px;
+    overflow: hidden;
+  }
+  .prefix {
+    width: 32px;
+    display: grid;
+    place-items: center;
+    border-right: 1px solid var(--line);
+    background: var(--surface-muted);
+    color: var(--accent);
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+  input {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    padding: 0 11px;
+    font: 14px/1 var(--font);
+    color: var(--ink);
+    background: transparent;
+  }
+  input::selection { background: var(--accent-soft); }
+  .hint {
+    color: var(--ink-muted);
+    font-size: 11.5px;
+    line-height: 1.45;
+  }
+
+  /* ─────────── avatar row (compact, no big drag-zone) ─────────── */
+  .avatar-row {
+    display: grid;
+    grid-template-columns: 38px 1fr auto;
+    align-items: center;
+    gap: 11px;
+    padding: 8px 9px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: var(--surface-muted);
+  }
+  .avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 800;
+    font-size: 13px;
+    border: 1px solid rgba(40, 97, 74, 0.18);
+  }
+  .avatar-copy {
+    display: grid;
+    gap: 1px;
+    min-width: 0;
+  }
+  .avatar-copy strong {
+    font-size: 12px;
+    color: var(--ink);
+  }
+  .avatar-copy span {
+    font-size: 11px;
+    color: var(--ink-muted);
+    line-height: 1.35;
+  }
+  .ghost {
+    height: 28px;
+    border: 1px solid var(--line-strong);
+    background: #fff;
+    color: var(--ink-soft);
+    border-radius: 5px;
+    padding: 0 9px;
+    font: 700 11.5px/1 var(--font);
+  }
+
+  /* ─────────── confirm row + fineprint ─────────── */
+  .primary {
+    margin-top: 4px;
+    width: 100%;
+    min-height: 40px;
+    border: 1px solid var(--accent-strong);
+    background: var(--accent);
+    color: #fff;
+    border-radius: 7px;
+    font: 700 13.5px/1 var(--font);
+    cursor: default;
+    box-shadow: 0 1px 0 rgba(255,255,255,0.28) inset,
+                0 8px 18px rgba(40, 97, 74, 0.16);
+  }
+  .fineprint {
+    margin: 12px 0 0;
+    text-align: center;
+    color: var(--ink-muted);
+    font-size: 11px;
+    line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+  <main class="gate">
+    <div class="card">
+      <header class="head">
+        <span class="mark" aria-hidden="true"></span>
+        <h1>Create your account</h1>
+        <p class="sub">
+          Pick a name. Display name and avatar can be edited later;
+          the name is permanent.
+        </p>
+      </header>
+
+      <form>
+        <!-- 1. Name. The single permanent field.
+             Auto-focused + select-all on mount; Enter submits. -->
+        <div class="field">
+          <div class="row">
+            <label for="name">Name</label>
+            <span class="badge">Permanent</span>
+          </div>
+          <div class="control">
+            <span class="prefix">@</span>
+            <input id="name" value="user-0ea0b897" autofocus />
+          </div>
+          <div class="hint">Used for @mentions across messages, prompts, and search.</div>
+        </div>
+
+        <!-- 2. Display name. Optional default; editable in Profile later. -->
+        <div class="field">
+          <div class="row">
+            <label for="display-name">Display name</label>
+          </div>
+          <div class="control">
+            <input id="display-name" value="You" />
+          </div>
+        </div>
+
+        <!-- 3. Avatar. Local-preview only; uploaded after identity is confirmed. -->
+        <div class="field">
+          <div class="row">
+            <label>Avatar</label>
+          </div>
+          <div class="avatar-row">
+            <div class="avatar" aria-hidden="true">Y</div>
+            <div class="avatar-copy">
+              <strong>Optional</strong>
+              <span>Uploads after identity is confirmed.</span>
+            </div>
+            <button type="button" class="ghost">Choose</button>
+          </div>
+        </div>
+
+        <button type="button" class="primary">Confirm</button>
+      </form>
+
+      <p class="fineprint">
+        The name is permanent and cannot be changed later. ⌘Q quits Silverhand.
+      </p>
+    </div>
+  </main>
+</body>
+</html>

@@ -19,8 +19,8 @@ import type {
 } from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
 import { api } from '@/lib/api';
-import { CURRENT_USER_ID } from '@/lib/current-user';
-import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
+import { getCurrentUserId } from '@/lib/current-user';
+import { onWsFrame, subscribeViewerScope, isCurrentViewerScope } from '@/lib/ws-client';
 import {
   AGENT_RUN_STATES_GC_MS,
   agentRunStatesKey,
@@ -383,7 +383,7 @@ export function useSendMessage(
         conversation_id: channelId,
         from_kind: 'user',
         from_agent_id: null,
-        from_user_id: CURRENT_USER_ID,
+        from_user_id: getCurrentUserId(),
         content: input.content,
         metadata: null,
         attachments: snapshots,
@@ -561,7 +561,7 @@ export function useAgentRunStates(
 
 /**
  * Notification-backed unread counts per channel. Invalidated by WS
- * `viewer:local` `unread_updated` events — no polling.
+ * viewer-scoped `unread_updated` events — no polling.
  *
  * @deprecated Backed by the notification system (mention_external /
  * agent_start_failed only). Use useMessageUnreadCounts for IM-style
@@ -573,10 +573,10 @@ export function useChannelUnreadCounts(workspaceId: string | null) {
 
   useEffect(() => {
     if (!workspaceId) return;
-    const sub = subscribeWsScope('viewer:local');
+    const sub = subscribeViewerScope();
     const unsub = onWsFrame(frame => {
       if (frame.type !== 'event') return;
-      if (frame.scope !== 'viewer:local') return;
+      if (!isCurrentViewerScope(frame.scope)) return;
       if (frame.kind === 'unread_updated' && isMessageUnreadUpdatedPayload(frame.payload)) {
         return;
       }
@@ -601,7 +601,7 @@ export function useChannelUnreadCounts(workspaceId: string | null) {
 /**
  * Per-channel message unread counts for the channels sidebar badge.
  * Backed by the conversation_reads cursor system. Invalidated by WS
- * `viewer:local` `unread_updated` events — no polling.
+ * viewer-scoped `unread_updated` events — no polling.
  */
 export function useMessageUnreadCounts(
   workspaceId: string | null,
@@ -612,15 +612,15 @@ export function useMessageUnreadCounts(
 
   useEffect(() => {
     if (!workspaceId) return;
-    const sub = subscribeWsScope('viewer:local');
+    const sub = subscribeViewerScope();
     const unsub = onWsFrame(frame => {
       if (frame.type === 'snapshot_required') {
-        if (frame.scope !== 'viewer:local') return;
+        if (!isCurrentViewerScope(frame.scope)) return;
         invalidateMessageUnreadQueries(qc);
         return;
       }
       if (frame.type !== 'event') return;
-      if (frame.scope !== 'viewer:local') return;
+      if (!isCurrentViewerScope(frame.scope)) return;
       if (frame.kind !== 'unread_updated') return;
       if (!isMessageUnreadUpdatedPayload(frame.payload)) return;
       invalidateMessageUnreadQueries(qc);
@@ -689,22 +689,22 @@ export function useMarkMessageChannelRead() {
  * Global message unread summary across ALL workspaces.
  * Backed by conversation_reads — returns total unread message count per workspace.
  * Used by the workspace sidebar to show per-workspace unread badges.
- * Invalidated by WS `viewer:local` `unread_updated` events — no polling.
+ * Invalidated by WS viewer-scoped `unread_updated` events — no polling.
  */
 export function useMessageUnreadSummary() {
   const qc = useQueryClient();
   const queryKey = ['message-unread', 'summary'] as const;
 
   useEffect(() => {
-    const sub = subscribeWsScope('viewer:local');
+    const sub = subscribeViewerScope();
     const unsub = onWsFrame(frame => {
       if (frame.type === 'snapshot_required') {
-        if (frame.scope !== 'viewer:local') return;
+        if (!isCurrentViewerScope(frame.scope)) return;
         invalidateMessageUnreadQueries(qc);
         return;
       }
       if (frame.type !== 'event') return;
-      if (frame.scope !== 'viewer:local') return;
+      if (!isCurrentViewerScope(frame.scope)) return;
       if (frame.kind !== 'unread_updated') return;
       if (!isMessageUnreadUpdatedPayload(frame.payload)) return;
       invalidateMessageUnreadQueries(qc);

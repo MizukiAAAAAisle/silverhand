@@ -16,6 +16,8 @@ import { Titlebar } from '@/components/layout/Titlebar';
 import { VerticalSplitter } from '@/components/layout/VerticalSplitter';
 import { useAppearance } from '@/hooks/useAppearance';
 import { useLayoutSettings } from '@/hooks/useLayoutSettings';
+import { isRegistrationRequired, useViewerUser } from '@/features/me/hooks';
+import { RegistrationGate } from '@/features/me/RegistrationGate';
 import { useResizableWidth } from '@/hooks/useResizableWidth';
 import { CreateWorkspaceDialog } from '@/features/workspaces/CreateWorkspaceDialog';
 import { CreateChannelDialog } from '@/features/workspaces/CreateChannelDialog';
@@ -114,6 +116,40 @@ const lastThreadByChannel = loadStringMap(LAST_THREAD_KEY);
 
 export function App(): JSX.Element {
   useAppearance();
+  // Hydrate the viewer profile (current user) so api() can stamp the
+  // X-Silverhand-Principal header against the real viewer id
+  // and `isCurrentUserId` resolves correctly. Returns either the
+  // resolved UserDto OR `{ registration_required: true, suggested_name }`
+  // when no viewer is registered yet.
+  const viewer = useViewerUser();
+
+  // Three-way render: loading → registration gate → registered shell.
+  // Critical: each branch returns BEFORE any further hooks, and the
+  // shell lives in a separate component (`RegisteredAppShell`) so the
+  // hook order is stable inside `App` across re-renders. If we kept
+  // the shell hooks inline here, the post-registration render would
+  // call dozens more hooks than the pre-registration render and React
+  // would crash with "Rendered more hooks than during the previous
+  // render".
+  if (!viewer.data) {
+    return (
+      <div className="grid h-screen w-screen place-items-center bg-bg-base text-xs text-text-muted">
+        Loading…
+      </div>
+    );
+  }
+  if (isRegistrationRequired(viewer.data)) {
+    // Full-screen RegistrationGate. POST /api/register is the SOLE
+    // creator of `users` rows, and the renderer enforces the matching
+    // UI invariant by simply not mounting the shell. After registration
+    // succeeds, /api/me returns the resolved UserDto and the next
+    // render falls through to `<RegisteredAppShell />`.
+    return <RegistrationGate suggestedName={viewer.data.suggested_name} />;
+  }
+  return <RegisteredAppShell />;
+}
+
+function RegisteredAppShell(): JSX.Element {
   const {
     layout,
     toggleWorkspaceSidebar,
@@ -273,7 +309,7 @@ export function App(): JSX.Element {
   // ── Dock badge sync ────────────────────────────────────────────────────
   // macOS dock icon shows total unread messages across every workspace.
   // `useMessageUnreadSummary` already aggregates `conversation_reads`
-  // globally and self-invalidates on `viewer:local` `unread_updated`,
+  // globally and self-invalidates on viewer-scoped `unread_updated`,
   // so summing here gives a reactive total without any extra wiring.
   // Notification unread (mentions / agent_start_failed) is intentionally
   // excluded — it's a different concept and would double-count mentions

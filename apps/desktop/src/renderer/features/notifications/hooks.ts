@@ -6,7 +6,7 @@ import type {
   NotificationDto,
 } from '@silverhand/shared';
 import { api } from '@/lib/api';
-import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
+import { onWsFrame, subscribeViewerScope, isCurrentViewerScope } from '@/lib/ws-client';
 
 const unreadKey = ['notifications', 'unread'] as const;
 const listKey = ['notifications', 'list'] as const;
@@ -42,23 +42,23 @@ export interface UnreadCounts {
 }
 
 /**
- * Unread notification counts. Subscribes to the WS `viewer:local` scope and
+ * Unread notification counts. Subscribes to the WS viewer scope and
  * invalidates on `notification` events — no more 5 s polling.
  */
 export function useUnreadCounts() {
   const qc = useQueryClient();
 
   useEffect(() => {
-    const sub = subscribeWsScope('viewer:local');
+    const sub = subscribeViewerScope();
     const unsub = onWsFrame(frame => {
-      if (frame.type === 'event' && frame.scope === 'viewer:local') {
+      if (frame.type === 'event' && isCurrentViewerScope(frame.scope)) {
         if (
           frame.kind === 'notification' ||
           (frame.kind === 'unread_updated' && !isMessageUnreadUpdatedPayload(frame.payload))
         ) {
           invalidateQueryDebounced(qc, unreadKey);
         }
-      } else if (frame.type === 'snapshot_required' && frame.scope === 'viewer:local') {
+      } else if (frame.type === 'snapshot_required' && isCurrentViewerScope(frame.scope)) {
         invalidateQueryDebounced(qc, unreadKey);
       }
     });
@@ -104,7 +104,7 @@ export function useMarkNotificationsRead() {
 }
 
 /**
- * Mount this once at the App root. Listens for WS `viewer:local` notification
+ * Mount this once at the App root. Listens for WS viewer-scoped notification
  * events (replacing the previous 5 s poll) and fires:
  *  - an in-app toast (sonner) for every new notification
  *  - a system notification via IPC when the app is not in the foreground
@@ -128,14 +128,14 @@ export function useNotificationToasts(activeChannelId: string | null) {
   // arrives. `unread_updated` is a badge/read-cursor signal and would make
   // every channel switch refetch the toast list.
   useEffect(() => {
-    const sub = subscribeWsScope('viewer:local');
+    const sub = subscribeViewerScope();
     const toastKey = [...listKey, { unread: true, toasts: true }] as const;
     const unsub = onWsFrame(frame => {
-      if (frame.type === 'event' && frame.scope === 'viewer:local') {
+      if (frame.type === 'event' && isCurrentViewerScope(frame.scope)) {
         if (frame.kind === 'notification') {
           invalidateQueryDebounced(qc, toastKey);
         }
-      } else if (frame.type === 'snapshot_required' && frame.scope === 'viewer:local') {
+      } else if (frame.type === 'snapshot_required' && isCurrentViewerScope(frame.scope)) {
         invalidateQueryDebounced(qc, toastKey);
       }
     });

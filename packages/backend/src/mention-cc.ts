@@ -1,4 +1,5 @@
 import { extractMentions, systemSubtype } from '@silverhand/shared';
+import type { Database as Db } from 'better-sqlite3';
 import type {
   AgentDto,
   ConversationDto,
@@ -10,6 +11,7 @@ import type { AgentRepo } from './repos/agent-repo.js';
 import type { ConversationRepo } from './repos/conversation-repo.js';
 import type { MessageRepo } from './repos/message-repo.js';
 import type { NotificationRepo } from './repos/notification-repo.js';
+import { SettingsRepo } from './repos/settings-repo.js';
 import type { ConversationManager } from './conversation-manager.js';
 import type { BackendLogger } from './context.js';
 import type { ScopeEventBus } from './ws/scope-event-bus.js';
@@ -24,13 +26,17 @@ export interface MentionCcOpts {
   sourceConversation: ConversationDto;
   /** Source workspace for context surfacing. */
   sourceWorkspace: WorkspaceDto;
+  /** SQLite handle — used to resolve the viewer id from
+   *  `app_settings.viewer_user_id` for the WS push scope. */
+  db: Db;
   agents: AgentRepo;
   conversations: ConversationRepo;
   messages: MessageRepo;
   notifications: NotificationRepo;
   conversationManager: ConversationManager;
   logger: BackendLogger;
-  /** Event bus for WS push — publish viewer:local notification after insert. */
+  /** Event bus for WS push — publishes a viewer-scoped notification
+   *  frame after insert. */
   events: ScopeEventBus;
 }
 
@@ -166,11 +172,16 @@ async function deliverOne(
       mention_excerpt: excerpt(opts.message.content),
     },
   });
-  // v1 single-user: push viewer:local so notification hooks invalidate without polling.
-  opts.events.publishToScope('viewer:local', 'notification', {
-    kind: 'mention_external',
-    conversation_id: mentionsConversation.id,
-  });
+  // Push to the resolved viewer's private scope so notification hooks
+  // invalidate without polling. Pre-PR1 hardcoded 'viewer:local'; the
+  // registered random-id viewer needs the resolved id.
+  const viewerUserId = new SettingsRepo(opts.db).getViewerUserId();
+  if (viewerUserId) {
+    opts.events.publishToScope(`viewer:${viewerUserId}`, 'notification', {
+      kind: 'mention_external',
+      conversation_id: mentionsConversation.id,
+    });
+  }
 }
 
 /**

@@ -52,6 +52,7 @@ function bootstrap() {
     thread,
     service,
     storage,
+    agent,
     cleanup: tmp.cleanup,
     silverhandDir: tmp.silverhandDir,
     localHostId,
@@ -84,7 +85,7 @@ describe('AttachmentService.upload', () => {
   });
 
   it('uploads from a thread and resolves to the parent channel', async () => {
-    const { service, channel, thread, cleanup } = bootstrap();
+    const { service, channel, thread, agent, cleanup } = bootstrap();
     try {
       const dto = await service.upload({
         sourceConversationId: thread.id,
@@ -92,7 +93,7 @@ describe('AttachmentService.upload', () => {
         contentType: 'application/pdf',
         buffer: Buffer.from('%PDF-1.4'),
         createdByKind: 'agent',
-        createdById: 'agent-id',
+        createdById: agent.id,
       });
       expect(dto.channel_id).toBe(channel.id);
       expect(dto.source_conversation_id).toBe(thread.id);
@@ -160,7 +161,7 @@ describe('AttachmentService.upload', () => {
 
 describe('AttachmentService.locateForAgent', () => {
   it('returns the local path for own-channel attachments', async () => {
-    const { service, channel, cleanup, silverhandDir } = bootstrap();
+    const { service, channel, agent, cleanup, silverhandDir } = bootstrap();
     try {
       const dto = await service.upload({
         sourceConversationId: channel.id,
@@ -168,7 +169,7 @@ describe('AttachmentService.locateForAgent', () => {
         contentType: 'image/png',
         buffer: Buffer.from('bytes'),
         createdByKind: 'agent',
-        createdById: 'agent-id',
+        createdById: agent.id,
       });
       const located = await service.locateForAgent(dto.id, channel.id);
       expect(located).not.toBeNull();
@@ -182,7 +183,7 @@ describe('AttachmentService.locateForAgent', () => {
   });
 
   it('denies cross-channel access (returns null without leaking existence)', async () => {
-    const { service, channel, cleanup, db, localHostId } = bootstrap();
+    const { service, channel, agent, cleanup, db, localHostId } = bootstrap();
     try {
       const dto = await service.upload({
         sourceConversationId: channel.id,
@@ -190,7 +191,7 @@ describe('AttachmentService.locateForAgent', () => {
         contentType: 'image/png',
         buffer: Buffer.from('bytes'),
         createdByKind: 'agent',
-        createdById: 'agent-id',
+        createdById: agent.id,
       });
       const conversations = new ConversationRepo(db);
       const otherWorkspace = new WorkspaceRepo(db, {

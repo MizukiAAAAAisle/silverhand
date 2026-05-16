@@ -93,10 +93,18 @@ function conversationRef(row: {
   };
 }
 
+export interface SearchOptions {
+  /** When true and the input filters by `user_id`, also match rows
+   *  where `messages.from_user_id IS NULL`. Routes pass true when the
+   *  filter id matches the resolved viewer; pre-PR1 NULL-authored
+   *  legacy messages are surfaced as "from current viewer". */
+  includeNullAuthor?: boolean;
+}
+
 export class SearchRepo {
   constructor(private readonly db: Db) {}
 
-  search(input: SearchQueryInput): SearchResultDto[] {
+  search(input: SearchQueryInput, opts: SearchOptions = {}): SearchResultDto[] {
     const query = input.q.trim();
     const hasAuthorFilter = !!input.user_id || !!input.agent_id;
     const hasSearchIntent =
@@ -122,7 +130,7 @@ export class SearchRepo {
       );
     }
 
-    results.push(...this.searchMessages(input, query, limit));
+    results.push(...this.searchMessages(input, query, limit, opts));
     return results.slice(0, limit);
   }
 
@@ -223,6 +231,7 @@ export class SearchRepo {
     input: SearchQueryInput,
     query: string,
     limit: number,
+    opts: SearchOptions,
   ): SearchResultDto[] {
     const where: string[] = [];
     const params: SqlValue[] = [];
@@ -234,7 +243,9 @@ export class SearchRepo {
     applyTimeFilters(where, params, input, 'm.created_at');
     if (input.user_id) {
       where.push(`m.from_kind = 'user'`);
-      if (input.user_id === 'local') {
+      // Legacy NULL-authored messages are surfaced as "from current
+      // viewer" (see route layer's includeNullAuthor flag).
+      if (opts.includeNullAuthor) {
         where.push(`(m.from_user_id = ? OR m.from_user_id IS NULL)`);
       } else {
         where.push(`m.from_user_id = ?`);

@@ -14,6 +14,15 @@ import { RuntimeKindSchema, type RuntimeKind } from '@silverhand/shared';
  *   - `proxy_runtimes` — comma-separated runtime kinds (e.g. `codex,cursor`)
  *     that the proxy applies to. Empty/unset = no runtime gets the proxy
  *     even if `proxy_url` is set (explicit opt-in).
+ *   - `viewer_user_id` — id of the registered viewer (V1 single user).
+ *     Absent until `POST /api/register` runs, at which point the
+ *     register service INSERTs the `users` row and writes this key in
+ *     the same transaction. Its absence is the registration-required
+ *     signal; the principal middleware skips principal resolution and
+ *     the `requireRegisteredViewer` gate rejects every public route
+ *     except the registration whitelist. V2 multi-user replaces this
+ *     with token claims; the key is then dead weight and gets deleted
+ *     in a future migration.
  */
 export class SettingsRepo {
   constructor(private readonly db: Db) {}
@@ -68,6 +77,13 @@ export class SettingsRepo {
     }
     return out;
   }
+
+  /** V1 viewer pointer (see class docstring). Returns null in the
+   *  registration-required state — caller MUST treat null as "viewer
+   *  has not registered yet" and reject the request, NOT as corruption. */
+  getViewerUserId(): string | null {
+    return this.get(SETTINGS_KEYS.VIEWER_USER_ID);
+  }
 }
 
 export const SETTINGS_KEYS = {
@@ -78,4 +94,19 @@ export const SETTINGS_KEYS = {
    *  proxy applies to. Empty (or unset) means **no runtime** gets the
    *  proxy even if `PROXY_URL` is set — explicit opt-in per runtime. */
   PROXY_RUNTIMES: 'proxy_runtimes',
+  /** V1 viewer pointer (see class docstring). */
+  VIEWER_USER_ID: 'viewer_user_id',
+  /** Audit row written by `UserService.register()` after the v21
+   *  Deferred Adoption step succeeds. Value is `Date.now()` as a
+   *  decimal string. Useful for diagnostics + the future cleanup
+   *  migration (see `docs/human-identity-migration-cleanup-plan.md`). */
+  LEGACY_V21_ADOPTION_COMPLETED_AT: 'legacy_v21_adoption_completed_at',
+  /** Audit row written by `UserService.register()` alongside
+   *  `LEGACY_V21_ADOPTION_COMPLETED_AT`. Value is a JSON object with
+   *  per-segment row counts:
+   *    `{ messages_from: N, messages_task: N, conversation_reads: N,
+   *       attachments: N }`
+   *  All-zero on fresh DBs, non-zero only when the user restored a
+   *  pre-v21 backup before registering. */
+  LEGACY_V21_ADOPTION_COUNTS: 'legacy_v21_adoption_counts',
 } as const;

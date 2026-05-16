@@ -7,6 +7,7 @@ import type {
   ServerFrame,
 } from '@silverhand/shared';
 import type { BackendContext } from '../context.js';
+import { SettingsRepo } from '../repos/settings-repo.js';
 import {
   canSubscribeScope,
   parseWsScope,
@@ -111,7 +112,23 @@ export class EventWsConnection {
     }
 
     this.authenticated = true;
-    this.viewerUserId = this.ctx.serverConfig.user_id || 'local';
+    // V1 single-user: the viewer pointer lives in
+    // `app_settings.viewer_user_id` and is written by `POST
+    // /api/register` (the sole creator of `users` rows). Pre-
+    // registration the pointer is absent; the WS handshake refuses
+    // because no user principal can be attached to the connection.
+    // V2 multi-user replaces this with token-claim resolution; the
+    // public WS handshake itself stays the same.
+    const viewerUserId = new SettingsRepo(this.ctx.db).getViewerUserId();
+    if (!viewerUserId) {
+      this.closeWithError(
+        'auth_failed',
+        'no registered viewer — call POST /api/register first',
+        1011,
+      );
+      return;
+    }
+    this.viewerUserId = viewerUserId;
     this.clearAuthTimer();
     this.send({
       type: 'authenticated',

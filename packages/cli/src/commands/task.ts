@@ -195,8 +195,27 @@ with the most recent --title; if omitted, the title is reused as body.
 If you intend to work on these immediately, follow up with
 \`silverhand task claim --task-number <n>\`.
 
+Pre-flight failures (exit 1):
+  --message was supplied → flag_removed (use --title / --body)
+
 stdout: CreateTasksResult JSON.`,
   flags: ['title', 'body'] as const,
+  // Agents reach for --message because half of the CLIs in their
+  // training data treat it as the canonical "body" flag (gh, git,
+  // hub, ...). 5/14 daily report logged one such hit. Routing it
+  // through `flag_removed` turns the failure into an actionable
+  // migration line that names the right shape, instead of a bare
+  // unknown-flag typo with no useful suggestion (Levenshtein from
+  // `message` to `title` / `body` is too large for a hint).
+  removedFlags: {
+    message: {
+      replacement: 'title+body',
+      hint:
+        'silverhand task create takes --title (required) and --body (optional). ' +
+        'For one task use `silverhand task create --title "..." --body "..."`. ' +
+        'Repeat --title to create multiple in a single call.',
+    },
+  },
   async run({ client, args }) {
     const titles = flagStringArray(args, 'title');
     if (!titles || titles.length === 0) {

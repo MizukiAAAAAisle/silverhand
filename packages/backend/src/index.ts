@@ -31,6 +31,7 @@ import { ConversationRepo } from './repos/conversation-repo.js';
 import { MessageRepo } from './repos/message-repo.js';
 import { NotificationRepo } from './repos/notification-repo.js';
 import { ScheduleRepo } from './repos/schedule-repo.js';
+import { SettingsRepo } from './repos/settings-repo.js';
 import { WorkspaceRepo } from './repos/workspace-repo.js';
 import { AttachmentService } from './services/attachment-service.js';
 import { ChannelService } from './services/channel-service.js';
@@ -38,6 +39,8 @@ import { ConversationMessageService } from './services/conversation-message-serv
 import { ScheduleService } from './services/schedule-service.js';
 import { ThreadService } from './services/thread-service.js';
 import { TaskService } from './services/task-service.js';
+import { UserService } from './services/user-service.js';
+import { UserRepo } from './repos/user-repo.js';
 import { createLocalBlobFileStorage } from './storage/blob-file-storage.js';
 import type { ServerConfig } from '@silverhand/shared';
 import type { Server as HttpServer } from 'node:http';
@@ -87,6 +90,12 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     conversations: new ConversationRepo(db),
   });
 
+  const userService = new UserService({
+    db,
+    users: new UserRepo(db),
+    blobStorage,
+  });
+
   const ctx: BackendContext = {
     db,
     serverConfig: opts.serverConfig,
@@ -97,6 +106,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     logDir: opts.logDir,
     blobStorage,
     attachmentService,
+    userService,
     channelService: undefined as unknown as ChannelService,
     conversationMessageService: undefined as unknown as ConversationMessageService,
     threadService: undefined as unknown as ThreadService,
@@ -158,6 +168,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     workspaces: new WorkspaceRepo(db, { workspacesRoot }),
     messages: new MessageRepo(db),
     agents: new AgentRepo(db),
+    settings: new SettingsRepo(db),
     conversationManager: ctx.conversationManager,
     events: ctx.events,
     logger,

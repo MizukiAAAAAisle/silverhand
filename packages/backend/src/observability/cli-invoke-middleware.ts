@@ -65,6 +65,7 @@ export function createCliInvokeMiddleware(ctx: BackendContext): MiddlewareHandle
 
     let httpStatus = 0;
     let errorCode: string | undefined;
+    let errorIssues: ReadonlyArray<{ path: string; code: string }> | undefined;
     let thrown: unknown;
     try {
       await next();
@@ -77,7 +78,9 @@ export function createCliInvokeMiddleware(ctx: BackendContext): MiddlewareHandle
       const durationMs = nsToMs(process.hrtime.bigint() - started);
       const status = httpStatus >= 200 && httpStatus < 400 ? 'success' : 'failure';
       if (status === 'failure') {
-        errorCode = await peekErrorCode(c);
+        const peeked = await peekErrorDetail(c);
+        errorCode = peeked?.code;
+        errorIssues = peeked?.issues;
       }
       const cid = c.req.param('cid') ?? null;
       const aid = c.req.param('aid') ?? null;
@@ -101,6 +104,16 @@ export function createCliInvokeMiddleware(ctx: BackendContext): MiddlewareHandle
           duration_ms: durationMs,
           status,
           ...(errorCode ? { error_code: errorCode } : {}),
+          // Schema-validation field summary, sanitized: only `path`
+          // (joined dotted) and `code` (zod tag like `too_small`,
+          // `invalid_type`). NEVER `received` / `minimum` / `message`
+          // since those can carry user-supplied values. Closes the 5/14
+          // observability gap where `schedule.create | invalid_input`
+          // logged with `error_message=''` because the structured
+          // `issues[]` was discarded.
+          ...(errorIssues && errorIssues.length > 0
+            ? { error_issues: errorIssues }
+            : {}),
           ...(thrown && status === 'failure'
             ? { error_kind: 'throw' }
             : {}),
@@ -142,25 +155,93 @@ function readStatus(c: Context): number | null {
 }
 
 /**
- * Best-effort attempt to read the `error.code` field out of a JSON
+ * Best-effort attempt to read structured error info out of a JSON
  * response body. We clone the response, parse it once, and swallow any
  * error. The original response stays intact.
+ *
+ * Returns:
+ *   - `code`: the stable backend error code (e.g. `invalid_input`,
+ *     `forbidden`). Same field that used to be returned by the previous
+ *     `peekErrorCode`; the legacy bare-string `error: 'forbidden'`
+ *     shape is still picked up so existing tests stay green.
+ *   - `issues`: zod schema-validation summary, ONE object per failing
+ *     field. Each entry carries:
+ *        path: dotted path (`'every_seconds'`, `'tasks.0.title'`)
+ *        code: zod issue code (`'too_small'`, `'invalid_type'`, ...)
+ *     Privacy contract: only `path` and `code` are surfaced. Fields
+ *     like `received`/`minimum`/`message` can carry user-supplied
+ *     values and are deliberately discarded so they never reach
+ *     `cli-*.log`.
  */
-async function peekErrorCode(c: Context): Promise<string | undefined> {
+async function peekErrorDetail(c: Context): Promise<
+  | {
+      code?: string;
+      issues?: ReadonlyArray<{ path: string; code: string }>;
+    }
+  | undefined
+> {
   try {
     const cloned = c.res.clone();
     const body = await cloned.json().catch(() => null);
-    if (body && typeof body === 'object') {
-      const errCode =
-        (body as { error?: { code?: unknown } }).error?.code ??
-        (body as { code?: unknown }).code;
-      if (typeof errCode === 'string') return errCode;
-      // Some legacy routes use { error: 'forbidden' } as a bare string.
-      const bare = (body as { error?: unknown }).error;
-      if (typeof bare === 'string') return bare;
-    }
+    if (!body || typeof body !== 'object') return undefined;
+    const code = extractCode(body);
+    const issues = extractIssueSummary(body);
+    if (code === undefined && issues === undefined) return undefined;
+    return {
+      ...(code !== undefined ? { code } : {}),
+      ...(issues !== undefined ? { issues } : {}),
+    };
   } catch {
-    /* swallow */
+    return undefined;
   }
+}
+
+function extractCode(body: unknown): string | undefined {
+  const obj = body as Record<string, unknown>;
+  const errCode =
+    (obj.error as { code?: unknown } | undefined)?.code ?? obj.code;
+  if (typeof errCode === 'string') return errCode;
+  // Some legacy routes use { error: 'forbidden' } as a bare string.
+  if (typeof obj.error === 'string') return obj.error;
   return undefined;
+}
+
+/**
+ * Extract a privacy-safe summary of zod `issues[]` if present in the
+ * response body. We tolerate the issues array landing under either
+ * `body.issues` (e.g. `agentScheduleCreate` / `agentCliTrace`) or
+ * `body.error.issues` for routes that nest. Anything that doesn't look
+ * like a zod issue array is ignored (returns undefined → no field is
+ * logged, vs an empty array which would still pollute lines).
+ */
+function extractIssueSummary(
+  body: unknown,
+): ReadonlyArray<{ path: string; code: string }> | undefined {
+  const obj = body as Record<string, unknown>;
+  const raw =
+    (obj.issues as unknown) ??
+    ((obj.error as { issues?: unknown } | undefined)?.issues as unknown);
+  if (!Array.isArray(raw)) return undefined;
+  const out: { path: string; code: string }[] = [];
+  // Cap at 16 issues to bound the log line size; a malformed body with
+  // hundreds of issues is still a single anomaly we want one line for.
+  for (const issue of raw.slice(0, 16)) {
+    if (!issue || typeof issue !== 'object') continue;
+    const i = issue as Record<string, unknown>;
+    const code = typeof i.code === 'string' ? i.code : undefined;
+    const pathArr = Array.isArray(i.path) ? i.path : undefined;
+    if (!code || !pathArr) continue;
+    // Coerce each path segment to a string so numeric array indexes
+    // (e.g. `['tasks', 0, 'title']` → `'tasks.0.title'`) read sensibly.
+    // Reject segments that don't fit short identifier shape — guards
+    // against the (currently unused) `z.record(...)` case where keys
+    // could be agent-supplied. 64-char cap mirrors `path` field in
+    // CliTraceInputSchema.
+    const safe = pathArr
+      .map(p => (typeof p === 'string' || typeof p === 'number' ? String(p) : ''))
+      .filter(s => s.length > 0 && s.length <= 64 && /^[\w.\-:]+$/.test(s));
+    if (safe.length === 0 && pathArr.length > 0) continue;
+    out.push({ path: safe.join('.'), code });
+  }
+  return out.length > 0 ? out : undefined;
 }

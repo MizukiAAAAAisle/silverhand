@@ -340,12 +340,17 @@ export class ConversationManager {
           reason: 'spawn_error',
         },
       });
-      // v1 single-user: notify viewer:local so notification hooks invalidate without polling.
-      // Multi-user: replace 'local' with the actual viewer/user_id.
-      this.ctx.events.publishToScope('viewer:local', 'notification', {
-        kind: 'agent_start_failed',
-        conversation_id: conversationId,
-      });
+      // Push to the resolved viewer's private scope so notification
+      // hooks invalidate without polling. Pre-PR1 hardcoded
+      // 'viewer:local'; the registered random-id viewer needs
+      // the resolved id.
+      const viewerUserId = this.settings.getViewerUserId();
+      if (viewerUserId) {
+        this.ctx.events.publishToScope(`viewer:${viewerUserId}`, 'notification', {
+          kind: 'agent_start_failed',
+          conversation_id: conversationId,
+        });
+      }
     } catch (e) {
       this.ctx.logger.error({ conversationId, agentId, e }, 'conversation: failed to insert start-failure notification');
     }
@@ -392,11 +397,15 @@ export class ConversationManager {
           ...(opts.error ? { error: opts.error } : {}),
         },
       });
-      // v1 single-user: notify viewer:local so notification hooks invalidate without polling.
-      this.ctx.events.publishToScope('viewer:local', 'notification', {
-        kind: 'agent_start_failed',
-        conversation_id: conversationId,
-      });
+      // Push to the resolved viewer's private scope so notification
+      // hooks invalidate without polling. Pre-PR1 hardcoded 'viewer:local'.
+      const viewerUserId = this.settings.getViewerUserId();
+      if (viewerUserId) {
+        this.ctx.events.publishToScope(`viewer:${viewerUserId}`, 'notification', {
+          kind: 'agent_start_failed',
+          conversation_id: conversationId,
+        });
+      }
     } catch (e) {
       this.ctx.logger.error({ conversationId, agentId, e }, 'conversation: failed to insert crash notification');
     }

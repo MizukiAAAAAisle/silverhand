@@ -98,7 +98,6 @@ function bootstrap() {
     mode: 'embedded',
     url: 'http://127.0.0.1:0',
     auth_token: 'a'.repeat(32),
-    user_id: null,
     refresh_token: null,
     child_sessions: {
       max_concurrent_per_parent: null,

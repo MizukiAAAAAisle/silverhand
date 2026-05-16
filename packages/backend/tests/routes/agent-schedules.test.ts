@@ -219,6 +219,16 @@ describe('POST /api/agents/:id/schedules/:scheduleId/cancel', () => {
     t = buildTestApp();
     const infoSpy = vi.spyOn(t.ctx.logger, 'info');
     const { aliceId } = await setupTwoAgents(t);
+    // Seed the desktop user the test impersonates via the principal
+    // header. Without this row the v21-tightened middleware rejects
+    // the request as "principal user does not exist".
+    const now = Date.now();
+    t.ctx.db
+      .prepare(
+        `INSERT INTO users (id, name, display_name, created_at, updated_at)
+         VALUES ('desktop-user-42', 'desktop-user-42-name', 'Desktop User 42', ?, ?)`,
+      )
+      .run(now, now);
     const seeded = seedSchedule(t, aliceId);
     const res = await http(t).post(
       apiPaths.agentScheduleCancel(aliceId, seeded.id),

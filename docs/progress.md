@@ -1922,4 +1922,64 @@ messages → activity runs (clusterable subtype + 相邻 + 5min gap) → split b
 - task drawer timeline view（结构改动，不在视觉分层范围）
 - 配套 mockup `docs/mockups/system-message-activity-cluster.html` 已落盘 + 已发 @shiki 验收。
 
+## 2026-05-17 — Human identity V1 注册 · Deferred Adoption（pre-v21 备份不丢数据）
+
+### 触发
+
+@shiki 在做 V1 human identity 时误清了本地 DB；同时发现 `pnpm dev` 路径上 v21 migration 体内含 destructive UPDATE/DELETE，会把 pre-v21 dev 数据当成"FK 无法满足的脏数据"直接抹掉。@shiki 还有一份几天前的备份，希望"恢复备份 → 启动 app → 注册身份 → 备份数据自动迁移、零清除"。
+
+### 设计：Deferred Adoption
+
+放弃 fail-fast / db:reset 路线，改为"非破坏 staging + 注册时一次性 adopt"的两段式：
+
+**Phase 1（v21 migration 体内）**：把 pre-v21 的用户拥有事实**复制**进 4 张 holding 表（不删除信息，只搬位置），同时做必要的 schema FK rebuild：
+
+| Staging 表 | 内容 |
+|---|---|
+| `legacy_message_from_user_v21(message_id)` | 原 `from_kind='user' AND from_user_id IS NOT NULL` 的消息 id |
+| `legacy_message_task_assignee_user_v21(message_id)` | 原 `task_number IS NOT NULL AND task_assignee_user_id IS NOT NULL` 的消息 id |
+| `legacy_conversation_reads_v21(original_user_id, conversation_id, last_read_seq, read_at)` | 旧的所有读光标 |
+| `legacy_user_attachments_v21(11 列同 attachments)` | 旧 `created_by_kind='user'` 的完整 attachment 行 |
+
+主表（messages / conversation_reads / attachments）的 user-id 列在 rebuild 时 NULL 化或 DELETE，使 schema 立即 FK-clean，但**所有 user 拥有的内容信息 100% 保留在 staging**。v21 同时安装 cross-namespace uniqueness 触发器 + polymorphic attachments dispatch 触发器。
+
+**Phase 2（`POST /api/register` 同事务）**：`UserService.register()` 在创建第一个 viewer 的同一个 better-sqlite3 transaction 里调用 `adoptLegacyV21(db, viewerId)` helper：
+1. 用 staging 里记录的 message id 把 `messages.from_user_id` / `messages.task_assignee_user_id` 改写为 `viewerId`（只 adopt 原本非 NULL 的行 —— 不能"过度认领"）
+2. `INSERT INTO conversation_reads SELECT ?, conversation_id, MAX(last_read_seq), MAX(read_at) FROM legacy_conversation_reads_v21 GROUP BY conversation_id`（V1 single-viewer 合并：任何 pre-v21 读光标都属于这台机器现在注册的这个人，最远的 read marker 胜出）
+3. 把 `legacy_user_attachments_v21` 的 11 列完整 INSERT-SELECT 回 `attachments`，把 `created_by_id` 改写为 `viewerId`
+4. 写 audit 行到 `app_settings`：`legacy_v21_adoption_completed_at`（decimal ms）+ `legacy_v21_adoption_counts`（JSON `{messages_from, messages_task, conversation_reads, attachments}`）
+5. `DROP TABLE IF EXISTS legacy_*_v21`
+
+任何步骤抛错 → 整个 register 事务 rollback：viewer row 不存在、`viewer_user_id` 不存在、staging 完整保留可重试。这是回滚测试钉死的硬约束。
+
+### 实现锚点
+
+- **`packages/shared/src/db/migrations.ts`** v21（约 L1380-1670）—— v21 体重写为非破坏 staging；v22 保持 no-op，注释指向 v21 Deferred Adoption 契约（不再说 "wipe required / no upgrade path"）。
+- **`packages/backend/src/services/user-service.ts`** `register()` + `adoptLegacyV21()` helper（L386-484）—— 单事务 atomic，audit 写入用 `SETTINGS_KEYS.*` 常量。
+- **`packages/backend/src/repos/settings-repo.ts`** —— 新增 `LEGACY_V21_ADOPTION_COMPLETED_AT` / `LEGACY_V21_ADOPTION_COUNTS` 两个 key 常量。
+- **`packages/backend/tests/services/user-service-adoption.test.ts`** —— 新文件 7 个测试是契约 spec：fresh DB 全零 + DROP；只 adopt 原非 NULL 行；conversation_reads MAX 合并；attachment 11 列回插；DROP 后无残留；二次注册 409；adoption 失败 → 整个 register rollback、staging 保留。
+- **`packages/backend/tests/db-migrations.test.ts`** v21 测试重写为 Deferred Adoption 契约（4 张 staging 正确填充、主表 FK-clean、users 仍空、audit 还未写）。
+
+### Review
+
+@Cindy 两轮 review，全部通过：
+
+- **round-1**：主路径 LGTM（staging 真的非破坏 / register 事务 atomic / rollback 测试到位 / attachment 11 列回插 / 两个 message staging filter / conversation_reads MAX 语义都符合契约）。给了 4 个非阻塞清理点：v21 测试 describe 顶部注释、v22 注释、conversation_reads rebuild 注释（旧版 "emptied above" 事实错误，实际是先 copy 到 staging 再 DROP）、audit 写入用 `SETTINGS_KEYS.*` 常量（替代字符串字面量）。
+- **round-2**：4 项清理已合入，没有新 blocker，最终 LGTM。
+
+### 已知边界
+
+**已经跑过旧 destructive v21 且本地无 staging 表的 DB** 不在 #task:5 范围。那种中间态的旧 v21 已经吞过用户数据，任何后续迁移都补不回。需要的话另开 v23 corrective（@Cindy 在 `docs/human-identity-migration-cleanup-plan.md` 留了 Mode B 兜底）。Deferred Adoption 能保护的是**还没跑过 v21 的备份**。
+
+### 配套文档
+
+- **`docs/human-identity-migration-cleanup-plan.md`**（@Cindy 主笔，@Alice review）—— 落地后清理路径（Mode A 保桥 vs Mode B v23 guard + 移除 register adoption），含真实 DB 验收 SQL 模板。**不要在 @shiki 完成备份恢复 + 注册验收前执行清理**。
+- @Cindy 同步在写 recovery 用快照 doc（task #7），覆盖背景 / 最终方案 / 真实验收步骤 / 查询 SQL / 已知边界 / 后续 commit/cleanup 入口 —— 路径待发。
+
+### 状态
+
+- #task:5 in_review，工作树**未 commit**（按 @shiki 标准纪律）
+- 质量门：`pnpm -r typecheck` ✅ / backend 59 files / 718 tests ✅ / desktop 11 files / 191 tests ✅ / `git diff --check` ✅
+- 等 @shiki 用备份做真实验收 → commit 决定（commit 时倾向拆成 "shared/migrations + backend/adoption" 两个 commit）
+
 

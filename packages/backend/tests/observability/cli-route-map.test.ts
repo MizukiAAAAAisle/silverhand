@@ -1,7 +1,7 @@
 /**
  * Drift guard for the CLI invoke route map.
  *
- * Two invariants we never want to lose:
+ * Three invariants we never want to lose:
  *
  *   1. Every entry in `CLI_INVOKE_ROUTES` maps to a `(noun, verb)` pair
  *      that actually exists in `COMMAND_GROUPS`. If we rename a CLI
@@ -12,9 +12,23 @@
  *      entry. Adding a new route without registering it would silently
  *      drop it from `cli-*.log`.
  *
+ *   3. The HTTP method declared in `CLI_INVOKE_ROUTES` matches the
+ *      method `routes.ts` actually registers each `internalPaths` helper
+ *      under. A mismatch here is exactly what produced the
+ *      `None.None` rows in `cli-*.log` for `silverhand schedule list`
+ *      on 2026-05-14: the route was registered as POST but the map
+ *      said GET, so the middleware looked up the wrong (method, suffix)
+ *      tuple and returned null. We parse `routes.ts` to learn the
+ *      ground truth, then compare each entry — so any future
+ *      method drift fails the build instead of silently dropping
+ *      observability for one endpoint.
+ *
  * Together they keep the `cli.invoke` aggregations honest as the
  * command surface evolves.
  */
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { COMMAND_GROUPS } from '@silverhand/cli';
 import { internalPaths } from '@silverhand/shared';
@@ -38,6 +52,36 @@ function suffixOf(path: string): string {
   return m ? m[1]! : '';
 }
 
+/**
+ * Read `packages/backend/src/routes.ts` and build a map from
+ * `internalPaths` helper name → registered HTTP method (`'GET'|'POST'`).
+ *
+ * Uses a regex over the source rather than booting the app: cheaper,
+ * deterministic, and the test wants to fail when the *source registers*
+ * the wrong method, not when a runtime probe happens to 404.
+ */
+function buildRegistrationMap(): Map<string, 'GET' | 'POST'> {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const routesPath = resolve(here, '../../src/routes.ts');
+  const src = readFileSync(routesPath, 'utf8');
+  const re = /app\.(get|post)\(\s*internalPaths\.(\w+)\s*\(/g;
+  const map = new Map<string, 'GET' | 'POST'>();
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src)) !== null) {
+    const method = m[1]!.toUpperCase() as 'GET' | 'POST';
+    const name = m[2]!;
+    // First registration wins. There should never be duplicates; if a
+    // name shows up twice we fail loudly below.
+    if (map.has(name) && map.get(name) !== method) {
+      throw new Error(
+        `internalPaths.${name} registered with both ${map.get(name)} and ${method} in routes.ts`,
+      );
+    }
+    map.set(name, method);
+  }
+  return map;
+}
+
 describe('CLI invoke route map', () => {
   it('every entry maps to a (noun, verb) that exists in COMMAND_GROUPS', () => {
     for (const r of CLI_INVOKE_ROUTES) {
@@ -47,12 +91,13 @@ describe('CLI invoke route map', () => {
     }
   });
 
-  it('covers every internal agent route exposed by internalPaths', () => {
+  it('covers every internal agent route exposed by internalPaths, with the registered HTTP method', () => {
     // Build the universe of suffixes from `internalPaths` (minus the
     // observability-only `agentCliTrace`, which is logged separately).
     const builders = Object.entries(internalPaths).filter(
       ([name]) => name !== 'agentCliTrace',
     );
+    const registered = buildRegistrationMap();
     for (const [name, fn] of builders) {
       // Each helper is `(cid, aid, ...rest) => string`. Probe with
       // placeholder ids; collapse `:attachmentId` to `*` for the
@@ -62,10 +107,59 @@ describe('CLI invoke route map', () => {
           ? (fn as (...a: string[]) => string)(':cid', ':aid', 'ATT')
           : (fn as (...a: string[]) => string)(':cid', ':aid');
       const suffix = suffixOf(probed).replace('/ATT/', '/*/');
-      // Try GET first, then POST — the map must answer one of them.
-      const hit = lookupCliRoute('GET', suffix) ?? lookupCliRoute('POST', suffix);
-      expect(hit, `internalPaths.${name} (${probed}) has no CLI_INVOKE_ROUTES entry`)
-        .not.toBeNull();
+      // Strict match: the test must know the exact registered method.
+      // Without this the previous `GET ?? POST` fallback masked the
+      // 5/14 `schedules/list` regression — the map said GET, the route
+      // was POST, and the test still passed because POST happened to
+      // hit. Now: ground-truth method must be registered AND must
+      // match the route-map's declared method.
+      const expectedMethod = registered.get(name);
+      expect(
+        expectedMethod,
+        `internalPaths.${name} is not registered in routes.ts (no app.get/app.post call)`,
+      ).toBeDefined();
+      const hit = lookupCliRoute(expectedMethod!, suffix);
+      expect(
+        hit,
+        `internalPaths.${name} (${expectedMethod} ${probed}) has no CLI_INVOKE_ROUTES entry — middleware will log noun=null,verb=null`,
+      ).not.toBeNull();
+    }
+  });
+
+  it('every CLI_INVOKE_ROUTES entry method matches the routes.ts registration', () => {
+    // Reverse direction: walk the route map, find the matching
+    // internalPaths helper by suffix, and assert the methods agree.
+    // This catches the case where someone updates the map to a method
+    // that isn't actually registered (the cli-invoke middleware would
+    // then start logging None.None for that endpoint).
+    const registered = buildRegistrationMap();
+    const builders = Object.entries(internalPaths).filter(
+      ([name]) => name !== 'agentCliTrace',
+    );
+    const suffixToName = new Map<string, string>();
+    for (const [name, fn] of builders) {
+      const probed =
+        name === 'agentLocateAttachment'
+          ? (fn as (...a: string[]) => string)(':cid', ':aid', 'ATT')
+          : (fn as (...a: string[]) => string)(':cid', ':aid');
+      const suffix = suffixOf(probed).replace('/ATT/', '/*/');
+      suffixToName.set(suffix, name);
+    }
+    for (const r of CLI_INVOKE_ROUTES) {
+      const name = suffixToName.get(r.suffix);
+      expect(
+        name,
+        `CLI_INVOKE_ROUTES entry ${r.method} ${r.suffix} has no matching internalPaths helper`,
+      ).toBeDefined();
+      const actualMethod = registered.get(name!);
+      expect(
+        actualMethod,
+        `CLI_INVOKE_ROUTES entry ${r.method} ${r.suffix} → internalPaths.${name} is not registered in routes.ts`,
+      ).toBeDefined();
+      expect(
+        actualMethod,
+        `CLI_INVOKE_ROUTES entry ${r.method} ${r.suffix} → routes.ts registers ${actualMethod} for internalPaths.${name}; the map will produce None.None in cli-*.log`,
+      ).toBe(r.method);
     }
   });
 

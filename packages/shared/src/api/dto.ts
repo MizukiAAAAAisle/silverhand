@@ -25,6 +25,94 @@ export const HostDtoSchema = z.object({
 });
 export type HostDto = z.infer<typeof HostDtoSchema>;
 
+// ── User ─────────────────────────────────────────────────────────
+// Profile-only "human" identity. Auth/credentials live in a separate
+// (V2-only) `user_auth_identities` table; this DTO is what the renderer
+// reads via /api/me. `avatar_url` is a server-rendered URL (currently
+// `silverhand-blob://<storage_key>`); the renderer never assembles
+// storage keys directly.
+export const UserDtoSchema = z.object({
+  id: z.string(),
+  /** Unique mention name. Decided once at registration and never editable
+   *  after — surfaces in the renderer as `@<name>`. Globally unique
+   *  across users.name ⊕ agents.name. */
+  name: z.string(),
+  display_name: z.string(),
+  /** Resolved avatar URL or null. */
+  avatar_url: z.string().nullable(),
+  created_at: z.number(),
+  updated_at: z.number(),
+});
+export type UserDto = z.infer<typeof UserDtoSchema>;
+
+/**
+ * Pre-registration shape returned by `GET /api/me` when no `users` row
+ * exists yet (i.e. `app_settings.viewer_user_id` is unset). The renderer
+ * branches on the discriminator and shows `<RegistrationGate>` rather
+ * than mounting the AppShell.
+ *
+ * `suggested_name` is a server-rendered placeholder of shape
+ * `user-<4hex>` — the renderer uses it as the input default so the form
+ * is never empty on first paint. The user is free to overwrite.
+ */
+export const RegistrationRequiredSchema = z.object({
+  registration_required: z.literal(true),
+  suggested_name: z.string(),
+});
+export type RegistrationRequired = z.infer<typeof RegistrationRequiredSchema>;
+
+/** Discriminated union returned by `GET /api/me`. */
+export const MeResponseSchema = z.union([
+  UserDtoSchema,
+  RegistrationRequiredSchema,
+]);
+export type MeResponse = z.infer<typeof MeResponseSchema>;
+
+// POST /api/register — the SOLE creator of `users` rows. Called once at
+// registration (V1 first launch / V2 after auth signup). Atomically
+// INSERTs the user row and writes `app_settings.viewer_user_id` in a
+// single transaction. Calling it after registration has already
+// completed returns 409 `already_registered`.
+//
+// `display_name` is optional: if omitted, defaults to the registered
+// `name`. Avatar is NOT part of registration — the renderer uploads it
+// via POST /api/me/avatar after this call succeeds (kept separate so we
+// have a single write entry into a pre-registration DB).
+export const RegisterUserInputSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(2, 'name must be at least 2 characters')
+    .max(32, 'name must be at most 32 characters')
+    .regex(
+      // Aligned with MENTION_RE below: alpha-first so `@<name>` always
+      // parses as a mention. A numeric-first name would be a permanent
+      // identity that the chat surface can never link back to.
+      /^[a-zA-Z][a-zA-Z0-9_-]*$/,
+      'name must start with a letter, then letters / digits / dash / underscore',
+    ),
+  display_name: z.string().trim().min(1).max(64).optional(),
+});
+export type RegisterUserInput = z.infer<typeof RegisterUserInputSchema>;
+
+// PATCH /api/me — post-registration profile update. By design `name`
+// is NOT in this schema: the registration boundary is the only public
+// writer. Avatar is also separate (POST /api/me/avatar) so the renderer
+// has a single binary upload path. Empty objects fail validation.
+export const UpdateUserProfileInputSchema = z
+  .object({
+    display_name: z.string().trim().min(1).max(64).optional(),
+  })
+  .refine(v => Object.keys(v).length > 0, { message: 'no fields to update' });
+export type UpdateUserProfileInput = z.infer<typeof UpdateUserProfileInputSchema>;
+
+// Response from POST /api/me/avatar. The renderer doesn't need the raw
+// storage key; the URL is enough.
+export const UploadAvatarResponseSchema = z.object({
+  avatar_url: z.string(),
+});
+export type UploadAvatarResponse = z.infer<typeof UploadAvatarResponseSchema>;
+
 // ── Agent ────────────────────────────────────────────────────────
 export const AgentDtoSchema = z.object({
   id: z.string(),
@@ -58,7 +146,7 @@ export type CreateAgentInput = z.infer<typeof CreateAgentInputSchema>;
 
 // PATCH /api/agents/:id — every field optional, only provided keys
 // are written. `name` and `host_id` are deliberately excluded; `name`
-// is the immutable handle (see migrations.ts v5 comment), and
+// is the immutable identifier (see migrations.ts v5 comment), and
 // changing host is not supported in v1.
 export const UpdateAgentInputSchema = z
   .object({
@@ -465,7 +553,7 @@ export type AgentRunStatesDto = z.infer<typeof AgentRunStatesDtoSchema>;
 export const TaskAssigneeDtoSchema = z.object({
   type: TaskAssigneeTypeSchema,
   id: z.string(),
-  /** Agent display_name or user handle — denormalized for list render. */
+  /** Agent display_name or user name — denormalized for list render. */
   name: z.string(),
 });
 export type TaskAssigneeDto = z.infer<typeof TaskAssigneeDtoSchema>;
@@ -1220,15 +1308,19 @@ export type MarkNotificationsReadInput = z.infer<
 
 // ── Mention extraction ───────────────────────────────────────────
 //
-// Single source of truth for what "@handle" means in a message body.
+// Single source of truth for what "@name" means in a message body.
 // Mirrors the renderer-side regex in `Markdown.tsx` and the
 // composer-side detector — the boundary check rejects emails (`me@x`)
 // and paths (`a/@b`), and the alpha-first requirement rejects issue
-// refs like `@123`. Matches the agent name regex from
-// `CreateAgentInputSchema`.
+// refs like `@123`. Aligned with `RegisterUserInputSchema.name`
+// (alpha-first by design: `users.name` is the permanent mention
+// anchor). `CreateAgentInputSchema.name` is intentionally broader
+// (`/^[a-zA-Z0-9_-]+$/`, allows numeric-first); a numeric-first
+// agent name will not be `@`-mentionable until/unless that schema
+// is tightened — out of scope for the registration rewrite.
 const MENTION_RE = /(?<![\w/])@([a-zA-Z][a-zA-Z0-9_-]*)/g;
 
-/** Returns the unique set of @-handles referenced in `text`, in
+/** Returns the unique set of @-names referenced in `text`, in
  *  first-occurrence order. */
 export function extractMentions(text: string): string[] {
   const seen = new Set<string>();

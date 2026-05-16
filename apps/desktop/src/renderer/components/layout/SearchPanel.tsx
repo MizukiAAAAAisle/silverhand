@@ -17,7 +17,7 @@ import { Input, Label } from '@/components/ui/input';
 import { useAgents } from '@/features/agents/hooks';
 import { useMessageSearch } from '@/features/search/hooks';
 import type { WorkspaceListItem } from '@/features/workspaces/hooks';
-import { CURRENT_USER_ID, formatUserDisplayName } from '@/lib/current-user';
+import { formatUserDisplayName, getCurrentUserId } from '@/lib/current-user';
 import { cn } from '@/lib/cn';
 
 interface SearchPanelProps {
@@ -402,10 +402,10 @@ function SenderFilterSelect({
                 Human
               </Select.Label>
               <SelectItem
-                value={`user:${CURRENT_USER_ID}`}
+                value={`user:${getCurrentUserId() ?? 'self'}`}
                 icon={<User className="size-3.5" />}
               >
-                {formatUserDisplayName(CURRENT_USER_ID)}
+                {formatUserDisplayName(getCurrentUserId())}
               </SelectItem>
             </Select.Group>
             <Select.Group>

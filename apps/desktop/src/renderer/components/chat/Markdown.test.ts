@@ -10,6 +10,16 @@ import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
 import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
 import { taskByNumberKey } from '@/features/tasks/useTaskByNumber';
+import { setCurrentUserId } from '@/lib/current-user';
+
+// Tests pass actor ids through SystemMessage rendering and assert the
+// renderer maps the viewer's id to "@you". Under the post pre-ship
+// rewrite identity model there is no implicit alias for legacy
+// literals like `'local'` — `isCurrentUserId(id)` is true only when
+// `id === currentUserId`. Seed `currentUserId = 'local'` once for
+// the SSR test environment so fixtures using `actor_user_id: 'local'`
+// keep rendering as "@you" without re-introducing the alias.
+setCurrentUserId('local', 'you');
 
 function render(content: string, refs?: Map<string, ConversationReference>): string {
   // PR-4 commit 5 (Cindy review of `45fca42`): ConversationRef now

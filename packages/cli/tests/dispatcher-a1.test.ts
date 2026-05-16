@@ -113,4 +113,63 @@ describe('dispatcher A1 hard guard (real subprocess)', () => {
     const body = parseStderrJson(r.stderr);
     expect(body.error.subkind).not.toBe('unexpected_arguments');
   });
+
+  // ── verb_removed migration hint ────────────────────────────────────
+  // 5/14 daily report logged one `unknown verb message read` failure.
+  // Pointing the typo at the canonical verb (`history`) saves a retry
+  // round AND keeps the agent inside the command surface they meant.
+  // Asserting via real subprocess so the dispatcher wiring is covered
+  // end-to-end (group lookup → removedVerbs resolution → CliError shape).
+  it('rejects message read with subkind=verb_removed and points at history', async () => {
+    const r = await runCli(['message', 'read']);
+    expect(r.code).toBe(1);
+    const body = parseStderrJson(r.stderr);
+    expect(body.error.code).toBe('validation_error');
+    expect(body.error.subkind).toBe('verb_removed');
+    // Dispatcher prefixes "silverhand <noun> <verb> is not a verb;"
+    // already; the hint must NOT repeat that phrase. We assert the
+    // dispatcher prefix appears exactly once and the redirect is
+    // present right after.
+    const phrase = 'silverhand message read is not a verb';
+    const occurrences = body.error.message.split(phrase).length - 1;
+    expect(occurrences).toBe(1);
+    expect(body.error.message).toContain('silverhand message history');
+    expect(body.error.details).toMatchObject({
+      noun: 'message',
+      verb: 'read',
+      replacement: 'history',
+    });
+  });
+
+  it('a genuinely unknown verb still falls back to plain `unknown verb` (no subkind)', async () => {
+    // `message bogus` is not in `removedVerbs`, so the migration hint
+    // path must not fire. Locks the precedence: explicit redirect
+    // first, generic fallback second.
+    const r = await runCli(['message', 'bogus']);
+    expect(r.code).toBe(1);
+    const body = parseStderrJson(r.stderr);
+    expect(body.error.code).toBe('validation_error');
+    expect(body.error.subkind).toBeUndefined();
+    expect(body.error.message).toContain('unknown verb');
+  });
+
+  // ── task create --message → flag_removed ──────────────────────────
+  // 5/14 daily report logged one `unknown flag --message` for
+  // `task create`. Routing it through the `flag_removed` mechanism
+  // gives the agent an actionable migration line instead of a typo
+  // suggestion that's too far for Levenshtein to bridge.
+  it('rejects task create --message with subkind=flag_removed and replacement=title+body', async () => {
+    const r = await runCli(['task', 'create', '--message', 'do the thing']);
+    expect(r.code).toBe(1);
+    const body = parseStderrJson(r.stderr);
+    expect(body.error.code).toBe('validation_error');
+    expect(body.error.subkind).toBe('flag_removed');
+    expect(body.error.message).toContain('--message was removed');
+    expect(body.error.message).toContain('--title');
+    expect(body.error.message).toContain('--body');
+    expect(body.error.details).toEqual({
+      flag: 'message',
+      replacement: 'title+body',
+    });
+  });
 }, { timeout: 20_000 });

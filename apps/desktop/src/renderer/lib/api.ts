@@ -3,7 +3,7 @@ import {
   X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
 import type { BackendInfo } from '../../preload/api';
-import { CURRENT_USER_ID } from './current-user';
+import { getCurrentUserId } from './current-user';
 
 let cachedInfo: BackendInfo | null = null;
 
@@ -45,12 +45,19 @@ async function fetchWithInfo(
 ): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set('Authorization', `Bearer ${info.auth_token}`);
-  // Viewer principal — v1 hardcoded to user:local. When auth is introduced,
-  // replace CURRENT_USER_ID/session resolution here; callsites stay unchanged.
-  headers.set(
-    X_SILVERHAND_PRINCIPAL_HEADER,
-    encodeUserPrincipalHeader(CURRENT_USER_ID),
-  );
+  // Viewer principal — sourced from the boot-time hydration of
+  // `/api/me`. Until that completes we omit the header entirely; the
+  // backend's principal middleware then resolves the viewer via its
+  // `app_settings.viewer_user_id` lookup (set by `POST /api/register`,
+  // unset pre-registration). Once the hydration runs, this header
+  // carries the real viewer id.
+  const viewerId = getCurrentUserId();
+  if (viewerId) {
+    headers.set(
+      X_SILVERHAND_PRINCIPAL_HEADER,
+      encodeUserPrincipalHeader(viewerId),
+    );
+  }
   if (init.body && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
@@ -103,10 +110,13 @@ export async function apiUpload<T = unknown>(
   const send = async (i: BackendInfo): Promise<Response> => {
     const headers = new Headers();
     headers.set('Authorization', `Bearer ${i.auth_token}`);
-    headers.set(
-      X_SILVERHAND_PRINCIPAL_HEADER,
-      encodeUserPrincipalHeader(CURRENT_USER_ID),
-    );
+    const viewerId = getCurrentUserId();
+    if (viewerId) {
+      headers.set(
+        X_SILVERHAND_PRINCIPAL_HEADER,
+        encodeUserPrincipalHeader(viewerId),
+      );
+    }
     return fetch(`${i.url}${path}`, { method: 'POST', headers, body: formData });
   };
   let res: Response;
@@ -152,10 +162,13 @@ export async function fetchAttachmentBlob(attachmentId: string): Promise<{
   const url = `${info.url}/api/attachments/${encodeURIComponent(attachmentId)}`;
   const headers = new Headers();
   headers.set('Authorization', `Bearer ${info.auth_token}`);
-  headers.set(
-    X_SILVERHAND_PRINCIPAL_HEADER,
-    encodeUserPrincipalHeader(CURRENT_USER_ID),
-  );
+  const viewerId = getCurrentUserId();
+  if (viewerId) {
+    headers.set(
+      X_SILVERHAND_PRINCIPAL_HEADER,
+      encodeUserPrincipalHeader(viewerId),
+    );
+  }
   const res = await fetch(url, { headers });
   if (!res.ok) {
     const text = await res.text().catch(() => '');

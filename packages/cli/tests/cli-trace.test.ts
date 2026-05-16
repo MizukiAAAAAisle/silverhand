@@ -82,6 +82,7 @@ describe('cli-trace fire-and-forget reporter', () => {
   // payload must round-trip every subkind the CLI emits today.
   it.each([
     'flag_removed',
+    'verb_removed',
     'unknown_flag',
     'enum_invalid',
     'mutually_exclusive',

@@ -59,6 +59,23 @@ export interface NounGroup {
   noun: string;
   summary: string;
   commands: readonly Command[];
+  /** Verbs this noun USED to accept (or that agents commonly reach for
+   *  by mistake). When the agent types one, the dispatcher throws
+   *  `validation_error` with `subkind: 'verb_removed'` and the supplied
+   *  migration hint pointing at the canonical verb — far more useful
+   *  than the generic `unknown verb` line, since agents seeing the
+   *  generic line tend to retry with another guess instead of reading
+   *  the help. */
+  removedVerbs?: Readonly<Record<string, RemovedVerbSpec>>;
+}
+
+export interface RemovedVerbSpec {
+  /** Canonical verb the agent should switch to. Surfaced in the error
+   *  message and `details.replacement`. */
+  replacement: string;
+  /** One-sentence actionable hint. Should name the canonical verb and
+   *  any cross-cutting consequence (e.g. flag changes). */
+  hint: string;
 }
 
 export const COMMAND_GROUPS: readonly NounGroup[] = [
@@ -66,6 +83,26 @@ export const COMMAND_GROUPS: readonly NounGroup[] = [
     noun: 'message',
     summary: 'Send messages, read history, search visible text.',
     commands: messageCommands,
+    // Agents reach for `silverhand message read` because every IM-style
+    // CLI uses `read` for "show me messages" — but our verb is
+    // `history` (anchored window read). 5/14 daily report logged one
+    // `unknown verb message read` failure. Pointing the typo at the
+    // right verb saves a retry round and keeps the agent in the
+    // command surface they intended.
+    removedVerbs: {
+      read: {
+        replacement: 'history',
+        // The dispatcher prefixes the stderr line with
+        // `silverhand <noun> <verb> is not a verb; ` already, so the
+        // hint must start straight at the actionable redirect — leading
+        // with another "is not a verb" sentence reads as a stutter
+        // (`Cindy review nit on #task:349`).
+        hint:
+          'use `silverhand message history` to read an anchored window ' +
+          '(--before-seq | --after-seq | --around). For full-text ' +
+          'lookup across the workspace use `silverhand message search`.',
+      },
+    },
   },
   {
     noun: 'task',

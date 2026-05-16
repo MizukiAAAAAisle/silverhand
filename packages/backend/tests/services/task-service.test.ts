@@ -161,7 +161,7 @@ describe('TaskService.createTasks', () => {
         tasks: [{ title: 'x' }],
       });
       expect(result).toEqual({ error: 'not_conversation_member' });
-      expect(t.service.list({ actor: { kind: 'user', userId: null } })).toEqual([]);
+      expect(t.service.list({ actor: { kind: 'user', userId: 'local' } })).toEqual([]);
     } finally {
       t.cleanup();
     }
@@ -233,7 +233,7 @@ describe('TaskService.claimTask — agent actor', () => {
         by: { taskNumber: 1 },
       });
       expect(r).toMatchObject({ success: true, task_number: 1 });
-      const fresh = t.service.getByMessageId(r.message_id!, { kind: 'user', userId: null });
+      const fresh = t.service.getByMessageId(r.message_id!, { kind: 'user', userId: 'local' });
       expect(fresh?.status).toBe('in_progress');
       expect(fresh?.assignee?.id).toBe(t.alice.id);
     } finally {
@@ -270,7 +270,7 @@ describe('TaskService.claimTask — agent actor', () => {
         by: { messageId: msg.id },
       });
       expect(r).toMatchObject({ success: true, task_number: 1, message_id: msg.id });
-      const fresh = t.service.getByMessageId(msg.id, { kind: 'user', userId: null });
+      const fresh = t.service.getByMessageId(msg.id, { kind: 'user', userId: 'local' });
       expect(fresh?.status).toBe('in_progress');
       expect(fresh?.assignee?.id).toBe(t.alice.id);
     } finally {
@@ -374,7 +374,7 @@ describe('TaskService.claimTask — agent actor', () => {
         by: { taskNumber: 1 },
       });
       expect(r.success).toBe(true);
-      const fresh = t.service.getByMessageId(r.message_id!, { kind: 'user', userId: null });
+      const fresh = t.service.getByMessageId(r.message_id!, { kind: 'user', userId: 'local' });
       expect(fresh?.status).toBe('in_review');
     } finally {
       t.cleanup();
@@ -479,7 +479,7 @@ describe('TaskService.claimTask — user actor', () => {
         assignee: { agentId: t.bob.id },
       });
       expect(r.success).toBe(true);
-      const fresh = t.service.getByMessageId(r.message_id!, { kind: 'user', userId: null });
+      const fresh = t.service.getByMessageId(r.message_id!, { kind: 'user', userId: 'local' });
       expect(fresh?.status).toBe('in_progress');
       expect(fresh?.assignee?.id).toBe(t.bob.id);
     } finally {
@@ -497,7 +497,7 @@ describe('TaskService.claimTask — user actor', () => {
         by: { messageId: msgId },
       });
       expect(r.success).toBe(true);
-      const fresh = t.service.getByMessageId(msgId, { kind: 'user', userId: null });
+      const fresh = t.service.getByMessageId(msgId, { kind: 'user', userId: 'local' });
       expect(fresh?.status).toBe('in_progress');
       expect(fresh?.assignee).toBe(null);
     } finally {
@@ -522,7 +522,7 @@ describe('TaskService.claimTask — user actor', () => {
         assignee: { agentId: t.alice.id },
       });
       expect(r.success).toBe(true);
-      const fresh = t.service.getByMessageId(msgId, { kind: 'user', userId: null });
+      const fresh = t.service.getByMessageId(msgId, { kind: 'user', userId: 'local' });
       expect(fresh?.status).toBe('in_progress');
       expect(fresh?.assignee?.id).toBe(t.alice.id);
     } finally {
@@ -590,7 +590,7 @@ describe('TaskService.unclaimTask', () => {
       expect(r).toEqual({ success: true });
       const fresh = t.service.getByMessageId((await firstMsgId(t)), {
         kind: 'user',
-        userId: null,
+        userId: 'local',
       });
       expect(fresh?.status).toBe('todo');
       expect(fresh?.assignee).toBe(null);
@@ -678,7 +678,7 @@ describe('TaskService.unclaimTask', () => {
         by: { messageId: msgId },
       });
       expect(r.success).toBe(true);
-      const fresh = t.service.getByMessageId(msgId, { kind: 'user', userId: null });
+      const fresh = t.service.getByMessageId(msgId, { kind: 'user', userId: 'local' });
       expect(fresh?.status).toBe('todo');
       expect(fresh?.assignee).toBe(null);
     } finally {
@@ -804,7 +804,7 @@ describe('TaskService.updateStatus', () => {
         status: 'done',
       });
       expect(r.success).toBe(true);
-      const fresh = t.service.getByMessageId(msgId, { kind: 'user', userId: null });
+      const fresh = t.service.getByMessageId(msgId, { kind: 'user', userId: 'local' });
       expect(fresh?.status).toBe('done');
     } finally {
       t.cleanup();
@@ -879,7 +879,7 @@ describe('TaskService.list / getByMessageId', () => {
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: ch2.id },
         tasks: [{ title: 'task2' }],
       });
-      const r = t.service.list({ actor: { kind: 'user', userId: null } });
+      const r = t.service.list({ actor: { kind: 'user', userId: 'local' } });
       expect(r.length).toBe(2);
     } finally {
       t.cleanup();
@@ -909,7 +909,7 @@ describe('TaskService.list / getByMessageId', () => {
         tasks: [{ title: 'task2' }],
       });
       const r = t.service.list({
-        actor: { kind: 'user', userId: null },
+        actor: { kind: 'user', userId: 'local' },
         workspaceId: ws2.id,
       });
       expect(r.length).toBe(1);
@@ -1060,7 +1060,7 @@ describe('TaskService agent-actor validation', () => {
           tasks: [{ title: 'x' }],
         }),
       ).rejects.toBeInstanceOf(PrincipalConversationMismatchError);
-      expect(t.service.list({ actor: { kind: 'user', userId: null } })).toEqual([]);
+      expect(t.service.list({ actor: { kind: 'user', userId: 'local' } })).toEqual([]);
     } finally {
       t.cleanup();
     }
@@ -1220,7 +1220,7 @@ describe('TaskService agent-actor validation', () => {
       expect(r.success).toBe(false);
       if (!r.success) expect(r.code).toBe('wrong_conversation');
       // Task in other conv is still claimed by alice.
-      const list = t.service.list({ actor: { kind: 'user', userId: null } });
+      const list = t.service.list({ actor: { kind: 'user', userId: 'local' } });
       expect(list[0]!.assignee?.id).toBe(t.alice.id);
     } finally {
       t.cleanup();
@@ -1255,7 +1255,7 @@ describe('TaskService agent-actor validation', () => {
       expect(r.success).toBe(false);
       if (!r.success) expect(r.code).toBe('wrong_conversation');
       // Status unchanged.
-      const list = t.service.list({ actor: { kind: 'user', userId: null } });
+      const list = t.service.list({ actor: { kind: 'user', userId: 'local' } });
       expect(list[0]!.status).toBe('in_progress');
     } finally {
       t.cleanup();
@@ -1430,13 +1430,13 @@ describe('TaskService system message metadata enrichment (PR-2)', () => {
     }
   });
 
-  it('user actor produces actor.kind=user (id=null for legacy) on user-driven mutations', async () => {
+  it('user actor produces actor.kind=user with the principal user id on user-driven mutations', async () => {
     const t = bootstrap();
     try {
       await createTask(t, t.alice.id, 'user-actor-meta');
       const msgId = await firstMsgId(t);
       await t.service.unclaimTask({
-        actor: { kind: 'user', userId: null },
+        actor: { kind: 'user', userId: 'local' },
         by: { messageId: msgId },
       });
       const rows = fetchSystemMetadata(t, 'task_unclaim');
@@ -1445,7 +1445,7 @@ describe('TaskService system message metadata enrichment (PR-2)', () => {
       expect(meta).not.toBeNull();
       expect(meta!.actor.kind).toBe('user');
       if (meta!.actor.kind !== 'user') throw new Error();
-      expect(meta!.actor.id).toBeNull();
+      expect(meta!.actor.id).toBe('local');
       expect(meta!.actor.name).toBe('user');
     } finally {
       t.cleanup();

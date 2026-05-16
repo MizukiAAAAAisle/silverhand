@@ -16,6 +16,7 @@ import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { NotificationRepo } from '../../src/repos/notification-repo.js';
 import { ScheduleRepo } from '../../src/repos/schedule-repo.js';
+import { SettingsRepo } from '../../src/repos/settings-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { createApiRouter, createInternalRouter } from '../../src/routes.js';
 import type { ConversationManager } from '../../src/conversation-manager.js';
@@ -26,6 +27,8 @@ import { ConversationMessageService } from '../../src/services/conversation-mess
 import { ScheduleService } from '../../src/services/schedule-service.js';
 import { TaskService } from '../../src/services/task-service.js';
 import { ThreadService } from '../../src/services/thread-service.js';
+import { UserService } from '../../src/services/user-service.js';
+import { UserRepo } from '../../src/repos/user-repo.js';
 import { createLocalBlobFileStorage } from '../../src/storage/blob-file-storage.js';
 import { makeTempSilverhandDir, openTestDb } from './db.js';
 
@@ -129,6 +132,9 @@ export interface TestApp {
   ctx: BackendContext;
   fake: FakeConversationManager;
   authToken: string;
+  /** The resolved viewer id for this test fixture. Always `'local'` —
+   *  see `openTestDb` for the test fixture registered users. */
+  viewerUserId: string;
   cleanup: () => void;
 }
 
@@ -139,7 +145,7 @@ export interface TestApp {
  * provision, which we don't want in unit tests.
  */
 export function buildTestApp(): TestApp {
-  const { db } = openTestDb();
+  const { db, viewerUserId } = openTestDb();
   const tmp = makeTempSilverhandDir();
   // The real `startBackend` mkdirs workspacesRoot before mounting routes.
   mkdirSync(tmp.workspacesRoot, { recursive: true });
@@ -150,7 +156,6 @@ export function buildTestApp(): TestApp {
     mode: 'embedded',
     url: 'http://127.0.0.1:0',
     auth_token: authToken,
-    user_id: null,
     refresh_token: null,
     child_sessions: {
       max_concurrent_per_parent: null,
@@ -165,6 +170,11 @@ export function buildTestApp(): TestApp {
     attachments: new AttachmentRepo(db),
     conversations: new ConversationRepo(db),
   });
+  const userService = new UserService({
+    db,
+    users: new UserRepo(db),
+    blobStorage,
+  });
 
   const ctx: BackendContext = {
     db,
@@ -175,6 +185,7 @@ export function buildTestApp(): TestApp {
     workspacesRoot: tmp.workspacesRoot,
     blobStorage,
     attachmentService,
+    userService,
     channelService: undefined as unknown as ChannelService,
     conversationMessageService: undefined as unknown as ConversationMessageService,
     threadService: undefined as unknown as ThreadService,
@@ -234,6 +245,7 @@ export function buildTestApp(): TestApp {
     workspaces: new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot }),
     messages: new MessageRepo(db),
     agents: new AgentRepo(db),
+    settings: new SettingsRepo(db),
     conversationManager: ctx.conversationManager,
     events: ctx.events,
     logger: silentLogger,
@@ -254,6 +266,7 @@ export function buildTestApp(): TestApp {
     ctx,
     fake,
     authToken,
+    viewerUserId,
     cleanup: () => {
       ctx.scheduleService.stop();
       try {

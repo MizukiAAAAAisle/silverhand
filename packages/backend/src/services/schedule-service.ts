@@ -17,6 +17,7 @@ import type { ConversationManager } from '../conversation-manager.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
 import type { ScheduleRepo } from '../repos/schedule-repo.js';
+import type { SettingsRepo } from '../repos/settings-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
 
@@ -54,6 +55,9 @@ export interface ScheduleServiceOptions {
   workspaces: WorkspaceRepo;
   messages: MessageRepo;
   agents: AgentRepo;
+  /** Used to resolve the current viewer id from
+   *  `app_settings.viewer_user_id` for the WS scope on schedule fire. */
+  settings: SettingsRepo;
   conversationManager: ConversationManager;
   events: ScopeEventBus;
   logger: BackendLogger;
@@ -94,6 +98,7 @@ export class ScheduleService {
   private readonly workspaces: WorkspaceRepo;
   private readonly messages: MessageRepo;
   private readonly agents: AgentRepo;
+  private readonly settings: SettingsRepo;
   private readonly conversationManager: ConversationManager;
   private readonly events: ScopeEventBus;
   private readonly logger: BackendLogger;
@@ -111,6 +116,7 @@ export class ScheduleService {
     this.workspaces = opts.workspaces;
     this.messages = opts.messages;
     this.agents = opts.agents;
+    this.settings = opts.settings;
     this.conversationManager = opts.conversationManager;
     this.events = opts.events;
     this.logger = opts.logger;
@@ -540,9 +546,15 @@ export class ScheduleService {
       kind: 'message',
       payload: { message: msg },
     });
-    this.events.publishToScope('viewer:local', 'unread_updated', {
-      conversation_id: dmChannelId,
-    });
+    // Push to the resolved viewer's private scope so the renderer's
+    // unread hooks invalidate without polling. Pre-PR1 hardcoded
+    // 'viewer:local'.
+    const viewerUserId = this.settings.getViewerUserId();
+    if (viewerUserId) {
+      this.events.publishToScope(`viewer:${viewerUserId}`, 'unread_updated', {
+        conversation_id: dmChannelId,
+      });
+    }
     // Order matters: `start()` is required for non-oneShot drivers
     // (claude). If start fails, the inbox row sits unread until some
     // other path starts the agent — which is misleading because the

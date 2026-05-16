@@ -53,6 +53,7 @@ export type ErrorCode = (typeof ERROR_CODES)[number];
  */
 export type ErrorSubkind =
   | 'flag_removed'
+  | 'verb_removed'
   | 'unexpected_arguments'
   | 'stdin_is_tty'
   | 'empty_stdin'

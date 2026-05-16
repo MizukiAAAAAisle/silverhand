@@ -171,7 +171,6 @@ export function canDeleteAttachment(
   if (principal.kind === 'system') return true;
   if (principal.kind === 'user') {
     return (
-      principal.userId !== null &&
       attachment.created_by_kind === 'user' &&
       attachment.created_by_id === principal.userId
     );
@@ -189,7 +188,7 @@ export function canViewOwnedState(
 ): boolean {
   if (principal.kind === 'system') return true;
   if (principal.kind !== 'user') return false;
-  return principal.userId !== null && principal.userId === targetUserId;
+  return principal.userId === targetUserId;
 }
 
 export function canSubscribeViewer(

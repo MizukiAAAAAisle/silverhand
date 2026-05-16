@@ -135,6 +135,47 @@ describe('cli invoke middleware', () => {
     expect(line!.payload.error_code).toBe('invalid input');
   });
 
+  it('captures a privacy-safe issue summary on schema validation failures', async () => {
+    // The 5/14 daily report logged `schedule.create | invalid_input |
+    // (empty error_message)` — the route returns a structured
+    // `issues[]` array but the previous middleware threw it away, so
+    // the report parser couldn't bucket. Now we must extract a
+    // {path, code} per issue (NEVER values).
+    const { conversationId, agentId } = await setupAgent(t!);
+    const h = http(t!);
+
+    // Send a body that fails ScheduleCreateInputSchema in multiple
+    // fields at once — validates that we capture all issues, not just
+    // the first.
+    const res = await h.post(
+      `/internal/conversations/${conversationId}/agents/${agentId}/schedules`,
+      { kind: 'unknown_kind', message: '' },
+    );
+    expect(res.status).toBe(400);
+
+    const line = captured.lines.find(l => l.payload.category === 'cli.invoke');
+    expect(line).toBeDefined();
+    expect(line!.payload.error_code).toBe('invalid_input');
+
+    const issues = line!.payload.error_issues as
+      | ReadonlyArray<{ path: string; code: string }>
+      | undefined;
+    expect(issues).toBeDefined();
+    expect(Array.isArray(issues)).toBe(true);
+    expect(issues!.length).toBeGreaterThan(0);
+    // Every entry must have BOTH a non-empty path and a code.
+    for (const i of issues!) {
+      expect(typeof i.path).toBe('string');
+      expect(typeof i.code).toBe('string');
+      expect(i.code.length).toBeGreaterThan(0);
+    }
+
+    // Privacy: nothing about the supplied value (`unknown_kind`)
+    // leaks. The path is structural; `code` is a zod tag.
+    const serialized = JSON.stringify(line!.payload);
+    expect(serialized).not.toContain('unknown_kind');
+  });
+
   it('still logs the call when auth rejects (401 case)', async () => {
     const { conversationId, agentId } = await setupAgent(t!);
 
@@ -242,6 +283,7 @@ describe('cli-trace endpoint', () => {
   // logged payload.
   it.each([
     'flag_removed',
+    'verb_removed',
     'unknown_flag',
     'enum_invalid',
     'mutually_exclusive',

@@ -12,6 +12,7 @@ import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
 import type { NotificationRepo } from '../repos/notification-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
+import { SettingsRepo } from '../repos/settings-repo.js';
 import type { AttachmentService } from './attachment-service.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
 import {
@@ -452,7 +453,17 @@ export class ConversationMessageService {
     return resolved.snapshots;
   }
 
-  private publishUnreadUpdated(conversationId: string, viewerUserId = 'local'): void {
+  /**
+   * Resolves the current viewer id from `app_settings.viewer_user_id`
+   * and publishes an `unread_updated` frame to that viewer's private
+   * scope. Used after every persisted user/agent message so the
+   * renderer's notification & unread hooks invalidate without polling.
+   * Pre-PR1 this hardcoded `'local'`; the registered random-id
+   * viewer needs the resolved id or the renderer never sees the event.
+   */
+  private publishUnreadUpdated(conversationId: string): void {
+    const viewerUserId = new SettingsRepo(this.db).getViewerUserId();
+    if (!viewerUserId) return;
     this.events.publishToScope(`viewer:${viewerUserId}`, 'unread_updated', {
       conversation_id: conversationId,
     });
@@ -494,6 +505,7 @@ export class ConversationMessageService {
         message,
         sourceConversation,
         sourceWorkspace,
+        db: this.db,
         agents: this.agents,
         conversations: this.conversations,
         messages: this.messages,

@@ -17,14 +17,29 @@ import {
   RotateCcw,
   Save,
   Type,
+  User,
 } from 'lucide-react';
 import type { RuntimeKind } from '@silverhand/shared';
+import {
+  AVATAR_MAX_SIZE_LABEL,
+  encodeUserPrincipalHeader,
+  validateAvatarFile,
+  X_SILVERHAND_PRINCIPAL_HEADER,
+} from '@silverhand/shared';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { AgentAvatar } from '@/components/AgentAvatar';
-import { api } from '@/lib/api';
+import { api, getBackendInfo } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { useAppearance } from '@/hooks/useAppearance';
+import { getCurrentUserId } from '@/lib/current-user';
+import {
+  isRegistrationRequired,
+  useClearAvatar,
+  useUpdateProfile,
+  useUploadAvatar,
+  useViewerUser,
+} from '@/features/me/hooks';
 import {
   DEFAULT_MARKDOWN_FONT_SIZE,
   FONT_SIZE_MAX,
@@ -95,8 +110,12 @@ function parseRuntimes(raw: string | undefined | null): RuntimeKind[] {
  *  page-internal sub-nav; selection is local React state, persisted to
  *  localStorage so a refresh stays put. (No URL routing yet — settings
  *  deep-links are rare and the URL slot belongs to the chat router.) */
-type SettingsSection = 'appearance' | 'proxy';
-const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = ['appearance', 'proxy'];
+type SettingsSection = 'appearance' | 'profile' | 'proxy';
+const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
+  'appearance',
+  'profile',
+  'proxy',
+];
 const SETTINGS_SECTION_KEY = 'silverhand:settings-section';
 
 function readPersistedSection(): SettingsSection {
@@ -228,6 +247,8 @@ export function SettingsPage(): JSX.Element {
               resetMarkdownText={resetMarkdownText}
               resetMarkdownFontSize={resetMarkdownFontSize}
             />
+          ) : section === 'profile' ? (
+            <ProfilePane />
           ) : (
             <ProxyPane
               proxyUrl={proxyUrl}
@@ -268,6 +289,7 @@ function SettingsSubNav({
     icon: ReactNode;
   }> = [
     { id: 'appearance', label: 'Appearance', icon: <Palette className="size-3.5" /> },
+    { id: 'profile', label: 'Profile', icon: <User className="size-3.5" /> },
     { id: 'proxy', label: 'Proxy', icon: <Network className="size-3.5" /> },
   ];
 
@@ -425,6 +447,275 @@ function AppearancePane({
           </SettingsSection>
         </div>
       </div>
+    </section>
+  );
+}
+
+/** Profile pane — viewer's mention name (read-only), display name, and
+ *  avatar. Backed by `/api/me` (GET/PATCH/POST/DELETE) for reads and
+ *  display_name / avatar edits.
+ *
+ *  `name` is set once at registration (full-screen gate before the app
+ *  shell mounts) and is intentionally not editable here: the backend
+ *  service / route layer does not expose a rename surface, and PATCH
+ *  /api/me does not accept a `name` field. The display copy makes this
+ *  permanent contract visible to the user. */
+function ProfilePane(): JSX.Element {
+  const viewer = useViewerUser();
+  const updateProfile = useUpdateProfile();
+  const uploadAvatar = useUploadAvatar();
+  const clearAvatar = useClearAvatar();
+
+  // ProfilePane only mounts after registration (App.tsx gates the
+  // shell behind <RegistrationGate />), so any `registration_required`
+  // shape here is a transient race during refetch. Narrow once and
+  // treat it as `undefined` for the rest of the pane.
+  const dto =
+    viewer.data && !isRegistrationRequired(viewer.data) ? viewer.data : undefined;
+
+  const [displayName, setDisplayName] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [avatarObjectUrl, setAvatarObjectUrl] = useState<string | null>(null);
+
+  // Seed local form state from server. Re-runs whenever the cached
+  // viewer dto changes (e.g. after a successful PATCH).
+  useEffect(() => {
+    if (dto) {
+      setDisplayName(dto.display_name);
+      setError(null);
+    }
+  }, [dto]);
+
+  // Avatars require auth headers, so they cannot be dropped straight
+  // into `<img src>`. Mirror the attachment pattern: fetch as a Blob,
+  // make an object URL, revoke it on unmount / update.
+  useEffect(() => {
+    let revoked = false;
+    let objectUrlAtFetchTime: string | null = null;
+    const path = dto?.avatar_url;
+    if (!path) {
+      setAvatarObjectUrl(null);
+      return;
+    }
+    void (async () => {
+      try {
+        const info = await getBackendInfo();
+        const headers = new Headers();
+        headers.set('Authorization', `Bearer ${info.auth_token}`);
+        const id = getCurrentUserId();
+        if (id) {
+          headers.set(
+            X_SILVERHAND_PRINCIPAL_HEADER,
+            encodeUserPrincipalHeader(id),
+          );
+        }
+        const res = await fetch(`${info.url}${path}`, { headers });
+        if (!res.ok) return;
+        const blob = await res.blob();
+        if (revoked) return;
+        objectUrlAtFetchTime = URL.createObjectURL(blob);
+        setAvatarObjectUrl(objectUrlAtFetchTime);
+      } catch {
+        // Best-effort — falls back to the placeholder.
+      }
+    })();
+    return () => {
+      revoked = true;
+      if (objectUrlAtFetchTime) URL.revokeObjectURL(objectUrlAtFetchTime);
+    };
+  }, [dto?.avatar_url]);
+
+  const dirty =
+    !!dto && displayName !== dto.display_name;
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!dto) return;
+    setError(null);
+    try {
+      await updateProfile.mutateAsync({
+        display_name:
+          displayName !== dto.display_name ? displayName : undefined,
+      });
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 1500);
+    } catch (err) {
+      const apiErr = err as { body?: string; message?: string };
+      let parsed: { error?: string; code?: string } = {};
+      try {
+        parsed = JSON.parse(apiErr.body ?? '{}');
+      } catch {
+        // not JSON — fall through to .message.
+      }
+      setError(parsed.error ?? apiErr.message ?? 'Failed to save');
+    }
+  };
+
+  const onPickAvatar = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-uploading the same file later
+    if (!file) return;
+    setError(null);
+    const validation = validateAvatarFile(file);
+    if (validation) {
+      setError(validation.message);
+      return;
+    }
+    try {
+      await uploadAvatar.mutateAsync({ file });
+    } catch (err) {
+      const apiErr = err as { body?: string; message?: string };
+      let parsed: { error?: string; code?: string } = {};
+      try {
+        parsed = JSON.parse(apiErr.body ?? '{}');
+      } catch {
+        // not JSON — fall through to .message.
+      }
+      setError(parsed.error ?? apiErr.message ?? 'Failed to upload avatar');
+    }
+  };
+
+  const onClearAvatar = async () => {
+    setError(null);
+    try {
+      await clearAvatar.mutateAsync();
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  if (viewer.isLoading) {
+    return (
+      <section className="flex min-w-0 flex-1 items-center justify-center py-10 text-xs text-text-muted">
+        Loading profile…
+      </section>
+    );
+  }
+  if (!dto) {
+    return (
+      <section className="flex min-w-0 flex-1 items-center justify-center py-10 text-xs text-text-muted">
+        Could not load your profile. Please retry from the main app.
+      </section>
+    );
+  }
+
+  return (
+    <section className="flex min-w-0 flex-1 flex-col gap-5 px-5 py-5">
+      <header className="flex flex-col gap-1">
+        <h2 className="font-serif text-base font-semibold text-text-primary">
+          Profile
+        </h2>
+        <p className="text-xs text-text-muted">
+          How you appear to agents in this workspace. Your name was set at
+          registration and cannot be changed; display name and avatar can.
+        </p>
+      </header>
+
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <div className="flex flex-col gap-2">
+          <Label>Name</Label>
+          <div className="flex max-w-sm items-center gap-2 rounded-md border border-border-subtle bg-bg-row-hover px-3 py-1.5 text-sm text-text-primary">
+            <span className="font-mono text-text-muted">@</span>
+            <span className="select-text">{dto.name}</span>
+          </div>
+          <p className="text-[11px] text-text-muted">
+            Permanent — used for <code>@mention</code>s across messages,
+            prompts, and search.
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="profile-display-name">Display name</Label>
+          <Input
+            id="profile-display-name"
+            value={displayName}
+            onChange={e => setDisplayName(e.target.value)}
+            placeholder="Your Name"
+            className="max-w-sm"
+          />
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <Label>Avatar</Label>
+          <div className="flex items-center gap-3">
+            <div className="grid size-14 place-items-center overflow-hidden rounded-full border border-border-subtle bg-bg-row-hover">
+              {avatarObjectUrl ? (
+                // eslint-disable-next-line jsx-a11y/img-redundant-alt
+                <img
+                  src={avatarObjectUrl}
+                  alt="Your avatar"
+                  className="size-full object-cover"
+                />
+              ) : (
+                <User className="size-6 text-text-muted" />
+              )}
+            </div>
+            <div className="flex flex-col gap-1">
+              <label
+                className={cn(
+                  'inline-flex cursor-pointer items-center gap-1 rounded-md border border-border-subtle px-2.5 py-1 text-xs text-text-primary transition-colors',
+                  uploadAvatar.isPending
+                    ? 'opacity-50'
+                    : 'hover:bg-bg-row-hover',
+                )}
+              >
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/gif,image/webp"
+                  onChange={onPickAvatar}
+                  disabled={uploadAvatar.isPending}
+                  className="sr-only"
+                />
+                {uploadAvatar.isPending ? (
+                  <>
+                    <Loader2 className="size-3 animate-spin" />
+                    Uploading…
+                  </>
+                ) : (
+                  'Upload new'
+                )}
+              </label>
+              {dto.avatar_url ? (
+                <button
+                  type="button"
+                  onClick={onClearAvatar}
+                  disabled={clearAvatar.isPending}
+                  className="self-start text-[11px] text-text-muted underline-offset-2 hover:underline disabled:opacity-50"
+                >
+                  Remove avatar
+                </button>
+              ) : null}
+              <p className="text-[11px] text-text-muted">
+                PNG / JPEG / GIF / WEBP, up to {AVATAR_MAX_SIZE_LABEL}.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <footer className="flex items-center gap-3 pt-2">
+          <Button type="submit" disabled={!dirty || updateProfile.isPending}>
+            {updateProfile.isPending ? (
+              <>
+                <Loader2 className="size-3.5 animate-spin" /> Saving…
+              </>
+            ) : (
+              <>
+                <Save className="size-3.5" /> Save changes
+              </>
+            )}
+          </Button>
+          {saved ? (
+            <span className="inline-flex items-center gap-1 text-xs text-text-secondary">
+              <CheckCircle2 className="size-3.5 text-status-success" />
+              Saved
+            </span>
+          ) : null}
+          {error ? (
+            <span className="text-xs text-status-error">{error}</span>
+          ) : null}
+        </footer>
+      </form>
     </section>
   );
 }

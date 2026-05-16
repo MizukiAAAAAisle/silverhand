@@ -1333,4 +1333,363 @@ export const migrations: Migration[] = [
         ON conversation_inboxes(conversation_id, agent_id, message_id);
     `,
   },
+  {
+    version: 21,
+    name: 'users_registry',
+    foreignKeyEscape: true,
+    // Establishes a real `users` table to back the principal abstraction.
+    //
+    // INVARIANT: a row in `users` represents a *registered* identity.
+    // Pre-registration there is NO user row — `app_settings.viewer_user_id`
+    // is simply absent. `POST /api/register` is the sole creator of user
+    // rows: it INSERTs a new `users` row and writes `viewer_user_id` in
+    // a single transaction. The principal middleware reads
+    // `viewer_user_id`; when absent, no user principal is set, and the
+    // pre-register gate refuses every public route except the
+    // registration whitelist (`GET /api/me`, `POST /api/register`,
+    // `GET /api/health`).
+    //
+    // V2 multi-user only swaps the principal *source* (token claims
+    // instead of `app_settings.viewer_user_id`) and adds auth identity /
+    // session tables; this schema does not change. Future invitation
+    // flows use a separate `pending_invites` table — they do NOT
+    // pre-insert into `users`.
+    //
+    // DEFERRED ADOPTION (replaces the earlier "wipe contract"): pre-v21
+    // dev DBs hold legacy user-id literals (`'local'`, `'desktop-user-42'`,
+    // etc.) in user-owned columns. Rather than DELETE/NULL those rows
+    // and force `rm -rf ~/.silverhand` on every developer, v21 stages
+    // the legacy facts into four `legacy_*_v21` holding tables and
+    // leaves the new main schema empty/clean. `POST /api/register`
+    // (in `UserService.register()`) is the sole adopter: in the same
+    // transaction that creates the first `users` row, it consumes the
+    // staging tables and rewrites the legacy ids to the new viewer.
+    // After successful registration the staging tables are dropped and
+    // an audit row is written to `app_settings`. See
+    // `docs/human-identity-migration-cleanup-plan.md` for the long-term
+    // plan to retire the bridge.
+    //
+    // What this migration does (NON-DESTRUCTIVE):
+    //   1. CREATE TABLE `users` with `name UNIQUE` and avatar pair-CHECK.
+    //   2. Capture pre-v21 user-owned references into staging tables:
+    //        - `legacy_message_from_user_v21(message_id PK)` — message
+    //          ids whose old `from_kind='user' AND from_user_id IS NOT NULL`.
+    //        - `legacy_message_task_assignee_user_v21(message_id PK)` —
+    //          message ids whose old `task_number IS NOT NULL AND
+    //          task_assignee_user_id IS NOT NULL`.
+    //        - `legacy_conversation_reads_v21(...full row + original_user_id)`
+    //          — every old conversation_reads row, intact.
+    //        - `legacy_user_attachments_v21(...full attachments columns)`
+    //          — every old `attachments(created_by_kind='user')` row, intact.
+    //   3. Move kind=user attachments out of the main `attachments`
+    //      table BEFORE installing the dispatch trigger so the trigger
+    //      never sees a row with a created_by_id that isn't yet a
+    //      legitimate user — the staging table is the temporary home
+    //      for those rows until registration adopts them.
+    //   4. Rebuild messages / conversation_reads / notifications with
+    //      FK to `users(id)` (v12 ALTER RENAME pattern). user-id columns
+    //      are INSERT-SELECTed as NULL (legacy values are already preserved
+    //      via staging on the message ids that need them; conversation_reads
+    //      starts empty because the staging table holds the full rows).
+    //      `notifications.user_id` is intentionally NOT staged — the
+    //      majority of pre-v21 notifications were system-kind with no
+    //      user_id, and bulk-adopting them at register would over-claim.
+    //   5. Install `attachments.created_by_id` polymorphic dispatch
+    //      trigger (kind=user → users; kind=agent → agents). Safe now
+    //      that user-kind rows are in staging.
+    //   6. Install cross-namespace uniqueness triggers between
+    //      `users.name` and `agents.name` so `@<name>` mentions resolve
+    //      unambiguously.
+    //   7. Final `pragma_foreign_key_check` to refuse an inconsistent
+    //      commit.
+    //
+    // FRESH-DB CASE: source rows are zero, staging tables are created
+    // empty, register's adoption step is a no-op, audit counts are all
+    // zero. Same code path, same final state.
+    //
+    // PRE-V21 BACKUP CASE: source rows non-empty, staging captures them,
+    // register's adoption step rewrites legacy ids to the new viewer
+    // and drops the staging tables.
+    up: `
+      CREATE TABLE users (
+        id                  TEXT PRIMARY KEY,
+        name                TEXT NOT NULL UNIQUE,
+        display_name        TEXT NOT NULL,
+        avatar_storage_key  TEXT,
+        avatar_content_type TEXT,
+        created_at          INTEGER NOT NULL,
+        updated_at          INTEGER NOT NULL,
+        CHECK (
+          (avatar_storage_key IS NULL AND avatar_content_type IS NULL)
+          OR
+          (avatar_storage_key IS NOT NULL AND avatar_content_type IS NOT NULL)
+        )
+      );
+
+      -- Staging tables for legacy user-owned facts. Built with explicit
+      -- DDL (not CREATE TABLE AS SELECT) so PK / column types are exact;
+      -- INSERT SELECT then captures the source rows. Empty source =
+      -- empty staging, register adoption is a no-op.
+
+      CREATE TABLE legacy_message_from_user_v21 (
+        message_id TEXT PRIMARY KEY
+      );
+      INSERT INTO legacy_message_from_user_v21 (message_id)
+      SELECT id
+        FROM messages
+       WHERE from_kind = 'user'
+         AND from_user_id IS NOT NULL;
+
+      CREATE TABLE legacy_message_task_assignee_user_v21 (
+        message_id TEXT PRIMARY KEY
+      );
+      INSERT INTO legacy_message_task_assignee_user_v21 (message_id)
+      SELECT id
+        FROM messages
+       WHERE task_number IS NOT NULL
+         AND task_assignee_user_id IS NOT NULL;
+
+      CREATE TABLE legacy_conversation_reads_v21 (
+        original_user_id TEXT NOT NULL,
+        conversation_id  TEXT NOT NULL,
+        last_read_seq    INTEGER NOT NULL,
+        read_at          INTEGER NOT NULL,
+        PRIMARY KEY (original_user_id, conversation_id)
+      );
+      INSERT INTO legacy_conversation_reads_v21
+        (original_user_id, conversation_id, last_read_seq, read_at)
+      SELECT user_id, conversation_id, last_read_seq, read_at
+        FROM conversation_reads;
+
+      -- attachments staging mirrors the v15 column shape exactly so
+      -- adoption can re-INSERT into the live attachments table without
+      -- column drift. No FK declared here (staging is a parking lot).
+      CREATE TABLE legacy_user_attachments_v21 (
+        id                     TEXT PRIMARY KEY,
+        channel_id             TEXT NOT NULL,
+        source_conversation_id TEXT,
+        filename               TEXT NOT NULL,
+        size                   INTEGER NOT NULL,
+        content_type           TEXT NOT NULL,
+        storage                TEXT NOT NULL,
+        storage_key            TEXT NOT NULL,
+        created_by_kind        TEXT NOT NULL,
+        created_by_id          TEXT NOT NULL,
+        created_at             INTEGER NOT NULL
+      );
+      INSERT INTO legacy_user_attachments_v21
+        (id, channel_id, source_conversation_id, filename, size, content_type,
+         storage, storage_key, created_by_kind, created_by_id, created_at)
+      SELECT id, channel_id, source_conversation_id, filename, size, content_type,
+             storage, storage_key, created_by_kind, created_by_id, created_at
+        FROM attachments
+       WHERE created_by_kind = 'user';
+
+      -- Now that user-kind attachments are safely in staging, evict
+      -- them from the main table. Remaining rows are kind='agent' and
+      -- already FK-valid, so the trigger we install in step 5 won't
+      -- block any existing data.
+      DELETE FROM attachments
+       WHERE created_by_kind = 'user';
+
+      -- Rebuild messages with FK on from_user_id and task_assignee_user_id.
+      -- user-id columns are NULL'd; legacy attribution lives in
+      -- legacy_message_*_v21 staging and is restored at register time.
+      ALTER TABLE messages RENAME TO messages_legacy_v21;
+
+      CREATE TABLE messages (
+        id                      TEXT PRIMARY KEY,
+        conversation_id         TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        from_kind               TEXT NOT NULL,
+        from_agent_id           TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        from_user_id            TEXT REFERENCES users(id) ON DELETE SET NULL,
+        content                 TEXT NOT NULL,
+        metadata                TEXT,
+        seq                     INTEGER NOT NULL,
+        created_at              INTEGER NOT NULL,
+        task_number             INTEGER,
+        task_status             TEXT,
+        task_assignee_agent_id  TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        task_assignee_user_id   TEXT REFERENCES users(id) ON DELETE SET NULL,
+        task_title              TEXT,
+        task_workspace_id       TEXT REFERENCES workspaces(id) ON DELETE CASCADE
+      );
+
+      INSERT INTO messages
+        (id, conversation_id, from_kind, from_agent_id, from_user_id,
+         content, metadata, seq, created_at, task_number, task_status,
+         task_assignee_agent_id, task_assignee_user_id, task_title,
+         task_workspace_id)
+      SELECT id, conversation_id, from_kind, from_agent_id, NULL,
+             content, metadata, seq, created_at, task_number, task_status,
+             task_assignee_agent_id, NULL, task_title,
+             task_workspace_id
+        FROM messages_legacy_v21;
+
+      DROP TABLE messages_legacy_v21;
+
+      CREATE INDEX idx_messages_conversation
+        ON messages(conversation_id, seq);
+      CREATE UNIQUE INDEX uniq_messages_task_workspace_number
+        ON messages(task_workspace_id, task_number)
+        WHERE task_number IS NOT NULL;
+      CREATE INDEX idx_messages_task_workspace
+        ON messages(task_workspace_id, task_status)
+        WHERE task_workspace_id IS NOT NULL;
+      CREATE INDEX idx_messages_conversation_from_kind
+        ON messages(conversation_id, from_kind, seq);
+
+      -- Rebuild conversation_reads with FK on user_id (NOT NULL by domain).
+      ALTER TABLE conversation_reads RENAME TO conversation_reads_legacy_v21;
+
+      CREATE TABLE conversation_reads (
+        user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        conversation_id  TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        last_read_seq    INTEGER NOT NULL DEFAULT 0,
+        read_at          INTEGER NOT NULL,
+        PRIMARY KEY (user_id, conversation_id)
+      );
+
+      -- Pre-v21 rows were already copied to legacy_conversation_reads_v21
+      -- staging above; do not copy them into the live table here —
+      -- adoption at POST /api/register time will rewrite legacy ids to
+      -- the freshly registered viewer.
+      DROP TABLE conversation_reads_legacy_v21;
+
+      CREATE INDEX idx_conversation_reads_conversation
+        ON conversation_reads(conversation_id);
+
+      -- Rebuild notifications with FK on user_id (nullable; SET NULL on
+      -- delete so notification rows stay readable when the user goes
+      -- away in the future). user_id values are NULL'd because the
+      -- pre-v21 majority were system-kind notifications anyway; we
+      -- intentionally do NOT stage them — bulk-adopting at register
+      -- would over-claim system-authored notifications to the viewer.
+      ALTER TABLE notifications RENAME TO notifications_legacy_v21;
+
+      CREATE TABLE notifications (
+        id                      TEXT PRIMARY KEY,
+        kind                    TEXT NOT NULL,
+        user_id                 TEXT REFERENCES users(id) ON DELETE SET NULL,
+        agent_id                TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        workspace_id            TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
+        conversation_id         TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+        message_id              TEXT REFERENCES messages(id) ON DELETE SET NULL,
+        source_workspace_id     TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
+        source_conversation_id  TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+        source_message_id       TEXT REFERENCES messages(id) ON DELETE SET NULL,
+        payload                 TEXT,
+        read_at                 INTEGER,
+        created_at              INTEGER NOT NULL
+      );
+
+      INSERT INTO notifications
+        (id, kind, user_id, agent_id, workspace_id, conversation_id, message_id,
+         source_workspace_id, source_conversation_id, source_message_id,
+         payload, read_at, created_at)
+      SELECT id, kind, NULL, agent_id, workspace_id, conversation_id, message_id,
+             source_workspace_id, source_conversation_id, source_message_id,
+             payload, read_at, created_at
+        FROM notifications_legacy_v21;
+
+      DROP TABLE notifications_legacy_v21;
+
+      CREATE INDEX idx_notifications_unread
+        ON notifications(user_id, read_at, created_at DESC);
+      CREATE INDEX idx_notifications_conversation_unread
+        ON notifications(conversation_id, read_at, created_at DESC);
+      CREATE INDEX idx_notifications_source_conversation
+        ON notifications(source_conversation_id, created_at DESC);
+
+      -- attachments.created_by_id is polymorphic (kind ∈ {user, agent}).
+      -- SQLite has no conditional FK syntax, so a trigger validates by
+      -- kind. Honest about what it is, instead of pretending to be FK.
+      CREATE TRIGGER attachments_created_by_validate_insert
+      BEFORE INSERT ON attachments
+      BEGIN
+        SELECT CASE
+          WHEN NEW.created_by_kind = 'user'
+               AND NOT EXISTS (SELECT 1 FROM users WHERE id = NEW.created_by_id)
+          THEN RAISE(ABORT, 'attachments.created_by_id (kind=user) must reference users(id)')
+          WHEN NEW.created_by_kind = 'agent'
+               AND NOT EXISTS (SELECT 1 FROM agents WHERE id = NEW.created_by_id)
+          THEN RAISE(ABORT, 'attachments.created_by_id (kind=agent) must reference agents(id)')
+        END;
+      END;
+
+      CREATE TRIGGER attachments_created_by_validate_update
+      BEFORE UPDATE OF created_by_kind, created_by_id ON attachments
+      BEGIN
+        SELECT CASE
+          WHEN NEW.created_by_kind = 'user'
+               AND NOT EXISTS (SELECT 1 FROM users WHERE id = NEW.created_by_id)
+          THEN RAISE(ABORT, 'attachments.created_by_id (kind=user) must reference users(id)')
+          WHEN NEW.created_by_kind = 'agent'
+               AND NOT EXISTS (SELECT 1 FROM agents WHERE id = NEW.created_by_id)
+          THEN RAISE(ABORT, 'attachments.created_by_id (kind=agent) must reference agents(id)')
+        END;
+      END;
+
+      -- Mention resolution treats users.name ⊕ agents.name as a single
+      -- namespace; otherwise @local could be ambiguous if a user named
+      -- 'local' coexists with an agent named 'local'. Reject any insert
+      -- or rename that would produce a collision.
+      CREATE TRIGGER users_name_unique_against_agents_insert
+      BEFORE INSERT ON users
+      WHEN EXISTS (SELECT 1 FROM agents WHERE name = NEW.name)
+      BEGIN
+        SELECT RAISE(ABORT, 'users.name collides with an existing agent name');
+      END;
+
+      CREATE TRIGGER users_name_unique_against_agents_update
+      BEFORE UPDATE OF name ON users
+      WHEN NEW.name != OLD.name
+        AND EXISTS (SELECT 1 FROM agents WHERE name = NEW.name)
+      BEGIN
+        SELECT RAISE(ABORT, 'users.name collides with an existing agent name');
+      END;
+
+      CREATE TRIGGER agents_name_unique_against_users_insert
+      BEFORE INSERT ON agents
+      WHEN EXISTS (SELECT 1 FROM users WHERE name = NEW.name)
+      BEGIN
+        SELECT RAISE(ABORT, 'agents.name collides with an existing user name');
+      END;
+
+      CREATE TRIGGER agents_name_unique_against_users_update
+      BEFORE UPDATE OF name ON agents
+      WHEN NEW.name != OLD.name
+        AND EXISTS (SELECT 1 FROM users WHERE name = NEW.name)
+      BEGIN
+        SELECT RAISE(ABORT, 'agents.name collides with an existing user name');
+      END;
+
+      -- Final FK integrity check (mirrors v12). Any orphan reference
+      -- aborts the migration so we never commit a broken state.
+      CREATE TEMP TABLE _v21_fk_check (
+        table_name TEXT CHECK (table_name IS NULL),
+        rowid      INTEGER,
+        parent     TEXT,
+        fkid       INTEGER
+      );
+      INSERT INTO _v21_fk_check SELECT * FROM pragma_foreign_key_check;
+      DROP TABLE _v21_fk_check;
+    `,
+  },
+  {
+    version: 22,
+    name: 'identity_model_rewritten_pre_ship',
+    // No-op. The original v22 renamed `users.handle` → `users.name`;
+    // the rewritten v21 (above) creates the column as `name` directly,
+    // so this version exists only to keep the version sequence stable
+    // for dev DBs that already advanced to v22 under the prior model.
+    // No data or schema changes.
+    //
+    // See v21 header for the Deferred Adoption contract — pre-v21
+    // user-owned facts are staged into `legacy_*_v21` and adopted at
+    // first `POST /api/register`. Future identity-model changes
+    // should land in a new migration version, not by mutating either
+    // of these.
+    up: `-- intentionally empty`,
+  },
 ];

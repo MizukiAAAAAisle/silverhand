@@ -11,6 +11,7 @@ import { HostRepo } from '../../src/repos/host-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { NotificationRepo } from '../../src/repos/notification-repo.js';
 import { ScheduleRepo } from '../../src/repos/schedule-repo.js';
+import { SettingsRepo } from '../../src/repos/settings-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { ConversationManager } from '../../src/conversation-manager.js';
@@ -20,6 +21,8 @@ import { ConversationMessageService } from '../../src/services/conversation-mess
 import { ScheduleService } from '../../src/services/schedule-service.js';
 import { ThreadService } from '../../src/services/thread-service.js';
 import { TaskService } from '../../src/services/task-service.js';
+import { UserService } from '../../src/services/user-service.js';
+import { UserRepo } from '../../src/repos/user-repo.js';
 import { initWorkspaceDir } from '../../src/workspace-files.js';
 import { createLocalBlobFileStorage } from '../../src/storage/blob-file-storage.js';
 import { makeTempSilverhandDir, openTestDb } from './db.js';
@@ -123,7 +126,6 @@ export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {})
     mode: 'embedded',
     url: 'http://127.0.0.1:0',
     auth_token: 'a'.repeat(32),
-    user_id: null,
     refresh_token: null,
     child_sessions: {
       max_concurrent_per_parent: null,
@@ -138,6 +140,11 @@ export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {})
     attachments: new AttachmentRepo(db),
     conversations: new ConversationRepo(db),
   });
+  const userService = new UserService({
+    db,
+    users: new UserRepo(db),
+    blobStorage,
+  });
 
   const ctx: BackendContext = {
     db,
@@ -149,6 +156,7 @@ export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {})
     logDir: opts.logDir,
     blobStorage,
     attachmentService,
+    userService,
     channelService: undefined as unknown as ChannelService,
     conversationMessageService: undefined as unknown as ConversationMessageService,
     threadService: undefined as unknown as ThreadService,
@@ -213,6 +221,7 @@ export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {})
     workspaces: new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot }),
     messages: new MessageRepo(db),
     agents: new AgentRepo(db),
+    settings: new SettingsRepo(db),
     conversationManager: ctx.conversationManager,
     events: ctx.events,
     logger: silentLogger,
