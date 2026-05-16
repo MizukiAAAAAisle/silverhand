@@ -4,6 +4,19 @@
 
 ---
 
+## 2026-05-17 — Human identity ship + Mode B cleanup
+
+- **Commit 1 (`feat: register-based human identity (V1) + CLI observability fixes`)**：把已 review 的人身份重写（v21 staging + register-time 适配 + RegistrationGate + ProfilePane + 5MB avatar）和 #task:349 CLI observability 收尾（cli-invoke-middleware 抽 `{path,code}` issue summary、`cli-route-map` `schedules/list` 改 POST、`verb_removed` 调度 subkind）一起落地。两篇 `docs/human-identity-*.md` 同 commit 入仓。@shiki 本地 backup 恢复后已经按 §10 验证通过；DB adoption counts (1019/0/71/12) 与实测 1021/0/72/12 对齐。
+- **Commit 2 (`feat: Mode B cleanup — retire Deferred Adoption bridge`)**：按 cleanup-plan §6 落地 Mode B：
+  - `Migration` interface 加 `precondition?: (db) => void`；`runMigrations` 抽出 `applySingleMigration` 让普通 + `foreignKeyEscape` 两条分支共享同一条 apply path（precondition 在事务内、`up` 之前跑）。
+  - 新增 v23 `remove_v21_adoption_bridge`：precondition 检查每张 `legacy_*_v21` staging 表的行数 + `pragma('foreign_key_check')`，非空 staging 触发清晰的 "register first on a build that still has Deferred Adoption" 错误（旧 SQL `RAISE(ABORT, ...)` 仅 trigger 内合法、文档示例已修正）；`up` 用 `DROP TABLE IF EXISTS` 把已确证为空的 staging 删干净。
+  - `UserService.register()` 删 `adoptLegacyV21` helper + 调用；`SETTINGS_KEYS.LEGACY_V21_ADOPTION_*` 删；`tests/services/user-service-adoption.test.ts` 删（adoption runtime 不再存在）。
+  - `tests/db-migrations.test.ts` 加 `applyMigrationsThrough(db, max)` helper + 3 条 v23 测试（fresh-DB 全跑过 / 非空 staging 拒绝 / post-adoption idempotent）；v16/v20/v21 staging-creation 测试改为 `applyMigrationsThrough(db, 22)` 保留 v21 历史合同。
+  - 两篇 `docs/human-identity-*.md` 加 status footer 标记 cleanup landed；cleanup-plan §6 Step 3 修订（不再写 standalone `RAISE()`，给出 `precondition` TS 写法 + 强调 `pragma('foreign_key_check')` 不抛要主动检查）。
+- **质量门**：`pnpm -r typecheck` 4/4；`./scripts/test.sh` 58 files / 715 tests；`pnpm --filter @silverhand/desktop test` 12 files / 195 tests；`git diff --check` 干净。
+
+---
+
 ## 2026-05-15 — Clear CLI session + delivery queue 收敛
 
 - **delivery queue DB-first**：`conversation_inboxes` 加 `(conversation_id, agent_id, message_id)` unique；`ensureDelivery` 幂等写入；`pendingDeliveries` 改成带 `inboxId/messageId/text` 的当前进程 formatted batch cache。hard stop 时内存可丢，pending DB row 保留，下次 start drain。

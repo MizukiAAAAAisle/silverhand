@@ -39,6 +39,61 @@ function openDbAt(version: number): Database.Database {
   return db;
 }
 
+/**
+ * Test helper: apply pending migrations up to and including the
+ * requested version, mirroring `runMigrations` semantics (transactions,
+ * preconditions, foreignKeyEscape branching) but stopping early so
+ * tests can observe intermediate states.
+ *
+ * Used by tests that need to inspect the post-v22 state (the
+ * staging-creation contract from v21 — see Deferred Adoption history)
+ * without triggering v23's Mode B cleanup, which drops empty staging
+ * tables and refuses to run when staging holds unadopted rows.
+ */
+function applyMigrationsThrough(
+  db: Database.Database,
+  maxVersion: number,
+): void {
+  const applied = new Set(
+    db
+      .prepare<[], { version: number }>('SELECT version FROM _migrations')
+      .all()
+      .map(r => r.version),
+  );
+  const insertMigration = db.prepare(
+    'INSERT INTO _migrations (version, name, applied_at) VALUES (?, ?, ?)',
+  );
+  for (const m of migrations) {
+    if (applied.has(m.version)) continue;
+    if (m.version > maxVersion) break;
+    const apply = () => {
+      if (m.precondition) m.precondition(db);
+      db.exec(m.up);
+      if (m.foreignKeyEscape) {
+        const violations = db.pragma('foreign_key_check') as unknown[];
+        if (violations.length > 0) {
+          throw new Error(
+            `migration v${m.version}: foreign_key_check found ${violations.length} violations: ${JSON.stringify(violations)}`,
+          );
+        }
+      }
+      insertMigration.run(m.version, m.name, Date.now());
+    };
+    if (m.foreignKeyEscape) {
+      db.pragma('foreign_keys = OFF');
+      db.pragma('legacy_alter_table = ON');
+      try {
+        db.transaction(apply)();
+      } finally {
+        db.pragma('legacy_alter_table = OFF');
+        db.pragma('foreign_keys = ON');
+      }
+    } else {
+      db.transaction(apply)();
+    }
+  }
+}
+
 function pragmaNumber(db: Database.Database, name: string): number {
   const row = db.pragma(name) as Array<Record<string, number>>;
   return Object.values(row[0] ?? {})[0] ?? 0;
@@ -114,7 +169,12 @@ describe('database migrations', () => {
     try {
       seedV15SystemDmFixture(db);
 
-      runMigrations(db);
+      // Stops at v22 — the seed creates `from_user_id='local'` legacy
+      // user references, which v21 stages into `legacy_message_*_v21`.
+      // Running through v23 would refuse (Mode B: non-empty staging
+      // means unadopted data). v16's contract is unaffected by v23 so
+      // observing post-v22 state is sufficient.
+      applyMigrationsThrough(db, 22);
 
       expect(pragmaNumber(db, 'foreign_keys')).toBe(1);
       expect(pragmaNumber(db, 'legacy_alter_table')).toBe(0);
@@ -369,7 +429,10 @@ describe('database migrations', () => {
           (3, 'conv', 'agent_a', 'msg', NULL, 3);
       `);
 
-      runMigrations(db);
+      // Stops at v22 — same reason as the v16 test above (legacy
+      // user references would otherwise prime v21 staging and trip
+      // v23's Mode B refusal).
+      applyMigrationsThrough(db, 22);
 
       expect(
         db.prepare(`SELECT version FROM _migrations WHERE version = 20`).get(),
@@ -853,8 +916,12 @@ describe('database migrations', () => {
     });
 
     it('stages pre-v21 user-id literals into legacy_*_v21 holding tables (Deferred Adoption)', () => {
-      // Open a v20-shape DB seeded with legacy literals, then run all
-      // remaining migrations. The new v21 (Deferred Adoption) must:
+      // Open a v20-shape DB seeded with legacy literals, then apply
+      // through v22. Mode B's v23 cleanup intentionally refuses to run
+      // when staging holds rows; this test asserts the historical v21
+      // staging-creation contract (still meaningful as a bridge for
+      // pre-v21 backups consumed on older builds).
+      // The new v21 (Deferred Adoption) must:
       //   - NULL nullable user-id columns in main tables (messages.from_user_id,
       //     messages.task_assignee_user_id, notifications.user_id).
       //   - Move kind=user attachments into legacy_user_attachments_v21.
@@ -864,11 +931,11 @@ describe('database migrations', () => {
       //     can re-attribute exactly the originally-attributed rows
       //     (rows that were NULL pre-v21 stay NULL).
       // Main schema must be FK-clean immediately so the app boots
-      // pre-registration; adoption happens later in UserService.register().
+      // pre-registration.
       const db = openDbAt(20);
       try {
         seedV20LegacyData(db);
-        runMigrations(db);
+        applyMigrationsThrough(db, 22);
 
         // FK integrity holds — proves the staging move was sufficient.
         expect(db.pragma('foreign_key_check')).toEqual([]);
@@ -1008,11 +1075,24 @@ describe('database migrations', () => {
 
     it('on a fresh-schema DB (no pre-v21 data) creates empty staging tables', () => {
       // Fresh install path: no source rows, so staging tables exist
-      // (CREATE TABLE always runs) but are empty. Register-time adoption
-      // will be a no-op with all-zero audit counts.
+      // (CREATE TABLE always runs) but are empty.
+      //
+      // Test stops at v22 to verify v21's staging-creation contract.
+      // After v23 (Mode B cleanup) runs, the staging tables are
+      // dropped — the post-v23 fresh-DB invariant is covered by the
+      // v23 describe block below.
       const db = new Database(':memory:');
       try {
-        runMigrations(db);
+        // Bootstrap _migrations to satisfy applyMigrationsThrough's
+        // initial SELECT.
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS _migrations (
+            version INTEGER PRIMARY KEY,
+            name    TEXT NOT NULL,
+            applied_at INTEGER NOT NULL
+          );
+        `);
+        applyMigrationsThrough(db, 22);
 
         for (const t of [
           'legacy_message_from_user_v21',
@@ -1032,6 +1112,132 @@ describe('database migrations', () => {
             .get();
           expect(count?.c).toBe(0);
         }
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  describe('migration v23 (Mode B cleanup of v21 adoption bridge)', () => {
+    it('drops empty staging tables on a post-v22 fresh DB', () => {
+      // Fresh install path through the whole chain. v21 created the
+      // four `legacy_*_v21` staging tables (CREATE TABLE always
+      // runs); v23's precondition saw zero rows in each, so its `up`
+      // legitimately DROPped them. End state: no staging, FK clean.
+      const db = new Database(':memory:');
+      try {
+        runMigrations(db);
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 23`).get(),
+        ).toBeDefined();
+        for (const t of [
+          'legacy_message_from_user_v21',
+          'legacy_message_task_assignee_user_v21',
+          'legacy_conversation_reads_v21',
+          'legacy_user_attachments_v21',
+        ]) {
+          expect(
+            db
+              .prepare(
+                `SELECT name FROM sqlite_schema WHERE type='table' AND name = ?`,
+              )
+              .get(t),
+          ).toBeUndefined();
+        }
+        expect(db.pragma('foreign_key_check')).toEqual([]);
+      } finally {
+        db.close();
+      }
+    });
+
+    it('refuses to run when staging tables still hold unadopted rows', () => {
+      // Simulated pre-v21 backup that was never registered: v21 ran
+      // and staged rows, but no `POST /api/register` adoption ran. v23
+      // refuses with a clear "register first on a build that still has
+      // Deferred Adoption" error so the operator does not lose data.
+      const db = new Database(':memory:');
+      try {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS _migrations (
+            version INTEGER PRIMARY KEY,
+            name    TEXT NOT NULL,
+            applied_at INTEGER NOT NULL
+          );
+        `);
+        applyMigrationsThrough(db, 22);
+        // Inject one staged row to simulate unadopted legacy data.
+        db.exec(`
+          INSERT INTO legacy_message_from_user_v21 (message_id)
+          VALUES ('msg_legacy_unadopted');
+        `);
+
+        // Sanity: staging is non-empty after seed.
+        const fromUserCount = db
+          .prepare<[], { c: number }>(
+            `SELECT COUNT(*) AS c FROM legacy_message_from_user_v21`,
+          )
+          .get();
+        expect(fromUserCount?.c).toBe(1);
+
+        // v23 must throw, leaving _migrations.version=23 unwritten.
+        expect(() => runMigrations(db)).toThrow(
+          /v23 cleanup: legacy_\*_v21 staging tables still hold unadopted/,
+        );
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 23`).get(),
+        ).toBeUndefined();
+
+        // Staging tables remain — data is preserved for the operator
+        // to recover via an older build that still has Deferred
+        // Adoption.
+        expect(
+          db
+            .prepare(
+              `SELECT name FROM sqlite_schema WHERE type='table'
+                AND name = 'legacy_message_from_user_v21'`,
+            )
+            .get(),
+        ).toBeDefined();
+        expect(
+          db
+            .prepare<[], { c: number }>(
+              `SELECT COUNT(*) AS c FROM legacy_message_from_user_v21`,
+            )
+            .get()?.c,
+        ).toBe(1);
+      } finally {
+        db.close();
+      }
+    });
+
+    it('is idempotent on a post-adoption DB (staging already dropped)', () => {
+      // Simulated post-register state: staging tables were DROPped at
+      // registration time on an older Deferred-Adoption build. v23
+      // sees no staging, no FK issues, and applies as a no-op.
+      const db = new Database(':memory:');
+      try {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS _migrations (
+            version INTEGER PRIMARY KEY,
+            name    TEXT NOT NULL,
+            applied_at INTEGER NOT NULL
+          );
+        `);
+        applyMigrationsThrough(db, 22);
+        for (const t of [
+          'legacy_message_from_user_v21',
+          'legacy_message_task_assignee_user_v21',
+          'legacy_conversation_reads_v21',
+          'legacy_user_attachments_v21',
+        ]) {
+          db.exec(`DROP TABLE IF EXISTS ${t};`);
+        }
+
+        runMigrations(db);
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 23`).get(),
+        ).toBeDefined();
+        expect(db.pragma('foreign_key_check')).toEqual([]);
       } finally {
         db.close();
       }

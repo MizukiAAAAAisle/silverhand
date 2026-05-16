@@ -96,17 +96,4 @@ export const SETTINGS_KEYS = {
   PROXY_RUNTIMES: 'proxy_runtimes',
   /** V1 viewer pointer (see class docstring). */
   VIEWER_USER_ID: 'viewer_user_id',
-  /** Audit row written by `UserService.register()` after the v21
-   *  Deferred Adoption step succeeds. Value is `Date.now()` as a
-   *  decimal string. Useful for diagnostics + the future cleanup
-   *  migration (see `docs/human-identity-migration-cleanup-plan.md`). */
-  LEGACY_V21_ADOPTION_COMPLETED_AT: 'legacy_v21_adoption_completed_at',
-  /** Audit row written by `UserService.register()` alongside
-   *  `LEGACY_V21_ADOPTION_COMPLETED_AT`. Value is a JSON object with
-   *  per-segment row counts:
-   *    `{ messages_from: N, messages_task: N, conversation_reads: N,
-   *       attachments: N }`
-   *  All-zero on fresh DBs, non-zero only when the user restored a
-   *  pre-v21 backup before registering. */
-  LEGACY_V21_ADOPTION_COUNTS: 'legacy_v21_adoption_counts',
 } as const;

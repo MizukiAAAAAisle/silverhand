@@ -1,8 +1,15 @@
 # Human Identity Migration Cleanup Plan
 
-> Status: follow-up plan. Use this after Deferred Adoption has landed,
-> the user's backup DB has been restored and registered successfully,
-> and we are ready to remove temporary migration/adoption scaffolding.
+> Status: **Mode B cleanup landed.** The Deferred Adoption bridge has
+> been removed from runtime — `UserService.register()` no longer calls
+> `adoptLegacyV21`, the `LEGACY_V21_ADOPTION_*` settings keys are
+> gone, and migration v23 (`remove_v21_adoption_bridge`) drops the
+> empty staging tables on every DB / refuses to apply when staging
+> still holds unadopted rows. v21's body is preserved unmodified
+> (mutating an applied migration is forbidden), and its
+> staging-creation contract tests stop at v22 to remain meaningful.
+> This file is now historical reference for how the bridge worked
+> and how it was retired.
 
 ## 1. Background
 
@@ -172,17 +179,65 @@ Instead:
 
 v23 must fail fast if staging tables are present:
 
-```sql
-SELECT CASE WHEN EXISTS (
-  SELECT 1
-    FROM sqlite_schema
-   WHERE type = 'table'
-     AND name LIKE 'legacy\_%\_v21' ESCAPE '\'
-) THEN RAISE(
-  ABORT,
-  'v23 cleanup: legacy_*_v21 staging tables present — register first to adopt them'
-) END;
+```ts
+// In packages/shared/src/db/migrations.ts, add a `precondition` to
+// the v23 entry. SQL `RAISE(ABORT, ...)` is **not** valid in standalone
+// statements (SQLite restricts it to trigger programs), so the runner
+// supports a code-level precondition that runs inside the same
+// transaction as the migration's `up` body. Throwing aborts the
+// transaction, leaves `_migrations.version=23` unwritten, and is
+// retried on next boot.
+{
+  version: 23,
+  name: 'remove_v21_adoption_bridge',
+  precondition: db => {
+    const sqliteDb = db as { prepare: (s: string) => any; pragma: (c: string) => any };
+    const stagingNames = [
+      'legacy_message_from_user_v21',
+      'legacy_message_task_assignee_user_v21',
+      'legacy_conversation_reads_v21',
+      'legacy_user_attachments_v21',
+    ];
+    const present = sqliteDb
+      .prepare(
+        `SELECT name FROM sqlite_schema
+          WHERE type='table' AND name IN (${stagingNames.map(() => '?').join(',')})`,
+      )
+      .all(...stagingNames) as Array<{ name: string }>;
+    const nonEmpty: Array<{ name: string; rows: number }> = [];
+    for (const { name } of present) {
+      const r = sqliteDb.prepare(`SELECT COUNT(*) AS n FROM ${name}`).get() as { n: number };
+      if (r.n > 0) nonEmpty.push({ name, rows: r.n });
+    }
+    if (nonEmpty.length > 0) {
+      throw new Error(
+        `v23 cleanup: legacy_*_v21 staging tables still hold unadopted rows`,
+      );
+    }
+    const fk = sqliteDb.pragma('foreign_key_check') as unknown[];
+    if (fk.length > 0) {
+      throw new Error(`v23 cleanup: foreign_key_check found ${fk.length} violation(s)`);
+    }
+  },
+  up: `
+    DROP TABLE IF EXISTS legacy_message_from_user_v21;
+    DROP TABLE IF EXISTS legacy_message_task_assignee_user_v21;
+    DROP TABLE IF EXISTS legacy_conversation_reads_v21;
+    DROP TABLE IF EXISTS legacy_user_attachments_v21;
+  `,
+}
 ```
+
+Notes:
+
+- v23 NEVER drops a non-empty staging table — silently dropping would
+  lose the user's old messages / reads / attachments. Empty staging
+  tables (created by v21 on a fresh install whose source tables were
+  already empty) are dropped by the `up` body, which is safe by
+  construction.
+- `PRAGMA foreign_key_check` returns rows for violations and does
+  **not** raise on its own; the precondition must inspect the rows
+  array itself.
 
 This is only acceptable after the team agrees the old-backup migration window is
 closed.
@@ -205,20 +260,24 @@ Keep `already_registered` behavior unchanged.
 
 ### Step 3: Add v23 Guard Migration In Mode B
 
-Do not add a migration that drops staging tables.
+Do not add a migration that drops *non-empty* staging tables.
 
-Staging tables can legally remain only when v21 ran but registration has not
-completed. In that state they may contain the user's old messages, reads, and
-attachments waiting to be adopted. Dropping them would silently lose data.
+Staging tables can legally remain non-empty when v21 ran but
+registration has not completed. In that state they may contain the
+user's old messages, reads, and attachments waiting to be adopted.
+Dropping them would silently lose data.
 
-The Mode B migration should only:
+The Mode B migration should:
 
-- assert no `legacy_*_v21` staging tables exist;
-- abort with an explicit "register first" message if they do;
-- run `PRAGMA foreign_key_check` before commit.
+- assert no `legacy_*_v21` staging tables hold rows;
+- abort with an explicit "register first" message if any do;
+- run `PRAGMA foreign_key_check` and abort on any violation;
+- DROP the (now provably-empty) staging tables in its `up` body so
+  the steady-state schema no longer carries dead bridge tables.
 
-If all staging tables were dropped by successful registration, v23 is a no-op
-guard.
+If all staging tables were dropped by successful registration before
+v23 runs, the precondition is a no-op and the `up` body's
+`DROP TABLE IF EXISTS` is also a no-op.
 
 ### Step 4: Update Tests
 

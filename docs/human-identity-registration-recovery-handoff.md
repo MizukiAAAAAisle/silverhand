@@ -1,9 +1,12 @@
 # Human Identity Registration Recovery Handoff
 
-> Purpose: this note preserves the important context from the Silverhand
-> conversation before the local DB is restored. Use it after restoring an old
-> `~/.silverhand` backup so the registration migration can be validated without
-> relying on chat history.
+> Status: **historical reference.** The user's backup has been restored
+> and adopted; Mode B cleanup (migration v23 +
+> `UserService.register()` adoption-runtime removal) has shipped. This
+> file is preserved for the audit trail of how Deferred Adoption was
+> designed and verified before retirement. See
+> `docs/human-identity-migration-cleanup-plan.md` for the cleanup
+> footprint.
 
 ## 1. Why This Exists
 

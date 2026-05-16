@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import type { Database as Db } from 'better-sqlite3';
 import { migrations } from '@silverhand/shared';
+import type { Migration } from '@silverhand/shared';
 
 export function openDatabase(filepath: string): Db {
   const db = new Database(filepath);
@@ -31,31 +32,48 @@ export function runMigrations(db: Db): void {
     'INSERT INTO _migrations (version, name, applied_at) VALUES (?, ?, ?)',
   );
 
+  /**
+   * Apply a single migration inside a transaction. Both the
+   * `precondition` hook (if any) and the `up` SQL run in the same
+   * transaction as the `_migrations` row write — any throw rolls back
+   * everything, so a failed precondition leaves no `_migrations`
+   * marker and the migration is retried on next boot.
+   *
+   * Shared between the `foreignKeyEscape` branch (which toggles
+   * `foreign_keys = OFF` first) and the normal branch so v23-style
+   * guard migrations behave identically across both paths.
+   */
+  const applySingleMigration = (m: Migration): void => {
+    db.transaction(() => {
+      if (m.precondition) {
+        m.precondition(db);
+      }
+      db.exec(m.up);
+      if (m.foreignKeyEscape) {
+        const violations = db.pragma('foreign_key_check') as unknown[];
+        if (violations.length > 0) {
+          throw new Error(
+            `migration v${m.version}: foreign_key_check found ${violations.length} violations: ${JSON.stringify(violations)}`,
+          );
+        }
+      }
+      insertMigration.run(m.version, m.name, Date.now());
+    })();
+  };
+
   for (const m of migrations) {
     if (applied.has(m.version)) continue;
     if (m.foreignKeyEscape) {
       db.pragma('foreign_keys = OFF');
       db.pragma('legacy_alter_table = ON');
       try {
-        db.transaction(() => {
-          db.exec(m.up);
-          const violations = db.pragma('foreign_key_check') as unknown[];
-          if (violations.length > 0) {
-            throw new Error(
-              `migration v${m.version}: foreign_key_check found ${violations.length} violations: ${JSON.stringify(violations)}`,
-            );
-          }
-          insertMigration.run(m.version, m.name, Date.now());
-        })();
+        applySingleMigration(m);
       } finally {
         db.pragma('legacy_alter_table = OFF');
         db.pragma('foreign_keys = ON');
       }
     } else {
-      db.transaction(() => {
-        db.exec(m.up);
-        insertMigration.run(m.version, m.name, Date.now());
-      })();
+      applySingleMigration(m);
     }
   }
 }

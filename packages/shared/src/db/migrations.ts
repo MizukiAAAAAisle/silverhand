@@ -1,8 +1,37 @@
+/**
+ * Backend-injected db handle type. We keep `precondition` typed as
+ * `unknown` here in the shared package so this module stays free of a
+ * runtime dependency on `better-sqlite3` (only the backend imports
+ * that). The migration runner in `packages/backend/src/db.ts` casts
+ * to its `Database` instance before invoking.
+ */
+export type MigrationDb = unknown;
+
 export interface Migration {
   version: number;
   name: string;
   up: string;
   foreignKeyEscape?: true;
+  /**
+   * Optional code-level precondition. Runs INSIDE the migration's
+   * transaction, BEFORE `up` is exec'd. Throwing aborts the
+   * transaction — no rows are written to `_migrations`, so the
+   * migration is retried on next boot.
+   *
+   * Use cases:
+   *   - asserting a prior bridge has been consumed (Mode B cleanup
+   *     v23 fails if `legacy_*_v21` staging tables still exist);
+   *   - inspecting `PRAGMA foreign_key_check` results before applying
+   *     destructive DDL;
+   *   - any guard whose error message must be clearer than what a SQL
+   *     CHECK / UNIQUE violation would produce.
+   *
+   * SQL-only `RAISE(ABORT, ...)` cannot be used in standalone
+   * statements (SQLite restricts it to trigger programs), so this
+   * hook is the canonical way to fail-fast a migration with a
+   * developer-readable error.
+   */
+  precondition?: (db: MigrationDb) => void;
 }
 
 export const migrations: Migration[] = [
@@ -1691,5 +1720,105 @@ export const migrations: Migration[] = [
     // should land in a new migration version, not by mutating either
     // of these.
     up: `-- intentionally empty`,
+  },
+  {
+    version: 23,
+    name: 'remove_v21_adoption_bridge',
+    // Mode B cleanup: this build no longer supports automatic
+    // adoption of pre-v21 backups. The v21 staging-creation contract
+    // is preserved in git history (and v21's body must NOT be
+    // edited — once applied to any DB, mutating it would create a
+    // schema drift between DBs that share the same `_migrations`
+    // version), but the register-time adoption helper has been
+    // removed in this commit alongside this migration.
+    //
+    // The precondition guards against a half-migrated DB: if any of
+    // the four `legacy_*_v21` staging tables still hold rows, they
+    // contain unadopted user-owned data that this build can no longer
+    // import. Aborting forces the operator to either (a) drop the
+    // backup or (b) migrate it on a build that still has Deferred
+    // Adoption (any commit before this one).
+    //
+    // EMPTY staging tables (created by v21, then never written to
+    // because the source tables were already empty — i.e. fresh
+    // install) are dropped by the `up` body. This is safe by
+    // construction: zero rows, zero data loss. The two-step shape
+    // (precondition assert non-empty → up drops empty) is the
+    // canonical Mode B pattern; v23 NEVER drops a non-empty staging
+    // table.
+    //
+    // It also runs `PRAGMA foreign_key_check` and aborts on any
+    // violation — better to fail fast than ship a v23 row over a
+    // broken state.
+    precondition: db => {
+      // Cast: shared package keeps `MigrationDb = unknown` to avoid a
+      // runtime dependency on better-sqlite3. The runner injects the
+      // real Database instance.
+      const sqliteDb = db as {
+        prepare: (sql: string) => {
+          all: (...args: unknown[]) => unknown[];
+          get: (...args: unknown[]) => unknown;
+        };
+        pragma: (cmd: string) => unknown;
+      };
+
+      const stagingNames = [
+        'legacy_message_from_user_v21',
+        'legacy_message_task_assignee_user_v21',
+        'legacy_conversation_reads_v21',
+        'legacy_user_attachments_v21',
+      ];
+
+      const present = sqliteDb
+        .prepare(
+          `SELECT name FROM sqlite_schema
+            WHERE type = 'table'
+              AND name IN (${stagingNames.map(() => '?').join(',')})`,
+        )
+        .all(...stagingNames) as Array<{ name: string }>;
+
+      // Inspect each staging table that still exists. Drop is safe
+      // only when COUNT(*) = 0; any non-zero count blocks v23.
+      const nonEmpty: Array<{ name: string; rows: number }> = [];
+      for (const { name } of present) {
+        // Identifier is from a fixed allow-list above, not user input,
+        // so direct interpolation is safe here.
+        const row = sqliteDb
+          .prepare(`SELECT COUNT(*) AS n FROM ${name}`)
+          .get() as { n: number };
+        if (row.n > 0) nonEmpty.push({ name, rows: row.n });
+      }
+
+      if (nonEmpty.length > 0) {
+        const summary = nonEmpty.map(s => `${s.name}(${s.rows})`).join(', ');
+        throw new Error(
+          `v23 cleanup: legacy_*_v21 staging tables still hold unadopted `
+            + `rows (${summary}). This build no longer supports auto-adoption `
+            + `of pre-v21 backups. To recover this DB, register first on a `
+            + `build that still has Deferred Adoption (any commit before `
+            + `this one), then upgrade.`,
+        );
+      }
+
+      // PRAGMA foreign_key_check returns rows for violations and does
+      // NOT raise — caller must inspect.
+      const fkRows = sqliteDb.pragma('foreign_key_check') as unknown[];
+      if (fkRows.length > 0) {
+        const sample = JSON.stringify(fkRows.slice(0, 5));
+        throw new Error(
+          `v23 cleanup: foreign_key_check found ${fkRows.length} `
+            + `violation(s); refusing to apply. Sample: ${sample}`,
+        );
+      }
+    },
+    // Drop staging tables IF they exist and are empty (precondition
+    // guarantees emptiness). Idempotent — safe on post-adoption DBs
+    // where register-time adoption already DROPped them.
+    up: `
+      DROP TABLE IF EXISTS legacy_message_from_user_v21;
+      DROP TABLE IF EXISTS legacy_message_task_assignee_user_v21;
+      DROP TABLE IF EXISTS legacy_conversation_reads_v21;
+      DROP TABLE IF EXISTS legacy_user_attachments_v21;
+    `,
   },
 ];
