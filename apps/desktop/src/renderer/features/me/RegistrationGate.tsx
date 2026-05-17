@@ -3,7 +3,7 @@ import { Loader2 } from 'lucide-react';
 import { validateAvatarFile } from '@silverhand/shared';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/cn';
+import { AvatarPickerButton } from '@/components/AvatarPickerButton';
 import { useRegisterUser, useUploadAvatar } from './hooks';
 
 /**
@@ -66,18 +66,14 @@ export function RegistrationGate({ suggestedName }: RegistrationGateProps): JSX.
     return () => URL.revokeObjectURL(url);
   }, [avatarFile]);
 
-  const onPickAvatar = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0] ?? null;
-    e.target.value = ''; // allow re-picking the same file later
-    if (file) {
-      const validation = validateAvatarFile(file);
-      if (validation) {
-        setAvatarFile(null);
-        setError(
-          `${validation.message} You can continue now and retry from Settings -> Profile.`,
-        );
-        return;
-      }
+  const onPickAvatar = (file: File) => {
+    const validation = validateAvatarFile(file);
+    if (validation) {
+      setAvatarFile(null);
+      setError(
+        `${validation.message} You can continue now and retry from Settings -> Profile.`,
+      );
+      return;
     }
     setError(null);
     setAvatarFile(file);
@@ -203,33 +199,27 @@ export function RegistrationGate({ suggestedName }: RegistrationGateProps): JSX.
           <div className="flex flex-col gap-1.5">
             <Label>Avatar</Label>
             <div className="flex items-center gap-3">
-              <div className="grid size-10 place-items-center overflow-hidden rounded-full border border-border bg-bg-row-hover text-xs font-semibold text-text-muted">
-                {avatarPreview ? (
-                  // eslint-disable-next-line jsx-a11y/img-redundant-alt
-                  <img
-                    src={avatarPreview}
-                    alt=""
-                    className="size-full object-cover"
-                  />
-                ) : (
-                  (displayName || name || 'Y').slice(0, 1).toUpperCase()
-                )}
-              </div>
-              <label
-                className={cn(
-                  'inline-flex cursor-pointer items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs text-text-primary transition-colors hover:bg-bg-row-hover',
-                  submitting && 'pointer-events-none opacity-50',
-                )}
+              <AvatarPickerButton
+                size={40}
+                label={avatarFile ? 'Edit' : 'Add'}
+                onPick={onPickAvatar}
+                disabled={submitting}
+                ariaLabel={avatarFile ? 'Change avatar' : 'Add avatar'}
+                className="border border-border"
               >
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/gif,image/webp"
-                  onChange={onPickAvatar}
-                  className="sr-only"
-                  disabled={submitting}
-                />
-                {avatarFile ? 'Change…' : 'Choose…'}
-              </label>
+                <span className="grid size-full place-items-center bg-bg-row-hover text-xs font-semibold text-text-muted">
+                  {avatarPreview ? (
+                    // eslint-disable-next-line jsx-a11y/img-redundant-alt
+                    <img
+                      src={avatarPreview}
+                      alt=""
+                      className="size-full object-cover"
+                    />
+                  ) : (
+                    (displayName || name || 'Y').slice(0, 1).toUpperCase()
+                  )}
+                </span>
+              </AvatarPickerButton>
               {avatarFile ? (
                 <button
                   type="button"

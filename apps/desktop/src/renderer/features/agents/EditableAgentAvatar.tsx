@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Camera } from 'lucide-react';
 import { validateAvatarFile, type RuntimeKind } from '@silverhand/shared';
 import { ApiError } from '@/lib/api';
 import { AgentAvatar } from '@/components/AgentAvatar';
-import { cn } from '@/lib/cn';
+import { AvatarPickerButton } from '@/components/AvatarPickerButton';
 import { useUploadAgentAvatar, useClearAgentAvatar } from './hooks';
 
 interface EditableAgentAvatarProps {
@@ -19,7 +19,8 @@ interface EditableAgentAvatarProps {
    *  yet, render the runtime tint. */
   avatarObjectUrl: string | null;
   /** Whether the agent has a server-side avatar today; drives the
-   *  visibility of the "Remove" button. The parent passes
+   *  visibility of the "Remove" link and the picker label (`Edit` vs
+   *  `Add`; verbose ariaLabel is built separately). The parent passes
    *  `agent.avatar_url != null` — separate from `avatarObjectUrl`
    *  because the latter goes through a fetch and may be `null` even
    *  while the agent has an avatar (race during refresh). */
@@ -29,23 +30,24 @@ interface EditableAgentAvatarProps {
 /**
  * Editable variant of `<AgentAvatar>` for the agent profile card.
  *
- * Mirrors the human avatar UX (`features/me/RegistrationGate.tsx` /
- * SettingsPage profile section): same shared `validateAvatarFile`
- * client-side preflight (5MB cap, JPEG/PNG/GIF/WEBP), same hidden
- * `<input type="file">` triggered by a label, same "Change…/Choose…"
- * +  "Remove" pair.
+ * UX (per #task:314): the entire avatar circle is the click target.
+ * Hovering reveals a bottom strip with the visible verb (`Edit` /
+ * `Add`); clicking anywhere on the circle opens the file picker. The
+ * previous separate `Choose…/Change…` button has been removed so this
+ * widget matches the human avatar editor in `RegistrationGate` and
+ * `SettingsPage > Profile`. Verbose screen-reader text lives on the
+ * picker's `ariaLabel` because the visible label is forced short to
+ * fit inside the 56px circular clip.
  *
- * The widget is rendered ONLY when `canEditAgentProfile(viewer, agent)`
- * is true — non-creators see the static `<AgentAvatar>` plus a
- * read-only summary line in the card body. PR-2's avatar self-edit
- * lives on the internal token route only and is not reached from here.
+ * Removal is a small text link rendered below the avatar — kept outside
+ * the click target so a misaim can't silently re-open the picker.
  *
- * Error surfacing follows Cindy's PR-3 review tightening: we cover
- * the PR-2 service codes (`avatar_too_large` / `avatar_unsupported_type`
- * / `avatar_missing` / `avatar_storage_failed`) AND the cross-cutting
- * HTTP states (403 forbidden when the cached `created_by_user_id` is
- * stale, 404 agent_not_found, generic failure). The user must always
- * see *something* — we never silently swallow a mutation error.
+ * Error surfacing follows Cindy's PR-3 review tightening: we cover the
+ * PR-2 service codes (`avatar_too_large` / `avatar_unsupported_type` /
+ * `avatar_missing` / `avatar_storage_failed`) AND the cross-cutting HTTP
+ * states (403 forbidden when the cached `created_by_user_id` is stale,
+ * 404 agent_not_found, generic failure). The user must always see
+ * *something* — we never silently swallow a mutation error.
  */
 export function EditableAgentAvatar({
   agentId,
@@ -57,7 +59,6 @@ export function EditableAgentAvatar({
 }: EditableAgentAvatarProps): JSX.Element {
   const upload = useUploadAgentAvatar(agentId);
   const clear = useClearAgentAvatar(agentId);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Clear the local error when the agent id changes — switching agents
@@ -67,10 +68,7 @@ export function EditableAgentAvatar({
     setError(null);
   }, [agentId]);
 
-  const onPick = async (e: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
-    const file = e.target.files?.[0] ?? null;
-    e.target.value = ''; // allow re-picking the same file later
-    if (!file) return;
+  const onPick = async (file: File): Promise<void> => {
     setError(null);
     const validation = validateAvatarFile(file);
     if (validation) {
@@ -94,18 +92,33 @@ export function EditableAgentAvatar({
   };
 
   const pending = upload.isPending || clear.isPending;
-  const labelText = hasAvatar ? 'Change…' : 'Choose…';
+  // Visible label MUST be short — the strip sits inside the avatar's
+  // 56px circular clip. ariaLabel carries the verbose screen-reader
+  // text. Cindy review #task:314: "Change photo" overflowed and was
+  // cut horizontally even at 56px once uppercase tracking was applied.
+  const pickerLabel = hasAvatar ? 'Edit' : 'Add';
+  const pickerAriaLabel = hasAvatar
+    ? `Change avatar for @${alt}`
+    : `Add avatar for @${alt}`;
 
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center gap-3">
         <div className="relative">
-          <AgentAvatar
-            runtime={runtime}
+          <AvatarPickerButton
             size={size}
-            avatarObjectUrl={avatarObjectUrl}
-            alt={alt}
-          />
+            label={pickerLabel}
+            onPick={file => void onPick(file)}
+            disabled={pending}
+            ariaLabel={pickerAriaLabel}
+          >
+            <AgentAvatar
+              runtime={runtime}
+              size={size}
+              avatarObjectUrl={avatarObjectUrl}
+              alt={alt}
+            />
+          </AvatarPickerButton>
           {pending ? (
             <span
               className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-full bg-bg-base/40"
@@ -115,22 +128,6 @@ export function EditableAgentAvatar({
             </span>
           ) : null}
         </div>
-        <label
-          className={cn(
-            'inline-flex cursor-pointer items-center gap-1 rounded-md border border-border-subtle px-2.5 py-1 text-xs text-text-primary transition-colors hover:bg-bg-hover',
-            pending && 'pointer-events-none opacity-50',
-          )}
-        >
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/png,image/jpeg,image/gif,image/webp"
-            onChange={onPick}
-            className="sr-only"
-            disabled={pending}
-          />
-          {labelText}
-        </label>
         {hasAvatar ? (
           <button
             type="button"

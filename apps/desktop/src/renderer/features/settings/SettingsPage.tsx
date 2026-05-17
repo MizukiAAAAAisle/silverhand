@@ -27,6 +27,7 @@ import {
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { AgentAvatar } from '@/components/AgentAvatar';
+import { AvatarPickerButton } from '@/components/AvatarPickerButton';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { useAppearance } from '@/hooks/useAppearance';
@@ -516,10 +517,7 @@ function ProfilePane(): JSX.Element {
     }
   };
 
-  const onPickAvatar = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = ''; // allow re-uploading the same file later
-    if (!file) return;
+  const onPickAvatar = async (file: File) => {
     setError(null);
     const validation = validateAvatarFile(file);
     if (validation) {
@@ -603,43 +601,34 @@ function ProfilePane(): JSX.Element {
         <div className="flex flex-col gap-2">
           <Label>Avatar</Label>
           <div className="flex items-center gap-3">
-            <div className="grid size-14 place-items-center overflow-hidden rounded-full border border-border-subtle bg-bg-row-hover">
-              {avatarObjectUrl ? (
-                // eslint-disable-next-line jsx-a11y/img-redundant-alt
-                <img
-                  src={avatarObjectUrl}
-                  alt="Your avatar"
-                  className="size-full object-cover"
-                />
-              ) : (
-                <User className="size-6 text-text-muted" />
-              )}
-            </div>
-            <div className="flex flex-col gap-1">
-              <label
-                className={cn(
-                  'inline-flex cursor-pointer items-center gap-1 rounded-md border border-border-subtle px-2.5 py-1 text-xs text-text-primary transition-colors',
-                  uploadAvatar.isPending
-                    ? 'opacity-50'
-                    : 'hover:bg-bg-row-hover',
-                )}
-              >
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/gif,image/webp"
-                  onChange={onPickAvatar}
-                  disabled={uploadAvatar.isPending}
-                  className="sr-only"
-                />
-                {uploadAvatar.isPending ? (
-                  <>
-                    <Loader2 className="size-3 animate-spin" />
-                    Uploading…
-                  </>
+            <AvatarPickerButton
+              size={56}
+              label={dto.avatar_url ? 'Edit' : 'Add'}
+              onPick={file => void onPickAvatar(file)}
+              disabled={uploadAvatar.isPending}
+              ariaLabel={dto.avatar_url ? 'Change avatar' : 'Add avatar'}
+              className="border border-border-subtle"
+            >
+              <span className="grid size-full place-items-center bg-bg-row-hover">
+                {avatarObjectUrl ? (
+                  // eslint-disable-next-line jsx-a11y/img-redundant-alt
+                  <img
+                    src={avatarObjectUrl}
+                    alt="Your avatar"
+                    className="size-full object-cover"
+                  />
                 ) : (
-                  'Upload new'
+                  <User className="size-7 text-text-muted" />
                 )}
-              </label>
+              </span>
+            </AvatarPickerButton>
+            <div className="flex flex-col gap-1">
+              {uploadAvatar.isPending ? (
+                <span className="inline-flex items-center gap-1 text-[11px] text-text-muted">
+                  <Loader2 className="size-3 animate-spin" />
+                  Uploading…
+                </span>
+              ) : null}
               {dto.avatar_url ? (
                 <button
                   type="button"
