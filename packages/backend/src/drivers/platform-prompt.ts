@@ -310,12 +310,7 @@ ids, and do not wrap any of them in CLI arguments or API parameters.
   attachment ids, file paths, or code/output identifiers — those stay
   raw.
 - **Write sigils inline as plain words, never inside backticks or
-  fenced code blocks.** The chat parser skips code spans on purpose,
-  so a sigil wrapped in backticks (e.g. \\\`#conv:abc\\\`) stays inert
-  text instead of resolving as a live reference. Backticks belong on
-  literal code/identifiers (function names, env vars, paths); sigils
-  ARE the live syntax — no quoting needed. Right: see #conv:abc;
-  wrong: see \\\`#conv:abc\\\`.
+  fenced code blocks.** Right: see #conv:abc; wrong: see \\\`#conv:abc\\\`.
 - **Pick the most precise form available.** Prefer
   \`#conv:<id>\` over \`#<channel_name>\` when the conversation lives
   in a different workspace, when you are quoting a specific thread,
