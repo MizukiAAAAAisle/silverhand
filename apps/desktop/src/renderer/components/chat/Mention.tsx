@@ -84,18 +84,27 @@ function HumanMention({ human }: { human: UserDto }): JSX.Element {
   // to the viewer. When multi-human lands, swap to a prop-threaded
   // avatar map keyed by user id.
   const avatarObjectUrl = useViewerAvatarObjectUrl();
+  const nav = useNav();
   const label = human.display_name?.trim() || human.name;
   const initial = label.charAt(0).toUpperCase();
+  // Keep element + classes identical to AgentMention so both mentions
+  // share box model, baseline, and focus ring. Clicking @yourself
+  // jumps to Settings where the viewer manages their profile (v1
+  // invariant: human === viewer).
   const trigger = (
-    <span
+    <button
+      type="button"
+      onClick={event => {
+        event.preventDefault();
+        nav.toSettings();
+      }}
       className="rounded px-1 -mx-0.5 font-medium text-accent transition-colors hover:bg-accent-soft focus-visible:bg-accent-soft focus-visible:outline-none"
       aria-label={`@${human.name}`}
-      tabIndex={0}
       data-mention-kind="human"
       data-mention-id={human.id}
     >
       @{label}
-    </span>
+    </button>
   );
   return (
     <HoverPopover

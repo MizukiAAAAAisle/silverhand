@@ -54,10 +54,14 @@ function renderWithHumans(
     React.createElement(
       QueryClientProvider,
       { client: qc },
-      React.createElement(Markdown, {
-        content,
-        humansByName,
-      }),
+      React.createElement(
+        StaticRouter,
+        { location: '/' },
+        React.createElement(Markdown, {
+          content,
+          humansByName,
+        }),
+      ),
     ),
   );
 }
