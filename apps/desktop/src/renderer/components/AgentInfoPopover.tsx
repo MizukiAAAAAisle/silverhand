@@ -40,6 +40,24 @@ interface AgentInfoPopoverProps {
   /** Header member chips can expose per-agent controls; inline mentions
    *  and message avatars keep the popover informational. */
   management?: boolean;
+  /**
+   * Avatar object URL resolved by the parent's batch hook.
+   *
+   * - `undefined` (omitted) — caller is a standalone surface with no
+   *   batch context (settings page, dev tools); fall back to an internal
+   *   single-agent `useAgentAvatarObjectUrl` so the popover still shows
+   *   the right image.
+   * - `null` — parent looked it up and the agent has no avatar (or it
+   *   is still loading); render the runtime tint, no fetch.
+   * - `string` — use the parent's blob URL directly.
+   *
+   * Required for high-frequency render sites (timeline message authors,
+   * inline `@mentions`, header member chips). Without it, every popover
+   * instance would fire its own GET — which destroys the batch-hook
+   * contract. PR-2 review caught this and made the prop the canonical
+   * path for those callers.
+   */
+  avatarObjectUrl?: string | null;
 }
 
 const HOVER_OPEN_DELAY_MS = 80;
@@ -64,10 +82,21 @@ export function AgentInfoPopover({
   routeKind = 'channel',
   trigger = 'click',
   management = false,
+  avatarObjectUrl,
 }: AgentInfoPopoverProps): JSX.Element {
   const [hoverOpen, setHoverOpen] = useState(false);
   const [managementDialogOpen, setManagementDialogOpen] = useState(false);
-  const avatarObjectUrl = useAgentAvatarObjectUrl(agent.avatar_url);
+  // Fallback only when the caller is unbatched (`undefined`). The
+  // explicit `null` case from a batched parent means "no avatar yet"
+  // and must NOT trigger an internal fetch — that was the PR-2 review
+  // blocker (every timeline popover otherwise re-fetched per instance).
+  // `useAgentAvatarObjectUrl` short-circuits on null input, so passing
+  // `null` here is a deliberate no-fetch path.
+  const fallbackAvatarObjectUrl = useAgentAvatarObjectUrl(
+    avatarObjectUrl === undefined ? agent.avatar_url : null,
+  );
+  const resolvedAvatarObjectUrl =
+    avatarObjectUrl === undefined ? fallbackAvatarObjectUrl : avatarObjectUrl;
   // Single timer reused for both open and close so consecutive
   // pointer transitions cancel each other out cleanly.
   const timerRef = useRef<number | null>(null);
@@ -118,7 +147,7 @@ export function AgentInfoPopover({
             <AgentAvatar
               runtime={agent.runtime}
               size={36}
-              avatarObjectUrl={avatarObjectUrl}
+              avatarObjectUrl={resolvedAvatarObjectUrl}
               alt={agent.display_name || agent.name}
             />
             <div className="min-w-0 flex-1">

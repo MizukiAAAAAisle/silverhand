@@ -129,6 +129,16 @@ export function MessageItem({
   const agent = !isUser && message.from_agent_id
     ? agentsById.get(message.from_agent_id)
     : undefined;
+  // Author avatar URL resolved by the parent's batch hook. `undefined`
+  // means the parent didn't thread the map (legacy / non-channel
+  // surfaces) — pass `undefined` straight through so AgentInfoPopover
+  // falls back to its own single-agent fetch. `null` means the agent
+  // simply has no avatar (or it's still loading); render the runtime
+  // tint, no fetch.
+  const agentAvatarObjectUrl =
+    agent && agentAvatarUrls
+      ? agentAvatarUrls.get(agent.id) ?? null
+      : undefined;
   const name = isUser
     ? formatUserDisplayName(message.from_user_id)
     : agent?.name ?? 'agent';
@@ -221,6 +231,7 @@ export function MessageItem({
                   conversationId={conversationId}
                   routeKind={routeKind}
                   trigger="hover"
+                  avatarObjectUrl={agentAvatarObjectUrl}
                 >
                   <button
                     type="button"
@@ -265,6 +276,7 @@ export function MessageItem({
             conversationId={conversationId}
             agentsByName={agentsByName}
             humansByName={humansByName}
+            agentAvatarUrls={agentAvatarUrls}
             channelsByName={channelsByName}
             onOpenChannelRef={onOpenChannelRef}
             conversationRefsById={conversationRefsById}
@@ -475,6 +487,7 @@ function Avatar({
         conversationId={conversationId}
         routeKind={routeKind}
         trigger="hover"
+        avatarObjectUrl={agentAvatarObjectUrl}
       >
         <button
           type="button"

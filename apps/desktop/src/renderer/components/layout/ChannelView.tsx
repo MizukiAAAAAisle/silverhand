@@ -659,6 +659,7 @@ function MemberStrip({
               side="bottom"
               align="end"
               management
+              avatarObjectUrl={agentAvatarUrls.get(agent.id) ?? null}
             >
               <button
                 type="button"

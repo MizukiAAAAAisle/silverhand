@@ -10,6 +10,13 @@ interface MentionProps {
   /** Resolved agent — undefined when the name doesn't match any known
    *  agent (typo, deleted agent, or just a stray "@word"). */
   agent: AgentDto | undefined;
+  /** Avatar URL resolved by the parent's batch hook (Markdown threads
+   *  it from the timeline's lifted `agentAvatarUrls`). `undefined` =
+   *  no batch context (popover falls back to its own single-agent
+   *  fetch). `null` = batched parent looked it up and there's nothing
+   *  yet (render the runtime icon, no fetch). `string` = use the
+   *  parent's blob URL directly. */
+  agentAvatarObjectUrl?: string | null;
   /** Resolved human user. `users.name` and `agents.name` are globally
    *  unique in the data layer, so this is mutually exclusive with
    *  `agent` unless the invariant is broken upstream. */
@@ -33,11 +40,18 @@ interface MentionProps {
 export function Mention({
   name,
   agent,
+  agentAvatarObjectUrl,
   human,
   conversationId,
 }: MentionProps): JSX.Element {
   if (agent) {
-    return <AgentMention agent={agent} conversationId={conversationId} />;
+    return (
+      <AgentMention
+        agent={agent}
+        avatarObjectUrl={agentAvatarObjectUrl}
+        conversationId={conversationId}
+      />
+    );
   }
 
   if (human) {
@@ -49,9 +63,11 @@ export function Mention({
 
 function AgentMention({
   agent,
+  avatarObjectUrl,
   conversationId,
 }: {
   agent: AgentDto;
+  avatarObjectUrl?: string | null;
   conversationId: string | null;
 }): JSX.Element {
   const nav = useNav();
@@ -62,6 +78,7 @@ function AgentMention({
       agent={agent}
       conversationId={conversationId}
       trigger="hover"
+      avatarObjectUrl={avatarObjectUrl}
     >
       <button
         type="button"

@@ -20,6 +20,11 @@ interface MarkdownProps {
    *  absent, mentions render as plain accent-colored text without the
    *  popover. */
   agentsByName?: Map<string, AgentDto>;
+  /** Object-URL map keyed by agent id. Threaded straight to inline
+   *  `<Mention>` so `<AgentInfoPopover>` reuses the parent's batch
+   *  fetch instead of firing one GET per `@mention`. Missing entries
+   *  / `null` fall back to the runtime icon. */
+  agentAvatarUrls?: Map<string, string | null>;
   /** Lookup by human user `name` (same @mention namespace as agents).
    *  The data layer guarantees `users.name` and `agents.name` are
    *  globally unique; rendering only consumes that invariant. */
@@ -67,6 +72,7 @@ function MarkdownInner({
   content,
   conversationId,
   agentsByName,
+  agentAvatarUrls,
   humansByName,
   channelsByName,
   onOpenChannelRef,
@@ -101,10 +107,20 @@ function MarkdownInner({
           a: ({ href, children, ...rest }) => {
             if (typeof href === 'string' && href.startsWith(MENTION_PREFIX)) {
               const name = href.slice(MENTION_PREFIX.length);
+              const mentionAgent = agentsByName?.get(name);
+              // `undefined` = parent didn't thread the map (no batch
+              // context — popover falls back to its own fetch).
+              // `null`     = batched parent looked it up; the agent
+              //              has no avatar yet, render runtime icon.
+              const mentionAvatarObjectUrl =
+                agentAvatarUrls && mentionAgent
+                  ? agentAvatarUrls.get(mentionAgent.id) ?? null
+                  : undefined;
               return (
                 <Mention
                   name={name}
-                  agent={agentsByName?.get(name)}
+                  agent={mentionAgent}
+                  agentAvatarObjectUrl={mentionAvatarObjectUrl}
                   human={humansByName?.get(name)}
                   conversationId={conversationId ?? null}
                 />
