@@ -110,7 +110,7 @@ export function AgentInfoPopover({
           collisionPadding={8}
           onPointerEnter={scheduleOpen}
           onPointerLeave={scheduleClose}
-          className="z-50 w-[260px] rounded-md border border-border bg-bg-floating p-3 shadow-lg outline-none"
+          className="z-50 w-[260px] max-w-[calc(100vw-32px)] rounded-md border border-border bg-bg-floating p-3 shadow-lg outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
         >
           <div className="flex items-start gap-3">
             <AgentAvatar runtime={agent.runtime} size={36} />
