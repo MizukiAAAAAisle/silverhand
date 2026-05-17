@@ -117,6 +117,7 @@ import { installPublicBearerMiddleware } from './auth/bearer.js';
 import {
   canAgentAccessWorkspace,
   canDeleteAttachment,
+  canEditAgent,
   canManageMembers,
   canMutateWorkspace,
   canPostToConversation,
@@ -1839,10 +1840,10 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
 
   function createAgentWithHome(
     input: CreateAgentInput,
-    creatorUserId: string | null,
+    creatorUserId: string,
   ) {
     return ctx.db.transaction(() => {
-      const agent = agents.create(input, localHost.id);
+      const agent = agents.create(input, localHost.id, creatorUserId);
       const agentL1Dir = join(ctx.silverhandDir, 'agents', agent.id);
       const home = workspaces.insertAgentHome({
         agent,
@@ -1871,15 +1872,11 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       // agent must own its agent_home, not the install's primary
       // viewer.
       //
-      // Pre-registration / system actor: this route is user-gated,
-      // so a creator user id should always be present. If somehow
-      // null (defense), skip the user-membership writes — the
-      // workspace/dm rows still come up clean and a future register
-      // tx will retroactively backfill them via UserService.register().
-      if (creatorUserId) {
-        workspaces.addUserMember(home.id, creatorUserId);
-        conversations.addUser(dm.id, creatorUserId);
-      }
+      // v26 made `creatorUserId` non-null (FK on agents table); the
+      // user-gate middleware guarantees a user principal here, so
+      // there is no defensive null path anymore.
+      workspaces.addUserMember(home.id, creatorUserId);
+      conversations.addUser(dm.id, creatorUserId);
 
       const onboardingMsg = messages.insertForConversation({
         conversationId: dm.id,
@@ -1907,9 +1904,12 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (agents.getByName(parsed.data.name)) {
       return c.json({ error: 'agent name already exists' }, 409);
     }
+    // The user-gate middleware guarantees `principal.kind === 'user'`
+    // on every public route, so `creatorUserId` is always non-null
+    // here. v26 enforces this at the FK layer (`created_by_user_id
+    // NOT NULL REFERENCES users(id)`).
     const principal = getUserPrincipal(c);
-    const creatorUserId =
-      principal.kind === 'user' ? principal.userId : null;
+    const creatorUserId = principal.userId;
     const { agent, dm, onboardingMsg, agentL1Dir } = createAgentWithHome(
       parsed.data,
       creatorUserId,
@@ -1940,10 +1940,20 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   // refused while any conversation_agent for this agent is starting/active
   // — otherwise the next event from the in-flight CLI would be parsed
   // by the wrong driver.
+  //
+  // Permission: `canEditAgent` (v26). The creator user — recorded on
+  // `agents.created_by_user_id` at create time — and the agent acting
+  // as itself are the only allowed editors. v1 single-human installs
+  // see this as viewer-only (the viewer created every agent); v2
+  // multi-human deployments will deny non-creator humans even if they
+  // share the workspace.
   app.patch('/api/agents/:id', async c => {
     const id = c.req.param('id');
     const agent = agents.get(id);
     if (!agent) return c.json({ error: 'agent not found' }, 404);
+    if (!canEditAgent(ctx, getUserPrincipal(c), id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const body = await c.req.json().catch(() => ({}));
     const parsed = UpdateAgentInputSchema.safeParse(body);
     if (!parsed.success) {

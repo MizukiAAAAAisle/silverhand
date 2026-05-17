@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   canDeleteAttachment,
+  canEditAgent,
   canManageMembers,
   canMutateWorkspace,
   canPostToConversation,
@@ -29,8 +30,8 @@ function seed(t: TestApp) {
   });
   const attachments = new AttachmentRepo(t.ctx.db);
   const host = new HostRepo(t.ctx.db).ensureLocal();
-  const alice = agents.create({ name: 'alice', runtime: 'claude' }, host.id);
-  const bob = agents.create({ name: 'bob', runtime: 'claude' }, host.id);
+  const alice = agents.create({ name: 'alice', runtime: 'claude' }, host.id, 'local');
+  const bob = agents.create({ name: 'bob', runtime: 'claude' }, host.id, 'local');
   const workspace = workspaces.insert({
     name: `ws-${randomUUID().slice(0, 8)}`,
     description: null,
@@ -285,5 +286,58 @@ describe('permission helpers', () => {
       )
       .run(f.channel.id, Date.now());
     expect(canViewConversation(t.ctx, user, f.channel.id)).toBe(true);
+  });
+
+  describe('canEditAgent (v26 creator-or-self gate)', () => {
+    it('allows the creator user, denies non-creator users', () => {
+      t = buildTestApp();
+      const f = seed(t);
+      // Fixture seeds 'local' as the creator of every agent created via
+      // the AgentRepo helper.
+      const localUser: UserPrincipal = { kind: 'user', userId: 'local' };
+      expect(canEditAgent(t.ctx, localUser, f.alice.id)).toBe(true);
+      expect(canEditAgent(t.ctx, localUser, f.bob.id)).toBe(true);
+
+      // A second user that didn't create alice can't edit alice.
+      const now = Date.now();
+      t.ctx.db
+        .prepare(
+          `INSERT INTO users (id, name, display_name, created_at, updated_at)
+           VALUES ('u-other', 'other', 'Other', ?, ?)`,
+        )
+        .run(now, now);
+      const otherUser: UserPrincipal = { kind: 'user', userId: 'u-other' };
+      expect(canEditAgent(t.ctx, otherUser, f.alice.id)).toBe(false);
+    });
+
+    it('allows the agent acting as itself, denies cross-agent', () => {
+      t = buildTestApp();
+      const f = seed(t);
+      const aliceSelf: AgentPrincipal = {
+        kind: 'agent',
+        agentId: f.alice.id,
+        conversationId: f.channel.id,
+      };
+      const bobAsAlice: AgentPrincipal = {
+        kind: 'agent',
+        agentId: f.bob.id,
+        conversationId: f.channel.id,
+      };
+      expect(canEditAgent(t.ctx, aliceSelf, f.alice.id)).toBe(true);
+      expect(canEditAgent(t.ctx, bobAsAlice, f.alice.id)).toBe(false);
+    });
+
+    it('allows system unconditionally; user-principal returns false for missing agents', () => {
+      t = buildTestApp();
+      const f = seed(t);
+      // system is the unconditional-bypass branch (mirrors every other
+      // canX predicate). It does not consult the agent row.
+      expect(canEditAgent(t.ctx, { kind: 'system' }, f.alice.id)).toBe(true);
+      expect(canEditAgent(t.ctx, { kind: 'system' }, 'missing')).toBe(true);
+
+      // User principal must consult the row, and missing → deny.
+      const localUser: UserPrincipal = { kind: 'user', userId: 'local' };
+      expect(canEditAgent(t.ctx, localUser, 'missing')).toBe(false);
+    });
   });
 });

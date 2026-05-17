@@ -29,8 +29,8 @@ function bootstrap() {
   const messages = new MessageRepo(db);
   const inbox = new ConversationInboxRepo(db);
   const agents = new AgentRepo(db);
-  const a = agents.create({ name: 'a', runtime: 'claude' }, localHostId);
-  const b = agents.create({ name: 'b', runtime: 'claude' }, localHostId);
+  const a = agents.create({ name: 'a', runtime: 'claude' }, localHostId, 'local');
+  const b = agents.create({ name: 'b', runtime: 'claude' }, localHostId, 'local');
   return { channel, messages, inbox, agentA: a.id, agentB: b.id };
 }
 

@@ -83,8 +83,8 @@ function bootstrap() {
     workspacePath: tmp.workspacesRoot,
     workspaceHostId: localHostId,
   });
-  const alice = agents.create({ name: 'alice', runtime: 'claude' }, localHostId);
-  const bob = agents.create({ name: 'bob', runtime: 'claude' }, localHostId);
+  const alice = agents.create({ name: 'alice', runtime: 'claude' }, localHostId, 'local');
+  const bob = agents.create({ name: 'bob', runtime: 'claude' }, localHostId, 'local');
   workspaces.addMember(workspace.id, alice.id);
   workspaces.addMember(workspace.id, bob.id);
   const source = conversations.insertChannel({
@@ -170,7 +170,7 @@ describe('ChannelService.createChannel', () => {
         }),
       ).rejects.toBeInstanceOf(WorkspaceUnsuitableError);
 
-      const outsider = t.agents.create({ name: 'outsider', runtime: 'claude' }, t.localHostId);
+      const outsider = t.agents.create({ name: 'outsider', runtime: 'claude' }, t.localHostId, 'local');
       await expect(
         t.service.createChannel({
           workspaceId: t.workspace.id,

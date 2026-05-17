@@ -164,6 +164,16 @@ export const AgentDtoSchema = z.object({
   fast_mode: FastModeSchema.nullable(),
   host_id: z.string(),
   description: z.string().nullable(),
+  /** v26: id of the user who created this agent. The renderer uses it
+   *  to decide whether to surface profile-edit affordances (Edit
+   *  button, avatar upload). Backend `canEditAgent` is the source of
+   *  truth; this field is the renderer's hint. */
+  created_by_user_id: z.string(),
+  /** v26: resolved avatar URL or null. Matches `UserDto.avatar_url` —
+   *  cache-busted by `updated_at`. PR-1 always returns null (no
+   *  storage wired); PR-2 flips this on once the storage / route
+   *  pair lands. */
+  avatar_url: z.string().nullable(),
   created_at: z.number(),
   updated_at: z.number(),
 });

@@ -89,9 +89,30 @@ describe('POST /api/register', () => {
 
   it('rejects a name that collides with an existing agents.name', async () => {
     t = buildTestApp();
-    // Seed the colliding agent BEFORE unregistering — POST /api/agents
-    // requires a registered viewer (the public-principal gate).
-    await http(t).post('/api/agents', { name: 'collide', runtime: 'claude' });
+    // Seed a colliding agent via raw SQL with a *different* creator user so
+    // unregistering 'local' isn't blocked by the new ON DELETE RESTRICT FK
+    // from agents.created_by_user_id (v26).
+    const hostId = (
+      t.ctx.db
+        .prepare<[], { id: string }>(`SELECT id FROM hosts LIMIT 1`)
+        .get()!
+    ).id;
+    const now = Date.now();
+    t.ctx.db
+      .prepare(
+        `INSERT INTO users (id, name, display_name, created_at, updated_at)
+         VALUES ('u-other', 'other', 'Other', ?, ?)`,
+      )
+      .run(now, now);
+    t.ctx.db
+      .prepare(
+        `INSERT INTO agents
+           (id, name, runtime, model, host_id, description, created_at, updated_at,
+            display_name, reasoning_effort, fast_mode, created_by_user_id)
+         VALUES ('a-collide', 'collide', 'claude', NULL, ?, NULL, ?, ?,
+                 'collide', NULL, NULL, 'u-other')`,
+      )
+      .run(hostId, now, now);
     unregisterViewer(t);
 
     const res = await http(t).post(apiPaths.register, { name: 'collide' });

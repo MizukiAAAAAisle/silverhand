@@ -288,6 +288,43 @@ describe('PATCH /api/agents/:id', () => {
       );
     }
   });
+
+  it('403s when the registered viewer is not the creator (v26 canEditAgent gate)', async () => {
+    // 'teammate' creates the agent; 'local' (the default test viewer)
+    // tries to PATCH it. The v26 gate must reject by creator mismatch.
+    t = buildTestApp();
+    const created = await (
+      await http(t).post(
+        '/api/agents',
+        { name: 'alice', runtime: 'claude' },
+        {
+          headers: {
+            [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
+          },
+        },
+      )
+    ).json() as any;
+    expect(created.agent.created_by_user_id).toBe('teammate');
+
+    const denied = await http(t).patch(`/api/agents/${created.agent.id}`, {
+      display_name: 'Hijacked',
+    });
+    expect(denied.status).toBe(403);
+    const body = await denied.json() as any;
+    expect(body.error).toBe('forbidden');
+
+    // The creator can still PATCH their own agent.
+    const allowed = await http(t).patch(
+      `/api/agents/${created.agent.id}`,
+      { display_name: 'Alice (renamed)' },
+      {
+        headers: {
+          [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
+        },
+      },
+    );
+    expect(allowed.status).toBe(200);
+  });
 });
 
 describe('GET /api/agents/:id/workspace', () => {

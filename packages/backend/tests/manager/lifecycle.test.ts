@@ -141,6 +141,7 @@ function addOtherConversationAgent(h: ManagerHarness, name = 'other'): string {
   const agent = new AgentRepo(h.ctx.db).create(
     { name, runtime: 'claude' },
     host!.id,
+    'local',
   );
   new ConversationRepo(h.ctx.db).addAgent(h.sessionId, agent.id);
   return agent.id;

@@ -104,7 +104,7 @@ export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {})
   });
 
   const agents = new AgentRepo(db);
-  const agent = agents.create({ name: 'mock', runtime: 'claude' }, localHostId);
+  const agent = agents.create({ name: 'mock', runtime: 'claude' }, localHostId, 'local');
   workspaces.addMember(workspace.id, agent.id);
 
   const conversations = new ConversationRepo(db);

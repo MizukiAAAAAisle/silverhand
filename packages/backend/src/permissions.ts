@@ -1,6 +1,7 @@
 import type { AttachmentRow } from '@silverhand/shared';
 import type { BackendContext } from './context.js';
 import type { Principal, UserPrincipal } from './auth/principal.js';
+import { AgentRepo } from './repos/agent-repo.js';
 import { ConversationRepo } from './repos/conversation-repo.js';
 import { WorkspaceRepo } from './repos/workspace-repo.js';
 
@@ -167,6 +168,45 @@ export function canPostToConversation(
 ): boolean {
   if (!canViewConversation(ctx, principal, conversationId)) return false;
   return true;
+}
+
+/**
+ * Profile / avatar edit gate for an agent. v26 added
+ * `agents.created_by_user_id` as the source of truth for this; v1
+ * single-human installs have one viewer who created every agent, so
+ * the gate is effectively viewer-only there. v2 multi-human will
+ * naturally narrow it: a coworker who joins the workspace can read
+ * the agent (membership-based) but cannot edit its profile.
+ *
+ * Allow rules (OR):
+ *   1. `principal.kind === 'user'` and `principal.userId` matches
+ *      `agents.created_by_user_id` — the creator.
+ *   2. `principal.kind === 'agent'` and `principal.agentId === agentId`
+ *      — the agent acting as itself. Today only reachable on internal
+ *      routes (`/internal/conversations/:cid/agents/:aid/*`); the
+ *      public PATCH `/api/agents/:id` is gated to user principals by
+ *      `installRequireRegisteredViewerMiddleware`. Locked in here so
+ *      future internal self-edit endpoints (PR-2/3) stay consistent.
+ *   3. `principal.kind === 'system'` — internal hosts and migration
+ *      jobs can edit anything. Mirrors every other `canX` predicate.
+ *
+ * Returns `false` for missing agents, non-creator users, and
+ * cross-agent agent principals.
+ */
+export function canEditAgent(
+  ctx: BackendContext,
+  principal: Principal,
+  agentId: string,
+): boolean {
+  if (principal.kind === 'system') return true;
+  const repo = new AgentRepo(ctx.db);
+  const agent = repo.get(agentId);
+  if (!agent) return false;
+  if (principal.kind === 'user') {
+    return agent.created_by_user_id === principal.userId;
+  }
+  // agent principal
+  return principal.agentId === agentId;
 }
 
 export function canViewAttachment(

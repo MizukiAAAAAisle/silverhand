@@ -10,11 +10,13 @@ describe('AgentRepo', () => {
     const agent = repo.create(
       { name: 'alice', runtime: 'claude' },
       localHostId,
+      'local',
     );
     expect(agent.host_id).toBe(localHostId);
     expect(agent.runtime).toBe('claude');
     expect(agent.model).toBeNull();
     expect(agent.description).toBeNull();
+    expect(agent.created_by_user_id).toBe('local');
   });
 
   it('create honors explicit host_id, model, and description', () => {
@@ -30,6 +32,7 @@ describe('AgentRepo', () => {
         host_id: localHostId,
       },
       localHostId,
+      'local',
     );
     expect(agent.model).toBe('claude-sonnet-4-6');
     expect(agent.description).toBe('reviewer');
@@ -39,8 +42,8 @@ describe('AgentRepo', () => {
     const { db, localHostId } = openTestDb();
     const repo = new AgentRepo(db);
 
-    const a = repo.create({ name: 'a', runtime: 'claude' }, localHostId);
-    const b = repo.create({ name: 'b', runtime: 'claude' }, localHostId);
+    const a = repo.create({ name: 'a', runtime: 'claude' }, localHostId, 'local');
+    const b = repo.create({ name: 'b', runtime: 'claude' }, localHostId, 'local');
     const list = repo.list();
     expect(list.map(x => x.id)).toEqual([a.id, b.id]);
 
@@ -54,7 +57,7 @@ describe('AgentRepo', () => {
   it('create defaults display_name to name and reasoning_effort to null', () => {
     const { db, localHostId } = openTestDb();
     const repo = new AgentRepo(db);
-    const a = repo.create({ name: 'alice', runtime: 'codex' }, localHostId);
+    const a = repo.create({ name: 'alice', runtime: 'codex' }, localHostId, 'local');
     expect(a.display_name).toBe('alice');
     expect(a.reasoning_effort).toBeNull();
     expect(a.fast_mode).toBeNull();
@@ -67,12 +70,14 @@ describe('AgentRepo', () => {
     const enabled = repo.create(
       { name: 'fast-on', runtime: 'codex', fast_mode: true },
       localHostId,
+      'local',
     );
     expect(enabled.fast_mode).toBe(true);
 
     const disabled = repo.create(
       { name: 'fast-off', runtime: 'codex', fast_mode: false },
       localHostId,
+      'local',
     );
     expect(disabled.fast_mode).toBe(false);
 
@@ -86,6 +91,7 @@ describe('AgentRepo', () => {
     const a = repo.create(
       { name: 'alice', runtime: 'claude', model: 'sonnet' },
       localHostId,
+      'local',
     );
     // small delay so updated_at is observably newer
     await new Promise(r => setTimeout(r, 5));
@@ -108,9 +114,18 @@ describe('AgentRepo', () => {
     const a = repo.create(
       { name: 'a', runtime: 'codex', model: 'o1', description: 'x' },
       localHostId,
+      'local',
     );
     const u = repo.update(a.id, { model: null, description: null })!;
     expect(u.model).toBeNull();
     expect(u.description).toBeNull();
+  });
+
+  it('create rejects an unknown user id (FK to users.id)', () => {
+    const { db, localHostId } = openTestDb();
+    const repo = new AgentRepo(db);
+    expect(() =>
+      repo.create({ name: 'orphan', runtime: 'claude' }, localHostId, 'no-such-user'),
+    ).toThrow(/FOREIGN KEY/i);
   });
 });

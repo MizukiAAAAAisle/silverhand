@@ -87,10 +87,12 @@ function bootstrap(): Fixture {
   const owner = agents.create(
     { name: 'alice', runtime: 'claude' },
     localHostId,
+    'local',
   );
   const other = agents.create(
     { name: 'bob', runtime: 'claude' },
     localHostId,
+    'local',
   );
 
   // Provision agent_home + dm_channel for the owner. Tests need this so

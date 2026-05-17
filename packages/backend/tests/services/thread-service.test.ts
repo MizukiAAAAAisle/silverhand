@@ -123,9 +123,9 @@ function bootstrap() {
     workspacePath: tmp.workspacesRoot,
     workspaceHostId: localHostId,
   });
-  const alice = agents.create({ name: 'alice', runtime: 'claude' }, localHostId);
-  const bob = agents.create({ name: 'bob', runtime: 'claude' }, localHostId);
-  const carol = agents.create({ name: 'carol', runtime: 'claude' }, localHostId);
+  const alice = agents.create({ name: 'alice', runtime: 'claude' }, localHostId, 'local');
+  const bob = agents.create({ name: 'bob', runtime: 'claude' }, localHostId, 'local');
+  const carol = agents.create({ name: 'carol', runtime: 'claude' }, localHostId, 'local');
   for (const agent of [alice, bob, carol]) {
     workspaces.addMember(workspace.id, agent.id);
   }

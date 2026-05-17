@@ -82,6 +82,17 @@ export interface AgentRow {
   fast_mode: FastMode | null;
   host_id: string;
   description: string | null;
+  /** v26: human who created the agent (a `users.id`). Source of truth
+   *  for `canEditAgent` — only the creator and the agent itself may
+   *  edit profile / replace avatar. NOT NULL with `ON DELETE RESTRICT`
+   *  (deleting the user is blocked while their agents still reference
+   *  it; v2 multi-human flows must reassign or hard-delete first). */
+  created_by_user_id: string;
+  /** v26: storage key inside the configured BlobFileStorage; NULL when
+   *  no avatar is set. Coupled with `avatar_content_type` via CHECK
+   *  (mirrors `users` v21). */
+  avatar_storage_key: string | null;
+  avatar_content_type: string | null;
   created_at: number;
   updated_at: number;
 }

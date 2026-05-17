@@ -340,10 +340,14 @@ describe('database migrations', () => {
       db.exec(`
         INSERT INTO hosts (id, name, kind, created_at)
           VALUES ('h', 'local', 'local', 1);
+        INSERT INTO users (id, name, display_name, created_at, updated_at)
+          VALUES ('u-creator', 'creator', 'Creator', 1, 1);
         INSERT INTO agents
           (id, name, runtime, model, host_id, description,
-           created_at, updated_at, display_name, reasoning_effort, fast_mode)
-          VALUES ('ag', 'a', 'claude', NULL, 'h', NULL, 1, 1, 'A', NULL, NULL);
+           created_at, updated_at, display_name, reasoning_effort, fast_mode,
+           created_by_user_id)
+          VALUES ('ag', 'a', 'claude', NULL, 'h', NULL, 1, 1, 'A', NULL, NULL,
+                  'u-creator');
       `);
       expect(() =>
         db
@@ -706,12 +710,14 @@ describe('database migrations', () => {
         db.exec(`
           INSERT INTO hosts (id, name, kind, created_at)
           VALUES ('host_local', 'local', 'local', 1);
+          INSERT INTO users (id, name, display_name, created_at, updated_at)
+          VALUES ('u-creator', 'creator', 'Creator', 1, 1);
           INSERT INTO agents
             (id, name, runtime, model, host_id, description, created_at, updated_at,
-             display_name, reasoning_effort, fast_mode)
+             display_name, reasoning_effort, fast_mode, created_by_user_id)
           VALUES
             ('agent_alice', 'alice', 'claude', NULL, 'host_local', NULL, 1, 1,
-             'Alice', NULL, NULL);
+             'Alice', NULL, NULL, 'u-creator');
         `);
 
         expect(() =>
@@ -754,9 +760,10 @@ describe('database migrations', () => {
             .prepare(
               `INSERT INTO agents
                  (id, name, runtime, model, host_id, description,
-                  created_at, updated_at, display_name, reasoning_effort, fast_mode)
+                  created_at, updated_at, display_name, reasoning_effort, fast_mode,
+                  created_by_user_id)
                VALUES ('agent_clash', 'shiki', 'claude', NULL, 'host_local', NULL,
-                       1, 1, 'Clashing', NULL, NULL)`,
+                       1, 1, 'Clashing', NULL, NULL, 'u-shiki')`,
             )
             .run(),
         ).toThrow(/collides with an existing user name/);
@@ -765,9 +772,10 @@ describe('database migrations', () => {
         db.prepare(
           `INSERT INTO agents
              (id, name, runtime, model, host_id, description,
-              created_at, updated_at, display_name, reasoning_effort, fast_mode)
+              created_at, updated_at, display_name, reasoning_effort, fast_mode,
+              created_by_user_id)
            VALUES ('agent_alice', 'alice', 'claude', NULL, 'host_local', NULL,
-                   1, 1, 'Alice', NULL, NULL)`,
+                   1, 1, 'Alice', NULL, NULL, 'u-shiki')`,
         ).run();
         expect(() =>
           db.prepare(`UPDATE agents SET name = 'shiki' WHERE id = 'agent_alice'`).run(),
@@ -784,12 +792,14 @@ describe('database migrations', () => {
         db.exec(`
           INSERT INTO hosts (id, name, kind, created_at)
           VALUES ('host_local', 'local', 'local', 1);
+          INSERT INTO users (id, name, display_name, created_at, updated_at)
+          VALUES ('u-creator', 'creator', 'Creator', 1, 1);
           INSERT INTO agents
             (id, name, runtime, model, host_id, description, created_at, updated_at,
-             display_name, reasoning_effort, fast_mode)
+             display_name, reasoning_effort, fast_mode, created_by_user_id)
           VALUES
             ('agent_alice', 'alice', 'claude', NULL, 'host_local', NULL, 1, 1,
-             'Alice', NULL, NULL);
+             'Alice', NULL, NULL, 'u-creator');
           INSERT INTO workspaces
             (id, name, description, workspace_kind, workspace_path, workspace_host_id,
              owner_agent_id, archived_at, pinned_at, created_at, updated_at)
@@ -1428,6 +1438,400 @@ describe('database migrations', () => {
         expect(
           (db.prepare(`SELECT COUNT(*) AS n FROM workspace_users`).get() as { n: number }).n,
         ).toBe(0);
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  describe('migration v26 (agent creator + avatar)', () => {
+    it('backfills created_by_user_id from app_settings.viewer_user_id for existing agents', () => {
+      const db = new Database(':memory:');
+      try {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS _migrations (
+            version INTEGER PRIMARY KEY,
+            name    TEXT NOT NULL,
+            applied_at INTEGER NOT NULL
+          );
+        `);
+        applyMigrationsThrough(db, 25);
+
+        // Pre-v26 state: a registered viewer + an existing agent. v26
+        // must backfill created_by_user_id to the viewer.
+        const now = 1_700_000_000_000;
+        db.prepare(
+          `INSERT INTO users (id, name, display_name, created_at, updated_at)
+             VALUES ('viewer_1', 'shiki', 'Shiki', ?, ?)`,
+        ).run(now, now);
+        db.prepare(
+          `INSERT INTO app_settings (key, value)
+             VALUES ('viewer_user_id', 'viewer_1')`,
+        ).run();
+        db.prepare(
+          `INSERT INTO hosts (id, name, kind, created_at)
+             VALUES ('h1', 'local', 'local', ?)`,
+        ).run(now);
+        db.prepare(
+          `INSERT INTO agents
+             (id, name, runtime, model, host_id, description,
+              created_at, updated_at, display_name, reasoning_effort, fast_mode)
+           VALUES ('a1', 'alice', 'claude', NULL, 'h1', NULL, ?, ?, 'Alice', NULL, NULL)`,
+        ).run(now, now);
+
+        runMigrations(db);
+
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 26`).get(),
+        ).toBeDefined();
+
+        const row = db
+          .prepare<[], {
+            created_by_user_id: string;
+            avatar_storage_key: string | null;
+            avatar_content_type: string | null;
+          }>(
+            `SELECT created_by_user_id, avatar_storage_key, avatar_content_type
+               FROM agents WHERE id = 'a1'`,
+          )
+          .get();
+        expect(row).toEqual({
+          created_by_user_id: 'viewer_1',
+          avatar_storage_key: null,
+          avatar_content_type: null,
+        });
+      } finally {
+        db.close();
+      }
+    });
+
+    it('is a no-op on empty pre-registration DBs (no agents → no NOT NULL violation)', () => {
+      const db = new Database(':memory:');
+      try {
+        // Virgin DB: no users row, no viewer_user_id, no agents. v26 must
+        // succeed because zero-row INSERT-SELECT short-circuits without
+        // dereferencing the (NULL) viewer subquery.
+        runMigrations(db);
+
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 26`).get(),
+        ).toBeDefined();
+        expect(
+          (db.prepare(`SELECT COUNT(*) AS n FROM agents`).get() as { n: number }).n,
+        ).toBe(0);
+
+        // The new shape is in place (FK + CHECK pair).
+        const cols = (db.pragma('table_info(agents)') as Array<{
+          name: string;
+          notnull: number;
+        }>).reduce<Record<string, { notnull: number }>>((acc, c) => {
+          acc[c.name] = { notnull: c.notnull };
+          return acc;
+        }, {});
+        expect(cols.created_by_user_id?.notnull).toBe(1);
+        expect(cols.avatar_storage_key?.notnull).toBe(0);
+        expect(cols.avatar_content_type?.notnull).toBe(0);
+
+        const fk = (db.pragma('foreign_key_list(agents)') as Array<{
+          table: string;
+          from: string;
+          on_delete: string;
+        }>).find(f => f.from === 'created_by_user_id');
+        expect(fk?.table).toBe('users');
+        expect(fk?.on_delete).toBe('RESTRICT');
+      } finally {
+        db.close();
+      }
+    });
+
+    it('aborts loudly when pre-registration DB has agents but no viewer_user_id (impossible in production)', () => {
+      const db = new Database(':memory:');
+      try {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS _migrations (
+            version INTEGER PRIMARY KEY,
+            name    TEXT NOT NULL,
+            applied_at INTEGER NOT NULL
+          );
+        `);
+        applyMigrationsThrough(db, 25);
+
+        // Corrupt pre-condition: agent rows exist but no viewer pointer.
+        // (Production cannot reach this — the create route is user-gated —
+        // but the migration must NOT silently succeed if it does.)
+        const now = 1_700_000_000_000;
+        db.prepare(
+          `INSERT INTO hosts (id, name, kind, created_at)
+             VALUES ('h1', 'local', 'local', ?)`,
+        ).run(now);
+        db.prepare(
+          `INSERT INTO agents
+             (id, name, runtime, model, host_id, description,
+              created_at, updated_at, display_name, reasoning_effort, fast_mode)
+           VALUES ('a1', 'alice', 'claude', NULL, 'h1', NULL, ?, ?, 'Alice', NULL, NULL)`,
+        ).run(now, now);
+
+        expect(() => runMigrations(db)).toThrow(/NOT NULL/i);
+      } finally {
+        db.close();
+      }
+    });
+
+    it('leaves no agents_legacy_v26 drift behind', () => {
+      const db = new Database(':memory:');
+      try {
+        runMigrations(db);
+        const tables = db
+          .prepare<[], { name: string }>(
+            `SELECT name FROM sqlite_schema WHERE type = 'table'`,
+          )
+          .all()
+          .map(r => r.name);
+        expect(tables).toContain('agents');
+        expect(tables).not.toContain('agents_legacy_v26');
+      } finally {
+        db.close();
+      }
+    });
+
+    it('preserves the v21 trigger surface verbatim across the rebuild', () => {
+      const db = new Database(':memory:');
+      try {
+        runMigrations(db);
+        const triggers = db
+          .prepare<[], { name: string }>(
+            `SELECT name FROM sqlite_schema WHERE type = 'trigger' ORDER BY name`,
+          )
+          .all()
+          .map(r => r.name);
+        expect(triggers).toEqual(
+          expect.arrayContaining([
+            'attachments_created_by_validate_insert',
+            'attachments_created_by_validate_update',
+            'users_name_unique_against_agents_insert',
+            'users_name_unique_against_agents_update',
+            'agents_name_unique_against_users_insert',
+            'agents_name_unique_against_users_update',
+          ]),
+        );
+      } finally {
+        db.close();
+      }
+    });
+
+    it('user/agent name collision triggers still fire after the rebuild (both directions)', () => {
+      const db = new Database(':memory:');
+      try {
+        runMigrations(db);
+        const now = Date.now();
+        db.prepare(
+          `INSERT INTO hosts (id, name, kind, created_at)
+             VALUES ('h1', 'local', 'local', ?)`,
+        ).run(now);
+        db.prepare(
+          `INSERT INTO users (id, name, display_name, created_at, updated_at)
+             VALUES ('u1', 'shiki', 'Shiki', ?, ?)`,
+        ).run(now, now);
+        db.prepare(
+          `INSERT INTO agents
+             (id, name, runtime, model, host_id, description,
+              created_at, updated_at, display_name, reasoning_effort, fast_mode,
+              created_by_user_id)
+           VALUES ('a1', 'alice', 'claude', NULL, 'h1', NULL, ?, ?,
+                   'Alice', NULL, NULL, 'u1')`,
+        ).run(now, now);
+
+        // user→agent direction (insert + update).
+        expect(() =>
+          db
+            .prepare(
+              `INSERT INTO users (id, name, display_name, created_at, updated_at)
+                 VALUES ('u-clash', 'alice', 'Bob', ?, ?)`,
+            )
+            .run(now, now),
+        ).toThrow(/collides with an existing agent name/);
+        db.prepare(
+          `INSERT INTO users (id, name, display_name, created_at, updated_at)
+             VALUES ('u-bob', 'bob', 'Bob', ?, ?)`,
+        ).run(now, now);
+        expect(() =>
+          db.prepare(`UPDATE users SET name = 'alice' WHERE id = 'u-bob'`).run(),
+        ).toThrow(/collides with an existing agent name/);
+
+        // agent→user direction (insert + update).
+        expect(() =>
+          db
+            .prepare(
+              `INSERT INTO agents
+                 (id, name, runtime, model, host_id, description,
+                  created_at, updated_at, display_name, reasoning_effort, fast_mode,
+                  created_by_user_id)
+               VALUES ('a-clash', 'shiki', 'claude', NULL, 'h1', NULL, ?, ?,
+                       'Clash', NULL, NULL, 'u1')`,
+            )
+            .run(now, now),
+        ).toThrow(/collides with an existing user name/);
+        expect(() =>
+          db.prepare(`UPDATE agents SET name = 'shiki' WHERE id = 'a1'`).run(),
+        ).toThrow(/collides with an existing user name/);
+      } finally {
+        db.close();
+      }
+    });
+
+    it('attachments dispatch trigger still rejects orphan owner ids after the rebuild', () => {
+      const db = new Database(':memory:');
+      try {
+        runMigrations(db);
+        const now = Date.now();
+        db.prepare(
+          `INSERT INTO hosts (id, name, kind, created_at)
+             VALUES ('h1', 'local', 'local', ?)`,
+        ).run(now);
+        db.prepare(
+          `INSERT INTO users (id, name, display_name, created_at, updated_at)
+             VALUES ('u1', 'shiki', 'Shiki', ?, ?)`,
+        ).run(now, now);
+        db.prepare(
+          `INSERT INTO agents
+             (id, name, runtime, model, host_id, description,
+              created_at, updated_at, display_name, reasoning_effort, fast_mode,
+              created_by_user_id)
+           VALUES ('a1', 'alice', 'claude', NULL, 'h1', NULL, ?, ?,
+                   'Alice', NULL, NULL, 'u1')`,
+        ).run(now, now);
+        db.prepare(
+          `INSERT INTO workspaces
+             (id, name, description, workspace_kind, workspace_path, workspace_host_id,
+              owner_agent_id, archived_at, pinned_at, created_at, updated_at)
+           VALUES ('ws1', 'main', NULL, 'regular', '/tmp/ws1', 'h1', NULL, NULL, NULL, ?, ?)`,
+        ).run(now, now);
+        db.prepare(
+          `INSERT INTO conversations
+             (id, workspace_id, workspace_path, kind, parent_conversation_id, title,
+              status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
+              archived_at, created_at, updated_at)
+           VALUES ('c1', 'ws1', '/tmp/ws1', 'channel', NULL, 'general',
+                   'idle', NULL, NULL, NULL, NULL, NULL, ?, ?)`,
+        ).run(now, now);
+
+        // kind='user' with unknown id rejected.
+        expect(() =>
+          db
+            .prepare(
+              `INSERT INTO attachments
+                 (id, channel_id, source_conversation_id, filename, size,
+                  content_type, storage, storage_key, created_by_kind,
+                  created_by_id, created_at)
+               VALUES ('att_u', 'c1', 'c1', 'x.png', 1,
+                       'image/png', 'local', 'attachments/x.png',
+                       'user', 'u-missing', ?)`,
+            )
+            .run(now),
+        ).toThrow(/created_by_id \(kind=user\)/);
+
+        // kind='agent' with unknown id rejected.
+        expect(() =>
+          db
+            .prepare(
+              `INSERT INTO attachments
+                 (id, channel_id, source_conversation_id, filename, size,
+                  content_type, storage, storage_key, created_by_kind,
+                  created_by_id, created_at)
+               VALUES ('att_a', 'c1', 'c1', 'x.png', 1,
+                       'image/png', 'local', 'attachments/x.png',
+                       'agent', 'a-missing', ?)`,
+            )
+            .run(now),
+        ).toThrow(/created_by_id \(kind=agent\)/);
+      } finally {
+        db.close();
+      }
+    });
+
+    it('blocks DELETE on the creator user via ON DELETE RESTRICT', () => {
+      const db = new Database(':memory:');
+      try {
+        runMigrations(db);
+        const now = Date.now();
+        db.prepare(
+          `INSERT INTO hosts (id, name, kind, created_at)
+             VALUES ('h1', 'local', 'local', ?)`,
+        ).run(now);
+        db.prepare(
+          `INSERT INTO users (id, name, display_name, created_at, updated_at)
+             VALUES ('u1', 'shiki', 'Shiki', ?, ?)`,
+        ).run(now, now);
+        db.prepare(
+          `INSERT INTO agents
+             (id, name, runtime, model, host_id, description,
+              created_at, updated_at, display_name, reasoning_effort, fast_mode,
+              created_by_user_id)
+           VALUES ('a1', 'alice', 'claude', NULL, 'h1', NULL, ?, ?,
+                   'Alice', NULL, NULL, 'u1')`,
+        ).run(now, now);
+
+        expect(() =>
+          db.prepare(`DELETE FROM users WHERE id = 'u1'`).run(),
+        ).toThrow(/FOREIGN KEY/);
+      } finally {
+        db.close();
+      }
+    });
+
+    it('CHECK pair rejects half-set avatar columns', () => {
+      const db = new Database(':memory:');
+      try {
+        runMigrations(db);
+        const now = Date.now();
+        db.prepare(
+          `INSERT INTO hosts (id, name, kind, created_at)
+             VALUES ('h1', 'local', 'local', ?)`,
+        ).run(now);
+        db.prepare(
+          `INSERT INTO users (id, name, display_name, created_at, updated_at)
+             VALUES ('u1', 'shiki', 'Shiki', ?, ?)`,
+        ).run(now, now);
+        db.prepare(
+          `INSERT INTO agents
+             (id, name, runtime, model, host_id, description,
+              created_at, updated_at, display_name, reasoning_effort, fast_mode,
+              created_by_user_id, avatar_storage_key, avatar_content_type)
+           VALUES ('a1', 'alice', 'claude', NULL, 'h1', NULL, ?, ?,
+                   'Alice', NULL, NULL, 'u1', NULL, NULL)`,
+        ).run(now, now);
+
+        // storage_key set but content_type null → CHECK violation.
+        expect(() =>
+          db
+            .prepare(
+              `UPDATE agents
+                  SET avatar_storage_key = 'avatars/agent_a1.png',
+                      avatar_content_type = NULL
+                WHERE id = 'a1'`,
+            )
+            .run(),
+        ).toThrow(/CHECK/);
+
+        // content_type set but storage_key null → CHECK violation.
+        expect(() =>
+          db
+            .prepare(
+              `UPDATE agents
+                  SET avatar_storage_key = NULL,
+                      avatar_content_type = 'image/png'
+                WHERE id = 'a1'`,
+            )
+            .run(),
+        ).toThrow(/CHECK/);
+
+        // Both set → ok.
+        db.prepare(
+          `UPDATE agents
+              SET avatar_storage_key = 'avatars/agent_a1.png',
+                  avatar_content_type = 'image/png'
+            WHERE id = 'a1'`,
+        ).run();
       } finally {
         db.close();
       }

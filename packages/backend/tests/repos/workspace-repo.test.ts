@@ -17,8 +17,8 @@ function bootstrapWorkspaceAndAgents() {
     workspacePath: workspaces.workspacePathFor('ops'),
     workspaceHostId: localHostId,
   });
-  const a = agents.create({ name: 'a', runtime: 'claude' }, localHostId);
-  const b = agents.create({ name: 'b', runtime: 'claude' }, localHostId);
+  const a = agents.create({ name: 'a', runtime: 'claude' }, localHostId, 'local');
+  const b = agents.create({ name: 'b', runtime: 'claude' }, localHostId, 'local');
   return { db, localHostId, workspace, a, b, workspaces };
 }
 

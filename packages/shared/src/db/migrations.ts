@@ -1923,4 +1923,179 @@ export const migrations: Migration[] = [
          WHERE (SELECT value FROM app_settings WHERE key = 'viewer_user_id') IS NOT NULL;
     `,
   },
+  {
+    version: 26,
+    name: 'agent_creator_and_avatar',
+    foreignKeyEscape: true,
+    // Agent profile feature: persist the creator (a `users.id`) on every
+    // agent row, and add the avatar storage pair (mirrors `users` v21).
+    // The creator is the source of truth for `canEditAgent`: only the
+    // creator (user) and the agent itself (via internal route, future
+    // PR) may PATCH the agent's profile or replace its avatar.
+    //
+    // Why a full table rebuild: SQLite cannot retro-actively add a
+    // `NOT NULL` column without a constant DEFAULT, and the FK to
+    // `users(id)` cannot be a string literal default. Rebuild + INSERT
+    // SELECT is the only way to make `created_by_user_id` non-null on
+    // existing rows. We pair it with the avatar columns + CHECK in the
+    // same rebuild to avoid a second rebuild later.
+    //
+    // ON DELETE RESTRICT for `created_by_user_id`: the creator is a
+    // permission-granting reference, not metadata. Cascading delete
+    // (CASCADE) would silently destroy agents whose creator went away;
+    // nulling it (SET NULL) would leave agents permanently human-
+    // unmanageable. RESTRICT forces the v2 multi-human path to make an
+    // explicit decision (reassign / archive / hard-delete) before
+    // removing a user. v1 has no user-delete surface so this is never
+    // exercised in production today.
+    //
+    // Trigger handling (legacy_alter_table = ON, set by `foreignKeyEscape`):
+    // body references to `agents` in v21's six triggers are NOT
+    // automatically rewritten when the table is renamed. We explicitly
+    // DROP all six before the rebuild and recreate them verbatim after
+    // the new `agents` table is in place.
+    //
+    // Backfill: existing rows take `created_by_user_id` from
+    // `app_settings.viewer_user_id`. v1 single-human installs have one
+    // viewer who created every existing agent — this is the true
+    // attribution. Pre-registration DBs with zero agent rows produce
+    // zero INSERTs (the SELECT-from-empty-source short-circuit) so the
+    // migration succeeds without a viewer pointer. Pre-registration
+    // DBs WITH agent rows trigger a `NOT NULL constraint failed` (the
+    // SELECT subquery returns NULL); this state is impossible in
+    // production (the create route is user-gated) and the loud abort
+    // is the honest answer for a corrupt DB.
+    //
+    // Avatar columns: nullable pair coupled by CHECK, matching `users`
+    // v21. The PR-2 service layer writes both at once; the public
+    // `GET /api/agents/:id/avatar` route serves the blob.
+    up: `
+      -- 1. Drop triggers that reference \`agents\` (either ON agents or
+      --    in body). legacy_alter_table=ON means we own this; modern
+      --    SQLite would otherwise update body refs automatically.
+      DROP TRIGGER IF EXISTS attachments_created_by_validate_insert;
+      DROP TRIGGER IF EXISTS attachments_created_by_validate_update;
+      DROP TRIGGER IF EXISTS users_name_unique_against_agents_insert;
+      DROP TRIGGER IF EXISTS users_name_unique_against_agents_update;
+      DROP TRIGGER IF EXISTS agents_name_unique_against_users_insert;
+      DROP TRIGGER IF EXISTS agents_name_unique_against_users_update;
+
+      -- 2. Rebuild agents with new columns. The full final shape:
+      --    v1 (id, name, runtime, model, host_id, description,
+      --        created_at, updated_at)
+      --    v5 + display_name, reasoning_effort
+      --    v17 + fast_mode
+      --    v26 + created_by_user_id (NOT NULL, FK RESTRICT),
+      --        + avatar_storage_key (nullable), avatar_content_type
+      --          (nullable), CHECK pair.
+      ALTER TABLE agents RENAME TO agents_legacy_v26;
+
+      CREATE TABLE agents (
+        id                  TEXT PRIMARY KEY,
+        name                TEXT NOT NULL UNIQUE,
+        runtime             TEXT NOT NULL,
+        model               TEXT,
+        host_id             TEXT NOT NULL REFERENCES hosts(id) ON DELETE RESTRICT,
+        description         TEXT,
+        created_at          INTEGER NOT NULL,
+        updated_at          INTEGER NOT NULL,
+        display_name        TEXT NOT NULL DEFAULT '',
+        reasoning_effort    TEXT,
+        fast_mode           INTEGER,
+        created_by_user_id  TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+        avatar_storage_key  TEXT,
+        avatar_content_type TEXT,
+        CHECK (
+          (avatar_storage_key IS NULL AND avatar_content_type IS NULL)
+          OR
+          (avatar_storage_key IS NOT NULL AND avatar_content_type IS NOT NULL)
+        )
+      );
+
+      INSERT INTO agents (
+        id, name, runtime, model, host_id, description,
+        created_at, updated_at, display_name, reasoning_effort, fast_mode,
+        created_by_user_id, avatar_storage_key, avatar_content_type
+      )
+      SELECT
+        id, name, runtime, model, host_id, description,
+        created_at, updated_at, display_name, reasoning_effort, fast_mode,
+        (SELECT value FROM app_settings WHERE key = 'viewer_user_id'),
+        NULL, NULL
+      FROM agents_legacy_v26;
+
+      DROP TABLE agents_legacy_v26;
+
+      -- 3. Recreate the six triggers verbatim from v21. Bodies are
+      --    identical; the new \`agents\` table satisfies them.
+      CREATE TRIGGER attachments_created_by_validate_insert
+      BEFORE INSERT ON attachments
+      BEGIN
+        SELECT CASE
+          WHEN NEW.created_by_kind = 'user'
+               AND NOT EXISTS (SELECT 1 FROM users WHERE id = NEW.created_by_id)
+          THEN RAISE(ABORT, 'attachments.created_by_id (kind=user) must reference users(id)')
+          WHEN NEW.created_by_kind = 'agent'
+               AND NOT EXISTS (SELECT 1 FROM agents WHERE id = NEW.created_by_id)
+          THEN RAISE(ABORT, 'attachments.created_by_id (kind=agent) must reference agents(id)')
+        END;
+      END;
+
+      CREATE TRIGGER attachments_created_by_validate_update
+      BEFORE UPDATE OF created_by_kind, created_by_id ON attachments
+      BEGIN
+        SELECT CASE
+          WHEN NEW.created_by_kind = 'user'
+               AND NOT EXISTS (SELECT 1 FROM users WHERE id = NEW.created_by_id)
+          THEN RAISE(ABORT, 'attachments.created_by_id (kind=user) must reference users(id)')
+          WHEN NEW.created_by_kind = 'agent'
+               AND NOT EXISTS (SELECT 1 FROM agents WHERE id = NEW.created_by_id)
+          THEN RAISE(ABORT, 'attachments.created_by_id (kind=agent) must reference agents(id)')
+        END;
+      END;
+
+      CREATE TRIGGER users_name_unique_against_agents_insert
+      BEFORE INSERT ON users
+      WHEN EXISTS (SELECT 1 FROM agents WHERE name = NEW.name)
+      BEGIN
+        SELECT RAISE(ABORT, 'users.name collides with an existing agent name');
+      END;
+
+      CREATE TRIGGER users_name_unique_against_agents_update
+      BEFORE UPDATE OF name ON users
+      WHEN NEW.name != OLD.name
+        AND EXISTS (SELECT 1 FROM agents WHERE name = NEW.name)
+      BEGIN
+        SELECT RAISE(ABORT, 'users.name collides with an existing agent name');
+      END;
+
+      CREATE TRIGGER agents_name_unique_against_users_insert
+      BEFORE INSERT ON agents
+      WHEN EXISTS (SELECT 1 FROM users WHERE name = NEW.name)
+      BEGIN
+        SELECT RAISE(ABORT, 'agents.name collides with an existing user name');
+      END;
+
+      CREATE TRIGGER agents_name_unique_against_users_update
+      BEFORE UPDATE OF name ON agents
+      WHEN NEW.name != OLD.name
+        AND EXISTS (SELECT 1 FROM users WHERE name = NEW.name)
+      BEGIN
+        SELECT RAISE(ABORT, 'agents.name collides with an existing user name');
+      END;
+
+      -- 4. Final FK integrity check (mirrors v21). The runner already
+      --    re-runs foreign_key_check after every \`foreignKeyEscape\`
+      --    migration, but we keep the explicit pattern for clarity and
+      --    to abort with a useful error message if anything regresses.
+      CREATE TEMP TABLE _v26_fk_check (
+        table_name TEXT CHECK (table_name IS NULL),
+        rowid      INTEGER,
+        parent     TEXT,
+        fkid       INTEGER
+      );
+      INSERT INTO _v26_fk_check SELECT * FROM pragma_foreign_key_check;
+      DROP TABLE _v26_fk_check;
+    `,
+  },
 ];

@@ -15,14 +15,33 @@ function newId(): string {
   return randomBytes(12).toString('base64url');
 }
 
-function rowToDto(row: AgentRow): AgentDto {
+export function agentRowToDto(row: AgentRow): AgentDto {
   // SQLite stores booleans as 0/1; coerce back to boolean | null.
   const fast = row.fast_mode as unknown as number | boolean | null;
   return {
-    ...row,
+    id: row.id,
+    name: row.name,
+    display_name: row.display_name,
+    runtime: row.runtime,
+    model: row.model,
+    reasoning_effort: row.reasoning_effort,
     fast_mode:
       fast === null || fast === undefined ? null : Boolean(fast),
+    host_id: row.host_id,
+    description: row.description,
+    created_by_user_id: row.created_by_user_id,
+    // PR-1 always emits null. PR-2 flips this on once the
+    // /api/agents/:id/avatar route + AgentService.uploadAvatar land
+    // (will mirror UserService: `${apiPaths.agentAvatar(id)}?v=${updated_at}`
+    // when avatar_storage_key is non-null).
+    avatar_url: null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
   };
+}
+
+function rowToDto(row: AgentRow): AgentDto {
+  return agentRowToDto(row);
 }
 
 export class AgentRepo {
@@ -49,18 +68,28 @@ export class AgentRepo {
     return row ? rowToDto(row) : null;
   }
 
-  create(input: CreateAgentInput, defaultHostId: string): AgentDto {
+  create(
+    input: CreateAgentInput,
+    defaultHostId: string,
+    createdByUserId: string,
+  ): AgentDto {
     const id = newId();
     const now = Date.now();
     // display_name defaults to the handle so the UI doesn't have to
     // collect both at create time. Users edit display_name later via
     // the agent profile page.
+    //
+    // `created_by_user_id` is required (NOT NULL since v26). Callers
+    // must thread the creator's user id from their auth principal —
+    // routes pass `getUserPrincipal(c).userId`; tests pass an explicit
+    // fixture user id. The cross-namespace name-collision trigger
+    // (v21) and FK to `users(id)` (v26) both fire here on bad input.
     this.db
       .prepare(
         `INSERT INTO agents
          (id, name, display_name, runtime, model, reasoning_effort, fast_mode,
-          host_id, description, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          host_id, description, created_by_user_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -72,6 +101,7 @@ export class AgentRepo {
         input.fast_mode === undefined ? null : input.fast_mode ? 1 : 0,
         input.host_id ?? defaultHostId,
         input.description ?? null,
+        createdByUserId,
         now,
         now,
       );

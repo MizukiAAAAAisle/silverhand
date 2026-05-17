@@ -29,7 +29,7 @@ describe('ConversationRepo canonical schema', () => {
   it('creates channels, threads, agents, and messages without legacy tables', () => {
     const t = bootstrap();
     try {
-      const agent = t.agents.create({ name: 'alice', runtime: 'claude' }, t.localHostId);
+      const agent = t.agents.create({ name: 'alice', runtime: 'claude' }, t.localHostId, 'local');
       const workspacePath = join(t.tmp.workspacesRoot, 'eng');
       const workspace = t.workspaces.insert({
         name: 'eng',
@@ -103,7 +103,7 @@ describe('ConversationRepo canonical schema', () => {
   it('keeps DM channels under the agent_home workspace with agent L1 path snapshots', () => {
     const t = bootstrap();
     try {
-      const agent = t.agents.create({ name: 'cindy', runtime: 'codex' }, t.localHostId);
+      const agent = t.agents.create({ name: 'cindy', runtime: 'codex' }, t.localHostId, 'local');
       const agentWorkspacePath = join(t.tmp.silverhandDir, 'agents', agent.id);
       const home = t.workspaces.insertAgentHome({
         agent,

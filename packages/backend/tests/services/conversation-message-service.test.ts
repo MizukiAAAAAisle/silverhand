@@ -112,8 +112,8 @@ function bootstrap() {
     workspacePath: tmp.workspacesRoot,
     workspaceHostId: localHostId,
   });
-  const alice = agents.create({ name: 'alice', runtime: 'claude' }, localHostId);
-  const bob = agents.create({ name: 'bob', runtime: 'claude' }, localHostId);
+  const alice = agents.create({ name: 'alice', runtime: 'claude' }, localHostId, 'local');
+  const bob = agents.create({ name: 'bob', runtime: 'claude' }, localHostId, 'local');
   workspaces.addMember(workspace.id, alice.id);
   workspaces.addMember(workspace.id, bob.id);
   const channel = conversations.insertChannel({
@@ -598,6 +598,7 @@ describe('ConversationMessageService.sendMessage', () => {
       const outsider = t.agents.create(
         { name: 'outsider', runtime: 'claude' },
         t.alice.host_id,
+        'local',
       );
       await expect(
         t.service.sendMessage({

@@ -77,8 +77,8 @@ function bootstrap() {
     workspacePath: tmp.workspacesRoot,
     workspaceHostId: localHostId,
   });
-  const alice = agents.create({ name: 'alice', runtime: 'claude' }, localHostId);
-  const bob = agents.create({ name: 'bob', runtime: 'claude' }, localHostId);
+  const alice = agents.create({ name: 'alice', runtime: 'claude' }, localHostId, 'local');
+  const bob = agents.create({ name: 'bob', runtime: 'claude' }, localHostId, 'local');
   workspaces.addMember(workspace.id, alice.id);
   workspaces.addMember(workspace.id, bob.id);
   const channel = conversations.insertChannel({
@@ -154,7 +154,7 @@ describe('TaskService.createTasks', () => {
   it('agent not in conversation → not_conversation_member, no insert', async () => {
     const t = bootstrap();
     try {
-      const outsider = t.agents.create({ name: 'out', runtime: 'claude' }, t.localHostId);
+      const outsider = t.agents.create({ name: 'out', runtime: 'claude' }, t.localHostId, 'local');
       const result = await t.service.createTasks({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: outsider.id, conversationId: t.channel.id },
@@ -534,7 +534,7 @@ describe('TaskService.claimTask — user actor', () => {
     const t = bootstrap();
     try {
       await createTask(t, t.alice.id, 'x');
-      const outsider = t.agents.create({ name: 'out', runtime: 'claude' }, t.localHostId);
+      const outsider = t.agents.create({ name: 'out', runtime: 'claude' }, t.localHostId, 'local');
       const r = await t.service.claimTask({
         actor: { kind: 'user', userId: 'local' },
         by: { messageId: (await firstMsgId(t)) },
@@ -1098,7 +1098,7 @@ describe('TaskService agent-actor validation', () => {
   it('claimTask: agent not member of source conversation → not_conversation_member', async () => {
     const t = bootstrap();
     try {
-      const outsider = t.agents.create({ name: 'out', runtime: 'claude' }, t.localHostId);
+      const outsider = t.agents.create({ name: 'out', runtime: 'claude' }, t.localHostId, 'local');
       await createTask(t, t.alice.id, 't');
       const r = await t.service.claimTask({
         actor: { kind: 'agent', agentId: outsider.id, conversationId: t.channel.id },
@@ -1133,7 +1133,7 @@ describe('TaskService agent-actor validation', () => {
   it('unclaimTask: agent not member of source conversation → not_conversation_member', async () => {
     const t = bootstrap();
     try {
-      const outsider = t.agents.create({ name: 'out', runtime: 'claude' }, t.localHostId);
+      const outsider = t.agents.create({ name: 'out', runtime: 'claude' }, t.localHostId, 'local');
       await createTask(t, t.alice.id, 't');
       await t.service.claimTask({
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
@@ -1173,7 +1173,7 @@ describe('TaskService agent-actor validation', () => {
   it('updateStatus: agent not member of source conversation → not_conversation_member', async () => {
     const t = bootstrap();
     try {
-      const outsider = t.agents.create({ name: 'out', runtime: 'claude' }, t.localHostId);
+      const outsider = t.agents.create({ name: 'out', runtime: 'claude' }, t.localHostId, 'local');
       await createTask(t, t.alice.id, 't');
       await t.service.claimTask({
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },

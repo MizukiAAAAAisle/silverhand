@@ -26,7 +26,7 @@ function bootstrap() {
     workspacePath,
     workspaceHostId: localHostId,
   });
-  const agent = new AgentRepo(db).create({ name: 'a', runtime: 'claude' }, localHostId);
+  const agent = new AgentRepo(db).create({ name: 'a', runtime: 'claude' }, localHostId, 'local');
   workspaces.addMember(workspace.id, agent.id);
   const conversations = new ConversationRepo(db);
   const channel = conversations.insertChannel({

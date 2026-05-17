@@ -13,6 +13,7 @@ import type {
   WorkspaceUserMemberDto,
   WorkspaceUserMemberRow,
 } from '@silverhand/shared';
+import { agentRowToDto } from './agent-repo.js';
 
 function newId(): string {
   return randomBytes(12).toString('base64url');
@@ -357,7 +358,7 @@ export class WorkspaceRepo {
           ORDER BY wm.joined_at ASC`,
       )
       .all(workspaceId)
-      .map(r => ({ ...r }));
+      .map(agentRowToDto);
   }
 
   isMember(workspaceId: string, agentId: string): boolean {

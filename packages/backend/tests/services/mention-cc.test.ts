@@ -70,7 +70,7 @@ function bootstrap() {
   // Recipient agent ("alice") with their agent_home + Onboarding DM.
   // mention-cc looks up the agent's primary DM and uses its workspace
   // as the home for the new Mentions DM.
-  const alice = agents.create({ name: 'alice', runtime: 'claude' }, localHostId);
+  const alice = agents.create({ name: 'alice', runtime: 'claude' }, localHostId, 'local');
   const aliceHome = workspaces.insertAgentHome({
     agent: { id: alice.id, name: alice.name, host_id: alice.host_id },
     workspacePath: tmp.workspacesRoot,

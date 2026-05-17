@@ -58,10 +58,12 @@ describe('MembershipService.listMembers', () => {
       const alice = t.agents.create(
         { name: 'alice', runtime: 'claude' },
         t.localHostId,
+        'local',
       );
       const bob = t.agents.create(
         { name: 'bob', runtime: 'codex' },
         t.localHostId,
+        'local',
       );
       // Add bob first to verify joined-order ASC vs name-order or
       // creation-order: the resulting list must be [bob, alice], not
@@ -114,6 +116,7 @@ describe('MembershipService.listMembers', () => {
       const alice = t.agents.create(
         { name: 'alice', runtime: 'claude' },
         t.localHostId,
+        'local',
       );
       // Patch display_name so the DTO carries something distinct from
       // `name`. Repo doesn't expose updateProfile for agents, so write
@@ -171,6 +174,7 @@ describe('MembershipService.listMembers', () => {
       const ghost = t.agents.create(
         { name: 'ghost', runtime: 'claude' },
         t.localHostId,
+        'local',
       );
       t.conversations.addAgent(t.channel.id, ghost.id);
       // Force-insert a conversation_users row pointing at a user that
