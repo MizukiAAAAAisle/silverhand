@@ -24,6 +24,8 @@ import type {
   AgentDto,
   AgentRunState,
   ConversationAgentDto,
+  HumanMemberDto,
+  MemberDto,
   MessageDto,
   ThreadDto,
   UserDto,
@@ -38,6 +40,8 @@ import { SystemActivityCluster } from '@/components/chat/SystemActivityCluster';
 import { groupMessages } from '@/components/chat/groupMessages';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
+import { HoverPopover } from '@/components/chat/HoverPopover';
+import { useConversationMembers } from '@/features/conversations/useConversationMembers';
 import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
 import {
   AppDropdownMenu,
@@ -271,7 +275,7 @@ function ActiveChannelView({
     }
   }, [agentActionDisabled, agentIds, stopAgent]);
   const memberStrip = (
-    <AgentStrip
+    <MemberStrip
       channelId={conversation.id}
       routeKind={routeKind}
       conversationAgents={channelAgents}
@@ -558,9 +562,15 @@ function ActiveChannelView({
   );
 }
 
-// ── Agent strip ─────────────────────────────────────────────────────────
+// ── Member strip ────────────────────────────────────────────────────────
 
-function AgentStrip({
+/** Maximum number of chips rendered inline; overflow collapses into a
+ *  `+N` chip whose hover popover lists the remaining members. Header
+ *  height must not jitter as channels grow membership, so this cap
+ *  exists even though current channels rarely exceed it. */
+const MEMBER_STRIP_VISIBLE_CAP = 8;
+
+function MemberStrip({
   channelId,
   routeKind,
   conversationAgents,
@@ -575,49 +585,217 @@ function AgentStrip({
     for (const a of agents) m.set(a.id, a);
     return m;
   }, [agents]);
+  const conversationAgentById = useMemo(() => {
+    const m = new Map<string, ConversationAgentDto>();
+    for (const ca of conversationAgents) m.set(ca.agent_id, ca);
+    return m;
+  }, [conversationAgents]);
 
-  if (conversationAgents.length === 0) {
+  // Members come from the same backend source-of-truth that the
+  // platform prompt's "Members in this conversation:" block renders, so
+  // chips and prompt can never drift. Self-filter is the renderer's
+  // job: the *current human viewer* is dropped here. Agent self has no
+  // UI meaning for chips and is intentionally not filtered.
+  const membersResult = useConversationMembers(channelId);
+  const { data: viewer } = useViewerUser();
+  const viewerUserId = viewer && !isRegistrationRequired(viewer) ? viewer.id : null;
+
+  const visibleMembers = useMemo(() => {
+    if (membersResult.status !== 'resolved') return [];
+    return membersResult.members.filter(m => {
+      if (m.kind !== 'human') return true;
+      // Drop the current viewer — UI-self has no meaning in a chip strip
+      // pointing at "who else is in this room with me".
+      return m.user_id !== viewerUserId;
+    });
+  }, [membersResult, viewerUserId]);
+
+  // Empty-state: no agents AND no other humans. Keep the original copy
+  // when only the agent side is empty (the strip's pre-PR-C contract).
+  if (visibleMembers.length === 0 && conversationAgents.length === 0) {
     return (
       <span className="shrink-0 text-[10px] italic text-text-muted">
         {routeKind === 'thread' ? 'Thread' : 'Channel'} 还没有成员
       </span>
     );
   }
-  // Plain inline roster: members sit beside the name. Each avatar keeps
-  // its own presence dot and border, without overlapping the next member.
+
+  const inline = visibleMembers.slice(0, MEMBER_STRIP_VISIBLE_CAP);
+  const overflow = visibleMembers.slice(MEMBER_STRIP_VISIBLE_CAP);
+
   return (
-    <div className="flex shrink-0 items-center gap-1.5">
-      {conversationAgents.map(s => {
-        const agent = agentById.get(s.agent_id);
-        if (!agent) return null;
-        return (
-          <AgentInfoPopover
-            key={s.agent_id}
-            agent={agent}
-            conversationId={channelId}
-            routeKind={routeKind}
-            trigger="hover"
-            side="bottom"
-            align="end"
-            management
-          >
-            <button
-              type="button"
-              aria-label={`@${agent.name}`}
-              className="relative rounded-full border border-[#9ca3af] bg-bg-floating p-px shadow-sm transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+    <div
+      className="flex shrink-0 items-center gap-1.5"
+      data-member-strip
+      data-member-count={visibleMembers.length}
+    >
+      {inline.map(member => {
+        if (member.kind === 'agent') {
+          const agent = agentById.get(member.agent_id);
+          if (!agent) return null;
+          const ca = conversationAgentById.get(member.agent_id);
+          // No conversation_agents row → agent is in `conversation_users`-style
+          // membership but never spawned in this conversation. Render
+          // a faint dot (idle) so the chip stays uniform shape.
+          const status: ConversationAgentDto['status'] = ca?.status ?? 'idle';
+          return (
+            <AgentInfoPopover
+              key={`agent:${member.agent_id}`}
+              agent={agent}
+              conversationId={channelId}
+              routeKind={routeKind}
+              trigger="hover"
+              side="bottom"
+              align="end"
+              management
             >
-              <AgentAvatar runtime={agent.runtime} size={22} />
-              <span
-                className={
-                  'absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full border border-bg-floating shadow-sm ' +
-                  STATUS_DOT[s.status]
-                }
-              />
-            </button>
-          </AgentInfoPopover>
+              <button
+                type="button"
+                aria-label={`@${agent.name}`}
+                data-member-chip="agent"
+                data-member-id={member.agent_id}
+                className="relative rounded-full border border-[#9ca3af] bg-bg-floating p-px shadow-sm transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+              >
+                <AgentAvatar runtime={agent.runtime} size={22} />
+                <span
+                  className={
+                    'absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full border border-bg-floating shadow-sm '
+                    + STATUS_DOT[status]
+                  }
+                />
+              </button>
+            </AgentInfoPopover>
+          );
+        }
+        return (
+          <HumanMemberChip key={`human:${member.user_id}`} human={member} />
         );
       })}
+      {overflow.length > 0 ? (
+        <MemberOverflowChip
+          overflow={overflow}
+          totalVisible={visibleMembers.length}
+        />
+      ) : null}
     </div>
+  );
+}
+
+/**
+ * Human chip — same footprint as the agent chip (22px circle), but
+ * holds the viewer's avatar (current single-human invariant) or a
+ * letter placeholder. Hover popover mirrors `HumanMention`'s
+ * content so inline `@handle` mentions and header chips read the
+ * same.
+ *
+ * V2 multi-human will need a `usersById` map prop (avatar URL keyed
+ * by user id); for now the only resolvable avatar belongs to the
+ * viewer, and the viewer is filtered out of the strip anyway, so
+ * remote humans always render the placeholder until that prop lands.
+ */
+function HumanMemberChip({ human }: { human: HumanMemberDto }): JSX.Element {
+  const label = human.display_name?.trim() || human.name;
+  const initial = label.charAt(0).toUpperCase();
+  const trigger = (
+    <button
+      type="button"
+      aria-label={`@${human.name}`}
+      data-member-chip="human"
+      data-member-id={human.user_id}
+      className="relative inline-flex size-[22px] shrink-0 items-center justify-center overflow-hidden rounded-full border border-[#9ca3af] bg-bg-elevated p-0 text-[11px] font-medium text-text-muted shadow-sm transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+    >
+      <span aria-hidden>{initial}</span>
+    </button>
+  );
+  return (
+    <HoverPopover
+      trigger={trigger}
+      isContentReady
+      // Match AgentInfoPopover's 80ms hover-open so agent and human
+      // chips feel identical to the pointer.
+      openDelayMs={80}
+      content={
+        <div className="flex items-start gap-3">
+          <span
+            className="inline-flex size-9 shrink-0 items-center justify-center rounded-full bg-bg-elevated text-sm font-medium text-text-muted"
+            aria-hidden
+          >
+            {initial}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm font-semibold text-text-primary">
+              {label}
+            </div>
+            <div className="truncate font-mono text-xs text-text-muted">
+              @{human.name}
+            </div>
+          </div>
+        </div>
+      }
+    />
+  );
+}
+
+/**
+ * `+N` overflow chip. Hover opens a popover listing the collapsed
+ * members so the cap doesn't hide the room. Click is a no-op (v1):
+ * the design rejects navigation from chips, and a dedicated members
+ * panel/route is out of scope here.
+ */
+function MemberOverflowChip({
+  overflow,
+  totalVisible,
+}: {
+  overflow: MemberDto[];
+  totalVisible: number;
+}): JSX.Element {
+  const trigger = (
+    <button
+      type="button"
+      aria-label={`+${overflow.length} more members`}
+      data-member-chip="overflow"
+      className="inline-flex size-[22px] shrink-0 items-center justify-center rounded-full border border-[#9ca3af] bg-bg-elevated p-0 text-[10px] font-semibold text-text-muted shadow-sm transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+    >
+      +{overflow.length}
+    </button>
+  );
+  return (
+    <HoverPopover
+      trigger={trigger}
+      isContentReady
+      openDelayMs={80}
+      content={
+        <div
+          className="flex flex-col gap-2"
+          data-member-overflow-list
+          data-member-total={totalVisible}
+        >
+          <div className="text-[11px] uppercase tracking-wider text-text-muted">
+            +{overflow.length} more
+          </div>
+          {overflow.map(m => {
+            const id = m.kind === 'agent' ? m.agent_id : m.user_id;
+            const label = m.display_name?.trim() || m.name;
+            return (
+              <div
+                key={`${m.kind}:${id}`}
+                className="flex items-center gap-2"
+                data-member-overflow-row
+                data-member-id={id}
+                data-member-kind={m.kind}
+              >
+                <span className="truncate text-sm text-text-primary">
+                  {label}
+                </span>
+                <span className="truncate font-mono text-xs text-text-muted">
+                  @{m.name}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      }
+    />
   );
 }
 

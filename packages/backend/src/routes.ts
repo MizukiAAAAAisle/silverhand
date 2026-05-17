@@ -103,6 +103,8 @@ import {
   type ScheduleErrorCode,
 } from './services/schedule-service.js';
 import { UserServiceError } from './services/user-service.js';
+import { MembershipService } from './services/membership-service.js';
+import { UserRepo } from './repos/user-repo.js';
 import {
   type AppEnv,
   getAgentPrincipal,
@@ -465,6 +467,8 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   const conversationInboxes = new ConversationInboxRepo(ctx.db);
   const notifications = new NotificationRepo(ctx.db);
   const conversationReads = new ConversationReadRepo(ctx.db);
+  const users = new UserRepo(ctx.db);
+  const membership = new MembershipService({ agents, users, conversations });
 
   const localHost = hosts.ensureLocal();
 
@@ -1227,6 +1231,38 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       archived_at: conversation.archived_at,
     };
     return c.json({ ref });
+  });
+
+  /**
+   * GET /api/conversations/:id/members
+   *
+   * Resolved member list (agents + humans) for any conversation by id.
+   * Backs the chat-header member-chip strip (PR-C). Same `MemberDto`
+   * shape that the platform prompt's "Members in this conversation:"
+   * block (PR-B) consumes — single source of truth so the agent's
+   * stated participants and the chips the human sees can never drift.
+   *
+   * Permission: `canViewConversation` — strict membership / system
+   * gate (workspace member or conversation member). Threads inherit
+   * their parent's membership at creation time (v25 PR-A invariant),
+   * so this route is correct for channel / dm_channel / thread alike
+   * without special-casing.
+   *
+   * Self filtering is the renderer's job. Agent self has no UI
+   * meaning here; the renderer drops the current human viewer
+   * (UI-self) by `kind === 'human' && user_id === viewer.id` —
+   * unrelated to the prompt's per-spawn `self: true` agent marker.
+   */
+  app.get(apiPaths.conversationMembers(':id'), c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'conversation id required' }, 400);
+    const conversation = conversations.get(id);
+    if (!conversation) return c.json({ error: 'conversation not found' }, 404);
+    if (!canViewConversation(ctx, getUserPrincipal(c), conversation.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    const members = membership.listMembers(conversation.id);
+    return c.json({ members });
   });
 
   app.get(apiPaths.threadMessages(':id'), c => {

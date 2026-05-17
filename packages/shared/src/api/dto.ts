@@ -509,6 +509,14 @@ export const MemberDtoSchema = z.discriminatedUnion('kind', [
 ]);
 export type MemberDto = z.infer<typeof MemberDtoSchema>;
 
+/** Response shape for `GET /api/conversations/:id/members`. */
+export const ConversationMembersResponseSchema = z.object({
+  members: z.array(MemberDtoSchema),
+});
+export type ConversationMembersResponse = z.infer<
+  typeof ConversationMembersResponseSchema
+>;
+
 export const ClearSessionResponseSchema = z.object({
   ok: z.literal(true),
   prev_cli_session_id: z.string().nullable(),

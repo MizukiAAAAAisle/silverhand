@@ -83,6 +83,16 @@ export const apiPaths = {
    *  conversation's workspace. */
   conversationRef: (id: string) => `/api/conversations/${id}/ref`,
 
+  /** Members (agents + humans) of any conversation by id (channel /
+   *  dm_channel / thread). Backs the chat-header member chips. The
+   *  shape is the same `MemberDto[]` rendered into the agent system
+   *  prompt, so renderer + prompt see the same source of truth. Self
+   *  is NOT filtered server-side: the renderer drops the current
+   *  human viewer (UI-self) — agent self has no UI meaning here.
+   *  Permission: `canViewConversation` (workspace member or
+   *  conversation member). */
+  conversationMembers: (id: string) => `/api/conversations/${id}/members`,
+
   // attachments — upload via channel/thread context, download by id.
   // Each upload creates an independent blob (no de-dup).
   channelAttachments: (id: string) => `/api/channels/${id}/attachments`,
