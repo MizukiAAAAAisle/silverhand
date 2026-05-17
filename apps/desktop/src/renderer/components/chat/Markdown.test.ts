@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { StaticRouter } from 'react-router-dom/server';
 import { describe, expect, it } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { TaskSummaryDto } from '@silverhand/shared';
+import type { TaskSummaryDto, UserDto } from '@silverhand/shared';
 import { Markdown } from './Markdown';
 import { SystemMessage } from './SystemMessage';
 import type { ChannelReference } from './ChannelRef';
@@ -40,6 +40,23 @@ function render(content: string, refs?: Map<string, ConversationReference>): str
         content,
         conversationRefsById: refs,
         onOpenConversationRef: () => undefined,
+      }),
+    ),
+  );
+}
+
+function renderWithHumans(
+  content: string,
+  humansByName: Map<string, UserDto>,
+): string {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return renderToStaticMarkup(
+    React.createElement(
+      QueryClientProvider,
+      { client: qc },
+      React.createElement(Markdown, {
+        content,
+        humansByName,
       }),
     ),
   );
@@ -105,6 +122,7 @@ describe('SystemMessage channel refs', () => {
     msg: import('@silverhand/shared').MessageDto,
     channelsByName: Map<string, ChannelReference | null>,
     conversationRefsById?: Map<string, ConversationReference>,
+    humansByName?: Map<string, UserDto>,
   ): string {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     return renderToStaticMarkup(
@@ -118,6 +136,7 @@ describe('SystemMessage channel refs', () => {
             message: msg,
             channelsByName,
             conversationRefsById,
+            humansByName,
             onOpenConversationRef: () => undefined,
             onOpenChannelRef: () => undefined,
           }),
@@ -159,6 +178,32 @@ describe('SystemMessage channel refs', () => {
     const html = renderSystem(msg, channels);
     expect(html).toContain('data-channel-ref-state="resolved"');
     expect(html).toContain('data-channel-ref-id="ch-v3"');
+  });
+
+  it('resolves @human handles inside markdown-backed system bodies', () => {
+    const humans = new Map<string, UserDto>([
+      [
+        'shiki',
+        {
+          id: 'user-shiki',
+          name: 'shiki',
+          display_name: 'Shiki',
+          avatar_url: null,
+          created_at: 1,
+          updated_at: 1,
+        },
+      ],
+    ]);
+    const msg = makeSystemMessage('thread_summary', {
+      thread_title: 'Follow-up',
+      summary: 'cc @shiki for review.',
+    });
+
+    const html = renderSystem(msg, new Map(), undefined, humans);
+
+    expect(html).toContain('data-mention-kind="human"');
+    expect(html).toContain('data-mention-id="user-shiki"');
+    expect(html).toContain('@Shiki');
   });
 
   it('renders session_cleared full metadata as inline audit row (no toast styling)', () => {
@@ -1094,6 +1139,38 @@ describe('Markdown channel refs', () => {
     const html = renderWithChannels('See #version3.', channels);
     expect(html).toContain('data-channel-ref-state="resolved-no-handler"');
     expect(html).not.toContain('role="button"');
+  });
+});
+
+describe('Markdown human mentions', () => {
+  it('renders resolved human @handle as a human mention chip', () => {
+    const humans = new Map<string, UserDto>([
+      [
+        'shiki',
+        {
+          id: 'user-shiki',
+          name: 'shiki',
+          display_name: 'Shiki',
+          avatar_url: null,
+          created_at: 1,
+          updated_at: 1,
+        },
+      ],
+    ]);
+
+    const html = renderWithHumans('cc @shiki on this.', humans);
+
+    expect(html).toContain('data-mention-kind="human"');
+    expect(html).toContain('data-mention-id="user-shiki"');
+    expect(html).toContain('@Shiki');
+    expect(html).not.toContain('>@shiki<');
+  });
+
+  it('keeps unresolved @handle as muted text', () => {
+    const html = renderWithHumans('cc @missing on this.', new Map());
+
+    expect(html).toContain('@missing');
+    expect(html).not.toContain('data-mention-kind="human"');
   });
 });
 

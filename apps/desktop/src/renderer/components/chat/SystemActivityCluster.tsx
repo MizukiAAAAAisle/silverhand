@@ -1,4 +1,4 @@
-import type { MessageDto } from '@silverhand/shared';
+import type { MessageDto, UserDto } from '@silverhand/shared';
 import { SystemMessage } from './SystemMessage';
 import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
@@ -39,6 +39,7 @@ export interface SystemActivityClusterProps {
   onOpenConversationRef?: (id: string) => void;
   channelsByName?: Map<string, ChannelReference | null>;
   onOpenChannelRef?: (channelId: string) => void;
+  humansByName?: Map<string, UserDto>;
 }
 
 export function SystemActivityCluster({
@@ -47,6 +48,7 @@ export function SystemActivityCluster({
   onOpenConversationRef,
   channelsByName,
   onOpenChannelRef,
+  humansByName,
 }: SystemActivityClusterProps): JSX.Element {
   return (
     <div
@@ -61,6 +63,7 @@ export function SystemActivityCluster({
           onOpenConversationRef={onOpenConversationRef}
           channelsByName={channelsByName}
           onOpenChannelRef={onOpenChannelRef}
+          humansByName={humansByName}
         />
       ))}
     </div>

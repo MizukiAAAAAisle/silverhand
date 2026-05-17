@@ -13,6 +13,7 @@ import {
   type TaskSystemMetadata,
   type TaskSystemMetadataPartial,
   type ThreadAnchorMetadata,
+  type UserDto,
   readChannelContextMetadata,
   readChildContextMetadata,
   readRenameMetadata,
@@ -38,6 +39,7 @@ interface SystemMessageProps {
   onOpenConversationRef?: (id: string) => void;
   channelsByName?: Map<string, ChannelReference | null>;
   onOpenChannelRef?: (channelId: string) => void;
+  humansByName?: Map<string, UserDto>;
 }
 
 /**
@@ -52,6 +54,7 @@ interface RendererProps {
   onOpenConversationRef?: (id: string) => void;
   channelsByName?: Map<string, ChannelReference | null>;
   onOpenChannelRef?: (channelId: string) => void;
+  humansByName?: Map<string, UserDto>;
 }
 
 type SystemMessageRenderer = ComponentType<RendererProps>;
@@ -135,6 +138,7 @@ function GenericNarrationFallback({
   onOpenConversationRef,
   channelsByName,
   onOpenChannelRef,
+  humansByName,
 }: RendererProps): JSX.Element {
   return (
     <div className="px-4 py-1.5 text-center italic text-text-muted">
@@ -144,6 +148,7 @@ function GenericNarrationFallback({
         onOpenConversationRef={onOpenConversationRef}
         channelsByName={channelsByName}
         onOpenChannelRef={onOpenChannelRef}
+        humansByName={humansByName}
       />
     </div>
   );
@@ -159,6 +164,7 @@ function CollapsibleNarration({
   onOpenConversationRef,
   channelsByName,
   onOpenChannelRef,
+  humansByName,
 }: RendererProps): JSX.Element {
   const [expanded, setExpanded] = useState(false);
   return (
@@ -185,6 +191,7 @@ function CollapsibleNarration({
             onOpenConversationRef={onOpenConversationRef}
             channelsByName={channelsByName}
             onOpenChannelRef={onOpenChannelRef}
+            humansByName={humansByName}
           />
         ) : (
           // Plain text — markdown leaks block elements that break a
@@ -215,6 +222,7 @@ function MentionCcCard({
   onOpenConversationRef,
   channelsByName,
   onOpenChannelRef,
+  humansByName,
 }: RendererProps): JSX.Element {
   const meta = (message.metadata ?? {}) as Record<string, unknown>;
   const channelName =
@@ -280,6 +288,7 @@ function MentionCcCard({
             onOpenConversationRef={onOpenConversationRef}
             channelsByName={channelsByName}
             onOpenChannelRef={onOpenChannelRef}
+            humansByName={humansByName}
           />
         </div>
       ) : (
@@ -314,6 +323,7 @@ function SessionClearedCard({
   onOpenConversationRef,
   channelsByName,
   onOpenChannelRef,
+  humansByName,
 }: RendererProps): JSX.Element {
   const meta = readSessionClearedMetadata(message.metadata);
   if (meta) return <SessionClearedRow meta={meta} />;
@@ -330,6 +340,7 @@ function SessionClearedCard({
           onOpenConversationRef={onOpenConversationRef}
           channelsByName={channelsByName}
           onOpenChannelRef={onOpenChannelRef}
+          humansByName={humansByName}
         />
       </div>
     </div>
@@ -407,6 +418,7 @@ function ScheduleFireBanner({
   onOpenConversationRef,
   channelsByName,
   onOpenChannelRef,
+  humansByName,
 }: RendererProps): JSX.Element {
   const meta = readScheduleFireMetadata(message.metadata);
   // Body is `meta.body` when producer wrote it (post-PR-4 producer
@@ -438,6 +450,7 @@ function ScheduleFireBanner({
           onOpenConversationRef={onOpenConversationRef}
           channelsByName={channelsByName}
           onOpenChannelRef={onOpenChannelRef}
+          humansByName={humansByName}
         />
       </div>
     </div>
@@ -773,6 +786,7 @@ function ThreadSummaryCard({
   onOpenConversationRef,
   channelsByName,
   onOpenChannelRef,
+  humansByName,
 }: RendererProps): JSX.Element {
   const meta = (message.metadata ?? {}) as Record<string, unknown>;
   const threadTitle =
@@ -815,6 +829,7 @@ function ThreadSummaryCard({
           onOpenConversationRef={onOpenConversationRef}
           channelsByName={channelsByName}
           onOpenChannelRef={onOpenChannelRef}
+          humansByName={humansByName}
         />
       </div>
     </div>
@@ -899,12 +914,14 @@ function ContextCardShell({
   onOpenConversationRef,
   channelsByName,
   onOpenChannelRef,
+  humansByName,
 }: {
   model: ContextCardModel;
   conversationRefsById?: Map<string, ConversationReference>;
   onOpenConversationRef?: (id: string) => void;
   channelsByName?: Map<string, ChannelReference | null>;
   onOpenChannelRef?: (channelId: string) => void;
+  humansByName?: Map<string, UserDto>;
 }): JSX.Element {
   const [expanded, setExpanded] = useState(model.defaultExpanded);
   const collapsible = !model.defaultExpanded;
@@ -915,6 +932,7 @@ function ContextCardShell({
       onOpenConversationRef={onOpenConversationRef}
       channelsByName={channelsByName}
       onOpenChannelRef={onOpenChannelRef}
+      humansByName={humansByName}
     />
   );
 
@@ -1007,6 +1025,7 @@ function ContextCardLegacyFallback({
   onOpenConversationRef,
   channelsByName,
   onOpenChannelRef,
+  humansByName,
 }: {
   kind: ContextCardKind;
   tagLabel: string;
@@ -1015,6 +1034,7 @@ function ContextCardLegacyFallback({
   onOpenConversationRef?: (id: string) => void;
   channelsByName?: Map<string, ChannelReference | null>;
   onOpenChannelRef?: (channelId: string) => void;
+  humansByName?: Map<string, UserDto>;
 }): JSX.Element {
   return (
     <div
@@ -1042,6 +1062,7 @@ function ContextCardLegacyFallback({
           onOpenConversationRef={onOpenConversationRef}
           channelsByName={channelsByName}
           onOpenChannelRef={onOpenChannelRef}
+          humansByName={humansByName}
         />
       </div>
     </div>
@@ -1068,6 +1089,7 @@ function ThreadAnchorCard(props: RendererProps): JSX.Element {
       onOpenConversationRef={props.onOpenConversationRef}
       channelsByName={props.channelsByName}
       onOpenChannelRef={props.onOpenChannelRef}
+      humansByName={props.humansByName}
     />
   );
 }
@@ -1116,6 +1138,7 @@ function ChildContextCard(props: RendererProps): JSX.Element {
       onOpenConversationRef={props.onOpenConversationRef}
       channelsByName={props.channelsByName}
       onOpenChannelRef={props.onOpenChannelRef}
+      humansByName={props.humansByName}
     />
   );
 }
@@ -1154,6 +1177,7 @@ function ChannelContextCard(props: RendererProps): JSX.Element {
       onOpenConversationRef={props.onOpenConversationRef}
       channelsByName={props.channelsByName}
       onOpenChannelRef={props.onOpenChannelRef}
+      humansByName={props.humansByName}
     />
   );
 }
@@ -1194,6 +1218,7 @@ function OnboardingRow({
   onOpenConversationRef,
   channelsByName,
   onOpenChannelRef,
+  humansByName,
 }: RendererProps): JSX.Element {
   const [expanded, setExpanded] = useState(false);
   return (
@@ -1234,6 +1259,7 @@ function OnboardingRow({
             onOpenConversationRef={onOpenConversationRef}
             channelsByName={channelsByName}
             onOpenChannelRef={onOpenChannelRef}
+            humansByName={humansByName}
           />
         ) : (
           <span>{firstLine(message.content)}</span>

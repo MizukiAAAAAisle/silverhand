@@ -26,6 +26,7 @@ import type {
   ConversationAgentDto,
   MessageDto,
   ThreadDto,
+  UserDto,
 } from '@silverhand/shared';
 import { Composer } from '@/components/chat/Composer';
 import { MessageItem } from '@/components/chat/MessageItem';
@@ -55,7 +56,11 @@ import {
   type ThreadSummary,
 } from '@/features/threads/hooks';
 import { useSavedMessageIds, useToggleSave } from '@/features/saved/hooks';
-import { useViewerAvatarObjectUrl } from '@/features/me/hooks';
+import {
+  isRegistrationRequired,
+  useViewerAvatarObjectUrl,
+  useViewerUser,
+} from '@/features/me/hooks';
 import {
   useChannelAgents,
   useChannelMessages,
@@ -693,11 +698,13 @@ function MessageList({
   );
   const savedIds = useSavedMessageIds();
   const { toggle: toggleSave } = useToggleSave();
+  const { data: viewer } = useViewerUser();
   const viewerAvatarObjectUrl = useViewerAvatarObjectUrl();
   const startThread = useStartThread(workspaceId);
-  // Three lookup maps used by the message renderer:
+  // Lookup maps used by the message renderer:
   //  - `agentsById`   → message author (avatar + display name)
   //  - `agentsByName` → inline `@handle` mention pills
+  //  - `humansByName` → inline `@handle` human mention pills
   //  - `channelsByName` → inline `#<channel_name>` ref pills
   const { agentsById, agentsByName } = useMemo(() => {
     const byId = new Map<string, AgentDto>();
@@ -708,6 +715,13 @@ function MessageList({
     }
     return { agentsById: byId, agentsByName: byName };
   }, [agents]);
+  const humansByName = useMemo(() => {
+    const byName = new Map<string, UserDto>();
+    if (viewer && !isRegistrationRequired(viewer)) {
+      byName.set(viewer.name, viewer);
+    }
+    return byName;
+  }, [viewer]);
   // Build the channel-name lookup keyed by channel `title`. Threads
   // aren't addressable by `#<name>` (use `#conv:<id>` for threads), so
   // we filter to top-level channels (`channel` / `dm_channel`). When
@@ -971,6 +985,7 @@ function MessageList({
                       onOpenConversationRef={onOpenConversationRef}
                       channelsByName={channelsByName}
                       onOpenChannelRef={onOpenChannelRef}
+                      humansByName={humansByName}
                     />
                   </li>
                 );
@@ -985,6 +1000,7 @@ function MessageList({
                     onOpenConversationRef={onOpenConversationRef}
                     channelsByName={channelsByName}
                     onOpenChannelRef={onOpenChannelRef}
+                    humansByName={humansByName}
                   />
                 ) : (
                   <MessageItem
@@ -993,6 +1009,7 @@ function MessageList({
                     routeKind={routeKind}
                     agentsById={agentsById}
                     agentsByName={agentsByName}
+                    humansByName={humansByName}
                     channelsByName={channelsByName}
                     onOpenChannelRef={onOpenChannelRef}
                     conversationRefsById={conversationRefsById}

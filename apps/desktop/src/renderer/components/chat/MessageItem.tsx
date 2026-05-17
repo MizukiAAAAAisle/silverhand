@@ -1,6 +1,11 @@
 import { type FocusEvent, useCallback, useEffect, useState } from 'react';
 import { Bookmark, ClipboardCheck, CornerUpLeft, FileText, User } from 'lucide-react';
-import type { AgentDto, AttachmentSnapshot, MessageDto } from '@silverhand/shared';
+import type {
+  AgentDto,
+  AttachmentSnapshot,
+  MessageDto,
+  UserDto,
+} from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
 import { useNav } from '@/router';
@@ -32,6 +37,8 @@ interface MessageItemProps {
   /** Lookup by `agent.name` (the @mention handle). Threaded to the
    *  Markdown component so inline `@handle` references can resolve. */
   agentsByName: Map<string, AgentDto>;
+  /** Lookup by `user.name` in the same @mention namespace as agents. */
+  humansByName?: Map<string, UserDto>;
   /** Lookup by `channel.title` (the #handle used in inline refs).
    *  `null` value = ambiguity sentinel (multiple channels share that
    *  title in this workspace) → chip degrades to inert text. Threaded
@@ -97,6 +104,7 @@ export function MessageItem({
   routeKind = 'channel',
   agentsById,
   agentsByName,
+  humansByName,
   channelsByName,
   onOpenChannelRef,
   conversationRefsById,
@@ -247,6 +255,7 @@ export function MessageItem({
             content={message.content}
             conversationId={conversationId}
             agentsByName={agentsByName}
+            humansByName={humansByName}
             channelsByName={channelsByName}
             onOpenChannelRef={onOpenChannelRef}
             conversationRefsById={conversationRefsById}

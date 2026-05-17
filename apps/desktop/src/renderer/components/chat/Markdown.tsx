@@ -4,7 +4,7 @@ import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { Check, Copy } from 'lucide-react';
-import type { AgentDto } from '@silverhand/shared';
+import type { AgentDto, UserDto } from '@silverhand/shared';
 import { Mention } from './Mention';
 import { ChannelRef, type ChannelReference } from './ChannelRef';
 import { ConversationRef, type ConversationReference } from './ConversationRef';
@@ -20,6 +20,10 @@ interface MarkdownProps {
    *  absent, mentions render as plain accent-colored text without the
    *  popover. */
   agentsByName?: Map<string, AgentDto>;
+  /** Lookup by human user `name` (same @mention namespace as agents).
+   *  The data layer guarantees `users.name` and `agents.name` are
+   *  globally unique; rendering only consumes that invariant. */
+  humansByName?: Map<string, UserDto>;
   /** Lookup by channel `title` for `#<channel_name>` refs in the
    *  message's workspace.
    *  - `ChannelReference` → unique match in this workspace
@@ -63,6 +67,7 @@ function MarkdownInner({
   content,
   conversationId,
   agentsByName,
+  humansByName,
   channelsByName,
   onOpenChannelRef,
   conversationRefsById,
@@ -100,6 +105,7 @@ function MarkdownInner({
                 <Mention
                   name={name}
                   agent={agentsByName?.get(name)}
+                  human={humansByName?.get(name)}
                   conversationId={conversationId ?? null}
                 />
               );
