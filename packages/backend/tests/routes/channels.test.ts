@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
-import { readRenameMetadata } from '@silverhand/shared';
+import {
+  encodeUserPrincipalHeader,
+  readRenameMetadata,
+  X_SILVERHAND_PRINCIPAL_HEADER,
+} from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 
@@ -680,5 +684,138 @@ describe('GET /api/archived-channels (cross-workspace aggregate)', () => {
     expect(
       (await http(t).get('/api/archived-channels?since=not-a-number')).status,
     ).toBe(400);
+  });
+});
+
+describe('list routes filter by conversation_users (v25 PR-A blocker fix)', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  /**
+   * Regression for PR-A blocker #1: workspace channel/thread list
+   * routes used to return every conversation in the workspace
+   * regardless of `conversation_users` membership. After v25 we
+   * filter by membership for human principals so a workspace member
+   * who is not a member of a private channel/thread does not see it
+   * in the sidebar / archived list.
+   *
+   * Scenario:
+   *   - `local` (the fixture viewer) is the workspace member.
+   *   - `teammate` (another fixture user) is also a workspace member
+   *      via the test autoseed triggers.
+   *   - We strip both users out of `conversation_users` for one
+   *      private channel and assert each list endpoint excludes it
+   *      when called as `teammate` but still includes it for `local`.
+   */
+  it('hides channels/threads/archived from human principals who are not conversation_users', async () => {
+    t = buildTestApp();
+
+    // Create a workspace + 2 channels via the routes (so route-level
+    // membership writes apply naturally). One channel will be the
+    // "private" one we strip teammate from.
+    const aliceId = await makeAgent(t, 'alice');
+    const wsRes = await http(t).post('/api/workspaces', {
+      name: 'shared',
+      member_agent_ids: [aliceId],
+    });
+    expect(wsRes.status).toBe(201);
+    const ws = await wsRes.json() as any;
+    const workspaceId: string = ws.workspace.id;
+
+    const publicCh = await http(t).post(
+      `/api/workspaces/${workspaceId}/channels`,
+      { title: 'Public', member_agent_ids: [aliceId] },
+    );
+    expect(publicCh.status).toBe(201);
+    const pub = await publicCh.json() as any;
+
+    const privateCh = await http(t).post(
+      `/api/workspaces/${workspaceId}/channels`,
+      { title: 'Private', member_agent_ids: [aliceId] },
+    );
+    expect(privateCh.status).toBe(201);
+    const priv = await privateCh.json() as any;
+
+    // Insert a thread under the private channel, then strip
+    // `teammate` from BOTH the channel and the thread so the
+    // membership filter has something to hide.
+    const conversations = new ConversationRepo(t.ctx.db);
+    const thread = conversations.insertThread({
+      channelId: priv.channel.id,
+      title: 'priv-thread',
+    });
+    t.ctx.db
+      .prepare(`DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = 'teammate'`)
+      .run(priv.channel.id);
+    t.ctx.db
+      .prepare(`DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = 'teammate'`)
+      .run(thread.id);
+
+    // Archive the private channel so we can also assert the archived
+    // route + aggregate route filter the same way.
+    const archive = await http(t).patch(
+      `/api/channels/${priv.channel.id}/archive`,
+      { archived: true },
+    );
+    expect(archive.status).toBe(200);
+
+    // Active list — local sees Onboarding+Public, teammate sees the
+    // same minus the (now archived) Private. priv is archived, so the
+    // active list does not include it for either principal; the
+    // membership filter still hides the archived parent's threads.
+    const activeLocal = await (
+      await http(t).get(`/api/workspaces/${workspaceId}/channels`)
+    ).json() as any;
+    expect(activeLocal.channels.map((c: any) => c.title).sort()).toEqual(
+      ['Onboarding', 'Public'],
+    );
+
+    const activeTeammate = await (
+      await http(t).get(`/api/workspaces/${workspaceId}/channels`, {
+        headers: { [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate') },
+      })
+    ).json() as any;
+    expect(activeTeammate.channels.map((c: any) => c.title).sort()).toEqual(
+      ['Onboarding', 'Public'],
+    );
+    expect(activeTeammate.threads.map((t: any) => t.id)).not.toContain(thread.id);
+    expect(activeTeammate.channels.map((c: any) => c.title).sort()).toEqual(
+      ['Onboarding', 'Public'],
+    );
+    // The private thread under the (now-archived) private channel
+    // should not surface to teammate via the active list either.
+    expect(activeTeammate.threads.map((t: any) => t.id)).not.toContain(thread.id);
+
+    // Archived list (workspace-scoped) — local sees the archived
+    // private channel; teammate sees nothing.
+    const archivedLocalResp = await http(t).get(`/api/workspaces/${workspaceId}/channels/archived`);
+    const archivedLocal = await archivedLocalResp.json() as any;
+    expect(archivedLocal.channels.map((c: any) => c.title)).toEqual(['Private']);
+
+    const archivedTeammateResp = await http(t).get(
+      `/api/workspaces/${workspaceId}/channels/archived`,
+      {
+        headers: { [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate') },
+      },
+    );
+    const archivedTeammate = await archivedTeammateResp.json() as any;
+    expect(archivedTeammate.channels).toEqual([]);
+    expect(archivedTeammate.threads.map((t: any) => t.id)).not.toContain(thread.id);
+
+    // Cross-workspace aggregate — same gate.
+    const aggLocal = await (
+      await http(t).get(`/api/archived-channels?workspace_id=${workspaceId}`)
+    ).json() as any;
+    expect(aggLocal.channels.map((r: any) => r.channel.title)).toEqual(['Private']);
+
+    const aggTeammate = await (
+      await http(t).get(`/api/archived-channels?workspace_id=${workspaceId}`, {
+        headers: { [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate') },
+      })
+    ).json() as any;
+    expect(aggTeammate.channels).toEqual([]);
   });
 });

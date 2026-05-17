@@ -117,28 +117,62 @@ export class ConversationRepo {
   }
 
   /** Active (non-archived) channels for a workspace. Pinned-first sort,
-   *  consumed by the workspace channels list endpoint. */
-  listActiveChannelsForWorkspace(workspaceId: string): ChannelConversationDto[] {
+   *  consumed by the workspace channels list endpoint.
+   *
+   *  When `opts.forUserId` is supplied (route-layer user principal),
+   *  the result is intersected with `conversation_users` so the caller
+   *  only sees channels they are explicitly a member of. v1 single-
+   *  human is auto-added to every channel by ChannelService /
+   *  registration backfill so this filter is a no-op in practice;
+   *  v2 multi-human relies on it as the authoritative chokepoint.
+   */
+  listActiveChannelsForWorkspace(
+    workspaceId: string,
+    opts: { forUserId?: string } = {},
+  ): ChannelConversationDto[] {
+    const args: Array<string> = [workspaceId];
+    let userJoin = '';
+    if (opts.forUserId !== undefined) {
+      userJoin = `AND EXISTS (
+        SELECT 1 FROM conversation_users cu
+         WHERE cu.conversation_id = conversations.id AND cu.user_id = ?
+      )`;
+      args.push(opts.forUserId);
+    }
     const rows = this.db
-      .prepare<[string], ConversationRow>(
+      .prepare<typeof args, ConversationRow>(
         `SELECT * FROM conversations
          WHERE workspace_id = ? AND kind = 'channel' AND archived_at IS NULL
+           ${userJoin}
          ORDER BY (pinned_at IS NOT NULL) DESC,
                   pinned_at ASC,
                   created_at ASC`,
       )
-      .all(workspaceId);
+      .all(...args);
     return rows.map(rowToChannel);
   }
 
-  listArchivedChannelsForWorkspace(workspaceId: string): ChannelConversationDto[] {
+  listArchivedChannelsForWorkspace(
+    workspaceId: string,
+    opts: { forUserId?: string } = {},
+  ): ChannelConversationDto[] {
+    const args: Array<string> = [workspaceId];
+    let userJoin = '';
+    if (opts.forUserId !== undefined) {
+      userJoin = `AND EXISTS (
+        SELECT 1 FROM conversation_users cu
+         WHERE cu.conversation_id = conversations.id AND cu.user_id = ?
+      )`;
+      args.push(opts.forUserId);
+    }
     const rows = this.db
-      .prepare<[string], ConversationRow>(
+      .prepare<typeof args, ConversationRow>(
         `SELECT * FROM conversations
          WHERE workspace_id = ? AND kind = 'channel' AND archived_at IS NOT NULL
+           ${userJoin}
          ORDER BY archived_at DESC, created_at ASC`,
       )
-      .all(workspaceId);
+      .all(...args);
     return rows.map(rowToChannel);
   }
 
@@ -165,6 +199,7 @@ export class ConversationRepo {
   listArchivedChannelsAggregate(opts: {
     workspaceId?: string;
     since?: number;
+    forUserId?: string;
   } = {}): ArchivedAggregateRow[] {
     const where: string[] = [
       `c.kind = 'channel'`,
@@ -178,6 +213,15 @@ export class ConversationRepo {
     if (opts.since !== undefined) {
       where.push('c.archived_at >= ?');
       args.push(opts.since);
+    }
+    if (opts.forUserId !== undefined) {
+      where.push(
+        `EXISTS (
+           SELECT 1 FROM conversation_users cu
+            WHERE cu.conversation_id = c.id AND cu.user_id = ?
+         )`,
+      );
+      args.push(opts.forUserId);
     }
     const rows = this.db
       .prepare<typeof args, ConversationRow & {
@@ -252,15 +296,28 @@ export class ConversationRepo {
     return row ? rowToDmChannel(row) : null;
   }
 
-  listDmChannelsForWorkspace(workspaceId: string): DmChannelDto[] {
+  listDmChannelsForWorkspace(
+    workspaceId: string,
+    opts: { forUserId?: string } = {},
+  ): DmChannelDto[] {
+    const args: Array<string> = [workspaceId];
+    let userJoin = '';
+    if (opts.forUserId !== undefined) {
+      userJoin = `AND EXISTS (
+        SELECT 1 FROM conversation_users cu
+         WHERE cu.conversation_id = c.id AND cu.user_id = ?
+      )`;
+      args.push(opts.forUserId);
+    }
     const rows = this.db
-      .prepare<[string], ConversationRow>(
+      .prepare<typeof args, ConversationRow>(
         `SELECT c.*
            FROM conversations c
            JOIN workspaces w ON w.id = c.workspace_id
            LEFT JOIN agents owner ON owner.id = w.owner_agent_id
           WHERE c.workspace_id = ?
             AND c.kind = 'dm_channel'
+            ${userJoin}
           ORDER BY CASE
                      WHEN c.title = 'Onboarding' THEN 0
                      WHEN owner.id IS NOT NULL AND c.title = 'dm-' || owner.name THEN 1
@@ -268,7 +325,7 @@ export class ConversationRepo {
                    END,
                    c.created_at ASC`,
       )
-      .all(workspaceId);
+      .all(...args);
     return rows.map(rowToDmChannel);
   }
 
@@ -320,7 +377,7 @@ export class ConversationRepo {
 
   listThreadsForWorkspace(
     workspaceId: string,
-    opts: { parentArchived?: boolean } = {},
+    opts: { parentArchived?: boolean; forUserId?: string } = {},
   ): ThreadDto[] {
     // Threads always render under their parent. Splitting active vs
     // archived at the SQL layer (rather than in the route) keeps the
@@ -332,9 +389,18 @@ export class ConversationRepo {
     } else if (opts.parentArchived === false) {
       parentClause = `AND p.archived_at IS NULL`;
     }
+    const args: Array<string> = [workspaceId];
+    let userJoin = '';
+    if (opts.forUserId !== undefined) {
+      userJoin = `AND EXISTS (
+        SELECT 1 FROM conversation_users cu
+         WHERE cu.conversation_id = c.id AND cu.user_id = ?
+      )`;
+      args.push(opts.forUserId);
+    }
     const rows = this.db
       .prepare<
-        [string],
+        typeof args,
         ConversationRow & { anchor_message_id: string | null }
       >(
         `SELECT c.*,
@@ -352,9 +418,10 @@ export class ConversationRepo {
                 LIMIT 1
              )
           WHERE c.workspace_id = ? AND c.kind = 'thread' ${parentClause}
+            ${userJoin}
           ORDER BY c.created_at ASC`,
       )
-      .all(workspaceId);
+      .all(...args);
     return rows.map(r => rowToThread(r, r.anchor_message_id));
   }
 

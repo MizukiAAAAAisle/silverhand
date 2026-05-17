@@ -115,4 +115,48 @@ describe('workspace/conversation routes', () => {
     expect((await http(t).get(`/api/threads/${threadId}/messages`)).status)
       .toBe(200);
   });
+
+  it('writes user_id into conversation_users when creating a DM under agent_home (v25 PR-A blocker fix)', async () => {
+    // Regression for PR-A blocker #2: agent_home POST /channels used
+    // to only conversations.addAgent(dm, owner) without writing
+    // conversation_users for the human creator. After v25 permission
+    // tightening, that left the user unable to GET /messages on the
+    // DM they just created.
+    t = buildTestApp();
+    t.ctx.db.exec(
+      `DROP TRIGGER IF EXISTS test_seed_workspace_users;
+       DROP TRIGGER IF EXISTS test_seed_conversation_users;`,
+    );
+    const agentBody = await (
+      await http(t).post('/api/agents', { name: 'creator', runtime: 'claude' })
+    ).json() as any;
+    const home = (await (
+      await http(t).get('/api/workspaces')
+    ).json() as any).workspaces.find(
+      (w: any) => w.workspace_kind === 'agent_home' && w.owner_agent_id === agentBody.agent.id,
+    );
+    expect(home).toBeDefined();
+
+    // Create a secondary DM under the agent_home as the principal user.
+    const created = await http(t).post(`/api/workspaces/${home.id}/channels`, {
+      title: 'Mentions',
+      member_agent_ids: [],
+    });
+    expect(created.status).toBe(201);
+    const dm = (await created.json() as any).channel;
+
+    // The creator (default 'local') must be a conversation_users
+    // member of the new DM, otherwise GET /messages would 403.
+    const dmMembers = t.ctx.db
+      .prepare<[string], { user_id: string }>(
+        `SELECT user_id FROM conversation_users WHERE conversation_id = ?`,
+      )
+      .all(dm.id)
+      .map(r => r.user_id);
+    expect(dmMembers).toEqual(['local']);
+
+    // And the route they own must be readable.
+    const messagesResp = await http(t).get(`/api/channels/${dm.id}/messages`);
+    expect(messagesResp.status).toBe(200);
+  });
 });

@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import {
+  encodeUserPrincipalHeader,
+  X_SILVERHAND_PRINCIPAL_HEADER,
+} from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 describe('POST /api/agents', () => {
@@ -72,6 +76,52 @@ describe('POST /api/agents', () => {
       runtime: 'claude',
     });
     expect(dup.status).toBe(409);
+  });
+
+  it('writes human membership for the creator (not the global viewer) on agent_home + DM (v25 PR-A blocker fix)', async () => {
+    // Regression for PR-A blocker #4: createAgentWithHome used
+    // settings.getViewerUserId() instead of the principal that drove
+    // the route. With v25 permission tightening, multi-human v2 would
+    // see the *global* viewer as agent_home owner instead of the human
+    // who clicked "create agent". Drop the test-fixture autoseed so
+    // we can observe the membership writes deterministically.
+    t = buildTestApp();
+    t.ctx.db.exec(
+      `DROP TRIGGER IF EXISTS test_seed_workspace_users;
+       DROP TRIGGER IF EXISTS test_seed_conversation_users;`,
+    );
+    // Fixture seeds 'local' as global viewer; have 'teammate' (a
+    // different fixture user) drive the route via principal header.
+    const created = await http(t).post('/api/agents', { name: 'creator-test', runtime: 'claude' }, {
+      headers: {
+        [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
+      },
+    });
+    expect(created.status).toBe(201);
+    const body = await created.json() as any;
+
+    // workspace_users for the new agent_home should contain
+    // 'teammate' (the creator), not 'local' (the global viewer).
+    const homeMembers = t.ctx.db
+      .prepare<[string], { user_id: string }>(
+        `SELECT user_id FROM workspace_users
+           WHERE workspace_id = (
+             SELECT id FROM workspaces WHERE owner_agent_id = ?
+           )`,
+      )
+      .all(body.agent.id)
+      .map(r => r.user_id);
+    expect(homeMembers).toEqual(['teammate']);
+
+    // conversation_users for the onboarding DM should also contain
+    // only the creator.
+    const dmMembers = t.ctx.db
+      .prepare<[string], { user_id: string }>(
+        `SELECT user_id FROM conversation_users WHERE conversation_id = ?`,
+      )
+      .all(body.dm_channel_id)
+      .map(r => r.user_id);
+    expect(dmMembers).toEqual(['teammate']);
   });
 });
 

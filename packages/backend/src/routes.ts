@@ -763,23 +763,37 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!workspace) {
       return c.json({ error: 'workspace not found' }, 404);
     }
-    if (!canViewWorkspace(ctx, getUserPrincipal(c), workspace.id)) {
+    const principal = getUserPrincipal(c);
+    if (!canViewWorkspace(ctx, principal, workspace.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
+    // Membership filter: human principals only see channels/threads
+    // they are explicit members of (`conversation_users`). Agent /
+    // system principals never call these public list endpoints in
+    // practice; if they ever do, the unfiltered behavior is the
+    // historical contract.
+    const forUserId =
+      principal.kind === 'user' ? principal.userId : undefined;
     const channels =
       workspace.workspace_kind === 'regular'
         ? timedRouteSpan(
             ctx,
             'workspace.channels.list_active',
             { workspaceId: workspace.id },
-            () => conversations.listActiveChannelsForWorkspace(workspace.id),
+            () =>
+              conversations.listActiveChannelsForWorkspace(workspace.id, {
+                forUserId,
+              }),
             result => ({ channelCount: result.length }),
           )
         : timedRouteSpan(
             ctx,
             'workspace.dm_channel.list',
             { workspaceId: workspace.id },
-            () => conversations.listDmChannelsForWorkspace(workspace.id),
+            () =>
+              conversations.listDmChannelsForWorkspace(workspace.id, {
+                forUserId,
+              }),
             result => ({ channelCount: result.length }),
           );
     // Active endpoint only returns threads whose parent is also active —
@@ -793,6 +807,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
             () =>
               conversations.listThreadsForWorkspace(workspace.id, {
                 parentArchived: false,
+                forUserId,
               }),
             result => ({ threadCount: result.length }),
           )
@@ -800,7 +815,10 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
             ctx,
             'workspace.threads.list',
             { workspaceId: workspace.id },
-            () => conversations.listThreadsForWorkspace(workspace.id),
+            () =>
+              conversations.listThreadsForWorkspace(workspace.id, {
+                forUserId,
+              }),
             result => ({ threadCount: result.length }),
           );
     return c.json({
@@ -816,7 +834,8 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!workspace) {
       return c.json({ error: 'workspace not found' }, 404);
     }
-    if (!canViewWorkspace(ctx, getUserPrincipal(c), workspace.id)) {
+    const principal = getUserPrincipal(c);
+    if (!canViewWorkspace(ctx, principal, workspace.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
     // agent_home workspaces don't support channel archive (their only
@@ -825,11 +844,16 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (workspace.workspace_kind !== 'regular') {
       return c.json({ channels: [], threads: [] });
     }
+    const forUserId =
+      principal.kind === 'user' ? principal.userId : undefined;
     const channels = timedRouteSpan(
       ctx,
       'workspace.channels.list_archived',
       { workspaceId: workspace.id },
-      () => conversations.listArchivedChannelsForWorkspace(workspace.id),
+      () =>
+        conversations.listArchivedChannelsForWorkspace(workspace.id, {
+          forUserId,
+        }),
       result => ({ channelCount: result.length }),
     );
     const threads = timedRouteSpan(
@@ -839,6 +863,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       () =>
         conversations.listThreadsForWorkspace(workspace.id, {
           parentArchived: true,
+          forUserId,
         }),
       result => ({ threadCount: result.length }),
     );
@@ -878,12 +903,15 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
         conversations.listArchivedChannelsAggregate({
           workspaceId: parsed.data.workspace_id,
           since: parsed.data.since,
+          forUserId:
+            principal.kind === 'user' ? principal.userId : undefined,
         }),
       result => ({ rowCount: result.length }),
     );
-    // v1 user can view every workspace, so we don't need to filter `rows`
-    // here. Once a real workspace ACL exists this filter will be the
-    // single chokepoint that enforces it.
+    // Membership filter is applied at the repo level (forUserId), so
+    // the result already only includes channels the principal is a
+    // `conversation_users` member of. v1 single-human is auto-added
+    // to every conversation; v2 multi-human relies on this filter.
     return c.json({ channels: rows });
   });
 
@@ -914,6 +942,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       }
       const owner = agents.get(workspace.owner_agent_id);
       if (!owner) return c.json({ error: 'agent_home owner not found' }, 404);
+      const principal = getUserPrincipal(c);
       const channel = ctx.db.transaction(() => {
         const dm = conversations.insertDmChannel({
           workspaceId: workspace.id,
@@ -922,6 +951,15 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
           agentId: owner.id,
         });
         conversations.addAgent(dm.id, owner.id);
+        // v25: human membership for the freshly-created DM. The user
+        // who triggered the route is a workspace member (canMutate
+        // already passed), so they are a legitimate human member of
+        // their newly-created DM. Without this row the post-create
+        // GET /messages would 403 for the same principal that just
+        // created it.
+        if (principal.kind === 'user') {
+          conversations.addUser(dm.id, principal.userId);
+        }
         return dm;
       })();
       ctx.events.publishToScope(`workspace:${workspace.id}`, 'workspace_channels_changed', {
@@ -1763,7 +1801,10 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     }
   }
 
-  function createAgentWithHome(input: CreateAgentInput) {
+  function createAgentWithHome(
+    input: CreateAgentInput,
+    creatorUserId: string | null,
+  ) {
     return ctx.db.transaction(() => {
       const agent = agents.create(input, localHost.id);
       const agentL1Dir = join(ctx.silverhandDir, 'agents', agent.id);
@@ -1780,23 +1821,28 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       conversations.addAgent(dm.id, agent.id);
 
       // v25 human membership for agent_home + its DM channel. The
-      // registered viewer is a participant in every DM (it is the
-      // human side of the conversation), so they must be a member
-      // of the agent_home workspace and the dm_channel itself for
-      // the v25 permission gates to allow access. agent_home is
-      // explicitly allowed for `workspace_users` (no v17-style
-      // trigger blocks it), unlike `workspace_members` which is
-      // agent-only.
+      // creator (the human principal that drove this route) is the
+      // human side of this DM and the owner of the agent_home
+      // surface, so they must be a member of both for the v25
+      // permission gates to allow access. agent_home is explicitly
+      // allowed for `workspace_users` (no v17-style trigger blocks
+      // it), unlike `workspace_members` which is agent-only.
       //
-      // Pre-registration: this route is user-gated, so a viewer
-      // must exist by the time we reach here. If somehow no viewer
-      // is registered (defense), skip the user-membership writes —
-      // the workspace/dm rows still come up clean and the viewer's
-      // own register tx will retroactively backfill them.
-      const viewerUserId = settings.getViewerUserId();
-      if (viewerUserId) {
-        workspaces.addUserMember(home.id, viewerUserId);
-        conversations.addUser(dm.id, viewerUserId);
+      // Multi-human note: we use `creatorUserId` (passed in from the
+      // route's `getUserPrincipal(c).userId`) rather than the global
+      // `viewer_user_id` setting. v1 single-human these are always
+      // the same; v2 multi-human a second human creating their own
+      // agent must own its agent_home, not the install's primary
+      // viewer.
+      //
+      // Pre-registration / system actor: this route is user-gated,
+      // so a creator user id should always be present. If somehow
+      // null (defense), skip the user-membership writes — the
+      // workspace/dm rows still come up clean and a future register
+      // tx will retroactively backfill them via UserService.register().
+      if (creatorUserId) {
+        workspaces.addUserMember(home.id, creatorUserId);
+        conversations.addUser(dm.id, creatorUserId);
       }
 
       const onboardingMsg = messages.insertForConversation({
@@ -1825,7 +1871,13 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (agents.getByName(parsed.data.name)) {
       return c.json({ error: 'agent name already exists' }, 409);
     }
-    const { agent, dm, onboardingMsg, agentL1Dir } = createAgentWithHome(parsed.data);
+    const principal = getUserPrincipal(c);
+    const creatorUserId =
+      principal.kind === 'user' ? principal.userId : null;
+    const { agent, dm, onboardingMsg, agentL1Dir } = createAgentWithHome(
+      parsed.data,
+      creatorUserId,
+    );
     await ensureAgentL1Dir(agentL1Dir);
     await ctx.conversationManager.deliverMessage(dm.id, agent.id, onboardingMsg.id);
     ctx.conversationManager

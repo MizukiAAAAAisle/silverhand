@@ -123,6 +123,46 @@ async function deliverOne(
   // is INSERT OR IGNORE, so re-running is a no-op.
   opts.conversations.addAgent(mentionsConversation.id, agent.id);
 
+  // v25 human membership: the original message author must be a
+  // member of the Mentions conversation, otherwise the v25 permission
+  // gates won't let them GET /messages on a DM that is literally
+  // about *their own* @-mention. Resolution order:
+  //   1. The triggering user message's `from_user_id` (the natural
+  //      "this human caused this CC" answer).
+  //   2. Legacy null user id → fall back to the registered viewer.
+  //   3. No viewer either → log+skip the membership writes (do NOT
+  //      insert empty rows). PR-A's `UserService.register()` backfill
+  //      will add this human to every existing conversation when a
+  //      human eventually registers.
+  // We also defensively `addUserMember` on the agent_home workspace
+  // — pre-v25 agents are backfilled by the migration, post-v25
+  // agents created via createAgentWithHome get the creator added,
+  // but a multi-human v2 may have agents whose home was never
+  // explicitly joined by this particular human.
+  const messageAuthorId = opts.message.from_user_id ?? null;
+  const fallbackViewerId = new SettingsRepo(opts.db).getViewerUserId();
+  const humanMemberId = messageAuthorId ?? fallbackViewerId;
+  if (humanMemberId) {
+    opts.conversations.addUser(mentionsConversation.id, humanMemberId);
+    // workspace_users is INSERT OR IGNORE — safe to re-run.
+    opts.db
+      .prepare(
+        `INSERT OR IGNORE INTO workspace_users
+           (workspace_id, user_id, joined_at)
+         VALUES (?, ?, ?)`,
+      )
+      .run(mentionsConversation.workspace_id, humanMemberId, Date.now());
+  } else {
+    opts.logger.warn(
+      {
+        handle,
+        sourceConversationId: opts.sourceConversation.id,
+        sourceMessageId: opts.message.id,
+      },
+      'mention-cc: no human member id available (legacy null author + no registered viewer); skipping user membership writes',
+    );
+  }
+
   const wrapped = opts.messages.insertForConversation({
     conversationId: mentionsConversation.id,
     fromKind: 'system',
