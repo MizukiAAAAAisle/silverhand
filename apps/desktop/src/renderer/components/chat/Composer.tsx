@@ -8,7 +8,7 @@ import {
   type FormEvent,
   type KeyboardEvent,
 } from 'react';
-import { Hash, Paperclip, Send, X } from 'lucide-react';
+import { Hash, Paperclip, X } from 'lucide-react';
 import type { AgentDto } from '@silverhand/shared';
 import { Button } from '@/components/ui/button';
 import { AgentAvatar } from '@/components/AgentAvatar';
@@ -543,7 +543,7 @@ export function Composer({
                 ? '会话已关闭，无法发送'
                 : 'Enter 发送，Shift + Enter 换行，@agent，#channel'
           }
-          className="block max-h-48 min-h-[60px] w-full resize-none rounded-md border border-border-subtle bg-bg-floating px-3 py-2 pb-11 pr-12 text-sm text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none focus:ring-2 focus:ring-border-focus disabled:cursor-not-allowed disabled:opacity-60"
+          className="block max-h-48 min-h-[60px] w-full resize-none rounded-md border border-border-subtle bg-bg-floating px-3 py-2 pb-11 pr-20 text-sm text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none focus:ring-2 focus:ring-border-focus disabled:cursor-not-allowed disabled:opacity-60"
         />
         <input
           ref={fileInputRef}
@@ -568,12 +568,12 @@ export function Composer({
         <Button
           type="submit"
           variant="default"
-          size="icon"
+          size="sm"
           disabled={sendDisabled}
           title="发送消息"
-          className="absolute bottom-2 right-2 size-8"
+          className="absolute bottom-2 right-2 h-8"
         >
-          <Send className="size-3.5" />
+          Send
         </Button>
       </div>
       <Lightbox
