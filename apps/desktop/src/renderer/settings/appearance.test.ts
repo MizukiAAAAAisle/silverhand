@@ -21,8 +21,8 @@ class StyleStub {
 
 describe('parseAppearance', () => {
   it('keeps the legacy theme-only shape', () => {
-    expect(parseAppearance({ theme: 'paper-ink' })).toEqual({
-      theme: 'paper-ink',
+    expect(parseAppearance({ theme: 'forza6' })).toEqual({
+      theme: 'forza6',
     });
   });
 
@@ -37,13 +37,13 @@ describe('parseAppearance', () => {
   it('normalizes shared font size and trims font families', () => {
     expect(
       parseAppearance({
-        theme: 'warm-coral',
+        theme: 'forza6',
         fontSize: 100,
         prose: { fontFamily: '  Georgia, serif  ' },
         code: { fontFamily: '   ' },
       }),
     ).toEqual({
-      theme: 'warm-coral',
+      theme: 'forza6',
       // Clamped to FONT_SIZE_MAX.
       fontSize: 22,
       prose: { fontFamily: 'Georgia, serif' },
@@ -83,7 +83,7 @@ describe('applyAppearanceOverrides', () => {
 
   it('removes markdown override tokens when settings reset', () => {
     const style = new StyleStub();
-    applyAppearanceOverrides(style, { theme: 'paper-ink' });
+    applyAppearanceOverrides(style, { theme: 'forza6' });
 
     expect(style.removed).toEqual([
       MD_TOKENS.PROSE_FONT,
@@ -103,14 +103,6 @@ describe('theme markdown token cascade contract', () => {
     new URL('../styles/themes/warm-script.css', import.meta.url),
     'utf8',
   );
-  const paperInkCss = readFileSync(
-    new URL('../styles/themes/paper-ink.css', import.meta.url),
-    'utf8',
-  );
-  const warmCoralCss = readFileSync(
-    new URL('../styles/themes/warm-coral.css', import.meta.url),
-    'utf8',
-  );
   const forza6Css = readFileSync(
     new URL('../styles/themes/forza6.css', import.meta.url),
     'utf8',
@@ -123,8 +115,6 @@ describe('theme markdown token cascade contract', () => {
 
     expect(themeImports).toEqual([
       'warm-script.css',
-      'paper-ink.css',
-      'warm-coral.css',
       'forza6.css',
       'forza6-components.css',
     ]);
@@ -132,13 +122,11 @@ describe('theme markdown token cascade contract', () => {
 
   it('keeps :root only on the default theme', () => {
     expect(warmScriptCss).toContain(':root,\n[data-theme=\'warm-script\']');
-    expect(paperInkCss).not.toContain(':root');
-    expect(warmCoralCss).not.toContain(':root');
     expect(forza6Css).not.toContain(':root');
   });
 
   it('defaults prose and code markdown font sizes to 12px in every theme', () => {
-    for (const css of [warmScriptCss, paperInkCss, warmCoralCss, forza6Css]) {
+    for (const css of [warmScriptCss, forza6Css]) {
       expect(css).toContain('--md-prose-size: 12px;');
       expect(css).toContain('--md-code-size: 12px;');
     }
@@ -159,7 +147,7 @@ describe('theme markdown token cascade contract', () => {
       '--text-on-structure',
       '--text-on-dark-pop',
     ];
-    for (const css of [warmScriptCss, paperInkCss, warmCoralCss, forza6Css]) {
+    for (const css of [warmScriptCss, forza6Css]) {
       for (const token of NEW_TOKENS) {
         expect(css).toContain(`${token}:`);
       }

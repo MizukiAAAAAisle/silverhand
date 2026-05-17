@@ -9,8 +9,6 @@
    `DEFAULT_APPEARANCE` (or vice versa) silently leaks the late
    default's tokens into other themes; do both together. */
 @import "./themes/warm-script.css";
-@import "./themes/paper-ink.css";
-@import "./themes/warm-coral.css";
 @import "./themes/forza6.css";
 
 /* Forza6-only component-layer specialization. Every selector inside is
@@ -22,7 +20,7 @@
 
 /* Highlight.js theme for fenced code blocks rendered by rehype-highlight.
    Picked the "github" light theme as a neutral baseline — works under
-   warm-coral. If we ship a dark theme later, swap this for github-dark
+   warm-script. If we ship a dark theme later, swap this for github-dark
    based on data-theme. */
 @import "highlight.js/styles/github.css";
 
@@ -470,8 +468,8 @@ button:disabled { cursor: not-allowed; }
    text via inline margin, and breaks anywhere so a long path can't
    blow out the message bubble. Background is an ink-wash on the
    page (mix of `--text-primary` into `--bg-base`) so the chip stays
-   in the theme's own color family — warm in paper-ink, neutral in
-   warm-coral — instead of looking like a foreign gray block. */
+   in the theme's own color family instead of looking like a foreign
+   gray block. */
 .markdown-body :not(pre) > code {
   display: inline;
   padding: 0.08em 0.36em;

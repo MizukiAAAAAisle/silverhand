@@ -71,9 +71,9 @@ electron/src/renderer/src/
 
 **关键：`--bg-selected` ≠ `--bg-floating`**。这是踩过坑的拆分（详见主文档 §9.5）。warm 下两者凑巧都是 `#FFFFFF`，shadcn 下必须分别给值（selected `#F3F3F3`、floating `#FFFFFF`），否则 `bg-elevated` 容器里的激活态会消失。
 
-**关键 2：三个 sidebar token 是 per-theme 可选项**。warm-coral 这种"留白派"主题让它们全部 `var(--bg-primary)`，左侧 chrome 一片同色。paper-ink 这种"梯度派"主题让它们沿一条 oklab 色线递减——见 §9。**新主题里这三个 token 必须给值**（哪怕都退化到 `var(--bg-primary)`），否则切换主题时 NavRail / sidebar 会瞬变成透明黑。
+**关键 2：三个 sidebar token 是 per-theme 可选项**。"留白派"主题让它们全部 `var(--bg-primary)`，左侧 chrome 一片同色。"梯度派"主题让它们沿一条 oklab 色线递减——见 §9。**新主题里这三个 token 必须给值**（哪怕都退化到 `var(--bg-primary)`），否则切换主题时 NavRail / sidebar 会瞬变成透明黑。
 
-**关键 3：默认主题同时挂在 `:root` 上，新增 token 不能依赖 fallback。** 只要组件开始读取新的 CSS var，其它主题也必须显式定义同名 token；否则会继承默认主题值，出现"切主题后还用 paper-ink 的 1px row border / 纸白 NavRail icon"这类泄漏。
+**关键 3：默认主题同时挂在 `:root` 上，新增 token 不能依赖 fallback。** 只要组件开始读取新的 CSS var，其它主题也必须显式定义同名 token；否则会继承默认主题值，出现"切主题后还用旧主题的 1px row border / 不该出现的 NavRail icon 色"这类泄漏。
 
 ### 3.1.1 App frame / panel card 几何
 
@@ -98,7 +98,7 @@ electron/src/renderer/src/
 | `--bg-task-tag` | Message header 后的 task tag 底色 | 主题化的高显著 chip，通常从 `--brand-primary` 派生，不要复用 warning |
 | `--text-on-task-tag` | task tag 上的文字 / icon | 与 `--bg-task-tag` 成对维护对比度 |
 | `--border-task-tag` | task tag 描边 | 与 task tag 底色同族，提供边缘清晰度 |
-| `--sidebar-row-border-width` | Workspace / Channel / Search / Saved row 描边宽度 | 默认视觉标准 `2px`；paper-ink 这类淡墨晕 selected 可降到 `1px` |
+| `--sidebar-row-border-width` | Workspace / Channel / Search / Saved row 描边宽度 | 默认视觉标准 `2px`；selected 是淡墨晕的主题可降到 `1px` |
 
 ### 3.1.3 Forza6-introduced tokens (loud-festival theme family)
 
@@ -364,7 +364,8 @@ appearance.test.ts 锁定）。这是 §3.1 关键 3 的硬约束：不显式定
 - **改完没重启 dev server** —— Vite HMR 对 `@import` 链路偶尔失效，新主题文件不重新打包；切主题没反应时优先重启。
 
 ## 8. 已有参考
-/Users/shiki/workspace/webskill-repos/api-anything/electron/src/renderer/src/styles/themes/warm-coral.css
+- `apps/desktop/src/renderer/styles/themes/warm-script.css`（默认主题，`:root` baseline）
+- `apps/desktop/src/renderer/styles/themes/forza6.css` + `forza6-components.css`（loud-festival 范式）
 
 ---
 
@@ -426,7 +427,7 @@ NavRail 项 / channel / DM / session 这种**一级导航 row**，用同一套�
 **两个关键设计点**：
 
 1. **default 上也占位**（用 `border-transparent`），避免 hover/selected 切换时整行向内推——这是非常常见的低级 layout shift bug。
-2. **border width 必须主题化但显式定义**。默认视觉标准是 `2px`；paper-ink 这种 selected 是淡墨晕的主题可以用 `1px`。因为默认主题同时挂在 `:root`，其它主题必须显式写 `--sidebar-row-border-width: 2px`，不能指望 fallback。
+2. **border width 必须主题化但显式定义**。默认视觉标准是 `2px`；selected 是淡墨晕的主题可以用 `1px`。因为默认主题同时挂在 `:root`，其它主题必须显式写 `--sidebar-row-border-width: 2px`，不能指望 fallback。
 3. **border-color 从 hover 到 selected 完全一致**（都是 `border-accent`），只在 bg opacity 上递进。视觉语义：边出现 = 候选，底变实 = 确定。早期版本让 hover 用减弱的 `border-accent/40`，看起来像"两种不同的状态"而不是"同一种渐进确认"。
 
 **适用范围**：

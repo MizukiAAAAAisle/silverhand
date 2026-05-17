@@ -59,20 +59,6 @@ const THEME_META: Record<
   ThemeId,
   { label: string; bg: string; surface: string; text: string; accent: string }
 > = {
-  'paper-ink': {
-    label: 'Paper Ink',
-    bg: '#FAF4E4',
-    surface: '#F2EAD2',
-    text: '#1A1611',
-    accent: '#263A42',
-  },
-  'warm-coral': {
-    label: 'Warm Coral',
-    bg: '#F9F9F7',
-    surface: '#F3F3F0',
-    text: '#1A1A18',
-    accent: '#B5651D',
-  },
   'warm-script': {
     label: 'Warm Script',
     bg: '#F8F6F2',
@@ -364,7 +350,7 @@ function AppearancePane({
             title="Appearance"
             description="Choose the visual theme used across the workspace shell and chat UI."
           >
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-2">
               {THEME_IDS.map(id => {
                 const meta = THEME_META[id];
                 const active = appearance.theme === id;
