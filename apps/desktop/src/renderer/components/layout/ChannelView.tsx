@@ -393,8 +393,12 @@ function ActiveChannelView({
         {showThreadHeader ? (
           <>
             <CornerDownRight className="size-3.5 shrink-0 text-text-muted" />
-            <span className="min-w-0 truncate font-serif text-sm font-semibold text-text-primary">
-              #{parentTitle ?? conversation.title}
+            <span
+              data-conversation-title
+              className="min-w-0 truncate font-serif text-sm font-semibold text-text-primary"
+            >
+              <span data-conversation-hash>#</span>
+              {parentTitle ?? conversation.title}
             </span>
             {memberStrip}
             {onJumpToOriginal && anchorMessageId ? (
@@ -410,7 +414,13 @@ function ActiveChannelView({
           </>
         ) : (
           <>
-            <span className="min-w-0 truncate font-serif text-sm font-semibold text-text-primary">
+            <span
+              data-conversation-title
+              className="min-w-0 truncate font-serif text-sm font-semibold text-text-primary"
+            >
+              {conversation.kind === 'channel' ? (
+                <span data-conversation-hash>#</span>
+              ) : null}
               {conversation.title}
             </span>
             {memberStrip}
@@ -433,7 +443,7 @@ function ActiveChannelView({
           </span>
         ) : null}
 
-        <div className="ml-auto flex shrink-0 items-center gap-1">
+        <div data-channel-actions className="ml-auto flex shrink-0 items-center gap-1">
           <button
             type="button"
             onClick={() => void restartAgents()}

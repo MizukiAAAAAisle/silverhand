@@ -109,6 +109,7 @@ export function Titlebar({
 
   return (
     <header
+      data-titlebar="app"
       className={
         'drag-region flex h-[var(--titlebar-height)] shrink-0 items-center ' +
         'gap-2 border-b text-xs ' +
@@ -176,7 +177,10 @@ export function Titlebar({
       </div>
 
       {hasWorkspace ? (
-        <span className="truncate font-serif text-sm font-semibold text-text-primary">
+        <span
+          data-workspace-name
+          className="truncate font-serif text-sm font-semibold text-text-primary"
+        >
           {workspaceName}
           {workspaceKind === 'dm' ? (
             <span className="ml-1 text-text-muted">· DM</span>

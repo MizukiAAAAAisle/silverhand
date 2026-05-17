@@ -48,6 +48,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
 
   return (
     <aside
+      data-sidebar="workspaces"
       className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]"
       style={{
         borderRadius: 'var(--card-radius, 0)',

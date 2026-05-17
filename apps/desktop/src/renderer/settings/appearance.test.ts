@@ -126,6 +126,7 @@ describe('theme markdown token cascade contract', () => {
       'paper-ink.css',
       'warm-coral.css',
       'forza6.css',
+      'forza6-components.css',
     ]);
   });
 

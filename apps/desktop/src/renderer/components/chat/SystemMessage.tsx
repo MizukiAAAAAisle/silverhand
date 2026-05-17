@@ -705,6 +705,7 @@ function TaskStatusPill({ status }: { status: TaskStatus }): JSX.Element {
   return (
     <span
       data-task-event-status={status}
+      data-task-status={status}
       className={
         'inline-flex items-center rounded-full px-1.5 text-[10px] font-semibold uppercase leading-none tracking-wider ' +
         styles[status]

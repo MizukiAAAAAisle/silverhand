@@ -470,3 +470,80 @@ NavRail 项 / channel / DM / session 这种**一级导航 row**，用同一套�
 - ✅ Popover / DropdownMenu content + menuitem
 - ✅ Command palette content + item
 - ❌ 工具栏 / 行内 chip / tag（独立元素，不存在包含关系，不适用同心圆）
+
+## 12. Forza6 component-layer 特化清单（参考实现）
+
+forza6 是首个走"token + component skin"两层的主题，不只是换色。其它主题加新 component-layer specialization 时，可以参考 forza6 的边界与 hook
+约定。Token 层见 §3.1.3，本节聚焦 PR-2 component-layer 范围。
+
+### 12.1 文件边界
+
+- `apps/desktop/src/renderer/styles/themes/forza6.css` — token 层（约 250 行，PR-1）
+- `apps/desktop/src/renderer/styles/themes/forza6-components.css` — component 特化层（约 740 行，PR-2）。**所有 selector 都必须 `[data-theme='forza6']`-scoped**，warm 三主题像素零变化。
+
+### 12.2 特化覆盖面（8 大块）
+
+| # | 区域 | 特化内容 |
+|---|---|---|
+| 1 | App frame / Titlebar | 节日粉 frame；titlebar 5 片不规则斜切三角硬纹（中右分布，SVG `viewBox 600×28`，y `-4`/`32` 截断）；workspace name display caps |
+| 2 | NavRail / Sidebar | 浅 lime carrier `#F4F8E8`；selected lime `#D4F523` pill + 黑边 + 3px 黑左侧 dock notch；hover lime preview `#E6F68A` + 2px 黑边；count → magenta + tnum |
+| 3 | Chat header | `#` magenta + 900 + 1.25em + margin-right；title display caps；右侧 action button cluster transparent + 2px 黑边方角 + 每按钮 lime hover preview；sidebar Hash icon stroke-width 2.75 + magenta |
+| 4 | Composer | textarea focus magenta + padding-right 5.5rem；send button magenta sticker + 方角 + display caps（v5.x 之后 product 默认是 "Send" 文字，forza6 只保留配色/几何特化） |
+| 5 | Markdown | inline code lime body `#D4F523` + 2px 黑边方角海报贴纸；多行 fenced code block 深青-黑 HUD island `#0F2F2C` + 2px 黑边 + lime display caps 语言标签 + 浅文 `#E8F1EF` (12.6:1 AAA) + dark hljs syntax palette（forza6-scoped，不动 global github.css）|
+| 6 | Task 系统 | task panel/drawer 列容器 2px 黑边 + 顶 5px 状态色条；列头 display caps + magenta count；卡片 sticker + lime hover preview；`#nnn` magenta display caps；status badge 配色阶梯（todo 透明黑边 / in_progress cyan `#22B7E0` / in_review magenta `#FF2C7A` / done muted green）。**四处共用 `data-task-status` hook**：panel / drawer / task popover / markdown system message task event |
+| 7 | Popper / 浮层 | 全 Radix wrapper 局部 `--bg-hover: #E6F68A` lime preview（dropdown / context menu / popover / select / tooltip / hovercard item hover 统一）；context menu + agent/human profile popover + ManageMembersPopover + task popover (HoverPopover) 加 2px 黑边方角海报硬框；菜单内 menuitem 同步方角 |
+| 8 | Settings appearance | `THEME_META.forza6` 4 色 swatch：浅 lime + 节日粉 + 黑 + 酸 lime（双 lime + magenta + 黑） |
+
+### 12.3 TSX 结构 hook 约定
+
+特化全部走 CSS，TSX 只加 **theme-neutral 结构 hook**——hook 名描述 DOM 角色，不带 forza6 语义。这样：
+- 其它主题想做特化时复用同一组 hook
+- TSX review 不会被主题词污染
+- 主题切换不需要改 React 树
+
+当前 forza6 消费的 hook（按引入顺序，~14 个组件文件）：
+
+| Hook | 文件 | 角色 |
+|---|---|---|
+| `data-titlebar="app"` | `Titlebar.tsx` | 应用 titlebar 容器 |
+| `data-workspace-name` | `Titlebar.tsx` | workspace 名字 chip |
+| `data-conversation-title` | `ChannelView.tsx` | chat header 标题（regular + dm 两处）|
+| `data-conversation-hash` | `ChannelView.tsx` | chat header `#` |
+| `data-channel-actions` | `ChannelView.tsx` | chat header 右侧按钮 cluster |
+| `data-channel-icon` | `ChannelsSidebar.tsx` | sidebar Hash icon |
+| `data-composer-input` | `Composer.tsx` | chat 输入框 textarea |
+| `data-composer-action="send"` | `Composer.tsx` | send 按钮 |
+| `data-sidebar` | `Sidebar.tsx` / `ChannelsSidebar.tsx` / `App.tsx` | sidebar `<aside>` 容器（4 处）|
+| `data-tasks-board` | `WorkspaceTasksDrawer.tsx` / `TasksSection.tsx` | task kanban container |
+| `data-tasks-column` + `data-status` | 同上 | task 列容器 |
+| `data-tasks-num` | 同上 | task 号 `#nnn` |
+| `data-task-status` | `WorkspaceTasksDrawer.tsx` / `TasksSection.tsx` / `TaskRef.tsx` / `SystemMessage.tsx` | task status badge（四处共用 canonical hook）|
+| `data-popover-frame="info"` | `AgentInfoPopover.tsx` / `HumanInfoPopover.tsx` / `ManageMembersPopover.tsx` / `HoverPopover.tsx` | info-card 类浮层（要海报硬框）|
+
+不能用作 forza6 hook 的 attr：
+- 任何 `aria-*`（a11y 是产品契约，不能被 CSS 私吞）
+- 任何含 `forza6` / 主题词的命名
+
+### 12.4 不特化的（设计边界，避免噪声过载）
+
+- 滚动条
+- Tooltip 内容（小浮层）
+- HoverCard 部分用例（仅 HoverPopover wrapper 走海报硬框）
+- Select listbox（仅继承 lime hover，不加硬框）
+- Settings 主体（保留默认）
+- 黑底 member-strip（v5.4 已撤回；token `--text-on-dark-pop` 留备未来）
+
+### 12.5 关键架构原则
+
+1. **Lazy variable substitution**：核心 token 用 `color-mix(in oklab, brand X%, var(--bg-channels-sidebar))` 类公式定义一次，scope 切换自动重新解析。Sidebar token 在 `aside[data-sidebar]` 局部 redefine，root 不受影响。
+2. **Specificity > Tailwind utility**：`[data-theme='forza6'] [hook]` selector 是 (0,2,0)，稳赢 Tailwind utility (0,1,0)，不需要 `!important`。
+3. **Hover→Selected 硬度递进**：hover (浅 lime + 黑边) → selected (实心 lime + 黑边 + notch) → inline (lime sticker 方角) → send (magenta sticker + display caps) → status badge → `#` 大号 magenta。每一档比上一档"更硬"。
+4. **Status 配色阶梯**：todo 中性黑边 / in_progress HUD live cyan / in_review 高注意 magenta / done passed muted green。lime 不进工作流状态色（避免和 done/pass 撞语义）。
+5. **WCAG 必须不让步**：磁红 + 近黑 6.38:1 AA / 浅 lime + 近黑 ~14:1 AAA / cyan + 黑 9.4:1 AAA。任何"主观感觉应该换色"的提议先算对比度。
+
+### 12.6 验证
+
+- `pnpm --filter @silverhand/desktop typecheck`
+- `pnpm --filter @silverhand/desktop test`（appearance.test.ts 含 4 个主题相关测试）
+- 切到 forza6 → 切到 warm-three 的来回测试，无 token 残留
+- 颜色对比度走 WCAG 2.1 AA / AAA

@@ -1223,7 +1223,14 @@ function RegisteredAppShell(): JSX.Element {
       <div
         className="flex min-w-0 flex-1 overflow-hidden"
         style={{
-          background: 'var(--bg-app, transparent)',
+          // Frame layer. `backgroundColor` paints the frame fill; the
+          // separate `backgroundImage` lets a theme overlay a texture
+          // (forza6 = translucent triangles) without disturbing the
+          // color. Other themes resolve `--bg-pattern-image` to `none`,
+          // so this write is universal-but-inert outside forza6 — see
+          // `docs/design-new-theme.md` §3.1.3.
+          backgroundColor: 'var(--bg-app, transparent)',
+          backgroundImage: 'var(--bg-pattern-image, none)',
           padding: '0 var(--frame-padding, 0) var(--frame-padding, 0)',
           gap: 'var(--frame-padding, 0)',
         }}
@@ -1245,6 +1252,7 @@ function RegisteredAppShell(): JSX.Element {
         ) : appSection === 'members' ? (
           <>
             <aside
+              data-sidebar="members"
               className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]"
               style={{
                 borderRadius: 'var(--card-radius, 0)',
@@ -1299,6 +1307,7 @@ function RegisteredAppShell(): JSX.Element {
         ) : appSection === 'computers' ? (
           <>
             <aside
+              data-sidebar="computers"
               className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]"
               style={{
                 borderRadius: 'var(--card-radius, 0)',

@@ -223,6 +223,7 @@ function TaskStatusBadge({ status }: { status: TaskStatus }): JSX.Element {
   };
   return (
     <span
+      data-task-status={status}
       className={
         'rounded px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide ' +
         styles[status]

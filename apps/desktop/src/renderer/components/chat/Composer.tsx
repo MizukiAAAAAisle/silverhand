@@ -522,6 +522,7 @@ export function Composer({
         <textarea
           ref={ref}
           value={draft}
+          data-composer-input
           onChange={e => {
             updateDraft(
               e.target.value,
@@ -571,6 +572,7 @@ export function Composer({
           size="sm"
           disabled={sendDisabled}
           title="发送消息"
+          data-composer-action="send"
           className="absolute bottom-2 right-2 h-8"
         >
           Send

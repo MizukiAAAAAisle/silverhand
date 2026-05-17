@@ -39,6 +39,7 @@ export function ManageMembersPopover({
           align="start"
           sideOffset={6}
           collisionPadding={8}
+          data-popover-frame="info"
           className="z-50 w-[260px] rounded-md border border-border bg-bg-floating p-3 shadow-lg outline-none"
         >
           <PopoverBody workspaceId={workspaceId} />

@@ -55,6 +55,7 @@ export function HoverPopover({
           align="start"
           sideOffset={6}
           collisionPadding={8}
+          data-popover-frame="info"
           className="z-[80] w-[260px] max-w-[calc(100vw-32px)] rounded-md border border-border bg-bg-floating p-3 text-xs text-text-primary shadow-lg outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
         >
           {isContentReady ? content : skeleton ?? <DefaultSkeleton />}

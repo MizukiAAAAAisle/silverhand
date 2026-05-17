@@ -13,6 +13,13 @@
 @import "./themes/warm-coral.css";
 @import "./themes/forza6.css";
 
+/* Forza6-only component-layer specialization. Every selector inside is
+   `[data-theme='forza6']`-scoped; warm-three themes are pixel-identical
+   before and after this import. Must come AFTER forza6.css so token
+   re-assignments inside it (`--bg-channels-sidebar` deep teal etc.)
+   beat the PR-1 light-pink defaults. */
+@import "./themes/forza6-components.css";
+
 /* Highlight.js theme for fenced code blocks rendered by rehype-highlight.
    Picked the "github" light theme as a neutral baseline — works under
    warm-coral. If we ship a dark theme later, swap this for github-dark

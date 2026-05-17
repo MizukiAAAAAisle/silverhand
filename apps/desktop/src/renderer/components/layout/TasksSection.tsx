@@ -128,7 +128,10 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
         * (height = content) while staying capped at the available height
         * via `max-h-full`. `items-start` keeps short columns hugging the
         * top instead of stretching to the tallest column. */}
-      <div className="flex min-h-0 flex-1 items-start gap-3 overflow-hidden p-4">
+      <div
+        data-tasks-board
+        className="flex min-h-0 flex-1 items-start gap-3 overflow-hidden p-4"
+      >
         {COLUMNS.map(col => (
           <KanbanColumn
             key={col.status}
@@ -349,6 +352,8 @@ function KanbanColumn({
 }): JSX.Element {
   return (
     <section
+      data-tasks-column
+      data-status={status}
       className={cn(
         // Each column hugs its own content height (cross-axis auto via
         // `items-start` on the row), but caps at the parent height with
@@ -404,7 +409,10 @@ function TaskCard({
 }): JSX.Element {
   const { relative, absolute } = useRelativeTime(task.created_at);
   return (
-    <div className="group relative rounded-md border border-border-subtle bg-bg-base transition-colors hover:border-accent hover:bg-bg-hover">
+    <div
+      data-task-number={task.task_number}
+      className="group relative rounded-md border border-border-subtle bg-bg-base transition-colors hover:border-accent hover:bg-bg-hover"
+    >
       {/* Jump button: covers the content area */}
       <button
         type="button"
@@ -413,7 +421,7 @@ function TaskCard({
       >
         {/* Row 1: #number + status badge inline */}
         <div className="flex items-center gap-1.5 pb-0.5">
-          <span className="shrink-0 font-mono text-[10px] text-text-muted">
+          <span data-tasks-num className="shrink-0 font-mono text-[10px] text-text-muted">
             #{task.task_number}
           </span>
           <TaskStatusBadge status={task.status} />
@@ -479,6 +487,7 @@ function TaskStatusBadge({ status }: { status: TaskStatus }): JSX.Element {
   };
   return (
     <span
+      data-task-status={status}
       className={cn(
         'rounded px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide',
         styles[status],

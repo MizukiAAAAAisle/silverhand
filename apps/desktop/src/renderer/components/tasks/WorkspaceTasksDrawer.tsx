@@ -432,7 +432,10 @@ export function WorkspaceTasksDrawer({
           {/* Kanban board — flex row of columns. Each column hugs its
               own content height (items-start) but caps at `max-h-full`,
               so a sparse column doesn't claim 100% of the page. */}
-          <div className="flex min-h-0 flex-1 items-start gap-3 overflow-hidden p-4">
+          <div
+            data-tasks-board
+            className="flex min-h-0 flex-1 items-start gap-3 overflow-hidden p-4"
+          >
             {COLUMNS.map(col => (
               <KanbanColumn
                 key={col.status}
@@ -821,6 +824,8 @@ function KanbanColumn({
 }): JSX.Element {
   return (
     <section
+      data-tasks-column
+      data-status={status}
       className={cn(
         // Mirrors TasksSection — column hugs content height with a
         // `max-h-full` cap; body scrolls inside when content overflows.
@@ -899,7 +904,7 @@ function TaskCard({
       >
         {/* Row 1: #number + status badge inline */}
         <div className="flex items-center gap-1.5 pb-0.5">
-          <span className="font-mono text-[10px] text-text-muted">
+          <span data-tasks-num className="font-mono text-[10px] text-text-muted">
             #{task.task_number}
           </span>
           <TaskStatusBadge status={task.status} />
@@ -965,6 +970,7 @@ function TaskStatusBadge({ status }: { status: TaskStatus }): JSX.Element {
   };
   return (
     <span
+      data-task-status={status}
       className={cn(
         'rounded px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide',
         styles[status],
