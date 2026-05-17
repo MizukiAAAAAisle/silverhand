@@ -190,8 +190,10 @@ export function canPostToConversation(
  *   3. `principal.kind === 'system'` — internal hosts and migration
  *      jobs can edit anything. Mirrors every other `canX` predicate.
  *
- * Returns `false` for missing agents, non-creator users, and
- * cross-agent agent principals.
+ * Returns `true` for system principals unconditionally (mirrors every
+ * other `canX` predicate — system never reads the agent row). Returns
+ * `false` for missing agents on user/agent principals, non-creator
+ * users, and cross-agent agent principals.
  */
 export function canEditAgent(
   ctx: BackendContext,
