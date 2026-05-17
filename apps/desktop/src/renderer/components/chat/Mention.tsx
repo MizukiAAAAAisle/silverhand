@@ -1,6 +1,6 @@
-import { User } from 'lucide-react';
 import type { AgentDto, UserDto } from '@silverhand/shared';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
+import { useViewerAvatarObjectUrl } from '@/features/me/hooks';
 import { useNav } from '@/router';
 import { HoverPopover } from './HoverPopover';
 
@@ -79,10 +79,16 @@ function AgentMention({
 }
 
 function HumanMention({ human }: { human: UserDto }): JSX.Element {
+  // v1 invariant: the only registered human is the viewer themselves
+  // (no `/api/users` listing endpoint yet), so the avatar always belongs
+  // to the viewer. When multi-human lands, swap to a prop-threaded
+  // avatar map keyed by user id.
+  const avatarObjectUrl = useViewerAvatarObjectUrl();
   const label = human.display_name?.trim() || human.name;
+  const initial = label.charAt(0).toUpperCase();
   const trigger = (
     <span
-      className="inline-flex items-center gap-0.5 rounded px-1 -mx-0.5 font-medium text-accent transition-colors hover:bg-accent-soft focus-visible:bg-accent-soft focus-visible:outline-none"
+      className="rounded px-1 -mx-0.5 font-medium text-accent transition-colors hover:bg-accent-soft focus-visible:bg-accent-soft focus-visible:outline-none"
       aria-label={`@${human.name}`}
       tabIndex={0}
       data-mention-kind="human"
@@ -96,23 +102,32 @@ function HumanMention({ human }: { human: UserDto }): JSX.Element {
       trigger={trigger}
       isContentReady
       content={
-        <div className="space-y-2">
-          <div className="flex items-start gap-2.5">
-            <span className="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-bg-elevated text-text-muted">
-              <User className="size-4" />
+        <div className="flex items-center gap-2.5">
+          {avatarObjectUrl ? (
+            <span className="inline-block size-9 shrink-0 overflow-hidden rounded-full bg-bg-elevated">
+              {/* eslint-disable-next-line jsx-a11y/img-redundant-alt */}
+              <img
+                src={avatarObjectUrl}
+                alt=""
+                className="size-full object-cover"
+              />
             </span>
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-semibold text-text-primary">
-                {label}
-              </div>
-              <div className="truncate font-mono text-xs text-text-muted">
-                @{human.name}
-              </div>
+          ) : (
+            <span
+              className="inline-flex size-9 shrink-0 items-center justify-center rounded-full bg-bg-elevated text-sm font-medium text-text-muted"
+              aria-hidden
+            >
+              {initial}
+            </span>
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm font-semibold text-text-primary">
+              {label}
+            </div>
+            <div className="truncate text-xs text-text-muted">
+              @{human.name}
             </div>
           </div>
-          <span className="inline-flex rounded bg-bg-elevated px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-text-muted">
-            Human
-          </span>
         </div>
       }
     />
