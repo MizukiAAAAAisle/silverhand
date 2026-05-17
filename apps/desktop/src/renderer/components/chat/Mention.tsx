@@ -1,8 +1,8 @@
 import type { AgentDto, UserDto } from '@silverhand/shared';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
+import { HumanInfoPopover } from '@/components/HumanInfoPopover';
 import { useViewerAvatarObjectUrl } from '@/features/me/hooks';
 import { useNav } from '@/router';
-import { HoverPopover } from './HoverPopover';
 
 interface MentionProps {
   /** The handle as it appeared in the source text (without `@`). */
@@ -103,63 +103,25 @@ function HumanMention({ human }: { human: UserDto }): JSX.Element {
   const avatarObjectUrl = useViewerAvatarObjectUrl();
   const nav = useNav();
   const label = human.display_name?.trim() || human.name;
-  const initial = label.charAt(0).toUpperCase();
   // Keep element + classes identical to AgentMention so both mentions
   // share box model, baseline, and focus ring. Clicking @yourself
   // jumps to Settings where the viewer manages their profile (v1
   // invariant: human === viewer).
-  const trigger = (
-    <button
-      type="button"
-      onClick={event => {
-        event.preventDefault();
-        nav.toSettings();
-      }}
-      className="rounded px-1 -mx-0.5 font-medium text-accent transition-colors hover:bg-accent-soft focus-visible:bg-accent-soft focus-visible:outline-none"
-      aria-label={`@${human.name}`}
-      data-mention-kind="human"
-      data-mention-id={human.id}
-    >
-      @{label}
-    </button>
-  );
   return (
-    <HoverPopover
-      trigger={trigger}
-      isContentReady
-      // Mirror AgentInfoPopover's 80ms hover-open so agent and human
-      // mentions feel identical to the pointer. Default 500ms was too
-      // slow next to the agent popover.
-      openDelayMs={80}
-      content={
-        <div className="flex items-start gap-3">
-          {avatarObjectUrl ? (
-            <span className="inline-block size-9 shrink-0 overflow-hidden rounded-full bg-bg-elevated">
-              {/* eslint-disable-next-line jsx-a11y/img-redundant-alt */}
-              <img
-                src={avatarObjectUrl}
-                alt=""
-                className="size-full object-cover"
-              />
-            </span>
-          ) : (
-            <span
-              className="inline-flex size-9 shrink-0 items-center justify-center rounded-full bg-bg-elevated text-sm font-medium text-text-muted"
-              aria-hidden
-            >
-              {initial}
-            </span>
-          )}
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-semibold text-text-primary">
-              {label}
-            </div>
-            <div className="truncate font-mono text-xs text-text-muted">
-              @{human.name}
-            </div>
-          </div>
-        </div>
-      }
-    />
+    <HumanInfoPopover human={human} trigger="hover" avatarObjectUrl={avatarObjectUrl}>
+      <button
+        type="button"
+        onClick={event => {
+          event.preventDefault();
+          nav.toSettings();
+        }}
+        className="rounded px-1 -mx-0.5 font-medium text-accent transition-colors hover:bg-accent-soft focus-visible:bg-accent-soft focus-visible:outline-none"
+        aria-label={`@${human.name}`}
+        data-mention-kind="human"
+        data-mention-id={human.id}
+      >
+        @{label}
+      </button>
+    </HumanInfoPopover>
   );
 }

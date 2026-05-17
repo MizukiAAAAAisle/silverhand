@@ -40,6 +40,7 @@ import { SystemActivityCluster } from '@/components/chat/SystemActivityCluster';
 import { groupMessages } from '@/components/chat/groupMessages';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
+import { HumanInfoPopover } from '@/components/HumanInfoPopover';
 import { HoverPopover } from '@/components/chat/HoverPopover';
 import { useConversationMembers } from '@/features/conversations/useConversationMembers';
 import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
@@ -713,43 +714,18 @@ function MemberStrip({
 function HumanMemberChip({ human }: { human: HumanMemberDto }): JSX.Element {
   const label = human.display_name?.trim() || human.name;
   const initial = label.charAt(0).toUpperCase();
-  const trigger = (
-    <button
-      type="button"
-      aria-label={`@${human.name}`}
-      data-member-chip="human"
-      data-member-id={human.user_id}
-      className="relative inline-flex size-[22px] shrink-0 items-center justify-center overflow-hidden rounded-full border border-[#9ca3af] bg-bg-elevated p-0 text-[11px] font-medium text-text-muted shadow-sm transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
-    >
-      <span aria-hidden>{initial}</span>
-    </button>
-  );
   return (
-    <HoverPopover
-      trigger={trigger}
-      isContentReady
-      // Match AgentInfoPopover's 80ms hover-open so agent and human
-      // chips feel identical to the pointer.
-      openDelayMs={80}
-      content={
-        <div className="flex items-start gap-3">
-          <span
-            className="inline-flex size-9 shrink-0 items-center justify-center rounded-full bg-bg-elevated text-sm font-medium text-text-muted"
-            aria-hidden
-          >
-            {initial}
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-semibold text-text-primary">
-              {label}
-            </div>
-            <div className="truncate font-mono text-xs text-text-muted">
-              @{human.name}
-            </div>
-          </div>
-        </div>
-      }
-    />
+    <HumanInfoPopover human={human} trigger="hover" side="bottom" align="end">
+      <button
+        type="button"
+        aria-label={`@${human.name}`}
+        data-member-chip="human"
+        data-member-id={human.user_id}
+        className="relative inline-flex size-[22px] shrink-0 items-center justify-center overflow-hidden rounded-full border border-[#9ca3af] bg-bg-elevated p-0 text-[11px] font-medium text-text-muted shadow-sm transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+      >
+        <span aria-hidden>{initial}</span>
+      </button>
+    </HumanInfoPopover>
   );
 }
 
@@ -1219,6 +1195,7 @@ function MessageList({
                     onStartThread={onThreadCreated ? handleStartThread : undefined}
                     threadReplyCount={threadByAnchor?.get(m.id)?.reply_count}
                     viewerAvatarObjectUrl={viewerAvatarObjectUrl}
+                    viewer={viewer && !isRegistrationRequired(viewer) ? viewer : undefined}
                     agentAvatarUrls={agentAvatarUrls}
                     highlighted={
                       highlightedMessageId != null &&
