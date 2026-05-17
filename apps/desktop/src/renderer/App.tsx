@@ -26,6 +26,7 @@ import { WorkspaceTasksDrawer } from '@/components/tasks/WorkspaceTasksDrawer';
 import { useTasks } from '@/features/tasks/hooks';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { AgentView } from '@/features/agents/AgentView';
+import { HumanView } from '@/features/me/HumanView';
 import { SideUnresolvedPlaceholder } from '@/components/layout/SideUnresolvedPlaceholder';
 import type { ConversationReference } from '@/components/chat/ConversationRef';
 import { useConversationById } from '@/features/conversations/useConversationById';
@@ -202,6 +203,7 @@ function RegisteredAppShell(): JSX.Element {
     fullscreen: routeFullscreen,
     threadFullscreen,
     agentId: selectedAgentId,
+    userId: selectedUserId,
   } = route;
   const workspaceSidebarPane = layout.workspaceSidebar;
   const channelSidebarPane = layout.channelSidebar;
@@ -542,6 +544,10 @@ function RegisteredAppShell(): JSX.Element {
 
   useEffect(() => {
     if (appSection !== 'members') return;
+    // A human-route resolution is its own valid landing. Skip the
+    // agent-first default so `/members/u/<userId>` doesn't get clobbered
+    // back to an agent on first paint.
+    if (selectedUserId) return;
     if (agents.length === 0) return;
     if (selectedAgentId && agents.some(a => a.id === selectedAgentId)) return;
 
@@ -550,7 +556,7 @@ function RegisteredAppShell(): JSX.Element {
       ? remembered
       : agents[0]!.id;
     nav.go(routes.membersAgent(target), { replace: true });
-  }, [agents, appSection, nav, selectedAgentId]);
+  }, [agents, appSection, nav, selectedAgentId, selectedUserId]);
 
   // If the open thread is loaded and its parent doesn't match the current
   // selection, drop it. Don't drop on "missing from list" — that fires
@@ -1250,10 +1256,18 @@ function RegisteredAppShell(): JSX.Element {
                 <MembersPanel
                   selectedAgentId={selectedAgentId}
                   onSelectAgent={id => nav.toMembers(id)}
+                  selectedUserId={selectedUserId}
+                  onSelectUser={id => nav.toMembersUser(id)}
                 />
               </nav>
             </aside>
-            {selectedAgentId ? (
+            {selectedUserId ? (
+              <HumanView
+                key={selectedUserId}
+                userId={selectedUserId}
+                onUnreachable={() => nav.toMembers()}
+              />
+            ) : selectedAgentId ? (
               <AgentView
                 key={selectedAgentId}
                 agentId={selectedAgentId}

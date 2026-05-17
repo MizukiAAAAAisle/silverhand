@@ -1,0 +1,53 @@
+import type {
+  MeResponse,
+  RegistrationRequired,
+  UserDto,
+} from '@silverhand/shared';
+
+/**
+ * Local copy of the `isRegistrationRequired` type guard. Inlined so
+ * `permissions.ts` stays free of React-Query imports — `./hooks` pulls
+ * in `useQuery` etc. and we don't want to drag that into a tiny pure
+ * predicate. The check matches the canonical one verbatim; if the
+ * shape ever changes, both copies must move together.
+ */
+function isRegistrationRequiredLocal(
+  body: MeResponse,
+): body is RegistrationRequired {
+  return (
+    typeof body === 'object'
+    && body !== null
+    && 'registration_required' in body
+    && (body as { registration_required: unknown }).registration_required === true
+  );
+}
+
+/**
+ * Renderer-side gate for editing a user's (human's) profile.
+ *
+ * Mirrors the v1 `/api/me` contract: only the viewer themselves can
+ * edit their own profile. There is no admin / "edit-other-users"
+ * surface in v1 — `PATCH /api/me` and `POST/DELETE /api/me/avatar` all
+ * key off `requireViewerUserId(c)`, so the backend will reject any
+ * cross-user attempt with 403 anyway. This helper lets the UI hide
+ * those affordances ahead of the network round-trip.
+ *
+ * Returns false in three cases:
+ *   1. `viewer === undefined` — the viewer query is still loading or
+ *      errored. Render the form as read-only until we know.
+ *   2. `viewer` is the `RegistrationRequired` shape — pre-registration
+ *      should never reach a profile detail view, but if it does we
+ *      keep the affordances hidden.
+ *   3. The viewer's id does not match the target user id — different
+ *      human, no edit. v1 single-user installs never hit this branch
+ *      because the only navigable human is the viewer; v2 multi-human
+ *      relies on it.
+ */
+export function canEditUserProfile(
+  viewer: MeResponse | undefined,
+  user: Pick<UserDto, 'id'>,
+): boolean {
+  if (!viewer) return false;
+  if (isRegistrationRequiredLocal(viewer)) return false;
+  return viewer.id === user.id;
+}

@@ -69,6 +69,12 @@ export const routes = {
   },
   members: () => '/members',
   membersAgent: (agentId: string) => `/members/${agentId}`,
+  // Distinct prefix for users so a user id can never collide with the
+  // agent id namespace at the URL level. The MembersPanel writes this
+  // when a HUMANS row is clicked; AgentView and HumanView are then
+  // mutually exclusive at the App level (parseRouteState produces one
+  // of agentId / userId, never both).
+  membersUser: (userId: string) => `/members/u/${userId}`,
   computers: () => '/computers',
   tasks: () => '/tasks',
   settings: () => '/settings',
@@ -83,6 +89,7 @@ export const routePatterns = {
   chatSaved: '/chat/saved',
   chat: '/chat',
   membersAgent: '/members/:agentId',
+  membersUser: '/members/u/:userId',
   members: '/members',
   computers: '/computers',
   tasks: '/tasks',
@@ -121,6 +128,10 @@ export interface RouteState {
    *  `fullscreen` + `secondaryDescriptor` from App-level selectors. */
   threadFullscreen: boolean;
   agentId: string | null;
+  /** Set when the URL is `/members/u/:userId`. Mutually exclusive with
+   *  `agentId` (the patterns are disjoint by segment count). The
+   *  members section's right-pane branches on whichever is non-null. */
+  userId: string | null;
 }
 
 /**
@@ -132,7 +143,15 @@ export function parseRouteState(pathname: string, search: string): RouteState {
   const mThread = matchPath(routePatterns.chatThread, pathname);
   const mChannel = matchPath(routePatterns.chatChannel, pathname);
   const mWorkspace = matchPath(routePatterns.chatWorkspace, pathname);
-  const mAgent = matchPath(routePatterns.membersAgent, pathname);
+  // Order matters: the user route is more specific (`/members/u/:userId`,
+  // three segments) than the agent route (`/members/:agentId`, two
+  // segments), and matchPath returns the first match. Trying the user
+  // pattern first means `/members/u/foo` resolves cleanly. The patterns
+  // are still disjoint by segment count — `/members/:agentId` will not
+  // match a three-segment URL — but checking explicitly keeps intent
+  // visible to the next reader.
+  const mUser = matchPath(routePatterns.membersUser, pathname);
+  const mAgent = mUser ? null : matchPath(routePatterns.membersAgent, pathname);
 
   const workspaceId =
     mThread?.params.workspaceId ??
@@ -186,6 +205,7 @@ export function parseRouteState(pathname: string, search: string): RouteState {
     fullscreen,
     threadFullscreen,
     agentId: mAgent?.params.agentId ?? null,
+    userId: mUser?.params.userId ?? null,
   };
 }
 
@@ -340,6 +360,10 @@ export function useNav(): {
     opts?: ThreadRouteOptions & { replace?: boolean },
   ) => void;
   toMembers: (agentId?: string) => void;
+  /** Navigate the members section to a human's profile by user id.
+   *  Mutually exclusive with the agent form — only one of agentId /
+   *  userId is meaningful at a time. */
+  toMembersUser: (userId: string) => void;
   toComputers: () => void;
   toTasks: () => void;
   toSettings: () => void;
@@ -425,6 +449,10 @@ export function useNav(): {
       go(agentId ? routes.membersAgent(agentId) : routes.members()),
     [go],
   );
+  const toMembersUser = useCallback(
+    (userId: string) => go(routes.membersUser(userId)),
+    [go],
+  );
   const toComputers = useCallback(() => go(routes.computers()), [go]);
   const toTasks = useCallback(() => go(routes.tasks()), [go]);
   const toSettings = useCallback(() => go(routes.settings()), [go]);
@@ -439,6 +467,7 @@ export function useNav(): {
     toChannel,
     toThread,
     toMembers,
+    toMembersUser,
     toComputers,
     toTasks,
     toSettings,
@@ -456,6 +485,7 @@ export function useNav(): {
     toChannel,
     toThread,
     toMembers,
+    toMembersUser,
     toComputers,
     toTasks,
     toSettings,

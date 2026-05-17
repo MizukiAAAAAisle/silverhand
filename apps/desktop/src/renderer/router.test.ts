@@ -103,7 +103,15 @@ describe('parseRouteState — chat URL matrix', () => {
     const r = parseRouteState('/members/agent-1', '');
     expect(r.section).toBe('members');
     expect(r.agentId).toBe('agent-1');
+    expect(r.userId).toBeNull();
     expect(r.workspaceId).toBeNull();
+  });
+
+  it('parses /members/u/:userId into userId and leaves agentId null', () => {
+    const r = parseRouteState('/members/u/u-1', '');
+    expect(r.section).toBe('members');
+    expect(r.userId).toBe('u-1');
+    expect(r.agentId).toBeNull();
   });
 });
 
