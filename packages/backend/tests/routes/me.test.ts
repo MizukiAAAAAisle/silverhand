@@ -151,4 +151,26 @@ describe('/api/me + /api/users/:id/avatar', () => {
     const res = await http(t).get(apiPaths.userAvatar('local'));
     expect(res.status).toBe(404);
   });
+
+  it('PATCH /api/me rejects display_name with control chars or Unicode line separators (400)', async () => {
+    // See dto.ts `DisplayNameSchema`. Mirrors the register-route guard so
+    // post-registration profile edits cannot reintroduce values that the
+    // initial register call would have rejected.
+    t = buildTestApp();
+    const cases = [
+      'first\nsecond',
+      'tab\there',
+      'cr\rhere',
+      'null\x00here',
+      'nel\u0085here',
+      'ls\u2028here',
+      'ps\u2029here',
+    ];
+    for (const display_name of cases) {
+      const res = await http(t).patch(apiPaths.me, { display_name });
+      expect(res.status, `display_name=${JSON.stringify(display_name)}`).toBe(
+        400,
+      );
+    }
+  });
 });

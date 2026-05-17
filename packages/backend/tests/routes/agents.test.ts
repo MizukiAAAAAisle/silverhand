@@ -259,6 +259,33 @@ describe('PATCH /api/agents/:id', () => {
     const body = await res.json() as any;
     expect(body.agent.runtime).toBe('codex');
   });
+
+  it('rejects display_name with control chars or Unicode line separators (400)', async () => {
+    // Defense-in-depth: keep prompt-injection-shaped values out of
+    // `agents.display_name` from the write side. Mirrors the
+    // register / PATCH /api/me guards via shared `DisplayNameSchema`.
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
+    ).json() as any;
+    const cases = [
+      'first\nsecond',
+      'tab\there',
+      'cr\rhere',
+      'null\x00here',
+      'nel\u0085here',
+      'ls\u2028here',
+      'ps\u2029here',
+    ];
+    for (const display_name of cases) {
+      const res = await http(t).patch(`/api/agents/${created.agent.id}`, {
+        display_name,
+      });
+      expect(res.status, `display_name=${JSON.stringify(display_name)}`).toBe(
+        400,
+      );
+    }
+  });
 });
 
 describe('GET /api/agents/:id/workspace', () => {

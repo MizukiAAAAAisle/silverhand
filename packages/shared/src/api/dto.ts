@@ -68,6 +68,42 @@ export const MeResponseSchema = z.union([
 ]);
 export type MeResponse = z.infer<typeof MeResponseSchema>;
 
+// `display_name` is rendered into the agent system prompt (PR-B
+// "Members in this conversation:" block) and persisted on `users`
+// and `agents`. Reject every character that could survive `.trim()`
+// but be interpreted as a line break downstream — ASCII control chars
+// (U+0000 – U+001F, includes tab, LF, CR, vertical tab, form feed,
+// etc.) plus the three Unicode line separators that `JSON.stringify`
+// does NOT escape (U+0085 NEXT LINE, U+2028 LINE SEPARATOR, U+2029
+// PARAGRAPH SEPARATOR). The `quotePromptValue` helper in
+// platform-prompt.ts also escapes these at render time as
+// defense-in-depth, but blocking them at the write boundary keeps the
+// DB clean and prevents future schema drift / direct-DB writes from
+// leaking malicious values into the prompt. See @Cindy review thread
+// on `d65cc19`. Other punctuation (`,` `:` `"`) is allowed: humans
+// legitimately use these in display names (e.g. `"Alice (lead)"`,
+// `"Bob, the bot"`) and the prompt's JSON-quoted form makes them
+// unambiguous to the model.
+const DISPLAY_NAME_FORBIDDEN_RE = /[\x00-\x1F\u0085\u2028\u2029]/;
+const DISPLAY_NAME_FORBIDDEN_MSG =
+  'display_name must not contain control characters or Unicode line separators';
+
+/**
+ * Shared validator for any user-editable `display_name` field. Used by
+ * `RegisterUserInputSchema`, `UpdateUserProfileInputSchema`, and
+ * `UpdateAgentInputSchema`. Trim → 1..64 chars → reject ASCII control
+ * chars (U+0000–U+001F) + Unicode line separators
+ * (U+0085 / U+2028 / U+2029).
+ */
+export const DisplayNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .refine(s => !DISPLAY_NAME_FORBIDDEN_RE.test(s), {
+    message: DISPLAY_NAME_FORBIDDEN_MSG,
+  });
+
 // POST /api/register — the SOLE creator of `users` rows. Called once at
 // registration (V1 first launch / V2 after auth signup). Atomically
 // INSERTs the user row and writes `app_settings.viewer_user_id` in a
@@ -76,8 +112,8 @@ export type MeResponse = z.infer<typeof MeResponseSchema>;
 //
 // `display_name` is optional: if omitted, defaults to the registered
 // `name`. Avatar is NOT part of registration — the renderer uploads it
-// via POST /api/me/avatar after this call succeeds (kept separate so we
-// have a single write entry into a pre-registration DB).
+// via POST /api/me/avatar after this call succeeds (kept separate so
+// we have a single binary upload path).
 export const RegisterUserInputSchema = z.object({
   name: z
     .string()
@@ -91,7 +127,7 @@ export const RegisterUserInputSchema = z.object({
       /^[a-zA-Z][a-zA-Z0-9_-]*$/,
       'name must start with a letter, then letters / digits / dash / underscore',
     ),
-  display_name: z.string().trim().min(1).max(64).optional(),
+  display_name: DisplayNameSchema.optional(),
 });
 export type RegisterUserInput = z.infer<typeof RegisterUserInputSchema>;
 
@@ -101,7 +137,7 @@ export type RegisterUserInput = z.infer<typeof RegisterUserInputSchema>;
 // has a single binary upload path. Empty objects fail validation.
 export const UpdateUserProfileInputSchema = z
   .object({
-    display_name: z.string().trim().min(1).max(64).optional(),
+    display_name: DisplayNameSchema.optional(),
   })
   .refine(v => Object.keys(v).length > 0, { message: 'no fields to update' });
 export type UpdateUserProfileInput = z.infer<typeof UpdateUserProfileInputSchema>;
@@ -150,7 +186,7 @@ export type CreateAgentInput = z.infer<typeof CreateAgentInputSchema>;
 // changing host is not supported in v1.
 export const UpdateAgentInputSchema = z
   .object({
-    display_name: z.string().trim().min(1).max(64).optional(),
+    display_name: DisplayNameSchema.optional(),
     description: z.string().max(2000).nullable().optional(),
     runtime: RuntimeKindSchema.optional(),
     model: z.string().nullable().optional(),

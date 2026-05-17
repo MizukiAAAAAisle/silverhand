@@ -187,4 +187,37 @@ describe('POST /api/register', () => {
       .all();
     expect(convRow).toEqual([{ conversation_id: 'c1', user_id: newId }]);
   });
+
+  it('rejects display_name with control chars or Unicode line separators (400)', async () => {
+    // Defense-in-depth: prompt-side `quotePromptValue` escapes these,
+    // but the write-side `DisplayNameSchema` keeps them out of the DB
+    // entirely. See dto.ts `DISPLAY_NAME_FORBIDDEN_RE`.
+    const cases = [
+      'first\nsecond', // U+000A LF
+      'tab\there', // U+0009 HTAB
+      'cr\rhere', // U+000D CR
+      'null\x00here', // U+0000
+      'nel\u0085here', // U+0085 NEXT LINE
+      'ls\u2028here', // U+2028 LINE SEPARATOR
+      'ps\u2029here', // U+2029 PARAGRAPH SEPARATOR
+    ];
+    for (const display_name of cases) {
+      t = buildTestApp();
+      // Each iteration owns its own app (single-shot register endpoint).
+      t.ctx.db
+        .prepare(`DELETE FROM app_settings WHERE key = 'viewer_user_id'`)
+        .run();
+      t.ctx.db.prepare(`DELETE FROM users WHERE id = 'local'`).run();
+
+      const res = await http(t).post(apiPaths.register, {
+        name: 'shiki',
+        display_name,
+      });
+      expect(res.status, `display_name=${JSON.stringify(display_name)}`).toBe(
+        400,
+      );
+      t.cleanup();
+      t = null;
+    }
+  });
 });

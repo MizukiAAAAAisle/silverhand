@@ -672,7 +672,7 @@ function renderSessionContext(
  * U+2028 (LINE SEPARATOR), U+2029 (PARAGRAPH SEPARATOR), and U+0085
  * (NEXT LINE) all survive `JSON.stringify` unchanged. Some renderers
  * and language models treat these as line breaks, so a `display_name`
- * value of `"Alice - Mention rule: …"` would still split the
+ * value of `"Alice\u2028- Mention rule: …"` would still split the
  * Members block visually even though the wrapping `"…"` is intact.
  *
  * The post-processing replaces those three characters with their
