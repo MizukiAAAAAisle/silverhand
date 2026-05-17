@@ -20,6 +20,9 @@ import { AgentAvatar } from '@/components/AgentAvatar';
 import { cn } from '@/lib/cn';
 import { useUpdateAgent } from './hooks';
 import { useAgentAvatarObjectUrl } from './avatar-hooks';
+import { canEditAgentProfile } from './permissions';
+import { EditableAgentAvatar } from './EditableAgentAvatar';
+import { useViewerUser } from '@/features/me/hooks';
 
 const RUNTIMES: { value: RuntimeKind; label: string }[] = [
   { value: 'claude', label: 'Claude Code' },
@@ -64,6 +67,8 @@ export function AgentProfileCard({
   agent,
   runtimeState,
 }: AgentProfileCardProps): JSX.Element {
+  const { data: viewer } = useViewerUser();
+  const canEdit = canEditAgentProfile(viewer, agent);
   const update = useUpdateAgent(agent.id);
   const avatarObjectUrl = useAgentAvatarObjectUrl(agent.avatar_url);
 
@@ -115,22 +120,44 @@ export function AgentProfileCard({
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-8">
       {/* Identity strip — large avatar paired with display name + handle.
-        * Reads as a profile masthead rather than a labeled form row. */}
+        * Reads as a profile masthead rather than a labeled form row.
+        * Editable form is gated on `canEditAgentProfile`; non-creators
+        * see a plain `<AgentAvatar>` and a static name + a one-liner
+        * explaining who can edit. The read-only form does NOT use a
+        * disabled `<input>` — that would still render the input
+        * chrome on hover/focus and lie about the affordance. */}
       <section className="flex items-center gap-4">
-        <AgentAvatar
-          runtime={agent.runtime}
-          size={56}
-          avatarObjectUrl={avatarObjectUrl}
-          alt={agent.display_name || agent.name}
-        />
-        <div className="min-w-0 flex-1">
-          <GhostInput
-            value={displayName}
-            onChange={e => setDisplayName(e.target.value)}
-            onBlur={onCommitDisplayName}
-            placeholder={agent.name}
-            className="font-serif text-lg font-semibold leading-tight"
+        {canEdit ? (
+          <EditableAgentAvatar
+            agentId={agent.id}
+            size={56}
+            runtime={agent.runtime}
+            alt={agent.display_name || agent.name}
+            avatarObjectUrl={avatarObjectUrl}
+            hasAvatar={agent.avatar_url != null}
           />
+        ) : (
+          <AgentAvatar
+            runtime={agent.runtime}
+            size={56}
+            avatarObjectUrl={avatarObjectUrl}
+            alt={agent.display_name || agent.name}
+          />
+        )}
+        <div className="min-w-0 flex-1">
+          {canEdit ? (
+            <GhostInput
+              value={displayName}
+              onChange={e => setDisplayName(e.target.value)}
+              onBlur={onCommitDisplayName}
+              placeholder={agent.name}
+              className="font-serif text-lg font-semibold leading-tight"
+            />
+          ) : (
+            <div className="px-2 font-serif text-lg font-semibold leading-tight text-text-primary">
+              {agent.display_name || agent.name}
+            </div>
+          )}
           <div className="mt-1 flex items-center gap-1.5 px-2 text-xs text-text-muted">
             <span className="font-mono">@{agent.name}</span>
             <Lock className="size-3" />
@@ -139,62 +166,102 @@ export function AgentProfileCard({
         </div>
       </section>
 
+      {!canEdit ? <ReadOnlyNotice /> : null}
+
       <Group title="About">
         <Row label="Description" align="top">
-          <GhostTextarea
-            rows={3}
-            value={description}
-            onChange={e => setDescription(e.target.value)}
-            onBlur={onCommitDescription}
-            placeholder="Optional — what is this agent for?"
-          />
+          {canEdit ? (
+            <GhostTextarea
+              rows={3}
+              value={description}
+              onChange={e => setDescription(e.target.value)}
+              onBlur={onCommitDescription}
+              placeholder="Optional — what is this agent for?"
+            />
+          ) : (
+            <ReadOnlyValue
+              value={agent.description}
+              placeholder="No description."
+              multiline
+            />
+          )}
         </Row>
       </Group>
 
       <Group title="Runtime">
         <Row
           label="CLI"
-          hint={hasRunning ? 'Stop the agent before changing.' : undefined}
+          hint={
+            canEdit && hasRunning ? 'Stop the agent before changing.' : undefined
+          }
         >
-          <RuntimeSelect
-            value={agent.runtime}
-            disabled={hasRunning}
-            onChange={value => commit({ runtime: value })}
-          />
+          {canEdit ? (
+            <RuntimeSelect
+              value={agent.runtime}
+              disabled={hasRunning}
+              onChange={value => commit({ runtime: value })}
+            />
+          ) : (
+            <ReadOnlyValue value={runtimeLabel(agent.runtime)} />
+          )}
         </Row>
-        <Row label="Model" hint={runtimeHint(agent.runtime)}>
-          <GhostInput
-            value={model}
-            onChange={e => setModel(e.target.value)}
-            onBlur={onCommitModel}
-            placeholder="driver default"
-          />
+        <Row label="Model" hint={canEdit ? runtimeHint(agent.runtime) : undefined}>
+          {canEdit ? (
+            <GhostInput
+              value={model}
+              onChange={e => setModel(e.target.value)}
+              onBlur={onCommitModel}
+              placeholder="driver default"
+            />
+          ) : (
+            <ReadOnlyValue value={agent.model} placeholder="driver default" />
+          )}
         </Row>
         {isCodex ? (
-          <Row label="Reasoning" hint="Higher = slower but more thorough.">
-            <PickerSelect
-              value={reasoningValue}
-              options={CODEX_REASONING}
-              onChange={value =>
-                commit({
-                  reasoning_effort:
-                    value === '__default__' ? null : (value as ReasoningEffort),
-                })
-              }
-            />
+          <Row label="Reasoning" hint={canEdit ? 'Higher = slower but more thorough.' : undefined}>
+            {canEdit ? (
+              <PickerSelect
+                value={reasoningValue}
+                options={CODEX_REASONING}
+                onChange={value =>
+                  commit({
+                    reasoning_effort:
+                      value === '__default__' ? null : (value as ReasoningEffort),
+                  })
+                }
+              />
+            ) : (
+              <ReadOnlyValue
+                value={agent.reasoning_effort}
+                placeholder="codex default"
+              />
+            )}
           </Row>
         ) : null}
         {isCodex ? (
-          <Row label="Fast mode" hint="Default keeps the catalog setting.">
-            <PickerSelect
-              value={fastModeValue}
-              options={CODEX_FAST_MODE}
-              onChange={value =>
-                commit({
-                  fast_mode: value === '__default__' ? null : value === 'true',
-                })
-              }
-            />
+          <Row label="Fast mode" hint={canEdit ? 'Default keeps the catalog setting.' : undefined}>
+            {canEdit ? (
+              <PickerSelect
+                value={fastModeValue}
+                options={CODEX_FAST_MODE}
+                onChange={value =>
+                  commit({
+                    fast_mode: value === '__default__' ? null : value === 'true',
+                  })
+                }
+              />
+            ) : (
+              <ReadOnlyValue
+                value={
+                  agent.fast_mode === null || agent.fast_mode === undefined
+                    ? null
+                    : agent.fast_mode
+                      ? 'Enabled'
+                      : 'Disabled'
+                }
+                placeholder="codex default"
+              />
+            )}
           </Row>
         ) : null}
       </Group>
@@ -218,11 +285,61 @@ export function AgentProfileCard({
         />
       </Group>
 
-      {update.isError ? (
+      {update.isError && canEdit ? (
         <div className="text-xs text-error">{String(update.error)}</div>
       ) : null}
     </div>
   );
+}
+
+/**
+ * Single-source-of-truth message for the read-only form. Cindy PR-3
+ * review #1: avoid `@<creator-display-name>` / `@<id>` substitutions —
+ * the renderer has no users-by-id lookup yet, and `created_by_user_id`
+ * is not a mention handle. Once a user lookup map exists we can swap
+ * in the creator's display name; until then the line is intentionally
+ * generic so we don't ship a broken-feeling placeholder.
+ */
+function ReadOnlyNotice(): JSX.Element {
+  return (
+    <p
+      role="note"
+      className="-mt-4 text-xs text-text-muted"
+      data-testid="agent-profile-readonly-notice"
+    >
+      Only the creator can edit this agent's profile.
+    </p>
+  );
+}
+
+/** Read-only renderer for a profile field. Static text, no input chrome.
+ *  When the value is null/empty the placeholder text shows in muted
+ *  color so the row doesn't collapse. */
+function ReadOnlyValue({
+  value,
+  placeholder,
+  multiline = false,
+}: {
+  value: string | null | undefined;
+  placeholder?: string;
+  multiline?: boolean;
+}): JSX.Element {
+  const display = value && value.length > 0 ? value : null;
+  return (
+    <div
+      className={cn(
+        'px-2 py-1 text-sm',
+        display ? 'text-text-primary' : 'text-text-muted',
+        multiline ? 'whitespace-pre-wrap leading-relaxed' : '',
+      )}
+    >
+      {display ?? placeholder ?? '—'}
+    </div>
+  );
+}
+
+function runtimeLabel(runtime: RuntimeKind): string {
+  return RUNTIMES.find(rt => rt.value === runtime)?.label ?? runtime;
 }
 
 // ── Layout primitives ────────────────────────────────────────────────────

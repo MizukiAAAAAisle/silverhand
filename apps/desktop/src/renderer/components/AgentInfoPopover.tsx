@@ -1,6 +1,6 @@
 import * as Popover from '@radix-ui/react-popover';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, Eraser, Power, RefreshCw } from 'lucide-react';
+import { AlertTriangle, Eraser, Pencil, Power, RefreshCw } from 'lucide-react';
 import type { AgentDto, ConversationAgentStatus } from '@silverhand/shared';
 import {
   useChannelAgents,
@@ -9,6 +9,9 @@ import {
   useStopAgent,
 } from '@/features/channels/hooks';
 import { useAgentAvatarObjectUrl } from '@/features/agents/avatar-hooks';
+import { canEditAgentProfile } from '@/features/agents/permissions';
+import { useViewerUser } from '@/features/me/hooks';
+import { useNav } from '@/router';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -86,6 +89,9 @@ export function AgentInfoPopover({
 }: AgentInfoPopoverProps): JSX.Element {
   const [hoverOpen, setHoverOpen] = useState(false);
   const [managementDialogOpen, setManagementDialogOpen] = useState(false);
+  const { data: viewer } = useViewerUser();
+  const canEdit = canEditAgentProfile(viewer, agent);
+  const nav = useNav();
   // Fallback only when the caller is unbatched (`undefined`). The
   // explicit `null` case from a batched parent means "no avatar yet"
   // and must NOT trigger an internal fetch — that was the PR-2 review
@@ -201,6 +207,20 @@ export function AgentInfoPopover({
               routeKind={routeKind}
               onDialogOpenChange={setManagementDialogOpen}
             />
+          ) : null}
+          {canEdit ? (
+            <div className="mt-3 border-t border-border-subtle pt-2">
+              <button
+                type="button"
+                onClick={() => nav.toMembers(agent.id)}
+                className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary"
+                title={`Edit @${agent.name} profile`}
+                data-testid="agent-info-edit-profile"
+              >
+                <Pencil className="size-3.5" />
+                Edit profile
+              </button>
+            </div>
           ) : null}
         </Popover.Content>
       </Popover.Portal>

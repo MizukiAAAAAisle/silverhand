@@ -10,7 +10,7 @@ import type {
   UpdateAgentInput,
 } from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
-import { api } from '@/lib/api';
+import { api, apiUpload } from '@/lib/api';
 
 const agentsKey = ['agents'] as const;
 const agentKey = (id: string) => ['agents', id] as const;
@@ -66,6 +66,68 @@ export function useUpdateAgent(agentId: string | null) {
         method: 'PATCH',
         body: JSON.stringify(input),
       });
+      return res.agent;
+    },
+    onSuccess: () => {
+      if (!agentId) return;
+      qc.invalidateQueries({ queryKey: agentsKey });
+      qc.invalidateQueries({ queryKey: agentKey(agentId) });
+    },
+  });
+}
+
+/**
+ * POST /api/agents/:id/avatar (multipart). Mirrors `useUploadAvatar` in
+ * `features/me/hooks.ts` but for agents.
+ *
+ * The route is gated by `canEditAgent` (creator-or-system) — non-creator
+ * humans get 403, which `apiUpload` surfaces as `ApiError`. The renderer
+ * UI hides the upload control via `canEditAgentProfile` so the user
+ * normally never reaches this hook without permission, but the
+ * mutation still has to handle 403 in case the cached `created_by_user_id`
+ * is stale or the agent was just transferred.
+ *
+ * On success the response carries the updated agent dto with a new
+ * `avatar_url = ${apiPaths.agentAvatar(id)}?v=${updated_at}` cache-buster;
+ * invalidating the list + detail keys re-renders every consumer with the
+ * new URL, which `useAgentAvatarObjectUrls` picks up via its
+ * `(id, avatar_url)` cache key.
+ */
+export function useUploadAgentAvatar(agentId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (file: File) => {
+      if (!agentId) throw new Error('no agent id');
+      const form = new FormData();
+      form.set('file', file);
+      const res = await apiUpload<{ avatar_url: string; agent: AgentDto }>(
+        apiPaths.agentAvatar(agentId),
+        form,
+      );
+      return res;
+    },
+    onSuccess: () => {
+      if (!agentId) return;
+      qc.invalidateQueries({ queryKey: agentsKey });
+      qc.invalidateQueries({ queryKey: agentKey(agentId) });
+    },
+  });
+}
+
+/**
+ * DELETE /api/agents/:id/avatar. Idempotent on the backend — clearing
+ * an already-clear pointer returns 200 with `avatar_url: null`, so the
+ * renderer doesn't have to special-case "nothing to clear".
+ */
+export function useClearAgentAvatar(agentId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      if (!agentId) throw new Error('no agent id');
+      const res = await api<{ agent: AgentDto }>(
+        apiPaths.agentAvatar(agentId),
+        { method: 'DELETE' },
+      );
       return res.agent;
     },
     onSuccess: () => {
