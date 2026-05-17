@@ -197,7 +197,9 @@ describe('POST /api/register', () => {
       'tab\there', // U+0009 HTAB
       'cr\rhere', // U+000D CR
       'null\x00here', // U+0000
-      'nel\u0085here', // U+0085 NEXT LINE
+      'del\x7Fhere', // U+007F DEL
+      'nel\u0085here', // U+0085 NEXT LINE (C1)
+      'c1\u009Fhere', // U+009F APPLICATION PROGRAM COMMAND (C1)
       'ls\u2028here', // U+2028 LINE SEPARATOR
       'ps\u2029here', // U+2029 PARAGRAPH SEPARATOR
     ];

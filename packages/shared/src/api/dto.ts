@@ -71,29 +71,33 @@ export type MeResponse = z.infer<typeof MeResponseSchema>;
 // `display_name` is rendered into the agent system prompt (PR-B
 // "Members in this conversation:" block) and persisted on `users`
 // and `agents`. Reject every character that could survive `.trim()`
-// but be interpreted as a line break downstream — ASCII control chars
-// (U+0000 – U+001F, includes tab, LF, CR, vertical tab, form feed,
-// etc.) plus the three Unicode line separators that `JSON.stringify`
-// does NOT escape (U+0085 NEXT LINE, U+2028 LINE SEPARATOR, U+2029
-// PARAGRAPH SEPARATOR). The `quotePromptValue` helper in
-// platform-prompt.ts also escapes these at render time as
-// defense-in-depth, but blocking them at the write boundary keeps the
-// DB clean and prevents future schema drift / direct-DB writes from
-// leaking malicious values into the prompt. See @Cindy review thread
-// on `d65cc19`. Other punctuation (`,` `:` `"`) is allowed: humans
-// legitimately use these in display names (e.g. `"Alice (lead)"`,
-// `"Bob, the bot"`) and the prompt's JSON-quoted form makes them
-// unambiguous to the model.
-const DISPLAY_NAME_FORBIDDEN_RE = /[\x00-\x1F\u0085\u2028\u2029]/;
+// but be interpreted as a line break or non-printable control
+// downstream:
+//   - C0 controls       U+0000 – U+001F  (NUL, TAB, LF, CR, VT, FF, …)
+//   - DEL               U+007F
+//   - C1 controls       U+0080 – U+009F  (includes U+0085 NEL)
+//   - Line separators   U+2028 LINE SEPARATOR, U+2029 PARAGRAPH SEPARATOR
+//
+// `JSON.stringify` only escapes U+0000-U+001F; everything else above
+// would land in the prompt verbatim. The `quotePromptValue` helper in
+// platform-prompt.ts escapes the line-separator subset at render time
+// as defense-in-depth, but blocking the full set at the write
+// boundary keeps the DB clean and prevents future schema drift /
+// direct-DB writes from leaking malicious values into the prompt.
+// See @Cindy review threads on `d65cc19` and `d7680e5`. Other
+// punctuation (`,` `:` `"`) is allowed: humans legitimately use these
+// in display names (e.g. `"Alice (lead)"`, `"Bob, the bot"`) and the
+// prompt's JSON-quoted form makes them unambiguous to the model.
+const DISPLAY_NAME_FORBIDDEN_RE = /[\x00-\x1F\x7F-\x9F\u2028\u2029]/;
 const DISPLAY_NAME_FORBIDDEN_MSG =
   'display_name must not contain control characters or Unicode line separators';
 
 /**
  * Shared validator for any user-editable `display_name` field. Used by
  * `RegisterUserInputSchema`, `UpdateUserProfileInputSchema`, and
- * `UpdateAgentInputSchema`. Trim → 1..64 chars → reject ASCII control
- * chars (U+0000–U+001F) + Unicode line separators
- * (U+0085 / U+2028 / U+2029).
+ * `UpdateAgentInputSchema`. Trim → 1..64 chars → reject control
+ * characters (C0 U+0000–U+001F, DEL U+007F, C1 U+0080–U+009F) and
+ * Unicode line separators (U+2028 / U+2029).
  */
 export const DisplayNameSchema = z
   .string()

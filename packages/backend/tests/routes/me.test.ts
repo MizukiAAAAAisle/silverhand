@@ -162,7 +162,9 @@ describe('/api/me + /api/users/:id/avatar', () => {
       'tab\there',
       'cr\rhere',
       'null\x00here',
+      'del\x7Fhere',
       'nel\u0085here',
+      'c1\u009Fhere',
       'ls\u2028here',
       'ps\u2029here',
     ];
