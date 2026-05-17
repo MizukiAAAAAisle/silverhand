@@ -8,6 +8,7 @@ import {
   useStartAgent,
   useStopAgent,
 } from '@/features/channels/hooks';
+import { useAgentAvatarObjectUrl } from '@/features/agents/avatar-hooks';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -66,6 +67,7 @@ export function AgentInfoPopover({
 }: AgentInfoPopoverProps): JSX.Element {
   const [hoverOpen, setHoverOpen] = useState(false);
   const [managementDialogOpen, setManagementDialogOpen] = useState(false);
+  const avatarObjectUrl = useAgentAvatarObjectUrl(agent.avatar_url);
   // Single timer reused for both open and close so consecutive
   // pointer transitions cancel each other out cleanly.
   const timerRef = useRef<number | null>(null);
@@ -113,7 +115,12 @@ export function AgentInfoPopover({
           className="z-50 w-[260px] max-w-[calc(100vw-32px)] rounded-md border border-border bg-bg-floating p-3 shadow-lg outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
         >
           <div className="flex items-start gap-3">
-            <AgentAvatar runtime={agent.runtime} size={36} />
+            <AgentAvatar
+              runtime={agent.runtime}
+              size={36}
+              avatarObjectUrl={avatarObjectUrl}
+              alt={agent.display_name || agent.name}
+            />
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-semibold text-text-primary">
                 {agent.display_name || agent.name}

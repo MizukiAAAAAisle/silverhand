@@ -3,6 +3,7 @@ import type { ServerConfig } from '@silverhand/shared';
 import type { ScopeEventBus } from './ws/scope-event-bus.js';
 import type { ConversationManager } from './conversation-manager.js';
 import type { AttachmentService } from './services/attachment-service.js';
+import type { AgentService } from './services/agent-service.js';
 import type { ChannelService } from './services/channel-service.js';
 import type { ConversationMessageService } from './services/conversation-message-service.js';
 import type { ScheduleService } from './services/schedule-service.js';
@@ -70,6 +71,10 @@ export interface BackendContext {
   /** Application layer over `blobStorage` that knows about channels,
    *  threads, message snapshots, and access policy. */
   attachmentService: AttachmentService;
+  /** Application layer that owns the agent avatar blob lifecycle
+   *  (write/clear/serve). Mirrors `userService` but scoped to
+   *  `agents.avatar_storage_key` / `avatar_content_type`. */
+  agentService: AgentService;
   /** Application layer that owns user profile reads / updates / avatar
    *  blob lifecycle. Backed by `UserRepo` + `BlobFileStorage`. */
   userService: UserService;

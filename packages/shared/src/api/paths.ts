@@ -12,6 +12,13 @@ export const apiPaths = {
   agentRuntimeState: (id: string) => `/api/agents/${id}/runtime-state`,
   agentStop: (id: string) => `/api/agents/${id}/stop`,
   agentDeleteImpact: (id: string) => `/api/agents/${id}/delete-impact`,
+  /** Public avatar fetch for any agent. Returns the blob bytes with a
+   *  long immutable Cache-Control header (cache-busted via the
+   *  `?v=updated_at` query param baked into `AgentDto.avatar_url`).
+   *  Read gate matches `GET /api/agents/:id` (authed + agent exists);
+   *  write gates (POST/DELETE) are creator-only via `canEditAgent`.
+   *  Returns 404 when the agent has no avatar set. */
+  agentAvatar: (id: string) => `/api/agents/${id}/avatar`,
   /** Per-agent schedule list for the user-facing Agent panel. Backed by
    *  `ScheduleService.list` — same data the agent sees via the MCP
    *  `list_schedules` tool, but reachable from the host UI without an
@@ -218,6 +225,17 @@ export const internalPaths = {
    *  either a local path (zero-copy) or a download URL. */
   agentLocateAttachment: (cid: string, aid: string, attachmentId: string) =>
     `/internal/conversations/${cid}/agents/${aid}/attachments/${attachmentId}/locate`,
+
+  /** Agent uploads its own avatar (multipart). Token middleware enforces
+   *  `principal.agentId === aid`, so the route is structurally self-only.
+   *  PR-2 mirrors the public `POST /api/agents/:id/avatar` write path
+   *  for the agent-self branch of `canEditAgent`. */
+  agentUploadAvatar: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/avatar`,
+  /** Agent clears its own avatar. Idempotent; returns the updated DTO.
+   *  Token middleware enforces self-only as above. */
+  agentDeleteAvatar: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/avatar`,
 
   /** Observability-only: CLI fire-and-forget upload of a pre-flight
    *  failure (parse / strict-flag / unknown-noun) that never reached

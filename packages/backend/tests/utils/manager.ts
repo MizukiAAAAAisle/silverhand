@@ -16,6 +16,7 @@ import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { ConversationManager } from '../../src/conversation-manager.js';
 import { AttachmentService } from '../../src/services/attachment-service.js';
+import { AgentService } from '../../src/services/agent-service.js';
 import { ChannelService } from '../../src/services/channel-service.js';
 import { ConversationMessageService } from '../../src/services/conversation-message-service.js';
 import { ScheduleService } from '../../src/services/schedule-service.js';
@@ -145,6 +146,10 @@ export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {})
     users: new UserRepo(db),
     blobStorage,
   });
+  const agentService = new AgentService({
+    agents: new AgentRepo(db),
+    blobStorage,
+  });
 
   const ctx: BackendContext = {
     db,
@@ -156,6 +161,7 @@ export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {})
     logDir: opts.logDir,
     blobStorage,
     attachmentService,
+    agentService,
     userService,
     channelService: undefined as unknown as ChannelService,
     conversationMessageService: undefined as unknown as ConversationMessageService,

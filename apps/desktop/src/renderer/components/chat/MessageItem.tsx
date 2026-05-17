@@ -65,6 +65,11 @@ interface MessageItemProps {
    *  parent pane so a single fetch drives every message render in the
    *  list. Resolved by `useViewerAvatarObjectUrl`. */
   viewerAvatarObjectUrl?: string | null;
+  /** Object-URL map keyed by agent id. The parent pane runs a single
+   *  `useAgentAvatarObjectUrls` over the workspace agent list so every
+   *  authored message reuses the same blob URL instead of N independent
+   *  fetches. Missing entries / `null` fall back to the runtime icon. */
+  agentAvatarUrls?: Map<string, string | null>;
   /** Persistently render the hover frame around this row — used by the
    *  parent pane to mark "the message a thread is anchored to" while
    *  the thread pane is open. Doesn't expose the action bar, since the
@@ -115,6 +120,7 @@ export function MessageItem({
   saved = false,
   highlighted = false,
   viewerAvatarObjectUrl = null,
+  agentAvatarUrls,
 }: MessageItemProps): JSX.Element {
   const isUser = message.from_kind === 'user';
   const isCurrentUser = isUser && isCurrentUserId(message.from_user_id);
@@ -179,6 +185,9 @@ export function MessageItem({
         isCurrentUser={isCurrentUser}
         viewerAvatarObjectUrl={viewerAvatarObjectUrl}
         agent={agent}
+        agentAvatarObjectUrl={
+          agent ? agentAvatarUrls?.get(agent.id) ?? null : null
+        }
         conversationId={conversationId}
         routeKind={routeKind}
         onNavigateAgent={navigateToAgent}
@@ -414,6 +423,7 @@ function Avatar({
   isCurrentUser,
   viewerAvatarObjectUrl,
   agent,
+  agentAvatarObjectUrl,
   conversationId,
   routeKind,
   onNavigateAgent,
@@ -425,6 +435,10 @@ function Avatar({
   isCurrentUser: boolean;
   viewerAvatarObjectUrl: string | null;
   agent: AgentDto | undefined;
+  /** This message's authoring-agent avatar object URL, looked up by the
+   *  parent from the workspace-wide `agentAvatarUrls` map. `null` falls
+   *  back to the runtime icon. */
+  agentAvatarObjectUrl: string | null;
   conversationId: string;
   routeKind: 'channel' | 'thread';
   onNavigateAgent: (agentId: string) => void;
@@ -471,7 +485,12 @@ function Avatar({
           }}
           className="mt-0.5 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
         >
-          <AgentAvatar runtime={agent.runtime} size={32} />
+          <AgentAvatar
+            runtime={agent.runtime}
+            size={32}
+            avatarObjectUrl={agentAvatarObjectUrl}
+            alt={agent.display_name || agent.name}
+          />
         </button>
       </AgentInfoPopover>
     );

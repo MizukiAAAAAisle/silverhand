@@ -1,6 +1,7 @@
 import { Plus, User } from 'lucide-react';
 import { useState } from 'react';
 import { useAgents } from '@/features/agents/hooks';
+import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { CreateAgentDialog } from '@/features/agents/CreateAgentDialog';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { Button } from '@/components/ui/button';
@@ -22,6 +23,7 @@ export function MembersPanel({
 }: MembersPanelProps): JSX.Element {
   const [open, setOpen] = useState(false);
   const { data: agents = [] } = useAgents();
+  const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
 
   return (
     <>
@@ -47,7 +49,14 @@ export function MembersPanel({
           agents.map(a => (
             <SidebarRow
               key={a.id}
-              icon={<AgentAvatar runtime={a.runtime} size={20} />}
+              icon={
+                <AgentAvatar
+                  runtime={a.runtime}
+                  size={20}
+                  avatarObjectUrl={agentAvatarUrls.get(a.id) ?? null}
+                  alt={a.display_name || a.name}
+                />
+              }
               title={a.display_name || a.name}
               subtitle={a.runtime}
               status="idle"

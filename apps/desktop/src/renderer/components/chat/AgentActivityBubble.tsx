@@ -39,6 +39,9 @@ interface AgentActivityStripProps {
   /** Resolved from agentsById — may be absent if the agent list hasn't
    *  loaded yet (renders a generic placeholder in that case). */
   agentsById: Map<string, AgentDto>;
+  /** Object-URL map keyed by agent id. Owned by the parent (ChannelView)
+   *  so a single batch hook drives every activity row's avatar. */
+  agentAvatarUrls?: Map<string, string | null>;
   anchorMessageId: string | null;
   onJumpToAnchor: () => void;
 }
@@ -51,6 +54,7 @@ interface AgentActivityStripProps {
 export function AgentActivityStrip({
   states,
   agentsById,
+  agentAvatarUrls,
   anchorMessageId,
   onJumpToAnchor,
 }: AgentActivityStripProps): JSX.Element {
@@ -64,6 +68,7 @@ export function AgentActivityStrip({
             key={state.runId}
             state={state}
             agent={agentsById.get(state.agentId)}
+            avatarObjectUrl={agentAvatarUrls?.get(state.agentId) ?? null}
             anchorMessageId={anchorMessageId}
             onJumpToAnchor={onJumpToAnchor}
           />
@@ -76,11 +81,13 @@ export function AgentActivityStrip({
 function AgentActivityRow({
   state,
   agent,
+  avatarObjectUrl,
   anchorMessageId,
   onJumpToAnchor,
 }: {
   state: AgentRunState;
   agent: AgentDto | undefined;
+  avatarObjectUrl: string | null;
   anchorMessageId: string | null;
   onJumpToAnchor: () => void;
 }): JSX.Element {
@@ -128,7 +135,12 @@ function AgentActivityRow({
       }
     >
       <span className="pt-0.5">
-        <AgentAvatar runtime={runtime} size={16} />
+        <AgentAvatar
+          runtime={runtime}
+          size={16}
+          avatarObjectUrl={avatarObjectUrl}
+          alt={agent?.display_name || agent?.name}
+        />
       </span>
       <span className="min-w-0 flex-1 space-y-1">
         <span className="flex min-w-0 items-center gap-1.5 leading-5">

@@ -34,6 +34,7 @@ import { ScheduleRepo } from './repos/schedule-repo.js';
 import { SettingsRepo } from './repos/settings-repo.js';
 import { WorkspaceRepo } from './repos/workspace-repo.js';
 import { AttachmentService } from './services/attachment-service.js';
+import { AgentService } from './services/agent-service.js';
 import { ChannelService } from './services/channel-service.js';
 import { ConversationMessageService } from './services/conversation-message-service.js';
 import { ScheduleService } from './services/schedule-service.js';
@@ -96,6 +97,11 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     blobStorage,
   });
 
+  const agentService = new AgentService({
+    agents: new AgentRepo(db),
+    blobStorage,
+  });
+
   const ctx: BackendContext = {
     db,
     serverConfig: opts.serverConfig,
@@ -106,6 +112,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     logDir: opts.logDir,
     blobStorage,
     attachmentService,
+    agentService,
     userService,
     channelService: undefined as unknown as ChannelService,
     conversationMessageService: undefined as unknown as ConversationMessageService,

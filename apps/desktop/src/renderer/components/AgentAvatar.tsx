@@ -10,6 +10,24 @@ interface AgentAvatarProps {
   rounded?: 'full' | 'md';
   className?: string;
   title?: string;
+  /**
+   * When provided and non-null, render the bytes as the avatar image
+   * (rounded to the same silhouette as the runtime fallback). When
+   * null/undefined, render the runtime icon. The URL is expected to
+   * be an `URL.createObjectURL(...)` result owned by the caller —
+   * this component never fetches or revokes it.
+   *
+   * Wiring rationale: avoiding internal fetches here is a firm PR-2
+   * constraint. The same agent rendered in 100 message rows would
+   * otherwise trigger 100 fetches and 100 object URL allocations;
+   * the parent uses `useAgentAvatarObjectUrl` (single) or
+   * `useAgentAvatarObjectUrls` (batch) and threads the resolved URL
+   * down as a prop.
+   */
+  avatarObjectUrl?: string | null;
+  /** Alt text rendered when an avatar image is shown. Falls back to
+   *  the agent display_name or runtime name. */
+  alt?: string;
 }
 
 const ICONS: Record<
@@ -38,7 +56,33 @@ export function AgentAvatar({
   rounded = 'full',
   className,
   title,
+  avatarObjectUrl,
+  alt,
 }: AgentAvatarProps): JSX.Element {
+  // When an uploaded avatar URL is available, render the image and
+  // skip the runtime tint — the bytes already encode the agent's
+  // identity so the brand-color frame would be visual noise.
+  if (avatarObjectUrl) {
+    return (
+      <span
+        className={cn(
+          'inline-flex shrink-0 items-center justify-center overflow-hidden bg-bg-muted',
+          rounded === 'full' ? 'rounded-full' : 'rounded-md',
+          className,
+        )}
+        style={{ width: size, height: size }}
+        title={title}
+      >
+        <img
+          src={avatarObjectUrl}
+          alt={alt ?? title ?? `${runtime} avatar`}
+          className="h-full w-full object-cover"
+          draggable={false}
+        />
+      </span>
+    );
+  }
+
   const Icon = ICONS[runtime];
   const tint = TINTS[runtime];
   const inner = Math.round(size * 0.6);

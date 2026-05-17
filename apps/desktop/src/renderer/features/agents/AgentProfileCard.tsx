@@ -19,6 +19,7 @@ import type {
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { cn } from '@/lib/cn';
 import { useUpdateAgent } from './hooks';
+import { useAgentAvatarObjectUrl } from './avatar-hooks';
 
 const RUNTIMES: { value: RuntimeKind; label: string }[] = [
   { value: 'claude', label: 'Claude Code' },
@@ -64,6 +65,7 @@ export function AgentProfileCard({
   runtimeState,
 }: AgentProfileCardProps): JSX.Element {
   const update = useUpdateAgent(agent.id);
+  const avatarObjectUrl = useAgentAvatarObjectUrl(agent.avatar_url);
 
   // Local drafts; commit on blur for text fields, immediately for selects.
   // Avoids fighting React Query's optimistic re-renders if the user types
@@ -115,7 +117,12 @@ export function AgentProfileCard({
       {/* Identity strip — large avatar paired with display name + handle.
         * Reads as a profile masthead rather than a labeled form row. */}
       <section className="flex items-center gap-4">
-        <AgentAvatar runtime={agent.runtime} size={56} />
+        <AgentAvatar
+          runtime={agent.runtime}
+          size={56}
+          avatarObjectUrl={avatarObjectUrl}
+          alt={agent.display_name || agent.name}
+        />
         <div className="min-w-0 flex-1">
           <GhostInput
             value={displayName}

@@ -6,6 +6,7 @@ import type { AgentDto, AgentRuntimeStateDto } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { Button } from '@/components/ui/button';
 import { useStopAgent } from './hooks';
+import { useAgentAvatarObjectUrl } from './avatar-hooks';
 import { DeleteAgentDialog } from './DeleteAgentDialog';
 
 dayjs.extend(relativeTime);
@@ -23,6 +24,7 @@ export function AgentHeader({
 }: AgentHeaderProps): JSX.Element {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const stopAgent = useStopAgent(agent.id);
+  const avatarObjectUrl = useAgentAvatarObjectUrl(agent.avatar_url);
   const running = (runtimeState?.conversation_agents ?? []).filter(
     s => s.status === 'starting' || s.status === 'active',
   );
@@ -30,7 +32,12 @@ export function AgentHeader({
 
   return (
     <header className="flex shrink-0 items-start gap-4 border-b border-border-subtle bg-bg-floating px-6 py-4">
-      <AgentAvatar runtime={agent.runtime} size={48} />
+      <AgentAvatar
+        runtime={agent.runtime}
+        size={48}
+        avatarObjectUrl={avatarObjectUrl}
+        alt={agent.display_name || agent.name}
+      />
 
       <div className="min-w-0 flex-1">
         <h1 className="truncate font-serif text-lg font-semibold text-text-primary">

@@ -103,6 +103,7 @@ import {
   type ScheduleErrorCode,
 } from './services/schedule-service.js';
 import { UserServiceError } from './services/user-service.js';
+import { AgentServiceError } from './services/agent-service.js';
 import { MembershipService } from './services/membership-service.js';
 import { UserRepo } from './repos/user-repo.js';
 import {
@@ -292,6 +293,30 @@ function userServiceErrorStatus(err: unknown): 400 | 404 | 409 | 413 | 415 | nul
 
 function userServiceErrorBody(err: unknown): { error: string; code: string } {
   if (err instanceof UserServiceError) {
+    return { error: err.message, code: err.code };
+  }
+  return { error: String(err), code: 'unknown_error' };
+}
+
+const agentServiceErrorStatusMap: Partial<
+  Record<AgentServiceError['code'], 400 | 404 | 413 | 415>
+> = {
+  agent_not_found: 404,
+  avatar_missing: 400,
+  avatar_too_large: 413,
+  avatar_unsupported_type: 415,
+  avatar_storage_failed: 400,
+};
+
+function agentServiceErrorStatus(err: unknown): 400 | 404 | 413 | 415 | null {
+  if (err instanceof AgentServiceError) {
+    return agentServiceErrorStatusMap[err.code] ?? 400;
+  }
+  return null;
+}
+
+function agentServiceErrorBody(err: unknown): { error: string; code: string } {
+  if (err instanceof AgentServiceError) {
     return { error: err.message, code: err.code };
   }
   return { error: String(err), code: 'unknown_error' };
@@ -1972,6 +1997,81 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     }
     const updated = agents.update(id, parsed.data);
     return c.json({ agent: updated });
+  });
+
+  // Public avatar lifecycle. Mirrors `/api/me/avatar` but keyed by
+  // agent id and gated by the v26 `canEditAgent` predicate (creator
+  // user ∨ system on the public surface; agent-self is reachable only
+  // via the internal route below). v1 single-human installs see this
+  // as viewer-only; v2 multi-human deployments deny non-creator humans
+  // even when they share the workspace.
+  //
+  // Read gate: any logged-in viewer who reaches the existing
+  // `GET /api/agents/:id` can also fetch the avatar — there is no
+  // hidden-profile concept in v1 (matches `GET /api/users/:id/avatar`).
+  app.post(apiPaths.agentAvatar(':id'), async c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'agent id required' }, 400);
+    if (!agents.get(id)) return c.json({ error: 'agent not found' }, 404);
+    if (!canEditAgent(ctx, getUserPrincipal(c), id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    let form: FormData;
+    try {
+      form = await c.req.formData();
+    } catch {
+      return c.json({ error: 'multipart/form-data required' }, 400);
+    }
+    const file = form.get('file');
+    if (!(file instanceof File)) {
+      return c.json({ error: 'file field required' }, 400);
+    }
+    const buffer = Buffer.from(await file.arrayBuffer());
+    try {
+      const dto = await ctx.agentService.uploadAvatar(id, {
+        buffer,
+        contentType: file.type || 'application/octet-stream',
+        filename: file.name || 'avatar',
+      });
+      return c.json({ avatar_url: dto.avatar_url, agent: dto });
+    } catch (err) {
+      const status = agentServiceErrorStatus(err);
+      if (status) return c.json(agentServiceErrorBody(err), status);
+      throw err;
+    }
+  });
+
+  app.delete(apiPaths.agentAvatar(':id'), async c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'agent id required' }, 400);
+    if (!agents.get(id)) return c.json({ error: 'agent not found' }, 404);
+    if (!canEditAgent(ctx, getUserPrincipal(c), id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    try {
+      const dto = await ctx.agentService.clearAvatar(id);
+      return c.json({ agent: dto });
+    } catch (err) {
+      const status = agentServiceErrorStatus(err);
+      if (status) return c.json(agentServiceErrorBody(err), status);
+      throw err;
+    }
+  });
+
+  // Public-by-id avatar fetch. Read gate matches GET /api/agents/:id
+  // (authed + agent exists). Returns 404 when the agent has no avatar
+  // — the renderer's `useAgentAvatarObjectUrls` hook treats 404 as
+  // "fall back to the runtime icon".
+  app.get(apiPaths.agentAvatar(':id'), async c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'agent id required' }, 400);
+    if (!agents.get(id)) return c.json({ error: 'agent not found' }, 404);
+    const ref = ctx.agentService.getAvatarStorageRef(id);
+    if (!ref) return c.json({ error: 'avatar not found' }, 404);
+    return ctx.blobStorage.serve(
+      { storage: ctx.blobStorage.kind, storageKey: ref.storageKey },
+      { contentType: ref.contentType, filename: ref.filename },
+    );
   });
 
   app.get('/api/agents/:id/workspace', async c => {
@@ -3834,6 +3934,79 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
       return c.json(located.locate);
     },
   );
+
+  // ── Agent self-edit avatar (silverhand CLI → backend) ────────────
+  // The agent token middleware already enforces `principal.agentId ===
+  // :aid`, so the URL pin alone makes this self-only. `canEditAgent`
+  // is called as a defensive double-check (mirrors the public route)
+  // and to keep the agent-self branch of the predicate exercised by
+  // tests instead of dead code.
+  //
+  // Only the avatar is exposed here — display_name / description /
+  // runtime / reasoning_effort / fast_mode self-edit is **not**
+  // covered by PR-2. Cross-creator profile edits go through the
+  // public `PATCH /api/agents/:id` (creator-only); agent self-edit
+  // for those fields is a future internal route, not implied by this
+  // PR.
+
+  app.post(internalPaths.agentUploadAvatar(':cid', ':aid'), async c => {
+    const cid = c.req.param('cid');
+    const aid = c.req.param('aid');
+    if (!cid || !aid) {
+      return c.json({ error: 'conversation id and agent id required' }, 400);
+    }
+    if (!conversations.get(cid)) return c.json({ error: 'conversation not found' }, 404);
+    if (!agents.get(aid)) return c.json({ error: 'agent not found' }, 404);
+    const principal = getAgentPrincipal(c);
+    if (!canEditAgent(ctx, principal, aid)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    let form: FormData;
+    try {
+      form = await c.req.formData();
+    } catch {
+      return c.json({ error: 'multipart/form-data required' }, 400);
+    }
+    const file = form.get('file');
+    if (!(file instanceof File)) {
+      return c.json({ error: 'file field required' }, 400);
+    }
+    const buffer = Buffer.from(await file.arrayBuffer());
+    try {
+      const dto = await ctx.agentService.uploadAvatar(aid, {
+        buffer,
+        contentType: file.type || 'application/octet-stream',
+        filename: file.name || 'avatar',
+      });
+      return c.json({ avatar_url: dto.avatar_url, agent: dto });
+    } catch (err) {
+      const status = agentServiceErrorStatus(err);
+      if (status) return c.json(agentServiceErrorBody(err), status);
+      throw err;
+    }
+  });
+
+  app.delete(internalPaths.agentDeleteAvatar(':cid', ':aid'), async c => {
+    const cid = c.req.param('cid');
+    const aid = c.req.param('aid');
+    if (!cid || !aid) {
+      return c.json({ error: 'conversation id and agent id required' }, 400);
+    }
+    if (!conversations.get(cid)) return c.json({ error: 'conversation not found' }, 404);
+    if (!agents.get(aid)) return c.json({ error: 'agent not found' }, 404);
+    const principal = getAgentPrincipal(c);
+    if (!canEditAgent(ctx, principal, aid)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    try {
+      const dto = await ctx.agentService.clearAvatar(aid);
+      return c.json({ agent: dto });
+    } catch (err) {
+      const status = agentServiceErrorStatus(err);
+      if (status) return c.json(agentServiceErrorBody(err), status);
+      throw err;
+    }
+  });
 
   // ── Agent-owned schedules (silverhand CLI → backend) ──────────────
   // Per-agent surface — no channel/thread coupling. The route still

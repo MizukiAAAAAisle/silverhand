@@ -13,6 +13,7 @@ import type { AgentDto } from '@silverhand/shared';
 import { Button } from '@/components/ui/button';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { useAgents } from '@/features/agents/hooks';
+import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useWorkspaces, type WorkspaceListItem } from '@/features/workspaces/hooks';
 import { useSendMessage } from '@/features/channels/hooks';
 import {
@@ -223,6 +224,7 @@ export function Composer({
   }, [conversationId, routeKind]);
 
   const { data: agents = [] } = useAgents();
+  const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
   const { data: workspaces = [] } = useWorkspaces();
 
   const trigger = useMemo(
@@ -514,6 +516,7 @@ export function Composer({
             active={active}
             onPick={insertPick}
             onHover={setActive}
+            agentAvatarUrls={agentAvatarUrls}
           />
         ) : null}
         <textarea
@@ -739,11 +742,13 @@ function PickerMenu({
   active,
   onPick,
   onHover,
+  agentAvatarUrls,
 }: {
   items: PickerItem[];
   active: number;
   onPick: (item: PickerItem) => void;
   onHover: (index: number) => void;
+  agentAvatarUrls: Map<string, string | null>;
 }): JSX.Element {
   return (
     <div
@@ -762,6 +767,11 @@ function PickerMenu({
           active={i === active}
           onPick={() => onPick(item)}
           onHover={() => onHover(i)}
+          agentAvatarUrl={
+            item.kind === 'agent'
+              ? agentAvatarUrls.get(item.agent.id) ?? null
+              : null
+          }
         />
       ))}
     </div>
@@ -773,11 +783,13 @@ function Row({
   active,
   onPick,
   onHover,
+  agentAvatarUrl,
 }: {
   item: PickerItem;
   active: boolean;
   onPick: () => void;
   onHover: () => void;
+  agentAvatarUrl: string | null;
 }): JSX.Element {
   const cls =
     'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-left ' +
@@ -793,7 +805,12 @@ function Row({
     >
       {item.kind === 'agent' ? (
         <>
-          <AgentAvatar runtime={item.agent.runtime} size={20} />
+          <AgentAvatar
+            runtime={item.agent.runtime}
+            size={20}
+            avatarObjectUrl={agentAvatarUrl}
+            alt={item.agent.display_name || item.agent.name}
+          />
           <span className="truncate font-medium">
             {item.agent.display_name?.trim() || item.agent.name}
           </span>

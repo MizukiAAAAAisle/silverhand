@@ -22,6 +22,7 @@ import { createApiRouter, createInternalRouter } from '../../src/routes.js';
 import type { ConversationManager } from '../../src/conversation-manager.js';
 import { AgentTokenStore } from '../../src/auth/agent-token-store.js';
 import { AttachmentService } from '../../src/services/attachment-service.js';
+import { AgentService } from '../../src/services/agent-service.js';
 import { ChannelService } from '../../src/services/channel-service.js';
 import { ConversationMessageService } from '../../src/services/conversation-message-service.js';
 import { ScheduleService } from '../../src/services/schedule-service.js';
@@ -175,6 +176,10 @@ export function buildTestApp(): TestApp {
     users: new UserRepo(db),
     blobStorage,
   });
+  const agentService = new AgentService({
+    agents: new AgentRepo(db),
+    blobStorage,
+  });
 
   const ctx: BackendContext = {
     db,
@@ -185,6 +190,7 @@ export function buildTestApp(): TestApp {
     workspacesRoot: tmp.workspacesRoot,
     blobStorage,
     attachmentService,
+    agentService,
     userService,
     channelService: undefined as unknown as ChannelService,
     conversationMessageService: undefined as unknown as ConversationMessageService,

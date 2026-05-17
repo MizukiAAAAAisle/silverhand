@@ -4,6 +4,7 @@ import * as Select from '@radix-ui/react-select';
 import { ChevronDown, Trash2, UserPlus } from 'lucide-react';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { useAgents } from '@/features/agents/hooks';
+import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import {
   useAddWorkspaceMember,
   useWorkspaceMembers,
@@ -52,6 +53,7 @@ export function ManageMembersPopover({
 function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
   const { data: members = [], isLoading: membersLoading } =
     useWorkspaceMembers(workspaceId);
+  const memberAvatarUrls = useAgentAvatarObjectUrls(members);
   const { data: agents = [] } = useAgents();
   const addMember = useAddWorkspaceMember(workspaceId);
   const removeMember = useRemoveWorkspaceMember(workspaceId);
@@ -144,7 +146,12 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
                 key={m.id}
                 className="flex items-center gap-2 rounded-md border border-border-subtle bg-bg-base px-2 py-1"
               >
-                <AgentAvatar runtime={m.runtime} size={20} />
+                <AgentAvatar
+                  runtime={m.runtime}
+                  size={20}
+                  avatarObjectUrl={memberAvatarUrls.get(m.id) ?? null}
+                  alt={m.display_name || m.name}
+                />
                 <span className="text-sm font-medium text-text-primary">
                   @{m.name}
                 </span>

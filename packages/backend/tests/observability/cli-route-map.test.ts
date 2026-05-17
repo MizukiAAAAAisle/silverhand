@@ -8,9 +8,10 @@
  *      verb, the test points at the orphan immediately.
  *
  *   2. Every internal route defined in `internalPaths` (minus the
- *      observability-only `agentCliTrace`) has a `CLI_INVOKE_ROUTES`
- *      entry. Adding a new route without registering it would silently
- *      drop it from `cli-*.log`.
+ *      observability-only `agentCliTrace` and the profile-self avatar
+ *      routes that are intentionally not CLI commands) has a
+ *      `CLI_INVOKE_ROUTES` entry. Adding a new route without
+ *      registering it would silently drop it from `cli-*.log`.
  *
  *   3. The HTTP method declared in `CLI_INVOKE_ROUTES` matches the
  *      method `routes.ts` actually registers each `internalPaths` helper
@@ -36,6 +37,22 @@ import {
   CLI_INVOKE_ROUTES,
   lookupCliRoute,
 } from '../../src/observability/cli-route-map.js';
+
+/**
+ * Internal routes intentionally excluded from CLI invoke
+ * accounting:
+ *   - `agentCliTrace`: observability-only fire-and-forget endpoint;
+ *     logged as `cli.preflight_failure` instead.
+ *   - `agentUploadAvatar` / `agentDeleteAvatar`: profile-self avatar
+ *     edit. Forward-compat for the `canEditAgent` agent-self branch
+ *     — these are NOT exposed as `silverhand <noun> <verb>` commands
+ *     in v1, so they have no CLI invoke surface to log against.
+ */
+const NON_CLI_INTERNAL_ROUTES = new Set([
+  'agentCliTrace',
+  'agentUploadAvatar',
+  'agentDeleteAvatar',
+]);
 
 const KNOWN_VERBS = new Set<string>();
 for (const g of COMMAND_GROUPS) {
@@ -93,9 +110,10 @@ describe('CLI invoke route map', () => {
 
   it('covers every internal agent route exposed by internalPaths, with the registered HTTP method', () => {
     // Build the universe of suffixes from `internalPaths` (minus the
-    // observability-only `agentCliTrace`, which is logged separately).
+    // observability-only `agentCliTrace` and the avatar self-edit
+    // routes that are intentionally not CLI commands).
     const builders = Object.entries(internalPaths).filter(
-      ([name]) => name !== 'agentCliTrace',
+      ([name]) => !NON_CLI_INTERNAL_ROUTES.has(name),
     );
     const registered = buildRegistrationMap();
     for (const [name, fn] of builders) {
@@ -134,7 +152,7 @@ describe('CLI invoke route map', () => {
     // then start logging None.None for that endpoint).
     const registered = buildRegistrationMap();
     const builders = Object.entries(internalPaths).filter(
-      ([name]) => name !== 'agentCliTrace',
+      ([name]) => !NON_CLI_INTERNAL_ROUTES.has(name),
     );
     const suffixToName = new Map<string, string>();
     for (const [name, fn] of builders) {

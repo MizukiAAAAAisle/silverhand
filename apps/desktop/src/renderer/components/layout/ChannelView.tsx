@@ -48,6 +48,7 @@ import {
   AppDropdownMenuItem,
 } from '@/components/menus/AppContextMenu';
 import { useAgents } from '@/features/agents/hooks';
+import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import {
   useWorkspaces,
   useChannelsForWorkspace,
@@ -226,6 +227,11 @@ function ActiveChannelView({
     [runStates],
   );
   const { data: agents = [] } = useAgents();
+  // Single batch fetch for every agent avatar in this channel — threaded
+  // down to MemberStrip, MessageList (→ MessageItem authors), and the
+  // AgentActivityStrip so the same blob URL is reused everywhere instead
+  // of three independent hook instances each firing the same network calls.
+  const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
   const activityAgentsById = useMemo(() => {
     const m = new Map<string, AgentDto>();
     for (const agent of agents) m.set(agent.id, agent);
@@ -279,6 +285,7 @@ function ActiveChannelView({
       channelId={conversation.id}
       routeKind={routeKind}
       conversationAgents={channelAgents}
+      agentAvatarUrls={agentAvatarUrls}
     />
   );
 
@@ -512,6 +519,7 @@ function ActiveChannelView({
           hasMoreBefore={!!hasPreviousPage}
           isFetchingEarlier={isFetchingPreviousPage}
           onLoadEarlier={loadEarlierMessages}
+          agentAvatarUrls={agentAvatarUrls}
           leadingSlot={
             anchor ? (
               <QuotedMessagePreview
@@ -540,6 +548,7 @@ function ActiveChannelView({
           <AgentActivityStrip
             states={activeRunStates}
             agentsById={activityAgentsById}
+            agentAvatarUrls={agentAvatarUrls}
             anchorMessageId={activityAnchorMessageId}
             onJumpToAnchor={() => {
               if (activityAnchorMessageId) {
@@ -574,10 +583,12 @@ function MemberStrip({
   channelId,
   routeKind,
   conversationAgents,
+  agentAvatarUrls,
 }: {
   channelId: string;
   routeKind: 'channel' | 'thread';
   conversationAgents: ConversationAgentDto[];
+  agentAvatarUrls: Map<string, string | null>;
 }): JSX.Element {
   const { data: agents = [] } = useAgents();
   const agentById = useMemo(() => {
@@ -656,7 +667,12 @@ function MemberStrip({
                 data-member-id={member.agent_id}
                 className="relative rounded-full border border-[#9ca3af] bg-bg-floating p-px shadow-sm transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
               >
-                <AgentAvatar runtime={agent.runtime} size={22} />
+                <AgentAvatar
+                  runtime={agent.runtime}
+                  size={22}
+                  avatarObjectUrl={agentAvatarUrls.get(agent.id) ?? null}
+                  alt={agent.display_name || agent.name}
+                />
                 <span
                   className={
                     'absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full border border-bg-floating shadow-sm '
@@ -816,6 +832,7 @@ function MessageList({
   hasMoreBefore,
   isFetchingEarlier,
   onLoadEarlier,
+  agentAvatarUrls,
   leadingSlot,
   highlightedMessageId,
   jumpToMessageId,
@@ -835,6 +852,10 @@ function MessageList({
   hasMoreBefore: boolean;
   isFetchingEarlier: boolean;
   onLoadEarlier: () => void;
+  /** Map of agent id → avatar object URL. Lifted into ActiveChannelView
+   *  so message authors, member chips, and the activity strip share a
+   *  single batch fetch instead of three independent ones. */
+  agentAvatarUrls: Map<string, string | null>;
   leadingSlot?: ReactNode;
   highlightedMessageId?: string | null;
   jumpToMessageId: string | null;
@@ -1197,6 +1218,7 @@ function MessageList({
                     onStartThread={onThreadCreated ? handleStartThread : undefined}
                     threadReplyCount={threadByAnchor?.get(m.id)?.reply_count}
                     viewerAvatarObjectUrl={viewerAvatarObjectUrl}
+                    agentAvatarUrls={agentAvatarUrls}
                     highlighted={
                       highlightedMessageId != null &&
                       m.id === highlightedMessageId

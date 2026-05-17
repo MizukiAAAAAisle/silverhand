@@ -1,14 +1,15 @@
 import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
-import type {
-  AgentDto,
-  AgentRow,
-  AgentRuntimeConversation,
-  ConversationAgentStatus,
-  ConversationKind,
-  CreateAgentInput,
-  UpdateAgentInput,
-  WorkspaceKind,
+import {
+  apiPaths,
+  type AgentDto,
+  type AgentRow,
+  type AgentRuntimeConversation,
+  type ConversationAgentStatus,
+  type ConversationKind,
+  type CreateAgentInput,
+  type UpdateAgentInput,
+  type WorkspaceKind,
 } from '@silverhand/shared';
 
 function newId(): string {
@@ -30,11 +31,13 @@ export function agentRowToDto(row: AgentRow): AgentDto {
     host_id: row.host_id,
     description: row.description,
     created_by_user_id: row.created_by_user_id,
-    // PR-1 always emits null. PR-2 flips this on once the
-    // /api/agents/:id/avatar route + AgentService.uploadAvatar land
-    // (will mirror UserService: `${apiPaths.agentAvatar(id)}?v=${updated_at}`
-    // when avatar_storage_key is non-null).
-    avatar_url: null,
+    // Mirror UserDto: present when the row has an avatar blob set;
+    // cache-busted via `updated_at` so the renderer's HTTP cache
+    // refreshes whenever AgentService.uploadAvatar / clearAvatar runs
+    // (both bump updated_at via `setAvatar`/`clearAvatar`).
+    avatar_url: row.avatar_storage_key
+      ? `${apiPaths.agentAvatar(row.id)}?v=${row.updated_at}`
+      : null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -155,6 +158,59 @@ export class AgentRepo {
 
   delete(id: string): void {
     this.db.prepare('DELETE FROM agents WHERE id = ?').run(id);
+  }
+
+  /**
+   * Set avatar storage_key + content_type as a unit. Caller (the
+   * AgentService) must have already persisted the blob via
+   * `BlobFileStorage.put`. Mirrors `UserRepo.setAvatar`. Returns the
+   * updated row, or null when the agent does not exist.
+   *
+   * Both columns are written together so the v26 CHECK pair
+   * (`(key NULL AND ct NULL) OR (key NOT NULL AND ct NOT NULL)`)
+   * holds across every commit boundary.
+   */
+  setAvatar(
+    id: string,
+    avatar: { storageKey: string; contentType: string },
+  ): AgentDto | null {
+    if (!this.get(id)) return null;
+    this.db
+      .prepare(
+        `UPDATE agents
+            SET avatar_storage_key = ?,
+                avatar_content_type = ?,
+                updated_at = ?
+          WHERE id = ?`,
+      )
+      .run(avatar.storageKey, avatar.contentType, Date.now(), id);
+    return this.get(id);
+  }
+
+  /** Clear avatar (both storage_key + content_type to NULL together).
+   *  Mirrors `UserRepo.clearAvatar`. */
+  clearAvatar(id: string): AgentDto | null {
+    if (!this.get(id)) return null;
+    this.db
+      .prepare(
+        `UPDATE agents
+            SET avatar_storage_key = NULL,
+                avatar_content_type = NULL,
+                updated_at = ?
+          WHERE id = ?`,
+      )
+      .run(Date.now(), id);
+    return this.get(id);
+  }
+
+  /** Read raw row including avatar storage fields. The DTO drops the
+   *  storage key (renderer fetches via `avatar_url`); routes that need
+   *  the key (avatar download / cleanup) call this. */
+  getRow(id: string): AgentRow | null {
+    const row = this.db
+      .prepare<[string], AgentRow>('SELECT * FROM agents WHERE id = ?')
+      .get(id);
+    return row ?? null;
   }
 
   /**
