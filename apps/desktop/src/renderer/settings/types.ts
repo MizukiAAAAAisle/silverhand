@@ -2,6 +2,7 @@ export const THEME_IDS = [
   'warm-coral',
   'paper-ink',
   'warm-script',
+  'forza6',
 ] as const;
 export type ThemeId = (typeof THEME_IDS)[number];
 

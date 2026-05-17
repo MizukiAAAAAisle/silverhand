@@ -135,4 +135,18 @@
 
   /* ── Chat default ── */
   --chat-font-size: 15px;
+
+  /* ── Compat: tokens introduced by forza6 (design-new-theme §3 关键 3 —
+     every theme MUST define these explicitly so a forza6 → paper-ink
+     switch doesn't leak the festival values). Paper-ink is a single-
+     accent, no-pattern, no-black-structure theme; the new tokens
+     degenerate onto existing siblings. ── */
+  --font-display: var(--font-sans);
+  --bg-pattern-image: none;
+  --bg-pattern-opacity: 0;
+  --accent-2: var(--accent);
+  --text-on-accent-2: var(--text-on-accent);
+  --bg-structure-dark: var(--text-primary);
+  --text-on-structure: var(--bg-base);
+  --text-on-dark-pop: var(--accent);
 }

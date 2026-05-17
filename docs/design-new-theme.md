@@ -100,6 +100,27 @@ electron/src/renderer/src/
 | `--border-task-tag` | task tag 描边 | 与 task tag 底色同族，提供边缘清晰度 |
 | `--sidebar-row-border-width` | Workspace / Channel / Search / Saved row 描边宽度 | 默认视觉标准 `2px`；paper-ink 这类淡墨晕 selected 可降到 `1px` |
 
+### 3.1.3 Forza6-introduced tokens (loud-festival theme family)
+
+新增于 forza6（festival-racing 主题）。**每个主题都必须显式定义这 8 个 token**——单 accent / 无纹理 / 无黑结构的主题可以全部退化成现有 sibling（见
+appearance.test.ts 锁定）。这是 §3.1 关键 3 的硬约束：不显式定义就会从 `:root` 默认主题（warm-script）漏过来，切到 forza6 再切回会出现"留下来的 forza6 三角纹理 / lime accent-2 / 黑结构条"等泄漏 bug。
+
+| Token | 用途 | 退化规则（warm/single-accent 主题） |
+|---|---|---|
+| `--font-display` | 重压窄体大写字体栈（chrome 标题、segment、status pill）| `var(--font-sans)` |
+| `--bg-pattern-image` | 持续在场的几何身份纹理（forza6 的三角 SVG data URL）| `none` |
+| `--bg-pattern-opacity` | 纹理强度 | `0` |
+| `--accent-2` | 第二 accent（forza6 用电青；info / 链接 / 3 档信息）| `var(--accent)` |
+| `--text-on-accent-2` | `--accent-2` 上的文字 | `var(--text-on-accent)` |
+| `--bg-structure-dark` | 黑色结构层（segment 容器 / member-strip / now-playing / titlebar tint / tool-card header / popover header / workspace-tile）| `var(--text-primary)`（浅色主题用 text-primary 当近黑）|
+| `--text-on-structure` | `--bg-structure-dark` 上的文字 | `var(--bg-base)` |
+| `--text-on-dark-pop` | 深底/黑结构上的荧光数字 metadata（currency / level / counter）| `var(--accent)`（浅色主题没有"深底荧光黄"，退化到 accent）|
+
+**`--bg-structure-dark` / `--text-on-dark-pop` 使用边界**（review-locked，
+不要泄漏成普通装饰色）：
+- `--bg-structure-dark` 仅承担**结构层**——容器、tab/segment 当前段、进度槽、卡片 header、titlebar tint、workspace-tile、NavRail dock notch。**禁止**做"任意按钮黑底"或"chat 主区分隔条"。
+- `--text-on-dark-pop` 仅在**深色 chrome 或黑结构**上用——currency / 等级 / 短 metadata 数字。**禁止**进入 `--bg-chat` 浅白读区，否则破坏阅读层级。
+
 ### 3.2 文字
 
 | Token | 用途 |

@@ -1,0 +1,248 @@
+/* ================================================================
+   Theme: Forza Horizon 6 — Festival Racing
+   Cool teal frame + hot magenta brand + acid lime accent + black
+   structural layer + fluorescent yellow metadata. See
+   docs/design-new-theme.md and docs/mockups/forza6-festival-mockup.html.
+
+   Personality (matches design-new-theme §4.1):
+   - Temperature: cool teal base + warm fluorescent accents (controlled clash).
+   - Accent volume: loud. Constraint is COVERAGE area, not per-pixel saturation;
+     chat read area stays cool-neutral white so long-stay reading isn't punished.
+   - Border strategy: color-block (almost no 1px hairlines). Separation comes
+     from saturation differences and the 8px frame gap, not strokes.
+   ================================================================ */
+
+[data-theme='forza6'] {
+  /* ── Backgrounds (cool-neutral ladder for chat read area) ── */
+  --bg-base: #F7F8F6;
+  --bg-primary: #ECEEEB;
+  --bg-elevated: #E5E8E4;
+  --bg-surface: #DDE0DC;
+  --bg-hover: #DAE0DA;
+  --bg-active: #C9D1C9;
+  /* Selected (NavRail icons / sidebar rows / segment current).
+     Magenta + near-black via `--text-on-brand` → 5.56:1 (AA, not AAA).
+     `--bg-selected` is intentionally aligned with `--bg-row-selected`
+     so NavRail (which reads `--bg-selected`) and sidebar row tokens
+     paint the same magenta selection wedge. */
+  --bg-selected: var(--brand-primary);
+  --bg-floating: #FFFFFF;
+  --bg-chat: #F7F8F6;
+
+  /* ── Card frame —
+     Hard chrome/read split: 8px frame padding exposes the deep teal
+     `--bg-app`, so the chat panel reads as a flat cool-white island
+     dropped onto the festival frame. */
+  --bg-app: #0F847B;
+  --frame-padding: 8px;
+  --card-radius: 6px;          /* tighter than warm 8px — Forza tile feel */
+  --card-shadow: 0 1px 2px rgba(var(--shadow-base), 0.06);
+  --splitter-bg: transparent;
+  --splitter-offset: calc((var(--frame-padding) + 4px) / -2);
+  --titlebar-border: transparent;
+
+  /* ── Brand (hot magenta) —
+     On-brand foregrounds are NEAR-BLACK, not white. White on `#FF2C7A`
+     is only 3.56:1 — fails WCAG AA for normal-weight text (sidebar row
+     names are 14px, see Sidebar.tsx:63 / ChannelsSidebar.tsx:254 /
+     WorkspacesPanel.tsx:163; bold doesn't elevate them to "large text"
+     either). Black on `#FF2C7A` ≈ 5.56:1 → AA pass (not AAA, which
+     needs ≥7:1), and aligns with the broader Forza on-color system
+     where neon-saturation surfaces pair with `#0A0A0A`. The "white
+     text on hot pink tile" we see in screenshots is for short heavy-
+     display-caps headlines; chat-app sidebar/CTA labels don't qualify.
+     Cindy review `jD0-Ik9O0c-QzuXd` blocker #1, AA/AAA correction in
+     `JzkPVNV3svN97WSR`. */
+  --brand-primary: #FF2C7A;
+  --text-on-brand: #0A0A0A;
+  --text-nav-rail: rgba(0, 0, 0, 0.78);
+  --text-nav-rail-hover: #0A0A0A;
+  --bg-nav-rail-hover: rgba(0, 0, 0, 0.14);
+  --bg-task-tag: var(--brand-primary);
+  --text-on-task-tag: var(--text-on-brand);
+  --border-task-tag: rgba(0, 0, 0, 0.18);
+  --sidebar-row-border-width: 2px;
+
+  /* ── Sidebar row state — hot magenta selected; lighter pink wash on hover ── */
+  --bg-row-selected: var(--brand-primary);
+  --bg-row-hover: color-mix(in oklab, var(--brand-primary) 22%, var(--bg-channels-sidebar));
+
+  /* ── Sidebar identity ladder —
+     PR-1 uses LIGHT pink-tinted sidebars so existing sidebar components
+     (Sidebar.tsx / ChannelsSidebar.tsx / WorkspacesPanel.tsx) reading
+     `text-text-secondary` / `text-text-muted` (which are dark in this
+     theme, tuned for the cool-white chat read area) stay readable.
+     The mockup's deep-teal sidebar lands in PR-2 alongside forza6-only
+     overrides on those components: deep-teal bg + light text +
+     structure-dark variant headers. Doing it now without component-
+     layer fg overrides produces ~1.5:1 sidebar text on dark teal — the
+     PR-1 review blocker Cindy flagged on `-a3eR3PFtTRqtVsq`. */
+  --bg-nav-rail: var(--brand-primary);
+  --bg-channels-sidebar: color-mix(in oklab, var(--brand-primary) 8%, var(--bg-base));
+  --bg-sessions-sidebar: color-mix(in oklab, var(--brand-primary) 4%, var(--bg-base));
+
+  /* ── Islands (code blocks) — deep teal-black HUD aesthetic ── */
+  --bg-island: #0F2F2C;
+  --bg-island-deep: #081E1B;
+
+  /* ── Text (cool-neutral on light, light on dark island) ── */
+  --text-primary: #0F1F1D;
+  --text-secondary: #4A5C58;
+  /* `--text-muted` must clear 4.5:1 on light bgs (design-new-theme §4.2).
+     `#7A8A86` was 3.39:1 on `--bg-base` and 3.10:1 on `--bg-primary` —
+     fails AA. `#5A6B67` clears 4.5:1 on both light surfaces and is
+     still distinct enough from `--text-primary`. Cindy review
+     `jD0-Ik9O0c-QzuXd` blocker #2. */
+  --text-muted: #5A6B67;
+  --text-inverse: #F7F8F6;
+  --text-island: #E8F1EF;
+  /* `--text-inline-code` is deep teal — distinct from `--accent` (deep
+     magenta) AND from `--text-primary` (near-black) by hue, so a long
+     code path / file name never reads like prose or a heading
+     (design-new-theme §7 three-color rule). MUST clear AA against the
+     inline-code chip background, NOT just `--bg-base`: the chip uses
+     `color-mix(text-primary 14%, bg-base)` (≈ `#D7DAD8`) per
+     `global.css:468-475`. `#0F847B` was 3.24:1 on the chip and failed.
+     `#095C56` is 5.57:1 on the chip → AA. Cindy review
+     `aVZH3CHe-XUrK77J` blocker #2. */
+  --text-inline-code: #095C56;
+
+  /* ── Accent —
+     Forza tokens have a dual-role tension: the bright neon palette
+     (lime / cyan / hot pink / yellow) reads as TILE SURFACE in the
+     screenshots, but existing components consume `--accent` as
+     FOREGROUND TEXT on light bg (`text-accent` is hardcoded on agent
+     names, task refs, search icons, status pills — see Cindy review
+     `JzkPVNV3svN97WSR`). Bright lime on cool-white reads at 1.17:1 —
+     unusable as text.
+
+     Resolution: `--accent` is a DEEP MAGENTA — a sister hue of brand-
+     primary (`#FF2C7A`) but darker (`#B3186A` ≈ 6.06:1 on `--bg-base`,
+     AA). It works as both foreground (`text-accent`) AND as surface
+     (`bg-accent` paired with white). The neon lime / yellow / cyan
+     keep their festival role via `--text-on-dark-pop`, future PR-2
+     `[data-theme='forza6']` component-layer specialization (progress
+     fills, focus rings, icon highlights), and `--accent-2` (cyan,
+     surface-only — see comment below). */
+  --accent: #B3186A;
+  --accent-soft: rgba(179, 24, 106, 0.14);
+  --accent-hover: #8E0F50;
+  --accent-glow: rgba(179, 24, 106, 0.30);
+
+  /* ── Semantic — deep-saturation variants of the festival palette so
+     `text-success` / `text-warning` / `text-error` clear AA on light
+     bg. The neon versions remain visible in PR-2 chrome surfaces under
+     forza6-only specialization (e.g., progress fill = bright lime,
+     warning HUD strip = bright yellow). ── */
+  --success: #3F7A1B;             /* deep lime — ~5.4:1 on bg-base, AA */
+  --success-soft: rgba(63, 122, 27, 0.16);
+  --warning: #8A5A00;             /* deep amber — ~5.56:1 on bg-base, AA
+                                     (was `#B07820` at only 3.55:1 — fail) */
+  --warning-soft: rgba(138, 90, 0, 0.16);
+  --error: #C8003C;               /* deep red — ~5.4:1 on bg-base, AA */
+  --error-soft: rgba(200, 0, 60, 0.16);
+
+  /* ── Borders (color-block派 — almost no hairlines) ── */
+  --border: transparent;
+  --border-subtle: rgba(15, 31, 29, 0.10);
+  --border-island: rgba(255, 255, 255, 0.08);
+  --border-focus: var(--accent);
+
+  /* ── On-color foregrounds —
+     Driven by per-pair contrast, not a single rule. Neon surfaces
+     (`--brand-primary` hot magenta, `--accent-2` cyan) pair with
+     near-black; deep-saturated surfaces (`--accent` deep magenta,
+     `--success` deep lime, `--error` deep red, `--warning` deep
+     amber) pair with white where white reads cleaner. Every pair
+     clears AA — none reach AAA (which needs ≥7:1).
+     White is reserved for the dark-saturated surfaces above + the
+     `--bg-structure-dark` near-black structural layer. */
+  --text-on-accent: #FFFFFF;        /* deep magenta + white ≈ 6.45:1 AA */
+  --text-on-success: #FFFFFF;       /* deep lime + white ≈ 5.9:1 AA */
+  --text-on-warning: #FFFFFF;       /* deep amber + white ≈ 5.93:1 AA */
+  --text-on-error: #FFFFFF;         /* deep red + white ≈ 5.9:1 AA */
+  --text-on-selected: var(--text-on-brand);  /* selected = brand magenta → near-black ≈ 5.56:1 AA */
+
+  /* ── Overlay / shadow ── */
+  --overlay-backdrop: rgba(8, 30, 27, 0.45);
+  --shadow-base: 14, 24, 22;
+  --shadow-popover:
+    0 10px 30px -8px rgba(var(--shadow-base), 0.28),
+    0 2px 6px -2px rgba(var(--shadow-base), 0.10);
+  --shadow-modal:
+    0 25px 50px -12px rgba(var(--shadow-base), 0.34);
+  --shadow-button: 0 1px 2px 0 rgba(var(--shadow-base), 0.06);
+
+  /* ── Radii — tighter than warm; Forza tiles read as hard-cut blocks ── */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+
+  /* ── Fonts ──
+     `--font-display` (NEW) — heavy condensed face for chrome labels,
+     workspace tile monograms, segment buttons, status pills. Falls back
+     through Bebas → Helvetica Condensed → system-ui so no install needed.
+     `--font-serif` is set to sans because the festival vibe rejects
+     serif altogether. */
+  --font-display: 'Impact', 'Bebas Neue', 'Helvetica Neue Condensed', 'Arial Narrow', system-ui, sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', 'Helvetica Neue', sans-serif;
+  --font-serif: var(--font-sans);
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', 'Sarasa Mono SC', 'Source Han Mono SC', 'Noto Sans Mono CJK SC', 'PingFang SC', monospace;
+
+  /* ── Markdown body ── */
+  --md-prose-font: var(--font-sans);
+  --md-prose-size: 12px;
+  --md-code-font: var(--font-mono);
+  --md-code-size: 12px;
+
+  /* ── Motion ── */
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --duration: 200ms;
+
+  /* ── Chat default ── */
+  --chat-font-size: 14px;
+
+  /* ============================================================
+     NEW TOKENS introduced by forza6 (extending design-new-theme §3).
+     Documented also in design-new-theme.md so future themes know to
+     define them explicitly (no fallback leak — see §3.1 关键 3).
+     ============================================================ */
+
+  /* `--bg-pattern-image` —
+     Inline SVG of overlapping translucent triangles. Other themes set
+     this to `none` so the chrome stays flat. Components that want the
+     festival texture apply it as `background-image: var(--bg-pattern-image)`
+     (modulated by `--bg-pattern-opacity` if needed via overlay). */
+  --bg-pattern-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='140' viewBox='0 0 160 140'><g fill='none'><polygon points='0,0 80,0 40,70' fill='rgba(255,255,255,0.05)'/><polygon points='80,0 160,0 120,70' fill='rgba(255,255,255,0.03)'/><polygon points='40,70 120,70 80,140' fill='rgba(255,255,255,0.06)'/><polygon points='0,140 40,70 0,70' fill='rgba(255,255,255,0.04)'/><polygon points='160,70 160,140 120,70' fill='rgba(255,255,255,0.04)'/></g></svg>");
+  --bg-pattern-opacity: 1;
+
+  /* `--accent-2` — electric cyan (info / link / 3rd-tier pill).
+     Forza is a three-accent system; collapsing to one accent loses the
+     pink/lime/cyan triad that defines the festival look.
+     SURFACE-ONLY token: `bg-accent-2` paired with near-black is the
+     intended use (cyan tile + black text inside, ~7.5:1). Do NOT use
+     as `text-accent-2` foreground on light bg — `#22B7E0` on `#F7F8F6`
+     is only ~2.21:1 (Cindy review `JzkPVNV3svN97WSR`). If a future
+     foreground "info ink" is needed, add a separate token; don't
+     overload this one. */
+  --accent-2: #22B7E0;
+  --text-on-accent-2: #0A0A0A;
+
+  /* `--bg-structure-dark` — near-black structural layer.
+     Roles (review-locked, do not bleed beyond these):
+       segment control container, segment-current background,
+       progress slot, member-strip / now-playing / titlebar tint,
+       tool-call card header, popover header, workspace-tile background,
+       3px NavRail dock notch.
+     NEVER use as decoration on chat-read surface. */
+  --bg-structure-dark: #0A0A0A;
+  --text-on-structure: #FFFFFF;
+
+  /* `--text-on-dark-pop` — fluorescent yellow metadata.
+     Roles (review-locked):
+       currency / level numbers / counters that sit ON dark chrome or
+       black structure. NEVER on `--bg-chat` or any light surface — the
+       contrast disappears and the festival HUD vibe breaks. */
+  --text-on-dark-pop: #FFEB00;
+}

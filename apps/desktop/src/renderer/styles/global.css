@@ -11,6 +11,7 @@
 @import "./themes/warm-script.css";
 @import "./themes/paper-ink.css";
 @import "./themes/warm-coral.css";
+@import "./themes/forza6.css";
 
 /* Highlight.js theme for fenced code blocks rendered by rehype-highlight.
    Picked the "github" light theme as a neutral baseline — works under
@@ -75,6 +76,15 @@
   --font-sans: var(--font-sans);
   --font-serif: var(--font-serif);
   --font-mono: var(--font-mono);
+  --font-display: var(--font-display);
+
+  /* New tokens introduced by forza6 — see docs/design-new-theme.md §3.
+     Every theme MUST define these explicitly (no fallback leak). */
+  --color-accent-2: var(--accent-2);
+  --color-text-on-accent-2: var(--text-on-accent-2);
+  --color-bg-structure-dark: var(--bg-structure-dark);
+  --color-text-on-structure: var(--text-on-structure);
+  --color-text-on-dark-pop: var(--text-on-dark-pop);
 }
 
 /* ── Non-themable layout constants ── */

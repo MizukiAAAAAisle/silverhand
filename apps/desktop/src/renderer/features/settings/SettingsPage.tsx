@@ -80,6 +80,19 @@ const THEME_META: Record<
     text: '#1F1B14',
     accent: '#FFD440',
   },
+  forza6: {
+    label: 'Forza6',
+    // Swatch refreshed for PR-2 v5.x final palette: pale lime sidebar
+    // carrier + festival magenta frame + acid lime selected/inline-code
+    // + near-black text. The original v1-era teal `#0F847B` no longer
+    // has a live site after the v5 selected/focus role swap (deep teal
+    // sidebars were dropped in favour of pale lime). shiki
+    // `30FgGvhGzEJztabr` "卡片色系还有青色，更新一下".
+    bg: '#F4F8E8',
+    surface: '#FF2C7A',
+    text: '#0A0A0A',
+    accent: '#D4F523',
+  },
 };
 
 interface SettingsResponse {

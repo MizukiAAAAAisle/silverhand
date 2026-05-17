@@ -111,6 +111,10 @@ describe('theme markdown token cascade contract', () => {
     new URL('../styles/themes/warm-coral.css', import.meta.url),
     'utf8',
   );
+  const forza6Css = readFileSync(
+    new URL('../styles/themes/forza6.css', import.meta.url),
+    'utf8',
+  );
 
   it('imports the default :root theme before themes that override it', () => {
     const themeImports = [...globalCss.matchAll(/@import "\.\/themes\/([^"]+)";/g)].map(
@@ -121,6 +125,7 @@ describe('theme markdown token cascade contract', () => {
       'warm-script.css',
       'paper-ink.css',
       'warm-coral.css',
+      'forza6.css',
     ]);
   });
 
@@ -128,12 +133,35 @@ describe('theme markdown token cascade contract', () => {
     expect(warmScriptCss).toContain(':root,\n[data-theme=\'warm-script\']');
     expect(paperInkCss).not.toContain(':root');
     expect(warmCoralCss).not.toContain(':root');
+    expect(forza6Css).not.toContain(':root');
   });
 
   it('defaults prose and code markdown font sizes to 12px in every theme', () => {
-    for (const css of [warmScriptCss, paperInkCss, warmCoralCss]) {
+    for (const css of [warmScriptCss, paperInkCss, warmCoralCss, forza6Css]) {
       expect(css).toContain('--md-prose-size: 12px;');
       expect(css).toContain('--md-code-size: 12px;');
+    }
+  });
+
+  /* Forza6 introduced 8 new tokens — every theme MUST define them
+     explicitly so a theme switch from forza6 doesn't leak the
+     festival-only values via :root fallback (design-new-theme §3.1
+     关键 3). */
+  it('every theme explicitly defines forza6-introduced tokens', () => {
+    const NEW_TOKENS = [
+      '--font-display',
+      '--bg-pattern-image',
+      '--bg-pattern-opacity',
+      '--accent-2',
+      '--text-on-accent-2',
+      '--bg-structure-dark',
+      '--text-on-structure',
+      '--text-on-dark-pop',
+    ];
+    for (const css of [warmScriptCss, paperInkCss, warmCoralCss, forza6Css]) {
+      for (const token of NEW_TOKENS) {
+        expect(css).toContain(`${token}:`);
+      }
     }
   });
 });
