@@ -85,13 +85,15 @@ export function WorkspaceGroup({
               key={w.id}
               trigger={
                 canPin ? (
-                  <WorkspaceRow
-                    workspace={w}
-                    title={title}
-                    selected={w.id === selectedWorkspaceId}
-                    onClick={() => onSelectWorkspace(w.id)}
-                    onPin={(id, pinned) => onPinWorkspace?.(id, pinned)}
-                  />
+                  <li>
+                    <WorkspaceRow
+                      workspace={w}
+                      title={title}
+                      selected={w.id === selectedWorkspaceId}
+                      onClick={() => onSelectWorkspace(w.id)}
+                      onPin={(id, pinned) => onPinWorkspace?.(id, pinned)}
+                    />
+                  </li>
                 ) : (
                   <SidebarRow
                     icon={ICON_BY_KIND[w.kind]}
@@ -143,19 +145,21 @@ export function WorkspaceGroup({
   );
 }
 
+interface WorkspaceRowProps {
+  workspace: WorkspaceItem;
+  title: string;
+  selected: boolean;
+  onClick: () => void;
+  onPin: (id: string, pinned: boolean) => void;
+}
+
 function WorkspaceRow({
   workspace,
   title,
   selected,
   onClick,
   onPin,
-}: {
-  workspace: WorkspaceItem;
-  title: string;
-  selected: boolean;
-  onClick: () => void;
-  onPin: (id: string, pinned: boolean) => void;
-}): JSX.Element {
+}: WorkspaceRowProps): JSX.Element {
   const [hovered, setHovered] = useState(false);
   const isPinned = isWorkspacePinned(workspace);
   const showPin = hovered || isPinned;
@@ -164,74 +168,72 @@ function WorkspaceRow({
     : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary';
 
   return (
-    <li>
-      <div
-        className={'sidebar-row-border flex w-full items-stretch border transition-colors ' + rowBg}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
+    <div
+      className={'sidebar-row-border flex w-full items-stretch border transition-colors ' + rowBg}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <button
+        type="button"
+        onClick={onClick}
+        className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-sm"
       >
-        <button
-          type="button"
-          onClick={onClick}
-          className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-sm"
+        <span className="shrink-0 text-text-muted">{ICON_BY_KIND[workspace.kind]}</span>
+        <span
+          className={
+            'flex min-w-0 flex-1 items-baseline gap-1.5 ' +
+            (workspace.unread && workspace.unread > 0 && !selected
+              ? 'font-semibold text-text-primary'
+              : '')
+          }
         >
-          <span className="shrink-0 text-text-muted">{ICON_BY_KIND[workspace.kind]}</span>
+          <span className="truncate">{title}</span>
+        </span>
+        {workspace.unread && workspace.unread > 0 ? (
           <span
             className={
-              'flex min-w-0 flex-1 items-baseline gap-1.5 ' +
-              (workspace.unread && workspace.unread > 0 && !selected
-                ? 'font-semibold text-text-primary'
-                : '')
+              'inline-flex h-4 min-w-[1rem] shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-semibold tabular-nums ' +
+              (selected
+                ? 'bg-bg-floating text-accent'
+                : 'bg-accent text-text-on-accent')
             }
+            aria-label={`${workspace.unread} unread`}
           >
-            <span className="truncate">{title}</span>
+            {workspace.unread > 99 ? '99+' : workspace.unread}
           </span>
-          {workspace.unread && workspace.unread > 0 ? (
-            <span
-              className={
-                'inline-flex h-4 min-w-[1rem] shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-semibold tabular-nums ' +
-                (selected
-                  ? 'bg-bg-floating text-accent'
-                  : 'bg-accent text-text-on-accent')
-              }
-              aria-label={`${workspace.unread} unread`}
-            >
-              {workspace.unread > 99 ? '99+' : workspace.unread}
-            </span>
-          ) : workspace.active ? (
-            <span className="size-1.5 rounded-full bg-success" />
-          ) : null}
-        </button>
+        ) : workspace.active ? (
+          <span className="size-1.5 rounded-full bg-success" />
+        ) : null}
+      </button>
 
-        <button
-          type="button"
-          aria-label={isPinned ? '取消固定' : '固定'}
-          title={isPinned ? '取消固定' : '固定'}
-          onClick={e => {
-            e.stopPropagation();
-            onPin(workspace.id, !isPinned);
-          }}
-          className={
-            'group/pin flex shrink-0 items-center justify-center px-1 ' +
-            (!showPin ? 'pointer-events-none opacity-0' : '') +
-            (selected
-              ? isPinned
-                ? ' text-text-on-selected'
-                : ' text-text-on-selected/60 hover:text-text-on-selected'
-              : isPinned
-                ? ' text-accent'
-                : ' text-text-muted hover:text-text-primary')
-          }
-          tabIndex={showPin ? 0 : -1}
-        >
-          {isPinned ? (
-            <PinOff className="size-3 transition-transform group-hover/pin:scale-125 group-hover/pin:[stroke-width:2.5]" />
-          ) : (
-            <Pin className="size-3 transition-transform group-hover/pin:scale-125 group-hover/pin:[stroke-width:2.5]" />
-          )}
-        </button>
-      </div>
-    </li>
+      <button
+        type="button"
+        aria-label={isPinned ? '取消固定' : '固定'}
+        title={isPinned ? '取消固定' : '固定'}
+        onClick={e => {
+          e.stopPropagation();
+          onPin(workspace.id, !isPinned);
+        }}
+        className={
+          'group/pin flex shrink-0 items-center justify-center px-1 ' +
+          (!showPin ? 'pointer-events-none opacity-0' : '') +
+          (selected
+            ? isPinned
+              ? ' text-text-on-selected'
+              : ' text-text-on-selected/60 hover:text-text-on-selected'
+            : isPinned
+              ? ' text-accent'
+              : ' text-text-muted hover:text-text-primary')
+        }
+        tabIndex={showPin ? 0 : -1}
+      >
+        {isPinned ? (
+          <PinOff className="size-3 transition-transform group-hover/pin:scale-125 group-hover/pin:[stroke-width:2.5]" />
+        ) : (
+          <Pin className="size-3 transition-transform group-hover/pin:scale-125 group-hover/pin:[stroke-width:2.5]" />
+        )}
+      </button>
+    </div>
   );
 }
 
