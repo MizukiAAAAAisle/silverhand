@@ -101,8 +101,12 @@ function HumanMention({ human }: { human: UserDto }): JSX.Element {
     <HoverPopover
       trigger={trigger}
       isContentReady
+      // Mirror AgentInfoPopover's 80ms hover-open so agent and human
+      // mentions feel identical to the pointer. Default 500ms was too
+      // slow next to the agent popover.
+      openDelayMs={80}
       content={
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-start gap-3">
           {avatarObjectUrl ? (
             <span className="inline-block size-9 shrink-0 overflow-hidden rounded-full bg-bg-elevated">
               {/* eslint-disable-next-line jsx-a11y/img-redundant-alt */}
@@ -124,7 +128,7 @@ function HumanMention({ human }: { human: UserDto }): JSX.Element {
             <div className="truncate text-sm font-semibold text-text-primary">
               {label}
             </div>
-            <div className="truncate text-xs text-text-muted">
+            <div className="truncate font-mono text-xs text-text-muted">
               @{human.name}
             </div>
           </div>
