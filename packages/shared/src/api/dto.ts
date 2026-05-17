@@ -434,6 +434,41 @@ export const ConversationUserMemberDtoSchema = z.object({
 });
 export type ConversationUserMemberDto = z.infer<typeof ConversationUserMemberDtoSchema>;
 
+// ── Conversation members (rendered) ──────────────────────────────
+// `MemberDto` is the unified, rendered shape used wherever code
+// needs to treat conversation participants uniformly — currently
+// the platform prompt's "Members in this conversation:" block
+// (PR-B) and, in PR-C, the chat header chip strip. Distinct from
+// `ConversationAgentDto` / `ConversationUserMemberDto`, which are
+// raw membership rows.
+//
+// The `agent_id` / `user_id` discriminator carries the
+// participant's primary key so callers (e.g. the prompt builder
+// flagging `self: true`, or PR-C click routing) can map back to
+// AgentRepo / UserRepo without re-fetching by name.
+export const AgentMemberDtoSchema = z.object({
+  kind: z.literal('agent'),
+  agent_id: z.string(),
+  name: z.string(),
+  display_name: z.string(),
+  runtime: RuntimeKindSchema,
+});
+export type AgentMemberDto = z.infer<typeof AgentMemberDtoSchema>;
+
+export const HumanMemberDtoSchema = z.object({
+  kind: z.literal('human'),
+  user_id: z.string(),
+  name: z.string(),
+  display_name: z.string(),
+});
+export type HumanMemberDto = z.infer<typeof HumanMemberDtoSchema>;
+
+export const MemberDtoSchema = z.discriminatedUnion('kind', [
+  AgentMemberDtoSchema,
+  HumanMemberDtoSchema,
+]);
+export type MemberDto = z.infer<typeof MemberDtoSchema>;
+
 export const ClearSessionResponseSchema = z.object({
   ok: z.literal(true),
   prev_cli_session_id: z.string().nullable(),

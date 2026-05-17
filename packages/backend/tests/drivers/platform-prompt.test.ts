@@ -14,7 +14,8 @@ function prompt(): string {
       channelName: 'silverhand',
       channelKind: 'regular',
       sessionTitle: 'member activity',
-      otherMembers: [],
+      members: [],
+      selfAgentId: 'agent-1',
       isChildSession: false,
     },
   });
@@ -51,7 +52,8 @@ describe('buildPlatformPrompt', () => {
         channelName: 'silverhand',
         channelKind: 'regular',
         sessionTitle: 'Thread: topic',
-        otherMembers: [],
+        members: [],
+        selfAgentId: 'agent-1',
         isChildSession: true,
         parentSessionTitle: 'member activity',
         parentChannelConversationId: 'channel-1',
@@ -121,7 +123,8 @@ describe('buildPlatformPrompt', () => {
         channelName: 'Onboarding',
         channelKind: 'dm',
         sessionTitle: 'Onboarding',
-        otherMembers: [],
+        members: [],
+        selfAgentId: 'agent-1',
         isChildSession: false,
       },
     });
@@ -142,7 +145,8 @@ describe('buildPlatformPrompt', () => {
         channelName: 'silverhand',
         channelKind: 'regular',
         sessionTitle: 'member activity',
-        otherMembers: [],
+        members: [],
+        selfAgentId: 'agent-1',
         isChildSession: false,
       },
     });
@@ -186,7 +190,8 @@ describe('buildPlatformPrompt', () => {
         channelName: 'silverhand',
         channelKind: 'regular',
         sessionTitle: 'member activity',
-        otherMembers: [],
+        members: [],
+        selfAgentId: 'agent-1',
         isChildSession: false,
       },
     });
@@ -446,7 +451,8 @@ describe('buildPlatformPrompt', () => {
         channelName: 'silverhand',
         channelKind: 'regular',
         sessionTitle: 'Thread: topic',
-        otherMembers: [],
+        members: [],
+        selfAgentId: 'agent-1',
         isChildSession: true,
         parentSessionTitle: 'member activity',
         parentChannelConversationId: 'channel-1',
@@ -479,7 +485,8 @@ describe('buildPlatformPrompt', () => {
         channelName: 'silverhand',
         channelKind: 'regular',
         sessionTitle: 'debug branch',
-        otherMembers: [],
+        members: [],
+        selfAgentId: 'agent-1',
         isChildSession: true,
         parentSessionTitle: 'member activity',
         parentChannelConversationId: 'channel-1',
@@ -488,6 +495,156 @@ describe('buildPlatformPrompt', () => {
     });
 
     expect(text).toContain('report the final result via `silverhand thread close`');
+  });
+
+  // ── Members block (PR-B) ────────────────────────────────────────
+  //
+  // The platform prompt teaches agents who else is in the channel by
+  // rendering each participant as a key:value line under "Members in
+  // this conversation:" — locked with @shiki + @Cindy. Agents must
+  // also be told that `@<name>` is the only valid mention form.
+
+  function memberPrompt(): string {
+    return buildPlatformPrompt({
+      agentId: 'agent-1',
+      agentName: 'alice',
+      runtime: 'claude',
+      activeProfileDir: './.silverhand/agents/agent-1',
+      roleSystemPrompt: '_role_',
+      sessionContext: {
+        conversationId: 'conv-channel-1',
+        channelName: 'silverhand',
+        channelKind: 'regular',
+        sessionTitle: 'general',
+        members: [
+          {
+            kind: 'agent',
+            agent_id: 'agent-1',
+            name: 'alice',
+            display_name: 'Alice',
+            runtime: 'claude',
+          },
+          {
+            kind: 'agent',
+            agent_id: 'agent-2',
+            name: 'cindy',
+            display_name: 'Cindy',
+            runtime: 'codex',
+          },
+          {
+            kind: 'human',
+            user_id: 'user-1',
+            name: 'shiki',
+            display_name: 'shiki',
+          },
+        ],
+        selfAgentId: 'agent-1',
+        isChildSession: false,
+      },
+    });
+  }
+
+  it('renders the locked Members block in key:value form, with self marked', () => {
+    const text = memberPrompt();
+    expect(text).toContain('Members in this conversation:');
+    // Self row: agent + runtime + self: true
+    expect(text).toContain(
+      '- name: alice, display_name: Alice, kind: agent, runtime: claude, self: true',
+    );
+    // Non-self agent: agent + runtime, no self marker
+    expect(text).toContain(
+      '- name: cindy, display_name: Cindy, kind: agent, runtime: codex',
+    );
+    expect(text).not.toMatch(
+      /name: cindy[^\n]*self: true/,
+    );
+    // Human: no runtime field, no self marker
+    expect(text).toContain(
+      '- name: shiki, display_name: shiki, kind: human',
+    );
+    expect(text).not.toMatch(/name: shiki[^\n]*runtime:/);
+    expect(text).not.toMatch(/name: shiki[^\n]*self: true/);
+  });
+
+  it('teaches the mention rule positively without printing the wrong form', () => {
+    const text = memberPrompt();
+    expect(text).toContain(
+      'Mention rule: use `@<name>` only. `display_name` is for recognition, not mentioning.',
+    );
+    // Drift guard: putting the bad form in the prompt risks the model
+    // treating it as a known-but-failing pattern. The rule is stated
+    // positively and must never re-introduce the negative phrasing.
+    expect(text).not.toMatch(/@<display_name> will not resolve/);
+    expect(text).not.toMatch(/@<display_name>/);
+  });
+
+  it('omits the Members block when no participants are present', () => {
+    // Defensive case: every spawn happens because the agent IS a
+    // member, so this list should always have at least self. If we
+    // somehow got here with an empty list, the prompt should NOT
+    // render a header followed by nothing.
+    const text = buildPlatformPrompt({
+      agentId: 'agent-1',
+      agentName: 'alice',
+      runtime: 'claude',
+      activeProfileDir: './.silverhand/agents/agent-1',
+      roleSystemPrompt: '_role_',
+      sessionContext: {
+        conversationId: 'conv-channel-1',
+        channelName: 'silverhand',
+        channelKind: 'regular',
+        sessionTitle: 'general',
+        members: [],
+        selfAgentId: 'agent-1',
+        isChildSession: false,
+      },
+    });
+    expect(text).not.toContain('Members in this conversation:');
+    expect(text).not.toContain('Mention rule:');
+  });
+
+  it('renders `name === display_name` rows uniformly (no collapse)', () => {
+    // Key:value parser stays uniform; we accept the redundant
+    // `display_name: <same as name>` token rather than branching.
+    const text = buildPlatformPrompt({
+      agentId: 'agent-1',
+      agentName: 'alice',
+      runtime: 'claude',
+      activeProfileDir: './.silverhand/agents/agent-1',
+      roleSystemPrompt: '_role_',
+      sessionContext: {
+        conversationId: 'conv-channel-1',
+        channelName: 'silverhand',
+        channelKind: 'regular',
+        sessionTitle: 'general',
+        members: [
+          {
+            kind: 'agent',
+            agent_id: 'agent-1',
+            name: 'alice',
+            display_name: 'alice',
+            runtime: 'claude',
+          },
+        ],
+        selfAgentId: 'agent-1',
+        isChildSession: false,
+      },
+    });
+    expect(text).toContain(
+      '- name: alice, display_name: alice, kind: agent, runtime: claude, self: true',
+    );
+  });
+
+  it('drops legacy "Other members in this channel/thread" wording', () => {
+    // Pre-PR-B the section used a different shape:
+    //   - Other members in this channel/thread:
+    //     - `@cindy` (codex)
+    // PR-B replaced that with the Members + key:value block. Drift
+    // guard: never resurrect the legacy rendering.
+    const text = memberPrompt();
+    expect(text).not.toContain('Other members in this channel/thread');
+    expect(text).not.toContain("(none — you're solo)");
+    expect(text).not.toMatch(/^\s+- `@\w+`\s+\(\w+\)$/m);
   });
 
   // ── Drift guard ───────────────────────────────────────────────────────

@@ -47,7 +47,9 @@ import { MessageRepo } from './repos/message-repo.js';
 import { extractAttachmentSnapshotsFromRow } from './repos/message-repo.js';
 import { NotificationRepo } from './repos/notification-repo.js';
 import { SettingsRepo, SETTINGS_KEYS } from './repos/settings-repo.js';
+import { UserRepo } from './repos/user-repo.js';
 import { WorkspaceRepo } from './repos/workspace-repo.js';
+import { MembershipService } from './services/membership-service.js';
 
 /** §3.5 watchdog window. Slock's `COMPACTION_STALE_MS` = 5 min. */
 const COMPACTION_STALE_MS = 5 * 60 * 1000;
@@ -210,6 +212,8 @@ export class ConversationManager {
   private readonly inboxes: ConversationInboxRepo;
   private readonly messages: MessageRepo;
   private readonly notifications: NotificationRepo;
+  private readonly users: UserRepo;
+  private readonly membership: MembershipService;
   private readonly settings: SettingsRepo;
   private binariesPromise: Promise<Map<string, string>> | null = null;
   /** Legacy test override for all init watchdog windows. Prefer the
@@ -246,6 +250,12 @@ export class ConversationManager {
     this.messages = new MessageRepo(ctx.db);
     this.notifications = new NotificationRepo(ctx.db);
     this.settings = new SettingsRepo(ctx.db);
+    this.users = new UserRepo(ctx.db);
+    this.membership = new MembershipService({
+      agents: this.agents,
+      users: this.users,
+      conversations: this.conversations,
+    });
 
     if (ctx.logDir) {
       const ts = new Date().toISOString().replace(/[:.]/g, '-');
@@ -1575,12 +1585,7 @@ export class ConversationManager {
     workspace: WorkspaceDto,
     agent: AgentDto,
   ): Promise<DriverPromptContext> {
-    const others = this.conversations
-      .listAgents(conversation.id)
-      .filter(sa => sa.agent_id !== agent.id)
-      .map(sa => this.agents.get(sa.agent_id))
-      .filter((a): a is AgentDto => a !== null)
-      .map(a => ({ name: a.name, runtime: a.runtime }));
+    const members = this.membership.listMembers(conversation.id);
 
     let parentSessionTitle: string | null = null;
     let parentChannelConversationId: string | null = null;
@@ -1602,7 +1607,8 @@ export class ConversationManager {
       channelName: conversation.kind === 'dm_channel' ? conversation.title : workspace.name,
       channelKind: conversation.kind === 'dm_channel' ? 'dm' : 'regular',
       sessionTitle: conversation.title,
-      otherMembers: others,
+      members,
+      selfAgentId: agent.id,
       isChildSession: isThread,
       parentSessionTitle,
       parentChannelConversationId,

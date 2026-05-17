@@ -1,4 +1,4 @@
-import type { RuntimeKind } from '@silverhand/shared';
+import type { MemberDto, RuntimeKind } from '@silverhand/shared';
 
 type WorkspaceUiKind = 'regular' | 'dm';
 type ToolName =
@@ -61,8 +61,14 @@ export interface SessionContextInput {
   channelName: string;
   channelKind: WorkspaceUiKind;
   sessionTitle: string;
-  /** Other agents present in this channel/thread (excluding self). */
-  otherMembers: Array<{ name: string; runtime: RuntimeKind }>;
+  /** Agent + human participants of this conversation. Includes self;
+   *  the renderer marks the matching `agent_id === selfAgentId` row
+   *  with `self: true`. The list is rendered verbatim under
+   *  "Members in this conversation:" — see PR-B. */
+  members: MemberDto[];
+  /** Agent id of the currently-spawning agent (i.e. "you"); used to
+   *  apply the `self: true` marker on its row in the members block. */
+  selfAgentId: string;
   /** True when the current context is a Thread. Tweaks the prompt so the
    *  agent knows it's in a sub-discussion. */
   isChildSession: boolean;
@@ -636,17 +642,43 @@ function renderSessionContext(
       );
     }
   }
-  if (sc.otherMembers.length === 0) {
-    lines.push(`- Other members in this channel/thread: _(none — you're solo)_`);
+  if (sc.members.length === 0) {
+    // Defensive: every spawn happens because the agent IS a member,
+    // so this list should always contain at least self. If we somehow
+    // got here with no members, omit the block rather than render an
+    // empty header.
   } else {
-    lines.push(`- Other members in this channel/thread:`);
-    for (const m of sc.otherMembers) {
-      lines.push(`  - \`@${m.name}\` (${m.runtime})`);
+    lines.push(`- Members in this conversation:`);
+    for (const m of sc.members) {
+      lines.push(`  ${renderMemberLine(m, sc.selfAgentId)}`);
     }
+    lines.push(
+      `- Mention rule: use \`@<name>\` only. \`display_name\` is for recognition, not mentioning.`,
+    );
   }
   lines.push(
     `- Workspace-wide consensus lives at \`./.silverhand/CONSENSUS.md\`.`,
     `  Read it at startup; treat its contents as binding on every member.`,
   );
   return lines.join('\n');
+}
+
+/**
+ * Render one member as `- name: X, display_name: Y, kind: agent|human,
+ * [runtime: <r>,] [self: true]`. The key:value form was locked with
+ * @shiki + @Cindy because it's easier for the model to parse than
+ * parenthesized prose, and self / agent / human stay disambiguated
+ * without leaking impl into the prompt.
+ */
+function renderMemberLine(m: MemberDto, selfAgentId: string): string {
+  const parts: string[] = [
+    `name: ${m.name}`,
+    `display_name: ${m.display_name}`,
+    `kind: ${m.kind}`,
+  ];
+  if (m.kind === 'agent') {
+    parts.push(`runtime: ${m.runtime}`);
+    if (m.agent_id === selfAgentId) parts.push(`self: true`);
+  }
+  return `- ${parts.join(', ')}`;
 }
