@@ -334,6 +334,83 @@ describe('ChannelService.createChannel', () => {
       t.cleanup();
     }
   });
+
+  it('user-created channel snapshots the full workspace_users set', async () => {
+    const t = bootstrap();
+    try {
+      // Drop test-fixture autoseed triggers so the user-membership we
+      // observe is *only* what ChannelService writes — not what the
+      // openTestDb triggers fan out to every fixture user.
+      t.db.exec(
+        `DROP TRIGGER IF EXISTS test_seed_workspace_users;
+         DROP TRIGGER IF EXISTS test_seed_conversation_users;`,
+      );
+      // Pin a deterministic workspace_users set: only `local` and
+      // `alice` are workspace members. The user-actor branch must
+      // mirror these into the new channel's conversation_users.
+      t.db.exec(`DELETE FROM workspace_users WHERE workspace_id = '${t.workspace.id}'`);
+      const now = Date.now();
+      t.db
+        .prepare(
+          `INSERT INTO workspace_users (workspace_id, user_id, joined_at)
+             VALUES (?, 'local', ?), (?, 'alice', ?)`,
+        )
+        .run(t.workspace.id, now, t.workspace.id, now);
+
+      const result = await t.service.createChannel({
+        workspaceId: t.workspace.id,
+        title: 'planning',
+        memberAgentIds: [t.alice.id],
+        actor: { kind: 'user', userId: 'local' },
+      });
+
+      const userMembers = t.conversations
+        .listUsers(result.channel.id)
+        .map(u => u.user_id)
+        .sort();
+      expect(userMembers).toEqual(['alice', 'local']);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('agent-created channel inherits user members narrowly from the source conversation', async () => {
+    const t = bootstrap();
+    try {
+      // Drop test-fixture autoseed triggers (see comment above).
+      t.db.exec(
+        `DROP TRIGGER IF EXISTS test_seed_workspace_users;
+         DROP TRIGGER IF EXISTS test_seed_conversation_users;`,
+      );
+      // Constrain the source conversation_users to a strict subset:
+      // only `local` is a member of the source, NOT `alice` (even
+      // though both are workspace members). The agent-actor branch
+      // must inherit only `local` into the new channel.
+      t.db.exec(
+        `DELETE FROM conversation_users WHERE conversation_id = '${t.source.id}'`,
+      );
+      t.db
+        .prepare(
+          `INSERT INTO conversation_users (conversation_id, user_id, joined_at)
+             VALUES (?, 'local', ?)`,
+        )
+        .run(t.source.id, Date.now());
+
+      const result = await t.service.createChannel({
+        workspaceId: t.workspace.id,
+        title: 'spawned',
+        memberAgentIds: [t.alice.id],
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.source.id },
+      });
+
+      const userMembers = t.conversations
+        .listUsers(result.channel.id)
+        .map(u => u.user_id);
+      expect(userMembers).toEqual(['local']);
+    } finally {
+      t.cleanup();
+    }
+  });
 });
 
 describe('ChannelService.setPinned', () => {

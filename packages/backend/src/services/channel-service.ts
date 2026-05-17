@@ -231,6 +231,24 @@ export class ChannelService {
         this.conversations.addAgent(channel.id, memberId);
       }
 
+      // v25 human membership snapshot:
+      //   - user-created channel: snapshot full `workspace_users` so
+      //     every workspace human gets the new channel.
+      //   - agent-created channel: inherit narrowly from the SOURCE
+      //     conversation's `conversation_users`. v1 single-human is
+      //     equivalent to the workspace snapshot; v2 multi-human will
+      //     legitimately differ (an agent in a private subset of
+      //     humans should not fan out to humans outside that
+      //     conversation just because they share the workspace).
+      const userMemberIds = input.actor.kind === 'agent'
+        ? this.conversations
+            .listUsers(input.actor.conversationId)
+            .map(u => u.user_id)
+        : this.workspaces.listUserMemberIds(workspace.id);
+      for (const userId of userMemberIds) {
+        this.conversations.addUser(channel.id, userId);
+      }
+
       let contextMsg: MessageDto | null = null;
       let promptMsg: MessageDto | null = null;
       if (input.seed && input.actor.kind === 'agent') {

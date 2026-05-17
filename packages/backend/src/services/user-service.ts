@@ -120,6 +120,45 @@ export class UserService {
         displayName: args.displayName,
       });
       this.settings.set(SETTINGS_KEYS.VIEWER_USER_ID, id);
+
+      // v25 backfill on first registration. The v25 migration's INSERT
+      // ... SELECT covers DBs that were already registered before
+      // v25 shipped (shiki's case). This branch covers the OTHER
+      // path: a DB that ran v25 with no viewer_user_id (so v25's
+      // backfill SELECT returned 0 rows), then registers later. In
+      // that path, here is the only place we know "the human just
+      // came into being" AND have access to the same transaction
+      // that creates them. Add membership rows for every existing
+      // workspace and conversation now, so the permission gates
+      // (canViewWorkspace / canViewConversation) immediately reflect
+      // the new human.
+      //
+      // The pair of writes is INSERT-only (no DELETE / UPDATE). The
+      // tx envelope guarantees atomicity with the user INSERT and
+      // viewer_user_id write — partial state (user exists but is
+      // not a member of their own workspaces) is impossible.
+      const now = Date.now();
+      const insertWorkspaceUser = this.db.prepare(
+        `INSERT OR IGNORE INTO workspace_users
+           (workspace_id, user_id, joined_at) VALUES (?, ?, ?)`,
+      );
+      const insertConversationUser = this.db.prepare(
+        `INSERT OR IGNORE INTO conversation_users
+           (conversation_id, user_id, joined_at) VALUES (?, ?, ?)`,
+      );
+      const workspaceRows = this.db
+        .prepare<[], { id: string }>(`SELECT id FROM workspaces`)
+        .all();
+      for (const w of workspaceRows) {
+        insertWorkspaceUser.run(w.id, id, now);
+      }
+      const conversationRows = this.db
+        .prepare<[], { id: string }>(`SELECT id FROM conversations`)
+        .all();
+      for (const c of conversationRows) {
+        insertConversationUser.run(c.id, id, now);
+      }
+
       return row;
     });
 

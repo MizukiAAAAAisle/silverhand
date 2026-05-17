@@ -8,8 +8,11 @@ import type {
   ConversationDto,
   ConversationKind,
   ConversationRow,
+  ConversationUserMemberDto,
+  ConversationUserMemberRow,
   DmChannelDto,
   ThreadDto,
+  UserRow,
 } from '@silverhand/shared';
 
 function newId(): string {
@@ -681,6 +684,81 @@ export class ConversationRepo {
       )
       .get(conversationId, agentId);
     return row ? { ...row } : null;
+  }
+
+  // ── Human (user) membership — `conversation_users` (v25) ─────────
+  // Mirrors `addAgent` / `listAgents` / `getAgent` etc. for users.
+  // Humans don't run as processes, so this table has no
+  // cli_session_id / pid / status columns — just (conversation, user,
+  // joined_at). v1 has at most one human per DB; the schema is
+  // multi-human ready.
+
+  addUser(
+    conversationId: string,
+    userId: string,
+  ): ConversationUserMemberDto {
+    const now = Date.now();
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO conversation_users
+         (conversation_id, user_id, joined_at)
+         VALUES (?, ?, ?)`,
+      )
+      .run(conversationId, userId, now);
+    const row = this.db
+      .prepare<[string, string], ConversationUserMemberRow>(
+        `SELECT * FROM conversation_users
+         WHERE conversation_id = ? AND user_id = ?`,
+      )
+      .get(conversationId, userId);
+    if (!row) throw new Error('conversation_users insert failed');
+    return { ...row };
+  }
+
+  listUsers(conversationId: string): ConversationUserMemberDto[] {
+    return this.db
+      .prepare<[string], ConversationUserMemberRow>(
+        `SELECT * FROM conversation_users
+         WHERE conversation_id = ?
+         ORDER BY joined_at ASC`,
+      )
+      .all(conversationId)
+      .map(r => ({ ...r }));
+  }
+
+  listUserMembers(conversationId: string): UserRow[] {
+    return this.db
+      .prepare<[string], UserRow>(
+        `SELECT u.*
+           FROM users u
+           JOIN conversation_users cu ON cu.user_id = u.id
+          WHERE cu.conversation_id = ?
+          ORDER BY cu.joined_at ASC`,
+      )
+      .all(conversationId)
+      .map(r => ({ ...r }));
+  }
+
+  getUser(
+    conversationId: string,
+    userId: string,
+  ): ConversationUserMemberDto | null {
+    const row = this.db
+      .prepare<[string, string], ConversationUserMemberRow>(
+        `SELECT * FROM conversation_users
+         WHERE conversation_id = ? AND user_id = ?`,
+      )
+      .get(conversationId, userId);
+    return row ? { ...row } : null;
+  }
+
+  removeUser(conversationId: string, userId: string): void {
+    this.db
+      .prepare(
+        `DELETE FROM conversation_users
+         WHERE conversation_id = ? AND user_id = ?`,
+      )
+      .run(conversationId, userId);
   }
 
   listLiveStatusAgents(): ConversationAgentDto[] {

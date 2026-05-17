@@ -74,6 +74,33 @@ export function openTestDb(): {
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
   ).run();
 
+  // v25 test-fixture compatibility: production permission gates now
+  // require explicit `workspace_users` / `conversation_users`
+  // membership for human principals. Production code adds the viewer
+  // through routes/services (POST /api/workspaces, ChannelService,
+  // ThreadService, createAgentWithHome). Many tests bypass those
+  // surfaces and create workspaces/conversations directly via repos —
+  // they would otherwise lose user access. These triggers snapshot
+  // ALL fixture users into membership on every workspace/conversation
+  // insert so direct-repo tests keep working without per-test
+  // boilerplate. Routes-driven tests still pass because the explicit
+  // route inserts are `INSERT OR IGNORE`.
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS test_seed_workspace_users
+    AFTER INSERT ON workspaces
+    BEGIN
+      INSERT OR IGNORE INTO workspace_users (workspace_id, user_id, joined_at)
+      SELECT NEW.id, u.id, NEW.created_at FROM users u;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS test_seed_conversation_users
+    AFTER INSERT ON conversations
+    BEGIN
+      INSERT OR IGNORE INTO conversation_users (conversation_id, user_id, joined_at)
+      SELECT NEW.id, u.id, NEW.created_at FROM users u;
+    END;
+  `);
+
   return {
     db,
     localHostId: local.id,

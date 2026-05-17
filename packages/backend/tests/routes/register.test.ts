@@ -125,4 +125,66 @@ describe('POST /api/register', () => {
     const dashFirst = await http(t).post(apiPaths.register, { name: '-shiki' });
     expect(dashFirst.status).toBe(400);
   });
+
+  it('backfills workspace_users and conversation_users for every existing row at registration time', async () => {
+    t = buildTestApp();
+    // Drop the test-fixture auto-seed triggers so we can observe
+    // *only* the register-time backfill behavior without other
+    // fixture users being snapshot in. Production has no such triggers.
+    t.ctx.db.exec(
+      `DROP TRIGGER IF EXISTS test_seed_workspace_users;
+       DROP TRIGGER IF EXISTS test_seed_conversation_users;`,
+    );
+    unregisterViewer(t);
+    // Also drop the other fixture users so the post-register row set
+    // we assert on is unambiguously the one written by register().
+    t.ctx.db.exec(`DELETE FROM users`);
+
+    // Insert a workspace + conversation pair *before* registration so
+    // the v25 register-time backfill path (the "DB ran v25 with no
+    // viewer, then registers later" branch in UserService.register)
+    // has something to walk over. The fixture already ensures a
+    // 'local' host row.
+    const now = Date.now();
+    const hostId = (
+      t.ctx.db
+        .prepare<[], { id: string }>(`SELECT id FROM hosts LIMIT 1`)
+        .get()!
+    ).id;
+    t.ctx.db
+      .prepare(
+        `INSERT INTO workspaces
+           (id, name, description, workspace_path, workspace_kind,
+            workspace_host_id, owner_agent_id, created_at, updated_at)
+         VALUES ('ws1', 'pre', NULL, '/tmp/x', 'regular', ?, NULL, ?, ?)`,
+      )
+      .run(hostId, now, now);
+    t.ctx.db
+      .prepare(
+        `INSERT INTO conversations
+           (id, workspace_id, kind, title, workspace_path, status,
+            created_at, updated_at)
+         VALUES ('c1', 'ws1', 'channel', 't', '/tmp/x', 'open', ?, ?)`,
+      )
+      .run(now, now);
+
+    const res = await http(t).post(apiPaths.register, { name: 'shiki' });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    const newId: string = body.id;
+
+    // Membership edges exist for the freshly-registered viewer.
+    const wsRow = t.ctx.db
+      .prepare<[], { workspace_id: string; user_id: string }>(
+        `SELECT workspace_id, user_id FROM workspace_users`,
+      )
+      .all();
+    expect(wsRow).toEqual([{ workspace_id: 'ws1', user_id: newId }]);
+    const convRow = t.ctx.db
+      .prepare<[], { conversation_id: string; user_id: string }>(
+        `SELECT conversation_id, user_id FROM conversation_users`,
+      )
+      .all();
+    expect(convRow).toEqual([{ conversation_id: 'c1', user_id: newId }]);
+  });
 });

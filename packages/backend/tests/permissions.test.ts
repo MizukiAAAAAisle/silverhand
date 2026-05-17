@@ -248,4 +248,42 @@ describe('permission helpers', () => {
       viewerUserId: 'someone-else',
     })).toBe(false);
   });
+
+  it('denies user access without explicit workspace_users / conversation_users membership (v25 tightening)', () => {
+    t = buildTestApp();
+    const f = seed(t);
+    // Drop the test-fixture autoseed triggers and remove the local
+    // user from membership tables, simulating a v2 multi-human world
+    // where a user exists but is not a member of this workspace /
+    // conversation.
+    t.ctx.db.exec(
+      `DROP TRIGGER IF EXISTS test_seed_workspace_users;
+       DROP TRIGGER IF EXISTS test_seed_conversation_users;
+       DELETE FROM workspace_users WHERE workspace_id = '${f.workspace.id}';
+       DELETE FROM conversation_users WHERE conversation_id = '${f.channel.id}';`,
+    );
+
+    const user: UserPrincipal = { kind: 'user', userId: 'local' };
+    expect(canViewWorkspace(t.ctx, user, f.workspace.id)).toBe(false);
+    expect(canViewConversation(t.ctx, user, f.channel.id)).toBe(false);
+
+    // Re-adding only workspace membership (not conversation) reopens
+    // workspace access but not conversation access — the gate is
+    // parallel, not hierarchical fallback.
+    t.ctx.db
+      .prepare(
+        `INSERT INTO workspace_users (workspace_id, user_id, joined_at) VALUES (?, 'local', ?)`,
+      )
+      .run(f.workspace.id, Date.now());
+    expect(canViewWorkspace(t.ctx, user, f.workspace.id)).toBe(true);
+    expect(canViewConversation(t.ctx, user, f.channel.id)).toBe(false);
+
+    // Adding conversation membership too completes the gate.
+    t.ctx.db
+      .prepare(
+        `INSERT INTO conversation_users (conversation_id, user_id, joined_at) VALUES (?, 'local', ?)`,
+      )
+      .run(f.channel.id, Date.now());
+    expect(canViewConversation(t.ctx, user, f.channel.id)).toBe(true);
+  });
 });

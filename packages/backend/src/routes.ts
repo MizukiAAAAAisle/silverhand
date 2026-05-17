@@ -519,12 +519,20 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     }
     await initWorkspaceDir(validation.resolved);
 
+    const viewerUserId = requireViewerUserId(c);
+
     const workspace = workspaces.insert({
       name: parsed.data.name,
       description: parsed.data.description ?? null,
       workspacePath: validation.resolved,
       workspaceHostId: parsed.data.workspace_host_id ?? localHost.id,
     });
+
+    // v25: human membership. The actor (registered viewer) becomes a
+    // member of every workspace they create. In v1 single-human this is
+    // always the same one viewer; in v2 multi-human it's still
+    // correct — the creator is a member by default.
+    workspaces.addUserMember(workspace.id, viewerUserId);
 
     const memberAgents = parsed.data.member_agent_ids
       .map(id => agents.get(id))
@@ -545,6 +553,11 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       workspacePath: workspace.workspace_path,
       title: 'Onboarding',
     });
+    // Snapshot workspace_users into the onboarding channel.
+    // v1: single viewer; v2 will fan out across all workspace humans.
+    for (const userId of workspaces.listUserMemberIds(workspace.id)) {
+      conversations.addUser(onboarding.id, userId);
+    }
     for (const agent of memberAgents) {
       conversations.addAgent(onboarding.id, agent.id);
     }
@@ -1765,6 +1778,27 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
         agentId: agent.id,
       });
       conversations.addAgent(dm.id, agent.id);
+
+      // v25 human membership for agent_home + its DM channel. The
+      // registered viewer is a participant in every DM (it is the
+      // human side of the conversation), so they must be a member
+      // of the agent_home workspace and the dm_channel itself for
+      // the v25 permission gates to allow access. agent_home is
+      // explicitly allowed for `workspace_users` (no v17-style
+      // trigger blocks it), unlike `workspace_members` which is
+      // agent-only.
+      //
+      // Pre-registration: this route is user-gated, so a viewer
+      // must exist by the time we reach here. If somehow no viewer
+      // is registered (defense), skip the user-membership writes —
+      // the workspace/dm rows still come up clean and the viewer's
+      // own register tx will retroactively backfill them.
+      const viewerUserId = settings.getViewerUserId();
+      if (viewerUserId) {
+        workspaces.addUserMember(home.id, viewerUserId);
+        conversations.addUser(dm.id, viewerUserId);
+      }
+
       const onboardingMsg = messages.insertForConversation({
         conversationId: dm.id,
         fromKind: 'system',

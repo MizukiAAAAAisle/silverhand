@@ -294,6 +294,15 @@ export const WorkspaceMemberDtoSchema = z.object({
 });
 export type WorkspaceMemberDto = z.infer<typeof WorkspaceMemberDtoSchema>;
 
+/** Human membership in a workspace (v25). Parallel to
+ *  `WorkspaceMemberDto` but for users instead of agents. */
+export const WorkspaceUserMemberDtoSchema = z.object({
+  workspace_id: z.string(),
+  user_id: z.string(),
+  joined_at: z.number(),
+});
+export type WorkspaceUserMemberDto = z.infer<typeof WorkspaceUserMemberDtoSchema>;
+
 export const CreateWorkspaceInputSchema = z.object({
   name: z
     .string()
@@ -415,6 +424,15 @@ export const ConversationAgentDtoSchema = z.object({
   joined_at: z.number(),
 });
 export type ConversationAgentDto = z.infer<typeof ConversationAgentDtoSchema>;
+
+/** Human membership in a conversation (v25). Parallel to
+ *  `ConversationAgentDto` minus the process-lifecycle fields. */
+export const ConversationUserMemberDtoSchema = z.object({
+  conversation_id: z.string(),
+  user_id: z.string(),
+  joined_at: z.number(),
+});
+export type ConversationUserMemberDto = z.infer<typeof ConversationUserMemberDtoSchema>;
 
 export const ClearSessionResponseSchema = z.object({
   ok: z.literal(true),

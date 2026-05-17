@@ -4,11 +4,14 @@ import { dirname, join, relative, resolve } from 'node:path';
 import type {
   AgentDto,
   AgentRow,
+  UserRow,
   WorkspaceDto,
   WorkspaceKind,
   WorkspaceMemberDto,
   WorkspaceMemberRow,
   WorkspaceRow,
+  WorkspaceUserMemberDto,
+  WorkspaceUserMemberRow,
 } from '@silverhand/shared';
 
 function newId(): string {
@@ -375,6 +378,78 @@ export class WorkspaceRepo {
           WHERE workspace_id = ? AND agent_id = ?`,
       )
       .run(workspaceId, agentId);
+  }
+
+  // ── Human (user) membership — `workspace_users` (v25) ───────────
+  // Mirrors the agent membership API above but for users. Unlike
+  // `workspace_members`, `workspace_users` accepts ALL workspace
+  // kinds (regular / agent_home / dm) — humans have no
+  // owner_agent_id equivalent that grants implicit access.
+
+  addUserMember(
+    workspaceId: string,
+    userId: string,
+  ): WorkspaceUserMemberDto {
+    const now = Date.now();
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO workspace_users
+         (workspace_id, user_id, joined_at)
+         VALUES (?, ?, ?)`,
+      )
+      .run(workspaceId, userId, now);
+    const row = this.db
+      .prepare<[string, string], WorkspaceUserMemberRow>(
+        `SELECT * FROM workspace_users
+         WHERE workspace_id = ? AND user_id = ?`,
+      )
+      .get(workspaceId, userId);
+    if (!row) throw new Error('workspace_users insert failed');
+    return { ...row };
+  }
+
+  listUserMemberIds(workspaceId: string): string[] {
+    return this.db
+      .prepare<[string], { user_id: string }>(
+        `SELECT user_id FROM workspace_users
+         WHERE workspace_id = ?
+         ORDER BY joined_at ASC`,
+      )
+      .all(workspaceId)
+      .map(r => r.user_id);
+  }
+
+  listUserMembers(workspaceId: string): UserRow[] {
+    return this.db
+      .prepare<[string], UserRow>(
+        `SELECT u.*
+           FROM users u
+           JOIN workspace_users wu ON wu.user_id = u.id
+          WHERE wu.workspace_id = ?
+          ORDER BY wu.joined_at ASC`,
+      )
+      .all(workspaceId)
+      .map(r => ({ ...r }));
+  }
+
+  isUserMember(workspaceId: string, userId: string): boolean {
+    const row = this.db
+      .prepare<[string, string], { c: number }>(
+        `SELECT COUNT(*) AS c
+           FROM workspace_users
+          WHERE workspace_id = ? AND user_id = ?`,
+      )
+      .get(workspaceId, userId);
+    return (row?.c ?? 0) > 0;
+  }
+
+  removeUserMember(workspaceId: string, userId: string): void {
+    this.db
+      .prepare(
+        `DELETE FROM workspace_users
+          WHERE workspace_id = ? AND user_id = ?`,
+      )
+      .run(workspaceId, userId);
   }
 
   workspacePathFor(name: string): string {

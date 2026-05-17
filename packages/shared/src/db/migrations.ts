@@ -1839,4 +1839,88 @@ export const migrations: Migration[] = [
        );
     `,
   },
+  {
+    version: 25,
+    name: 'human_workspace_and_conversation_membership',
+    // Real human membership tables — until now humans have been
+    // implicit (the registered viewer in `app_settings.viewer_user_id`
+    // could view everything by existence-check alone). PR-A of the
+    // multi-human prep adds explicit `workspace_users` /
+    // `conversation_users` rows, mirroring the agent membership tables
+    // (`workspace_members` / `conversation_agents`) but without the
+    // process-lifecycle columns (cli_session_id / pid / status) that
+    // are agent-only.
+    //
+    // Naming asymmetry note: the existing agent table is
+    // `workspace_members` (historical). We add `workspace_users`
+    // alongside it instead of renaming, to keep this migration small
+    // and to avoid touching the dozens of repo/service/route call
+    // sites that already reference `workspace_members`. Future cleanup
+    // may unify the names — out of scope here.
+    //
+    // Workspace kind scope: unlike `workspace_members` (v17 trigger
+    // forbids agent_home rows because agent access is owner-driven),
+    // `workspace_users` allows ALL workspace kinds — humans have no
+    // owner column equivalent, and agent_home / DM workspaces still
+    // need the human as a member so the chat UI and prompt context
+    // can list them.
+    //
+    // Backfill (idempotent): if `app_settings.viewer_user_id` is
+    // already set (i.e. this DB has been registered against a build
+    // with Deferred Adoption removed but no membership tables yet —
+    // shiki's case), insert the viewer into every existing
+    // `workspaces` row's `workspace_users` and every existing
+    // `conversations` row's `conversation_users`. Pre-registration
+    // DBs (no `viewer_user_id`) are no-ops here; `UserService.register()`
+    // performs the equivalent membership write inside its own
+    // single-tx registration flow when a human first registers.
+    //
+    // INSERT-only contract: per @shiki greenlight, this migration
+    // does not DELETE or UPDATE any existing rows. It only writes new
+    // membership edges; tables that did not exist before this
+    // migration come up empty. Idempotent with INSERT OR IGNORE on
+    // the backfill (in case a future rerun-shaped scenario sees both
+    // the row already there and the migration ledger missing).
+    up: `
+      CREATE TABLE workspace_users (
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        joined_at    INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, user_id)
+      );
+
+      CREATE INDEX idx_workspace_users_user
+        ON workspace_users(user_id, joined_at);
+
+      CREATE TABLE conversation_users (
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        joined_at       INTEGER NOT NULL,
+        PRIMARY KEY (conversation_id, user_id)
+      );
+
+      CREATE INDEX idx_conversation_users_user
+        ON conversation_users(user_id, joined_at);
+
+      -- Backfill: if a viewer is already registered, give them
+      -- membership edges to every existing workspace and conversation.
+      -- The SELECT viewer_user_id subquery returns NULL on
+      -- pre-registration DBs, and the INSERT ... SELECT silently
+      -- inserts zero rows in that case — so this is safe on every DB
+      -- shape. INSERT OR IGNORE protects against rare reapply paths.
+      INSERT OR IGNORE INTO workspace_users (workspace_id, user_id, joined_at)
+        SELECT w.id,
+               (SELECT value FROM app_settings WHERE key = 'viewer_user_id'),
+               COALESCE(w.created_at, strftime('%s','now') * 1000)
+          FROM workspaces w
+         WHERE (SELECT value FROM app_settings WHERE key = 'viewer_user_id') IS NOT NULL;
+
+      INSERT OR IGNORE INTO conversation_users (conversation_id, user_id, joined_at)
+        SELECT c.id,
+               (SELECT value FROM app_settings WHERE key = 'viewer_user_id'),
+               COALESCE(c.created_at, strftime('%s','now') * 1000)
+          FROM conversations c
+         WHERE (SELECT value FROM app_settings WHERE key = 'viewer_user_id') IS NOT NULL;
+    `,
+  },
 ];

@@ -1295,6 +1295,145 @@ describe('database migrations', () => {
     });
   });
 
+  describe('migration v25 (human workspace and conversation membership)', () => {
+    it('creates membership tables and backfills the registered viewer into existing rows', () => {
+      const db = new Database(':memory:');
+      try {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS _migrations (
+            version INTEGER PRIMARY KEY,
+            name    TEXT NOT NULL,
+            applied_at INTEGER NOT NULL
+          );
+        `);
+        applyMigrationsThrough(db, 24);
+
+        // Pre-v25 state: a registered viewer plus a workspace and a
+        // conversation row. v25 must backfill membership for both.
+        const now = 1_700_000_000_000;
+        db.prepare(
+          `INSERT INTO users (id, name, display_name, created_at, updated_at)
+           VALUES ('viewer_1', 'viewer-test', 'Viewer Test', ?, ?)`,
+        ).run(now, now);
+        db.prepare(
+          `INSERT INTO app_settings (key, value)
+             VALUES ('viewer_user_id', 'viewer_1')`,
+        ).run();
+        db.prepare(
+          `INSERT INTO hosts (id, name, kind, created_at)
+             VALUES ('h1', 'local', 'local', ?)`,
+        ).run(now);
+        db.prepare(
+          `INSERT INTO workspaces
+             (id, name, description, workspace_path, workspace_kind,
+              workspace_host_id, owner_agent_id, created_at, updated_at)
+           VALUES ('ws1', 'pre-v25', NULL, '/tmp/x', 'regular', 'h1', NULL, ?, ?)`,
+        ).run(now, now);
+        db.prepare(
+          `INSERT INTO conversations
+             (id, workspace_id, kind, title, workspace_path, status,
+              created_at, updated_at)
+           VALUES ('c1', 'ws1', 'channel', 'main', '/tmp/x', 'open', ?, ?)`,
+        ).run(now, now);
+
+        runMigrations(db);
+
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 25`).get(),
+        ).toBeDefined();
+
+        const wsRow = db
+          .prepare<[], { workspace_id: string; user_id: string; joined_at: number }>(
+            `SELECT workspace_id, user_id, joined_at FROM workspace_users`,
+          )
+          .all();
+        expect(wsRow).toEqual([
+          { workspace_id: 'ws1', user_id: 'viewer_1', joined_at: now },
+        ]);
+        const convRow = db
+          .prepare<[], { conversation_id: string; user_id: string; joined_at: number }>(
+            `SELECT conversation_id, user_id, joined_at FROM conversation_users`,
+          )
+          .all();
+        expect(convRow).toEqual([
+          { conversation_id: 'c1', user_id: 'viewer_1', joined_at: now },
+        ]);
+      } finally {
+        db.close();
+      }
+    });
+
+    it('is a no-op backfill on pre-registration databases', () => {
+      const db = new Database(':memory:');
+      try {
+        // Run all migrations on a virgin DB (no viewer_user_id, no
+        // users row). v25 must create the membership tables but write
+        // zero rows because the viewer subquery returns NULL.
+        runMigrations(db);
+
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 25`).get(),
+        ).toBeDefined();
+        expect(
+          (db.prepare(`SELECT COUNT(*) AS n FROM workspace_users`).get() as { n: number }).n,
+        ).toBe(0);
+        expect(
+          (db.prepare(`SELECT COUNT(*) AS n FROM conversation_users`).get() as { n: number }).n,
+        ).toBe(0);
+      } finally {
+        db.close();
+      }
+    });
+
+    it('cascades membership rows when a workspace or conversation is deleted', () => {
+      const db = new Database(':memory:');
+      try {
+        runMigrations(db);
+        const now = Date.now();
+        db.prepare(
+          `INSERT INTO users (id, name, display_name, created_at, updated_at)
+             VALUES ('u1', 'u1-test', 'U1', ?, ?)`,
+        ).run(now, now);
+        db.prepare(
+          `INSERT INTO hosts (id, name, kind, created_at)
+             VALUES ('h1', 'local', 'local', ?)`,
+        ).run(now);
+        db.prepare(
+          `INSERT INTO workspaces
+             (id, name, description, workspace_path, workspace_kind,
+              workspace_host_id, owner_agent_id, created_at, updated_at)
+           VALUES ('ws1', 'w', NULL, '/tmp/y', 'regular', 'h1', NULL, ?, ?)`,
+        ).run(now, now);
+        db.prepare(
+          `INSERT INTO conversations
+             (id, workspace_id, kind, title, workspace_path, status,
+              created_at, updated_at)
+           VALUES ('c1', 'ws1', 'channel', 't', '/tmp/y', 'open', ?, ?)`,
+        ).run(now, now);
+        db.prepare(
+          `INSERT INTO workspace_users (workspace_id, user_id, joined_at)
+             VALUES ('ws1', 'u1', ?)`,
+        ).run(now);
+        db.prepare(
+          `INSERT INTO conversation_users (conversation_id, user_id, joined_at)
+             VALUES ('c1', 'u1', ?)`,
+        ).run(now);
+
+        db.prepare(`DELETE FROM conversations WHERE id = ?`).run('c1');
+        expect(
+          (db.prepare(`SELECT COUNT(*) AS n FROM conversation_users`).get() as { n: number }).n,
+        ).toBe(0);
+
+        db.prepare(`DELETE FROM workspaces WHERE id = ?`).run('ws1');
+        expect(
+          (db.prepare(`SELECT COUNT(*) AS n FROM workspace_users`).get() as { n: number }).n,
+        ).toBe(0);
+      } finally {
+        db.close();
+      }
+    });
+  });
+
   describe('migration v22 (no-op stub)', () => {
     /**
      * The original v22 renamed `users.handle` → `users.name`. The

@@ -124,6 +124,20 @@ export interface WorkspaceMemberRow {
   joined_at: number;
 }
 
+/**
+ * Human membership row for `workspace_users` (v25). Mirrors
+ * `WorkspaceMemberRow` but for users instead of agents. Unlike
+ * `workspace_members`, this table accepts ALL workspace kinds —
+ * including `agent_home` and DM workspaces — because humans have no
+ * `owner_agent_id` equivalent that would let them access a workspace
+ * implicitly.
+ */
+export interface WorkspaceUserMemberRow {
+  workspace_id: string;
+  user_id: string;
+  joined_at: number;
+}
+
 export interface ConversationRow {
   id: string;
   workspace_id: string;
@@ -147,6 +161,18 @@ export interface ConversationAgentRow {
   cli_session_id: string | null;
   pid: number | null;
   status: ConversationAgentStatus;
+  joined_at: number;
+}
+
+/**
+ * Human membership row for `conversation_users` (v25). Mirrors
+ * `ConversationAgentRow` minus the agent-only process-lifecycle
+ * columns (cli_session_id / pid / status); humans don't run as
+ * processes, so those fields don't apply.
+ */
+export interface ConversationUserMemberRow {
+  conversation_id: string;
+  user_id: string;
   joined_at: number;
 }
 

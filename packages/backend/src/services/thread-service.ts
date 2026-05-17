@@ -518,6 +518,17 @@ export class ThreadService {
       for (const memberId of memberAgentIds) {
         this.conversations.addAgent(thread.id, memberId);
       }
+      // v25 human membership: threads inherit from their parent
+      // conversation's `conversation_users`. This works for both
+      // user-created and agent-created threads — the parent already
+      // carries the right narrowing (channel snapshotted from
+      // workspace_users for user creators, or from a source
+      // conversation for agent creators).
+      for (const userId of this.conversations
+        .listUsers(input.parentChannelId)
+        .map(u => u.user_id)) {
+        this.conversations.addUser(thread.id, userId);
+      }
       const insertedSeeds = input.seedMessages.map(seed => ({
         input: seed,
         message: this.messages.insertForConversation({

@@ -74,11 +74,18 @@ export function canViewWorkspace(
   principal: Principal,
   workspaceId: string,
 ): boolean {
-  // v1 has no human workspace-membership table yet. User access is an
-  // existence check; multi-human ACLs replace this implementation later.
   if (!workspaceExists(ctx, workspaceId)) return false;
   if (principal.kind === 'system') return true;
-  if (principal.kind === 'user') return true;
+  if (principal.kind === 'user') {
+    // v25: humans are real workspace members. The viewer is added
+    // to every existing workspace at register time (UserService.register
+    // backfill) and to every new workspace at creation; v25 migration
+    // also retroactively backfilled DBs that registered before this
+    // table existed. Any user not in `workspace_users` for the queried
+    // workspace is denied here. Multi-human v2 will use this same
+    // gate — invite flows simply add another user to `workspace_users`.
+    return workspaceRepo(ctx).isUserMember(workspaceId, principal.userId);
+  }
 
   const conversation = conversationRepo(ctx).get(principal.conversationId);
   if (!conversation) return false;
@@ -137,7 +144,18 @@ export function canViewConversation(
   const conversation = conversationRepo(ctx).get(conversationId);
   if (!conversation) return false;
   if (!canViewWorkspace(ctx, principal, conversation.workspace_id)) return false;
-  if (principal.kind !== 'agent') return true;
+  if (principal.kind === 'system') return true;
+  if (principal.kind === 'user') {
+    // v25: human conversation membership. Workspace check passed
+    // above (so we know the user is a workspace member); now also
+    // require explicit `conversation_users` membership for the
+    // specific channel/thread. Channels are seeded from
+    // `workspace_users` at creation; threads inherit from the parent
+    // conversation. v25 migration backfilled both for already-
+    // registered DBs.
+    return conversationRepo(ctx).getUser(conversation.id, principal.userId)
+      !== null;
+  }
   if (principal.conversationId !== conversation.id) return false;
   return conversationRepo(ctx).getAgent(conversation.id, principal.agentId) !== null;
 }

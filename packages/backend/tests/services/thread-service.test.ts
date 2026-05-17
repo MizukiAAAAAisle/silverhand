@@ -612,3 +612,44 @@ describe('ThreadService.closeThread', () => {
     }
   });
 });
+
+describe('ThreadService user-membership inheritance (v25)', () => {
+  it('inherits user members from the parent conversation when creating a thread', async () => {
+    const t = bootstrap();
+    try {
+      // Drop test-fixture autoseed triggers so observed user
+      // membership reflects only what ThreadService writes.
+      t.db.exec(
+        `DROP TRIGGER IF EXISTS test_seed_workspace_users;
+         DROP TRIGGER IF EXISTS test_seed_conversation_users;`,
+      );
+      // Pin parent conversation_users to a specific subset.
+      t.db.exec(
+        `DELETE FROM conversation_users WHERE conversation_id = '${t.channel.id}'`,
+      );
+      t.db
+        .prepare(
+          `INSERT INTO conversation_users (conversation_id, user_id, joined_at)
+             VALUES (?, 'local', ?), (?, 'alice', ?)`,
+        )
+        .run(t.channel.id, Date.now(), t.channel.id, Date.now());
+
+      const result = await t.service.createThreadFromAgent({
+        parentConversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        title: 'child',
+        requestedMembers: [t.alice.id],
+        contextSummary: 'ctx',
+        initialPrompt: 'go',
+      });
+
+      const userMembers = t.conversations
+        .listUsers(result.thread.id)
+        .map(u => u.user_id)
+        .sort();
+      expect(userMembers).toEqual(['alice', 'local']);
+    } finally {
+      t.cleanup();
+    }
+  });
+});
