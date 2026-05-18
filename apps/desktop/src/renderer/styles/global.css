@@ -489,14 +489,17 @@ button:disabled { cursor: not-allowed; }
    (language tag + copy + expand). The `pre` itself is the scroll
    container; the surrounding wrapper applies the border/rounded
    shell so the header strip can sit flush with the top edge.
-   Background uses the same ink-wash recipe as inline code, just at
-   a lighter strength so the block feels like a card on the page. */
+   Background / border / pre text colour all read from the `island`
+   token family (`--bg-island` / `--text-island` / `--border-island`)
+   so each theme owns the code-block palette directly — warm-script
+   gets its soft warm stone tint, forza6 gets its deep teal-black
+   HUD aesthetic, no per-theme override of these rules needed. */
 .markdown-body .code-block {
   max-width: 100%;
   margin: 0.5em 0;
-  border: 1px solid color-mix(in srgb, var(--text-primary) 12%, transparent);
+  border: 1px solid var(--border-island);
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--text-primary) 4%, var(--bg-base));
+  background: var(--bg-island);
   overflow: hidden;
 }
 .markdown-body .code-block__header {
@@ -504,7 +507,7 @@ button:disabled { cursor: not-allowed; }
   align-items: center;
   justify-content: space-between;
   padding: 0.25em 0.6em;
-  border-bottom: 1px solid color-mix(in srgb, var(--text-primary) 10%, transparent);
+  border-bottom: 1px solid var(--border-island);
   font-family: var(--font-mono);
   font-size: 0.75em;
   color: var(--text-muted);
@@ -532,6 +535,7 @@ button:disabled { cursor: not-allowed; }
   background: transparent;
   border: 0;
   border-radius: 0;
+  color: var(--text-island);
   font-family: var(--md-code-font, var(--font-mono));
   font-size: var(--md-code-size, 12px);
   line-height: 1.5;
@@ -543,7 +547,7 @@ button:disabled { cursor: not-allowed; }
   display: block;
   width: 100%;
   padding: 0.3em 0.6em;
-  border-top: 1px solid color-mix(in srgb, var(--text-primary) 10%, transparent);
+  border-top: 1px solid var(--border-island);
   background: transparent;
   font-size: 0.75em;
   color: var(--text-muted);

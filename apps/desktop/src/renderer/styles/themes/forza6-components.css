@@ -388,25 +388,24 @@
    `VGm9HpWGWyDx5bhf` "深色 HUD/code island，保留可读性，lime/粉只
    做边框或小标题，不要把大段代码染成高饱和底".
 
-   Markdown rendering uses `.markdown-body .code-block` wrapper
-   (global.css:493) with header strip + pre + expand toggle.
-   Forza6 specialization:
-     - Container: `#0F2F2C` deep teal-black body (mockup --bg-island)
-       + `2px solid #0A0A0A` border + `border-radius: 2px` poster
-       sticker family. Body text ≈ `#E8F1EF` ≈ 12.6:1 AAA on the
-       deep teal-black ground.
-     - Header strip: pure `#0A0A0A` for the structural-dark slab
-       Cindy approved earlier; `--font-display` caps + lime small
-       label for the language tag (this is the `lime/粉只做边框或
-       小标题` Cindy asked for).
-     - Inline `:not(pre) > code` already sticker-painted in v5
-       (lime fill + 2px black border + square corners) and is
-       intentionally not touched here — they're different products
-       (chip vs island), different visual recipes.
-     - `code-block__expand` toggle gets a faint lime-tinted hover
-       to match the rest of the forza6 hover vocabulary. */
+   PR-2 token promotion (#task:346) moves the structural recipe to
+   the global rule via the `island` token family — forza6.css already
+   set `--bg-island: #0F2F2C` / `--text-island: #E8F1EF` / `--border-island:
+   rgba(255,255,255,0.08)`, so `.markdown-body .code-block` and
+   `.code-block pre` pick those up directly. What stays in this
+   forza6-only block:
+     - Poster sticker geometry: 2px near-black outline + 2px radius
+       (the same poster vocabulary as inline-code / NavRail selected
+       / send button). Not a code-island role — a forza6 chrome role.
+     - Header strip: pure `#0A0A0A` slab (`--bg-structure-dark` family)
+       with island-light foreground. Header bg stays forza6-scoped
+       because warm-script's `--bg-island-deep` warm stone would be
+       wrong here, and global keeps the header transparent.
+     - lime small label for the language tag (this is the `lime/粉
+       只做边框或小标题` Cindy asked for).
+     - lime-tinted hover on the expand toggle to match the rest of
+       the forza6 hover vocabulary. */
 [data-theme='forza6'] .markdown-body .code-block {
-  background: #0F2F2C;
   border: 2px solid #0A0A0A;
   border-radius: 2px;
 }
@@ -426,9 +425,6 @@
 }
 [data-theme='forza6'] .markdown-body .code-block__copy:hover {
   color: #D4F523;
-}
-[data-theme='forza6'] .markdown-body .code-block pre {
-  color: #E8F1EF;
 }
 [data-theme='forza6'] .markdown-body .code-block pre code {
   color: inherit;
