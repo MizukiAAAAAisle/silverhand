@@ -221,8 +221,21 @@
   --error: #C8003C;               /* deep red — ~5.4:1 on bg-base, AA */
   --error-soft: rgba(200, 0, 60, 0.16);
 
-  /* ── Borders (color-block派 — almost no hairlines) ── */
-  --border: transparent;
+  /* ── Borders (color-block 派 — frame gap + saturation 主力分层；
+     `--border` 仍保留可见 hairline) ──
+     PR-8 fix: `--border` 之前是 `transparent`，意图是"几乎不画 border"
+     强化 color-block 语汇。但 `--border` 在 TSX 里被多处当成"默认描边
+     色"消费 —— Input/Textarea/Button outline 描边、saved/search
+     message item baseline 描边（`hover ? 'border-accent' : 'border-border'`
+     的 layout-stable hover pattern）、QuotedMessagePreview 边框等。
+     设 transparent 让这些表面在 forza6 下边消失（shiki 报告 saved /
+     search 列表行边没了）。
+     解决：恢复可见但低噪音的冷暗色调 hairline；color-block 语汇仍然
+     靠 frame gap (8px) + saturation 差异承担主力分层，`--border` 只
+     给消费 token 的 control / item 表面一个能看见的默认描边。如果
+     某处 *需要* 透明边占位避免 layout shift，应该在 callsite 用
+     `border-transparent`，不再让主题 token 兜底。 */
+  --border: rgba(15, 31, 29, 0.14);
   --border-subtle: rgba(15, 31, 29, 0.10);
   --border-island: rgba(255, 255, 255, 0.08);
   --border-focus: var(--accent);
