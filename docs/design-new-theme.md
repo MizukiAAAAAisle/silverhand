@@ -401,15 +401,15 @@ button / select trigger / 小 icon button —— 一个统一圆角出口。
 - EventsApp pin toggle 小 icon button
 
 **追加消费点（PR-11 #task:368）**：form/settings 内的 **control-adjacent
-action-callout box** ——
-- `WorkspaceSettingsDialog` 的 archive box + delete box（每个都用 dialog
-  内嵌 callout 包一组 label + Button）
-- `AgentSchedulesCard` 的 error empty-state box（同形态 callout）
+action-callout box** —— 表单内嵌一组 label + Button 的操作提示容器：
+- `WorkspaceSettingsDialog` 的 archive box + delete box
 
-边界**故意收窄**（Cindy `nOEqbfmR71tNnKrj`）：只包含表单/设置里直接包
-按钮或 input 的操作提示 box，**不**把所有 card / 一般 empty-state /
-notification banner 都卷进来。本 token 的 control 语义是\"包了控件的
-直接容器\"，泛化会让 `--control-radius` 边界失控。
+边界**故意收窄**（Cindy `nOEqbfmR71tNnKrj` / `NFTFg47A8h0LihSe`）：
+只包含**直接包按钮或 input** 的 form/settings 操作 callout。**不**把
+一般 error 提示 / empty-state / notification banner / 非表单 callout
+卷进来——`AgentSchedulesCard` 的查询失败提示曾经误纳，review 时回滚，
+那是 notification empty-state，不是 control-adjacent action callout。
+泛化会让 `--control-radius` 边界失控。
 
 **故意不入** `--control-radius`：
 - SelectContent / popover / dialog / menu 等浮层表面 → 走 `--floating-radius`
