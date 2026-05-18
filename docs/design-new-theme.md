@@ -540,27 +540,28 @@ NavRail / channels / sessions 三块 chrome 全部 `var(--bg-primary)`，跟 cha
 
 NavRail 项 / channel / DM / session 这种**一级导航 row**，用同一套三档状态机，不要每个组件各发明一套。现在 workspace/channel/sidebar row 的状态已经主题化：
 
-| 状态 | border | background | 视觉读法 |
-|---|---|---|---|
-| default | `border-transparent` + `--sidebar-row-border-width` | 无 | 占位边但不可见 |
-| hover | `border-accent` + `--sidebar-row-border-width` | `--bg-row-hover` | selected 的弱一级预演 |
-| selected | `border-accent` + `--sidebar-row-border-width` | `--bg-row-selected` | 当前所在 |
+| 状态 | border color | border width | background | 视觉读法 |
+|---|---|---|---|---|
+| default | `border-transparent`（TSX Tailwind class） | `--sidebar-row-border-width` | 无 | 占位边但不可见 |
+| hover | `--border-row-hover` | `--sidebar-row-border-width` | `--bg-row-hover` | selected 的弱一级预演 |
+| selected | `--border-row-selected` | `--sidebar-row-border-width` | `--bg-row-selected` | 当前所在 |
 
-**两个关键设计点**：
+**三个关键设计点**：
 
 1. **default 上也占位**（用 `border-transparent`），避免 hover/selected 切换时整行向内推——这是非常常见的低级 layout shift bug。
 2. **border width 必须主题化但显式定义**。默认视觉标准是 `2px`；selected 是淡墨晕的主题可以用 `1px`。因为默认主题同时挂在 `:root`，其它主题必须显式写 `--sidebar-row-border-width: 2px`，不能指望 fallback。
-3. **border-color 从 hover 到 selected 完全一致**（都是 `border-accent`），只在 bg opacity 上递进。视觉语义：边出现 = 候选，底变实 = 确定。早期版本让 hover 用减弱的 `border-accent/40`，看起来像"两种不同的状态"而不是"同一种渐进确认"。
+3. **border color 默认可同色，但由两个 token 控制**（`--border-row-hover` / `--border-row-selected`，见 §3.5.1）。背景承担 hover→selected 的 emphasis 梯度，边只决定 geometry。早期版本让 hover 用减弱的 `border-accent/40`，看起来像"两种不同的状态"而不是"同一种渐进确认"——分两 token 之后仍然推荐设成同色，但有需要时（比如 selected 想用更深一档锚色）也能各走各。
 
 **适用范围**：
-- ✅ NavRail 项（icon 导航）
-- ✅ Sidebar channel / DM 项
-- ✅ SessionsSidebar 会话项
-- ✅ 任何"一选一"语义的一级导航 row
+- ✅ NavRail 项（`nav[aria-label='App sections']` 内）
+- ✅ Sidebar channel / DM 项（`aside[data-sidebar]` 内的 `.sidebar-row-border`）
+- ✅ SessionsSidebar 会话项（同上）
+- ✅ Workspaces / Members / Computers 等所有 `aside[data-sidebar]` 内的一级导航 row
 - ❌ 行内按钮 / toolbar / dropdown trigger（用各自的状态系统）
 - ❌ Saved / 分组 header 等"动作"性质而非"导航选中"性质的按钮（继续用 `bg-bg-hover`）
+- ❌ 主内容区的 row（如 `ArchivedChannelsPanel`）即便复用 `.sidebar-row-border` 类（拿宽度），也**不**自动接 row-state border 契约；它们走自己的 hover 词汇。需要纳入时请给显式 hook 并补到 §3.5.1。
 
-**主题间的退化**：组件层读取 `--bg-row-selected` / `--bg-row-hover` / `--sidebar-row-border-width`。新主题必须显式定义这三个 token；如果想沿用旧视觉，就把 selected 设为 `var(--bg-selected)`，hover 设为 `rgba(255,255,255,0.7)` 或本主题等价值，border width 设为 `2px`。
+**主题间的退化**：组件层读取 5 个 token —— `--bg-row-selected` / `--bg-row-hover` / `--sidebar-row-border-width` / `--border-row-hover` / `--border-row-selected`。新主题必须显式定义全部五个；如果想沿用旧视觉，就把 selected 设为 `var(--bg-selected)`，hover 设为 `rgba(255,255,255,0.7)` 或本主题等价值，border width 设为 `2px`，两个 border color 都设为 `var(--accent)`（warm-script 的做法）。
 
 ---
 
