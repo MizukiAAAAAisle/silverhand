@@ -507,10 +507,11 @@ button:disabled { cursor: not-allowed; }
   align-items: center;
   justify-content: space-between;
   padding: 0.25em 0.6em;
+  background: var(--bg-island-deep);
   border-bottom: 1px solid var(--border-island);
   font-family: var(--font-mono);
   font-size: 0.75em;
-  color: var(--text-muted);
+  color: var(--text-island);
   user-select: none;
 }
 .markdown-body .code-block__lang {
