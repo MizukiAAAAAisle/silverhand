@@ -166,6 +166,14 @@
   --control-radius: 0;
   --chip-radius: 0;
 
+  /* ── Select listbox radius (§3.6.2, PR-9 token promotion) ──
+     forza6 把 Select.Content + Select.Item 全部归零，跟 control trigger
+     同节拍 —— shiki `TkTXGENjcioj5Zrw` 报 trigger 直角而 content 圆角的
+     视觉断裂。仅动 radius，border 仍走 Tailwind `border-border`（小气泡
+     PR-4 边界保留，2px 黑框不进 Select listbox）。 */
+  --select-content-radius: 0;
+  --select-item-radius: 0;
+
   /* ── forza6 syntax palette (theme-private; PR-7 internal cleanup) ──
      The `.markdown-body .code-block .hljs-*` rules in
      `forza6-components.css` read these values; warm-script intentionally

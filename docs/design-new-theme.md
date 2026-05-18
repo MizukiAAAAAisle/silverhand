@@ -275,6 +275,37 @@ lazy substitution 工作得很好（forza6 在浮层 wrapper 内重定义 `--bg-
 **Tooltip / Select listbox 故意不入**：它们是小气泡，给海报感重框会
 过载视觉。forza6 v5.7.1 的边界判断在 PR-4 后保留。
 
+### 3.6.2 Select listbox radius（PR-9 token promotion）
+
+Radix `Select.Content` 和 `Select.Item` 共用一对 radius token，由
+`global.css` 里 `[data-radix-select-content]` / `[data-radix-select-content]
+[role='option']` 全局选择器消费。所有 SelectContent / SelectItem 调用点
+（SearchPanel / ArchivedChannelsPanel / AgentPicker / ManageMembersPopover /
+EventsApp / AgentProfileCard / TaskStatusPill 的 popover items 等）的
+TSX **不动**，由 global 选择器扫，跟 floating frame 同样的
+"source order + 等 specificity 胜出"机制。
+
+| Token | 用途 | 取值原则 |
+|---|---|---|
+| `--select-content-radius` | Select listbox 外框圆角 | 暖系 `6px` 字面值（= 之前 Tailwind `rounded-md`，pixel-zero）；海报系 `0` |
+| `--select-item-radius` | Select item 圆角 | 暖系 `2px` 字面值（= 之前 Tailwind `rounded-sm`，pixel-zero）；海报系 `0` |
+
+**这不是 PR-4 floating frame 边界的反悔** —— PR-4 把 Select listbox 排
+除在 floating frame 之外的理由是**边框**（给小气泡套 2px poster 黑框会
+over-shout 周边 UI）。PR-9 只动 radius，不动 border：Select listbox 仍
+继续走 Tailwind `border border-border`（PR-8 已让 `--border` 在 forza6
+下可见），不接 `--floating-border`。"小气泡不接重框"边界原封不动。
+
+**字面值（6px / 2px）而非 `var(--radius-md)` / `var(--radius-sm)`** ——
+跟 control / chip radius 同一逻辑（Cindy `1eG7CReuc5X9ER_9`）：warm 的
+`--radius-md: 10px` 不是当前 Select listbox 6px 的等价物，借用会把 warm
+从 6px 带到 10px。字面值保证 pixel-zero。
+
+**为什么不复用 `--control-radius`** —— select trigger（= control）和
+select listbox 在概念上是配对的（一个打开另一个），radius 一致很合理。
+但 control = 6px、listbox item = 2px、listbox container = 6px 是三个值
+而 control 只是一个，复用会丢 item 维度。独立 2 token 更稳。
+
 ### 3.7 几何 + 排版 + 节奏
 
 | Token | 用途 |
@@ -537,6 +568,12 @@ shiki 决定先保留胶囊（forza6 用饱和填色表达状态语义，不需�
      调整命名 radius 时意外把 control/chip 圆角带跑（Cindy 1eG7CReuc5X9ER_9） */
   --control-radius: ...;          /* 暖系 6px 字面值，海报系 0 */
   --chip-radius: ...;             /* 暖系 4px 字面值，海报系 0 */
+
+  /* ── Select listbox radius (§3.6.2) ── Radix Select.Content +
+     Select.Item 共享一对 radius token；border 不接，PR-4 "小气泡不
+     接重框"边界保留 */
+  --select-content-radius: ...;   /* 暖系 6px 字面值，海报系 0 */
+  --select-item-radius: ...;      /* 暖系 2px 字面值，海报系 0 */
 
   /* ── Motion ── */
   --ease: cubic-bezier(...);

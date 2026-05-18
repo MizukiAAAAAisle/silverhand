@@ -371,6 +371,23 @@ button:disabled { cursor: not-allowed; }
   border-radius: var(--floating-item-radius);
 }
 
+/* Select listbox radius (PR-9 token promotion #task:361). Radix
+   `Select.Content` + `Select.Item` get a dedicated 2-token radius
+   contract so forza6 can square the listbox without inheriting the
+   heavy poster frame meant for full menus (PR-4 boundary preserved:
+   Select listbox is small, a 2px black `--floating-border` would
+   over-shout). `[data-radix-select-content]` matches the Radix root;
+   `[role='option']` is the ARIA role Radix puts on `Select.Item`.
+   Both selectors are `(0,1,0)` / `(0,1,1)` specificity — they win
+   against the literal `rounded-md` / `rounded-sm` Tailwind classes
+   on equal/higher specificity + later source order. */
+[data-radix-select-content] {
+  border-radius: var(--select-content-radius);
+}
+[data-radix-select-content] [role='option'] {
+  border-radius: var(--select-item-radius);
+}
+
 /* Row-state border color (PR-5 token promotion). Sidebar rows
    (`.sidebar-row-border` class on ChannelsSidebar / WorkspacesPanel /
    Sidebar / sidebar-shared — all rendered inside an

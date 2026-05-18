@@ -286,4 +286,19 @@ describe('theme markdown token cascade contract', () => {
       }
     }
   });
+
+  /* PR-9 token promotion (#task:361): Select listbox radius is now a
+     2-token contract. Radix `Select.Content` + `Select.Item` get
+     dedicated radius so forza6 can square them without inheriting the
+     heavy 2px poster border meant for full menus (PR-4 boundary
+     preserved). Every theme MUST declare both so a theme switch
+     doesn't leak the `0` value into warm themes via :root fallback. */
+  it('every theme explicitly defines select listbox radius tokens', () => {
+    const SELECT_RADIUS_TOKENS = ['--select-content-radius', '--select-item-radius'];
+    for (const css of [warmScriptCss, forza6Css]) {
+      for (const token of SELECT_RADIUS_TOKENS) {
+        expect(css).toContain(`${token}:`);
+      }
+    }
+  });
 });

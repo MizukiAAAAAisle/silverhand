@@ -144,6 +144,18 @@
   --control-radius: 6px;
   --chip-radius: 4px;
 
+  /* ── Select listbox radius (§3.6.2, PR-9 token promotion) ──
+     Radix `Select.Content` + `Select.Item` 浮层共用一对 radius token。
+     warm 用字面值 `6px / 2px` 保持 pixel-zero（= 之前 Tailwind `rounded-md`
+     / `rounded-sm`）；海报系 forza6 设 0 跟 control trigger 同节拍 ——
+     trigger 直角而 content 圆角的视觉断裂是 shiki `TkTXGENjcioj5Zrw`
+     报的 bug。
+     PR-4 "Select listbox 故意不入 floating frame" 的边界关于**边框**
+     (heavy poster 2px 黑框会 over-shout 小气泡)，radius 不在那个理由里，
+     所以这一波只接 radius，不动 border。 */
+  --select-content-radius: 6px;
+  --select-item-radius: 2px;
+
   /* ── Accent (暖近黑 — 高对比·低噪音) ──
      #2D2316 在 #FFFAEF 上对比度 ≈ 15:1（AAA）；
      亮黄侧栏 + 深黑 accent = 强焦点感，无颜色噪音。 */
