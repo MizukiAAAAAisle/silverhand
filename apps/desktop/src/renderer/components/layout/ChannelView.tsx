@@ -677,7 +677,7 @@ function MemberStrip({
                 aria-label={`@${agent.name}`}
                 data-member-chip="agent"
                 data-member-id={member.agent_id}
-                className="relative inline-flex size-[18px] shrink-0 items-center justify-center overflow-hidden rounded-none border border-[#9ca3af] bg-bg-floating p-0 shadow-sm transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+                className="relative inline-flex size-[18px] shrink-0 items-center justify-center rounded-none border border-[#9ca3af] bg-bg-floating p-0 shadow-sm transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
               >
                 <AgentAvatar
                   runtime={agent.runtime}
@@ -687,7 +687,7 @@ function MemberStrip({
                 />
                 <span
                   className={
-                    'absolute -bottom-0.5 -right-0.5 size-2 rounded-full border border-bg-floating shadow-sm '
+                    'pointer-events-none absolute bottom-0 right-0 size-2 translate-x-1/2 translate-y-1/2 rounded-full border border-bg-floating shadow-sm '
                     + STATUS_DOT[status]
                   }
                 />
