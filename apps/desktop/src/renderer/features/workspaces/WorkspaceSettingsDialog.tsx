@@ -172,7 +172,7 @@ export function WorkspaceSettingsDialog({
           </div>
         ) : null}
 
-        <div className="mt-2 flex items-center justify-between gap-3 rounded-md border border-border-subtle bg-bg-elevated/40 p-3">
+        <div className="mt-2 flex items-center justify-between gap-3 rounded-[var(--control-radius)] border border-border-subtle bg-bg-elevated/40 p-3">
           <div className="flex flex-col gap-0.5">
             <span className="text-sm font-medium text-text-primary">
               {isArchived ? '已归档' : '归档 Workspace'}
@@ -203,7 +203,7 @@ export function WorkspaceSettingsDialog({
           </Button>
         </div>
 
-        <div className="mt-2 flex flex-col gap-2 rounded-md border border-error/30 bg-error/5 p-3">
+        <div className="mt-2 flex flex-col gap-2 rounded-[var(--control-radius)] border border-error/30 bg-error/5 p-3">
           <div className="flex flex-col gap-0.5">
             <span className="text-sm font-medium text-text-primary">
               删除 Workspace

@@ -400,11 +400,24 @@ button / select trigger / 小 icon button —— 一个统一圆角出口。
 - DeleteAgentDialog 的 confirm input
 - EventsApp pin toggle 小 icon button
 
+**追加消费点（PR-11 #task:368）**：form/settings 内的 **control-adjacent
+action-callout box** ——
+- `WorkspaceSettingsDialog` 的 archive box + delete box（每个都用 dialog
+  内嵌 callout 包一组 label + Button）
+- `AgentSchedulesCard` 的 error empty-state box（同形态 callout）
+
+边界**故意收窄**（Cindy `nOEqbfmR71tNnKrj`）：只包含表单/设置里直接包
+按钮或 input 的操作提示 box，**不**把所有 card / 一般 empty-state /
+notification banner 都卷进来。本 token 的 control 语义是\"包了控件的
+直接容器\"，泛化会让 `--control-radius` 边界失控。
+
 **故意不入** `--control-radius`：
 - SelectContent / popover / dialog / menu 等浮层表面 → 走 `--floating-radius`
-- card 表面（包括 SearchPanel 的 result card）→ 走 `--card-radius`
+- card 表面（包括 SearchPanel 的 result card、DialogContent 主框）→ 走 `--card-radius`
 - chip → 走 `--chip-radius`（§3.7.3）
 - pill 胶囊（TaskStatusPill）→ shiki 决定先保留胶囊，pill-radius 不入
+- 一般 empty-state / notification banner / 非表单 callout → 暂留 Tailwind
+  `rounded-md` 字面值，等真出现需要直角的语义再单独抽 token
 
 ### 3.7.3 Chip radius（PR-8 token promotion）
 

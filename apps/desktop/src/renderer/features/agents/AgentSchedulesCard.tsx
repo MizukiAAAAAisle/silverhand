@@ -66,7 +66,7 @@ export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps): JSX.El
       </header>
 
       {query.isError ? (
-        <div className="rounded-md border border-dashed border-error/40 bg-error/5 px-3 py-2 text-xs text-error">
+        <div className="rounded-[var(--control-radius)] border border-dashed border-error/40 bg-error/5 px-3 py-2 text-xs text-error">
           Failed to load schedules.
         </div>
       ) : null}
