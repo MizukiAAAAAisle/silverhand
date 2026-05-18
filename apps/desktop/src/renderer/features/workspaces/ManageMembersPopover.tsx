@@ -163,7 +163,7 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
                   disabled={removeMember.isPending}
                   aria-label="移除"
                   title="移除成员"
-                  className="ml-auto flex size-6 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-error disabled:opacity-60"
+                  className="ml-auto flex size-6 items-center justify-center rounded-[var(--chip-radius)] text-text-muted hover:bg-bg-hover hover:text-error disabled:opacity-60"
                 >
                   <Trash2 className="size-3.5" />
                 </button>

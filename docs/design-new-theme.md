@@ -439,7 +439,9 @@ TasksSection + WorkspaceTasksDrawer 的 TaskStatusBadge（与 TaskRef
 一类——AgentPicker `SelectedChip`（新建 channel 已选成员 tag，
 `text-xs px-2 py-0.5` 形态，跟 ConversationRef chip 同节拍）和
 ManageMembersPopover 成员 tile（titlebar 添加成员 popover 里的单行
-member 行，avatar + @name + runtime + 移除 icon）。**仅限 "member
+member 行，avatar + @name + runtime + 移除 icon）。member tile 内部
+的 remove icon button 也随 tile 走 `--chip-radius`——否则 hover 背景
+在 forza6 下会冒出 4px 圆角小底，跟方角 tile 不齐。**仅限 "member
 selection chip / tile" 这一窄类**，不可推广为"列表行 / card 通用圆
 角"。如果将来出现更宽的 list row 需要直角，单独开 token，不要复用
 `--chip-radius` 把列表全部扫进来。
