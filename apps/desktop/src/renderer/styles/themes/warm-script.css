@@ -193,6 +193,9 @@
   --border-subtle: #0000001a;
   --border-island: #6B5A4026;
   --border-focus: #2D231640;
+  /* Chat avatar frame — warm-script keeps the soft default. */
+  --border-avatar: var(--border-subtle);
+  --border-avatar-width: 1px;
 
   /* ── On-color foregrounds ── */
   --text-on-accent: #FFFFFF;

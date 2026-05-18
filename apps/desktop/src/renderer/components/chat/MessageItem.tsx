@@ -460,26 +460,14 @@ function Avatar({
   onNavigateAgent: (agentId: string) => void;
 }): JSX.Element {
   if (isUser) {
-    const inner = isCurrentUser && viewerAvatarObjectUrl ? (
-      <span
-        className="mt-0.5 inline-block size-8 shrink-0 overflow-hidden rounded-none border border-border-subtle bg-bg-elevated"
-        aria-hidden
-      >
-        {/* eslint-disable-next-line jsx-a11y/img-redundant-alt */}
-        <img
-          src={viewerAvatarObjectUrl}
-          alt="Your avatar"
-          className="size-full object-cover"
-        />
-      </span>
-    ) : (
-      <span
-        className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-none border border-border-subtle bg-bg-elevated text-text-muted"
-        aria-hidden
-      >
-        <User className="size-4" />
-      </span>
-    );
+    // Make the avatar's outermost element (button when wrapped, span
+    // when not) carry an explicit size-8 box. Earlier the size lived
+    // on the inner span only, so the wrapping <button> auto-sized
+    // from its child and the focus ring rendered as a 32×34 rectangle
+    // (@shiki feedback `4TU4EBHr70R-YMgc` + follow-up
+    // `osrdZIlji8lBfdiv`). With size on the outermost element the
+    // box stays square regardless of the avatar image's natural
+    // aspect ratio (`object-cover` already crops the image to fill).
     if (isCurrentUser && viewer) {
       return (
         <HumanInfoPopover
@@ -490,14 +478,49 @@ function Avatar({
           <button
             type="button"
             aria-label={`@${viewer.name}`}
-            className="rounded-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+            className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-none border-[length:var(--border-avatar-width)] border-border-avatar bg-bg-elevated text-text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
           >
-            {inner}
+            {viewerAvatarObjectUrl ? (
+              /* eslint-disable-next-line jsx-a11y/img-redundant-alt */
+              <img
+                src={viewerAvatarObjectUrl}
+                alt="Your avatar"
+                className="size-full object-cover"
+                draggable={false}
+              />
+            ) : (
+              <User className="size-4" />
+            )}
           </button>
         </HumanInfoPopover>
       );
     }
-    return inner;
+    // Unwrapped path (other-user message or viewer not yet loaded):
+    // span carries both the size and the mt-0.5 offset directly.
+    if (isCurrentUser && viewerAvatarObjectUrl) {
+      return (
+        <span
+          className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-none border-[length:var(--border-avatar-width)] border-border-avatar bg-bg-elevated"
+          aria-hidden
+        >
+          {/* eslint-disable-next-line jsx-a11y/img-redundant-alt */}
+          <img
+            src={viewerAvatarObjectUrl}
+            alt="Your avatar"
+            className="size-full object-cover"
+            draggable={false}
+          />
+        </span>
+      );
+    }
+    return (
+      <span
+        className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-none border-[length:var(--border-avatar-width)] border-border-avatar bg-bg-elevated text-text-muted"
+        aria-hidden
+      >
+        <User className="size-4" />
+      </span>
+    );
   }
   if (agent) {
     return (
@@ -520,7 +543,7 @@ function Avatar({
           <AgentAvatar
             runtime={agent.runtime}
             size={32}
-            className="border border-border-subtle"
+            className="border-[length:var(--border-avatar-width)] border-border-avatar"
             avatarObjectUrl={agentAvatarObjectUrl}
             alt={agent.display_name || agent.name}
           />
@@ -530,7 +553,7 @@ function Avatar({
   }
   return (
     <span
-      className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-none border border-border-subtle bg-bg-elevated text-text-muted"
+      className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-none border-[length:var(--border-avatar-width)] border-border-avatar bg-bg-elevated text-text-muted"
       aria-hidden
     >
       <User className="size-4" />

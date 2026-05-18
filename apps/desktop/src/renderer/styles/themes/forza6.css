@@ -262,6 +262,11 @@
   --border-subtle: rgba(15, 31, 29, 0.10);
   --border-island: rgba(255, 255, 255, 0.08);
   --border-focus: var(--accent);
+  /* Chat avatar frame — forza6 uses the brand near-black to harden
+     the head-shot edge against neon backgrounds. Other themes alias
+     this to `--border-subtle` so the chat surface stays soft. */
+  --border-avatar: #0A0A0A;
+  --border-avatar-width: 2px;
 
   /* ── On-color foregrounds —
      Driven by per-pair contrast, not a single rule. Neon surfaces
