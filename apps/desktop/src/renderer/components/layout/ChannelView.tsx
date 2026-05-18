@@ -677,11 +677,11 @@ function MemberStrip({
                 aria-label={`@${agent.name}`}
                 data-member-chip="agent"
                 data-member-id={member.agent_id}
-                className="relative rounded-none border border-[#9ca3af] bg-bg-floating p-px shadow-sm transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+                className="relative inline-flex size-[18px] shrink-0 items-center justify-center overflow-hidden rounded-none border border-[#9ca3af] bg-bg-floating p-0 shadow-sm transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
               >
                 <AgentAvatar
                   runtime={agent.runtime}
-                  size={18}
+                  size={16}
                   avatarObjectUrl={agentAvatarUrls.get(agent.id) ?? null}
                   alt={agent.display_name || agent.name}
                 />
