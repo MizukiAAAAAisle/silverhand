@@ -301,4 +301,29 @@ describe('theme markdown token cascade contract', () => {
       }
     }
   });
+
+  /* PR-10 token promotion (#task:365): primary control surface
+     (Button `default` variant CTA — Create / Save / Register submit
+     buttons) is now a 3-token contract. forza6 needed CTAs to use
+     `--brand-primary` (#FF2C7A "theme pink") instead of `--accent`
+     (#B3186A deep magenta — pressed dark for text-accent浅底 AA per
+     Cindy `JzkPVNV3svN97WSR`); the previous coupling of CTA bg to
+     accent foreground meant forza6 CTAs read as muddy dark pink
+     (shiki `Ao2TTCQ6Q2r5OG-a`). Every theme MUST declare all three
+     so the brand vs accent decision is explicit per-theme. warm-script
+     degenerates each to the accent family (pixel-zero — warm's accent
+     is intentionally a single warm-near-black hue serving both bg and
+     fg). */
+  it('every theme explicitly defines primary control surface tokens', () => {
+    const CTA_TOKENS = [
+      '--bg-control-primary',
+      '--bg-control-primary-hover',
+      '--text-on-control-primary',
+    ];
+    for (const css of [warmScriptCss, forza6Css]) {
+      for (const token of CTA_TOKENS) {
+        expect(css).toContain(`${token}:`);
+      }
+    }
+  });
 });

@@ -159,6 +159,19 @@
   --select-content-radius: 6px;
   --select-item-radius: 4px;
 
+  /* ── Primary control surface (§3.2.3, PR-10 token promotion) ──
+     `Button` default variant (CTA — 各 dialog 的 Create / Save 主按钮)
+     的 bg / text / hover 出口。warm-script 退化到 accent 家族
+     (pixel-zero) —— warm 的 `--accent` 已经是暖近黑，CTA bg 用它和
+     foreground 一致没问题。forza6 用 `--brand-primary` (#FF2C7A 主题粉)
+     而不是 `--accent` (#B3186A deep magenta)，因为 forza6 的 `--accent`
+     被压成 deep 是为了浅底 text-accent AA，当 CTA bg 看起来太暗 ——
+     shiki `Ao2TTCQ6Q2r5OG-a` 报"create workspace/channel/settings 里
+     button 粉色太暗"。让 CTA 跟 accent foreground 解耦。 */
+  --bg-control-primary: var(--accent);
+  --bg-control-primary-hover: var(--accent-hover);
+  --text-on-control-primary: var(--text-on-accent);
+
   /* ── Accent (暖近黑 — 高对比·低噪音) ──
      #2D2316 在 #FFFAEF 上对比度 ≈ 15:1（AAA）；
      亮黄侧栏 + 深黑 accent = 强焦点感，无颜色噪音。 */

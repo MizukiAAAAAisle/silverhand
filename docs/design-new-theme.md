@@ -172,6 +172,33 @@ narrow namespace 防止被复用到不合适的尺寸。
 magenta(in_review)：cyan 是 dashboard-live，magenta 是 attention-grabbing
 beacon，跟语义同向。
 
+### 3.2.3 Primary control surface（PR-10 token promotion）
+
+`Button` `default` variant —— 所有 dialog 的 Create / Save 提交按钮、
+SettingsPage 的 profile/general save、RegistrationGate 的注册主按钮等
+**主 CTA** —— 通过一个 3-token 契约取 bg / hover bg / text，跟 `--accent`
+foreground 语义解耦。
+
+| Token | 用途 | 取值原则 |
+|---|---|---|
+| `--bg-control-primary` | 主 CTA 背景 | 暖系退化到 `var(--accent)`（pixel-zero）；海报系用 `var(--brand-primary)` (#FF2C7A) —— 不能跟着 forza6 `--accent` 被压成 deep magenta，CTA 背景太暗 |
+| `--bg-control-primary-hover` | hover bg | 暖系 `var(--accent-hover)`；海报系 `color-mix(in oklab, var(--brand-primary) 88%, #000000)` 把热粉往黑里走 12% |
+| `--text-on-control-primary` | 配 bg 的字色 | 暖系 `var(--text-on-accent)`；海报系 `var(--text-on-brand)` (近黑 #0A0A0A on #FF2C7A ≈ 5.56:1 AA) |
+
+**为什么独立 token 不直接 `--bg-accent` / `--text-on-accent`** —— 在
+forza6 里 `--accent` 必须同时承担"浅底可读 foreground"（text-accent、
+agent name 等）和"loud CTA 表面"，两个角色对色彩的需求冲突：foreground
+要深 (≥4.5:1 on cool-white)，CTA 要亮 (品牌识别)。把它们拆成不同 token
+是唯一的解。warm-script 没这个冲突（暖系 accent 本身就是近黑既当字又当
+bg），所以三个 token 都退化到 accent 家族，pixel-zero 不变。shiki
+`Ao2TTCQ6Q2r5OG-a` 直接报"forza6 create dialog button 粉色太暗"。
+
+**故意不动**：装饰性 `bg-accent` 表面（NavRail selected、SettingsPage
+theme swatch selected、Titlebar notification badge、ChannelView FAB
+等）继续用 `--accent`。它们是 selected/indicator 语义，跟 CTA 不一类，
+不应该跟着主 CTA 改色 —— 那会让 forza6 整个"被选中"的色调跟"主操作"
+混淆。
+
 ### 3.3 Accent + on-color 配对
 
 | Token | 用途 |
@@ -583,6 +610,12 @@ shiki 决定先保留胶囊（forza6 用饱和填色表达状态语义，不需�
      接重框"边界保留 */
   --select-content-radius: ...;   /* 暖系 6px 字面值，海报系 0 */
   --select-item-radius: ...;      /* 暖系 4px（视觉同心折中），海报系 0 */
+
+  /* ── Primary control surface (§3.2.3) ── Button default variant
+     (CTA) 的 bg / hover / text 出口；跟 --accent foreground 解耦 */
+  --bg-control-primary: ...;        /* 暖系 var(--accent)；海报系 var(--brand-primary) */
+  --bg-control-primary-hover: ...;  /* 暖系 var(--accent-hover)；海报系 color-mix(...) 8-12% 变深 */
+  --text-on-control-primary: ...;   /* 暖系 var(--text-on-accent)；海报系 var(--text-on-brand) */
 
   /* ── Motion ── */
   --ease: cubic-bezier(...);
