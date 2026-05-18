@@ -132,6 +132,18 @@ appearance.test.ts 锁定）。这是 §3.1 关键 3 的硬约束：不显式定
 | `--text-island` | 岛屿（代码块）内的文字 |
 | `--text-inline-code` | 行内 `code` 字色 —— **每个主题独立选**，见主文档 §7 选色三原则 |
 
+### 3.2.1 Inline-code chip（PR-3 token promotion）
+
+`.markdown-body :not(pre) > code` 渲染时读取下表 4 token，全部 per-theme
+强制定义；不允许漏一个回退到 `:root`，否则会出现 forza6 → 暖系切换后
+仍残留 lime + 黑边的泄漏。`--text-inline-code` 已在 §3.2，新增 3 个：
+
+| Token | 用途 | 取值原则 |
+|---|---|---|
+| `--bg-inline-code` | chip 背景 | 暖系常用 `color-mix(text-primary 14%, bg-base)` 软底；海报系用饱和填充色 |
+| `--border-inline-code` | chip 边框 shorthand（含 width + style + color） | 软底主题给 `none`；海报系给 `2px solid <near-black>` |
+| `--radius-inline-code` | chip 圆角 | 软底主题给 `var(--radius-sm)`；海报系给 `0` 方角 |
+
 ### 3.3 Accent + on-color 配对
 
 | Token | 用途 |

@@ -271,24 +271,14 @@
   text-transform: uppercase;
 }
 
-/* ── Markdown inline code — poster-style lime sticker ──
-   shiki `z7QboHr4aDIoAHQX`: "inline-code 背景色应该是类似：#D4F523
-   的颜色，然后加上 2px 黑色，直角 border，来营造海报风格".
-     - background: full acid lime (`#D4F523`).
-     - color: near-black, ≈ 13.8:1 AAA on lime.
-     - border: 2px solid near-black — strong outline so the chip
-       stands clearly against the cool-white chat surface (lime
-       alone vs white is only 1.42:1).
-     - border-radius: 0 — square corners, "poster" / "sticker"
-       aesthetic, breaks from the soft-rounded PR-1 chip default.
-
-   Selector specificity: ours (0,3,1) > global.css (0,2,1). */
-[data-theme='forza6'] .markdown-body :not(pre) > code {
-  background: #D4F523;
-  color: #0A0A0A;
-  border: 2px solid #0A0A0A;
-  border-radius: 0;
-}
+/* ── Markdown inline code ─────────────────────────────────────────
+   Promoted to the token contract in PR-3 (#task:344). The lime
+   sticker recipe (acid-lime bg + 2px near-black border + 0 radius +
+   near-black text) now lives entirely in forza6.css via
+   `--bg-inline-code` / `--border-inline-code` / `--radius-inline-code`
+   / `--text-inline-code`, consumed by the single
+   `.markdown-body :not(pre) > code` rule in global.css. No forza6-
+   scoped override here anymore. */
 
 /* ── #v5.3 — Member-strip black HUD readout (REMOVED in v5.4) ────────
    v5.3 wrapped `[data-member-strip]` in a black pill with a "CREW"

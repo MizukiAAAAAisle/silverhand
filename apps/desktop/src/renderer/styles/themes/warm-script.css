@@ -72,6 +72,15 @@
   --text-island: #2A2520;
   --text-inline-code: #7A5C30;  /* 暖琥珀色 — accent 近黑时不再用 color-mix */
 
+  /* Inline-code chip — soft ink-wash, borderless, soft-rounded so it
+     reads as inline emphasis rather than a hard sticker. Background
+     formula stays the previous `color-mix(text-primary 14%, bg-base)`
+     so warm-script's chip visual is byte-for-byte unchanged from
+     pre-tokenization. */
+  --bg-inline-code: color-mix(in srgb, var(--text-primary) 14%, var(--bg-base));
+  --border-inline-code: none;
+  --radius-inline-code: var(--radius-sm);
+
   /* ── Accent (暖近黑 — 高对比·低噪音) ──
      #2D2316 在 #FFFAEF 上对比度 ≈ 15:1（AAA）；
      亮黄侧栏 + 深黑 accent = 强焦点感，无颜色噪音。 */

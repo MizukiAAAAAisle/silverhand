@@ -464,12 +464,14 @@ button:disabled { cursor: not-allowed; }
 }
 .markdown-body th { background: var(--bg-elevated); font-weight: 600; }
 
-/* Inline code — chip-style: tighter, bordered, breathes next to CJK
-   text via inline margin, and breaks anywhere so a long path can't
-   blow out the message bubble. Background is an ink-wash on the
-   page (mix of `--text-primary` into `--bg-base`) so the chip stays
-   in the theme's own color family instead of looking like a foreign
-   gray block. */
+/* Inline code — chip-style: tighter, breathes next to CJK text via
+   inline margin, and breaks anywhere so a long path can't blow out
+   the message bubble. Visual identity (background / border / radius)
+   is fully theme-driven through `--bg-inline-code` /
+   `--border-inline-code` / `--radius-inline-code` / `--text-inline-code`
+   so warm-script can keep a soft borderless ink-wash chip while
+   forza6 paints a hard lime poster sticker — all via tokens, no
+   per-theme override of this rule needed. */
 .markdown-body :not(pre) > code {
   display: inline;
   padding: 0.08em 0.36em;
@@ -477,8 +479,9 @@ button:disabled { cursor: not-allowed; }
   font-family: var(--md-code-font, var(--font-mono));
   font-size: var(--md-code-size, 12px);
   color: var(--text-inline-code);
-  background: color-mix(in srgb, var(--text-primary) 14%, var(--bg-base));
-  border-radius: var(--radius-sm);
+  background: var(--bg-inline-code);
+  border: var(--border-inline-code);
+  border-radius: var(--radius-inline-code);
   overflow-wrap: anywhere;
 }
 

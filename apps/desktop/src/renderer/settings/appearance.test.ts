@@ -153,4 +153,22 @@ describe('theme markdown token cascade contract', () => {
       }
     }
   });
+
+  /* PR-3 token promotion (#task:344): inline-code chip is now a
+     4-token contract (bg / border / radius + the existing
+     --text-inline-code). Every theme MUST declare the three new
+     tokens so a theme switch from forza6 doesn't leak the lime
+     poster recipe via :root fallback. */
+  it('every theme explicitly defines inline-code chip tokens', () => {
+    const INLINE_CODE_TOKENS = [
+      '--bg-inline-code',
+      '--border-inline-code',
+      '--radius-inline-code',
+    ];
+    for (const css of [warmScriptCss, forza6Css]) {
+      for (const token of INLINE_CODE_TOKENS) {
+        expect(css).toContain(`${token}:`);
+      }
+    }
+  });
 });
