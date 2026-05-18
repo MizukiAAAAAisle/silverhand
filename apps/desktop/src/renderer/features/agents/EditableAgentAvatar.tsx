@@ -8,7 +8,7 @@ import { useUploadAgentAvatar, useClearAgentAvatar } from './hooks';
 
 interface EditableAgentAvatarProps {
   agentId: string;
-  /** Pixel size of the avatar circle (must match the existing static
+  /** Pixel size of the avatar square (must match the existing static
    *  AgentAvatar size on the same surface so the page doesn't reflow
    *  when toggling between editable/read-only). */
   size: number;
@@ -30,14 +30,14 @@ interface EditableAgentAvatarProps {
 /**
  * Editable variant of `<AgentAvatar>` for the agent profile card.
  *
- * UX (per #task:314): the entire avatar circle is the click target.
+ * UX (per #task:314): the entire avatar square is the click target.
  * Hovering reveals a bottom strip with the visible verb (`Edit` /
- * `Add`); clicking anywhere on the circle opens the file picker. The
+ * `Add`); clicking anywhere on the avatar opens the file picker. The
  * previous separate `Choose…/Change…` button has been removed so this
  * widget matches the human avatar editor in `RegistrationGate` and
  * `SettingsPage > Profile`. Verbose screen-reader text lives on the
  * picker's `ariaLabel` because the visible label is forced short to
- * fit inside the 56px circular clip.
+ * fit inside the 56px frame's clip.
  *
  * Removal is a small text link rendered below the avatar — kept outside
  * the click target so a misaim can't silently re-open the picker.
@@ -93,7 +93,7 @@ export function EditableAgentAvatar({
 
   const pending = upload.isPending || clear.isPending;
   // Visible label MUST be short — the strip sits inside the avatar's
-  // 56px circular clip. ariaLabel carries the verbose screen-reader
+  // 56px frame clip. ariaLabel carries the verbose screen-reader
   // text. Cindy review #task:314: "Change photo" overflowed and was
   // cut horizontally even at 56px once uppercase tracking was applied.
   const pickerLabel = hasAvatar ? 'Edit' : 'Add';

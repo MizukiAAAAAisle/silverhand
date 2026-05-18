@@ -710,7 +710,7 @@ function MemberStrip({
 }
 
 /**
- * Human chip — same footprint as the agent chip (22px circle), but
+ * Human chip — same footprint as the agent chip (22px square), but
  * holds the viewer's avatar (current single-human invariant) or a
  * letter placeholder. Hover popover mirrors `HumanMention`'s
  * content so inline `@handle` mentions and header chips read the

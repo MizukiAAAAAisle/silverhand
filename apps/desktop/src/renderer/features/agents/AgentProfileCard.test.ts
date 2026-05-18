@@ -90,12 +90,12 @@ describe('AgentProfileCard creator/read-only render branches', () => {
     );
     // Description goes through GhostTextarea on the creator branch.
     expect(html).toContain('<textarea');
-    // Editable avatar picker is mounted — the whole avatar circle is the
+    // Editable avatar picker is mounted — the whole avatar square is the
     // click target now (a hidden file input + a hover label band). Both
     // markers must show; the human/agent click-the-avatar UX consolidation
     // (#task:314) replaced the old "Choose…/Change…" button. The visible
     // strip label is a single verb ("Edit" / "Add") to fit within the
-    // circular clip; the verbose text lives on the wrapper's `aria-label`.
+    // frame's clip; the verbose text lives on the wrapper's `aria-label`.
     expect(html).toContain('type="file"');
     expect(html).toMatch(/>Edit<|>Add</);
     expect(html).toMatch(/aria-label="(Change avatar|Add avatar) for @Alice"/);

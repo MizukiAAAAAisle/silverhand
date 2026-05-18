@@ -38,13 +38,13 @@ export interface AvatarPickerButtonProps {
   disabled?: boolean;
   /**
    * Override for the accessible name read by screen readers. The visible
-   * `label` is forced to a short verb to fit inside the circle's clip,
-   * which makes for a poor SR announcement on its own — pass a verbose
-   * value here (e.g. `'Change avatar'` / `'Add avatar for @alice'`).
+   * `label` is forced to a short verb to fit inside the avatar frame's
+   * clip, which makes for a poor SR announcement on its own — pass a
+   * verbose value here (e.g. `'Change avatar'` / `'Add avatar for @alice'`).
    * Defaults to `label`.
    */
   ariaLabel?: string;
-  /** Extra classes applied to the outer label/circle. */
+  /** Extra classes applied to the outer label/frame. */
   className?: string;
 }
 
