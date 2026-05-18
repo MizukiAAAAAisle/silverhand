@@ -287,6 +287,35 @@ lazy substitution 工作得很好（forza6 在浮层 wrapper 内重定义 `--bg-
 | `--duration` | 通用过渡时长 |
 | `--chat-font-size` | 对话区默认字号（用户可在 Settings 覆盖） |
 
+### 3.7.1 Chrome label utility（PR-6 token promotion）
+
+`.chrome-label` 工具类（定义在 `global.css`）给所有"chrome 小标签"
+—— uppercase + 紧 tracking + 可选 display 字体 —— 一个统一出口。
+典型消费者：分组 header（NavRail "Tasks" / Sidebar "CHANNELS"）、
+表格表头、Select.Label、settings tab 大写小标题、各种 badge 文本。
+
+3 token 全部 per-theme 强制定义；漏一个回退 `:root` 会让 forza6 的
+display 字体 + 0.06em tracking 泄漏到暖系：
+
+| Token | 用途 | 取值原则 |
+|---|---|---|
+| `--font-chrome-label` | label 字体栈 | 暖系常用 `var(--font-sans)`（暖系无独立 display 字体栈）；海报系用 `var(--font-display)` |
+| `--chrome-label-tracking` | letter-spacing | 暖系 `0.05em`（≈ Tailwind `tracking-wider`）；海报系 `0.06em`（与其它海报 caps 元素一致） |
+| `--chrome-label-transform` | text-transform | 通常都 `uppercase`；小写主题可设 `none` |
+
+**有意为之的窄契约**：size / weight / color 都留在调用点（call-site
+Tailwind utility），不进 token。每个 label 的 size 由它在 chrome 中
+的"重量"决定（10px badge vs 13px section header），强行统一会丢
+per-callsite 的设计自由度。Utility 只负责把"什么字 + 多开 tracking
++ 是否大写"这一组**per-theme** 的决策抽出来。
+
+**与现有 callsite 的关系**：~30+ TSX 调用点目前还在用裸 Tailwind
+（`uppercase tracking-wider`）。PR-6 只建立 utility + 契约，不做迁移
+扫，避免一次性改面过大、产生不必要的视觉对比噪音。后续按 callsite
+分类（badges / table headers / group titles / Select.Label）开独立
+sweep PR；每个 sweep 完成后，forza6-components.css 里对应的
+`font-family: var(--font-display)` 直接覆写就能删一行。
+
 ---
 
 ## 4. 选 token 值的核心约束
@@ -445,6 +474,11 @@ lazy substitution 工作得很好（forza6 在浮层 wrapper 内重定义 `--bg-
   --font-sans: ...;
   --font-serif: ...;        /* 极简主题可设为 var(--font-sans) */
   --font-mono: ...;
+
+  /* ── Chrome label utility (§3.7.1) ── `.chrome-label` 工具类消费 */
+  --font-chrome-label: ...;       /* 暖系 var(--font-sans)，海报系 var(--font-display) */
+  --chrome-label-tracking: ...;   /* 暖系 0.05em，海报系 0.06em */
+  --chrome-label-transform: ...;  /* 通常 uppercase；小写主题给 none */
 
   /* ── Motion ── */
   --ease: cubic-bezier(...);

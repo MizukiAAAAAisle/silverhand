@@ -149,6 +149,13 @@
   --border-row-hover: #0A0A0A;
   --border-row-selected: #0A0A0A;
 
+  /* ── Chrome label utility (§3.7.1) ──
+     forza6 走 display 字体栈 + 稍开的 tracking（0.06em，跟
+     `[data-tasks-num]` 等海报感 caps 元素一致）。 */
+  --font-chrome-label: var(--font-display);
+  --chrome-label-tracking: 0.06em;
+  --chrome-label-transform: uppercase;
+
   /* ── Accent —
      Forza tokens have a dual-role tension: the bright neon palette
      (lime / cyan / hot pink / yellow) reads as TILE SURFACE in the

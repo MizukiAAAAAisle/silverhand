@@ -243,4 +243,24 @@ describe('theme markdown token cascade contract', () => {
       }
     }
   });
+
+  /* PR-6 token promotion (#task:354): `.chrome-label` utility reads a
+     3-token contract (font family / tracking / text transform). Every
+     theme MUST declare all three so a theme switch from forza6 doesn't
+     leak the display font + 0.06em tracking into warm themes via :root
+     fallback. The utility is intentionally narrow — size / weight /
+     color stay at the call site so existing Tailwind vocabulary isn't
+     overridden. */
+  it('every theme explicitly defines chrome-label tokens', () => {
+    const CHROME_LABEL_TOKENS = [
+      '--font-chrome-label',
+      '--chrome-label-tracking',
+      '--chrome-label-transform',
+    ];
+    for (const css of [warmScriptCss, forza6Css]) {
+      for (const token of CHROME_LABEL_TOKENS) {
+        expect(css).toContain(`${token}:`);
+      }
+    }
+  });
 });

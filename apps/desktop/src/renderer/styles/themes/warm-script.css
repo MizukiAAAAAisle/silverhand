@@ -118,6 +118,15 @@
   --border-row-hover: var(--accent);
   --border-row-selected: var(--accent);
 
+  /* ── Chrome label utility (§3.7.1) ──
+     `.chrome-label` 工具类（global.css）消费这 3 token，给所有
+     uppercase + tracked + chrome 字体感的小标签一个统一出口。
+     warm-script 走 sans（暖系无独立 display 字体栈），tracking 与
+     Tailwind `tracking-wider`（0.05em）等价。 */
+  --font-chrome-label: var(--font-sans);
+  --chrome-label-tracking: 0.05em;
+  --chrome-label-transform: uppercase;
+
   /* ── Accent (暖近黑 — 高对比·低噪音) ──
      #2D2316 在 #FFFAEF 上对比度 ≈ 15:1（AAA）；
      亮黄侧栏 + 深黑 accent = 强焦点感，无颜色噪音。 */

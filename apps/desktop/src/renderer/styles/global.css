@@ -407,6 +407,26 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   border-color: var(--border-row-hover);
 }
 
+/* Chrome label utility (PR-6 token promotion). Opt-in `.chrome-label`
+   class normalizes the three "chrome small-caps" properties — font
+   family, letter spacing, text transform — into a single per-theme
+   contract. Use it on any uppercase + tracked + chrome-font label
+   (group titles, table headers, badges, settings tab headers, etc.).
+   Size / weight / color stay at the call site (Tailwind utilities) —
+   the utility is intentionally narrow so the per-callsite vocabulary
+   isn't lost.
+
+   Existing call sites (~30+ TSX surfaces) are intentionally NOT
+   migrated in this commit — the utility is established first, the
+   sweep is a separate PR. forza6-components.css still carries direct
+   `font-family: var(--font-display)` overrides on several rules; once
+   their TSX adopts `.chrome-label`, those overrides can be deleted. */
+.chrome-label {
+  font-family: var(--font-chrome-label);
+  letter-spacing: var(--chrome-label-tracking);
+  text-transform: var(--chrome-label-transform);
+}
+
 /* ── Activity cluster (PR-10) ──────────────────────────────────────
    `task_* / session_cleared / rename` lifecycle events get pooled
    into an `ActivityCluster` (see `groupMessages.ts`). The cluster
