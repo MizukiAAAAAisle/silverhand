@@ -462,7 +462,7 @@ function Avatar({
   if (isUser) {
     const inner = isCurrentUser && viewerAvatarObjectUrl ? (
       <span
-        className="mt-0.5 inline-block size-8 shrink-0 overflow-hidden rounded-none bg-bg-elevated"
+        className="mt-0.5 inline-block size-8 shrink-0 overflow-hidden rounded-none border border-border-subtle bg-bg-elevated"
         aria-hidden
       >
         {/* eslint-disable-next-line jsx-a11y/img-redundant-alt */}
@@ -474,7 +474,7 @@ function Avatar({
       </span>
     ) : (
       <span
-        className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-none bg-bg-elevated text-text-muted"
+        className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-none border border-border-subtle bg-bg-elevated text-text-muted"
         aria-hidden
       >
         <User className="size-4" />
@@ -520,6 +520,7 @@ function Avatar({
           <AgentAvatar
             runtime={agent.runtime}
             size={32}
+            className="border border-border-subtle"
             avatarObjectUrl={agentAvatarObjectUrl}
             alt={agent.display_name || agent.name}
           />
@@ -529,7 +530,7 @@ function Avatar({
   }
   return (
     <span
-      className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-none bg-bg-elevated text-text-muted"
+      className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-none border border-border-subtle bg-bg-elevated text-text-muted"
       aria-hidden
     >
       <User className="size-4" />
