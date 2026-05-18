@@ -203,6 +203,27 @@ beacon，跟语义同向。
 | `--border-island` | 岛屿描边 |
 | `--border-focus` | focus ring |
 
+### 3.5.1 Row-state border color（PR-5 token promotion）
+
+Sidebar 行（`.sidebar-row-border` 类，命中 ChannelsSidebar /
+WorkspacesPanel / Sidebar / sidebar-shared）和 NavRail 按钮
+（`nav[aria-label='App sections'] button`）的 hover / selected 边框
+颜色，共用一套 2-token 契约。每个主题 MUST 全部 2 个都显式定义；
+不允许漏一个回退到 `:root`，否则 forza6 的近黑会泄漏到暖系。
+
+| Token | 用途 | 取值原则 |
+|---|---|---|
+| `--border-row-hover` | 行 hover 时的边框色 | 暖系常用 `var(--accent)`；海报系用 `<near-black>` |
+| `--border-row-selected` | 行 selected 时的边框色 | 同上；通常与 hover 同色，让 hover 成为 selected 的"几何 preview" |
+
+宽度仍走 `.sidebar-row-border { border-width: var(--sidebar-row-border-width, 2px) }`，
+没有 per-theme 差异，所以不进契约。
+
+**为什么两个 token 而非 shorthand？** Hover 和 selected 经常同色但
+背景不同（forza6 = pale-lime vs lime fill；warm = transparent vs
+bg-selected），分开 token 让"色一致而背景递进"的语义显式：边框承担
+geometry，背景承担 emphasis 梯度。
+
 ### 3.6 阴影 + 浮层 base
 
 | Token | 用途 |
@@ -383,6 +404,10 @@ lazy substitution 工作得很好（forza6 在浮层 wrapper 内重定义 `--bg-
   --border-subtle: ...;
   --border-island: ...;
   --border-focus: ...;
+
+  /* ── Row-state border color (§3.5.1) ── sidebar / NavRail hover + selected */
+  --border-row-hover: ...;       /* 暖系 var(--accent)，海报系 <near-black> */
+  --border-row-selected: ...;    /* 通常同 hover；让 hover 成为 selected geometry preview */
 
   /* ── On-color foregrounds ── */
   --text-on-accent: ...;

@@ -110,6 +110,14 @@
   --floating-radius: var(--radius-md);
   --floating-item-radius: var(--radius-sm);
 
+  /* ── Row-state border color (§3.5.1) ──
+     Sidebar / NavRail 行的 selected + hover 边框颜色。warm-script 走
+     现有 accent 黏合（与 TSX 里 `border-accent` / `hover:border-accent`
+     Tailwind class 视觉等价），global.css 的 token 规则 source order
+     稍后覆写，pixel-zero。两态同一色 = 暖系视觉简约一致。 */
+  --border-row-hover: var(--accent);
+  --border-row-selected: var(--accent);
+
   /* ── Accent (暖近黑 — 高对比·低噪音) ──
      #2D2316 在 #FFFAEF 上对比度 ≈ 15:1（AAA）；
      亮黄侧栏 + 深黑 accent = 强焦点感，无颜色噪音。 */

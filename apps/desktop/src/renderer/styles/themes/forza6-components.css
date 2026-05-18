@@ -136,11 +136,13 @@
    shiki `z7QboHr4aDIoAHQX` "navrail/sidebar 选中用 酸柠绿".
    Lime body, near-black icon, near-black border for poster-style
    containment, plus 3px near-black left-edge dock notch.
+   `border-color` now comes from `--border-row-selected` (PR-5 token,
+   global.css); only the lime fill + position relative for the notch
+   stay forza6-specific.
    Specificity (0,3,0) > Tailwind utility (0,1,0). */
 [data-theme='forza6']
   nav[aria-label='App sections'] button[aria-current='page'] {
   background-color: #D4F523;
-  border-color: #0A0A0A;
   color: #0A0A0A;
   position: relative;
 }
@@ -174,10 +176,12 @@
 
    Three-step "border-first, fill-next, notch-last" hardness ramp
    that all share the same near-black structural border — Cindy
-   review #3 "hover 应该更硬，少用透明色". */
+   review #3 "hover 应该更硬，少用透明色".
+
+   `border-color` now comes from `--border-row-hover` (PR-5 token,
+   global.css); only the pale-lime ground stays forza6-specific. */
 [data-theme='forza6']
   nav[aria-label='App sections'] button:not([aria-current='page']):hover {
-  border-color: #0A0A0A;
   background-color: #E6F68A;
 }
 
@@ -203,10 +207,12 @@
 /* Selected row: poster-style near-black 2px border + dark token
    re-restore for descendants (children that opt out of
    `currentColor` via explicit `text-text-muted` etc. stay near-black
-   on the lime selection wedge — black-on-lime is 14.8:1 AAA). */
+   on the lime selection wedge — black-on-lime is 14.8:1 AAA).
+   `border-color` now comes from `--border-row-selected` (PR-5 token,
+   global.css); only the descendant text-token re-restore stays
+   forza6-specific. */
 [data-theme='forza6']
   aside[data-sidebar] .sidebar-row-border.text-text-on-selected {
-  border-color: #0A0A0A;
   --text-primary: #0A0A0A;
   --text-secondary: #0A0A0A;
   --text-muted: rgba(0, 0, 0, 0.62);
@@ -218,11 +224,12 @@
    shiki v5.4 `HmSkM-LYURE6O9zp` "缺少黑边". Same fix as NavRail:
    border switches from `#D4F523` lime to `#0A0A0A` near-black so
    the hover sticker shares the selected sticker's structural
-   border, making hover a true preview. Ground stays `#E6F68A`. */
+   border, making hover a true preview. Ground stays `#E6F68A`.
+   `border-color` now comes from `--border-row-hover` (PR-5 token,
+   global.css); only the pale-lime ground stays forza6-specific. */
 [data-theme='forza6']
   aside[data-sidebar]
   .sidebar-row-border:not(.text-text-on-selected):hover {
-  border-color: #0A0A0A;
   background-color: #E6F68A;
 }
 

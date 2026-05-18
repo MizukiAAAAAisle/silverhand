@@ -223,4 +223,24 @@ describe('theme markdown token cascade contract', () => {
       }
     }
   });
+
+  /* PR-5 token promotion (#task:352): sidebar / NavRail row border
+     colour for hover + selected states is now a 2-token contract.
+     Every theme MUST declare both so a theme switch from forza6
+     doesn't leak its poster-sticker near-black into warm themes via
+     :root fallback. Per Cindy `tBslbxNV5QSi8x3s` we kept this scoped
+     to row state border colour only — width + radius stay on
+     `.sidebar-row-border` (global.css) because they don't vary by
+     theme today. */
+  it('every theme explicitly defines row-state border tokens', () => {
+    const ROW_STATE_TOKENS = [
+      '--border-row-hover',
+      '--border-row-selected',
+    ];
+    for (const css of [warmScriptCss, forza6Css]) {
+      for (const token of ROW_STATE_TOKENS) {
+        expect(css).toContain(`${token}:`);
+      }
+    }
+  });
 });

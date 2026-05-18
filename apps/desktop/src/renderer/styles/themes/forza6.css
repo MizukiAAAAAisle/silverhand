@@ -142,6 +142,13 @@
   --floating-radius: 0;
   --floating-item-radius: 0;
 
+  /* ── Row-state border color (§3.5.1) ──
+     Sidebar / NavRail 行的 selected + hover 边框颜色。forza6 走
+     poster sticker 硬边：两态同一近黑色 (#0A0A0A)，差异化由背景填充
+     承担（lime 选中 vs pale-lime 预览），不靠边框色梯度。 */
+  --border-row-hover: #0A0A0A;
+  --border-row-selected: #0A0A0A;
+
   /* ── Accent —
      Forza tokens have a dual-role tension: the bright neon palette
      (lime / cyan / hot pink / yellow) reads as TILE SURFACE in the
