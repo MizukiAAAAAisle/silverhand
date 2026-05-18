@@ -100,6 +100,16 @@
   --task-status-done-text: var(--success);
   --task-status-done-border: none;
 
+  /* ── Floating frame (§3.x) ──
+     Menu / popover / hover-card 共用一套外框契约。warm-script 用
+     现有 chrome 词汇：1px 极淡分隔线 + 中等圆角 + items 用 sm 圆角。
+     与 TSX 里 Tailwind `border border-border rounded-md` / `rounded-sm`
+     的视觉等价（global.css 的 token 规则在 source order 上稍后覆写，
+     pixel-zero）。 */
+  --floating-border: 1px solid var(--border);
+  --floating-radius: var(--radius-md);
+  --floating-item-radius: var(--radius-sm);
+
   /* ── Accent (暖近黑 — 高对比·低噪音) ──
      #2D2316 在 #FFFAEF 上对比度 ≈ 15:1（AAA）；
      亮黄侧栏 + 深黑 accent = 强焦点感，无颜色噪音。 */

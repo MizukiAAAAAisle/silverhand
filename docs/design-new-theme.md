@@ -213,6 +213,39 @@ beacon，跟语义同向。
 | `--shadow-modal` | modal 单层大扩散 |
 | `--shadow-button` | 按钮阴影（可选） |
 
+### 3.6.1 Floating frame（PR-4 token promotion）
+
+Menu / popover / hover-card 共用一套外框契约。两组消费面，命中规则
+都在 `global.css`：
+
+- `[data-radix-menu-content]` —— Radix DropdownMenu + ContextMenu 内部
+  共用属性
+- `[data-popover-frame='info']` —— 我们自定义的中性结构 hook，挂在
+  AgentInfoPopover / HumanInfoPopover / ManageMembersPopover /
+  HoverPopover 的 `Content`
+
+每个主题 MUST 全部 3 个都显式定义；不允许漏一个回退到 `:root`，否则
+forza6 的 2px 黑边 + 零圆角海报感会泄漏到暖系。
+
+| Token | 用途 | 取值原则 |
+|---|---|---|
+| `--floating-border` | 外框边框 shorthand（width + style + color） | 暖系常用 `1px solid var(--border)`；海报系用 `2px solid <near-black>` |
+| `--floating-radius` | 外框圆角 | 暖系 `var(--radius-md)`；海报系 `0` 方角 |
+| `--floating-item-radius` | 菜单内项的圆角（外方内圆会读成"歪贴纸"） | 暖系 `var(--radius-sm)`；海报系 `0`，跟外框对齐 |
+
+**没有 `--floating-border-width`** —— Cindy `GZJAggfU2U8kcIV0` 决策：
+shorthand 已含 width，当前没有任何 inset/offset 布局算需要单独取 width。
+等真有第二消费点再补，先 YAGNI。
+
+**没有 `--floating-item-hover-bg`** —— hover 色已经通过
+`[data-radix-popper-content-wrapper] { --bg-hover: ... }` 的 scoped
+lazy substitution 工作得很好（forza6 在浮层 wrapper 内重定义 `--bg-hover`
+为 lime，所有 `data-[highlighted]:bg-bg-hover` Tailwind 工具类自动跟上），
+不需要新 token。等出现"浮层 hover ≠ 普通 hover"的第二个主题，再升级。
+
+**Tooltip / Select listbox 故意不入**：它们是小气泡，给海报感重框会
+过载视觉。forza6 v5.7.1 的边界判断在 PR-4 后保留。
+
 ### 3.7 几何 + 排版 + 节奏
 
 | Token | 用途 |
@@ -328,6 +361,11 @@ beacon，跟语义同向。
   --task-status-in-progress-bg: ...;   --task-status-in-progress-text: ...;   --task-status-in-progress-border: ...;
   --task-status-in-review-bg: ...;     --task-status-in-review-text: ...;     --task-status-in-review-border: ...;
   --task-status-done-bg: ...;          --task-status-done-text: ...;          --task-status-done-border: ...;
+
+  /* ── Floating frame (§3.6.1) ── menu / popover / hover-card 共用 */
+  --floating-border: ...;        /* shorthand：暖系 `1px solid var(--border)`，海报系 `2px solid <near-black>` */
+  --floating-radius: ...;        /* 暖系 var(--radius-md)，海报系 0 */
+  --floating-item-radius: ...;   /* 跟外框对齐：暖系 var(--radius-sm)，海报系 0 */
 
   /* ── Accent ── */
   --accent: ...;

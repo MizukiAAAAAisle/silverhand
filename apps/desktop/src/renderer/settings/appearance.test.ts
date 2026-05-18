@@ -201,4 +201,26 @@ describe('theme markdown token cascade contract', () => {
       }
     }
   });
+
+  /* PR-4 token promotion (#task:350): floating frame (menu /
+     popover / hover-card outer chrome + inner item radius) is now a
+     3-token contract. Every theme MUST declare all three so a theme
+     switch from forza6 doesn't leak its 2px black + 0-radius poster
+     sticker frame into warm themes via :root fallback. Border is a
+     shorthand (width + style + color) so a single token captures the
+     full edge identity per theme; per Cindy `GZJAggfU2U8kcIV0` we
+     intentionally skipped a separate `--floating-border-width` until
+     a real consumer needs the width for layout/inset math. */
+  it('every theme explicitly defines floating frame tokens', () => {
+    const FLOATING_FRAME_TOKENS = [
+      '--floating-border',
+      '--floating-radius',
+      '--floating-item-radius',
+    ];
+    for (const css of [warmScriptCss, forza6Css]) {
+      for (const token of FLOATING_FRAME_TOKENS) {
+        expect(css).toContain(`${token}:`);
+      }
+    }
+  });
 });

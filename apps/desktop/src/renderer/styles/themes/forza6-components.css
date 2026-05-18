@@ -695,50 +695,12 @@
   --bg-hover: #E6F68A;
 }
 
-/* ── Poster sticker frame for menus + profile popovers (v5.7.1) ──
-   shiki `AZNsmZA4aRQpQARN` — context menu + agent/human profile
-   popover should pick up the same poster-sticker hardness as the
-   rest of the forza6 chrome (2px black border + zero radius).
+/* Poster sticker frame for menus + popovers — values now live in the
+   `--floating-border` / `--floating-radius` / `--floating-item-radius`
+   token contract (forza6.css + global.css rules). The surface scope
+   choices (`[data-radix-menu-content]`, `[data-popover-frame='info']`,
+   inner items by role) are documented in global.css's floating-frame
+   block. Tooltip and Select listbox stay soft on purpose — they sit
+   outside the global rule for the same reason they used to sit outside
+   the forza6 override. */
 
-   Two scope groups, both narrow:
-   1. `[data-radix-menu-content]` — emitted by `@radix-ui/react-menu`
-      (the primitive both DropdownMenu and ContextMenu re-export). A
-      stable Radix-internal data attribute we already verified by
-      grepping the compiled `index.mjs`.
-   2. `[data-popover-frame='info']` — a theme-neutral structural
-      hook we add to every Content surface that should read as an
-      "info card" frame. Currently applied to:
-        - AgentInfoPopover / HumanInfoPopover (Popover.Content)
-        - ManageMembersPopover (Popover.Content)
-        - HoverPopover (HoverCard.Content) — covers task popover,
-          conversation popover, and channel-mention hover popover
-          (v5.7.3, shiki `163ei8HSMscd0Dbr`).
-      React-popover does NOT emit a `data-radix-popover-content`
-      attribute (verified by grep; only `data-state` exists), and
-      react-hover-card emits no equivalent either, so we cannot
-      piggy-back on a Radix attr the way the menu rule above does.
-      Adding our own theme-neutral data hook keeps the TSX free of
-      forza6 semantics and lets warm three themes stay pixel-zero.
-
-   Tooltip (`data-radix-tooltip-content`) and Select listbox
-   (`data-radix-select-content`) deliberately stay soft — they are
-   small floating bubbles where a heavy poster frame would over-
-   shout the surrounding UI. They still inherit the lime
-   `--bg-hover` from the wrapper rule above. (HoverCard used to be
-   in this group too, but its only consumer in this codebase is
-   HoverPopover, which is itself an info-card surface — so we
-   promoted it via the explicit hook rather than skipping it.)
-
-   Inner menu items also re-square their corners so they align with
-   the new outer square frame; otherwise rounded items inside a
-   square popover read as "crooked stickers". */
-[data-theme='forza6'] [data-radix-menu-content],
-[data-theme='forza6'] [data-popover-frame='info'] {
-  border: 2px solid #0A0A0A;
-  border-radius: 0;
-}
-[data-theme='forza6'] [data-radix-menu-content] [role='menuitem'],
-[data-theme='forza6'] [data-radix-menu-content] [role='menuitemcheckbox'],
-[data-theme='forza6'] [data-radix-menu-content] [role='menuitemradio'] {
-  border-radius: 0;
-}

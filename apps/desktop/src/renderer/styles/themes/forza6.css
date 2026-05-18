@@ -134,6 +134,14 @@
   --task-status-done-text: #2E5A14;
   --task-status-done-border: 1.5px solid rgba(0, 0, 0, 0.40);
 
+  /* ── Floating frame (§3.x) ──
+     Menu / popover / hover-card 共用一套外框契约。forza6 走 poster
+     sticker hardness：2px 全黑边 + 零圆角 + items 也零圆角（避免外方
+     内圆的"歪贴纸"观感，沿用 forza6-components.css v5.7.1 的设计）。 */
+  --floating-border: 2px solid #0A0A0A;
+  --floating-radius: 0;
+  --floating-item-radius: 0;
+
   /* ── Accent —
      Forza tokens have a dual-role tension: the bright neon palette
      (lime / cyan / hot pink / yellow) reads as TILE SURFACE in the

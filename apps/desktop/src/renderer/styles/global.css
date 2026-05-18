@@ -344,6 +344,33 @@ button:disabled { cursor: not-allowed; }
   border: var(--task-status-done-border);
 }
 
+/* Floating frame (PR-4 token promotion). All Radix menu surfaces
+   (`[data-radix-menu-content]` — DropdownMenu + ContextMenu) and our
+   `[data-popover-frame='info']` info-card hook (AgentInfoPopover,
+   HumanInfoPopover, ManageMembersPopover, HoverPopover) read a single
+   3-token contract for outer border + outer radius + inner item
+   radius. Each theme owns its values. TSX intentionally still carries
+   `border border-border rounded-md` Tailwind classes; the rules below
+   sit later in CSS source order at equal specificity, so they win and
+   the values come from tokens (forza6 → 2px black + 0 radius; warm
+   themes → 1px subtle + radius-md / radius-sm).
+
+   Tooltip (`data-radix-tooltip-content`) and Select listbox
+   (`data-radix-select-content`) deliberately stay outside this rule
+   — they're small floating bubbles where a heavy poster frame
+   over-shouts the surrounding UI (forza6 v5.7.1 rationale, preserved).
+   Cindy `GZJAggfU2U8kcIV0` / `L4ApUD5JQCD8LuAQ`. */
+[data-radix-menu-content],
+[data-popover-frame='info'] {
+  border: var(--floating-border);
+  border-radius: var(--floating-radius);
+}
+[data-radix-menu-content] [role='menuitem'],
+[data-radix-menu-content] [role='menuitemcheckbox'],
+[data-radix-menu-content] [role='menuitemradio'] {
+  border-radius: var(--floating-item-radius);
+}
+
 /* ── Activity cluster (PR-10) ──────────────────────────────────────
    `task_* / session_cleared / rename` lifecycle events get pooled
    into an `ActivityCluster` (see `groupMessages.ts`). The cluster
