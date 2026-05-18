@@ -290,6 +290,11 @@ appearance.test.ts 锁定）。这是 §3.1 关键 3 的硬约束：不显式定
   --text-island: ...;
   --text-inline-code: ...;  /* 与 accent 区分、与 text-primary 有色相差 */
 
+  /* ── Inline-code chip (§3.2.1) ── */
+  --bg-inline-code: ...;        /* 软底主题常用 color-mix(text-primary X%, bg-base) */
+  --border-inline-code: ...;    /* shorthand：软底主题给 `none`，海报系给 `2px solid <near-black>` */
+  --radius-inline-code: ...;    /* 软底主题给 var(--radius-sm)，海报系给 `0` */
+
   /* ── Accent ── */
   --accent: ...;
   --accent-soft: ...;       /* ~6-10% alpha 的 accent */
