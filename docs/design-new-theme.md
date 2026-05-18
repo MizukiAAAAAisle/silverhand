@@ -323,7 +323,7 @@ button / select trigger / 小 icon button —— 一个统一圆角出口。
 
 | Token | 用途 | 取值原则 |
 |---|---|---|
-| `--control-radius` | control 表面圆角 | 暖系常用 `var(--radius-sm)`（warm-script 中 = 6px，跟之前 Tailwind `rounded-md` 像素相等，pixel-zero）；海报系用 `0` 强化"hard-cut block"语汇 |
+| `--control-radius` | control 表面圆角 | 暖系 `6px` 字面值（= 之前 Tailwind `rounded-md` 像素值，pixel-zero；**故意不 reuse `var(--radius-sm)`** —— warm 当前两者 6px 等值是巧合，control 语义对齐的是 md 档，借 sm 会让后续调整 `--radius-sm` 时意外把 control 圆角带小，Cindy `1eG7CReuc5X9ER_9`）；海报系用 `0` 强化"hard-cut block"语汇 |
 
 **消费点（PR-8 已迁完）**：
 - `components/ui/input.tsx` Input + Textarea
@@ -341,17 +341,18 @@ button / select trigger / 小 icon button —— 一个统一圆角出口。
 
 ### 3.7.3 Chip radius（PR-8 token promotion）
 
-`--chip-radius` 给所有 **inline reference / filter / 小 data chip** ——
-TaskRef / ConversationRef / ChannelRef / TaskStatusBadge / ConversationRef
-kind chip —— 一个统一圆角出口。
+`--chip-radius` 给所有 **inline reference / mention / filter / 小 data
+chip** —— TaskRef / ConversationRef / ChannelRef / Mention / TaskStatusBadge /
+ConversationRef kind chip —— 一个统一圆角出口。
 
 | Token | 用途 | 取值原则 |
 |---|---|---|
-| `--chip-radius` | chip 表面圆角 | 暖系 `4px` 字面值（= 之前 Tailwind `rounded` 默认值，pixel-zero；warm 的 `--radius-sm` 是 6px 不能 reuse）；海报系 `0` 跟 control 同节拍 |
+| `--chip-radius` | chip 表面圆角 | 暖系 `4px` 字面值（= 之前 Tailwind `rounded` 默认值，pixel-zero；同 control 一样不 reuse 命名 radius 防止意外 coupling）；海报系 `0` 跟 control 同节拍 |
 
 **消费点（PR-8 已迁完）**：TaskRef.tsx 全部 4 处 chip 状态 + 内嵌
 TaskStatusBadge；ConversationRef.tsx inert + interactive + kind chip；
-ChannelRef.tsx inert + interactive。
+ChannelRef.tsx inert + interactive；Mention.tsx agent + human mention；
+WorkspaceTasksDrawer 的 TaskStatusBadge（与 TaskRef 内嵌版本同形态）。
 
 **与 `--control-radius` 的边界**：
 - chip = inline 文本旁边的小标签，没有交互手感（即使可点也是 "点开
@@ -530,8 +531,10 @@ shiki 决定先保留胶囊（forza6 用饱和填色表达状态语义，不需�
 
   /* ── Control + chip radius (§3.7.2 / §3.7.3) ── input / button /
      select trigger / icon button → `--control-radius`；inline
-     reference / filter / 小 data chip → `--chip-radius` */
-  --control-radius: ...;          /* 暖系 var(--radius-sm)，海报系 0 */
+     reference / mention / filter / 小 data chip → `--chip-radius`。
+     字面值（6px / 4px）而非 `var(--radius-*)` 是有意的 —— 防止后续
+     调整命名 radius 时意外把 control/chip 圆角带跑（Cindy 1eG7CReuc5X9ER_9） */
+  --control-radius: ...;          /* 暖系 6px 字面值，海报系 0 */
   --chip-radius: ...;             /* 暖系 4px 字面值，海报系 0 */
 
   /* ── Motion ── */

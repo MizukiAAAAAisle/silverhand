@@ -86,7 +86,7 @@ function AgentMention({
           event.preventDefault();
           nav.toMembers(agent.id);
         }}
-        className="rounded px-1 -mx-0.5 font-medium text-accent transition-colors hover:bg-accent-soft focus-visible:bg-accent-soft focus-visible:outline-none"
+        className="rounded-[var(--chip-radius)] px-1 -mx-0.5 font-medium text-accent transition-colors hover:bg-accent-soft focus-visible:bg-accent-soft focus-visible:outline-none"
         aria-label={`@${agent.name}`}
       >
         @{label}
@@ -115,7 +115,7 @@ function HumanMention({ human }: { human: UserDto }): JSX.Element {
           event.preventDefault();
           nav.toSettings();
         }}
-        className="rounded px-1 -mx-0.5 font-medium text-accent transition-colors hover:bg-accent-soft focus-visible:bg-accent-soft focus-visible:outline-none"
+        className="rounded-[var(--chip-radius)] px-1 -mx-0.5 font-medium text-accent transition-colors hover:bg-accent-soft focus-visible:bg-accent-soft focus-visible:outline-none"
         aria-label={`@${human.name}`}
         data-mention-kind="human"
         data-mention-id={human.id}
