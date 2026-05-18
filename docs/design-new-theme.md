@@ -316,6 +316,54 @@ per-callsite 的设计自由度。Utility 只负责把"什么字 + 多开 tracki
 sweep PR；每个 sweep 完成后，forza6-components.css 里对应的
 `font-family: var(--font-display)` 直接覆写就能删一行。
 
+### 3.7.2 Control radius（PR-8 token promotion）
+
+`--control-radius` 给所有 **control surface** —— input / textarea /
+button / select trigger / 小 icon button —— 一个统一圆角出口。
+
+| Token | 用途 | 取值原则 |
+|---|---|---|
+| `--control-radius` | control 表面圆角 | 暖系常用 `var(--radius-sm)`（warm-script 中 = 6px，跟之前 Tailwind `rounded-md` 像素相等，pixel-zero）；海报系用 `0` 强化"hard-cut block"语汇 |
+
+**消费点（PR-8 已迁完）**：
+- `components/ui/input.tsx` Input + Textarea
+- `components/ui/button.tsx` buttonVariants 基础
+- 5 处内联 select trigger string：SearchPanel / ArchivedChannelsPanel
+  (含 Restore 小按钮) / AgentPicker / ManageMembersPopover / EventsApp
+- DeleteAgentDialog 的 confirm input
+- EventsApp pin toggle 小 icon button
+
+**故意不入** `--control-radius`：
+- SelectContent / popover / dialog / menu 等浮层表面 → 走 `--floating-radius`
+- card 表面（包括 SearchPanel 的 result card）→ 走 `--card-radius`
+- chip → 走 `--chip-radius`（§3.7.3）
+- pill 胶囊（TaskStatusPill）→ shiki 决定先保留胶囊，pill-radius 不入
+
+### 3.7.3 Chip radius（PR-8 token promotion）
+
+`--chip-radius` 给所有 **inline reference / filter / 小 data chip** ——
+TaskRef / ConversationRef / ChannelRef / TaskStatusBadge / ConversationRef
+kind chip —— 一个统一圆角出口。
+
+| Token | 用途 | 取值原则 |
+|---|---|---|
+| `--chip-radius` | chip 表面圆角 | 暖系 `4px` 字面值（= 之前 Tailwind `rounded` 默认值，pixel-zero；warm 的 `--radius-sm` 是 6px 不能 reuse）；海报系 `0` 跟 control 同节拍 |
+
+**消费点（PR-8 已迁完）**：TaskRef.tsx 全部 4 处 chip 状态 + 内嵌
+TaskStatusBadge；ConversationRef.tsx inert + interactive + kind chip；
+ChannelRef.tsx inert + interactive。
+
+**与 `--control-radius` 的边界**：
+- chip = inline 文本旁边的小标签，没有交互手感（即使可点也是 "点开
+  popover" 级别），形状是 `<span>`-shaped 短长方
+- control = 有清晰交互手感的表面（input / button / select），形状是
+  矩形按钮 / 输入框
+- 两个 token 分开的核心是 warm-script 里它们的圆角值不同（4px vs 6px）
+
+**没引入 `--pill-radius`** —— TaskStatusPill 是当前唯一胶囊消费者，
+shiki 决定先保留胶囊（forza6 用饱和填色表达状态语义，不需要靠形状）。
+后面如果第二个 pill 消费者出现再单独开 `--pill-radius`。
+
 ---
 
 ## 4. 选 token 值的核心约束
@@ -479,6 +527,12 @@ sweep PR；每个 sweep 完成后，forza6-components.css 里对应的
   --font-chrome-label: ...;       /* 暖系 var(--font-sans)，海报系 var(--font-display) */
   --chrome-label-tracking: ...;   /* 暖系 0.05em，海报系 0.06em */
   --chrome-label-transform: ...;  /* 通常 uppercase；小写主题给 none */
+
+  /* ── Control + chip radius (§3.7.2 / §3.7.3) ── input / button /
+     select trigger / icon button → `--control-radius`；inline
+     reference / filter / 小 data chip → `--chip-radius` */
+  --control-radius: ...;          /* 暖系 var(--radius-sm)，海报系 0 */
+  --chip-radius: ...;             /* 暖系 4px 字面值，海报系 0 */
 
   /* ── Motion ── */
   --ease: cubic-bezier(...);

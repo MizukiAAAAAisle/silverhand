@@ -263,4 +263,27 @@ describe('theme markdown token cascade contract', () => {
       }
     }
   });
+
+  /* PR-8 token promotion (#task:359): control + chip radius is now a
+     2-token contract. Every theme MUST declare both so a theme switch
+     from forza6 doesn't leak the `0` poster radius into warm themes
+     via :root fallback. Scope is intentionally narrow:
+     - `--control-radius` → input / textarea / button / select trigger /
+       small icon button (everything that was Tailwind `rounded-md` on
+       a control surface).
+     - `--chip-radius` → inline reference chip / filter chip / small
+       data chip (everything that was Tailwind `rounded` ≈ 4px on a
+       chip surface).
+     `--pill-radius` deliberately NOT introduced — TaskStatusPill is
+     the sole `rounded-full` consumer and shiki decided to keep it
+     capsule (forza6 expresses status via saturated fill, not shape).
+     Open a `pill-radius` PR if/when a second pill consumer lands. */
+  it('every theme explicitly defines control + chip radius tokens', () => {
+    const RADIUS_TOKENS = ['--control-radius', '--chip-radius'];
+    for (const css of [warmScriptCss, forza6Css]) {
+      for (const token of RADIUS_TOKENS) {
+        expect(css).toContain(`${token}:`);
+      }
+    }
+  });
 });

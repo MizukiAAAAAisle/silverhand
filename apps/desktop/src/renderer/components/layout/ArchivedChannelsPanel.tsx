@@ -26,7 +26,7 @@ interface ArchivedChannelsPanelProps {
 }
 
 const SELECT_TRIGGER_CLASS =
-  'flex h-8 w-full items-center justify-between gap-2 rounded-md border border-border bg-bg-floating px-2.5 text-xs text-text-primary outline-none transition-colors hover:border-accent focus:border-border-focus focus:ring-2 focus:ring-border-focus data-[placeholder]:text-text-muted';
+  'flex h-8 w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border border-border bg-bg-floating px-2.5 text-xs text-text-primary outline-none transition-colors hover:border-accent focus:border-border-focus focus:ring-2 focus:ring-border-focus data-[placeholder]:text-text-muted';
 
 const SELECT_CONTENT_CLASS =
   'z-[60] max-h-[42vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border border-border bg-bg-floating shadow-lg';
@@ -336,7 +336,7 @@ function ArchivedChannelRow({
             onRestore();
           }}
           disabled={restorePending}
-          className="m-3 ml-0 inline-flex shrink-0 items-center gap-1.5 self-center rounded-md border border-border bg-bg-base px-2.5 py-1.5 text-xs text-text-secondary transition-colors hover:border-accent hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+          className="m-3 ml-0 inline-flex shrink-0 items-center gap-1.5 self-center rounded-[var(--control-radius)] border border-border bg-bg-base px-2.5 py-1.5 text-xs text-text-secondary transition-colors hover:border-accent hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
           aria-label={`Restore ${item.channel.title}`}
           title="Restore channel"
         >

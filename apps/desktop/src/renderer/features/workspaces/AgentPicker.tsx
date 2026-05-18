@@ -69,7 +69,7 @@ export function AgentPicker({
         <Select.Trigger
           id={selectId}
           aria-label="添加成员"
-          className="flex w-full items-center justify-between gap-2 rounded-md border border-border-subtle bg-bg-base px-2.5 py-1.5 text-sm text-text-primary outline-none transition-colors hover:border-border focus:border-border-focus focus:ring-2 focus:ring-border-focus disabled:cursor-not-allowed disabled:opacity-60 data-[placeholder]:text-text-muted"
+          className="flex w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border border-border-subtle bg-bg-base px-2.5 py-1.5 text-sm text-text-primary outline-none transition-colors hover:border-border focus:border-border-focus focus:ring-2 focus:ring-border-focus disabled:cursor-not-allowed disabled:opacity-60 data-[placeholder]:text-text-muted"
         >
           <span className="flex min-w-0 items-center gap-1.5">
             <UserPlus className="size-3.5 shrink-0 text-text-muted" />

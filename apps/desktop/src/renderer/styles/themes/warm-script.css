@@ -127,6 +127,18 @@
   --chrome-label-tracking: 0.05em;
   --chrome-label-transform: uppercase;
 
+  /* ── Control + chip radius (§3.7.2 / §3.7.3, PR-8 token promotion) ──
+     `--control-radius` 给所有 control surface (input / textarea / button /
+     select trigger / 小 icon button) 一个统一圆角出口。`--chip-radius` 给
+     所有 inline reference / filter chip 一个统一出口。warm-script 走现有
+     视觉语汇：control 6px（= 之前 Tailwind `rounded-md` 的像素值，pixel-
+     zero）；chip 4px（= 之前 Tailwind `rounded` 默认，pixel-zero）。海报
+     系（forza6）把两个都设 0 强化直角海报感。pill-radius 暂不入：
+     TaskStatusPill 是当前唯一胶囊消费者，shiki 决定先保留胶囊，等真有
+     第二个 pill 消费者再开。 */
+  --control-radius: var(--radius-sm);
+  --chip-radius: 4px;
+
   /* ── Accent (暖近黑 — 高对比·低噪音) ──
      #2D2316 在 #FFFAEF 上对比度 ≈ 15:1（AAA）；
      亮黄侧栏 + 深黑 accent = 强焦点感，无颜色噪音。 */

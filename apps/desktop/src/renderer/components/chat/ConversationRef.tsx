@@ -94,7 +94,7 @@ export function ConversationRef({
 
   const inertChip = (
     <span
-      className="inline-flex max-w-[220px] items-center gap-0.5 rounded bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
+      className="inline-flex max-w-[220px] items-center gap-0.5 rounded-[var(--chip-radius)] bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
       // Wrapped in HoverPopover below — `aria-label` instead of the
       // native `title` attribute. macOS browsers schedule the native
       // tooltip on a 2-3s cycle that competes with Radix HoverCard
@@ -113,7 +113,7 @@ export function ConversationRef({
     <span
       role="button"
       tabIndex={0}
-      className="inline-flex max-w-[220px] cursor-pointer items-center gap-0.5 rounded bg-accent-soft px-1.5 -mx-0.5 font-medium text-accent transition-colors hover:bg-accent hover:text-text-on-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+      className="inline-flex max-w-[220px] cursor-pointer items-center gap-0.5 rounded-[var(--chip-radius)] bg-accent-soft px-1.5 -mx-0.5 font-medium text-accent transition-colors hover:bg-accent hover:text-text-on-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
       aria-label={tooltip}
       data-conversation-ref={id}
       onClick={event => {
@@ -166,7 +166,7 @@ function ConversationPopoverBody({
   return (
     <div className="space-y-2">
       <div className="flex items-baseline gap-2">
-        <span className="rounded bg-bg-elevated px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-text-muted">
+        <span className="rounded-[var(--chip-radius)] bg-bg-elevated px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-text-muted">
           {kindLabel(conversation.kind)}
         </span>
       </div>

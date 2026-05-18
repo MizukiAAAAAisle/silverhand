@@ -84,7 +84,7 @@ export function DeleteAgentDialog({
             type="text"
             value={confirmText}
             onChange={e => setConfirmText(e.target.value)}
-            className="h-9 w-full rounded-md border border-border bg-bg-base px-3 font-mono text-sm text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-error"
+            className="h-9 w-full rounded-[var(--control-radius)] border border-border bg-bg-base px-3 font-mono text-sm text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-error"
             placeholder="delete"
             autoFocus
           />
