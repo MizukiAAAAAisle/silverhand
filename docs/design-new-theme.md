@@ -144,6 +144,34 @@ appearance.test.ts 锁定）。这是 §3.1 关键 3 的硬约束：不显式定
 | `--border-inline-code` | chip 边框 shorthand（含 width + style + color） | 软底主题给 `none`；海报系给 `2px solid <near-black>` |
 | `--radius-inline-code` | chip 圆角 | 软底主题给 `var(--radius-sm)`；海报系给 `0` 方角 |
 
+### 3.2.2 Task status badge（PR-3 token promotion）
+
+任务状态徽标在 5 个渲染点出现（`WorkspaceTasksDrawer` / `TasksSection`
+看板卡 / `TaskRef` 内联 chip / `SystemMessage` task-event pill /
+`TaskStatusPill` popover 选择器），全部经 `[data-task-status='<status>']`
+钩子从同一 12-token 契约取色。每个主题 MUST 全部 12 个都显式定义；
+不允许漏一个回退到 `:root`，否则 forza6 的饱和青/品红会泄漏到暖系。
+
+命名用 domain-prefix `--task-status-*` 而非通用 `--status-*`：这些值
+专门为 ~10px 海报-display 徽标调过，不是一般性"状态色"词汇，
+narrow namespace 防止被复用到不合适的尺寸。
+
+| Token | 用途 |
+|---|---|
+| `--task-status-todo-bg` / `-text` / `-border` | "todo" 徽标背景 / 字 / 边框 shorthand |
+| `--task-status-in-progress-bg` / `-text` / `-border` | "in progress" — **active/HUD-live 语义**，配 warning 一路（cyan / amber / lime live indicator） |
+| `--task-status-in-review-bg` / `-text` / `-border` | "in review" — **awaiting human attention 语义**，配 accent/brand 一路（loud beacon） |
+| `--task-status-done-bg` / `-text` / `-border` | "done" 徽标背景 / 字 / 边框 shorthand |
+
+边框使用 shorthand（含 width + style + color）：暖软底主题三个状态
+基本都给 `none`，海报系按 hard-fill / soft-fill 决定是否加 1.5px 黑环。
+
+**语义提醒**：`in_progress` = active / 正在跑 → warning/HUD-live；
+`in_review` = 等待人类介入 → accent/loud-beacon。如果你直觉相反，
+请回看 forza6 的 `#22B7E0` cyan(in_progress) vs `var(--brand-primary)`
+magenta(in_review)：cyan 是 dashboard-live，magenta 是 attention-grabbing
+beacon，跟语义同向。
+
 ### 3.3 Accent + on-color 配对
 
 | Token | 用途 |
@@ -294,6 +322,12 @@ appearance.test.ts 锁定）。这是 §3.1 关键 3 的硬约束：不显式定
   --bg-inline-code: ...;        /* 软底主题常用 color-mix(text-primary X%, bg-base) */
   --border-inline-code: ...;    /* shorthand：软底主题给 `none`，海报系给 `2px solid <near-black>` */
   --radius-inline-code: ...;    /* 软底主题给 var(--radius-sm)，海报系给 `0` */
+
+  /* ── Task status badge (§3.2.2) ── 4 状态 × {bg / text / border} */
+  --task-status-todo-bg: ...;          --task-status-todo-text: ...;          --task-status-todo-border: ...;
+  --task-status-in-progress-bg: ...;   --task-status-in-progress-text: ...;   --task-status-in-progress-border: ...;
+  --task-status-in-review-bg: ...;     --task-status-in-review-text: ...;     --task-status-in-review-border: ...;
+  --task-status-done-bg: ...;          --task-status-done-text: ...;          --task-status-done-border: ...;
 
   /* ── Accent ── */
   --accent: ...;

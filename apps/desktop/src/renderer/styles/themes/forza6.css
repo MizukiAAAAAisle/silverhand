@@ -115,6 +115,25 @@
   --border-inline-code: 2px solid #0A0A0A;
   --radius-inline-code: 0;
 
+  /* Task status badge — 4 statuses × {bg, text, border} = 12 tokens.
+     Promoted from forza6-components.css PR-2 v5.6. Saturated fills
+     (in_progress cyan, in_review brand magenta) drop their border
+     because the fill itself frames the chip; todo + done keep a
+     poster-sticker outline for identity. See shiki `u3MEX9LowZZLMa8Z` /
+     Cindy `qE1wgoD3Oy_aQLFH` for the crowding rationale. */
+  --task-status-todo-bg: transparent;
+  --task-status-todo-text: #0A0A0A;
+  --task-status-todo-border: 1.5px solid #0A0A0A;
+  --task-status-in-progress-bg: #22B7E0;
+  --task-status-in-progress-text: #0A0A0A;
+  --task-status-in-progress-border: none;
+  --task-status-in-review-bg: var(--brand-primary);
+  --task-status-in-review-text: var(--text-on-brand);
+  --task-status-in-review-border: none;
+  --task-status-done-bg: rgba(63, 122, 27, 0.18);
+  --task-status-done-text: #2E5A14;
+  --task-status-done-border: 1.5px solid rgba(0, 0, 0, 0.40);
+
   /* ── Accent —
      Forza tokens have a dual-role tension: the bright neon palette
      (lime / cyan / hot pink / yellow) reads as TILE SURFACE in the

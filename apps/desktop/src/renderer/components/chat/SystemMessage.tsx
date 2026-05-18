@@ -690,12 +690,6 @@ function TaskEventDot({ kind }: { kind: TaskEventDotKind }): JSX.Element {
  * inside that height regardless of the row's `line-height: 1.5`.
  */
 function TaskStatusPill({ status }: { status: TaskStatus }): JSX.Element {
-  const styles: Record<TaskStatus, string> = {
-    todo: 'bg-bg-elevated text-text-muted',
-    in_progress: 'bg-accent/10 text-accent',
-    in_review: 'bg-warning/10 text-warning',
-    done: 'bg-success/10 text-success',
-  };
   const labels: Record<TaskStatus, string> = {
     todo: 'todo',
     in_progress: 'in progress',
@@ -706,10 +700,7 @@ function TaskStatusPill({ status }: { status: TaskStatus }): JSX.Element {
     <span
       data-task-event-status={status}
       data-task-status={status}
-      className={
-        'inline-flex items-center rounded-full px-1.5 text-[10px] font-semibold uppercase leading-none tracking-wider ' +
-        styles[status]
-      }
+      className="inline-flex items-center rounded-full px-1.5 text-[10px] font-semibold uppercase leading-none tracking-wider"
     >
       {labels[status]}
     </span>

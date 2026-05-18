@@ -956,12 +956,6 @@ function TaskCard({
 
 /** Small inline status badge — non-interactive, color-coded by status. */
 function TaskStatusBadge({ status }: { status: TaskStatus }): JSX.Element {
-  const styles: Record<TaskStatus, string> = {
-    todo: 'bg-bg-elevated text-text-muted',
-    in_progress: 'bg-accent/10 text-accent',
-    in_review: 'bg-warning/10 text-warning',
-    done: 'bg-success/10 text-success',
-  };
   const labels: Record<TaskStatus, string> = {
     todo: 'todo',
     in_progress: 'in progress',
@@ -971,10 +965,7 @@ function TaskStatusBadge({ status }: { status: TaskStatus }): JSX.Element {
   return (
     <span
       data-task-status={status}
-      className={cn(
-        'rounded px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide',
-        styles[status],
-      )}
+      className="rounded px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide"
     >
       {labels[status]}
     </span>

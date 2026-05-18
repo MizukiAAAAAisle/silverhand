@@ -310,6 +310,40 @@ button:disabled { cursor: not-allowed; }
   height: var(--system-message-control-height);
 }
 
+/* Task status badge — all four surfaces (TaskStatusBadge in drawer /
+   TasksSection / TaskRef chat chip, TaskStatusPill in SystemMessage
+   task events, TaskStatusPill popover picker) read color identity
+   from the same 12-token contract via the shared `[data-task-status]`
+   hook. Each theme owns its mapping; the global rule just wires the
+   tokens to CSS properties.
+
+   PR-3 (#task:348) promoted this; before PR-3 each component carried
+   its own Tailwind `bg-X text-X` utility classes and four of the five
+   surfaces had `in_progress` / `in_review` swapped vs. the popover's
+   documented intent (and vs. forza6 v5). The token migration aligns
+   all five to one mapping: in_progress = warning/HUD-live,
+   in_review = accent/loud-beacon. Cindy `zPcSb7jWheyIaaqj`. */
+[data-task-status='todo'] {
+  background-color: var(--task-status-todo-bg);
+  color: var(--task-status-todo-text);
+  border: var(--task-status-todo-border);
+}
+[data-task-status='in_progress'] {
+  background-color: var(--task-status-in-progress-bg);
+  color: var(--task-status-in-progress-text);
+  border: var(--task-status-in-progress-border);
+}
+[data-task-status='in_review'] {
+  background-color: var(--task-status-in-review-bg);
+  color: var(--task-status-in-review-text);
+  border: var(--task-status-in-review-border);
+}
+[data-task-status='done'] {
+  background-color: var(--task-status-done-bg);
+  color: var(--task-status-done-text);
+  border: var(--task-status-done-border);
+}
+
 /* ── Activity cluster (PR-10) ──────────────────────────────────────
    `task_* / session_cleared / rename` lifecycle events get pooled
    into an `ActivityCluster` (see `groupMessages.ts`). The cluster

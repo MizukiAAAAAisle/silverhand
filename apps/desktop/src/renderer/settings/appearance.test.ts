@@ -171,4 +171,34 @@ describe('theme markdown token cascade contract', () => {
       }
     }
   });
+
+  /* PR-5 token promotion (#task:345): task-status badge is now a
+     12-token contract (4 statuses × {bg / text / border}). Every
+     theme MUST declare all twelve so a theme switch doesn't leak
+     forza6's saturated cyan/magenta fills via :root fallback into
+     warm themes. Domain-prefixed (`--task-status-*`) over generic
+     (`--status-*`) because the namespace must stay narrow — these
+     values are tuned for a single ~10px poster-display badge, not
+     a general "status colour" vocabulary. */
+  it('every theme explicitly defines task-status badge tokens', () => {
+    const TASK_STATUS_TOKENS = [
+      '--task-status-todo-bg',
+      '--task-status-todo-text',
+      '--task-status-todo-border',
+      '--task-status-in-progress-bg',
+      '--task-status-in-progress-text',
+      '--task-status-in-progress-border',
+      '--task-status-in-review-bg',
+      '--task-status-in-review-text',
+      '--task-status-in-review-border',
+      '--task-status-done-bg',
+      '--task-status-done-text',
+      '--task-status-done-border',
+    ];
+    for (const css of [warmScriptCss, forza6Css]) {
+      for (const token of TASK_STATUS_TOKENS) {
+        expect(css).toContain(`${token}:`);
+      }
+    }
+  });
 });

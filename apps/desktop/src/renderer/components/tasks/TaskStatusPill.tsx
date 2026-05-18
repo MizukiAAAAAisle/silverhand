@@ -28,16 +28,6 @@ const COPY: Record<TaskStatus, string> = {
   done: 'Done',
 };
 
-const TONE: Record<TaskStatus, string> = {
-  // Neutral for "not yet started", warning for active, accent for
-  // awaiting review, success for done. Soft + colored text variants
-  // give a subtle but legible status code.
-  todo: 'bg-bg-elevated text-text-muted',
-  in_progress: 'bg-warning-soft text-warning',
-  in_review: 'bg-accent-soft text-accent',
-  done: 'bg-success-soft text-success',
-};
-
 const SIZE: Record<NonNullable<TaskStatusPillProps['size']>, string> = {
   sm: 'h-5 px-1.5 text-[10px]',
   md: 'h-6 px-2 text-xs',
@@ -53,20 +43,24 @@ export function TaskStatusPill({
 }: TaskStatusPillProps): JSX.Element {
   const base = cn(
     'inline-flex items-center justify-center rounded-full font-medium uppercase tracking-wider whitespace-nowrap',
-    TONE[status],
     SIZE[size],
     className,
   );
   const label = COPY[status];
 
   if (!onChange) {
-    return <span className={base}>{label}</span>;
+    return (
+      <span data-task-status={status} className={base}>
+        {label}
+      </span>
+    );
   }
 
   return (
     <PillPicker current={status} onChange={onChange}>
       <button
         type="button"
+        data-task-status={status}
         className={cn(base, 'cursor-pointer transition-opacity hover:opacity-80')}
       >
         {label}

@@ -81,6 +81,25 @@
   --border-inline-code: none;
   --radius-inline-code: var(--radius-sm);
 
+  /* Task status badge — 4 statuses × {bg, text, border} = 12 tokens.
+     Semantic intent (matches `TaskStatusPill.tsx` doc + forza6 v5
+     framing + docs/tasks-design.md): todo = neutral; in_progress =
+     warning/HUD-live ("actively in motion"); in_review = accent/loud
+     beacon ("needs human attention"); done = success/passed.
+     Warm-script badges are borderless soft chips. */
+  --task-status-todo-bg: var(--bg-elevated);
+  --task-status-todo-text: var(--text-muted);
+  --task-status-todo-border: none;
+  --task-status-in-progress-bg: var(--warning-soft);
+  --task-status-in-progress-text: var(--warning);
+  --task-status-in-progress-border: none;
+  --task-status-in-review-bg: var(--accent-soft);
+  --task-status-in-review-text: var(--accent);
+  --task-status-in-review-border: none;
+  --task-status-done-bg: var(--success-soft);
+  --task-status-done-text: var(--success);
+  --task-status-done-border: none;
+
   /* ── Accent (暖近黑 — 高对比·低噪音) ──
      #2D2316 在 #FFFAEF 上对比度 ≈ 15:1（AAA）；
      亮黄侧栏 + 深黑 accent = 强焦点感，无颜色噪音。 */

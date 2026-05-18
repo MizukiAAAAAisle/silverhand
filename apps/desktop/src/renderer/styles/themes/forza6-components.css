@@ -653,51 +653,22 @@
   letter-spacing: 0.06em;
 }
 
-/* Status badge colour rebalance. We lean on the existing
-   `[data-task-status]` value rather than the original Tailwind
-   classes, so this re-skin is cleanly forza6-scoped — warm themes
-   keep their bg-accent/10 styling untouched. */
+/* Status badge typography is forza6-only: poster-display caps with
+   tight tracking and a hard 2px corner radius. Per-status colours +
+   borders live in the `--task-status-*` token family (see forza6.css);
+   colour application happens in global.css's `[data-task-status]`
+   rules so warm themes get the same structural contract.
+
+   Was 0.10em — at the 9-10px badge size that distance was making
+   letters perceptually merge on the busiest fills. 0.06em matches
+   the `[data-tasks-num]` `#nnn` magenta number's tracking, so the
+   two display-caps elements that anchor the row sit on the same
+   vertical-rhythm vocabulary. */
 [data-theme='forza6'] [data-task-status] {
-  border: 1.5px solid #0A0A0A;
-  border-radius: 2px;
   font-family: var(--font-display);
-  /* Was 0.10em — at the 9-10px badge size that distance was making
-     letters perceptually merge on the busiest fills. 0.06em matches
-     the `[data-tasks-num]` `#nnn` magenta number's tracking, so the
-     two display-caps elements that anchor the row sit on the same
-     vertical-rhythm vocabulary. */
   letter-spacing: 0.06em;
   font-weight: 700;
-}
-[data-theme='forza6'] [data-task-status='todo'] {
-  background-color: transparent;
-  color: #0A0A0A;
-}
-[data-theme='forza6'] [data-task-status='in_progress'] {
-  background-color: #22B7E0;
-  color: #0A0A0A;
-  /* Same border-drop rationale as in_review below — saturated fill
-     supplies its own framing; black 1.5px ring crowded the small caps. */
-  border: none;
-}
-[data-theme='forza6'] [data-task-status='in_review'] {
-  background-color: var(--brand-primary);
-  color: var(--text-on-brand);
-  /* Loud-fill badges (in_progress / in_review) drop the structural
-     1.5px black border defined on the base `[data-task-status]` rule:
-     the saturated background already frames the chip, and a surrounding
-     black ring on a ~9-10px display-caps badge added perceived
-     crowding (shiki `u3MEX9LowZZLMa8Z` "粉底黑字看不清", root cause was
-     the cramped frame, not the foreground colour — see math in
-     `vwEKQ64rxfBzEFSj` / Cindy ack `qE1wgoD3Oy_aQLFH`). todo and done
-     keep their borders because they need the edge for poster-sticker
-     identity (todo is transparent; done is muted). */
-  border: none;
-}
-[data-theme='forza6'] [data-task-status='done'] {
-  background-color: rgba(63, 122, 27, 0.18);
-  color: #2E5A14;
-  border-color: rgba(0, 0, 0, 0.40);
+  border-radius: 2px;
 }
 
 /* ── Radix popper surfaces (v5.7) ──────────────────────────────────
