@@ -297,7 +297,7 @@ selector 顺便把它也覆盖了 —— 形态一致，海报系都要直角。
 | Token | 用途 | 取值原则 |
 |---|---|---|
 | `--select-content-radius` | Select listbox 外框圆角 | 暖系 `6px` 字面值（= 之前 Tailwind `rounded-md`，pixel-zero）；海报系 `0` |
-| `--select-item-radius` | Select item 圆角 | 暖系 `2px` 字面值（= 之前 Tailwind `rounded-sm`，pixel-zero）；海报系 `0` |
+| `--select-item-radius` | Select item 圆角 | 暖系 `4px`（**不是 pixel-zero**：旧 Tailwind `rounded-sm` = 2px 在 6px content 里看起来不同心，shiki `a76QCh7CRAqVSO_N` 报 → Cindy `LFN_zqTcxswPiVgM` 建议 4px 折中：callsites 一半有 `p-1` 一半没有，4px 在两种场景下都是 ~2px 偏差，比 2px item 时的 4px 偏差更协调）；海报系 `0` |
 
 **这不是 PR-4 floating frame 边界的反悔** —— PR-4 把 Select listbox 排
 除在 floating frame 之外的理由是**边框**（给小气泡套 2px poster 黑框会
@@ -305,10 +305,10 @@ over-shout 周边 UI）。PR-9 只动 radius，不动 border：Select listbox �
 继续走 Tailwind `border border-border`（PR-8 已让 `--border` 在 forza6
 下可见），不接 `--floating-border`。"小气泡不接重框"边界原封不动。
 
-**字面值（6px / 2px）而非 `var(--radius-md)` / `var(--radius-sm)`** ——
-跟 control / chip radius 同一逻辑（Cindy `1eG7CReuc5X9ER_9`）：warm 的
-`--radius-md: 10px` 不是当前 Select listbox 6px 的等价物，借用会把 warm
-从 6px 带到 10px。字面值保证 pixel-zero。
+**字面值（content 6px / item 4px）而非 `var(--radius-md)` / `var(--radius-sm)`** ——
+content 6px 跟 control / chip 同一逻辑保持 pixel-zero。item 4px 是
+**视觉同心折中**（详见上表注脚）；不复用命名 radius 是因为 warm 的
+`--radius-sm: 6px` / `--radius-md: 10px` 都不等于此处需要的 4px。
 
 **为什么不复用 `--control-radius`** —— select trigger（= control）和
 select listbox 在概念上是配对的（一个打开另一个），radius 一致很合理。
@@ -582,7 +582,7 @@ shiki 决定先保留胶囊（forza6 用饱和填色表达状态语义，不需�
      Select.Item 共享一对 radius token；border 不接，PR-4 "小气泡不
      接重框"边界保留 */
   --select-content-radius: ...;   /* 暖系 6px 字面值，海报系 0 */
-  --select-item-radius: ...;      /* 暖系 2px 字面值，海报系 0 */
+  --select-item-radius: ...;      /* 暖系 4px（视觉同心折中），海报系 0 */
 
   /* ── Motion ── */
   --ease: cubic-bezier(...);
