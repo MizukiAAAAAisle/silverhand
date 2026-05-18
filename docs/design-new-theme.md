@@ -352,7 +352,8 @@ ConversationRef kind chip —— 一个统一圆角出口。
 **消费点（PR-8 已迁完）**：TaskRef.tsx 全部 4 处 chip 状态 + 内嵌
 TaskStatusBadge；ConversationRef.tsx inert + interactive + kind chip；
 ChannelRef.tsx inert + interactive；Mention.tsx agent + human mention；
-WorkspaceTasksDrawer 的 TaskStatusBadge（与 TaskRef 内嵌版本同形态）。
+TasksSection + WorkspaceTasksDrawer 的 TaskStatusBadge（与 TaskRef
+内嵌版本同形态）。
 
 **与 `--control-radius` 的边界**：
 - chip = inline 文本旁边的小标签，没有交互手感（即使可点也是 "点开
