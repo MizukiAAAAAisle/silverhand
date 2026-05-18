@@ -373,7 +373,8 @@ button:disabled { cursor: not-allowed; }
 
 /* Row-state border color (PR-5 token promotion). Sidebar rows
    (`.sidebar-row-border` class on ChannelsSidebar / WorkspacesPanel /
-   Sidebar / sidebar-shared) and NavRail buttons
+   Sidebar / sidebar-shared — all rendered inside an
+   `aside[data-sidebar="..."]` wrapper) and NavRail buttons
    (`nav[aria-label='App sections'] button`) share a 2-token contract
    for the visible border in hover + selected states. Each theme owns
    its values:
@@ -382,16 +383,26 @@ button:disabled { cursor: not-allowed; }
    - forza6:      both = #0A0A0A poster-sticker near-black — pixel-zero
      vs the removed forza6-components.css per-state overrides.
 
+   The `aside[data-sidebar]` ancestor matters: `ArchivedChannelsPanel`
+   (`apps/desktop/src/renderer/components/layout/ArchivedChannelsPanel.tsx`)
+   reuses `.sidebar-row-border` for its archive list, but it lives in
+   the main content area (no `aside[data-sidebar]` wrapper) and uses
+   a different hover language (`border-accent bg-bg-hover`). Pulling
+   it into this contract would override that with forza6 near-black,
+   breaking pixel-zero. Cindy `N6tR2FJpzpebGJdb`. If a future archive
+   surface wants the same chrome contract, give it a dedicated hook
+   and document it here.
+
    Selectors are more specific than the Tailwind utilities they
    replace, so they win at the cascade regardless of source order
-   (0,3,0 / 0,2,0 vs 0,2,0 / 0,1,0). TSX intentionally still carries
+   (0,3,1 / 0,2,1 vs 0,2,0 / 0,1,0). TSX intentionally still carries
    `border-accent` / `border-transparent` classes — same Cindy-aligned
    minimal-change pattern as PR-4. */
-.sidebar-row-border.text-text-on-selected,
+aside[data-sidebar] .sidebar-row-border.text-text-on-selected,
 nav[aria-label='App sections'] button[aria-current='page'] {
   border-color: var(--border-row-selected);
 }
-.sidebar-row-border:not(.text-text-on-selected):hover,
+aside[data-sidebar] .sidebar-row-border:not(.text-text-on-selected):hover,
 nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   border-color: var(--border-row-hover);
 }

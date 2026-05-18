@@ -206,7 +206,8 @@ beacon，跟语义同向。
 ### 3.5.1 Row-state border color（PR-5 token promotion）
 
 Sidebar 行（`.sidebar-row-border` 类，命中 ChannelsSidebar /
-WorkspacesPanel / Sidebar / sidebar-shared）和 NavRail 按钮
+WorkspacesPanel / Sidebar / sidebar-shared —— 全部嵌在
+`aside[data-sidebar="..."]` 包裹内）和 NavRail 按钮
 （`nav[aria-label='App sections'] button`）的 hover / selected 边框
 颜色，共用一套 2-token 契约。每个主题 MUST 全部 2 个都显式定义；
 不允许漏一个回退到 `:root`，否则 forza6 的近黑会泄漏到暖系。
@@ -218,6 +219,13 @@ WorkspacesPanel / Sidebar / sidebar-shared）和 NavRail 按钮
 
 宽度仍走 `.sidebar-row-border { border-width: var(--sidebar-row-border-width, 2px) }`，
 没有 per-theme 差异，所以不进契约。
+
+**为什么必须有 `aside[data-sidebar]` 祖先**：`ArchivedChannelsPanel`
+也复用 `.sidebar-row-border` 类做归档列表，但它在主内容区（无
+`aside[data-sidebar]` 包裹），且 hover 用 `border-accent bg-bg-hover`
+另一套词汇。如果 global 选择器不带这个祖先，会把归档行也拉进契约，
+forza6 下会把 accent hover 翻成近黑。Cindy `N6tR2FJpzpebGJdb` 抓到。
+未来如果有第三个 row 表面想接同契约，请给它显式 hook 并补到这一节。
 
 **为什么两个 token 而非 shorthand？** Hover 和 selected 经常同色但
 背景不同（forza6 = pale-lime vs lime fill；warm = transparent vs
