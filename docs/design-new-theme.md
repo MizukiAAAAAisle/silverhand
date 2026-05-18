@@ -691,6 +691,43 @@ forza6 是首个走"token + component skin"两层的主题，不只是换色。�
 - Settings 主体（保留默认）
 - 黑底 member-strip（v5.4 已撤回；token `--text-on-dark-pop` 留备未来）
 
+### 12.4.1 Theme-private token：`--forza6-syntax-*`（PR-7 内部清理）
+
+forza6 在 `[data-theme='forza6'] .markdown-body .code-block .hljs-*`
+上覆盖了 8 套 `highlight.js` 语义色（base / keyword / string /
+number / comment / meta / addition / deletion），用一套 HUD 海报
+调色让 fenced code 在深青-黑岛屿底色上读起来像 Forza 仪表盘。
+PR-7 (#task:357) 把这些字面量提到 `--forza6-syntax-*` token，
+作为 **theme-private 词汇**，不进 §3 的跨主题契约表。
+
+| Token | 默认值 | 用途 |
+|---|---|---|
+| `--forza6-syntax-base` | `#E8F1EF` | `.hljs` 基础文字色（无语义类时） |
+| `--forza6-syntax-keyword` | `#D4F523` lime | `.hljs-keyword/built_in/title/name/tag/section` 等"骨架" |
+| `--forza6-syntax-string` | `#FFD7E5` 软粉 | `.hljs-string/attr/template-variable/variable/regexp` |
+| `--forza6-syntax-number` | `#22B7E0` cyan | `.hljs-number/literal/symbol/bullet/link` |
+| `--forza6-syntax-comment` | `rgba(255,255,255,0.45)` | `.hljs-comment/quote`，配合 italic |
+| `--forza6-syntax-meta` | `rgba(255,255,255,0.55)` | `.hljs-meta/meta-string` |
+| `--forza6-syntax-addition` | `#D4F523` | diff `+` 行，前景同 keyword |
+| `--forza6-syntax-deletion` | `#FF6F8C` 珊瑚 | diff `−` 行 |
+
+**为什么用 `--forza6-` 前缀而不是通用 `--syntax-*`**：当前只有
+forza6 需要覆写 syntax 调色（warm-script 走 `highlight.js/styles/github.css`
+vendor stylesheet，零覆写）。把它命名成 theme-private 留出空间，
+未来如果要做"跨主题 syntax contract"（drop github.css，每主题都列
+完整 hljs 矩阵 + cascade test），就能直接用没被占用的 `--syntax-*`
+命名空间，不会和这套发生 alias 冲突。
+
+**Cascade test 不约束**：`appearance.test.ts` 的"每个主题必须显式
+定义"断言**不**覆盖这些 token，因为 warm-script 故意不定义它们。
+新主题接入时按需重复 forza6 的 8 token 即可，没有"漏定义"风险——
+不定义就走 github.css 的默认。
+
+**Addition / deletion 行的浅色背景仍是字面量**（`rgba(212, 245, 35, 0.08)`
+/ `rgba(255, 111, 140, 0.08)`），因为它们是前景色的 alpha 派生；
+未来想拆 token 时直接加 `--forza6-syntax-addition-bg` / `-deletion-bg`
+两个即可。
+
 ### 12.5 关键架构原则
 
 1. **Lazy variable substitution**：核心 token 用 `color-mix(in oklab, brand X%, var(--bg-channels-sidebar))` 类公式定义一次，scope 切换自动重新解析。Sidebar token 在 `aside[data-sidebar]` 局部 redefine，root 不受影响。

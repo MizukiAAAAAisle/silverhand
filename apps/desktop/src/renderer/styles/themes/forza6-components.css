@@ -457,21 +457,26 @@
    untouched globally so warm themes / inline-code outside the
    island stay correct (Cindy "不要换全局 highlight theme").
 
+   PR-7 (#task:357) promoted the literal colours into theme-private
+   `--forza6-syntax-*` tokens in `forza6.css`. Selectors stay here
+   because this remains forza6-only — see Cindy `9_55SzDv3OjHYxYD`:
+   "scope 以 theme-private cleanup 计，不计入跨主题 token promotion".
+
    Palette borrows from the mockup's `.island .k/.s/.c` recipe so
    the code island reads as a Forza HUD readout:
-     - keyword / built_in / title / tag → lime `#D4F523` (energy)
-     - string / attr / variable        → soft pink `#FFD7E5` (mockup .island .s)
-     - number / literal / symbol       → cyan `#22B7E0` (--accent-2)
+     - keyword / built_in / title / tag → lime (energy)
+     - string / attr / variable        → soft pink (mockup .island .s)
+     - number / literal / symbol       → cyan
      - comment / quote                 → muted white 0.45 (mockup .island .c)
      - meta                            → muted white 0.55
      - addition (diff)                 → lime
-     - deletion (diff)                 → coral `#FF6F8C` (mockup .tool-body .del)
+     - deletion (diff)                 → coral (mockup .tool-body .del)
    All contrasts on `#0F2F2C` ground are AA+ except comments which
    stay 0.45 alpha as mockup intends — comments are de-emphasized
    by design and 5:1 still passes UI-component contrast. */
 [data-theme='forza6'] .markdown-body .code-block .hljs,
 [data-theme='forza6'] .markdown-body .code-block .hljs * {
-  color: #E8F1EF;
+  color: var(--forza6-syntax-base);
   background: transparent;
 }
 [data-theme='forza6'] .markdown-body .code-block .hljs-keyword,
@@ -483,37 +488,37 @@
 [data-theme='forza6'] .markdown-body .code-block .hljs-tag,
 [data-theme='forza6'] .markdown-body .code-block .hljs-selector-tag,
 [data-theme='forza6'] .markdown-body .code-block .hljs-section {
-  color: #D4F523;
+  color: var(--forza6-syntax-keyword);
 }
 [data-theme='forza6'] .markdown-body .code-block .hljs-string,
 [data-theme='forza6'] .markdown-body .code-block .hljs-attr,
 [data-theme='forza6'] .markdown-body .code-block .hljs-template-variable,
 [data-theme='forza6'] .markdown-body .code-block .hljs-variable,
 [data-theme='forza6'] .markdown-body .code-block .hljs-regexp {
-  color: #FFD7E5;
+  color: var(--forza6-syntax-string);
 }
 [data-theme='forza6'] .markdown-body .code-block .hljs-number,
 [data-theme='forza6'] .markdown-body .code-block .hljs-literal,
 [data-theme='forza6'] .markdown-body .code-block .hljs-symbol,
 [data-theme='forza6'] .markdown-body .code-block .hljs-bullet,
 [data-theme='forza6'] .markdown-body .code-block .hljs-link {
-  color: #22B7E0;
+  color: var(--forza6-syntax-number);
 }
 [data-theme='forza6'] .markdown-body .code-block .hljs-comment,
 [data-theme='forza6'] .markdown-body .code-block .hljs-quote {
-  color: rgba(255, 255, 255, 0.45);
+  color: var(--forza6-syntax-comment);
   font-style: italic;
 }
 [data-theme='forza6'] .markdown-body .code-block .hljs-meta,
 [data-theme='forza6'] .markdown-body .code-block .hljs-meta-string {
-  color: rgba(255, 255, 255, 0.55);
+  color: var(--forza6-syntax-meta);
 }
 [data-theme='forza6'] .markdown-body .code-block .hljs-addition {
-  color: #D4F523;
+  color: var(--forza6-syntax-addition);
   background: rgba(212, 245, 35, 0.08);
 }
 [data-theme='forza6'] .markdown-body .code-block .hljs-deletion {
-  color: #FF6F8C;
+  color: var(--forza6-syntax-deletion);
   background: rgba(255, 111, 140, 0.08);
 }
 [data-theme='forza6'] .markdown-body .code-block .hljs-emphasis {

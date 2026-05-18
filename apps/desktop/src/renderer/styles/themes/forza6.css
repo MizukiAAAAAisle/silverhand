@@ -156,6 +156,26 @@
   --chrome-label-tracking: 0.06em;
   --chrome-label-transform: uppercase;
 
+  /* ── forza6 syntax palette (theme-private; PR-7 internal cleanup) ──
+     The `.markdown-body .code-block .hljs-*` rules in
+     `forza6-components.css` read these values; warm-script intentionally
+     does NOT define them (its syntax colours come from the
+     `highlight.js/styles/github.css` vendor stylesheet imported by
+     `global.css`). Name prefix `--forza6-syntax-*` makes the
+     theme-private nature explicit so a future cross-theme syntax
+     contract (`--syntax-*`) won't collide. See design-new-theme.md §12
+     for the design intent (HUD readout palette on deep-teal-black
+     island ground; all foreground/background pairings AA+ except the
+     intentionally-muted comment line). */
+  --forza6-syntax-base: #E8F1EF;
+  --forza6-syntax-keyword: #D4F523;
+  --forza6-syntax-string: #FFD7E5;
+  --forza6-syntax-number: #22B7E0;
+  --forza6-syntax-comment: rgba(255, 255, 255, 0.45);
+  --forza6-syntax-meta: rgba(255, 255, 255, 0.55);
+  --forza6-syntax-addition: #D4F523;
+  --forza6-syntax-deletion: #FF6F8C;
+
   /* ── Accent —
      Forza tokens have a dual-role tension: the bright neon palette
      (lime / cyan / hot pink / yellow) reads as TILE SURFACE in the
