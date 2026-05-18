@@ -57,7 +57,21 @@ const settingsKey = ['settings'] as const;
 /** 4-color swatch preview and display name for each theme. */
 const THEME_META: Record<
   ThemeId,
-  { label: string; bg: string; surface: string; text: string; accent: string }
+  {
+    label: string;
+    bg: string;
+    surface: string;
+    text: string;
+    accent: string;
+    /** Idle (non-active) tile border color. Per-theme so the preview
+     *  carries that theme's identity instead of the *current* viewer
+     *  theme's `--border-subtle`. forza6's near-black poster border
+     *  was nearly invisible against the magenta side of its
+     *  lime→magenta gradient because the global subtle is only ~10%
+     *  alpha — looked like the border had "disappeared" along the
+     *  bottom-right (@shiki feedback `h45zG6elM7NVgPzQ`). */
+    border: string;
+  }
 > = {
   'warm-script': {
     label: 'Warm Script',
@@ -65,6 +79,7 @@ const THEME_META: Record<
     surface: '#F3EFE8',
     text: '#1F1B14',
     accent: '#FFD440',
+    border: 'rgba(0, 0, 0, 0.10)',
   },
   forza6: {
     label: 'Forza6',
@@ -78,6 +93,7 @@ const THEME_META: Record<
     surface: '#FF2C7A',
     text: '#0A0A0A',
     accent: '#D4F523',
+    border: '#FF2C7A',
   },
 };
 
@@ -367,6 +383,13 @@ function AppearancePane({
                     )}
                     style={{
                       background: `linear-gradient(135deg, ${meta.bg}, ${meta.surface})`,
+                      // Idle tiles override the global `border-border-subtle`
+                      // with a per-theme border so the preview carries the
+                      // previewed theme's identity (forza6 = poster near-black,
+                      // warm = soft black @ 10%). Active tiles fall through
+                      // to the `border-accent` class so the current theme's
+                      // accent still marks "you are here".
+                      ...(active ? null : { borderColor: meta.border }),
                     }}
                   >
                     <div className="flex gap-1">
