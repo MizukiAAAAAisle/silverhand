@@ -356,9 +356,11 @@ button:disabled { cursor: not-allowed; }
    themes → 1px subtle + radius-md / radius-sm).
 
    Tooltip (`data-radix-tooltip-content`) and Select listbox
-   (`data-radix-select-content`) deliberately stay outside this rule
-   — they're small floating bubbles where a heavy poster frame
-   over-shouts the surrounding UI (forza6 v5.7.1 rationale, preserved).
+   (`role='listbox'` — Radix doesn't expose a stable `data-radix-select-content`
+   attribute, the role is the reliable hook; see Select listbox rule
+   below) deliberately stay outside this rule — they're small floating
+   bubbles where a heavy poster frame over-shouts the surrounding UI
+   (forza6 v5.7.1 rationale, preserved).
    Cindy `GZJAggfU2U8kcIV0` / `L4ApUD5JQCD8LuAQ`. */
 [data-radix-menu-content],
 [data-popover-frame='info'] {
@@ -371,20 +373,25 @@ button:disabled { cursor: not-allowed; }
   border-radius: var(--floating-item-radius);
 }
 
-/* Select listbox radius (PR-9 token promotion #task:361). Radix
-   `Select.Content` + `Select.Item` get a dedicated 2-token radius
-   contract so forza6 can square the listbox without inheriting the
-   heavy poster frame meant for full menus (PR-4 boundary preserved:
-   Select listbox is small, a 2px black `--floating-border` would
-   over-shout). `[data-radix-select-content]` matches the Radix root;
-   `[role='option']` is the ARIA role Radix puts on `Select.Item`.
-   Both selectors are `(0,1,0)` / `(0,1,1)` specificity — they win
-   against the literal `rounded-md` / `rounded-sm` Tailwind classes
-   on equal/higher specificity + later source order. */
-[data-radix-select-content] {
+/* Select listbox radius (PR-9 token promotion #task:361 / fix #task:363).
+   Radix `Select.Content` does NOT expose a stable `data-radix-select-content`
+   attribute (earlier comment was wrong — verified against
+   `@radix-ui/react-select@2.2.6` source, only `data-radix-select-viewport`
+   exists on the inner viewport, not the root). The reliable hook is the
+   ARIA `role` Radix sets on Select.Content (`role="listbox"`) and on each
+   Select.Item (`role="option"`).
+
+   Selector `[role='listbox']` also catches our custom Composer mention
+   dropdown (Composer.tsx:760 — same shape pattern, also wants forza6 = 0).
+   No other listbox in the codebase today (`grep role='listbox'` confirmed).
+
+   Same PR-4 boundary preserved: Select listbox only receives RADIUS,
+   not the heavy `--floating-border` 2px black frame — that's still
+   reserved for full menus (DropdownMenu / ContextMenu / info popovers). */
+[role='listbox'] {
   border-radius: var(--select-content-radius);
 }
-[data-radix-select-content] [role='option'] {
+[role='listbox'] [role='option'] {
   border-radius: var(--select-item-radius);
 }
 

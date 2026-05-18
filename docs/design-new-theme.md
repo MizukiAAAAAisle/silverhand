@@ -278,12 +278,21 @@ lazy substitution 工作得很好（forza6 在浮层 wrapper 内重定义 `--bg-
 ### 3.6.2 Select listbox radius（PR-9 token promotion）
 
 Radix `Select.Content` 和 `Select.Item` 共用一对 radius token，由
-`global.css` 里 `[data-radix-select-content]` / `[data-radix-select-content]
-[role='option']` 全局选择器消费。所有 SelectContent / SelectItem 调用点
+`global.css` 里 `[role='listbox']` / `[role='listbox'] [role='option']`
+全局选择器消费。所有 SelectContent / SelectItem 调用点
 （SearchPanel / ArchivedChannelsPanel / AgentPicker / ManageMembersPopover /
 EventsApp / AgentProfileCard / TaskStatusPill 的 popover items 等）的
 TSX **不动**，由 global 选择器扫，跟 floating frame 同样的
 "source order + 等 specificity 胜出"机制。
+
+**为什么用 `[role='listbox']` 而不是 `[data-radix-select-content]`** ——
+Radix Select 实际不暴露 `data-radix-select-content`（首版 PR-9 试了 ——
+shiki `aLkR1sZ-HzyLB3fO` 报 wrapper 和 item hover 仍然圆角，验证
+`@radix-ui/react-select@2.2.6` 源码确认只有 `data-radix-select-viewport`
+存在于内部 viewport，不在 Content 根上）。ARIA `role="listbox"` 是
+Radix 在 Select.Content 上实际设置的属性，也是 W3C 标准词汇。同时
+Composer mention 自定义下拉 (`Composer.tsx:760`) 也用 `role="listbox"`，
+selector 顺便把它也覆盖了 —— 形态一致，海报系都要直角。
 
 | Token | 用途 | 取值原则 |
 |---|---|---|
