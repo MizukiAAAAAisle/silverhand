@@ -681,13 +681,13 @@ function MemberStrip({
               >
                 <AgentAvatar
                   runtime={agent.runtime}
-                  size={22}
+                  size={18}
                   avatarObjectUrl={agentAvatarUrls.get(agent.id) ?? null}
                   alt={agent.display_name || agent.name}
                 />
                 <span
                   className={
-                    'absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full border border-bg-floating shadow-sm '
+                    'absolute -bottom-0.5 -right-0.5 size-2 rounded-full border border-bg-floating shadow-sm '
                     + STATUS_DOT[status]
                   }
                 />
@@ -710,7 +710,7 @@ function MemberStrip({
 }
 
 /**
- * Human chip — same footprint as the agent chip (22px square), but
+ * Human chip — same footprint as the agent chip (18px square), but
  * holds the viewer's avatar (current single-human invariant) or a
  * letter placeholder. Hover popover mirrors `HumanMention`'s
  * content so inline `@handle` mentions and header chips read the
@@ -731,7 +731,7 @@ function HumanMemberChip({ human }: { human: HumanMemberDto }): JSX.Element {
         aria-label={`@${human.name}`}
         data-member-chip="human"
         data-member-id={human.user_id}
-        className="relative inline-flex size-[22px] shrink-0 items-center justify-center overflow-hidden rounded-none border border-[#9ca3af] bg-bg-elevated p-0 text-[11px] font-medium text-text-muted shadow-sm transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+        className="relative inline-flex size-[18px] shrink-0 items-center justify-center overflow-hidden rounded-none border border-[#9ca3af] bg-bg-elevated p-0 text-[10px] font-medium text-text-muted shadow-sm transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
       >
         <span aria-hidden>{initial}</span>
       </button>
@@ -757,7 +757,7 @@ function MemberOverflowChip({
       type="button"
       aria-label={`+${overflow.length} more members`}
       data-member-chip="overflow"
-      className="inline-flex size-[22px] shrink-0 items-center justify-center rounded-full border border-[#9ca3af] bg-bg-elevated p-0 text-[10px] font-semibold text-text-muted shadow-sm transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+      className="inline-flex size-[18px] shrink-0 items-center justify-center rounded-full border border-[#9ca3af] bg-bg-elevated p-0 text-[9px] font-semibold text-text-muted shadow-sm transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
     >
       +{overflow.length}
     </button>
