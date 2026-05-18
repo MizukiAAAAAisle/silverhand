@@ -89,7 +89,7 @@ export function MembersPanel({
           <SidebarRow
             icon={
               viewerAvatarObjectUrl ? (
-                <span className="grid size-5 place-items-center overflow-hidden rounded-full bg-bg-row-hover">
+                <span className="grid size-5 place-items-center overflow-hidden rounded-none bg-bg-row-hover">
                   {/* eslint-disable-next-line jsx-a11y/img-redundant-alt */}
                   <img
                     src={viewerAvatarObjectUrl}

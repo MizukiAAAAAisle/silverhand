@@ -121,7 +121,7 @@ export function EditableAgentAvatar({
           </AvatarPickerButton>
           {pending ? (
             <span
-              className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-full bg-bg-base/40"
+              className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-none bg-bg-base/40"
               aria-hidden
             >
               <Camera className="size-4 text-text-muted" />

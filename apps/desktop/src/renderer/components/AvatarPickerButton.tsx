@@ -4,23 +4,23 @@ import { cn } from '@/lib/cn';
 export interface AvatarPickerButtonProps {
   /**
    * The avatar visual itself (e.g. `<AgentAvatar>` or a custom `<img>` /
-   * placeholder). The picker treats it as a circular silhouette of
+   * placeholder). The picker treats it as a square silhouette of
    * `size` × `size` pixels and overlays the hover affordance on top.
    * The visual must already be rendered at `size`; the picker doesn't
    * resize children.
    */
   children: ReactNode;
   /**
-   * Pixel size of the avatar circle. Used to constrain the click target
+   * Pixel size of the avatar square. Used to constrain the click target
    * and to scale the hover bottom strip.
    */
   size: number;
   /**
    * Hover/focus overlay label. The strip is clipped to the avatar's
-   * circle radius (`overflow-hidden`), so this MUST stay very short —
-   * a single verb like `'Edit'` or `'Add'`. The smallest call site is
-   * the 40px registration-gate avatar; even uppercase 10px text gets
-   * trimmed past ~5 characters there. Use `ariaLabel` for the verbose
+   * frame (`overflow-hidden`), so this MUST stay very short — a single
+   * verb like `'Edit'` or `'Add'`. The smallest call site is the 40px
+   * registration-gate avatar; even uppercase 10px text gets trimmed
+   * past ~5 characters there. Use `ariaLabel` for the verbose
    * screen-reader text (e.g. `'Change avatar'`).
    */
   label: string;
@@ -51,10 +51,10 @@ export interface AvatarPickerButtonProps {
 /**
  * Click-the-avatar avatar picker.
  *
- * The whole circle is the click target — we wrap the avatar visual in a
+ * The whole square is the click target — we wrap the avatar visual in a
  * `<label>` containing a hidden `<input type="file">`. On hover or
  * keyboard focus a thin bottom strip slides in with a single short verb
- * (`'Edit'` / `'Add'`); clicking anywhere on the circle opens the OS
+ * (`'Edit'` / `'Add'`); clicking anywhere on the avatar opens the OS
  * file picker. Designed to replace the previous Choose…/Change… button
  * pattern so the affordance lives on the avatar itself, not in a
  * neighboring control.
@@ -82,7 +82,7 @@ export function AvatarPickerButton({
     <label
       htmlFor={inputId}
       className={cn(
-        'group relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full',
+        'group relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none',
         // Focus ring lives on the wrapper so keyboard users get a clear
         // outline when the hidden input gains focus via Tab.
         'focus-within:outline-none focus-within:ring-2 focus-within:ring-border-focus',
@@ -113,17 +113,17 @@ export function AvatarPickerButton({
           'pointer-events-none absolute inset-x-0 bottom-0 grid place-items-center',
           'bg-black/60 text-white',
           // Tight letter-spacing + a short label is mandatory: the strip
-          // sits inside the circular `overflow-hidden` clip, so anything
-          // wider than the chord at the bottom band gets cut. Callers
-          // pass single verbs; `ariaLabel` carries the verbose text.
+          // sits inside the square `overflow-hidden` clip, so anything
+          // wider than the available width gets cut. Callers pass single
+          // verbs; `ariaLabel` carries the verbose text.
           'text-[10px] font-semibold uppercase tracking-normal',
           'opacity-0 transition-opacity duration-100 ease-out',
           'group-hover:opacity-100 group-focus-within:opacity-100',
         )}
         style={{
           // Bottom third reads as a label band without dominating the
-          // avatar circle; clamp so we don't get a sliver on tiny
-          // avatars or an overwhelming bar on the 56–72px profile sizes.
+          // avatar; clamp so we don't get a sliver on tiny avatars or
+          // an overwhelming bar on the 56–72px profile sizes.
           height: Math.max(14, Math.min(20, Math.round(size * 0.32))),
         }}
         aria-hidden

@@ -462,7 +462,7 @@ function Avatar({
   if (isUser) {
     const inner = isCurrentUser && viewerAvatarObjectUrl ? (
       <span
-        className="mt-0.5 inline-block size-8 shrink-0 overflow-hidden rounded-full bg-bg-elevated"
+        className="mt-0.5 inline-block size-8 shrink-0 overflow-hidden rounded-none bg-bg-elevated"
         aria-hidden
       >
         {/* eslint-disable-next-line jsx-a11y/img-redundant-alt */}
@@ -474,7 +474,7 @@ function Avatar({
       </span>
     ) : (
       <span
-        className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-bg-elevated text-text-muted"
+        className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-none bg-bg-elevated text-text-muted"
         aria-hidden
       >
         <User className="size-4" />
@@ -490,7 +490,7 @@ function Avatar({
           <button
             type="button"
             aria-label={`@${viewer.name}`}
-            className="rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+            className="rounded-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
           >
             {inner}
           </button>
@@ -515,7 +515,7 @@ function Avatar({
             event.preventDefault();
             onNavigateAgent(agent.id);
           }}
-          className="mt-0.5 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+          className="mt-0.5 rounded-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
         >
           <AgentAvatar
             runtime={agent.runtime}
@@ -529,7 +529,7 @@ function Avatar({
   }
   return (
     <span
-      className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-bg-elevated text-text-muted"
+      className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-none bg-bg-elevated text-text-muted"
       aria-hidden
     >
       <User className="size-4" />

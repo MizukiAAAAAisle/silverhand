@@ -147,7 +147,7 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
             ) : null}
           </div>
         ) : (
-          <span className="grid size-14 place-items-center overflow-hidden rounded-full border border-border-subtle bg-bg-row-hover">
+          <span className="grid size-14 place-items-center overflow-hidden rounded-none border border-border-subtle bg-bg-row-hover">
             {avatarObjectUrl ? (
               // eslint-disable-next-line jsx-a11y/img-redundant-alt
               <img

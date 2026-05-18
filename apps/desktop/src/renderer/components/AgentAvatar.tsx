@@ -6,8 +6,6 @@ interface AgentAvatarProps {
   runtime: RuntimeKind;
   /** Pixel size of the square. Default 28. */
   size?: number;
-  /** Override the default rounded-full silhouette. */
-  rounded?: 'full' | 'md';
   className?: string;
   title?: string;
   /**
@@ -53,7 +51,6 @@ const TINTS: Record<RuntimeKind, { bg: string; fg: string }> = {
 export function AgentAvatar({
   runtime,
   size = 28,
-  rounded = 'full',
   className,
   title,
   avatarObjectUrl,
@@ -66,8 +63,7 @@ export function AgentAvatar({
     return (
       <span
         className={cn(
-          'inline-flex shrink-0 items-center justify-center overflow-hidden bg-bg-muted',
-          rounded === 'full' ? 'rounded-full' : 'rounded-md',
+          'inline-flex shrink-0 items-center justify-center overflow-hidden bg-bg-muted rounded-none',
           className,
         )}
         style={{ width: size, height: size }}
@@ -89,8 +85,7 @@ export function AgentAvatar({
   return (
     <span
       className={cn(
-        'inline-flex shrink-0 items-center justify-center overflow-hidden',
-        rounded === 'full' ? 'rounded-full' : 'rounded-md',
+        'inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none',
         tint.bg,
         tint.fg,
         className,
