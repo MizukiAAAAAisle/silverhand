@@ -128,7 +128,7 @@ function SelectedChip({
   onRemove: () => void;
 }): JSX.Element {
   return (
-    <span className="inline-flex items-center gap-1 rounded-md border border-accent-base bg-accent-soft px-2 py-0.5 text-xs text-text-primary">
+    <span className="inline-flex items-center gap-1 rounded-[var(--chip-radius)] border border-accent-base bg-accent-soft px-2 py-0.5 text-xs text-text-primary">
       @{name}
       <button
         type="button"

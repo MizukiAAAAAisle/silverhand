@@ -145,7 +145,7 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
             {members.map(m => (
               <li
                 key={m.id}
-                className="flex items-center gap-2 rounded-md border border-border-subtle bg-bg-base px-2 py-1"
+                className="flex items-center gap-2 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-base px-2 py-1"
               >
                 <AgentAvatar
                   runtime={m.runtime}

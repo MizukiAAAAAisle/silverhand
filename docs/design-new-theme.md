@@ -435,6 +435,15 @@ ChannelRef.tsx inert + interactive；Mention.tsx agent + human mention；
 TasksSection + WorkspaceTasksDrawer 的 TaskStatusBadge（与 TaskRef
 内嵌版本同形态）。
 
+**追加消费点（PR-12，#task:370）**：**member selection chip / tile** 这
+一类——AgentPicker `SelectedChip`（新建 channel 已选成员 tag，
+`text-xs px-2 py-0.5` 形态，跟 ConversationRef chip 同节拍）和
+ManageMembersPopover 成员 tile（titlebar 添加成员 popover 里的单行
+member 行，avatar + @name + runtime + 移除 icon）。**仅限 "member
+selection chip / tile" 这一窄类**，不可推广为"列表行 / card 通用圆
+角"。如果将来出现更宽的 list row 需要直角，单独开 token，不要复用
+`--chip-radius` 把列表全部扫进来。
+
 **与 `--control-radius` 的边界**：
 - chip = inline 文本旁边的小标签，没有交互手感（即使可点也是 "点开
   popover" 级别），形状是 `<span>`-shaped 短长方
