@@ -3,7 +3,6 @@ import {
   useEffect,
   useState,
   type InputHTMLAttributes,
-  type ReactNode,
   type TextareaHTMLAttributes,
 } from 'react';
 import * as Select from '@radix-ui/react-select';
@@ -18,6 +17,12 @@ import type {
 } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { cn } from '@/lib/cn';
+import {
+  MetadataList,
+  ProfileField,
+  ProfileFieldGrid,
+  ProfileSection,
+} from '@/features/common/ProfileSummarySections';
 import { useUpdateAgent } from './hooks';
 import { useAgentAvatarObjectUrl } from './avatar-hooks';
 import { canEditAgentProfile } from './permissions';
@@ -56,12 +61,19 @@ interface AgentProfileCardProps {
 }
 
 /**
- * Settings-style agent profile view. Replaces the previous form-heavy
- * card (stacked labels above bordered inputs) with a two-column row
- * layout: label on the left, ghost-input value on the right that only
- * paints its chrome on hover/focus. Reads as a profile sheet first and
- * an editor second — which matches how the user actually interacts with
- * it (mostly viewing, occasionally tweaking).
+ * Agent profile card. Section structure follows the #task:396 contract
+ * (identity-led + operational list):
+ *
+ *   Identity      → avatar + display name + handle (editable in place)
+ *   Capabilities  → runtime + model + description (+ codex extras)
+ *   Metadata      → host id + created/updated + agent id
+ *
+ * Sections are bordered cards; fields inside each section stack
+ * label-on-top in a 2-column wrap grid rather than the previous
+ * 120px-label form grid, so the panel reads as a profile sheet
+ * rather than a settings form. The editors themselves (GhostInput /
+ * GhostTextarea / Radix Select) are unchanged so codex-specific
+ * options and runtime-blocked disables keep working.
  */
 export function AgentProfileCard({
   agent,
@@ -118,156 +130,164 @@ export function AgentProfileCard({
         : 'false';
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-8">
-      {/* Identity strip — large avatar paired with display name + handle.
-        * Reads as a profile masthead rather than a labeled form row.
-        * Editable form is gated on `canEditAgentProfile`; non-creators
-        * see a plain `<AgentAvatar>` and a static name + a one-liner
-        * explaining who can edit. The read-only form does NOT use a
-        * disabled `<input>` — that would still render the input
-        * chrome on hover/focus and lie about the affordance. */}
-      <section className="flex items-center gap-4">
-        {canEdit ? (
-          <EditableAgentAvatar
-            agentId={agent.id}
-            size={56}
-            runtime={agent.runtime}
-            alt={agent.display_name || agent.name}
-            avatarObjectUrl={avatarObjectUrl}
-            hasAvatar={agent.avatar_url != null}
-          />
-        ) : (
-          <AgentAvatar
-            runtime={agent.runtime}
-            size={56}
-            avatarObjectUrl={avatarObjectUrl}
-            alt={agent.display_name || agent.name}
-          />
-        )}
-        <div className="min-w-0 flex-1">
-          {canEdit ? (
-            <GhostInput
-              value={displayName}
-              onChange={e => setDisplayName(e.target.value)}
-              onBlur={onCommitDisplayName}
-              placeholder={agent.name}
-              className="font-serif text-lg font-semibold leading-tight"
-            />
-          ) : (
-            <div className="px-2 font-serif text-lg font-semibold leading-tight text-text-primary">
-              {agent.display_name || agent.name}
-            </div>
-          )}
-          <div className="mt-1 flex items-center gap-1.5 px-2 text-xs text-text-muted">
-            <span className="font-mono">@{agent.name}</span>
-            <Lock className="size-3" />
-            <span>handle is locked in v1</span>
-          </div>
-        </div>
-      </section>
-
+    <div className="mx-auto flex max-w-3xl flex-col gap-6">
       {!canEdit ? <ReadOnlyNotice /> : null}
 
-      <Group title="About">
-        <Row label="Description" align="top">
+      {/* Identity — avatar + name + locked handle. Mirrors the Hero's
+        * identity info but with editing affordances live here. The
+        * Hero is read-only by design (it's the page chrome, not the
+        * editor surface). */}
+      <ProfileSection title="Identity">
+        <div className="flex items-center gap-4">
           {canEdit ? (
-            <GhostTextarea
-              rows={3}
-              value={description}
-              onChange={e => setDescription(e.target.value)}
-              onBlur={onCommitDescription}
-              placeholder="Optional — what is this agent for?"
+            <EditableAgentAvatar
+              agentId={agent.id}
+              size={56}
+              runtime={agent.runtime}
+              alt={agent.display_name || agent.name}
+              avatarObjectUrl={avatarObjectUrl}
+              hasAvatar={agent.avatar_url != null}
             />
           ) : (
-            <ReadOnlyValue
-              value={agent.description}
-              placeholder="No description."
-              multiline
+            <AgentAvatar
+              runtime={agent.runtime}
+              size={56}
+              avatarObjectUrl={avatarObjectUrl}
+              alt={agent.display_name || agent.name}
             />
           )}
-        </Row>
-      </Group>
-
-      <Group title="Runtime">
-        <Row
-          label="CLI"
-          hint={
-            canEdit && hasRunning ? 'Stop the agent before changing.' : undefined
-          }
-        >
-          {canEdit ? (
-            <RuntimeSelect
-              value={agent.runtime}
-              disabled={hasRunning}
-              onChange={value => commit({ runtime: value })}
-            />
-          ) : (
-            <ReadOnlyValue value={runtimeLabel(agent.runtime)} />
-          )}
-        </Row>
-        <Row label="Model" hint={canEdit ? runtimeHint(agent.runtime) : undefined}>
-          {canEdit ? (
-            <GhostInput
-              value={model}
-              onChange={e => setModel(e.target.value)}
-              onBlur={onCommitModel}
-              placeholder="driver default"
-            />
-          ) : (
-            <ReadOnlyValue value={agent.model} placeholder="driver default" />
-          )}
-        </Row>
-        {isCodex ? (
-          <Row label="Reasoning" hint={canEdit ? 'Higher = slower but more thorough.' : undefined}>
+          <div className="min-w-0 flex-1">
             {canEdit ? (
-              <PickerSelect
-                value={reasoningValue}
-                options={CODEX_REASONING}
-                onChange={value =>
-                  commit({
-                    reasoning_effort:
-                      value === '__default__' ? null : (value as ReasoningEffort),
-                  })
-                }
+              <GhostInput
+                value={displayName}
+                onChange={e => setDisplayName(e.target.value)}
+                onBlur={onCommitDisplayName}
+                placeholder={agent.name}
+                className="font-serif text-lg font-semibold leading-tight"
+              />
+            ) : (
+              <div className="px-2 font-serif text-lg font-semibold leading-tight text-text-primary">
+                {agent.display_name || agent.name}
+              </div>
+            )}
+            <div className="mt-1 flex items-center gap-1.5 px-2 text-xs text-text-muted">
+              <span className="font-mono">@{agent.name}</span>
+              <Lock className="size-3" />
+              <span>handle is locked in v1</span>
+            </div>
+          </div>
+        </div>
+      </ProfileSection>
+
+      {/* Capabilities — what this agent can do. Description, runtime,
+        * model, plus codex-specific tuning. Description gets the
+        * full-row treatment because it's the long-form field; the
+        * narrower fields share the 2-col grid. */}
+      <ProfileSection title="Capabilities">
+        <ProfileFieldGrid>
+          <ProfileField label="Description" full>
+            {canEdit ? (
+              <GhostTextarea
+                rows={3}
+                value={description}
+                onChange={e => setDescription(e.target.value)}
+                onBlur={onCommitDescription}
+                placeholder="Optional — what is this agent for?"
               />
             ) : (
               <ReadOnlyValue
-                value={agent.reasoning_effort}
-                placeholder="codex default"
+                value={agent.description}
+                placeholder="No description."
+                multiline
               />
             )}
-          </Row>
-        ) : null}
-        {isCodex ? (
-          <Row label="Fast mode" hint={canEdit ? 'Default keeps the catalog setting.' : undefined}>
+          </ProfileField>
+          <ProfileField
+            label="Runtime"
+            hint={
+              canEdit && hasRunning ? 'Stop the agent before changing.' : undefined
+            }
+          >
             {canEdit ? (
-              <PickerSelect
-                value={fastModeValue}
-                options={CODEX_FAST_MODE}
-                onChange={value =>
-                  commit({
-                    fast_mode: value === '__default__' ? null : value === 'true',
-                  })
-                }
+              <RuntimeSelect
+                value={agent.runtime}
+                disabled={hasRunning}
+                onChange={value => commit({ runtime: value })}
               />
             ) : (
-              <ReadOnlyValue
-                value={
-                  agent.fast_mode === null || agent.fast_mode === undefined
-                    ? null
-                    : agent.fast_mode
-                      ? 'Enabled'
-                      : 'Disabled'
-                }
-                placeholder="codex default"
-              />
+              <ReadOnlyValue value={runtimeLabel(agent.runtime)} />
             )}
-          </Row>
-        ) : null}
-      </Group>
+          </ProfileField>
+          <ProfileField label="Model" hint={canEdit ? runtimeHint(agent.runtime) : undefined}>
+            {canEdit ? (
+              <GhostInput
+                value={model}
+                onChange={e => setModel(e.target.value)}
+                onBlur={onCommitModel}
+                placeholder="driver default"
+              />
+            ) : (
+              <ReadOnlyValue value={agent.model} placeholder="driver default" />
+            )}
+          </ProfileField>
+          {isCodex ? (
+            <ProfileField
+              label="Reasoning"
+              hint={canEdit ? 'Higher = slower but more thorough.' : undefined}
+            >
+              {canEdit ? (
+                <PickerSelect
+                  value={reasoningValue}
+                  options={CODEX_REASONING}
+                  onChange={value =>
+                    commit({
+                      reasoning_effort:
+                        value === '__default__' ? null : (value as ReasoningEffort),
+                    })
+                  }
+                />
+              ) : (
+                <ReadOnlyValue
+                  value={agent.reasoning_effort}
+                  placeholder="codex default"
+                />
+              )}
+            </ProfileField>
+          ) : null}
+          {isCodex ? (
+            <ProfileField
+              label="Fast mode"
+              hint={canEdit ? 'Default keeps the catalog setting.' : undefined}
+            >
+              {canEdit ? (
+                <PickerSelect
+                  value={fastModeValue}
+                  options={CODEX_FAST_MODE}
+                  onChange={value =>
+                    commit({
+                      fast_mode: value === '__default__' ? null : value === 'true',
+                    })
+                  }
+                />
+              ) : (
+                <ReadOnlyValue
+                  value={
+                    agent.fast_mode === null || agent.fast_mode === undefined
+                      ? null
+                      : agent.fast_mode
+                        ? 'Enabled'
+                        : 'Disabled'
+                  }
+                  placeholder="codex default"
+                />
+              )}
+            </ProfileField>
+          ) : null}
+        </ProfileFieldGrid>
+      </ProfileSection>
 
-      <Group title="Metadata" muted>
-        <MetaList
+      <ProfileSection title="Metadata" muted>
+        <MetadataList
           items={[
             { label: 'Host', value: agent.host_id },
             {
@@ -283,7 +303,7 @@ export function AgentProfileCard({
             { label: 'Agent ID', value: agent.id, mono: true },
           ]}
         />
-      </Group>
+      </ProfileSection>
 
       {update.isError && canEdit ? (
         <div className="text-xs text-error">{String(update.error)}</div>
@@ -304,7 +324,7 @@ function ReadOnlyNotice(): JSX.Element {
   return (
     <p
       role="note"
-      className="-mt-4 text-xs text-text-muted"
+      className="text-xs text-text-muted"
       data-testid="agent-profile-readonly-notice"
     >
       Only the creator can edit this agent's profile.
@@ -340,98 +360,6 @@ function ReadOnlyValue({
 
 function runtimeLabel(runtime: RuntimeKind): string {
   return RUNTIMES.find(rt => rt.value === runtime)?.label ?? runtime;
-}
-
-// ── Layout primitives ────────────────────────────────────────────────────
-
-function Group({
-  title,
-  children,
-  muted = false,
-}: {
-  title: string;
-  children: ReactNode;
-  muted?: boolean;
-}): JSX.Element {
-  return (
-    <section className="flex flex-col">
-      <h3
-        className={cn(
-          'mb-2 font-serif text-[13px] font-semibold uppercase tracking-wider',
-          muted ? 'text-text-muted' : 'text-text-secondary',
-        )}
-      >
-        {title}
-      </h3>
-      <div className="divide-y divide-border-subtle/60 rounded-md border border-border-subtle/60 bg-bg-floating/50">
-        {children}
-      </div>
-    </section>
-  );
-}
-
-function Row({
-  label,
-  hint,
-  align = 'center',
-  children,
-}: {
-  label: string;
-  hint?: string;
-  align?: 'center' | 'top';
-  children: ReactNode;
-}): JSX.Element {
-  return (
-    <div
-      className={cn(
-        'grid grid-cols-[120px_1fr] gap-3 px-3 py-2.5',
-        align === 'top' ? 'items-start' : 'items-center',
-      )}
-    >
-      <div className={cn('min-w-0', align === 'top' ? 'pt-1.5' : '')}>
-        <div className="text-xs font-medium text-text-secondary">{label}</div>
-        {hint ? (
-          <div className="mt-0.5 text-[11px] leading-snug text-text-muted">
-            {hint}
-          </div>
-        ) : null}
-      </div>
-      <div className="min-w-0">{children}</div>
-    </div>
-  );
-}
-
-interface MetaItem {
-  label: string;
-  value: string;
-  title?: string;
-  mono?: boolean;
-}
-
-function MetaList({ items }: { items: MetaItem[] }): JSX.Element {
-  return (
-    <dl className="divide-y divide-border-subtle/60">
-      {items.map(item => (
-        <div
-          key={item.label}
-          className="flex items-baseline justify-between gap-3 px-3 py-1.5"
-          title={item.title}
-        >
-          <dt className="text-[11px] uppercase tracking-wider text-text-muted">
-            {item.label}
-          </dt>
-          <dd
-            className={cn(
-              'min-w-0 truncate text-xs text-text-primary',
-              item.mono ? 'font-mono' : '',
-            )}
-          >
-            {item.value}
-          </dd>
-        </div>
-      ))}
-    </dl>
-  );
 }
 
 // ── Ghost inputs (transparent until hover/focus) ─────────────────────────

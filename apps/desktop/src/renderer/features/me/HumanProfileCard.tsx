@@ -3,7 +3,6 @@ import {
   useEffect,
   useState,
   type InputHTMLAttributes,
-  type ReactNode,
 } from 'react';
 import dayjs from 'dayjs';
 import { Lock, User as UserIcon } from 'lucide-react';
@@ -11,6 +10,10 @@ import { validateAvatarFile, type UserDto } from '@silverhand/shared';
 import { ApiError } from '@/lib/api';
 import { AvatarPickerButton } from '@/components/AvatarPickerButton';
 import { cn } from '@/lib/cn';
+import {
+  MetadataList,
+  ProfileSection,
+} from '@/features/common/ProfileSummarySections';
 import {
   useClearAvatar,
   useUpdateProfile,
@@ -27,12 +30,11 @@ interface HumanProfileCardProps {
 }
 
 /**
- * Settings-style profile view for a human (user). Mirrors
- * `AgentProfileCard`: identity strip + ghost-input fields + a metadata
- * group, with permission gating that hides editing affordances for
- * non-self viewers. v1 only ever navigates here for the viewer
- * themselves, but the gate is wired the same way the agent surface is
- * so v2 multi-human gets the read-only path for free.
+ * Human profile card. Section structure mirrors `AgentProfileCard` —
+ * Identity + Metadata — but drops the Capabilities section because
+ * humans have no runtime/model surface. Identity hosts the avatar
+ * picker and the editable display-name input; Metadata is the tight
+ * `<dl>` of created/updated/id.
  *
  * Backend contract reused as-is from the registration / Settings →
  * Profile flow:
@@ -111,93 +113,95 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
   const hasAvatar = user.avatar_url != null;
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-8">
-      <section className="flex items-center gap-4">
-        {canEdit ? (
-          <div className="flex flex-col gap-1.5">
-            <AvatarPickerButton
-              size={56}
-              label={hasAvatar ? 'Edit' : 'Add'}
-              onPick={file => void onPickAvatar(file)}
-              disabled={avatarPending}
-              ariaLabel={hasAvatar ? 'Change avatar' : 'Add avatar'}
-              className="border border-border-subtle"
-            >
-              <span className="grid size-full place-items-center bg-bg-row-hover">
-                {avatarObjectUrl ? (
-                  // eslint-disable-next-line jsx-a11y/img-redundant-alt
-                  <img
-                    src={avatarObjectUrl}
-                    alt="Your avatar"
-                    className="size-full object-cover"
-                  />
-                ) : (
-                  <UserIcon className="size-7 text-text-muted" />
-                )}
-              </span>
-            </AvatarPickerButton>
-            {avatarError ? (
-              <p
-                role="alert"
-                className="text-[11px] leading-snug text-error"
-                data-testid="human-avatar-error"
-              >
-                {avatarError}
-              </p>
-            ) : null}
-          </div>
-        ) : (
-          <span className="grid size-14 place-items-center overflow-hidden rounded-none border border-border-subtle bg-bg-row-hover">
-            {avatarObjectUrl ? (
-              // eslint-disable-next-line jsx-a11y/img-redundant-alt
-              <img
-                src={avatarObjectUrl}
-                alt={user.display_name || user.name}
-                className="size-full object-cover"
-              />
-            ) : (
-              <UserIcon className="size-7 text-text-muted" />
-            )}
-          </span>
-        )}
-        <div className="min-w-0 flex-1">
-          {canEdit ? (
-            <GhostInput
-              value={displayName}
-              onChange={e => setDisplayName(e.target.value)}
-              onBlur={onCommitDisplayName}
-              placeholder={user.name}
-              className="font-serif text-lg font-semibold leading-tight"
-            />
-          ) : (
-            <div className="px-2 font-serif text-lg font-semibold leading-tight text-text-primary">
-              {user.display_name || user.name}
-            </div>
-          )}
-          <div className="mt-1 flex items-center gap-1.5 px-2 text-xs text-text-muted">
-            <span className="font-mono">@{user.name}</span>
-            <Lock className="size-3" />
-            <span>name is permanent</span>
-          </div>
-          {canEdit && hasAvatar ? (
-            <div className="mt-1 px-2">
-              <button
-                type="button"
-                onClick={() => void onClearAvatar()}
-                disabled={avatarPending}
-                className="text-[11px] text-text-muted underline-offset-2 hover:underline disabled:opacity-50"
-              >
-                Remove avatar
-              </button>
-            </div>
-          ) : null}
-        </div>
-      </section>
-
+    <div className="mx-auto flex max-w-3xl flex-col gap-6">
       {!canEdit ? <ReadOnlyNotice /> : null}
 
-      <Group title="Metadata" muted>
-        <MetaList
+      <ProfileSection title="Identity">
+        <div className="flex items-center gap-4">
+          {canEdit ? (
+            <div className="flex flex-col gap-1.5">
+              <AvatarPickerButton
+                size={56}
+                label={hasAvatar ? 'Edit' : 'Add'}
+                onPick={file => void onPickAvatar(file)}
+                disabled={avatarPending}
+                ariaLabel={hasAvatar ? 'Change avatar' : 'Add avatar'}
+                className="border border-border-subtle"
+              >
+                <span className="grid size-full place-items-center bg-bg-row-hover">
+                  {avatarObjectUrl ? (
+                    // eslint-disable-next-line jsx-a11y/img-redundant-alt
+                    <img
+                      src={avatarObjectUrl}
+                      alt="Your avatar"
+                      className="size-full object-cover"
+                    />
+                  ) : (
+                    <UserIcon className="size-7 text-text-muted" />
+                  )}
+                </span>
+              </AvatarPickerButton>
+              {avatarError ? (
+                <p
+                  role="alert"
+                  className="text-[11px] leading-snug text-error"
+                  data-testid="human-avatar-error"
+                >
+                  {avatarError}
+                </p>
+              ) : null}
+            </div>
+          ) : (
+            <span className="grid size-14 place-items-center overflow-hidden rounded-none border border-border-subtle bg-bg-row-hover">
+              {avatarObjectUrl ? (
+                // eslint-disable-next-line jsx-a11y/img-redundant-alt
+                <img
+                  src={avatarObjectUrl}
+                  alt={user.display_name || user.name}
+                  className="size-full object-cover"
+                />
+              ) : (
+                <UserIcon className="size-7 text-text-muted" />
+              )}
+            </span>
+          )}
+          <div className="min-w-0 flex-1">
+            {canEdit ? (
+              <GhostInput
+                value={displayName}
+                onChange={e => setDisplayName(e.target.value)}
+                onBlur={onCommitDisplayName}
+                placeholder={user.name}
+                className="font-serif text-lg font-semibold leading-tight"
+              />
+            ) : (
+              <div className="px-2 font-serif text-lg font-semibold leading-tight text-text-primary">
+                {user.display_name || user.name}
+              </div>
+            )}
+            <div className="mt-1 flex items-center gap-1.5 px-2 text-xs text-text-muted">
+              <span className="font-mono">@{user.name}</span>
+              <Lock className="size-3" />
+              <span>name is permanent</span>
+            </div>
+            {canEdit && hasAvatar ? (
+              <div className="mt-1 px-2">
+                <button
+                  type="button"
+                  onClick={() => void onClearAvatar()}
+                  disabled={avatarPending}
+                  className="text-[11px] text-text-muted underline-offset-2 hover:underline disabled:opacity-50"
+                >
+                  Remove avatar
+                </button>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </ProfileSection>
+
+      <ProfileSection title="Metadata" muted>
+        <MetadataList
           items={[
             {
               label: 'Created',
@@ -212,7 +216,7 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
             { label: 'User ID', value: user.id, mono: true },
           ]}
         />
-      </Group>
+      </ProfileSection>
 
       {update.isError && canEdit ? (
         <div className="text-xs text-error">{String(update.error)}</div>
@@ -231,7 +235,7 @@ function ReadOnlyNotice(): JSX.Element {
   return (
     <p
       role="note"
-      className="-mt-4 text-xs text-text-muted"
+      className="text-xs text-text-muted"
       data-testid="human-profile-readonly-notice"
     >
       Only this user can edit their profile.
@@ -283,67 +287,6 @@ function parseErrorCode(body: string): string | null {
   } catch {
     return null;
   }
-}
-
-// ── Layout primitives ────────────────────────────────────────────────────
-
-function Group({
-  title,
-  children,
-  muted = false,
-}: {
-  title: string;
-  children: ReactNode;
-  muted?: boolean;
-}): JSX.Element {
-  return (
-    <section className="flex flex-col">
-      <h3
-        className={cn(
-          'mb-2 font-serif text-[13px] font-semibold uppercase tracking-wider',
-          muted ? 'text-text-muted' : 'text-text-secondary',
-        )}
-      >
-        {title}
-      </h3>
-      <div className="divide-y divide-border-subtle/60 rounded-md border border-border-subtle/60 bg-bg-floating/50">
-        {children}
-      </div>
-    </section>
-  );
-}
-
-interface MetaItem {
-  label: string;
-  value: string;
-  title?: string;
-  mono?: boolean;
-}
-
-function MetaList({ items }: { items: MetaItem[] }): JSX.Element {
-  return (
-    <dl className="divide-y divide-border-subtle/60">
-      {items.map(item => (
-        <div
-          key={item.label}
-          className="flex items-baseline justify-between gap-3 px-3 py-1.5"
-          title={item.title}
-        >
-          <dt className="text-[11px] uppercase tracking-wider text-text-muted">
-            {item.label}
-          </dt>
-          <dd
-            className={cn(
-              'min-w-0 truncate text-xs text-text-primary',
-              item.mono ? 'font-mono' : '',
-            )}
-          >
-            {item.value}
-          </dd>
-        </div>
-      ))}
-    </dl>
-  );
 }
 
 const GhostInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(

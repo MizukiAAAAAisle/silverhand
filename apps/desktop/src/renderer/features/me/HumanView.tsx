@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useViewerUser, isRegistrationRequired } from './hooks';
+import { HumanHeader } from './HumanHeader';
 import { HumanProfileCard } from './HumanProfileCard';
 
 interface HumanViewProps {
@@ -84,6 +85,7 @@ export function HumanView({
         boxShadow: 'var(--card-shadow, none)',
       }}
     >
+      <HumanHeader user={dto} />
       <div className="min-w-0 flex-1 overflow-y-auto">
         <div className="px-8 py-6">
           <HumanProfileCard user={dto} />
