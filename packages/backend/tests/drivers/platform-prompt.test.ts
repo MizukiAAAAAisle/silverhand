@@ -1133,6 +1133,28 @@ describe('buildPlatformPrompt — four-file model', () => {
     expect(regular).toContain('## Workspace Consensus');
   });
 
+  it('strips every CONSENSUS.md cue from DM prompt prose, not just the section', () => {
+    // Cindy round-2 review: dropping the Workspace Consensus *section*
+    // is necessary but not sufficient. The prose elsewhere in the
+    // prompt also pointed at CONSENSUS.md as if it were always loaded
+    // ("Your role, this workspace's MEMORY.md, and CONSENSUS.md are
+    // auto-loaded …", "**Initial role / Active Workspace Memory /
+    // Workspace Consensus** sections are re-injected …", "Workspace-
+    // wide consensus is auto-loaded below in **Workspace Consensus**
+    // …", etc). With the section actually missing in DM, that prose
+    // self-contradicted AND nudged the DM agent to create a stray
+    // .silverhand/CONSENSUS.md under its L1 dir.
+    const dm = withInjections({ channelKind: 'dm', currentConsensus: null });
+    expect(dm).not.toContain('CONSENSUS.md');
+    expect(dm).not.toContain('Workspace Consensus');
+    expect(dm).not.toContain('consensus');
+    // Sanity: the regular path still mentions all of these.
+    const regular = withInjections({ channelKind: 'regular' });
+    expect(regular).toContain('CONSENSUS.md');
+    expect(regular).toContain('Workspace Consensus');
+    expect(regular).toContain('consensus');
+  });
+
   it('uses a longer fence when injected content contains triple backticks', () => {
     // R2: a body containing ``` would close a 3-backtick fence and let
     // its trailing prose escape into top-level prompt. The renderer

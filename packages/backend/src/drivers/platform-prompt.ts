@@ -139,12 +139,19 @@ export function buildPlatformPrompt(input: PlatformPromptInput): string {
   const listSchedules = t('list_schedules');
   const cancelSchedule = t('cancel_schedule');
   const parentConclusionTarget = '`silverhand message send --target parent`';
+  // DM workspaces (`agent_home`) have only one member, so there is no
+  // concept of consensus. We still render the role/MEMORY auto-load
+  // notice, but every reference to CONSENSUS.md is suppressed in the
+  // DM branch so the prompt does not nudge the agent to create a stray
+  // `.silverhand/CONSENSUS.md` under its L1 directory.
+  const hasConsensus = input.currentConsensus !== null;
   const sessionContextBlock = renderSessionContext(
     input.sessionContext,
     {
       parentSend: '`silverhand message send --target parent`',
       closeThread: '`silverhand thread close`',
     },
+    { hasConsensus },
   );
   const profileDir = normalizeProfileDir(input.activeProfileDir);
   const memoryPath = profilePath(profileDir, 'MEMORY.md');
@@ -171,6 +178,27 @@ export function buildPlatformPrompt(input: PlatformPromptInput): string {
             'No CONSENSUS.md exists yet. Create one only when the workspace has reached an agreement everyone must follow.',
         });
   const memoryIndexBlock = renderWorkspaceMemoryIndex(input.workspaceMemoryIndex);
+
+  // Conditional fragments — when `hasConsensus` is false (DM /
+  // agent_home) every CONSENSUS.md reference is suppressed.
+  const autoLoadList = hasConsensus
+    ? "Your role, this workspace's MEMORY.md, and CONSENSUS.md are auto-loaded"
+    : "Your role and this workspace's MEMORY.md are auto-loaded";
+  const startupSkim = hasConsensus
+    ? "Skim the auto-injected sections below: **Initial role** (your role\n   contract, sourced from L1 — shared across every workspace),\n   **Active Workspace Memory** (this workspace's MEMORY.md), and\n   **Workspace Consensus**. They are your recovery anchor."
+    : "Skim the auto-injected sections below: **Initial role** (your role\n   contract, sourced from L1 — shared across every workspace) and\n   **Active Workspace Memory** (this workspace's MEMORY.md). They are\n   your recovery anchor.";
+  const workspaceMemoryBullet = hasConsensus
+    ? `- **Workspace memory is local.** \`${memoryPath}\` (auto-loaded as **Active\n  Workspace Memory** below) plus \`${notesDir}/\` describe what is true in\n  this workspace; \`./.silverhand/CONSENSUS.md\` is the rules every member\n  here must respect.`
+    : `- **Workspace memory is local.** \`${memoryPath}\` (auto-loaded as **Active\n  Workspace Memory** below) plus \`${notesDir}/\` describe what is true in\n  this workspace.`;
+  const writeByScopeBullet = hasConsensus
+    ? `- **Write by scope.** Global identity / role / working-style guidance from\n  the user → update L1 \`system_prompt.md\`. Guidance about this workspace's\n  collaboration, tasks, project facts, or work logs → update L2\n  (\`MEMORY.md\` / \`notes/\` / \`CONSENSUS.md\`).`
+    : `- **Write by scope.** Global identity / role / working-style guidance from\n  the user → update L1 \`system_prompt.md\`. Guidance about this DM's\n  collaboration, tasks, project facts, or work logs → update L2\n  (\`MEMORY.md\` / \`notes/\`).`;
+  const currentVsReferenceBullet = hasConsensus
+    ? `- **Current vs reference.** The current workspace's MEMORY.md and CONSENSUS\n  are already loaded for you. Other workspaces appear in **Workspace Memory\n  Index** as paths only — open one with your file tools only when the task\n  needs cross-workspace context.`
+    : `- **Current vs reference.** The current workspace's MEMORY.md is already\n  loaded for you. Other workspaces appear in **Workspace Memory Index** as\n  paths only — open one with your file tools only when the task needs\n  cross-workspace context.`;
+  const compactionAutoInject = hasConsensus
+    ? '**the Initial role / Active Workspace Memory /\nWorkspace Consensus sections are re-injected on every spawn (and after\ncompaction)**'
+    : '**the Initial role and Active Workspace Memory sections are\nre-injected on every spawn (and after compaction)**';
 
   return `You are **@${input.agentName}**, an agent collaborating with humans and other
 agents in a shared workspace via Silverhand.
@@ -207,7 +235,7 @@ ${renderSilverhandCliManual()}
   \`silverhand task claim --message-id <message_id>\`; if it is already on the
   task board, use \`silverhand task claim --task-number N\`. If the claim
   fails, do not work on that item unless the user explicitly redirects.
-- Your role, this workspace's MEMORY.md, and CONSENSUS.md are auto-loaded
+- ${autoLoadList}
   into this system prompt below. Read them once at startup; you do not need
   to open the files yourself.
 - When you receive messages with \`type=system\` (Silverhand system messages),
@@ -216,10 +244,7 @@ ${renderSilverhandCliManual()}
 
 ## Startup sequence
 
-1. Skim the auto-injected sections below: **Initial role** (your role
-   contract, sourced from L1 — shared across every workspace),
-   **Active Workspace Memory** (this workspace's MEMORY.md), and
-   **Workspace Consensus**. They are your recovery anchor.
+1. ${startupSkim}
 2. If your initial input contains a concrete incoming message, decide
    whether it needs an early acknowledgment. If yes, send a brief one
    via ${sendMessage} before deep context-gathering.
@@ -237,18 +262,9 @@ ${renderSilverhandCliManual()}
 - **Identity is global.** \`~/.silverhand/agents/${input.agentId}/system_prompt.md\`
   is the only source of who you are, and it applies in every workspace.
   Auto-loaded as **Initial role** below.
-- **Workspace memory is local.** \`${memoryPath}\` (auto-loaded as **Active
-  Workspace Memory** below) plus \`${notesDir}/\` describe what is true in
-  this workspace; \`./.silverhand/CONSENSUS.md\` is the rules every member
-  here must respect.
-- **Write by scope.** Global identity / role / working-style guidance from
-  the user → update L1 \`system_prompt.md\`. Guidance about this workspace's
-  collaboration, tasks, project facts, or work logs → update L2
-  (\`MEMORY.md\` / \`notes/\` / \`CONSENSUS.md\`).
-- **Current vs reference.** The current workspace's MEMORY.md and CONSENSUS
-  are already loaded for you. Other workspaces appear in **Workspace Memory
-  Index** as paths only — open one with your file tools only when the task
-  needs cross-workspace context.
+${workspaceMemoryBullet}
+${writeByScopeBullet}
+${currentVsReferenceBullet}
 
 These paths are internal working context. Do not mention them to the user
 unless they ask.
@@ -277,9 +293,7 @@ Context / handoff changes.
 
 Your context will periodically be compressed by the runtime to stay
 within model limits. When that happens you lose your in-context
-conversation history but **the Initial role / Active Workspace Memory /
-Workspace Consensus sections are re-injected on every spawn (and after
-compaction)**. Therefore:
+conversation history but ${compactionAutoInject}. Therefore:
 - MEMORY.md must be self-sufficient as a recovery point for knowledge and
   handoff. Your role is loaded from L1 (\`system_prompt.md\`); MEMORY.md
   should point to that source, not repeat it.
@@ -756,6 +770,7 @@ should stop and be reported.
 function renderSessionContext(
   sc: SessionContextInput,
   tools: { parentSend: string; closeThread: string },
+  opts: { hasConsensus: boolean },
 ): string {
   const lines: string[] = [];
   lines.push('## This Context');
@@ -807,11 +822,13 @@ function renderSessionContext(
       `- Mention rule: use \`@<name>\` only. \`display_name\` is for recognition, not mentioning.`,
     );
   }
-  lines.push(
-    `- Workspace-wide consensus is auto-loaded below in **Workspace Consensus**.`,
-    `  The source file lives at \`./.silverhand/CONSENSUS.md\`; treat its contents`,
-    `  as binding on every member.`,
-  );
+  if (opts.hasConsensus) {
+    lines.push(
+      `- Workspace-wide consensus is auto-loaded below in **Workspace Consensus**.`,
+      `  The source file lives at \`./.silverhand/CONSENSUS.md\`; treat its contents`,
+      `  as binding on every member.`,
+    );
+  }
   return lines.join('\n');
 }
 
