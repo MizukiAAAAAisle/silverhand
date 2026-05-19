@@ -294,7 +294,7 @@ const GhostInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputEle
     <input
       ref={ref}
       className={cn(
-        'w-full rounded-md border border-transparent bg-transparent px-2 py-1 text-sm text-text-primary placeholder:text-text-muted',
+        'w-full rounded-sm border border-transparent bg-transparent px-2 py-1 text-sm text-text-primary placeholder:text-text-muted',
         'transition-colors hover:border-border-subtle hover:bg-bg-base/40',
         'focus:border-border focus:bg-bg-floating focus:outline-none focus:ring-2 focus:ring-border-focus',
         className,

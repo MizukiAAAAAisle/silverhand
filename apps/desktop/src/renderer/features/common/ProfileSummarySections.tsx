@@ -65,7 +65,7 @@ export function ProfileSection({
           <div className="text-[11px] text-text-muted">{headerSlot}</div>
         ) : null}
       </header>
-      <div className="rounded-md border border-border-subtle/60 bg-bg-floating/50 p-4">
+      <div className="rounded-sm border border-border-subtle/60 bg-bg-floating/50 p-4">
         {children}
       </div>
     </section>

@@ -117,8 +117,8 @@ export function PresencePill({
     label ??
     `${runningCount} running/starting`;
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full bg-success-soft px-2 py-0.5 text-[11px] font-medium text-success">
-      <span className="size-1.5 rounded-full bg-success" />
+    <span className="inline-flex items-center gap-1.5 rounded-sm bg-success px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-text-on-success">
+      <span className="size-1.5 rounded-full bg-text-on-success/90" />
       {shown}
     </span>
   );
