@@ -1361,6 +1361,20 @@ describe('Markdown task refs', () => {
     expect(html).not.toContain('silverhand-channel:task');
   });
 
+  it('parses slash-separated task refs as two live refs', () => {
+    const html = renderWithTaskCtx(
+      'Compare #task:317/#task:318 before closing.',
+      'w-eng',
+      () => {},
+    );
+
+    expect(html).toContain('data-task-ref="317"');
+    expect(html).toContain('data-task-ref="318"');
+    expect(html.indexOf('data-task-ref="317"')).toBeLessThan(
+      html.indexOf('data-task-ref="318"'),
+    );
+  });
+
   it('renders inert `#task:<n>` text outside any TaskRefContext', () => {
     // Saved/preview surfaces render Markdown without a workspace
     // anchor. The chip should still appear (so `#task:5` is visually
@@ -1377,7 +1391,8 @@ describe('Markdown task refs', () => {
     const html = renderWithTaskCtx(
       [
         'PR #123',          // bare # + number is *issue ref*, not task
-        'see#1',             // attached to word — `?<![\\w/]` blocks
+        'see#1',             // attached to word — leading-boundary guard blocks
+        'path/#task:2',      // slash is a path separator unless it follows a live ref
         '#task:abc',         // non-numeric value
         '`#task:99`',        // inside inline code
         '[#task:7](https://example.com)', // inside existing link
@@ -1388,6 +1403,7 @@ describe('Markdown task refs', () => {
     // None of the protected forms should yield a TaskRef chip.
     expect(html).not.toContain('data-task-ref="123"');
     expect(html).not.toContain('data-task-ref="1"');
+    expect(html).not.toContain('data-task-ref="2"');
     expect(html).not.toContain('data-task-ref="99"');
     expect(html).not.toContain('data-task-ref="7"');
     // `#task:abc` doesn't match the digit-only branch and the channel

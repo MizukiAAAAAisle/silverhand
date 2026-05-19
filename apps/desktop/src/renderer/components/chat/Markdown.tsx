@@ -248,9 +248,11 @@ function walk(node: MdastNode): void {
   node.children = next;
 }
 
-// `(?<![\w/])` keeps email addresses (`me@example.com`), paths
-// (`a/@b`), URL fragments (`page#anchor`), and issue refs (`PR #123`
-// — alpha-first below filters those) out. Handle character class
+// Leading-boundary validation is handled in `canStartRef`. It keeps
+// email addresses (`me@example.com`), paths (`a/@b`), URL fragments
+// (`page#anchor`), and issue refs (`PR #123` — alpha-first below
+// filters those) out, while still allowing slash-separated live refs
+// such as `#task:317/#task:318`. Handle character class
 // mirrors `CreateAgentInputSchema` / `CreateChannelInputSchema` in
 // `packages/shared/src/api/dto.ts` (alphanumerics, `-`, `_`).
 // Conversation ids are generated from 12 random bytes as base64url,
@@ -271,17 +273,22 @@ function walk(node: MdastNode): void {
 // `#task:abc` doesn't fall back to matching `#conv` / `#task` as a
 // stray channel reference.
 const REF_RE =
-  /(?<![\w/])(?:#conv:([A-Za-z0-9_-]{16})(?![A-Za-z0-9_-])|#task:([1-9]\d*)(?!\w)|@([a-zA-Z][a-zA-Z0-9_-]*)|#(?!conv:|task:)([a-zA-Z][a-zA-Z0-9_-]*))/g;
+  /(?:#conv:([A-Za-z0-9_-]{16})(?![A-Za-z0-9_-])|#task:([1-9]\d*)(?!\w)|@([a-zA-Z][a-zA-Z0-9_-]*)|#(?!conv:|task:)([a-zA-Z][a-zA-Z0-9_-]*))/g;
 
 function pushSplit(text: string, out: MdastNode[]): void {
   let last = 0;
+  let lastRefEnd = -1;
   let m: RegExpExecArray | null;
   let any = false;
   while ((m = REF_RE.exec(text)) !== null) {
+    if (!canStartRef(text, m.index, lastRefEnd)) {
+      continue;
+    }
     any = true;
     if (m.index > last) {
       out.push({ type: 'text', value: text.slice(last, m.index) });
     }
+    const refEnd = m.index + m[0].length;
     const conversationId = m[1];
     if (conversationId) {
       out.push({
@@ -291,7 +298,8 @@ function pushSplit(text: string, out: MdastNode[]): void {
         url: `${CONVERSATION_PREFIX}${conversationId}`,
         children: [{ type: 'text', value: `#conv:${conversationId}` }],
       });
-      last = m.index + m[0].length;
+      last = refEnd;
+      lastRefEnd = refEnd;
       continue;
     }
     const taskNumber = m[2];
@@ -301,7 +309,8 @@ function pushSplit(text: string, out: MdastNode[]): void {
         url: `${TASK_PREFIX}${taskNumber}`,
         children: [{ type: 'text', value: `#task:${taskNumber}` }],
       });
-      last = m.index + m[0].length;
+      last = refEnd;
+      lastRefEnd = refEnd;
       continue;
     }
     const mentionName = m[3];
@@ -311,7 +320,8 @@ function pushSplit(text: string, out: MdastNode[]): void {
         url: `${MENTION_PREFIX}${mentionName}`,
         children: [{ type: 'text', value: `@${mentionName}` }],
       });
-      last = m.index + m[0].length;
+      last = refEnd;
+      lastRefEnd = refEnd;
       continue;
     }
     const channelName = m[4]!;
@@ -320,7 +330,8 @@ function pushSplit(text: string, out: MdastNode[]): void {
       url: `${CHANNEL_PREFIX}${channelName}`,
       children: [{ type: 'text', value: `#${channelName}` }],
     });
-    last = m.index + m[0].length;
+    last = refEnd;
+    lastRefEnd = refEnd;
   }
   if (!any) {
     out.push({ type: 'text', value: text });
@@ -329,6 +340,19 @@ function pushSplit(text: string, out: MdastNode[]): void {
   if (last < text.length) {
     out.push({ type: 'text', value: text.slice(last) });
   }
+}
+
+function canStartRef(text: string, index: number, lastRefEnd: number): boolean {
+  if (index === 0) return true;
+  const prev = text[index - 1]!;
+  if (prev === '/') {
+    // Let slash act as a compact separator between already-live refs:
+    // `#task:317/#task:318`, `#conv:<id>/#task:318`, etc. Without a
+    // live ref immediately before the slash, keep treating `/@x` and
+    // `/#task:1` as path/URL text.
+    return lastRefEnd === index - 1;
+  }
+  return !/[\w]/.test(prev);
 }
 
 function CodeBlock({ children }: { children: React.ReactNode }): JSX.Element {
