@@ -97,10 +97,13 @@ export interface PresencePillProps {
 }
 
 /**
- * Presence indicator with the standard dot-on-soft-success styling
- * when something is running, and a muted text-only fallback when idle
- * everywhere. Mirrors the AgentHeader Stop button's `starting || active`
- * predicate so the Hero count never disagrees with what Stop targets.
+ * Presence indicator. When the agent has any starting/active conversation
+ * we render a HUD-style state tag — solid `bg-success` tile + on-color
+ * dot + uppercase tracking-wider caps — matching the Activity / Schedule
+ * status pill vocabulary. Idle falls back to muted text-only so the Hero
+ * doesn't carry a state chip when there's no live work. Mirrors the
+ * AgentHeader Stop button's `starting || active` predicate so the Hero
+ * count never disagrees with what Stop targets.
  */
 export function PresencePill({
   runningCount,
