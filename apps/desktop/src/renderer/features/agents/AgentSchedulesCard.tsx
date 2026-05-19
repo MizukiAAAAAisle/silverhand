@@ -304,7 +304,7 @@ function FilterTabs({
           className={cn(
             'px-2 py-0.5 text-[11px] transition-colors',
             opt.value === value
-              ? 'bg-accent font-semibold text-text-on-accent'
+              ? 'bg-accent-2 font-semibold text-text-on-accent-2'
               : 'text-text-muted hover:text-text-primary',
           )}
         >
