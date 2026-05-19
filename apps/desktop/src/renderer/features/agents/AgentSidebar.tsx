@@ -71,15 +71,17 @@ export function AgentSidebar({ active, onChange }: AgentSidebarProps): JSX.Eleme
             aria-current={selected ? 'page' : undefined}
             onClick={() => onChange(item.id)}
             title={item.hint}
+            data-panel-control="nav-button"
             className={cn(
               // Quietest possible "selected": a soft fill + bolder text.
               // No accent bar, no border — the agent panel isn't a main
               // navigation surface, so the indicator should sit underneath
               // the content, not compete with it. forza6 specialization
-              // (lime ground + 2px black border + 2px radius) lives in
+              // (lime ground + 2px black border) lives in
               // forza6-components.css, scoped via the parent aside's
-              // `aria-label="Agent sections"`.
-              'flex items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm transition-colors',
+              // `aria-label="Agent sections"`. Radius comes from the
+              // global `[data-panel-control]` rule (token-driven).
+              'flex items-center gap-2 px-2 py-1.5 text-left text-sm transition-colors',
               selected
                 ? 'bg-bg-hover/60 text-text-primary'
                 : 'text-text-muted hover:bg-bg-hover/40 hover:text-text-primary',

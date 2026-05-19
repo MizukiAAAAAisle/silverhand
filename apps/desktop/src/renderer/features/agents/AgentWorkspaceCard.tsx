@@ -58,7 +58,8 @@ function PathBar({ path }: { path: string }): JSX.Element {
       </code>
       <button
         type="button"
-        className="flex size-6 items-center justify-center rounded-sm text-text-muted hover:bg-bg-hover hover:text-text-primary"
+        data-panel-control="row-action"
+        className="flex size-6 items-center justify-center text-text-muted hover:bg-bg-hover hover:text-text-primary"
         title="Copy path"
         onClick={onCopy}
       >
@@ -66,7 +67,8 @@ function PathBar({ path }: { path: string }): JSX.Element {
       </button>
       <button
         type="button"
-        className="flex size-6 items-center justify-center rounded-sm text-text-muted hover:bg-bg-hover hover:text-text-primary"
+        data-panel-control="row-action"
+        className="flex size-6 items-center justify-center text-text-muted hover:bg-bg-hover hover:text-text-primary"
         title="Reveal in Finder"
         onClick={onReveal}
       >

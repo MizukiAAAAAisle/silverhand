@@ -221,7 +221,8 @@ function ActivityCard({
             <button
               type="button"
               onClick={() => onOpen(row)}
-              className="inline-flex items-center gap-1 rounded-sm px-2 py-0.5 text-[11px] text-text-muted hover:bg-bg-hover hover:text-text-primary"
+              data-panel-control="row-action"
+              className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] text-text-muted hover:bg-bg-hover hover:text-text-primary"
               title="Open"
             >
               Open
@@ -310,7 +311,8 @@ function OverflowMenu({
       <Popover.Trigger asChild>
         <button
           type="button"
-          className="inline-grid size-6 place-items-center rounded-sm text-text-muted hover:bg-bg-hover hover:text-text-primary"
+          data-panel-control="row-action"
+          className="inline-grid size-6 place-items-center text-text-muted hover:bg-bg-hover hover:text-text-primary"
           title="Show runtime details"
           aria-label="Show runtime details"
         >
@@ -321,7 +323,8 @@ function OverflowMenu({
         <Popover.Content
           align="end"
           sideOffset={4}
-          className="z-50 min-w-[200px] rounded-sm border border-border bg-bg-floating p-3 text-xs shadow-popover"
+          data-panel-control="popover"
+          className="z-50 min-w-[200px] border border-border bg-bg-floating p-3 text-xs shadow-popover"
         >
           <dl className="flex flex-col gap-1.5">
             <RuntimeDetail label="PID">

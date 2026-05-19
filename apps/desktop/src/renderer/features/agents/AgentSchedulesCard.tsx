@@ -69,7 +69,8 @@ export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps): JSX.El
             type="button"
             onClick={() => query.refetch()}
             disabled={query.isFetching}
-            className="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-[11px] text-text-muted hover:bg-bg-hover hover:text-text-primary disabled:opacity-50"
+            data-panel-control="row-action"
+            className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] text-text-muted hover:bg-bg-hover hover:text-text-primary disabled:opacity-50"
             title="Refresh"
           >
             <RefreshCcw
@@ -165,7 +166,8 @@ function ScheduleItem({
             type="button"
             onClick={onCancel}
             disabled={cancelling}
-            className="inline-flex items-center gap-1 rounded-sm px-2 py-0.5 text-[11px] text-text-muted hover:bg-bg-hover hover:text-error disabled:opacity-50"
+            data-panel-control="row-action"
+            className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] text-text-muted hover:bg-bg-hover hover:text-error disabled:opacity-50"
             title="Cancel"
           >
             <X className="size-3" />
