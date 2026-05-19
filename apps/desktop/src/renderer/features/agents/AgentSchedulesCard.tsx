@@ -80,7 +80,10 @@ export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps): JSX.El
       </header>
 
       {query.isError ? (
-        <div className="rounded-sm border border-dashed border-error/40 bg-error/5 px-3 py-2 text-xs text-error">
+        <div
+          data-panel-card="placeholder"
+          className="rounded-sm border border-dashed border-error/40 bg-error/5 px-3 py-2 text-xs text-error"
+        >
           Failed to load schedules.
         </div>
       ) : null}

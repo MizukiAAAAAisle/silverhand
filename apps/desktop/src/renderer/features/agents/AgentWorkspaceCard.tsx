@@ -49,7 +49,8 @@ function PathBar({ path }: { path: string }): JSX.Element {
   return (
     <div className="flex shrink-0 items-center gap-1 text-xs text-text-muted">
       <code
-        className="max-w-[260px] truncate rounded bg-bg-base px-2 py-0.5 font-mono"
+        data-panel-pill="path"
+        className="max-w-[260px] truncate rounded-sm bg-bg-base px-2 py-0.5 font-mono"
         dir="rtl"
         title={path}
       >
@@ -57,7 +58,7 @@ function PathBar({ path }: { path: string }): JSX.Element {
       </code>
       <button
         type="button"
-        className="flex size-6 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
+        className="flex size-6 items-center justify-center rounded-sm text-text-muted hover:bg-bg-hover hover:text-text-primary"
         title="Copy path"
         onClick={onCopy}
       >
@@ -65,7 +66,7 @@ function PathBar({ path }: { path: string }): JSX.Element {
       </button>
       <button
         type="button"
-        className="flex size-6 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
+        className="flex size-6 items-center justify-center rounded-sm text-text-muted hover:bg-bg-hover hover:text-text-primary"
         title="Reveal in Finder"
         onClick={onReveal}
       >
@@ -87,13 +88,19 @@ function FileBlock({
   const [open, setOpen] = useState(!!defaultOpen);
   if (!file) {
     return (
-      <div className="rounded-md border border-dashed border-border-subtle px-3 py-2 text-xs text-text-muted">
+      <div
+        data-panel-card="placeholder"
+        className="rounded-sm border border-dashed border-border-subtle px-3 py-2 text-xs text-text-muted"
+      >
         {title} — not present yet
       </div>
     );
   }
   return (
-    <div className="overflow-hidden rounded-md border border-border-subtle">
+    <div
+      data-panel-card="profile-section"
+      className="overflow-hidden rounded-sm border border-border-subtle"
+    >
       <button
         type="button"
         onClick={() => setOpen(o => !o)}
@@ -127,7 +134,10 @@ function NotesBlock({
 }): JSX.Element {
   const [open, setOpen] = useState(false);
   return (
-    <div className="overflow-hidden rounded-md border border-border-subtle">
+    <div
+      data-panel-card="profile-section"
+      className="overflow-hidden rounded-sm border border-border-subtle"
+    >
       <button
         type="button"
         onClick={() => setOpen(o => !o)}
