@@ -70,8 +70,8 @@ export function AgentConversationActivityList({
 
   return (
     <div className="flex flex-col gap-3">
-      <header className="flex flex-wrap items-start justify-between gap-2">
-        <p className="min-w-0 text-xs leading-relaxed text-text-muted">
+      <header className="flex items-center gap-3">
+        <p className="min-w-0 flex-1 text-xs leading-relaxed text-text-muted">
           Every channel or thread this agent participates in. Status is
           live — restart or hard-stop from the channel header.
         </p>
@@ -79,7 +79,7 @@ export function AgentConversationActivityList({
       </header>
 
       {rows.length === 0 ? (
-        <div className="rounded-md border border-dashed border-border-subtle px-4 py-6 text-center text-xs text-text-muted">
+        <div className="rounded-sm border border-dashed border-border-subtle px-4 py-6 text-center text-xs text-text-muted">
           {emptyMessage(filter, all.length)}
         </div>
       ) : (
@@ -168,13 +168,13 @@ function ActivityCard({
   return (
     <li
       className={cn(
-        'relative overflow-hidden rounded-md border border-border-subtle bg-bg-floating/50 px-4 py-3 transition-colors hover:bg-bg-hover/60',
+        'relative overflow-hidden rounded-sm border border-border-subtle bg-bg-floating/50 px-4 py-3 transition-colors hover:bg-bg-hover/60',
         closed ? 'opacity-70' : '',
       )}
     >
       <span
         aria-hidden="true"
-        className={cn('absolute inset-y-2 left-0 w-1 rounded-full', accent)}
+        className={cn('absolute inset-y-0 left-0 w-1', accent)}
       />
 
       <div className="flex items-start gap-3 pl-2">
@@ -194,7 +194,7 @@ function ActivityCard({
               </span>
             </span>
             {row.thread_title ? (
-              <span className="inline-flex items-center rounded-full bg-bg-base px-2 py-0.5 text-[11px] text-text-secondary">
+              <span className="inline-flex items-center rounded-sm bg-bg-base px-2 py-0.5 text-[11px] text-text-secondary">
                 {row.thread_title}
               </span>
             ) : null}
@@ -214,7 +214,7 @@ function ActivityCard({
             <button
               type="button"
               onClick={() => onOpen(row)}
-              className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] text-text-muted hover:bg-bg-hover hover:text-text-primary"
+              className="inline-flex items-center gap-1 rounded-sm px-2 py-0.5 text-[11px] text-text-muted hover:bg-bg-hover hover:text-text-primary"
               title="Open"
             >
               Open
@@ -258,23 +258,23 @@ function StatusPill({
 }): JSX.Element {
   if (closed) {
     return (
-      <span className="inline-flex items-center rounded-full bg-bg-base px-2 py-0.5 text-[11px] text-text-muted">
+      <span className="inline-flex items-center rounded-sm bg-bg-base px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
         closed
       </span>
     );
   }
   const cls =
     status === 'active'
-      ? 'bg-success-soft text-success'
+      ? 'bg-success text-text-on-success'
       : status === 'starting'
-        ? 'bg-warning-soft text-warning'
+        ? 'bg-warning text-text-on-warning'
         : status === 'crashed'
-          ? 'bg-error-soft text-error'
-          : 'bg-bg-base text-text-secondary';
+          ? 'bg-error text-text-on-error'
+          : 'bg-bg-surface text-text-secondary';
   return (
     <span
       className={cn(
-        'inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium',
+        'inline-flex items-center rounded-sm px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
         cls,
       )}
     >
@@ -299,7 +299,7 @@ function OverflowMenu({
       <Popover.Trigger asChild>
         <button
           type="button"
-          className="inline-grid size-6 place-items-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
+          className="inline-grid size-6 place-items-center rounded-sm text-text-muted hover:bg-bg-hover hover:text-text-primary"
           title="Show runtime details"
           aria-label="Show runtime details"
         >
@@ -310,7 +310,7 @@ function OverflowMenu({
         <Popover.Content
           align="end"
           sideOffset={4}
-          className="z-50 min-w-[200px] rounded-md border border-border bg-bg-floating p-3 text-xs shadow-popover"
+          className="z-50 min-w-[200px] rounded-sm border border-border bg-bg-floating p-3 text-xs shadow-popover"
         >
           <dl className="flex flex-col gap-1.5">
             <RuntimeDetail label="PID">
@@ -381,14 +381,14 @@ function FilterTabs({
   onChange: (next: ActivityFilter) => void;
 }): JSX.Element {
   return (
-    <div className="flex items-center rounded-md border border-border-subtle bg-bg-base p-0.5">
+    <div className="flex shrink-0 items-center rounded-sm border border-border-subtle bg-bg-base p-0.5">
       {FILTERS.map(opt => (
         <button
           key={opt.value}
           type="button"
           onClick={() => onChange(opt.value)}
           className={cn(
-            'rounded px-2 py-0.5 text-[11px] transition-colors',
+            'rounded-sm px-2 py-0.5 text-[11px] transition-colors',
             opt.value === value
               ? 'bg-bg-floating text-text-primary'
               : 'text-text-muted hover:text-text-primary',

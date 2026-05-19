@@ -59,17 +59,17 @@ export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps): JSX.El
 
   return (
     <div className="flex flex-col gap-3">
-      <header className="flex flex-wrap items-start justify-between gap-2">
-        <p className="min-w-0 text-xs text-text-muted">
+      <header className="flex items-center gap-3">
+        <p className="min-w-0 flex-1 text-xs text-text-muted">
           Self-scheduled wakes. Read-only here, cancel only.
         </p>
-        <div className="flex items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1">
           <FilterTabs value={filter} onChange={setFilter} />
           <button
             type="button"
             onClick={() => query.refetch()}
             disabled={query.isFetching}
-            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-text-muted hover:bg-bg-hover hover:text-text-primary disabled:opacity-50"
+            className="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-[11px] text-text-muted hover:bg-bg-hover hover:text-text-primary disabled:opacity-50"
             title="Refresh"
           >
             <RefreshCcw
@@ -80,7 +80,7 @@ export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps): JSX.El
       </header>
 
       {query.isError ? (
-        <div className="rounded-md border border-dashed border-error/40 bg-error/5 px-3 py-2 text-xs text-error">
+        <div className="rounded-sm border border-dashed border-error/40 bg-error/5 px-3 py-2 text-xs text-error">
           Failed to load schedules.
         </div>
       ) : null}
@@ -88,7 +88,7 @@ export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps): JSX.El
       {query.isLoading ? (
         <div className="text-sm text-text-muted">Loading…</div>
       ) : rows.length === 0 ? (
-        <div className="rounded-md border border-dashed border-border-subtle px-4 py-6 text-center text-xs text-text-muted">
+        <div className="rounded-sm border border-dashed border-border-subtle px-4 py-6 text-center text-xs text-text-muted">
           {filter === 'active'
             ? 'No active schedules.'
             : `No schedules with status ${filter}.`}
@@ -128,7 +128,7 @@ function ScheduleItem({
   return (
     <li
       className={cn(
-        'flex items-center gap-3 rounded-md border border-border-subtle bg-bg-floating/50 px-4 py-3 transition-colors hover:bg-bg-hover/60',
+        'flex items-center gap-3 rounded-sm border border-border-subtle bg-bg-floating/50 px-4 py-3 transition-colors hover:bg-bg-hover/60',
         terminal ? 'opacity-70' : '',
       )}
     >
@@ -158,7 +158,7 @@ function ScheduleItem({
             type="button"
             onClick={onCancel}
             disabled={cancelling}
-            className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] text-text-muted hover:bg-bg-hover hover:text-error disabled:opacity-50"
+            className="inline-flex items-center gap-1 rounded-sm px-2 py-0.5 text-[11px] text-text-muted hover:bg-bg-hover hover:text-error disabled:opacity-50"
             title="Cancel"
           >
             <X className="size-3" />
@@ -170,12 +170,14 @@ function ScheduleItem({
   );
 }
 
-/** Coloured square chip with the kind glyph. Three-token palette
- *  (once=accent / interval=success / cron=warning) — all themes
- *  expose these semantic tokens, so the chip adapts cleanly when the
- *  theme changes. We deliberately avoid `--accent-2`: warm-script
- *  aliases it to `--accent`, which would collapse to the once color
- *  and lose discriminability. */
+/** Solid coloured tile chip with the kind glyph. Three-token palette
+ *  using the saturated semantic surfaces (`bg-accent` / `bg-success` /
+ *  `bg-warning` paired with their on-color foregrounds) so the chip
+ *  reads as a deliberate festival tile rather than a washed-out
+ *  background tint — `*-soft` would look dull next to forza6's
+ *  brand-saturated chrome. We deliberately avoid `--accent-2`:
+ *  warm-script aliases it to `--accent`, which would collapse to the
+ *  once color and lose discriminability. */
 function KindChip({
   kind,
 }: {
@@ -183,10 +185,10 @@ function KindChip({
 }): JSX.Element {
   const cls =
     kind === 'once'
-      ? 'bg-accent-soft text-accent'
+      ? 'bg-accent text-text-on-accent'
       : kind === 'interval'
-        ? 'bg-success-soft text-success'
-        : 'bg-warning-soft text-warning';
+        ? 'bg-success text-text-on-success'
+        : 'bg-warning text-text-on-warning';
   const Icon =
     kind === 'once'
       ? Clock
@@ -196,7 +198,7 @@ function KindChip({
   return (
     <span
       className={cn(
-        'grid size-9 shrink-0 place-items-center rounded-md',
+        'grid size-9 shrink-0 place-items-center rounded-sm',
         cls,
       )}
       title={kind}
@@ -244,23 +246,25 @@ export function formatFiredCount(row: ScheduleDto): string {
 }
 
 function StatusPill({ status }: { status: ScheduleStatus }): JSX.Element {
-  // Maps the persisted `ScheduleStatus` enum to the standard
-  // soft-bg + on-color pill. Mirrors AgentConversationActivityList's
-  // pill vocabulary so the two surfaces feel consistent.
+  // Maps the persisted `ScheduleStatus` enum to a solid saturated
+  // surface + on-color foreground (festival-tile recipe), mirroring
+  // AgentConversationActivityList's pill vocabulary. `*-soft` washes
+  // looked dull next to forza6's brand chrome — solid tiles read as
+  // deliberate state markers in every theme.
   const cls =
     status === 'pending'
-      ? 'bg-success-soft text-success'
+      ? 'bg-success text-text-on-success'
       : status === 'firing'
-        ? 'bg-accent-soft text-accent'
+        ? 'bg-accent text-text-on-accent'
         : status === 'done'
-          ? 'bg-bg-base text-text-muted'
+          ? 'bg-bg-surface text-text-muted'
           : status === 'cancelled'
-            ? 'bg-bg-base text-text-secondary'
-            : 'bg-error-soft text-error'; // failed
+            ? 'bg-bg-surface text-text-secondary'
+            : 'bg-error text-text-on-error'; // failed
   return (
     <span
       className={cn(
-        'inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium',
+        'inline-flex items-center rounded-sm px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
         cls,
       )}
     >
@@ -277,14 +281,14 @@ function FilterTabs({
   onChange: (next: ScheduleListStatusFilter) => void;
 }): JSX.Element {
   return (
-    <div className="flex items-center rounded-md border border-border-subtle bg-bg-base p-0.5">
+    <div className="flex shrink-0 items-center rounded-sm border border-border-subtle bg-bg-base p-0.5">
       {STATUS_FILTERS.map(opt => (
         <button
           key={opt.value}
           type="button"
           onClick={() => onChange(opt.value)}
           className={cn(
-            'rounded px-2 py-0.5 text-[11px] transition-colors',
+            'rounded-sm px-2 py-0.5 text-[11px] transition-colors',
             opt.value === value
               ? 'bg-bg-floating text-text-primary'
               : 'text-text-muted hover:text-text-primary',
