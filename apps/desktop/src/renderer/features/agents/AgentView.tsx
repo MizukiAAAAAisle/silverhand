@@ -4,7 +4,7 @@ import { AgentHeader } from './AgentHeader';
 import { AgentProfileCard } from './AgentProfileCard';
 import { AgentSchedulesCard } from './AgentSchedulesCard';
 import { AgentWorkspaceCard } from './AgentWorkspaceCard';
-import { AgentRuntimeTable } from './AgentRuntimeTable';
+import { AgentConversationActivityList } from './AgentConversationActivityList';
 import { AgentSidebar, type AgentSection } from './AgentSidebar';
 import {
   useAgent,
@@ -124,7 +124,7 @@ export function AgentView({
               />
             ) : null}
             {section === 'runtime' ? (
-              <AgentRuntimeTable
+              <AgentConversationActivityList
                 state={runtimeQuery.data}
                 onOpenConversation={onOpenConversation}
               />
