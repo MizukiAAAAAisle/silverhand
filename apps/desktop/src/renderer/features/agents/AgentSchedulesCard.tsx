@@ -149,10 +149,7 @@ function ScheduleItem({
           </span>
           <StatusPill status={row.status} />
           <span className="font-mono">{kindSpecText(row)}</span>
-          <span className="font-mono">
-            {row.fired_count}
-            {row.max_occurrences ? ` / ${row.max_occurrences}` : ' / ∞'} fired
-          </span>
+          <span className="font-mono">{formatFiredCount(row)}</span>
         </div>
       </div>
       <div className="flex shrink-0 items-center">
@@ -219,6 +216,31 @@ function kindSpecText(row: ScheduleDto): string {
     case 'cron':
       return `cron ${row.spec.expression} · ${row.spec.timezone}`;
   }
+}
+
+/**
+ * Audit/recovery counter for the meta strip. `max_occurrences` is a
+ * repeat-only field in the persisted DTO — `ScheduleSpecOnceSchema`
+ * has no `max_occurrences`, and `ScheduleCreateInputSchema` actively
+ * rejects `max_occurrences` on a `once` row (dto.ts:1584). So a `null`
+ * on a once row means "not applicable" (the row can only fire once by
+ * definition), NOT "unlimited" — Cindy's PR-3 review finding. Repeat
+ * rows still get `∞` when there's no cap.
+ *
+ * Exported for the regression test that locks this distinction; not
+ * part of the public component API.
+ */
+export function formatFiredCount(row: ScheduleDto): string {
+  const fired = row.fired_count;
+  if (row.spec.kind === 'once') {
+    // A `once` row's capacity is always 1, even when the DTO leaves
+    // `max_occurrences` null.
+    return `${fired} / 1 fired`;
+  }
+  if (row.max_occurrences != null) {
+    return `${fired} / ${row.max_occurrences} fired`;
+  }
+  return `${fired} / ∞ fired`;
 }
 
 function StatusPill({ status }: { status: ScheduleStatus }): JSX.Element {
