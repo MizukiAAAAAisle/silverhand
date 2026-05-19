@@ -128,7 +128,7 @@ function AgentActivityRow({
           : `${displayName}: ${progressText}`
       }
       className={
-        'group flex w-full min-w-0 items-start gap-2 rounded-[6px] border border-transparent px-2 py-1 text-left text-xs text-text-muted transition-colors ' +
+        'group flex w-full min-w-0 items-start gap-2 rounded-[var(--control-radius)] border border-transparent px-2 py-1 text-left text-xs text-text-muted transition-colors ' +
         (canJump
           ? 'hover:bg-bg-hover/60 hover:text-text-primary'
           : 'cursor-default')
