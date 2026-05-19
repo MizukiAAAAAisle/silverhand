@@ -1176,6 +1176,28 @@ describe('Markdown human mentions', () => {
     expect(html).toContain('@missing');
     expect(html).not.toContain('data-mention-kind="human"');
   });
+
+  it('does not parse @handle after a path slash', () => {
+    const humans = new Map<string, UserDto>([
+      [
+        'shiki',
+        {
+          id: 'user-shiki',
+          name: 'shiki',
+          display_name: 'Shiki',
+          avatar_url: null,
+          created_at: 1,
+          updated_at: 1,
+        },
+      ],
+    ]);
+
+    const html = renderWithHumans('Literal path/@shiki stays text.', humans);
+
+    expect(html).toContain('path/@shiki');
+    expect(html).not.toContain('data-mention-kind="human"');
+    expect(html).not.toContain('data-mention-id="user-shiki"');
+  });
 });
 
 describe('Markdown conversation refs', () => {
@@ -1373,6 +1395,40 @@ describe('Markdown task refs', () => {
     expect(html.indexOf('data-task-ref="317"')).toBeLessThan(
       html.indexOf('data-task-ref="318"'),
     );
+  });
+
+  it('keeps refs after double slash inert', () => {
+    const html = renderWithTaskCtx(
+      'Compare #task:5//#task:6 before closing.',
+      'w-eng',
+      () => {},
+    );
+
+    expect(html).toContain('data-task-ref="5"');
+    expect(html).not.toContain('data-task-ref="6"');
+  });
+
+  it('parses space-separated refs around slash punctuation', () => {
+    const html = renderWithTaskCtx(
+      'Compare #task:5 / #task:6 before closing.',
+      'w-eng',
+      () => {},
+    );
+
+    expect(html).toContain('data-task-ref="5"');
+    expect(html).toContain('data-task-ref="6"');
+  });
+
+  it('parses slash-separated task and channel refs', () => {
+    const html = renderWithTaskCtx(
+      'Coordinate #task:5/#general before closing.',
+      'w-eng',
+      () => {},
+    );
+
+    expect(html).toContain('data-task-ref="5"');
+    expect(html).toContain('data-channel-ref-state="unresolved"');
+    expect(html).toContain('#general');
   });
 
   it('renders inert `#task:<n>` text outside any TaskRefContext', () => {
