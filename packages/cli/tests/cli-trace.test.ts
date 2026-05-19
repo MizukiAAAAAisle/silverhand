@@ -83,6 +83,7 @@ describe('cli-trace fire-and-forget reporter', () => {
   it.each([
     'flag_removed',
     'verb_removed',
+    'missing_required_flag',
     'unknown_flag',
     'enum_invalid',
     'mutually_exclusive',

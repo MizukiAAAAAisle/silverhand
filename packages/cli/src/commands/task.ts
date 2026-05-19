@@ -196,6 +196,9 @@ If you intend to work on these immediately, follow up with
 \`silverhand task claim --task-number <n>\`.
 
 Pre-flight failures (exit 1):
+  --title not supplied  → missing_required_flag (use the minimal call
+                          shown above; or \`task claim --message-id <id>\`
+                          to promote an existing message)
   --message was supplied → flag_removed (use --title / --body)
 
 stdout: CreateTasksResult JSON.`,
@@ -219,10 +222,25 @@ stdout: CreateTasksResult JSON.`,
   async run({ client, args }) {
     const titles = flagStringArray(args, 'title');
     if (!titles || titles.length === 0) {
+      // Daily reports group failures by `error_subkind + details.command +
+      // details.flag` rather than by message text. Without a structured
+      // subkind here this bucket would be keyed by the literal English
+      // sentence — any future copy edit (e.g. adding the
+      // `task claim --message-id` redirect below) would split the
+      // historical bucket and obscure the trend. The subkind is wide
+      // enough to cover any required-flag-missing case (`--task-number`,
+      // `--message-id`, ...) once we wire those throws the same way.
       throw new CliError({
         code: 'validation_error',
-        message: 'task create requires at least one --title',
+        subkind: 'missing_required_flag',
+        message:
+          'silverhand task create requires at least one --title. ' +
+          'Minimal call: `silverhand task create --title "..." --body "..."`. ' +
+          'If you meant to turn an existing message into a task, use ' +
+          '`silverhand task claim --message-id <id>` instead — it ' +
+          'promotes-and-claims in one call without a fresh title.',
         retriable: false,
+        details: { command: 'task create', flag: 'title' },
       });
     }
     const bodiesArr = flagStringArray(args, 'body') ?? [];

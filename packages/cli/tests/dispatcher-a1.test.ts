@@ -30,7 +30,10 @@ interface RunResult {
   stderr: string;
 }
 
-function runCli(argv: readonly string[], opts: { stdin?: string } = {}): Promise<RunResult> {
+function runCli(
+  argv: readonly string[],
+  opts: { stdin?: string; env?: Record<string, string> } = {},
+): Promise<RunResult> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(TSX_BIN, [CLI_SRC, ...argv], {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -38,12 +41,16 @@ function runCli(argv: readonly string[], opts: { stdin?: string } = {}): Promise
       // BEFORE loadEnv runs. (The guard does run before loadEnv, but
       // belt-and-suspenders: if anyone ever flips that order, this test
       // turns into a clean failure rather than a missing-env distraction.)
+      // Tests that need to reach a `cmd.run` body (the verb's own
+      // pre-flight checks) can pass `opts.env` to inject dummy
+      // SILVERHAND_* vars so `loadEnv` succeeds.
       env: {
         ...process.env,
         SILVERHAND_CONVERSATION_ID: undefined as unknown as string,
         SILVERHAND_AGENT_ID: undefined as unknown as string,
         SILVERHAND_SERVER_URL: undefined as unknown as string,
         SILVERHAND_AUTH_TOKEN: undefined as unknown as string,
+        ...(opts.env ?? {}),
       },
     });
     let stdout = '';
@@ -171,5 +178,46 @@ describe('dispatcher A1 hard guard (real subprocess)', () => {
       flag: 'message',
       replacement: 'title+body',
     });
+  });
+
+  // ── task create with no --title → missing_required_flag ──────────
+  // The 5/13–5/18 daily reports keep showing one-or-two
+  // `task create requires at least one --title` failures per day.
+  // Plain text was useless — the agent would re-call with the same
+  // shape. The new message points at the minimal example AND the
+  // `task claim --message-id` redirect (for the "promote a message
+  // into a task" use case).
+  //
+  // The structured `subkind: 'missing_required_flag'` + `details:
+  // {command, flag}` is what makes the daily-report bucket survive
+  // future copy edits — aggregations should key off subkind+details,
+  // not the prose. Locked here so the contract can't drift.
+  it('rejects task create with no --title via missing_required_flag', async () => {
+    // The check lives inside `cmd.run` (after `loadEnv`), so we have to
+    // supply dummy SILVERHAND_* env or the env-missing throw fires
+    // first. The test still proves the structured shape — code +
+    // subkind + details + message — exactly what the daily report
+    // groups on.
+    const r = await runCli(['task', 'create'], {
+      env: {
+        SILVERHAND_CONVERSATION_ID: 'conv-test',
+        SILVERHAND_AGENT_ID: 'agent-test',
+        SILVERHAND_SERVER_URL: 'http://127.0.0.1:1', // unreachable; we never reach the request
+        SILVERHAND_AUTH_TOKEN: 'tok-test',
+      },
+    });
+    expect(r.code).toBe(1);
+    const body = parseStderrJson(r.stderr);
+    expect(body.error.code).toBe('validation_error');
+    expect(body.error.subkind).toBe('missing_required_flag');
+    expect(body.error.details).toEqual({
+      command: 'task create',
+      flag: 'title',
+    });
+    // Message must show the minimal call AND the message-id redirect —
+    // the report-side bucket is structural, but the agent reads the
+    // line right now and decides what to do next.
+    expect(body.error.message).toContain('silverhand task create --title');
+    expect(body.error.message).toContain('silverhand task claim --message-id');
   });
 }, { timeout: 20_000 });
