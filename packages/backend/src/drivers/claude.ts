@@ -85,6 +85,9 @@ export class ClaudeDriver implements Driver {
       runtime: 'claude',
       activeProfileDir: ctx.activeProfileDir,
       roleSystemPrompt: ctx.roleSystemPrompt,
+      currentMemory: ctx.currentMemory,
+      currentConsensus: ctx.currentConsensus,
+      workspaceMemoryIndex: ctx.workspaceMemoryIndex,
       sessionContext: ctx.sessionContext,
     });
   }

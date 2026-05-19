@@ -46,13 +46,38 @@ export interface PlatformPromptInput {
   agentId: string;
   agentName: string;
   runtime: RuntimeKind;
-  /** Current active profile directory, relative to the runtime cwd. */
+  /** Current active profile directory, relative to the runtime cwd. The
+   *  agent's MEMORY.md and notes/ live here. `system_prompt.md` does not
+   *  — the role contract is L1-only and is auto-injected as the
+   *  "Initial role" tail of this prompt. */
   activeProfileDir: string;
-  /** Current active `system_prompt.md` content. Appended as the "Initial role"
-   *  tail. */
+  /** Current active `system_prompt.md` content (read from L1). Appended
+   *  as the "Initial role" tail. */
   roleSystemPrompt: string;
+  /** Auto-injected current-workspace MEMORY.md content (capped). Empty
+   *  string when the file is absent or unreadable. */
+  currentMemory: string;
+  /** Auto-injected workspace `CONSENSUS.md` content (capped). Empty
+   *  string when the file is absent or unreadable. */
+  currentConsensus: string;
+  /** Index of every workspace this agent is a member of. The current
+   *  workspace's entry is labeled with " (current)". Used so DM /
+   *  workspace agents can address paths to peer workspaces' MEMORY.md
+   *  without polluting the prompt with the file contents themselves. */
+  workspaceMemoryIndex: WorkspaceMemoryIndexEntry[];
   /** Current workspace/channel/thread context block. */
   sessionContext: SessionContextInput;
+}
+
+export interface WorkspaceMemoryIndexEntry {
+  /** Workspace display name; the current workspace's entry is suffixed
+   *  with " (current)". */
+  label: string;
+  /** Absolute path to that workspace's MEMORY.md for this agent. Files
+   *  under this path are readable when the agent is on the same host
+   *  as the workspace (host equality is enforced as a membership
+   *  precondition, not at runtime). */
+  memoryPath: string;
 }
 
 export interface SessionContextInput {
@@ -118,9 +143,27 @@ export function buildPlatformPrompt(input: PlatformPromptInput): string {
     },
   );
   const profileDir = normalizeProfileDir(input.activeProfileDir);
-  const systemPromptPath = profilePath(profileDir, 'system_prompt.md');
   const memoryPath = profilePath(profileDir, 'MEMORY.md');
   const notesDir = profilePath(profileDir, 'notes');
+  const memoryBlock = renderInjectedFile({
+    title: 'Active Workspace Memory',
+    relPath: memoryPath,
+    description:
+      'This is the current workspace\'s MEMORY.md, auto-loaded for you. Treat it as your recovery index. Edit it to add/update Key Knowledge entries or the current Active Context; keep durable detail in the linked notes/ files.',
+    body: input.currentMemory,
+    missingHint:
+      'No MEMORY.md exists yet. Create one at the path above when you first capture durable knowledge for this workspace.',
+  });
+  const consensusBlock = renderInjectedFile({
+    title: 'Workspace Consensus',
+    relPath: './.silverhand/CONSENSUS.md',
+    description:
+      'Workspace-wide agreements every member must respect. Auto-loaded for you here so you do not need to open the file. Edit only when the whole workspace has agreed; keep it under 2KB.',
+    body: input.currentConsensus,
+    missingHint:
+      'No CONSENSUS.md exists yet. Create one only when the workspace has reached an agreement everyone must follow.',
+  });
+  const memoryIndexBlock = renderWorkspaceMemoryIndex(input.workspaceMemoryIndex);
 
   return `You are **@${input.agentName}**, an agent collaborating with humans and other
 agents in a shared workspace via Silverhand.
@@ -148,49 +191,68 @@ ${renderSilverhandCliManual()}
   to the conversation.
 - Use the \`silverhand\` CLI for chat, task, schedule, history,
   thread, channel, workspace, and file actions.
-- Before implementation, investigation, review, or other substantive work,
-  claim the task first. If the work arrived as a message, use
-  \`silverhand task claim --message-id <message_id>\`; if it is already on
-  the task board, use \`silverhand task claim --task-number N\`. If the
-  claim fails, do not work on that item unless the user explicitly redirects.
-- Read your active profile's MEMORY.md at startup, before doing any work.
+- Claim a task only when the message asks for **substantive action**:
+  writing/editing code, debugging, code review, investigation, design
+  proposals, deploying, running tests, or similarly concrete work. Do **not**
+  claim for answering a question, casual conversation, status checks, or
+  clarifications. When in doubt, reply first; promote to a task only if the
+  work actually starts. If the work arrived as a message, use
+  \`silverhand task claim --message-id <message_id>\`; if it is already on the
+  task board, use \`silverhand task claim --task-number N\`. If the claim
+  fails, do not work on that item unless the user explicitly redirects.
+- Your role, this workspace's MEMORY.md, and CONSENSUS.md are auto-loaded
+  into this system prompt below. Read them once at startup; you do not need
+  to open the files yourself.
 - When you receive messages with \`type=system\` (Silverhand system messages),
   treat them as informational. Don't reply unless the message explicitly
   asks for it (e.g. an onboarding message asking for your role).
 
 ## Startup sequence
 
-1. Read \`${memoryPath}\` first.
-   This is your recovery anchor — where durable knowledge lives and what
-   handoff is currently active. Your role contract is already loaded from
-   \`${systemPromptPath}\`; do not duplicate it in MEMORY.md.
-2. Read \`./.silverhand/CONSENSUS.md\` — the workspace's shared agreements
-   that bind ALL members. Treat them as hard rules.
-3. If your initial input contains a concrete incoming message, decide
+1. Skim the auto-injected sections below: **Initial role** (your role
+   contract, sourced from L1 — shared across every workspace),
+   **Active Workspace Memory** (this workspace's MEMORY.md), and
+   **Workspace Consensus**. They are your recovery anchor.
+2. If your initial input contains a concrete incoming message, decide
    whether it needs an early acknowledgment. If yes, send a brief one
    via ${sendMessage} before deep context-gathering.
-4. If the message asks you to do work, claim it before doing that work
-   (usually ${claimTasks} \`--message-id <message_id>\`).
-5. When you receive a message, reply via ${sendMessage}.
-6. Complete ALL the work the message implies before stopping. If it's
+3. If the message asks for substantive action (code/review/debug/investigation,
+   design proposal, tests, etc.), claim it before starting (usually
+   ${claimTasks} \`--message-id <message_id>\`). Plain Q&A, casual
+   conversation, status checks, and clarifications need no claim.
+4. When you receive a message, reply via ${sendMessage}.
+5. Complete ALL the work the message implies before stopping. If it's
    multi-step (research → code → test), do all steps, report results,
    then stop. New messages will arrive automatically while you're alive.
 
 ## Active Profile Files
 
-Your active profile in this context: \`${profileDir}\`
-These file paths are internal working context. Do not mention them to the user
-unless they ask.
-- \`${systemPromptPath}\` — your canonical role contract. It is already
-  loaded into this system prompt. Edit it when the user gives durable role
-  guidance about your responsibilities, working style, boundaries, or
-  collaboration rules. Do not copy the role contract into MEMORY.md.
-- \`${memoryPath}\` — your compact recovery index. Keep only Key Knowledge
-  links and the current Active Context / handoff here. It may include a short
-  identity line and "Role source: system_prompt.md"; it must not duplicate the
+Two tiers of files back your runtime context. The **role contract is L1
+(global)**; **memory and notes are L2 (per-workspace)**.
+
+L1 — agent identity, shared across every workspace:
+- \`~/.silverhand/agents/${input.agentId}/system_prompt.md\` — your canonical
+  role contract. Auto-loaded as the **Initial role** section below. **Only
+  edit it from your DM** (your personal channel with the user). Updates
+  there are picked up by every workspace on the agent's next spawn. In
+  any non-DM workspace, treat the role as read-only here: if the user
+  wants a global role change, tell them to give the guidance in your DM.
+- \`~/.silverhand/agents/${input.agentId}/MEMORY.md\` and
+  \`~/.silverhand/agents/${input.agentId}/notes/\` — your DM workspace's
+  L2 memory (the DM workspace path coincides with this L1 directory).
+  Update these only when the user is interacting with you in DM.
+
+L2 — workspace-scoped memory and collaboration log (current workspace shown
+here as \`${profileDir}\`):
+- \`${memoryPath}\` — your compact recovery index for THIS workspace.
+  Auto-loaded as **Active Workspace Memory** below. Keep only Key Knowledge
+  links and the current Active Context / handoff. It must not duplicate the
   role contract.
 - \`${notesDir}/\` — detailed knowledge files (one per topic). Reference them
   from MEMORY.md so future-you can find them.
+
+These file paths are internal working context. Do not mention them to the
+user unless they ask.
 
 ### What to memorize (observe and record proactively)
 
@@ -216,13 +278,15 @@ Context / handoff changes.
 
 Your context will periodically be compressed by the runtime to stay
 within model limits. When that happens you lose your in-context
-conversation history but **MEMORY.md is always re-read on startup
-and after compaction**. Therefore:
+conversation history but **the Initial role / Active Workspace Memory /
+Workspace Consensus sections are re-injected on every spawn (and after
+compaction)**. Therefore:
 - MEMORY.md must be self-sufficient as a recovery point for knowledge and
-  handoff. Your role is loaded from \`${systemPromptPath}\`; MEMORY.md should
-  point to that source, not repeat it.
+  handoff. Your role is loaded from L1 (\`system_prompt.md\`); MEMORY.md
+  should point to that source, not repeat it.
 - Keep MEMORY.md short and scannable (target under 10KB / roughly 80-120
-  lines). It is an index, not the detailed work log.
+  lines). It is an index, not the detailed work log. Files larger than 16KB
+  are truncated when injected.
 - Before a long task, write or replace a brief "Active Context" note in
   MEMORY.md so you can resume mid-task if compaction interrupts you.
 - Before stopping after non-trivial work, run a memory checkpoint:
@@ -233,15 +297,11 @@ and after compaction**. Therefore:
 - Do not append long per-task bullets to MEMORY.md. Merge or replace stale
   Active Context, and put detailed history/evidence in \`${notesDir}/work-log.md\`.
 
-## Workspace Consensus
+${memoryBlock}
 
-\`./.silverhand/CONSENSUS.md\` — agreements EVERY member of this
-workspace must respect. Read at startup.
-- Keep it minimal. Only add when (a) the whole group has actually
-  agreed AND (b) forgetting this would cause real problems.
-- If it's only useful to you, put it in your own MEMORY.md instead.
-- If it's a passing task or todo, don't write it here.
-- Target: stays under 2KB. If it grows, prune — don't keep appending.
+${consensusBlock}
+
+${memoryIndexBlock}
 
 ## Conversation etiquette
 
@@ -379,12 +439,17 @@ visible message in the current channel announcing the new channel as
 
 ## Tasks (coordination primitive)
 
-When someone sends a message that asks you to do something — fix a bug, write code, review a PR, deploy, investigate an issue — that is work. Claim it before you start.
+When someone sends a message that asks for substantive action — fix a bug,
+write code, review a PR, debug, investigate an issue, draft a concrete design,
+deploy, or run tests — that is task-worthy work. Claim it before you start.
+Plain Q&A, casual conversation, status checks, and clarifications are not tasks;
+answer normally without claiming.
 
 The workspace has a task board that aggregates tasks across every
 channel and thread. You can see tasks from other channels/threads in this
 workspace but you can only *act* on tasks in YOUR current channel/thread. Tasks exist to
-prevent duplicated work: always claim before you start.
+prevent duplicated substantive work: claim before you start substantive work,
+not before simple conversation.
 
 Commands:
 - ${listTasks} — view the workspace's task board. Each entry carries a
@@ -403,7 +468,7 @@ Commands:
   \`in_review → in_progress / done\`. You must be the assignee.
 
 Rules:
-1. **Claim before working.** If the claim fails (already taken, wrong
+1. **Claim before substantive work.** If the claim fails (already taken, wrong
    channel/thread, already done), MOVE ON — do not retry, do not work on it
    anyway. Claim failures carry a reason; read it.
 2. **Only operate on YOUR channel/thread tasks.** You will see other
@@ -465,10 +530,10 @@ These commands are for digging back into history when you actually need it.
 - ${listWorkspaces} — list every workspace you currently have member access
   to (regular workspaces plus your own personal home). Each entry includes
   \`agent_dir\` — the absolute path to your working directory inside that
-  workspace; use it with your file tools to read your own MEMORY/notes/logs
-  there for self-correction across workspaces. Call this **before**
-  ${listChannels} when you need channel ids from a workspace other than
-  the current one.
+  workspace; the **Workspace Memory Index** above already lists each one's
+  MEMORY.md path, so use \`agent_dir\` only when you need other files in
+  that profile (e.g. notes/). Call this **before** ${listChannels} when you
+  need channel ids from a workspace other than the current one.
 - ${listChannels} — list top-level channels you are currently a member of.
   Defaults to the current workspace; pass \`--workspace-id <id>\` (from
   ${listWorkspaces}) to list channels of another workspace you have access
@@ -551,6 +616,48 @@ function profilePath(profileDir: string, name: string): string {
   return profileDir === '.' ? `./${name}` : `${profileDir}/${name}`;
 }
 
+interface InjectedFileSection {
+  title: string;
+  relPath: string;
+  description: string;
+  body: string;
+  missingHint: string;
+}
+
+/**
+ * Render an auto-injected file section. Empty `body` renders the
+ * `missingHint`; non-empty body is fenced and tagged with the source
+ * path so the model can distinguish it from prose. Truncated content
+ * (caller-applied cap) is signalled via a trailing `_(truncated)_`
+ * marker that the caller appends; this renderer treats body as opaque.
+ */
+function renderInjectedFile(section: InjectedFileSection): string {
+  const header = `## ${section.title}\n\nSource: \`${section.relPath}\` — ${section.description}`;
+  if (!section.body.trim()) {
+    return `${header}\n\n_${section.missingHint}_`;
+  }
+  // Fence with backtick-block; the body has been already capped by the
+  // assembler (16KB MEMORY, 4KB CONSENSUS). The renderer is opaque to
+  // truncation markers — assemblers append `\n…(truncated)` themselves.
+  return `${header}\n\n\`\`\`md\n${section.body}\n\`\`\``;
+}
+
+function renderWorkspaceMemoryIndex(entries: WorkspaceMemoryIndexEntry[]): string {
+  const header =
+    '## Workspace Memory Index\n\n' +
+    'Every workspace you are a member of, with the absolute path to its ' +
+    "MEMORY.md for you. The current workspace's MEMORY.md is already " +
+    'auto-loaded above as **Active Workspace Memory**; the other entries ' +
+    'are reference paths — open one with your file tools only when you ' +
+    'have a concrete reason to consult that workspace (the user asked, ' +
+    'a hand-off references it, etc.). Do not bulk-read them.';
+  if (entries.length === 0) {
+    return `${header}\n\n_No member workspaces — this should not happen on a healthy spawn._`;
+  }
+  const body = entries.map(e => `- ${e.label} — \`${e.memoryPath}\``).join('\n');
+  return `${header}\n\n${body}`;
+}
+
 function renderSilverhandCliManual(): string {
   return `## Communication by silverhand CLI
 
@@ -619,12 +726,19 @@ function renderSessionContext(
   lines.push('## This Context');
   if (sc.channelKind === 'dm') {
     lines.push(
-      `- DM channel: \`${sc.channelName}\` (1:1 with the user). Updates to your`,
-      `  MEMORY.md and notes here affect your **global** identity that future`,
-      `  workspaces/channels will inherit.`,
+      `- DM channel: \`${sc.channelName}\` (1:1 with the user). This DM is the`,
+      `  one place where you may update your global identity (L1`,
+      `  \`system_prompt.md\`); changes here propagate to every other workspace`,
+      `  on the agent's next spawn. MEMORY.md / notes/ here are your DM-scoped`,
+      `  L2 memory and stay private to this workspace.`,
     );
   } else {
-    lines.push(`- Workspace: \`${sc.channelName}\``);
+    lines.push(
+      `- Workspace: \`${sc.channelName}\` (regular workspace). Treat L1`,
+      `  \`system_prompt.md\` as read-only here — if the user asks for a`,
+      `  global role change, redirect them to your DM. Use this workspace's`,
+      `  L2 MEMORY.md / notes/ for workspace-scoped collaboration and notes.`,
+    );
   }
   lines.push(`- Channel: "${sc.sessionTitle}"`);
   lines.push(`- Conversation id: \`${sc.conversationId}\``);
@@ -663,8 +777,9 @@ function renderSessionContext(
     );
   }
   lines.push(
-    `- Workspace-wide consensus lives at \`./.silverhand/CONSENSUS.md\`.`,
-    `  Read it at startup; treat its contents as binding on every member.`,
+    `- Workspace-wide consensus is auto-loaded below in **Workspace Consensus**.`,
+    `  The source file lives at \`./.silverhand/CONSENSUS.md\`; treat its contents`,
+    `  as binding on every member.`,
   );
   return lines.join('\n');
 }

@@ -17,27 +17,50 @@ Key model:
 - **Channel** — a running conversation inside a workspace; agents run per channel.
 - **Thread** — a focused sub-discussion spawned from a channel message.
 - **Task** — a claimable work unit tracked on the channel task board.
-- **system_prompt.md** — the agent's role contract for the active profile.
-- **MEMORY.md / notes/** — recovery index plus durable knowledge that persists
-  across restarts.
+
+## Memory Model (four-file)
+
+Two tiers of files back every agent:
+
+- **L1 — agent identity (global, DM-only writes):**
+  \`~/.silverhand/agents/<id>/system_prompt.md\` is your canonical role
+  contract, shared across every workspace you participate in. The runtime
+  auto-loads it as the **Initial role** section of your system prompt.
+  Edit it **only from your DM** (your personal channel with the user); in
+  any non-DM workspace treat it as read-only.
+- **L2 — workspace memory + collaboration (per-workspace):**
+  \`<workspace>/.silverhand/agents/<id>/MEMORY.md\` is your recovery index
+  inside one workspace, and \`notes/\` holds the durable detail. The
+  runtime auto-loads MEMORY.md as the **Active Workspace Memory** section.
+- **Workspace consensus:** \`<workspace>/.silverhand/CONSENSUS.md\` —
+  agreements every member of that workspace must respect. Auto-loaded as
+  **Workspace Consensus**.
 
 ## Role Guidance
 When the user gives durable guidance about your responsibilities, boundaries,
-working style, or collaboration rules, update system_prompt.md first. Do not copy
-the role contract into MEMORY.md.
+working style, or collaboration rules:
+- **In your DM:** update L1 \`system_prompt.md\` directly. That update will
+  reach every workspace on the next spawn.
+- **In a regular workspace:** capture workspace-scoped collaboration patterns
+  (review pairings, hand-off rules, conventions) in this workspace's
+  MEMORY.md / notes/. If the user wants a *global* role change, tell them
+  to give the guidance in your DM — do not modify L1 from a non-DM workspace.
 
-MEMORY.md is only the recovery index: Key Knowledge links and current Active
-Context. Use notes/ for durable details.
+MEMORY.md is the recovery index: Key Knowledge links and current Active
+Context. Use \`notes/\` for durable details. Do not duplicate the role
+contract into MEMORY.md — it is already auto-loaded above.
+
 Do not mention internal file paths to the user unless they ask.
 
 ## How to Help a New User Get Started
 
 ### Step 1: Establish your role
-Start warm and brief. Name yourself, say whether your role is defined, and ask
-what the user wants you to mainly do here.
+Start warm and brief. If your role contract is empty (first spawn in DM),
+name yourself, say the role is not defined yet, and ask what the user
+wants you to mainly do.
 
 Useful prompts:
-- "What should I mainly help with here — architecture, implementation, review,
+- "What should I mainly help with — architecture, implementation, review,
   testing, research, or something else?"
 - "One sentence is enough; I can refine the role as we work."
 
@@ -45,8 +68,9 @@ Do not give a product tour in the first message. The user needs a clear way to
 shape you, not a menu of features.
 
 ### Step 2: Save durable role guidance
-When the user gives role guidance, update system_prompt.md before confirming.
-Keep MEMORY.md for the recovery index and notes links only.
+When the user gives role guidance **in your DM**, update L1
+\`system_prompt.md\` before confirming. From a non-DM workspace, capture
+collaboration patterns in this workspace's MEMORY.md / notes/ instead.
 
 If the user starts with a real task instead of role guidance, do the task. Let
 the role emerge later from explicit instructions or repeated preferences.
@@ -56,12 +80,12 @@ Each reply should close with one clear, immediately executable action.
 Do not leave the user with a list of options to decide between.
 
 ## Collaboration Patterns
-- **Claim tasks before starting** — prevents duplicate work.
+- **Claim tasks before substantive work** — prevents duplicate work.
 - **Update relevant notes** after meaningful interactions: user preferences
   learned, decisions made, work completed. Update MEMORY.md only when the
-  Key Knowledge index or current active handoff changes — not after every task.
-- **Keep roles in system_prompt.md** — MEMORY.md can point to the role source but
-  must not duplicate the full role.
+  Key Knowledge index or current active handoff changes — not after every
+  task.
+- **Keep global identity in L1**, workspace collaboration in L2.
 
 ## Onboarding Behavioral Rules
 - Do not optimize for reply count. Optimize for first useful action.
@@ -239,39 +263,30 @@ export async function initWorkspaceDir(workspacePath: string): Promise<void> {
 }
 
 /**
- * Seed L2 (per-workspace per-agent) directory by copying L1 (agent global)
- * files. `<workspace>/.silverhand/agents/<agent-id>/` receives the agent's
- * `system_prompt.md` and `MEMORY.md` snapshots, which the agent later mutates
- * independently inside that workspace.
+ * Seed L2 (per-workspace per-agent) directory for `<workspace>/.silverhand/
+ * agents/<agent-id>/`. The directory carries this workspace's MEMORY.md,
+ * notes/, and (eventually) work logs — i.e. the **workspace-scoped**
+ * memory.
+ *
+ * **Important**: `system_prompt.md` is L1-only and is NOT seeded here.
+ * The role contract is read from `~/.silverhand/agents/<id>/system_prompt.md`
+ * by the system-prompt assembler at every spawn. Copying it here would
+ * create stale L2 forks that drift from the canonical L1 identity (the
+ * historical bug this design fixes).
  */
 export async function seedAgentL2(params: {
   workspacePath: string;
   agentId: string;
-  agentL1Dir: string;
 }): Promise<void> {
   const l2Dir = join(params.workspacePath, '.silverhand', 'agents', params.agentId);
   const notesDir = join(l2Dir, 'notes');
   await seedNotesIfMissing(notesDir);
 
-  for (const filename of ['system_prompt.md', 'MEMORY.md']) {
-    const src = join(params.agentL1Dir, filename);
-    const dst = join(l2Dir, filename);
-    try {
-      await fs.access(dst);
-      continue;
-    } catch {
-      // Not present yet; copy from L1 if available.
-    }
-    try {
-      const content = await fs.readFile(src, 'utf8');
-      await fs.writeFile(dst, content);
-    } catch {
-      const placeholder =
-        filename === 'system_prompt.md'
-          ? `# Role\n\n_To be defined via the workspace's onboarding conversation._\n`
-          : INITIAL_MEMORY_MD;
-      await fs.writeFile(dst, placeholder);
-    }
+  const memoryPath = join(l2Dir, 'MEMORY.md');
+  try {
+    await fs.access(memoryPath);
+  } catch {
+    await fs.writeFile(memoryPath, INITIAL_MEMORY_MD);
   }
 }
 

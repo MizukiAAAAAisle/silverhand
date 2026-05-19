@@ -107,6 +107,9 @@ export class CodexDriver implements Driver {
       runtime: 'codex',
       activeProfileDir: ctx.activeProfileDir,
       roleSystemPrompt: ctx.roleSystemPrompt,
+      currentMemory: ctx.currentMemory,
+      currentConsensus: ctx.currentConsensus,
+      workspaceMemoryIndex: ctx.workspaceMemoryIndex,
       sessionContext: ctx.sessionContext,
     });
   }

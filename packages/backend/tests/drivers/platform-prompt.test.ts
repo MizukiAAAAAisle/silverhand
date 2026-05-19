@@ -9,6 +9,9 @@ function prompt(): string {
     runtime: 'claude',
     activeProfileDir: './.silverhand/agents/agent-1',
     roleSystemPrompt: '_role_',
+    currentMemory: '',
+    currentConsensus: '',
+    workspaceMemoryIndex: [],
     sessionContext: {
       conversationId: 'conv-channel-1',
       channelName: 'silverhand',
@@ -47,6 +50,9 @@ describe('buildPlatformPrompt', () => {
       runtime: 'claude',
       activeProfileDir: './.silverhand/agents/agent-1',
       roleSystemPrompt: '_role_',
+      currentMemory: '',
+      currentConsensus: '',
+      workspaceMemoryIndex: [],
       sessionContext: {
         conversationId: 'thread-1',
         channelName: 'silverhand',
@@ -87,10 +93,8 @@ describe('buildPlatformPrompt', () => {
 
   it('keeps MEMORY.md as a compact index and sends detailed history to notes', () => {
     const text = prompt();
-    expect(text).toContain('canonical role contract');
-    expect(text).toContain('Do not copy the role contract into MEMORY.md');
-    expect(text).toContain('It may include a short');
-    expect(text).toContain('Role source: system_prompt.md');
+    expect(text).toContain('canonical\n  role contract');
+    expect(text).toContain('It must not duplicate the');
     expect(text).toContain('target under 10KB');
     expect(text).toContain('It is an index, not the detailed work log');
     expect(text).toContain('run a memory checkpoint');
@@ -104,13 +108,16 @@ describe('buildPlatformPrompt', () => {
     expect(text).not.toContain('After completing significant work, update notes');
   });
 
-  it('renders the active profile path instead of hard-coding L2 paths', () => {
+  it('renders the active profile path and the L1/L2 split in Active Profile Files', () => {
     const regular = prompt();
-    expect(regular).toContain(
-      'Your active profile in this context: `./.silverhand/agents/agent-1`',
-    );
+    // L1 path is hard-coded by agent id; L2 path is rendered as a relative
+    // profile dir. The legacy "Your active profile in this context: ..."
+    // header was removed when system_prompt.md moved to L1-only.
+    expect(regular).toContain('~/.silverhand/agents/agent-1/system_prompt.md');
+    expect(regular).toContain('./.silverhand/agents/agent-1/MEMORY.md');
+    expect(regular).toContain('current workspace shown');
+    expect(regular).toContain('./.silverhand/agents/agent-1/notes/');
     expect(regular).toContain('These file paths are internal working context');
-    expect(regular).toContain('Read `./.silverhand/agents/agent-1/MEMORY.md` first');
 
     const dm = buildPlatformPrompt({
       agentId: 'agent-1',
@@ -118,6 +125,9 @@ describe('buildPlatformPrompt', () => {
       runtime: 'claude',
       activeProfileDir: '.',
       roleSystemPrompt: '_role_',
+      currentMemory: '',
+      currentConsensus: '',
+      workspaceMemoryIndex: [],
       sessionContext: {
         conversationId: 'dm-conv-1',
         channelName: 'Onboarding',
@@ -129,10 +139,12 @@ describe('buildPlatformPrompt', () => {
       },
     });
 
-    expect(dm).toContain('Your active profile in this context: `.`');
-    expect(dm).toContain('Read `./MEMORY.md` first');
-    expect(dm).toContain('`./system_prompt.md`');
-    expect(dm).not.toContain('./.silverhand/agents/agent-1/MEMORY.md');
+    // DM profile dir collapses to '.' — MEMORY.md and notes/ live at the
+    // root of the L1 directory (which is also the DM workspace path).
+    expect(dm).toContain('./MEMORY.md');
+    expect(dm).toContain('./notes/');
+    // L1 path stays the same (it's keyed off agent id, not profile dir).
+    expect(dm).toContain('~/.silverhand/agents/agent-1/system_prompt.md');
 
     const messy = buildPlatformPrompt({
       agentId: 'agent-1',
@@ -140,6 +152,9 @@ describe('buildPlatformPrompt', () => {
       runtime: 'claude',
       activeProfileDir: './.silverhand//agents///agent-1/',
       roleSystemPrompt: '_role_',
+      currentMemory: '',
+      currentConsensus: '',
+      workspaceMemoryIndex: [],
       sessionContext: {
         conversationId: 'conv-channel-1',
         channelName: 'silverhand',
@@ -152,15 +167,27 @@ describe('buildPlatformPrompt', () => {
     });
 
     expect(messy).toContain(
-      'Read `./.silverhand/agents/agent-1/MEMORY.md` first',
+      './.silverhand/agents/agent-1/MEMORY.md',
     );
+    // The redundant slashes get normalized.
+    expect(messy).not.toContain('//agents');
   });
 
   it('requires task state updates before reporting completion', () => {
     const text = prompt();
-    expect(text).toContain('claim the task first');
+    expect(text).toContain('Claim a task only when the message asks');
+    expect(text).toContain('substantive action');
+    expect(text).toContain('Do **not**');
+    expect(text).toContain('answering a question');
+    expect(text).toContain('casual conversation');
+    expect(text).toContain('status checks');
+    expect(text).toContain('clarifications');
+    expect(text).toContain('When in doubt, reply first');
     expect(text).toContain('silverhand task claim --message-id <message_id>');
-    expect(text).toContain('claim it before doing that work');
+    expect(text).toContain('Plain Q&A');
+    expect(text).toContain('need no claim');
+    expect(text).toContain('not before simple conversation');
+    expect(text).toContain('Claim before substantive work');
     expect(text).toContain('Close the loop on tasks you own');
     expect(text).toContain('call `silverhand task status` first');
     expect(text).toContain('leaving the task state unchanged');
@@ -185,6 +212,9 @@ describe('buildPlatformPrompt', () => {
       runtime: 'codex',
       activeProfileDir: './.silverhand/agents/agent-1',
       roleSystemPrompt: '_role_',
+      currentMemory: '',
+      currentConsensus: '',
+      workspaceMemoryIndex: [],
       sessionContext: {
         conversationId: 'conv-channel-1',
         channelName: 'silverhand',
@@ -446,6 +476,9 @@ describe('buildPlatformPrompt', () => {
       runtime: 'claude',
       activeProfileDir: './.silverhand/agents/agent-1',
       roleSystemPrompt: '_role_',
+      currentMemory: '',
+      currentConsensus: '',
+      workspaceMemoryIndex: [],
       sessionContext: {
         conversationId: 'thread-1',
         channelName: 'silverhand',
@@ -480,6 +513,9 @@ describe('buildPlatformPrompt', () => {
       runtime: 'claude',
       activeProfileDir: './.silverhand/agents/agent-1',
       roleSystemPrompt: '_role_',
+      currentMemory: '',
+      currentConsensus: '',
+      workspaceMemoryIndex: [],
       sessionContext: {
         conversationId: 'thread-1',
         channelName: 'silverhand',
@@ -511,6 +547,9 @@ describe('buildPlatformPrompt', () => {
       runtime: 'claude',
       activeProfileDir: './.silverhand/agents/agent-1',
       roleSystemPrompt: '_role_',
+      currentMemory: '',
+      currentConsensus: '',
+      workspaceMemoryIndex: [],
       sessionContext: {
         conversationId: 'conv-channel-1',
         channelName: 'silverhand',
@@ -591,6 +630,9 @@ describe('buildPlatformPrompt', () => {
       runtime: 'claude',
       activeProfileDir: './.silverhand/agents/agent-1',
       roleSystemPrompt: '_role_',
+      currentMemory: '',
+      currentConsensus: '',
+      workspaceMemoryIndex: [],
       sessionContext: {
         conversationId: 'conv-channel-1',
         channelName: 'silverhand',
@@ -614,6 +656,9 @@ describe('buildPlatformPrompt', () => {
       runtime: 'claude',
       activeProfileDir: './.silverhand/agents/agent-1',
       roleSystemPrompt: '_role_',
+      currentMemory: '',
+      currentConsensus: '',
+      workspaceMemoryIndex: [],
       sessionContext: {
         conversationId: 'conv-channel-1',
         channelName: 'silverhand',
@@ -661,6 +706,9 @@ describe('buildPlatformPrompt', () => {
       runtime: 'claude',
       activeProfileDir: './.silverhand/agents/agent-1',
       roleSystemPrompt: '_role_',
+      currentMemory: '',
+      currentConsensus: '',
+      workspaceMemoryIndex: [],
       sessionContext: {
         conversationId: 'conv-channel-1',
         channelName: 'silverhand',
@@ -767,6 +815,9 @@ describe('buildPlatformPrompt', () => {
       runtime: 'claude',
       activeProfileDir: './.silverhand/agents/agent-1',
       roleSystemPrompt: '_role_',
+      currentMemory: '',
+      currentConsensus: '',
+      workspaceMemoryIndex: [],
       sessionContext: {
         conversationId: 'conv-channel-1',
         channelName: 'silverhand',
@@ -915,3 +966,133 @@ describe('buildPlatformPrompt', () => {
     }
   });
 });
+
+// -----------------------------------------------------------------------
+// Four-file model: auto-injection, workspace memory index, drift safeguards.
+// See docs/agent-system-prompt-memory.md.
+// -----------------------------------------------------------------------
+
+describe('buildPlatformPrompt — four-file model', () => {
+  function withInjections(args: {
+    currentMemory?: string;
+    currentConsensus?: string;
+    workspaceMemoryIndex?: Array<{ label: string; memoryPath: string }>;
+    channelKind?: 'regular' | 'dm';
+    roleSystemPrompt?: string;
+    activeProfileDir?: string;
+  }): string {
+    return buildPlatformPrompt({
+      agentId: 'agent-1',
+      agentName: 'Cindy',
+      runtime: 'claude',
+      activeProfileDir: args.activeProfileDir ?? './.silverhand/agents/agent-1',
+      roleSystemPrompt: args.roleSystemPrompt ?? '_role_',
+      currentMemory: args.currentMemory ?? '',
+      currentConsensus: args.currentConsensus ?? '',
+      workspaceMemoryIndex: args.workspaceMemoryIndex ?? [],
+      sessionContext: {
+        conversationId: 'conv-1',
+        channelName: 'silverhand',
+        channelKind: args.channelKind ?? 'regular',
+        sessionTitle: 'main',
+        members: [],
+        selfAgentId: 'agent-1',
+        isChildSession: false,
+      },
+    });
+  }
+
+  it('auto-injects current MEMORY.md content under Active Workspace Memory', () => {
+    const text = withInjections({
+      currentMemory: '# Memory\n\n- token: ABC123',
+    });
+    expect(text).toContain('## Active Workspace Memory');
+    expect(text).toContain('# Memory');
+    expect(text).toContain('- token: ABC123');
+  });
+
+  it('auto-injects CONSENSUS.md content under Workspace Consensus', () => {
+    const text = withInjections({
+      currentConsensus: '# Consensus\n\n- be kind to each other',
+    });
+    expect(text).toContain('## Workspace Consensus');
+    expect(text).toContain('be kind to each other');
+  });
+
+  it('renders missing-hint when MEMORY/CONSENSUS are empty', () => {
+    const text = withInjections({});
+    // Section header always renders.
+    expect(text).toContain('## Active Workspace Memory');
+    expect(text).toContain('## Workspace Consensus');
+    // But no fenced body: missing-hint is rendered as italics.
+    expect(text).toMatch(/Active Workspace Memory[\s\S]*No MEMORY\.md exists yet/);
+    expect(text).toMatch(/Workspace Consensus[\s\S]*No CONSENSUS\.md exists yet/);
+  });
+
+  it('renders the workspace memory index with the current workspace marked', () => {
+    const text = withInjections({
+      workspaceMemoryIndex: [
+        { label: 'silverhand (current)', memoryPath: '/abs/silverhand/.silverhand/agents/a1/MEMORY.md' },
+        { label: 'cindy (DM)', memoryPath: '/abs/home/.silverhand/agents/a1/MEMORY.md' },
+        { label: 'project-foo', memoryPath: '/abs/foo/.silverhand/agents/a1/MEMORY.md' },
+      ],
+    });
+    expect(text).toContain('## Workspace Memory Index');
+    expect(text).toContain('- silverhand (current) — `/abs/silverhand/.silverhand/agents/a1/MEMORY.md`');
+    expect(text).toContain('- cindy (DM) — `/abs/home/.silverhand/agents/a1/MEMORY.md`');
+    expect(text).toContain('- project-foo — `/abs/foo/.silverhand/agents/a1/MEMORY.md`');
+  });
+
+  it('drops the legacy "read MEMORY.md first" startup instruction', () => {
+    // The four-file model auto-injects MEMORY/CONSENSUS, so the agent
+    // does NOT need to issue Read calls at startup. If the prompt re-grows
+    // those instructions, this regression test will fail.
+    const text = withInjections({});
+    expect(text).not.toContain('Read your active profile');
+    expect(text).not.toMatch(/Read `[^`]*MEMORY\.md` first/);
+    expect(text).not.toMatch(/Read `\.\/\.silverhand\/CONSENSUS\.md` —/);
+  });
+
+  it('does not announce L2 system_prompt.md path (system_prompt is L1-only)', () => {
+    const text = withInjections({});
+    // The legacy Active Profile Files section listed
+    // ./.silverhand/agents/<id>/system_prompt.md as the role contract path.
+    // It must now point at L1, not L2.
+    expect(text).not.toContain('./.silverhand/agents/agent-1/system_prompt.md');
+    expect(text).toContain('~/.silverhand/agents/agent-1/system_prompt.md');
+  });
+
+  it('marks DM context as the only place to edit global identity', () => {
+    const text = withInjections({ channelKind: 'dm' });
+    expect(text).toMatch(/DM channel[\s\S]*global identity/);
+    expect(text).toMatch(/DM channel[\s\S]*L1.*system_prompt\.md/);
+  });
+
+  it('marks regular workspaces as treating L1 system_prompt as read-only', () => {
+    const text = withInjections({ channelKind: 'regular' });
+    expect(text).toMatch(/Treat L1[\s\S]*`system_prompt\.md` as read-only/);
+    expect(text).toMatch(/redirect them to your DM/);
+  });
+
+  it('fences the auto-injected blocks so model can distinguish prose from content', () => {
+    const text = withInjections({
+      currentMemory: '# Memory\n- a',
+      currentConsensus: '# C\n- b',
+    });
+    // Fence with `\`\`\`md` is the contract.
+    const memoryFenceCount = (text.match(/```md\n# Memory/g) ?? []).length;
+    const consensusFenceCount = (text.match(/```md\n# C/g) ?? []).length;
+    expect(memoryFenceCount).toBe(1);
+    expect(consensusFenceCount).toBe(1);
+  });
+
+  it('preserves a truncation marker when caller pre-truncates content', () => {
+    // The renderer is opaque to truncation — assemblers append their own
+    // marker. Assert the marker passes through verbatim.
+    const text = withInjections({
+      currentMemory: '# Memory\n- huge stuff here\n…(truncated)',
+    });
+    expect(text).toContain('…(truncated)');
+  });
+});
+

@@ -56,15 +56,15 @@ describe('POST /api/workspaces', () => {
       (m: any) => m.metadata?.subtype === 'onboarding',
     );
     expect(onboardingMessages).toHaveLength(2);
+    // Workspace onboarding: tell the agent role is auto-loaded from L1 and
+    // workspace-scoped collaboration goes into THIS workspace's MEMORY/notes.
     expect(onboardingMessages[0].content).toContain(
-      'read the seeded onboarding guide note',
+      'just joined workspace',
     );
-    expect(onboardingMessages[0].content).toContain(
-      'do not mention internal file paths',
-    );
-    expect(onboardingMessages[0].content).not.toContain('system_prompt.md');
-    expect(onboardingMessages[0].content).not.toContain('MEMORY.md');
-    expect(onboardingMessages[0].content).not.toContain('.silverhand/agents');
+    expect(onboardingMessages[0].content).toContain('auto-loaded above');
+    expect(onboardingMessages[0].content).toContain('Active Workspace Memory');
+    expect(onboardingMessages[0].content).toContain('do NOT modify your global system_prompt.md');
+    expect(onboardingMessages[0].content).toContain('redirect them to your DM');
 
     const members = await (
       await http(t).get(`/api/workspaces/${body.workspace.id}/members`)

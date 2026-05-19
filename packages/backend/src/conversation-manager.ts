@@ -32,10 +32,11 @@ import {
   type DriverSpawnContext,
   type ParsedEvent,
   type SessionContextInput,
+  type WorkspaceMemoryIndexEntry,
 } from './drivers/index.js';
 import { detectRuntimes } from './runtimes.js';
 import { expandProxyEnv } from './proxy.js';
-import { activeAgentProfileDir } from './agent-profile.js';
+import { activeAgentProfileDir, agentL1ProfileDir, agentMemoryDirFor } from './agent-profile.js';
 import { prepareSpawnFiles, type SpawnPrepHandle } from './spawn-prep.js';
 import { AgentRepo } from './repos/agent-repo.js';
 import {
@@ -68,6 +69,45 @@ const RAW_AGENT_EVENT_STRING_MAX_CHARS = 500;
 const RAW_AGENT_EVENT_ARRAY_MAX_ITEMS = 20;
 const RAW_AGENT_EVENT_OBJECT_MAX_KEYS = 40;
 const RAW_AGENT_EVENT_MAX_DEPTH = 4;
+
+/**
+ * Caps for auto-injected context files (MEMORY.md / CONSENSUS.md). The
+ * platform prompt embeds the file contents verbatim; oversized files
+ * blow context budgets and have historically been a sign that an agent
+ * was using MEMORY.md as a work log instead of an index. Keeping
+ * MEMORY <= 16KB and CONSENSUS <= 4KB is the documented soft target;
+ * the assembler enforces it as a hard truncation point with an explicit
+ * `…(truncated)` marker so the agent knows when content was clipped.
+ */
+const MEMORY_INJECT_CAP_BYTES = 16 * 1024;
+const CONSENSUS_INJECT_CAP_BYTES = 4 * 1024;
+
+/**
+ * Read a UTF-8 text file but cap the returned size to `capBytes`. Missing /
+ * unreadable files yield `''` (the platform-prompt renderer treats empty
+ * as "show the missing-hint instead"). Files larger than the cap are
+ * truncated at a UTF-8-safe character boundary and tagged with an
+ * explicit `\n…(truncated)` marker so the model can see the clip
+ * happened. The cap is measured in bytes (Buffer.byteLength) — multi-byte
+ * runes near the boundary are dropped together rather than producing a
+ * malformed code unit.
+ */
+async function readFileWithCap(path: string, capBytes: number): Promise<string> {
+  let buf: Buffer;
+  try {
+    buf = await readFile(path);
+  } catch {
+    return '';
+  }
+  if (buf.byteLength <= capBytes) return buf.toString('utf-8');
+  // UTF-8-safe truncation: walk back from `capBytes` until the byte at
+  // the boundary is not a continuation byte (0b10xxxxxx). Treat
+  // out-of-bounds reads as "not a continuation byte" so the loop
+  // terminates cleanly.
+  let cut = capBytes;
+  while (cut > 0 && (buf[cut] !== undefined && (buf[cut]! & 0xc0) === 0x80)) cut -= 1;
+  return `${buf.subarray(0, cut).toString('utf-8')}\n…(truncated)`;
+}
 
 type ActivitySnippetKind = 'thinking' | 'text';
 type InitTimeoutReason =
@@ -1611,10 +1651,42 @@ export class ConversationManager {
     }
 
     const profile = activeAgentProfileDir(conversation, workspace, agent.id);
+
+    // Role contract: L1-only. The agent's identity is shared across
+    // every workspace and lives at `~/.silverhand/agents/<id>/system_prompt.md`.
+    // This redirect is the heart of the L1/L2 split — we no longer copy
+    // system_prompt.md into the L2 directory, so reading from `profile`
+    // here would be wrong for non-DM workspaces.
+    const l1Dir = agentL1ProfileDir(this.ctx.silverhandDir, agent.id);
     const roleSystemPrompt = await readFile(
-      join(profile.absoluteDir, 'system_prompt.md'),
+      join(l1Dir, 'system_prompt.md'),
       'utf-8',
     ).catch(() => '');
+
+    // Auto-injected current-workspace MEMORY.md. Capped + truncation-marked
+    // so the platform prompt has an upper-bound on the rendered block.
+    const currentMemory = await readFileWithCap(
+      join(profile.absoluteDir, 'MEMORY.md'),
+      MEMORY_INJECT_CAP_BYTES,
+    );
+
+    // Workspace-wide consensus, scoped to this workspace's `.silverhand/`.
+    // For agent_home (DM workspace), `workspace_path` is the agent's L1
+    // directory itself, and CONSENSUS.md may simply not exist — that's
+    // fine; renderer falls back to the missing-hint.
+    const consensusPath = join(workspace.workspace_path, '.silverhand', 'CONSENSUS.md');
+    const currentConsensus = await readFileWithCap(
+      consensusPath,
+      CONSENSUS_INJECT_CAP_BYTES,
+    );
+
+    // Cross-workspace memory index. Same-host trust model: every workspace
+    // returned by `listForAgent` is a workspace this agent already has
+    // membership in, and host-equality between agent and workspace is
+    // enforced at `addAgentToWorkspace` time as a membership precondition,
+    // not filtered here at runtime.
+    const workspaceMemoryIndex = this.buildWorkspaceMemoryIndex(agent.id, workspace.id);
+
     const isThread = conversation.kind === 'thread';
 
     const sessionContext: SessionContextInput = {
@@ -1635,8 +1707,38 @@ export class ConversationManager {
       agentName: agent.name,
       activeProfileDir: profile.promptDir,
       roleSystemPrompt,
+      currentMemory,
+      currentConsensus,
+      workspaceMemoryIndex,
       sessionContext,
     };
+  }
+
+  /**
+   * Index every workspace this agent is a member of, with the agent's
+   * MEMORY.md path inside it. The current workspace's entry is suffixed
+   * with " (current)" so the prompt renderer can call out the auto-loaded
+   * one without duplicating its name.
+   *
+   * For agent_home workspaces, the workspace path coincides with the L1
+   * agent directory and the agent's MEMORY.md sits at the workspace root.
+   * For regular workspaces it lives at
+   * `<workspace>/.silverhand/agents/<agentId>/MEMORY.md`.
+   */
+  private buildWorkspaceMemoryIndex(
+    agentId: string,
+    currentWorkspaceId: string,
+  ): WorkspaceMemoryIndexEntry[] {
+    const ws = this.workspaces.listForAgent(agentId);
+    return ws.map(w => {
+      const dir = agentMemoryDirFor(w, agentId);
+      const isCurrent = w.id === currentWorkspaceId;
+      const baseLabel = w.workspace_kind === 'agent_home' ? `${w.name} (DM)` : w.name;
+      return {
+        label: isCurrent ? `${baseLabel} (current)` : baseLabel,
+        memoryPath: join(dir, 'MEMORY.md'),
+      };
+    });
   }
 
   /**

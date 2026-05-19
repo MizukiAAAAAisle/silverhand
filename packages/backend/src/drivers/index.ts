@@ -1,9 +1,12 @@
 import type { ParsedEvent } from '@silverhand/shared';
 import type { RuntimeKind } from '@silverhand/shared';
-import type { SessionContextInput } from './platform-prompt.js';
+import type {
+  SessionContextInput,
+  WorkspaceMemoryIndexEntry,
+} from './platform-prompt.js';
 
 export type { ParsedEvent };
-export type { SessionContextInput };
+export type { SessionContextInput, WorkspaceMemoryIndexEntry };
 
 /**
  * Inputs to `buildSystemPrompt`. Subset of spawn context — does not
@@ -15,6 +18,9 @@ export interface DriverPromptContext {
   agentName: string;
   activeProfileDir: string;
   roleSystemPrompt: string;
+  currentMemory: string;
+  currentConsensus: string;
+  workspaceMemoryIndex: WorkspaceMemoryIndexEntry[];
   sessionContext: SessionContextInput;
 }
 

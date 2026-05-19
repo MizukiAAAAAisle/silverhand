@@ -20,8 +20,13 @@ export function AgentWorkspaceCard({
     <div className="flex flex-col gap-4">
       <header className="flex items-start justify-between gap-3">
         <p className="text-xs leading-relaxed text-text-muted">
-          L1 (global) — what's here is shared across every channel this
-          agent participates in.
+          The agent's global home. <span className="font-mono">system_prompt.md</span> is
+          the canonical role contract — it is shared across every workspace
+          this agent joins, and only this DM may edit it.{' '}
+          <span className="font-mono">MEMORY.md</span> and{' '}
+          <span className="font-mono">notes/</span> here are the DM workspace's
+          own memory; other workspaces keep separate memory under their own
+          paths.
         </p>
         {workspace ? <PathBar path={workspace.l1_path} /> : null}
       </header>
@@ -158,7 +163,8 @@ function NotesBlock({
       {open ? (
         notes.length === 0 ? (
           <div className="px-4 py-3 text-xs text-text-muted">
-            No notes yet. Agent will fill this with cross-channel knowledge.
+            No notes yet. Agent will fill this with durable knowledge from
+            its DM conversations.
           </div>
         ) : (
           <ul className="bg-bg-floating">

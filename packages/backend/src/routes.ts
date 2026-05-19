@@ -333,8 +333,8 @@ function onboardingBody(
       ? `You're the only agent here right now.`
       : `Other agents in this workspace:\n${others.map(m => `- @${m.name} (${m.runtime})`).join('\n')}`,
     ``,
-    `This is your first onboarding message in this workspace. Before replying, read the seeded onboarding guide note for internal guidance; do not mention internal file paths unless the user asks.`,
-    `Send one short greeting: name yourself, state your current workspace role briefly (or say it is not defined yet), and ask what the user wants you to mainly do here (architecture, implementation, review, testing, or research are all valid).`,
+    `This is your first onboarding message in this workspace. Your role contract is auto-loaded above (sourced from your global L1 system_prompt.md), and this workspace's MEMORY.md is auto-loaded under "Active Workspace Memory" — skim them before replying.`,
+    `Send one short greeting introducing yourself by your global role. If the user later wants to refine how you collaborate inside this specific workspace (review pairings, hand-off rules, etc.), capture that in this workspace's MEMORY.md or notes/ — do NOT modify your global system_prompt.md from here. If the user asks for a global role change, redirect them to your DM.`,
   ].join('\n');
 }
 
@@ -574,7 +574,6 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       await seedAgentL2({
         workspacePath: workspace.workspace_path,
         agentId: agent.id,
-        agentL1Dir,
       });
     }
 
@@ -1050,7 +1049,6 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     await seedAgentL2({
       workspacePath: workspace.workspace_path,
       agentId: agent.id,
-      agentL1Dir,
     });
     return c.json({ member }, 201);
   });
@@ -1908,8 +1906,8 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
         fromKind: 'system',
         content: [
           `You (@${agent.name}) are now in your personal DM with the user.`,
-          `Before replying, read the seeded onboarding guide note for internal guidance; do not mention internal file paths unless the user asks.`,
-          `Send one short greeting: say hi by name, state your current global role briefly (or say it is not defined yet), and ask what role the user would like you to play.`,
+          `This DM is the **only** place where your global identity lives — your role contract at L1 \`system_prompt.md\` is shared across every workspace you join, and updates here propagate everywhere on the agent's next spawn.`,
+          `Send one short greeting: say hi by name, state your current global role briefly (or say it is not defined yet), and ask what role the user would like you to play. When the user gives durable role guidance, write it into your L1 \`system_prompt.md\` in this DM — that is what makes the role stick across workspaces. Do not mention internal file paths to the user unless they ask.`,
         ].join('\n'),
         metadata: { subtype: systemSubtype('onboarding') },
       });

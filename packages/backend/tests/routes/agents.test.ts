@@ -61,11 +61,13 @@ describe('POST /api/agents', () => {
       await http(t).get(`/api/channels/${body.dm_channel_id}/messages`)
     ).json() as any;
     const onboarding = msgs.messages.find((m: any) => m.metadata?.subtype === 'onboarding');
-    expect(onboarding.content).toContain('read the seeded onboarding guide note');
-    expect(onboarding.content).toContain('do not mention internal file paths');
-    expect(onboarding.content).not.toContain('system_prompt.md');
-    expect(onboarding.content).not.toContain('MEMORY.md');
-    expect(onboarding.content).not.toContain('.silverhand/agents');
+    // DM onboarding: we now teach the agent that this DM is the only place
+    // where its global identity (L1 system_prompt.md) lives, and that role
+    // updates here propagate to every workspace.
+    expect(onboarding.content).toContain('your personal DM');
+    expect(onboarding.content).toContain('global identity');
+    expect(onboarding.content).toContain('L1 `system_prompt.md`');
+    expect(onboarding.content).toContain('Do not mention internal file paths');
   });
 
   it('returns 409 on duplicate name', async () => {
