@@ -731,7 +731,8 @@
    refactor → #task:415 cascade-layer lock → #task:417 token-only
    refactor that retired the lock) is captured in
    `#conv:m-jmqBPrOO8gkYsp`. */
-[data-theme='forza6'] [data-panel-card] {
+[data-theme='forza6'] [data-panel-card='row'],
+[data-theme='forza6'] [data-panel-card='placeholder'] {
   border: 2px solid #0A0A0A;
 }
 [data-theme='forza6'] [data-panel-card='row']:hover {
@@ -745,8 +746,15 @@
      identity here; corners are squared via `--card-radius`-free
      declaration in global.css. */
   border-style: dashed;
-  border-width: 2px;
 }
+/* `data-panel-card="profile-section"` deliberately does NOT pick up
+   the 2px black poster frame — shiki `FDv3rR0UhmOEIPaE` flagged that
+   the heavy frame on the three Identity / Capabilities / Metadata
+   cards in Agent / Human profile read as ad-banner rather than
+   information block. They keep the JSX-supplied
+   `border-border-subtle/60` only, which renders as a hairline divider
+   in every theme. The poster identity stays focused on the surfaces
+   that are actually scan-line records (rows, dashed empty states). */
 
 [data-theme='forza6'] [data-panel-pill] {
   /* Pill identity is type + saturation — caps + heavier tracking. */
