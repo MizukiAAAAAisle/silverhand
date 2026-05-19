@@ -32,7 +32,7 @@ describe('buildPlatformPrompt', () => {
 
   it('keeps system announcements informational unless explicitly requested', () => {
     const text = prompt();
-    expect(text).toContain('from_kind=system');
+    expect(text).toContain('type=system');
     expect(text).toContain("Don't reply unless the message explicitly");
   });
 

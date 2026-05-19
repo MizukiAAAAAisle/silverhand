@@ -494,6 +494,19 @@ export class ConversationManager {
    *    ctx.events keyed by conversationId
    *  - On exit, handle is removed and temp files are cleaned up
    */
+  /**
+   * Resolve the registered viewer's mention handle, used as the
+   * fallback `sender=` value when a user message has a null
+   * `from_user_id` (legacy pre-PR-A rows) or its `from_user_id` no
+   * longer resolves. Returns `undefined` when registration hasn't
+   * completed yet — callers degrade to the bare token `user`.
+   */
+  private resolveDefaultUserHandle(): string | undefined {
+    const viewerId = this.settings.getViewerUserId();
+    if (!viewerId) return undefined;
+    return this.users.get(viewerId)?.name ?? undefined;
+  }
+
   async start(conversationId: string, agentId: string, opts: StartOptions = {}): Promise<void> {
     return this.startWithLifecycleLock(conversationId, agentId, opts, 0);
   }
@@ -580,6 +593,8 @@ export class ConversationManager {
         initialPrompt = formatInboxBatch(
           items,
           id => this.agents.get(id)?.name,
+          id => this.users.get(id)?.name,
+          this.resolveDefaultUserHandle(),
           agent.name,
           sendMessageToolName(driver),
         );
@@ -1692,6 +1707,8 @@ export class ConversationManager {
     const text = formatLiveMessage(
       msg,
       id => this.agents.get(id)?.name,
+      id => this.users.get(id)?.name,
+      this.resolveDefaultUserHandle(),
       this.agents.get(agentId)?.name,
       sendMessageToolName(handle.driver),
     );
@@ -2131,6 +2148,8 @@ export class ConversationManager {
     const text = formatInboxBatch(
       items,
       id => this.agents.get(id)?.name,
+      id => this.users.get(id)?.name,
+      this.resolveDefaultUserHandle(),
       this.agents.get(handle.agentId)?.name,
       sendMessageToolName(handle.driver),
     );
@@ -2197,6 +2216,8 @@ function sendMessageToolName(_driver: Driver): string {
 function formatInboxBatch(
   items: PendingConversationInboxItem[],
   agentNameById: (id: string) => string | undefined,
+  userNameById: (id: string) => string | undefined,
+  defaultUserHandle: string | undefined,
   recipientAgentName: string | undefined,
   sendMessageTool: string,
 ): string {
@@ -2206,9 +2227,14 @@ function formatInboxBatch(
       : `You have ${items.length} messages waiting since you were last active (oldest first):`;
   const body = items
     .map(({ message }) => {
-      const sender = describeSender(message, agentNameById);
+      const meta = formatStdinMessageHeader(
+        message,
+        agentNameById,
+        userNameById,
+        defaultUserHandle,
+      );
       const suffix = formatAttachmentSuffix(extractAttachmentSnapshotsFromRow(message));
-      return `[from ${sender}]\nmessage_id=${message.id}\n${message.content}${suffix}`;
+      return `${meta}\n${message.content}${suffix}`;
     })
     .join('\n\n---\n\n');
   return `${header}\n\n${body}\n\n${formatDeliveryInstruction(
@@ -2218,22 +2244,77 @@ function formatInboxBatch(
   )}`;
 }
 
-function describeSender(
+/**
+ * Single-line canonical meta header for a message delivered to an agent's
+ * stdin. Replaces the older two-segment `[from <sender>]\nmessage_id=<id>`
+ * form (#task:394 — added because human authors lacked a mention handle in
+ * the old `[from user]` rendering).
+ *
+ * Format (fields in fixed order, no quoting; content body follows on the
+ * next line):
+ *
+ *     msg_id=<full-id> sender=@<handle>|system type=agent|human|system time=<ISO8601>
+ *
+ * - `sender` is the canonical mention handle (`@<agent.name>` /
+ *   `@<user.name>`) so an agent can reply with `@<handle>` directly. For
+ *   pre-PR-A null-author rows or a row whose `from_user_id` is unknown,
+ *   fall back to the registered viewer handle, then to the bare token
+ *   `user`. System messages emit `sender=system` with no `@`.
+ * - `type` is the surface vocabulary: DB column `from_kind='user'` maps
+ *   to `human` here; agent and system pass through.
+ * - `time` is ISO 8601 in the local timezone (offset preserved) so the
+ *   agent sees both an absolute instant and the wall clock the user
+ *   experienced.
+ *
+ * Helper lives in this file (not in shared) until a non-runtime surface
+ * (export, audit log) actually needs to reuse it.
+ */
+function formatStdinMessageHeader(
   msg: MessageLite,
   agentNameById: (id: string) => string | undefined,
+  userNameById: (id: string) => string | undefined,
+  defaultUserHandle: string | undefined,
 ): string {
+  const time = formatStdinTimestamp(msg.created_at);
   switch (msg.from_kind) {
     case 'agent': {
-      const name = msg.from_agent_id
+      const handle = msg.from_agent_id
         ? agentNameById(msg.from_agent_id)
         : undefined;
-      return `@${name ?? 'agent'}`;
+      const sender = handle ? `@${handle}` : 'agent';
+      return `msg_id=${msg.id} sender=${sender} type=agent time=${time}`;
     }
-    case 'user':
-      return 'user';
-    case 'system':
-      return 'system';
+    case 'user': {
+      const resolved = msg.from_user_id
+        ? userNameById(msg.from_user_id) ?? defaultUserHandle
+        : defaultUserHandle;
+      const sender = resolved ? `@${resolved}` : 'user';
+      return `msg_id=${msg.id} sender=${sender} type=human time=${time}`;
+    }
+    case 'system': {
+      return `msg_id=${msg.id} sender=system type=system time=${time}`;
+    }
   }
+}
+
+/**
+ * ISO 8601 with local timezone offset (e.g. `2026-05-18T15:42:30+08:00`).
+ * Keeps the agent's view of "when did this happen" honest about both the
+ * absolute instant and the wall clock the human experienced — UTC-only
+ * would lose the latter, and bare local time would lose the former.
+ */
+function formatStdinTimestamp(epochMs: number): string {
+  const d = new Date(epochMs);
+  const pad = (n: number, width = 2): string => String(n).padStart(width, '0');
+  const offsetMin = -d.getTimezoneOffset();
+  const sign = offsetMin >= 0 ? '+' : '-';
+  const offAbs = Math.abs(offsetMin);
+  const offset = `${sign}${pad(Math.floor(offAbs / 60))}:${pad(offAbs % 60)}`;
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+    `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` +
+    offset
+  );
 }
 
 /** Single live message as "A 档" payload — same shape as inbox batches
@@ -2241,12 +2322,19 @@ function describeSender(
 function formatLiveMessage(
   message: MessageLite,
   agentNameById: (id: string) => string | undefined,
+  userNameById: (id: string) => string | undefined,
+  defaultUserHandle: string | undefined,
   recipientAgentName: string | undefined,
   sendMessageTool: string,
 ): string {
-  const sender = describeSender(message, agentNameById);
+  const meta = formatStdinMessageHeader(
+    message,
+    agentNameById,
+    userNameById,
+    defaultUserHandle,
+  );
   const suffix = formatAttachmentSuffix(message.attachments);
-  return `New message from ${sender}:\nmessage_id=${message.id}\n${message.content}${suffix}\n\n${formatDeliveryInstruction(
+  return `New message:\n${meta}\n${message.content}${suffix}\n\n${formatDeliveryInstruction(
     [message],
     recipientAgentName,
     sendMessageTool,
@@ -2254,12 +2342,15 @@ function formatLiveMessage(
 }
 
 /** Minimal projection both InboxRepo's joined rows and MessageRepo
- *  DTOs satisfy — the formatters only need these three fields. */
+ *  DTOs satisfy — the formatters need these fields plus the metadata the
+ *  canonical stdin header carries. */
 interface MessageLite {
   id: string;
   from_kind: FromKind;
   from_agent_id: string | null;
+  from_user_id: string | null;
   content: string;
+  created_at: number;
   attachments?: AttachmentSnapshot[] | null;
 }
 

@@ -552,6 +552,10 @@ describe('ConversationManager.deliverMessage', () => {
 
   it('agent running → writes user message to stdin (gated, but boundary safe at idle)', async () => {
     h = await buildManagerHarness();
+    // The test fixture pre-registers viewer `local` (users.name=`local-test`),
+    // so the human-message header for legacy `from_user_id=NULL` rows
+    // resolves through the viewer-handle fallback — the assertion below
+    // locks `sender=@local-test`, not bare `user`.
     await h.manager.start(h.sessionId, h.agentId);
     await waitInit(h);
 
@@ -572,8 +576,10 @@ describe('ConversationManager.deliverMessage', () => {
     const parsed = JSON.parse(live!);
     expect(parsed.type).toBe('user');
     expect(parsed.message.content[0].text).toContain('live ping');
-    expect(parsed.message.content[0].text).toContain('New message from user');
-    expect(parsed.message.content[0].text).toContain('message_id=msg-live-1');
+    expect(parsed.message.content[0].text).toContain('New message:');
+    expect(parsed.message.content[0].text).toContain('msg_id=msg-live-1');
+    expect(parsed.message.content[0].text).toContain('sender=@local-test');
+    expect(parsed.message.content[0].text).toContain('type=human');
     expect(parsed.message.content[0].text).toContain('silverhand message send');
     expect(parsed.message.content[0].text).toContain(
       'Complete ALL your work before stopping',
@@ -616,6 +622,8 @@ describe('ConversationManager.deliverMessage', () => {
     const live = lines.find(l => l.includes('implementation slice'));
     expect(live).toBeDefined();
     const text = JSON.parse(live!).message.content[0].text;
+    expect(text).toContain('sender=@mock');
+    expect(text).toContain('type=agent');
     expect(text).toContain('Respond as appropriate.');
     expect(text).not.toContain('This is an agent message not addressed to you');
     expect(text).not.toContain('No reply is needed unless');
@@ -1175,8 +1183,8 @@ describe('ConversationManager inbox drain on init', () => {
     const text = parsed.message.content[0].text;
     expect(text).toContain('queued-m1');
     expect(text).toContain('queued-m2');
-    expect(text).toContain('message_id=m1');
-    expect(text).toContain('message_id=m2');
+    expect(text).toContain('msg_id=m1');
+    expect(text).toContain('msg_id=m2');
     expect(text).toContain('2 messages waiting');
     expect(text).toContain('silverhand message send');
     expect(text).toContain('Complete ALL your work before stopping');
