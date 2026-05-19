@@ -824,3 +824,69 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
     transition: none;
   }
 }
+
+/* ── Agent / Human panel — token-driven radius contract (#task:417) ───
+   Every panel surface routes its `border-radius` through the existing
+   per-theme radius tokens declared in `themes/<name>.css`, so a theme
+   author changes one token and every panel hook follows. JSX carries
+   `data-panel-*` hooks but no `rounded-*` class, removing the cascade
+   tug-of-war with Tailwind utilities the previous override pass had
+   to fight (see #task:415 retro for the layer/specificity story).
+
+   Hooks (set in JSX, theme-neutral names):
+
+     [data-panel-card="row"]            Activity / Schedule list rows
+       Long horizontal scan-line surfaces — same vocabulary as message
+       items / saved items. Always 0; treated as records, not tiles.
+
+     [data-panel-card="placeholder"]    Empty / error state strips
+       Dashed scan-line empty states. Always 0 to match row vocabulary.
+
+     [data-panel-card="profile-section"] Profile / FileBlock /
+                                         NotesBlock static cards
+       Static block tiles → `var(--card-radius)` (forza6 6px tile,
+       warm 8px tile).
+
+     [data-panel-pill="*"]              Status / kind / thread /
+                                         presence / path chips
+       → `var(--chip-radius)` (forza6 0, warm 4px).
+
+     [data-panel-tabs]                  Activity / Schedule FilterTabs
+                                         outer frame
+       → `var(--control-radius)` (forza6 0, warm 6px). Inner segment
+       buttons stay squared so the active tab reads as a hard wedge
+       inside the bracket regardless of theme.
+
+     [data-panel-control]               GhostInput / GhostTextarea /
+                                         Select trigger / Select content
+       → `var(--control-radius)` to align with Composer / form input
+       surfaces already on the same token.
+
+   Forza6-specific identity (2px black border, lime hover, display-caps
+   pill typography, dashed stroke on placeholder) lives in
+   `themes/forza6-components.css` and only sets non-radius properties
+   on these hooks. Warm themes pick up no overrides and read as soft
+   tile geometry.
+
+   This block is the single source of truth for panel radius. Do not
+   add `rounded-*` classes back to the JSX hooks above — the cascade
+   bug they reintroduce is the exact issue this contract removes. */
+[data-panel-card='row'],
+[data-panel-card='placeholder'] {
+  border-radius: 0;
+}
+[data-panel-card='profile-section'] {
+  border-radius: var(--card-radius);
+}
+[data-panel-pill] {
+  border-radius: var(--chip-radius);
+}
+[data-panel-tabs] {
+  border-radius: var(--control-radius);
+}
+[data-panel-tabs] button {
+  border-radius: 0;
+}
+[data-panel-control] {
+  border-radius: var(--control-radius);
+}

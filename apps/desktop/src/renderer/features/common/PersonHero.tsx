@@ -122,7 +122,7 @@ export function PresencePill({
   return (
     <span
       data-panel-pill="presence"
-      className="inline-flex items-center gap-1.5 rounded-sm bg-success px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-text-on-success"
+      className="inline-flex items-center gap-1.5 bg-success px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-text-on-success"
     >
       <span className="size-1.5 rounded-full bg-text-on-success/90" />
       {shown}

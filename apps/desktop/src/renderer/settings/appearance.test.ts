@@ -327,62 +327,66 @@ describe('theme markdown token cascade contract', () => {
     }
   });
 
-  /* PR follow-up (#task:415 / #task:416): the agent panel poster
-     contract relies on `forza6-components.css` rules like
-     `[data-theme='forza6'] [data-panel-pill]` winning over Tailwind
-     utilities like `.rounded-sm` that JSX still applies. Two cascade
-     properties make this work today:
+  /* PR follow-up (#task:417): panel radius is token-driven. Every
+     panel hook reads its `border-radius` from `--card-radius` /
+     `--chip-radius` / `--control-radius` (or hard-zero for rows /
+     placeholders) via global.css, so a theme-author change to one
+     token reaches every panel surface and JSX never carries a
+     `rounded-*` class on the hook elements that would fight the
+     contract.
 
-       1. `forza6-components.css` is imported AFTER `tailwindcss` and
-          is NOT wrapped in any `@layer`. Tailwind v4's `@import
-          "tailwindcss"` puts utilities into `@layer utilities`, so an
-          unlayered rule beats them regardless of specificity.
-       2. The `[data-theme='forza6'] [data-panel-*]` selectors are
-          (0,2,0), strictly higher than `.rounded-sm` (0,1,0). Even
-          inside a hypothetical layer the specificity still wins.
+     This test pins the four invariants that make that work:
 
-     If a future change moves the import into `@layer components` (a
-     reasonable refactor on its face — Tailwind docs even suggest it
-     for "your own component classes"), property #1 collapses and the
-     panel surfaces silently revert to the warm-theme `--radius-sm`
-     value because Tailwind utilities now sit in a later layer than
-     the component rules. This test locks both invariants so the
-     regression shows up here, not in a screenshot months later.
+       1. The panel block lives in `global.css`, NOT in
+          `forza6-components.css` (the previous override pass had it
+          there and depended on cascade-layer + specificity tricks
+          to win over Tailwind — see #task:415 retro).
+       2. Long rows + placeholders are hard zero (chat-surface scan
+          line vocabulary; same as message items / saved items).
+       3. Static cards consume `--card-radius`; pills consume
+          `--chip-radius`; tabs + controls consume `--control-radius`.
+          Inner tab segment buttons are explicitly squared so the
+          active tab reads as a hard wedge inside the bracket.
+       4. `forza6-components.css` carries NO `border-radius` on the
+          panel hooks — its job is now non-radius identity only
+          (poster border, lime hover, dashed stroke, display caps).
 
-     See conversation #conv:m-jmqBPrOO8gkYsp for the back-and-forth
-     that produced this lock. */
-  it('keeps forza6-components.css unlayered and ordered after tailwindcss', () => {
-    const lines = globalCss.split('\n');
-    const tailwindIdx = lines.findIndex(l =>
-      l.match(/^@import\s+"tailwindcss"\s*;/),
+     This test replaces the previous "forza6-components.css unlayered
+     + post-tailwind import" lock (#task:415), which became
+     unnecessary once the radius contract no longer depends on the
+     unlayered/layered cascade order. */
+  it('routes every agent-panel hook radius through global.css tokens', () => {
+    // (1) global.css owns the panel radius block.
+    expect(globalCss).toMatch(
+      /\[data-panel-card='row'\][\s\S]{0,200}border-radius:\s*0\b/,
     );
-    const forza6ComponentsIdx = lines.findIndex(l =>
-      l.includes('@import "./themes/forza6-components.css"'),
+    expect(globalCss).toMatch(
+      /\[data-panel-card='placeholder'\][\s\S]{0,200}border-radius:\s*0\b/,
     );
-    expect(tailwindIdx).toBeGreaterThanOrEqual(0);
-    expect(forza6ComponentsIdx).toBeGreaterThan(tailwindIdx);
+    expect(globalCss).toMatch(
+      /\[data-panel-card='profile-section'\][\s\S]{0,200}border-radius:\s*var\(--card-radius\)/,
+    );
+    expect(globalCss).toMatch(
+      /\[data-panel-pill\][\s\S]{0,200}border-radius:\s*var\(--chip-radius\)/,
+    );
+    expect(globalCss).toMatch(
+      /\[data-panel-tabs\][\s\S]{0,200}border-radius:\s*var\(--control-radius\)/,
+    );
+    expect(globalCss).toMatch(
+      /\[data-panel-tabs\]\s+button[\s\S]{0,200}border-radius:\s*0\b/,
+    );
+    expect(globalCss).toMatch(
+      /\[data-panel-control\][\s\S]{0,200}border-radius:\s*var\(--control-radius\)/,
+    );
 
-    // No `@layer` block opens before the forza6-components import that
-    // hasn't already closed. We approximate this with a depth counter:
-    // every `@layer name { … }` increments depth at `{`, decrements at
-    // `}`. The forza6-components import line must land at depth 0.
-    let depth = 0;
-    for (let i = 0; i < forza6ComponentsIdx; i++) {
-      const line = lines[i] ?? '';
-      if (/^@layer\s+[^;]*\{/.test(line.trim())) depth++;
-      // Closing braces — only count ones that close an @layer block,
-      // approximated by counting trailing `}` at depth > 0.
-      const closes = (line.match(/\}/g) ?? []).length;
-      const opens = (line.match(/\{/g) ?? []).length - (depth > 0 ? 1 : 0);
-      depth = Math.max(0, depth + opens - closes);
-    }
-    expect(depth).toBe(0);
-
-    // `forza6-components.css` itself must not start with `@layer …`.
+    // (4) forza6-components.css must NOT redeclare radius on these
+    // hooks — its scope is now non-radius identity only.
     const forza6ComponentsCss = readFileSync(
       new URL('../styles/themes/forza6-components.css', import.meta.url),
       'utf8',
     );
-    expect(forza6ComponentsCss.trimStart()).not.toMatch(/^@layer\b/);
+    const panelHookRadiusRegex =
+      /\[data-panel-(?:card|pill|tabs|control)[^\]]*\][\s\S]{0,400}?\bborder-radius:/g;
+    expect(forza6ComponentsCss.match(panelHookRadiusRegex)).toBeNull();
   });
 });

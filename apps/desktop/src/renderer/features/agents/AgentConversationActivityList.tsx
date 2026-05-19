@@ -81,7 +81,7 @@ export function AgentConversationActivityList({
       {rows.length === 0 ? (
         <div
           data-panel-card="placeholder"
-          className="rounded-sm border border-dashed border-border-subtle px-4 py-6 text-center text-xs text-text-muted"
+          className="border border-dashed border-border-subtle px-4 py-6 text-center text-xs text-text-muted"
         >
           {emptyMessage(filter, all.length)}
         </div>
@@ -172,7 +172,7 @@ function ActivityCard({
     <li
       data-panel-card="row"
       className={cn(
-        'relative overflow-hidden rounded-sm border border-border-subtle bg-bg-floating/50 px-4 py-3 transition-colors hover:bg-bg-hover/60',
+        'relative overflow-hidden border border-border-subtle bg-bg-floating/50 px-4 py-3 transition-colors hover:bg-bg-hover/60',
         closed ? 'opacity-70' : '',
       )}
     >
@@ -200,7 +200,7 @@ function ActivityCard({
             {row.thread_title ? (
               <span
                 data-panel-pill="thread"
-                className="inline-flex items-center rounded-sm bg-bg-base px-2 py-0.5 text-[11px] text-text-secondary"
+                className="inline-flex items-center bg-bg-base px-2 py-0.5 text-[11px] text-text-secondary"
               >
                 {row.thread_title}
               </span>
@@ -267,7 +267,7 @@ function StatusPill({
     return (
       <span
         data-panel-pill="status"
-        className="inline-flex items-center rounded-sm bg-bg-base px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted"
+        className="inline-flex items-center bg-bg-base px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted"
       >
         closed
       </span>
@@ -285,7 +285,7 @@ function StatusPill({
     <span
       data-panel-pill="status"
       className={cn(
-        'inline-flex items-center rounded-sm px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
+        'inline-flex items-center px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
         cls,
       )}
     >
@@ -394,7 +394,7 @@ function FilterTabs({
   return (
     <div
       data-panel-tabs
-      className="flex shrink-0 items-center rounded-sm border border-border-subtle bg-bg-base p-0.5"
+      className="flex shrink-0 items-center border border-border-subtle bg-bg-base p-0.5"
     >
       {FILTERS.map(opt => (
         <button
@@ -402,7 +402,7 @@ function FilterTabs({
           type="button"
           onClick={() => onChange(opt.value)}
           className={cn(
-            'rounded-sm px-2 py-0.5 text-[11px] transition-colors',
+            'px-2 py-0.5 text-[11px] transition-colors',
             opt.value === value
               ? 'bg-bg-floating text-text-primary'
               : 'text-text-muted hover:text-text-primary',

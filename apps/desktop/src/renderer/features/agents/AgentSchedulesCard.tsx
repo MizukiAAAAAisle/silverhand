@@ -82,7 +82,7 @@ export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps): JSX.El
       {query.isError ? (
         <div
           data-panel-card="placeholder"
-          className="rounded-sm border border-dashed border-error/40 bg-error/5 px-3 py-2 text-xs text-error"
+          className="border border-dashed border-error/40 bg-error/5 px-3 py-2 text-xs text-error"
         >
           Failed to load schedules.
         </div>
@@ -93,7 +93,7 @@ export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps): JSX.El
       ) : rows.length === 0 ? (
         <div
           data-panel-card="placeholder"
-          className="rounded-sm border border-dashed border-border-subtle px-4 py-6 text-center text-xs text-text-muted"
+          className="border border-dashed border-border-subtle px-4 py-6 text-center text-xs text-text-muted"
         >
           {filter === 'active'
             ? 'No active schedules.'
@@ -135,7 +135,7 @@ function ScheduleItem({
     <li
       data-panel-card="row"
       className={cn(
-        'flex items-center gap-3 rounded-sm border border-border-subtle bg-bg-floating/50 px-4 py-3 transition-colors hover:bg-bg-hover/60',
+        'flex items-center gap-3 border border-border-subtle bg-bg-floating/50 px-4 py-3 transition-colors hover:bg-bg-hover/60',
         terminal ? 'opacity-70' : '',
       )}
     >
@@ -206,7 +206,7 @@ function KindChip({
     <span
       data-panel-pill="kind"
       className={cn(
-        'grid size-9 shrink-0 place-items-center rounded-sm',
+        'grid size-9 shrink-0 place-items-center',
         cls,
       )}
       title={kind}
@@ -273,7 +273,7 @@ function StatusPill({ status }: { status: ScheduleStatus }): JSX.Element {
     <span
       data-panel-pill="status"
       className={cn(
-        'inline-flex items-center rounded-sm px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
+        'inline-flex items-center px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
         cls,
       )}
     >
@@ -292,7 +292,7 @@ function FilterTabs({
   return (
     <div
       data-panel-tabs
-      className="flex shrink-0 items-center rounded-sm border border-border-subtle bg-bg-base p-0.5"
+      className="flex shrink-0 items-center border border-border-subtle bg-bg-base p-0.5"
     >
       {STATUS_FILTERS.map(opt => (
         <button
@@ -300,7 +300,7 @@ function FilterTabs({
           type="button"
           onClick={() => onChange(opt.value)}
           className={cn(
-            'rounded-sm px-2 py-0.5 text-[11px] transition-colors',
+            'px-2 py-0.5 text-[11px] transition-colors',
             opt.value === value
               ? 'bg-bg-floating text-text-primary'
               : 'text-text-muted hover:text-text-primary',

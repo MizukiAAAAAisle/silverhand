@@ -67,7 +67,7 @@ export function ProfileSection({
       </header>
       <div
         data-panel-card="profile-section"
-        className="rounded-sm border border-border-subtle/60 bg-bg-floating/50 p-4"
+        className="border border-border-subtle/60 bg-bg-floating/50 p-4"
       >
         {children}
       </div>

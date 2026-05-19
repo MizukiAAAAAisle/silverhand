@@ -716,59 +716,23 @@
    outside the global rule for the same reason they used to sit outside
    the forza6 override. */
 
-/* ── Agent / Human panel — poster geometry via existing tokens
-   (#task:411 / #task:414) ──────────────────────────────────────────
-   shiki `koeB7pWjvSQR3r5f` flagged that `rounded-sm` (4px) still felt
-   too round under forza6. The first cut answered with a hard-coded
-   `2px radius + 2px black border` everywhere; shiki + Cindy
-   `JNDDsHGSgS2MaX5-` then pointed out that the literal 2px did not
-   match forza6's existing token contract:
+/* ── Agent / Human panel — forza6 poster identity (#task:417) ─────────
+   Radius for every panel hook is now defined in `global.css` against
+   the per-theme tokens (`--card-radius` / `--chip-radius` /
+   `--control-radius`). This block keeps only the forza6-only
+   *non-radius* identity layered on top of those hooks: the 2px black
+   poster frame, lime hover preview on rows, dashed stroke on
+   placeholders, display-caps typography on pills, the AgentSidebar
+   selected = lime + 2px black recipe.
 
-     - `--control-radius: 0`, `--chip-radius: 0`,
-       `--select-content-radius: 0`, `--radius-inline-code: 0`
-       — controls / chips / inline runs are hard-zero in forza6.
-     - `--card-radius: 6px` — static block cards keep the "Forza
-       tile feel" radius.
-     - Long horizontal rows (message item, saved item, conversation
-       activity row, schedule row) follow the chat surface vocabulary
-       and stay at 0, like list-of-records scan lines, NOT tile cards.
-
-   The block below routes every panel hook through that contract
-   instead of adding a third literal value:
-
-     Pills / tabs / controls / sidebar nav buttons → `var(--chip-radius)`
-       or `var(--control-radius)` (= 0 in forza6, = 4–6px in warm).
-     Long rows (`data-panel-card='row'`) → 0 (chat-surface vocabulary).
-     Static cards (`data-panel-card='profile-section'`) →
-       `var(--card-radius)` (= 6px tile in forza6).
-     Empty / error placeholders → 0 (treated as dashed scan lines,
-       not tile cards).
-
-   Hooks (set in JSX, theme-neutral names):
-     - `data-panel-card="row"`        Activity / Schedule list rows
-     - `data-panel-card="placeholder"` Empty / error state strips
-     - `data-panel-card="profile-section"` ProfileSummarySections /
-                                       FileBlock / NotesBlock cards
-     - `data-panel-pill="status"`     ConversationAgentStatus /
-                                       ScheduleStatus chip
-     - `data-panel-pill="kind"`       Schedule kind chip
-     - `data-panel-pill="thread"`     Thread title pill
-     - `data-panel-pill="presence"`   PersonHero presence tag
-     - `data-panel-pill="path"`       Workspace path code chip
-     - `data-panel-tabs`              Activity / Schedule FilterTabs
-     - `data-panel-control`           GhostInput / GhostTextarea /
-                                       Select trigger / Select content
-
-   The 2px black frame stays — that is the poster identity, separate
-   from the radius decision. Colour / padding / typography stay
-   driven by Tailwind classes in JSX. */
+   See `global.css` "Agent / Human panel — token-driven radius
+   contract" for the radius source of truth. The history of how this
+   contract evolved (#task:411 hard-coded 2px → #task:414 token
+   refactor → #task:415 cascade-layer lock → #task:417 token-only
+   refactor that retired the lock) is captured in
+   `#conv:m-jmqBPrOO8gkYsp`. */
 [data-theme='forza6'] [data-panel-card] {
   border: 2px solid #0A0A0A;
-}
-[data-theme='forza6'] [data-panel-card='row'] {
-  /* Long horizontal scan-line surfaces — same vocabulary as message
-     items / saved items. Hard zero, never a tile. */
-  border-radius: 0;
 }
 [data-theme='forza6'] [data-panel-card='row']:hover {
   /* Lime preview — same vocabulary as task card / sidebar / NavRail
@@ -777,58 +741,35 @@
   color: #0A0A0A;
 }
 [data-theme='forza6'] [data-panel-card='placeholder'] {
-  /* Empty / error state — dashed strip with hard corners, not a
-     dashed tile. Keeps the dashed border treatment but drops the
-     2px radius the first cut applied. */
+  /* Empty / error state — dashed stroke is the only forza6-specific
+     identity here; corners are squared via `--card-radius`-free
+     declaration in global.css. */
   border-style: dashed;
   border-width: 2px;
-  border-radius: 0;
-}
-[data-theme='forza6'] [data-panel-card='profile-section'] {
-  /* Static block container — the only "tile" surface in the panel
-     family. Inherits `--card-radius: 6px` from forza6.css:38, the
-     "tighter than warm 8px — Forza tile feel" value. */
-  border-radius: var(--card-radius);
 }
 
 [data-theme='forza6'] [data-panel-pill] {
-  /* `--chip-radius: 0` in forza6, `4px` in warm. Display-caps
-     typography stays — the pill identity is type + saturation, not
-     shape. */
-  border-radius: var(--chip-radius);
+  /* Pill identity is type + saturation — caps + heavier tracking. */
   font-family: var(--font-display);
   letter-spacing: 0.06em;
   font-weight: 700;
 }
 
 [data-theme='forza6'] [data-panel-tabs] {
-  /* Outer frame inherits the panel's 2px black border; radius drops
-     to `--control-radius` (0 in forza6) so the frame reads as a hard
-     bracket instead of a softened pill. Inner segment buttons stay
-     squared. */
+  /* Outer poster bracket only — radius drops to 0 via
+     `--control-radius` in global.css. */
   border: 2px solid #0A0A0A;
-  border-radius: var(--control-radius);
   padding: 0;
-}
-[data-theme='forza6'] [data-panel-tabs] button {
-  border-radius: 0;
-}
-
-[data-theme='forza6'] [data-panel-control] {
-  /* Inputs / select triggers / select popovers — typing surfaces,
-     not poster cards. `--control-radius` resolves to 0 in forza6
-     and matches `--control-radius: 0` already applied to Composer
-     and other input surfaces. Border colour follows the existing
-     `--border-focus` magenta on focus. */
-  border-radius: var(--control-radius);
 }
 
 /* AgentSidebar buttons — control-surface semantics (the rail is a
    navigation control, not a tile). Selected = lime fill + 2px black
-   border + `--control-radius`; hover (unselected) = lime preview
-   ground so hover reads as a preview of the selected state. */
+   border + `--control-radius` (= 0 in forza6); hover (unselected) =
+   lime preview ground so hover reads as a preview of the selected
+   state. Radius is supplied by the global rule on
+   `[data-panel-control]`-style controls; here we only paint the
+   forza6 lime/black surface treatment. */
 [data-theme='forza6'] aside[aria-label='Agent sections'] button {
-  border-radius: var(--control-radius);
   border: 2px solid transparent;
 }
 [data-theme='forza6']

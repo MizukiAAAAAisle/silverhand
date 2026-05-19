@@ -50,7 +50,7 @@ function PathBar({ path }: { path: string }): JSX.Element {
     <div className="flex shrink-0 items-center gap-1 text-xs text-text-muted">
       <code
         data-panel-pill="path"
-        className="max-w-[260px] truncate rounded-sm bg-bg-base px-2 py-0.5 font-mono"
+        className="max-w-[260px] truncate bg-bg-base px-2 py-0.5 font-mono"
         dir="rtl"
         title={path}
       >
@@ -90,7 +90,7 @@ function FileBlock({
     return (
       <div
         data-panel-card="placeholder"
-        className="rounded-sm border border-dashed border-border-subtle px-3 py-2 text-xs text-text-muted"
+        className="border border-dashed border-border-subtle px-3 py-2 text-xs text-text-muted"
       >
         {title} — not present yet
       </div>
@@ -99,7 +99,7 @@ function FileBlock({
   return (
     <div
       data-panel-card="profile-section"
-      className="overflow-hidden rounded-sm border border-border-subtle"
+      className="overflow-hidden border border-border-subtle"
     >
       <button
         type="button"
@@ -136,7 +136,7 @@ function NotesBlock({
   return (
     <div
       data-panel-card="profile-section"
-      className="overflow-hidden rounded-sm border border-border-subtle"
+      className="overflow-hidden border border-border-subtle"
     >
       <button
         type="button"

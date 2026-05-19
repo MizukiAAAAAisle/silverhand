@@ -370,7 +370,7 @@ const GhostInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputEle
       ref={ref}
       data-panel-control="ghost-input"
       className={cn(
-        'w-full rounded-sm border border-transparent bg-transparent px-2 py-1 text-sm text-text-primary placeholder:text-text-muted',
+        'w-full border border-transparent bg-transparent px-2 py-1 text-sm text-text-primary placeholder:text-text-muted',
         'transition-colors hover:border-border-subtle hover:bg-bg-base/40',
         'focus:border-border focus:bg-bg-floating focus:outline-none focus:ring-2 focus:ring-border-focus',
         className,
@@ -389,7 +389,7 @@ const GhostTextarea = forwardRef<
     ref={ref}
     data-panel-control="ghost-textarea"
     className={cn(
-      'w-full resize-none rounded-sm border border-transparent bg-transparent px-2 py-1.5 text-sm leading-relaxed text-text-primary placeholder:text-text-muted',
+      'w-full resize-none border border-transparent bg-transparent px-2 py-1.5 text-sm leading-relaxed text-text-primary placeholder:text-text-muted',
       'transition-colors hover:border-border-subtle hover:bg-bg-base/40',
       'focus:border-border focus:bg-bg-floating focus:outline-none focus:ring-2 focus:ring-border-focus',
       className,
@@ -403,7 +403,7 @@ GhostTextarea.displayName = 'GhostTextarea';
 
 function selectTriggerClass(disabled: boolean): string {
   return cn(
-    'flex h-8 w-full items-center justify-between rounded-sm border border-transparent bg-transparent px-2 text-sm text-text-primary',
+    'flex h-8 w-full items-center justify-between border border-transparent bg-transparent px-2 text-sm text-text-primary',
     'transition-colors hover:border-border-subtle hover:bg-bg-base/40',
     'data-[state=open]:border-border data-[state=open]:bg-bg-floating',
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus',
@@ -412,7 +412,7 @@ function selectTriggerClass(disabled: boolean): string {
 }
 
 function selectContentClass(): string {
-  return 'z-50 min-w-[var(--radix-select-trigger-width)] rounded-sm border border-border bg-bg-floating p-1 text-sm shadow-popover';
+  return 'z-50 min-w-[var(--radix-select-trigger-width)] border border-border bg-bg-floating p-1 text-sm shadow-popover';
 }
 
 function selectItemClass(): string {
