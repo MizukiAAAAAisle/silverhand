@@ -23,7 +23,7 @@ that injects them on every spawn.
 
 | Path | Tier | Scope | Who writes |
 | --- | --- | --- | --- |
-| `~/.silverhand/agents/<id>/system_prompt.md` | L1 | global (all workspaces) | the agent in **its DM only** |
+| `~/.silverhand/agents/<id>/system_prompt.md` | L1 | global (all workspaces) | the agent (any workspace), guided by the scope rule |
 | `<workspace>/.silverhand/agents/<id>/MEMORY.md` | L2 | one workspace | the agent in that workspace |
 | `<workspace>/.silverhand/agents/<id>/notes/*` | L2 | one workspace | the agent in that workspace |
 | `<workspace>/.silverhand/CONSENSUS.md` | workspace | one workspace | every member, by agreement |
@@ -32,11 +32,23 @@ For an agent's DM workspace (`workspace_kind = 'agent_home'`), the
 workspace path **coincides with** the L1 directory:
 `workspace_path = ~/.silverhand/agents/<id>`. So the same physical
 `MEMORY.md` and `notes/` serve as the DM's L2. There is no separate
-"DM-L2" copy.
+"DM-L2" copy. The DM workspace does **not** carry a `CONSENSUS.md` — a
+DM has only one member, so the prompt skips the Workspace Consensus
+section in `agent_home`.
 
 There is no L2 `system_prompt.md`. The role contract is L1-only and is
 read directly from `~/.silverhand/agents/<id>/system_prompt.md` by the
-system-prompt assembler at every spawn.
+system-prompt assembler at every spawn. The single-source-of-truth
+invariant is "L1 is the only place `system_prompt.md` exists" — there
+is no write-side restriction on which workspace may edit it. Agents
+decide where to write by **scope**:
+
+- **Global** (identity / role / working-style guidance) → L1
+  `system_prompt.md`. Picked up by every workspace on the agent's next
+  spawn.
+- **Workspace-scoped** (collaboration patterns, project facts, work
+  logs, consensus rules) → that workspace's L2 `MEMORY.md` / `notes/`,
+  or `CONSENSUS.md` for rules every member must respect.
 
 ## Why no L2 system_prompt
 
@@ -49,9 +61,8 @@ workspace. In practice that meant:
    placeholder if nothing had ever been shaped at L1 first.
 3. Every new workspace prompted the user to "tell me my role" again.
 
-The fix is to drop the L2 copy and read from L1 directly. The agent in
-a non-DM workspace treats the role as read-only; if the user wants a
-global change there, the agent redirects to the DM.
+The fix is to drop the L2 copy and read from L1 directly. There is now
+exactly one `system_prompt.md` per agent.
 
 ## Spawn-time prompt assembly
 
@@ -88,17 +99,20 @@ the operating manual, so the agent sees them up-front.
 ## Onboarding contract
 
 ### DM (`agent_home`) onboarding
-Tells the agent it is in its personal DM and that this DM is the
-**only** place where its global identity (L1 `system_prompt.md`) may be
-edited. When the user gives durable role guidance, the agent updates L1
-directly.
+Tells the agent it is in its personal DM, that L1 `system_prompt.md` is
+shared across every workspace, and that this DM also has its own L2
+MEMORY/notes. Updates to L1 from anywhere propagate everywhere on the
+next spawn. The agent decides where to write by scope (global → L1;
+DM-local notes → DM's L2).
 
 ### Regular workspace onboarding
 Tells the agent its role is auto-loaded from L1 and that workspace-scoped
-collaboration patterns belong in this workspace's MEMORY.md / notes/.
-If the user asks for a global role change, the agent redirects them to
-the DM — it does **not** attempt to act in the DM from here. There is
-no cross-conversation execution face.
+collaboration patterns belong in this workspace's MEMORY.md / notes/. The
+same scope rule applies: global identity goes to L1, workspace-scoped
+guidance goes to L2. There is no execution face that lets the agent jump
+to a different conversation; all writes happen in the agent's current
+process, which is fine because L1 is a real file the agent can edit
+in-place.
 
 ## Host-equality is a membership precondition, not a runtime filter
 
@@ -133,7 +147,12 @@ Manual. There is no programmatic migration script:
 ## Anti-patterns to keep out
 
 - **Do not re-introduce L2 `system_prompt.md`.** Even as a "fallback"
-  it re-creates the duplication this design is fixing.
+  it re-creates the duplication this design is fixing. The invariant is
+  "L1 is the only place `system_prompt.md` exists" — there is no
+  per-workspace copy.
+- **Do not re-introduce a write-side restriction on L1.** The role can
+  be edited from any workspace; agents pick the layer by **scope** of
+  the guidance, not by which channel they happen to be in.
 - **Do not auto-inject MEMORY.md from peer workspaces.** Cross-context
   pollution risk; the workspace memory index is path-only on purpose.
 - **Do not push agent-side `Read MEMORY.md first` instructions** —
@@ -141,3 +160,7 @@ Manual. There is no programmatic migration script:
 - **Do not add a host-id filter inside `buildWorkspaceMemoryIndex`.**
   Host equality is enforced at membership time; runtime filtering is
   redundant and can mask membership bugs.
+- **Do not render Workspace Consensus in `agent_home`.** The DM
+  workspace has only one member, so there is no "consensus" to record;
+  the prompt would otherwise nudge the agent to create a stray
+  `.silverhand/CONSENSUS.md` under the L1 directory.

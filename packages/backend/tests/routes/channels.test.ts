@@ -63,8 +63,14 @@ describe('POST /api/workspaces', () => {
     );
     expect(onboardingMessages[0].content).toContain('auto-loaded above');
     expect(onboardingMessages[0].content).toContain('Active Workspace Memory');
-    expect(onboardingMessages[0].content).toContain('do NOT modify your global system_prompt.md');
-    expect(onboardingMessages[0].content).toContain('redirect them to your DM');
+    // Scope rule: global → L1 system_prompt.md, workspace-scoped → L2.
+    // Drift guard for R1: must NOT contain "DM-only / redirect-to-DM"
+    // wording — that restriction was retracted.
+    expect(onboardingMessages[0].content).toContain('write by scope');
+    expect(onboardingMessages[0].content).toContain('L1 system_prompt.md');
+    expect(onboardingMessages[0].content).toContain('L2 MEMORY.md');
+    expect(onboardingMessages[0].content).not.toMatch(/redirect them to your DM/i);
+    expect(onboardingMessages[0].content).not.toMatch(/do NOT modify your global system_prompt\.md/i);
 
     const members = await (
       await http(t).get(`/api/workspaces/${body.workspace.id}/members`)

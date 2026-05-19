@@ -333,8 +333,8 @@ function onboardingBody(
       ? `You're the only agent here right now.`
       : `Other agents in this workspace:\n${others.map(m => `- @${m.name} (${m.runtime})`).join('\n')}`,
     ``,
-    `This is your first onboarding message in this workspace. Your role contract is auto-loaded above (sourced from your global L1 system_prompt.md), and this workspace's MEMORY.md is auto-loaded under "Active Workspace Memory" — skim them before replying.`,
-    `Send one short greeting introducing yourself by your global role. If the user later wants to refine how you collaborate inside this specific workspace (review pairings, hand-off rules, etc.), capture that in this workspace's MEMORY.md or notes/ — do NOT modify your global system_prompt.md from here. If the user asks for a global role change, redirect them to your DM.`,
+    `Your role contract is auto-loaded above (sourced from L1 system_prompt.md, shared across every workspace), and this workspace's MEMORY.md is auto-loaded as Active Workspace Memory.`,
+    `Send one short greeting introducing yourself by your global role. As you work, write by scope: global identity / role / working-style guidance → update L1 system_prompt.md; this workspace's collaboration, tasks, project facts, or work logs → update L2 MEMORY.md / notes/ / CONSENSUS.md. Do not mention internal file paths to the user unless they ask.`,
   ].join('\n');
 }
 
@@ -1906,8 +1906,8 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
         fromKind: 'system',
         content: [
           `You (@${agent.name}) are now in your personal DM with the user.`,
-          `This DM is the **only** place where your global identity lives — your role contract at L1 \`system_prompt.md\` is shared across every workspace you join, and updates here propagate everywhere on the agent's next spawn.`,
-          `Send one short greeting: say hi by name, state your current global role briefly (or say it is not defined yet), and ask what role the user would like you to play. When the user gives durable role guidance, write it into your L1 \`system_prompt.md\` in this DM — that is what makes the role stick across workspaces. Do not mention internal file paths to the user unless they ask.`,
+          `Your role contract lives at L1 \`system_prompt.md\` and is shared across every workspace; updates to it propagate everywhere on the agent's next spawn. This DM also has its own L2 \`MEMORY.md\` / \`notes/\` for memory that stays here.`,
+          `Send one short greeting: say hi by name, state your current global role briefly (or say it is not defined yet), and ask what role the user would like you to play. Write by scope: global identity / role / working-style guidance → update L1 \`system_prompt.md\`; DM-local notes → update this DM's \`MEMORY.md\` / \`notes/\`. Do not mention internal file paths to the user unless they ask.`,
         ].join('\n'),
         metadata: { subtype: systemSubtype('onboarding') },
       });

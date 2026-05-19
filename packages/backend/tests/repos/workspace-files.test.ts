@@ -150,12 +150,18 @@ describe('seedAgentL2 + ensureAgentL1Dir', () => {
       'utf8',
     );
 
-    // New-model phrasing.
-    expect(guide).toContain('L1 — agent identity');
-    expect(guide).toContain('L2 — workspace memory');
-    expect(guide).toContain('DM-only writes');
+    // New-model phrasing — the four-file scope skeleton.
+    expect(guide).toContain('Identity is global.');
+    expect(guide).toContain('Workspace memory is local.');
+    expect(guide).toContain('Write by scope.');
+    expect(guide).toContain('Current vs reference.');
     // Old-model phrasing must not survive.
     expect(guide).not.toContain('update system_prompt.md first');
+    // R1 drift guard: the retracted "DM-only writes" wording must not
+    // come back. The invariant is "L1 is the only place
+    // system_prompt.md exists", not "only the DM may edit it".
+    expect(guide).not.toMatch(/DM-only writes/i);
+    expect(guide).not.toMatch(/redirect them to your DM/i);
   });
 
   it('preserves existing notes files on re-seed', async () => {

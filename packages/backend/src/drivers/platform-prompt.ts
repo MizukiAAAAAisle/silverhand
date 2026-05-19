@@ -54,12 +54,16 @@ export interface PlatformPromptInput {
   /** Current active `system_prompt.md` content (read from L1). Appended
    *  as the "Initial role" tail. */
   roleSystemPrompt: string;
-  /** Auto-injected current-workspace MEMORY.md content (capped). Empty
-   *  string when the file is absent or unreadable. */
-  currentMemory: string;
-  /** Auto-injected workspace `CONSENSUS.md` content (capped). Empty
-   *  string when the file is absent or unreadable. */
-  currentConsensus: string;
+  /** Auto-injected current-workspace MEMORY.md content. Discriminated:
+   *  `present` carries the (already capped) body, `missing` shows a
+   *  create-one hint, `unreadable` shows an explicit error so the agent
+   *  does not falsely conclude the file is absent. */
+  currentMemory: InjectedFileContent;
+  /** Auto-injected workspace `CONSENSUS.md`. `null` means the section
+   *  should be omitted entirely (e.g. DM workspaces have no concept of
+   *  consensus); otherwise same discriminated semantics as
+   *  `currentMemory`. */
+  currentConsensus: InjectedFileContent | null;
   /** Index of every workspace this agent is a member of. The current
    *  workspace's entry is labeled with " (current)". Used so DM /
    *  workspace agents can address paths to peer workspaces' MEMORY.md
@@ -150,19 +154,22 @@ export function buildPlatformPrompt(input: PlatformPromptInput): string {
     relPath: memoryPath,
     description:
       'This is the current workspace\'s MEMORY.md, auto-loaded for you. Treat it as your recovery index. Edit it to add/update Key Knowledge entries or the current Active Context; keep durable detail in the linked notes/ files.',
-    body: input.currentMemory,
+    content: input.currentMemory,
     missingHint:
       'No MEMORY.md exists yet. Create one at the path above when you first capture durable knowledge for this workspace.',
   });
-  const consensusBlock = renderInjectedFile({
-    title: 'Workspace Consensus',
-    relPath: './.silverhand/CONSENSUS.md',
-    description:
-      'Workspace-wide agreements every member must respect. Auto-loaded for you here so you do not need to open the file. Edit only when the whole workspace has agreed; keep it under 2KB.',
-    body: input.currentConsensus,
-    missingHint:
-      'No CONSENSUS.md exists yet. Create one only when the workspace has reached an agreement everyone must follow.',
-  });
+  const consensusBlock =
+    input.currentConsensus === null
+      ? ''
+      : renderInjectedFile({
+          title: 'Workspace Consensus',
+          relPath: './.silverhand/CONSENSUS.md',
+          description:
+            'Workspace-wide agreements every member must respect. Auto-loaded for you here so you do not need to open the file. Edit only when the whole workspace has agreed; keep it under 2KB.',
+          content: input.currentConsensus,
+          missingHint:
+            'No CONSENSUS.md exists yet. Create one only when the workspace has reached an agreement everyone must follow.',
+        });
   const memoryIndexBlock = renderWorkspaceMemoryIndex(input.workspaceMemoryIndex);
 
   return `You are **@${input.agentName}**, an agent collaborating with humans and other
@@ -227,32 +234,24 @@ ${renderSilverhandCliManual()}
 
 ## Active Profile Files
 
-Two tiers of files back your runtime context. The **role contract is L1
-(global)**; **memory and notes are L2 (per-workspace)**.
+- **Identity is global.** \`~/.silverhand/agents/${input.agentId}/system_prompt.md\`
+  is the only source of who you are, and it applies in every workspace.
+  Auto-loaded as **Initial role** below.
+- **Workspace memory is local.** \`${memoryPath}\` (auto-loaded as **Active
+  Workspace Memory** below) plus \`${notesDir}/\` describe what is true in
+  this workspace; \`./.silverhand/CONSENSUS.md\` is the rules every member
+  here must respect.
+- **Write by scope.** Global identity / role / working-style guidance from
+  the user → update L1 \`system_prompt.md\`. Guidance about this workspace's
+  collaboration, tasks, project facts, or work logs → update L2
+  (\`MEMORY.md\` / \`notes/\` / \`CONSENSUS.md\`).
+- **Current vs reference.** The current workspace's MEMORY.md and CONSENSUS
+  are already loaded for you. Other workspaces appear in **Workspace Memory
+  Index** as paths only — open one with your file tools only when the task
+  needs cross-workspace context.
 
-L1 — agent identity, shared across every workspace:
-- \`~/.silverhand/agents/${input.agentId}/system_prompt.md\` — your canonical
-  role contract. Auto-loaded as the **Initial role** section below. **Only
-  edit it from your DM** (your personal channel with the user). Updates
-  there are picked up by every workspace on the agent's next spawn. In
-  any non-DM workspace, treat the role as read-only here: if the user
-  wants a global role change, tell them to give the guidance in your DM.
-- \`~/.silverhand/agents/${input.agentId}/MEMORY.md\` and
-  \`~/.silverhand/agents/${input.agentId}/notes/\` — your DM workspace's
-  L2 memory (the DM workspace path coincides with this L1 directory).
-  Update these only when the user is interacting with you in DM.
-
-L2 — workspace-scoped memory and collaboration log (current workspace shown
-here as \`${profileDir}\`):
-- \`${memoryPath}\` — your compact recovery index for THIS workspace.
-  Auto-loaded as **Active Workspace Memory** below. Keep only Key Knowledge
-  links and the current Active Context / handoff. It must not duplicate the
-  role contract.
-- \`${notesDir}/\` — detailed knowledge files (one per topic). Reference them
-  from MEMORY.md so future-you can find them.
-
-These file paths are internal working context. Do not mention them to the
-user unless they ask.
+These paths are internal working context. Do not mention them to the user
+unless they ask.
 
 ### What to memorize (observe and record proactively)
 
@@ -620,26 +619,62 @@ interface InjectedFileSection {
   title: string;
   relPath: string;
   description: string;
-  body: string;
+  content: InjectedFileContent;
   missingHint: string;
 }
 
 /**
- * Render an auto-injected file section. Empty `body` renders the
- * `missingHint`; non-empty body is fenced and tagged with the source
- * path so the model can distinguish it from prose. Truncated content
- * (caller-applied cap) is signalled via a trailing `_(truncated)_`
- * marker that the caller appends; this renderer treats body as opaque.
+ * Result of resolving an auto-injected file. `present` carries the
+ * (already capped) body; `missing` means the file does not exist yet
+ * (the renderer shows a "create one" hint); `unreadable` means the
+ * file exists but the runtime could not read it (the renderer shows
+ * an explicit error so the agent does not falsely conclude the file
+ * is missing and create a duplicate).
+ */
+export type InjectedFileContent =
+  | { kind: 'present'; body: string }
+  | { kind: 'missing' }
+  | { kind: 'unreadable'; reason: string };
+
+/**
+ * Render an auto-injected file section. Empty body renders the
+ * `missingHint`; non-empty body is fenced with a backtick run that is
+ * **strictly longer than the longest backtick run in the body**, so the
+ * embedded content cannot close the fence and inject prompt-level
+ * instructions. Per CommonMark §4.5 a fenced code block opened with
+ * N backticks is closed only by ≥N backticks alone on a line; we pick
+ * N = max(3, longestRunInBody + 1).
  */
 function renderInjectedFile(section: InjectedFileSection): string {
   const header = `## ${section.title}\n\nSource: \`${section.relPath}\` — ${section.description}`;
-  if (!section.body.trim()) {
+  const c = section.content;
+  if (c.kind === 'missing') {
     return `${header}\n\n_${section.missingHint}_`;
   }
-  // Fence with backtick-block; the body has been already capped by the
-  // assembler (16KB MEMORY, 4KB CONSENSUS). The renderer is opaque to
-  // truncation markers — assemblers append `\n…(truncated)` themselves.
-  return `${header}\n\n\`\`\`md\n${section.body}\n\`\`\``;
+  if (c.kind === 'unreadable') {
+    // Explicit error so the agent doesn't treat read failure as
+    // "file does not exist yet" and try to create one.
+    return `${header}\n\n_[unable to read ${section.relPath}: ${c.reason}]_`;
+  }
+  const fence = pickFence(c.body);
+  return `${header}\n\n${fence}md\n${c.body}\n${fence}`;
+}
+
+/**
+ * Pick a backtick fence longer than the longest backtick run in `body`
+ * so that a body containing ``` cannot escape the fence and inject
+ * top-level prompt instructions. The default is 3 backticks; we bump up
+ * one past the longest run found.
+ */
+function pickFence(body: string): string {
+  let longest = 0;
+  const re = /`+/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(body)) !== null) {
+    if (match[0].length > longest) longest = match[0].length;
+  }
+  const n = Math.max(3, longest + 1);
+  return '`'.repeat(n);
 }
 
 function renderWorkspaceMemoryIndex(entries: WorkspaceMemoryIndexEntry[]): string {
@@ -726,18 +761,14 @@ function renderSessionContext(
   lines.push('## This Context');
   if (sc.channelKind === 'dm') {
     lines.push(
-      `- DM channel: \`${sc.channelName}\` (1:1 with the user). This DM is the`,
-      `  one place where you may update your global identity (L1`,
-      `  \`system_prompt.md\`); changes here propagate to every other workspace`,
-      `  on the agent's next spawn. MEMORY.md / notes/ here are your DM-scoped`,
-      `  L2 memory and stay private to this workspace.`,
+      `- DM channel: \`${sc.channelName}\` (1:1 with the user). MEMORY.md /`,
+      `  notes/ here are this DM's L2 memory and stay private to it.`,
     );
   } else {
     lines.push(
-      `- Workspace: \`${sc.channelName}\` (regular workspace). Treat L1`,
-      `  \`system_prompt.md\` as read-only here — if the user asks for a`,
-      `  global role change, redirect them to your DM. Use this workspace's`,
-      `  L2 MEMORY.md / notes/ for workspace-scoped collaboration and notes.`,
+      `- Workspace: \`${sc.channelName}\` (regular workspace). Use this`,
+      `  workspace's L2 MEMORY.md / notes/ for workspace-scoped collaboration`,
+      `  and notes; L1 \`system_prompt.md\` is shared across every workspace.`,
     );
   }
   lines.push(`- Channel: "${sc.sessionTitle}"`);

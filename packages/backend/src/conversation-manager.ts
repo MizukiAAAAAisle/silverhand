@@ -30,6 +30,7 @@ import {
   type Driver,
   type DriverPromptContext,
   type DriverSpawnContext,
+  type InjectedFileContent,
   type ParsedEvent,
   type SessionContextInput,
   type WorkspaceMemoryIndexEntry,
@@ -83,30 +84,51 @@ const MEMORY_INJECT_CAP_BYTES = 16 * 1024;
 const CONSENSUS_INJECT_CAP_BYTES = 4 * 1024;
 
 /**
- * Read a UTF-8 text file but cap the returned size to `capBytes`. Missing /
- * unreadable files yield `''` (the platform-prompt renderer treats empty
- * as "show the missing-hint instead"). Files larger than the cap are
- * truncated at a UTF-8-safe character boundary and tagged with an
- * explicit `\n…(truncated)` marker so the model can see the clip
- * happened. The cap is measured in bytes (Buffer.byteLength) — multi-byte
- * runes near the boundary are dropped together rather than producing a
+ * Read a UTF-8 text file but cap the returned size to `capBytes`. The
+ * result is a discriminated union so the system-prompt assembler can
+ * render the right thing per case:
+ *
+ *   - `present`: file existed and read OK; body is the (possibly
+ *     truncated) UTF-8 text. Truncation is signalled with a trailing
+ *     `\n…(truncated)` marker so the agent knows the content was
+ *     clipped.
+ *   - `missing`: ENOENT — file simply does not exist. Renderer shows
+ *     the "create one when…" hint.
+ *   - `unreadable`: any other error (EACCES, EISDIR, IO, …). Renderer
+ *     shows an explicit `[unable to read …: <reason>]` so the agent
+ *     does not falsely conclude the file is missing and create a
+ *     duplicate.
+ *
+ * The cap is measured in bytes (Buffer.byteLength) — multi-byte runes
+ * near the boundary are dropped together rather than producing a
  * malformed code unit.
  */
-async function readFileWithCap(path: string, capBytes: number): Promise<string> {
+async function readFileWithCap(
+  path: string,
+  capBytes: number,
+): Promise<InjectedFileContent> {
   let buf: Buffer;
   try {
     buf = await readFile(path);
-  } catch {
-    return '';
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === 'ENOENT') return { kind: 'missing' };
+    const reason = code ?? (err as Error | undefined)?.message ?? 'unknown error';
+    return { kind: 'unreadable', reason };
   }
-  if (buf.byteLength <= capBytes) return buf.toString('utf-8');
+  if (buf.byteLength <= capBytes) {
+    return { kind: 'present', body: buf.toString('utf-8') };
+  }
   // UTF-8-safe truncation: walk back from `capBytes` until the byte at
   // the boundary is not a continuation byte (0b10xxxxxx). Treat
   // out-of-bounds reads as "not a continuation byte" so the loop
   // terminates cleanly.
   let cut = capBytes;
   while (cut > 0 && (buf[cut] !== undefined && (buf[cut]! & 0xc0) === 0x80)) cut -= 1;
-  return `${buf.subarray(0, cut).toString('utf-8')}\n…(truncated)`;
+  return {
+    kind: 'present',
+    body: `${buf.subarray(0, cut).toString('utf-8')}\n…(truncated)`,
+  };
 }
 
 type ActivitySnippetKind = 'thinking' | 'text';
@@ -1671,14 +1693,18 @@ export class ConversationManager {
     );
 
     // Workspace-wide consensus, scoped to this workspace's `.silverhand/`.
-    // For agent_home (DM workspace), `workspace_path` is the agent's L1
-    // directory itself, and CONSENSUS.md may simply not exist — that's
-    // fine; renderer falls back to the missing-hint.
-    const consensusPath = join(workspace.workspace_path, '.silverhand', 'CONSENSUS.md');
-    const currentConsensus = await readFileWithCap(
-      consensusPath,
-      CONSENSUS_INJECT_CAP_BYTES,
-    );
+    // For agent_home (DM workspace), there is exactly one member and no
+    // notion of "consensus", so we omit the section entirely. Otherwise,
+    // we read CONSENSUS.md with the same discriminated semantics as
+    // MEMORY.md — missing renders a create hint, unreadable renders an
+    // explicit error.
+    const currentConsensus =
+      workspace.workspace_kind === 'agent_home'
+        ? null
+        : await readFileWithCap(
+            join(workspace.workspace_path, '.silverhand', 'CONSENSUS.md'),
+            CONSENSUS_INJECT_CAP_BYTES,
+          );
 
     // Cross-workspace memory index. Same-host trust model: every workspace
     // returned by `listForAgent` is a workspace this agent already has
