@@ -63,14 +63,15 @@ export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps): JSX.El
         <p className="min-w-0 flex-1 text-xs text-text-muted">
           Self-scheduled wakes. Read-only here, cancel only.
         </p>
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="flex shrink-0 items-stretch gap-1">
           <FilterTabs value={filter} onChange={setFilter} />
           <button
             type="button"
             onClick={() => query.refetch()}
             disabled={query.isFetching}
             data-panel-control="row-action"
-            className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] text-text-muted hover:bg-bg-hover hover:text-text-primary disabled:opacity-50"
+            className="inline-flex min-w-7 items-center justify-center px-1.5 text-[11px] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50"
+            aria-label="Refresh schedules"
             title="Refresh"
           >
             <RefreshCcw
