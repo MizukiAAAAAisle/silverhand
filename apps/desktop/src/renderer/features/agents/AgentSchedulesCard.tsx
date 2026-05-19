@@ -1,5 +1,11 @@
 import { useMemo, useState } from 'react';
-import { Calendar, RefreshCcw, X } from 'lucide-react';
+import {
+  CalendarClock,
+  Clock,
+  RefreshCcw,
+  Repeat,
+  X,
+} from 'lucide-react';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import type {
@@ -7,6 +13,7 @@ import type {
   ScheduleListStatusFilter,
   ScheduleStatus,
 } from '@silverhand/shared';
+import { cn } from '@/lib/cn';
 import { useAgentSchedules, useCancelAgentSchedule } from './hooks';
 
 dayjs.extend(relativeTime);
@@ -28,13 +35,20 @@ const STATUS_FILTERS: Array<{ value: ScheduleListStatusFilter; label: string }> 
  *
  * This card is the primary audit/observability surface for schedules
  * — the agent creates them via the MCP tool but cannot show them to
- * the user except by chatting. The schedules table also doubles as
- * the recovery path when a fire is mis-rendered in the wake DM (see
- * task #184): even if the user misses the system message, the row
- * here still shows last_fired_at / fired_count.
+ * the user except by chatting. The list also doubles as the recovery
+ * path when a fire is mis-rendered in the wake DM (see task #184):
+ * even if the user misses the system message, the row here still
+ * shows `fired_count` and the last status, which is why we keep both
+ * audit counters visible even after switching from the old <table>.
  *
  * Cancel is the only mutation; creation is intentionally agent-only
  * to preserve the "agent owns its own wake plans" semantic.
+ *
+ * Layout: each schedule is a `ScheduleItem` card (kind icon chip +
+ * message + meta strip + cancel/disclosure). Replaces the previous
+ * 6-column <table>; the new shape leads with the message (the
+ * user-meaningful field) and tucks counters/cron-spec into a muted
+ * meta row underneath. PR-3 (#task:396).
  */
 export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps): JSX.Element {
   const [filter, setFilter] = useState<ScheduleListStatusFilter>('active');
@@ -80,36 +94,22 @@ export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps): JSX.El
             : `No schedules with status ${filter}.`}
         </div>
       ) : (
-        <div className="overflow-hidden rounded-md border border-border-subtle">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-border-subtle bg-bg-base text-left text-[11px] uppercase tracking-wide text-text-muted">
-                <th className="px-3 py-2 font-medium">Kind</th>
-                <th className="px-3 py-2 font-medium">Next fire</th>
-                <th className="px-3 py-2 font-medium">Status</th>
-                <th className="px-3 py-2 font-medium">Fired</th>
-                <th className="px-3 py-2 font-medium">Message</th>
-                <th className="px-3 py-2"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(row => (
-                <ScheduleRow
-                  key={row.id}
-                  row={row}
-                  cancelling={cancel.isPending && cancel.variables === row.id}
-                  onCancel={() => cancel.mutate(row.id)}
-                />
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ul className="flex flex-col gap-2">
+          {rows.map(row => (
+            <ScheduleItem
+              key={row.id}
+              row={row}
+              cancelling={cancel.isPending && cancel.variables === row.id}
+              onCancel={() => cancel.mutate(row.id)}
+            />
+          ))}
+        </ul>
       )}
     </div>
   );
 }
 
-function ScheduleRow({
+function ScheduleItem({
   row,
   cancelling,
   onCancel,
@@ -119,81 +119,129 @@ function ScheduleRow({
   onCancel: () => void;
 }): JSX.Element {
   const cancellable = row.status === 'pending' || row.status === 'firing';
-  // `next_fire_at` only describes a real future fire while the row is
-  // still live. For any terminal status (`done|cancelled|failed`) the
-  // stored value is stale, so collapse the column to `—` and skip the
-  // ISO tooltip — otherwise a `failed` row keeps showing "in 3
-  // minutes" forever.
+  // `next_fire_at` is only meaningful while the row is still live. For
+  // any terminal status the stored value is stale (e.g. a failed row
+  // would otherwise keep saying "in 3 minutes" forever), so collapse
+  // the countdown to em-dash and skip the ISO tooltip.
   const hasFutureFire = row.status === 'pending' || row.status === 'firing';
+  const terminal = !cancellable;
   return (
-    <tr className="border-t border-border-subtle align-middle first:border-t-0 hover:bg-bg-hover">
-      <td className="px-3 py-1.5">
-        <KindCell row={row} />
-      </td>
-      <td
-        className="px-3 py-1.5 font-mono text-text-muted"
-        title={hasFutureFire ? dayjs(row.next_fire_at).toISOString() : undefined}
-      >
-        {hasFutureFire ? dayjs(row.next_fire_at).fromNow() : '—'}
-      </td>
-      <td className="px-3 py-1.5">
-        <StatusPill status={row.status} />
-      </td>
-      <td className="px-3 py-1.5 font-mono text-text-muted">
-        {row.fired_count}
-        {row.max_occurrences ? ` / ${row.max_occurrences}` : null}
-      </td>
-      <td className="px-3 py-1.5 text-text-primary">
-        <span className="line-clamp-1" title={row.message}>
+    <li
+      className={cn(
+        'flex items-center gap-3 rounded-md border border-border-subtle bg-bg-floating/50 px-4 py-3 transition-colors hover:bg-bg-hover/60',
+        terminal ? 'opacity-70' : '',
+      )}
+    >
+      <KindChip kind={row.spec.kind} />
+      <div className="min-w-0 flex-1">
+        <div
+          className="truncate text-sm font-medium text-text-primary"
+          title={row.message}
+        >
           {row.message}
-        </span>
-      </td>
-      <td className="px-3 py-1.5 text-right">
+        </div>
+        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-text-muted">
+          <span
+            className="font-medium text-text-secondary"
+            title={hasFutureFire ? dayjs(row.next_fire_at).toISOString() : undefined}
+          >
+            {hasFutureFire ? dayjs(row.next_fire_at).fromNow() : '—'}
+          </span>
+          <StatusPill status={row.status} />
+          <span className="font-mono">{kindSpecText(row)}</span>
+          <span className="font-mono">
+            {row.fired_count}
+            {row.max_occurrences ? ` / ${row.max_occurrences}` : ' / ∞'} fired
+          </span>
+        </div>
+      </div>
+      <div className="flex shrink-0 items-center">
         {cancellable ? (
           <button
             type="button"
             onClick={onCancel}
             disabled={cancelling}
-            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-text-muted hover:bg-bg-hover hover:text-error disabled:opacity-50"
+            className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] text-text-muted hover:bg-bg-hover hover:text-error disabled:opacity-50"
             title="Cancel"
           >
             <X className="size-3" />
             Cancel
           </button>
         ) : null}
-      </td>
-    </tr>
+      </div>
+    </li>
   );
 }
 
-function KindCell({ row }: { row: ScheduleDto }): JSX.Element {
-  const detail = (() => {
-    if (row.spec.kind === 'once') return 'one-shot';
-    if (row.spec.kind === 'interval') return `every ${row.spec.every_seconds}s`;
-    return `${row.spec.expression} (${row.spec.timezone})`;
-  })();
+/** Coloured square chip with the kind glyph. Three-token palette
+ *  (once=accent / interval=success / cron=warning) — all themes
+ *  expose these semantic tokens, so the chip adapts cleanly when the
+ *  theme changes. We deliberately avoid `--accent-2`: warm-script
+ *  aliases it to `--accent`, which would collapse to the once color
+ *  and lose discriminability. */
+function KindChip({
+  kind,
+}: {
+  kind: ScheduleDto['spec']['kind'];
+}): JSX.Element {
+  const cls =
+    kind === 'once'
+      ? 'bg-accent-soft text-accent'
+      : kind === 'interval'
+        ? 'bg-success-soft text-success'
+        : 'bg-warning-soft text-warning';
+  const Icon =
+    kind === 'once'
+      ? Clock
+      : kind === 'interval'
+        ? Repeat
+        : CalendarClock;
   return (
-    <div className="flex items-center gap-1.5 whitespace-nowrap text-xs leading-5">
-      <Calendar className="size-3.5 shrink-0 text-text-muted" />
-      <span className="text-text-primary">{row.spec.kind}</span>
-      <span className="font-mono text-text-muted">{detail}</span>
-    </div>
+    <span
+      className={cn(
+        'grid size-9 shrink-0 place-items-center rounded-md',
+        cls,
+      )}
+      title={kind}
+      aria-label={`${kind} schedule`}
+    >
+      <Icon className="size-4" />
+    </span>
   );
+}
+
+function kindSpecText(row: ScheduleDto): string {
+  switch (row.spec.kind) {
+    case 'once':
+      return 'once';
+    case 'interval':
+      return `every ${row.spec.every_seconds}s`;
+    case 'cron':
+      return `cron ${row.spec.expression} · ${row.spec.timezone}`;
+  }
 }
 
 function StatusPill({ status }: { status: ScheduleStatus }): JSX.Element {
+  // Maps the persisted `ScheduleStatus` enum to the standard
+  // soft-bg + on-color pill. Mirrors AgentConversationActivityList's
+  // pill vocabulary so the two surfaces feel consistent.
   const cls =
     status === 'pending'
-      ? 'bg-accent-soft text-accent'
+      ? 'bg-success-soft text-success'
       : status === 'firing'
-        ? 'bg-warning/10 text-warning'
+        ? 'bg-accent-soft text-accent'
         : status === 'done'
-          ? 'bg-success/10 text-success'
-          : status === 'failed'
-            ? 'bg-error/10 text-error'
-            : 'bg-bg-base text-text-muted';
+          ? 'bg-bg-base text-text-muted'
+          : status === 'cancelled'
+            ? 'bg-bg-base text-text-secondary'
+            : 'bg-error-soft text-error'; // failed
   return (
-    <span className={`rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${cls}`}>
+    <span
+      className={cn(
+        'inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium',
+        cls,
+      )}
+    >
       {status}
     </span>
   );
@@ -213,11 +261,12 @@ function FilterTabs({
           key={opt.value}
           type="button"
           onClick={() => onChange(opt.value)}
-          className={`rounded px-2 py-0.5 text-[11px] transition-colors ${
+          className={cn(
+            'rounded px-2 py-0.5 text-[11px] transition-colors',
             opt.value === value
               ? 'bg-bg-floating text-text-primary'
-              : 'text-text-muted hover:text-text-primary'
-          }`}
+              : 'text-text-muted hover:text-text-primary',
+          )}
         >
           {opt.label}
         </button>
