@@ -7,6 +7,10 @@ import type {
   StorageKind,
 } from '@silverhand/shared';
 import {
+  isGenericMimeHint,
+  mimeFromFilename,
+} from '@silverhand/shared';
+import {
   AttachmentRepo,
   rowToDto,
   rowToSnapshot,
@@ -298,44 +302,36 @@ function sanitizeFilename(raw: string): string | null {
   return cleaned;
 }
 
-const EXT_BY_CONTENT_TYPE: Record<string, string> = {
-  'image/jpeg': 'jpg',
-  'image/png': 'png',
-  'image/gif': 'gif',
-  'image/webp': 'webp',
-  'application/pdf': 'pdf',
-  'text/plain': 'txt',
-  'text/markdown': 'md',
-  'application/json': 'json',
-  'text/csv': 'csv',
-  'application/zip': 'zip',
-};
-
-/** sniff order: explicit mime → magic bytes → extension map → fallback. */
+/**
+ * Recognise the canonical Content-Type for an upload.
+ *
+ * Order is fixed (see also `docs/cli-system.md` "Attachment MIME
+ * contract" and `packages/shared/src/mime.ts`):
+ *
+ *   1. `explicit` — only if it carries useful information. Generic
+ *      hints (`application/octet-stream`, empty, malformed) are
+ *      treated as "no hint" because every common upload pipeline
+ *      defaults to them; trusting them as authoritative would let
+ *      `.html` files be permanently mis-typed as opaque binaries.
+ *   2. Magic bytes — PNG/JPEG/GIF/WebP/PDF/ZIP. Sniffing always wins
+ *      over suffix so a renamed `.txt` PNG still resolves to `image/png`.
+ *   3. Suffix whitelist — text-like types with no stable magic
+ *      (`.html/.htm/.svg/.json/.md/.txt/.csv`).
+ *   4. Fallback `application/octet-stream`.
+ */
 export function detectContentType(
   explicit: string | null,
   buffer: Buffer,
   filename: string,
 ): string {
-  if (explicit) {
-    const norm = explicit.split(';')[0]?.trim().toLowerCase();
-    if (norm && /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(norm)) return norm;
+  if (!isGenericMimeHint(explicit)) {
+    return explicit!.split(';')[0]!.trim().toLowerCase();
   }
   const sniffed = sniffMagic(buffer);
   if (sniffed) return sniffed;
-  const ext = extOf(filename);
-  if (ext) {
-    for (const [mime, mappedExt] of Object.entries(EXT_BY_CONTENT_TYPE)) {
-      if (mappedExt === ext) return mime;
-    }
-  }
+  const fromSuffix = mimeFromFilename(filename);
+  if (fromSuffix) return fromSuffix;
   return 'application/octet-stream';
-}
-
-function extOf(filename: string): string | null {
-  const idx = filename.lastIndexOf('.');
-  if (idx <= 0 || idx === filename.length - 1) return null;
-  return filename.slice(idx + 1).toLowerCase();
 }
 
 function sniffMagic(buf: Buffer): string | null {
@@ -363,6 +359,10 @@ function sniffMagic(buf: Buffer): string | null {
   // PDF: %PDF
   if (buf[0] === 0x25 && buf[1] === 0x50 && buf[2] === 0x44 && buf[3] === 0x46) {
     return 'application/pdf';
+  }
+  // ZIP: PK\x03\x04 (also covers .docx/.xlsx/.pptx; surface as zip for now).
+  if (buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04) {
+    return 'application/zip';
   }
   return null;
 }

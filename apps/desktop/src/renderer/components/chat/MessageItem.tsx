@@ -741,11 +741,36 @@ function AttachmentTile({ attachment }: { attachment: AttachmentSnapshot }): JSX
   }
 
   async function downloadAndOpen(): Promise<void> {
-    // Non-image fallback: fetch the bytes once and open in a new
-    // window. Image preview goes through the in-app Lightbox below.
+    // Non-image attachments must NOT be opened via `window.open(blob_url)` —
+    // Electron's setWindowOpenHandler hands the URL to
+    // `shell.openExternal`, which can't resolve `blob:` URLs (they're
+    // scoped to the renderer process). The result was that clicking
+    // any non-image attachment silently did nothing — the symptom that
+    // surfaced as the original `.html` bug (`#task:383`).
+    //
+    // Instead: fetch the bytes through the authenticated backend route
+    // (which already lives in this process), ship them to main over
+    // IPC, and let main write a temp file + `shell.openPath`. The OS
+    // default handler picks the right app from the extension. HTML
+    // therefore opens in the user's real browser, not in any
+    // Electron-controlled WebContents — which keeps untrusted HTML
+    // outside the app's process tree.
+    //
+    // Main applies a strict extension allowlist (`isSafeOpenExtension`
+    // in `@silverhand/shared`); types whose default handler would
+    // execute code (`.command`, `.app`, `.pkg`, ...) are rejected here
+    // with `unsafe_extension`. We surface that as a friendly hint.
     try {
       const res = await fetchAttachmentBlob(attachment.id);
-      window.open(res.url, '_blank', 'noopener');
+      const blob = await fetch(res.url).then(r => r.blob());
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      const result = await window.agentHub.openAttachmentExternal({
+        filename: attachment.filename,
+        bytes,
+      });
+      if (!result.ok) {
+        setError(describeOpenFailure(result.reason));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -807,4 +832,19 @@ function formatBytes(n: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
   return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
+
+/** Translate the IPC failure reason into a user-facing tooltip string.
+ *  Keep it short — it shows up as the chip's `title` attribute. */
+function describeOpenFailure(reason: string): string {
+  if (reason === 'unsafe_extension') {
+    return '该类型的文件不能直接在应用内打开（出于安全考虑）。';
+  }
+  if (reason.startsWith('open_failed')) {
+    return '系统未能打开此文件。';
+  }
+  if (reason === 'empty_payload' || reason === 'invalid_payload') {
+    return '附件数据无效。';
+  }
+  return reason;
 }

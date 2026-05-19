@@ -279,8 +279,15 @@ export class BackendClient {
       this.env.serverUrl +
       internalPaths.agentUploadAttachment(this.env.conversationId, this.env.agentId);
     const form = new FormData();
+    // Important: when the agent did NOT pass `--content-type`, leave the
+    // Blob's type empty rather than forcing `application/octet-stream`.
+    // The backend treats both empty and `application/octet-stream` as
+    // "no useful hint" and falls through to magic-bytes + suffix
+    // detection — so an HTML file uploaded by an agent (which never
+    // typed a MIME) still resolves to `text/html` and renders correctly.
+    // See `packages/shared/src/mime.ts` for the shared contract.
     const blob = new Blob([buffer], {
-      type: input.contentType ?? 'application/octet-stream',
+      type: input.contentType ?? '',
     });
     form.append('file', blob, input.filename ?? basename(input.path));
     let res: Response;

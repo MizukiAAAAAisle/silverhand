@@ -15,6 +15,10 @@ declare global {
       getBackendInfo(): Promise<BackendInfo | null>;
       pickDirectory(options?: { defaultPath?: string }): Promise<string | null>;
       openExternal(url: string): Promise<void>;
+      openAttachmentExternal(input: {
+        filename: string;
+        bytes: Uint8Array;
+      }): Promise<{ ok: true } | { ok: false; reason: string }>;
       showItemInFolder(path: string): Promise<void>;
       setWindowAlwaysOnTop(pinned: boolean): Promise<void>;
       setActiveConversation(active: ActiveConversationInfo): Promise<void>;

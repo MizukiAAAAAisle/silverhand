@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { isSafeOpenExtension } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
@@ -357,5 +358,132 @@ describe('detectContentType', () => {
     expect(detectContentType(null, Buffer.from('hi'), 'a.unknown')).toBe(
       'application/octet-stream',
     );
+  });
+  it('treats application/octet-stream as a no-hint and continues to suffix detection', () => {
+    // Reproduces the `#task:383` bug: agent-uploaded HTML had its MIME
+    // recorded as `application/octet-stream` because the explicit branch
+    // accepted that uninformative value. The contract is that
+    // octet-stream — regardless of source (CLI default, multipart
+    // default, browser fallback) — must fall through to magic + suffix.
+    expect(
+      detectContentType(
+        'application/octet-stream',
+        Buffer.from('<html></html>'),
+        'report.html',
+      ),
+    ).toBe('text/html');
+  });
+  it('treats octet-stream + suffix-mapped extension as the suffix MIME', () => {
+    expect(
+      detectContentType('application/octet-stream', Buffer.from('hi'), 'notes.md'),
+    ).toBe('text/markdown');
+    expect(
+      detectContentType('application/octet-stream', Buffer.from('a,b'), 'data.csv'),
+    ).toBe('text/csv');
+    expect(
+      detectContentType('application/octet-stream', Buffer.from('{}'), 'x.json'),
+    ).toBe('application/json');
+  });
+  it('treats binary/octet-stream and empty MIME as no-hint', () => {
+    expect(
+      detectContentType('binary/octet-stream', Buffer.from('hi'), 'page.htm'),
+    ).toBe('text/html');
+    expect(detectContentType('', Buffer.from('hi'), 'page.html')).toBe('text/html');
+  });
+  it('lets magic bytes override a misleading extension', () => {
+    // A PNG renamed `.txt` must still resolve as image/png — magic wins
+    // over suffix.
+    const png = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+      Buffer.alloc(4, 0),
+    ]);
+    expect(detectContentType(null, png, 'fake.txt')).toBe('image/png');
+    expect(
+      detectContentType('application/octet-stream', png, 'fake.txt'),
+    ).toBe('image/png');
+  });
+  it('sniffs PDF and ZIP magic bytes', () => {
+    expect(
+      detectContentType(null, Buffer.from('%PDF-1.4'), 'doc.bin'),
+    ).toBe('application/pdf');
+    expect(
+      detectContentType(
+        null,
+        Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.alloc(4, 0)]),
+        'pkg.bin',
+      ),
+    ).toBe('application/zip');
+  });
+  it('rejects malformed explicit MIME and falls through', () => {
+    // No `/` → not a valid type/subtype → treated as no-hint.
+    expect(detectContentType('not-a-mime', Buffer.from('hi'), 'page.html')).toBe(
+      'text/html',
+    );
+  });
+  it('lower-cases and strips parameters from explicit MIME', () => {
+    expect(
+      detectContentType('Text/HTML; charset=utf-8', Buffer.from('hi'), 'x.bin'),
+    ).toBe('text/html');
+  });
+});
+
+describe('isSafeOpenExtension (shell.openPath allowlist)', () => {
+  it('allows viewer-format extensions whose default handler does not execute code', () => {
+    for (const name of [
+      'report.html',
+      'page.HTM',
+      'manual.pdf',
+      'log.txt',
+      'verbose.log',
+      'notes.md',
+      'README.markdown',
+      'data.json',
+      'rows.csv',
+      'icon.png',
+      'photo.jpg',
+      'photo.JPEG',
+      'animation.gif',
+      'banner.webp',
+    ]) {
+      expect(isSafeOpenExtension(name)).toBe(true);
+    }
+  });
+  it('rejects executable / installer / script extensions', () => {
+    // The whole point of the allowlist: never let the OS dispatch a
+    // chat attachment to a shell, installer, or runtime.
+    for (const name of [
+      'evil.command',
+      'malware.app',
+      'setup.pkg',
+      'image.dmg',
+      'macro.scpt',
+      'binary.exe',
+      'task.bat',
+      'script.ps1',
+      'archive.jar',
+      'tool.sh',
+      'script.zsh',
+      'helper.applescript',
+    ]) {
+      expect(isSafeOpenExtension(name)).toBe(false);
+    }
+  });
+  it('rejects SVG (browser executes <script> when opened directly)', () => {
+    expect(isSafeOpenExtension('icon.svg')).toBe(false);
+  });
+  it('rejects Office macro-capable formats', () => {
+    for (const name of ['x.docx', 'x.xlsm', 'x.pptm', 'x.ppam']) {
+      expect(isSafeOpenExtension(name)).toBe(false);
+    }
+  });
+  it('rejects archives — let the user save and unpack manually', () => {
+    expect(isSafeOpenExtension('bundle.zip')).toBe(false);
+  });
+  it('rejects filenames with no extension', () => {
+    expect(isSafeOpenExtension('Makefile')).toBe(false);
+    expect(isSafeOpenExtension('')).toBe(false);
+  });
+  it('rejects dotfiles (no extension by spec)', () => {
+    expect(isSafeOpenExtension('.bashrc')).toBe(false);
   });
 });

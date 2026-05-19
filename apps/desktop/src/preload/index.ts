@@ -16,6 +16,16 @@ const api = {
   pickDirectory: (options?: { defaultPath?: string }): Promise<string | null> =>
     ipcRenderer.invoke('dialog:pickDirectory', options),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:openExternal', url),
+  /** Save attachment bytes to a per-app temp dir and hand the file off
+   *  to the OS default handler (e.g. open `.html` in the user's
+   *  browser). The renderer is responsible for fetching the bytes via
+   *  the authenticated backend route — main never sees the auth token
+   *  or user principal here. See `attachment:openExternal` in main. */
+  openAttachmentExternal: (input: {
+    filename: string;
+    bytes: Uint8Array;
+  }): Promise<{ ok: true } | { ok: false; reason: string }> =>
+    ipcRenderer.invoke('attachment:openExternal', input),
   showItemInFolder: (path: string): Promise<void> =>
     ipcRenderer.invoke('shell:showItemInFolder', path),
   setWindowAlwaysOnTop: (pinned: boolean): Promise<void> =>

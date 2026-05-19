@@ -186,6 +186,16 @@ Current `subkind` values (CLI-side enum is the source of truth):
   `silverhand message history` for an anchored window read or
   `silverhand message search` for full-text. `details` carries
   `{noun, verb, replacement}`.
+- `missing_required_flag` — a required value-bearing flag was not
+  supplied. Example: `silverhand task create` with no `--title`
+  redirects the agent to the minimal call shape and to
+  `silverhand task claim --message-id <id>` (for the "promote an
+  existing message" use case). `details` carries
+  `{command, flag}` — both static, code-defined values; safe to
+  log. The daily report aggregates failure buckets on
+  `error_subkind + details.command + details.flag` so future copy
+  edits to the prose error message do not split the historical
+  bucket.
 - `unknown_flag` — flag name not declared by the command. `details`
   carries `{flag, suggestion?, other_unknown?}` for did-you-mean
   surfacing in trace aggregations.
@@ -257,6 +267,72 @@ authentication -> principal binding -> ACL -> handler
 
 Handlers should not trust agent-supplied body fields for scope-bearing values
 when the route path or authenticated principal already provides that scope.
+
+### 5.1 Attachment MIME contract
+
+`silverhand file upload` does NOT require the agent to pass
+`--content-type`. The backend is the canonical authority for the MIME
+ultimately written to the DB; the CLI only forwards what the caller
+explicitly typed (or nothing).
+
+The backend recognition pipeline is fixed (see `detectContentType` in
+`packages/backend/src/services/attachment-service.ts` and the shared
+helpers in `packages/shared/src/mime.ts`):
+
+1. **Caller-supplied MIME**, only if it carries useful information.
+   `application/octet-stream`, `binary/octet-stream`, empty, and
+   syntactically invalid values are treated as **no hint** and fall
+   through. This matters because every common upload pipeline (HTML
+   form, multipart parser, Node `Blob` with no `type`, browsers without
+   a registered handler) defaults to `application/octet-stream`.
+2. **Magic bytes** — PNG / JPEG / GIF / WebP / PDF / ZIP. Sniffing
+   always wins over suffix, so a PNG renamed `.txt` still resolves to
+   `image/png` and an attacker can't suffix-spoof their way past
+   downstream handlers.
+3. **Suffix whitelist** for text-like types with no stable magic:
+   `.html / .htm / .svg / .json / .md / .markdown / .txt / .log / .csv`,
+   plus `.pdf / .zip / .png / .jpg / .jpeg / .gif / .webp` as a corrupt-
+   payload safety net.
+4. **Fallback** `application/octet-stream`.
+
+Renderer side: non-image attachments are NOT opened via
+`window.open(blob_url)` — Electron's `setWindowOpenHandler` redirects
+new-window opens to `shell.openExternal`, which can't resolve `blob:`
+URLs (they're scoped to the renderer process). The renderer instead
+fetches the bytes through the authenticated download route and ships
+them to main over the `attachment:openExternal` IPC; main writes a temp
+file with the original extension and calls `shell.openPath`. The OS
+default handler picks the right app from the extension. HTML therefore
+opens in the user's real browser, not in any Electron-controlled
+WebContents — which keeps untrusted HTML outside the app's process tree.
+
+**Security gate — extension allowlist.** The attachment system accepts
+arbitrary files, so handing every non-image to `shell.openPath` would
+let `.command`, `.app`, `.pkg`, `.scpt`, etc. start executing /
+installing on click. Main therefore gates `attachment:openExternal`
+behind `isSafeOpenExtension` (in `packages/shared/src/mime.ts`):
+
+- Allowed: `html`, `htm`, `pdf`, `txt`, `log`, `md`, `markdown`,
+  `json`, `csv`, plus image types (`png`, `jpg`, `jpeg`, `gif`,
+  `webp`). All have default handlers that are viewers or sandboxed —
+  no shell, installer, or runtime.
+- Rejected (returns `unsafe_extension`): everything else, including
+  `svg` (browsers execute SVG `<script>` when loaded directly),
+  Office macro-capable formats (`docx/xlsm/pptm/ppam`), and archives
+  (`zip`) — the user can save and open manually.
+- The check is on **filename extension only**, not MIME. macOS Launch
+  Services dispatches by on-disk extension, and pre-existing rows can
+  carry `application/octet-stream` from before the MIME contract;
+  trusting MIME would either break legitimate `.html` opens or
+  require a DB backfill.
+
+When changing the contract, update **all** of:
+- `packages/shared/src/mime.ts` (the source-of-truth helpers and tables).
+- `packages/backend/src/services/attachment-service.ts` (`detectContentType`
+  and its sniff function).
+- This section of the doc.
+- `packages/backend/src/drivers/platform-prompt.ts` if the agent-facing
+  guidance changes (e.g. you start asking agents to pass `--content-type`).
 
 ## 6. Packaging
 
