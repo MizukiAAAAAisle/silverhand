@@ -36,6 +36,7 @@ interface AgentConversationActivityListProps {
  * (alias-as-filter, not as persisted status).
  */
 type ActivityFilter = 'active' | 'all' | 'idle' | 'crashed' | 'closed';
+export type { ActivityFilter };
 
 const FILTERS: Array<{ value: ActivityFilter; label: string }> = [
   { value: 'active', label: 'Active' },
@@ -96,7 +97,9 @@ export function AgentConversationActivityList({
   );
 }
 
-function applyFilter(
+/** Exported for the regression test that locks the filter contract.
+ *  Not part of the public component API. */
+export function applyFilter(
   rows: ReadonlyArray<AgentRuntimeConversation>,
   filter: ActivityFilter,
 ): AgentRuntimeConversation[] {
@@ -116,7 +119,11 @@ function applyFilter(
     case 'idle':
       return rows.filter(r => r.closed_at === null && r.status === 'idle');
     case 'crashed':
-      return rows.filter(r => r.status === 'crashed');
+      // Closed wins over status (mirror `active` / `idle`): a closed
+      // conversation belongs only in `Closed` or `All`, never in the
+      // live status filters. Without this guard, a long-dead crashed
+      // row keeps showing up in `Crashed` forever.
+      return rows.filter(r => r.closed_at === null && r.status === 'crashed');
     case 'closed':
       return rows.filter(r => r.closed_at !== null);
   }
