@@ -326,4 +326,63 @@ describe('theme markdown token cascade contract', () => {
       }
     }
   });
+
+  /* PR follow-up (#task:415 / #task:416): the agent panel poster
+     contract relies on `forza6-components.css` rules like
+     `[data-theme='forza6'] [data-panel-pill]` winning over Tailwind
+     utilities like `.rounded-sm` that JSX still applies. Two cascade
+     properties make this work today:
+
+       1. `forza6-components.css` is imported AFTER `tailwindcss` and
+          is NOT wrapped in any `@layer`. Tailwind v4's `@import
+          "tailwindcss"` puts utilities into `@layer utilities`, so an
+          unlayered rule beats them regardless of specificity.
+       2. The `[data-theme='forza6'] [data-panel-*]` selectors are
+          (0,2,0), strictly higher than `.rounded-sm` (0,1,0). Even
+          inside a hypothetical layer the specificity still wins.
+
+     If a future change moves the import into `@layer components` (a
+     reasonable refactor on its face — Tailwind docs even suggest it
+     for "your own component classes"), property #1 collapses and the
+     panel surfaces silently revert to the warm-theme `--radius-sm`
+     value because Tailwind utilities now sit in a later layer than
+     the component rules. This test locks both invariants so the
+     regression shows up here, not in a screenshot months later.
+
+     See conversation #conv:m-jmqBPrOO8gkYsp for the back-and-forth
+     that produced this lock. */
+  it('keeps forza6-components.css unlayered and ordered after tailwindcss', () => {
+    const lines = globalCss.split('\n');
+    const tailwindIdx = lines.findIndex(l =>
+      l.match(/^@import\s+"tailwindcss"\s*;/),
+    );
+    const forza6ComponentsIdx = lines.findIndex(l =>
+      l.includes('@import "./themes/forza6-components.css"'),
+    );
+    expect(tailwindIdx).toBeGreaterThanOrEqual(0);
+    expect(forza6ComponentsIdx).toBeGreaterThan(tailwindIdx);
+
+    // No `@layer` block opens before the forza6-components import that
+    // hasn't already closed. We approximate this with a depth counter:
+    // every `@layer name { … }` increments depth at `{`, decrements at
+    // `}`. The forza6-components import line must land at depth 0.
+    let depth = 0;
+    for (let i = 0; i < forza6ComponentsIdx; i++) {
+      const line = lines[i] ?? '';
+      if (/^@layer\s+[^;]*\{/.test(line.trim())) depth++;
+      // Closing braces — only count ones that close an @layer block,
+      // approximated by counting trailing `}` at depth > 0.
+      const closes = (line.match(/\}/g) ?? []).length;
+      const opens = (line.match(/\{/g) ?? []).length - (depth > 0 ? 1 : 0);
+      depth = Math.max(0, depth + opens - closes);
+    }
+    expect(depth).toBe(0);
+
+    // `forza6-components.css` itself must not start with `@layer …`.
+    const forza6ComponentsCss = readFileSync(
+      new URL('../styles/themes/forza6-components.css', import.meta.url),
+      'utf8',
+    );
+    expect(forza6ComponentsCss.trimStart()).not.toMatch(/^@layer\b/);
+  });
 });
