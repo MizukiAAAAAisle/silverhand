@@ -368,6 +368,7 @@ const GhostInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputEle
   ({ className, ...props }, ref) => (
     <input
       ref={ref}
+      data-panel-control="ghost-input"
       className={cn(
         'w-full rounded-sm border border-transparent bg-transparent px-2 py-1 text-sm text-text-primary placeholder:text-text-muted',
         'transition-colors hover:border-border-subtle hover:bg-bg-base/40',
@@ -386,6 +387,7 @@ const GhostTextarea = forwardRef<
 >(({ className, ...props }, ref) => (
   <textarea
     ref={ref}
+    data-panel-control="ghost-textarea"
     className={cn(
       'w-full resize-none rounded-sm border border-transparent bg-transparent px-2 py-1.5 text-sm leading-relaxed text-text-primary placeholder:text-text-muted',
       'transition-colors hover:border-border-subtle hover:bg-bg-base/40',
@@ -432,7 +434,10 @@ function RuntimeSelect({
       disabled={disabled}
       onValueChange={v => onChange(v as RuntimeKind)}
     >
-      <Select.Trigger className={selectTriggerClass(disabled)}>
+      <Select.Trigger
+        data-panel-control="select-trigger"
+        className={selectTriggerClass(disabled)}
+      >
         <Select.Value />
         <Select.Icon>
           <ChevronDown className="size-3.5 text-text-muted" />
@@ -442,6 +447,7 @@ function RuntimeSelect({
         <Select.Content
           position="popper"
           sideOffset={4}
+          data-panel-control="select-content"
           className={selectContentClass()}
         >
           <Select.Viewport>
@@ -472,7 +478,10 @@ function PickerSelect({
 }): JSX.Element {
   return (
     <Select.Root value={value} onValueChange={onChange}>
-      <Select.Trigger className={selectTriggerClass(false)}>
+      <Select.Trigger
+        data-panel-control="select-trigger"
+        className={selectTriggerClass(false)}
+      >
         <Select.Value />
         <Select.Icon>
           <ChevronDown className="size-3.5 text-text-muted" />
@@ -482,6 +491,7 @@ function PickerSelect({
         <Select.Content
           position="popper"
           sideOffset={4}
+          data-panel-control="select-content"
           className={selectContentClass()}
         >
           <Select.Viewport>

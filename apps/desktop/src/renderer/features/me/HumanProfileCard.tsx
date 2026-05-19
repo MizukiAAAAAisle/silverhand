@@ -293,6 +293,7 @@ const GhostInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputEle
   ({ className, ...props }, ref) => (
     <input
       ref={ref}
+      data-panel-control="ghost-input"
       className={cn(
         'w-full rounded-sm border border-transparent bg-transparent px-2 py-1 text-sm text-text-primary placeholder:text-text-muted',
         'transition-colors hover:border-border-subtle hover:bg-bg-base/40',

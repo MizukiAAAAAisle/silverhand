@@ -88,7 +88,10 @@ export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps): JSX.El
       {query.isLoading ? (
         <div className="text-sm text-text-muted">Loading…</div>
       ) : rows.length === 0 ? (
-        <div className="rounded-sm border border-dashed border-border-subtle px-4 py-6 text-center text-xs text-text-muted">
+        <div
+          data-panel-card="placeholder"
+          className="rounded-sm border border-dashed border-border-subtle px-4 py-6 text-center text-xs text-text-muted"
+        >
           {filter === 'active'
             ? 'No active schedules.'
             : `No schedules with status ${filter}.`}
@@ -127,6 +130,7 @@ function ScheduleItem({
   const terminal = !cancellable;
   return (
     <li
+      data-panel-card="row"
       className={cn(
         'flex items-center gap-3 rounded-sm border border-border-subtle bg-bg-floating/50 px-4 py-3 transition-colors hover:bg-bg-hover/60',
         terminal ? 'opacity-70' : '',
@@ -197,6 +201,7 @@ function KindChip({
         : CalendarClock;
   return (
     <span
+      data-panel-pill="kind"
       className={cn(
         'grid size-9 shrink-0 place-items-center rounded-sm',
         cls,
@@ -263,6 +268,7 @@ function StatusPill({ status }: { status: ScheduleStatus }): JSX.Element {
             : 'bg-error text-text-on-error'; // failed
   return (
     <span
+      data-panel-pill="status"
       className={cn(
         'inline-flex items-center rounded-sm px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
         cls,
@@ -281,7 +287,10 @@ function FilterTabs({
   onChange: (next: ScheduleListStatusFilter) => void;
 }): JSX.Element {
   return (
-    <div className="flex shrink-0 items-center rounded-sm border border-border-subtle bg-bg-base p-0.5">
+    <div
+      data-panel-tabs
+      className="flex shrink-0 items-center rounded-sm border border-border-subtle bg-bg-base p-0.5"
+    >
       {STATUS_FILTERS.map(opt => (
         <button
           key={opt.value}

@@ -79,7 +79,10 @@ export function AgentConversationActivityList({
       </header>
 
       {rows.length === 0 ? (
-        <div className="rounded-sm border border-dashed border-border-subtle px-4 py-6 text-center text-xs text-text-muted">
+        <div
+          data-panel-card="placeholder"
+          className="rounded-sm border border-dashed border-border-subtle px-4 py-6 text-center text-xs text-text-muted"
+        >
           {emptyMessage(filter, all.length)}
         </div>
       ) : (
@@ -167,6 +170,7 @@ function ActivityCard({
   const accent = stateAccentClass(row.status, closed);
   return (
     <li
+      data-panel-card="row"
       className={cn(
         'relative overflow-hidden rounded-sm border border-border-subtle bg-bg-floating/50 px-4 py-3 transition-colors hover:bg-bg-hover/60',
         closed ? 'opacity-70' : '',
@@ -194,7 +198,10 @@ function ActivityCard({
               </span>
             </span>
             {row.thread_title ? (
-              <span className="inline-flex items-center rounded-sm bg-bg-base px-2 py-0.5 text-[11px] text-text-secondary">
+              <span
+                data-panel-pill="thread"
+                className="inline-flex items-center rounded-sm bg-bg-base px-2 py-0.5 text-[11px] text-text-secondary"
+              >
                 {row.thread_title}
               </span>
             ) : null}
@@ -258,7 +265,10 @@ function StatusPill({
 }): JSX.Element {
   if (closed) {
     return (
-      <span className="inline-flex items-center rounded-sm bg-bg-base px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+      <span
+        data-panel-pill="status"
+        className="inline-flex items-center rounded-sm bg-bg-base px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted"
+      >
         closed
       </span>
     );
@@ -273,6 +283,7 @@ function StatusPill({
           : 'bg-bg-surface text-text-secondary';
   return (
     <span
+      data-panel-pill="status"
       className={cn(
         'inline-flex items-center rounded-sm px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
         cls,
@@ -381,7 +392,10 @@ function FilterTabs({
   onChange: (next: ActivityFilter) => void;
 }): JSX.Element {
   return (
-    <div className="flex shrink-0 items-center rounded-sm border border-border-subtle bg-bg-base p-0.5">
+    <div
+      data-panel-tabs
+      className="flex shrink-0 items-center rounded-sm border border-border-subtle bg-bg-base p-0.5"
+    >
       {FILTERS.map(opt => (
         <button
           key={opt.value}

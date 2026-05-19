@@ -715,3 +715,99 @@
    block. Tooltip and Select listbox stay soft on purpose — they sit
    outside the global rule for the same reason they used to sit outside
    the forza6 override. */
+
+/* ── Agent / Human panel — poster sticker geometry (#task:411) ────────
+   shiki `koeB7pWjvSQR3r5f` — generic `rounded-sm` (4px) still felt
+   too round under forza6, where the established poster vocabulary
+   is `2px radius + 2px black border` (see Task card line ~582,
+   inline-code, send button, channel-actions cluster). This block
+   layers the same recipe on top of the agent panel's structural
+   surfaces via stable `data-panel-*` hooks; warm three themes
+   ignore the attributes and keep their soft 4–10px radii.
+
+   Hooks (set in JSX, theme-neutral names):
+     - `data-panel-card="row"`        Activity / Schedule list rows
+     - `data-panel-card="placeholder"` Empty / error state cards
+     - `data-panel-card="profile-section"` ProfileSummarySections box
+     - `data-panel-pill="status"`     ConversationAgentStatus / ScheduleStatus chip
+     - `data-panel-pill="kind"`       Schedule kind chip (once/interval/cron)
+     - `data-panel-pill="thread"`     Thread title pill on activity row
+     - `data-panel-pill="presence"`   PersonHero presence tag
+     - `data-panel-tabs`              Activity / Schedule FilterTabs
+     - `data-panel-control`           GhostInput / GhostTextarea / Select
+                                      trigger / Select content (Agent + Human profile)
+
+   Colour stays driven by Tailwind / token classes from JSX — this
+   file only fixes geometry + display-caps typography for pills. */
+[data-theme='forza6'] [data-panel-card] {
+  border: 2px solid #0A0A0A;
+  border-radius: 2px;
+}
+[data-theme='forza6'] [data-panel-card='row']:hover {
+  /* Lime preview — same vocabulary as task card / sidebar / NavRail
+     hover. Bump the priority over Tailwind's `hover:bg-bg-hover/60`. */
+  background-color: #E6F68A;
+  color: #0A0A0A;
+}
+[data-theme='forza6'] [data-panel-card='placeholder'] {
+  /* Empty / error state stays dashed — keep the dashed style, just
+     harden the corner + border weight to match the family. */
+  border-style: dashed;
+  border-width: 2px;
+}
+[data-theme='forza6'] [data-panel-card='profile-section'] {
+  /* Profile section card uses a softer ground (`bg-bg-floating/50`
+     in JSX) and is a static container, so we don't apply the
+     hover lime swap and we keep the JSX background. */
+}
+
+[data-theme='forza6'] [data-panel-pill] {
+  border-radius: 2px;
+  font-family: var(--font-display);
+  letter-spacing: 0.06em;
+  font-weight: 700;
+}
+
+[data-theme='forza6'] [data-panel-tabs] {
+  /* Outer frame: 2px radius + 2px black border, the same poster
+     bracket the rest of the panel uses. The inner segment buttons
+     get squared corners so the active tab reads as a hard wedge
+     instead of a Bootstrap pill. */
+  border: 2px solid #0A0A0A;
+  border-radius: 2px;
+  padding: 0;
+}
+[data-theme='forza6'] [data-panel-tabs] button {
+  border-radius: 0;
+}
+
+[data-theme='forza6'] [data-panel-control] {
+  /* Inputs / select triggers / select popovers tighten to 2px
+     without the heavy 2px black frame — these are typing surfaces,
+     not poster cards. Border colour follows the existing
+     `--border-focus` magenta on focus (Composer.tsx:546 vocabulary). */
+  border-radius: 2px;
+}
+
+/* AgentSidebar buttons — poster recipe matching the NavRail selected /
+   inline-code family. Selected = lime fill + 2px black border + 2px
+   radius; hover (unselected) = lime preview ground + 2px black border
+   so hover reads as a preview of the selected state. */
+[data-theme='forza6'] aside[aria-label='Agent sections'] button {
+  border-radius: 2px;
+  border: 2px solid transparent;
+}
+[data-theme='forza6']
+  aside[aria-label='Agent sections']
+  button[aria-current='page'] {
+  background-color: #D4F523;
+  color: #0A0A0A;
+  border-color: #0A0A0A;
+}
+[data-theme='forza6']
+  aside[aria-label='Agent sections']
+  button:not([aria-current='page']):hover {
+  background-color: #E6F68A;
+  color: #0A0A0A;
+  border-color: #0A0A0A;
+}
