@@ -738,13 +738,23 @@
    the global cool `#DAE0DA` on `--bg-floating: #FFFFFF` (~1.05:1) the
    highlight is effectively invisible against the popover background.
 
-   Same scoped lazy-substitution pattern as the Radix rule: redefine
-   `--bg-hover` to the lime preview inside the picker only; Row's
-   existing `bg-bg-hover` resolves to lime + near-black text (~14:1
-   AAA on `--text-primary: #0F1F1D`). No component-layer edits, no
-   root token churn, warm-script pixel-zero. shiki `d-tGhYairt07s7Bl`. */
-[data-theme='forza6'] [data-composer-picker] {
-  --bg-hover: #E6F68A;
+   PR-1 attempted a scoped `--bg-hover` substitution on the picker
+   container (mirroring the Radix-wrapper pattern). That worked for the
+   active row, but it ALSO bled into `::-webkit-scrollbar-thumb` —
+   `global.css:131` paints the thumb with `var(--bg-hover)`, so the
+   picker scrollbar turned lime too. shiki `oL3Z1aUepvUbFDKg` flagged
+   the scrollbar tint as off-pattern and asked to retry with festival
+   pink (the same brand identity NavRail / sidebar selected rows use).
+
+   PR-2 (this rule) targets the row element directly instead of the
+   variable, so only the active row repaints. Uses `--brand-primary`
+   (#FF2C7A) + `--text-on-brand` (#0A0A0A near-black, AA ~5.56:1) — the
+   same selected-state vocabulary as `--bg-selected` / NavRail icon /
+   sidebar row. Scrollbar thumb stays the default cool wash; no
+   component-layer churn; warm-script pixel-zero. */
+[data-theme='forza6'] [data-composer-picker] [role='option'][aria-selected='true'] {
+  background-color: var(--brand-primary);
+  color: var(--text-on-brand);
 }
 
 /* Poster sticker frame for menus + popovers — values now live in the
