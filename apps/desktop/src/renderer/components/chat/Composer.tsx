@@ -271,17 +271,12 @@ export function Composer({
 
   const insertPick = (item: PickerItem): void => {
     if (!trigger) return;
-    // Agent autocomplete inserts `@<handle>` (handle is the agent's
-    // url-safe `name`). Channel autocomplete inserts `#<title>` —
-    // channels don't carry a separate `name` field, the title IS the
-    // mention handle that ChannelRef resolves against.
-    const handle = item.kind === 'agent' ? item.agent.name : item.channel.title;
     const before = draft.slice(0, trigger.pos);
     const after = draft.slice(trigger.pos + 1 + trigger.query.length);
     // Trailing space so the next keystroke isn't immediately treated
     // as continuation of the handle (and so the caret lands at a
     // typing-friendly spot).
-    const insertion = `${trigger.kind}${handle} `;
+    const insertion = `${formatPickInsertion(item)} `;
     const nextDraft = before + insertion + after;
     const nextCaret = (before + insertion).length;
     updateDraft(nextDraft, nextCaret);
@@ -927,4 +922,44 @@ function rowKey(item: PickerItem): string {
   return item.kind === 'agent'
     ? `a:${item.agent.id}`
     : `c:${item.channel.id}`;
+}
+
+/**
+ * Mirror of `Markdown.tsx`'s `#<name>` capture (`[a-zA-Z][a-zA-Z0-9_-]*`).
+ * A channel title that doesn't fully match this can't be inserted as
+ * `#<title>` because the renderer would either drop the trailing
+ * non-matching chars (leaving an unintended partial ref) or fail to
+ * parse the ref at all — see Cindy's #task:502 review finding.
+ *
+ * The regex is duplicated rather than imported because Markdown.tsx
+ * keeps it inline in a large alternation; mirroring it here with a
+ * dedicated regression keeps both sites pinned to the same shape.
+ */
+const MENTION_HANDLE_RE = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
+
+/**
+ * Build the text to splice in when the user picks a row from the
+ * mention popover. Exported for the regression test that locks the
+ * three branches the renderer can actually parse:
+ *
+ *   - `agent`  → `@<name>` — agent.name is always url-safe by schema.
+ *   - `channel` + handle-safe title → `#<title>` — the cheap,
+ *     human-readable form.
+ *   - `channel` + non-handle-safe title (CJK / spaces / slashes /
+ *     anything outside `[a-zA-Z0-9_-]`) → `#conv:<id>` — falls back
+ *     to the id-precise form. Channel ids are 16-char alphanumeric +
+ *     `-_`, which matches Markdown.tsx's `#conv:` parser exactly, so
+ *     the receiver always resolves to a working ChannelRef regardless
+ *     of how exotic the title is.
+ *
+ * We deliberately do NOT relax the title in-place (slugify, strip,
+ * etc.): a slugged title might collide with another channel's actual
+ * title and silently mis-route. `#conv:<id>` is unambiguous.
+ */
+export function formatPickInsertion(item: PickerItem): string {
+  if (item.kind === 'agent') return `@${item.agent.name}`;
+  if (MENTION_HANDLE_RE.test(item.channel.title)) {
+    return `#${item.channel.title}`;
+  }
+  return `#conv:${item.channel.id}`;
 }
