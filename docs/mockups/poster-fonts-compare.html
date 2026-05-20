@@ -12,7 +12,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Anton&family=Oswald:wght@500;700&family=Archivo+Black&family=Bungee&family=Alfa+Slab+One&family=Staatliches&family=Black+Ops+One&family=Big+Shoulders+Display:wght@800&family=Bowlby+One&family=Russo+One&family=Inter:wght@400;500;600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Anton&family=Oswald:wght@400;500;700&family=Archivo+Black&family=Bungee&family=Alfa+Slab+One&family=Staatliches&family=Black+Ops+One&family=Big+Shoulders+Display:wght@400;800&family=Bowlby+One&family=Russo+One&family=Inter:wght@400;500;600&display=swap"
     />
 
     <style>
@@ -206,68 +206,156 @@
         flex: 1 1 auto;
       }
 
+      /* "Regular size" cascade — added per shiki feedback
+         (M8ODNwFkY05Bjeb-): headline size sells the font's bold/heavy
+         personality, but the actual app surfaces it at chrome-label
+         sizes (8-20px). This row renders the same uppercase + 0.06em
+         tracking treatment chrome labels use, at four real UI sizes,
+         so a font that "looks fine at 64px but mediocre at 11px" gets
+         caught.
+           20px → Tasks Drawer column header / chat header workspace name
+           14px → chat header channel title / button labels
+           11px → sidebar group title / inline pill
+           9px  → task status badge / sidebar count */
+      .sample-cascade {
+        margin-top: 16px;
+        padding-top: 12px;
+        border-top: 1px dashed var(--line);
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        color: var(--ink);
+      }
+      .sample-cascade .cas-label {
+        font: 500 10px/1.1 var(--body);
+        color: var(--ink-muted);
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        margin-bottom: 4px;
+      }
+      .sample-cascade .cas {
+        line-height: 1.05;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .sample-cascade .s20 {
+        font-size: 20px;
+      }
+      .sample-cascade .s14 {
+        font-size: 14px;
+      }
+      .sample-cascade .s11 {
+        font-size: 11px;
+        color: var(--ink-soft);
+      }
+      .sample-cascade .s9 {
+        font-size: 9px;
+        color: var(--ink-muted);
+      }
+
       /* Per-font typeface scoping */
       .ff-impact .sample-head,
       .ff-impact .sample-strip,
+      .ff-impact .sample-cascade .cas,
       .ff-impact .sample-pair .pf-label.poster {
         font-family: 'Impact', 'Helvetica Neue Condensed', sans-serif;
       }
       .ff-bebas .sample-head,
       .ff-bebas .sample-strip,
+      .ff-bebas .sample-cascade .cas,
       .ff-bebas .sample-pair .pf-label.poster {
         font-family: 'Bebas Neue', sans-serif;
       }
       .ff-anton .sample-head,
       .ff-anton .sample-strip,
+      .ff-anton .sample-cascade .cas,
       .ff-anton .sample-pair .pf-label.poster {
         font-family: 'Anton', sans-serif;
       }
       .ff-oswald .sample-head,
       .ff-oswald .sample-strip,
+      .ff-oswald .sample-cascade .cas,
       .ff-oswald .sample-pair .pf-label.poster {
         font-family: 'Oswald', sans-serif;
         font-weight: 700;
       }
       .ff-archivo .sample-head,
       .ff-archivo .sample-strip,
+      .ff-archivo .sample-cascade .cas,
       .ff-archivo .sample-pair .pf-label.poster {
         font-family: 'Archivo Black', sans-serif;
       }
       .ff-bungee .sample-head,
       .ff-bungee .sample-strip,
+      .ff-bungee .sample-cascade .cas,
       .ff-bungee .sample-pair .pf-label.poster {
         font-family: 'Bungee', sans-serif;
       }
       .ff-alfa .sample-head,
       .ff-alfa .sample-strip,
+      .ff-alfa .sample-cascade .cas,
       .ff-alfa .sample-pair .pf-label.poster {
         font-family: 'Alfa Slab One', serif;
       }
       .ff-staatliches .sample-head,
       .ff-staatliches .sample-strip,
+      .ff-staatliches .sample-cascade .cas,
       .ff-staatliches .sample-pair .pf-label.poster {
         font-family: 'Staatliches', sans-serif;
       }
       .ff-blackops .sample-head,
       .ff-blackops .sample-strip,
+      .ff-blackops .sample-cascade .cas,
       .ff-blackops .sample-pair .pf-label.poster {
         font-family: 'Black Ops One', sans-serif;
       }
       .ff-bigshoulders .sample-head,
       .ff-bigshoulders .sample-strip,
+      .ff-bigshoulders .sample-cascade .cas,
       .ff-bigshoulders .sample-pair .pf-label.poster {
         font-family: 'Big Shoulders Display', sans-serif;
         font-weight: 800;
       }
       .ff-bowlby .sample-head,
       .ff-bowlby .sample-strip,
+      .ff-bowlby .sample-cascade .cas,
       .ff-bowlby .sample-pair .pf-label.poster {
         font-family: 'Bowlby One', sans-serif;
       }
       .ff-russo .sample-head,
       .ff-russo .sample-strip,
+      .ff-russo .sample-cascade .cas,
       .ff-russo .sample-pair .pf-label.poster {
         font-family: 'Russo One', sans-serif;
+      }
+
+      /* Multi-weight families: dedicated cards for the regular weight
+         comparison shiki asked for (M8ODNwFkY05Bjeb-). Single-weight
+         poster faces (Bebas / Anton / Bungee / Bowlby / Russo /
+         Archivo Black / Alfa Slab One / Staatliches / Black Ops One)
+         have no "regular variant" — they exist as one specific
+         visual statement; the regular row in the cascade is the only
+         smaller-size proxy available for them. */
+      .ff-oswald-reg .sample-head,
+      .ff-oswald-reg .sample-strip,
+      .ff-oswald-reg .sample-cascade .cas,
+      .ff-oswald-reg .sample-pair .pf-label.poster {
+        font-family: 'Oswald', sans-serif;
+        font-weight: 500;
+      }
+      .ff-bigshoulders-reg .sample-head,
+      .ff-bigshoulders-reg .sample-strip,
+      .ff-bigshoulders-reg .sample-cascade .cas,
+      .ff-bigshoulders-reg .sample-pair .pf-label.poster {
+        font-family: 'Big Shoulders Display', sans-serif;
+        font-weight: 400;
+      }
+      .ff-bigshoulders-reg .sample-head {
+        font-size: 56px;
+      }
+      .ff-oswald-reg .sample-head {
+        font-size: 60px;
+        letter-spacing: 0;
       }
 
       /* Some Google faces ship at fixed weights and look thinner at large
@@ -314,11 +402,21 @@
         proportion, x-height and kerning are the only variables.
       </p>
       <p>
-        Three samples per card: a 64px headline (the typical chrome label
-        usage), a black metadata strip (date + counter, mimics our task
-        / sidebar pills), and a label-next-to-body row that previews how
-        the face sits next to Inter (current body / chrome label
-        secondary).
+        Four samples per card: a 64px headline (large display), a black
+        metadata strip (date + counter, mimics our task / sidebar
+        pills), a label-next-to-body row showing how the face sits next
+        to Inter (body / chrome label secondary), and a **chrome label
+        cascade** at the four real UI sizes (20 / 14 / 11 / 9 px,
+        uppercase + 0.06em tracking — added per shiki feedback after
+        Bebas in real app: headline-size sells, but most consumers live
+        at 8-20px and that's where readability actually matters).
+      </p>
+      <p>
+        Cards 13-14 add the regular (non-display) weight of the two
+        families that ship one: Oswald 500 (vs 700 in card #4) and Big
+        Shoulders Display 400 (vs 800 in card #10). All other roster
+        entries are single-weight by design — the cascade row is the
+        only smaller-size proxy for them.
       </p>
     </header>
 
@@ -341,6 +439,13 @@
           <span class="pf-label poster">CHANNEL</span>
           <span class="pf-body">Forza6 theme · 12 members · last seen 14:32</span>
         </div>
+        <div class="sample-cascade">
+          <span class="cas-label">CHROME LABEL CASCADE — 20 / 14 / 11 / 9 px</span>
+          <span class="cas s20">FORZA6 THEME · 12 MEMBERS</span>
+          <span class="cas s14">CHANNEL · WORKSPACE TITLE</span>
+          <span class="cas s11">SIDEBAR GROUP · SAVED MESSAGES</span>
+          <span class="cas s9">IN_PROGRESS · #024 · TODO</span>
+        </div>
       </article>
 
       <!-- 2. Bebas Neue — gold standard for posters -->
@@ -360,6 +465,13 @@
         <div class="sample-pair">
           <span class="pf-label poster">CHANNEL</span>
           <span class="pf-body">Forza6 theme · 12 members · last seen 14:32</span>
+        </div>
+        <div class="sample-cascade">
+          <span class="cas-label">CHROME LABEL CASCADE — 20 / 14 / 11 / 9 px</span>
+          <span class="cas s20">FORZA6 THEME · 12 MEMBERS</span>
+          <span class="cas s14">CHANNEL · WORKSPACE TITLE</span>
+          <span class="cas s11">SIDEBAR GROUP · SAVED MESSAGES</span>
+          <span class="cas s9">IN_PROGRESS · #024 · TODO</span>
         </div>
       </article>
 
@@ -381,6 +493,13 @@
           <span class="pf-label poster">CHANNEL</span>
           <span class="pf-body">Forza6 theme · 12 members · last seen 14:32</span>
         </div>
+        <div class="sample-cascade">
+          <span class="cas-label">CHROME LABEL CASCADE — 20 / 14 / 11 / 9 px</span>
+          <span class="cas s20">FORZA6 THEME · 12 MEMBERS</span>
+          <span class="cas s14">CHANNEL · WORKSPACE TITLE</span>
+          <span class="cas s11">SIDEBAR GROUP · SAVED MESSAGES</span>
+          <span class="cas s9">IN_PROGRESS · #024 · TODO</span>
+        </div>
       </article>
 
       <!-- 4. Oswald — narrow vertical -->
@@ -400,6 +519,13 @@
         <div class="sample-pair">
           <span class="pf-label poster">CHANNEL</span>
           <span class="pf-body">Forza6 theme · 12 members · last seen 14:32</span>
+        </div>
+        <div class="sample-cascade">
+          <span class="cas-label">CHROME LABEL CASCADE — 20 / 14 / 11 / 9 px</span>
+          <span class="cas s20">FORZA6 THEME · 12 MEMBERS</span>
+          <span class="cas s14">CHANNEL · WORKSPACE TITLE</span>
+          <span class="cas s11">SIDEBAR GROUP · SAVED MESSAGES</span>
+          <span class="cas s9">IN_PROGRESS · #024 · TODO</span>
         </div>
       </article>
 
@@ -421,6 +547,13 @@
           <span class="pf-label poster">CHANNEL</span>
           <span class="pf-body">Forza6 theme · 12 members · last seen 14:32</span>
         </div>
+        <div class="sample-cascade">
+          <span class="cas-label">CHROME LABEL CASCADE — 20 / 14 / 11 / 9 px</span>
+          <span class="cas s20">FORZA6 THEME · 12 MEMBERS</span>
+          <span class="cas s14">CHANNEL · WORKSPACE TITLE</span>
+          <span class="cas s11">SIDEBAR GROUP · SAVED MESSAGES</span>
+          <span class="cas s9">IN_PROGRESS · #024 · TODO</span>
+        </div>
       </article>
 
       <!-- 6. Bungee — angular geometric -->
@@ -440,6 +573,13 @@
         <div class="sample-pair">
           <span class="pf-label poster">CHANNEL</span>
           <span class="pf-body">Forza6 theme · 12 members · last seen 14:32</span>
+        </div>
+        <div class="sample-cascade">
+          <span class="cas-label">CHROME LABEL CASCADE — 20 / 14 / 11 / 9 px</span>
+          <span class="cas s20">FORZA6 THEME · 12 MEMBERS</span>
+          <span class="cas s14">CHANNEL · WORKSPACE TITLE</span>
+          <span class="cas s11">SIDEBAR GROUP · SAVED MESSAGES</span>
+          <span class="cas s9">IN_PROGRESS · #024 · TODO</span>
         </div>
       </article>
 
@@ -461,6 +601,13 @@
           <span class="pf-label poster">CHANNEL</span>
           <span class="pf-body">Forza6 theme · 12 members · last seen 14:32</span>
         </div>
+        <div class="sample-cascade">
+          <span class="cas-label">CHROME LABEL CASCADE — 20 / 14 / 11 / 9 px</span>
+          <span class="cas s20">FORZA6 THEME · 12 MEMBERS</span>
+          <span class="cas s14">CHANNEL · WORKSPACE TITLE</span>
+          <span class="cas s11">SIDEBAR GROUP · SAVED MESSAGES</span>
+          <span class="cas s9">IN_PROGRESS · #024 · TODO</span>
+        </div>
       </article>
 
       <!-- 8. Staatliches — minimal condensed -->
@@ -480,6 +627,13 @@
         <div class="sample-pair">
           <span class="pf-label poster">CHANNEL</span>
           <span class="pf-body">Forza6 theme · 12 members · last seen 14:32</span>
+        </div>
+        <div class="sample-cascade">
+          <span class="cas-label">CHROME LABEL CASCADE — 20 / 14 / 11 / 9 px</span>
+          <span class="cas s20">FORZA6 THEME · 12 MEMBERS</span>
+          <span class="cas s14">CHANNEL · WORKSPACE TITLE</span>
+          <span class="cas s11">SIDEBAR GROUP · SAVED MESSAGES</span>
+          <span class="cas s9">IN_PROGRESS · #024 · TODO</span>
         </div>
       </article>
 
@@ -501,6 +655,13 @@
           <span class="pf-label poster">CHANNEL</span>
           <span class="pf-body">Forza6 theme · 12 members · last seen 14:32</span>
         </div>
+        <div class="sample-cascade">
+          <span class="cas-label">CHROME LABEL CASCADE — 20 / 14 / 11 / 9 px</span>
+          <span class="cas s20">FORZA6 THEME · 12 MEMBERS</span>
+          <span class="cas s14">CHANNEL · WORKSPACE TITLE</span>
+          <span class="cas s11">SIDEBAR GROUP · SAVED MESSAGES</span>
+          <span class="cas s9">IN_PROGRESS · #024 · TODO</span>
+        </div>
       </article>
 
       <!-- 10. Big Shoulders Display — variable condensed -->
@@ -520,6 +681,13 @@
         <div class="sample-pair">
           <span class="pf-label poster">CHANNEL</span>
           <span class="pf-body">Forza6 theme · 12 members · last seen 14:32</span>
+        </div>
+        <div class="sample-cascade">
+          <span class="cas-label">CHROME LABEL CASCADE — 20 / 14 / 11 / 9 px</span>
+          <span class="cas s20">FORZA6 THEME · 12 MEMBERS</span>
+          <span class="cas s14">CHANNEL · WORKSPACE TITLE</span>
+          <span class="cas s11">SIDEBAR GROUP · SAVED MESSAGES</span>
+          <span class="cas s9">IN_PROGRESS · #024 · TODO</span>
         </div>
       </article>
 
@@ -541,6 +709,13 @@
           <span class="pf-label poster">CHANNEL</span>
           <span class="pf-body">Forza6 theme · 12 members · last seen 14:32</span>
         </div>
+        <div class="sample-cascade">
+          <span class="cas-label">CHROME LABEL CASCADE — 20 / 14 / 11 / 9 px</span>
+          <span class="cas s20">FORZA6 THEME · 12 MEMBERS</span>
+          <span class="cas s14">CHANNEL · WORKSPACE TITLE</span>
+          <span class="cas s11">SIDEBAR GROUP · SAVED MESSAGES</span>
+          <span class="cas s9">IN_PROGRESS · #024 · TODO</span>
+        </div>
       </article>
 
       <!-- 12. Russo One — wide bold geometric -->
@@ -561,6 +736,74 @@
           <span class="pf-label poster">CHANNEL</span>
           <span class="pf-body">Forza6 theme · 12 members · last seen 14:32</span>
         </div>
+        <div class="sample-cascade">
+          <span class="cas-label">CHROME LABEL CASCADE — 20 / 14 / 11 / 9 px</span>
+          <span class="cas s20">FORZA6 THEME · 12 MEMBERS</span>
+          <span class="cas s14">CHANNEL · WORKSPACE TITLE</span>
+          <span class="cas s11">SIDEBAR GROUP · SAVED MESSAGES</span>
+          <span class="cas s9">IN_PROGRESS · #024 · TODO</span>
+        </div>
+      </article>
+
+      <!-- 13. Oswald Regular (500) — direct regular-weight comparison
+           (shiki M8ODNwFkY05Bjeb-). Oswald is one of the two roster
+           families with a true multi-weight stack; this card pairs with
+           card #4 to show what "regular weight" looks like at the same
+           headline + chrome cascade. -->
+      <article class="card ff-oswald-reg">
+        <div class="card-head">
+          <div class="card-name">Oswald — Regular (500)</div>
+          <div class="card-meta">Google · sans · regular weight comparison</div>
+        </div>
+        <div class="sample-head">
+          FORZA <span class="accent">6</span><br />FESTIVAL
+        </div>
+        <div class="sample-strip">
+          <span class="date">MAY 24</span>
+          <span class="at">19:00</span>
+          <span class="num">#024</span>
+        </div>
+        <div class="sample-pair">
+          <span class="pf-label poster">CHANNEL</span>
+          <span class="pf-body">Forza6 theme · 12 members · last seen 14:32</span>
+        </div>
+        <div class="sample-cascade">
+          <span class="cas-label">CHROME LABEL CASCADE — 20 / 14 / 11 / 9 px</span>
+          <span class="cas s20">FORZA6 THEME · 12 MEMBERS</span>
+          <span class="cas s14">CHANNEL · WORKSPACE TITLE</span>
+          <span class="cas s11">SIDEBAR GROUP · SAVED MESSAGES</span>
+          <span class="cas s9">IN_PROGRESS · #024 · TODO</span>
+        </div>
+      </article>
+
+      <!-- 14. Big Shoulders Display Regular (400) — direct regular-weight
+           comparison (shiki M8ODNwFkY05Bjeb-). Pairs with card #10
+           (weight 800) so the bold ↔ regular gap is visible at headline
+           AND chrome-label sizes. -->
+      <article class="card ff-bigshoulders-reg">
+        <div class="card-head">
+          <div class="card-name">Big Shoulders — Regular (400)</div>
+          <div class="card-meta">Google · sans · regular weight comparison</div>
+        </div>
+        <div class="sample-head">
+          FORZA <span class="accent">6</span><br />FESTIVAL
+        </div>
+        <div class="sample-strip">
+          <span class="date">MAY 24</span>
+          <span class="at">19:00</span>
+          <span class="num">#024</span>
+        </div>
+        <div class="sample-pair">
+          <span class="pf-label poster">CHANNEL</span>
+          <span class="pf-body">Forza6 theme · 12 members · last seen 14:32</span>
+        </div>
+        <div class="sample-cascade">
+          <span class="cas-label">CHROME LABEL CASCADE — 20 / 14 / 11 / 9 px</span>
+          <span class="cas s20">FORZA6 THEME · 12 MEMBERS</span>
+          <span class="cas s14">CHANNEL · WORKSPACE TITLE</span>
+          <span class="cas s11">SIDEBAR GROUP · SAVED MESSAGES</span>
+          <span class="cas s9">IN_PROGRESS · #024 · TODO</span>
+        </div>
       </article>
     </main>
 
@@ -568,8 +811,10 @@
       Open in browser. The card outlined in pink is the current
       <code>--font-display</code> chain in
       <kbd>themes/forza6.css</kbd>. Pick the card whose headline +
-      metadata strip + label all read clean at this size; that's a
-      stronger signal than feeling about the headline alone.
+      metadata strip + chrome label cascade all read clean — the
+      cascade row (20 / 14 / 11 / 9 px uppercase, the four sizes most
+      `--font-display` consumers actually live at) is the higher-stakes
+      test than the 64px headline.
     </footer>
   </body>
 </html>
