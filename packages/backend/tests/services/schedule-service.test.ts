@@ -57,6 +57,7 @@ interface Fixture {
   ownerAgentId: string;
   otherAgentId: string;
   homeDmId: string;
+  localHostId: string;
   setNow: (ts: number) => void;
   cleanup: () => void;
 }
@@ -118,6 +119,7 @@ function bootstrap(): Fixture {
   const service = new ScheduleService({
     schedules,
     workspaces,
+    conversations,
     messages,
     agents,
     settings: new SettingsRepo(db),
@@ -140,6 +142,7 @@ function bootstrap(): Fixture {
     ownerAgentId: owner.id,
     otherAgentId: other.id,
     homeDmId: dm.id,
+    localHostId,
     setNow,
     cleanup: tmp.cleanup,
   };
@@ -167,6 +170,7 @@ describe('ScheduleService.create', () => {
         spec: { kind: 'once', delay_seconds: 60 },
       },
       f.ownerAgentId,
+      f.homeDmId,
     );
     expect(created.spec.kind).toBe('once');
     if (created.spec.kind === 'once') {
@@ -184,6 +188,7 @@ describe('ScheduleService.create', () => {
       f.service.create(
         { title: 'Test schedule', message: 'm', spec: { kind: 'once' } as ScheduleCreateInput['spec'] },
         f.ownerAgentId,
+        f.homeDmId,
       ),
     ).toThrow(ScheduleError);
   });
@@ -199,6 +204,7 @@ describe('ScheduleService.create', () => {
           spec: { kind: 'once', delay_seconds: SCHEDULE_MIN_DELAY_SECONDS - 1 },
         },
         f.ownerAgentId,
+        f.homeDmId,
       );
     } catch (e) {
       err = e as ScheduleError;
@@ -220,6 +226,7 @@ describe('ScheduleService.create', () => {
           },
         },
         f.ownerAgentId,
+        f.homeDmId,
       );
     } catch (e) {
       err = e as ScheduleError;
@@ -238,6 +245,7 @@ describe('ScheduleService.create', () => {
           spec: { kind: 'interval', every_seconds: 60 },
         },
         f.ownerAgentId,
+        f.homeDmId,
       );
     } catch (e) {
       err = e as ScheduleError;
@@ -255,6 +263,7 @@ describe('ScheduleService.create', () => {
         allow_unbounded: true,
       },
       f.ownerAgentId,
+      f.homeDmId,
     );
     expect(created.spec.kind).toBe('interval');
     expect(created.next_fire_at).toBe(currentNow + 60_000);
@@ -270,6 +279,7 @@ describe('ScheduleService.create', () => {
         max_occurrences: 3,
       },
       f.ownerAgentId,
+      f.homeDmId,
     );
     expect(created.max_occurrences).toBe(3);
   });
@@ -290,6 +300,7 @@ describe('ScheduleService.create', () => {
           max_occurrences: 5,
         },
         f.ownerAgentId,
+        f.homeDmId,
       );
     } catch (e) {
       err = e as ScheduleError;
@@ -313,6 +324,7 @@ describe('ScheduleService.create', () => {
           max_occurrences: 5,
         },
         f.ownerAgentId,
+        f.homeDmId,
       );
     } catch (e) {
       err = e as ScheduleError;
@@ -340,6 +352,7 @@ describe('ScheduleService.create', () => {
         allow_unbounded: true,
       },
       f.ownerAgentId,
+      f.homeDmId,
     );
     expect(created.next_fire_at).toBe(Date.UTC(2024, 2, 9, 14, 0, 0));
   });
@@ -351,6 +364,7 @@ describe('ScheduleService.create', () => {
       f.service.create(
         { title: 'Test schedule', message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
         'nonexistent',
+        f.homeDmId,
       );
     } catch (e) {
       err = e as ScheduleError;
@@ -365,11 +379,153 @@ describe('ScheduleService.create', () => {
       f.service.create(
         { title: 'Test schedule', message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
         f.otherAgentId,
+        f.homeDmId,
       );
     } catch (e) {
       err = e as ScheduleError;
     }
     expect(err?.code).toBe('agent_home_not_found');
+  });
+
+  // ── target_conversation_id (#task:478) ────────────────────────────
+  // The schedule's "target" is the conversation whose
+  // (conversation, owner_agent) runtime wakes up on each fire — that
+  // runtime owns the full lifecycle: receive wake → produce work →
+  // post result, all in its own context. Splitting the fire-target
+  // from the execution-target would re-introduce the original bug
+  // (target-Alice has no memory of authoring the report posted under
+  // her name); therefore there is intentionally no `report_target_id`
+  // and no fan-out from one session to another.
+
+  it('defaults target_conversation_id to the calling conversation', () => {
+    const f = setup();
+    const created = f.service.create(
+      { title: 'Test schedule', message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
+      f.ownerAgentId,
+      f.homeDmId,
+    );
+    // Default = the calling conversation (here: agent_home DM, mirroring
+    // the legacy hardcoded fire target so existing tests don't change
+    // semantics). When the agent calls from a channel, this would be
+    // the channel id.
+    expect(created.target_conversation_id).toBe(f.homeDmId);
+  });
+
+  it('accepts an explicit target_conversation_id when the owner is a member', () => {
+    const f = setup();
+    // Provision a regular workspace + channel that the owner joins.
+    const ws = f.workspaces.insert({
+      name: 'team',
+      description: null,
+      workspacePath: '/tmp/silverhand-team',
+      workspaceHostId: f.localHostId,
+    });
+    const channel = f.conversations.insertChannel({
+      workspaceId: ws.id,
+      workspacePath: ws.workspace_path,
+      title: 'general',
+    });
+    f.conversations.addAgent(channel.id, f.ownerAgentId);
+
+    const created = f.service.create(
+      {
+        title: 'Channel cron',
+        message: 'fire in the channel',
+        target_conversation_id: channel.id,
+        spec: { kind: 'once', delay_seconds: 60 },
+      },
+      f.ownerAgentId,
+      f.homeDmId,
+    );
+    expect(created.target_conversation_id).toBe(channel.id);
+  });
+
+  it('rejects when target_conversation_id does not exist', () => {
+    const f = setup();
+    let err: ScheduleError | undefined;
+    try {
+      f.service.create(
+        {
+          title: 'Test schedule',
+          message: 'm',
+          target_conversation_id: 'no-such-conv',
+          spec: { kind: 'once', delay_seconds: 60 },
+        },
+        f.ownerAgentId,
+        f.homeDmId,
+      );
+    } catch (e) {
+      err = e as ScheduleError;
+    }
+    expect(err?.code).toBe('target_conversation_not_found');
+  });
+
+  it('rejects when target conversation is closed', () => {
+    const f = setup();
+    const ws = f.workspaces.insert({
+      name: 'team',
+      description: null,
+      workspacePath: '/tmp/silverhand-team-closed',
+      workspaceHostId: f.localHostId,
+    });
+    const channel = f.conversations.insertChannel({
+      workspaceId: ws.id,
+      workspacePath: ws.workspace_path,
+      title: 'closed-room',
+    });
+    f.conversations.addAgent(channel.id, f.ownerAgentId);
+    // Mark the channel closed via the conversation lifecycle setter.
+    f.conversations.close(channel.id, 'closed for test');
+
+    let err: ScheduleError | undefined;
+    try {
+      f.service.create(
+        {
+          title: 'Test schedule',
+          message: 'm',
+          target_conversation_id: channel.id,
+          spec: { kind: 'once', delay_seconds: 60 },
+        },
+        f.ownerAgentId,
+        f.homeDmId,
+      );
+    } catch (e) {
+      err = e as ScheduleError;
+    }
+    expect(err?.code).toBe('target_conversation_closed');
+  });
+
+  it('rejects when owner is not a member of target conversation', () => {
+    const f = setup();
+    const ws = f.workspaces.insert({
+      name: 'team',
+      description: null,
+      workspacePath: '/tmp/silverhand-team-strangers',
+      workspaceHostId: f.localHostId,
+    });
+    const channel = f.conversations.insertChannel({
+      workspaceId: ws.id,
+      workspacePath: ws.workspace_path,
+      title: 'no-entry',
+    });
+    // Note: ownerAgentId NOT added as a member.
+
+    let err: ScheduleError | undefined;
+    try {
+      f.service.create(
+        {
+          title: 'Test schedule',
+          message: 'm',
+          target_conversation_id: channel.id,
+          spec: { kind: 'once', delay_seconds: 60 },
+        },
+        f.ownerAgentId,
+        f.homeDmId,
+      );
+    } catch (e) {
+      err = e as ScheduleError;
+    }
+    expect(err?.code).toBe('agent_not_in_target_conversation');
   });
 
   it('enforces per-agent active quota', () => {
@@ -382,6 +538,7 @@ describe('ScheduleService.create', () => {
           spec: { kind: 'once', delay_seconds: 60 + i },
         },
         f.ownerAgentId,
+        f.homeDmId,
       );
     }
     let err: ScheduleError | undefined;
@@ -389,6 +546,7 @@ describe('ScheduleService.create', () => {
       f.service.create(
         { title: 'Test schedule', message: 'overflow', spec: { kind: 'once', delay_seconds: 9999 } },
         f.ownerAgentId,
+        f.homeDmId,
       );
     } catch (e) {
       err = e as ScheduleError;
@@ -408,6 +566,7 @@ describe('ScheduleService.create', () => {
           until_at: currentNow + 60_000, // before first fire (currentNow + 600_000)
         },
         f.ownerAgentId,
+        f.homeDmId,
       );
     } catch (e) {
       err = e as ScheduleError;
@@ -437,7 +596,7 @@ describe('ScheduleService.create', () => {
       }
       let err: ScheduleError | undefined;
       try {
-        f.service.create(input, f.ownerAgentId);
+        f.service.create(input, f.ownerAgentId, f.homeDmId);
       } catch (e) {
         err = e as ScheduleError;
       }
@@ -452,10 +611,12 @@ describe('ScheduleService.list', () => {
     const due = f.service.create(
       { title: 'Test schedule', message: 'soon', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
+      f.homeDmId,
     );
     const later = f.service.create(
       { title: 'Test schedule', message: 'later', spec: { kind: 'once', delay_seconds: 600 } },
       f.ownerAgentId,
+      f.homeDmId,
     );
     // Cancel one to verify it's filtered out by status='active'.
     f.service.cancel(later.id, f.ownerAgentId);
@@ -472,11 +633,15 @@ describe('ScheduleService.list', () => {
     const mine = f.service.create(
       { title: 'Test schedule', message: 'mine', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
+      f.homeDmId,
     );
     // bob has no agent_home so we can't service.create for him; insert
     // directly via repo to fake a stray row that our list must ignore.
+    // Pass an arbitrary target_conversation_id — list filters by owner,
+    // not by target, so the value doesn't matter for this test.
     f.schedules.insert({
       ownerAgentId: f.otherAgentId,
+      targetConversationId: 'unused-target',
       title: 'Test schedule',
       message: 'theirs',
       spec: { kind: 'once', fire_at: currentNow + 60_000 },
@@ -493,6 +658,7 @@ describe('ScheduleService.cancel', () => {
     const s = f.service.create(
       { title: 'Test schedule', message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
+      f.homeDmId,
     );
     const after = f.service.cancel(s.id, f.ownerAgentId);
     expect(after.status).toBe('cancelled');
@@ -504,6 +670,7 @@ describe('ScheduleService.cancel', () => {
     const s = f.service.create(
       { title: 'Test schedule', message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
+      f.homeDmId,
     );
     let err: ScheduleError | undefined;
     try {
@@ -520,6 +687,7 @@ describe('ScheduleService.cancel', () => {
     const s = f.service.create(
       { title: 'Test schedule', message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
+      f.homeDmId,
     );
     f.setNow(currentNow + 70_000);
     await f.service.tick();
@@ -540,6 +708,7 @@ describe('ScheduleService.tick — fire & advance', () => {
     const s = f.service.create(
       { title: 'Test schedule', message: 'follow up', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
+      f.homeDmId,
     );
     f.setNow(currentNow + 60_000);
     await f.service.tick();
@@ -560,6 +729,7 @@ describe('ScheduleService.tick — fire & advance', () => {
         spec: { kind: 'once', delay_seconds: 60 },
       },
       f.ownerAgentId,
+      f.homeDmId,
     );
     f.setNow(currentNow + 60_000);
     await f.service.tick();
@@ -607,6 +777,7 @@ describe('ScheduleService.tick — fire & advance', () => {
         allow_unbounded: true,
       },
       f.ownerAgentId,
+      f.homeDmId,
     );
     f.setNow(Date.UTC(2024, 2, 9, 14, 0, 0));
     await f.service.tick();
@@ -625,6 +796,7 @@ describe('ScheduleService.tick — fire & advance', () => {
     f.service.create(
       { title: 'Test schedule', message: 'm', spec: { kind: 'once', delay_seconds: 600 } },
       f.ownerAgentId,
+      f.homeDmId,
     );
     f.setNow(currentNow + 60_000); // not yet due
     await f.service.tick();
@@ -641,6 +813,7 @@ describe('ScheduleService.tick — fire & advance', () => {
         max_occurrences: 3,
       },
       f.ownerAgentId,
+      f.homeDmId,
     );
 
     // First fire at exactly the planned time — next should be t+60s.
@@ -680,6 +853,7 @@ describe('ScheduleService.tick — fire & advance', () => {
         until_at: currentNow + 65_000, // covers the first fire only
       },
       f.ownerAgentId,
+      f.homeDmId,
     );
     f.setNow(s.next_fire_at);
     await f.service.tick();
@@ -694,6 +868,7 @@ describe('ScheduleService.tick — fire & advance', () => {
     const s = f.service.create(
       { title: 'Test schedule', message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
+      f.homeDmId,
     );
     f.setNow(currentNow + 60_000);
     await f.service.tick();
@@ -703,12 +878,114 @@ describe('ScheduleService.tick — fire & advance', () => {
   });
 });
 
+describe('ScheduleService.tick — target_conversation_id (#task:478)', () => {
+  // Provision a regular workspace + channel where the owner is a member.
+  // Returns the channel id; the caller drives the rest.
+  function provisionChannel(f: ReturnType<typeof setup>, name: string): string {
+    const ws = f.workspaces.insert({
+      name,
+      description: null,
+      workspacePath: `/tmp/silverhand-${name}`,
+      workspaceHostId: f.localHostId,
+    });
+    const channel = f.conversations.insertChannel({
+      workspaceId: ws.id,
+      workspacePath: ws.workspace_path,
+      title: 'fire-here',
+    });
+    f.conversations.addAgent(channel.id, f.ownerAgentId);
+    return channel.id;
+  }
+
+  it('wake fires in the explicit target conversation, not agent_home', async () => {
+    const f = setup();
+    const channelId = provisionChannel(f, 'tick-target');
+    const s = f.service.create(
+      {
+        title: 'channel cron',
+        message: 'go',
+        target_conversation_id: channelId,
+        spec: { kind: 'once', delay_seconds: 60 },
+      },
+      f.ownerAgentId,
+      f.homeDmId,
+    );
+    f.setNow(currentNow + 60_000);
+    await f.service.tick();
+    expect(f.schedules.get(s.id)?.status).toBe('done');
+    expect(f.fake.delivered.length).toBe(1);
+    // Both the system message AND the runtime start hit the target,
+    // not the home DM. This is the subject-continuity invariant —
+    // the (target, owner) session is the one that wakes, produces,
+    // and posts.
+    expect(f.fake.delivered[0]?.conversationId).toBe(channelId);
+    expect(f.fake.starts[0]?.conversationId).toBe(channelId);
+  });
+
+  it('marks failed and posts owner notice when target was deleted between create and fire', async () => {
+    const f = setup();
+    const channelId = provisionChannel(f, 'tick-deleted');
+    const s = f.service.create(
+      {
+        title: 'doomed',
+        message: 'go',
+        target_conversation_id: channelId,
+        spec: { kind: 'once', delay_seconds: 60 },
+      },
+      f.ownerAgentId,
+      f.homeDmId,
+    );
+    // Delete the channel between create and fire.
+    f.conversations.delete(channelId);
+    f.setNow(currentNow + 60_000);
+    await f.service.tick();
+
+    const after = f.schedules.get(s.id);
+    expect(after?.status).toBe('failed');
+    expect(after?.failure_reason).toContain('target_conversation_unavailable');
+    // No deliver/start to the missing target.
+    expect(f.fake.delivered.length).toBe(0);
+    expect(f.fake.starts.length).toBe(0);
+    // Owner gets a heads-up in their agent_home DM so they don't keep
+    // waiting on a wake that will never land. This is a lifecycle
+    // notice — distinct from the wake itself, because the wake
+    // belongs to the (target, agent) session and that session can no
+    // longer be reached.
+    const notices = f.messages.listForConversation(f.homeDmId, 50);
+    expect(notices.length).toBeGreaterThan(0);
+    expect(notices.some(m => m.content.includes('could not fire'))).toBe(true);
+  });
+
+  it('marks failed and posts owner notice when target was closed between create and fire', async () => {
+    const f = setup();
+    const channelId = provisionChannel(f, 'tick-closed');
+    const s = f.service.create(
+      {
+        title: 'closing time',
+        message: 'go',
+        target_conversation_id: channelId,
+        spec: { kind: 'once', delay_seconds: 60 },
+      },
+      f.ownerAgentId,
+      f.homeDmId,
+    );
+    f.conversations.close(channelId, 'archived for test');
+    f.setNow(currentNow + 60_000);
+    await f.service.tick();
+
+    expect(f.schedules.get(s.id)?.status).toBe('failed');
+    const notices = f.messages.listForConversation(f.homeDmId, 50);
+    expect(notices.some(m => m.content.includes('has been closed'))).toBe(true);
+  });
+});
+
 describe('ScheduleService.tick — concurrency and recovery', () => {
   it('CAS prevents two parallel ticks from firing the same row twice', async () => {
     const f = setup();
     const s = f.service.create(
       { title: 'Test schedule', message: 'racy', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
+      f.homeDmId,
     );
     f.setNow(currentNow + 60_000);
     // Fire both ticks "simultaneously" — Promise.all → JS event loop
@@ -724,6 +1001,7 @@ describe('ScheduleService.tick — concurrency and recovery', () => {
     const s = f.service.create(
       { title: 'Test schedule', message: 'crashed mid-fire', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
+      f.homeDmId,
     );
     // Simulate crash: the prior process left this row in 'firing'.
     f.schedules.tryClaim(s.id);
@@ -743,6 +1021,7 @@ describe('ScheduleService.tick — concurrency and recovery', () => {
         allow_unbounded: true,
       },
       f.ownerAgentId,
+      f.homeDmId,
     );
     // Jump forward 10 minutes — by old "catch-up" logic, this would
     // fire 10 times. Locked design says: fire once, advance from
@@ -783,6 +1062,7 @@ describe('ScheduleService.tick — cron + DST', () => {
         max_occurrences: 5,
       },
       f.ownerAgentId,
+      f.homeDmId,
     );
     let prev = s.next_fire_at;
     for (let i = 0; i < 5; i++) {
@@ -821,6 +1101,7 @@ describe('ScheduleService.tick — cron + DST', () => {
         max_occurrences: 8,
       },
       f.ownerAgentId,
+      f.homeDmId,
     );
     let prev = s.next_fire_at;
     for (let i = 0; i < 8; i++) {
@@ -859,6 +1140,7 @@ describe('ScheduleService renders wake body', () => {
       const s = f.service.create(
         { title: 'Test schedule', message: 'show in ui', spec: { kind: 'once', delay_seconds: 60 } },
         f.ownerAgentId,
+        f.homeDmId,
       );
       f.setNow(s.next_fire_at);
       await f.service.tick();
@@ -890,6 +1172,7 @@ describe('ScheduleService renders wake body', () => {
         max_occurrences: 3,
       },
       f.ownerAgentId,
+      f.homeDmId,
     );
     f.setNow(s.next_fire_at);
     await f.service.tick();
@@ -904,6 +1187,7 @@ describe('ScheduleService renders wake body', () => {
     const s = f.service.create(
       { title: 'Test schedule', message: 'morning', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
+      f.homeDmId,
     );
     // Fire 10 minutes after the planned time.
     f.setNow(s.next_fire_at + 10 * 60_000);
@@ -945,6 +1229,7 @@ describe('ScheduleService — cron 5-field strictness', () => {
           max_occurrences: 5,
         },
         f.ownerAgentId,
+        f.homeDmId,
       );
     } catch (e) {
       err = e as ScheduleError;
@@ -966,6 +1251,7 @@ describe('ScheduleService — cron 5-field strictness', () => {
             max_occurrences: 5,
           },
           f.ownerAgentId,
+          f.homeDmId,
         );
       } catch (e) {
         err = e as ScheduleError;
@@ -988,6 +1274,7 @@ describe('ScheduleService — cron 5-field strictness', () => {
           max_occurrences: 5,
         },
         f.ownerAgentId,
+        f.homeDmId,
       ),
     ).not.toThrow();
   });
@@ -999,6 +1286,7 @@ describe('ScheduleService — cancel-during-firing race', () => {
     const s = f.service.create(
       { title: 'Test schedule', message: 'racy', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
+      f.homeDmId,
     );
 
     // Simulate the race: tick() begins, CAS-claims into 'firing',
@@ -1040,6 +1328,7 @@ describe('ScheduleService — cancel-during-firing race', () => {
         max_occurrences: 5,
       },
       f.ownerAgentId,
+      f.homeDmId,
     );
     f.fake.deliverMessage = async (cid, aid, mid) => {
       f.fake.delivered.push({ conversationId: cid, agentId: aid, messageId: mid });
@@ -1068,6 +1357,7 @@ describe('ScheduleService — start() failure marks the schedule failed', () => 
     const s = f.service.create(
       { title: 'Test schedule', message: 'wake me', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
+      f.homeDmId,
     );
     f.setNow(currentNow + 60_000);
     await f.service.tick();
@@ -1093,6 +1383,7 @@ describe('ScheduleService — wake body advancement details', () => {
         allow_unbounded: true,
       },
       f.ownerAgentId,
+      f.homeDmId,
     );
     // Skip 5 minutes — 5 occurrences elapsed since the planned fire
     // time. We catch up with a single fire; missed_count = 5.
@@ -1117,6 +1408,7 @@ describe('ScheduleService — wake body advancement details', () => {
         max_occurrences: 3,
       },
       f.ownerAgentId,
+      f.homeDmId,
     );
     f.setNow(s.next_fire_at);
     await f.service.tick();
@@ -1136,6 +1428,7 @@ describe('ScheduleService — wake body advancement details', () => {
         max_occurrences: 1,
       },
       f.ownerAgentId,
+      f.homeDmId,
     );
     f.setNow(s.next_fire_at);
     await f.service.tick();
@@ -1151,6 +1444,7 @@ describe('ScheduleService — wake body advancement details', () => {
     const s = f.service.create(
       { title: 'Test schedule', message: 'just once', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
+      f.homeDmId,
     );
     f.setNow(s.next_fire_at);
     await f.service.tick();
@@ -1171,10 +1465,12 @@ describe('ScheduleSchedule isolation', () => {
     const a = f.service.create(
       { title: 'Test schedule', message: 'second', spec: { kind: 'once', delay_seconds: 600 } },
       f.ownerAgentId,
+      f.homeDmId,
     );
     const b = f.service.create(
       { title: 'Test schedule', message: 'first', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
+      f.homeDmId,
     );
     const list = f.service.list(f.ownerAgentId, 'pending', undefined);
     expect(list.map(s => s.id)).toEqual([b.id, a.id]);
@@ -1185,6 +1481,7 @@ describe('ScheduleSchedule isolation', () => {
     f.service.create(
       { title: 'Test schedule', message: 'mine', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
+      f.homeDmId,
     );
     // Listing under a foreign agent returns nothing — no error.
     const list = f.service.list(f.otherAgentId, 'all', undefined);
@@ -1207,6 +1504,7 @@ describe('ScheduleDto round-trip', () => {
         allow_unbounded: true,
       },
       f.ownerAgentId,
+      f.homeDmId,
     );
     const reread: ScheduleDto = f.schedules.get(created.id)!;
     expect(reread.spec.kind).toBe('cron');

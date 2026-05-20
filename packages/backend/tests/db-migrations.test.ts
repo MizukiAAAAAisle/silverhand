@@ -1896,6 +1896,98 @@ describe('database migrations', () => {
     });
   });
 
+  describe('migration v28 (schedule target_conversation_id)', () => {
+    it('adds NOT NULL target_conversation_id and backfills existing rows from owner agent_home DM', () => {
+      // Lock the v28 backfill contract: rows that pre-date the column
+      // get their `target_conversation_id` populated from the owner's
+      // agent_home DM, preserving the legacy hardcoded fire target.
+      // After v28 the service no longer reads `agent_home` at fire
+      // time — the column is the single source of truth.
+      const db = new Database(':memory:');
+      try {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS _migrations (
+            version INTEGER PRIMARY KEY,
+            name    TEXT NOT NULL,
+            applied_at INTEGER NOT NULL
+          );
+        `);
+        applyMigrationsThrough(db, 27);
+
+        const now = 1_700_000_000_000;
+        db.prepare(
+          `INSERT INTO users (id, name, display_name, created_at, updated_at)
+             VALUES ('viewer_1', 'shiki', 'Shiki', ?, ?)`,
+        ).run(now, now);
+        db.prepare(
+          `INSERT INTO app_settings (key, value)
+             VALUES ('viewer_user_id', 'viewer_1')`,
+        ).run();
+        db.prepare(
+          `INSERT INTO hosts (id, name, kind, created_at)
+             VALUES ('h1', 'local', 'local', ?)`,
+        ).run(now);
+        db.prepare(
+          `INSERT INTO agents
+             (id, name, runtime, model, host_id, description,
+              created_at, updated_at, display_name, reasoning_effort, fast_mode,
+              created_by_user_id)
+           VALUES ('a1', 'alice', 'claude', NULL, 'h1', NULL, ?, ?, 'Alice', NULL, NULL,
+                   'viewer_1')`,
+        ).run(now, now);
+        // Owner's agent_home + DM (the legacy fire target).
+        db.prepare(
+          `INSERT INTO workspaces
+             (id, name, description, workspace_kind, workspace_path,
+              workspace_host_id, owner_agent_id, archived_at, created_at, updated_at)
+           VALUES ('ws_home', 'alice', NULL, 'agent_home',
+                   '/tmp/alice-home', 'h1', 'a1', NULL, ?, ?)`,
+        ).run(now, now);
+        db.prepare(
+          `INSERT INTO conversations
+             (id, workspace_id, workspace_path, kind, parent_conversation_id,
+              title, status, spawned_by_agent_id, closed_at, close_summary,
+              pinned_at, archived_at, created_at, updated_at)
+           VALUES ('conv_dm', 'ws_home', '/tmp/alice-home', 'dm_channel',
+                   NULL, 'dm-alice', 'active', NULL, NULL, NULL, NULL, NULL, ?, ?)`,
+        ).run(now, now);
+        // Pre-existing schedule with no target_conversation_id (column
+        // didn't exist in v27).
+        db.prepare(
+          `INSERT INTO schedules
+             (id, owner_agent_id, title, message, spec_json, next_fire_at, status,
+              fired_count, created_at, updated_at)
+           VALUES ('s1', 'a1', 'Daily review',
+                   'review deploy status', '{"kind":"once","fire_at":1}',
+                   1, 'pending', 0, ?, ?)`,
+        ).run(now, now);
+
+        runMigrations(db);
+
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 28`).get(),
+        ).toBeDefined();
+        // Backfilled to the owner's agent_home DM.
+        const row = db
+          .prepare<[], { target_conversation_id: string }>(
+            `SELECT target_conversation_id FROM schedules WHERE id = 's1'`,
+          )
+          .get();
+        expect(row?.target_conversation_id).toBe('conv_dm');
+        // Index exists for fast scheduler-side lookups by target.
+        const idx = db
+          .prepare<[], { name: string }>(
+            `SELECT name FROM sqlite_master
+              WHERE type = 'index' AND name = 'idx_schedules_target'`,
+          )
+          .get();
+        expect(idx?.name).toBe('idx_schedules_target');
+      } finally {
+        db.close();
+      }
+    });
+  });
+
   describe('migration v22 (no-op stub)', () => {
     /**
      * The original v22 renamed `users.handle` → `users.name`. The

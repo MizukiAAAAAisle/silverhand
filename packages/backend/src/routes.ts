@@ -254,6 +254,9 @@ const scheduleErrorStatusMap: Record<ScheduleErrorCode, 400 | 403 | 404 | 409 | 
   too_many_active_schedules: 429,
   agent_not_found: 404,
   agent_home_not_found: 404,
+  target_conversation_not_found: 404,
+  target_conversation_closed: 409,
+  agent_not_in_target_conversation: 403,
   schedule_not_found: 404,
   not_owner: 403,
   not_cancellable: 409,
@@ -4007,12 +4010,14 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
   });
 
   // ── Agent-owned schedules (silverhand CLI → backend) ──────────────
-  // Per-agent surface — no channel/thread coupling. The route still
-  // hangs off the calling conversation so the existing internal
-  // principal middleware (cid+aid → AgentPrincipal) authenticates the
-  // request without a second auth path. The schedule itself is owned
-  // by `principal.agentId`; the conversation context is irrelevant to
-  // the schedule's lifecycle (it always wakes the agent in agent_home).
+  // Per-agent surface. The route hangs off the calling conversation so
+  // the existing internal principal middleware (cid+aid → AgentPrincipal)
+  // authenticates the request without a second auth path; the calling
+  // `cid` is also passed into the service as the default
+  // `target_conversation_id` so creating a schedule in DM defaults to
+  // firing in DM, in a channel defaults to firing in that channel, etc.
+  // (the agent can always override with `target_conversation_id` in the
+  // body to fire elsewhere it's a member of).
   // Errors map ScheduleError.code → structured `{ error, code }` JSON
   // via scheduleServiceErrorResponse so the agent sees stable codes.
 
@@ -4032,7 +4037,11 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
     }
     const principal = getAgentPrincipal(c);
     try {
-      const schedule = ctx.scheduleService.create(parsed.data, principal.agentId);
+      const schedule = ctx.scheduleService.create(
+        parsed.data,
+        principal.agentId,
+        cid,
+      );
       return c.json({ schedule });
     } catch (err) {
       const mapped = scheduleServiceErrorResponse(c, err);

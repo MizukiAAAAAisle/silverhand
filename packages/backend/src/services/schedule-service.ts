@@ -15,6 +15,7 @@ import {
 import type { BackendLogger } from '../context.js';
 import type { ConversationManager } from '../conversation-manager.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
+import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
 import type { ScheduleRepo } from '../repos/schedule-repo.js';
 import type { SettingsRepo } from '../repos/settings-repo.js';
@@ -36,6 +37,9 @@ export type ScheduleErrorCode =
   | 'too_many_active_schedules'
   | 'agent_not_found'
   | 'agent_home_not_found'
+  | 'target_conversation_not_found'
+  | 'target_conversation_closed'
+  | 'agent_not_in_target_conversation'
   | 'schedule_not_found'
   | 'not_owner'
   | 'not_cancellable';
@@ -53,6 +57,9 @@ export class ScheduleError extends Error {
 export interface ScheduleServiceOptions {
   schedules: ScheduleRepo;
   workspaces: WorkspaceRepo;
+  /** Used to validate `target_conversation_id` (existence, not closed)
+   *  and the owner agent's membership at create time. */
+  conversations: ConversationRepo;
   messages: MessageRepo;
   agents: AgentRepo;
   /** Used to resolve the current viewer id from
@@ -96,6 +103,7 @@ const NEAR_TIMER_CAP_MS = 60_000;
 export class ScheduleService {
   private readonly schedules: ScheduleRepo;
   private readonly workspaces: WorkspaceRepo;
+  private readonly conversations: ConversationRepo;
   private readonly messages: MessageRepo;
   private readonly agents: AgentRepo;
   private readonly settings: SettingsRepo;
@@ -114,6 +122,7 @@ export class ScheduleService {
   constructor(opts: ScheduleServiceOptions) {
     this.schedules = opts.schedules;
     this.workspaces = opts.workspaces;
+    this.conversations = opts.conversations;
     this.messages = opts.messages;
     this.agents = opts.agents;
     this.settings = opts.settings;
@@ -180,8 +189,21 @@ export class ScheduleService {
    * Validate input, enforce quota/range, compute initial
    * `next_fire_at`, persist. Throws `ScheduleError` for any caller
    * fault; never throws for transient I/O.
+   *
+   * `callingConversationId` is the conversation the create call landed
+   * in (the route's `:cid` path param). It's used as the default for
+   * `target_conversation_id` when the input doesn't specify one — so
+   * creating in DM defaults to firing in DM, creating in a channel
+   * defaults to firing in that channel, etc. The principle is "the
+   * `(conversation, agent)` runtime that posts the result is the one
+   * that did the work" — splitting fire-target from execution-target
+   * would break the subject-continuity invariant.
    */
-  create(input: ScheduleCreateInput, ownerAgentId: string): ScheduleDto {
+  create(
+    input: ScheduleCreateInput,
+    ownerAgentId: string,
+    callingConversationId: string,
+  ): ScheduleDto {
     const parsed = ScheduleCreateInputSchema.safeParse(input);
     if (!parsed.success) {
       throw new ScheduleError(
@@ -206,6 +228,39 @@ export class ScheduleService {
       throw new ScheduleError(
         'agent_home_not_found',
         `agent ${ownerAgentId} has no agent_home dm_channel`,
+      );
+    }
+
+    // Resolve and validate the execution target. Default = the calling
+    // conversation; explicit override via input.target_conversation_id.
+    // Validation: target conversation must exist, must not be closed,
+    // and the owner agent must be a member. We do NOT also check
+    // `archived_at` here — archived channels still accept new messages
+    // (archive is a soft-list-out flag, not a write barrier); closure
+    // (`closed_at`) is the hard "no more messages" predicate.
+    const targetConversationId =
+      data.target_conversation_id ?? callingConversationId;
+    const target = this.conversations.get(targetConversationId);
+    if (!target) {
+      throw new ScheduleError(
+        'target_conversation_not_found',
+        `target conversation ${targetConversationId} not found`,
+      );
+    }
+    if (target.closed_at !== null) {
+      throw new ScheduleError(
+        'target_conversation_closed',
+        `target conversation ${targetConversationId} is closed`,
+      );
+    }
+    const membership = this.conversations.getAgent(
+      targetConversationId,
+      ownerAgentId,
+    );
+    if (!membership) {
+      throw new ScheduleError(
+        'agent_not_in_target_conversation',
+        `agent ${ownerAgentId} is not a member of target conversation ${targetConversationId}`,
       );
     }
 
@@ -294,6 +349,7 @@ export class ScheduleService {
 
     const schedule = this.schedules.insert({
       ownerAgentId,
+      targetConversationId,
       title: data.title,
       message: data.message,
       spec: canonicalSpec,
@@ -508,18 +564,36 @@ export class ScheduleService {
     actualFireAt: number,
     advancement: Advancement,
   ): Promise<void> {
-    const home = this.workspaces.getAgentHomeByOwner(dto.owner_agent_id);
-    if (!home || !home.dm_channel_id) {
-      // Agent_home should exist (we validated at create time and the
-      // CASCADE guards owner deletion), but guard anyway.
+    // Resolve the execution target. Validated at create time but
+    // checked again here because conversations can be closed/removed
+    // between create and fire — when that happens the schedule must
+    // fail loudly (not silently fall back to agent_home), and the
+    // owner needs an out-of-band signal so they don't keep waiting
+    // for a wake that will never land.
+    const targetConvId = dto.target_conversation_id;
+    const target = this.conversations.get(targetConvId);
+    if (!target) {
+      this.notifyOwnerOfDeadTarget(dto, 'missing');
       throw new Error(
-        `owner ${dto.owner_agent_id} has no agent_home dm_channel`,
+        `target_conversation_unavailable: ${targetConvId} (missing)`,
       );
     }
-    const dmChannelId = home.dm_channel_id;
+    if (target.closed_at !== null) {
+      this.notifyOwnerOfDeadTarget(dto, 'closed');
+      throw new Error(
+        `target_conversation_unavailable: ${targetConvId} (closed)`,
+      );
+    }
+    if (!this.conversations.getAgent(targetConvId, dto.owner_agent_id)) {
+      this.notifyOwnerOfDeadTarget(dto, 'not_member');
+      throw new Error(
+        `target_conversation_unavailable: ${targetConvId} (owner not member)`,
+      );
+    }
+
     const body = renderWakeBody(dto, actualFireAt, advancement);
     const msg = this.messages.insertForConversation({
-      conversationId: dmChannelId,
+      conversationId: targetConvId,
       fromKind: 'system',
       content: body,
       metadata: {
@@ -541,10 +615,11 @@ export class ScheduleService {
         next_fire_at: advancement.nextFireAt,
       },
     });
-    // Make the wake visible to an already-open agent_home DM before
-    // delivery/start. Without this, the row exists and the agent wakes,
-    // but the renderer only sees it after a manual refetch.
-    this.events.publish(dmChannelId, {
+    // Make the wake visible to an already-open viewer of the target
+    // conversation before delivery/start. Without this, the row exists
+    // and the agent wakes, but the renderer only sees it after a manual
+    // refetch.
+    this.events.publish(targetConvId, {
       kind: 'message',
       payload: { message: msg },
     });
@@ -554,7 +629,7 @@ export class ScheduleService {
     const viewerUserId = this.settings.getViewerUserId();
     if (viewerUserId) {
       this.events.publishToScope(`viewer:${viewerUserId}`, 'unread_updated', {
-        conversation_id: dmChannelId,
+        conversation_id: targetConvId,
       });
     }
     // Order matters: `start()` is required for non-oneShot drivers
@@ -563,11 +638,65 @@ export class ScheduleService {
     // schedule would otherwise look "delivered". Treat both legs as
     // required; `processOne` will markFailed if either throws.
     await this.conversationManager.deliverMessage(
-      dmChannelId,
+      targetConvId,
       dto.owner_agent_id,
       msg.id,
     );
-    await this.conversationManager.start(dmChannelId, dto.owner_agent_id);
+    await this.conversationManager.start(targetConvId, dto.owner_agent_id);
+  }
+
+  /** Best-effort lifecycle notice when the schedule's target conversation
+   *  has become unreachable (deleted, closed, or owner removed) between
+   *  create and fire. Posts a plain system message into the owner's
+   *  agent_home DM so the operator finds out without staring at the
+   *  silent target. Failure here must not mask the underlying wake
+   *  failure — we swallow throws and rely on the wake's own log line.
+   *
+   *  This is deliberately a generic system message (no new typed
+   *  metadata subtype) — v1 has one operator and the human-readable
+   *  body is enough; if the failure mode becomes common we can graduate
+   *  it to a `schedule_failed` subtype later. */
+  private notifyOwnerOfDeadTarget(
+    dto: ScheduleDto,
+    reason: 'missing' | 'closed' | 'not_member',
+  ): void {
+    try {
+      const home = this.workspaces.getAgentHomeByOwner(dto.owner_agent_id);
+      if (!home || !home.dm_channel_id) return;
+      const reasonText =
+        reason === 'missing'
+          ? 'no longer exists'
+          : reason === 'closed'
+          ? 'has been closed'
+          : 'no longer has you as a member';
+      const content =
+        `Schedule "${dto.title || dto.id}" could not fire: target ` +
+        `conversation ${dto.target_conversation_id} ${reasonText}. ` +
+        `Marking the schedule as failed; create a new one with a valid ` +
+        `target if you still need it.`;
+      const msg = this.messages.insertForConversation({
+        conversationId: home.dm_channel_id,
+        fromKind: 'system',
+        content,
+      });
+      this.events.publish(home.dm_channel_id, {
+        kind: 'message',
+        payload: { message: msg },
+      });
+      const viewerUserId = this.settings.getViewerUserId();
+      if (viewerUserId) {
+        this.events.publishToScope(
+          `viewer:${viewerUserId}`,
+          'unread_updated',
+          { conversation_id: home.dm_channel_id },
+        );
+      }
+    } catch (err) {
+      this.logger.warn(
+        { scheduleId: dto.id, err },
+        'schedule-service: failed to post target-dead notice; continuing',
+      );
+    }
   }
 
   // ── Validation helpers ────────────────────────────────────────

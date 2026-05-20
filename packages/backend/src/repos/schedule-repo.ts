@@ -14,6 +14,7 @@ function newId(): string {
 interface ScheduleRow {
   id: string;
   owner_agent_id: string;
+  target_conversation_id: string;
   title: string;
   message: string;
   spec_json: string;
@@ -33,6 +34,7 @@ function rowToDto(row: ScheduleRow): ScheduleDto {
   return {
     id: row.id,
     owner_agent_id: row.owner_agent_id,
+    target_conversation_id: row.target_conversation_id,
     title: row.title,
     message: row.message,
     spec: ScheduleSpecSchema.parse(JSON.parse(row.spec_json)),
@@ -51,6 +53,11 @@ function rowToDto(row: ScheduleRow): ScheduleDto {
 
 export interface InsertScheduleParams {
   ownerAgentId: string;
+  /** Required. Resolved by the service from input or defaulted to the
+   *  calling conversation. The repo never derives a target itself —
+   *  validation lives in the service so unrelated tests can construct
+   *  schedules with arbitrary targets. */
+  targetConversationId: string;
   title: string;
   message: string;
   spec: ScheduleSpec;
@@ -68,16 +75,17 @@ export class ScheduleRepo {
     this.db
       .prepare(
         `INSERT INTO schedules
-         (id, owner_agent_id, title, message, spec_json, next_fire_at, status,
+         (id, owner_agent_id, target_conversation_id, title, message, spec_json, next_fire_at, status,
           fired_count, last_fired_at, max_occurrences, until_at,
           failure_reason, cancelled_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'pending',
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending',
                  0, NULL, ?, ?,
                  NULL, NULL, ?, ?)`,
       )
       .run(
         id,
         params.ownerAgentId,
+        params.targetConversationId,
         params.title,
         params.message,
         JSON.stringify(params.spec),

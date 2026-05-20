@@ -173,6 +173,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   ctx.scheduleService = new ScheduleService({
     schedules: new ScheduleRepo(db),
     workspaces: new WorkspaceRepo(db, { workspacesRoot }),
+    conversations: new ConversationRepo(db),
     messages: new MessageRepo(db),
     agents: new AgentRepo(db),
     settings: new SettingsRepo(db),

@@ -249,6 +249,7 @@ export function buildTestApp(): TestApp {
   ctx.scheduleService = new ScheduleService({
     schedules: new ScheduleRepo(db),
     workspaces: new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot }),
+    conversations: new ConversationRepo(db),
     messages: new MessageRepo(db),
     agents: new AgentRepo(db),
     settings: new SettingsRepo(db),

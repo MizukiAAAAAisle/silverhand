@@ -53,6 +53,10 @@ function seedSchedule(
   const now = Date.now();
   const dto = repo.insert({
     ownerAgentId,
+    // The Agent Schedules panel renders schedules regardless of target,
+    // so seed with a placeholder string. Tests that exercise wake routing
+    // live in `schedule-service.test.ts` against the real service.
+    targetConversationId: 'panel-seed-target',
     title: overrides.title ?? 'Panel seed',
     message: overrides.message ?? 'panel-seed',
     spec: { kind: 'once', fire_at: overrides.nextFireAt ?? now + 60_000 },

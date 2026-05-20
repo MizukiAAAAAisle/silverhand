@@ -164,6 +164,19 @@ function ScheduleItem({
           <StatusPill status={row.status} />
           <span className="font-mono">{kindSpecText(row)}</span>
           <span className="font-mono">{formatFiredCount(row)}</span>
+          {/* Schedule's execution target — the conversation whose
+           *  (conversation, owner_agent) runtime wakes up on each fire
+           *  AND posts the result. Surfaced so the operator can tell
+           *  at a glance "this cron will run in #release", not "this
+           *  cron will run somewhere I have to dig for". The id is
+           *  truncated because we don't yet resolve a human-readable
+           *  conversation title here; nicer naming is a follow-up. */}
+          <span
+            className="font-mono"
+            title={`Fires in conversation ${row.target_conversation_id}`}
+          >
+            → {row.target_conversation_id.slice(0, 8)}
+          </span>
         </div>
       </div>
       <div className="flex shrink-0 items-center">

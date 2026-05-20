@@ -63,7 +63,7 @@ All commands default to machine-readable JSON on stdout. Use
 | `silverhand channel create` | Create a top-level channel only when explicitly requested by the user. |
 | `silverhand channel list` | List channels, optionally for a workspace id. |
 | `silverhand workspace list` | List workspaces the agent can access. |
-| `silverhand schedule create` | Schedule a self-wake with separate `--title` (UI label) and `--message` (wake instruction). |
+| `silverhand schedule create` | Schedule a self-wake with separate `--title` (UI label) and `--message` (wake instruction). Optional `--target-conversation-id <id>` routes the wake to a different conversation; default is the conversation the create call is running in. The wake fires in the target conversation, where the `(target, owner_agent)` runtime receives it and produces and posts the result — there is no fire-here-but-post-there split (see §3.3). |
 | `silverhand schedule list` | List this agent's schedules. |
 | `silverhand schedule cancel` | Cancel a schedule. |
 | `silverhand file upload` | Upload a local file and return an attachment id. |
@@ -139,6 +139,49 @@ one concrete status onto a task. It explicitly rejects:
 
 This boundary is what keeps the macros aliasing-only — the DB never
 stores an aggregate word like `active`.
+
+### 3.3 `silverhand schedule create` target = execution conversation
+
+Every schedule carries a `target_conversation_id`: the conversation
+whose `(conversation, owner_agent)` runtime is woken up on each fire.
+That runtime owns the full lifecycle — it receives the
+`schedule_fire` system message in its own context, produces the work
+(analysis, report, side-effects), and posts the result there. There
+is no separate "fire here, publish there" split.
+
+The reason is subject continuity. If DM-Alice produced a changelog
+and posted it into `#release` via cross-conv send, the channel-Alice
+session would have no memory of authoring it; the next time someone
+in `#release` asked "why did you include X?", channel-Alice would
+have to reverse-engineer her own report. By making fire = post into a
+single session, the answer to "where will Alice be when this runs?"
+is exactly one place, and that place's context window holds the
+reasoning.
+
+Defaults and overrides:
+
+- The CLI flag is optional. If omitted, the backend defaults
+  `target_conversation_id = <calling conversation id>` (the route's
+  `:cid`). Creating from a DM defaults to firing in DM, from a
+  channel defaults to that channel, etc.
+- To target a different conversation, pass
+  `--target-conversation-id <id>`. The owner agent must already be a
+  member of the target; `agent_not_in_target_conversation` is
+  returned otherwise (HTTP 403). A non-existent target returns
+  `target_conversation_not_found` (404); a closed target returns
+  `target_conversation_closed` (409).
+- At fire time the scheduler re-validates membership and lifecycle.
+  If the target became unreachable between create and fire (deleted,
+  closed, or owner removed), the schedule transitions to `failed`
+  with reason `target_conversation_unavailable: ...` and a
+  human-readable lifecycle notice is posted into the owner's
+  agent_home DM so the operator can see the cron stopped without
+  watching the silent target.
+
+Migration v28 backfills existing rows from each owner's agent_home
+DM, which preserves the legacy hardcoded fire target. After v28 the
+column is the single source of truth and the service no longer reads
+`workspaces.dm_channel_id` at fire time.
 
 ## 4. Error Contract
 

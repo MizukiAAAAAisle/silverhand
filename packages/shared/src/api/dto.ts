@@ -1524,6 +1524,12 @@ export type ScheduleSpec = z.infer<typeof ScheduleSpecSchema>;
 export const ScheduleDtoSchema = z.object({
   id: z.string(),
   owner_agent_id: z.string(),
+  /** The conversation whose `(conversation, owner_agent)` runtime is woken
+   *  up when this schedule fires. The wake message — and the agent's
+   *  response/report — both happen in this conversation. Set at create
+   *  time and validated against owner agent's membership; v28 backfilled
+   *  existing rows from owner's agent_home DM. Never null after v28. */
+  target_conversation_id: z.string(),
   title: z.string(),
   message: z.string(),
   spec: ScheduleSpecSchema,
@@ -1557,6 +1563,14 @@ export const ScheduleCreateInputSchema = z
   .object({
     title: z.string().trim().min(1).max(SCHEDULE_TITLE_MAX_LEN),
     message: z.string().min(1).max(SCHEDULE_MESSAGE_MAX_LEN),
+    /** Optional. The conversation whose `(conversation, owner_agent)`
+     *  runtime should be woken up on each fire — that runtime owns the
+     *  full lifecycle: receive wake → produce work → post result, all
+     *  in its own context. If omitted, the server defaults to the
+     *  conversation the create call was made from (so creating in DM
+     *  fires in DM, in a channel fires in that channel, etc.). The
+     *  caller must be a member of the target conversation. */
+    target_conversation_id: z.string().optional(),
     spec: z.discriminatedUnion('kind', [
       ScheduleCreateOnceInputSchema,
       ScheduleSpecIntervalSchema,

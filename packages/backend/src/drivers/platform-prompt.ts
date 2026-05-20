@@ -591,6 +591,18 @@ message, or for work that needs fresh instructions before it can proceed.
 - ${schedule} requires \`--title <text>\` (short UI label),
   \`--message <text>\` (echoed in the wake message — write the actual
   instruction to your future self), and \`--kind once|interval|cron\`.
+- **Where the wake fires** (\`--target-conversation-id <id>\`): every
+  schedule has an execution target — the conversation whose
+  \`(conversation, you)\` runtime wakes up on each fire. THAT runtime
+  receives the wake, does the work, AND posts the report; there is no
+  way to fire in one place and post elsewhere. The default is the
+  conversation you are creating from (DM creates fire in DM, channel
+  creates fire in that channel, etc.). If the user asks you to set up
+  a schedule that posts somewhere else, ask which conversation, then
+  pass \`--target-conversation-id <id>\`. You must already be a member
+  of the target. Don't try to fire in DM and cross-post — the channel
+  session would have no memory of authoring the report and couldn't
+  answer follow-ups in its own context.
 - Before creating a new repeating schedule, call ${listSchedules} with
   \`--status active\` when duplication is possible.
 - \`--kind once\` requires exactly one of \`--fire-at <epoch_ms>\` or

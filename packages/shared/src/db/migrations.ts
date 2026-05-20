@@ -2109,4 +2109,50 @@ export const migrations: Migration[] = [
       ALTER TABLE schedules ADD COLUMN title TEXT NOT NULL DEFAULT '';
     `,
   },
+  {
+    version: 28,
+    name: 'schedule_target_conversation',
+    // Decouple where a schedule fires from the implicit "owner's agent_home
+    // DM". Every schedule now carries an explicit `target_conversation_id`
+    // = the conversation whose `(conversation, owner_agent)` runtime is
+    // woken up when the schedule fires; that runtime also produces and
+    // posts the result there. This is the "agent as subject" invariant —
+    // the session that posts is the one that did the work, so follow-up
+    // questions in that conversation can be answered from its own context.
+    //
+    // Backfill: existing rows preserved their old behavior — fire into
+    // owner's agent_home DM. We backfill `target_conversation_id` from
+    // `workspaces.dm_channel_id WHERE owner_agent_id = schedules.owner_agent_id`.
+    // After this migration the column is the single source of truth and the
+    // service no longer reads `workspaces.dm_channel_id` at fire time.
+    //
+    // No FK: a hard-deleted target conversation should fail loudly at fire
+    // time (-> markFailed with `target_conversation_unavailable`) rather
+    // than silently CASCADE the schedule away. Application validates at
+    // create + at fire.
+    up: `
+      ALTER TABLE schedules ADD COLUMN target_conversation_id TEXT NOT NULL DEFAULT '';
+      UPDATE schedules
+         SET target_conversation_id = COALESCE(
+           (SELECT c.id
+              FROM conversations c
+              JOIN workspaces w ON w.id = c.workspace_id
+              LEFT JOIN agents owner ON owner.id = w.owner_agent_id
+             WHERE w.owner_agent_id = schedules.owner_agent_id
+               AND w.workspace_kind = 'agent_home'
+               AND c.kind = 'dm_channel'
+             ORDER BY CASE
+                        WHEN c.title = 'Onboarding' THEN 0
+                        WHEN owner.id IS NOT NULL AND c.title = 'dm-' || owner.name THEN 1
+                        ELSE 2
+                      END,
+                      c.created_at ASC
+             LIMIT 1),
+           ''
+         )
+       WHERE target_conversation_id = '';
+      CREATE INDEX IF NOT EXISTS idx_schedules_target
+        ON schedules(target_conversation_id);
+    `,
+  },
 ];

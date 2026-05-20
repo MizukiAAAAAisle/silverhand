@@ -14,6 +14,7 @@ const createCommand: Command = {
   verb: 'create',
   summary: 'Create a self-wake schedule for this agent.',
   help: `silverhand schedule create --title <text> --message <text> --kind once|interval|cron
+                            [--target-conversation-id <id>]
                             [<kind-specific flags>]
                             [--until-at <epoch_ms>] [--max-occurrences N]
                             [--allow-unbounded]
@@ -25,6 +26,20 @@ Common flags:
                            the actual instruction to your future self.
                            1..500 chars.
   --kind once|interval|cron Required. Time policy.
+  --target-conversation-id <id>
+                           Optional. The conversation whose
+                           (conversation, you) runtime is woken up on
+                           each fire — that runtime owns the full
+                           lifecycle: receive wake → produce work →
+                           post result, all in its own context. You
+                           must already be a member of the target.
+                           Defaults to the conversation this command
+                           is running in (so creating in a DM fires in
+                           that DM, in a channel fires in that channel,
+                           etc.). Splitting fire-target from
+                           execution-target is intentionally NOT
+                           supported — the session that posts is the
+                           one that did the work.
 
 once flags (exactly one):
   --fire-at <epoch_ms>     Absolute UTC fire time.
@@ -49,6 +64,7 @@ stdout: { "schedule": ScheduleDto }`,
     'title',
     'message',
     'kind',
+    'target-conversation-id',
     'fire-at',
     'delay-seconds',
     'every-seconds',
@@ -99,6 +115,10 @@ stdout: { "schedule": ScheduleDto }`,
     const untilAt = flagNumber(args, 'until-at');
     const maxOccurrences = flagNumber(args, 'max-occurrences');
     const allowUnbounded = flagBool(args, 'allow-unbounded');
+    const targetConversationId = flagString(args, 'target-conversation-id');
+    const targetField = targetConversationId !== undefined
+      ? { target_conversation_id: targetConversationId }
+      : {};
 
     let input: ScheduleCreateInput;
     if (kind === 'once') {
@@ -107,6 +127,7 @@ stdout: { "schedule": ScheduleDto }`,
       input = {
         title,
         message,
+        ...targetField,
         spec: {
           kind: 'once',
           ...(fireAt !== undefined ? { fire_at: fireAt } : {}),
@@ -126,6 +147,7 @@ stdout: { "schedule": ScheduleDto }`,
       input = {
         title,
         message,
+        ...targetField,
         spec: {
           kind: 'interval',
           every_seconds: everySeconds,
@@ -148,6 +170,7 @@ stdout: { "schedule": ScheduleDto }`,
       input = {
         title,
         message,
+        ...targetField,
         spec: { kind: 'cron', expression, timezone },
         ...(untilAt !== undefined ? { until_at: untilAt } : {}),
         ...(maxOccurrences !== undefined ? { max_occurrences: maxOccurrences } : {}),
