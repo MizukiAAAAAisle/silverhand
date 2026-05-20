@@ -556,10 +556,12 @@ export function Composer({
                   : 'Enter 发送，Shift + Enter 换行，@agent，#channel'
             }
             // No bottom/right padding to dodge buttons anymore — they
-            // live in the toolbar below. `min-h-[80px]` adds one row
-            // over the previous 60px so the box stays the same total
-            // height after the toolbar is stacked underneath.
-            className="block max-h-48 min-h-[80px] w-full resize-none bg-transparent px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+            // live in the toolbar below. `min-h-[60px]` keeps the
+            // textarea at 3 rows; the toolbar adds its own ~32px
+            // below, so total composer height ≈ 92px (up from 76px),
+            // which shiki accepted as the trade for guaranteed
+            // no-overlap.
+            className="block max-h-48 min-h-[60px] w-full resize-none bg-transparent px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
           />
           <input
             ref={fileInputRef}
