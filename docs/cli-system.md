@@ -183,6 +183,29 @@ DM, which preserves the legacy hardcoded fire target. After v28 the
 column is the single source of truth and the service no longer reads
 `workspaces.dm_channel_id` at fire time.
 
+The list/get response also carries `target_label`: a server-derived
+human pointer for the target, projected via a LEFT JOIN on
+`conversations` at read time. Format:
+
+| target kind            | label              |
+|------------------------|--------------------|
+| regular channel        | `#<title>`         |
+| DM channel             | `@<title>`         |
+| thread (parent known)  | `#<parent>:<title>`|
+| thread (orphan parent) | `<title>`          |
+| deleted target         | `Unavailable conversation` |
+
+ACL boundary: `target_label` follows the *schedule's* visibility, not
+the target conversation's. Once a caller is allowed to see the
+schedule, the label is part of the schedule's own description (where
+it fires) rather than a leaked metadata projection of the target. The
+label is intentionally minimal — title and kind only, never workspace
+path / member list / parent ids — so the schedule list can stay the
+single auth boundary without expanding the surface of what
+schedule-visibility implies. Agents reporting schedules back to a user
+should prefer `target_label` over the raw `target_conversation_id` so
+the user sees a meaningful pointer instead of an opaque id.
+
 ## 4. Error Contract
 
 stderr is the primary failure context for agents. It must be concise,

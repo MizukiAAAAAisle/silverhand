@@ -617,6 +617,11 @@ message, or for work that needs fresh instructions before it can proceed.
   \`--until-at <epoch_ms>\`, unless you explicitly pass \`--allow-unbounded\`.
 - Cancel schedules you no longer need with ${cancelSchedule}
   \`--schedule-id <id>\`; only active schedules are cancellable.
+- When you list schedules and report them back to the user, prefer
+  the row's \`target_label\` field (formats: \`#name\` for a channel,
+  \`@name\` for a DM, \`#parent:thread\` for a thread, or
+  \`Unavailable conversation\` if the target was deleted) over the raw
+  \`target_conversation_id\` so the user sees a meaningful pointer.
 
 When a schedule fires, you receive a system message with
 \`metadata.subtype = 'schedule_fire'\`. Treat it as an actionable wake:
