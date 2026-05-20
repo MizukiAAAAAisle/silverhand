@@ -349,6 +349,26 @@
   margin-right: 0.3em;
   vertical-align: -0.04em;
 }
+
+/* ── #task:491 — channel header italic (forza6 only) ─────────────────
+   shiki bfStYyhvHahhNoKa "forza6 主题的 channel header 用斜体（包括
+   前面的#号）". Italic the chat-header channel title AND the magenta
+   `#` glyph together so the pair reads as one italicised event-poster
+   subhead. Scope is narrow on purpose:
+     - DOES italicize: `[data-conversation-title]` (chat header, channel
+       + thread variants) and `[data-conversation-hash]` (the magenta `#`).
+     - DOES NOT italicize: `[data-workspace-name]` (titlebar workspace
+       label) — shiki specifically said "channel header".
+     - DOES NOT touch sidebar `<Hash />` SVG icon — it's not text.
+   Rajdhani (currently active --font-display per Cindy 05d9569) has no
+   designed italic variant; browsers will synthesize an oblique. That
+   reads fine at the chat-header size; revisit if shiki picks a final
+   font that ships a true italic. */
+[data-theme='forza6'] [data-conversation-title],
+[data-theme='forza6'] [data-conversation-hash] {
+  font-style: italic;
+}
+
 /* Lucide `<Hash />` is an SVG with `stroke="currentColor"
    stroke-width="2"` — bumping stroke-width thickens the glyph for
    the same poster-bold feel the chat header `#` gets via
