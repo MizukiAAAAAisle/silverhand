@@ -4,6 +4,11 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { App } from './App';
 import { queryClient } from './lib/queryClient';
+// Bebas Neue is forza6's poster-headline face — bundled (not a CDN
+// link) so the chrome label / task pill / sidebar count metrics don't
+// flash through the system Impact fallback during a cold start with no
+// network. Single-weight (400) only, ~16KB woff2.
+import '@fontsource/bebas-neue/400.css';
 import './styles/global.css';
 
 const root = document.getElementById('root');
