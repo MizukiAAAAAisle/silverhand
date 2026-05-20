@@ -315,7 +315,7 @@
      task chips still need a poster face, but they sit inside prose and
      should not follow every chrome/header `--font-display` trial. */
   --font-display: 'Rajdhani', 'Impact', 'Helvetica Neue Condensed', 'Arial Narrow', system-ui, sans-serif;
-  --forza6-font-task-ref: 'Impact', 'Helvetica Neue Condensed', 'Arial Narrow', system-ui, sans-serif;
+  --forza6-font-task-ref: 'Barlow Condensed', 'Impact', 'Helvetica Neue Condensed', 'Arial Narrow', system-ui, sans-serif;
   --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', 'Helvetica Neue', sans-serif;
   --font-serif: var(--font-sans);
   --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', 'Sarasa Mono SC', 'Source Han Mono SC', 'Noto Sans Mono CJK SC', 'PingFang SC', monospace;
