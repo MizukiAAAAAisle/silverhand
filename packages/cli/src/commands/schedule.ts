@@ -13,12 +13,14 @@ import type { Command } from './index.js';
 const createCommand: Command = {
   verb: 'create',
   summary: 'Create a self-wake schedule for this agent.',
-  help: `silverhand schedule create --message <text> --kind once|interval|cron
+  help: `silverhand schedule create --title <text> --message <text> --kind once|interval|cron
                             [<kind-specific flags>]
                             [--until-at <epoch_ms>] [--max-occurrences N]
                             [--allow-unbounded]
 
 Common flags:
+  --title <text>           Required. Short UI label for the schedule list.
+                           1..120 chars.
   --message <text>         Required. Echoed in the wake message — write
                            the actual instruction to your future self.
                            1..500 chars.
@@ -44,6 +46,7 @@ Repeat-only options (rejected on once):
 
 stdout: { "schedule": ScheduleDto }`,
   flags: [
+    'title',
     'message',
     'kind',
     'fire-at',
@@ -57,17 +60,40 @@ stdout: { "schedule": ScheduleDto }`,
   ] as const,
   booleanFlags: ['allow-unbounded'],
   async run({ client, args }) {
+    const title = flagString(args, 'title');
     const message = flagString(args, 'message');
     const kind = flagString(args, 'kind') as
       | 'once'
       | 'interval'
       | 'cron'
       | undefined;
-    if (!message || !kind) {
+    if (!title) {
       throw new CliError({
         code: 'validation_error',
-        message: 'schedule create requires --message and --kind',
+        subkind: 'missing_required_flag',
+        message:
+          'schedule create requires --title <text>; use a short label for the schedules UI',
         retriable: false,
+        details: { command: 'schedule create', flag: 'title' },
+      });
+    }
+    if (!message) {
+      throw new CliError({
+        code: 'validation_error',
+        subkind: 'missing_required_flag',
+        message:
+          'schedule create requires --message <text>; write the actual instruction for your future self',
+        retriable: false,
+        details: { command: 'schedule create', flag: 'message' },
+      });
+    }
+    if (!kind) {
+      throw new CliError({
+        code: 'validation_error',
+        subkind: 'missing_required_flag',
+        message: 'schedule create requires --kind once|interval|cron',
+        retriable: false,
+        details: { command: 'schedule create', flag: 'kind' },
       });
     }
     const untilAt = flagNumber(args, 'until-at');
@@ -79,6 +105,7 @@ stdout: { "schedule": ScheduleDto }`,
       const fireAt = flagNumber(args, 'fire-at');
       const delaySeconds = flagNumber(args, 'delay-seconds');
       input = {
+        title,
         message,
         spec: {
           kind: 'once',
@@ -97,6 +124,7 @@ stdout: { "schedule": ScheduleDto }`,
         });
       }
       input = {
+        title,
         message,
         spec: {
           kind: 'interval',
@@ -118,6 +146,7 @@ stdout: { "schedule": ScheduleDto }`,
         });
       }
       input = {
+        title,
         message,
         spec: { kind: 'cron', expression, timezone },
         ...(untilAt !== undefined ? { until_at: untilAt } : {}),

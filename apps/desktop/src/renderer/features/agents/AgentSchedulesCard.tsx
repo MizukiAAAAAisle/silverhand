@@ -145,10 +145,15 @@ function ScheduleItem({
       <div className="min-w-0 flex-1">
         <div
           className="truncate text-sm font-medium text-text-primary"
-          title={row.message}
+          title={row.title}
         >
-          {row.message}
+          {row.title}
         </div>
+        {row.message && row.message !== row.title ? (
+          <div className="mt-0.5 truncate text-xs text-text-secondary" title={row.message}>
+            {row.message}
+          </div>
+        ) : null}
         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-text-muted">
           <span
             className="font-medium text-text-secondary"

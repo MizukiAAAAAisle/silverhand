@@ -14,6 +14,7 @@ function newId(): string {
 interface ScheduleRow {
   id: string;
   owner_agent_id: string;
+  title: string;
   message: string;
   spec_json: string;
   next_fire_at: number;
@@ -32,6 +33,7 @@ function rowToDto(row: ScheduleRow): ScheduleDto {
   return {
     id: row.id,
     owner_agent_id: row.owner_agent_id,
+    title: row.title,
     message: row.message,
     spec: ScheduleSpecSchema.parse(JSON.parse(row.spec_json)),
     next_fire_at: row.next_fire_at,
@@ -49,6 +51,7 @@ function rowToDto(row: ScheduleRow): ScheduleDto {
 
 export interface InsertScheduleParams {
   ownerAgentId: string;
+  title: string;
   message: string;
   spec: ScheduleSpec;
   nextFireAt: number;
@@ -65,16 +68,17 @@ export class ScheduleRepo {
     this.db
       .prepare(
         `INSERT INTO schedules
-         (id, owner_agent_id, message, spec_json, next_fire_at, status,
+         (id, owner_agent_id, title, message, spec_json, next_fire_at, status,
           fired_count, last_fired_at, max_occurrences, until_at,
           failure_reason, cancelled_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'pending',
+         VALUES (?, ?, ?, ?, ?, ?, 'pending',
                  0, NULL, ?, ?,
                  NULL, NULL, ?, ?)`,
       )
       .run(
         id,
         params.ownerAgentId,
+        params.title,
         params.message,
         JSON.stringify(params.spec),
         params.nextFireAt,

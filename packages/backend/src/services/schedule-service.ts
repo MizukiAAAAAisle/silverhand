@@ -294,6 +294,7 @@ export class ScheduleService {
 
     const schedule = this.schedules.insert({
       ownerAgentId,
+      title: data.title,
       message: data.message,
       spec: canonicalSpec,
       nextFireAt,
@@ -524,6 +525,7 @@ export class ScheduleService {
       metadata: {
         subtype: systemSubtype('schedule_fire'),
         schedule_id: dto.id,
+        title: dto.title,
         spec_kind: dto.spec.kind,
         // Pre-rendered human spec label so the renderer can show
         // `cron */5 9-18 * * 1-5` / `interval 60s` / `once` without

@@ -317,6 +317,8 @@ export function readSessionClearedMetadata(
  * + the original wake body, without re-parsing `message.content`.
  *
  *  - `schedule_id`: stable id of the underlying schedule row.
+ *  - `title`: short UI label for the wake. Optional — legacy rows
+ *    fall back to the generic "Scheduled wake" header.
  *  - `spec_kind`: `'once' | 'interval' | 'cron'` — drives the header
  *    spec pill grouping.
  *  - `spec_summary`: pre-rendered human label
@@ -346,6 +348,7 @@ export function readSessionClearedMetadata(
 export const ScheduleFireMetadataSchema = z.object({
   subtype: z.literal('schedule_fire'),
   schedule_id: z.string(),
+  title: z.string().optional(),
   spec_kind: z.enum(['once', 'interval', 'cron']),
   spec_summary: z.string().optional(),
   body: z.string().optional(),

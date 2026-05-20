@@ -1478,6 +1478,7 @@ export const SCHEDULE_MIN_DELAY_SECONDS = 30;
 export const SCHEDULE_MAX_DELAY_SECONDS = 90 * 24 * 60 * 60; // 90 days
 export const SCHEDULE_MIN_INTERVAL_SECONDS = 60;
 export const SCHEDULE_MAX_ACTIVE_PER_AGENT = 50;
+export const SCHEDULE_TITLE_MAX_LEN = 120;
 export const SCHEDULE_MESSAGE_MAX_LEN = 500;
 
 export const ScheduleStatusSchema = z.enum([
@@ -1523,6 +1524,7 @@ export type ScheduleSpec = z.infer<typeof ScheduleSpecSchema>;
 export const ScheduleDtoSchema = z.object({
   id: z.string(),
   owner_agent_id: z.string(),
+  title: z.string(),
   message: z.string(),
   spec: ScheduleSpecSchema,
   next_fire_at: z.number(),
@@ -1553,6 +1555,7 @@ export type ScheduleCreateOnceInput = z.infer<
 
 export const ScheduleCreateInputSchema = z
   .object({
+    title: z.string().trim().min(1).max(SCHEDULE_TITLE_MAX_LEN),
     message: z.string().min(1).max(SCHEDULE_MESSAGE_MAX_LEN),
     spec: z.discriminatedUnion('kind', [
       ScheduleCreateOnceInputSchema,

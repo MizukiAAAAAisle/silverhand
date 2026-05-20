@@ -162,6 +162,7 @@ describe('ScheduleService.create', () => {
     const f = setup();
     const created = f.service.create(
       {
+        title: 'Build check',
         message: 'check the build',
         spec: { kind: 'once', delay_seconds: 60 },
       },
@@ -174,13 +175,14 @@ describe('ScheduleService.create', () => {
     expect(created.next_fire_at).toBe(currentNow + 60_000);
     expect(created.status).toBe('pending');
     expect(created.fired_count).toBe(0);
+    expect(created.title).toBe('Build check');
   });
 
   it('rejects once when both fire_at and delay_seconds are missing', () => {
     const f = setup();
     expect(() =>
       f.service.create(
-        { message: 'm', spec: { kind: 'once' } as ScheduleCreateInput['spec'] },
+        { title: 'Test schedule', message: 'm', spec: { kind: 'once' } as ScheduleCreateInput['spec'] },
         f.ownerAgentId,
       ),
     ).toThrow(ScheduleError);
@@ -192,6 +194,7 @@ describe('ScheduleService.create', () => {
     try {
       f.service.create(
         {
+          title: 'Test schedule',
           message: 'm',
           spec: { kind: 'once', delay_seconds: SCHEDULE_MIN_DELAY_SECONDS - 1 },
         },
@@ -209,6 +212,7 @@ describe('ScheduleService.create', () => {
     try {
       f.service.create(
         {
+          title: 'Test schedule',
           message: 'm',
           spec: {
             kind: 'once',
@@ -229,6 +233,7 @@ describe('ScheduleService.create', () => {
     try {
       f.service.create(
         {
+          title: 'Test schedule',
           message: 'm',
           spec: { kind: 'interval', every_seconds: 60 },
         },
@@ -244,6 +249,7 @@ describe('ScheduleService.create', () => {
     const f = setup();
     const created = f.service.create(
       {
+        title: 'Test schedule',
         message: 'poll every minute',
         spec: { kind: 'interval', every_seconds: 60 },
         allow_unbounded: true,
@@ -258,6 +264,7 @@ describe('ScheduleService.create', () => {
     const f = setup();
     const created = f.service.create(
       {
+        title: 'Test schedule',
         message: 'three checks',
         spec: { kind: 'interval', every_seconds: 60 },
         max_occurrences: 3,
@@ -273,6 +280,7 @@ describe('ScheduleService.create', () => {
     try {
       f.service.create(
         {
+          title: 'Test schedule',
           message: 'm',
           spec: {
             kind: 'cron',
@@ -295,6 +303,7 @@ describe('ScheduleService.create', () => {
     try {
       f.service.create(
         {
+          title: 'Test schedule',
           message: 'm',
           spec: {
             kind: 'cron',
@@ -321,6 +330,7 @@ describe('ScheduleService.create', () => {
     f.setNow(fixedNow);
     const created = f.service.create(
       {
+        title: 'Test schedule',
         message: 'daily 9am NYC',
         spec: {
           kind: 'cron',
@@ -339,7 +349,7 @@ describe('ScheduleService.create', () => {
     let err: ScheduleError | undefined;
     try {
       f.service.create(
-        { message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
+        { title: 'Test schedule', message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
         'nonexistent',
       );
     } catch (e) {
@@ -353,7 +363,7 @@ describe('ScheduleService.create', () => {
     let err: ScheduleError | undefined;
     try {
       f.service.create(
-        { message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
+        { title: 'Test schedule', message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
         f.otherAgentId,
       );
     } catch (e) {
@@ -367,6 +377,7 @@ describe('ScheduleService.create', () => {
     for (let i = 0; i < SCHEDULE_MAX_ACTIVE_PER_AGENT; i++) {
       f.service.create(
         {
+          title: 'Test schedule',
           message: `m${i}`,
           spec: { kind: 'once', delay_seconds: 60 + i },
         },
@@ -376,7 +387,7 @@ describe('ScheduleService.create', () => {
     let err: ScheduleError | undefined;
     try {
       f.service.create(
-        { message: 'overflow', spec: { kind: 'once', delay_seconds: 9999 } },
+        { title: 'Test schedule', message: 'overflow', spec: { kind: 'once', delay_seconds: 9999 } },
         f.ownerAgentId,
       );
     } catch (e) {
@@ -391,6 +402,7 @@ describe('ScheduleService.create', () => {
     try {
       f.service.create(
         {
+          title: 'Test schedule',
           message: 'm',
           spec: { kind: 'interval', every_seconds: 600 },
           until_at: currentNow + 60_000, // before first fire (currentNow + 600_000)
@@ -412,6 +424,7 @@ describe('ScheduleService.create', () => {
     field => {
       const f = setup();
       const input: ScheduleCreateInput = {
+        title: 'Test schedule',
         message: 'm',
         spec: { kind: 'once', delay_seconds: 600 },
       };
@@ -437,11 +450,11 @@ describe('ScheduleService.list', () => {
   it('filters by status with active alias expanding to pending|firing', async () => {
     const f = setup();
     const due = f.service.create(
-      { message: 'soon', spec: { kind: 'once', delay_seconds: 60 } },
+      { title: 'Test schedule', message: 'soon', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
     );
     const later = f.service.create(
-      { message: 'later', spec: { kind: 'once', delay_seconds: 600 } },
+      { title: 'Test schedule', message: 'later', spec: { kind: 'once', delay_seconds: 600 } },
       f.ownerAgentId,
     );
     // Cancel one to verify it's filtered out by status='active'.
@@ -457,13 +470,14 @@ describe('ScheduleService.list', () => {
   it('returns schedules owned by the agent only', () => {
     const f = setup();
     const mine = f.service.create(
-      { message: 'mine', spec: { kind: 'once', delay_seconds: 60 } },
+      { title: 'Test schedule', message: 'mine', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
     );
     // bob has no agent_home so we can't service.create for him; insert
     // directly via repo to fake a stray row that our list must ignore.
     f.schedules.insert({
       ownerAgentId: f.otherAgentId,
+      title: 'Test schedule',
       message: 'theirs',
       spec: { kind: 'once', fire_at: currentNow + 60_000 },
       nextFireAt: currentNow + 60_000,
@@ -477,7 +491,7 @@ describe('ScheduleService.cancel', () => {
   it('cancels a pending schedule when called by owner', () => {
     const f = setup();
     const s = f.service.create(
-      { message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
+      { title: 'Test schedule', message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
     );
     const after = f.service.cancel(s.id, f.ownerAgentId);
@@ -488,7 +502,7 @@ describe('ScheduleService.cancel', () => {
   it('rejects cancel from a non-owner agent', () => {
     const f = setup();
     const s = f.service.create(
-      { message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
+      { title: 'Test schedule', message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
     );
     let err: ScheduleError | undefined;
@@ -504,7 +518,7 @@ describe('ScheduleService.cancel', () => {
   it('rejects cancel when schedule already done', async () => {
     const f = setup();
     const s = f.service.create(
-      { message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
+      { title: 'Test schedule', message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
     );
     f.setNow(currentNow + 70_000);
@@ -524,7 +538,7 @@ describe('ScheduleService.tick — fire & advance', () => {
   it('one-shot fires once then transitions to done', async () => {
     const f = setup();
     const s = f.service.create(
-      { message: 'follow up', spec: { kind: 'once', delay_seconds: 60 } },
+      { title: 'Test schedule', message: 'follow up', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
     );
     f.setNow(currentNow + 60_000);
@@ -540,7 +554,11 @@ describe('ScheduleService.tick — fire & advance', () => {
   it('wake message lands in agent_home dm_channel with imperative body', async () => {
     const f = setup();
     f.service.create(
-      { message: 'review the deploy', spec: { kind: 'once', delay_seconds: 60 } },
+      {
+        title: 'Deploy review',
+        message: 'review the deploy',
+        spec: { kind: 'once', delay_seconds: 60 },
+      },
       f.ownerAgentId,
     );
     f.setNow(currentNow + 60_000);
@@ -564,6 +582,7 @@ describe('ScheduleService.tick — fire & advance', () => {
     expect(parsed).not.toBeNull();
     expect(parsed!.spec_kind).toBe('once');
     expect(parsed!.spec_summary).toBe('once');
+    expect(parsed!.title).toBe('Deploy review');
     expect(parsed!.body).toBe('review the deploy');
     expect(parsed!.missed_count).toBe(0);
     expect(typeof parsed!.actual_fire_at).toBe('number');
@@ -578,6 +597,7 @@ describe('ScheduleService.tick — fire & advance', () => {
     f.setNow(fixedNow);
     f.service.create(
       {
+        title: 'Test schedule',
         message: 'daily 9am NYC reminder',
         spec: {
           kind: 'cron',
@@ -603,7 +623,7 @@ describe('ScheduleService.tick — fire & advance', () => {
   it('does not deliver before next_fire_at', async () => {
     const f = setup();
     f.service.create(
-      { message: 'm', spec: { kind: 'once', delay_seconds: 600 } },
+      { title: 'Test schedule', message: 'm', spec: { kind: 'once', delay_seconds: 600 } },
       f.ownerAgentId,
     );
     f.setNow(currentNow + 60_000); // not yet due
@@ -615,6 +635,7 @@ describe('ScheduleService.tick — fire & advance', () => {
     const f = setup();
     const s = f.service.create(
       {
+        title: 'Test schedule',
         message: 'tick',
         spec: { kind: 'interval', every_seconds: 60 },
         max_occurrences: 3,
@@ -653,6 +674,7 @@ describe('ScheduleService.tick — fire & advance', () => {
     const f = setup();
     const s = f.service.create(
       {
+        title: 'Test schedule',
         message: 'tick until',
         spec: { kind: 'interval', every_seconds: 60 },
         until_at: currentNow + 65_000, // covers the first fire only
@@ -670,7 +692,7 @@ describe('ScheduleService.tick — fire & advance', () => {
     const f = setup();
     f.fake.deliverError = new Error('mcp dead');
     const s = f.service.create(
-      { message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
+      { title: 'Test schedule', message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
     );
     f.setNow(currentNow + 60_000);
@@ -685,7 +707,7 @@ describe('ScheduleService.tick — concurrency and recovery', () => {
   it('CAS prevents two parallel ticks from firing the same row twice', async () => {
     const f = setup();
     const s = f.service.create(
-      { message: 'racy', spec: { kind: 'once', delay_seconds: 60 } },
+      { title: 'Test schedule', message: 'racy', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
     );
     f.setNow(currentNow + 60_000);
@@ -700,7 +722,7 @@ describe('ScheduleService.tick — concurrency and recovery', () => {
   it('start() resets stale firing rows from a prior process', () => {
     const f = setup();
     const s = f.service.create(
-      { message: 'crashed mid-fire', spec: { kind: 'once', delay_seconds: 60 } },
+      { title: 'Test schedule', message: 'crashed mid-fire', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
     );
     // Simulate crash: the prior process left this row in 'firing'.
@@ -715,6 +737,7 @@ describe('ScheduleService.tick — concurrency and recovery', () => {
     const f = setup();
     const s = f.service.create(
       {
+        title: 'Test schedule',
         message: 'every minute',
         spec: { kind: 'interval', every_seconds: 60 },
         allow_unbounded: true,
@@ -750,6 +773,7 @@ describe('ScheduleService.tick — cron + DST', () => {
     f.setNow(Date.UTC(2024, 2, 9, 23, 0, 0));
     const s = f.service.create(
       {
+        title: 'Test schedule',
         message: 'daily 8am NYC',
         spec: {
           kind: 'cron',
@@ -787,6 +811,7 @@ describe('ScheduleService.tick — cron + DST', () => {
     f.setNow(Date.UTC(2024, 10, 2, 23, 0, 0));
     const s = f.service.create(
       {
+        title: 'Test schedule',
         message: 'every hour at :30',
         spec: {
           kind: 'cron',
@@ -832,7 +857,7 @@ describe('ScheduleService renders wake body', () => {
     });
     try {
       const s = f.service.create(
-        { message: 'show in ui', spec: { kind: 'once', delay_seconds: 60 } },
+        { title: 'Test schedule', message: 'show in ui', spec: { kind: 'once', delay_seconds: 60 } },
         f.ownerAgentId,
       );
       f.setNow(s.next_fire_at);
@@ -859,6 +884,7 @@ describe('ScheduleService renders wake body', () => {
     const f = setup();
     const s = f.service.create(
       {
+        title: 'Test schedule',
         message: 'metric check',
         spec: { kind: 'interval', every_seconds: 60 },
         max_occurrences: 3,
@@ -876,7 +902,7 @@ describe('ScheduleService renders wake body', () => {
   it('reports late delivery in human-readable form', async () => {
     const f = setup();
     const s = f.service.create(
-      { message: 'morning', spec: { kind: 'once', delay_seconds: 60 } },
+      { title: 'Test schedule', message: 'morning', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
     );
     // Fire 10 minutes after the planned time.
@@ -911,6 +937,7 @@ describe('ScheduleService — cron 5-field strictness', () => {
     try {
       f.service.create(
         {
+          title: 'Test schedule',
           message: 'sub-minute is not allowed',
           // cron-parser would happily accept this 6-field form,
           // but our v1 contract is 5-field UNIX cron.
@@ -933,6 +960,7 @@ describe('ScheduleService — cron 5-field strictness', () => {
       try {
         f.service.create(
           {
+            title: 'Test schedule',
             message: 'aliases blocked',
             spec: { kind: 'cron', expression: alias, timezone: 'UTC' },
             max_occurrences: 5,
@@ -954,6 +982,7 @@ describe('ScheduleService — cron 5-field strictness', () => {
     expect(() =>
       f.service.create(
         {
+          title: 'Test schedule',
           message: 'fine',
           spec: { kind: 'cron', expression: '0 9 * * *', timezone: 'UTC' },
           max_occurrences: 5,
@@ -968,7 +997,7 @@ describe('ScheduleService — cancel-during-firing race', () => {
   it('cancel that wins between CAS and completion is preserved', async () => {
     const f = setup();
     const s = f.service.create(
-      { message: 'racy', spec: { kind: 'once', delay_seconds: 60 } },
+      { title: 'Test schedule', message: 'racy', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
     );
 
@@ -1005,6 +1034,7 @@ describe('ScheduleService — cancel-during-firing race', () => {
     const f = setup();
     const s = f.service.create(
       {
+        title: 'Test schedule',
         message: 'repeating racy',
         spec: { kind: 'interval', every_seconds: 60 },
         max_occurrences: 5,
@@ -1036,7 +1066,7 @@ describe('ScheduleService — start() failure marks the schedule failed', () => 
       throw new Error('runtime spawn failed');
     };
     const s = f.service.create(
-      { message: 'wake me', spec: { kind: 'once', delay_seconds: 60 } },
+      { title: 'Test schedule', message: 'wake me', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
     );
     f.setNow(currentNow + 60_000);
@@ -1057,6 +1087,7 @@ describe('ScheduleService — wake body advancement details', () => {
     const f = setup();
     const s = f.service.create(
       {
+        title: 'Test schedule',
         message: 'every 60s',
         spec: { kind: 'interval', every_seconds: 60 },
         allow_unbounded: true,
@@ -1080,6 +1111,7 @@ describe('ScheduleService — wake body advancement details', () => {
     const f = setup();
     const s = f.service.create(
       {
+        title: 'Test schedule',
         message: 'tick',
         spec: { kind: 'interval', every_seconds: 60 },
         max_occurrences: 3,
@@ -1098,6 +1130,7 @@ describe('ScheduleService — wake body advancement details', () => {
     const f = setup();
     const s = f.service.create(
       {
+        title: 'Test schedule',
         message: 'last tick',
         spec: { kind: 'interval', every_seconds: 60 },
         max_occurrences: 1,
@@ -1116,7 +1149,7 @@ describe('ScheduleService — wake body advancement details', () => {
   it('one-shot wake never includes next_fire_at or missed_count copy', async () => {
     const f = setup();
     const s = f.service.create(
-      { message: 'just once', spec: { kind: 'once', delay_seconds: 60 } },
+      { title: 'Test schedule', message: 'just once', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
     );
     f.setNow(s.next_fire_at);
@@ -1136,11 +1169,11 @@ describe('ScheduleSchedule isolation', () => {
   it('listForAgent excludes other agents and orders by next_fire_at asc', () => {
     const f = setup();
     const a = f.service.create(
-      { message: 'second', spec: { kind: 'once', delay_seconds: 600 } },
+      { title: 'Test schedule', message: 'second', spec: { kind: 'once', delay_seconds: 600 } },
       f.ownerAgentId,
     );
     const b = f.service.create(
-      { message: 'first', spec: { kind: 'once', delay_seconds: 60 } },
+      { title: 'Test schedule', message: 'first', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
     );
     const list = f.service.list(f.ownerAgentId, 'pending', undefined);
@@ -1150,7 +1183,7 @@ describe('ScheduleSchedule isolation', () => {
   it('does not validate workspace path / settings of other agents', () => {
     const f = setup();
     f.service.create(
-      { message: 'mine', spec: { kind: 'once', delay_seconds: 60 } },
+      { title: 'Test schedule', message: 'mine', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
     );
     // Listing under a foreign agent returns nothing — no error.
@@ -1164,6 +1197,7 @@ describe('ScheduleDto round-trip', () => {
     const f = setup();
     const created = f.service.create(
       {
+        title: 'Test schedule',
         message: 'cron readback',
         spec: {
           kind: 'cron',

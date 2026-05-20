@@ -5,7 +5,8 @@ import { formatFiredCount } from './AgentSchedulesCard';
 function makeSchedule(overrides: Partial<ScheduleDto> = {}): ScheduleDto {
   return {
     id: 's-0',
-    agent_id: 'a-0',
+    owner_agent_id: 'a-0',
+    title: 'Wake title',
     message: 'wake',
     spec: { kind: 'once', fire_at: 1700000000 },
     next_fire_at: 1700000000,

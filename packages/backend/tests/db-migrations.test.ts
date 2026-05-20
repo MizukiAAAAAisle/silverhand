@@ -291,6 +291,7 @@ describe('database migrations', () => {
       const expectedNotNull = [
         'id',
         'owner_agent_id',
+        'title',
         'message',
         'spec_json',
         'next_fire_at',
@@ -1832,6 +1833,63 @@ describe('database migrations', () => {
                   avatar_content_type = 'image/png'
             WHERE id = 'a1'`,
         ).run();
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  describe('migration v27 (schedule titles)', () => {
+    it('adds title without deriving pseudo-titles from historical message', () => {
+      const db = new Database(':memory:');
+      try {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS _migrations (
+            version INTEGER PRIMARY KEY,
+            name    TEXT NOT NULL,
+            applied_at INTEGER NOT NULL
+          );
+        `);
+        applyMigrationsThrough(db, 25);
+
+        const now = 1_700_000_000_000;
+        db.prepare(
+          `INSERT INTO users (id, name, display_name, created_at, updated_at)
+             VALUES ('viewer_1', 'shiki', 'Shiki', ?, ?)`,
+        ).run(now, now);
+        db.prepare(
+          `INSERT INTO app_settings (key, value)
+             VALUES ('viewer_user_id', 'viewer_1')`,
+        ).run();
+        db.prepare(
+          `INSERT INTO hosts (id, name, kind, created_at)
+             VALUES ('h1', 'local', 'local', ?)`,
+        ).run(now);
+        db.prepare(
+          `INSERT INTO agents
+             (id, name, runtime, model, host_id, description,
+              created_at, updated_at, display_name, reasoning_effort, fast_mode)
+           VALUES ('a1', 'alice', 'claude', NULL, 'h1', NULL, ?, ?, 'Alice', NULL, NULL)`,
+        ).run(now, now);
+        db.prepare(
+          `INSERT INTO schedules
+             (id, owner_agent_id, message, spec_json, next_fire_at, status,
+              fired_count, created_at, updated_at)
+           VALUES ('s1', 'a1', 'review deploy status', '{"kind":"once","fire_at":1}',
+                   1, 'pending', 0, ?, ?)`,
+        ).run(now, now);
+
+        runMigrations(db);
+
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 27`).get(),
+        ).toBeDefined();
+        const row = db
+          .prepare<[], { title: string }>(
+            `SELECT title FROM schedules WHERE id = 's1'`,
+          )
+          .get();
+        expect(row?.title).toBe('');
       } finally {
         db.close();
       }

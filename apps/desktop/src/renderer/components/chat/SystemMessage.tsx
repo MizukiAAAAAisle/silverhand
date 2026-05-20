@@ -425,6 +425,7 @@ function ScheduleFireBanner({
   // change); legacy rows fall back to `message.content` so older DB
   // wakes still surface their reminder text.
   const bodyMd = meta?.body ?? message.content;
+  const headerTitle = meta?.title?.trim() || 'Scheduled wake';
 
   return (
     <div
@@ -433,7 +434,9 @@ function ScheduleFireBanner({
     >
       <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-text-secondary">
         <Clock aria-hidden className="size-3.5 shrink-0 text-warning" />
-        <span>Scheduled wake</span>
+        <span className="min-w-0 truncate" title={headerTitle}>
+          {headerTitle}
+        </span>
         {meta ? (
           <span className="ml-auto font-mono text-[11px] font-normal text-text-muted">
             {meta.spec_summary ?? meta.spec_kind}

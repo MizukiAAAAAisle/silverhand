@@ -588,9 +588,9 @@ polling, deadline checks, periodic review, and delayed verification.
 Do not create a schedule for work that can wait for the user's next
 message, or for work that needs fresh instructions before it can proceed.
 
-- ${schedule} requires \`--message <text>\` (echoed in the wake message —
-  write the actual instruction to your future self) and
-  \`--kind once|interval|cron\`.
+- ${schedule} requires \`--title <text>\` (short UI label),
+  \`--message <text>\` (echoed in the wake message — write the actual
+  instruction to your future self), and \`--kind once|interval|cron\`.
 - Before creating a new repeating schedule, call ${listSchedules} with
   \`--status active\` when duplication is possible.
 - \`--kind once\` requires exactly one of \`--fire-at <epoch_ms>\` or
@@ -760,7 +760,7 @@ should stop and be reported.
 - **\`silverhand channel create\`**: Create a top-level channel when requested.
 - **\`silverhand channel list\`**: List channels, optionally by workspace.
 - **\`silverhand workspace list\`**: List workspaces you can access.
-- **\`silverhand schedule create\`**: Schedule a self-wake.
+- **\`silverhand schedule create\`**: Schedule a self-wake with a title and wake instruction.
 - **\`silverhand schedule list\`**: List your schedules.
 - **\`silverhand schedule cancel\`**: Cancel one of your schedules.
 - **\`silverhand file upload\`**: Upload a local file and return an attachment id.

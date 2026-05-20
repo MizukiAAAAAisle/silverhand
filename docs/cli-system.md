@@ -63,7 +63,7 @@ All commands default to machine-readable JSON on stdout. Use
 | `silverhand channel create` | Create a top-level channel only when explicitly requested by the user. |
 | `silverhand channel list` | List channels, optionally for a workspace id. |
 | `silverhand workspace list` | List workspaces the agent can access. |
-| `silverhand schedule create` | Schedule a self-wake. |
+| `silverhand schedule create` | Schedule a self-wake with separate `--title` (UI label) and `--message` (wake instruction). |
 | `silverhand schedule list` | List this agent's schedules. |
 | `silverhand schedule cancel` | Cancel a schedule. |
 | `silverhand file upload` | Upload a local file and return an attachment id. |
@@ -100,7 +100,7 @@ Pre-flight failures (exit 1, code `validation_error`):
 
 | `subkind` | When |
 |---|---|
-| `flag_removed` | The legacy `--content`, `--text`, or `--message` flag was supplied. |
+| `flag_removed` | A command-specific removed/disallowed flag was supplied, such as `message send --content` / `--text` / `--message` or `task create --message`. |
 | `stdin_is_tty` | `process.stdin.isTTY` is true (no body was piped in). |
 | `empty_stdin` | Stdin closed with 0 bytes. |
 | `invalid_utf8` | Stdin contained byte sequences that are not valid UTF-8. The CLI does NOT silently substitute U+FFFD — re-encode upstream and retry. |

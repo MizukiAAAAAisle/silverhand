@@ -2098,4 +2098,15 @@ export const migrations: Migration[] = [
       DROP TABLE _v26_fk_check;
     `,
   },
+  {
+    version: 27,
+    name: 'schedule_titles',
+    // Split the short UI label (`title`) from the actual wake instruction
+    // (`message`). Existing rows are intentionally left with an empty title:
+    // this dev DB has one operator, so meaningful historical titles are
+    // patched explicitly instead of manufacturing pseudo-titles from message.
+    up: `
+      ALTER TABLE schedules ADD COLUMN title TEXT NOT NULL DEFAULT '';
+    `,
+  },
 ];

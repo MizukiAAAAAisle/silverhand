@@ -42,12 +42,18 @@ async function setupTwoAgents(t: TestApp): Promise<Setup> {
 function seedSchedule(
   t: TestApp,
   ownerAgentId: string,
-  overrides: Partial<{ message: string; status: ScheduleDto['status']; nextFireAt: number }> = {},
+  overrides: Partial<{
+    title: string;
+    message: string;
+    status: ScheduleDto['status'];
+    nextFireAt: number;
+  }> = {},
 ): ScheduleDto {
   const repo = new ScheduleRepo(t.ctx.db);
   const now = Date.now();
   const dto = repo.insert({
     ownerAgentId,
+    title: overrides.title ?? 'Panel seed',
     message: overrides.message ?? 'panel-seed',
     spec: { kind: 'once', fire_at: overrides.nextFireAt ?? now + 60_000 },
     nextFireAt: overrides.nextFireAt ?? now + 60_000,
