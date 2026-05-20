@@ -341,6 +341,13 @@
       .ff-oswald-reg .sample-cascade .cas,
       .ff-oswald-reg .sample-pair .pf-label.poster {
         font-family: 'Oswald', sans-serif;
+        font-weight: 400;
+      }
+      .ff-oswald-med .sample-head,
+      .ff-oswald-med .sample-strip,
+      .ff-oswald-med .sample-cascade .cas,
+      .ff-oswald-med .sample-pair .pf-label.poster {
+        font-family: 'Oswald', sans-serif;
         font-weight: 500;
       }
       .ff-bigshoulders-reg .sample-head,
@@ -350,13 +357,11 @@
         font-family: 'Big Shoulders Display', sans-serif;
         font-weight: 400;
       }
-      .ff-bigshoulders-reg .sample-head {
-        font-size: 56px;
-      }
-      .ff-oswald-reg .sample-head {
-        font-size: 60px;
-        letter-spacing: 0;
-      }
+      /* Keep headline size identical across weight variants — Cindy
+         EGOvJCc7YHXhPQR6: shrinking the regular-weight headline to
+         60/56px would confound the comparison. Same 64px lets the
+         actual weight difference speak. The headline lines may visually
+         "float" more in regular weight; that's the honest data. */
 
       /* Some Google faces ship at fixed weights and look thinner at large
          sizes — bump letter-spacing to recover poster density. */
@@ -412,11 +417,12 @@
         at 8-20px and that's where readability actually matters).
       </p>
       <p>
-        Cards 13-14 add the regular (non-display) weight of the two
-        families that ship one: Oswald 500 (vs 700 in card #4) and Big
-        Shoulders Display 400 (vs 800 in card #10). All other roster
-        entries are single-weight by design — the cascade row is the
-        only smaller-size proxy for them.
+        Cards 13-15 add the alternate weights of the two families that
+        ship a real weight stack: Oswald 400 Regular and Oswald 500
+        Medium (vs 700 in card #4), and Big Shoulders Display 400
+        Regular (vs 800 in card #10). All other roster entries are
+        single-weight by design — the cascade row is the only
+        smaller-size proxy for them.
       </p>
     </header>
 
@@ -745,14 +751,16 @@
         </div>
       </article>
 
-      <!-- 13. Oswald Regular (500) — direct regular-weight comparison
+      <!-- 13. Oswald Regular (400) — direct regular-weight comparison
            (shiki M8ODNwFkY05Bjeb-). Oswald is one of the two roster
            families with a true multi-weight stack; this card pairs with
-           card #4 to show what "regular weight" looks like at the same
-           headline + chrome cascade. -->
+           card #4 (700) to show what regular weight looks like at the
+           same headline + chrome cascade. Cindy EGOvJCc7YHXhPQR6:
+           "regular" means CSS 400, not 500 (= Medium). Card #15 below
+           is the separate Medium (500) demo. -->
       <article class="card ff-oswald-reg">
         <div class="card-head">
-          <div class="card-name">Oswald — Regular (500)</div>
+          <div class="card-name">Oswald — Regular (400)</div>
           <div class="card-meta">Google · sans · regular weight comparison</div>
         </div>
         <div class="sample-head">
@@ -784,6 +792,38 @@
         <div class="card-head">
           <div class="card-name">Big Shoulders — Regular (400)</div>
           <div class="card-meta">Google · sans · regular weight comparison</div>
+        </div>
+        <div class="sample-head">
+          FORZA <span class="accent">6</span><br />FESTIVAL
+        </div>
+        <div class="sample-strip">
+          <span class="date">MAY 24</span>
+          <span class="at">19:00</span>
+          <span class="num">#024</span>
+        </div>
+        <div class="sample-pair">
+          <span class="pf-label poster">CHANNEL</span>
+          <span class="pf-body">Forza6 theme · 12 members · last seen 14:32</span>
+        </div>
+        <div class="sample-cascade">
+          <span class="cas-label">CHROME LABEL CASCADE — 20 / 14 / 11 / 9 px</span>
+          <span class="cas s20">FORZA6 THEME · 12 MEMBERS</span>
+          <span class="cas s14">CHANNEL · WORKSPACE TITLE</span>
+          <span class="cas s11">SIDEBAR GROUP · SAVED MESSAGES</span>
+          <span class="cas s9">IN_PROGRESS · #024 · TODO</span>
+        </div>
+      </article>
+
+      <!-- 15. Oswald Medium (500) — intermediate-weight demo (Cindy
+           EGOvJCc7YHXhPQR6 nit follow-up). Lives between Oswald 400
+           (card #13) and Oswald 700 (card #4). Worth comparing because
+           we already pay the network cost for 500 and Medium is often
+           the sweet spot for chrome labels — heavy enough to read at
+           9-11px, not so heavy it overpowers Inter body. -->
+      <article class="card ff-oswald-med">
+        <div class="card-head">
+          <div class="card-name">Oswald — Medium (500)</div>
+          <div class="card-meta">Google · sans · medium weight (between 400 and 700)</div>
         </div>
         <div class="sample-head">
           FORZA <span class="accent">6</span><br />FESTIVAL
