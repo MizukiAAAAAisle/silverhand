@@ -729,6 +729,24 @@
   --bg-hover: #E6F68A;
 }
 
+/* Composer @mention / #channel picker (#task:505) ───────────────────
+   The mention/channel autocomplete in `Composer.tsx` (PickerMenu) is a
+   hand-rolled floating `<div role="listbox">`, NOT a Radix Popover/
+   Select — so it sits outside `[data-radix-popper-content-wrapper]`
+   and does not inherit the lime `--bg-hover` substitution above. Its
+   keyboard-active row uses `bg-bg-hover` to mark the selection; with
+   the global cool `#DAE0DA` on `--bg-floating: #FFFFFF` (~1.05:1) the
+   highlight is effectively invisible against the popover background.
+
+   Same scoped lazy-substitution pattern as the Radix rule: redefine
+   `--bg-hover` to the lime preview inside the picker only; Row's
+   existing `bg-bg-hover` resolves to lime + near-black text (~14:1
+   AAA on `--text-primary: #0F1F1D`). No component-layer edits, no
+   root token churn, warm-script pixel-zero. shiki `d-tGhYairt07s7Bl`. */
+[data-theme='forza6'] [data-composer-picker] {
+  --bg-hover: #E6F68A;
+}
+
 /* Poster sticker frame for menus + popovers — values now live in the
    `--floating-border` / `--floating-radius` / `--floating-item-radius`
    token contract (forza6.css + global.css rules). The surface scope

@@ -817,6 +817,14 @@ function PickerMenu({
       // empty. We drop `right-0` and pin `w-64`; long display names
       // fall back to truncate inside the row.
       className="absolute bottom-full left-0 mb-1.5 w-64 max-h-64 overflow-y-auto rounded-md border border-border bg-bg-floating p-1 shadow-lg"
+      // Stable hook for per-theme adaptation of the keyboard-active row
+      // fill (Row uses `bg-bg-hover` to mark the highlighted option).
+      // This is a hand-rolled floating panel, so it does NOT sit inside
+      // `[data-radix-popper-content-wrapper]` and misses the forza6
+      // `--bg-hover → lime` substitution that adapts every Radix popper.
+      // forza6-components.css targets this attribute to apply the same
+      // lime preview here. See #task:505.
+      data-composer-picker=""
       role="listbox"
       // Don't steal focus from the textarea on click — submit handler
       // still needs the caret position to do the replacement.
