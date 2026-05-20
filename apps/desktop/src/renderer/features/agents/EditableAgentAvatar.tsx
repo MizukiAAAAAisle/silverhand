@@ -103,11 +103,13 @@ export function EditableAgentAvatar({
 
   return (
     // Vertical stack so the Remove link sits *below* the avatar instead
-    // of stealing horizontal space next to it. `items-start` keeps both
-    // children flush to the avatar's left edge — `gap-1.5` is tight on
-    // purpose so Remove reads as an annotation of the avatar above it,
-    // not as an unrelated row. Matches the doc comment above.
-    <div className="flex flex-col items-start gap-1.5">
+    // of stealing horizontal space next to it. `items-center` centers
+    // both children on the avatar's vertical axis — keeps Remove
+    // visually anchored to the square above it instead of drifting to
+    // the left edge under a narrow letter like "R". `gap-1.5` is tight
+    // on purpose so Remove reads as an annotation of the avatar above
+    // it, not as an unrelated row. Matches the doc comment above.
+    <div className="flex flex-col items-center gap-1.5">
       <div className="relative">
         <AvatarPickerButton
           size={size}

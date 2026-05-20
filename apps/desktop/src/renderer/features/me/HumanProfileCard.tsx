@@ -119,7 +119,11 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
       <ProfileSection title="Identity">
         <div className="flex items-center gap-4">
           {canEdit ? (
-            <div className="flex flex-col gap-1.5">
+            // Avatar column: picker on top, Remove link centered below
+            // (vertical-stack mirror of EditableAgentAvatar — same copy,
+            // same gap, same centering). Keeping the two surfaces visually
+            // identical means a viewer who knows one knows the other.
+            <div className="flex flex-col items-center gap-1.5">
               <AvatarPickerButton
                 size={56}
                 label={hasAvatar ? 'Edit' : 'Add'}
@@ -141,6 +145,16 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
                   )}
                 </span>
               </AvatarPickerButton>
+              {hasAvatar ? (
+                <button
+                  type="button"
+                  onClick={() => void onClearAvatar()}
+                  disabled={avatarPending}
+                  className="text-[11px] text-text-muted underline-offset-2 hover:underline disabled:opacity-50"
+                >
+                  Remove
+                </button>
+              ) : null}
               {avatarError ? (
                 <p
                   role="alert"
@@ -184,18 +198,6 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
               <Lock className="size-3" />
               <span>name is permanent</span>
             </div>
-            {canEdit && hasAvatar ? (
-              <div className="mt-1 px-2">
-                <button
-                  type="button"
-                  onClick={() => void onClearAvatar()}
-                  disabled={avatarPending}
-                  className="text-[11px] text-text-muted underline-offset-2 hover:underline disabled:opacity-50"
-                >
-                  Remove avatar
-                </button>
-              </div>
-            ) : null}
           </div>
         </div>
       </ProfileSection>
