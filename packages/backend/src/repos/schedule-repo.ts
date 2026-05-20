@@ -32,7 +32,6 @@ interface ScheduleRow {
   // no longer exists (orphan) — formatted as 'Unavailable conversation'.
   target_title: string | null;
   target_kind: 'channel' | 'dm_channel' | 'thread' | null;
-  target_parent_id: string | null;
   target_parent_title: string | null;
 }
 
@@ -53,7 +52,6 @@ const SCHEDULE_SELECT_WITH_TARGET = `
   SELECT s.*,
          tc.title           AS target_title,
          tc.kind            AS target_kind,
-         tc.parent_conversation_id AS target_parent_id,
          tp.title           AS target_parent_title
     FROM schedules s
     LEFT JOIN conversations tc ON tc.id = s.target_conversation_id
