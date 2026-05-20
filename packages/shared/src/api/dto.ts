@@ -1530,6 +1530,22 @@ export const ScheduleDtoSchema = z.object({
    *  time and validated against owner agent's membership; v28 backfilled
    *  existing rows from owner's agent_home DM. Never null after v28. */
   target_conversation_id: z.string(),
+  /** Server-side derived label for `target_conversation_id`, projected
+   *  by the agent-facing schedule list/create response. Format:
+   *    - `#<title>`           for a regular channel
+   *    - `@<title>`           for a DM channel (workspace_kind agent_home)
+   *    - `#<parent>:<title>`  for a thread under a known parent
+   *    - `<title>`            for a thread whose parent is missing
+   *    - `'Unavailable conversation'` when the target id no longer
+   *      resolves (deleted/orphaned).
+   *  ACL boundary: this label follows the **schedule's** visibility, not
+   *  the target conversation's — once the caller is allowed to see the
+   *  schedule, the label is part of the schedule's own semantics
+   *  (the schedule describes WHERE it fires) rather than a leaked
+   *  metadata projection of the target. The label is intentionally
+   *  minimal (title + kind) and never carries workspace path, member
+   *  list, parent ids, or any other target-private metadata. */
+  target_label: z.string(),
   title: z.string(),
   message: z.string(),
   spec: ScheduleSpecSchema,

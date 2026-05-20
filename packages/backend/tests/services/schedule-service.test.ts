@@ -440,6 +440,99 @@ describe('ScheduleService.create', () => {
     expect(created.target_conversation_id).toBe(channel.id);
   });
 
+  it('projects target_label as `#title` for a regular channel', () => {
+    // PR-2 of #task:479: target_label is server-side derived from the
+    // joined conversation row so the agent panel (and any other
+    // schedule consumer) can show "→ #release" without a per-row
+    // /conversations/:id/ref fan-out, AND so the ACL stays single-
+    // boundary (the schedule list authorizes; label is part of the
+    // schedule's own semantics, not a leaked target metadata
+    // projection). Format spec: '#<title>'.
+    const f = setup();
+    const ws = f.workspaces.insert({
+      name: 'team',
+      description: null,
+      workspacePath: '/tmp/silverhand-team-label',
+      workspaceHostId: f.localHostId,
+    });
+    const channel = f.conversations.insertChannel({
+      workspaceId: ws.id,
+      workspacePath: ws.workspace_path,
+      title: 'release',
+    });
+    f.conversations.addAgent(channel.id, f.ownerAgentId);
+
+    const created = f.service.create(
+      {
+        title: 'Channel cron',
+        message: 'fire',
+        target_conversation_id: channel.id,
+        spec: { kind: 'once', delay_seconds: 60 },
+      },
+      f.ownerAgentId,
+      f.homeDmId,
+    );
+    expect(created.target_label).toBe('#release');
+  });
+
+  it('projects target_label as `@title` for a DM channel target', () => {
+    // DM channels are addressed with `@` to mirror the inline `@<handle>`
+    // mention sigil and distinguish them from `#` channels at a glance.
+    const f = setup();
+    // The setup helper provisions homeDmId — an agent_home DM — so we
+    // reuse it as the target rather than creating another DM workspace.
+    const created = f.service.create(
+      {
+        title: 'DM cron',
+        message: 'fire here',
+        target_conversation_id: f.homeDmId,
+        spec: { kind: 'once', delay_seconds: 60 },
+      },
+      f.ownerAgentId,
+      f.homeDmId,
+    );
+    // The agent_home DM's title was set at provisioning; we don't
+    // assert the exact suffix because that's seeding territory, only
+    // that the prefix marks it as a DM.
+    expect(created.target_label.startsWith('@')).toBe(true);
+  });
+
+  it('projects target_label as `#parent:thread` for a thread target', () => {
+    // Threads are nested resources — operators need to see both the
+    // thread's title AND the channel it lives under, otherwise "→
+    // rollout-plan" gives no spatial context. Format: '#<parent>:<thread>'.
+    const f = setup();
+    const ws = f.workspaces.insert({
+      name: 'team',
+      description: null,
+      workspacePath: '/tmp/silverhand-team-thread',
+      workspaceHostId: f.localHostId,
+    });
+    const parent = f.conversations.insertChannel({
+      workspaceId: ws.id,
+      workspacePath: ws.workspace_path,
+      title: 'release',
+    });
+    f.conversations.addAgent(parent.id, f.ownerAgentId);
+    const thread = f.conversations.insertThread({
+      channelId: parent.id,
+      title: 'rollout-plan',
+    });
+    f.conversations.addAgent(thread.id, f.ownerAgentId);
+
+    const created = f.service.create(
+      {
+        title: 'Thread cron',
+        message: 'fire in thread',
+        target_conversation_id: thread.id,
+        spec: { kind: 'once', delay_seconds: 60 },
+      },
+      f.ownerAgentId,
+      f.homeDmId,
+    );
+    expect(created.target_label).toBe('#release:rollout-plan');
+  });
+
   it('rejects when target_conversation_id does not exist', () => {
     const f = setup();
     let err: ScheduleError | undefined;

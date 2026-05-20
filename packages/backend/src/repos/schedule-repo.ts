@@ -28,6 +28,50 @@ interface ScheduleRow {
   cancelled_at: number | null;
   created_at: number;
   updated_at: number;
+  // Projected by every SELECT via LEFT JOIN; null when the target row
+  // no longer exists (orphan) — formatted as 'Unavailable conversation'.
+  target_title: string | null;
+  target_kind: 'channel' | 'dm_channel' | 'thread' | null;
+  target_parent_id: string | null;
+  target_parent_title: string | null;
+}
+
+/**
+ * Common SELECT fragment that joins conversations + their parents so
+ * `rowToDto` can project `target_label`. Centralised so every read site
+ * (agent list, scheduler tick, get-by-id) sees the same projection
+ * shape and the label is computed once.
+ *
+ * Permission note: this projection is intentionally label-only — title
+ * and kind, no workspace path / member / parent ids beyond what the
+ * label needs. The schedule list endpoint already authorises by agent
+ * ownership; per the "follow schedule permission" boundary, the label
+ * is part of the schedule's own description (where it fires), not a
+ * leaked target-conversation metadata projection.
+ */
+const SCHEDULE_SELECT_WITH_TARGET = `
+  SELECT s.*,
+         tc.title           AS target_title,
+         tc.kind            AS target_kind,
+         tc.parent_conversation_id AS target_parent_id,
+         tp.title           AS target_parent_title
+    FROM schedules s
+    LEFT JOIN conversations tc ON tc.id = s.target_conversation_id
+    LEFT JOIN conversations tp ON tp.id = tc.parent_conversation_id
+`;
+
+function buildTargetLabel(row: ScheduleRow): string {
+  if (row.target_title === null || row.target_kind === null) {
+    return 'Unavailable conversation';
+  }
+  if (row.target_kind === 'thread') {
+    const parent = row.target_parent_title?.trim();
+    return parent ? `#${parent}:${row.target_title}` : row.target_title;
+  }
+  if (row.target_kind === 'dm_channel') {
+    return `@${row.target_title}`;
+  }
+  return `#${row.target_title}`;
 }
 
 function rowToDto(row: ScheduleRow): ScheduleDto {
@@ -35,6 +79,7 @@ function rowToDto(row: ScheduleRow): ScheduleDto {
     id: row.id,
     owner_agent_id: row.owner_agent_id,
     target_conversation_id: row.target_conversation_id,
+    target_label: buildTargetLabel(row),
     title: row.title,
     message: row.message,
     spec: ScheduleSpecSchema.parse(JSON.parse(row.spec_json)),
@@ -103,7 +148,7 @@ export class ScheduleRepo {
   get(id: string): ScheduleDto | null {
     const row = this.db
       .prepare<[string], ScheduleRow>(
-        `SELECT * FROM schedules WHERE id = ?`,
+        `${SCHEDULE_SELECT_WITH_TARGET} WHERE s.id = ?`,
       )
       .get(id);
     return row ? rowToDto(row) : null;
@@ -122,16 +167,16 @@ export class ScheduleRepo {
       ? statuses.map(() => '?').join(',')
       : null;
     const where = placeholders
-      ? `owner_agent_id = ? AND status IN (${placeholders})`
-      : `owner_agent_id = ?`;
+      ? `s.owner_agent_id = ? AND s.status IN (${placeholders})`
+      : `s.owner_agent_id = ?`;
     const params: (string | number)[] = [ownerAgentId];
     if (statuses) params.push(...statuses);
     params.push(limit);
     const rows = this.db
       .prepare<typeof params, ScheduleRow>(
-        `SELECT * FROM schedules
+        `${SCHEDULE_SELECT_WITH_TARGET}
          WHERE ${where}
-         ORDER BY next_fire_at ASC, created_at ASC
+         ORDER BY s.next_fire_at ASC, s.created_at ASC
          LIMIT ?`,
       )
       .all(...params);
@@ -156,9 +201,9 @@ export class ScheduleRepo {
   listDuePending(now: number, limit = 100): ScheduleDto[] {
     const rows = this.db
       .prepare<[number, number], ScheduleRow>(
-        `SELECT * FROM schedules
-         WHERE status = 'pending' AND next_fire_at <= ?
-         ORDER BY next_fire_at ASC
+        `${SCHEDULE_SELECT_WITH_TARGET}
+         WHERE s.status = 'pending' AND s.next_fire_at <= ?
+         ORDER BY s.next_fire_at ASC
          LIMIT ?`,
       )
       .all(now, limit);

@@ -7,6 +7,7 @@ function makeSchedule(overrides: Partial<ScheduleDto> = {}): ScheduleDto {
     id: 's-0',
     owner_agent_id: 'a-0',
     target_conversation_id: 'conv-0',
+    target_label: '#release',
     title: 'Wake title',
     message: 'wake',
     spec: { kind: 'once', fire_at: 1700000000 },

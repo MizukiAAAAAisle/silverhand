@@ -166,16 +166,18 @@ function ScheduleItem({
           <span className="font-mono">{formatFiredCount(row)}</span>
           {/* Schedule's execution target — the conversation whose
            *  (conversation, owner_agent) runtime wakes up on each fire
-           *  AND posts the result. Surfaced so the operator can tell
-           *  at a glance "this cron will run in #release", not "this
-           *  cron will run somewhere I have to dig for". The id is
-           *  truncated because we don't yet resolve a human-readable
-           *  conversation title here; nicer naming is a follow-up. */}
+           *  AND posts the result. `target_label` is server-projected
+           *  under schedule's own ACL (see ScheduleDto.target_label):
+           *  '#name' / '@name' / '#parent:thread' / 'Unavailable
+           *  conversation'. We never call /conversations/:id/ref from
+           *  here — schedule list is the single auth boundary, and
+           *  fan-out lookups would mix two ACL models. The full id is
+           *  retained as the tooltip for audit. */}
           <span
             className="font-mono"
             title={`Fires in conversation ${row.target_conversation_id}`}
           >
-            → {row.target_conversation_id.slice(0, 8)}
+            → {row.target_label}
           </span>
         </div>
       </div>
