@@ -267,13 +267,15 @@
   opacity: 1;
 }
 
-/* ── #4 Display caps on chrome chips ──
-   Chat task-tag chip — `[data-task-ref]` (TaskRef.tsx). Display caps
-   + tighter letter-spacing. Chip surface inherits PR-1 forza6's
-   `--bg-task-tag: var(--brand-primary)` magenta + near-black text,
-   per shiki "task = 节日粉". */
+/* ── #4 Display caps on task-ref chips ─────────────────────────────
+   Chat task-tag chip — `[data-task-ref]` (TaskRef.tsx). Keep the
+   poster-chip uppercase + tracking, but do NOT use `--font-display`.
+   shiki 8sDhI2IlI5gcSI6r / lV4V87a8VnTQEEJ8: Markdown task chips sit
+   inside prose, so they need a stable poster face that harmonises with
+   Markdown text instead of following every channel-header/sidebar font
+   trial. */
 [data-theme='forza6'] [data-task-ref] {
-  font-family: var(--font-display);
+  font-family: var(--forza6-font-task-ref);
   letter-spacing: 0.10em;
   text-transform: uppercase;
 }
