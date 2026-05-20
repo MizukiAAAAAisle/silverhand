@@ -9,12 +9,16 @@ import {
   type KeyboardEvent,
 } from 'react';
 import { Hash, Paperclip, X } from 'lucide-react';
-import type { AgentDto } from '@silverhand/shared';
+import type { AgentDto, ChannelConversationDto } from '@silverhand/shared';
 import { Button } from '@/components/ui/button';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
-import { useWorkspaces, type WorkspaceListItem } from '@/features/workspaces/hooks';
+import {
+  useChannelsForWorkspace,
+  type ChannelListItem,
+} from '@/features/workspaces/hooks';
+import { useConversationById } from '@/features/conversations/useConversationById';
 import { useSendMessage } from '@/features/channels/hooks';
 import {
   clearComposerDraft,
@@ -225,7 +229,20 @@ export function Composer({
 
   const { data: agents = [] } = useAgents();
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
-  const { data: workspaces = [] } = useWorkspaces();
+  // `#` autocomplete is scoped to the *current* conversation's
+  // workspace — channel references in chat resolve per-workspace
+  // (see Markdown.tsx CHANNEL_PREFIX → ChannelRef), so suggesting
+  // channels from another workspace would only ever render as
+  // unresolved muted text. We pull the conversation ref to learn
+  // workspace_id + workspace_kind, then feed both to
+  // useChannelsForWorkspace.
+  const conv = useConversationById(conversationId);
+  const workspaceId = conv.ref?.workspace_id ?? null;
+  const workspaceKind = conv.ref?.workspace_kind ?? null;
+  const { data: workspaceChannels = [] } = useChannelsForWorkspace(
+    workspaceId,
+    workspaceKind,
+  );
 
   const trigger = useMemo(
     () => (composing ? null : detectTrigger(draft, caret)),
@@ -237,8 +254,8 @@ export function Composer({
     if (trigger.kind === '@') {
       return filterAgents(agents, trigger.query);
     }
-    return filterWorkspaces(workspaces, trigger.query);
-  }, [trigger, agents, workspaces]);
+    return filterChannels(workspaceChannels, trigger.query);
+  }, [trigger, agents, workspaceChannels]);
 
   const [active, setActive] = useState(0);
   // Keep the highlight in range as the candidate list shrinks/grows.
@@ -254,7 +271,11 @@ export function Composer({
 
   const insertPick = (item: PickerItem): void => {
     if (!trigger) return;
-    const handle = item.kind === 'agent' ? item.agent.name : item.workspace.name;
+    // Agent autocomplete inserts `@<handle>` (handle is the agent's
+    // url-safe `name`). Channel autocomplete inserts `#<title>` —
+    // channels don't carry a separate `name` field, the title IS the
+    // mention handle that ChannelRef resolves against.
+    const handle = item.kind === 'agent' ? item.agent.name : item.channel.title;
     const before = draft.slice(0, trigger.pos);
     const after = draft.slice(trigger.pos + 1 + trigger.query.length);
     // Trailing space so the next keystroke isn't immediately treated
@@ -735,7 +756,7 @@ function detectTrigger(text: string, caret: number): ActiveTrigger | null {
 
 type PickerItem =
   | { kind: 'agent'; agent: AgentDto }
-  | { kind: 'workspace'; workspace: WorkspaceListItem };
+  | { kind: 'channel'; channel: ChannelConversationDto };
 
 function filterAgents(agents: AgentDto[], query: string): PickerItem[] {
   const q = query.toLowerCase();
@@ -750,15 +771,31 @@ function filterAgents(agents: AgentDto[], query: string): PickerItem[] {
   return matched.slice(0, 8).map(agent => ({ kind: 'agent', agent }));
 }
 
-function filterWorkspaces(
-  workspaces: WorkspaceListItem[],
+/**
+ * Filter the workspace's conversation list down to top-level channels
+ * the user can actually mention.
+ *
+ * - `kind === 'channel'` only: DM channels have no meaningful `#name`
+ *   and thread mentions aren't addressable by name (see CLI docs —
+ *   threads only accept `#conv:<id>`).
+ * - Skip archived channels: a `#name` on an archived channel resolves
+ *   to inert muted text on the receiving end (see ChannelRef
+ *   `data-channel-ref-state="resolved-no-handler"` + the dim style on
+ *   `closed_at`); offering them in the picker would invite dead refs.
+ */
+function filterChannels(
+  channels: ChannelListItem[],
   query: string,
 ): PickerItem[] {
   const q = query.toLowerCase();
+  const onlyTopLevel = channels.filter(
+    (c): c is ChannelConversationDto =>
+      c.kind === 'channel' && c.archived_at === null,
+  );
   const matched = q
-    ? workspaces.filter(w => w.name.toLowerCase().includes(q))
-    : workspaces;
-  return matched.slice(0, 8).map(workspace => ({ kind: 'workspace', workspace }));
+    ? onlyTopLevel.filter(c => c.title.toLowerCase().includes(q))
+    : onlyTopLevel;
+  return matched.slice(0, 8).map(channel => ({ kind: 'channel', channel }));
 }
 
 // ── menu ──────────────────────────────────────────────────────────
@@ -859,13 +896,13 @@ function Row({
         </>
       ) : (
         <>
-          <Hash className="size-4 text-text-muted" />
+          <Hash className="size-4 shrink-0 text-text-muted" />
           <div className="flex min-w-0 flex-1 flex-col leading-tight">
             <span className="truncate text-sm font-medium text-text-primary">
-              #{item.workspace.name}
+              #{item.channel.title}
             </span>
-            <span className="truncate text-[11px] uppercase tracking-wider text-text-muted">
-              {item.workspace.kind}
+            <span className="truncate text-[11px] text-text-muted">
+              {item.channel.closed_at !== null ? 'closed' : 'channel'}
             </span>
           </div>
         </>
@@ -877,5 +914,5 @@ function Row({
 function rowKey(item: PickerItem): string {
   return item.kind === 'agent'
     ? `a:${item.agent.id}`
-    : `w:${item.workspace.id}`;
+    : `c:${item.channel.id}`;
 }
