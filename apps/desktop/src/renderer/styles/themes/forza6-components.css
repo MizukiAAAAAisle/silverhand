@@ -750,10 +750,18 @@
    variable, so only the active row repaints. Uses `--brand-primary`
    (#FF2C7A) + `--text-on-brand` (#0A0A0A near-black, AA ~5.56:1) — the
    same selected-state vocabulary as `--bg-selected` / NavRail icon /
-   sidebar row. Scrollbar thumb stays the default cool wash; no
+   sidebar row. Row descendants carry their own `text-text-primary` /
+   `text-text-muted` utilities, so the follow-up rule explicitly lifts
+   the muted meta line and channel hash icon back to the selected-row
+   foreground. Scrollbar thumb stays the default cool wash; no
    component-layer churn; warm-script pixel-zero. */
 [data-theme='forza6'] [data-composer-picker] [role='option'][aria-selected='true'] {
   background-color: var(--brand-primary);
+  color: var(--text-on-brand);
+}
+[data-theme='forza6']
+  [data-composer-picker]
+  [role='option'][aria-selected='true'] .text-text-muted {
   color: var(--text-on-brand);
 }
 
