@@ -13,6 +13,7 @@ release/
 
 # Local data
 docs/cli-log-reports/*
+docs/changelogs/*
 .silverhand
 *.db
 *.db-journal
