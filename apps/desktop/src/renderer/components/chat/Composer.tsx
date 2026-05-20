@@ -861,8 +861,20 @@ function Row({
   const cls =
     'flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-left ' +
     (active ? 'bg-bg-hover text-text-primary' : 'text-text-secondary');
+  // Keep the keyboard-highlighted row inside the scrollable menu.
+  // Without this, ↑/↓ past the menu's visible window leaves the
+  // selection invisible — the user has no idea their arrow press
+  // moved anywhere. `block: 'nearest'` only scrolls when actually
+  // needed, so hover-driven activation in the middle of the list
+  // doesn't jerk the scroll position.
+  const rowRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!active) return;
+    rowRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [active]);
   return (
     <button
+      ref={rowRef}
       type="button"
       role="option"
       aria-selected={active}
