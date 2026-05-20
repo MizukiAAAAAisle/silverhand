@@ -572,8 +572,11 @@ export function Composer({
               e.target.value = '';
             }}
           />
-          {/* Toolbar row — sibling of the textarea, NOT overlaid. */}
-          <div className="flex items-center justify-between border-t border-border-subtle px-2 py-1.5">
+          {/* Toolbar row — sibling of the textarea, NOT overlaid. No
+           *  top border: the shared shell border already encloses
+           *  textarea + toolbar as one box, and an internal divider
+           *  read as two separate widgets stacked. */}
+          <div className="flex items-center justify-between px-2 py-1.5">
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
