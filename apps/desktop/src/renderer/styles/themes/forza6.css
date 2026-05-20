@@ -301,17 +301,16 @@
 
   /* ── Fonts ──
      `--font-display` — heavy condensed face for chrome labels,
-     workspace tile monograms, segment buttons, status pills. Bebas
-     Neue is bundled via `@fontsource/bebas-neue` (imported in
-     renderer/main.tsx, ~16KB woff2). It's the canonical "festival
-     poster" face — narrow caps stay readable down to 8-10px task pill
-     / sidebar count, which is where most `--font-display` consumers
-     actually live (shiki Bebas pick #task:483 vs Impact baseline).
-     Fallback chain keeps Impact / Helvetica Condensed / Arial Narrow
-     so a missing webfont doesn't drop us to ugly system-ui at the same
-     metrics. `--font-serif` is set to sans because the festival vibe
-     rejects serif altogether. */
-  --font-display: 'Bebas Neue', 'Impact', 'Helvetica Neue Condensed', 'Arial Narrow', system-ui, sans-serif;
+     workspace tile monograms, segment buttons, status pills. Saira
+     Condensed is bundled via `@fontsource/saira-condensed` (imported in
+     renderer/main.tsx, ~20KB woff2). It trades a little pure festival
+     poster personality for stronger small-size HUD / racing UI
+     readability, which matters because most `--font-display` consumers
+     live at 8-20px (shiki Saira trial #task:489). Fallback chain keeps
+     Impact / Helvetica Condensed / Arial Narrow so a missing webfont
+     doesn't drop us to ugly system-ui at the same metrics. `--font-serif`
+     is set to sans because the festival vibe rejects serif altogether. */
+  --font-display: 'Saira Condensed', 'Impact', 'Helvetica Neue Condensed', 'Arial Narrow', system-ui, sans-serif;
   --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', 'Helvetica Neue', sans-serif;
   --font-serif: var(--font-sans);
   --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', 'Sarasa Mono SC', 'Source Han Mono SC', 'Noto Sans Mono CJK SC', 'PingFang SC', monospace;
