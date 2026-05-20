@@ -12,7 +12,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Anton&family=Oswald:wght@400;500;700&family=Archivo+Black&family=Bungee&family=Alfa+Slab+One&family=Staatliches&family=Black+Ops+One&family=Big+Shoulders+Display:wght@400;800&family=Bowlby+One&family=Russo+One&family=Inter:wght@400;500;600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Anton&family=Oswald:wght@400;500;700&family=Archivo+Black&family=Bungee&family=Alfa+Slab+One&family=Staatliches&family=Black+Ops+One&family=Big+Shoulders+Display:wght@400;800&family=Bowlby+One&family=Russo+One&family=Barlow+Condensed:wght@600;700&family=Roboto+Condensed:wght@600;700&family=Saira+Condensed:wght@600;700&family=Teko:wght@600;700&family=Rajdhani:wght@600;700&family=Inter:wght@400;500;600&display=swap"
     />
 
     <style>
@@ -357,6 +357,41 @@
         font-family: 'Big Shoulders Display', sans-serif;
         font-weight: 400;
       }
+      .ff-barlow .sample-head,
+      .ff-barlow .sample-strip,
+      .ff-barlow .sample-cascade .cas,
+      .ff-barlow .sample-pair .pf-label.poster {
+        font-family: 'Barlow Condensed', sans-serif;
+        font-weight: 700;
+      }
+      .ff-roboto-condensed .sample-head,
+      .ff-roboto-condensed .sample-strip,
+      .ff-roboto-condensed .sample-cascade .cas,
+      .ff-roboto-condensed .sample-pair .pf-label.poster {
+        font-family: 'Roboto Condensed', sans-serif;
+        font-weight: 700;
+      }
+      .ff-saira .sample-head,
+      .ff-saira .sample-strip,
+      .ff-saira .sample-cascade .cas,
+      .ff-saira .sample-pair .pf-label.poster {
+        font-family: 'Saira Condensed', sans-serif;
+        font-weight: 700;
+      }
+      .ff-teko .sample-head,
+      .ff-teko .sample-strip,
+      .ff-teko .sample-cascade .cas,
+      .ff-teko .sample-pair .pf-label.poster {
+        font-family: 'Teko', sans-serif;
+        font-weight: 600;
+      }
+      .ff-rajdhani .sample-head,
+      .ff-rajdhani .sample-strip,
+      .ff-rajdhani .sample-cascade .cas,
+      .ff-rajdhani .sample-pair .pf-label.poster {
+        font-family: 'Rajdhani', sans-serif;
+        font-weight: 700;
+      }
       /* Keep headline size identical across weight variants — Cindy
          EGOvJCc7YHXhPQR6: shrinking the regular-weight headline to
          60/56px would confound the comparison. Same 64px lets the
@@ -423,6 +458,12 @@
         Regular (vs 800 in card #10). All other roster entries are
         single-weight by design — the cascade row is the only
         smaller-size proxy for them.
+      </p>
+      <p>
+        Cards 16-20 add Cindy's second-pass UI-display candidates:
+        Barlow Condensed, Roboto Condensed, Saira Condensed, Teko, and
+        Rajdhani. These trade some pure poster personality for stronger
+        small-size UI readability and real weight stacks.
       </p>
     </header>
 
@@ -824,6 +865,153 @@
         <div class="card-head">
           <div class="card-name">Oswald — Medium (500)</div>
           <div class="card-meta">Google · sans · medium weight (between 400 and 700)</div>
+        </div>
+        <div class="sample-head">
+          FORZA <span class="accent">6</span><br />FESTIVAL
+        </div>
+        <div class="sample-strip">
+          <span class="date">MAY 24</span>
+          <span class="at">19:00</span>
+          <span class="num">#024</span>
+        </div>
+        <div class="sample-pair">
+          <span class="pf-label poster">CHANNEL</span>
+          <span class="pf-body">Forza6 theme · 12 members · last seen 14:32</span>
+        </div>
+        <div class="sample-cascade">
+          <span class="cas-label">CHROME LABEL CASCADE — 20 / 14 / 11 / 9 px</span>
+          <span class="cas s20">FORZA6 THEME · 12 MEMBERS</span>
+          <span class="cas s14">CHANNEL · WORKSPACE TITLE</span>
+          <span class="cas s11">SIDEBAR GROUP · SAVED MESSAGES</span>
+          <span class="cas s9">IN_PROGRESS · #024 · TODO</span>
+        </div>
+      </article>
+
+      <!-- 16. Barlow Condensed — Cindy second-pass recommendation
+           (LEnnvly6zGR4UQk7): more UI-native than Bebas, still
+           condensed enough for poster chrome. 700 is the likely
+           forza6 display weight; 600 is loaded too if the app needs
+           a softer chrome-label pass. -->
+      <article class="card ff-barlow">
+        <div class="card-head">
+          <div class="card-name">Barlow Condensed — Bold (700)</div>
+          <div class="card-meta">Google · sans · UI-friendly condensed</div>
+        </div>
+        <div class="sample-head">
+          FORZA <span class="accent">6</span><br />FESTIVAL
+        </div>
+        <div class="sample-strip">
+          <span class="date">MAY 24</span>
+          <span class="at">19:00</span>
+          <span class="num">#024</span>
+        </div>
+        <div class="sample-pair">
+          <span class="pf-label poster">CHANNEL</span>
+          <span class="pf-body">Forza6 theme · 12 members · last seen 14:32</span>
+        </div>
+        <div class="sample-cascade">
+          <span class="cas-label">CHROME LABEL CASCADE — 20 / 14 / 11 / 9 px</span>
+          <span class="cas s20">FORZA6 THEME · 12 MEMBERS</span>
+          <span class="cas s14">CHANNEL · WORKSPACE TITLE</span>
+          <span class="cas s11">SIDEBAR GROUP · SAVED MESSAGES</span>
+          <span class="cas s9">IN_PROGRESS · #024 · TODO</span>
+        </div>
+      </article>
+
+      <!-- 17. Roboto Condensed — conservative control sample. Useful as
+           a "readability first" baseline if the more expressive poster
+           faces feel too decorative in 9-14px UI labels. -->
+      <article class="card ff-roboto-condensed">
+        <div class="card-head">
+          <div class="card-name">Roboto Condensed — Bold (700)</div>
+          <div class="card-meta">Google · sans · conservative readable</div>
+        </div>
+        <div class="sample-head">
+          FORZA <span class="accent">6</span><br />FESTIVAL
+        </div>
+        <div class="sample-strip">
+          <span class="date">MAY 24</span>
+          <span class="at">19:00</span>
+          <span class="num">#024</span>
+        </div>
+        <div class="sample-pair">
+          <span class="pf-label poster">CHANNEL</span>
+          <span class="pf-body">Forza6 theme · 12 members · last seen 14:32</span>
+        </div>
+        <div class="sample-cascade">
+          <span class="cas-label">CHROME LABEL CASCADE — 20 / 14 / 11 / 9 px</span>
+          <span class="cas s20">FORZA6 THEME · 12 MEMBERS</span>
+          <span class="cas s14">CHANNEL · WORKSPACE TITLE</span>
+          <span class="cas s11">SIDEBAR GROUP · SAVED MESSAGES</span>
+          <span class="cas s9">IN_PROGRESS · #024 · TODO</span>
+        </div>
+      </article>
+
+      <!-- 18. Saira Condensed — stronger HUD / racing energy than
+           Barlow, but with a real weight stack and good small-label
+           readability. -->
+      <article class="card ff-saira">
+        <div class="card-head">
+          <div class="card-name">Saira Condensed — Bold (700)</div>
+          <div class="card-meta">Google · sans · HUD / racing condensed</div>
+        </div>
+        <div class="sample-head">
+          FORZA <span class="accent">6</span><br />FESTIVAL
+        </div>
+        <div class="sample-strip">
+          <span class="date">MAY 24</span>
+          <span class="at">19:00</span>
+          <span class="num">#024</span>
+        </div>
+        <div class="sample-pair">
+          <span class="pf-label poster">CHANNEL</span>
+          <span class="pf-body">Forza6 theme · 12 members · last seen 14:32</span>
+        </div>
+        <div class="sample-cascade">
+          <span class="cas-label">CHROME LABEL CASCADE — 20 / 14 / 11 / 9 px</span>
+          <span class="cas s20">FORZA6 THEME · 12 MEMBERS</span>
+          <span class="cas s14">CHANNEL · WORKSPACE TITLE</span>
+          <span class="cas s11">SIDEBAR GROUP · SAVED MESSAGES</span>
+          <span class="cas s9">IN_PROGRESS · #024 · TODO</span>
+        </div>
+      </article>
+
+      <!-- 19. Teko — hard, tall and poster-like, but multi-weight. The
+           600 weight is intentionally used instead of 700 because Teko
+           gets very loud at headline size. -->
+      <article class="card ff-teko">
+        <div class="card-head">
+          <div class="card-name">Teko — SemiBold (600)</div>
+          <div class="card-meta">Google · sans · hard poster / HUD</div>
+        </div>
+        <div class="sample-head">
+          FORZA <span class="accent">6</span><br />FESTIVAL
+        </div>
+        <div class="sample-strip">
+          <span class="date">MAY 24</span>
+          <span class="at">19:00</span>
+          <span class="num">#024</span>
+        </div>
+        <div class="sample-pair">
+          <span class="pf-label poster">CHANNEL</span>
+          <span class="pf-body">Forza6 theme · 12 members · last seen 14:32</span>
+        </div>
+        <div class="sample-cascade">
+          <span class="cas-label">CHROME LABEL CASCADE — 20 / 14 / 11 / 9 px</span>
+          <span class="cas s20">FORZA6 THEME · 12 MEMBERS</span>
+          <span class="cas s14">CHANNEL · WORKSPACE TITLE</span>
+          <span class="cas s11">SIDEBAR GROUP · SAVED MESSAGES</span>
+          <span class="cas s9">IN_PROGRESS · #024 · TODO</span>
+        </div>
+      </article>
+
+      <!-- 20. Rajdhani — wider tech / racing UI candidate. Less
+           "festival poster" than Bebas, but often cleaner in dense
+           dashboard chrome. -->
+      <article class="card ff-rajdhani">
+        <div class="card-head">
+          <div class="card-name">Rajdhani — Bold (700)</div>
+          <div class="card-meta">Google · sans · tech / racing UI</div>
         </div>
         <div class="sample-head">
           FORZA <span class="accent">6</span><br />FESTIVAL
