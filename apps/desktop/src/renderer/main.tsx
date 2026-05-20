@@ -4,11 +4,11 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { App } from './App';
 import { queryClient } from './lib/queryClient';
-// Saira Condensed is forza6's poster/HUD display face — bundled (not a
-// CDN link) so chrome label / task pill / sidebar count metrics don't
+// Rajdhani is forza6's tech/racing display face — bundled (not a CDN
+// link) so chrome label / task pill / sidebar count metrics don't
 // flash through a system fallback during a cold start with no network.
-// Single weight (700) only, ~20KB woff2.
-import '@fontsource/saira-condensed/700.css';
+// Single weight (700) only, ~16KB woff2.
+import '@fontsource/rajdhani/700.css';
 import './styles/global.css';
 
 const root = document.getElementById('root');

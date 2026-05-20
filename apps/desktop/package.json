@@ -17,7 +17,7 @@
     "package:dir": "electron-builder --mac --dir --config electron-builder.yml"
   },
   "dependencies": {
-    "@fontsource/saira-condensed": "^5.2.8",
+    "@fontsource/rajdhani": "^5.2.7",
     "@hono/node-server": "^1.13.2",
     "@radix-ui/react-context-menu": "^2.2.16",
     "@radix-ui/react-dialog": "^1.1.15",
