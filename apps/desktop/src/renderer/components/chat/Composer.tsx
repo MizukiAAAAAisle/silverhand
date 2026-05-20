@@ -519,64 +519,83 @@ export function Composer({
             agentAvatarUrls={agentAvatarUrls}
           />
         ) : null}
-        <textarea
-          ref={ref}
-          value={draft}
-          data-composer-input
-          onChange={e => {
-            updateDraft(
-              e.target.value,
-              e.target.selectionStart ?? e.target.value.length,
-            );
-          }}
-          onKeyUp={e => updateCaret(e.currentTarget.selectionStart ?? 0)}
-          onClick={e => updateCaret(e.currentTarget.selectionStart ?? 0)}
-          onSelect={e => updateCaret(e.currentTarget.selectionStart ?? 0)}
-          onKeyDown={onKeyDown}
-          onPaste={onPaste}
-          onCompositionStart={() => setComposing(true)}
-          onCompositionEnd={() => setComposing(false)}
-          disabled={disabled}
-          placeholder={
-            archived
-              ? '会话已归档，无法发送'
-              : disabled
-                ? '会话已关闭，无法发送'
-                : 'Enter 发送，Shift + Enter 换行，@agent，#channel'
-          }
-          className="block max-h-48 min-h-[60px] w-full resize-none rounded-md border border-border-subtle bg-bg-floating px-3 py-2 pb-11 pr-20 text-sm text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none focus:ring-2 focus:ring-border-focus disabled:cursor-not-allowed disabled:opacity-60"
-        />
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          className="hidden"
-          onChange={e => {
-            if (e.target.files) addFiles(e.target.files);
-            // Reset so re-selecting the same file fires onChange.
-            e.target.value = '';
-          }}
-        />
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={disabled || pending.length >= MAX_ATTACHMENTS}
-          title="附件"
-          className="absolute bottom-2 left-2 inline-flex size-8 items-center justify-center rounded-md text-text-muted transition-colors hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Paperclip className="size-4" />
-        </button>
-        <Button
-          type="submit"
-          variant="default"
-          size="sm"
-          disabled={sendDisabled}
-          title="发送消息"
-          data-composer-action="send"
-          className="absolute bottom-2 right-2 h-8"
-        >
-          Send
-        </Button>
+        {/* Composer shell: border + bg + focus-ring live on the
+         *  wrapper, not the textarea, so the bottom toolbar joins the
+         *  same box. Previously the Send/attachment buttons floated
+         *  absolutely on top of the textarea (with `pb-11 pr-20` on
+         *  the textarea to dodge them); long messages would scroll
+         *  underneath and visually collide with "Send". Stacking them
+         *  as siblings means the textarea no longer needs reserved
+         *  padding and text can occupy its full width. Wrapper carries
+         *  `focus-within:` ring so the focused-textarea outline still
+         *  encloses both rows. */}
+        <div className="flex flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-floating focus-within:border-border-focus focus-within:ring-2 focus-within:ring-border-focus">
+          <textarea
+            ref={ref}
+            value={draft}
+            data-composer-input
+            onChange={e => {
+              updateDraft(
+                e.target.value,
+                e.target.selectionStart ?? e.target.value.length,
+              );
+            }}
+            onKeyUp={e => updateCaret(e.currentTarget.selectionStart ?? 0)}
+            onClick={e => updateCaret(e.currentTarget.selectionStart ?? 0)}
+            onSelect={e => updateCaret(e.currentTarget.selectionStart ?? 0)}
+            onKeyDown={onKeyDown}
+            onPaste={onPaste}
+            onCompositionStart={() => setComposing(true)}
+            onCompositionEnd={() => setComposing(false)}
+            disabled={disabled}
+            placeholder={
+              archived
+                ? '会话已归档，无法发送'
+                : disabled
+                  ? '会话已关闭，无法发送'
+                  : 'Enter 发送，Shift + Enter 换行，@agent，#channel'
+            }
+            // No bottom/right padding to dodge buttons anymore — they
+            // live in the toolbar below. `min-h-[80px]` adds one row
+            // over the previous 60px so the box stays the same total
+            // height after the toolbar is stacked underneath.
+            className="block max-h-48 min-h-[80px] w-full resize-none bg-transparent px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+          />
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={e => {
+              if (e.target.files) addFiles(e.target.files);
+              // Reset so re-selecting the same file fires onChange.
+              e.target.value = '';
+            }}
+          />
+          {/* Toolbar row — sibling of the textarea, NOT overlaid. */}
+          <div className="flex items-center justify-between border-t border-border-subtle px-2 py-1.5">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={disabled || pending.length >= MAX_ATTACHMENTS}
+              title="附件"
+              className="inline-flex size-7 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Paperclip className="size-4" />
+            </button>
+            <Button
+              type="submit"
+              variant="default"
+              size="sm"
+              disabled={sendDisabled}
+              title="发送消息"
+              data-composer-action="send"
+              className="h-7"
+            >
+              Send
+            </Button>
+          </div>
+        </div>
       </div>
       <Lightbox
         open={previewing !== null}
@@ -754,9 +773,13 @@ function PickerMenu({
 }): JSX.Element {
   return (
     <div
-      // Float above the textarea, left-aligned. Width matches the
-      // textarea so long display names don't get clipped.
-      className="absolute bottom-full left-0 right-0 mb-1.5 max-h-64 overflow-y-auto rounded-md border border-border bg-bg-floating p-1 shadow-lg"
+      // Float above the textarea, left-aligned. Width is a fixed
+      // narrow 256px so a 4-field row (avatar / display_name / handle
+      // / runtime) doesn't drown in dead space — composer is ~600+px
+      // wide and the previous `left-0 right-0` made the menu look
+      // empty. We drop `right-0` and pin `w-64`; long display names
+      // fall back to truncate inside the row.
+      className="absolute bottom-full left-0 mb-1.5 w-64 max-h-64 overflow-y-auto rounded-md border border-border bg-bg-floating p-1 shadow-lg"
       role="listbox"
       // Don't steal focus from the textarea on click — submit handler
       // still needs the caret position to do the replacement.
@@ -794,7 +817,7 @@ function Row({
   agentAvatarUrl: string | null;
 }): JSX.Element {
   const cls =
-    'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-left ' +
+    'flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-left ' +
     (active ? 'bg-bg-hover text-text-primary' : 'text-text-secondary');
   return (
     <button
@@ -809,27 +832,37 @@ function Row({
         <>
           <AgentAvatar
             runtime={item.agent.runtime}
-            size={20}
+            size={28}
             avatarObjectUrl={agentAvatarUrl}
             alt={item.agent.display_name || item.agent.name}
           />
-          <span className="truncate font-medium">
-            {item.agent.display_name?.trim() || item.agent.name}
-          </span>
-          <span className="truncate text-xs text-text-muted">
-            @{item.agent.name}
-          </span>
-          <span className="ml-auto shrink-0 text-[10px] text-text-muted">
-            {item.agent.runtime}
-          </span>
+          {/* Two-line row: display_name leads (the primary thing the
+           *  user is choosing), with @handle + runtime as a muted
+           *  meta line underneath. Mirrors the AgentProfileCard /
+           *  PersonHero identity hierarchy so the popover doesn't
+           *  invent its own. */}
+          <div className="flex min-w-0 flex-1 flex-col leading-tight">
+            <span className="truncate text-sm font-medium text-text-primary">
+              {item.agent.display_name?.trim() || item.agent.name}
+            </span>
+            <div className="flex items-center gap-1.5 text-[11px] text-text-muted">
+              <span className="truncate font-mono">@{item.agent.name}</span>
+              <span aria-hidden>·</span>
+              <span className="shrink-0">{item.agent.runtime}</span>
+            </div>
+          </div>
         </>
       ) : (
         <>
           <Hash className="size-4 text-text-muted" />
-          <span className="truncate font-medium">#{item.workspace.name}</span>
-          <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wider text-text-muted">
-            {item.workspace.kind}
-          </span>
+          <div className="flex min-w-0 flex-1 flex-col leading-tight">
+            <span className="truncate text-sm font-medium text-text-primary">
+              #{item.workspace.name}
+            </span>
+            <span className="truncate text-[11px] uppercase tracking-wider text-text-muted">
+              {item.workspace.kind}
+            </span>
+          </div>
         </>
       )}
     </button>
