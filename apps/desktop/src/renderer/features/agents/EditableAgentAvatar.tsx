@@ -102,43 +102,46 @@ export function EditableAgentAvatar({
     : `Add avatar for @${alt}`;
 
   return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex items-center gap-3">
-        <div className="relative">
-          <AvatarPickerButton
+    // Vertical stack so the Remove link sits *below* the avatar instead
+    // of stealing horizontal space next to it. `items-start` keeps both
+    // children flush to the avatar's left edge — `gap-1.5` is tight on
+    // purpose so Remove reads as an annotation of the avatar above it,
+    // not as an unrelated row. Matches the doc comment above.
+    <div className="flex flex-col items-start gap-1.5">
+      <div className="relative">
+        <AvatarPickerButton
+          size={size}
+          label={pickerLabel}
+          onPick={file => void onPick(file)}
+          disabled={pending}
+          ariaLabel={pickerAriaLabel}
+        >
+          <AgentAvatar
+            runtime={runtime}
             size={size}
-            label={pickerLabel}
-            onPick={file => void onPick(file)}
-            disabled={pending}
-            ariaLabel={pickerAriaLabel}
+            avatarObjectUrl={avatarObjectUrl}
+            alt={alt}
+          />
+        </AvatarPickerButton>
+        {pending ? (
+          <span
+            className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-none bg-bg-base/40"
+            aria-hidden
           >
-            <AgentAvatar
-              runtime={runtime}
-              size={size}
-              avatarObjectUrl={avatarObjectUrl}
-              alt={alt}
-            />
-          </AvatarPickerButton>
-          {pending ? (
-            <span
-              className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-none bg-bg-base/40"
-              aria-hidden
-            >
-              <Camera className="size-4 text-text-muted" />
-            </span>
-          ) : null}
-        </div>
-        {hasAvatar ? (
-          <button
-            type="button"
-            onClick={() => void onRemove()}
-            disabled={pending}
-            className="text-[11px] text-text-muted underline-offset-2 hover:underline disabled:opacity-50"
-          >
-            Remove
-          </button>
+            <Camera className="size-4 text-text-muted" />
+          </span>
         ) : null}
       </div>
+      {hasAvatar ? (
+        <button
+          type="button"
+          onClick={() => void onRemove()}
+          disabled={pending}
+          className="text-[11px] text-text-muted underline-offset-2 hover:underline disabled:opacity-50"
+        >
+          Remove
+        </button>
+      ) : null}
       {error ? (
         <p
           role="alert"
