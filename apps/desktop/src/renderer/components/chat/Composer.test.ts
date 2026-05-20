@@ -3,16 +3,26 @@ import type { AgentDto, ChannelConversationDto } from '@silverhand/shared';
 import { formatPickInsertion } from './Composer';
 
 /**
- * Locks the three branches `formatPickInsertion` can produce so the
+ * Locks the two branches `formatPickInsertion` can produce so the
  * mention picker never inserts a string that `Markdown.tsx`'s
- * `#<name>` / `#conv:<id>` parsers can't resolve.
+ * `@<handle>` / `#conv:<id>` parsers can't resolve.
  *
- * Cindy #task:502 review finding: the original implementation always
- * inserted `#${title}`, which silently broke for the common case of
- * channel titles with spaces / CJK / slashes (see
- * `CreateChannelDialog.tsx` placeholder `修复 login bug`). The
- * regression here pins each branch by example so a future refactor
- * can't silently regress one of them.
+ * History:
+ * - Original implementation always inserted `#<title>` — broke on
+ *   the common case of CJK / spaces / slashes / leading digits.
+ *   (Cindy #task:502 review finding.)
+ * - First fix added a handle-safe branch that kept `#<title>` for
+ *   ASCII-only titles and fell back to `#conv:<id>` otherwise.
+ * - shiki + Cindy then converged on the simpler invariant: the
+ *   picker ALWAYS inserts `#conv:<id>`, because (a) it sidesteps
+ *   the title-charset constraint entirely, (b) it sidesteps
+ *   same-title ambiguity inside a workspace (ChannelRef returns the
+ *   ambiguous sentinel and renders inert muted text), and (c) the
+ *   picker already has the id in hand, so there is no win to
+ *   recomputing it from a title.
+ *
+ * `#<name>` remains a valid hand-written short alias for unique
+ * handle-safe titles, but the picker stops producing it.
  */
 
 function agent(overrides: Partial<AgentDto> = {}): AgentDto {
@@ -53,41 +63,40 @@ describe('formatPickInsertion', () => {
     expect(formatPickInsertion({ kind: 'agent', agent: agent() })).toBe('@alice');
   });
 
-  it('channel with handle-safe title → #<title> (cheap, human-readable)', () => {
-    expect(
-      formatPickInsertion({ kind: 'channel', channel: channel({ title: 'general' }) }),
-    ).toBe('#general');
-    expect(
-      formatPickInsertion({ kind: 'channel', channel: channel({ title: 'agent-panel_ui-1' }) }),
-    ).toBe('#agent-panel_ui-1');
-  });
-
-  it('channel with title containing spaces → #conv:<id> fallback', () => {
-    // Common case — channel creator UI placeholder literally suggests
-    // `修复 login bug`. Inserting `#agent panel ui polish` would have
-    // the Markdown parser eat only `#agent` and drop the rest as plain
-    // text, producing an unintended partial ref.
+  it('channel with handle-safe title → still #conv:<id> (no title shortcut)', () => {
+    // Picker no longer takes the `#<title>` shortcut even when the
+    // title would parse. Avoids the cross-title-ambiguity case
+    // entirely — two `#general` channels in a workspace would render
+    // inert; `#conv:<id>` always wins.
     expect(
       formatPickInsertion({
         kind: 'channel',
-        channel: channel({ id: 'qdQwBXDqcq_GE63-', title: 'agent panel ui polish' }),
+        channel: channel({ id: 'qdQwBXDqcq_GE63-', title: 'general' }),
       }),
     ).toBe('#conv:qdQwBXDqcq_GE63-');
   });
 
-  it('channel with CJK title → #conv:<id> fallback', () => {
+  it('channel with title containing spaces → #conv:<id>', () => {
+    // The placeholder in CreateChannelDialog is literally
+    // `修复 login bug`, so this is the common case, not a corner.
     expect(
       formatPickInsertion({
         kind: 'channel',
-        channel: channel({ id: 'abc1234567890def', title: '修复 login bug' }),
+        channel: channel({ id: 'abc1234567890def', title: 'agent panel ui polish' }),
       }),
     ).toBe('#conv:abc1234567890def');
   });
 
-  it('channel with title starting with a digit → #conv:<id> fallback', () => {
-    // Markdown's regex anchors the leading char to `[a-zA-Z]`, so
-    // `#2026-roadmap` would never parse as a channel ref. Fall back to
-    // the id form so the receiver still resolves it.
+  it('channel with CJK title → #conv:<id>', () => {
+    expect(
+      formatPickInsertion({
+        kind: 'channel',
+        channel: channel({ id: 'cjkc000000000aaa', title: '修复 login bug' }),
+      }),
+    ).toBe('#conv:cjkc000000000aaa');
+  });
+
+  it('channel with title starting with a digit → #conv:<id>', () => {
     expect(
       formatPickInsertion({
         kind: 'channel',
@@ -96,7 +105,7 @@ describe('formatPickInsertion', () => {
     ).toBe('#conv:roadmap0000000aa');
   });
 
-  it('channel with slash in title → #conv:<id> fallback', () => {
+  it('channel with slash in title → #conv:<id>', () => {
     expect(
       formatPickInsertion({
         kind: 'channel',

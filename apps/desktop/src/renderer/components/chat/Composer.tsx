@@ -925,41 +925,28 @@ function rowKey(item: PickerItem): string {
 }
 
 /**
- * Mirror of `Markdown.tsx`'s `#<name>` capture (`[a-zA-Z][a-zA-Z0-9_-]*`).
- * A channel title that doesn't fully match this can't be inserted as
- * `#<title>` because the renderer would either drop the trailing
- * non-matching chars (leaving an unintended partial ref) or fail to
- * parse the ref at all — see Cindy's #task:502 review finding.
- *
- * The regex is duplicated rather than imported because Markdown.tsx
- * keeps it inline in a large alternation; mirroring it here with a
- * dedicated regression keeps both sites pinned to the same shape.
- */
-const MENTION_HANDLE_RE = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
-
-/**
  * Build the text to splice in when the user picks a row from the
  * mention popover. Exported for the regression test that locks the
- * three branches the renderer can actually parse:
+ * two branches the renderer always resolves:
  *
- *   - `agent`  → `@<name>` — agent.name is always url-safe by schema.
- *   - `channel` + handle-safe title → `#<title>` — the cheap,
- *     human-readable form.
- *   - `channel` + non-handle-safe title (CJK / spaces / slashes /
- *     anything outside `[a-zA-Z0-9_-]`) → `#conv:<id>` — falls back
- *     to the id-precise form. Channel ids are 16-char alphanumeric +
- *     `-_`, which matches Markdown.tsx's `#conv:` parser exactly, so
- *     the receiver always resolves to a working ChannelRef regardless
- *     of how exotic the title is.
+ *   - `agent`   → `@<name>` — agent.name is url-safe by schema, so
+ *                 the renderer's `@<handle>` parser always matches.
+ *   - `channel` → `#conv:<id>` — universal, id-precise. We do NOT
+ *                 emit `#<title>` even when the title happens to be
+ *                 handle-safe: `#name` parsing is workspace-scoped
+ *                 by-title (Markdown.tsx → ChannelRef) and breaks on
+ *                 CJK / spaces / leading digits / collisions with
+ *                 another same-titled channel, so the picker would
+ *                 silently produce different reliability for
+ *                 different titles. Channel ids match `#conv:`'s
+ *                 16-char alphanumeric+`-_` parser shape exactly,
+ *                 so this branch always renders as a working ref.
  *
- * We deliberately do NOT relax the title in-place (slugify, strip,
- * etc.): a slugged title might collide with another channel's actual
- * title and silently mis-route. `#conv:<id>` is unambiguous.
+ * The user can still type `#general` manually if they prefer the
+ * shorter form for a handle-safe title — the picker just picks the
+ * surer wire format.
  */
 export function formatPickInsertion(item: PickerItem): string {
   if (item.kind === 'agent') return `@${item.agent.name}`;
-  if (MENTION_HANDLE_RE.test(item.channel.title)) {
-    return `#${item.channel.title}`;
-  }
   return `#conv:${item.channel.id}`;
 }
