@@ -773,23 +773,23 @@ function filterAgents(agents: AgentDto[], query: string): PickerItem[] {
  * - `kind === 'channel'` only: DM channels have no meaningful `#name`
  *   and thread mentions aren't addressable by name (see CLI docs —
  *   threads only accept `#conv:<id>`).
- * - Skip archived channels: a `#name` on an archived channel resolves
- *   to inert muted text on the receiving end (see ChannelRef
- *   `data-channel-ref-state="resolved-no-handler"` + the dim style on
- *   `closed_at`); offering them in the picker would invite dead refs.
+ * - Skip archived AND closed channels: both resolve to inert / dim
+ *   refs on the receiving end (see ChannelRef's `closed_at`-driven
+ *   `dim` class), so offering them in the picker would invite dead
+ *   refs and inflate the menu with rows the user almost never wants.
  */
 function filterChannels(
   channels: ChannelListItem[],
   query: string,
 ): PickerItem[] {
   const q = query.toLowerCase();
-  const onlyTopLevel = channels.filter(
+  const onlyLive = channels.filter(
     (c): c is ChannelConversationDto =>
-      c.kind === 'channel' && c.archived_at === null,
+      c.kind === 'channel' && c.archived_at === null && c.closed_at === null,
   );
   const matched = q
-    ? onlyTopLevel.filter(c => c.title.toLowerCase().includes(q))
-    : onlyTopLevel;
+    ? onlyLive.filter(c => c.title.toLowerCase().includes(q))
+    : onlyLive;
   return matched.slice(0, 8).map(channel => ({ kind: 'channel', channel }));
 }
 
@@ -902,16 +902,16 @@ function Row({
           </div>
         </>
       ) : (
+        // Channel rows are intentionally one line: the Hash glyph in
+        // front already says "this is a channel", so we drop both the
+        // literal `#` prefix on the title AND the fixed `channel` /
+        // `closed` meta line. Less noise, faster scan. (Closed
+        // channels are filtered upstream in `filterChannels`.)
         <>
           <Hash className="size-4 shrink-0 text-text-muted" />
-          <div className="flex min-w-0 flex-1 flex-col leading-tight">
-            <span className="truncate text-sm font-medium text-text-primary">
-              #{item.channel.title}
-            </span>
-            <span className="truncate text-[11px] text-text-muted">
-              {item.channel.closed_at !== null ? 'closed' : 'channel'}
-            </span>
-          </div>
+          <span className="truncate text-sm font-medium text-text-primary">
+            {item.channel.title}
+          </span>
         </>
       )}
     </button>
