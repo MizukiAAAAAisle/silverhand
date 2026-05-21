@@ -2608,9 +2608,15 @@ function terminalStatus(reason: AgentRunTerminalReason): AgentRunStatus {
 
 function sanitizeParsedEventForBroadcast(ev: ParsedEvent): ParsedEvent {
   if (ev.kind !== 'tool_call') return ev;
+  // The shared ParsedEvent contract types `tool_call.input` as
+  // "required but opaque" via `RequiredUnknownSchema` — z infers it
+  // as `Exclude<unknown, undefined>` = `{} | null`. The sanitizer
+  // returns `unknown` (it's a generic recursive walker); the cast
+  // re-narrows for assignment. The sanitizer never returns
+  // `undefined`, so the cast is safe at runtime.
   return {
     ...ev,
-    input: sanitizeRawAgentEventValue(ev.input),
+    input: sanitizeRawAgentEventValue(ev.input) as {} | null,
   };
 }
 

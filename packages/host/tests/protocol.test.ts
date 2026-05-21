@@ -726,3 +726,214 @@ describe('protocol — runtime_init lifecycle events (Cindy `vqDWkLFF6pAeIE5t`)'
     expect(r.success).toBe(false);
   });
 });
+
+describe('protocol — runtime_parsed_event (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWfnq-bKJ`)', () => {
+  it('accepts every ParsedEvent kind on the wire (round-trip parse)', () => {
+    const samples: unknown[] = [
+      { kind: 'session_init', sessionId: 'sess-1' },
+      { kind: 'thinking', text: 'pondering' },
+      { kind: 'text', text: 'hello' },
+      {
+        kind: 'tool_call',
+        name: 'Bash',
+        input: { command: 'ls' },
+        toolCallId: 'tc-1',
+      },
+      { kind: 'tool_output', name: 'Bash', toolCallId: 'tc-1' },
+      { kind: 'turn_end', sessionId: 'sess-1' },
+      { kind: 'compaction_started' },
+      { kind: 'compaction_finished' },
+      { kind: 'error', message: 'boom', code: 'E_THING', fatal: true },
+      { kind: 'unknown', raw: 'mystery line' },
+    ];
+    for (const parsed of samples) {
+      const r = EventFrameSchema.safeParse({
+        event: 'runtime_parsed_event',
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        parsed,
+        ts: 1,
+      });
+      expect(r.success).toBe(true);
+    }
+  });
+
+  it('rejects extra top-level fields (no raw_line allowed — raw bytes live on runtime_output)', () => {
+    // Cindy: parsed_event must NOT duplicate the raw byte stream.
+    // `runtime_output` already carries every chunk; adding raw_line
+    // here would double the wire cost without any new information.
+    const r = EventFrameSchema.safeParse({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'text', text: 'hi' },
+      raw_line: '{"type":"text","text":"hi"}',
+      ts: 1,
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('rejects unknown ParsedEvent kind discriminator', () => {
+    const r = EventFrameSchema.safeParse({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'absurd_new_kind', text: 'nope' },
+      ts: 1,
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('tool_call.input is REQUIRED — missing or explicit undefined both fail (Cindy `YW2BGWryWjfymPkU` B1)', () => {
+    // A bare `z.unknown()` at an object property would let zod treat
+    // `input` as optional — `{kind:'tool_call', name:'Bash'}` would
+    // parse with `input === undefined`, silently downgrading the TS
+    // contract that marks the field required. The
+    // `RequiredUnknownSchema` helper (same trick as
+    // `StreamJsonPayloadSchema.payload`) re-asserts presence while
+    // keeping the value's shape opaque.
+    const missing = EventFrameSchema.safeParse({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'tool_call', name: 'Bash' },
+      ts: 1,
+    });
+    expect(missing.success).toBe(false);
+
+    const explicitUndef = EventFrameSchema.safeParse({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'tool_call', name: 'Bash', input: undefined },
+      ts: 1,
+    });
+    expect(explicitUndef.success).toBe(false);
+
+    // null is a valid opaque payload — drivers may legitimately emit
+    // a null input (e.g. nullary tool); only undefined/missing is
+    // forbidden.
+    const nullInput = EventFrameSchema.safeParse({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'tool_call', name: 'Bash', input: null },
+      ts: 1,
+    });
+    expect(nullInput.success).toBe(true);
+
+    // Empty object input is the common shape — must parse.
+    const emptyObj = EventFrameSchema.safeParse({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'tool_call', name: 'Bash', input: {} },
+      ts: 1,
+    });
+    expect(emptyObj.success).toBe(true);
+  });
+
+  it('ParsedEvent arms are strict — rejects extra payload fields on a recognized kind', () => {
+    // Defends backend against drivers sneaking in undocumented fields.
+    // If a new field is ever needed, the schema must be widened
+    // explicitly so both daemon and backend agree on its meaning.
+    const r = EventFrameSchema.safeParse({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: {
+        kind: 'tool_call',
+        name: 'Bash',
+        input: {},
+        toolCallId: 'tc-1',
+        // unsanctioned field — strict() should bite.
+        secretAuthToken: 'shhh',
+      },
+      ts: 1,
+    });
+    expect(r.success).toBe(false);
+  });
+});
+
+describe('protocol — runtime_parsed_event_dropped (metadata-only, Cindy `C2BZGDbQWfnq-bKJ`)', () => {
+  it('accepts the minimal metadata-only shape', () => {
+    const r = EventFrameSchema.safeParse({
+      event: 'runtime_parsed_event_dropped',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed_kind: 'tool_call',
+      encoded_bytes: 2_000_000,
+      reason: 'frame_too_large',
+      ts: 1,
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('rejects any payload-bearing field (no raw, no input, no text, no parsed)', () => {
+    // Cindy's hard rule: dropped event must NEVER carry a partial
+    // payload. The whole point of dropping is that we cannot honestly
+    // ship the parsed event — leaking even one field would let
+    // backend mistake the frame for a complete event.
+    const forbidden = [
+      { raw: 'the original line' },
+      { parsed: { kind: 'unknown', raw: 'the original line' } },
+      { input: { command: 'ls' } },
+      { text: 'hi' },
+      { name: 'Bash' },
+      { toolCallId: 'tc-1' },
+      { partial_payload: 'anything' },
+    ];
+    for (const extra of forbidden) {
+      const r = EventFrameSchema.safeParse({
+        event: 'runtime_parsed_event_dropped',
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        parsed_kind: 'unknown',
+        encoded_bytes: 2_000_000,
+        reason: 'frame_too_large',
+        ts: 1,
+        ...extra,
+      });
+      expect(r.success).toBe(false);
+    }
+  });
+
+  it('rejects unknown parsed_kind', () => {
+    const r = EventFrameSchema.safeParse({
+      event: 'runtime_parsed_event_dropped',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed_kind: 'made_up',
+      encoded_bytes: 2_000_000,
+      reason: 'frame_too_large',
+      ts: 1,
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('rejects unknown reason (single-arm enum: only frame_too_large in 3b)', () => {
+    const r = EventFrameSchema.safeParse({
+      event: 'runtime_parsed_event_dropped',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed_kind: 'text',
+      encoded_bytes: 2_000_000,
+      reason: 'rate_limit',
+      ts: 1,
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('rejects negative encoded_bytes', () => {
+    const r = EventFrameSchema.safeParse({
+      event: 'runtime_parsed_event_dropped',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed_kind: 'text',
+      encoded_bytes: -1,
+      reason: 'frame_too_large',
+      ts: 1,
+    });
+    expect(r.success).toBe(false);
+  });
+});

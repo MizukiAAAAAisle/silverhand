@@ -1,22 +1,147 @@
 /**
- * Driver-side type contracts shared between backend and (optionally)
- * renderer for typing event payloads. The actual `Driver` interface
- * and concrete implementations live in `@silverhand/backend` since they
- * use Node-only APIs (`crypto`, `child_process`, `NodeJS.ProcessEnv`).
+ * Driver-side type contracts shared between backend (prompt assembly,
+ * sanitization) and host (parse fanout). The actual `Driver` interface
+ * and concrete implementations live in `@silverhand/host/drivers` since
+ * they use Node-only APIs (`crypto`, `child_process`, `NodeJS.ProcessEnv`).
+ *
+ * `ParsedEvent` is the unified event union a driver's `parseLine`
+ * returns. It has two consumers:
+ *
+ *   - The host's RealSupervisor — emits each parsed event as a
+ *     `runtime_parsed_event` frame on the daemon→backend wire (see
+ *     `@silverhand/host` `protocol.ts`). This crossing is the reason
+ *     the union needs a runtime zod schema: the host validates outbound
+ *     frames (`ParsedEventSchema.parse(parsed)` before encoding); the
+ *     backend validates inbound frames again on the other end.
+ *
+ *   - Backend's `sanitizeParsedEventForBroadcast` — strips fields not
+ *     safe for renderer / DB projection (e.g. raw tool input).
+ *
+ * Cindy `OQCA05pivtB8nSTC` locked the zod requirement for this exact
+ * boundary: the cross-process projection must validate end-to-end, not
+ * trust the producer.
  */
+import { z } from 'zod';
 
 /**
- * Unified event union emitted by a driver's `parseLine`. ConversationManager
- * converts these to realtime UI broadcasts and `session_events` rows.
+ * "Required but opaque" — the same trick `StreamJsonPayloadSchema`
+ * uses for `runtime_wake.payload`. A bare `z.unknown()` at an object
+ * property is treated by zod as OPTIONAL (missing key parses fine),
+ * which would silently downgrade fields the TS type marks required.
+ * `.refine(v => v !== undefined, ...)` re-asserts presence while
+ * keeping the value's *shape* opaque.
+ *
+ * Used on `ParsedEvent.tool_call.input` so the wire schema matches
+ * the original TS contract (Cindy `YW2BGWryWjfymPkU` B1). Drivers
+ * MUST supply the input field — even if it's `null` or an empty
+ * object — and never omit it entirely.
  */
-export type ParsedEvent =
-  | { kind: 'session_init'; sessionId: string }
-  | { kind: 'thinking'; text: string }
-  | { kind: 'text'; text: string }
-  | { kind: 'tool_call'; name: string; input: unknown; toolCallId?: string }
-  | { kind: 'tool_output'; name?: string; toolCallId?: string }
-  | { kind: 'turn_end'; sessionId?: string }
-  | { kind: 'compaction_started' }
-  | { kind: 'compaction_finished' }
-  | { kind: 'error'; message: string; code?: string; fatal?: boolean }
-  | { kind: 'unknown'; raw: string };
+const RequiredUnknownSchema = z
+  .unknown()
+  .refine(v => v !== undefined, {
+    message: 'field is required (opaque payload must be present)',
+  });
+
+export const ParsedEventSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.literal('session_init'),
+      sessionId: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('thinking'),
+      text: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('text'),
+      text: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('tool_call'),
+      name: z.string().min(1),
+      /** Tool input is driver-specific; we keep it `unknown` here so
+       *  the cross-process schema doesn't constrain individual driver
+       *  payload shapes. Sanitization for renderer / DB is backend's
+       *  responsibility (see `sanitizeParsedEventForBroadcast`).
+       *
+       *  REQUIRED but opaque (Cindy `YW2BGWryWjfymPkU` B1): a bare
+       *  `z.unknown()` at an object property is treated by zod as
+       *  optional — `{kind:'tool_call', name:'Bash'}` without an
+       *  `input` field would parse fine, silently downgrading the
+       *  contract. `RequiredUnknownSchema` (same pattern as
+       *  `StreamJsonPayloadSchema`) re-asserts presence. */
+      input: RequiredUnknownSchema,
+      toolCallId: z.string().min(1).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('tool_output'),
+      name: z.string().min(1).optional(),
+      toolCallId: z.string().min(1).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('turn_end'),
+      sessionId: z.string().min(1).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('compaction_started'),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('compaction_finished'),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('error'),
+      message: z.string(),
+      code: z.string().optional(),
+      fatal: z.boolean().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('unknown'),
+      /** The original line bytes. Host MUST NOT leak this onto any
+       *  `runtime_parsed_event_dropped` frame (Cindy
+       *  `C2BZGDbQWfnq-bKJ`): the dropped frame is metadata-only. */
+      raw: z.string(),
+    })
+    .strict(),
+]);
+
+export type ParsedEvent = z.infer<typeof ParsedEventSchema>;
+
+/**
+ * Enumeration of every `ParsedEvent.kind`. Useful for switch
+ * exhaustiveness checks and for typing the `parsed_kind` field on
+ * `runtime_parsed_event_dropped` frames (where we keep the kind
+ * marker but strip the payload).
+ */
+export const PARSED_EVENT_KINDS = [
+  'session_init',
+  'thinking',
+  'text',
+  'tool_call',
+  'tool_output',
+  'turn_end',
+  'compaction_started',
+  'compaction_finished',
+  'error',
+  'unknown',
+] as const satisfies ReadonlyArray<ParsedEvent['kind']>;
+
+export const ParsedEventKindSchema = z.enum(PARSED_EVENT_KINDS);
+export type ParsedEventKind = ParsedEvent['kind'];

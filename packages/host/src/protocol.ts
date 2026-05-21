@@ -35,7 +35,11 @@
  * can be demultiplexed.
  */
 import { z } from 'zod';
-import { AgentRunStateSchema } from '@silverhand/shared';
+import {
+  AgentRunStateSchema,
+  ParsedEventKindSchema,
+  ParsedEventSchema,
+} from '@silverhand/shared';
 
 // ── Intent registry ─────────────────────────────────────────────────
 //
@@ -598,6 +602,19 @@ export type ResponseFrame = z.infer<typeof ResponseFrameSchema>;
  *    — daemon-internal init-watchdog / retry / cooldown loop exposed
  *    to backend so backend can drive UI (`agent_status` SSE) + DB
  *    projection without owning the retry state machine.
+ *
+ *  PR-2 step 2 commit 3b (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWfnq-bKJ`):
+ *
+ *  - `runtime_parsed_event` — non-droppable structured sidecar of
+ *    `runtime_output`. Each line the driver's `parseLine` recognizes
+ *    becomes one of these frames. Raw bytes still go on
+ *    `runtime_output` unchanged; this is additive, not a replacement.
+ *  - `runtime_parsed_event_dropped` — non-droppable metadata-only
+ *    frame the daemon emits when a parsed event's encoded form
+ *    exceeds `MAX_FRAME_BYTES`. Carries `parsed_kind` + `encoded_bytes`
+ *    + `reason:'frame_too_large'` ONLY; explicitly NO payload (no
+ *    raw line, no tool input, no text) so we never half-leak a
+ *    truncated event onto the wire.
  */
 export const EventFrameSchema = z.discriminatedUnion('event', [
   z.object({
@@ -764,6 +781,65 @@ export const EventFrameSchema = z.discriminatedUnion('event', [
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
   }),
+  // ── runtime parsed event fanout (locked by Cindy `OQCA05pivtB8nSTC` +
+  //     `C2BZGDbQWfnq-bKJ`) ─────────────────────────────────────────
+  //
+  // `runtime_parsed_event` is the structured sidecar of `runtime_output`:
+  // each line the driver's `parseLine` recognizes becomes one of these
+  // frames. The raw byte stream stays on `runtime_output` unchanged —
+  // backend's observability / activity log / unparsed-line surface all
+  // continue to read from there. Parsed events are NOT a replacement;
+  // they are a strict superset of recognition signals derived from the
+  // same bytes.
+  //
+  // Non-droppable: backend's `handleParsedEvent` drives the
+  // AgentRunState lifecycle (thinking / tool_running / compacting /
+  // turn_end) and the `session_events` DB projection. Dropping one
+  // would leave run-state stuck or DB out of sync, neither of which
+  // is recoverable from `runtime_output` alone (only the driver
+  // knows the schema).
+  //
+  // No `raw_line` field: raw bytes are already on `runtime_output`,
+  // so carrying them here would duplicate every byte at twice the
+  // wire cost. The `parsed` payload is the only thing this frame
+  // contributes beyond what `runtime_output` already provides.
+  z
+    .object({
+      event: z.literal('runtime_parsed_event'),
+      conversation_id: z.string().min(1),
+      agent_id: z.string().min(1),
+      parsed: ParsedEventSchema,
+      ts: z.number().int(),
+    })
+    .strict(),
+  // `runtime_parsed_event_dropped` is the safety valve when a parsed
+  // event's encoded payload exceeds MAX_FRAME_BYTES. We CANNOT silently
+  // truncate the `parsed` payload (Cindy: "frame 保护不要静默改写任意
+  // ParsedEvent") — that would let backend believe it received a
+  // complete `tool_call` / `text` / `unknown.raw` when it didn't.
+  //
+  // The dropped frame is metadata-only by hard rule (Cindy
+  // `C2BZGDbQWfnq-bKJ`): `parsed_kind` lets backend project a
+  // best-effort run-state hint (e.g. "we know a tool_call happened
+  // even though we lost the input"), `encoded_bytes` lets backend
+  // logs surface the size budget, and `reason` is a single-arm enum.
+  // NO payload — explicitly NO `unknown.raw`, NO tool input, NO text.
+  //
+  // Note: this dropped frame is on the WIRE only. RealSupervisor
+  // still updates its in-memory AgentRunState from the original
+  // ParsedEvent before encoding — frame-too-large is a broadcast
+  // concern, not a run-state concern (Cindy `C2BZGDbQWfnq-bKJ`).
+  z
+    .object({
+      event: z.literal('runtime_parsed_event_dropped'),
+      conversation_id: z.string().min(1),
+      agent_id: z.string().min(1),
+      parsed_kind: ParsedEventKindSchema,
+      encoded_bytes: z.number().int().nonnegative(),
+      reason: z.literal('frame_too_large'),
+      ts: z.number().int(),
+    })
+    .strict(),
 ]);
 export type EventFrame = z.infer<typeof EventFrameSchema>;
 

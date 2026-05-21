@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 /*
- * RealSupervisor 3a test fixture — a tiny "runtime binary" the host
- * supervisor can spawn to validate spawn / output-pump / hard-stop /
- * exit behavior without depending on a real claude / codex / cursor
- * install.
+ * RealSupervisor 3a/3b test fixture — a tiny "runtime binary" the
+ * host supervisor can spawn to validate spawn / output-pump /
+ * hard-stop / exit / stdin-write behavior without depending on a
+ * real claude / codex / cursor install.
  *
  * Behavior (driven by argv to keep the script trivially configurable):
  *
  *   node echo-runtime.cjs [--echo TEXT] [--echo-stderr TEXT]
  *                         [--sleep MS] [--ignore-sigterm]
+ *                         [--echo-stdin] [--emit-line LINE]
  *
  *  --echo TEXT          write TEXT + '\n' to stdout, then keep running.
  *  --echo-stderr TEXT   write TEXT + '\n' to stderr, then keep running.
@@ -17,15 +18,24 @@
  *  --ignore-sigterm     install a SIGTERM handler that logs but does
  *                       not exit, forcing the supervisor's SIGKILL
  *                       escalation path. Default: SIGTERM exits 143.
+ *  --echo-stdin         for each line received on stdin, write
+ *                       "STDIN:<line>\n" to stdout. Lets supervisor
+ *                       3b tests verify wake() / soft-stop /
+ *                       startup_delivery actually reached the child.
+ *  --emit-line LINE     write LINE + '\n' to stdout. May be repeated.
+ *                       Used by 3b tests to drive parsed-event fanout
+ *                       with a custom driver parseLine.
  *
- * Always reads stdin (so closing the pipe doesn't kill us); never
- * parses or responds. The supervisor is the only thing closing this
- * process.
+ * Always reads stdin (so closing the pipe doesn't kill us); responds
+ * only when `--echo-stdin` is set. The supervisor is the only thing
+ * closing this process.
  */
 const args = process.argv.slice(2);
 let sleepMs = 60_000; // 60s default — long enough for any test to finish before timeout
 let ignoreSigterm = false;
+let echoStdin = false;
 const toEcho = [];
+const emitLines = [];
 
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
@@ -39,6 +49,10 @@ for (let i = 0; i < args.length; i++) {
     sleepMs = Number(args[++i] ?? '60000');
   } else if (a === '--ignore-sigterm') {
     ignoreSigterm = true;
+  } else if (a === '--echo-stdin') {
+    echoStdin = true;
+  } else if (a === '--emit-line') {
+    emitLines.push(args[++i] ?? '');
   }
 }
 
@@ -52,9 +66,22 @@ if (ignoreSigterm) {
   });
 }
 
-// Keep stdin readable so the parent doesn't lose its write side; we
-// don't actually do anything with the bytes (3b will exercise that).
-process.stdin.on('data', () => {});
+// Keep stdin readable so the parent doesn't lose its write side. When
+// --echo-stdin is set, line-buffer stdin and echo each line prefixed
+// with STDIN:. The newline boundary matches the supervisor's
+// stdin-write contract (one stream-json line per write).
+let stdinBuffer = '';
+process.stdin.on('data', chunk => {
+  if (!echoStdin) return;
+  stdinBuffer += chunk.toString('utf-8');
+  let nl = stdinBuffer.indexOf('\n');
+  while (nl !== -1) {
+    const line = stdinBuffer.slice(0, nl);
+    stdinBuffer = stdinBuffer.slice(nl + 1);
+    process.stdout.write(`STDIN:${line}\n`);
+    nl = stdinBuffer.indexOf('\n');
+  }
+});
 process.stdin.resume();
 
 // Ready handshake — tests wait for this line on stdout before issuing
@@ -65,7 +92,11 @@ process.stdout.write('READY\n');
 for (const { stream, text } of toEcho) {
   (stream === 'stderr' ? process.stderr : process.stdout).write(text + '\n');
 }
+for (const line of emitLines) {
+  process.stdout.write(line + '\n');
+}
 
 // Voluntary exit after `--sleep` so tests that DON'T issue a stop
 // still see a clean exit (with `intentional:false`, i.e. crashed).
 setTimeout(() => process.exit(0), sleepMs);
+
