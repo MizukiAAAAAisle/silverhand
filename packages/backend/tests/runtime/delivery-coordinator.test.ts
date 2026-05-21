@@ -1156,3 +1156,156 @@ describe('B3: requires_first_message init-observed gate', () => {
     expect(delivered).toEqual([[20, 21]]);
   });
 });
+
+// ── B2 batch-native submitLiveDeliveryBatch (Cindy `nKFVSvx4CyBLxPNq`) ──
+//
+// DaemonHost.drainPending calls `submitLiveDeliveryBatch` directly so a
+// multi-row drain produces ONE wake carrying all delivery_ids with
+// all-or-nothing ack semantics. These tests pin the batch surface
+// independently of DaemonHost wiring.
+
+describe('B2: submitLiveDeliveryBatch — batch-native one wake all-or-nothing', () => {
+  it('empty batch throws (caller must no-op upstream)', async () => {
+    const { bridge } = makeBridge({ delivered: true, delivery_ids: [] });
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
+    const { sink } = makeInboxSink();
+    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
+    await expect(c.submitLiveDeliveryBatch('c1', 'a1', [])).rejects.toThrow(
+      /empty batch/,
+    );
+  });
+
+  it('multi-row direct driver → ONE wake with all delivery_ids; ack all on success', async () => {
+    const { bridge, calls } = makeBridge({
+      delivered: true,
+      delivery_ids: [10, 11, 12],
+    });
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
+    const { sink, delivered } = makeInboxSink();
+    const c = new RuntimeDeliveryCoordinator({
+      bridge,
+      cache,
+      inboxAck: sink,
+      callbacks: { combineBatch: payloads => payloads.join('\n') },
+    });
+    const decision = await c.submitLiveDeliveryBatch('c1', 'a1', [
+      req({ inboxId: 10, messageId: 'mA', driver: DRIVER_DIRECT }),
+      req({ inboxId: 11, messageId: 'mB', driver: DRIVER_DIRECT }),
+      req({ inboxId: 12, messageId: 'mC', driver: DRIVER_DIRECT }),
+    ]);
+    expect(decision).toEqual({
+      kind: 'wake_dispatched',
+      deliveryIds: [10, 11, 12],
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.deliveryIds).toEqual([10, 11, 12]);
+    expect(delivered).toEqual([[10, 11, 12]]);
+  });
+
+  it('multi-row bridge throw → NO markDelivered for any row; propagates', async () => {
+    const { bridge, calls } = makeBridge(() => new Error('socket closed'));
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
+    const { sink, delivered } = makeInboxSink();
+    const c = new RuntimeDeliveryCoordinator({
+      bridge,
+      cache,
+      inboxAck: sink,
+      callbacks: { combineBatch: payloads => payloads.join('\n') },
+    });
+    await expect(
+      c.submitLiveDeliveryBatch('c1', 'a1', [
+        req({ inboxId: 10, messageId: 'mA', driver: DRIVER_DIRECT }),
+        req({ inboxId: 11, messageId: 'mB', driver: DRIVER_DIRECT }),
+      ]),
+    ).rejects.toThrow(/socket closed/);
+    expect(calls).toHaveLength(1);
+    // All-or-nothing: NO partial markDelivered for either row.
+    expect(delivered).toHaveLength(0);
+  });
+
+  it('multi-row wake_refused → NO ack; rows would remain pending in the inbox', async () => {
+    const { bridge, calls } = makeBridge({
+      delivered: false,
+      reason: 'driver_refused',
+      delivery_ids: [10, 11],
+    });
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
+    const { sink, delivered } = makeInboxSink();
+    const c = new RuntimeDeliveryCoordinator({
+      bridge,
+      cache,
+      inboxAck: sink,
+      callbacks: { combineBatch: payloads => payloads.join('\n') },
+    });
+    const decision = await c.submitLiveDeliveryBatch('c1', 'a1', [
+      req({ inboxId: 10, messageId: 'mA', driver: DRIVER_DIRECT }),
+      req({ inboxId: 11, messageId: 'mB', driver: DRIVER_DIRECT }),
+    ]);
+    expect(decision).toEqual({ kind: 'wake_refused', reason: 'driver_refused' });
+    expect(calls).toHaveLength(1);
+    expect(delivered).toHaveLength(0);
+  });
+
+  it('multi-row requires_first_message + init not observed → entire batch stashed; flushed as one ack on session_init', async () => {
+    // The B3 gate must preserve batch atomicity: every id from the
+    // batch lands in initPendingDeliveryIds, then a single
+    // markDelivered fires on session_init carrying all of them.
+    const { bridge, calls } = makeBridge({
+      delivered: true,
+      delivery_ids: [50, 51, 52],
+    });
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
+    const { sink, delivered } = makeInboxSink();
+    const c = new RuntimeDeliveryCoordinator({
+      bridge,
+      cache,
+      inboxAck: sink,
+      callbacks: { combineBatch: payloads => payloads.join('\n') },
+    });
+    const decision = await c.submitLiveDeliveryBatch('c1', 'a1', [
+      req({ inboxId: 50, messageId: 'mA', driver: DRIVER_DIRECT_REQUIRES_FIRST }),
+      req({ inboxId: 51, messageId: 'mB', driver: DRIVER_DIRECT_REQUIRES_FIRST }),
+      req({ inboxId: 52, messageId: 'mC', driver: DRIVER_DIRECT_REQUIRES_FIRST }),
+    ]);
+    expect(decision).toEqual({
+      kind: 'wake_dispatched',
+      deliveryIds: [50, 51, 52],
+    });
+    expect(calls).toHaveLength(1);
+    // Init gate deferred — ack pending until session_init.
+    expect(delivered).toEqual([]);
+    // session_init releases the entire batch as ONE markDelivered call.
+    c.onParsedEvent('c1', 'a1', parsed('session_init'));
+    expect(delivered).toEqual([[50, 51, 52]]);
+  });
+
+  it('multi-row gated mid-turn → entire batch queued; flush combines into one wake', async () => {
+    const { bridge, calls } = makeBridge({
+      delivered: true,
+      delivery_ids: [60, 61],
+    });
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
+    const { sink, delivered } = makeInboxSink();
+    const c = new RuntimeDeliveryCoordinator({
+      bridge,
+      cache,
+      inboxAck: sink,
+      callbacks: { combineBatch: payloads => payloads.join('\n') },
+    });
+    // Push into busy state.
+    c.onParsedEvent('c1', 'a1', parsed('tool_call'));
+    const decision = await c.submitLiveDeliveryBatch('c1', 'a1', [
+      req({ inboxId: 60, messageId: 'mA', driver: DRIVER_GATED }),
+      req({ inboxId: 61, messageId: 'mB', driver: DRIVER_GATED }),
+    ]);
+    expect(decision).toEqual({ kind: 'queued_mid_turn', pendingCount: 2 });
+    expect(calls).toHaveLength(0);
+    expect(c.pendingCount('c1', 'a1')).toBe(2);
+    // Safe boundary opens → flush wakes once with both ids.
+    c.onParsedEvent('c1', 'a1', parsed('tool_output'));
+    await new Promise(resolve => setImmediate(resolve));
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.deliveryIds).toEqual([60, 61]);
+    expect(delivered).toEqual([[60, 61]]);
+  });
+});

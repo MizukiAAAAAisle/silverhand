@@ -84,7 +84,10 @@ import type { MembershipService } from '../services/membership-service.js';
 import { prepareSpawnFiles } from '../spawn-prep.js';
 import type { AgentRuntimeHost } from './agent-runtime-host.js';
 import type { RuntimeBridge } from './bridge.js';
-import type { RuntimeDeliveryCoordinator } from './delivery-coordinator.js';
+import type {
+  LiveDeliveryRequest,
+  RuntimeDeliveryCoordinator,
+} from './delivery-coordinator.js';
 import type { RuntimeEventHandler } from './event-handler.js';
 import type { EventPublisher } from './event-handler.js';
 import { buildPromptContext } from './prompt-context.js';
@@ -166,6 +169,16 @@ export interface DaemonAgentRuntimeHostDeps {
    *  routes. Wired as a thunk because `BackendContext.serverConfig`
    *  is mutated after the Hono server binds its port. */
   serverConfig: () => ServerConfig;
+  /**
+   * Parent process environment used as the inherited base for the
+   * spawn env. Defaults to `process.env`. **Production must NOT
+   * override this** — the parent's proxy vars (HTTP_PROXY etc.) MUST
+   * propagate to codex so it can reach the model endpoint behind a
+   * corporate proxy (shiki invariant). The seam exists purely so
+   * tests can pin "wire env contains only SILVERHAND_* + PATH" with
+   * a deterministic `{}` instead of the developer's shell env.
+   */
+  baseProcessEnv?: NodeJS.ProcessEnv;
   /** Used by `clearSession` to wrap the row-update + audit insert in
    *  a single sqlite transaction (matches CM behavior). */
   db: Database;
@@ -213,6 +226,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
   private readonly silverhandCli: SilverhandCliLauncher;
   private readonly agentTokens: AgentTokenStore;
   private readonly serverConfig: () => ServerConfig;
+  private readonly baseProcessEnv: NodeJS.ProcessEnv;
   private readonly db: Database;
   private readonly logger: BackendLogger;
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -236,6 +250,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
     this.silverhandCli = deps.silverhandCli;
     this.agentTokens = deps.agentTokens;
     this.serverConfig = deps.serverConfig;
+    this.baseProcessEnv = deps.baseProcessEnv ?? process.env;
     this.db = deps.db;
     this.logger = deps.logger;
     this._client = deps.client;
@@ -425,7 +440,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
       serverUrl: this.serverConfig().url,
       token: agentToken,
       binDir: spawnPrep.binDir,
-      baseProcessEnv: process.env,
+      baseProcessEnv: this.baseProcessEnv,
     });
 
     const options: NonNullable<
@@ -1032,24 +1047,43 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
    * drain on the NEXT `start()` via `startup_delivery`, which never
    * comes if the runtime is already up. This method closes the gap.
    *
-   * Per-row failures are warn-only — drainPending as a whole still
-   * resolves so the EventHandler's callback bookkeeping is not
-   * disturbed. `deliverMessage` itself never throws on benign paths
-   * (missing message, missing agent, no cache entry, driver returns
-   * null); the only throw path is coordinator transport failure
-   * (Cindy `0G5uJBydO_4qt_2r` "fail loudly") which we want to log and
-   * leave the row pending — the inbox is the source of truth.
+   * # Batch contract (Cindy `nKFVSvx4CyBLxPNq` blocker 2)
+   *
+   * `runtime_ready_for_drain` is a batch primitive: every pending row
+   * for (conv, agent) is read once, formatted via
+   * `formatLiveMessage` + `driver.encodeStdinMessage`, then handed to
+   * `coordinator.submitLiveDeliveryBatch` as a single batch. The
+   * coordinator collapses that into ONE `runtime_wake` carrying ALL
+   * `delivery_ids`, with all-or-nothing ack:
+   *
+   *   - on `{delivered:true}` from the daemon, `markDelivered` runs
+   *     once with every id (or the entire batch is stashed for the B3
+   *     init gate to flush atomically on `session_init`);
+   *   - on `{delivered:false}` or throw, NO ids are acked; every row
+   *     stays pending so the next ready_for_drain replays the whole
+   *     batch.
+   *
+   * Per-row looping would: (a) change the agent's visible turn
+   * boundary (claude would see N user turns instead of one batched
+   * payload), and (b) degrade ack into partial-success — both
+   * forbidden by Cindy's contract on `runtime_ready_for_drain`.
+   *
+   * Pre-flight rejections (`agent not found`, `cacheEntry missing`,
+   * `driver returned null payload`, `delivery already delivered`) are
+   * row-local: if the row cannot even be encoded into a payload it is
+   * logged and skipped; the remaining rows still form a batch. The
+   * batch submitted to the coordinator only contains
+   * already-encoded-and-formatted requests. If pre-flight drops every
+   * row the batch is empty and we no-op (no wake fired).
    *
    * NOTE on ordering with B3 (initObserved gating): for claude
-   * (`kickoffMode='requires_first_message'`) the first wake we
-   * dispatch here may arrive BEFORE the daemon emits
+   * (`kickoffMode='requires_first_message'`) the wake we dispatch here
+   * may arrive BEFORE the daemon emits
    * `runtime_parsed_event(session_init)`. The coordinator's B3 gate
-   * defers `markDelivered` for that wake until session_init lands —
-   * so rows drained from here are NOT acked optimistically; the inbox
-   * stays pending until the parsed session_init for the corresponding
-   * runtime is observed. This method does not need to know about the
-   * gate — it just submits via deliverMessage and lets the
-   * coordinator own ack timing.
+   * stashes the entire batch's `delivery_ids` into
+   * `initPendingDeliveryIds` and flushes them as one `markDelivered`
+   * call when session_init lands — preserving the all-or-nothing
+   * semantics across the gate.
    */
   async drainPending(
     conversationId: string,
@@ -1076,15 +1110,48 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
         agent_id: agentId,
         pending_count: pending.length,
       },
-      'drain: ready_for_drain — flushing pending inbox rows',
+      'drain: ready_for_drain — assembling batch from pending inbox rows',
     );
+
+    // Resolve agent + driver once — every pending row is for the same
+    // (conv, agent) by construction.
+    const agent = this.agents.get(agentId);
+    if (!agent) {
+      this.logger.warn(
+        {
+          kind: 'runtime',
+          mode: 'daemon',
+          conv_id: conversationId,
+          agent_id: agentId,
+          pending_count: pending.length,
+        },
+        'drain: agent not found in agents table; batch left pending',
+      );
+      return;
+    }
+    const driver = getDriver(agent.runtime);
+    const sa = this.conversations.getAgent(conversationId, agentId);
+    const cliSessionId = sa?.cli_session_id ?? null;
+    const defaultUserHandle = this.resolveDefaultUserHandle();
+
+    // Build batch. Pre-flight rejections are row-local and logged; only
+    // rows that produce a non-null encoded payload enter the batch.
+    // `listPending` already returns the joined message rows, so no
+    // extra MessageRepo lookup is needed.
+    const batch: LiveDeliveryRequest[] = [];
     for (const row of pending) {
-      await this.deliverMessage(
-        conversationId,
-        agentId,
-        row.message.id,
-      ).catch(err =>
-        this.logger.warn(
+      const text = formatLiveMessage(
+        row.message,
+        id => this.agents.get(id)?.name,
+        id => this.users.get(id)?.name,
+        defaultUserHandle,
+        agent.name,
+        sendMessageToolName(driver),
+      );
+      const line = driver.encodeStdinMessage(text, cliSessionId);
+      if (line === null) {
+        // Driver doesn't accept stdin (e.g. cursor's oneShot path).
+        this.logger.info(
           {
             kind: 'runtime',
             mode: 'daemon',
@@ -1092,10 +1159,67 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
             agent_id: agentId,
             inbox_id: row.inboxId,
             msg_id: row.message.id,
-            err: err instanceof Error ? err.message : String(err),
           },
-          'drain: deliverMessage failed; row stays pending',
-        ),
+          'drain: driver did not produce a stdin payload; row stays pending',
+        );
+        continue;
+      }
+      batch.push({
+        inboxId: row.inboxId,
+        messageId: row.message.id,
+        payload: line,
+        driver: {
+          oneShot: driver.oneShot,
+          busyDeliveryMode: driver.busyDeliveryMode,
+          kickoffMode: driver.kickoffMode,
+        },
+      });
+    }
+
+    if (batch.length === 0) {
+      this.logger.info(
+        {
+          kind: 'runtime',
+          mode: 'daemon',
+          conv_id: conversationId,
+          agent_id: agentId,
+          pending_count: pending.length,
+        },
+        'drain: every pending row was pre-flight rejected; no wake fired',
+      );
+      return;
+    }
+
+    try {
+      const decision = await this.coordinator.submitLiveDeliveryBatch(
+        conversationId,
+        agentId,
+        batch,
+      );
+      this.logger.info(
+        {
+          kind: 'runtime',
+          mode: 'daemon',
+          conv_id: conversationId,
+          agent_id: agentId,
+          batch_size: batch.length,
+          delivery_ids: batch.map(b => b.inboxId),
+          decision: decision.kind,
+        },
+        'drain: coordinator batch decision',
+      );
+    } catch (err) {
+      this.logger.warn(
+        {
+          kind: 'runtime',
+          mode: 'daemon',
+          conv_id: conversationId,
+          agent_id: agentId,
+          batch_size: batch.length,
+          delivery_ids: batch.map(b => b.inboxId),
+          err: err instanceof Error ? err.message : String(err),
+        },
+        'drain: coordinator batch threw; entire batch stays pending',
       );
     }
   }

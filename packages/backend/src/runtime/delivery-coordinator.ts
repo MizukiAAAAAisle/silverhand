@@ -347,24 +347,81 @@ export class RuntimeDeliveryCoordinator {
   // ── public surface ───────────────────────────────────────────────
 
   /**
-   * Decide how to handle a live delivery. DaemonHost calls this AFTER
-   * `inboxes.ensureDelivery` returned a fresh (not-yet-delivered) row
-   * and AFTER `driver.encodeStdinMessage` returned a non-null payload.
+   * Decide how to handle a single live delivery. DaemonHost calls this
+   * AFTER `inboxes.ensureDelivery` returned a fresh (not-yet-delivered)
+   * row and AFTER `driver.encodeStdinMessage` returned a non-null
+   * payload.
    *
    * The return value is informational — coordinator already advanced
    * state / acks as needed. DaemonHost can use it for logging /
    * metrics; the inbox is the source of truth for retry.
+   *
+   * Thin convenience over `submitLiveDeliveryBatch([req])`.
    */
   async submitLiveDelivery(
     conversationId: string,
     agentId: string,
     req: LiveDeliveryRequest,
   ): Promise<LiveDeliveryDecision> {
+    return this.submitLiveDeliveryBatch(conversationId, agentId, [req]);
+  }
+
+  /**
+   * Batch sibling of `submitLiveDelivery`. DaemonHost.drainPending uses
+   * this so that a multi-row drain produces ONE `runtime_wake` carrying
+   * all `delivery_ids`, with all-or-nothing ack semantics (Cindy
+   * `nKFVSvx4CyBLxPNq` blocker 2):
+   *
+   *   - on `{delivered:true}` → `markDelivered` runs once with ALL ids
+   *     (or the entire batch is stashed into `initPendingDeliveryIds`
+   *     if the B3 init gate is still closed for a
+   *     `requires_first_message` driver; that stash also flushes as
+   *     one ack);
+   *   - on `{delivered:false}` or throw → NO ids are acked; every row
+   *     stays pending so the next ready_for_drain replays the whole
+   *     batch.
+   *
+   * Per-row `deliverMessage` looping would change the agent's visible
+   * turn boundary (one wake per row → claude treats each as its own
+   * user turn) and would degrade batch ack into partial-success — both
+   * forbidden by Cindy's contract.
+   *
+   * Invariants the caller must uphold:
+   *   1. All requests share the same (conv, agent) → same driver.
+   *      The coordinator reads `driver` from `batch[0]` after the empty
+   *      check.
+   *   2. The batch is non-empty. Empty batches throw — callers should
+   *      no-op upstream when their listPending returned nothing.
+   *   3. Each `req` already passed `inboxes.ensureDelivery` (so
+   *      `inboxId` is a fresh, not-yet-delivered row) and
+   *      `driver.encodeStdinMessage` returned a non-null payload.
+   *
+   * Decision semantics for the batch return value (since the function
+   * returns a single decision rather than per-row):
+   *   - `wake_dispatched` carries every `result.delivery_ids` from the
+   *     single wake.
+   *   - `wake_refused` / `noop_*` apply to the batch uniformly.
+   *   - `queued_mid_turn.pendingCount` reflects the queue size after
+   *     enqueuing the entire batch.
+   */
+  async submitLiveDeliveryBatch(
+    conversationId: string,
+    agentId: string,
+    batch: readonly LiveDeliveryRequest[],
+  ): Promise<LiveDeliveryDecision> {
+    if (batch.length === 0) {
+      throw new Error(
+        'submitLiveDeliveryBatch: empty batch — caller must no-op when ' +
+          'listPending is empty rather than calling through with [].',
+      );
+    }
+    const deliveryIds = batch.map(item => item.inboxId);
+    const head = batch[0]!;
     const entry = this.cache.get(conversationId, agentId);
     if (!entry) {
       this.logger.info(
-        { conversationId, agentId, inboxId: req.inboxId },
-        'deliver: no cache entry; row stays pending until next start',
+        { conversationId, agentId, deliveryIds, batchSize: batch.length },
+        'deliver: no cache entry; rows stay pending until next start',
       );
       return { kind: 'noop_no_runtime' };
     }
@@ -378,10 +435,11 @@ export class RuntimeDeliveryCoordinator {
         {
           conversationId,
           agentId,
-          inboxId: req.inboxId,
+          deliveryIds,
+          batchSize: batch.length,
           phase: entry.phase,
         },
-        'deliver: runtime not in ready phase; row stays pending',
+        'deliver: runtime not in ready phase; rows stay pending',
       );
       return { kind: 'noop_phase', phase: entry.phase };
     }
@@ -393,35 +451,39 @@ export class RuntimeDeliveryCoordinator {
     // route by driver policy so the test matrix doesn't have to enumerate
     // every transient phase variant.
 
-    if (req.driver.busyDeliveryMode === 'none') {
-      // oneShot live: never push via wake. Row stays pending; the
+    if (head.driver.busyDeliveryMode === 'none') {
+      // oneShot live: never push via wake. Rows stay pending; the
       // next respawn (on runtime_exit) drains via startup_delivery.
       this.logger.info(
-        { conversationId, agentId, inboxId: req.inboxId },
-        'deliver: oneShot driver live, row queued for next respawn',
+        { conversationId, agentId, deliveryIds, batchSize: batch.length },
+        'deliver: oneShot driver live, rows queued for next respawn',
       );
       return { kind: 'noop_oneshot_live' };
     }
 
     const st = this.ensureState(conversationId, agentId);
 
-    if (req.driver.busyDeliveryMode === 'direct' || isSafeBoundary(st.busy)) {
-      return this.dispatchWake(conversationId, agentId, [req]);
+    if (head.driver.busyDeliveryMode === 'direct' || isSafeBoundary(st.busy)) {
+      return this.dispatchWake(conversationId, agentId, [...batch]);
     }
 
-    // Gated driver mid-turn. Enqueue; flush will fire when
-    // outstandingToolUses returns to 0 + compacting clears.
-    this.enqueue(st, req);
+    // Gated driver mid-turn. Enqueue every row; flush will fire when
+    // outstandingToolUses returns to 0 + compacting clears, and will
+    // combine via `combineGatedBatch`.
+    for (const req of batch) {
+      this.enqueue(st, req);
+    }
     this.logger.info(
       {
         conversationId,
         agentId,
-        inboxId: req.inboxId,
+        deliveryIds,
+        batchSize: batch.length,
         pendingCount: st.pending.length,
         outstandingToolUses: st.busy.outstandingToolUses,
         compacting: st.busy.compacting,
       },
-      'deliver: gated driver busy, queued for next safe boundary',
+      'deliver: gated driver busy, batch queued for next safe boundary',
     );
     return { kind: 'queued_mid_turn', pendingCount: st.pending.length };
   }

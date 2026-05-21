@@ -51,6 +51,7 @@ import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.j
 import { UserRepo } from '../../src/repos/user-repo.js';
 import { SettingsRepo } from '../../src/repos/settings-repo.js';
 import { RuntimeDeliveryCoordinator } from '../../src/runtime/delivery-coordinator.js';
+import { combineGatedBatch } from '../../src/runtime/stdin-format.js';
 import { MembershipService } from '../../src/services/membership-service.js';
 import { AgentTokenStore } from '../../src/auth/agent-token-store.js';
 import type {
@@ -230,6 +231,7 @@ function makeHost(
     agentTokens?: AgentTokenStore;
     serverConfig?: () => ServerConfig;
     logger?: BackendLogger;
+    baseProcessEnv?: NodeJS.ProcessEnv;
   } = {},
 ): HostFixture {
   const client = makeFakeClient(clientOverrides);
@@ -288,6 +290,7 @@ function makeHost(
     serverConfig: extraDeps.serverConfig ?? noopServerConfig,
     db: extraDeps.db ?? noopDb,
     logger: extraDeps.logger ?? noopLogger,
+    baseProcessEnv: extraDeps.baseProcessEnv,
   });
   return { host, cache, bridge, events, publisher };
 }
@@ -1846,6 +1849,12 @@ function makeObservableCoordinator(cache: RunStateCache): {
     inboxAck: {
       markDelivered: ids => marked.push([...ids]),
     },
+    callbacks: {
+      // Match production wiring in `packages/backend/src/index.ts` so
+      // multi-row drainPending batches collapse via the same byte-format
+      // pipeline. Single-payload batches never hit this callback.
+      combineBatch: payloads => combineGatedBatch(payloads, 'silverhand message send'),
+    },
   });
   return {
     coordinator,
@@ -2655,6 +2664,12 @@ describe('DaemonAgentRuntimeHost — start', () => {
           serverConfig: fix.serverConfig,
           cache,
           db: fix.db,
+          // B5 deterministic env: production inherits `process.env` so
+          // the parent's HTTP_PROXY etc. propagate (shiki invariant —
+          // codex needs proxy export). The test pins a `{}` baseProcessEnv
+          // seam so the wire-env assertion below is independent of the
+          // developer's shell (Cindy `nKFVSvx4CyBLxPNq` blocker 1).
+          baseProcessEnv: {},
         },
       );
       await host.start(fix.channelId, fix.agentId);
@@ -2667,8 +2682,9 @@ describe('DaemonAgentRuntimeHost — start', () => {
       expect(wireEnv.SILVERHAND_AGENT_ID).toBe(fix.agentId);
       // bin shim prepended to PATH.
       expect(wireEnv.PATH?.split(':')[0]).toMatch(/spawn-.+\/bin$/);
-      // No proxy settings configured in fixture → bridge's applyProxyEnv
-      // is identity, so no HTTP_PROXY / HTTPS_PROXY surfaces.
+      // No proxy settings configured in fixture + deterministic empty
+      // baseProcessEnv → bridge's applyProxyEnv is identity, so no
+      // HTTP_PROXY / HTTPS_PROXY surfaces.
       expect(wireEnv.HTTP_PROXY).toBeUndefined();
       expect(wireEnv.HTTPS_PROXY).toBeUndefined();
       expect(wireEnv.http_proxy).toBeUndefined();
@@ -2683,20 +2699,21 @@ describe('DaemonAgentRuntimeHost — start', () => {
 //
 // B2 (Cindy `usjxj8AxX4AvJ5E-`): EventHandler routes
 // `runtime_ready_for_drain` to `DaemonHost.drainPending(conv, agent)`,
-// which flushes every pending inbox row through `deliverMessage`
-// (which itself goes through the coordinator + bridge). This closes
-// the gap where rows that arrived during startup_pending would never
-// be redelivered if the runtime crossed into `ready` without ever
-// being woken by submitLiveDelivery.
+// which collapses every pending inbox row into a single batch handed
+// to `coordinator.submitLiveDeliveryBatch`. That call issues ONE
+// `runtime_wake` carrying every `delivery_id`, with all-or-nothing
+// ack semantics (Cindy `nKFVSvx4CyBLxPNq` blocker 2). Per-row
+// `deliverMessage` looping is forbidden — it would change claude's
+// visible turn boundary and degrade ack into partial success.
 //
 // Tests pin:
 //   1. listPending empty → noop log, coordinator not called
 //   2. one pending row + cache phase=ready + claude → coordinator.wake
-//      with the right payload + delivered_at set
-//   3. multiple pending rows → each row goes through deliverMessage
-//      sequentially (one wake per row in current impl; batching is
-//      future optimization)
-//   4. per-row failure logs warn-only; remaining rows still attempt
+//      with the right payload + delivered_at set (B3 gate defers ack)
+//   3. multiple pending rows → ONE wake carrying all delivery_ids in a
+//      combined payload (batch-native)
+//   4. all-or-nothing ack: bridge throw → NO rows acked, every row
+//      stays pending for the next ready_for_drain replay
 
 describe('DaemonAgentRuntimeHost — drainPending', () => {
   it('listPending empty → noop, coordinator not called', async () => {
@@ -2781,15 +2798,21 @@ describe('DaemonAgentRuntimeHost — drainPending', () => {
     }
   });
 
-  it('multiple pending rows → each routed through deliverMessage in order', async () => {
+  it('multiple pending rows → ONE wake carrying all delivery_ids (batch-native)', async () => {
+    // Cindy `nKFVSvx4CyBLxPNq` blocker 2: `runtime_ready_for_drain` is
+    // a batch primitive — N pending rows must collapse into ONE
+    // `runtime_wake` call with ALL `delivery_ids` in a single
+    // combined payload. Per-row wakes would change claude's visible
+    // turn boundary (1 user turn → N user turns) and degrade ack into
+    // partial success, both forbidden by Cindy's contract.
     const fix = makeDeliverFixture();
     try {
       const msgA = fix.insertViewerMessage('first');
       const msgB = fix.insertViewerMessage('second');
       const msgC = fix.insertViewerMessage('third');
-      fix.inboxes.ensureDelivery(fix.channelId, fix.agentId, msgA);
-      fix.inboxes.ensureDelivery(fix.channelId, fix.agentId, msgB);
-      fix.inboxes.ensureDelivery(fix.channelId, fix.agentId, msgC);
+      const dA = fix.inboxes.ensureDelivery(fix.channelId, fix.agentId, msgA);
+      const dB = fix.inboxes.ensureDelivery(fix.channelId, fix.agentId, msgB);
+      const dC = fix.inboxes.ensureDelivery(fix.channelId, fix.agentId, msgC);
 
       const cache = new RunStateCache();
       cache.applyRuntimeStatus(DAEMON_KEY, [
@@ -2802,7 +2825,7 @@ describe('DaemonAgentRuntimeHost — drainPending', () => {
           started_at: 1700000000000,
         },
       ]);
-      const { coordinator, wakeCalls } = makeObservableCoordinator(cache);
+      const { coordinator, wakeCalls, marked } = makeObservableCoordinator(cache);
       const { host } = makeHost({}, fix.conversations, {
         agents: fix.agents,
         messages: fix.messages,
@@ -2815,17 +2838,33 @@ describe('DaemonAgentRuntimeHost — drainPending', () => {
       });
       await host.drainPending(fix.channelId, fix.agentId);
 
-      // One wake per row (current impl loops single deliverMessages;
-      // batching is a future optimization — pin the per-row contract
-      // so a future batch change has to update this assertion
-      // intentionally).
-      expect(wakeCalls).toHaveLength(3);
+      // Exactly ONE wake — every pending row in a single payload.
+      expect(wakeCalls).toHaveLength(1);
+      expect(wakeCalls[0]!.delivery_ids).toEqual([
+        dA.inboxId,
+        dB.inboxId,
+        dC.inboxId,
+      ]);
+      // Payload combines all three via combineGatedBatch — single
+      // stream-json line containing all messages.
+      expect(wakeCalls[0]!.payload).toContain('first');
+      expect(wakeCalls[0]!.payload).toContain('second');
+      expect(wakeCalls[0]!.payload).toContain('third');
+
+      // B3 gate still applies — claude is `requires_first_message`, so
+      // the batch's delivered:true does NOT immediately ack; the entire
+      // batch stays stashed until session_init lands.
+      expect(marked).toEqual([]);
     } finally {
       fix.cleanup();
     }
   });
 
-  it('per-row failure logs warn; remaining rows still attempt', async () => {
+  it('all-or-nothing ack: bridge throw → NO rows acked, entire batch stays pending', async () => {
+    // Cindy `nKFVSvx4CyBLxPNq` blocker 2: failure semantics for a
+    // batch wake must be all-or-nothing — if the single
+    // `runtime_wake` throws (or returns delivered:false), every row
+    // in the batch stays pending. There must be NO partial markDelivered.
     const fix = makeDeliverFixture();
     try {
       const msgA = fix.insertViewerMessage('A');
@@ -2844,20 +2883,24 @@ describe('DaemonAgentRuntimeHost — drainPending', () => {
           started_at: 1700000000000,
         },
       ]);
-      // Coordinator whose first wake throws + second succeeds.
-      const wakeCalls: number[] = [];
+      // Coordinator whose wake always throws — simulate transport blip.
+      let wakeAttempts = 0;
+      const marked: number[][] = [];
       const coordinator = new RuntimeDeliveryCoordinator({
         bridge: {
           runtimeWake: async () => {
-            wakeCalls.push(wakeCalls.length);
-            if (wakeCalls.length === 1) {
-              throw new Error('simulated transport blip on row 1');
-            }
-            return { delivered: true, delivery_ids: [42] };
+            wakeAttempts += 1;
+            throw new Error('simulated transport blip');
           },
         },
         cache,
-        inboxAck: { markDelivered: () => {} },
+        inboxAck: {
+          markDelivered: ids => marked.push([...ids]),
+        },
+        callbacks: {
+          combineBatch: payloads =>
+            combineGatedBatch(payloads, 'silverhand message send'),
+        },
       });
       const warns: Array<{ meta: unknown; msg: string }> = [];
       const customLogger: BackendLogger = {
@@ -2877,14 +2920,17 @@ describe('DaemonAgentRuntimeHost — drainPending', () => {
       });
       await host.drainPending(fix.channelId, fix.agentId);
 
-      // Both wakes attempted despite first failure.
-      expect(wakeCalls.length).toBe(2);
-      // First failure produced a warn line — drainPending's catch arm
-      // logs 'drain: deliverMessage failed'.
+      // Exactly ONE wake attempted (not per-row) and it threw.
+      expect(wakeAttempts).toBe(1);
+      // No rows acked — batch failure is all-or-nothing.
+      expect(marked).toEqual([]);
+      // drainPending swallowed the throw + logged warn for the batch.
       const drainWarns = warns.filter(w =>
-        w.msg.includes('drain: deliverMessage failed'),
+        w.msg.includes('drain: coordinator batch threw'),
       );
       expect(drainWarns.length).toBe(1);
+      // Inbox rows still pending — next ready_for_drain replays them.
+      expect(fix.inboxes.listPending(fix.channelId, fix.agentId)).toHaveLength(2);
     } finally {
       fix.cleanup();
     }
