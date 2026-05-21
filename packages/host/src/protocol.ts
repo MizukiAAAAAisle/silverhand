@@ -199,16 +199,52 @@ export const RuntimeStartParamsSchema = z
 export type RuntimeStartParams = z.infer<typeof RuntimeStartParamsSchema>;
 
 export const RuntimeStartResultSchema = z
-  .object({
-    pid: z.number().int(),
-    started_at: z.number().int(),
-    /** True iff daemon accepted the startup_delivery payload for
-     *  attempt. NOT a "consumed" signal — that's the async
-     *  runtime_startup_delivery_consumed event. Absent when
-     *  `startup_delivery` was not provided in params. */
-    startup_delivery_accepted: z.boolean().optional(),
-  })
-  .strict();
+  .discriminatedUnion('started', [
+    z
+      .object({
+        started: z.literal(true),
+        pid: z.number().int(),
+        started_at: z.number().int(),
+        /** True iff daemon accepted the startup_delivery payload for
+         *  attempt. NOT a "consumed" signal — that's the async
+         *  runtime_startup_delivery_consumed event. Absent when
+         *  `startup_delivery` was not provided in params. */
+        startup_delivery_accepted: z.boolean().optional(),
+      })
+      .strict(),
+    /**
+     * Cooldown-blocked arm (Cindy `-pdNvRYOWip5e9yA` + plan v2
+     * `EOmOrJxeJUnbcmVR`): daemon is in init-failure cooldown for this
+     * (conv, agent) and refuses to spawn. This is a BUSINESS state —
+     * backend projects it to `agent_status reason:'init_cooldown'` SSE
+     * — not a transport error, so it ships in the result union rather
+     * than throwing an `internal_error` reply.
+     *
+     * Only the daemon's user-facing `runtime_start` gate produces
+     * this arm. Daemon-internal retry respawns (attempt > 0) take a
+     * separate code path that is NEVER blocked by this gate; the
+     * watchdog failure decides retry eligibility at the moment of
+     * failure. The gate ONLY fires when:
+     *   - no live handle exists for (conv, agent), AND
+     *   - this is a fresh user-initiated start (initAttempt === 0).
+     * Idempotent return for an already-running handle is the success
+     * arm even if a stale cooldown would otherwise apply.
+     *
+     * Programmer / deployment errors (missing `options.runtime`,
+     * missing binary, unknown runtime kind) STILL throw and surface
+     * as `internal_error` — they are not modeled as business state.
+     */
+    z
+      .object({
+        started: z.literal(false),
+        reason: z.literal('init_cooldown'),
+        /** Wall-clock epoch ms at which cooldown expires. Backend
+         *  projects to `agent_status.cooldown_until`. Must be strictly
+         *  in the future at emit time. */
+        cooldown_until: z.number().int().positive(),
+      })
+      .strict(),
+  ]);
 export type RuntimeStartResult = z.infer<typeof RuntimeStartResultSchema>;
 
 // ── runtime_stop ────────────────────────────────────────────────────
@@ -761,6 +797,32 @@ export const EventFrameSchema = z.discriminatedUnion('event', [
     cooldown_until: z.number().int().positive(),
     /** Total attempts that failed before cooldown engaged (== max_retries). */
     attempts_exhausted: z.number().int().nonnegative(),
+    ts: z.number().int(),
+  }).strict(),
+  // ── runtime_compaction_stale (Cindy `-pdNvRYOWip5e9yA` 3c plan
+  //     refinement) ───────────────────────────────────────────────
+  //
+  // Per-handle compaction watchdog (5 min, matches CM
+  // COMPACTION_STALE_MS) fired without observing `compaction_finished`.
+  // CRITICAL: this is observational only — daemon DOES NOT kill the
+  // child or change phase. CM's `recordCompactionStale` preserves
+  // `compacting: true` and only stacks `compactionStale: true` on the
+  // run-state, so the UI can show "still compacting, but stale"
+  // instead of "no longer compacting". Backend maps this 1:1 onto
+  // the existing `compaction_stale` SSE event.
+  //
+  // Non-droppable: backend depends on this to refresh `compactionStale`
+  // in its RunStateCache; dropping would leave the UI showing fresh
+  // compacting state indefinitely. Single implicit reason
+  // (watchdog timeout) — additional reasons would each get their own
+  // strict() variant.
+  z.object({
+    event: z.literal('runtime_compaction_stale'),
+    conversation_id: z.string().min(1),
+    agent_id: z.string().min(1),
+    /** Ms elapsed since `compaction_started` was observed, at the
+     *  moment the watchdog fired. */
+    elapsed_ms: z.number().int().nonnegative(),
     ts: z.number().int(),
   }).strict(),
   z.object({

@@ -27,7 +27,19 @@ import { join } from 'node:path';
 import { runDaemon, type RunningDaemon } from '../src/daemon/index.js';
 import { FakeSupervisor } from '../src/daemon/fake-supervisor.js';
 import { HostClient } from '../src/client/index.js';
-import type { EventFrame } from '../src/protocol.js';
+import type { EventFrame, RuntimeStartResult } from '../src/protocol.js';
+
+/** Narrow a `RuntimeStartResult` to the success arm; throws on the
+ *  cooldown arm — every e2e-supervisor test expects success.
+ *  (3c added the discriminated-union shape; see real-supervisor.test.ts
+ *  for the longer explanation.) */
+function assertStarted(
+  res: RuntimeStartResult,
+): asserts res is Extract<RuntimeStartResult, { started: true }> {
+  if (!res.started) {
+    throw new Error(`expected start() to succeed: ${JSON.stringify(res)}`);
+  }
+}
 
 interface E2eFixture {
   dir: string;
@@ -101,6 +113,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
       agent_id: 'agent-1',
       options: {},
     });
+    assertStarted(r);
     expect(r.pid).toBeGreaterThan(0);
     expect(typeof r.started_at).toBe('number');
     expect(r.startup_delivery_accepted).toBeUndefined();
@@ -132,6 +145,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
         payload: '{"role":"user","content":"hello"}\n',
       },
     });
+    assertStarted(r);
     expect(r.startup_delivery_accepted).toBe(true);
 
     const consumed = await waitForEvent(

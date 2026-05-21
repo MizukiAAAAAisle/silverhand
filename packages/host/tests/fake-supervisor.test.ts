@@ -10,7 +10,18 @@ import {
   type FakeSupervisorOptions,
   type FakeSupervisorPhase,
 } from '../src/daemon/fake-supervisor.js';
-import type { EventFrame } from '../src/protocol.js';
+import type { EventFrame, RuntimeStartResult } from '../src/protocol.js';
+
+/** Narrow a `RuntimeStartResult` to the success arm; throws on the
+ *  cooldown arm — every fake-supervisor test expects success. See
+ *  the longer explanation in `real-supervisor.test.ts`. */
+function assertStarted(
+  res: RuntimeStartResult,
+): asserts res is Extract<RuntimeStartResult, { started: true }> {
+  if (!res.started) {
+    throw new Error(`expected start() to succeed: ${JSON.stringify(res)}`);
+  }
+}
 
 interface Harness {
   supervisor: FakeSupervisor;
@@ -54,6 +65,7 @@ describe('FakeSupervisor — start without startup_delivery', () => {
       agent_id: 'a1',
       options: {},
     });
+    assertStarted(r);
     expect(r.pid).toBeGreaterThan(0);
     expect(r.startup_delivery_accepted).toBeUndefined();
     expect(h.supervisor.__getPhase('c1', 'a1')).toBe<FakeSupervisorPhase>(
@@ -96,6 +108,8 @@ describe('FakeSupervisor — start without startup_delivery', () => {
       agent_id: 'a1',
       options: {},
     });
+    assertStarted(first);
+    assertStarted(second);
     expect(second.pid).toBe(first.pid);
     expect(second.started_at).toBe(first.started_at);
     h.flush();
@@ -119,6 +133,7 @@ describe('FakeSupervisor — start with startup_delivery (happy path)', () => {
         payload: { type: 'user', message: { content: 'hi' } },
       },
     });
+    assertStarted(r);
     expect(r.startup_delivery_accepted).toBe(true);
     expect(h.supervisor.__getPhase('c1', 'a1')).toBe<FakeSupervisorPhase>(
       'startup_pending',

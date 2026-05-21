@@ -6,6 +6,7 @@ import {
   RequestFrameSchema,
   ResponseFrameSchema,
   RuntimeStartParamsSchema,
+  RuntimeStartResultSchema,
   RuntimeStopParamsSchema,
   RuntimeStopResultSchema,
   RuntimeWakeParamsSchema,
@@ -935,5 +936,165 @@ describe('protocol — runtime_parsed_event_dropped (metadata-only, Cindy `C2BZG
       ts: 1,
     });
     expect(r.success).toBe(false);
+  });
+});
+
+describe('protocol — runtime_start result discriminated union (Cindy `-pdNvRYOWip5e9yA` 3c plan)', () => {
+  // Pre-3c the result was a flat `{pid, started_at, startup_delivery_accepted?}`.
+  // 3c added a cooldown-blocked arm so backend can project init cooldown
+  // to UI as a business state instead of swallowing it as `internal_error`.
+  // The shape MUST be a `started`-discriminated union so backend's
+  // RuntimeBridge can `switch (res.started)` cleanly.
+
+  it('success arm parses with started:true + pid + started_at + optional startup_delivery_accepted', () => {
+    const r1 = RuntimeStartResultSchema.safeParse({
+      started: true,
+      pid: 12345,
+      started_at: 1_700_000_000_000,
+    });
+    expect(r1.success).toBe(true);
+
+    const r2 = RuntimeStartResultSchema.safeParse({
+      started: true,
+      pid: 12345,
+      started_at: 1_700_000_000_000,
+      startup_delivery_accepted: true,
+    });
+    expect(r2.success).toBe(true);
+
+    const r3 = RuntimeStartResultSchema.safeParse({
+      started: true,
+      pid: 12345,
+      started_at: 1_700_000_000_000,
+      startup_delivery_accepted: false,
+    });
+    expect(r3.success).toBe(true);
+  });
+
+  it('cooldown arm parses with started:false + reason:init_cooldown + positive cooldown_until', () => {
+    const r = RuntimeStartResultSchema.safeParse({
+      started: false,
+      reason: 'init_cooldown',
+      cooldown_until: 1_700_000_300_000,
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('rejects missing started discriminator (no flat shape allowed)', () => {
+    // The pre-3c flat shape would have parsed against a plain object
+    // schema; the discriminated union forces every caller to provide
+    // the discriminator.
+    const flat = RuntimeStartResultSchema.safeParse({
+      pid: 12345,
+      started_at: 1_700_000_000_000,
+    });
+    expect(flat.success).toBe(false);
+  });
+
+  it('rejects cross-arm field leakage (started:true + cooldown_until, started:false + pid)', () => {
+    // `.strict()` on each arm prevents backend from ever seeing a
+    // half-success/half-failure shape where ambiguous fields could
+    // be interpreted either way.
+    const successWithCooldown = RuntimeStartResultSchema.safeParse({
+      started: true,
+      pid: 1,
+      started_at: 1,
+      cooldown_until: 1_700_000_300_000,
+    });
+    expect(successWithCooldown.success).toBe(false);
+
+    const failureWithPid = RuntimeStartResultSchema.safeParse({
+      started: false,
+      reason: 'init_cooldown',
+      cooldown_until: 1_700_000_300_000,
+      pid: 1,
+    });
+    expect(failureWithPid.success).toBe(false);
+  });
+
+  it('cooldown arm rejects non-positive cooldown_until', () => {
+    // Wall-clock epoch ms must be in the future (or at minimum
+    // positive) — a zero or negative value would let backend project
+    // cooldown_until=0 and immediately treat the gate as cleared.
+    for (const cooldown_until of [0, -1, -1_700_000_000]) {
+      const r = RuntimeStartResultSchema.safeParse({
+        started: false,
+        reason: 'init_cooldown',
+        cooldown_until,
+      });
+      expect(r.success, `cooldown_until=${cooldown_until}`).toBe(false);
+    }
+  });
+
+  it('cooldown arm rejects unknown reason (single-arm enum reserved for init_cooldown in 3c)', () => {
+    const r = RuntimeStartResultSchema.safeParse({
+      started: false,
+      reason: 'binary_missing',
+      cooldown_until: 1_700_000_300_000,
+    });
+    expect(r.success).toBe(false);
+  });
+});
+
+describe('protocol — runtime_compaction_stale event (Cindy `-pdNvRYOWip5e9yA` 3c plan)', () => {
+  // CM's compaction watchdog fires once at 5 min without observing
+  // `compaction_finished`. The daemon publishes this observational
+  // event but does NOT kill the child or change phase — backend
+  // maps it onto the existing `compaction_stale` SSE projection.
+
+  it('accepts the minimal shape', () => {
+    const r = EventFrameSchema.safeParse({
+      event: 'runtime_compaction_stale',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      elapsed_ms: 300_000,
+      ts: 1_700_000_300_000,
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('rejects extra fields (strict — no payload bleed for "kill_reason" / "phase_change")', () => {
+    // This event is intentionally observational. If a future variant
+    // ever needs to kill or transition state, it must be a NEW event
+    // arm so the bilateral parser sees it. The strict() guards drift
+    // from a one-line PR sneaking in a side-effect field.
+    const r = EventFrameSchema.safeParse({
+      event: 'runtime_compaction_stale',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      elapsed_ms: 300_000,
+      ts: 1_700_000_300_000,
+      kill_reason: 'compaction_stale',
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('rejects negative elapsed_ms (must be ≥0)', () => {
+    const r = EventFrameSchema.safeParse({
+      event: 'runtime_compaction_stale',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      elapsed_ms: -1,
+      ts: 1_700_000_300_000,
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('rejects missing conversation_id / agent_id', () => {
+    const noConv = EventFrameSchema.safeParse({
+      event: 'runtime_compaction_stale',
+      agent_id: 'a1',
+      elapsed_ms: 0,
+      ts: 1,
+    });
+    expect(noConv.success).toBe(false);
+
+    const noAgent = EventFrameSchema.safeParse({
+      event: 'runtime_compaction_stale',
+      conversation_id: 'c1',
+      elapsed_ms: 0,
+      ts: 1,
+    });
+    expect(noAgent.success).toBe(false);
   });
 });

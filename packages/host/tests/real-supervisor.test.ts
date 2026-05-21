@@ -26,9 +26,31 @@ import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { RealSupervisor } from '../src/daemon/real-supervisor/index.js';
 import type { Driver, DriverSpawnContext, ParsedEvent } from '../src/drivers/index.js';
 import type { DaemonLogger } from '../src/daemon/logger.js';
-import type { EventFrame } from '../src/protocol.js';
+import type { EventFrame, RuntimeStartResult } from '../src/protocol.js';
 
 const FIXTURE = join(__dirname, '_fixtures', 'echo-runtime.cjs');
+
+/**
+ * TS assertion helper: narrow a `RuntimeStartResult` to the success
+ * arm so subsequent `.pid` / `.started_at` accesses typecheck. Throws
+ * if the result is the cooldown arm — every existing 3a/3b test
+ * expects a successful start, so the failure mode is "test setup is
+ * wrong, not the code under test".
+ *
+ * 3c (Cindy `-pdNvRYOWip5e9yA`) replaced the flat result shape with a
+ * discriminated union: `{started:true, pid, started_at, ...}` vs
+ * `{started:false, reason:'init_cooldown', cooldown_until}`. Cooldown-
+ * specific tests use the discriminator directly.
+ */
+function assertStarted(
+  res: RuntimeStartResult,
+): asserts res is Extract<RuntimeStartResult, { started: true }> {
+  if (!res.started) {
+    throw new Error(
+      `expected start() to succeed, got cooldown: ${JSON.stringify(res)}`,
+    );
+  }
+}
 
 /** Build a noop logger that satisfies the `DaemonLogger` interface
  *  without actually writing. Tests don't assert on log contents; the
@@ -129,6 +151,7 @@ describe('RealSupervisor 3a — spawn / status / phase emit', () => {
     const { supervisor, events } = makeSupervisor();
     const res = await supervisor.start(baseStartParams);
 
+    assertStarted(res);
     expect(res.pid).toBeGreaterThan(0);
     expect(typeof res.started_at).toBe('number');
 
@@ -163,6 +186,8 @@ describe('RealSupervisor 3a — spawn / status / phase emit', () => {
     const { supervisor } = makeSupervisor();
     const first = await supervisor.start(baseStartParams);
     const second = await supervisor.start(baseStartParams);
+    assertStarted(first);
+    assertStarted(second);
     expect(second.pid).toBe(first.pid);
     expect(second.started_at).toBe(first.started_at);
     await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
@@ -182,8 +207,10 @@ describe('RealSupervisor 3a — spawn / status / phase emit', () => {
       },
     };
     const r1 = await supervisor.start(params);
-    expect(r1.startup_delivery_accepted).toBe(true);
     const r2 = await supervisor.start(params);
+    assertStarted(r1);
+    assertStarted(r2);
+    expect(r1.startup_delivery_accepted).toBe(true);
     expect(r2.startup_delivery_accepted).toBe(false);
     await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
   });
@@ -1555,6 +1582,7 @@ describe('RealSupervisor 3b — Cindy `YW2BGWryWjfymPkU` nit: startup_delivery_a
     // a batch it never sent.
     const { supervisor } = makeSupervisor();
     const res = await supervisor.start(baseStartParams);
+    assertStarted(res);
     expect(res.pid).toBeGreaterThan(0);
     expect(typeof res.started_at).toBe('number');
     expect(Object.prototype.hasOwnProperty.call(res, 'startup_delivery_accepted')).toBe(false);

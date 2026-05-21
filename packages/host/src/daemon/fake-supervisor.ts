@@ -152,11 +152,12 @@ export class FakeSupervisor {
     const existing = this.runtimes.get(k);
     if (existing && existing.phase !== 'exited') {
       return {
+        started: true,
         pid: existing.pid,
         started_at: existing.started_at,
-        startup_delivery_accepted: params.startup_delivery
-          ? false
-          : undefined,
+        ...(params.startup_delivery
+          ? { startup_delivery_accepted: false }
+          : {}),
       };
     }
     const pid = this.nextPid++;
@@ -193,9 +194,12 @@ export class FakeSupervisor {
     }
 
     return {
+      started: true,
       pid,
       started_at: startedAt,
-      startup_delivery_accepted: params.startup_delivery ? true : undefined,
+      ...(params.startup_delivery
+        ? { startup_delivery_accepted: true }
+        : {}),
     };
   }
 

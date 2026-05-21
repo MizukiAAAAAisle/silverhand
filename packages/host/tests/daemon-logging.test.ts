@@ -189,7 +189,7 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
   /** Stub supervisor that resolves wake successfully so the dispatch
    *  exercises the full received → ok path. */
   const stubSupervisor: Supervisor = {
-    start: async () => ({ pid: 1, started_at: 0 }),
+    start: async () => ({ started: true, pid: 1, started_at: 0 }),
     stop: async () => ({ mode: 'hard', stopped: true, exit_code: 0 }),
     wake: async params => ({ delivered: true, delivery_ids: params.delivery_ids }),
     status: async () => ({ runtimes: [] }),

@@ -238,9 +238,9 @@ describe('HostClient — runtime_* typed helpers (PR-2 step 1)', () => {
     });
     peer.send({
       id: peer.received[0]!.id,
-      result: { pid: 4242, started_at: 1_700_000_000_000 },
+      result: { started: true, pid: 4242, started_at: 1_700_000_000_000 },
     });
-    await expect(promise).resolves.toMatchObject({ pid: 4242, started_at: 1_700_000_000_000 });
+    await expect(promise).resolves.toMatchObject({ started: true, pid: 4242, started_at: 1_700_000_000_000 });
     await client.close();
   });
 

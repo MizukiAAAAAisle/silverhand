@@ -139,8 +139,8 @@ describe('IntentDispatcher — runtime_* routing', () => {
     });
     expect('result' in r).toBe(true);
     if ('result' in r) {
-      expect(r.result).toMatchObject({ started_at: 1_000 });
-      expect((r.result as { pid: number }).pid).toBeGreaterThan(0);
+      expect(r.result).toMatchObject({ started: true, started_at: 1_000 });
+      expect((r.result as { started: true; pid: number }).pid).toBeGreaterThan(0);
     }
   });
 

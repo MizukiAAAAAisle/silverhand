@@ -206,6 +206,7 @@ export class RealSupervisor implements Supervisor {
     const existing = this.handles.get(k);
     if (existing && existing.phase !== 'exited') {
       return {
+        started: true,
         pid: existing.pid,
         started_at: existing.startedAt,
         ...(hasStartupDelivery ? { startup_delivery_accepted: false } : {}),
@@ -343,6 +344,7 @@ export class RealSupervisor implements Supervisor {
     }
 
     return {
+      started: true,
       pid,
       started_at: startedAt,
       ...(hasStartupDelivery ? { startup_delivery_accepted: true } : {}),
