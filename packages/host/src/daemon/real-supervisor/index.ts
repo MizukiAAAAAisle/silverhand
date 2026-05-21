@@ -87,7 +87,7 @@ import {
 } from '../../protocol.js';
 import type { DaemonLogger } from '../logger.js';
 import type { Supervisor } from '../supervisor.js';
-import type { RuntimeHandle, RuntimePhase } from './handle.js';
+import type { InitTimeoutReason, RuntimeHandle, RuntimePhase } from './handle.js';
 
 // ── Configurable timing knobs ──────────────────────────────────────
 //
@@ -103,6 +103,47 @@ export const DEFAULT_SIGTERM_TO_SIGKILL_MS = 5_000;
  *  exited regardless of the OS's response. Real `kill -9` lands
  *  within ms; this is a safety budget for stuck zombies. */
 export const DEFAULT_SIGKILL_TIMEOUT_MS = 10_000;
+
+// ── 3c-b init watchdog + retry/cooldown + compaction knobs ─────────
+//
+// These mirror CM's defaults (`packages/backend/src/conversation-
+// manager.ts` lines 57-66) byte-for-byte. The override precedence
+// inside `initTimeoutFor` is locked by Cindy (`-pdNvRYOWip5e9yA`):
+//
+//   opts.initWatchdogMs (global override across all 3 tiers)
+//     > opts.init<Tier>Ms                         (per-tier override)
+//       > driver.<tier>                           (driver opinion)
+//         > DEFAULT_INIT_<TIER>_MS                (this constant)
+//
+// `opts.initWatchdogMs` exists for the "I want fast tests" knob CM
+// already exposes (one number, applies to all three timers); when it's
+// set the per-tier values are deliberately ignored.
+
+export const DEFAULT_INIT_LIVENESS_SILENCE_MS = 30 * 1000;
+export const DEFAULT_INIT_PRE_PROTOCOL_CAP_MS = 5 * 60 * 1000;
+export const DEFAULT_INIT_POST_PROTOCOL_MS = 30 * 1000;
+export const DEFAULT_INIT_TIMEOUT_MAX_RETRIES = 1;
+export const DEFAULT_INIT_FAILURE_COOLDOWN_THRESHOLD = 3;
+export const DEFAULT_INIT_FAILURE_COOLDOWN_MS = 5 * 60 * 1000;
+/** Watchdog window from `compaction_started` to `compaction_finished`.
+ *  Past this the daemon emits `runtime_compaction_stale` and stacks
+ *  `compactionStale: true` onto the run state — but does NOT kill
+ *  the child or change phase. Matches CM's `COMPACTION_STALE_MS`. */
+export const DEFAULT_COMPACTION_STALE_MS = 5 * 60 * 1000;
+
+type InitTimeoutTier =
+  | 'initLivenessSilenceMs'
+  | 'initPreProtocolCapMs'
+  | 'initPostProtocolMs';
+
+/** Per-(conv,agent) init-failure counter + cooldown clock. Sticky
+ *  across attempts within the same incident window — cleared on a
+ *  successful init or on the cooldown clock fully elapsing without
+ *  the entry being touched. */
+interface InitRetryState {
+  failures: number;
+  cooldownUntil: number;
+}
 
 export interface RealSupervisorOptions {
   /** Sink for outgoing events; wired by `runDaemon` to the per-socket
@@ -133,6 +174,25 @@ export interface RealSupervisorOptions {
   now?: () => number;
   sigtermToSigkillMs?: number;
   sigkillTimeoutMs?: number;
+  // ── 3c-b init watchdog + retry/cooldown + compaction knobs ──────
+  //
+  // Override precedence is fixed (Cindy `-pdNvRYOWip5e9yA`):
+  //   opts.initWatchdogMs > opts.init<Tier>Ms > driver.<tier> > DEFAULT_*
+  // See `initTimeoutFor` for the implementation. Constructor knobs
+  // are optional so production wiring can omit them and inherit the
+  // CM-aligned defaults verbatim.
+  /** Global override for all 3 init timers (silence, pre-protocol
+   *  cap, post-protocol). When set, per-tier overrides are ignored
+   *  per the precedence table above. Maps 1:1 onto CM's
+   *  `ConversationManager.initWatchdogMs`. */
+  initWatchdogMs?: number | null;
+  initLivenessSilenceMs?: number;
+  initPreProtocolCapMs?: number;
+  initPostProtocolMs?: number;
+  initMaxRetries?: number;
+  initFailureCooldownThreshold?: number;
+  initFailureCooldownMs?: number;
+  compactionStaleMs?: number;
 }
 
 /** Composite key for `Map<key, RuntimeHandle>` — null byte separator
@@ -172,6 +232,27 @@ export class RealSupervisor implements Supervisor {
   private readonly sigtermToSigkillMs: number;
   private readonly sigkillTimeoutMs: number;
 
+  // ── 3c-b state ─────────────────────────────────────────────────
+  /** Sticky per-(conv, agent) init failure counter + cooldown clock.
+   *  Survives across watchdog-triggered respawns within the same
+   *  incident window. Cleared by a successful `session_init`. */
+  private readonly initRetryStates = new Map<string, InitRetryState>();
+  /** Per-(conv, agent) lifecycle serialization (Cindy plan v2 issue
+   *  #6 + tightening `ixAq6GPTn4fVSpCF`). Each entry is the tail
+   *  promise for the *most recent* lifecycle operation on that key;
+   *  new ops queue behind it. wake/soft-stop intentionally DO NOT
+   *  participate — they gate via `handle.startupDelivery` / `phase`
+   *  instead. */
+  private readonly lifecycleTails = new Map<string, Promise<void>>();
+  private readonly initWatchdogMs: number | null;
+  private readonly initLivenessSilenceMs?: number;
+  private readonly initPreProtocolCapMs?: number;
+  private readonly initPostProtocolMs?: number;
+  private readonly initMaxRetries: number;
+  private readonly initFailureCooldownThreshold: number;
+  private readonly initFailureCooldownMs: number;
+  private readonly compactionStaleMs: number;
+
   constructor(opts: RealSupervisorOptions) {
     this.emit = opts.emit;
     this.logger = opts.logger;
@@ -182,11 +263,50 @@ export class RealSupervisor implements Supervisor {
     this.sigtermToSigkillMs =
       opts.sigtermToSigkillMs ?? DEFAULT_SIGTERM_TO_SIGKILL_MS;
     this.sigkillTimeoutMs = opts.sigkillTimeoutMs ?? DEFAULT_SIGKILL_TIMEOUT_MS;
+    this.initWatchdogMs = opts.initWatchdogMs ?? null;
+    this.initLivenessSilenceMs = opts.initLivenessSilenceMs;
+    this.initPreProtocolCapMs = opts.initPreProtocolCapMs;
+    this.initPostProtocolMs = opts.initPostProtocolMs;
+    this.initMaxRetries = opts.initMaxRetries ?? DEFAULT_INIT_TIMEOUT_MAX_RETRIES;
+    this.initFailureCooldownThreshold =
+      opts.initFailureCooldownThreshold ?? DEFAULT_INIT_FAILURE_COOLDOWN_THRESHOLD;
+    this.initFailureCooldownMs =
+      opts.initFailureCooldownMs ?? DEFAULT_INIT_FAILURE_COOLDOWN_MS;
+    this.compactionStaleMs = opts.compactionStaleMs ?? DEFAULT_COMPACTION_STALE_MS;
   }
 
   // ── runtime_start ──────────────────────────────────────────────
 
+  /**
+   * Public start entry — funnels every (conv, agent) start through
+   * the lifecycle lock, then the cooldown gate, then the actual
+   * spawn path. Cindy plan v2:
+   *   - Lock granularity: per-(conv, agent), not global. Different
+   *     keys spawn in parallel; same key serializes start↔stop↔
+   *     clearSession↔internal-retry-respawn.
+   *   - Cooldown gate scope: ONLY for fresh user-initiated starts
+   *     (`initAttempt === 0`) AND only when no live handle exists.
+   *     Idempotent return for an already-running handle is the
+   *     success arm even if cooldown would otherwise apply, and
+   *     daemon-internal retry respawns (attempt > 0) bypass the gate
+   *     entirely so an in-flight retry can complete.
+   */
   async start(params: RuntimeStartParams): Promise<RuntimeStartResult> {
+    return this.startWithLock(params, 0);
+  }
+
+  private startWithLock(
+    params: RuntimeStartParams,
+    initAttempt: number,
+  ): Promise<RuntimeStartResult> {
+    const k = key(params.conversation_id, params.agent_id);
+    return this.withLifecycleLock(k, () => this.startUnlocked(params, initAttempt));
+  }
+
+  private async startUnlocked(
+    params: RuntimeStartParams,
+    initAttempt: number,
+  ): Promise<RuntimeStartResult> {
     const k = key(params.conversation_id, params.agent_id);
     const hasStartupDelivery = !!params.startup_delivery;
 
@@ -214,6 +334,33 @@ export class RealSupervisor implements Supervisor {
     }
     if (existing && existing.phase === 'exited') {
       this.handles.delete(k);
+    }
+
+    // 3c-b cooldown gate (Cindy plan v2 issue #3). Fires only when:
+    //   - this is a fresh user-initiated start (initAttempt === 0), AND
+    //   - no live handle remains (idempotent success returned above).
+    // Internal retry respawns (initAttempt > 0) bypass — the watchdog
+    // already decided retry eligibility at the moment of failure;
+    // re-gating here would deadlock a half-spawned retry against its
+    // own cooldown clock.
+    if (initAttempt === 0 && this.isInitCoolingDown(k)) {
+      const state = this.initRetryStates.get(k);
+      const cooldownUntil = state?.cooldownUntil ?? this.now();
+      this.logger.info(
+        {
+          kind: 'process',
+          action: 'start_blocked_by_cooldown',
+          conv_id: params.conversation_id,
+          agent_id: params.agent_id,
+          cooldown_until: cooldownUntil,
+        },
+        'start refused: init failure cooldown active',
+      );
+      return {
+        started: false,
+        reason: 'init_cooldown',
+        cooldown_until: cooldownUntil,
+      };
     }
 
     const wire = (params.options ?? {}) as StartOptionsFromWire;
@@ -293,6 +440,27 @@ export class RealSupervisor implements Supervisor {
       stdoutLineBuffer: '',
       runState: null,
       busy: { outstandingToolUses: 0, compacting: false },
+      // 3c-b additions
+      // Strip `startup_delivery` from the cached params so an internal
+      // retry respawn doesn't try to replay a payload the previous
+      // attempt already consumed (or already failed). Backend re-pumps
+      // pending inbox rows via `runtime_wake` against the new handle.
+      spawnParams: {
+        conversation_id: params.conversation_id,
+        agent_id: params.agent_id,
+        options: params.options,
+      },
+      initWatchdogArmed: false,
+      initStartedAt: startedAt,
+      initProtocolObserved: false,
+      initTimedOut: false,
+      initTimeoutReason: null,
+      initLivenessSilenceTimer: null,
+      initPreProtocolCapTimer: null,
+      initPostProtocolTimer: null,
+      initAttempt,
+      initRetryPlanned: false,
+      compactionWatchdog: null,
     };
     this.handles.set(k, handle);
 
@@ -314,8 +482,59 @@ export class RealSupervisor implements Supervisor {
 
     this.attachChildListeners(handle);
 
+    // 3c-b: driver-side init handshake. Codex needs `bindIO` to send
+    // its JSON-RPC `initialize` → `thread/start` immediately after
+    // spawn — without it the child never reaches `thread/started` and
+    // every spawn hits the post-protocol watchdog. Drivers without a
+    // handshake (claude, cursor) leave `bindIO` undefined.
+    //
+    // The writeLine wrapper (a) routes through `writeStdinPayload`
+    // which is the single point of stdin writes (preserves the
+    // backpressure / drain semantics) and (b) asserts the driver did
+    // NOT include a trailing `\n` — `writeStdinPayload` always appends
+    // one, so a driver that already terminates would emit a
+    // double-newline frame. Cindy `-pdNvRYOWip5e9yA` flagged this as
+    // the bindIO failure mode worth catching at the seam, not at the
+    // child.
+    if (handle.driver.bindIO) {
+      handle.driver.bindIO({
+        writeLine: (line: string) => {
+          if (line.endsWith('\n')) {
+            return Promise.reject(
+              new Error(
+                'driver.writeLine: line must not end with "\\n" (writeStdinPayload appends the newline)',
+              ),
+            );
+          }
+          return this.writeStdinPayload(handle, line);
+        },
+        spawnCtx,
+      });
+    }
+
+    // 3c-b: 3-tier init watchdog. Two arming paths (Cindy plan v2
+    // issue #1 + CM's `deferInitWatchdog` rule, lines 678-682):
+    //
+    //   - DEFAULT: arm immediately at spawn. Covers claude with a
+    //     kickoff inbox, codex (self_inits), cursor (oneShot — but
+    //     oneShot drivers exit before the watchdog usually matters,
+    //     so this is cheap belt-and-suspenders).
+    //   - DEFERRED: `requires_first_message` + no startup_delivery +
+    //     `initAttempt === 0`. Empty-inbox claude does not emit
+    //     `system.init` until something actually appears on stdin, so
+    //     arming at spawn would guarantee a `silence` timeout on
+    //     every dormant agent. We defer to `wake()`'s post-write
+    //     `ensureInitWatchdogArmed()`. On retry (`initAttempt > 0`)
+    //     we ALWAYS arm: a failed first attempt with empty inbox
+    //     should not silently turn into an unguarded live process.
+    const deferInitWatchdog =
+      initAttempt === 0 &&
+      handle.driver.kickoffMode === 'requires_first_message' &&
+      !startupBatch;
+    if (!deferInitWatchdog) this.startInitWatchdog(handle);
+
     // Optimistic ready transition. 3a/3b do NOT implement the init
-    // watchdog (that's 3c) — for now we mark the runtime `ready`
+    // watchdog (that's 3c-b above) — for now we mark the runtime `ready`
     // after a single tick. The startup_delivery write below settles
     // asynchronously; until it settles, `maybeEmitReadyForDrain` is
     // gated by `handle.startupDelivery !== null` and will not emit.
@@ -499,14 +718,22 @@ export class RealSupervisor implements Supervisor {
 
   async stop(params: RuntimeStopParams): Promise<RuntimeStopResult> {
     if (params.mode === 'soft') {
+      // Soft stop bypasses the lifecycle lock (Cindy plan v2 issue
+      // #6): soft is a directive WRITE, not a lifecycle transition,
+      // so it must be deliverable mid-start / mid-stop / mid-retry
+      // without blocking on the lock. The write itself gates on
+      // `handle.phase` (`not_running` / `draining` arms) which is
+      // already the right interlock.
       return this.softStopHandle(params);
     }
     const k = key(params.conversation_id, params.agent_id);
-    const handle = this.handles.get(k);
-    if (!handle || handle.phase === 'exited') {
-      return { mode: 'hard', stopped: false, exit_code: null };
-    }
-    return this.hardStopHandle(handle);
+    return this.withLifecycleLock(k, async () => {
+      const handle = this.handles.get(k);
+      if (!handle || handle.phase === 'exited') {
+        return { mode: 'hard', stopped: false, exit_code: null };
+      }
+      return this.hardStopHandle(handle);
+    });
   }
 
   /**
@@ -726,6 +953,16 @@ export class RealSupervisor implements Supervisor {
         delivery_ids: passthroughDeliveryIds,
       };
     }
+    // 3c-b deferred-init arm: the first real stdin write to a
+    // `requires_first_message` driver (claude) is what makes the
+    // runtime ultimately emit `session_init`. The watchdog was NOT
+    // armed at spawn time for empty-inbox starts (see
+    // `deferInitWatchdog` in startUnlocked); arm it NOW so a runtime
+    // that accepts the write but never reaches init still gets the
+    // same silence/pre-protocol/post-protocol coverage. `ensureInitWatchdog`
+    // is a no-op if a watchdog is already armed or init was already
+    // observed, so this is safe to call unconditionally on every wake.
+    this.ensureInitWatchdogArmed(handle);
     return {
       delivered: true,
       delivery_ids: passthroughDeliveryIds,
@@ -771,24 +1008,49 @@ export class RealSupervisor implements Supervisor {
     // (`agents.cli_session_id`) after this resolves. 3b will add the
     // explicit resume-state path on the host side (driver-mediated
     // `claude --resume` invalidation) and tighten this contract.
+    //
+    // 3c-b: runs under the per-(conv, agent) lifecycle lock so a
+    // concurrent start / hardStop trigger serializes behind it. The
+    // wrapped block does ALL the handle bookkeeping (read + hard
+    // stop) inside the critical section so a race with start cannot
+    // observe `clearSession` mid-stop.
     const k = key(params.conversation_id, params.agent_id);
-    const handle = this.handles.get(k);
-    if (!handle || handle.phase === 'exited') return { cleared: false };
-    await this.hardStopHandle(handle);
-    return { cleared: true };
+    return this.withLifecycleLock(k, async () => {
+      const handle = this.handles.get(k);
+      if (!handle || handle.phase === 'exited') return { cleared: false };
+      await this.hardStopHandle(handle);
+      return { cleared: true };
+    });
   }
 
   // ── runtime_stop_all ───────────────────────────────────────────
 
   async stopAll(_params: RuntimeStopAllParams): Promise<RuntimeStopAllResult> {
-    const pending: Array<Promise<unknown>> = [];
-    let count = 0;
-    for (const handle of this.handles.values()) {
-      if (handle.phase === 'exited') continue;
-      count++;
-      pending.push(this.hardStopHandle(handle));
+    // 3c-b (Cindy tightening `ixAq6GPTn4fVSpCF`): fan out one
+    // lifecycle-lock acquisition per (conv, agent) and wait on all
+    // of them in parallel. Different keys spawn / stop independently,
+    // so the natural shape is `Promise.all` over per-key entries —
+    // a single global lock would queue every stop behind every other,
+    // turning stopAll into a serial drain.
+    //
+    // Snapshot the keys BEFORE awaiting any lock so we don't iterate
+    // a Map that's being mutated by concurrent `onChildExit` cleanups
+    // or by another in-flight stop completing under one of our lock
+    // sections.
+    const livingKeys: string[] = [];
+    for (const [k, handle] of this.handles) {
+      if (handle.phase !== 'exited') livingKeys.push(k);
     }
-    await Promise.all(pending);
+    const count = livingKeys.length;
+    await Promise.all(
+      livingKeys.map(k =>
+        this.withLifecycleLock(k, async () => {
+          const handle = this.handles.get(k);
+          if (!handle || handle.phase === 'exited') return;
+          await this.hardStopHandle(handle);
+        }),
+      ),
+    );
     return { stopped_count: count };
   }
 
@@ -882,6 +1144,13 @@ export class RealSupervisor implements Supervisor {
     const text = typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
     if (text.length === 0) return;
 
+    // 3c-b: any byte from the child (stdout OR stderr) refreshes the
+    // pre-protocol silence watchdog. Matches CM (`conversation-manager.ts`
+    // lines 785-787, 796-797). Refresh is a no-op once `initProtocolObserved`
+    // or `initObserved` has flipped — the silence tier is only active
+    // pre-first-protocol-frame.
+    this.refreshInitLiveness(handle);
+
     // Raw `runtime_output` is the only droppable wire frame and ALWAYS
     // reflects exactly what the child wrote. Per Cindy `C2BZGDbQWfnq-bKJ`,
     // parse fanout is a strict sidecar: we never consume or replace
@@ -944,6 +1213,15 @@ export class RealSupervisor implements Supervisor {
   }
 
   private dispatchParsedLine(handle: RuntimeHandle, line: string): void {
+    // 3c-b: observe init-progress BEFORE parseLine so a driver's
+    // classifyInitProgress (pure line classifier) can advance the
+    // watchdog state machine even if parseLine returns no events for
+    // this specific frame (drivers occasionally emit protocol
+    // bookkeeping that maps to no ParsedEvent). Order matches CM
+    // (`conversation-manager.ts` lines 789-794): observe → parse →
+    // fanout.
+    this.observeInitProgress(handle, line);
+
     let events: ParsedEvent[];
     try {
       events = handle.driver.parseLine(line);
@@ -1079,6 +1357,12 @@ export class RealSupervisor implements Supervisor {
       if (!handle.initObserved) {
         handle.initObserved = true;
         handle.cliSessionId = parsed.sessionId;
+        // 3c-b: stop every init watchdog timer now that init has
+        // landed AND clear the (conv, agent) retry/cooldown bucket.
+        // The cooldown counter is sticky across attempts within an
+        // incident window; a successful init is the explicit reset.
+        this.clearInitWatchdog(handle);
+        this.clearInitRetryState(handle.conversationId, handle.agentId);
         this.logger.info(
           {
             kind: 'process',
@@ -1134,16 +1418,28 @@ export class RealSupervisor implements Supervisor {
         break;
       case 'compaction_started':
         handle.busy.compacting = true;
+        // 3c-b: arm the compaction watchdog. Cleared on
+        // compaction_finished, child exit, or hard stop. Watchdog
+        // fire path stacks `compactionStale: true` on the run state
+        // and emits `runtime_compaction_stale` — but does NOT change
+        // phase or kill the child (Cindy plan v2 issue #4).
+        this.startCompactionWatchdog(handle);
         this.transitionRunState(handle, {
           compacting: true,
           compactingSince: this.now(),
+          // Clear any prior `compactionStale` flag so the next stale
+          // window starts fresh and the wire-visible diff fires
+          // again if the new compaction also stalls.
+          compactionStale: false,
         });
         break;
       case 'compaction_finished':
         handle.busy.compacting = false;
+        this.clearCompactionWatchdog(handle);
         this.transitionRunState(handle, {
           compacting: false,
           compactingSince: null,
+          compactionStale: false,
           ...(handle.busy.outstandingToolUses === 0
             ? { status: 'thinking', detail: null }
             : {}),
@@ -1191,6 +1487,11 @@ export class RealSupervisor implements Supervisor {
       terminalReason?: AgentRunState['terminalReason'];
       compacting?: boolean;
       compactingSince?: number | null;
+      /** 3c-b: stacked stale flag from the compaction watchdog. Must
+       *  be set in the same patch that DOES NOT touch `compacting` so
+       *  the run-state keeps `compacting: true` alongside
+       *  `compactionStale: true` (Cindy plan v2 issue #4). */
+      compactionStale?: boolean;
     },
   ): void {
     const ts = this.now();
@@ -1212,6 +1513,7 @@ export class RealSupervisor implements Supervisor {
         ...(patch.compactingSince !== undefined && patch.compactingSince !== null
           ? { compactingSince: patch.compactingSince }
           : {}),
+        ...(patch.compactionStale === true ? { compactionStale: true } : {}),
       };
       this.emitState(handle);
       return;
@@ -1237,13 +1539,19 @@ export class RealSupervisor implements Supervisor {
     } else if (patch.compactingSince !== undefined) {
       next.compactingSince = patch.compactingSince;
     }
+    if (patch.compactionStale === true) {
+      next.compactionStale = true;
+    } else if (patch.compactionStale === false) {
+      delete next.compactionStale;
+    }
     handle.runState = next;
     // Emit when wire-visible field changed.
     const shouldEmit =
       prev.status !== next.status ||
       prev.detail !== next.detail ||
       prev.terminalReason !== next.terminalReason ||
-      prev.compacting !== next.compacting;
+      prev.compacting !== next.compacting ||
+      prev.compactionStale !== next.compactionStale;
     if (shouldEmit) this.emitState(handle);
   }
 
@@ -1357,6 +1665,12 @@ export class RealSupervisor implements Supervisor {
       clearTimeout(handle.sigkillTimer);
       handle.sigkillTimer = null;
     }
+    // 3c-b: stop any pending init / compaction timers attached to
+    // this handle BEFORE the retry-respawn branch fires, otherwise a
+    // stray `failInitWatchdog` callback could race the new handle and
+    // observe the old one mid-cleanup.
+    this.clearInitWatchdog(handle);
+    this.clearCompactionWatchdog(handle);
 
     // Cindy `5nruk1IPaEHSab0T` B5: Node's `readline.createInterface`
     // (which CM uses) emits a final `line` for input that ended
@@ -1382,6 +1696,7 @@ export class RealSupervisor implements Supervisor {
 
     const intentional = handle.intentionalExit;
     const ts = this.now();
+    const k = key(handle.conversationId, handle.agentId);
 
     this.logger.info(
       {
@@ -1393,6 +1708,8 @@ export class RealSupervisor implements Supervisor {
         exit_code: code,
         signal: signal ?? null,
         intentional,
+        init_timed_out: handle.initTimedOut,
+        init_retry_planned: handle.initRetryPlanned,
       },
       'child exited',
     );
@@ -1408,9 +1725,69 @@ export class RealSupervisor implements Supervisor {
       this.emitStartupDeliveryFailed(
         handle,
         handle.startupDelivery.deliveryIds,
-        'child_exit',
+        handle.initTimedOut ? 'init_watchdog' : 'child_exit',
       );
       this.clearStartupGate(handle);
+    }
+
+    // 3c-b retry branch (Cindy plan v2 issue #3 + override precedence
+    // `-pdNvRYOWip5e9yA`): if the init watchdog killed the child AND
+    // it decided retry was eligible, respawn under the lifecycle
+    // lock with `initAttempt + 1`. Daemon-internal retry SKIPS the
+    // start-time cooldown gate (`startWithLock` is the gated entry
+    // — internalRespawnForRetry calls it WITHOUT bypassing because
+    // `startUnlocked` does its own gate check that distinguishes
+    // `initAttempt === 0` vs `> 0`).
+    if (
+      handle.initTimedOut &&
+      handle.initRetryPlanned &&
+      !handle.intentionalExit
+    ) {
+      const newAttempt = handle.initAttempt + 1;
+      this.emit({
+        event: 'runtime_init_retrying',
+        conversation_id: handle.conversationId,
+        agent_id: handle.agentId,
+        retry_attempt: newAttempt,
+        max_retries: this.initMaxRetries,
+        delay_ms: 0,
+        ts: this.now(),
+      });
+      // Emit terminal runtime_state for the failed attempt and the
+      // accompanying runtime_exit, then drop the handle and respawn.
+      this.handles.delete(k);
+      this.resolveRun(handle, 'timeout');
+      this.emit({
+        event: 'runtime_exit',
+        conversation_id: handle.conversationId,
+        agent_id: handle.agentId,
+        code,
+        intentional: false,
+        ts,
+      });
+      void this.internalRespawnForRetry(handle.spawnParams, newAttempt);
+      return;
+    }
+
+    // 3c-b cooldown branch: init failed, no retry. If a fresh
+    // cooldown window engaged in this incident, surface it on the
+    // wire so backend can project `agent_status crashed
+    // reason=init_cooldown` for the now-dead handle. `cooldownUntil > now`
+    // is the only "really cooling down right now" check (Cindy plan
+    // v2 issue #2 — cooldown ≠ retry-exhausted; the two are
+    // independent state).
+    if (handle.initTimedOut) {
+      const state = this.initRetryStates.get(k);
+      if (state && state.cooldownUntil > this.now()) {
+        this.emit({
+          event: 'runtime_init_cooldown',
+          conversation_id: handle.conversationId,
+          agent_id: handle.agentId,
+          cooldown_until: state.cooldownUntil,
+          attempts_exhausted: state.failures,
+          ts: this.now(),
+        });
+      }
     }
 
     // Cindy `YW2BGWryWjfymPkU` B3 + `5nruk1IPaEHSab0T` B4: terminal
@@ -1420,18 +1797,21 @@ export class RealSupervisor implements Supervisor {
     // run starts with a fresh `runId` and no stale terminalReason.
     //
     // Reason mapping (matches CM `conversation-manager.ts` lines
-    // 856-907 with what 3b can know — `init_timeout` and fatal-error
-    // reasons land in 3c):
+    // 856-907):
+    //   init watchdog killed it → `timeout` (precedence over intentional)
     //   intentional stop request → `stopped`
     //   clean exit (code === 0)  → `replied`  (oneShot/cursor critical)
     //   non-zero / signal exit   → `crashed`
-    // `replied → idle`, `stopped|crashed → failed` per CM's
+    // `replied → idle`, `timeout|stopped|crashed → failed` per CM's
     // terminalStatus table (Cindy `GMbjEkGUHrB1BBMe`).
-    const reason: NonNullable<AgentRunState['terminalReason']> = intentional
-      ? 'stopped'
-      : code === 0
-        ? 'replied'
-        : 'crashed';
+    const reason: NonNullable<AgentRunState['terminalReason']> =
+      handle.initTimedOut
+        ? 'timeout'
+        : intentional
+          ? 'stopped'
+          : code === 0
+            ? 'replied'
+            : 'crashed';
     this.resolveRun(handle, reason);
     this.emit({
       event: 'runtime_exit',
@@ -1487,6 +1867,392 @@ export class RealSupervisor implements Supervisor {
       state: base,
       ts,
     });
+  }
+
+  // ── 3c-b: init watchdog + retry/cooldown + lifecycle lock ──────
+
+  /**
+   * Override-resolution for one init watchdog tier. Cindy
+   * `-pdNvRYOWip5e9yA` locked precedence:
+   *
+   *   1. `opts.initWatchdogMs` (global override; one number applies
+   *      to all three tiers — matches CM `ConversationManager.initWatchdogMs`)
+   *   2. `opts.init<Tier>Ms`   (per-tier override on the supervisor)
+   *   3. `driver.<tier>`       (driver opinion — claude/codex/cursor
+   *      each declare their own defaults)
+   *   4. `DEFAULT_INIT_<TIER>_MS`
+   *
+   * The global override exists specifically for tests that want one
+   * tiny number for all three timers without overriding the per-tier
+   * fields one by one.
+   */
+  private initTimeoutFor(driver: Driver, tier: InitTimeoutTier, fallback: number): number {
+    if (this.initWatchdogMs !== null) return this.initWatchdogMs;
+    const overrideMap: Record<InitTimeoutTier, number | undefined> = {
+      initLivenessSilenceMs: this.initLivenessSilenceMs,
+      initPreProtocolCapMs: this.initPreProtocolCapMs,
+      initPostProtocolMs: this.initPostProtocolMs,
+    };
+    const override = overrideMap[tier];
+    if (override !== undefined) return override;
+    return driver[tier] ?? fallback;
+  }
+
+  /** Arm both the silence-tier and the pre-protocol-cap timer for
+   *  this handle. Idempotent: clears any prior timers first so retries
+   *  / wake-driven deferred arming don't pile up. */
+  private startInitWatchdog(handle: RuntimeHandle): void {
+    this.clearInitWatchdog(handle);
+    handle.initWatchdogArmed = true;
+    handle.initStartedAt = this.now();
+    this.armInitLivenessSilenceWatchdog(handle);
+    const timeoutMs = this.initTimeoutFor(
+      handle.driver,
+      'initPreProtocolCapMs',
+      DEFAULT_INIT_PRE_PROTOCOL_CAP_MS,
+    );
+    handle.initPreProtocolCapTimer = setTimer(() => {
+      handle.initPreProtocolCapTimer = null;
+      this.failInitWatchdog(handle, 'pre_protocol_cap', timeoutMs);
+    }, timeoutMs);
+    handle.initPreProtocolCapTimer.unref();
+  }
+
+  /** Clear every init-watchdog timer attached to this handle. Called
+   *  from clearSession, hard stop, child exit, AND when init lands. */
+  private clearInitWatchdog(handle: RuntimeHandle): void {
+    if (handle.initLivenessSilenceTimer) {
+      clearTimeout(handle.initLivenessSilenceTimer);
+      handle.initLivenessSilenceTimer = null;
+    }
+    if (handle.initPreProtocolCapTimer) {
+      clearTimeout(handle.initPreProtocolCapTimer);
+      handle.initPreProtocolCapTimer = null;
+    }
+    if (handle.initPostProtocolTimer) {
+      clearTimeout(handle.initPostProtocolTimer);
+      handle.initPostProtocolTimer = null;
+    }
+  }
+
+  /** (Re-)arm the silence-tier timer. Called on watchdog start AND on
+   *  every refresh (raw byte arrival pre-protocol). */
+  private armInitLivenessSilenceWatchdog(handle: RuntimeHandle): void {
+    if (handle.initLivenessSilenceTimer) {
+      clearTimeout(handle.initLivenessSilenceTimer);
+      handle.initLivenessSilenceTimer = null;
+    }
+    const timeoutMs = this.initTimeoutFor(
+      handle.driver,
+      'initLivenessSilenceMs',
+      DEFAULT_INIT_LIVENESS_SILENCE_MS,
+    );
+    handle.initLivenessSilenceTimer = setTimer(() => {
+      handle.initLivenessSilenceTimer = null;
+      this.failInitWatchdog(handle, 'silence', timeoutMs);
+    }, timeoutMs);
+    handle.initLivenessSilenceTimer.unref();
+  }
+
+  /** Reset the silence-tier debounce on every raw byte from the
+   *  child. No-op once protocol or session ready has been observed —
+   *  silence is only meaningful pre-first-frame. */
+  private refreshInitLiveness(handle: RuntimeHandle): void {
+    if (!handle.initWatchdogArmed) return;
+    if (handle.initObserved || handle.initProtocolObserved || handle.initTimedOut) return;
+    this.armInitLivenessSilenceWatchdog(handle);
+  }
+
+  /** Driver's pure line classifier advances the watchdog state
+   *  machine. `protocol_ready` cancels silence + pre-protocol cap and
+   *  arms the post-protocol timer; `session_ready` cancels every
+   *  timer outright (the parsed `session_init` branch then flips
+   *  `initObserved` + clears the retry bucket). */
+  private observeInitProgress(handle: RuntimeHandle, line: string): void {
+    if (!handle.initWatchdogArmed) return;
+    if (handle.initObserved || handle.initTimedOut) return;
+    const progress = handle.driver.classifyInitProgress(line);
+    if (!progress) return;
+    this.markInitProtocolReady(handle);
+    if (progress === 'session_ready') this.clearInitWatchdog(handle);
+  }
+
+  private markInitProtocolReady(handle: RuntimeHandle): void {
+    if (handle.initProtocolObserved) return;
+    handle.initProtocolObserved = true;
+    // Cancel the pre-protocol-only timers; arm the post-protocol
+    // timer to bound the silence between first protocol frame and
+    // session ready.
+    if (handle.initLivenessSilenceTimer) {
+      clearTimeout(handle.initLivenessSilenceTimer);
+      handle.initLivenessSilenceTimer = null;
+    }
+    if (handle.initPreProtocolCapTimer) {
+      clearTimeout(handle.initPreProtocolCapTimer);
+      handle.initPreProtocolCapTimer = null;
+    }
+    const timeoutMs = this.initTimeoutFor(
+      handle.driver,
+      'initPostProtocolMs',
+      DEFAULT_INIT_POST_PROTOCOL_MS,
+    );
+    handle.initPostProtocolTimer = setTimer(() => {
+      handle.initPostProtocolTimer = null;
+      this.failInitWatchdog(handle, 'post_protocol', timeoutMs);
+    }, timeoutMs);
+    handle.initPostProtocolTimer.unref();
+  }
+
+  /** Deferred-init arming for `requires_first_message` drivers. Called
+   *  from `wake()` after a successful stdin write. No-op if watchdog
+   *  already armed, init already observed, or init already timed out. */
+  private ensureInitWatchdogArmed(handle: RuntimeHandle): void {
+    if (handle.initWatchdogArmed || handle.initObserved || handle.initTimedOut) return;
+    this.startInitWatchdog(handle);
+  }
+
+  /**
+   * Watchdog fired. Emit `runtime_init_timeout`, decide retry vs
+   * cooldown, then SIGTERM → SIGKILL the child. The exit handler
+   * picks up the retry branch from `handle.initRetryPlanned`.
+   *
+   * Idempotent: bails if the handle is already gone, already init'd,
+   * or already marked init-timed-out. This matters because three
+   * timers race the same flag; only the first to fire counts.
+   */
+  private failInitWatchdog(
+    handle: RuntimeHandle,
+    reason: InitTimeoutReason,
+    timeoutMs: number,
+  ): void {
+    const k = key(handle.conversationId, handle.agentId);
+    if (!this.handles.has(k) || handle.initObserved || handle.initTimedOut) return;
+
+    this.clearInitWatchdog(handle);
+    handle.initTimedOut = true;
+    handle.initTimeoutReason = reason;
+    const { retry, cooldownUntilOnEvent } = this.recordInitTimeout(handle);
+    handle.initRetryPlanned = retry;
+
+    const elapsedMs = this.now() - handle.initStartedAt;
+    this.logger.warn(
+      {
+        kind: 'process',
+        action: 'init_watchdog_fired',
+        pid: handle.pid,
+        conv_id: handle.conversationId,
+        agent_id: handle.agentId,
+        timeout_reason: reason,
+        elapsed_ms: elapsedMs,
+        timeout_ms: timeoutMs,
+        retry_attempt: handle.initAttempt,
+        retrying: retry,
+      },
+      'init watchdog fired; killing child',
+    );
+    this.emit({
+      event: 'runtime_init_timeout',
+      conversation_id: handle.conversationId,
+      agent_id: handle.agentId,
+      timeout_reason: reason,
+      elapsed_ms: elapsedMs,
+      timeout_ms: timeoutMs,
+      retrying: retry,
+      retry_attempt: handle.initAttempt,
+      max_retries: this.initMaxRetries,
+      ...(cooldownUntilOnEvent !== null
+        ? { cooldown_until: cooldownUntilOnEvent }
+        : {}),
+      ts: this.now(),
+    });
+
+    // SIGTERM → SIGKILL cascade. Use the supervisor's grace-period
+    // knob so test runs stay snappy.
+    try {
+      handle.child.kill('SIGTERM');
+    } catch {
+      // Already gone — exit listener fires the cleanup either way.
+    }
+    setTimer(() => {
+      if (!this.handles.has(k)) return;
+      if (handle.phase === 'exited') return;
+      try {
+        handle.child.kill('SIGKILL');
+      } catch {
+        // Already gone — same.
+      }
+    }, this.sigtermToSigkillMs).unref();
+  }
+
+  /** Bump the failure counter, engage cooldown if threshold crossed,
+   *  decide retry eligibility. Cindy plan v2 issue #2: cooldown vs
+   *  retry-exhausted are independent — return cooldownUntilOnEvent
+   *  only when cooldown is genuinely active right now. */
+  private recordInitTimeout(handle: RuntimeHandle): {
+    retry: boolean;
+    cooldownUntilOnEvent: number | null;
+  } {
+    const k = key(handle.conversationId, handle.agentId);
+    const now = this.now();
+    const state = this.initRetryStates.get(k) ?? { failures: 0, cooldownUntil: 0 };
+    state.failures += 1;
+    if (state.failures >= this.initFailureCooldownThreshold) {
+      state.cooldownUntil = now + this.initFailureCooldownMs;
+    }
+    this.initRetryStates.set(k, state);
+    const cooldownActive = state.cooldownUntil > now;
+    const retry =
+      !cooldownActive &&
+      handle.initAttempt < this.initMaxRetries &&
+      !handle.intentionalExit;
+    return {
+      retry,
+      cooldownUntilOnEvent: cooldownActive ? state.cooldownUntil : null,
+    };
+  }
+
+  /** Wipe the failure counter + cooldown clock. Called on successful
+   *  `session_init` AND when start_unlocked observes a no-op
+   *  idempotent return — neither of those cases should keep an old
+   *  incident window alive. */
+  private clearInitRetryState(conversationId: string, agentId: string): void {
+    this.initRetryStates.delete(key(conversationId, agentId));
+  }
+
+  /** Is the (conv, agent) currently inside an active cooldown window? */
+  private isInitCoolingDown(k: string): boolean {
+    const state = this.initRetryStates.get(k);
+    return !!state && state.cooldownUntil > this.now();
+  }
+
+  /**
+   * Daemon-internal retry respawn. Called from the child-exit handler
+   * when `initRetryPlanned` was true. Goes through `startWithLock` so
+   * the per-(conv, agent) lifecycle lock serializes the respawn
+   * against any concurrent user-initiated start / stop / clearSession.
+   * Errors are logged but not propagated — the retry already emitted
+   * `runtime_init_retrying`; a failed respawn surfaces as the next
+   * watchdog firing or a different `runtime_exit`.
+   */
+  private async internalRespawnForRetry(
+    originalParams: RuntimeStartParams,
+    newAttempt: number,
+  ): Promise<void> {
+    try {
+      await this.startWithLock(originalParams, newAttempt);
+    } catch (err) {
+      this.logger.error(
+        {
+          kind: 'process',
+          action: 'init_retry_respawn_failed',
+          conv_id: originalParams.conversation_id,
+          agent_id: originalParams.agent_id,
+          retry_attempt: newAttempt,
+          error_message: (err as Error).message,
+        },
+        'init watchdog retry respawn failed',
+      );
+    }
+  }
+
+  /**
+   * Per-(conv, agent) lifecycle serialization. Cindy plan v2 issue
+   * #6 + tightening `ixAq6GPTn4fVSpCF`:
+   *
+   *   - Covers ONLY lifecycle mutations: start, hard stop, clearSession,
+   *     internal retry respawn. wake/soft-stop/output-pause go around.
+   *   - Per-key, not global — different (conv, agent) ops parallelize.
+   *   - Survives previous-op failure: a rejected predecessor must not
+   *     wedge the queue. We swallow the previous tail's rejection at
+   *     the await site.
+   *
+   * The map entry holds the *latest tail* so subsequent calls queue
+   * behind every in-flight op for that key.
+   */
+  private async withLifecycleLock<T>(k: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.lifecycleTails.get(k);
+    let resolveTail!: () => void;
+    const tail = new Promise<void>(r => {
+      resolveTail = r;
+    });
+    this.lifecycleTails.set(k, tail);
+    try {
+      if (prev) {
+        // Tolerate previous-op failure — the queue keeps moving even
+        // if an earlier start threw or a stop rejected.
+        try {
+          await prev;
+        } catch {
+          /* swallow — see comment */
+        }
+      }
+      return await fn();
+    } finally {
+      resolveTail();
+      // Only clear the map entry if we're still the tail. A faster
+      // follow-up op may have already overwritten it with its own
+      // tail; in that case the map should keep the newer reference.
+      if (this.lifecycleTails.get(k) === tail) {
+        this.lifecycleTails.delete(k);
+      }
+    }
+  }
+
+  // ── 3c-b: compaction watchdog ──────────────────────────────────
+
+  /**
+   * Arm the compaction watchdog. On fire: emit
+   * `runtime_compaction_stale` AND stack `compactionStale: true` on
+   * the run state (Cindy plan v2 issue #4 — observational only;
+   * preserve `compacting: true`; do NOT kill the child or change
+   * phase). Idempotent: clears any prior timer first.
+   */
+  private startCompactionWatchdog(handle: RuntimeHandle): void {
+    this.clearCompactionWatchdog(handle);
+    const startedAt = this.now();
+    handle.compactionWatchdog = setTimer(() => {
+      handle.compactionWatchdog = null;
+      this.fireCompactionStale(handle, startedAt);
+    }, this.compactionStaleMs);
+    handle.compactionWatchdog.unref();
+  }
+
+  private clearCompactionWatchdog(handle: RuntimeHandle): void {
+    if (handle.compactionWatchdog) {
+      clearTimeout(handle.compactionWatchdog);
+      handle.compactionWatchdog = null;
+    }
+  }
+
+  private fireCompactionStale(handle: RuntimeHandle, startedAt: number): void {
+    // Defense in depth: a finish that lands in the same tick as the
+    // timer would clear the watchdog but we'd still be inside the
+    // callback. Bail if compaction is no longer active.
+    if (!handle.busy.compacting) return;
+    if (handle.phase === 'exited' || handle.phase === 'draining') return;
+    const elapsedMs = this.now() - startedAt;
+    this.logger.warn(
+      {
+        kind: 'process',
+        action: 'compaction_stale',
+        pid: handle.pid,
+        conv_id: handle.conversationId,
+        agent_id: handle.agentId,
+        elapsed_ms: elapsedMs,
+      },
+      'compaction has been running past the stale window with no finish event',
+    );
+    this.emit({
+      event: 'runtime_compaction_stale',
+      conversation_id: handle.conversationId,
+      agent_id: handle.agentId,
+      elapsed_ms: elapsedMs,
+      ts: this.now(),
+    });
+    // Stack stale onto the run state; explicitly do NOT touch
+    // `compacting` — the UI must still show "compacting (stale)",
+    // not "no longer compacting".
+    this.transitionRunState(handle, { compactionStale: true });
   }
 }
 

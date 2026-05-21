@@ -5,13 +5,26 @@
  * 3a scope: spawn / output / hard-stop / exit. 3b adds parse-fanout
  * state (line buffer + per-handle AgentRunState), startup-delivery
  * step-0 gating, and the `initObserved` flag the wake gate keys off.
- * 3c will add watchdog timers, retry/cooldown bookkeeping, and the
- * lifecycle-lock. Each addition stays inside this file; consumers
- * reach the handle only through `RealSupervisor` methods.
+ * 3c-b adds the init-watchdog timers, retry/cooldown bookkeeping,
+ * and the compaction watchdog. The lifecycle-lock lives on the
+ * supervisor (`lifecycleTails: Map<key, Promise<void>>`) rather than
+ * the handle so that operations on a (conv, agent) with no handle yet
+ * (e.g. a fresh `start`) still queue correctly.
+ *
+ * Consumers reach the handle only through `RealSupervisor` methods.
  */
 import type { ChildProcess } from 'node:child_process';
 import type { AgentRunState } from '@silverhand/shared';
 import type { Driver } from '../../drivers/index.js';
+import type { RuntimeStartParams } from '../../protocol.js';
+
+/** Tier name for the 3-tier init watchdog. Matches CM's
+ *  `InitTimeoutReason` so the wire `runtime_init_timeout.timeout_reason`
+ *  can carry these values through unmodified. */
+export type InitTimeoutReason =
+  | 'silence'
+  | 'pre_protocol_cap'
+  | 'post_protocol';
 
 export type RuntimePhase =
   | 'spawning'
@@ -117,5 +130,50 @@ export interface RuntimeHandle {
   /** Per-handle tool-call bookkeeping so `tool_output` knows when to
    *  drop status back to `thinking`. Mirrors CM's `handle.busy`. */
   busy: { outstandingToolUses: number; compacting: boolean };
+
+  // ── 3c-b additions ───────────────────────────────────────────────
+
+  /** Cached original `RuntimeStartParams` minus `startup_delivery`,
+   *  used by `internalRespawnForRetry` so a watchdog-triggered
+   *  re-spawn re-runs `start()` with the same `options` and the same
+   *  (conv, agent). startup_delivery is intentionally NOT carried —
+   *  the original payload was either consumed or failed before the
+   *  timeout fired, and the daemon cannot reliably replay it. Backend's
+   *  inbox path handles redelivery via `runtime_wake` on the new
+   *  handle. */
+  spawnParams: RuntimeStartParams;
+
+  /** Init watchdog state — three timers (silence / pre-protocol cap /
+   *  post-protocol) plus the cross-cutting bookkeeping. `armed`
+   *  protects against double-arming on the deferred-init path
+   *  (claude empty-inbox: arm only when wake actually writes). All
+   *  three timers are independently cleared once `initObserved` flips
+   *  (session_init parsed). */
+  initWatchdogArmed: boolean;
+  initStartedAt: number;
+  initProtocolObserved: boolean;
+  initTimedOut: boolean;
+  initTimeoutReason: InitTimeoutReason | null;
+  initLivenessSilenceTimer: NodeJS.Timeout | null;
+  initPreProtocolCapTimer: NodeJS.Timeout | null;
+  initPostProtocolTimer: NodeJS.Timeout | null;
+
+  /** 0-indexed attempt counter for this (conv, agent). `0` = first
+   *  user-initiated start; daemon-internal retry respawns bump it.
+   *  The cooldown gate in `start()` only fires for `initAttempt === 0`
+   *  per Cindy plan v2 issue #3. */
+  initAttempt: number;
+  /** Decided at the moment `failInitWatchdog` fires: whether the
+   *  child-exit handler should respawn (`true`) or finalize as a
+   *  terminal init failure (`false` → may also engage cooldown). */
+  initRetryPlanned: boolean;
+
+  /** Compaction watchdog. Set when `compaction_started` parsed event
+   *  arrives; cleared on `compaction_finished` or on exit. When it
+   *  fires we emit `runtime_compaction_stale` (observational only —
+   *  does NOT kill the child) and stack `compactionStale: true` onto
+   *  the runState while preserving `compacting: true` (Cindy plan
+   *  v2 issue #4). */
+  compactionWatchdog: NodeJS.Timeout | null;
 }
 

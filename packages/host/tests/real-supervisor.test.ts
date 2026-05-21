@@ -1589,3 +1589,680 @@ describe('RealSupervisor 3b — Cindy `YW2BGWryWjfymPkU` nit: startup_delivery_a
     await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// 3c-b: bindIO + init watchdog + retry/cooldown + lifecycle lock +
+//       compaction watchdog
+//
+// All 3c-b tests use the same fake-driver / fixture pattern as 3a/3b
+// — RealSupervisor is exercised against a real child process via
+// echo-runtime.cjs. Watchdog timers default to ~5 minutes; tests
+// override the supervisor's `initWatchdogMs` (global override per
+// Cindy `-pdNvRYOWip5e9yA`) to ~50-200ms so the cascades complete
+// inside vitest's 5s budget.
+// ─────────────────────────────────────────────────────────────────────
+
+import {
+  DEFAULT_COMPACTION_STALE_MS,
+  DEFAULT_INIT_LIVENESS_SILENCE_MS,
+  DEFAULT_INIT_POST_PROTOCOL_MS,
+  DEFAULT_INIT_PRE_PROTOCOL_CAP_MS,
+  type RealSupervisorOptions,
+} from '../src/daemon/real-supervisor/index.js';
+
+/** Build a supervisor variant that lets each 3c-b test pass extra
+ *  watchdog / retry / cooldown knobs without rebuilding the spawn /
+ *  driver wiring. Keeps the rest of the makeSupervisor() shape
+ *  identical to 3a/3b. */
+function make3cSupervisor(
+  opts: {
+    driverArgs?: string[];
+    driverOverride?: (base: Driver) => Driver;
+    spawnFn?: (b: string, a: ReadonlyArray<string>, o: SpawnOptions) => ChildProcess;
+  } & Partial<
+    Pick<
+      RealSupervisorOptions,
+      | 'sigtermToSigkillMs'
+      | 'sigkillTimeoutMs'
+      | 'initWatchdogMs'
+      | 'initLivenessSilenceMs'
+      | 'initPreProtocolCapMs'
+      | 'initPostProtocolMs'
+      | 'initMaxRetries'
+      | 'initFailureCooldownThreshold'
+      | 'initFailureCooldownMs'
+      | 'compactionStaleMs'
+    >
+  > = {},
+): { supervisor: RealSupervisor; events: EventFrame[]; driver: Driver } {
+  const spy = makeEmitSpy();
+  const baseDriver = makeFakeDriver(opts.driverArgs);
+  const driver = opts.driverOverride ? opts.driverOverride(baseDriver) : baseDriver;
+  const realSpawn = spawn;
+  const spawnFn =
+    opts.spawnFn ??
+    ((bin, args, options) => realSpawn(execPath, [bin, ...args.slice(1)], options));
+  const supervisor = new RealSupervisor({
+    emit: spy.emit,
+    logger: silentLogger(),
+    driverFor: () => driver,
+    resolveBinary: async (_kind, fallback) => fallback,
+    spawnFn,
+    sigtermToSigkillMs: opts.sigtermToSigkillMs ?? 50,
+    sigkillTimeoutMs: opts.sigkillTimeoutMs ?? 200,
+    initWatchdogMs: opts.initWatchdogMs,
+    initLivenessSilenceMs: opts.initLivenessSilenceMs,
+    initPreProtocolCapMs: opts.initPreProtocolCapMs,
+    initPostProtocolMs: opts.initPostProtocolMs,
+    initMaxRetries: opts.initMaxRetries,
+    initFailureCooldownThreshold: opts.initFailureCooldownThreshold,
+    initFailureCooldownMs: opts.initFailureCooldownMs,
+    compactionStaleMs: opts.compactionStaleMs,
+  });
+  return { supervisor, events: spy.events, driver };
+}
+
+describe('RealSupervisor 3c-b — driver.bindIO', () => {
+  it('calls driver.bindIO once after spawn with writeLine + spawnCtx', async () => {
+    const calls: Array<{ writeLine: (line: string) => Promise<void>; ctx: DriverSpawnContext }> = [];
+    const { supervisor } = make3cSupervisor({
+      driverOverride: base => ({
+        ...base,
+        bindIO(io) {
+          calls.push({ writeLine: io.writeLine, ctx: io.spawnCtx });
+        },
+      }),
+    });
+    const res = await supervisor.start(baseStartParams);
+    assertStarted(res);
+    expect(calls).toHaveLength(1);
+    expect(typeof calls[0]!.writeLine).toBe('function');
+    expect(calls[0]!.ctx.agentName).toBe('tester');
+    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+
+  it('bindIO.writeLine writes the payload + "\\n" to child stdin', async () => {
+    let writeLine: ((line: string) => Promise<void>) | null = null;
+    const { supervisor, events } = make3cSupervisor({
+      driverArgs: ['--echo-stdin'],
+      driverOverride: base => ({
+        ...base,
+        bindIO(io) {
+          writeLine = io.writeLine;
+        },
+      }),
+    });
+    await supervisor.start(baseStartParams);
+    await waitFor(() => writeLine !== null);
+    // wait for child READY so stdin is plumbed
+    await waitFor(() =>
+      events.some(
+        e =>
+          e.event === 'runtime_output' &&
+          e.stream === 'stdout' &&
+          e.chunk.includes('READY'),
+      ),
+    );
+    await writeLine!('jsonrpc-line-no-trailing-newline');
+    await waitFor(() =>
+      events.some(
+        e =>
+          e.event === 'runtime_output' &&
+          e.stream === 'stdout' &&
+          e.chunk.includes('STDIN:jsonrpc-line-no-trailing-newline'),
+      ),
+      2_000,
+    );
+    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+
+  it('bindIO.writeLine rejects when the driver line already ends with "\\n" (Cindy `-pdNvRYOWip5e9yA` guard)', async () => {
+    let writeLine: ((line: string) => Promise<void>) | null = null;
+    const { supervisor } = make3cSupervisor({
+      driverOverride: base => ({
+        ...base,
+        bindIO(io) {
+          writeLine = io.writeLine;
+        },
+      }),
+    });
+    await supervisor.start(baseStartParams);
+    await waitFor(() => writeLine !== null);
+    await expect(writeLine!('already-terminated\n')).rejects.toThrow(/must not end with/);
+    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+});
+
+describe('RealSupervisor 3c-b — 3-tier init watchdog', () => {
+  it('silence tier fires when no bytes arrive within livenessSilenceMs', async () => {
+    // Spawn a binary that produces NO output at all (echo-runtime is
+    // chatty by default with READY — use a sleep-only fixture by
+    // pointing at a node process that just hangs).
+    const { supervisor, events } = make3cSupervisor({
+      driverArgs: [], // echo-runtime emits READY immediately, defeating silence.
+      driverOverride: base => ({
+        ...base,
+        kickoffMode: 'self_inits', // arm immediately at spawn
+        // Replace buildArgs with a node one-liner that produces zero
+        // bytes, so the silence timer can fire before READY would.
+        buildArgs: () => [
+          execPath,
+          '-e',
+          'setInterval(() => {}, 1000);',
+        ],
+      }),
+      initLivenessSilenceMs: 60,
+      // Big pre-protocol cap so the silence timer fires first.
+      initPreProtocolCapMs: 60_000,
+      sigtermToSigkillMs: 30,
+    });
+    await supervisor.start(baseStartParams);
+    await waitFor(
+      () =>
+        events.some(
+          e =>
+            e.event === 'runtime_init_timeout' &&
+            e.timeout_reason === 'silence',
+        ),
+      2_000,
+    );
+    const timeout = events.find(e => e.event === 'runtime_init_timeout');
+    expect(timeout && timeout.event === 'runtime_init_timeout').toBe(true);
+    if (timeout && timeout.event === 'runtime_init_timeout') {
+      expect(timeout.timeout_reason).toBe('silence');
+      expect(timeout.retry_attempt).toBe(0);
+    }
+  });
+
+  it('pre_protocol_cap tier fires when raw bytes arrive but no protocol line lands within the cap', async () => {
+    // echo-runtime emits READY (raw bytes → silence timer refreshes)
+    // but classifyInitProgress is `() => null` (default fake), so the
+    // pre-protocol cap is the next timer to fire.
+    const { supervisor, events } = make3cSupervisor({
+      initLivenessSilenceMs: 60_000,
+      initPreProtocolCapMs: 80,
+      sigtermToSigkillMs: 30,
+    });
+    await supervisor.start(baseStartParams);
+    await waitFor(
+      () =>
+        events.some(
+          e =>
+            e.event === 'runtime_init_timeout' &&
+            e.timeout_reason === 'pre_protocol_cap',
+        ),
+      2_000,
+    );
+  });
+
+  it('post_protocol tier fires after protocol_ready when session_ready never lands', async () => {
+    // Driver classifyInitProgress returns 'protocol_ready' for any
+    // line. After READY arrives, the post-protocol timer arms; we
+    // never emit session_ready, so it fires.
+    const { supervisor, events } = make3cSupervisor({
+      driverOverride: base => ({
+        ...base,
+        classifyInitProgress: () => 'protocol_ready' as const,
+      }),
+      initPostProtocolMs: 80,
+      sigtermToSigkillMs: 30,
+    });
+    await supervisor.start(baseStartParams);
+    await waitFor(
+      () =>
+        events.some(
+          e =>
+            e.event === 'runtime_init_timeout' &&
+            e.timeout_reason === 'post_protocol',
+        ),
+      2_000,
+    );
+  });
+
+  it('classifyInitProgress=session_ready clears every init watchdog (no timeout fires)', async () => {
+    const { supervisor, events } = make3cSupervisor({
+      driverOverride: base => ({
+        ...base,
+        classifyInitProgress: () => 'session_ready' as const,
+      }),
+      initWatchdogMs: 80, // every tier
+      sigtermToSigkillMs: 30,
+    });
+    await supervisor.start(baseStartParams);
+    // Wait past every watchdog window; no timeout should ever fire.
+    await wait(250);
+    expect(events.find(e => e.event === 'runtime_init_timeout')).toBeUndefined();
+    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+
+  it('a parsed session_init event clears the watchdog and the retry bucket', async () => {
+    const { supervisor, events } = make3cSupervisor({
+      driverOverride: base => ({
+        ...base,
+        parseLine: line => {
+          // Treat any line containing "READY" as session_init for this test.
+          if (line.includes('READY')) {
+            return [{ kind: 'session_init' as const, sessionId: 'sess-1' }];
+          }
+          return [];
+        },
+      }),
+      initWatchdogMs: 200,
+      sigtermToSigkillMs: 30,
+    });
+    await supervisor.start(baseStartParams);
+    await wait(400);
+    expect(events.find(e => e.event === 'runtime_init_timeout')).toBeUndefined();
+    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+
+  it('deferred-init: requires_first_message + no startup_delivery → no watchdog at spawn; wake arms it', async () => {
+    const { supervisor, events } = make3cSupervisor({
+      driverOverride: base => ({
+        ...base,
+        kickoffMode: 'requires_first_message',
+      }),
+      initWatchdogMs: 80,
+      sigtermToSigkillMs: 30,
+    });
+    await supervisor.start(baseStartParams);
+    // Let every default-armed window pass; nothing should fire because
+    // the watchdog isn't armed yet.
+    await wait(250);
+    expect(events.find(e => e.event === 'runtime_init_timeout')).toBeUndefined();
+    // Now wake — that arms the watchdog. echo-runtime won't emit
+    // session_init, so a silence/pre-cap timeout follows.
+    await supervisor.wake({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      delivery_ids: [1],
+      kind: 'message',
+      payload: '{"role":"user","content":"hi"}',
+    });
+    await waitFor(
+      () => events.some(e => e.event === 'runtime_init_timeout'),
+      2_000,
+    );
+  });
+
+  it('override precedence: opts.initLivenessSilenceMs overrides driver.initLivenessSilenceMs', async () => {
+    const { supervisor, events } = make3cSupervisor({
+      driverArgs: [],
+      driverOverride: base => ({
+        ...base,
+        initLivenessSilenceMs: 60_000, // driver opinion would never fire in test budget
+        // produce no bytes so silence is the only thing in play
+        buildArgs: () => [execPath, '-e', 'setInterval(() => {}, 1000);'],
+      }),
+      initLivenessSilenceMs: 80, // supervisor override → wins
+      initPreProtocolCapMs: 60_000,
+      sigtermToSigkillMs: 30,
+    });
+    await supervisor.start(baseStartParams);
+    await waitFor(
+      () =>
+        events.some(
+          e =>
+            e.event === 'runtime_init_timeout' &&
+            e.timeout_reason === 'silence',
+        ),
+      2_000,
+    );
+  });
+
+  it('override precedence: opts.initWatchdogMs (global) wins over per-tier override AND driver', async () => {
+    const { supervisor, events } = make3cSupervisor({
+      driverArgs: [],
+      driverOverride: base => ({
+        ...base,
+        initLivenessSilenceMs: 60_000,
+        buildArgs: () => [execPath, '-e', 'setInterval(() => {}, 1000);'],
+      }),
+      initWatchdogMs: 80,            // global override
+      initLivenessSilenceMs: 60_000, // per-tier — must be IGNORED
+      sigtermToSigkillMs: 30,
+    });
+    await supervisor.start(baseStartParams);
+    await waitFor(
+      () =>
+        events.some(
+          e =>
+            e.event === 'runtime_init_timeout' &&
+            e.timeout_reason === 'silence',
+        ),
+      2_000,
+    );
+  });
+});
+
+describe('RealSupervisor 3c-b — retry / cooldown state machine', () => {
+  it('first timeout with maxRetries=1 emits retrying=true + runtime_init_retrying for attempt 1', async () => {
+    const { supervisor, events } = make3cSupervisor({
+      initWatchdogMs: 80,
+      sigtermToSigkillMs: 30,
+      initMaxRetries: 1,
+      // High threshold so cooldown does NOT engage during the retry window.
+      initFailureCooldownThreshold: 10,
+    });
+    await supervisor.start(baseStartParams);
+    await waitFor(
+      () =>
+        events.some(
+          e => e.event === 'runtime_init_retrying' && e.retry_attempt === 1,
+        ),
+      2_000,
+    );
+    // The timeout that triggered the retry carried retry_attempt=0
+    // (0-indexed, "the one that just failed") and retrying=true.
+    const firstTimeout = events.find(
+      e => e.event === 'runtime_init_timeout',
+    );
+    expect(firstTimeout && firstTimeout.event === 'runtime_init_timeout').toBe(true);
+    if (firstTimeout && firstTimeout.event === 'runtime_init_timeout') {
+      expect(firstTimeout.retry_attempt).toBe(0);
+      expect(firstTimeout.retrying).toBe(true);
+      expect(firstTimeout.max_retries).toBe(1);
+      expect(firstTimeout.cooldown_until).toBeUndefined();
+    }
+    // Stop any pending retry process.
+    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+
+  it('second timeout (attempt=1) emits retrying=false; no runtime_init_retrying follows', async () => {
+    const { supervisor, events } = make3cSupervisor({
+      initWatchdogMs: 80,
+      sigtermToSigkillMs: 30,
+      initMaxRetries: 1,
+      initFailureCooldownThreshold: 10,
+    });
+    await supervisor.start(baseStartParams);
+    await waitFor(
+      () =>
+        events.filter(e => e.event === 'runtime_init_timeout').length >= 2,
+      4_000,
+    );
+    const timeouts = events.filter(e => e.event === 'runtime_init_timeout');
+    if (timeouts[1] && timeouts[1].event === 'runtime_init_timeout') {
+      expect(timeouts[1].retry_attempt).toBe(1);
+      expect(timeouts[1].retrying).toBe(false);
+    }
+    // Exactly ONE retrying event was emitted across the whole sequence.
+    expect(events.filter(e => e.event === 'runtime_init_retrying')).toHaveLength(1);
+  });
+
+  it('after threshold failures cooldown engages: runtime_init_timeout carries cooldown_until + runtime_init_cooldown event fires on exit', async () => {
+    const { supervisor, events } = make3cSupervisor({
+      initWatchdogMs: 60,
+      sigtermToSigkillMs: 30,
+      initMaxRetries: 0,                 // no retry — every failure is terminal
+      initFailureCooldownThreshold: 1,   // cooldown after the first failure
+      initFailureCooldownMs: 60_000,
+    });
+    await supervisor.start(baseStartParams);
+    await waitFor(
+      () => events.some(e => e.event === 'runtime_init_cooldown'),
+      3_000,
+    );
+    const timeout = events.find(e => e.event === 'runtime_init_timeout');
+    if (timeout && timeout.event === 'runtime_init_timeout') {
+      expect(typeof timeout.cooldown_until).toBe('number');
+      expect((timeout.cooldown_until ?? 0) > Date.now()).toBe(true);
+    }
+    const cooldown = events.find(e => e.event === 'runtime_init_cooldown');
+    if (cooldown && cooldown.event === 'runtime_init_cooldown') {
+      expect(cooldown.attempts_exhausted).toBeGreaterThanOrEqual(1);
+      expect(cooldown.cooldown_until > Date.now()).toBe(true);
+    }
+  });
+
+  it('start at attempt=0 while cooldown is active returns the cooldown result arm', async () => {
+    const { supervisor } = make3cSupervisor({
+      initWatchdogMs: 60,
+      sigtermToSigkillMs: 30,
+      initMaxRetries: 0,
+      initFailureCooldownThreshold: 1,
+      initFailureCooldownMs: 60_000,
+    });
+    await supervisor.start(baseStartParams);
+    // Wait for the cooldown bucket to land.
+    await waitFor(
+      () =>
+        supervisor.status({ conversation_id: 'c1', agent_id: 'a1' }).runtimes
+          .length === 0 ||
+        supervisor
+          .status({ conversation_id: 'c1', agent_id: 'a1' })
+          .runtimes.some(r => r.phase === 'exited'),
+      3_000,
+    );
+    // Give the exit handler a tick to mark cooldown.
+    await wait(50);
+    const second = await supervisor.start(baseStartParams);
+    expect(second.started).toBe(false);
+    if (!second.started) {
+      expect(second.reason).toBe('init_cooldown');
+      expect(second.cooldown_until > Date.now()).toBe(true);
+    }
+  });
+
+  it('start at attempt=0 after cooldown expires returns the success arm again', async () => {
+    const { supervisor } = make3cSupervisor({
+      initWatchdogMs: 60,
+      sigtermToSigkillMs: 30,
+      initMaxRetries: 0,
+      initFailureCooldownThreshold: 1,
+      initFailureCooldownMs: 40, // very short cooldown
+    });
+    await supervisor.start(baseStartParams);
+    await wait(300); // outlast cooldown
+    const second = await supervisor.start(baseStartParams);
+    assertStarted(second);
+    expect(second.pid).toBeGreaterThan(0);
+    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+
+  it('successful session_init clears the retry bucket (subsequent timeout sees a fresh failures counter)', async () => {
+    // First spawn lands session_init → failures cleared. Second
+    // spawn (after stop) hits silence; if the bucket leaked, this
+    // would be failures=2 (cooldown engages); since it was cleared
+    // we expect failures=1 (no cooldown). Tests via cooldown_until
+    // absence on the timeout event.
+    let succeed = true;
+    const { supervisor, events } = make3cSupervisor({
+      driverOverride: base => ({
+        ...base,
+        parseLine: line => {
+          if (succeed && line.includes('READY')) {
+            return [{ kind: 'session_init' as const, sessionId: 'sess' }];
+          }
+          return [];
+        },
+      }),
+      initWatchdogMs: 80,
+      sigtermToSigkillMs: 30,
+      initMaxRetries: 0,
+      initFailureCooldownThreshold: 2, // would fire on the 2nd failure if bucket leaked
+      initFailureCooldownMs: 60_000,
+    });
+    await supervisor.start(baseStartParams);
+    // Give session_init a chance to land + clear bucket.
+    await wait(150);
+    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    // Now force the second spawn to fail.
+    succeed = false;
+    await supervisor.start(baseStartParams);
+    await waitFor(
+      () => events.some(e => e.event === 'runtime_init_timeout'),
+      2_000,
+    );
+    const timeouts = events.filter(e => e.event === 'runtime_init_timeout');
+    const last = timeouts[timeouts.length - 1];
+    // The bucket should be at 1, not 2 — no cooldown_until on this timeout.
+    if (last && last.event === 'runtime_init_timeout') {
+      expect(last.cooldown_until).toBeUndefined();
+    }
+  });
+});
+
+describe('RealSupervisor 3c-b — lifecycle lock', () => {
+  it('concurrent start+start on the same key returns the idempotent success arm (lock serializes)', async () => {
+    const { supervisor } = make3cSupervisor();
+    const [a, b] = await Promise.all([
+      supervisor.start(baseStartParams),
+      supervisor.start(baseStartParams),
+    ]);
+    assertStarted(a);
+    assertStarted(b);
+    expect(a.pid).toBe(b.pid);
+    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+
+  it('concurrent start+stop on the same key serializes (stop sees the live handle)', async () => {
+    const { supervisor } = make3cSupervisor();
+    const startP = supervisor.start(baseStartParams);
+    const stopP = supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    const [s, st] = await Promise.all([startP, stopP]);
+    assertStarted(s);
+    expect(st).toMatchObject({ mode: 'hard', stopped: true });
+  });
+
+  it('stopAll fans out per-key in parallel (two different keys both stop)', async () => {
+    const { supervisor } = make3cSupervisor();
+    await supervisor.start({ ...baseStartParams, conversation_id: 'c1' });
+    await supervisor.start({ ...baseStartParams, conversation_id: 'c2' });
+    const res = await supervisor.stopAll({});
+    expect(res.stopped_count).toBe(2);
+    const snap = supervisor.status({});
+    for (const r of snap.runtimes) {
+      expect(r.phase).toBe('exited');
+    }
+  });
+
+  it('wake does NOT take the lifecycle lock (wake runs while a hard stop holds the lock)', async () => {
+    // The 3a/3b suite already covers wake-while-draining returning
+    // 'draining'. The 3c-b interpretation: confirm wake reaches the
+    // gate WITHOUT waiting for the lock — i.e. it returns 'draining'
+    // immediately during the SIGTERM grace period, not after the
+    // exit. We assert wake returns BEFORE the stop's promise
+    // resolves, which would not be possible if both queued on the
+    // same lock.
+    const { supervisor, events } = make3cSupervisor({
+      driverArgs: ['--ignore-sigterm'],
+      sigtermToSigkillMs: 200,
+      sigkillTimeoutMs: 400,
+    });
+    await supervisor.start(baseStartParams);
+    await waitFor(() =>
+      events.some(
+        e =>
+          e.event === 'runtime_output' &&
+          e.stream === 'stdout' &&
+          e.chunk.includes('READY'),
+      ),
+    );
+    const stopP = supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    // Yield a tick so draining state is observed.
+    await wait(20);
+    const wakeRes = await supervisor.wake({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      delivery_ids: [99],
+      kind: 'message',
+      payload: '{"role":"user","content":"x"}',
+    });
+    expect(wakeRes.delivered).toBe(false);
+    if (!wakeRes.delivered) expect(wakeRes.reason).toBe('draining');
+    await stopP;
+  });
+});
+
+describe('RealSupervisor 3c-b — compaction watchdog', () => {
+  it('compaction_started + no compaction_finished within compactionStaleMs → runtime_compaction_stale + run-state stacks compactionStale:true (keeps compacting:true)', async () => {
+    const { supervisor, events } = make3cSupervisor({
+      driverOverride: base => ({
+        ...base,
+        parseLine: line => {
+          if (line.includes('COMPACT_START')) return [{ kind: 'compaction_started' as const }];
+          return [];
+        },
+      }),
+      driverArgs: ['--emit-line', 'COMPACT_START'],
+      compactionStaleMs: 80,
+      sigtermToSigkillMs: 30,
+    });
+    await supervisor.start(baseStartParams);
+    await waitFor(
+      () => events.some(e => e.event === 'runtime_compaction_stale'),
+      2_000,
+    );
+    const stale = events.find(e => e.event === 'runtime_compaction_stale');
+    if (stale && stale.event === 'runtime_compaction_stale') {
+      expect(stale.elapsed_ms).toBeGreaterThanOrEqual(80);
+    }
+    // The most recent runtime_state carries both compacting:true and
+    // compactionStale:true. (CM contract — UI shows "still compacting,
+    // stale" not "no longer compacting".)
+    const stateEmits = events.filter(e => e.event === 'runtime_state');
+    const last = stateEmits[stateEmits.length - 1];
+    if (last && last.event === 'runtime_state') {
+      expect(last.state.compacting).toBe(true);
+      expect(last.state.compactionStale).toBe(true);
+    }
+    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+
+  it('compaction_stale does NOT kill the child (status() still shows the live pid)', async () => {
+    const { supervisor, events } = make3cSupervisor({
+      driverOverride: base => ({
+        ...base,
+        parseLine: line => {
+          if (line.includes('COMPACT_START')) return [{ kind: 'compaction_started' as const }];
+          return [];
+        },
+      }),
+      driverArgs: ['--emit-line', 'COMPACT_START'],
+      compactionStaleMs: 60,
+      sigtermToSigkillMs: 30,
+    });
+    const res = await supervisor.start(baseStartParams);
+    assertStarted(res);
+    await waitFor(
+      () => events.some(e => e.event === 'runtime_compaction_stale'),
+      2_000,
+    );
+    const snap = supervisor.status({ conversation_id: 'c1', agent_id: 'a1' });
+    expect(snap.runtimes[0]?.pid).toBe(res.pid);
+    expect(snap.runtimes[0]?.phase).toBe('ready');
+    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+
+  it('compaction_finished cancels the watchdog (no stale event fires)', async () => {
+    const { supervisor, events } = make3cSupervisor({
+      driverOverride: base => ({
+        ...base,
+        parseLine: line => {
+          if (line.includes('COMPACT_START')) return [{ kind: 'compaction_started' as const }];
+          if (line.includes('COMPACT_END')) return [{ kind: 'compaction_finished' as const }];
+          return [];
+        },
+      }),
+      driverArgs: ['--emit-line', 'COMPACT_START', '--emit-line', 'COMPACT_END'],
+      compactionStaleMs: 200,
+      sigtermToSigkillMs: 30,
+    });
+    await supervisor.start(baseStartParams);
+    // Wait longer than compactionStaleMs; the finished event should
+    // have cleared the watchdog so no stale fires.
+    await wait(400);
+    expect(events.find(e => e.event === 'runtime_compaction_stale')).toBeUndefined();
+    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+});
+
+describe('RealSupervisor 3c-b — defaults exported for the bridge', () => {
+  it('exports CM-aligned defaults so backend can render UI hints without re-deriving the values', () => {
+    expect(DEFAULT_INIT_LIVENESS_SILENCE_MS).toBe(30 * 1000);
+    expect(DEFAULT_INIT_PRE_PROTOCOL_CAP_MS).toBe(5 * 60 * 1000);
+    expect(DEFAULT_INIT_POST_PROTOCOL_MS).toBe(30 * 1000);
+    expect(DEFAULT_COMPACTION_STALE_MS).toBe(5 * 60 * 1000);
+  });
+});
