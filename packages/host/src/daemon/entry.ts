@@ -32,6 +32,7 @@
  * dev run.
  */
 import { runDaemon } from './run.js';
+import { RealSupervisor } from './real-supervisor/index.js';
 
 interface ParsedArgv {
   socketPath: string;
@@ -87,6 +88,15 @@ async function main(): Promise<void> {
       installSignals: true,
       writeStdoutHandshake: true,
       alsoStderr: parsed.alsoStderr,
+      // Production wire: RealSupervisor owns spawn/wake/stop and the
+      // per-(conv, agent) AgentRunState lifecycle. Without this factory
+      // `runDaemon` boots a PR-1 surface (ping/status/echo) only, and
+      // every `runtime_*` intent returns `internal_error: runtime_*
+      // intent reached dispatcher with no supervisor wired` — the
+      // exact daemon-mode boot bug Cindy diagnosed in `MlwnvOfs-L5Nv_x2`.
+      // FakeSupervisor stays test-only (validates protocol wiring
+      // without a real CLI child); production must wire Real.
+      supervisorFactory: deps => new RealSupervisor(deps),
     });
   } catch (err) {
     const e = err as NodeJS.ErrnoException;
