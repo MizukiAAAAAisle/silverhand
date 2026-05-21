@@ -32,6 +32,12 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { splitNdjson } from './protocol.js';
 import { EventFrameSchema, type EventFrame } from './protocol.js';
+import {
+  reclaimStaleDaemonIfPresent,
+  ReclaimFailLoudlyError,
+  type ReclaimDeps,
+} from './daemon/reclaim.js';
+import { createDaemonLogger } from './daemon/logger.js';
 
 export interface DaemonLauncher {
   command: string;
@@ -52,6 +58,17 @@ export interface SpawnDaemonOptions {
   maxRestarts?: number;
   /** Sliding window for `maxRestarts`. Default 60_000ms. */
   restartWindowMs?: number;
+  /**
+   * Stale-daemon reclaim toggle. When true (default), the parent
+   * inspects the pid file before spawning and, if it points at a
+   * still-live silverhand-daemon of *this* silverhand-dir,
+   * SIGTERM/SIGKILLs it before launching a fresh one. Disable for
+   * tests that want to assert raw behaviour against an already-
+   * running fixture.
+   */
+  reclaimStaleDaemon?: boolean;
+  /** Test override for reclaim deps; production paths use defaults. */
+  reclaimDeps?: Partial<ReclaimDeps>;
 }
 
 export interface DaemonHandle {
@@ -88,6 +105,34 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
   let lastHandshake: Extract<EventFrame, { event: 'ready' }> | null = null;
   let killed = false;
   let killResolve: (() => void) | null = null;
+
+  // ── Stale-daemon reclaim (PR-2 step 1) ───────────────────────────
+  // Run BEFORE the first spawn so a crashed-prior-session daemon
+  // doesn't make our child fail to claim the pid file. Disabled in
+  // tests that want to assert "two daemons clash" semantics.
+  if (opts.reclaimStaleDaemon ?? true) {
+    const reclaimLogger = createDaemonLogger({
+      dir: opts.logDir,
+      alsoStderr,
+      base: { component: 'silverhand-spawn-reclaim' },
+    });
+    try {
+      const r = await reclaimStaleDaemonIfPresent({
+        pidFilePath: opts.pidFilePath,
+        socketPath: opts.socketPath,
+        logger: reclaimLogger,
+        deps: opts.reclaimDeps,
+      });
+      if (r.action === 'fail_loudly') {
+        await reclaimLogger.close();
+        throw new ReclaimFailLoudlyError(r);
+      }
+      // 'no_pid_file' / 'stale_dead_pid' / 'reclaimed' → safe to
+      // proceed; logger captured what happened.
+    } finally {
+      await reclaimLogger.close();
+    }
+  }
 
   const spawnOnce = async (): Promise<Extract<EventFrame, { event: 'ready' }>> => {
     const daemonArgs = [
