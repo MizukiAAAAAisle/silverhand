@@ -209,3 +209,169 @@ describe('RunStateCache: clear / clearAll', () => {
     expect(cache.daemonInstanceKey).toBe(DAEMON_B);
   });
 });
+
+// ── Cindy `SG1-ZTOUKLvs1A6G` revision 5: resolveRun helpers ────────
+
+describe('RunStateCache: resolveRun', () => {
+  it('returns terminal snapshot + clears runState from the entry', () => {
+    const cache = new RunStateCache();
+    const state = runState({ runId: 'r-1', status: 'thinking' });
+    cache.applyRuntimeStatus(
+      DAEMON_A,
+      [dto(CONV, AGENT_X, { run_state: state })],
+      1700000001000,
+    );
+    const terminal = cache.resolveRun(
+      CONV,
+      AGENT_X,
+      'replied',
+      undefined,
+      1700000002000,
+    );
+    expect(terminal).not.toBeNull();
+    expect(terminal!.status).toBe('idle'); // CM mapping: replied → idle
+    expect(terminal!.terminalReason).toBe('replied');
+    expect(terminal!.runId).toBe('r-1');
+    expect(terminal!.updatedAt).toBe(1700000002000);
+    expect(cache.get(CONV, AGENT_X)?.runState).toBeNull();
+  });
+
+  it('crashed/timeout/stopped/replaced/conversation_closed all map to failed', () => {
+    const cache = new RunStateCache();
+    cache.applyRuntimeStatus(
+      DAEMON_A,
+      [dto(CONV, AGENT_X, { run_state: runState() })],
+    );
+    expect(
+      cache.resolveRun(CONV, AGENT_X, 'crashed')?.status,
+    ).toBe('failed');
+
+    cache.applyRuntimeStatus(
+      DAEMON_A,
+      [dto(CONV, AGENT_X, { run_state: runState() })],
+    );
+    expect(
+      cache.resolveRun(CONV, AGENT_X, 'timeout')?.status,
+    ).toBe('failed');
+
+    cache.applyRuntimeStatus(
+      DAEMON_A,
+      [dto(CONV, AGENT_X, { run_state: runState() })],
+    );
+    expect(
+      cache.resolveRun(CONV, AGENT_X, 'stopped')?.status,
+    ).toBe('failed');
+
+    cache.applyRuntimeStatus(
+      DAEMON_A,
+      [dto(CONV, AGENT_X, { run_state: runState() })],
+    );
+    expect(
+      cache.resolveRun(CONV, AGENT_X, 'conversation_closed')?.status,
+    ).toBe('failed');
+  });
+
+  it('turn_ended and replaced also map to idle (matches CM terminalStatus)', () => {
+    const cache = new RunStateCache();
+    cache.applyRuntimeStatus(
+      DAEMON_A,
+      [dto(CONV, AGENT_X, { run_state: runState() })],
+    );
+    expect(
+      cache.resolveRun(CONV, AGENT_X, 'turn_ended')?.status,
+    ).toBe('idle');
+
+    cache.applyRuntimeStatus(
+      DAEMON_A,
+      [dto(CONV, AGENT_X, { run_state: runState() })],
+    );
+    expect(
+      cache.resolveRun(CONV, AGENT_X, 'replaced')?.status,
+    ).toBe('idle');
+  });
+
+  it('returns null when no entry or no active runState', () => {
+    const cache = new RunStateCache();
+    expect(cache.resolveRun(CONV, AGENT_X, 'replied')).toBeNull();
+    // Entry with runState=null
+    cache.applyRuntimeStatus(
+      DAEMON_A,
+      [dto(CONV, AGENT_X, { run_state: null })],
+    );
+    expect(cache.resolveRun(CONV, AGENT_X, 'replied')).toBeNull();
+  });
+
+  it('returns null + leaves state untouched when expectedRunId mismatches', () => {
+    const cache = new RunStateCache();
+    cache.applyRuntimeStatus(
+      DAEMON_A,
+      [dto(CONV, AGENT_X, { run_state: runState({ runId: 'r-current' }) })],
+    );
+    const out = cache.resolveRun(CONV, AGENT_X, 'replied', 'r-stale');
+    expect(out).toBeNull();
+    expect(cache.get(CONV, AGENT_X)?.runState?.runId).toBe('r-current');
+  });
+
+  it('clears compacting / compactionStale on the terminal snapshot', () => {
+    const cache = new RunStateCache();
+    cache.applyRuntimeStatus(
+      DAEMON_A,
+      [
+        dto(CONV, AGENT_X, {
+          run_state: runState({
+            compacting: true,
+            compactingSince: 1700000000500,
+            compactionStale: true,
+          }),
+        }),
+      ],
+    );
+    const terminal = cache.resolveRun(CONV, AGENT_X, 'crashed');
+    expect(terminal!.compacting).toBe(false);
+    expect(terminal!.compactingSince).toBeUndefined();
+    expect(terminal!.compactionStale).toBe(false);
+  });
+});
+
+describe('RunStateCache: resolveConversationRuns', () => {
+  it('resolves every (conv, *) entry that has an active runState', () => {
+    const cache = new RunStateCache();
+    cache.applyRuntimeStatus(DAEMON_A, [
+      dto(CONV, AGENT_X, {
+        run_state: runState({ runId: 'r-x', agentId: AGENT_X }),
+      }),
+      dto(CONV, AGENT_Y, {
+        run_state: runState({ runId: 'r-y', agentId: AGENT_Y }),
+      }),
+      dto('conv-other', AGENT_X, {
+        run_state: runState({ runId: 'r-other', conversationId: 'conv-other' }),
+      }),
+    ]);
+    const resolved = cache.resolveConversationRuns(
+      CONV,
+      'conversation_closed',
+    );
+    const ids = resolved.map(s => s.runId).sort();
+    expect(ids).toEqual(['r-x', 'r-y']);
+    for (const t of resolved) {
+      expect(t.status).toBe('failed');
+      expect(t.terminalReason).toBe('conversation_closed');
+    }
+    // Other-conv entry untouched.
+    expect(cache.get('conv-other', AGENT_X)?.runState?.runId).toBe('r-other');
+    // Resolved entries had their runState cleared but entry preserved.
+    expect(cache.get(CONV, AGENT_X)?.runState).toBeNull();
+    expect(cache.get(CONV, AGENT_Y)?.runState).toBeNull();
+  });
+
+  it('returns [] when conversation has no active runs', () => {
+    const cache = new RunStateCache();
+    cache.applyRuntimeStatus(
+      DAEMON_A,
+      [dto(CONV, AGENT_X, { run_state: null })],
+    );
+    expect(cache.resolveConversationRuns(CONV, 'conversation_closed')).toEqual(
+      [],
+    );
+  });
+});

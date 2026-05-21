@@ -53,7 +53,27 @@
  * tests trivial (no async, no mocks, no event-loop coordination).
  */
 import type { RuntimeStateDto } from '@silverhand/host';
-import type { AgentRunState } from '@silverhand/shared';
+import type {
+  AgentRunState,
+  AgentRunStatus,
+  AgentRunTerminalReason,
+} from '@silverhand/shared';
+
+/**
+ * Project a CM-style terminal status from a `AgentRunTerminalReason`.
+ * Matches `conversation-manager.ts:2575-2579` verbatim — the same
+ * mapping CM uses in `publishTerminalRunState` via its module-level
+ * `terminalStatus` helper. Lifted here so the daemon-mode `resolveRun`
+ * helpers below project identically. Keep these two definitions in
+ * sync until commit 5's CM removal collapses them.
+ */
+function terminalStatusForReason(
+  reason: AgentRunTerminalReason,
+): AgentRunStatus {
+  return reason === 'replied' || reason === 'turn_ended' || reason === 'replaced'
+    ? 'idle'
+    : 'failed';
+}
 
 /**
  * Daemon lifecycle phase, mirroring `RuntimeStateDto.phase` from the
@@ -301,6 +321,98 @@ export class RunStateCache {
    */
   get daemonInstanceKey(): string | null {
     return this.currentDaemonInstanceKey;
+  }
+
+  // ── run resolution helpers (Cindy `SG1-ZTOUKLvs1A6G` revision 5) ──
+  //
+  // CM's `resolveRun` / `resolveConversationRuns` need a daemon-mode
+  // equivalent. The split: cache owns the snapshot transition (clear
+  // runState, project terminalReason); DaemonHost owns the SSE
+  // publish off the returned snapshot. Doing the publish inside the
+  // cache would re-couple the projection (`RunStateCache`) to the
+  // event surface (`EventPublisher`), breaking the boundary
+  // (`KMJFmcS4hf_tJ5hj` 3).
+  //
+  // The returned `AgentRunState` carries `status: 'failed'` (matching
+  // CM's terminal projection — `idle` runs that turn-end naturally
+  // also end up failed/replied etc., but the cache wrapper here
+  // always stamps `failed` because anything DaemonHost would
+  // explicitly "resolve" was not a natural turn_end). Caller picks
+  // the right SSE payload.
+
+  /**
+   * Resolve the active run for (conv, agent). Returns the terminal
+   * snapshot (with `terminalReason` and cleared `compacting` /
+   * `compactionStale`) so the caller can broadcast the final state,
+   * then clears `runState` from the cache entry.
+   *
+   * No-op + returns `null` when there is no entry, no active runState,
+   * or (when supplied) the `expectedRunId` doesn't match the active
+   * run's `runId` — matches CM's idempotency contract (`resolveRun`
+   * fired against a stale runId is silently dropped to avoid clobbering
+   * the next run's state).
+   */
+  resolveRun(
+    conversationId: string,
+    agentId: string,
+    reason: AgentRunTerminalReason,
+    expectedRunId?: string,
+    now: number = Date.now(),
+  ): AgentRunState | null {
+    const k = key(conversationId, agentId);
+    const prev = this.entries.get(k);
+    if (!prev?.runState) return null;
+    if (expectedRunId !== undefined && prev.runState.runId !== expectedRunId) {
+      return null;
+    }
+    const terminalStatus: AgentRunStatus = terminalStatusForReason(reason);
+    const terminal: AgentRunState = {
+      ...prev.runState,
+      status: terminalStatus,
+      terminalReason: reason,
+      updatedAt: now,
+      // Compaction flags are run-scoped; a resolved run should not
+      // carry "we're still compacting" into the terminal snapshot.
+      compacting: false,
+      compactingSince: undefined,
+      compactionStale: false,
+    };
+    this.entries.set(k, {
+      ...prev,
+      runState: null,
+      updatedAt: now,
+    });
+    return terminal;
+  }
+
+  /**
+   * Bulk-resolve every (conv, *) entry's active run. Returns the list
+   * of terminal snapshots so the caller can publish each on the SSE
+   * bus. Order: insertion order of the underlying map (stable across
+   * Node versions for non-Symbol keys).
+   *
+   * Matches CM `resolveConversationRuns(conv, reason='conversation_closed')`
+   * semantics: every agent in the conversation that still had an
+   * active run state gets a terminal snapshot.
+   */
+  resolveConversationRuns(
+    conversationId: string,
+    reason: AgentRunTerminalReason,
+    now: number = Date.now(),
+  ): AgentRunState[] {
+    const resolved: AgentRunState[] = [];
+    for (const entry of this.entries.values()) {
+      if (entry.conversationId !== conversationId) continue;
+      const terminal = this.resolveRun(
+        conversationId,
+        entry.agentId,
+        reason,
+        undefined,
+        now,
+      );
+      if (terminal) resolved.push(terminal);
+    }
+    return resolved;
   }
 
   /**

@@ -211,6 +211,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
       bridge,
       cache,
       eventHandler,
+      events: ctx.events,
     });
   } else {
     // legacy: runtimeHost === the in-process ConversationManager. This
@@ -280,9 +281,11 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     events: ctx.events,
     logger,
   });
-  ctx.runtimeHost.reconcileOnBoot();
-  // Boot recovery + start scheduling AFTER reconcile so any handles the
-  // CM brings back are visible to the first wake delivery.
+  // Boot recovery — may be async in daemon mode (hydrate from
+  // `runtime_status` then diff stale DB rows). Legacy mode resolves
+  // synchronously. Either way scheduling waits until reconcile lands so
+  // any handles brought back are visible to the first wake delivery.
+  await ctx.runtimeHost.reconcileOnBoot();
   ctx.scheduleService.start();
   const stopEventLoopLagProbe = startEventLoopLagProbe(logger);
 

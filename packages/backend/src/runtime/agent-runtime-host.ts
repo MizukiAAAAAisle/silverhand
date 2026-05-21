@@ -110,8 +110,12 @@ export interface AgentRuntimeHost {
    * - Daemon: `runtime_status` hydrate is the ground truth.
    *   Snapshot-active runtimes are NOT touched (daemon is supervising
    *   them); rows absent from the snapshot are stale and cleared.
+   *
+   * Return type allows either sync (legacy in-process) or async
+   * (daemon mode needs to await the bridge round-trip before diffing).
+   * Callers MUST handle both via `await ctx.runtimeHost.reconcileOnBoot()`.
    */
-  reconcileOnBoot(): void;
+  reconcileOnBoot(): void | Promise<void>;
 
   // ── run-state surface (read-only views used by routes/services) ─
   /** All `AgentRunState`s belonging to the given conversation. */
