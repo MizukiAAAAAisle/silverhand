@@ -35,13 +35,28 @@
  * can be demultiplexed.
  */
 import { z } from 'zod';
+import { AgentRunStateSchema } from '@silverhand/shared';
 
 // ── Intent registry ─────────────────────────────────────────────────
 //
 // PR-1 intent surface is intentionally tiny: just enough to prove the
 // IPC carries structured payloads, plumbs lifecycle, and supports
-// reconnect. PR-2 expands this with runtime_start / runtime_stop /
-// runtime_wake / runtime_inject.
+// reconnect. PR-2 expands this with the runtime_* family that the
+// design lock at `docs/silverhand-daemon-pr2-design.md` describes.
+//
+// PR-2 step 1 lands the wire schemas here PLUS a daemon-internal fake
+// supervisor that satisfies the contract without doing any real
+// process spawn. Step 2 wires the supervisor to the real
+// ConversationManager execution-plane code carved out of
+// `packages/backend/src/conversation-manager.ts`. Both steps share
+// THIS file as the single source of truth — drift between client and
+// daemon is impossible because both import from one registry.
+//
+// Naming convention: every PR-2 intent / event prefixes with
+// `runtime_` so they are visually distinct from PR-1's
+// ping / status / echo lifecycle intents. The split is deliberate:
+// runtime_* talk to a (conversation, agent) supervised process;
+// PR-1 lifecycle intents talk to the daemon as a whole.
 
 export const PingParamsSchema = z.object({}).strict();
 export type PingParams = z.infer<typeof PingParamsSchema>;
@@ -86,6 +101,260 @@ export const EchoResultSchema = z
   .strict();
 export type EchoResult = z.infer<typeof EchoResultSchema>;
 
+// ── PR-2 runtime_* surface ──────────────────────────────────────────
+//
+// Wire surface for the (conversation, agent) supervisor that the
+// daemon owns. The shapes below match the design lock in
+// `docs/silverhand-daemon-pr2-design.md` §3 verbatim. Anything that
+// looks "runtime_*" goes through one (conversation_id, agent_id) pair
+// — the daemon serializes operations on that key with the same
+// per-pair lifecycle lock CM uses today.
+
+/**
+ * StreamJsonPayload — the hydrated stream-json frame the BACKEND
+ * builds before handing it off via `runtime_wake` /
+ * `runtime_start.startup_delivery`. It's the same shape CM today
+ * formats inbox rows into and writes to claude-family stdin.
+ *
+ * PR-2 step 1: shape held opaque (`unknown`) on the wire because the
+ * daemon never inspects it — it just buffers + writes to stdin per
+ * driver semantics. Step 2 moves the hydration logic into a typed
+ * helper inside backend; the daemon contract is "I write whatever
+ * bytes you give me on this field".
+ */
+export const StreamJsonPayloadSchema = z.unknown();
+export type StreamJsonPayload = z.infer<typeof StreamJsonPayloadSchema>;
+
+/**
+ * StartOptions — placeholder. Step 1 keeps this loose because the
+ * fake supervisor doesn't care about the contents. Step 2 will lift
+ * the full shape verbatim out of CM (mock CLI override, init retry
+ * tier config, driver kind, etc.) and replace this with a strict
+ * schema. The wire is forward-compatible: step 2 narrows the schema,
+ * doesn't add new top-level fields.
+ */
+export const StartOptionsSchema = z.object({}).passthrough();
+export type StartOptions = z.infer<typeof StartOptionsSchema>;
+
+/** A single (conversation, agent) supervised runtime as the daemon
+ *  reports it via `runtime_status`. Mirrors the run-state DTO that
+ *  backend already publishes to renderers. */
+export const RuntimeStateDtoSchema = z.object({
+  conversation_id: z.string().min(1),
+  agent_id: z.string().min(1),
+  pid: z.number().int().nullable(),
+  /** Daemon's view of where this runtime is in its lifecycle. The
+   *  enum mirrors the §3.2.1 startup/live exclusivity state machine
+   *  so the operator can read intent vs implementation off one
+   *  field. */
+  phase: z.enum([
+    'idle',
+    'spawning',
+    'startup_pending',
+    'ready',
+    'draining',
+    'exited',
+  ]),
+  /** Last known AgentRunState; null until the driver emits its first
+   *  run-state transition. */
+  run_state: AgentRunStateSchema.nullable(),
+  started_at: z.number().int().nullable(),
+});
+export type RuntimeStateDto = z.infer<typeof RuntimeStateDtoSchema>;
+
+// ── runtime_start ───────────────────────────────────────────────────
+
+export const RuntimeStartParamsSchema = z
+  .object({
+    conversation_id: z.string().min(1),
+    agent_id: z.string().min(1),
+    options: StartOptionsSchema,
+    /** Optional spawn-time inbox drain, replacing CM's drainInbox().
+     *  Daemon attempts the write per driver-specific semantics; ack
+     *  is async via runtime_startup_delivery_consumed | _failed
+     *  events. See design doc §3.1 + §3.2.1. */
+    startup_delivery: z
+      .object({
+        delivery_ids: z.array(z.number().int()).min(1),
+        payload: StreamJsonPayloadSchema,
+      })
+      .optional(),
+  })
+  .strict();
+export type RuntimeStartParams = z.infer<typeof RuntimeStartParamsSchema>;
+
+export const RuntimeStartResultSchema = z
+  .object({
+    pid: z.number().int(),
+    started_at: z.number().int(),
+    /** True iff daemon accepted the startup_delivery payload for
+     *  attempt. NOT a "consumed" signal — that's the async
+     *  runtime_startup_delivery_consumed event. Absent when
+     *  `startup_delivery` was not provided in params. */
+    startup_delivery_accepted: z.boolean().optional(),
+  })
+  .strict();
+export type RuntimeStartResult = z.infer<typeof RuntimeStartResultSchema>;
+
+// ── runtime_stop ────────────────────────────────────────────────────
+
+export const RuntimeStopParamsSchema = z
+  .object({
+    conversation_id: z.string().min(1),
+    agent_id: z.string().min(1),
+    /** soft = directive user message, hard = SIGTERM/SIGKILL cascade.
+     *  Mirrors CM today. */
+    mode: z.enum(['soft', 'hard']),
+  })
+  .strict();
+export type RuntimeStopParams = z.infer<typeof RuntimeStopParamsSchema>;
+
+export const RuntimeStopResultSchema = z
+  .object({
+    stopped: z.boolean(),
+    exit_code: z.number().int().nullable(),
+  })
+  .strict();
+export type RuntimeStopResult = z.infer<typeof RuntimeStopResultSchema>;
+
+// ── runtime_wake ────────────────────────────────────────────────────
+
+/**
+ * Live-delivery primitive. BATCH-NATIVE — single-row delivery is
+ * `delivery_ids: [id]`. Backend owns the inbox; daemon never reads
+ * or writes inbox rows. See design doc §3.1.
+ *
+ * Result is all-or-nothing: success returns the same `delivery_ids`
+ * caller passed in (so the response carries enough context to
+ * `markDelivered` even if the request was retried over a reconnect).
+ * Failure carries a typed `reason` and the same `delivery_ids` so
+ * the caller keeps every row pending — no partial mark.
+ */
+export const RuntimeWakeParamsSchema = z
+  .object({
+    conversation_id: z.string().min(1),
+    agent_id: z.string().min(1),
+    delivery_ids: z.array(z.number().int()).min(1),
+    kind: z.enum(['message', 'schedule_fire']),
+    payload: StreamJsonPayloadSchema,
+  })
+  .strict();
+export type RuntimeWakeParams = z.infer<typeof RuntimeWakeParamsSchema>;
+
+export const RuntimeWakeReasonSchema = z.enum([
+  'not_running',
+  'not_initialized',
+  'startup_pending',
+  'draining',
+  'driver_refused',
+]);
+export type RuntimeWakeReason = z.infer<typeof RuntimeWakeReasonSchema>;
+
+export const RuntimeWakeResultSchema = z.union([
+  z
+    .object({
+      delivered: z.literal(true),
+      delivery_ids: z.array(z.number().int()).min(1),
+    })
+    .strict(),
+  z
+    .object({
+      delivered: z.literal(false),
+      reason: RuntimeWakeReasonSchema,
+      delivery_ids: z.array(z.number().int()).min(1),
+    })
+    .strict(),
+]);
+export type RuntimeWakeResult = z.infer<typeof RuntimeWakeResultSchema>;
+
+// ── runtime_status ──────────────────────────────────────────────────
+
+export const RuntimeStatusParamsSchema = z
+  .object({
+    conversation_id: z.string().min(1).optional(),
+    agent_id: z.string().min(1).optional(),
+  })
+  .strict();
+export type RuntimeStatusParams = z.infer<typeof RuntimeStatusParamsSchema>;
+
+export const RuntimeStatusResultSchema = z
+  .object({
+    runtimes: z.array(RuntimeStateDtoSchema),
+  })
+  .strict();
+export type RuntimeStatusResult = z.infer<typeof RuntimeStatusResultSchema>;
+
+// ── runtime_clear_session ───────────────────────────────────────────
+
+export const RuntimeClearSessionParamsSchema = z
+  .object({
+    conversation_id: z.string().min(1),
+    agent_id: z.string().min(1),
+  })
+  .strict();
+export type RuntimeClearSessionParams = z.infer<
+  typeof RuntimeClearSessionParamsSchema
+>;
+
+export const RuntimeClearSessionResultSchema = z
+  .object({ cleared: z.boolean() })
+  .strict();
+export type RuntimeClearSessionResult = z.infer<
+  typeof RuntimeClearSessionResultSchema
+>;
+
+// ── runtime_stop_all / runtime_close_activity_log ───────────────────
+
+export const RuntimeStopAllParamsSchema = z.object({}).strict();
+export type RuntimeStopAllParams = z.infer<typeof RuntimeStopAllParamsSchema>;
+
+export const RuntimeStopAllResultSchema = z
+  .object({ stopped_count: z.number().int().nonnegative() })
+  .strict();
+export type RuntimeStopAllResult = z.infer<typeof RuntimeStopAllResultSchema>;
+
+export const RuntimeCloseActivityLogParamsSchema = z.object({}).strict();
+export type RuntimeCloseActivityLogParams = z.infer<
+  typeof RuntimeCloseActivityLogParamsSchema
+>;
+
+export const RuntimeCloseActivityLogResultSchema = z
+  .object({ flushed: z.boolean() })
+  .strict();
+export type RuntimeCloseActivityLogResult = z.infer<
+  typeof RuntimeCloseActivityLogResultSchema
+>;
+
+// ── output flow control (intents bodies present, v0 unused) ─────────
+
+export const RuntimeOutputPauseParamsSchema = z
+  .object({
+    conversation_id: z.string().min(1),
+    agent_id: z.string().min(1),
+  })
+  .strict();
+export type RuntimeOutputPauseParams = z.infer<
+  typeof RuntimeOutputPauseParamsSchema
+>;
+
+export const RuntimeOutputPauseResultSchema = z
+  .object({ paused: z.boolean() })
+  .strict();
+export type RuntimeOutputPauseResult = z.infer<
+  typeof RuntimeOutputPauseResultSchema
+>;
+
+export const RuntimeOutputResumeParamsSchema = RuntimeOutputPauseParamsSchema;
+export type RuntimeOutputResumeParams = RuntimeOutputPauseParams;
+
+export const RuntimeOutputResumeResultSchema = z
+  .object({ resumed: z.boolean() })
+  .strict();
+export type RuntimeOutputResumeResult = z.infer<
+  typeof RuntimeOutputResumeResultSchema
+>;
+
+
 /**
  * Single source of truth for the intent ↔ params/result type pairing.
  * The client uses it to enforce that `host.call('echo', {...})` only
@@ -105,6 +374,42 @@ export const intentSchemas = {
   echo: {
     params: EchoParamsSchema,
     result: EchoResultSchema,
+  },
+  runtime_start: {
+    params: RuntimeStartParamsSchema,
+    result: RuntimeStartResultSchema,
+  },
+  runtime_stop: {
+    params: RuntimeStopParamsSchema,
+    result: RuntimeStopResultSchema,
+  },
+  runtime_wake: {
+    params: RuntimeWakeParamsSchema,
+    result: RuntimeWakeResultSchema,
+  },
+  runtime_status: {
+    params: RuntimeStatusParamsSchema,
+    result: RuntimeStatusResultSchema,
+  },
+  runtime_clear_session: {
+    params: RuntimeClearSessionParamsSchema,
+    result: RuntimeClearSessionResultSchema,
+  },
+  runtime_stop_all: {
+    params: RuntimeStopAllParamsSchema,
+    result: RuntimeStopAllResultSchema,
+  },
+  runtime_close_activity_log: {
+    params: RuntimeCloseActivityLogParamsSchema,
+    result: RuntimeCloseActivityLogResultSchema,
+  },
+  runtime_output_pause: {
+    params: RuntimeOutputPauseParamsSchema,
+    result: RuntimeOutputPauseResultSchema,
+  },
+  runtime_output_resume: {
+    params: RuntimeOutputResumeParamsSchema,
+    result: RuntimeOutputResumeResultSchema,
   },
 } as const;
 
@@ -165,15 +470,26 @@ export const ResponseFrameSchema = z.union([
 export type ResponseFrame = z.infer<typeof ResponseFrameSchema>;
 
 /**
- * Unsolicited events. PR-1 surface:
+ * Unsolicited events. Two categories:
+ *
+ *  - **droppable** = `runtime_output` only. Subject to the
+ *    per-(conv,agent) 4 MiB un-flushed buffer cap (§2.2.2 of design
+ *    lock). Daemon may emit `runtime_output_dropped` when bytes are
+ *    discarded — that ack itself is non-droppable.
+ *  - **non-droppable** = everything else. Daemon must never sacrifice
+ *    one of these to relieve backpressure.
+ *
+ *  PR-1 surface kept verbatim:
  *
  *  - `ready`         — daemon socket is bound; handshake signal mirrored
- *                      to stdout for the spawn helper. Carries socket
- *                      path so the parent can also use stdout as a probe.
+ *                      to stdout for the spawn helper.
  *  - `shutting_down` — daemon received SIGTERM/SIGINT and is draining.
- *                      Clients should stop sending new requests; any
- *                      in-flight ones may receive `shutting_down`
- *                      responses or socket close.
+ *
+ *  PR-2 step 1 surface (matches design doc §3.2):
+ *
+ *  - `runtime_state` / `runtime_output` / `runtime_exit` / `runtime_ready_for_drain`
+ *  - `runtime_startup_delivery_consumed` / `runtime_startup_delivery_failed`
+ *  - `runtime_output_dropped` / `runtime_output_paused` / `runtime_output_resumed`
  */
 export const EventFrameSchema = z.discriminatedUnion('event', [
   z.object({
@@ -186,6 +502,77 @@ export const EventFrameSchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('shutting_down'),
     reason: z.string(),
+  }),
+  // ── runtime_* events ────────────────────────────────────────────
+  z.object({
+    event: z.literal('runtime_state'),
+    conversation_id: z.string().min(1),
+    agent_id: z.string().min(1),
+    state: AgentRunStateSchema,
+    ts: z.number().int(),
+  }),
+  z.object({
+    event: z.literal('runtime_output'),
+    conversation_id: z.string().min(1),
+    agent_id: z.string().min(1),
+    stream: z.enum(['stdout', 'stderr']),
+    /** Raw bytes from the child process, base64-free utf-8 string.
+     *  This is the ONLY droppable field on the wire — see the per-
+     *  stream cap in design doc §2.2.2. */
+    chunk: z.string(),
+    ts: z.number().int(),
+  }),
+  z.object({
+    event: z.literal('runtime_exit'),
+    conversation_id: z.string().min(1),
+    agent_id: z.string().min(1),
+    code: z.number().int().nullable(),
+    intentional: z.boolean(),
+    ts: z.number().int(),
+  }),
+  z.object({
+    event: z.literal('runtime_ready_for_drain'),
+    conversation_id: z.string().min(1),
+    agent_id: z.string().min(1),
+    ts: z.number().int(),
+  }),
+  z.object({
+    event: z.literal('runtime_startup_delivery_consumed'),
+    conversation_id: z.string().min(1),
+    agent_id: z.string().min(1),
+    delivery_ids: z.array(z.number().int()).min(1),
+    ts: z.number().int(),
+  }),
+  z.object({
+    event: z.literal('runtime_startup_delivery_failed'),
+    conversation_id: z.string().min(1),
+    agent_id: z.string().min(1),
+    delivery_ids: z.array(z.number().int()).min(1),
+    reason: z.enum([
+      'child_exit',
+      'init_watchdog',
+      'write_failed',
+      'driver_refused',
+    ]),
+    ts: z.number().int(),
+  }),
+  z.object({
+    event: z.literal('runtime_output_dropped'),
+    conversation_id: z.string().min(1),
+    agent_id: z.string().min(1),
+    dropped_count: z.number().int().nonnegative(),
+    bytes_dropped: z.number().int().nonnegative(),
+    since_ts: z.number().int(),
+  }),
+  z.object({
+    event: z.literal('runtime_output_paused'),
+    conversation_id: z.string().min(1),
+    agent_id: z.string().min(1),
+  }),
+  z.object({
+    event: z.literal('runtime_output_resumed'),
+    conversation_id: z.string().min(1),
+    agent_id: z.string().min(1),
   }),
 ]);
 export type EventFrame = z.infer<typeof EventFrameSchema>;
