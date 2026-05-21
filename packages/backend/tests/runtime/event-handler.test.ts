@@ -837,6 +837,154 @@ describe('RuntimeEventHandler — event routing', () => {
   });
 });
 
+describe('RuntimeEventHandler — runtime_parsed_event → agent_event projection', () => {
+  // Cindy carried-forward commit-5 hard blocker
+  // (`ch9ZsU0v0ATr6tr8` + `gePj5qOffE7rDlGw`):
+  // - publish under SSE kind `agent_event` (NOT a new kind)
+  // - payload shape matches CM `:1338-1341`:
+  //   { agent_id, event: ParsedEvent }
+  // - tool_call.input MUST flow through sanitizeParsedEventForBroadcast
+  //   so large payloads / cycles / depth don't reach the wire
+
+  it('text event passes through as-is on agent_event', async () => {
+    const cache = new RunStateCache();
+    const { client, emit } = makeFakeClient();
+    const { bridge } = makeBridge({
+      runtimes: [
+        {
+          conversation_id: 'c1',
+          agent_id: 'a1',
+          pid: 1234,
+          phase: 'ready',
+          run_state: null,
+          started_at: 1700000000000,
+        },
+      ],
+    });
+    const { publisher, published } = makePublisher();
+    const { sink } = makeInboxAck();
+    const handler = new RuntimeEventHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: sink,
+    });
+    await handler.start();
+    emit({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'text', text: 'hello world' } as never,
+      ts: 1700000001000,
+    });
+    const agentEvent = published.find(p => p.kind === 'agent_event');
+    expect(agentEvent).toBeDefined();
+    const payload = agentEvent!.payload as {
+      agent_id: string;
+      event: { kind: string; text?: string };
+    };
+    expect(payload.agent_id).toBe('a1');
+    expect(payload.event.kind).toBe('text');
+    expect(payload.event.text).toBe('hello world');
+  });
+
+  it('large tool_call.input is sanitized BEFORE publish (truncation marker present)', async () => {
+    const cache = new RunStateCache();
+    const { client, emit } = makeFakeClient();
+    const { bridge } = makeBridge({
+      runtimes: [
+        {
+          conversation_id: 'c1',
+          agent_id: 'a1',
+          pid: 1234,
+          phase: 'ready',
+          run_state: null,
+          started_at: 1700000000000,
+        },
+      ],
+    });
+    const { publisher, published } = makePublisher();
+    const { sink } = makeInboxAck();
+    const handler = new RuntimeEventHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: sink,
+    });
+    await handler.start();
+    const huge = 'x'.repeat(2000); // exceeds 500-char cap
+    emit({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: {
+        kind: 'tool_call',
+        toolUseId: 'tu-1',
+        name: 'bash',
+        input: { command: huge },
+      } as never,
+      ts: 1700000001100,
+    });
+    const agentEvent = published.find(p => p.kind === 'agent_event');
+    expect(agentEvent).toBeDefined();
+    const payload = agentEvent!.payload as {
+      event: { input: { command: string } };
+    };
+    expect(payload.event.input.command.length).toBeLessThan(huge.length);
+    expect(payload.event.input.command).toContain('<truncated');
+  });
+
+  it('runtime_parsed_event_dropped does NOT produce an agent_event (logged-only)', async () => {
+    const cache = new RunStateCache();
+    const { client, emit } = makeFakeClient();
+    const { bridge } = makeBridge({
+      runtimes: [
+        {
+          conversation_id: 'c1',
+          agent_id: 'a1',
+          pid: 1234,
+          phase: 'ready',
+          run_state: null,
+          started_at: 1700000000000,
+        },
+      ],
+    });
+    const { publisher, published } = makePublisher();
+    const { sink } = makeInboxAck();
+    const warns: object[] = [];
+    const handler = new RuntimeEventHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: sink,
+      logger: {
+        info: () => {},
+        warn: m => warns.push(m),
+        error: () => {},
+      },
+    });
+    await handler.start();
+    emit({
+      event: 'runtime_parsed_event_dropped',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed_kind: 'tool_call',
+      encoded_bytes: 2_000_000,
+      reason: 'frame_too_large',
+      ts: 1700000001200,
+    });
+    // No SSE publish (renderer has no UI for dropped frames yet).
+    expect(published.find(p => p.kind === 'agent_event')).toBeUndefined();
+    // But the operator-visible warn lands so SREs can see it in logs.
+    expect(warns.some(w => (w as { event?: string }).event === 'runtime_parsed_event_dropped')).toBe(
+      true,
+    );
+  });
+});
+
 describe('RuntimeEventHandler — cache-not-ready safety', () => {
   it('runtime_state arriving before hydrate completes is dropped (no cache mutation)', async () => {
     const cache = new RunStateCache();

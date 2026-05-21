@@ -61,6 +61,7 @@
 import type { EventFrame, HostClient } from '@silverhand/host';
 import type { RuntimeBridge } from './bridge.js';
 import type { RunStateCache } from './run-state-cache.js';
+import { sanitizeParsedEventForBroadcast } from './event-sanitize.js';
 
 /**
  * Backend-side SSE publisher contract — matches the existing
@@ -331,15 +332,53 @@ export class RuntimeEventHandler {
           },
         });
         return;
-      // Frames we acknowledge but currently route nowhere — kept here
-      // so the exhaustive `switch` doesn't fall through silently and
-      // so the list is discoverable for commit 5's wire-up.
+      case 'runtime_parsed_event':
+        // Project to the CM-equivalent `agent_event` SSE shape so
+        // the renderer's Events panel and the agent-event listeners
+        // can't tell which path produced the publish. MUST run
+        // sanitization here (`tool_call.input` size cap + recursion
+        // depth + cycle detection) — same call as CM
+        // `conversation-manager.ts:1338-1341`. Cindy
+        // `ch9ZsU0v0ATr6tr8` carried-forward blocker for commit 5
+        // unit 1.
+        this.events.publish(frame.conversation_id, {
+          kind: 'agent_event',
+          payload: {
+            agent_id: frame.agent_id,
+            event: sanitizeParsedEventForBroadcast(frame.parsed),
+          },
+        });
+        return;
+      // `runtime_parsed_event_dropped` carries metadata-only (no
+      // payload) when the encoded parsed event exceeded
+      // `MAX_FRAME_BYTES`. CM has no equivalent (in-process never
+      // hit a wire cap). For commit 5 unit 1 we DO NOT project it
+      // yet — the renderer has no UI for "an event was dropped";
+      // dispatching a typed degenerate `agent_event` here would
+      // confuse listeners that assume `event` is the real ParsedEvent.
+      // A dedicated SSE kind for dropped frames is a follow-up
+      // (out of scope for this commit).
+      case 'runtime_parsed_event_dropped':
+        this.logger.warn(
+          {
+            kind: 'event',
+            event: 'runtime_parsed_event_dropped',
+            conv_id: frame.conversation_id,
+            agent_id: frame.agent_id,
+            parsed_kind: frame.parsed_kind,
+            bytes: frame.encoded_bytes,
+            reason: frame.reason,
+          },
+          'parsed event dropped at wire (no SSE projection)',
+        );
+        return;
+      // Other frames we acknowledge but currently route nowhere —
+      // kept here so the exhaustive `switch` doesn't fall through
+      // silently and so the list is discoverable for future wire-up.
       case 'runtime_output':
       case 'runtime_output_dropped':
       case 'runtime_output_paused':
       case 'runtime_output_resumed':
-      case 'runtime_parsed_event':
-      case 'runtime_parsed_event_dropped':
         return;
       default: {
         // Exhaustiveness check: if `EventFrame` gains a variant and

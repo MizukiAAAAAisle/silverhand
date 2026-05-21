@@ -3,12 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { createInterface, type Interface as ReadlineInterface } from 'node:readline';
 import { readFile } from 'node:fs/promises';
 import { createWriteStream, type WriteStream } from 'node:fs';
-import { delimiter, join } from 'node:path';
+import { join } from 'node:path';
 import {
-  SILVERHAND_AGENT_ID_ENV,
-  SILVERHAND_AUTH_TOKEN_ENV,
-  SILVERHAND_CONVERSATION_ID_ENV,
-  SILVERHAND_SERVER_URL_ENV,
   extractMentions,
   systemSubtype,
 } from '@silverhand/shared';
@@ -37,7 +33,8 @@ import {
   type WorkspaceMemoryIndexEntry,
 } from './drivers/index.js';
 import { detectRuntimes } from '@silverhand/host/runtimes';
-import { applyProxyEnv, parseProxyRuntimes } from './runtime/proxy-env.js';
+import { sanitizeParsedEventForBroadcast } from './runtime/event-sanitize.js';
+import { buildAgentSpawnEnv } from './runtime/spawn-env.js';
 import { activeAgentProfileDir, agentL1ProfileDir, agentMemoryDirFor } from './agent-profile.js';
 import { prepareSpawnFiles, type SpawnPrepHandle } from './spawn-prep.js';
 import { AgentRepo } from './repos/agent-repo.js';
@@ -67,10 +64,8 @@ const INIT_FAILURE_COOLDOWN_MS = 5 * 60 * 1000;
 const AGENT_ACTIVITY_HEARTBEAT_MS = 2 * 1000;
 const ACTIVITY_SNIPPET_MAX_CHARS = 200;
 const ACTIVITY_SNIPPET_BUFFER_MAX_CHARS = ACTIVITY_SNIPPET_MAX_CHARS * 4;
-const RAW_AGENT_EVENT_STRING_MAX_CHARS = 500;
-const RAW_AGENT_EVENT_ARRAY_MAX_ITEMS = 20;
-const RAW_AGENT_EVENT_OBJECT_MAX_KEYS = 40;
-const RAW_AGENT_EVENT_MAX_DEPTH = 4;
+// RAW_AGENT_EVENT_* caps moved to runtime/event-sanitize.ts alongside
+// the sanitizer functions; CM no longer references them directly.
 
 /**
  * Caps for auto-injected context files (MEMORY.md / CONSENSUS.md). The
@@ -693,16 +688,23 @@ export class ConversationManager {
     };
 
     const args = driver.buildArgs(spawnCtx);
-    const env = this.withSilverhandCliEnv(
-      this.applyProxySetting(driver.applyEnv(process.env), agent.runtime),
-      {
-        conversationId,
-        agentId,
-        serverUrl: this.ctx.serverConfig.url,
-        token: agentToken,
-        binDir: spawnPrep.binDir,
+    // Spawn env composition moved into a shared helper so the
+    // daemon-path (`RuntimeBridge`) can build the same env from the
+    // same inputs. Behavior is byte-equivalent to the prior inline
+    // `withSilverhandCliEnv(applyProxySetting(driver.applyEnv(process.env), runtime), {...})`.
+    const env = buildAgentSpawnEnv({
+      driver,
+      runtime: agent.runtime,
+      conversationId,
+      agentId,
+      serverUrl: this.ctx.serverConfig.url,
+      token: agentToken,
+      binDir: spawnPrep.binDir,
+      baseProcessEnv: process.env,
+      proxySettings: {
+        get: (key: 'proxy_url' | 'proxy_runtimes') => this.settings.get(key),
       },
-    );
+    });
 
     this.ctx.logger.info(
       { conversationId, agentId, runtime: agent.runtime, binary, args },
@@ -2230,36 +2232,11 @@ export class ConversationManager {
    * the bridge and we don't want to touch the spawn path until the
    * commit-5 atomic flip.
    */
-  private applyProxySetting(
-    env: NodeJS.ProcessEnv,
-    runtime: string,
-  ): NodeJS.ProcessEnv {
-    return applyProxyEnv(env, runtime, {
-      proxyUrl: this.settings.get(SETTINGS_KEYS.PROXY_URL),
-      allowlist: parseProxyRuntimes(this.settings.get(SETTINGS_KEYS.PROXY_RUNTIMES)),
-    });
-  }
-
-  private withSilverhandCliEnv(
-    env: NodeJS.ProcessEnv,
-    input: {
-      conversationId: string;
-      agentId: string;
-      serverUrl: string;
-      token: string;
-      binDir: string;
-    },
-  ): NodeJS.ProcessEnv {
-    const currentPath = env.PATH ?? process.env.PATH ?? '';
-    return {
-      ...env,
-      [SILVERHAND_CONVERSATION_ID_ENV]: input.conversationId,
-      [SILVERHAND_AGENT_ID_ENV]: input.agentId,
-      [SILVERHAND_SERVER_URL_ENV]: input.serverUrl,
-      [SILVERHAND_AUTH_TOKEN_ENV]: input.token,
-      PATH: currentPath ? `${input.binDir}${delimiter}${currentPath}` : input.binDir,
-    };
-  }
+  // `applyProxySetting` + `withSilverhandCliEnv` deleted. Spawn env
+  // composition is now in `runtime/spawn-env.ts` via
+  // `buildAgentSpawnEnv` — same callers (only `start()`), same
+  // behavior; the helper is shared with the daemon-path bridge so
+  // env can't drift across the gated flip.
 
   /** Fetch + format pending inbox items, write one combined stdin user
    *  message, mark delivered. No-op when inbox is empty.
@@ -2600,66 +2577,11 @@ function terminalStatus(reason: AgentRunTerminalReason): AgentRunStatus {
     : 'failed';
 }
 
-function sanitizeParsedEventForBroadcast(ev: ParsedEvent): ParsedEvent {
-  if (ev.kind !== 'tool_call') return ev;
-  // The shared ParsedEvent contract types `tool_call.input` as
-  // "required but opaque" via `RequiredUnknownSchema` — z infers it
-  // as `Exclude<unknown, undefined>` = `{} | null`. The sanitizer
-  // returns `unknown` (it's a generic recursive walker); the cast
-  // re-narrows for assignment. The sanitizer never returns
-  // `undefined`, so the cast is safe at runtime.
-  return {
-    ...ev,
-    input: sanitizeRawAgentEventValue(ev.input) as {} | null,
-  };
-}
-
-function sanitizeRawAgentEventValue(
-  value: unknown,
-  depth = 0,
-  seen = new WeakSet<object>(),
-): unknown {
-  if (typeof value === 'string') return truncateRawAgentEventString(value);
-  if (
-    value === null ||
-    typeof value === 'number' ||
-    typeof value === 'boolean' ||
-    typeof value === 'undefined'
-  ) {
-    return value;
-  }
-  if (typeof value === 'bigint') return value.toString();
-  if (typeof value !== 'object') return String(value);
-  if (seen.has(value)) return '[Circular]';
-  if (depth >= RAW_AGENT_EVENT_MAX_DEPTH) return '[Truncated object]';
-
-  seen.add(value);
-  if (Array.isArray(value)) {
-    const items = value
-      .slice(0, RAW_AGENT_EVENT_ARRAY_MAX_ITEMS)
-      .map(item => sanitizeRawAgentEventValue(item, depth + 1, seen));
-    const omitted = value.length - items.length;
-    if (omitted > 0) items.push({ __truncatedItems: omitted });
-    seen.delete(value);
-    return items;
-  }
-
-  const out: Record<string, unknown> = {};
-  const entries = Object.entries(value);
-  for (const [key, entryValue] of entries.slice(0, RAW_AGENT_EVENT_OBJECT_MAX_KEYS)) {
-    out[key] = sanitizeRawAgentEventValue(entryValue, depth + 1, seen);
-  }
-  const omitted = entries.length - Object.keys(out).length;
-  if (omitted > 0) out.__truncatedKeys = omitted;
-  seen.delete(value);
-  return out;
-}
-
-function truncateRawAgentEventString(value: string): string {
-  if (value.length <= RAW_AGENT_EVENT_STRING_MAX_CHARS) return value;
-  const omitted = value.length - RAW_AGENT_EVENT_STRING_MAX_CHARS;
-  return `${value.slice(0, RAW_AGENT_EVENT_STRING_MAX_CHARS)}...<truncated ${omitted} chars>`;
-}
+// `sanitizeParsedEventForBroadcast` / `sanitizeRawAgentEventValue` /
+// `truncateRawAgentEventString` lifted to
+// `packages/backend/src/runtime/event-sanitize.ts` so the daemon-path
+// publisher (`RuntimeEventHandler`) reuses the exact same sanitizer.
+// CM imports `sanitizeParsedEventForBroadcast` from there.
 
 function trimActivitySnippet(text: string): string | undefined {
   const normalized = text.replace(/\s+/g, ' ').trim();
