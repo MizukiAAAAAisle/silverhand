@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { formatAttachmentSuffix } from '../../src/conversation-manager.js';
+import { formatAttachmentSuffix } from '../../src/runtime/stdin-format.js';
 import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
