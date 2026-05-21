@@ -230,24 +230,48 @@ describe('IntentDispatcher — runtime_* routing', () => {
     if ('error' in r) expect(r.error.code).toBe('unknown_intent');
   });
 
-  it('runtime_output_pause / _resume return successful no-op (v0)', async () => {
-    const supervisor = new FakeSupervisor({ emit: () => {} });
+  it('runtime_output_pause / _resume route through supervisor (Cindy `_YD0KJF-YAQXlcki`)', async () => {
+    // Pause on an un-started (conv, agent): supervisor returns
+    // paused=false with no emit. This proves the dispatcher actually
+    // reaches the supervisor (a v0 inline `{paused: true}` no-op
+    // would have given the wrong answer).
+    const events: import('../src/protocol.js').EventFrame[] = [];
+    const supervisor = new FakeSupervisor({
+      emit: e => events.push(e),
+    });
     const d = new IntentDispatcher({
       logger: silentLogger(),
       supervisor,
     });
-    const pause = await d.dispatch('p', 'runtime_output_pause', {
+    const pauseUnknown = await d.dispatch('p1', 'runtime_output_pause', {
+      conversation_id: 'no-such',
+      agent_id: 'no-such',
+    });
+    expect('result' in pauseUnknown).toBe(true);
+    if ('result' in pauseUnknown) {
+      expect(pauseUnknown.result).toEqual({ paused: false });
+    }
+    expect(events.filter(e => e.event === 'runtime_output_paused')).toHaveLength(0);
+
+    // Now start a runtime synchronously (no flush — fake's start
+    // returns synchronously even before the scheduled ready emit,
+    // and pauseOutput accepts any non-exited phase).
+    supervisor.start({ conversation_id: 'c1', agent_id: 'a1', options: {} });
+    const pauseLive = await d.dispatch('p2', 'runtime_output_pause', {
       conversation_id: 'c1',
       agent_id: 'a1',
     });
-    expect('result' in pause).toBe(true);
-    if ('result' in pause) expect(pause.result).toEqual({ paused: true });
-    const resume = await d.dispatch('r', 'runtime_output_resume', {
+    expect('result' in pauseLive).toBe(true);
+    if ('result' in pauseLive) expect(pauseLive.result).toEqual({ paused: true });
+    expect(events.filter(e => e.event === 'runtime_output_paused')).toHaveLength(1);
+
+    const resumeLive = await d.dispatch('r2', 'runtime_output_resume', {
       conversation_id: 'c1',
       agent_id: 'a1',
     });
-    expect('result' in resume).toBe(true);
-    if ('result' in resume) expect(resume.result).toEqual({ resumed: true });
+    expect('result' in resumeLive).toBe(true);
+    if ('result' in resumeLive) expect(resumeLive.result).toEqual({ resumed: true });
+    expect(events.filter(e => e.event === 'runtime_output_resumed')).toHaveLength(1);
   });
 
   it('status intent merges supervisor runtimes into ping-style status', async () => {

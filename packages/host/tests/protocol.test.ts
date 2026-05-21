@@ -201,6 +201,58 @@ describe('protocol — runtime_* registry', () => {
     expect(empty.success).toBe(false);
   });
 
+  it('runtime_wake REJECTS missing payload (review fix Cindy ihw5XHpjldmEc-wt)', () => {
+    // The step-0 contract says delivery_ids MUST NOT reach the daemon
+    // without an accompanying stdin payload. A bare `z.unknown()`
+    // would treat `payload` as optional; the refinement guard rejects
+    // both omission and explicit `undefined`.
+    const missing = RuntimeWakeParamsSchema.safeParse({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      delivery_ids: [1],
+      kind: 'message',
+    });
+    expect(missing.success).toBe(false);
+
+    const explicitUndef = RuntimeWakeParamsSchema.safeParse({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      delivery_ids: [1],
+      kind: 'message',
+      payload: undefined,
+    });
+    expect(explicitUndef.success).toBe(false);
+
+    // Null is a valid stream-json value (the wire is still opaque per
+    // step 1) — only undefined / missing is forbidden.
+    const nullPayload = RuntimeWakeParamsSchema.safeParse({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      delivery_ids: [1],
+      kind: 'message',
+      payload: null,
+    });
+    expect(nullPayload.success).toBe(true);
+  });
+
+  it('runtime_start.startup_delivery REJECTS missing payload (review fix Cindy ihw5XHpjldmEc-wt)', () => {
+    const missing = RuntimeStartParamsSchema.safeParse({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      options: {},
+      startup_delivery: { delivery_ids: [101] },
+    });
+    expect(missing.success).toBe(false);
+
+    const explicitUndef = RuntimeStartParamsSchema.safeParse({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      options: {},
+      startup_delivery: { delivery_ids: [101], payload: undefined },
+    });
+    expect(explicitUndef.success).toBe(false);
+  });
+
   it('runtime_wake result is all-or-nothing — success carries delivery_ids back', () => {
     const success = RuntimeWakeResultSchema.safeParse({
       delivered: true,

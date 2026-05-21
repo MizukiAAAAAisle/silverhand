@@ -246,6 +246,37 @@ describe('OutputBackpressure — drop window', () => {
       .filter(p => p.event === 'runtime_output_dropped');
     expect(summaries).toHaveLength(2);
   });
+
+  it('invokes onSummaryEvent with the synthesized frame before the socket write (§3.4 event log path)', () => {
+    // Cindy `POiN_oGtyDjr3Sni` note — the summary frame used to go
+    // direct to socket.write, bypassing the structured event log.
+    // The new onSummaryEvent hook lets the server route it through
+    // logEvent so runtime_output_dropped shows up in the event log
+    // like every other broadcast event.
+    const captured: EventFrame[] = [];
+    const bp = new OutputBackpressure({
+      highWaterBytes: 64,
+      lowWaterBytes: 32,
+      now: () => 1_700_000_000_000,
+      onSummaryEvent: ev => captured.push(ev),
+    });
+    const sock = makeFakeSocket();
+    bp.emit(asSocket(sock), outputFrame(60));
+    sock.writableNeedDrain = true;
+    bp.emit(asSocket(sock), outputFrame(60));
+    bp.emit(asSocket(sock), outputFrame(60));
+    sock.writableNeedDrain = false;
+    sock.__ack(1);
+    expect(captured).toHaveLength(1);
+    const ev = captured[0]!;
+    if (ev.event !== 'runtime_output_dropped') {
+      throw new Error('expected runtime_output_dropped');
+    }
+    expect(ev.conversation_id).toBe('c1');
+    expect(ev.agent_id).toBe('a1');
+    expect(ev.dropped_count).toBe(2);
+    expect(ev.since_ts).toBe(1_700_000_000_000);
+  });
 });
 
 describe('OutputBackpressure — per-key isolation', () => {

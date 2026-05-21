@@ -150,6 +150,8 @@ Backend logic (PR-2 v0): never call pause. The protocol exists but the backend s
 
 This satisfies the contract ("we have a primitive for back-pressure") without paying for it in the common case.
 
+**Daemon routing (locked by Cindy `_YD0KJF-YAQXlcki`):** even though v0 backend never calls pause/resume, the dispatcher MUST route both intents through the `Supervisor` interface (`Supervisor.pauseOutput` / `Supervisor.resumeOutput`) rather than answering inline with a no-op `{ paused: true }`. Reason: when step 2 ships the real supervisor and wires actual stdout-pump gating, the protocol boundary stays unchanged — no dispatcher rewiring, no test churn. The fake supervisor implements both methods today: on a live (conv, agent) it flips an `output_paused` flag and emits the `runtime_output_paused` / `_resumed` ack event; on an unknown or exited runtime it returns `{ paused: false }` / `{ resumed: false }` and emits nothing.
+
 #### 2.2.2 Daemon-side guardrail (always on)
 
 Independently of backend pause/resume, the daemon enforces a **per-(conv, agent) outgoing buffer cap** at the socket-write layer.
@@ -157,7 +159,7 @@ Independently of backend pause/resume, the daemon enforces a **per-(conv, agent)
 **Scope (critical, locked by shiki `kh7mQQIUi8WxFoPX`)**: this buffer counts **only un-flushed bytes** — chunks that are queued but the daemon has not yet been able to hand off to the kernel + Node socket buffer (i.e. the socket reported `writableNeedDrain` and the chunk is still in our in-process queue). Once a chunk is written and the socket's `drain` event fires (kernel + Node side both accepted it), the chunk is no longer counted. **It is NOT a session-cumulative byte counter.** Under normal flow (backend reading at line rate), pending stays near 0 and 4 MiB is never approached; the cap only matters when backend stalls and agent keeps producing output.
 
 - If the socket's `writableNeedDrain` returns true AND the per-stream pending buffer crosses 4 MiB:
-  - drop the oldest chunks until the buffer is back under 2 MiB;
+  - drop incoming chunks (each new `runtime_output` event for that key) until the buffer recovers under 2 MiB; the kernel still drains the chunks already handed to it via `socket.write()`. Functionally equivalent to "drop the oldest queued chunks" — both lose the same number of bytes per window — but avoids carrying an app-level FIFO that would itself need bounding (drop policy locked by Cindy `POiN_oGtyDjr3Sni`);
   - emit one `runtime_output_dropped` event with `{ dropped_count, bytes_dropped }`;
   - log it.
 
@@ -242,7 +244,7 @@ The daemon's JSONL log (written under the app's configured silverhand-dir / `log
 **MUST be logged** (one JSONL line per event):
 
 - intent lifecycle: `{ ts, level, kind: 'intent', intent, request_id, conv_id?, agent_id?, status: 'received'|'ok'|'error', error_code?, duration_ms }`
-- emitted event: `{ ts, level, kind: 'event', event, conv_id?, agent_id?, pid?, delivery_ids?, dropped_count?, bytes_dropped? }`
+- emitted event: `{ ts, level, kind: 'event', event, conv_id?, agent_id?, pid?, delivery_ids?, dropped_count?, bytes_dropped? }` — **every** broadcast event the daemon puts on the wire emits one of these lines, including per-socket `runtime_output_dropped` summaries and the lifecycle `shutting_down` frame. Routing is uniform: server `broadcast()` and `OutputBackpressure.emitSummary` both feed `logEvent` (Cindy `POiN_oGtyDjr3Sni` note).
 - process lifecycle: `{ ts, level, kind: 'process', action: 'spawn'|'exit'|'sigterm'|'sigkill'|'reclaim', conv_id?, agent_id?, pid, exit_code?, cmdline_match? }`
 - daemon lifecycle: `{ ts, level, kind: 'daemon', action: 'boot'|'shutting_down'|'pid_claim'|'pid_reclaim', pid, socket_path, pid_file_path, conflict_pid? }`
 - backpressure: `{ ts, level, kind: 'backpressure', conv_id, agent_id, action: 'dropped'|'paused'|'resumed', dropped_count?, bytes_dropped?, buffer_bytes }`

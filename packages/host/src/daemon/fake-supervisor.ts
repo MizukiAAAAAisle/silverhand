@@ -53,6 +53,10 @@ import type {
   RuntimeClearSessionResult,
   RuntimeCloseActivityLogParams,
   RuntimeCloseActivityLogResult,
+  RuntimeOutputPauseParams,
+  RuntimeOutputPauseResult,
+  RuntimeOutputResumeParams,
+  RuntimeOutputResumeResult,
   RuntimeStartParams,
   RuntimeStartResult,
   RuntimeStateDto,
@@ -81,6 +85,11 @@ interface FakeRuntime {
   phase: FakeSupervisorPhase;
   started_at: number;
   pending_startup_delivery_ids?: number[];
+  /** Output flow-control flag. Set by `pauseOutput`, cleared by
+   *  `resumeOutput`. The fake doesn't gate any actual stdout pump on
+   *  this — step 2's real supervisor will. We track it here so
+   *  duplicate pause/resume calls don't re-emit ack events. */
+  output_paused: boolean;
 }
 
 export interface FakeSupervisorOptions {
@@ -159,8 +168,14 @@ export class FakeSupervisor {
       phase: params.startup_delivery ? 'startup_pending' : 'spawning',
       started_at: startedAt,
       pending_startup_delivery_ids: params.startup_delivery?.delivery_ids,
+      output_paused: false,
     };
     this.runtimes.set(k, rt);
+    // Initial phase emit — review fix Cindy `ihw5XHpjldmEc-wt`. Step 1
+    // locks the protocol event surface, so the fake MUST emit the
+    // declared `runtime_state` transitions; tests / e2e + future
+    // integrations rely on them.
+    this.emitState(rt);
 
     if (params.startup_delivery) {
       // Startup-pending path: simulate driver consuming the batch
@@ -193,6 +208,7 @@ export class FakeSupervisor {
       return { stopped: false, exit_code: null };
     }
     rt.phase = 'draining';
+    this.emitState(rt);
     const exitCode = params.mode === 'hard' ? 137 : 0;
     this.scheduleExit(rt, exitCode, /* intentional */ true);
     return { stopped: true, exit_code: exitCode };
@@ -296,6 +312,50 @@ export class FakeSupervisor {
     return { flushed: true };
   }
 
+  // ── runtime_output_pause / runtime_output_resume ───────────────
+  //
+  // Cindy `_YD0KJF-YAQXlcki` requires these to flow through the
+  // Supervisor interface (NOT inline dispatcher emit) so step 2's
+  // real flow-control wiring doesn't reshape the protocol boundary.
+  //
+  // Semantics:
+  //  - On unknown / exited (conv, agent): return paused=false
+  //    (resumed=false) and emit nothing. Backend snapshot reconciles
+  //    via the result, no event is needed.
+  //  - On a live runtime in a non-paused state: flip the flag, emit
+  //    `runtime_output_paused`, return paused=true.
+  //  - On a live runtime that's already paused: return paused=true
+  //    (idempotent) and skip the emit so the wire isn't spammed.
+  //  - resume() is the mirror.
+
+  pauseOutput(params: RuntimeOutputPauseParams): RuntimeOutputPauseResult {
+    const k = key(params.conversation_id, params.agent_id);
+    const rt = this.runtimes.get(k);
+    if (!rt || rt.phase === 'exited') return { paused: false };
+    if (rt.output_paused) return { paused: true };
+    rt.output_paused = true;
+    this.emit({
+      event: 'runtime_output_paused',
+      conversation_id: rt.conversation_id,
+      agent_id: rt.agent_id,
+    });
+    return { paused: true };
+  }
+
+  resumeOutput(params: RuntimeOutputResumeParams): RuntimeOutputResumeResult {
+    const k = key(params.conversation_id, params.agent_id);
+    const rt = this.runtimes.get(k);
+    if (!rt || rt.phase === 'exited') return { resumed: false };
+    if (!rt.output_paused) return { resumed: true };
+    rt.output_paused = false;
+    this.emit({
+      event: 'runtime_output_resumed',
+      conversation_id: rt.conversation_id,
+      agent_id: rt.agent_id,
+    });
+    return { resumed: true };
+  }
+
   // ── private scheduling helpers ─────────────────────────────────
 
   /**
@@ -316,6 +376,7 @@ export class FakeSupervisor {
       if (this.failStartupDelivery) {
         rt.phase = 'exited';
         rt.pending_startup_delivery_ids = undefined;
+        this.emitState(rt, /* terminalReason */ 'crashed');
         this.emit({
           event: 'runtime_startup_delivery_failed',
           conversation_id: rt.conversation_id,
@@ -337,6 +398,7 @@ export class FakeSupervisor {
       // Happy path: consumed → ready → ready_for_drain.
       rt.phase = 'ready';
       rt.pending_startup_delivery_ids = undefined;
+      this.emitState(rt);
       this.emit({
         event: 'runtime_startup_delivery_consumed',
         conversation_id: rt.conversation_id,
@@ -359,6 +421,7 @@ export class FakeSupervisor {
       // moved us already.
       if (rt.phase !== 'spawning') return;
       rt.phase = 'ready';
+      this.emitState(rt);
       this.emit({
         event: 'runtime_ready_for_drain',
         conversation_id: rt.conversation_id,
@@ -376,6 +439,7 @@ export class FakeSupervisor {
     this.schedule(() => {
       if (rt.phase === 'exited') return;
       rt.phase = 'exited';
+      this.emitState(rt, intentional ? 'stopped' : 'crashed');
       this.emit({
         event: 'runtime_exit',
         conversation_id: rt.conversation_id,
@@ -384,6 +448,56 @@ export class FakeSupervisor {
         intentional,
         ts: this.now(),
       });
+    });
+  }
+
+  /**
+   * Build + emit a `runtime_state` event reflecting `rt`'s current
+   * phase. Phase → `AgentRunStatus` mapping (deliberately collapses
+   * ConversationManager's richer state machine — the fake is for
+   * protocol-surface coverage only; step 2 wires the real CM-derived
+   * state on the wire):
+   *
+   *   - `spawning`         → `starting`
+   *   - `startup_pending`  → `starting`
+   *   - `ready` / `idle`   → `idle`
+   *   - `draining`         → `idle`  (terminal in flight)
+   *   - `exited`           → `idle`  with the supplied `terminalReason`
+   *
+   * `runId` is synthesized from pid + started_at so it stays stable
+   * across phase emits within one runtime lifetime.
+   */
+  private emitState(
+    rt: FakeRuntime,
+    terminalReason?:
+      | 'replied'
+      | 'turn_ended'
+      | 'replaced'
+      | 'stopped'
+      | 'crashed'
+      | 'timeout'
+      | 'conversation_closed',
+  ): void {
+    const status: 'starting' | 'idle' | 'failed' =
+      rt.phase === 'spawning' || rt.phase === 'startup_pending'
+        ? 'starting'
+        : 'idle';
+    const ts = this.now();
+    this.emit({
+      event: 'runtime_state',
+      conversation_id: rt.conversation_id,
+      agent_id: rt.agent_id,
+      state: {
+        runId: `fake-${rt.pid}-${rt.started_at}`,
+        agentId: rt.agent_id,
+        conversationId: rt.conversation_id,
+        status,
+        startedAt: rt.started_at,
+        updatedAt: ts,
+        lastActivityAt: ts,
+        ...(terminalReason ? { terminalReason } : {}),
+      },
+      ts,
     });
   }
 

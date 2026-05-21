@@ -196,6 +196,8 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
     clearSession: async () => ({ cleared: true }),
     stopAll: async () => ({ stopped_count: 0 }),
     closeActivityLog: async () => ({ flushed: true }),
+    pauseOutput: async () => ({ paused: true }),
+    resumeOutput: async () => ({ resumed: true }),
   };
 
   it('runtime_wake dispatch logs received + ok lines that omit `payload`', async () => {

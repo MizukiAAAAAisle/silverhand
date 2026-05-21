@@ -21,7 +21,7 @@
  *    same broadcast events.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDaemon, type RunningDaemon } from '../src/daemon/index.js';
@@ -280,6 +280,185 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
       expect(has(evA)).toBe(true);
       expect(has(evB)).toBe(true);
     }, { timeout: 1000 });
+  });
+
+  it('runtime_state events stream through subscribe across the start/stop lifecycle', async () => {
+    // Cindy `POiN_oGtyDjr3Sni` blocker 3: step 1 locks the protocol
+    // event surface, so the fake supervisor MUST emit `runtime_state`
+    // on every phase transition AND that emission must reach a
+    // subscribed HostClient through the real wire.
+    const f = await setupFixture();
+    fixtures.push(f);
+    const client = new HostClient({ socketPath: f.socketPath });
+    clients.push(client);
+    await client.connect();
+    const events: EventFrame[] = [];
+    client.subscribe(e => events.push(e));
+
+    await client.runtimeStart({
+      conversation_id: 'c-state',
+      agent_id: 'ag-state',
+      options: {},
+    });
+    // Wait for ready so we know both starting + idle states have been
+    // emitted (FakeSupervisor emits state(starting) on start() and
+    // state(idle) on the scheduled ready transition).
+    await waitForEvent(
+      events,
+      (e): e is Extract<EventFrame, { event: 'runtime_ready_for_drain' }> =>
+        e.event === 'runtime_ready_for_drain' && e.conversation_id === 'c-state',
+    );
+    const stateEvents = events.filter(
+      (e): e is Extract<EventFrame, { event: 'runtime_state' }> =>
+        e.event === 'runtime_state' && e.conversation_id === 'c-state',
+    );
+    expect(stateEvents).toHaveLength(2);
+    expect(stateEvents[0]?.state.status).toBe('starting');
+    expect(stateEvents[1]?.state.status).toBe('idle');
+    // runId is stable across emits within one runtime lifetime so the
+    // backend can correlate the wire transitions to a single run.
+    expect(stateEvents[0]?.state.runId).toBe(stateEvents[1]?.state.runId);
+
+    await client.runtimeStop({
+      conversation_id: 'c-state',
+      agent_id: 'ag-state',
+      mode: 'soft',
+    });
+    await waitForEvent(
+      events,
+      (e): e is Extract<EventFrame, { event: 'runtime_exit' }> =>
+        e.event === 'runtime_exit' && e.conversation_id === 'c-state',
+    );
+    const final = events.filter(
+      (e): e is Extract<EventFrame, { event: 'runtime_state' }> =>
+        e.event === 'runtime_state' && e.conversation_id === 'c-state',
+    );
+    // Two more state emits appear: draining (still status=idle, no
+    // terminalReason) and exited (status=idle, terminalReason='stopped').
+    expect(final).toHaveLength(4);
+    expect(final[3]?.state.terminalReason).toBe('stopped');
+  });
+
+  it('runtime_state on startup_delivery failure carries terminalReason=crashed', async () => {
+    // Failure path of blocker 3: the terminal `runtime_state` line for
+    // an init-failed runtime must encode `terminalReason: 'crashed'`
+    // so backend snapshots reconcile to the correct AgentRunState.
+    const f = await setupFixture({ failStartupDelivery: true });
+    fixtures.push(f);
+    const client = new HostClient({ socketPath: f.socketPath });
+    clients.push(client);
+    await client.connect();
+    const events: EventFrame[] = [];
+    client.subscribe(e => events.push(e));
+
+    await client.runtimeStart({
+      conversation_id: 'c-crash',
+      agent_id: 'ag-crash',
+      options: {},
+      startup_delivery: { delivery_ids: [1], payload: '{}\n' },
+    });
+    await waitForEvent(
+      events,
+      (e): e is Extract<EventFrame, { event: 'runtime_exit' }> =>
+        e.event === 'runtime_exit' && e.conversation_id === 'c-crash',
+    );
+    const stateEvents = events.filter(
+      (e): e is Extract<EventFrame, { event: 'runtime_state' }> =>
+        e.event === 'runtime_state' && e.conversation_id === 'c-crash',
+    );
+    // starting (start()) + crashed terminal (scheduleStartupSettle fail).
+    expect(stateEvents).toHaveLength(2);
+    expect(stateEvents[0]?.state.status).toBe('starting');
+    expect(stateEvents[1]?.state.terminalReason).toBe('crashed');
+  });
+
+  it('runtime_output_pause / runtime_output_resume route through supervisor and emit ack events', async () => {
+    // Cindy `_YD0KJF-YAQXlcki` blocker 4: pause/resume must flow
+    // through the Supervisor interface (NOT inline dispatcher emit)
+    // AND emit `runtime_output_paused` / `_resumed` so subscribers
+    // observe the flow-control transition.
+    const f = await setupFixture();
+    fixtures.push(f);
+    const client = new HostClient({ socketPath: f.socketPath });
+    clients.push(client);
+    await client.connect();
+    const events: EventFrame[] = [];
+    client.subscribe(e => events.push(e));
+
+    await client.runtimeStart({
+      conversation_id: 'c-flow',
+      agent_id: 'ag-flow',
+      options: {},
+    });
+    await waitForEvent(
+      events,
+      (e): e is Extract<EventFrame, { event: 'runtime_ready_for_drain' }> =>
+        e.event === 'runtime_ready_for_drain' && e.conversation_id === 'c-flow',
+    );
+
+    const pause = await client.call('runtime_output_pause', {
+      conversation_id: 'c-flow',
+      agent_id: 'ag-flow',
+    });
+    expect(pause).toEqual({ paused: true });
+    await waitForEvent(
+      events,
+      (e): e is Extract<EventFrame, { event: 'runtime_output_paused' }> =>
+        e.event === 'runtime_output_paused' && e.conversation_id === 'c-flow',
+    );
+
+    const resume = await client.call('runtime_output_resume', {
+      conversation_id: 'c-flow',
+      agent_id: 'ag-flow',
+    });
+    expect(resume).toEqual({ resumed: true });
+    await waitForEvent(
+      events,
+      (e): e is Extract<EventFrame, { event: 'runtime_output_resumed' }> =>
+        e.event === 'runtime_output_resumed' && e.conversation_id === 'c-flow',
+    );
+  });
+
+  it('runtime_output_pause on an unknown runtime returns paused=false with no event', async () => {
+    const f = await setupFixture();
+    fixtures.push(f);
+    const client = new HostClient({ socketPath: f.socketPath });
+    clients.push(client);
+    await client.connect();
+    const events: EventFrame[] = [];
+    client.subscribe(e => events.push(e));
+
+    const r = await client.call('runtime_output_pause', {
+      conversation_id: 'no-such-conv',
+      agent_id: 'no-such-agent',
+    });
+    expect(r).toEqual({ paused: false });
+    // Settle the event loop briefly; assert no paused event arrived.
+    await new Promise(res => setImmediate(res));
+    expect(
+      events.filter(e => e.event === 'runtime_output_paused'),
+    ).toHaveLength(0);
+  });
+
+  it('shutting_down event lands as a `kind: "event"` log line (Cindy `POiN_oGtyDjr3Sni` note)', async () => {
+    // Previously DaemonServer.stop() wrote the shutting_down frame
+    // directly to each socket, bypassing logEvent. The fix routes it
+    // through `broadcast()` which calls logEvent. Verify by stopping
+    // a real daemon and grepping its JSONL log for the kind=event line.
+    const f = await setupFixture();
+    // Don't push to fixtures[] — we stop manually below, then clean.
+    const logPath = f.daemon.logger.filePath;
+    await f.daemon.stop('test_shutting_down_log').catch(() => {});
+    const raw = readFileSync(logPath, 'utf8');
+    const lines = raw
+      .split('\n')
+      .filter(l => l.length > 0)
+      .map(l => JSON.parse(l) as Record<string, unknown>);
+    const evLine = lines.find(
+      l => l.kind === 'event' && l.event === 'shutting_down',
+    );
+    expect(evLine).toBeDefined();
+    rmSync(f.dir, { recursive: true, force: true });
   });
 
   it('runtime_inject_env returns unknown_intent (removed in v0)', async () => {

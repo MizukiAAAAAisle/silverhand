@@ -89,6 +89,22 @@ export class DaemonServer {
           bytes_dropped: entry.bytes_dropped,
         });
       }),
+      // Cindy `POiN_oGtyDjr3Sni` note — runtime_output_dropped used to
+      // bypass logEvent because OutputBackpressure wrote it directly
+      // to the socket from emitSummary. Wire the summary through the
+      // structured event log so every emitted event (even per-socket
+      // ones) shows up alongside broadcast events.
+      onSummaryEvent: opts.backpressure?.onSummaryEvent ?? (event => {
+        logEvent(this.logger, {
+          event: event.event,
+          conv_id: 'conversation_id' in event ? event.conversation_id : undefined,
+          agent_id: 'agent_id' in event ? event.agent_id : undefined,
+          dropped_count:
+            'dropped_count' in event ? event.dropped_count : undefined,
+          bytes_dropped:
+            'bytes_dropped' in event ? event.bytes_dropped : undefined,
+        });
+      }),
     });
     this.server = new Server(socket => this.handleConnection(socket));
   }
@@ -145,14 +161,10 @@ export class DaemonServer {
   async stop(reason: string): Promise<void> {
     this.dispatcher.markShuttingDown();
     const event: EventFrame = { event: 'shutting_down', reason };
-    const encoded = encodeFrame(event);
-    for (const socket of this.liveSockets) {
-      try {
-        socket.write(encoded);
-      } catch {
-        /* peer already gone — ignore */
-      }
-    }
+    // Route through broadcast so the §3.4 event log line is emitted
+    // (Cindy `POiN_oGtyDjr3Sni` note: previously this used a direct
+    // socket.write loop and bypassed logEvent).
+    this.broadcast(event);
     await new Promise<void>(resolve => {
       this.server.close(() => resolve());
       for (const socket of this.liveSockets) {

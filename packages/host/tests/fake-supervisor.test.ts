@@ -47,7 +47,7 @@ function makeHarness(
 }
 
 describe('FakeSupervisor — start without startup_delivery', () => {
-  it('transitions spawning → ready and emits runtime_ready_for_drain', () => {
+  it('transitions spawning → ready and emits runtime_state + runtime_ready_for_drain', () => {
     const h = makeHarness();
     const r = h.supervisor.start({
       conversation_id: 'c1',
@@ -59,20 +59,28 @@ describe('FakeSupervisor — start without startup_delivery', () => {
     expect(h.supervisor.__getPhase('c1', 'a1')).toBe<FakeSupervisorPhase>(
       'spawning',
     );
-    expect(h.events).toEqual([]);
+    // Initial runtime_state(starting) is emitted synchronously inside
+    // start() so backend snapshot reconciles never see a "missing
+    // initial state" gap.
+    expect(h.events.map(e => e.event)).toEqual(['runtime_state']);
+    const initial = h.events[0];
+    if (!initial || initial.event !== 'runtime_state') throw new Error('shape');
+    expect(initial.state.status).toBe('starting');
 
     h.flush();
     expect(h.supervisor.__getPhase('c1', 'a1')).toBe<FakeSupervisorPhase>(
       'ready',
     );
-    expect(h.events).toEqual([
-      {
-        event: 'runtime_ready_for_drain',
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        ts: 1_000,
-      },
+    // Phase change to ready emits another runtime_state(idle) before
+    // ready_for_drain.
+    expect(h.events.map(e => e.event)).toEqual([
+      'runtime_state',
+      'runtime_state',
+      'runtime_ready_for_drain',
     ]);
+    const ready = h.events[1];
+    if (!ready || ready.event !== 'runtime_state') throw new Error('shape');
+    expect(ready.state.status).toBe('idle');
   });
 
   it('is idempotent on (conv, agent) — second start returns same pid + no double-spawn', () => {
@@ -100,7 +108,7 @@ describe('FakeSupervisor — start without startup_delivery', () => {
 });
 
 describe('FakeSupervisor — start with startup_delivery (happy path)', () => {
-  it('emits consumed → ready_for_drain and pins delivery_ids verbatim', () => {
+  it('emits state(starting) → consumed → state(idle) → ready_for_drain and pins delivery_ids verbatim', () => {
     const h = makeHarness();
     const r = h.supervisor.start({
       conversation_id: 'c1',
@@ -115,16 +123,19 @@ describe('FakeSupervisor — start with startup_delivery (happy path)', () => {
     expect(h.supervisor.__getPhase('c1', 'a1')).toBe<FakeSupervisorPhase>(
       'startup_pending',
     );
+    expect(h.events.map(e => e.event)).toEqual(['runtime_state']);
 
     h.flush();
     expect(h.supervisor.__getPhase('c1', 'a1')).toBe<FakeSupervisorPhase>(
       'ready',
     );
     expect(h.events.map(e => e.event)).toEqual([
+      'runtime_state',
+      'runtime_state',
       'runtime_startup_delivery_consumed',
       'runtime_ready_for_drain',
     ]);
-    const consumed = h.events[0];
+    const consumed = h.events[2];
     if (!consumed || consumed.event !== 'runtime_startup_delivery_consumed') {
       throw new Error('discriminant mismatch');
     }
@@ -133,7 +144,7 @@ describe('FakeSupervisor — start with startup_delivery (happy path)', () => {
 });
 
 describe('FakeSupervisor — start with startup_delivery (failure path)', () => {
-  it('emits failed + exit; runtime is left in exited state; no ready_for_drain', () => {
+  it('emits state + failed + exit; runtime is left in exited state; no ready_for_drain', () => {
     const h = makeHarness({ failStartupDelivery: true });
     h.supervisor.start({
       conversation_id: 'c1',
@@ -146,10 +157,17 @@ describe('FakeSupervisor — start with startup_delivery (failure path)', () => 
       'exited',
     );
     expect(h.events.map(e => e.event)).toEqual([
+      'runtime_state', // initial starting
+      'runtime_state', // exited (terminalReason=crashed)
       'runtime_startup_delivery_failed',
       'runtime_exit',
     ]);
-    const failed = h.events[0];
+    // Terminal state line carries the terminalReason for the exit.
+    const terminal = h.events[1];
+    if (!terminal || terminal.event !== 'runtime_state') throw new Error('shape');
+    expect(terminal.state.terminalReason).toBe('crashed');
+
+    const failed = h.events[2];
     if (!failed || failed.event !== 'runtime_startup_delivery_failed') {
       throw new Error('discriminant mismatch');
     }
@@ -433,5 +451,90 @@ describe('FakeSupervisor — closeActivityLog', () => {
   it('returns flushed=true (fake holds no log file)', () => {
     const h = makeHarness();
     expect(h.supervisor.closeActivityLog({})).toEqual({ flushed: true });
+  });
+});
+
+describe('FakeSupervisor — pauseOutput / resumeOutput', () => {
+  // Cindy `_YD0KJF-YAQXlcki` requires pause/resume to flow through
+  // the Supervisor interface (not inline dispatcher emit) AND to emit
+  // `runtime_output_paused` / `_resumed` ack events on the wire.
+  it('on a live runtime: emits paused, then resumed; idempotent on repeats', () => {
+    const h = makeHarness();
+    h.supervisor.start({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      options: {},
+    });
+    h.flush();
+    const eventsBefore = h.events.length;
+
+    const r1 = h.supervisor.pauseOutput({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+    });
+    expect(r1).toEqual({ paused: true });
+    expect(h.events.slice(eventsBefore).map(e => e.event)).toEqual([
+      'runtime_output_paused',
+    ]);
+
+    // Idempotent: repeat pause returns paused=true but does NOT emit
+    // a second event (avoids spamming the wire).
+    const r2 = h.supervisor.pauseOutput({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+    });
+    expect(r2).toEqual({ paused: true });
+    expect(h.events.slice(eventsBefore).map(e => e.event)).toEqual([
+      'runtime_output_paused',
+    ]);
+
+    const r3 = h.supervisor.resumeOutput({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+    });
+    expect(r3).toEqual({ resumed: true });
+    expect(h.events.slice(eventsBefore).map(e => e.event)).toEqual([
+      'runtime_output_paused',
+      'runtime_output_resumed',
+    ]);
+
+    // Repeat resume also idempotent — no second resumed event.
+    const r4 = h.supervisor.resumeOutput({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+    });
+    expect(r4).toEqual({ resumed: true });
+    expect(h.events.slice(eventsBefore).map(e => e.event)).toEqual([
+      'runtime_output_paused',
+      'runtime_output_resumed',
+    ]);
+  });
+
+  it('on an unknown (conv, agent): returns paused=false / resumed=false with no emit', () => {
+    const h = makeHarness();
+    const eventsBefore = h.events.length;
+    expect(
+      h.supervisor.pauseOutput({ conversation_id: 'no-such', agent_id: 'no-such' }),
+    ).toEqual({ paused: false });
+    expect(
+      h.supervisor.resumeOutput({ conversation_id: 'no-such', agent_id: 'no-such' }),
+    ).toEqual({ resumed: false });
+    expect(h.events.length).toBe(eventsBefore);
+  });
+
+  it('on an exited runtime: returns paused=false / resumed=false with no emit', () => {
+    const h = makeHarness();
+    h.supervisor.start({ conversation_id: 'c1', agent_id: 'a1', options: {} });
+    h.flush();
+    h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    h.flush();
+    const eventsBefore = h.events.length;
+    expect(
+      h.supervisor.pauseOutput({ conversation_id: 'c1', agent_id: 'a1' }),
+    ).toEqual({ paused: false });
+    expect(
+      h.supervisor.resumeOutput({ conversation_id: 'c1', agent_id: 'a1' }),
+    ).toEqual({ resumed: false });
+    expect(h.events.length).toBe(eventsBefore);
   });
 });

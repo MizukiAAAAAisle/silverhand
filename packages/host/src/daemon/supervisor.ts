@@ -22,6 +22,10 @@ import type {
   RuntimeClearSessionResult,
   RuntimeCloseActivityLogParams,
   RuntimeCloseActivityLogResult,
+  RuntimeOutputPauseParams,
+  RuntimeOutputPauseResult,
+  RuntimeOutputResumeParams,
+  RuntimeOutputResumeResult,
   RuntimeStartParams,
   RuntimeStartResult,
   RuntimeStatusParams,
@@ -50,4 +54,21 @@ export interface Supervisor {
   closeActivityLog(
     params: RuntimeCloseActivityLogParams,
   ): RuntimeCloseActivityLogResult | Promise<RuntimeCloseActivityLogResult>;
+  /**
+   * Pause/resume runtime_output streaming for one (conv, agent). v0
+   * backend never calls these, but the protocol surface is locked in
+   * step 1: when called, the supervisor must emit
+   * `runtime_output_paused` / `runtime_output_resumed` so subscribers
+   * see the flow-control transition. Step 2's real supervisor will
+   * gate stdout pumps on this state; the fake just toggles a flag and
+   * emits the ack event. Cindy `_YD0KJF-YAQXlcki` requires this to
+   * route through the Supervisor interface (NOT inline dispatcher
+   * emit) so the protocol boundary doesn't reshape in step 2.
+   */
+  pauseOutput(
+    params: RuntimeOutputPauseParams,
+  ): RuntimeOutputPauseResult | Promise<RuntimeOutputPauseResult>;
+  resumeOutput(
+    params: RuntimeOutputResumeParams,
+  ): RuntimeOutputResumeResult | Promise<RuntimeOutputResumeResult>;
 }

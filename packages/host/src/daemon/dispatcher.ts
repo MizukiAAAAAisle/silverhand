@@ -32,6 +32,8 @@ import {
   type ResponseFrame,
   type RuntimeClearSessionParams,
   type RuntimeCloseActivityLogParams,
+  type RuntimeOutputPauseParams,
+  type RuntimeOutputResumeParams,
   type RuntimeStartParams,
   type RuntimeStatusParams,
   type RuntimeStopAllParams,
@@ -285,16 +287,22 @@ export class IntentDispatcher {
         return this.requireSupervisor().closeActivityLog(
           params as RuntimeCloseActivityLogParams,
         );
-      // ── output flow control (v0 unused, protocol present) ───────
+      // ── output flow control ─────────────────────────────────────
+      // Cindy `_YD0KJF-YAQXlcki`: route through the Supervisor
+      // interface so step 2's real flow-control wiring slots in
+      // without reshaping the protocol boundary. The supervisor is
+      // also where the `runtime_output_paused` / `_resumed` ack event
+      // is emitted (FakeSupervisor.pauseOutput emits it directly via
+      // its emit channel; the real supervisor will gate stdout pumps
+      // and emit at the same point).
       case 'runtime_output_pause':
-        // v0: backend never calls these (per design doc §2.2 — the
-        // protocol is reserved). When step 2 wires a real
-        // supervisor that supports flow control we'll route to it
-        // here; for now we return a successful no-op so the
-        // contract is honored without daemon-side enforcement.
-        return { paused: true };
+        return this.requireSupervisor().pauseOutput(
+          params as RuntimeOutputPauseParams,
+        );
       case 'runtime_output_resume':
-        return { resumed: true };
+        return this.requireSupervisor().resumeOutput(
+          params as RuntimeOutputResumeParams,
+        );
     }
   }
 

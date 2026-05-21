@@ -116,13 +116,24 @@ export type EchoResult = z.infer<typeof EchoResultSchema>;
  * `runtime_start.startup_delivery`. It's the same shape CM today
  * formats inbox rows into and writes to claude-family stdin.
  *
- * PR-2 step 1: shape held opaque (`unknown`) on the wire because the
- * daemon never inspects it — it just buffers + writes to stdin per
- * driver semantics. Step 2 moves the hydration logic into a typed
- * helper inside backend; the daemon contract is "I write whatever
- * bytes you give me on this field".
+ * PR-2 step 1: shape held opaque on the wire because the daemon never
+ * inspects it — it just buffers + writes to stdin per driver
+ * semantics. Step 2 will type the hydration site inside backend
+ * separately; the daemon's contract stays "I write whatever bytes you
+ * give me on this field".
+ *
+ * Required-but-opaque (review fix per Cindy `ihw5XHpjldmEc-wt`): a
+ * bare `z.unknown()` lets the field be omitted entirely (zod treats
+ * `unknown` at object properties as optional), which violated the
+ * step-0 contract — `delivery_ids` MUST NOT reach the daemon without
+ * an accompanying stdin payload. The refinement rejects an absent or
+ * `undefined` value while still leaving the value's *shape* opaque
+ * (step 2 will tighten that, per Cindy `_YD0KJF-YAQXlcki`).
  */
-export const StreamJsonPayloadSchema = z.unknown();
+export const StreamJsonPayloadSchema = z.unknown().refine(
+  v => v !== undefined,
+  { message: 'payload is required (stream-json bytes must be present)' },
+);
 export type StreamJsonPayload = z.infer<typeof StreamJsonPayloadSchema>;
 
 /**
