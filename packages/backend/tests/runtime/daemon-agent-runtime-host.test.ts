@@ -1491,6 +1491,219 @@ describe('DaemonAgentRuntimeHost — clearSession', () => {
       fix.cleanup();
     }
   });
+
+  // B4 (Cindy `usjxj8AxX4AvJ5E-`): audit row must be delivered to every
+  // OTHER agent in the conversation via `deliverMessage`, matching CM's
+  // `publishAndDeliverSessionClearedAudit` semantics. The cleared agent
+  // does NOT receive its own audit. Per-delivery failures only warn —
+  // clearSession as a whole still succeeds.
+  it('delivers audit message to peer agents via deliverMessage; cleared agent does not get own', async () => {
+    const { db, viewerUserId, localHostId } = openTestDb();
+    const { silverhandDir, workspacesRoot, cleanup } = makeTempSilverhandDir();
+    const conversations = new RealConversationRepo(db);
+    const agents = new AgentRepo(db);
+    const workspaces = new WorkspaceRepo(db, { workspacesRoot });
+    const messages = new MessageRepo(db);
+    const inboxes = new ConversationInboxRepo(db);
+    const users = new UserRepo(db);
+    const settings = new SettingsRepo(db);
+
+    try {
+      const ws = workspaces.insert({
+        name: 'ws-clear-2',
+        description: null,
+        workspacePath: `${workspacesRoot}/ws-clear-2`,
+        workspaceHostId: localHostId,
+      });
+      const cleared = agents.create(
+        { name: 'agent-cleared', runtime: 'claude', host_id: localHostId },
+        localHostId,
+        viewerUserId,
+      );
+      const peer = agents.create(
+        { name: 'agent-peer', runtime: 'claude', host_id: localHostId },
+        localHostId,
+        viewerUserId,
+      );
+      const channel = conversations.insertChannel({
+        workspaceId: ws.id,
+        workspacePath: ws.workspace_path,
+        title: 'ws-clear-2',
+        spawnedByAgentId: null,
+      });
+      conversations.addAgent(channel.id, cleared.id);
+      conversations.addAgent(channel.id, peer.id);
+      conversations.updateAgentRuntime(channel.id, cleared.id, {
+        cliSessionId: 'sess-deadbeef-abc123',
+      });
+
+      const runtimeClearSession = vi.fn(
+        async (): Promise<RuntimeClearSessionResult> => ({ cleared: true }),
+      );
+      // Coordinator is not needed here — peer has no cache entry and
+      // claude (kickoffMode='requires_first_message') is NOT oneShot,
+      // so deliverMessage short-circuits before the coordinator runs.
+      // The inbox row is what we assert on (rows replay via
+      // startup_delivery on peer's next spawn).
+      const { host, events } = makeHost(
+        { runtimeClearSession },
+        conversations,
+        {
+          agents,
+          messages,
+          db,
+          inboxes,
+          users,
+          settings,
+          silverhandDir,
+        },
+      );
+      await host.clearSession(channel.id, cleared.id, 'alice');
+
+      // Cleared agent's row is wiped.
+      const after = conversations.getAgent(channel.id, cleared.id);
+      expect(after?.cli_session_id).toBeNull();
+
+      // Exactly one audit message in the conversation.
+      const messageCount = (db
+        .prepare<[string], { c: number }>(
+          'SELECT COUNT(*) AS c FROM messages WHERE conversation_id = ?',
+        )
+        .get(channel.id)?.c ?? 0) as number;
+      expect(messageCount).toBe(1);
+      const auditRow = db
+        .prepare<[string], { id: string }>(
+          `SELECT id FROM messages WHERE conversation_id = ?
+            ORDER BY seq DESC LIMIT 1`,
+        )
+        .get(channel.id)!;
+
+      // Peer agent's inbox has the audit row pending; cleared agent has none.
+      const peerInbox = db
+        .prepare<
+          [string, string, string],
+          { id: number; delivered_at: number | null }
+        >(
+          `SELECT id, delivered_at FROM conversation_inboxes
+             WHERE conversation_id = ? AND agent_id = ? AND message_id = ?`,
+        )
+        .get(channel.id, peer.id, auditRow.id);
+      expect(peerInbox).toBeDefined();
+      // Peer is not running → row stays pending; coordinator never ran.
+      expect(peerInbox!.delivered_at).toBeNull();
+
+      const clearedInbox = db
+        .prepare<[string, string], { c: number }>(
+          'SELECT COUNT(*) AS c FROM conversation_inboxes WHERE conversation_id = ? AND agent_id = ?',
+        )
+        .get(channel.id, cleared.id)?.c ?? 0;
+      expect(clearedInbox).toBe(0);
+
+      // SSE: agent_status + message.
+      expect(events.publishes.map(e => e.kind)).toEqual([
+        'agent_status',
+        'message',
+      ]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  // B4 (cont'd): per-delivery failure warns only — clearSession still
+  // succeeds. Simulated by proxying the agents repo so peer's
+  // `agents.get` throws inside deliverMessage (the cleared agent's
+  // earlier `agents.get` call for the audit row still goes through).
+  it('peer deliverMessage failure does not fail clearSession (warn-only)', async () => {
+    const { db, viewerUserId, localHostId } = openTestDb();
+    const { silverhandDir, workspacesRoot, cleanup } = makeTempSilverhandDir();
+    const conversations = new RealConversationRepo(db);
+    const realAgents = new AgentRepo(db);
+    const workspaces = new WorkspaceRepo(db, { workspacesRoot });
+    const messages = new MessageRepo(db);
+    const inboxes = new ConversationInboxRepo(db);
+    const users = new UserRepo(db);
+    const settings = new SettingsRepo(db);
+
+    try {
+      const ws = workspaces.insert({
+        name: 'ws-clear-3',
+        description: null,
+        workspacePath: `${workspacesRoot}/ws-clear-3`,
+        workspaceHostId: localHostId,
+      });
+      const cleared = realAgents.create(
+        { name: 'agent-cleared', runtime: 'claude', host_id: localHostId },
+        localHostId,
+        viewerUserId,
+      );
+      const peer = realAgents.create(
+        { name: 'agent-peer', runtime: 'claude', host_id: localHostId },
+        localHostId,
+        viewerUserId,
+      );
+      const channel = conversations.insertChannel({
+        workspaceId: ws.id,
+        workspacePath: ws.workspace_path,
+        title: 'ws-clear-3',
+        spawnedByAgentId: null,
+      });
+      conversations.addAgent(channel.id, cleared.id);
+      conversations.addAgent(channel.id, peer.id);
+      conversations.updateAgentRuntime(channel.id, cleared.id, {
+        cliSessionId: 'sess-deadbeef-abc123',
+      });
+
+      // Proxy agents so `agents.get(peer.id)` throws. Cleared agent's
+      // `agents.get` is called earlier (when building the audit row) and
+      // must still succeed.
+      const agents = new Proxy(realAgents, {
+        get(target, prop, receiver) {
+          if (prop === 'get') {
+            return (id: string) => {
+              if (id === peer.id) {
+                throw new Error('simulated peer agents.get failure');
+              }
+              return target.get(id);
+            };
+          }
+          return Reflect.get(target, prop, receiver);
+        },
+      }) as AgentRepo;
+
+      const runtimeClearSession = vi.fn(
+        async (): Promise<RuntimeClearSessionResult> => ({ cleared: true }),
+      );
+      const { host } = makeHost(
+        { runtimeClearSession },
+        conversations,
+        {
+          agents,
+          messages,
+          db,
+          inboxes,
+          users,
+          settings,
+          silverhandDir,
+        },
+      );
+      // clearSession must still resolve — peer failure is warn-only.
+      await expect(
+        host.clearSession(channel.id, cleared.id, 'alice'),
+      ).resolves.toMatchObject({ wasRunning: false });
+
+      // DB still cleared + audit row still inserted.
+      const after = conversations.getAgent(channel.id, cleared.id);
+      expect(after?.cli_session_id).toBeNull();
+      const messageCount = (db
+        .prepare<[string], { c: number }>(
+          'SELECT COUNT(*) AS c FROM messages WHERE conversation_id = ?',
+        )
+        .get(channel.id)?.c ?? 0) as number;
+      expect(messageCount).toBe(1);
+    } finally {
+      cleanup();
+    }
+  });
 });
 
 // ── deliverMessage ──────────────────────────────────────────────────

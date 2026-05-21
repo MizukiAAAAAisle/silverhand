@@ -722,11 +722,32 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
         kind: 'message',
         payload: { message: auditMessage },
       });
-      // TODO(2b-ii slice 4): once `deliverMessage` is implemented,
-      // wake every other agent in the conversation with the audit
-      // message (mirror CM `publishAndDeliverSessionClearedAudit`).
-      // Until then the audit shows in chat + lands in the messages
-      // table, but other agents only see it on their next wake.
+      // Mirror CM `publishAndDeliverSessionClearedAudit`: deliver the
+      // audit message to every OTHER agent in the conversation so they
+      // see the cleared-session signal in their own context (their
+      // chat history, their inbox if offline). The cleared agent
+      // itself does NOT receive its own audit. Per-delivery failures
+      // are warn-level only — clearSession as a whole stays successful.
+      for (const ca of this.conversations.listAgents(conversationId)) {
+        if (ca.agent_id === agentId) continue;
+        await this.deliverMessage(
+          conversationId,
+          ca.agent_id,
+          auditMessage.id,
+        ).catch(err =>
+          this.logger.warn(
+            {
+              kind: 'runtime',
+              mode: 'daemon',
+              conv_id: conversationId,
+              agent_id: ca.agent_id,
+              msg_id: auditMessage.id,
+              err: err instanceof Error ? err.message : String(err),
+            },
+            'clear-session: audit delivery to peer agent failed',
+          ),
+        );
+      }
     }
 
     return { prevCliSessionId, wasRunning };
