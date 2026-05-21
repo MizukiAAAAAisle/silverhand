@@ -55,25 +55,41 @@ export interface RunDaemonOptions {
    *  one is created at `logDir/daemon-<utc>.log`. */
   logger?: DaemonLogger;
   /**
-   * Optional supervisor factory. The daemon constructs the supervisor
-   * AFTER the server is bound, passing an `emit` callback that
-   * broadcasts events to every live socket connection (with
-   * runtime_output backpressure applied per §2.2.2). Used by:
+   * Supervisor factory — REQUIRED, but explicitly nullable (Cindy
+   * `XuKGmdna3GWZcY2G` + shiki `Go9ZiB4OnwTbELZU`). The daemon
+   * constructs the supervisor AFTER the server is bound, passing an
+   * `emit` callback that broadcasts events to every live socket
+   * connection (with runtime_output backpressure applied per §2.2.2).
    *
-   *   - tests, which inject `FakeSupervisor` to validate the full
-   *     intent → supervisor → event-broadcast → HostClient.subscribe
-   *     path without a real CLI child process.
-   *   - PR-2 step 2, which will plug the real CM-derived supervisor
-   *     here at production wiring time.
+   * Two legitimate shapes:
+   *   - `(deps) => new RealSupervisor(deps)` — production wire
+   *     (`entry.ts`). Anything that owns spawn/wake/stop lifecycle.
+   *   - `(deps) => new FakeSupervisor({...})` — protocol/e2e tests
+   *     validating the full intent → supervisor → broadcast →
+   *     HostClient.subscribe path without a real CLI child.
+   *   - `null` — explicit opt-out for tests that only exercise the
+   *     PR-1 surface (ping/status/echo). `runtime_*` intents in that
+   *     mode return `internal_error: no supervisor wired`.
    *
-   * Daemons constructed without this factory still function as a PR-1
-   * surface (ping/status/echo only); runtime_* intents return
-   * `internal_error` because the dispatcher has no supervisor wired.
+   * Why required-but-nullable instead of optional:
+   *   - Optional (`supervisorFactory?:`) was the original PR-1 shape;
+   *     after PR-2 step 2 every production caller MUST wire a real
+   *     supervisor, and a missing factory silently degrades to PR-1
+   *     mode at runtime. This bit us at `43d5295`'s pre-fix state:
+   *     `entry.ts` was missing the wire and TypeScript was happy,
+   *     daemon booted, all `runtime_*` intents failed.
+   *   - Forcing the field to be present makes "I deliberately want
+   *     no supervisor here" a typed decision (`null`) instead of
+   *     accidental absence. The `entry-supervisor-wiring.test.ts`
+   *     suite + the `// @ts-expect-error` contract test in
+   *     `dependency-guard.test.ts` lock both halves of the invariant.
    */
-  supervisorFactory?: (deps: {
-    emit: (event: EventFrame) => void;
-    logger: DaemonLogger;
-  }) => Supervisor;
+  supervisorFactory:
+    | ((deps: {
+        emit: (event: EventFrame) => void;
+        logger: DaemonLogger;
+      }) => Supervisor)
+    | null;
 }
 
 export interface RunningDaemon {
@@ -131,10 +147,12 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   // supervisor is constructed but won't fire events before
   // `server.start()` returns anyway.
   let broadcaster: (event: EventFrame) => void = () => {};
-  const supervisor = opts.supervisorFactory?.({
-    emit: event => broadcaster(event),
-    logger,
-  });
+  const supervisor = opts.supervisorFactory
+    ? opts.supervisorFactory({
+        emit: event => broadcaster(event),
+        logger,
+      })
+    : undefined;
   const dispatcher = new IntentDispatcher({
     logger,
     startedAt,

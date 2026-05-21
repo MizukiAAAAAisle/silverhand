@@ -36,6 +36,12 @@ async function setupFixture(): Promise<E2eFixture> {
     installSignals: false,
     writeStdoutHandshake: false,
     alsoStderr: false,
+    // PR-1 surface only (ping/status/echo) — runtime_* intents are
+    // out of scope here. Explicit `null` opts out of the required-but-
+    // nullable supervisorFactory contract (Cindy `XuKGmdna3GWZcY2G` +
+    // shiki `Go9ZiB4OnwTbELZU`): "no supervisor here" must be a typed
+    // decision, never accidental absence.
+    supervisorFactory: null,
   });
   return { dir, socketPath, pidFilePath, logDir, daemon };
 }
@@ -104,6 +110,7 @@ describe('e2e — real Unix socket', () => {
         logDir: f.logDir,
         installSignals: false,
         writeStdoutHandshake: false,
+        supervisorFactory: null,
       }),
     ).rejects.toThrow(/already running/);
   });
