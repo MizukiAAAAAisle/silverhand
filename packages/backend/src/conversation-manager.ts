@@ -35,6 +35,7 @@ import {
 import { detectRuntimes } from '@silverhand/host/runtimes';
 import { sanitizeParsedEventForBroadcast } from './runtime/event-sanitize.js';
 import { buildAgentSpawnEnv } from './runtime/spawn-env.js';
+import type { AgentRuntimeHost } from './runtime/agent-runtime-host.js';
 import { activeAgentProfileDir, agentL1ProfileDir, agentMemoryDirFor } from './agent-profile.js';
 import { prepareSpawnFiles, type SpawnPrepHandle } from './spawn-prep.js';
 import { AgentRepo } from './repos/agent-repo.js';
@@ -262,7 +263,7 @@ export interface ClearSessionResult {
  * Phase 3E adds delivery scheduling, 3F adds soft+hard interrupt,
  * 3G adds compaction watchdog. The skeleton accommodates all of those.
  */
-export class ConversationManager {
+export class ConversationManager implements AgentRuntimeHost {
   private readonly handles = new Map<string, AgentHandle>();
   private readonly agents: AgentRepo;
   private readonly workspaces: WorkspaceRepo;
