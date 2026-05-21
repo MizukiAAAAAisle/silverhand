@@ -87,4 +87,28 @@ describe('IntentDispatcher', () => {
     if (!('result' in r)) return;
     expect(r.result).toMatchObject({ intent_count: 1 });
   });
+
+  it('rejects handler output that does not match the declared result schema (review fix B2)', async () => {
+    // Subclass override forces the echo handler to emit a
+    // contract-breaking shape. The base class's post-handler
+    // safeParse should catch it and return `internal_error` with a
+    // drift-flavored message — the malformed object never reaches
+    // the wire.
+    class DriftingDispatcher extends IntentDispatcher {
+      protected override async runHandler(
+        intent: 'ping' | 'status' | 'echo',
+        params: unknown,
+      ): Promise<unknown> {
+        if (intent === 'echo') return { wrong_field: 1 };
+        return super.runHandler(intent, params);
+      }
+    }
+    const d = new DriftingDispatcher({ logger: silentLogger() });
+    const r = await d.dispatch('req-drift', 'echo', { message: 'hi' });
+    expect('error' in r).toBe(true);
+    if ('error' in r) {
+      expect(r.error.code).toBe('internal_error');
+      expect(r.error.message).toContain('drift');
+    }
+  });
 });

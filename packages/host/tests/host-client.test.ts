@@ -181,3 +181,40 @@ describe('HostClient — timeouts and lifecycle', () => {
     await client.close();
   });
 });
+
+describe('HostClient — schema drift guard (review fix B2)', () => {
+  it('rejects with `internal_error` when daemon returns a result that fails its intent schema', async () => {
+    // Simulates a future drift: a daemon (older or buggy) returns a
+    // ping response missing `daemon_pid`. The client's mirror
+    // validation catches it before resolving the caller, so the
+    // caller never has to handle a half-shaped object at runtime.
+    const { transport, peer } = createFakeTransportPair();
+    const client = new HostClient({ transportFactory: () => transport, rng: FIXED_RNG });
+    await client.connect();
+    const promise = client.ping();
+    await new Promise(setImmediate);
+    peer.send({
+      id: peer.received[0]!.id,
+      result: {
+        pong: true,
+        // daemon_pid intentionally omitted
+        daemon_version: '0.1.0',
+        started_at: 0,
+      },
+    });
+    await expect(promise).rejects.toMatchObject({ code: 'internal_error' });
+    await expect(promise).rejects.toThrow(/drift/);
+    await client.close();
+  });
+
+  it('still passes a well-shaped result through unmodified', async () => {
+    const { transport, peer } = createFakeTransportPair();
+    const client = new HostClient({ transportFactory: () => transport, rng: FIXED_RNG });
+    await client.connect();
+    const promise = client.echo('ok');
+    await new Promise(setImmediate);
+    peer.send({ id: peer.received[0]!.id, result: { echoed: 'ok' } });
+    await expect(promise).resolves.toEqual({ echoed: 'ok' });
+    await client.close();
+  });
+});

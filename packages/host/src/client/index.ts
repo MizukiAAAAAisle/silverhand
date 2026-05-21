@@ -41,6 +41,7 @@
 import { randomBytes } from 'node:crypto';
 import {
   encodeFrame,
+  intentSchemas,
   type IntentName,
   type IntentParams,
   type IntentResult,
@@ -286,9 +287,41 @@ export class HostClient {
     this.pending.delete(frame.id);
     if ('error' in frame) {
       pending.reject(new HostClientError(frame.error.code, frame.error.message));
-    } else {
-      pending.resolve(frame.result);
+      return;
     }
+    // Mirror-validate the result against the schema we know for the
+    // intent the caller dispatched. The daemon already validates on
+    // its end (dispatcher.ts), but a client/daemon version skew —
+    // e.g. an older client running against a newer daemon that added
+    // fields — would still get caught here. We treat drift as a
+    // typed `internal_error` so callers branching on `.code` see the
+    // same surface as a daemon-side handler failure.
+    const schema = intentSchemas[pending.intent as IntentName];
+    if (schema) {
+      const validated = schema.result.safeParse(frame.result);
+      if (!validated.success) {
+        const issues = validated.error.errors
+          .map(e => `${e.path.join('.')}: ${e.message}`)
+          .join('; ');
+        this.logger.warn(
+          { intent: pending.intent, issues },
+          'host client received response that does not match intent schema',
+        );
+        pending.reject(
+          new HostClientError(
+            'internal_error',
+            `drift: response for ${pending.intent} failed schema validation (${issues})`,
+          ),
+        );
+        return;
+      }
+      pending.resolve(validated.data);
+      return;
+    }
+    // Unknown intent (shouldn't happen — `call()` is typed against
+    // the registry) — pass through without validation so we don't
+    // strand the caller.
+    pending.resolve(frame.result);
   }
 
   private handleDisconnect(reason: string): void {

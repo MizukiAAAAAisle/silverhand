@@ -90,7 +90,33 @@ export class SocketTransport implements Transport {
   write(encodedLine: string): boolean {
     if (!this.connected || !this.socket) return false;
     try {
-      return this.socket.write(encodedLine);
+      // IMPORTANT: We intentionally discard `Socket.write()`'s boolean
+      // return value. Node returns `false` from write() when the
+      // internal buffer crosses `highWaterMark` — that's a
+      // *backpressure* signal, NOT a failure. The bytes are still
+      // queued and will reach the daemon in order; the daemon will
+      // process the request and reply normally.
+      //
+      // The previous version propagated that `false` up to
+      // `HostClient.call()`, which then deleted the pending entry and
+      // rejected with `disconnected`. The daemon still answered, but
+      // the client treated the (now legitimately late) response as a
+      // duplicate to drop — so the caller saw a phantom failure on a
+      // request that actually succeeded. PR-2's larger payloads
+      // (runtime_inject_env, runtime_output streams) would tip into
+      // this corner constantly.
+      //
+      // True failure modes are still surfaced:
+      //   - not connected            → handled by the early-return above
+      //   - synchronous write throws → caught below
+      //   - socket error/close       → fires `disconnect` separately
+      //
+      // When we actually need backpressure handling (PR-2+), the
+      // right primitive is a `drain` listener on the transport that
+      // pauses outgoing intent dispatch — not silently failing
+      // individual writes.
+      this.socket.write(encodedLine);
+      return true;
     } catch {
       return false;
     }

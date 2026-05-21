@@ -801,14 +801,23 @@ app.on('before-quit', event => {
   app.setBadgeCount(0);
 
   // Hard ceiling so a wedged shutdown can't hang the app forever.
-  // ConversationManager.stop already escalates to SIGKILL after 10s; this
-  // is the safety net for everything around it (driver bugs, hung
-  // logger flushes, etc.). Kept above 10s so the normal SIGTERM/SIGKILL
-  // cascade gets to run before we force-exit.
+  // Two sequential budgets share this window:
+  //
+  //   1. `backend.close()` — `ConversationManager.stop` escalates to
+  //      SIGKILL after 10s. Add a couple of seconds of headroom for
+  //      activity log flush + HTTP drain + DB close.
+  //   2. `daemon.kill({ gracefulMs: 5_000 })` — daemon gets 5s of
+  //      SIGTERM before SIGKILL.
+  //
+  // 10s (CM) + 5s (daemon) + 10s safety margin = 25s. The previous
+  // 15s ceiling barely covered the CM stage alone; adding daemon
+  // shutdown after it would race the watchdog and cause `app.exit(1)`
+  // before the daemon released its pid file / socket, leaving stale
+  // state for the next launch. See review of #task:510 PR-1.
   const watchdog = setTimeout(() => {
     console.error('[main] shutdown watchdog fired; forcing exit');
     app.exit(1);
-  }, 15_000);
+  }, 25_000);
   watchdog.unref();
 
   void shutdown().finally(() => {

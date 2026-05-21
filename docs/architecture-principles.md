@@ -135,10 +135,57 @@ PR / 设计稿 review 时按以下顺序检查：
 3. §7 已知漏洞 —— 涉及到的必须显式回应
 4. 涉及鉴权 → 同时过 `permissions.md`
 5. 涉及数据模型 → 同时过 `core-design.md` §2
+6. 涉及 spawn / 子进程 / runtime 生命周期 → 同时过 §10 AgentHost runtime boundary
 
 ---
 
-## 9. 历史
+## 9. AgentHost runtime boundary（control plane vs execution plane）
+
+> Anchor for `docs/silverhand-daemon.md` (PR-1 落地 `#task:510`)。
+
+### 9.1 两个 plane 的分工
+
+| plane | 角色 | 例子 |
+| --- | --- | --- |
+| **control plane** | IM server：HTTP route、DB、ACL、消息分发、scheduler | `packages/backend` |
+| **execution plane** | AgentHost：spawn agent CLI、stdin/stdout、文件系统访问、API key、本地 PATH | `packages/host`（PR-1 IPC skeleton；PR-2 起承接 spawn / inbox-drain / run-state） |
+
+**核心 invariant**：spawn agent CLI 是 execution plane 的事，**不是** control plane 的事。
+当前 `ConversationManager` 物理上还在 backend，是过渡形态，不是目标形态。
+
+未来 remote / sandbox 形态：
+- 云端 backend 不可能 spawn `claude` —— 没装、没用户 fs、没 API key；
+- 沙箱内 daemon 持有真正的 user-side 运行时，向 IM 上报；
+- Electron 客户端订阅 IM 广播，**自己也不 spawn** —— 它跟其它客户端等价。
+
+### 9.2 设计期检查项（写新 service / route / 进程时过一遍）
+
+- 这件事是 IM 语义（who-can-see-what / 持久化 / 投递）还是 host 语义（spawn / IO / fs / 进程生命周期）？答错就是把代码塞错 plane。
+- 如果未来把 backend 部署到云端，这件事能放到云端跑吗？跑不了说明它属于 execution plane。
+- 该功能需要的 OS 资源（pid、socket、子进程句柄、本地 fs path）有没有越过 IPC 边界泄漏到 backend 数据结构里？越过了就是把 host 的实现细节固化到 control plane 协议里。
+
+### 9.3 边界条款（不能违反）
+
+1. **agent-facing CLI 永远只暴露业务面**（message / task / channel / thread / workspace / file / schedule）。daemon 控制权（spawn / pid / version / token 颁发）属基础设施层，**不允许**写成 `silverhand host ...` 子命令。
+2. **backend 记 `(conversation, agent)` runtime intent / state；不记 OS process handle**。handle 永远归 host。
+3. **host 是真正的安全边界**：进程在哪个 host 上跑、能访问哪些 fs / API key，host 是 truth source。`host_id` membership precondition（`agent.host_id == workspace.host_id`）已经把 host 建模成一等公民，PR-2+ 会把它从 ACL 字段提升为 runtime 协议端点。
+4. **CLI 不是秘密边界，backend token + ACL 才是**。任何"防止 agent 看见 X"的需求，应该走 backend authz，**不要**走"agent 看不见这个命令"的路径——agent 是有自主性的 actor，藏命令并不等同于授权拒绝。
+
+### 9.4 当前实现 vs 目标实现
+
+| 关注点 | 当前实现 | 目标实现（PR-2+） |
+| --- | --- | --- |
+| spawn agent CLI | `backend/conversation-manager.ts`（同进程） | `packages/host` daemon（独立子进程） |
+| inbox drain | backend | daemon |
+| run state record | backend | daemon → backend 通过 event 上报 |
+| backend → daemon 通信 | n/a | `HostClient` over Unix socket（PR-1 已经接好 ping/status/echo） |
+| `hostClient` 必需性 | optional（PR-1） | required（PR-2） |
+
+`packages/backend/src/conversation-manager.ts` 是技术债 anchor。新功能不要再往 CM 里堆 IM 语义，旧的 IM 语义遇到机会就往 backend 收。PR-2 真搬迁之前**不要做并行重写**——保持单一实现是真相源。
+
+---
+
+## 10. 历史
 
 - 2026-05-04 ~ 05-05：mcp system 频道下 thread `bbUBIrwJO5ZNY1ww`（"统一 human/agent 共用业务到 application service 层"）通过 PR-1 ~ PR-6 完成首轮落地
 - 2026-05-07：`permissions.md` 锁版 Slice A'/B/C/D 计划，task #125 是 Slice A' 实施

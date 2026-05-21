@@ -27,8 +27,8 @@ become the only place those processes are owned.
 
 ## Why a separate process
 
-See `#task:509` discussion (also captured in `docs/architecture-principles.md`)
-for the long form. Short version:
+See `#task:509` discussion (captured in `docs/architecture-principles.md`
+§9 "AgentHost runtime boundary") for the long form. Short version:
 
 - backend = IM/control plane (HTTP server, DB, ACL, routing).
 - daemon = agent execution plane (process supervision, stdin/stdout,
@@ -114,8 +114,8 @@ The daemon is intentionally **not** exposed through any
 `silverhand` subcommand. The agent-facing CLI surface stays at
 `message / task / channel / thread / workspace / file / schedule`;
 daemon control (spawn / pid / version) belongs to the operator, not
-the agent. See `docs/architecture-principles.md` for the rationale
-(host control plane vs. agent business plane).
+the agent. See `docs/architecture-principles.md` §9.3 for the
+rationale (host control plane vs. agent business plane).
 
 ## PR-2 hand-off
 
@@ -131,3 +131,66 @@ The follow-up PR will:
 
 The wire format here is designed to absorb (2) and (3) without breaking
 existing intents.
+
+## Open questions to resolve before PR-2
+
+These need an explicit decision before `hostClient` becomes required;
+PR-1 punts on them because backend still boots without the daemon, so
+the worst-case is "no host plumbing this run".
+
+### Stale-daemon conflict on Electron crash
+
+Today: if Electron main crashes (segfault, OOM, force-quit), the
+daemon child outlives it because we don't bind the daemon lifetime
+to the parent process at the OS level. On the next launch,
+`spawnDaemonChild` → `claimPidFile` will see a live pid and reject;
+backend then boots without host plumbing. In PR-1 this is a degraded
+mode the operator can see in the logs. In PR-2 (required `hostClient`)
+backend boot will fail outright.
+
+Three candidate strategies, pick before PR-2 ships:
+
+1. **Attach existing daemon.** If `claimPidFile` reports a live pid,
+   skip the spawn and just `HostClient.connect()` to the existing
+   socket. Trade-off: parent loses the `kill()` lever on the
+   surviving daemon and the daemon's restart budget resets across
+   parent restarts, which can hide repeat-crash patterns.
+
+2. **Kill-and-reclaim.** On startup, if a daemon pid is alive, send
+   it SIGTERM (5s grace), wait for it to release the pid file, then
+   spawn our own. Simpler semantics; cost is a one-time IPC blip and
+   a daemon log line. Risk: the surviving daemon might be doing
+   real work for some other parent process — but in our v1
+   deployment (one Electron per user, one daemon per user), it
+   can't be.
+
+3. **OS-level single-instance lock + parent-bound daemon.** Use
+   `flock` on the pid file in addition to the kill(0) probe; have
+   the daemon poll its parent's pid and exit voluntarily when the
+   parent dies. Closest to "the daemon is logically a part of
+   Electron". Most code; clearest semantics.
+
+Default lean (Alice): start with (2) for PR-2 — explicit reclaim, no
+hidden state-sharing across launches. Revisit if we ever support
+multi-parent topologies.
+
+### Backpressure / drain on the IPC
+
+PR-1's `SocketTransport.write()` discards the Node `write()` return
+value (see comment block in `client/socket-transport.ts`). That's
+correct *as long as no intent stream is high-volume*. PR-2's
+`runtime_output` stream (one frame per CLI stdout/stderr chunk) might
+tip the daemon → client direction into highWaterMark territory under
+sustained load. Decision point: add an explicit drain protocol (peer
+sets a "paused" event, sender stops emitting non-essential frames
+until "resumed"), or keep relying on the kernel's socket buffer + TCP-
+like flow control until measurements show pressure.
+
+### Result-schema validation cost
+
+PR-1 validates every response on both sides (dispatcher + client). For
+PR-2's `runtime_output` event stream this could be O(n_frames * zod
+parse). If it shows up in profiling, the right out is to keep
+validation on for `ping`/`status`/`runtime_*` request results (rare,
+small) but pre-narrow `runtime_output` to a hand-typed JSON.parse +
+manual shape check. Don't pre-optimize until we measure.

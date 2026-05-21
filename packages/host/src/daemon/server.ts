@@ -43,6 +43,7 @@ import {
 } from '../protocol.js';
 import type { IntentDispatcher } from './dispatcher.js';
 import type { DaemonLogger } from './logger.js';
+import { DAEMON_VERSION } from './version.js';
 
 export interface DaemonServerOptions {
   socketPath: string;
@@ -178,7 +179,7 @@ export class DaemonServer {
         event: 'ready',
         socket_path: this.socketPath,
         daemon_pid: process.pid,
-        daemon_version: '0.1.0',
+        daemon_version: DAEMON_VERSION,
         started_at: this.dispatcher.getStartedAt(),
       }),
     );

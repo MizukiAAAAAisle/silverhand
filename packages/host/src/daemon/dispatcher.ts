@@ -109,7 +109,33 @@ export class IntentDispatcher {
     this.intentCount += 1;
     try {
       const result = await this.runHandler(intent as IntentName, parsed.data);
-      return { id: requestId, result };
+      // Validate the handler's own result against the declared schema
+      // BEFORE sending it on the wire. If a handler ever drifts from
+      // the contract (e.g. a refactor accidentally drops a field, or
+      // the schema gets tightened without updating the handler), we
+      // want to catch it at the IPC boundary on the *daemon* side
+      // rather than ship malformed bytes the client has to puzzle out.
+      //
+      // The mirror check on the client (HostClient.handleFrame) is a
+      // second line of defense against version skew between a newer
+      // daemon and older client (or vice versa).
+      const resultValidated = schema.result.safeParse(result);
+      if (!resultValidated.success) {
+        this.logger.error(
+          {
+            intent,
+            issues: resultValidated.error.errors
+              .map(e => `${e.path.join('.')}: ${e.message}`)
+              .join('; '),
+          },
+          'daemon emitted result that does not match schema',
+        );
+        return this.errorFrame(requestId, {
+          code: 'internal_error',
+          message: `daemon result drift for intent ${intent}`,
+        });
+      }
+      return { id: requestId, result: resultValidated.data };
     } catch (err) {
       this.logger.error(
         {
@@ -135,8 +161,13 @@ export class IntentDispatcher {
    * PR-2 will add `runtime_start` / `runtime_stop` / `runtime_wake`
    * and they will be wider; if this switch grows past ~5 cases, split
    * it into a registry map keyed by intent name.
+   *
+   * `protected` so a test-only subclass can override one intent's
+   * output to verify the result-drift guard in `dispatch()` (without
+   * monkey-patching production code). Production callers go through
+   * `dispatch()` and never see this method directly.
    */
-  private async runHandler(
+  protected async runHandler(
     intent: IntentName,
     params: unknown,
   ): Promise<unknown> {
