@@ -41,6 +41,7 @@ import {
 import { DAEMON_VERSION } from './version.js';
 import type { DaemonLogger } from './logger.js';
 import type { Supervisor } from './supervisor.js';
+import { logIntent } from './daemon-logging.js';
 
 export interface DispatcherOptions {
   logger: DaemonLogger;
@@ -102,27 +103,65 @@ export class IntentDispatcher {
     intent: string,
     rawParams: unknown,
   ): Promise<ResponseFrame> {
-    if (this.shuttingDown) {
-      return this.errorFrame(requestId, {
-        code: 'shutting_down',
-        message: 'daemon is shutting down',
+    const startedAtMs = this.now();
+    // Extract conv_id / agent_id from params (when present) for the log
+    // line — strictly read-only, never modifies params. Other fields
+    // (notably `payload`) MUST NOT be logged per §3.4.
+    const convId =
+      typeof rawParams === 'object' && rawParams !== null && 'conversation_id' in rawParams
+        ? String((rawParams as { conversation_id: unknown }).conversation_id)
+        : undefined;
+    const agentId =
+      typeof rawParams === 'object' && rawParams !== null && 'agent_id' in rawParams
+        ? String((rawParams as { agent_id: unknown }).agent_id)
+        : undefined;
+    logIntent(this.logger, {
+      intent,
+      request_id: requestId,
+      status: 'received',
+      conv_id: convId,
+      agent_id: agentId,
+    });
+    const finish = (frame: ResponseFrame): ResponseFrame => {
+      const isError = 'error' in frame;
+      logIntent(this.logger, {
+        intent,
+        request_id: requestId,
+        status: isError ? 'error' : 'ok',
+        conv_id: convId,
+        agent_id: agentId,
+        error_code: isError ? frame.error.code : undefined,
+        duration_ms: this.now() - startedAtMs,
       });
+      return frame;
+    };
+    if (this.shuttingDown) {
+      return finish(
+        this.errorFrame(requestId, {
+          code: 'shutting_down',
+          message: 'daemon is shutting down',
+        }),
+      );
     }
     const schema = intentSchemas[intent as IntentName];
     if (!schema) {
-      return this.errorFrame(requestId, {
-        code: 'unknown_intent',
-        message: `unknown intent: ${intent}`,
-      });
+      return finish(
+        this.errorFrame(requestId, {
+          code: 'unknown_intent',
+          message: `unknown intent: ${intent}`,
+        }),
+      );
     }
     const parsed = schema.params.safeParse(rawParams);
     if (!parsed.success) {
-      return this.errorFrame(requestId, {
-        code: 'invalid_params',
-        message: parsed.error.errors
-          .map(e => `${e.path.join('.')}: ${e.message}`)
-          .join('; '),
-      });
+      return finish(
+        this.errorFrame(requestId, {
+          code: 'invalid_params',
+          message: parsed.error.errors
+            .map(e => `${e.path.join('.')}: ${e.message}`)
+            .join('; '),
+        }),
+      );
     }
     this.intentCount += 1;
     try {
@@ -148,12 +187,14 @@ export class IntentDispatcher {
           },
           'daemon emitted result that does not match schema',
         );
-        return this.errorFrame(requestId, {
-          code: 'internal_error',
-          message: `daemon result drift for intent ${intent}`,
-        });
+        return finish(
+          this.errorFrame(requestId, {
+            code: 'internal_error',
+            message: `daemon result drift for intent ${intent}`,
+          }),
+        );
       }
-      return { id: requestId, result: resultValidated.data };
+      return finish({ id: requestId, result: resultValidated.data });
     } catch (err) {
       this.logger.error(
         {
@@ -162,10 +203,12 @@ export class IntentDispatcher {
         },
         'intent handler threw',
       );
-      return this.errorFrame(requestId, {
-        code: 'internal_error',
-        message: err instanceof Error ? err.message : String(err),
-      });
+      return finish(
+        this.errorFrame(requestId, {
+          code: 'internal_error',
+          message: err instanceof Error ? err.message : String(err),
+        }),
+      );
     }
   }
 

@@ -44,6 +44,7 @@ import { Socket } from 'node:net';
 import { promisify } from 'node:util';
 import { encodeFrame, splitNdjson, AnyFrameSchema } from '../protocol.js';
 import type { DaemonLogger } from './logger.js';
+import { logProcess } from './daemon-logging.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -291,7 +292,14 @@ export async function reclaimStaleDaemonIfPresent(
       check: 'b_cmdline_mismatch',
       detail: `cmdline did not contain both --socket-path and --pid-file tokens. Got: ${cmdline.slice(0, 200)}`,
     };
-    opts.logger.error(fail, 'kill-and-reclaim aborted: cmdline mismatch');
+    // §3.4: log structured fields only — do NOT log the cmdline itself
+    // even on mismatch. The `fail.detail` carrying the cmdline tail is
+    // surfaced upstream via `ReclaimFailLoudlyError` for operator debug,
+    // not via the daemon JSONL log.
+    opts.logger.error(
+      { check: fail.check, pid, cmdline_match: false },
+      'kill-and-reclaim aborted: cmdline mismatch',
+    );
     return fail;
   }
 
@@ -328,13 +336,17 @@ export async function reclaimStaleDaemonIfPresent(
   }
 
   // ── Reclaim — SIGTERM gracefulMs → SIGKILL killGraceMs ─────────
+  // §3.4: do NOT log the cmdline itself — only `cmdline_match: true`
+  // (verified above by checks (b) and (c)/(d)).
   opts.logger.info(
-    { pid, gracefulMs, killGraceMs, cmdline: cmdline.slice(0, 120) },
+    { pid, gracefulMs, killGraceMs },
     'reclaiming stale daemon: SIGTERM',
   );
+  logProcess(opts.logger, { action: 'sigterm', pid, cmdline_match: true });
   deps.signalPid(pid, 'SIGTERM');
   let exitState = await deps.waitForExit(pid, gracefulMs);
   if (exitState === 'gone') {
+    logProcess(opts.logger, { action: 'reclaim', pid, exit_code: null, cmdline_match: true });
     return {
       action: 'reclaimed',
       pid,
@@ -346,9 +358,11 @@ export async function reclaimStaleDaemonIfPresent(
     { pid, gracefulMs },
     'daemon survived SIGTERM grace; escalating to SIGKILL',
   );
+  logProcess(opts.logger, { action: 'sigkill', pid, cmdline_match: true });
   deps.signalPid(pid, 'SIGKILL');
   exitState = await deps.waitForExit(pid, killGraceMs);
   if (exitState === 'gone') {
+    logProcess(opts.logger, { action: 'reclaim', pid, exit_code: null, cmdline_match: true });
     return {
       action: 'reclaimed',
       pid,

@@ -29,6 +29,7 @@ import { DaemonServer } from './server.js';
 import { createDaemonLogger, type DaemonLogger } from './logger.js';
 import { encodeFrame, type EventFrame } from '../protocol.js';
 import { DAEMON_VERSION } from './version.js';
+import { logDaemon } from './daemon-logging.js';
 
 export interface RunDaemonOptions {
   /** Absolute path where the daemon should bind its Unix socket. */
@@ -93,6 +94,11 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     await logger.close();
     throw err;
   }
+  logDaemon(logger, {
+    action: 'pid_claim',
+    pid: process.pid,
+    pid_file_path: opts.pidFilePath,
+  });
 
   const startedAt = Date.now();
   const dispatcher = new IntentDispatcher({ logger, startedAt });
@@ -136,11 +142,18 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     },
     'daemon ready',
   );
+  logDaemon(logger, {
+    action: 'boot',
+    pid: process.pid,
+    socket_path: opts.socketPath,
+    pid_file_path: opts.pidFilePath,
+  });
 
   let stopped = false;
   const stop = async (reason: string): Promise<void> => {
     if (stopped) return;
     stopped = true;
+    logDaemon(logger, { action: 'shutting_down', pid: process.pid });
     try {
       await server.stop(reason);
     } catch (err) {

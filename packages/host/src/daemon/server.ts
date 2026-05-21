@@ -48,6 +48,7 @@ import {
   OutputBackpressure,
   type OutputBackpressureOptions,
 } from './output-backpressure.js';
+import { logBackpressure, logEvent } from './daemon-logging.js';
 
 export interface DaemonServerOptions {
   socketPath: string;
@@ -74,20 +75,19 @@ export class DaemonServer {
     this.backpressure = new OutputBackpressure({
       ...opts.backpressure,
       logDrop: opts.backpressure?.logDrop ?? (entry => {
-        // §3.4 logging contract: structured fields only, never the
-        // chunk body. logDrop's input is already structure-only.
-        if (entry.kind === 'drop') {
-          // Per-chunk drops are noisy under sustained pressure; log
-          // at debug-equivalent (warn) only the first time per
-          // (conv, agent) — the summary frame is the canonical
-          // operator-visible signal. We just include drop counts
-          // here for log completeness.
-          if (entry.dropped_count === 1) {
-            this.logger.warn(entry, 'runtime_output backpressure: dropping chunks');
-          }
-        } else {
-          this.logger.warn(entry, 'runtime_output backpressure: recovered');
-        }
+        // §3.4 logging contract — structured fields only via the
+        // typed `logBackpressure` helper. Per-chunk drops are noisy
+        // under sustained pressure; we only log the FIRST drop in a
+        // window (`dropped_count === 1`) plus the recovery summary.
+        if (entry.kind === 'drop' && entry.dropped_count !== 1) return;
+        logBackpressure(this.logger, {
+          conv_id: entry.conversation_id,
+          agent_id: entry.agent_id,
+          action: 'dropped',
+          buffer_bytes: entry.buffer_bytes,
+          dropped_count: entry.dropped_count,
+          bytes_dropped: entry.bytes_dropped,
+        });
       }),
     });
     this.server = new Server(socket => this.handleConnection(socket));
@@ -270,6 +270,19 @@ export class DaemonServer {
    * supervisor's `emit` callback in `runDaemon`.
    */
   broadcast(event: EventFrame): void {
+    // §3.4 logging contract: log a structured `kind: 'event'` line
+    // per emitted event, with allow-listed scalar fields only. Body
+    // / chunk content NEVER appears.
+    logEvent(this.logger, {
+      event: event.event,
+      conv_id: 'conversation_id' in event ? event.conversation_id : undefined,
+      agent_id: 'agent_id' in event ? event.agent_id : undefined,
+      delivery_ids: 'delivery_ids' in event ? event.delivery_ids : undefined,
+      dropped_count:
+        'dropped_count' in event ? event.dropped_count : undefined,
+      bytes_dropped:
+        'bytes_dropped' in event ? event.bytes_dropped : undefined,
+    });
     for (const socket of this.liveSockets) {
       this.backpressure.emit(socket, event);
     }

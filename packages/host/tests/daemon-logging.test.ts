@@ -1,0 +1,278 @@
+/**
+ * §3.4 daemon logging contract — redaction tests.
+ *
+ * Step 1 review boundary (Cindy `1vRk1SIAFfa1x10t`): protocol-side
+ * correctness + logging contract assertions. These tests assert:
+ *
+ *  1. Each typed helper writes a `kind: '<group>'` field that matches
+ *     its bucket — `intent`, `event`, `process`, `daemon`,
+ *     `backpressure`. The grep-for-jq operator workflow depends on
+ *     this discriminator.
+ *  2. No log entry passed through any helper carries any forbidden
+ *     field name (`payload`, `chunk`, `body`, `text`, `prompt`,
+ *     `env_*`). Compile-time enforcement happens via the typed
+ *     interfaces; the runtime guard `findForbiddenFields` is a
+ *     belt-and-suspenders check the test exercises.
+ *  3. End-to-end: dispatch a real intent through `IntentDispatcher`
+ *     with a `payload`-bearing param (e.g. `runtime_wake`) and assert
+ *     the log line emitted by `logIntent` does NOT carry the payload
+ *     value or the field name. This is the primary "did we leak
+ *     stdin bytes through the log layer" test.
+ */
+import { describe, expect, it } from 'vitest';
+import {
+  FORBIDDEN_LOG_FIELDS,
+  FORBIDDEN_LOG_FIELD_PREFIXES,
+  findForbiddenFields,
+  logBackpressure,
+  logDaemon,
+  logEvent,
+  logIntent,
+  logProcess,
+} from '../src/daemon/daemon-logging.js';
+import type { DaemonLogger } from '../src/daemon/logger.js';
+import { IntentDispatcher } from '../src/daemon/dispatcher.js';
+import type { Supervisor } from '../src/daemon/supervisor.js';
+
+interface CapturedLine {
+  level: 'info' | 'warn' | 'error';
+  obj: Record<string, unknown>;
+  msg: string;
+}
+
+function capturingLogger(): { lines: CapturedLine[]; logger: DaemonLogger } {
+  const lines: CapturedLine[] = [];
+  const logger: DaemonLogger = {
+    filePath: '/dev/null',
+    info: (obj, msg) =>
+      lines.push({ level: 'info', obj: obj as Record<string, unknown>, msg: msg ?? '' }),
+    warn: (obj, msg) =>
+      lines.push({ level: 'warn', obj: obj as Record<string, unknown>, msg: msg ?? '' }),
+    error: (obj, msg) =>
+      lines.push({ level: 'error', obj: obj as Record<string, unknown>, msg: msg ?? '' }),
+    close: async () => {},
+  };
+  return { lines, logger };
+}
+
+describe('§3.4 — typed helpers stamp the right `kind` discriminator', () => {
+  it('logIntent → kind: "intent"', () => {
+    const { lines, logger } = capturingLogger();
+    logIntent(logger, {
+      intent: 'ping',
+      request_id: 'r1',
+      status: 'ok',
+      duration_ms: 1,
+    });
+    expect(lines[0]!.obj.kind).toBe('intent');
+    expect(lines[0]!.obj.intent).toBe('ping');
+    expect(lines[0]!.obj.status).toBe('ok');
+  });
+
+  it('logEvent → kind: "event"', () => {
+    const { lines, logger } = capturingLogger();
+    logEvent(logger, { event: 'runtime_state', conv_id: 'c1', agent_id: 'a1' });
+    expect(lines[0]!.obj.kind).toBe('event');
+    expect(lines[0]!.obj.event).toBe('runtime_state');
+  });
+
+  it('logProcess → kind: "process"', () => {
+    const { lines, logger } = capturingLogger();
+    logProcess(logger, { action: 'spawn', pid: 1234 });
+    expect(lines[0]!.obj.kind).toBe('process');
+  });
+
+  it('logDaemon → kind: "daemon"', () => {
+    const { lines, logger } = capturingLogger();
+    logDaemon(logger, {
+      action: 'boot',
+      pid: 1234,
+      socket_path: '/tmp/s',
+      pid_file_path: '/tmp/p',
+    });
+    expect(lines[0]!.obj.kind).toBe('daemon');
+  });
+
+  it('logBackpressure → kind: "backpressure"', () => {
+    const { lines, logger } = capturingLogger();
+    logBackpressure(logger, {
+      conv_id: 'c1',
+      agent_id: 'a1',
+      action: 'dropped',
+      buffer_bytes: 100,
+      dropped_count: 1,
+      bytes_dropped: 50,
+    });
+    expect(lines[0]!.obj.kind).toBe('backpressure');
+  });
+
+  it('logProcess sigkill is warn-level (operator attention)', () => {
+    const { lines, logger } = capturingLogger();
+    logProcess(logger, { action: 'sigkill', pid: 1234 });
+    expect(lines[0]!.level).toBe('warn');
+  });
+});
+
+describe('§3.4 — forbidden field names never reach the log line', () => {
+  it('findForbiddenFields detects every listed name', () => {
+    for (const name of FORBIDDEN_LOG_FIELDS) {
+      expect(findForbiddenFields({ [name]: 'anything' })).toContain(name);
+    }
+    for (const prefix of FORBIDDEN_LOG_FIELD_PREFIXES) {
+      const k = `${prefix}MY_VAR`;
+      expect(findForbiddenFields({ [k]: 'value' })).toContain(k);
+    }
+  });
+
+  it('findForbiddenFields ignores allowed structural fields', () => {
+    expect(
+      findForbiddenFields({
+        kind: 'intent',
+        intent: 'ping',
+        request_id: 'r1',
+        status: 'ok',
+        conv_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [1, 2, 3],
+        dropped_count: 0,
+        bytes_dropped: 0,
+        pid: 1234,
+        socket_path: '/tmp/s',
+      }),
+    ).toEqual([]);
+  });
+
+  it('every typed helper emits a line whose top-level keys are forbidden-free', () => {
+    const { lines, logger } = capturingLogger();
+    logIntent(logger, {
+      intent: 'runtime_wake',
+      request_id: 'r1',
+      status: 'received',
+      conv_id: 'c1',
+      agent_id: 'a1',
+    });
+    logEvent(logger, {
+      event: 'runtime_output_dropped',
+      conv_id: 'c1',
+      agent_id: 'a1',
+      dropped_count: 5,
+      bytes_dropped: 1024,
+    });
+    logProcess(logger, {
+      action: 'reclaim',
+      pid: 1234,
+      conv_id: 'c1',
+      agent_id: 'a1',
+      cmdline_match: true,
+    });
+    logDaemon(logger, {
+      action: 'pid_claim',
+      pid: 1234,
+      pid_file_path: '/tmp/daemon.pid',
+    });
+    logBackpressure(logger, {
+      conv_id: 'c1',
+      agent_id: 'a1',
+      action: 'dropped',
+      buffer_bytes: 4_000_000,
+      dropped_count: 12,
+      bytes_dropped: 8192,
+    });
+    expect(lines).toHaveLength(5);
+    for (const line of lines) {
+      expect(findForbiddenFields(line.obj)).toEqual([]);
+    }
+  });
+});
+
+describe('§3.4 — IntentDispatcher payload redaction', () => {
+  /** Stub supervisor that resolves wake successfully so the dispatch
+   *  exercises the full received → ok path. */
+  const stubSupervisor: Supervisor = {
+    start: async () => ({ pid: 1, started_at: 0 }),
+    stop: async () => ({ stopped: true, exit_code: 0 }),
+    wake: async params => ({ delivered: true, delivery_ids: params.delivery_ids }),
+    status: async () => ({ runtimes: [] }),
+    clearSession: async () => ({ cleared: true }),
+    stopAll: async () => ({ stopped_count: 0 }),
+    closeActivityLog: async () => ({ flushed: true }),
+  };
+
+  it('runtime_wake dispatch logs received + ok lines that omit `payload`', async () => {
+    const { lines, logger } = capturingLogger();
+    const d = new IntentDispatcher({ logger, supervisor: stubSupervisor });
+    const SECRET_PAYLOAD =
+      '{"role":"user","content":"VERY-CONFIDENTIAL-USER-INPUT-XYZ"}\n';
+    await d.dispatch('req-1', 'runtime_wake', {
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      delivery_ids: [42],
+      kind: 'message',
+      payload: SECRET_PAYLOAD,
+    });
+    // §3.4: NO log line may carry the payload value or the field name.
+    for (const line of lines) {
+      const flat = JSON.stringify(line.obj);
+      expect(flat).not.toContain('VERY-CONFIDENTIAL-USER-INPUT-XYZ');
+      expect(flat).not.toContain('"payload"');
+    }
+    // Sanity: at least one received + one ok log line landed.
+    const received = lines.filter(l => (l.obj as { status?: string }).status === 'received');
+    const ok = lines.filter(l => (l.obj as { status?: string }).status === 'ok');
+    expect(received).toHaveLength(1);
+    expect(ok).toHaveLength(1);
+    expect(ok[0]!.obj).toMatchObject({
+      kind: 'intent',
+      intent: 'runtime_wake',
+      request_id: 'req-1',
+      status: 'ok',
+      conv_id: 'c1',
+      agent_id: 'a1',
+    });
+    expect(typeof ok[0]!.obj.duration_ms).toBe('number');
+  });
+
+  it('invalid_params dispatch still emits an `error` log line without payload leakage', async () => {
+    const { lines, logger } = capturingLogger();
+    const d = new IntentDispatcher({ logger, supervisor: stubSupervisor });
+    // Pass a malformed wake — missing delivery_ids → invalid_params.
+    await d.dispatch('req-2', 'runtime_wake', {
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      kind: 'message',
+      payload: 'LEAK-ATTEMPT',
+    });
+    for (const line of lines) {
+      const flat = JSON.stringify(line.obj);
+      expect(flat).not.toContain('LEAK-ATTEMPT');
+      expect(flat).not.toContain('"payload"');
+    }
+    const errLine = lines.find(l => (l.obj as { status?: string }).status === 'error');
+    expect(errLine?.obj).toMatchObject({
+      kind: 'intent',
+      intent: 'runtime_wake',
+      status: 'error',
+      error_code: 'invalid_params',
+    });
+  });
+
+  it('shutting-down dispatch logs error + reason without exposing params', async () => {
+    const { lines, logger } = capturingLogger();
+    const d = new IntentDispatcher({ logger, supervisor: stubSupervisor });
+    d.markShuttingDown();
+    await d.dispatch('req-3', 'runtime_wake', {
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      delivery_ids: [1],
+      kind: 'message',
+      payload: 'POST-SHUTDOWN-LEAK',
+    });
+    for (const line of lines) {
+      const flat = JSON.stringify(line.obj);
+      expect(flat).not.toContain('POST-SHUTDOWN-LEAK');
+      expect(flat).not.toContain('"payload"');
+    }
+    const errLine = lines.find(l => (l.obj as { status?: string }).status === 'error');
+    expect(errLine?.obj.error_code).toBe('shutting_down');
+  });
+});
