@@ -135,7 +135,7 @@ PR / 设计稿 review 时按以下顺序检查：
 3. §7 已知漏洞 —— 涉及到的必须显式回应
 4. 涉及鉴权 → 同时过 `permissions.md`
 5. 涉及数据模型 → 同时过 `core-design.md` §2
-6. 涉及 spawn / 子进程 / runtime 生命周期 → 同时过 §10 AgentHost runtime boundary
+6. 涉及 spawn / 子进程 / runtime 生命周期 → 同时过 §9 AgentHost runtime boundary
 
 ---
 
