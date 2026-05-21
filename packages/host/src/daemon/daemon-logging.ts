@@ -49,6 +49,13 @@ export const FORBIDDEN_LOG_FIELDS = [
   'body',
   'text',
   'prompt',
+  // `line` is the raw NDJSON frame string. The malformed-JSON path in
+  // server.ts CANNOT use zod (parse already failed), so the only debug
+  // information available is the line itself — which may carry stdin
+  // / payload bytes. Forbid the field name as a tripwire so future
+  // edits can't accidentally log it. Use `line_bytes` instead. (Cindy
+  // `9rxtrdT2NXfX2zEs` round-3 blocker.)
+  'line',
 ] as const;
 
 export const FORBIDDEN_LOG_FIELD_PREFIXES = ['env_'] as const;

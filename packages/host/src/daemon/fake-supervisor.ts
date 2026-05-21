@@ -282,6 +282,12 @@ export class FakeSupervisor {
     const rt = this.runtimes.get(k);
     if (!rt || rt.phase === 'exited') return { cleared: false };
     rt.phase = 'draining';
+    // Phase change → emit runtime_state so backend snapshot reconcile
+    // sees the draining intermediate (Cindy `9rxtrdT2NXfX2zEs`
+    // blocker — the fake's doc comment promises "runtime_state after
+    // every phase change"; clearSession and stopAll need the same
+    // treatment as stop()).
+    this.emitState(rt);
     // Hard kill semantics: emit exit immediately, no graceful wait.
     this.scheduleExit(rt, 137, /* intentional */ true);
     return { cleared: true };
@@ -294,6 +300,10 @@ export class FakeSupervisor {
     for (const rt of this.runtimes.values()) {
       if (rt.phase === 'exited') continue;
       rt.phase = 'draining';
+      // Same phase-change emit as clearSession / stop — keep the
+      // runtime_state stream consistent across every intent that
+      // moves a runtime into draining.
+      this.emitState(rt);
       this.scheduleExit(rt, 0, /* intentional */ true);
       count++;
     }

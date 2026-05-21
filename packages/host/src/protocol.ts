@@ -605,9 +605,9 @@ export type AnyFrame = z.infer<typeof AnyFrameSchema>;
 /** Hard cap on one frame's encoded size. Guards both directions from
  *  pathological payloads and gives us a clean error to surface
  *  instead of letting the splitter buffer grow without bound.
- *  1 MiB is generous for PR-1's intent surface (largest payload is
- *  echo, ~kB) and leaves headroom for PR-2's runtime_inject which
- *  may carry env maps and small JSON arg lists. */
+ *  1 MiB is generous for PR-2's intent surface — `runtime_wake` and
+ *  `runtime_start.startup_delivery` carry one stream-json line each,
+ *  which is well under the cap in practice. */
 export const MAX_FRAME_BYTES = 1 * 1024 * 1024;
 
 /** Encode an outgoing frame to its NDJSON wire form (single line +

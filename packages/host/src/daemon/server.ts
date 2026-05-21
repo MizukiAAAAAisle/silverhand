@@ -233,8 +233,21 @@ export class DaemonServer {
     } catch (err) {
       // Malformed JSON: the peer is broken. We can't extract a request
       // id to reply against; close the connection to surface the bug.
+      //
+      // §3.4 contract (Cindy `9rxtrdT2NXfX2zEs`): the raw `line` MUST
+      // NOT be logged — a malformed payload-bearing frame would leak
+      // user/stdin bytes into the JSONL since this path never reaches
+      // zod. Log structured fields only: byte size + parser error
+      // class. The parser error message comes from
+      // JSON.parse / V8 ("Unexpected token X at position N") and does
+      // NOT echo the offending byte sequence.
       this.logger.warn(
-        { err: (err as Error).message, line: line.slice(0, 120) },
+        {
+          kind: 'connection',
+          action: 'frame_parse_failed',
+          line_bytes: Buffer.byteLength(line, 'utf8'),
+          parse_error: (err as Error).message,
+        },
         'failed to parse frame as JSON; closing connection',
       );
       socket.destroy();
@@ -242,11 +255,22 @@ export class DaemonServer {
     }
     const validated = AnyFrameSchema.safeParse(parsed);
     if (!validated.success || !('intent' in validated.data)) {
+      // Similar redaction concern: zod issue messages can sometimes
+      // include offending values (e.g. union mismatches). Log only the
+      // issue paths + types so we still get debug signal without
+      // leaking field contents. `paths` are dot-joined field names
+      // ('params.delivery_ids'), structurally safe.
       this.logger.warn(
         {
-          err: validated.success
-            ? 'expected request frame'
-            : validated.error.errors.map(e => e.message).join('; '),
+          kind: 'connection',
+          action: 'frame_invalid',
+          err: validated.success ? 'expected_request_frame' : 'schema_mismatch',
+          issue_count: validated.success
+            ? 0
+            : validated.error.errors.length,
+          issue_paths: validated.success
+            ? undefined
+            : validated.error.errors.map(e => e.path.join('.')),
         },
         'invalid frame; ignoring',
       );

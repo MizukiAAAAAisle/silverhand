@@ -383,6 +383,63 @@ describe('FakeSupervisor — stop / clearSession / stopAll', () => {
     // c2 already exited; only c1 was still live → count=1.
     expect(r.stopped_count).toBe(1);
   });
+
+  it('clearSession emits runtime_state on the draining transition (Cindy `9rxtrdT2NXfX2zEs`)', () => {
+    // Doc comment promises runtime_state after every phase change.
+    // Mirror what stop() already does so backend snapshot reconcile
+    // sees the same wire stream regardless of which hard-kill intent
+    // landed.
+    const h = makeHarness();
+    h.supervisor.start({ conversation_id: 'c1', agent_id: 'a1', options: {} });
+    h.flush();
+    const eventsBefore = h.events.length;
+    h.supervisor.clearSession({ conversation_id: 'c1', agent_id: 'a1' });
+    // Synchronous emit: state(draining) before the scheduled exit.
+    expect(
+      h.events.slice(eventsBefore).map(e => e.event),
+    ).toEqual(['runtime_state']);
+    h.flush();
+    // After the scheduled exit: another runtime_state + runtime_exit.
+    expect(h.events.slice(eventsBefore).map(e => e.event)).toEqual([
+      'runtime_state',
+      'runtime_state',
+      'runtime_exit',
+    ]);
+    const terminal = h.events[h.events.length - 2];
+    if (!terminal || terminal.event !== 'runtime_state') throw new Error('shape');
+    expect(terminal.state.terminalReason).toBe('stopped');
+  });
+
+  it('stopAll emits runtime_state on each draining transition (Cindy `9rxtrdT2NXfX2zEs`)', () => {
+    const h = makeHarness();
+    h.supervisor.start({ conversation_id: 'c1', agent_id: 'a1', options: {} });
+    h.supervisor.start({ conversation_id: 'c2', agent_id: 'a2', options: {} });
+    h.flush();
+    const eventsBefore = h.events.length;
+    h.supervisor.stopAll({});
+    // Two synchronous state(draining) emits — one per live runtime.
+    const synchronous = h.events.slice(eventsBefore);
+    expect(synchronous.map(e => e.event)).toEqual([
+      'runtime_state',
+      'runtime_state',
+    ]);
+    expect(
+      new Set(
+        synchronous
+          .filter((e): e is Extract<typeof e, { event: 'runtime_state' }> =>
+            e.event === 'runtime_state',
+          )
+          .map(e => e.conversation_id),
+      ),
+    ).toEqual(new Set(['c1', 'c2']));
+    h.flush();
+    // After scheduled exits: each runtime adds state(exited) + exit.
+    const after = h.events.slice(eventsBefore);
+    expect(
+      after.filter(e => e.event === 'runtime_state'),
+    ).toHaveLength(4);
+    expect(after.filter(e => e.event === 'runtime_exit')).toHaveLength(2);
+  });
 });
 
 describe('FakeSupervisor — status', () => {

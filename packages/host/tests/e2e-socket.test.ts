@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createConnection } from 'node:net';
 import { runDaemon, type RunningDaemon } from '../src/daemon/index.js';
 import { HostClient } from '../src/client/index.js';
 
@@ -120,5 +121,66 @@ describe('e2e — real Unix socket', () => {
     await f.daemon.stop('test_done');
     // Calling immediately after stop: socket is closed → disconnected.
     await expect(client.ping()).rejects.toMatchObject({ code: 'disconnected' });
+  });
+
+  it('malformed JSON frame is logged with structured fields only — raw line never lands in JSONL (Cindy `9rxtrdT2NXfX2zEs`)', async () => {
+    // §3.4 contract: the malformed-frame path in DaemonServer.handleLine
+    // cannot use zod (JSON.parse already failed), so the raw line is
+    // the only debug info available — which means it can carry stdin
+    // / payload bytes for any frame that happens to be malformed.
+    // Verify the log line carries `line_bytes` + `parse_error` only,
+    // and that the SECRET token embedded in the bad frame never
+    // appears anywhere in the JSONL.
+    const f = await setupFixture();
+    const logPath = f.daemon.logger.filePath;
+    const SECRET = 'LEAK-FROM-MALFORMED-FRAME-AAAAA';
+    // Craft a line that's syntactically invalid JSON (trailing `}` →
+    // `{`) but carries the secret in the payload position.
+    const bad = `{"id":"x","intent":"runtime_wake","params":{"payload":"${SECRET}"}{\n`;
+    await new Promise<void>((resolve, reject) => {
+      const sock = createConnection(f.socketPath);
+      const timer = setTimeout(() => {
+        sock.destroy();
+        reject(new Error('timed out waiting for daemon ack'));
+      }, 2000);
+      sock.on('connect', () => {
+        sock.write(bad, () => {
+          // Give the daemon one event-loop tick to consume the bytes,
+          // log the malformed-frame line, and destroy the conn — then
+          // we tear down our own side and stop waiting.
+          setTimeout(() => {
+            clearTimeout(timer);
+            sock.destroy();
+            resolve();
+          }, 100);
+        });
+      });
+      sock.on('error', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+    // Stop the daemon so the logger drains its write stream.
+    await f.daemon.stop('test_done').catch(() => {});
+    const raw = readFileSync(logPath, 'utf8');
+    expect(raw).not.toContain(SECRET);
+    expect(raw).not.toContain('"line"');
+    const lines = raw
+      .split('\n')
+      .filter(l => l.length > 0)
+      .map(l => JSON.parse(l) as Record<string, unknown>);
+    const malformed = lines.find(
+      l =>
+        l.kind === 'connection' &&
+        (l as { action?: string }).action === 'frame_parse_failed',
+    );
+    expect(malformed).toBeDefined();
+    // splitNdjson strips the trailing newline before passing the line
+    // to JSON.parse, so the logged byte count is `bad` minus the `\n`.
+    expect(malformed!.line_bytes).toBe(
+      Buffer.byteLength(bad, 'utf8') - 1,
+    );
+    expect(typeof malformed!.parse_error).toBe('string');
+    rmSync(f.dir, { recursive: true, force: true });
   });
 });

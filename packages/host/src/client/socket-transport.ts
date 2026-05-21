@@ -103,8 +103,8 @@ export class SocketTransport implements Transport {
       // the client treated the (now legitimately late) response as a
       // duplicate to drop — so the caller saw a phantom failure on a
       // request that actually succeeded. PR-2's larger payloads
-      // (runtime_inject_env, runtime_output streams) would tip into
-      // this corner constantly.
+      // (`runtime_wake`, `runtime_start.startup_delivery`) would tip
+      // into this corner constantly.
       //
       // True failure modes are still surfaced:
       //   - not connected            → handled by the early-return above
