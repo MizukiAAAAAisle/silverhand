@@ -8,7 +8,9 @@
   "exports": {
     ".": "./src/index.ts",
     "./daemon": "./src/daemon/index.ts",
-    "./protocol": "./src/protocol.ts"
+    "./drivers": "./src/drivers/index.ts",
+    "./protocol": "./src/protocol.ts",
+    "./runtimes": "./src/runtimes.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

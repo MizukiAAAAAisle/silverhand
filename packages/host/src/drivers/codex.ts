@@ -5,11 +5,9 @@ import { join } from 'node:path';
 import {
   type Driver,
   type DriverIO,
-  type DriverPromptContext,
   type DriverSpawnContext,
   type ParsedEvent,
 } from './index.js';
-import { buildPlatformPrompt } from './platform-prompt.js';
 
 /**
  * Codex CLI driver.
@@ -98,20 +96,6 @@ export class CodexDriver implements Driver {
 
   applyEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     return { ...baseEnv, NO_COLOR: '1' };
-  }
-
-  buildSystemPrompt(ctx: DriverPromptContext): string {
-    return buildPlatformPrompt({
-      agentId: ctx.agentId,
-      agentName: ctx.agentName,
-      runtime: 'codex',
-      activeProfileDir: ctx.activeProfileDir,
-      roleSystemPrompt: ctx.roleSystemPrompt,
-      currentMemory: ctx.currentMemory,
-      currentConsensus: ctx.currentConsensus,
-      workspaceMemoryIndex: ctx.workspaceMemoryIndex,
-      sessionContext: ctx.sessionContext,
-    });
   }
 
   bindIO(io: DriverIO): void {

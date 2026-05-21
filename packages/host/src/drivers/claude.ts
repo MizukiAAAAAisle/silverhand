@@ -1,11 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import {
   type Driver,
-  type DriverPromptContext,
   type DriverSpawnContext,
   type ParsedEvent,
 } from './index.js';
-import { buildPlatformPrompt } from './platform-prompt.js';
 
 const DISALLOWED_TOOLS = [
   'EnterPlanMode',
@@ -76,20 +74,6 @@ export class ClaudeDriver implements Driver {
     const env = { ...baseEnv };
     delete env.CLAUDECODE;
     return env;
-  }
-
-  buildSystemPrompt(ctx: DriverPromptContext): string {
-    return buildPlatformPrompt({
-      agentId: ctx.agentId,
-      agentName: ctx.agentName,
-      runtime: 'claude',
-      activeProfileDir: ctx.activeProfileDir,
-      roleSystemPrompt: ctx.roleSystemPrompt,
-      currentMemory: ctx.currentMemory,
-      currentConsensus: ctx.currentConsensus,
-      workspaceMemoryIndex: ctx.workspaceMemoryIndex,
-      sessionContext: ctx.sessionContext,
-    });
   }
 
   encodeStdinMessage(content: string, cliSessionId: string | null): string {

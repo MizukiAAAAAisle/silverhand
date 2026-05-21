@@ -26,6 +26,7 @@ import type {
 
 import type { BackendContext } from './context.js';
 import {
+  buildSystemPromptFor,
   getDriver,
   type Driver,
   type DriverPromptContext,
@@ -35,7 +36,7 @@ import {
   type SessionContextInput,
   type WorkspaceMemoryIndexEntry,
 } from './drivers/index.js';
-import { detectRuntimes } from './runtimes.js';
+import { detectRuntimes } from '@silverhand/host/runtimes';
 import { expandProxyEnv } from './proxy.js';
 import { activeAgentProfileDir, agentL1ProfileDir, agentMemoryDirFor } from './agent-profile.js';
 import { prepareSpawnFiles, type SpawnPrepHandle } from './spawn-prep.js';
@@ -635,7 +636,7 @@ export class ConversationManager {
     // Synthesize prompt + write spawn files.
     const agentToken = this.ctx.agentTokens.issue(conversationId, agentId);
     const promptCtx = await this.buildPromptContext(conversation, workspace, agent);
-    const systemPromptText = driver.buildSystemPrompt(promptCtx);
+    const systemPromptText = buildSystemPromptFor(driver.kind, promptCtx);
     const spawnPrep = await prepareSpawnFiles({
       conversationId,
       agentId,

@@ -74,7 +74,7 @@ import { WorkspaceRepo } from './repos/workspace-repo.js';
 import { ConversationRepo, type RepoError } from './repos/conversation-repo.js';
 import { validateWorkspacePath } from './provision.js';
 import { ensureAgentL1Dir, initWorkspaceDir, seedAgentL2 } from './workspace-files.js';
-import { detectRuntimes } from './runtimes.js';
+import { detectRuntimes } from '@silverhand/host/runtimes';
 import { buildAgentWorkspaceDto } from './agent-workspace.js';
 import { AttachmentRejection } from './services/attachment-service.js';
 import {

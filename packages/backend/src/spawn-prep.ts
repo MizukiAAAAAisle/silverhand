@@ -10,7 +10,7 @@ import type { SilverhandCliLauncher } from './context.js';
  * safely (see core-design §4.2).
  *
  * Layout under `<os.tmpdir()>/silverhand/<conversationId>/<agentId>/<spawn>/`:
- *   - system-prompt.md   driver.buildSystemPrompt() output
+ *   - system-prompt.md   buildSystemPromptFor(driver.kind, …) output
  *   - bin/silverhand     stable CLI entrypoint injected at the front of PATH
  *
  * Lifecycle: ConversationManager calls `prepareSpawnFiles` before spawning

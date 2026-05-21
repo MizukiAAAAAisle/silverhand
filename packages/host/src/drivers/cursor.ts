@@ -2,11 +2,9 @@ import { readFileSync } from 'node:fs';
 
 import {
   type Driver,
-  type DriverPromptContext,
   type DriverSpawnContext,
   type ParsedEvent,
 } from './index.js';
-import { buildPlatformPrompt } from './platform-prompt.js';
 
 /**
  * Cursor CLI (`cursor-agent --print`) driver.
@@ -59,20 +57,6 @@ export class CursorDriver implements Driver {
 
   applyEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     return { ...baseEnv, FORCE_COLOR: '0', NO_COLOR: '1' };
-  }
-
-  buildSystemPrompt(ctx: DriverPromptContext): string {
-    return buildPlatformPrompt({
-      agentId: ctx.agentId,
-      agentName: ctx.agentName,
-      runtime: 'cursor',
-      activeProfileDir: ctx.activeProfileDir,
-      roleSystemPrompt: ctx.roleSystemPrompt,
-      currentMemory: ctx.currentMemory,
-      currentConsensus: ctx.currentConsensus,
-      workspaceMemoryIndex: ctx.workspaceMemoryIndex,
-      sessionContext: ctx.sessionContext,
-    });
   }
 
   encodeStdinMessage(_text: string, _cliSessionId: string | null): string | null {
