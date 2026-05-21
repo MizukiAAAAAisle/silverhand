@@ -63,6 +63,10 @@ import type { ParsedEvent } from '@silverhand/shared';
 import type { RuntimeBridge } from './bridge.js';
 import type { RunStateCache } from './run-state-cache.js';
 import { sanitizeParsedEventForBroadcast } from './event-sanitize.js';
+import {
+  NOOP_STATUS_PROJECTOR,
+  type RuntimeStatusProjector,
+} from './status-projector.js';
 
 /**
  * Backend-side SSE publisher contract — matches the existing
@@ -166,6 +170,12 @@ export interface RuntimeEventHandlerDeps {
   cache: RunStateCache;
   events: EventPublisher;
   inboxAck: InboxAckSink;
+  /** Sink for the four events that mutate `conversation_agents` AND
+   *  publish `agent_status` SSE. Default is the noop projector — tests
+   *  that don't exercise DB projection don't need to inject one.
+   *  Production wires `DbRuntimeStatusProjector` in `index.ts`. See
+   *  `runtime/status-projector.ts` for the rationale. */
+  statusProjector?: RuntimeStatusProjector;
   /** Fires on `runtime_ready_for_drain`. Optional in commit 4 since
    *  the drain coordinator may not be wired yet. */
   onReadyForDrain?: ReadyForDrainHandler;
@@ -194,6 +204,7 @@ export class RuntimeEventHandler {
   private readonly cache: RunStateCache;
   private readonly events: EventPublisher;
   private readonly inboxAck: InboxAckSink;
+  private readonly statusProjector: RuntimeStatusProjector;
   private readonly onReadyForDrain?: ReadyForDrainHandler;
   private readonly onParsedEventCb?: ParsedEventHandler;
   private readonly onRuntimeExitCb?: RuntimeExitHandler;
@@ -236,6 +247,7 @@ export class RuntimeEventHandler {
     this.cache = deps.cache;
     this.events = deps.events;
     this.inboxAck = deps.inboxAck;
+    this.statusProjector = deps.statusProjector ?? NOOP_STATUS_PROJECTOR;
     this.onReadyForDrain = deps.onReadyForDrain;
     this.onParsedEventCb = deps.onParsedEvent;
     this.onRuntimeExitCb = deps.onRuntimeExit;
@@ -396,18 +408,18 @@ export class RuntimeEventHandler {
         // Frontend status patcher only listens to `agent_status`; a new
         // kind would leave the runtime stuck in stale status from the
         // pre-retry view. Cindy `ch9ZsU0v0ATr6tr8` blocker 2.
+        //
+        // B1 (Cindy `usjxj8AxX4AvJ5E-`): the projector owns BOTH the
+        // DB write (`status='starting', pid=null`) AND the SSE — status
+        // mapping in one place. Handler only fans out the wire fields.
         const key = `${frame.conversation_id}|${frame.agent_id}`;
         const timeoutReason = this.lastTimeoutReason.get(key);
-        this.events.publish(frame.conversation_id, {
-          kind: 'agent_status',
-          payload: {
-            agent_id: frame.agent_id,
-            status: 'starting',
-            reason: 'init_timeout_retrying',
-            retry_attempt: frame.retry_attempt,
-            max_retries: frame.max_retries,
-            ...(timeoutReason ? { timeout_reason: timeoutReason } : {}),
-          },
+        this.statusProjector.initRetrying({
+          conversationId: frame.conversation_id,
+          agentId: frame.agent_id,
+          retryAttempt: frame.retry_attempt,
+          maxRetries: frame.max_retries,
+          timeoutReason,
         });
         return;
       }
@@ -423,15 +435,13 @@ export class RuntimeEventHandler {
         this.initFailureFlag.add(
           `${frame.conversation_id}|${frame.agent_id}`,
         );
-        this.events.publish(frame.conversation_id, {
-          kind: 'agent_status',
-          payload: {
-            agent_id: frame.agent_id,
-            status: 'crashed',
-            reason: 'init_cooldown',
-            cooldown_until: frame.cooldown_until,
-            attempts_exhausted: frame.attempts_exhausted,
-          },
+        // B1 (Cindy `usjxj8AxX4AvJ5E-`): projector owns DB +
+        // `agent_status` SSE for the cooldown projection.
+        this.statusProjector.initCooldown({
+          conversationId: frame.conversation_id,
+          agentId: frame.agent_id,
+          cooldownUntil: frame.cooldown_until,
+          attemptsExhausted: frame.attempts_exhausted,
         });
         return;
       case 'runtime_compaction_stale':
@@ -459,6 +469,22 @@ export class RuntimeEventHandler {
             event: sanitizeParsedEventForBroadcast(frame.parsed),
           },
         });
+        // B1 (Cindy `usjxj8AxX4AvJ5E-`): claude's `system.init` arrives
+        // as a parsed `session_init` event. Project to DB
+        // (`status='active', cli_session_id=<id>`) + `agent_status` SSE
+        // via the projector. Claude emits `system.init` at the start of
+        // EVERY turn (see conversation-manager.ts:1182-1189) — projector
+        // writes are idempotent at the DB + SSE layer so no dedup here.
+        // The coordinator owns dedup of NON-idempotent side effects
+        // (init-pending inbox ack, drainInbox) via its own
+        // `initObserved` state (B3).
+        if (frame.parsed.kind === 'session_init') {
+          this.statusProjector.sessionInit({
+            conversationId: frame.conversation_id,
+            agentId: frame.agent_id,
+            cliSessionId: frame.parsed.sessionId,
+          });
+        }
         // Mark fatal-error flag for the coordinator's exit gate (Cindy
         // `BYHZJI9ALSVmmlFr` pin c). Only fatal errors suppress
         // oneShot auto-respawn; non-fatal `error` events (e.g.
@@ -631,36 +657,21 @@ export class RuntimeEventHandler {
           frame.agent_id,
         )
       : null;
-    // Status mapping mirrors CM `conversation-manager.ts:856-861`:
-    //   initTimedOut / fatalError  -> 'crashed'
-    //   intentionallyStopped OR code === 0 -> 'idle'
-    //   otherwise                  -> 'crashed'
-    // We project from the wire's `intentional` + `code` plus the two
-    // derived flags we just snapshotted from
-    // `runtime_init_*` / parsed `error{fatal:true}` history. Without
-    // the flags a fatal-error process that exited with code 0 would
-    // misproject to 'idle' (Cindy `rrF2L1RmWq5JFH3m` B2).
-    //
-    // Note: ConversationAgentStatusSchema only allows
-    // `idle|starting|active|crashed` — `'stopped'` was an invalid
-    // enum value that would have been rejected by any consumer that
-    // validates with the shared schema. Cindy `ch9ZsU0v0ATr6tr8`
-    // blocker 1.
-    const status: 'idle' | 'crashed' =
-      initTimedOut || fatalError
-        ? 'crashed'
-        : frame.intentional || frame.code === 0
-          ? 'idle'
-          : 'crashed';
-    this.events.publish(frame.conversation_id, {
-      kind: 'agent_status',
-      payload: {
-        agent_id: frame.agent_id,
-        status,
-        exit_code: frame.code,
-        intentional: frame.intentional,
-        run_state: entry?.runState ?? null,
-      },
+    // B1 (Cindy `usjxj8AxX4AvJ5E-`): projector owns the DB write
+    // (`status='idle'|'crashed', pid=null`) AND the `agent_status`
+    // SSE. Status mapping (initTimedOut/fatalError -> 'crashed';
+    // intentional || code===0 -> 'idle'; else 'crashed') lives in the
+    // projector — see status-projector.ts:runtimeExit. Handler still
+    // owns the cache update above + the gating-flag snapshot below
+    // because those depend on EventHandler-local state.
+    this.statusProjector.runtimeExit({
+      conversationId: frame.conversation_id,
+      agentId: frame.agent_id,
+      intentional: frame.intentional,
+      code: frame.code,
+      initTimedOut,
+      fatalError,
+      runState: entry?.runState ?? null,
     });
     // Forward to the coordinator AFTER cache+SSE updates, so the
     // coordinator's auto-respawn doesn't race a stale projection. The

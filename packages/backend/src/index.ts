@@ -35,6 +35,7 @@ import {
   RuntimeEventHandler,
   type InboxAckSink,
 } from './runtime/event-handler.js';
+import { DbRuntimeStatusProjector } from './runtime/status-projector.js';
 import {
   describeAgentRuntimeHostMode,
   parseAgentRuntimeHostMode,
@@ -241,6 +242,15 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
       cache,
       events: ctx.events,
       inboxAck,
+      // B1 (Cindy `usjxj8AxX4AvJ5E-`): the projector owns both the DB
+      // write to `conversation_agents` AND the matching `agent_status`
+      // SSE for the four status-mutating events (session_init,
+      // runtime_exit, init_retrying, init_cooldown). EventHandler stays
+      // event-fan-out — see `runtime/status-projector.ts`.
+      statusProjector: new DbRuntimeStatusProjector(
+        new ConversationRepo(db),
+        ctx.events,
+      ),
       // Forward parsed events to the coordinator's busy tracker
       // (Cindy `3l4bZ5vaMvlC9DVS`: forward-only — the handler MUST
       // NOT keep its own queue or call bridge.runtimeWake).
