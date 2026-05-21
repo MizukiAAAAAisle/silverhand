@@ -213,6 +213,9 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
       eventHandler,
       events: ctx.events,
       conversations: new ConversationRepo(db),
+      agents: new AgentRepo(db),
+      messages: new MessageRepo(db),
+      db,
       logger,
     });
   } else {

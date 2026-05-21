@@ -2,7 +2,7 @@
  * `DaemonAgentRuntimeHost` — daemon-mode implementation of
  * `AgentRuntimeHost`.
  *
- * # Scope of this sub-commit (2b-ii, slice 2)
+ * # Scope of this sub-commit (2b-ii, slices 1-3)
  *
  * The lifecycle / delivery surface is being filled in across multiple
  * sub-commits. This file currently implements:
@@ -10,27 +10,24 @@
  *   - **Read methods** — `getAgentRunStates`, `resolveRun`,
  *     `resolveConversationRuns` — backed by `RunStateCache` + an
  *     `EventPublisher` for the SSE side of `resolveRun`.
- *   - **Hard stop** — `stop(_, _, 'hard', ...)` delegates to
- *     `RuntimeBridge.runtimeStop({ mode: 'hard' })`.
+ *   - **Stop** — both `'hard'` and `'soft'`. Hard delegates straight
+ *     to `bridge.runtimeStop`; soft composes the directive line via
+ *     the agent's driver and ships it as `soft_directive`.
  *   - **Bulk shutdown** — `stopAll` → `bridge.runtimeStopAll`;
  *     `closeActivityLog` → `bridge.runtimeCloseActivityLog`.
- *   - **Boot recovery** — `reconcileOnBoot` starts the event subscription
- *     (which performs the initial `runtime_status` hydrate), then diffs
- *     the daemon's snapshot against the DB's `starting` / `active`
- *     `conversation_agents` rows. Snapshot-known runtimes are left
- *     alone (daemon is supervising); rows absent from the snapshot are
- *     stale → flipped to `idle`, `pid=null`. `cli_session_id` is kept
- *     so the next start uses `--resume`.
+ *   - **Boot recovery** — `reconcileOnBoot` starts the event
+ *     subscription (which performs the initial `runtime_status`
+ *     hydrate), then diffs the daemon's snapshot against the DB's
+ *     `starting` / `active` `conversation_agents` rows.
+ *   - **Clear session** — `clearSession` calls the bridge BEFORE the
+ *     DB tx (Cindy `5Yrv3roymWkCPxo1` #2), then writes the audit row
+ *     + publishes `agent_status` + `message` SSE.
  *
  * The following methods still throw with a labelled
  * "not-yet-implemented-in-2b-ii" message and a rollback recipe:
  *
  *   - `start`, `deliverMessage` — require lifting CM's spawn-prep /
  *     `formatLiveMessage` / `drainInbox` into shared helpers.
- *   - `clearSession` — requires the shared session-cleared audit
- *     message + delivery path (depends on `deliverMessage`).
- *   - `stop` with `mode === 'soft'` — requires the soft-directive
- *     stream-json payload composition.
  *
  * Daemon mode remains opt-in via `SILVERHAND_RUNTIME_HOST=daemon`; the
  * default (unset / `legacy`) still resolves to the in-process
@@ -52,13 +49,18 @@ import type {
   AgentRunState,
   AgentRunTerminalReason,
 } from '@silverhand/shared';
+import { systemSubtype } from '@silverhand/shared';
 import type { HostClient } from '@silverhand/host';
+import { getDriver } from '@silverhand/host/drivers';
+import type { Database } from 'better-sqlite3';
 import type { BackendLogger } from '../context.js';
 import type {
   ClearSessionResult,
   StartOptions,
 } from '../conversation-manager.js';
+import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
+import type { MessageRepo } from '../repos/message-repo.js';
 import type { AgentRuntimeHost } from './agent-runtime-host.js';
 import type { RuntimeBridge } from './bridge.js';
 import type { RuntimeEventHandler } from './event-handler.js';
@@ -96,6 +98,11 @@ export interface DaemonAgentRuntimeHostDeps {
   eventHandler: RuntimeEventHandler;
   events: EventPublisher;
   conversations: ConversationRepo;
+  agents: AgentRepo;
+  messages: MessageRepo;
+  /** Used by `clearSession` to wrap the row-update + audit insert in
+   *  a single sqlite transaction (matches CM behavior). */
+  db: Database;
   logger: BackendLogger;
 }
 
@@ -106,7 +113,7 @@ export interface DaemonAgentRuntimeHostDeps {
  */
 function notImplemented(method: string): Error {
   return new Error(
-    `${SILVERHAND_RUNTIME_HOST_ENV}=daemon: ${method}() is not yet implemented in sub-commit 2b-ii (this slice covers read methods + hard stop + stopAll + closeActivityLog + reconcileOnBoot only). ` +
+    `${SILVERHAND_RUNTIME_HOST_ENV}=daemon: ${method}() is not yet implemented in sub-commit 2b-ii (slices 1-3 cover read methods + stop + bulk shutdown + reconcileOnBoot + clearSession; start/deliverMessage land in slice 4). ` +
       `To roll back, restart with ${SILVERHAND_RUNTIME_HOST_ENV}=legacy (or unset the variable). ` +
       `The legacy in-process ConversationManager path remains the canonical, fully-supported runtime.`,
   );
@@ -125,6 +132,9 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
   private readonly events: EventPublisher;
   private readonly eventHandler: RuntimeEventHandler;
   private readonly conversations: ConversationRepo;
+  private readonly agents: AgentRepo;
+  private readonly messages: MessageRepo;
+  private readonly db: Database;
   private readonly logger: BackendLogger;
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   private readonly _client: HostClient;
@@ -135,6 +145,9 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
     this.events = deps.events;
     this.eventHandler = deps.eventHandler;
     this.conversations = deps.conversations;
+    this.agents = deps.agents;
+    this.messages = deps.messages;
+    this.db = deps.db;
     this.logger = deps.logger;
     this._client = deps.client;
   }
@@ -149,44 +162,235 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
   }
 
   /**
-   * Stop a runtime via the daemon. Hard mode is implemented;
-   * `'soft'` is deferred to a follow-up slice because it requires
-   * composing the directive stream-json payload (driver-specific,
-   * depends on `cli_session_id` for codex).
+   * Stop a runtime via the daemon.
    *
-   * Hard-mode behavior: ship `runtime_stop({mode:'hard'})` to the
-   * daemon; daemon does its SIGTERM→SIGKILL cascade and emits the
-   * trailing `runtime_exit` event. Backend does NOT touch the cache
-   * here — the `RuntimeEventHandler` will apply `applyRuntimeExit`
-   * when the event lands, and the corresponding SSE `agent_status`
-   * publish is driven by that event-handler path, not by this stop
-   * call. Result is intentionally void: per the
-   * `AgentRuntimeHost.stop` contract the daemon path is fire-and-await;
-   * callers don't get a typed `stopped`/`exit_code` because legacy CM
-   * never returned one either.
+   * - **Hard** (`mode='hard'`, default): ship `runtime_stop({mode:'hard'})`
+   *   to the daemon; daemon does its SIGTERM→SIGKILL cascade and emits
+   *   the trailing `runtime_exit` event. Backend does NOT touch the
+   *   cache here — `RuntimeEventHandler` will apply `applyRuntimeExit`
+   *   when the event lands.
+   * - **Soft** (`mode='soft'`): compose the directive stream-json line
+   *   via the agent's driver, ship it inside
+   *   `runtime_stop({mode:'soft', soft_directive: line})`. Daemon
+   *   writes the bytes to the child's stdin. Default directive matches
+   *   CM's wording ("user requested a course correction…"). If the
+   *   driver returns `null` from `encodeStdinMessage` (oneShot drivers
+   *   that don't accept stdin) we throw — there's no meaningful soft
+   *   semantics for those.
+   *
+   * Daemon's soft result carries `directive_delivered` + an optional
+   * `reason`. Failure (`directive_delivered=false`) is logged but does
+   * NOT throw — CM's soft path is best-effort; a write_failed /
+   * driver_refused / not_running leaves DB+SSE state untouched
+   * (`stop` doesn't return that info to callers anyway).
+   *
+   * Result is `void` to match the legacy `AgentRuntimeHost.stop`
+   * contract — callers never received a typed stopped/exit_code.
    */
   async stop(
     conversationId: string,
     agentId: string,
     mode: 'soft' | 'hard' = 'hard',
-    _softDirective?: string,
+    softDirective?: string,
   ): Promise<void> {
-    if (mode === 'soft') {
-      throw notImplemented('stop(mode=soft)');
+    if (mode === 'hard') {
+      await this.bridge.runtimeStop({
+        conversation_id: conversationId,
+        agent_id: agentId,
+        mode: 'hard',
+      });
+      return;
     }
-    await this.bridge.runtimeStop({
+    // soft
+    const agent = this.agents.get(agentId);
+    if (!agent) throw new Error(`agent ${agentId} not found`);
+    const sa = this.conversations.getAgent(conversationId, agentId);
+    const driver = getDriver(agent.runtime);
+    const directive =
+      softDirective ??
+      '[user requested a course correction — pause your current direction and ' +
+        'wait for the next instruction]';
+    const line = driver.encodeStdinMessage(directive, sa?.cli_session_id ?? null);
+    if (line === null) {
+      throw new Error(
+        `agent ${agentId} runtime '${agent.runtime}' does not accept stdin soft directives ` +
+          `(driver.encodeStdinMessage returned null). Use hard stop or skip the soft path.`,
+      );
+    }
+    const result = await this.bridge.runtimeStop({
       conversation_id: conversationId,
       agent_id: agentId,
-      mode: 'hard',
+      mode: 'soft',
+      soft_directive: line,
     });
+    if (result.mode === 'soft' && !result.directive_delivered) {
+      this.logger.warn(
+        {
+          kind: 'runtime',
+          mode: 'daemon',
+          conv_id: conversationId,
+          agent_id: agentId,
+          reason: result.reason,
+        },
+        'soft stop directive not delivered',
+      );
+    }
   }
 
+  /**
+   * Clear the per-(conv, agent) CLI session (Cindy `5Yrv3roymWkCPxo1`
+   * watchlist item 2: **clearRuntimeSession before DB**).
+   *
+   * Order:
+   *
+   *   1. Validate conversation + agent + conversation_agent membership
+   *      exist. Throws synchronously on missing entities — same shape as
+   *      CM's `clearSessionUnlocked` validation.
+   *   2. Snapshot `prevCliSessionId` + `wasRunning` BEFORE we mutate
+   *      anything. `wasRunning` is derived from the daemon cache (was
+   *      there a non-exited phase entry for this pair?), NOT from the
+   *      bridge result — the bridge `{cleared}` flag answers "did
+   *      daemon actually tear something down?", which is a subtly
+   *      different question (false when nothing was live to tear down,
+   *      true otherwise).
+   *   3. Call `bridge.clearRuntimeSession(conv, agent)`. Cindy
+   *      `BYHZJI9ALSVmmlFr`: transport / `internal_error` rejections
+   *      MUST propagate without touching DB — daemon ack failure means
+   *      runtime side may still be alive, and clearing DB would
+   *      desync the two. `{cleared:true}` AND `{cleared:false}` are
+   *      both treated as "daemon-side cleared; proceed to DB" (false
+   *      simply means "nothing was running to clear").
+   *   4. DB tx: clear `cli_session_id` on `conversation_agents` +
+   *      insert the session-cleared audit message atomically. Then
+   *      publish `agent_status` SSE (so renderers drop the prior
+   *      session badge) and `message` SSE (so the audit appears in
+   *      chat).
+   *
+   * Per-agent delivery of the audit (CM does `deliverMessage` for
+   * every other agent in the conversation so they see the system
+   * message immediately) is DEFERRED to slice 4 — it requires
+   * `deliverMessage`, which lifts CM's spawn-prep + format-inbox
+   * helpers. For now the audit lands on the SSE bus and in the
+   * messages table; agents will pick it up on their next wake.
+   */
   async clearSession(
-    _conversationId: string,
-    _agentId: string,
-    _actorUserId?: string | null,
+    conversationId: string,
+    agentId: string,
+    actorUserId: string | null = null,
   ): Promise<ClearSessionResult> {
-    throw notImplemented('clearSession');
+    // 1. Validate.
+    const conversation = this.conversations.get(conversationId);
+    if (!conversation) {
+      throw new Error(`conversation ${conversationId} not found`);
+    }
+    const agent = this.agents.get(agentId);
+    if (!agent) throw new Error(`agent ${agentId} not found`);
+    const existing = this.conversations.getAgent(conversationId, agentId);
+    if (!existing) {
+      throw new Error(
+        `agent ${agentId} is not a member of conversation ${conversationId}`,
+      );
+    }
+
+    // 2. Snapshot pre-state.
+    const prevCliSessionId = existing.cli_session_id;
+    const cacheEntry = this.cache.get(conversationId, agentId);
+    const wasRunning =
+      cacheEntry !== undefined && cacheEntry.phase !== 'exited';
+
+    // 3. Bridge first. Transport / internal_error rejections propagate
+    //    and leave DB untouched (Cindy `BYHZJI9ALSVmmlFr`). Both arms
+    //    of the daemon result continue to step 4.
+    await this.bridge.clearRuntimeSession(conversationId, agentId);
+
+    // 4. DB tx + audit + SSE.
+    const shouldAudit = wasRunning || prevCliSessionId !== null;
+    const { updated, auditMessage } = this.db.transaction(() => {
+      const updated = this.conversations.updateAgentRuntime(
+        conversationId,
+        agentId,
+        { cliSessionId: null },
+      );
+      if (!updated) {
+        throw new Error(
+          `agent ${agentId} is not a member of conversation ${conversationId}`,
+        );
+      }
+      const auditMessage = shouldAudit
+        ? this.insertSessionClearedAuditMessage({
+            conversationId,
+            agentId,
+            agentName: agent.name,
+            actorUserId,
+            prevCliSessionId,
+            wasRunning,
+          })
+        : null;
+      return { updated, auditMessage };
+    })();
+
+    this.events.publish(conversationId, {
+      kind: 'agent_status',
+      payload: {
+        agent_id: agentId,
+        status: updated.status,
+        pid: updated.pid,
+        cli_session_id: null,
+      },
+    });
+    if (auditMessage) {
+      this.events.publish(conversationId, {
+        kind: 'message',
+        payload: { message: auditMessage },
+      });
+      // TODO(2b-ii slice 4): once `deliverMessage` is implemented,
+      // wake every other agent in the conversation with the audit
+      // message (mirror CM `publishAndDeliverSessionClearedAudit`).
+      // Until then the audit shows in chat + lands in the messages
+      // table, but other agents only see it on their next wake.
+    }
+
+    return { prevCliSessionId, wasRunning };
+  }
+
+  /**
+   * Mirrors CM `insertSessionClearedAuditMessage` (line 1183-1214) so
+   * the audit row shape (content text, metadata.subtype, the prefix
+   * truncation) stays byte-identical between legacy and daemon paths.
+   * Lifted inline here rather than shared because CM is being removed
+   * after the cutover (commit 5+).
+   */
+  private insertSessionClearedAuditMessage(params: {
+    conversationId: string;
+    agentId: string;
+    agentName: string;
+    actorUserId: string | null;
+    prevCliSessionId: string | null;
+    wasRunning: boolean;
+  }) {
+    const actor = params.actorUserId ? `@${params.actorUserId}` : 'A user';
+    const prevLabel = params.prevCliSessionId
+      ? `${params.prevCliSessionId.slice(0, 8)}...`
+      : 'none';
+    return this.messages.insertForConversation({
+      conversationId: params.conversationId,
+      fromKind: 'system',
+      fromUserId: params.actorUserId,
+      content:
+        `${actor} cleared @${params.agentName}'s CLI session context ` +
+        `(prev session: ${prevLabel}). Next start will use a fresh session; ` +
+        'pending deliveries remain queued.',
+      metadata: {
+        subtype: systemSubtype('session_cleared'),
+        agent_id: params.agentId,
+        agent_name: params.agentName,
+        actor_user_id: params.actorUserId,
+        previous_cli_session_id_prefix: params.prevCliSessionId
+          ? params.prevCliSessionId.slice(0, 8)
+          : null,
+        was_running: params.wasRunning,
+      },
+    });
   }
 
   /**

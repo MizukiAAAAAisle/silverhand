@@ -8,12 +8,14 @@
  *   - `resolveRun` — cache.resolveRun + SSE `agent_activity`
  *   - `resolveConversationRuns` — cache.resolveConversationRuns + SSE
  *   - `stop` with `mode='hard'` — `bridge.runtimeStop({mode:'hard'})`
+ *   - `stop` with `mode='soft'` — driver-encode + ship via bridge
  *   - `stopAll` — `bridge.runtimeStopAll`
  *   - `closeActivityLog` — `bridge.runtimeCloseActivityLog`
+ *   - `reconcileOnBoot` — daemon snapshot-aware diff
+ *   - `clearSession` — bridge first, DB tx + audit + SSE
  *
  * Still throws (covered by scaffolding-error tests below):
- *   - `start`, `deliverMessage`, `clearSession`, `reconcileOnBoot`
- *   - `stop` with `mode='soft'`
+ *   - `start`, `deliverMessage`
  *
  * Cindy `0G5uJBydO_4qt_2r` pin: the throw is the contract, NOT a silent
  * no-op. Tests assert each throw names the env var, the offending
@@ -24,6 +26,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type {
   HostClient,
+  RuntimeClearSessionResult,
   RuntimeCloseActivityLogResult,
   RuntimeStatusResult,
   RuntimeStopAllResult,
@@ -31,6 +34,7 @@ import type {
   RuntimeStopResult,
 } from '@silverhand/host';
 import type { AgentRunState } from '@silverhand/shared';
+import type { Database } from 'better-sqlite3';
 import { DaemonAgentRuntimeHost } from '../../src/runtime/daemon-agent-runtime-host.js';
 import { RuntimeBridge } from '../../src/runtime/bridge.js';
 import { RunStateCache } from '../../src/runtime/run-state-cache.js';
@@ -40,6 +44,7 @@ import type { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { ConversationRepo as RealConversationRepo } from '../../src/repos/conversation-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
+import { MessageRepo } from '../../src/repos/message-repo.js';
 import type { BackendLogger } from '../../src/context.js';
 import { openTestDb, makeTempSilverhandDir } from '../utils/db.js';
 
@@ -54,6 +59,12 @@ interface ClientOverrides {
     | Promise<RuntimeCloseActivityLogResult>
     | RuntimeCloseActivityLogResult;
   runtimeStatus?: () => Promise<RuntimeStatusResult> | RuntimeStatusResult;
+  runtimeClearSession?: (params: {
+    conversation_id: string;
+    agent_id: string;
+  }) =>
+    | Promise<RuntimeClearSessionResult>
+    | RuntimeClearSessionResult;
   subscribe?: HostClient['subscribe'];
 }
 
@@ -65,13 +76,35 @@ const noopLogger: BackendLogger = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 } as any;
 
-// Minimal stub used by tests that never call reconcileOnBoot — the
-// type checker insists on a ConversationRepo shape, but listLiveStatusAgents
-// is never invoked. Cast through `unknown` keeps the surface narrow.
+// Minimal stub used by tests that don't exercise reconcileOnBoot /
+// clearSession / soft-stop — the type checker insists on the
+// ConversationRepo / AgentRepo / MessageRepo / Database shapes, but
+// the methods involved are never invoked. Cast through `unknown` keeps
+// each stub surface narrow.
 const noopConversationRepo = {
   listLiveStatusAgents: () => [],
   updateAgentRuntime: () => null,
+  get: () => null,
+  getAgent: () => null,
 } as unknown as ConversationRepo;
+
+const noopAgentRepo = {
+  get: () => null,
+} as unknown as AgentRepo;
+
+const noopMessageRepo = {
+  insertForConversation: () => {
+    throw new Error('noopMessageRepo.insertForConversation invoked');
+  },
+} as unknown as MessageRepo;
+
+// `db.transaction(fn)` returns a function that, when called, invokes
+// `fn` and returns its result. The real better-sqlite3 wraps in a
+// SQLite transaction; for tests that never reach the tx body the stub
+// is just an identity wrapper.
+const noopDb = {
+  transaction: <T>(fn: () => T) => () => fn(),
+} as unknown as Database;
 
 function makeFakeClient(overrides: ClientOverrides = {}): HostClient {
   // Methods absent from `overrides` are unreachable in the tests below
@@ -93,7 +126,10 @@ function makeFakeClient(overrides: ClientOverrides = {}): HostClient {
     runtimeStatus: overrides.runtimeStatus
       ? async () => overrides.runtimeStatus!()
       : reject,
-    runtimeClearSession: reject,
+    runtimeClearSession: overrides.runtimeClearSession
+      ? async (params: { conversation_id: string; agent_id: string }) =>
+          overrides.runtimeClearSession!(params)
+      : reject,
     runtimeStopAll: overrides.runtimeStopAll
       ? async () => overrides.runtimeStopAll!()
       : reject,
@@ -118,6 +154,11 @@ interface HostFixture {
 function makeHost(
   clientOverrides: ClientOverrides = {},
   conversations: ConversationRepo = noopConversationRepo,
+  extraDeps: {
+    agents?: AgentRepo;
+    messages?: MessageRepo;
+    db?: Database;
+  } = {},
 ): HostFixture {
   const client = makeFakeClient(clientOverrides);
   const bridge = new RuntimeBridge(client, { get: () => null });
@@ -146,6 +187,9 @@ function makeHost(
     eventHandler,
     events: publisher,
     conversations,
+    agents: extraDeps.agents ?? noopAgentRepo,
+    messages: extraDeps.messages ?? noopMessageRepo,
+    db: extraDeps.db ?? noopDb,
     logger: noopLogger,
   });
   return { host, cache, bridge, events, publisher };
@@ -456,6 +500,222 @@ describe('DaemonAgentRuntimeHost — stop (hard)', () => {
   });
 });
 
+// ── stop (soft) ─────────────────────────────────────────────────────
+//
+// Slice 3: soft stop composes the directive stream-json line via the
+// agent's driver, ships it inside `runtime_stop({mode:'soft',
+// soft_directive: line})`. The cache is NOT mutated (event handler
+// owns the exit projection — same as hard stop). Failure modes:
+//
+//   * driver returns `null` from encodeStdinMessage (e.g. cursor /
+//     codex oneShot drivers) → throw synchronously, do NOT call
+//     bridge.
+//   * agent row missing → throw synchronously, do NOT call bridge.
+//   * `directive_delivered=false` from daemon → log warn, do NOT throw
+//     (CM's soft path is best-effort).
+
+function makeAgentRepoStub(
+  agents: Array<{ id: string; name: string; runtime: 'claude' | 'cursor' }>,
+): AgentRepo {
+  const byId = new Map(agents.map(a => [a.id, a]));
+  return {
+    get: (id: string) => byId.get(id) ?? null,
+  } as unknown as AgentRepo;
+}
+
+function makeConvRepoStub(
+  rows: Array<{
+    conversation_id: string;
+    agent_id: string;
+    cli_session_id: string | null;
+  }>,
+): ConversationRepo {
+  const byKey = new Map(rows.map(r => [`${r.conversation_id}|${r.agent_id}`, r]));
+  return {
+    listLiveStatusAgents: () => [],
+    updateAgentRuntime: () => null,
+    get: () => null,
+    getAgent: (cid: string, aid: string) => byKey.get(`${cid}|${aid}`) ?? null,
+  } as unknown as ConversationRepo;
+}
+
+describe('DaemonAgentRuntimeHost — stop (soft)', () => {
+  it('encodes directive via driver + ships via bridge with soft_directive', async () => {
+    const runtimeStop = vi.fn(
+      async (_params: RuntimeStopParams): Promise<RuntimeStopResult> => ({
+        mode: 'soft',
+        directive_delivered: true,
+      }),
+    );
+    const agents = makeAgentRepoStub([
+      { id: AGENT_X, name: 'alice', runtime: 'claude' },
+    ]);
+    const conversations = makeConvRepoStub([
+      {
+        conversation_id: CONV,
+        agent_id: AGENT_X,
+        cli_session_id: 'sess-abc',
+      },
+    ]);
+    const { host } = makeHost({ runtimeStop }, conversations, { agents });
+    await host.stop(CONV, AGENT_X, 'soft', 'pause and wait');
+
+    expect(runtimeStop).toHaveBeenCalledTimes(1);
+    const call = runtimeStop.mock.calls[0]![0];
+    expect(call.conversation_id).toBe(CONV);
+    expect(call.agent_id).toBe(AGENT_X);
+    expect(call.mode).toBe('soft');
+    // The directive line must be a JSON-encoded claude stream-json
+    // user message carrying the directive verbatim + the current
+    // cli_session_id from the DB row.
+    const decoded = JSON.parse((call as { soft_directive: string }).soft_directive);
+    expect(decoded.type).toBe('user');
+    expect(decoded.message.content[0].text).toBe('pause and wait');
+    expect(decoded.session_id).toBe('sess-abc');
+  });
+
+  it('uses default directive when softDirective omitted', async () => {
+    const runtimeStop = vi.fn(
+      async (_params: RuntimeStopParams): Promise<RuntimeStopResult> => ({
+        mode: 'soft',
+        directive_delivered: true,
+      }),
+    );
+    const agents = makeAgentRepoStub([
+      { id: AGENT_X, name: 'alice', runtime: 'claude' },
+    ]);
+    const conversations = makeConvRepoStub([
+      { conversation_id: CONV, agent_id: AGENT_X, cli_session_id: null },
+    ]);
+    const { host } = makeHost({ runtimeStop }, conversations, { agents });
+    await host.stop(CONV, AGENT_X, 'soft');
+    const decoded = JSON.parse(
+      (runtimeStop.mock.calls[0]![0] as { soft_directive: string }).soft_directive,
+    );
+    // Default phrasing must mention "course correction" so CM-parity
+    // tests don't drift.
+    expect(decoded.message.content[0].text).toMatch(/course correction/);
+    // No cli_session_id present in the row → no session_id field
+    // on the encoded line.
+    expect(decoded.session_id).toBeUndefined();
+  });
+
+  it('throws without calling bridge when driver does not accept stdin (oneShot)', async () => {
+    const runtimeStop = vi.fn(
+      async (): Promise<RuntimeStopResult> => ({
+        mode: 'soft',
+        directive_delivered: true,
+      }),
+    );
+    const agents = makeAgentRepoStub([
+      { id: AGENT_X, name: 'cursor-bot', runtime: 'cursor' },
+    ]);
+    const conversations = makeConvRepoStub([
+      { conversation_id: CONV, agent_id: AGENT_X, cli_session_id: null },
+    ]);
+    const { host } = makeHost({ runtimeStop }, conversations, { agents });
+    await expect(host.stop(CONV, AGENT_X, 'soft')).rejects.toThrow(
+      /does not accept stdin soft directives/,
+    );
+    expect(runtimeStop).not.toHaveBeenCalled();
+  });
+
+  it('throws without calling bridge when agent row missing', async () => {
+    const runtimeStop = vi.fn(
+      async (): Promise<RuntimeStopResult> => ({
+        mode: 'soft',
+        directive_delivered: true,
+      }),
+    );
+    // Empty agents stub → host.stop will throw "agent not found".
+    const { host } = makeHost(
+      { runtimeStop },
+      makeConvRepoStub([]),
+      { agents: makeAgentRepoStub([]) },
+    );
+    await expect(host.stop(CONV, AGENT_X, 'soft')).rejects.toThrow(/not found/);
+    expect(runtimeStop).not.toHaveBeenCalled();
+  });
+
+  it('logs warn (does NOT throw) when daemon reports directive_delivered=false', async () => {
+    const runtimeStop = vi.fn(
+      async (): Promise<RuntimeStopResult> => ({
+        mode: 'soft',
+        directive_delivered: false,
+        reason: 'not_running',
+      }),
+    );
+    const warned: Array<{ obj: unknown; msg: string }> = [];
+    const agents = makeAgentRepoStub([
+      { id: AGENT_X, name: 'alice', runtime: 'claude' },
+    ]);
+    const conversations = makeConvRepoStub([
+      { conversation_id: CONV, agent_id: AGENT_X, cli_session_id: null },
+    ]);
+    const client = makeFakeClient({ runtimeStop });
+    const bridge = new RuntimeBridge(client, { get: () => null });
+    const cache = new RunStateCache();
+    const events: HostFixture['events'] = { publishes: [] };
+    const publisher: EventPublisher = {
+      publish: (cid, payload) =>
+        events.publishes.push({
+          conversationId: cid,
+          kind: payload.kind,
+          payload: payload.payload,
+        }),
+    };
+    const eventHandler = new RuntimeEventHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: { markDelivered: () => {}, markUndelivered: () => {} },
+    });
+    const customLogger: BackendLogger = {
+      ...noopLogger,
+      warn: (obj: unknown, msg: string) => warned.push({ obj, msg }),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+    const host = new DaemonAgentRuntimeHost({
+      client,
+      bridge,
+      cache,
+      eventHandler,
+      events: publisher,
+      conversations,
+      agents,
+      messages: noopMessageRepo,
+      db: noopDb,
+      logger: customLogger,
+    });
+    await host.stop(CONV, AGENT_X, 'soft', 'pause now');
+    expect(warned.length).toBe(1);
+    expect(warned[0]!.msg).toMatch(/soft stop directive not delivered/);
+    expect(warned[0]!.obj).toMatchObject({
+      mode: 'daemon',
+      conv_id: CONV,
+      agent_id: AGENT_X,
+      reason: 'not_running',
+    });
+  });
+
+  it('propagates bridge errors (does NOT swallow)', async () => {
+    const runtimeStop = vi.fn(async (): Promise<RuntimeStopResult> => {
+      throw new Error('daemon disconnected');
+    });
+    const agents = makeAgentRepoStub([
+      { id: AGENT_X, name: 'alice', runtime: 'claude' },
+    ]);
+    const conversations = makeConvRepoStub([
+      { conversation_id: CONV, agent_id: AGENT_X, cli_session_id: null },
+    ]);
+    const { host } = makeHost({ runtimeStop }, conversations, { agents });
+    await expect(host.stop(CONV, AGENT_X, 'soft')).rejects.toThrow(
+      'daemon disconnected',
+    );
+  });
+});
+
 describe('DaemonAgentRuntimeHost — stopAll / closeActivityLog', () => {
   it('stopAll delegates to bridge.runtimeStopAll', async () => {
     const runtimeStopAll = vi.fn(
@@ -504,24 +764,6 @@ describe('DaemonAgentRuntimeHost — not-yet-implemented (2b-ii scaffold)', () =
     assertScaffoldingError(err, 'start');
   });
 
-  it('stop(mode=soft) throws with rollback recipe', async () => {
-    const { host } = makeHost();
-    let err: unknown;
-    await host.stop(CONV, AGENT_X, 'soft', 'pause now').catch(e => {
-      err = e;
-    });
-    assertScaffoldingError(err, 'stop(mode=soft)');
-  });
-
-  it('clearSession() throws with rollback recipe', async () => {
-    const { host } = makeHost();
-    let err: unknown;
-    await host.clearSession(CONV, AGENT_X, 'user-1').catch(e => {
-      err = e;
-    });
-    assertScaffoldingError(err, 'clearSession');
-  });
-
   it('deliverMessage() throws — does NOT silently mark delivered', async () => {
     // Cindy `0G5uJBydO_4qt_2r`: "不能假装 delivered、也不能改变 markDelivered
     // 时点." The throw is the contract: no inbox row state is mutated.
@@ -556,6 +798,9 @@ describe('DaemonAgentRuntimeHost — constructor', () => {
           eventHandler,
           events,
           conversations: noopConversationRepo,
+          agents: noopAgentRepo,
+          messages: noopMessageRepo,
+          db: noopDb,
           logger: noopLogger,
         }),
     ).not.toThrow();
@@ -773,6 +1018,370 @@ describe('DaemonAgentRuntimeHost — reconcileOnBoot', () => {
       expect(
         events.publishes.filter(e => e.kind === 'agent_status'),
       ).toEqual([]);
+    } finally {
+      fix.cleanup();
+    }
+  });
+});
+
+// ── clearSession ────────────────────────────────────────────────────
+//
+// Slice 3 (Cindy `5Yrv3roymWkCPxo1` watchlist #2): bridge BEFORE DB.
+// Pinned guarantees:
+//
+//   1. Validation throws synchronously (missing conv / agent /
+//      membership) — bridge NOT called.
+//   2. `bridge.clearRuntimeSession` runs first. Transport / internal
+//      errors propagate; DB is NOT touched (Cindy `BYHZJI9ALSVmmlFr`).
+//   3. After bridge ack, DB tx clears `cli_session_id` AND inserts an
+//      audit row atomically (one tx, both succeed or both roll back).
+//   4. Audit only inserted when `wasRunning || prevCliSessionId !==
+//      null` (matches CM `shouldAudit`).
+//   5. `wasRunning` derived from the cache view (phase !== 'exited'),
+//      NOT from the bridge `{cleared}` flag.
+//   6. SSE: `agent_status` always; `message` only when audit landed.
+
+interface ClearSessionFixture {
+  silverhandDir: string;
+  cleanup: () => void;
+  conversations: ConversationRepo;
+  agents: AgentRepo;
+  messages: MessageRepo;
+  db: Database;
+  channelId: string;
+  agentId: string;
+  /** The session id seeded on the row at fixture creation time. */
+  initialCliSessionId: string | null;
+  countMessages(): number;
+  /** Reads the latest message row from the conversation. */
+  lastMessage(): {
+    content: string;
+    from_kind: string;
+    metadata: Record<string, unknown> | null;
+  } | null;
+}
+
+function makeClearSessionFixture(
+  opts: { initialCliSessionId?: string | null } = {},
+): ClearSessionFixture {
+  const { db, viewerUserId, localHostId } = openTestDb();
+  const { silverhandDir, workspacesRoot, cleanup } = makeTempSilverhandDir();
+  const conversations = new RealConversationRepo(db);
+  const agents = new AgentRepo(db);
+  const workspaces = new WorkspaceRepo(db, { workspacesRoot });
+  const messages = new MessageRepo(db);
+
+  const ws = workspaces.insert({
+    name: 'ws-clear',
+    description: null,
+    workspacePath: `${workspacesRoot}/ws-clear`,
+    workspaceHostId: localHostId,
+  });
+  const agent = agents.create(
+    { name: 'agent-clear', runtime: 'claude', host_id: localHostId },
+    localHostId,
+    viewerUserId,
+  );
+  const channel = conversations.insertChannel({
+    workspaceId: ws.id,
+    workspacePath: ws.workspace_path,
+    title: 'ws-clear',
+    spawnedByAgentId: null,
+  });
+  conversations.addAgent(channel.id, agent.id);
+  const initialCliSessionId =
+    opts.initialCliSessionId === undefined
+      ? 'sess-deadbeef-abc123'
+      : opts.initialCliSessionId;
+  if (initialCliSessionId !== null) {
+    conversations.updateAgentRuntime(channel.id, agent.id, {
+      cliSessionId: initialCliSessionId,
+    });
+  }
+
+  return {
+    silverhandDir,
+    cleanup,
+    conversations,
+    agents,
+    messages,
+    db,
+    channelId: channel.id,
+    agentId: agent.id,
+    initialCliSessionId,
+    countMessages: () =>
+      (db
+        .prepare<[string], { c: number }>(
+          'SELECT COUNT(*) AS c FROM messages WHERE conversation_id = ?',
+        )
+        .get(channel.id)?.c ?? 0) as number,
+    lastMessage: () => {
+      const row = db
+        .prepare<
+          [string],
+          {
+            content: string;
+            from_kind: string;
+            metadata: string | null;
+          }
+        >(
+          `SELECT content, from_kind, metadata
+             FROM messages WHERE conversation_id = ?
+            ORDER BY seq DESC LIMIT 1`,
+        )
+        .get(channel.id);
+      if (!row) return null;
+      return {
+        content: row.content,
+        from_kind: row.from_kind,
+        metadata: row.metadata ? JSON.parse(row.metadata) : null,
+      };
+    },
+  };
+}
+
+describe('DaemonAgentRuntimeHost — clearSession', () => {
+  it('validation throws (missing conversation) WITHOUT touching bridge or DB', async () => {
+    const fix = makeClearSessionFixture();
+    try {
+      const runtimeClearSession = vi.fn(
+        async (): Promise<RuntimeClearSessionResult> => ({ cleared: true }),
+      );
+      const { host } = makeHost(
+        { runtimeClearSession },
+        fix.conversations,
+        { agents: fix.agents, messages: fix.messages, db: fix.db },
+      );
+      await expect(
+        host.clearSession('conv-nope', fix.agentId, 'alice'),
+      ).rejects.toThrow(/conversation .* not found/);
+      expect(runtimeClearSession).not.toHaveBeenCalled();
+      // Row untouched.
+      const after = fix.conversations.getAgent(fix.channelId, fix.agentId);
+      expect(after?.cli_session_id).toBe(fix.initialCliSessionId);
+      expect(fix.countMessages()).toBe(0);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('calls bridge.clearRuntimeSession BEFORE writing to DB (order pinned)', async () => {
+    const fix = makeClearSessionFixture();
+    try {
+      const callOrder: string[] = [];
+      const runtimeClearSession = vi.fn(
+        async (): Promise<RuntimeClearSessionResult> => {
+          callOrder.push('bridge');
+          // Snapshot the DB at the moment the bridge is invoked —
+          // cli_session_id MUST still be the seeded value (the tx has
+          // not run yet).
+          const snap = fix.conversations.getAgent(fix.channelId, fix.agentId);
+          callOrder.push(`db-during-bridge=${snap?.cli_session_id ?? 'null'}`);
+          return { cleared: true };
+        },
+      );
+      const { host } = makeHost(
+        { runtimeClearSession },
+        fix.conversations,
+        { agents: fix.agents, messages: fix.messages, db: fix.db },
+      );
+      const result = await host.clearSession(
+        fix.channelId,
+        fix.agentId,
+        'alice',
+      );
+      expect(callOrder[0]).toBe('bridge');
+      expect(callOrder[1]).toBe(`db-during-bridge=${fix.initialCliSessionId}`);
+      // After call returns, DB is cleared.
+      const after = fix.conversations.getAgent(fix.channelId, fix.agentId);
+      expect(after?.cli_session_id).toBeNull();
+      expect(result.prevCliSessionId).toBe(fix.initialCliSessionId);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('transport error from bridge propagates; DB is NOT touched', async () => {
+    const fix = makeClearSessionFixture();
+    try {
+      const runtimeClearSession = vi.fn(
+        async (): Promise<RuntimeClearSessionResult> => {
+          throw new Error('daemon transport error');
+        },
+      );
+      const { host, events } = makeHost(
+        { runtimeClearSession },
+        fix.conversations,
+        { agents: fix.agents, messages: fix.messages, db: fix.db },
+      );
+      await expect(
+        host.clearSession(fix.channelId, fix.agentId, 'alice'),
+      ).rejects.toThrow('daemon transport error');
+      expect(runtimeClearSession).toHaveBeenCalledTimes(1);
+      // DB row untouched.
+      const after = fix.conversations.getAgent(fix.channelId, fix.agentId);
+      expect(after?.cli_session_id).toBe(fix.initialCliSessionId);
+      // No audit row.
+      expect(fix.countMessages()).toBe(0);
+      // No SSE either.
+      expect(events.publishes).toEqual([]);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('writes audit + publishes agent_status + message when prevCliSessionId was set', async () => {
+    const fix = makeClearSessionFixture();
+    try {
+      const runtimeClearSession = vi.fn(
+        async (): Promise<RuntimeClearSessionResult> => ({ cleared: true }),
+      );
+      const { host, events } = makeHost(
+        { runtimeClearSession },
+        fix.conversations,
+        { agents: fix.agents, messages: fix.messages, db: fix.db },
+      );
+      const result = await host.clearSession(
+        fix.channelId,
+        fix.agentId,
+        'alice',
+      );
+
+      // Result reflects pre-state.
+      expect(result.prevCliSessionId).toBe(fix.initialCliSessionId);
+      expect(result.wasRunning).toBe(false); // cache empty
+
+      // Row cleared.
+      const after = fix.conversations.getAgent(fix.channelId, fix.agentId);
+      expect(after?.cli_session_id).toBeNull();
+
+      // Audit row inserted (shouldAudit = prevCliSessionId !== null).
+      expect(fix.countMessages()).toBe(1);
+      const audit = fix.lastMessage()!;
+      expect(audit.from_kind).toBe('system');
+      expect(audit.content).toMatch(/cleared @agent-clear's CLI session context/);
+      // Prev session prefix truncated to first 8 chars + '...'
+      expect(audit.content).toContain('sess-dea...');
+      expect(audit.metadata?.subtype).toBe('session_cleared');
+      expect(audit.metadata?.was_running).toBe(false);
+
+      // SSE: agent_status + message in this order.
+      const kinds = events.publishes.map(e => e.kind);
+      expect(kinds).toEqual(['agent_status', 'message']);
+      expect(events.publishes[0]!.payload).toMatchObject({
+        agent_id: fix.agentId,
+        cli_session_id: null,
+      });
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('skips audit + skips message SSE when prevCliSessionId is null and not running', async () => {
+    const fix = makeClearSessionFixture({ initialCliSessionId: null });
+    try {
+      const runtimeClearSession = vi.fn(
+        async (): Promise<RuntimeClearSessionResult> => ({ cleared: false }),
+      );
+      const { host, events } = makeHost(
+        { runtimeClearSession },
+        fix.conversations,
+        { agents: fix.agents, messages: fix.messages, db: fix.db },
+      );
+      const result = await host.clearSession(
+        fix.channelId,
+        fix.agentId,
+        'alice',
+      );
+      expect(result.prevCliSessionId).toBeNull();
+      expect(result.wasRunning).toBe(false);
+      // shouldAudit = false → no message row.
+      expect(fix.countMessages()).toBe(0);
+      // SSE: agent_status only.
+      const kinds = events.publishes.map(e => e.kind);
+      expect(kinds).toEqual(['agent_status']);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('derives wasRunning=true from cache (phase != exited), audits even with null prevCliSessionId', async () => {
+    const fix = makeClearSessionFixture({ initialCliSessionId: null });
+    try {
+      const runtimeClearSession = vi.fn(
+        async (): Promise<RuntimeClearSessionResult> => ({ cleared: true }),
+      );
+      const { host, cache, events } = makeHost(
+        { runtimeClearSession },
+        fix.conversations,
+        { agents: fix.agents, messages: fix.messages, db: fix.db },
+      );
+      // Pre-populate cache so phase=ready (i.e. running).
+      cache.applyRuntimeStatus(DAEMON_KEY, [
+        {
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+          pid: 1,
+          phase: 'ready',
+          run_state: null,
+          started_at: 1700000000000,
+        },
+      ]);
+      const result = await host.clearSession(
+        fix.channelId,
+        fix.agentId,
+        'alice',
+      );
+      expect(result.wasRunning).toBe(true);
+      // shouldAudit fires because wasRunning (even though
+      // prevCliSessionId is null).
+      expect(fix.countMessages()).toBe(1);
+      const kinds = events.publishes.map(e => e.kind);
+      expect(kinds).toEqual(['agent_status', 'message']);
+      const audit = fix.lastMessage()!;
+      expect(audit.metadata?.was_running).toBe(true);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('proceeds with DB tx when bridge returns {cleared:false} (means "nothing to tear down")', async () => {
+    // Cindy `BYHZJI9ALSVmmlFr`: `{cleared:false}` is a valid ack —
+    // daemon side had nothing live to clear, backend STILL clears
+    // its DB session id + writes audit.
+    const fix = makeClearSessionFixture();
+    try {
+      const runtimeClearSession = vi.fn(
+        async (): Promise<RuntimeClearSessionResult> => ({ cleared: false }),
+      );
+      const { host } = makeHost(
+        { runtimeClearSession },
+        fix.conversations,
+        { agents: fix.agents, messages: fix.messages, db: fix.db },
+      );
+      await host.clearSession(fix.channelId, fix.agentId, 'alice');
+      const after = fix.conversations.getAgent(fix.channelId, fix.agentId);
+      expect(after?.cli_session_id).toBeNull();
+      expect(fix.countMessages()).toBe(1);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('audit content carries "A user" prefix when actorUserId is null', async () => {
+    const fix = makeClearSessionFixture();
+    try {
+      const runtimeClearSession = vi.fn(
+        async (): Promise<RuntimeClearSessionResult> => ({ cleared: true }),
+      );
+      const { host } = makeHost(
+        { runtimeClearSession },
+        fix.conversations,
+        { agents: fix.agents, messages: fix.messages, db: fix.db },
+      );
+      await host.clearSession(fix.channelId, fix.agentId, null);
+      const audit = fix.lastMessage()!;
+      expect(audit.content).toMatch(/^A user cleared/);
     } finally {
       fix.cleanup();
     }
