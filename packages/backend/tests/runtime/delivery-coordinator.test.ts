@@ -123,14 +123,21 @@ function makeInboxSink(): {
 const DRIVER_DIRECT: DriverDeliveryView = {
   busyDeliveryMode: 'direct',
   oneShot: false,
+  kickoffMode: 'self_inits',
 };
 const DRIVER_GATED: DriverDeliveryView = {
   busyDeliveryMode: 'gated',
   oneShot: false,
+  // claude is gated AND requires_first_message — but most legacy tests
+  // in this file predate B3 and assert immediate ack on `delivered:true`.
+  // Use `self_inits` here so existing assertions stay valid. B3-specific
+  // tests below use a per-test driver with `requires_first_message`.
+  kickoffMode: 'self_inits',
 };
 const DRIVER_NONE: DriverDeliveryView = {
   busyDeliveryMode: 'none',
   oneShot: true,
+  kickoffMode: 'self_inits',
 };
 
 function req(
@@ -969,5 +976,183 @@ describe('B4: flush transport throw must NOT lose the in-memory queue', () => {
     expect(callIdx).toBe(2); // retry happened
     expect(delivered).toEqual([[77]]);
     expect(c.pendingCount('c1', 'a1')).toBe(0);
+  });
+});
+
+// ── B3: init-observed gate for requires_first_message drivers ──────
+//
+// Cindy `usjxj8AxX4AvJ5E-` B3: claude's daemon `delivered:true` only
+// proves bytes hit stdin, not that the child consumed them. If the
+// child dies in the window between "stdin written" and parsed
+// `session_init`, marking the row delivered would lose the message.
+// For `kickoffMode='requires_first_message'`:
+//   1. wake success defers markDelivered; ids stash into
+//      initPendingDeliveryIds
+//   2. parsed `session_init` flushes the queue + clears
+//   3. runtime exit before session_init drops the queue WITHOUT
+//      marking — rows replay via startup_delivery on next spawn
+// `kickoffMode='self_inits'` drivers (codex/cursor) get the legacy
+// behavior: ack on `delivered:true`.
+
+const DRIVER_GATED_REQUIRES_FIRST: DriverDeliveryView = {
+  busyDeliveryMode: 'gated',
+  oneShot: false,
+  kickoffMode: 'requires_first_message',
+};
+const DRIVER_DIRECT_REQUIRES_FIRST: DriverDeliveryView = {
+  busyDeliveryMode: 'direct',
+  oneShot: false,
+  kickoffMode: 'requires_first_message',
+};
+
+describe('B3: requires_first_message init-observed gate', () => {
+  it('wake before session_init → delivered:true does NOT mark delivered (deferred)', async () => {
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
+    const { bridge, calls } = makeBridge({
+      delivered: true,
+      delivery_ids: [10],
+    });
+    const { sink, delivered } = makeInboxSink();
+    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
+    const decision = await c.submitLiveDelivery('c1', 'a1', {
+      ...req({ inboxId: 10 }),
+      driver: DRIVER_DIRECT_REQUIRES_FIRST,
+    });
+    expect(decision.kind).toBe('wake_dispatched');
+    expect(calls.length).toBe(1);
+    // CRITICAL: row NOT yet marked delivered — gate held the ack.
+    expect(delivered).toEqual([]);
+  });
+
+  it('parsed session_init after deferred wake → flushes ack', async () => {
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
+    const { bridge } = makeBridge([
+      { delivered: true, delivery_ids: [10] },
+      { delivered: true, delivery_ids: [11] },
+    ]);
+    const { sink, delivered } = makeInboxSink();
+    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
+    await c.submitLiveDelivery('c1', 'a1', {
+      ...req({ inboxId: 10 }),
+      driver: DRIVER_DIRECT_REQUIRES_FIRST,
+    });
+    await c.submitLiveDelivery('c1', 'a1', {
+      ...req({ inboxId: 11, messageId: 'm2' }),
+      driver: DRIVER_DIRECT_REQUIRES_FIRST,
+    });
+    expect(delivered).toEqual([]); // both deferred
+    c.onParsedEvent('c1', 'a1', parsed('session_init'));
+    // session_init flushes the entire queue in one markDelivered call.
+    expect(delivered).toEqual([[10, 11]]);
+  });
+
+  it('runtime_exit before session_init → init-pending dropped, NOT marked (rows replay via startup_delivery)', async () => {
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
+    const { bridge } = makeBridge({
+      delivered: true,
+      delivery_ids: [10],
+    });
+    const { sink, delivered } = makeInboxSink();
+    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
+    await c.submitLiveDelivery('c1', 'a1', {
+      ...req({ inboxId: 10 }),
+      driver: DRIVER_DIRECT_REQUIRES_FIRST,
+    });
+    expect(delivered).toEqual([]); // deferred
+    // Runtime dies before session_init lands. State is wiped; the
+    // init-pending IDs are dropped WITHOUT marking. The inbox row
+    // stays pending in DB so the next spawn picks it up via
+    // startup_delivery — coordinator does NOT pretend it was
+    // delivered (Cindy `0G5uJBydO_4qt_2r` "fail loudly / preserve
+    // pending").
+    c.onRuntimeExit('c1', 'a1', {
+      intentional: false,
+      code: 1,
+      initTimedOut: false,
+      fatalError: false,
+    });
+    expect(delivered).toEqual([]);
+  });
+
+  it('post-init wake (initObserved already set) → immediate markDelivered', async () => {
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
+    const { bridge } = makeBridge([
+      { delivered: true, delivery_ids: [10] }, // pre-init
+      { delivered: true, delivery_ids: [11] }, // post-init
+    ]);
+    const { sink, delivered } = makeInboxSink();
+    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
+    await c.submitLiveDelivery('c1', 'a1', {
+      ...req({ inboxId: 10 }),
+      driver: DRIVER_DIRECT_REQUIRES_FIRST,
+    });
+    c.onParsedEvent('c1', 'a1', parsed('session_init'));
+    expect(delivered).toEqual([[10]]); // queued one flushed
+    await c.submitLiveDelivery('c1', 'a1', {
+      ...req({ inboxId: 11, messageId: 'm2' }),
+      driver: DRIVER_DIRECT_REQUIRES_FIRST,
+    });
+    // Second wake post-init takes the legacy path: immediate ack.
+    expect(delivered).toEqual([[10], [11]]);
+  });
+
+  it('self_inits driver → wake success immediately marks delivered (gate does NOT engage)', async () => {
+    // Codex/cursor: daemon-side init proves the runtime is alive
+    // BEFORE any wake; the deferred-ack gate is claude-specific.
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
+    const { bridge } = makeBridge({
+      delivered: true,
+      delivery_ids: [10],
+    });
+    const { sink, delivered } = makeInboxSink();
+    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
+    await c.submitLiveDelivery('c1', 'a1', {
+      ...req({ inboxId: 10 }),
+      driver: DRIVER_DIRECT, // kickoffMode: 'self_inits'
+    });
+    expect(delivered).toEqual([[10]]);
+  });
+
+  it('gated flush before session_init → batch ack deferred until session_init', async () => {
+    // Gated + requires_first_message (the actual claude shape).
+    // Build up a pending queue mid-turn, then trigger safe-boundary
+    // flush. The flush wake succeeds but ack is deferred. session_init
+    // afterwards releases the ack.
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
+    const { bridge } = makeBridge({
+      delivered: true,
+      delivery_ids: [20, 21],
+    });
+    const { sink, delivered } = makeInboxSink();
+    const c = new RuntimeDeliveryCoordinator({
+      bridge,
+      cache,
+      inboxAck: sink,
+      callbacks: {
+        combineBatch: payloads => payloads.join('\n'),
+      },
+    });
+    // Push agent into busy state.
+    c.onParsedEvent('c1', 'a1', parsed('tool_call'));
+    // Enqueue two while busy.
+    await c.submitLiveDelivery('c1', 'a1', {
+      ...req({ inboxId: 20 }),
+      driver: DRIVER_GATED_REQUIRES_FIRST,
+    });
+    await c.submitLiveDelivery('c1', 'a1', {
+      ...req({ inboxId: 21, messageId: 'm2' }),
+      driver: DRIVER_GATED_REQUIRES_FIRST,
+    });
+    expect(c.pendingCount('c1', 'a1')).toBe(2);
+    // Safe boundary reopens → flush fires.
+    c.onParsedEvent('c1', 'a1', parsed('tool_output'));
+    // Allow the async flush microtask to run.
+    await Promise.resolve();
+    await Promise.resolve();
+    // Wake dispatched but ack deferred (initObserved still false).
+    expect(delivered).toEqual([]);
+    // session_init releases the deferred ack.
+    c.onParsedEvent('c1', 'a1', parsed('session_init'));
+    expect(delivered).toEqual([[20, 21]]);
   });
 });

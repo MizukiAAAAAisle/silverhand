@@ -2051,8 +2051,8 @@ describe('DaemonAgentRuntimeHost — deliverMessage', () => {
     }
   });
 
-  it('cache entry exists, claude driver in ready phase → coordinator.submitLiveDelivery + bridge.runtimeWake → markDelivered', async () => {
-    const fix = makeDeliverFixture(); // claude
+  it('cache entry exists, claude driver in ready phase → coordinator.submitLiveDelivery + bridge.runtimeWake; ack DEFERRED by B3 gate until session_init', async () => {
+    const fix = makeDeliverFixture(); // claude (kickoffMode='requires_first_message')
     try {
       const msgId = fix.insertViewerMessage('@agent-deliver please look');
       const cache = new RunStateCache();
@@ -2091,16 +2091,23 @@ describe('DaemonAgentRuntimeHost — deliverMessage', () => {
       expect(decoded.message.content[0].text).toContain(
         '@agent-deliver please look',
       );
-      // Coordinator marked delivered on the {delivered:true} ack. The
-      // observable coordinator's inboxAck routes to `marked` (not the
-      // real ConversationInboxRepo) — the DB delivered_at update lives
-      // in the coordinator's own test suite. Here we just verify the
-      // ack was forwarded with the right inbox id.
+      // B3 (Cindy `usjxj8AxX4AvJ5E-`): claude is
+      // `kickoffMode='requires_first_message'`. The first wake before
+      // `session_init` must NOT mark delivered — the gate stashes the
+      // ID into initPendingDeliveryIds and waits for the parsed
+      // session_init to prove consumption.
+      expect(marked).toEqual([]);
+      // Now simulate the parsed session_init landing. The coordinator's
+      // onParsedEvent fires markDelivered for the stashed IDs.
       const row = fix.db
         .prepare<[string], { delivered_at: number | null; id: number }>(
           'SELECT id, delivered_at FROM conversation_inboxes WHERE message_id = ?',
         )
         .get(msgId);
+      coordinator.onParsedEvent(fix.channelId, fix.agentId, {
+        kind: 'session_init',
+        sessionId: 'sess-xyz-12345',
+      });
       expect(marked.flat()).toEqual([row!.id]);
     } finally {
       fix.cleanup();
@@ -2724,7 +2731,7 @@ describe('DaemonAgentRuntimeHost — drainPending', () => {
     }
   });
 
-  it('one pending row + cache phase=ready → coordinator wakes + row marked delivered', async () => {
+  it('one pending row + cache phase=ready → coordinator wakes; ack DEFERRED by B3 gate (claude)', async () => {
     const fix = makeDeliverFixture();
     try {
       // Viewer user `local` is pre-seeded by openTestDb fixture; no
@@ -2760,8 +2767,15 @@ describe('DaemonAgentRuntimeHost — drainPending', () => {
       expect(wakeCalls).toHaveLength(1);
       expect(wakeCalls[0]!.conv_id).toBe(fix.channelId);
       expect(wakeCalls[0]!.agent_id).toBe(fix.agentId);
-      // Inbox marked delivered (the wake was {delivered:true}).
-      expect(marked.length).toBe(1);
+      // B3 (Cindy `usjxj8AxX4AvJ5E-`): drainPending fires for the
+      // `requires_first_message` claude driver. The wake's
+      // `delivered:true` is NOT immediately acked — gate holds it
+      // until parsed session_init. This is the very point of B3 —
+      // empty-inbox claude that crossed startup_pending → ready
+      // doesn't yet have a parsed `system.init`, and acking the wake
+      // on bytes-on-stdin alone would lose the message if the child
+      // dies before parsing.
+      expect(marked).toEqual([]);
     } finally {
       fix.cleanup();
     }

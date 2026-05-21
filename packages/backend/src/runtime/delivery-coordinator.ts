@@ -84,10 +84,10 @@ import type { RunStateCache, RuntimePhase } from './run-state-cache.js';
 /**
  * Capability snapshot a driver exposes to the coordinator. We do NOT
  * import the full `Driver` interface here — the coordinator only needs
- * these two fields, and narrowing the type makes the test seam smaller.
+ * these fields, and narrowing the type makes the test seam smaller.
  *
- * Source: `Driver.busyDeliveryMode` + `Driver.oneShot` from
- * `@silverhand/host/drivers`.
+ * Source: `Driver.busyDeliveryMode` + `Driver.oneShot` + `Driver.kickoffMode`
+ * from `@silverhand/host/drivers`.
  */
 export interface DriverDeliveryView {
   /** `gated` (Claude — only at safe boundaries), `direct` (Codex —
@@ -96,6 +96,13 @@ export interface DriverDeliveryView {
   busyDeliveryMode: 'gated' | 'direct' | 'none';
   /** True if the runtime exits after a single turn (cursor). */
   oneShot: boolean;
+  /** `requires_first_message` (claude — `system.init` only fires once
+   *  the runtime has received its first user message; B3 gate defers
+   *  inbox `markDelivered` until that parsed `session_init` is observed)
+   *  or `self_inits` (codex / cursor — daemon-side init proves the
+   *  runtime is alive before backend issues any wake; ack on
+   *  `{delivered:true}` is safe). */
+  kickoffMode: 'self_inits' | 'requires_first_message';
 }
 
 /**
@@ -284,6 +291,29 @@ interface PerAgentState {
    *  we use a simpler boolean because the coordinator never reads from
    *  the daemon side post-wake (no second-leg event to interleave). */
   flushing: boolean;
+  /**
+   * B3 (Cindy `usjxj8AxX4AvJ5E-`): set when we observe a parsed
+   * `session_init` for this (conv, agent). Cleared on `runtime_exit`
+   * via `state.delete`. Used to gate `markDelivered` for live wakes
+   * dispatched against `kickoffMode='requires_first_message'` runtimes
+   * that haven't surfaced `session_init` yet. Pre-B3 the daemon
+   * reporting `{delivered:true}` on the wake was treated as proof of
+   * delivery — but for claude the wake landing in stdin only proves
+   * the BYTES were written; the child must then parse it and emit
+   * `system.init` to prove it's actually consuming input. If the child
+   * dies in the window between "stdin written" and "session_init
+   * parsed", we'd have marked the row delivered while the message was
+   * lost.
+   */
+  initObserved: boolean;
+  /**
+   * Wake delivery IDs that were accepted by the daemon (`delivered:true`)
+   * but NOT yet acked to the inbox because `initObserved` was false
+   * at wake-time. Marked delivered on `session_init`; cleared (without
+   * marking) on `runtime_exit` so the rows replay via
+   * `startup_delivery` on the next spawn.
+   */
+  initPendingDeliveryIds: number[];
 }
 
 function key(conversationId: string, agentId: string): string {
@@ -434,9 +464,35 @@ export class RuntimeDeliveryCoordinator {
       case 'compaction_finished':
         st.busy.compacting = false;
         break;
-      // session_init / thinking / text / error / unknown have no busy
-      // impact — they're either init-only or content-only signals.
       case 'session_init':
+        // B3 (Cindy `usjxj8AxX4AvJ5E-`): claude's `system.init` is the
+        // proof that the runtime has parsed our first user message and
+        // is actively consuming input. Pre-init wakes that landed in
+        // `initPendingDeliveryIds` are now safe to ack.
+        //
+        // Idempotence: claude emits `system.init` at the start of every
+        // turn. The first observation latches `initObserved` and
+        // flushes the queue; subsequent observations find an empty
+        // queue and are no-ops. We deliberately leave `initObserved`
+        // sticky for the lifetime of this runtime (until
+        // `runtime_exit` clears state.delete) so a later wake landing
+        // before the NEXT turn's `system.init` doesn't get deferred.
+        if (!st.initObserved) {
+          st.initObserved = true;
+          if (st.initPendingDeliveryIds.length > 0) {
+            const ids = st.initPendingDeliveryIds.splice(0);
+            this.inboxAck.markDelivered(ids);
+            this.logger.info(
+              {
+                conversationId,
+                agentId,
+                deliveryIds: ids,
+              },
+              'deliver: session_init observed, flushing init-pending acks',
+            );
+          }
+        }
+        return;
       case 'thinking':
       case 'text':
       case 'error':
@@ -530,7 +586,13 @@ export class RuntimeDeliveryCoordinator {
     const k = key(conversationId, agentId);
     let st = this.state.get(k);
     if (!st) {
-      st = { busy: makeBusy(), pending: [], flushing: false };
+      st = {
+        busy: makeBusy(),
+        pending: [],
+        flushing: false,
+        initObserved: false,
+        initPendingDeliveryIds: [],
+      };
       this.state.set(k, st);
     }
     return st;
@@ -587,16 +649,38 @@ export class RuntimeDeliveryCoordinator {
         payload: combined,
       });
       if (result.delivered) {
-        this.inboxAck.markDelivered(result.delivery_ids);
-        this.logger.info(
-          {
-            conversationId,
-            agentId,
-            batchSize: batch.length,
-            deliveryIds: result.delivery_ids,
-          },
-          'deliver: flushed pending batch at safe boundary',
-        );
+        // B3: same gate as dispatchWake — defer ack for
+        // requires_first_message + !initObserved. Flush only fires for
+        // gated drivers (busyDeliveryMode === 'gated'), and `gated`
+        // implies claude — so kickoffMode='requires_first_message' is
+        // the common case. Re-check on `batch[0]` for symmetry; all
+        // rows in a flushed batch share the same agent → same driver.
+        const initGated =
+          batch[0]!.driver.kickoffMode === 'requires_first_message' &&
+          !st.initObserved;
+        if (initGated) {
+          st.initPendingDeliveryIds.push(...result.delivery_ids);
+          this.logger.info(
+            {
+              conversationId,
+              agentId,
+              batchSize: batch.length,
+              deliveryIds: result.delivery_ids,
+            },
+            'deliver: flushed batch, ack deferred until session_init (B3 gate)',
+          );
+        } else {
+          this.inboxAck.markDelivered(result.delivery_ids);
+          this.logger.info(
+            {
+              conversationId,
+              agentId,
+              batchSize: batch.length,
+              deliveryIds: result.delivery_ids,
+            },
+            'deliver: flushed pending batch at safe boundary',
+          );
+        }
       } else {
         // Refused. Push the batch back at the head so a later flush
         // can re-try. Order preserved because we used splice(0); items
@@ -678,16 +762,40 @@ export class RuntimeDeliveryCoordinator {
       throw err;
     }
     if (result.delivered) {
-      this.inboxAck.markDelivered(result.delivery_ids);
-      this.logger.info(
-        {
-          conversationId,
-          agentId,
-          deliveryIds: result.delivery_ids,
-          batchSize: batch.length,
-        },
-        'deliver: wake dispatched, rows marked delivered',
-      );
+      // B3 (Cindy `usjxj8AxX4AvJ5E-`): for `requires_first_message`
+      // drivers (claude), `delivered:true` from the daemon only proves
+      // the bytes hit stdin — the child may still die before parsing
+      // them. Defer the ack until the parsed `session_init` proves
+      // consumption. Other kickoffMode='self_inits' drivers
+      // (codex/cursor) prove init via daemon-side phase=ready before
+      // any wake reaches them, so the ack on `delivered:true` is safe.
+      const initGated =
+        batch[0]!.driver.kickoffMode === 'requires_first_message' &&
+        !this.ensureState(conversationId, agentId).initObserved;
+      if (initGated) {
+        const st = this.ensureState(conversationId, agentId);
+        st.initPendingDeliveryIds.push(...result.delivery_ids);
+        this.logger.info(
+          {
+            conversationId,
+            agentId,
+            deliveryIds: result.delivery_ids,
+            batchSize: batch.length,
+          },
+          'deliver: wake dispatched, ack deferred until session_init (B3 gate)',
+        );
+      } else {
+        this.inboxAck.markDelivered(result.delivery_ids);
+        this.logger.info(
+          {
+            conversationId,
+            agentId,
+            deliveryIds: result.delivery_ids,
+            batchSize: batch.length,
+          },
+          'deliver: wake dispatched, rows marked delivered',
+        );
+      }
       return { kind: 'wake_dispatched', deliveryIds: result.delivery_ids };
     }
     this.logger.warn(

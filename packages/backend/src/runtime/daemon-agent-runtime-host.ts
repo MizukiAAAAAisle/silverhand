@@ -987,6 +987,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
         driver: {
           oneShot: driver.oneShot,
           busyDeliveryMode: driver.busyDeliveryMode,
+          kickoffMode: driver.kickoffMode,
         },
       },
     );
