@@ -183,8 +183,12 @@ export class RuntimeEventHandler {
     this.unsubscribeReconnect = this.client.onReconnect(() => {
       // Reconnect to (possibly different) daemon. Wipe the cache so
       // mismatched-key events between now and hydrate resolution get
-      // dropped, then re-latch via runtime_status.
+      // dropped, then re-latch via runtime_status. Also clear the
+      // projection-side timeout-reason stash — old (conv,agent)
+      // entries no longer correspond to anything in the new daemon's
+      // view. Cindy `dMNdrYH0KK1VbDqs` cleanup.
       this.cache.clearAll();
+      this.lastTimeoutReason.clear();
       void this.hydrateSafely('reconnect');
     });
     await this.hydrateSafely('initial');
@@ -216,6 +220,11 @@ export class RuntimeEventHandler {
         // doesn't keep showing "ready" runtimes that no longer exist.
         // A subsequent `ready` from the next daemon will re-hydrate.
         this.cache.clearAll();
+        // lastTimeoutReason is projection-side temporary state tied
+        // to a specific (daemon, conv, agent) life — same daemon
+        // going away invalidates every entry. Cindy
+        // `dMNdrYH0KK1VbDqs` cleanup.
+        this.lastTimeoutReason.clear();
         this.logger.warn(
           { kind: 'daemon', reason: frame.reason },
           'daemon shutting down',
@@ -348,11 +357,15 @@ export class RuntimeEventHandler {
       // Same daemon as before — nothing to do.
       return;
     }
-    // Different daemon. Wipe cache and re-hydrate. We do NOT pre-set
-    // the instance key here — `applyRuntimeStatus` will latch it once
-    // hydrate succeeds, ensuring all events between now and then are
-    // dropped (mismatched key).
+    // Different daemon. Wipe cache + projection-side stash and
+    // re-hydrate. We do NOT pre-set the instance key here —
+    // `applyRuntimeStatus` will latch it once hydrate succeeds,
+    // ensuring all events between now and then are dropped
+    // (mismatched key). Cindy `dMNdrYH0KK1VbDqs` cleanup: stash also
+    // clears on daemon swap so the old daemon's last-timeout-reason
+    // can't bleed into a new daemon's retry projection.
     this.cache.clearAll();
+    this.lastTimeoutReason.clear();
     void this.hydrateSafely('daemon_ready', daemonPid, startedAt);
   }
 
@@ -391,6 +404,16 @@ export class RuntimeEventHandler {
   private onRuntimeExit(
     frame: Extract<EventFrame, { event: 'runtime_exit' }>,
   ): void {
+    // Clear the projection-side timeout-reason stash for this
+    // (conv, agent). If the runtime exits without going through
+    // runtime_init_cooldown (e.g. exhausted retries but daemon
+    // didn't engage cooldown, or fatal error path), the stale
+    // reason would otherwise wait forever for a matching
+    // runtime_init_retrying that never comes. Cindy
+    // `dMNdrYH0KK1VbDqs` cleanup.
+    this.lastTimeoutReason.delete(
+      `${frame.conversation_id}|${frame.agent_id}`,
+    );
     const key = this.cache.daemonInstanceKey;
     // Cache mutation is gated on a latched daemon key (events from a
     // pre-hydrate window can't safely write the cache because the

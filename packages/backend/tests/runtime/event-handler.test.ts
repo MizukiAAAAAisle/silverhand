@@ -673,6 +673,71 @@ describe('RuntimeEventHandler — event routing', () => {
     expect(payload).not.toHaveProperty('timeout_reason');
   });
 
+  it('runtime_exit clears the stashed timeout_reason (no stale bleed into a later unrelated retry)', async () => {
+    // Cindy `dMNdrYH0KK1VbDqs` cleanup: exhausted-without-cooldown
+    // or fatal-exit paths can produce a runtime_exit without a
+    // matching runtime_init_cooldown. Without this clear, the stale
+    // reason would wait forever for a runtime_init_retrying that
+    // never comes — and if a fresh start later DOES timeout+retry
+    // for an unrelated cause, it could inherit the old reason.
+    const cache = new RunStateCache();
+    const { client, emit } = makeFakeClient();
+    const { bridge } = makeBridge({
+      runtimes: [
+        {
+          conversation_id: 'c1',
+          agent_id: 'a1',
+          pid: 1234,
+          phase: 'ready',
+          run_state: null,
+          started_at: 1700000000000,
+        },
+      ],
+    });
+    const { publisher, published } = makePublisher();
+    const { sink } = makeInboxAck();
+    const handler = new RuntimeEventHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: sink,
+    });
+    await handler.start();
+    // Stash a reason …
+    emit({
+      event: 'runtime_init_timeout',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      timeout_reason: 'silence',
+      elapsed_ms: 500,
+      timeout_ms: 300,
+      retrying: false,
+      retry_attempt: 0,
+      max_retries: 0,
+      ts: 1700000001000,
+    });
+    // … then exit without cooldown (e.g. max_retries=0 path).
+    emit(exitFrame('c1', 'a1', false, 1));
+    // A subsequent unrelated retry on the SAME key must NOT inherit
+    // the stale reason.
+    emit({
+      event: 'runtime_init_retrying',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      retry_attempt: 1,
+      max_retries: 2,
+      delay_ms: 100,
+      ts: 1700000002000,
+    });
+    const retrying = published.find(
+      p =>
+        p.kind === 'agent_status' &&
+        (p.payload as Record<string, unknown>).reason === 'init_timeout_retrying',
+    );
+    expect(retrying!.payload).not.toHaveProperty('timeout_reason');
+  });
+
   it('runtime_state clears stashed timeout_reason (init recovered → next retry would write fresh)', async () => {
     const cache = new RunStateCache();
     const { client, emit } = makeFakeClient();
