@@ -1396,4 +1396,184 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
     });
     expect(publishedAgentStatus()).toHaveLength(1);
   });
+
+  // ── Cindy `rrF2L1RmWq5JFH3m` B1 regression: terminal runtime_state
+  //    must NOT clear gate flags. RealSupervisor emits terminal state
+  //    BEFORE the matching runtime_exit; clearing flags on terminal
+  //    state would mislead the coordinator's auto-respawn gate.
+  it('B1: terminal runtime_state preserves initTimedOut flag for the trailing exit', async () => {
+    const { handler, emit, exitCalls } = setup();
+    await handler.start();
+    emit({
+      event: 'runtime_init_timeout',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      timeout_reason: 'silence',
+      elapsed_ms: 30000,
+      timeout_ms: 30000,
+      retrying: false,
+      retry_attempt: 2,
+      max_retries: 2,
+      ts: 1700000002300,
+    });
+    // RealSupervisor publishes a terminal `runtime_state` BEFORE the
+    // matching `runtime_exit` to flush the run resolution. Terminal
+    // state must NOT strip the flag.
+    emit(
+      runStateFrame(
+        'c1',
+        'a1',
+        { ...RUN_STATE, status: 'failed', terminalReason: 'timeout' },
+        1700000002400,
+      ),
+    );
+    emit({
+      event: 'runtime_exit',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      code: null,
+      intentional: false,
+      ts: 1700000002500,
+    });
+    expect(exitCalls[0]!.meta.initTimedOut).toBe(true);
+  });
+
+  it('B1: terminal runtime_state preserves fatalError flag for the trailing exit', async () => {
+    const { handler, emit, exitCalls } = setup();
+    await handler.start();
+    emit({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: {
+        kind: 'error',
+        message: 'thread not found',
+        fatal: true,
+      } as never,
+      ts: 1700000002300,
+    });
+    emit(
+      runStateFrame(
+        'c1',
+        'a1',
+        { ...RUN_STATE, status: 'failed', terminalReason: 'crashed' },
+        1700000002400,
+      ),
+    );
+    emit({
+      event: 'runtime_exit',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      code: 1,
+      intentional: false,
+      ts: 1700000002500,
+    });
+    expect(exitCalls[0]!.meta.fatalError).toBe(true);
+  });
+
+  it('B1: non-terminal runtime_state still clears flags (recovery semantics)', async () => {
+    const { handler, emit, exitCalls } = setup();
+    await handler.start();
+    emit({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: {
+        kind: 'error',
+        message: 'fatal',
+        fatal: true,
+      } as never,
+      ts: 1700000002300,
+    });
+    // Non-terminal state (no terminalReason) — agent recovered.
+    emit(runStateFrame('c1', 'a1', RUN_STATE, 1700000002400));
+    emit({
+      event: 'runtime_exit',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      code: 0,
+      intentional: false,
+      ts: 1700000002500,
+    });
+    expect(exitCalls[0]!.meta.fatalError).toBe(false);
+  });
+
+  // ── Cindy `rrF2L1RmWq5JFH3m` B2 regression: agent_status SSE must
+  //    use the derived flags. fatal-error + exit code 0 must publish
+  //    'crashed', not 'idle'.
+  it('B2: fatal-error then exit code=0 publishes agent_status crashed', async () => {
+    const { handler, emit, exitCalls, publishedAgentStatus } = setup();
+    await handler.start();
+    emit({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: {
+        kind: 'error',
+        message: 'thread not found',
+        fatal: true,
+      } as never,
+      ts: 1700000002300,
+    });
+    emit({
+      event: 'runtime_exit',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      code: 0, // exit 0 would normally be 'idle' — fatalError forces crashed
+      intentional: false,
+      ts: 1700000002500,
+    });
+    const statuses = publishedAgentStatus();
+    expect(statuses).toHaveLength(1);
+    const payload = statuses[0]!.payload as { status: string };
+    expect(payload.status).toBe('crashed');
+    expect(exitCalls[0]!.meta.fatalError).toBe(true);
+  });
+
+  it('B2: init-cooldown then exit code=0 publishes agent_status crashed', async () => {
+    const { handler, emit, publishedAgentStatus } = setup();
+    await handler.start();
+    emit({
+      event: 'runtime_init_cooldown',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      cooldown_until: 1700000003000,
+      attempts_exhausted: 3,
+      ts: 1700000002400,
+    });
+    // Drop the init_cooldown SSE event so we can inspect just the exit
+    // status mapping; clear out anything published so far.
+    const baseline = publishedAgentStatus().length;
+    emit({
+      event: 'runtime_exit',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      code: 0,
+      intentional: false,
+      ts: 1700000002500,
+    });
+    const statuses = publishedAgentStatus();
+    expect(statuses.length).toBe(baseline + 1);
+    const payload = statuses[statuses.length - 1]!.payload as {
+      status: string;
+    };
+    expect(payload.status).toBe('crashed');
+  });
+
+  it('B2: benign exit (intentional=true) still maps to idle', async () => {
+    const { handler, emit, publishedAgentStatus } = setup();
+    await handler.start();
+    emit({
+      event: 'runtime_exit',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      code: 0,
+      intentional: true,
+      ts: 1700000002500,
+    });
+    const statuses = publishedAgentStatus();
+    expect(statuses).toHaveLength(1);
+    const payload = statuses[0]!.payload as { status: string };
+    expect(payload.status).toBe('idle');
+  });
 });

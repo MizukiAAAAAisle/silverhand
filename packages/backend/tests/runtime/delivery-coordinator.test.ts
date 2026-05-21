@@ -814,3 +814,160 @@ describe('busy tracker', () => {
     expect(calls).toHaveLength(0);
   });
 });
+
+// ── Cindy `rrF2L1RmWq5JFH3m` B3: combineBatch fail-loud ────────────
+
+describe('B3: multi-payload batch without combineBatch fails loudly', () => {
+  it('flush with 2 pending and no combineBatch throws + no markDelivered + rows back in queue', async () => {
+    const { bridge, calls } = makeBridge([]); // wake never reached
+    const cache = makeCacheView([
+      { conv: 'c1', agent: 'a1', phase: 'ready' },
+    ]);
+    const { sink, delivered } = makeInboxSink();
+    const errorLogs: string[] = [];
+    const logger = {
+      info: () => {},
+      warn: () => {},
+      error: (_meta: object, msg: string) => errorLogs.push(msg),
+    };
+    const c = new RuntimeDeliveryCoordinator({
+      bridge,
+      cache,
+      inboxAck: sink,
+      // NO combineBatch
+      logger,
+    });
+
+    c.onParsedEvent('c1', 'a1', parsed('tool_call'));
+    await c.submitLiveDelivery(
+      'c1',
+      'a1',
+      req({ inboxId: 1, messageId: 'a', payload: 'A', driver: DRIVER_GATED }),
+    );
+    await c.submitLiveDelivery(
+      'c1',
+      'a1',
+      req({ inboxId: 2, messageId: 'b', payload: 'B', driver: DRIVER_GATED }),
+    );
+    expect(c.pendingCount('c1', 'a1')).toBe(2);
+
+    // Tool output reopens boundary → flush is scheduled. With 2
+    // payloads and no combineBatch, flush must throw and leave rows
+    // in the queue.
+    c.onParsedEvent('c1', 'a1', parsed('tool_output'));
+    await new Promise(resolve => setImmediate(resolve));
+    // Two microtasks needed because flush is `void this.flush(...)`
+    // and the throw inside .catch happens one tick later.
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(calls).toHaveLength(0); // bridge.runtimeWake never called
+    expect(delivered).toHaveLength(0); // no inbox row mutated
+    expect(c.pendingCount('c1', 'a1')).toBe(2); // queue restored
+    expect(
+      errorLogs.some(m => m.includes('combine refused')),
+    ).toBe(true);
+  });
+
+  it('flush with 2 pending AND combineBatch wakes successfully', async () => {
+    // Sanity check: the failure above is purely the missing callback,
+    // not a regression in the happy path.
+    const { bridge, calls } = makeBridge({
+      delivered: true,
+      delivery_ids: [1, 2],
+    });
+    const cache = makeCacheView([
+      { conv: 'c1', agent: 'a1', phase: 'ready' },
+    ]);
+    const { sink, delivered } = makeInboxSink();
+    const combineBatch = vi.fn((p: readonly string[]) => p.join('|'));
+    const c = new RuntimeDeliveryCoordinator({
+      bridge,
+      cache,
+      inboxAck: sink,
+      callbacks: { combineBatch },
+    });
+
+    c.onParsedEvent('c1', 'a1', parsed('tool_call'));
+    await c.submitLiveDelivery(
+      'c1',
+      'a1',
+      req({ inboxId: 1, messageId: 'a', payload: 'A', driver: DRIVER_GATED }),
+    );
+    await c.submitLiveDelivery(
+      'c1',
+      'a1',
+      req({ inboxId: 2, messageId: 'b', payload: 'B', driver: DRIVER_GATED }),
+    );
+    c.onParsedEvent('c1', 'a1', parsed('tool_output'));
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(calls).toHaveLength(1);
+    expect(combineBatch).toHaveBeenCalledOnce();
+    expect(delivered).toEqual([[1, 2]]);
+    expect(c.pendingCount('c1', 'a1')).toBe(0);
+  });
+});
+
+// ── Cindy `rrF2L1RmWq5JFH3m` B4: flush transport throw restores queue
+
+describe('B4: flush transport throw must NOT lose the in-memory queue', () => {
+  it('bridge.runtimeWake throws on flush → rows pushed back, next boundary retries', async () => {
+    let callIdx = 0;
+    const bridge: CoordinatorBridge = {
+      runtimeWake: vi.fn(async params => {
+        callIdx += 1;
+        if (callIdx === 1) throw new Error('socket closed');
+        return {
+          delivered: true as const,
+          delivery_ids: [...params.delivery_ids],
+        };
+      }),
+    };
+    const cache = makeCacheView([
+      { conv: 'c1', agent: 'a1', phase: 'ready' },
+    ]);
+    const { sink, delivered } = makeInboxSink();
+    const errorLogs: string[] = [];
+    const logger = {
+      info: () => {},
+      warn: () => {},
+      error: (_meta: object, msg: string) => errorLogs.push(msg),
+    };
+    const c = new RuntimeDeliveryCoordinator({
+      bridge,
+      cache,
+      inboxAck: sink,
+      logger,
+    });
+
+    // Build up queue.
+    c.onParsedEvent('c1', 'a1', parsed('tool_call'));
+    await c.submitLiveDelivery(
+      'c1',
+      'a1',
+      req({ inboxId: 77, driver: DRIVER_GATED }),
+    );
+    expect(c.pendingCount('c1', 'a1')).toBe(1);
+
+    // First boundary reopen → flush throws. Queue must be restored.
+    c.onParsedEvent('c1', 'a1', parsed('tool_output'));
+    await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(callIdx).toBe(1); // first attempt happened
+    expect(delivered).toHaveLength(0); // nothing marked
+    expect(c.pendingCount('c1', 'a1')).toBe(1); // queue preserved
+    expect(errorLogs.some(m => m.includes('flush threw'))).toBe(true);
+
+    // Now simulate another mid-turn cycle so a fresh safe-boundary
+    // flush can retry. tool_call → busy=1 → tool_output → flush.
+    c.onParsedEvent('c1', 'a1', parsed('tool_call'));
+    c.onParsedEvent('c1', 'a1', parsed('tool_output'));
+    await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(callIdx).toBe(2); // retry happened
+    expect(delivered).toEqual([[77]]);
+    expect(c.pendingCount('c1', 'a1')).toBe(0);
+  });
+});

@@ -226,11 +226,16 @@ export interface CoordinatorCallbacks {
    *  rows exist before auto-respawning. DaemonHost wires this to
    *  `ConversationInboxRepo.listPending(conv, agent).length > 0`. */
   hasPendingInbox?(conversationId: string, agentId: string): boolean;
-  /** Called when the coordinator must flush a queued batch (gated
-   *  driver, safe boundary opened). DaemonHost provides the combine
-   *  function because batch formatting needs `Driver.encodeStdinMessage`
-   *  semantics. If absent, the coordinator falls back to wake-per-item
-   *  (functionally correct but less efficient). */
+  /** Called when the coordinator must combine multiple pending
+   *  payloads into a single wake (`gated` driver, multiple rows
+   *  accumulated before the next safe boundary). DaemonHost MUST
+   *  provide this — without it the coordinator cannot produce a
+   *  semantically-equivalent batch payload, and silently degrading to
+   *  `payloads.join(...)` would violate the
+   *  "no silent degradation" contract (Cindy `rrF2L1RmWq5JFH3m` B3 /
+   *  `0G5uJBydO_4qt_2r`). When omitted, multi-payload batches throw at
+   *  flush/dispatch time and the rows stay pending; single-payload
+   *  paths still work. */
   combineBatch?(payloads: readonly string[]): string;
 }
 
@@ -552,19 +557,27 @@ export class RuntimeDeliveryCoordinator {
     if (st.pending.length === 0) return;
     if (!isSafeBoundary(st.busy)) return;
     st.flushing = true;
+    const batch = st.pending.splice(0);
     try {
-      const batch = st.pending.splice(0);
-      const payloads = batch.map(item => item.payload);
-      const combined =
-        payloads.length === 1
-          ? payloads[0]!
-          : this.callbacks.combineBatch
-            ? this.callbacks.combineBatch(payloads)
-            : // Fallback: join with newline. Practically every batch is
-              // 1 item anyway (CM rarely accumulates more than one per
-              // safe-boundary window); leaving a textually-degraded
-              // multi-item batch is preferable to dropping rows.
-              payloads.join('\n');
+      let combined: string;
+      try {
+        combined = this.combinePayloads(batch.map(item => item.payload));
+      } catch (err) {
+        // No combineBatch callback for a multi-payload flush. Push the
+        // rows back and rethrow — silent degradation is forbidden
+        // (Cindy `rrF2L1RmWq5JFH3m` B3 / `0G5uJBydO_4qt_2r`).
+        st.pending.unshift(...batch);
+        this.logger.error(
+          {
+            conversationId,
+            agentId,
+            batchSize: batch.length,
+            err: (err as Error).message,
+          },
+          'deliver: flush combine refused; rows remain queued',
+        );
+        throw err;
+      }
       const deliveryIds = batch.map(item => item.inboxId);
       const result = await this.bridge.runtimeWake({
         conversation_id: conversationId,
@@ -600,19 +613,34 @@ export class RuntimeDeliveryCoordinator {
         );
       }
     } catch (err) {
+      // Transport / internal_error path. Push the batch back so a
+      // future safe boundary can retry — without this the in-memory
+      // queue would silently leak (Cindy `rrF2L1RmWq5JFH3m` B4). DB
+      // rows are still pending (no markDelivered ran) so a fresh
+      // `start()` or `ready_for_drain` would also redeliver, but the
+      // in-memory queue is the path that fires on the NEXT in-process
+      // safe boundary — losing it would mean a transport blip turns a
+      // mid-turn defer into "wait for the next runtime restart".
+      //
+      // Guard the unshift so the combineBatch-missing branch (which
+      // already unshifted before rethrowing) doesn't double-push.
+      const k = key(conversationId, agentId);
+      const stNow = this.state.get(k);
+      if (
+        stNow &&
+        !stNow.pending.some(item => item.messageId === batch[0]?.messageId)
+      ) {
+        stNow.pending.unshift(...batch);
+      }
       this.logger.error(
         {
           conversationId,
           agentId,
+          batchSize: batch.length,
           err: (err as Error).message,
         },
         'deliver: flush threw; rows remain queued',
       );
-      // On a thrown bridge call (transport failure), the batch we
-      // spliced is lost from the queue. Re-derive it from the inbox on
-      // the next opportunity — which will happen because no
-      // markDelivered ran, so listPending will still return them at the
-      // next start / ready_for_drain.
     } finally {
       st.flushing = false;
     }
@@ -623,13 +651,7 @@ export class RuntimeDeliveryCoordinator {
     agentId: string,
     batch: LiveDeliveryRequest[],
   ): Promise<LiveDeliveryDecision> {
-    const payloads = batch.map(item => item.payload);
-    const combined =
-      payloads.length === 1
-        ? payloads[0]!
-        : this.callbacks.combineBatch
-          ? this.callbacks.combineBatch(payloads)
-          : payloads.join('\n');
+    const combined = this.combinePayloads(batch.map(item => item.payload));
     const deliveryIds = batch.map(item => item.inboxId);
     let result: RuntimeWakeResult;
     try {
@@ -678,5 +700,30 @@ export class RuntimeDeliveryCoordinator {
       'deliver: wake refused, row stays pending',
     );
     return { kind: 'wake_refused', reason: result.reason };
+  }
+
+  /**
+   * Combine multiple already-encoded stdin payloads into one. Single-
+   * payload short-circuit returns as-is. Multi-payload REQUIRES a
+   * `combineBatch` callback — no silent degradation (Cindy
+   * `rrF2L1RmWq5JFH3m` B3 / `0G5uJBydO_4qt_2r`). DaemonHost binds this
+   * to a CM-equivalent `combineGatedBatch` formatter.
+   */
+  private combinePayloads(payloads: readonly string[]): string {
+    if (payloads.length === 0) {
+      throw new Error('combinePayloads: empty batch');
+    }
+    if (payloads.length === 1) return payloads[0]!;
+    if (!this.callbacks.combineBatch) {
+      throw new Error(
+        'RuntimeDeliveryCoordinator: combineBatch callback is required ' +
+          'for multi-payload batches (received ' +
+          payloads.length +
+          ' payloads). Silent join-fallback is forbidden — DaemonHost ' +
+          'must provide a CM-equivalent combineGatedBatch formatter ' +
+          'when wiring the coordinator.',
+      );
+    }
+    return this.callbacks.combineBatch(payloads);
   }
 }

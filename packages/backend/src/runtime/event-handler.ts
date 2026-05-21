@@ -310,26 +310,34 @@ export class RuntimeEventHandler {
           'daemon shutting down',
         );
         return;
-      case 'runtime_state':
-        // Clear any stale init-timeout reason — if daemon is emitting
-        // a normal state event, init succeeded (or moved past the
-        // failure path) and the next timeout would write a fresh
-        // value anyway. Safe to be unconditional.
-        this.lastTimeoutReason.delete(
-          `${frame.conversation_id}|${frame.agent_id}`,
-        );
-        // A normal state event after init-failure or fatal-error means
-        // the runtime recovered (e.g. retry succeeded; agent moved past
-        // the error). Clear both gating flags so a subsequent benign
-        // exit can still trigger oneShot auto-respawn.
-        this.initFailureFlag.delete(
-          `${frame.conversation_id}|${frame.agent_id}`,
-        );
-        this.fatalErrorFlag.delete(
-          `${frame.conversation_id}|${frame.agent_id}`,
-        );
+      case 'runtime_state': {
+        const isTerminalState = frame.state.terminalReason !== undefined;
+        if (!isTerminalState) {
+          // Clear any stale init-timeout reason on a NON-terminal state
+          // — a normal mid-run state event means init succeeded (or moved
+          // past the failure path); the next timeout would write a fresh
+          // value anyway. Same logic for the coordinator gate flags: a
+          // benign post-recovery state event resets the gate so a later
+          // unrelated exit can still trigger oneShot auto-respawn.
+          //
+          // Terminal states (`terminalReason` set) MUST preserve these
+          // flags — RealSupervisor emits the terminal `runtime_state`
+          // BEFORE the matching `runtime_exit`, so clearing here would
+          // strip the flag the coordinator needs at exit-time (Cindy
+          // `rrF2L1RmWq5JFH3m` B1).
+          this.lastTimeoutReason.delete(
+            `${frame.conversation_id}|${frame.agent_id}`,
+          );
+          this.initFailureFlag.delete(
+            `${frame.conversation_id}|${frame.agent_id}`,
+          );
+          this.fatalErrorFlag.delete(
+            `${frame.conversation_id}|${frame.agent_id}`,
+          );
+        }
         this.onRuntimeState(frame);
         return;
+      }
       case 'runtime_exit':
         this.onRuntimeExit(frame);
         return;
@@ -627,12 +635,11 @@ export class RuntimeEventHandler {
     //   initTimedOut / fatalError  -> 'crashed'
     //   intentionallyStopped OR code === 0 -> 'idle'
     //   otherwise                  -> 'crashed'
-    // We don't have initTimedOut/fatalError flags on the wire here
-    // (those are CM-internal); the closest signal we have is
-    // `intentional`, which is daemon's "did we ask for this exit"
-    // bit. Combined with `code === 0` covers the normal-shutdown
-    // case (e.g. claude exit 0 at end of session). Anything else is
-    // a crash.
+    // We project from the wire's `intentional` + `code` plus the two
+    // derived flags we just snapshotted from
+    // `runtime_init_*` / parsed `error{fatal:true}` history. Without
+    // the flags a fatal-error process that exited with code 0 would
+    // misproject to 'idle' (Cindy `rrF2L1RmWq5JFH3m` B2).
     //
     // Note: ConversationAgentStatusSchema only allows
     // `idle|starting|active|crashed` — `'stopped'` was an invalid
@@ -640,7 +647,11 @@ export class RuntimeEventHandler {
     // validates with the shared schema. Cindy `ch9ZsU0v0ATr6tr8`
     // blocker 1.
     const status: 'idle' | 'crashed' =
-      frame.intentional || frame.code === 0 ? 'idle' : 'crashed';
+      initTimedOut || fatalError
+        ? 'crashed'
+        : frame.intentional || frame.code === 0
+          ? 'idle'
+          : 'crashed';
     this.events.publish(frame.conversation_id, {
       kind: 'agent_status',
       payload: {
