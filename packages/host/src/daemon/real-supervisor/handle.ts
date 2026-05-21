@@ -66,6 +66,14 @@ export interface StartupDeliveryState {
   readonly text: string;
 }
 
+export type ActivitySnippetKind = 'thinking' | 'text';
+
+export interface ActivitySnippetBuffer {
+  runId: string;
+  kind: ActivitySnippetKind;
+  text: string;
+}
+
 export interface RuntimeHandle {
   readonly conversationId: string;
   readonly agentId: string;
@@ -138,6 +146,10 @@ export interface RuntimeHandle {
    *  parsed event arrives (or at start()) so `status()` always has
    *  a meaningful `run_state` to project. */
   runState: AgentRunState | null;
+  /** Rolling snippet buffer for visible agent activity text. Scoped
+   *  by runId so a new run cannot inherit text from the previous one
+   *  on the same (conversation, agent) handle. */
+  activitySnippetBuffer: ActivitySnippetBuffer | null;
   /** Per-handle tool-call bookkeeping so `tool_output` knows when to
    *  drop status back to `thinking`. Mirrors CM's `handle.busy`. */
   busy: { outstandingToolUses: number; compacting: boolean };
@@ -187,4 +199,3 @@ export interface RuntimeHandle {
    *  v2 issue #4). */
   compactionWatchdog: NodeJS.Timeout | null;
 }
-

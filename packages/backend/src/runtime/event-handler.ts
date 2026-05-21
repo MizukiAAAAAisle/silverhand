@@ -60,6 +60,7 @@
  */
 import type { EventFrame, HostClient } from '@silverhand/host';
 import type { ParsedEvent } from '@silverhand/shared';
+import type { ActivityLogWriter } from './activity-log-writer.js';
 import type { RuntimeBridge } from './bridge.js';
 import type { RunStateCache } from './run-state-cache.js';
 import { sanitizeParsedEventForBroadcast } from './event-sanitize.js';
@@ -186,6 +187,10 @@ export interface RuntimeEventHandlerDeps {
    *  enriched with `initTimedOut` / `fatalError` derivations. See
    *  `RuntimeExitHandler` for the contract. */
   onRuntimeExit?: RuntimeExitHandler;
+  /** Optional backend-owned JSONL sink for `agent_activity` parity
+   * with the legacy ConversationManager path. Writing must never
+   * block or fail the SSE publish path. */
+  activityLog?: ActivityLogWriter;
   logger?: RuntimeEventHandlerLogger;
 }
 
@@ -208,6 +213,7 @@ export class RuntimeEventHandler {
   private readonly onReadyForDrain?: ReadyForDrainHandler;
   private readonly onParsedEventCb?: ParsedEventHandler;
   private readonly onRuntimeExitCb?: RuntimeExitHandler;
+  private readonly activityLog?: ActivityLogWriter;
   private readonly logger: RuntimeEventHandlerLogger;
 
   private unsubscribeEvents: (() => void) | null = null;
@@ -251,6 +257,7 @@ export class RuntimeEventHandler {
     this.onReadyForDrain = deps.onReadyForDrain;
     this.onParsedEventCb = deps.onParsedEvent;
     this.onRuntimeExitCb = deps.onRuntimeExit;
+    this.activityLog = deps.activityLog;
     this.logger = deps.logger ?? NOOP_LOGGER;
   }
 
@@ -615,6 +622,7 @@ export class RuntimeEventHandler {
       kind: 'agent_activity',
       payload: frame.state,
     });
+    this.activityLog?.write(frame.state);
   }
 
   private onRuntimeExit(

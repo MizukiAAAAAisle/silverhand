@@ -13,7 +13,8 @@
  *     to `bridge.runtimeStop`; soft composes the directive line via
  *     the agent's driver and ships it as `soft_directive`.
  *   - **Bulk shutdown** — `stopAll` → `bridge.runtimeStopAll`;
- *     `closeActivityLog` → `bridge.runtimeCloseActivityLog`.
+ *     `closeActivityLog` → daemon flush ack + backend-owned
+ *     activity JSONL writer close.
  *   - **Boot recovery** — `reconcileOnBoot` starts the event
  *     subscription (which performs the initial `runtime_status`
  *     hydrate), then diffs the daemon's snapshot against the DB's
@@ -83,6 +84,7 @@ import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { MembershipService } from '../services/membership-service.js';
 import { prepareSpawnFiles } from '../spawn-prep.js';
 import type { AgentRuntimeHost } from './agent-runtime-host.js';
+import type { ActivityLogWriter } from './activity-log-writer.js';
 import type { RuntimeBridge } from './bridge.js';
 import type {
   LiveDeliveryRequest,
@@ -179,6 +181,11 @@ export interface DaemonAgentRuntimeHostDeps {
    * a deterministic `{}` instead of the developer's shell env.
    */
   baseProcessEnv?: NodeJS.ProcessEnv;
+  /** Backend-owned `agent_activity` JSONL writer. The daemon itself
+   *  has no activity log stream; this host closes the backend writer
+   *  during the normal shutdown sequence after asking daemon to flush
+   *  its outbound buffers. */
+  activityLog?: ActivityLogWriter;
   /** Used by `clearSession` to wrap the row-update + audit insert in
    *  a single sqlite transaction (matches CM behavior). */
   db: Database;
@@ -227,6 +234,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
   private readonly agentTokens: AgentTokenStore;
   private readonly serverConfig: () => ServerConfig;
   private readonly baseProcessEnv: NodeJS.ProcessEnv;
+  private readonly activityLog?: ActivityLogWriter;
   private readonly db: Database;
   private readonly logger: BackendLogger;
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -251,6 +259,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
     this.agentTokens = deps.agentTokens;
     this.serverConfig = deps.serverConfig;
     this.baseProcessEnv = deps.baseProcessEnv ?? process.env;
+    this.activityLog = deps.activityLog;
     this.db = deps.db;
     this.logger = deps.logger;
     this._client = deps.client;
@@ -797,16 +806,17 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
   }
 
   /**
-   * Ask daemon to flush + close its activity log file. Backend's own
-   * JSONL stream for activity events lives in `ConversationManager`
-   * (the legacy path); in daemon mode the daemon owns the activity
-   * log file, so backend just relays the close intent.
+   * Ask daemon to flush its outbound buffers, then close the
+   * backend-owned activity JSONL writer. RealSupervisor's
+   * `runtime_close_activity_log` is a noop ack for activity logging
+   * itself; the file lives in backend so shutdown does not depend on
+   * host internals.
    *
-   * Safe to call when daemon hasn't opened one — daemon's intent
-   * handler treats it as a no-op in that case.
+   * Safe to call when `logDir` is absent or this is called twice.
    */
   async closeActivityLog(): Promise<void> {
     await this.bridge.runtimeCloseActivityLog();
+    await this.activityLog?.close();
   }
 
   // ── delivery ────────────────────────────────────────────────────

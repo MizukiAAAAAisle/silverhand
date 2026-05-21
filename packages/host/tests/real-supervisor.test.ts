@@ -1070,6 +1070,33 @@ describe('RealSupervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGD
     }
     expect(cursor).toBe(required.length);
 
+    const snippetState = events.find(
+      e =>
+        e.event === 'runtime_state' &&
+        e.state.activitySnippet === 'pondering',
+    );
+    expect(snippetState).toBeDefined();
+
+    const toolState = events.find(
+      e =>
+        e.event === 'runtime_state' &&
+        e.state.status === 'tool_running' &&
+        e.state.detail === 'Bash',
+    );
+    expect(
+      toolState &&
+        toolState.event === 'runtime_state' &&
+        toolState.state.toolCallCounts,
+    ).toEqual({ Bash: 1 });
+
+    const postToolThinking = events.find(
+      e =>
+        e.event === 'runtime_state' &&
+        e.state.status === 'thinking' &&
+        e.state.toolCallCounts?.Bash === 1,
+    );
+    expect(postToolThinking).toBeDefined();
+
     const lastIdle = [...events]
       .reverse()
       .find(

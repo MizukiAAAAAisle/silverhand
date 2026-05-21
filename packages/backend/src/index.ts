@@ -29,6 +29,7 @@ import { DaemonAgentRuntimeHost } from './runtime/daemon-agent-runtime-host.js';
 import { RuntimeDeliveryCoordinator } from './runtime/delivery-coordinator.js';
 import { combineGatedBatch } from './runtime/stdin-format.js';
 import type { AgentRuntimeHost } from './runtime/agent-runtime-host.js';
+import { JsonlActivityLogWriter } from './runtime/activity-log-writer.js';
 import { RuntimeBridge, type ProxySettingsSource } from './runtime/bridge.js';
 import { RunStateCache } from './runtime/run-state-cache.js';
 import {
@@ -178,7 +179,9 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   // runtimeHost. In `daemon` mode we still create it so service
   // construction can proceed identically; the daemon shim is what
   // services route through via `ctx.runtimeHost`.
-  ctx.conversationManager = new ConversationManager(ctx);
+  ctx.conversationManager = new ConversationManager(ctx, {
+    activityLogEnabled: runtimeHostMode === 'legacy',
+  });
   if (runtimeHostMode === 'daemon') {
     if (!opts.hostClient) {
       throw new Error(
@@ -200,6 +203,10 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     };
     const bridge = new RuntimeBridge(opts.hostClient, proxySettings);
     const cache = new RunStateCache();
+    const activityLog = new JsonlActivityLogWriter({
+      logDir: ctx.logDir,
+      logger,
+    });
     const inboxRepo = new ConversationInboxRepo(db);
     const inboxAck: InboxAckSink = {
       markDelivered: (deliveryIds: readonly number[]) =>
@@ -264,6 +271,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
       // trio in `delivery-coordinator.ts:onRuntimeExit`).
       onRuntimeExit: (cid, aid, meta) =>
         coordinator.onRuntimeExit(cid, aid, meta),
+      activityLog,
       // B2 (Cindy `usjxj8AxX4AvJ5E-`): wire `runtime_ready_for_drain`
       // to DaemonHost.drainPending so rows that arrived during the
       // startup_pending window are flushed when the runtime crosses
@@ -313,6 +321,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
       // bound port after the Hono server listens (ctx.serverConfig is
       // mutated mid-boot from `:0` placeholder to the real URL).
       serverConfig: () => ctx.serverConfig,
+      activityLog,
       db,
       logger,
     });

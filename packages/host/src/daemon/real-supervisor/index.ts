@@ -87,7 +87,12 @@ import {
 } from '../../protocol.js';
 import type { DaemonLogger } from '../logger.js';
 import type { Supervisor } from '../supervisor.js';
-import type { InitTimeoutReason, RuntimeHandle, RuntimePhase } from './handle.js';
+import type {
+  ActivitySnippetKind,
+  InitTimeoutReason,
+  RuntimeHandle,
+  RuntimePhase,
+} from './handle.js';
 
 // ── Configurable timing knobs ──────────────────────────────────────
 //
@@ -130,6 +135,9 @@ export const DEFAULT_INIT_FAILURE_COOLDOWN_MS = 5 * 60 * 1000;
  *  `compactionStale: true` onto the run state — but does NOT kill
  *  the child or change phase. Matches CM's `COMPACTION_STALE_MS`. */
 export const DEFAULT_COMPACTION_STALE_MS = 5 * 60 * 1000;
+const ACTIVITY_SNIPPET_MAX_CHARS = 200;
+const ACTIVITY_SNIPPET_BUFFER_MAX_CHARS = ACTIVITY_SNIPPET_MAX_CHARS * 4;
+const SEND_MESSAGE_TOOL_NAME = 'silverhand message send';
 
 type InitTimeoutTier =
   | 'initLivenessSilenceMs'
@@ -442,6 +450,7 @@ export class RealSupervisor implements Supervisor {
       cliSessionId: spawnCtx.cliSessionId,
       stdoutLineBuffer: '',
       runState: null,
+      activitySnippetBuffer: null,
       busy: { outstandingToolUses: 0, compacting: false },
       // 3c-b additions
       // Strip `startup_delivery` from the cached params so an internal
@@ -1611,14 +1620,21 @@ export class RealSupervisor implements Supervisor {
 
     switch (parsed.kind) {
       case 'thinking':
+        this.recordActivitySnippet(handle, 'thinking', parsed.text);
+        break;
       case 'text':
-        this.transitionRunState(handle, { status: 'thinking', detail: null });
+        this.recordActivitySnippet(handle, 'text', parsed.text);
         break;
       case 'tool_call':
         handle.busy.outstandingToolUses += 1;
+        const toolCallCounts =
+          parsed.name === SEND_MESSAGE_TOOL_NAME
+            ? handle.runState?.toolCallCounts
+            : incrementToolCount(handle.runState?.toolCallCounts, parsed.name);
         this.transitionRunState(handle, {
           status: 'tool_running',
           detail: parsed.name,
+          ...(toolCallCounts ? { toolCallCounts } : {}),
         });
         break;
       case 'tool_output':
@@ -1693,8 +1709,8 @@ export class RealSupervisor implements Supervisor {
    *   - any other value          → set
    *
    * Emits `runtime_state` only when something visible to the wire
-   * changes (status, detail, compacting, terminalReason) — repeated
-   * text/thinking deltas don't spam the wire.
+   * changes (status, detail, snippet, tool counts, compacting,
+   * terminalReason).
    */
   private transitionRunState(
     handle: RuntimeHandle,
@@ -1709,6 +1725,8 @@ export class RealSupervisor implements Supervisor {
        *  the run-state keeps `compacting: true` alongside
        *  `compactionStale: true` (Cindy plan v2 issue #4). */
       compactionStale?: boolean;
+      activitySnippet?: string | null;
+      toolCallCounts?: Record<string, number> | null;
     },
   ): void {
     const ts = this.now();
@@ -1726,6 +1744,8 @@ export class RealSupervisor implements Supervisor {
           ? { detail: patch.detail }
           : {}),
         ...(patch.terminalReason ? { terminalReason: patch.terminalReason } : {}),
+        ...(patch.activitySnippet ? { activitySnippet: patch.activitySnippet } : {}),
+        ...(patch.toolCallCounts ? { toolCallCounts: patch.toolCallCounts } : {}),
         ...(patch.compacting !== undefined ? { compacting: patch.compacting } : {}),
         ...(patch.compactingSince !== undefined && patch.compactingSince !== null
           ? { compactingSince: patch.compactingSince }
@@ -1750,6 +1770,16 @@ export class RealSupervisor implements Supervisor {
     if (patch.terminalReason !== undefined) {
       next.terminalReason = patch.terminalReason;
     }
+    if (patch.activitySnippet === null) {
+      delete next.activitySnippet;
+    } else if (patch.activitySnippet !== undefined) {
+      next.activitySnippet = patch.activitySnippet;
+    }
+    if (patch.toolCallCounts === null) {
+      delete next.toolCallCounts;
+    } else if (patch.toolCallCounts !== undefined) {
+      next.toolCallCounts = patch.toolCallCounts;
+    }
     if (patch.compacting !== undefined) next.compacting = patch.compacting;
     if (patch.compactingSince === null) {
       delete next.compactingSince;
@@ -1767,9 +1797,63 @@ export class RealSupervisor implements Supervisor {
       prev.status !== next.status ||
       prev.detail !== next.detail ||
       prev.terminalReason !== next.terminalReason ||
+      prev.activitySnippet !== next.activitySnippet ||
+      JSON.stringify(prev.toolCallCounts ?? {}) !==
+        JSON.stringify(next.toolCallCounts ?? {}) ||
       prev.compacting !== next.compacting ||
       prev.compactionStale !== next.compactionStale;
     if (shouldEmit) this.emitState(handle);
+  }
+
+  private recordActivitySnippet(
+    handle: RuntimeHandle,
+    kind: ActivitySnippetKind,
+    text: string,
+  ): void {
+    if (!handle.runState) {
+      this.transitionRunState(handle, { status: 'thinking', detail: null });
+    }
+    const runId = handle.runState?.runId;
+    if (!runId) return;
+    const activitySnippet = this.appendActivitySnippetBuffer(
+      handle,
+      runId,
+      kind,
+      text,
+    );
+    this.transitionRunState(
+      handle,
+      activitySnippet ? { activitySnippet } : { status: 'thinking' },
+    );
+  }
+
+  private appendActivitySnippetBuffer(
+    handle: RuntimeHandle,
+    runId: string,
+    kind: ActivitySnippetKind,
+    text: string,
+  ): string | undefined {
+    const current = handle.activitySnippetBuffer;
+    const nextText =
+      current?.runId === runId && current.kind === kind
+        ? `${current.text}${text}`
+        : text;
+    const boundedText =
+      nextText.length <= ACTIVITY_SNIPPET_BUFFER_MAX_CHARS
+        ? nextText
+        : nextText.slice(-ACTIVITY_SNIPPET_BUFFER_MAX_CHARS);
+    handle.activitySnippetBuffer = { runId, kind, text: boundedText };
+    return trimActivitySnippet(boundedText);
+  }
+
+  private clearActivitySnippetBuffer(
+    handle: RuntimeHandle,
+    runId?: string,
+  ): void {
+    const current = handle.activitySnippetBuffer;
+    if (!current) return;
+    if (runId && current.runId !== runId) return;
+    handle.activitySnippetBuffer = null;
   }
 
   /**
@@ -1831,6 +1915,7 @@ export class RealSupervisor implements Supervisor {
       state: base,
       ts,
     });
+    this.clearActivitySnippetBuffer(handle, base.runId);
     // Clear so the next activity starts a fresh run. busy is reset
     // here too — turn_end already does it, but exit/crash paths
     // benefit from the safety net.
@@ -2516,6 +2601,24 @@ function phaseToStatus(phase: RuntimePhase): AgentRunState['status'] {
  */
 function driverReadyToEncode(driver: Driver): boolean {
   return driver.readyToEncode?.() ?? true;
+}
+
+function incrementToolCount(
+  counts: Record<string, number> | undefined,
+  toolName: string,
+): Record<string, number> {
+  return {
+    ...(counts ?? {}),
+    [toolName]: (counts?.[toolName] ?? 0) + 1,
+  };
+}
+
+function trimActivitySnippet(text: string): string | undefined {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return undefined;
+  return normalized.length <= ACTIVITY_SNIPPET_MAX_CHARS
+    ? normalized
+    : normalized.slice(-ACTIVITY_SNIPPET_MAX_CHARS);
 }
 
 /**

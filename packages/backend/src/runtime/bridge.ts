@@ -196,10 +196,9 @@ export class RuntimeBridge {
   }
 
   /**
-   * Tell daemon to flush + close its activity log file. Backend
-   * closes its own JSONL stream separately (it owns the file
-   * handle); this only covers daemon-buffered bytes that haven't
-   * been written yet.
+   * Tell daemon to flush any runtime-side buffers. The
+   * `agent-activity-*.log` file is backend-owned in daemon mode and
+   * is closed by `DaemonAgentRuntimeHost`.
    */
   runtimeCloseActivityLog(): Promise<RuntimeCloseActivityLogResult> {
     return this.client.runtimeCloseActivityLog();

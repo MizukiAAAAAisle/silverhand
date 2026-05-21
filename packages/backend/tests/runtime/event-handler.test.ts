@@ -501,12 +501,17 @@ describe('RuntimeEventHandler — event routing', () => {
     });
     const { publisher, published } = makePublisher();
     const { sink } = makeInboxAck();
+    const activityLogWrites: AgentRunState[] = [];
     const handler = makeHandler({
       client,
       bridge,
       cache,
       events: publisher,
       inboxAck: sink,
+      activityLog: {
+        write: state => activityLogWrites.push(state),
+        close: async () => {},
+      },
     });
     await handler.start();
     emit(runStateFrame('c1', 'a1', RUN_STATE));
@@ -514,6 +519,7 @@ describe('RuntimeEventHandler — event routing', () => {
     const activity = published.find(p => p.kind === 'agent_activity');
     expect(activity).toBeDefined();
     expect((activity!.payload as AgentRunState).runId).toBe('r1');
+    expect(activityLogWrites).toEqual([RUN_STATE]);
   });
 
   it('runtime_exit (intentional=false, non-zero code) → SSE agent_status crashed', async () => {

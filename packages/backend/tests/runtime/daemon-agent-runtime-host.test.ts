@@ -10,12 +10,9 @@
  *   - `stop` with `mode='hard'` — `bridge.runtimeStop({mode:'hard'})`
  *   - `stop` with `mode='soft'` — driver-encode + ship via bridge
  *   - `stopAll` — `bridge.runtimeStopAll`
- *   - `closeActivityLog` — `bridge.runtimeCloseActivityLog`
+ *   - `closeActivityLog` — daemon flush ack + backend activity-log close
  *   - `reconcileOnBoot` — daemon snapshot-aware diff
  *   - `clearSession` — bridge first, DB tx + audit + SSE
- *
- * Still throws (covered by scaffolding-error tests below):
- *   - `start`, `deliverMessage`
  *
  * Cindy `0G5uJBydO_4qt_2r` pin: the throw is the contract, NOT a silent
  * no-op. Tests assert each throw names the env var, the offending
@@ -38,6 +35,7 @@ import type {
 import type { AgentRunState } from '@silverhand/shared';
 import type { Database } from 'better-sqlite3';
 import { DaemonAgentRuntimeHost } from '../../src/runtime/daemon-agent-runtime-host.js';
+import type { ActivityLogWriter } from '../../src/runtime/activity-log-writer.js';
 import { RuntimeBridge } from '../../src/runtime/bridge.js';
 import { RunStateCache } from '../../src/runtime/run-state-cache.js';
 import { RuntimeEventHandler } from '../../src/runtime/event-handler.js';
@@ -232,6 +230,7 @@ function makeHost(
     serverConfig?: () => ServerConfig;
     logger?: BackendLogger;
     baseProcessEnv?: NodeJS.ProcessEnv;
+    activityLog?: ActivityLogWriter;
   } = {},
 ): HostFixture {
   const client = makeFakeClient(clientOverrides);
@@ -291,6 +290,7 @@ function makeHost(
     db: extraDeps.db ?? noopDb,
     logger: extraDeps.logger ?? noopLogger,
     baseProcessEnv: extraDeps.baseProcessEnv,
+    activityLog: extraDeps.activityLog,
   });
   return { host, cache, bridge, events, publisher };
 }
@@ -860,13 +860,29 @@ describe('DaemonAgentRuntimeHost — stopAll / closeActivityLog', () => {
     await expect(host.stopAll()).rejects.toThrow('daemon timeout');
   });
 
-  it('closeActivityLog delegates to bridge.runtimeCloseActivityLog', async () => {
+  it('closeActivityLog delegates to bridge.runtimeCloseActivityLog then closes backend writer', async () => {
+    const calls: string[] = [];
     const runtimeCloseActivityLog = vi.fn(
-      async (): Promise<RuntimeCloseActivityLogResult> => ({ flushed: true }),
+      async (): Promise<RuntimeCloseActivityLogResult> => {
+        calls.push('bridge');
+        return { flushed: true };
+      },
     );
-    const { host } = makeHost({ runtimeCloseActivityLog });
+    const activityLog = {
+      write: vi.fn(),
+      close: vi.fn(async () => {
+        calls.push('writer');
+      }),
+    };
+    const { host } = makeHost(
+      { runtimeCloseActivityLog },
+      noopConversationRepo,
+      { activityLog },
+    );
     await host.closeActivityLog();
     expect(runtimeCloseActivityLog).toHaveBeenCalledTimes(1);
+    expect(activityLog.close).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual(['bridge', 'writer']);
   });
 
   it('closeActivityLog propagates bridge errors', async () => {

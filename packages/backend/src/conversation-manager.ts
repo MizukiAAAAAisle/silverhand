@@ -246,7 +246,10 @@ export class ConversationManager implements AgentRuntimeHost {
    *  when `ctx.logDir` is not configured (e.g. in tests). */
   private readonly activityLogStream: WriteStream | null;
 
-  constructor(private readonly ctx: BackendContext) {
+  constructor(
+    private readonly ctx: BackendContext,
+    opts: { activityLogEnabled?: boolean } = {},
+  ) {
     this.agents = new AgentRepo(ctx.db);
     this.workspaces = new WorkspaceRepo(ctx.db, { workspacesRoot: ctx.workspacesRoot });
     this.conversations = new ConversationRepo(ctx.db);
@@ -261,7 +264,7 @@ export class ConversationManager implements AgentRuntimeHost {
       conversations: this.conversations,
     });
 
-    if (ctx.logDir) {
+    if (ctx.logDir && opts.activityLogEnabled !== false) {
       const ts = new Date().toISOString().replace(/[:.]/g, '-');
       const logPath = join(ctx.logDir, `agent-activity-${ts}.log`);
       this.activityLogStream = createWriteStream(logPath, { flags: 'a' });
