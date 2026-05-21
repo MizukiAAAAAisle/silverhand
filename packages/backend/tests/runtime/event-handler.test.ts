@@ -434,7 +434,7 @@ describe('RuntimeEventHandler — event routing', () => {
     expect((activity!.payload as AgentRunState).runId).toBe('r1');
   });
 
-  it('runtime_exit (intentional=false) → SSE agent_status crashed', async () => {
+  it('runtime_exit (intentional=false, non-zero code) → SSE agent_status crashed', async () => {
     const cache = new RunStateCache();
     const { client, emit } = makeFakeClient();
     const { bridge } = makeBridge({
@@ -473,7 +473,7 @@ describe('RuntimeEventHandler — event routing', () => {
     expect(sp.intentional).toBe(false);
   });
 
-  it('runtime_exit (intentional=true) → SSE agent_status stopped', async () => {
+  it('runtime_exit (intentional=true) → SSE agent_status idle (NOT stopped, schema only allows idle|starting|active|crashed)', async () => {
     const cache = new RunStateCache();
     const { client, emit } = makeFakeClient();
     const { bridge } = makeBridge({
@@ -500,10 +500,84 @@ describe('RuntimeEventHandler — event routing', () => {
     await handler.start();
     emit(exitFrame('c1', 'a1', true, 0));
     const status = published.find(p => p.kind === 'agent_status');
-    expect((status!.payload as { status: string }).status).toBe('stopped');
+    expect((status!.payload as { status: string }).status).toBe('idle');
   });
 
-  it('runtime_init_timeout/_retrying/_cooldown → SSE projection (no cache mutation)', async () => {
+  it('runtime_exit (intentional=false, code=0) → SSE agent_status idle (normal session end)', async () => {
+    // CM contract: `intentionallyStopped || code === 0 -> idle`. A
+    // CLI that exits with 0 on its own (e.g. claude wrapping up a
+    // session) is a clean shutdown, not a crash.
+    const cache = new RunStateCache();
+    const { client, emit } = makeFakeClient();
+    const { bridge } = makeBridge({
+      runtimes: [
+        {
+          conversation_id: 'c1',
+          agent_id: 'a1',
+          pid: 1234,
+          phase: 'ready',
+          run_state: null,
+          started_at: 1700000000000,
+        },
+      ],
+    });
+    const { publisher, published } = makePublisher();
+    const { sink } = makeInboxAck();
+    const handler = new RuntimeEventHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: sink,
+    });
+    await handler.start();
+    emit(exitFrame('c1', 'a1', false, 0));
+    const status = published.find(p => p.kind === 'agent_status');
+    expect((status!.payload as { status: string }).status).toBe('idle');
+  });
+
+  it('runtime_exit emits SSE even before hydrate completes (non-replayable)', async () => {
+    // runtime_exit is the one event we MUST publish even in the
+    // pre-hydrate window: a `runtime_status` snapshot only carries
+    // active runtimes, so it can NEVER resurrect a missed exit. If
+    // we dropped, the renderer would be stranded showing "active"
+    // forever. Cindy `ch9ZsU0v0ATr6tr8` blocker 3.
+    const cache = new RunStateCache();
+    const { client, emit } = makeFakeClient();
+    // Hold hydrate open so we can fire an exit in between.
+    let resolveStatus: ((value: RuntimeStatusResult) => void) | null = null;
+    const bridge = {
+      runtimeStatus: () =>
+        new Promise<RuntimeStatusResult>(resolve => {
+          resolveStatus = resolve;
+        }),
+    } as unknown as RuntimeBridge;
+    const { publisher, published } = makePublisher();
+    const { sink } = makeInboxAck();
+    const handler = new RuntimeEventHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: sink,
+    });
+    const startPromise = handler.start();
+    // Before hydrate resolves: cache has no daemon key, but exit
+    // must still surface a status event.
+    emit(exitFrame('c1', 'a1', false, 137));
+    const status = published.find(p => p.kind === 'agent_status');
+    expect(status).toBeDefined();
+    const sp = status!.payload as { status: string; exit_code: number | null };
+    expect(sp.status).toBe('crashed');
+    expect(sp.exit_code).toBe(137);
+    // Cache was NOT mutated — gated on daemon key latch.
+    expect(cache.list().length).toBe(0);
+    // Clean up.
+    resolveStatus!({ runtimes: [] });
+    await startPromise;
+  });
+
+  it('runtime_init_timeout → agent_init_timeout SSE; runtime_init_retrying → agent_status starting (joined with last timeout_reason); runtime_init_cooldown → agent_status crashed', async () => {
     const cache = new RunStateCache();
     const { client, emit } = makeFakeClient();
     const { bridge } = makeBridge({ runtimes: [] });
@@ -548,15 +622,114 @@ describe('RuntimeEventHandler — event routing', () => {
     });
     expect(published.map(p => p.kind)).toEqual([
       'agent_init_timeout',
-      'agent_init_retrying',
+      'agent_status',
       'agent_status',
     ]);
-    const last = published[2]!.payload as Record<string, unknown>;
-    expect(last.status).toBe('crashed');
-    expect(last.reason).toBe('init_cooldown');
-    expect(last.cooldown_until).toBe(1700000099000);
+    // runtime_init_retrying → CM-shaped agent_status starting payload.
+    // Frontend status patcher only reads agent_status; a new SSE kind
+    // would leave the UI stuck. Cindy `ch9ZsU0v0ATr6tr8` blocker 2.
+    const retrying = published[1]!.payload as Record<string, unknown>;
+    expect(retrying.status).toBe('starting');
+    expect(retrying.reason).toBe('init_timeout_retrying');
+    expect(retrying.retry_attempt).toBe(1);
+    expect(retrying.max_retries).toBe(2);
+    expect(retrying.timeout_reason).toBe('silence');
+    // runtime_init_cooldown → crashed.
+    const cooldown = published[2]!.payload as Record<string, unknown>;
+    expect(cooldown.status).toBe('crashed');
+    expect(cooldown.reason).toBe('init_cooldown');
+    expect(cooldown.cooldown_until).toBe(1700000099000);
     // Cache untouched by init events.
     expect(cache.list().length).toBe(0);
+  });
+
+  it('runtime_init_retrying without a prior runtime_init_timeout omits timeout_reason (still well-formed agent_status)', async () => {
+    const cache = new RunStateCache();
+    const { client, emit } = makeFakeClient();
+    const { bridge } = makeBridge({ runtimes: [] });
+    const { publisher, published } = makePublisher();
+    const { sink } = makeInboxAck();
+    const handler = new RuntimeEventHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: sink,
+    });
+    await handler.start();
+    emit({
+      event: 'runtime_init_retrying',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      retry_attempt: 1,
+      max_retries: 2,
+      delay_ms: 100,
+      ts: 1700000001100,
+    });
+    const status = published.find(p => p.kind === 'agent_status');
+    const payload = status!.payload as Record<string, unknown>;
+    expect(payload.status).toBe('starting');
+    expect(payload.reason).toBe('init_timeout_retrying');
+    expect(payload).not.toHaveProperty('timeout_reason');
+  });
+
+  it('runtime_state clears stashed timeout_reason (init recovered → next retry would write fresh)', async () => {
+    const cache = new RunStateCache();
+    const { client, emit } = makeFakeClient();
+    const { bridge } = makeBridge({
+      runtimes: [
+        {
+          conversation_id: 'c1',
+          agent_id: 'a1',
+          pid: 1234,
+          phase: 'ready',
+          run_state: null,
+          started_at: 1700000000000,
+        },
+      ],
+    });
+    const { publisher, published } = makePublisher();
+    const { sink } = makeInboxAck();
+    const handler = new RuntimeEventHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: sink,
+    });
+    await handler.start();
+    // Stash a timeout reason …
+    emit({
+      event: 'runtime_init_timeout',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      timeout_reason: 'post_protocol',
+      elapsed_ms: 1000,
+      timeout_ms: 800,
+      retrying: true,
+      retry_attempt: 0,
+      max_retries: 2,
+      ts: 1700000001000,
+    });
+    // … then init recovers (runtime_state arrives).
+    emit(runStateFrame('c1', 'a1', RUN_STATE));
+    // A later, unrelated retry must NOT inherit the stale reason.
+    emit({
+      event: 'runtime_init_retrying',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      retry_attempt: 2,
+      max_retries: 2,
+      delay_ms: 100,
+      ts: 1700000002000,
+    });
+    const retrying = published.find(
+      p =>
+        p.kind === 'agent_status' &&
+        (p.payload as Record<string, unknown>).reason === 'init_timeout_retrying',
+    );
+    const payload = retrying!.payload as Record<string, unknown>;
+    expect(payload).not.toHaveProperty('timeout_reason');
   });
 
   it('runtime_ready_for_drain → invokes onReadyForDrain callback (cache phase updated)', async () => {

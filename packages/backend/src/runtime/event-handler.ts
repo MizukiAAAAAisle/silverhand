@@ -147,6 +147,17 @@ export class RuntimeEventHandler {
   private unsubscribeEvents: (() => void) | null = null;
   private unsubscribeReconnect: (() => void) | null = null;
   private started = false;
+  /**
+   * Last seen `runtime_init_timeout.timeout_reason` per (conv,agent),
+   * stashed so we can attach it to the matching `runtime_init_retrying`
+   * projection (CM publishes `agent_status starting reason=init_timeout_retrying
+   * timeout_reason=...` — the daemon event surfaces the two halves
+   * separately, so we re-join them here). Cleared on
+   * `runtime_init_cooldown` (terminal failure) and on
+   * `runtime_state` (a normal state event after retry means init
+   * succeeded; the next timeout would write a fresh value anyway).
+   */
+  private readonly lastTimeoutReason = new Map<string, 'silence' | 'pre_protocol_cap' | 'post_protocol'>();
 
   constructor(deps: RuntimeEventHandlerDeps) {
     this.client = deps.client;
@@ -211,6 +222,13 @@ export class RuntimeEventHandler {
         );
         return;
       case 'runtime_state':
+        // Clear any stale init-timeout reason — if daemon is emitting
+        // a normal state event, init succeeded (or moved past the
+        // failure path) and the next timeout would write a fresh
+        // value anyway. Safe to be unconditional.
+        this.lastTimeoutReason.delete(
+          `${frame.conversation_id}|${frame.agent_id}`,
+        );
         this.onRuntimeState(frame);
         return;
       case 'runtime_exit':
@@ -236,6 +254,13 @@ export class RuntimeEventHandler {
         );
         return;
       case 'runtime_init_timeout':
+        // Stash the timeout_reason so a follow-up runtime_init_retrying
+        // can join it into the `agent_status starting reason=init_timeout_retrying`
+        // projection (CM's contract — see conversation-manager.ts:2108-2116).
+        this.lastTimeoutReason.set(
+          `${frame.conversation_id}|${frame.agent_id}`,
+          frame.timeout_reason,
+        );
         this.events.publish(frame.conversation_id, {
           kind: 'agent_init_timeout',
           payload: {
@@ -250,18 +275,33 @@ export class RuntimeEventHandler {
           },
         });
         return;
-      case 'runtime_init_retrying':
+      case 'runtime_init_retrying': {
+        // CM's contract: project to `agent_status` (status=starting,
+        // reason=init_timeout_retrying) — NOT a separate SSE kind.
+        // Frontend status patcher only listens to `agent_status`; a new
+        // kind would leave the runtime stuck in stale status from the
+        // pre-retry view. Cindy `ch9ZsU0v0ATr6tr8` blocker 2.
+        const key = `${frame.conversation_id}|${frame.agent_id}`;
+        const timeoutReason = this.lastTimeoutReason.get(key);
         this.events.publish(frame.conversation_id, {
-          kind: 'agent_init_retrying',
+          kind: 'agent_status',
           payload: {
             agent_id: frame.agent_id,
+            status: 'starting',
+            reason: 'init_timeout_retrying',
             retry_attempt: frame.retry_attempt,
             max_retries: frame.max_retries,
-            delay_ms: frame.delay_ms,
+            ...(timeoutReason ? { timeout_reason: timeoutReason } : {}),
           },
         });
         return;
+      }
       case 'runtime_init_cooldown':
+        // Terminal init failure — clear the timeout-reason stash so a
+        // future fresh start doesn't accidentally inherit it.
+        this.lastTimeoutReason.delete(
+          `${frame.conversation_id}|${frame.agent_id}`,
+        );
         this.events.publish(frame.conversation_id, {
           kind: 'agent_status',
           payload: {
@@ -352,20 +392,45 @@ export class RuntimeEventHandler {
     frame: Extract<EventFrame, { event: 'runtime_exit' }>,
   ): void {
     const key = this.cache.daemonInstanceKey;
-    if (!key) return;
-    const entry = this.cache.applyRuntimeExit(
-      key,
-      frame.conversation_id,
-      frame.agent_id,
-    );
-    // Status payload mirrors CM's existing `agent_status crashed/stopped`
-    // contract so commit 5's flip changes the source of the event but
-    // not its shape — renderer + bus consumers stay unchanged.
+    // Cache mutation is gated on a latched daemon key (events from a
+    // pre-hydrate window can't safely write the cache because the
+    // daemon identity isn't confirmed). But the SSE publish MUST run
+    // regardless: runtime_exit is non-replayable — there is no
+    // runtime_status snapshot that can later resurrect a "this runtime
+    // exited" notification, because exited runtimes are gone from the
+    // daemon's tracked set. Dropping the publish would permanently
+    // strand the renderer's status at "active" / "starting".
+    // Cindy `ch9ZsU0v0ATr6tr8` blocker 3.
+    const entry = key
+      ? this.cache.applyRuntimeExit(
+          key,
+          frame.conversation_id,
+          frame.agent_id,
+        )
+      : null;
+    // Status mapping mirrors CM `conversation-manager.ts:856-861`:
+    //   initTimedOut / fatalError  -> 'crashed'
+    //   intentionallyStopped OR code === 0 -> 'idle'
+    //   otherwise                  -> 'crashed'
+    // We don't have initTimedOut/fatalError flags on the wire here
+    // (those are CM-internal); the closest signal we have is
+    // `intentional`, which is daemon's "did we ask for this exit"
+    // bit. Combined with `code === 0` covers the normal-shutdown
+    // case (e.g. claude exit 0 at end of session). Anything else is
+    // a crash.
+    //
+    // Note: ConversationAgentStatusSchema only allows
+    // `idle|starting|active|crashed` — `'stopped'` was an invalid
+    // enum value that would have been rejected by any consumer that
+    // validates with the shared schema. Cindy `ch9ZsU0v0ATr6tr8`
+    // blocker 1.
+    const status: 'idle' | 'crashed' =
+      frame.intentional || frame.code === 0 ? 'idle' : 'crashed';
     this.events.publish(frame.conversation_id, {
       kind: 'agent_status',
       payload: {
         agent_id: frame.agent_id,
-        status: frame.intentional ? 'stopped' : 'crashed',
+        status,
         exit_code: frame.code,
         intentional: frame.intentional,
         run_state: entry?.runState ?? null,
