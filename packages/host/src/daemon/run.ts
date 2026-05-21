@@ -82,7 +82,7 @@ export interface RunDaemonOptions {
    *     no supervisor here" a typed decision (`null`) instead of
    *     accidental absence. The `entry-supervisor-wiring.test.ts`
    *     suite + the `// @ts-expect-error` contract test in
-   *     `dependency-guard.test.ts` lock both halves of the invariant.
+   *     `run-daemon-type-contract.test.ts` lock both halves of the invariant.
    */
   supervisorFactory:
     | ((deps: {
