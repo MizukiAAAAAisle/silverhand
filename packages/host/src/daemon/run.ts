@@ -30,6 +30,7 @@ import { createDaemonLogger, type DaemonLogger } from './logger.js';
 import { encodeFrame, type EventFrame } from '../protocol.js';
 import { DAEMON_VERSION } from './version.js';
 import { logDaemon } from './daemon-logging.js';
+import type { Supervisor } from './supervisor.js';
 
 export interface RunDaemonOptions {
   /** Absolute path where the daemon should bind its Unix socket. */
@@ -53,6 +54,26 @@ export interface RunDaemonOptions {
   /** Injected logger; tests use it to inspect log lines. When omitted,
    *  one is created at `logDir/daemon-<utc>.log`. */
   logger?: DaemonLogger;
+  /**
+   * Optional supervisor factory. The daemon constructs the supervisor
+   * AFTER the server is bound, passing an `emit` callback that
+   * broadcasts events to every live socket connection (with
+   * runtime_output backpressure applied per §2.2.2). Used by:
+   *
+   *   - tests, which inject `FakeSupervisor` to validate the full
+   *     intent → supervisor → event-broadcast → HostClient.subscribe
+   *     path without a real CLI child process.
+   *   - PR-2 step 2, which will plug the real CM-derived supervisor
+   *     here at production wiring time.
+   *
+   * Daemons constructed without this factory still function as a PR-1
+   * surface (ping/status/echo only); runtime_* intents return
+   * `internal_error` because the dispatcher has no supervisor wired.
+   */
+  supervisorFactory?: (deps: {
+    emit: (event: EventFrame) => void;
+    logger: DaemonLogger;
+  }) => Supervisor;
 }
 
 export interface RunningDaemon {
@@ -101,12 +122,30 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   });
 
   const startedAt = Date.now();
-  const dispatcher = new IntentDispatcher({ logger, startedAt });
+
+  // Resolve the circular dep between supervisor (needs `emit`),
+  // dispatcher (needs the supervisor), and server (needs the
+  // dispatcher; provides `broadcast`) by giving the supervisor a
+  // closure-bound `emit` that we wire to `server.broadcast` once the
+  // server exists. Until that point, `emit` is a no-op — the
+  // supervisor is constructed but won't fire events before
+  // `server.start()` returns anyway.
+  let broadcaster: (event: EventFrame) => void = () => {};
+  const supervisor = opts.supervisorFactory?.({
+    emit: event => broadcaster(event),
+    logger,
+  });
+  const dispatcher = new IntentDispatcher({
+    logger,
+    startedAt,
+    supervisor,
+  });
   const server = new DaemonServer({
     socketPath: opts.socketPath,
     dispatcher,
     logger,
   });
+  broadcaster = event => server.broadcast(event);
 
   try {
     await server.start();
