@@ -58,6 +58,14 @@ export interface RunningDaemon {
   socketPath: string;
   pidFilePath: string;
   logger: DaemonLogger;
+  /**
+   * Broadcast an unsolicited event to every live connection. Used by
+   * a Supervisor's `emit` callback to surface `runtime_*` events to
+   * the backend. `runtime_output` frames participate in the
+   * per-(conv, agent) 4 MiB drop cap (§2.2.2); all other events write
+   * straight through.
+   */
+  broadcast(event: EventFrame): void;
   /** Stop the daemon: drain in-flight intents, close socket, release
    *  pid file. Idempotent. Resolves once everything is flushed. */
   stop(reason: string): Promise<void>;
@@ -156,6 +164,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     socketPath: opts.socketPath,
     pidFilePath: opts.pidFilePath,
     logger,
+    broadcast: event => server.broadcast(event),
     stop,
   };
 }

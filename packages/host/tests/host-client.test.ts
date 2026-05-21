@@ -227,6 +227,7 @@ describe('HostClient — runtime_* typed helpers (PR-2 step 1)', () => {
     const promise = client.runtimeStart({
       conversation_id: 'conv1',
       agent_id: 'agent1',
+      options: {},
     });
     await new Promise(setImmediate);
     expect(peer.received).toHaveLength(1);
@@ -251,7 +252,7 @@ describe('HostClient — runtime_* typed helpers (PR-2 step 1)', () => {
       conversation_id: 'conv1',
       agent_id: 'agent1',
       delivery_ids: [10, 11, 12],
-      kind: 'batch',
+      kind: 'message',
       payload: '{"role":"user","content":"hi"}\n',
     });
     await new Promise(setImmediate);
@@ -273,7 +274,7 @@ describe('HostClient — runtime_* typed helpers (PR-2 step 1)', () => {
       conversation_id: 'conv1',
       agent_id: 'agent1',
       delivery_ids: [42],
-      kind: 'batch',
+      kind: 'message',
       payload: '{}\n',
     });
     await new Promise(setImmediate);

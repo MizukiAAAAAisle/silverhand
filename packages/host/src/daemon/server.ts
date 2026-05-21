@@ -44,11 +44,19 @@ import {
 import type { IntentDispatcher } from './dispatcher.js';
 import type { DaemonLogger } from './logger.js';
 import { DAEMON_VERSION } from './version.js';
+import {
+  OutputBackpressure,
+  type OutputBackpressureOptions,
+} from './output-backpressure.js';
 
 export interface DaemonServerOptions {
   socketPath: string;
   dispatcher: IntentDispatcher;
   logger: DaemonLogger;
+  /** Override OutputBackpressure thresholds — production uses defaults
+   *  (4 MiB / 2 MiB); tests trim the cap to a few KiB to drive drop
+   *  paths without 4 MiB of fixture bytes. */
+  backpressure?: OutputBackpressureOptions;
 }
 
 export class DaemonServer {
@@ -57,11 +65,31 @@ export class DaemonServer {
   private readonly logger: DaemonLogger;
   private readonly server: Server;
   private readonly liveSockets = new Set<Socket>();
+  private readonly backpressure: OutputBackpressure;
 
   constructor(opts: DaemonServerOptions) {
     this.socketPath = opts.socketPath;
     this.dispatcher = opts.dispatcher;
     this.logger = opts.logger;
+    this.backpressure = new OutputBackpressure({
+      ...opts.backpressure,
+      logDrop: opts.backpressure?.logDrop ?? (entry => {
+        // §3.4 logging contract: structured fields only, never the
+        // chunk body. logDrop's input is already structure-only.
+        if (entry.kind === 'drop') {
+          // Per-chunk drops are noisy under sustained pressure; log
+          // at debug-equivalent (warn) only the first time per
+          // (conv, agent) — the summary frame is the canonical
+          // operator-visible signal. We just include drop counts
+          // here for log completeness.
+          if (entry.dropped_count === 1) {
+            this.logger.warn(entry, 'runtime_output backpressure: dropping chunks');
+          }
+        } else {
+          this.logger.warn(entry, 'runtime_output backpressure: recovered');
+        }
+      }),
+    });
     this.server = new Server(socket => this.handleConnection(socket));
   }
 
@@ -168,6 +196,7 @@ export class DaemonServer {
     });
     socket.on('close', () => {
       this.liveSockets.delete(socket);
+      this.backpressure.forgetSocket(socket);
     });
     // Emit a `ready`-shaped event per connection so a fresh client
     // can confirm protocol version without a round trip. The spawn
@@ -230,5 +259,19 @@ export class DaemonServer {
   /** Test/debug helper: number of currently-open connections. */
   liveConnectionCount(): number {
     return this.liveSockets.size;
+  }
+
+  /**
+   * Send an unsolicited event to every live connection. Routed through
+   * `OutputBackpressure.emit()` so `runtime_output` frames participate
+   * in the per-(conv, agent) 4 MiB cap (§2.2.2) while every other event
+   * (control / lifecycle / drain readiness / startup delivery acks /
+   * dropped-summary) writes straight through. Wire this as the
+   * supervisor's `emit` callback in `runDaemon`.
+   */
+  broadcast(event: EventFrame): void {
+    for (const socket of this.liveSockets) {
+      this.backpressure.emit(socket, event);
+    }
   }
 }
