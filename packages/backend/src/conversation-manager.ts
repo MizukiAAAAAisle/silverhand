@@ -37,7 +37,7 @@ import {
   type WorkspaceMemoryIndexEntry,
 } from './drivers/index.js';
 import { detectRuntimes } from '@silverhand/host/runtimes';
-import { expandProxyEnv } from './proxy.js';
+import { applyProxyEnv, parseProxyRuntimes } from './runtime/proxy-env.js';
 import { activeAgentProfileDir, agentL1ProfileDir, agentMemoryDirFor } from './agent-profile.js';
 import { prepareSpawnFiles, type SpawnPrepHandle } from './spawn-prep.js';
 import { AgentRepo } from './repos/agent-repo.js';
@@ -2220,19 +2220,24 @@ export class ConversationManager {
    * to reach chatgpt.com through corporate firewalls; claude/anthropic
    * may not. The user picks which runtimes need it in Settings.
    */
+  /**
+   * NOTE (commit-4 daemon refactor): the actual proxy-env logic now
+   * lives in `packages/backend/src/runtime/proxy-env.ts` as a pure
+   * helper so `RuntimeBridge` can apply the same allowlist semantics
+   * when populating `runtime_start.options.env`. This method is a
+   * thin wrapper that reads the current `SettingsRepo` snapshot and
+   * delegates — kept here only because the CM call site predates
+   * the bridge and we don't want to touch the spawn path until the
+   * commit-5 atomic flip.
+   */
   private applyProxySetting(
     env: NodeJS.ProcessEnv,
     runtime: string,
   ): NodeJS.ProcessEnv {
-    const proxyUrl = this.settings.get(SETTINGS_KEYS.PROXY_URL);
-    if (!proxyUrl) return env;
-    const allowlist = parseRuntimeList(
-      this.settings.get(SETTINGS_KEYS.PROXY_RUNTIMES),
-    );
-    if (!allowlist.has(runtime)) return env;
-    const expanded = expandProxyEnv(proxyUrl);
-    if (!expanded) return env;
-    return { ...env, ...expanded };
+    return applyProxyEnv(env, runtime, {
+      proxyUrl: this.settings.get(SETTINGS_KEYS.PROXY_URL),
+      allowlist: parseProxyRuntimes(this.settings.get(SETTINGS_KEYS.PROXY_RUNTIMES)),
+    });
   }
 
   private withSilverhandCliEnv(
@@ -2577,17 +2582,6 @@ function formatDeliveryInstruction(
 
 function isSafeBoundary(h: AgentHandle): boolean {
   return h.busy.outstandingToolUses === 0 && !h.busy.compacting;
-}
-
-/** Comma-separated runtime kinds → Set, robust to whitespace + empty entries. */
-function parseRuntimeList(raw: string | null): Set<string> {
-  if (!raw) return new Set();
-  return new Set(
-    raw
-      .split(',')
-      .map(s => s.trim())
-      .filter(s => s.length > 0),
-  );
 }
 
 function incrementToolCount(
