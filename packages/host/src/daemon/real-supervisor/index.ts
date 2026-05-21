@@ -495,15 +495,17 @@ export class RealSupervisor implements Supervisor {
     // one, so a driver that already terminates would emit a
     // double-newline frame. Cindy `-pdNvRYOWip5e9yA` flagged this as
     // the bindIO failure mode worth catching at the seam, not at the
-    // child.
+    // child. Cindy `HyC05fC-FEs94uoZ` follow-up: throw SYNCHRONOUSLY
+    // (not a rejected Promise) — drivers like Codex call
+    // `void this.io?.writeLine(...)` which would swallow a rejection
+    // into an unhandled rejection. A sync throw blows up the bound
+    // callsite immediately and surfaces during driver-author testing.
     if (handle.driver.bindIO) {
       handle.driver.bindIO({
         writeLine: (line: string) => {
           if (line.endsWith('\n')) {
-            return Promise.reject(
-              new Error(
-                'driver.writeLine: line must not end with "\\n" (writeStdinPayload appends the newline)',
-              ),
+            throw new Error(
+              'driver.writeLine: line must not end with "\\n" (writeStdinPayload appends the newline)',
             );
           }
           return this.writeStdinPayload(handle, line);
@@ -806,6 +808,22 @@ export class RealSupervisor implements Supervisor {
   private hardStopHandle(handle: RuntimeHandle): Promise<RuntimeStopResult> {
     handle.intentionalExit = true;
     handle.phase = 'draining';
+    // Cindy `HyC05fC-FEs94uoZ` B2: a user-initiated hard stop must
+    // cancel any in-flight init watchdog (and compaction watchdog) AT
+    // DRAINING ENTRY, mirroring CM (`conversation-manager.ts`
+    // lines 1020-1023, `clearInitWatchdog(h)` right after
+    // `intentionallyStopped = true`). Without this, the timer would
+    // keep ticking inside the SIGTERM grace window; if it fired before
+    // the child actually exited, `failInitWatchdog` would set
+    // `initTimedOut = true` and the exit handler's reason-mapping
+    // would pick `'timeout'` over `'stopped'`, polluting terminal
+    // state, retry/cooldown bookkeeping, and the startup_delivery
+    // failed reason (`init_watchdog` instead of `child_exit`). Same
+    // rationale applies to the compaction watchdog — a stale-emit
+    // mid-shutdown is just noise on the wire and wastes a
+    // run-state diff.
+    this.clearInitWatchdog(handle);
+    this.clearCompactionWatchdog(handle);
     this.emitState(handle);
 
     const exitPromise = new Promise<RuntimeStopResult>(resolve => {
@@ -2031,6 +2049,20 @@ export class RealSupervisor implements Supervisor {
     this.clearInitWatchdog(handle);
     handle.initTimedOut = true;
     handle.initTimeoutReason = reason;
+    // Cindy `HyC05fC-FEs94uoZ` B3: flip to `draining` + emit state so
+    // the wake gate (`handle.phase === 'draining' → reason:'draining'`)
+    // covers the SIGTERM→SIGKILL kill window. Without this, backend
+    // could `runtime_wake` between the timer firing and the child
+    // actually exiting, and the daemon would write stdin + markDelivered
+    // a message to a process that's already being killed. We do NOT
+    // touch `intentionalExit` — the watchdog kill is daemon-initiated,
+    // not a user stop, and the exit handler's reason mapping still
+    // resolves to `'timeout'` (which takes precedence over both
+    // `intentional` and `code === 0`). The retry-respawn branch in
+    // `onChildExit` doesn't gate on phase, so this draining flip does
+    // not block `internalRespawnForRetry`.
+    handle.phase = 'draining';
+    this.emitState(handle);
     const { retry, cooldownUntilOnEvent } = this.recordInitTimeout(handle);
     handle.initRetryPlanned = retry;
 

@@ -29,6 +29,14 @@ import type { DaemonLogger } from '../src/daemon/logger.js';
 import type { EventFrame, RuntimeStartResult } from '../src/protocol.js';
 
 const FIXTURE = join(__dirname, '_fixtures', 'echo-runtime.cjs');
+/** 3c-b watchdog fixture — produces zero bytes until killed. See
+ *  `tests/_fixtures/no-output-runtime.cjs` for rationale (Cindy
+ *  `HyC05fC-FEs94uoZ` B1). Tests that need to observe silence-tier
+ *  firing must point `driver.binary` + `buildArgs` at this file so the
+ *  spawn seam (`realSpawn(execPath, [bin, ...args.slice(1)])`)
+ *  executes `node no-output-runtime.cjs` without any positional
+ *  arguments leaking through. */
+const NO_OUTPUT_FIXTURE = join(__dirname, '_fixtures', 'no-output-runtime.cjs');
 
 /**
  * TS assertion helper: narrow a `RuntimeStartResult` to the success
@@ -1716,7 +1724,7 @@ describe('RealSupervisor 3c-b — driver.bindIO', () => {
     await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
   });
 
-  it('bindIO.writeLine rejects when the driver line already ends with "\\n" (Cindy `-pdNvRYOWip5e9yA` guard)', async () => {
+  it('bindIO.writeLine throws synchronously when the driver line already ends with "\\n" (Cindy `-pdNvRYOWip5e9yA` guard, `HyC05fC-FEs94uoZ` sync follow-up)', async () => {
     let writeLine: ((line: string) => Promise<void>) | null = null;
     const { supervisor } = make3cSupervisor({
       driverOverride: base => ({
@@ -1728,28 +1736,33 @@ describe('RealSupervisor 3c-b — driver.bindIO', () => {
     });
     await supervisor.start(baseStartParams);
     await waitFor(() => writeLine !== null);
-    await expect(writeLine!('already-terminated\n')).rejects.toThrow(/must not end with/);
+    // Synchronous throw — Codex drivers fire-and-forget via
+    // `void this.io?.writeLine(...)`, so a rejected Promise would
+    // become an unhandled rejection. The seam throws inside the
+    // driver's bound callsite instead, where the driver author sees
+    // it during local testing.
+    expect(() => writeLine!('already-terminated\n')).toThrow(/must not end with/);
     await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
   });
 });
 
 describe('RealSupervisor 3c-b — 3-tier init watchdog', () => {
   it('silence tier fires when no bytes arrive within livenessSilenceMs', async () => {
-    // Spawn a binary that produces NO output at all (echo-runtime is
-    // chatty by default with READY — use a sleep-only fixture by
-    // pointing at a node process that just hangs).
+    // Cindy `HyC05fC-FEs94uoZ` B1: prior version pointed buildArgs at
+    // `[execPath, '-e', 'setInterval(...);']` to try to coerce
+    // echo-runtime into emitting nothing, but the test spawn seam
+    // collapses to `[bin, ...args.slice(1)]` so the actual invocation
+    // was `node echo-runtime.cjs -e setInterval(...);` — echo-runtime
+    // ignored the unknown args and still emitted `READY\n`, refreshing
+    // the silence timer. Use the dedicated no-output fixture so the
+    // spawn seam runs `node no-output-runtime.cjs` cleanly and the
+    // child emits zero bytes until the watchdog kills it.
     const { supervisor, events } = make3cSupervisor({
-      driverArgs: [], // echo-runtime emits READY immediately, defeating silence.
       driverOverride: base => ({
         ...base,
         kickoffMode: 'self_inits', // arm immediately at spawn
-        // Replace buildArgs with a node one-liner that produces zero
-        // bytes, so the silence timer can fire before READY would.
-        buildArgs: () => [
-          execPath,
-          '-e',
-          'setInterval(() => {}, 1000);',
-        ],
+        binary: NO_OUTPUT_FIXTURE,
+        buildArgs: () => [NO_OUTPUT_FIXTURE],
       }),
       initLivenessSilenceMs: 60,
       // Big pre-protocol cap so the silence timer fires first.
@@ -1820,17 +1833,26 @@ describe('RealSupervisor 3c-b — 3-tier init watchdog', () => {
   });
 
   it('classifyInitProgress=session_ready clears every init watchdog (no timeout fires)', async () => {
+    // The fixture's READY line drives `classifyInitProgress`, so we
+    // need the silence/pre-protocol windows to be wider than node's
+    // cold-start latency — otherwise the silence timer fires before
+    // READY arrives and the watchdog kills the child before
+    // `session_ready` has any chance to clear it. Cindy
+    // `HyC05fC-FEs94uoZ` B1: original 80ms window was racing the
+    // child boot. 600ms is wide enough on macOS/Linux dev hosts and
+    // CI while still keeping the "wait past every window" assertion
+    // honest.
     const { supervisor, events } = make3cSupervisor({
       driverOverride: base => ({
         ...base,
         classifyInitProgress: () => 'session_ready' as const,
       }),
-      initWatchdogMs: 80, // every tier
+      initWatchdogMs: 600, // every tier
       sigtermToSigkillMs: 30,
     });
     await supervisor.start(baseStartParams);
     // Wait past every watchdog window; no timeout should ever fire.
-    await wait(250);
+    await wait(1_200);
     expect(events.find(e => e.event === 'runtime_init_timeout')).toBeUndefined();
     await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
   });
@@ -1847,11 +1869,15 @@ describe('RealSupervisor 3c-b — 3-tier init watchdog', () => {
           return [];
         },
       }),
-      initWatchdogMs: 200,
+      // Same cold-start-aware window rationale as the
+      // classifyInitProgress=session_ready test above. session_init
+      // arrives via parseLine on the READY line; the silence/pre-cap
+      // windows must outlast node's cold start.
+      initWatchdogMs: 600,
       sigtermToSigkillMs: 30,
     });
     await supervisor.start(baseStartParams);
-    await wait(400);
+    await wait(1_200);
     expect(events.find(e => e.event === 'runtime_init_timeout')).toBeUndefined();
     await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
   });
@@ -1886,13 +1912,16 @@ describe('RealSupervisor 3c-b — 3-tier init watchdog', () => {
   });
 
   it('override precedence: opts.initLivenessSilenceMs overrides driver.initLivenessSilenceMs', async () => {
+    // Use the no-output fixture so silence fires from a true "no
+    // bytes received" state (not "echo-runtime READY refreshed the
+    // timer once, then went idle"). Cindy `HyC05fC-FEs94uoZ` B1
+    // applies here too.
     const { supervisor, events } = make3cSupervisor({
-      driverArgs: [],
       driverOverride: base => ({
         ...base,
         initLivenessSilenceMs: 60_000, // driver opinion would never fire in test budget
-        // produce no bytes so silence is the only thing in play
-        buildArgs: () => [execPath, '-e', 'setInterval(() => {}, 1000);'],
+        binary: NO_OUTPUT_FIXTURE,
+        buildArgs: () => [NO_OUTPUT_FIXTURE],
       }),
       initLivenessSilenceMs: 80, // supervisor override → wins
       initPreProtocolCapMs: 60_000,
@@ -1911,12 +1940,14 @@ describe('RealSupervisor 3c-b — 3-tier init watchdog', () => {
   });
 
   it('override precedence: opts.initWatchdogMs (global) wins over per-tier override AND driver', async () => {
+    // Same fixture swap as the per-tier-override test: no-output
+    // fixture so silence fires deterministically from zero bytes.
     const { supervisor, events } = make3cSupervisor({
-      driverArgs: [],
       driverOverride: base => ({
         ...base,
         initLivenessSilenceMs: 60_000,
-        buildArgs: () => [execPath, '-e', 'setInterval(() => {}, 1000);'],
+        binary: NO_OUTPUT_FIXTURE,
+        buildArgs: () => [NO_OUTPUT_FIXTURE],
       }),
       initWatchdogMs: 80,            // global override
       initLivenessSilenceMs: 60_000, // per-tier — must be IGNORED
@@ -2102,6 +2133,219 @@ describe('RealSupervisor 3c-b — retry / cooldown state machine', () => {
     }
   });
 });
+
+describe('RealSupervisor 3c-b — round-2 regressions (Cindy `HyC05fC-FEs94uoZ` B2/B3)', () => {
+  it('B2: hard stop during init clears the watchdog so no runtime_init_timeout fires and terminal reason is "stopped"', async () => {
+    // CM (`conversation-manager.ts` lines 1020-1023) clears the init
+    // watchdog AT DRAINING ENTRY so a user-initiated hard stop is not
+    // mismarked as init timeout. Without the fix:
+    //   1. user calls `stop({mode:'hard'})` while init is in flight
+    //   2. handle.phase → draining, intentionalExit=true, but the
+    //      watchdog timer is still ticking
+    //   3. silence/pre-cap fires before the child actually exits
+    //   4. failInitWatchdog sets initTimedOut=true
+    //   5. onChildExit's reason mapping picks 'timeout' (precedence
+    //      over 'stopped'), pollutes terminal state + retry/cooldown
+    //      bucket + startup_delivery `failed` reason
+    // With the fix: hardStopHandle clears every watchdog at draining
+    // entry; the timer never fires; exit handler maps `intentional`
+    // → terminal `stopped`.
+    const { supervisor, events } = make3cSupervisor({
+      driverOverride: base => ({
+        ...base,
+        binary: NO_OUTPUT_FIXTURE,
+        buildArgs: () => [NO_OUTPUT_FIXTURE],
+      }),
+      // Tight watchdog so the timer would fire well within the
+      // SIGTERM grace if it weren't cleared.
+      initWatchdogMs: 80,
+      sigtermToSigkillMs: 200,
+      sigkillTimeoutMs: 600,
+    });
+    await supervisor.start(baseStartParams);
+    // Trigger hard stop BEFORE the silence window elapses.
+    const stopPromise = supervisor.stop({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      mode: 'hard',
+    });
+    // Wait well past the original 80ms silence window to prove the
+    // timer was actually cleared, not just delayed.
+    await wait(300);
+    const stopRes = await stopPromise;
+    expect(stopRes).toMatchObject({ mode: 'hard', stopped: true });
+
+    // NO runtime_init_timeout — proves clearInitWatchdog ran at
+    // hardStopHandle entry.
+    expect(events.find(e => e.event === 'runtime_init_timeout')).toBeUndefined();
+    // Terminal reason is 'stopped' (not 'timeout'), proving the
+    // exit-handler reason mapping picked the user intent.
+    const terminal = events.find(
+      e =>
+        e.event === 'runtime_state' &&
+        e.state.terminalReason !== undefined,
+    );
+    expect(terminal).toBeDefined();
+    if (terminal && terminal.event === 'runtime_state') {
+      expect(terminal.state.terminalReason).toBe('stopped');
+      expect(terminal.state.status).toBe('failed');
+    }
+    // Exit event marked intentional.
+    const exitEvt = events.find(e => e.event === 'runtime_exit');
+    expect(
+      exitEvt && exitEvt.event === 'runtime_exit' && exitEvt.intentional,
+    ).toBe(true);
+  });
+
+  it('B3: init watchdog fire flips phase=draining so wake during the kill window returns delivered:false (reason:draining)', async () => {
+    // Without B3 the watchdog kill window leaves `wake()` open: the
+    // timer fires, `failInitWatchdog` SIGTERMs the child but does NOT
+    // touch phase, so wake's `exited/startup_pending/draining` gate
+    // doesn't catch it. Backend writes stdin to a dying process and
+    // markDelivered's the inbox row to a runtime that never
+    // processes it. With B3, failInitWatchdog sets phase='draining'
+    // immediately, so the wake gate's draining arm rejects.
+    //
+    // Test setup: no-output fixture with --ignore-sigterm so the
+    // child stays alive in the SIGTERM grace window. initWatchdogMs
+    // is widened to 500ms so node has time to cold-boot the fixture
+    // AND register the SIGTERM handler before the timer fires (a
+    // signal that arrives mid-bootstrap falls back to default
+    // action — terminate — defeating --ignore-sigterm). Long
+    // SIGTERM/SIGKILL grace keeps the dying handle observable while
+    // wake races against the retry respawn.
+    const { supervisor, events } = make3cSupervisor({
+      driverOverride: base => ({
+        ...base,
+        binary: NO_OUTPUT_FIXTURE,
+        buildArgs: () => [NO_OUTPUT_FIXTURE, '--ignore-sigterm'],
+      }),
+      initWatchdogMs: 500,
+      initMaxRetries: 0,
+      initFailureCooldownThreshold: 10,
+      sigtermToSigkillMs: 800,
+      sigkillTimeoutMs: 1_500,
+    });
+    await supervisor.start(baseStartParams);
+    await waitFor(
+      () => events.some(e => e.event === 'runtime_init_timeout'),
+      3_000,
+    );
+    // At this instant phase should be 'draining' (the child is alive
+    // because --ignore-sigterm swallows SIGTERM; SIGKILL won't land
+    // for another 800ms).
+    const wakeRes = await supervisor.wake({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      delivery_ids: [11],
+      kind: 'message',
+      payload: '{"role":"user","content":"during-kill-window"}',
+    });
+    expect(wakeRes.delivered).toBe(false);
+    if (!wakeRes.delivered) {
+      // 'draining' is the wake-gate signal that the runtime is being
+      // torn down — backend MUST NOT markDelivered against this
+      // outcome.
+      expect(wakeRes.reason).toBe('draining');
+    }
+    // Sanity: the child eventually exits via SIGKILL and the
+    // supervisor emits a terminal runtime_exit so the test cleanup
+    // doesn't hang.
+    await waitFor(() => events.some(e => e.event === 'runtime_exit'), 4_000);
+  });
+
+  it('B3 + retry: phase=draining after watchdog fire does NOT block onChildExit retry-respawn (init_retrying still fires + new handle spawns)', async () => {
+    // Cindy `eHnfQ2a2_l5x-YoQ` note 2: the B3 phase=draining flip
+    // must not interfere with the retry branch in onChildExit. The
+    // retry branch deletes the old handle and calls
+    // `internalRespawnForRetry`; it does NOT gate on phase. This
+    // test proves the full sequence:
+    //   1. watchdog fires → phase=draining + initTimedOut + initRetryPlanned=true
+    //   2. wake during kill window → rejected with reason='draining'
+    //   3. child exits → onChildExit detects retry → emits
+    //      runtime_init_retrying + deletes old handle + spawns new
+    //   4. new handle has a different pid; status() reports a fresh
+    //      ready runtime
+    //
+    // Same fixture configuration rationale as the B3 test above:
+    // --ignore-sigterm + 500ms watchdog so node boots and registers
+    // the handler before the timer fires; 800ms SIGTERM grace so the
+    // dying handle stays observable.
+    const { supervisor, events } = make3cSupervisor({
+      driverOverride: base => ({
+        ...base,
+        binary: NO_OUTPUT_FIXTURE,
+        buildArgs: () => [NO_OUTPUT_FIXTURE, '--ignore-sigterm'],
+      }),
+      initWatchdogMs: 500,
+      initMaxRetries: 1, // first failure → retry
+      initFailureCooldownThreshold: 10, // don't engage cooldown
+      sigtermToSigkillMs: 800,
+      sigkillTimeoutMs: 1_500,
+    });
+    const startRes = await supervisor.start(baseStartParams);
+    assertStarted(startRes);
+    const originalPid = startRes.pid;
+    await waitFor(
+      () => events.some(e => e.event === 'runtime_init_timeout'),
+      3_000,
+    );
+    // Wake inside the draining window must reject.
+    const midWake = await supervisor.wake({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      delivery_ids: [42],
+      kind: 'message',
+      payload: '{"role":"user","content":"x"}',
+    });
+    expect(midWake.delivered).toBe(false);
+    if (!midWake.delivered) expect(midWake.reason).toBe('draining');
+    // Wait for the retry event + the new spawn to happen (SIGKILL
+    // will eventually take the SIGTERM-ignoring child down).
+    await waitFor(
+      () =>
+        events.some(
+          e => e.event === 'runtime_init_retrying' && e.retry_attempt === 1,
+        ),
+      4_000,
+    );
+    await waitFor(() => {
+      const snap = supervisor.status({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+      });
+      // The new handle must be live (different pid; phase ready
+      // OR — if its own watchdog already fired — at least visibly
+      // present and not the original exited handle).
+      return (
+        snap.runtimes.length === 1 &&
+        snap.runtimes[0]!.pid !== null &&
+        snap.runtimes[0]!.pid !== originalPid
+      );
+    }, 4_000);
+    // The retry's new handle inherits no draining state from the old
+    // one — confirms phase=draining set by failInitWatchdog did NOT
+    // leak across the respawn boundary.
+    const retryingEvent = events.find(e => e.event === 'runtime_init_retrying');
+    expect(
+      retryingEvent && retryingEvent.event === 'runtime_init_retrying'
+        ? retryingEvent.retry_attempt
+        : null,
+    ).toBe(1);
+    // The terminal runtime_state for the FAILED attempt carries
+    // terminalReason='timeout', mapped via resolveRun (Cindy: init
+    // watchdog precedence over intentional/code in reason mapping).
+    const timeoutTerminal = events.find(
+      e =>
+        e.event === 'runtime_state' &&
+        e.state.terminalReason === 'timeout',
+    );
+    expect(timeoutTerminal).toBeDefined();
+    // Cleanup: tear down the retry's runtime.
+    await supervisor.stopAll({});
+  });
+});
+
 
 describe('RealSupervisor 3c-b — lifecycle lock', () => {
   it('concurrent start+start on the same key returns the idempotent success arm (lock serializes)', async () => {
