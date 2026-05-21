@@ -247,9 +247,13 @@ describe('Spawn env parity — driver.applyEnv adds NO_COLOR (codex-style)', () 
   });
 });
 
-describe('Spawn env parity — driver.applyEnv strips a key (cursor-style)', () => {
-  // cursor's `applyEnv` (host/src/drivers/cursor.ts:58) might delete
-  // ANSI color env. Ensure parity when driver removes keys too.
+describe('Spawn env parity — driver.applyEnv deletes a key (delete-style)', () => {
+  // Cindy `Ds1gzWSacsYUN-37`: the cursor driver actually sets
+  // `FORCE_COLOR='0'` + `NO_COLOR='1'`, it does NOT delete. The
+  // delete-style transform is still worth covering on its own —
+  // any future driver that strips an inherited env key must stay
+  // byte-equivalent across legacy/daemon paths — so we keep the
+  // case but drop the misleading driver-name attribution.
   const driver = makeDriver(env => {
     const out = { ...env };
     delete out.FORCE_COLOR;
