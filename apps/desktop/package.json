@@ -50,6 +50,7 @@
   "devDependencies": {
     "@electron/rebuild": "^4.0.4",
     "@silverhand/backend": "workspace:*",
+    "@silverhand/host": "workspace:*",
     "@silverhand/shared": "workspace:*",
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.0",

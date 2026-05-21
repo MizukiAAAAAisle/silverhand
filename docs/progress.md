@@ -4,6 +4,22 @@
 
 ---
 
+## 2026-05-21 — `silverhand-daemon` PR-1（AgentHost runtime boundary, IPC skeleton）
+
+- **新 package `@silverhand/host`** 落地 `#task:510`。包含三块：
+  - `src/protocol.ts` — NDJSON wire format + zod schemas（intent registry / response / event；`MAX_FRAME_BYTES = 1 MiB`；`splitNdjson` pure splitter）。
+  - `src/daemon/*` — Unix-socket server + 三件套 intent (`ping` / `status` / `echo`) + 进程 lifecycle (pid file claim, `kill(pid,0)` 活性探测, stale 覆写, SIGTERM/SIGINT graceful drain)；`run.ts` 把 dispatcher + server + lifecycle 组合成 `runDaemon(opts)`；`entry.ts` 是 argv shim（`--socket-path / --pid-file / --log-dir [--stderr]`）。Stdout 仅保留 `ready` handshake；其它都到 `daemon-<utc>.log` JSONL（mirror backend logger 格式）。
+  - `src/client/*` — `HostClient`：可插拔 `Transport`（socket 真品 + 测试用 in-memory fake）、pending-request 表、随机 id 关联、full-jitter exponential backoff（initial 250ms → cap 30s）、typed `HostClientError`（`disconnected | timeout | closed` + 5 个 daemon 端 codes）、`onReconnect` 钩子。
+  - `src/spawn.ts` — `spawnDaemonChild({ launcher, socketPath, pidFilePath, logDir })`：fork Node 子进程，读 stdout 等 `ready` handshake，capped restart budget（默认 5/60s），`kill({ gracefulMs })` SIGTERM → SIGKILL fallback。
+- **Backend `startBackend({ ..., hostClient? })`** 接受可选 `HostClient`。boot 时 `ping()` 一次，记 `daemon_pid + daemon_version`；失败仅 warn（PR-1 不上硬依赖）。PR-2 才把 `ConversationManager` 搬进 daemon、把 `hostClient` 变 required。
+- **Electron main bootstrap**：在 `startBackend` 之前 `spawnDaemonChild` + `HostClient.connect()`；`shutdown()` 顺序 `backend.close() → hostClient.close() → daemon.kill(5_000)`；daemon 路径 `<silverhand-dir>/run/daemon.{sock,pid}`，日志 `<silverhand-dir>/logs/daemon-*.log`。Daemon 启不起来 → 整个 app 仍能 boot，只丢 host plumbing。
+- **Packaging**：`scripts/dev.sh` 在 `pnpm --filter @silverhand/cli build` 后追加 `pnpm --filter @silverhand/host build`（esbuild ~20ms）；`apps/desktop/electron-builder.yml` 加 `extraResources` 把 `packages/host/dist/daemon.js` 装到 `silverhand-daemon/daemon.mjs`，复用 `process.execPath + ELECTRON_RUN_AS_NODE=1` 启动壳。
+- **测试**：`packages/host/tests/` 37 tests 全绿（`protocol.test.ts` 14 / `dispatcher.test.ts` 7 / `host-client.test.ts` 10 / `e2e-socket.test.ts` 5 in-process real Unix socket / `spawn-daemon.test.ts` 1 真 subprocess 走 tsx）。整 repo `pnpm test` backend 820/820 + cli 131/131 + desktop 261/261；`pnpm -r typecheck` 4/4 包绿。
+- **关键架构 invariant**（落档 `docs/silverhand-daemon.md`）：daemon 控制面**不暴露**成 `silverhand` 子命令——agent-facing CLI 永远只是 message/task/channel/thread/workspace/file/schedule；daemon 控制权（spawn/pid/version）属基础设施层。host 是真正的安全边界，socket file `chmod 0o600` 是 PR-1 的全部 authz；远端形态加 bearer token。
+- **PR-2 hand-off**：搬 `ConversationManager`（spawn/inbox-drain/run-state）进 daemon，加 `runtime_start/stop/wake/inject_env` intent + 双向 `runtime_state/runtime_output` events，把 backend 对 host 的依赖变 required。
+
+---
+
 ## 2026-05-17 — Human identity ship + Mode B cleanup
 
 - **Commit 1 (`feat: register-based human identity (V1) + CLI observability fixes`)**：把已 review 的人身份重写（v21 staging + register-time 适配 + RegistrationGate + ProfilePane + 5MB avatar）和 #task:349 CLI observability 收尾（cli-invoke-middleware 抽 `{path,code}` issue summary、`cli-route-map` `schedules/list` 改 POST、`verb_removed` 调度 subkind）一起落地。两篇 `docs/human-identity-*.md` 同 commit 入仓。@shiki 本地 backup 恢复后已经按 §10 验证通过；DB adoption counts (1019/0/71/12) 与实测 1021/0/72/12 对齐。

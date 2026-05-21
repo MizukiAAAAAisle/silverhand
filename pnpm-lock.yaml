@@ -114,6 +114,9 @@ importers:
       '@silverhand/backend':
         specifier: workspace:*
         version: link:../../packages/backend
+      '@silverhand/host':
+        specifier: workspace:*
+        version: link:../../packages/host
       '@silverhand/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -156,6 +159,9 @@ importers:
       '@hono/node-server':
         specifier: ^1.13.2
         version: 1.19.14(hono@4.12.15)
+      '@silverhand/host':
+        specifier: workspace:*
+        version: link:../host
       '@silverhand/shared':
         specifier: workspace:*
         version: link:../shared
@@ -200,6 +206,31 @@ importers:
         specifier: ^3.23.8
         version: 3.25.76
     devDependencies:
+      esbuild:
+        specifier: ^0.28.0
+        version: 0.28.0
+      tsx:
+        specifier: ^4.19.1
+        version: 4.21.0
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.5
+        version: 2.1.9(@types/node@22.19.17)(lightningcss@1.32.0)
+
+  packages/host:
+    dependencies:
+      '@silverhand/shared':
+        specifier: workspace:*
+        version: link:../shared
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^22.7.5
+        version: 22.19.17
       esbuild:
         specifier: ^0.28.0
         version: 0.28.0

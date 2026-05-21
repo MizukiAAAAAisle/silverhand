@@ -38,6 +38,7 @@ pnpm workspaces, all `workspace:*` linked:
 - `packages/backend` — Hono HTTP server, `better-sqlite3` (WAL), `ConversationManager`, provisioning helpers. Host-agnostic; consumed by both the Electron main process and `dev:headless`.
 - `packages/cli` — agent-facing `silverhand` CLI. It reads injected
   `SILVERHAND_*` env vars and calls backend internal HTTP routes.
+- `packages/host` — `silverhand-daemon` process + `HostClient`. PR-1 ships an IPC skeleton (Unix socket, ping/status/echo); PR-2 will own agent spawn/inbox-drain/run-state (moved out of backend). See `docs/silverhand-daemon.md`.
 - `apps/desktop` — Electron 33 main + React renderer (electron-vite, React Query + SSE, Tailwind v4, Radix UI).
 
 ## Architecture in five facts

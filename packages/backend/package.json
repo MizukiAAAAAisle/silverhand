@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.13.2",
+    "@silverhand/host": "workspace:*",
     "@silverhand/shared": "workspace:*",
     "better-sqlite3": "^11.3.0",
     "cron-parser": "^4.9.0",

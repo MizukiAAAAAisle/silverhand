@@ -44,6 +44,7 @@ import { UserService } from './services/user-service.js';
 import { UserRepo } from './repos/user-repo.js';
 import { createLocalBlobFileStorage } from './storage/blob-file-storage.js';
 import type { ServerConfig } from '@silverhand/shared';
+import type { HostClient } from '@silverhand/host';
 import type { Server as HttpServer } from 'node:http';
 
 export interface CreateBackendOptions {
@@ -58,6 +59,14 @@ export interface CreateBackendOptions {
   loggers?: Partial<BackendLoggers>;
   /** Where the file logger writes. Optional. */
   logDir?: string;
+  /**
+   * Connected `silverhand-daemon` client. Optional in PR-1 — when
+   * present, backend pings the daemon at boot and logs the version
+   * (smoke test of the IPC plumbing). When absent, backend behaves
+   * exactly as before. PR-2 promotes this to required and routes
+   * runtime intents (spawn/stop/wake/inject) through it.
+   */
+  hostClient?: HostClient;
 }
 
 export interface RunningBackend {
@@ -186,6 +195,31 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   // CM brings back are visible to the first wake delivery.
   ctx.scheduleService.start();
   const stopEventLoopLagProbe = startEventLoopLagProbe(logger);
+
+  // PR-1 smoke: if the host has spawned a silverhand-daemon and handed
+  // us a connected client, ping it once at boot so the IPC plumbing is
+  // exercised every time the backend starts. We log the version + pid
+  // but do NOT take a hard dependency on the daemon being reachable —
+  // failure is logged as a warning, never fatal. PR-2 will route real
+  // runtime intents through this client and the warn becomes an error.
+  if (opts.hostClient) {
+    try {
+      const ping = await opts.hostClient.ping();
+      logger.info(
+        {
+          daemon_pid: ping.daemon_pid,
+          daemon_version: ping.daemon_version,
+          started_at: ping.started_at,
+        },
+        'silverhand-daemon ping ok',
+      );
+    } catch (err) {
+      logger.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        'silverhand-daemon ping failed at boot (non-fatal in PR-1)',
+      );
+    }
+  }
 
   const app = new Hono<AppEnv>();
   app.use('*', silverhandCors());

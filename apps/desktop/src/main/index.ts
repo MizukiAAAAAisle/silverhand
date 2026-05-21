@@ -5,9 +5,12 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { isSafeOpenExtension } from '@silverhand/shared';
 import { startBackend, createCategorizedLoggers, type CategorizedLoggers, type RunningBackend, type FileLogger } from '@silverhand/backend';
+import { HostClient, spawnDaemonChild, type DaemonHandle } from '@silverhand/host';
 import { loadOrCreateServerConfig, databasePath, silverhandDir, writeServerConfig } from './config.js';
 
 let backend: RunningBackend | null = null;
+let daemon: DaemonHandle | null = null;
+let hostClient: HostClient | null = null;
 let logger: FileLogger | null = null;
 let loggers: CategorizedLoggers | null = null;
 let mainWindow: BrowserWindow | null = null;
@@ -145,6 +148,57 @@ function resolveSilverhandCliLauncher(): {
   };
 }
 
+/**
+ * Resolve how to launch the `silverhand-daemon` child process from
+ * Electron main. Mirrors `resolveSilverhandCliLauncher` — same trick:
+ *
+ *  - dev: the daemon entry runs via tsx (installed in
+ *    `packages/host/node_modules/.bin/tsx`); we launch it through the
+ *    same Electron-as-Node host so `process.execPath` stays the
+ *    single canonical Node interpreter for everything we spawn.
+ *  - release: the daemon is bundled to `dist/daemon.mjs` and shipped
+ *    next to `silverhand-cli/cli.mjs` under `resourcesPath`.
+ *
+ * PR-1 dev path: we just point at `packages/host/dist/daemon.js`
+ * produced by the host's `build` script. Devs run `pnpm --filter
+ * @silverhand/host build` once; subsequent `pnpm dev` cycles pick up
+ * the bundle. (Wiring this into `scripts/dev.sh` so it's automatic is
+ * a follow-up; see TODO at the bottom of this file.)
+ */
+function resolveDaemonLauncher(): {
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
+} {
+  const entry = app.isPackaged
+    ? join(process.resourcesPath, 'silverhand-daemon', 'daemon.mjs')
+    : join(resolve(app.getAppPath(), '../..'), 'packages/host/dist/daemon.js');
+  return {
+    command: process.execPath,
+    args: [entry],
+    env: { ELECTRON_RUN_AS_NODE: '1' },
+  };
+}
+
+interface DaemonPaths {
+  socketPath: string;
+  pidFilePath: string;
+  logDir: string;
+}
+
+function daemonPaths(): DaemonPaths {
+  // All daemon runtime artifacts live under `<silverhand-dir>/run/` so
+  // the user can rm -rf the whole thing if their machine ever ends up
+  // in a weird state. Logs share the existing `logs/` directory the
+  // file logger already writes to.
+  const runDir = join(silverhandDir(), 'run');
+  return {
+    socketPath: join(runDir, 'daemon.sock'),
+    pidFilePath: join(runDir, 'daemon.pid'),
+    logDir: join(silverhandDir(), 'logs'),
+  };
+}
+
 async function bootstrap(): Promise<void> {
   try {
     const pathResult = patchPathFromLoginShell();
@@ -177,6 +231,52 @@ async function bootstrap(): Promise<void> {
         'dev CDP remote debugging enabled',
       );
     }
+    // PR-1: spawn the silverhand-daemon child BEFORE backend boots and
+    // hand a connected HostClient to startBackend. The daemon is the
+    // future home for spawn/inbox/run-state (PR-2); right now it
+    // exposes only ping/status/echo. Failure to spawn the daemon must
+    // NOT fail the app — backend still boots without it; we log a
+    // warning so the operator notices.
+    const paths = daemonPaths();
+    try {
+      daemon = await spawnDaemonChild({
+        launcher: resolveDaemonLauncher(),
+        socketPath: paths.socketPath,
+        pidFilePath: paths.pidFilePath,
+        logDir: paths.logDir,
+        alsoStderr: !app.isPackaged,
+      });
+      logger.info(
+        {
+          pid: daemon.pid,
+          socketPath: daemon.socketPath,
+          daemonVersion: daemon.daemonVersion,
+        },
+        'silverhand-daemon spawned',
+      );
+      hostClient = new HostClient({ socketPath: paths.socketPath });
+      try {
+        await hostClient.connect();
+      } catch (err) {
+        logger.warn(
+          { err: err instanceof Error ? err.message : String(err) },
+          'HostClient initial connect failed; continuing without host plumbing',
+        );
+        await hostClient.close().catch(() => undefined);
+        hostClient = null;
+      }
+      daemon.onExit(info => {
+        logger?.error(
+          { reason: info.reason, code: info.code },
+          'silverhand-daemon exited and exceeded restart budget',
+        );
+      });
+    } catch (err) {
+      logger.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        'failed to spawn silverhand-daemon; backend will boot without host plumbing',
+      );
+    }
     backend = await startBackend({
       dbPath: databasePath(),
       silverhandDir: silverhandDir(),
@@ -185,6 +285,7 @@ async function bootstrap(): Promise<void> {
       logger,
       loggers: loggers ?? undefined,
       logDir: join(silverhandDir(), 'logs'),
+      hostClient: hostClient ?? undefined,
     });
     await writeServerConfig(backend.context.serverConfig);
   } catch (err) {
@@ -642,6 +743,22 @@ async function shutdown(): Promise<void> {
     }
   } catch (err) {
     console.error('[main] backend.close() failed:', err);
+  }
+  try {
+    // Tear down host plumbing AFTER backend so any final pings during
+    // shutdown have something to talk to. HostClient first (drops the
+    // socket cleanly so daemon doesn't log a "peer error"); then
+    // daemon (SIGTERM → graceful drain → SIGKILL fallback).
+    if (hostClient) {
+      await hostClient.close().catch(() => undefined);
+      hostClient = null;
+    }
+    if (daemon) {
+      await daemon.kill({ gracefulMs: 5_000 }).catch(() => undefined);
+      daemon = null;
+    }
+  } catch (err) {
+    console.error('[main] host shutdown failed:', err);
   }
   try {
     // `logger` is just an alias for `loggers.system`; close it via the

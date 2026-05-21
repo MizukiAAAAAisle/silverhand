@@ -59,6 +59,12 @@ asarUnpack:
 extraResources:
   - from: ../../packages/cli/dist/cli.js
     to: silverhand-cli/cli.mjs
+  # PR-1 silverhand-daemon: Electron main spawns this bundle as a
+  # child process at startup. Same `.mjs` rename trick as the CLI so
+  # Node loads it as ESM without a sibling package.json. See
+  # `apps/desktop/src/main/index.ts:resolveDaemonLauncher`.
+  - from: ../../packages/host/dist/daemon.js
+    to: silverhand-daemon/daemon.mjs
 
 mac:
   category: public.app-category.developer-tools
