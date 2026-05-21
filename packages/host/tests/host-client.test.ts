@@ -218,3 +218,206 @@ describe('HostClient — schema drift guard (review fix B2)', () => {
     await client.close();
   });
 });
+
+describe('HostClient — runtime_* typed helpers (PR-2 step 1)', () => {
+  it('runtimeStart sends runtime_start with params and resolves on result', async () => {
+    const { transport, peer } = createFakeTransportPair();
+    const client = new HostClient({ transportFactory: () => transport, rng: FIXED_RNG });
+    await client.connect();
+    const promise = client.runtimeStart({
+      conversation_id: 'conv1',
+      agent_id: 'agent1',
+    });
+    await new Promise(setImmediate);
+    expect(peer.received).toHaveLength(1);
+    expect(peer.received[0]!.intent).toBe('runtime_start');
+    expect(peer.received[0]!.params).toMatchObject({
+      conversation_id: 'conv1',
+      agent_id: 'agent1',
+    });
+    peer.send({
+      id: peer.received[0]!.id,
+      result: { pid: 4242, started_at: 1_700_000_000_000 },
+    });
+    await expect(promise).resolves.toMatchObject({ pid: 4242, started_at: 1_700_000_000_000 });
+    await client.close();
+  });
+
+  it('runtimeWake sends batch delivery_ids and returns delivered=true result', async () => {
+    const { transport, peer } = createFakeTransportPair();
+    const client = new HostClient({ transportFactory: () => transport, rng: FIXED_RNG });
+    await client.connect();
+    const promise = client.runtimeWake({
+      conversation_id: 'conv1',
+      agent_id: 'agent1',
+      delivery_ids: [10, 11, 12],
+      kind: 'batch',
+      payload: '{"role":"user","content":"hi"}\n',
+    });
+    await new Promise(setImmediate);
+    expect(peer.received[0]!.intent).toBe('runtime_wake');
+    expect((peer.received[0]!.params as { delivery_ids: number[] }).delivery_ids).toEqual([10, 11, 12]);
+    peer.send({
+      id: peer.received[0]!.id,
+      result: { delivered: true, delivery_ids: [10, 11, 12] },
+    });
+    await expect(promise).resolves.toEqual({ delivered: true, delivery_ids: [10, 11, 12] });
+    await client.close();
+  });
+
+  it('runtimeWake delivered=false branch carries a reason', async () => {
+    const { transport, peer } = createFakeTransportPair();
+    const client = new HostClient({ transportFactory: () => transport, rng: FIXED_RNG });
+    await client.connect();
+    const promise = client.runtimeWake({
+      conversation_id: 'conv1',
+      agent_id: 'agent1',
+      delivery_ids: [42],
+      kind: 'batch',
+      payload: '{}\n',
+    });
+    await new Promise(setImmediate);
+    peer.send({
+      id: peer.received[0]!.id,
+      result: { delivered: false, delivery_ids: [42], reason: 'not_running' },
+    });
+    await expect(promise).resolves.toEqual({
+      delivered: false,
+      delivery_ids: [42],
+      reason: 'not_running',
+    });
+    await client.close();
+  });
+
+  it('runtimeStatus accepts no params and merges supervisor runtimes', async () => {
+    const { transport, peer } = createFakeTransportPair();
+    const client = new HostClient({ transportFactory: () => transport, rng: FIXED_RNG });
+    await client.connect();
+    const promise = client.runtimeStatus();
+    await new Promise(setImmediate);
+    expect(peer.received[0]!.intent).toBe('runtime_status');
+    expect(peer.received[0]!.params).toEqual({});
+    peer.send({
+      id: peer.received[0]!.id,
+      result: { runtimes: [] },
+    });
+    await expect(promise).resolves.toEqual({ runtimes: [] });
+    await client.close();
+  });
+
+  it('runtimeStopAll and runtimeCloseActivityLog send empty params', async () => {
+    const { transport, peer } = createFakeTransportPair();
+    const client = new HostClient({ transportFactory: () => transport, rng: FIXED_RNG });
+    await client.connect();
+    const stopAll = client.runtimeStopAll();
+    await new Promise(setImmediate);
+    peer.send({ id: peer.received[0]!.id, result: { stopped_count: 0 } });
+    await expect(stopAll).resolves.toEqual({ stopped_count: 0 });
+    const closeLog = client.runtimeCloseActivityLog();
+    await new Promise(setImmediate);
+    peer.send({ id: peer.received[1]!.id, result: { flushed: true } });
+    await expect(closeLog).resolves.toEqual({ flushed: true });
+    await client.close();
+  });
+});
+
+describe('HostClient — subscribe (unsolicited events)', () => {
+  it('delivers runtime_state events to all subscribers in arrival order', async () => {
+    const { transport, peer } = createFakeTransportPair();
+    const client = new HostClient({ transportFactory: () => transport, rng: FIXED_RNG });
+    await client.connect();
+    const recvA: string[] = [];
+    const recvB: string[] = [];
+    client.subscribe(e => {
+      if (e.event === 'runtime_state') recvA.push(e.state.status);
+    });
+    client.subscribe(e => {
+      if (e.event === 'runtime_state') recvB.push(e.state.status);
+    });
+    const stateFrame = (status: 'idle' | 'thinking'): import('../src/protocol.js').EventFrame => ({
+      event: 'runtime_state',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      state: {
+        runId: 'run-1',
+        agentId: 'a1',
+        conversationId: 'c1',
+        status,
+        startedAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+        lastActivityAt: 1_700_000_000_000,
+      },
+      ts: 1_700_000_000_000,
+    });
+    peer.send(stateFrame('idle'));
+    peer.send(stateFrame('thinking'));
+    expect(recvA).toEqual(['idle', 'thinking']);
+    expect(recvB).toEqual(['idle', 'thinking']);
+    await client.close();
+  });
+
+  it('unsubscribe stops further deliveries to that handler', async () => {
+    const { transport, peer } = createFakeTransportPair();
+    const client = new HostClient({ transportFactory: () => transport, rng: FIXED_RNG });
+    await client.connect();
+    const recv: string[] = [];
+    const off = client.subscribe(e => {
+      if (e.event === 'shutting_down') recv.push(e.reason);
+    });
+    peer.send({ event: 'shutting_down', reason: 'test_1' });
+    off();
+    peer.send({ event: 'shutting_down', reason: 'test_2' });
+    expect(recv).toEqual(['test_1']);
+    await client.close();
+  });
+
+  it('isolates subscriber errors so other subscribers still receive the event', async () => {
+    const { transport, peer } = createFakeTransportPair();
+    const client = new HostClient({
+      transportFactory: () => transport,
+      rng: FIXED_RNG,
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+    });
+    await client.connect();
+    const good: string[] = [];
+    client.subscribe(() => {
+      throw new Error('boom');
+    });
+    client.subscribe(e => {
+      if (e.event === 'shutting_down') good.push(e.reason);
+    });
+    peer.send({ event: 'shutting_down', reason: 'after_throw' });
+    expect(good).toEqual(['after_throw']);
+    await client.close();
+  });
+
+  it('subscribers persist across reconnect (handler set lives on the client)', async () => {
+    const peers: ReturnType<typeof createFakeTransportPair>[] = [];
+    const client = new HostClient({
+      transportFactory: () => {
+        const pair = createFakeTransportPair();
+        peers.push(pair);
+        return pair.transport;
+      },
+      rng: FIXED_RNG,
+      initialBackoffMs: 1,
+      maxBackoffMs: 5,
+    });
+    await client.connect();
+    const recv: string[] = [];
+    client.subscribe(e => {
+      if (e.event === 'shutting_down') recv.push(e.reason);
+    });
+    peers[0]!.peer.send({ event: 'shutting_down', reason: 'first' });
+    peers[0]!.peer.disconnect('drop');
+    await vi.waitFor(() => {
+      expect(peers.length).toBeGreaterThanOrEqual(2);
+    });
+    await vi.waitFor(() => {
+      expect(client.isConnected()).toBe(true);
+    });
+    peers[1]!.peer.send({ event: 'shutting_down', reason: 'after_reconnect' });
+    expect(recv).toEqual(['first', 'after_reconnect']);
+    await client.close();
+  });
+});

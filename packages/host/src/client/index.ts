@@ -42,11 +42,17 @@ import { randomBytes } from 'node:crypto';
 import {
   encodeFrame,
   intentSchemas,
+  type EventFrame,
   type IntentName,
   type IntentParams,
   type IntentResult,
   type RequestFrame,
   type ResponseError,
+  type RuntimeStartParams,
+  type RuntimeStopParams,
+  type RuntimeWakeParams,
+  type RuntimeStatusParams,
+  type RuntimeClearSessionParams,
 } from '../protocol.js';
 import type { DecodedFrame, Transport } from './transport.js';
 import { SocketTransport } from './socket-transport.js';
@@ -115,6 +121,7 @@ export class HostClient {
   private readonly rng: () => number;
   private readonly pending = new Map<string, PendingRequest>();
   private readonly reconnectHandlers = new Set<() => void>();
+  private readonly eventHandlers = new Set<(event: EventFrame) => void>();
   private transport: Transport | null = null;
   private closed = false;
   /** Resolves once *some* transport reaches connected; replaced on each
@@ -228,6 +235,71 @@ export class HostClient {
     return this.call('echo', { message });
   }
 
+  // ── PR-2 runtime_* typed helpers ───────────────────────────────
+  // Thin wrappers around `call()` so backend code reads
+  // `host.runtimeStart({...})` rather than `host.call('runtime_start',
+  // {...})`. The typing is identical to the underlying `call()`; the
+  // helper just locks the intent name so a typo can't reach the
+  // wire.
+
+  runtimeStart(
+    params: RuntimeStartParams,
+  ): Promise<IntentResult<'runtime_start'>> {
+    return this.call('runtime_start', params);
+  }
+
+  runtimeStop(
+    params: RuntimeStopParams,
+  ): Promise<IntentResult<'runtime_stop'>> {
+    return this.call('runtime_stop', params);
+  }
+
+  runtimeWake(
+    params: RuntimeWakeParams,
+  ): Promise<IntentResult<'runtime_wake'>> {
+    return this.call('runtime_wake', params);
+  }
+
+  runtimeStatus(
+    params: RuntimeStatusParams = {},
+  ): Promise<IntentResult<'runtime_status'>> {
+    return this.call('runtime_status', params);
+  }
+
+  runtimeClearSession(
+    params: RuntimeClearSessionParams,
+  ): Promise<IntentResult<'runtime_clear_session'>> {
+    return this.call('runtime_clear_session', params);
+  }
+
+  runtimeStopAll(): Promise<IntentResult<'runtime_stop_all'>> {
+    return this.call('runtime_stop_all', {});
+  }
+
+  runtimeCloseActivityLog(): Promise<IntentResult<'runtime_close_activity_log'>> {
+    return this.call('runtime_close_activity_log', {});
+  }
+
+  /**
+   * Subscribe to **unsolicited events** the daemon emits — runtime_*
+   * lifecycle (state, output, exit, ready_for_drain,
+   * startup_delivery_consumed/_failed, output_dropped/_paused/_resumed)
+   * plus the daemon-level `shutting_down` and `ready` envelopes from
+   * PR-1. Re-subscription on reconnect is automatic via
+   * `onReconnect` — the handler set is preserved across the
+   * lifecycle of the HostClient itself, not the underlying
+   * transport.
+   *
+   * Returns an unsubscribe function. Multiple subscribers are
+   * supported; each receives every event in arrival order.
+   */
+  subscribe(handler: (event: EventFrame) => void): () => void {
+    this.eventHandlers.add(handler);
+    return () => {
+      this.eventHandlers.delete(handler);
+    };
+  }
+
   /** Tear down. Cancels reconnect, rejects every pending request,
    *  closes the transport. Idempotent. */
   async close(): Promise<void> {
@@ -275,6 +347,19 @@ export class HostClient {
           },
           'daemon ready handshake',
         );
+      }
+      // Dispatch to subscribers AFTER logging so a subscriber that
+      // throws doesn't suppress the log line. Errors are isolated per
+      // handler — one bad subscriber does not break the others.
+      for (const h of this.eventHandlers) {
+        try {
+          h(frame);
+        } catch (err) {
+          this.logger.error(
+            { err: (err as Error).message, event: frame.event },
+            'event subscriber threw',
+          );
+        }
       }
       return;
     }
