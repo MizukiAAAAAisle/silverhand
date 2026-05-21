@@ -165,7 +165,7 @@ describe('IntentDispatcher — runtime_* routing', () => {
       agent_id: 'a1',
       delivery_ids: [101, 102],
       kind: 'message',
-      payload: {},
+      text: 'hi',
     });
     expect('result' in r).toBe(true);
     if ('result' in r) {

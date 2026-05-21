@@ -66,7 +66,7 @@ function makeBridge(
         agentId: params.agent_id,
         deliveryIds: [...params.delivery_ids],
         kind: params.kind,
-        payload: params.payload,
+        text: params.text,
       };
       calls.push(call);
       if (typeof results === 'function') {
@@ -90,7 +90,7 @@ interface CoordinatorBridgeCall {
   agentId: string;
   deliveryIds: number[];
   kind: 'message' | 'schedule_fire';
-  payload: string;
+  text: string;
 }
 
 function makeCacheView(
@@ -141,15 +141,14 @@ const DRIVER_NONE: DriverDeliveryView = {
 };
 
 /**
- * Build a `LiveDeliveryRequest` with the new combine-before-encode
- * shape (Cindy `Mqf1h-FKudtEbH1O`). Legacy-style `inboxId` / `messageId`
- * / `payload` overrides are translated for test brevity:
+ * Build a `LiveDeliveryRequest` with the Option A v2 shape (Cindy
+ * `UMGu36zoTDVuKWXi` — daemon encodes via in-process driver; backend
+ * ships raw text). Legacy-style `inboxId` / `messageId` / `payload`
+ * overrides are translated for test brevity:
  *   - `inboxId: N` → `deliveryIds: [N]`
  *   - `messageId: 'm'` → `dedupKey: 'm'`
- *   - `payload: 'X'` → `text: 'X'` AND `encode: t => t` (identity, so
- *     dispatched wakes carry the override text verbatim — keeps the
- *     existing payload-assertion tests valid without forcing every
- *     test to JSON-parse)
+ *   - `payload: 'X'` → `text: 'X'` (renamed; daemon now owns encode
+ *     so the test fixture no longer needs an identity-encode closure)
  */
 function req(
   overrides: Partial<LiveDeliveryRequest> & {
@@ -164,7 +163,6 @@ function req(
     dedupKey: messageId ?? 'm1',
     text: payload ?? '{"type":"user","message":"hi"}',
     driver: DRIVER_GATED,
-    encode: t => t,
   };
   return { ...base, ...rest };
 }
@@ -486,7 +484,7 @@ describe('case 5: phase=ready + driver=gated + busy mid-turn', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
       deliveryIds: [1, 2],
-      payload: 'A|B',
+      text: 'A|B',
     });
     expect(combineGated).toHaveBeenCalledTimes(1);
     expect(delivered).toEqual([[1, 2]]);
@@ -888,7 +886,7 @@ describe('B3: multi-payload batch without combineGated fails loudly', () => {
     expect(delivered).toHaveLength(0); // no inbox row mutated
     expect(c.pendingCount('c1', 'a1')).toBe(2); // queue restored
     expect(
-      errorLogs.some(m => m.includes('combine/encode refused')),
+      errorLogs.some(m => m.includes('flush combine refused')),
     ).toBe(true);
   });
 

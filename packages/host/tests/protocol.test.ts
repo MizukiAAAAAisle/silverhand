@@ -161,7 +161,7 @@ describe('protocol — runtime_* registry', () => {
       options: {},
       startup_delivery: {
         delivery_ids: [101, 102, 103],
-        payload: { type: 'user', message: { content: '...' } },
+        text: 'hello',
       },
     });
     expect(ok.success).toBe(true);
@@ -179,7 +179,7 @@ describe('protocol — runtime_* registry', () => {
       conversation_id: 'c1',
       agent_id: 'a1',
       options: {},
-      startup_delivery: { delivery_ids: [], payload: {} },
+      startup_delivery: { delivery_ids: [], text: 'x' },
     });
     expect(r.success).toBe(false);
   });
@@ -190,7 +190,7 @@ describe('protocol — runtime_* registry', () => {
       agent_id: 'a1',
       delivery_ids: [42],
       kind: 'message',
-      payload: {},
+      text: 'hi',
     });
     expect(ok.success).toBe(true);
 
@@ -199,16 +199,18 @@ describe('protocol — runtime_* registry', () => {
       agent_id: 'a1',
       delivery_ids: [],
       kind: 'message',
-      payload: {},
+      text: 'hi',
     });
     expect(empty.success).toBe(false);
   });
 
-  it('runtime_wake REJECTS missing payload (review fix Cindy ihw5XHpjldmEc-wt)', () => {
+  it('runtime_wake REJECTS missing text and empty text (Option A v2 — Cindy `UMGu36zoTDVuKWXi` + `wYjG20JdGjLpwq8K`)', () => {
     // The step-0 contract says delivery_ids MUST NOT reach the daemon
-    // without an accompanying stdin payload. A bare `z.unknown()`
-    // would treat `payload` as optional; the refinement guard rejects
-    // both omission and explicit `undefined`.
+    // without accompanying message text — daemon encodes via its
+    // in-process driver instance. `.min(1)` rejects both missing and
+    // empty-string, so every backend call site must yield non-empty
+    // text or fail loudly at schema validation rather than at stdin
+    // encode (Cindy `wYjG20JdGjLpwq8K`).
     const missing = RuntimeWakeParamsSchema.safeParse({
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -217,28 +219,28 @@ describe('protocol — runtime_* registry', () => {
     });
     expect(missing.success).toBe(false);
 
-    const explicitUndef = RuntimeWakeParamsSchema.safeParse({
+    const empty = RuntimeWakeParamsSchema.safeParse({
       conversation_id: 'c1',
       agent_id: 'a1',
       delivery_ids: [1],
       kind: 'message',
-      payload: undefined,
+      text: '',
     });
-    expect(explicitUndef.success).toBe(false);
+    expect(empty.success).toBe(false);
 
-    // Null is a valid stream-json value (the wire is still opaque per
-    // step 1) — only undefined / missing is forbidden.
-    const nullPayload = RuntimeWakeParamsSchema.safeParse({
+    // Any non-empty string is valid; the daemon owns interpretation
+    // (driver-side `encodeStdinMessage(text, cliSessionId)`).
+    const ok = RuntimeWakeParamsSchema.safeParse({
       conversation_id: 'c1',
       agent_id: 'a1',
       delivery_ids: [1],
       kind: 'message',
-      payload: null,
+      text: ' ',
     });
-    expect(nullPayload.success).toBe(true);
+    expect(ok.success).toBe(true);
   });
 
-  it('runtime_start.startup_delivery REJECTS missing payload (review fix Cindy ihw5XHpjldmEc-wt)', () => {
+  it('runtime_start.startup_delivery REJECTS missing text and empty text (Option A v2)', () => {
     const missing = RuntimeStartParamsSchema.safeParse({
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -247,13 +249,13 @@ describe('protocol — runtime_* registry', () => {
     });
     expect(missing.success).toBe(false);
 
-    const explicitUndef = RuntimeStartParamsSchema.safeParse({
+    const empty = RuntimeStartParamsSchema.safeParse({
       conversation_id: 'c1',
       agent_id: 'a1',
       options: {},
-      startup_delivery: { delivery_ids: [101], payload: undefined },
+      startup_delivery: { delivery_ids: [101], text: '' },
     });
-    expect(explicitUndef.success).toBe(false);
+    expect(empty.success).toBe(false);
   });
 
   it('runtime_wake result is all-or-nothing — success carries delivery_ids back', () => {
@@ -401,7 +403,7 @@ describe('protocol — runtime_stop step 2 shape (Cindy `vqDWkLFF6pAeIE5t`)', ()
       conversation_id: 'c1',
       agent_id: 'a1',
       mode: 'soft',
-      soft_directive: '{"role":"user","content":"please stop"}\n',
+      soft_directive: 'please stop',
     });
     expect(ok.success).toBe(true);
 
@@ -425,21 +427,23 @@ describe('protocol — runtime_stop step 2 shape (Cindy `vqDWkLFF6pAeIE5t`)', ()
       conversation_id: 'c1',
       agent_id: 'a1',
       mode: 'hard',
-      soft_directive: '{}\n',
+      soft_directive: 'whatever',
     });
     expect(conflated.success).toBe(false);
   });
 
-  it('soft_directive null is a valid stream-json value', () => {
-    // Mirrors StreamJsonPayloadSchema's null-allowed contract from
-    // step 1; soft_directive is the same opaque-but-required payload.
+  it('soft_directive empty string fails .min(1) (Option A v2 — Cindy `wYjG20JdGjLpwq8K`)', () => {
+    // Option A v2: soft_directive is now unencoded text, not stream-json
+    // bytes. Empty string is a caller bug (backend always synthesizes
+    // non-empty directive phrasing) — fail at schema validation, not
+    // at stdin encode.
     const r = RuntimeStopParamsSchema.safeParse({
       conversation_id: 'c1',
       agent_id: 'a1',
       mode: 'soft',
-      soft_directive: null,
+      soft_directive: '',
     });
-    expect(r.success).toBe(true);
+    expect(r.success).toBe(false);
   });
 
   it('soft_directive explicit undefined fails the same as missing', () => {

@@ -253,7 +253,7 @@ describe('HostClient — runtime_* typed helpers (PR-2 step 1)', () => {
       agent_id: 'agent1',
       delivery_ids: [10, 11, 12],
       kind: 'message',
-      payload: '{"role":"user","content":"hi"}\n',
+      text: 'hi',
     });
     await new Promise(setImmediate);
     expect(peer.received[0]!.intent).toBe('runtime_wake');
@@ -275,7 +275,7 @@ describe('HostClient — runtime_* typed helpers (PR-2 step 1)', () => {
       agent_id: 'agent1',
       delivery_ids: [42],
       kind: 'message',
-      payload: '{}\n',
+      text: 'stub',
     });
     await new Promise(setImmediate);
     peer.send({

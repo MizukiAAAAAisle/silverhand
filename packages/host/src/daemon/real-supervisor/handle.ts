@@ -53,6 +53,17 @@ export type RuntimePhase =
  */
 export interface StartupDeliveryState {
   readonly deliveryIds: readonly number[];
+  /**
+   * Option A v2 (Cindy `UMGu36zoTDVuKWXi`): the unencoded text the
+   * daemon will encode + write at consume time using its in-process
+   * `handle.driver.encodeStdinMessage(text, handle.cliSessionId)`.
+   * Held on the gate (not in a separate field) so there is exactly
+   * ONE source of truth for the pending batch: clearing the gate
+   * also drops the text. Stateful drivers (codex) consume only after
+   * `driver.readyToEncode()` flips true; stateless drivers (claude)
+   * consume immediately.
+   */
+  readonly text: string;
 }
 
 export interface RuntimeHandle {

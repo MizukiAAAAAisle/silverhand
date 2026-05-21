@@ -110,17 +110,25 @@ export interface DriverDeliveryView {
  * `inboxes.ensureDelivery`. The coordinator decides whether to call
  * `wake`, queue, or refuse.
  *
- * # Combine-before-encode invariant (Cindy `Mqf1h-FKudtEbH1O`)
+ * # Daemon owns encode (Option A v2 — Cindy `UMGu36zoTDVuKWXi`)
  *
  * `text` is the UN-ENCODED human-readable message body (from
- * `formatLiveMessage` or `formatInboxBatch`). `encode` produces the
- * final driver stdin line when called with that text — or, for a
- * multi-request batch, with the text returned by the coordinator's
- * `combineGated` callback.
+ * `formatLiveMessage` or `formatInboxBatch`). The daemon's in-process
+ * driver instance — whose runtime state (codex `threadId` etc.) is
+ * authoritative — encodes via `encodeStdinMessage(text, cliSessionId)`
+ * just before writing to stdin. Backend MUST NOT pre-encode: doing so
+ * would spin up a STATELESS driver instance whose `encodeStdinMessage`
+ * returns null for codex (no `threadId` yet), silently killing every
+ * wake. This was the codex daemon-mode delivery blocker (see commit
+ * 2b-iii log).
  *
- * The coordinator MUST combine texts BEFORE encoding when batch.length
- * > 1; encoding each text individually and then joining JSON lines as
- * text produces a payload that is not a legal driver stdin line
+ * # Combine-before-encode invariant (still holds)
+ *
+ * Combination still happens BEFORE the daemon encodes. The coordinator
+ * combines multiple `text` fields via `combineGated` when batch.length
+ * > 1 and ships ONE combined text to the daemon. The daemon then
+ * encodes once. Feeding encoded JSON lines through `combineGated`
+ * would produce a payload that is not a legal driver stdin line
  * (claude's `--input-format stream-json` would see malformed input).
  *
  * # Atomic delivery groups (`deliveryIds`)
@@ -144,15 +152,9 @@ export interface LiveDeliveryRequest {
    *  request whose key already exists in the pending queue. */
   dedupKey: string;
   /** Un-encoded human-readable text. Combined with sibling requests
-   *  via `combineGated` before encoding when batch.length > 1. */
+   *  via `combineGated` before the daemon encodes when batch.length > 1. */
   text: string;
   driver: DriverDeliveryView;
-  /** Produce the final driver stdin line for the given text. Closes
-   *  over the driver instance + cli session id at construction. Returns
-   *  null if the driver refuses (e.g. cursor oneShot — although that
-   *  driver should never reach this point because oneShot is filtered
-   *  earlier). */
-  encode: (text: string) => string | null;
 }
 
 /**
@@ -188,6 +190,7 @@ export type LiveDeliveryDecision =
         | 'not_initialized'
         | 'startup_pending'
         | 'draining'
+        | 'driver_not_ready'
         | 'driver_refused';
     }
   | { kind: 'queued_mid_turn'; pendingCount: number }
@@ -219,6 +222,10 @@ export interface RuntimeExitMeta {
  * Bridge subset the coordinator needs. Kept narrow so tests can pass
  * an `{ runtimeWake: vi.fn() }` literal without instantiating
  * `RuntimeBridge`.
+ *
+ * `text` is the unencoded message text the daemon will hand to its
+ * in-process driver's `encodeStdinMessage(text, cliSessionId)` (Option
+ * A v2 — Cindy `UMGu36zoTDVuKWXi`). Backend NEVER pre-encodes.
  */
 export interface CoordinatorBridge {
   runtimeWake(params: {
@@ -226,7 +233,7 @@ export interface CoordinatorBridge {
     agent_id: string;
     delivery_ids: number[];
     kind: 'message' | 'schedule_fire';
-    payload: string;
+    text: string;
   }): Promise<RuntimeWakeResult>;
 }
 
@@ -311,9 +318,8 @@ interface PendingDelivery {
   deliveryIds: readonly number[];
   dedupKey: string;
   /** Un-encoded human-readable text. Combined with sibling pendings at
-   *  flush time via `combineGated` (when length > 1). */
+   *  flush time via `combineGated` (when length > 1); daemon encodes. */
   text: string;
-  encode: (text: string) => string | null;
   /** The driver capability the request was submitted under. Stored so
    *  the flush path can pick the right routing (in practice a single
    *  agent's driver doesn't change mid-session, but storing per-row
@@ -717,7 +723,6 @@ export class RuntimeDeliveryCoordinator {
       deliveryIds: req.deliveryIds,
       dedupKey: req.dedupKey,
       text: req.text,
-      encode: req.encode,
       driver: req.driver,
     });
   }
@@ -731,14 +736,15 @@ export class RuntimeDeliveryCoordinator {
     st.flushing = true;
     const batch = st.pending.splice(0);
     try {
-      let payload: string;
+      let text: string;
       try {
-        payload = this.combineAndEncode(batch);
+        text = this.combineText(batch);
       } catch (err) {
-        // No combineGated callback for a multi-text flush, or encode
-        // returned null. Push the rows back and rethrow — silent
-        // degradation is forbidden (Cindy `rrF2L1RmWq5JFH3m` B3 /
-        // `0G5uJBydO_4qt_2r`; `Mqf1h-FKudtEbH1O` combine-before-encode).
+        // No combineGated callback for a multi-text flush. Push the
+        // rows back and rethrow — silent degradation is forbidden
+        // (Cindy `rrF2L1RmWq5JFH3m` B3 / `0G5uJBydO_4qt_2r`;
+        // `Mqf1h-FKudtEbH1O` combine-before-encode is preserved by the
+        // coordinator combining text BEFORE shipping to daemon).
         st.pending.unshift(...batch);
         this.logger.error(
           {
@@ -747,7 +753,7 @@ export class RuntimeDeliveryCoordinator {
             batchSize: batch.length,
             err: (err as Error).message,
           },
-          'deliver: flush combine/encode refused; rows remain queued',
+          'deliver: flush combine refused; rows remain queued',
         );
         throw err;
       }
@@ -757,7 +763,7 @@ export class RuntimeDeliveryCoordinator {
         agent_id: agentId,
         delivery_ids: deliveryIds,
         kind: 'message',
-        payload,
+        text,
       });
       if (result.delivered) {
         // B3: same gate as dispatchWake — defer ack for
@@ -846,7 +852,7 @@ export class RuntimeDeliveryCoordinator {
     agentId: string,
     batch: LiveDeliveryRequest[],
   ): Promise<LiveDeliveryDecision> {
-    const payload = this.combineAndEncode(batch);
+    const text = this.combineText(batch);
     const deliveryIds = batch.flatMap(item => [...item.deliveryIds]);
     let result: RuntimeWakeResult;
     try {
@@ -855,7 +861,7 @@ export class RuntimeDeliveryCoordinator {
         agent_id: agentId,
         delivery_ids: deliveryIds,
         kind: 'message',
-        payload,
+        text,
       });
     } catch (err) {
       this.logger.error(
@@ -922,53 +928,48 @@ export class RuntimeDeliveryCoordinator {
   }
 
   /**
-   * Combine un-encoded message texts BEFORE encoding (Cindy
-   * `Mqf1h-FKudtEbH1O`: feeding encoded JSON lines through `combineGated`
-   * yields a payload that is not a valid driver stdin line — claude's
-   * `--input-format stream-json` parses it as malformed). Single-request
-   * batches encode their text directly; multi-request batches combine
-   * texts via `combineGated` then encode once via `batch[0].encode`
-   * (all requests in a (conv, agent) batch share the same driver + cli
-   * session id).
+   * Combine un-encoded message texts BEFORE the daemon encodes (Cindy
+   * `Mqf1h-FKudtEbH1O` + Option A v2 `UMGu36zoTDVuKWXi`: combine BEFORE
+   * encode is preserved by the coordinator never encoding at all —
+   * combination happens here on text, the daemon's in-process driver
+   * instance encodes once after receiving the combined text). Feeding
+   * encoded JSON lines through `combineGated` would yield a payload
+   * that is not a valid driver stdin line — claude's
+   * `--input-format stream-json` parses it as malformed.
+   *
+   * Single-request batches return the text verbatim; multi-request
+   * batches combine via `combineGated` (DaemonHost wires this to
+   * `combineGatedBatch`).
    *
    * Throws if:
    *   - batch is empty;
    *   - multi-text batch was submitted without a `combineGated`
-   *     callback wired on the coordinator;
-   *   - the request's `encode` returns null (driver refused — should
-   *     not happen here because oneShot is filtered earlier and the
-   *     remaining drivers always accept stdin).
+   *     callback wired on the coordinator.
+   *
+   * The "encode returned null" failure mode no longer exists at this
+   * layer — the daemon's `runtimeWake` decides between `driver_not_ready`
+   * (recoverable; row stays pending) and `driver_refused` (driver bug;
+   * fail loudly). Both arms keep the inbox row pending.
    */
-  private combineAndEncode(
-    batch: readonly { text: string; encode: (text: string) => string | null }[],
+  private combineText(
+    batch: readonly { text: string }[],
   ): string {
     if (batch.length === 0) {
-      throw new Error('combineAndEncode: empty batch');
+      throw new Error('combineText: empty batch');
     }
-    let combinedText: string;
     if (batch.length === 1) {
-      combinedText = batch[0]!.text;
-    } else {
-      if (!this.callbacks.combineGated) {
-        throw new Error(
-          'RuntimeDeliveryCoordinator: combineGated callback is required ' +
-            'for multi-text batches (received ' +
-            batch.length +
-            ' texts). Silent join-fallback is forbidden — DaemonHost ' +
-            'must provide a CM-equivalent combineGatedBatch formatter ' +
-            'when wiring the coordinator.',
-        );
-      }
-      combinedText = this.callbacks.combineGated(batch.map(item => item.text));
+      return batch[0]!.text;
     }
-    const payload = batch[0]!.encode(combinedText);
-    if (payload === null) {
+    if (!this.callbacks.combineGated) {
       throw new Error(
-        'RuntimeDeliveryCoordinator: encode returned null for combined ' +
-          'text — driver refused stdin payload. This is unexpected on a ' +
-          'gated/direct dispatch path (oneShot is filtered earlier).',
+        'RuntimeDeliveryCoordinator: combineGated callback is required ' +
+          'for multi-text batches (received ' +
+          batch.length +
+          ' texts). Silent join-fallback is forbidden — DaemonHost ' +
+          'must provide a CM-equivalent combineGatedBatch formatter ' +
+          'when wiring the coordinator.',
       );
     }
-    return payload;
+    return this.callbacks.combineGated(batch.map(item => item.text));
   }
 }

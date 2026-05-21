@@ -186,15 +186,12 @@ describe('RuntimeBridge.runtimeStart — proxy env layering', () => {
       options: { runtime: 'claude' },
       startupDelivery: {
         delivery_ids: [101, 102],
-        payload: { type: 'user', content: 'hello' },
+        text: 'hello',
       },
     });
     const params = calls[0]!.params as RuntimeStartParams;
     expect(params.startup_delivery?.delivery_ids).toEqual([101, 102]);
-    expect(params.startup_delivery?.payload).toEqual({
-      type: 'user',
-      content: 'hello',
-    });
+    expect(params.startup_delivery?.text).toEqual('hello');
   });
 
   it('overwrites caller-supplied options.env (proxy layering is authoritative)', async () => {
@@ -294,7 +291,7 @@ describe('RuntimeBridge — other passthrough intents', () => {
       agent_id: 'a1',
       delivery_ids: [42],
       kind: 'message',
-      payload: { type: 'user', content: 'wake up' },
+      text: 'wake up',
     });
     expect(calls[0]!.intent).toBe('runtime_wake');
     const p = calls[0]!.params as RuntimeWakeParams;
@@ -312,11 +309,11 @@ describe('RuntimeBridge — other passthrough intents', () => {
       conversation_id: 'c1',
       agent_id: 'a1',
       mode: 'soft',
-      soft_directive: { type: 'user', content: '[stop]' },
+      soft_directive: '[stop]',
     });
     const p = calls[0]!.params as RuntimeStopParams;
     expect(p.mode).toBe('soft');
-    expect(p.soft_directive).toEqual({ type: 'user', content: '[stop]' });
+    expect(p.soft_directive).toEqual('[stop]');
   });
 
   it('runtimeStatus omits empty params (matches HostClient default arg)', async () => {

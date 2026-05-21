@@ -146,6 +146,18 @@ export class CodexDriver implements Driver {
     });
   }
 
+  /**
+   * Codex can only encode stdin messages after `thread/started`
+   * lands and `handleThreadReady` sets `this.threadId`. Before that,
+   * `encodeStdinMessage` returns null and the daemon's
+   * `ready_for_drain` gate (Option A v2 — Cindy `UMGu36zoTDVuKWXi`)
+   * keeps `runtime_ready_for_drain` bottled up so backend doesn't
+   * `runtime_wake` into a null-encode dead-end.
+   */
+  readyToEncode(): boolean {
+    return this.threadId !== null;
+  }
+
   encodeInterruptControl(): string | null {
     // Codex app-server doesn't expose a clean turn-cancel RPC at the
     // moment slock targeted (and slock itself relies on signals).

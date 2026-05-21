@@ -115,29 +115,46 @@ export type EchoResult = z.infer<typeof EchoResultSchema>;
 // per-pair lifecycle lock CM uses today.
 
 /**
- * StreamJsonPayload — the hydrated stream-json frame the BACKEND
- * builds before handing it off via `runtime_wake` /
- * `runtime_start.startup_delivery`. It's the same shape CM today
- * formats inbox rows into and writes to claude-family stdin.
+ * Live-delivery text — the unencoded message text the daemon will
+ * hand to its in-process driver's `encodeStdinMessage(text, ...)`
+ * just before writing to stdin. Used by `runtime_wake.text` /
+ * `runtime_start.startup_delivery.text` / `runtime_stop.soft_directive`.
  *
- * PR-2 step 1: shape held opaque on the wire because the daemon never
- * inspects it — it just buffers + writes to stdin per driver
- * semantics. Step 2 will type the hydration site inside backend
- * separately; the daemon's contract stays "I write whatever bytes you
- * give me on this field".
+ * Why text and not pre-encoded stream-json bytes (Option A v2 — Cindy
+ * `UMGu36zoTDVuKWXi`): stateful drivers (codex) carry `threadId` /
+ * `activeTurnId` inside the driver instance that owns the child's
+ * stdio. If backend pre-encodes by spinning up its own driver
+ * instance, that instance has no `threadId` and `encodeStdinMessage`
+ * returns `null`, so the wake silently dies (this was the codex
+ * daemon-mode delivery blocker; see commit 2b-iii log). Moving the
+ * encode into the daemon restores the legacy CM invariant — one
+ * driver instance per (conv, agent), and whoever owns the child
+ * process owns the driver state.
  *
- * Required-but-opaque (review fix per Cindy `ihw5XHpjldmEc-wt`): a
- * bare `z.unknown()` lets the field be omitted entirely (zod treats
- * `unknown` at object properties as optional), which violated the
- * step-0 contract — `delivery_ids` MUST NOT reach the daemon without
- * an accompanying stdin payload. The refinement rejects an absent or
- * `undefined` value while still leaving the value's *shape* opaque
- * (step 2 will tighten that, per Cindy `_YD0KJF-YAQXlcki`).
+ * `.min(1)` is intentional (Cindy `wYjG20JdGjLpwq8K`): every backend
+ * call site (formatInboxBatch / combineGated / soft directive) yields
+ * non-empty text. An empty string reaching the daemon is a caller
+ * bug — fail loudly at schema validation, not at stdin encode.
+ */
+export const RuntimeMessageTextSchema = z.string().min(1);
+export type RuntimeMessageText = z.infer<typeof RuntimeMessageTextSchema>;
+
+/**
+ * StreamJsonPayload — DEPRECATED (Option A v2). Was the pre-encoded
+ * stream-json line backend used to send to daemon for stdin write.
+ * After 2b-iii the daemon does its own encode, so callers send
+ * `RuntimeMessageTextSchema` instead. Kept exported only because
+ * historical tests may still reference the type symbol; new code
+ * MUST NOT use it. Will be removed in a follow-up cleanup commit.
+ *
+ * @deprecated use RuntimeMessageTextSchema; backend no longer
+ *   pre-encodes daemon-bound deliveries.
  */
 export const StreamJsonPayloadSchema = z.unknown().refine(
   v => v !== undefined,
   { message: 'payload is required (stream-json bytes must be present)' },
 );
+/** @deprecated see StreamJsonPayloadSchema */
 export type StreamJsonPayload = z.infer<typeof StreamJsonPayloadSchema>;
 
 /**
@@ -185,14 +202,17 @@ export const RuntimeStartParamsSchema = z
     agent_id: z.string().min(1),
     options: StartOptionsSchema,
     /** Optional spawn-time inbox drain, replacing CM's drainInbox().
-     *  Daemon attempts the write per driver-specific semantics; ack
-     *  is async via runtime_startup_delivery_consumed | _failed
-     *  events. See design doc §3.1 + §3.2.1. */
+     *  Carries unencoded text (Option A v2); daemon encodes on its
+     *  side via the in-process driver instance whose state is the
+     *  authoritative one. Ack is async via
+     *  runtime_startup_delivery_consumed | _failed events. See
+     *  design doc §3.1 + §3.2.1. */
     startup_delivery: z
       .object({
         delivery_ids: z.array(z.number().int()).min(1),
-        payload: StreamJsonPayloadSchema,
+        text: RuntimeMessageTextSchema,
       })
+      .strict()
       .optional(),
   })
   .strict();
@@ -273,11 +293,12 @@ export const RuntimeStopParamsSchema = z
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
     mode: z.enum(['soft', 'hard']),
-    /** Stream-json line backend wants daemon to inject as a directive
-     *  user message. ONLY allowed when `mode === 'soft'`. Backend is
-     *  responsible for materialising the default phrasing — daemon
-     *  treats it as opaque bytes (per the Step 1 payload contract). */
-    soft_directive: StreamJsonPayloadSchema.optional(),
+    /** Unencoded directive text the daemon will hand to its driver's
+     *  `encodeStdinMessage(text, cliSessionId)` and write to stdin
+     *  as a user message. ONLY allowed when `mode === 'soft'`.
+     *  Option A v2 (Cindy `UMGu36zoTDVuKWXi`): backend no longer
+     *  pre-encodes — daemon owns the driver instance with state. */
+    soft_directive: RuntimeMessageTextSchema.optional(),
   })
   .strict()
   .superRefine((val, ctx) => {
@@ -377,7 +398,14 @@ export const RuntimeWakeParamsSchema = z
     agent_id: z.string().min(1),
     delivery_ids: z.array(z.number().int()).min(1),
     kind: z.enum(['message', 'schedule_fire']),
-    payload: StreamJsonPayloadSchema,
+    /** Unencoded message text (Option A v2). Daemon's
+     *  `RealSupervisor.wake()` calls
+     *  `handle.driver.encodeStdinMessage(text, handle.cliSessionId)`
+     *  using its in-process driver instance whose runtime state
+     *  (codex threadId / activeTurnId etc.) was set during spawn /
+     *  bindIO. backend MUST NOT pre-encode — see
+     *  RuntimeMessageTextSchema doc for the why. */
+    text: RuntimeMessageTextSchema,
   })
   .strict();
 export type RuntimeWakeParams = z.infer<typeof RuntimeWakeParamsSchema>;
@@ -387,6 +415,24 @@ export const RuntimeWakeReasonSchema = z.enum([
   'not_initialized',
   'startup_pending',
   'draining',
+  /**
+   * Option A v2 (Cindy `UMGu36zoTDVuKWXi`): driver's
+   * `encodeStdinMessage` returned null AND `driver.readyToEncode()`
+   * was false (e.g. codex pre-`thread/started`). Distinct from
+   * `driver_refused` (encode null AFTER ready) because backend's
+   * response is different: `driver_not_ready` is recoverable —
+   * backend keeps the DB row pending and waits for the daemon's next
+   * `runtime_ready_for_drain` to re-attempt; `driver_refused` is a
+   * config / programming error and warrants a louder backend signal.
+   *
+   * Daemon explicitly does NOT keep its own re-delivery queue here:
+   * the DB inbox is the single durable source of truth (Cindy
+   * `UMGu36zoTDVuKWXi`). Avoiding a second queue prevents
+   * crash-loses-memory, ready_for_drain-replays-duplicate, and ack-
+   * race-with-DB classes of bugs that a daemon-side queue would
+   * introduce.
+   */
+  'driver_not_ready',
   'driver_refused',
 ]);
 export type RuntimeWakeReason = z.infer<typeof RuntimeWakeReasonSchema>;

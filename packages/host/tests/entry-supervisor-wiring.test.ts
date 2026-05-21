@@ -57,9 +57,13 @@ const DAEMON_ENTRY = resolve(HERE, '../src/daemon/entry.ts');
 
 /** Field names that MUST NOT appear in any daemon JSONL line.
  *  Mirrors the daemon log contract: no payload, no env, no stdout /
- *  stderr chunk content. We grep on the JSON-key form (`"<name>":`)
- *  so unrelated occurrences in human-readable `msg` strings don't
- *  false-positive. */
+ *  stderr chunk content, no soft_directive, no text (Option A v2 —
+ *  Cindy `UMGu36zoTDVuKWXi`: `runtime_wake.text` /
+ *  `runtime_start.startup_delivery.text` / `runtime_stop.soft_directive`
+ *  carry raw user / agent message bytes the daemon will encode via
+ *  its in-process driver; the daemon must never log the text). We
+ *  grep on the JSON-key form (`"<name>":`) so unrelated occurrences
+ *  in human-readable `msg` strings don't false-positive. */
 const FORBIDDEN_LOG_KEYS = [
   '"payload":',
   '"env":',
@@ -67,6 +71,7 @@ const FORBIDDEN_LOG_KEYS = [
   '"stderr":',
   '"chunk":',
   '"soft_directive":',
+  '"text":',
 ];
 
 function readDaemonLogs(logDir: string): string {

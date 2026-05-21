@@ -200,22 +200,24 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
     resumeOutput: async () => ({ resumed: true }),
   };
 
-  it('runtime_wake dispatch logs received + ok lines that omit `payload`', async () => {
+  it('runtime_wake dispatch logs received + ok lines that omit `text` (Option A v2)', async () => {
     const { lines, logger } = capturingLogger();
     const d = new IntentDispatcher({ logger, supervisor: stubSupervisor });
-    const SECRET_PAYLOAD =
-      '{"role":"user","content":"VERY-CONFIDENTIAL-USER-INPUT-XYZ"}\n';
+    const SECRET_TEXT = 'VERY-CONFIDENTIAL-USER-INPUT-XYZ';
     await d.dispatch('req-1', 'runtime_wake', {
       conversation_id: 'c1',
       agent_id: 'a1',
       delivery_ids: [42],
       kind: 'message',
-      payload: SECRET_PAYLOAD,
+      text: SECRET_TEXT,
     });
-    // §3.4: NO log line may carry the payload value or the field name.
+    // §3.4: NO log line may carry the text value or the field name.
+    // Option A v2 (Cindy `UMGu36zoTDVuKWXi`): `text` replaces the old
+    // pre-encoded `payload`; `FORBIDDEN_LOG_FIELDS` covers both.
     for (const line of lines) {
       const flat = JSON.stringify(line.obj);
       expect(flat).not.toContain('VERY-CONFIDENTIAL-USER-INPUT-XYZ');
+      expect(flat).not.toContain('"text"');
       expect(flat).not.toContain('"payload"');
     }
     // Sanity: at least one received + one ok log line landed.
@@ -234,7 +236,7 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
     expect(typeof ok[0]!.obj.duration_ms).toBe('number');
   });
 
-  it('invalid_params dispatch still emits an `error` log line without payload leakage', async () => {
+  it('invalid_params dispatch still emits an `error` log line without text leakage', async () => {
     const { lines, logger } = capturingLogger();
     const d = new IntentDispatcher({ logger, supervisor: stubSupervisor });
     // Pass a malformed wake — missing delivery_ids → invalid_params.
@@ -242,11 +244,12 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
       conversation_id: 'c1',
       agent_id: 'a1',
       kind: 'message',
-      payload: 'LEAK-ATTEMPT',
+      text: 'LEAK-ATTEMPT',
     });
     for (const line of lines) {
       const flat = JSON.stringify(line.obj);
       expect(flat).not.toContain('LEAK-ATTEMPT');
+      expect(flat).not.toContain('"text"');
       expect(flat).not.toContain('"payload"');
     }
     const errLine = lines.find(l => (l.obj as { status?: string }).status === 'error');
@@ -267,11 +270,12 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
       agent_id: 'a1',
       delivery_ids: [1],
       kind: 'message',
-      payload: 'POST-SHUTDOWN-LEAK',
+      text: 'POST-SHUTDOWN-LEAK',
     });
     for (const line of lines) {
       const flat = JSON.stringify(line.obj);
       expect(flat).not.toContain('POST-SHUTDOWN-LEAK');
+      expect(flat).not.toContain('"text"');
       expect(flat).not.toContain('"payload"');
     }
     const errLine = lines.find(l => (l.obj as { status?: string }).status === 'error');

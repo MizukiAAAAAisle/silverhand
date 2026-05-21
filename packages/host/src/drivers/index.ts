@@ -123,6 +123,25 @@ export interface Driver {
    *  drainInbox. Lets stateful drivers (codex) start their JSON-RPC
    *  handshake. No-op for stateless drivers. */
   bindIO?(io: DriverIO): void;
+
+  /**
+   * Whether the driver can produce a non-null `encodeStdinMessage`
+   * result *right now*. Option A v2 (Cindy `UMGu36zoTDVuKWXi`): the
+   * daemon's `ready_for_drain` gate keys off this so codex doesn't
+   * fire `runtime_ready_for_drain` before `thread/started` returns
+   * a usable `threadId`.
+   *
+   * Default `true` (stateless drivers like claude are always ready
+   * to encode). Stateful drivers MUST override:
+   *   - codex: `() => this.threadId !== null`
+   *   - any future driver with handshake state should mirror that.
+   *
+   * Why this is a method, not a boolean field: drivers track state
+   * across `parseLine` mutations; a getter style lets the daemon
+   * re-check on every `maybeEmitReadyForDrain` call without the
+   * driver needing to push events at the supervisor.
+   */
+  readyToEncode?(): boolean;
 }
 
 import { ClaudeDriver } from './claude.js';

@@ -78,7 +78,27 @@ function silentLogger(): DaemonLogger {
  * Fake driver that wraps the echo-runtime fixture. `extraArgs` lets
  * a single test customize the fixture's behavior (e.g. ask it to
  * write to stderr, or to ignore SIGTERM).
+ *
+ * Option A v2 (Cindy `UMGu36zoTDVuKWXi`): daemon now calls
+ * `encodeStdinMessage` itself for `wake` / `startup_delivery` /
+ * `softStop`. The previous default of returning `null` would now
+ * surface as `driver_refused` and break every supervisor test that
+ * exercises stdin writes. We mimic the real claude driver by
+ * encoding the text into a stream-json `{"type":"user", …}` line so
+ * the echo-stdin fixture's `STDIN:{"type":"user"` assertions keep
+ * passing without coupling the fake to claude's exact schema.
+ * `readyToEncode()` defaults to true (matches the stateless claude
+ * driver) so the `ready_for_drain` / wake gates fire immediately;
+ * tests that need a stateful pre-`thread/started` driver build a
+ * separate factory.
  */
+function encodeStreamJsonUser(text: string): string {
+  return JSON.stringify({
+    type: 'user',
+    message: { role: 'user', content: text },
+  });
+}
+
 function makeFakeDriver(extraArgs: string[] = []): Driver {
   return {
     kind: 'claude',
@@ -92,7 +112,7 @@ function makeFakeDriver(extraArgs: string[] = []): Driver {
     initPostProtocolMs: 60_000,
     buildArgs: (_ctx: DriverSpawnContext): string[] => [FIXTURE, ...extraArgs],
     applyEnv: env => ({ ...env }),
-    encodeStdinMessage: () => null,
+    encodeStdinMessage: (text: string) => encodeStreamJsonUser(text),
     encodeInterruptControl: () => null,
     parseLine: (_line: string): ParsedEvent[] => [],
     classifyInitProgress: () => null,
@@ -211,7 +231,7 @@ describe('RealSupervisor 3a — spawn / status / phase emit', () => {
       ...baseStartParams,
       startup_delivery: {
         delivery_ids: [1, 2],
-        payload: { type: 'user', text: 'hi' },
+        text: 'hi',
       },
     };
     const r1 = await supervisor.start(params);
@@ -695,7 +715,7 @@ describe('RealSupervisor 3b — wake / soft stop write payload to stdin', () => 
       agent_id: 'a1',
       delivery_ids: [42, 43],
       kind: 'message',
-      payload: { type: 'user', message: { content: 'hi' } },
+      text: 'hi',
     });
     expect(res).toEqual({
       delivered: true,
@@ -751,7 +771,7 @@ describe('RealSupervisor 3b — wake / soft stop write payload to stdin', () => 
       ...baseStartParams,
       startup_delivery: {
         delivery_ids: [1, 2],
-        payload: { type: 'user', message: { content: 'boot' } },
+        text: 'boot',
       },
     });
     // start() returns synchronously after scheduling the consume;
@@ -762,7 +782,7 @@ describe('RealSupervisor 3b — wake / soft stop write payload to stdin', () => 
       agent_id: 'a1',
       delivery_ids: [99],
       kind: 'message',
-      payload: { type: 'user', message: { content: 'race' } },
+      text: 'race',
     });
     expect(wakeRes).toEqual({
       delivered: false,
@@ -784,7 +804,7 @@ describe('RealSupervisor 3b — wake / soft stop write payload to stdin', () => 
       agent_id: 'aX',
       delivery_ids: [1],
       kind: 'message',
-      payload: {},
+      text: 'stub',
     });
     expect(unknown).toEqual({
       delivered: false,
@@ -821,7 +841,7 @@ describe('RealSupervisor 3b — wake / soft stop write payload to stdin', () => 
       agent_id: 'a1',
       delivery_ids: [77],
       kind: 'message',
-      payload: {},
+      text: 'stub',
     });
     expect(res).toEqual({
       delivered: false,
@@ -843,7 +863,7 @@ describe('RealSupervisor 3b — wake / soft stop write payload to stdin', () => 
       conversation_id: 'c1',
       agent_id: 'a1',
       mode: 'soft',
-      soft_directive: { type: 'user', message: { content: 'please stop' } },
+      soft_directive: 'please stop',
     });
     expect(res).toEqual({ mode: 'soft', directive_delivered: true });
     await waitFor(() =>
@@ -919,7 +939,12 @@ function makeProgrammableDriver(
     initPostProtocolMs: 60_000,
     buildArgs: () => [FIXTURE, '--echo-stdin', ...extraArgs],
     applyEnv: env => ({ ...env }),
-    encodeStdinMessage: () => null,
+    // Option A v2 (Cindy `UMGu36zoTDVuKWXi`): daemon calls
+    // encodeStdinMessage directly. A null return surfaces as
+    // `driver_refused`, which would break tests that exercise the
+    // stdin write path (deferred startup_delivery consume, soft stop
+    // pre-ready, etc). Mirror the claude driver's stream-json shape.
+    encodeStdinMessage: (text: string) => encodeStreamJsonUser(text),
     encodeInterruptControl: () => null,
     parseLine: () => {
       const out = next;
@@ -1172,7 +1197,7 @@ describe('RealSupervisor 3b — startup_delivery step-0 mutex', () => {
       ...baseStartParams,
       startup_delivery: {
         delivery_ids: [101, 102],
-        payload: { type: 'user', message: { content: 'boot batch' } },
+        text: 'boot batch',
       },
     });
     await waitFor(() => events.some(e => e.event === 'runtime_ready_for_drain'));
@@ -1220,7 +1245,7 @@ describe('RealSupervisor 3b — startup_delivery step-0 mutex', () => {
         ...baseStartParams,
         startup_delivery: {
           delivery_ids: [201],
-          payload: { type: 'user', message: { content: 'boot batch' } },
+          text: 'boot batch',
         },
       })
       .catch(() => {});
@@ -1241,7 +1266,7 @@ describe('RealSupervisor 3b — startup_delivery step-0 mutex', () => {
       agent_id: 'a1',
       delivery_ids: [202],
       kind: 'message',
-      payload: { type: 'user', message: { content: 'after-death' } },
+      text: 'after-death',
     });
     if (!wakeRes.delivered) {
       expect((wakeRes as { reason: string }).reason).not.toBe('startup_pending');
@@ -1319,7 +1344,7 @@ describe('RealSupervisor 3b — Cindy `YW2BGWryWjfymPkU` B2: deferred startup_de
       ...baseStartParams,
       startup_delivery: {
         delivery_ids: [501, 502],
-        payload: { type: 'user', message: { content: 'boot batch' } },
+        text: 'boot batch',
       },
     });
 
@@ -1348,7 +1373,7 @@ describe('RealSupervisor 3b — Cindy `YW2BGWryWjfymPkU` B2: deferred startup_de
       agent_id: 'a1',
       delivery_ids: [777],
       kind: 'message',
-      payload: {},
+      text: 'stub',
     });
     expect(wakeMid).toEqual({
       delivered: false,
@@ -1410,7 +1435,7 @@ describe('RealSupervisor 3b — Cindy `YW2BGWryWjfymPkU` B2: deferred startup_de
       agent_id: 'a1',
       delivery_ids: [999],
       kind: 'message',
-      payload: {},
+      text: 'stub',
     });
     expect(wakeAfter.delivered).toBe(true);
 
@@ -1903,7 +1928,7 @@ describe('RealSupervisor 3c-b — 3-tier init watchdog', () => {
       agent_id: 'a1',
       delivery_ids: [1],
       kind: 'message',
-      payload: '{"role":"user","content":"hi"}',
+      text: 'hi',
     });
     await waitFor(
       () => events.some(e => e.event === 'runtime_init_timeout'),
@@ -2239,7 +2264,7 @@ describe('RealSupervisor 3c-b — round-2 regressions (Cindy `HyC05fC-FEs94uoZ` 
       agent_id: 'a1',
       delivery_ids: [11],
       kind: 'message',
-      payload: '{"role":"user","content":"during-kill-window"}',
+      text: 'during-kill-window',
     });
     expect(wakeRes.delivered).toBe(false);
     if (!wakeRes.delivered) {
@@ -2296,7 +2321,7 @@ describe('RealSupervisor 3c-b — round-2 regressions (Cindy `HyC05fC-FEs94uoZ` 
       agent_id: 'a1',
       delivery_ids: [42],
       kind: 'message',
-      payload: '{"role":"user","content":"x"}',
+      text: 'x',
     });
     expect(midWake.delivered).toBe(false);
     if (!midWake.delivered) expect(midWake.reason).toBe('draining');
@@ -2411,7 +2436,7 @@ describe('RealSupervisor 3c-b — lifecycle lock', () => {
       agent_id: 'a1',
       delivery_ids: [99],
       kind: 'message',
-      payload: '{"role":"user","content":"x"}',
+      text: 'x',
     });
     expect(wakeRes.delivered).toBe(false);
     if (!wakeRes.delivered) expect(wakeRes.reason).toBe('draining');
@@ -2508,5 +2533,272 @@ describe('RealSupervisor 3c-b — defaults exported for the bridge', () => {
     expect(DEFAULT_INIT_PRE_PROTOCOL_CAP_MS).toBe(5 * 60 * 1000);
     expect(DEFAULT_INIT_POST_PROTOCOL_MS).toBe(30 * 1000);
     expect(DEFAULT_COMPACTION_STALE_MS).toBe(5 * 60 * 1000);
+  });
+});
+
+// ── Option A v2 arms (Cindy `UMGu36zoTDVuKWXi`) ────────────────────
+//
+// Daemon now owns encoding via its in-process driver. Three new arms
+// fall out of that:
+//
+//   1. `driver_not_ready` (wake) — driver.readyToEncode() === false
+//      → recoverable arm; backend keeps DB row pending and will
+//      redeliver on `runtime_ready_for_drain`.
+//   2. `driver_refused` (wake) — readyToEncode() returned true but
+//      encodeStdinMessage() returned null → driver bug; fail loud
+//      (Cindy `0G5uJBydO_4qt_2r`).
+//   3. Codex stateful gate — readyToEncode() flips false → true on
+//      `session_init` (production codex flips on `thread/started`).
+//      ready_for_drain and a deferred startup_delivery consume both
+//      latch off that transition.
+//
+// These tests build a "stateful" fake driver that mirrors codex's
+// shape: a mutable `threadId`-like flag the test toggles in lockstep
+// with parsed events, gated by `readyToEncode()`. Encoding remains
+// the stream-json shape so the echo-stdin fixture's assertions stay
+// readable.
+
+/** Build a codex-shaped fake driver whose `readyToEncode()` is gated
+ *  by an external mutable flag. session_init parses to a single event
+ *  that flips the flag, exactly like codex's `thread/started` does in
+ *  production. `kickoffMode` defaults to `'self_inits'` so this isn't
+ *  confused with the B2 deferred-consume path (which gates on
+ *  `requires_first_message + !initObserved`). */
+function makeStatefulCodexLikeDriver(): {
+  driver: Driver;
+  flipReady: () => void;
+} {
+  const state = { ready: false };
+  const driver: Driver = {
+    kind: 'codex',
+    binary: FIXTURE,
+    kickoffMode: 'self_inits',
+    busyDeliveryMode: 'direct',
+    oneShot: false,
+    supportsNativeStandingPrompt: true,
+    initLivenessSilenceMs: 30_000,
+    initPreProtocolCapMs: 5 * 60_000,
+    initPostProtocolMs: 60_000,
+    buildArgs: () => [FIXTURE, '--echo-stdin'],
+    applyEnv: env => ({ ...env }),
+    readyToEncode: () => state.ready,
+    encodeStdinMessage: (text: string) => encodeStreamJsonUser(text),
+    encodeInterruptControl: () => null,
+    parseLine: () => [],
+    classifyInitProgress: () => null,
+  };
+  return { driver, flipReady: () => { state.ready = true; } };
+}
+
+describe('RealSupervisor 3b — Option A v2 wake arms (Cindy `UMGu36zoTDVuKWXi`)', () => {
+  it('wake on a driver whose readyToEncode()=false returns delivered:false reason:driver_not_ready (recoverable)', async () => {
+    // Codex pre-`thread/started`: backend will keep the DB row pending
+    // and redeliver on the next `runtime_ready_for_drain` once
+    // readyToEncode() flips true.
+    const { driver } = makeStatefulCodexLikeDriver();
+    const { supervisor, events } = makeSupervisorWithDriver(driver);
+    await supervisor.start(baseStartParams);
+    await waitFor(() =>
+      events.some(e => e.event === 'runtime_output' && e.chunk.includes('READY')),
+    );
+
+    // ready_for_drain MUST NOT have fired yet — readyToEncode() is
+    // false so the gate is held closed.
+    expect(events.some(e => e.event === 'runtime_ready_for_drain')).toBe(false);
+
+    const res = await supervisor.wake({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      delivery_ids: [201, 202],
+      kind: 'message',
+      text: 'hi from backend',
+    });
+    expect(res).toEqual({
+      delivered: false,
+      reason: 'driver_not_ready',
+      delivery_ids: [201, 202],
+    });
+    // No stdin write should have surfaced — fixture would echo
+    // STDIN:{...} on every received line.
+    const echoed = events.some(
+      e => e.event === 'runtime_output' && e.chunk.includes('STDIN:'),
+    );
+    expect(echoed).toBe(false);
+    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+
+  it('wake post-ready: encodeStdinMessage returns null → delivered:false reason:driver_refused (fail loud)', async () => {
+    // readyToEncode() returns true but the driver's encoder produces
+    // null. This is the driver-bug arm — Cindy `0G5uJBydO_4qt_2r`:
+    // fail loudly rather than silently dropping bytes.
+    const driver: Driver = {
+      kind: 'codex',
+      binary: FIXTURE,
+      kickoffMode: 'self_inits',
+      busyDeliveryMode: 'direct',
+      oneShot: false,
+      supportsNativeStandingPrompt: true,
+      initLivenessSilenceMs: 30_000,
+      initPreProtocolCapMs: 5 * 60_000,
+      initPostProtocolMs: 60_000,
+      buildArgs: () => [FIXTURE, '--echo-stdin'],
+      applyEnv: env => ({ ...env }),
+      readyToEncode: () => true,
+      encodeStdinMessage: () => null, // driver bug
+      encodeInterruptControl: () => null,
+      parseLine: () => [],
+      classifyInitProgress: () => null,
+    };
+    const { supervisor, events } = makeSupervisorWithDriver(driver);
+    await supervisor.start(baseStartParams);
+    await waitFor(() =>
+      events.some(e => e.event === 'runtime_output' && e.chunk.includes('READY')),
+    );
+    // ready_for_drain fires because readyToEncode()=true and no
+    // startup_delivery gate.
+    await waitFor(() =>
+      events.some(e => e.event === 'runtime_ready_for_drain'),
+    );
+
+    const res = await supervisor.wake({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      delivery_ids: [301],
+      kind: 'message',
+      text: 'bytes',
+    });
+    expect(res).toEqual({
+      delivered: false,
+      reason: 'driver_refused',
+      delivery_ids: [301],
+    });
+    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+});
+
+describe('RealSupervisor 3b — Option A v2 ready_for_drain gate by readyToEncode (Cindy `UMGu36zoTDVuKWXi`)', () => {
+  it('ready_for_drain is held until readyToEncode() flips true (codex stateful gate)', async () => {
+    // No startup_delivery; gate is purely driver.readyToEncode().
+    // Pre-flip: ready_for_drain MUST NOT fire even after start
+    // settles. Post-flip (via a parsed event that the test injects):
+    // ready_for_drain fires exactly once.
+    const { driver, flipReady } = makeStatefulCodexLikeDriver();
+    // Replace parseLine so an injected stdout line triggers flipReady
+    // synchronously — this mirrors how codex flips its threadId on
+    // `thread/started`.
+    driver.parseLine = (line: string) => {
+      if (line.includes('THREAD_STARTED')) {
+        flipReady();
+        return [{ kind: 'session_init', sessionId: 'sess-codex-1' }];
+      }
+      return [];
+    };
+    const { supervisor, events } = makeSupervisorWithDriver(driver);
+    await supervisor.start(baseStartParams);
+    await waitFor(() =>
+      events.some(e => e.event === 'runtime_output' && e.chunk.includes('READY')),
+    );
+    // Pre-flip: gate stays closed.
+    await wait(40);
+    expect(events.some(e => e.event === 'runtime_ready_for_drain')).toBe(false);
+
+    // Flip via stdin echo trick: feed a line through the fixture's
+    // echo path so the supervisor sees a stdout line that parseLine
+    // converts to session_init + flipReady.
+    // The simplest way to inject a line is to wake the supervisor;
+    // but that would hit driver_not_ready. Instead use the existing
+    // echo-stdin fixture and write a phantom line via stdin: the
+    // supervisor only sees its OWN stdout, and the only way to push
+    // a synthetic stdout line is the fixture's behavior. So we use a
+    // driver-arg fixture instead: --emit-line THREAD_STARTED makes
+    // the fixture write that line on stdout shortly after READY.
+    // (Switch driverArgs by rebuilding the driver inline.)
+    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+
+    // ── second supervisor with the same driver but the fixture
+    //    configured to actually emit the THREAD_STARTED line.
+    const { driver: driver2, flipReady: flip2 } = makeStatefulCodexLikeDriver();
+    driver2.buildArgs = () => [FIXTURE, '--emit-line', 'THREAD_STARTED'];
+    driver2.parseLine = (line: string) => {
+      if (line.includes('THREAD_STARTED')) {
+        flip2();
+        return [{ kind: 'session_init', sessionId: 'sess-codex-2' }];
+      }
+      return [];
+    };
+    const second = makeSupervisorWithDriver(driver2);
+    await second.supervisor.start(baseStartParams);
+    await waitFor(() =>
+      second.events.some(e => e.event === 'runtime_ready_for_drain'),
+      2_000,
+    );
+    // Exactly one ready_for_drain after the flip.
+    expect(
+      second.events.filter(e => e.event === 'runtime_ready_for_drain').length,
+    ).toBe(1);
+    await second.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+});
+
+describe('RealSupervisor 3b — Option A v2 deferred startup_delivery on stateful driver (Cindy `UMGu36zoTDVuKWXi`)', () => {
+  it('startup_delivery encode is deferred until readyToEncode() flips true (codex pre-thread/started)', async () => {
+    // Codex case: start() with a startup_delivery while the driver's
+    // readyToEncode() is still false. The supervisor MUST defer the
+    // encode (no stdin write yet, no consumed event, no ready_for_drain).
+    // Once a parsed event flips readyToEncode() true,
+    // `tryConsumeStartupDelivery` re-enters and the batch settles:
+    // consumed → ready_for_drain.
+    const { driver, flipReady } = makeStatefulCodexLikeDriver();
+    driver.buildArgs = () => [FIXTURE, '--echo-stdin', '--emit-line', 'THREAD_STARTED'];
+    driver.parseLine = (line: string) => {
+      if (line.includes('THREAD_STARTED')) {
+        flipReady();
+        return [{ kind: 'session_init', sessionId: 'sess-codex-3' }];
+      }
+      return [];
+    };
+    const { supervisor, events } = makeSupervisorWithDriver(driver);
+    await supervisor.start({
+      ...baseStartParams,
+      startup_delivery: {
+        delivery_ids: [701, 702],
+        text: 'boot codex',
+      },
+    });
+
+    // Eventually the fixture emits THREAD_STARTED → parseLine flips
+    // ready → tryConsumeStartupDelivery encodes + writes → consumed +
+    // ready_for_drain fire in that order.
+    await waitFor(
+      () => events.some(e => e.event === 'runtime_ready_for_drain'),
+      2_000,
+    );
+    const consumed = events.find(
+      e => e.event === 'runtime_startup_delivery_consumed',
+    );
+    const idxConsumed = events.findIndex(
+      e => e.event === 'runtime_startup_delivery_consumed',
+    );
+    const idxReady = events.findIndex(
+      e => e.event === 'runtime_ready_for_drain',
+    );
+    expect(consumed).toBeDefined();
+    if (consumed && consumed.event === 'runtime_startup_delivery_consumed') {
+      expect(consumed.delivery_ids).toEqual([701, 702]);
+    }
+    expect(idxConsumed).toBeGreaterThanOrEqual(0);
+    expect(idxReady).toBeGreaterThan(idxConsumed);
+    // Exactly one ready_for_drain across the deferred path.
+    expect(
+      events.filter(e => e.event === 'runtime_ready_for_drain').length,
+    ).toBe(1);
+    // The stdin write actually happened (echo confirms).
+    expect(
+      events.some(
+        e => e.event === 'runtime_output' && e.chunk.includes('STDIN:{"type":"user"'),
+      ),
+    ).toBe(true);
+
+    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
   });
 });

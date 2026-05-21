@@ -376,11 +376,14 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
     // Drain inbox per driver kind. For oneShot drivers the inbox
     // can't ride over stdin — there is no persistent stdin loop on
     // the daemon side either — so we drain now and pass the formatted
-    // text as `initial_prompt`. For streamed drivers we encode one
-    // stream-json line and ship it as `startup_delivery`.
+    // text as `initial_prompt`. For streamed drivers we hand the
+    // daemon the raw text and let it encode via its in-process driver
+    // instance (Option A v2 — Cindy `UMGu36zoTDVuKWXi`); the legacy
+    // backend-side `driver.encodeStdinMessage` call was the codex
+    // delivery blocker (stateless instance, no threadId).
     let initialPrompt = '';
     let startupDelivery:
-      | { delivery_ids: number[]; payload: {} | null }
+      | { delivery_ids: number[]; text: string }
       | undefined;
     let oneShotPreDrainedIds: number[] = [];
     const pending = this.inboxes.listPending(conversationId, agentId);
@@ -397,32 +400,10 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
         initialPrompt = text;
         oneShotPreDrainedIds = pending.map(p => p.inboxId);
       } else {
-        const line = driver.encodeStdinMessage(
+        startupDelivery = {
+          delivery_ids: pending.map(p => p.inboxId),
           text,
-          sessionAgent.cli_session_id ?? null,
-        );
-        if (line !== null) {
-          startupDelivery = {
-            delivery_ids: pending.map(p => p.inboxId),
-            payload: line,
-          };
-        } else {
-          // Streamed driver but the encoder returned null — surfaces
-          // a driver bug or capability mismatch. Don't ship startup
-          // payload; let the spawn proceed empty so the daemon can
-          // still init, and the row stays pending for the next wake.
-          this.logger.warn(
-            {
-              kind: 'runtime',
-              mode: 'daemon',
-              conv_id: conversationId,
-              agent_id: agentId,
-              runtime: agent.runtime,
-              pending_count: pending.length,
-            },
-            'start: streamed driver returned null encoder; spawning without startup_delivery',
-          );
-        }
+        };
       }
     }
 
@@ -563,14 +544,16 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
    *   the trailing `runtime_exit` event. Backend does NOT touch the
    *   cache here — `RuntimeEventHandler` will apply `applyRuntimeExit`
    *   when the event lands.
-   * - **Soft** (`mode='soft'`): compose the directive stream-json line
-   *   via the agent's driver, ship it inside
-   *   `runtime_stop({mode:'soft', soft_directive: line})`. Daemon
-   *   writes the bytes to the child's stdin. Default directive matches
-   *   CM's wording ("user requested a course correction…"). If the
-   *   driver returns `null` from `encodeStdinMessage` (oneShot drivers
-   *   that don't accept stdin) we throw — there's no meaningful soft
-   *   semantics for those.
+   * - **Soft** (`mode='soft'`): ship the unencoded directive text inside
+   *   `runtime_stop({mode:'soft', soft_directive: text})`. Daemon
+   *   encodes via its in-process driver instance (Option A v2 — Cindy
+   *   `UMGu36zoTDVuKWXi`) and writes the resulting bytes to the child's
+   *   stdin. Default directive matches CM's wording ("user requested a
+   *   course correction…"). Pre-`readyToEncode()` soft stop surfaces as
+   *   `directive_delivered:false` with `reason:'driver_refused'`
+   *   (Cindy `wYjG20JdGjLpwq8K`: kept on the existing enum, no new
+   *   `driver_not_ready` arm for soft stop because directives are
+   *   not retried).
    *
    * Daemon's soft result carries `directive_delivered` + an optional
    * `reason`. Failure (`directive_delivered=false`) is logged but does
@@ -598,24 +581,20 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
     // soft
     const agent = this.agents.get(agentId);
     if (!agent) throw new Error(`agent ${agentId} not found`);
-    const sa = this.conversations.getAgent(conversationId, agentId);
-    const driver = getDriver(agent.runtime);
     const directive =
       softDirective ??
       '[user requested a course correction — pause your current direction and ' +
         'wait for the next instruction]';
-    const line = driver.encodeStdinMessage(directive, sa?.cli_session_id ?? null);
-    if (line === null) {
-      throw new Error(
-        `agent ${agentId} runtime '${agent.runtime}' does not accept stdin soft directives ` +
-          `(driver.encodeStdinMessage returned null). Use hard stop or skip the soft path.`,
-      );
-    }
+    // Option A v2 (Cindy `UMGu36zoTDVuKWXi`): ship raw directive text;
+    // daemon encodes via its in-process driver instance whose state
+    // (codex threadId etc.) is authoritative. Pre-`readyToEncode()`
+    // soft stop maps to existing `driver_refused` per Cindy
+    // `wYjG20JdGjLpwq8K` (no new enum arm).
     const result = await this.bridge.runtimeStop({
       conversation_id: conversationId,
       agent_id: agentId,
       mode: 'soft',
-      soft_directive: line,
+      soft_directive: directive,
     });
     if (result.mode === 'soft' && !result.directive_delivered) {
       this.logger.warn(
@@ -971,29 +950,13 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
       agent.name,
       sendMessageToolName(driver),
     );
-    const sa = this.conversations.getAgent(conversationId, agentId);
-    const cliSessionId = sa?.cli_session_id ?? null;
-    const encode = (combinedText: string): string | null =>
-      driver.encodeStdinMessage(combinedText, cliSessionId);
-    // Probe-only: detect a driver that refuses stdin (e.g. cursor
-    // oneShot) early so the row is left pending rather than handed to
-    // the coordinator and rejected mid-flush. Encoded result is
-    // discarded; the coordinator re-encodes from `text` (or the
-    // combined text when batched).
-    if (encode(text) === null) {
-      this.logger.info(
-        {
-          kind: 'runtime',
-          mode: 'daemon',
-          conv_id: conversationId,
-          agent_id: agentId,
-          msg_id: messageId,
-          inbox_id: delivery.inboxId,
-        },
-        'deliver: driver did not produce a stdin payload; row stays pending for next respawn',
-      );
-      return;
-    }
+    // Option A v2 (Cindy `UMGu36zoTDVuKWXi`): no backend-side encode
+    // probe. Daemon owns encoding via its in-process driver instance;
+    // it returns `driver_not_ready` (codex pre-handshake — row stays
+    // pending, redelivers on `runtime_ready_for_drain`) or
+    // `driver_refused` (driver bug — fail loud) and the coordinator
+    // keeps the inbox row pending on both arms. oneShot drivers are
+    // filtered downstream via `driver.busyDeliveryMode === 'none'`.
 
     const decision = await this.coordinator.submitLiveDelivery(
       conversationId,
@@ -1007,7 +970,6 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
           busyDeliveryMode: driver.busyDeliveryMode,
           kickoffMode: driver.kickoffMode,
         },
-        encode,
       },
     );
     this.logger.info(
@@ -1136,14 +1098,18 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
       return;
     }
     const driver = getDriver(agent.runtime);
-    const sa = this.conversations.getAgent(conversationId, agentId);
-    const cliSessionId = sa?.cli_session_id ?? null;
     const defaultUserHandle = this.resolveDefaultUserHandle();
 
     // ONE inbox-batch text covering every pending row. `formatInboxBatch`
     // is the inbox-drain wrapper (not `combineGatedBatch` which is the
     // mid-turn-busy wrapper). The coordinator never re-combines because
     // we submit a 1-element batch with multi `deliveryIds`.
+    //
+    // Option A v2 (Cindy `UMGu36zoTDVuKWXi`): no backend-side encode
+    // probe. Daemon owns the encode via its in-process driver instance
+    // and returns `driver_not_ready` / `driver_refused` if it can't.
+    // Coordinator keeps the inbox batch pending on both arms; the next
+    // `runtime_ready_for_drain` triggers a re-drain.
     const batchText = formatInboxBatch(
       pending,
       id => this.agents.get(id)?.name,
@@ -1152,22 +1118,6 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
       agent.name,
       sendMessageToolName(driver),
     );
-    const encode = (combinedText: string): string | null =>
-      driver.encodeStdinMessage(combinedText, cliSessionId);
-    if (encode(batchText) === null) {
-      // Driver doesn't accept stdin (e.g. cursor's oneShot path).
-      this.logger.info(
-        {
-          kind: 'runtime',
-          mode: 'daemon',
-          conv_id: conversationId,
-          agent_id: agentId,
-          pending_count: pending.length,
-        },
-        'drain: driver did not produce a stdin payload; batch stays pending',
-      );
-      return;
-    }
 
     const deliveryIds = pending.map(row => row.inboxId);
     const req: LiveDeliveryRequest = {
@@ -1182,7 +1132,6 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
         busyDeliveryMode: driver.busyDeliveryMode,
         kickoffMode: driver.kickoffMode,
       },
-      encode,
     };
 
     try {

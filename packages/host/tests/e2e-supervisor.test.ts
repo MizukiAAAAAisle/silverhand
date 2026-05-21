@@ -142,7 +142,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
       options: {},
       startup_delivery: {
         delivery_ids: [101, 102],
-        payload: '{"role":"user","content":"hello"}\n',
+        text: 'hello',
       },
     });
     assertStarted(r);
@@ -170,7 +170,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
       conversation_id: 'conv-3',
       agent_id: 'agent-3',
       options: {},
-      startup_delivery: { delivery_ids: [200], payload: '{}\n' },
+      startup_delivery: { delivery_ids: [200], text: 'stub' },
     });
     const failed = await waitForEvent(
       events,
@@ -207,7 +207,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
       agent_id: 'agent-4',
       delivery_ids: [50, 51, 52],
       kind: 'message',
-      payload: '{"role":"user","content":"batch"}\n',
+      text: 'batch',
     });
     expect(r).toEqual({ delivered: true, delivery_ids: [50, 51, 52] });
   });
@@ -223,7 +223,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
       agent_id: 'no-such-agent',
       delivery_ids: [1],
       kind: 'message',
-      payload: '{}\n',
+      text: 'stub',
     });
     expect(r).toEqual({
       delivered: false,
@@ -370,7 +370,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
       conversation_id: 'c-crash',
       agent_id: 'ag-crash',
       options: {},
-      startup_delivery: { delivery_ids: [1], payload: '{}\n' },
+      startup_delivery: { delivery_ids: [1], text: 'stub' },
     });
     await waitForEvent(
       events,

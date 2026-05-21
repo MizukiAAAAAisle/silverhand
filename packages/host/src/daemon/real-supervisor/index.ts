@@ -416,7 +416,10 @@ export class RealSupervisor implements Supervisor {
     // the gate stays closed until the supervisor settles the batch.
     // Without startup_delivery the gate is already open.
     const startupBatch = params.startup_delivery
-      ? { deliveryIds: [...params.startup_delivery.delivery_ids] }
+      ? {
+          deliveryIds: [...params.startup_delivery.delivery_ids],
+          text: params.startup_delivery.text,
+        }
       : null;
 
     const handle: RuntimeHandle = {
@@ -553,15 +556,19 @@ export class RealSupervisor implements Supervisor {
     });
 
     // Consume startup_delivery asynchronously — settle order (Cindy
-    // `wuiwdLKrLFyGip_s`):
-    //   1. write payload to stdin (or fail)
-    //   2. emit `runtime_startup_delivery_consumed` OR `_failed`
-    //   3. clear `handle.startupDelivery = null`
-    //   4. THEN re-evaluate ready_for_drain
+    // `wuiwdLKrLFyGip_s` + Option A v2 `UMGu36zoTDVuKWXi`):
+    //   1. wait until `driver.readyToEncode()` (stateless drivers like
+    //      claude: immediate; stateful drivers like codex: after
+    //      `thread/started`)
+    //   2. encode raw text via `driver.encodeStdinMessage(text, cliSessionId)`
+    //   3. write encoded line to stdin (or fail)
+    //   4. emit `runtime_startup_delivery_consumed` OR `_failed`
+    //   5. clear `handle.startupDelivery = null`
+    //   6. THEN re-evaluate ready_for_drain
     // We don't `await` here — start() must return promptly so backend
     // can move on; the settle continues on the next microtask.
     if (startupBatch) {
-      void this.consumeStartupDelivery(handle, startupBatch.deliveryIds, params.startup_delivery!.payload);
+      void this.consumeStartupDelivery(handle);
     }
 
     return {
@@ -572,26 +579,35 @@ export class RealSupervisor implements Supervisor {
     };
   }
 
-  private async consumeStartupDelivery(
-    handle: RuntimeHandle,
-    deliveryIds: readonly number[],
-    payload: unknown,
-  ): Promise<void> {
-    // The pending settle path. Possible outcomes:
-    //   - child already exited before we got here → `child_exit`
-    //   - encode/write succeeds → may settle immediately as
-    //     `_consumed`, OR (for `requires_first_message` drivers
-    //     pre-`session_init`) defer consumed until the runtime
-    //     confirms by emitting session_init. Cindy `YW2BGWryWjfymPkU`
-    //     B2: write success ≠ runtime consumed the turn; CM's
-    //     `initPendingInboxIds` defers `markDelivered` for codex-like
-    //     drivers until `session_init` arrives, and the daemon must
-    //     mirror that or `runtime_ready_for_drain` would fire while
-    //     the runtime is still pre-init.
-    //   - stdin write fails synchronously → `_failed (write_failed)`
-    // After ANY of those, the gate clears via `clearStartupGate`
-    // (settle path emits the consumed/failed event first) and we
+  private async consumeStartupDelivery(handle: RuntimeHandle): Promise<void> {
+    // Option A v2 (Cindy `UMGu36zoTDVuKWXi`): startup batch carries
+    // RAW TEXT on `handle.startupDelivery.text`. Daemon owns encode
+    // because the driver instance with the right runtime state lives
+    // here, not in backend. Two stateful pre-conditions, in order:
+    //
+    //   - exited/draining → fail with `child_exit` (same as before)
+    //   - `!driver.readyToEncode()` → DEFER until init/handshake.
+    //     For codex, `readyToEncode = threadId !== null`. The deferred
+    //     consume kicks back in from `updateRunStateFromParsed` after
+    //     `session_init` (claude) or `handleThreadReady` (codex) flips
+    //     state. The gate stays closed across the defer so
+    //     `runtime_wake` and `runtime_ready_for_drain` keep their
+    //     blocking behavior.
+    //   - encode returns null AFTER ready → fail with `driver_refused`
+    //     (config/programming error; fail loud per Cindy
+    //     `0G5uJBydO_4qt_2r`)
+    //   - encode + write succeeds → settle as consumed (or, for the
+    //     `requires_first_message + !initObserved` arm, mark
+    //     `startupAwaitingInit` and let `session_init` settle —
+    //     unchanged from 3b).
+    //
+    // After ANY settle, the gate clears via `clearStartupGate` (which
+    // wipes both `startupDelivery` and `startupAwaitingInit`) and we
     // re-evaluate `ready_for_drain` exactly once.
+    const batch = handle.startupDelivery;
+    if (!batch) return; // gate already cleared by another path
+    const deliveryIds = batch.deliveryIds;
+
     if (handle.phase === 'exited' || handle.phase === 'draining') {
       this.emitStartupDeliveryFailed(handle, deliveryIds, 'child_exit');
       this.clearStartupGate(handle);
@@ -599,8 +615,50 @@ export class RealSupervisor implements Supervisor {
       return;
     }
 
+    const driverReady = driverReadyToEncode(handle.driver);
+    if (!driverReady) {
+      // Defer — driver not ready yet. session_init / handleThreadReady
+      // will retry via `tryConsumeStartupDelivery(handle)`. NO emit, NO
+      // gate clear; the batch stays pending. Log once per defer so the
+      // operator can see the transition.
+      this.logger.info(
+        {
+          kind: 'process',
+          action: 'startup_delivery_defer_pre_ready',
+          pid: handle.pid,
+          conv_id: handle.conversationId,
+          agent_id: handle.agentId,
+          delivery_ids: [...deliveryIds],
+        },
+        'startup_delivery deferred: driver not ready to encode (e.g. codex pre-thread/started)',
+      );
+      return;
+    }
+
+    const encoded = handle.driver.encodeStdinMessage(batch.text, handle.cliSessionId);
+    if (encoded === null) {
+      // Driver claims ready_to_encode but still refused. This is a
+      // driver-author bug; fail loud per Cindy `0G5uJBydO_4qt_2r`.
+      this.logger.warn(
+        {
+          kind: 'process',
+          action: 'startup_delivery_driver_refused',
+          pid: handle.pid,
+          conv_id: handle.conversationId,
+          agent_id: handle.agentId,
+          delivery_ids: [...deliveryIds],
+          text_bytes: batch.text.length,
+        },
+        'startup_delivery encode returned null after driver claimed ready (driver bug?)',
+      );
+      this.emitStartupDeliveryFailed(handle, deliveryIds, 'driver_refused');
+      this.clearStartupGate(handle);
+      this.maybeEmitReadyForDrain(handle);
+      return;
+    }
+
     try {
-      await this.writeStdinPayload(handle, payload);
+      await this.writeStdinPayload(handle, encoded);
     } catch (err) {
       this.logger.warn(
         {
@@ -651,6 +709,19 @@ export class RealSupervisor implements Supervisor {
     this.maybeEmitReadyForDrain(handle);
   }
 
+  /** Re-attempt a deferred startup_delivery after a driver-state
+   *  transition (claude session_init OR codex handleThreadReady).
+   *  Idempotent: no-op when no gate is pending or when driver is
+   *  still not ready. Kept as a separate entry so the run-state
+   *  handler can call it without re-deriving "did we just become
+   *  ready". */
+  private tryConsumeStartupDelivery(handle: RuntimeHandle): void {
+    if (!handle.startupDelivery) return;
+    if (handle.startupAwaitingInit) return; // write done, awaiting init
+    if (!driverReadyToEncode(handle.driver)) return;
+    void this.consumeStartupDelivery(handle);
+  }
+
   /**
    * Clear the step-0 gate. ALWAYS clears both `startupDelivery`
    * AND `startupAwaitingInit` in the same critical section so the
@@ -695,18 +766,32 @@ export class RealSupervisor implements Supervisor {
   /**
    * Step-0 ready_for_drain gate. The single arbiter of when this
    * event fires; called from (a) start()'s setImmediate ready
-   * transition and (b) every startup_delivery settle. Idempotent
+   * transition, (b) every startup_delivery settle, and (c) the
+   * session_init / handleThreadReady tryConsume path. Idempotent
    * via `handle.readyForDrainEmitted` so re-entry is harmless.
    *
-   * Conditions (Cindy `wuiwdLKrLFyGip_s`):
+   * Conditions (Cindy `wuiwdLKrLFyGip_s` + Option A v2
+   * `UMGu36zoTDVuKWXi`):
    *   - phase === 'ready'                 (runtime is live)
    *   - startupDelivery === null          (no pending batch)
+   *   - driver.readyToEncode()            (codex post-`thread/started`;
+   *                                        stateless drivers always
+   *                                        return true)
    *   - !readyForDrainEmitted             (one-shot per run)
+   *
+   * Explicitly NOT gated on `initObserved` — see Cindy plan v2.
+   * `requires_first_message + empty-inbox` claude reaches `ready`
+   * before `session_init`; we still want `runtime_ready_for_drain`
+   * to fire so backend can drain its inbox (the first write is
+   * what makes claude emit `session_init` in the first place).
+   * For codex the equivalent gate IS `readyToEncode()` because
+   * `encodeStdinMessage` returns null pre-`thread/started`.
    */
   private maybeEmitReadyForDrain(handle: RuntimeHandle): void {
     if (handle.readyForDrainEmitted) return;
     if (handle.phase !== 'ready') return;
     if (handle.startupDelivery !== null) return;
+    if (!driverReadyToEncode(handle.driver)) return;
     handle.readyForDrainEmitted = true;
     this.emit({
       event: 'runtime_ready_for_drain',
@@ -739,19 +824,28 @@ export class RealSupervisor implements Supervisor {
   }
 
   /**
-   * Soft stop: write the backend-supplied opaque directive payload
-   * to the child's stdin so the agent can finish the current turn
-   * gracefully. The runtime is NOT terminated — backend reacts to
-   * the next `turn_end` or `runtime_exit` (Cindy: result must not
-   * conflate "process stopped" with "directive written"; the
-   * .superRefine on RuntimeStopResultSchema enforces the
-   * `directive_delivered` ↔ `reason` pairing at the protocol layer).
+   * Soft stop: write the backend-supplied directive text to the
+   * child's stdin so the agent can finish the current turn gracefully.
+   * The runtime is NOT terminated — backend reacts to the next
+   * `turn_end` or `runtime_exit` (Cindy: result must not conflate
+   * "process stopped" with "directive written"; the .superRefine on
+   * RuntimeStopResultSchema enforces the `directive_delivered` ↔
+   * `reason` pairing at the protocol layer).
    *
-   * `driver.encodeInterruptControl` is intentionally NOT called
-   * here: backend already encodes the directive into stream-json
-   * bytes via the driver on its side before this call. Daemon's
-   * contract is "I write whatever bytes you give me" (protocol
-   * Step 1 `StreamJsonPayload` doc).
+   * Option A v2 (Cindy `UMGu36zoTDVuKWXi` + `wYjG20JdGjLpwq8K`):
+   * daemon owns the driver instance with state, so it encodes the
+   * directive text via `handle.driver.encodeStdinMessage(text,
+   * cliSessionId)` instead of writing pre-encoded bytes from backend.
+   *
+   * Pre-`readyToEncode()` mapping: Cindy explicitly opted to NOT extend
+   * the soft `reason` enum with a new `driver_not_ready` arm — soft
+   * stop pre-handshake is rare and the directive can't be retried by
+   * backend the way a wake can, so the encode-null pre-ready case maps
+   * to the existing `driver_refused`. Logged distinctly so operators
+   * can tell the two arms apart on inspection.
+   *
+   * `driver.encodeInterruptControl` is intentionally NOT called here:
+   * soft stop is a user-message inject, not a protocol-level interrupt.
    */
   private async softStopHandle(
     params: RuntimeStopParams,
@@ -774,8 +868,47 @@ export class RealSupervisor implements Supervisor {
         reason: 'driver_refused',
       };
     }
+    if (!driverReadyToEncode(handle.driver)) {
+      this.logger.info(
+        {
+          kind: 'process',
+          action: 'soft_stop_driver_not_ready',
+          pid: handle.pid,
+          conv_id: handle.conversationId,
+          agent_id: handle.agentId,
+        },
+        'soft stop refused: driver not ready to encode (mapping to driver_refused per Cindy `wYjG20JdGjLpwq8K`)',
+      );
+      return {
+        mode: 'soft',
+        directive_delivered: false,
+        reason: 'driver_refused',
+      };
+    }
+    const encoded = handle.driver.encodeStdinMessage(
+      params.soft_directive,
+      handle.cliSessionId,
+    );
+    if (encoded === null) {
+      this.logger.warn(
+        {
+          kind: 'process',
+          action: 'soft_stop_driver_refused',
+          pid: handle.pid,
+          conv_id: handle.conversationId,
+          agent_id: handle.agentId,
+          text_bytes: params.soft_directive.length,
+        },
+        'soft stop encode returned null after driver claimed ready (driver bug?)',
+      );
+      return {
+        mode: 'soft',
+        directive_delivered: false,
+        reason: 'driver_refused',
+      };
+    }
     try {
-      await this.writeStdinPayload(handle, params.soft_directive);
+      await this.writeStdinPayload(handle, encoded);
     } catch (err) {
       this.logger.warn(
         {
@@ -914,18 +1047,29 @@ export class RealSupervisor implements Supervisor {
   // ── runtime_wake ───────────────────────────────────────────────
 
   async wake(params: RuntimeWakeParams): Promise<RuntimeWakeResult> {
-    // Wake gating (Cindy `_JjyK8UrpcmYA5Iu`):
-    //   - no handle / exited     → not_running
+    // Wake gating (Cindy `_JjyK8UrpcmYA5Iu` + Option A v2
+    // `UMGu36zoTDVuKWXi`):
+    //   - no handle / exited        → not_running
     //   - startup_delivery in flight → startup_pending
     //   - draining (hard stop in flight) → draining
-    //   - otherwise               → write payload + return delivered
+    //   - driver not ready to encode → driver_not_ready (backend
+    //     keeps DB row pending; next `runtime_ready_for_drain` will
+    //     re-trigger drain)
+    //   - encode returned null while ready → driver_refused (driver
+    //     bug; fail loudly per Cindy `0G5uJBydO_4qt_2r`)
+    //   - write failed              → driver_refused
+    //   - otherwise                 → delivered
     //
     // 3b deliberately does NOT gate on `initObserved` / driver
     // kickoff mode (Cindy: `not_initialized` arm exists in the
     // reason enum but its policy lives with 3c's init-watchdog
     // awareness). For self_inits drivers like claude the FIRST
     // write IS what makes session_init come back, so a pre-init
-    // gate would deadlock the deferred-init flow.
+    // gate would deadlock the deferred-init flow. The new
+    // `driver_not_ready` arm only fires when the driver itself
+    // says it can't encode yet (codex pre-`thread/started`); for
+    // claude `readyToEncode()` is always true so this arm is never
+    // hit on the deferred-init path.
     const k = key(params.conversation_id, params.agent_id);
     const handle = this.handles.get(k);
     const passthroughDeliveryIds = [...params.delivery_ids];
@@ -950,8 +1094,48 @@ export class RealSupervisor implements Supervisor {
         delivery_ids: passthroughDeliveryIds,
       };
     }
+    // Option A v2: daemon owns encode. Driver instance held by handle
+    // carries the per-(conv,agent) protocol state (codex threadId etc).
+    if (!driverReadyToEncode(handle.driver)) {
+      this.logger.info(
+        {
+          kind: 'process',
+          action: 'wake_driver_not_ready',
+          pid: handle.pid,
+          conv_id: handle.conversationId,
+          agent_id: handle.agentId,
+          delivery_ids: passthroughDeliveryIds,
+        },
+        'wake refused: driver not ready to encode (backend keeps pending)',
+      );
+      return {
+        delivered: false,
+        reason: 'driver_not_ready',
+        delivery_ids: passthroughDeliveryIds,
+      };
+    }
+    const encoded = handle.driver.encodeStdinMessage(params.text, handle.cliSessionId);
+    if (encoded === null) {
+      this.logger.warn(
+        {
+          kind: 'process',
+          action: 'wake_driver_refused',
+          pid: handle.pid,
+          conv_id: handle.conversationId,
+          agent_id: handle.agentId,
+          delivery_ids: passthroughDeliveryIds,
+          text_bytes: params.text.length,
+        },
+        'wake encode returned null after driver claimed ready (driver bug?)',
+      );
+      return {
+        delivered: false,
+        reason: 'driver_refused',
+        delivery_ids: passthroughDeliveryIds,
+      };
+    }
     try {
-      await this.writeStdinPayload(handle, params.payload);
+      await this.writeStdinPayload(handle, encoded);
     } catch (err) {
       this.logger.warn(
         {
@@ -1394,18 +1578,33 @@ export class RealSupervisor implements Supervisor {
         );
         // Cindy `YW2BGWryWjfymPkU` B2: settle the deferred consumed
         // emit if `consumeStartupDelivery` parked the batch awaiting
-        // init. Settle order — emit consumed FIRST, then clear gate,
-        // then re-evaluate ready_for_drain — same as the non-deferred
-        // path inside `consumeStartupDelivery`. The `startupDelivery
-        // !== null` precondition guarantees we only fire for batches
-        // that are still pending (no double-emit on a re-consumed
-        // race).
+        // init (claude path: write already done; just emit consumed).
+        // Settle order — emit consumed FIRST, then clear gate, then
+        // re-evaluate ready_for_drain — same as the non-deferred path
+        // inside `consumeStartupDelivery`. The `startupDelivery !==
+        // null` precondition guarantees we only fire for batches that
+        // are still pending (no double-emit on a re-consumed race).
         if (handle.startupAwaitingInit && handle.startupDelivery) {
           const ids = handle.startupDelivery.deliveryIds;
           this.emitStartupDeliveryConsumed(handle, ids);
           this.clearStartupGate(handle);
           this.maybeEmitReadyForDrain(handle);
         }
+        // Option A v2 (Cindy `UMGu36zoTDVuKWXi`): codex path. If
+        // `consumeStartupDelivery` deferred earlier because
+        // `driver.readyToEncode()` was false (codex pre-`thread/started`),
+        // the gate is still pending without `startupAwaitingInit`.
+        // session_init means the driver is now ready (codex
+        // `handleThreadReady` sets `threadId` BEFORE pushing the
+        // `session_init` parsed event), so the deferred consume can
+        // proceed. Mutually exclusive with the awaitingInit branch
+        // above — that one already cleared the gate.
+        this.tryConsumeStartupDelivery(handle);
+        // Also re-evaluate the drain gate: codex's `ready_for_drain`
+        // is bottled until `driver.readyToEncode()` flips true, and
+        // (for runs without startup_delivery) we need to fire it now
+        // that the driver is ready.
+        this.maybeEmitReadyForDrain(handle);
       }
       return;
     }
@@ -2300,6 +2499,23 @@ function phaseToStatus(phase: RuntimePhase): AgentRunState['status'] {
     case 'exited':
       return 'idle';
   }
+}
+
+/**
+ * Read `driver.readyToEncode()` with a default-true fallback for
+ * drivers that don't implement the optional method. Stateless drivers
+ * (claude) typically omit it; stateful drivers (codex) MUST implement
+ * so the daemon's `ready_for_drain` gate, the wake `driver_not_ready`
+ * arm, and the startup_delivery defer-pre-encode path (Option A v2 —
+ * Cindy `UMGu36zoTDVuKWXi`) all key off the right state.
+ *
+ * Lifted to a module-level helper rather than an instance method so
+ * `consumeStartupDelivery` / `tryConsumeStartupDelivery` /
+ * `maybeEmitReadyForDrain` / `wake` / `softStopHandle` can call it
+ * without re-establishing `this` binding.
+ */
+function driverReadyToEncode(driver: Driver): boolean {
+  return driver.readyToEncode?.() ?? true;
 }
 
 /**

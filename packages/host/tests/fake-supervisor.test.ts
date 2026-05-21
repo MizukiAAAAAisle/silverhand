@@ -130,7 +130,7 @@ describe('FakeSupervisor — start with startup_delivery (happy path)', () => {
       options: {},
       startup_delivery: {
         delivery_ids: [101, 102, 103],
-        payload: { type: 'user', message: { content: 'hi' } },
+        text: 'hi',
       },
     });
     assertStarted(r);
@@ -165,7 +165,7 @@ describe('FakeSupervisor — start with startup_delivery (failure path)', () => 
       conversation_id: 'c1',
       agent_id: 'a1',
       options: {},
-      startup_delivery: { delivery_ids: [1, 2], payload: {} },
+      startup_delivery: { delivery_ids: [1, 2], text: 'stub' },
     });
     h.flush();
     expect(h.supervisor.__getPhase('c1', 'a1')).toBe<FakeSupervisorPhase>(
@@ -199,7 +199,7 @@ describe('FakeSupervisor — wake (state-machine reasons per §3.2.1)', () => {
       agent_id: 'a1',
       delivery_ids: [42],
       kind: 'message',
-      payload: {},
+      text: 'stub',
     });
     expect(r).toEqual({
       delivered: false,
@@ -221,7 +221,7 @@ describe('FakeSupervisor — wake (state-machine reasons per §3.2.1)', () => {
       agent_id: 'a1',
       delivery_ids: [42],
       kind: 'message',
-      payload: {},
+      text: 'stub',
     });
     expect(r).toEqual({
       delivered: false,
@@ -236,14 +236,14 @@ describe('FakeSupervisor — wake (state-machine reasons per §3.2.1)', () => {
       conversation_id: 'c1',
       agent_id: 'a1',
       options: {},
-      startup_delivery: { delivery_ids: [1], payload: {} },
+      startup_delivery: { delivery_ids: [1], text: 'stub' },
     });
     const r = h.supervisor.wake({
       conversation_id: 'c1',
       agent_id: 'a1',
       delivery_ids: [42],
       kind: 'message',
-      payload: {},
+      text: 'stub',
     });
     expect(r.delivered).toBe(false);
     if (r.delivered === false) expect(r.reason).toBe('startup_pending');
@@ -262,7 +262,7 @@ describe('FakeSupervisor — wake (state-machine reasons per §3.2.1)', () => {
       agent_id: 'a1',
       delivery_ids: [10, 11, 12],
       kind: 'message',
-      payload: {},
+      text: 'stub',
     });
     expect(r).toEqual({ delivered: true, delivery_ids: [10, 11, 12] });
   });
@@ -285,7 +285,7 @@ describe('FakeSupervisor — wake (state-machine reasons per §3.2.1)', () => {
       agent_id: 'a1',
       delivery_ids: [1],
       kind: 'message',
-      payload: {},
+      text: 'stub',
     });
     expect(r.delivered).toBe(false);
     if (r.delivered === false) expect(r.reason).toBe('draining');
@@ -310,7 +310,7 @@ describe('FakeSupervisor — wake (state-machine reasons per §3.2.1)', () => {
       agent_id: 'a1',
       delivery_ids: [1],
       kind: 'message',
-      payload: {},
+      text: 'stub',
     });
     expect(r.delivered).toBe(false);
     if (r.delivered === false) expect(r.reason).toBe('not_running');

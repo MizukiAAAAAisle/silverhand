@@ -603,17 +603,17 @@ describe('DaemonAgentRuntimeHost — stop (hard)', () => {
 
 // ── stop (soft) ─────────────────────────────────────────────────────
 //
-// Slice 3: soft stop composes the directive stream-json line via the
-// agent's driver, ships it inside `runtime_stop({mode:'soft',
-// soft_directive: line})`. The cache is NOT mutated (event handler
-// owns the exit projection — same as hard stop). Failure modes:
-//
-//   * driver returns `null` from encodeStdinMessage (e.g. cursor /
-//     codex oneShot drivers) → throw synchronously, do NOT call
-//     bridge.
-//   * agent row missing → throw synchronously, do NOT call bridge.
-//   * `directive_delivered=false` from daemon → log warn, do NOT throw
-//     (CM's soft path is best-effort).
+// Option A v2 (Cindy `UMGu36zoTDVuKWXi`): backend ships the raw
+// directive text inside `runtime_stop({mode:'soft', soft_directive:
+// <raw text>})`. The daemon owns encoding via its in-process driver
+// instance (whose state — codex threadId, etc — is authoritative).
+// Backend never calls `encodeStdinMessage` and no longer probes for
+// "driver accepts stdin"; pre-`readyToEncode()` soft stop and
+// non-stdin drivers (cursor oneShot) both surface from the daemon
+// as `directive_delivered:false` with `reason:'driver_refused'`,
+// which the backend logs as a warn — exactly the same path the
+// last test in this block exercises. The cache is NOT mutated
+// (event handler owns the exit projection — same as hard stop).
 
 function makeAgentRepoStub(
   agents: Array<{ id: string; name: string; runtime: 'claude' | 'cursor' }>,
@@ -641,7 +641,7 @@ function makeConvRepoStub(
 }
 
 describe('DaemonAgentRuntimeHost — stop (soft)', () => {
-  it('encodes directive via driver + ships via bridge with soft_directive', async () => {
+  it('ships RAW directive text via bridge with soft_directive (daemon owns encode — Option A v2)', async () => {
     const runtimeStop = vi.fn(
       async (_params: RuntimeStopParams): Promise<RuntimeStopResult> => ({
         mode: 'soft',
@@ -666,16 +666,14 @@ describe('DaemonAgentRuntimeHost — stop (soft)', () => {
     expect(call.conversation_id).toBe(CONV);
     expect(call.agent_id).toBe(AGENT_X);
     expect(call.mode).toBe('soft');
-    // The directive line must be a JSON-encoded claude stream-json
-    // user message carrying the directive verbatim + the current
-    // cli_session_id from the DB row.
-    const decoded = JSON.parse((call as { soft_directive: string }).soft_directive);
-    expect(decoded.type).toBe('user');
-    expect(decoded.message.content[0].text).toBe('pause and wait');
-    expect(decoded.session_id).toBe('sess-abc');
+    // Option A v2: backend ships verbatim text — the daemon encodes via
+    // its in-process driver (codex threadId etc lives there). Backend
+    // never produces a stream-json line; cli_session_id is the daemon's
+    // (stateful) driver's concern.
+    expect((call as { soft_directive: string }).soft_directive).toBe('pause and wait');
   });
 
-  it('uses default directive when softDirective omitted', async () => {
+  it('uses default directive (raw text) when softDirective omitted', async () => {
     const runtimeStop = vi.fn(
       async (_params: RuntimeStopParams): Promise<RuntimeStopResult> => ({
         mode: 'soft',
@@ -690,22 +688,30 @@ describe('DaemonAgentRuntimeHost — stop (soft)', () => {
     ]);
     const { host } = makeHost({ runtimeStop }, conversations, { agents });
     await host.stop(CONV, AGENT_X, 'soft');
-    const decoded = JSON.parse(
-      (runtimeStop.mock.calls[0]![0] as { soft_directive: string }).soft_directive,
-    );
+    const shipped = (runtimeStop.mock.calls[0]![0] as { soft_directive: string })
+      .soft_directive;
     // Default phrasing must mention "course correction" so CM-parity
-    // tests don't drift.
-    expect(decoded.message.content[0].text).toMatch(/course correction/);
-    // No cli_session_id present in the row → no session_id field
-    // on the encoded line.
-    expect(decoded.session_id).toBeUndefined();
+    // tests don't drift, AND it must be raw text (not JSON) per Option A v2.
+    expect(shipped).toMatch(/course correction/);
+    expect(() => JSON.parse(shipped)).toThrow(); // proves not pre-encoded
   });
 
-  it('throws without calling bridge when driver does not accept stdin (oneShot)', async () => {
+  it('non-stdin drivers (cursor oneShot) — backend ships text; daemon surfaces driver_refused as warn (Option A v2)', async () => {
+    // Pre-Option A v2 the backend probed `driver.encodeStdinMessage`
+    // and threw "does not accept stdin soft directives" before even
+    // calling the bridge. Under Option A v2 that responsibility moved
+    // into RealSupervisor (`driver_refused` arm — Cindy
+    // `wYjG20JdGjLpwq8K`), so backend now ships the text and the
+    // daemon's `directive_delivered:false / reason:'driver_refused'`
+    // arm becomes the failure surface — handled by the existing warn
+    // path below. This test pins that the backend NO LONGER throws
+    // (and does NOT short-circuit) for oneShot agents — it must call
+    // the bridge so the daemon can refuse cleanly.
     const runtimeStop = vi.fn(
-      async (): Promise<RuntimeStopResult> => ({
+      async (_params: RuntimeStopParams): Promise<RuntimeStopResult> => ({
         mode: 'soft',
-        directive_delivered: true,
+        directive_delivered: false,
+        reason: 'driver_refused',
       }),
     );
     const agents = makeAgentRepoStub([
@@ -715,10 +721,15 @@ describe('DaemonAgentRuntimeHost — stop (soft)', () => {
       { conversation_id: CONV, agent_id: AGENT_X, cli_session_id: null },
     ]);
     const { host } = makeHost({ runtimeStop }, conversations, { agents });
-    await expect(host.stop(CONV, AGENT_X, 'soft')).rejects.toThrow(
-      /does not accept stdin soft directives/,
+    // Does not throw — soft path is best-effort; warn-only handling
+    // covers the refused arm (see the dedicated warn test below).
+    await expect(host.stop(CONV, AGENT_X, 'soft')).resolves.toBeUndefined();
+    expect(runtimeStop).toHaveBeenCalledTimes(1);
+    const call = runtimeStop.mock.calls[0]![0];
+    expect(call.mode).toBe('soft');
+    expect((call as { soft_directive: string }).soft_directive).toMatch(
+      /course correction/,
     );
-    expect(runtimeStop).not.toHaveBeenCalled();
   });
 
   it('throws without calling bridge when agent row missing', async () => {
@@ -1810,20 +1821,20 @@ function makeObservableCoordinator(cache: RunStateCache): {
     conv_id: string;
     agent_id: string;
     delivery_ids: number[];
-    payload: string;
+    text: string;
   }>;
   marked: number[][];
-  setWakeResponse(r: { delivered: true; ids?: number[] } | { delivered: false; reason: 'not_running' | 'not_initialized' | 'startup_pending' | 'draining' | 'driver_refused' }): void;
+  setWakeResponse(r: { delivered: true; ids?: number[] } | { delivered: false; reason: 'not_running' | 'not_initialized' | 'startup_pending' | 'draining' | 'driver_not_ready' | 'driver_refused' }): void;
 } {
   let next:
     | { delivered: true; ids?: number[] }
-    | { delivered: false; reason: 'not_running' | 'not_initialized' | 'startup_pending' | 'draining' | 'driver_refused' }
+    | { delivered: false; reason: 'not_running' | 'not_initialized' | 'startup_pending' | 'draining' | 'driver_not_ready' | 'driver_refused' }
     = { delivered: true };
   const wakeCalls: Array<{
     conv_id: string;
     agent_id: string;
     delivery_ids: number[];
-    payload: string;
+    text: string;
   }> = [];
   const marked: number[][] = [];
   const coordinator = new RuntimeDeliveryCoordinator({
@@ -1833,7 +1844,7 @@ function makeObservableCoordinator(cache: RunStateCache): {
           conv_id: params.conversation_id,
           agent_id: params.agent_id,
           delivery_ids: params.delivery_ids,
-          payload: params.payload,
+          text: params.text,
         });
         if (next.delivered) {
           return { delivered: true, delivery_ids: next.ids ?? params.delivery_ids };
@@ -2094,12 +2105,13 @@ describe('DaemonAgentRuntimeHost — deliverMessage', () => {
       expect(wakeCalls.length).toBe(1);
       expect(wakeCalls[0]!.conv_id).toBe(fix.channelId);
       expect(wakeCalls[0]!.agent_id).toBe(fix.agentId);
-      // Payload is a claude stream-json line containing the message.
-      const decoded = JSON.parse(wakeCalls[0]!.payload);
-      expect(decoded.type).toBe('user');
-      expect(decoded.message.content[0].text).toContain(
-        '@agent-deliver please look',
-      );
+      // Option A v2 (Cindy `UMGu36zoTDVuKWXi`): backend ships RAW text
+      // (formatted via `formatLiveMessage`); daemon owns the
+      // stream-json encode via its in-process driver. The shipped text
+      // therefore contains the human-readable line, NOT a JSON envelope.
+      const shipped = wakeCalls[0]!.text;
+      expect(shipped).toContain('@agent-deliver please look');
+      expect(() => JSON.parse(shipped)).toThrow(); // proves not pre-encoded
       // B3 (Cindy `usjxj8AxX4AvJ5E-`): claude is
       // `kickoffMode='requires_first_message'`. The first wake before
       // `session_init` must NOT mark delivered — the gate stashes the
@@ -2497,12 +2509,11 @@ describe('DaemonAgentRuntimeHost — start', () => {
       const sd = startCalls[0]!.startup_delivery;
       expect(sd).toBeDefined();
       expect(sd!.delivery_ids).toEqual([delivery.inboxId]);
-      // Payload is a JSON stream-json line containing the message.
-      const decoded = JSON.parse(sd!.payload as string);
-      expect(decoded.type).toBe('user');
-      expect(decoded.message.content[0].text).toContain(
-        '@agent-deliver please look',
-      );
+      // Option A v2 (Cindy `UMGu36zoTDVuKWXi`): backend ships unencoded
+      // text; daemon encodes via its in-process driver. So we assert
+      // the text contains the human-readable mention, not a stream-json
+      // shape — the encode step happens daemon-side.
+      expect(sd!.text).toContain('@agent-deliver please look');
 
       // start() MUST NOT mark delivered for streamed drivers — that's
       // the daemon's `runtime_startup_delivery_consumed` ack route.
@@ -2784,21 +2795,16 @@ describe('DaemonAgentRuntimeHost — drainPending', () => {
       expect(wakeCalls).toHaveLength(1);
       expect(wakeCalls[0]!.conv_id).toBe(fix.channelId);
       expect(wakeCalls[0]!.agent_id).toBe(fix.agentId);
-      // Wire payload MUST be a legal claude stream-json line — even for
-      // a single-row drain, the coordinator's encode-after-combine
-      // pipeline is exercised (combine is a no-op for length=1 but the
-      // encode still runs through driver.encodeStdinMessage). Pre-fix
-      // this would also pass on single-row, but the assertion guards
-      // against accidental regression that flips the contract.
-      const parsed = JSON.parse(wakeCalls[0]!.payload);
-      expect(parsed.type).toBe('user');
-      expect(parsed.message.role).toBe('user');
-      expect(parsed.message.content[0].type).toBe('text');
-      const text: string = parsed.message.content[0].text;
-      // Single-row drainPending still wraps via `formatInboxBatch`
-      // ("You have one message waiting since you were last active:").
-      expect(text).toContain('You have one message waiting');
-      expect(text).toContain('@agent-deliver pls drain');
+      // Option A v2 (Cindy `UMGu36zoTDVuKWXi`): backend ships RAW
+      // combined text built by `formatInboxBatch` — the daemon owns
+      // the stream-json encode via its in-process driver. Single-row
+      // drainPending still wraps via the inbox-drain wrapper ("You
+      // have one message waiting since you were last active:"), but
+      // there is no surrounding JSON envelope on the wire.
+      const shipped = wakeCalls[0]!.text;
+      expect(() => JSON.parse(shipped)).toThrow(); // proves not pre-encoded
+      expect(shipped).toContain('You have one message waiting');
+      expect(shipped).toContain('@agent-deliver pls drain');
 
       // B3 (Cindy `usjxj8AxX4AvJ5E-`): drainPending fires for the
       // `requires_first_message` claude driver. The wake's
@@ -2862,28 +2868,24 @@ describe('DaemonAgentRuntimeHost — drainPending', () => {
         dB.inboxId,
         dC.inboxId,
       ]);
-      // Payload MUST be a legal claude stream-json line — JSON.parse
-      // succeeds AND the top-level shape matches `encodeStdinMessage`
-      // (`{type:'user', message:{role:'user', content:[{type:'text',
-      // text}]}}`). Pre-fix this was garbage text containing nested
-      // JSON lines from per-row encoding (Cindy `Mqf1h-FKudtEbH1O`).
-      const parsed = JSON.parse(wakeCalls[0]!.payload);
-      expect(parsed.type).toBe('user');
-      expect(parsed.message.role).toBe('user');
-      expect(Array.isArray(parsed.message.content)).toBe(true);
-      expect(parsed.message.content[0].type).toBe('text');
-      const text: string = parsed.message.content[0].text;
-      // The combined text comes from `formatInboxBatch` (inbox-drain
-      // wrapper), NOT `combineGatedBatch` — drainPending semantics are
-      // "inbox at ready", not "mid-turn busy".
-      expect(text).toContain('You have 3 messages waiting since you were last active');
-      expect(text).toContain('first');
-      expect(text).toContain('second');
-      expect(text).toContain('third');
-      // No nested `{"type":"user"` from per-row encoding — pre-fix this
-      // would appear because driver-encoded payloads were embedded as
-      // text.
-      expect(text).not.toContain('"type":"user"');
+      // Option A v2 (Cindy `UMGu36zoTDVuKWXi`): payload is RAW combined
+      // text built by `formatInboxBatch` (inbox-drain wrapper), NOT a
+      // pre-encoded stream-json line. Daemon owns the encode via its
+      // in-process driver. Pre-Option-A-v2 this was a stream-json JSON
+      // envelope; under Option A v2 it is the literal "You have N
+      // messages waiting…" line containing each row verbatim. Combine
+      // BEFORE encode is preserved because there IS no backend encode
+      // step at all — daemon receives one combined text per batch.
+      const shipped = wakeCalls[0]!.text;
+      expect(() => JSON.parse(shipped)).toThrow(); // proves not pre-encoded
+      expect(shipped).toContain('You have 3 messages waiting since you were last active');
+      expect(shipped).toContain('first');
+      expect(shipped).toContain('second');
+      expect(shipped).toContain('third');
+      // No nested `{"type":"user"` — pre-Mqf1h-FKudtEbH1O bug embedded
+      // per-row encoded payloads as text; under Option A v2 there are
+      // no per-row encodes anywhere.
+      expect(shipped).not.toContain('"type":"user"');
 
       // B3 gate still applies — claude is `requires_first_message`, so
       // the batch's delivered:true does NOT immediately ack; the entire
