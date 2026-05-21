@@ -263,7 +263,7 @@ describe('FakeSupervisor — wake (state-machine reasons per §3.2.1)', () => {
     h.supervisor.stop({
       conversation_id: 'c1',
       agent_id: 'a1',
-      mode: 'soft',
+      mode: 'hard',
     });
     const r = h.supervisor.wake({
       conversation_id: 'c1',
@@ -287,7 +287,7 @@ describe('FakeSupervisor — wake (state-machine reasons per §3.2.1)', () => {
     h.supervisor.stop({
       conversation_id: 'c1',
       agent_id: 'a1',
-      mode: 'soft',
+      mode: 'hard',
     });
     h.flush();
     const r = h.supervisor.wake({
@@ -316,7 +316,7 @@ describe('FakeSupervisor — stop / clearSession / stopAll', () => {
       agent_id: 'a1',
       mode: 'hard',
     });
-    expect(r).toEqual({ stopped: true, exit_code: 137 });
+    expect(r).toEqual({ mode: 'hard', stopped: true, exit_code: 137 });
     expect(h.supervisor.__getPhase('c1', 'a1')).toBe<FakeSupervisorPhase>(
       'draining',
     );
@@ -331,14 +331,71 @@ describe('FakeSupervisor — stop / clearSession / stopAll', () => {
     }
   });
 
-  it('stop on a never-started runtime is a no-op', () => {
+  it('hard stop on a never-started runtime is a no-op', () => {
+    const h = makeHarness();
+    const r = h.supervisor.stop({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      mode: 'hard',
+    });
+    expect(r).toEqual({ mode: 'hard', stopped: false, exit_code: null });
+  });
+
+  it('soft stop on a ready runtime writes the directive without exiting (Cindy `vqDWkLFF6pAeIE5t`)', () => {
+    const h = makeHarness();
+    h.supervisor.start({ conversation_id: 'c1', agent_id: 'a1', options: {} });
+    h.flush();
+    const eventsBefore = h.events.length;
+    const r = h.supervisor.stop({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      mode: 'soft',
+      soft_directive: '{"role":"user","content":"please stop"}\n',
+    });
+    expect(r).toEqual({ mode: 'soft', directive_delivered: true });
+    // CRITICAL: soft stop does NOT terminate the runtime nor emit any
+    // state transition. Backend MUST NOT treat directive_delivered:true
+    // as "stopped" — it's a "directive injected, agent will wrap up
+    // on its own turn boundary".
+    expect(h.supervisor.__getPhase('c1', 'a1')).toBe<FakeSupervisorPhase>('ready');
+    expect(h.events.length).toBe(eventsBefore);
+    h.flush();
+    expect(h.supervisor.__getPhase('c1', 'a1')).toBe<FakeSupervisorPhase>('ready');
+  });
+
+  it('soft stop on an un-started runtime returns directive_delivered=false reason=not_running', () => {
     const h = makeHarness();
     const r = h.supervisor.stop({
       conversation_id: 'c1',
       agent_id: 'a1',
       mode: 'soft',
+      soft_directive: '{}\n',
     });
-    expect(r).toEqual({ stopped: false, exit_code: null });
+    expect(r).toEqual({
+      mode: 'soft',
+      directive_delivered: false,
+      reason: 'not_running',
+    });
+  });
+
+  it('soft stop on a draining runtime returns directive_delivered=false reason=driver_refused', () => {
+    const h = makeHarness();
+    h.supervisor.start({ conversation_id: 'c1', agent_id: 'a1', options: {} });
+    h.flush();
+    h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    // Now draining (exit scheduled but not flushed).
+    expect(h.supervisor.__getPhase('c1', 'a1')).toBe<FakeSupervisorPhase>('draining');
+    const r = h.supervisor.stop({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      mode: 'soft',
+      soft_directive: '{}\n',
+    });
+    expect(r).toEqual({
+      mode: 'soft',
+      directive_delivered: false,
+      reason: 'driver_refused',
+    });
   });
 
   it('clearSession hard-kills regardless of mode, returns cleared=true', () => {
@@ -376,7 +433,7 @@ describe('FakeSupervisor — stop / clearSession / stopAll', () => {
     h.supervisor.stop({
       conversation_id: 'c2',
       agent_id: 'a2',
-      mode: 'soft',
+      mode: 'hard',
     });
     h.flush();
     const r = h.supervisor.stopAll({});

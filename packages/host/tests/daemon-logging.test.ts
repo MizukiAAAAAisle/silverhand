@@ -190,7 +190,7 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
    *  exercises the full received → ok path. */
   const stubSupervisor: Supervisor = {
     start: async () => ({ pid: 1, started_at: 0 }),
-    stop: async () => ({ stopped: true, exit_code: 0 }),
+    stop: async () => ({ mode: 'hard', stopped: true, exit_code: 0 }),
     wake: async params => ({ delivered: true, delivery_ids: params.delivery_ids }),
     status: async () => ({ runtimes: [] }),
     clearSession: async () => ({ cleared: true }),

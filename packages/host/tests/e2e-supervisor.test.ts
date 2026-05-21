@@ -249,8 +249,9 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     const r = await client.runtimeStop({
       conversation_id: 'c-X',
       agent_id: 'ag-X',
-      mode: 'soft',
+      mode: 'hard',
     });
+    if (r.mode !== 'hard') throw new Error('expected hard stop result');
     expect(r.stopped).toBe(true);
     const exit = await waitForEvent(
       events,
@@ -322,7 +323,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     await client.runtimeStop({
       conversation_id: 'c-state',
       agent_id: 'ag-state',
-      mode: 'soft',
+      mode: 'hard',
     });
     await waitForEvent(
       events,
@@ -459,6 +460,87 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     );
     expect(evLine).toBeDefined();
     rmSync(f.dir, { recursive: true, force: true });
+  });
+
+  it('runtime_stop mode=soft writes the directive and does NOT terminate (Cindy `vqDWkLFF6pAeIE5t`)', async () => {
+    // Soft-stop semantics under the discriminated-union result: the
+    // runtime stays live; backend MUST NOT flip DB / SSE state to
+    // stopped on directive_delivered:true.
+    const f = await setupFixture();
+    fixtures.push(f);
+    const client = new HostClient({ socketPath: f.socketPath });
+    clients.push(client);
+    await client.connect();
+    const events: EventFrame[] = [];
+    client.subscribe(e => events.push(e));
+    await client.runtimeStart({
+      conversation_id: 'c-soft',
+      agent_id: 'ag-soft',
+      options: {},
+    });
+    await waitForEvent(
+      events,
+      (e): e is Extract<EventFrame, { event: 'runtime_ready_for_drain' }> =>
+        e.event === 'runtime_ready_for_drain' && e.conversation_id === 'c-soft',
+    );
+    const eventsBefore = events.length;
+    const r = await client.runtimeStop({
+      conversation_id: 'c-soft',
+      agent_id: 'ag-soft',
+      mode: 'soft',
+      soft_directive: '{"role":"user","content":"please wrap up"}\n',
+    });
+    if (r.mode !== 'soft') throw new Error('expected soft stop result');
+    expect(r.directive_delivered).toBe(true);
+    expect(r.reason).toBeUndefined();
+    // Settle and assert no terminal events fired.
+    await new Promise(res => setImmediate(res));
+    const afterSoft = events.slice(eventsBefore);
+    expect(afterSoft.filter(e => e.event === 'runtime_exit')).toHaveLength(0);
+    expect(
+      afterSoft.filter(
+        e =>
+          e.event === 'runtime_state' &&
+          'state' in e &&
+          'terminalReason' in e.state &&
+          e.state.terminalReason !== undefined,
+      ),
+    ).toHaveLength(0);
+  });
+
+  it('runtime_stop mode=soft on unknown runtime returns directive_delivered=false reason=not_running', async () => {
+    const f = await setupFixture();
+    fixtures.push(f);
+    const client = new HostClient({ socketPath: f.socketPath });
+    clients.push(client);
+    await client.connect();
+    const r = await client.runtimeStop({
+      conversation_id: 'no-such',
+      agent_id: 'no-such',
+      mode: 'soft',
+      soft_directive: '{}\n',
+    });
+    if (r.mode !== 'soft') throw new Error('expected soft stop result');
+    expect(r.directive_delivered).toBe(false);
+    expect(r.reason).toBe('not_running');
+  });
+
+  it('runtime_stop mode=hard with soft_directive is rejected as invalid_params at the wire', async () => {
+    const f = await setupFixture();
+    fixtures.push(f);
+    const client = new HostClient({ socketPath: f.socketPath });
+    clients.push(client);
+    await client.connect();
+    await expect(
+      client.runtimeStop({
+        conversation_id: 'c-x',
+        agent_id: 'ag-x',
+        mode: 'hard',
+        // superRefine catches the misuse at runtime; the type allows
+        // soft_directive on the union shape (it's optional everywhere).
+        soft_directive: '{}\n',
+      }),
+    ).rejects.toMatchObject({ code: 'invalid_params' });
   });
 
   it('runtime_inject_env returns unknown_intent (removed in v0)', async () => {

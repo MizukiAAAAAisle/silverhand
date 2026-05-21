@@ -204,14 +204,41 @@ export class FakeSupervisor {
   stop(params: RuntimeStopParams): RuntimeStopResult {
     const k = key(params.conversation_id, params.agent_id);
     const rt = this.runtimes.get(k);
+
+    // Soft stop = inject directive on stdin; runtime stays alive.
+    // Fake doesn't model an actual driver, so we just simulate a
+    // successful write when the runtime exists in a writable phase.
+    if (params.mode === 'soft') {
+      if (!rt || rt.phase === 'exited' || rt.phase === 'idle') {
+        return {
+          mode: 'soft',
+          directive_delivered: false,
+          reason: 'not_running',
+        };
+      }
+      if (rt.phase !== 'ready') {
+        // spawning / startup_pending / draining → driver can't accept
+        // new stdin yet (or anymore).
+        return {
+          mode: 'soft',
+          directive_delivered: false,
+          reason: 'driver_refused',
+        };
+      }
+      // Successful directive write — runtime keeps running; no exit
+      // scheduled, no state change.
+      return { mode: 'soft', directive_delivered: true };
+    }
+
+    // Hard stop = SIGTERM/SIGKILL cascade.
     if (!rt || rt.phase === 'exited') {
-      return { stopped: false, exit_code: null };
+      return { mode: 'hard', stopped: false, exit_code: null };
     }
     rt.phase = 'draining';
     this.emitState(rt);
-    const exitCode = params.mode === 'hard' ? 137 : 0;
+    const exitCode = 137;
     this.scheduleExit(rt, exitCode, /* intentional */ true);
-    return { stopped: true, exit_code: exitCode };
+    return { mode: 'hard', stopped: true, exit_code: exitCode };
   }
 
   // ── runtime_wake ───────────────────────────────────────────────

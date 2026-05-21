@@ -209,23 +209,113 @@ export type RuntimeStartResult = z.infer<typeof RuntimeStartResultSchema>;
 
 // ── runtime_stop ────────────────────────────────────────────────────
 
+/**
+ * Stop a (conv, agent) runtime. Two modes with distinct semantics
+ * (locked by Cindy `vqDWkLFF6pAeIE5t` step 2 plan reply):
+ *
+ *  - **`hard`** — SIGTERM 5s → SIGKILL cascade. Result reports the
+ *    process termination outcome via `{ stopped, exit_code }`.
+ *  - **`soft`** — inject a directive user message into stdin (e.g.
+ *    "[the user wants you to stop]") and let the agent wrap up.
+ *    Backend MUST supply the directive in `soft_directive`. Result
+ *    reports the write outcome via `{ directive_delivered, reason? }`.
+ *    The runtime is NOT terminated by a soft stop; the agent's next
+ *    `turn_end` or `runtime_exit` is what backend should react to.
+ *
+ * Why the result is a discriminated union rather than a flat object:
+ * conflating "process stopped" with "directive written" lets backend
+ * misinterpret a soft `write_failed` as "agent is now stopped" and
+ * flip DB / SSE state incorrectly. Splitting on `mode` makes that
+ * misuse a compile-time error.
+ */
 export const RuntimeStopParamsSchema = z
   .object({
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
-    /** soft = directive user message, hard = SIGTERM/SIGKILL cascade.
-     *  Mirrors CM today. */
     mode: z.enum(['soft', 'hard']),
+    /** Stream-json line backend wants daemon to inject as a directive
+     *  user message. ONLY allowed when `mode === 'soft'`. Backend is
+     *  responsible for materialising the default phrasing — daemon
+     *  treats it as opaque bytes (per the Step 1 payload contract). */
+    soft_directive: StreamJsonPayloadSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((val, ctx) => {
+    if (val.mode === 'hard' && val.soft_directive !== undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['soft_directive'],
+        message:
+          "soft_directive is only valid when mode === 'soft'; hard mode kills the process and ignores stdin.",
+      });
+    }
+    if (val.mode === 'soft' && val.soft_directive === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['soft_directive'],
+        message:
+          "soft_directive is required when mode === 'soft'; backend MUST supply the directive bytes (default phrasing is backend's responsibility).",
+      });
+    }
+  });
 export type RuntimeStopParams = z.infer<typeof RuntimeStopParamsSchema>;
 
 export const RuntimeStopResultSchema = z
-  .object({
-    stopped: z.boolean(),
-    exit_code: z.number().int().nullable(),
-  })
-  .strict();
+  .discriminatedUnion('mode', [
+    z
+      .object({
+        mode: z.literal('hard'),
+        /** Whether the runtime was actually live and got the signal.
+         *  False = nothing to stop (already exited / never started). */
+        stopped: z.boolean(),
+        /** Final exit code if known at response time. SIGTERM cascade
+         *  may not have completed; daemon may report `null` and let the
+         *  `runtime_exit` event carry the real value. */
+        exit_code: z.number().int().nullable(),
+      })
+      .strict(),
+    z
+      .object({
+        mode: z.literal('soft'),
+        /** Whether the directive line was written to the child's stdin.
+         *  False = runtime not running, write failed, or driver refused.
+         *  IMPORTANT: directive_delivered === false does NOT mean the
+         *  runtime is stopped — backend must NOT flip DB / SSE state
+         *  to a stopped status on a soft failure. */
+        directive_delivered: z.boolean(),
+        /** Why the directive wasn't delivered. REQUIRED when
+         *  directive_delivered === false; FORBIDDEN when
+         *  directive_delivered === true. The pairing is enforced by
+         *  the .superRefine() below (Cindy `eMcEhycw8fQwucis`) — a
+         *  bare `optional()` would let backend silently emit either
+         *  `{delivered:false}` (no reason) or
+         *  `{delivered:true, reason:'write_failed'}`, both of which
+         *  defeat the whole point of the discriminated soft result. */
+        reason: z
+          .enum(['not_running', 'write_failed', 'driver_refused'])
+          .optional(),
+      })
+      .strict(),
+  ])
+  .superRefine((val, ctx) => {
+    if (val.mode !== 'soft') return;
+    if (val.directive_delivered === false && val.reason === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['reason'],
+        message:
+          "soft result with directive_delivered=false must carry a typed reason ('not_running' | 'write_failed' | 'driver_refused')",
+      });
+    }
+    if (val.directive_delivered === true && val.reason !== undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['reason'],
+        message:
+          'soft result with directive_delivered=true must not carry a reason',
+      });
+    }
+  });
 export type RuntimeStopResult = z.infer<typeof RuntimeStopResultSchema>;
 
 // ── runtime_wake ────────────────────────────────────────────────────
@@ -501,6 +591,13 @@ export type ResponseFrame = z.infer<typeof ResponseFrameSchema>;
  *  - `runtime_state` / `runtime_output` / `runtime_exit` / `runtime_ready_for_drain`
  *  - `runtime_startup_delivery_consumed` / `runtime_startup_delivery_failed`
  *  - `runtime_output_dropped` / `runtime_output_paused` / `runtime_output_resumed`
+ *
+ *  PR-2 step 2 surface (Cindy `vqDWkLFF6pAeIE5t`):
+ *
+ *  - `runtime_init_timeout` / `runtime_init_retrying` / `runtime_init_cooldown`
+ *    — daemon-internal init-watchdog / retry / cooldown loop exposed
+ *    to backend so backend can drive UI (`agent_status` SSE) + DB
+ *    projection without owning the retry state machine.
  */
 export const EventFrameSchema = z.discriminatedUnion('event', [
   z.object({
@@ -566,7 +663,89 @@ export const EventFrameSchema = z.discriminatedUnion('event', [
       'driver_refused',
     ]),
     ts: z.number().int(),
-  }),
+  }).strict(),
+  // ── runtime init lifecycle (locked by Cindy `vqDWkLFF6pAeIE5t`) ──
+  //
+  // These three events surface the daemon-internal init watchdog +
+  // retry loop to backend. Init lifecycle is ORTHOGONAL to
+  // `runtime_startup_delivery_*`: empty-inbox and self-init paths
+  // have no startup_delivery to attach to but still get watchdog
+  // timeouts / retries / cooldown. Backend doesn't own retry — daemon
+  // does — but backend translates each event into UI / DB projection
+  // (`agent_status` SSE, `updateAgentRuntime` columns, crash
+  // notifications) since it owns those surfaces.
+  //
+  // Sequence over a typical failure path (retry_attempt is 0-indexed,
+  // matching CM's `handle.initAttempt`):
+  //   runtime_init_timeout (retry_attempt=0, retrying=true) →
+  //   runtime_init_retrying (retry_attempt=1 of N) →
+  //   runtime_init_timeout (retry_attempt=1, retrying=true) →
+  //   ... →
+  //   runtime_init_timeout (retry_attempt=N-1, retrying=false, cooldown_until=…) →
+  //   runtime_init_cooldown (attempts_exhausted = N).
+  // The cooldown path may also fire with retry_attempt=0 if max_retries=0.
+  // The terminal `runtime_exit` follows separately when the daemon
+  // gives up and the child process is gone.
+  z.object({
+    event: z.literal('runtime_init_timeout'),
+    conversation_id: z.string().min(1),
+    agent_id: z.string().min(1),
+    /** Which watchdog tier tripped (mirrors CM's three-tier
+     *  PR-A watchdog: silence between bytes / pre-protocol cap /
+     *  post-protocol stall). Names match CM's `InitTimeoutReason` so
+     *  backend can pass the value straight through to `agent_init_timeout`
+     *  SSE without translation (Cindy `4CJATqU0DdbsGVXW`). */
+    timeout_reason: z.enum(['silence', 'pre_protocol_cap', 'post_protocol']),
+    /** Wall-clock ms between spawn and watchdog firing — only the
+     *  daemon has the precise spawn timestamp, so we ship it on the
+     *  same event rather than asking backend to reconstruct it. */
+    elapsed_ms: z.number().int().nonnegative(),
+    /** The configured timeout value (ms) for the tier that fired —
+     *  varies per driver and may be overridden by daemon config. */
+    timeout_ms: z.number().int().nonnegative(),
+    /** True iff the daemon has already decided to re-spawn after this
+     *  timeout. False means cooldown / give-up — a `runtime_exit`
+     *  follows and no `runtime_init_retrying` will. Lets backend mark
+     *  the projection terminal in a single hop without buffering. */
+    retrying: z.boolean(),
+    /** 0-indexed attempt number that just timed out (first attempt
+     *  is 0). Matches CM's `handle.initAttempt` semantics. */
+    retry_attempt: z.number().int().nonnegative(),
+    /** Total retry budget the daemon will honor before cooldown. */
+    max_retries: z.number().int().nonnegative(),
+    /** Optional: present iff this timeout transition also engaged
+     *  cooldown — wall-clock epoch ms when backend / user may
+     *  attempt a fresh start. Carrying it on the same event keeps the
+     *  cooldown-on-timeout path self-contained; backend never has to
+     *  wait for a follow-up `runtime_init_cooldown` to know whether
+     *  to publish `agent_status:crashed reason=init_cooldown` vs
+     *  `init_timeout`. */
+    cooldown_until: z.number().int().positive().optional(),
+    ts: z.number().int(),
+  }).strict(),
+  z.object({
+    event: z.literal('runtime_init_retrying'),
+    conversation_id: z.string().min(1),
+    agent_id: z.string().min(1),
+    /** The attempt number about to start (= the previous timeout's
+     *  retry_attempt + 1). */
+    retry_attempt: z.number().int().positive(),
+    max_retries: z.number().int().nonnegative(),
+    /** How long the daemon will wait before re-spawning, ms. */
+    delay_ms: z.number().int().nonnegative(),
+    ts: z.number().int(),
+  }).strict(),
+  z.object({
+    event: z.literal('runtime_init_cooldown'),
+    conversation_id: z.string().min(1),
+    agent_id: z.string().min(1),
+    /** Wall-clock epoch ms after which backend / user may attempt a
+     *  fresh start. Daemon will NOT auto-retry past this point. */
+    cooldown_until: z.number().int().positive(),
+    /** Total attempts that failed before cooldown engaged (== max_retries). */
+    attempts_exhausted: z.number().int().nonnegative(),
+    ts: z.number().int(),
+  }).strict(),
   z.object({
     event: z.literal('runtime_output_dropped'),
     conversation_id: z.string().min(1),
