@@ -42,7 +42,7 @@ function silentLogger(): BackendLogger {
 
 interface CapturedLog {
   level: 'info' | 'warn' | 'error';
-  obj: object;
+  obj: unknown;
   msg: string;
 }
 
@@ -92,17 +92,29 @@ describe('startBackend — SILVERHAND_RUNTIME_HOST dispatch (sub-commit 2a)', ()
   });
 
   it('legacy mode ignores hostClient even when one is passed', async () => {
-    // Cindy `bJUazoeBrxK8XglK` blocker (2): the legacy fallback MUST
-    // be independent of daemon plumbing. We pass a hostClient whose
-    // ping() throws if invoked — its absence from the boot path
-    // proves legacy doesn't reach into it.
-    const hostClient = {
-      ping: vi.fn(() => {
-        throw new Error('legacy must not call hostClient.ping');
+    // Cindy `bJUazoeBrxK8XglK` blocker (2) + `yAyzGil3UdCENIom` B2:
+    // the legacy fallback MUST be independent of daemon plumbing.
+    // Track every call on the hostClient surface backend might
+    // accidentally touch (ping, subscribe, onReconnect, close); after
+    // a successful legacy boot every counter must still be zero. The
+    // ping mock returns instead of throwing so that any silent
+    // invocation surfaces as a positive assertion failure rather
+    // than the test passing because the throw got swallowed.
+    const ping = vi.fn(() =>
+      Promise.resolve({
+        daemon_pid: 12345,
+        daemon_version: '0.0.0-test',
+        started_at: 0,
       }),
-      subscribe: () => () => {},
-      onReconnect: () => () => {},
-      close: () => Promise.resolve(),
+    );
+    const subscribe = vi.fn(() => () => {});
+    const onReconnect = vi.fn(() => () => {});
+    const close = vi.fn(() => Promise.resolve());
+    const hostClient = {
+      ping,
+      subscribe,
+      onReconnect,
+      close,
     } as unknown as HostClient;
     process.env[SILVERHAND_RUNTIME_HOST_ENV] = 'legacy';
     running = await startBackend({
@@ -113,11 +125,15 @@ describe('startBackend — SILVERHAND_RUNTIME_HOST dispatch (sub-commit 2a)', ()
       logger: silentLogger(),
       hostClient,
     });
-    // The legacy branch should NOT have constructed the daemon shim.
-    // Easiest assertion: runtimeHost is the ConversationManager.
+    // Daemon shim NOT constructed.
     expect(running.context.runtimeHost).toBe(
       running.context.conversationManager,
     );
+    // Cindy B2: legacy boot must not touch the hostClient surface.
+    expect(ping).not.toHaveBeenCalled();
+    expect(subscribe).not.toHaveBeenCalled();
+    expect(onReconnect).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
   });
 
   it('daemon mode without hostClient throws loudly at boot', async () => {

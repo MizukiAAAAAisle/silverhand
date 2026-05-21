@@ -286,13 +286,17 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   ctx.scheduleService.start();
   const stopEventLoopLagProbe = startEventLoopLagProbe(logger);
 
-  // PR-1 smoke: if the host has spawned a silverhand-daemon and handed
-  // us a connected client, ping it once at boot so the IPC plumbing is
-  // exercised every time the backend starts. We log the version + pid
-  // but do NOT take a hard dependency on the daemon being reachable —
-  // failure is logged as a warning, never fatal. PR-2 will route real
-  // runtime intents through this client and the warn becomes an error.
-  if (opts.hostClient) {
+  // Daemon-mode liveness ping (#task:512 sub-commit 2a). The old PR-1
+  // "smoke if hostClient is present" path ran unconditionally for any
+  // caller passing `hostClient`, which would have meant legacy mode
+  // could still reach into daemon plumbing if the operator forgot to
+  // unset it. Cindy `yAyzGil3UdCENIom` blocker B2: legacy must NOT
+  // call hostClient at all. The ping now runs ONLY in daemon mode.
+  // Failure is still warn-level here (the daemon shim's first real
+  // call will surface the disconnect more concretely) — the gate
+  // upstream is what guarantees `opts.hostClient` is genuinely
+  // present and connected in daemon mode.
+  if (runtimeHostMode === 'daemon' && opts.hostClient) {
     try {
       const ping = await opts.hostClient.ping();
       logger.info(
@@ -306,7 +310,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     } catch (err) {
       logger.warn(
         { err: err instanceof Error ? err.message : String(err) },
-        'silverhand-daemon ping failed at boot (non-fatal in PR-1)',
+        'silverhand-daemon ping failed at boot',
       );
     }
   }
