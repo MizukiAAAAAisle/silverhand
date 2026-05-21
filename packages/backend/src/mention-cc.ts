@@ -12,7 +12,7 @@ import type { ConversationRepo } from './repos/conversation-repo.js';
 import type { MessageRepo } from './repos/message-repo.js';
 import type { NotificationRepo } from './repos/notification-repo.js';
 import { SettingsRepo } from './repos/settings-repo.js';
-import type { ConversationManager } from './conversation-manager.js';
+import type { AgentRuntimeHost } from './runtime/agent-runtime-host.js';
 import type { BackendLogger } from './context.js';
 import type { ScopeEventBus } from './ws/scope-event-bus.js';
 
@@ -33,7 +33,7 @@ export interface MentionCcOpts {
   conversations: ConversationRepo;
   messages: MessageRepo;
   notifications: NotificationRepo;
-  conversationManager: ConversationManager;
+  runtimeHost: AgentRuntimeHost;
   logger: BackendLogger;
   /** Event bus for WS push — publishes a viewer-scoped notification
    *  frame after insert. */
@@ -185,7 +185,7 @@ async function deliverOne(
 
   // Fire-and-forget start; deliverMessage tolerates "not yet running"
   // by enqueueing to the inbox, so we don't need to await ordering.
-  opts.conversationManager
+  opts.runtimeHost
     .start(mentionsConversation.id, agent.id)
     .catch(err =>
       opts.logger.warn(
@@ -193,7 +193,7 @@ async function deliverOne(
         'mention-cc: auto-start failed (will still inbox-deliver)',
       ),
     );
-  await opts.conversationManager.deliverMessage(mentionsConversation.id, agent.id, wrapped.id);
+  await opts.runtimeHost.deliverMessage(mentionsConversation.id, agent.id, wrapped.id);
 
   opts.notifications.insert({
     kind: 'mention_external',

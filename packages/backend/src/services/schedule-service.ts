@@ -13,7 +13,7 @@ import {
   systemSubtype,
 } from '@silverhand/shared';
 import type { BackendLogger } from '../context.js';
-import type { ConversationManager } from '../conversation-manager.js';
+import type { AgentRuntimeHost } from '../runtime/agent-runtime-host.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
@@ -65,7 +65,7 @@ export interface ScheduleServiceOptions {
   /** Used to resolve the current viewer id from
    *  `app_settings.viewer_user_id` for the WS scope on schedule fire. */
   settings: SettingsRepo;
-  conversationManager: ConversationManager;
+  runtimeHost: AgentRuntimeHost;
   events: ScopeEventBus;
   logger: BackendLogger;
   /** Override `Date.now()` in tests so the scheduler clock is
@@ -107,7 +107,7 @@ export class ScheduleService {
   private readonly messages: MessageRepo;
   private readonly agents: AgentRepo;
   private readonly settings: SettingsRepo;
-  private readonly conversationManager: ConversationManager;
+  private readonly runtimeHost: AgentRuntimeHost;
   private readonly events: ScopeEventBus;
   private readonly logger: BackendLogger;
   private readonly now: () => number;
@@ -126,7 +126,7 @@ export class ScheduleService {
     this.messages = opts.messages;
     this.agents = opts.agents;
     this.settings = opts.settings;
-    this.conversationManager = opts.conversationManager;
+    this.runtimeHost = opts.runtimeHost;
     this.events = opts.events;
     this.logger = opts.logger;
     this.now = opts.now ?? Date.now;
@@ -637,12 +637,12 @@ export class ScheduleService {
     // other path starts the agent — which is misleading because the
     // schedule would otherwise look "delivered". Treat both legs as
     // required; `processOne` will markFailed if either throws.
-    await this.conversationManager.deliverMessage(
+    await this.runtimeHost.deliverMessage(
       targetConvId,
       dto.owner_agent_id,
       msg.id,
     );
-    await this.conversationManager.start(targetConvId, dto.owner_agent_id);
+    await this.runtimeHost.start(targetConvId, dto.owner_agent_id);
   }
 
   /** Best-effort lifecycle notice when the schedule's target conversation

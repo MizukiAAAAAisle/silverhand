@@ -201,6 +201,7 @@ export function buildTestApp(): TestApp {
     events: new ScopeEventBus(),
     silverhandCliLauncher: { command: 'noop', args: [] },
     agentTokens: new AgentTokenStore(),
+    runtimeHost: fake as unknown as ConversationManager,
     conversationManager: fake as unknown as ConversationManager,
   };
   ctx.channelService = new ChannelService({
@@ -210,7 +211,7 @@ export function buildTestApp(): TestApp {
     agents: new AgentRepo(db),
     messages: new MessageRepo(db),
     events: ctx.events,
-    conversationManager: ctx.conversationManager,
+    runtimeHost: ctx.runtimeHost,
     logger: silentLogger,
   });
   ctx.conversationMessageService = new ConversationMessageService({
@@ -221,7 +222,7 @@ export function buildTestApp(): TestApp {
     notifications: new NotificationRepo(db),
     workspaces: new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot }),
     attachmentService,
-    conversationManager: ctx.conversationManager,
+    runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger: silentLogger,
   });
@@ -231,7 +232,7 @@ export function buildTestApp(): TestApp {
     messages: new MessageRepo(db),
     agents: new AgentRepo(db),
     workspaces: new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot }),
-    conversationManager: ctx.conversationManager,
+    runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger: silentLogger,
     serverConfig: () => ctx.serverConfig,
@@ -242,7 +243,7 @@ export function buildTestApp(): TestApp {
     conversations: new ConversationRepo(db),
     messages: new MessageRepo(db),
     agents: new AgentRepo(db),
-    conversationManager: ctx.conversationManager,
+    runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger: silentLogger,
   });
@@ -253,7 +254,7 @@ export function buildTestApp(): TestApp {
     messages: new MessageRepo(db),
     agents: new AgentRepo(db),
     settings: new SettingsRepo(db),
-    conversationManager: ctx.conversationManager,
+    runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger: silentLogger,
     disableAutoTick: true,

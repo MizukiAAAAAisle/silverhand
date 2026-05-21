@@ -6,7 +6,7 @@ import {
   systemSubtype,
 } from '@silverhand/shared';
 import type { BackendLogger } from '../context.js';
-import type { ConversationManager } from '../conversation-manager.js';
+import type { AgentRuntimeHost } from '../runtime/agent-runtime-host.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationRepo, RepoError } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
@@ -127,7 +127,7 @@ export interface ChannelServiceOptions {
   agents: AgentRepo;
   messages: MessageRepo;
   events: ScopeEventBus;
-  conversationManager: ConversationManager;
+  runtimeHost: AgentRuntimeHost;
   logger: BackendLogger;
 }
 
@@ -144,7 +144,7 @@ export class ChannelService {
   private readonly agents: AgentRepo;
   private readonly messages: MessageRepo;
   private readonly events: ScopeEventBus;
-  private readonly conversationManager: ConversationManager;
+  private readonly runtimeHost: AgentRuntimeHost;
   private readonly logger: BackendLogger;
 
   constructor(opts: ChannelServiceOptions) {
@@ -154,7 +154,7 @@ export class ChannelService {
     this.agents = opts.agents;
     this.messages = opts.messages;
     this.events = opts.events;
-    this.conversationManager = opts.conversationManager;
+    this.runtimeHost = opts.runtimeHost;
     this.logger = opts.logger;
   }
 
@@ -402,7 +402,7 @@ export class ChannelService {
     reason: string,
   ): Promise<void> {
     try {
-      await this.conversationManager.deliverMessage(conversationId, agentId, messageId);
+      await this.runtimeHost.deliverMessage(conversationId, agentId, messageId);
     } catch (err) {
       this.logger.warn({ conversationId, agentId, messageId, err }, reason);
     }
@@ -419,7 +419,7 @@ export class ChannelService {
     try {
       await Promise.all(
         recipients.map(ca =>
-          this.conversationManager.deliverMessage(
+          this.runtimeHost.deliverMessage(
             conversationId,
             ca.agent_id,
             messageId,
@@ -441,7 +441,7 @@ export class ChannelService {
     try {
       await Promise.all(
         recipients.map(ca =>
-          this.conversationManager.start(conversationId, ca.agent_id).catch(err => {
+          this.runtimeHost.start(conversationId, ca.agent_id).catch(err => {
             this.logger.warn(
               { conversationId, agentId: ca.agent_id, err },
               'channel-service: auto-start on agent-created channel failed',

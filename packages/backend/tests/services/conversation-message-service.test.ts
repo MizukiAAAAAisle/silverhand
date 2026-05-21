@@ -102,7 +102,7 @@ function bootstrap() {
     notifications,
     workspaces,
     attachmentService,
-    conversationManager: fake as unknown as ConversationManager,
+    runtimeHost: fake as unknown as ConversationManager,
     events,
     logger,
   });

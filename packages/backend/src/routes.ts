@@ -601,12 +601,12 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
         content: onboardingBody(workspace.name, agent, others),
         metadata: { subtype: systemSubtype('onboarding') },
       });
-      await ctx.conversationManager.deliverMessage(
+      await ctx.runtimeHost.deliverMessage(
         onboarding.id,
         agent.id,
         onboardingMsg.id,
       );
-      ctx.conversationManager
+      ctx.runtimeHost
         .start(onboarding.id, agent.id)
         .catch(err =>
           ctx.logger.error(
@@ -675,7 +675,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
           },
         });
         for (const ca of conversations.listAgents(channel.id)) {
-          await ctx.conversationManager.deliverMessage(
+          await ctx.runtimeHost.deliverMessage(
             channel.id,
             ca.agent_id,
             announce.id,
@@ -763,9 +763,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       .list()
       .filter(conversation => conversation.workspace_id === workspace.id);
     for (const conversation of workspaceConversations) {
-      ctx.conversationManager.resolveConversationRuns(conversation.id, 'conversation_closed');
+      ctx.runtimeHost.resolveConversationRuns(conversation.id, 'conversation_closed');
       for (const ca of conversations.listAgents(conversation.id)) {
-        void ctx.conversationManager.stop(conversation.id, ca.agent_id, 'hard');
+        void ctx.runtimeHost.stop(conversation.id, ca.agent_id, 'hard');
       }
     }
     // Sweep physical attachment blobs for every top-level channel before
@@ -1069,7 +1069,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     }
     for (const conversation of conversations.list()) {
       if (conversation.workspace_id !== workspace.id) continue;
-      await ctx.conversationManager
+      await ctx.runtimeHost
         .stop(conversation.id, agentId, 'hard')
         .catch(err =>
           ctx.logger.warn(
@@ -1427,7 +1427,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       ctx,
       'conversation.agent_run_states.snapshot',
       { conversationId: channel.id, kind: channel.kind },
-      () => ctx.conversationManager.getAgentRunStates(channel.id),
+      () => ctx.runtimeHost.getAgentRunStates(channel.id),
       result => ({ stateCount: result.length }),
     );
     return c.json({ states });
@@ -1445,7 +1445,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       ctx,
       'conversation.agent_run_states.snapshot',
       { conversationId: thread.id, kind: thread.kind },
-      () => ctx.conversationManager.getAgentRunStates(thread.id),
+      () => ctx.runtimeHost.getAgentRunStates(thread.id),
       result => ({ stateCount: result.length }),
     );
     return c.json({ states });
@@ -1794,7 +1794,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       'api: start agent requested',
     );
     try {
-      await ctx.conversationManager.start(conversationId, agentId);
+      await ctx.runtimeHost.start(conversationId, agentId);
       return c.json({ ok: true });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -1822,7 +1822,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       { conversationId, agentId, mode, hasDirective: !!directive },
       'api: stop agent requested',
     );
-    await ctx.conversationManager.stop(conversationId, agentId, mode, directive);
+    await ctx.runtimeHost.stop(conversationId, agentId, mode, directive);
     return c.json({ ok: true });
   }
 
@@ -1844,7 +1844,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       'api: clear agent session requested',
     );
     try {
-      const result = await ctx.conversationManager.clearSession(
+      const result = await ctx.runtimeHost.clearSession(
         conversationId,
         agentId,
         principal.userId,
@@ -1941,8 +1941,8 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       creatorUserId,
     );
     await ensureAgentL1Dir(agentL1Dir);
-    await ctx.conversationManager.deliverMessage(dm.id, agent.id, onboardingMsg.id);
-    ctx.conversationManager
+    await ctx.runtimeHost.deliverMessage(dm.id, agent.id, onboardingMsg.id);
+    ctx.runtimeHost
       .start(dm.id, agent.id)
       .catch(err =>
         ctx.logger.error(
@@ -2162,7 +2162,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       .filter(s => s.status === 'starting' || s.status === 'active');
     await Promise.all(
       live.map(s =>
-        ctx.conversationManager.stop(s.conversation_id, id, 'hard').catch(err =>
+        ctx.runtimeHost.stop(s.conversation_id, id, 'hard').catch(err =>
           ctx.logger.warn(
             { conversationId: s.conversation_id, agentId: id, err },
             'agent stop: conversation stop failed',
@@ -2202,7 +2202,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     //    delete — once conversation_agents rows are gone, conversationManager
     //    can't look up handles by (conversation id, agent id).
     for (const live of impact.running_conversation_agents) {
-      await ctx.conversationManager
+      await ctx.runtimeHost
         .stop(live.conversation_id, id, 'hard')
         .catch(err =>
           ctx.logger.warn(

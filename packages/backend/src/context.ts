@@ -2,6 +2,7 @@ import type { Database as Db } from 'better-sqlite3';
 import type { ServerConfig } from '@silverhand/shared';
 import type { ScopeEventBus } from './ws/scope-event-bus.js';
 import type { ConversationManager } from './conversation-manager.js';
+import type { AgentRuntimeHost } from './runtime/agent-runtime-host.js';
 import type { AttachmentService } from './services/attachment-service.js';
 import type { AgentService } from './services/agent-service.js';
 import type { ChannelService } from './services/channel-service.js';
@@ -97,8 +98,28 @@ export interface BackendContext {
   silverhandCliLauncher: SilverhandCliLauncher;
   /** Per-process bearer tokens scoped to one agent/conversation runtime. */
   agentTokens: AgentTokenStore;
-  /** Owns running agent CLI child processes. Initialized after the
-   *  context object is built (circular dep otherwise). */
+  /**
+   * Backend-side facade for agent runtime lifecycle. Services and
+   * routes should read/call **only** this field — never
+   * `conversationManager` — so the legacy/daemon switch (#task:512
+   * sub-commit 2a, `SILVERHAND_RUNTIME_HOST`) can route through
+   * different implementations without touching the call sites.
+   *
+   * In the default `legacy` mode this points at the same
+   * `ConversationManager` instance as `conversationManager` below; in
+   * `daemon` mode (sub-commit 2b onward) this points at the daemon
+   * shim. Either way, the interface contract is the same.
+   */
+  runtimeHost: AgentRuntimeHost;
+  /**
+   * Concrete `ConversationManager` instance. Retained on the context
+   * for now so the legacy spawn path can keep working unchanged; new
+   * call sites MUST go through `runtimeHost` (which equals this in
+   * legacy mode). This field disappears together with the legacy
+   * branch when shiki signs off on daemon-mode manual test.
+   *
+   * @internal
+   */
   conversationManager: ConversationManager;
 }
 

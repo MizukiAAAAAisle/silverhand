@@ -25,6 +25,19 @@ import {
   type EventWsServerController,
 } from './ws/ws-server.js';
 import { ConversationManager } from './conversation-manager.js';
+import { DaemonAgentRuntimeHost } from './runtime/daemon-agent-runtime-host.js';
+import type { AgentRuntimeHost } from './runtime/agent-runtime-host.js';
+import { RuntimeBridge, type ProxySettingsSource } from './runtime/bridge.js';
+import { RunStateCache } from './runtime/run-state-cache.js';
+import {
+  RuntimeEventHandler,
+  type InboxAckSink,
+} from './runtime/event-handler.js';
+import {
+  describeAgentRuntimeHostMode,
+  parseAgentRuntimeHostMode,
+  SILVERHAND_RUNTIME_HOST_ENV,
+} from './runtime/runtime-host-mode.js';
 import { AgentRepo } from './repos/agent-repo.js';
 import { AttachmentRepo } from './repos/attachment-repo.js';
 import { ConversationRepo } from './repos/conversation-repo.js';
@@ -132,10 +145,87 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     events: new ScopeEventBus(),
     silverhandCliLauncher: opts.silverhandCliLauncher,
     agentTokens: new AgentTokenStore(),
-    // Placeholder; replaced immediately below (ConversationManager needs ctx).
+    // Both placeholders are filled immediately below — the runtime
+    // host dispatch decides whether `runtimeHost` is the legacy CM or
+    // the daemon shim. The legacy `conversationManager` field exists
+    // for backwards compat with the boot path and disappears together
+    // with the legacy branch when shiki signs off on daemon mode.
     conversationManager: undefined as unknown as ConversationManager,
+    runtimeHost: undefined as unknown as AgentRuntimeHost,
   };
+
+  // ── Runtime host dispatch (#task:512 sub-commit 2a) ────────────
+  // SILVERHAND_RUNTIME_HOST gates which AgentRuntimeHost
+  // implementation backs `ctx.runtimeHost`. The env var is parsed by
+  // the pure helper in `runtime/runtime-host-mode.ts`, which Electron
+  // main also imports for its own daemon-spawn gate — keeping the
+  // two layers from drifting on default / accepted values / failure
+  // mode. Unset / `legacy` → existing in-process ConversationManager
+  // (zero behavior change vs prior releases). `daemon` →
+  // `DaemonAgentRuntimeHost` (2a: scaffolding only, every method
+  // throws with a rollback recipe). Anything else throws.
+  const runtimeHostMode = parseAgentRuntimeHostMode(
+    process.env[SILVERHAND_RUNTIME_HOST_ENV],
+  );
+  const runtimeHostBanner = describeAgentRuntimeHostMode(runtimeHostMode);
+  // Always create the legacy CM — services need it for the back-compat
+  // `conversationManager` field, and in `legacy` mode it IS the
+  // runtimeHost. In `daemon` mode we still create it so service
+  // construction can proceed identically; the daemon shim is what
+  // services route through via `ctx.runtimeHost`.
   ctx.conversationManager = new ConversationManager(ctx);
+  if (runtimeHostMode === 'daemon') {
+    if (!opts.hostClient) {
+      throw new Error(
+        `${SILVERHAND_RUNTIME_HOST_ENV}=daemon: a connected HostClient is required ` +
+          `but startBackend() received hostClient=undefined. Either start the ` +
+          `silverhand-daemon and pass a connected HostClient, or roll back by ` +
+          `restarting with ${SILVERHAND_RUNTIME_HOST_ENV}=legacy.`,
+      );
+    }
+    // Build the (currently throw-only) daemon shim. Sub-commit 2b
+    // replaces the throws with real bridge/cache/event-handler
+    // delegations. The bridge/cache/event-handler triple is
+    // instantiated here so the wiring shape is stable across 2a→2b.
+    const proxySettings: ProxySettingsSource = {
+      get: (key: 'proxy_url' | 'proxy_runtimes') =>
+        new SettingsRepo(db).get(key),
+    };
+    const bridge = new RuntimeBridge(opts.hostClient, proxySettings);
+    const cache = new RunStateCache();
+    const inboxAck: InboxAckSink = {
+      // 2a placeholder — 2b wires through ConversationInboxRepo.
+      markDelivered: () => {},
+      markUndelivered: () => {},
+    };
+    const eventHandler = new RuntimeEventHandler({
+      client: opts.hostClient,
+      bridge,
+      cache,
+      events: ctx.events,
+      inboxAck,
+      logger,
+    });
+    ctx.runtimeHost = new DaemonAgentRuntimeHost({
+      client: opts.hostClient,
+      bridge,
+      cache,
+      eventHandler,
+    });
+  } else {
+    // legacy: runtimeHost === the in-process ConversationManager. This
+    // is the zero-behavior-change default; nothing else in the boot
+    // flow changes.
+    ctx.runtimeHost = ctx.conversationManager;
+  }
+  logger.info(
+    {
+      mode: runtimeHostBanner.mode,
+      rollback: runtimeHostBanner.rollback,
+    },
+    runtimeHostBanner.note,
+  );
+
   ctx.channelService = new ChannelService({
     db,
     conversations: new ConversationRepo(db),
@@ -143,7 +233,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     agents: new AgentRepo(db),
     messages: new MessageRepo(db),
     events: ctx.events,
-    conversationManager: ctx.conversationManager,
+    runtimeHost: ctx.runtimeHost,
     logger,
   });
   ctx.conversationMessageService = new ConversationMessageService({
@@ -154,7 +244,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     notifications: new NotificationRepo(db),
     workspaces: new WorkspaceRepo(db, { workspacesRoot }),
     attachmentService,
-    conversationManager: ctx.conversationManager,
+    runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger,
   });
@@ -164,7 +254,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     messages: new MessageRepo(db),
     agents: new AgentRepo(db),
     workspaces: new WorkspaceRepo(db, { workspacesRoot }),
-    conversationManager: ctx.conversationManager,
+    runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger,
     serverConfig: () => ctx.serverConfig,
@@ -175,7 +265,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     conversations: new ConversationRepo(db),
     messages: new MessageRepo(db),
     agents: new AgentRepo(db),
-    conversationManager: ctx.conversationManager,
+    runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger,
   });
@@ -186,11 +276,11 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     messages: new MessageRepo(db),
     agents: new AgentRepo(db),
     settings: new SettingsRepo(db),
-    conversationManager: ctx.conversationManager,
+    runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger,
   });
-  ctx.conversationManager.reconcileOnBoot();
+  ctx.runtimeHost.reconcileOnBoot();
   // Boot recovery + start scheduling AFTER reconcile so any handles the
   // CM brings back are visible to the first wake delivery.
   ctx.scheduleService.start();
@@ -247,7 +337,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
             ctx.scheduleService.stop();
             // Phase 1: stop all agents (must finish before activity-log flush
             // so terminal events are written before the stream closes).
-            await ctx.conversationManager.stopAll().catch(() => undefined);
+            await ctx.runtimeHost.stopAll().catch(() => undefined);
 
             // Phase 2: close WS lifecycle before the HTTP drain removes sockets.
             await eventWs?.close();
@@ -265,7 +355,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
             const serverDrained = new Promise<void>(res => server.close(() => res()));
             if ('closeAllConnections' in server) server.closeAllConnections();
             await Promise.allSettled([
-              ctx.conversationManager.closeActivityLog(),
+              ctx.runtimeHost.closeActivityLog(),
               serverDrained,
             ]);
 
@@ -292,6 +382,13 @@ export {
   type FileLogger,
   type FileLoggerOptions,
 } from './logger.js';
+export {
+  DEFAULT_AGENT_RUNTIME_HOST_MODE,
+  SILVERHAND_RUNTIME_HOST_ENV,
+  describeAgentRuntimeHostMode,
+  parseAgentRuntimeHostMode,
+  type AgentRuntimeHostMode,
+} from './runtime/runtime-host-mode.js';
 
 function assertLauncherResolvable(command: string, label = 'launcher'): void {
   if (isAbsolute(command)) {

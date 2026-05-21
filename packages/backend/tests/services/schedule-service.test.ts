@@ -123,7 +123,7 @@ function bootstrap(): Fixture {
     messages,
     agents,
     settings: new SettingsRepo(db),
-    conversationManager: fake as unknown as ConversationManager,
+    runtimeHost: fake as unknown as ConversationManager,
     events,
     logger,
     now: () => currentNow,

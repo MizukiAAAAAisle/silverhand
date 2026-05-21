@@ -4,7 +4,16 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { isSafeOpenExtension } from '@silverhand/shared';
-import { startBackend, createCategorizedLoggers, type CategorizedLoggers, type RunningBackend, type FileLogger } from '@silverhand/backend';
+import {
+  startBackend,
+  createCategorizedLoggers,
+  type CategorizedLoggers,
+  type RunningBackend,
+  type FileLogger,
+  parseAgentRuntimeHostMode,
+  describeAgentRuntimeHostMode,
+  SILVERHAND_RUNTIME_HOST_ENV,
+} from '@silverhand/backend';
 import { HostClient, spawnDaemonChild, type DaemonHandle } from '@silverhand/host';
 import { loadOrCreateServerConfig, databasePath, silverhandDir, writeServerConfig } from './config.js';
 
@@ -231,14 +240,42 @@ async function bootstrap(): Promise<void> {
         'dev CDP remote debugging enabled',
       );
     }
-    // PR-1: spawn the silverhand-daemon child BEFORE backend boots and
-    // hand a connected HostClient to startBackend. The daemon is the
-    // future home for spawn/inbox/run-state (PR-2); right now it
-    // exposes only ping/status/echo. Failure to spawn the daemon must
-    // NOT fail the app — backend still boots without it; we log a
-    // warning so the operator notices.
-    const paths = daemonPaths();
-    try {
+    // Runtime host gate (#task:512 sub-commit 2a). The
+    // SILVERHAND_RUNTIME_HOST env var decides whether the daemon
+    // child is spawned at all. Parsed by the same pure helper backend
+    // uses, so the two layers cannot drift on default / accepted
+    // values / failure mode (`parseAgentRuntimeHostMode` throws loudly
+    // on an unknown value; we do NOT silently fall back to legacy).
+    //
+    //   - `legacy` (default, unset, or `=legacy`): the legacy
+    //     in-process ConversationManager path. We do NOT spawn a
+    //     daemon and do NOT new HostClient — the legacy fallback must
+    //     not have a hidden dependency on the daemon being reachable.
+    //   - `daemon`: spawn the daemon, connect HostClient, and on
+    //     either failure abort bootstrap. Silent fallback to legacy
+    //     would mask a configuration mistake from the operator who
+    //     explicitly asked for daemon mode.
+    const runtimeHostMode = parseAgentRuntimeHostMode(
+      process.env[SILVERHAND_RUNTIME_HOST_ENV],
+    );
+    const runtimeHostBanner = describeAgentRuntimeHostMode(runtimeHostMode);
+    logger.info(
+      {
+        mode: runtimeHostBanner.mode,
+        rollback: runtimeHostBanner.rollback,
+      },
+      `electron-main: ${runtimeHostBanner.note}`,
+    );
+
+    if (runtimeHostMode === 'daemon') {
+      // PR-2 step 2 commit 5 sub-commit 2a: scaffolding only. The
+      // daemon child is spawned and HostClient connected so backend
+      // can route runtime intents through it, but the actual
+      // DaemonAgentRuntimeHost shim throws on every method until 2b
+      // ships the real bridge delegations. Operators opting into
+      // daemon mode in 2a will see those throws and roll back via
+      // `SILVERHAND_RUNTIME_HOST=legacy`; that's by design.
+      const paths = daemonPaths();
       daemon = await spawnDaemonChild({
         launcher: resolveDaemonLauncher(),
         socketPath: paths.socketPath,
@@ -258,12 +295,22 @@ async function bootstrap(): Promise<void> {
       try {
         await hostClient.connect();
       } catch (err) {
-        logger.warn(
-          { err: err instanceof Error ? err.message : String(err) },
-          'HostClient initial connect failed; continuing without host plumbing',
-        );
+        // daemon mode requires a live HostClient — surface the failure
+        // loudly. Do NOT downgrade to legacy: the operator explicitly
+        // requested daemon mode, and silent fallback would obscure a
+        // misconfiguration. Tear down what we partially created
+        // before re-throwing so the bootstrap catch can clean up the
+        // daemon child.
         await hostClient.close().catch(() => undefined);
         hostClient = null;
+        await daemon?.kill({ gracefulMs: 1_000 }).catch(() => undefined);
+        daemon = null;
+        throw new Error(
+          `${SILVERHAND_RUNTIME_HOST_ENV}=daemon: HostClient failed to connect ` +
+            `to the spawned silverhand-daemon. To roll back, restart with ` +
+            `${SILVERHAND_RUNTIME_HOST_ENV}=legacy (or unset the variable). ` +
+            `Underlying error: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
       daemon.onExit(info => {
         logger?.error(
@@ -271,12 +318,10 @@ async function bootstrap(): Promise<void> {
           'silverhand-daemon exited and exceeded restart budget',
         );
       });
-    } catch (err) {
-      logger.warn(
-        { err: err instanceof Error ? err.message : String(err) },
-        'failed to spawn silverhand-daemon; backend will boot without host plumbing',
-      );
     }
+    // legacy mode: no daemon spawn, no HostClient — startBackend will
+    // see `hostClient: undefined` and route everything through the
+    // in-process ConversationManager exactly as before.
     backend = await startBackend({
       dbPath: databasePath(),
       silverhandDir: silverhandDir(),

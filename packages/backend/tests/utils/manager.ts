@@ -172,6 +172,7 @@ export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {})
     events: new ScopeEventBus(),
     silverhandCliLauncher: { command: 'true', args: [] },
     agentTokens: new AgentTokenStore(),
+    runtimeHost: undefined as unknown as ConversationManager,
     conversationManager: undefined as unknown as ConversationManager,
   };
   // Bootstrap local host (matches what startBackend would do)
@@ -179,6 +180,7 @@ export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {})
 
   const manager = new ConversationManager(ctx);
   ctx.conversationManager = manager;
+  ctx.runtimeHost = manager;
   ctx.channelService = new ChannelService({
     db,
     conversations: new ConversationRepo(db),
@@ -186,7 +188,7 @@ export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {})
     agents: new AgentRepo(db),
     messages: new MessageRepo(db),
     events: ctx.events,
-    conversationManager: ctx.conversationManager,
+    runtimeHost: ctx.runtimeHost,
     logger: silentLogger,
   });
   ctx.conversationMessageService = new ConversationMessageService({
@@ -197,7 +199,7 @@ export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {})
     notifications: new NotificationRepo(db),
     workspaces: new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot }),
     attachmentService,
-    conversationManager: ctx.conversationManager,
+    runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger: silentLogger,
   });
@@ -207,7 +209,7 @@ export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {})
     messages: new MessageRepo(db),
     agents: new AgentRepo(db),
     workspaces: new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot }),
-    conversationManager: ctx.conversationManager,
+    runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger: silentLogger,
     serverConfig: () => ctx.serverConfig,
@@ -218,7 +220,7 @@ export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {})
     conversations: new ConversationRepo(db),
     messages: new MessageRepo(db),
     agents: new AgentRepo(db),
-    conversationManager: ctx.conversationManager,
+    runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger: silentLogger,
   });
@@ -229,7 +231,7 @@ export async function buildManagerHarness(opts: BuildManagerHarnessOptions = {})
     messages: new MessageRepo(db),
     agents: new AgentRepo(db),
     settings: new SettingsRepo(db),
-    conversationManager: ctx.conversationManager,
+    runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger: silentLogger,
     disableAutoTick: true,

@@ -7,7 +7,7 @@ import {
   systemSubtype,
 } from '@silverhand/shared';
 import type { BackendLogger } from '../context.js';
-import type { ConversationManager } from '../conversation-manager.js';
+import type { AgentRuntimeHost } from '../runtime/agent-runtime-host.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
@@ -125,7 +125,7 @@ export interface ThreadServiceOptions {
   messages: MessageRepo;
   agents: AgentRepo;
   workspaces: WorkspaceRepo;
-  conversationManager: ConversationManager;
+  runtimeHost: AgentRuntimeHost;
   events: ScopeEventBus;
   logger: BackendLogger;
   serverConfig: ServerConfig | (() => ServerConfig);
@@ -179,7 +179,7 @@ export class ThreadService {
   private readonly messages: MessageRepo;
   private readonly agents: AgentRepo;
   private readonly workspaces: WorkspaceRepo;
-  private readonly conversationManager: ConversationManager;
+  private readonly runtimeHost: AgentRuntimeHost;
   private readonly events: ScopeEventBus;
   private readonly logger: BackendLogger;
   private readonly getServerConfig: () => ServerConfig;
@@ -191,7 +191,7 @@ export class ThreadService {
     this.messages = opts.messages;
     this.agents = opts.agents;
     this.workspaces = opts.workspaces;
-    this.conversationManager = opts.conversationManager;
+    this.runtimeHost = opts.runtimeHost;
     this.events = opts.events;
     this.logger = opts.logger;
     const serverConfig = opts.serverConfig;
@@ -469,7 +469,7 @@ export class ThreadService {
         thread_id: closed.thread.id,
       },
     });
-    this.conversationManager.resolveConversationRuns(
+    this.runtimeHost.resolveConversationRuns(
       closed.thread.id,
       CONVERSATION_CLOSED,
     );
@@ -591,7 +591,7 @@ export class ThreadService {
     reason: string,
   ): Promise<void> {
     try {
-      await this.conversationManager.deliverMessage(conversationId, agentId, messageId);
+      await this.runtimeHost.deliverMessage(conversationId, agentId, messageId);
     } catch (err) {
       this.logger.warn({ conversationId, agentId, messageId, err }, reason);
     }
@@ -608,7 +608,7 @@ export class ThreadService {
     try {
       await Promise.all(
         selected.map(ca =>
-          this.conversationManager.deliverMessage(
+          this.runtimeHost.deliverMessage(
             conversationId,
             ca.agent_id,
             messageId,
@@ -629,7 +629,7 @@ export class ThreadService {
     policy: CreateThreadCoreInput['autoStart'],
   ): Promise<void> {
     if (policy.mode === 'seedOnly') {
-      await this.conversationManager.start(conversationId, policy.agentId).catch(err => {
+      await this.runtimeHost.start(conversationId, policy.agentId).catch(err => {
         this.logger.warn(
           { conversationId, agentId: policy.agentId, err },
           'thread-service: auto-start on user-created thread failed',
@@ -642,7 +642,7 @@ export class ThreadService {
         .filter(ca => ca.agent_id !== (policy.excludeAgentId ?? null))
         .filter(ca => ca.status !== 'active' && ca.status !== 'starting')
         .map(ca =>
-          this.conversationManager.start(conversationId, ca.agent_id).catch(err => {
+          this.runtimeHost.start(conversationId, ca.agent_id).catch(err => {
             this.logger.warn(
               { conversationId, agentId: ca.agent_id, err },
               'thread-service: auto-start on agent-created thread failed',
@@ -658,7 +658,7 @@ export class ThreadService {
   ): Promise<void> {
     await Promise.all(
       members.map(ca =>
-        this.conversationManager.stop(conversationId, ca.agent_id, 'hard').catch(err => {
+        this.runtimeHost.stop(conversationId, ca.agent_id, 'hard').catch(err => {
           this.logger.warn(
             { conversationId, agentId: ca.agent_id, err },
             'thread-service: stop closed thread member failed',

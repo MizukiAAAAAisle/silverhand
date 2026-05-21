@@ -5,7 +5,7 @@ import type {
   SendMessageTarget,
 } from '@silverhand/shared';
 import type { BackendLogger } from '../context.js';
-import type { ConversationManager } from '../conversation-manager.js';
+import type { AgentRuntimeHost } from '../runtime/agent-runtime-host.js';
 import { ccMentionsFromUserMessage } from '../mention-cc.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
@@ -178,7 +178,7 @@ export interface ConversationMessageServiceOptions {
   notifications: NotificationRepo;
   workspaces: WorkspaceRepo;
   attachmentService: AttachmentService;
-  conversationManager: ConversationManager;
+  runtimeHost: AgentRuntimeHost;
   events: ScopeEventBus;
   logger: BackendLogger;
 }
@@ -200,7 +200,7 @@ export class ConversationMessageService {
   private readonly notifications: NotificationRepo;
   private readonly workspaces: WorkspaceRepo;
   private readonly attachmentService: AttachmentService;
-  private readonly conversationManager: ConversationManager;
+  private readonly runtimeHost: AgentRuntimeHost;
   private readonly events: ScopeEventBus;
   private readonly logger: BackendLogger;
 
@@ -212,7 +212,7 @@ export class ConversationMessageService {
     this.notifications = opts.notifications;
     this.workspaces = opts.workspaces;
     this.attachmentService = opts.attachmentService;
-    this.conversationManager = opts.conversationManager;
+    this.runtimeHost = opts.runtimeHost;
     this.events = opts.events;
     this.logger = opts.logger;
   }
@@ -300,7 +300,7 @@ export class ConversationMessageService {
     }
 
     if (policy.resolveRun && input.actor.kind === 'agent') {
-      this.conversationManager.resolveRun(
+      this.runtimeHost.resolveRun(
         txResult.sourceConversation.id,
         input.actor.agentId,
         REPLIED,
@@ -479,7 +479,7 @@ export class ConversationMessageService {
     try {
       await Promise.all(
         selected.map(ca =>
-          this.conversationManager.deliverMessage(
+          this.runtimeHost.deliverMessage(
             conversationId,
             ca.agent_id,
             messageId,
@@ -510,7 +510,7 @@ export class ConversationMessageService {
         conversations: this.conversations,
         messages: this.messages,
         notifications: this.notifications,
-        conversationManager: this.conversationManager,
+        runtimeHost: this.runtimeHost,
         logger: this.logger,
         events: this.events,
       });
@@ -530,7 +530,7 @@ export class ConversationMessageService {
       recipients
         .filter(ca => ca.status !== 'active' && ca.status !== 'starting')
         .map(ca =>
-          this.conversationManager.start(conversationId, ca.agent_id).catch(err => {
+          this.runtimeHost.start(conversationId, ca.agent_id).catch(err => {
             this.logger.warn(
               { conversationId, agentId: ca.agent_id, err },
               'conversation-message-service: auto-start on message send failed',

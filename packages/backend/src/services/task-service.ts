@@ -16,7 +16,7 @@ import {
   taskSystemSubtype,
 } from '@silverhand/shared';
 import type { BackendLogger } from '../context.js';
-import type { ConversationManager } from '../conversation-manager.js';
+import type { AgentRuntimeHost } from '../runtime/agent-runtime-host.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
@@ -104,7 +104,7 @@ export interface TaskServiceOptions {
   conversations: ConversationRepo;
   messages: MessageRepo;
   agents: AgentRepo;
-  conversationManager: ConversationManager;
+  runtimeHost: AgentRuntimeHost;
   events: ScopeEventBus;
   logger: BackendLogger;
 }
@@ -209,7 +209,7 @@ export class TaskService {
   private readonly conversations: ConversationRepo;
   private readonly messages: MessageRepo;
   private readonly agents: AgentRepo;
-  private readonly conversationManager: ConversationManager;
+  private readonly runtimeHost: AgentRuntimeHost;
   private readonly events: ScopeEventBus;
   private readonly logger: BackendLogger;
 
@@ -218,7 +218,7 @@ export class TaskService {
     this.conversations = opts.conversations;
     this.messages = opts.messages;
     this.agents = opts.agents;
-    this.conversationManager = opts.conversationManager;
+    this.runtimeHost = opts.runtimeHost;
     this.events = opts.events;
     this.logger = opts.logger;
   }
@@ -1212,7 +1212,7 @@ export class TaskService {
     // Best-effort, fire-and-forget delivery to recipients.
     const recipients = this.conversations.listAgents(conversationId);
     for (const ca of recipients) {
-      void this.conversationManager
+      void this.runtimeHost
         .deliverMessage(conversationId, ca.agent_id, sysMsg.id)
         .catch(err => {
           this.logger.warn(

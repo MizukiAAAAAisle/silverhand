@@ -126,7 +126,7 @@ describe('ccMentionsFromUserMessage — human membership writes (v25 PR-A blocke
         conversations: t.conversations,
         messages: t.messages,
         notifications: t.notifications,
-        conversationManager: t.fake as unknown as ConversationManager,
+        runtimeHost: t.fake as unknown as ConversationManager,
         logger: t.logger,
         events: t.events,
       });
@@ -182,7 +182,7 @@ describe('ccMentionsFromUserMessage — human membership writes (v25 PR-A blocke
         conversations: t.conversations,
         messages: t.messages,
         notifications: t.notifications,
-        conversationManager: t.fake as unknown as ConversationManager,
+        runtimeHost: t.fake as unknown as ConversationManager,
         logger: t.logger,
         events: t.events,
       });
@@ -230,7 +230,7 @@ describe('ccMentionsFromUserMessage — human membership writes (v25 PR-A blocke
         conversations: t.conversations,
         messages: t.messages,
         notifications: t.notifications,
-        conversationManager: t.fake as unknown as ConversationManager,
+        runtimeHost: t.fake as unknown as ConversationManager,
         logger: t.logger,
         events: t.events,
       });
@@ -279,7 +279,7 @@ describe('ccMentionsFromUserMessage — human membership writes (v25 PR-A blocke
         conversations: t.conversations,
         messages: t.messages,
         notifications: t.notifications,
-        conversationManager: t.fake as unknown as ConversationManager,
+        runtimeHost: t.fake as unknown as ConversationManager,
         logger: t.logger,
         events: t.events,
       });
@@ -299,7 +299,7 @@ describe('ccMentionsFromUserMessage — human membership writes (v25 PR-A blocke
         conversations: t.conversations,
         messages: t.messages,
         notifications: t.notifications,
-        conversationManager: t.fake as unknown as ConversationManager,
+        runtimeHost: t.fake as unknown as ConversationManager,
         logger: t.logger,
         events: t.events,
       });
