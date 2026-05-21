@@ -45,6 +45,10 @@ import { ConversationRepo as RealConversationRepo } from '../../src/repos/conver
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
+import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
+import { UserRepo } from '../../src/repos/user-repo.js';
+import { SettingsRepo } from '../../src/repos/settings-repo.js';
+import { RuntimeDeliveryCoordinator } from '../../src/runtime/delivery-coordinator.js';
 import type { BackendLogger } from '../../src/context.js';
 import { openTestDb, makeTempSilverhandDir } from '../utils/db.js';
 
@@ -106,6 +110,22 @@ const noopDb = {
   transaction: <T>(fn: () => T) => () => fn(),
 } as unknown as Database;
 
+const noopInboxRepo = {
+  ensureDelivery: () => {
+    throw new Error('noopInboxRepo.ensureDelivery invoked');
+  },
+  markDelivered: () => {},
+  listPending: () => [],
+} as unknown as ConversationInboxRepo;
+
+const noopUserRepo = {
+  get: () => null,
+} as unknown as UserRepo;
+
+const noopSettingsRepo = {
+  getViewerUserId: () => null,
+} as unknown as SettingsRepo;
+
 function makeFakeClient(overrides: ClientOverrides = {}): HostClient {
   // Methods absent from `overrides` are unreachable in the tests below
   // (the live methods explicitly delegate to bridge.runtimeStop /
@@ -158,11 +178,16 @@ function makeHost(
     agents?: AgentRepo;
     messages?: MessageRepo;
     db?: Database;
+    inboxes?: ConversationInboxRepo;
+    users?: UserRepo;
+    settings?: SettingsRepo;
+    coordinator?: RuntimeDeliveryCoordinator;
+    cache?: RunStateCache;
   } = {},
 ): HostFixture {
   const client = makeFakeClient(clientOverrides);
   const bridge = new RuntimeBridge(client, { get: () => null });
-  const cache = new RunStateCache();
+  const cache = extraDeps.cache ?? new RunStateCache();
   const events: HostFixture['events'] = { publishes: [] };
   const publisher: EventPublisher = {
     publish: (conversationId, payload) => {
@@ -180,6 +205,21 @@ function makeHost(
     events: publisher,
     inboxAck: { markDelivered: () => {}, markUndelivered: () => {} },
   });
+  const inboxes = extraDeps.inboxes ?? noopInboxRepo;
+  const settings = extraDeps.settings ?? noopSettingsRepo;
+  const users = extraDeps.users ?? noopUserRepo;
+  // Default coordinator passes through to a noop bridge / inbox sink.
+  // Tests that want to observe coordinator interactions inject one
+  // explicitly via `extraDeps.coordinator` (typically a real
+  // RuntimeDeliveryCoordinator wrapping mocked bridge + sink) so the
+  // submitLiveDelivery decision is observable.
+  const coordinator =
+    extraDeps.coordinator ??
+    new RuntimeDeliveryCoordinator({
+      bridge: { runtimeWake: () => Promise.reject(new Error('noop wake')) },
+      cache,
+      inboxAck: { markDelivered: () => {} },
+    });
   const host = new DaemonAgentRuntimeHost({
     client,
     bridge,
@@ -189,6 +229,10 @@ function makeHost(
     conversations,
     agents: extraDeps.agents ?? noopAgentRepo,
     messages: extraDeps.messages ?? noopMessageRepo,
+    inboxes,
+    users,
+    settings,
+    coordinator,
     db: extraDeps.db ?? noopDb,
     logger: noopLogger,
   });
@@ -685,6 +729,14 @@ describe('DaemonAgentRuntimeHost — stop (soft)', () => {
       conversations,
       agents,
       messages: noopMessageRepo,
+      inboxes: noopInboxRepo,
+      users: noopUserRepo,
+      settings: noopSettingsRepo,
+      coordinator: new RuntimeDeliveryCoordinator({
+        bridge: { runtimeWake: () => Promise.reject(new Error('noop')) },
+        cache,
+        inboxAck: { markDelivered: () => {} },
+      }),
       db: noopDb,
       logger: customLogger,
     });
@@ -763,17 +815,6 @@ describe('DaemonAgentRuntimeHost — not-yet-implemented (2b-ii scaffold)', () =
     });
     assertScaffoldingError(err, 'start');
   });
-
-  it('deliverMessage() throws — does NOT silently mark delivered', async () => {
-    // Cindy `0G5uJBydO_4qt_2r`: "不能假装 delivered、也不能改变 markDelivered
-    // 时点." The throw is the contract: no inbox row state is mutated.
-    const { host } = makeHost();
-    let err: unknown;
-    await host.deliverMessage(CONV, AGENT_X, 'msg-1').catch(e => {
-      err = e;
-    });
-    assertScaffoldingError(err, 'deliverMessage');
-  });
 });
 
 describe('DaemonAgentRuntimeHost — constructor', () => {
@@ -800,6 +841,16 @@ describe('DaemonAgentRuntimeHost — constructor', () => {
           conversations: noopConversationRepo,
           agents: noopAgentRepo,
           messages: noopMessageRepo,
+          inboxes: noopInboxRepo,
+          users: noopUserRepo,
+          settings: noopSettingsRepo,
+          coordinator: new RuntimeDeliveryCoordinator({
+            bridge: {
+              runtimeWake: () => Promise.reject(new Error('noop')),
+            },
+            cache,
+            inboxAck: { markDelivered: () => {} },
+          }),
           db: noopDb,
           logger: noopLogger,
         }),
@@ -1382,6 +1433,487 @@ describe('DaemonAgentRuntimeHost — clearSession', () => {
       await host.clearSession(fix.channelId, fix.agentId, null);
       const audit = fix.lastMessage()!;
       expect(audit.content).toMatch(/^A user cleared/);
+    } finally {
+      fix.cleanup();
+    }
+  });
+});
+
+// ── deliverMessage ──────────────────────────────────────────────────
+//
+// Slice 4b: `deliverMessage` orchestrates inbox `ensureDelivery` →
+// driver encode → `coordinator.submitLiveDelivery`. The coordinator
+// owns the wake-vs-queue-vs-respawn decision + `markDelivered` timing
+// (Cindy `0G5uJBydO_4qt_2r`: backend NEVER marks rows delivered
+// outside the wake ack path). Test surface:
+//
+//   1. Missing message → log warn + return; no inbox write.
+//   2. Already-delivered row → log + return; no coordinator call.
+//   3. Agent not in agents table → log warn + return; row stays
+//      pending (ensureDelivery already ran — that's idempotent).
+//   4. No cache entry + driver NOT oneShot → log + return; no
+//      coordinator call; row stays pending for next start drain.
+//   5. No cache entry + driver IS oneShot → call `this.start()` (still
+//      throws in 4b but caught + logged; row stays pending).
+//   6. Cache entry exists, driver.encodeStdinMessage returns null →
+//      log + return; no coordinator call.
+//   7. Cache entry exists, driver returns a line → coordinator.
+//      submitLiveDelivery called with payload + driver capability
+//      snapshot.
+
+interface DeliverFixture {
+  cleanup: () => void;
+  db: Database;
+  channelId: string;
+  agentId: string;
+  agents: AgentRepo;
+  conversations: ConversationRepo;
+  messages: MessageRepo;
+  inboxes: ConversationInboxRepo;
+  users: UserRepo;
+  settings: SettingsRepo;
+  /** Insert a message authored by the registered viewer and return id. */
+  insertViewerMessage(content: string): string;
+}
+
+function makeDeliverFixture(opts: {
+  agentRuntime?: 'claude' | 'cursor';
+} = {}): DeliverFixture {
+  const { db, viewerUserId, localHostId } = openTestDb();
+  const { workspacesRoot, cleanup } = makeTempSilverhandDir();
+  const conversations = new RealConversationRepo(db);
+  const agents = new AgentRepo(db);
+  const workspaces = new WorkspaceRepo(db, { workspacesRoot });
+  const messages = new MessageRepo(db);
+  const inboxes = new ConversationInboxRepo(db);
+  const users = new UserRepo(db);
+  const settings = new SettingsRepo(db);
+
+  const ws = workspaces.insert({
+    name: 'ws-deliver',
+    description: null,
+    workspacePath: `${workspacesRoot}/ws-deliver`,
+    workspaceHostId: localHostId,
+  });
+  const agent = agents.create(
+    { name: 'agent-deliver', runtime: opts.agentRuntime ?? 'claude', host_id: localHostId },
+    localHostId,
+    viewerUserId,
+  );
+  const channel = conversations.insertChannel({
+    workspaceId: ws.id,
+    workspacePath: ws.workspace_path,
+    title: 'ws-deliver',
+    spawnedByAgentId: null,
+  });
+  conversations.addAgent(channel.id, agent.id);
+
+  return {
+    cleanup,
+    db,
+    channelId: channel.id,
+    agentId: agent.id,
+    agents,
+    conversations,
+    messages,
+    inboxes,
+    users,
+    settings,
+    insertViewerMessage: (content: string) => {
+      const dto = messages.insertForConversation({
+        conversationId: channel.id,
+        fromKind: 'user',
+        fromUserId: viewerUserId,
+        content,
+      });
+      return dto.id;
+    },
+  };
+}
+
+/** Coordinator with mocked bridge + sink so deliverMessage tests can
+ *  observe submitLiveDelivery outcomes without a real daemon. */
+function makeObservableCoordinator(cache: RunStateCache): {
+  coordinator: RuntimeDeliveryCoordinator;
+  wakeCalls: Array<{
+    conv_id: string;
+    agent_id: string;
+    delivery_ids: number[];
+    payload: string;
+  }>;
+  marked: number[][];
+  setWakeResponse(r: { delivered: true; ids?: number[] } | { delivered: false; reason: 'not_running' | 'not_initialized' | 'startup_pending' | 'draining' | 'driver_refused' }): void;
+} {
+  let next:
+    | { delivered: true; ids?: number[] }
+    | { delivered: false; reason: 'not_running' | 'not_initialized' | 'startup_pending' | 'draining' | 'driver_refused' }
+    = { delivered: true };
+  const wakeCalls: Array<{
+    conv_id: string;
+    agent_id: string;
+    delivery_ids: number[];
+    payload: string;
+  }> = [];
+  const marked: number[][] = [];
+  const coordinator = new RuntimeDeliveryCoordinator({
+    bridge: {
+      runtimeWake: async params => {
+        wakeCalls.push({
+          conv_id: params.conversation_id,
+          agent_id: params.agent_id,
+          delivery_ids: params.delivery_ids,
+          payload: params.payload,
+        });
+        if (next.delivered) {
+          return { delivered: true, delivery_ids: next.ids ?? params.delivery_ids };
+        }
+        return {
+          delivered: false,
+          reason: next.reason,
+          delivery_ids: params.delivery_ids,
+        };
+      },
+    },
+    cache,
+    inboxAck: {
+      markDelivered: ids => marked.push([...ids]),
+    },
+  });
+  return {
+    coordinator,
+    wakeCalls,
+    marked,
+    setWakeResponse: r => {
+      next = r;
+    },
+  };
+}
+
+describe('DaemonAgentRuntimeHost — deliverMessage', () => {
+  it('missing message → log warn + return; no inbox write, no coordinator call', async () => {
+    const fix = makeDeliverFixture();
+    try {
+      const { coordinator, wakeCalls } = makeObservableCoordinator(
+        new RunStateCache(),
+      );
+      const { host } = makeHost({}, fix.conversations, {
+        agents: fix.agents,
+        messages: fix.messages,
+        inboxes: fix.inboxes,
+        users: fix.users,
+        settings: fix.settings,
+        coordinator,
+        db: fix.db,
+      });
+      await host.deliverMessage(fix.channelId, fix.agentId, 'msg-does-not-exist');
+      expect(wakeCalls).toEqual([]);
+      // No inbox row created either — ensureDelivery requires a valid
+      // message FK so we short-circuit before touching the inbox.
+      const inboxCount = fix.db
+        .prepare<[string, string], { c: number }>(
+          'SELECT COUNT(*) AS c FROM conversation_inboxes WHERE conversation_id = ? AND agent_id = ?',
+        )
+        .get(fix.channelId, fix.agentId)?.c ?? 0;
+      expect(inboxCount).toBe(0);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('already-delivered inbox row → log + return; no coordinator call', async () => {
+    const fix = makeDeliverFixture();
+    try {
+      const msgId = fix.insertViewerMessage('hello');
+      // Pre-create + mark delivered.
+      const pre = fix.inboxes.ensureDelivery(fix.channelId, fix.agentId, msgId);
+      fix.inboxes.markDelivered([pre.inboxId]);
+
+      const { coordinator, wakeCalls } = makeObservableCoordinator(
+        new RunStateCache(),
+      );
+      const { host } = makeHost({}, fix.conversations, {
+        agents: fix.agents,
+        messages: fix.messages,
+        inboxes: fix.inboxes,
+        users: fix.users,
+        settings: fix.settings,
+        coordinator,
+        db: fix.db,
+      });
+      await host.deliverMessage(fix.channelId, fix.agentId, msgId);
+      expect(wakeCalls).toEqual([]);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('agent missing from agents table → log warn + return; row stays pending', async () => {
+    const fix = makeDeliverFixture();
+    try {
+      const msgId = fix.insertViewerMessage('hello');
+      const { coordinator, wakeCalls } = makeObservableCoordinator(
+        new RunStateCache(),
+      );
+      const { host } = makeHost({}, fix.conversations, {
+        // Stub agents to return null even though the real fix.agents
+        // has the row — exercises the missing-agent branch directly.
+        agents: { get: () => null } as unknown as AgentRepo,
+        messages: fix.messages,
+        inboxes: fix.inboxes,
+        users: fix.users,
+        settings: fix.settings,
+        coordinator,
+        db: fix.db,
+      });
+      await host.deliverMessage(fix.channelId, fix.agentId, msgId);
+      expect(wakeCalls).toEqual([]);
+      // ensureDelivery DID run (idempotent insert) but the row is left
+      // pending (no markDelivered).
+      const row = fix.db
+        .prepare<[string], { delivered_at: number | null }>(
+          'SELECT delivered_at FROM conversation_inboxes WHERE message_id = ?',
+        )
+        .get(msgId);
+      expect(row?.delivered_at).toBeNull();
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('no cache entry + non-oneShot driver → log + return; row stays pending', async () => {
+    const fix = makeDeliverFixture(); // claude (non-oneShot)
+    try {
+      const msgId = fix.insertViewerMessage('hello');
+      const cache = new RunStateCache();
+      // No applyRuntimeStatus → no cache entry for (conv, agent).
+      const { coordinator, wakeCalls } = makeObservableCoordinator(cache);
+      const { host } = makeHost({}, fix.conversations, {
+        agents: fix.agents,
+        messages: fix.messages,
+        inboxes: fix.inboxes,
+        users: fix.users,
+        settings: fix.settings,
+        coordinator,
+        db: fix.db,
+      });
+      await host.deliverMessage(fix.channelId, fix.agentId, msgId);
+      expect(wakeCalls).toEqual([]);
+      // Row exists + still pending.
+      const row = fix.db
+        .prepare<[string], { delivered_at: number | null }>(
+          'SELECT delivered_at FROM conversation_inboxes WHERE message_id = ?',
+        )
+        .get(msgId);
+      expect(row?.delivered_at).toBeNull();
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('no cache entry + oneShot driver → calls start() (which still throws in 4b); error caught + logged; row stays pending', async () => {
+    const fix = makeDeliverFixture({ agentRuntime: 'cursor' }); // oneShot
+    try {
+      const msgId = fix.insertViewerMessage('hello');
+      const cache = new RunStateCache();
+      const { coordinator, wakeCalls } = makeObservableCoordinator(cache);
+      const errors: Array<{ obj: unknown; msg: string }> = [];
+      const customLogger: BackendLogger = {
+        ...noopLogger,
+        error: (obj: unknown, msg: string) => errors.push({ obj, msg }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any;
+      const client = makeFakeClient({});
+      const bridge = new RuntimeBridge(client, { get: () => null });
+      const events: HostFixture['events'] = { publishes: [] };
+      const publisher: EventPublisher = {
+        publish: (cid, payload) =>
+          events.publishes.push({
+            conversationId: cid,
+            kind: payload.kind,
+            payload: payload.payload,
+          }),
+      };
+      const eventHandler = new RuntimeEventHandler({
+        client,
+        bridge,
+        cache,
+        events: publisher,
+        inboxAck: { markDelivered: () => {}, markUndelivered: () => {} },
+      });
+      const host = new DaemonAgentRuntimeHost({
+        client,
+        bridge,
+        cache,
+        eventHandler,
+        events: publisher,
+        conversations: fix.conversations,
+        agents: fix.agents,
+        messages: fix.messages,
+        inboxes: fix.inboxes,
+        users: fix.users,
+        settings: fix.settings,
+        coordinator,
+        db: fix.db,
+        logger: customLogger,
+      });
+      await host.deliverMessage(fix.channelId, fix.agentId, msgId);
+      // start() threw inside the .catch; error log captured.
+      const startErrors = errors.filter(e =>
+        e.msg.includes('auto-start on deliverMessage failed'),
+      );
+      expect(startErrors.length).toBe(1);
+      // Coordinator NOT called (the oneShot path bypasses
+      // submitLiveDelivery — respawn route exclusively).
+      expect(wakeCalls).toEqual([]);
+      // Row still pending.
+      const row = fix.db
+        .prepare<[string], { delivered_at: number | null }>(
+          'SELECT delivered_at FROM conversation_inboxes WHERE message_id = ?',
+        )
+        .get(msgId);
+      expect(row?.delivered_at).toBeNull();
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('cache entry exists, claude driver in ready phase → coordinator.submitLiveDelivery + bridge.runtimeWake → markDelivered', async () => {
+    const fix = makeDeliverFixture(); // claude
+    try {
+      const msgId = fix.insertViewerMessage('@agent-deliver please look');
+      const cache = new RunStateCache();
+      cache.applyRuntimeStatus(DAEMON_KEY, [
+        {
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+          pid: 1,
+          phase: 'ready',
+          run_state: null,
+          started_at: 1700000000000,
+        },
+      ]);
+      const { coordinator, wakeCalls, marked, setWakeResponse } =
+        makeObservableCoordinator(cache);
+      setWakeResponse({ delivered: true });
+      const { host } = makeHost({}, fix.conversations, {
+        agents: fix.agents,
+        messages: fix.messages,
+        inboxes: fix.inboxes,
+        users: fix.users,
+        settings: fix.settings,
+        coordinator,
+        cache,
+        db: fix.db,
+      });
+      await host.deliverMessage(fix.channelId, fix.agentId, msgId);
+
+      // Coordinator dispatched one wake.
+      expect(wakeCalls.length).toBe(1);
+      expect(wakeCalls[0]!.conv_id).toBe(fix.channelId);
+      expect(wakeCalls[0]!.agent_id).toBe(fix.agentId);
+      // Payload is a claude stream-json line containing the message.
+      const decoded = JSON.parse(wakeCalls[0]!.payload);
+      expect(decoded.type).toBe('user');
+      expect(decoded.message.content[0].text).toContain(
+        '@agent-deliver please look',
+      );
+      // Coordinator marked delivered on the {delivered:true} ack. The
+      // observable coordinator's inboxAck routes to `marked` (not the
+      // real ConversationInboxRepo) — the DB delivered_at update lives
+      // in the coordinator's own test suite. Here we just verify the
+      // ack was forwarded with the right inbox id.
+      const row = fix.db
+        .prepare<[string], { delivered_at: number | null; id: number }>(
+          'SELECT id, delivered_at FROM conversation_inboxes WHERE message_id = ?',
+        )
+        .get(msgId);
+      expect(marked.flat()).toEqual([row!.id]);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('cache entry exists, cursor driver returns null payload → log + return; coordinator NOT called', async () => {
+    const fix = makeDeliverFixture({ agentRuntime: 'cursor' });
+    try {
+      const msgId = fix.insertViewerMessage('hello');
+      const cache = new RunStateCache();
+      cache.applyRuntimeStatus(DAEMON_KEY, [
+        {
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+          pid: 1,
+          phase: 'ready',
+          run_state: null,
+          started_at: 1700000000000,
+        },
+      ]);
+      const { coordinator, wakeCalls } = makeObservableCoordinator(cache);
+      const { host } = makeHost({}, fix.conversations, {
+        agents: fix.agents,
+        messages: fix.messages,
+        inboxes: fix.inboxes,
+        users: fix.users,
+        settings: fix.settings,
+        coordinator,
+        cache,
+        db: fix.db,
+      });
+      await host.deliverMessage(fix.channelId, fix.agentId, msgId);
+      // Cursor returns null from encodeStdinMessage → short-circuit.
+      expect(wakeCalls).toEqual([]);
+      // Row stays pending; the next runtime_exit will trigger an
+      // auto-respawn whose startup_delivery drains it.
+      const row = fix.db
+        .prepare<[string], { delivered_at: number | null }>(
+          'SELECT delivered_at FROM conversation_inboxes WHERE message_id = ?',
+        )
+        .get(msgId);
+      expect(row?.delivered_at).toBeNull();
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('cache entry exists, wake refused → coordinator returns wake_refused; markDelivered NOT called', async () => {
+    const fix = makeDeliverFixture();
+    try {
+      const msgId = fix.insertViewerMessage('hello');
+      const cache = new RunStateCache();
+      cache.applyRuntimeStatus(DAEMON_KEY, [
+        {
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+          pid: 1,
+          phase: 'ready',
+          run_state: null,
+          started_at: 1700000000000,
+        },
+      ]);
+      const { coordinator, wakeCalls, marked, setWakeResponse } =
+        makeObservableCoordinator(cache);
+      setWakeResponse({ delivered: false, reason: 'driver_refused' });
+      const { host } = makeHost({}, fix.conversations, {
+        agents: fix.agents,
+        messages: fix.messages,
+        inboxes: fix.inboxes,
+        users: fix.users,
+        settings: fix.settings,
+        coordinator,
+        cache,
+        db: fix.db,
+      });
+      await host.deliverMessage(fix.channelId, fix.agentId, msgId);
+      expect(wakeCalls.length).toBe(1);
+      // markDelivered MUST NOT run on a refusal (Cindy
+      // `0G5uJBydO_4qt_2r`).
+      expect(marked).toEqual([]);
+      const row = fix.db
+        .prepare<[string], { delivered_at: number | null }>(
+          'SELECT delivered_at FROM conversation_inboxes WHERE message_id = ?',
+        )
+        .get(msgId);
+      expect(row?.delivered_at).toBeNull();
     } finally {
       fix.cleanup();
     }

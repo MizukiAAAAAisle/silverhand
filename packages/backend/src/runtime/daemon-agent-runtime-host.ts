@@ -2,7 +2,7 @@
  * `DaemonAgentRuntimeHost` — daemon-mode implementation of
  * `AgentRuntimeHost`.
  *
- * # Scope of this sub-commit (2b-ii, slices 1-3)
+ * # Scope of this sub-commit (2b-ii, slices 1-4b)
  *
  * The lifecycle / delivery surface is being filled in across multiple
  * sub-commits. This file currently implements:
@@ -22,12 +22,20 @@
  *   - **Clear session** — `clearSession` calls the bridge BEFORE the
  *     DB tx (Cindy `5Yrv3roymWkCPxo1` #2), then writes the audit row
  *     + publishes `agent_status` + `message` SSE.
+ *   - **Deliver message** — `deliverMessage` looks up the message,
+ *     ensures the inbox row, formats the stream-json payload via the
+ *     shared `formatLiveMessage` helper, then submits to
+ *     `RuntimeDeliveryCoordinator`. Coordinator owns
+ *     wake-vs-queue-vs-respawn routing + `markDelivered` timing
+ *     (Cindy `5Yrv3roymWkCPxo1` #4: oneShot respawn ONLY via
+ *     `start()+startup_delivery`).
  *
  * The following methods still throw with a labelled
  * "not-yet-implemented-in-2b-ii" message and a rollback recipe:
  *
- *   - `start`, `deliverMessage` — require lifting CM's spawn-prep /
- *     `formatLiveMessage` / `drainInbox` into shared helpers.
+ *   - `start` — requires lifting CM's `buildPromptContext` +
+ *     `prepareSpawnFiles` orchestration + inbox-drain payload
+ *     composition into shared helpers (slice 4c).
  *
  * Daemon mode remains opt-in via `SILVERHAND_RUNTIME_HOST=daemon`; the
  * default (unset / `legacy`) still resolves to the in-process
@@ -59,14 +67,22 @@ import type {
   StartOptions,
 } from '../conversation-manager.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
+import type { ConversationInboxRepo } from '../repos/conversation-inbox-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
+import type { SettingsRepo } from '../repos/settings-repo.js';
+import type { UserRepo } from '../repos/user-repo.js';
 import type { AgentRuntimeHost } from './agent-runtime-host.js';
 import type { RuntimeBridge } from './bridge.js';
+import type { RuntimeDeliveryCoordinator } from './delivery-coordinator.js';
 import type { RuntimeEventHandler } from './event-handler.js';
 import type { EventPublisher } from './event-handler.js';
 import type { RunStateCache } from './run-state-cache.js';
 import { SILVERHAND_RUNTIME_HOST_ENV } from './runtime-host-mode.js';
+import {
+  formatLiveMessage,
+  sendMessageToolName,
+} from './stdin-format.js';
 
 /**
  * Dependencies for the daemon-mode runtime host.
@@ -100,6 +116,21 @@ export interface DaemonAgentRuntimeHostDeps {
   conversations: ConversationRepo;
   agents: AgentRepo;
   messages: MessageRepo;
+  /** Inbox repo used by `deliverMessage` (`ensureDelivery` on entry).
+   *  Coordinator owns `markDelivered` timing — backend never marks
+   *  rows delivered outside the wake path (Cindy `0G5uJBydO_4qt_2r`). */
+  inboxes: ConversationInboxRepo;
+  /** User repo + settings repo used by `formatLiveMessage` to
+   *  resolve sender / default-viewer mention handles. Both reads
+   *  happen per-delivery; we don't cache because handle changes
+   *  (rename) MUST be reflected on the next message without restart. */
+  users: UserRepo;
+  settings: SettingsRepo;
+  /** Live-delivery decision module. DaemonHost only constructs the
+   *  encoded payload + driver capability snapshot and hands them
+   *  through; coordinator owns wake-vs-queue-vs-respawn routing +
+   *  inbox-ack timing. */
+  coordinator: RuntimeDeliveryCoordinator;
   /** Used by `clearSession` to wrap the row-update + audit insert in
    *  a single sqlite transaction (matches CM behavior). */
   db: Database;
@@ -113,7 +144,7 @@ export interface DaemonAgentRuntimeHostDeps {
  */
 function notImplemented(method: string): Error {
   return new Error(
-    `${SILVERHAND_RUNTIME_HOST_ENV}=daemon: ${method}() is not yet implemented in sub-commit 2b-ii (slices 1-3 cover read methods + stop + bulk shutdown + reconcileOnBoot + clearSession; start/deliverMessage land in slice 4). ` +
+    `${SILVERHAND_RUNTIME_HOST_ENV}=daemon: ${method}() is not yet implemented in sub-commit 2b-ii (slices 1-4b cover read methods + stop + bulk shutdown + reconcileOnBoot + clearSession + deliverMessage; start lands in slice 4c). ` +
       `To roll back, restart with ${SILVERHAND_RUNTIME_HOST_ENV}=legacy (or unset the variable). ` +
       `The legacy in-process ConversationManager path remains the canonical, fully-supported runtime.`,
   );
@@ -134,6 +165,10 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
   private readonly conversations: ConversationRepo;
   private readonly agents: AgentRepo;
   private readonly messages: MessageRepo;
+  private readonly inboxes: ConversationInboxRepo;
+  private readonly users: UserRepo;
+  private readonly settings: SettingsRepo;
+  private readonly coordinator: RuntimeDeliveryCoordinator;
   private readonly db: Database;
   private readonly logger: BackendLogger;
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -147,6 +182,10 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
     this.conversations = deps.conversations;
     this.agents = deps.agents;
     this.messages = deps.messages;
+    this.inboxes = deps.inboxes;
+    this.users = deps.users;
+    this.settings = deps.settings;
+    this.coordinator = deps.coordinator;
     this.db = deps.db;
     this.logger = deps.logger;
     this._client = deps.client;
@@ -416,12 +455,203 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
   }
 
   // ── delivery ────────────────────────────────────────────────────
+  /**
+   * Hand a message to the (conv, agent) runtime.
+   *
+   * Daemon-mode flow (Cindy `5Yrv3roymWkCPxo1` watchlist items 1+4):
+   *
+   *   1. Validate the message exists. Missing → log warn + return.
+   *      We deliberately do NOT throw here — CM doesn't throw on
+   *      this path and a missing message is a benign "row deleted
+   *      between produce and consume" race.
+   *
+   *   2. `ensureDelivery` on the inbox repo. This is the only DB write
+   *      DaemonHost performs in the delivery path; it's idempotent
+   *      (returns an existing row or creates one). If the row is
+   *      already marked delivered, log + return.
+   *
+   *   3. Look up agent + driver. Missing agent → log warn + return.
+   *
+   *   4. If the cache has NO entry for (conv, agent) → agent is not
+   *      running. The ensureDelivery row stays pending and will be
+   *      drained on next start via `startup_delivery`. For oneShot
+   *      drivers (cursor), fire `this.start(...)` to trigger that
+   *      spawn — Cindy `5Yrv3roymWkCPxo1` #4: oneShot respawn ONLY
+   *      goes through start+startup_delivery, NEVER via direct wake.
+   *      Errors are caught + logged (best-effort; the row remains
+   *      pending so the next manual start still picks it up).
+   *
+   *   5. Format the live-message stream-json payload via the shared
+   *      `formatLiveMessage` helper (byte-identical to CM).
+   *
+   *   6. Encode the line via the driver. If the driver returns null
+   *      (oneShot drivers like cursor that don't accept stdin), log
+   *      and return — coordinator's "noop_oneshot_live" path would
+   *      reach the same outcome but we short-circuit on the encoding
+   *      failure to avoid sending a no-op request through the wire.
+   *
+   *   7. Submit to the coordinator with the driver capability snapshot.
+   *      Coordinator owns:
+   *         - busy-aware queue / flush (gated drivers mid-turn)
+   *         - bridge.runtimeWake dispatch
+   *         - `markDelivered` timing (ONLY on `{delivered:true}` ack)
+   *      Decision is returned for logging but is informational; the
+   *      inbox is the source of truth for retry.
+   */
   async deliverMessage(
-    _conversationId: string,
-    _agentId: string,
-    _messageId: string,
+    conversationId: string,
+    agentId: string,
+    messageId: string,
   ): Promise<void> {
-    throw notImplemented('deliverMessage');
+    const msg = this.messages.getById(messageId);
+    if (!msg) {
+      this.logger.warn(
+        { kind: 'runtime', mode: 'daemon', conv_id: conversationId, agent_id: agentId, msg_id: messageId },
+        'deliver: messageId not found in messages table',
+      );
+      return;
+    }
+
+    const delivery = this.inboxes.ensureDelivery(
+      conversationId,
+      agentId,
+      messageId,
+    );
+    if (delivery.deliveredAt !== null) {
+      this.logger.info(
+        {
+          kind: 'runtime',
+          mode: 'daemon',
+          conv_id: conversationId,
+          agent_id: agentId,
+          msg_id: messageId,
+          inbox_id: delivery.inboxId,
+        },
+        'deliver: message already delivered to agent; skipping',
+      );
+      return;
+    }
+
+    const agent = this.agents.get(agentId);
+    if (!agent) {
+      this.logger.warn(
+        {
+          kind: 'runtime',
+          mode: 'daemon',
+          conv_id: conversationId,
+          agent_id: agentId,
+          msg_id: messageId,
+          inbox_id: delivery.inboxId,
+        },
+        'deliver: agent not found in agents table; row left pending',
+      );
+      return;
+    }
+    const driver = getDriver(agent.runtime);
+
+    const cacheEntry = this.cache.get(conversationId, agentId);
+    if (!cacheEntry) {
+      this.logger.info(
+        {
+          kind: 'runtime',
+          mode: 'daemon',
+          conv_id: conversationId,
+          agent_id: agentId,
+          msg_id: messageId,
+          inbox_id: delivery.inboxId,
+          one_shot: driver.oneShot,
+        },
+        'deliver: agent not running, enqueued to inbox',
+      );
+      if (driver.oneShot) {
+        // Auto-start so the spawn-time `startup_delivery` drains the
+        // row we just queued. start() is idempotent and best-effort
+        // here; if it fails the row stays pending for the next
+        // manual start. NOTE: in 2b-ii slice 4b, start() still throws
+        // (slice 4c). The catch swallows the throw so the inbox row
+        // is not corrupted — operator sees the error in the agent log
+        // and retries explicitly.
+        this.start(conversationId, agentId).catch(err =>
+          this.logger.error(
+            {
+              kind: 'runtime',
+              mode: 'daemon',
+              conv_id: conversationId,
+              agent_id: agentId,
+              err: err instanceof Error ? err.message : String(err),
+            },
+            'oneShot: auto-start on deliverMessage failed; row stays pending',
+          ),
+        );
+      }
+      return;
+    }
+
+    const text = formatLiveMessage(
+      msg,
+      id => this.agents.get(id)?.name,
+      id => this.users.get(id)?.name,
+      this.resolveDefaultUserHandle(),
+      agent.name,
+      sendMessageToolName(driver),
+    );
+    const sa = this.conversations.getAgent(conversationId, agentId);
+    const line = driver.encodeStdinMessage(text, sa?.cli_session_id ?? null);
+    if (line === null) {
+      // Driver doesn't accept stdin (e.g. cursor's oneShot path).
+      // The coordinator's `noop_oneshot_live` arm would reach the
+      // same conclusion but we short-circuit because there's no
+      // payload to dispatch.
+      this.logger.info(
+        {
+          kind: 'runtime',
+          mode: 'daemon',
+          conv_id: conversationId,
+          agent_id: agentId,
+          msg_id: messageId,
+          inbox_id: delivery.inboxId,
+        },
+        'deliver: driver did not produce a stdin payload; row stays pending for next respawn',
+      );
+      return;
+    }
+
+    const decision = await this.coordinator.submitLiveDelivery(
+      conversationId,
+      agentId,
+      {
+        inboxId: delivery.inboxId,
+        messageId,
+        payload: line,
+        driver: {
+          oneShot: driver.oneShot,
+          busyDeliveryMode: driver.busyDeliveryMode,
+        },
+      },
+    );
+    this.logger.info(
+      {
+        kind: 'runtime',
+        mode: 'daemon',
+        conv_id: conversationId,
+        agent_id: agentId,
+        msg_id: messageId,
+        inbox_id: delivery.inboxId,
+        decision: decision.kind,
+      },
+      'deliver: coordinator decision',
+    );
+  }
+
+  /** Resolve the registered viewer's mention handle (used as the
+   *  fallback `sender=` when a user message has a null
+   *  `from_user_id`). Returns undefined when registration hasn't
+   *  completed yet — formatters degrade to the bare token `user`.
+   *  Mirrors CM `resolveDefaultUserHandle`. */
+  private resolveDefaultUserHandle(): string | undefined {
+    const viewerId = this.settings.getViewerUserId();
+    if (!viewerId) return undefined;
+    return this.users.get(viewerId)?.name ?? undefined;
   }
 
   // ── boot recovery ───────────────────────────────────────────────

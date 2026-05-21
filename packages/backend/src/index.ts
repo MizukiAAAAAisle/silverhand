@@ -26,6 +26,8 @@ import {
 } from './ws/ws-server.js';
 import { ConversationManager } from './conversation-manager.js';
 import { DaemonAgentRuntimeHost } from './runtime/daemon-agent-runtime-host.js';
+import { RuntimeDeliveryCoordinator } from './runtime/delivery-coordinator.js';
+import { combineGatedBatch } from './runtime/stdin-format.js';
 import type { AgentRuntimeHost } from './runtime/agent-runtime-host.js';
 import { RuntimeBridge, type ProxySettingsSource } from './runtime/bridge.js';
 import { RunStateCache } from './runtime/run-state-cache.js';
@@ -41,6 +43,7 @@ import {
 import { AgentRepo } from './repos/agent-repo.js';
 import { AttachmentRepo } from './repos/attachment-repo.js';
 import { ConversationRepo } from './repos/conversation-repo.js';
+import { ConversationInboxRepo } from './repos/conversation-inbox-repo.js';
 import { MessageRepo } from './repos/message-repo.js';
 import { NotificationRepo } from './repos/notification-repo.js';
 import { ScheduleRepo } from './repos/schedule-repo.js';
@@ -183,27 +186,71 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
           `restarting with ${SILVERHAND_RUNTIME_HOST_ENV}=legacy.`,
       );
     }
-    // Build the (currently throw-only) daemon shim. Sub-commit 2b
-    // replaces the throws with real bridge/cache/event-handler
-    // delegations. The bridge/cache/event-handler triple is
-    // instantiated here so the wiring shape is stable across 2a→2b.
+    // Build the daemon shim. Sub-commit 2b-ii (slices 1-4b) replaces
+    // most throws with real bridge / cache / event-handler /
+    // coordinator delegations. `start` still throws (slice 4c lifts
+    // CM's buildPromptContext + spawn-prep). The bridge / cache /
+    // event-handler / coordinator quad is instantiated here so the
+    // wiring shape is stable across 2a → 2b → cutover.
     const proxySettings: ProxySettingsSource = {
       get: (key: 'proxy_url' | 'proxy_runtimes') =>
         new SettingsRepo(db).get(key),
     };
     const bridge = new RuntimeBridge(opts.hostClient, proxySettings);
     const cache = new RunStateCache();
+    const inboxRepo = new ConversationInboxRepo(db);
     const inboxAck: InboxAckSink = {
-      // 2a placeholder — 2b wires through ConversationInboxRepo.
-      markDelivered: () => {},
+      markDelivered: (deliveryIds: readonly number[]) =>
+        inboxRepo.markDelivered([...deliveryIds]),
       markUndelivered: () => {},
     };
+    // Construct the coordinator BEFORE EventHandler so the handler's
+    // forward-only callbacks can reference it. Coordinator's
+    // `respawn` callback closes over `ctx.runtimeHost` via a thunk —
+    // the field isn't populated yet, so we defer the lookup to
+    // call-time (start() is invoked from `onRuntimeExit` paths only,
+    // long after construction finishes).
+    const coordinator = new RuntimeDeliveryCoordinator({
+      bridge: {
+        runtimeWake: params => opts.hostClient!.runtimeWake(params),
+      },
+      cache,
+      inboxAck,
+      callbacks: {
+        respawn: (cid, aid) => ctx.runtimeHost.start(cid, aid),
+        hasPendingInbox: (cid, aid) =>
+          inboxRepo.listPending(cid, aid).length > 0,
+        // `combineBatch` requires the same byte-format pipeline CM
+        // uses for multi-row safe-boundary flush (claude gated path).
+        // The lifted `combineGatedBatch` keeps daemon mode
+        // byte-identical to CM. Tool-name is hardcoded to match
+        // `sendMessageToolName(driver)` (currently driver-agnostic).
+        combineBatch: payloads =>
+          combineGatedBatch(payloads, 'silverhand message send'),
+      },
+      logger: {
+        info: (meta, msg) => logger.info(meta, msg),
+        warn: (meta, msg) => logger.warn(meta, msg),
+        error: (meta, msg) => logger.error(meta, msg),
+      },
+    });
     const eventHandler = new RuntimeEventHandler({
       client: opts.hostClient,
       bridge,
       cache,
       events: ctx.events,
       inboxAck,
+      // Forward parsed events to the coordinator's busy tracker
+      // (Cindy `3l4bZ5vaMvlC9DVS`: forward-only — the handler MUST
+      // NOT keep its own queue or call bridge.runtimeWake).
+      onParsedEvent: (cid, aid, ev) =>
+        coordinator.onParsedEvent(cid, aid, ev),
+      // Forward runtime_exit to the coordinator so it can clear its
+      // per-agent queue + decide oneShot auto-respawn (gated by the
+      // intentional / initTimedOut / fatalError / hasPendingInbox
+      // trio in `delivery-coordinator.ts:onRuntimeExit`).
+      onRuntimeExit: (cid, aid, meta) =>
+        coordinator.onRuntimeExit(cid, aid, meta),
       logger,
     });
     ctx.runtimeHost = new DaemonAgentRuntimeHost({
@@ -215,6 +262,10 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
       conversations: new ConversationRepo(db),
       agents: new AgentRepo(db),
       messages: new MessageRepo(db),
+      inboxes: inboxRepo,
+      users: new UserRepo(db),
+      settings: new SettingsRepo(db),
+      coordinator,
       db,
       logger,
     });

@@ -221,7 +221,7 @@ export function formatAttachmentSuffix(
 /** When multiple gated deliveries pile up between safe boundaries, we
  *  flush as one combined user message so claude sees them in order. */
 export function combineGatedBatch(
-  messages: string[],
+  messages: readonly string[],
   sendMessageTool: string,
 ): string {
   return (
