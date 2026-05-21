@@ -59,6 +59,7 @@
  *     spawn replays them.
  */
 import type { EventFrame, HostClient } from '@silverhand/host';
+import type { ParsedEvent } from '@silverhand/shared';
 import type { RuntimeBridge } from './bridge.js';
 import type { RunStateCache } from './run-state-cache.js';
 import { sanitizeParsedEventForBroadcast } from './event-sanitize.js';
@@ -103,6 +104,50 @@ export type ReadyForDrainHandler = (
   agentId: string,
 ) => void | Promise<void>;
 
+/**
+ * Parsed-event forwarder. Fires on every `runtime_parsed_event` with
+ * the RAW `frame.parsed` value — Cindy `BYHZJI9ALSVmmlFr` pin b: the
+ * delivery coordinator's busy tracker must read from raw, not from the
+ * SSE-sanitized payload (sanitization is a UI boundary; tracking
+ * outstanding tool_uses is a delivery boundary).
+ *
+ * Hook contract is "forward only" — the handler MUST NOT keep its own
+ * queue or call `bridge.runtimeWake` (Cindy `3l4bZ5vaMvlC9DVS`).
+ */
+export type ParsedEventHandler = (
+  conversationId: string,
+  agentId: string,
+  event: ParsedEvent,
+) => void;
+
+/**
+ * Runtime-exit forwarder. Fires AFTER the handler has updated cache +
+ * SSE, with the `intentional` / `code` fields from the wire plus two
+ * derived flags the wire doesn't carry directly:
+ *
+ *   - `initTimedOut` — true iff the (conv, agent) had a
+ *     `runtime_init_cooldown` event observed before this exit, OR a
+ *     `runtime_init_timeout` with `retrying: false`. Marker for the
+ *     coordinator's oneShot-respawn gate (Cindy `BYHZJI9ALSVmmlFr`
+ *     pin c — do NOT auto-respawn after an init failure; that would
+ *     thrash a permanently-broken runtime).
+ *   - `fatalError` — true iff a parsed `error` event with `fatal: true`
+ *     was observed before this exit (e.g. `thread_not_found`). Same
+ *     gate rationale.
+ *
+ * Hook contract is "forward only" — see ParsedEventHandler.
+ */
+export type RuntimeExitHandler = (
+  conversationId: string,
+  agentId: string,
+  meta: {
+    intentional: boolean;
+    code: number | null;
+    initTimedOut: boolean;
+    fatalError: boolean;
+  },
+) => void;
+
 export interface RuntimeEventHandlerLogger {
   info(meta: object, msg: string): void;
   warn(meta: object, msg: string): void;
@@ -124,6 +169,13 @@ export interface RuntimeEventHandlerDeps {
   /** Fires on `runtime_ready_for_drain`. Optional in commit 4 since
    *  the drain coordinator may not be wired yet. */
   onReadyForDrain?: ReadyForDrainHandler;
+  /** Fires on `runtime_parsed_event` with the RAW parsed payload —
+   *  see `ParsedEventHandler` for the rationale and contract. */
+  onParsedEvent?: ParsedEventHandler;
+  /** Fires on `runtime_exit` AFTER the handler's cache/SSE updates,
+   *  enriched with `initTimedOut` / `fatalError` derivations. See
+   *  `RuntimeExitHandler` for the contract. */
+  onRuntimeExit?: RuntimeExitHandler;
   logger?: RuntimeEventHandlerLogger;
 }
 
@@ -143,6 +195,8 @@ export class RuntimeEventHandler {
   private readonly events: EventPublisher;
   private readonly inboxAck: InboxAckSink;
   private readonly onReadyForDrain?: ReadyForDrainHandler;
+  private readonly onParsedEventCb?: ParsedEventHandler;
+  private readonly onRuntimeExitCb?: RuntimeExitHandler;
   private readonly logger: RuntimeEventHandlerLogger;
 
   private unsubscribeEvents: (() => void) | null = null;
@@ -159,6 +213,22 @@ export class RuntimeEventHandler {
    * succeeded; the next timeout would write a fresh value anyway).
    */
   private readonly lastTimeoutReason = new Map<string, 'silence' | 'pre_protocol_cap' | 'post_protocol'>();
+  /**
+   * Per-(conv,agent) markers the coordinator uses to gate oneShot
+   * auto-respawn on `runtime_exit`. We set the marker when we see an
+   * init-failure terminal (`runtime_init_cooldown`, or
+   * `runtime_init_timeout` with `retrying: false`) and clear it on a
+   * fresh `runtime_state` so a successful re-init resets the gate.
+   * Cleared on `runtime_exit` too — the next runtime starts clean.
+   */
+  private readonly initFailureFlag = new Set<string>();
+  /**
+   * Same shape as `initFailureFlag` but for parsed `error` events with
+   * `fatal: true` (e.g. `thread_not_found`). Set in the parsed-event
+   * routing branch; cleared on runtime_state (recovery) and
+   * runtime_exit (next runtime starts clean).
+   */
+  private readonly fatalErrorFlag = new Set<string>();
 
   constructor(deps: RuntimeEventHandlerDeps) {
     this.client = deps.client;
@@ -167,6 +237,8 @@ export class RuntimeEventHandler {
     this.events = deps.events;
     this.inboxAck = deps.inboxAck;
     this.onReadyForDrain = deps.onReadyForDrain;
+    this.onParsedEventCb = deps.onParsedEvent;
+    this.onRuntimeExitCb = deps.onRuntimeExit;
     this.logger = deps.logger ?? NOOP_LOGGER;
   }
 
@@ -185,11 +257,13 @@ export class RuntimeEventHandler {
       // Reconnect to (possibly different) daemon. Wipe the cache so
       // mismatched-key events between now and hydrate resolution get
       // dropped, then re-latch via runtime_status. Also clear the
-      // projection-side timeout-reason stash — old (conv,agent)
-      // entries no longer correspond to anything in the new daemon's
-      // view. Cindy `dMNdrYH0KK1VbDqs` cleanup.
+      // projection-side timeout-reason stash + coordinator gate flags
+      // — old (conv,agent) entries no longer correspond to anything
+      // in the new daemon's view. Cindy `dMNdrYH0KK1VbDqs` cleanup.
       this.cache.clearAll();
       this.lastTimeoutReason.clear();
+      this.initFailureFlag.clear();
+      this.fatalErrorFlag.clear();
       void this.hydrateSafely('reconnect');
     });
     await this.hydrateSafely('initial');
@@ -226,6 +300,11 @@ export class RuntimeEventHandler {
         // going away invalidates every entry. Cindy
         // `dMNdrYH0KK1VbDqs` cleanup.
         this.lastTimeoutReason.clear();
+        // Same rationale for the coordinator-gate flags: daemon swap
+        // means a fresh runtime under the new daemon must start with
+        // a clean gate.
+        this.initFailureFlag.clear();
+        this.fatalErrorFlag.clear();
         this.logger.warn(
           { kind: 'daemon', reason: frame.reason },
           'daemon shutting down',
@@ -237,6 +316,16 @@ export class RuntimeEventHandler {
         // failure path) and the next timeout would write a fresh
         // value anyway. Safe to be unconditional.
         this.lastTimeoutReason.delete(
+          `${frame.conversation_id}|${frame.agent_id}`,
+        );
+        // A normal state event after init-failure or fatal-error means
+        // the runtime recovered (e.g. retry succeeded; agent moved past
+        // the error). Clear both gating flags so a subsequent benign
+        // exit can still trigger oneShot auto-respawn.
+        this.initFailureFlag.delete(
+          `${frame.conversation_id}|${frame.agent_id}`,
+        );
+        this.fatalErrorFlag.delete(
           `${frame.conversation_id}|${frame.agent_id}`,
         );
         this.onRuntimeState(frame);
@@ -271,6 +360,14 @@ export class RuntimeEventHandler {
           `${frame.conversation_id}|${frame.agent_id}`,
           frame.timeout_reason,
         );
+        // If the daemon won't retry, this is a terminal init failure
+        // that the next runtime_exit will follow. Mark so the
+        // coordinator suppresses oneShot auto-respawn.
+        if (!frame.retrying) {
+          this.initFailureFlag.add(
+            `${frame.conversation_id}|${frame.agent_id}`,
+          );
+        }
         this.events.publish(frame.conversation_id, {
           kind: 'agent_init_timeout',
           payload: {
@@ -312,6 +409,12 @@ export class RuntimeEventHandler {
         this.lastTimeoutReason.delete(
           `${frame.conversation_id}|${frame.agent_id}`,
         );
+        // Mark the init-failure flag so the next runtime_exit suppresses
+        // oneShot auto-respawn (Cindy `BYHZJI9ALSVmmlFr` pin c — don't
+        // thrash a runtime the daemon has already given up on).
+        this.initFailureFlag.add(
+          `${frame.conversation_id}|${frame.agent_id}`,
+        );
         this.events.publish(frame.conversation_id, {
           kind: 'agent_status',
           payload: {
@@ -348,6 +451,44 @@ export class RuntimeEventHandler {
             event: sanitizeParsedEventForBroadcast(frame.parsed),
           },
         });
+        // Mark fatal-error flag for the coordinator's exit gate (Cindy
+        // `BYHZJI9ALSVmmlFr` pin c). Only fatal errors suppress
+        // oneShot auto-respawn; non-fatal `error` events (e.g.
+        // recoverable tool errors) leave the gate open.
+        if (
+          frame.parsed.kind === 'error' &&
+          frame.parsed.fatal === true
+        ) {
+          this.fatalErrorFlag.add(
+            `${frame.conversation_id}|${frame.agent_id}`,
+          );
+        }
+        // Forward the RAW parsed event to the coordinator (Cindy
+        // `BYHZJI9ALSVmmlFr` pin b — busy tracker reads raw, not
+        // sanitized). Hook contract is forward-only: the callback MUST
+        // NOT hold queues or issue wakes; that lives in the
+        // coordinator. Try/catch keeps a buggy hook from poisoning the
+        // SSE projection.
+        if (this.onParsedEventCb) {
+          try {
+            this.onParsedEventCb(
+              frame.conversation_id,
+              frame.agent_id,
+              frame.parsed,
+            );
+          } catch (err) {
+            this.logger.error(
+              {
+                kind: 'event',
+                event: 'runtime_parsed_event',
+                conv_id: frame.conversation_id,
+                agent_id: frame.agent_id,
+                err: (err as Error).message,
+              },
+              'onParsedEvent callback threw',
+            );
+          }
+        }
         return;
       // `runtime_parsed_event_dropped` carries metadata-only (no
       // payload) when the encoded parsed event exceeded
@@ -405,6 +546,8 @@ export class RuntimeEventHandler {
     // can't bleed into a new daemon's retry projection.
     this.cache.clearAll();
     this.lastTimeoutReason.clear();
+    this.initFailureFlag.clear();
+    this.fatalErrorFlag.clear();
     void this.hydrateSafely('daemon_ready', daemonPid, startedAt);
   }
 
@@ -453,6 +596,16 @@ export class RuntimeEventHandler {
     this.lastTimeoutReason.delete(
       `${frame.conversation_id}|${frame.agent_id}`,
     );
+    // Snapshot the gating flags BEFORE clearing them — coordinator
+    // needs them on the callback. (Clearing after the snapshot keeps
+    // the next runtime's gate clean: a fresh start under the same
+    // (conv, agent) must not inherit the dead runtime's failure
+    // markers.)
+    const flagKey = `${frame.conversation_id}|${frame.agent_id}`;
+    const initTimedOut = this.initFailureFlag.has(flagKey);
+    const fatalError = this.fatalErrorFlag.has(flagKey);
+    this.initFailureFlag.delete(flagKey);
+    this.fatalErrorFlag.delete(flagKey);
     const key = this.cache.daemonInstanceKey;
     // Cache mutation is gated on a latched daemon key (events from a
     // pre-hydrate window can't safely write the cache because the
@@ -498,6 +651,31 @@ export class RuntimeEventHandler {
         run_state: entry?.runState ?? null,
       },
     });
+    // Forward to the coordinator AFTER cache+SSE updates, so the
+    // coordinator's auto-respawn doesn't race a stale projection. The
+    // callback contract is forward-only — coordinator decides whether
+    // to call DaemonHost.start; handler does not.
+    if (this.onRuntimeExitCb) {
+      try {
+        this.onRuntimeExitCb(frame.conversation_id, frame.agent_id, {
+          intentional: frame.intentional,
+          code: frame.code,
+          initTimedOut,
+          fatalError,
+        });
+      } catch (err) {
+        this.logger.error(
+          {
+            kind: 'event',
+            event: 'runtime_exit',
+            conv_id: frame.conversation_id,
+            agent_id: frame.agent_id,
+            err: (err as Error).message,
+          },
+          'onRuntimeExit callback threw',
+        );
+      }
+    }
   }
 
   private onReadyForDrainEvent(

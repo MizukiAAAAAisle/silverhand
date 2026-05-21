@@ -1018,3 +1018,382 @@ describe('RuntimeEventHandler — cache-not-ready safety', () => {
     await startPromise;
   });
 });
+
+describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () => {
+  // Cindy `3l4bZ5vaMvlC9DVS`: EventHandler hooks ONLY forward events;
+  // they must NOT hold queues or call wake. These tests pin the
+  // forward-only contract for `onParsedEvent` and `onRuntimeExit`.
+
+  function setup(opts: { withCallbacks?: boolean } = {}): {
+    cache: RunStateCache;
+    emit: (frame: EventFrame) => void;
+    handler: RuntimeEventHandler;
+    parsedCalls: Array<{ conv: string; agent: string; event: unknown }>;
+    exitCalls: Array<{
+      conv: string;
+      agent: string;
+      meta: {
+        intentional: boolean;
+        code: number | null;
+        initTimedOut: boolean;
+        fatalError: boolean;
+      };
+    }>;
+    publishedAgentStatus: () => Array<{ conv: string; payload: unknown }>;
+  } {
+    const cache = new RunStateCache();
+    const { client, emit } = makeFakeClient();
+    const { bridge } = makeBridge({
+      runtimes: [
+        {
+          conversation_id: 'c1',
+          agent_id: 'a1',
+          pid: 1234,
+          phase: 'ready',
+          run_state: null,
+          started_at: 1700000000000,
+        },
+      ],
+    });
+    const { publisher, published } = makePublisher();
+    const { sink } = makeInboxAck();
+    const parsedCalls: Array<{ conv: string; agent: string; event: unknown }> =
+      [];
+    const exitCalls: Array<{
+      conv: string;
+      agent: string;
+      meta: {
+        intentional: boolean;
+        code: number | null;
+        initTimedOut: boolean;
+        fatalError: boolean;
+      };
+    }> = [];
+    const handler = new RuntimeEventHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: sink,
+      ...(opts.withCallbacks === false
+        ? {}
+        : {
+            onParsedEvent: (conv, agent, event) =>
+              parsedCalls.push({ conv, agent, event }),
+            onRuntimeExit: (conv, agent, meta) =>
+              exitCalls.push({ conv, agent, meta }),
+          }),
+    });
+    return {
+      cache,
+      emit,
+      handler,
+      parsedCalls,
+      exitCalls,
+      publishedAgentStatus: () =>
+        published
+          .filter(p => p.kind === 'agent_status')
+          .map(p => ({ conv: p.conv, payload: p.payload })),
+    };
+  }
+
+  it('onParsedEvent receives RAW parsed payload (not sanitized)', async () => {
+    const { handler, emit, parsedCalls } = setup();
+    await handler.start();
+    const hugeInput = 'x'.repeat(2000); // would be truncated by the sanitizer
+    emit({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: {
+        kind: 'tool_call',
+        name: 'bash',
+        input: { command: hugeInput },
+      } as never,
+      ts: 1700000001100,
+    });
+    expect(parsedCalls).toHaveLength(1);
+    const ev = parsedCalls[0]!.event as {
+      kind: string;
+      input: { command: string };
+    };
+    expect(ev.kind).toBe('tool_call');
+    // Raw payload preserved verbatim — sanitization is a UI boundary.
+    expect(ev.input.command).toBe(hugeInput);
+    expect(ev.input.command.length).toBe(2000);
+  });
+
+  it('onRuntimeExit fires AFTER agent_status publish; carries derived flags', async () => {
+    const { handler, emit, exitCalls, publishedAgentStatus } = setup();
+    await handler.start();
+    emit({
+      event: 'runtime_exit',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      code: 0,
+      intentional: true,
+      ts: 1700000002000,
+    });
+    expect(publishedAgentStatus()).toHaveLength(1);
+    expect(exitCalls).toHaveLength(1);
+    expect(exitCalls[0]).toEqual({
+      conv: 'c1',
+      agent: 'a1',
+      meta: {
+        intentional: true,
+        code: 0,
+        initTimedOut: false,
+        fatalError: false,
+      },
+    });
+  });
+
+  it('initTimedOut derived from runtime_init_cooldown before exit', async () => {
+    const { handler, emit, exitCalls } = setup();
+    await handler.start();
+    emit({
+      event: 'runtime_init_cooldown',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      cooldown_until: 1700000003000,
+      attempts_exhausted: 3,
+      ts: 1700000002500,
+    });
+    emit({
+      event: 'runtime_exit',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      code: 1,
+      intentional: false,
+      ts: 1700000002600,
+    });
+    expect(exitCalls[0]!.meta.initTimedOut).toBe(true);
+    expect(exitCalls[0]!.meta.fatalError).toBe(false);
+  });
+
+  it('initTimedOut also derived from runtime_init_timeout with retrying=false', async () => {
+    const { handler, emit, exitCalls } = setup();
+    await handler.start();
+    emit({
+      event: 'runtime_init_timeout',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      timeout_reason: 'silence',
+      elapsed_ms: 30000,
+      timeout_ms: 30000,
+      retrying: false,
+      retry_attempt: 2,
+      max_retries: 2,
+      ts: 1700000002400,
+    });
+    emit({
+      event: 'runtime_exit',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      code: null,
+      intentional: false,
+      ts: 1700000002500,
+    });
+    expect(exitCalls[0]!.meta.initTimedOut).toBe(true);
+  });
+
+  it('runtime_init_timeout with retrying=true does NOT set initTimedOut', async () => {
+    const { handler, emit, exitCalls } = setup();
+    await handler.start();
+    emit({
+      event: 'runtime_init_timeout',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      timeout_reason: 'silence',
+      elapsed_ms: 30000,
+      timeout_ms: 30000,
+      retrying: true,
+      retry_attempt: 0,
+      max_retries: 2,
+      ts: 1700000002400,
+    });
+    emit({
+      event: 'runtime_exit',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      code: 1,
+      intentional: false,
+      ts: 1700000002500,
+    });
+    expect(exitCalls[0]!.meta.initTimedOut).toBe(false);
+  });
+
+  it('fatalError derived from parsed error event with fatal=true', async () => {
+    const { handler, emit, exitCalls } = setup();
+    await handler.start();
+    emit({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: {
+        kind: 'error',
+        message: 'thread not found',
+        code: 'thread_not_found',
+        fatal: true,
+      } as never,
+      ts: 1700000002400,
+    });
+    emit({
+      event: 'runtime_exit',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      code: 1,
+      intentional: false,
+      ts: 1700000002500,
+    });
+    expect(exitCalls[0]!.meta.fatalError).toBe(true);
+    expect(exitCalls[0]!.meta.initTimedOut).toBe(false);
+  });
+
+  it('parsed error with fatal omitted does NOT set fatalError', async () => {
+    const { handler, emit, exitCalls } = setup();
+    await handler.start();
+    emit({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: {
+        kind: 'error',
+        message: 'recoverable error',
+      } as never,
+      ts: 1700000002400,
+    });
+    emit({
+      event: 'runtime_exit',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      code: 1,
+      intentional: false,
+      ts: 1700000002500,
+    });
+    expect(exitCalls[0]!.meta.fatalError).toBe(false);
+  });
+
+  it('fatalError clears after a fresh runtime_state (recovery)', async () => {
+    const { handler, emit, exitCalls } = setup();
+    await handler.start();
+    emit({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: {
+        kind: 'error',
+        message: 'fatal',
+        fatal: true,
+      } as never,
+      ts: 1700000002300,
+    });
+    emit(runStateFrame('c1', 'a1', RUN_STATE, 1700000002400));
+    emit({
+      event: 'runtime_exit',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      code: 0,
+      intentional: false,
+      ts: 1700000002500,
+    });
+    expect(exitCalls[0]!.meta.fatalError).toBe(false);
+  });
+
+  it('flags do not leak between (conv, agent) pairs', async () => {
+    const { handler, emit, exitCalls } = setup();
+    await handler.start();
+    // Init failure on c1/a1.
+    emit({
+      event: 'runtime_init_cooldown',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      cooldown_until: 1700000003000,
+      attempts_exhausted: 3,
+      ts: 1700000002500,
+    });
+    // Exit on c2/a2 must NOT inherit c1/a1's flag.
+    emit({
+      event: 'runtime_exit',
+      conversation_id: 'c2',
+      agent_id: 'a2',
+      code: 0,
+      intentional: false,
+      ts: 1700000002600,
+    });
+    const c2Exit = exitCalls.find(e => e.conv === 'c2');
+    expect(c2Exit?.meta.initTimedOut).toBe(false);
+  });
+
+  it('throwing onParsedEvent callback is logged and does NOT break SSE projection', async () => {
+    const cache = new RunStateCache();
+    const { client, emit } = makeFakeClient();
+    const { bridge } = makeBridge({
+      runtimes: [
+        {
+          conversation_id: 'c1',
+          agent_id: 'a1',
+          pid: 1234,
+          phase: 'ready',
+          run_state: null,
+          started_at: 1700000000000,
+        },
+      ],
+    });
+    const { publisher, published } = makePublisher();
+    const { sink } = makeInboxAck();
+    const errorLogs: Array<{ meta: unknown; msg: string }> = [];
+    const logger = {
+      info: () => {},
+      warn: () => {},
+      error: (meta: object, msg: string) => errorLogs.push({ meta, msg }),
+    };
+    const handler = new RuntimeEventHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: sink,
+      onParsedEvent: () => {
+        throw new Error('boom');
+      },
+      logger,
+    });
+    await handler.start();
+    emit({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'text', text: 'hi' } as never,
+      ts: 1700000001000,
+    });
+    // SSE projection still ran.
+    expect(published.find(p => p.kind === 'agent_event')).toBeDefined();
+    // Error was logged.
+    expect(errorLogs).toHaveLength(1);
+    expect(errorLogs[0]!.msg).toContain('onParsedEvent');
+  });
+
+  it('omitting callbacks is allowed — no crash, projection unchanged', async () => {
+    const { handler, emit, publishedAgentStatus } = setup({
+      withCallbacks: false,
+    });
+    await handler.start();
+    emit({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'text', text: 'hi' } as never,
+      ts: 1700000001000,
+    });
+    emit({
+      event: 'runtime_exit',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      code: 0,
+      intentional: true,
+      ts: 1700000002000,
+    });
+    expect(publishedAgentStatus()).toHaveLength(1);
+  });
+});
