@@ -30,9 +30,17 @@ import {
   type IntentName,
   type ResponseError,
   type ResponseFrame,
+  type RuntimeClearSessionParams,
+  type RuntimeCloseActivityLogParams,
+  type RuntimeStartParams,
+  type RuntimeStatusParams,
+  type RuntimeStopAllParams,
+  type RuntimeStopParams,
+  type RuntimeWakeParams,
 } from '../protocol.js';
 import { DAEMON_VERSION } from './version.js';
 import type { DaemonLogger } from './logger.js';
+import type { Supervisor } from './supervisor.js';
 
 export interface DispatcherOptions {
   logger: DaemonLogger;
@@ -40,12 +48,21 @@ export interface DispatcherOptions {
   startedAt?: number;
   /** Epoch ms supplier; injected so tests can pin time. Default: Date.now. */
   now?: () => number;
+  /**
+   * Supervisor backing the runtime_* intents. PR-1's call-site (no
+   * supervisor) treats every runtime_* intent as `unknown_intent`,
+   * so the dispatcher's behaviour is backward-compatible with
+   * existing PR-1 tests. PR-2 step 1 plugs a `FakeSupervisor` here;
+   * step 2 swaps in the real one.
+   */
+  supervisor?: Supervisor;
 }
 
 export class IntentDispatcher {
   private readonly logger: DaemonLogger;
   private readonly startedAt: number;
   private readonly now: () => number;
+  private readonly supervisor: Supervisor | undefined;
   private intentCount = 0;
   private shuttingDown = false;
 
@@ -53,6 +70,7 @@ export class IntentDispatcher {
     this.logger = opts.logger;
     this.now = opts.now ?? Date.now;
     this.startedAt = opts.startedAt ?? this.now();
+    this.supervisor = opts.supervisor;
   }
 
   /** Signal that subsequent intents should be rejected with
@@ -156,11 +174,13 @@ export class IntentDispatcher {
   }
 
   /**
-   * Per-intent business logic. Each case is intentionally tiny — PR-1
-   * is here to prove the IPC plumbing, not to do real runtime work.
-   * PR-2 will add `runtime_start` / `runtime_stop` / `runtime_wake`
-   * and they will be wider; if this switch grows past ~5 cases, split
-   * it into a registry map keyed by intent name.
+   * Per-intent business logic. PR-1's lifecycle intents
+   * (ping / status / echo) are handled inline; PR-2's runtime_*
+   * intents are routed to the injected `Supervisor` when one is
+   * provided, and reported as `unknown_intent` (via the schema
+   * registry already rejecting unknown names) when no supervisor
+   * is wired — that keeps backward-compatibility with PR-1 tests
+   * that construct a dispatcher without a supervisor.
    *
    * `protected` so a test-only subclass can override one intent's
    * output to verify the result-drift guard in `dispatch()` (without
@@ -186,12 +206,63 @@ export class IntentDispatcher {
           started_at: this.startedAt,
           uptime_ms: this.now() - this.startedAt,
           intent_count: this.intentCount,
-          runtimes: [],
+          runtimes: this.supervisor
+            ? (await this.supervisor.status({})).runtimes
+            : [],
         };
       case 'echo': {
         const p = params as { message: string };
         return { echoed: p.message };
       }
+      // ── runtime_* family ────────────────────────────────────────
+      // Each case below requires `this.supervisor` to be set; when
+      // it isn't, we throw — `dispatch()` catches and projects as
+      // `internal_error`. Production daemons always wire a
+      // supervisor, so this is only reachable via misconfigured
+      // test setups.
+      case 'runtime_start':
+        return this.requireSupervisor().start(params as RuntimeStartParams);
+      case 'runtime_stop':
+        return this.requireSupervisor().stop(params as RuntimeStopParams);
+      case 'runtime_wake':
+        return this.requireSupervisor().wake(params as RuntimeWakeParams);
+      case 'runtime_status':
+        return this.requireSupervisor().status(
+          params as RuntimeStatusParams,
+        );
+      case 'runtime_clear_session':
+        return this.requireSupervisor().clearSession(
+          params as RuntimeClearSessionParams,
+        );
+      case 'runtime_stop_all':
+        return this.requireSupervisor().stopAll(
+          params as RuntimeStopAllParams,
+        );
+      case 'runtime_close_activity_log':
+        return this.requireSupervisor().closeActivityLog(
+          params as RuntimeCloseActivityLogParams,
+        );
+      // ── output flow control (v0 unused, protocol present) ───────
+      case 'runtime_output_pause':
+        // v0: backend never calls these (per design doc §2.2 — the
+        // protocol is reserved). When step 2 wires a real
+        // supervisor that supports flow control we'll route to it
+        // here; for now we return a successful no-op so the
+        // contract is honored without daemon-side enforcement.
+        return { paused: true };
+      case 'runtime_output_resume':
+        return { resumed: true };
     }
+  }
+
+  /** Internal helper for runtime_* handlers. Throws a typed error
+   *  the dispatcher's catch arm will project as `internal_error`. */
+  private requireSupervisor(): Supervisor {
+    if (!this.supervisor) {
+      throw new Error(
+        'runtime_* intent reached dispatcher with no supervisor wired',
+      );
+    }
+    return this.supervisor;
   }
 }

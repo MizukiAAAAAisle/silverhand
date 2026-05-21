@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { IntentDispatcher } from '../src/daemon/dispatcher.js';
+import { FakeSupervisor } from '../src/daemon/fake-supervisor.js';
 import type { DaemonLogger } from '../src/daemon/logger.js';
 
 function silentLogger(): DaemonLogger {
@@ -96,11 +97,16 @@ describe('IntentDispatcher', () => {
     // the wire.
     class DriftingDispatcher extends IntentDispatcher {
       protected override async runHandler(
-        intent: 'ping' | 'status' | 'echo',
+        intent: Parameters<IntentDispatcher['dispatch']>[1] extends string
+          ? string
+          : never,
         params: unknown,
       ): Promise<unknown> {
         if (intent === 'echo') return { wrong_field: 1 };
-        return super.runHandler(intent, params);
+        // Cast back to the wider union the parent expects; we
+        // narrowed only to express "any registered intent name" in
+        // a test-only subclass.
+        return super.runHandler(intent as never, params);
       }
     }
     const d = new DriftingDispatcher({ logger: silentLogger() });
@@ -109,6 +115,162 @@ describe('IntentDispatcher', () => {
     if ('error' in r) {
       expect(r.error.code).toBe('internal_error');
       expect(r.error.message).toContain('drift');
+    }
+  });
+});
+
+describe('IntentDispatcher — runtime_* routing', () => {
+  it('routes runtime_start through the wired supervisor', async () => {
+    const events: unknown[] = [];
+    const queue: Array<() => void> = [];
+    const supervisor = new FakeSupervisor({
+      emit: e => events.push(e),
+      now: () => 1_000,
+      schedule: cb => queue.push(cb),
+    });
+    const d = new IntentDispatcher({
+      logger: silentLogger(),
+      supervisor,
+    });
+    const r = await d.dispatch('req-1', 'runtime_start', {
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      options: {},
+    });
+    expect('result' in r).toBe(true);
+    if ('result' in r) {
+      expect(r.result).toMatchObject({ started_at: 1_000 });
+      expect((r.result as { pid: number }).pid).toBeGreaterThan(0);
+    }
+  });
+
+  it('routes runtime_wake → fake supervisor → returns batch result', async () => {
+    const queue: Array<() => void> = [];
+    const supervisor = new FakeSupervisor({
+      emit: () => {},
+      schedule: cb => queue.push(cb),
+    });
+    const d = new IntentDispatcher({
+      logger: silentLogger(),
+      supervisor,
+    });
+    await d.dispatch('s', 'runtime_start', {
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      options: {},
+    });
+    while (queue.length) queue.shift()!(); // flush to ready
+    const r = await d.dispatch('w', 'runtime_wake', {
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      delivery_ids: [101, 102],
+      kind: 'message',
+      payload: {},
+    });
+    expect('result' in r).toBe(true);
+    if ('result' in r) {
+      expect(r.result).toEqual({
+        delivered: true,
+        delivery_ids: [101, 102],
+      });
+    }
+  });
+
+  it('runtime_status reflects supervisor snapshot', async () => {
+    const queue: Array<() => void> = [];
+    const supervisor = new FakeSupervisor({
+      emit: () => {},
+      schedule: cb => queue.push(cb),
+    });
+    const d = new IntentDispatcher({
+      logger: silentLogger(),
+      supervisor,
+    });
+    await d.dispatch('s', 'runtime_start', {
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      options: {},
+    });
+    while (queue.length) queue.shift()!();
+    const r = await d.dispatch('q', 'runtime_status', {});
+    expect('result' in r).toBe(true);
+    if ('result' in r) {
+      const result = r.result as { runtimes: Array<{ phase: string }> };
+      expect(result.runtimes).toHaveLength(1);
+      expect(result.runtimes[0]?.phase).toBe('ready');
+    }
+  });
+
+  it('rejects runtime_* with internal_error when no supervisor wired', async () => {
+    const d = new IntentDispatcher({ logger: silentLogger() });
+    const r = await d.dispatch('s', 'runtime_start', {
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      options: {},
+    });
+    expect('error' in r).toBe(true);
+    if ('error' in r) {
+      expect(r.error.code).toBe('internal_error');
+      expect(r.error.message).toContain('no supervisor');
+    }
+  });
+
+  it('rejects runtime_inject_env (removed v3) as unknown_intent', async () => {
+    const supervisor = new FakeSupervisor({ emit: () => {} });
+    const d = new IntentDispatcher({
+      logger: silentLogger(),
+      supervisor,
+    });
+    const r = await d.dispatch('x', 'runtime_inject_env', {
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      env_patch: {},
+    });
+    expect('error' in r).toBe(true);
+    if ('error' in r) expect(r.error.code).toBe('unknown_intent');
+  });
+
+  it('runtime_output_pause / _resume return successful no-op (v0)', async () => {
+    const supervisor = new FakeSupervisor({ emit: () => {} });
+    const d = new IntentDispatcher({
+      logger: silentLogger(),
+      supervisor,
+    });
+    const pause = await d.dispatch('p', 'runtime_output_pause', {
+      conversation_id: 'c1',
+      agent_id: 'a1',
+    });
+    expect('result' in pause).toBe(true);
+    if ('result' in pause) expect(pause.result).toEqual({ paused: true });
+    const resume = await d.dispatch('r', 'runtime_output_resume', {
+      conversation_id: 'c1',
+      agent_id: 'a1',
+    });
+    expect('result' in resume).toBe(true);
+    if ('result' in resume) expect(resume.result).toEqual({ resumed: true });
+  });
+
+  it('status intent merges supervisor runtimes into ping-style status', async () => {
+    const queue: Array<() => void> = [];
+    const supervisor = new FakeSupervisor({
+      emit: () => {},
+      schedule: cb => queue.push(cb),
+    });
+    const d = new IntentDispatcher({
+      logger: silentLogger(),
+      supervisor,
+    });
+    await d.dispatch('s', 'runtime_start', {
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      options: {},
+    });
+    while (queue.length) queue.shift()!();
+    const r = await d.dispatch('q', 'status', {});
+    expect('result' in r).toBe(true);
+    if ('result' in r) {
+      const result = r.result as { runtimes: unknown[] };
+      expect(result.runtimes).toHaveLength(1);
     }
   });
 });
