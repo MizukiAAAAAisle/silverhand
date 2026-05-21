@@ -49,6 +49,7 @@ import { NotificationRepo } from './repos/notification-repo.js';
 import { ScheduleRepo } from './repos/schedule-repo.js';
 import { SettingsRepo } from './repos/settings-repo.js';
 import { WorkspaceRepo } from './repos/workspace-repo.js';
+import { MembershipService } from './services/membership-service.js';
 import { AttachmentService } from './services/attachment-service.js';
 import { AgentService } from './services/agent-service.js';
 import { ChannelService } from './services/channel-service.js';
@@ -266,6 +267,19 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
       users: new UserRepo(db),
       settings: new SettingsRepo(db),
       coordinator,
+      workspaces: new WorkspaceRepo(db, { workspacesRoot }),
+      membership: new MembershipService({
+        agents: new AgentRepo(db),
+        users: new UserRepo(db),
+        conversations: new ConversationRepo(db),
+      }),
+      silverhandDir: opts.silverhandDir,
+      silverhandCli: opts.silverhandCliLauncher,
+      agentTokens: ctx.agentTokens,
+      // serverConfig is read fresh on every start() so it picks up the
+      // bound port after the Hono server listens (ctx.serverConfig is
+      // mutated mid-boot from `:0` placeholder to the real URL).
+      serverConfig: () => ctx.serverConfig,
       db,
       logger,
     });

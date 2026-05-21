@@ -2,10 +2,9 @@
  * `DaemonAgentRuntimeHost` — daemon-mode implementation of
  * `AgentRuntimeHost`.
  *
- * # Scope of this sub-commit (2b-ii, slices 1-4b)
+ * # Scope of this sub-commit (2b-ii, slices 1-4c)
  *
- * The lifecycle / delivery surface is being filled in across multiple
- * sub-commits. This file currently implements:
+ * Every method on the `AgentRuntimeHost` interface is now implemented:
  *
  *   - **Read methods** — `getAgentRunStates`, `resolveRun`,
  *     `resolveConversationRuns` — backed by `RunStateCache` + an
@@ -29,57 +28,71 @@
  *     wake-vs-queue-vs-respawn routing + `markDelivered` timing
  *     (Cindy `5Yrv3roymWkCPxo1` #4: oneShot respawn ONLY via
  *     `start()+startup_delivery`).
- *
- * The following methods still throw with a labelled
- * "not-yet-implemented-in-2b-ii" message and a rollback recipe:
- *
- *   - `start` — requires lifting CM's `buildPromptContext` +
- *     `prepareSpawnFiles` orchestration + inbox-drain payload
- *     composition into shared helpers (slice 4c).
+ *   - **Start** — `start` lifts CM's prompt-context assembly into the
+ *     shared `runtime/prompt-context.ts` module, drives
+ *     `prepareSpawnFiles`, composes either `startup_delivery`
+ *     (streamed drivers) or `initial_prompt` (oneShot drivers) from
+ *     the pending inbox, builds the spawn env via the existing
+ *     `buildAgentSpawnEnv` helper, and ships the whole bundle through
+ *     `bridge.runtimeStart`. The `{started:false, reason:'init_cooldown'}`
+ *     arm is projected to an `agent_status` SSE with
+ *     `reason:'init_cooldown'` + `cooldown_until` (mirrors CM's
+ *     `publishInitCooldown`); the success arm flips the row to
+ *     `starting` + the daemon-reported pid.
  *
  * Daemon mode remains opt-in via `SILVERHAND_RUNTIME_HOST=daemon`; the
  * default (unset / `legacy`) still resolves to the in-process
- * `ConversationManager`. The boot dispatch in `index.ts` does NOT yet
- * wire callers through `DaemonAgentRuntimeHost` for the
- * not-yet-implemented surface — calls that reach those throws are an
- * explicit operator opt-in to an unfinished mode.
+ * `ConversationManager`.
  *
- * # Why throws, not no-ops (preserved from 2a)
+ * # Why throws (and how this file uses them, preserved from 2a)
  *
  * Cindy `0G5uJBydO_4qt_2r`: "daemon mode 对这类未覆盖场景 fail
  * loudly / 明确保留 pending，不能假装 delivered、也不能改变
- * markDelivered 时点." A silent no-op here would silently lose
- * messages / orphan UI state when an operator switches to daemon mode
- * prematurely. A loud throw with the exact rollback command surfaces
- * the misconfiguration immediately.
+ * markDelivered 时点." A silent no-op would silently lose messages or
+ * orphan UI state when an operator switches to daemon mode prematurely.
+ * The `notImplemented` helper is preserved for future methods that
+ * land before their tests do — it formats a loud error with the env
+ * var, method name, and rollback recipe.
  */
 import type {
   AgentRunState,
   AgentRunTerminalReason,
+  ServerConfig,
 } from '@silverhand/shared';
 import { systemSubtype } from '@silverhand/shared';
 import type { HostClient } from '@silverhand/host';
 import { getDriver } from '@silverhand/host/drivers';
 import type { Database } from 'better-sqlite3';
-import type { BackendLogger } from '../context.js';
+import type {
+  BackendLogger,
+  SilverhandCliLauncher,
+} from '../context.js';
 import type {
   ClearSessionResult,
   StartOptions,
 } from '../conversation-manager.js';
+import type { AgentTokenStore } from '../auth/agent-token-store.js';
+import { buildSystemPromptFor } from '../drivers/index.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationInboxRepo } from '../repos/conversation-inbox-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
 import type { SettingsRepo } from '../repos/settings-repo.js';
 import type { UserRepo } from '../repos/user-repo.js';
+import type { WorkspaceRepo } from '../repos/workspace-repo.js';
+import type { MembershipService } from '../services/membership-service.js';
+import { prepareSpawnFiles } from '../spawn-prep.js';
 import type { AgentRuntimeHost } from './agent-runtime-host.js';
 import type { RuntimeBridge } from './bridge.js';
 import type { RuntimeDeliveryCoordinator } from './delivery-coordinator.js';
 import type { RuntimeEventHandler } from './event-handler.js';
 import type { EventPublisher } from './event-handler.js';
+import { buildPromptContext } from './prompt-context.js';
 import type { RunStateCache } from './run-state-cache.js';
 import { SILVERHAND_RUNTIME_HOST_ENV } from './runtime-host-mode.js';
+import { buildAgentSpawnEnv } from './spawn-env.js';
 import {
+  formatInboxBatch,
   formatLiveMessage,
   sendMessageToolName,
 } from './stdin-format.js';
@@ -131,6 +144,28 @@ export interface DaemonAgentRuntimeHostDeps {
    *  through; coordinator owns wake-vs-queue-vs-respawn routing +
    *  inbox-ack timing. */
   coordinator: RuntimeDeliveryCoordinator;
+  /** Workspace repo — used by `start` to look up workspace metadata
+   *  for prompt-context assembly + the workspace-memory index. */
+  workspaces: WorkspaceRepo;
+  /** Membership projection used by `start` to render the prompt's
+   *  "Members in this conversation" block. Same instance CM uses so
+   *  the two runtime hosts produce byte-identical prompts. */
+  membership: MembershipService;
+  /** Path to the `~/.silverhand` directory used by `start` to locate
+   *  L1 `system_prompt.md` for the spawning agent. Wired from
+   *  `BackendContext.silverhandDir` at boot. */
+  silverhandDir: string;
+  /** `silverhand` CLI launcher passed to `prepareSpawnFiles`. CLI shim
+   *  inside the spawn dir resolves to this command. */
+  silverhandCli: SilverhandCliLauncher;
+  /** Per-spawn auth token issuer for the agent's CLI. The token is
+   *  embedded in the spawn env and rotates on every `start`. */
+  agentTokens: AgentTokenStore;
+  /** Backend's HTTP URL — read once per `start` and embedded in the
+   *  spawn env so the agent's `silverhand` CLI can reach the internal
+   *  routes. Wired as a thunk because `BackendContext.serverConfig`
+   *  is mutated after the Hono server binds its port. */
+  serverConfig: () => ServerConfig;
   /** Used by `clearSession` to wrap the row-update + audit insert in
    *  a single sqlite transaction (matches CM behavior). */
   db: Database;
@@ -140,11 +175,14 @@ export interface DaemonAgentRuntimeHostDeps {
 /**
  * Standard error message body for methods that remain
  * not-yet-implemented in this sub-commit. Centralised so the rollback
- * recipe phrasing cannot drift between methods.
+ * recipe phrasing cannot drift between methods. Kept around even after
+ * the last `start` throw was removed — future surface additions can
+ * reuse it without re-inventing the rollback recipe.
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function notImplemented(method: string): Error {
   return new Error(
-    `${SILVERHAND_RUNTIME_HOST_ENV}=daemon: ${method}() is not yet implemented in sub-commit 2b-ii (slices 1-4b cover read methods + stop + bulk shutdown + reconcileOnBoot + clearSession + deliverMessage; start lands in slice 4c). ` +
+    `${SILVERHAND_RUNTIME_HOST_ENV}=daemon: ${method}() is not yet implemented. ` +
       `To roll back, restart with ${SILVERHAND_RUNTIME_HOST_ENV}=legacy (or unset the variable). ` +
       `The legacy in-process ConversationManager path remains the canonical, fully-supported runtime.`,
   );
@@ -169,6 +207,12 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
   private readonly users: UserRepo;
   private readonly settings: SettingsRepo;
   private readonly coordinator: RuntimeDeliveryCoordinator;
+  private readonly workspaces: WorkspaceRepo;
+  private readonly membership: MembershipService;
+  private readonly silverhandDir: string;
+  private readonly silverhandCli: SilverhandCliLauncher;
+  private readonly agentTokens: AgentTokenStore;
+  private readonly serverConfig: () => ServerConfig;
   private readonly db: Database;
   private readonly logger: BackendLogger;
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -186,18 +230,314 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
     this.users = deps.users;
     this.settings = deps.settings;
     this.coordinator = deps.coordinator;
+    this.workspaces = deps.workspaces;
+    this.membership = deps.membership;
+    this.silverhandDir = deps.silverhandDir;
+    this.silverhandCli = deps.silverhandCli;
+    this.agentTokens = deps.agentTokens;
+    this.serverConfig = deps.serverConfig;
     this.db = deps.db;
     this.logger = deps.logger;
     this._client = deps.client;
   }
 
   // ── lifecycle ───────────────────────────────────────────────────
+  /**
+   * Spawn a runtime via the daemon. Mirrors CM's `start` orchestration
+   * but delegates the actual child-process management to the daemon
+   * over the IPC bridge:
+   *
+   *   1. Resolve conversation / agent / workspace + ensure the
+   *      `(conv, agent)` join row exists.
+   *   2. Idempotent cache check — if a live (non-`exited`) entry
+   *      already exists, no-op. The daemon-side `runtime_start` is
+   *      itself idempotent (returns the existing pid on repeat), but
+   *      we still short-circuit here so we don't waste a round-trip
+   *      + re-run prompt assembly.
+   *   3. Issue a fresh per-spawn agent token + build the prompt
+   *      context (lifted to `runtime/prompt-context.ts` so CM and
+   *      daemon mode produce byte-identical system prompts) + write
+   *      spawn files via `prepareSpawnFiles`.
+   *   4. Compose inbox payload:
+   *        - oneShot drivers (cursor) — drain inbox now; the formatted
+   *          text becomes `options.initial_prompt` (argv body for
+   *          cursor-agent). Daemon never emits a delivery-consumed
+   *          event for this path, so we `markDelivered` ourselves on
+   *          the success arm.
+   *        - streamed drivers (claude/codex) — drain inbox + encode
+   *          one stream-json line, ship as `startup_delivery`. Daemon
+   *          emits `runtime_startup_delivery_consumed` on success;
+   *          `RuntimeEventHandler` routes that event to
+   *          `inbox.markDelivered`. We DO NOT mark here.
+   *   5. Build the spawn env (same `buildAgentSpawnEnv` CM uses) and
+   *      call `bridge.runtimeStart` — the bridge layers proxy keys
+   *      on top of `baseEnv` per the allowlist.
+   *   6. Project the response:
+   *        - `{started: true}` → flip the row to `starting` + publish
+   *          `agent_status`. Daemon will emit `runtime_state` /
+   *          `runtime_ready_for_drain` events as the runtime
+   *          transitions through its watchdog stages; the cache
+   *          tracks those.
+   *        - `{started: false, reason: 'init_cooldown'}` → flip the
+   *          row to `crashed` + publish `agent_status` with
+   *          `reason: 'init_cooldown'` + `cooldown_until`. Mirrors
+   *          CM's `publishInitCooldown` projection (Cindy
+   *          `5Yrv3roymWkCPxo1` — pre-gate lives daemon-side; backend
+   *          only projects the result arm).
+   *
+   * Throws on transport / daemon `internal_error` (the bridge
+   * surfaces those as `HostClientError`); callers handle those the
+   * same way they handled CM throws — propagate to the originating
+   * request, log via `recordStartFailure` is a CM-only concept and is
+   * not replicated here because daemon mode does not own init-retry
+   * state.
+   */
   async start(
-    _conversationId: string,
-    _agentId: string,
-    _opts?: StartOptions,
+    conversationId: string,
+    agentId: string,
+    opts: StartOptions = {},
   ): Promise<void> {
-    throw notImplemented('start');
+    const conversation = this.conversations.get(conversationId);
+    if (!conversation) {
+      throw new Error(`conversation ${conversationId} not found`);
+    }
+    if (conversation.closed_at !== null) {
+      throw new Error(`conversation ${conversationId} is closed`);
+    }
+    const agent = this.agents.get(agentId);
+    if (!agent) throw new Error(`agent ${agentId} not found`);
+    const workspace = this.workspaces.get(conversation.workspace_id);
+    if (!workspace) {
+      throw new Error(`workspace ${conversation.workspace_id} not found`);
+    }
+
+    // Idempotent: if the cache says we already have a live runtime,
+    // no-op. We compare against the cache (not the DB row's `status`)
+    // because the cache is the daemon's authoritative projection — a
+    // stale `starting` row that the reconcile sweep hasn't cleared yet
+    // would otherwise short-circuit us when daemon has nothing.
+    const cacheEntry = this.cache.get(conversationId, agentId);
+    if (cacheEntry && cacheEntry.phase !== 'exited') {
+      this.logger.info(
+        {
+          kind: 'runtime',
+          mode: 'daemon',
+          conv_id: conversationId,
+          agent_id: agentId,
+          phase: cacheEntry.phase,
+        },
+        'start: no-op, runtime already live per daemon cache',
+      );
+      return;
+    }
+
+    // Ensure the join row exists (callers may have skipped addAgent).
+    let sessionAgent = this.conversations.getAgent(conversationId, agentId);
+    if (!sessionAgent) {
+      sessionAgent = this.conversations.addAgent(conversationId, agentId);
+    }
+
+    const driver = getDriver(agent.runtime);
+    const agentToken = this.agentTokens.issue(conversationId, agentId);
+
+    // Synthesize prompt + write spawn files.
+    const promptCtx = await buildPromptContext({
+      conversation,
+      workspace,
+      agent,
+      silverhandDir: this.silverhandDir,
+      listMembers: id => this.membership.listMembers(id),
+      listWorkspacesForAgent: id => this.workspaces.listForAgent(id),
+      getConversation: id => this.conversations.get(id),
+    });
+    const systemPromptText = buildSystemPromptFor(driver.kind, promptCtx);
+    const spawnPrep = await prepareSpawnFiles({
+      conversationId,
+      agentId,
+      systemPromptText,
+      silverhandCli: this.silverhandCli,
+    });
+
+    // Drain inbox per driver kind. For oneShot drivers the inbox
+    // can't ride over stdin — there is no persistent stdin loop on
+    // the daemon side either — so we drain now and pass the formatted
+    // text as `initial_prompt`. For streamed drivers we encode one
+    // stream-json line and ship it as `startup_delivery`.
+    let initialPrompt = '';
+    let startupDelivery:
+      | { delivery_ids: number[]; payload: {} | null }
+      | undefined;
+    let oneShotPreDrainedIds: number[] = [];
+    const pending = this.inboxes.listPending(conversationId, agentId);
+    if (pending.length > 0) {
+      const text = formatInboxBatch(
+        pending,
+        id => this.agents.get(id)?.name,
+        id => this.users.get(id)?.name,
+        this.resolveDefaultUserHandle(),
+        agent.name,
+        sendMessageToolName(driver),
+      );
+      if (driver.oneShot) {
+        initialPrompt = text;
+        oneShotPreDrainedIds = pending.map(p => p.inboxId);
+      } else {
+        const line = driver.encodeStdinMessage(
+          text,
+          sessionAgent.cli_session_id ?? null,
+        );
+        if (line !== null) {
+          startupDelivery = {
+            delivery_ids: pending.map(p => p.inboxId),
+            payload: line,
+          };
+        } else {
+          // Streamed driver but the encoder returned null — surfaces
+          // a driver bug or capability mismatch. Don't ship startup
+          // payload; let the spawn proceed empty so the daemon can
+          // still init, and the row stays pending for the next wake.
+          this.logger.warn(
+            {
+              kind: 'runtime',
+              mode: 'daemon',
+              conv_id: conversationId,
+              agent_id: agentId,
+              runtime: agent.runtime,
+              pending_count: pending.length,
+            },
+            'start: streamed driver returned null encoder; spawning without startup_delivery',
+          );
+        }
+      }
+    }
+
+    // Build the spawn env. The bridge layers proxy keys on top per
+    // the `proxy_runtimes` allowlist — we MUST pass the env we want
+    // the child to see via `baseEnv`, not pre-populated `options.env`.
+    const baseEnv = buildAgentSpawnEnv({
+      driver,
+      runtime: agent.runtime,
+      conversationId,
+      agentId,
+      serverUrl: this.serverConfig().url,
+      token: agentToken,
+      binDir: spawnPrep.binDir,
+      baseProcessEnv: process.env,
+      proxySettings: {
+        get: (key: 'proxy_url' | 'proxy_runtimes') => this.settings.get(key),
+      },
+    });
+
+    const options: NonNullable<
+      Parameters<RuntimeBridge['runtimeStart']>[0]['options']
+    > = {
+      runtime: agent.runtime,
+      cwd: conversation.workspace_path,
+      agent_name: agent.name,
+      cli_session_id: sessionAgent.cli_session_id,
+      model: opts.model ?? agent.model,
+      reasoning_effort: agent.reasoning_effort,
+      fast_mode: agent.fast_mode,
+      system_prompt_path: spawnPrep.systemPromptPath,
+      initial_prompt: initialPrompt,
+    };
+
+    this.logger.info(
+      {
+        kind: 'runtime',
+        mode: 'daemon',
+        conv_id: conversationId,
+        agent_id: agentId,
+        runtime: agent.runtime,
+        has_startup_delivery: startupDelivery !== undefined,
+        one_shot: driver.oneShot,
+        pending_inbox_count: pending.length,
+      },
+      'start: requesting runtime_start',
+    );
+
+    const result = await this.bridge.runtimeStart({
+      conversationId,
+      agentId,
+      runtime: agent.runtime,
+      baseEnv,
+      options,
+      ...(startupDelivery ? { startupDelivery } : {}),
+    });
+
+    if (!result.started) {
+      // init_cooldown arm — project to SSE so the renderer drops the
+      // spawn affordance and shows the cooldown timer. Mirrors CM's
+      // `publishInitCooldown`. We DO NOT mark inbox rows delivered;
+      // they survive the cooldown and drain on the next start.
+      this.conversations.updateAgentRuntime(conversationId, agentId, {
+        status: 'crashed',
+        pid: null,
+      });
+      this.events.publish(conversationId, {
+        kind: 'agent_status',
+        payload: {
+          agent_id: agentId,
+          status: 'crashed',
+          reason: 'init_cooldown',
+          cooldown_until: result.cooldown_until,
+        },
+      });
+      this.logger.warn(
+        {
+          kind: 'runtime',
+          mode: 'daemon',
+          conv_id: conversationId,
+          agent_id: agentId,
+          cooldown_until: result.cooldown_until,
+        },
+        'start: daemon refused with init_cooldown; surfaced to SSE',
+      );
+      return;
+    }
+
+    // Success arm — flip the DB row to `starting`. Daemon will emit
+    // `runtime_state` / `runtime_ready_for_drain` as the runtime
+    // crosses init / ready boundaries; `RuntimeEventHandler` advances
+    // `agent_status` from there. We DO NOT prematurely flip to
+    // `active` here.
+    this.conversations.updateAgentRuntime(conversationId, agentId, {
+      status: 'starting',
+      pid: result.pid,
+    });
+    this.events.publish(conversationId, {
+      kind: 'agent_status',
+      payload: {
+        agent_id: agentId,
+        status: 'starting',
+        pid: result.pid,
+      },
+    });
+
+    // oneShot drivers consume `initial_prompt` synchronously at
+    // child-spawn time, and daemon does NOT emit a delivery-consumed
+    // event for that path (it has no batch to ack). Mark the rows we
+    // pre-drained delivered now — leaving them pending would cause
+    // the next spawn to redeliver the same content. Streamed drivers
+    // are acked async via `runtime_startup_delivery_consumed`, which
+    // `RuntimeEventHandler` already routes to `inbox.markDelivered`.
+    if (oneShotPreDrainedIds.length > 0) {
+      this.inboxes.markDelivered(oneShotPreDrainedIds);
+    }
+
+    this.logger.info(
+      {
+        kind: 'runtime',
+        mode: 'daemon',
+        conv_id: conversationId,
+        agent_id: agentId,
+        pid: result.pid,
+        started_at: result.started_at,
+        startup_delivery_accepted: result.startup_delivery_accepted ?? null,
+        one_shot_marked_delivered: oneShotPreDrainedIds.length,
+      },
+      'start: daemon accepted runtime_start',
+    );
   }
 
   /**

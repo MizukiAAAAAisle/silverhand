@@ -28,6 +28,8 @@ import type {
   HostClient,
   RuntimeClearSessionResult,
   RuntimeCloseActivityLogResult,
+  RuntimeStartParams,
+  RuntimeStartResult,
   RuntimeStatusResult,
   RuntimeStopAllResult,
   RuntimeStopParams,
@@ -49,10 +51,19 @@ import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.j
 import { UserRepo } from '../../src/repos/user-repo.js';
 import { SettingsRepo } from '../../src/repos/settings-repo.js';
 import { RuntimeDeliveryCoordinator } from '../../src/runtime/delivery-coordinator.js';
-import type { BackendLogger } from '../../src/context.js';
+import { MembershipService } from '../../src/services/membership-service.js';
+import { AgentTokenStore } from '../../src/auth/agent-token-store.js';
+import type {
+  BackendLogger,
+  SilverhandCliLauncher,
+} from '../../src/context.js';
+import type { ServerConfig } from '@silverhand/shared';
 import { openTestDb, makeTempSilverhandDir } from '../utils/db.js';
 
 interface ClientOverrides {
+  runtimeStart?: (
+    params: RuntimeStartParams,
+  ) => Promise<RuntimeStartResult> | RuntimeStartResult;
   runtimeStop?: (
     params: RuntimeStopParams,
   ) => Promise<RuntimeStopResult> | RuntimeStopResult;
@@ -126,6 +137,33 @@ const noopSettingsRepo = {
   getViewerUserId: () => null,
 } as unknown as SettingsRepo;
 
+// New-in-slice-4c stubs — start() reads from workspace/membership +
+// the auth/launcher/serverConfig wiring. Tests that don't exercise
+// start() never invoke these.
+const noopWorkspaceRepo = {
+  get: () => null,
+  listForAgent: () => [],
+} as unknown as WorkspaceRepo;
+const noopMembership = {
+  listMembers: () => [],
+} as unknown as MembershipService;
+const noopAgentTokens = new AgentTokenStore();
+const noopSilverhandCli: SilverhandCliLauncher = {
+  command: '/tmp/silverhand-stub',
+  args: [],
+};
+const noopServerConfig = (): ServerConfig => ({
+  mode: 'embedded',
+  url: 'http://127.0.0.1:0',
+  auth_token: 'test-token-1234567890ab',
+  refresh_token: null,
+  child_sessions: {
+    max_concurrent_per_parent: null,
+    spawn_cooldown_seconds: null,
+    max_depth: 1,
+  },
+});
+
 function makeFakeClient(overrides: ClientOverrides = {}): HostClient {
   // Methods absent from `overrides` are unreachable in the tests below
   // (the live methods explicitly delegate to bridge.runtimeStop /
@@ -138,7 +176,9 @@ function makeFakeClient(overrides: ClientOverrides = {}): HostClient {
     ping: reject,
     subscribe: overrides.subscribe ?? (() => () => {}),
     onReconnect: () => () => {},
-    runtimeStart: reject,
+    runtimeStart: overrides.runtimeStart
+      ? async (params: RuntimeStartParams) => overrides.runtimeStart!(params)
+      : reject,
     runtimeStop: overrides.runtimeStop
       ? async (params: RuntimeStopParams) => overrides.runtimeStop!(params)
       : reject,
@@ -183,6 +223,12 @@ function makeHost(
     settings?: SettingsRepo;
     coordinator?: RuntimeDeliveryCoordinator;
     cache?: RunStateCache;
+    workspaces?: WorkspaceRepo;
+    membership?: MembershipService;
+    silverhandDir?: string;
+    silverhandCli?: SilverhandCliLauncher;
+    agentTokens?: AgentTokenStore;
+    serverConfig?: () => ServerConfig;
   } = {},
 ): HostFixture {
   const client = makeFakeClient(clientOverrides);
@@ -233,6 +279,12 @@ function makeHost(
     users,
     settings,
     coordinator,
+    workspaces: extraDeps.workspaces ?? noopWorkspaceRepo,
+    membership: extraDeps.membership ?? noopMembership,
+    silverhandDir: extraDeps.silverhandDir ?? '/tmp/silverhand-stub-dir',
+    silverhandCli: extraDeps.silverhandCli ?? noopSilverhandCli,
+    agentTokens: extraDeps.agentTokens ?? noopAgentTokens,
+    serverConfig: extraDeps.serverConfig ?? noopServerConfig,
     db: extraDeps.db ?? noopDb,
     logger: noopLogger,
   });
@@ -259,6 +311,7 @@ function fakeRunState(patch: Partial<AgentRunState> = {}): AgentRunState {
 
 const ROLLBACK_RECIPE = 'SILVERHAND_RUNTIME_HOST=legacy';
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function assertScaffoldingError(err: unknown, method: string): void {
   expect(err).toBeInstanceOf(Error);
   const message = (err as Error).message;
@@ -737,6 +790,12 @@ describe('DaemonAgentRuntimeHost — stop (soft)', () => {
         cache,
         inboxAck: { markDelivered: () => {} },
       }),
+      workspaces: noopWorkspaceRepo,
+      membership: noopMembership,
+      silverhandDir: '/tmp/silverhand-stub-dir',
+      silverhandCli: noopSilverhandCli,
+      agentTokens: noopAgentTokens,
+      serverConfig: noopServerConfig,
       db: noopDb,
       logger: customLogger,
     });
@@ -806,17 +865,6 @@ describe('DaemonAgentRuntimeHost — stopAll / closeActivityLog', () => {
   });
 });
 
-describe('DaemonAgentRuntimeHost — not-yet-implemented (2b-ii scaffold)', () => {
-  it('start() throws with rollback recipe', async () => {
-    const { host } = makeHost();
-    let err: unknown;
-    await host.start(CONV, AGENT_X).catch(e => {
-      err = e;
-    });
-    assertScaffoldingError(err, 'start');
-  });
-});
-
 describe('DaemonAgentRuntimeHost — constructor', () => {
   it('accepts the deps shape without throwing', () => {
     const client = makeFakeClient();
@@ -851,6 +899,12 @@ describe('DaemonAgentRuntimeHost — constructor', () => {
             cache,
             inboxAck: { markDelivered: () => {} },
           }),
+          workspaces: noopWorkspaceRepo,
+          membership: noopMembership,
+          silverhandDir: '/tmp/silverhand-stub-dir',
+          silverhandCli: noopSilverhandCli,
+          agentTokens: noopAgentTokens,
+          serverConfig: noopServerConfig,
           db: noopDb,
           logger: noopLogger,
         }),
@@ -1753,6 +1807,12 @@ describe('DaemonAgentRuntimeHost — deliverMessage', () => {
         users: fix.users,
         settings: fix.settings,
         coordinator,
+        workspaces: noopWorkspaceRepo,
+        membership: noopMembership,
+        silverhandDir: '/tmp/silverhand-stub-dir',
+        silverhandCli: noopSilverhandCli,
+        agentTokens: noopAgentTokens,
+        serverConfig: noopServerConfig,
         db: fix.db,
         logger: customLogger,
       });
@@ -1914,6 +1974,423 @@ describe('DaemonAgentRuntimeHost — deliverMessage', () => {
         )
         .get(msgId);
       expect(row?.delivered_at).toBeNull();
+    } finally {
+      fix.cleanup();
+    }
+  });
+});
+
+// ── slice 4c: DaemonHost.start ─────────────────────────────────────
+//
+// `start()` orchestrates spawn intent: it builds the prompt context,
+// writes spawn files, optionally composes startup_delivery (streamed)
+// or initial_prompt (oneShot), and calls `bridge.runtimeStart`. The
+// real spawn happens daemon-side; backend only wires the request and
+// projects the response.
+//
+// Behavioral surface covered here:
+//
+//   1. Success arm — bridge returns {started:true, pid, started_at}.
+//      DB row flips to `starting` + pid; SSE `agent_status` published.
+//   2. init_cooldown arm — bridge returns {started:false,
+//      reason:'init_cooldown', cooldown_until}. DB row flips to
+//      `crashed` + null pid; SSE carries `reason:'init_cooldown'` +
+//      `cooldown_until`. Mirrors CM `publishInitCooldown`.
+//   3. Idempotency — cache shows live entry → no-op (no bridge call).
+//   4. Streamed startup_delivery — inbox has rows; one stream-json
+//      line composed + shipped as `startup_delivery`. markDelivered
+//      NOT called here (daemon's runtime_startup_delivery_consumed
+//      event is the async ack).
+//   5. oneShot drain — cursor agent with inbox; initial_prompt
+//      populated, NO startup_delivery, markDelivered IS called after
+//      the success arm (daemon does not emit consumed event for the
+//      argv-content path).
+//   6. Transport throw — bridge throws → start() propagates the error;
+//      DB row untouched.
+
+interface StartFixture extends DeliverFixture {
+  workspaces: WorkspaceRepo;
+  membership: MembershipService;
+  silverhandDir: string;
+  silverhandCli: SilverhandCliLauncher;
+  agentTokens: AgentTokenStore;
+  serverConfig: () => ServerConfig;
+}
+
+function makeStartFixture(opts: {
+  agentRuntime?: 'claude' | 'cursor';
+} = {}): StartFixture {
+  const base = makeDeliverFixture(opts);
+  const workspaces = new WorkspaceRepo(base.db, {
+    workspacesRoot: '/tmp/silverhand-stub-workspaces',
+  });
+  const membership = new MembershipService({
+    agents: base.agents,
+    users: base.users,
+    conversations: base.conversations,
+  });
+  const tmp = makeTempSilverhandDir();
+  // Extend cleanup so the silverhandDir temp folder is removed too.
+  const compoundCleanup = (): void => {
+    try {
+      tmp.cleanup();
+    } catch {
+      // best-effort
+    }
+    base.cleanup();
+  };
+  return {
+    ...base,
+    cleanup: compoundCleanup,
+    workspaces,
+    membership,
+    silverhandDir: tmp.silverhandDir,
+    silverhandCli: noopSilverhandCli,
+    agentTokens: new AgentTokenStore(),
+    serverConfig: noopServerConfig,
+  };
+}
+
+describe('DaemonAgentRuntimeHost — start', () => {
+  it('success arm: {started:true} → DB row flips to starting + pid; SSE agent_status published', async () => {
+    const fix = makeStartFixture();
+    try {
+      const cache = new RunStateCache();
+      const startCalls: RuntimeStartParams[] = [];
+      const { host, events } = makeHost(
+        {
+          runtimeStart: async params => {
+            startCalls.push(params);
+            return {
+              started: true,
+              pid: 42,
+              started_at: 1700000000000,
+            };
+          },
+        },
+        fix.conversations,
+        {
+          agents: fix.agents,
+          messages: fix.messages,
+          inboxes: fix.inboxes,
+          users: fix.users,
+          settings: fix.settings,
+          workspaces: fix.workspaces,
+          membership: fix.membership,
+          silverhandDir: fix.silverhandDir,
+          silverhandCli: fix.silverhandCli,
+          agentTokens: fix.agentTokens,
+          serverConfig: fix.serverConfig,
+          cache,
+          db: fix.db,
+        },
+      );
+
+      await host.start(fix.channelId, fix.agentId);
+
+      // Bridge was called with the right shape.
+      expect(startCalls.length).toBe(1);
+      expect(startCalls[0]!.conversation_id).toBe(fix.channelId);
+      expect(startCalls[0]!.agent_id).toBe(fix.agentId);
+      // No inbox → no startup_delivery.
+      expect(startCalls[0]!.startup_delivery).toBeUndefined();
+
+      // DB row updated.
+      const row = fix.db
+        .prepare<[string, string], { status: string; pid: number | null }>(
+          'SELECT status, pid FROM conversation_agents WHERE conversation_id = ? AND agent_id = ?',
+        )
+        .get(fix.channelId, fix.agentId);
+      expect(row?.status).toBe('starting');
+      expect(row?.pid).toBe(42);
+
+      // SSE agent_status emitted.
+      const statusEvents = events.publishes.filter(p => p.kind === 'agent_status');
+      expect(statusEvents.length).toBe(1);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const payload = statusEvents[0]!.payload as any;
+      expect(payload.agent_id).toBe(fix.agentId);
+      expect(payload.status).toBe('starting');
+      expect(payload.pid).toBe(42);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('init_cooldown arm: {started:false} → DB flips to crashed; SSE carries reason + cooldown_until', async () => {
+    const fix = makeStartFixture();
+    try {
+      const cache = new RunStateCache();
+      const cooldownUntil = Date.now() + 5 * 60 * 1000;
+      const { host, events } = makeHost(
+        {
+          runtimeStart: async () => ({
+            started: false,
+            reason: 'init_cooldown',
+            cooldown_until: cooldownUntil,
+          }),
+        },
+        fix.conversations,
+        {
+          agents: fix.agents,
+          messages: fix.messages,
+          inboxes: fix.inboxes,
+          users: fix.users,
+          settings: fix.settings,
+          workspaces: fix.workspaces,
+          membership: fix.membership,
+          silverhandDir: fix.silverhandDir,
+          silverhandCli: fix.silverhandCli,
+          agentTokens: fix.agentTokens,
+          serverConfig: fix.serverConfig,
+          cache,
+          db: fix.db,
+        },
+      );
+
+      await host.start(fix.channelId, fix.agentId);
+
+      // DB row → crashed + null pid.
+      const row = fix.db
+        .prepare<[string, string], { status: string; pid: number | null }>(
+          'SELECT status, pid FROM conversation_agents WHERE conversation_id = ? AND agent_id = ?',
+        )
+        .get(fix.channelId, fix.agentId);
+      expect(row?.status).toBe('crashed');
+      expect(row?.pid).toBeNull();
+
+      // SSE.
+      const statusEvents = events.publishes.filter(p => p.kind === 'agent_status');
+      expect(statusEvents.length).toBe(1);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const payload = statusEvents[0]!.payload as any;
+      expect(payload.status).toBe('crashed');
+      expect(payload.reason).toBe('init_cooldown');
+      expect(payload.cooldown_until).toBe(cooldownUntil);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('idempotent: cache has live entry → no-op; bridge NOT called', async () => {
+    const fix = makeStartFixture();
+    try {
+      const cache = new RunStateCache();
+      cache.applyRuntimeStatus(DAEMON_KEY, [
+        {
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+          pid: 99,
+          phase: 'ready',
+          run_state: null,
+          started_at: 1700000000000,
+        },
+      ]);
+      let called = 0;
+      const { host } = makeHost(
+        {
+          runtimeStart: async () => {
+            called += 1;
+            return { started: true, pid: 99, started_at: 1700000000000 };
+          },
+        },
+        fix.conversations,
+        {
+          agents: fix.agents,
+          messages: fix.messages,
+          inboxes: fix.inboxes,
+          users: fix.users,
+          settings: fix.settings,
+          workspaces: fix.workspaces,
+          membership: fix.membership,
+          silverhandDir: fix.silverhandDir,
+          silverhandCli: fix.silverhandCli,
+          agentTokens: fix.agentTokens,
+          serverConfig: fix.serverConfig,
+          cache,
+          db: fix.db,
+        },
+      );
+      await host.start(fix.channelId, fix.agentId);
+      expect(called).toBe(0);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('streamed driver with pending inbox → startup_delivery composed; markDelivered NOT called by start', async () => {
+    const fix = makeStartFixture(); // claude (streamed)
+    try {
+      const cache = new RunStateCache();
+      // Seed pending inbox row.
+      const msgId = fix.insertViewerMessage('@agent-deliver please look');
+      const delivery = fix.inboxes.ensureDelivery(
+        fix.channelId,
+        fix.agentId,
+        msgId,
+      );
+
+      const startCalls: RuntimeStartParams[] = [];
+      const { host } = makeHost(
+        {
+          runtimeStart: async params => {
+            startCalls.push(params);
+            return {
+              started: true,
+              pid: 42,
+              started_at: 1700000000000,
+              startup_delivery_accepted: true,
+            };
+          },
+        },
+        fix.conversations,
+        {
+          agents: fix.agents,
+          messages: fix.messages,
+          inboxes: fix.inboxes,
+          users: fix.users,
+          settings: fix.settings,
+          workspaces: fix.workspaces,
+          membership: fix.membership,
+          silverhandDir: fix.silverhandDir,
+          silverhandCli: fix.silverhandCli,
+          agentTokens: fix.agentTokens,
+          serverConfig: fix.serverConfig,
+          cache,
+          db: fix.db,
+        },
+      );
+
+      await host.start(fix.channelId, fix.agentId);
+
+      expect(startCalls.length).toBe(1);
+      const sd = startCalls[0]!.startup_delivery;
+      expect(sd).toBeDefined();
+      expect(sd!.delivery_ids).toEqual([delivery.inboxId]);
+      // Payload is a JSON stream-json line containing the message.
+      const decoded = JSON.parse(sd!.payload as string);
+      expect(decoded.type).toBe('user');
+      expect(decoded.message.content[0].text).toContain(
+        '@agent-deliver please look',
+      );
+
+      // start() MUST NOT mark delivered for streamed drivers — that's
+      // the daemon's `runtime_startup_delivery_consumed` ack route.
+      const row = fix.db
+        .prepare<[string], { delivered_at: number | null }>(
+          'SELECT delivered_at FROM conversation_inboxes WHERE message_id = ?',
+        )
+        .get(msgId);
+      expect(row?.delivered_at).toBeNull();
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('oneShot driver with pending inbox → initial_prompt populated; rows marked delivered after success', async () => {
+    const fix = makeStartFixture({ agentRuntime: 'cursor' });
+    try {
+      const cache = new RunStateCache();
+      const msgId = fix.insertViewerMessage('hello cursor');
+      fix.inboxes.ensureDelivery(fix.channelId, fix.agentId, msgId);
+
+      const startCalls: RuntimeStartParams[] = [];
+      const { host } = makeHost(
+        {
+          runtimeStart: async params => {
+            startCalls.push(params);
+            return {
+              started: true,
+              pid: 7,
+              started_at: 1700000000000,
+            };
+          },
+        },
+        fix.conversations,
+        {
+          agents: fix.agents,
+          messages: fix.messages,
+          inboxes: fix.inboxes,
+          users: fix.users,
+          settings: fix.settings,
+          workspaces: fix.workspaces,
+          membership: fix.membership,
+          silverhandDir: fix.silverhandDir,
+          silverhandCli: fix.silverhandCli,
+          agentTokens: fix.agentTokens,
+          serverConfig: fix.serverConfig,
+          cache,
+          db: fix.db,
+        },
+      );
+
+      await host.start(fix.channelId, fix.agentId);
+
+      expect(startCalls.length).toBe(1);
+      // oneShot: NO startup_delivery; initial_prompt has the text.
+      expect(startCalls[0]!.startup_delivery).toBeUndefined();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const options = startCalls[0]!.options as any;
+      expect(typeof options.initial_prompt).toBe('string');
+      expect(options.initial_prompt).toContain('hello cursor');
+
+      // oneShot: markDelivered IS called (daemon has no async ack
+      // route for argv-content drains).
+      const row = fix.db
+        .prepare<[string], { delivered_at: number | null }>(
+          'SELECT delivered_at FROM conversation_inboxes WHERE message_id = ?',
+        )
+        .get(msgId);
+      expect(row?.delivered_at).not.toBeNull();
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('bridge transport error → start() rejects; DB row untouched', async () => {
+    const fix = makeStartFixture();
+    try {
+      const cache = new RunStateCache();
+      const { host } = makeHost(
+        {
+          runtimeStart: () => {
+            throw new Error('daemon disconnected');
+          },
+        },
+        fix.conversations,
+        {
+          agents: fix.agents,
+          messages: fix.messages,
+          inboxes: fix.inboxes,
+          users: fix.users,
+          settings: fix.settings,
+          workspaces: fix.workspaces,
+          membership: fix.membership,
+          silverhandDir: fix.silverhandDir,
+          silverhandCli: fix.silverhandCli,
+          agentTokens: fix.agentTokens,
+          serverConfig: fix.serverConfig,
+          cache,
+          db: fix.db,
+        },
+      );
+      let err: unknown;
+      await host.start(fix.channelId, fix.agentId).catch(e => {
+        err = e;
+      });
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toContain('daemon disconnected');
+
+      // DB row was never flipped to starting/crashed.
+      const row = fix.db
+        .prepare<[string, string], { status: string }>(
+          'SELECT status FROM conversation_agents WHERE conversation_id = ? AND agent_id = ?',
+        )
+        .get(fix.channelId, fix.agentId);
+      // Initial status after addAgent — anything other than starting/crashed
+      // means we never wrote a partial state.
+      expect(row?.status).not.toBe('starting');
+      expect(row?.status).not.toBe('crashed');
     } finally {
       fix.cleanup();
     }
