@@ -25,6 +25,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type {
   HostClient,
   RuntimeCloseActivityLogResult,
+  RuntimeStatusResult,
   RuntimeStopAllResult,
   RuntimeStopParams,
   RuntimeStopResult,
@@ -35,6 +36,12 @@ import { RuntimeBridge } from '../../src/runtime/bridge.js';
 import { RunStateCache } from '../../src/runtime/run-state-cache.js';
 import { RuntimeEventHandler } from '../../src/runtime/event-handler.js';
 import type { EventPublisher } from '../../src/runtime/event-handler.js';
+import type { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { ConversationRepo as RealConversationRepo } from '../../src/repos/conversation-repo.js';
+import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
+import { AgentRepo } from '../../src/repos/agent-repo.js';
+import type { BackendLogger } from '../../src/context.js';
+import { openTestDb, makeTempSilverhandDir } from '../utils/db.js';
 
 interface ClientOverrides {
   runtimeStop?: (
@@ -46,7 +53,25 @@ interface ClientOverrides {
   runtimeCloseActivityLog?: () =>
     | Promise<RuntimeCloseActivityLogResult>
     | RuntimeCloseActivityLogResult;
+  runtimeStatus?: () => Promise<RuntimeStatusResult> | RuntimeStatusResult;
+  subscribe?: HostClient['subscribe'];
 }
+
+const noopLogger: BackendLogger = {
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+  debug: () => {},
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+} as any;
+
+// Minimal stub used by tests that never call reconcileOnBoot — the
+// type checker insists on a ConversationRepo shape, but listLiveStatusAgents
+// is never invoked. Cast through `unknown` keeps the surface narrow.
+const noopConversationRepo = {
+  listLiveStatusAgents: () => [],
+  updateAgentRuntime: () => null,
+} as unknown as ConversationRepo;
 
 function makeFakeClient(overrides: ClientOverrides = {}): HostClient {
   // Methods absent from `overrides` are unreachable in the tests below
@@ -58,14 +83,16 @@ function makeFakeClient(overrides: ClientOverrides = {}): HostClient {
     Promise.reject(new Error('unmocked host client method'));
   return {
     ping: reject,
-    subscribe: () => () => {},
+    subscribe: overrides.subscribe ?? (() => () => {}),
     onReconnect: () => () => {},
     runtimeStart: reject,
     runtimeStop: overrides.runtimeStop
       ? async (params: RuntimeStopParams) => overrides.runtimeStop!(params)
       : reject,
     runtimeWake: reject,
-    runtimeStatus: reject,
+    runtimeStatus: overrides.runtimeStatus
+      ? async () => overrides.runtimeStatus!()
+      : reject,
     runtimeClearSession: reject,
     runtimeStopAll: overrides.runtimeStopAll
       ? async () => overrides.runtimeStopAll!()
@@ -88,7 +115,10 @@ interface HostFixture {
   publisher: EventPublisher;
 }
 
-function makeHost(clientOverrides: ClientOverrides = {}): HostFixture {
+function makeHost(
+  clientOverrides: ClientOverrides = {},
+  conversations: ConversationRepo = noopConversationRepo,
+): HostFixture {
   const client = makeFakeClient(clientOverrides);
   const bridge = new RuntimeBridge(client, { get: () => null });
   const cache = new RunStateCache();
@@ -115,6 +145,8 @@ function makeHost(clientOverrides: ClientOverrides = {}): HostFixture {
     cache,
     eventHandler,
     events: publisher,
+    conversations,
+    logger: noopLogger,
   });
   return { host, cache, bridge, events, publisher };
 }
@@ -500,15 +532,6 @@ describe('DaemonAgentRuntimeHost — not-yet-implemented (2b-ii scaffold)', () =
     });
     assertScaffoldingError(err, 'deliverMessage');
   });
-
-  it('reconcileOnBoot() throws', async () => {
-    const { host } = makeHost();
-    let err: unknown;
-    await Promise.resolve(host.reconcileOnBoot()).catch(e => {
-      err = e;
-    });
-    assertScaffoldingError(err, 'reconcileOnBoot');
-  });
 });
 
 describe('DaemonAgentRuntimeHost — constructor', () => {
@@ -532,7 +555,226 @@ describe('DaemonAgentRuntimeHost — constructor', () => {
           cache,
           eventHandler,
           events,
+          conversations: noopConversationRepo,
+          logger: noopLogger,
         }),
     ).not.toThrow();
+  });
+});
+
+// ── reconcileOnBoot ─────────────────────────────────────────────────
+//
+// Boot recovery (Cindy `5Yrv3roymWkCPxo1` watchlist #3 — snapshot-aware).
+// Three cases pin the contract:
+//
+//   1. Snapshot returned by daemon = ground truth. DB rows whose
+//      (conv, agent) appear in the snapshot are left alone (daemon is
+//      supervising). Rows absent from the snapshot are cleared to
+//      `idle` (`pid=null`, `cli_session_id` preserved). A matching
+//      `agent_status` SSE fires per cleared row so renderers drop
+//      stale spinners immediately.
+//   2. Empty DB → no-op (nothing to diff).
+//   3. Hydrate failure → SKIP the diff. Daemon might be temporarily
+//      unreachable; clearing rows here would spuriously flip live
+//      agents to idle. Logged as a warning.
+
+interface ReconcileFixture {
+  silverhandDir: string;
+  workspacesRoot: string;
+  cleanup: () => void;
+  conversations: ConversationRepo;
+  agents: AgentRepo;
+  workspaces: WorkspaceRepo;
+  insertChannelWithAgent(
+    workspaceName: string,
+    agentName: string,
+  ): { channelId: string; agentId: string };
+}
+
+function makeReconcileFixture(): ReconcileFixture {
+  const { db, viewerUserId, localHostId } = openTestDb();
+  const { silverhandDir, workspacesRoot, cleanup } = makeTempSilverhandDir();
+  const conversations = new RealConversationRepo(db);
+  const agents = new AgentRepo(db);
+  const workspaces = new WorkspaceRepo(db, { workspacesRoot });
+  let n = 0;
+  return {
+    silverhandDir,
+    workspacesRoot,
+    cleanup,
+    conversations,
+    agents,
+    workspaces,
+    insertChannelWithAgent(workspaceName, agentName) {
+      n += 1;
+      const ws = workspaces.insert({
+        name: workspaceName,
+        description: null,
+        workspacePath: `${workspacesRoot}/${workspaceName}-${n}`,
+        workspaceHostId: localHostId,
+      });
+      const agent = agents.create(
+        { name: agentName, runtime: 'claude', host_id: localHostId },
+        localHostId,
+        viewerUserId,
+      );
+      const channel = conversations.insertChannel({
+        workspaceId: ws.id,
+        workspacePath: ws.workspace_path,
+        title: workspaceName,
+        spawnedByAgentId: null,
+      });
+      conversations.addAgent(channel.id, agent.id);
+      return { channelId: channel.id, agentId: agent.id };
+    },
+  };
+}
+
+function readyFrame(daemonPid: number, startedAt: number) {
+  return {
+    event: 'ready' as const,
+    daemon_pid: daemonPid,
+    daemon_version: 'test',
+    started_at: startedAt,
+    socket_path: '/tmp/fake.sock',
+  };
+}
+
+describe('DaemonAgentRuntimeHost — reconcileOnBoot', () => {
+  it('clears DB rows whose (conv, agent) is absent from the daemon snapshot', async () => {
+    const fix = makeReconcileFixture();
+    try {
+      const alive = fix.insertChannelWithAgent('ws-alive', 'alive');
+      const stale = fix.insertChannelWithAgent('ws-stale', 'stale');
+      fix.conversations.updateAgentRuntime(alive.channelId, alive.agentId, {
+        status: 'active',
+        pid: 1111,
+      });
+      fix.conversations.updateAgentRuntime(stale.channelId, stale.agentId, {
+        status: 'starting',
+        pid: 2222,
+      });
+
+      // Snapshot: daemon knows about the alive pair only.
+      const runtimeStatus = vi.fn(
+        async (): Promise<RuntimeStatusResult> => ({
+          runtimes: [
+            {
+              conversation_id: alive.channelId,
+              agent_id: alive.agentId,
+              pid: 1111,
+              phase: 'ready',
+              run_state: null,
+              started_at: 1700000000000,
+            },
+          ],
+        }),
+      );
+      // Subscribe stub — feed a `ready` event so cache latches a
+      // daemon key; otherwise hydrateSafely falls back to "unknown@...".
+      const subscribe: HostClient['subscribe'] = sink => {
+        sink(readyFrame(1, 1));
+        return () => {};
+      };
+
+      const { host, events } = makeHost(
+        { runtimeStatus, subscribe },
+        fix.conversations,
+      );
+      await host.reconcileOnBoot();
+
+      // Alive row untouched.
+      const aliveAfter = fix.conversations.getAgent(
+        alive.channelId,
+        alive.agentId,
+      );
+      expect(aliveAfter?.status).toBe('active');
+      expect(aliveAfter?.pid).toBe(1111);
+
+      // Stale row flipped to idle + pid cleared.
+      const staleAfter = fix.conversations.getAgent(
+        stale.channelId,
+        stale.agentId,
+      );
+      expect(staleAfter?.status).toBe('idle');
+      expect(staleAfter?.pid).toBeNull();
+
+      // SSE published for the cleared row only.
+      const idlePublishes = events.publishes.filter(
+        e => e.kind === 'agent_status',
+      );
+      expect(idlePublishes.length).toBe(1);
+      expect(idlePublishes[0]!.conversationId).toBe(stale.channelId);
+      expect(idlePublishes[0]!.payload).toMatchObject({
+        agent_id: stale.agentId,
+        status: 'idle',
+        pid: null,
+        reason: 'reconcile_stale',
+      });
+
+      expect(runtimeStatus).toHaveBeenCalled();
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('is a no-op when DB has no live (starting/active) rows', async () => {
+    const fix = makeReconcileFixture();
+    try {
+      const runtimeStatus = vi.fn(
+        async (): Promise<RuntimeStatusResult> => ({ runtimes: [] }),
+      );
+      const subscribe: HostClient['subscribe'] = sink => {
+        sink(readyFrame(1, 1));
+        return () => {};
+      };
+      const { host, events } = makeHost(
+        { runtimeStatus, subscribe },
+        fix.conversations,
+      );
+      await host.reconcileOnBoot();
+      expect(runtimeStatus).toHaveBeenCalled();
+      expect(events.publishes).toEqual([]);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('skips the DB diff when hydrate failed (does NOT clobber live rows)', async () => {
+    const fix = makeReconcileFixture();
+    try {
+      // Seed a row that WOULD be cleared if we ran the diff.
+      const seed = fix.insertChannelWithAgent('ws-x', 'agent-x');
+      fix.conversations.updateAgentRuntime(seed.channelId, seed.agentId, {
+        status: 'active',
+        pid: 9999,
+      });
+
+      // Make hydrate fail by throwing from runtimeStatus.
+      const runtimeStatus = vi.fn(async (): Promise<RuntimeStatusResult> => {
+        throw new Error('daemon unreachable');
+      });
+      // No `ready` event → no daemon-instance key from that path either.
+      const subscribe: HostClient['subscribe'] = () => () => {};
+
+      const { host, cache, events } = makeHost(
+        { runtimeStatus, subscribe },
+        fix.conversations,
+      );
+      await host.reconcileOnBoot();
+
+      // Cache empty + no daemon key latched.
+      expect(cache.daemonInstanceKey).toBeNull();
+      // DB untouched.
+      const after = fix.conversations.getAgent(seed.channelId, seed.agentId);
+      expect(after?.status).toBe('active');
+      expect(after?.pid).toBe(9999);
+      // No agent_status publishes.
+      expect(
+        events.publishes.filter(e => e.kind === 'agent_status'),
+      ).toEqual([]);
+    } finally {
+      fix.cleanup();
+    }
   });
 });

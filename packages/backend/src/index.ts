@@ -212,6 +212,8 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
       cache,
       eventHandler,
       events: ctx.events,
+      conversations: new ConversationRepo(db),
+      logger,
     });
   } else {
     // legacy: runtimeHost === the in-process ConversationManager. This
