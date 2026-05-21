@@ -107,21 +107,52 @@ export interface DriverDeliveryView {
 
 /**
  * A live-delivery request. DaemonHost builds these after
- * `inboxes.ensureDelivery` + `driver.encodeStdinMessage`. The
- * coordinator decides whether to call `wake`, queue, or refuse.
+ * `inboxes.ensureDelivery`. The coordinator decides whether to call
+ * `wake`, queue, or refuse.
  *
- * `payload` is the FINAL stream-json line the daemon will write to the
- * child's stdin (driver-encoded). Coordinator does not re-format it.
+ * # Combine-before-encode invariant (Cindy `Mqf1h-FKudtEbH1O`)
  *
- * `driver` is a capability snapshot — it MUST match the driver currently
- * bound to (conv, agent) on the host side. Coordinator does not
- * re-look-up.
+ * `text` is the UN-ENCODED human-readable message body (from
+ * `formatLiveMessage` or `formatInboxBatch`). `encode` produces the
+ * final driver stdin line when called with that text — or, for a
+ * multi-request batch, with the text returned by the coordinator's
+ * `combineGated` callback.
+ *
+ * The coordinator MUST combine texts BEFORE encoding when batch.length
+ * > 1; encoding each text individually and then joining JSON lines as
+ * text produces a payload that is not a legal driver stdin line
+ * (claude's `--input-format stream-json` would see malformed input).
+ *
+ * # Atomic delivery groups (`deliveryIds`)
+ *
+ * Most requests cover a single inbox row → `deliveryIds = [inboxId]`.
+ * For caller pre-combined groups (e.g. `DaemonHost.drainPending` using
+ * `formatInboxBatch` because the inbox-drain wrapper differs from the
+ * gated-busy wrapper) `text` is already the combined text and
+ * `deliveryIds` carries every inbox row the combined text covers.
+ * Coordinator treats them as one atomic ack group.
  */
 export interface LiveDeliveryRequest {
-  inboxId: number;
-  messageId: string;
-  payload: string;
+  /** Atomic group of inbox row ids this single `text` covers. Singleton
+   *  for live deliverMessage; multi when the caller pre-combined. All
+   *  ids in the group are acked together (or stashed together for the
+   *  B3 init gate). */
+  deliveryIds: readonly number[];
+  /** Stable dedup key. For singleton groups, the row's message id; for
+   *  pre-combined groups, an arbitrary key the caller picks (typically
+   *  the first row's message id). Coordinator's enqueue skips a new
+   *  request whose key already exists in the pending queue. */
+  dedupKey: string;
+  /** Un-encoded human-readable text. Combined with sibling requests
+   *  via `combineGated` before encoding when batch.length > 1. */
+  text: string;
   driver: DriverDeliveryView;
+  /** Produce the final driver stdin line for the given text. Closes
+   *  over the driver instance + cli session id at construction. Returns
+   *  null if the driver refuses (e.g. cursor oneShot — although that
+   *  driver should never reach this point because oneShot is filtered
+   *  earlier). */
+  encode: (text: string) => string | null;
 }
 
 /**
@@ -233,17 +264,20 @@ export interface CoordinatorCallbacks {
    *  rows exist before auto-respawning. DaemonHost wires this to
    *  `ConversationInboxRepo.listPending(conv, agent).length > 0`. */
   hasPendingInbox?(conversationId: string, agentId: string): boolean;
-  /** Called when the coordinator must combine multiple pending
-   *  payloads into a single wake (`gated` driver, multiple rows
-   *  accumulated before the next safe boundary). DaemonHost MUST
-   *  provide this — without it the coordinator cannot produce a
-   *  semantically-equivalent batch payload, and silently degrading to
-   *  `payloads.join(...)` would violate the
-   *  "no silent degradation" contract (Cindy `rrF2L1RmWq5JFH3m` B3 /
-   *  `0G5uJBydO_4qt_2r`). When omitted, multi-payload batches throw at
-   *  flush/dispatch time and the rows stay pending; single-payload
-   *  paths still work. */
-  combineBatch?(payloads: readonly string[]): string;
+  /** Called when the coordinator must combine multiple un-encoded
+   *  message texts into one gated-batch text BEFORE the per-driver
+   *  encode step. DaemonHost wires this to `combineGatedBatch(texts,
+   *  'silverhand message send')`. Without it the coordinator cannot
+   *  produce a semantically-equivalent batch text, and silently
+   *  degrading to `texts.join(...)` would violate the "no silent
+   *  degradation" contract (Cindy `rrF2L1RmWq5JFH3m` B3 /
+   *  `0G5uJBydO_4qt_2r`). When omitted, multi-text batches throw at
+   *  flush/dispatch time and the rows stay pending; single-text paths
+   *  still work. Note the critical contract (Cindy `Mqf1h-FKudtEbH1O`):
+   *  the input is un-encoded message text, NOT driver-encoded stdin
+   *  lines — encoding happens once after combine, via the request's
+   *  `encode` callback. */
+  combineGated?(texts: readonly string[]): string;
 }
 
 export interface CoordinatorLogger {
@@ -272,9 +306,14 @@ interface BusyState {
 }
 
 interface PendingDelivery {
-  inboxId: number;
-  messageId: string;
-  payload: string;
+  /** Inbox row ids covered by this pending request. Singleton for most
+   *  enqueued requests; multi for caller pre-combined groups. */
+  deliveryIds: readonly number[];
+  dedupKey: string;
+  /** Un-encoded human-readable text. Combined with sibling pendings at
+   *  flush time via `combineGated` (when length > 1). */
+  text: string;
+  encode: (text: string) => string | null;
   /** The driver capability the request was submitted under. Stored so
    *  the flush path can pick the right routing (in practice a single
    *  agent's driver doesn't change mid-session, but storing per-row
@@ -367,19 +406,29 @@ export class RuntimeDeliveryCoordinator {
   }
 
   /**
-   * Batch sibling of `submitLiveDelivery`. DaemonHost.drainPending uses
-   * this so that a multi-row drain produces ONE `runtime_wake` carrying
-   * all `delivery_ids`, with all-or-nothing ack semantics (Cindy
-   * `nKFVSvx4CyBLxPNq` blocker 2):
+   * Batch sibling of `submitLiveDelivery`. Two callers:
    *
-   *   - on `{delivered:true}` → `markDelivered` runs once with ALL ids
-   *     (or the entire batch is stashed into `initPendingDeliveryIds`
-   *     if the B3 init gate is still closed for a
-   *     `requires_first_message` driver; that stash also flushes as
-   *     one ack);
+   *   1. **`DaemonHost.drainPending`** (Cindy `nKFVSvx4CyBLxPNq` blocker 2):
+   *      multi-row inbox drain on `runtime_ready_for_drain`. The caller
+   *      pre-combines via `formatInboxBatch` and submits ONE request
+   *      with multi `deliveryIds`; coordinator dispatches once and acks
+   *      all ids atomically.
+   *   2. **Mid-turn gated flush** (internal): single-message requests
+   *      enqueued via `submitLiveDelivery` get re-collected by `flush`
+   *      when the safe boundary reopens; if multiple are pending the
+   *      coordinator combines their `text` fields via `combineGated`
+   *      (Cindy `Mqf1h-FKudtEbH1O`: combine BEFORE encode — feeding
+   *      encoded JSON lines through `combineGated` would produce
+   *      malformed claude stdin).
+   *
+   * Ack contract — all-or-nothing across the batch:
+   *   - on `{delivered:true}` → `markDelivered` runs once with EVERY id
+   *     across the entire batch (or the entire batch is stashed into
+   *     `initPendingDeliveryIds` for the B3 init gate; that stash also
+   *     flushes as one ack);
    *   - on `{delivered:false}` or throw → NO ids are acked; every row
-   *     stays pending so the next ready_for_drain replays the whole
-   *     batch.
+   *     stays pending so the next ready_for_drain (or live arrival)
+   *     replays the whole batch.
    *
    * Per-row `deliverMessage` looping would change the agent's visible
    * turn boundary (one wake per row → claude treats each as its own
@@ -387,14 +436,14 @@ export class RuntimeDeliveryCoordinator {
    * forbidden by Cindy's contract.
    *
    * Invariants the caller must uphold:
-   *   1. All requests share the same (conv, agent) → same driver.
-   *      The coordinator reads `driver` from `batch[0]` after the empty
-   *      check.
+   *   1. All requests share the same (conv, agent) → same driver +
+   *      same encode closure (same cli session id). The coordinator
+   *      reads `driver` from `batch[0]` after the empty check and uses
+   *      `batch[0].encode` for the dispatch encode.
    *   2. The batch is non-empty. Empty batches throw — callers should
    *      no-op upstream when their listPending returned nothing.
-   *   3. Each `req` already passed `inboxes.ensureDelivery` (so
-   *      `inboxId` is a fresh, not-yet-delivered row) and
-   *      `driver.encodeStdinMessage` returned a non-null payload.
+   *   3. Each `req` already passed `inboxes.ensureDelivery` (so every
+   *      `inboxId` in `deliveryIds` is a fresh, not-yet-delivered row).
    *
    * Decision semantics for the batch return value (since the function
    * returns a single decision rather than per-row):
@@ -415,7 +464,7 @@ export class RuntimeDeliveryCoordinator {
           'listPending is empty rather than calling through with [].',
       );
     }
-    const deliveryIds = batch.map(item => item.inboxId);
+    const deliveryIds = batch.flatMap(item => [...item.deliveryIds]);
     const head = batch[0]!;
     const entry = this.cache.get(conversationId, agentId);
     if (!entry) {
@@ -469,7 +518,7 @@ export class RuntimeDeliveryCoordinator {
 
     // Gated driver mid-turn. Enqueue every row; flush will fire when
     // outstandingToolUses returns to 0 + compacting clears, and will
-    // combine via `combineGatedBatch`.
+    // combine texts via `combineGated` then encode once.
     for (const req of batch) {
       this.enqueue(st, req);
     }
@@ -661,15 +710,14 @@ export class RuntimeDeliveryCoordinator {
   }
 
   private enqueue(st: PerAgentState, req: LiveDeliveryRequest): void {
-    // Idempotent push — re-delivery of the same messageId at the same
-    // boundary should not double-write. CM uses messageId as the dedup
-    // key (inboxId is also unique per delivery, but messageId is what
-    // the caller knows).
-    if (st.pending.some(item => item.messageId === req.messageId)) return;
+    // Idempotent push — re-delivery of the same dedupKey at the same
+    // boundary should not double-write.
+    if (st.pending.some(item => item.dedupKey === req.dedupKey)) return;
     st.pending.push({
-      inboxId: req.inboxId,
-      messageId: req.messageId,
-      payload: req.payload,
+      deliveryIds: req.deliveryIds,
+      dedupKey: req.dedupKey,
+      text: req.text,
+      encode: req.encode,
       driver: req.driver,
     });
   }
@@ -683,13 +731,14 @@ export class RuntimeDeliveryCoordinator {
     st.flushing = true;
     const batch = st.pending.splice(0);
     try {
-      let combined: string;
+      let payload: string;
       try {
-        combined = this.combinePayloads(batch.map(item => item.payload));
+        payload = this.combineAndEncode(batch);
       } catch (err) {
-        // No combineBatch callback for a multi-payload flush. Push the
-        // rows back and rethrow — silent degradation is forbidden
-        // (Cindy `rrF2L1RmWq5JFH3m` B3 / `0G5uJBydO_4qt_2r`).
+        // No combineGated callback for a multi-text flush, or encode
+        // returned null. Push the rows back and rethrow — silent
+        // degradation is forbidden (Cindy `rrF2L1RmWq5JFH3m` B3 /
+        // `0G5uJBydO_4qt_2r`; `Mqf1h-FKudtEbH1O` combine-before-encode).
         st.pending.unshift(...batch);
         this.logger.error(
           {
@@ -698,17 +747,17 @@ export class RuntimeDeliveryCoordinator {
             batchSize: batch.length,
             err: (err as Error).message,
           },
-          'deliver: flush combine refused; rows remain queued',
+          'deliver: flush combine/encode refused; rows remain queued',
         );
         throw err;
       }
-      const deliveryIds = batch.map(item => item.inboxId);
+      const deliveryIds = batch.flatMap(item => [...item.deliveryIds]);
       const result = await this.bridge.runtimeWake({
         conversation_id: conversationId,
         agent_id: agentId,
         delivery_ids: deliveryIds,
         kind: 'message',
-        payload: combined,
+        payload,
       });
       if (result.delivered) {
         // B3: same gate as dispatchWake — defer ack for
@@ -768,13 +817,13 @@ export class RuntimeDeliveryCoordinator {
       // safe boundary — losing it would mean a transport blip turns a
       // mid-turn defer into "wait for the next runtime restart".
       //
-      // Guard the unshift so the combineBatch-missing branch (which
-      // already unshifted before rethrowing) doesn't double-push.
+      // Guard the unshift so the combine/encode branch (which already
+      // unshifted before rethrowing) doesn't double-push.
       const k = key(conversationId, agentId);
       const stNow = this.state.get(k);
       if (
         stNow &&
-        !stNow.pending.some(item => item.messageId === batch[0]?.messageId)
+        !stNow.pending.some(item => item.dedupKey === batch[0]?.dedupKey)
       ) {
         stNow.pending.unshift(...batch);
       }
@@ -797,8 +846,8 @@ export class RuntimeDeliveryCoordinator {
     agentId: string,
     batch: LiveDeliveryRequest[],
   ): Promise<LiveDeliveryDecision> {
-    const combined = this.combinePayloads(batch.map(item => item.payload));
-    const deliveryIds = batch.map(item => item.inboxId);
+    const payload = this.combineAndEncode(batch);
+    const deliveryIds = batch.flatMap(item => [...item.deliveryIds]);
     let result: RuntimeWakeResult;
     try {
       result = await this.bridge.runtimeWake({
@@ -806,7 +855,7 @@ export class RuntimeDeliveryCoordinator {
         agent_id: agentId,
         delivery_ids: deliveryIds,
         kind: 'message',
-        payload: combined,
+        payload,
       });
     } catch (err) {
       this.logger.error(
@@ -873,27 +922,53 @@ export class RuntimeDeliveryCoordinator {
   }
 
   /**
-   * Combine multiple already-encoded stdin payloads into one. Single-
-   * payload short-circuit returns as-is. Multi-payload REQUIRES a
-   * `combineBatch` callback — no silent degradation (Cindy
-   * `rrF2L1RmWq5JFH3m` B3 / `0G5uJBydO_4qt_2r`). DaemonHost binds this
-   * to a CM-equivalent `combineGatedBatch` formatter.
+   * Combine un-encoded message texts BEFORE encoding (Cindy
+   * `Mqf1h-FKudtEbH1O`: feeding encoded JSON lines through `combineGated`
+   * yields a payload that is not a valid driver stdin line — claude's
+   * `--input-format stream-json` parses it as malformed). Single-request
+   * batches encode their text directly; multi-request batches combine
+   * texts via `combineGated` then encode once via `batch[0].encode`
+   * (all requests in a (conv, agent) batch share the same driver + cli
+   * session id).
+   *
+   * Throws if:
+   *   - batch is empty;
+   *   - multi-text batch was submitted without a `combineGated`
+   *     callback wired on the coordinator;
+   *   - the request's `encode` returns null (driver refused — should
+   *     not happen here because oneShot is filtered earlier and the
+   *     remaining drivers always accept stdin).
    */
-  private combinePayloads(payloads: readonly string[]): string {
-    if (payloads.length === 0) {
-      throw new Error('combinePayloads: empty batch');
+  private combineAndEncode(
+    batch: readonly { text: string; encode: (text: string) => string | null }[],
+  ): string {
+    if (batch.length === 0) {
+      throw new Error('combineAndEncode: empty batch');
     }
-    if (payloads.length === 1) return payloads[0]!;
-    if (!this.callbacks.combineBatch) {
+    let combinedText: string;
+    if (batch.length === 1) {
+      combinedText = batch[0]!.text;
+    } else {
+      if (!this.callbacks.combineGated) {
+        throw new Error(
+          'RuntimeDeliveryCoordinator: combineGated callback is required ' +
+            'for multi-text batches (received ' +
+            batch.length +
+            ' texts). Silent join-fallback is forbidden — DaemonHost ' +
+            'must provide a CM-equivalent combineGatedBatch formatter ' +
+            'when wiring the coordinator.',
+        );
+      }
+      combinedText = this.callbacks.combineGated(batch.map(item => item.text));
+    }
+    const payload = batch[0]!.encode(combinedText);
+    if (payload === null) {
       throw new Error(
-        'RuntimeDeliveryCoordinator: combineBatch callback is required ' +
-          'for multi-payload batches (received ' +
-          payloads.length +
-          ' payloads). Silent join-fallback is forbidden — DaemonHost ' +
-          'must provide a CM-equivalent combineGatedBatch formatter ' +
-          'when wiring the coordinator.',
+        'RuntimeDeliveryCoordinator: encode returned null for combined ' +
+          'text — driver refused stdin payload. This is unexpected on a ' +
+          'gated/direct dispatch path (oneShot is filtered earlier).',
       );
     }
-    return this.callbacks.combineBatch(payloads);
+    return payload;
   }
 }

@@ -140,16 +140,33 @@ const DRIVER_NONE: DriverDeliveryView = {
   kickoffMode: 'self_inits',
 };
 
+/**
+ * Build a `LiveDeliveryRequest` with the new combine-before-encode
+ * shape (Cindy `Mqf1h-FKudtEbH1O`). Legacy-style `inboxId` / `messageId`
+ * / `payload` overrides are translated for test brevity:
+ *   - `inboxId: N` → `deliveryIds: [N]`
+ *   - `messageId: 'm'` → `dedupKey: 'm'`
+ *   - `payload: 'X'` → `text: 'X'` AND `encode: t => t` (identity, so
+ *     dispatched wakes carry the override text verbatim — keeps the
+ *     existing payload-assertion tests valid without forcing every
+ *     test to JSON-parse)
+ */
 function req(
-  overrides: Partial<LiveDeliveryRequest> = {},
+  overrides: Partial<LiveDeliveryRequest> & {
+    inboxId?: number;
+    messageId?: string;
+    payload?: string;
+  } = {},
 ): LiveDeliveryRequest {
-  return {
-    inboxId: 1,
-    messageId: 'm1',
-    payload: '{"type":"user","message":"hi"}',
+  const { inboxId, messageId, payload, ...rest } = overrides;
+  const base: LiveDeliveryRequest = {
+    deliveryIds: inboxId !== undefined ? [inboxId] : [1],
+    dedupKey: messageId ?? 'm1',
+    text: payload ?? '{"type":"user","message":"hi"}',
     driver: DRIVER_GATED,
-    ...overrides,
+    encode: t => t,
   };
+  return { ...base, ...rest };
 }
 
 function parsed(kind: ParsedEvent['kind']): ParsedEvent {
@@ -431,7 +448,7 @@ describe('case 5: phase=ready + driver=gated + busy mid-turn', () => {
     expect(c.busySnapshot('c1', 'a1').outstandingToolUses).toBe(0);
   });
 
-  it('multiple queued items flush as one batch via combineBatch', async () => {
+  it('multiple queued items flush as one batch via combineGated', async () => {
     const { bridge, calls } = makeBridge({
       delivered: true,
       delivery_ids: [1, 2],
@@ -440,14 +457,14 @@ describe('case 5: phase=ready + driver=gated + busy mid-turn', () => {
       { conv: 'c1', agent: 'a1', phase: 'ready' },
     ]);
     const { sink, delivered } = makeInboxSink();
-    const combineBatch = vi.fn((payloads: readonly string[]) =>
+    const combineGated = vi.fn((payloads: readonly string[]) =>
       payloads.join('|'),
     );
     const c = new RuntimeDeliveryCoordinator({
       bridge,
       cache,
       inboxAck: sink,
-      callbacks: { combineBatch },
+      callbacks: { combineGated },
     });
 
     c.onParsedEvent('c1', 'a1', parsed('tool_call'));
@@ -471,7 +488,7 @@ describe('case 5: phase=ready + driver=gated + busy mid-turn', () => {
       deliveryIds: [1, 2],
       payload: 'A|B',
     });
-    expect(combineBatch).toHaveBeenCalledTimes(1);
+    expect(combineGated).toHaveBeenCalledTimes(1);
     expect(delivered).toEqual([[1, 2]]);
   });
 
@@ -822,10 +839,10 @@ describe('busy tracker', () => {
   });
 });
 
-// ── Cindy `rrF2L1RmWq5JFH3m` B3: combineBatch fail-loud ────────────
+// ── Cindy `rrF2L1RmWq5JFH3m` B3: combineGated fail-loud ────────────
 
-describe('B3: multi-payload batch without combineBatch fails loudly', () => {
-  it('flush with 2 pending and no combineBatch throws + no markDelivered + rows back in queue', async () => {
+describe('B3: multi-payload batch without combineGated fails loudly', () => {
+  it('flush with 2 pending and no combineGated throws + no markDelivered + rows back in queue', async () => {
     const { bridge, calls } = makeBridge([]); // wake never reached
     const cache = makeCacheView([
       { conv: 'c1', agent: 'a1', phase: 'ready' },
@@ -841,7 +858,7 @@ describe('B3: multi-payload batch without combineBatch fails loudly', () => {
       bridge,
       cache,
       inboxAck: sink,
-      // NO combineBatch
+      // NO combineGated
       logger,
     });
 
@@ -859,7 +876,7 @@ describe('B3: multi-payload batch without combineBatch fails loudly', () => {
     expect(c.pendingCount('c1', 'a1')).toBe(2);
 
     // Tool output reopens boundary → flush is scheduled. With 2
-    // payloads and no combineBatch, flush must throw and leave rows
+    // payloads and no combineGated, flush must throw and leave rows
     // in the queue.
     c.onParsedEvent('c1', 'a1', parsed('tool_output'));
     await new Promise(resolve => setImmediate(resolve));
@@ -871,11 +888,11 @@ describe('B3: multi-payload batch without combineBatch fails loudly', () => {
     expect(delivered).toHaveLength(0); // no inbox row mutated
     expect(c.pendingCount('c1', 'a1')).toBe(2); // queue restored
     expect(
-      errorLogs.some(m => m.includes('combine refused')),
+      errorLogs.some(m => m.includes('combine/encode refused')),
     ).toBe(true);
   });
 
-  it('flush with 2 pending AND combineBatch wakes successfully', async () => {
+  it('flush with 2 pending AND combineGated wakes successfully', async () => {
     // Sanity check: the failure above is purely the missing callback,
     // not a regression in the happy path.
     const { bridge, calls } = makeBridge({
@@ -886,12 +903,12 @@ describe('B3: multi-payload batch without combineBatch fails loudly', () => {
       { conv: 'c1', agent: 'a1', phase: 'ready' },
     ]);
     const { sink, delivered } = makeInboxSink();
-    const combineBatch = vi.fn((p: readonly string[]) => p.join('|'));
+    const combineGated = vi.fn((p: readonly string[]) => p.join('|'));
     const c = new RuntimeDeliveryCoordinator({
       bridge,
       cache,
       inboxAck: sink,
-      callbacks: { combineBatch },
+      callbacks: { combineGated },
     });
 
     c.onParsedEvent('c1', 'a1', parsed('tool_call'));
@@ -909,7 +926,7 @@ describe('B3: multi-payload batch without combineBatch fails loudly', () => {
     await new Promise(resolve => setImmediate(resolve));
 
     expect(calls).toHaveLength(1);
-    expect(combineBatch).toHaveBeenCalledOnce();
+    expect(combineGated).toHaveBeenCalledOnce();
     expect(delivered).toEqual([[1, 2]]);
     expect(c.pendingCount('c1', 'a1')).toBe(0);
   });
@@ -1129,7 +1146,7 @@ describe('B3: requires_first_message init-observed gate', () => {
       cache,
       inboxAck: sink,
       callbacks: {
-        combineBatch: payloads => payloads.join('\n'),
+        combineGated: payloads => payloads.join('\n'),
       },
     });
     // Push agent into busy state.
@@ -1186,7 +1203,7 @@ describe('B2: submitLiveDeliveryBatch — batch-native one wake all-or-nothing',
       bridge,
       cache,
       inboxAck: sink,
-      callbacks: { combineBatch: payloads => payloads.join('\n') },
+      callbacks: { combineGated: payloads => payloads.join('\n') },
     });
     const decision = await c.submitLiveDeliveryBatch('c1', 'a1', [
       req({ inboxId: 10, messageId: 'mA', driver: DRIVER_DIRECT }),
@@ -1210,7 +1227,7 @@ describe('B2: submitLiveDeliveryBatch — batch-native one wake all-or-nothing',
       bridge,
       cache,
       inboxAck: sink,
-      callbacks: { combineBatch: payloads => payloads.join('\n') },
+      callbacks: { combineGated: payloads => payloads.join('\n') },
     });
     await expect(
       c.submitLiveDeliveryBatch('c1', 'a1', [
@@ -1235,7 +1252,7 @@ describe('B2: submitLiveDeliveryBatch — batch-native one wake all-or-nothing',
       bridge,
       cache,
       inboxAck: sink,
-      callbacks: { combineBatch: payloads => payloads.join('\n') },
+      callbacks: { combineGated: payloads => payloads.join('\n') },
     });
     const decision = await c.submitLiveDeliveryBatch('c1', 'a1', [
       req({ inboxId: 10, messageId: 'mA', driver: DRIVER_DIRECT }),
@@ -1260,7 +1277,7 @@ describe('B2: submitLiveDeliveryBatch — batch-native one wake all-or-nothing',
       bridge,
       cache,
       inboxAck: sink,
-      callbacks: { combineBatch: payloads => payloads.join('\n') },
+      callbacks: { combineGated: payloads => payloads.join('\n') },
     });
     const decision = await c.submitLiveDeliveryBatch('c1', 'a1', [
       req({ inboxId: 50, messageId: 'mA', driver: DRIVER_DIRECT_REQUIRES_FIRST }),
@@ -1290,7 +1307,7 @@ describe('B2: submitLiveDeliveryBatch — batch-native one wake all-or-nothing',
       bridge,
       cache,
       inboxAck: sink,
-      callbacks: { combineBatch: payloads => payloads.join('\n') },
+      callbacks: { combineGated: payloads => payloads.join('\n') },
     });
     // Push into busy state.
     c.onParsedEvent('c1', 'a1', parsed('tool_call'));

@@ -222,13 +222,15 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
         respawn: (cid, aid) => ctx.runtimeHost.start(cid, aid),
         hasPendingInbox: (cid, aid) =>
           inboxRepo.listPending(cid, aid).length > 0,
-        // `combineBatch` requires the same byte-format pipeline CM
-        // uses for multi-row safe-boundary flush (claude gated path).
-        // The lifted `combineGatedBatch` keeps daemon mode
-        // byte-identical to CM. Tool-name is hardcoded to match
+        // `combineGated` is invoked with UN-ENCODED message texts BEFORE
+        // the per-driver encode step (Cindy `Mqf1h-FKudtEbH1O`: feeding
+        // driver-encoded JSON lines through `combineGatedBatch` would
+        // produce malformed claude stdin — combine before encode). The
+        // lifted `combineGatedBatch` keeps daemon mode byte-identical
+        // to CM. Tool-name is hardcoded to match
         // `sendMessageToolName(driver)` (currently driver-agnostic).
-        combineBatch: payloads =>
-          combineGatedBatch(payloads, 'silverhand message send'),
+        combineGated: texts =>
+          combineGatedBatch(texts, 'silverhand message send'),
       },
       logger: {
         info: (meta, msg) => logger.info(meta, msg),

@@ -1853,7 +1853,7 @@ function makeObservableCoordinator(cache: RunStateCache): {
       // Match production wiring in `packages/backend/src/index.ts` so
       // multi-row drainPending batches collapse via the same byte-format
       // pipeline. Single-payload batches never hit this callback.
-      combineBatch: payloads => combineGatedBatch(payloads, 'silverhand message send'),
+      combineGated: payloads => combineGatedBatch(payloads, 'silverhand message send'),
     },
   });
   return {
@@ -2784,6 +2784,22 @@ describe('DaemonAgentRuntimeHost — drainPending', () => {
       expect(wakeCalls).toHaveLength(1);
       expect(wakeCalls[0]!.conv_id).toBe(fix.channelId);
       expect(wakeCalls[0]!.agent_id).toBe(fix.agentId);
+      // Wire payload MUST be a legal claude stream-json line — even for
+      // a single-row drain, the coordinator's encode-after-combine
+      // pipeline is exercised (combine is a no-op for length=1 but the
+      // encode still runs through driver.encodeStdinMessage). Pre-fix
+      // this would also pass on single-row, but the assertion guards
+      // against accidental regression that flips the contract.
+      const parsed = JSON.parse(wakeCalls[0]!.payload);
+      expect(parsed.type).toBe('user');
+      expect(parsed.message.role).toBe('user');
+      expect(parsed.message.content[0].type).toBe('text');
+      const text: string = parsed.message.content[0].text;
+      // Single-row drainPending still wraps via `formatInboxBatch`
+      // ("You have one message waiting since you were last active:").
+      expect(text).toContain('You have one message waiting');
+      expect(text).toContain('@agent-deliver pls drain');
+
       // B3 (Cindy `usjxj8AxX4AvJ5E-`): drainPending fires for the
       // `requires_first_message` claude driver. The wake's
       // `delivered:true` is NOT immediately acked — gate holds it
@@ -2798,13 +2814,14 @@ describe('DaemonAgentRuntimeHost — drainPending', () => {
     }
   });
 
-  it('multiple pending rows → ONE wake carrying all delivery_ids (batch-native)', async () => {
-    // Cindy `nKFVSvx4CyBLxPNq` blocker 2: `runtime_ready_for_drain` is
-    // a batch primitive — N pending rows must collapse into ONE
-    // `runtime_wake` call with ALL `delivery_ids` in a single
-    // combined payload. Per-row wakes would change claude's visible
-    // turn boundary (1 user turn → N user turns) and degrade ack into
-    // partial success, both forbidden by Cindy's contract.
+  it('multiple pending rows → ONE wake carrying all delivery_ids in a valid stream-json line (batch-native + combine-before-encode)', async () => {
+    // Cindy `nKFVSvx4CyBLxPNq` blocker 2 + `Mqf1h-FKudtEbH1O`:
+    // `runtime_ready_for_drain` is a batch primitive — N pending rows
+    // must collapse into ONE `runtime_wake` call with ALL `delivery_ids`
+    // in a single legal claude stream-json line. Combine MUST happen
+    // before driver.encode (feeding driver-encoded JSON lines into
+    // combineGatedBatch would produce a malformed payload that claude
+    // sees as non-stream-json text).
     const fix = makeDeliverFixture();
     try {
       const msgA = fix.insertViewerMessage('first');
@@ -2845,11 +2862,28 @@ describe('DaemonAgentRuntimeHost — drainPending', () => {
         dB.inboxId,
         dC.inboxId,
       ]);
-      // Payload combines all three via combineGatedBatch — single
-      // stream-json line containing all messages.
-      expect(wakeCalls[0]!.payload).toContain('first');
-      expect(wakeCalls[0]!.payload).toContain('second');
-      expect(wakeCalls[0]!.payload).toContain('third');
+      // Payload MUST be a legal claude stream-json line — JSON.parse
+      // succeeds AND the top-level shape matches `encodeStdinMessage`
+      // (`{type:'user', message:{role:'user', content:[{type:'text',
+      // text}]}}`). Pre-fix this was garbage text containing nested
+      // JSON lines from per-row encoding (Cindy `Mqf1h-FKudtEbH1O`).
+      const parsed = JSON.parse(wakeCalls[0]!.payload);
+      expect(parsed.type).toBe('user');
+      expect(parsed.message.role).toBe('user');
+      expect(Array.isArray(parsed.message.content)).toBe(true);
+      expect(parsed.message.content[0].type).toBe('text');
+      const text: string = parsed.message.content[0].text;
+      // The combined text comes from `formatInboxBatch` (inbox-drain
+      // wrapper), NOT `combineGatedBatch` — drainPending semantics are
+      // "inbox at ready", not "mid-turn busy".
+      expect(text).toContain('You have 3 messages waiting since you were last active');
+      expect(text).toContain('first');
+      expect(text).toContain('second');
+      expect(text).toContain('third');
+      // No nested `{"type":"user"` from per-row encoding — pre-fix this
+      // would appear because driver-encoded payloads were embedded as
+      // text.
+      expect(text).not.toContain('"type":"user"');
 
       // B3 gate still applies — claude is `requires_first_message`, so
       // the batch's delivered:true does NOT immediately ack; the entire
@@ -2898,7 +2932,7 @@ describe('DaemonAgentRuntimeHost — drainPending', () => {
           markDelivered: ids => marked.push([...ids]),
         },
         callbacks: {
-          combineBatch: payloads =>
+          combineGated: payloads =>
             combineGatedBatch(payloads, 'silverhand message send'),
         },
       });
@@ -2926,7 +2960,7 @@ describe('DaemonAgentRuntimeHost — drainPending', () => {
       expect(marked).toEqual([]);
       // drainPending swallowed the throw + logged warn for the batch.
       const drainWarns = warns.filter(w =>
-        w.msg.includes('drain: coordinator batch threw'),
+        w.msg.includes('drain: coordinator inbox-batch threw'),
       );
       expect(drainWarns.length).toBe(1);
       // Inbox rows still pending — next ready_for_drain replays them.
