@@ -90,7 +90,7 @@ import type { EventPublisher } from './event-handler.js';
 import { buildPromptContext } from './prompt-context.js';
 import type { RunStateCache } from './run-state-cache.js';
 import { SILVERHAND_RUNTIME_HOST_ENV } from './runtime-host-mode.js';
-import { buildAgentSpawnEnv } from './spawn-env.js';
+import { buildBridgeBaseEnv } from './spawn-env.js';
 import {
   formatInboxBatch,
   formatLiveMessage,
@@ -411,10 +411,13 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
       }
     }
 
-    // Build the spawn env. The bridge layers proxy keys on top per
-    // the `proxy_runtimes` allowlist — we MUST pass the env we want
-    // the child to see via `baseEnv`, not pre-populated `options.env`.
-    const baseEnv = buildAgentSpawnEnv({
+    // Build the spawn env via `buildBridgeBaseEnv` — the *base* env
+    // contract the bridge expects. Bridge layers proxy keys on top
+    // per the `proxy_runtimes` allowlist; we MUST NOT pre-apply proxy
+    // here (would either double-overlay or bypass the bridge's
+    // single-point proxy-injection boundary — Cindy B5 contract from
+    // commit 5 unit 1 `spawn-env.ts` docstring).
+    const baseEnv = buildBridgeBaseEnv({
       driver,
       runtime: agent.runtime,
       conversationId,
@@ -423,9 +426,6 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
       token: agentToken,
       binDir: spawnPrep.binDir,
       baseProcessEnv: process.env,
-      proxySettings: {
-        get: (key: 'proxy_url' | 'proxy_runtimes') => this.settings.get(key),
-      },
     });
 
     const options: NonNullable<

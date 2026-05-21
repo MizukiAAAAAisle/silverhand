@@ -2395,4 +2395,65 @@ describe('DaemonAgentRuntimeHost — start', () => {
       fix.cleanup();
     }
   });
+
+  it('B5: bridge receives env === applyProxyEnv(buildBridgeBaseEnv(...)) — DaemonHost MUST NOT call buildAgentSpawnEnv', async () => {
+    // The wire-level invariant: backend ships `buildBridgeBaseEnv`
+    // (driver.applyEnv + SILVERHAND_* + bin shim, NO proxy) as
+    // `RuntimeStartInput.baseEnv`; the bridge layers `applyProxyEnv`
+    // on top per the allowlist. DaemonHost calling `buildAgentSpawnEnv`
+    // would either double-overlay proxy (already in baseEnv + bridge
+    // re-adds) or bypass the bridge's single-point proxy boundary —
+    // both break the spawn-env contract from commit 5 unit 1.
+    const fix = makeStartFixture(); // claude — proxy_runtimes includes claude
+    try {
+      const cache = new RunStateCache();
+      const startCalls: RuntimeStartParams[] = [];
+      const { host } = makeHost(
+        {
+          runtimeStart: async params => {
+            startCalls.push(params);
+            return {
+              started: true,
+              pid: 1,
+              started_at: 1700000000000,
+            };
+          },
+        },
+        fix.conversations,
+        {
+          agents: fix.agents,
+          messages: fix.messages,
+          inboxes: fix.inboxes,
+          users: fix.users,
+          settings: fix.settings,
+          workspaces: fix.workspaces,
+          membership: fix.membership,
+          silverhandDir: fix.silverhandDir,
+          silverhandCli: fix.silverhandCli,
+          agentTokens: fix.agentTokens,
+          serverConfig: fix.serverConfig,
+          cache,
+          db: fix.db,
+        },
+      );
+      await host.start(fix.channelId, fix.agentId);
+      expect(startCalls.length).toBe(1);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const wireEnv = (startCalls[0]!.options as any).env as NodeJS.ProcessEnv;
+
+      // Required SILVERHAND_* vars from buildBridgeBaseEnv → present.
+      expect(wireEnv.SILVERHAND_CONVERSATION_ID).toBe(fix.channelId);
+      expect(wireEnv.SILVERHAND_AGENT_ID).toBe(fix.agentId);
+      // bin shim prepended to PATH.
+      expect(wireEnv.PATH?.split(':')[0]).toMatch(/spawn-.+\/bin$/);
+      // No proxy settings configured in fixture → bridge's applyProxyEnv
+      // is identity, so no HTTP_PROXY / HTTPS_PROXY surfaces.
+      expect(wireEnv.HTTP_PROXY).toBeUndefined();
+      expect(wireEnv.HTTPS_PROXY).toBeUndefined();
+      expect(wireEnv.http_proxy).toBeUndefined();
+      expect(wireEnv.https_proxy).toBeUndefined();
+    } finally {
+      fix.cleanup();
+    }
+  });
 });
