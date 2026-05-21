@@ -262,8 +262,29 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
       // trio in `delivery-coordinator.ts:onRuntimeExit`).
       onRuntimeExit: (cid, aid, meta) =>
         coordinator.onRuntimeExit(cid, aid, meta),
+      // B2 (Cindy `usjxj8AxX4AvJ5E-`): wire `runtime_ready_for_drain`
+      // to DaemonHost.drainPending so rows that arrived during the
+      // startup_pending window are flushed when the runtime crosses
+      // into `ready` without ever being woken by submitLiveDelivery.
+      // Late-bound via the daemonHostRef closure because DaemonHost
+      // construction needs the eventHandler above. The callback only
+      // fires after `eventHandler.start()`, which DaemonHost calls
+      // from `reconcileOnBoot` — strictly after `daemonHostRef` is
+      // populated below.
+      onReadyForDrain: (cid, aid) => {
+        const host = daemonHostRef;
+        if (!host) {
+          logger.warn(
+            { kind: 'runtime', mode: 'daemon', conv_id: cid, agent_id: aid },
+            'drain: ready_for_drain fired before DaemonHost wired; skipping',
+          );
+          return;
+        }
+        return host.drainPending(cid, aid);
+      },
       logger,
     });
+    let daemonHostRef: DaemonAgentRuntimeHost | null = null;
     ctx.runtimeHost = new DaemonAgentRuntimeHost({
       client: opts.hostClient,
       bridge,
@@ -293,6 +314,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
       db,
       logger,
     });
+    daemonHostRef = ctx.runtimeHost as DaemonAgentRuntimeHost;
   } else {
     // legacy: runtimeHost === the in-process ConversationManager. This
     // is the zero-behavior-change default; nothing else in the boot

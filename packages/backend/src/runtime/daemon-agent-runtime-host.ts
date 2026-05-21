@@ -1015,6 +1015,90 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
     return this.users.get(viewerId)?.name ?? undefined;
   }
 
+  // ── drain on ready ─────────────────────────────────────────────────
+  /**
+   * Drain every pending `conversation_inboxes` row for (conv, agent).
+   * Wired to `RuntimeEventHandler.onReadyForDrain` so that when a
+   * daemon-side runtime flips to the `ready` phase AFTER startup
+   * (e.g. an empty-inbox claude spawn that crossed startup_pending →
+   * ready without ever being woken), the rows that arrived during the
+   * startup_pending window do not leak.
+   *
+   * Pre-B2 (Cindy `usjxj8AxX4AvJ5E-`): `runtime_ready_for_drain` was
+   * unwired — `submitLiveDelivery` returns `noop_phase` while the
+   * runtime is `startup_pending`, the row stays pending in the inbox,
+   * and no event ever fires to re-attempt it. The DB rows would only
+   * drain on the NEXT `start()` via `startup_delivery`, which never
+   * comes if the runtime is already up. This method closes the gap.
+   *
+   * Per-row failures are warn-only — drainPending as a whole still
+   * resolves so the EventHandler's callback bookkeeping is not
+   * disturbed. `deliverMessage` itself never throws on benign paths
+   * (missing message, missing agent, no cache entry, driver returns
+   * null); the only throw path is coordinator transport failure
+   * (Cindy `0G5uJBydO_4qt_2r` "fail loudly") which we want to log and
+   * leave the row pending — the inbox is the source of truth.
+   *
+   * NOTE on ordering with B3 (initObserved gating): for claude
+   * (`kickoffMode='requires_first_message'`) the first wake we
+   * dispatch here may arrive BEFORE the daemon emits
+   * `runtime_parsed_event(session_init)`. The coordinator's B3 gate
+   * defers `markDelivered` for that wake until session_init lands —
+   * so rows drained from here are NOT acked optimistically; the inbox
+   * stays pending until the parsed session_init for the corresponding
+   * runtime is observed. This method does not need to know about the
+   * gate — it just submits via deliverMessage and lets the
+   * coordinator own ack timing.
+   */
+  async drainPending(
+    conversationId: string,
+    agentId: string,
+  ): Promise<void> {
+    const pending = this.inboxes.listPending(conversationId, agentId);
+    if (pending.length === 0) {
+      this.logger.info(
+        {
+          kind: 'runtime',
+          mode: 'daemon',
+          conv_id: conversationId,
+          agent_id: agentId,
+        },
+        'drain: no pending inbox rows; ready_for_drain noop',
+      );
+      return;
+    }
+    this.logger.info(
+      {
+        kind: 'runtime',
+        mode: 'daemon',
+        conv_id: conversationId,
+        agent_id: agentId,
+        pending_count: pending.length,
+      },
+      'drain: ready_for_drain — flushing pending inbox rows',
+    );
+    for (const row of pending) {
+      await this.deliverMessage(
+        conversationId,
+        agentId,
+        row.message.id,
+      ).catch(err =>
+        this.logger.warn(
+          {
+            kind: 'runtime',
+            mode: 'daemon',
+            conv_id: conversationId,
+            agent_id: agentId,
+            inbox_id: row.inboxId,
+            msg_id: row.message.id,
+            err: err instanceof Error ? err.message : String(err),
+          },
+          'drain: deliverMessage failed; row stays pending',
+        ),
+      );
+    }
+  }
+
   // ── boot recovery ───────────────────────────────────────────────
   /**
    * Daemon-mode boot recovery (Cindy `5Yrv3roymWkCPxo1` watchlist

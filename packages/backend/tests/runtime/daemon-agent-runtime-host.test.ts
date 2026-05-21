@@ -229,6 +229,7 @@ function makeHost(
     silverhandCli?: SilverhandCliLauncher;
     agentTokens?: AgentTokenStore;
     serverConfig?: () => ServerConfig;
+    logger?: BackendLogger;
   } = {},
 ): HostFixture {
   const client = makeFakeClient(clientOverrides);
@@ -286,7 +287,7 @@ function makeHost(
     agentTokens: extraDeps.agentTokens ?? noopAgentTokens,
     serverConfig: extraDeps.serverConfig ?? noopServerConfig,
     db: extraDeps.db ?? noopDb,
-    logger: noopLogger,
+    logger: extraDeps.logger ?? noopLogger,
   });
   return { host, cache, bridge, events, publisher };
 }
@@ -2665,6 +2666,211 @@ describe('DaemonAgentRuntimeHost — start', () => {
       expect(wireEnv.HTTPS_PROXY).toBeUndefined();
       expect(wireEnv.http_proxy).toBeUndefined();
       expect(wireEnv.https_proxy).toBeUndefined();
+    } finally {
+      fix.cleanup();
+    }
+  });
+});
+
+// ── drainPending ────────────────────────────────────────────────────
+//
+// B2 (Cindy `usjxj8AxX4AvJ5E-`): EventHandler routes
+// `runtime_ready_for_drain` to `DaemonHost.drainPending(conv, agent)`,
+// which flushes every pending inbox row through `deliverMessage`
+// (which itself goes through the coordinator + bridge). This closes
+// the gap where rows that arrived during startup_pending would never
+// be redelivered if the runtime crossed into `ready` without ever
+// being woken by submitLiveDelivery.
+//
+// Tests pin:
+//   1. listPending empty → noop log, coordinator not called
+//   2. one pending row + cache phase=ready + claude → coordinator.wake
+//      with the right payload + delivered_at set
+//   3. multiple pending rows → each row goes through deliverMessage
+//      sequentially (one wake per row in current impl; batching is
+//      future optimization)
+//   4. per-row failure logs warn-only; remaining rows still attempt
+
+describe('DaemonAgentRuntimeHost — drainPending', () => {
+  it('listPending empty → noop, coordinator not called', async () => {
+    const fix = makeDeliverFixture();
+    try {
+      const cache = new RunStateCache();
+      cache.applyRuntimeStatus(DAEMON_KEY, [
+        {
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+          pid: 1,
+          phase: 'ready',
+          run_state: null,
+          started_at: 1700000000000,
+        },
+      ]);
+      const { coordinator, wakeCalls } = makeObservableCoordinator(cache);
+      const { host } = makeHost({}, fix.conversations, {
+        agents: fix.agents,
+        messages: fix.messages,
+        inboxes: fix.inboxes,
+        users: fix.users,
+        settings: fix.settings,
+        coordinator,
+        cache,
+        db: fix.db,
+      });
+      await host.drainPending(fix.channelId, fix.agentId);
+      expect(wakeCalls).toEqual([]);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('one pending row + cache phase=ready → coordinator wakes + row marked delivered', async () => {
+    const fix = makeDeliverFixture();
+    try {
+      // Viewer user `local` is pre-seeded by openTestDb fixture; no
+      // need to upsert. formatLiveMessage resolves the sender handle
+      // via SettingsRepo.getViewerUserId + UserRepo.get.
+      const msgId = fix.insertViewerMessage('@agent-deliver pls drain');
+      fix.inboxes.ensureDelivery(fix.channelId, fix.agentId, msgId);
+
+      const cache = new RunStateCache();
+      cache.applyRuntimeStatus(DAEMON_KEY, [
+        {
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+          pid: 1,
+          phase: 'ready',
+          run_state: null,
+          started_at: 1700000000000,
+        },
+      ]);
+      const { coordinator, wakeCalls, marked } = makeObservableCoordinator(cache);
+      const { host } = makeHost({}, fix.conversations, {
+        agents: fix.agents,
+        messages: fix.messages,
+        inboxes: fix.inboxes,
+        users: fix.users,
+        settings: fix.settings,
+        coordinator,
+        cache,
+        db: fix.db,
+      });
+      await host.drainPending(fix.channelId, fix.agentId);
+
+      expect(wakeCalls).toHaveLength(1);
+      expect(wakeCalls[0]!.conv_id).toBe(fix.channelId);
+      expect(wakeCalls[0]!.agent_id).toBe(fix.agentId);
+      // Inbox marked delivered (the wake was {delivered:true}).
+      expect(marked.length).toBe(1);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('multiple pending rows → each routed through deliverMessage in order', async () => {
+    const fix = makeDeliverFixture();
+    try {
+      const msgA = fix.insertViewerMessage('first');
+      const msgB = fix.insertViewerMessage('second');
+      const msgC = fix.insertViewerMessage('third');
+      fix.inboxes.ensureDelivery(fix.channelId, fix.agentId, msgA);
+      fix.inboxes.ensureDelivery(fix.channelId, fix.agentId, msgB);
+      fix.inboxes.ensureDelivery(fix.channelId, fix.agentId, msgC);
+
+      const cache = new RunStateCache();
+      cache.applyRuntimeStatus(DAEMON_KEY, [
+        {
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+          pid: 1,
+          phase: 'ready',
+          run_state: null,
+          started_at: 1700000000000,
+        },
+      ]);
+      const { coordinator, wakeCalls } = makeObservableCoordinator(cache);
+      const { host } = makeHost({}, fix.conversations, {
+        agents: fix.agents,
+        messages: fix.messages,
+        inboxes: fix.inboxes,
+        users: fix.users,
+        settings: fix.settings,
+        coordinator,
+        cache,
+        db: fix.db,
+      });
+      await host.drainPending(fix.channelId, fix.agentId);
+
+      // One wake per row (current impl loops single deliverMessages;
+      // batching is a future optimization — pin the per-row contract
+      // so a future batch change has to update this assertion
+      // intentionally).
+      expect(wakeCalls).toHaveLength(3);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('per-row failure logs warn; remaining rows still attempt', async () => {
+    const fix = makeDeliverFixture();
+    try {
+      const msgA = fix.insertViewerMessage('A');
+      const msgB = fix.insertViewerMessage('B');
+      fix.inboxes.ensureDelivery(fix.channelId, fix.agentId, msgA);
+      fix.inboxes.ensureDelivery(fix.channelId, fix.agentId, msgB);
+
+      const cache = new RunStateCache();
+      cache.applyRuntimeStatus(DAEMON_KEY, [
+        {
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+          pid: 1,
+          phase: 'ready',
+          run_state: null,
+          started_at: 1700000000000,
+        },
+      ]);
+      // Coordinator whose first wake throws + second succeeds.
+      const wakeCalls: number[] = [];
+      const coordinator = new RuntimeDeliveryCoordinator({
+        bridge: {
+          runtimeWake: async () => {
+            wakeCalls.push(wakeCalls.length);
+            if (wakeCalls.length === 1) {
+              throw new Error('simulated transport blip on row 1');
+            }
+            return { delivered: true, delivery_ids: [42] };
+          },
+        },
+        cache,
+        inboxAck: { markDelivered: () => {} },
+      });
+      const warns: Array<{ meta: unknown; msg: string }> = [];
+      const customLogger: BackendLogger = {
+        ...noopLogger,
+        warn: (meta, msg) => warns.push({ meta, msg: msg ?? '' }),
+      };
+      const { host } = makeHost({}, fix.conversations, {
+        agents: fix.agents,
+        messages: fix.messages,
+        inboxes: fix.inboxes,
+        users: fix.users,
+        settings: fix.settings,
+        coordinator,
+        cache,
+        db: fix.db,
+        logger: customLogger,
+      });
+      await host.drainPending(fix.channelId, fix.agentId);
+
+      // Both wakes attempted despite first failure.
+      expect(wakeCalls.length).toBe(2);
+      // First failure produced a warn line — drainPending's catch arm
+      // logs 'drain: deliverMessage failed'.
+      const drainWarns = warns.filter(w =>
+        w.msg.includes('drain: deliverMessage failed'),
+      );
+      expect(drainWarns.length).toBe(1);
     } finally {
       fix.cleanup();
     }
