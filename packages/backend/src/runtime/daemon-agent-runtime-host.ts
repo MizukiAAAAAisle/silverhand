@@ -56,23 +56,13 @@
  * land before their tests do — it formats a loud error with the env
  * var, method name, and rollback recipe.
  */
-import type {
-  AgentRunState,
-  AgentRunTerminalReason,
-  ServerConfig,
-} from '@silverhand/shared';
+import type { AgentRunState, AgentRunTerminalReason, ServerConfig } from '@silverhand/shared';
 import { systemSubtype } from '@silverhand/shared';
 import type { HostClient } from '@silverhand/host';
 import { getDriver } from '@silverhand/host/drivers';
 import type { Database } from 'better-sqlite3';
-import type {
-  BackendLogger,
-  SilverhandCliLauncher,
-} from '../context.js';
-import type {
-  ClearSessionResult,
-  StartOptions,
-} from '../conversation-manager.js';
+import type { BackendLogger, SilverhandCliLauncher } from '../context.js';
+import type { ClearSessionResult, StartOptions } from '../conversation-manager.js';
 import type { AgentTokenStore } from '../auth/agent-token-store.js';
 import { buildSystemPromptFor } from '../drivers/index.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
@@ -87,21 +77,14 @@ import { prepareSpawnFiles } from '../spawn-prep.js';
 import type { AgentRuntimeHost } from './agent-runtime-host.js';
 import type { ActivityLogWriter } from './activity-log-writer.js';
 import type { RuntimeBridge } from './bridge.js';
-import type {
-  LiveDeliveryRequest,
-  RuntimeDeliveryCoordinator,
-} from './delivery-coordinator.js';
+import type { LiveDeliveryRequest, RuntimeDeliveryCoordinator } from './delivery-coordinator.js';
 import type { RuntimeEventHandler } from './event-handler.js';
 import type { EventPublisher } from './event-handler.js';
 import { buildPromptContext } from './prompt-context.js';
 import type { RunStateCache } from './run-state-cache.js';
 import { SILVERHAND_RUNTIME_HOST_ENV } from './runtime-host-mode.js';
 import { buildBridgeBaseEnv } from './spawn-env.js';
-import {
-  formatInboxBatch,
-  formatLiveMessage,
-  sendMessageToolName,
-} from './stdin-format.js';
+import { formatInboxBatch, formatLiveMessage, sendMessageToolName } from './stdin-format.js';
 
 /**
  * Dependencies for the daemon-mode runtime host.
@@ -317,11 +300,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
    * not replicated here because daemon mode does not own init-retry
    * state.
    */
-  async start(
-    conversationId: string,
-    agentId: string,
-    opts: StartOptions = {},
-  ): Promise<void> {
+  async start(conversationId: string, agentId: string, opts: StartOptions = {}): Promise<void> {
     const conversation = this.conversations.get(conversationId);
     if (!conversation) {
       throw new Error(`conversation ${conversationId} not found`);
@@ -392,9 +371,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
     // backend-side `driver.encodeStdinMessage` call was the codex
     // delivery blocker (stateless instance, no threadId).
     let initialPrompt = '';
-    let startupDelivery:
-      | { delivery_ids: number[]; text: string }
-      | undefined;
+    let startupDelivery: { delivery_ids: number[]; text: string } | undefined;
     let oneShotPreDrainedIds: number[] = [];
     const pending = this.inboxes.listPending(conversationId, agentId);
     if (pending.length > 0) {
@@ -434,9 +411,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
       baseProcessEnv: this.baseProcessEnv,
     });
 
-    const options: NonNullable<
-      Parameters<RuntimeBridge['runtimeStart']>[0]['options']
-    > = {
+    const options: NonNullable<Parameters<RuntimeBridge['runtimeStart']>[0]['options']> = {
       runtime: agent.runtime,
       cwd: conversation.workspace_path,
       agent_name: agent.name,
@@ -593,8 +568,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
     if (!agent) throw new Error(`agent ${agentId} not found`);
     const directive =
       softDirective ??
-      '[user requested a course correction — pause your current direction and ' +
-        'wait for the next instruction]';
+      '[user requested a course correction — pause your current direction and ' + 'wait for the next instruction]';
     // Option A v2 (Cindy `UMGu36zoTDVuKWXi`): ship raw directive text;
     // daemon encodes via its in-process driver instance whose state
     // (codex threadId etc.) is authoritative. Pre-`readyToEncode()`
@@ -670,34 +644,26 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
     if (!agent) throw new Error(`agent ${agentId} not found`);
     const existing = this.conversations.getAgent(conversationId, agentId);
     if (!existing) {
-      throw new Error(
-        `agent ${agentId} is not a member of conversation ${conversationId}`,
-      );
+      throw new Error(`agent ${agentId} is not a member of conversation ${conversationId}`);
     }
 
     // 2. Snapshot pre-state.
     const prevCliSessionId = existing.cli_session_id;
     const cacheEntry = this.cache.get(conversationId, agentId);
-    const wasRunning =
-      cacheEntry !== undefined && cacheEntry.phase !== 'exited';
+    const wasRunning = cacheEntry !== undefined && cacheEntry.phase !== 'exited';
 
     // 3. Bridge first. Transport / internal_error rejections propagate
     //    and leave DB untouched (Cindy `BYHZJI9ALSVmmlFr`). Both arms
     //    of the daemon result continue to step 4.
     await this.bridge.clearRuntimeSession(conversationId, agentId);
+    this.coordinator.clearRuntime(conversationId, agentId, 'stopped');
 
     // 4. DB tx + audit + SSE.
     const shouldAudit = wasRunning || prevCliSessionId !== null;
     const { updated, auditMessage } = this.db.transaction(() => {
-      const updated = this.conversations.updateAgentRuntime(
-        conversationId,
-        agentId,
-        { cliSessionId: null },
-      );
+      const updated = this.conversations.updateAgentRuntime(conversationId, agentId, { cliSessionId: null });
       if (!updated) {
-        throw new Error(
-          `agent ${agentId} is not a member of conversation ${conversationId}`,
-        );
+        throw new Error(`agent ${agentId} is not a member of conversation ${conversationId}`);
       }
       const auditMessage = shouldAudit
         ? this.insertSessionClearedAuditMessage({
@@ -734,11 +700,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
       // are warn-level only — clearSession as a whole stays successful.
       for (const ca of this.conversations.listAgents(conversationId)) {
         if (ca.agent_id === agentId) continue;
-        await this.deliverMessage(
-          conversationId,
-          ca.agent_id,
-          auditMessage.id,
-        ).catch(err =>
+        await this.deliverMessage(conversationId, ca.agent_id, auditMessage.id).catch(err =>
           this.logger.warn(
             {
               kind: 'runtime',
@@ -773,9 +735,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
     wasRunning: boolean;
   }) {
     const actor = params.actorUserId ? `@${params.actorUserId}` : 'A user';
-    const prevLabel = params.prevCliSessionId
-      ? `${params.prevCliSessionId.slice(0, 8)}...`
-      : 'none';
+    const prevLabel = params.prevCliSessionId ? `${params.prevCliSessionId.slice(0, 8)}...` : 'none';
     return this.messages.insertForConversation({
       conversationId: params.conversationId,
       fromKind: 'system',
@@ -789,9 +749,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
         agent_id: params.agentId,
         agent_name: params.agentName,
         actor_user_id: params.actorUserId,
-        previous_cli_session_id_prefix: params.prevCliSessionId
-          ? params.prevCliSessionId.slice(0, 8)
-          : null,
+        previous_cli_session_id_prefix: params.prevCliSessionId ? params.prevCliSessionId.slice(0, 8) : null,
         was_running: params.wasRunning,
       },
     });
@@ -864,25 +822,23 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
    *      Decision is returned for logging but is informational; the
    *      inbox is the source of truth for retry.
    */
-  async deliverMessage(
-    conversationId: string,
-    agentId: string,
-    messageId: string,
-  ): Promise<void> {
+  async deliverMessage(conversationId: string, agentId: string, messageId: string): Promise<void> {
     const msg = this.messages.getById(messageId);
     if (!msg) {
       this.logger.warn(
-        { kind: 'runtime', mode: 'daemon', conv_id: conversationId, agent_id: agentId, msg_id: messageId },
+        {
+          kind: 'runtime',
+          mode: 'daemon',
+          conv_id: conversationId,
+          agent_id: agentId,
+          msg_id: messageId,
+        },
         'deliver: messageId not found in messages table',
       );
       return;
     }
 
-    const delivery = this.inboxes.ensureDelivery(
-      conversationId,
-      agentId,
-      messageId,
-    );
+    const delivery = this.inboxes.ensureDelivery(conversationId, agentId, messageId);
     if (delivery.deliveredAt !== null) {
       this.logger.info(
         {
@@ -968,20 +924,17 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
     // keeps the inbox row pending on both arms. oneShot drivers are
     // filtered downstream via `driver.busyDeliveryMode === 'none'`.
 
-    const decision = await this.coordinator.submitLiveDelivery(
-      conversationId,
-      agentId,
-      {
-        deliveryIds: [delivery.inboxId],
-        dedupKey: messageId,
-        text,
-        driver: {
-          oneShot: driver.oneShot,
-          busyDeliveryMode: driver.busyDeliveryMode,
-          kickoffMode: driver.kickoffMode,
-        },
+    const decision = await this.coordinator.submitLiveDelivery(conversationId, agentId, {
+      deliveryIds: [delivery.inboxId],
+      dedupKey: messageId,
+      text,
+      driver: {
+        runtime: agent.runtime,
+        oneShot: driver.oneShot,
+        busyDeliveryMode: driver.busyDeliveryMode,
+        kickoffMode: driver.kickoffMode,
       },
-    );
+    });
     this.logger.info(
       {
         kind: 'runtime',
@@ -1063,10 +1016,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
    * `markDelivered` when session_init lands — preserving the
    * all-or-nothing semantics across the gate.
    */
-  async drainPending(
-    conversationId: string,
-    agentId: string,
-  ): Promise<void> {
+  async drainPending(conversationId: string, agentId: string): Promise<void> {
     const pending = this.inboxes.listPending(conversationId, agentId);
     if (pending.length === 0) {
       this.logger.info(
@@ -1138,6 +1088,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
       dedupKey: pending[0]!.message.id,
       text: batchText,
       driver: {
+        runtime: agent.runtime,
         oneShot: driver.oneShot,
         busyDeliveryMode: driver.busyDeliveryMode,
         kickoffMode: driver.kickoffMode,
@@ -1145,11 +1096,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
     };
 
     try {
-      const decision = await this.coordinator.submitLiveDelivery(
-        conversationId,
-        agentId,
-        req,
-      );
+      const decision = await this.coordinator.submitLiveDelivery(conversationId, agentId, req);
       this.logger.info(
         {
           kind: 'runtime',
@@ -1313,18 +1260,8 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
    * signature; callers that want the terminal snapshot read it from
    * the SSE bus (same as legacy).
    */
-  resolveRun(
-    conversationId: string,
-    agentId: string,
-    reason: AgentRunTerminalReason,
-    runId?: string,
-  ): void {
-    const terminal = this.cache.resolveRun(
-      conversationId,
-      agentId,
-      reason,
-      runId,
-    );
+  resolveRun(conversationId: string, agentId: string, reason: AgentRunTerminalReason, runId?: string): void {
+    const terminal = this.cache.resolveRun(conversationId, agentId, reason, runId);
     if (!terminal) return;
     this.events.publish(conversationId, {
       kind: 'agent_activity',
@@ -1342,10 +1279,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
    * Implementation: cache returns the array of terminal snapshots
    * with `runState` already cleared; we just publish each one.
    */
-  resolveConversationRuns(
-    conversationId: string,
-    reason: AgentRunTerminalReason = 'conversation_closed',
-  ): void {
+  resolveConversationRuns(conversationId: string, reason: AgentRunTerminalReason = 'conversation_closed'): void {
     const terminals = this.cache.resolveConversationRuns(conversationId, reason);
     for (const terminal of terminals) {
       this.events.publish(conversationId, {

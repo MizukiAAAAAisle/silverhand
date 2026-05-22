@@ -52,33 +52,20 @@ import { RuntimeDeliveryCoordinator } from '../../src/runtime/delivery-coordinat
 import { combineGatedBatch } from '../../src/runtime/stdin-format.js';
 import { MembershipService } from '../../src/services/membership-service.js';
 import { AgentTokenStore } from '../../src/auth/agent-token-store.js';
-import type {
-  BackendLogger,
-  SilverhandCliLauncher,
-} from '../../src/context.js';
+import type { BackendLogger, SilverhandCliLauncher } from '../../src/context.js';
 import type { ServerConfig } from '@silverhand/shared';
 import { openTestDb, makeTempSilverhandDir } from '../utils/db.js';
 
 interface ClientOverrides {
-  runtimeStart?: (
-    params: RuntimeStartParams,
-  ) => Promise<RuntimeStartResult> | RuntimeStartResult;
-  runtimeStop?: (
-    params: RuntimeStopParams,
-  ) => Promise<RuntimeStopResult> | RuntimeStopResult;
-  runtimeStopAll?: () =>
-    | Promise<RuntimeStopAllResult>
-    | RuntimeStopAllResult;
-  runtimeCloseActivityLog?: () =>
-    | Promise<RuntimeCloseActivityLogResult>
-    | RuntimeCloseActivityLogResult;
+  runtimeStart?: (params: RuntimeStartParams) => Promise<RuntimeStartResult> | RuntimeStartResult;
+  runtimeStop?: (params: RuntimeStopParams) => Promise<RuntimeStopResult> | RuntimeStopResult;
+  runtimeStopAll?: () => Promise<RuntimeStopAllResult> | RuntimeStopAllResult;
+  runtimeCloseActivityLog?: () => Promise<RuntimeCloseActivityLogResult> | RuntimeCloseActivityLogResult;
   runtimeStatus?: () => Promise<RuntimeStatusResult> | RuntimeStatusResult;
   runtimeClearSession?: (params: {
     conversation_id: string;
     agent_id: string;
-  }) =>
-    | Promise<RuntimeClearSessionResult>
-    | RuntimeClearSessionResult;
+  }) => Promise<RuntimeClearSessionResult> | RuntimeClearSessionResult;
   subscribe?: HostClient['subscribe'];
 }
 
@@ -117,7 +104,10 @@ const noopMessageRepo = {
 // SQLite transaction; for tests that never reach the tx body the stub
 // is just an identity wrapper.
 const noopDb = {
-  transaction: <T>(fn: () => T) => () => fn(),
+  transaction:
+    <T>(fn: () => T) =>
+    () =>
+      fn(),
 } as unknown as Database;
 
 const noopInboxRepo = {
@@ -169,8 +159,7 @@ function makeFakeClient(overrides: ClientOverrides = {}): HostClient {
   // .runtimeStopAll / .runtimeCloseActivityLog only). We supply rejecting
   // stubs so any accidental delegation surfaces loudly as an unexpected
   // resolution.
-  const reject = () =>
-    Promise.reject(new Error('unmocked host client method'));
+  const reject = () => Promise.reject(new Error('unmocked host client method'));
   return {
     ping: reject,
     subscribe: overrides.subscribe ?? (() => () => {}),
@@ -178,20 +167,13 @@ function makeFakeClient(overrides: ClientOverrides = {}): HostClient {
     runtimeStart: overrides.runtimeStart
       ? async (params: RuntimeStartParams) => overrides.runtimeStart!(params)
       : reject,
-    runtimeStop: overrides.runtimeStop
-      ? async (params: RuntimeStopParams) => overrides.runtimeStop!(params)
-      : reject,
+    runtimeStop: overrides.runtimeStop ? async (params: RuntimeStopParams) => overrides.runtimeStop!(params) : reject,
     runtimeWake: reject,
-    runtimeStatus: overrides.runtimeStatus
-      ? async () => overrides.runtimeStatus!()
-      : reject,
+    runtimeStatus: overrides.runtimeStatus ? async () => overrides.runtimeStatus!() : reject,
     runtimeClearSession: overrides.runtimeClearSession
-      ? async (params: { conversation_id: string; agent_id: string }) =>
-          overrides.runtimeClearSession!(params)
+      ? async (params: { conversation_id: string; agent_id: string }) => overrides.runtimeClearSession!(params)
       : reject,
-    runtimeStopAll: overrides.runtimeStopAll
-      ? async () => overrides.runtimeStopAll!()
-      : reject,
+    runtimeStopAll: overrides.runtimeStopAll ? async () => overrides.runtimeStopAll!() : reject,
     runtimeCloseActivityLog: overrides.runtimeCloseActivityLog
       ? async () => overrides.runtimeCloseActivityLog!()
       : reject,
@@ -206,7 +188,13 @@ interface HostFixture {
   host: DaemonAgentRuntimeHost;
   cache: RunStateCache;
   bridge: RuntimeBridge;
-  events: { publishes: Array<{ conversationId: string; kind: string; payload: unknown }> };
+  events: {
+    publishes: Array<{
+      conversationId: string;
+      kind: string;
+      payload: unknown;
+    }>;
+  };
   publisher: EventPublisher;
 }
 
@@ -353,7 +341,10 @@ describe('DaemonAgentRuntimeHost — read methods', () => {
         agent_id: AGENT_X,
         pid: 3,
         phase: 'ready',
-        run_state: fakeRunState({ runId: 'r-other', conversationId: 'conv-other' }),
+        run_state: fakeRunState({
+          runId: 'r-other',
+          conversationId: 'conv-other',
+        }),
         started_at: 1700000000000,
       },
     ]);
@@ -486,15 +477,16 @@ describe('DaemonAgentRuntimeHost — resolveConversationRuns', () => {
         agent_id: AGENT_X,
         pid: 3,
         phase: 'ready',
-        run_state: fakeRunState({ runId: 'r-other', conversationId: 'conv-other' }),
+        run_state: fakeRunState({
+          runId: 'r-other',
+          conversationId: 'conv-other',
+        }),
         started_at: 1700000000000,
       },
     ]);
     host.resolveConversationRuns(CONV);
     expect(events.publishes.length).toBe(2);
-    const reasons = events.publishes.map(
-      e => (e.payload as AgentRunState).terminalReason,
-    );
+    const reasons = events.publishes.map(e => (e.payload as AgentRunState).terminalReason);
     expect(reasons).toEqual(['conversation_closed', 'conversation_closed']);
     // Other-conv entry untouched.
     expect(cache.get('conv-other', AGENT_X)?.runState?.runId).toBe('r-other');
@@ -563,15 +555,11 @@ describe('DaemonAgentRuntimeHost — stop (hard)', () => {
   });
 
   it('propagates bridge errors (does NOT swallow)', async () => {
-    const runtimeStop = vi.fn(
-      async (): Promise<RuntimeStopResult> => {
-        throw new Error('daemon disconnected');
-      },
-    );
+    const runtimeStop = vi.fn(async (): Promise<RuntimeStopResult> => {
+      throw new Error('daemon disconnected');
+    });
     const { host } = makeHost({ runtimeStop });
-    await expect(host.stop(CONV, AGENT_X, 'hard')).rejects.toThrow(
-      'daemon disconnected',
-    );
+    await expect(host.stop(CONV, AGENT_X, 'hard')).rejects.toThrow('daemon disconnected');
   });
 
   it('does NOT touch the cache directly (event-handler owns the exit projection)', async () => {
@@ -615,9 +603,7 @@ describe('DaemonAgentRuntimeHost — stop (hard)', () => {
 // last test in this block exercises. The cache is NOT mutated
 // (event handler owns the exit projection — same as hard stop).
 
-function makeAgentRepoStub(
-  agents: Array<{ id: string; name: string; runtime: 'claude' | 'cursor' }>,
-): AgentRepo {
+function makeAgentRepoStub(agents: Array<{ id: string; name: string; runtime: 'claude' | 'cursor' }>): AgentRepo {
   const byId = new Map(agents.map(a => [a.id, a]));
   return {
     get: (id: string) => byId.get(id) ?? null,
@@ -648,9 +634,7 @@ describe('DaemonAgentRuntimeHost — stop (soft)', () => {
         directive_delivered: true,
       }),
     );
-    const agents = makeAgentRepoStub([
-      { id: AGENT_X, name: 'alice', runtime: 'claude' },
-    ]);
+    const agents = makeAgentRepoStub([{ id: AGENT_X, name: 'alice', runtime: 'claude' }]);
     const conversations = makeConvRepoStub([
       {
         conversation_id: CONV,
@@ -680,16 +664,11 @@ describe('DaemonAgentRuntimeHost — stop (soft)', () => {
         directive_delivered: true,
       }),
     );
-    const agents = makeAgentRepoStub([
-      { id: AGENT_X, name: 'alice', runtime: 'claude' },
-    ]);
-    const conversations = makeConvRepoStub([
-      { conversation_id: CONV, agent_id: AGENT_X, cli_session_id: null },
-    ]);
+    const agents = makeAgentRepoStub([{ id: AGENT_X, name: 'alice', runtime: 'claude' }]);
+    const conversations = makeConvRepoStub([{ conversation_id: CONV, agent_id: AGENT_X, cli_session_id: null }]);
     const { host } = makeHost({ runtimeStop }, conversations, { agents });
     await host.stop(CONV, AGENT_X, 'soft');
-    const shipped = (runtimeStop.mock.calls[0]![0] as { soft_directive: string })
-      .soft_directive;
+    const shipped = (runtimeStop.mock.calls[0]![0] as { soft_directive: string }).soft_directive;
     // Default phrasing must mention "course correction" so CM-parity
     // tests don't drift, AND it must be raw text (not JSON) per Option A v2.
     expect(shipped).toMatch(/course correction/);
@@ -714,12 +693,8 @@ describe('DaemonAgentRuntimeHost — stop (soft)', () => {
         reason: 'driver_refused',
       }),
     );
-    const agents = makeAgentRepoStub([
-      { id: AGENT_X, name: 'cursor-bot', runtime: 'cursor' },
-    ]);
-    const conversations = makeConvRepoStub([
-      { conversation_id: CONV, agent_id: AGENT_X, cli_session_id: null },
-    ]);
+    const agents = makeAgentRepoStub([{ id: AGENT_X, name: 'cursor-bot', runtime: 'cursor' }]);
+    const conversations = makeConvRepoStub([{ conversation_id: CONV, agent_id: AGENT_X, cli_session_id: null }]);
     const { host } = makeHost({ runtimeStop }, conversations, { agents });
     // Does not throw — soft path is best-effort; warn-only handling
     // covers the refused arm (see the dedicated warn test below).
@@ -727,9 +702,7 @@ describe('DaemonAgentRuntimeHost — stop (soft)', () => {
     expect(runtimeStop).toHaveBeenCalledTimes(1);
     const call = runtimeStop.mock.calls[0]![0];
     expect(call.mode).toBe('soft');
-    expect((call as { soft_directive: string }).soft_directive).toMatch(
-      /course correction/,
-    );
+    expect((call as { soft_directive: string }).soft_directive).toMatch(/course correction/);
   });
 
   it('throws without calling bridge when agent row missing', async () => {
@@ -740,11 +713,9 @@ describe('DaemonAgentRuntimeHost — stop (soft)', () => {
       }),
     );
     // Empty agents stub → host.stop will throw "agent not found".
-    const { host } = makeHost(
-      { runtimeStop },
-      makeConvRepoStub([]),
-      { agents: makeAgentRepoStub([]) },
-    );
+    const { host } = makeHost({ runtimeStop }, makeConvRepoStub([]), {
+      agents: makeAgentRepoStub([]),
+    });
     await expect(host.stop(CONV, AGENT_X, 'soft')).rejects.toThrow(/not found/);
     expect(runtimeStop).not.toHaveBeenCalled();
   });
@@ -758,12 +729,8 @@ describe('DaemonAgentRuntimeHost — stop (soft)', () => {
       }),
     );
     const warned: Array<{ obj: unknown; msg: string }> = [];
-    const agents = makeAgentRepoStub([
-      { id: AGENT_X, name: 'alice', runtime: 'claude' },
-    ]);
-    const conversations = makeConvRepoStub([
-      { conversation_id: CONV, agent_id: AGENT_X, cli_session_id: null },
-    ]);
+    const agents = makeAgentRepoStub([{ id: AGENT_X, name: 'alice', runtime: 'claude' }]);
+    const conversations = makeConvRepoStub([{ conversation_id: CONV, agent_id: AGENT_X, cli_session_id: null }]);
     const client = makeFakeClient({ runtimeStop });
     const bridge = new RuntimeBridge(client, { get: () => null });
     const cache = new RunStateCache();
@@ -829,24 +796,16 @@ describe('DaemonAgentRuntimeHost — stop (soft)', () => {
     const runtimeStop = vi.fn(async (): Promise<RuntimeStopResult> => {
       throw new Error('daemon disconnected');
     });
-    const agents = makeAgentRepoStub([
-      { id: AGENT_X, name: 'alice', runtime: 'claude' },
-    ]);
-    const conversations = makeConvRepoStub([
-      { conversation_id: CONV, agent_id: AGENT_X, cli_session_id: null },
-    ]);
+    const agents = makeAgentRepoStub([{ id: AGENT_X, name: 'alice', runtime: 'claude' }]);
+    const conversations = makeConvRepoStub([{ conversation_id: CONV, agent_id: AGENT_X, cli_session_id: null }]);
     const { host } = makeHost({ runtimeStop }, conversations, { agents });
-    await expect(host.stop(CONV, AGENT_X, 'soft')).rejects.toThrow(
-      'daemon disconnected',
-    );
+    await expect(host.stop(CONV, AGENT_X, 'soft')).rejects.toThrow('daemon disconnected');
   });
 });
 
 describe('DaemonAgentRuntimeHost — stopAll / closeActivityLog', () => {
   it('stopAll delegates to bridge.runtimeStopAll', async () => {
-    const runtimeStopAll = vi.fn(
-      async (): Promise<RuntimeStopAllResult> => ({ stopped_count: 3 }),
-    );
+    const runtimeStopAll = vi.fn(async (): Promise<RuntimeStopAllResult> => ({ stopped_count: 3 }));
     const { host } = makeHost({ runtimeStopAll });
     await host.stopAll();
     expect(runtimeStopAll).toHaveBeenCalledTimes(1);
@@ -862,23 +821,17 @@ describe('DaemonAgentRuntimeHost — stopAll / closeActivityLog', () => {
 
   it('closeActivityLog delegates to bridge.runtimeCloseActivityLog then closes backend writer', async () => {
     const calls: string[] = [];
-    const runtimeCloseActivityLog = vi.fn(
-      async (): Promise<RuntimeCloseActivityLogResult> => {
-        calls.push('bridge');
-        return { flushed: true };
-      },
-    );
+    const runtimeCloseActivityLog = vi.fn(async (): Promise<RuntimeCloseActivityLogResult> => {
+      calls.push('bridge');
+      return { flushed: true };
+    });
     const activityLog = {
       write: vi.fn(),
       close: vi.fn(async () => {
         calls.push('writer');
       }),
     };
-    const { host } = makeHost(
-      { runtimeCloseActivityLog },
-      noopConversationRepo,
-      { activityLog },
-    );
+    const { host } = makeHost({ runtimeCloseActivityLog }, noopConversationRepo, { activityLog });
     await host.closeActivityLog();
     expect(runtimeCloseActivityLog).toHaveBeenCalledTimes(1);
     expect(activityLog.close).toHaveBeenCalledTimes(1);
@@ -886,11 +839,9 @@ describe('DaemonAgentRuntimeHost — stopAll / closeActivityLog', () => {
   });
 
   it('closeActivityLog propagates bridge errors', async () => {
-    const runtimeCloseActivityLog = vi.fn(
-      async (): Promise<RuntimeCloseActivityLogResult> => {
-        throw new Error('daemon disconnected');
-      },
-    );
+    const runtimeCloseActivityLog = vi.fn(async (): Promise<RuntimeCloseActivityLogResult> => {
+      throw new Error('daemon disconnected');
+    });
     const { host } = makeHost({ runtimeCloseActivityLog });
     await expect(host.closeActivityLog()).rejects.toThrow('daemon disconnected');
   });
@@ -966,10 +917,7 @@ interface ReconcileFixture {
   conversations: ConversationRepo;
   agents: AgentRepo;
   workspaces: WorkspaceRepo;
-  insertChannelWithAgent(
-    workspaceName: string,
-    agentName: string,
-  ): { channelId: string; agentId: string };
+  insertChannelWithAgent(workspaceName: string, agentName: string): { channelId: string; agentId: string };
 }
 
 function makeReconcileFixture(): ReconcileFixture {
@@ -1058,32 +1006,21 @@ describe('DaemonAgentRuntimeHost — reconcileOnBoot', () => {
         return () => {};
       };
 
-      const { host, events } = makeHost(
-        { runtimeStatus, subscribe },
-        fix.conversations,
-      );
+      const { host, events } = makeHost({ runtimeStatus, subscribe }, fix.conversations);
       await host.reconcileOnBoot();
 
       // Alive row untouched.
-      const aliveAfter = fix.conversations.getAgent(
-        alive.channelId,
-        alive.agentId,
-      );
+      const aliveAfter = fix.conversations.getAgent(alive.channelId, alive.agentId);
       expect(aliveAfter?.status).toBe('active');
       expect(aliveAfter?.pid).toBe(1111);
 
       // Stale row flipped to idle + pid cleared.
-      const staleAfter = fix.conversations.getAgent(
-        stale.channelId,
-        stale.agentId,
-      );
+      const staleAfter = fix.conversations.getAgent(stale.channelId, stale.agentId);
       expect(staleAfter?.status).toBe('idle');
       expect(staleAfter?.pid).toBeNull();
 
       // SSE published for the cleared row only.
-      const idlePublishes = events.publishes.filter(
-        e => e.kind === 'agent_status',
-      );
+      const idlePublishes = events.publishes.filter(e => e.kind === 'agent_status');
       expect(idlePublishes.length).toBe(1);
       expect(idlePublishes[0]!.conversationId).toBe(stale.channelId);
       expect(idlePublishes[0]!.payload).toMatchObject({
@@ -1102,17 +1039,12 @@ describe('DaemonAgentRuntimeHost — reconcileOnBoot', () => {
   it('is a no-op when DB has no live (starting/active) rows', async () => {
     const fix = makeReconcileFixture();
     try {
-      const runtimeStatus = vi.fn(
-        async (): Promise<RuntimeStatusResult> => ({ runtimes: [] }),
-      );
+      const runtimeStatus = vi.fn(async (): Promise<RuntimeStatusResult> => ({ runtimes: [] }));
       const subscribe: HostClient['subscribe'] = sink => {
         sink(readyFrame(1, 1));
         return () => {};
       };
-      const { host, events } = makeHost(
-        { runtimeStatus, subscribe },
-        fix.conversations,
-      );
+      const { host, events } = makeHost({ runtimeStatus, subscribe }, fix.conversations);
       await host.reconcileOnBoot();
       expect(runtimeStatus).toHaveBeenCalled();
       expect(events.publishes).toEqual([]);
@@ -1138,10 +1070,7 @@ describe('DaemonAgentRuntimeHost — reconcileOnBoot', () => {
       // No `ready` event → no daemon-instance key from that path either.
       const subscribe: HostClient['subscribe'] = () => () => {};
 
-      const { host, cache, events } = makeHost(
-        { runtimeStatus, subscribe },
-        fix.conversations,
-      );
+      const { host, cache, events } = makeHost({ runtimeStatus, subscribe }, fix.conversations);
       await host.reconcileOnBoot();
 
       // Cache empty + no daemon key latched.
@@ -1151,9 +1080,7 @@ describe('DaemonAgentRuntimeHost — reconcileOnBoot', () => {
       expect(after?.status).toBe('active');
       expect(after?.pid).toBe(9999);
       // No agent_status publishes.
-      expect(
-        events.publishes.filter(e => e.kind === 'agent_status'),
-      ).toEqual([]);
+      expect(events.publishes.filter(e => e.kind === 'agent_status')).toEqual([]);
     } finally {
       fix.cleanup();
     }
@@ -1197,9 +1124,7 @@ interface ClearSessionFixture {
   } | null;
 }
 
-function makeClearSessionFixture(
-  opts: { initialCliSessionId?: string | null } = {},
-): ClearSessionFixture {
+function makeClearSessionFixture(opts: { initialCliSessionId?: string | null } = {}): ClearSessionFixture {
   const { db, viewerUserId, localHostId } = openTestDb();
   const { silverhandDir, workspacesRoot, cleanup } = makeTempSilverhandDir();
   const conversations = new RealConversationRepo(db);
@@ -1226,9 +1151,7 @@ function makeClearSessionFixture(
   });
   conversations.addAgent(channel.id, agent.id);
   const initialCliSessionId =
-    opts.initialCliSessionId === undefined
-      ? 'sess-deadbeef-abc123'
-      : opts.initialCliSessionId;
+    opts.initialCliSessionId === undefined ? 'sess-deadbeef-abc123' : opts.initialCliSessionId;
   if (initialCliSessionId !== null) {
     conversations.updateAgentRuntime(channel.id, agent.id, {
       cliSessionId: initialCliSessionId,
@@ -1247,9 +1170,7 @@ function makeClearSessionFixture(
     initialCliSessionId,
     countMessages: () =>
       (db
-        .prepare<[string], { c: number }>(
-          'SELECT COUNT(*) AS c FROM messages WHERE conversation_id = ?',
-        )
+        .prepare<[string], { c: number }>('SELECT COUNT(*) AS c FROM messages WHERE conversation_id = ?')
         .get(channel.id)?.c ?? 0) as number,
     lastMessage: () => {
       const row = db
@@ -1280,17 +1201,13 @@ describe('DaemonAgentRuntimeHost — clearSession', () => {
   it('validation throws (missing conversation) WITHOUT touching bridge or DB', async () => {
     const fix = makeClearSessionFixture();
     try {
-      const runtimeClearSession = vi.fn(
-        async (): Promise<RuntimeClearSessionResult> => ({ cleared: true }),
-      );
-      const { host } = makeHost(
-        { runtimeClearSession },
-        fix.conversations,
-        { agents: fix.agents, messages: fix.messages, db: fix.db },
-      );
-      await expect(
-        host.clearSession('conv-nope', fix.agentId, 'alice'),
-      ).rejects.toThrow(/conversation .* not found/);
+      const runtimeClearSession = vi.fn(async (): Promise<RuntimeClearSessionResult> => ({ cleared: true }));
+      const { host } = makeHost({ runtimeClearSession }, fix.conversations, {
+        agents: fix.agents,
+        messages: fix.messages,
+        db: fix.db,
+      });
+      await expect(host.clearSession('conv-nope', fix.agentId, 'alice')).rejects.toThrow(/conversation .* not found/);
       expect(runtimeClearSession).not.toHaveBeenCalled();
       // Row untouched.
       const after = fix.conversations.getAgent(fix.channelId, fix.agentId);
@@ -1305,27 +1222,21 @@ describe('DaemonAgentRuntimeHost — clearSession', () => {
     const fix = makeClearSessionFixture();
     try {
       const callOrder: string[] = [];
-      const runtimeClearSession = vi.fn(
-        async (): Promise<RuntimeClearSessionResult> => {
-          callOrder.push('bridge');
-          // Snapshot the DB at the moment the bridge is invoked —
-          // cli_session_id MUST still be the seeded value (the tx has
-          // not run yet).
-          const snap = fix.conversations.getAgent(fix.channelId, fix.agentId);
-          callOrder.push(`db-during-bridge=${snap?.cli_session_id ?? 'null'}`);
-          return { cleared: true };
-        },
-      );
-      const { host } = makeHost(
-        { runtimeClearSession },
-        fix.conversations,
-        { agents: fix.agents, messages: fix.messages, db: fix.db },
-      );
-      const result = await host.clearSession(
-        fix.channelId,
-        fix.agentId,
-        'alice',
-      );
+      const runtimeClearSession = vi.fn(async (): Promise<RuntimeClearSessionResult> => {
+        callOrder.push('bridge');
+        // Snapshot the DB at the moment the bridge is invoked —
+        // cli_session_id MUST still be the seeded value (the tx has
+        // not run yet).
+        const snap = fix.conversations.getAgent(fix.channelId, fix.agentId);
+        callOrder.push(`db-during-bridge=${snap?.cli_session_id ?? 'null'}`);
+        return { cleared: true };
+      });
+      const { host } = makeHost({ runtimeClearSession }, fix.conversations, {
+        agents: fix.agents,
+        messages: fix.messages,
+        db: fix.db,
+      });
+      const result = await host.clearSession(fix.channelId, fix.agentId, 'alice');
       expect(callOrder[0]).toBe('bridge');
       expect(callOrder[1]).toBe(`db-during-bridge=${fix.initialCliSessionId}`);
       // After call returns, DB is cleared.
@@ -1337,22 +1248,46 @@ describe('DaemonAgentRuntimeHost — clearSession', () => {
     }
   });
 
+  it('clears coordinator runtime state after daemon clear succeeds', async () => {
+    const fix = makeClearSessionFixture();
+    try {
+      const cache = new RunStateCache();
+      const coordinator = new RuntimeDeliveryCoordinator({
+        bridge: { runtimeWake: () => Promise.reject(new Error('unused')) },
+        cache,
+        inboxAck: { markDelivered: () => {} },
+      });
+      const clearRuntime = vi.spyOn(coordinator, 'clearRuntime');
+      const runtimeClearSession = vi.fn(async (): Promise<RuntimeClearSessionResult> => ({ cleared: true }));
+      const { host } = makeHost({ runtimeClearSession }, fix.conversations, {
+        agents: fix.agents,
+        messages: fix.messages,
+        db: fix.db,
+        cache,
+        coordinator,
+      });
+
+      await host.clearSession(fix.channelId, fix.agentId, 'alice');
+
+      expect(runtimeClearSession).toHaveBeenCalledTimes(1);
+      expect(clearRuntime).toHaveBeenCalledWith(fix.channelId, fix.agentId, 'stopped');
+    } finally {
+      fix.cleanup();
+    }
+  });
+
   it('transport error from bridge propagates; DB is NOT touched', async () => {
     const fix = makeClearSessionFixture();
     try {
-      const runtimeClearSession = vi.fn(
-        async (): Promise<RuntimeClearSessionResult> => {
-          throw new Error('daemon transport error');
-        },
-      );
-      const { host, events } = makeHost(
-        { runtimeClearSession },
-        fix.conversations,
-        { agents: fix.agents, messages: fix.messages, db: fix.db },
-      );
-      await expect(
-        host.clearSession(fix.channelId, fix.agentId, 'alice'),
-      ).rejects.toThrow('daemon transport error');
+      const runtimeClearSession = vi.fn(async (): Promise<RuntimeClearSessionResult> => {
+        throw new Error('daemon transport error');
+      });
+      const { host, events } = makeHost({ runtimeClearSession }, fix.conversations, {
+        agents: fix.agents,
+        messages: fix.messages,
+        db: fix.db,
+      });
+      await expect(host.clearSession(fix.channelId, fix.agentId, 'alice')).rejects.toThrow('daemon transport error');
       expect(runtimeClearSession).toHaveBeenCalledTimes(1);
       // DB row untouched.
       const after = fix.conversations.getAgent(fix.channelId, fix.agentId);
@@ -1369,19 +1304,13 @@ describe('DaemonAgentRuntimeHost — clearSession', () => {
   it('writes audit + publishes agent_status + message when prevCliSessionId was set', async () => {
     const fix = makeClearSessionFixture();
     try {
-      const runtimeClearSession = vi.fn(
-        async (): Promise<RuntimeClearSessionResult> => ({ cleared: true }),
-      );
-      const { host, events } = makeHost(
-        { runtimeClearSession },
-        fix.conversations,
-        { agents: fix.agents, messages: fix.messages, db: fix.db },
-      );
-      const result = await host.clearSession(
-        fix.channelId,
-        fix.agentId,
-        'alice',
-      );
+      const runtimeClearSession = vi.fn(async (): Promise<RuntimeClearSessionResult> => ({ cleared: true }));
+      const { host, events } = makeHost({ runtimeClearSession }, fix.conversations, {
+        agents: fix.agents,
+        messages: fix.messages,
+        db: fix.db,
+      });
+      const result = await host.clearSession(fix.channelId, fix.agentId, 'alice');
 
       // Result reflects pre-state.
       expect(result.prevCliSessionId).toBe(fix.initialCliSessionId);
@@ -1416,19 +1345,13 @@ describe('DaemonAgentRuntimeHost — clearSession', () => {
   it('skips audit + skips message SSE when prevCliSessionId is null and not running', async () => {
     const fix = makeClearSessionFixture({ initialCliSessionId: null });
     try {
-      const runtimeClearSession = vi.fn(
-        async (): Promise<RuntimeClearSessionResult> => ({ cleared: false }),
-      );
-      const { host, events } = makeHost(
-        { runtimeClearSession },
-        fix.conversations,
-        { agents: fix.agents, messages: fix.messages, db: fix.db },
-      );
-      const result = await host.clearSession(
-        fix.channelId,
-        fix.agentId,
-        'alice',
-      );
+      const runtimeClearSession = vi.fn(async (): Promise<RuntimeClearSessionResult> => ({ cleared: false }));
+      const { host, events } = makeHost({ runtimeClearSession }, fix.conversations, {
+        agents: fix.agents,
+        messages: fix.messages,
+        db: fix.db,
+      });
+      const result = await host.clearSession(fix.channelId, fix.agentId, 'alice');
       expect(result.prevCliSessionId).toBeNull();
       expect(result.wasRunning).toBe(false);
       // shouldAudit = false → no message row.
@@ -1444,14 +1367,12 @@ describe('DaemonAgentRuntimeHost — clearSession', () => {
   it('derives wasRunning=true from cache (phase != exited), audits even with null prevCliSessionId', async () => {
     const fix = makeClearSessionFixture({ initialCliSessionId: null });
     try {
-      const runtimeClearSession = vi.fn(
-        async (): Promise<RuntimeClearSessionResult> => ({ cleared: true }),
-      );
-      const { host, cache, events } = makeHost(
-        { runtimeClearSession },
-        fix.conversations,
-        { agents: fix.agents, messages: fix.messages, db: fix.db },
-      );
+      const runtimeClearSession = vi.fn(async (): Promise<RuntimeClearSessionResult> => ({ cleared: true }));
+      const { host, cache, events } = makeHost({ runtimeClearSession }, fix.conversations, {
+        agents: fix.agents,
+        messages: fix.messages,
+        db: fix.db,
+      });
       // Pre-populate cache so phase=ready (i.e. running).
       cache.applyRuntimeStatus(DAEMON_KEY, [
         {
@@ -1463,11 +1384,7 @@ describe('DaemonAgentRuntimeHost — clearSession', () => {
           started_at: 1700000000000,
         },
       ]);
-      const result = await host.clearSession(
-        fix.channelId,
-        fix.agentId,
-        'alice',
-      );
+      const result = await host.clearSession(fix.channelId, fix.agentId, 'alice');
       expect(result.wasRunning).toBe(true);
       // shouldAudit fires because wasRunning (even though
       // prevCliSessionId is null).
@@ -1487,14 +1404,12 @@ describe('DaemonAgentRuntimeHost — clearSession', () => {
     // its DB session id + writes audit.
     const fix = makeClearSessionFixture();
     try {
-      const runtimeClearSession = vi.fn(
-        async (): Promise<RuntimeClearSessionResult> => ({ cleared: false }),
-      );
-      const { host } = makeHost(
-        { runtimeClearSession },
-        fix.conversations,
-        { agents: fix.agents, messages: fix.messages, db: fix.db },
-      );
+      const runtimeClearSession = vi.fn(async (): Promise<RuntimeClearSessionResult> => ({ cleared: false }));
+      const { host } = makeHost({ runtimeClearSession }, fix.conversations, {
+        agents: fix.agents,
+        messages: fix.messages,
+        db: fix.db,
+      });
       await host.clearSession(fix.channelId, fix.agentId, 'alice');
       const after = fix.conversations.getAgent(fix.channelId, fix.agentId);
       expect(after?.cli_session_id).toBeNull();
@@ -1507,14 +1422,12 @@ describe('DaemonAgentRuntimeHost — clearSession', () => {
   it('audit content carries "A user" prefix when actorUserId is null', async () => {
     const fix = makeClearSessionFixture();
     try {
-      const runtimeClearSession = vi.fn(
-        async (): Promise<RuntimeClearSessionResult> => ({ cleared: true }),
-      );
-      const { host } = makeHost(
-        { runtimeClearSession },
-        fix.conversations,
-        { agents: fix.agents, messages: fix.messages, db: fix.db },
-      );
+      const runtimeClearSession = vi.fn(async (): Promise<RuntimeClearSessionResult> => ({ cleared: true }));
+      const { host } = makeHost({ runtimeClearSession }, fix.conversations, {
+        agents: fix.agents,
+        messages: fix.messages,
+        db: fix.db,
+      });
       await host.clearSession(fix.channelId, fix.agentId, null);
       const audit = fix.lastMessage()!;
       expect(audit.content).toMatch(/^A user cleared/);
@@ -1568,27 +1481,21 @@ describe('DaemonAgentRuntimeHost — clearSession', () => {
         cliSessionId: 'sess-deadbeef-abc123',
       });
 
-      const runtimeClearSession = vi.fn(
-        async (): Promise<RuntimeClearSessionResult> => ({ cleared: true }),
-      );
+      const runtimeClearSession = vi.fn(async (): Promise<RuntimeClearSessionResult> => ({ cleared: true }));
       // Coordinator is not needed here — peer has no cache entry and
       // claude (kickoffMode='requires_first_message') is NOT oneShot,
       // so deliverMessage short-circuits before the coordinator runs.
       // The inbox row is what we assert on (rows replay via
       // startup_delivery on peer's next spawn).
-      const { host, events } = makeHost(
-        { runtimeClearSession },
-        conversations,
-        {
-          agents,
-          messages,
-          db,
-          inboxes,
-          users,
-          settings,
-          silverhandDir,
-        },
-      );
+      const { host, events } = makeHost({ runtimeClearSession }, conversations, {
+        agents,
+        messages,
+        db,
+        inboxes,
+        users,
+        settings,
+        silverhandDir,
+      });
       await host.clearSession(channel.id, cleared.id, 'alice');
 
       // Cleared agent's row is wiped.
@@ -1597,9 +1504,7 @@ describe('DaemonAgentRuntimeHost — clearSession', () => {
 
       // Exactly one audit message in the conversation.
       const messageCount = (db
-        .prepare<[string], { c: number }>(
-          'SELECT COUNT(*) AS c FROM messages WHERE conversation_id = ?',
-        )
+        .prepare<[string], { c: number }>('SELECT COUNT(*) AS c FROM messages WHERE conversation_id = ?')
         .get(channel.id)?.c ?? 0) as number;
       expect(messageCount).toBe(1);
       const auditRow = db
@@ -1611,10 +1516,7 @@ describe('DaemonAgentRuntimeHost — clearSession', () => {
 
       // Peer agent's inbox has the audit row pending; cleared agent has none.
       const peerInbox = db
-        .prepare<
-          [string, string, string],
-          { id: number; delivered_at: number | null }
-        >(
+        .prepare<[string, string, string], { id: number; delivered_at: number | null }>(
           `SELECT id, delivered_at FROM conversation_inboxes
              WHERE conversation_id = ? AND agent_id = ? AND message_id = ?`,
         )
@@ -1623,18 +1525,16 @@ describe('DaemonAgentRuntimeHost — clearSession', () => {
       // Peer is not running → row stays pending; coordinator never ran.
       expect(peerInbox!.delivered_at).toBeNull();
 
-      const clearedInbox = db
-        .prepare<[string, string], { c: number }>(
-          'SELECT COUNT(*) AS c FROM conversation_inboxes WHERE conversation_id = ? AND agent_id = ?',
-        )
-        .get(channel.id, cleared.id)?.c ?? 0;
+      const clearedInbox =
+        db
+          .prepare<[string, string], { c: number }>(
+            'SELECT COUNT(*) AS c FROM conversation_inboxes WHERE conversation_id = ? AND agent_id = ?',
+          )
+          .get(channel.id, cleared.id)?.c ?? 0;
       expect(clearedInbox).toBe(0);
 
       // SSE: agent_status + message.
-      expect(events.publishes.map(e => e.kind)).toEqual([
-        'agent_status',
-        'message',
-      ]);
+      expect(events.publishes.map(e => e.kind)).toEqual(['agent_status', 'message']);
     } finally {
       cleanup();
     }
@@ -1701,34 +1601,24 @@ describe('DaemonAgentRuntimeHost — clearSession', () => {
         },
       }) as AgentRepo;
 
-      const runtimeClearSession = vi.fn(
-        async (): Promise<RuntimeClearSessionResult> => ({ cleared: true }),
-      );
-      const { host } = makeHost(
-        { runtimeClearSession },
-        conversations,
-        {
-          agents,
-          messages,
-          db,
-          inboxes,
-          users,
-          settings,
-          silverhandDir,
-        },
-      );
+      const runtimeClearSession = vi.fn(async (): Promise<RuntimeClearSessionResult> => ({ cleared: true }));
+      const { host } = makeHost({ runtimeClearSession }, conversations, {
+        agents,
+        messages,
+        db,
+        inboxes,
+        users,
+        settings,
+        silverhandDir,
+      });
       // clearSession must still resolve — peer failure is warn-only.
-      await expect(
-        host.clearSession(channel.id, cleared.id, 'alice'),
-      ).resolves.toMatchObject({ wasRunning: false });
+      await expect(host.clearSession(channel.id, cleared.id, 'alice')).resolves.toMatchObject({ wasRunning: false });
 
       // DB still cleared + audit row still inserted.
       const after = conversations.getAgent(channel.id, cleared.id);
       expect(after?.cli_session_id).toBeNull();
       const messageCount = (db
-        .prepare<[string], { c: number }>(
-          'SELECT COUNT(*) AS c FROM messages WHERE conversation_id = ?',
-        )
+        .prepare<[string], { c: number }>('SELECT COUNT(*) AS c FROM messages WHERE conversation_id = ?')
         .get(channel.id)?.c ?? 0) as number;
       expect(messageCount).toBe(1);
     } finally {
@@ -1774,9 +1664,11 @@ interface DeliverFixture {
   insertViewerMessage(content: string): string;
 }
 
-function makeDeliverFixture(opts: {
-  agentRuntime?: 'claude' | 'cursor';
-} = {}): DeliverFixture {
+function makeDeliverFixture(
+  opts: {
+    agentRuntime?: 'claude' | 'cursor';
+  } = {},
+): DeliverFixture {
   const { db, viewerUserId, localHostId } = openTestDb();
   const { workspacesRoot, cleanup } = makeTempSilverhandDir();
   const conversations = new RealConversationRepo(db);
@@ -1794,7 +1686,11 @@ function makeDeliverFixture(opts: {
     workspaceHostId: localHostId,
   });
   const agent = agents.create(
-    { name: 'agent-deliver', runtime: opts.agentRuntime ?? 'claude', host_id: localHostId },
+    {
+      name: 'agent-deliver',
+      runtime: opts.agentRuntime ?? 'claude',
+      host_id: localHostId,
+    },
     localHostId,
     viewerUserId,
   );
@@ -1840,12 +1736,33 @@ function makeObservableCoordinator(cache: RunStateCache): {
     text: string;
   }>;
   marked: number[][];
-  setWakeResponse(r: { delivered: true; ids?: number[] } | { delivered: false; reason: 'not_running' | 'not_initialized' | 'startup_pending' | 'draining' | 'driver_not_ready' | 'driver_refused' }): void;
+  setWakeResponse(
+    r:
+      | { delivered: true; ids?: number[] }
+      | {
+          delivered: false;
+          reason:
+            | 'not_running'
+            | 'not_initialized'
+            | 'startup_pending'
+            | 'draining'
+            | 'driver_not_ready'
+            | 'driver_refused';
+        },
+  ): void;
 } {
   let next:
     | { delivered: true; ids?: number[] }
-    | { delivered: false; reason: 'not_running' | 'not_initialized' | 'startup_pending' | 'draining' | 'driver_not_ready' | 'driver_refused' }
-    = { delivered: true };
+    | {
+        delivered: false;
+        reason:
+          | 'not_running'
+          | 'not_initialized'
+          | 'startup_pending'
+          | 'draining'
+          | 'driver_not_ready'
+          | 'driver_refused';
+      } = { delivered: true };
   const wakeCalls: Array<{
     conv_id: string;
     agent_id: string;
@@ -1863,7 +1780,10 @@ function makeObservableCoordinator(cache: RunStateCache): {
           text: params.text,
         });
         if (next.delivered) {
-          return { delivered: true, delivery_ids: next.ids ?? params.delivery_ids };
+          return {
+            delivered: true,
+            delivery_ids: next.ids ?? params.delivery_ids,
+          };
         }
         return {
           delivered: false,
@@ -1897,9 +1817,7 @@ describe('DaemonAgentRuntimeHost — deliverMessage', () => {
   it('missing message → log warn + return; no inbox write, no coordinator call', async () => {
     const fix = makeDeliverFixture();
     try {
-      const { coordinator, wakeCalls } = makeObservableCoordinator(
-        new RunStateCache(),
-      );
+      const { coordinator, wakeCalls } = makeObservableCoordinator(new RunStateCache());
       const { host } = makeHost({}, fix.conversations, {
         agents: fix.agents,
         messages: fix.messages,
@@ -1913,11 +1831,12 @@ describe('DaemonAgentRuntimeHost — deliverMessage', () => {
       expect(wakeCalls).toEqual([]);
       // No inbox row created either — ensureDelivery requires a valid
       // message FK so we short-circuit before touching the inbox.
-      const inboxCount = fix.db
-        .prepare<[string, string], { c: number }>(
-          'SELECT COUNT(*) AS c FROM conversation_inboxes WHERE conversation_id = ? AND agent_id = ?',
-        )
-        .get(fix.channelId, fix.agentId)?.c ?? 0;
+      const inboxCount =
+        fix.db
+          .prepare<[string, string], { c: number }>(
+            'SELECT COUNT(*) AS c FROM conversation_inboxes WHERE conversation_id = ? AND agent_id = ?',
+          )
+          .get(fix.channelId, fix.agentId)?.c ?? 0;
       expect(inboxCount).toBe(0);
     } finally {
       fix.cleanup();
@@ -1932,9 +1851,7 @@ describe('DaemonAgentRuntimeHost — deliverMessage', () => {
       const pre = fix.inboxes.ensureDelivery(fix.channelId, fix.agentId, msgId);
       fix.inboxes.markDelivered([pre.inboxId]);
 
-      const { coordinator, wakeCalls } = makeObservableCoordinator(
-        new RunStateCache(),
-      );
+      const { coordinator, wakeCalls } = makeObservableCoordinator(new RunStateCache());
       const { host } = makeHost({}, fix.conversations, {
         agents: fix.agents,
         messages: fix.messages,
@@ -1955,9 +1872,7 @@ describe('DaemonAgentRuntimeHost — deliverMessage', () => {
     const fix = makeDeliverFixture();
     try {
       const msgId = fix.insertViewerMessage('hello');
-      const { coordinator, wakeCalls } = makeObservableCoordinator(
-        new RunStateCache(),
-      );
+      const { coordinator, wakeCalls } = makeObservableCoordinator(new RunStateCache());
       const { host } = makeHost({}, fix.conversations, {
         // Stub agents to return null even though the real fix.agents
         // has the row — exercises the missing-agent branch directly.
@@ -2068,9 +1983,7 @@ describe('DaemonAgentRuntimeHost — deliverMessage', () => {
       });
       await host.deliverMessage(fix.channelId, fix.agentId, msgId);
       // start() threw inside the .catch; error log captured.
-      const startErrors = errors.filter(e =>
-        e.msg.includes('auto-start on deliverMessage failed'),
-      );
+      const startErrors = errors.filter(e => e.msg.includes('auto-start on deliverMessage failed'));
       expect(startErrors.length).toBe(1);
       // Coordinator NOT called (the oneShot path bypasses
       // submitLiveDelivery — respawn route exclusively).
@@ -2102,8 +2015,7 @@ describe('DaemonAgentRuntimeHost — deliverMessage', () => {
           started_at: 1700000000000,
         },
       ]);
-      const { coordinator, wakeCalls, marked, setWakeResponse } =
-        makeObservableCoordinator(cache);
+      const { coordinator, wakeCalls, marked, setWakeResponse } = makeObservableCoordinator(cache);
       setWakeResponse({ delivered: true });
       const { host } = makeHost({}, fix.conversations, {
         agents: fix.agents,
@@ -2208,8 +2120,7 @@ describe('DaemonAgentRuntimeHost — deliverMessage', () => {
           started_at: 1700000000000,
         },
       ]);
-      const { coordinator, wakeCalls, marked, setWakeResponse } =
-        makeObservableCoordinator(cache);
+      const { coordinator, wakeCalls, marked, setWakeResponse } = makeObservableCoordinator(cache);
       setWakeResponse({ delivered: false, reason: 'driver_refused' });
       const { host } = makeHost({}, fix.conversations, {
         agents: fix.agents,
@@ -2275,9 +2186,11 @@ interface StartFixture extends DeliverFixture {
   serverConfig: () => ServerConfig;
 }
 
-function makeStartFixture(opts: {
-  agentRuntime?: 'claude' | 'cursor';
-} = {}): StartFixture {
+function makeStartFixture(
+  opts: {
+    agentRuntime?: 'claude' | 'cursor';
+  } = {},
+): StartFixture {
   const base = makeDeliverFixture(opts);
   const workspaces = new WorkspaceRepo(base.db, {
     workspacesRoot: '/tmp/silverhand-stub-workspaces',
@@ -2482,11 +2395,7 @@ describe('DaemonAgentRuntimeHost — start', () => {
       const cache = new RunStateCache();
       // Seed pending inbox row.
       const msgId = fix.insertViewerMessage('@agent-deliver please look');
-      const delivery = fix.inboxes.ensureDelivery(
-        fix.channelId,
-        fix.agentId,
-        msgId,
-      );
+      const delivery = fix.inboxes.ensureDelivery(fix.channelId, fix.agentId, msgId);
 
       const startCalls: RuntimeStartParams[] = [];
       const { host } = makeHost(
@@ -2879,11 +2788,7 @@ describe('DaemonAgentRuntimeHost — drainPending', () => {
 
       // Exactly ONE wake — every pending row in a single payload.
       expect(wakeCalls).toHaveLength(1);
-      expect(wakeCalls[0]!.delivery_ids).toEqual([
-        dA.inboxId,
-        dB.inboxId,
-        dC.inboxId,
-      ]);
+      expect(wakeCalls[0]!.delivery_ids).toEqual([dA.inboxId, dB.inboxId, dC.inboxId]);
       // Option A v2 (Cindy `UMGu36zoTDVuKWXi`): payload is RAW combined
       // text built by `formatInboxBatch` (inbox-drain wrapper), NOT a
       // pre-encoded stream-json line. Daemon owns the encode via its
@@ -2950,8 +2855,7 @@ describe('DaemonAgentRuntimeHost — drainPending', () => {
           markDelivered: ids => marked.push([...ids]),
         },
         callbacks: {
-          combineGated: payloads =>
-            combineGatedBatch(payloads, 'silverhand message send'),
+          combineGated: payloads => combineGatedBatch(payloads, 'silverhand message send'),
         },
       });
       const warns: Array<{ meta: unknown; msg: string }> = [];
@@ -2977,9 +2881,7 @@ describe('DaemonAgentRuntimeHost — drainPending', () => {
       // No rows acked — batch failure is all-or-nothing.
       expect(marked).toEqual([]);
       // drainPending swallowed the throw + logged warn for the batch.
-      const drainWarns = warns.filter(w =>
-        w.msg.includes('drain: coordinator inbox-batch threw'),
-      );
+      const drainWarns = warns.filter(w => w.msg.includes('drain: coordinator inbox-batch threw'));
       expect(drainWarns.length).toBe(1);
       // Inbox rows still pending — next ready_for_drain replays them.
       expect(fix.inboxes.listPending(fix.channelId, fix.agentId)).toHaveLength(2);

@@ -243,6 +243,13 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
         // `sendMessageToolName(driver)` (currently driver-agnostic).
         combineGated: texts =>
           combineGatedBatch(texts, 'silverhand message send'),
+        publishActivity: state => {
+          ctx.events.publish(state.conversationId, {
+            kind: 'agent_activity',
+            payload: state,
+          });
+          activityLog.write(state);
+        },
       },
       logger: {
         info: (meta, msg) => logger.info(meta, msg),
@@ -276,6 +283,8 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
       // trio in `delivery-coordinator.ts:onRuntimeExit`).
       onRuntimeExit: (cid, aid, meta) =>
         coordinator.onRuntimeExit(cid, aid, meta),
+      onInitTimeout: (cid, aid) =>
+        coordinator.clearWakeWatchdog(cid, aid, 'timeout'),
       activityLog,
       // B2 (Cindy `usjxj8AxX4AvJ5E-`): wire `runtime_ready_for_drain`
       // to DaemonHost.drainPending so rows that arrived during the

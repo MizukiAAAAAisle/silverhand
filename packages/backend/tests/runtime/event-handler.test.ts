@@ -126,11 +126,7 @@ function makeForwardingProjector(publisher: EventPublisher): RuntimeStatusProjec
     },
     runtimeExit({ conversationId, agentId, intentional, code, initTimedOut, fatalError, runState }) {
       const status: 'idle' | 'crashed' =
-        initTimedOut || fatalError
-          ? 'crashed'
-          : intentional || code === 0
-            ? 'idle'
-            : 'crashed';
+        initTimedOut || fatalError ? 'crashed' : intentional || code === 0 ? 'idle' : 'crashed';
       publisher.publish(conversationId, {
         kind: 'agent_status',
         payload: {
@@ -183,7 +179,6 @@ function makeHandler(deps: Omit<RuntimeEventHandlerDeps, 'statusProjector'>): Ru
   });
 }
 
-
 function readyFrame(daemonPid: number, startedAt: number): EventFrame {
   return {
     event: 'ready',
@@ -194,12 +189,7 @@ function readyFrame(daemonPid: number, startedAt: number): EventFrame {
   };
 }
 
-function runStateFrame(
-  conversationId: string,
-  agentId: string,
-  state: AgentRunState,
-  ts = 1700000000000,
-): EventFrame {
+function runStateFrame(conversationId: string, agentId: string, state: AgentRunState, ts = 1700000000000): EventFrame {
   return {
     event: 'runtime_state',
     conversation_id: conversationId,
@@ -708,11 +698,7 @@ describe('RuntimeEventHandler — event routing', () => {
       attempts_exhausted: 2,
       ts: 1700000002000,
     });
-    expect(published.map(p => p.kind)).toEqual([
-      'agent_init_timeout',
-      'agent_status',
-      'agent_status',
-    ]);
+    expect(published.map(p => p.kind)).toEqual(['agent_init_timeout', 'agent_status', 'agent_status']);
     // runtime_init_retrying → CM-shaped agent_status starting payload.
     // Frontend status patcher only reads agent_status; a new SSE kind
     // would leave the UI stuck. Cindy `ch9ZsU0v0ATr6tr8` blocker 2.
@@ -819,9 +805,7 @@ describe('RuntimeEventHandler — event routing', () => {
       ts: 1700000002000,
     });
     const retrying = published.find(
-      p =>
-        p.kind === 'agent_status' &&
-        (p.payload as Record<string, unknown>).reason === 'init_timeout_retrying',
+      p => p.kind === 'agent_status' && (p.payload as Record<string, unknown>).reason === 'init_timeout_retrying',
     );
     expect(retrying!.payload).not.toHaveProperty('timeout_reason');
   });
@@ -877,9 +861,7 @@ describe('RuntimeEventHandler — event routing', () => {
       ts: 1700000002000,
     });
     const retrying = published.find(
-      p =>
-        p.kind === 'agent_status' &&
-        (p.payload as Record<string, unknown>).reason === 'init_timeout_retrying',
+      p => p.kind === 'agent_status' && (p.payload as Record<string, unknown>).reason === 'init_timeout_retrying',
     );
     const payload = retrying!.payload as Record<string, unknown>;
     expect(payload).not.toHaveProperty('timeout_reason');
@@ -1067,9 +1049,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
     // No SSE publish (renderer has no UI for dropped frames yet).
     expect(published.find(p => p.kind === 'agent_event')).toBeUndefined();
     // But the operator-visible warn lands so SREs can see it in logs.
-    expect(warns.some(w => (w as { event?: string }).event === 'runtime_parsed_event_dropped')).toBe(
-      true,
-    );
+    expect(warns.some(w => (w as { event?: string }).event === 'runtime_parsed_event_dropped')).toBe(true);
   });
 });
 
@@ -1127,6 +1107,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
         fatalError: boolean;
       };
     }>;
+    initTimeoutCalls: Array<{ conv: string; agent: string }>;
     publishedAgentStatus: () => Array<{ conv: string; payload: unknown }>;
   } {
     const cache = new RunStateCache();
@@ -1145,8 +1126,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
     });
     const { publisher, published } = makePublisher();
     const { sink } = makeInboxAck();
-    const parsedCalls: Array<{ conv: string; agent: string; event: unknown }> =
-      [];
+    const parsedCalls: Array<{ conv: string; agent: string; event: unknown }> = [];
     const exitCalls: Array<{
       conv: string;
       agent: string;
@@ -1157,6 +1137,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
         fatalError: boolean;
       };
     }> = [];
+    const initTimeoutCalls: Array<{ conv: string; agent: string }> = [];
     const handler = makeHandler({
       client,
       bridge,
@@ -1166,10 +1147,9 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
       ...(opts.withCallbacks === false
         ? {}
         : {
-            onParsedEvent: (conv, agent, event) =>
-              parsedCalls.push({ conv, agent, event }),
-            onRuntimeExit: (conv, agent, meta) =>
-              exitCalls.push({ conv, agent, meta }),
+            onParsedEvent: (conv, agent, event) => parsedCalls.push({ conv, agent, event }),
+            onRuntimeExit: (conv, agent, meta) => exitCalls.push({ conv, agent, meta }),
+            onInitTimeout: (conv, agent) => initTimeoutCalls.push({ conv, agent }),
           }),
     });
     return {
@@ -1178,10 +1158,9 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
       handler,
       parsedCalls,
       exitCalls,
+      initTimeoutCalls,
       publishedAgentStatus: () =>
-        published
-          .filter(p => p.kind === 'agent_status')
-          .map(p => ({ conv: p.conv, payload: p.payload })),
+        published.filter(p => p.kind === 'agent_status').map(p => ({ conv: p.conv, payload: p.payload })),
     };
   }
 
@@ -1283,6 +1262,35 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
       ts: 1700000002500,
     });
     expect(exitCalls[0]!.meta.initTimedOut).toBe(true);
+  });
+
+  it('runtime_init_timeout and runtime_init_cooldown forward to onInitTimeout', async () => {
+    const { handler, emit, initTimeoutCalls } = setup();
+    await handler.start();
+    emit({
+      event: 'runtime_init_timeout',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      timeout_reason: 'silence',
+      elapsed_ms: 30000,
+      timeout_ms: 30000,
+      retrying: true,
+      retry_attempt: 0,
+      max_retries: 1,
+      ts: 1700000002400,
+    });
+    emit({
+      event: 'runtime_init_cooldown',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      cooldown_until: 1700000003000,
+      attempts_exhausted: 2,
+      ts: 1700000002500,
+    });
+    expect(initTimeoutCalls).toEqual([
+      { conv: 'c1', agent: 'a1' },
+      { conv: 'c1', agent: 'a1' },
+    ]);
   });
 
   it('runtime_init_timeout with retrying=true does NOT set initTimedOut', async () => {
@@ -1507,14 +1515,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
     // RealSupervisor publishes a terminal `runtime_state` BEFORE the
     // matching `runtime_exit` to flush the run resolution. Terminal
     // state must NOT strip the flag.
-    emit(
-      runStateFrame(
-        'c1',
-        'a1',
-        { ...RUN_STATE, status: 'failed', terminalReason: 'timeout' },
-        1700000002400,
-      ),
-    );
+    emit(runStateFrame('c1', 'a1', { ...RUN_STATE, status: 'failed', terminalReason: 'timeout' }, 1700000002400));
     emit({
       event: 'runtime_exit',
       conversation_id: 'c1',
@@ -1540,14 +1541,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
       } as never,
       ts: 1700000002300,
     });
-    emit(
-      runStateFrame(
-        'c1',
-        'a1',
-        { ...RUN_STATE, status: 'failed', terminalReason: 'crashed' },
-        1700000002400,
-      ),
-    );
+    emit(runStateFrame('c1', 'a1', { ...RUN_STATE, status: 'failed', terminalReason: 'crashed' }, 1700000002400));
     emit({
       event: 'runtime_exit',
       conversation_id: 'c1',

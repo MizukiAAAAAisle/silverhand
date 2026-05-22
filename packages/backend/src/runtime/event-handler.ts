@@ -64,10 +64,7 @@ import type { ActivityLogWriter } from './activity-log-writer.js';
 import type { RuntimeBridge } from './bridge.js';
 import type { RunStateCache } from './run-state-cache.js';
 import { sanitizeParsedEventForBroadcast } from './event-sanitize.js';
-import {
-  NOOP_STATUS_PROJECTOR,
-  type RuntimeStatusProjector,
-} from './status-projector.js';
+import { NOOP_STATUS_PROJECTOR, type RuntimeStatusProjector } from './status-projector.js';
 
 /**
  * Backend-side SSE publisher contract — matches the existing
@@ -104,10 +101,7 @@ export interface InboxAckSink {
  * We do NOT do drain ourselves because the cache+inbox state needed
  * to decide what to send lives outside this module.
  */
-export type ReadyForDrainHandler = (
-  conversationId: string,
-  agentId: string,
-) => void | Promise<void>;
+export type ReadyForDrainHandler = (conversationId: string, agentId: string) => void | Promise<void>;
 
 /**
  * Parsed-event forwarder. Fires on every `runtime_parsed_event` with
@@ -119,11 +113,7 @@ export type ReadyForDrainHandler = (
  * Hook contract is "forward only" — the handler MUST NOT keep its own
  * queue or call `bridge.runtimeWake` (Cindy `3l4bZ5vaMvlC9DVS`).
  */
-export type ParsedEventHandler = (
-  conversationId: string,
-  agentId: string,
-  event: ParsedEvent,
-) => void;
+export type ParsedEventHandler = (conversationId: string, agentId: string, event: ParsedEvent) => void;
 
 /**
  * Runtime-exit forwarder. Fires AFTER the handler has updated cache +
@@ -152,6 +142,11 @@ export type RuntimeExitHandler = (
     fatalError: boolean;
   },
 ) => void;
+
+/** Init-timeout forwarder. Used by the daemon-mode delivery coordinator
+ * to cancel live-wake stuck watchdogs when startup failure supersedes
+ * the pending-wake window. */
+export type RuntimeInitTimeoutHandler = (conversationId: string, agentId: string) => void;
 
 export interface RuntimeEventHandlerLogger {
   info(meta: object, msg: string): void;
@@ -187,6 +182,9 @@ export interface RuntimeEventHandlerDeps {
    *  enriched with `initTimedOut` / `fatalError` derivations. See
    *  `RuntimeExitHandler` for the contract. */
   onRuntimeExit?: RuntimeExitHandler;
+  /** Fires on runtime init-timeout/cooldown paths so the delivery
+   *  coordinator can clear any live-wake stuck indicator. */
+  onInitTimeout?: RuntimeInitTimeoutHandler;
   /** Optional backend-owned JSONL sink for `agent_activity` parity
    * with the legacy ConversationManager path. Writing must never
    * block or fail the SSE publish path. */
@@ -213,6 +211,7 @@ export class RuntimeEventHandler {
   private readonly onReadyForDrain?: ReadyForDrainHandler;
   private readonly onParsedEventCb?: ParsedEventHandler;
   private readonly onRuntimeExitCb?: RuntimeExitHandler;
+  private readonly onInitTimeoutCb?: RuntimeInitTimeoutHandler;
   private readonly activityLog?: ActivityLogWriter;
   private readonly logger: RuntimeEventHandlerLogger;
 
@@ -257,6 +256,7 @@ export class RuntimeEventHandler {
     this.onReadyForDrain = deps.onReadyForDrain;
     this.onParsedEventCb = deps.onParsedEvent;
     this.onRuntimeExitCb = deps.onRuntimeExit;
+    this.onInitTimeoutCb = deps.onInitTimeout;
     this.activityLog = deps.activityLog;
     this.logger = deps.logger ?? NOOP_LOGGER;
   }
@@ -269,9 +269,7 @@ export class RuntimeEventHandler {
   async start(): Promise<void> {
     if (this.started) return;
     this.started = true;
-    this.unsubscribeEvents = this.client.subscribe(frame =>
-      this.dispatch(frame),
-    );
+    this.unsubscribeEvents = this.client.subscribe(frame => this.dispatch(frame));
     this.unsubscribeReconnect = this.client.onReconnect(() => {
       // Reconnect to (possibly different) daemon. Wipe the cache so
       // mismatched-key events between now and hydrate resolution get
@@ -324,10 +322,7 @@ export class RuntimeEventHandler {
         // a clean gate.
         this.initFailureFlag.clear();
         this.fatalErrorFlag.clear();
-        this.logger.warn(
-          { kind: 'daemon', reason: frame.reason },
-          'daemon shutting down',
-        );
+        this.logger.warn({ kind: 'daemon', reason: frame.reason }, 'daemon shutting down');
         return;
       case 'runtime_state': {
         const isTerminalState = frame.state.terminalReason !== undefined;
@@ -344,15 +339,9 @@ export class RuntimeEventHandler {
           // BEFORE the matching `runtime_exit`, so clearing here would
           // strip the flag the coordinator needs at exit-time (Cindy
           // `rrF2L1RmWq5JFH3m` B1).
-          this.lastTimeoutReason.delete(
-            `${frame.conversation_id}|${frame.agent_id}`,
-          );
-          this.initFailureFlag.delete(
-            `${frame.conversation_id}|${frame.agent_id}`,
-          );
-          this.fatalErrorFlag.delete(
-            `${frame.conversation_id}|${frame.agent_id}`,
-          );
+          this.lastTimeoutReason.delete(`${frame.conversation_id}|${frame.agent_id}`);
+          this.initFailureFlag.delete(`${frame.conversation_id}|${frame.agent_id}`);
+          this.fatalErrorFlag.delete(`${frame.conversation_id}|${frame.agent_id}`);
         }
         this.onRuntimeState(frame);
         return;
@@ -380,20 +369,16 @@ export class RuntimeEventHandler {
         );
         return;
       case 'runtime_init_timeout':
+        this.forwardInitTimeout(frame.conversation_id, frame.agent_id, frame.event);
         // Stash the timeout_reason so a follow-up runtime_init_retrying
         // can join it into the `agent_status starting reason=init_timeout_retrying`
         // projection (CM's contract — see conversation-manager.ts:2108-2116).
-        this.lastTimeoutReason.set(
-          `${frame.conversation_id}|${frame.agent_id}`,
-          frame.timeout_reason,
-        );
+        this.lastTimeoutReason.set(`${frame.conversation_id}|${frame.agent_id}`, frame.timeout_reason);
         // If the daemon won't retry, this is a terminal init failure
         // that the next runtime_exit will follow. Mark so the
         // coordinator suppresses oneShot auto-respawn.
         if (!frame.retrying) {
-          this.initFailureFlag.add(
-            `${frame.conversation_id}|${frame.agent_id}`,
-          );
+          this.initFailureFlag.add(`${frame.conversation_id}|${frame.agent_id}`);
         }
         this.events.publish(frame.conversation_id, {
           kind: 'agent_init_timeout',
@@ -431,17 +416,14 @@ export class RuntimeEventHandler {
         return;
       }
       case 'runtime_init_cooldown':
+        this.forwardInitTimeout(frame.conversation_id, frame.agent_id, frame.event);
         // Terminal init failure — clear the timeout-reason stash so a
         // future fresh start doesn't accidentally inherit it.
-        this.lastTimeoutReason.delete(
-          `${frame.conversation_id}|${frame.agent_id}`,
-        );
+        this.lastTimeoutReason.delete(`${frame.conversation_id}|${frame.agent_id}`);
         // Mark the init-failure flag so the next runtime_exit suppresses
         // oneShot auto-respawn (Cindy `BYHZJI9ALSVmmlFr` pin c — don't
         // thrash a runtime the daemon has already given up on).
-        this.initFailureFlag.add(
-          `${frame.conversation_id}|${frame.agent_id}`,
-        );
+        this.initFailureFlag.add(`${frame.conversation_id}|${frame.agent_id}`);
         // B1 (Cindy `usjxj8AxX4AvJ5E-`): projector owns DB +
         // `agent_status` SSE for the cooldown projection.
         this.statusProjector.initCooldown({
@@ -496,13 +478,8 @@ export class RuntimeEventHandler {
         // `BYHZJI9ALSVmmlFr` pin c). Only fatal errors suppress
         // oneShot auto-respawn; non-fatal `error` events (e.g.
         // recoverable tool errors) leave the gate open.
-        if (
-          frame.parsed.kind === 'error' &&
-          frame.parsed.fatal === true
-        ) {
-          this.fatalErrorFlag.add(
-            `${frame.conversation_id}|${frame.agent_id}`,
-          );
+        if (frame.parsed.kind === 'error' && frame.parsed.fatal === true) {
+          this.fatalErrorFlag.add(`${frame.conversation_id}|${frame.agent_id}`);
         }
         // Forward the RAW parsed event to the coordinator (Cindy
         // `BYHZJI9ALSVmmlFr` pin b — busy tracker reads raw, not
@@ -512,11 +489,7 @@ export class RuntimeEventHandler {
         // SSE projection.
         if (this.onParsedEventCb) {
           try {
-            this.onParsedEventCb(
-              frame.conversation_id,
-              frame.agent_id,
-              frame.parsed,
-            );
+            this.onParsedEventCb(frame.conversation_id, frame.agent_id, frame.parsed);
           } catch (err) {
             this.logger.error(
               {
@@ -572,6 +545,28 @@ export class RuntimeEventHandler {
     }
   }
 
+  private forwardInitTimeout(
+    conversationId: string,
+    agentId: string,
+    event: 'runtime_init_timeout' | 'runtime_init_cooldown',
+  ): void {
+    if (!this.onInitTimeoutCb) return;
+    try {
+      this.onInitTimeoutCb(conversationId, agentId);
+    } catch (err) {
+      this.logger.error(
+        {
+          kind: 'event',
+          event,
+          conv_id: conversationId,
+          agent_id: agentId,
+          err: (err as Error).message,
+        },
+        'onInitTimeout callback threw',
+      );
+    }
+  }
+
   private onDaemonReady(daemonPid: number, startedAt: number): void {
     const newKey = makeDaemonInstanceKey(daemonPid, startedAt);
     if (this.cache.daemonInstanceKey === newKey) {
@@ -592,9 +587,7 @@ export class RuntimeEventHandler {
     void this.hydrateSafely('daemon_ready', daemonPid, startedAt);
   }
 
-  private onRuntimeState(
-    frame: Extract<EventFrame, { event: 'runtime_state' }>,
-  ): void {
+  private onRuntimeState(frame: Extract<EventFrame, { event: 'runtime_state' }>): void {
     const key = this.cache.daemonInstanceKey;
     if (!key) {
       // Pre-hydrate: we haven't latched a daemon key yet. Dropping
@@ -612,12 +605,7 @@ export class RuntimeEventHandler {
       );
       return;
     }
-    this.cache.applyRuntimeState(
-      key,
-      frame.conversation_id,
-      frame.agent_id,
-      frame.state,
-    );
+    this.cache.applyRuntimeState(key, frame.conversation_id, frame.agent_id, frame.state);
     this.events.publish(frame.conversation_id, {
       kind: 'agent_activity',
       payload: frame.state,
@@ -625,9 +613,7 @@ export class RuntimeEventHandler {
     this.activityLog?.write(frame.state);
   }
 
-  private onRuntimeExit(
-    frame: Extract<EventFrame, { event: 'runtime_exit' }>,
-  ): void {
+  private onRuntimeExit(frame: Extract<EventFrame, { event: 'runtime_exit' }>): void {
     // Clear the projection-side timeout-reason stash for this
     // (conv, agent). If the runtime exits without going through
     // runtime_init_cooldown (e.g. exhausted retries but daemon
@@ -635,9 +621,7 @@ export class RuntimeEventHandler {
     // reason would otherwise wait forever for a matching
     // runtime_init_retrying that never comes. Cindy
     // `dMNdrYH0KK1VbDqs` cleanup.
-    this.lastTimeoutReason.delete(
-      `${frame.conversation_id}|${frame.agent_id}`,
-    );
+    this.lastTimeoutReason.delete(`${frame.conversation_id}|${frame.agent_id}`);
     // Snapshot the gating flags BEFORE clearing them — coordinator
     // needs them on the callback. (Clearing after the snapshot keeps
     // the next runtime's gate clean: a fresh start under the same
@@ -658,13 +642,7 @@ export class RuntimeEventHandler {
     // daemon's tracked set. Dropping the publish would permanently
     // strand the renderer's status at "active" / "starting".
     // Cindy `ch9ZsU0v0ATr6tr8` blocker 3.
-    const entry = key
-      ? this.cache.applyRuntimeExit(
-          key,
-          frame.conversation_id,
-          frame.agent_id,
-        )
-      : null;
+    const entry = key ? this.cache.applyRuntimeExit(key, frame.conversation_id, frame.agent_id) : null;
     // B1 (Cindy `usjxj8AxX4AvJ5E-`): projector owns the DB write
     // (`status='idle'|'crashed', pid=null`) AND the `agent_status`
     // SSE. Status mapping (initTimedOut/fatalError -> 'crashed';
@@ -708,9 +686,7 @@ export class RuntimeEventHandler {
     }
   }
 
-  private onReadyForDrainEvent(
-    frame: Extract<EventFrame, { event: 'runtime_ready_for_drain' }>,
-  ): void {
+  private onReadyForDrainEvent(frame: Extract<EventFrame, { event: 'runtime_ready_for_drain' }>): void {
     const key = this.cache.daemonInstanceKey;
     if (key) {
       // Cache hint: daemon just told us this runtime is `ready`.
@@ -719,10 +695,7 @@ export class RuntimeEventHandler {
     }
     if (this.onReadyForDrain) {
       try {
-        const result = this.onReadyForDrain(
-          frame.conversation_id,
-          frame.agent_id,
-        );
+        const result = this.onReadyForDrain(frame.conversation_id, frame.agent_id);
         if (result && typeof (result as Promise<void>).then === 'function') {
           (result as Promise<void>).catch(err => {
             this.logger.error(

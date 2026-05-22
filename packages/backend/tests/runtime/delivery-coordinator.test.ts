@@ -29,9 +29,9 @@
  *   - Init-timeout / fatal-error / no-pending suppress oneShot respawn
  *   - State scoped per (conv, agent) — events on c1/a1 don't poison c2/a2
  */
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RuntimeWakeResult } from '@silverhand/host';
-import type { ParsedEvent } from '@silverhand/shared';
+import type { AgentRunState, ParsedEvent } from '@silverhand/shared';
 import {
   RuntimeDeliveryCoordinator,
   type CoordinatorBridge,
@@ -44,11 +44,12 @@ import type { RuntimePhase } from '../../src/runtime/run-state-cache.js';
 
 // ── helpers ────────────────────────────────────────────────────────
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 function makeBridge(
-  results:
-    | RuntimeWakeResult
-    | RuntimeWakeResult[]
-    | ((call: CoordinatorBridgeCall) => RuntimeWakeResult | Error),
+  results: RuntimeWakeResult | RuntimeWakeResult[] | ((call: CoordinatorBridgeCall) => RuntimeWakeResult | Error),
 ): {
   bridge: CoordinatorBridge;
   calls: CoordinatorBridgeCall[];
@@ -57,8 +58,8 @@ function makeBridge(
   const resultQueue: RuntimeWakeResult[] = Array.isArray(results)
     ? [...results]
     : typeof results === 'function'
-      ? []
-      : [results];
+    ? []
+    : [results];
   const bridge: CoordinatorBridge = {
     runtimeWake: vi.fn(async params => {
       const call: CoordinatorBridgeCall = {
@@ -75,9 +76,7 @@ function makeBridge(
         return r;
       }
       if (resultQueue.length === 0) {
-        throw new Error(
-          `runtimeWake called more times than results queued; call #${calls.length}`,
-        );
+        throw new Error(`runtimeWake called more times than results queued; call #${calls.length}`);
       }
       return resultQueue.shift()!;
     }),
@@ -94,11 +93,19 @@ interface CoordinatorBridgeCall {
 }
 
 function makeCacheView(
-  entries: Array<{ conv: string; agent: string; phase: RuntimePhase }>,
+  entries: Array<{
+    conv: string;
+    agent: string;
+    phase: RuntimePhase;
+    runState?: AgentRunState | null;
+  }>,
 ): CoordinatorCacheView {
-  const map = new Map<string, { phase: RuntimePhase }>();
+  const map = new Map<string, { phase: RuntimePhase; runState?: AgentRunState | null }>();
   for (const e of entries) {
-    map.set(`${e.conv}|${e.agent}`, { phase: e.phase });
+    map.set(`${e.conv}|${e.agent}`, {
+      phase: e.phase,
+      runState: e.runState ?? null,
+    });
   }
   return {
     get(conv, agent) {
@@ -121,11 +128,13 @@ function makeInboxSink(): {
 }
 
 const DRIVER_DIRECT: DriverDeliveryView = {
+  runtime: 'codex',
   busyDeliveryMode: 'direct',
   oneShot: false,
   kickoffMode: 'self_inits',
 };
 const DRIVER_GATED: DriverDeliveryView = {
+  runtime: 'claude',
   busyDeliveryMode: 'gated',
   oneShot: false,
   // claude is gated AND requires_first_message — but most legacy tests
@@ -135,10 +144,24 @@ const DRIVER_GATED: DriverDeliveryView = {
   kickoffMode: 'self_inits',
 };
 const DRIVER_NONE: DriverDeliveryView = {
+  runtime: 'cursor',
   busyDeliveryMode: 'none',
   oneShot: true,
   kickoffMode: 'self_inits',
 };
+
+function runState(overrides: Partial<AgentRunState> = {}): AgentRunState {
+  return {
+    runId: 'run-1',
+    agentId: 'a1',
+    conversationId: 'c1',
+    status: 'idle',
+    startedAt: 1_000,
+    updatedAt: 2_000,
+    lastActivityAt: 2_000,
+    ...overrides,
+  };
+}
 
 /**
  * Build a `LiveDeliveryRequest` with the Option A v2 shape (Cindy
@@ -214,9 +237,7 @@ describe('case 1: runtime not running (no cache entry)', () => {
 describe('case 2: phase=startup_pending', () => {
   it('noop_phase; row stays pending', async () => {
     const { bridge, calls } = makeBridge([]);
-    const cache = makeCacheView([
-      { conv: 'c1', agent: 'a1', phase: 'startup_pending' },
-    ]);
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'startup_pending' }]);
     const { sink, delivered } = makeInboxSink();
     const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
 
@@ -233,9 +254,7 @@ describe('case 2: phase=startup_pending', () => {
 describe('case 3: phase=draining', () => {
   it('noop_phase; row stays pending for next start', async () => {
     const { bridge, calls } = makeBridge([]);
-    const cache = makeCacheView([
-      { conv: 'c1', agent: 'a1', phase: 'draining' },
-    ]);
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'draining' }]);
     const { sink, delivered } = makeInboxSink();
     const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
 
@@ -248,9 +267,7 @@ describe('case 3: phase=draining', () => {
 
   it('also noop on phase=exited (stale cache projection)', async () => {
     const { bridge, calls } = makeBridge([]);
-    const cache = makeCacheView([
-      { conv: 'c1', agent: 'a1', phase: 'exited' },
-    ]);
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'exited' }]);
     const { sink, delivered } = makeInboxSink();
     const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
 
@@ -270,17 +287,11 @@ describe('case 4: phase=ready + driver=direct (immediate wake)', () => {
       delivered: true,
       delivery_ids: [42],
     });
-    const cache = makeCacheView([
-      { conv: 'c1', agent: 'a1', phase: 'ready' },
-    ]);
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
     const { sink, delivered } = makeInboxSink();
     const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
 
-    const decision = await c.submitLiveDelivery(
-      'c1',
-      'a1',
-      req({ inboxId: 42, driver: DRIVER_DIRECT }),
-    );
+    const decision = await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 42, driver: DRIVER_DIRECT }));
 
     expect(decision).toEqual({
       kind: 'wake_dispatched',
@@ -302,17 +313,11 @@ describe('case 4: phase=ready + driver=direct (immediate wake)', () => {
       reason: 'driver_refused',
       delivery_ids: [42],
     });
-    const cache = makeCacheView([
-      { conv: 'c1', agent: 'a1', phase: 'ready' },
-    ]);
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
     const { sink, delivered } = makeInboxSink();
     const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
 
-    const decision = await c.submitLiveDelivery(
-      'c1',
-      'a1',
-      req({ inboxId: 42, driver: DRIVER_DIRECT }),
-    );
+    const decision = await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 42, driver: DRIVER_DIRECT }));
 
     expect(decision).toEqual({
       kind: 'wake_refused',
@@ -324,19 +329,13 @@ describe('case 4: phase=ready + driver=direct (immediate wake)', () => {
 
   it('bridge throws (transport error) → no markDelivered, propagates', async () => {
     const { bridge, calls } = makeBridge(() => new Error('socket closed'));
-    const cache = makeCacheView([
-      { conv: 'c1', agent: 'a1', phase: 'ready' },
-    ]);
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
     const { sink, delivered } = makeInboxSink();
     const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
 
-    await expect(
-      c.submitLiveDelivery(
-        'c1',
-        'a1',
-        req({ inboxId: 42, driver: DRIVER_DIRECT }),
-      ),
-    ).rejects.toThrow(/socket closed/);
+    await expect(c.submitLiveDelivery('c1', 'a1', req({ inboxId: 42, driver: DRIVER_DIRECT }))).rejects.toThrow(
+      /socket closed/,
+    );
 
     expect(calls).toHaveLength(1);
     expect(delivered).toHaveLength(0);
@@ -351,9 +350,7 @@ describe('case 5: phase=ready + driver=gated + busy mid-turn', () => {
       delivered: true,
       delivery_ids: [7],
     });
-    const cache = makeCacheView([
-      { conv: 'c1', agent: 'a1', phase: 'ready' },
-    ]);
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
     const { sink, delivered } = makeInboxSink();
     const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
 
@@ -364,11 +361,7 @@ describe('case 5: phase=ready + driver=gated + busy mid-turn', () => {
       compacting: false,
     });
 
-    const decision = await c.submitLiveDelivery(
-      'c1',
-      'a1',
-      req({ inboxId: 7, driver: DRIVER_GATED }),
-    );
+    const decision = await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 7, driver: DRIVER_GATED }));
 
     expect(decision).toEqual({ kind: 'queued_mid_turn', pendingCount: 1 });
     expect(calls).toHaveLength(0); // no wake yet
@@ -391,9 +384,7 @@ describe('case 5: phase=ready + driver=gated + busy mid-turn', () => {
       delivered: true,
       delivery_ids: [9],
     });
-    const cache = makeCacheView([
-      { conv: 'c1', agent: 'a1', phase: 'ready' },
-    ]);
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
     const { sink, delivered } = makeInboxSink();
     const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
 
@@ -401,11 +392,7 @@ describe('case 5: phase=ready + driver=gated + busy mid-turn', () => {
     // boundary; submit should queue.
     c.onParsedEvent('c1', 'a1', parsed('compaction_started'));
 
-    const decision = await c.submitLiveDelivery(
-      'c1',
-      'a1',
-      req({ inboxId: 9, driver: DRIVER_GATED }),
-    );
+    const decision = await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 9, driver: DRIVER_GATED }));
     expect(decision.kind).toBe('queued_mid_turn');
     expect(calls).toHaveLength(0);
 
@@ -422,20 +409,14 @@ describe('case 5: phase=ready + driver=gated + busy mid-turn', () => {
       delivered: true,
       delivery_ids: [11],
     });
-    const cache = makeCacheView([
-      { conv: 'c1', agent: 'a1', phase: 'ready' },
-    ]);
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
     const { sink, delivered } = makeInboxSink();
     const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
 
     // Drive busy → 2 (two tool_calls), then queue, then turn_end.
     c.onParsedEvent('c1', 'a1', parsed('tool_call'));
     c.onParsedEvent('c1', 'a1', parsed('tool_call'));
-    await c.submitLiveDelivery(
-      'c1',
-      'a1',
-      req({ inboxId: 11, driver: DRIVER_GATED }),
-    );
+    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 11, driver: DRIVER_GATED }));
     expect(calls).toHaveLength(0);
 
     c.onParsedEvent('c1', 'a1', parsed('turn_end'));
@@ -451,13 +432,9 @@ describe('case 5: phase=ready + driver=gated + busy mid-turn', () => {
       delivered: true,
       delivery_ids: [1, 2],
     });
-    const cache = makeCacheView([
-      { conv: 'c1', agent: 'a1', phase: 'ready' },
-    ]);
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
     const { sink, delivered } = makeInboxSink();
-    const combineGated = vi.fn((payloads: readonly string[]) =>
-      payloads.join('|'),
-    );
+    const combineGated = vi.fn((payloads: readonly string[]) => payloads.join('|'));
     const c = new RuntimeDeliveryCoordinator({
       bridge,
       cache,
@@ -466,16 +443,8 @@ describe('case 5: phase=ready + driver=gated + busy mid-turn', () => {
     });
 
     c.onParsedEvent('c1', 'a1', parsed('tool_call'));
-    await c.submitLiveDelivery(
-      'c1',
-      'a1',
-      req({ inboxId: 1, messageId: 'm-a', payload: 'A', driver: DRIVER_GATED }),
-    );
-    await c.submitLiveDelivery(
-      'c1',
-      'a1',
-      req({ inboxId: 2, messageId: 'm-b', payload: 'B', driver: DRIVER_GATED }),
-    );
+    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 1, messageId: 'm-a', payload: 'A', driver: DRIVER_GATED }));
+    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 2, messageId: 'm-b', payload: 'B', driver: DRIVER_GATED }));
     expect(c.pendingCount('c1', 'a1')).toBe(2);
 
     c.onParsedEvent('c1', 'a1', parsed('tool_output'));
@@ -492,9 +461,7 @@ describe('case 5: phase=ready + driver=gated + busy mid-turn', () => {
 
   it('idempotent enqueue: same messageId twice → pending stays 1', async () => {
     const { bridge } = makeBridge([]);
-    const cache = makeCacheView([
-      { conv: 'c1', agent: 'a1', phase: 'ready' },
-    ]);
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
     const { sink } = makeInboxSink();
     const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
 
@@ -512,18 +479,12 @@ describe('case 5: phase=ready + driver=gated + busy mid-turn', () => {
       reason: 'driver_refused',
       delivery_ids: [13],
     });
-    const cache = makeCacheView([
-      { conv: 'c1', agent: 'a1', phase: 'ready' },
-    ]);
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
     const { sink, delivered } = makeInboxSink();
     const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
 
     c.onParsedEvent('c1', 'a1', parsed('tool_call'));
-    await c.submitLiveDelivery(
-      'c1',
-      'a1',
-      req({ inboxId: 13, driver: DRIVER_GATED }),
-    );
+    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 13, driver: DRIVER_GATED }));
     c.onParsedEvent('c1', 'a1', parsed('tool_output'));
     await new Promise(resolve => setImmediate(resolve));
 
@@ -538,17 +499,11 @@ describe('case 5: phase=ready + driver=gated + busy mid-turn', () => {
 describe('case 6: phase=ready + driver=none (oneShot live)', () => {
   it('noop_oneshot_live; never wakes', async () => {
     const { bridge, calls } = makeBridge([]);
-    const cache = makeCacheView([
-      { conv: 'c1', agent: 'a1', phase: 'ready' },
-    ]);
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
     const { sink, delivered } = makeInboxSink();
     const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
 
-    const decision = await c.submitLiveDelivery(
-      'c1',
-      'a1',
-      req({ driver: DRIVER_NONE }),
-    );
+    const decision = await c.submitLiveDelivery('c1', 'a1', req({ driver: DRIVER_NONE }));
 
     expect(decision).toEqual({ kind: 'noop_oneshot_live' });
     expect(calls).toHaveLength(0);
@@ -559,11 +514,7 @@ describe('case 6: phase=ready + driver=none (oneShot live)', () => {
 // ── case 7 — oneShot exit auto-respawn ─────────────────────────────
 
 describe('case 7: oneShot exit auto-respawn (intentional=false, no failure, pending)', () => {
-  function setup({
-    hasPending,
-  }: {
-    hasPending: boolean;
-  }) {
+  function setup({ hasPending }: { hasPending: boolean }) {
     const { bridge } = makeBridge([]);
     const cache = makeCacheView([]);
     const { sink } = makeInboxSink();
@@ -692,20 +643,14 @@ describe('case 7: oneShot exit auto-respawn (intentional=false, no failure, pend
 
   it('clears per-agent state on exit (busy + pending dropped)', async () => {
     const { bridge } = makeBridge([]);
-    const cache = makeCacheView([
-      { conv: 'c1', agent: 'a1', phase: 'ready' },
-    ]);
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
     const { sink } = makeInboxSink();
     const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
 
     // Build up some state.
     c.onParsedEvent('c1', 'a1', parsed('tool_call'));
     c.onParsedEvent('c1', 'a1', parsed('compaction_started'));
-    await c.submitLiveDelivery(
-      'c1',
-      'a1',
-      req({ inboxId: 99, driver: DRIVER_GATED }),
-    );
+    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 99, driver: DRIVER_GATED }));
     expect(c.pendingCount('c1', 'a1')).toBe(1);
     expect(c.busySnapshot('c1', 'a1')).toEqual({
       outstandingToolUses: 1,
@@ -746,11 +691,7 @@ describe('per-(conv,agent) isolation', () => {
     c.onParsedEvent('c1', 'a1', parsed('tool_call'));
 
     // (c2, a2) is still at safe boundary → direct wake fires.
-    const decision = await c.submitLiveDelivery(
-      'c2',
-      'a2',
-      req({ inboxId: 200, driver: DRIVER_GATED }),
-    );
+    const decision = await c.submitLiveDelivery('c2', 'a2', req({ inboxId: 200, driver: DRIVER_GATED }));
 
     expect(decision.kind).toBe('wake_dispatched');
     expect(calls).toHaveLength(1);
@@ -789,9 +730,7 @@ describe('per-(conv,agent) isolation', () => {
 describe('busy tracker', () => {
   it('tool_output below 0 clamps to 0', () => {
     const { bridge } = makeBridge([]);
-    const cache = makeCacheView([
-      { conv: 'c1', agent: 'a1', phase: 'ready' },
-    ]);
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
     const { sink } = makeInboxSink();
     const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
 
@@ -804,9 +743,7 @@ describe('busy tracker', () => {
 
   it('session_init / thinking / text / error / unknown are noops', () => {
     const { bridge } = makeBridge([]);
-    const cache = makeCacheView([
-      { conv: 'c1', agent: 'a1', phase: 'ready' },
-    ]);
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
     const { sink } = makeInboxSink();
     const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
 
@@ -823,9 +760,7 @@ describe('busy tracker', () => {
 
   it('boundary re-open does NOT flush when queue is empty', async () => {
     const { bridge, calls } = makeBridge([]);
-    const cache = makeCacheView([
-      { conv: 'c1', agent: 'a1', phase: 'ready' },
-    ]);
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
     const { sink } = makeInboxSink();
     const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
 
@@ -842,9 +777,7 @@ describe('busy tracker', () => {
 describe('B3: multi-payload batch without combineGated fails loudly', () => {
   it('flush with 2 pending and no combineGated throws + no markDelivered + rows back in queue', async () => {
     const { bridge, calls } = makeBridge([]); // wake never reached
-    const cache = makeCacheView([
-      { conv: 'c1', agent: 'a1', phase: 'ready' },
-    ]);
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
     const { sink, delivered } = makeInboxSink();
     const errorLogs: string[] = [];
     const logger = {
@@ -861,16 +794,8 @@ describe('B3: multi-payload batch without combineGated fails loudly', () => {
     });
 
     c.onParsedEvent('c1', 'a1', parsed('tool_call'));
-    await c.submitLiveDelivery(
-      'c1',
-      'a1',
-      req({ inboxId: 1, messageId: 'a', payload: 'A', driver: DRIVER_GATED }),
-    );
-    await c.submitLiveDelivery(
-      'c1',
-      'a1',
-      req({ inboxId: 2, messageId: 'b', payload: 'B', driver: DRIVER_GATED }),
-    );
+    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 1, messageId: 'a', payload: 'A', driver: DRIVER_GATED }));
+    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 2, messageId: 'b', payload: 'B', driver: DRIVER_GATED }));
     expect(c.pendingCount('c1', 'a1')).toBe(2);
 
     // Tool output reopens boundary → flush is scheduled. With 2
@@ -885,9 +810,7 @@ describe('B3: multi-payload batch without combineGated fails loudly', () => {
     expect(calls).toHaveLength(0); // bridge.runtimeWake never called
     expect(delivered).toHaveLength(0); // no inbox row mutated
     expect(c.pendingCount('c1', 'a1')).toBe(2); // queue restored
-    expect(
-      errorLogs.some(m => m.includes('flush combine refused')),
-    ).toBe(true);
+    expect(errorLogs.some(m => m.includes('flush combine refused'))).toBe(true);
   });
 
   it('flush with 2 pending AND combineGated wakes successfully', async () => {
@@ -897,9 +820,7 @@ describe('B3: multi-payload batch without combineGated fails loudly', () => {
       delivered: true,
       delivery_ids: [1, 2],
     });
-    const cache = makeCacheView([
-      { conv: 'c1', agent: 'a1', phase: 'ready' },
-    ]);
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
     const { sink, delivered } = makeInboxSink();
     const combineGated = vi.fn((p: readonly string[]) => p.join('|'));
     const c = new RuntimeDeliveryCoordinator({
@@ -910,16 +831,8 @@ describe('B3: multi-payload batch without combineGated fails loudly', () => {
     });
 
     c.onParsedEvent('c1', 'a1', parsed('tool_call'));
-    await c.submitLiveDelivery(
-      'c1',
-      'a1',
-      req({ inboxId: 1, messageId: 'a', payload: 'A', driver: DRIVER_GATED }),
-    );
-    await c.submitLiveDelivery(
-      'c1',
-      'a1',
-      req({ inboxId: 2, messageId: 'b', payload: 'B', driver: DRIVER_GATED }),
-    );
+    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 1, messageId: 'a', payload: 'A', driver: DRIVER_GATED }));
+    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 2, messageId: 'b', payload: 'B', driver: DRIVER_GATED }));
     c.onParsedEvent('c1', 'a1', parsed('tool_output'));
     await new Promise(resolve => setImmediate(resolve));
 
@@ -945,9 +858,7 @@ describe('B4: flush transport throw must NOT lose the in-memory queue', () => {
         };
       }),
     };
-    const cache = makeCacheView([
-      { conv: 'c1', agent: 'a1', phase: 'ready' },
-    ]);
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
     const { sink, delivered } = makeInboxSink();
     const errorLogs: string[] = [];
     const logger = {
@@ -964,11 +875,7 @@ describe('B4: flush transport throw must NOT lose the in-memory queue', () => {
 
     // Build up queue.
     c.onParsedEvent('c1', 'a1', parsed('tool_call'));
-    await c.submitLiveDelivery(
-      'c1',
-      'a1',
-      req({ inboxId: 77, driver: DRIVER_GATED }),
-    );
+    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 77, driver: DRIVER_GATED }));
     expect(c.pendingCount('c1', 'a1')).toBe(1);
 
     // First boundary reopen → flush throws. Queue must be restored.
@@ -1185,9 +1092,7 @@ describe('B2: submitLiveDeliveryBatch — batch-native one wake all-or-nothing',
     const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
     const { sink } = makeInboxSink();
     const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
-    await expect(c.submitLiveDeliveryBatch('c1', 'a1', [])).rejects.toThrow(
-      /empty batch/,
-    );
+    await expect(c.submitLiveDeliveryBatch('c1', 'a1', [])).rejects.toThrow(/empty batch/);
   });
 
   it('multi-row direct driver → ONE wake with all delivery_ids; ack all on success', async () => {
@@ -1256,7 +1161,10 @@ describe('B2: submitLiveDeliveryBatch — batch-native one wake all-or-nothing',
       req({ inboxId: 10, messageId: 'mA', driver: DRIVER_DIRECT }),
       req({ inboxId: 11, messageId: 'mB', driver: DRIVER_DIRECT }),
     ]);
-    expect(decision).toEqual({ kind: 'wake_refused', reason: 'driver_refused' });
+    expect(decision).toEqual({
+      kind: 'wake_refused',
+      reason: 'driver_refused',
+    });
     expect(calls).toHaveLength(1);
     expect(delivered).toHaveLength(0);
   });
@@ -1278,9 +1186,21 @@ describe('B2: submitLiveDeliveryBatch — batch-native one wake all-or-nothing',
       callbacks: { combineGated: payloads => payloads.join('\n') },
     });
     const decision = await c.submitLiveDeliveryBatch('c1', 'a1', [
-      req({ inboxId: 50, messageId: 'mA', driver: DRIVER_DIRECT_REQUIRES_FIRST }),
-      req({ inboxId: 51, messageId: 'mB', driver: DRIVER_DIRECT_REQUIRES_FIRST }),
-      req({ inboxId: 52, messageId: 'mC', driver: DRIVER_DIRECT_REQUIRES_FIRST }),
+      req({
+        inboxId: 50,
+        messageId: 'mA',
+        driver: DRIVER_DIRECT_REQUIRES_FIRST,
+      }),
+      req({
+        inboxId: 51,
+        messageId: 'mB',
+        driver: DRIVER_DIRECT_REQUIRES_FIRST,
+      }),
+      req({
+        inboxId: 52,
+        messageId: 'mC',
+        driver: DRIVER_DIRECT_REQUIRES_FIRST,
+      }),
     ]);
     expect(decision).toEqual({
       kind: 'wake_dispatched',
@@ -1322,5 +1242,249 @@ describe('B2: submitLiveDeliveryBatch — batch-native one wake all-or-nothing',
     expect(calls).toHaveLength(1);
     expect(calls[0]!.deliveryIds).toEqual([60, 61]);
     expect(delivered).toEqual([[60, 61]]);
+  });
+});
+
+// ── P2 wake→first-parsed watchdog ─────────────────────────────────
+
+describe('P2: live-wake stuck watchdog', () => {
+  it('publishes a synthetic thinking activity after delivered wake stays silent for threshold', async () => {
+    vi.useFakeTimers();
+    let now = 10_000;
+    const published: AgentRunState[] = [];
+    const { bridge } = makeBridge({ delivered: true, delivery_ids: [10] });
+    const cache = makeCacheView([
+      {
+        conv: 'c1',
+        agent: 'a1',
+        phase: 'ready',
+        runState: runState({ updatedAt: 9_000, lastActivityAt: 9_000 }),
+      },
+    ]);
+    const { sink } = makeInboxSink();
+    const c = new RuntimeDeliveryCoordinator({
+      bridge,
+      cache,
+      inboxAck: sink,
+      wakeStuckMs: 30_000,
+      now: () => now,
+      callbacks: {
+        publishActivity: state => published.push(state),
+      },
+    });
+
+    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 10, driver: DRIVER_GATED }));
+    expect(published).toHaveLength(0);
+    now = 40_000;
+    vi.advanceTimersByTime(30_000);
+
+    expect(published).toHaveLength(1);
+    expect(published[0]).toMatchObject({
+      runId: 'run-1',
+      status: 'thinking',
+      activitySnippet: 'Waiting for claude response (30s+)',
+      updatedAt: 40_000,
+      lastActivityAt: 40_000,
+    });
+    vi.useRealTimers();
+  });
+
+  it('cancels before firing when any parsed event arrives', async () => {
+    vi.useFakeTimers();
+    let now = 10_000;
+    const published: AgentRunState[] = [];
+    const { bridge } = makeBridge({ delivered: true, delivery_ids: [10] });
+    const cache = makeCacheView([
+      {
+        conv: 'c1',
+        agent: 'a1',
+        phase: 'ready',
+        runState: runState({ updatedAt: 9_000 }),
+      },
+    ]);
+    const { sink } = makeInboxSink();
+    const c = new RuntimeDeliveryCoordinator({
+      bridge,
+      cache,
+      inboxAck: sink,
+      wakeStuckMs: 30_000,
+      now: () => now,
+      callbacks: {
+        publishActivity: state => published.push(state),
+      },
+    });
+
+    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 10, driver: DRIVER_GATED }));
+    now = 20_000;
+    vi.advanceTimersByTime(10_000);
+    c.onParsedEvent('c1', 'a1', parsed('thinking'));
+    now = 50_000;
+    vi.advanceTimersByTime(30_000);
+
+    expect(published).toHaveLength(0);
+    vi.useRealTimers();
+  });
+
+  it('resets to the latest delivered wake', async () => {
+    vi.useFakeTimers();
+    let now = 10_000;
+    const published: AgentRunState[] = [];
+    const { bridge } = makeBridge([
+      { delivered: true, delivery_ids: [10] },
+      { delivered: true, delivery_ids: [11] },
+    ]);
+    const cache = makeCacheView([
+      {
+        conv: 'c1',
+        agent: 'a1',
+        phase: 'ready',
+        runState: runState({ updatedAt: 9_000 }),
+      },
+    ]);
+    const { sink } = makeInboxSink();
+    const c = new RuntimeDeliveryCoordinator({
+      bridge,
+      cache,
+      inboxAck: sink,
+      wakeStuckMs: 30_000,
+      now: () => now,
+      callbacks: {
+        publishActivity: state => published.push(state),
+      },
+    });
+
+    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 10, messageId: 'm10', driver: DRIVER_GATED }));
+    now = 30_000;
+    vi.advanceTimersByTime(20_000);
+    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 11, messageId: 'm11', driver: DRIVER_GATED }));
+    now = 59_000;
+    vi.advanceTimersByTime(29_000);
+    expect(published).toHaveLength(0);
+    now = 60_000;
+    vi.advanceTimersByTime(1_000);
+    expect(published).toHaveLength(1);
+    expect(published[0]!.updatedAt).toBe(60_000);
+    vi.useRealTimers();
+  });
+
+  it('explicitly tombstones a fired synthetic bubble on runtime_exit when no real state superseded it', async () => {
+    vi.useFakeTimers();
+    let now = 10_000;
+    const published: AgentRunState[] = [];
+    const { bridge } = makeBridge({ delivered: true, delivery_ids: [10] });
+    const cache = makeCacheView([
+      {
+        conv: 'c1',
+        agent: 'a1',
+        phase: 'ready',
+        runState: runState({ updatedAt: 9_000 }),
+      },
+    ]);
+    const { sink } = makeInboxSink();
+    const c = new RuntimeDeliveryCoordinator({
+      bridge,
+      cache,
+      inboxAck: sink,
+      wakeStuckMs: 30_000,
+      now: () => now,
+      callbacks: {
+        publishActivity: state => published.push(state),
+      },
+    });
+
+    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 10, driver: DRIVER_GATED }));
+    now = 40_000;
+    vi.advanceTimersByTime(30_000);
+    now = 41_000;
+    c.onRuntimeExit('c1', 'a1', {
+      intentional: false,
+      code: 137,
+      initTimedOut: false,
+      fatalError: false,
+    });
+
+    expect(published).toHaveLength(2);
+    expect(published[1]).toMatchObject({
+      runId: 'run-1',
+      status: 'failed',
+      terminalReason: 'crashed',
+      updatedAt: 41_000,
+    });
+    vi.useRealTimers();
+  });
+
+  it('does not tombstone when a real runtime_state already superseded the synthetic bubble', async () => {
+    vi.useFakeTimers();
+    let now = 10_000;
+    const published: AgentRunState[] = [];
+    const entry = {
+      phase: 'ready' as RuntimePhase,
+      runState: runState({ updatedAt: 9_000 }),
+    };
+    const cache: CoordinatorCacheView = {
+      get: () => entry,
+    };
+    const { bridge } = makeBridge({ delivered: true, delivery_ids: [10] });
+    const { sink } = makeInboxSink();
+    const c = new RuntimeDeliveryCoordinator({
+      bridge,
+      cache,
+      inboxAck: sink,
+      wakeStuckMs: 30_000,
+      now: () => now,
+      callbacks: {
+        publishActivity: state => published.push(state),
+      },
+    });
+
+    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 10, driver: DRIVER_GATED }));
+    now = 40_000;
+    vi.advanceTimersByTime(30_000);
+    entry.runState = runState({
+      status: 'thinking',
+      activitySnippet: 'real content',
+      updatedAt: 40_500,
+      lastActivityAt: 40_500,
+    });
+    now = 41_000;
+    c.onParsedEvent('c1', 'a1', parsed('thinking'));
+
+    expect(published).toHaveLength(1);
+    expect(published[0]!.activitySnippet).toBe('Waiting for claude response (30s+)');
+    vi.useRealTimers();
+  });
+
+  it('clearWakeWatchdog cancels init-timeout path before firing', async () => {
+    vi.useFakeTimers();
+    let now = 10_000;
+    const published: AgentRunState[] = [];
+    const { bridge } = makeBridge({ delivered: true, delivery_ids: [10] });
+    const cache = makeCacheView([
+      {
+        conv: 'c1',
+        agent: 'a1',
+        phase: 'ready',
+        runState: runState({ updatedAt: 9_000 }),
+      },
+    ]);
+    const { sink } = makeInboxSink();
+    const c = new RuntimeDeliveryCoordinator({
+      bridge,
+      cache,
+      inboxAck: sink,
+      wakeStuckMs: 30_000,
+      now: () => now,
+      callbacks: {
+        publishActivity: state => published.push(state),
+      },
+    });
+
+    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 10, driver: DRIVER_GATED }));
+    c.clearWakeWatchdog('c1', 'a1', 'timeout');
+    now = 40_000;
+    vi.advanceTimersByTime(30_000);
+
+    expect(published).toHaveLength(0);
+    vi.useRealTimers();
   });
 });

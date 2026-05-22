@@ -61,15 +61,17 @@
  *   - Message formatting / driver `encodeStdinMessage`. DaemonHost owns
  *     these because they need `MessageRepo` + `AgentRepo` + `UserRepo`
  *     lookups + the per-driver `Driver` instance. The coordinator
- *     receives the pre-formatted payload string and a `DriverDeliveryView`
+ *     receives the pre-formatted raw text and a `DriverDeliveryView`
  *     capability snapshot.
  *
  *   - Issuing `runtime_start`. DaemonHost owns `start()`; coordinator
  *     calls back into a `respawn` function to ask for one.
  *
- *   - SSE / DB writes. EventHandler owns SSE for the cache-projection
- *     events; clearSession-style DB writes live in `AgentService`. The
- *     coordinator only touches inbox-ack (`markDelivered`).
+ *   - General SSE / DB writes. EventHandler owns daemon-projected SSE;
+ *     clearSession-style DB writes live in `AgentService`. The
+ *     coordinator only touches inbox-ack (`markDelivered`) plus the P2
+ *     synthetic stuck indicator via an injected `publishActivity`
+ *     callback.
  *
  * ## Test scope (sub-2b-i, Cindy `3l4bZ5vaMvlC9DVS`)
  *
@@ -78,7 +80,12 @@
  * integration in 2b-i — that's 2b-ii.
  */
 import type { RuntimeWakeResult } from '@silverhand/host';
-import type { ParsedEvent } from '@silverhand/shared';
+import type {
+  AgentRunState,
+  AgentRunStatus,
+  AgentRunTerminalReason,
+  ParsedEvent,
+} from '@silverhand/shared';
 import type { RunStateCache, RuntimePhase } from './run-state-cache.js';
 
 /**
@@ -90,6 +97,10 @@ import type { RunStateCache, RuntimePhase } from './run-state-cache.js';
  * from `@silverhand/host/drivers`.
  */
 export interface DriverDeliveryView {
+  /** Runtime label used only for user-visible stuck-watchdog copy.
+   *  Optional so tests can keep small fixtures; gated drivers default
+   *  to `claude`, direct drivers to `runtime`. */
+  runtime?: string;
   /** `gated` (Claude — only at safe boundaries), `direct` (Codex —
    *  push immediately), or `none` (Cursor / oneShot — never push, must
    *  respawn). */
@@ -254,7 +265,7 @@ export interface CoordinatorCacheView {
   get(
     conversationId: string,
     agentId: string,
-  ): { phase: RuntimePhase } | undefined;
+  ): { phase: RuntimePhase; runState?: AgentRunState | null } | undefined;
 }
 
 /**
@@ -282,9 +293,15 @@ export interface CoordinatorCallbacks {
    *  flush/dispatch time and the rows stay pending; single-text paths
    *  still work. Note the critical contract (Cindy `Mqf1h-FKudtEbH1O`):
    *  the input is un-encoded message text, NOT driver-encoded stdin
-   *  lines — encoding happens once after combine, via the request's
-   *  `encode` callback. */
+   *  lines — daemon encodes once after the combined text crosses the
+   *  wire. */
   combineGated?(texts: readonly string[]): string;
+  /** Optional backend-side `agent_activity` publisher. Used only for
+   *  the P2 live-wake stuck indicator: after daemon accepted a live
+   *  wake, if no parsed event arrives within the threshold, publish a
+   *  synthetic `thinking` run state so the UI doesn't look idle while
+   *  the child process is stuck before its first observable event. */
+  publishActivity?(state: AgentRunState): void;
 }
 
 export interface CoordinatorLogger {
@@ -305,6 +322,11 @@ export interface RuntimeDeliveryCoordinatorDeps {
   inboxAck: CoordinatorInboxSink;
   callbacks?: CoordinatorCallbacks;
   logger?: CoordinatorLogger;
+  /** Wake→first-parsed watchdog threshold. Defaults to 30s, per P2
+   *  review. Set <=0 to disable in tests. */
+  wakeStuckMs?: number;
+  /** Test seam for deterministic timestamps. Production uses Date.now. */
+  now?: () => number;
 }
 
 interface BusyState {
@@ -359,7 +381,19 @@ interface PerAgentState {
    * `startup_delivery` on the next spawn.
    */
   initPendingDeliveryIds: number[];
+  wakeWatchdog: WakeWatchdogState | null;
 }
+
+interface WakeWatchdogState {
+  timer: ReturnType<typeof setTimeout> | null;
+  token: number;
+  baseRunId: string;
+  baseUpdatedAt: number;
+  fired: boolean;
+  syntheticState: AgentRunState | null;
+}
+
+const DEFAULT_WAKE_STUCK_MS = 30_000;
 
 function key(conversationId: string, agentId: string): string {
   return `${conversationId}|${agentId}`;
@@ -379,7 +413,10 @@ export class RuntimeDeliveryCoordinator {
   private readonly inboxAck: CoordinatorInboxSink;
   private readonly callbacks: CoordinatorCallbacks;
   private readonly logger: CoordinatorLogger;
+  private readonly wakeStuckMs: number;
+  private readonly now: () => number;
   private readonly state = new Map<string, PerAgentState>();
+  private nextWakeWatchdogToken = 0;
 
   constructor(deps: RuntimeDeliveryCoordinatorDeps) {
     this.bridge = deps.bridge;
@@ -387,6 +424,8 @@ export class RuntimeDeliveryCoordinator {
     this.inboxAck = deps.inboxAck;
     this.callbacks = deps.callbacks ?? {};
     this.logger = deps.logger ?? NOOP_LOGGER;
+    this.wakeStuckMs = deps.wakeStuckMs ?? DEFAULT_WAKE_STUCK_MS;
+    this.now = deps.now ?? (() => Date.now());
   }
 
   // ── public surface ───────────────────────────────────────────────
@@ -443,9 +482,8 @@ export class RuntimeDeliveryCoordinator {
    *
    * Invariants the caller must uphold:
    *   1. All requests share the same (conv, agent) → same driver +
-   *      same encode closure (same cli session id). The coordinator
-   *      reads `driver` from `batch[0]` after the empty check and uses
-   *      `batch[0].encode` for the dispatch encode.
+   *      same daemon-owned driver state. The coordinator reads
+   *      `driver` from `batch[0]` after the empty check.
    *   2. The batch is non-empty. Empty batches throw — callers should
    *      no-op upstream when their listPending returned nothing.
    *   3. Each `req` already passed `inboxes.ensureDelivery` (so every
@@ -558,6 +596,11 @@ export class RuntimeDeliveryCoordinator {
     ev: ParsedEvent,
   ): void {
     const st = this.ensureState(conversationId, agentId);
+    // Any parsed signal means the child has moved past the silent
+    // wake→first-event window. Cancel the P2 watchdog before applying
+    // busy-state transitions; if the synthetic bubble already fired,
+    // clear it unless a real runtime_state has already superseded it.
+    this.clearWakeWatchdog(conversationId, agentId, 'replaced');
     const wasSafe = isSafeBoundary(st.busy);
     switch (ev.kind) {
       case 'tool_call':
@@ -645,6 +688,17 @@ export class RuntimeDeliveryCoordinator {
     agentId: string,
     meta: RuntimeExitMeta,
   ): void {
+    this.clearWakeWatchdog(
+      conversationId,
+      agentId,
+      meta.initTimedOut
+        ? 'timeout'
+        : meta.fatalError
+          ? 'crashed'
+          : meta.intentional || meta.code === 0
+            ? 'stopped'
+            : 'crashed',
+    );
     // Clear per-agent state regardless of whether we respawn — any
     // queue state belongs to the dead runtime; a fresh start owns its
     // own queue.
@@ -678,6 +732,39 @@ export class RuntimeDeliveryCoordinator {
       });
   }
 
+  /**
+   * Clear the live-wake stuck watchdog for a single runtime. Used by
+   * EventHandler's init-timeout path and DaemonHost.clearSession. Does
+   * NOT clear pending deliveries or busy state; use `clearRuntime` for
+   * full session teardown.
+   */
+  clearWakeWatchdog(
+    conversationId: string,
+    agentId: string,
+    reason: AgentRunTerminalReason = 'replaced',
+  ): void {
+    const st = this.state.get(key(conversationId, agentId));
+    if (!st?.wakeWatchdog) return;
+    const watchdog = st.wakeWatchdog;
+    if (watchdog.timer) clearTimeout(watchdog.timer);
+    st.wakeWatchdog = null;
+    if (!watchdog.fired) return;
+    this.publishSyntheticClear(conversationId, agentId, watchdog, reason);
+  }
+
+  /** Clear every coordinator-owned bit for a runtime. This is the
+   * clearSession-side equivalent of `onRuntimeExit`: cancel the stuck
+   * watchdog, remove busy/pending state, and leave DB inbox rows as
+   * the durable source of truth. */
+  clearRuntime(
+    conversationId: string,
+    agentId: string,
+    reason: AgentRunTerminalReason = 'stopped',
+  ): void {
+    this.clearWakeWatchdog(conversationId, agentId, reason);
+    this.state.delete(key(conversationId, agentId));
+  }
+
   // ── test inspection ──────────────────────────────────────────────
 
   /** Read-only view of the pending queue. Test-only convenience. */
@@ -709,6 +796,7 @@ export class RuntimeDeliveryCoordinator {
         flushing: false,
         initObserved: false,
         initPendingDeliveryIds: [],
+        wakeWatchdog: null,
       };
       this.state.set(k, st);
     }
@@ -766,6 +854,7 @@ export class RuntimeDeliveryCoordinator {
         text,
       });
       if (result.delivered) {
+        this.startWakeWatchdog(conversationId, agentId, batch[0]!.driver);
         // B3: same gate as dispatchWake — defer ack for
         // requires_first_message + !initObserved. Flush only fires for
         // gated drivers (busyDeliveryMode === 'gated'), and `gated`
@@ -879,6 +968,7 @@ export class RuntimeDeliveryCoordinator {
       throw err;
     }
     if (result.delivered) {
+      this.startWakeWatchdog(conversationId, agentId, batch[0]!.driver);
       // B3 (Cindy `usjxj8AxX4AvJ5E-`): for `requires_first_message`
       // drivers (claude), `delivered:true` from the daemon only proves
       // the bytes hit stdin — the child may still die before parsing
@@ -927,6 +1017,116 @@ export class RuntimeDeliveryCoordinator {
     return { kind: 'wake_refused', reason: result.reason };
   }
 
+  private startWakeWatchdog(
+    conversationId: string,
+    agentId: string,
+    driver: DriverDeliveryView,
+  ): void {
+    if (this.wakeStuckMs <= 0) return;
+    if (!this.callbacks.publishActivity) return;
+    const base = this.cache.get(conversationId, agentId)?.runState;
+    if (!base) {
+      this.logger.info(
+        { conversationId, agentId },
+        'deliver: wake stuck watchdog skipped; no base runState',
+      );
+      return;
+    }
+    const st = this.ensureState(conversationId, agentId);
+    // Reset to the latest delivered wake. If an older synthetic bubble
+    // had already fired, explicitly tombstone it before starting the
+    // next window; otherwise the stale "waiting" row can remain visible.
+    this.clearWakeWatchdog(conversationId, agentId, 'replaced');
+    const token = ++this.nextWakeWatchdogToken;
+    const timer = setTimeout(() => {
+      this.fireWakeWatchdog(conversationId, agentId, token, driver);
+    }, this.wakeStuckMs);
+    st.wakeWatchdog = {
+      timer,
+      token,
+      baseRunId: base.runId,
+      baseUpdatedAt: base.updatedAt,
+      fired: false,
+      syntheticState: null,
+    };
+  }
+
+  private fireWakeWatchdog(
+    conversationId: string,
+    agentId: string,
+    token: number,
+    driver: DriverDeliveryView,
+  ): void {
+    const st = this.state.get(key(conversationId, agentId));
+    const watchdog = st?.wakeWatchdog;
+    if (!watchdog || watchdog.token !== token) return;
+    watchdog.timer = null;
+    const current = this.cache.get(conversationId, agentId)?.runState;
+    if (!current || current.runId !== watchdog.baseRunId) {
+      st.wakeWatchdog = null;
+      return;
+    }
+    // A real runtime_state already arrived after the wake. The parsed
+    // hook should normally have cancelled us first; this guard keeps
+    // timer ordering from publishing a stale synthetic bubble.
+    if (current.updatedAt > watchdog.baseUpdatedAt) {
+      st.wakeWatchdog = null;
+      return;
+    }
+
+    const now = this.now();
+    const { terminalReason: _terminalReason, ...base } = current;
+    const synthetic: AgentRunState = {
+      ...base,
+      status: 'thinking',
+      activitySnippet: waitingSnippet(driver, this.wakeStuckMs),
+      updatedAt: now,
+      lastActivityAt: now,
+    };
+    watchdog.fired = true;
+    watchdog.syntheticState = synthetic;
+    this.callbacks.publishActivity?.(synthetic);
+    this.logger.warn(
+      {
+        conversationId,
+        agentId,
+        runId: synthetic.runId,
+        thresholdMs: this.wakeStuckMs,
+      },
+      'deliver: wake accepted but no parsed event observed before watchdog threshold',
+    );
+  }
+
+  private publishSyntheticClear(
+    conversationId: string,
+    agentId: string,
+    watchdog: WakeWatchdogState,
+    reason: AgentRunTerminalReason,
+  ): void {
+    const current = this.cache.get(conversationId, agentId)?.runState;
+    // If the daemon has already sent a newer real state for the same
+    // run, that real state has either replaced the synthetic bubble or
+    // will be the source of truth for the renderer. Do not tombstone it.
+    if (current && current.runId === watchdog.baseRunId && current.updatedAt > watchdog.baseUpdatedAt) {
+      return;
+    }
+    const source = watchdog.syntheticState ?? current;
+    if (!source || source.runId !== watchdog.baseRunId) return;
+    const now = this.now();
+    const { activitySnippet: _activitySnippet, ...base } = source;
+    const terminal: AgentRunState = {
+      ...base,
+      status: terminalStatusForReason(reason),
+      terminalReason: reason,
+      updatedAt: now,
+      lastActivityAt: now,
+      compacting: false,
+      compactingSince: undefined,
+      compactionStale: false,
+    };
+    this.callbacks.publishActivity?.(terminal);
+  }
+
   /**
    * Combine un-encoded message texts BEFORE the daemon encodes (Cindy
    * `Mqf1h-FKudtEbH1O` + Option A v2 `UMGu36zoTDVuKWXi`: combine BEFORE
@@ -951,9 +1151,7 @@ export class RuntimeDeliveryCoordinator {
    * (recoverable; row stays pending) and `driver_refused` (driver bug;
    * fail loudly). Both arms keep the inbox row pending.
    */
-  private combineText(
-    batch: readonly { text: string }[],
-  ): string {
+  private combineText(batch: readonly { text: string }[]): string {
     if (batch.length === 0) {
       throw new Error('combineText: empty batch');
     }
@@ -972,4 +1170,14 @@ export class RuntimeDeliveryCoordinator {
     }
     return this.callbacks.combineGated(batch.map(item => item.text));
   }
+}
+
+function waitingSnippet(driver: DriverDeliveryView, thresholdMs: number): string {
+  const seconds = Math.max(1, Math.round(thresholdMs / 1000));
+  const runtime = driver.runtime ?? (driver.busyDeliveryMode === 'gated' ? 'claude' : 'runtime');
+  return `Waiting for ${runtime} response (${seconds}s+)`;
+}
+
+function terminalStatusForReason(reason: AgentRunTerminalReason): AgentRunStatus {
+  return reason === 'replied' || reason === 'turn_ended' || reason === 'replaced' ? 'idle' : 'failed';
 }
