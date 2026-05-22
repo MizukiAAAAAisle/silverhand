@@ -431,30 +431,43 @@ export class TaskService {
     const actorErr = this.validateAgentActorForClaim(actor);
     if (actorErr) return actorErr;
 
-    // Blocker 1 (#task:530, Cindy `CZ7Un3P5YATZ1GTq`): for a message-id
-    // claim of a not-yet-numbered message in the actor's current
-    // conversation, the call is a PROMOTION and must target the source
-    // conversation's workspace regardless of any --workspace-id /
-    // --workspace selector. The selector only routes lookups of
-    // already-numbered tasks; running selector resolution first would
-    // wrongly reject a valid promotion when the agent accidentally
-    // passed a selector. Peek the message here (informational only —
-    // the txn below re-validates atomically) to pick the path.
-    let promotionWorkspaceId: string | null = null;
+    // #task:530 Round 2 + Round 3 (Cindy `CZ7Un3P5YATZ1GTq` Blocker 1
+    // + `zJ4xdGu3uEo68_k7` Blocker 4):
+    //  - PROMOTION (message-id of non-task in current conv) → use
+    //    `sourceConv.workspace_id`, skip selector entirely.
+    //  - MESSAGE-ID-PINNED (message-id of already-numbered task) →
+    //    use `msg.task_workspace_id` (the row's own workspace); the
+    //    selector, if any, only validates intent (mismatch ⇒
+    //    `task_not_found`). Membership of `msg.task_workspace_id` is
+    //    ALWAYS required, even without a selector, so a leaked
+    //    message id from another workspace can't bypass access.
+    //  - TASK-NUMBER lookup → resolve selector → workspace, membership
+    //    check via `resolveAgentTaskWorkspace`.
+    // Peek is informational only; the txn re-fetches msg + uses
+    // `UPDATE ... WHERE id = ?` for atomic correctness.
+    let taskWorkspaceId: string | undefined;
+    let skipSelector = false;
     if ('messageId' in by) {
       const peek = this.fetchMessage(by.messageId);
-      if (
-        peek &&
-        peek.task_number === null &&
-        peek.conversation_id === actor.conversationId
-      ) {
-        promotionWorkspaceId = sourceConv.workspace_id;
+      if (peek) {
+        if (peek.task_number === null && peek.conversation_id === actor.conversationId) {
+          taskWorkspaceId = sourceConv.workspace_id;
+          skipSelector = true;
+        } else if (peek.task_number !== null) {
+          const access = this.validateMessageIdAccess(actor, peek, workspaceSelector);
+          if ('failure' in access) {
+            return failClaim({
+              code: access.failure,
+              reason: access.reason,
+              messageId: by.messageId,
+            });
+          }
+          taskWorkspaceId = access.workspaceId;
+          skipSelector = true;
+        }
       }
     }
-    let taskWorkspaceId: string;
-    if (promotionWorkspaceId !== null) {
-      taskWorkspaceId = promotionWorkspaceId;
-    } else {
+    if (!skipSelector) {
       const resolved = this.resolveAgentTaskWorkspace(
         actor,
         sourceConv,
@@ -469,6 +482,8 @@ export class TaskService {
       if ('failure' in resolved) return resolved.failure;
       taskWorkspaceId = resolved.workspace.id;
     }
+    // taskWorkspaceId is definitely assigned in both branches above.
+    const resolvedTaskWorkspaceId = taskWorkspaceId!;
 
     type ClaimTxOut =
       | { failure: ClaimResultEntry }
@@ -546,13 +561,14 @@ export class TaskService {
             ownerConversationId: msg.conversation_id,
           };
         }
-        // Message already a task: route through the selector-resolved
-        // workspace (the message's task_workspace_id should match
-        // taskWorkspaceId when selector defaults; for explicit selector
-        // the lookup may fail naturally).
-        row = this.fetchTaskByNumber(taskWorkspaceId, msg.task_number);
+        // Message already a task: row identity is the message id, NOT
+        // (selector-workspace, msg.task_number). Pre-txn we already
+        // ran validateMessageIdAccess; fetch by id so a different
+        // workspace's same-numbered task can never be touched
+        // (Round 3 blocker `zJ4xdGu3uEo68_k7`).
+        row = this.fetchTaskByMessageId(msg.id);
       } else {
-        row = this.fetchTaskByNumber(taskWorkspaceId, by.taskNumber);
+        row = this.fetchTaskByNumber(resolvedTaskWorkspaceId, by.taskNumber);
       }
       if (!row) {
         return { failure: failClaim({
@@ -623,7 +639,7 @@ export class TaskService {
       sourceConv,
       ownerConv,
       taskNumber: txOut.taskNumber,
-      taskWorkspaceId,
+      taskWorkspaceId: resolvedTaskWorkspaceId,
     });
 
     await this.broadcast({
@@ -763,14 +779,36 @@ export class TaskService {
     const actorErr = this.validateAgentActorForMutation(actor);
     if (actorErr) return actorErr;
 
-    const resolved = this.resolveAgentTaskWorkspace(
-      actor,
-      sourceConv,
-      workspaceSelector,
-      args => mutationFailure(args),
-    );
-    if ('failure' in resolved) return resolved.failure;
-    const taskWorkspaceId = resolved.workspace.id;
+    // #task:530 Round 3 (Cindy `zJ4xdGu3uEo68_k7` + `YreWED1qOBStvZxG`):
+    // for the message-id form of unclaim, the row identity is the
+    // message id — selector cannot retarget onto a same-numbered task
+    // in another workspace. Membership of `msg.task_workspace_id` is
+    // always required even without an explicit selector. Task-number
+    // lookups still flow through the selector resolution.
+    let taskWorkspaceId: string | undefined;
+    let skipSelector = false;
+    if ('messageId' in by) {
+      const peek = this.fetchMessage(by.messageId);
+      if (peek && peek.task_number !== null) {
+        const access = this.validateMessageIdAccess(actor, peek, workspaceSelector);
+        if ('failure' in access) {
+          return { success: false, code: access.failure, reason: access.reason };
+        }
+        taskWorkspaceId = access.workspaceId;
+        skipSelector = true;
+      }
+    }
+    if (!skipSelector) {
+      const resolved = this.resolveAgentTaskWorkspace(
+        actor,
+        sourceConv,
+        workspaceSelector,
+        args => mutationFailure(args),
+      );
+      if ('failure' in resolved) return resolved.failure;
+      taskWorkspaceId = resolved.workspace.id;
+    }
+    const resolvedTaskWorkspaceId = taskWorkspaceId!;
 
     type UnclaimAgentTxOut =
       | { failure: TaskMutationResult }
@@ -789,16 +827,14 @@ export class TaskService {
         if (!msg || msg.task_number === null) {
           return { failure: { success: false, code: 'not_a_task', reason: 'not a task' } };
         }
-        // For a numbered task we can look it up anywhere in the
-        // resolved workspace — the message-id form is just an
-        // alternate key. The promotion-vs-numbered-task split that
-        // claim cares about doesn't apply here: unclaim by definition
-        // requires the row to already carry a task_number, so we
-        // never widen across conversations beyond what the selector
-        // already authorized.
-        row = this.fetchTaskByNumber(taskWorkspaceId, msg.task_number);
+        // Message-id form: row identity is the message id itself.
+        // validateMessageIdAccess (pre-txn) already authorized this
+        // and pinned the workspace; use msg.id so a selector cannot
+        // retarget the mutation onto a same-numbered task in another
+        // workspace (Round 3 blocker `zJ4xdGu3uEo68_k7`).
+        row = this.fetchTaskByMessageId(msg.id);
       } else {
-        row = this.fetchTaskByNumber(taskWorkspaceId, by.taskNumber);
+        row = this.fetchTaskByNumber(resolvedTaskWorkspaceId, by.taskNumber);
       }
       if (!row) {
         return { failure: { success: false, code: 'task_not_found', reason: 'task not found' } };
@@ -841,7 +877,7 @@ export class TaskService {
       sourceConv,
       ownerConv,
       taskNumber: txOut.taskNumber,
-      taskWorkspaceId,
+      taskWorkspaceId: resolvedTaskWorkspaceId,
     });
 
     await this.broadcast({
@@ -943,14 +979,33 @@ export class TaskService {
     const actorErr = this.validateAgentActorForMutation(actor);
     if (actorErr) return actorErr;
 
-    const resolved = this.resolveAgentTaskWorkspace(
-      actor,
-      sourceConv,
-      workspaceSelector,
-      args => mutationFailure(args),
-    );
-    if ('failure' in resolved) return resolved.failure;
-    const taskWorkspaceId = resolved.workspace.id;
+    // #task:530 Round 3 mirror of unclaim — message-id form pins the
+    // row by message id and always checks `msg.task_workspace_id`
+    // membership (Cindy `zJ4xdGu3uEo68_k7` + `YreWED1qOBStvZxG`).
+    let taskWorkspaceId: string | undefined;
+    let skipSelector = false;
+    if ('messageId' in by) {
+      const peek = this.fetchMessage(by.messageId);
+      if (peek && peek.task_number !== null) {
+        const access = this.validateMessageIdAccess(actor, peek, workspaceSelector);
+        if ('failure' in access) {
+          return { success: false, code: access.failure, reason: access.reason };
+        }
+        taskWorkspaceId = access.workspaceId;
+        skipSelector = true;
+      }
+    }
+    if (!skipSelector) {
+      const resolved = this.resolveAgentTaskWorkspace(
+        actor,
+        sourceConv,
+        workspaceSelector,
+        args => mutationFailure(args),
+      );
+      if ('failure' in resolved) return resolved.failure;
+      taskWorkspaceId = resolved.workspace.id;
+    }
+    const resolvedTaskWorkspaceId = taskWorkspaceId!;
 
     type StatusAgentTxOut =
       | { failure: TaskMutationResult }
@@ -970,9 +1025,10 @@ export class TaskService {
         if (!msg || msg.task_number === null) {
           return { failure: { success: false, code: 'not_a_task', reason: 'not a task' } };
         }
-        row = this.fetchTaskByNumber(taskWorkspaceId, msg.task_number);
+        // Pin to message id — see unclaim path for rationale.
+        row = this.fetchTaskByMessageId(msg.id);
       } else {
-        row = this.fetchTaskByNumber(taskWorkspaceId, by.taskNumber);
+        row = this.fetchTaskByNumber(resolvedTaskWorkspaceId, by.taskNumber);
       }
       if (!row) {
         return { failure: { success: false, code: 'task_not_found', reason: 'task not found' } };
@@ -1029,7 +1085,7 @@ export class TaskService {
       sourceConv,
       ownerConv,
       taskNumber: txOut.taskNumber,
-      taskWorkspaceId,
+      taskWorkspaceId: resolvedTaskWorkspaceId,
       status,
     });
 
@@ -1274,6 +1330,91 @@ export class TaskService {
       )
       .get(taskWorkspaceId, taskNumber);
     return row ?? null;
+  }
+
+  /** Fetch a task row keyed by message id. The message-id form of
+   *  claim/unclaim/status uses this so the row identity stays pinned
+   *  to the message — Cindy `zJ4xdGu3uEo68_k7` Round 2 blocker:
+   *  reaching the row via `fetchTaskByNumber(selectorWs, msg.task_number)`
+   *  would let a `--workspace-id` selector silently retarget the
+   *  mutation onto a same-numbered task in another workspace. The
+   *  message id is the canonical key. */
+  private fetchTaskByMessageId(messageId: string): ResolvedTaskRow | null {
+    const row = this.db
+      .prepare<[string], ResolvedTaskRow>(
+        `SELECT m.id,
+                m.conversation_id AS conversation_id,
+                m.task_number,
+                m.task_workspace_id,
+                m.task_status,
+                m.task_assignee_agent_id,
+                m.task_title,
+                m.content,
+                m.from_kind,
+                m.from_agent_id,
+                c.title AS owner_conversation_title
+         FROM messages m
+         JOIN conversations c ON c.id = m.conversation_id
+         WHERE m.id = ? AND m.task_number IS NOT NULL`,
+      )
+      .get(messageId);
+    return row ?? null;
+  }
+
+  /** Validate that the agent may operate on a task identified by
+   *  message id. Returns the message's actual `task_workspace_id` on
+   *  success. Per Cindy `zJ4xdGu3uEo68_k7` + `YreWED1qOBStvZxG`:
+   *  - The row's workspace is `msg.task_workspace_id` (NOT the
+   *    selector-resolved one).
+   *  - Membership of that workspace is always required, even when no
+   *    selector was passed — otherwise a leaked message id would let
+   *    a non-member mutate the task.
+   *  - If a selector WAS passed and resolves to a different workspace,
+   *    we return `task_not_found` so the caller can't infer existence
+   *    of the row outside their authorized scope.
+   *
+   *  Callers wrap the failure into their own envelope (ClaimResultEntry
+   *  vs TaskMutationResult). */
+  private validateMessageIdAccess(
+    actor: AgentActor,
+    msg: ResolvedMessageRow,
+    selector: WorkspaceSelector | undefined,
+  ):
+    | { ok: true; workspaceId: string }
+    | { failure: 'task_not_found' | 'workspace_membership_required'; reason: string } {
+    if (msg.task_number === null || msg.task_workspace_id === null) {
+      // Caller should only invoke this for already-numbered tasks.
+      // Treat as not-a-task so the failure surfaces cleanly.
+      return { failure: 'task_not_found', reason: 'message is not a task' };
+    }
+    const rowWorkspaceId = msg.task_workspace_id;
+    if (selector?.workspaceId && selector.workspaceId !== rowWorkspaceId) {
+      return {
+        failure: 'task_not_found',
+        reason: 'task not found in the specified workspace',
+      };
+    }
+    if (selector?.workspaceName) {
+      const matches = this.workspaces.findAllByName(selector.workspaceName);
+      const ids = new Set(matches.map(m => m.id));
+      if (!ids.has(rowWorkspaceId)) {
+        return {
+          failure: 'task_not_found',
+          reason: 'task not found in the specified workspace',
+        };
+      }
+    }
+    const targetWs = this.workspaces.get(rowWorkspaceId);
+    if (!targetWs) {
+      return { failure: 'task_not_found', reason: 'task workspace not found' };
+    }
+    if (!this.isAgentWorkspaceMember(targetWs, actor.agentId)) {
+      return {
+        failure: 'workspace_membership_required',
+        reason: `agent is not a member of workspace ${targetWs.id}`,
+      };
+    }
+    return { ok: true, workspaceId: rowWorkspaceId };
   }
 
   private fetchMessage(messageId: string): ResolvedMessageRow | null {

@@ -1844,4 +1844,170 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
       t.cleanup();
     }
   });
+
+  // ── Round 3 Blocker (Cindy `zJ4xdGu3uEo68_k7` + `YreWED1qOBStvZxG`)
+  //
+  // For the `--message-id` form of claim/unclaim/status, the row
+  // identity is the message id — NOT `(selector-workspace,
+  // msg.task_number)`. A selector that resolves to a different
+  // workspace must NOT silently retarget the mutation onto a
+  // same-numbered task in that workspace. Membership of the message's
+  // own `task_workspace_id` is also always required, so a leaked
+  // message id can't bypass access.
+
+  it('claim --message-id of ws-A task with --workspace-id ws-B (same #N exists) does NOT touch ws-B row', async () => {
+    const t = bootstrapTwoWorkspaces();
+    try {
+      // Add alice as member of both workspaces (so a successful claim
+      // path would not be gated by workspace_membership_required, and
+      // any bug that retargets would actually mutate ws2).
+      t.workspaces.addMember(t.ws2.id, t.alice.id);
+
+      // Create #1 in current ws by alice (assignee=alice).
+      const wsCreated = await t.service.createTasks({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        tasks: [{ title: 'ws #1' }],
+      });
+      if (!('tasks' in wsCreated)) throw new Error();
+      const wsMsgId = wsCreated.tasks[0]!.message_id;
+      await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { messageId: wsMsgId },
+      });
+
+      // Create #1 in ws2 by bob (assignee=bob, unclaimed by alice).
+      await t.service.createTasks({
+        conversationId: t.ws2Channel.id,
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.ws2Channel.id },
+        tasks: [{ title: 'ws2 #1' }],
+      });
+      const ws2Before = t.service.list({ actor: { kind: 'user', userId: 'local' } })
+        .find(x => x.workspace_id === t.ws2.id);
+      expect(ws2Before?.assignee).toBeNull();
+
+      // Now alice tries to claim by message-id of ws #1 BUT passes
+      // --workspace-id ws2. Pre-Round-3 bug would resolve selector →
+      // ws2, then fetchTaskByNumber(ws2, msg.task_number=1) → mutate
+      // ws2 #1. Round 3 fix: row identity = wsMsgId; selector
+      // mismatch ⇒ task_not_found; ws2 #1 untouched. wsMsgId is
+      // already claimed by alice so we expect already_claimed
+      // (assignee==self) — but with selector mismatch the row "doesn't
+      // exist" from caller view, so task_not_found wins.
+      const r = await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { messageId: wsMsgId },
+        workspaceSelector: { workspaceId: t.ws2.id },
+      });
+      expect(r.success).toBe(false);
+      expect(r.code).toBe('task_not_found');
+
+      // ws2 #1 must remain unassigned (NOT mutated to alice).
+      const ws2After = t.service.list({ actor: { kind: 'user', userId: 'local' } })
+        .find(x => x.workspace_id === t.ws2.id);
+      expect(ws2After?.assignee).toBeNull();
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('claim --message-id of a task in another ws WITHOUT selector still fails on membership', async () => {
+    // Without a selector at all, an agent who somehow has a message id
+    // from a workspace it does not belong to must NOT be able to claim.
+    // The selector default ("current workspace") only applies to
+    // task-number lookups and promotion; message-id lookups are global
+    // by row identity and demand membership of the row's workspace.
+    const t = bootstrapTwoWorkspaces();
+    try {
+      // alice is NOT a member of ws2.
+      const ws2Task = await t.service.createTasks({
+        conversationId: t.ws2Channel.id,
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.ws2Channel.id },
+        tasks: [{ title: 'ws2 #1' }],
+      });
+      if (!('tasks' in ws2Task)) throw new Error();
+      const ws2MsgId = ws2Task.tasks[0]!.message_id;
+
+      const r = await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { messageId: ws2MsgId },
+      });
+      expect(r.success).toBe(false);
+      expect(r.code).toBe('workspace_membership_required');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('unclaim/status --message-id mirror the same row-identity guard', async () => {
+    const t = bootstrapTwoWorkspaces();
+    try {
+      t.workspaces.addMember(t.ws2.id, t.alice.id);
+      t.conversations.addAgent(t.ws2Channel.id, t.alice.id);
+
+      // ws #1: alice creates + claims.
+      const wsCreated = await t.service.createTasks({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        tasks: [{ title: 'ws #1' }],
+      });
+      if (!('tasks' in wsCreated)) throw new Error();
+      const wsMsgId = wsCreated.tasks[0]!.message_id;
+      await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { messageId: wsMsgId },
+      });
+
+      // ws2 #1: alice creates + claims (so a buggy retarget would
+      // actually flip ws2 #1 status).
+      const ws2Created = await t.service.createTasks({
+        conversationId: t.ws2Channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.ws2Channel.id },
+        tasks: [{ title: 'ws2 #1' }],
+      });
+      if (!('tasks' in ws2Created)) throw new Error();
+      const ws2MsgId = ws2Created.tasks[0]!.message_id;
+      await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.ws2Channel.id },
+        by: { messageId: ws2MsgId },
+      });
+
+      // Snapshot ws2 #1's status before.
+      const before = t.service.getByMessageId(ws2MsgId, { kind: 'user', userId: 'local' });
+      expect(before?.status).toBe('in_progress');
+
+      // unclaim by message-id of ws #1 with selector→ws2 must fail and
+      // NOT mutate either row's assignee.
+      const u = await t.service.unclaimTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { messageId: wsMsgId },
+        workspaceSelector: { workspaceId: t.ws2.id },
+      });
+      expect(u.success).toBe(false);
+      expect(u.code).toBe('task_not_found');
+
+      // status by message-id of ws #1 with selector→ws2 must fail and
+      // NOT mutate ws2 #1 status.
+      const s = await t.service.updateStatus({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { messageId: wsMsgId },
+        status: 'in_review',
+        workspaceSelector: { workspaceId: t.ws2.id },
+      });
+      expect(s.success).toBe(false);
+      expect(s.code).toBe('task_not_found');
+
+      const after = t.service.getByMessageId(ws2MsgId, { kind: 'user', userId: 'local' });
+      expect(after?.status).toBe('in_progress');
+      expect(after?.assignee?.id).toBe(t.alice.id);
+
+      // And the ws #1 row itself is also unchanged (still claimed,
+      // still in_progress).
+      const wsAfter = t.service.getByMessageId(wsMsgId, { kind: 'user', userId: 'local' });
+      expect(wsAfter?.assignee?.id).toBe(t.alice.id);
+      expect(wsAfter?.status).toBe('in_progress');
+    } finally {
+      t.cleanup();
+    }
+  });
 });
