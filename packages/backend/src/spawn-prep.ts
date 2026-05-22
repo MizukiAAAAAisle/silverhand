@@ -13,9 +13,10 @@ import type { SilverhandCliLauncher } from './context.js';
  *   - system-prompt.md   buildSystemPromptFor(driver.kind, …) output
  *   - bin/silverhand     stable CLI entrypoint injected at the front of PATH
  *
- * Lifecycle: ConversationManager calls `prepareSpawnFiles` before spawning
- * the agent CLI, then `cleanup()` after the child exits. Crashed leaves
- * stragglers — fine, OS tmp gets reaped eventually.
+ * Lifecycle: `DaemonAgentRuntimeHost.start` calls `prepareSpawnFiles`
+ * before issuing `bridge.runtimeStart`, then `cleanup()` after the
+ * runtime exits. Crashed leaves stragglers — fine, OS tmp gets reaped
+ * eventually.
  */
 
 export interface SpawnPrepInput {

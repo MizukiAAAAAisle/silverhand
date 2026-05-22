@@ -5,12 +5,15 @@ import { RuntimeKindSchema, type RuntimeKind } from '@silverhand/shared';
  * `app_settings` is a flat key/value store for host-wide preferences.
  * Currently used for:
  *
- *   - `proxy_url` — when non-empty, ConversationManager injects HTTP_PROXY /
- *     HTTPS_PROXY / ALL_PROXY (uppercase + lowercase) into every spawned
- *     agent process whose runtime is in the `proxy_runtimes` allowlist.
- *     Lets users with corporate firewalls / local proxies point per-runtime
- *     CLIs (e.g. just codex) at one URL without having to remember to
- *     `export http_proxy=...` before `pnpm dev`.
+ *   - `proxy_url` — when non-empty, the runtime spawn env injects
+ *     HTTP_PROXY / HTTPS_PROXY / ALL_PROXY (uppercase + lowercase) into
+ *     every spawned agent process whose runtime is in the
+ *     `proxy_runtimes` allowlist. Lets users with corporate firewalls /
+ *     local proxies point per-runtime CLIs (e.g. just codex) at one URL
+ *     without having to remember to `export http_proxy=...` before
+ *     `pnpm dev`. The composition lives in `runtime/spawn-env.ts`
+ *     (`applyProxyEnv`); `RuntimeBridge` reads these settings at wake
+ *     time so the daemon never needs DB access.
  *   - `proxy_runtimes` — comma-separated runtime kinds (e.g. `codex,cursor`)
  *     that the proxy applies to. Empty/unset = no runtime gets the proxy
  *     even if `proxy_url` is set (explicit opt-in).

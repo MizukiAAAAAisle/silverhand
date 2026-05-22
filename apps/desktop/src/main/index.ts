@@ -10,9 +10,6 @@ import {
   type CategorizedLoggers,
   type RunningBackend,
   type FileLogger,
-  parseAgentRuntimeHostMode,
-  describeAgentRuntimeHostMode,
-  SILVERHAND_RUNTIME_HOST_ENV,
 } from '@silverhand/backend';
 import { HostClient, spawnDaemonChild, type DaemonHandle } from '@silverhand/host';
 import { loadOrCreateServerConfig, databasePath, silverhandDir, writeServerConfig } from './config.js';
@@ -240,106 +237,50 @@ async function bootstrap(): Promise<void> {
         'dev CDP remote debugging enabled',
       );
     }
-    // Runtime host gate (#task:512). Daemon is the only supported
-    // runtime path post-Commit B of the cleanup sequence; the legacy
-    // in-process ConversationManager runtime was deleted with that
-    // commit. The SILVERHAND_RUNTIME_HOST env var is parsed by the
-    // same pure helper backend uses, so the two layers cannot drift
-    // on default / accepted values / failure mode
-    // (`parseAgentRuntimeHostMode` throws loudly on an unknown value;
-    // we do NOT silently coerce).
-    //
-    //   - `daemon` (default, unset, or `=daemon`): spawn the daemon,
-    //     connect HostClient, and on either failure abort bootstrap.
-    //     There is no runtime fallback — Cindy `0aTZCqe07rmqA08k`
-    //     blocker 2: connect-failure surface must NOT advertise
-    //     `=legacy` as recovery, because `=legacy` no longer runs a
-    //     different runtime. Recovery is "fix the daemon spawn /
-    //     HostClient connection".
-    //   - `legacy` (`=legacy`): retained parse value for one more
-    //     commit (Commit C deletes the env switch entirely). Reaches
-    //     `startBackend` without spawning a daemon; backend then
-    //     throws at boot with an explicit Commit B removed-message.
-    //     This is intentional: an operator who pinned `=legacy`
-    //     during the soak window sees a precise diagnostic instead
-    //     of an unrelated parse failure or silent drift.
-    const runtimeHostMode = parseAgentRuntimeHostMode(
-      process.env[SILVERHAND_RUNTIME_HOST_ENV],
-    );
-    const runtimeHostBanner = describeAgentRuntimeHostMode(runtimeHostMode);
+    // Spawn silverhand-daemon and connect a HostClient. Daemon is the
+    // only supported runtime path; backend routes every spawn / wake
+    // / inbox delivery through this client. On connect failure we
+    // tear down what we partially created and re-throw — there is no
+    // runtime fallback (#task:512 cleanup Commit B deleted the
+    // in-process ConversationManager runtime, Commit C removed the
+    // env switch). Recovery is fixing the daemon spawn / socket.
+    const paths = daemonPaths();
+    daemon = await spawnDaemonChild({
+      launcher: resolveDaemonLauncher(),
+      socketPath: paths.socketPath,
+      pidFilePath: paths.pidFilePath,
+      logDir: paths.logDir,
+      alsoStderr: !app.isPackaged,
+    });
     logger.info(
       {
-        mode: runtimeHostBanner.mode,
-        rollback: runtimeHostBanner.rollback,
+        pid: daemon.pid,
+        socketPath: daemon.socketPath,
+        daemonVersion: daemon.daemonVersion,
       },
-      `electron-main: ${runtimeHostBanner.note}`,
+      'silverhand-daemon spawned',
     );
-
-    if (runtimeHostMode === 'daemon') {
-      // Daemon is the only supported runtime post-Commit B. The
-      // daemon child is spawned and HostClient connected so backend
-      // can route runtime intents through it. On failure we tear
-      // down what we partially created and re-throw with a recovery
-      // hint that points at fixing the daemon connection — NOT at
-      // `=legacy`, because the legacy in-process ConversationManager
-      // runtime was removed in Commit B and `=legacy` will only
-      // surface a removed-message at boot.
-      const paths = daemonPaths();
-      daemon = await spawnDaemonChild({
-        launcher: resolveDaemonLauncher(),
-        socketPath: paths.socketPath,
-        pidFilePath: paths.pidFilePath,
-        logDir: paths.logDir,
-        alsoStderr: !app.isPackaged,
-      });
-      logger.info(
-        {
-          pid: daemon.pid,
-          socketPath: daemon.socketPath,
-          daemonVersion: daemon.daemonVersion,
-        },
-        'silverhand-daemon spawned',
+    hostClient = new HostClient({ socketPath: paths.socketPath });
+    try {
+      await hostClient.connect();
+    } catch (err) {
+      await hostClient.close().catch(() => undefined);
+      hostClient = null;
+      await daemon?.kill({ gracefulMs: 1_000 }).catch(() => undefined);
+      daemon = null;
+      throw new Error(
+        'silverhand-daemon: HostClient failed to connect to the spawned daemon. ' +
+          'There is no runtime fallback — daemon is the only supported runtime path. ' +
+          'Recovery: ensure silverhand-daemon is spawnable / its socket is reachable. ' +
+          `Underlying error: ${err instanceof Error ? err.message : String(err)}`,
       );
-      hostClient = new HostClient({ socketPath: paths.socketPath });
-      try {
-        await hostClient.connect();
-      } catch (err) {
-        // Daemon mode requires a live HostClient — surface the
-        // failure loudly. There is no runtime fallback (Commit B
-        // removed the legacy in-process ConversationManager
-        // runtime); recovery is fixing the daemon spawn / socket.
-        // Tear down what we partially created before re-throwing so
-        // the bootstrap catch can clean up the daemon child.
-        await hostClient.close().catch(() => undefined);
-        hostClient = null;
-        await daemon?.kill({ gracefulMs: 1_000 }).catch(() => undefined);
-        daemon = null;
-        throw new Error(
-          `${SILVERHAND_RUNTIME_HOST_ENV}=daemon (the only supported runtime): ` +
-            `HostClient failed to connect to the spawned silverhand-daemon. ` +
-            `There is no runtime fallback — the legacy in-process ConversationManager ` +
-            `runtime was removed in Commit B of the daemon cleanup sequence; ` +
-            `${SILVERHAND_RUNTIME_HOST_ENV}=legacy will NOT fall back to a different ` +
-            `runtime, it now throws at boot with an explicit removed-message. ` +
-            `Recovery: ensure silverhand-daemon is spawnable / its socket is reachable. ` +
-            `Underlying error: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-      daemon.onExit(info => {
-        logger?.error(
-          { reason: info.reason, code: info.code },
-          'silverhand-daemon exited and exceeded restart budget',
-        );
-      });
     }
-    // legacy mode: no daemon spawn, no HostClient. We let
-    // `startBackend` see `hostClient: undefined` and throw at boot
-    // with an explicit Commit B removed-message. This is intentional
-    // — Commit B removed the legacy in-process ConversationManager
-    // runtime; `=legacy` survives one more commit only as a parse
-    // value whose only effect is producing a precise diagnostic
-    // instead of an unrelated parse failure for operators who pinned
-    // it during the soak window.
+    daemon.onExit(info => {
+      logger?.error(
+        { reason: info.reason, code: info.code },
+        'silverhand-daemon exited and exceeded restart budget',
+      );
+    });
     backend = await startBackend({
       dbPath: databasePath(),
       silverhandDir: silverhandDir(),
@@ -348,7 +289,7 @@ async function bootstrap(): Promise<void> {
       logger,
       loggers: loggers ?? undefined,
       logDir: join(silverhandDir(), 'logs'),
-      hostClient: hostClient ?? undefined,
+      hostClient,
     });
     await writeServerConfig(backend.context.serverConfig);
   } catch (err) {

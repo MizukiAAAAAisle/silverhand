@@ -7,8 +7,8 @@
  *   - Subscribe to events (`RuntimeEventHandler` owns that)
  *   - Hold or mutate cache state (`RunStateCache` owns that)
  *   - Touch the DB, SSE, inbox, or activity log
- *   - Implement business rules around when to start / stop (caller —
- *     `ConversationManager` post-flip — owns that)
+ *   - Implement business rules around when to start / stop
+ *     (`DaemonAgentRuntimeHost` owns that)
  *
  * Concretely, the bridge is a thin typed proxy over `HostClient`
  * intents that injects two backend-only concerns the daemon cannot

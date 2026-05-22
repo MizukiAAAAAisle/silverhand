@@ -1,35 +1,29 @@
 /**
  * `spawn-env` — pure helpers that compose the env passed to a spawned
- * agent CLI. Used by BOTH the legacy CM spawn path (today) and the
- * daemon-path `RuntimeBridge` caller (post-commit-5 atomic flip).
+ * agent CLI. The daemon-path `RuntimeBridge` caller is the only
+ * consumer post-cleanup (Commit B removed the legacy in-process
+ * ConversationManager spawn path).
  *
- * ## Why this lives here (commit 5 unit 1)
+ * ## Why this lives here as a separate module
  *
- * CM has historically built the env inline at the spawn call site:
+ * The env composition was lifted out of the original
+ * `ConversationManager` runtime so the daemon path could land
+ * byte-identical bytes in `runtime_start.options.env`; the daemon
+ * then re-applies `driver.applyEnv` on top of
+ * `{ ...daemon.process.env, ...wire.env }`. The lift survives as the
+ * single source of spawn env composition; the module-level cap on
+ * what's allowed in `SILVERHAND_*` vars / driver env / proxy overlay
+ * lives here.
  *
- *   ```ts
- *   const env = this.withSilverhandCliEnv(
- *     this.applyProxySetting(driver.applyEnv(process.env), runtime),
- *     { conversationId, agentId, serverUrl, token, binDir },
- *   );
- *   ```
- *
- * Two layers (proxy + silverhand-CLI) lived as CM private methods. For
- * the daemon path we need the SAME env composition to land in
- * `runtime_start.options.env`; the daemon then re-applies
- * `driver.applyEnv` on top of `{ ...daemon.process.env, ...wire.env }`.
- *
- * Cindy's commit-5 hard line (msg `gePj5qOffE7rDlGw` + earlier
- * `KMJFmcS4hf_tJ5hj`): spawn env MUST be byte-equivalent across the
- * legacy ↔ daemon paths — PATH shim, `SILVERHAND_*` vars, driver env,
- * proxy overlay. To make that a static invariant we share the env
- * composition; this module is the single source.
+ * Cindy's commit-5 hard line (msgs `gePj5qOffE7rDlGw` +
+ * `KMJFmcS4hf_tJ5hj`): spawn env MUST stay byte-equivalent to what
+ * the original CM produced — PATH shim, `SILVERHAND_*` vars, driver
+ * env, proxy overlay. The `proxy-env.test.ts` suite pins each layer.
  *
  * ## Layer model
  *
- * `buildAgentSpawnEnv` — the END env CM passes to `spawn()` today.
- * Daemon-path test fixture re-uses this to assert parity. The four
- * layers applied in order:
+ * `buildAgentSpawnEnv` — the END env passed to spawn-prep / the
+ * daemon's `runtime_start`. Four layers applied in order:
  *
  *   1. `driver.applyEnv(baseProcessEnv)`   ← innermost (driver vars)
  *   2. `applyProxyEnv(...)`               ← proxy overlay (allowlist gated)

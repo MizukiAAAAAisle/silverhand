@@ -2,13 +2,10 @@
  * `event-sanitize` — pure helpers for sanitizing `ParsedEvent`
  * payloads before they go on the wire as `agent_event` SSE.
  *
- * ## Why this lives here (not as CM-private anymore)
- *
- * CM owns the `agent_event` publish today; PR-2 step 2 commit 5 makes
- * `RuntimeEventHandler` the second publisher (legacy CM keeps working
- * via the gated `SILVERHAND_RUNTIME_HOST=legacy|daemon` switch).
- * Both call sites MUST apply the same sanitization or the daemon
- * path would silently regress two contracts:
+ * `RuntimeEventHandler` is the only publisher; behavior was preserved
+ * byte-for-byte from the original `ConversationManager` implementation
+ * during the daemon cutover so SSE consumers (Events panel, agent-event
+ * listeners) cannot tell the runtime changed. Two contracts protected:
  *
  *   1. `tool_call.input` size cap — large tool inputs (e.g. multi-MB
  *      JSON) would flood SSE listeners + bloat the Events panel.
@@ -16,13 +13,9 @@
  *      a self-referencing input crashes JSON.stringify on the wire.
  *
  * Cindy `ch9ZsU0v0ATr6tr8` blocker (carried forward from commit-4
- * review): `sanitizeParsedEventForBroadcast` MUST be reused across
- * both paths, not duplicated. Living in a shared module is the only
- * way to make that a static invariant.
- *
- * The behavior is preserved byte-for-byte from CM's prior private
- * implementation — no relaxation, no new caps. Constants are
- * re-exported so tests can pin the boundary explicitly.
+ * review): `sanitizeParsedEventForBroadcast` is the single sanitizer
+ * for `agent_event` publishes — no relaxation, no new caps. Constants
+ * are re-exported so tests can pin the boundary explicitly.
  */
 import type { ParsedEvent } from '@silverhand/shared';
 
@@ -45,8 +38,7 @@ export const RAW_AGENT_EVENT_MAX_DEPTH = 4;
 
 /**
  * Wrapper that only sanitizes `tool_call` events — every other
- * `ParsedEvent` kind passes through unchanged. CM published it on
- * the `agent_event` SSE; daemon-path publisher does the same.
+ * `ParsedEvent` kind passes through unchanged.
  *
  * The `as {} | null` cast is the same one CM used: shared
  * `RequiredUnknownSchema` infers `Exclude<unknown, undefined>` =

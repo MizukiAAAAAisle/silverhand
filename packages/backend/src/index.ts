@@ -36,11 +36,6 @@ import {
   type InboxAckSink,
 } from './runtime/event-handler.js';
 import { DbRuntimeStatusProjector } from './runtime/status-projector.js';
-import {
-  describeAgentRuntimeHostMode,
-  parseAgentRuntimeHostMode,
-  SILVERHAND_RUNTIME_HOST_ENV,
-} from './runtime/runtime-host-mode.js';
 import { AgentRepo } from './repos/agent-repo.js';
 import { AttachmentRepo } from './repos/attachment-repo.js';
 import { ConversationRepo } from './repos/conversation-repo.js';
@@ -78,11 +73,13 @@ export interface CreateBackendOptions {
   /** Where the file logger writes. Optional. */
   logDir?: string;
   /**
-   * Connected `silverhand-daemon` client. Optional in PR-1 — when
-   * present, backend pings the daemon at boot and logs the version
-   * (smoke test of the IPC plumbing). When absent, backend behaves
-   * exactly as before. PR-2 promotes this to required and routes
-   * runtime intents (spawn/stop/wake/inject) through it.
+   * Connected `silverhand-daemon` client. **Required.** Backend
+   * routes every spawn / wake / clearSession / inbox delivery /
+   * run-state read through this client; without it the boot throws.
+   * Legacy in-process spawn was removed in #task:512 cleanup
+   * Commit B and the env switch in Commit C — there is no runtime
+   * fallback. Type stays optional so existing call sites compile,
+   * but startBackend throws if it is undefined.
    */
   hostClient?: HostClient;
 }
@@ -150,202 +147,168 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     events: new ScopeEventBus(),
     silverhandCliLauncher: opts.silverhandCliLauncher,
     agentTokens: new AgentTokenStore(),
-    // Filled immediately below by the runtime host dispatch.
+    // Filled immediately below when the daemon runtime host is constructed.
     runtimeHost: undefined as unknown as AgentRuntimeHost,
   };
 
-  // ── Runtime host dispatch (`SILVERHAND_RUNTIME_HOST`) ────────────
-  // Daemon mode is the only supported runtime path post-Commit B.
-  // The env switch survives one more diff: `=daemon` / unset wires
-  // the daemon shim, `=legacy` throws loudly with a recovery hint
-  // (the in-process `ConversationManager` surfaces have been removed
-  // — there is nothing to roll back to). The switch itself is
-  // scheduled for deletion in Commit C.
-  const runtimeHostMode = parseAgentRuntimeHostMode(
-    process.env[SILVERHAND_RUNTIME_HOST_ENV],
-  );
-  const runtimeHostBanner = describeAgentRuntimeHostMode(runtimeHostMode);
-  if (runtimeHostMode === 'daemon') {
-    if (!opts.hostClient) {
-      throw new Error(
-        `${SILVERHAND_RUNTIME_HOST_ENV}=daemon (the only supported runtime): a connected ` +
-          `HostClient is required but startBackend() received hostClient=undefined. The host ` +
-          `(Electron main or dev-headless) must spawn silverhand-daemon and pass a connected ` +
-          `HostClient. There is no runtime fallback — the legacy in-process ConversationManager ` +
-          `runtime was removed in Commit B of the daemon cleanup sequence. Setting ` +
-          `${SILVERHAND_RUNTIME_HOST_ENV}=legacy will NOT fall back to a different runtime; ` +
-          `it now throws at boot with an explicit removed-message and is retained as a parse ` +
-          `value for one more commit only so a stale '=legacy' pin produces a precise ` +
-          `diagnostic. Recovery: ensure silverhand-daemon is spawnable / its socket is reachable.`,
-      );
-    }
-    // Build the daemon runtime host. Bridge / cache / event-handler /
-    // coordinator are all live now; this is the only supported runtime
-    // path post-Commit B. The `legacy` branch below throws — the
-    // env switch is retained for one more commit only so an operator
-    // who set `=legacy` during the soak window sees a clear "removed"
-    // message instead of an unrelated parse failure.
-    const proxySettings: ProxySettingsSource = {
-      get: (key: 'proxy_url' | 'proxy_runtimes') =>
-        new SettingsRepo(db).get(key),
-    };
-    const bridge = new RuntimeBridge(opts.hostClient, proxySettings);
-    const cache = new RunStateCache();
-    const activityLog = new JsonlActivityLogWriter({
-      logDir: ctx.logDir,
-      logger,
-    });
-    const inboxRepo = new ConversationInboxRepo(db);
-    const inboxAck: InboxAckSink = {
-      markDelivered: (deliveryIds: readonly number[]) =>
-        inboxRepo.markDelivered([...deliveryIds]),
-      markUndelivered: () => {},
-    };
-    // Construct the coordinator BEFORE EventHandler so the handler's
-    // forward-only callbacks can reference it. Coordinator's
-    // `respawn` callback closes over `ctx.runtimeHost` via a thunk —
-    // the field isn't populated yet, so we defer the lookup to
-    // call-time (start() is invoked from `onRuntimeExit` paths only,
-    // long after construction finishes).
-    const coordinator = new RuntimeDeliveryCoordinator({
-      bridge: {
-        runtimeWake: params => opts.hostClient!.runtimeWake(params),
-      },
-      cache,
-      inboxAck,
-      callbacks: {
-        respawn: (cid, aid) => ctx.runtimeHost.start(cid, aid),
-        hasPendingInbox: (cid, aid) =>
-          inboxRepo.listPending(cid, aid).length > 0,
-        // `combineGated` is invoked with UN-ENCODED message texts BEFORE
-        // the per-driver encode step (Cindy `Mqf1h-FKudtEbH1O`: feeding
-        // driver-encoded JSON lines through `combineGatedBatch` would
-        // produce malformed claude stdin — combine before encode). The
-        // lifted `combineGatedBatch` keeps daemon mode byte-identical
-        // to CM. Tool-name is hardcoded to match
-        // `sendMessageToolName(driver)` (currently driver-agnostic).
-        combineGated: texts =>
-          combineGatedBatch(texts, 'silverhand message send'),
-        publishActivity: state => {
-          ctx.events.publish(state.conversationId, {
-            kind: 'agent_activity',
-            payload: state,
-          });
-          activityLog.write(state);
-        },
-      },
-      logger: {
-        info: (meta, msg) => logger.info(meta, msg),
-        warn: (meta, msg) => logger.warn(meta, msg),
-        error: (meta, msg) => logger.error(meta, msg),
-      },
-    });
-    const eventHandler = new RuntimeEventHandler({
-      client: opts.hostClient,
-      bridge,
-      cache,
-      events: ctx.events,
-      inboxAck,
-      // B1 (Cindy `usjxj8AxX4AvJ5E-`): the projector owns both the DB
-      // write to `conversation_agents` AND the matching `agent_status`
-      // SSE for the four status-mutating events (session_init,
-      // runtime_exit, init_retrying, init_cooldown). EventHandler stays
-      // event-fan-out — see `runtime/status-projector.ts`.
-      statusProjector: new DbRuntimeStatusProjector(
-        new ConversationRepo(db),
-        ctx.events,
-      ),
-      // Forward parsed events to the coordinator's busy tracker
-      // (Cindy `3l4bZ5vaMvlC9DVS`: forward-only — the handler MUST
-      // NOT keep its own queue or call bridge.runtimeWake).
-      onParsedEvent: (cid, aid, ev) =>
-        coordinator.onParsedEvent(cid, aid, ev),
-      // Forward runtime_exit to the coordinator so it can clear its
-      // per-agent queue + decide oneShot auto-respawn (gated by the
-      // intentional / initTimedOut / fatalError / hasPendingInbox
-      // trio in `delivery-coordinator.ts:onRuntimeExit`).
-      onRuntimeExit: (cid, aid, meta) =>
-        coordinator.onRuntimeExit(cid, aid, meta),
-      onInitTimeout: (cid, aid) =>
-        coordinator.clearWakeWatchdog(cid, aid, 'timeout'),
-      activityLog,
-      // B2 (Cindy `usjxj8AxX4AvJ5E-`): wire `runtime_ready_for_drain`
-      // to DaemonHost.drainPending so rows that arrived during the
-      // startup_pending window are flushed when the runtime crosses
-      // into `ready` without ever being woken by submitLiveDelivery.
-      // Late-bound via the daemonHostRef closure because DaemonHost
-      // construction needs the eventHandler above. The callback only
-      // fires after `eventHandler.start()`, which DaemonHost calls
-      // from `reconcileOnBoot` — strictly after `daemonHostRef` is
-      // populated below.
-      onReadyForDrain: (cid, aid) => {
-        const host = daemonHostRef;
-        if (!host) {
-          logger.warn(
-            { kind: 'runtime', mode: 'daemon', conv_id: cid, agent_id: aid },
-            'drain: ready_for_drain fired before DaemonHost wired; skipping',
-          );
-          return;
-        }
-        return host.drainPending(cid, aid);
-      },
-      logger,
-    });
-    let daemonHostRef: DaemonAgentRuntimeHost | null = null;
-    ctx.runtimeHost = new DaemonAgentRuntimeHost({
-      client: opts.hostClient,
-      bridge,
-      cache,
-      eventHandler,
-      events: ctx.events,
-      conversations: new ConversationRepo(db),
-      agents: new AgentRepo(db),
-      messages: new MessageRepo(db),
-      inboxes: inboxRepo,
-      users: new UserRepo(db),
-      settings: new SettingsRepo(db),
-      coordinator,
-      workspaces: new WorkspaceRepo(db, { workspacesRoot }),
-      membership: new MembershipService({
-        agents: new AgentRepo(db),
-        users: new UserRepo(db),
-        conversations: new ConversationRepo(db),
-      }),
-      silverhandDir: opts.silverhandDir,
-      silverhandCli: opts.silverhandCliLauncher,
-      agentTokens: ctx.agentTokens,
-      // serverConfig is read fresh on every start() so it picks up the
-      // bound port after the Hono server listens (ctx.serverConfig is
-      // mutated mid-boot from `:0` placeholder to the real URL).
-      serverConfig: () => ctx.serverConfig,
-      activityLog,
-      db,
-      logger,
-    });
-    daemonHostRef = ctx.runtimeHost as DaemonAgentRuntimeHost;
-  } else {
-    // legacy: the in-process ConversationManager runtime was removed
-    // in Commit B of the cleanup sequence. The env switch itself is
-    // kept for one more commit so operators who pinned `=legacy`
-    // during the soak window see this explicit message instead of an
-    // unrelated parse / wiring failure. Recovery: unset
-    // `SILVERHAND_RUNTIME_HOST` (or set it to `daemon`).
+  // ── Runtime host wiring ─────────────────────────────────────────
+  // Daemon is the only supported runtime path. The host (Electron
+  // main or dev-headless) MUST spawn silverhand-daemon and pass a
+  // connected `HostClient`; without it the boot throws — there is no
+  // runtime fallback (the legacy in-process ConversationManager
+  // runtime was removed in #task:512 cleanup Commit B; the
+  // `SILVERHAND_RUNTIME_HOST` env switch was removed in Commit C).
+  if (!opts.hostClient) {
     throw new Error(
-      `${SILVERHAND_RUNTIME_HOST_ENV}=legacy was set, but the in-process ` +
-        `ConversationManager runtime path was removed in Commit B of the ` +
-        `daemon cleanup sequence — there is no legacy runtime to fall back to. ` +
-        `Recovery: unset ${SILVERHAND_RUNTIME_HOST_ENV} (or set it to ` +
-        `'daemon') and restart. The env switch will disappear entirely in ` +
-        `the next commit (Commit C); past that point any value other than ` +
-        `'daemon' / unset will fail at parse time.`,
+      'startBackend: a connected HostClient is required but received hostClient=undefined. ' +
+        'The host (Electron main or dev-headless) must spawn silverhand-daemon and pass a ' +
+        'connected HostClient. There is no runtime fallback — the legacy in-process ' +
+        'ConversationManager runtime was removed in #task:512 cleanup Commit B; the ' +
+        'SILVERHAND_RUNTIME_HOST env switch was removed in Commit C. Recovery: ensure ' +
+        'silverhand-daemon is spawnable / its socket is reachable.',
     );
   }
-  logger.info(
-    {
-      mode: runtimeHostBanner.mode,
-      rollback: runtimeHostBanner.rollback,
+  const proxySettings: ProxySettingsSource = {
+    get: (key: 'proxy_url' | 'proxy_runtimes') =>
+      new SettingsRepo(db).get(key),
+  };
+  const bridge = new RuntimeBridge(opts.hostClient, proxySettings);
+  const cache = new RunStateCache();
+  const activityLog = new JsonlActivityLogWriter({
+    logDir: ctx.logDir,
+    logger,
+  });
+  const inboxRepo = new ConversationInboxRepo(db);
+  const inboxAck: InboxAckSink = {
+    markDelivered: (deliveryIds: readonly number[]) =>
+      inboxRepo.markDelivered([...deliveryIds]),
+    markUndelivered: () => {},
+  };
+  // Construct the coordinator BEFORE EventHandler so the handler's
+  // forward-only callbacks can reference it. Coordinator's
+  // `respawn` callback closes over `ctx.runtimeHost` via a thunk —
+  // the field isn't populated yet, so we defer the lookup to
+  // call-time (start() is invoked from `onRuntimeExit` paths only,
+  // long after construction finishes).
+  const coordinator = new RuntimeDeliveryCoordinator({
+    bridge: {
+      runtimeWake: params => opts.hostClient!.runtimeWake(params),
     },
-    runtimeHostBanner.note,
+    cache,
+    inboxAck,
+    callbacks: {
+      respawn: (cid, aid) => ctx.runtimeHost.start(cid, aid),
+      hasPendingInbox: (cid, aid) =>
+        inboxRepo.listPending(cid, aid).length > 0,
+      // `combineGated` is invoked with UN-ENCODED message texts BEFORE
+      // the per-driver encode step (Cindy `Mqf1h-FKudtEbH1O`: feeding
+      // driver-encoded JSON lines through `combineGatedBatch` would
+      // produce malformed claude stdin — combine before encode). The
+      // lifted `combineGatedBatch` keeps daemon mode byte-identical
+      // to the original CM stdin formatter. Tool-name is hardcoded to
+      // match `sendMessageToolName(driver)` (currently driver-agnostic).
+      combineGated: texts =>
+        combineGatedBatch(texts, 'silverhand message send'),
+      publishActivity: state => {
+        ctx.events.publish(state.conversationId, {
+          kind: 'agent_activity',
+          payload: state,
+        });
+        activityLog.write(state);
+      },
+    },
+    logger: {
+      info: (meta, msg) => logger.info(meta, msg),
+      warn: (meta, msg) => logger.warn(meta, msg),
+      error: (meta, msg) => logger.error(meta, msg),
+    },
+  });
+  const eventHandler = new RuntimeEventHandler({
+    client: opts.hostClient,
+    bridge,
+    cache,
+    events: ctx.events,
+    inboxAck,
+    // B1 (Cindy `usjxj8AxX4AvJ5E-`): the projector owns both the DB
+    // write to `conversation_agents` AND the matching `agent_status`
+    // SSE for the four status-mutating events (session_init,
+    // runtime_exit, init_retrying, init_cooldown). EventHandler stays
+    // event-fan-out — see `runtime/status-projector.ts`.
+    statusProjector: new DbRuntimeStatusProjector(
+      new ConversationRepo(db),
+      ctx.events,
+    ),
+    // Forward parsed events to the coordinator's busy tracker
+    // (Cindy `3l4bZ5vaMvlC9DVS`: forward-only — the handler MUST
+    // NOT keep its own queue or call bridge.runtimeWake).
+    onParsedEvent: (cid, aid, ev) =>
+      coordinator.onParsedEvent(cid, aid, ev),
+    // Forward runtime_exit to the coordinator so it can clear its
+    // per-agent queue + decide oneShot auto-respawn (gated by the
+    // intentional / initTimedOut / fatalError / hasPendingInbox
+    // trio in `delivery-coordinator.ts:onRuntimeExit`).
+    onRuntimeExit: (cid, aid, meta) =>
+      coordinator.onRuntimeExit(cid, aid, meta),
+    onInitTimeout: (cid, aid) =>
+      coordinator.clearWakeWatchdog(cid, aid, 'timeout'),
+    activityLog,
+    // B2 (Cindy `usjxj8AxX4AvJ5E-`): wire `runtime_ready_for_drain`
+    // to DaemonHost.drainPending so rows that arrived during the
+    // startup_pending window are flushed when the runtime crosses
+    // into `ready` without ever being woken by submitLiveDelivery.
+    // Late-bound via the daemonHostRef closure because DaemonHost
+    // construction needs the eventHandler above. The callback only
+    // fires after `eventHandler.start()`, which DaemonHost calls
+    // from `reconcileOnBoot` — strictly after `daemonHostRef` is
+    // populated below.
+    onReadyForDrain: (cid, aid) => {
+      const host = daemonHostRef;
+      if (!host) {
+        logger.warn(
+          { kind: 'runtime', conv_id: cid, agent_id: aid },
+          'drain: ready_for_drain fired before DaemonHost wired; skipping',
+        );
+        return;
+      }
+      return host.drainPending(cid, aid);
+    },
+    logger,
+  });
+  let daemonHostRef: DaemonAgentRuntimeHost | null = null;
+  ctx.runtimeHost = new DaemonAgentRuntimeHost({
+    client: opts.hostClient,
+    bridge,
+    cache,
+    eventHandler,
+    events: ctx.events,
+    conversations: new ConversationRepo(db),
+    agents: new AgentRepo(db),
+    messages: new MessageRepo(db),
+    inboxes: inboxRepo,
+    users: new UserRepo(db),
+    settings: new SettingsRepo(db),
+    coordinator,
+    workspaces: new WorkspaceRepo(db, { workspacesRoot }),
+    membership: new MembershipService({
+      agents: new AgentRepo(db),
+      users: new UserRepo(db),
+      conversations: new ConversationRepo(db),
+    }),
+    silverhandDir: opts.silverhandDir,
+    silverhandCli: opts.silverhandCliLauncher,
+    agentTokens: ctx.agentTokens,
+    // serverConfig is read fresh on every start() so it picks up the
+    // bound port after the Hono server listens (ctx.serverConfig is
+    // mutated mid-boot from `:0` placeholder to the real URL).
+    serverConfig: () => ctx.serverConfig,
+    activityLog,
+    db,
+    logger,
+  });
+  daemonHostRef = ctx.runtimeHost as DaemonAgentRuntimeHost;
+  logger.info(
+    { runtime: 'daemon' },
+    'agent runtime: silverhand-daemon (the only supported runtime)',
   );
 
   ctx.channelService = new ChannelService({
@@ -402,41 +365,31 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     events: ctx.events,
     logger,
   });
-  // Boot recovery — may be async in daemon mode (hydrate from
-  // `runtime_status` then diff stale DB rows). Legacy mode resolves
-  // synchronously. Either way scheduling waits until reconcile lands so
-  // any handles brought back are visible to the first wake delivery.
+  // Boot recovery (daemon hydrate from `runtime_status` then diff
+  // stale DB rows). Scheduling waits until reconcile lands so any
+  // handles brought back are visible to the first wake delivery.
   await ctx.runtimeHost.reconcileOnBoot();
   ctx.scheduleService.start();
   const stopEventLoopLagProbe = startEventLoopLagProbe(logger);
 
-  // Daemon-mode liveness ping (#task:512 sub-commit 2a). The old PR-1
-  // "smoke if hostClient is present" path ran unconditionally for any
-  // caller passing `hostClient`, which would have meant legacy mode
-  // could still reach into daemon plumbing if the operator forgot to
-  // unset it. Cindy `yAyzGil3UdCENIom` blocker B2: legacy must NOT
-  // call hostClient at all. The ping now runs ONLY in daemon mode.
-  // Failure is still warn-level here (the daemon shim's first real
-  // call will surface the disconnect more concretely) — the gate
-  // upstream is what guarantees `opts.hostClient` is genuinely
-  // present and connected in daemon mode.
-  if (runtimeHostMode === 'daemon' && opts.hostClient) {
-    try {
-      const ping = await opts.hostClient.ping();
-      logger.info(
-        {
-          daemon_pid: ping.daemon_pid,
-          daemon_version: ping.daemon_version,
-          started_at: ping.started_at,
-        },
-        'silverhand-daemon ping ok',
-      );
-    } catch (err) {
-      logger.warn(
-        { err: err instanceof Error ? err.message : String(err) },
-        'silverhand-daemon ping failed at boot',
-      );
-    }
+  // Daemon liveness ping. The daemon shim's first real call will
+  // surface a disconnect more concretely than the ping; this is a
+  // best-effort smoke confirming the IPC channel is alive at boot.
+  try {
+    const ping = await opts.hostClient.ping();
+    logger.info(
+      {
+        daemon_pid: ping.daemon_pid,
+        daemon_version: ping.daemon_version,
+        started_at: ping.started_at,
+      },
+      'silverhand-daemon ping ok',
+    );
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'silverhand-daemon ping failed at boot',
+    );
   }
 
   const app = new Hono<AppEnv>();
@@ -510,13 +463,6 @@ export {
   type FileLogger,
   type FileLoggerOptions,
 } from './logger.js';
-export {
-  DEFAULT_AGENT_RUNTIME_HOST_MODE,
-  SILVERHAND_RUNTIME_HOST_ENV,
-  describeAgentRuntimeHostMode,
-  parseAgentRuntimeHostMode,
-  type AgentRuntimeHostMode,
-} from './runtime/runtime-host-mode.js';
 
 function assertLauncherResolvable(command: string, label = 'launcher'): void {
   if (isAbsolute(command)) {

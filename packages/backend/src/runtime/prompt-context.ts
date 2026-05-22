@@ -2,14 +2,15 @@
  * `prompt-context.ts` — pure helpers that assemble a `DriverPromptContext`
  * for a given (conversation, agent) about to be spawned.
  *
- * Lifted out of `conversation-manager.ts` so both the legacy in-process
- * path (CM.start) and the daemon shim (`DaemonAgentRuntimeHost.start`)
- * call the same function and produce byte-identical system prompts.
- * Without sharing, agents would see different membership ordering,
- * cap behavior, or workspace-memory-index labels across the two
- * runtime hosts — a class of bug we explicitly designed against in
- * Cindy's `5Yrv3roymWkCPxo1` watchlist (item 1: DaemonHost stays thin
- * by reusing every formatter that CM uses).
+ * Lifted out of the (now-removed) `conversation-manager.ts` during the
+ * daemon cutover so the daemon shim (`DaemonAgentRuntimeHost.start`)
+ * calls the same function the legacy CM did and produces byte-identical
+ * system prompts. The CM runtime itself was deleted in #task:512
+ * cleanup Commit B; this helper survives as the shared formatter and
+ * is the single source of truth for membership ordering, cap behavior,
+ * and workspace-memory-index labels (Cindy `5Yrv3roymWkCPxo1`
+ * watchlist item 1: DaemonHost stays thin by reusing every formatter
+ * the legacy CM used).
  *
  * # Surface
  *

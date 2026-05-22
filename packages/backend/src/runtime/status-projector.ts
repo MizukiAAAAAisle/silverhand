@@ -34,10 +34,11 @@
  * layer (a re-broadcast of an identical `agent_status` payload is a
  * benign duplicate for the renderer). `session_init` in particular
  * fires at the start of every claude turn (`system.init` is per-turn,
- * not per-process — see `conversation-manager.ts:1182-1189`); the
- * sink does NOT dedup. Dedup of side effects that ARE non-idempotent
- * (marking init-pending inbox rows delivered, calling drainInbox) is
- * owned by the coordinator (B3), not by this sink.
+ * not per-process — invariant inherited from the original
+ * ConversationManager runtime); the sink does NOT dedup. Dedup of
+ * side effects that ARE non-idempotent (marking init-pending inbox
+ * rows delivered, calling drainInbox) is owned by the coordinator
+ * (B3), not by this sink.
  */
 import type { AgentRunState } from '@silverhand/shared';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
@@ -126,7 +127,9 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
   }
 
   /**
-   * Status mapping mirrors CM `conversation-manager.ts:856-861`:
+   * Status mapping (preserved verbatim from the original
+   * ConversationManager runtime so the wire-to-DB enum stays stable
+   * across the daemon cutover):
    *   initTimedOut || fatalError       -> 'crashed'
    *   intentional || code === 0        -> 'idle'
    *   otherwise                        -> 'crashed'
@@ -172,8 +175,9 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
   }
 
   /**
-   * CM's contract (conversation-manager.ts:766-778): on init retry the
-   * row flips back to `starting` (pid cleared — the failed child is
+   * Inherited contract from the original ConversationManager runtime:
+   * on init retry the row flips back to `starting` (pid cleared — the
+   * failed child is
    * gone; the retry's new child gets a fresh pid via a later spawn),
    * and the SSE carries `reason='init_timeout_retrying'` so the
    * renderer's status patcher shows the retry attempt without

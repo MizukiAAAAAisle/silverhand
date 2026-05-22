@@ -1,32 +1,18 @@
 /**
  * Stdin-message formatters used by every (conv, agent) delivery path —
  * live wakes, inbox drain at spawn, gated/combined batches, and the
- * soft-stop directive. Lifted out of `conversation-manager.ts` so both
- * the legacy in-process path and the daemon shim (`DaemonAgentRuntimeHost`)
- * use byte-identical wire format. CM imports from here; daemon-host
- * imports from here. No behavioral change vs CM's previous private
- * helpers — function names, signatures, and bodies are unchanged
- * apart from the export keyword. Tests for each formatter still live
- * under CM's own test files (round-tripped via the legacy spawn path);
- * a dedicated unit test for daemon-host's `deliverMessage` exercises
- * the same surface separately.
- *
- * # Why a separate module
- *
- * 2b-ii slice 4 needs `DaemonAgentRuntimeHost.deliverMessage` and
- * `start` to emit the same stdin payload bytes CM does, OR an
- * end-user-visible drift surfaces between `SILVERHAND_RUNTIME_HOST=legacy`
- * and `SILVERHAND_RUNTIME_HOST=daemon` (e.g. agents formatted the
- * stdin meta header one way in legacy and another way in daemon).
- * The cheapest way to enforce byte-equality is to share the function
- * — lift, re-import, no copy-paste.
+ * soft-stop directive. Lifted out of the (now-removed)
+ * `conversation-manager.ts` during the daemon cutover so both runtime
+ * paths used byte-identical wire format. The legacy CM runtime was
+ * deleted in #task:512 cleanup Commit B; these formatters are now the
+ * single source of truth for stdin encoding and are consumed only by
+ * `DaemonAgentRuntimeHost`.
  *
  * # What's NOT here
  *
- * - `buildPromptContext` — owns DB + file IO + workspace memory
- *   index lookups; staying on CM until slice 4c does a separate lift.
- * - `prepareSpawnFiles` — already in its own module (`spawn-prep.ts`).
- * - `sanitizeParsedEventForBroadcast` — already in `event-sanitize.ts`.
+ * - `buildPromptContext` — its own module (`prompt-context.ts`).
+ * - `prepareSpawnFiles` — its own module (`spawn-prep.ts`).
+ * - `sanitizeParsedEventForBroadcast` — its own module (`event-sanitize.ts`).
  *
  * # Surface
  *
@@ -44,10 +30,9 @@ import { extractAttachmentSnapshotsFromRow } from '../repos/message-repo.js';
 
 /** The CLI tool name an agent should call to reply. Kept as a function
  *  signature for forward compat — if a non-claude driver ever needed a
- *  per-driver tool label we'd switch on `driver.kind` here. CM's
- *  original lived inside `conversation-manager.ts` and ignored its
- *  arg; preserve the signature so the daemon shim can call with
- *  exactly the same args. */
+ *  per-driver tool label we'd switch on `driver.kind` here. The arg is
+ *  ignored today; the signature mirrors the lifted-from-CM helper so
+ *  call sites stayed unchanged across the cutover. */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function sendMessageToolName(_driver: Driver): string {
   return 'silverhand message send';

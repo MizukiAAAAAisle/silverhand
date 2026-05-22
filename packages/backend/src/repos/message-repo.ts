@@ -97,8 +97,9 @@ export function extractAttachmentSnapshots(
 }
 
 /** Convenience: parse-and-extract from a raw MessageRow, since callers
- *  outside the DTO mapper (e.g. the conversation-manager formatters that
- *  receive MessageRow from the inbox repo) want the typed list directly. */
+ *  outside the DTO mapper (e.g. the stdin formatters in
+ *  `runtime/stdin-format.ts` that receive MessageRow from the inbox
+ *  repo) want the typed list directly. */
 export function extractAttachmentSnapshotsFromRow(
   row: { metadata: string | null },
 ): AttachmentSnapshot[] | null {

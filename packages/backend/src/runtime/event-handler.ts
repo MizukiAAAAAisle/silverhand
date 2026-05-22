@@ -186,8 +186,8 @@ export interface RuntimeEventHandlerDeps {
    *  coordinator can clear any live-wake stuck indicator. */
   onInitTimeout?: RuntimeInitTimeoutHandler;
   /** Optional backend-owned JSONL sink for `agent_activity` parity
-   * with the legacy ConversationManager path. Writing must never
-   * block or fail the SSE publish path. */
+   * with the original ConversationManager runtime contract. Writing
+   * must never block or fail the SSE publish path. */
   activityLog?: ActivityLogWriter;
   logger?: RuntimeEventHandlerLogger;
 }
@@ -372,7 +372,8 @@ export class RuntimeEventHandler {
         this.forwardInitTimeout(frame.conversation_id, frame.agent_id, frame.event);
         // Stash the timeout_reason so a follow-up runtime_init_retrying
         // can join it into the `agent_status starting reason=init_timeout_retrying`
-        // projection (CM's contract — see conversation-manager.ts:2108-2116).
+        // projection (contract preserved from the original
+        // ConversationManager runtime).
         this.lastTimeoutReason.set(`${frame.conversation_id}|${frame.agent_id}`, frame.timeout_reason);
         // If the daemon won't retry, this is a terminal init failure
         // that the next runtime_exit will follow. Mark so the
@@ -443,12 +444,12 @@ export class RuntimeEventHandler {
         });
         return;
       case 'runtime_parsed_event':
-        // Project to the CM-equivalent `agent_event` SSE shape so
-        // the renderer's Events panel and the agent-event listeners
-        // can't tell which path produced the publish. MUST run
+        // Project to the historical `agent_event` SSE shape so the
+        // renderer's Events panel and the agent-event listeners can't
+        // tell which runtime produced the publish. MUST run
         // sanitization here (`tool_call.input` size cap + recursion
-        // depth + cycle detection) — same call as CM
-        // `conversation-manager.ts:1338-1341`. Cindy
+        // depth + cycle detection) — invariant inherited from the
+        // original ConversationManager runtime; Cindy
         // `ch9ZsU0v0ATr6tr8` carried-forward blocker for commit 5
         // unit 1.
         this.events.publish(frame.conversation_id, {
@@ -462,11 +463,11 @@ export class RuntimeEventHandler {
         // as a parsed `session_init` event. Project to DB
         // (`status='active', cli_session_id=<id>`) + `agent_status` SSE
         // via the projector. Claude emits `system.init` at the start of
-        // EVERY turn (see conversation-manager.ts:1182-1189) — projector
-        // writes are idempotent at the DB + SSE layer so no dedup here.
-        // The coordinator owns dedup of NON-idempotent side effects
-        // (init-pending inbox ack, drainInbox) via its own
-        // `initObserved` state (B3).
+        // EVERY turn — invariant inherited from the original
+        // ConversationManager runtime; projector writes are idempotent
+        // at the DB + SSE layer so no dedup here. The coordinator owns
+        // dedup of NON-idempotent side effects (init-pending inbox
+        // ack, drainInbox) via its own `initObserved` state (B3).
         if (frame.parsed.kind === 'session_init') {
           this.statusProjector.sessionInit({
             conversationId: frame.conversation_id,

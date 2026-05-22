@@ -41,23 +41,22 @@
  *     `publishInitCooldown`); the success arm flips the row to
  *     `starting` + the daemon-reported pid.
  *
- * Daemon mode is the only supported runtime path post-Commit B.
- * `SILVERHAND_RUNTIME_HOST=legacy` is now a loud boot-time throw — the
- * old in-process ConversationManager execution surface was deleted
- * with this commit. The env switch itself is retained for one more
- * commit (Commit C) so an operator who pinned `=legacy` during the
- * soak window sees a clear "removed" message at boot rather than an
- * unrelated parse failure.
+ * Daemon is the only supported runtime path. The legacy in-process
+ * ConversationManager runtime was removed in #task:512 cleanup
+ * Commit B; the `SILVERHAND_RUNTIME_HOST` env switch was removed in
+ * Commit C. There is no runtime fallback — backend `startBackend`
+ * throws if no `HostClient` is passed; `silverhand-daemon` is
+ * mandatory.
  *
  * # Why throws (and how this file uses them, preserved from 2a)
  *
  * Cindy `0G5uJBydO_4qt_2r`: "daemon mode 对这类未覆盖场景 fail
  * loudly / 明确保留 pending，不能假装 delivered、也不能改变
  * markDelivered 时点." A silent no-op would silently lose messages or
- * orphan UI state when an operator switches to daemon mode prematurely.
- * The `notImplemented` helper is preserved for future methods that
- * land before their tests do — it formats a loud error with the env
- * var, method name, and post-B "no runtime fallback" recovery note.
+ * orphan UI state when a future surface lands before its tests do.
+ * The `notImplemented` helper is preserved for that case — it formats
+ * a loud error with method name and the "no runtime fallback" recovery
+ * note.
  */
 import type { AgentRunState, AgentRunTerminalReason, ServerConfig } from '@silverhand/shared';
 import { systemSubtype } from '@silverhand/shared';
@@ -88,7 +87,6 @@ import type { RuntimeEventHandler } from './event-handler.js';
 import type { EventPublisher } from './event-handler.js';
 import { buildPromptContext } from './prompt-context.js';
 import type { RunStateCache } from './run-state-cache.js';
-import { SILVERHAND_RUNTIME_HOST_ENV } from './runtime-host-mode.js';
 import { buildBridgeBaseEnv } from './spawn-env.js';
 import { formatInboxBatch, formatLiveMessage, sendMessageToolName } from './stdin-format.js';
 
@@ -196,9 +194,9 @@ export interface DaemonAgentRuntimeHostDeps {
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 function notImplemented(method: string): Error {
   return new Error(
-    `${SILVERHAND_RUNTIME_HOST_ENV}=daemon: ${method}() is not yet implemented. ` +
+    `silverhand-daemon: ${method}() is not yet implemented. ` +
       `There is no runtime fallback — the legacy in-process ConversationManager runtime ` +
-      `was removed in Commit B of the cleanup sequence; daemon is the only supported runtime.`,
+      `was removed in #task:512 cleanup Commit B; daemon is the only supported runtime.`,
   );
 }
 
@@ -1155,10 +1153,10 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
    *      (conv, agent) pair is in the daemon snapshot, leave it alone
    *      — daemon owns that runtime. If it's NOT in the snapshot,
    *      treat it as stale: flip to `idle`, clear `pid`, KEEP
-   *      `cli_session_id` so the next start uses `--resume`. Mirrors
-   *      legacy CM's recovery contract (line 484-543 of
-   *      conversation-manager.ts) except we never SIGKILL — daemon
-   *      owns the child processes in this mode, not us.
+   *      `cli_session_id` so the next start uses `--resume`. Recovery
+   *      contract inherited from the original ConversationManager
+   *      runtime, except we never SIGKILL — daemon owns the child
+   *      processes, not us.
    *
    * Safety: if hydrate failed, `cache.daemonInstanceKey` is `null`. In
    * that case we DO NOT clear any DB rows — daemon may be alive but

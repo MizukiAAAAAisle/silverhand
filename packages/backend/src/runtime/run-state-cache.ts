@@ -60,12 +60,12 @@ import type {
 } from '@silverhand/shared';
 
 /**
- * Project a CM-style terminal status from a `AgentRunTerminalReason`.
- * Matches `conversation-manager.ts:2575-2579` verbatim — the same
- * mapping CM uses in `publishTerminalRunState` via its module-level
- * `terminalStatus` helper. Lifted here so the daemon-mode `resolveRun`
- * helpers below project identically. Keep these two definitions in
- * sync until commit 5's CM removal collapses them.
+ * Project a terminal status from an `AgentRunTerminalReason`. Mapping
+ * inherited verbatim from the original `ConversationManager` runtime's
+ * `publishTerminalRunState` / `terminalStatus` helper; lifted here so
+ * `resolveRun` projects identically. (The CM runtime itself was
+ * removed in #task:512 cleanup Commit B; this helper survived as the
+ * shared projection.)
  */
 function terminalStatusForReason(
   reason: AgentRunTerminalReason,

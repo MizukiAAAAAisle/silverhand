@@ -12,9 +12,9 @@
  * dispatch boundary for "who actually owns the child process" — the
  * silverhand-daemon.
  *
- * The interface mirrors the (now-deleted) `ConversationManager` public
+ * The interface mirrors the (now-removed) `ConversationManager` public
  * surface so all existing call sites (services, routes) stayed working
- * through the cleanup. Cindy `bJUazoeBrxK8XglK` blocker (1):
+ * across the cutover. Cindy `bJUazoeBrxK8XglK` blocker (1):
  * "按现有 call sites 精确建模，不要发明新形状".
  */
 import type {
@@ -39,11 +39,6 @@ export interface ClearSessionResult {
 /**
  * Backend-side facade for the per-(conversation, agent) runtime
  * lifecycle. Only implementation: `DaemonAgentRuntimeHost`.
- *
- * @see ./runtime-host-mode.ts for the (transitional) boot-time mode
- *   switch — the legacy path is gone, but the env switch survives one
- *   more commit so daemon-mode operators can roll back to a clear
- *   "legacy unsupported" error instead of a silent crash.
  */
 export interface AgentRuntimeHost {
   // ── lifecycle ───────────────────────────────────────────────────
@@ -93,8 +88,7 @@ export interface AgentRuntimeHost {
   // ── delivery ────────────────────────────────────────────────────
   /**
    * Hand a message to the (conv, agent) runtime. Persists to inbox if
-   * the runtime is offline; injects via stdin (legacy) or
-   * `runtime_wake` (daemon) if running.
+   * the runtime is offline; injects via `runtime_wake` if running.
    */
   deliverMessage(
     conversationId: string,
@@ -106,17 +100,12 @@ export interface AgentRuntimeHost {
   /**
    * Backend boot: reconcile stale `conversation_agents` rows.
    *
-   * - Legacy: there are no in-process handles after a crash, so any
-   *   row with `status IN ('starting','active')` is stale → flip to
-   *   `'idle'`, clear pid, keep `cli_session_id` so next start uses
-   *   `--resume`.
-   * - Daemon: `runtime_status` hydrate is the ground truth.
-   *   Snapshot-active runtimes are NOT touched (daemon is supervising
-   *   them); rows absent from the snapshot are stale and cleared.
+   * `runtime_status` hydrate is the ground truth: snapshot-active
+   * runtimes are NOT touched (daemon is supervising them); rows
+   * absent from the snapshot are stale and cleared.
    *
-   * Return type allows either sync (legacy in-process) or async
-   * (daemon mode needs to await the bridge round-trip before diffing).
-   * Callers MUST handle both via `await ctx.runtimeHost.reconcileOnBoot()`.
+   * Async because the daemon hydrate needs a bridge round-trip
+   * before diffing. Callers MUST `await ctx.runtimeHost.reconcileOnBoot()`.
    */
   reconcileOnBoot(): void | Promise<void>;
 

@@ -105,13 +105,11 @@ export interface BackendContext {
    * routes route every spawn / stop / wake / clearSession / inbox
    * delivery / run-state read through this single interface.
    *
-   * The only implementation post-Commit B is `DaemonAgentRuntimeHost`
-   * (silverhand-daemon over `RuntimeBridge`). The transitional
-   * `SILVERHAND_RUNTIME_HOST=legacy` rollback is now a loud boot-time
-   * throw — the in-process `ConversationManager` surfaces have been
-   * removed. The env switch itself disappears in a follow-up commit
-   * (kept for one more diff so an operator hitting the throw sees a
-   * stable error message rather than an unrelated parse failure).
+   * The only implementation is `DaemonAgentRuntimeHost`
+   * (silverhand-daemon over `RuntimeBridge`). The in-process
+   * `ConversationManager` runtime was removed in #task:512 cleanup
+   * Commit B and the `SILVERHAND_RUNTIME_HOST` env switch was removed
+   * in Commit C — there is no runtime fallback.
    */
   runtimeHost: AgentRuntimeHost;
 }
