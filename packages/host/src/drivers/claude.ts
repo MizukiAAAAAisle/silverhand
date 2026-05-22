@@ -113,6 +113,9 @@ export class ClaudeDriver implements Driver {
         if (event.subtype === 'init' && typeof event.session_id === 'string') {
           events.push({ kind: 'session_init', sessionId: event.session_id });
         }
+        if (event.subtype === 'api_error') {
+          events.push(parseClaudeApiError(event));
+        }
         if (event.subtype === 'status' && event.status === 'compacting') {
           events.push({ kind: 'compaction_started' });
         }
@@ -229,6 +232,33 @@ export class ClaudeDriver implements Driver {
     }
     return event && typeof event === 'object' ? 'protocol_ready' : null;
   }
+}
+
+function parseClaudeApiError(event: any): ParsedEvent {
+  const causeCode =
+    typeof event.error?.cause?.code === 'string'
+      ? event.error.cause.code
+      : typeof event.cause?.code === 'string'
+        ? event.cause.code
+        : null;
+  const retryAttempt =
+    typeof event.retryAttempt === 'number' && Number.isFinite(event.retryAttempt)
+      ? event.retryAttempt
+      : null;
+  const code =
+    causeCode === 'ConnectionRefused'
+      ? 'api_connection_refused'
+      : 'api_error';
+  const base =
+    causeCode === 'ConnectionRefused'
+      ? 'Claude API gateway unreachable; retrying'
+      : 'Claude API request failed; retrying';
+  return {
+    kind: 'error',
+    code,
+    message:
+      retryAttempt !== null ? `${base} (attempt ${retryAttempt})` : base,
+  };
 }
 
 function collectResultError(event: any): string {

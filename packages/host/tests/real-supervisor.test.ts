@@ -1111,6 +1111,37 @@ describe('RealSupervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGD
     await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
   });
 
+  it('non-fatal parsed errors surface as thinking activity instead of leaving the UI idle', async () => {
+    const { driver } = makeProgrammableDriver(['--emit-line', 'A']);
+    const { supervisor, events } = makeSupervisorWithDriver(driver);
+    let step = 0;
+    const sequence: ParsedEvent[][] = [
+      [],
+      [
+        {
+          kind: 'error',
+          code: 'api_connection_refused',
+          message: 'Claude API gateway unreachable; retrying (attempt 1)',
+        },
+      ],
+    ];
+    driver.parseLine = () => sequence[step++] ?? [];
+
+    await supervisor.start(baseStartParams);
+
+    await waitFor(() =>
+      events.some(
+        e =>
+          e.event === 'runtime_state' &&
+          e.state.status === 'thinking' &&
+          e.state.activitySnippet ===
+            'Claude API gateway unreachable; retrying (attempt 1)',
+      ),
+    );
+
+    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+
   it('a parsed event whose encoded frame exceeds MAX_FRAME_BYTES is downgraded to runtime_parsed_event_dropped (no payload leaked)', async () => {
     const { driver } = makeProgrammableDriver(['--emit-line', 'A']);
     const { supervisor, events } = makeSupervisorWithDriver(driver);

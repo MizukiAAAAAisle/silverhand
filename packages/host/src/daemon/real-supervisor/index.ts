@@ -1689,9 +1689,13 @@ export class RealSupervisor implements Supervisor {
         this.resolveRun(handle, 'turn_ended');
         break;
       case 'error':
-        // Errors don't mutate run-state directly in 3b — backend
-        // owns the user-visible error projection. 3c may add a
-        // fatal-error → terminalReason path.
+        if (parsed.fatal !== true) {
+          this.transitionRunState(handle, {
+            status: 'thinking',
+            detail: null,
+            activitySnippet: parsed.message,
+          });
+        }
         break;
       case 'unknown':
         // No-op; backend may decide what to do with it.

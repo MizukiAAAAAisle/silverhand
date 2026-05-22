@@ -100,3 +100,34 @@ describe('ClaudeDriver.classifyInitProgress', () => {
     expect(new ClaudeDriver().classifyInitProgress('not json')).toBeNull();
   });
 });
+
+describe('ClaudeDriver.parseLine', () => {
+  it('projects Claude system api_error as a safe non-fatal error event', () => {
+    const events = new ClaudeDriver().parseLine(
+      JSON.stringify({
+        type: 'system',
+        subtype: 'api_error',
+        level: 'error',
+        error: {
+          type: null,
+          cause: {
+            code: 'ConnectionRefused',
+            path: 'http://127.0.0.1:9090/v1/messages?beta=true',
+            errno: 0,
+          },
+        },
+        retryAttempt: 3,
+      }),
+    );
+
+    expect(events).toEqual([
+      {
+        kind: 'error',
+        code: 'api_connection_refused',
+        message: 'Claude API gateway unreachable; retrying (attempt 3)',
+      },
+    ]);
+    expect(JSON.stringify(events)).not.toContain('127.0.0.1');
+    expect(JSON.stringify(events)).not.toContain('/v1/messages');
+  });
+});
