@@ -1,6 +1,14 @@
 import { createWriteStream, mkdirSync, type WriteStream } from 'node:fs';
 import { join } from 'node:path';
+import {
+  parseSilverhandLogLevel,
+  sanitizeLogFields,
+  SILVERHAND_LOG_LEVEL_ENV,
+  type SilverhandLogLevel,
+} from '@silverhand/shared';
 import type { BackendLogger } from './context.js';
+
+type LogEventLevel = SilverhandLogLevel | 'error';
 
 export interface FileLoggerOptions {
   /** Directory to write logs into. One file per backend boot. */
@@ -13,15 +21,34 @@ export interface FileLoggerOptions {
    *  to `backend` so existing callers continue writing to
    *  `backend-<utc>.log`. */
   filenamePrefix?: string;
+  /** Shared mutable level/window state. Categorized loggers pass one
+   *  instance so system/agent/cli sinks change together. */
+  logControl?: LogLevelControl;
 }
 
 export interface FileLogger extends BackendLogger {
   /** Absolute path of the log file currently being written. */
   filePath: string;
+  /** Mutable level/window state used by this logger and its children. */
+  logControl: LogLevelControl;
+  debug(obj: unknown, msg?: string): void;
   /** Returns a child logger that merges `bindings` into every line. */
   child(bindings: Record<string, unknown>): FileLogger;
   /** Flush + close the underlying stream. Idempotent. */
   close(): Promise<void>;
+}
+
+export interface ConversationDebugStatus {
+  enabled: boolean;
+  expiresAt: number | null;
+}
+
+export interface LogLevelControl {
+  getGlobalLevel(): SilverhandLogLevel;
+  setGlobalLevel(level: SilverhandLogLevel): void;
+  enableConversationDebug(conversationId: string, expiresAt: number): void;
+  disableConversationDebug(conversationId: string): void;
+  getConversationDebugStatus(conversationId: string): ConversationDebugStatus;
 }
 
 /**
@@ -29,9 +56,10 @@ export interface FileLogger extends BackendLogger {
  * (default `prefix = backend`). Format: one JSON object per line —
  * `{ ts, level, msg, ...fields }`.
  *
- * Level is info|warn|error. We expose a separate `debug` mirror that
- * only writes when `SILVERHAND_LOG_DEBUG=1` so high-volume parser
- * traces don't drown the file by default.
+ * Level is debug|info|warn|error. `SILVERHAND_LOG_LEVEL` accepts
+ * warn|info|debug and defaults to warn. Per-conversation debug
+ * windows are held in the shared `LogLevelControl`; a line must carry
+ * `conversationId` to be lifted by that window.
  */
 export function createFileLogger(opts: FileLoggerOptions): FileLogger {
   mkdirSync(opts.dir, { recursive: true });
@@ -41,8 +69,9 @@ export function createFileLogger(opts: FileLoggerOptions): FileLogger {
   const stream = createWriteStream(filePath, { flags: 'a' });
   const alsoConsole = opts.alsoConsole ?? true;
   const base: Record<string, unknown> = { pid: process.pid, ...(opts.base ?? {}) };
+  const logControl = opts.logControl ?? createLogLevelControl();
 
-  return makeLogger(stream, filePath, alsoConsole, base);
+  return makeLogger(stream, filePath, alsoConsole, base, logControl);
 }
 
 /**
@@ -68,15 +97,66 @@ export interface CategorizedLoggers {
   system: FileLogger;
   agent: FileLogger;
   cli: FileLogger;
+  logControl: LogLevelControl;
 }
 
 export function createCategorizedLoggers(
   opts: Omit<FileLoggerOptions, 'filenamePrefix'>,
 ): CategorizedLoggers {
+  const logControl = opts.logControl ?? createLogLevelControl();
   return {
-    system: createFileLogger({ ...opts, filenamePrefix: 'backend' }),
-    agent: createFileLogger({ ...opts, filenamePrefix: 'agent' }),
-    cli: createFileLogger({ ...opts, filenamePrefix: 'cli' }),
+    system: createFileLogger({ ...opts, filenamePrefix: 'backend', logControl }),
+    agent: createFileLogger({ ...opts, filenamePrefix: 'agent', logControl }),
+    cli: createFileLogger({ ...opts, filenamePrefix: 'cli', logControl }),
+    logControl,
+  };
+}
+
+export function createLogLevelControl(
+  initialLevel: SilverhandLogLevel = parseSilverhandLogLevel(
+    process.env[SILVERHAND_LOG_LEVEL_ENV],
+  ),
+): LogLevelControl {
+  let globalLevel = initialLevel;
+  const windows = new Map<string, { expiresAt: number; timer: ReturnType<typeof setTimeout> }>();
+
+  const clearWindow = (conversationId: string): void => {
+    const existing = windows.get(conversationId);
+    if (existing) clearTimeout(existing.timer);
+    windows.delete(conversationId);
+  };
+
+  const purgeExpired = (conversationId: string, now = Date.now()): void => {
+    const existing = windows.get(conversationId);
+    if (!existing) return;
+    if (existing.expiresAt <= now) clearWindow(conversationId);
+  };
+
+  return {
+    getGlobalLevel: () => globalLevel,
+    setGlobalLevel: level => {
+      globalLevel = level;
+    },
+    enableConversationDebug: (conversationId, expiresAt) => {
+      clearWindow(conversationId);
+      const delay = expiresAt - Date.now();
+      if (delay <= 0) return;
+      const timer = setTimeout(() => {
+        windows.delete(conversationId);
+      }, delay);
+      timer.unref?.();
+      windows.set(conversationId, { expiresAt, timer });
+    },
+    disableConversationDebug: conversationId => {
+      clearWindow(conversationId);
+    },
+    getConversationDebugStatus: conversationId => {
+      purgeExpired(conversationId);
+      const existing = windows.get(conversationId);
+      return existing
+        ? { enabled: true, expiresAt: existing.expiresAt }
+        : { enabled: false, expiresAt: null };
+    },
   };
 }
 
@@ -85,19 +165,23 @@ function makeLogger(
   filePath: string,
   alsoConsole: boolean,
   base: Record<string, unknown>,
+  logControl: LogLevelControl,
 ): FileLogger {
-  const write = (level: 'info' | 'warn' | 'error', obj: unknown, msg?: string) => {
-    const fields =
+  const safeBase = sanitizeLogFields(base);
+  const write = (level: LogEventLevel, obj: unknown, msg?: string) => {
+    const rawFields =
       obj && typeof obj === 'object' && !(obj instanceof Error)
         ? (obj as Record<string, unknown>)
         : { data: serializeUnknown(obj) };
+    const fields = sanitizeLogFields(rawFields);
     const line = {
       ts: new Date().toISOString(),
       level,
       msg: msg ?? '',
-      ...base,
+      ...safeBase,
       ...fields,
     };
+    if (!shouldWrite(level, line, logControl)) return;
     stream.write(safeStringify(line) + '\n');
     if (alsoConsole) {
       const fn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
@@ -107,16 +191,40 @@ function makeLogger(
 
   return {
     filePath,
+    logControl,
+    debug: (obj, msg) => write('debug', obj, msg),
     info: (obj, msg) => write('info', obj, msg),
     warn: (obj, msg) => write('warn', obj, msg),
     error: (obj, msg) => write('error', obj, msg),
-    child: bindings => makeLogger(stream, filePath, alsoConsole, { ...base, ...bindings }),
+    child: bindings =>
+      makeLogger(stream, filePath, alsoConsole, { ...safeBase, ...bindings }, logControl),
     close: () =>
       new Promise<void>(resolve => {
         stream.end(() => resolve());
       }),
   };
 }
+
+function shouldWrite(
+  eventLevel: LogEventLevel,
+  line: Record<string, unknown>,
+  logControl: LogLevelControl,
+): boolean {
+  if (eventLevel === 'error') return true;
+  const conversationId = typeof line.conversationId === 'string' ? line.conversationId : null;
+  const effectiveLevel =
+    conversationId && logControl.getConversationDebugStatus(conversationId).enabled
+      ? 'debug'
+      : logControl.getGlobalLevel();
+  return LEVEL_RANK[eventLevel] >= LEVEL_RANK[effectiveLevel];
+}
+
+const LEVEL_RANK: Record<LogEventLevel, number> = {
+  debug: 10,
+  info: 20,
+  warn: 30,
+  error: 40,
+};
 
 function serializeUnknown(v: unknown): unknown {
   if (v instanceof Error) {

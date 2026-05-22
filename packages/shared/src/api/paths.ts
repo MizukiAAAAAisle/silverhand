@@ -89,6 +89,7 @@ export const apiPaths = {
    *  unread state. Permission: workspace member of the target
    *  conversation's workspace. */
   conversationRef: (id: string) => `/api/conversations/${id}/ref`,
+  conversationLogDebug: (id: string) => `/api/conversations/${id}/log-debug`,
 
   /** Members (agents + humans) of any conversation by id (channel /
    *  dm_channel / thread). Backs the chat-header member chips. The

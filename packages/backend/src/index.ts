@@ -59,6 +59,7 @@ import { createLocalBlobFileStorage } from './storage/blob-file-storage.js';
 import type { ServerConfig } from '@silverhand/shared';
 import type { HostClient } from '@silverhand/host';
 import type { Server as HttpServer } from 'node:http';
+import { createLogLevelControl, type LogLevelControl } from './logger.js';
 
 export interface CreateBackendOptions {
   dbPath: string;
@@ -98,6 +99,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     agent: opts.loggers?.agent ?? logger,
     cli: opts.loggers?.cli ?? logger,
   };
+  const logControl = resolveLogControl(loggers.system);
   const db = openDatabase(opts.dbPath);
   const workspacesRoot = join(opts.silverhandDir, 'workspaces');
   const blobStorage = createLocalBlobFileStorage({ silverhandDir: opts.silverhandDir });
@@ -131,6 +133,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     serverConfig: opts.serverConfig,
     logger,
     loggers,
+    logControl,
     silverhandDir: opts.silverhandDir,
     workspacesRoot,
     logDir: opts.logDir,
@@ -265,7 +268,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
       const host = daemonHostRef;
       if (!host) {
         logger.warn(
-          { kind: 'runtime', conv_id: cid, agent_id: aid },
+          { kind: 'runtime', conversationId: cid, agent_id: aid },
           'drain: ready_for_drain fired before DaemonHost wired; skipping',
         );
         return;
@@ -459,10 +462,17 @@ export type { BackendContext, BackendLogger, BackendLoggers } from './context.js
 export {
   createCategorizedLoggers,
   createFileLogger,
+  createLogLevelControl,
   type CategorizedLoggers,
   type FileLogger,
   type FileLoggerOptions,
+  type LogLevelControl,
 } from './logger.js';
+
+function resolveLogControl(logger: BackendLogger): LogLevelControl {
+  const candidate = logger as BackendLogger & { logControl?: LogLevelControl };
+  return candidate.logControl ?? createLogLevelControl();
+}
 
 function assertLauncherResolvable(command: string, label = 'launcher'): void {
   if (isAbsolute(command)) {

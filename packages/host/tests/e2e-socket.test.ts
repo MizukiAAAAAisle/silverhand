@@ -29,10 +29,12 @@ async function setupFixture(): Promise<E2eFixture> {
   const socketPath = join(dir, 'daemon.sock');
   const pidFilePath = join(dir, 'daemon.pid');
   const logDir = join(dir, 'logs');
+  const runtimePidRootDir = join(dir, 'runtime-pids');
   const daemon = await runDaemon({
     socketPath,
     pidFilePath,
     logDir,
+    runtimePidRootDir,
     installSignals: false,
     writeStdoutHandshake: false,
     alsoStderr: false,
@@ -108,6 +110,7 @@ describe('e2e — real Unix socket', () => {
         socketPath: join(f.dir, 'other.sock'),
         pidFilePath: f.pidFilePath,
         logDir: f.logDir,
+        runtimePidRootDir: join(f.dir, 'other-runtime-pids'),
         installSignals: false,
         writeStdoutHandshake: false,
         supervisorFactory: null,

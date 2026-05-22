@@ -43,7 +43,6 @@ import {
 } from '../protocol.js';
 import type { IntentDispatcher } from './dispatcher.js';
 import type { DaemonLogger } from './logger.js';
-import { DAEMON_VERSION } from './version.js';
 import {
   OutputBackpressure,
   type OutputBackpressureOptions,
@@ -81,7 +80,7 @@ export class DaemonServer {
         // window (`dropped_count === 1`) plus the recovery summary.
         if (entry.kind === 'drop' && entry.dropped_count !== 1) return;
         logBackpressure(this.logger, {
-          conv_id: entry.conversation_id,
+          conversationId: entry.conversation_id,
           agent_id: entry.agent_id,
           action: 'dropped',
           buffer_bytes: entry.buffer_bytes,
@@ -97,7 +96,7 @@ export class DaemonServer {
       onSummaryEvent: opts.backpressure?.onSummaryEvent ?? (event => {
         logEvent(this.logger, {
           event: event.event,
-          conv_id: 'conversation_id' in event ? event.conversation_id : undefined,
+          conversationId: 'conversation_id' in event ? event.conversation_id : undefined,
           agent_id: 'agent_id' in event ? event.agent_id : undefined,
           dropped_count:
             'dropped_count' in event ? event.dropped_count : undefined,
@@ -218,9 +217,9 @@ export class DaemonServer {
     socket.write(
       encodeFrame({
         event: 'ready',
+        ...this.dispatcher.getHelloResult(),
         socket_path: this.socketPath,
         daemon_pid: process.pid,
-        daemon_version: DAEMON_VERSION,
         started_at: this.dispatcher.getStartedAt(),
       }),
     );
@@ -311,7 +310,7 @@ export class DaemonServer {
     // / chunk content NEVER appears.
     logEvent(this.logger, {
       event: event.event,
-      conv_id: 'conversation_id' in event ? event.conversation_id : undefined,
+      conversationId: 'conversation_id' in event ? event.conversation_id : undefined,
       agent_id: 'agent_id' in event ? event.agent_id : undefined,
       delivery_ids: 'delivery_ids' in event ? event.delivery_ids : undefined,
       dropped_count:

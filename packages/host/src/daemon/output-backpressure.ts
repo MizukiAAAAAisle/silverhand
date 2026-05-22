@@ -88,7 +88,7 @@ export interface OutputBackpressureOptions {
   highWaterBytes?: number;
   /** Override the recovery low-water threshold. Must be ≤ high-water. */
   lowWaterBytes?: number;
-  /** Optional structured logger hook; receives `{ conv_id, agent_id,
+  /** Optional structured logger hook; receives `{ conversationId, agent_id,
    *  bytes_dropped, dropped_count, buffer_bytes }` per dropped chunk
    *  and per emitted summary. */
   logDrop?: (entry: {

@@ -9,7 +9,8 @@
  *    chunks, no inbox row content, no system-prompt / MEMORY /
  *    CONSENSUS file content, no env values.
  *  - **Field-name guard.** Any field whose name suggests content
- *    (`payload`, `chunk`, `body`, `text`, `prompt`, `env_*`) is
+ *    (`payload`, `chunk`, `body`, `text`, `prompt`, `env`, `env_*`,
+ *    `stdout`, `stderr`, `soft_directive`) is
  *    forbidden — even an empty string. This is enforced **at compile
  *    time** by the `*Log` parameter types: each helper accepts only
  *    the listed allow-list of field names.
@@ -36,6 +37,11 @@
  * `chunk: '...'` to an intent log") is caught by the type system,
  * not by hoping reviewers spot it.
  */
+import {
+  findForbiddenLogFields,
+  FORBIDDEN_LOG_FIELD_PREFIXES,
+  FORBIDDEN_LOG_FIELDS,
+} from '@silverhand/shared';
 import type { DaemonLogger } from './logger.js';
 
 /**
@@ -43,22 +49,7 @@ import type { DaemonLogger } from './logger.js';
  * verify no log entry passed through any helper carries any of these
  * as a field name.
  */
-export const FORBIDDEN_LOG_FIELDS = [
-  'payload',
-  'chunk',
-  'body',
-  'text',
-  'prompt',
-  // `line` is the raw NDJSON frame string. The malformed-JSON path in
-  // server.ts CANNOT use zod (parse already failed), so the only debug
-  // information available is the line itself — which may carry stdin
-  // / payload bytes. Forbid the field name as a tripwire so future
-  // edits can't accidentally log it. Use `line_bytes` instead. (Cindy
-  // `9rxtrdT2NXfX2zEs` round-3 blocker.)
-  'line',
-] as const;
-
-export const FORBIDDEN_LOG_FIELD_PREFIXES = ['env_'] as const;
+export { FORBIDDEN_LOG_FIELD_PREFIXES, FORBIDDEN_LOG_FIELDS };
 
 // ── Intent ──────────────────────────────────────────────────────────
 
@@ -75,7 +66,7 @@ export interface IntentLog {
   intent: string;
   request_id: string;
   status: 'received' | 'ok' | 'error';
-  conv_id?: string;
+  conversationId?: string;
   agent_id?: string;
   error_code?: string;
   duration_ms?: number;
@@ -99,7 +90,7 @@ export function logIntent(logger: DaemonLogger, entry: IntentLog): void {
  */
 export interface EventLog {
   event: string;
-  conv_id?: string;
+  conversationId?: string;
   agent_id?: string;
   pid?: number;
   delivery_ids?: number[];
@@ -120,7 +111,7 @@ export function logEvent(logger: DaemonLogger, entry: EventLog): void {
 export interface ProcessLog {
   action: 'spawn' | 'exit' | 'sigterm' | 'sigkill' | 'reclaim';
   pid: number;
-  conv_id?: string;
+  conversationId?: string;
   agent_id?: string;
   exit_code?: number | null;
   /** Whether the cmdline of `pid` matched our identity tokens (for
@@ -159,7 +150,7 @@ export function logDaemon(logger: DaemonLogger, entry: DaemonLifecycleLog): void
  * helper.
  */
 export interface BackpressureLog {
-  conv_id: string;
+  conversationId: string;
   agent_id: string;
   action: 'dropped' | 'paused' | 'resumed';
   buffer_bytes: number;
@@ -183,18 +174,5 @@ export function logBackpressure(
 export function findForbiddenFields(
   entry: Record<string, unknown>,
 ): string[] {
-  const hits: string[] = [];
-  for (const key of Object.keys(entry)) {
-    if ((FORBIDDEN_LOG_FIELDS as readonly string[]).includes(key)) {
-      hits.push(key);
-      continue;
-    }
-    for (const prefix of FORBIDDEN_LOG_FIELD_PREFIXES) {
-      if (key.startsWith(prefix)) {
-        hits.push(key);
-        break;
-      }
-    }
-  }
-  return hits;
+  return findForbiddenLogFields(entry);
 }

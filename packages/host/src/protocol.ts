@@ -37,15 +37,76 @@
 import { z } from 'zod';
 import {
   AgentRunStateSchema,
+  HostKindSchema,
   ParsedEventKindSchema,
   ParsedEventSchema,
 } from '@silverhand/shared';
 
+// ── Protocol handshake ─────────────────────────────────────────────
+//
+// This is the v1 starting point for the daemon IPC protocol. Bumping
+// the protocol version is a compatibility event, not a package-version
+// bump: clients fail loud during `hello` if the daemon speaks a
+// different version.
+
+export const HOST_PROTOCOL_VERSION = 1;
+
+export const KNOWN_CAPABILITIES_V1 = [
+  'runtime.claude',
+  'runtime.codex',
+  'runtime.cursor',
+  'transport.unix_socket',
+  'fs.local',
+  'proxy.env_inherit',
+] as const;
+export type KnownCapabilityV1 = typeof KNOWN_CAPABILITIES_V1[number];
+
+export const HelloParamsSchema = z.object({}).strict();
+export type HelloParams = z.infer<typeof HelloParamsSchema>;
+
+export const HelloResultSchema = z
+  .object({
+    protocol_version: z.number().int().positive(),
+    daemon_version: z.string(),
+    /**
+     * Stable daemon-installation identity. For the bootstrap local
+     * daemon this is `local`; future multi-daemon installs will each
+     * report their own durable daemon_id.
+     */
+    daemon_id: z.string().min(1),
+    /**
+     * Ephemeral process-generation identity. Changes on every daemon
+     * boot and lets backend drop stale per-daemon runtime snapshots
+     * without confusing that with daemon placement.
+     */
+    instance_id: z.string().min(1),
+    /**
+     * Human-readable host claim. This is display / registry input,
+     * not a placement policy by itself; placement must also consider
+     * capabilities and backend-side assignment.
+     */
+    host_descriptor: z
+      .object({
+        name: z.string().min(1),
+        kind: HostKindSchema,
+      })
+      .strict(),
+    /**
+     * Deliberately `string[]`, not an enum. Unknown capabilities must
+     * remain wire-valid so older clients can ignore future daemon
+     * feature flags instead of rejecting the whole handshake.
+     */
+    capabilities: z.array(z.string()),
+  })
+  .strict();
+export type HelloResult = z.infer<typeof HelloResultSchema>;
+
 // ── Intent registry ─────────────────────────────────────────────────
 //
-// PR-1 intent surface is intentionally tiny: just enough to prove the
-// IPC carries structured payloads, plumbs lifecycle, and supports
-// reconnect. PR-2 expands this with the runtime_* family that the
+// PR-1 intent surface is intentionally tiny: hello gates protocol
+// compatibility, then ping/status/echo prove the IPC carries
+// structured payloads, plumbs lifecycle, and supports reconnect.
+// PR-2 expands this with the runtime_* family that the
 // design lock at `docs/silverhand-daemon-pr2-design.md` describes.
 //
 // PR-2 step 1 lands the wire schemas here PLUS a daemon-internal fake
@@ -58,7 +119,7 @@ import {
 //
 // Naming convention: every PR-2 intent / event prefixes with
 // `runtime_` so they are visually distinct from PR-1's
-// ping / status / echo lifecycle intents. The split is deliberate:
+// hello / ping / status / echo lifecycle intents. The split is deliberate:
 // runtime_* talk to a (conversation, agent) supervised process;
 // PR-1 lifecycle intents talk to the daemon as a whole.
 
@@ -104,6 +165,38 @@ export const EchoResultSchema = z
   })
   .strict();
 export type EchoResult = z.infer<typeof EchoResultSchema>;
+
+// ── conversation_log_debug ─────────────────────────────────────────
+
+export const ConversationLogDebugParamsSchema = z.discriminatedUnion('enabled', [
+  z
+    .object({
+      conversation_id: z.string().min(1),
+      enabled: z.literal(true),
+      expires_at: z.number().int().positive(),
+    })
+    .strict(),
+  z
+    .object({
+      conversation_id: z.string().min(1),
+      enabled: z.literal(false),
+    })
+    .strict(),
+]);
+export type ConversationLogDebugParams = z.infer<
+  typeof ConversationLogDebugParamsSchema
+>;
+
+export const ConversationLogDebugResultSchema = z
+  .object({
+    ok: z.literal(true),
+    enabled: z.boolean(),
+    expires_at: z.number().int().positive().nullable(),
+  })
+  .strict();
+export type ConversationLogDebugResult = z.infer<
+  typeof ConversationLogDebugResultSchema
+>;
 
 // ── PR-2 runtime_* surface ──────────────────────────────────────────
 //
@@ -550,6 +643,10 @@ export type RuntimeOutputResumeResult = z.infer<
  * to a handler.
  */
 export const intentSchemas = {
+  hello: {
+    params: HelloParamsSchema,
+    result: HelloResultSchema,
+  },
   ping: {
     params: PingParamsSchema,
     result: PingResultSchema,
@@ -561,6 +658,10 @@ export const intentSchemas = {
   echo: {
     params: EchoParamsSchema,
     result: EchoResultSchema,
+  },
+  conversation_log_debug: {
+    params: ConversationLogDebugParamsSchema,
+    result: ConversationLogDebugResultSchema,
   },
   runtime_start: {
     params: RuntimeStartParamsSchema,
@@ -699,11 +800,10 @@ export type ResponseFrame = z.infer<typeof ResponseFrameSchema>;
  *    truncated event onto the wire.
  */
 export const EventFrameSchema = z.discriminatedUnion('event', [
-  z.object({
+  HelloResultSchema.extend({
     event: z.literal('ready'),
     socket_path: z.string(),
     daemon_pid: z.number().int(),
-    daemon_version: z.string(),
     started_at: z.number().int(),
   }),
   z.object({

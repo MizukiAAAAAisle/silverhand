@@ -32,6 +32,10 @@ import type {
   RuntimeStopParams,
   RuntimeStopResult,
 } from '@silverhand/host';
+import {
+  HOST_PROTOCOL_VERSION,
+  KNOWN_CAPABILITIES_V1,
+} from '@silverhand/host';
 import type { AgentRunState } from '@silverhand/shared';
 import type { Database } from 'better-sqlite3';
 import { DaemonAgentRuntimeHost } from '../../src/runtime/daemon-agent-runtime-host.js';
@@ -771,7 +775,7 @@ describe('DaemonAgentRuntimeHost — stop (soft)', () => {
     expect(warned[0]!.msg).toMatch(/soft stop directive not delivered/);
     expect(warned[0]!.obj).toMatchObject({
       mode: 'daemon',
-      conv_id: CONV,
+      conversationId: CONV,
       agent_id: AGENT_X,
       reason: 'not_running',
     });
@@ -947,8 +951,13 @@ function makeReconcileFixture(): ReconcileFixture {
 function readyFrame(daemonPid: number, startedAt: number) {
   return {
     event: 'ready' as const,
+    protocol_version: HOST_PROTOCOL_VERSION,
     daemon_pid: daemonPid,
     daemon_version: 'test',
+    daemon_id: 'local',
+    instance_id: `${startedAt}-${daemonPid}`,
+    host_descriptor: { name: 'local', kind: 'local' as const },
+    capabilities: [...KNOWN_CAPABILITIES_V1],
     started_at: startedAt,
     socket_path: '/tmp/fake.sock',
   };
@@ -1715,7 +1724,7 @@ function makeDeliverFixture(
 function makeObservableCoordinator(cache: RunStateCache): {
   coordinator: RuntimeDeliveryCoordinator;
   wakeCalls: Array<{
-    conv_id: string;
+    conversationId: string;
     agent_id: string;
     delivery_ids: number[];
     text: string;
@@ -1749,7 +1758,7 @@ function makeObservableCoordinator(cache: RunStateCache): {
           | 'driver_refused';
       } = { delivered: true };
   const wakeCalls: Array<{
-    conv_id: string;
+    conversationId: string;
     agent_id: string;
     delivery_ids: number[];
     text: string;
@@ -1759,7 +1768,7 @@ function makeObservableCoordinator(cache: RunStateCache): {
     bridge: {
       runtimeWake: async params => {
         wakeCalls.push({
-          conv_id: params.conversation_id,
+          conversationId: params.conversation_id,
           agent_id: params.agent_id,
           delivery_ids: params.delivery_ids,
           text: params.text,
@@ -2016,7 +2025,7 @@ describe('DaemonAgentRuntimeHost — deliverMessage', () => {
 
       // Coordinator dispatched one wake.
       expect(wakeCalls.length).toBe(1);
-      expect(wakeCalls[0]!.conv_id).toBe(fix.channelId);
+      expect(wakeCalls[0]!.conversationId).toBe(fix.channelId);
       expect(wakeCalls[0]!.agent_id).toBe(fix.agentId);
       // Option A v2 (Cindy `UMGu36zoTDVuKWXi`): backend ships RAW text
       // (formatted via `formatLiveMessage`); daemon owns the
@@ -2703,7 +2712,7 @@ describe('DaemonAgentRuntimeHost — drainPending', () => {
       await host.drainPending(fix.channelId, fix.agentId);
 
       expect(wakeCalls).toHaveLength(1);
-      expect(wakeCalls[0]!.conv_id).toBe(fix.channelId);
+      expect(wakeCalls[0]!.conversationId).toBe(fix.channelId);
       expect(wakeCalls[0]!.agent_id).toBe(fix.agentId);
       // Option A v2 (Cindy `UMGu36zoTDVuKWXi`): backend ships RAW
       // combined text built by `formatInboxBatch` — the daemon owns

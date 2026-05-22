@@ -100,10 +100,15 @@ describe('daemon entry — production supervisor wiring (Cindy `MlwnvOfs-L5Nv_x2
     const socketPath = join(dir, 'daemon.sock');
     const pidFilePath = join(dir, 'daemon.pid');
     const logDir = join(dir, 'logs');
+    const homeDir = join(dir, 'home');
 
     let handle: DaemonHandle | null = null;
     handle = await spawnDaemonChild({
-      launcher: { command: TSX_BIN, args: [DAEMON_ENTRY] },
+      launcher: {
+        command: TSX_BIN,
+        args: [DAEMON_ENTRY],
+        env: { HOME: homeDir },
+      },
       socketPath,
       pidFilePath,
       logDir,

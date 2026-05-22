@@ -16,7 +16,12 @@ import type {
   TransportEvents,
   DecodedFrame,
 } from '../../src/client/transport.js';
-import { AnyFrameSchema, type RequestFrame } from '../../src/protocol.js';
+import {
+  AnyFrameSchema,
+  HOST_PROTOCOL_VERSION,
+  KNOWN_CAPABILITIES_V1,
+  type RequestFrame,
+} from '../../src/protocol.js';
 
 export interface FakeDaemonPeer {
   /** Inject a frame from the "daemon" side to the client. */
@@ -40,6 +45,10 @@ export function createFakeTransportPair(opts?: {
    *  connected; the very first frame to write will silently no-op so
    *  the client surfaces the failure as a `disconnected` error. */
   silentlyBroken?: boolean;
+  /** Auto-answer HostClient.connect()'s hello gate without recording
+   *  the request, keeping non-handshake tests focused on their own
+   *  first user intent. Disable to test protocol negotiation failures. */
+  autoHello?: boolean;
 }): FakeTransportPair {
   const handlers: { [K in keyof TransportEvents]: Set<TransportEvents[K]> } = {
     frame: new Set(),
@@ -49,6 +58,7 @@ export function createFakeTransportPair(opts?: {
   let connected = false;
   let connectErrorOnce = opts?.connectErrorOnce ?? null;
   const silentlyBroken = opts?.silentlyBroken ?? false;
+  const autoHello = opts?.autoHello ?? true;
   const received: RequestFrame[] = [];
 
   const transport: Transport = {
@@ -66,7 +76,28 @@ export function createFakeTransportPair(opts?: {
         const parsed = JSON.parse(line.trim());
         const validated = AnyFrameSchema.safeParse(parsed);
         if (validated.success && 'intent' in validated.data) {
-          received.push(validated.data);
+          const request = validated.data as RequestFrame;
+          if (autoHello && request.intent === 'hello') {
+            const requestId = request.id;
+            queueMicrotask(() => {
+              if (!connected) return;
+              for (const h of handlers.frame) {
+                h({
+                  id: requestId,
+                  result: {
+                    protocol_version: HOST_PROTOCOL_VERSION,
+                    daemon_version: '0.0.0-test-daemon',
+                    daemon_id: 'local',
+                    instance_id: 'test-instance',
+                    host_descriptor: { name: 'local', kind: 'local' },
+                    capabilities: [...KNOWN_CAPABILITIES_V1],
+                  },
+                });
+              }
+            });
+            return true;
+          }
+          received.push(request);
         }
       } catch {
         /* ignore malformed test input */

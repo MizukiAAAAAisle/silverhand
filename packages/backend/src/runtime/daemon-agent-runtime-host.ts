@@ -334,7 +334,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
         {
           kind: 'runtime',
           mode: 'daemon',
-          conv_id: conversationId,
+          conversationId,
           agent_id: agentId,
           phase: cacheEntry.phase,
         },
@@ -435,7 +435,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
       {
         kind: 'runtime',
         mode: 'daemon',
-        conv_id: conversationId,
+        conversationId,
         agent_id: agentId,
         runtime: agent.runtime,
         has_startup_delivery: startupDelivery !== undefined,
@@ -476,7 +476,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
         {
           kind: 'runtime',
           mode: 'daemon',
-          conv_id: conversationId,
+          conversationId,
           agent_id: agentId,
           cooldown_until: result.cooldown_until,
         },
@@ -518,7 +518,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
       {
         kind: 'runtime',
         mode: 'daemon',
-        conv_id: conversationId,
+        conversationId,
         agent_id: agentId,
         pid: result.pid,
         started_at: result.started_at,
@@ -593,7 +593,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
         {
           kind: 'runtime',
           mode: 'daemon',
-          conv_id: conversationId,
+          conversationId,
           agent_id: agentId,
           reason: result.reason,
         },
@@ -713,7 +713,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
             {
               kind: 'runtime',
               mode: 'daemon',
-              conv_id: conversationId,
+              conversationId,
               agent_id: ca.agent_id,
               msg_id: auditMessage.id,
               err: err instanceof Error ? err.message : String(err),
@@ -770,6 +770,14 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
    */
   async stopAll(): Promise<void> {
     await this.bridge.runtimeStopAll();
+  }
+
+  async setConversationLogDebug(
+    conversationId: string,
+    enabled: boolean,
+    expiresAt?: number | null,
+  ): Promise<void> {
+    await this.bridge.setConversationLogDebug(conversationId, enabled, expiresAt);
   }
 
   /**
@@ -837,7 +845,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
         {
           kind: 'runtime',
           mode: 'daemon',
-          conv_id: conversationId,
+          conversationId,
           agent_id: agentId,
           msg_id: messageId,
         },
@@ -852,7 +860,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
         {
           kind: 'runtime',
           mode: 'daemon',
-          conv_id: conversationId,
+          conversationId,
           agent_id: agentId,
           msg_id: messageId,
           inbox_id: delivery.inboxId,
@@ -868,7 +876,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
         {
           kind: 'runtime',
           mode: 'daemon',
-          conv_id: conversationId,
+          conversationId,
           agent_id: agentId,
           msg_id: messageId,
           inbox_id: delivery.inboxId,
@@ -885,7 +893,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
         {
           kind: 'runtime',
           mode: 'daemon',
-          conv_id: conversationId,
+          conversationId,
           agent_id: agentId,
           msg_id: messageId,
           inbox_id: delivery.inboxId,
@@ -905,7 +913,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
             {
               kind: 'runtime',
               mode: 'daemon',
-              conv_id: conversationId,
+              conversationId,
               agent_id: agentId,
               err: err instanceof Error ? err.message : String(err),
             },
@@ -947,7 +955,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
       {
         kind: 'runtime',
         mode: 'daemon',
-        conv_id: conversationId,
+        conversationId,
         agent_id: agentId,
         msg_id: messageId,
         inbox_id: delivery.inboxId,
@@ -1031,7 +1039,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
         {
           kind: 'runtime',
           mode: 'daemon',
-          conv_id: conversationId,
+          conversationId,
           agent_id: agentId,
         },
         'drain: no pending inbox rows; ready_for_drain noop',
@@ -1042,7 +1050,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
       {
         kind: 'runtime',
         mode: 'daemon',
-        conv_id: conversationId,
+        conversationId,
         agent_id: agentId,
         pending_count: pending.length,
       },
@@ -1057,7 +1065,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
         {
           kind: 'runtime',
           mode: 'daemon',
-          conv_id: conversationId,
+          conversationId,
           agent_id: agentId,
           pending_count: pending.length,
         },
@@ -1109,7 +1117,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
         {
           kind: 'runtime',
           mode: 'daemon',
-          conv_id: conversationId,
+          conversationId,
           agent_id: agentId,
           batch_size: pending.length,
           delivery_ids: deliveryIds,
@@ -1122,7 +1130,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
         {
           kind: 'runtime',
           mode: 'daemon',
-          conv_id: conversationId,
+          conversationId,
           agent_id: agentId,
           batch_size: pending.length,
           delivery_ids: deliveryIds,

@@ -28,8 +28,17 @@ import { IntentDispatcher } from './dispatcher.js';
 import { DaemonServer } from './server.js';
 import { createDaemonLogger, type DaemonLogger } from './logger.js';
 import { encodeFrame, type EventFrame } from '../protocol.js';
-import { DAEMON_VERSION } from './version.js';
+import { DAEMON_VERSION, createDaemonHelloResult } from './version.js';
 import { logDaemon } from './daemon-logging.js';
+import {
+  defaultDaemonIdentityPath,
+  readOrCreateDaemonIdentity,
+} from './identity.js';
+import {
+  buildDaemonInstanceId,
+  defaultRuntimePidRootDir,
+  reconcileRuntimePidfiles,
+} from './runtime-pidfiles.js';
 import type { SupervisorContract } from './supervisor-contract.js';
 
 export interface RunDaemonOptions {
@@ -54,6 +63,16 @@ export interface RunDaemonOptions {
   /** Injected logger; tests use it to inspect log lines. When omitted,
    *  one is created at `logDir/daemon-<utc>.log`. */
   logger?: DaemonLogger;
+  /** Root for per-runtime pidfiles. Production defaults to
+   *  `~/.silverhand/daemon/runtime-pids`; tests pass a temp dir.
+   *  `null` disables the phase-1 pidfile feature for protocol-only
+   *  fixtures. */
+  runtimePidRootDir?: string | null;
+  /** Persistent daemon identity file. Production defaults next to the
+   *  runtime pidfile root (`~/.silverhand/daemon/identity.json`).
+   *  Tests that pass a temp runtimePidRootDir automatically keep the
+   *  identity file under that temp tree. */
+  daemonIdentityPath?: string | null;
   /**
    * SupervisorContract factory — REQUIRED, but explicitly nullable (Cindy
    * `XuKGmdna3GWZcY2G` + shiki `Go9ZiB4OnwTbELZU`). The daemon
@@ -88,6 +107,8 @@ export interface RunDaemonOptions {
     | ((deps: {
         emit: (event: EventFrame) => void;
         logger: DaemonLogger;
+        daemonInstanceId: string;
+        runtimePidRootDir: string | null;
       }) => SupervisorContract)
     | null;
 }
@@ -110,6 +131,21 @@ export interface RunningDaemon {
 }
 
 export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> {
+  const startedAt = Date.now();
+  const daemonInstanceId = buildDaemonInstanceId(startedAt);
+  const runtimePidRootDir =
+    opts.runtimePidRootDir === undefined
+      ? defaultRuntimePidRootDir()
+      : opts.runtimePidRootDir;
+  const daemonIdentityPath =
+    opts.daemonIdentityPath === undefined
+      ? defaultDaemonIdentityPath(runtimePidRootDir)
+      : opts.daemonIdentityPath;
+  const daemonIdentity =
+    daemonIdentityPath === null
+      ? undefined
+      : readOrCreateDaemonIdentity(daemonIdentityPath);
+  const helloResult = createDaemonHelloResult(daemonInstanceId, daemonIdentity);
   const logger =
     opts.logger ??
     createDaemonLogger({
@@ -137,7 +173,32 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     pid_file_path: opts.pidFilePath,
   });
 
-  const startedAt = Date.now();
+  if (runtimePidRootDir !== null) {
+    try {
+      const reconcile = reconcileRuntimePidfiles({
+        rootDir: runtimePidRootDir,
+        selfDaemonInstanceId: daemonInstanceId,
+        logger,
+      });
+      logger.info(
+        {
+          runtimePidRootDir,
+          daemonInstanceId,
+          ...reconcile,
+        },
+        'runtime pidfile orphan reconcile completed',
+      );
+    } catch (err) {
+      logger.warn(
+        {
+          runtimePidRootDir,
+          daemonInstanceId,
+          err: (err as Error).message,
+        },
+        'runtime pidfile orphan reconcile failed; continuing daemon boot',
+      );
+    }
+  }
 
   // Resolve the circular dep between supervisor (needs `emit`),
   // dispatcher (needs the supervisor), and server (needs the
@@ -151,11 +212,14 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     ? opts.supervisorFactory({
         emit: event => broadcaster(event),
         logger,
+        daemonInstanceId,
+        runtimePidRootDir,
       })
     : undefined;
   const dispatcher = new IntentDispatcher({
     logger,
     startedAt,
+    helloResult,
     supervisor,
   });
   const server = new DaemonServer({
@@ -184,9 +248,9 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   if (opts.writeStdoutHandshake ?? true) {
     const readyEvent: EventFrame = {
       event: 'ready',
+      ...helloResult,
       socket_path: opts.socketPath,
       daemon_pid: process.pid,
-      daemon_version: DAEMON_VERSION,
       started_at: startedAt,
     };
     process.stdout.write(encodeFrame(readyEvent));

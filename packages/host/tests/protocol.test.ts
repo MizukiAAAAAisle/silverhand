@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   AnyFrameSchema,
   EventFrameSchema,
+  HOST_PROTOCOL_VERSION,
+  KNOWN_CAPABILITIES_V1,
   MAX_FRAME_BYTES,
   RequestFrameSchema,
   ResponseFrameSchema,
+  HelloResultSchema,
   RuntimeStartParamsSchema,
   RuntimeStartResultSchema,
   RuntimeStopParamsSchema,
@@ -15,6 +18,12 @@ import {
   intentSchemas,
   splitNdjson,
 } from '../src/protocol.js';
+
+const HELLO_IDENTITY = {
+  daemon_id: 'local',
+  instance_id: 'test-instance',
+  host_descriptor: { name: 'local', kind: 'local' as const },
+};
 
 describe('protocol — frame schemas', () => {
   it('parses a well-formed request frame', () => {
@@ -52,9 +61,12 @@ describe('protocol — frame schemas', () => {
   it('discriminates events by `event` field', () => {
     const r = EventFrameSchema.safeParse({
       event: 'ready',
+      protocol_version: HOST_PROTOCOL_VERSION,
       socket_path: '/tmp/x.sock',
       daemon_pid: 1,
       daemon_version: '0.0.0',
+      ...HELLO_IDENTITY,
+      capabilities: [...KNOWN_CAPABILITIES_V1],
       started_at: 0,
     });
     expect(r.success).toBe(true);
@@ -69,6 +81,43 @@ describe('protocol — frame schemas', () => {
     expect(AnyFrameSchema.safeParse({ id: 'a', result: {} }).success).toBe(true);
     expect(AnyFrameSchema.safeParse({ event: 'shutting_down', reason: 'x' }).success).toBe(true);
     expect(AnyFrameSchema.safeParse({ foo: 'bar' }).success).toBe(false);
+  });
+});
+
+describe('protocol — hello handshake', () => {
+  it('accepts the v1 daemon handshake shape', () => {
+    expect(
+      intentSchemas.hello.result.safeParse({
+        protocol_version: HOST_PROTOCOL_VERSION,
+        daemon_version: '0.1.0',
+        ...HELLO_IDENTITY,
+        capabilities: [...KNOWN_CAPABILITIES_V1],
+      }).success,
+    ).toBe(true);
+  });
+
+  it('allows unknown capability strings for forward compatibility', () => {
+    const parsed = HelloResultSchema.safeParse({
+      protocol_version: HOST_PROTOCOL_VERSION,
+      daemon_version: '0.1.0',
+      ...HELLO_IDENTITY,
+      capabilities: ['runtime.future_thing'],
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('requires daemon identity fields in v1', () => {
+    expect(
+      HelloResultSchema.safeParse({
+        protocol_version: HOST_PROTOCOL_VERSION,
+        daemon_version: '0.1.0',
+        capabilities: [...KNOWN_CAPABILITIES_V1],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('does not advertise runtimes without a driver implementation', () => {
+    expect(KNOWN_CAPABILITIES_V1).not.toContain('runtime.gemini');
   });
 });
 

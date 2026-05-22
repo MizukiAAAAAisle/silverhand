@@ -7,6 +7,6 @@
 export { runDaemon, type RunDaemonOptions, type RunningDaemon } from './run.js';
 export { IntentDispatcher } from './dispatcher.js';
 export { DaemonServer } from './server.js';
-export { createDaemonLogger, type DaemonLogger } from './logger.js';
+export { createDaemonLogControl, createDaemonLogger, type DaemonLogger } from './logger.js';
 export { claimPidFile, releasePidFile, installShutdownHandlers } from './lifecycle.js';
 export { DAEMON_VERSION } from './version.js';

@@ -30,8 +30,12 @@
  *    confused with backend logs.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { splitNdjson } from './protocol.js';
-import { EventFrameSchema, type EventFrame } from './protocol.js';
+import {
+  EventFrameSchema,
+  HOST_PROTOCOL_VERSION,
+  splitNdjson,
+  type EventFrame,
+} from './protocol.js';
 import {
   reclaimStaleDaemonIfPresent,
   ReclaimFailLoudlyError,
@@ -189,6 +193,18 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
             if (settled) continue;
             settled = true;
             clearTimeout(readyTimer);
+            if (validated.data.protocol_version !== HOST_PROTOCOL_VERSION) {
+              try { proc.kill('SIGKILL'); } catch { /* already gone */ }
+              reject(
+                new Error(
+                  `daemon stdout ready speaks host protocol_version=${validated.data.protocol_version}; ` +
+                    `client expects ${HOST_PROTOCOL_VERSION}. ` +
+                    `Daemon version=${validated.data.daemon_version}. ` +
+                    'Recovery: stop the stale silverhand-daemon and restart the app/CLI so client and daemon come from the same checkout/build.',
+                ),
+              );
+              return;
+            }
             resolve(validated.data);
             return;
           }

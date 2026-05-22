@@ -19,6 +19,7 @@ import {
   CreateWorkspaceInputSchema,
   CreateTasksInputSchema,
   DeleteAgentInputSchema,
+  ConversationLogDebugInputSchema,
   HumanClaimTaskInputSchema,
   HumanUpdateTaskStatusInputSchema,
   ListTasksQuerySchema,
@@ -57,6 +58,7 @@ import {
   type ReadHistoryTargetRef,
   type SendMessageTarget,
   systemSubtype,
+  TEMP_CONVERSATION_DEBUG_WINDOW_MS,
 } from '@silverhand/shared';
 import type { BackendContext } from './context.js';
 import { createCliInvokeMiddleware } from './observability/cli-invoke-middleware.js';
@@ -1258,6 +1260,78 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       archived_at: conversation.archived_at,
     };
     return c.json({ ref });
+  });
+
+  app.get(apiPaths.conversationLogDebug(':id'), c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'conversation id required' }, 400);
+    const conversation = conversations.get(id);
+    if (!conversation) return c.json({ error: 'conversation not found' }, 404);
+    if (!canViewConversation(ctx, getUserPrincipal(c), conversation.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    const status = ctx.logControl.getConversationDebugStatus(conversation.id);
+    return c.json({
+      conversationId: conversation.id,
+      enabled: status.enabled,
+      expiresAt: status.expiresAt,
+    });
+  });
+
+  app.post(apiPaths.conversationLogDebug(':id'), async c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'conversation id required' }, 400);
+    const conversation = conversations.get(id);
+    if (!conversation) return c.json({ error: 'conversation not found' }, 404);
+    const principal = getUserPrincipal(c);
+    if (!canViewConversation(ctx, principal, conversation.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = ConversationLogDebugInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+
+    let expiresAt: number | null = null;
+    if (parsed.data.enabled) {
+      expiresAt = Date.now() + TEMP_CONVERSATION_DEBUG_WINDOW_MS;
+      ctx.logControl.enableConversationDebug(conversation.id, expiresAt);
+    } else {
+      ctx.logControl.disableConversationDebug(conversation.id);
+    }
+
+    let daemonSynced = true;
+    try {
+      await ctx.runtimeHost.setConversationLogDebug(
+        conversation.id,
+        parsed.data.enabled,
+        expiresAt,
+      );
+    } catch (err) {
+      daemonSynced = false;
+      ctx.logger.warn(
+        { conversationId: conversation.id, err },
+        'conversation log debug: daemon sync failed',
+      );
+    }
+
+    ctx.logger.info(
+      {
+        conversationId: conversation.id,
+        enabled: parsed.data.enabled,
+        expiresAt,
+        daemonSynced,
+        actorUserId: principal.userId,
+      },
+      'conversation log debug window updated',
+    );
+    return c.json({
+      conversationId: conversation.id,
+      enabled: parsed.data.enabled,
+      expiresAt,
+      daemonSynced,
+    });
   });
 
   /**
@@ -3401,8 +3475,8 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
     ctx.loggers.cli.info(
       {
         category: 'cli.preflight_failure',
-        cid: principal.conversationId,
-        aid: principal.agentId,
+        conversationId: principal.conversationId,
+        agentId: principal.agentId,
         noun: parsed.data.noun ?? null,
         verb: parsed.data.verb ?? null,
         flags_seen: parsed.data.flags_seen ?? [],

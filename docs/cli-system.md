@@ -432,13 +432,63 @@ The backend writes three categorized JSONL logs under
 | `agent-<utc>.log` | `loggers.agent` | ConversationManager spawn / drain / exit / compaction. |
 | `cli-<utc>.log` | `loggers.cli` | Every `silverhand` CLI invocation + CLI-side pre-flight failures. |
 
+Log volume is controlled by `SILVERHAND_LOG_LEVEL=warn|info|debug`.
+Default is `warn`, so `info` lifecycle lines are suppressed unless the
+operator opts in. Filtering happens at the logger sink; child loggers inherit
+the same level/window state. A temporary per-conversation debug window can
+lift lines that carry the exact structured field `conversationId` for about
+10 minutes, then automatically falls back on both backend and daemon sides.
+The window does not relax the privacy contract: fields named `text`,
+`payload`, `body`, `chunk`, `prompt`, `env`, `env_*`, `stdout`, `stderr`, or
+`soft_directive` are forbidden at every level.
+
+Troubleshooting recipe:
+
+1. For global process startup problems, launch with a broader level and
+   reproduce:
+
+   ```sh
+   SILVERHAND_LOG_LEVEL=info pnpm dev
+   # or, only for a short local repro:
+   SILVERHAND_LOG_LEVEL=debug pnpm dev
+   ```
+
+2. For one conversation, open a temporary debug window, reproduce, then inspect
+   the newest logs:
+
+   ```sh
+   URL=$(jq -r .url ~/.silverhand/server-config.json)
+   AUTH=$(jq -r .auth_token ~/.silverhand/server-config.json)
+   CONV=<conversation-id>
+
+   curl -sS -X POST "$URL/api/conversations/$CONV/log-debug" \
+     -H "authorization: Bearer $AUTH" \
+     -H 'content-type: application/json' \
+     -d '{"enabled":true}'
+
+   tail -n 200 ~/.silverhand/logs/backend-*.log ~/.silverhand/logs/agent-*.log \
+     ~/.silverhand/logs/cli-*.log ~/.silverhand/logs/daemon-*.log
+   ```
+
+3. Close the window early when done:
+
+   ```sh
+   curl -sS -X POST "$URL/api/conversations/$CONV/log-debug" \
+     -H "authorization: Bearer $AUTH" \
+     -H 'content-type: application/json' \
+     -d '{"enabled":false}'
+   ```
+
+Only human/public API auth can open or close this window. Agent internal
+routes do not expose log-level mutation.
+
 `cli-<utc>.log` carries two distinct categories:
 
 - `cli.invoke` — one line per call against any
   `/internal/conversations/:cid/agents/:aid/...` route. Emitted by the
   Hono middleware in
   `packages/backend/src/observability/cli-invoke-middleware.ts`. Fields:
-  `{ts, level, category, request_id, cid, aid, noun, verb, method, route_suffix, query_keys, http_status, duration_ms, status, error_code?, error_issues?}`.
+  `{ts, level, category, request_id, conversationId, agentId, noun, verb, method, route_suffix, query_keys, http_status, duration_ms, status, error_code?, error_issues?}`.
   `route_suffix` is the *matched route pattern* — never the raw URL
   path — so wildcard segments like `attachments/<id>/locate` collapse
   to `attachments/*/locate` and ids never leak. The `query_keys` array

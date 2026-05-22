@@ -4,7 +4,7 @@
  *
  * Mounted on `/internal/conversations/:cid/agents/:aid/*` (the family
  * of agent-principal routes). For every request:
- *   - on entry: capture `{cid, aid, noun, verb, request_id, query_keys}`
+ *   - on entry: capture `{conversationId, agentId, noun, verb, request_id, query_keys}`
  *   - on exit:  add `{http_status, duration_ms, status, error_code?}`
  *               and write to `ctx.loggers.cli` with category `cli.invoke`
  *
@@ -32,7 +32,7 @@ export const CLI_TRACE_SUFFIX = 'cli-trace';
  *
  * Note on ordering: this middleware MUST be registered after the
  * agent-token check (so principal binding is verified before we log
- * `aid`) but it does its own start/end timing independent of any
+ * `agentId`) but it does its own start/end timing independent of any
  * later auth/ACL middleware. If a later middleware short-circuits
  * with 401/403/etc, we still emit one `cli.invoke` line with that
  * status — the agent's typo experience is preserved.
@@ -82,14 +82,14 @@ export function createCliInvokeMiddleware(ctx: BackendContext): MiddlewareHandle
         errorCode = peeked?.code;
         errorIssues = peeked?.issues;
       }
-      const cid = c.req.param('cid') ?? null;
-      const aid = c.req.param('aid') ?? null;
+      const conversationId = c.req.param('cid') ?? null;
+      const agentId = c.req.param('aid') ?? null;
       log.info(
         {
           category: 'cli.invoke',
           request_id: requestId,
-          cid,
-          aid,
+          conversationId,
+          agentId,
           noun: route?.noun ?? null,
           verb: route?.verb ?? null,
           method: c.req.method,

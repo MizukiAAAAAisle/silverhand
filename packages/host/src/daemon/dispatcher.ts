@@ -26,7 +26,9 @@
  *    dispatcher only logs errors that handlers throw.
  */
 import {
+  type HelloResult,
   intentSchemas,
+  type ConversationLogDebugParams,
   type IntentName,
   type ResponseError,
   type ResponseFrame,
@@ -40,7 +42,7 @@ import {
   type RuntimeStopParams,
   type RuntimeWakeParams,
 } from '../protocol.js';
-import { DAEMON_VERSION } from './version.js';
+import { DAEMON_VERSION, createDaemonHelloResult } from './version.js';
 import type { DaemonLogger } from './logger.js';
 import type { SupervisorContract } from './supervisor-contract.js';
 import { logIntent } from './daemon-logging.js';
@@ -51,6 +53,8 @@ export interface DispatcherOptions {
   startedAt?: number;
   /** Epoch ms supplier; injected so tests can pin time. Default: Date.now. */
   now?: () => number;
+  /** Daemon hello payload bound to this daemon process generation. */
+  helloResult?: HelloResult;
   /**
    * SupervisorContract backing the runtime_* intents. `null` keeps the
    * protocol-only PR-1 surface for tests; production wires the
@@ -63,6 +67,7 @@ export class IntentDispatcher {
   private readonly logger: DaemonLogger;
   private readonly startedAt: number;
   private readonly now: () => number;
+  private readonly helloResult: HelloResult;
   private readonly supervisor: SupervisorContract | undefined;
   private intentCount = 0;
   private shuttingDown = false;
@@ -71,6 +76,7 @@ export class IntentDispatcher {
     this.logger = opts.logger;
     this.now = opts.now ?? Date.now;
     this.startedAt = opts.startedAt ?? this.now();
+    this.helloResult = opts.helloResult ?? createDaemonHelloResult();
     this.supervisor = opts.supervisor;
   }
 
@@ -92,6 +98,14 @@ export class IntentDispatcher {
     return this.intentCount;
   }
 
+  getHelloResult(): HelloResult {
+    return {
+      ...this.helloResult,
+      host_descriptor: { ...this.helloResult.host_descriptor },
+      capabilities: [...this.helloResult.capabilities],
+    };
+  }
+
   /**
    * Dispatch a single intent. Always returns a well-formed
    * `ResponseFrame` — never throws. Handlers that throw are caught
@@ -104,7 +118,7 @@ export class IntentDispatcher {
     rawParams: unknown,
   ): Promise<ResponseFrame> {
     const startedAtMs = this.now();
-    // Extract conv_id / agent_id from params (when present) for the log
+    // Extract conversationId / agent_id from params (when present) for the log
     // line — strictly read-only, never modifies params. Other fields
     // (notably `payload`) MUST NOT be logged per §3.4.
     const convId =
@@ -119,7 +133,7 @@ export class IntentDispatcher {
       intent,
       request_id: requestId,
       status: 'received',
-      conv_id: convId,
+      conversationId: convId,
       agent_id: agentId,
     });
     const finish = (frame: ResponseFrame): ResponseFrame => {
@@ -128,7 +142,7 @@ export class IntentDispatcher {
         intent,
         request_id: requestId,
         status: isError ? 'error' : 'ok',
-        conv_id: convId,
+        conversationId: convId,
         agent_id: agentId,
         error_code: isError ? frame.error.code : undefined,
         duration_ms: this.now() - startedAtMs,
@@ -235,6 +249,8 @@ export class IntentDispatcher {
     params: unknown,
   ): Promise<unknown> {
     switch (intent) {
+      case 'hello':
+        return this.getHelloResult();
       case 'ping':
         return {
           pong: true as const,
@@ -256,6 +272,15 @@ export class IntentDispatcher {
       case 'echo': {
         const p = params as { message: string };
         return { echoed: p.message };
+      }
+      case 'conversation_log_debug': {
+        const p = params as ConversationLogDebugParams;
+        if (p.enabled) {
+          this.logger.logControl.enableConversationDebug(p.conversation_id, p.expires_at);
+          return { ok: true, enabled: true, expires_at: p.expires_at };
+        }
+        this.logger.logControl.disableConversationDebug(p.conversation_id);
+        return { ok: true, enabled: false, expires_at: null };
       }
       // ── runtime_* family ────────────────────────────────────────
       // Each case below requires `this.supervisor` to be set; when

@@ -22,11 +22,14 @@ import { join } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { execPath } from 'node:process';
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 import { Supervisor } from '../src/daemon/supervisor/index.js';
 import type { Driver, DriverSpawnContext, ParsedEvent } from '../src/drivers/index.js';
-import type { DaemonLogger } from '../src/daemon/logger.js';
+import { createDaemonLogControl, type DaemonLogger } from '../src/daemon/logger.js';
 import type { EventFrame, RuntimeStartResult } from '../src/protocol.js';
+import { runtimePidFilePath } from '../src/daemon/runtime-pidfiles.js';
 
 const FIXTURE = join(__dirname, '_fixtures', 'echo-runtime.cjs');
 /** 3c-b watchdog fixture — produces zero bytes until killed. See
@@ -67,6 +70,8 @@ function silentLogger(): DaemonLogger {
   const noop = (): void => {};
   return {
     filePath: '/dev/null',
+    logControl: createDaemonLogControl('debug'),
+    debug: noop,
     info: noop,
     warn: noop,
     error: noop,
@@ -131,6 +136,8 @@ function makeSupervisor(opts: {
   sigtermToSigkillMs?: number;
   sigkillTimeoutMs?: number;
   spawnFn?: (b: string, a: ReadonlyArray<string>, o: SpawnOptions) => ChildProcess;
+  daemonInstanceId?: string;
+  runtimePidRootDir?: string | null;
 } = {}): {
   supervisor: Supervisor;
   events: EventFrame[];
@@ -149,6 +156,8 @@ function makeSupervisor(opts: {
     driverFor: () => driver,
     resolveBinary: async (_kind, fallback) => fallback,
     spawnFn,
+    daemonInstanceId: opts.daemonInstanceId,
+    runtimePidRootDir: opts.runtimePidRootDir,
     sigtermToSigkillMs: opts.sigtermToSigkillMs ?? 50,
     sigkillTimeoutMs: opts.sigkillTimeoutMs ?? 200,
   });
@@ -208,6 +217,46 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
     });
 
     await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+
+  it('writes a runtime pidfile after spawn and unlinks it when the child exits', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'silverhand-supervisor-pidfile-'));
+    const runtimePidRootDir = join(dir, 'runtime-pids');
+    const daemonInstanceId = '1000-42';
+    let supervisor: Supervisor | null = null;
+    try {
+      ({ supervisor } = makeSupervisor({
+        runtimePidRootDir,
+        daemonInstanceId,
+      }));
+      const res = await supervisor.start(baseStartParams);
+      assertStarted(res);
+
+      const filePath = runtimePidFilePath(
+        runtimePidRootDir,
+        daemonInstanceId,
+        'c1',
+        'a1',
+      );
+      expect(existsSync(filePath)).toBe(true);
+      const record = JSON.parse(readFileSync(filePath, 'utf8'));
+      expect(record).toMatchObject({
+        pid: res.pid,
+        started_at: res.started_at,
+        conv: 'c1',
+        agent: 'a1',
+        runtime: 'claude',
+        cmd: FIXTURE,
+      });
+
+      await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+      expect(existsSync(filePath)).toBe(false);
+    } finally {
+      await supervisor
+        ?.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' })
+        .catch(() => {});
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('start is idempotent — second start while running returns the same pid + started_at', async () => {

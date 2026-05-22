@@ -50,6 +50,7 @@
  */
 import type {
   HostClient,
+  ConversationLogDebugResult,
   RuntimeClearSessionResult,
   RuntimeCloseActivityLogResult,
   RuntimeStartParams,
@@ -202,6 +203,27 @@ export class RuntimeBridge {
    */
   runtimeCloseActivityLog(): Promise<RuntimeCloseActivityLogResult> {
     return this.client.runtimeCloseActivityLog();
+  }
+
+  setConversationLogDebug(
+    conversationId: string,
+    enabled: boolean,
+    expiresAt?: number | null,
+  ): Promise<ConversationLogDebugResult> {
+    if (enabled) {
+      if (!expiresAt) {
+        throw new Error('setConversationLogDebug: expiresAt is required when enabling debug');
+      }
+      return this.client.setConversationLogDebug({
+        conversation_id: conversationId,
+        enabled: true,
+        expires_at: expiresAt,
+      });
+    }
+    return this.client.setConversationLogDebug({
+      conversation_id: conversationId,
+      enabled: false,
+    });
   }
 
   /**

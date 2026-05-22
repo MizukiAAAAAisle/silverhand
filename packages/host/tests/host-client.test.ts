@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { HostClient, HostClientError } from '../src/client/index.js';
+import {
+  HostClient,
+  HostClientError,
+  ProtocolVersionMismatchError,
+} from '../src/client/index.js';
 import { createFakeTransportPair } from './_helpers/fake-transport.js';
+import { HOST_PROTOCOL_VERSION, KNOWN_CAPABILITIES_V1 } from '../src/protocol.js';
 
 const FIXED_RNG = () => 0.5; // deterministic backoff jitter
 
@@ -62,6 +67,139 @@ describe('HostClient — happy path', () => {
     // Late duplicate should be silently dropped (no double-resolve crash).
     peer.send({ id, result: { echoed: 'hi (late)' } });
     await expect(promise).resolves.toEqual({ echoed: 'hi' });
+    await client.close();
+  });
+});
+
+describe('HostClient — protocol handshake', () => {
+  it('negotiates hello during connect and exposes a readonly capability snapshot', async () => {
+    const { transport } = createFakeTransportPair();
+    const client = new HostClient({ transportFactory: () => transport, rng: FIXED_RNG });
+    await client.connect();
+
+    expect(client.negotiated).toMatchObject({
+      protocolVersion: HOST_PROTOCOL_VERSION,
+      daemonVersion: '0.0.0-test-daemon',
+      daemonId: 'local',
+      instanceId: 'test-instance',
+      hostDescriptor: { name: 'local', kind: 'local' },
+    });
+    expect(client.capabilities.has('runtime.cursor')).toBe(true);
+    expect([...client.capabilities]).toEqual([...KNOWN_CAPABILITIES_V1]);
+    expect(Object.isFrozen(client.capabilities)).toBe(true);
+    expect('add' in client.capabilities).toBe(false);
+    await client.close();
+  });
+
+  it('throws ProtocolVersionMismatchError on protocol version mismatch and closes the transport', async () => {
+    const { transport, peer } = createFakeTransportPair({ autoHello: false });
+    const client = new HostClient({ transportFactory: () => transport, rng: FIXED_RNG });
+    const connect = client.connect();
+    await vi.waitFor(() => {
+      expect(peer.received[0]?.intent).toBe('hello');
+    });
+    peer.send({
+      id: peer.received[0]!.id,
+      result: {
+        protocol_version: HOST_PROTOCOL_VERSION + 1,
+        daemon_version: 'future-daemon',
+        daemon_id: 'local',
+        instance_id: 'future-instance',
+        host_descriptor: { name: 'local', kind: 'local' },
+        capabilities: [...KNOWN_CAPABILITIES_V1],
+      },
+    });
+
+    await expect(connect).rejects.toBeInstanceOf(ProtocolVersionMismatchError);
+    await expect(connect).rejects.toMatchObject({
+      code: 'protocol_mismatch',
+      expected: HOST_PROTOCOL_VERSION,
+      actual: HOST_PROTOCOL_VERSION + 1,
+      daemonVersion: 'future-daemon',
+      reason: 'version_mismatch',
+    });
+    expect(client.isConnected()).toBe(false);
+    await client.close();
+  });
+
+  it('allows unknown capability strings without schema drift', async () => {
+    const { transport, peer } = createFakeTransportPair({ autoHello: false });
+    const client = new HostClient({ transportFactory: () => transport, rng: FIXED_RNG });
+    const connect = client.connect();
+    await vi.waitFor(() => {
+      expect(peer.received[0]?.intent).toBe('hello');
+    });
+    peer.send({
+      id: peer.received[0]!.id,
+      result: {
+        protocol_version: HOST_PROTOCOL_VERSION,
+        daemon_version: 'newer-daemon',
+        daemon_id: 'local',
+        instance_id: 'newer-instance',
+        host_descriptor: { name: 'local', kind: 'local' },
+        capabilities: ['runtime.future_thing'],
+      },
+    });
+
+    await expect(connect).resolves.toBeUndefined();
+    expect(client.capabilities.has('runtime.future_thing')).toBe(true);
+    await client.close();
+  });
+
+  it('maps schema-invalid hello results to invalid_hello and closes the transport', async () => {
+    const { transport, peer } = createFakeTransportPair({ autoHello: false });
+    const client = new HostClient({ transportFactory: () => transport, rng: FIXED_RNG });
+    const connect = client.connect();
+    await vi.waitFor(() => {
+      expect(peer.received[0]?.intent).toBe('hello');
+    });
+    peer.send({
+      id: peer.received[0]!.id,
+      result: {
+        protocol_version: HOST_PROTOCOL_VERSION,
+        daemon_version: 'broken-daemon',
+        daemon_id: 'local',
+        instance_id: 'broken-instance',
+        host_descriptor: { name: 'local', kind: 'local' },
+        // capabilities deliberately omitted — must fail schema validation.
+      },
+    });
+
+    await expect(connect).rejects.toBeInstanceOf(ProtocolVersionMismatchError);
+    await expect(connect).rejects.toMatchObject({
+      code: 'protocol_mismatch',
+      expected: HOST_PROTOCOL_VERSION,
+      actual: null,
+      daemonVersion: null,
+      reason: 'invalid_hello',
+    });
+    expect(client.isConnected()).toBe(false);
+    expect(client.negotiated).toBeNull();
+    await client.close();
+  });
+
+  it('maps missing hello support to daemon_protocol_missing and closes the transport', async () => {
+    const { transport, peer } = createFakeTransportPair({ autoHello: false });
+    const client = new HostClient({ transportFactory: () => transport, rng: FIXED_RNG });
+    const connect = client.connect();
+    await vi.waitFor(() => {
+      expect(peer.received[0]?.intent).toBe('hello');
+    });
+    peer.send({
+      id: peer.received[0]!.id,
+      error: { code: 'unknown_intent', message: 'unknown intent: hello' },
+    });
+
+    await expect(connect).rejects.toBeInstanceOf(ProtocolVersionMismatchError);
+    await expect(connect).rejects.toMatchObject({
+      code: 'protocol_mismatch',
+      expected: HOST_PROTOCOL_VERSION,
+      actual: null,
+      daemonVersion: null,
+      reason: 'daemon_protocol_missing',
+    });
+    expect(client.isConnected()).toBe(false);
+    expect(client.negotiated).toBeNull();
     await client.close();
   });
 });

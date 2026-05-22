@@ -243,11 +243,11 @@ The daemon's JSONL log (written under the app's configured silverhand-dir / `log
 
 **MUST be logged** (one JSONL line per event):
 
-- intent lifecycle: `{ ts, level, kind: 'intent', intent, request_id, conv_id?, agent_id?, status: 'received'|'ok'|'error', error_code?, duration_ms }`
-- emitted event: `{ ts, level, kind: 'event', event, conv_id?, agent_id?, pid?, delivery_ids?, dropped_count?, bytes_dropped? }` — **every** broadcast event the daemon puts on the wire emits one of these lines, including per-socket `runtime_output_dropped` summaries and the lifecycle `shutting_down` frame. Routing is uniform: server `broadcast()` and `OutputBackpressure.emitSummary` both feed `logEvent` (Cindy `POiN_oGtyDjr3Sni` note).
-- process lifecycle: `{ ts, level, kind: 'process', action: 'spawn'|'exit'|'sigterm'|'sigkill'|'reclaim', conv_id?, agent_id?, pid, exit_code?, cmdline_match? }`
+- intent lifecycle: `{ ts, level, kind: 'intent', intent, request_id, conversationId?, agent_id?, status: 'received'|'ok'|'error', error_code?, duration_ms }`
+- emitted event: `{ ts, level, kind: 'event', event, conversationId?, agent_id?, pid?, delivery_ids?, dropped_count?, bytes_dropped? }` — **every** broadcast event the daemon puts on the wire emits one of these lines, including per-socket `runtime_output_dropped` summaries and the lifecycle `shutting_down` frame. Routing is uniform: server `broadcast()` and `OutputBackpressure.emitSummary` both feed `logEvent` (Cindy `POiN_oGtyDjr3Sni` note).
+- process lifecycle: `{ ts, level, kind: 'process', action: 'spawn'|'exit'|'sigterm'|'sigkill'|'reclaim', conversationId?, agent_id?, pid, exit_code?, cmdline_match? }`
 - daemon lifecycle: `{ ts, level, kind: 'daemon', action: 'boot'|'shutting_down'|'pid_claim'|'pid_reclaim', pid, socket_path, pid_file_path, conflict_pid? }`
-- backpressure: `{ ts, level, kind: 'backpressure', conv_id, agent_id, action: 'dropped'|'paused'|'resumed', dropped_count?, bytes_dropped?, buffer_bytes }`
+- backpressure: `{ ts, level, kind: 'backpressure', conversationId, agent_id, action: 'dropped'|'paused'|'resumed', dropped_count?, bytes_dropped?, buffer_bytes }`
 
 **MUST NOT be logged**:
 
@@ -255,7 +255,7 @@ The daemon's JSONL log (written under the app's configured silverhand-dir / `log
 - stdout / stderr chunks emitted by any child process (the content of `runtime_output` events)
 - inbox row content / message bodies / user text / agent text
 - system prompts, MEMORY / CONSENSUS file content, env var values
-- any field whose name suggests content (`payload`, `chunk`, `body`, `text`, `prompt`, `env_*`)
+- any field whose name suggests content (`payload`, `chunk`, `body`, `text`, `prompt`, `env`, `env_*`, `stdout`, `stderr`, `soft_directive`)
 
 If a field is needed for debugging but borderline (e.g. a single-token "first 32 bytes"), it is borderline and the answer is **don't**. Use `byte_count` / `line_count` / `sha256_short` instead.
 

@@ -40,9 +40,11 @@
  */
 import { randomBytes } from 'node:crypto';
 import {
+  HOST_PROTOCOL_VERSION,
   encodeFrame,
   intentSchemas,
   type EventFrame,
+  type HelloResult,
   type IntentName,
   type IntentParams,
   type IntentResult,
@@ -53,6 +55,7 @@ import {
   type RuntimeWakeParams,
   type RuntimeStatusParams,
   type RuntimeClearSessionParams,
+  type ConversationLogDebugParams,
 } from '../protocol.js';
 import type { DecodedFrame, Transport } from './transport.js';
 import { SocketTransport } from './socket-transport.js';
@@ -65,12 +68,63 @@ import { SocketTransport } from './socket-transport.js';
  */
 export class HostClientError extends Error {
   constructor(
-    public readonly code: ResponseError['code'] | 'disconnected' | 'timeout' | 'closed',
+    public readonly code:
+      | ResponseError['code']
+      | 'disconnected'
+      | 'timeout'
+      | 'closed'
+      | 'protocol_mismatch',
     message: string,
   ) {
     super(message);
     this.name = 'HostClientError';
   }
+}
+
+export type ProtocolVersionMismatchReason =
+  | 'version_mismatch'
+  | 'daemon_protocol_missing'
+  | 'invalid_hello';
+
+export class ProtocolVersionMismatchError extends HostClientError {
+  public readonly expected: number;
+  public readonly actual: number | null;
+  public readonly daemonVersion: string | null;
+  public readonly reason: ProtocolVersionMismatchReason;
+  public override readonly cause?: unknown;
+
+  constructor(opts: {
+    expected: number;
+    actual: number | null;
+    daemonVersion: string | null;
+    reason: ProtocolVersionMismatchReason;
+    cause?: unknown;
+  }) {
+    const actualLabel = opts.actual === null ? 'missing' : String(opts.actual);
+    const daemonVersionLabel = opts.daemonVersion ?? 'unknown';
+    super(
+      'protocol_mismatch',
+      `daemon speaks host protocol_version=${actualLabel}; ` +
+        `client expects ${opts.expected}. ` +
+        `Daemon version=${daemonVersionLabel}. ` +
+        'Recovery: stop the stale silverhand-daemon and restart the app/CLI so client and daemon come from the same checkout/build.',
+    );
+    this.name = 'ProtocolVersionMismatchError';
+    this.expected = opts.expected;
+    this.actual = opts.actual;
+    this.daemonVersion = opts.daemonVersion;
+    this.reason = opts.reason;
+    this.cause = opts.cause;
+  }
+}
+
+export interface HostClientNegotiatedProtocol {
+  protocolVersion: number;
+  daemonVersion: string;
+  daemonId: string;
+  instanceId: string;
+  hostDescriptor: HelloResult['host_descriptor'];
+  capabilities: ReadonlySet<string>;
 }
 
 interface PendingRequest {
@@ -91,6 +145,40 @@ const NOOP_LOGGER: HostClientLogger = {
   warn: () => {},
   error: () => {},
 };
+
+const EMPTY_CAPABILITIES = readonlySetSnapshot([]);
+
+function readonlySetSnapshot(values: Iterable<string>): ReadonlySet<string> {
+  const inner = new Set(values);
+  let facade: ReadonlySet<string>;
+  facade = Object.freeze({
+    get size(): number {
+      return inner.size;
+    },
+    has(value: string): boolean {
+      return inner.has(value);
+    },
+    entries(): IterableIterator<[string, string]> {
+      return inner.entries();
+    },
+    keys(): IterableIterator<string> {
+      return inner.keys();
+    },
+    values(): IterableIterator<string> {
+      return inner.values();
+    },
+    [Symbol.iterator](): IterableIterator<string> {
+      return inner[Symbol.iterator]();
+    },
+    forEach(
+      callbackfn: (value: string, value2: string, set: ReadonlySet<string>) => void,
+      thisArg?: unknown,
+    ): void {
+      inner.forEach(value => callbackfn.call(thisArg, value, value, facade));
+    },
+  } satisfies ReadonlySet<string>);
+  return facade;
+}
 
 export interface HostClientOptions {
   /** Absolute path to the daemon's Unix socket. Required unless
@@ -132,6 +220,8 @@ export class HostClient {
   private backoffMs: number;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private connectAttempted = false;
+  private negotiatedProtocol: HostClientNegotiatedProtocol | null = null;
+  private suppressNextDisconnect = false;
 
   constructor(opts: HostClientOptions) {
     if (!opts.transportFactory && !opts.socketPath) {
@@ -180,6 +270,14 @@ export class HostClient {
 
   isConnected(): boolean {
     return this.transport?.isConnected() ?? false;
+  }
+
+  get negotiated(): HostClientNegotiatedProtocol | null {
+    return this.negotiatedProtocol;
+  }
+
+  get capabilities(): ReadonlySet<string> {
+    return this.negotiatedProtocol?.capabilities ?? EMPTY_CAPABILITIES;
   }
 
   /**
@@ -233,6 +331,12 @@ export class HostClient {
 
   echo(message: string): Promise<IntentResult<'echo'>> {
     return this.call('echo', { message });
+  }
+
+  setConversationLogDebug(
+    params: ConversationLogDebugParams,
+  ): Promise<IntentResult<'conversation_log_debug'>> {
+    return this.call('conversation_log_debug', params);
   }
 
   // ── PR-2 runtime_* typed helpers ───────────────────────────────
@@ -325,9 +429,63 @@ export class HostClient {
       transport.close();
     });
     await transport.connect();
+    try {
+      await this.negotiateProtocol();
+    } catch (err) {
+      this.negotiatedProtocol = null;
+      if (this.transport === transport) this.transport = null;
+      this.suppressNextDisconnect = true;
+      transport.close();
+      throw err;
+    }
     this.backoffMs = this.initialBackoffMs;
     this.readyResolve?.();
     this.logger.info({}, 'host client connected');
+  }
+
+  private async negotiateProtocol(): Promise<void> {
+    let hello: HelloResult;
+    try {
+      hello = await this.call('hello', {});
+    } catch (err) {
+      if (err instanceof HostClientError && err.code === 'unknown_intent') {
+        throw new ProtocolVersionMismatchError({
+          expected: HOST_PROTOCOL_VERSION,
+          actual: null,
+          daemonVersion: null,
+          reason: 'daemon_protocol_missing',
+          cause: err,
+        });
+      }
+      if (err instanceof HostClientError && err.code === 'internal_error') {
+        throw new ProtocolVersionMismatchError({
+          expected: HOST_PROTOCOL_VERSION,
+          actual: null,
+          daemonVersion: null,
+          reason: 'invalid_hello',
+          cause: err,
+        });
+      }
+      throw err;
+    }
+
+    if (hello.protocol_version !== HOST_PROTOCOL_VERSION) {
+      throw new ProtocolVersionMismatchError({
+        expected: HOST_PROTOCOL_VERSION,
+        actual: hello.protocol_version,
+        daemonVersion: hello.daemon_version,
+        reason: 'version_mismatch',
+      });
+    }
+
+    this.negotiatedProtocol = Object.freeze({
+      protocolVersion: hello.protocol_version,
+      daemonVersion: hello.daemon_version,
+      daemonId: hello.daemon_id,
+      instanceId: hello.instance_id,
+      hostDescriptor: { ...hello.host_descriptor },
+      capabilities: readonlySetSnapshot(hello.capabilities),
+    });
   }
 
   private handleFrame(frame: DecodedFrame): void {
@@ -343,6 +501,8 @@ export class HostClient {
           {
             daemon_pid: frame.daemon_pid,
             daemon_version: frame.daemon_version,
+            daemon_id: frame.daemon_id,
+            instance_id: frame.instance_id,
             started_at: frame.started_at,
           },
           'daemon ready handshake',
@@ -410,11 +570,17 @@ export class HostClient {
   }
 
   private handleDisconnect(reason: string): void {
+    if (this.suppressNextDisconnect) {
+      this.suppressNextDisconnect = false;
+      this.transport = null;
+      return;
+    }
     this.logger.warn({ reason }, 'host client transport disconnected');
     this.rejectAllPending(
       new HostClientError('disconnected', `transport disconnected: ${reason}`),
     );
     this.transport = null;
+    this.negotiatedProtocol = null;
     if (this.closed) return;
     // The current ready promise is no longer "ready" — replace it so
     // future awaiters wait on the NEXT connect cycle, not the closed
@@ -459,6 +625,20 @@ export class HostClient {
         }
       }
     } catch (err) {
+      if (err instanceof ProtocolVersionMismatchError) {
+        this.closed = true;
+        this.readyReject?.(err);
+        this.logger.error(
+          {
+            expected: err.expected,
+            actual: err.actual,
+            daemon_version: err.daemonVersion,
+            reason: err.reason,
+          },
+          'host client protocol negotiation failed; reconnect disabled',
+        );
+        return;
+      }
       this.logger.warn(
         { err: (err as Error).message },
         'host client reconnect attempt failed; will retry',

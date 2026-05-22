@@ -19,21 +19,46 @@
  */
 import { createWriteStream, mkdirSync, type WriteStream } from 'node:fs';
 import { join } from 'node:path';
+import {
+  parseSilverhandLogLevel,
+  sanitizeLogFields,
+  SILVERHAND_LOG_LEVEL_ENV,
+  type SilverhandLogLevel,
+} from '@silverhand/shared';
+
+type LogEventLevel = SilverhandLogLevel | 'error';
 
 export interface DaemonLogger {
+  debug(obj: unknown, msg?: string): void;
   info(obj: unknown, msg?: string): void;
   warn(obj: unknown, msg?: string): void;
   error(obj: unknown, msg?: string): void;
   /** Absolute path of the log file currently being written. */
   filePath: string;
+  /** Mutable level/window state used by this daemon logger. */
+  logControl: DaemonLogControl;
   /** Flush + close the underlying stream. Idempotent. */
   close(): Promise<void>;
+}
+
+export interface ConversationDebugStatus {
+  enabled: boolean;
+  expiresAt: number | null;
+}
+
+export interface DaemonLogControl {
+  getGlobalLevel(): SilverhandLogLevel;
+  setGlobalLevel(level: SilverhandLogLevel): void;
+  enableConversationDebug(conversationId: string, expiresAt: number): void;
+  disableConversationDebug(conversationId: string): void;
+  getConversationDebugStatus(conversationId: string): ConversationDebugStatus;
 }
 
 export interface DaemonLoggerOptions {
   dir: string;
   alsoStderr?: boolean;
   base?: Record<string, unknown>;
+  logControl?: DaemonLogControl;
 }
 
 export function createDaemonLogger(opts: DaemonLoggerOptions): DaemonLogger {
@@ -43,19 +68,23 @@ export function createDaemonLogger(opts: DaemonLoggerOptions): DaemonLogger {
   const stream = createWriteStream(filePath, { flags: 'a' });
   const alsoStderr = opts.alsoStderr ?? false;
   const base: Record<string, unknown> = { pid: process.pid, ...(opts.base ?? {}) };
+  const logControl = opts.logControl ?? createDaemonLogControl();
+  const safeBase = sanitizeLogFields(base);
 
-  const write = (level: 'info' | 'warn' | 'error', obj: unknown, msg?: string) => {
-    const fields =
+  const write = (level: LogEventLevel, obj: unknown, msg?: string) => {
+    const rawFields =
       obj && typeof obj === 'object' && !(obj instanceof Error)
         ? (obj as Record<string, unknown>)
         : { data: serializeUnknown(obj) };
+    const fields = sanitizeLogFields(rawFields);
     const line = {
       ts: new Date().toISOString(),
       level,
       msg: msg ?? '',
-      ...base,
+      ...safeBase,
       ...fields,
     };
+    if (!shouldWrite(level, line, logControl)) return;
     const encoded = safeStringify(line);
     stream.write(encoded + '\n');
     if (alsoStderr) {
@@ -65,6 +94,8 @@ export function createDaemonLogger(opts: DaemonLoggerOptions): DaemonLogger {
 
   return {
     filePath,
+    logControl,
+    debug: (obj, msg) => write('debug', obj, msg),
     info: (obj, msg) => write('info', obj, msg),
     warn: (obj, msg) => write('warn', obj, msg),
     error: (obj, msg) => write('error', obj, msg),
@@ -74,6 +105,75 @@ export function createDaemonLogger(opts: DaemonLoggerOptions): DaemonLogger {
       }),
   };
 }
+
+export function createDaemonLogControl(
+  initialLevel: SilverhandLogLevel = parseSilverhandLogLevel(
+    process.env[SILVERHAND_LOG_LEVEL_ENV],
+  ),
+): DaemonLogControl {
+  let globalLevel = initialLevel;
+  const windows = new Map<string, { expiresAt: number; timer: ReturnType<typeof setTimeout> }>();
+
+  const clearWindow = (conversationId: string): void => {
+    const existing = windows.get(conversationId);
+    if (existing) clearTimeout(existing.timer);
+    windows.delete(conversationId);
+  };
+
+  const purgeExpired = (conversationId: string, now = Date.now()): void => {
+    const existing = windows.get(conversationId);
+    if (!existing) return;
+    if (existing.expiresAt <= now) clearWindow(conversationId);
+  };
+
+  return {
+    getGlobalLevel: () => globalLevel,
+    setGlobalLevel: level => {
+      globalLevel = level;
+    },
+    enableConversationDebug: (conversationId, expiresAt) => {
+      clearWindow(conversationId);
+      const delay = expiresAt - Date.now();
+      if (delay <= 0) return;
+      const timer = setTimeout(() => {
+        windows.delete(conversationId);
+      }, delay);
+      timer.unref?.();
+      windows.set(conversationId, { expiresAt, timer });
+    },
+    disableConversationDebug: conversationId => {
+      clearWindow(conversationId);
+    },
+    getConversationDebugStatus: conversationId => {
+      purgeExpired(conversationId);
+      const existing = windows.get(conversationId);
+      return existing
+        ? { enabled: true, expiresAt: existing.expiresAt }
+        : { enabled: false, expiresAt: null };
+    },
+  };
+}
+
+function shouldWrite(
+  eventLevel: LogEventLevel,
+  line: Record<string, unknown>,
+  logControl: DaemonLogControl,
+): boolean {
+  if (eventLevel === 'error') return true;
+  const conversationId = typeof line.conversationId === 'string' ? line.conversationId : null;
+  const effectiveLevel =
+    conversationId && logControl.getConversationDebugStatus(conversationId).enabled
+      ? 'debug'
+      : logControl.getGlobalLevel();
+  return LEVEL_RANK[eventLevel] >= LEVEL_RANK[effectiveLevel];
+}
+
+const LEVEL_RANK: Record<LogEventLevel, number> = {
+  debug: 10,
+  info: 20,
+  warn: 30,
+  error: 40,
+};
 
 function serializeUnknown(v: unknown): unknown {
   if (v instanceof Error) {

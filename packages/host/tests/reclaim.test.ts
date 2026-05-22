@@ -18,11 +18,13 @@ import {
   reclaimStaleDaemonIfPresent,
   type ReclaimDeps,
 } from '../src/daemon/reclaim.js';
-import type { DaemonLogger } from '../src/daemon/logger.js';
+import { createDaemonLogControl, type DaemonLogger } from '../src/daemon/logger.js';
 
 function silentLogger(): DaemonLogger {
   return {
     filePath: '/dev/null',
+    logControl: createDaemonLogControl('debug'),
+    debug: () => {},
     info: () => {},
     warn: () => {},
     error: () => {},

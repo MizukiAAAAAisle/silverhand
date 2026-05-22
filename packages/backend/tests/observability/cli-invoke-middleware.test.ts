@@ -88,8 +88,8 @@ describe('cli invoke middleware', () => {
       http_status: 200,
       status: 'success',
     });
-    expect(line.payload.cid).toBe(conversationId);
-    expect(line.payload.aid).toBe(agentId);
+    expect(line.payload.conversationId).toBe(conversationId);
+    expect(line.payload.agentId).toBe(agentId);
     expect(line.payload.request_id).toMatch(/^[0-9a-f-]{36}$/);
     expect(typeof line.payload.duration_ms).toBe('number');
 
@@ -265,8 +265,8 @@ describe('cli-trace endpoint', () => {
       error_code: 'validation_error',
       status: 'failure',
     });
-    expect(trace!.payload.cid).toBe(conversationId);
-    expect(trace!.payload.aid).toBe(agentId);
+    expect(trace!.payload.conversationId).toBe(conversationId);
+    expect(trace!.payload.agentId).toBe(agentId);
 
     // Crucial: NO cli.invoke line was also emitted. Pre-flight
     // failures must not pollute the success-rate stats.

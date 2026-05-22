@@ -360,7 +360,7 @@ export class RuntimeEventHandler {
         this.logger.warn(
           {
             kind: 'inbox',
-            conv_id: frame.conversation_id,
+            conversationId: frame.conversation_id,
             agent_id: frame.agent_id,
             reason: frame.reason,
             delivery_ids: frame.delivery_ids,
@@ -496,7 +496,7 @@ export class RuntimeEventHandler {
               {
                 kind: 'event',
                 event: 'runtime_parsed_event',
-                conv_id: frame.conversation_id,
+                conversationId: frame.conversation_id,
                 agent_id: frame.agent_id,
                 err: (err as Error).message,
               },
@@ -519,7 +519,7 @@ export class RuntimeEventHandler {
           {
             kind: 'event',
             event: 'runtime_parsed_event_dropped',
-            conv_id: frame.conversation_id,
+            conversationId: frame.conversation_id,
             agent_id: frame.agent_id,
             parsed_kind: frame.parsed_kind,
             bytes: frame.encoded_bytes,
@@ -559,7 +559,7 @@ export class RuntimeEventHandler {
         {
           kind: 'event',
           event,
-          conv_id: conversationId,
+          conversationId,
           agent_id: agentId,
           err: (err as Error).message,
         },
@@ -599,7 +599,7 @@ export class RuntimeEventHandler {
         {
           kind: 'event',
           event: 'runtime_state',
-          conv_id: frame.conversation_id,
+          conversationId: frame.conversation_id,
           agent_id: frame.agent_id,
         },
         'dropped event: cache not yet hydrated',
@@ -677,7 +677,7 @@ export class RuntimeEventHandler {
           {
             kind: 'event',
             event: 'runtime_exit',
-            conv_id: frame.conversation_id,
+            conversationId: frame.conversation_id,
             agent_id: frame.agent_id,
             err: (err as Error).message,
           },
@@ -703,7 +703,7 @@ export class RuntimeEventHandler {
               {
                 kind: 'event',
                 event: 'runtime_ready_for_drain',
-                conv_id: frame.conversation_id,
+                conversationId: frame.conversation_id,
                 agent_id: frame.agent_id,
                 err: (err as Error).message,
               },
@@ -716,7 +716,7 @@ export class RuntimeEventHandler {
           {
             kind: 'event',
             event: 'runtime_ready_for_drain',
-            conv_id: frame.conversation_id,
+            conversationId: frame.conversation_id,
             agent_id: frame.agent_id,
             err: (err as Error).message,
           },

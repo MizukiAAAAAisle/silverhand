@@ -80,6 +80,17 @@ export interface AgentRuntimeHost {
   stopAll(): Promise<void>;
 
   /**
+   * Sync the human-controlled temporary log-debug window to the
+   * runtime host. Backend owns the public API and local logger state;
+   * daemon keeps its own TTL as a fail-safe if backend disappears.
+   */
+  setConversationLogDebug(
+    conversationId: string,
+    enabled: boolean,
+    expiresAt?: number | null,
+  ): Promise<void>;
+
+  /**
    * Flush and close the dedicated activity log stream. Must be called
    * after `stopAll()` so terminal events are written first.
    */

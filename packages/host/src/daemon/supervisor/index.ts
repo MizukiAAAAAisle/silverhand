@@ -46,6 +46,10 @@ import {
   type RuntimeWakeResult,
 } from '../../protocol.js';
 import type { DaemonLogger } from '../logger.js';
+import {
+  unlinkRuntimePidfile,
+  writeRuntimePidfile,
+} from '../runtime-pidfiles.js';
 import type { SupervisorContract } from '../supervisor-contract.js';
 import type {
   ActivitySnippetKind,
@@ -142,6 +146,11 @@ export interface SupervisorOptions {
   now?: () => number;
   sigtermToSigkillMs?: number;
   sigkillTimeoutMs?: number;
+  /** Daemon-owned runtime pidfile context. Production `runDaemon`
+   *  supplies both fields; unit tests can leave `runtimePidRootDir`
+   *  null/undefined to disable filesystem pidfiles. */
+  daemonInstanceId?: string;
+  runtimePidRootDir?: string | null;
   // ── 3c-b init watchdog + retry/cooldown + compaction knobs ──────
   //
   // Override precedence is fixed (Cindy `-pdNvRYOWip5e9yA`):
@@ -199,6 +208,8 @@ export class Supervisor implements SupervisorContract {
   private readonly now: () => number;
   private readonly sigtermToSigkillMs: number;
   private readonly sigkillTimeoutMs: number;
+  private readonly daemonInstanceId: string | null;
+  private readonly runtimePidRootDir: string | null;
 
   // ── 3c-b state ─────────────────────────────────────────────────
   /** Sticky per-(conv, agent) init failure counter + cooldown clock.
@@ -231,6 +242,8 @@ export class Supervisor implements SupervisorContract {
     this.sigtermToSigkillMs =
       opts.sigtermToSigkillMs ?? DEFAULT_SIGTERM_TO_SIGKILL_MS;
     this.sigkillTimeoutMs = opts.sigkillTimeoutMs ?? DEFAULT_SIGKILL_TIMEOUT_MS;
+    this.daemonInstanceId = opts.daemonInstanceId ?? null;
+    this.runtimePidRootDir = opts.runtimePidRootDir ?? null;
     this.initWatchdogMs = opts.initWatchdogMs ?? null;
     this.initLivenessSilenceMs = opts.initLivenessSilenceMs;
     this.initPreProtocolCapMs = opts.initPreProtocolCapMs;
@@ -318,7 +331,7 @@ export class Supervisor implements SupervisorContract {
         {
           kind: 'process',
           action: 'start_blocked_by_cooldown',
-          conv_id: params.conversation_id,
+          conversationId: params.conversation_id,
           agent_id: params.agent_id,
           cooldown_until: cooldownUntil,
         },
@@ -376,6 +389,25 @@ export class Supervisor implements SupervisorContract {
     if (typeof pid !== 'number') {
       throw new Error(
         `runtime_start: child spawned without a pid for runtime "${runtimeKind}"`,
+      );
+    }
+    try {
+      this.writeRuntimePidfile({
+        conversationId: params.conversation_id,
+        agentId: params.agent_id,
+        pid,
+        startedAt,
+        runtime: runtimeKind,
+        cmd: binary,
+      });
+    } catch (err) {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* already gone */
+      }
+      throw new Error(
+        `runtime_start: failed to write runtime pidfile for "${params.conversation_id}/${params.agent_id}": ${(err as Error).message}`,
       );
     }
 
@@ -441,7 +473,7 @@ export class Supervisor implements SupervisorContract {
         kind: 'process',
         action: 'spawn',
         pid,
-        conv_id: handle.conversationId,
+        conversationId: handle.conversationId,
         agent_id: handle.agentId,
         runtime: runtimeKind,
         startup_delivery: startupBatch ? startupBatch.deliveryIds : null,
@@ -596,7 +628,7 @@ export class Supervisor implements SupervisorContract {
           kind: 'process',
           action: 'startup_delivery_defer_pre_ready',
           pid: handle.pid,
-          conv_id: handle.conversationId,
+          conversationId: handle.conversationId,
           agent_id: handle.agentId,
           delivery_ids: [...deliveryIds],
         },
@@ -614,7 +646,7 @@ export class Supervisor implements SupervisorContract {
           kind: 'process',
           action: 'startup_delivery_driver_refused',
           pid: handle.pid,
-          conv_id: handle.conversationId,
+          conversationId: handle.conversationId,
           agent_id: handle.agentId,
           delivery_ids: [...deliveryIds],
           text_bytes: batch.text.length,
@@ -635,7 +667,7 @@ export class Supervisor implements SupervisorContract {
           kind: 'process',
           action: 'startup_delivery_write_failed',
           pid: handle.pid,
-          conv_id: handle.conversationId,
+          conversationId: handle.conversationId,
           agent_id: handle.agentId,
           delivery_ids: [...deliveryIds],
           error_message: (err as Error).message,
@@ -666,7 +698,7 @@ export class Supervisor implements SupervisorContract {
           kind: 'process',
           action: 'startup_delivery_awaiting_init',
           pid: handle.pid,
-          conv_id: handle.conversationId,
+          conversationId: handle.conversationId,
           agent_id: handle.agentId,
           delivery_ids: [...deliveryIds],
         },
@@ -844,7 +876,7 @@ export class Supervisor implements SupervisorContract {
           kind: 'process',
           action: 'soft_stop_driver_not_ready',
           pid: handle.pid,
-          conv_id: handle.conversationId,
+          conversationId: handle.conversationId,
           agent_id: handle.agentId,
         },
         'soft stop refused: driver not ready to encode (mapping to driver_refused per Cindy `wYjG20JdGjLpwq8K`)',
@@ -865,7 +897,7 @@ export class Supervisor implements SupervisorContract {
           kind: 'process',
           action: 'soft_stop_driver_refused',
           pid: handle.pid,
-          conv_id: handle.conversationId,
+          conversationId: handle.conversationId,
           agent_id: handle.agentId,
           text_bytes: params.soft_directive.length,
         },
@@ -885,7 +917,7 @@ export class Supervisor implements SupervisorContract {
           kind: 'process',
           action: 'soft_stop_write_failed',
           pid: handle.pid,
-          conv_id: handle.conversationId,
+          conversationId: handle.conversationId,
           agent_id: handle.agentId,
           error_message: (err as Error).message,
         },
@@ -960,7 +992,7 @@ export class Supervisor implements SupervisorContract {
               kind: 'process',
               action: 'sigkill_timeout',
               pid: handle.pid,
-              conv_id: handle.conversationId,
+              conversationId: handle.conversationId,
               agent_id: handle.agentId,
               timeout_ms: this.sigkillTimeoutMs,
             },
@@ -980,7 +1012,7 @@ export class Supervisor implements SupervisorContract {
         kind: 'process',
         action: 'sigterm',
         pid: handle.pid,
-        conv_id: handle.conversationId,
+        conversationId: handle.conversationId,
         agent_id: handle.agentId,
       },
       'sending SIGTERM to runtime',
@@ -998,7 +1030,7 @@ export class Supervisor implements SupervisorContract {
           kind: 'process',
           action: 'sigkill',
           pid: handle.pid,
-          conv_id: handle.conversationId,
+          conversationId: handle.conversationId,
           agent_id: handle.agentId,
         },
         'escalating to SIGKILL after grace period',
@@ -1072,7 +1104,7 @@ export class Supervisor implements SupervisorContract {
           kind: 'process',
           action: 'wake_driver_not_ready',
           pid: handle.pid,
-          conv_id: handle.conversationId,
+          conversationId: handle.conversationId,
           agent_id: handle.agentId,
           delivery_ids: passthroughDeliveryIds,
         },
@@ -1091,7 +1123,7 @@ export class Supervisor implements SupervisorContract {
           kind: 'process',
           action: 'wake_driver_refused',
           pid: handle.pid,
-          conv_id: handle.conversationId,
+          conversationId: handle.conversationId,
           agent_id: handle.agentId,
           delivery_ids: passthroughDeliveryIds,
           text_bytes: params.text.length,
@@ -1112,7 +1144,7 @@ export class Supervisor implements SupervisorContract {
           kind: 'process',
           action: 'wake_write_failed',
           pid: handle.pid,
-          conv_id: handle.conversationId,
+          conversationId: handle.conversationId,
           agent_id: handle.agentId,
           delivery_ids: passthroughDeliveryIds,
           error_message: (err as Error).message,
@@ -1299,7 +1331,7 @@ export class Supervisor implements SupervisorContract {
           kind: 'process',
           action: 'child_error',
           pid: handle.pid,
-          conv_id: handle.conversationId,
+          conversationId: handle.conversationId,
           agent_id: handle.agentId,
           error_message: (err as Error).message,
         },
@@ -1403,7 +1435,7 @@ export class Supervisor implements SupervisorContract {
           kind: 'process',
           action: 'parse_line_threw',
           pid: handle.pid,
-          conv_id: handle.conversationId,
+          conversationId: handle.conversationId,
           agent_id: handle.agentId,
           error_message: (err as Error).message,
         },
@@ -1425,7 +1457,7 @@ export class Supervisor implements SupervisorContract {
             kind: 'process',
             action: 'parse_event_invalid',
             pid: handle.pid,
-            conv_id: handle.conversationId,
+            conversationId: handle.conversationId,
             agent_id: handle.agentId,
             issue: validated.error.issues[0]?.message ?? 'unknown',
           },
@@ -1472,7 +1504,7 @@ export class Supervisor implements SupervisorContract {
           kind: 'process',
           action: 'parse_event_too_large',
           pid: handle.pid,
-          conv_id: handle.conversationId,
+          conversationId: handle.conversationId,
           agent_id: handle.agentId,
           parsed_kind: parsed.kind,
           error_message: (err as Error).message,
@@ -1540,7 +1572,7 @@ export class Supervisor implements SupervisorContract {
             kind: 'process',
             action: 'session_init',
             pid: handle.pid,
-            conv_id: handle.conversationId,
+            conversationId: handle.conversationId,
             agent_id: handle.agentId,
             cli_session_id: parsed.sessionId,
           },
@@ -1921,6 +1953,46 @@ export class Supervisor implements SupervisorContract {
     });
   }
 
+  private writeRuntimePidfile(params: {
+    conversationId: string;
+    agentId: string;
+    pid: number;
+    startedAt: number;
+    runtime: RuntimeKind;
+    cmd: string;
+  }): void {
+    if (!this.runtimePidRootDir || !this.daemonInstanceId) return;
+    writeRuntimePidfile({
+      rootDir: this.runtimePidRootDir,
+      daemonInstanceId: this.daemonInstanceId,
+      ...params,
+    });
+  }
+
+  private unlinkRuntimePidfileForHandle(handle: RuntimeHandle): void {
+    if (!this.runtimePidRootDir || !this.daemonInstanceId) return;
+    try {
+      unlinkRuntimePidfile({
+        rootDir: this.runtimePidRootDir,
+        daemonInstanceId: this.daemonInstanceId,
+        conversationId: handle.conversationId,
+        agentId: handle.agentId,
+      });
+    } catch (err) {
+      this.logger.warn(
+        {
+          kind: 'process',
+          action: 'runtime_pidfile_unlink_failed',
+          pid: handle.pid,
+          conversationId: handle.conversationId,
+          agent_id: handle.agentId,
+          err: (err as Error).message,
+        },
+        'failed to unlink runtime pidfile during child finalization',
+      );
+    }
+  }
+
   private onChildExit(
     handle: RuntimeHandle,
     code: number | null,
@@ -1960,6 +2032,7 @@ export class Supervisor implements SupervisorContract {
 
     handle.phase = 'exited';
     handle.exitCode = code;
+    this.unlinkRuntimePidfileForHandle(handle);
 
     const intentional = handle.intentionalExit;
     const ts = this.now();
@@ -1970,7 +2043,7 @@ export class Supervisor implements SupervisorContract {
         kind: 'process',
         action: 'exit',
         pid: handle.pid,
-        conv_id: handle.conversationId,
+        conversationId: handle.conversationId,
         agent_id: handle.agentId,
         exit_code: code,
         signal: signal ?? null,
@@ -2321,7 +2394,7 @@ export class Supervisor implements SupervisorContract {
         kind: 'process',
         action: 'init_watchdog_fired',
         pid: handle.pid,
-        conv_id: handle.conversationId,
+        conversationId: handle.conversationId,
         agent_id: handle.agentId,
         timeout_reason: reason,
         elapsed_ms: elapsedMs,
@@ -2426,7 +2499,7 @@ export class Supervisor implements SupervisorContract {
         {
           kind: 'process',
           action: 'init_retry_respawn_failed',
-          conv_id: originalParams.conversation_id,
+          conversationId: originalParams.conversation_id,
           agent_id: originalParams.agent_id,
           retry_attempt: newAttempt,
           error_message: (err as Error).message,
@@ -2517,7 +2590,7 @@ export class Supervisor implements SupervisorContract {
         kind: 'process',
         action: 'compaction_stale',
         pid: handle.pid,
-        conv_id: handle.conversationId,
+        conversationId: handle.conversationId,
         agent_id: handle.agentId,
         elapsed_ms: elapsedMs,
       },

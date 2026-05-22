@@ -18,8 +18,11 @@
 export {
   HostClient,
   HostClientError,
+  ProtocolVersionMismatchError,
   type HostClientOptions,
   type HostClientLogger,
+  type HostClientNegotiatedProtocol,
+  type ProtocolVersionMismatchReason,
 } from './client/index.js';
 export { SocketTransport } from './client/socket-transport.js';
 export type { Transport, TransportEvents, DecodedFrame } from './client/transport.js';
@@ -32,6 +35,10 @@ export {
 export {
   AnyFrameSchema,
   EventFrameSchema,
+  HelloParamsSchema,
+  HelloResultSchema,
+  HOST_PROTOCOL_VERSION,
+  KNOWN_CAPABILITIES_V1,
   RequestFrameSchema,
   ResponseFrameSchema,
   intentSchemas,
@@ -41,11 +48,16 @@ export {
   type IntentName,
   type IntentParams,
   type IntentResult,
+  type HelloParams,
+  type HelloResult,
+  type KnownCapabilityV1,
   type RequestFrame,
   type ResponseFrame,
   type ResponseError,
   type EventFrame,
   type AnyFrame,
+  type ConversationLogDebugParams,
+  type ConversationLogDebugResult,
   type RuntimeStateDto,
   type RuntimeStartParams,
   type RuntimeStartResult,

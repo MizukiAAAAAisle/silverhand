@@ -222,7 +222,6 @@ async function bootstrap(): Promise<void> {
         logFile: logger.filePath,
         agentLogFile: loggers.agent.filePath,
         cliLogFile: loggers.cli.filePath,
-        path: process.env.PATH,
         pathPatch: pathResult,
       },
       'logger initialized',

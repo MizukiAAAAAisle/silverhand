@@ -10,7 +10,7 @@
  *     this discriminator.
  *  2. No log entry passed through any helper carries any forbidden
  *     field name (`payload`, `chunk`, `body`, `text`, `prompt`,
- *     `env_*`). Compile-time enforcement happens via the typed
+ *     `env`, `env_*`, `stdout`, `stderr`, `soft_directive`). Compile-time enforcement happens via the typed
  *     interfaces; the runtime guard `findForbiddenFields` is a
  *     belt-and-suspenders check the test exercises.
  *  3. End-to-end: dispatch a real intent through `IntentDispatcher`
@@ -30,12 +30,12 @@ import {
   logIntent,
   logProcess,
 } from '../src/daemon/daemon-logging.js';
-import type { DaemonLogger } from '../src/daemon/logger.js';
+import { createDaemonLogControl, type DaemonLogger } from '../src/daemon/logger.js';
 import { IntentDispatcher } from '../src/daemon/dispatcher.js';
 import type { SupervisorContract } from '../src/daemon/supervisor-contract.js';
 
 interface CapturedLine {
-  level: 'info' | 'warn' | 'error';
+  level: 'debug' | 'info' | 'warn' | 'error';
   obj: Record<string, unknown>;
   msg: string;
 }
@@ -44,6 +44,9 @@ function capturingLogger(): { lines: CapturedLine[]; logger: DaemonLogger } {
   const lines: CapturedLine[] = [];
   const logger: DaemonLogger = {
     filePath: '/dev/null',
+    logControl: createDaemonLogControl('debug'),
+    debug: (obj, msg) =>
+      lines.push({ level: 'debug', obj: obj as Record<string, unknown>, msg: msg ?? '' }),
     info: (obj, msg) =>
       lines.push({ level: 'info', obj: obj as Record<string, unknown>, msg: msg ?? '' }),
     warn: (obj, msg) =>
@@ -71,7 +74,7 @@ describe('§3.4 — typed helpers stamp the right `kind` discriminator', () => {
 
   it('logEvent → kind: "event"', () => {
     const { lines, logger } = capturingLogger();
-    logEvent(logger, { event: 'runtime_state', conv_id: 'c1', agent_id: 'a1' });
+    logEvent(logger, { event: 'runtime_state', conversationId: 'c1', agent_id: 'a1' });
     expect(lines[0]!.obj.kind).toBe('event');
     expect(lines[0]!.obj.event).toBe('runtime_state');
   });
@@ -96,7 +99,7 @@ describe('§3.4 — typed helpers stamp the right `kind` discriminator', () => {
   it('logBackpressure → kind: "backpressure"', () => {
     const { lines, logger } = capturingLogger();
     logBackpressure(logger, {
-      conv_id: 'c1',
+      conversationId: 'c1',
       agent_id: 'a1',
       action: 'dropped',
       buffer_bytes: 100,
@@ -131,7 +134,7 @@ describe('§3.4 — forbidden field names never reach the log line', () => {
         intent: 'ping',
         request_id: 'r1',
         status: 'ok',
-        conv_id: 'c1',
+        conversationId: 'c1',
         agent_id: 'a1',
         delivery_ids: [1, 2, 3],
         dropped_count: 0,
@@ -148,12 +151,12 @@ describe('§3.4 — forbidden field names never reach the log line', () => {
       intent: 'runtime_wake',
       request_id: 'r1',
       status: 'received',
-      conv_id: 'c1',
+      conversationId: 'c1',
       agent_id: 'a1',
     });
     logEvent(logger, {
       event: 'runtime_output_dropped',
-      conv_id: 'c1',
+      conversationId: 'c1',
       agent_id: 'a1',
       dropped_count: 5,
       bytes_dropped: 1024,
@@ -161,7 +164,7 @@ describe('§3.4 — forbidden field names never reach the log line', () => {
     logProcess(logger, {
       action: 'reclaim',
       pid: 1234,
-      conv_id: 'c1',
+      conversationId: 'c1',
       agent_id: 'a1',
       cmdline_match: true,
     });
@@ -171,7 +174,7 @@ describe('§3.4 — forbidden field names never reach the log line', () => {
       pid_file_path: '/tmp/daemon.pid',
     });
     logBackpressure(logger, {
-      conv_id: 'c1',
+      conversationId: 'c1',
       agent_id: 'a1',
       action: 'dropped',
       buffer_bytes: 4_000_000,
@@ -230,7 +233,7 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
       intent: 'runtime_wake',
       request_id: 'req-1',
       status: 'ok',
-      conv_id: 'c1',
+      conversationId: 'c1',
       agent_id: 'a1',
     });
     expect(typeof ok[0]!.obj.duration_ms).toBe('number');

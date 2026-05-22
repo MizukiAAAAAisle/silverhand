@@ -19,7 +19,13 @@
  *     hydrate completes.
  */
 import { describe, expect, it, vi } from 'vitest';
-import type { EventFrame, HostClient, RuntimeStatusResult } from '@silverhand/host';
+import {
+  HOST_PROTOCOL_VERSION,
+  KNOWN_CAPABILITIES_V1,
+  type EventFrame,
+  type HostClient,
+  type RuntimeStatusResult,
+} from '@silverhand/host';
 import type { AgentRunState } from '@silverhand/shared';
 import { RunStateCache } from '../../src/runtime/run-state-cache.js';
 import { RuntimeBridge } from '../../src/runtime/bridge.js';
@@ -182,9 +188,14 @@ function makeHandler(deps: Omit<RuntimeEventHandlerDeps, 'statusProjector'>): Ru
 function readyFrame(daemonPid: number, startedAt: number): EventFrame {
   return {
     event: 'ready',
+    protocol_version: HOST_PROTOCOL_VERSION,
     socket_path: '/tmp/sock',
     daemon_pid: daemonPid,
     daemon_version: '0.0.0-test',
+    daemon_id: 'local',
+    instance_id: `${startedAt}-${daemonPid}`,
+    host_descriptor: { name: 'local', kind: 'local' },
+    capabilities: [...KNOWN_CAPABILITIES_V1],
     started_at: startedAt,
   };
 }

@@ -1721,3 +1721,26 @@ export type CliTraceInput = z.infer<typeof CliTraceInputSchema>;
 
 export const CliTraceOutputSchema = z.object({ ok: z.literal(true) });
 export type CliTraceOutput = z.infer<typeof CliTraceOutputSchema>;
+
+// ── Human-only conversation log debugging ──────────────────────────
+
+export const ConversationLogDebugInputSchema = z
+  .object({
+    enabled: z.boolean(),
+  })
+  .strict();
+export type ConversationLogDebugInput = z.infer<
+  typeof ConversationLogDebugInputSchema
+>;
+
+export const ConversationLogDebugStatusSchema = z
+  .object({
+    conversationId: z.string(),
+    enabled: z.boolean(),
+    expiresAt: z.number().int().nullable(),
+    daemonSynced: z.boolean().optional(),
+  })
+  .strict();
+export type ConversationLogDebugStatus = z.infer<
+  typeof ConversationLogDebugStatusSchema
+>;

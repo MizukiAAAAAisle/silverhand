@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { IntentDispatcher } from '../src/daemon/dispatcher.js';
+import { DAEMON_VERSION } from '../src/daemon/version.js';
 import { FakeSupervisor } from './_helpers/fake-supervisor.js';
-import type { DaemonLogger } from '../src/daemon/logger.js';
+import { createDaemonLogControl, type DaemonLogger } from '../src/daemon/logger.js';
+import { HOST_PROTOCOL_VERSION, KNOWN_CAPABILITIES_V1 } from '../src/protocol.js';
 
 function silentLogger(): DaemonLogger {
   return {
     filePath: '/dev/null',
+    logControl: createDaemonLogControl('debug'),
+    debug: () => {},
     info: () => {},
     warn: () => {},
     error: () => {},
@@ -14,6 +18,21 @@ function silentLogger(): DaemonLogger {
 }
 
 describe('IntentDispatcher', () => {
+  it('handles hello with protocol version and capabilities', async () => {
+    const d = new IntentDispatcher({ logger: silentLogger() });
+    const r = await d.dispatch('hello-1', 'hello', {});
+    expect('result' in r).toBe(true);
+    if (!('result' in r)) return;
+    expect(r.result).toEqual({
+      protocol_version: HOST_PROTOCOL_VERSION,
+      daemon_version: DAEMON_VERSION,
+      daemon_id: 'local',
+      instance_id: 'test-instance',
+      host_descriptor: { name: 'local', kind: 'local' },
+      capabilities: [...KNOWN_CAPABILITIES_V1],
+    });
+  });
+
   it('handles ping with the daemon pid + version', async () => {
     const d = new IntentDispatcher({ logger: silentLogger(), startedAt: 1_700_000_000_000 });
     const r = await d.dispatch('req-1', 'ping', {});
@@ -31,6 +50,39 @@ describe('IntentDispatcher', () => {
     const r = await d.dispatch('req-2', 'echo', { message: 'hi' });
     expect('result' in r).toBe(true);
     if ('result' in r) expect(r.result).toEqual({ echoed: 'hi' });
+  });
+
+  it('syncs conversation log debug windows into the daemon logger control', async () => {
+    const logger = silentLogger();
+    const d = new IntentDispatcher({ logger });
+    const expiresAt = Date.now() + 60_000;
+
+    const opened = await d.dispatch('req-debug-open', 'conversation_log_debug', {
+      conversation_id: 'c1',
+      enabled: true,
+      expires_at: expiresAt,
+    });
+    expect(opened).toEqual({
+      id: 'req-debug-open',
+      result: { ok: true, enabled: true, expires_at: expiresAt },
+    });
+    expect(logger.logControl.getConversationDebugStatus('c1')).toEqual({
+      enabled: true,
+      expiresAt,
+    });
+
+    const closed = await d.dispatch('req-debug-close', 'conversation_log_debug', {
+      conversation_id: 'c1',
+      enabled: false,
+    });
+    expect(closed).toEqual({
+      id: 'req-debug-close',
+      result: { ok: true, enabled: false, expires_at: null },
+    });
+    expect(logger.logControl.getConversationDebugStatus('c1')).toEqual({
+      enabled: false,
+      expiresAt: null,
+    });
   });
 
   it('rejects unknown intents', async () => {

@@ -54,10 +54,12 @@ async function setupFixture(opts?: { failStartupDelivery?: boolean }): Promise<E
   const socketPath = join(dir, 'daemon.sock');
   const pidFilePath = join(dir, 'daemon.pid');
   const logDir = join(dir, 'logs');
+  const runtimePidRootDir = join(dir, 'runtime-pids');
   const daemon = await runDaemon({
     socketPath,
     pidFilePath,
     logDir,
+    runtimePidRootDir,
     installSignals: false,
     writeStdoutHandshake: false,
     alsoStderr: false,
@@ -462,6 +464,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     // a real daemon and grepping its JSONL log for the kind=event line.
     const f = await setupFixture();
     // Don't push to fixtures[] — we stop manually below, then clean.
+    f.daemon.logger.logControl.setGlobalLevel('info');
     const logPath = f.daemon.logger.filePath;
     await f.daemon.stop('test_shutting_down_log').catch(() => {});
     const raw = readFileSync(logPath, 'utf8');

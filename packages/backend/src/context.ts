@@ -12,6 +12,7 @@ import type { ThreadService } from './services/thread-service.js';
 import type { UserService } from './services/user-service.js';
 import type { BlobFileStorage } from './storage/blob-file-storage.js';
 import type { AgentTokenStore } from './auth/agent-token-store.js';
+import type { LogLevelControl } from './logger.js';
 
 export interface BackendLogger {
   info(obj: unknown, msg?: string): void;
@@ -61,6 +62,8 @@ export interface BackendContext {
    *  cli } = { logger, logger, logger }` when no file logger is in use
    *  (e.g. tests). */
   loggers: BackendLoggers;
+  /** Shared log-level and per-conversation temporary debug-window state. */
+  logControl: LogLevelControl;
   /** Root for all silverhand state (`~/.silverhand`). */
   silverhandDir: string;
   /** `<silverhandDir>/workspaces/` — root for auto-generated channel workspaces. */

@@ -31,6 +31,7 @@ import { ThreadService } from '../../src/services/thread-service.js';
 import { UserService } from '../../src/services/user-service.js';
 import { UserRepo } from '../../src/repos/user-repo.js';
 import { createLocalBlobFileStorage } from '../../src/storage/blob-file-storage.js';
+import { createLogLevelControl } from '../../src/logger.js';
 import { makeTempSilverhandDir, openTestDb } from './db.js';
 
 /**
@@ -62,6 +63,11 @@ export class FakeConversationManager {
     runId?: string;
   }> = [];
   resolvedConversations: Array<{ conversationId: string; reason: AgentRunTerminalReason }> = [];
+  logDebugSyncs: Array<{
+    conversationId: string;
+    enabled: boolean;
+    expiresAt: number | null;
+  }> = [];
   stoppedAll = 0;
   reconciled = 0;
 
@@ -121,6 +127,17 @@ export class FakeConversationManager {
     messageId: string,
   ): Promise<void> {
     this.delivered.push({ conversationId, agentId, messageId });
+  }
+  async setConversationLogDebug(
+    conversationId: string,
+    enabled: boolean,
+    expiresAt?: number | null,
+  ): Promise<void> {
+    this.logDebugSyncs.push({
+      conversationId,
+      enabled,
+      expiresAt: expiresAt ?? null,
+    });
   }
 }
 
@@ -188,6 +205,7 @@ export function buildTestApp(): TestApp {
     serverConfig,
     logger: silentLogger,
     loggers: { system: silentLogger, agent: silentLogger, cli: silentLogger },
+    logControl: createLogLevelControl('warn'),
     silverhandDir: tmp.silverhandDir,
     workspacesRoot: tmp.workspacesRoot,
     blobStorage,
