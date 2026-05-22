@@ -1507,21 +1507,15 @@ function RegisteredAppShell(): JSX.Element {
                     active={channelsSidebar.isDragging}
                   />
                 ) : null}
-                {secondaryView ? (
-                  shouldSecondaryFullscreen(
-                    secondaryDescriptor,
-                    routeFullscreen,
-                  ) ? (
-                    secondaryView
-                  ) : (
-                    <SplitPane
-                      left={parentView}
-                      right={secondaryView}
-                      storageKey="silverhand.layout.split-ratio"
-                    />
-                  )
+                {secondaryView &&
+                shouldSecondaryFullscreen(secondaryDescriptor, routeFullscreen) ? (
+                  secondaryView
                 ) : (
-                  parentView
+                  <SplitPane
+                    left={parentView}
+                    right={secondaryView}
+                    storageKey="silverhand.layout.split-ratio"
+                  />
                 )}
               </>
             )}

@@ -935,7 +935,7 @@ function ContextCardShell({
     <div
       data-context-card={model.kind}
       className={
-        'mx-4 my-1 border-l-2 bg-bg-floating px-3 py-2 ' +
+        'my-1 border-l-2 bg-bg-floating px-2 py-2 ' +
         CONTEXT_KIND_BORDER[model.kind]
       }
     >
@@ -969,11 +969,17 @@ function ContextCardShell({
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
-            className="ml-auto text-text-muted hover:text-text-secondary"
+            className="ml-auto flex size-6 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-secondary"
             aria-expanded={expanded}
+            aria-label={expanded ? 'Collapse context' : 'Expand context'}
+            title={expanded ? 'Collapse' : 'Expand'}
             data-context-toggle={expanded ? 'collapse' : 'expand'}
           >
-            {expanded ? 'collapse' : 'expand'}
+            <ChevronRight
+              className={
+                'size-3.5 transition-transform ' + (expanded ? 'rotate-90' : '')
+              }
+            />
           </button>
         ) : null}
       </div>

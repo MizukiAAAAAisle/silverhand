@@ -115,8 +115,11 @@ function AgentActivityRow({
   return (
     <button
       type="button"
-      disabled={!canJump}
-      onClick={onJumpToAnchor}
+      aria-disabled={!canJump}
+      tabIndex={canJump ? 0 : -1}
+      onClick={() => {
+        if (canJump) onJumpToAnchor();
+      }}
       aria-label={
         canJump
           ? `${displayName} activity, jump to latest user message`

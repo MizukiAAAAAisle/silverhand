@@ -238,6 +238,10 @@ export function useChannelMessages(
   const onEvent = useCallback(
     (e: ConversationStreamEvent) => {
       if (!channelId) return;
+      if (e.kind === 'connected' && e.payload?.snapshot_required) {
+        void qc.invalidateQueries({ queryKey: messagesKey(channelId) });
+        return;
+      }
       if (e.kind === 'message') {
         const msg = e.payload?.message as MessageDto | undefined;
         if (!msg) return;
