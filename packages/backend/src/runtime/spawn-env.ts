@@ -1,8 +1,9 @@
 /**
  * `spawn-env` — pure helpers that compose the env passed to a spawned
  * agent CLI. The daemon-path `RuntimeBridge` caller is the only
- * consumer post-cleanup (Commit B removed the legacy in-process
- * ConversationManager spawn path).
+ * consumer post-cleanup (Commit B removed the in-process
+ * ConversationManager spawn path; Commit C removed the runtime-host
+ * env switch — there is no other branch).
  *
  * ## Why this lives here as a separate module
  *

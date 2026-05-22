@@ -1,26 +1,33 @@
 /**
- * Spawn-env parity tests — pin the byte-equivalence between the legacy
- * CM spawn-env composition and the daemon-path env composition the
+ * Spawn-env parity tests — pin the byte-equivalence between the
+ * **original CM spawn-env oracle** (`buildAgentSpawnEnv`, lifted out of
+ * the now-removed `conversation-manager.ts` and preserved as the single
+ * source of truth) and the daemon-path env composition the
  * `RuntimeBridge` caller builds via `buildBridgeBaseEnv` + bridge's
  * proxy layer + daemon-side `driver.applyEnv` re-application.
  *
- * Cindy's commit-5 hard line (msg `gePj5qOffE7rDlGw` + earlier
- * `KMJFmcS4hf_tJ5hj`): the env the spawned CLI sees MUST be
- * byte-equivalent across the gated `SILVERHAND_RUNTIME_HOST=legacy|daemon`
- * paths — `PATH` shim, `SILVERHAND_*` vars, driver env, proxy overlay.
- * These tests are the static check for that invariant. Any divergence
- * here means commit 5 unit 2's flip would silently change what the
- * spawned CLI sees, which is the worst possible silent regression.
+ * Naming note: post-cleanup there is no longer a "legacy" runtime path
+ * to compare against — the in-process ConversationManager runtime was
+ * removed in #task:512 cleanup Commit B and the
+ * `SILVERHAND_RUNTIME_HOST` env switch in Commit C. We keep these
+ * tests because the oracle (`buildAgentSpawnEnv`) is still the
+ * authoritative spec for what bytes a spawned CLI should see, and the
+ * daemon-side reconstruction (bridge wireEnv merged with daemon
+ * `process.env`, then `driver.applyEnv`) is what actually ships those
+ * bytes. If the two diverge, the spawned CLI silently sees something
+ * different from the spec — which is the worst possible silent
+ * regression and exactly what the original Commit-5 hard line (Cindy
+ * `gePj5qOffE7rDlGw` + earlier `KMJFmcS4hf_tJ5hj`) protects against.
  *
  * Test strategy:
  *
  *   1. Build a fixed `SpawnEnvInput` (driver, runtime, cwd, settings).
- *   2. Compute `legacyEnv = buildAgentSpawnEnv(input)`.
+ *   2. Compute `oracleEnv = buildAgentSpawnEnv(input)` — the spec.
  *   3. Compute `wireEnv` the bridge would ship:
  *      `bridgeWireEnv = applyProxyEnv(buildBridgeBaseEnv(input), runtime, settings)`.
  *   4. Simulate daemon-side spawn:
  *      `daemonComputedEnv = driver.applyEnv({ ...daemonProcessEnv, ...bridgeWireEnv })`.
- *   5. Assert `daemonComputedEnv` deep-equals `legacyEnv` (with the
+ *   5. Assert `daemonComputedEnv` deep-equals `oracleEnv` (with the
  *      single-host invariant `daemonProcessEnv === baseProcessEnv`).
  *
  * The daemon's spawn step does exactly
@@ -107,9 +114,9 @@ describe('Spawn env parity — driver.applyEnv is identity (claude-style)', () =
   // logic from driver-specific behaviour.
   const driver = makeDriver(env => ({ ...env }));
 
-  it('legacy CM env equals daemon-spawn env when proxy is OFF', () => {
+  it('CM oracle env equals daemon-spawn env when proxy is OFF', () => {
     const proxy = settings({ proxy_url: null, proxy_runtimes: null });
-    const legacy = buildAgentSpawnEnv({
+    const oracle = buildAgentSpawnEnv({
       ...FIXED_INPUT,
       driver,
       baseProcessEnv: BASE_PROCESS_ENV,
@@ -128,15 +135,15 @@ describe('Spawn env parity — driver.applyEnv is identity (claude-style)', () =
     // driver.applyEnv. Single-host invariant: daemonProcessEnv ===
     // BASE_PROCESS_ENV.
     const daemon = simulateDaemonSpawnEnv(BASE_PROCESS_ENV, driver, wireEnv);
-    expect(daemon).toEqual(legacy);
+    expect(daemon).toEqual(oracle);
   });
 
-  it('legacy CM env equals daemon-spawn env when proxy is ON for the runtime', () => {
+  it('CM oracle env equals daemon-spawn env when proxy is ON for the runtime', () => {
     const proxy = settings({
       proxy_url: 'http://127.0.0.1:7897',
       proxy_runtimes: 'codex',
     });
-    const legacy = buildAgentSpawnEnv({
+    const oracle = buildAgentSpawnEnv({
       ...FIXED_INPUT,
       driver,
       baseProcessEnv: BASE_PROCESS_ENV,
@@ -152,19 +159,19 @@ describe('Spawn env parity — driver.applyEnv is identity (claude-style)', () =
       allowlist: parseProxyRuntimes(proxy.get('proxy_runtimes')),
     });
     const daemon = simulateDaemonSpawnEnv(BASE_PROCESS_ENV, driver, wireEnv);
-    expect(daemon).toEqual(legacy);
+    expect(daemon).toEqual(oracle);
     // Sanity: proxy keys are actually present on both sides.
-    expect(legacy.HTTP_PROXY).toBe('http://127.0.0.1:7897');
+    expect(oracle.HTTP_PROXY).toBe('http://127.0.0.1:7897');
     expect(daemon.HTTP_PROXY).toBe('http://127.0.0.1:7897');
   });
 
-  it('legacy CM env equals daemon-spawn env when proxy is ON but runtime not allowlisted', () => {
+  it('CM oracle env equals daemon-spawn env when proxy is ON but runtime not allowlisted', () => {
     const proxy = settings({
       proxy_url: 'http://127.0.0.1:7897',
       proxy_runtimes: 'codex', // claude is NOT in allowlist
     });
     const claudeInput = { ...FIXED_INPUT, runtime: 'claude' };
-    const legacy = buildAgentSpawnEnv({
+    const oracle = buildAgentSpawnEnv({
       ...claudeInput,
       driver,
       baseProcessEnv: BASE_PROCESS_ENV,
@@ -180,38 +187,38 @@ describe('Spawn env parity — driver.applyEnv is identity (claude-style)', () =
       allowlist: parseProxyRuntimes(proxy.get('proxy_runtimes')),
     });
     const daemon = simulateDaemonSpawnEnv(BASE_PROCESS_ENV, driver, wireEnv);
-    expect(daemon).toEqual(legacy);
-    expect(legacy.HTTP_PROXY).toBeUndefined();
+    expect(daemon).toEqual(oracle);
+    expect(oracle.HTTP_PROXY).toBeUndefined();
     expect(daemon.HTTP_PROXY).toBeUndefined();
   });
 
   it('PATH order is preserved — bin shim comes first, then existing PATH', () => {
     const proxy = settings({ proxy_url: null, proxy_runtimes: null });
-    const legacy = buildAgentSpawnEnv({
+    const oracle = buildAgentSpawnEnv({
       ...FIXED_INPUT,
       driver,
       baseProcessEnv: BASE_PROCESS_ENV,
       proxySettings: proxy,
     });
-    expect(legacy.PATH).toBe(
+    expect(oracle.PATH).toBe(
       `${FIXED_INPUT.binDir}${delimiter}/usr/local/bin:/usr/bin:/bin`,
     );
   });
 
   it('SILVERHAND_* env vars are all populated', () => {
     const proxy = settings({ proxy_url: null, proxy_runtimes: null });
-    const legacy = buildAgentSpawnEnv({
+    const oracle = buildAgentSpawnEnv({
       ...FIXED_INPUT,
       driver,
       baseProcessEnv: BASE_PROCESS_ENV,
       proxySettings: proxy,
     });
-    expect(legacy[SILVERHAND_CONVERSATION_ID_ENV]).toBe(
+    expect(oracle[SILVERHAND_CONVERSATION_ID_ENV]).toBe(
       FIXED_INPUT.conversationId,
     );
-    expect(legacy[SILVERHAND_AGENT_ID_ENV]).toBe(FIXED_INPUT.agentId);
-    expect(legacy[SILVERHAND_SERVER_URL_ENV]).toBe(FIXED_INPUT.serverUrl);
-    expect(legacy[SILVERHAND_AUTH_TOKEN_ENV]).toBe(FIXED_INPUT.token);
+    expect(oracle[SILVERHAND_AGENT_ID_ENV]).toBe(FIXED_INPUT.agentId);
+    expect(oracle[SILVERHAND_SERVER_URL_ENV]).toBe(FIXED_INPUT.serverUrl);
+    expect(oracle[SILVERHAND_AUTH_TOKEN_ENV]).toBe(FIXED_INPUT.token);
   });
 });
 
@@ -225,7 +232,7 @@ describe('Spawn env parity — driver.applyEnv adds NO_COLOR (codex-style)', () 
       proxy_url: 'http://127.0.0.1:7897',
       proxy_runtimes: 'codex',
     });
-    const legacy = buildAgentSpawnEnv({
+    const oracle = buildAgentSpawnEnv({
       ...FIXED_INPUT,
       driver,
       baseProcessEnv: BASE_PROCESS_ENV,
@@ -241,9 +248,9 @@ describe('Spawn env parity — driver.applyEnv adds NO_COLOR (codex-style)', () 
       allowlist: parseProxyRuntimes(proxy.get('proxy_runtimes')),
     });
     const daemon = simulateDaemonSpawnEnv(BASE_PROCESS_ENV, driver, wireEnv);
-    expect(legacy.NO_COLOR).toBe('1');
+    expect(oracle.NO_COLOR).toBe('1');
     expect(daemon.NO_COLOR).toBe('1');
-    expect(daemon).toEqual(legacy);
+    expect(daemon).toEqual(oracle);
   });
 });
 
@@ -252,8 +259,9 @@ describe('Spawn env parity — driver.applyEnv deletes a key (delete-style)', ()
   // `FORCE_COLOR='0'` + `NO_COLOR='1'`, it does NOT delete. The
   // delete-style transform is still worth covering on its own —
   // any future driver that strips an inherited env key must stay
-  // byte-equivalent across legacy/daemon paths — so we keep the
-  // case but drop the misleading driver-name attribution.
+  // byte-equivalent across the oracle and the daemon-computed
+  // reconstruction — so we keep the case but drop the misleading
+  // driver-name attribution.
   const driver = makeDriver(env => {
     const out = { ...env };
     delete out.FORCE_COLOR;
@@ -263,7 +271,7 @@ describe('Spawn env parity — driver.applyEnv deletes a key (delete-style)', ()
   it('FORCE_COLOR present in base env is stripped on both sides', () => {
     const proxy = settings({ proxy_url: null, proxy_runtimes: null });
     const baseEnv = { ...BASE_PROCESS_ENV, FORCE_COLOR: '1' };
-    const legacy = buildAgentSpawnEnv({
+    const oracle = buildAgentSpawnEnv({
       ...FIXED_INPUT,
       driver,
       baseProcessEnv: baseEnv,
@@ -279,8 +287,8 @@ describe('Spawn env parity — driver.applyEnv deletes a key (delete-style)', ()
       allowlist: parseProxyRuntimes(proxy.get('proxy_runtimes')),
     });
     const daemon = simulateDaemonSpawnEnv(baseEnv, driver, wireEnv);
-    expect(legacy.FORCE_COLOR).toBeUndefined();
+    expect(oracle.FORCE_COLOR).toBeUndefined();
     expect(daemon.FORCE_COLOR).toBeUndefined();
-    expect(daemon).toEqual(legacy);
+    expect(daemon).toEqual(oracle);
   });
 });
