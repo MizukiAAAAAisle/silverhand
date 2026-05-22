@@ -1,7 +1,6 @@
 import { useMemo } from 'react';
 import { Archive, Bookmark, Search } from 'lucide-react';
 import { cn } from '@/lib/cn';
-import { formatUserDisplayName, getCurrentUserId } from '@/lib/current-user';
 import { WorkspaceGroup, type WorkspaceItem } from './WorkspacesPanel';
 
 interface SidebarProps {
@@ -148,15 +147,6 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           />
         ) : null}
       </nav>
-
-      <div className="border-t border-border-subtle px-3 py-2.5">
-        <div className="flex items-center gap-2 text-xs text-text-muted">
-          <div className="size-7 rounded-none bg-bg-elevated" />
-          <div className="min-w-0 flex-1 truncate text-text-secondary">
-            {formatUserDisplayName(getCurrentUserId())}
-          </div>
-        </div>
-      </div>
     </aside>
   );
 }
