@@ -24,10 +24,9 @@
 import { z } from 'zod';
 
 /**
- * "Required but opaque" — the same trick `StreamJsonPayloadSchema`
- * uses for `runtime_wake.payload`. A bare `z.unknown()` at an object
- * property is treated by zod as OPTIONAL (missing key parses fine),
- * which would silently downgrade fields the TS type marks required.
+ * "Required but opaque" — a bare `z.unknown()` at an object property
+ * is treated by zod as OPTIONAL (missing key parses fine), which
+ * would silently downgrade fields the TS type marks required.
  * `.refine(v => v !== undefined, ...)` re-asserts presence while
  * keeping the value's *shape* opaque.
  *
@@ -74,8 +73,7 @@ export const ParsedEventSchema = z.discriminatedUnion('kind', [
        *  `z.unknown()` at an object property is treated by zod as
        *  optional — `{kind:'tool_call', name:'Bash'}` without an
        *  `input` field would parse fine, silently downgrading the
-       *  contract. `RequiredUnknownSchema` (same pattern as
-       *  `StreamJsonPayloadSchema`) re-asserts presence. */
+       *  contract. `RequiredUnknownSchema` re-asserts presence. */
       input: RequiredUnknownSchema,
       toolCallId: z.string().min(1).optional(),
     })

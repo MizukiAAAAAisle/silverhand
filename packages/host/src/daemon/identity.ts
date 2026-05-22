@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { z } from 'zod';
@@ -32,9 +32,27 @@ export function defaultDaemonIdentityPath(runtimePidRootDir?: string | null): st
 export function readOrCreateDaemonIdentity(filePath: string): DaemonIdentity {
   if (!existsSync(filePath)) {
     mkdirSync(dirname(filePath), { recursive: true });
-    writeFileSync(filePath, `${JSON.stringify(DEFAULT_DAEMON_IDENTITY, null, 2)}\n`, {
-      mode: 0o600,
-    });
+    // Atomic create: write a sibling tmp file first, then rename. A
+    // crash mid-write must never leave a half-written `identity.json`
+    // behind because future boots will JSON.parse-fail on it and
+    // throw before we even reach `claimPidFile`. The pidfile root next
+    // door (`runtime-pids/`) is written with the same tmp+rename
+    // discipline (see `runtime-pidfiles.ts writeRuntimePidfile`) —
+    // identity should match.
+    const tmp = `${filePath}.tmp-${process.pid}`;
+    try {
+      writeFileSync(tmp, `${JSON.stringify(DEFAULT_DAEMON_IDENTITY, null, 2)}\n`, {
+        mode: 0o600,
+      });
+      renameSync(tmp, filePath);
+    } catch (err) {
+      try {
+        unlinkSync(tmp);
+      } catch {
+        // best-effort tmp cleanup; ignore if it never landed
+      }
+      throw err;
+    }
     return DEFAULT_DAEMON_IDENTITY;
   }
   const parsed = JSON.parse(readFileSync(filePath, 'utf-8')) as unknown;

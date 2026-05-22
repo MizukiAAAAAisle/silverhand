@@ -1923,9 +1923,9 @@ export class Supervisor implements SupervisorContract {
 
   /**
    * Write `payload` to the child's stdin as a single NDJSON line.
-   * The wire `StreamJsonPayload` is opaque (zod `z.unknown()`),
-   * but the daemon's contract is "I write whatever bytes you give
-   * me + a trailing newline". Two encodings are accepted:
+   * The daemon's contract is "I write whatever bytes you give me +
+   * a trailing newline" — `payload` is intentionally `unknown` so
+   * either encoding shape is accepted:
    *
    *   - `string` → written verbatim + '\n'
    *   - object   → `JSON.stringify(payload) + '\n'`

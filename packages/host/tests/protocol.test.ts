@@ -843,8 +843,7 @@ describe('protocol — runtime_parsed_event (Cindy `OQCA05pivtB8nSTC` + `C2BZGDb
     // `input` as optional — `{kind:'tool_call', name:'Bash'}` would
     // parse with `input === undefined`, silently downgrading the TS
     // contract that marks the field required. The
-    // `RequiredUnknownSchema` helper (same trick as
-    // `StreamJsonPayloadSchema.payload`) re-asserts presence while
+    // `RequiredUnknownSchema` helper re-asserts presence while
     // keeping the value's shape opaque.
     const missing = EventFrameSchema.safeParse({
       event: 'runtime_parsed_event',

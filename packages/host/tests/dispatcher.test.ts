@@ -27,7 +27,7 @@ describe('IntentDispatcher', () => {
       protocol_version: HOST_PROTOCOL_VERSION,
       daemon_version: DAEMON_VERSION,
       daemon_id: 'local',
-      instance_id: 'test-instance',
+      instance_id: '__test_instance__',
       host_descriptor: { name: 'local', kind: 'local' },
       capabilities: [...KNOWN_CAPABILITIES_V1],
     });

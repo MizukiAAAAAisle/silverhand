@@ -68,10 +68,31 @@ export interface RunDaemonOptions {
    *  `null` disables the phase-1 pidfile feature for protocol-only
    *  fixtures. */
   runtimePidRootDir?: string | null;
-  /** Persistent daemon identity file. Production defaults next to the
-   *  runtime pidfile root (`~/.silverhand/daemon/identity.json`).
-   *  Tests that pass a temp runtimePidRootDir automatically keep the
-   *  identity file under that temp tree. */
+  /**
+   * Persistent daemon identity file. Four resolution cases:
+   *
+   *   - `=== null` — skip reading/creating any identity file; the
+   *     daemon advertises `DEFAULT_DAEMON_IDENTITY` (bootstrap
+   *     `daemon_id='local'` + `host_descriptor={name:'local',
+   *     kind:'local'}`). Used by protocol-only tests that don't want
+   *     to touch the filesystem.
+   *   - omitted **and** `runtimePidRootDir === null` — same as above
+   *     (cannot derive a file location without a root); bootstrap
+   *     identity is broadcast.
+   *   - omitted **and** `runtimePidRootDir` is set — derived to
+   *     `dirname(runtimePidRootDir)/identity.json`. Tests that pass
+   *     a temp `runtimePidRootDir` therefore keep the identity file
+   *     under the same temp tree automatically.
+   *   - explicit string — use the given path verbatim. Production
+   *     boot in `apps/desktop` lets this default to
+   *     `~/.silverhand/daemon/identity.json` via
+   *     `defaultDaemonIdentityPath`.
+   *
+   * On first read for any non-null path, the file is created with the
+   * bootstrap identity (atomic tmp+rename, mode 0o600). Subsequent
+   * boots reuse it; multi-daemon launchers may pre-populate a
+   * different file before boot.
+   */
   daemonIdentityPath?: string | null;
   /**
    * SupervisorContract factory — REQUIRED, but explicitly nullable (Cindy

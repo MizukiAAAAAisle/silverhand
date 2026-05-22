@@ -233,24 +233,6 @@ export const RuntimeMessageTextSchema = z.string().min(1);
 export type RuntimeMessageText = z.infer<typeof RuntimeMessageTextSchema>;
 
 /**
- * StreamJsonPayload — DEPRECATED (Option A v2). Was the pre-encoded
- * stream-json line backend used to send to daemon for stdin write.
- * After 2b-iii the daemon does its own encode, so callers send
- * `RuntimeMessageTextSchema` instead. Kept exported only because
- * historical tests may still reference the type symbol; new code
- * MUST NOT use it. Will be removed in a follow-up cleanup commit.
- *
- * @deprecated use RuntimeMessageTextSchema; backend no longer
- *   pre-encodes daemon-bound deliveries.
- */
-export const StreamJsonPayloadSchema = z.unknown().refine(
-  v => v !== undefined,
-  { message: 'payload is required (stream-json bytes must be present)' },
-);
-/** @deprecated see StreamJsonPayloadSchema */
-export type StreamJsonPayload = z.infer<typeof StreamJsonPayloadSchema>;
-
-/**
  * StartOptions — placeholder. Step 1 keeps this loose because the
  * fake supervisor doesn't care about the contents. Step 2 will lift
  * the full shape verbatim out of CM (mock CLI override, init retry

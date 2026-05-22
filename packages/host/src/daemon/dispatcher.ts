@@ -76,7 +76,15 @@ export class IntentDispatcher {
     this.logger = opts.logger;
     this.now = opts.now ?? Date.now;
     this.startedAt = opts.startedAt ?? this.now();
-    this.helloResult = opts.helloResult ?? createDaemonHelloResult();
+    // The fallback `helloResult` exists for the protocol-only test
+    // matrix where the dispatcher is exercised in isolation. Prod
+    // wiring goes through `runDaemon`, which always passes a fully
+    // materialised `helloResult` (real `instance_id`, real identity).
+    // `'__test_instance__'` is the grep-friendly sentinel — if it
+    // ever shows up on the wire in prod logs, something forgot to
+    // pass `helloResult`.
+    this.helloResult =
+      opts.helloResult ?? createDaemonHelloResult('__test_instance__');
     this.supervisor = opts.supervisor;
   }
 
