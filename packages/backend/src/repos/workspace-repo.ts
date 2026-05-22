@@ -98,7 +98,7 @@ export class WorkspaceRepo {
          WHERE w.workspace_kind IN ('regular', 'agent_home')
          ORDER BY CASE w.workspace_kind WHEN 'regular' THEN 0 ELSE 1 END,
                   (w.pinned_at IS NOT NULL) DESC,
-                  w.pinned_at ASC,
+                  w.pinned_at DESC,
                   w.updated_at DESC`,
       )
       .all();
@@ -199,7 +199,10 @@ export class WorkspaceRepo {
              WHERE w.owner_agent_id = ?
                AND w.workspace_kind = 'agent_home'
            )
-          ORDER BY sort_group ASC, sort_name COLLATE NOCASE ASC`,
+          ORDER BY sort_group ASC,
+                   (pinned_at IS NOT NULL) DESC,
+                   pinned_at DESC,
+                   sort_name COLLATE NOCASE ASC`,
       )
       .all(agentId, agentId)
       .map(rowToDto);

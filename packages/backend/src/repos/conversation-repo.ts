@@ -145,7 +145,7 @@ export class ConversationRepo {
          WHERE workspace_id = ? AND kind = 'channel' AND archived_at IS NULL
            ${userJoin}
          ORDER BY (pinned_at IS NOT NULL) DESC,
-                  pinned_at ASC,
+                  pinned_at DESC,
                   created_at ASC`,
       )
       .all(...args);

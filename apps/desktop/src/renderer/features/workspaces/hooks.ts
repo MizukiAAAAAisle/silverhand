@@ -63,11 +63,26 @@ function workspaceToListItem(workspace: WorkspaceDto): WorkspaceListItem {
   };
 }
 
-function sortConversationList(items: ChannelListItem[]): ChannelListItem[] {
+export function sortConversationList(items: ChannelListItem[]): ChannelListItem[] {
+  const byId = new Map(items.map(item => [item.id, item] as const));
+  const topFor = (item: ChannelListItem): ChannelListItem =>
+    item.kind === 'thread' && item.parent_conversation_id
+      ? byId.get(item.parent_conversation_id) ?? item
+      : item;
+  const compareTop = (a: ChannelListItem, b: ChannelListItem): number => {
+    const aPinned = a.pinned_at !== null;
+    const bPinned = b.pinned_at !== null;
+    if (aPinned !== bPinned) return aPinned ? -1 : 1;
+    if (a.pinned_at !== null && b.pinned_at !== null && a.pinned_at !== b.pinned_at) {
+      return b.pinned_at - a.pinned_at;
+    }
+    return a.created_at - b.created_at;
+  };
+
   return [...items].sort((a, b) => {
-    const aParent = a.kind === 'thread' ? a.parent_conversation_id : a.id;
-    const bParent = b.kind === 'thread' ? b.parent_conversation_id : b.id;
-    if (aParent !== bParent) return a.created_at - b.created_at;
+    const aTop = topFor(a);
+    const bTop = topFor(b);
+    if (aTop.id !== bTop.id) return compareTop(aTop, bTop);
     if (a.kind !== b.kind) return a.kind === 'thread' ? 1 : -1;
     return a.created_at - b.created_at;
   });

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
@@ -55,7 +55,7 @@ describe('WorkspaceRepo', () => {
     expect(workspaces.isMember(workspace.id, b.id)).toBe(true);
   });
 
-  it('pins regular workspaces and lists pinned rows first', () => {
+  it('pins regular workspaces and lists later pins first', () => {
     const { localHostId, workspace, workspaces } = bootstrapWorkspaceAndAgents();
     const second = workspaces.insert({
       name: 'infra',
@@ -65,11 +65,18 @@ describe('WorkspaceRepo', () => {
     });
 
     expect(workspaces.get(workspace.id)?.pinned_at).toBeNull();
-    expect(workspaces.setPinned(workspace.id, true)?.pinned_at).not.toBeNull();
-    expect(workspaces.list().map(w => w.id).slice(0, 2)).toEqual([
-      workspace.id,
-      second.id,
-    ]);
+    const now = vi.spyOn(Date, 'now');
+    now.mockReturnValueOnce(1_000).mockReturnValueOnce(2_000);
+    try {
+      expect(workspaces.setPinned(workspace.id, true)?.pinned_at).toBe(1_000);
+      expect(workspaces.setPinned(second.id, true)?.pinned_at).toBe(2_000);
+      expect(workspaces.list().map(w => w.id).slice(0, 2)).toEqual([
+        second.id,
+        workspace.id,
+      ]);
+    } finally {
+      now.mockRestore();
+    }
 
     expect(workspaces.setPinned(workspace.id, false)?.pinned_at).toBeNull();
   });

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -153,17 +153,27 @@ describe('workspace metadata and membership routes', () => {
       await http(t).post('/api/workspaces', { name: 'pin-second' })
     ).json() as any;
 
-    const pin = await http(t).post(
-      `/api/workspaces/${first.workspace.id}/pin`,
-    );
-    expect(pin.status).toBe(200);
-    const pinned = await pin.json() as any;
-    expect(pinned.workspace.pinned_at).not.toBeNull();
+    const now = vi.spyOn(Date, 'now');
+    now.mockReturnValueOnce(1_000).mockReturnValueOnce(2_000);
+    try {
+      const pin = await http(t).post(
+        `/api/workspaces/${first.workspace.id}/pin`,
+      );
+      expect(pin.status).toBe(200);
+      const pinned = await pin.json() as any;
+      expect(pinned.workspace.pinned_at).toBe(1_000);
+      const secondPin = await http(t).post(
+        `/api/workspaces/${second.workspace.id}/pin`,
+      );
+      expect(secondPin.status).toBe(200);
+    } finally {
+      now.mockRestore();
+    }
 
     const listed = await (await http(t).get('/api/workspaces')).json() as any;
     expect(listed.workspaces.map((w: any) => w.id).slice(0, 2)).toEqual([
-      first.workspace.id,
       second.workspace.id,
+      first.workspace.id,
     ]);
 
     const unpin = await http(t).del(
