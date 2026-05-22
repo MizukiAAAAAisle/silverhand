@@ -4,10 +4,10 @@
  * `FakeSupervisor` plugged into the daemon, and unsolicited events
  * coming back through HostClient.subscribe.
  *
- * Step 1 review boundary (Cindy `1vRk1SIAFfa1x10t`): protocol-side
- * correctness only — the fake supervisor models driver state
- * deterministically; PR-2 step 2 will validate behavioral
- * equivalence with the real CM-derived supervisor.
+ * Protocol-side coverage: the fake supervisor models driver state
+ * deterministically while the socket / dispatcher / subscription path
+ * is real. Production supervisor behavior is covered separately by
+ * `supervisor.test.ts`.
  *
  * What this test covers:
  *
@@ -25,13 +25,13 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDaemon, type RunningDaemon } from '../src/daemon/index.js';
-import { FakeSupervisor } from '../src/daemon/fake-supervisor.js';
+import { FakeSupervisor } from './_helpers/fake-supervisor.js';
 import { HostClient } from '../src/client/index.js';
 import type { EventFrame, RuntimeStartResult } from '../src/protocol.js';
 
 /** Narrow a `RuntimeStartResult` to the success arm; throws on the
  *  cooldown arm — every e2e-supervisor test expects success.
- *  (3c added the discriminated-union shape; see real-supervisor.test.ts
+ *  (3c added the discriminated-union shape; see supervisor.test.ts
  *  for the longer explanation.) */
 function assertStarted(
   res: RuntimeStartResult,

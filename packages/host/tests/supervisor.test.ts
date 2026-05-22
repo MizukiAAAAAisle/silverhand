@@ -1,5 +1,5 @@
 /**
- * RealSupervisor 3a — spawn / output / hard stop / exit / status.
+ * Supervisor 3a — spawn / output / hard stop / exit / status.
  *
  * Scope locked with Cindy in `jhH-vC1s_1J_jTLu`: this suite covers
  * execution-plane behavior only. Parse / wake / soft stop / watchdog
@@ -23,7 +23,7 @@ import { setTimeout as wait } from 'node:timers/promises';
 import { execPath } from 'node:process';
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 
-import { RealSupervisor } from '../src/daemon/real-supervisor/index.js';
+import { Supervisor } from '../src/daemon/supervisor/index.js';
 import type { Driver, DriverSpawnContext, ParsedEvent } from '../src/drivers/index.js';
 import type { DaemonLogger } from '../src/daemon/logger.js';
 import type { EventFrame, RuntimeStartResult } from '../src/protocol.js';
@@ -132,7 +132,7 @@ function makeSupervisor(opts: {
   sigkillTimeoutMs?: number;
   spawnFn?: (b: string, a: ReadonlyArray<string>, o: SpawnOptions) => ChildProcess;
 } = {}): {
-  supervisor: RealSupervisor;
+  supervisor: Supervisor;
   events: EventFrame[];
 } {
   const spy = makeEmitSpy();
@@ -143,7 +143,7 @@ function makeSupervisor(opts: {
   const spawnFn =
     opts.spawnFn ??
     ((bin, args, options) => realSpawn(execPath, [bin, ...args.slice(1)], options));
-  const supervisor = new RealSupervisor({
+  const supervisor = new Supervisor({
     emit: spy.emit,
     logger: silentLogger(),
     driverFor: () => driver,
@@ -174,7 +174,7 @@ async function waitFor(
   throw new Error(`waitFor timed out after ${timeoutMs}ms`);
 }
 
-describe('RealSupervisor 3a — spawn / status / phase emit', () => {
+describe('Supervisor 3a — spawn / status / phase emit', () => {
   it('start spawns a child with a real pid and emits runtime_state (starting → idle) + runtime_ready_for_drain', async () => {
     const { supervisor, events } = makeSupervisor();
     const res = await supervisor.start(baseStartParams);
@@ -256,7 +256,7 @@ describe('RealSupervisor 3a — spawn / status / phase emit', () => {
 
   it('start throws when the binary resolver returns null', async () => {
     const spy = makeEmitSpy();
-    const supervisor = new RealSupervisor({
+    const supervisor = new Supervisor({
       emit: spy.emit,
       logger: silentLogger(),
       driverFor: () => makeFakeDriver(),
@@ -266,7 +266,7 @@ describe('RealSupervisor 3a — spawn / status / phase emit', () => {
   });
 });
 
-describe('RealSupervisor 3a — output pump', () => {
+describe('Supervisor 3a — output pump', () => {
   it('emits runtime_output for stdout chunks the child writes', async () => {
     const { supervisor, events } = makeSupervisor({
       driverArgs: ['--echo', 'hello-from-stdout'],
@@ -354,7 +354,7 @@ describe('RealSupervisor 3a — output pump', () => {
   });
 });
 
-describe('RealSupervisor 3a — hard stop / exit', () => {
+describe('Supervisor 3a — hard stop / exit', () => {
   it('hard stop sends SIGTERM, child exits, runtime_state(failed, stopped) + runtime_exit(intentional=true) land', async () => {
     const { supervisor, events } = makeSupervisor();
     await supervisor.start(baseStartParams);
@@ -633,7 +633,7 @@ describe('RealSupervisor 3a — hard stop / exit', () => {
         : [];
 
     const spy = makeEmitSpy();
-    const supervisor = new RealSupervisor({
+    const supervisor = new Supervisor({
       emit: spy.emit,
       logger: silentLogger(),
       driverFor: () => driver,
@@ -666,7 +666,7 @@ describe('RealSupervisor 3a — hard stop / exit', () => {
   });
 });
 
-describe('RealSupervisor 3a — stopAll / closeActivityLog', () => {
+describe('Supervisor 3a — stopAll / closeActivityLog', () => {
   it('stopAll hard-terminates every live handle and returns the count', async () => {
     const { supervisor, events } = makeSupervisor();
     await supervisor.start({ ...baseStartParams, agent_id: 'a1' });
@@ -694,7 +694,7 @@ describe('RealSupervisor 3a — stopAll / closeActivityLog', () => {
   });
 });
 
-describe('RealSupervisor 3b — wake / soft stop write payload to stdin', () => {
+describe('Supervisor 3b — wake / soft stop write payload to stdin', () => {
   it('wake on a live runtime writes the encoded payload to stdin and returns delivered:true with the same delivery_ids', async () => {
     // 3b lifts the 3a stub: wake now writes the opaque payload to
     // the child's stdin (+ '\n') and returns delivered:true on
@@ -892,7 +892,7 @@ describe('RealSupervisor 3b — wake / soft stop write payload to stdin', () => 
   });
 });
 
-describe('RealSupervisor 3b — clearSession behavior', () => {
+describe('Supervisor 3b — clearSession behavior', () => {
   it('clearSession on unknown returns cleared:false; on live hard-stops the runtime and returns cleared:true (resume-state clear remains a 3b/backend concern)', async () => {
     const { supervisor, events } = makeSupervisor();
     const miss = await supervisor.clearSession({
@@ -960,7 +960,7 @@ function makeSupervisorWithDriver(driver: Driver, opts: {
   sigtermToSigkillMs?: number;
   sigkillTimeoutMs?: number;
 } = {}): {
-  supervisor: RealSupervisor;
+  supervisor: Supervisor;
   events: EventFrame[];
 } {
   const spy = makeEmitSpy();
@@ -970,7 +970,7 @@ function makeSupervisorWithDriver(driver: Driver, opts: {
     args: ReadonlyArray<string>,
     options: SpawnOptions,
   ): ChildProcess => realSpawn(execPath, [bin, ...args.slice(1)], options);
-  const supervisor = new RealSupervisor({
+  const supervisor = new Supervisor({
     emit: spy.emit,
     logger: silentLogger(),
     driverFor: () => driver,
@@ -986,7 +986,7 @@ function makeSupervisorWithDriver(driver: Driver, opts: {
 // `../src/drivers/index.js`, which re-exports `ParsedEvent` from
 // `@silverhand/shared`).
 
-describe('RealSupervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWfnq-bKJ`)', () => {
+describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWfnq-bKJ`)', () => {
   it('every stdout line is passed to driver.parseLine and each returned ParsedEvent is fanned out as runtime_parsed_event', async () => {
     const { driver, setNextParse } = makeProgrammableDriver(['--emit-line', 'PROBE']);
     const { supervisor, events } = makeSupervisorWithDriver(driver);
@@ -1243,7 +1243,7 @@ describe('RealSupervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGD
   });
 });
 
-describe('RealSupervisor 3b — startup_delivery step-0 mutex', () => {
+describe('Supervisor 3b — startup_delivery step-0 mutex', () => {
   it('start with startup_delivery delays runtime_ready_for_drain until the batch settles (runtime_startup_delivery_consumed comes first)', async () => {
     // Cindy `wuiwdLKrLFyGip_s`: settle order is
     //   consumed/failed → clear pending → ready_for_drain.
@@ -1343,7 +1343,7 @@ describe('RealSupervisor 3b — startup_delivery step-0 mutex', () => {
   });
 });
 
-describe('RealSupervisor 3b — Cindy `YW2BGWryWjfymPkU` B2: deferred startup_delivery consume for requires_first_message drivers', () => {
+describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B2: deferred startup_delivery consume for requires_first_message drivers', () => {
   it('write success alone does NOT settle the gate when driver.kickoffMode === requires_first_message; consumed fires only after session_init', async () => {
     // CM's `initPendingInboxIds` defers `markDelivered` for codex-like
     // (`requires_first_message`) drivers until `session_init` arrives,
@@ -1388,7 +1388,7 @@ describe('RealSupervisor 3b — Cindy `YW2BGWryWjfymPkU` B2: deferred startup_de
 
     const { driver } = makeProgrammableDriver([], 'requires_first_message');
     const spy = makeEmitSpy();
-    const supervisor = new RealSupervisor({
+    const supervisor = new Supervisor({
       emit: spy.emit,
       logger: silentLogger(),
       driverFor: () => driver,
@@ -1502,7 +1502,7 @@ describe('RealSupervisor 3b — Cindy `YW2BGWryWjfymPkU` B2: deferred startup_de
   });
 });
 
-describe('RealSupervisor 3b — Cindy `YW2BGWryWjfymPkU` B3: resolveRun terminal semantics', () => {
+describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B3: resolveRun terminal semantics', () => {
   it('turn_end resolves the run; the next thinking event creates a fresh runId with no leaked terminalReason', async () => {
     // resolveRun() clears `handle.runState` after emitting the terminal
     // so the next observable activity must allocate a NEW runId via
@@ -1664,7 +1664,7 @@ describe('RealSupervisor 3b — Cindy `YW2BGWryWjfymPkU` B3: resolveRun terminal
   });
 });
 
-describe('RealSupervisor 3b — Cindy `YW2BGWryWjfymPkU` nit: startup_delivery_accepted is ABSENT when params had no startup_delivery', () => {
+describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` nit: startup_delivery_accepted is ABSENT when params had no startup_delivery', () => {
   it('start without startup_delivery returns a result with NO startup_delivery_accepted key (not false)', async () => {
     // The protocol comment says "Absent when `startup_delivery` was
     // not provided in params" — surface only when the caller actually
@@ -1686,7 +1686,7 @@ describe('RealSupervisor 3b — Cindy `YW2BGWryWjfymPkU` nit: startup_delivery_a
 //       compaction watchdog
 //
 // All 3c-b tests use the same fake-driver / fixture pattern as 3a/3b
-// — RealSupervisor is exercised against a real child process via
+// — Supervisor is exercised against a real child process via
 // echo-runtime.cjs. Watchdog timers default to ~5 minutes; tests
 // override the supervisor's `initWatchdogMs` (global override per
 // Cindy `-pdNvRYOWip5e9yA`) to ~50-200ms so the cascades complete
@@ -1698,8 +1698,8 @@ import {
   DEFAULT_INIT_LIVENESS_SILENCE_MS,
   DEFAULT_INIT_POST_PROTOCOL_MS,
   DEFAULT_INIT_PRE_PROTOCOL_CAP_MS,
-  type RealSupervisorOptions,
-} from '../src/daemon/real-supervisor/index.js';
+  type SupervisorOptions,
+} from '../src/daemon/supervisor/index.js';
 
 /** Build a supervisor variant that lets each 3c-b test pass extra
  *  watchdog / retry / cooldown knobs without rebuilding the spawn /
@@ -1712,7 +1712,7 @@ function make3cSupervisor(
     spawnFn?: (b: string, a: ReadonlyArray<string>, o: SpawnOptions) => ChildProcess;
   } & Partial<
     Pick<
-      RealSupervisorOptions,
+      SupervisorOptions,
       | 'sigtermToSigkillMs'
       | 'sigkillTimeoutMs'
       | 'initWatchdogMs'
@@ -1725,7 +1725,7 @@ function make3cSupervisor(
       | 'compactionStaleMs'
     >
   > = {},
-): { supervisor: RealSupervisor; events: EventFrame[]; driver: Driver } {
+): { supervisor: Supervisor; events: EventFrame[]; driver: Driver } {
   const spy = makeEmitSpy();
   const baseDriver = makeFakeDriver(opts.driverArgs);
   const driver = opts.driverOverride ? opts.driverOverride(baseDriver) : baseDriver;
@@ -1733,7 +1733,7 @@ function make3cSupervisor(
   const spawnFn =
     opts.spawnFn ??
     ((bin, args, options) => realSpawn(execPath, [bin, ...args.slice(1)], options));
-  const supervisor = new RealSupervisor({
+  const supervisor = new Supervisor({
     emit: spy.emit,
     logger: silentLogger(),
     driverFor: () => driver,
@@ -1753,7 +1753,7 @@ function make3cSupervisor(
   return { supervisor, events: spy.events, driver };
 }
 
-describe('RealSupervisor 3c-b — driver.bindIO', () => {
+describe('Supervisor 3c-b — driver.bindIO', () => {
   it('calls driver.bindIO once after spawn with writeLine + spawnCtx', async () => {
     const calls: Array<{ writeLine: (line: string) => Promise<void>; ctx: DriverSpawnContext }> = [];
     const { supervisor } = make3cSupervisor({
@@ -1829,7 +1829,7 @@ describe('RealSupervisor 3c-b — driver.bindIO', () => {
   });
 });
 
-describe('RealSupervisor 3c-b — 3-tier init watchdog', () => {
+describe('Supervisor 3c-b — 3-tier init watchdog', () => {
   it('silence tier fires when no bytes arrive within livenessSilenceMs', async () => {
     // Cindy `HyC05fC-FEs94uoZ` B1: prior version pointed buildArgs at
     // `[execPath, '-e', 'setInterval(...);']` to try to coerce
@@ -2049,7 +2049,7 @@ describe('RealSupervisor 3c-b — 3-tier init watchdog', () => {
   });
 });
 
-describe('RealSupervisor 3c-b — retry / cooldown state machine', () => {
+describe('Supervisor 3c-b — retry / cooldown state machine', () => {
   it('first timeout with maxRetries=1 emits retrying=true + runtime_init_retrying for attempt 1', async () => {
     const { supervisor, events } = make3cSupervisor({
       initWatchdogMs: 80,
@@ -2217,7 +2217,7 @@ describe('RealSupervisor 3c-b — retry / cooldown state machine', () => {
   });
 });
 
-describe('RealSupervisor 3c-b — round-2 regressions (Cindy `HyC05fC-FEs94uoZ` B2/B3)', () => {
+describe('Supervisor 3c-b — round-2 regressions (Cindy `HyC05fC-FEs94uoZ` B2/B3)', () => {
   it('B2: hard stop during init clears the watchdog so no runtime_init_timeout fires and terminal reason is "stopped"', async () => {
     // CM (`conversation-manager.ts` lines 1020-1023) clears the init
     // watchdog AT DRAINING ENTRY so a user-initiated hard stop is not
@@ -2430,7 +2430,7 @@ describe('RealSupervisor 3c-b — round-2 regressions (Cindy `HyC05fC-FEs94uoZ` 
 });
 
 
-describe('RealSupervisor 3c-b — lifecycle lock', () => {
+describe('Supervisor 3c-b — lifecycle lock', () => {
   it('concurrent start+start on the same key returns the idempotent success arm (lock serializes)', async () => {
     const { supervisor } = make3cSupervisor();
     const [a, b] = await Promise.all([
@@ -2502,7 +2502,7 @@ describe('RealSupervisor 3c-b — lifecycle lock', () => {
   });
 });
 
-describe('RealSupervisor 3c-b — compaction watchdog', () => {
+describe('Supervisor 3c-b — compaction watchdog', () => {
   it('compaction_started + no compaction_finished within compactionStaleMs → runtime_compaction_stale + run-state stacks compactionStale:true (keeps compacting:true)', async () => {
     const { supervisor, events } = make3cSupervisor({
       driverOverride: base => ({
@@ -2585,7 +2585,7 @@ describe('RealSupervisor 3c-b — compaction watchdog', () => {
   });
 });
 
-describe('RealSupervisor 3c-b — defaults exported for the bridge', () => {
+describe('Supervisor 3c-b — defaults exported for the bridge', () => {
   it('exports CM-aligned defaults so backend can render UI hints without re-deriving the values', () => {
     expect(DEFAULT_INIT_LIVENESS_SILENCE_MS).toBe(30 * 1000);
     expect(DEFAULT_INIT_PRE_PROTOCOL_CAP_MS).toBe(5 * 60 * 1000);
@@ -2648,7 +2648,7 @@ function makeStatefulCodexLikeDriver(): {
   return { driver, flipReady: () => { state.ready = true; } };
 }
 
-describe('RealSupervisor 3b — Option A v2 wake arms (Cindy `UMGu36zoTDVuKWXi`)', () => {
+describe('Supervisor 3b — Option A v2 wake arms (Cindy `UMGu36zoTDVuKWXi`)', () => {
   it('wake on a driver whose readyToEncode()=false returns delivered:false reason:driver_not_ready (recoverable)', async () => {
     // Codex pre-`thread/started`: backend will keep the DB row pending
     // and redeliver on the next `runtime_ready_for_drain` once
@@ -2734,7 +2734,7 @@ describe('RealSupervisor 3b — Option A v2 wake arms (Cindy `UMGu36zoTDVuKWXi`)
   });
 });
 
-describe('RealSupervisor 3b — Option A v2 ready_for_drain gate by readyToEncode (Cindy `UMGu36zoTDVuKWXi`)', () => {
+describe('Supervisor 3b — Option A v2 ready_for_drain gate by readyToEncode (Cindy `UMGu36zoTDVuKWXi`)', () => {
   it('ready_for_drain is held until readyToEncode() flips true (codex stateful gate)', async () => {
     // No startup_delivery; gate is purely driver.readyToEncode().
     // Pre-flip: ready_for_drain MUST NOT fire even after start
@@ -2798,7 +2798,7 @@ describe('RealSupervisor 3b — Option A v2 ready_for_drain gate by readyToEncod
   });
 });
 
-describe('RealSupervisor 3b — Option A v2 deferred startup_delivery on stateful driver (Cindy `UMGu36zoTDVuKWXi`)', () => {
+describe('Supervisor 3b — Option A v2 deferred startup_delivery on stateful driver (Cindy `UMGu36zoTDVuKWXi`)', () => {
   it('startup_delivery encode is deferred until readyToEncode() flips true (codex pre-thread/started)', async () => {
     // Codex case: start() with a startup_delivery while the driver's
     // readyToEncode() is still false. The supervisor MUST defer the

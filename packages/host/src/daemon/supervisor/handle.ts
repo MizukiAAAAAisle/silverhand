@@ -1,6 +1,6 @@
 /**
  * RuntimeHandle — per-(conversation, agent) execution-plane state
- * owned by `RealSupervisor`.
+ * owned by `Supervisor`.
  *
  * 3a scope: spawn / output / hard-stop / exit. 3b adds parse-fanout
  * state (line buffer + per-handle AgentRunState), startup-delivery
@@ -11,7 +11,7 @@
  * the handle so that operations on a (conv, agent) with no handle yet
  * (e.g. a fresh `start`) still queue correctly.
  *
- * Consumers reach the handle only through `RealSupervisor` methods.
+ * Consumers reach the handle only through `Supervisor` methods.
  */
 import type { ChildProcess } from 'node:child_process';
 import type { AgentRunState } from '@silverhand/shared';
@@ -90,7 +90,7 @@ export interface RuntimeHandle {
   /** The actual child process. Owned by the handle; cleanup releases
    *  stdio streams + removes listeners. */
   readonly child: ChildProcess;
-  /** Current execution phase. Updated in-place by RealSupervisor as
+  /** Current execution phase. Updated in-place by Supervisor as
    *  the process moves through its lifecycle. */
   phase: RuntimePhase;
   /** Output flow-control flag. `true` while `pauseOutput()` is in

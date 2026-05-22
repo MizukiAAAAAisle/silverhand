@@ -9,12 +9,12 @@ import {
   FakeSupervisor,
   type FakeSupervisorOptions,
   type FakeSupervisorPhase,
-} from '../src/daemon/fake-supervisor.js';
+} from './_helpers/fake-supervisor.js';
 import type { EventFrame, RuntimeStartResult } from '../src/protocol.js';
 
 /** Narrow a `RuntimeStartResult` to the success arm; throws on the
  *  cooldown arm — every fake-supervisor test expects success. See
- *  the longer explanation in `real-supervisor.test.ts`. */
+ *  the longer explanation in `supervisor.test.ts`. */
 function assertStarted(
   res: RuntimeStartResult,
 ): asserts res is Extract<RuntimeStartResult, { started: true }> {

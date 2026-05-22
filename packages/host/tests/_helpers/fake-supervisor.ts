@@ -1,20 +1,12 @@
 /**
- * Fake supervisor — daemon-side in-memory mock of the (conversation,
- * agent) execution-plane runtime that PR-2 step 2 will carve out of
- * `packages/backend/src/conversation-manager.ts`.
+ * FakeSupervisor — test-only in-memory implementation of the
+ * daemon-side runtime contract.
  *
- * Why fake instead of real for step 1:
- *
- *  - Step 1 review boundary (per Cindy `1vRk1SIAFfa1x10t`) is the
- *    PROTOCOL — wire shapes, dispatcher routing, kill-and-reclaim
- *    semantics, output backpressure, logging contract. Behavioral
- *    equivalence with real CM is step 2's review boundary.
- *  - The CM file is large and load-bearing. Lifting it in step 1
- *    would mix two unrelated reviews and risk regressing the 820
- *    backend tests on a protocol-only change.
- *  - The fake exercises every code path the real supervisor will
- *    need: state machine transitions, event emission, batch wake
- *    semantics, startup/live exclusivity, clean teardown.
+ * It exists for protocol / dispatcher / socket e2e tests that need
+ * deterministic `runtime_*` responses and broadcast events without
+ * spawning a real agent CLI. Production wiring uses
+ * `src/daemon/supervisor/index.ts`; this helper deliberately lives
+ * under `tests/_helpers` so it cannot be imported by the daemon entry.
  *
  * State machine (matches design doc §3.2.1):
  *
@@ -68,7 +60,7 @@ import type {
   RuntimeStopResult,
   RuntimeWakeParams,
   RuntimeWakeResult,
-} from '../protocol.js';
+} from '../../src/protocol.js';
 
 export type FakeSupervisorPhase =
   | 'idle'
@@ -87,7 +79,7 @@ interface FakeRuntime {
   pending_startup_delivery_ids?: number[];
   /** Output flow-control flag. Set by `pauseOutput`, cleared by
    *  `resumeOutput`. The fake doesn't gate any actual stdout pump on
-   *  this — step 2's real supervisor will. We track it here so
+   *  this. We track it here so
    *  duplicate pause/resume calls don't re-emit ack events. */
   output_paused: boolean;
 }
@@ -356,8 +348,8 @@ export class FakeSupervisor {
   // ── runtime_output_pause / runtime_output_resume ───────────────
   //
   // Cindy `_YD0KJF-YAQXlcki` requires these to flow through the
-  // Supervisor interface (NOT inline dispatcher emit) so step 2's
-  // real flow-control wiring doesn't reshape the protocol boundary.
+  // SupervisorContract (NOT inline dispatcher emit) so protocol
+  // routing stays identical between fake and production supervisors.
   //
   // Semantics:
   //  - On unknown / exited (conv, agent): return paused=false
@@ -494,10 +486,9 @@ export class FakeSupervisor {
 
   /**
    * Build + emit a `runtime_state` event reflecting `rt`'s current
-   * phase. Phase → `AgentRunStatus` mapping (deliberately collapses
-   * ConversationManager's richer state machine — the fake is for
-   * protocol-surface coverage only; step 2 wires the real CM-derived
-   * state on the wire):
+   * phase. Phase → `AgentRunStatus` mapping deliberately collapses
+   * the production supervisor's richer state machine — the fake is
+   * for protocol-surface coverage only:
    *
    *   - `spawning`         → `starting`
    *   - `startup_pending`  → `starting`

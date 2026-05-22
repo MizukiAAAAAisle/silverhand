@@ -42,7 +42,7 @@ import {
 } from '../protocol.js';
 import { DAEMON_VERSION } from './version.js';
 import type { DaemonLogger } from './logger.js';
-import type { Supervisor } from './supervisor.js';
+import type { SupervisorContract } from './supervisor-contract.js';
 import { logIntent } from './daemon-logging.js';
 
 export interface DispatcherOptions {
@@ -52,20 +52,18 @@ export interface DispatcherOptions {
   /** Epoch ms supplier; injected so tests can pin time. Default: Date.now. */
   now?: () => number;
   /**
-   * Supervisor backing the runtime_* intents. PR-1's call-site (no
-   * supervisor) treats every runtime_* intent as `unknown_intent`,
-   * so the dispatcher's behaviour is backward-compatible with
-   * existing PR-1 tests. PR-2 step 1 plugs a `FakeSupervisor` here;
-   * step 2 swaps in the real one.
+   * SupervisorContract backing the runtime_* intents. `null` keeps the
+   * protocol-only PR-1 surface for tests; production wires the
+   * concrete `Supervisor`.
    */
-  supervisor?: Supervisor;
+  supervisor?: SupervisorContract;
 }
 
 export class IntentDispatcher {
   private readonly logger: DaemonLogger;
   private readonly startedAt: number;
   private readonly now: () => number;
-  private readonly supervisor: Supervisor | undefined;
+  private readonly supervisor: SupervisorContract | undefined;
   private intentCount = 0;
   private shuttingDown = false;
 
@@ -221,7 +219,7 @@ export class IntentDispatcher {
   /**
    * Per-intent business logic. PR-1's lifecycle intents
    * (ping / status / echo) are handled inline; PR-2's runtime_*
-   * intents are routed to the injected `Supervisor` when one is
+   * intents are routed to the injected `SupervisorContract` when one is
    * provided, and reported as `unknown_intent` (via the schema
    * registry already rejecting unknown names) when no supervisor
    * is wired — that keeps backward-compatibility with PR-1 tests
@@ -288,13 +286,10 @@ export class IntentDispatcher {
           params as RuntimeCloseActivityLogParams,
         );
       // ── output flow control ─────────────────────────────────────
-      // Cindy `_YD0KJF-YAQXlcki`: route through the Supervisor
-      // interface so step 2's real flow-control wiring slots in
-      // without reshaping the protocol boundary. The supervisor is
-      // also where the `runtime_output_paused` / `_resumed` ack event
-      // is emitted (FakeSupervisor.pauseOutput emits it directly via
-      // its emit channel; the real supervisor will gate stdout pumps
-      // and emit at the same point).
+      // Cindy `_YD0KJF-YAQXlcki`: route through the SupervisorContract
+      // interface instead of emitting from the dispatcher. The
+      // concrete supervisor owns both flow-control state and the
+      // `runtime_output_paused` / `_resumed` ack event.
       case 'runtime_output_pause':
         return this.requireSupervisor().pauseOutput(
           params as RuntimeOutputPauseParams,
@@ -308,7 +303,7 @@ export class IntentDispatcher {
 
   /** Internal helper for runtime_* handlers. Throws a typed error
    *  the dispatcher's catch arm will project as `internal_error`. */
-  private requireSupervisor(): Supervisor {
+  private requireSupervisor(): SupervisorContract {
     if (!this.supervisor) {
       throw new Error(
         'runtime_* intent reached dispatcher with no supervisor wired',

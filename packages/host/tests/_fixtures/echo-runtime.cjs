@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * RealSupervisor 3a/3b test fixture — a tiny "runtime binary" the
+ * Supervisor 3a/3b test fixture — a tiny "runtime binary" the
  * host supervisor can spawn to validate spawn / output-pump /
  * hard-stop / exit / stdin-write behavior without depending on a
  * real claude / codex / cursor install.

@@ -399,7 +399,7 @@ export const RuntimeWakeParamsSchema = z
     delivery_ids: z.array(z.number().int()).min(1),
     kind: z.enum(['message', 'schedule_fire']),
     /** Unencoded message text (Option A v2). Daemon's
-     *  `RealSupervisor.wake()` calls
+     *  `Supervisor.wake()` calls
      *  `handle.driver.encodeStdinMessage(text, handle.cliSessionId)`
      *  using its in-process driver instance whose runtime state
      *  (codex threadId / activeTurnId etc.) was set during spawn /
@@ -933,7 +933,7 @@ export const EventFrameSchema = z.discriminatedUnion('event', [
   // logs surface the size budget, and `reason` is a single-arm enum.
   // NO payload — explicitly NO `unknown.raw`, NO tool input, NO text.
   //
-  // Note: this dropped frame is on the WIRE only. RealSupervisor
+  // Note: this dropped frame is on the WIRE only. Supervisor
   // still updates its in-memory AgentRunState from the original
   // ParsedEvent before encoding — frame-too-large is a broadcast
   // concern, not a run-state concern (Cindy `C2BZGDbQWfnq-bKJ`).

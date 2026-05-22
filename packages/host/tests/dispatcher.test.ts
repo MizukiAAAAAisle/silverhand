@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { IntentDispatcher } from '../src/daemon/dispatcher.js';
-import { FakeSupervisor } from '../src/daemon/fake-supervisor.js';
+import { FakeSupervisor } from './_helpers/fake-supervisor.js';
 import type { DaemonLogger } from '../src/daemon/logger.js';
 
 function silentLogger(): DaemonLogger {

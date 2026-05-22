@@ -32,7 +32,7 @@ import {
 } from '../src/daemon/daemon-logging.js';
 import type { DaemonLogger } from '../src/daemon/logger.js';
 import { IntentDispatcher } from '../src/daemon/dispatcher.js';
-import type { Supervisor } from '../src/daemon/supervisor.js';
+import type { SupervisorContract } from '../src/daemon/supervisor-contract.js';
 
 interface CapturedLine {
   level: 'info' | 'warn' | 'error';
@@ -188,7 +188,7 @@ describe('§3.4 — forbidden field names never reach the log line', () => {
 describe('§3.4 — IntentDispatcher payload redaction', () => {
   /** Stub supervisor that resolves wake successfully so the dispatch
    *  exercises the full received → ok path. */
-  const stubSupervisor: Supervisor = {
+  const stubSupervisor: SupervisorContract = {
     start: async () => ({ started: true, pid: 1, started_at: 0 }),
     stop: async () => ({ mode: 'hard', stopped: true, exit_code: 0 }),
     wake: async params => ({ delivered: true, delivery_ids: params.delivery_ids }),

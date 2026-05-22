@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * RealSupervisor 3c-b watchdog test fixture — a truly silent runtime.
+ * Supervisor 3c-b watchdog test fixture — a truly silent runtime.
  *
  * Unlike `echo-runtime.cjs`, this fixture writes NOTHING to stdout or
  * stderr at any point. It exists for tests that need to observe the

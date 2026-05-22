@@ -15,13 +15,13 @@
  *   markers stop being errors and TypeScript fails the suite.
  *
  * Cindy `iAbuG0AXK6k4BXDU` review bar: must defend "all `runDaemon`
- * callers are forced to a typed choice (Real / Fake / null)", not
+ * callers are forced to a typed choice (Supervisor / Fake / null)", not
  * just a local helper alias. We exercise `RunDaemonOptions` directly
  * — the same type the callers see.
  */
 import { describe, it, expect } from 'vitest';
 import type { RunDaemonOptions } from '../src/daemon/index.js';
-import type { Supervisor } from '../src/daemon/supervisor.js';
+import type { SupervisorContract } from '../src/daemon/supervisor-contract.js';
 
 describe('RunDaemonOptions.supervisorFactory — required-but-nullable contract', () => {
   it('omitting supervisorFactory fails typecheck (regression guard for shiki `Go9ZiB4OnwTbELZU`)', () => {
@@ -53,11 +53,11 @@ describe('RunDaemonOptions.supervisorFactory — required-but-nullable contract'
   });
 
   it('a real factory function is accepted', () => {
-    // The shape RealSupervisor / FakeSupervisor factories take. We
+    // The shape Supervisor / FakeSupervisor factories take. We
     // don't actually call it — the assertion is just that the
     // assignment typechecks.
     const factory: NonNullable<RunDaemonOptions['supervisorFactory']> = () =>
-      ({} as Supervisor);
+      ({} as SupervisorContract);
     const productionShape: RunDaemonOptions = {
       socketPath: '/tmp/x.sock',
       pidFilePath: '/tmp/x.pid',

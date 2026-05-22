@@ -9,7 +9,7 @@
  * every `runtime_*` intent returned
  * `internal_error: runtime_* intent reached dispatcher with no
  * supervisor wired`. The fix is a one-liner — pass
- * `supervisorFactory: deps => new RealSupervisor(deps)` — but the
+ * `supervisorFactory: deps => new Supervisor(deps)` — but the
  * regression is sneaky (`pnpm dev` would still boot, agents would
  * just silently stop responding), so this test is the tripwire that
  * catches any future PR that drops the wire.
@@ -26,15 +26,15 @@
  *   3. The daemon log written during this boot contains NO payload
  *      / env / stdout / stderr field. Daemon log contract (Cindy
  *      `vhLGdqko0gaHrD_3` + `UOr7eZ8yA7COsyw9`) is structured-only;
- *      this regression guard makes sure neither RealSupervisor
+ *      this regression guard makes sure neither Supervisor
  *      wiring nor entry.ts itself leaked a body field.
  *
  * Scope NOT covered here: a full `runtime_start → runtime_state`
  * roundtrip. That requires injecting a fake `driverFor` / `spawnFn`
  * into the supervisor, which entry.ts deliberately does not expose
  * (production callers must never get those seams). The behavioral
- * coverage of RealSupervisor under controlled spawn lives in
- * `real-supervisor.test.ts`; this file's job is the wire itself.
+ * coverage of Supervisor under controlled spawn lives in
+ * `supervisor.test.ts`; this file's job is the wire itself.
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -122,7 +122,7 @@ describe('daemon entry — production supervisor wiring (Cindy `MlwnvOfs-L5Nv_x2
     // supervisor wired the dispatcher throws
     // `runtime_* intent reached dispatcher with no supervisor wired`
     // and the call rejects with `internal_error`. With it wired,
-    // RealSupervisor's status() returns `{runtimes: []}` because no
+    // Supervisor's status() returns `{runtimes: []}` because no
     // (conv, agent) has been started yet.
     const status = await client.runtimeStatus({});
     expect(status).toEqual({ runtimes: [] });

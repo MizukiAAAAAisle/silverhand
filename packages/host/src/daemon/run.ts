@@ -30,7 +30,7 @@ import { createDaemonLogger, type DaemonLogger } from './logger.js';
 import { encodeFrame, type EventFrame } from '../protocol.js';
 import { DAEMON_VERSION } from './version.js';
 import { logDaemon } from './daemon-logging.js';
-import type { Supervisor } from './supervisor.js';
+import type { SupervisorContract } from './supervisor-contract.js';
 
 export interface RunDaemonOptions {
   /** Absolute path where the daemon should bind its Unix socket. */
@@ -55,14 +55,14 @@ export interface RunDaemonOptions {
    *  one is created at `logDir/daemon-<utc>.log`. */
   logger?: DaemonLogger;
   /**
-   * Supervisor factory — REQUIRED, but explicitly nullable (Cindy
+   * SupervisorContract factory — REQUIRED, but explicitly nullable (Cindy
    * `XuKGmdna3GWZcY2G` + shiki `Go9ZiB4OnwTbELZU`). The daemon
    * constructs the supervisor AFTER the server is bound, passing an
    * `emit` callback that broadcasts events to every live socket
    * connection (with runtime_output backpressure applied per §2.2.2).
    *
    * Two legitimate shapes:
-   *   - `(deps) => new RealSupervisor(deps)` — production wire
+   *   - `(deps) => new Supervisor(deps)` — production wire
    *     (`entry.ts`). Anything that owns spawn/wake/stop lifecycle.
    *   - `(deps) => new FakeSupervisor({...})` — protocol/e2e tests
    *     validating the full intent → supervisor → broadcast →
@@ -88,7 +88,7 @@ export interface RunDaemonOptions {
     | ((deps: {
         emit: (event: EventFrame) => void;
         logger: DaemonLogger;
-      }) => Supervisor)
+      }) => SupervisorContract)
     | null;
 }
 
@@ -98,7 +98,7 @@ export interface RunningDaemon {
   logger: DaemonLogger;
   /**
    * Broadcast an unsolicited event to every live connection. Used by
-   * a Supervisor's `emit` callback to surface `runtime_*` events to
+   * a SupervisorContract's `emit` callback to surface `runtime_*` events to
    * the backend. `runtime_output` frames participate in the
    * per-(conv, agent) 4 MiB drop cap (§2.2.2); all other events write
    * straight through.

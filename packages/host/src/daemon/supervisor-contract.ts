@@ -1,12 +1,11 @@
 /**
- * Supervisor — daemon-side abstraction over the (conversation, agent)
- * runtime. PR-2 step 1 ships a fake implementation
- * (`FakeSupervisor`); step 2 will ship a real one carved out of
- * `packages/backend/src/conversation-manager.ts`.
+ * SupervisorContract — daemon-side abstraction over the (conversation,
+ * agent) runtime.
  *
- * The interface is the contract both implementations honor. By
- * pinning it before step 2, we guarantee step 2 is a drop-in swap —
- * no dispatcher / server / HostClient code paths change.
+ * The production implementation is `Supervisor`; tests may provide
+ * test-only implementations such as `FakeSupervisor`. The dispatcher
+ * depends only on this contract so protocol routing stays independent
+ * from the concrete execution-plane implementation.
  *
  * Method names + shapes mirror the wire intents 1:1 so the
  * dispatcher can route by intent name without translation. Async
@@ -38,7 +37,7 @@ import type {
   RuntimeWakeResult,
 } from '../protocol.js';
 
-export interface Supervisor {
+export interface SupervisorContract {
   start(params: RuntimeStartParams): RuntimeStartResult | Promise<RuntimeStartResult>;
   stop(params: RuntimeStopParams): RuntimeStopResult | Promise<RuntimeStopResult>;
   wake(params: RuntimeWakeParams): RuntimeWakeResult | Promise<RuntimeWakeResult>;
@@ -59,11 +58,10 @@ export interface Supervisor {
    * backend never calls these, but the protocol surface is locked in
    * step 1: when called, the supervisor must emit
    * `runtime_output_paused` / `runtime_output_resumed` so subscribers
-   * see the flow-control transition. Step 2's real supervisor will
-   * gate stdout pumps on this state; the fake just toggles a flag and
-   * emits the ack event. Cindy `_YD0KJF-YAQXlcki` requires this to
-   * route through the Supervisor interface (NOT inline dispatcher
-   * emit) so the protocol boundary doesn't reshape in step 2.
+   * see the flow-control transition. Cindy `_YD0KJF-YAQXlcki`
+   * requires this to route through the SupervisorContract interface
+   * (NOT inline dispatcher emit) so the protocol boundary stays
+   * stable.
    */
   pauseOutput(
     params: RuntimeOutputPauseParams,

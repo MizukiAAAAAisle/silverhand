@@ -1,53 +1,13 @@
 /**
- * RealSupervisor — production supervisor for the silverhand daemon.
+ * Supervisor — production execution-plane owner for silverhand-daemon.
  *
- * Step 2 commit 3a/3b scope (locked with Cindy in
- * `wjay-7-ARIgrFzOf` → `jhH-vC1s_1J_jTLu` →
- * `OQCA05pivtB8nSTC` → `C2BZGDbQWfnq-bKJ`):
- *
- * 3a (committed `82230e2`):
- *   - spawn agent runtime via `child_process.spawn` using the driver's
- *     `buildArgs` / `applyEnv`
- *   - own the `ChildProcess` lifecycle (stdout / stderr / exit)
- *   - pump raw stdout/stderr to `runtime_output` events (per-chunk)
- *   - hard stop: SIGTERM → 5s → SIGKILL → 10s cascade, emitting
- *     `runtime_state` (draining) then `runtime_exit` on close
- *   - `status()` returns a per-(conv, agent) snapshot
- *   - `pauseOutput` / `resumeOutput` flip a flag + emit ack events
- *     (raw output drops while paused)
- *
- * 3b (this commit):
- *   - line-buffered stdout → `driver.parseLine` → per-event fanout
- *     onto `runtime_parsed_event`. Raw `runtime_output` is unchanged
- *     (Cindy `C2BZGDbQWfnq-bKJ`: parsed_event is a sidecar, not a
- *     replacement). Frame-too-large parsed events surface as
- *     `runtime_parsed_event_dropped` metadata-only frames.
- *   - per-handle `AgentRunState` lifecycle driven by parsed events
- *     (thinking / tool_running / compacting / idle), with `runId`
- *     stable across the run.
- *   - `wake()` writes the opaque stream-json payload to stdin with
- *     step-0 mutex gating (`startup_pending` rejection while the
- *     start batch is still in flight).
- *   - `stop({ mode: 'soft' })` writes the backend-supplied directive
- *     payload to stdin and reports `{directive_delivered, reason?}`.
- *   - `start()` now accepts `startup_delivery` — phase pins to
- *     `startup_pending`, the supervisor consumes the payload, emits
- *     `runtime_startup_delivery_consumed` or `_failed`, then clears
- *     the gate. Only AFTER the gate clears AND the runtime is `ready`
- *     does `runtime_ready_for_drain` fire (single, idempotent emit).
- *
- * Explicitly NOT in 3a/3b (will land in 3c):
- *   - 3-tier init watchdog (silence / pre-protocol-cap / post-protocol)
- *   - retry / cooldown loop on init failure
- *   - compaction watchdog
- *   - lifecycle-lock atomicity for concurrent start/stop
- *   - host-side resume-state clear (`driver` API to invalidate
- *     `claude --resume` after `clearSession`)
- *
- * Wiring: NOT wired into `runDaemon` yet — FakeSupervisor stays the
- * default until commit 5's atomic flip. 3a/3b tests instantiate
- * RealSupervisor directly to validate execution-plane behavior in
- * isolation.
+ * It owns one runtime child process per `(conversation, agent)`:
+ * spawn args/env, stdout/stderr pumping, parsed-event fanout,
+ * stdin delivery, lifecycle locks, init retry/cooldown, compaction
+ * watchdogs, and run-state projection. Dispatcher/server code sees
+ * only the `SupervisorContract`; this concrete class is wired by
+ * `entry.ts` in production and instantiated directly by focused
+ * execution-plane tests.
  */
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { setTimeout as setTimer } from 'node:timers';
@@ -86,7 +46,7 @@ import {
   type RuntimeWakeResult,
 } from '../../protocol.js';
 import type { DaemonLogger } from '../logger.js';
-import type { Supervisor } from '../supervisor.js';
+import type { SupervisorContract } from '../supervisor-contract.js';
 import type {
   ActivitySnippetKind,
   InitTimeoutReason,
@@ -153,7 +113,7 @@ interface InitRetryState {
   cooldownUntil: number;
 }
 
-export interface RealSupervisorOptions {
+export interface SupervisorOptions {
   /** Sink for outgoing events; wired by `runDaemon` to the per-socket
    *  broadcaster (with output backpressure applied per §2.2.2). */
   emit: (event: EventFrame) => void;
@@ -162,7 +122,7 @@ export interface RealSupervisorOptions {
   logger: DaemonLogger;
   /** Optional injection for tests:
    *   - `driverFor` lets tests substitute a fake `Driver` so they can
-   *     drive `RealSupervisor` against a controlled binary;
+   *     drive `Supervisor` against a controlled binary;
    *   - `resolveBinary` lets tests pin the binary path without
    *     touching PATH;
    *   - `spawnFn` lets tests fully stub `child_process.spawn`.
@@ -226,7 +186,7 @@ interface StartOptionsFromWire {
   initial_prompt?: string;
 }
 
-export class RealSupervisor implements Supervisor {
+export class Supervisor implements SupervisorContract {
   private readonly handles = new Map<string, RuntimeHandle>();
   private readonly emit: (event: EventFrame) => void;
   private readonly logger: DaemonLogger;
@@ -235,7 +195,7 @@ export class RealSupervisor implements Supervisor {
     kind: RuntimeKind,
     fallback: string,
   ) => Promise<string | null>;
-  private readonly spawnFn: NonNullable<RealSupervisorOptions['spawnFn']>;
+  private readonly spawnFn: NonNullable<SupervisorOptions['spawnFn']>;
   private readonly now: () => number;
   private readonly sigtermToSigkillMs: number;
   private readonly sigkillTimeoutMs: number;
@@ -261,7 +221,7 @@ export class RealSupervisor implements Supervisor {
   private readonly initFailureCooldownMs: number;
   private readonly compactionStaleMs: number;
 
-  constructor(opts: RealSupervisorOptions) {
+  constructor(opts: SupervisorOptions) {
     this.emit = opts.emit;
     this.logger = opts.logger;
     this.driverFor = opts.driverFor ?? getDefaultDriver;
@@ -547,9 +507,10 @@ export class RealSupervisor implements Supervisor {
       !startupBatch;
     if (!deferInitWatchdog) this.startInitWatchdog(handle);
 
-    // Optimistic ready transition. 3a/3b do NOT implement the init
-    // watchdog (that's 3c-b above) — for now we mark the runtime `ready`
-    // after a single tick. The startup_delivery write below settles
+    // Optimistic ready transition. The init watchdog is armed above
+    // when required; we still mark the runtime `ready` after a single
+    // tick so backend can observe a live process while protocol init
+    // continues. The startup_delivery write below settles
     // asynchronously; until it settles, `maybeEmitReadyForDrain` is
     // gated by `handle.startupDelivery !== null` and will not emit.
     // (Cindy `_JjyK8UrpcmYA5Iu`: pending startup batch keeps
