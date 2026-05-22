@@ -168,15 +168,15 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   if (runtimeHostMode === 'daemon') {
     if (!opts.hostClient) {
       throw new Error(
-        `${SILVERHAND_RUNTIME_HOST_ENV}=daemon (default): a connected HostClient is required ` +
-          `but startBackend() received hostClient=undefined. The host (Electron main or ` +
-          `dev-headless) must spawn silverhand-daemon and pass a connected HostClient. ` +
-          `Rollback recipe: restart with ${SILVERHAND_RUNTIME_HOST_ENV}=legacy ` +
-          `(NOTE: the legacy in-process ConversationManager spawn path was removed in ` +
-          `Commit B of the cleanup sequence — '=legacy' now throws at boot with this ` +
-          `same message family rather than running a different runtime; this option is ` +
-          `kept for one more commit so the env-switch deletion does not coincide with ` +
-          `the legacy code deletion).`,
+        `${SILVERHAND_RUNTIME_HOST_ENV}=daemon (the only supported runtime): a connected ` +
+          `HostClient is required but startBackend() received hostClient=undefined. The host ` +
+          `(Electron main or dev-headless) must spawn silverhand-daemon and pass a connected ` +
+          `HostClient. There is no runtime fallback — the legacy in-process ConversationManager ` +
+          `runtime was removed in Commit B of the daemon cleanup sequence. Setting ` +
+          `${SILVERHAND_RUNTIME_HOST_ENV}=legacy will NOT fall back to a different runtime; ` +
+          `it now throws at boot with an explicit removed-message and is retained as a parse ` +
+          `value for one more commit only so a stale '=legacy' pin produces a precise ` +
+          `diagnostic. Recovery: ensure silverhand-daemon is spawnable / its socket is reachable.`,
       );
     }
     // Build the daemon runtime host. Bridge / cache / event-handler /

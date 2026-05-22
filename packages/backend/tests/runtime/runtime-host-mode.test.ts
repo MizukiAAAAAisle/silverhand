@@ -2,14 +2,21 @@
  * Unit tests for `runtime-host-mode` — the parse helper shared by
  * Electron main and the backend boot. Pins:
  *
- *   - default = `daemon` (Commit A of cleanup: daemon is now the
- *     supported runtime path; legacy remains as explicit rollback
- *     during the soak window)
+ *   - default = `daemon` (Commit A flipped the default; Commit B
+ *     deleted the in-process ConversationManager runtime — daemon is
+ *     now the only supported runtime)
  *   - empty string == unset (treat misconfigured env like absent)
- *   - `'legacy'` / `'daemon'` accepted verbatim
+ *   - `'legacy'` / `'daemon'` accepted verbatim by the parser. The
+ *     parser does NOT throw on `'legacy'` — the dispatch sites
+ *     (backend startBackend / Electron main) throw at boot with an
+ *     explicit Commit B removed-message instead. This split keeps
+ *     parse semantics narrow and lets the dispatch site own the
+ *     operator-facing diagnostic.
  *   - invalid values throw loud — no silent coerce, no lowercasing
- *   - banner describer surfaces a rollback recipe in `daemon` mode
- *     AND labels `legacy` as an explicit rollback (not the default)
+ *   - banner describer is honest post-Commit B: daemon's rollback
+ *     field must NOT sell `=legacy` as a real recovery path
+ *     (Cindy `0aTZCqe07rmqA08k` blocker 1); legacy describer must
+ *     say "now throws / not a runtime recovery".
  *
  * Cindy `bJUazoeBrxK8XglK` blocker (2) + `Q48i12KhABcPcnK1`: the
  * helper must be pure (no DB/logger imports). The test file imports
@@ -35,12 +42,12 @@ describe('parseAgentRuntimeHostMode', () => {
     expect(parseAgentRuntimeHostMode('')).toBe('daemon');
   });
 
-  it('accepts the literal "legacy" (explicit rollback override)', () => {
-    // Regression guard for Commit A: even though daemon is now the
-    // default, the explicit `=legacy` rollback path MUST keep
-    // returning 'legacy' until the legacy CM surfaces are deleted in a
-    // later commit. Deleting the legacy path and the env switch in the
-    // same diff would strand any operator who needed the rollback.
+  it('accepts the literal "legacy" at parse time (the throw is owned by the dispatch sites)', () => {
+    // Post-Commit B `=legacy` no longer runs a different runtime —
+    // backend `startBackend` and Electron main bootstrap throw at
+    // boot with an explicit removed-message. Parse stays narrow:
+    // `'legacy'` parses successfully so the dispatch site owns the
+    // operator-facing diagnostic. This split is intentional.
     expect(parseAgentRuntimeHostMode('legacy')).toBe('legacy');
   });
 
@@ -72,8 +79,11 @@ describe('parseAgentRuntimeHostMode', () => {
     expect(err?.message).toContain("'legacy'");
     expect(err?.message).toContain("'daemon'");
     expect(err?.message).toContain('"inprocess"');
-    expect(err?.message).toContain('default daemon runtime');
-    expect(err?.message).toContain('SILVERHAND_RUNTIME_HOST=legacy');
+    // Post-Commit B the parse-failure message must explain that
+    // `=legacy` is no longer a runtime fallback so an operator
+    // hitting a typo near `=legacy` doesn't think they're one
+    // correct value away from a working rollback.
+    expect(err?.message).toContain('Commit B');
   });
 
   it('throws on whitespace-padded values (no auto-trim)', () => {
@@ -85,29 +95,46 @@ describe('parseAgentRuntimeHostMode', () => {
 });
 
 describe('describeAgentRuntimeHostMode', () => {
-  it('daemon mode is labelled as default and surfaces the legacy rollback recipe', () => {
+  it('daemon mode is labelled as the only supported runtime; rollback field MUST NOT sell =legacy', () => {
+    // Cindy `0aTZCqe07rmqA08k` blocker 1: post-Commit B the legacy
+    // CM runtime no longer exists, so the daemon banner cannot tell
+    // operators to roll back via `=legacy`. The rollback field must
+    // not contain `SILVERHAND_RUNTIME_HOST=legacy`, and the prose
+    // must explicitly say there is no runtime fallback.
     const d = describeAgentRuntimeHostMode('daemon');
     expect(d.mode).toBe('daemon');
     expect(d.note).toMatch(/daemon/);
-    expect(d.note).toMatch(/default/);
-    expect(d.rollback).toBe(`${SILVERHAND_RUNTIME_HOST_ENV}=legacy`);
-    // The note should also mention the rollback path in prose so a
-    // raw `tail -f` reader can recover without consulting docs.
-    expect(d.note).toContain('SILVERHAND_RUNTIME_HOST=legacy');
+    expect(d.note).toMatch(/only supported runtime/);
+    // Banner must mention Commit B + that legacy is not a runtime
+    // path so a tail -f reader does not assume `=legacy` is recovery.
+    expect(d.note).toContain('Commit B');
+    expect(d.note).toMatch(/no runtime fallback/);
+    // Hard guard: the rollback field MUST NOT advertise `=legacy`
+    // as a recovery recipe — that's the entire point of the
+    // blocker. The describer also explicitly mentions Commit B so
+    // the field stays self-explanatory in structured logs.
+    expect(d.rollback).not.toContain(`${SILVERHAND_RUNTIME_HOST_ENV}=legacy`);
+    expect(d.rollback).toContain('Commit B');
+    // The note prose must NOT advertise `=legacy` as a recovery.
+    // Mention is allowed (in the "now throws" context) but the
+    // word "fall back" must not appear next to `=legacy`.
+    expect(d.note).not.toMatch(/restart with [^.]*legacy[^.]*fall back/i);
   });
 
-  it('legacy mode is labelled as explicit rollback (not the default)', () => {
+  it('legacy mode is labelled as a parse-only value that boot-throws (not a runtime path)', () => {
     const d = describeAgentRuntimeHostMode('legacy');
     expect(d.mode).toBe('legacy');
     expect(d.note).toMatch(/legacy/);
+    // Mention ConversationManager (in the "removed in Commit B"
+    // context) so the historical context is preserved.
     expect(d.note).toMatch(/ConversationManager/);
-    // Rollback recipe for legacy = "go back to default" = unset / set daemon.
+    expect(d.note).toContain('Commit B');
+    expect(d.note).toMatch(/throws at boot|removed-message/);
+    // Recovery path = back to default daemon. NOT a runtime
+    // alternative to daemon.
     expect(d.rollback).toContain(SILVERHAND_RUNTIME_HOST_ENV);
     expect(d.rollback).toMatch(/unset|daemon/);
-    // The note should signal this is an explicit override away from
-    // the default daemon path, so operators do not assume legacy is
-    // the supported steady state.
-    expect(d.note).toMatch(/explicit rollback|default daemon/);
+    expect(d.note).toMatch(/not a runtime recovery|not a runtime fallback/);
   });
 });
 

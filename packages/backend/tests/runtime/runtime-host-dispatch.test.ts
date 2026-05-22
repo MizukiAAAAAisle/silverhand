@@ -86,11 +86,11 @@ describe('startBackend — SILVERHAND_RUNTIME_HOST dispatch', () => {
     }
   });
 
-  it('default (env unset): daemon mode — boot without hostClient throws with rollback recipe', async () => {
-    // Commit A pin: env unset means daemon mode. Without a hostClient
-    // the boot MUST throw, and the error MUST carry the explicit
-    // legacy rollback recipe so an operator who hits a daemon-spawn
-    // regression knows the recovery command verbatim.
+  it('default (env unset): daemon mode — boot without hostClient throws with no-fallback message', async () => {
+    // Post-Commit B daemon is the only runtime; the throw MUST NOT
+    // sell `=legacy` as a recovery path (Cindy `0aTZCqe07rmqA08k`
+    // blocker 2). The error must explain there is no runtime
+    // fallback and that the recovery is fixing daemon connectivity.
     let err: Error | null = null;
     try {
       running = await startBackend({
@@ -106,8 +106,13 @@ describe('startBackend — SILVERHAND_RUNTIME_HOST dispatch', () => {
     expect(err).toBeInstanceOf(Error);
     expect(err?.message).toContain('SILVERHAND_RUNTIME_HOST=daemon');
     expect(err?.message).toContain('HostClient');
-    // Rollback recipe is the load-bearing assertion for Commit A.
-    expect(err?.message).toContain('SILVERHAND_RUNTIME_HOST=legacy');
+    // Honest no-fallback messaging — load-bearing assertion for B2.
+    expect(err?.message).toContain('Commit B');
+    expect(err?.message).toMatch(/no runtime fallback/);
+    expect(err?.message).toMatch(/silverhand-daemon|spawnable|socket/);
+    // Hard guard: must NOT phrase `=legacy` as a fallback / rollback.
+    expect(err?.message).not.toMatch(/fall back to.*ConversationManager/);
+    expect(err?.message).not.toMatch(/rollback recipe.*legacy/i);
   });
 
   it('explicit SILVERHAND_RUNTIME_HOST=legacy throws loudly at boot (Commit B removed the runtime)', async () => {
@@ -184,9 +189,9 @@ describe('startBackend — SILVERHAND_RUNTIME_HOST dispatch', () => {
     expect(close).not.toHaveBeenCalled();
   });
 
-  it('explicit SILVERHAND_RUNTIME_HOST=daemon without hostClient throws loudly at boot', async () => {
-    // Same failure as the env-unset case (since daemon is now the
-    // default). Kept as a separate test so the explicit-opt-in
+  it('explicit SILVERHAND_RUNTIME_HOST=daemon without hostClient throws loudly with no-fallback message', async () => {
+    // Same throw as the env-unset case (since daemon is the only
+    // runtime). Kept as a separate test so the explicit-opt-in
     // signal does not silently disappear if the default flips again
     // in the future.
     process.env[SILVERHAND_RUNTIME_HOST_ENV] = 'daemon';
@@ -205,7 +210,9 @@ describe('startBackend — SILVERHAND_RUNTIME_HOST dispatch', () => {
     expect(err).toBeInstanceOf(Error);
     expect(err?.message).toContain('SILVERHAND_RUNTIME_HOST=daemon');
     expect(err?.message).toContain('HostClient');
-    expect(err?.message).toContain('SILVERHAND_RUNTIME_HOST=legacy');
+    expect(err?.message).toContain('Commit B');
+    expect(err?.message).toMatch(/no runtime fallback/);
+    expect(err?.message).not.toMatch(/fall back to.*ConversationManager/);
   });
 
   it('invalid env value throws before any boot work', async () => {

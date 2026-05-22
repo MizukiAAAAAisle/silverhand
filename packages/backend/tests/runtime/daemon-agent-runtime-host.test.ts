@@ -301,21 +301,6 @@ function fakeRunState(patch: Partial<AgentRunState> = {}): AgentRunState {
   };
 }
 
-const ROLLBACK_RECIPE = 'SILVERHAND_RUNTIME_HOST=legacy';
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function assertScaffoldingError(err: unknown, method: string): void {
-  expect(err).toBeInstanceOf(Error);
-  const message = (err as Error).message;
-  expect(message).toContain('SILVERHAND_RUNTIME_HOST=daemon');
-  expect(message).toContain(`${method}(`);
-  expect(message).toContain('not yet implemented');
-  expect(message).toContain(ROLLBACK_RECIPE);
-  // The canonical fallback should be named so the operator knows
-  // legacy mode is the supported path, not just a workaround.
-  expect(message).toMatch(/ConversationManager/);
-}
-
 describe('DaemonAgentRuntimeHost — read methods', () => {
   it('getAgentRunStates returns every (conv, *) entry with an active runState', () => {
     const { host, cache } = makeHost();

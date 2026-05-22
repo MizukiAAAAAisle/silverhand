@@ -57,7 +57,7 @@
  * orphan UI state when an operator switches to daemon mode prematurely.
  * The `notImplemented` helper is preserved for future methods that
  * land before their tests do — it formats a loud error with the env
- * var, method name, and rollback recipe.
+ * var, method name, and post-B "no runtime fallback" recovery note.
  */
 import type { AgentRunState, AgentRunTerminalReason, ServerConfig } from '@silverhand/shared';
 import { systemSubtype } from '@silverhand/shared';
@@ -184,17 +184,21 @@ export interface DaemonAgentRuntimeHostDeps {
 
 /**
  * Standard error message body for methods that remain
- * not-yet-implemented in this sub-commit. Centralised so the rollback
+ * not-yet-implemented in this sub-commit. Centralised so the recovery
  * recipe phrasing cannot drift between methods. Kept around even after
  * the last `start` throw was removed — future surface additions can
- * reuse it without re-inventing the rollback recipe.
+ * reuse it without re-inventing the diagnostic. Post-Commit B the
+ * recipe MUST NOT advertise `=legacy` as a runtime fallback (Cindy
+ * `0aTZCqe07rmqA08k` blocker 1) — the legacy in-process
+ * ConversationManager runtime was removed in Commit B; daemon is the
+ * only runtime.
  */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 function notImplemented(method: string): Error {
   return new Error(
     `${SILVERHAND_RUNTIME_HOST_ENV}=daemon: ${method}() is not yet implemented. ` +
-      `To roll back during the cleanup soak window, restart with ${SILVERHAND_RUNTIME_HOST_ENV}=legacy. ` +
-      `Unset the variable to use the default daemon runtime.`,
+      `There is no runtime fallback — the legacy in-process ConversationManager runtime ` +
+      `was removed in Commit B of the cleanup sequence; daemon is the only supported runtime.`,
   );
 }
 

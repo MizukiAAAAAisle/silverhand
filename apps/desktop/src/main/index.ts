@@ -240,24 +240,29 @@ async function bootstrap(): Promise<void> {
         'dev CDP remote debugging enabled',
       );
     }
-    // Runtime host gate (#task:512 sub-commit 2a, default flipped to
-    // `daemon` in Commit A of the cleanup sequence). The
-    // SILVERHAND_RUNTIME_HOST env var decides whether the daemon
-    // child is spawned at all. Parsed by the same pure helper backend
-    // uses, so the two layers cannot drift on default / accepted
-    // values / failure mode (`parseAgentRuntimeHostMode` throws loudly
-    // on an unknown value; we do NOT silently fall back to legacy).
+    // Runtime host gate (#task:512). Daemon is the only supported
+    // runtime path post-Commit B of the cleanup sequence; the legacy
+    // in-process ConversationManager runtime was deleted with that
+    // commit. The SILVERHAND_RUNTIME_HOST env var is parsed by the
+    // same pure helper backend uses, so the two layers cannot drift
+    // on default / accepted values / failure mode
+    // (`parseAgentRuntimeHostMode` throws loudly on an unknown value;
+    // we do NOT silently coerce).
     //
     //   - `daemon` (default, unset, or `=daemon`): spawn the daemon,
     //     connect HostClient, and on either failure abort bootstrap.
-    //     Silent fallback to legacy would mask a configuration
-    //     mistake or daemon-spawn regression.
-    //   - `legacy` (`=legacy`): explicit rollback to the in-process
-    //     ConversationManager path. We do NOT spawn a daemon and do
-    //     NOT new HostClient — the legacy fallback must not have a
-    //     hidden dependency on the daemon being reachable. This path
-    //     stays available through the cleanup soak window and is
-    //     removed once the legacy CM surfaces are deleted.
+    //     There is no runtime fallback — Cindy `0aTZCqe07rmqA08k`
+    //     blocker 2: connect-failure surface must NOT advertise
+    //     `=legacy` as recovery, because `=legacy` no longer runs a
+    //     different runtime. Recovery is "fix the daemon spawn /
+    //     HostClient connection".
+    //   - `legacy` (`=legacy`): retained parse value for one more
+    //     commit (Commit C deletes the env switch entirely). Reaches
+    //     `startBackend` without spawning a daemon; backend then
+    //     throws at boot with an explicit Commit B removed-message.
+    //     This is intentional: an operator who pinned `=legacy`
+    //     during the soak window sees a precise diagnostic instead
+    //     of an unrelated parse failure or silent drift.
     const runtimeHostMode = parseAgentRuntimeHostMode(
       process.env[SILVERHAND_RUNTIME_HOST_ENV],
     );
@@ -271,13 +276,14 @@ async function bootstrap(): Promise<void> {
     );
 
     if (runtimeHostMode === 'daemon') {
-      // PR-2 step 2 commit 5 Commit A: daemon is now the default
-      // runtime path. The daemon child is spawned and HostClient
-      // connected so backend can route runtime intents through it.
-      // On failure we tear down what we partially created and re-throw
-      // with the rollback recipe; operators can fall back via
-      // `SILVERHAND_RUNTIME_HOST=legacy` while the legacy CM surfaces
-      // remain in the tree (cleanup soak window).
+      // Daemon is the only supported runtime post-Commit B. The
+      // daemon child is spawned and HostClient connected so backend
+      // can route runtime intents through it. On failure we tear
+      // down what we partially created and re-throw with a recovery
+      // hint that points at fixing the daemon connection — NOT at
+      // `=legacy`, because the legacy in-process ConversationManager
+      // runtime was removed in Commit B and `=legacy` will only
+      // surface a removed-message at boot.
       const paths = daemonPaths();
       daemon = await spawnDaemonChild({
         launcher: resolveDaemonLauncher(),
@@ -298,22 +304,25 @@ async function bootstrap(): Promise<void> {
       try {
         await hostClient.connect();
       } catch (err) {
-        // daemon mode requires a live HostClient — surface the failure
-        // loudly. Do NOT downgrade to legacy: the operator explicitly
-        // requested daemon mode, and silent fallback would obscure a
-        // misconfiguration. Tear down what we partially created
-        // before re-throwing so the bootstrap catch can clean up the
-        // daemon child.
+        // Daemon mode requires a live HostClient — surface the
+        // failure loudly. There is no runtime fallback (Commit B
+        // removed the legacy in-process ConversationManager
+        // runtime); recovery is fixing the daemon spawn / socket.
+        // Tear down what we partially created before re-throwing so
+        // the bootstrap catch can clean up the daemon child.
         await hostClient.close().catch(() => undefined);
         hostClient = null;
         await daemon?.kill({ gracefulMs: 1_000 }).catch(() => undefined);
         daemon = null;
         throw new Error(
-          `${SILVERHAND_RUNTIME_HOST_ENV}=daemon (default): HostClient failed to connect ` +
-            `to the spawned silverhand-daemon. Rollback recipe: restart with ` +
-            `${SILVERHAND_RUNTIME_HOST_ENV}=legacy to fall back to the in-process ` +
-            `ConversationManager spawn path (still available during the cleanup soak ` +
-            `window). Underlying error: ${err instanceof Error ? err.message : String(err)}`,
+          `${SILVERHAND_RUNTIME_HOST_ENV}=daemon (the only supported runtime): ` +
+            `HostClient failed to connect to the spawned silverhand-daemon. ` +
+            `There is no runtime fallback — the legacy in-process ConversationManager ` +
+            `runtime was removed in Commit B of the daemon cleanup sequence; ` +
+            `${SILVERHAND_RUNTIME_HOST_ENV}=legacy will NOT fall back to a different ` +
+            `runtime, it now throws at boot with an explicit removed-message. ` +
+            `Recovery: ensure silverhand-daemon is spawnable / its socket is reachable. ` +
+            `Underlying error: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
       daemon.onExit(info => {
@@ -323,9 +332,14 @@ async function bootstrap(): Promise<void> {
         );
       });
     }
-    // legacy mode: no daemon spawn, no HostClient — startBackend will
-    // see `hostClient: undefined` and route everything through the
-    // in-process ConversationManager exactly as before.
+    // legacy mode: no daemon spawn, no HostClient. We let
+    // `startBackend` see `hostClient: undefined` and throw at boot
+    // with an explicit Commit B removed-message. This is intentional
+    // — Commit B removed the legacy in-process ConversationManager
+    // runtime; `=legacy` survives one more commit only as a parse
+    // value whose only effect is producing a precise diagnostic
+    // instead of an unrelated parse failure for operators who pinned
+    // it during the soak window.
     backend = await startBackend({
       dbPath: databasePath(),
       silverhandDir: silverhandDir(),
