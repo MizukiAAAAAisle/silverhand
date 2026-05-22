@@ -160,25 +160,30 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     runtimeHost: undefined as unknown as AgentRuntimeHost,
   };
 
-  // ── Runtime host dispatch (#task:512 sub-commit 2a) ────────────
+  // ── Runtime host dispatch (#task:512 sub-commit 2a; default flipped
+  // to `daemon` in Commit A of the cleanup sequence) ────────────
   // SILVERHAND_RUNTIME_HOST gates which AgentRuntimeHost
   // implementation backs `ctx.runtimeHost`. The env var is parsed by
   // the pure helper in `runtime/runtime-host-mode.ts`, which Electron
   // main also imports for its own daemon-spawn gate — keeping the
   // two layers from drifting on default / accepted values / failure
-  // mode. Unset / `legacy` → existing in-process ConversationManager
-  // (zero behavior change vs prior releases). `daemon` →
-  // `DaemonAgentRuntimeHost` (2a: scaffolding only, every method
-  // throws with a rollback recipe). Anything else throws.
+  // mode. Unset / `daemon` → `DaemonAgentRuntimeHost` over
+  // RuntimeBridge + RunStateCache + EventHandler + coordinator
+  // (the supported runtime path). `legacy` → existing in-process
+  // ConversationManager (explicit rollback during the cleanup soak
+  // window; scheduled for removal once the daemon path has soaked).
+  // Anything else throws.
   const runtimeHostMode = parseAgentRuntimeHostMode(
     process.env[SILVERHAND_RUNTIME_HOST_ENV],
   );
   const runtimeHostBanner = describeAgentRuntimeHostMode(runtimeHostMode);
   // Always create the legacy CM — services need it for the back-compat
   // `conversationManager` field, and in `legacy` mode it IS the
-  // runtimeHost. In `daemon` mode we still create it so service
-  // construction can proceed identically; the daemon shim is what
-  // services route through via `ctx.runtimeHost`.
+  // runtimeHost. In `daemon` mode (default) we still create it so
+  // service construction can proceed identically; the daemon shim is
+  // what services route through via `ctx.runtimeHost`. The legacy CM
+  // construction will go away in Commit B once the back-compat field
+  // is removed.
   ctx.conversationManager = new ConversationManager(ctx, {
     activityLogEnabled: runtimeHostMode === 'legacy',
   });
@@ -193,12 +198,10 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
           `cleanup soak window).`,
       );
     }
-    // Build the daemon shim. Sub-commit 2b-ii (slices 1-4b) replaces
-    // most throws with real bridge / cache / event-handler /
-    // coordinator delegations. `start` still throws (slice 4c lifts
-    // CM's buildPromptContext + spawn-prep). The bridge / cache /
-    // event-handler / coordinator quad is instantiated here so the
-    // wiring shape is stable across 2a → 2b → cutover.
+    // Build the daemon runtime host. Bridge / cache / event-handler /
+    // coordinator are all live now; this is the supported default
+    // path after Commit A. The legacy CM branch below remains only as
+    // an explicit rollback during the cleanup soak window.
     const proxySettings: ProxySettingsSource = {
       get: (key: 'proxy_url' | 'proxy_runtimes') =>
         new SettingsRepo(db).get(key),
@@ -329,9 +332,10 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     });
     daemonHostRef = ctx.runtimeHost as DaemonAgentRuntimeHost;
   } else {
-    // legacy: runtimeHost === the in-process ConversationManager. This
-    // is the zero-behavior-change default; nothing else in the boot
-    // flow changes.
+    // legacy: runtimeHost === the in-process ConversationManager.
+    // This is now an explicit rollback path, kept until the daemon
+    // default has soaked and the old CM responsibility surface is
+    // deleted in a later cleanup commit.
     ctx.runtimeHost = ctx.conversationManager;
   }
   logger.info(

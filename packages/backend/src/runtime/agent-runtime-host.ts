@@ -36,9 +36,10 @@ import type {
  * Backend-side facade for the per-(conversation, agent) runtime
  * lifecycle. Two implementations:
  *
- * - `ConversationManager` (legacy in-process spawn — default).
- * - `DaemonAgentRuntimeHost` (delegates to `silverhand-daemon` via
- *    `RuntimeBridge`; gated by `SILVERHAND_RUNTIME_HOST=daemon`).
+ * - `DaemonAgentRuntimeHost` (default; delegates to `silverhand-daemon`
+ *    via `RuntimeBridge`).
+ * - `ConversationManager` (legacy in-process spawn; explicit rollback
+ *    via `SILVERHAND_RUNTIME_HOST=legacy` during the cleanup soak window).
  *
  * @see ./runtime-host-mode.ts for the boot-time mode switch.
  */

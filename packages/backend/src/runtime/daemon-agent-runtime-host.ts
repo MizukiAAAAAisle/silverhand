@@ -41,9 +41,10 @@
  *     `publishInitCooldown`); the success arm flips the row to
  *     `starting` + the daemon-reported pid.
  *
- * Daemon mode remains opt-in via `SILVERHAND_RUNTIME_HOST=daemon`; the
- * default (unset / `legacy`) still resolves to the in-process
- * `ConversationManager`.
+ * Daemon mode is the default runtime path after cleanup Commit A.
+ * `SILVERHAND_RUNTIME_HOST=legacy` remains as an explicit rollback
+ * while the old ConversationManager execution surface is still in the
+ * tree.
  *
  * # Why throws (and how this file uses them, preserved from 2a)
  *
@@ -203,8 +204,8 @@ export interface DaemonAgentRuntimeHostDeps {
 function notImplemented(method: string): Error {
   return new Error(
     `${SILVERHAND_RUNTIME_HOST_ENV}=daemon: ${method}() is not yet implemented. ` +
-      `To roll back, restart with ${SILVERHAND_RUNTIME_HOST_ENV}=legacy (or unset the variable). ` +
-      `The legacy in-process ConversationManager path remains the canonical, fully-supported runtime.`,
+      `To roll back during the cleanup soak window, restart with ${SILVERHAND_RUNTIME_HOST_ENV}=legacy. ` +
+      `Unset the variable to use the default daemon runtime.`,
   );
 }
 
@@ -932,10 +933,9 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
         // Auto-start so the spawn-time `startup_delivery` drains the
         // row we just queued. start() is idempotent and best-effort
         // here; if it fails the row stays pending for the next
-        // manual start. NOTE: in 2b-ii slice 4b, start() still throws
-        // (slice 4c). The catch swallows the throw so the inbox row
-        // is not corrupted — operator sees the error in the agent log
-        // and retries explicitly.
+        // manual start. The catch swallows start failures so the
+        // inbox row is not corrupted — operator sees the error in the
+        // agent log and retries explicitly.
         this.start(conversationId, agentId).catch(err =>
           this.logger.error(
             {

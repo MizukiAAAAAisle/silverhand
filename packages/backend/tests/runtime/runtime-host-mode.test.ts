@@ -72,6 +72,8 @@ describe('parseAgentRuntimeHostMode', () => {
     expect(err?.message).toContain("'legacy'");
     expect(err?.message).toContain("'daemon'");
     expect(err?.message).toContain('"inprocess"');
+    expect(err?.message).toContain('default daemon runtime');
+    expect(err?.message).toContain('SILVERHAND_RUNTIME_HOST=legacy');
   });
 
   it('throws on whitespace-padded values (no auto-trim)', () => {

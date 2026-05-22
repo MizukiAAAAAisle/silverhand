@@ -105,10 +105,11 @@ export interface BackendContext {
    * sub-commit 2a, `SILVERHAND_RUNTIME_HOST`) can route through
    * different implementations without touching the call sites.
    *
-   * In the default `legacy` mode this points at the same
-   * `ConversationManager` instance as `conversationManager` below; in
-   * `daemon` mode (sub-commit 2b onward) this points at the daemon
-   * shim. Either way, the interface contract is the same.
+   * In the default `daemon` mode this points at the daemon runtime
+   * host; in explicit rollback mode (`SILVERHAND_RUNTIME_HOST=legacy`)
+   * this points at the same `ConversationManager` instance as
+   * `conversationManager` below. Either way, the interface contract
+   * is the same.
    */
   runtimeHost: AgentRuntimeHost;
   /**

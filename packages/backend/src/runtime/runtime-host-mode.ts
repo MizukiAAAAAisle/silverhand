@@ -63,8 +63,9 @@ export function parseAgentRuntimeHostMode(
   if (!parsed.success) {
     throw new Error(
       `${SILVERHAND_RUNTIME_HOST_ENV}: invalid value ${JSON.stringify(raw)}. ` +
-        `Accepted values are 'legacy' or 'daemon'. To roll back to the ` +
-        `default runtime path unset the variable or set it to 'legacy'.`,
+        `Accepted values are 'legacy' or 'daemon'. Unset the variable to use ` +
+        `the default daemon runtime; set ${SILVERHAND_RUNTIME_HOST_ENV}=legacy ` +
+        `only as an explicit rollback during the cleanup soak window.`,
     );
   }
   return parsed.data;
