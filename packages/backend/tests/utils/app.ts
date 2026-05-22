@@ -238,6 +238,8 @@ export function buildTestApp(): TestApp {
     conversations: new ConversationRepo(db),
     messages: new MessageRepo(db),
     agents: new AgentRepo(db),
+    users: new UserRepo(db),
+    settings: new SettingsRepo(db),
     notifications: new NotificationRepo(db),
     workspaces: new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot }),
     attachmentService,

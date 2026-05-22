@@ -23,7 +23,11 @@ declare global {
       setWindowAlwaysOnTop(pinned: boolean): Promise<void>;
       setActiveConversation(active: ActiveConversationInfo): Promise<void>;
       onActiveConversation(handler: (active: ActiveConversationInfo) => void): () => void;
-      showSystemNotification(opts: { title: string; body: string }): Promise<void>;
+      showSystemNotification(opts: {
+        title: string;
+        body: string;
+        force?: boolean;
+      }): Promise<void>;
       setBadgeCount(count: number): Promise<void>;
       onShutdownProgress(handler: (step: string) => void): () => void;
       onNavigateSettings(handler: () => void): () => void;

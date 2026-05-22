@@ -5,6 +5,8 @@ import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { NotificationRepo } from '../../src/repos/notification-repo.js';
+import { SettingsRepo } from '../../src/repos/settings-repo.js';
+import { UserRepo } from '../../src/repos/user-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { AttachmentService } from '../../src/services/attachment-service.js';
 import {
@@ -81,6 +83,8 @@ function bootstrap() {
   const conversations = new ConversationRepo(db);
   const messages = new MessageRepo(db);
   const notifications = new NotificationRepo(db);
+  const settings = new SettingsRepo(db);
+  const users = new UserRepo(db);
   const attachments = new AttachmentRepo(db);
   const attachmentService = new AttachmentService({
     storage: createLocalBlobFileStorage({ silverhandDir: tmp.silverhandDir }),
@@ -99,6 +103,8 @@ function bootstrap() {
     conversations,
     messages,
     agents,
+    users,
+    settings,
     notifications,
     workspaces,
     attachmentService,
@@ -132,6 +138,8 @@ function bootstrap() {
     workspaces,
     conversations,
     messages,
+    notifications,
+    users,
     events,
     fake,
     logger,
@@ -214,6 +222,58 @@ describe('ConversationMessageService.sendMessage', () => {
           thread_id: thread.id,
         },
       });
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('notifies the viewer when another sender mentions their user handle', async () => {
+    const t = bootstrap();
+    try {
+      const viewerEvents: Array<{ kind: string; payload: any }> = [];
+      const unsubViewer = t.events.subscribeScope('viewer:local', e => {
+        viewerEvents.push({ kind: e.kind, payload: e.payload });
+      });
+
+      const result = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'can you check this, @local-test?',
+      });
+      unsubViewer();
+
+      expect(t.notifications.list({ unread: true })).toEqual([
+        expect.objectContaining({
+          kind: 'mention_self',
+          conversation_id: t.channel.id,
+          message_id: result.message.id,
+          source_conversation_id: t.channel.id,
+          source_message_id: result.message.id,
+        }),
+      ]);
+      expect(viewerEvents).toContainEqual({
+        kind: 'notification',
+        payload: {
+          kind: 'mention_self',
+          conversation_id: t.channel.id,
+          message_id: result.message.id,
+        },
+      });
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('does not notify when the viewer mentions their own user handle', async () => {
+    const t = bootstrap();
+    try {
+      await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'user', userId: 'local' },
+        content: 'note to @local-test',
+      });
+
+      expect(t.notifications.list({ unread: true })).toEqual([]);
     } finally {
       t.cleanup();
     }

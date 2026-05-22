@@ -269,6 +269,8 @@ export interface AttachmentRow {
 
 export const NotificationKindSchema = z.enum([
   'mention_external',
+  /** The registered human viewer was @-mentioned in a conversation. */
+  'mention_self',
   /** An agent failed to start before its process was even spawned
    *  (e.g. runtime binary not on PATH). Inserted by ConversationManager. */
   'agent_start_failed',

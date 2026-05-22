@@ -55,7 +55,11 @@ const api = {
     ipcRenderer.on('navigate:settings', listener);
     return () => ipcRenderer.off('navigate:settings', listener);
   },
-  showSystemNotification: (opts: { title: string; body: string }): Promise<void> =>
+  showSystemNotification: (opts: {
+    title: string;
+    body: string;
+    force?: boolean;
+  }): Promise<void> =>
     ipcRenderer.invoke('notification:show', opts),
   setBadgeCount: (count: number): Promise<void> =>
     ipcRenderer.invoke('badge:setCount', count),

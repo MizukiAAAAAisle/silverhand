@@ -329,6 +329,8 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     conversations: new ConversationRepo(db),
     messages: new MessageRepo(db),
     agents: new AgentRepo(db),
+    users: new UserRepo(db),
+    settings: new SettingsRepo(db),
     notifications: new NotificationRepo(db),
     workspaces: new WorkspaceRepo(db, { workspacesRoot }),
     attachmentService,

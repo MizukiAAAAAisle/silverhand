@@ -4,6 +4,7 @@ import type {
   MessageDto,
   SendMessageTarget,
 } from '@silverhand/shared';
+import { extractMentions } from '@silverhand/shared';
 import type { BackendLogger } from '../context.js';
 import type { AgentRuntimeHost } from '../runtime/agent-runtime-host.js';
 import { ccMentionsFromUserMessage } from '../mention-cc.js';
@@ -11,8 +12,9 @@ import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
 import type { NotificationRepo } from '../repos/notification-repo.js';
+import type { UserRepo } from '../repos/user-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
-import { SettingsRepo } from '../repos/settings-repo.js';
+import type { SettingsRepo } from '../repos/settings-repo.js';
 import type { AttachmentService } from './attachment-service.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
 import {
@@ -175,6 +177,8 @@ export interface ConversationMessageServiceOptions {
   conversations: ConversationRepo;
   messages: MessageRepo;
   agents: AgentRepo;
+  users: UserRepo;
+  settings: SettingsRepo;
   notifications: NotificationRepo;
   workspaces: WorkspaceRepo;
   attachmentService: AttachmentService;
@@ -191,12 +195,22 @@ interface SendMessageTxResult {
 }
 
 const REPLIED: AgentRunTerminalReason = 'replied';
+const MENTION_EXCERPT_LIMIT = 160;
+
+function excerpt(s: string): string {
+  const compact = s.replace(/\s+/g, ' ').trim();
+  return compact.length <= MENTION_EXCERPT_LIMIT
+    ? compact
+    : `${compact.slice(0, MENTION_EXCERPT_LIMIT - 1)}…`;
+}
 
 export class ConversationMessageService {
   private readonly db: Db;
   private readonly conversations: ConversationRepo;
   private readonly messages: MessageRepo;
   private readonly agents: AgentRepo;
+  private readonly users: UserRepo;
+  private readonly settings: SettingsRepo;
   private readonly notifications: NotificationRepo;
   private readonly workspaces: WorkspaceRepo;
   private readonly attachmentService: AttachmentService;
@@ -209,6 +223,8 @@ export class ConversationMessageService {
     this.conversations = opts.conversations;
     this.messages = opts.messages;
     this.agents = opts.agents;
+    this.users = opts.users;
+    this.settings = opts.settings;
     this.notifications = opts.notifications;
     this.workspaces = opts.workspaces;
     this.attachmentService = opts.attachmentService;
@@ -288,6 +304,10 @@ export class ConversationMessageService {
       payload: { message: txResult.message },
     });
     this.publishUnreadUpdated(txResult.targetConversation.id);
+    this.notifyViewerMentionBestEffort(
+      txResult.targetConversation,
+      txResult.message,
+    );
 
     if (txResult.targetConversation.parent_conversation_id) {
       this.events.publish(txResult.targetConversation.parent_conversation_id, {
@@ -462,11 +482,60 @@ export class ConversationMessageService {
    * viewer needs the resolved id or the renderer never sees the event.
    */
   private publishUnreadUpdated(conversationId: string): void {
-    const viewerUserId = new SettingsRepo(this.db).getViewerUserId();
+    const viewerUserId = this.settings.getViewerUserId();
     if (!viewerUserId) return;
     this.events.publishToScope(`viewer:${viewerUserId}`, 'unread_updated', {
       conversation_id: conversationId,
     });
+  }
+
+  private notifyViewerMentionBestEffort(
+    conversation: NonNullable<ReturnType<ConversationRepo['get']>>,
+    message: MessageDto,
+  ): void {
+    let viewerUserId: string | null = null;
+    try {
+      viewerUserId = this.settings.getViewerUserId();
+      if (!viewerUserId) return;
+      if (message.from_kind === 'user' && message.from_user_id === viewerUserId) return;
+
+      const viewer = this.users.get(viewerUserId);
+      if (!viewer) return;
+      const mentioned = extractMentions(message.content).includes(viewer.name);
+      if (!mentioned) return;
+
+      this.notifications.insert({
+        kind: 'mention_self',
+        // Notification routes still read v1 rows through user_id IS NULL.
+        userId: null,
+        workspaceId: conversation.workspace_id,
+        conversationId: conversation.id,
+        messageId: message.id,
+        sourceWorkspaceId: conversation.workspace_id,
+        sourceConversationId: conversation.id,
+        sourceMessageId: message.id,
+        payload: {
+          conversation_title: conversation.title,
+          mentioned_name: viewer.name,
+          mention_excerpt: excerpt(message.content),
+        },
+      });
+      this.events.publishToScope(`viewer:${viewerUserId}`, 'notification', {
+        kind: 'mention_self',
+        conversation_id: conversation.id,
+        message_id: message.id,
+      });
+    } catch (err) {
+      this.logger.warn(
+        {
+          conversationId: conversation.id,
+          messageId: message.id,
+          viewerUserId,
+          err,
+        },
+        'conversation-message-service: viewer mention notification failed',
+      );
+    }
   }
 
   private async deliverBestEffort(

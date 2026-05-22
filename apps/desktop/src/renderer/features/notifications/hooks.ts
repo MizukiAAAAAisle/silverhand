@@ -164,10 +164,12 @@ export function useNotificationToasts(activeChannelId: string | null) {
       seenIds.current.add(n.id);
 
       const isAgentFailure = n.kind === 'agent_start_failed';
+      const isViewerMention = n.kind === 'mention_self';
 
       // Suppress channel-match notifications unless it's an error.
       if (
         !isAgentFailure &&
+        !isViewerMention &&
         n.conversation_id &&
         n.conversation_id === activeChannelId
       ) {
@@ -184,9 +186,13 @@ export function useNotificationToasts(activeChannelId: string | null) {
 
       toastIds.push(n.id);
 
-      // System notification — main process only fires it when no Electron
-      // window is focused, so we always call this unconditionally here.
-      void window.agentHub.showSystemNotification({ title: 'Silverhand', body: label });
+      // System notification — main process suppresses ordinary alerts when an
+      // Electron window is focused; direct human mentions opt out via `force`.
+      void window.agentHub.showSystemNotification({
+        title: 'Silverhand',
+        body: label,
+        force: isViewerMention,
+      });
     }
 
     // Mark toasted notifications as read so they don't accumulate in the
@@ -218,6 +224,12 @@ function buildToastLabel(n: NotificationDto): string {
   if (n.kind === 'mention_external') {
     const channelName = n.payload?.['source_workspace_name'] as string | undefined;
     return channelName ? `你在 #${channelName} 有新提及` : '新提及消息';
+  }
+  if (n.kind === 'mention_self') {
+    const conversationTitle = n.payload?.['conversation_title'] as string | undefined;
+    return conversationTitle
+      ? `你在 #${conversationTitle} 被提及`
+      : '你被提及了';
   }
   return '新通知';
 }

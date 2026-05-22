@@ -658,14 +658,14 @@ ipcMain.handle('badge:setCount', (_event, value: unknown) => {
 });
 
 ipcMain.handle('notification:show', (_event, opts: unknown) => {
-  // Fire a system notification only when no Electron window is focused.
-  // `BrowserWindow.getFocusedWindow()` returns null when the app is in
-  // the background — more correct than checking mainWindow alone, which
-  // would misfire when the Events window or a dialog has focus.
-  if (BrowserWindow.getFocusedWindow() !== null) return;
   if (!opts || typeof opts !== 'object') return;
-  const { title, body } = opts as Partial<Record<string, unknown>>;
+  const { title, body, force } = opts as Partial<Record<string, unknown>>;
   if (typeof title !== 'string' || typeof body !== 'string') return;
+  // Fire ordinary system notifications only when no Electron window is
+  // focused. Direct human mentions opt into `force` so an active-but-
+  // different channel still produces an OS notification instead of only
+  // changing the unread dot.
+  if (force !== true && BrowserWindow.getFocusedWindow() !== null) return;
   const n = new Notification({ title, body });
   n.show();
 });
