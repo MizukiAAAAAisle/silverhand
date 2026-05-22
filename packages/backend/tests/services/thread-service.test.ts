@@ -21,7 +21,7 @@ import {
   ThreadService,
 } from '../../src/services/thread-service.js';
 import type { BackendLogger } from '../../src/context.js';
-import type { ConversationManager } from '../../src/conversation-manager.js';
+import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
 import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
 import { PrincipalConversationMismatchError } from '../../src/auth/principal.js';
 import { makeTempSilverhandDir, openTestDb } from '../utils/db.js';
@@ -111,7 +111,7 @@ function bootstrap() {
     messages,
     agents,
     workspaces,
-    runtimeHost: fake as unknown as ConversationManager,
+    runtimeHost: fake as unknown as AgentRuntimeHost,
     events,
     logger,
     serverConfig,

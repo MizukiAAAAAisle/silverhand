@@ -24,7 +24,6 @@ import {
   installEventWebSocketServer,
   type EventWsServerController,
 } from './ws/ws-server.js';
-import { ConversationManager } from './conversation-manager.js';
 import { DaemonAgentRuntimeHost } from './runtime/daemon-agent-runtime-host.js';
 import { RuntimeDeliveryCoordinator } from './runtime/delivery-coordinator.js';
 import { combineGatedBatch } from './runtime/stdin-format.js';
@@ -151,57 +150,41 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     events: new ScopeEventBus(),
     silverhandCliLauncher: opts.silverhandCliLauncher,
     agentTokens: new AgentTokenStore(),
-    // Both placeholders are filled immediately below — the runtime
-    // host dispatch decides whether `runtimeHost` is the legacy CM or
-    // the daemon shim. The legacy `conversationManager` field exists
-    // for backwards compat with the boot path and disappears together
-    // with the legacy branch when shiki signs off on daemon mode.
-    conversationManager: undefined as unknown as ConversationManager,
+    // Filled immediately below by the runtime host dispatch.
     runtimeHost: undefined as unknown as AgentRuntimeHost,
   };
 
-  // ── Runtime host dispatch (#task:512 sub-commit 2a; default flipped
-  // to `daemon` in Commit A of the cleanup sequence) ────────────
-  // SILVERHAND_RUNTIME_HOST gates which AgentRuntimeHost
-  // implementation backs `ctx.runtimeHost`. The env var is parsed by
-  // the pure helper in `runtime/runtime-host-mode.ts`, which Electron
-  // main also imports for its own daemon-spawn gate — keeping the
-  // two layers from drifting on default / accepted values / failure
-  // mode. Unset / `daemon` → `DaemonAgentRuntimeHost` over
-  // RuntimeBridge + RunStateCache + EventHandler + coordinator
-  // (the supported runtime path). `legacy` → existing in-process
-  // ConversationManager (explicit rollback during the cleanup soak
-  // window; scheduled for removal once the daemon path has soaked).
-  // Anything else throws.
+  // ── Runtime host dispatch (`SILVERHAND_RUNTIME_HOST`) ────────────
+  // Daemon mode is the only supported runtime path post-Commit B.
+  // The env switch survives one more diff: `=daemon` / unset wires
+  // the daemon shim, `=legacy` throws loudly with a recovery hint
+  // (the in-process `ConversationManager` surfaces have been removed
+  // — there is nothing to roll back to). The switch itself is
+  // scheduled for deletion in Commit C.
   const runtimeHostMode = parseAgentRuntimeHostMode(
     process.env[SILVERHAND_RUNTIME_HOST_ENV],
   );
   const runtimeHostBanner = describeAgentRuntimeHostMode(runtimeHostMode);
-  // Always create the legacy CM — services need it for the back-compat
-  // `conversationManager` field, and in `legacy` mode it IS the
-  // runtimeHost. In `daemon` mode (default) we still create it so
-  // service construction can proceed identically; the daemon shim is
-  // what services route through via `ctx.runtimeHost`. The legacy CM
-  // construction will go away in Commit B once the back-compat field
-  // is removed.
-  ctx.conversationManager = new ConversationManager(ctx, {
-    activityLogEnabled: runtimeHostMode === 'legacy',
-  });
   if (runtimeHostMode === 'daemon') {
     if (!opts.hostClient) {
       throw new Error(
         `${SILVERHAND_RUNTIME_HOST_ENV}=daemon (default): a connected HostClient is required ` +
           `but startBackend() received hostClient=undefined. The host (Electron main or ` +
           `dev-headless) must spawn silverhand-daemon and pass a connected HostClient. ` +
-          `Rollback recipe: restart with ${SILVERHAND_RUNTIME_HOST_ENV}=legacy to fall back ` +
-          `to the in-process ConversationManager spawn path (still available during the ` +
-          `cleanup soak window).`,
+          `Rollback recipe: restart with ${SILVERHAND_RUNTIME_HOST_ENV}=legacy ` +
+          `(NOTE: the legacy in-process ConversationManager spawn path was removed in ` +
+          `Commit B of the cleanup sequence — '=legacy' now throws at boot with this ` +
+          `same message family rather than running a different runtime; this option is ` +
+          `kept for one more commit so the env-switch deletion does not coincide with ` +
+          `the legacy code deletion).`,
       );
     }
     // Build the daemon runtime host. Bridge / cache / event-handler /
-    // coordinator are all live now; this is the supported default
-    // path after Commit A. The legacy CM branch below remains only as
-    // an explicit rollback during the cleanup soak window.
+    // coordinator are all live now; this is the only supported runtime
+    // path post-Commit B. The `legacy` branch below throws — the
+    // env switch is retained for one more commit only so an operator
+    // who set `=legacy` during the soak window sees a clear "removed"
+    // message instead of an unrelated parse failure.
     const proxySettings: ProxySettingsSource = {
       get: (key: 'proxy_url' | 'proxy_runtimes') =>
         new SettingsRepo(db).get(key),
@@ -341,11 +324,21 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     });
     daemonHostRef = ctx.runtimeHost as DaemonAgentRuntimeHost;
   } else {
-    // legacy: runtimeHost === the in-process ConversationManager.
-    // This is now an explicit rollback path, kept until the daemon
-    // default has soaked and the old CM responsibility surface is
-    // deleted in a later cleanup commit.
-    ctx.runtimeHost = ctx.conversationManager;
+    // legacy: the in-process ConversationManager runtime was removed
+    // in Commit B of the cleanup sequence. The env switch itself is
+    // kept for one more commit so operators who pinned `=legacy`
+    // during the soak window see this explicit message instead of an
+    // unrelated parse / wiring failure. Recovery: unset
+    // `SILVERHAND_RUNTIME_HOST` (or set it to `daemon`).
+    throw new Error(
+      `${SILVERHAND_RUNTIME_HOST_ENV}=legacy was set, but the in-process ` +
+        `ConversationManager runtime path was removed in Commit B of the ` +
+        `daemon cleanup sequence — there is no legacy runtime to fall back to. ` +
+        `Recovery: unset ${SILVERHAND_RUNTIME_HOST_ENV} (or set it to ` +
+        `'daemon') and restart. The env switch will disappear entirely in ` +
+        `the next commit (Commit C); past that point any value other than ` +
+        `'daemon' / unset will fail at parse time.`,
+    );
   }
   logger.info(
     {

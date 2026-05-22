@@ -19,7 +19,7 @@ import { ScheduleRepo } from '../../src/repos/schedule-repo.js';
 import { SettingsRepo } from '../../src/repos/settings-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { createApiRouter, createInternalRouter } from '../../src/routes.js';
-import type { ConversationManager } from '../../src/conversation-manager.js';
+import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
 import { AgentTokenStore } from '../../src/auth/agent-token-store.js';
 import { AttachmentService } from '../../src/services/attachment-service.js';
 import { AgentService } from '../../src/services/agent-service.js';
@@ -34,9 +34,11 @@ import { createLocalBlobFileStorage } from '../../src/storage/blob-file-storage.
 import { makeTempSilverhandDir, openTestDb } from './db.js';
 
 /**
- * Records every call routes / provision make into ConversationManager. Routes
- * use `.start`, `.stop`, `.deliverMessage`, `.stopAll`, `.reconcileOnBoot`,
- * `.isRunning` — none of which can be allowed to spawn real CLIs in tests.
+ * Records every call routes / provision make into the runtime host.
+ * Routes use `.start`, `.stop`, `.deliverMessage`, `.stopAll`,
+ * `.reconcileOnBoot`, `.isRunning` — none of which can be allowed to
+ * spawn real CLIs in tests. (Class name kept for diff readability;
+ * the type cast is to `AgentRuntimeHost` post-Commit B.)
  */
 export class FakeConversationManager {
   starts: Array<{ conversationId: string; agentId: string }> = [];
@@ -141,9 +143,9 @@ export interface TestApp {
 
 /**
  * Build a Hono app + BackendContext suitable for in-process testing
- * (`app.fetch(req)`). No port is opened. ConversationManager is a fake — the
- * real one would try to spawn agent CLI subprocesses on every channel
- * provision, which we don't want in unit tests.
+ * (`app.fetch(req)`). No port is opened. The runtime host is a fake —
+ * the real one would try to spawn agent CLI subprocesses on every
+ * channel provision, which we don't want in unit tests.
  */
 export function buildTestApp(): TestApp {
   const { db, viewerUserId } = openTestDb();
@@ -201,8 +203,7 @@ export function buildTestApp(): TestApp {
     events: new ScopeEventBus(),
     silverhandCliLauncher: { command: 'noop', args: [] },
     agentTokens: new AgentTokenStore(),
-    runtimeHost: fake as unknown as ConversationManager,
-    conversationManager: fake as unknown as ConversationManager,
+    runtimeHost: fake as unknown as AgentRuntimeHost,
   };
   ctx.channelService = new ChannelService({
     db,

@@ -282,29 +282,33 @@ describe('event WebSocket server', () => {
         max_depth: 1,
       },
     };
-    // Cleanup Commit A flipped the default runtime host to `daemon`,
-    // which requires a connected HostClient to boot. This test
-    // exercises ws shutdown end-to-end and has no daemon to spawn,
-    // so it pins the legacy in-process path explicitly via env. The
-    // legacy path remains supported as the explicit rollback during
-    // the cleanup soak window.
-    const prevRuntimeHost = process.env.SILVERHAND_RUNTIME_HOST;
-    process.env.SILVERHAND_RUNTIME_HOST = 'legacy';
-    try {
-      runningBackend = await startBackend({
-        dbPath: join(tmp, 'silverhand.db'),
-        silverhandDir: tmp,
-        serverConfig: config,
-        silverhandCliLauncher: { command: 'true', args: [] },
-        logger: { info() {}, warn() {}, error() {} },
-      });
-    } finally {
-      if (prevRuntimeHost === undefined) {
-        delete process.env.SILVERHAND_RUNTIME_HOST;
-      } else {
-        process.env.SILVERHAND_RUNTIME_HOST = prevRuntimeHost;
-      }
-    }
+    // Cleanup Commit B removed the in-process `ConversationManager`
+    // runtime, so the only path through `startBackend` is daemon mode
+    // — which needs a connected HostClient. This test exercises ws
+    // shutdown end-to-end (orthogonal to runtime host); we hand a
+    // minimal stub HostClient so the boot can proceed without a real
+    // daemon. The stub never receives runtime intents because the
+    // test never spawns an agent.
+    const stubHostClient = {
+      ping: () =>
+        Promise.resolve({
+          daemon_pid: 12345,
+          daemon_version: '0.0.0-test-ws',
+          started_at: 0,
+        }),
+      subscribe: () => () => {},
+      onReconnect: () => () => {},
+      close: () => Promise.resolve(),
+      runtimeStatus: () => Promise.resolve({ runtimes: [] as unknown[] }),
+    } as unknown as Parameters<typeof startBackend>[0]['hostClient'];
+    runningBackend = await startBackend({
+      dbPath: join(tmp, 'silverhand.db'),
+      silverhandDir: tmp,
+      serverConfig: config,
+      silverhandCliLauncher: { command: 'true', args: [] },
+      logger: { info() {}, warn() {}, error() {} },
+      hostClient: stubHostClient,
+    });
 
     // Pre-ship rewrite: a fresh DB has no registered viewer, so the
     // public WS auth handshake refuses with `auth_failed`. Register

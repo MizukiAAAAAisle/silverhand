@@ -1,47 +1,49 @@
 /**
  * `AgentRuntimeHost` — the backend-side facade for agent runtime
- * lifecycle (start/stop/wake/clear-session/inbox delivery/run-state),
- * shared by the two execution paths gated by `SILVERHAND_RUNTIME_HOST`:
- *
- *   - `LegacyAgentRuntimeHost` = the existing in-process
- *     `ConversationManager` which spawns child CLIs directly.
- *   - `DaemonAgentRuntimeHost` = a thin shim that delegates to the
- *     `silverhand-daemon` over `RuntimeBridge` and reads passive
- *     run-state from `RunStateCache` (events flow back through
- *     `RuntimeEventHandler`).
+ * lifecycle (start/stop/wake/clear-session/inbox delivery/run-state).
+ * The only implementation is `DaemonAgentRuntimeHost`, which delegates
+ * to `silverhand-daemon` over `RuntimeBridge` and reads passive
+ * run-state from `RunStateCache` (events flow back through
+ * `RuntimeEventHandler`).
  *
  * **NOT related to workspace host identity.** The `host_id` column on
  * agents / workspaces and the `HostRepo` row identify a physical host
  * (currently always `'local'`). `AgentRuntimeHost` is a runtime-side
- * dispatch boundary for "who actually owns the child process" —
- * `ConversationManager` (legacy) or the daemon (`silverhand-daemon`).
+ * dispatch boundary for "who actually owns the child process" — the
+ * silverhand-daemon.
  *
- * The interface mirrors the existing `ConversationManager` public
- * surface exactly so all existing call sites (services, routes) keep
- * working with a single rename `ctx.conversationManager →
- * ctx.runtimeHost`. New shape is intentionally avoided — Cindy
- * `bJUazoeBrxK8XglK` blocker (1): "按现有 call sites 精确建模，不要发明
- * 新形状".
+ * The interface mirrors the (now-deleted) `ConversationManager` public
+ * surface so all existing call sites (services, routes) stayed working
+ * through the cleanup. Cindy `bJUazoeBrxK8XglK` blocker (1):
+ * "按现有 call sites 精确建模，不要发明新形状".
  */
 import type {
   AgentRunState,
   AgentRunTerminalReason,
 } from '@silverhand/shared';
-import type {
-  ClearSessionResult,
-  StartOptions,
-} from '../conversation-manager.js';
+
+/** Optional `start()` overrides. Kept thin — only fields services
+ *  actually pass at call time. */
+export interface StartOptions {
+  /** Override the model (e.g. `sonnet-4-6`). Falls back to agent.model. */
+  model?: string | null;
+}
+
+/** Pre-clear snapshot returned by `clearSession()`. Callers use this
+ *  to decide whether to publish an audit message and what to log. */
+export interface ClearSessionResult {
+  prevCliSessionId: string | null;
+  wasRunning: boolean;
+}
 
 /**
  * Backend-side facade for the per-(conversation, agent) runtime
- * lifecycle. Two implementations:
+ * lifecycle. Only implementation: `DaemonAgentRuntimeHost`.
  *
- * - `DaemonAgentRuntimeHost` (default; delegates to `silverhand-daemon`
- *    via `RuntimeBridge`).
- * - `ConversationManager` (legacy in-process spawn; explicit rollback
- *    via `SILVERHAND_RUNTIME_HOST=legacy` during the cleanup soak window).
- *
- * @see ./runtime-host-mode.ts for the boot-time mode switch.
+ * @see ./runtime-host-mode.ts for the (transitional) boot-time mode
+ *   switch — the legacy path is gone, but the env switch survives one
+ *   more commit so daemon-mode operators can roll back to a clear
+ *   "legacy unsupported" error instead of a silent crash.
  */
 export interface AgentRuntimeHost {
   // ── lifecycle ───────────────────────────────────────────────────

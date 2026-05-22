@@ -8,7 +8,7 @@ import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
 import { ccMentionsFromUserMessage } from '../../src/mention-cc.js';
 import type { BackendLogger } from '../../src/context.js';
-import type { ConversationManager } from '../../src/conversation-manager.js';
+import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
 import { makeTempSilverhandDir, openTestDb } from '../utils/db.js';
 
 class FakeConversationManager {
@@ -126,7 +126,7 @@ describe('ccMentionsFromUserMessage — human membership writes (v25 PR-A blocke
         conversations: t.conversations,
         messages: t.messages,
         notifications: t.notifications,
-        runtimeHost: t.fake as unknown as ConversationManager,
+        runtimeHost: t.fake as unknown as AgentRuntimeHost,
         logger: t.logger,
         events: t.events,
       });
@@ -182,7 +182,7 @@ describe('ccMentionsFromUserMessage — human membership writes (v25 PR-A blocke
         conversations: t.conversations,
         messages: t.messages,
         notifications: t.notifications,
-        runtimeHost: t.fake as unknown as ConversationManager,
+        runtimeHost: t.fake as unknown as AgentRuntimeHost,
         logger: t.logger,
         events: t.events,
       });
@@ -230,7 +230,7 @@ describe('ccMentionsFromUserMessage — human membership writes (v25 PR-A blocke
         conversations: t.conversations,
         messages: t.messages,
         notifications: t.notifications,
-        runtimeHost: t.fake as unknown as ConversationManager,
+        runtimeHost: t.fake as unknown as AgentRuntimeHost,
         logger: t.logger,
         events: t.events,
       });
@@ -279,7 +279,7 @@ describe('ccMentionsFromUserMessage — human membership writes (v25 PR-A blocke
         conversations: t.conversations,
         messages: t.messages,
         notifications: t.notifications,
-        runtimeHost: t.fake as unknown as ConversationManager,
+        runtimeHost: t.fake as unknown as AgentRuntimeHost,
         logger: t.logger,
         events: t.events,
       });
@@ -299,7 +299,7 @@ describe('ccMentionsFromUserMessage — human membership writes (v25 PR-A blocke
         conversations: t.conversations,
         messages: t.messages,
         notifications: t.notifications,
-        runtimeHost: t.fake as unknown as ConversationManager,
+        runtimeHost: t.fake as unknown as AgentRuntimeHost,
         logger: t.logger,
         events: t.events,
       });

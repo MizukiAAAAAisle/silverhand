@@ -2,19 +2,19 @@
  * Backend boot dispatch tests for the `SILVERHAND_RUNTIME_HOST` gated
  * runtime host.
  *
- * Commit A of the cleanup sequence flipped the default from `legacy`
- * to `daemon`. The legacy path remains reachable as an explicit
- * rollback (`SILVERHAND_RUNTIME_HOST=legacy`) until the legacy CM
- * surfaces are deleted in a later commit — these tests pin that the
- * explicit-rollback path stays 0-drift even as the default changes.
+ * Cleanup history:
+ *   - Commit A flipped the default from `legacy` to `daemon`.
+ *   - Commit B (this file) deleted the in-process `ConversationManager`
+ *     runtime. The env switch itself survives one more commit (Commit C),
+ *     but `=legacy` now throws loudly at boot — there is nothing to
+ *     fall back to. These tests pin that the throw carries the right
+ *     recovery hint and that the daemon path is unaffected.
  *
- * Cindy `0G5uJBydO_4qt_2r` review boundary:
- *   - legacy mode (now explicit override) must remain functional and
- *     0-drift from before the flip
- *   - legacy mode must NOT depend on `hostClient` even if one is passed
- *   - daemon mode (now default) without a `hostClient` must throw
- *     loudly at boot — and the error message must carry the rollback
- *     recipe (`SILVERHAND_RUNTIME_HOST=legacy`)
+ * Cindy `0G5uJBydO_4qt_2r` review boundary still in force:
+ *   - daemon mode (default) without a `hostClient` must throw loudly
+ *     at boot — and the error message must carry the (now historical)
+ *     `SILVERHAND_RUNTIME_HOST=legacy` recovery recipe so an operator
+ *     who already pinned that value sees one consistent message family
  *   - banner / rollback recipe must surface in the boot logs
  *
  * These are integration tests against the real `startBackend` (no
@@ -110,33 +110,41 @@ describe('startBackend — SILVERHAND_RUNTIME_HOST dispatch', () => {
     expect(err?.message).toContain('SILVERHAND_RUNTIME_HOST=legacy');
   });
 
-  it('explicit SILVERHAND_RUNTIME_HOST=legacy still routes to in-process ConversationManager (rollback regression)', async () => {
-    // Commit A keeps `=legacy` working as the explicit rollback path
-    // until the legacy CM surfaces are deleted in a later commit. If
-    // this test ever fails, the deletion landed too early and the
-    // rollback escape hatch is gone — abort the diff that broke this.
+  it('explicit SILVERHAND_RUNTIME_HOST=legacy throws loudly at boot (Commit B removed the runtime)', async () => {
+    // Commit A kept `=legacy` working as a rollback escape hatch;
+    // Commit B (this commit) deleted the in-process
+    // ConversationManager runtime. The env switch is retained for one
+    // more commit so an operator who pinned `=legacy` during the soak
+    // window sees a clear "removed" message instead of an unrelated
+    // wiring failure. The error MUST mention Commit B by name and
+    // surface the recovery (unset / =daemon).
     process.env[SILVERHAND_RUNTIME_HOST_ENV] = 'legacy';
-    running = await startBackend({
-      dbPath: join(tmp, 'silverhand.db'),
-      silverhandDir: tmp,
-      serverConfig: fixedServerConfig,
-      silverhandCliLauncher: { command: 'true', args: [] },
-      logger: silentLogger(),
-    });
-    expect(running.context.runtimeHost).toBe(
-      running.context.conversationManager,
-    );
+    let err: Error | null = null;
+    try {
+      running = await startBackend({
+        dbPath: join(tmp, 'silverhand.db'),
+        silverhandDir: tmp,
+        serverConfig: fixedServerConfig,
+        silverhandCliLauncher: { command: 'true', args: [] },
+        logger: silentLogger(),
+      });
+    } catch (e) {
+      err = e as Error;
+    }
+    expect(err).toBeInstanceOf(Error);
+    expect(err?.message).toContain('SILVERHAND_RUNTIME_HOST=legacy');
+    expect(err?.message).toContain('Commit B');
+    expect(err?.message).toContain('ConversationManager');
+    // Recovery recipe — operator must know what to do.
+    expect(err?.message).toMatch(/unset|'daemon'/);
   });
 
-  it('explicit legacy mode ignores hostClient even when one is passed', async () => {
+  it('explicit legacy mode also throws even when a hostClient is passed', async () => {
     // Cindy `bJUazoeBrxK8XglK` blocker (2) + `yAyzGil3UdCENIom` B2:
-    // the legacy fallback MUST be independent of daemon plumbing.
-    // Track every call on the hostClient surface backend might
-    // accidentally touch (ping, subscribe, onReconnect, close); after
-    // a successful legacy boot every counter must still be zero. The
-    // ping mock returns instead of throwing so that any silent
-    // invocation surfaces as a positive assertion failure rather
-    // than the test passing because the throw got swallowed.
+    // the legacy path must not silently start the daemon plumbing
+    // when the operator asked for legacy. Post-Commit B we still
+    // honour that contract — the throw fires before any hostClient
+    // surface is touched.
     const ping = vi.fn(() =>
       Promise.resolve({
         daemon_pid: 12345,
@@ -154,19 +162,22 @@ describe('startBackend — SILVERHAND_RUNTIME_HOST dispatch', () => {
       close,
     } as unknown as HostClient;
     process.env[SILVERHAND_RUNTIME_HOST_ENV] = 'legacy';
-    running = await startBackend({
-      dbPath: join(tmp, 'silverhand.db'),
-      silverhandDir: tmp,
-      serverConfig: fixedServerConfig,
-      silverhandCliLauncher: { command: 'true', args: [] },
-      logger: silentLogger(),
-      hostClient,
-    });
-    // Daemon shim NOT constructed.
-    expect(running.context.runtimeHost).toBe(
-      running.context.conversationManager,
-    );
-    // Cindy B2: legacy boot must not touch the hostClient surface.
+    let err: Error | null = null;
+    try {
+      running = await startBackend({
+        dbPath: join(tmp, 'silverhand.db'),
+        silverhandDir: tmp,
+        serverConfig: fixedServerConfig,
+        silverhandCliLauncher: { command: 'true', args: [] },
+        logger: silentLogger(),
+        hostClient,
+      });
+    } catch (e) {
+      err = e as Error;
+    }
+    expect(err).toBeInstanceOf(Error);
+    expect(err?.message).toContain('SILVERHAND_RUNTIME_HOST=legacy');
+    // hostClient surface must not have been called — Cindy B2.
     expect(ping).not.toHaveBeenCalled();
     expect(subscribe).not.toHaveBeenCalled();
     expect(onReconnect).not.toHaveBeenCalled();
@@ -218,12 +229,37 @@ describe('startBackend — SILVERHAND_RUNTIME_HOST dispatch', () => {
     expect(err?.message).toContain("'daemon'");
   });
 
-  it('explicit legacy mode boot logs the legacy banner with rollback hint', async () => {
-    // We boot in legacy explicitly because we need a successful boot
-    // (the default daemon path needs a hostClient). The banner
-    // assertions still verify the describer text — daemon banner is
-    // verified in the runtime-host-mode unit tests.
-    process.env[SILVERHAND_RUNTIME_HOST_ENV] = 'legacy';
+  it('daemon mode boot logs the daemon banner with rollback hint', async () => {
+    // Post-Commit B the only path that reaches the boot banner log is
+    // the daemon path. Verify the describer text surfaces in the
+    // captured log line so an operator tailing logs sees mode +
+    // rollback recipe in one place. (Banner content per
+    // describer is unit-tested in runtime-host-mode.test.ts.)
+    //
+    // We use a stub hostClient that resolves `ping` synchronously —
+    // we don't need the full daemon plumbing for a banner check, only
+    // for the boot to clear the dispatch and reach `logger.info`.
+    process.env[SILVERHAND_RUNTIME_HOST_ENV] = 'daemon';
+    const ping = vi.fn(() =>
+      Promise.resolve({
+        daemon_pid: 12345,
+        daemon_version: '0.0.0-test',
+        started_at: 0,
+      }),
+    );
+    const subscribe = vi.fn(() => () => {});
+    const onReconnect = vi.fn(() => () => {});
+    const close = vi.fn(() => Promise.resolve());
+    const runtimeStatus = vi.fn(() =>
+      Promise.resolve({ runtimes: [] as unknown[] }),
+    );
+    const hostClient = {
+      ping,
+      subscribe,
+      onReconnect,
+      close,
+      runtimeStatus,
+    } as unknown as HostClient;
     const logs: CapturedLog[] = [];
     running = await startBackend({
       dbPath: join(tmp, 'silverhand.db'),
@@ -231,16 +267,17 @@ describe('startBackend — SILVERHAND_RUNTIME_HOST dispatch', () => {
       serverConfig: fixedServerConfig,
       silverhandCliLauncher: { command: 'true', args: [] },
       logger: capturingLogger(logs),
+      hostClient,
     });
     const banner = logs.find(l =>
-      l.msg.includes('agent runtime: legacy path'),
+      l.msg.includes('agent runtime: daemon path'),
     );
     expect(banner).toBeDefined();
     expect(banner?.obj).toMatchObject({
-      mode: 'legacy',
+      mode: 'daemon',
     });
     // Banner should mention the env var so an operator scanning logs
-    // sees how to return to the default daemon path.
+    // sees the (historical) rollback path.
     expect(banner?.msg).toContain(SILVERHAND_RUNTIME_HOST_ENV);
   });
 

@@ -16,7 +16,7 @@ import {
   TargetError,
 } from '../../src/services/conversation-message-service.js';
 import type { BackendLogger } from '../../src/context.js';
-import type { ConversationManager } from '../../src/conversation-manager.js';
+import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
 import { createLocalBlobFileStorage } from '../../src/storage/blob-file-storage.js';
 import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
 import { ccMentionsFromUserMessage } from '../../src/mention-cc.js';
@@ -27,7 +27,7 @@ vi.mock('../../src/mention-cc.js', () => ({
   ccMentionsFromUserMessage: vi.fn(async () => {}),
 }));
 
-type TerminalReason = Parameters<ConversationManager['resolveRun']>[2];
+type TerminalReason = Parameters<AgentRuntimeHost['resolveRun']>[2];
 
 class FakeConversationManager {
   starts: Array<{ conversationId: string; agentId: string }> = [];
@@ -102,7 +102,7 @@ function bootstrap() {
     notifications,
     workspaces,
     attachmentService,
-    runtimeHost: fake as unknown as ConversationManager,
+    runtimeHost: fake as unknown as AgentRuntimeHost,
     events,
     logger,
   });

@@ -2199,7 +2199,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     const impact = computeDeleteImpact(id);
 
     // 1. Hard-stop every running conversation_agent. Must precede any DB
-    //    delete — once conversation_agents rows are gone, conversationManager
+    //    delete — once conversation_agents rows are gone, the runtime host
     //    can't look up handles by (conversation id, agent id).
     for (const live of impact.running_conversation_agents) {
       await ctx.runtimeHost

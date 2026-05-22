@@ -41,10 +41,13 @@
  *     `publishInitCooldown`); the success arm flips the row to
  *     `starting` + the daemon-reported pid.
  *
- * Daemon mode is the default runtime path after cleanup Commit A.
- * `SILVERHAND_RUNTIME_HOST=legacy` remains as an explicit rollback
- * while the old ConversationManager execution surface is still in the
- * tree.
+ * Daemon mode is the only supported runtime path post-Commit B.
+ * `SILVERHAND_RUNTIME_HOST=legacy` is now a loud boot-time throw — the
+ * old in-process ConversationManager execution surface was deleted
+ * with this commit. The env switch itself is retained for one more
+ * commit (Commit C) so an operator who pinned `=legacy` during the
+ * soak window sees a clear "removed" message at boot rather than an
+ * unrelated parse failure.
  *
  * # Why throws (and how this file uses them, preserved from 2a)
  *
@@ -62,7 +65,11 @@ import type { HostClient } from '@silverhand/host';
 import { getDriver } from '@silverhand/host/drivers';
 import type { Database } from 'better-sqlite3';
 import type { BackendLogger, SilverhandCliLauncher } from '../context.js';
-import type { ClearSessionResult, StartOptions } from '../conversation-manager.js';
+import type {
+  AgentRuntimeHost,
+  ClearSessionResult,
+  StartOptions,
+} from './agent-runtime-host.js';
 import type { AgentTokenStore } from '../auth/agent-token-store.js';
 import { buildSystemPromptFor } from '../drivers/index.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
@@ -74,7 +81,6 @@ import type { UserRepo } from '../repos/user-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { MembershipService } from '../services/membership-service.js';
 import { prepareSpawnFiles } from '../spawn-prep.js';
-import type { AgentRuntimeHost } from './agent-runtime-host.js';
 import type { ActivityLogWriter } from './activity-log-writer.js';
 import type { RuntimeBridge } from './bridge.js';
 import type { LiveDeliveryRequest, RuntimeDeliveryCoordinator } from './delivery-coordinator.js';

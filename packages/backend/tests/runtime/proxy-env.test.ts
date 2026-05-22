@@ -1,15 +1,15 @@
 /**
  * Unit tests for `applyProxyEnv` / `parseProxyRuntimes` — the proxy
- * helper extracted out of `ConversationManager.applyProxySetting` in
- * commit 4 (RuntimeBridge prep). These tests pin the semantics that
- * BOTH call sites (CM today, `RuntimeBridge` post-flip) MUST honor
- * exactly, so the codex / claude allowlist behavior cannot silently
- * drift across the daemon cutover.
+ * helper extracted out of the (now-deleted) `ConversationManager
+ * .applyProxySetting` in commit 4 of the daemon cutover (RuntimeBridge
+ * prep). The helper is the only call site post-Commit B; these tests
+ * pin the semantics so the codex / claude allowlist behavior stays
+ * byte-identical to the lifted source.
  *
  * Cindy `KzTBo4xxUmcx77yR` + `QDF5xr23ehj1RhzY` + shiki
- * `piIb3YZgFjA5qaaE`: preserve CM `applyProxySetting()` semantics
- * verbatim — same SettingsRepo keys, same comma-split allowlist, same
- * `expandProxyEnv()`. These tests assert that contract.
+ * `piIb3YZgFjA5qaaE`: preserve the original CM `applyProxySetting()`
+ * semantics verbatim — same SettingsRepo keys, same comma-split
+ * allowlist, same `expandProxyEnv()`. These tests assert that contract.
  */
 import { describe, expect, it } from 'vitest';
 import {

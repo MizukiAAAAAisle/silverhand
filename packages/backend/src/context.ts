@@ -1,7 +1,6 @@
 import type { Database as Db } from 'better-sqlite3';
 import type { ServerConfig } from '@silverhand/shared';
 import type { ScopeEventBus } from './ws/scope-event-bus.js';
-import type { ConversationManager } from './conversation-manager.js';
 import type { AgentRuntimeHost } from './runtime/agent-runtime-host.js';
 import type { AttachmentService } from './services/attachment-service.js';
 import type { AgentService } from './services/agent-service.js';
@@ -25,7 +24,9 @@ export interface BackendLogger {
  * file so events from different concerns can be queried separately:
  *
  *   - `system`: HTTP server, scheduler, ws, auth, DB.
- *   - `agent`:  ConversationManager spawn / drain / exit / compaction.
+ *   - `agent`:  agent runtime spawn / drain / exit / compaction (now
+ *               owned by silverhand-daemon and surfaced through
+ *               `DaemonAgentRuntimeHost` + `RuntimeEventHandler`).
  *   - `cli`:    every CLI invocation + CLI-side pre-flight failures.
  *
  * Existing call sites keep using `ctx.logger` (the historical "system"
@@ -41,9 +42,10 @@ export interface BackendLoggers {
 /**
  * Host-supplied way to launch the `silverhand` CLI.
  *
- * ConversationManager creates a per-spawn `bin/silverhand` shim that forwards
- * to this launcher so the agent sees one stable command name on PATH in both
- * dev and packaged builds.
+ * The runtime host (`DaemonAgentRuntimeHost`, via the per-spawn prep
+ * in `silverhand-daemon`) creates a per-spawn `bin/silverhand` shim
+ * that forwards to this launcher so the agent sees one stable command
+ * name on PATH in both dev and packaged builds.
  */
 export interface SilverhandCliLauncher {
   command: string;
@@ -100,28 +102,18 @@ export interface BackendContext {
   agentTokens: AgentTokenStore;
   /**
    * Backend-side facade for agent runtime lifecycle. Services and
-   * routes should read/call **only** this field — never
-   * `conversationManager` — so the legacy/daemon switch (#task:512
-   * sub-commit 2a, `SILVERHAND_RUNTIME_HOST`) can route through
-   * different implementations without touching the call sites.
+   * routes route every spawn / stop / wake / clearSession / inbox
+   * delivery / run-state read through this single interface.
    *
-   * In the default `daemon` mode this points at the daemon runtime
-   * host; in explicit rollback mode (`SILVERHAND_RUNTIME_HOST=legacy`)
-   * this points at the same `ConversationManager` instance as
-   * `conversationManager` below. Either way, the interface contract
-   * is the same.
+   * The only implementation post-Commit B is `DaemonAgentRuntimeHost`
+   * (silverhand-daemon over `RuntimeBridge`). The transitional
+   * `SILVERHAND_RUNTIME_HOST=legacy` rollback is now a loud boot-time
+   * throw — the in-process `ConversationManager` surfaces have been
+   * removed. The env switch itself disappears in a follow-up commit
+   * (kept for one more diff so an operator hitting the throw sees a
+   * stable error message rather than an unrelated parse failure).
    */
   runtimeHost: AgentRuntimeHost;
-  /**
-   * Concrete `ConversationManager` instance. Retained on the context
-   * for now so the legacy spawn path can keep working unchanged; new
-   * call sites MUST go through `runtimeHost` (which equals this in
-   * legacy mode). This field disappears together with the legacy
-   * branch when shiki signs off on daemon-mode manual test.
-   *
-   * @internal
-   */
-  conversationManager: ConversationManager;
 }
 
 export const consoleLogger: BackendLogger = {
