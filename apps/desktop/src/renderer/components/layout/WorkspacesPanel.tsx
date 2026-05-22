@@ -72,6 +72,7 @@ export function WorkspaceGroup({
       onAdd={onAdd}
       collapsible
       defaultExpanded={defaultExpanded ?? true}
+      headerClass="text-sm font-medium tracking-wider text-text-muted"
     >
       {workspaces.length === 0 ? (
         <li className="px-2 py-2 text-xs text-text-muted">{emptyHint ?? '空'}</li>
