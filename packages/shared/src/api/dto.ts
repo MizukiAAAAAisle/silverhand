@@ -972,15 +972,35 @@ export const ClaimTasksInputSchema = z
   .object({
     task_numbers: z.array(z.number()).optional(),
     message_ids: z.array(z.string()).optional(),
+    /** Optional workspace selector for cross-workspace task ops. When
+     *  omitted, the target task is resolved in the actor's current
+     *  conversation's workspace (the legacy default). When provided,
+     *  the actor must already be a member of the resolved workspace.
+     *  `workspace_id` and `workspace_name` are mutually exclusive.
+     *
+     *  The selector intentionally does NOT apply to message-id
+     *  promotion (turning a not-yet-task message into a task): a
+     *  regular message can only become a task in its own
+     *  conversation, so promotion always targets the actor's
+     *  current workspace regardless of selector. */
+    workspace_id: z.string().optional(),
+    workspace_name: z.string().optional(),
   })
   .refine(v => (v.task_numbers?.length ?? 0) + (v.message_ids?.length ?? 0) > 0, {
     message: 'provide at least one of task_numbers or message_ids',
+  })
+  .refine(v => !(v.workspace_id && v.workspace_name), {
+    message: 'workspace_id and workspace_name are mutually exclusive',
   });
 export type ClaimTasksInput = z.infer<typeof ClaimTasksInputSchema>;
 
-/** Typed code for claim-tool failures. `wrong_conversation`,
- *  `task_done`, `already_claimed` etc. are stable; the older free-form
- *  `reason` string is preserved alongside `code` for tool consumers. */
+/** Typed code for claim-tool failures. `wrong_conversation` remains for
+ *  the message-id promotion path (a message can only become a task in
+ *  its own conversation); cross-workspace task ops fail with
+ *  `workspace_membership_required` / `unknown_workspace` /
+ *  `ambiguous_workspace` instead. `task_done`, `already_claimed` etc.
+ *  are stable; the free-form `reason` string is preserved alongside
+ *  `code` for tool consumers. */
 export const ClaimErrorCodeSchema = z.enum([
   'task_not_found',
   'message_not_found',
@@ -995,6 +1015,9 @@ export const ClaimErrorCodeSchema = z.enum([
   'not_conversation_member',
   'agent_not_found',
   'not_a_task',
+  'unknown_workspace',
+  'ambiguous_workspace',
+  'workspace_membership_required',
 ]);
 export type ClaimErrorCode = z.infer<typeof ClaimErrorCodeSchema>;
 
@@ -1008,6 +1031,9 @@ export const ClaimResultEntrySchema = z.object({
   /** If the task belongs to a different channel/thread, its id+title surface
    *  here so the caller can explain to the agent why claim failed. */
   owner_conversation: TaskConversationRefSchema.optional(),
+  /** Workspace ids matching the supplied `workspace_name`, returned when
+   *  `code === 'ambiguous_workspace'` so the caller can disambiguate. */
+  workspace_candidates: z.array(z.string()).optional(),
 });
 export type ClaimResultEntry = z.infer<typeof ClaimResultEntrySchema>;
 
@@ -1017,16 +1043,30 @@ export const ClaimTasksResultSchema = z.object({
 export type ClaimTasksResult = z.infer<typeof ClaimTasksResultSchema>;
 
 // POST /internal/agent/:aid/tasks/unclaim
-export const UnclaimTaskInputSchema = z.object({
-  task_number: z.number().int().positive(),
-});
+export const UnclaimTaskInputSchema = z
+  .object({
+    task_number: z.number().int().positive(),
+    /** Optional workspace selector — see ClaimTasksInputSchema. */
+    workspace_id: z.string().optional(),
+    workspace_name: z.string().optional(),
+  })
+  .refine(v => !(v.workspace_id && v.workspace_name), {
+    message: 'workspace_id and workspace_name are mutually exclusive',
+  });
 export type UnclaimTaskInput = z.infer<typeof UnclaimTaskInputSchema>;
 
 // POST /internal/agent/:aid/tasks/update-status
-export const UpdateTaskStatusInputSchema = z.object({
-  task_number: z.number().int().positive(),
-  status: TaskStatusSchema,
-});
+export const UpdateTaskStatusInputSchema = z
+  .object({
+    task_number: z.number().int().positive(),
+    status: TaskStatusSchema,
+    /** Optional workspace selector — see ClaimTasksInputSchema. */
+    workspace_id: z.string().optional(),
+    workspace_name: z.string().optional(),
+  })
+  .refine(v => !(v.workspace_id && v.workspace_name), {
+    message: 'workspace_id and workspace_name are mutually exclusive',
+  });
 export type UpdateTaskStatusInput = z.infer<typeof UpdateTaskStatusInputSchema>;
 
 /** Typed code for unclaim / status mutation failures. */
@@ -1041,6 +1081,9 @@ export const TaskMutationErrorCodeSchema = z.enum([
   'conversation_not_found',
   'not_conversation_member',
   'agent_not_found',
+  'unknown_workspace',
+  'ambiguous_workspace',
+  'workspace_membership_required',
 ]);
 export type TaskMutationErrorCode = z.infer<typeof TaskMutationErrorCodeSchema>;
 
@@ -1050,6 +1093,9 @@ export const TaskMutationResultSchema = z.object({
   reason: z.string().optional(),
   /** Typed failure code; present whenever `success === false`. */
   code: TaskMutationErrorCodeSchema.optional(),
+  /** Workspace ids matching the supplied `workspace_name`, returned when
+   *  `code === 'ambiguous_workspace'` so the caller can disambiguate. */
+  workspace_candidates: z.array(z.string()).optional(),
 });
 export type TaskMutationResult = z.infer<typeof TaskMutationResultSchema>;
 

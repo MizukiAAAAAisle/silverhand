@@ -9,6 +9,7 @@ import {
   flagNumberArray,
   flagString,
   flagStringArray,
+  type ParsedArgs,
 } from '../parse.js';
 import type { Command } from './index.js';
 
@@ -101,8 +102,8 @@ const listCommand: Command = {
                        [--limit N]
 
 Returns aggregated tasks across the current workspace, with server-side
-filtering. You can only mutate tasks that belong to your current
-channel/thread; others are returned read-only.
+filtering. Pass --workspace-id <id> to read a sister workspace's board
+(you must be a member); the default is the actor's current workspace.
 
 Without filters this returns the entire board, which can be large — pass
 --task-number / --status / --mine / --limit to narrow.
@@ -252,20 +253,59 @@ stdout: CreateTasksResult JSON.`,
   },
 };
 
+/** Resolve the optional `--workspace-id` / `--workspace <name>` pair
+ *  into the wire-shape fields. They are mutually exclusive: passing
+ *  both is rejected pre-flight with a clear message so the agent does
+ *  not have to round-trip to the backend to learn the same. Omitting
+ *  both means "use the current workspace" (the legacy default). */
+function resolveWorkspaceSelector(
+  args: ParsedArgs,
+): { workspace_id?: string; workspace_name?: string } {
+  const workspaceId = flagString(args, 'workspace-id');
+  const workspaceName = flagString(args, 'workspace');
+  if (workspaceId && workspaceName) {
+    throw new CliError({
+      code: 'validation_error',
+      subkind: 'mutually_exclusive',
+      message: '--workspace-id and --workspace are mutually exclusive',
+      retriable: false,
+      details: { flags: ['workspace-id', 'workspace'] },
+    });
+  }
+  return {
+    ...(workspaceId ? { workspace_id: workspaceId } : {}),
+    ...(workspaceName ? { workspace_name: workspaceName } : {}),
+  };
+}
+
 const claimCommand: Command = {
   verb: 'claim',
   summary: 'Claim tasks by task number, or promote-and-claim by message id.',
   help: `silverhand task claim (--task-number N [--task-number N ...] |
                           --message-id <id> [--message-id <id> ...])
+                         [--workspace-id <id> | --workspace <name>]
 
-Atomic claim. If a task is already claimed by someone else or belongs to
-a different channel/thread, the result entry has success=false with a
-reason. Always move on when a claim fails — do not retry.
+Atomic claim. If a task is already claimed by someone else, the result
+entry has success=false with a reason. Always move on when a claim
+fails — do not retry.
 
 Claiming a "todo" task auto-advances it to "in_progress".
 
+Workspace selector (cross-workspace claims):
+  --workspace-id <id>   Target a specific workspace by id.
+  --workspace <name>    Target by workspace name. Fails if 0 or >1
+                        workspaces share the name (the result includes
+                        \`workspace_candidates\` on ambiguity).
+  (default)             The actor's current workspace.
+
+You must be a member of the resolved workspace; otherwise the claim
+fails with \`workspace_membership_required\`. Promotion (--message-id
+of a not-yet-task message) always targets the current conversation
+regardless of the selector — a message can only become a task in its
+own conversation.
+
 stdout: ClaimTasksResult JSON.`,
-  flags: ['task-number', 'message-id'] as const,
+  flags: ['task-number', 'message-id', 'workspace-id', 'workspace'] as const,
   async run({ client, args }) {
     const taskNumbers = flagNumberArray(args, 'task-number');
     const messageIds = flagStringArray(args, 'message-id');
@@ -276,9 +316,11 @@ stdout: ClaimTasksResult JSON.`,
         retriable: false,
       });
     }
+    const selector = resolveWorkspaceSelector(args);
     return client.claimTasks({
       ...(taskNumbers ? { task_numbers: taskNumbers } : {}),
       ...(messageIds ? { message_ids: messageIds } : {}),
+      ...selector,
     });
   },
 };
@@ -287,13 +329,17 @@ const unclaimCommand: Command = {
   verb: 'unclaim',
   summary: 'Release your claim on a task.',
   help: `silverhand task unclaim --task-number N
+                           [--workspace-id <id> | --workspace <name>]
 
 Use only when you can no longer work on the task. To signal completion,
 use \`silverhand task status --task-number N --status in_review\` (or
 done if explicitly approved) instead.
 
+Workspace selector — see \`silverhand task claim --help\`. You must be
+the task's assignee.
+
 stdout: TaskMutationResult JSON.`,
-  flags: ['task-number'] as const,
+  flags: ['task-number', 'workspace-id', 'workspace'] as const,
   async run({ client, args }) {
     const n = flagNumber(args, 'task-number');
     if (n === undefined) {
@@ -303,7 +349,8 @@ stdout: TaskMutationResult JSON.`,
         retriable: false,
       });
     }
-    return client.unclaimTask(n);
+    const selector = resolveWorkspaceSelector(args);
+    return client.unclaimTask({ task_number: n, ...selector });
   },
 };
 
@@ -311,8 +358,10 @@ const statusCommand: Command = {
   verb: 'status',
   summary: 'Move a task through its status workflow.',
   help: `silverhand task status --task-number N --status in_progress|in_review|done
+                          [--workspace-id <id> | --workspace <name>]
 
-Allowed transitions (you must be the assignee):
+Allowed transitions (you must be the assignee, or the creator of an
+unassigned task you created yourself):
   in_progress → in_review : your work is ready for human validation
   in_progress → done      : trivial tasks or after explicit human approval
   in_review   → done      : after human approval (usually the human does this)
@@ -323,8 +372,11 @@ Allowed transitions (you must be the assignee):
 are NOT valid here — passing one fails with enum_invalid pointing back
 to \`task list\`.
 
+Workspace selector — see \`silverhand task claim --help\`. Cross-workspace
+status updates require you to be a member of the resolved workspace.
+
 stdout: TaskMutationResult JSON.`,
-  flags: ['task-number', 'status'] as const,
+  flags: ['task-number', 'status', 'workspace-id', 'workspace'] as const,
   async run({ client, args }) {
     const n = flagNumber(args, 'task-number');
     const status = flagString(args, 'status') as TaskStatus | undefined;
@@ -366,7 +418,8 @@ stdout: TaskMutationResult JSON.`,
         },
       });
     }
-    return client.updateTaskStatus({ task_number: n, status });
+    const selector = resolveWorkspaceSelector(args);
+    return client.updateTaskStatus({ task_number: n, status, ...selector });
   },
 };
 

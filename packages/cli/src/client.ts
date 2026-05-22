@@ -205,17 +205,23 @@ export class BackendClient {
     );
   }
 
-  unclaimTask(task_number: number): Promise<TaskMutationResult> {
+  unclaimTask(input: {
+    task_number: number;
+    workspace_id?: string;
+    workspace_name?: string;
+  }): Promise<TaskMutationResult> {
     return this.request(
       'POST',
       internalPaths.agentUnclaimConversationTask(this.env.conversationId, this.env.agentId),
-      { task_number },
+      input,
     );
   }
 
   updateTaskStatus(input: {
     task_number: number;
     status: TaskStatus;
+    workspace_id?: string;
+    workspace_name?: string;
   }): Promise<TaskMutationResult> {
     return this.request(
       'POST',

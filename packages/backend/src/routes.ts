@@ -3450,6 +3450,7 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
   const agents = new AgentRepo(ctx.db);
   const conversations = new ConversationRepo(ctx.db);
   const messages = new MessageRepo(ctx.db);
+  const workspaces = new WorkspaceRepo(ctx.db, { workspacesRoot: ctx.workspacesRoot });
   const taskDeps = { ctx, agents, conversations, messages };
 
   app.use('/internal/conversations/:cid/agents/:aid/*', async (c, next) => {
@@ -3861,9 +3862,41 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!canViewConversation(ctx, principal, principal.conversationId)) {
       return c.json({ error: 'forbidden' }, 403);
     }
+    // Agent-side --workspace-id (#task:530): default is the actor's
+    // current conversation's workspace; if the agent passes a different
+    // workspace_id we must validate existence + membership at the route
+    // layer so the service doesn't silently widen reads across
+    // workspaces. We don't accept --workspace <name> for list — only
+    // claim/unclaim/status need the disambiguation.
+    let effectiveWorkspaceId = parsed.data.workspace_id;
+    if (effectiveWorkspaceId && effectiveWorkspaceId !== conversation.workspace_id) {
+      const targetWs = workspaces.get(effectiveWorkspaceId);
+      if (!targetWs) {
+        return c.json(
+          { error: `workspace ${effectiveWorkspaceId} not found`, code: 'unknown_workspace' },
+          404,
+        );
+      }
+      const isMember =
+        targetWs.workspace_kind === 'agent_home'
+          ? targetWs.owner_agent_id === aid
+          : workspaces.isMember(targetWs.id, aid);
+      if (!isMember) {
+        return c.json(
+          {
+            error: `agent is not a member of workspace ${targetWs.id}`,
+            code: 'workspace_membership_required',
+          },
+          403,
+        );
+      }
+    } else if (!effectiveWorkspaceId) {
+      effectiveWorkspaceId = conversation.workspace_id;
+    }
     return c.json({
       tasks: ctx.taskService.list({
         actor: principal,
+        workspaceId: effectiveWorkspaceId,
         conversationId: parsed.data.conversation_id,
         status: parsed.data.status,
         taskNumbers: parsed.data.task_number,
@@ -3914,12 +3947,23 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!canPostToConversation(ctx, actor, actor.conversationId)) {
       return c.json({ error: 'forbidden' }, 403);
     }
+    // Wire optional --workspace-id / --workspace selector (#task:530).
+    // Schema XOR enforces exclusivity; the service does membership +
+    // existence checks per result entry.
+    const workspaceSelector = {
+      ...(parsed.data.workspace_id ? { workspaceId: parsed.data.workspace_id } : {}),
+      ...(parsed.data.workspace_name ? { workspaceName: parsed.data.workspace_name } : {}),
+    };
     const results = [];
     for (const taskNumber of parsed.data.task_numbers ?? []) {
-      results.push(await ctx.taskService.claimTask({ actor, by: { taskNumber } }));
+      results.push(
+        await ctx.taskService.claimTask({ actor, by: { taskNumber }, workspaceSelector }),
+      );
     }
     for (const messageId of parsed.data.message_ids ?? []) {
-      results.push(await ctx.taskService.claimTask({ actor, by: { messageId } }));
+      results.push(
+        await ctx.taskService.claimTask({ actor, by: { messageId }, workspaceSelector }),
+      );
     }
     return c.json({ results });
   });
@@ -3939,9 +3983,14 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!canPostToConversation(ctx, principal, principal.conversationId)) {
       return c.json({ error: 'forbidden' }, 403);
     }
+    const workspaceSelector = {
+      ...(parsed.data.workspace_id ? { workspaceId: parsed.data.workspace_id } : {}),
+      ...(parsed.data.workspace_name ? { workspaceName: parsed.data.workspace_name } : {}),
+    };
     const result = await ctx.taskService.unclaimTask({
       actor: principal,
       by: { taskNumber: parsed.data.task_number },
+      workspaceSelector,
     });
     return c.json(result);
   });
@@ -3961,10 +4010,15 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!canPostToConversation(ctx, principal, principal.conversationId)) {
       return c.json({ error: 'forbidden' }, 403);
     }
+    const workspaceSelector = {
+      ...(parsed.data.workspace_id ? { workspaceId: parsed.data.workspace_id } : {}),
+      ...(parsed.data.workspace_name ? { workspaceName: parsed.data.workspace_name } : {}),
+    };
     const result = await ctx.taskService.updateStatus({
       actor: principal,
       by: { taskNumber: parsed.data.task_number },
       status: parsed.data.status,
+      workspaceSelector,
     });
     return c.json(result);
   });

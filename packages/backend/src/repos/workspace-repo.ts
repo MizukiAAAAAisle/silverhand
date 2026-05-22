@@ -126,6 +126,25 @@ export class WorkspaceRepo {
     return row ? rowToDto(row) : null;
   }
 
+  /** Match by `workspaces.name` across ALL kinds (regular + agent_home).
+   *  Returns every row; callers must handle ambiguity. Used by the
+   *  agent-facing task ops to resolve `--workspace <name>` without
+   *  assuming uniqueness: only `regular` workspaces have a partial
+   *  unique index, agent_home names mirror the agent's name and may
+   *  collide across the two kinds. */
+  findAllByName(name: string): WorkspaceDto[] {
+    return this.db
+      .prepare<[string], WorkspaceSelectRow>(
+        `${WORKSPACE_SELECT}
+         WHERE w.name = ?
+           AND w.workspace_kind IN ('regular', 'agent_home')
+         ORDER BY CASE w.workspace_kind WHEN 'regular' THEN 0 ELSE 1 END,
+                  w.created_at ASC`,
+      )
+      .all(name)
+      .map(rowToDto);
+  }
+
   listForAgent(agentId: string): WorkspaceDto[] {
     return this.db
       .prepare<[string, string], WorkspaceSelectRow & { sort_group: number; sort_name: string }>(

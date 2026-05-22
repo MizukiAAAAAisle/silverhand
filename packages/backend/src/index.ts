@@ -355,6 +355,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     conversations: new ConversationRepo(db),
     messages: new MessageRepo(db),
     agents: new AgentRepo(db),
+    workspaces: new WorkspaceRepo(db, { workspacesRoot }),
     runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger,

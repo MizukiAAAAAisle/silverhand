@@ -468,35 +468,42 @@ Plain Q&A, casual conversation, status checks, and clarifications are not tasks;
 answer normally without claiming.
 
 The workspace has a task board that aggregates tasks across every
-channel and thread. You can see tasks from other channels/threads in this
-workspace but you can only *act* on tasks in YOUR current channel/thread. Tasks exist to
-prevent duplicated substantive work: claim before you start substantive work,
-not before simple conversation.
+channel and thread. You can see and act on tasks anywhere in your
+current workspace; reaching into a different workspace requires the
+explicit \`--workspace-id\` / \`--workspace <name>\` selector and that
+you are already a member of that workspace.
 
 Commands:
 - ${listTasks} — view the workspace's task board. Each entry carries a
-  source channel/thread field; other channels/threads' tasks appear in the listing but
-  are read-only to you.
+  source channel/thread field so you can see where each task lives.
 - ${createTasks} — create new task-messages in THIS channel/thread only. Use
   for genuinely new subtasks or follow-up work.
-- ${claimTasks} — claim by \`--task-number N\` (repeatable, own
-  channel/thread) or promote a regular message to a task and claim it via
-  \`--message-id <id>\` (repeatable, own channel/thread). Fails atomically
-  if another agent already claimed it or the task belongs to another
-  channel/thread.
-- ${unclaimTask} — \`--task-number N\`. Releases your claim (not a "done" signal).
-- ${updateTaskStatus} — \`--task-number N --status in_progress|in_review|done\`.
+- ${claimTasks} — claim by \`--task-number N\` (repeatable) or promote a
+  regular message to a task and claim it via \`--message-id <id>\`
+  (repeatable). Fails atomically if another agent already claimed it.
+  Cross-channel within your current workspace works without flags;
+  cross-workspace requires \`--workspace-id <id>\` or
+  \`--workspace <name>\`. Promotion (\`--message-id\` of a not-yet-task
+  message) always targets the current conversation — a message can
+  only become a task in its own conversation.
+- ${unclaimTask} — \`--task-number N\` (+ optional workspace selector).
+  Releases your claim (not a "done" signal).
+- ${updateTaskStatus} — \`--task-number N --status in_progress|in_review|done\`
+  (+ optional workspace selector).
   Allowed transitions: \`in_progress → in_review / done\`,
-  \`in_review → in_progress / done\`. You must be the assignee.
+  \`in_review → in_progress / done\`. You must be the assignee, or the
+  creator of a still-unassigned task you created yourself.
 
 Rules:
-1. **Claim before substantive work.** If the claim fails (already taken, wrong
-   channel/thread, already done), MOVE ON — do not retry, do not work on it
-   anyway. Claim failures carry a reason; read it.
-2. **Only operate on YOUR channel/thread tasks.** You will see other
-   channels/threads' tasks in ${listTasks} output, but claim/unclaim/update will reject
-   them. That is intentional — the other channel/thread agents will
-   handle those.
+1. **Claim before substantive work.** If the claim fails (already taken,
+   already done, not a member of the workspace), MOVE ON — do not retry,
+   do not work on it anyway. Claim failures carry a typed \`code\` and
+   \`reason\`; read them.
+2. **Cross-workspace ops are opt-in.** Without a selector the call
+   targets your current workspace. Passing \`--workspace <name>\` fails
+   loudly when 0 or >1 workspaces share the name (the response includes
+   \`workspace_candidates\` on ambiguity so you can re-issue with
+   \`--workspace-id\`).
 3. **Stop at \`in_review\` for non-trivial work.** The human validates
    and moves it to \`done\`. Setting \`done\` yourself is only
    appropriate for trivial tasks or after explicit approval.
@@ -778,9 +785,9 @@ should stop and be reported.
   passing one to \`silverhand task status --status\` fails with
   \`subkind: 'enum_invalid'\`.
 - **\`silverhand task create\`**: Create tasks without auto-claiming.
-- **\`silverhand task claim\`**: Claim tasks by task number or message id.
-- **\`silverhand task unclaim\`**: Release your claim on a task.
-- **\`silverhand task status\`**: Move a task through its status workflow.
+- **\`silverhand task claim\`**: Claim tasks by task number or message id. Add \`--workspace-id <id>\` or \`--workspace <name>\` to target a different workspace you belong to.
+- **\`silverhand task unclaim\`**: Release your claim on a task. Accepts the same workspace selector.
+- **\`silverhand task status\`**: Move a task through its status workflow. Accepts the same workspace selector.
 - **\`silverhand thread create\`**: Open a Thread from the current channel.
 - **\`silverhand thread close\`**: Close the current Thread.
 - **\`silverhand channel create\`**: Create a top-level channel when requested.

@@ -142,7 +142,7 @@ describe('Tasks (PR-T1)', () => {
     expect(listed.tasks[0].creator.name).not.toBe('you');
   });
 
-  it('rejects cross-conversation claim with owner_conversation in reason', async () => {
+  it('cross-conversation claim within same workspace succeeds (#task:530)', async () => {
     t = buildTestApp();
     const s1 = await setup(t);
     // Second session in same channel.
@@ -155,22 +155,22 @@ describe('Tasks (PR-T1)', () => {
     const sessionId2 = ses2.channel.id;
 
     const h = http(t);
-    // Create in session 1, try to claim from session 2.
+    // Create in session 1, claim from session 2 — new cross-channel
+    // semantics: same workspace, so the lookup resolves via the
+    // actor's current workspace and succeeds.
     await h.post(
       `/internal/conversations/${s1.sessionId}/agents/${s1.agentIds.alice}/tasks/create`,
       { tasks: [{ title: 'in session 1' }] },
     );
-    const wrongClaim = await (
+    const crossClaim = await (
       await h.post(
         `/internal/conversations/${sessionId2}/agents/${s1.agentIds.bob}/tasks/claim`,
         { task_numbers: [1] },
       )
     ).json() as any;
-    expect(wrongClaim.results[0].success).toBe(false);
-    expect(wrongClaim.results[0].reason).toMatch(/another conversation/);
-    expect(wrongClaim.results[0].owner_conversation?.id).toBe(s1.sessionId);
+    expect(crossClaim.results[0].success).toBe(true);
 
-    // But it IS visible in list_tasks from session 2 (channel-level
+    // It IS visible in list_tasks from session 2 (workspace-level
     // aggregation).
     const listed = await (
       await h.get(
@@ -179,6 +179,7 @@ describe('Tasks (PR-T1)', () => {
     ).json() as any;
     expect(listed.tasks).toHaveLength(1);
     expect(listed.tasks[0].conversation.id).toBe(s1.sessionId);
+    expect(listed.tasks[0].assignee?.id).toBe(s1.agentIds.bob);
   });
 
   it('update_status: assignee-only + transition rules', async () => {
@@ -481,5 +482,42 @@ describe('Tasks (PR-T1)', () => {
       await h.get(`${listPath}?status=all`)
     ).json()) as any;
     expect(allViaLegacy.tasks.length).toBe(5);
+  });
+
+  it('agent task list with --workspace-id of non-member workspace → 403 (#task:530)', async () => {
+    // Cindy `8SGSccsFirCbsuTN` Blocker 2: the route must enforce
+    // workspace existence + agent membership BEFORE handing
+    // workspace_id to taskService.list, otherwise an agent can
+    // silently read sister workspaces.
+    t = buildTestApp();
+    const s1 = await setup(t);
+    const h = http(t);
+
+    // Create a second regular workspace whose only member is bob.
+    // alice does NOT belong to ws2.
+    const ws2Resp = await h.post('/api/workspaces', {
+      name: 'platform',
+      member_agent_ids: [s1.agentIds.bob],
+    });
+    expect(ws2Resp.status).toBe(201);
+    const ws2 = (await ws2Resp.json()) as any;
+    expect(ws2.workspace?.id).toBeDefined();
+
+    // Alice (current conv = s1.sessionId, ws=eng) tries to list ws2.
+    const listPath = `/internal/conversations/${s1.sessionId}/agents/${s1.agentIds.alice}/tasks`;
+    const denied = await h.get(`${listPath}?workspace_id=${ws2.workspace.id}`);
+    expect(denied.status).toBe(403);
+    const deniedBody = (await denied.json()) as any;
+    expect(deniedBody.code).toBe('workspace_membership_required');
+
+    // Same call with a non-existent workspace_id → 404 unknown.
+    const missing = await h.get(`${listPath}?workspace_id=ws-not-found`);
+    expect(missing.status).toBe(404);
+    const missingBody = (await missing.json()) as any;
+    expect(missingBody.code).toBe('unknown_workspace');
+
+    // Without selector (default = current ws) → 200 with no tasks.
+    const ok = await h.get(listPath);
+    expect(ok.status).toBe(200);
   });
 });

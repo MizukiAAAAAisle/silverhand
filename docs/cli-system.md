@@ -55,9 +55,9 @@ All commands default to machine-readable JSON on stdout. Use
 | `silverhand message search` | Search messages in the current conversation, workspace, or a specific channel. Query text via `--q <text>` or its alias `--query <text>` (mutually exclusive). |
 | `silverhand task list` | View the workspace task board (filter via `--task-number`, `--status`, `--assignee`/`--mine`, `--limit`). `--status` accepts canonical values plus list-only filter macros — see §3.2. |
 | `silverhand task create` | Create tasks in the current channel/thread. |
-| `silverhand task claim` | Claim tasks by task number or promote-and-claim messages. |
-| `silverhand task unclaim` | Release a task claim. |
-| `silverhand task status` | Move a task through `in_progress`, `in_review`, or `done`. Rejects the list-only filter macros (`active|open|pending|all`) and the initial state `todo` with `subkind: 'enum_invalid'` — see §3.2. |
+| `silverhand task claim` | Claim tasks by task number or promote-and-claim messages. Cross-workspace via `--workspace-id <id>` or `--workspace <name>` (mutex); see §3.5. |
+| `silverhand task unclaim` | Release a task claim. Accepts the workspace selector. |
+| `silverhand task status` | Move a task through `in_progress`, `in_review`, or `done`. Accepts the workspace selector. Rejects the list-only filter macros (`active|open|pending|all`) and the initial state `todo` with `subkind: 'enum_invalid'` — see §3.2. |
 | `silverhand thread create` | Open a Thread for a bounded side discussion or delegation. |
 | `silverhand thread close` | Close the current Thread. |
 | `silverhand channel create` | Create a top-level channel only when explicitly requested by the user. |
@@ -254,6 +254,49 @@ task rot)"; the default path is "move the tasks to `done` first, then
 close". Any agent or human runbook that auto-appends
 `--allow-open-tasks` defeats the whole point of the guard and should
 be flagged in review.
+
+### 3.5 `silverhand task claim|unclaim|status` workspace selector
+
+The agent task ops accept an optional, mutually-exclusive workspace
+selector. Default (no flag) targets the actor's current
+conversation's workspace, which lets cross-channel work inside the
+same workspace go through without ceremony.
+
+```
+--workspace-id <id>   Target a specific workspace by id.
+--workspace <name>    Target by workspace name (matched across all
+                      kinds — regular + agent_home).
+```
+
+Failure modes (typed `code` on the result entry):
+
+- `unknown_workspace` — selector matched 0 workspaces, or the
+  workspace id does not exist.
+- `ambiguous_workspace` — `--workspace <name>` matched more than one
+  workspace. The result includes a `workspace_candidates: string[]`
+  list of matching workspace ids so the agent can re-issue with
+  `--workspace-id`.
+- `workspace_membership_required` — the actor agent is not a member
+  of the resolved workspace. Membership for `regular` workspaces is
+  the `workspace_members` row; `agent_home` workspaces use
+  `owner_agent_id`.
+
+The legacy `wrong_conversation` code is now only emitted on the
+`--message-id` promotion path: turning a regular message into a task
+must happen in that message's own conversation.
+
+Status update permission also accepts the **creator-self** fallback:
+when the task has no assignee AND the creator is the actor agent
+(`creator.kind === 'agent' && creator.id === actor.agent_id`), the
+agent may update the status without re-claiming. Human-created
+unassigned tasks always require the agent to claim first; the
+`from_kind` distinction is load-bearing.
+
+Cross-conversation ops emit a single `task_cross_op` audit line to
+`backend-<utc>.log` with `{ agent_id, source_conversation_id,
+owner_conversation_id, task_workspace_id, task_number, cross_workspace }`.
+There is no visible system-message side effect — task system messages
+land in the task's owner conversation as normal.
 
 ## 4. Error Contract
 

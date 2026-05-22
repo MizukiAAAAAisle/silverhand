@@ -188,11 +188,14 @@ describe('buildPlatformPrompt', () => {
     expect(text).toContain('silverhand task claim --message-id <message_id>');
     expect(text).toContain('Plain Q&A');
     expect(text).toContain('need no claim');
-    expect(text).toContain('not before simple conversation');
     expect(text).toContain('Claim before substantive work');
     expect(text).toContain('Close the loop on tasks you own');
     expect(text).toContain('call `silverhand task status` first');
     expect(text).toContain('leaving the task state unchanged');
+    // #task:530: workspace selector guidance must be present so agents
+    // discover --workspace-id / --workspace from the prompt alone.
+    expect(text).toContain('--workspace-id');
+    expect(text).toContain('Cross-workspace ops are opt-in');
   });
 
   it('includes schedule tool usage guidance and wake handling', () => {

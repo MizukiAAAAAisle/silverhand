@@ -263,6 +263,7 @@ export function buildTestApp(): TestApp {
     conversations: new ConversationRepo(db),
     messages: new MessageRepo(db),
     agents: new AgentRepo(db),
+    workspaces: new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot }),
     runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger: silentLogger,

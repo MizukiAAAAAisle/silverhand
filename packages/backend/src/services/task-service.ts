@@ -13,6 +13,7 @@ import {
   type TaskStatus,
   type TaskSummaryDto,
   type TaskSystemActor,
+  type WorkspaceDto,
   taskSystemSubtype,
 } from '@silverhand/shared';
 import type { BackendLogger } from '../context.js';
@@ -20,6 +21,7 @@ import type { AgentRuntimeHost } from '../runtime/agent-runtime-host.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
+import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
 import {
   assertActorConversationMatch,
@@ -44,8 +46,13 @@ import {
  *     5. best-effort, fire-and-forget per-recipient deliverMessage
  *   Today's tasks.ts awaits deliver before publishing — PR-5 inverts
  *   that to match PR-1/PR-2/PR-3.
- * - For agent ops, `task.conversation_id === actor.conversationId` is
- *   binding (returns wrong_conversation), not informational.
+ * - For agent ops, target workspace is resolved from the optional
+ *   `workspace_id` / `workspace_name` selector or defaults to the
+ *   actor's current conversation's workspace. The agent must be a
+ *   member of the resolved workspace. Cross-channel within the same
+ *   workspace is permitted; the legacy `wrong_conversation` gate is
+ *   only retained on the message-id promotion path (a regular
+ *   message can only become a task in its own conversation).
  * - Number scope (`task_workspace_id`) is the physical
  *   `conversation.workspace_id`. PR-6 makes agent_home workspaces real,
  *   so task DTO workspace_id is the natural physical scope for regular
@@ -71,16 +78,40 @@ export interface CreateTasksInput {
 }
 
 export type ClaimTaskInput =
-  | { actor: UserActor; by: UserTaskRef; assignee?: { agentId: string } }
-  | { actor: AgentActor; by: AgentTaskRef; assignee?: { agentId: string } };
+  | {
+      actor: UserActor;
+      by: UserTaskRef;
+      assignee?: { agentId: string };
+    }
+  | {
+      actor: AgentActor;
+      by: AgentTaskRef;
+      assignee?: { agentId: string };
+      workspaceSelector?: WorkspaceSelector;
+    };
 
 export type UnclaimTaskInput =
   | { actor: UserActor; by: UserTaskRef }
-  | { actor: AgentActor; by: AgentTaskRef };
+  | { actor: AgentActor; by: AgentTaskRef; workspaceSelector?: WorkspaceSelector };
 
 export type UpdateStatusInput =
   | { actor: UserActor; by: UserTaskRef; status: TaskStatus }
-  | { actor: AgentActor; by: AgentTaskRef; status: TaskStatus };
+  | {
+      actor: AgentActor;
+      by: AgentTaskRef;
+      status: TaskStatus;
+      workspaceSelector?: WorkspaceSelector;
+    };
+
+/** Optional `--workspace-id` / `--workspace <name>` selector wired
+ *  through from the CLI. Empty / undefined means "use the actor's
+ *  current conversation's workspace" (the legacy default). The
+ *  service validates exclusivity (id XOR name) defensively, even
+ *  though the wire schema also enforces it. */
+export interface WorkspaceSelector {
+  workspaceId?: string;
+  workspaceName?: string;
+}
 
 export interface ListTasksFilters {
   actor: TaskActor;
@@ -104,6 +135,7 @@ export interface TaskServiceOptions {
   conversations: ConversationRepo;
   messages: MessageRepo;
   agents: AgentRepo;
+  workspaces: WorkspaceRepo;
   runtimeHost: AgentRuntimeHost;
   events: ScopeEventBus;
   logger: BackendLogger;
@@ -189,6 +221,10 @@ interface ResolvedTaskRow {
   task_title: string | null;
   content: string;
   owner_conversation_title: string;
+  /** Creator origin — used for the "creator may close own stale
+   *  unassigned task" exception in `updateStatusAgent`. */
+  from_kind: MessageRow['from_kind'];
+  from_agent_id: string | null;
 }
 
 interface ResolvedMessageRow {
@@ -209,6 +245,7 @@ export class TaskService {
   private readonly conversations: ConversationRepo;
   private readonly messages: MessageRepo;
   private readonly agents: AgentRepo;
+  private readonly workspaces: WorkspaceRepo;
   private readonly runtimeHost: AgentRuntimeHost;
   private readonly events: ScopeEventBus;
   private readonly logger: BackendLogger;
@@ -218,6 +255,7 @@ export class TaskService {
     this.conversations = opts.conversations;
     this.messages = opts.messages;
     this.agents = opts.agents;
+    this.workspaces = opts.workspaces;
     this.runtimeHost = opts.runtimeHost;
     this.events = opts.events;
     this.logger = opts.logger;
@@ -230,10 +268,18 @@ export class TaskService {
     const args: (string | number)[] = [];
 
     if (filters.actor.kind === 'agent') {
+      // The agent path defaults to the actor's current workspace. The
+      // route layer is responsible for validating that any explicit
+      // `filters.workspaceId` (from the agent's `--workspace-id` flag)
+      // exists AND that the agent is a member — see the agent task list
+      // route in routes.ts (#task:530). Once validated, we honor the
+      // explicit value here so the agent can read a sister workspace's
+      // board.
       const conv = this.conversations.get(filters.actor.conversationId);
       if (!conv) return [];
+      const effectiveWs = filters.workspaceId ?? conv.workspace_id;
       clauses.push('m.task_workspace_id = ?');
-      args.push(conv.workspace_id);
+      args.push(effectiveWs);
     } else if (filters.workspaceId) {
       clauses.push('m.task_workspace_id = ?');
       args.push(filters.workspaceId);
@@ -353,7 +399,12 @@ export class TaskService {
 
   async claimTask(input: ClaimTaskInput): Promise<ClaimResultEntry> {
     if (input.actor.kind === 'agent') {
-      return this.claimTaskAgent(input.actor, input.by as AgentTaskRef, input.assignee);
+      return this.claimTaskAgent(
+        input.actor,
+        input.by as AgentTaskRef,
+        input.assignee,
+        (input as Extract<ClaimTaskInput, { actor: AgentActor }>).workspaceSelector,
+      );
     }
     return this.claimTaskUser(input.actor, input.by as UserTaskRef, input.assignee);
   }
@@ -362,6 +413,7 @@ export class TaskService {
     actor: AgentActor,
     by: AgentTaskRef,
     assignee: { agentId: string } | undefined,
+    workspaceSelector: WorkspaceSelector | undefined,
   ): Promise<ClaimResultEntry> {
     if (assignee && assignee.agentId !== actor.agentId) {
       return failClaim({
@@ -378,7 +430,45 @@ export class TaskService {
     }
     const actorErr = this.validateAgentActorForClaim(actor);
     if (actorErr) return actorErr;
-    const taskWorkspaceId = sourceConv.workspace_id;
+
+    // Blocker 1 (#task:530, Cindy `CZ7Un3P5YATZ1GTq`): for a message-id
+    // claim of a not-yet-numbered message in the actor's current
+    // conversation, the call is a PROMOTION and must target the source
+    // conversation's workspace regardless of any --workspace-id /
+    // --workspace selector. The selector only routes lookups of
+    // already-numbered tasks; running selector resolution first would
+    // wrongly reject a valid promotion when the agent accidentally
+    // passed a selector. Peek the message here (informational only —
+    // the txn below re-validates atomically) to pick the path.
+    let promotionWorkspaceId: string | null = null;
+    if ('messageId' in by) {
+      const peek = this.fetchMessage(by.messageId);
+      if (
+        peek &&
+        peek.task_number === null &&
+        peek.conversation_id === actor.conversationId
+      ) {
+        promotionWorkspaceId = sourceConv.workspace_id;
+      }
+    }
+    let taskWorkspaceId: string;
+    if (promotionWorkspaceId !== null) {
+      taskWorkspaceId = promotionWorkspaceId;
+    } else {
+      const resolved = this.resolveAgentTaskWorkspace(
+        actor,
+        sourceConv,
+        workspaceSelector,
+        args =>
+          failClaim({
+            code: args.code,
+            reason: args.reason,
+            workspaceCandidates: args.candidates,
+          }),
+      );
+      if ('failure' in resolved) return resolved.failure;
+      taskWorkspaceId = resolved.workspace.id;
+    }
 
     type ClaimTxOut =
       | { failure: ClaimResultEntry }
@@ -388,6 +478,7 @@ export class TaskService {
           taskNumber: number;
           title: string;
           status: TaskStatus;
+          ownerConversationId: string;
         };
 
     const txOut = this.db.transaction((): ClaimTxOut => {
@@ -402,10 +493,15 @@ export class TaskService {
             messageId: by.messageId,
           }) };
         }
+        // Promotion (turning a regular message into a task) is the one
+        // place where the message MUST live in the actor's current
+        // conversation — you can't reach across into another channel
+        // and conjure a task from a message there. Cross-workspace
+        // task ops only apply once the row already has a task_number.
         if (msg.conversation_id !== actor.conversationId) {
           return { failure: failClaim({
             code: 'wrong_conversation',
-            reason: 'message belongs to another conversation',
+            reason: 'message belongs to another conversation; promotion requires the message be in your current conversation',
             messageId: by.messageId,
           }) };
         }
@@ -424,8 +520,12 @@ export class TaskService {
           }) };
         }
         if (msg.task_number === null) {
-          // Promote + claim atomically inside this txn.
-          const nextNumber = this.allocateTaskNumber(taskWorkspaceId);
+          // Promote + claim atomically inside this txn. Promotion uses
+          // the actor's conversation's workspace (the source conv's),
+          // not the selector — the selector only routes lookups of
+          // already-numbered tasks.
+          const promoteWorkspaceId = sourceConv.workspace_id;
+          const nextNumber = this.allocateTaskNumber(promoteWorkspaceId);
           this.db
             .prepare(
               `UPDATE messages
@@ -436,15 +536,20 @@ export class TaskService {
                    task_assignee_agent_id = ?
                WHERE id = ? AND task_number IS NULL`,
             )
-            .run(nextNumber, firstLine(msg.content), taskWorkspaceId, actor.agentId, msg.id);
+            .run(nextNumber, firstLine(msg.content), promoteWorkspaceId, actor.agentId, msg.id);
           return {
             success: true,
             messageId: msg.id,
             taskNumber: nextNumber,
             title: firstLine(msg.content),
             status: 'in_progress',
+            ownerConversationId: msg.conversation_id,
           };
         }
+        // Message already a task: route through the selector-resolved
+        // workspace (the message's task_workspace_id should match
+        // taskWorkspaceId when selector defaults; for explicit selector
+        // the lookup may fail naturally).
         row = this.fetchTaskByNumber(taskWorkspaceId, msg.task_number);
       } else {
         row = this.fetchTaskByNumber(taskWorkspaceId, by.taskNumber);
@@ -454,17 +559,6 @@ export class TaskService {
           code: 'task_not_found',
           reason: 'task not found',
           taskNumber: 'taskNumber' in by ? by.taskNumber : undefined,
-        }) };
-      }
-      if (row.conversation_id !== actor.conversationId) {
-        return { failure: failClaim({
-          code: 'wrong_conversation',
-          reason: 'task belongs to another conversation; you cannot claim across conversations',
-          taskNumber: row.task_number,
-          ownerConversation: {
-            id: row.conversation_id,
-            title: row.owner_conversation_title,
-          },
         }) };
       }
       if (row.task_status === 'done') {
@@ -506,13 +600,34 @@ export class TaskService {
         taskNumber: row.task_number,
         title: row.task_title ?? firstLine(row.content),
         status: nextStatus,
+        ownerConversationId: row.conversation_id,
       };
     })();
 
     if ('failure' in txOut) return txOut.failure;
 
+    const ownerConv =
+      txOut.ownerConversationId === sourceConv.id
+        ? sourceConv
+        : this.conversations.get(txOut.ownerConversationId);
+    if (!ownerConv) {
+      // Should never happen — we just read the row inside the txn.
+      return failClaim({
+        code: 'conversation_not_found',
+        reason: 'task owner conversation vanished after commit',
+      });
+    }
+    this.auditCrossOp({
+      op: 'claim',
+      actor,
+      sourceConv,
+      ownerConv,
+      taskNumber: txOut.taskNumber,
+      taskWorkspaceId,
+    });
+
     await this.broadcast({
-      conversation: sourceConv,
+      conversation: ownerConv,
       kind: 'claim',
       messageId: txOut.messageId,
       taskNumber: txOut.taskNumber,
@@ -627,7 +742,11 @@ export class TaskService {
 
   async unclaimTask(input: UnclaimTaskInput): Promise<TaskMutationResult> {
     if (input.actor.kind === 'agent') {
-      return this.unclaimTaskAgent(input.actor, input.by as AgentTaskRef);
+      return this.unclaimTaskAgent(
+        input.actor,
+        input.by as AgentTaskRef,
+        (input as Extract<UnclaimTaskInput, { actor: AgentActor }>).workspaceSelector,
+      );
     }
     return this.unclaimTaskUser(input.actor, input.by as UserTaskRef);
   }
@@ -635,6 +754,7 @@ export class TaskService {
   private async unclaimTaskAgent(
     actor: AgentActor,
     by: AgentTaskRef,
+    workspaceSelector: WorkspaceSelector | undefined,
   ): Promise<TaskMutationResult> {
     const sourceConv = this.conversations.get(actor.conversationId);
     if (!sourceConv) {
@@ -642,7 +762,15 @@ export class TaskService {
     }
     const actorErr = this.validateAgentActorForMutation(actor);
     if (actorErr) return actorErr;
-    const taskWorkspaceId = sourceConv.workspace_id;
+
+    const resolved = this.resolveAgentTaskWorkspace(
+      actor,
+      sourceConv,
+      workspaceSelector,
+      args => mutationFailure(args),
+    );
+    if ('failure' in resolved) return resolved.failure;
+    const taskWorkspaceId = resolved.workspace.id;
 
     type UnclaimAgentTxOut =
       | { failure: TaskMutationResult }
@@ -651,6 +779,7 @@ export class TaskService {
           messageId: string;
           taskNumber: number;
           title: string;
+          ownerConversationId: string;
         };
 
     const txOut = this.db.transaction((): UnclaimAgentTxOut => {
@@ -660,26 +789,19 @@ export class TaskService {
         if (!msg || msg.task_number === null) {
           return { failure: { success: false, code: 'not_a_task', reason: 'not a task' } };
         }
-        if (msg.conversation_id !== actor.conversationId) {
-          return { failure: {
-            success: false,
-            code: 'wrong_conversation',
-            reason: 'message belongs to another conversation',
-          } };
-        }
+        // For a numbered task we can look it up anywhere in the
+        // resolved workspace — the message-id form is just an
+        // alternate key. The promotion-vs-numbered-task split that
+        // claim cares about doesn't apply here: unclaim by definition
+        // requires the row to already carry a task_number, so we
+        // never widen across conversations beyond what the selector
+        // already authorized.
         row = this.fetchTaskByNumber(taskWorkspaceId, msg.task_number);
       } else {
         row = this.fetchTaskByNumber(taskWorkspaceId, by.taskNumber);
       }
       if (!row) {
         return { failure: { success: false, code: 'task_not_found', reason: 'task not found' } };
-      }
-      if (row.conversation_id !== actor.conversationId) {
-        return { failure: {
-          success: false,
-          code: 'wrong_conversation',
-          reason: 'task belongs to another conversation',
-        } };
       }
       if (row.task_assignee_agent_id !== actor.agentId) {
         return { failure: { success: false, code: 'not_assignee', reason: 'not the assignee' } };
@@ -700,13 +822,30 @@ export class TaskService {
         messageId: row.id,
         taskNumber: row.task_number,
         title: row.task_title ?? firstLine(row.content),
+        ownerConversationId: row.conversation_id,
       };
     })();
 
     if ('failure' in txOut) return txOut.failure;
 
+    const ownerConv =
+      txOut.ownerConversationId === sourceConv.id
+        ? sourceConv
+        : this.conversations.get(txOut.ownerConversationId);
+    if (!ownerConv) {
+      return { success: false, code: 'conversation_not_found', reason: 'task owner conversation vanished after commit' };
+    }
+    this.auditCrossOp({
+      op: 'unclaim',
+      actor,
+      sourceConv,
+      ownerConv,
+      taskNumber: txOut.taskNumber,
+      taskWorkspaceId,
+    });
+
     await this.broadcast({
-      conversation: sourceConv,
+      conversation: ownerConv,
       kind: 'unclaim',
       messageId: txOut.messageId,
       taskNumber: txOut.taskNumber,
@@ -781,7 +920,12 @@ export class TaskService {
 
   async updateStatus(input: UpdateStatusInput): Promise<TaskMutationResult> {
     if (input.actor.kind === 'agent') {
-      return this.updateStatusAgent(input.actor, input.by as AgentTaskRef, input.status);
+      return this.updateStatusAgent(
+        input.actor,
+        input.by as AgentTaskRef,
+        input.status,
+        (input as Extract<UpdateStatusInput, { actor: AgentActor }>).workspaceSelector,
+      );
     }
     return this.updateStatusUser(input.actor, input.by as UserTaskRef, input.status);
   }
@@ -790,6 +934,7 @@ export class TaskService {
     actor: AgentActor,
     by: AgentTaskRef,
     status: TaskStatus,
+    workspaceSelector: WorkspaceSelector | undefined,
   ): Promise<TaskMutationResult> {
     const sourceConv = this.conversations.get(actor.conversationId);
     if (!sourceConv) {
@@ -797,7 +942,15 @@ export class TaskService {
     }
     const actorErr = this.validateAgentActorForMutation(actor);
     if (actorErr) return actorErr;
-    const taskWorkspaceId = sourceConv.workspace_id;
+
+    const resolved = this.resolveAgentTaskWorkspace(
+      actor,
+      sourceConv,
+      workspaceSelector,
+      args => mutationFailure(args),
+    );
+    if ('failure' in resolved) return resolved.failure;
+    const taskWorkspaceId = resolved.workspace.id;
 
     type StatusAgentTxOut =
       | { failure: TaskMutationResult }
@@ -807,6 +960,7 @@ export class TaskService {
           taskNumber: number;
           title: string;
           assigneeAgentId: string | null;
+          ownerConversationId: string;
         };
 
     const txOut = this.db.transaction((): StatusAgentTxOut => {
@@ -816,13 +970,6 @@ export class TaskService {
         if (!msg || msg.task_number === null) {
           return { failure: { success: false, code: 'not_a_task', reason: 'not a task' } };
         }
-        if (msg.conversation_id !== actor.conversationId) {
-          return { failure: {
-            success: false,
-            code: 'wrong_conversation',
-            reason: 'message belongs to another conversation',
-          } };
-        }
         row = this.fetchTaskByNumber(taskWorkspaceId, msg.task_number);
       } else {
         row = this.fetchTaskByNumber(taskWorkspaceId, by.taskNumber);
@@ -830,18 +977,21 @@ export class TaskService {
       if (!row) {
         return { failure: { success: false, code: 'task_not_found', reason: 'task not found' } };
       }
-      if (row.conversation_id !== actor.conversationId) {
-        return { failure: {
-          success: false,
-          code: 'wrong_conversation',
-          reason: 'task belongs to another conversation',
-        } };
-      }
-      if (row.task_assignee_agent_id !== actor.agentId) {
+      // Permission: assignee==self OR (assignee==null AND creator==self
+      // AND creator is an agent). The creator-self branch lets an
+      // agent close its own stale unassigned task without re-claiming;
+      // it intentionally never matches human-created rows (Cindy
+      // `S-RgXd_GWAHu4f0E`).
+      const isAssigneeSelf = row.task_assignee_agent_id === actor.agentId;
+      const isCreatorSelfStale =
+        row.task_assignee_agent_id === null &&
+        row.from_kind === 'agent' &&
+        row.from_agent_id === actor.agentId;
+      if (!isAssigneeSelf && !isCreatorSelfStale) {
         return { failure: {
           success: false,
           code: 'not_assignee',
-          reason: 'only the assignee can update status',
+          reason: 'only the assignee can update status (creator may close own unassigned task)',
         } };
       }
       if (!VALID_TRANSITIONS[row.task_status].includes(status)) {
@@ -860,13 +1010,31 @@ export class TaskService {
         taskNumber: row.task_number,
         title: row.task_title ?? firstLine(row.content),
         assigneeAgentId: row.task_assignee_agent_id,
+        ownerConversationId: row.conversation_id,
       };
     })();
 
     if ('failure' in txOut) return txOut.failure;
 
+    const ownerConv =
+      txOut.ownerConversationId === sourceConv.id
+        ? sourceConv
+        : this.conversations.get(txOut.ownerConversationId);
+    if (!ownerConv) {
+      return { success: false, code: 'conversation_not_found', reason: 'task owner conversation vanished after commit' };
+    }
+    this.auditCrossOp({
+      op: 'status',
+      actor,
+      sourceConv,
+      ownerConv,
+      taskNumber: txOut.taskNumber,
+      taskWorkspaceId,
+      status,
+    });
+
     await this.broadcast({
-      conversation: sourceConv,
+      conversation: ownerConv,
       kind: 'status',
       messageId: txOut.messageId,
       taskNumber: txOut.taskNumber,
@@ -973,6 +1141,106 @@ export class TaskService {
     return undefined;
   }
 
+  /** True iff the agent counts as a member of the workspace for the
+   *  purposes of task ops. `agent_home` workspaces have an implicit
+   *  membership (owner_agent_id === agent.id); every other kind goes
+   *  through the `workspace_members` table. Mirrors the union in
+   *  `WorkspaceRepo.listForAgent`. */
+  private isAgentWorkspaceMember(ws: WorkspaceDto, agentId: string): boolean {
+    if (ws.workspace_kind === 'agent_home') {
+      return ws.owner_agent_id === agentId;
+    }
+    return this.workspaces.isMember(ws.id, agentId);
+  }
+
+  /** Resolve the workspace whose `task_number` namespace the agent op
+   *  should target. Returns:
+   *  - `{ workspace }` on success
+   *  - `{ failure }` envelope using the supplied builder when the
+   *    selector is ambiguous / missing / unauthorized
+   *
+   *  Callers pass a `fail` builder so the same logic can produce either
+   *  `ClaimResultEntry` (claim) or `TaskMutationResult` (unclaim /
+   *  status) shapes without leaking shape knowledge here. */
+  private resolveAgentTaskWorkspace<F>(
+    actor: AgentActor,
+    sourceConv: ConversationDto,
+    selector: WorkspaceSelector | undefined,
+    fail: (args: {
+      code: 'unknown_workspace' | 'ambiguous_workspace' | 'workspace_membership_required';
+      reason: string;
+      candidates?: string[];
+    }) => F,
+  ): { workspace: WorkspaceDto } | { failure: F } {
+    // Schema enforces XOR but defend against an out-of-band call.
+    if (selector?.workspaceId && selector?.workspaceName) {
+      return {
+        failure: fail({
+          code: 'unknown_workspace',
+          reason: 'workspace_id and workspace_name are mutually exclusive',
+        }),
+      };
+    }
+
+    let ws: WorkspaceDto | null = null;
+    if (selector?.workspaceId) {
+      ws = this.workspaces.get(selector.workspaceId);
+      if (!ws) {
+        return {
+          failure: fail({
+            code: 'unknown_workspace',
+            reason: `workspace ${selector.workspaceId} not found`,
+          }),
+        };
+      }
+    } else if (selector?.workspaceName) {
+      const matches = this.workspaces.findAllByName(selector.workspaceName);
+      if (matches.length === 0) {
+        return {
+          failure: fail({
+            code: 'unknown_workspace',
+            reason: `no workspace named "${selector.workspaceName}"`,
+          }),
+        };
+      }
+      if (matches.length > 1) {
+        return {
+          failure: fail({
+            code: 'ambiguous_workspace',
+            reason:
+              `${matches.length} workspaces named "${selector.workspaceName}"; ` +
+              'disambiguate with --workspace-id',
+            candidates: matches.map(m => m.id),
+          }),
+        };
+      }
+      ws = matches[0]!;
+    } else {
+      ws = this.workspaces.get(sourceConv.workspace_id);
+      if (!ws) {
+        // Source conversation exists but its workspace was deleted —
+        // should be impossible given FK, but fail clean instead of
+        // crashing.
+        return {
+          failure: fail({
+            code: 'unknown_workspace',
+            reason: 'current conversation workspace not found',
+          }),
+        };
+      }
+    }
+
+    if (!this.isAgentWorkspaceMember(ws, actor.agentId)) {
+      return {
+        failure: fail({
+          code: 'workspace_membership_required',
+          reason: `agent is not a member of workspace ${ws.id}`,
+        }),
+      };
+    }
+    return { workspace: ws };
+  }
+
   private allocateTaskNumber(workspaceId: string): number {
     const row = this.db
       .prepare<[string], { next: number }>(
@@ -997,6 +1265,8 @@ export class TaskService {
                 m.task_assignee_agent_id,
                 m.task_title,
                 m.content,
+                m.from_kind,
+                m.from_agent_id,
                 c.title AS owner_conversation_title
          FROM messages m
          JOIN conversations c ON c.id = m.conversation_id
@@ -1147,6 +1417,45 @@ export class TaskService {
     };
   }
 
+  /** Log a single line per agent task op whenever the call crossed a
+   *  conversation/workspace boundary (the actor's running conversation
+   *  ≠ the task's owner conversation). Lightweight audit trail per
+   *  shiki / Cindy decision — no visible system message hook. */
+  private auditCrossOp(args: {
+    op: 'claim' | 'unclaim' | 'status';
+    actor: AgentActor;
+    sourceConv: ConversationDto;
+    ownerConv: ConversationDto;
+    taskNumber: number;
+    taskWorkspaceId: string;
+    status?: TaskStatus;
+  }): void {
+    if (args.sourceConv.id === args.ownerConv.id) return;
+    const crossWorkspace = args.sourceConv.workspace_id !== args.ownerConv.workspace_id;
+    // warn-level (not info) per Cindy `JLdi59K-TD11CAWy`: backend
+    // default log level since #523 is `warn`, so info lines never make
+    // it to disk. The message text is intentionally framed as an
+    // audit log line, not an exception, so on-call reading
+    // `backend-<utc>.log` recognizes it as routine cross-conv activity
+    // rather than a fault.
+    this.logger.warn(
+      {
+        op: 'task_cross_op',
+        action: args.op,
+        agent_id: args.actor.agentId,
+        source_conversation_id: args.sourceConv.id,
+        source_workspace_id: args.sourceConv.workspace_id,
+        owner_conversation_id: args.ownerConv.id,
+        owner_workspace_id: args.ownerConv.workspace_id,
+        task_workspace_id: args.taskWorkspaceId,
+        task_number: args.taskNumber,
+        cross_workspace: crossWorkspace,
+        ...(args.status ? { status: args.status } : {}),
+      },
+      'task-service: audit cross-conversation task op',
+    );
+  }
+
   private async broadcast(args: {
     conversation: ConversationDto;
     kind: TaskChangedEvent['kind'];
@@ -1230,6 +1539,7 @@ interface ClaimFailureArgs {
   taskNumber?: number;
   messageId?: string;
   ownerConversation?: { id: string; title: string };
+  workspaceCandidates?: string[];
 }
 
 function failClaim(args: ClaimFailureArgs): ClaimResultEntry {
@@ -1241,7 +1551,29 @@ function failClaim(args: ClaimFailureArgs): ClaimResultEntry {
   if (args.taskNumber !== undefined) entry.task_number = args.taskNumber;
   if (args.messageId !== undefined) entry.message_id = args.messageId;
   if (args.ownerConversation) entry.owner_conversation = args.ownerConversation;
+  if (args.workspaceCandidates && args.workspaceCandidates.length > 0) {
+    entry.workspace_candidates = args.workspaceCandidates;
+  }
   return entry;
+}
+
+/** Mirror of `failClaim` for the `TaskMutationResult` shape; used by
+ *  the shared workspace resolver to emit unclaim/status failures
+ *  without duplicating the envelope-build logic. */
+function mutationFailure(args: {
+  code: TaskMutationErrorCode;
+  reason: string;
+  candidates?: string[];
+}): TaskMutationResult {
+  const out: TaskMutationResult = {
+    success: false,
+    code: args.code,
+    reason: args.reason,
+  };
+  if (args.candidates && args.candidates.length > 0) {
+    out.workspace_candidates = args.candidates;
+  }
+  return out;
 }
 
 function isThreadAnchor(metadata: string | null): boolean {
