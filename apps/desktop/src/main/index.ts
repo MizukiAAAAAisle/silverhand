@@ -240,21 +240,24 @@ async function bootstrap(): Promise<void> {
         'dev CDP remote debugging enabled',
       );
     }
-    // Runtime host gate (#task:512 sub-commit 2a). The
+    // Runtime host gate (#task:512 sub-commit 2a, default flipped to
+    // `daemon` in Commit A of the cleanup sequence). The
     // SILVERHAND_RUNTIME_HOST env var decides whether the daemon
     // child is spawned at all. Parsed by the same pure helper backend
     // uses, so the two layers cannot drift on default / accepted
     // values / failure mode (`parseAgentRuntimeHostMode` throws loudly
     // on an unknown value; we do NOT silently fall back to legacy).
     //
-    //   - `legacy` (default, unset, or `=legacy`): the legacy
-    //     in-process ConversationManager path. We do NOT spawn a
-    //     daemon and do NOT new HostClient — the legacy fallback must
-    //     not have a hidden dependency on the daemon being reachable.
-    //   - `daemon`: spawn the daemon, connect HostClient, and on
-    //     either failure abort bootstrap. Silent fallback to legacy
-    //     would mask a configuration mistake from the operator who
-    //     explicitly asked for daemon mode.
+    //   - `daemon` (default, unset, or `=daemon`): spawn the daemon,
+    //     connect HostClient, and on either failure abort bootstrap.
+    //     Silent fallback to legacy would mask a configuration
+    //     mistake or daemon-spawn regression.
+    //   - `legacy` (`=legacy`): explicit rollback to the in-process
+    //     ConversationManager path. We do NOT spawn a daemon and do
+    //     NOT new HostClient — the legacy fallback must not have a
+    //     hidden dependency on the daemon being reachable. This path
+    //     stays available through the cleanup soak window and is
+    //     removed once the legacy CM surfaces are deleted.
     const runtimeHostMode = parseAgentRuntimeHostMode(
       process.env[SILVERHAND_RUNTIME_HOST_ENV],
     );
@@ -268,13 +271,13 @@ async function bootstrap(): Promise<void> {
     );
 
     if (runtimeHostMode === 'daemon') {
-      // PR-2 step 2 commit 5 sub-commit 2a: scaffolding only. The
-      // daemon child is spawned and HostClient connected so backend
-      // can route runtime intents through it, but the actual
-      // DaemonAgentRuntimeHost shim throws on every method until 2b
-      // ships the real bridge delegations. Operators opting into
-      // daemon mode in 2a will see those throws and roll back via
-      // `SILVERHAND_RUNTIME_HOST=legacy`; that's by design.
+      // PR-2 step 2 commit 5 Commit A: daemon is now the default
+      // runtime path. The daemon child is spawned and HostClient
+      // connected so backend can route runtime intents through it.
+      // On failure we tear down what we partially created and re-throw
+      // with the rollback recipe; operators can fall back via
+      // `SILVERHAND_RUNTIME_HOST=legacy` while the legacy CM surfaces
+      // remain in the tree (cleanup soak window).
       const paths = daemonPaths();
       daemon = await spawnDaemonChild({
         launcher: resolveDaemonLauncher(),
@@ -306,10 +309,11 @@ async function bootstrap(): Promise<void> {
         await daemon?.kill({ gracefulMs: 1_000 }).catch(() => undefined);
         daemon = null;
         throw new Error(
-          `${SILVERHAND_RUNTIME_HOST_ENV}=daemon: HostClient failed to connect ` +
-            `to the spawned silverhand-daemon. To roll back, restart with ` +
-            `${SILVERHAND_RUNTIME_HOST_ENV}=legacy (or unset the variable). ` +
-            `Underlying error: ${err instanceof Error ? err.message : String(err)}`,
+          `${SILVERHAND_RUNTIME_HOST_ENV}=daemon (default): HostClient failed to connect ` +
+            `to the spawned silverhand-daemon. Rollback recipe: restart with ` +
+            `${SILVERHAND_RUNTIME_HOST_ENV}=legacy to fall back to the in-process ` +
+            `ConversationManager spawn path (still available during the cleanup soak ` +
+            `window). Underlying error: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
       daemon.onExit(info => {

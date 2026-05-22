@@ -185,10 +185,12 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   if (runtimeHostMode === 'daemon') {
     if (!opts.hostClient) {
       throw new Error(
-        `${SILVERHAND_RUNTIME_HOST_ENV}=daemon: a connected HostClient is required ` +
-          `but startBackend() received hostClient=undefined. Either start the ` +
-          `silverhand-daemon and pass a connected HostClient, or roll back by ` +
-          `restarting with ${SILVERHAND_RUNTIME_HOST_ENV}=legacy.`,
+        `${SILVERHAND_RUNTIME_HOST_ENV}=daemon (default): a connected HostClient is required ` +
+          `but startBackend() received hostClient=undefined. The host (Electron main or ` +
+          `dev-headless) must spawn silverhand-daemon and pass a connected HostClient. ` +
+          `Rollback recipe: restart with ${SILVERHAND_RUNTIME_HOST_ENV}=legacy to fall back ` +
+          `to the in-process ConversationManager spawn path (still available during the ` +
+          `cleanup soak window).`,
       );
     }
     // Build the daemon shim. Sub-commit 2b-ii (slices 1-4b) replaces

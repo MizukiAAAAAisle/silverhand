@@ -1,11 +1,20 @@
 /**
- * Sub-commit 2a backend boot dispatch tests for the
- * `SILVERHAND_RUNTIME_HOST` gated runtime host.
+ * Backend boot dispatch tests for the `SILVERHAND_RUNTIME_HOST` gated
+ * runtime host.
+ *
+ * Commit A of the cleanup sequence flipped the default from `legacy`
+ * to `daemon`. The legacy path remains reachable as an explicit
+ * rollback (`SILVERHAND_RUNTIME_HOST=legacy`) until the legacy CM
+ * surfaces are deleted in a later commit — these tests pin that the
+ * explicit-rollback path stays 0-drift even as the default changes.
  *
  * Cindy `0G5uJBydO_4qt_2r` review boundary:
- *   - legacy mode (default) must be 0-drift from before sub-commit 2a
+ *   - legacy mode (now explicit override) must remain functional and
+ *     0-drift from before the flip
  *   - legacy mode must NOT depend on `hostClient` even if one is passed
- *   - daemon mode without a `hostClient` must throw loudly at boot
+ *   - daemon mode (now default) without a `hostClient` must throw
+ *     loudly at boot — and the error message must carry the rollback
+ *     recipe (`SILVERHAND_RUNTIME_HOST=legacy`)
  *   - banner / rollback recipe must surface in the boot logs
  *
  * These are integration tests against the real `startBackend` (no
@@ -54,7 +63,7 @@ function capturingLogger(out: CapturedLog[]): BackendLogger {
   };
 }
 
-describe('startBackend — SILVERHAND_RUNTIME_HOST dispatch (sub-commit 2a)', () => {
+describe('startBackend — SILVERHAND_RUNTIME_HOST dispatch', () => {
   let tmp: string;
   let running: RunningBackend | null = null;
   const originalEnv = process.env[SILVERHAND_RUNTIME_HOST_ENV];
@@ -77,7 +86,36 @@ describe('startBackend — SILVERHAND_RUNTIME_HOST dispatch (sub-commit 2a)', ()
     }
   });
 
-  it('default (env unset): legacy mode, runtimeHost is ConversationManager', async () => {
+  it('default (env unset): daemon mode — boot without hostClient throws with rollback recipe', async () => {
+    // Commit A pin: env unset means daemon mode. Without a hostClient
+    // the boot MUST throw, and the error MUST carry the explicit
+    // legacy rollback recipe so an operator who hits a daemon-spawn
+    // regression knows the recovery command verbatim.
+    let err: Error | null = null;
+    try {
+      running = await startBackend({
+        dbPath: join(tmp, 'silverhand.db'),
+        silverhandDir: tmp,
+        serverConfig: fixedServerConfig,
+        silverhandCliLauncher: { command: 'true', args: [] },
+        logger: silentLogger(),
+      });
+    } catch (e) {
+      err = e as Error;
+    }
+    expect(err).toBeInstanceOf(Error);
+    expect(err?.message).toContain('SILVERHAND_RUNTIME_HOST=daemon');
+    expect(err?.message).toContain('HostClient');
+    // Rollback recipe is the load-bearing assertion for Commit A.
+    expect(err?.message).toContain('SILVERHAND_RUNTIME_HOST=legacy');
+  });
+
+  it('explicit SILVERHAND_RUNTIME_HOST=legacy still routes to in-process ConversationManager (rollback regression)', async () => {
+    // Commit A keeps `=legacy` working as the explicit rollback path
+    // until the legacy CM surfaces are deleted in a later commit. If
+    // this test ever fails, the deletion landed too early and the
+    // rollback escape hatch is gone — abort the diff that broke this.
+    process.env[SILVERHAND_RUNTIME_HOST_ENV] = 'legacy';
     running = await startBackend({
       dbPath: join(tmp, 'silverhand.db'),
       silverhandDir: tmp,
@@ -85,13 +123,12 @@ describe('startBackend — SILVERHAND_RUNTIME_HOST dispatch (sub-commit 2a)', ()
       silverhandCliLauncher: { command: 'true', args: [] },
       logger: silentLogger(),
     });
-    // ctx.runtimeHost === ctx.conversationManager in legacy mode.
     expect(running.context.runtimeHost).toBe(
       running.context.conversationManager,
     );
   });
 
-  it('legacy mode ignores hostClient even when one is passed', async () => {
+  it('explicit legacy mode ignores hostClient even when one is passed', async () => {
     // Cindy `bJUazoeBrxK8XglK` blocker (2) + `yAyzGil3UdCENIom` B2:
     // the legacy fallback MUST be independent of daemon plumbing.
     // Track every call on the hostClient surface backend might
@@ -136,7 +173,11 @@ describe('startBackend — SILVERHAND_RUNTIME_HOST dispatch (sub-commit 2a)', ()
     expect(close).not.toHaveBeenCalled();
   });
 
-  it('daemon mode without hostClient throws loudly at boot', async () => {
+  it('explicit SILVERHAND_RUNTIME_HOST=daemon without hostClient throws loudly at boot', async () => {
+    // Same failure as the env-unset case (since daemon is now the
+    // default). Kept as a separate test so the explicit-opt-in
+    // signal does not silently disappear if the default flips again
+    // in the future.
     process.env[SILVERHAND_RUNTIME_HOST_ENV] = 'daemon';
     let err: Error | null = null;
     try {
@@ -177,7 +218,12 @@ describe('startBackend — SILVERHAND_RUNTIME_HOST dispatch (sub-commit 2a)', ()
     expect(err?.message).toContain("'daemon'");
   });
 
-  it('boot logs the mode banner with rollback recipe', async () => {
+  it('explicit legacy mode boot logs the legacy banner with rollback hint', async () => {
+    // We boot in legacy explicitly because we need a successful boot
+    // (the default daemon path needs a hostClient). The banner
+    // assertions still verify the describer text — daemon banner is
+    // verified in the runtime-host-mode unit tests.
+    process.env[SILVERHAND_RUNTIME_HOST_ENV] = 'legacy';
     const logs: CapturedLog[] = [];
     running = await startBackend({
       dbPath: join(tmp, 'silverhand.db'),
@@ -193,9 +239,9 @@ describe('startBackend — SILVERHAND_RUNTIME_HOST dispatch (sub-commit 2a)', ()
     expect(banner?.obj).toMatchObject({
       mode: 'legacy',
     });
-    // Even on the safe default, the banner names the env var so an
-    // operator scanning logs sees the opt-in toggle.
-    expect(banner?.msg).toContain('SILVERHAND_RUNTIME_HOST=daemon');
+    // Banner should mention the env var so an operator scanning logs
+    // sees how to return to the default daemon path.
+    expect(banner?.msg).toContain(SILVERHAND_RUNTIME_HOST_ENV);
   });
 
   it('daemon mode boot failure tears down before throwing', async () => {

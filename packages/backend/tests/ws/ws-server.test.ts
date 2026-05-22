@@ -282,13 +282,29 @@ describe('event WebSocket server', () => {
         max_depth: 1,
       },
     };
-    runningBackend = await startBackend({
-      dbPath: join(tmp, 'silverhand.db'),
-      silverhandDir: tmp,
-      serverConfig: config,
-      silverhandCliLauncher: { command: 'true', args: [] },
-      logger: { info() {}, warn() {}, error() {} },
-    });
+    // Cleanup Commit A flipped the default runtime host to `daemon`,
+    // which requires a connected HostClient to boot. This test
+    // exercises ws shutdown end-to-end and has no daemon to spawn,
+    // so it pins the legacy in-process path explicitly via env. The
+    // legacy path remains supported as the explicit rollback during
+    // the cleanup soak window.
+    const prevRuntimeHost = process.env.SILVERHAND_RUNTIME_HOST;
+    process.env.SILVERHAND_RUNTIME_HOST = 'legacy';
+    try {
+      runningBackend = await startBackend({
+        dbPath: join(tmp, 'silverhand.db'),
+        silverhandDir: tmp,
+        serverConfig: config,
+        silverhandCliLauncher: { command: 'true', args: [] },
+        logger: { info() {}, warn() {}, error() {} },
+      });
+    } finally {
+      if (prevRuntimeHost === undefined) {
+        delete process.env.SILVERHAND_RUNTIME_HOST;
+      } else {
+        process.env.SILVERHAND_RUNTIME_HOST = prevRuntimeHost;
+      }
+    }
 
     // Pre-ship rewrite: a fresh DB has no registered viewer, so the
     // public WS auth handshake refuses with `auth_failed`. Register

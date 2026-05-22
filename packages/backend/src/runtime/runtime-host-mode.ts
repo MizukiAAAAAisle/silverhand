@@ -4,7 +4,10 @@
  * Source of truth shared by `apps/desktop/src/main` and
  * `packages/backend/src/index.ts` so the two layers cannot drift on:
  *   - the accepted set (`legacy` | `daemon`)
- *   - the default (`legacy` — a power-off-and-back-on rollback path)
+ *   - the default (`daemon` — the supported runtime path. `legacy` remains
+ *     reachable as an explicit rollback during the cleanup soak window
+ *     and will be removed in a later commit once the in-process
+ *     ConversationManager surfaces are deleted.)
  *   - the failure mode on an invalid value (loud throw, never silent fallback)
  *
  * This module is intentionally **pure**: it imports only `zod`, has no
@@ -17,8 +20,18 @@ import { z } from 'zod';
 /** Discriminator returned by {@link parseAgentRuntimeHostMode}. */
 export type AgentRuntimeHostMode = 'legacy' | 'daemon';
 
-/** Default mode when the env var is unset / empty. */
-export const DEFAULT_AGENT_RUNTIME_HOST_MODE: AgentRuntimeHostMode = 'legacy';
+/**
+ * Default mode when the env var is unset / empty.
+ *
+ * Flipped from `'legacy'` to `'daemon'` as Commit A of the cleanup
+ * sequence (PR-2 step 2 commit 5 unit 2b-iii post-cleanup), after Option
+ * A v2 daemon-mode delivery (incl. codex) was hand-verified end-to-end.
+ * `SILVERHAND_RUNTIME_HOST=legacy` remains a working explicit rollback
+ * until the legacy ConversationManager surfaces are deleted in a later
+ * commit — do NOT delete the legacy code path and this env switch in the
+ * same diff.
+ */
+export const DEFAULT_AGENT_RUNTIME_HOST_MODE: AgentRuntimeHostMode = 'daemon';
 
 /** Canonical env var name. Use this constant — never the bare string. */
 export const SILVERHAND_RUNTIME_HOST_ENV = 'SILVERHAND_RUNTIME_HOST';
@@ -29,7 +42,7 @@ const ModeSchema = z.enum(['legacy', 'daemon']);
  * Parse `SILVERHAND_RUNTIME_HOST`'s raw env value into a discriminator.
  *
  * Semantics:
- *   - `undefined` / `''` (env var unset or empty)  → `'legacy'`
+ *   - `undefined` / `''` (env var unset or empty)  → `'daemon'`
  *   - `'legacy'` / `'daemon'`                       → that value
  *   - anything else                                → throw a labelled
  *     `Error` naming the invalid value and the legal set.
@@ -72,17 +85,19 @@ export function describeAgentRuntimeHostMode(mode: AgentRuntimeHostMode): {
       mode,
       rollback: `${SILVERHAND_RUNTIME_HOST_ENV}=legacy`,
       note:
-        'agent runtime: daemon path (silverhand-daemon via RuntimeBridge). ' +
+        'agent runtime: daemon path (silverhand-daemon via RuntimeBridge) — default. ' +
         `If anything misbehaves, restart with ${SILVERHAND_RUNTIME_HOST_ENV}=legacy ` +
-        'to fall back to the in-process ConversationManager spawn path.',
+        'to fall back to the in-process ConversationManager spawn path (rollback ' +
+        'remains available until the legacy code is deleted in a follow-up commit).',
     };
   }
   return {
     mode,
-    rollback: `(none — already on the safe default)`,
+    rollback: `unset ${SILVERHAND_RUNTIME_HOST_ENV} (or set it to 'daemon')`,
     note:
-      'agent runtime: legacy path (in-process ConversationManager spawn). ' +
-      `Set ${SILVERHAND_RUNTIME_HOST_ENV}=daemon to opt into the daemon path ` +
-      'for testing; rollback by unsetting the variable.',
+      'agent runtime: legacy path (in-process ConversationManager spawn) — ' +
+      `explicit rollback from the default daemon path via ${SILVERHAND_RUNTIME_HOST_ENV}=legacy. ` +
+      'This path is scheduled for removal once the daemon soak completes; ' +
+      'unset the variable (or set it to \'daemon\') to return to the default.',
   };
 }
