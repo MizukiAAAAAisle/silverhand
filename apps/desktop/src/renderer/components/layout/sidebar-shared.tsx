@@ -17,16 +17,8 @@ interface SectionProps {
   collapsible?: boolean;
   /** Initial expanded state for collapsible sections. Defaults to true. */
   defaultExpanded?: boolean;
-  /** Override the header text styling. Defaults to the compact
-   *  `text-[11px] font-medium tracking-wider text-text-muted` look used
-   *  by Members / Computers panels. WorkspacesPanel passes a larger
-   *  `text-sm` variant for the DM / WORKSPACES / ARCHIVED groups. */
-  headerClass?: string;
   children: ReactNode;
 }
-
-const DEFAULT_HEADER_CLASS =
-  'text-[11px] font-medium tracking-wider text-text-muted';
 
 export function SidebarSection({
   label,
@@ -35,7 +27,6 @@ export function SidebarSection({
   action,
   collapsible = false,
   defaultExpanded = true,
-  headerClass = DEFAULT_HEADER_CLASS,
   children,
 }: SectionProps): JSX.Element {
   const [expanded, setExpanded] = useState(defaultExpanded);
@@ -61,7 +52,7 @@ export function SidebarSection({
 
   return (
     <section className="px-1.5 pb-3">
-      <header className={`flex items-stretch justify-between ${headerClass}`}>
+      <header className="mb-1 flex items-stretch justify-between text-sm font-medium tracking-wider text-text-muted">
         {collapsible ? (
           <button
             type="button"
