@@ -1,13 +1,14 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import * as Popover from '@radix-ui/react-popover';
 import * as Select from '@radix-ui/react-select';
-import { ChevronDown, Trash2, UserPlus } from 'lucide-react';
+import { ChevronDown, Trash2, User, UserPlus } from 'lucide-react';
 import { AgentAvatar } from '@/components/AgentAvatar';
+import { HumanInfoPopover } from '@/components/HumanInfoPopover';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import {
   useAddWorkspaceMember,
-  useWorkspaceMembers,
+  useWorkspaceMemberLists,
   useRemoveWorkspaceMember,
 } from './hooks';
 
@@ -21,8 +22,8 @@ interface ManageMembersPopoverProps {
 /**
  * Anchored member-management surface for a workspace — shadcn-style.
  * Top: a selector that immediately enrolls the picked agent; below
- * that, AGENTS lists current agent members (with remove), HUMANS is
- * a stub section (no human-member concept in the data model yet).
+ * that, AGENTS lists current agent members (with remove), HUMANS lists
+ * registered human identities that belong to the workspace.
  *
  * Replaces the previous modal `ManageMembersDialog` so the action
  * stays anchored to its trigger in the titlebar.
@@ -52,8 +53,10 @@ export function ManageMembersPopover({
 // Split body out so the React-Query hooks below only mount once the
 // popover actually opens (Radix unmounts Content when closed).
 function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
-  const { data: members = [], isLoading: membersLoading } =
-    useWorkspaceMembers(workspaceId);
+  const { data: memberLists, isLoading: membersLoading } =
+    useWorkspaceMemberLists(workspaceId);
+  const members = memberLists?.agents ?? [];
+  const humanMembers = memberLists?.humans ?? [];
   const memberAvatarUrls = useAgentAvatarObjectUrls(members);
   const { data: agents = [] } = useAgents();
   const addMember = useAddWorkspaceMember(workspaceId);
@@ -99,7 +102,7 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
         >
           <span className="flex items-center gap-1.5">
             <UserPlus className="size-3.5 text-text-muted" />
-            <Select.Value placeholder="添加成员…" />
+            <Select.Value placeholder="添加 agent…" />
           </span>
           <Select.Icon>
             <ChevronDown className="size-3.5 text-text-muted" />
@@ -173,8 +176,41 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
         )}
       </Section>
 
-      <Section title="HUMANS · 0">
-        <Hint>暂无人类成员（尚未支持）</Hint>
+      <Section title={`HUMANS · ${humanMembers.length}`}>
+        {membersLoading ? (
+          <Hint>加载中…</Hint>
+        ) : humanMembers.length === 0 ? (
+          <Hint>还没有 human 成员</Hint>
+        ) : (
+          <ul className="flex flex-col gap-1">
+            {humanMembers.map(human => {
+              const label = human.display_name?.trim() || human.name;
+              return (
+                <li
+                  key={human.id}
+                  className="flex items-center gap-2 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-base px-2 py-1"
+                >
+                  <HumanInfoPopover human={human} trigger="hover">
+                    <button
+                      type="button"
+                      className="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+                    >
+                      <span
+                        className="inline-flex size-5 shrink-0 items-center justify-center rounded-none bg-bg-elevated text-[10px] font-medium text-text-muted"
+                        aria-hidden
+                      >
+                        {label ? label.charAt(0).toUpperCase() : <User className="size-3" />}
+                      </span>
+                      <span className="min-w-0 truncate text-sm font-medium text-text-primary">
+                        @{human.name}
+                      </span>
+                    </button>
+                  </HumanInfoPopover>
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </Section>
 
       {error ? (

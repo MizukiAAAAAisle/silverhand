@@ -10,6 +10,7 @@ import type {
   DmChannelDto,
   ThreadDto,
   UpdateWorkspaceInput,
+  UserDto,
   WorkspaceDto,
   WorkspaceMemberDto,
 } from '@silverhand/shared';
@@ -42,6 +43,25 @@ const archivedChannelsKey = (workspaceId: string) =>
 const archivedChannelsIndexKey = (workspaceId: string | null, since: number | null) =>
   ['archived-channels', { workspaceId, since }] as const;
 const membersKey = (workspaceId: string) => ['workspaces', workspaceId, 'members'] as const;
+
+interface WorkspaceMembersResponse {
+  members: AgentDto[];
+  human_members?: UserDto[];
+}
+
+export interface WorkspaceMemberLists {
+  agents: AgentDto[];
+  humans: UserDto[];
+}
+
+function normalizeWorkspaceMembers(
+  response: WorkspaceMembersResponse,
+): WorkspaceMemberLists {
+  return {
+    agents: response.members,
+    humans: response.human_members ?? [],
+  };
+}
 
 function workspaceToListItem(workspace: WorkspaceDto): WorkspaceListItem {
   const isDm = workspace.workspace_kind === 'agent_home';
@@ -374,11 +394,22 @@ export function useWorkspaceMembers(workspaceId: string | null) {
     queryKey: workspaceId ? membersKey(workspaceId) : ['workspaces', 'none', 'members'],
     enabled: !!workspaceId,
     queryFn: async () => {
-      const res = await api<{ members: AgentDto[] }>(
+      const res = await api<WorkspaceMembersResponse>(
         apiPaths.workspaceMembers(workspaceId!),
       );
-      return res.members;
+      return res;
     },
+    select: res => res.members,
+  });
+}
+
+export function useWorkspaceMemberLists(workspaceId: string | null) {
+  return useQuery({
+    queryKey: workspaceId ? membersKey(workspaceId) : ['workspaces', 'none', 'members'],
+    enabled: !!workspaceId,
+    queryFn: async () =>
+      api<WorkspaceMembersResponse>(apiPaths.workspaceMembers(workspaceId!)),
+    select: normalizeWorkspaceMembers,
   });
 }
 
