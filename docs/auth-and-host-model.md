@@ -384,7 +384,7 @@ A.5 for the future track.
 authenticated user → desktop Hosts page → select host → Revoke
 [main] POST /api/hosts/{id}/revoke (Authorization: Bearer <user_token>)
 [server] mark host.revoked_at = now
-         hard-delete the active host_token row (no grace; see below)
+         mark active host_credentials.revoked_at = now (no grace; see below)
          broadcast disconnect to that host's WS
 [daemon on revoked host] receives WS close → attempts reconnect
                           → server returns 401 host_revoked
