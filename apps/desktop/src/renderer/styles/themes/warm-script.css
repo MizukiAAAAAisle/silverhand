@@ -149,6 +149,11 @@
      forza6.css 同节同名 token 的注释。 */
   --control-border-width: 1px;
 
+  /* ── Control hover background (#task:555 third polish round) ──
+     warm-script 下用品牌黄跟白底调出 22% 的 light-yellow，跟 forza6
+     的同名 token 一节拍 —— hover 走主题色而不是中性 gray-hover。 */
+  --bg-control-hover: color-mix(in oklab, var(--brand-primary) 22%, var(--bg-floating));
+
   /* ── Select listbox radius (§3.6.2, PR-9 token promotion) ──
      Radix `Select.Content` + `Select.Item` 浮层共用一对 radius token。
      warm content `6px` 字面值保持 pixel-zero（= 之前 Tailwind `rounded-md`）；

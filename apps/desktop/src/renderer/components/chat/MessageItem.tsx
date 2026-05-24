@@ -214,8 +214,27 @@ export function MessageItem({
       id={`msg-${message.id}`}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
+      onClickCapture={
+        // shiki `0eolIYXZmVVYAjrM`: when MessageList is in selection
+        // mode, clicking anywhere on the row toggles selection — not
+        // just the checkbox. Capture phase is intentional: it fires
+        // BEFORE any nested onClick (TaskRef navigation, attachment
+        // open, link follow), so `preventDefault + stopPropagation`
+        // suppresses every child interaction in selection mode. The
+        // checkbox's own onClick is also intercepted; the row's toggle
+        // handler covers it. Outside selection mode this branch is a
+        // no-op so links / attachments / popovers still work.
+        selectionMode
+          ? event => {
+              event.preventDefault();
+              event.stopPropagation();
+              onToggleSelected?.(message);
+            }
+          : undefined
+      }
       className={
         'relative flex items-start gap-3 border-2 px-2 py-1.5 transition-colors ' +
+        (selectionMode ? 'cursor-pointer ' : '') +
         (alignRight ? 'flex-row-reverse' : 'flex-row') +
         ' ' +
         (framed

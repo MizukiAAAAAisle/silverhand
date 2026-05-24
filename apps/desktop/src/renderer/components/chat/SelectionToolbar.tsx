@@ -20,10 +20,12 @@ import { ClipboardCopy, Download } from 'lucide-react';
  * Buttons read three theme contracts:
  *   - `--control-radius` (forza6 = 0, warm = 6px)
  *   - `--control-border-width` (forza6 = 2px hard-cut, warm = 1px)
- *   - `--bg-hover` (each theme's hover-state surface)
+ *   - `--bg-control-hover` (each theme's brand-color-mixed hover —
+ *     forza6 = 22% pink on white = "节日粉", warm = 22% yellow on white)
  * Hover also lifts each button by 1px (`-translate-y-px`) for a tiny
  * micro-interaction; that came from shiki's request to add a
- * "位移动画" on hover.
+ * "位移动画" on hover. shiki `0eolIYXZmVVYAjrM` flagged the previous
+ * `bg-bg-hover` as too neutral — control hover must read brand.
  *
  * The export callbacks (`onCopyMarkdown` / `onSaveImage`) are
  * optional — when absent the corresponding button stays disabled
@@ -88,7 +90,7 @@ function ToolbarButton({
       disabled={disabled}
       title={label}
       aria-label={label}
-      className="inline-flex items-center gap-1 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-2 py-1 text-text-primary transition-[background-color,transform,box-shadow] duration-150 hover:-translate-y-px hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:bg-bg-floating focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+      className="inline-flex items-center gap-1 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-2 py-1 text-text-primary transition-[background-color,transform,box-shadow] duration-150 hover:-translate-y-px hover:bg-bg-control-hover disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:bg-bg-floating focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
     >
       {icon}
       <span>{label}</span>
