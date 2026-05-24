@@ -42,6 +42,11 @@ import { SystemActivityCluster } from '@/components/chat/SystemActivityCluster';
 import { groupMessages } from '@/components/chat/groupMessages';
 import { SelectionToolbar } from '@/components/chat/SelectionToolbar';
 import { useMessageSelection } from '@/components/chat/useMessageSelection';
+import { ImagePreviewModal } from '@/components/chat/ImagePreviewModal';
+import {
+  buildMarkdownTranscript,
+  suggestTranscriptFilename,
+} from '@/components/chat/markdownTranscript';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
 import { HumanInfoPopover } from '@/components/HumanInfoPopover';
@@ -953,6 +958,12 @@ function MessageList({
       );
     }
   }, []);
+  // Image preview modal lives here so the modal is part of MessageList's
+  // tree and clears on channel switch via the same React subtree teardown
+  // that invalidates the message data. Selection-mode export handlers
+  // are declared further down (after `selection` is in scope) and the
+  // modal's `open` state is just a React boolean.
+  const [imagePreviewOpen, setImagePreviewOpen] = useState(false);
   // Lookup maps used by the message renderer:
   //  - `agentsById`   → message author (avatar + display name)
   //  - `agentsByName` → inline `@handle` mention pills
@@ -1092,6 +1103,61 @@ function MessageList({
     windowResetVersion,
     jumpToMessageId,
   });
+
+  // Per-row Share entry: enter selection mode with this message
+  // preselected. `enter` is idempotent — re-entering from selecting
+  // just adds another message. Used by MessageItem's right-click menu.
+  const handleShare = useCallback(
+    (msg: MessageDto) => selection.enter(msg),
+    [selection],
+  );
+  // Channel title — surfaced in the screenshot header and used as the
+  // suggested filename base. Top-level channels live in liveChannels;
+  // we only want the title, so an inline find is fine.
+  const channelMeta = useMemo(() => {
+    const c =
+      liveChannels.find(x => x.id === channelId) ??
+      archivedChannels.find(x => x.id === channelId);
+    if (!c) return { title: null as string | null, kind: null as 'channel' | 'dm' | null };
+    return {
+      title: c.title,
+      kind:
+        c.kind === 'dm_channel'
+          ? ('dm' as const)
+          : c.kind === 'channel'
+            ? ('channel' as const)
+            : null,
+    };
+  }, [liveChannels, archivedChannels, channelId]);
+  const handleSaveMarkdown = useCallback(async (): Promise<void> => {
+    const snapshots = selection.selectedSorted();
+    if (snapshots.length === 0) return;
+    const text = buildMarkdownTranscript(snapshots, {
+      agentsById,
+      viewer: viewer && !isRegistrationRequired(viewer) ? viewer : undefined,
+    });
+    const suggestedName = suggestTranscriptFilename(snapshots, channelMeta.title);
+    const result = await window.agentHub.saveMarkdownExport({
+      text,
+      suggestedName,
+    });
+    if (result.ok) {
+      toast.success('已保存：' + result.path);
+      selection.exit();
+    } else if ('canceled' in result && result.canceled) {
+      // user dismissed dialog — keep selection so they can retry
+    } else if ('error' in result) {
+      toast.error('保存失败：' + result.error);
+    }
+  }, [selection, agentsById, viewer, channelMeta.title]);
+  const handleSaveImage = useCallback(() => {
+    if (selection.count === 0) return;
+    setImagePreviewOpen(true);
+  }, [selection.count]);
+  const previewSnapshots = useMemo(
+    () => (imagePreviewOpen ? selection.selectedSorted() : []),
+    [imagePreviewOpen, selection],
+  );
   const firstItemIndexRef = useRef(FIRST_ITEM_INDEX_START);
   const lastTopItemKeyRef = useRef<string | null>(null);
   const lastJumpRemountKeyRef = useRef<string | null>(null);
@@ -1387,10 +1453,7 @@ function MessageList({
           selected={selection.isSelected(m.id)}
           onToggleSelected={selection.toggle}
           onCopyMarkdown={handleCopyMarkdown}
-          /* `onShare` deliberately omitted in C1 — the export pipeline
-             lands in C2/C3, and Cindy's review constraint is no
-             half-baked Share entry visible to the user. The selection
-             scaffolding is in place but unreachable until then. */
+          onShare={handleShare}
         />
       );
     },
@@ -1417,6 +1480,7 @@ function MessageList({
       selection.isSelected,
       selection.toggle,
       handleCopyMarkdown,
+      handleShare,
     ],
   );
 
@@ -1426,12 +1490,24 @@ function MessageList({
         <SelectionToolbar
           count={selection.count}
           onCancel={selection.exit}
-          /* `onSaveMarkdown` / `onSaveImage` arrive in the export
-             commits (C2/C3). Until then the buttons stay disabled,
-             but the toolbar itself is unreachable in C1 because
-             Share entry isn't wired. */
+          onSaveMarkdown={handleSaveMarkdown}
+          onSaveImage={handleSaveImage}
         />
       ) : null}
+      <ImagePreviewModal
+        open={imagePreviewOpen}
+        onOpenChange={setImagePreviewOpen}
+        messages={previewSnapshots}
+        channelTitle={channelMeta.title}
+        channelKind={channelMeta.kind}
+        agentsById={agentsById}
+        agentsByName={agentsByName}
+        humansByName={humansByName}
+        channelsByName={channelsByName}
+        agentAvatarUrls={agentAvatarUrls}
+        viewer={viewer && !isRegistrationRequired(viewer) ? viewer : undefined}
+        viewerAvatarObjectUrl={viewerAvatarObjectUrl}
+      />
       <div className="relative min-h-0 min-w-0 flex-1">
       {isLoading ? (
         <div className="px-4 py-3 text-sm text-text-muted">加载消息…</div>

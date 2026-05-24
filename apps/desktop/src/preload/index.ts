@@ -63,6 +63,36 @@ const api = {
     ipcRenderer.invoke('notification:show', opts),
   setBadgeCount: (count: number): Promise<void> =>
     ipcRenderer.invoke('badge:setCount', count),
+  /** Save a PNG snapshot to disk via the native save dialog. The
+   *  renderer hands over raw bytes; main owns the dialog + writeFile.
+   *  See `export:savePng` in main. */
+  savePngExport: (input: {
+    pngBytes: Uint8Array;
+    suggestedName: string;
+  }): Promise<
+    | { ok: true; path: string }
+    | { ok: false; canceled: true }
+    | { ok: false; error: string }
+  > => ipcRenderer.invoke('export:savePng', input),
+  /** Copy PNG snapshot bytes to the OS clipboard. Main constructs a
+   *  NativeImage so Electron handles pasteboard format negotiation —
+   *  renderer-side `ClipboardItem` for images is brittle on macOS. */
+  copyPngExport: (input: {
+    pngBytes: Uint8Array;
+  }): Promise<{ ok: true } | { ok: false; error: string }> =>
+    ipcRenderer.invoke('export:copyPng', input),
+  /** Save a markdown transcript to disk via the native save dialog.
+   *  Markdown export is text-only — there's no clipboard variant for
+   *  files; the in-modal Copy button uses navigator.clipboard.writeText
+   *  directly in the renderer. */
+  saveMarkdownExport: (input: {
+    text: string;
+    suggestedName: string;
+  }): Promise<
+    | { ok: true; path: string }
+    | { ok: false; canceled: true }
+    | { ok: false; error: string }
+  > => ipcRenderer.invoke('export:saveMarkdown', input),
 };
 
 contextBridge.exposeInMainWorld('agentHub', api);

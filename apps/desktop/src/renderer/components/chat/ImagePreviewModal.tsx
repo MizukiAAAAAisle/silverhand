@@ -1,0 +1,264 @@
+import { useEffect, useRef, useState } from 'react';
+import * as Dialog from '@radix-ui/react-dialog';
+import { toPng } from 'html-to-image';
+import { toast } from 'sonner';
+import type { AgentDto, MessageDto, UserDto } from '@silverhand/shared';
+import { MessageScreenshotView } from './MessageScreenshotView';
+import { suggestImageFilename } from './markdownTranscript';
+import type { ChannelReference } from './ChannelRef';
+import type { ConversationReference } from './ConversationRef';
+
+/**
+ * Image-export preview modal.
+ *
+ * On mount we render a hidden `MessageScreenshotView` for the selected
+ * messages, run html-to-image once, and stash both:
+ *   - `pngBytes: Uint8Array` — the IPC payload for save / copy
+ *   - `dataUrl: string` — the `<img src>` attribute used for the visible
+ *     preview
+ *
+ * Copy and Save reuse the SAME bytes (Cindy review #4): we never
+ * re-capture, so what the user sees in the preview is exactly what
+ * lands on disk / clipboard.
+ *
+ * The visible scroller shows a downscaled copy of the dataUrl so the
+ * preview fits the modal even for tall transcripts. The captured PNG
+ * itself is at the screenshot view's natural width (760px container).
+ */
+export function ImagePreviewModal({
+  open,
+  onOpenChange,
+  messages,
+  channelTitle,
+  channelKind,
+  agentsById,
+  agentsByName,
+  humansByName,
+  channelsByName,
+  conversationRefsById,
+  agentAvatarUrls,
+  viewer,
+  viewerAvatarObjectUrl,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  messages: readonly MessageDto[];
+  channelTitle: string | null;
+  channelKind: 'channel' | 'dm' | null;
+  agentsById: ReadonlyMap<string, AgentDto>;
+  agentsByName: ReadonlyMap<string, AgentDto>;
+  humansByName?: ReadonlyMap<string, UserDto>;
+  channelsByName?: ReadonlyMap<string, ChannelReference | null>;
+  conversationRefsById?: ReadonlyMap<string, ConversationReference>;
+  agentAvatarUrls?: ReadonlyMap<string, string | null>;
+  viewer?: UserDto;
+  viewerAvatarObjectUrl?: string | null;
+}): JSX.Element {
+  const [phase, setPhase] = useState<'idle' | 'rendering' | 'ready' | 'error'>(
+    'idle',
+  );
+  const [error, setError] = useState<string | null>(null);
+  const [dataUrl, setDataUrl] = useState<string | null>(null);
+  const [pngBytes, setPngBytes] = useState<Uint8Array | null>(null);
+  const [busy, setBusy] = useState(false);
+  // Offscreen container ref — html-to-image runs against this DOM
+  // subtree. We position it offscreen rather than `display:none` so
+  // layout actually computes (display:none zeroes intrinsic sizes).
+  const offscreenRef = useRef<HTMLDivElement | null>(null);
+
+  // Run capture once per open. We deliberately depend on `open` not on
+  // `messages` because messages identity is stable for the lifetime of
+  // a single open request (selection is frozen at toolbar-click time).
+  useEffect(() => {
+    if (!open) {
+      setPhase('idle');
+      setError(null);
+      setDataUrl(null);
+      setPngBytes(null);
+      return;
+    }
+    setPhase('rendering');
+    setError(null);
+
+    // Wait one frame so React has actually committed the offscreen
+    // node + Markdown rendered its content; toPng on an empty tree
+    // produces a blank PNG.
+    let cancelled = false;
+    const runCapture = (): void => {
+      const node = offscreenRef.current;
+      if (!node) {
+        if (!cancelled) setError('screenshot_root_missing');
+        return;
+      }
+      toPng(node, {
+        pixelRatio: 2,
+        cacheBust: true,
+        // The offscreen container's background is already token-driven
+        // via Tailwind, but html-to-image renders transparent areas as
+        // alpha by default. Force an explicit canvas color so themes
+        // with a non-white bg-floating still produce a sensible PNG.
+        backgroundColor: '#ffffff',
+      })
+        .then(async url => {
+          if (cancelled) return;
+          // Strip the `data:image/png;base64,` prefix and decode to raw
+          // bytes. We keep both forms: dataUrl for the preview <img>,
+          // bytes for the IPC save / copy handlers.
+          const base64 = url.split(',', 2)[1] ?? '';
+          const binary = atob(base64);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+          }
+          setDataUrl(url);
+          setPngBytes(bytes);
+          setPhase('ready');
+        })
+        .catch(err => {
+          if (cancelled) return;
+          setError(err instanceof Error ? err.message : String(err));
+          setPhase('error');
+        });
+    };
+    const raf = requestAnimationFrame(() => {
+      // One more frame — the first commit only mounts the JSX; React
+      // 18 with concurrent rendering may still be flushing styles.
+      requestAnimationFrame(runCapture);
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+    };
+  }, [open]);
+
+  const suggestedName = suggestImageFilename(messages, channelTitle);
+
+  const onCopy = async (): Promise<void> => {
+    if (!pngBytes || busy) return;
+    setBusy(true);
+    try {
+      const result = await window.agentHub.copyPngExport({ pngBytes });
+      if (result.ok) {
+        toast.success('图片已复制到剪贴板');
+        onOpenChange(false);
+      } else {
+        toast.error('复制失败：' + result.error);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onSave = async (): Promise<void> => {
+    if (!pngBytes || busy) return;
+    setBusy(true);
+    try {
+      const result = await window.agentHub.savePngExport({
+        pngBytes,
+        suggestedName,
+      });
+      if (result.ok) {
+        toast.success('已保存：' + result.path);
+        onOpenChange(false);
+      } else if ('canceled' in result && result.canceled) {
+        // user dismissed dialog — silent
+      } else if ('error' in result) {
+        toast.error('保存失败：' + result.error);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-[90] bg-black/40" />
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-[91] flex max-h-[80vh] w-[820px] -translate-x-1/2 -translate-y-1/2 flex-col rounded-md border border-border bg-bg-floating p-4 shadow-xl">
+          <Dialog.Title className="text-sm font-semibold text-text-primary">
+            导出预览
+          </Dialog.Title>
+          <Dialog.Description className="mt-1 text-xs text-text-muted">
+            {messages.length === 0
+              ? '请选择至少一条消息'
+              : `共 ${messages.length} 条消息`}
+          </Dialog.Description>
+
+          <div className="mt-3 min-h-[200px] flex-1 overflow-auto rounded-sm border border-border-subtle bg-bg-elevated p-2">
+            {phase === 'rendering' || phase === 'idle' ? (
+              <div className="flex h-full items-center justify-center text-xs text-text-muted">
+                渲染中…
+              </div>
+            ) : phase === 'error' ? (
+              <div className="flex h-full items-center justify-center text-xs text-error">
+                渲染失败：{error}
+              </div>
+            ) : dataUrl ? (
+              <img
+                src={dataUrl}
+                alt="export preview"
+                className="block max-w-full"
+              />
+            ) : null}
+          </div>
+
+          <div className="mt-3 flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => onOpenChange(false)}
+              className="rounded-sm border border-border-subtle bg-bg-elevated px-3 py-1.5 text-xs text-text-primary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={phase !== 'ready' || busy}
+              onClick={onCopy}
+              className="rounded-sm border border-border-subtle bg-bg-elevated px-3 py-1.5 text-xs text-text-primary hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-bg-elevated focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+            >
+              Copy
+            </button>
+            <button
+              type="button"
+              disabled={phase !== 'ready' || busy}
+              onClick={onSave}
+              className="rounded-sm border border-accent bg-accent px-3 py-1.5 text-xs font-semibold text-text-on-accent hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+            >
+              Save
+            </button>
+          </div>
+
+          {/* Offscreen render target. Positioned far off-canvas so the
+              layout still computes (display:none would zero the
+              intrinsic height) without paint cost or visual noise.
+              html-to-image walks this subtree once per open. */}
+          <div
+            aria-hidden
+            style={{
+              position: 'fixed',
+              top: '-99999px',
+              left: '-99999px',
+              pointerEvents: 'none',
+            }}
+          >
+            <div ref={offscreenRef}>
+              <MessageScreenshotView
+                messages={messages}
+                channelTitle={channelTitle}
+                channelKind={channelKind}
+                agentsById={agentsById}
+                agentsByName={agentsByName}
+                humansByName={humansByName}
+                channelsByName={channelsByName}
+                conversationRefsById={conversationRefsById}
+                agentAvatarUrls={agentAvatarUrls}
+                viewer={viewer}
+                viewerAvatarObjectUrl={viewerAvatarObjectUrl}
+              />
+            </div>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
