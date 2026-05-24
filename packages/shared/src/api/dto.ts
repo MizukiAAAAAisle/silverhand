@@ -729,6 +729,12 @@ export type MessageDto = z.infer<typeof MessageDtoSchema>;
 export const ConversationMessagesDtoSchema = z.object({
   messages: z.array(MessageDtoSchema),
   has_more_before: z.boolean(),
+  /** True when at least one message exists with seq > max(messages.seq).
+   *  For the default "latest" window this is always false; for an
+   *  anchored window (`before_seq` / `after_seq` / `around_message_id`)
+   *  it reflects the real DB state, so a bidirectional infinite query
+   *  knows whether to issue a `getNextPageParam`. */
+  has_more_after: z.boolean(),
 });
 export type ConversationMessagesDto = z.infer<typeof ConversationMessagesDtoSchema>;
 

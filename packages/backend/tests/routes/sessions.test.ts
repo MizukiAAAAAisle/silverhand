@@ -81,6 +81,8 @@ describe('canonical channel/thread routes', () => {
     ).json() as any;
     expect(latest.messages.map((m: any) => m.content)).toEqual(['m3', 'm4']);
     expect(latest.has_more_before).toBe(true);
+    // `latest` is the tail by definition.
+    expect(latest.has_more_after).toBe(false);
 
     const earlier = await (
       await http(t).get(
@@ -89,6 +91,121 @@ describe('canonical channel/thread routes', () => {
     ).json() as any;
     expect(earlier.messages.map((m: any) => m.content)).toEqual(['m1', 'm2']);
     expect(earlier.has_more_before).toBe(true);
+    expect(earlier.has_more_after).toBe(true);
+  });
+
+  it('messages window supports after_seq and around_message_id', async () => {
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t, ['alice']);
+    const ids: string[] = [];
+    const seqs: number[] = [];
+    for (let i = 0; i < 9; i++) {
+      const r = await (
+        await http(t).post(`/api/channels/${channelId}/messages`, {
+          content: `m${i}`,
+        })
+      ).json() as any;
+      ids.push(r.message.id);
+      seqs.push(r.message.seq);
+    }
+
+    // Walk forward from one before m0's seq → window starts at m0
+    // (the onboarding system message sits at seq=1; we anchor past it
+    // by using m0's seq - 1 directly so we don't depend on whether
+    // the harness inserts other rows above).
+    const forward = await (
+      await http(t).get(
+        `/api/channels/${channelId}/messages?limit=3&after_seq=${seqs[0]! - 1}`,
+      )
+    ).json() as any;
+    expect(forward.messages[0].content).toBe('m0');
+    expect(forward.messages.map((m: any) => m.content)).toEqual([
+      'm0',
+      'm1',
+      'm2',
+    ]);
+    // Onboarding system message lives below m0; has_more_before is
+    // expected here.
+    expect(forward.has_more_after).toBe(true);
+
+    // around_message_id centers the window on the anchor row.
+    const around = await (
+      await http(t).get(
+        `/api/channels/${channelId}/messages?limit=5&around_message_id=${ids[4]}`,
+      )
+    ).json() as any;
+    expect(around.messages.map((m: any) => m.content)).toEqual([
+      'm2',
+      'm3',
+      'm4',
+      'm5',
+      'm6',
+    ]);
+    expect(around.has_more_before).toBe(true);
+    expect(around.has_more_after).toBe(true);
+  });
+
+  it('messages window 400s on multiple cursors and 404s on cross-channel anchors', async () => {
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t, ['alice']);
+    const own = await (
+      await http(t).post(`/api/channels/${channelId}/messages`, {
+        content: 'own',
+      })
+    ).json() as any;
+
+    // 2+ cursors → 400 with a stable code.
+    const conflict = await http(t).get(
+      `/api/channels/${channelId}/messages?before_seq=2&after_seq=1`,
+    );
+    expect(conflict.status).toBe(400);
+    const conflictBody = (await conflict.json()) as any;
+    expect(conflictBody.code).toBe('mutually_exclusive_cursors');
+
+    // Bad numeric cursor → 400 / invalid_cursor.
+    const bad = await http(t).get(
+      `/api/channels/${channelId}/messages?before_seq=foo`,
+    );
+    expect(bad.status).toBe(400);
+    expect(((await bad.json()) as any).code).toBe('invalid_cursor');
+
+    // Negative seq cursor → 400 / invalid_cursor (seq is 1-indexed).
+    const negative = await http(t).get(
+      `/api/channels/${channelId}/messages?after_seq=-1`,
+    );
+    expect(negative.status).toBe(400);
+    expect(((await negative.json()) as any).code).toBe('invalid_cursor');
+
+    // Empty around_message_id= is a client bug, not "latest".
+    const emptyAround = await http(t).get(
+      `/api/channels/${channelId}/messages?around_message_id=`,
+    );
+    expect(emptyAround.status).toBe(400);
+    expect(((await emptyAround.json()) as any).code).toBe('invalid_cursor');
+
+    // Anchor message id from a sibling channel → 404 / message_not_found.
+    const { channelId: otherChannelId } = await createWorkspaceChannel(t, [
+      'bob',
+    ]);
+    const stranger = await (
+      await http(t).post(`/api/channels/${otherChannelId}/messages`, {
+        content: 'stranger',
+      })
+    ).json() as any;
+    const cross = await http(t).get(
+      `/api/channels/${channelId}/messages?around_message_id=${stranger.message.id}`,
+    );
+    expect(cross.status).toBe(404);
+    expect(((await cross.json()) as any).code).toBe('message_not_found');
+
+    // Anchor in the same channel works.
+    const ok = await http(t).get(
+      `/api/channels/${channelId}/messages?around_message_id=${own.message.id}`,
+    );
+    expect(ok.status).toBe(200);
+    const okBody = (await ok.json()) as any;
+    expect(okBody.messages.map((m: any) => m.content)).toContain('own');
+    expect(okBody.has_more_after).toBe(false);
   });
 
   it('creates a thread from a channel message and enforces kind guards', async () => {

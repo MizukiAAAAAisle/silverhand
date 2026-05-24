@@ -3,7 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
-import { MessageRepo } from '../../src/repos/message-repo.js';
+import {
+  AnchorMessageNotInConversationError,
+  MessageRepo,
+} from '../../src/repos/message-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { openTestDb } from '../utils/db.js';
 
@@ -122,6 +125,8 @@ describe('MessageRepo', () => {
     const latest = repo.listWindowForConversation(channel.id, { limit: 2 });
     expect(latest.messages.map(m => m.content)).toEqual(['m3', 'm4']);
     expect(latest.has_more_before).toBe(true);
+    // `latest` mode is by definition at the tail; no probe needed.
+    expect(latest.has_more_after).toBe(false);
 
     const earlier = repo.listWindowForConversation(channel.id, {
       limit: 2,
@@ -129,6 +134,8 @@ describe('MessageRepo', () => {
     });
     expect(earlier.messages.map(m => m.content)).toEqual(['m1', 'm2']);
     expect(earlier.has_more_before).toBe(true);
+    // before_seq window must report newer rows exist beyond it.
+    expect(earlier.has_more_after).toBe(true);
 
     const oldest = repo.listWindowForConversation(channel.id, {
       limit: 2,
@@ -136,6 +143,145 @@ describe('MessageRepo', () => {
     });
     expect(oldest.messages.map(m => m.content)).toEqual(['m0']);
     expect(oldest.has_more_before).toBe(false);
+    expect(oldest.has_more_after).toBe(true);
+  });
+
+  it('listWindowForConversation supports after_seq for forward paging', () => {
+    const { db, channel } = bootstrapConversation();
+    const repo = new MessageRepo(db);
+    for (let i = 0; i < 5; i++) {
+      repo.insertForConversation({
+        conversationId: channel.id,
+        fromKind: 'user',
+        content: `m${i}`,
+      });
+    }
+
+    // Start from the oldest (seq=1) and walk forward in pages of 2.
+    const first = repo.listWindowForConversation(channel.id, {
+      limit: 2,
+      afterSeq: 1,
+    });
+    expect(first.messages.map(m => m.content)).toEqual(['m1', 'm2']);
+    expect(first.has_more_before).toBe(true);
+    expect(first.has_more_after).toBe(true);
+
+    const second = repo.listWindowForConversation(channel.id, {
+      limit: 2,
+      afterSeq: first.messages[1]!.seq,
+    });
+    expect(second.messages.map(m => m.content)).toEqual(['m3', 'm4']);
+    expect(second.has_more_before).toBe(true);
+    // Reached the tail — nothing beyond seq=5.
+    expect(second.has_more_after).toBe(false);
+  });
+
+  it('listWindowForConversation centers a window around a message id', () => {
+    const { db, channel } = bootstrapConversation();
+    const repo = new MessageRepo(db);
+    const inserted: string[] = [];
+    for (let i = 0; i < 9; i++) {
+      const m = repo.insertForConversation({
+        conversationId: channel.id,
+        fromKind: 'user',
+        content: `m${i}`,
+      });
+      inserted.push(m.id);
+    }
+    // limit=5 around m4 → 2 before + anchor + 2 after = m2..m6.
+    const around = repo.listWindowForConversation(channel.id, {
+      limit: 5,
+      aroundMessageId: inserted[4]!,
+    });
+    expect(around.messages.map(m => m.content)).toEqual([
+      'm2',
+      'm3',
+      'm4',
+      'm5',
+      'm6',
+    ]);
+    expect(around.has_more_before).toBe(true);
+    expect(around.has_more_after).toBe(true);
+
+    // Around the very first message: no rows before, fills with after.
+    const aroundFirst = repo.listWindowForConversation(channel.id, {
+      limit: 5,
+      aroundMessageId: inserted[0]!,
+    });
+    expect(aroundFirst.messages[0]!.content).toBe('m0');
+    expect(aroundFirst.has_more_before).toBe(false);
+    expect(aroundFirst.has_more_after).toBe(true);
+
+    // Around the very last message: no rows after, fills with before.
+    const aroundLast = repo.listWindowForConversation(channel.id, {
+      limit: 5,
+      aroundMessageId: inserted[8]!,
+    });
+    expect(aroundLast.messages.at(-1)!.content).toBe('m8');
+    expect(aroundLast.has_more_before).toBe(true);
+    expect(aroundLast.has_more_after).toBe(false);
+  });
+
+  it('listWindowForConversation throws when around_message_id is not in this conversation', () => {
+    const { db, workspace, channel, conversations } = bootstrapConversation();
+    const channel2 = conversations.insertChannel({
+      workspaceId: workspace.id,
+      workspacePath: workspace.workspace_path,
+      title: 't2',
+    });
+    const repo = new MessageRepo(db);
+    const own = repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      content: 'own',
+    });
+    const stranger = repo.insertForConversation({
+      conversationId: channel2.id,
+      fromKind: 'user',
+      content: 'stranger',
+    });
+
+    // Anchor in the same conversation works …
+    expect(
+      repo.listWindowForConversation(channel.id, {
+        limit: 5,
+        aroundMessageId: own.id,
+      }).messages.map(m => m.content),
+    ).toEqual(['own']);
+
+    // … but a sibling conversation's id throws (route maps to 404).
+    expect(() =>
+      repo.listWindowForConversation(channel.id, {
+        limit: 5,
+        aroundMessageId: stranger.id,
+      }),
+    ).toThrow(AnchorMessageNotInConversationError);
+
+    // Bogus message ids also throw — same channel-not-found bucket.
+    expect(() =>
+      repo.listWindowForConversation(channel.id, {
+        limit: 5,
+        aroundMessageId: 'no-such-message',
+      }),
+    ).toThrow(AnchorMessageNotInConversationError);
+  });
+
+  it('listWindowForConversation rejects 2+ anchors at once', () => {
+    const { db, channel } = bootstrapConversation();
+    const repo = new MessageRepo(db);
+    repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      content: 'm0',
+    });
+
+    expect(() =>
+      repo.listWindowForConversation(channel.id, {
+        limit: 5,
+        beforeSeq: 1,
+        afterSeq: 0,
+      }),
+    ).toThrow(/mutually exclusive/);
   });
 
   it('hydrates task assignee display names when reading messages', () => {

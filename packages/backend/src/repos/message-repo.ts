@@ -15,6 +15,38 @@ function newId(): string {
 export interface MessageWindow {
   messages: MessageDto[];
   has_more_before: boolean;
+  has_more_after: boolean;
+}
+
+/** Sentinel thrown by `listWindowForConversation` when the caller
+ *  passed `aroundMessageId` for a message that does not belong to
+ *  this conversation (or does not exist). The route layer maps this
+ *  to a 404 — the agent-facing read-history surface uses an inline
+ *  result object for the same case. We use a class because repo
+ *  callers are spread across user routes / agent routes / inbox
+ *  formatters and a typed throw keeps the contract obvious without
+ *  bleeding sentinel values into every call site. */
+export class AnchorMessageNotInConversationError extends Error {
+  constructor(
+    public readonly conversationId: string,
+    public readonly messageId: string,
+  ) {
+    super(
+      `around_message_id ${messageId} does not belong to conversation ${conversationId}`,
+    );
+    this.name = 'AnchorMessageNotInConversationError';
+  }
+}
+
+/** Mutually-exclusive cursor anchors. The repo enforces "at most
+ *  one is set"; the route layer additionally returns 400 when the
+ *  HTTP query carries 2+ at once so we get a stable error on the
+ *  wire. `null`/`undefined` for all three means "latest window". */
+export interface ListWindowOpts {
+  limit?: number;
+  beforeSeq?: number | null;
+  afterSeq?: number | null;
+  aroundMessageId?: string | null;
 }
 
 type MessageRowWithTaskAssignee = MessageRow & {
@@ -122,11 +154,113 @@ export class MessageRepo {
 
   listWindowForConversation(
     conversationId: string,
-    opts: { limit?: number; beforeSeq?: number | null } = {},
+    opts: ListWindowOpts = {},
   ): MessageWindow {
-    const limit = opts.limit ?? 200;
+    const limit = Math.max(1, opts.limit ?? 200);
     const beforeSeq = opts.beforeSeq ?? null;
-    const rows = this.db
+    const afterSeq = opts.afterSeq ?? null;
+    const aroundMessageId = opts.aroundMessageId ?? null;
+
+    // Mutex guard. The HTTP route already 400s on 2+ params before
+    // reaching here; this defends programmatic callers and keeps the
+    // semantics one-anchor-only. `latest` is the implicit zero-anchor
+    // mode and never collides.
+    const anchors = [
+      beforeSeq !== null,
+      afterSeq !== null,
+      aroundMessageId !== null,
+    ].filter(Boolean).length;
+    if (anchors > 1) {
+      throw new Error(
+        'listWindowForConversation: beforeSeq / afterSeq / aroundMessageId are mutually exclusive',
+      );
+    }
+
+    let rows: MessageRowWithTaskAssignee[];
+
+    if (aroundMessageId !== null) {
+      // Resolve anchor seq inside this conversation. We deliberately
+      // require the anchor to belong to the same conversation: a
+      // cross-conversation message id would otherwise leak a window
+      // around a message the caller might not be allowed to see, and
+      // the UX of "jump to message" is per-conversation anyway.
+      const anchorSeq = this.anchorSeqFor(conversationId, aroundMessageId);
+      if (anchorSeq === null) {
+        throw new AnchorMessageNotInConversationError(
+          conversationId,
+          aroundMessageId,
+        );
+      }
+      // Split: floor((limit - 1) / 2) before the anchor, then the
+      // anchor row itself, then fill the remainder after. This mirrors
+      // the agent-facing `buildReadHistoryDto` policy so user/agent
+      // surfaces produce comparably shaped windows when they ever
+      // need to be cross-checked in tests.
+      const beforeCount = Math.floor((limit - 1) / 2);
+      const beforeRows = this.fetchBeforeSeq(
+        conversationId,
+        anchorSeq,
+        beforeCount,
+      );
+      const anchorRow = this.fetchById(conversationId, aroundMessageId);
+      const afterLimit = Math.max(
+        0,
+        limit - beforeRows.length - (anchorRow ? 1 : 0),
+      );
+      const afterRows = this.fetchAfterSeq(
+        conversationId,
+        anchorSeq,
+        afterLimit,
+      );
+      rows = [...beforeRows, ...(anchorRow ? [anchorRow] : []), ...afterRows];
+    } else if (afterSeq !== null) {
+      rows = this.fetchAfterSeq(conversationId, afterSeq, limit);
+    } else {
+      // Both `latest` (beforeSeq === null) and explicit before_seq go
+      // through the same DESC-then-ASC path; null acts as "no upper
+      // bound", so the existing tail behaviour is preserved.
+      rows = this.fetchBeforeSeq(conversationId, beforeSeq, limit);
+    }
+
+    const minSeq = rows[0]?.seq ?? null;
+    const maxSeq = rows.at(-1)?.seq ?? null;
+
+    // For `latest` (no anchor at all), `has_more_after` must be false:
+    // we always returned the tail-most rows, so by definition there is
+    // nothing newer in the DB. We do NOT issue an extra DB probe in
+    // that case — the absence of an anchor is itself the proof. For
+    // every anchored mode (before/after/around) we probe by `seq >
+    // maxSeq` so the answer reflects the actual rows we returned.
+    const isLatest =
+      beforeSeq === null && afterSeq === null && aroundMessageId === null;
+
+    const hasMoreBefore =
+      minSeq === null
+        ? false
+        : this.existsWithSeq(conversationId, '<', minSeq);
+
+    const hasMoreAfter =
+      isLatest || maxSeq === null
+        ? false
+        : this.existsWithSeq(conversationId, '>', maxSeq);
+
+    return {
+      messages: rows.map(r => messageRowWithTaskAssigneeToDto(r)),
+      has_more_before: hasMoreBefore,
+      has_more_after: hasMoreAfter,
+    };
+  }
+
+  /** Fetch up to `limit` rows with `seq < beforeSeq` (or the tail
+   *  when `beforeSeq` is null), returned in seq ASC. Shared by
+   *  `latest` / `before_seq` / `around_message_id` paths so all of
+   *  them produce identically shaped joined rows. */
+  private fetchBeforeSeq(
+    conversationId: string,
+    beforeSeq: number | null,
+    limit: number,
+  ): MessageRowWithTaskAssignee[] {
+    return this.db
       .prepare<
         [string, number | null, number | null, number],
         MessageRowWithTaskAssignee
@@ -144,25 +278,85 @@ export class MessageRepo {
           ORDER BY m.seq ASC`,
       )
       .all(conversationId, beforeSeq, beforeSeq, limit);
+  }
 
-    const minSeq = rows[0]?.seq ?? null;
-    const hasMoreBefore =
-      minSeq === null
-        ? false
-        : this.db
-            .prepare<[string, number], { found: 1 }>(
-              `SELECT 1 AS found
-                 FROM messages
-                WHERE conversation_id = ?
-                  AND seq < ?
-                LIMIT 1`,
-            )
-            .get(conversationId, minSeq) !== undefined;
+  /** Fetch up to `limit` rows with `seq > afterSeq`, returned in
+   *  seq ASC. Used by `after_seq` and the post-anchor half of
+   *  `around_message_id`. */
+  private fetchAfterSeq(
+    conversationId: string,
+    afterSeq: number,
+    limit: number,
+  ): MessageRowWithTaskAssignee[] {
+    if (limit <= 0) return [];
+    return this.db
+      .prepare<
+        [string, number, number],
+        MessageRowWithTaskAssignee
+      >(
+        `SELECT m.*, aa.display_name AS task_assignee_name
+           FROM messages m
+           LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
+          WHERE m.conversation_id = ?
+            AND m.seq > ?
+          ORDER BY m.seq ASC
+          LIMIT ?`,
+      )
+      .all(conversationId, afterSeq, limit);
+  }
 
-    return {
-      messages: rows.map(r => messageRowWithTaskAssigneeToDto(r)),
-      has_more_before: hasMoreBefore,
-    };
+  /** Fetch a single row by id, scoped to one conversation. Returns
+   *  null when the id does not belong to the conversation; this is
+   *  what gives `aroundMessageId` its 404 semantics. */
+  private fetchById(
+    conversationId: string,
+    messageId: string,
+  ): MessageRowWithTaskAssignee | null {
+    const row = this.db
+      .prepare<[string, string], MessageRowWithTaskAssignee>(
+        `SELECT m.*, aa.display_name AS task_assignee_name
+           FROM messages m
+           LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
+          WHERE m.conversation_id = ?
+            AND m.id = ?`,
+      )
+      .get(conversationId, messageId);
+    return row ?? null;
+  }
+
+  /** Resolve a message id to its seq within a specific conversation,
+   *  or null when the id does not belong to that conversation. */
+  private anchorSeqFor(
+    conversationId: string,
+    messageId: string,
+  ): number | null {
+    const row = this.db
+      .prepare<[string, string], { seq: number }>(
+        `SELECT seq FROM messages
+          WHERE conversation_id = ? AND id = ?`,
+      )
+      .get(conversationId, messageId);
+    return row?.seq ?? null;
+  }
+
+  /** Cheap "is there any row on the other side of `pivot`" probe.
+   *  Used to populate `has_more_before` / `has_more_after`. */
+  private existsWithSeq(
+    conversationId: string,
+    op: '<' | '>',
+    pivot: number,
+  ): boolean {
+    const sql =
+      op === '<'
+        ? `SELECT 1 AS found FROM messages
+            WHERE conversation_id = ? AND seq < ? LIMIT 1`
+        : `SELECT 1 AS found FROM messages
+            WHERE conversation_id = ? AND seq > ? LIMIT 1`;
+    return (
+      this.db
+        .prepare<[string, number], { found: 1 }>(sql)
+        .get(conversationId, pivot) !== undefined
+    );
   }
 
   getById(id: string): MessageDto | null {

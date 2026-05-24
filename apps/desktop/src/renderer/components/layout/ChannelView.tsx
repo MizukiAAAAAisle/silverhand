@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import {
   Archive,
   ArchiveRestore,
@@ -78,6 +79,13 @@ import {
 import { useConversationStream } from '@/hooks/useConversationStream';
 import type { ChannelReference } from '@/components/chat/ChannelRef';
 import type { ConversationReference } from '@/components/chat/ConversationRef';
+import {
+  FIRST_ITEM_INDEX_START,
+  getFollowOutputBehavior,
+  getInitialTopMostItemIndex,
+  shouldRemountForJump,
+  shouldRemountForWindowReplacement,
+} from './messageListVirtualization';
 
 type WorkspaceUiKind = 'regular' | 'dm';
 
@@ -103,6 +111,13 @@ interface ChannelViewProps {
    *  `onJumped` so the parent can clear the target (otherwise switching
    *  workspaces and back would re-trigger the scroll). */
   jumpTarget?: { channelId: string; messageId: string } | null;
+  /** When true, App is still fetching an `around_message_id` window
+   *  for the current `jumpTarget` and the message may not yet be in
+   *  cache. MessageList's jump effect uses this to distinguish
+   *  "still priming, wait" from "primed and not present, give up"
+   *  on `idx === -1`. Bound by App to the latest jump attempt's
+   *  `(channelId, messageId)`; superseded by any newer jump. */
+  jumpPrimePending?: boolean;
   onJumped?: () => void;
   /** Called when the user clicks Thread on a message. The parent owns
    *  thread-pane state — receives the freshly-created thread id
@@ -180,6 +195,7 @@ function ActiveChannelView({
   conversation,
   parentTitle,
   jumpTarget,
+  jumpPrimePending = false,
   onJumped,
   onThreadCreated,
   onCloseChild,
@@ -203,6 +219,9 @@ function ActiveChannelView({
     hasPreviousPage,
     isFetchingPreviousPage,
     fetchPreviousPage,
+    isAtTail,
+    hasNewerLiveGap,
+    resetToLatest,
   } = useChannelMessages(conversation.id, routeKind);
 
   // Advance the message read cursor in real-time as new messages arrive.
@@ -545,7 +564,19 @@ function ActiveChannelView({
           }
           highlightedMessageId={highlightedMessageId ?? null}
           jumpToMessageId={effectiveJumpMessageId}
+          jumpPrimePending={
+            // Only pass `true` when this pane's prop-driven jump
+            // (the App-orchestrated saved/task jump) is the one
+            // App is currently priming. activity-strip jumps stay
+            // local — those messages are by construction recent
+            // and already in cache, so they never go through the
+            // prime path.
+            jumpPrimePending && !!jumpTarget && jumpTarget.channelId === conversation.id
+          }
           onJumped={handleMessageJumped}
+          isAtTail={isAtTail}
+          hasNewerLiveGap={hasNewerLiveGap}
+          onResetToLatest={resetToLatest}
           onThreadCreated={onThreadCreated}
           threadByAnchor={threadByAnchor}
           activeRunStates={activeRunStates}
@@ -823,7 +854,11 @@ function MessageList({
   leadingSlot,
   highlightedMessageId,
   jumpToMessageId,
+  jumpPrimePending = false,
   onJumped,
+  isAtTail = true,
+  hasNewerLiveGap = false,
+  onResetToLatest,
   onThreadCreated,
   threadByAnchor,
   activeRunStates,
@@ -846,7 +881,22 @@ function MessageList({
   leadingSlot?: ReactNode;
   highlightedMessageId?: string | null;
   jumpToMessageId: string | null;
+  /** When true, App is still resolving a `primeAround` for the current
+   *  `jumpToMessageId`. The jump effect waits in the `idx === -1`
+   *  branch instead of giving up. */
+  jumpPrimePending?: boolean;
   onJumped?: () => void;
+  /** True when the cached window reaches the conversation tail.
+   *  Around-message jumps can leave the list in a valid mid-history
+   *  window before any live message arrives; the center bottom button
+   *  must reset to latest in that state, not scroll to the window end. */
+  isAtTail?: boolean;
+  /** True when the cache window doesn't include the conversation's
+   *  tail and at least one live message has arrived since. This is a
+   *  live-content hint only; `!isAtTail` is the durable window-state
+   *  signal used for the button action. */
+  hasNewerLiveGap?: boolean;
+  onResetToLatest?: () => void;
   onThreadCreated?: (threadId: string, thread?: ThreadDto) => void;
   /** Map of `original message id → open-thread summary` for the parent
    *  pane. Empty / absent on thread panes. Drives the per-message
@@ -979,253 +1029,443 @@ function MessageList({
   // once the user manually scrolls back down — more deterministic than
   // waiting for the smooth-scroll animation to fire `onScroll`.
   //
-  // We key on `activeRunIds` (a stable joined string of runIds) rather than
-  // the full `activeRunStates` array so that heartbeat-only updates (which
-  // don't change the set of running agents) don't trigger spurious scrolls.
-  const activeRunIds = (activeRunStates ?? []).map(s => s.runId).join(',');
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const wasNearBottomRef = useRef(true);
-  const programmaticBottomScrollRef = useRef(false);
-  const programmaticBottomTimerRef = useRef<ReturnType<
-    typeof setTimeout
-  > | null>(null);
-  const loadEarlierSnapshotRef = useRef<{
-    scrollHeight: number;
-    scrollTop: number;
-  } | null>(null);
-  const loadEarlierInFlightRef = useRef(false);
+  // ── Virtuoso integration ────────────────────────────────────────────────
+  //
+  // Migration from a hand-rolled `overflow-y-auto + messages.map()` scroller
+  // to react-virtuoso. The data layer (useChannelMessages → MessageDto[])
+  // and the grouping layer (groupMessages) are unchanged; only the visible
+  // window is virtualized so DOM/layout/paint cost no longer scales with
+  // total message count.
+  //
+  // Behaviour we keep parity on:
+  //   - Stick-to-bottom on new live messages (`followOutput="auto"`)
+  //   - Top-pull pagination when older history exists (`startReached`)
+  //   - Scroll-to-bottom button visible when not at bottom
+  //   - Jump-to-message (Saved / task refs) — implemented via
+  //     `virtuosoRef.scrollToIndex` + a one-shot DOM flash class once the
+  //     row lands in the live DOM (Virtuoso may not have it mounted at
+  //     dispatch time).
+  //   - Restore scroll anchor across prepend (firstItemIndex tracking)
+  //
+  // Behaviour we explicitly drop:
+  //   - The synchronous `scrollTop = scrollHeight` flick on new messages —
+  //     replaced by Virtuoso's auto-follow which is gated on at-bottom
+  //     state (saner default and matches user intent).
+  const items = useMemo(() => groupMessages(messages), [messages]);
+
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const [isAtBottom, setIsAtBottom] = useState(true);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
+  const [flashedMessageId, setFlashedMessageId] = useState<string | null>(null);
 
-  // Reset "near bottom" whenever the channel changes so every new channel
-  // opens in follow-bottom mode regardless of the previous scroll position.
-  useEffect(() => {
-    wasNearBottomRef.current = true;
-    programmaticBottomScrollRef.current = false;
-    if (programmaticBottomTimerRef.current) {
-      clearTimeout(programmaticBottomTimerRef.current);
-      programmaticBottomTimerRef.current = null;
-    }
-    setShowScrollBottom(false);
-    loadEarlierInFlightRef.current = false;
-    return () => {
-      if (programmaticBottomTimerRef.current) {
-        clearTimeout(programmaticBottomTimerRef.current);
-        programmaticBottomTimerRef.current = null;
-      }
-    };
-  }, [channelId]);
+  // `firstItemIndex` shifts down as older messages prepend so the visible
+  // logical index stays stable and Virtuoso can hold scroll position. We
+  // start way above zero so we have headroom for many prepend rounds.
+  const [firstItemIndex, setFirstItemIndex] = useState(FIRST_ITEM_INDEX_START);
+  const [windowResetVersion, setWindowResetVersion] = useState(0);
+  const firstItemIndexRef = useRef(FIRST_ITEM_INDEX_START);
+  const lastTopItemKeyRef = useRef<string | null>(null);
+  const lastJumpRemountKeyRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    if (!isFetchingEarlier) {
-      loadEarlierInFlightRef.current = false;
-    }
-  }, [isFetchingEarlier]);
-
-  const handleScroll = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    let requestedEarlier = false;
-    if (
-      hasMoreBefore &&
-      !isFetchingEarlier &&
-      !loadEarlierInFlightRef.current &&
-      el.scrollTop <= 80
-    ) {
-      loadEarlierInFlightRef.current = true;
-      loadEarlierSnapshotRef.current = {
-        scrollHeight: el.scrollHeight,
-        scrollTop: el.scrollTop,
-      };
-      wasNearBottomRef.current = false;
-      requestedEarlier = true;
-      onLoadEarlier();
-    }
-    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (!requestedEarlier) {
-      wasNearBottomRef.current = distFromBottom <= 20;
-    }
-    if (programmaticBottomScrollRef.current) {
-      setShowScrollBottom(false);
-      if (distFromBottom <= 20) {
-        programmaticBottomScrollRef.current = false;
-        if (programmaticBottomTimerRef.current) {
-          clearTimeout(programmaticBottomTimerRef.current);
-          programmaticBottomTimerRef.current = null;
-        }
-      }
-      return;
-    }
-    setShowScrollBottom(distFromBottom > 120);
-  }, [hasMoreBefore, isFetchingEarlier, onLoadEarlier]);
-
-  useLayoutEffect(() => {
-    const snapshot = loadEarlierSnapshotRef.current;
-    const el = scrollRef.current;
-    if (!snapshot || !el) return;
-    const delta = el.scrollHeight - snapshot.scrollHeight;
-    el.scrollTop = snapshot.scrollTop + delta;
-    loadEarlierSnapshotRef.current = null;
-  }, [messages]);
-
-  const scrollToBottom = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    programmaticBottomScrollRef.current = true;
-    if (programmaticBottomTimerRef.current) {
-      clearTimeout(programmaticBottomTimerRef.current);
-    }
-    programmaticBottomTimerRef.current = setTimeout(() => {
-      programmaticBottomScrollRef.current = false;
-      programmaticBottomTimerRef.current = null;
-      const current = scrollRef.current;
-      if (!current) return;
-      const distFromBottom =
-        current.scrollHeight - current.scrollTop - current.clientHeight;
-      setShowScrollBottom(distFromBottom > 120);
-    }, 1_500);
-    wasNearBottomRef.current = true;
-    setShowScrollBottom(false);
-    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+  const itemKey = useCallback((item: ReturnType<typeof groupMessages>[number]) => {
+    return item.kind === 'cluster' ? item.id : item.message.id;
   }, []);
 
-  useEffect(() => {
-    if (jumpToMessageId) return;
-    if (!wasNearBottomRef.current) return;
-    const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-    setShowScrollBottom(false);
-  }, [messages, jumpToMessageId, activeRunIds, channelId]);
+  // Index of the current jump target inside `items`, shared by
+  // window-reset decisions and Virtuoso's `initialTopMostItemIndex`.
+  // Returns -1 while App is still priming the around-window.
+  const jumpTargetIdx = useMemo(() => {
+    if (!jumpToMessageId) return -1;
+    return items.findIndex(
+      it => it.kind === 'message' && it.message.id === jumpToMessageId,
+    );
+  }, [items, jumpToMessageId]);
 
-  // Jump to a specific message (typically from Saved view). Waits for
-  // the message to be in the DOM, scrolls into view, briefly highlights
-  // it, then signals completion so the parent clears the target.
+  // Reset Virtuoso bookkeeping whenever the channel changes — the user is
+  // entering a fresh stream and the stale baselines from the previous
+  // channel must not leak in.
+  useEffect(() => {
+    firstItemIndexRef.current = FIRST_ITEM_INDEX_START;
+    setFirstItemIndex(FIRST_ITEM_INDEX_START);
+    setWindowResetVersion(0);
+    lastTopItemKeyRef.current = null;
+    lastJumpRemountKeyRef.current = null;
+    setIsAtBottom(true);
+    setShowScrollBottom(false);
+    setFlashedMessageId(null);
+  }, [channelId]);
+
+  // New jump attempt boundary — fires whenever `jumpToMessageId` flips
+  // to a new non-null value. Clear any local flash from the previous
+  // attempt; positioning is handled by remounting Virtuoso below.
+  useEffect(() => {
+    if (!jumpToMessageId) {
+      lastJumpRemountKeyRef.current = null;
+      return;
+    }
+    setFlashedMessageId(null);
+  }, [jumpToMessageId, channelId]);
+
+  // Detect prepend on the items array and decrement `firstItemIndex` by
+  // the number of newly inserted top-side items. We compare against the
+  // previously observed top key — if it now sits at index N, then N items
+  // were prepended.
+  //
+  // useLayoutEffect (not useEffect) — this MUST commit synchronously
+  // before any passive effect (especially the jump effect below) runs,
+  // otherwise scrollToIndex fires with stale firstItemIndex props
+  // queued, Virtuoso miscomputes the target offset, and the row never
+  // materialises.
+  //
+  // Also handles the data-shrink case: when a query refetch evicts old
+  // pages (e.g. saved-jump on the same channel re-clicks
+  // markChannelRead → invalidate → first page only), `prevTopKey` is no
+  // longer in items. We can't compute a delta, so reset the baseline
+  // from scratch — without this, Virtuoso's size cache stays anchored
+  // to the long-gone 788-item layout and any subsequent scrollToIndex
+  // misses badly.
+  useLayoutEffect(() => {
+    if (items.length === 0) {
+      lastTopItemKeyRef.current = null;
+      return;
+    }
+    const top = items[0];
+    if (!top) return;
+    const newTopKey = itemKey(top);
+    const prevTopKey = lastTopItemKeyRef.current;
+    if (prevTopKey !== null && newTopKey !== prevTopKey) {
+      const idx = items.findIndex(it => itemKey(it) === prevTopKey);
+      if (idx > 0) {
+        // Pure prepend: anchor preserved, shift firstItemIndex down.
+        firstItemIndexRef.current -= idx;
+        setFirstItemIndex(firstItemIndexRef.current);
+      } else {
+        // Data shrunk / reset (prev top item no longer exists). Reset
+        // the baseline so Virtuoso re-anchors against the new dataset
+        // instead of tracking phantom offsets. This is a full window
+        // replacement (latest ↔ around-window), not a prepend. Remount
+        // only when the replacement is a valid landing window: normal
+        // latest reset (no jump target) or an around-window containing
+        // the target. If a jump target exists but is still absent,
+        // remounting would fall back to the current window's local end
+        // and reproduce the "stuck one hour ago" failure.
+        firstItemIndexRef.current = FIRST_ITEM_INDEX_START;
+        setFirstItemIndex(FIRST_ITEM_INDEX_START);
+        if (
+          shouldRemountForWindowReplacement({
+            hasJumpTarget: jumpToMessageId != null,
+            jumpTargetIndex: jumpTargetIdx,
+          })
+        ) {
+          setWindowResetVersion(v => v + 1);
+        }
+      }
+    }
+    lastTopItemKeyRef.current = newTopKey;
+  }, [items, itemKey, jumpTargetIdx, jumpToMessageId]);
+
+  // Treat every resolved jump as a fresh positioning request. This keeps
+  // saved-message jumps on the same channel on the same path as
+  // cross-channel jumps: Virtuoso mounts with `initialTopMostItemIndex`
+  // already pointing at the target, instead of reusing an old size cache
+  // and issuing an imperative scroll that can land on the previous
+  // around-window's local position.
+  useLayoutEffect(() => {
+    if (!jumpToMessageId) {
+      lastJumpRemountKeyRef.current = null;
+      return;
+    }
+    if (
+      !shouldRemountForJump({
+        hasJumpTarget: true,
+        jumpTargetIndex: jumpTargetIdx,
+      })
+    ) {
+      return;
+    }
+    const target = items[jumpTargetIdx];
+    if (!target) return;
+    const key = `${channelId}:${jumpToMessageId}:${itemKey(target)}`;
+    if (lastJumpRemountKeyRef.current === key) return;
+    lastJumpRemountKeyRef.current = key;
+    setWindowResetVersion(v => v + 1);
+  }, [channelId, items, itemKey, jumpTargetIdx, jumpToMessageId]);
+
+  // Bottom button visibility tracks `isAtBottom`. Virtuoso fires
+  // `atBottomStateChange` only when the boolean flips, so this stays
+  // stable across rapid scroll events.
+  useEffect(() => {
+    setShowScrollBottom(!isAtBottom);
+  }, [isAtBottom]);
+
+  const handleStartReached = useCallback(() => {
+    if (!hasMoreBefore || isFetchingEarlier) return;
+    onLoadEarlier();
+  }, [hasMoreBefore, isFetchingEarlier, onLoadEarlier]);
+
+  const scrollToBottom = useCallback(() => {
+    virtuosoRef.current?.scrollToIndex({
+      index: 'LAST',
+      align: 'end',
+      behavior: 'smooth',
+    });
+    setShowScrollBottom(false);
+  }, []);
+  const shouldResetToLatest = !isAtTail || hasNewerLiveGap;
+  const initialTopMostItemIndex = getInitialTopMostItemIndex({
+    jumpTargetIndex: jumpTargetIdx,
+    hasJumpTarget: jumpToMessageId != null,
+    itemCount: items.length,
+  });
+
+  // Jump-to-message completion gate. Actual positioning is declarative:
+  // when the target exists, the layout effect above remounts Virtuoso and
+  // `initialTopMostItemIndex` opens directly at that row. This effect only
+  // decides whether to wait for prime, give up on a final miss, or start
+  // the one-shot flash/onJumped sequence.
+  //
+  // `jumpPrimePending` lets us distinguish "target not in cache yet"
+  // (App is priming an around-window — wait for the next render) from
+  // "primed and not present" (App will have cleared `jumpTarget` on
+  // 404; for any other miss, signal `onJumped` so the parent doesn't
+  // sit on a stuck target).
   useEffect(() => {
     if (!jumpToMessageId) return;
-    if (messages.length === 0) return; // wait for load
-    const target = document.getElementById(`msg-${jumpToMessageId}`);
-    if (!target) {
-      // The target may live in an older page. Keep paging backward
-      // before giving up; Saved and Tasks can point well outside the
-      // latest message window.
-      if (hasMoreBefore) {
-        if (!isFetchingEarlier) {
-          onLoadEarlier();
-        }
-        return;
-      }
-      // Message might have been deleted; clear the target once there is
-      // no older history left to search.
+    if (items.length === 0) {
+      // Empty cache. If App is priming, wait; otherwise let the next
+      // data update re-trigger this effect — clearing the target now
+      // would lose the user's visual hint.
+      return;
+    }
+    if (jumpTargetIdx === -1) {
+      if (jumpPrimePending) return; // wait for prime
       onJumped?.();
       return;
     }
-    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    // Explicitly mark "not near bottom" so auto-scroll doesn't fire after
-    // onJumped clears jumpToMessageId. The user must scroll back down
-    // themselves to re-engage bottom-following.
-    wasNearBottomRef.current = false;
+    if (isFetchingEarlier) return;
+
     setShowScrollBottom(true);
-    target.classList.add('msg-jump-flash');
-    const t = setTimeout(() => {
-      target.classList.remove('msg-jump-flash');
-      onJumped?.();
-    }, 1600);
-    return () => clearTimeout(t);
+    setFlashedMessageId(jumpToMessageId);
   }, [
-    hasMoreBefore,
-    isFetchingEarlier,
     jumpToMessageId,
-    messages,
-    onLoadEarlier,
+    jumpPrimePending,
+    jumpTargetIdx,
+    items.length,
+    isFetchingEarlier,
     onJumped,
   ]);
 
+  // Apply the one-shot flash class once the target lands in the DOM.
+  // Virtuoso renders rows asynchronously after `scrollToIndex`, so
+  // we rAF-poll for the target. On success we flash, then call
+  // `onJumped` — the single point where jumpTarget cleanup happens.
+  // On giveup (target never materialised within ~2s @ 144Hz) we
+  // clear local flash state but deliberately do NOT call `onJumped`:
+  // that would clear the parent's `jumpTarget`, hiding the user's
+  // intent without ever showing the row.
+  useEffect(() => {
+    if (!flashedMessageId) return;
+    let cancelled = false;
+    let attempts = 0;
+    let cleanup: (() => void) | null = null;
+
+    const tryFlash = (): void => {
+      if (cancelled) return;
+      const target = document.getElementById(`msg-${flashedMessageId}`);
+      if (target) {
+        target.classList.add('msg-jump-flash');
+        const timer = setTimeout(() => {
+          target.classList.remove('msg-jump-flash');
+          if (!cancelled) {
+            setFlashedMessageId(null);
+            onJumped?.();
+          }
+        }, 1600);
+        cleanup = () => {
+          clearTimeout(timer);
+          target.classList.remove('msg-jump-flash');
+        };
+        return;
+      }
+      // Not rendered yet — try again next frame. Cap at 300 frames
+      // (~2s @ 144Hz, ~5s @ 60Hz) which is plenty of time for
+      // Virtuoso to materialise the target row.
+      if (attempts++ < 300) {
+        requestAnimationFrame(tryFlash);
+      } else if (!cancelled) {
+        setFlashedMessageId(null);
+        // Deliberately do NOT call onJumped on giveup — see effect
+        // header.
+      }
+    };
+    tryFlash();
+    return () => {
+      cancelled = true;
+      cleanup?.();
+    };
+  }, [flashedMessageId, onJumped]);
+
+  const renderItem = useCallback(
+    (item: ReturnType<typeof groupMessages>[number]) => {
+      if (item.kind === 'cluster') {
+        return (
+          <SystemActivityCluster
+            messages={item.messages}
+            conversationRefsById={conversationRefsById}
+            onOpenConversationRef={onOpenConversationRef}
+            channelsByName={channelsByName}
+            onOpenChannelRef={onOpenChannelRef}
+            humansByName={humansByName}
+          />
+        );
+      }
+      const m = item.message;
+      if (m.from_kind === 'system') {
+        return (
+          <SystemMessage
+            message={m}
+            conversationRefsById={conversationRefsById}
+            onOpenConversationRef={onOpenConversationRef}
+            channelsByName={channelsByName}
+            onOpenChannelRef={onOpenChannelRef}
+            humansByName={humansByName}
+          />
+        );
+      }
+      return (
+        <MessageItem
+          message={m}
+          conversationId={channelId}
+          routeKind={routeKind}
+          agentsById={agentsById}
+          agentsByName={agentsByName}
+          humansByName={humansByName}
+          channelsByName={channelsByName}
+          onOpenChannelRef={onOpenChannelRef}
+          conversationRefsById={conversationRefsById}
+          onOpenConversationRef={onOpenConversationRef}
+          saved={savedIds.has(m.id)}
+          onSave={msg => toggleSave(msg.id)}
+          onStartThread={onThreadCreated ? handleStartThread : undefined}
+          threadReplyCount={threadByAnchor?.get(m.id)?.reply_count}
+          viewerAvatarObjectUrl={viewerAvatarObjectUrl}
+          viewer={viewer && !isRegistrationRequired(viewer) ? viewer : undefined}
+          agentAvatarUrls={agentAvatarUrls}
+          highlighted={
+            highlightedMessageId != null && m.id === highlightedMessageId
+          }
+        />
+      );
+    },
+    [
+      channelId,
+      routeKind,
+      agentsById,
+      agentsByName,
+      humansByName,
+      channelsByName,
+      onOpenChannelRef,
+      conversationRefsById,
+      onOpenConversationRef,
+      savedIds,
+      toggleSave,
+      onThreadCreated,
+      handleStartThread,
+      threadByAnchor,
+      viewerAvatarObjectUrl,
+      viewer,
+      agentAvatarUrls,
+      highlightedMessageId,
+    ],
+  );
+
   return (
     <div className="relative min-h-0 min-w-0 flex-1">
-      <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        className="h-full min-w-0 overflow-y-auto px-4 py-3"
-      >
-        {isFetchingEarlier ? (
-          <div className="pb-2 text-center text-xs text-text-muted">
-            加载更早消息…
-          </div>
-        ) : null}
-        {leadingSlot ? <div className="mx-auto mb-1 max-w-[1200px]">{leadingSlot}</div> : null}
-        {isLoading ? (
-          <div className="text-sm text-text-muted">加载消息…</div>
-        ) : messages.length === 0 ? (
-          leadingSlot ? null : (
-            <div className="text-sm text-text-muted">还没有消息。在下方输入。</div>
-          )
-        ) : (
-          <ol className="mx-auto max-w-[1200px] space-y-1">
-            {groupMessages(messages).map(item => {
-              if (item.kind === 'cluster') {
-                return (
-                  <li key={item.id}>
-                    <SystemActivityCluster
-                      messages={item.messages}
-                      conversationRefsById={conversationRefsById}
-                      onOpenConversationRef={onOpenConversationRef}
-                      channelsByName={channelsByName}
-                      onOpenChannelRef={onOpenChannelRef}
-                      humansByName={humansByName}
-                    />
-                  </li>
-                );
-              }
-              const m = item.message;
-              return (
-              <li key={m.id}>
-                {m.from_kind === 'system' ? (
-                  <SystemMessage
-                    message={m}
-                    conversationRefsById={conversationRefsById}
-                    onOpenConversationRef={onOpenConversationRef}
-                    channelsByName={channelsByName}
-                    onOpenChannelRef={onOpenChannelRef}
-                    humansByName={humansByName}
-                  />
-                ) : (
-                  <MessageItem
-                    message={m}
-                    conversationId={channelId}
-                    routeKind={routeKind}
-                    agentsById={agentsById}
-                    agentsByName={agentsByName}
-                    humansByName={humansByName}
-                    channelsByName={channelsByName}
-                    onOpenChannelRef={onOpenChannelRef}
-                    conversationRefsById={conversationRefsById}
-                    onOpenConversationRef={onOpenConversationRef}
-                    saved={savedIds.has(m.id)}
-                    onSave={msg => toggleSave(msg.id)}
-                    onStartThread={onThreadCreated ? handleStartThread : undefined}
-                    threadReplyCount={threadByAnchor?.get(m.id)?.reply_count}
-                    viewerAvatarObjectUrl={viewerAvatarObjectUrl}
-                    viewer={viewer && !isRegistrationRequired(viewer) ? viewer : undefined}
-                    agentAvatarUrls={agentAvatarUrls}
-                    highlighted={
-                      highlightedMessageId != null &&
-                      m.id === highlightedMessageId
-                    }
-                  />
-                )}
-              </li>
-              );
-            })}
-          </ol>
-        )}
-      </div>
+      {isLoading ? (
+        <div className="px-4 py-3 text-sm text-text-muted">加载消息…</div>
+      ) : items.length === 0 && !leadingSlot ? (
+        <div className="px-4 py-3 text-sm text-text-muted">
+          还没有消息。在下方输入。
+        </div>
+      ) : (
+        <Virtuoso<typeof items[number]>
+          // Remount on channel switches and full window replacements
+          // (latest ↔ around-message). Prepends keep the same key so
+          // Virtuoso can preserve scroll position; disjoint windows get
+          // a fresh size/scroll queue and can use `initialTopMostItemIndex`.
+          key={`${channelId}:${windowResetVersion}`}
+          ref={virtuosoRef}
+          data={items}
+          firstItemIndex={firstItemIndex}
+          // On fresh mount, anchor the list at the jump target when
+          // there is one (and the around-window has already landed in
+          // `items` so we have a real index). Bottom fallback belongs
+          // only to ordinary channel opens. During a jump, `idx === -1`
+          // means "target not in this window yet"; falling back to the
+          // local window bottom is how we ended up stuck on stale
+          // around-window tails.
+          {...(initialTopMostItemIndex !== undefined
+            ? { initialTopMostItemIndex }
+            : {})}
+          // Stick to bottom only for the real tail. During a saved-message
+          // jump, or while browsing an around-message window, the window's
+          // bottom is just "the last row we currently hold" — following it
+          // would override the target-centered jump and land on stale history.
+          followOutput={atBottom =>
+            getFollowOutputBehavior({
+              hasJumpTarget: jumpToMessageId != null,
+              isAtTail,
+              atBottom,
+            })
+          }
+          atBottomStateChange={setIsAtBottom}
+          atBottomThreshold={20}
+          startReached={handleStartReached}
+          increaseViewportBy={{ top: 200, bottom: 200 }}
+          computeItemKey={(_index, item) => itemKey(item)}
+          components={{
+            Header: () => (
+              <>
+                {isFetchingEarlier ? (
+                  <div className="pb-2 text-center text-xs text-text-muted">
+                    加载更早消息…
+                  </div>
+                ) : null}
+                {leadingSlot ? (
+                  <div className="mx-auto mb-1 max-w-[1200px] px-4">
+                    {leadingSlot}
+                  </div>
+                ) : null}
+              </>
+            ),
+            // Bottom padding spacer — keeps the last message off the
+            // composer edge without baking the gutter into every item.
+            Footer: () => <div className="h-3" />,
+          }}
+          itemContent={(_index, item) => (
+            <div className="mx-auto max-w-[1200px] px-4 py-0.5">
+              {renderItem(item)}
+            </div>
+          )}
+          className="h-full min-w-0"
+        />
+      )}
 
-      {showScrollBottom ? (
+      {showScrollBottom || shouldResetToLatest ? (
         <button
           type="button"
-          aria-label="滚动到底部"
-          title="滚动到底部"
-          onClick={scrollToBottom}
+          aria-label={shouldResetToLatest ? '跳到最新消息' : '滚动到底部'}
+          title={shouldResetToLatest ? '跳到最新消息' : '滚动到底部'}
+          onClick={() => {
+            // `scrollToBottom` is local to the mounted window. After
+            // an around-message jump, newer rows can live outside that
+            // window, so the button must reset the query to latest.
+            if (shouldResetToLatest && onResetToLatest) {
+              onResetToLatest();
+              return;
+            }
+            scrollToBottom();
+          }}
           className="absolute bottom-4 left-1/2 z-20 flex size-9 -translate-x-1/2 items-center justify-center rounded-full bg-accent text-text-on-accent shadow-lg transition-opacity hover:opacity-90 active:opacity-75"
         >
           <ArrowDown className="size-4" />

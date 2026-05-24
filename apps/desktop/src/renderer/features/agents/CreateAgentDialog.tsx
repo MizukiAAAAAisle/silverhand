@@ -12,11 +12,21 @@ import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { useCreateAgent } from './hooks';
 
-const RUNTIMES: { value: RuntimeKind; label: string }[] = [
+// Runtime catalog for the create dialog. `disabled` runtimes appear in
+// the picker but can't be selected — they're listed so users know what
+// the roadmap looks like without us silently dropping options. `qoder`
+// isn't a real RuntimeKind yet (no driver / no DB enum value), so it's
+// rendered from a parallel struct rather than from RuntimeKind.
+type RuntimeChoice =
+  | { value: RuntimeKind; label: string; disabled?: boolean }
+  | { value: 'qoder'; label: string; disabled: true };
+
+const RUNTIMES: RuntimeChoice[] = [
   { value: 'claude', label: 'Claude Code' },
   { value: 'codex', label: 'Codex CLI' },
-  { value: 'cursor', label: 'Cursor' },
-  { value: 'gemini', label: 'Gemini' },
+  { value: 'cursor', label: 'Cursor', disabled: true },
+  { value: 'gemini', label: 'Gemini', disabled: true },
+  { value: 'qoder', label: 'Qoder', disabled: true },
 ];
 
 interface CreateAgentDialogProps {
@@ -85,21 +95,32 @@ export function CreateAgentDialog({
           <div className="flex flex-col gap-1.5">
             <Label>Runtime</Label>
             <div className="flex flex-wrap gap-2">
-              {RUNTIMES.map(rt => (
-                <button
-                  key={rt.value}
-                  type="button"
-                  onClick={() => setRuntime(rt.value)}
-                  className={
-                    'rounded-md border px-3 py-1.5 text-xs transition-colors ' +
-                    (runtime === rt.value
-                      ? 'border-accent-base bg-accent-soft text-text-primary'
-                      : 'border-border-default text-text-secondary hover:border-border-strong')
-                  }
-                >
-                  {rt.label}
-                </button>
-              ))}
+              {RUNTIMES.map(rt => {
+                const isDisabled = rt.disabled === true;
+                const isSelected = !isDisabled && runtime === rt.value;
+                return (
+                  <button
+                    key={rt.value}
+                    type="button"
+                    disabled={isDisabled}
+                    title={isDisabled ? 'coming soon' : undefined}
+                    onClick={() => {
+                      if (isDisabled) return;
+                      setRuntime(rt.value as RuntimeKind);
+                    }}
+                    className={
+                      'rounded-md border px-3 py-1.5 text-xs transition-colors ' +
+                      (isDisabled
+                        ? 'cursor-not-allowed border-border-default/60 text-text-muted opacity-50'
+                        : isSelected
+                        ? 'border-accent-base bg-accent-soft text-text-primary'
+                        : 'border-border-default text-text-secondary hover:border-border-strong')
+                    }
+                  >
+                    {rt.label}
+                  </button>
+                );
+              })}
             </div>
           </div>
 

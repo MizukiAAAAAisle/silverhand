@@ -311,9 +311,23 @@ export function SplitPane({
             // delay rendering `right` until after the width transition
             // completes so the heavy mount (queries, message list,
             // etc.) doesn't compete with the animation for the main
-            // thread.
-            style={{ contain: 'layout paint' }}
-            className="flex h-full min-w-0 flex-1 overflow-hidden"
+            // thread. While `right` is unmounted, the wrapper paints
+            // `bg-bg-chat` so the 220ms gap matches the destination
+            // ChannelView's background instead of revealing the App's
+            // `bg-bg-base` underneath.
+            //
+            // `borderRadius` mirrors the inner card chrome
+            // (`--card-radius`) so the same-coloured filler doesn't
+            // square off the inner ChannelView's rounded corners. Without
+            // this, the wrapper's sharp rectangle paints into the corner
+            // area that the inner card visually rounds away — producing
+            // asymmetric header radii (left pane keeps its rounded
+            // corners against App `bg-bg-base`, right pane looks square).
+            style={{
+              contain: 'layout paint',
+              borderRadius: 'var(--card-radius, 0)',
+            }}
+            className="flex h-full min-w-0 flex-1 overflow-hidden bg-bg-chat"
           >
             {contentMounted ? right : null}
           </div>

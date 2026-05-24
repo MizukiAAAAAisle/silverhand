@@ -29,13 +29,14 @@ let activeConversation: ActiveConversationInfo = { workspaceId: null, conversati
  *  SIGINT / SIGTERM. */
 const HEADLESS = process.env.SILVERHAND_HEADLESS === '1';
 
-interface DevRemoteDebuggingConfig {
+interface RemoteDebuggingConfig {
   enabled: boolean;
   port: number | null;
   reason?: string;
+  envName?: string;
 }
 
-const devRemoteDebugging = configureDevRemoteDebugging();
+const remoteDebugging = configureRemoteDebugging();
 
 interface ActiveConversationInfo {
   workspaceId: string | null;
@@ -43,36 +44,63 @@ interface ActiveConversationInfo {
 }
 
 /**
- * In `pnpm dev`, expose Electron's renderer targets over CDP so browser
- * DevTools / VS Code can inspect Network, WS frames, console, and React state
- * without relying on the in-window DevTools UI.
+ * Expose Electron's renderer targets over local-only CDP.
+ *
+ * Dev mode keeps the historical default of 9222 when the renderer dev server
+ * is active. Packaged builds are opt-in only: set
+ * `SILVERHAND_REMOTE_DEBUG_PORT=<port>` to open the endpoint for profiling.
  */
-function configureDevRemoteDebugging(): DevRemoteDebuggingConfig {
-  if (app.isPackaged) return { enabled: false, port: null, reason: 'packaged' };
-  if (!process.env['ELECTRON_RENDERER_URL']) {
+function configureRemoteDebugging(): RemoteDebuggingConfig {
+  const explicit = readRemoteDebugPortEnv();
+  const hasRendererDevServer = Boolean(process.env['ELECTRON_RENDERER_URL']);
+  if (!explicit && app.isPackaged) {
+    return { enabled: false, port: null, reason: 'packaged_env_absent' };
+  }
+  if (!explicit && !hasRendererDevServer) {
     return { enabled: false, port: null, reason: 'no_renderer_dev_server' };
   }
 
-  const raw =
-    process.env.SILVERHAND_CDP_PORT ??
-    process.env.SILVERHAND_REMOTE_DEBUGGING_PORT ??
-    '9222';
+  const raw = explicit?.value ?? '9222';
   const value = raw.trim();
   if (/^(0|false|off|disabled)$/i.test(value)) {
-    return { enabled: false, port: null, reason: 'disabled_by_env' };
+    return {
+      enabled: false,
+      port: null,
+      reason: 'disabled_by_env',
+      envName: explicit?.name,
+    };
   }
 
   const port = Number(value);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
     console.warn(
-      `[main] invalid SILVERHAND_CDP_PORT/SILVERHAND_REMOTE_DEBUGGING_PORT=${JSON.stringify(raw)}; CDP remote debugging disabled`,
+      `[main] invalid ${explicit?.name ?? 'default CDP port'}=${JSON.stringify(raw)}; CDP remote debugging disabled`,
     );
-    return { enabled: false, port: null, reason: 'invalid_port' };
+    return {
+      enabled: false,
+      port: null,
+      reason: 'invalid_port',
+      envName: explicit?.name,
+    };
   }
 
   app.commandLine.appendSwitch('remote-debugging-address', '127.0.0.1');
   app.commandLine.appendSwitch('remote-debugging-port', String(port));
-  return { enabled: true, port };
+  process.stderr.write(`[silverhand] remote debugging on 127.0.0.1:${port}\n`);
+  return { enabled: true, port, envName: explicit?.name };
+}
+
+function readRemoteDebugPortEnv(): { name: string; value: string } | null {
+  const candidates = [
+    'SILVERHAND_REMOTE_DEBUG_PORT',
+    'SILVERHAND_CDP_PORT',
+    'SILVERHAND_REMOTE_DEBUGGING_PORT',
+  ] as const;
+  for (const name of candidates) {
+    const value = process.env[name];
+    if (value !== undefined) return { name, value };
+  }
+  return null;
 }
 
 /**
@@ -226,14 +254,14 @@ async function bootstrap(): Promise<void> {
       },
       'logger initialized',
     );
-    if (devRemoteDebugging.enabled) {
+    if (remoteDebugging.enabled) {
       logger.info(
         {
-          port: devRemoteDebugging.port,
-          url: `http://127.0.0.1:${devRemoteDebugging.port}`,
-          env: 'SILVERHAND_CDP_PORT',
+          port: remoteDebugging.port,
+          url: `http://127.0.0.1:${remoteDebugging.port}`,
+          env: remoteDebugging.envName ?? 'dev-default',
         },
-        'dev CDP remote debugging enabled',
+        'CDP remote debugging enabled',
       );
     }
     // Spawn silverhand-daemon and connect a HostClient. Daemon is the

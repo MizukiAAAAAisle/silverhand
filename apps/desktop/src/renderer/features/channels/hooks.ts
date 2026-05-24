@@ -6,7 +6,7 @@ import {
   type InfiniteData,
   type QueryClient,
 } from '@tanstack/react-query';
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   AgentRunStatesDto,
   AttachmentDto,
@@ -18,7 +18,7 @@ import type {
   TaskChangedEvent,
 } from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import { getCurrentUserId } from '@/lib/current-user';
 import { onWsFrame, subscribeViewerScope, isCurrentViewerScope } from '@/lib/ws-client';
 import {
@@ -35,9 +35,23 @@ import { applyTaskChangedToTaskByNumberCache } from '@/features/tasks/useTaskByN
 const messagesKey = (cid: string) => ['channels', cid, 'messages'] as const;
 const agentsKey = (cid: string) => ['channels', cid, 'agents'] as const;
 const MESSAGE_PAGE_LIMIT = 100;
+const AROUND_MESSAGE_LIMIT = 100;
 type ConversationRouteKind = 'channel' | 'thread';
 
-type MessagesCache = InfiniteData<ConversationMessagesDto, number | undefined>;
+/** Page-param shape for the bidirectional infinite query.
+ *  - `undefined` (the initial param) → fetch the latest window.
+ *  - `{ kind: 'before', seq }` → fetch a window with seq < `seq`.
+ *  - `{ kind: 'after', seq }` → fetch a window with seq > `seq`.
+ *  We model it as a tagged union instead of a bare number so the
+ *  hook knows which direction it's paging without re-deriving it
+ *  from "is this a fetchPrevious or fetchNext call". React Query's
+ *  inferred page-param type stays `MessagesPageParam` end-to-end. */
+export type MessagesPageParam =
+  | undefined
+  | { kind: 'before'; seq: number }
+  | { kind: 'after'; seq: number };
+
+type MessagesCache = InfiniteData<ConversationMessagesDto, MessagesPageParam>;
 
 function invalidateMessageUnreadQueries(qc: QueryClient): void {
   const existing = messageUnreadInvalidationTimers.get(qc);
@@ -103,7 +117,7 @@ function applyPendingSessionAgentPatches(
 
 function makeMessagesCache(
   page: ConversationMessagesDto,
-  pageParam: number | undefined = undefined,
+  pageParam: MessagesPageParam = undefined,
 ): MessagesCache {
   return { pages: [page], pageParams: [pageParam] };
 }
@@ -112,20 +126,37 @@ function cacheHasMessage(data: MessagesCache | undefined, messageId: string): bo
   return data?.pages.some(page => page.messages.some(m => m.id === messageId)) ?? false;
 }
 
+/** Live-append is only safe when the last cached page is the tail
+ *  of the conversation — otherwise we would lie to the user (the
+ *  appended message wouldn't follow the message right above it).
+ *  Callers MUST gate on this; the helper itself stays loose so the
+ *  optimistic-send path can still bootstrap an empty cache. */
+function lastPageIsTail(data: MessagesCache | undefined): boolean {
+  if (!data || data.pages.length === 0) return true;
+  const last = data.pages[data.pages.length - 1];
+  return last?.has_more_after === false;
+}
+
 function appendMessageToCache(
   data: MessagesCache | undefined,
   msg: MessageDto,
 ): MessagesCache {
   if (!data) {
-    return makeMessagesCache({ messages: [msg], has_more_before: false });
+    return makeMessagesCache({
+      messages: [msg],
+      has_more_before: false,
+      has_more_after: false,
+    });
   }
   if (cacheHasMessage(data, msg.id)) return data;
 
   if (data.pages.length === 0) {
     return {
       ...data,
-      pages: [{ messages: [msg], has_more_before: false }],
-      pageParams: [undefined],
+      pages: [
+        { messages: [msg], has_more_before: false, has_more_after: false },
+      ],
+      pageParams: [undefined as MessagesPageParam],
     };
   }
 
@@ -197,54 +228,177 @@ function applyTaskChangedToCache(
   return changed ? { ...data, pages } : data;
 }
 
-/** Initial latest-window GET + previous-page fetch + live append on realtime events. */
+/** Build a single messages-window page request URL.
+ *
+ *  Cursor params are mutually exclusive on the wire (the route 400s
+ *  on 2+) — this helper enforces it locally too by treating
+ *  `MessagesPageParam` as the union it is. `aroundMessageId` is its
+ *  own caller-driven mode used by `usePrimeConversationMessages`,
+ *  not by the page-walk path. `signal` is plumbed straight through
+ *  to `api()` so callers can abort the in-flight fetch. */
+async function fetchMessagesWindow(opts: {
+  conversationId: string;
+  routeKind: ConversationRouteKind;
+  pageParam?: MessagesPageParam;
+  aroundMessageId?: string;
+  limit: number;
+  signal?: AbortSignal;
+}): Promise<ConversationMessagesDto> {
+  const params = new URLSearchParams({ limit: String(opts.limit) });
+  if (opts.aroundMessageId !== undefined) {
+    params.set('around_message_id', opts.aroundMessageId);
+  } else if (opts.pageParam) {
+    if (opts.pageParam.kind === 'before') {
+      params.set('before_seq', String(opts.pageParam.seq));
+    } else {
+      params.set('after_seq', String(opts.pageParam.seq));
+    }
+  }
+  const path =
+    opts.routeKind === 'thread'
+      ? apiPaths.threadMessages(opts.conversationId)
+      : apiPaths.channelMessages(opts.conversationId);
+  return api<ConversationMessagesDto>(`${path}?${params.toString()}`, {
+    signal: opts.signal,
+  });
+}
+
+/** Initial latest-window GET + bidirectional pagination + live
+ *  append on realtime events.
+ *
+ *  Bidirectional is what lets `usePrimeConversationMessages` replace
+ *  the cache with a single around-message page and have the user
+ *  scroll either direction from there: `getPreviousPageParam` reads
+ *  the first page's `has_more_before`, `getNextPageParam` reads the
+ *  last page's `has_more_after`.
+ *
+ *  Live `message` events are appended to the cache only when the last
+ *  page is the tail of the conversation (`has_more_after === false`).
+ *  `isAtTail` is the durable window-position signal for "latest"
+ *  actions. `hasNewerLiveGap` is narrower: it only means a live message
+ *  arrived while the window was not at tail. The gap flag is local hook
+ *  state, not React Query meta — meta is static, and the gap must drive
+ *  UI rerenders.
+ */
 export function useChannelMessages(
   channelId: string | null,
   routeKind: ConversationRouteKind = 'channel',
 ) {
   const qc = useQueryClient();
+  const [hasNewerLiveGap, setHasNewerLiveGap] = useState(false);
+
+  // Reset the gap whenever the consumer switches conversations —
+  // a stale "new messages below" hint from the previous channel
+  // would be both wrong and confusing.
+  useEffect(() => {
+    setHasNewerLiveGap(false);
+  }, [channelId]);
+
   const query = useInfiniteQuery<
     ConversationMessagesDto,
     Error,
-    InfiniteData<ConversationMessagesDto, number | undefined>,
+    InfiniteData<ConversationMessagesDto, MessagesPageParam>,
     ReturnType<typeof messagesKey>,
-    number | undefined
+    MessagesPageParam
   >({
     queryKey: messagesKey(channelId ?? 'none'),
     enabled: !!channelId,
-    initialPageParam: undefined as number | undefined,
-    queryFn: async ({ pageParam }) => {
-      const params = new URLSearchParams({
-        limit: String(MESSAGE_PAGE_LIMIT),
-      });
-      if (typeof pageParam === 'number') {
-        params.set('before_seq', String(pageParam));
-      }
-      const path =
-        routeKind === 'thread'
-          ? apiPaths.threadMessages(channelId!)
-          : apiPaths.channelMessages(channelId!);
-      return api<ConversationMessagesDto>(`${path}?${params.toString()}`);
+    initialPageParam: undefined as MessagesPageParam,
+    queryFn: async ({ pageParam, signal }) =>
+      fetchMessagesWindow({
+        conversationId: channelId!,
+        routeKind,
+        pageParam,
+        limit: MESSAGE_PAGE_LIMIT,
+        signal,
+      }),
+    getPreviousPageParam: firstPage => {
+      if (!firstPage.has_more_before) return undefined;
+      // Pending optimistic messages carry `id: 'pending-<uuid>'` and
+      // `seq: Date.now()` — feeding that epoch-ms cursor to
+      // `before_seq` would make the route return the entire history.
+      // Skip them so the cursor always reflects a real DB seq. The
+      // common case (no temp at the head) still resolves to
+      // `messages[0]` in O(1).
+      const firstReal = firstPage.messages.find(
+        m => !m.id.startsWith('pending-'),
+      );
+      return firstReal ? { kind: 'before', seq: firstReal.seq } : undefined;
     },
-    getNextPageParam: () => undefined,
-    getPreviousPageParam: firstPage =>
-      firstPage.has_more_before ? firstPage.messages[0]?.seq : undefined,
+    getNextPageParam: lastPage => {
+      if (!lastPage.has_more_after || lastPage.messages.length === 0) {
+        return undefined;
+      }
+      // Symmetric to getPreviousPageParam: filter out optimistic
+      // temps so `after_seq` never sees an epoch-ms cursor.
+      for (let i = lastPage.messages.length - 1; i >= 0; i--) {
+        const m = lastPage.messages[i]!;
+        if (!m.id.startsWith('pending-')) {
+          return { kind: 'after', seq: m.seq };
+        }
+      }
+      return undefined;
+    },
   });
+
+  // Whether the cached window reaches the conversation tail. This is
+  // deliberately separate from `hasNewerLiveGap`: a saved-message jump
+  // can land in mid-history even when no new live message has arrived.
+  const isAtTail = query.data
+    ? lastPageIsTail(query.data as MessagesCache)
+    : true;
+
+  // Whenever the cache shape implies the window is back at tail, clear
+  // the live-gap flag. Reaching tail can happen via three paths:
+  //   1. user scrolled forward enough that `fetchNextPage` returned
+  //      a page with `has_more_after: false`,
+  //   2. `primeAround` happened to land on a window that already
+  //      includes the tail (e.g. the saved message is recent),
+  //   3. `resetToLatest` re-fetched the latest window.
+  // Without this effect the gap would stay true forever once it
+  // flipped, making the "scroll to latest" affordance lie.
+  useEffect(() => {
+    if (isAtTail) setHasNewerLiveGap(false);
+  }, [isAtTail]);
+
   const messages = useMemo(
     () => query.data?.pages.flatMap(page => page.messages) ?? [],
     [query.data],
   );
 
+  /** Reset the active query to the latest window. We do NOT keep the
+   *  previous pages here: an around-message window may not be
+   *  contiguous with latest, and stitching disjoint ranges would
+   *  invalidate before/after cursors on either side. */
+  const resetToLatest = useCallback(() => {
+    if (!channelId) return;
+    setHasNewerLiveGap(false);
+    void qc.resetQueries({ queryKey: messagesKey(channelId), exact: true });
+  }, [qc, channelId]);
+
   const onEvent = useCallback(
     (e: ConversationStreamEvent) => {
       if (!channelId) return;
       if (e.kind === 'connected' && e.payload?.snapshot_required) {
+        // A reconnect can mean the window we hold is stale — the
+        // safest reconciliation is to drop back to latest. The user
+        // already lost some events while disconnected; surfacing the
+        // tail beats keeping a frozen mid-history window.
+        setHasNewerLiveGap(false);
         void qc.invalidateQueries({ queryKey: messagesKey(channelId) });
         return;
       }
       if (e.kind === 'message') {
         const msg = e.payload?.message as MessageDto | undefined;
         if (!msg) return;
+        const cur = qc.getQueryData<MessagesCache>(messagesKey(channelId));
+        if (!lastPageIsTail(cur)) {
+          // Window doesn't include the tail — don't lie. Mark the
+          // gap so the UI can show "scroll to latest"; the user
+          // will reset the window when they're ready.
+          setHasNewerLiveGap(true);
+          return;
+        }
         qc.setQueryData<MessagesCache>(messagesKey(channelId), prev =>
           appendMessageToCache(prev, msg),
         );
@@ -262,7 +416,105 @@ export function useChannelMessages(
   );
   useConversationStream(channelId, onEvent, routeKind);
 
-  return { ...query, data: messages };
+  return {
+    ...query,
+    data: messages,
+    isAtTail,
+    hasNewerLiveGap,
+    resetToLatest,
+  };
+}
+
+/** Independent helper for "prime the messages cache around message X
+ *  for any conversation". Lives in its own hook so the App-level
+ *  jump path doesn't depend on `useChannelMessages` being mounted
+ *  for the target conversation (which would be a footgun on jumps
+ *  that swap the active channel). The hook holds no state — it
+ *  only exposes a stable `primeAround` function bound to the
+ *  current `QueryClient`.
+ *
+ *  Stale-guard contract: the App passes `shouldCommit?: () =>
+ *  boolean`. After the network request resolves, we re-check
+ *  `shouldCommit()` immediately before `setQueryData`; if it
+ *  returns false we discard the response. This keeps the utility
+ *  oblivious to "current jump target" — App owns that decision.
+ */
+export function usePrimeConversationMessages() {
+  const qc = useQueryClient();
+
+  const primeAround = useCallback(
+    async (
+      conversationId: string,
+      routeKind: ConversationRouteKind,
+      messageId: string,
+      opts?: {
+        shouldCommit?: () => boolean;
+        signal?: AbortSignal;
+      },
+    ): Promise<{ committed: boolean; reason?: 'stale' | 'aborted' | 'not_found' }> => {
+      try {
+        if (opts?.signal?.aborted) return { committed: false, reason: 'aborted' };
+        const page = await fetchMessagesWindow({
+          conversationId,
+          routeKind,
+          aroundMessageId: messageId,
+          limit: AROUND_MESSAGE_LIMIT,
+          // Plumb signal into the underlying fetch so an abort on the
+          // App side actually cancels the in-flight request, not just
+          // the post-response commit. Without this, callers that only
+          // pass `signal` (and not `shouldCommit`) would still race
+          // against the network round-trip.
+          signal: opts?.signal,
+        });
+        if (opts?.signal?.aborted) return { committed: false, reason: 'aborted' };
+        if (opts?.shouldCommit && !opts.shouldCommit()) {
+          return { committed: false, reason: 'stale' };
+        }
+        // Cancel any in-flight latest/before/after fetch so React
+        // Query doesn't overwrite our prime with a stale response.
+        await qc.cancelQueries({
+          queryKey: messagesKey(conversationId),
+          exact: true,
+        });
+        // `cancelQueries` is async — by the time it resolves the
+        // user may have clicked another saved message. Re-check both
+        // guards before committing so we never write a stale window
+        // that the App has already moved past.
+        if (opts?.signal?.aborted) return { committed: false, reason: 'aborted' };
+        if (opts?.shouldCommit && !opts.shouldCommit()) {
+          return { committed: false, reason: 'stale' };
+        }
+        // Replace the entire cache with this single window. The
+        // around window may not be contiguous with whatever the
+        // hook held before, so stitching is unsafe; the hook will
+        // page outward from here using before/after cursors.
+        qc.setQueryData<MessagesCache>(
+          messagesKey(conversationId),
+          makeMessagesCache(page, undefined),
+        );
+        return { committed: true };
+      } catch (err) {
+        // Aborted fetches surface as DOMException 'AbortError'; treat
+        // as a non-error stale path so callers don't have to wrap.
+        if (
+          (err as { name?: string } | null)?.name === 'AbortError' ||
+          opts?.signal?.aborted
+        ) {
+          return { committed: false, reason: 'aborted' };
+        }
+        // 404 from the backend means the message id is not in this
+        // conversation. Surface that to App so it can clear the
+        // jump target instead of spinning on a phantom.
+        if (err instanceof ApiError && err.status === 404) {
+          return { committed: false, reason: 'not_found' };
+        }
+        throw err;
+      }
+    },
+    [qc],
+  );
+
+  return { primeAround };
 }
 
 /** Initial GET + live update on `agent_status` realtime events. */
@@ -372,6 +624,24 @@ export function useSendMessage(
       const key = messagesKey(channelId);
       await qc.cancelQueries({ queryKey: key });
       const prev = qc.getQueryData<MessagesCache>(key);
+      // Invariant: never append optimistic messages to a non-tail
+      // window. If the user is browsing an `around_message_id` window
+      // (or any other state where `lastPage.has_more_after === true`),
+      // appending here would visually attach the new message to the
+      // mid-history view, which is a lie about position. Rebuild the
+      // cache as a tail-only single page so the optimistic insert
+      // — and any subsequent live appends — land on a real tail.
+      // `has_more_before: true` lets the user scroll up to fetch
+      // earlier history once the latest window is established.
+      // Rollback is preserved by the captured `prev` baseline above.
+      if (prev && !lastPageIsTail(prev)) {
+        qc.setQueryData<MessagesCache>(key, {
+          pages: [
+            { messages: [], has_more_before: true, has_more_after: false },
+          ],
+          pageParams: [undefined as MessagesPageParam],
+        });
+      }
       const tempId = `pending-${crypto.randomUUID()}`;
       const snapshots: AttachmentSnapshot[] | null =
         input.attachments && input.attachments.length > 0

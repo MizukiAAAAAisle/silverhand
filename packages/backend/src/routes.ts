@@ -65,7 +65,7 @@ import { createCliInvokeMiddleware } from './observability/cli-invoke-middleware
 import { AgentRepo } from './repos/agent-repo.js';
 import { AttachmentRepo } from './repos/attachment-repo.js';
 import { HostRepo } from './repos/host-repo.js';
-import { MessageRepo, messageRowToDto } from './repos/message-repo.js';
+import { MessageRepo, messageRowToDto, AnchorMessageNotInConversationError } from './repos/message-repo.js';
 import { NotificationRepo } from './repos/notification-repo.js';
 import { SavedMessageRepo } from './repos/saved-message-repo.js';
 import { SearchRepo } from './repos/search-repo.js';
@@ -1178,6 +1178,113 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     return c.json({ by_conversation: { [channel.id]: count }, total: count });
   });
 
+  /**
+   * Parse the cursor query for the user-facing messages window
+   * endpoints (channel + thread). Returns either a parsed selector
+   * (≤ 1 anchor) or a Hono `Response` carrying a 400 with a stable
+   * `code` + `message`. Anchors are mutually exclusive on the wire:
+   * if a client sends 2+ at once we refuse before touching the DB so
+   * the resulting window is unambiguous and React Query never has to
+   * second-guess which cursor a page came from.
+   */
+  function parseMessagesWindowQuery(c: Context):
+    | {
+        ok: true;
+        limit: number;
+        beforeSeq: number | null;
+        afterSeq: number | null;
+        aroundMessageId: string | null;
+      }
+    | { ok: false; response: Response } {
+    const parsedLimit = Number(c.req.query('limit') ?? 200);
+    const limit = Number.isFinite(parsedLimit)
+      ? Math.min(Math.max(parsedLimit, 1), 500)
+      : 200;
+    const before = c.req.query('before_seq');
+    const after = c.req.query('after_seq');
+    const around = c.req.query('around_message_id');
+
+    // Reject any anchor that came in but failed numeric parsing
+    // before we count anchors — otherwise a junk `before_seq=foo`
+    // would silently degrade to "latest" and surprise the caller.
+    // `seq` is monotonically positive in the DB (1-indexed). `0` is
+    // intentionally allowed: `after_seq=0` means "page forward from
+    // before-the-first row", which is a legitimate way to ask for
+    // the earliest window. Negative cursors are rejected.
+    let beforeSeq: number | null = null;
+    if (before !== undefined) {
+      const n = Number(before);
+      if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) {
+        return {
+          ok: false,
+          response: c.json(
+            {
+              error: 'before_seq must be a non-negative integer',
+              code: 'invalid_cursor',
+            },
+            400,
+          ),
+        };
+      }
+      beforeSeq = n;
+    }
+    let afterSeq: number | null = null;
+    if (after !== undefined) {
+      const n = Number(after);
+      if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) {
+        return {
+          ok: false,
+          response: c.json(
+            {
+              error: 'after_seq must be a non-negative integer',
+              code: 'invalid_cursor',
+            },
+            400,
+          ),
+        };
+      }
+      afterSeq = n;
+    }
+    // Empty `around_message_id=` is a client bug, not "give me
+    // latest" — refusing it forces callers to either pass a real
+    // anchor or omit the param entirely, so the resulting window
+    // is unambiguous.
+    if (around !== undefined && around.length === 0) {
+      return {
+        ok: false,
+        response: c.json(
+          {
+            error: 'around_message_id must be a non-empty message id',
+            code: 'invalid_cursor',
+          },
+          400,
+        ),
+      };
+    }
+    const aroundMessageId =
+      around !== undefined && around.length > 0 ? around : null;
+
+    const anchorCount =
+      (beforeSeq !== null ? 1 : 0) +
+      (afterSeq !== null ? 1 : 0) +
+      (aroundMessageId !== null ? 1 : 0);
+    if (anchorCount > 1) {
+      return {
+        ok: false,
+        response: c.json(
+          {
+            error:
+              'before_seq, after_seq and around_message_id are mutually exclusive',
+            code: 'mutually_exclusive_cursors',
+          },
+          400,
+        ),
+      };
+    }
+
+    return { ok: true, limit, beforeSeq, afterSeq, aroundMessageId };
+  }
+
   app.get(apiPaths.conversationChannelMessages(':id'), c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'channel id required' }, 400);
@@ -1186,21 +1293,47 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!canViewConversation(ctx, getUserPrincipal(c), channel.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
-    const parsedLimit = Number(c.req.query('limit') ?? 200);
-    const parsedBefore = c.req.query('before_seq');
-    const limit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 500) : 200;
-    const beforeSeq = parsedBefore ? Number(parsedBefore) : null;
-    const window = timedRouteSpan(
-      ctx,
-      'conversation.messages.window',
-      { conversationId: channel.id, kind: channel.kind, limit, beforeSeq },
-      () => messages.listWindowForConversation(channel.id, { limit, beforeSeq }),
-      result => ({
-        messageCount: result.messages.length,
-        hasMoreBefore: result.has_more_before,
-      }),
-    );
-    return c.json(window);
+    const parsed = parseMessagesWindowQuery(c);
+    if (!parsed.ok) return parsed.response;
+    const { limit, beforeSeq, afterSeq, aroundMessageId } = parsed;
+    try {
+      const window = timedRouteSpan(
+        ctx,
+        'conversation.messages.window',
+        {
+          conversationId: channel.id,
+          kind: channel.kind,
+          limit,
+          beforeSeq,
+          afterSeq,
+          aroundMessageId,
+        },
+        () =>
+          messages.listWindowForConversation(channel.id, {
+            limit,
+            beforeSeq,
+            afterSeq,
+            aroundMessageId,
+          }),
+        result => ({
+          messageCount: result.messages.length,
+          hasMoreBefore: result.has_more_before,
+          hasMoreAfter: result.has_more_after,
+        }),
+      );
+      return c.json(window);
+    } catch (err) {
+      if (err instanceof AnchorMessageNotInConversationError) {
+        return c.json(
+          {
+            error: 'around_message_id not found in this conversation',
+            code: 'message_not_found',
+          },
+          404,
+        );
+      }
+      throw err;
+    }
   });
 
   app.get(apiPaths.conversationChannel(':id'), c => {
@@ -1397,21 +1530,47 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!canViewConversation(ctx, getUserPrincipal(c), thread.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
-    const parsedLimit = Number(c.req.query('limit') ?? 200);
-    const parsedBefore = c.req.query('before_seq');
-    const limit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 500) : 200;
-    const beforeSeq = parsedBefore ? Number(parsedBefore) : null;
-    const window = timedRouteSpan(
-      ctx,
-      'conversation.messages.window',
-      { conversationId: thread.id, kind: thread.kind, limit, beforeSeq },
-      () => messages.listWindowForConversation(thread.id, { limit, beforeSeq }),
-      result => ({
-        messageCount: result.messages.length,
-        hasMoreBefore: result.has_more_before,
-      }),
-    );
-    return c.json(window);
+    const parsed = parseMessagesWindowQuery(c);
+    if (!parsed.ok) return parsed.response;
+    const { limit, beforeSeq, afterSeq, aroundMessageId } = parsed;
+    try {
+      const window = timedRouteSpan(
+        ctx,
+        'conversation.messages.window',
+        {
+          conversationId: thread.id,
+          kind: thread.kind,
+          limit,
+          beforeSeq,
+          afterSeq,
+          aroundMessageId,
+        },
+        () =>
+          messages.listWindowForConversation(thread.id, {
+            limit,
+            beforeSeq,
+            afterSeq,
+            aroundMessageId,
+          }),
+        result => ({
+          messageCount: result.messages.length,
+          hasMoreBefore: result.has_more_before,
+          hasMoreAfter: result.has_more_after,
+        }),
+      );
+      return c.json(window);
+    } catch (err) {
+      if (err instanceof AnchorMessageNotInConversationError) {
+        return c.json(
+          {
+            error: 'around_message_id not found in this conversation',
+            code: 'message_not_found',
+          },
+          404,
+        );
+      }
+      throw err;
+    }
   });
 
   app.get(apiPaths.conversationChannelAgents(':id'), c => {

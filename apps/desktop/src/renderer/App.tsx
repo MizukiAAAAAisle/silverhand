@@ -51,6 +51,10 @@ import {
   useMessageUnreadCounts,
   useMessageUnreadSummary,
 } from '@/features/channels/hooks';
+import {
+  useMessageJumpController,
+  type MessageJumpTarget,
+} from '@/features/channels/useMessageJumpController';
 import { cleanupAllComposerDrafts } from '@/lib/composer-draft-cache';
 import {
   selectFocusedConversation,
@@ -67,13 +71,6 @@ import {
   useNav,
   useRouteState,
 } from '@/router';
-
-export interface MessageJumpTarget {
-  workspaceId?: string;
-  channelId: string;
-  threadId?: string | null;
-  messageId: string;
-}
 
 // Per-workspace "last viewed channel" + per-channel "last open thread"
 // memory. Persisted to localStorage so that quitting and relaunching the
@@ -214,11 +211,12 @@ function RegisteredAppShell(): JSX.Element {
   const [createChannelOpen, setCreateChannelOpen] = useState(false);
   const [workspaceSettingsOpen, setWorkspaceSettingsOpen] = useState(false);
   const [tasksDrawerOpen, setTasksDrawerOpen] = useState(false);
-  // One-shot jump target consumed by ChannelView once messages are
-  // loaded for the target channel. Cleared after handling. Kept in
-  // memory rather than the URL because it's truly ephemeral —
-  // refresh/back doesn't need to re-trigger the scroll.
-  const [jumpTarget, setJumpTarget] = useState<MessageJumpTarget | null>(null);
+  const {
+    jumpTarget,
+    requestJump,
+    clearJump,
+    isPrimePendingFor,
+  } = useMessageJumpController();
 
   // Holds the newly-created thread for the brief window between
   // nav.toThread() firing and the channels query refetch completing.
@@ -789,22 +787,10 @@ function RegisteredAppShell(): JSX.Element {
   }, [focusedTaskNumber, tasksDrawerOpen]);
 
   const handleJumpToMessage = (
-    params: {
-      workspaceId?: string;
-      channelId: string;
-      threadId?: string | null;
-      messageId: string;
-    },
+    params: MessageJumpTarget,
     options: { preserveThreadLayout?: boolean; threadFullscreen?: boolean } = {},
   ): void => {
-    const targetConversationId = params.threadId ?? params.channelId;
-    setJumpTarget({
-      workspaceId: params.workspaceId,
-      channelId: params.channelId,
-      threadId: params.threadId ?? null,
-      messageId: params.messageId,
-    });
-    markChannelRead.mutate(targetConversationId);
+    requestJump(params);
     const wid = resolveNavWorkspaceId(params.workspaceId, params.channelId);
     if (!wid) return;
     if (
@@ -901,7 +887,9 @@ function RegisteredAppShell(): JSX.Element {
   // ── Stable refs for ChannelView (so React.memo can short-circuit when
   //    only sidebar visibility flips). Recompute deliberately when the
   //    underlying nav / channel / mutation identity changes. ──────────────
-  const handleJumped = useCallback(() => setJumpTarget(null), []);
+  const handleJumped = useCallback(() => {
+    clearJump();
+  }, [clearJump]);
 
   const handleThreadCreated = useCallback(
     (threadId: string, thread?: ChannelListItem) => {
@@ -975,13 +963,12 @@ function RegisteredAppShell(): JSX.Element {
       if (!parentChannelId) return;
       if (secondaryDescriptor.source === 'side') {
         const wid = secondaryDescriptor.workspaceId;
-        setJumpTarget({
+        requestJump({
           workspaceId: wid,
           channelId: parentChannelId,
           threadId: null,
           messageId,
         });
-        markChannelRead.mutate(parentChannelId);
         nav.go(
           buildChannelPathPreservingSide(
             wid,
@@ -1021,7 +1008,7 @@ function RegisteredAppShell(): JSX.Element {
         ? secondaryDescriptor.id
         : null,
       nav.go,
-      markChannelRead,
+      requestJump,
     ],
   );
 
@@ -1092,6 +1079,25 @@ function RegisteredAppShell(): JSX.Element {
     [jumpTarget, secondaryConversationDescriptor],
   );
 
+  // Per-pane pending is derived from the controller's active
+  // `(conversationId, messageId)` pair. The App should not expose the
+  // attempt token to layout code — it is only a stale-prime guard.
+  const parentJumpPrimePending = useMemo(
+    () =>
+      parentJumpTarget !== null &&
+      isPrimePendingFor(parentJumpTarget.channelId, parentJumpTarget.messageId),
+    [isPrimePendingFor, parentJumpTarget],
+  );
+  const secondaryJumpPrimePending = useMemo(
+    () =>
+      secondaryJumpTarget !== null &&
+      isPrimePendingFor(
+        secondaryJumpTarget.channelId,
+        secondaryJumpTarget.messageId,
+      ),
+    [isPrimePendingFor, secondaryJumpTarget],
+  );
+
   // Parent-message highlight only renders alongside an open thread
   // (channel-typed sides aren't anchored to a parent message). Side
   // threads from PR-3 sigil clicks will fire `onThreadAnchorResolved`
@@ -1105,6 +1111,7 @@ function RegisteredAppShell(): JSX.Element {
       conversation={parentDescriptor}
       parentTitle={parentChannel?.title ?? null}
       jumpTarget={parentJumpTarget}
+      jumpPrimePending={parentJumpPrimePending}
       onJumped={handleJumped}
       onThreadCreated={handleThreadCreated}
       highlightedMessageId={highlightedMessageIdForParent}
@@ -1150,6 +1157,7 @@ function RegisteredAppShell(): JSX.Element {
           conversation={secondaryConversationDescriptor}
           parentTitle={secondaryViewInputs.parentTitle}
           jumpTarget={secondaryJumpTarget}
+          jumpPrimePending={secondaryJumpPrimePending}
           onJumped={handleJumped}
           onCloseChild={closeSecondary}
           // Cindy review of e9278a7 bug 2: previously hard-coded

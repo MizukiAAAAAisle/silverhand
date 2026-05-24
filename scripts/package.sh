@@ -68,10 +68,10 @@ ensure_binding "$ELECTRON_ABI" \
 
 if [[ "$DIR_ONLY" == "1" ]]; then
   echo "[package] running electron-builder --dir"
-  pnpm --filter @silverhand/desktop package:dir
+  ( cd "$ROOT_DIR/apps/desktop" && pnpm exec electron-builder --mac --dir --config electron-builder.yml )
 else
   echo "[package] running electron-builder"
-  pnpm --filter @silverhand/desktop package
+  ( cd "$ROOT_DIR/apps/desktop" && pnpm exec electron-builder --mac --config electron-builder.yml )
 fi
 
 echo "[package] artifacts in apps/desktop/release/"
