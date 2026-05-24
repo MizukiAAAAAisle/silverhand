@@ -563,15 +563,15 @@
        padding / gap) so the cluster falls back to the JSX defaults
        (`gap-1` = 4px between buttons).
    Per-button:
-     - Default: white ground (`--bg-floating: #FFFFFF`) on the cool
-       header bg (`--bg-base: #F7F8F6`) — intentionally subtle, the
-       hover lift does the heavy lifting on feedback.
-     - Square corners (`border-radius: 0`) — overrides the JSX
-       `rounded-[6px]` / `rounded` so the boxes read as poster cut
-       blocks, same hard-cut language as `--control-radius: 0` /
-       `--floating-radius: 0` / `--radius-inline-code: 0`. shiki
-       `npbm1_xryIbWicIw` "forza6 主题去掉圆角，保持直角，这是
-       海报的风格".
+     - Default: white ground (`--bg-floating: #FFFFFF`) with 2px solid
+       near-black poster border. shiki `pgbrwFLJryxRFjPd` followed up
+       on the v5.5→v5.7 refactor (which had dropped the per-button
+       frame entirely) and asked the boxes back at button level — same
+       hardness, just per-icon instead of one wrapping cluster.
+     - Square corners (`border-radius: 0`) — same hard-cut language as
+       `--control-radius: 0` / `--floating-radius: 0` /
+       `--radius-inline-code: 0`. shiki `npbm1_xryIbWicIw` "forza6 主题
+       去掉圆角，保持直角，这是海报的风格".
      - Hover: `translateY(-1px)` lift. transition kept short (150ms)
        so the icons feel snappy, not floaty. Icon colour shift
        (muted → primary) stays the JSX default — Cindy
@@ -590,6 +590,7 @@
 }
 [data-theme='forza6'] [data-channel-actions] button {
   background-color: var(--bg-floating);
+  border: 2px solid #0A0A0A;
   border-radius: 0;
   transition: transform 150ms var(--ease, ease);
 }
