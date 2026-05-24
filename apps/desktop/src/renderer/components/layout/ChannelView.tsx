@@ -677,7 +677,7 @@ function MemberStrip({
                 aria-label={`@${agent.name}`}
                 data-member-chip="agent"
                 data-member-id={member.agent_id}
-                className="relative inline-flex size-6 shrink-0 items-center justify-center rounded-none bg-bg-floating p-0 shadow-sm transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+                className="relative inline-flex size-6 shrink-0 items-center justify-center rounded-none border border-border-subtle bg-bg-floating p-0 transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
               >
                 <AgentAvatar
                   runtime={agent.runtime}
@@ -731,7 +731,7 @@ function HumanMemberChip({ human }: { human: HumanMemberDto }): JSX.Element {
         aria-label={`@${human.name}`}
         data-member-chip="human"
         data-member-id={human.user_id}
-        className="relative inline-flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-none bg-bg-elevated p-0 text-xs font-medium text-text-muted shadow-sm transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+        className="relative inline-flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-none border border-border-subtle bg-bg-elevated p-0 text-xs font-medium text-text-muted transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
       >
         <span aria-hidden>{initial}</span>
       </button>
@@ -757,7 +757,7 @@ function MemberOverflowChip({
       type="button"
       aria-label={`+${overflow.length} more members`}
       data-member-chip="overflow"
-      className="inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-bg-elevated p-0 text-[10px] font-semibold text-text-muted shadow-sm transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+      className="inline-flex size-6 shrink-0 items-center justify-center rounded-full border border-border-subtle bg-bg-elevated p-0 text-[10px] font-semibold text-text-muted transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
     >
       +{overflow.length}
     </button>
