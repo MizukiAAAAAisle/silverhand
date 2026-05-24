@@ -59,6 +59,7 @@ function truncate(s: string, n: number): string {
 export function ImagePreviewModal({
   open,
   onOpenChange,
+  onExportComplete,
   messages,
   channelTitle,
   channelKind,
@@ -73,6 +74,12 @@ export function ImagePreviewModal({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Called after a successful export (Copy or Save). The parent
+   *  uses this to exit selection mode — shiki `el2J5BByCR02Cy07`:
+   *  完成 export 后需要主动取消多选回到正常状态。Cancel and the
+   *  Save dialog's user-cancel path do NOT fire this callback so
+   *  retrying stays cheap. */
+  onExportComplete?: () => void;
   messages: readonly MessageDto[];
   channelTitle: string | null;
   channelKind: 'channel' | 'dm' | null;
@@ -190,6 +197,7 @@ export function ImagePreviewModal({
       const result = await window.agentHub.copyPngExport({ pngBytes });
       if (result.ok) {
         toast.success('图片已复制到剪贴板');
+        onExportComplete?.();
         onOpenChange(false);
       } else {
         toast.error('复制失败：' + result.error);
@@ -209,9 +217,10 @@ export function ImagePreviewModal({
       });
       if (result.ok) {
         toast.success('已保存：' + result.path);
+        onExportComplete?.();
         onOpenChange(false);
       } else if ('canceled' in result && result.canceled) {
-        // user dismissed dialog — silent
+        // user dismissed dialog — silent, keep selection so they can retry
       } else if ('error' in result) {
         toast.error('保存失败：' + result.error);
       }

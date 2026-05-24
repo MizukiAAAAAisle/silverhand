@@ -166,6 +166,12 @@
   --control-radius: 0;
   --chip-radius: 0;
 
+  /* ── Control border width (#task:555 release-testing 2) ──
+     forza6 的 hard-cut 语汇在 sidebar / select / focus ring 上都走 2px
+     描边；selection toolbar 上的 Cancel / Copy markdown / Save image
+     按钮也吃同节拍。warm-script 不发起这个加粗，留 1px。 */
+  --control-border-width: 2px;
+
   /* ── Select listbox radius (§3.6.2, PR-9 token promotion) ──
      forza6 把 Select.Content + Select.Item 全部归零，跟 control trigger
      同节拍 —— shiki `TkTXGENjcioj5Zrw` 报 trigger 直角而 content 圆角的

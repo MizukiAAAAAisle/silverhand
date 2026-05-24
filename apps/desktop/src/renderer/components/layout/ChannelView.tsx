@@ -1495,6 +1495,7 @@ function MessageList({
       <ImagePreviewModal
         open={imagePreviewOpen}
         onOpenChange={setImagePreviewOpen}
+        onExportComplete={selection.exit}
         messages={previewSnapshots}
         channelTitle={channelMeta.title}
         channelKind={channelMeta.kind}

@@ -144,6 +144,11 @@
   --control-radius: 6px;
   --chip-radius: 4px;
 
+  /* ── Control border width (#task:555 release-testing 2) ──
+     warm-script 不走 forza6 的 2px hard-cut，control 边框留 1px。看
+     forza6.css 同节同名 token 的注释。 */
+  --control-border-width: 1px;
+
   /* ── Select listbox radius (§3.6.2, PR-9 token promotion) ──
      Radix `Select.Content` + `Select.Item` 浮层共用一对 radius token。
      warm content `6px` 字面值保持 pixel-zero（= 之前 Tailwind `rounded-md`）；
