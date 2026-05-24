@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest';
+import { ParsedEventKindSchema } from '@silverhand/shared';
 import {
   AnyFrameSchema,
   encodeFrame,
   intentSchemas,
   MAX_FRAME_BYTES,
+  ResponseErrorSchema,
+  RuntimeStartResultSchema,
+  RuntimeStopParamsSchema,
+  RuntimeStopResultSchema,
+  RuntimeWakeReasonSchema,
+  RuntimeWakeResultSchema,
   type IntentName,
 } from '../src/protocol.js';
 import {
@@ -168,13 +175,11 @@ describe('wire contract — fixture catalogue invariants', () => {
   });
 
   it('every ResponseError code has at least one fixture', () => {
-    const expectedCodes = [
-      'unknown_intent',
-      'invalid_params',
-      'internal_error',
-      'shutting_down',
-      'request_too_large',
-    ] as const;
+    // Derived from ResponseErrorSchema so adding a new code there
+    // immediately fails this assertion until a fixture is added — no
+    // hand-coded list to drift against the schema (Cindy review of
+    // initial fixture-set lifted this from a static array).
+    const expectedCodes = ResponseErrorSchema.shape.code.options;
     const missing: string[] = [];
     for (const code of expectedCodes) {
       const has = wireFixtures.some((f) => {
@@ -209,22 +214,11 @@ describe('wire contract — fixture catalogue invariants', () => {
   });
 
   it('each ParsedEvent kind has a runtime_parsed_event fixture', () => {
-    // The parsed-event fanout is a discriminated union nested inside an
-    // EventFrame arm. A consumer that only sees the fixture catalogue
-    // should still find one example per kind so it can table-drive its
-    // own parser.
-    const expectedKinds = [
-      'session_init',
-      'thinking',
-      'text',
-      'tool_call',
-      'tool_output',
-      'turn_end',
-      'compaction_started',
-      'compaction_finished',
-      'error',
-      'unknown',
-    ] as const;
+    // Derived from ParsedEventKindSchema (single source of truth in
+    // shared) so any new kind triggers this catalogue test without
+    // editing the test (Cindy review of initial fixture-set: removed
+    // the hand-coded array that would silently miss schema growth).
+    const expectedKinds = ParsedEventKindSchema.options;
     const missing: string[] = [];
     for (const kind of expectedKinds) {
       const has = wireFixtures.some((f) => {
@@ -258,6 +252,184 @@ describe('wire contract — fixture catalogue invariants', () => {
     expect(
       failures,
       `AnyFrameSchema rejected: ${failures.join(', ')}`,
+    ).toEqual([]);
+  });
+
+  // ── Discriminated-union arm coverage ────────────────────────────
+  //
+  // The above per-intent / per-event coverage assertions are not
+  // enough on their own: nested discriminated unions and enum fields
+  // would silently grow new arms without any fixture forcing them
+  // onto the wire (Cindy review). The tests below derive their
+  // expected arm sets directly from the zod schemas so adding a new
+  // arm in protocol.ts immediately fails the matching catalogue test.
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const unwrapEffects = (schema: any): any =>
+    schema?._def?.schema ?? schema;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const literalValue = (schema: any): unknown => schema?._def?.value;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const innerOptional = (schema: any): any =>
+    schema?._def?.innerType ?? schema;
+
+  it('runtime_start.result covers every `started` arm (success/cooldown)', () => {
+    const arms = RuntimeStartResultSchema.options.map((o) =>
+      String(literalValue(o.shape.started)),
+    );
+    const missing = arms.filter(
+      (arm) =>
+        !wireFixtures.some((f) => {
+          if (
+            f.kind.kind !== 'response_success' ||
+            f.kind.intent !== 'runtime_start'
+          )
+            return false;
+          const parsed = JSON.parse(f.frame) as {
+            result?: { started?: boolean };
+          };
+          return String(parsed.result?.started) === arm;
+        }),
+    );
+    expect(
+      missing,
+      `runtime_start result arms missing fixture: ${missing.join(', ')}`,
+    ).toEqual([]);
+  });
+
+  it('runtime_stop.params covers every `mode` (soft/hard)', () => {
+    // RuntimeStopParamsSchema = z.object(...).strict().superRefine(...)
+    // ZodEffects wraps the underlying ZodObject — unwrap to reach .shape.
+    const inner = unwrapEffects(RuntimeStopParamsSchema);
+    const modes: readonly string[] = inner.shape.mode.options;
+    const missing = modes.filter(
+      (mode) =>
+        !wireFixtures.some((f) => {
+          if (
+            f.kind.kind !== 'request' ||
+            f.kind.intent !== 'runtime_stop'
+          )
+            return false;
+          const parsed = JSON.parse(f.frame) as {
+            params?: { mode?: string };
+          };
+          return parsed.params?.mode === mode;
+        }),
+    );
+    expect(
+      missing,
+      `runtime_stop param modes missing fixture: ${missing.join(', ')}`,
+    ).toEqual([]);
+  });
+
+  it('runtime_stop.result covers every `mode` arm (soft/hard)', () => {
+    // RuntimeStopResultSchema = z.discriminatedUnion('mode', [...]).superRefine(...)
+    const inner = unwrapEffects(RuntimeStopResultSchema);
+    const modes = inner.options.map((o: { shape: { mode: unknown } }) =>
+      String(literalValue(o.shape.mode)),
+    );
+    const missing = modes.filter(
+      (mode: string) =>
+        !wireFixtures.some((f) => {
+          if (
+            f.kind.kind !== 'response_success' ||
+            f.kind.intent !== 'runtime_stop'
+          )
+            return false;
+          const parsed = JSON.parse(f.frame) as {
+            result?: { mode?: string };
+          };
+          return parsed.result?.mode === mode;
+        }),
+    );
+    expect(
+      missing,
+      `runtime_stop result modes missing fixture: ${missing.join(', ')}`,
+    ).toEqual([]);
+  });
+
+  it('runtime_stop.result soft arm covers every `reason` enum slot', () => {
+    // The soft arm's `reason` is `z.enum(...).optional()`. Drill in,
+    // unwrap optional, then read .options. New enum value here =>
+    // mandatory new fixture.
+    const inner = unwrapEffects(RuntimeStopResultSchema);
+    const softArm = inner.options.find(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (o: any) => literalValue(o.shape.mode) === 'soft',
+    );
+    const reasons: readonly string[] = innerOptional(softArm.shape.reason)
+      .options;
+    const missing = reasons.filter(
+      (reason) =>
+        !wireFixtures.some((f) => {
+          if (
+            f.kind.kind !== 'response_success' ||
+            f.kind.intent !== 'runtime_stop'
+          )
+            return false;
+          const parsed = JSON.parse(f.frame) as {
+            result?: { mode?: string; reason?: string };
+          };
+          return (
+            parsed.result?.mode === 'soft' && parsed.result?.reason === reason
+          );
+        }),
+    );
+    expect(
+      missing,
+      `runtime_stop soft reasons missing fixture: ${missing.join(', ')}`,
+    ).toEqual([]);
+  });
+
+  it('runtime_wake.result covers every `delivered` arm (true/false)', () => {
+    const arms = RuntimeWakeResultSchema.options.map((o) =>
+      String(literalValue(o.shape.delivered)),
+    );
+    const missing = arms.filter(
+      (arm) =>
+        !wireFixtures.some((f) => {
+          if (
+            f.kind.kind !== 'response_success' ||
+            f.kind.intent !== 'runtime_wake'
+          )
+            return false;
+          const parsed = JSON.parse(f.frame) as {
+            result?: { delivered?: boolean };
+          };
+          return String(parsed.result?.delivered) === arm;
+        }),
+    );
+    expect(
+      missing,
+      `runtime_wake delivered arms missing fixture: ${missing.join(', ')}`,
+    ).toEqual([]);
+  });
+
+  it('runtime_wake.result covers every `reason` enum slot (delivered:false)', () => {
+    // Derived from RuntimeWakeReasonSchema directly — single source of
+    // truth. Adding a new reason in protocol.ts fails this test until
+    // a fixture lands (Cindy: this was the most-likely silent-drift axis).
+    const reasons = RuntimeWakeReasonSchema.options;
+    const missing = reasons.filter(
+      (reason) =>
+        !wireFixtures.some((f) => {
+          if (
+            f.kind.kind !== 'response_success' ||
+            f.kind.intent !== 'runtime_wake'
+          )
+            return false;
+          const parsed = JSON.parse(f.frame) as {
+            result?: { delivered?: boolean; reason?: string };
+          };
+          return (
+            parsed.result?.delivered === false &&
+            parsed.result?.reason === reason
+          );
+        }),
+    );
+    expect(
+      missing,
+      `runtime_wake reasons missing fixture: ${missing.join(', ')}`,
     ).toEqual([]);
   });
 });
