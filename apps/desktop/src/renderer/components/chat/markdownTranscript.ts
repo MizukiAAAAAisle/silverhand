@@ -90,26 +90,10 @@ function defaultFormatTime(epochMs: number): string {
 }
 
 /**
- * Suggest a default filename for a markdown transcript download.
- * `<channel-title>-<first-seq>.md` with non-filesystem-safe chars
- * stripped. The main process should still sanitize again before
- * passing to `dialog.showSaveDialog`.
- */
-export function suggestTranscriptFilename(
-  messages: readonly MessageDto[],
-  channelTitle: string | null,
-): string {
-  const safeTitle = (channelTitle ?? 'transcript')
-    .replace(/[\\/:*?"<>|]/g, '')
-    .replace(/\s+/g, '-')
-    .trim()
-    .slice(0, 80);
-  const firstSeq = messages.length > 0 ? messages[0]!.seq : 0;
-  return `${safeTitle || 'transcript'}-${firstSeq}.md`;
-}
-
-/**
- * Same suggestion for PNG image exports — keeps shape consistent.
+ * Same suggestion shape for PNG image exports. Markdown transcripts
+ * no longer need a filename helper — multi-select Copy markdown writes
+ * to the clipboard directly (shiki `vBRFDuOuOqhsYzow`), so there is no
+ * save dialog to seed.
  */
 export function suggestImageFilename(
   messages: readonly MessageDto[],

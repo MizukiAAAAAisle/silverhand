@@ -42,14 +42,6 @@ declare global {
       copyPngExport(input: {
         pngBytes: Uint8Array;
       }): Promise<{ ok: true } | { ok: false; error: string }>;
-      saveMarkdownExport(input: {
-        text: string;
-        suggestedName: string;
-      }): Promise<
-        | { ok: true; path: string }
-        | { ok: false; canceled: true }
-        | { ok: false; error: string }
-      >;
     };
   }
 }

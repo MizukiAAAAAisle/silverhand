@@ -8,6 +8,37 @@ import { suggestImageFilename } from './markdownTranscript';
 import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
 
+/** 1×1 transparent PNG. Used as html-to-image's `imagePlaceholder` so a
+ *  single failed avatar doesn't abort the whole screenshot. */
+const TRANSPARENT_PIXEL_DATA_URL =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=';
+
+/** html-to-image rejects from its image-embed step with the raw DOM
+ *  `Event` (the one passed to `<img>.onerror`). Decode it into a
+ *  message that names the failing source so the user sees something
+ *  useful instead of "[object Event]". Anything we can't decode falls
+ *  back to a stable label rather than the toString shape. */
+function formatCaptureFailure(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === 'string') return err;
+  if (typeof Event !== 'undefined' && err instanceof Event) {
+    const target = err.target as HTMLImageElement | null;
+    const src = target && 'src' in target ? target.src : '';
+    if (src) return `图像加载失败：${truncate(src, 96)}`;
+    return `图像加载失败 (${err.type})`;
+  }
+  if (err && typeof err === 'object') {
+    const e = err as { message?: unknown; type?: unknown };
+    if (typeof e.message === 'string' && e.message.length > 0) return e.message;
+    if (typeof e.type === 'string') return `事件 ${e.type}`;
+  }
+  return 'unknown_error';
+}
+
+function truncate(s: string, n: number): string {
+  return s.length <= n ? s : s.slice(0, n - 1) + '…';
+}
+
 /**
  * Image-export preview modal.
  *
@@ -92,7 +123,21 @@ export function ImagePreviewModal({
       }
       toPng(node, {
         pixelRatio: 2,
-        cacheBust: true,
+        // `cacheBust: true` appends `?cb=<ts>` to every <img> src so the
+        // embed pass re-fetches a clean copy. That breaks blob: URLs
+        // (avatars come through `URL.createObjectURL`) — querystrings on
+        // blob URLs make the resource non-findable. shiki
+        // `cKM3NLjAQU-idOWD` saw "渲染失败：[object Event]" because an
+        // <img> ended up with `blob:...?cb=...` and fired `onerror`.
+        // Static React tree → cache-busting buys us nothing anyway.
+        cacheBust: false,
+        // 1×1 transparent PNG. When an individual <img> still fails to
+        // load (revoked object URL, denied CORS, missing file), the
+        // embed pass swaps in this placeholder rather than rejecting
+        // the whole capture. We'd rather ship a screenshot with one
+        // gap than zero screenshot at all — single-avatar failures
+        // should not block the user's share flow.
+        imagePlaceholder: TRANSPARENT_PIXEL_DATA_URL,
         // The offscreen container's background is already token-driven
         // via Tailwind, but html-to-image renders transparent areas as
         // alpha by default. Force an explicit canvas color so themes
@@ -116,7 +161,12 @@ export function ImagePreviewModal({
         })
         .catch(err => {
           if (cancelled) return;
-          setError(err instanceof Error ? err.message : String(err));
+          // html-to-image's image-embed phase rejects with the raw DOM
+          // `Event` from `<img>.onerror` rather than an `Error`. A
+          // naive `String(err)` would surface "[object Event]" to the
+          // user (shiki `cKM3NLjAQU-idOWD`). Decode the event so the
+          // toast / error banner reports something actionable.
+          setError(formatCaptureFailure(err));
           setPhase('error');
         });
     };
@@ -174,7 +224,7 @@ export function ImagePreviewModal({
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-[90] bg-black/40" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-[91] flex max-h-[80vh] w-[820px] -translate-x-1/2 -translate-y-1/2 flex-col rounded-md border border-border bg-bg-floating p-4 shadow-xl">
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-[91] flex max-h-[80vh] w-[820px] -translate-x-1/2 -translate-y-1/2 flex-col rounded-[var(--floating-radius,var(--radius-md))] border border-border bg-bg-floating p-4 shadow-xl">
           <Dialog.Title className="text-sm font-semibold text-text-primary">
             导出预览
           </Dialog.Title>
@@ -184,7 +234,7 @@ export function ImagePreviewModal({
               : `共 ${messages.length} 条消息`}
           </Dialog.Description>
 
-          <div className="mt-3 min-h-[200px] flex-1 overflow-auto rounded-sm border border-border-subtle bg-bg-elevated p-2">
+          <div className="mt-3 min-h-[200px] flex-1 overflow-auto rounded-[var(--control-radius)] border border-border-subtle bg-bg-elevated p-2">
             {phase === 'rendering' || phase === 'idle' ? (
               <div className="flex h-full items-center justify-center text-xs text-text-muted">
                 渲染中…
@@ -206,7 +256,7 @@ export function ImagePreviewModal({
             <button
               type="button"
               onClick={() => onOpenChange(false)}
-              className="rounded-sm border border-border-subtle bg-bg-elevated px-3 py-1.5 text-xs text-text-primary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+              className="rounded-[var(--control-radius)] border border-border-subtle bg-bg-elevated px-3 py-1.5 text-xs text-text-primary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
             >
               Cancel
             </button>
@@ -214,7 +264,7 @@ export function ImagePreviewModal({
               type="button"
               disabled={phase !== 'ready' || busy}
               onClick={onCopy}
-              className="rounded-sm border border-border-subtle bg-bg-elevated px-3 py-1.5 text-xs text-text-primary hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-bg-elevated focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+              className="rounded-[var(--control-radius)] border border-border-subtle bg-bg-elevated px-3 py-1.5 text-xs text-text-primary hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-bg-elevated focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
             >
               Copy
             </button>
@@ -222,7 +272,7 @@ export function ImagePreviewModal({
               type="button"
               disabled={phase !== 'ready' || busy}
               onClick={onSave}
-              className="rounded-sm border border-accent bg-accent px-3 py-1.5 text-xs font-semibold text-text-on-accent hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+              className="rounded-[var(--control-radius)] border border-accent bg-accent px-3 py-1.5 text-xs font-semibold text-text-on-accent hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
             >
               Save
             </button>

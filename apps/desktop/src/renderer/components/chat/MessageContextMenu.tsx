@@ -14,8 +14,9 @@ import {
  * Three actions, all gated by callback presence:
  * - **Copy markdown** (`onCopyMarkdown`) — clipboard receives ONLY
  *   `message.content`; never include sender/time. Single-message
- *   semantic. Multi-message transcript export with sender headers
- *   is handled separately by Save markdown in selection mode.
+ *   semantic. Multi-message transcript export (with sender headers)
+ *   is also clipboard-bound, but lives on the SelectionToolbar's
+ *   "Copy markdown" button — see ChannelView.handleCopyMarkdownTranscript.
  * - **Save / Unsave** (`onToggleSave` + `saved`) — label switches
  *   based on current `saved` state. We never silently flip "Save"
  *   into a destructive unsave — Cindy's review constraint #2.

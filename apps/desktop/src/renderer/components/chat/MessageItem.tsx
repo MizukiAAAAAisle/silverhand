@@ -913,7 +913,7 @@ function SelectionCheckbox({
       aria-label={checked ? 'Deselect message' : 'Select message'}
       onClick={onChange}
       className={
-        'mt-1.5 inline-flex size-4 shrink-0 items-center justify-center rounded-sm border transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus ' +
+        'mt-1.5 inline-flex size-4 shrink-0 items-center justify-center rounded-[var(--control-radius)] border transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus ' +
         (checked
           ? 'border-accent bg-accent text-bg-floating'
           : 'border-border bg-bg-floating text-transparent hover:border-accent')

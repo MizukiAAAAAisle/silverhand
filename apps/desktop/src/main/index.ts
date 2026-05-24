@@ -797,37 +797,6 @@ ipcMain.handle(
   },
 );
 
-ipcMain.handle(
-  'export:saveMarkdown',
-  async (
-    event,
-    input: { text?: unknown; suggestedName?: unknown },
-  ): Promise<ExportSaveResult> => {
-    const text = typeof input?.text === 'string' ? input.text : '';
-    if (text.length === 0) return { ok: false, error: 'invalid_payload' };
-    const safeName = sanitizeExportFilename(input?.suggestedName, '.md');
-    const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
-    const result = await dialog.showSaveDialog(win!, {
-      title: 'Save markdown',
-      defaultPath: safeName,
-      filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }],
-    });
-    if (result.canceled || !result.filePath) {
-      return { ok: false, canceled: true };
-    }
-    try {
-      const { writeFile } = await import('node:fs/promises');
-      await writeFile(result.filePath, text, { encoding: 'utf8' });
-      return { ok: true, path: result.filePath };
-    } catch (err) {
-      return {
-        ok: false,
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
-  },
-);
-
 ipcMain.handle('notification:show', (_event, opts: unknown) => {
   if (!opts || typeof opts !== 'object') return;
   const { title, body, force } = opts as Partial<Record<string, unknown>>;

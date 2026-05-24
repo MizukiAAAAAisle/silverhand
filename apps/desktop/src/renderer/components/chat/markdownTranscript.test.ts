@@ -4,13 +4,13 @@ import {
   buildMarkdownTranscript,
   formatSenderLabel,
   suggestImageFilename,
-  suggestTranscriptFilename,
 } from './markdownTranscript';
 
 // Transcript format is the contract that distinguishes single-message
-// `Copy markdown` (pure content) from multi-message `Save markdown`
+// `Copy markdown` (pure content) from multi-message `Copy markdown`
 // (sender + time header per row, sorted by seq, two-blank-line gaps).
-// Cindy's review #3 + @shiki's "needs sender" follow-up.
+// shiki `vBRFDuOuOqhsYzow` flipped multi-select share from Save → Copy
+// (clipboard); transcript shape is unchanged.
 
 function agent(id: string, overrides: Partial<AgentDto> = {}): AgentDto {
   return {
@@ -233,37 +233,33 @@ describe('buildMarkdownTranscript', () => {
   });
 });
 
-describe('suggestTranscriptFilename / suggestImageFilename', () => {
+describe('suggestImageFilename', () => {
   const m = msg('m1', 42);
 
-  it('combines sanitized title and first-message seq for markdown', () => {
-    expect(suggestTranscriptFilename([m], 'design discussion')).toBe(
-      'design-discussion-42.md',
+  it('combines sanitized title and first-message seq for png', () => {
+    expect(suggestImageFilename([m], 'design discussion')).toBe(
+      'design-discussion-42.png',
     );
   });
 
   it('strips path-unsafe characters', () => {
-    expect(suggestTranscriptFilename([m], 'a/b\\c:d*e?f"g<h>i|j')).toBe(
-      'abcdefghij-42.md',
+    expect(suggestImageFilename([m], 'a/b\\c:d*e?f"g<h>i|j')).toBe(
+      'abcdefghij-42.png',
     );
   });
 
   it('falls back when title is null', () => {
-    expect(suggestTranscriptFilename([m], null)).toBe('transcript-42.md');
+    expect(suggestImageFilename([m], null)).toBe('transcript-42.png');
   });
 
   it('uses 0 seq when messages array is empty', () => {
-    expect(suggestTranscriptFilename([], 'foo')).toBe('foo-0.md');
-  });
-
-  it('image filename uses .png extension', () => {
-    expect(suggestImageFilename([m], 'design')).toBe('design-42.png');
+    expect(suggestImageFilename([], 'foo')).toBe('foo-0.png');
   });
 
   it('truncates very long titles to keep the filename usable', () => {
     const long = 'x'.repeat(200);
-    const out = suggestTranscriptFilename([m], long);
-    // 80-char prefix + "-42.md"
-    expect(out.length).toBeLessThanOrEqual(80 + '-42.md'.length);
+    const out = suggestImageFilename([m], long);
+    // 80-char prefix + "-42.png"
+    expect(out.length).toBeLessThanOrEqual(80 + '-42.png'.length);
   });
 });

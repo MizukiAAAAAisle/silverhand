@@ -81,18 +81,6 @@ const api = {
     pngBytes: Uint8Array;
   }): Promise<{ ok: true } | { ok: false; error: string }> =>
     ipcRenderer.invoke('export:copyPng', input),
-  /** Save a markdown transcript to disk via the native save dialog.
-   *  Markdown export is text-only — there's no clipboard variant for
-   *  files; the in-modal Copy button uses navigator.clipboard.writeText
-   *  directly in the renderer. */
-  saveMarkdownExport: (input: {
-    text: string;
-    suggestedName: string;
-  }): Promise<
-    | { ok: true; path: string }
-    | { ok: false; canceled: true }
-    | { ok: false; error: string }
-  > => ipcRenderer.invoke('export:saveMarkdown', input),
 };
 
 contextBridge.exposeInMainWorld('agentHub', api);

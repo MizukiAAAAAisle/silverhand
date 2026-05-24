@@ -43,10 +43,7 @@ import { groupMessages } from '@/components/chat/groupMessages';
 import { SelectionToolbar } from '@/components/chat/SelectionToolbar';
 import { useMessageSelection } from '@/components/chat/useMessageSelection';
 import { ImagePreviewModal } from '@/components/chat/ImagePreviewModal';
-import {
-  buildMarkdownTranscript,
-  suggestTranscriptFilename,
-} from '@/components/chat/markdownTranscript';
+import { buildMarkdownTranscript } from '@/components/chat/markdownTranscript';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
 import { HumanInfoPopover } from '@/components/HumanInfoPopover';
@@ -948,7 +945,8 @@ function MessageList({
   const handleCopyMarkdown = useCallback(async (msg: MessageDto): Promise<void> => {
     // Single-message copy semantic: clipboard receives ONLY
     // `message.content`. Multi-message transcript export with sender
-    // headers is handled by the (yet-to-land) Save markdown export.
+    // headers goes through `handleCopyMarkdownTranscript` below — same
+    // clipboard target, different payload shape.
     try {
       await navigator.clipboard.writeText(msg.content);
       toast.success('已复制到剪贴板');
@@ -1129,27 +1127,27 @@ function MessageList({
             : null,
     };
   }, [liveChannels, archivedChannels, channelId]);
-  const handleSaveMarkdown = useCallback(async (): Promise<void> => {
+  const handleCopyMarkdownTranscript = useCallback(async (): Promise<void> => {
     const snapshots = selection.selectedSorted();
     if (snapshots.length === 0) return;
     const text = buildMarkdownTranscript(snapshots, {
       agentsById,
       viewer: viewer && !isRegistrationRequired(viewer) ? viewer : undefined,
     });
-    const suggestedName = suggestTranscriptFilename(snapshots, channelMeta.title);
-    const result = await window.agentHub.saveMarkdownExport({
-      text,
-      suggestedName,
-    });
-    if (result.ok) {
-      toast.success('已保存：' + result.path);
+    // shiki `vBRFDuOuOqhsYzow`: multi-select share is clipboard, not a
+    // save dialog. Same destination as the single-message Copy markdown
+    // path — only the payload shape differs (transcript with sender
+    // headers vs. raw content).
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(`已复制 ${snapshots.length} 条消息到剪贴板`);
       selection.exit();
-    } else if ('canceled' in result && result.canceled) {
-      // user dismissed dialog — keep selection so they can retry
-    } else if ('error' in result) {
-      toast.error('保存失败：' + result.error);
+    } catch (err) {
+      toast.error(
+        '复制失败：' + (err instanceof Error ? err.message : String(err)),
+      );
     }
-  }, [selection, agentsById, viewer, channelMeta.title]);
+  }, [selection, agentsById, viewer]);
   const handleSaveImage = useCallback(() => {
     if (selection.count === 0) return;
     setImagePreviewOpen(true);
@@ -1490,7 +1488,7 @@ function MessageList({
         <SelectionToolbar
           count={selection.count}
           onCancel={selection.exit}
-          onSaveMarkdown={handleSaveMarkdown}
+          onCopyMarkdown={handleCopyMarkdownTranscript}
           onSaveImage={handleSaveImage}
         />
       ) : null}
