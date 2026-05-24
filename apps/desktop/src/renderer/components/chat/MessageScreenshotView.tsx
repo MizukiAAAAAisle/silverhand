@@ -160,6 +160,7 @@ function ScreenshotRow({
                 ? new Map(conversationRefsById)
                 : undefined
             }
+            interactive={false}
           />
           {message.attachments && message.attachments.length > 0 ? (
             <div className="mt-2 flex flex-wrap gap-2">

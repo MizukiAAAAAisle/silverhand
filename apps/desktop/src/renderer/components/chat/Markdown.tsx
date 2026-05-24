@@ -47,6 +47,22 @@ interface MarkdownProps {
    *  `onOpenConversationRef` is supplied. */
   conversationRefsById?: Map<string, ConversationReference>;
   onOpenConversationRef?: (id: string) => void;
+  /** Set to `false` for export / screenshot rendering. When false:
+   *  - fenced code blocks render as a bare `<pre>` (no copy / expand
+   *    buttons, no overflow useEffect)
+   *  - plain external links collapse to a styled `<span>` (no href,
+   *    no onClick, no IPC)
+   *  - internal refs (mention / channel / #conv / #task) render as
+   *    static accent-colored spans without mounting `<Mention>`,
+   *    `<ChannelRef>`, `<ConversationRef>`, or `<TaskRef>` — those
+   *    components run hooks / queries that have no place inside an
+   *    offscreen screenshot tree.
+   *
+   *  Default `true` keeps the in-channel behaviour exactly as before.
+   *  This is consumed by `MessageScreenshotView` (Cindy's review of
+   *  2f8a2ca: the export view was leaking interactive chrome into
+   *  the captured PNG). */
+  interactive?: boolean;
 }
 
 const MENTION_PREFIX = 'silverhand-mention:';
@@ -78,6 +94,7 @@ function MarkdownInner({
   onOpenChannelRef,
   conversationRefsById,
   onOpenConversationRef,
+  interactive = true,
 }: MarkdownProps): JSX.Element {
   // Plugin instance is recreated per render but is a thin closure;
   // remark instantiates the transformer once per `process` call so
@@ -105,6 +122,49 @@ function MarkdownInner({
         }
         components={{
           a: ({ href, children, ...rest }) => {
+            // Export / screenshot path: every reachable href shape
+            // collapses to a styled span. Internal-scheme chips keep
+            // their accent class so visual fidelity is preserved, but
+            // none of them mount the live components (which run their
+            // own hooks / queries). Plain links lose `href` entirely
+            // — no clickable handler, no `target=_blank`, no role.
+            if (!interactive) {
+              if (typeof href === 'string') {
+                if (href.startsWith(MENTION_PREFIX)) {
+                  return (
+                    <span className="font-medium text-accent">
+                      @{href.slice(MENTION_PREFIX.length)}
+                    </span>
+                  );
+                }
+                if (href.startsWith(CHANNEL_PREFIX)) {
+                  return (
+                    <span className="font-medium text-accent">
+                      #{href.slice(CHANNEL_PREFIX.length)}
+                    </span>
+                  );
+                }
+                if (href.startsWith(CONVERSATION_PREFIX)) {
+                  return (
+                    <span className="font-medium text-accent">
+                      #conv:{href.slice(CONVERSATION_PREFIX.length)}
+                    </span>
+                  );
+                }
+                if (href.startsWith(TASK_PREFIX)) {
+                  return (
+                    <span className="font-medium text-accent">
+                      #task:{href.slice(TASK_PREFIX.length)}
+                    </span>
+                  );
+                }
+              }
+              return (
+                <span className="markdown-link-static underline">
+                  {children}
+                </span>
+              );
+            }
             if (typeof href === 'string' && href.startsWith(MENTION_PREFIX)) {
               const name = href.slice(MENTION_PREFIX.length);
               const mentionAgent = agentsByName?.get(name);
@@ -189,7 +249,19 @@ function MarkdownInner({
               </a>
             );
           },
-          pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
+          pre: ({ children }) =>
+            interactive ? (
+              <CodeBlock>{children}</CodeBlock>
+            ) : (
+              // Export path: bare `<pre>`. No copy / expand button,
+              // no overflow useEffect — the captured screenshot
+              // shows the code as-is and any chrome would just be
+              // noise. We still keep the `code-block` class so
+              // existing CSS (font, padding) lands.
+              <div className="code-block">
+                <pre>{children}</pre>
+              </div>
+            ),
           code: ({ className, children, ...rest }) => (
             <code className={className} {...rest}>
               {children}
