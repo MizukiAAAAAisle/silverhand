@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
+import { toast } from 'sonner';
 import {
   Archive,
   ArchiveRestore,
@@ -39,6 +40,8 @@ import { findThreadAnchor, readAnchorMessageId } from '@/components/chat/threadA
 import { SystemMessage } from '@/components/chat/SystemMessage';
 import { SystemActivityCluster } from '@/components/chat/SystemActivityCluster';
 import { groupMessages } from '@/components/chat/groupMessages';
+import { SelectionToolbar } from '@/components/chat/SelectionToolbar';
+import { useMessageSelection } from '@/components/chat/useMessageSelection';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
 import { HumanInfoPopover } from '@/components/HumanInfoPopover';
@@ -937,6 +940,19 @@ function MessageList({
   const { data: viewer } = useViewerUser();
   const viewerAvatarObjectUrl = useViewerAvatarObjectUrl();
   const startThread = useStartThread(workspaceId);
+  const handleCopyMarkdown = useCallback(async (msg: MessageDto): Promise<void> => {
+    // Single-message copy semantic: clipboard receives ONLY
+    // `message.content`. Multi-message transcript export with sender
+    // headers is handled by the (yet-to-land) Save markdown export.
+    try {
+      await navigator.clipboard.writeText(msg.content);
+      toast.success('已复制到剪贴板');
+    } catch (err) {
+      toast.error(
+        '复制失败：' + (err instanceof Error ? err.message : String(err)),
+      );
+    }
+  }, []);
   // Lookup maps used by the message renderer:
   //  - `agentsById`   → message author (avatar + display name)
   //  - `agentsByName` → inline `@handle` mention pills
@@ -1063,6 +1079,19 @@ function MessageList({
   // start way above zero so we have headroom for many prepend rounds.
   const [firstItemIndex, setFirstItemIndex] = useState(FIRST_ITEM_INDEX_START);
   const [windowResetVersion, setWindowResetVersion] = useState(0);
+  // Multi-select state for the export-as-image / export-as-markdown
+  // pipelines. Owned at MessageList scope (not lifted to ChannelView)
+  // so the cleanup deps — channel switch, window reset, fresh jump —
+  // live in the same scope and don't require callback round-trips.
+  // The Share entry that activates this state is intentionally NOT
+  // wired in C1 (no `onShare` prop reaches MessageItem yet) — Cindy's
+  // "no half-baked Share entry" constraint. The toolbar therefore
+  // stays unmounted in C1.
+  const selection = useMessageSelection({
+    channelId,
+    windowResetVersion,
+    jumpToMessageId,
+  });
   const firstItemIndexRef = useRef(FIRST_ITEM_INDEX_START);
   const lastTopItemKeyRef = useRef<string | null>(null);
   const lastJumpRemountKeyRef = useRef<string | null>(null);
@@ -1354,6 +1383,14 @@ function MessageList({
           highlighted={
             highlightedMessageId != null && m.id === highlightedMessageId
           }
+          selectionMode={selection.active}
+          selected={selection.isSelected(m.id)}
+          onToggleSelected={selection.toggle}
+          onCopyMarkdown={handleCopyMarkdown}
+          /* `onShare` deliberately omitted in C1 — the export pipeline
+             lands in C2/C3, and Cindy's review constraint is no
+             half-baked Share entry visible to the user. The selection
+             scaffolding is in place but unreachable until then. */
         />
       );
     },
@@ -1376,11 +1413,26 @@ function MessageList({
       viewer,
       agentAvatarUrls,
       highlightedMessageId,
+      selection.active,
+      selection.isSelected,
+      selection.toggle,
+      handleCopyMarkdown,
     ],
   );
 
   return (
-    <div className="relative min-h-0 min-w-0 flex-1">
+    <div className="relative min-h-0 min-w-0 flex-1 flex flex-col">
+      {selection.active ? (
+        <SelectionToolbar
+          count={selection.count}
+          onCancel={selection.exit}
+          /* `onSaveMarkdown` / `onSaveImage` arrive in the export
+             commits (C2/C3). Until then the buttons stay disabled,
+             but the toolbar itself is unreachable in C1 because
+             Share entry isn't wired. */
+        />
+      ) : null}
+      <div className="relative min-h-0 min-w-0 flex-1">
       {isLoading ? (
         <div className="px-4 py-3 text-sm text-text-muted">加载消息…</div>
       ) : items.length === 0 && !leadingSlot ? (
@@ -1471,6 +1523,7 @@ function MessageList({
           <ArrowDown className="size-4" />
         </button>
       ) : null}
+      </div>
     </div>
   );
 }

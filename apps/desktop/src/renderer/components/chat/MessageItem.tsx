@@ -1,5 +1,5 @@
 import { type FocusEvent, useCallback, useEffect, useState } from 'react';
-import { Bookmark, ClipboardCheck, CornerUpLeft, FileText, User } from 'lucide-react';
+import { Bookmark, Check, ClipboardCheck, CornerUpLeft, FileText, User } from 'lucide-react';
 import type {
   AgentDto,
   AttachmentSnapshot,
@@ -23,6 +23,7 @@ import { Lightbox } from './Lightbox';
 import { Markdown } from './Markdown';
 import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
+import { MessageContextMenu } from './MessageContextMenu';
 import { useMessageLayoutMode } from './useMessageLayoutMode';
 import { useRelativeTime } from './useRelativeTime';
 
@@ -83,6 +84,22 @@ interface MessageItemProps {
    *  the thread pane is open. Doesn't expose the action bar, since the
    *  highlight is informational, not interactive. */
   highlighted?: boolean;
+  /** When the parent's MessageList is in multi-select mode this row
+   *  renders a checkbox column on the leading side (mirrored when
+   *  `alignRight`). Idle mode: no checkbox, no extra column. */
+  selectionMode?: boolean;
+  /** Whether this row is currently in the selection set. Drives the
+   *  checkbox visual + the row's selected highlight. */
+  selected?: boolean;
+  /** Toggle this row's selection membership. Required whenever
+   *  `selectionMode` is true. */
+  onToggleSelected?: (msg: MessageDto) => void;
+  /** Right-click → Copy markdown menu item. Hidden when undefined. */
+  onCopyMarkdown?: (msg: MessageDto) => void;
+  /** Right-click → Share… menu item. Hidden when undefined; the
+   *  parent only passes this in once the export pipeline is live so
+   *  the user never sees a half-baked Share entry (Cindy review). */
+  onShare?: (msg: MessageDto) => void;
 }
 
 /**
@@ -130,6 +147,11 @@ export function MessageItem({
   viewerAvatarObjectUrl = null,
   viewer,
   agentAvatarUrls,
+  selectionMode = false,
+  selected = false,
+  onToggleSelected,
+  onCopyMarkdown,
+  onShare,
 }: MessageItemProps): JSX.Element {
   const isUser = message.from_kind === 'user';
   const isCurrentUser = isUser && isCurrentUserId(message.from_user_id);
@@ -182,10 +204,12 @@ export function MessageItem({
     [],
   );
   // Visual-only: highlight forces the framed look; only real hover
-  // reveals the action bar.
-  const framed = hover || highlighted;
+  // reveals the action bar. Selection-mode also keeps the frame on
+  // selected rows so the user can see at a glance which messages are
+  // in the export queue.
+  const framed = hover || highlighted || (selectionMode && selected);
 
-  return (
+  const row = (
     <div
       id={`msg-${message.id}`}
       onMouseEnter={() => setHover(true)}
@@ -199,6 +223,12 @@ export function MessageItem({
           : 'border-transparent')
       }
     >
+      {selectionMode ? (
+        <SelectionCheckbox
+          checked={selected}
+          onChange={() => onToggleSelected?.(message)}
+        />
+      ) : null}
       <Avatar
         isUser={isUser}
         isCurrentUser={isCurrentUser}
@@ -364,6 +394,18 @@ export function MessageItem({
         />
       </div>
     </div>
+  );
+
+  return (
+    <MessageContextMenu
+      trigger={row}
+      saved={saved}
+      onCopyMarkdown={
+        onCopyMarkdown ? () => onCopyMarkdown(message) : undefined
+      }
+      onToggleSave={onSave ? () => onSave(message) : undefined}
+      onShare={onShare ? () => onShare(message) : undefined}
+    />
   );
 }
 
@@ -847,4 +889,37 @@ function describeOpenFailure(reason: string): string {
     return '附件数据无效。';
   }
   return reason;
+}
+
+/**
+ * Visual checkbox column shown when MessageList is in selection mode.
+ * Uses a real `<button>` for keyboard access; `aria-pressed` reflects
+ * the selection state. We deliberately don't use a native checkbox
+ * because the row's flex layout + theme tokens are easier to control
+ * with a styled button.
+ */
+function SelectionCheckbox({
+  checked,
+  onChange,
+}: {
+  checked: boolean;
+  onChange: () => void;
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={checked}
+      aria-label={checked ? 'Deselect message' : 'Select message'}
+      onClick={onChange}
+      className={
+        'mt-1.5 inline-flex size-4 shrink-0 items-center justify-center rounded-sm border transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus ' +
+        (checked
+          ? 'border-accent bg-accent text-bg-floating'
+          : 'border-border bg-bg-floating text-transparent hover:border-accent')
+      }
+    >
+      <Check className="size-3" strokeWidth={3} />
+    </button>
+  );
 }
