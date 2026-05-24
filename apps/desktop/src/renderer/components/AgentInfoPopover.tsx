@@ -323,7 +323,7 @@ function AgentManagementActions({
           type="button"
           onClick={restart}
           disabled={pending}
-          className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary disabled:opacity-50"
+          className="inline-flex h-7 items-center gap-1.5 rounded-[var(--control-radius)] px-2 text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary disabled:opacity-50"
           title={`Restart ${agentLabel}`}
         >
           <RefreshCw className="size-3.5" />
@@ -333,7 +333,7 @@ function AgentManagementActions({
           type="button"
           onClick={stopAgent}
           disabled={pending || row.status === 'idle'}
-          className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary disabled:opacity-50"
+          className="inline-flex h-7 items-center gap-1.5 rounded-[var(--control-radius)] px-2 text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary disabled:opacity-50"
           title={`Stop ${agentLabel}`}
         >
           <Power className="size-3.5" />
@@ -343,7 +343,7 @@ function AgentManagementActions({
           type="button"
           onClick={() => setDialogOpen(true)}
           disabled={pending}
-          className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-error hover:bg-error/10 disabled:opacity-50"
+          className="inline-flex h-7 items-center gap-1.5 rounded-[var(--control-radius)] px-2 text-xs text-error hover:bg-error/10 disabled:opacity-50"
           title={`Clear ${agentLabel} session`}
         >
           <Eraser className="size-3.5" />
