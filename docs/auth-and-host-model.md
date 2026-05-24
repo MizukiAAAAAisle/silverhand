@@ -362,10 +362,17 @@ user copies bootstrap string, runs in target env (Docker / k8s / VM)
 [remote daemon] stores host_token, opens outbound WS to server_url
 ```
 
-V1 actually-shipped surface from this section: schema (`hosts.kind` already
-`local|remote`) + the route shapes `POST /api/hosts` (kind validation),
-`POST /api/hosts/{id}/exchange`. Desktop UI for "Add remote host" and the
-headless daemon binary distribution are V1.5.
+**V1 ship scope from this section: nothing** (other than the existing
+`hosts.kind` enum already supporting `remote`). The protocol shape above
+is documented here so Phase 4 / V1.5 has a fixed target, but V1
+implementation MUST NOT ship `POST /api/hosts` (kind=remote create),
+`POST /api/hosts/{id}/exchange`, the desktop "Add remote host" UI, or the
+headless daemon binary. Those routes carry their own threat model
+(bootstrap-token leak surface, exchange replay, daemon outbound auth) and
+should land **with** their callers and headless daemon binary, not ahead
+of them — exposing an exchange endpoint without a real consumer means
+shipping unaudited surface area. V1's only host routes are the local-host
+set: `claim-or-create`, `revoke`, `rotate-token` (§6.1 / §6.3 / §6.4).
 
 *Sandboxing as a Host capability* (chroot, seccomp, namespace mounts,
 ephemeral fs) is orthogonal to `kind` and out of scope here; see Appendix
@@ -389,14 +396,15 @@ authenticated user → desktop Hosts page → select host → Revoke
 stop acting on my behalf right now" signal; granting an in-flight grace
 period would let a compromised or misbehaving host keep posting. After the
 revoke transaction commits, the next request bearing that token MUST fail
-fast — the token-validator's primary check is `host_token.revoked_at IS
-NULL AND host.revoked_at IS NULL`. The 60s grace described in §6.4 applies
-to **rotation only**, never to revoke.
+fast — the token-validator's primary check is `host_credentials.revoked_at
+IS NULL AND host.revoked_at IS NULL` (and missing-row → deny). The 60s
+grace described in §6.4 applies to **rotation only**, never to revoke.
 
-Soft-delete on the `hosts` row only (revoked_at timestamp). The row stays
-for audit / placement-history continuity. Hard-delete on the active
-`host_credentials` row so the token cannot be replayed even if the
-in-memory short-circuit is bypassed.
+Soft-delete on both the `hosts` row (`hosts.revoked_at`) and the active
+`host_credentials` row (`host_credentials.revoked_at = now`). The rows
+stay for audit / placement-history continuity; physical row removal is a
+future compaction concern, not a revoke responsibility. Token-validator
+treats `revoked_at != NULL` and missing row identically (deny).
 
 ### 6.4 Host_token rotation
 
@@ -551,7 +559,7 @@ Make embedded protocol-equivalent to remote, touching auth/host paths:
 Implement the Host model end-to-end, keeping a single local desktop daemon online:
 
 - Schema migration: add columns/tables per §8.
-- `/api/hosts/claim-or-create`, `/api/hosts/{id}/rotate-token`, `/api/hosts/{id}/revoke`, `/api/hosts/{id}/exchange` routes.
+- `/api/hosts/claim-or-create`, `/api/hosts/{id}/rotate-token`, `/api/hosts/{id}/revoke` routes (local-host scope only). Remote-host create + `/api/hosts/{id}/exchange` are deferred to Phase 4 / V1.5 along with the headless daemon binary — see §6.2.
 - Backend `RuntimeHostRegistry` abstraction over today's single `hostClient`. Cache keys gain `host_id` dimension. Run-state cache: per-host generation.
 - `conversation_agents.runtime_host_id` (or equivalent placement state) on the conversation/agent join row.
 - Tests: every runtime intent route through registry lookup (even when there's only one entry).
@@ -617,7 +625,7 @@ Reviewers (Cindy) will verify the following invariants. Implementation PRs MUST 
 8. Embedded mode auto-issues credentials over the same HTTP API used in remote (via `/auth/embedded-bootstrap`); no privileged in-process shortcut.
 9. Logout vs sign-out-and-disable-host are two distinct UX actions; default is logout-only.
 10. `host_token` rotation is explicit (no auto-rotation on claim); 60s grace period applies to **rotation only**, never to revoke.
-11. `DELETE /api/hosts/{id}` does not exist in V1; only `POST /api/hosts/{id}/revoke` (soft-delete on `hosts.revoked_at`, hard-delete on the active `host_credentials` row).
+11. `DELETE /api/hosts/{id}` does not exist in V1; only `POST /api/hosts/{id}/revoke` (soft-delete on `hosts.revoked_at` AND `host_credentials.revoked_at`; token-validator denies on either set or row missing). Physical row removal is a future compaction concern, not a revoke responsibility.
 12. Argon2id parameters are not hard-coded in the doc or implementation; stored in `user_password_credentials.password_hash_params`, set per environment per OWASP recommendation.
 13. `/auth/embedded-bootstrap` constraints (all four MUST hold): loopback-only listen + one-shot + boot-session scoped + only when `mode=embedded`. Failing any returns 404.
 14. `SILVERHAND_DISABLE_SIGNUP` and other auth-relevant config are loaded once at server startup into immutable in-memory config; auth routes do not re-read settings tables at request time.
@@ -732,3 +740,13 @@ This doc deliberately leaves the following undecided:
   - `safeStorage` description corrected (encryption API, encrypted blob in
     file, not a Keychain key-value store).
   - `user_auth_links` deferred to V2 migration (Cindy open question).
+- 2026-05-25 — Round 3 cleanup (Alice). Addresses Cindy review round 2 P2:
+  - Revoke uses soft-delete on **both** `hosts.revoked_at` and
+    `host_credentials.revoked_at`; token-validator denies on either set
+    or row missing. Earlier "hard-delete the credential row" wording
+    removed for consistency with the schema column.
+  - Remote-host route scope tightened: V1 ships only the local-host set
+    (`claim-or-create` / `revoke` / `rotate-token`). `POST /api/hosts`
+    (remote create) and `POST /api/hosts/{id}/exchange` move with the
+    headless daemon binary into Phase 4 / V1.5 so we don't expose
+    bootstrap-exchange surface ahead of its caller.
