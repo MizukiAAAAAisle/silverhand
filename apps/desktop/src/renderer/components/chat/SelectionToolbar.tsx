@@ -21,14 +21,14 @@ import { ClipboardCopy, Download } from 'lucide-react';
  *     `var(--accent)` (warm dark).
  *   - radius: `--control-radius` (forza6 0, warm 6px).
  *   - border width: `--control-border-width` (forza6 2px, warm 1px).
- * Primary-variant hover (Copy / Save):
- *   - bg → `--brand-primary` (full festival color: forza6 #FF2C7A
- *     pink, warm #FFD440 yellow)
- *   - text → `--text-on-brand` (forza6 near-black, warm warm-dark) for
- *     legibility on brand fill
- *   - font-weight bold (visual weight matches the bg punch)
- * Neutral-variant hover (Cancel): translate only, no fill, no weight
- * change. Both variants share the `-translate-y-px` micro-lift.
+ * All three buttons share `font-bold` at rest (shiki `3FRyRtUdrYh1Or29`:
+ * Cancel 常态也是 bold). The variant only diverges on hover:
+ *   - Primary (Copy / Save) hover: bg → `--brand-primary` (full
+ *     festival color: forza6 #FF2C7A pink, warm #FFD440 yellow);
+ *     text → `--text-on-brand` (forza6 near-black, warm warm-dark)
+ *     for legibility on the saturated fill.
+ *   - Neutral (Cancel) hover: lift only, no fill, no text inversion.
+ * Both variants share the `-translate-y-px` micro-lift.
  */
 export function SelectionToolbar({
   count,
@@ -85,25 +85,25 @@ function ToolbarButton({
   disabled?: boolean;
   onClick?: () => void;
 }): JSX.Element {
-  // Static base — radius, border width, padding, lift transition. The
-  // border *color* and hover state diverge per variant; rest stays
-  // shared so the three buttons read as one cluster at a glance.
+  // Static base — radius, border width, padding, font weight, lift
+  // transition. All three buttons share `font-bold` at rest; the only
+  // per-variant divergence is hover bg/text.
   const base =
     'inline-flex items-center gap-1 rounded-[var(--control-radius)] ' +
     'border-[length:var(--control-border-width)] ' +
     'border-[color:var(--border-row-selected)] bg-bg-floating ' +
-    'px-2 py-1 text-text-primary transition-[background-color,color,transform,font-weight,box-shadow] duration-150 ' +
+    'px-2 py-1 font-bold text-text-primary transition-[background-color,color,transform,box-shadow] duration-150 ' +
     'hover:-translate-y-px ' +
     'disabled:cursor-not-allowed disabled:opacity-50 ' +
-    'disabled:hover:translate-y-0 disabled:hover:bg-bg-floating disabled:hover:font-normal disabled:hover:text-text-primary ' +
+    'disabled:hover:translate-y-0 disabled:hover:bg-bg-floating disabled:hover:text-text-primary ' +
     'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus';
   const variantCls =
     variant === 'primary'
-      ? // hover fill is the literal brand color; text inverts to keep
-        // contrast (`--text-on-brand`); weight bumps to bold to
-        // match the bg punch. shiki `RNx6OVt9TlK26kjB` spec.
-        'hover:bg-[color:var(--brand-primary)] hover:text-[color:var(--text-on-brand)] hover:font-bold'
-      : // Cancel: lift only, no fill, no weight change.
+      ? // Copy / Save hover: festival fill + inverted text. Cancel
+        // doesn't get this — it's a recovery affordance, not a
+        // primary action.
+        'hover:bg-[color:var(--brand-primary)] hover:text-[color:var(--text-on-brand)]'
+      : // Cancel: lift only, no fill, no text inversion.
         '';
   return (
     <button
