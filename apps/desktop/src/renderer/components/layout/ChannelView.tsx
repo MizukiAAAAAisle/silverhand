@@ -389,13 +389,13 @@ function ActiveChannelView({
         boxShadow: 'var(--card-shadow, none)',
       }}
     >
-      <header className="flex h-[var(--titlebar-height)] min-w-0 shrink-0 items-center gap-2 border-b border-border-subtle px-4">
+      <header className="flex h-12 min-w-0 shrink-0 items-center gap-2 border-b border-border-subtle px-4">
         {showThreadHeader ? (
           <>
-            <CornerDownRight className="size-3.5 shrink-0 text-text-muted" />
+            <CornerDownRight className="size-4 shrink-0 text-text-muted" />
             <span
               data-conversation-title
-              className="min-w-0 truncate font-serif text-sm font-semibold text-text-primary"
+              className="min-w-0 truncate font-serif text-base font-semibold text-text-primary"
             >
               <span data-conversation-hash>#</span>
               {parentTitle ?? conversation.title}
@@ -416,7 +416,7 @@ function ActiveChannelView({
           <>
             <span
               data-conversation-title
-              className="min-w-0 truncate font-serif text-sm font-semibold text-text-primary"
+              className="min-w-0 truncate font-serif text-base font-semibold text-text-primary"
             >
               {conversation.kind === 'channel' ? (
                 <span data-conversation-hash>#</span>
@@ -450,9 +450,9 @@ function ActiveChannelView({
             disabled={agentActionDisabled}
             aria-label={restartTitle}
             title={restartTitle}
-            className="flex size-6 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-35"
+            className="flex size-8 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-35"
           >
-            <RefreshCw className="size-3.5" />
+            <RefreshCw className="size-4" />
           </button>
           <button
             type="button"
@@ -460,9 +460,9 @@ function ActiveChannelView({
             disabled={agentActionDisabled}
             aria-label={stopTitle}
             title={stopTitle}
-            className="flex size-6 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-35"
+            className="flex size-8 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-35"
           >
-            <Power className="size-3.5" />
+            <Power className="size-4" />
           </button>
           {canToggleArchive ? (
             <AppDropdownMenu
@@ -471,9 +471,9 @@ function ActiveChannelView({
                   type="button"
                   aria-label="Channel actions"
                   title="Channel actions"
-                  className="flex size-6 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary"
+                  className="flex size-8 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary"
                 >
-                  <MoreHorizontal className="size-3.5" />
+                  <MoreHorizontal className="size-4" />
                 </button>
               }
             >
@@ -498,12 +498,12 @@ function ActiveChannelView({
               onClick={onToggleFullscreen}
               aria-label={isFullscreen ? '退出全屏' : '全屏'}
               title={isFullscreen ? '退出全屏' : '全屏'}
-              className="flex size-6 shrink-0 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
+              className="flex size-8 shrink-0 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
             >
               {isFullscreen ? (
-                <Minimize2 className="size-3.5" />
+                <Minimize2 className="size-4" />
               ) : (
-                <Maximize2 className="size-3.5" />
+                <Maximize2 className="size-4" />
               )}
             </button>
           ) : null}
@@ -513,9 +513,9 @@ function ActiveChannelView({
               onClick={onCloseChild}
               aria-label={closeLabel}
               title={closeLabel}
-              className="flex size-6 shrink-0 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
+              className="flex size-8 shrink-0 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
             >
-              <X className="size-3.5" />
+              <X className="size-4" />
             </button>
           ) : null}
         </div>
@@ -677,11 +677,11 @@ function MemberStrip({
                 aria-label={`@${agent.name}`}
                 data-member-chip="agent"
                 data-member-id={member.agent_id}
-                className="relative inline-flex size-[18px] shrink-0 items-center justify-center rounded-none bg-bg-floating p-0 shadow-sm transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+                className="relative inline-flex size-6 shrink-0 items-center justify-center rounded-none bg-bg-floating p-0 shadow-sm transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
               >
                 <AgentAvatar
                   runtime={agent.runtime}
-                  size={16}
+                  size={20}
                   avatarObjectUrl={agentAvatarUrls.get(agent.id) ?? null}
                   alt={agent.display_name || agent.name}
                 />
@@ -710,7 +710,7 @@ function MemberStrip({
 }
 
 /**
- * Human chip — same footprint as the agent chip (18px square), but
+ * Human chip — same footprint as the agent chip (24px square), but
  * holds the viewer's avatar (current single-human invariant) or a
  * letter placeholder. Hover popover mirrors `HumanMention`'s
  * content so inline `@handle` mentions and header chips read the
@@ -731,7 +731,7 @@ function HumanMemberChip({ human }: { human: HumanMemberDto }): JSX.Element {
         aria-label={`@${human.name}`}
         data-member-chip="human"
         data-member-id={human.user_id}
-        className="relative inline-flex size-[18px] shrink-0 items-center justify-center overflow-hidden rounded-none bg-bg-elevated p-0 text-[10px] font-medium text-text-muted shadow-sm transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+        className="relative inline-flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-none bg-bg-elevated p-0 text-xs font-medium text-text-muted shadow-sm transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
       >
         <span aria-hidden>{initial}</span>
       </button>
@@ -757,7 +757,7 @@ function MemberOverflowChip({
       type="button"
       aria-label={`+${overflow.length} more members`}
       data-member-chip="overflow"
-      className="inline-flex size-[18px] shrink-0 items-center justify-center rounded-full bg-bg-elevated p-0 text-[9px] font-semibold text-text-muted shadow-sm transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+      className="inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-bg-elevated p-0 text-[10px] font-semibold text-text-muted shadow-sm transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
     >
       +{overflow.length}
     </button>
