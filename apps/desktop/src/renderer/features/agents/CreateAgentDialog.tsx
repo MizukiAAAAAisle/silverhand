@@ -109,7 +109,7 @@ export function CreateAgentDialog({
                       setRuntime(rt.value as RuntimeKind);
                     }}
                     className={
-                      'rounded-md border px-3 py-1.5 text-xs transition-colors ' +
+                      'rounded-[var(--control-radius)] border px-3 py-1.5 text-xs transition-colors ' +
                       (isDisabled
                         ? 'cursor-not-allowed border-border-default/60 text-text-muted opacity-50'
                         : isSelected
