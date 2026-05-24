@@ -10,6 +10,27 @@
  * node:child_process / fs imports so it can be unit-tested as a pure
  * encode/decode.
  *
+ * ## Authority layering
+ *
+ * Two layers govern the contract — they are NOT redundant:
+ *
+ *   1. **This file (zod schemas)** — authoritative for what *shape*
+ *      a frame may have. TypeScript daemon and TypeScript clients
+ *      import these directly.
+ *   2. **`tests/fixtures/wire/wire-fixtures.ts` (NDJSON byte
+ *      fixtures)** — authoritative for what *bytes* a valid frame
+ *      looks like on the socket. Locks the contract at the byte
+ *      level so future re-implementations (Rust daemon, remote host
+ *      agent, etc.) have an acceptance gate that does not depend on
+ *      zod. See `tests/fixtures/wire/README.md` for the consumer
+ *      recipe.
+ *
+ * When zod and the fixture catalogue disagree, the disagreement is a
+ * bug — fix it in the same change. Adding a new schema arm here
+ * without adding a fixture variant leaves cross-language consumers
+ * blind to the new shape; adding a fixture without widening the
+ * schema leaves the TS daemon refusing its own canonical wire bytes.
+ *
  * ## Framing
  *
  * Newline-delimited JSON over a duplex byte stream. One JSON object
