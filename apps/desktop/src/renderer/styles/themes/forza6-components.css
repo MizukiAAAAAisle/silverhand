@@ -566,8 +566,16 @@
      - Default: white ground (`--bg-floating: #FFFFFF`) on the cool
        header bg (`--bg-base: #F7F8F6`) — intentionally subtle, the
        hover lift does the heavy lifting on feedback.
-     - Hover: `translateY(-1px)` lift, no colour swap. transition kept
-       short (150ms) so the icons feel snappy, not floaty.
+     - Square corners (`border-radius: 0`) — overrides the JSX
+       `rounded-[6px]` / `rounded` so the boxes read as poster cut
+       blocks, same hard-cut language as `--control-radius: 0` /
+       `--floating-radius: 0` / `--radius-inline-code: 0`. shiki
+       `npbm1_xryIbWicIw` "forza6 主题去掉圆角，保持直角，这是
+       海报的风格".
+     - Hover: `translateY(-1px)` lift. transition kept short (150ms)
+       so the icons feel snappy, not floaty. Icon colour shift
+       (muted → primary) stays the JSX default — Cindy
+       `LzYY_zOmTInbJjYx`.
      - Disabled: keep the JSX `opacity-35` and skip the lift, matching
        the rest of forza6's disabled icon language.
    Specificity:
@@ -582,6 +590,7 @@
 }
 [data-theme='forza6'] [data-channel-actions] button {
   background-color: var(--bg-floating);
+  border-radius: 0;
   transition: transform 150ms var(--ease, ease);
 }
 [data-theme='forza6'] [data-channel-actions] button:hover:not(:disabled) {
