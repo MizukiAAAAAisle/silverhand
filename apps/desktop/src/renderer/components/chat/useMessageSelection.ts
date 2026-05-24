@@ -11,10 +11,21 @@ import type { MessageDto } from '@silverhand/shared';
  *
  * State shape:
  * - `mode: 'idle' | 'selecting'`
- * - `selected: Map<msg_id, MessageDto>` — full snapshots, NOT just ids.
- *   We freeze each message at toggle time so an around-window /
- *   latest-window swap (which evicts rows from the cache) doesn't lose
- *   content from the export queue. Cindy's #4 in proposal review.
+ * - `selected: Map<msg_id, MessageDto>` — REFERENCE snapshots, not
+ *   clones. We freeze each message at toggle time so an around-window
+ *   / latest-window swap (which evicts rows from the cache) doesn't
+ *   lose content from the export queue. MessageDto objects don't
+ *   mutate in place, so a reference is sufficient — the cache eviction
+ *   we're guarding against is "row no longer in `messages`", not
+ *   "row's fields changed". Cindy's #4 in proposal review.
+ *
+ * State machine invariant: `mode === 'idle'` ⇒ `selected.size === 0`.
+ * `enter()` is the ONLY transition from idle → selecting; `toggle()`
+ * in idle mode is a no-op (returns the original empty-idle state). If
+ * we let toggle write into `selected` while idle, a follow-up `enter()`
+ * would inherit those hidden selections (because enter copies the
+ * existing `selected` map) — surfacing as ghost-selected rows in a
+ * fresh selection round. The reducer makes this impossible.
  *
  * Cleanup is automatic via deps: any change to `channelId`, a window
  * replacement (`windowResetVersion` bump), or a new jump target sets
@@ -56,13 +67,17 @@ export function selectionEnter(
   return { mode: 'selecting', selected: next };
 }
 
-/** Toggle a single message's membership. No-op semantically when the
- *  state is `idle` — the caller is expected to have entered first.
- *  Always returns a new state object. */
+/** Toggle a single message's membership. **No-op when `mode === 'idle'`**:
+ *  toggle is a member-set operation, not a mode-flip. Only `enter()` can
+ *  transition idle → selecting. Without this guard, a stray toggle in
+ *  idle would write rows into `selected` while leaving `mode` at idle,
+ *  and the next `enter()` would inherit those ghost selections (because
+ *  enter copies the existing `selected` map). Returns a new state. */
 export function selectionToggle(
   state: SelectionState,
   msg: MessageDto,
 ): SelectionState {
+  if (state.mode === 'idle') return state;
   const next = new Map(state.selected);
   if (next.has(msg.id)) next.delete(msg.id);
   else next.set(msg.id, msg);

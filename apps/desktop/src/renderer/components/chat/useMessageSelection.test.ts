@@ -63,6 +63,24 @@ describe('selection state — pure reducer', () => {
     expect([...s.selected.keys()].sort()).toEqual(['a', 'b', 'c']);
   });
 
+  it('toggle() is a no-op in idle mode (mode-flip is enter-only)', () => {
+    // Cindy review P2: a stray toggle in idle would otherwise write
+    // into `selected` while leaving `mode` at idle, and the next
+    // enter() would inherit those ghost selections because enter
+    // copies the existing selected map. The reducer enforces the
+    // invariant `mode === 'idle' ⇒ selected.size === 0`.
+    const s0 = createSelectionState();
+    const sAfterToggle = selectionToggle(s0, msg('b', 2));
+    expect(sAfterToggle.mode).toBe('idle');
+    expect(sAfterToggle.selected.size).toBe(0);
+    // Now enter with a different message — must NOT carry the
+    // attempted-but-rejected toggle of `b`.
+    const sAfterEnter = selectionEnter(sAfterToggle, msg('a', 1));
+    expect(sAfterEnter.mode).toBe('selecting');
+    expect([...sAfterEnter.selected.keys()]).toEqual(['a']);
+    expect(sAfterEnter.selected.has('b')).toBe(false);
+  });
+
   it('toggle() adds and removes membership', () => {
     let s = selectionEnter(createSelectionState(), msg('a', 1));
     s = selectionToggle(s, msg('b', 2));
