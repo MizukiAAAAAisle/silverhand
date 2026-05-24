@@ -1453,6 +1453,11 @@ export type RuntimeInfo = z.infer<typeof RuntimeInfoSchema>;
 //   - source_workspace_name: string  (denormalized for list rendering)
 //   - source_conversation_title: string
 //   - mention_excerpt: string  (first ~120 chars of the original)
+// mention_self stashes:
+//   - conversation_title: string
+//   - trigger_name: string  (display label of the sender who mentioned viewer)
+//   - mentioned_name: string
+//   - mention_excerpt: string
 
 export const NotificationDtoSchema = z.object({
   id: z.string(),

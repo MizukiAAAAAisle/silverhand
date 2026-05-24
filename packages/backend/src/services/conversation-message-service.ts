@@ -204,6 +204,11 @@ function excerpt(s: string): string {
     : `${compact.slice(0, MENTION_EXCERPT_LIMIT - 1)}…`;
 }
 
+function nonEmptyName(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
 export class ConversationMessageService {
   private readonly db: Db;
   private readonly conversations: ConversationRepo;
@@ -516,6 +521,7 @@ export class ConversationMessageService {
         sourceMessageId: message.id,
         payload: {
           conversation_title: conversation.title,
+          trigger_name: this.resolveMessageSenderName(message),
           mentioned_name: viewer.name,
           mention_excerpt: excerpt(message.content),
         },
@@ -536,6 +542,26 @@ export class ConversationMessageService {
         'conversation-message-service: viewer mention notification failed',
       );
     }
+  }
+
+  private resolveMessageSenderName(message: MessageDto): string | null {
+    if (message.from_kind === 'agent' && message.from_agent_id) {
+      const agent = this.agents.get(message.from_agent_id);
+      return (
+        nonEmptyName(agent?.display_name)
+        ?? nonEmptyName(agent?.name)
+        ?? message.from_agent_id
+      );
+    }
+    if (message.from_kind === 'user' && message.from_user_id) {
+      const user = this.users.get(message.from_user_id);
+      return (
+        nonEmptyName(user?.display_name)
+        ?? nonEmptyName(user?.name)
+        ?? message.from_user_id
+      );
+    }
+    return null;
   }
 
   private async deliverBestEffort(

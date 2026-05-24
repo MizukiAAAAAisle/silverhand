@@ -190,7 +190,7 @@ export function useNotificationToasts(activeChannelId: string | null) {
       // Electron window is focused; direct human mentions opt out via `force`.
       void window.agentHub.showSystemNotification({
         title: 'Silverhand',
-        body: label,
+        body: buildSystemNotificationBody(n),
         force: isViewerMention,
       });
     }
@@ -232,4 +232,20 @@ function buildToastLabel(n: NotificationDto): string {
       : '你被提及了';
   }
   return '新通知';
+}
+
+function payloadString(n: NotificationDto, key: string): string | null {
+  const value = n.payload?.[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function buildSystemNotificationBody(n: NotificationDto): string {
+  if (n.kind === 'mention_self') {
+    const triggerName = payloadString(n, 'trigger_name') ?? '有人';
+    const conversationTitle = payloadString(n, 'conversation_title');
+    return conversationTitle
+      ? `${triggerName} 在 # ${conversationTitle} 中 @ 了你。`
+      : `${triggerName} @ 了你。`;
+  }
+  return buildToastLabel(n);
 }

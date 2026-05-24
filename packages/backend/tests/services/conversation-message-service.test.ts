@@ -249,6 +249,11 @@ describe('ConversationMessageService.sendMessage', () => {
           message_id: result.message.id,
           source_conversation_id: t.channel.id,
           source_message_id: result.message.id,
+          payload: expect.objectContaining({
+            conversation_title: 'source',
+            trigger_name: 'alice',
+            mentioned_name: 'local-test',
+          }),
         }),
       ]);
       expect(viewerEvents).toContainEqual({
