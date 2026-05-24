@@ -551,40 +551,42 @@
 }
 
 /* ── #v5.5 — Chat header action buttons as poster control cluster ───
-   shiki `GpO6aSc83fIkGZ-1` "Chat header 右侧 action buttons 需要
-   处理" + Cindy `VGm9HpWGWyDx5bhf` "浅底 + 2px 黑边 / hover lime
-   preview / active magenta 或 lime，和 sidebar hover/selected 的
-   语言保持一致".
+   Originally (Cindy `VGm9HpWGWyDx5bhf`) the right-side action cluster
+   was wrapped in a 2px black poster sticker frame so it read as one
+   compact control. shiki `Yu3fFDZs3hvZehb3` (#task:545) reframes the
+   ask: drop the outer frame entirely, give each icon its own white
+   box (no border), and add a slight hover displacement so the lift —
+   not a colour change — carries the interaction feedback.
 
-   ChannelView.tsx wraps the right-side action buttons (refresh /
-   stop / archive dropdown / fullscreen / close) in a flex
-   container. v5.5 adds `data-channel-actions` on that container,
-   then forza6 wraps it in the same poster sticker geometry the
-   rest of the theme uses:
-     - 2px solid black border + 2px radius (matches selected /
-       inline-code / send button / code island sticker family)
-     - transparent ground so the cool-white chat header shows
-       through, keeping the cluster light per Cindy's "浅底"
-     - tighter padding (1px / 2px) so the bordered cluster feels
-       like one control, not 5 stacked buttons
-     - per-button hover: lime sticker preview `#E6F68A` ground +
-       near-black icon, identical to sidebar / NavRail hover —
-       same vocabulary across all interactive surfaces.
-     - `:disabled` keeps base button's `opacity-35` and skips the
-       lime ground, so disabled icons read clearly inactive.
-   Selectors are forza6-only via `[data-theme='forza6']` and
-   `[data-channel-actions]` is structural (Cindy hook-naming
-   constraint). */
+   Layout:
+     - Container resets the v5 outer poster frame (border / radius /
+       padding / gap) so the cluster falls back to the JSX defaults
+       (`gap-1` = 4px between buttons).
+   Per-button:
+     - Default: white ground (`--bg-floating: #FFFFFF`) on the cool
+       header bg (`--bg-base: #F7F8F6`) — intentionally subtle, the
+       hover lift does the heavy lifting on feedback.
+     - Hover: `translateY(-1px)` lift, no colour swap. transition kept
+       short (150ms) so the icons feel snappy, not floaty.
+     - Disabled: keep the JSX `opacity-35` and skip the lift, matching
+       the rest of forza6's disabled icon language.
+   Specificity:
+     - `[data-theme='forza6'] [data-channel-actions] button` = (0,3,1)
+       wins over Tailwind utility `bg-bg-hover`, `text-text-muted`,
+       etc. (each 0,1,0) — JSX classes stay theme-neutral. */
 [data-theme='forza6'] [data-channel-actions] {
-  border: 2px solid #0A0A0A;
-  border-radius: 2px;
-  padding: 1px;
-  gap: 1px;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
   background: transparent;
 }
+[data-theme='forza6'] [data-channel-actions] button {
+  background-color: var(--bg-floating);
+  transition: transform 150ms var(--ease, ease);
+}
 [data-theme='forza6'] [data-channel-actions] button:hover:not(:disabled) {
-  background-color: #E6F68A;
-  color: #0A0A0A;
+  background-color: var(--bg-floating);
+  transform: translateY(-1px);
 }
 
 /* ── #v5.6 — Task panel (drawer + TasksSection) poster polish ────────
