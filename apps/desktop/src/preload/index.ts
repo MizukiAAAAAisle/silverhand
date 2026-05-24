@@ -59,8 +59,23 @@ const api = {
     title: string;
     body: string;
     force?: boolean;
+    /** Opaque id echoed back via `onNotificationClicked` so the renderer
+     *  can route the click to the right navigation target. Fire-and-
+     *  forget if omitted (the notification is just informational). */
+    notificationId?: string;
   }): Promise<void> =>
     ipcRenderer.invoke('notification:show', opts),
+  /** Subscribe to native-notification click events. Main fires this
+   *  when the user clicks an OS-level Silverhand notification, after
+   *  focusing the window. The id matches what the renderer originally
+   *  passed to `showSystemNotification`. */
+  onNotificationClicked: (handler: (notificationId: string) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, notificationId: string) => {
+      handler(notificationId);
+    };
+    ipcRenderer.on('notification:clicked', listener);
+    return () => ipcRenderer.off('notification:clicked', listener);
+  },
   setBadgeCount: (count: number): Promise<void> =>
     ipcRenderer.invoke('badge:setCount', count),
   /** Save a PNG snapshot to disk via the native save dialog. The

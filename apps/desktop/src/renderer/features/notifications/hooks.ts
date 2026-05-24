@@ -1,12 +1,15 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import type {
-  MarkNotificationsReadInput,
-  NotificationDto,
+import {
+  apiPaths,
+  type ConversationRef,
+  type MarkNotificationsReadInput,
+  type NotificationDto,
 } from '@silverhand/shared';
 import { api } from '@/lib/api';
 import { onWsFrame, subscribeViewerScope, isCurrentViewerScope } from '@/lib/ws-client';
+import type { MessageJumpTarget } from '@/features/channels/useMessageJumpController';
 
 const unreadKey = ['notifications', 'unread'] as const;
 const listKey = ['notifications', 'list'] as const;
@@ -112,8 +115,16 @@ export function useMarkNotificationsRead() {
  * Suppresses toasts for the currently active channel (user can already
  * see it) unless the kind is `agent_start_failed` (always shown — it's
  * an error condition regardless of focus).
+ *
+ * Click navigation: both toast `onClick` and native-notification click
+ * are routed through `onJump`. When omitted, notifications are still
+ * shown but inert. `agent_start_failed` is intentionally not clickable
+ * (no message anchor to focus on).
  */
-export function useNotificationToasts(activeChannelId: string | null) {
+export function useNotificationToasts(
+  activeChannelId: string | null,
+  onJump?: (target: MessageJumpTarget) => void,
+) {
   const qc = useQueryClient();
   const { data } = useQuery<{ notifications: NotificationDto[] }>({
     queryKey: [...listKey, { unread: true, toasts: true }],
@@ -123,6 +134,32 @@ export function useNotificationToasts(activeChannelId: string | null) {
 
   const seenIds = useRef<Set<string>>(new Set());
   const initialized = useRef(false);
+  // Live notification rows the user can click on. Toast `onClick` reads
+  // straight from this map; native-notification clicks come back from
+  // main as ids and look up here too. We keep it as a ref instead of
+  // closing over `data` so a stale closure (delivered to main yesterday,
+  // clicked today) still resolves correctly.
+  const clickableById = useRef<Map<string, NotificationDto>>(new Map());
+  // Stable callback ref so the WS subscribe effect doesn't tear down
+  // every time the parent's nav handler re-renders.
+  const onJumpRef = useRef(onJump);
+  useEffect(() => {
+    onJumpRef.current = onJump;
+  }, [onJump]);
+
+  const handleClickById = useCallback(
+    (notificationId: string): void => {
+      const n = clickableById.current.get(notificationId);
+      if (!n) return;
+      const handler = onJumpRef.current;
+      if (!handler) return;
+      void resolveNotificationJumpTarget(n, qc).then(target => {
+        if (!target) return;
+        handler(target);
+      });
+    },
+    [qc],
+  );
 
   // Toasts need the latest notification rows only when a new notification
   // arrives. `unread_updated` is a badge/read-cursor signal and would make
@@ -145,6 +182,13 @@ export function useNotificationToasts(activeChannelId: string | null) {
     };
   }, [qc]);
 
+  // Native-notification click bridge. Main process forwards the
+  // `notificationId` originally passed to `showSystemNotification`
+  // back here when the user clicks the OS-level alert.
+  useEffect(() => {
+    return window.agentHub.onNotificationClicked(handleClickById);
+  }, [handleClickById]);
+
   useEffect(() => {
     if (!data) return;
     const notifications = data.notifications;
@@ -152,7 +196,10 @@ export function useNotificationToasts(activeChannelId: string | null) {
     if (!initialized.current) {
       // First load: mark all existing notifications as seen without
       // toasting — we only alert for genuinely new arrivals.
-      for (const n of notifications) seenIds.current.add(n.id);
+      for (const n of notifications) {
+        seenIds.current.add(n.id);
+        if (isClickableKind(n.kind)) clickableById.current.set(n.id, n);
+      }
       initialized.current = true;
       return;
     }
@@ -162,6 +209,7 @@ export function useNotificationToasts(activeChannelId: string | null) {
     for (const n of notifications) {
       if (seenIds.current.has(n.id)) continue;
       seenIds.current.add(n.id);
+      if (isClickableKind(n.kind)) clickableById.current.set(n.id, n);
 
       const isAgentFailure = n.kind === 'agent_start_failed';
       const isViewerMention = n.kind === 'mention_self';
@@ -177,11 +225,25 @@ export function useNotificationToasts(activeChannelId: string | null) {
       }
 
       const label = buildToastLabel(n);
+      // Sonner's `ExternalToast` doesn't expose a whole-surface
+      // `onClick`; the idiomatic pattern is the `action` button. We
+      // surface "查看" so a click on the toast's affordance jumps to
+      // the source message. The system-notification path (main process)
+      // still fires on full-surface click — that one is governed by
+      // the OS-level Notification semantics, not sonner.
+      const toastOptions = isClickableKind(n.kind)
+        ? {
+            action: {
+              label: '查看',
+              onClick: () => handleClickById(n.id),
+            },
+          }
+        : undefined;
 
       if (isAgentFailure) {
-        toast.error(label);
+        toast.error(label, toastOptions);
       } else {
-        toast(label);
+        toast(label, toastOptions);
       }
 
       toastIds.push(n.id);
@@ -192,6 +254,7 @@ export function useNotificationToasts(activeChannelId: string | null) {
         title: 'Silverhand',
         body: buildSystemNotificationBody(n),
         force: isViewerMention,
+        notificationId: isClickableKind(n.kind) ? n.id : undefined,
       });
     }
 
@@ -206,7 +269,106 @@ export function useNotificationToasts(activeChannelId: string | null) {
         qc.invalidateQueries({ queryKey: unreadKey });
       });
     }
-  }, [data, activeChannelId, qc]);
+  }, [data, activeChannelId, qc, handleClickById]);
+}
+
+/**
+ * Whether a given notification kind has a meaningful click destination.
+ * `mention_self` and `mention_external` open the source message;
+ * `agent_start_failed` has no message anchor and is intentionally inert
+ * (the user can find the failed agent via the regular Members panel).
+ */
+function isClickableKind(kind: NotificationDto['kind']): boolean {
+  return kind === 'mention_self' || kind === 'mention_external';
+}
+
+/**
+ * Map a notification row onto a `MessageJumpTarget`. The jump path
+ * needs the *channel* id and an optional thread id; notifications
+ * carry the conversation id directly, which may be a thread. Resolves
+ * the conversation-ref via React Query's cache so repeated clicks
+ * (and `useConversationById` reads of the same id) share the lookup.
+ *
+ * Returns `null` for kinds without a navigable target or when the
+ * required ids are missing (e.g. malformed `mention_external` row).
+ */
+export async function resolveNotificationJumpTarget(
+  n: NotificationDto,
+  qc: ReturnType<typeof useQueryClient>,
+): Promise<MessageJumpTarget | null> {
+  if (n.kind === 'mention_self') {
+    if (!n.conversation_id || !n.message_id) return null;
+    return resolveTargetFromConversationId(
+      qc,
+      n.workspace_id,
+      n.conversation_id,
+      n.message_id,
+    );
+  }
+  if (n.kind === 'mention_external') {
+    // Original mention site lives in the source workspace. The local
+    // `conversation_id` is the synthesized DM Mentions channel; we
+    // intentionally bypass it and jump straight to the foreign source
+    // so the user lands on the actual message.
+    if (
+      !n.source_workspace_id ||
+      !n.source_conversation_id ||
+      !n.source_message_id
+    ) {
+      return null;
+    }
+    return resolveTargetFromConversationId(
+      qc,
+      n.source_workspace_id,
+      n.source_conversation_id,
+      n.source_message_id,
+    );
+  }
+  return null;
+}
+
+async function resolveTargetFromConversationId(
+  qc: ReturnType<typeof useQueryClient>,
+  workspaceId: string | null,
+  conversationId: string,
+  messageId: string,
+): Promise<MessageJumpTarget> {
+  // Cached against the same key `useConversationById` uses, so a
+  // recently-resolved cross-workspace `?side` ref is reused for free.
+  const data = await qc
+    .fetchQuery<{ ref: ConversationRef }>({
+      queryKey: ['conversation-ref', conversationId],
+      queryFn: () => api<{ ref: ConversationRef }>(apiPaths.conversationRef(conversationId)),
+      staleTime: 30_000,
+    })
+    .catch(() => null);
+  if (!data) {
+    // Fetch failed — fall back to treating the id as a top-level
+    // channel. Worse case the jump primer reports `not_found` and the
+    // user sees an empty state; better than silently swallowing the click.
+    return {
+      workspaceId: workspaceId ?? undefined,
+      channelId: conversationId,
+      threadId: null,
+      messageId,
+    };
+  }
+  const ref = data.ref;
+  const resolvedWorkspaceId = workspaceId ?? ref.workspace_id;
+  if (ref.kind === 'thread' && ref.parent_channel_id) {
+    return {
+      workspaceId: resolvedWorkspaceId,
+      channelId: ref.parent_channel_id,
+      threadId: ref.id,
+      messageId,
+    };
+  }
+  return {
+    workspaceId: resolvedWorkspaceId,
+    channelId: ref.id,
+    threadId: null,
+    messageId,
+  };
 }
 
 function buildToastLabel(n: NotificationDto): string {

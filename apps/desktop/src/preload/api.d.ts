@@ -27,7 +27,9 @@ declare global {
         title: string;
         body: string;
         force?: boolean;
+        notificationId?: string;
       }): Promise<void>;
+      onNotificationClicked(handler: (notificationId: string) => void): () => void;
       setBadgeCount(count: number): Promise<void>;
       onShutdownProgress(handler: (step: string) => void): () => void;
       onNavigateSettings(handler: () => void): () => void;

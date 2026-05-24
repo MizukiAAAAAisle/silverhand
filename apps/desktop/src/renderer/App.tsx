@@ -402,7 +402,17 @@ function RegisteredAppShell(): JSX.Element {
   // secondary are visible, only the user-attentive pane (= focused) gets
   // toasts silenced. Improving to "any visible pane silences" is a
   // future polish.
-  useNotificationToasts(focusedConversation?.id ?? null);
+  //
+  // Click handler: notifications carrying a navigation target (mention_*)
+  // route through `handleJumpToMessage`, the same primitive we use for
+  // search hits / Saved / task chips. The hook stashes the callback in
+  // an `onJumpRef` internally so the inline arrow's identity churn is
+  // a non-issue (no useCallback needed; trying to memoize would risk
+  // stale closures since `handleJumpToMessage` is declared below in the
+  // same function body).
+  useNotificationToasts(focusedConversation?.id ?? null, target =>
+    handleJumpToMessage(target),
+  );
   // Active-task count for the titlebar Tasks badge — scoped to the
   // current workspace so the number matches what the panel will show
   // when opened (default filter = current channel, but the badge is

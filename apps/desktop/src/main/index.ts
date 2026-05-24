@@ -797,9 +797,11 @@ ipcMain.handle(
   },
 );
 
-ipcMain.handle('notification:show', (_event, opts: unknown) => {
+ipcMain.handle('notification:show', (event, opts: unknown) => {
   if (!opts || typeof opts !== 'object') return;
-  const { title, body, force } = opts as Partial<Record<string, unknown>>;
+  const { title, body, force, notificationId } = opts as Partial<
+    Record<string, unknown>
+  >;
   if (typeof title !== 'string' || typeof body !== 'string') return;
   // Fire ordinary system notifications only when no Electron window is
   // focused. Direct human mentions opt into `force` so an active-but-
@@ -807,6 +809,32 @@ ipcMain.handle('notification:show', (_event, opts: unknown) => {
   // changing the unread dot.
   if (force !== true && BrowserWindow.getFocusedWindow() !== null) return;
   const n = new Notification({ title, body });
+  // Click handler — only wired when the renderer attached a
+  // `notificationId`. Bring a window forward (the user clicked, that's
+  // the intent) and forward the id back so the renderer can navigate
+  // to the right conversation. Without an id this is just an alert and
+  // we keep the legacy "show only" behavior.
+  if (typeof notificationId === 'string' && notificationId.length > 0) {
+    n.on('click', () => {
+      // Prefer the sender's window (the renderer that called us); fall
+      // back to any visible window. macOS keeps windows around in the
+      // dock even when minimized, so showing the first one is safe.
+      const senderWindow = BrowserWindow.fromWebContents(event.sender);
+      const target =
+        senderWindow ?? BrowserWindow.getAllWindows().find(w => !w.isDestroyed()) ?? null;
+      if (target) {
+        if (target.isMinimized()) target.restore();
+        target.show();
+        target.focus();
+      }
+      // Best-effort focus the app itself (e.g. when another app is
+      // frontmost). On macOS this nudges Silverhand to the foreground.
+      if (process.platform === 'darwin') app.focus({ steal: true });
+      if (!event.sender.isDestroyed()) {
+        event.sender.send('notification:clicked', notificationId);
+      }
+    });
+  }
   n.show();
 });
 
