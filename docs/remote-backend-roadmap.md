@@ -171,19 +171,32 @@ codepath is identical to the multi-user case.
 
 ### Stage B — Hosts model + credential binding
 
-**Goal**: `Host` becomes a first-class concept in schema and API. Every
-runtime intent route carries `host_id`, even with one local host.
-`host_token` is issued and revocable. Phase 4 (the daemon-outbound
+**Goal**: `Host` becomes a first-class concept in schema and API:
+identity, credential issuance/storage/revoke/rotate, a generic token
+verifier, and placement routing. Every runtime intent route carries
+`host_id`, even with one local host. Phase 4 (the daemon-outbound
 protocol that brings a remote host online) becomes a *new transport
 landing on existing identity*, not a rewrite of identity itself.
 
-**Critical scope note**: Stage B lands *identity + issuance + placement
-routing*. It does **not** land the long-lived daemon ↔ server outbound
-connection protocol (reconnect, backpressure, server-initiated control,
-"online" presence). That is daemon-outbound, follow-up phase. Stage B
-proves the contract works with embedded mode (loopback) where daemon
-and server are co-located and the "connection" is the existing in-process
-or unix-socket transport.
+**Critical scope note**: Stage B does NOT introduce any new
+daemon-initiated authenticated channel. The current pre-outbound
+architecture has backend / Electron main dialing the daemon's Unix
+socket via `HostClient`; the daemon does not currently make outbound
+HTTP/WS calls to the backend. Stage B keeps that transport unchanged.
+`host_token`'s Stage B contract is:
+
+- issued at `claim-or-create` time, hashed at rest in `host_credentials`
+- written to the daemon's config file (0600) by Electron main
+- validated by a generic server-side `verifyHostToken()` whenever
+  server-side code performs an action whose authorization needs the
+  host's identity (placement routing, revoke enforcement, future
+  daemon-initiated calls)
+- never IPC'd to the renderer, never carried by the daemon over a
+  channel that does not exist yet
+
+The daemon physically *presenting* `host_token` over an authenticated
+outbound channel to the server is **follow-up phase** (daemon outbound
+protocol), not Stage B.
 
 **In scope**:
 
@@ -192,23 +205,30 @@ or unix-socket transport.
 - New `host_credentials(id, host_id, token_hash, kind=long_lived|bootstrap, expires_at, consumed_at, revoked_at)`.
 - Routes (local-host scope only): `POST /api/hosts/claim-or-create`,
   `POST /api/hosts/{id}/revoke`, `POST /api/hosts/{id}/rotate-token`.
+- Generic `verifyHostToken(token)` server-side primitive: looks up
+  `host_credentials` by `token_hash`, denies on row missing, denies on
+  `host_credentials.revoked_at != NULL`, denies on
+  `host.revoked_at != NULL`, returns `(host_id, user_id)` on success.
+  Unit-test surface, no caller required in Stage B.
 - Backend `RuntimeHostRegistry` abstraction over today's single
   `hostClient`. Cache keys gain a `host_id` dimension; run-state cache
-  is per-host generation.
+  is per-host generation. Registry rejects placement on a revoked host
+  (fail-closed).
 - `conversation_agents.runtime_host_id` (or equivalent placement column)
   on the conversation/agent join row.
 - Every runtime intent route resolves a `host_id` via the registry —
   even when there is only one entry. No "if registry has one host, use
   it" shortcut.
-- Token validator on the existing daemon ↔ backend channel: when the
-  daemon makes any backend call, server validates `host_token` against
-  `host_credentials`. *This adds token auth to an existing local
-  channel; it is NOT a new outbound protocol.*
 - `installation_id` writer on desktop: `~/.silverhand/installation_id`
   auto-created on first run (uuid v4).
 - Soft-delete model for both `hosts.revoked_at` and
-  `host_credentials.revoked_at`; token validator denies on either set
-  or row missing. **No grace window on revoke**; rotation has 60s grace.
+  `host_credentials.revoked_at`; `verifyHostToken()` denies on either
+  set or row missing. **No grace window on revoke**; rotation has 60s
+  grace.
+- Daemon-config writer in Electron main: after `claim-or-create`
+  succeeds, main writes `{host_id, host_token, server_url}` to
+  `~/.silverhand/daemon-config.json` (0600, owner-only). Daemon reads
+  it at boot. No transport change.
 
 **Out of scope** (push back if asked):
 
@@ -218,53 +238,64 @@ or unix-socket transport.
   phase together with their threat model.
 - **Daemon outbound host protocol** — the long-lived WS / reconnect /
   backpressure / server-initiated control / "online" presence track is
-  follow-up phase. Stage B does NOT make a server "see daemons coming
-  online"; it only makes a server *recognize and authorize* a daemon's
-  identity when the daemon makes a backend call over the existing
-  channel.
+  follow-up phase. Stage B does NOT introduce a daemon-initiated
+  authenticated channel; the existing `HostClient`-dials-unix-socket
+  transport is unchanged.
+- **Daemon presenting `host_token` to the server in any new request
+  path**. That request path does not exist in V1.
 - Auto-rotation of `host_token` on every claim. Rotation is explicit.
 
 **PR breakdown (suggested)**:
 
-1. **B.1 Schema + RuntimeHostRegistry skeleton**: tables, migrations,
-   registry interface (single-entry implementation), `runtime_host_id`
-   placement column.
-2. **B.2 Local-host claim flow**: `claim-or-create` route + Electron
-   main wires it after login; writes `~/.silverhand/daemon-config.json`
-   0600; daemon picks up `host_token` and presents it on its next
-   backend call. (No new outbound protocol — uses the existing
-   daemon ↔ backend channel with the new credential added.)
+1. **B.1 Schema + RuntimeHostRegistry skeleton + verifyHostToken**:
+   tables, migrations, registry interface (single-entry implementation),
+   `runtime_host_id` placement column, generic `verifyHostToken()`
+   primitive with unit-test coverage of valid / rotated / revoked /
+   missing cases.
+2. **B.2 Local-host claim + token persistence**: `claim-or-create`
+   route + Electron main wires it after login; main writes
+   `~/.silverhand/daemon-config.json` 0600. Daemon reads it at boot
+   (existing transport — no protocol change). `host_token` is now on
+   disk in the daemon's config; how it later gets presented to the
+   server is follow-up phase.
 3. **B.3 Runtime intent routing through registry**: every existing
-   runtime intent route refactored to resolve host_id; cache keys
-   updated; per-host run-state generation.
+   runtime intent route refactored to resolve `host_id` through the
+   registry; cache keys updated; per-host run-state generation;
+   registry refuses placement on revoked host (fail-closed).
 4. **B.4 Revoke + rotate + Hosts UI**: revoke/rotate routes,
-   token-validator updates (revoked_at check), desktop Hosts page
-   (list / revoke action).
+   `verifyHostToken()` honours `revoked_at` on both rows, desktop
+   Hosts page (list / revoke action).
 
 **Acceptance criteria**:
 
-- Fresh desktop login → `claim-or-create` issues `host_id` +
-  `host_token` → main writes `~/.silverhand/daemon-config.json` 0600 →
-  daemon's next backend call carries the new `Authorization: Bearer
-  <host_token>` → server validates against `host_credentials`. Verified
-  by a smoke test against embedded mode (loopback).
+- `claim-or-create` issues `host_id` + `host_token` → server stores
+  `token_hash` in `host_credentials` → main writes
+  `~/.silverhand/daemon-config.json` 0600 with the cleartext token.
+  Verified by smoke test (no transport / channel involvement).
+- `verifyHostToken()` unit tests cover the full matrix: valid token →
+  returns `(host_id, user_id)`; rotated old token within 60s grace →
+  returns ok; rotated old token after 60s → denied; revoked credential
+  → denied; revoked host → denied; missing token → denied. Test
+  surface is the primitive itself; no caller required in Stage B.
 - Every runtime intent route in the codebase carries `host_id` through
   registry lookup. Verified by an audit test on the runtime router.
-- Revoke: token-validator denies the next request bearing the
-  revoked token within one DB roundtrip; daemon retry attempts return
-  401 `host_revoked`; existing agents on that host are NOT cascade-
-  deleted.
-- Rotate: old token valid for 60s after rotation commit; new token
-  valid immediately; daemon picks up new token via existing
-  daemon ↔ backend authenticated channel.
+- `RuntimeHostRegistry.placeAgent(host_id, ...)` refuses to place on a
+  `revoked_at != NULL` host. Verified by integration test.
+- Revoke: `verifyHostToken()` denies the revoked token within one DB
+  roundtrip after revoke commits; existing agents on that host are
+  NOT cascade-deleted.
+- Rotate: `verifyHostToken()` accepts both old and new tokens within
+  the 60s grace window; only new after grace; daemon-config-file
+  refresh path lands the new token (file write — no new transport).
 - Revoked host + new `claim-or-create` attempt → 409 `host_revoked`
   fail-closed, no silent revival.
 - `host_token` never appears in renderer process memory or IPC traffic
   (audited via leak-guard test that greps IPC payload schemas).
-- **Out-of-scope verification**: Stage B does NOT claim "remote-server
-  reaches desktop daemon" — that path is only valid after follow-up
-  phase ships daemon outbound. Acceptance tests run against embedded
-  mode where daemon and server are co-located.
+- **Out-of-scope verification**: Stage B does NOT introduce a new
+  daemon-initiated authenticated request path. The existing
+  `HostClient`-dials-unix-socket transport is unchanged. Acceptance
+  tests do NOT exercise "daemon making an authenticated outbound
+  call" — that surface lands in follow-up phase.
 
 **Detail spec**: `auth-and-host-model.md` §1, §5, §6, §8.2–§8.3, §10.
 
@@ -564,3 +595,33 @@ acceptance is met.
     relegated to manual security check, not CI gate.
   - Dependency graph annotated to make Stage-D-ships-control-plane-only
     visible at a glance.
+- 2026-05-25 — Round 3 transport-truth fix (Alice). Addresses Cindy
+  review round 2 P1: Stage B round-2 in-scope still implied a
+  daemon-initiated authenticated request path ("when the daemon makes
+  any backend call, server validates `host_token`") and acceptance
+  said "daemon's next backend call carries the new Authorization". The
+  current pre-outbound architecture has backend / Electron main dial
+  the daemon's Unix socket via `HostClient`; the daemon does NOT make
+  outbound HTTP/WS calls to the backend. That request path is
+  follow-up-phase, not V1.
+  - Stage B in-scope rewritten to deliver **host identity + token
+    issuance/storage/revoke/rotate + generic `verifyHostToken()` +
+    placement routing** only. New explicit out-of-scope item:
+    "Daemon presenting `host_token` to the server in any new request
+    path — that request path does not exist in V1."
+  - Stage B acceptance criteria rewritten around what actually ships:
+    smoke test for token issuance + on-disk persistence; unit-test
+    matrix for `verifyHostToken()` (valid / rotated within grace /
+    rotated past grace / revoked credential / revoked host / missing);
+    audit test for runtime-intent host_id routing; fail-closed test
+    for `placeAgent()` on revoked host. No test exercises a daemon
+    outbound authenticated call.
+  - B.1 PR adds `verifyHostToken()` primitive with unit-test surface;
+    B.2 reframed as "claim + token persistence", not "claim + outbound
+    handshake".
+  - Cross-doc cleanup landed in the same round:
+    `auth-and-host-model.md §6.1` updated (`2eacfff` on
+    `docs/auth-and-host-model`) to remove the matching "[daemon]
+    outbound-connects with host_token" diagram line + add a Transport
+    note paragraph deferring daemon-initiated outbound to follow-up
+    phase.
