@@ -5,6 +5,7 @@ export const apiPaths = {
 
   // hosts
   hosts: '/api/hosts',
+  hostClaimOrCreate: '/api/hosts/claim-or-create',
 
   // agents
   agents: '/api/agents',

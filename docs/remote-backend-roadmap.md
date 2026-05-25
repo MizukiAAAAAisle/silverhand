@@ -237,8 +237,8 @@ protocol), not Stage B.
   grace.
 - Daemon-config writer in Electron main: after `claim-or-create`
   succeeds, main writes `{host_id, host_token, server_url}` to
-  `~/.silverhand/daemon-config.json` (0600, owner-only). Daemon reads
-  it at boot. No transport change.
+  `~/.silverhand/daemon-config.json` (0600, owner-only) for daemon boot
+  / follow-up outbound phases. No transport change.
 
 **Out of scope** (push back if asked):
 
@@ -253,7 +253,10 @@ protocol), not Stage B.
   transport is unchanged.
 - **Daemon presenting `host_token` to the server in any new request
   path**. That request path does not exist in V1.
-- Auto-rotation of `host_token` on every claim. Rotation is explicit.
+- Auto-rotation of `host_token` on every claim. Rotation is explicit;
+  `claim-or-create` reuses the desktop's existing local daemon config
+  when `current_host_id` matches and only mints a new token when main
+  has no reusable cleartext token to persist.
 
 **PR breakdown (suggested)**:
 
@@ -264,8 +267,8 @@ protocol), not Stage B.
    missing cases.
 2. **B.2 Local-host claim + token persistence**: `claim-or-create`
    route + Electron main wires it after login; main writes
-   `~/.silverhand/daemon-config.json` 0600. Daemon reads it at boot
-   (existing transport — no protocol change). `host_token` is now on
+   `~/.silverhand/daemon-config.json` 0600 for daemon boot / follow-up
+   outbound phases (existing transport — no protocol change). `host_token` is now on
    disk in the daemon's config; how it later gets presented to the
    server is follow-up phase.
 3. **B.3 Runtime intent routing through registry**: every existing
@@ -278,7 +281,8 @@ protocol), not Stage B.
 
 **Acceptance criteria**:
 
-- `claim-or-create` issues `host_id` + `host_token` → server stores
+- `claim-or-create` issues `host_id` + `host_token` when main lacks a
+  reusable local daemon config for that host → server stores
   `token_hash` in `host_credentials` → main writes
   `~/.silverhand/daemon-config.json` 0600 with the cleartext token.
   Verified by smoke test (no transport / channel involvement).

@@ -23,6 +23,7 @@ import {
   ConversationLogDebugInputSchema,
   HumanClaimTaskInputSchema,
   HumanUpdateTaskStatusInputSchema,
+  HostClaimOrCreateInputSchema,
   ListTasksQuerySchema,
   MarkConversationReadInputSchema,
   MarkNotificationsReadInputSchema,
@@ -68,6 +69,7 @@ import { createCliInvokeMiddleware } from './observability/cli-invoke-middleware
 import { AgentRepo } from './repos/agent-repo.js';
 import { AttachmentRepo } from './repos/attachment-repo.js';
 import { HostRepo } from './repos/host-repo.js';
+import { HostTokenService } from './auth/host-token.js';
 import { MessageRepo, messageRowToDto, AnchorMessageNotInConversationError } from './repos/message-repo.js';
 import { NotificationRepo } from './repos/notification-repo.js';
 import { SavedMessageRepo } from './repos/saved-message-repo.js';
@@ -271,6 +273,20 @@ function threadServiceErrorResponse(c: Context, err: unknown): Response | null {
 }
 
 function resolveViewerUserId(c: Context): string {
+  return getUserPrincipal(c).userId;
+}
+
+function requireSessionBearerUser(c: Context, ctx: BackendContext): Response | string {
+  const token = bearerToken(c);
+  if (!token || token === ctx.serverConfig.auth_token) {
+    return c.json(
+      {
+        error: 'host claim requires a user session bearer',
+        code: 'session_bearer_required',
+      },
+      401,
+    );
+  }
   return getUserPrincipal(c).userId;
 }
 
@@ -588,6 +604,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   const notifications = new NotificationRepo(ctx.db);
   const conversationReads = new ConversationReadRepo(ctx.db);
   const users = new UserRepo(ctx.db);
+  const hostTokens = new HostTokenService(ctx.db);
   const membership = new MembershipService({ agents, users, conversations });
   const userAuth = new UserAuthService({
     db: ctx.db,
@@ -662,6 +679,47 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   });
 
   app.get(apiPaths.hosts, c => c.json({ hosts: hosts.list() }));
+
+  app.post(apiPaths.hostClaimOrCreate, async c => {
+    const userId = requireSessionBearerUser(c, ctx);
+    if (userId instanceof Response) return userId;
+
+    const body = await c.req.json().catch(() => null);
+    const parsed = HostClaimOrCreateInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+
+    const claimed = hosts.claimOrCreateLocal({
+      userId,
+      installationId: parsed.data.installation_id,
+      preferredName: parsed.data.label,
+    });
+    if (claimed.host.revoked_at !== null) {
+      return c.json(
+        {
+          error: 'host has been revoked',
+          error_code: 'host_revoked',
+        },
+        409,
+      );
+    }
+
+    const response = {
+      host_id: claimed.host.id,
+      host: {
+        id: claimed.host.id,
+        name: claimed.host.name,
+        kind: claimed.host.kind,
+        created_at: claimed.host.created_at,
+      },
+      server_url: ctx.serverConfig.url,
+      ...(parsed.data.current_host_id === claimed.host.id
+        ? {}
+        : { host_token: hostTokens.issueHostToken({ hostId: claimed.host.id }).hostToken }),
+    };
+    return c.json(response);
+  });
 
   // ── Workspaces / conversations ──────────────────────────────────
   //

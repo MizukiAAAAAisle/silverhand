@@ -25,6 +25,23 @@ export const HostDtoSchema = z.object({
 });
 export type HostDto = z.infer<typeof HostDtoSchema>;
 
+export const HostClaimOrCreateInputSchema = z.object({
+  installation_id: z.string().uuid(),
+  label: z.string().trim().min(1).max(128).optional(),
+  current_host_id: z.string().min(1).optional(),
+}).strict();
+export type HostClaimOrCreateInput = z.infer<typeof HostClaimOrCreateInputSchema>;
+
+export const HostClaimOrCreateResponseSchema = z.object({
+  host_id: z.string(),
+  host: HostDtoSchema,
+  server_url: z.string().url(),
+  host_token: z.string().min(1).optional(),
+});
+export type HostClaimOrCreateResponse = z.infer<
+  typeof HostClaimOrCreateResponseSchema
+>;
+
 // ── User ─────────────────────────────────────────────────────────
 // Profile-only "human" identity. Auth/credentials live in a separate
 // (V2-only) `user_auth_identities` table; this DTO is what the renderer

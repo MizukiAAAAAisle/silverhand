@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
   AuthSessionResponseSchema,
+  HostClaimOrCreateResponseSchema,
   ServerInfoSchema,
   UserDtoSchema,
   X_SILVERHAND_LEGACY_USER_ID_HEADER,
@@ -26,6 +27,14 @@ import {
 } from '@silverhand/backend';
 import { HostClient, spawnDaemonChild, type DaemonHandle } from '@silverhand/host';
 import { loadOrCreateServerConfig, databasePath, silverhandDir, writeServerConfig } from './config.js';
+import {
+  buildHostClaimInput,
+  loadOrCreateInstallationId,
+  readDaemonHostConfig,
+  isTokenBearingHostClaimPath,
+  writeDaemonHostConfig,
+  type LocalHostClaimStatus,
+} from './local-host-claim.js';
 
 let backend: RunningBackend | null = null;
 let daemon: DaemonHandle | null = null;
@@ -37,6 +46,7 @@ let eventsWindow: BrowserWindow | null = null;
 let activeConversation: ActiveConversationInfo = { workspaceId: null, conversationId: null };
 let userSessionToken: string | null = null;
 let userSessionUser: UserDto | null = null;
+let localHostClaim: LocalHostClaimStatus = { status: 'unclaimed', hostId: null };
 
 /** Set `SILVERHAND_HEADLESS=1` to boot the backend without a window.
  *  Useful for curl-driven smoke tests and integration scripts — see
@@ -354,6 +364,7 @@ function storeUserSession(token: string, user: UserDto): void {
 function clearUserSession(): void {
   userSessionToken = null;
   userSessionUser = null;
+  localHostClaim = { status: 'unclaimed', hostId: null };
   clearPersistedUserSession();
 }
 
@@ -401,6 +412,7 @@ async function hydrateDesktopSession(): Promise<void> {
   }
   userSessionToken = token;
   userSessionUser = user;
+  await claimLocalHostForUserSession();
 }
 
 async function desktopAuthState(): Promise<DesktopAuthState> {
@@ -443,7 +455,75 @@ async function postAuthSession(
     };
   }
   storeUserSession(parsed.data.user_token, parsed.data.user);
+  await claimLocalHostForUserSession();
   return { ok: true, user: parsed.data.user };
+}
+
+async function claimLocalHostForUserSession(): Promise<void> {
+  const token = userSessionToken;
+  const running = backend;
+  if (!token || !running) {
+    localHostClaim = { status: 'unclaimed', hostId: null };
+    return;
+  }
+
+  const dir = silverhandDir();
+  const existingConfig = readDaemonHostConfig(dir);
+  try {
+    const installationId = loadOrCreateInstallationId(dir);
+    const claimInput = buildHostClaimInput({
+      installationId,
+      existingConfig,
+    });
+    const res = await fetch(backendUrl(apiPaths.hostClaimOrCreate), {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(claimInput),
+    });
+    const text = await res.text();
+
+    if (res.status === 409) {
+      localHostClaim = {
+        status: 'revoked',
+        hostId: existingConfig?.host_id ?? null,
+      };
+      logger?.warn('local host claim failed: host revoked');
+      return;
+    }
+    if (!res.ok) {
+      throw new Error(`local host claim failed: ${res.status} ${res.statusText}`);
+    }
+
+    const parsed = HostClaimOrCreateResponseSchema.safeParse(parseJson(text));
+    if (!parsed.success) {
+      throw new Error(`invalid local host claim response: ${parsed.error.message}`);
+    }
+
+    const hostToken =
+      parsed.data.host_token ??
+      (existingConfig?.host_id === parsed.data.host_id
+        ? existingConfig.host_token
+        : null);
+    if (!hostToken) {
+      throw new Error('local host claim response omitted host_token without reusable config');
+    }
+
+    writeDaemonHostConfig(dir, {
+      server_url: running.url,
+      host_id: parsed.data.host_id,
+      host_token: hostToken,
+    });
+    localHostClaim = { status: 'claimed', hostId: parsed.data.host_id };
+  } catch (err) {
+    localHostClaim = {
+      status: 'error',
+      hostId: existingConfig?.host_id ?? localHostClaim.hostId,
+    };
+    logger?.warn({ err }, 'local host claim failed');
+  }
 }
 
 async function logoutUserSession(): Promise<{ ok: true }> {
@@ -463,6 +543,9 @@ async function logoutUserSession(): Promise<{ ok: true }> {
 function assertApiProxyPath(path: string): void {
   if (!path.startsWith('/api/')) {
     throw new Error(`desktop backend proxy only accepts /api/* paths: ${path}`);
+  }
+  if (isTokenBearingHostClaimPath(path)) {
+    throw new Error('desktop backend proxy refuses token-bearing host claim route');
   }
 }
 
@@ -872,6 +955,8 @@ ipcMain.handle('backend:info', () => {
     // user session token via `backend:request`; do not expose
     // `user_token` to the renderer.
     event_auth_token: backend.context.serverConfig.auth_token,
+    local_host_id: localHostClaim.status === 'claimed' ? localHostClaim.hostId : null,
+    local_host_status: localHostClaim.status,
   };
 });
 

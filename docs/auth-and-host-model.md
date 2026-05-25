@@ -312,11 +312,12 @@ This flow runs in the Electron **main** process; the renderer only sees
 [main] read ~/.silverhand/installation_id (creates uuid if absent)
 [main] POST /api/hosts/claim-or-create
          Authorization: Bearer <user_token>
-         Body: { installation_id, label: os.hostname(), capabilities: { ... } }
+         Body: { installation_id, label: os.hostname(), current_host_id? }
 [server] resolves (user_id, installation_id):
          CASE A: existing host, not revoked
-           → return { host_id, host_token, server_url }
-              (no rotation if existing token still valid)
+           → return { host_id, server_url }
+              (host_token included only when main has no reusable local
+               daemon config for that host; no implicit rotation)
          CASE B: no existing host
            → CREATE host (user_id, installation_id, kind=local, label, ...)
            → ISSUE host_token
@@ -327,7 +328,7 @@ This flow runs in the Electron **main** process; the renderer only sees
               re-create it from the Hosts page" (no silent revival)
 [main] write {host_id, host_token, server_url} to
        ~/.silverhand/daemon-config.json (mode 0600, owner-only)
-[main] spawn local daemon (or signal existing daemon to reload config)
+[main] existing local daemon transport remains unchanged in Stage B
 [daemon] holds host_token on disk; presents it on whatever transport
          the daemon ↔ server channel uses (see transport note below)
 ```

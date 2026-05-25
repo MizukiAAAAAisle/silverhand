@@ -26,7 +26,16 @@ export const ServerConfigSchema = z.object({
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;
 
 export const SERVER_CONFIG_FILENAME = 'server-config.json';
+export const INSTALLATION_ID_FILENAME = 'installation_id';
+export const DAEMON_HOST_CONFIG_FILENAME = 'daemon-config.json';
 export const AUTH_TOKEN_HEADER = 'authorization';
+
+export const DaemonHostConfigSchema = z.object({
+  server_url: z.string().url(),
+  host_id: z.string().min(1),
+  host_token: z.string().min(1),
+}).strict();
+export type DaemonHostConfig = z.infer<typeof DaemonHostConfigSchema>;
 
 /**
  * Environment variable names the `silverhand` CLI reads at every

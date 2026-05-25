@@ -86,7 +86,7 @@ listed in the order they appear in main.
 
 | IPC channel | Preload method | Tag | Notes / V1 disposition |
 |---|---|---|---|
-| `backend:info` | `getBackendInfo` | **mixed** (see notes) | Returns `{url, mode, auth_token, local_host_id?}`. Tag breakdown: **protocol metadata** for `url` + `mode` + `local_host_id` — neutral dual-mode connection info the renderer needs to address the backend, choose its auth flow, and gate host-kind UX. **embedded-only** for the `auth_token` field — that field is the legacy embedded shortcut C.4 fences. Under remote mode `auth_token` is `null` and the renderer acquires its session bearer from `getSessionBearer()` (see §6.1). The route itself stays, and C.3 adds `local_host_id` as an additive protocol-metadata field; only the `auth_token` field carries the embedded-only constraint. |
+| `backend:info` | `getBackendInfo` | **mixed** (see notes) | Returns `{url, mode, auth_token, local_host_id?, local_host_status}`. Tag breakdown: **protocol metadata** for `url` + `mode` + `local_host_id` + `local_host_status` — neutral dual-mode connection info the renderer needs to address the backend, choose its auth flow, and gate host-kind UX. **embedded-only** for the `auth_token` field — that field is the legacy embedded shortcut C.4 fences. Under remote mode `auth_token` is `null` and the renderer acquires its session bearer from `getSessionBearer()` (see §6.1). The route itself stays, and C.3 adds `local_host_id` / `local_host_status` as additive protocol-metadata fields; only the `auth_token` field carries the embedded-only constraint. |
 | `dialog:pickDirectory` | `pickDirectory` | **local-host-only UX** | Native open dialog. The picked path is on the user's machine; under Stage B that path can only be assigned to a local Host. Caller is `CreateWorkspaceDialog`. C.3 gates the picker on "the workspace's target host kind is `local` and equals this desktop's `local_host_id`". Backend mode is irrelevant — remote-backend + local-Host still picks user-fs paths legitimately. If/when the user has non-local hosts available (remote / sandbox), the create-workspace flow needs an additional "host placement" step that this V1 does not ship (deferred; see roadmap §5 Follow-up); until then default placement is the local Host and the picker stays. |
 | `shell:openExternal` | `openExternal` | **OS-IPC** | Strict `https?://` allowlist already enforced. Kept as-is. |
 | `attachment:openExternal` | `openAttachmentExternal` | **OS-IPC** | Renderer fetches bytes via HTTP first; main only handles the local tmp-write + Launch Services call. Already protocol-pure. Keep. |
@@ -138,9 +138,10 @@ through every fetch helper and is unaffected — it's set from `/api/me`
 hydration, identical under both modes.
 
 **`local_host_id` propagation to renderer**: Stage B introduces the
-`hosts` table and assigns this desktop's local host id when the daemon
-claims/registers. Main exposes it to the renderer through an additive
-field on `backend:info` (e.g. `local_host_id: string`) — that is a
+`hosts` table and assigns this desktop's local host id when main
+claims/registers the local Host. Main exposes safe metadata to the
+renderer through additive fields on `backend:info` (e.g.
+`local_host_id: string | null`, `local_host_status`) — that is a
 **protocol metadata** extension of an already existing IPC, not a new
 route, so it stays inside the C.3 surface without needing a separate
 disposition. Renderer caches it on `BackendInfo` and uses it for every

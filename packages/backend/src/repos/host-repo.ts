@@ -23,6 +23,11 @@ export interface CreateHostOptions {
   lastSeenAt?: number | null;
 }
 
+export interface ClaimLocalHostResult {
+  host: HostRow;
+  created: boolean;
+}
+
 export class HostRepo {
   constructor(private readonly db: Db) {}
 
@@ -110,6 +115,51 @@ export class HostRepo {
     return row;
   }
 
+  claimOrCreateLocal(input: {
+    userId: string;
+    installationId: string;
+    preferredName?: string;
+    now?: number;
+  }): ClaimLocalHostResult {
+    const now = input.now ?? Date.now();
+    const existing = this.getByUserInstallation(input.userId, input.installationId);
+    if (existing) {
+      if (existing.revoked_at !== null) {
+        return { host: existing, created: false };
+      }
+      this.touchLastSeen(existing.id, now);
+      const touched = this.get(existing.id);
+      if (!touched) {
+        throw new Error(
+          `HostRepo.claimOrCreateLocal: missing existing host ${existing.id}`,
+        );
+      }
+      return { host: touched, created: false };
+    }
+
+    const legacyLocal = this.getUnclaimedLocal();
+    if (legacyLocal) {
+      return {
+        host: this.bindToUserInstallation({
+          hostId: legacyLocal.id,
+          userId: input.userId,
+          installationId: input.installationId,
+          lastSeenAt: now,
+        }),
+        created: false,
+      };
+    }
+
+    return {
+      host: this.create(this.uniqueLocalHostName(input), 'local', {
+        userId: input.userId,
+        installationId: input.installationId,
+        lastSeenAt: now,
+      }),
+      created: true,
+    };
+  }
+
   touchLastSeen(id: string, lastSeenAt = Date.now()): boolean {
     const result = this.db
       .prepare(`UPDATE hosts SET last_seen_at = ? WHERE id = ?`)
@@ -134,4 +184,49 @@ export class HostRepo {
     if (existing) return existing;
     return this.create(LOCAL_HOST_NAME, 'local');
   }
+
+  private getUnclaimedLocal(): HostRow | null {
+    const row = this.db
+      .prepare<[string], HostRow>(
+        `SELECT * FROM hosts
+          WHERE name = ?
+            AND kind = 'local'
+            AND user_id IS NULL
+            AND installation_id IS NULL
+            AND revoked_at IS NULL`,
+      )
+      .get(LOCAL_HOST_NAME);
+    return row ?? null;
+  }
+
+  private uniqueLocalHostName(input: {
+    installationId: string;
+    preferredName?: string;
+  }): string {
+    const base = normalizeHostName(input.preferredName ?? LOCAL_HOST_NAME);
+    const prefix = input.installationId.replace(/-/g, '').slice(0, 8);
+    const candidates = [
+      base,
+      `${base}-${prefix}`,
+      `${LOCAL_HOST_NAME}-${prefix}`,
+    ];
+    for (const candidate of candidates) {
+      if (!this.getByName(candidate)) return candidate;
+    }
+    for (let i = 0; i < 8; i++) {
+      const candidate = `${LOCAL_HOST_NAME}-${prefix}-${randomBytes(3).toString('hex')}`;
+      if (!this.getByName(candidate)) return candidate;
+    }
+    throw new Error('HostRepo.claimOrCreateLocal: unable to allocate host name');
+  }
+}
+
+function normalizeHostName(value: string): string {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+  return normalized || LOCAL_HOST_NAME;
 }

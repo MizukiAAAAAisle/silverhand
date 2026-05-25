@@ -6,7 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('./api', () => ({
   getBackendInfo: vi.fn().mockResolvedValue({
     url: 'http://127.0.0.1:1234',
+    mode: 'embedded',
     event_auth_token: 'test-token',
+    local_host_id: 'host-local',
+    local_host_status: 'claimed',
   }),
 }));
 
