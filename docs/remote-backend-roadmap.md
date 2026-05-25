@@ -15,7 +15,9 @@
 > than restating either.
 >
 > **Reading order**:
-> 1. `remote-server-target-architecture.md` — the destination
+> 1. `remote-server-target-architecture.md` — the destination (read for
+>    topology + phase plan only; its auth §5 is **superseded** by
+>    `auth-and-host-model.md` — do not implement from it)
 > 2. This document — the path
 > 3. Per-stage detail spec (linked below)
 
@@ -31,8 +33,16 @@ The locked end state, from `remote-server-target-architecture.md`:
   identity, dual token).
 - **Sandbox (future)** = headless daemon host only, reusing the same
   daemon-host protocol as desktop.
-- **Daemon and agent always co-located**; agent never reaches the server
-  directly.
+- **Daemon and agent process / fs / runtime are host-local** —
+  co-located on the same Host. The daemon holds `host_token` and
+  represents the execution plane for that Host.
+- **Agent CLI is host-local but server-directed**: agent processes use
+  `silverhand` CLI calls that go to the server URL outbound with their
+  own conversation-scoped credentials. Agent CLI does NOT hold
+  `host_token` and is NOT a substitute for the daemon — it is a
+  consumer of server APIs, like the desktop UI is. This is the third
+  layer of the token taxonomy referenced in `auth-and-host-model.md`
+  §5 (user / host / agent-conversation-scoped).
 
 The "remote" in "remote backend" means *the control plane runs elsewhere
 than the user's desktop* — it does NOT mean *agents run in the cloud*.
@@ -140,8 +150,15 @@ codepath is identical to the multi-user case.
 - `SELECT` on any resource by an unrelated user returns empty / 404
   (depending on resource), never the row. Integration test seeds two
   users and asserts isolation across every ACL class.
-- Credential failure timing within 10% across the four enumeration
-  axes (email-known/unknown × password-correct/wrong) on a benchmark.
+- Credential failure path goes through a constant control flow: when
+  the `users` row is absent the implementation MUST hash a dummy
+  password against the same Argon2id parameters before returning, so
+  there is no early-exit branch on the unknown-email path. Verified by
+  a code-level audit (the route's failure branch has no conditional
+  return before the hash call) and by a unit test that mocks the hash
+  function and asserts it is invoked on both axes. Wall-clock timing
+  benchmarks (within X% across enumeration axes) are a manual security
+  check, NOT a CI gate — they are too flaky under shared-runner load.
 - `SILVERHAND_DISABLE_SIGNUP=1` → `POST /auth/signup` returns 404
   identical to a missing route; startup log prints the resolved value.
 - Desktop: fresh install → Setup Wizard appears; signup → login →
@@ -156,9 +173,17 @@ codepath is identical to the multi-user case.
 
 **Goal**: `Host` becomes a first-class concept in schema and API. Every
 runtime intent route carries `host_id`, even with one local host.
-`host_token` is the daemon's outbound credential. Phase 4 (daemon
-outbound to remote hosts) becomes a *routing target swap*, not a route
-rewrite.
+`host_token` is issued and revocable. Phase 4 (the daemon-outbound
+protocol that brings a remote host online) becomes a *new transport
+landing on existing identity*, not a rewrite of identity itself.
+
+**Critical scope note**: Stage B lands *identity + issuance + placement
+routing*. It does **not** land the long-lived daemon ↔ server outbound
+connection protocol (reconnect, backpressure, server-initiated control,
+"online" presence). That is daemon-outbound, follow-up phase. Stage B
+proves the contract works with embedded mode (loopback) where daemon
+and server are co-located and the "connection" is the existing in-process
+or unix-socket transport.
 
 **In scope**:
 
@@ -175,9 +200,10 @@ rewrite.
 - Every runtime intent route resolves a `host_id` via the registry —
   even when there is only one entry. No "if registry has one host, use
   it" shortcut.
-- Daemon outbound auth: daemon presents `host_token` as
-  `Authorization: Bearer` on its connection; server validates against
-  `host_credentials`.
+- Token validator on the existing daemon ↔ backend channel: when the
+  daemon makes any backend call, server validates `host_token` against
+  `host_credentials`. *This adds token auth to an existing local
+  channel; it is NOT a new outbound protocol.*
 - `installation_id` writer on desktop: `~/.silverhand/installation_id`
   auto-created on first run (uuid v4).
 - Soft-delete model for both `hosts.revoked_at` and
@@ -190,8 +216,12 @@ rewrite.
   `POST /api/hosts/{id}/exchange`, "Add remote host" desktop UI,
   headless daemon binary distribution — all deferred to follow-up
   phase together with their threat model.
-- Daemon outbound from a non-co-located process. Daemon stays local in
-  Stage B.
+- **Daemon outbound host protocol** — the long-lived WS / reconnect /
+  backpressure / server-initiated control / "online" presence track is
+  follow-up phase. Stage B does NOT make a server "see daemons coming
+  online"; it only makes a server *recognize and authorize* a daemon's
+  identity when the daemon makes a backend call over the existing
+  channel.
 - Auto-rotation of `host_token` on every claim. Rotation is explicit.
 
 **PR breakdown (suggested)**:
@@ -201,7 +231,9 @@ rewrite.
    placement column.
 2. **B.2 Local-host claim flow**: `claim-or-create` route + Electron
    main wires it after login; writes `~/.silverhand/daemon-config.json`
-   0600; daemon picks up host_token and authenticates outbound.
+   0600; daemon picks up `host_token` and presents it on its next
+   backend call. (No new outbound protocol — uses the existing
+   daemon ↔ backend channel with the new credential added.)
 3. **B.3 Runtime intent routing through registry**: every existing
    runtime intent route refactored to resolve host_id; cache keys
    updated; per-host run-state generation.
@@ -211,21 +243,28 @@ rewrite.
 
 **Acceptance criteria**:
 
-- Fresh desktop login → `claim-or-create` issues host_id + host_token →
-  daemon authenticates outbound → server marks `(user_id, host_id)`
-  online. Verified by a smoke test running through the full handshake.
+- Fresh desktop login → `claim-or-create` issues `host_id` +
+  `host_token` → main writes `~/.silverhand/daemon-config.json` 0600 →
+  daemon's next backend call carries the new `Authorization: Bearer
+  <host_token>` → server validates against `host_credentials`. Verified
+  by a smoke test against embedded mode (loopback).
 - Every runtime intent route in the codebase carries `host_id` through
   registry lookup. Verified by an audit test on the runtime router.
 - Revoke: token-validator denies the next request bearing the
-  revoked token within one DB roundtrip; daemon WS reconnect returns
+  revoked token within one DB roundtrip; daemon retry attempts return
   401 `host_revoked`; existing agents on that host are NOT cascade-
   deleted.
 - Rotate: old token valid for 60s after rotation commit; new token
-  valid immediately; daemon receives new token via existing connection.
+  valid immediately; daemon picks up new token via existing
+  daemon ↔ backend authenticated channel.
 - Revoked host + new `claim-or-create` attempt → 409 `host_revoked`
   fail-closed, no silent revival.
 - `host_token` never appears in renderer process memory or IPC traffic
   (audited via leak-guard test that greps IPC payload schemas).
+- **Out-of-scope verification**: Stage B does NOT claim "remote-server
+  reaches desktop daemon" — that path is only valid after follow-up
+  phase ships daemon outbound. Acceptance tests run against embedded
+  mode where daemon and server are co-located.
 
 **Detail spec**: `auth-and-host-model.md` §1, §5, §6, §8.2–§8.3, §10.
 
@@ -369,8 +408,16 @@ operations exist as recovery utilities, not as a CLI lifecycle tool.
   port; embedded mode imports the same entry point with no code-path
   divergence beyond config and `/auth/embedded-bootstrap` enablement.
 - Desktop in "remote" mode (server URL set in Settings) successfully
-  signs up, logs in, and runs an agent against a server running in a
-  separate Docker container.
+  signs up, logs in, lists/creates workspaces, sends a message, and
+  receives server-side state updates — i.e. **the full control-plane
+  surface works against a remote server**.
+- **Out-of-scope verification**: Stage D does NOT claim "remote server
+  drives the user's desktop daemon to run an agent." That path requires
+  daemon outbound (follow-up phase) and is intentionally NOT a Stage D
+  acceptance gate. With a remote server in Stage D, running agents
+  still requires daemon and server to be co-located — i.e. the user
+  uses embedded mode for actual agent runs. Remote control-plane + local
+  agent execution is the follow-up phase contract.
 - Env contract is complete: no required config goes through a non-env
   channel; admin subcommands need only env to find the DB.
 - `docker exec silverhand-server silverhand-server admin reset-password
@@ -409,13 +456,14 @@ operations exist as recovery utilities, not as a CLI lifecycle tool.
               │
         ┌─────▼──────┐
         │  Stage D   │ Server deployable runtime
-        │   server   │     (HARD prerequisite on C)
-        └─────┬──────┘
+        │   server   │     (HARD prerequisite on C; ships remote
+        └─────┬──────┘      control-plane only — see below)
               │
         ┌─────▼──────┐
         │ Follow-up  │ Daemon outbound + remote host + sandbox
-        │  phase     │     (HARD prerequisite on D)
-        └────────────┘
+        │  phase     │     (HARD prerequisite on D; this is what
+        └────────────┘      makes "remote server drives desktop
+                            daemon" actually work)
 ```
 
 **Hard constraints**:
@@ -489,3 +537,30 @@ acceptance is met.
   detail spec), `remote-server-target-architecture.md` (target topology
   + phase plan), `multi-daemon-registry.md` (RuntimeHostRegistry
   mechanics).
+- 2026-05-25 — Round 2 revision (Alice). Addresses Cindy review
+  round 1:
+  - **P1 daemon outbound leak**: Stage B in-scope rewritten to be
+    *identity + issuance + placement routing only*; "daemon outbound
+    auth" replaced with "token validator on existing daemon ↔ backend
+    channel"; B.2 PR description, acceptance criteria, and a new
+    Out-of-scope verification clause all clarify Stage B does NOT land
+    long-lived outbound WS / online presence. Stage D acceptance:
+    "runs an agent against remote server" claim removed and
+    explicitly marked as follow-up-phase-only ("Stage D ships remote
+    control-plane only; remote-drives-local-daemon requires daemon
+    outbound").
+  - **P1 §1 agent/server boundary**: rewritten to distinguish
+    daemon (host-local, holds `host_token`, represents execution
+    plane) from agent CLI (host-local but server-directed, holds
+    conversation-scoped credentials, consumes server APIs like the
+    desktop UI does). Cross-references the third token in
+    `auth-and-host-model.md §5`.
+  - **P2 cross-reference warning**: reading order now flags that
+    `remote-server-target-architecture.md §5` auth section is
+    superseded by `auth-and-host-model.md` — do not implement from it.
+  - **P2 timing acceptance flakiness**: Stage A credential timing
+    acceptance changed from "within 10% wall-clock benchmark" to
+    "constant control flow + dummy-hash audit"; wall-clock benchmark
+    relegated to manual security check, not CI gate.
+  - Dependency graph annotated to make Stage-D-ships-control-plane-only
+    visible at a glance.
