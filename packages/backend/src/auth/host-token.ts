@@ -32,6 +32,21 @@ export type VerifyHostTokenResult =
       code: VerifyHostTokenFailureCode;
     };
 
+export type HostCredentialIssueFailureCode =
+  | 'host_missing'
+  | 'host_unbound'
+  | 'host_revoked';
+
+export class HostCredentialIssueError extends Error {
+  constructor(
+    readonly code: HostCredentialIssueFailureCode,
+    readonly hostId: string,
+  ) {
+    super(`cannot issue host credential for ${hostId}: ${code}`);
+    this.name = 'HostCredentialIssueError';
+  }
+}
+
 export class HostTokenService {
   constructor(private readonly db: Db) {}
 
@@ -147,6 +162,28 @@ export class HostTokenService {
     };
   }
 
+  hasActiveLongLivedCredential(
+    hostId: string,
+    opts: { now?: number } = {},
+  ): boolean {
+    const now = opts.now ?? Date.now();
+    const row = this.db
+      .prepare<[string, number], { c: number }>(
+        `SELECT COUNT(*) AS c
+           FROM host_credentials c
+           JOIN hosts h ON h.id = c.host_id
+          WHERE c.host_id = ?
+            AND c.kind = 'long_lived'
+            AND c.consumed_at IS NULL
+            AND c.revoked_at IS NULL
+            AND (c.expires_at IS NULL OR c.expires_at > ?)
+            AND h.revoked_at IS NULL
+            AND h.user_id IS NOT NULL`,
+      )
+      .get(hostId, now);
+    return (row?.c ?? 0) > 0;
+  }
+
   private getCredentialById(id: string): HostCredentialRow | null {
     const row = this.db
       .prepare<[string], HostCredentialRow>(
@@ -163,15 +200,13 @@ export class HostTokenService {
       )
       .get(hostId);
     if (!row) {
-      throw new Error(`HostTokenService.issueHostToken: missing host ${hostId}`);
+      throw new HostCredentialIssueError('host_missing', hostId);
     }
     if (!row.user_id) {
-      throw new Error(
-        `HostTokenService.issueHostToken: host ${hostId} is not bound to a user`,
-      );
+      throw new HostCredentialIssueError('host_unbound', hostId);
     }
     if (row.revoked_at !== null) {
-      throw new Error(`HostTokenService.issueHostToken: host ${hostId} is revoked`);
+      throw new HostCredentialIssueError('host_revoked', hostId);
     }
   }
 }

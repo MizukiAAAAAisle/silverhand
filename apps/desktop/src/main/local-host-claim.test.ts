@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { apiPaths } from '@silverhand/shared';
@@ -10,6 +10,7 @@ import {
   isTokenBearingHostClaimPath,
   loadOrCreateInstallationId,
   readDaemonHostConfig,
+  removeDaemonHostConfig,
   writeDaemonHostConfig,
 } from './local-host-claim.js';
 
@@ -49,6 +50,22 @@ describe('desktop local host claim helpers', () => {
     expect(readDaemonHostConfig(dir)).toEqual(config);
     expect(JSON.parse(readFileSync(daemonHostConfigPath(dir), 'utf8'))).toEqual(config);
     expect(fileMode(daemonHostConfigPath(dir))).toBe(0o600);
+  });
+
+  it('removes daemon host config idempotently', () => {
+    const dir = tempDir();
+    const config = {
+      server_url: 'http://127.0.0.1:4321',
+      host_id: 'host-local',
+      host_token: 'host-token-cleartext',
+    };
+    writeDaemonHostConfig(dir, config);
+
+    removeDaemonHostConfig(dir);
+    removeDaemonHostConfig(dir);
+
+    expect(existsSync(daemonHostConfigPath(dir))).toBe(false);
+    expect(readDaemonHostConfig(dir)).toBeNull();
   });
 
   it('includes current_host_id only when reusable daemon config exists', () => {

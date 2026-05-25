@@ -31,6 +31,7 @@ import {
   buildHostClaimInput,
   loadOrCreateInstallationId,
   readDaemonHostConfig,
+  removeDaemonHostConfig,
   isTokenBearingHostClaimPath,
   writeDaemonHostConfig,
   type LocalHostClaimStatus,
@@ -366,6 +367,11 @@ function clearUserSession(): void {
   userSessionUser = null;
   localHostClaim = { status: 'unclaimed', hostId: null };
   clearPersistedUserSession();
+  try {
+    removeDaemonHostConfig(silverhandDir());
+  } catch (err) {
+    logger?.warn({ err }, 'failed to remove daemon host config');
+  }
 }
 
 function parseJson(text: string): unknown {

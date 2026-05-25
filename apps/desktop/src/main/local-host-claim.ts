@@ -75,6 +75,14 @@ export function writeDaemonHostConfig(
   );
 }
 
+export function removeDaemonHostConfig(silverhandDir: string): void {
+  try {
+    unlinkSync(daemonHostConfigPath(silverhandDir));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+  }
+}
+
 export function buildHostClaimInput(input: {
   installationId: string;
   existingConfig: DaemonHostConfig | null;

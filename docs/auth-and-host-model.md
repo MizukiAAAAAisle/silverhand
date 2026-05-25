@@ -316,8 +316,10 @@ This flow runs in the Electron **main** process; the renderer only sees
 [server] resolves (user_id, installation_id):
          CASE A: existing host, not revoked
            → return { host_id, server_url }
-              (host_token included only when main has no reusable local
-               daemon config for that host; no implicit rotation)
+              (host_token omitted only when main has a local daemon config
+               for that host AND the server still has at least one active
+               long_lived credential; stale/missing/revoked credentials force
+               a replacement token without treating claim as rotation)
          CASE B: no existing host
            → CREATE host (user_id, installation_id, kind=local, label, ...)
            → ISSUE host_token
@@ -637,7 +639,7 @@ Reviewers (Cindy) will verify the following invariants. Implementation PRs MUST 
 ### 10.2 Implementation details
 
 8. Embedded mode auto-issues credentials over the same HTTP API used in remote (via `/auth/embedded-bootstrap`); no privileged in-process shortcut.
-9. Logout vs sign-out-and-disable-host are two distinct UX actions; default is logout-only.
+9. Logout vs sign-out-and-disable-host are two distinct UX actions; default is logout-only. Logout clears the desktop session and local daemon config file but does **not** revoke the server-side Host row or its credentials; the next login reclaims the Host and receives a replacement token if the old local token is gone/stale.
 10. `host_token` rotation is explicit (no auto-rotation on claim); 60s grace period applies to **rotation only**, never to revoke.
 11. `DELETE /api/hosts/{id}` does not exist in V1; only `POST /api/hosts/{id}/revoke` (soft-delete on `hosts.revoked_at` AND `host_credentials.revoked_at`; token-validator denies on either set or row missing). Physical row removal is a future compaction concern, not a revoke responsibility.
 12. Argon2id parameters are not hard-coded in the doc or implementation; stored in `user_password_credentials.password_hash_params`, set per environment per OWASP recommendation.

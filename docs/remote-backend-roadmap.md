@@ -255,8 +255,10 @@ protocol), not Stage B.
   path**. That request path does not exist in V1.
 - Auto-rotation of `host_token` on every claim. Rotation is explicit;
   `claim-or-create` reuses the desktop's existing local daemon config
-  when `current_host_id` matches and only mints a new token when main
-  has no reusable cleartext token to persist.
+  when `current_host_id` matches **and** the server still has an active
+  long-lived credential for that host. Missing/stale/revoked credentials
+  force a replacement token, but that is recovery from local/server state
+  drift, not rotation.
 
 **PR breakdown (suggested)**:
 
@@ -282,8 +284,9 @@ protocol), not Stage B.
 **Acceptance criteria**:
 
 - `claim-or-create` issues `host_id` + `host_token` when main lacks a
-  reusable local daemon config for that host → server stores
-  `token_hash` in `host_credentials` → main writes
+  reusable local daemon config for that host, or when the server no
+  longer has an active long-lived credential for the supplied
+  `current_host_id` → server stores `token_hash` in `host_credentials` → main writes
   `~/.silverhand/daemon-config.json` 0600 with the cleartext token.
   Verified by smoke test (no transport / channel involvement).
 - `verifyHostToken()` unit tests cover the full matrix: valid token →

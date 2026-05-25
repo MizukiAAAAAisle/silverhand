@@ -17,6 +17,12 @@ describe('host routes', () => {
     const userToken = t.ctx.authSessions.issueSession({
       userId: t.viewerUserId,
     }).userToken;
+    const legacyLocal = new HostRepo(t.ctx.db).getByName('local');
+    expect(legacyLocal).toMatchObject({
+      user_id: null,
+      installation_id: null,
+      revoked_at: null,
+    });
 
     const res = await sessionHttp(t, userToken).post(apiPaths.hostClaimOrCreate, {
       installation_id: '11111111-1111-4111-8111-111111111111',
@@ -26,9 +32,9 @@ describe('host routes', () => {
     expect(res.status).toBe(200);
     const body = await res.json() as any;
     expect(body).toMatchObject({
-      host_id: expect.any(String),
+      host_id: legacyLocal!.id,
       host: {
-        id: expect.any(String),
+        id: legacyLocal!.id,
         name: 'local',
         kind: 'local',
         created_at: expect.any(Number),
@@ -90,6 +96,45 @@ describe('host routes', () => {
       )
       .get(first.host_id);
     expect(count?.c).toBe(1);
+  });
+
+  it('mints a replacement token when current_host_id has no active credential', async () => {
+    t = buildTestApp();
+    const userToken = t.ctx.authSessions.issueSession({
+      userId: t.viewerUserId,
+    }).userToken;
+    const h = sessionHttp(t, userToken);
+    const first = await h.json<any>(
+      h.post(apiPaths.hostClaimOrCreate, {
+        installation_id: '22222222-2222-4222-8222-222222222223',
+      }),
+    );
+    t.ctx.db
+      .prepare(`UPDATE host_credentials SET revoked_at = ? WHERE host_id = ?`)
+      .run(1_700_000_000_000, first.host_id);
+
+    const secondRes = await h.post(apiPaths.hostClaimOrCreate, {
+      installation_id: '22222222-2222-4222-8222-222222222223',
+      current_host_id: first.host_id,
+    });
+
+    expect(secondRes.status).toBe(200);
+    const second = await secondRes.json() as any;
+    expect(second.host_id).toBe(first.host_id);
+    expect(second.host_token).toEqual(expect.any(String));
+    expect(second.host_token).not.toBe(first.host_token);
+    const count = t.ctx.db
+      .prepare<[string], { c: number }>(
+        `SELECT COUNT(*) AS c FROM host_credentials WHERE host_id = ?`,
+      )
+      .get(first.host_id);
+    expect(count?.c).toBe(2);
+    expect(new HostTokenService(t.ctx.db).verifyHostToken(second.host_token))
+      .toMatchObject({
+        ok: true,
+        hostId: first.host_id,
+        userId: t.viewerUserId,
+      });
   });
 
   it('fails closed for a revoked existing host and does not issue a new token', async () => {

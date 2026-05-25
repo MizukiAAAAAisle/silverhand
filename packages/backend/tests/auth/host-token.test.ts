@@ -85,6 +85,44 @@ describe('HostTokenService', () => {
     });
   });
 
+  it('reports whether a host has an active long-lived credential', () => {
+    const { db, viewerUserId } = openTestDb();
+    const { hostId, hosts, tokens } = createOwnedHostTokenFixture(db, viewerUserId);
+    const now = 1_700_000_000_000;
+
+    expect(tokens.hasActiveLongLivedCredential(hostId, { now })).toBe(false);
+
+    const issued = tokens.issueHostToken({ hostId });
+    expect(tokens.hasActiveLongLivedCredential(hostId, { now })).toBe(true);
+
+    expect(tokens.revokeCredential(issued.credential.id, now)).toBe(true);
+    expect(tokens.hasActiveLongLivedCredential(hostId, { now })).toBe(false);
+
+    const expiring = tokens.issueHostToken({
+      hostId,
+      expiresAt: now + HOST_TOKEN_ROTATION_GRACE_MS,
+    });
+    expect(tokens.hasActiveLongLivedCredential(hostId, { now })).toBe(true);
+    expect(
+      tokens.hasActiveLongLivedCredential(hostId, {
+        now: now + HOST_TOKEN_ROTATION_GRACE_MS + 1,
+      }),
+    ).toBe(false);
+
+    const active = tokens.issueHostToken({ hostId });
+    expect(tokens.hasActiveLongLivedCredential(hostId, { now })).toBe(true);
+    expect(hosts.revoke(hostId, now)).toBe(true);
+    expect(tokens.hasActiveLongLivedCredential(hostId, { now })).toBe(false);
+    expect(tokens.verifyHostToken(expiring.hostToken, { now })).toEqual({
+      ok: false,
+      code: 'host_revoked',
+    });
+    expect(tokens.verifyHostToken(active.hostToken, { now })).toEqual({
+      ok: false,
+      code: 'host_revoked',
+    });
+  });
+
   it('denies a token for a revoked host even when the credential is active', () => {
     const { db, viewerUserId } = openTestDb();
     const { hostId, hosts, tokens } = createOwnedHostTokenFixture(db, viewerUserId);

@@ -69,7 +69,7 @@ import { createCliInvokeMiddleware } from './observability/cli-invoke-middleware
 import { AgentRepo } from './repos/agent-repo.js';
 import { AttachmentRepo } from './repos/attachment-repo.js';
 import { HostRepo } from './repos/host-repo.js';
-import { HostTokenService } from './auth/host-token.js';
+import { HostCredentialIssueError, HostTokenService } from './auth/host-token.js';
 import { MessageRepo, messageRowToDto, AnchorMessageNotInConversationError } from './repos/message-repo.js';
 import { NotificationRepo } from './repos/notification-repo.js';
 import { SavedMessageRepo } from './repos/saved-message-repo.js';
@@ -705,6 +705,27 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       );
     }
 
+    let hostToken: string | undefined;
+    if (
+      parsed.data.current_host_id !== claimed.host.id ||
+      !hostTokens.hasActiveLongLivedCredential(claimed.host.id)
+    ) {
+      try {
+        hostToken = hostTokens.issueHostToken({ hostId: claimed.host.id }).hostToken;
+      } catch (err) {
+        if (err instanceof HostCredentialIssueError && err.code === 'host_revoked') {
+          return c.json(
+            {
+              error: 'host has been revoked',
+              error_code: 'host_revoked',
+            },
+            409,
+          );
+        }
+        throw err;
+      }
+    }
+
     const response = {
       host_id: claimed.host.id,
       host: {
@@ -714,9 +735,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
         created_at: claimed.host.created_at,
       },
       server_url: ctx.serverConfig.url,
-      ...(parsed.data.current_host_id === claimed.host.id
-        ? {}
-        : { host_token: hostTokens.issueHostToken({ hostId: claimed.host.id }).hostToken }),
+      ...(hostToken ? { host_token: hostToken } : {}),
     };
     return c.json(response);
   });
