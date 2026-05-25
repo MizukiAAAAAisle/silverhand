@@ -79,4 +79,84 @@ describe('HostRepo', () => {
     expect(repo.revoke(newer.id)).toBe(true);
     expect(repo.getOwnedLocalForUser(viewerUserId)?.id).toBe(older.id);
   });
+
+  // Stage B.4: re-claim after revoke must succeed under the active-only
+  // partial UNIQUE. The lookup path filters revoked rows so
+  // `claimOrCreateLocal` reaches its `create` branch with a fresh row.
+  it('getByUserInstallation skips revoked rows so revoked + same install does not block re-claim', () => {
+    const { db, viewerUserId } = openTestDb();
+    const repo = new HostRepo(db);
+    const first = repo.create('owned-1', 'local', {
+      userId: viewerUserId,
+      installationId: 'install-1',
+    });
+    expect(repo.getByUserInstallation(viewerUserId, 'install-1')?.id).toBe(first.id);
+
+    repo.revoke(first.id);
+    expect(repo.getByUserInstallation(viewerUserId, 'install-1')).toBeNull();
+
+    // Re-claim should now mint a fresh active host row for the same
+    // (user, installation). The active-only UNIQUE permits both rows
+    // to coexist (one revoked, one active). Whether the result row
+    // is freshly inserted or a legacy `local` row that got bound is
+    // an implementation detail of `claimOrCreateLocal` — what matters
+    // for B.4 is that the new row id is different and active.
+    const result = repo.claimOrCreateLocal({
+      userId: viewerUserId,
+      installationId: 'install-1',
+    });
+    expect(result.host.id).not.toBe(first.id);
+    expect(result.host.revoked_at).toBeNull();
+    // Both rows now exist for the same (user, installation) pair —
+    // one revoked, one active. Order is by created_at; do not assume
+    // a specific orientation since `claimOrCreateLocal` may bind a
+    // legacy `local` row whose created_at predates `first`.
+    const all = db
+      .prepare<[string, string], { id: string; revoked_at: number | null }>(
+        `SELECT id, revoked_at FROM hosts
+          WHERE user_id = ? AND installation_id = ?
+          ORDER BY created_at ASC`,
+      )
+      .all(viewerUserId, 'install-1');
+    expect(all).toHaveLength(2);
+    const firstRow = all.find(r => r.id === first.id);
+    const newRow = all.find(r => r.id === result.host.id);
+    expect(firstRow).toBeDefined();
+    expect(newRow).toBeDefined();
+    expect(firstRow!.revoked_at).toEqual(expect.any(Number));
+    expect(newRow!.revoked_at).toBeNull();
+  });
+
+  it('listForUser returns only owned hosts, sorted active-first, and includes revoked rows', () => {
+    const { db } = openTestDb();
+    const repo = new HostRepo(db);
+    const aliceActive = repo.create('alice-active', 'local', {
+      userId: 'alice',
+      installationId: 'i-a-active',
+      lastSeenAt: 100,
+    });
+    const aliceRevoked = repo.create('alice-revoked', 'local', {
+      userId: 'alice',
+      installationId: 'i-a-revoked',
+      lastSeenAt: 50,
+    });
+    repo.revoke(aliceRevoked.id);
+    repo.create('bob-active', 'local', {
+      userId: 'bob',
+      installationId: 'i-b-active',
+      lastSeenAt: 200,
+    });
+
+    const aliceList = repo.listForUser('alice');
+    expect(aliceList.map(h => h.id)).toEqual([aliceActive.id, aliceRevoked.id]);
+    expect(aliceList[0]).toMatchObject({
+      revoked_at: null,
+      last_seen_at: 100,
+    });
+    expect(aliceList[1]).toMatchObject({ revoked_at: expect.any(Number) });
+
+    // Cross-user invisibility: Bob's active row never surfaces in
+    // Alice's list.
+    expect(aliceList.find(h => h.id.startsWith('bob'))).toBeUndefined();
+  });
 });

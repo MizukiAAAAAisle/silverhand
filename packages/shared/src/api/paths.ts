@@ -6,6 +6,23 @@ export const apiPaths = {
   // hosts
   hosts: '/api/hosts',
   hostClaimOrCreate: '/api/hosts/claim-or-create',
+  /** Soft-delete a host the caller owns (Stage B.4). Sets
+   *  `hosts.revoked_at` and bulk-revokes every active row in
+   *  `host_credentials` for that host in one transaction. Idempotent:
+   *  re-revoking an already-revoked host still sweeps any straggler
+   *  credentials but does not move the original tombstone timestamp.
+   *  No row cascade — agents/conversations bound to the host are
+   *  preserved; runtime placement fails closed instead. Bearer must
+   *  be a session bearer (legacy embedded auth_token rejected). */
+  hostRevoke: (id: string) => `/api/hosts/${id}/revoke`,
+  /** Rotate the long-lived credential for a host the caller owns
+   *  (Stage B.4). Server applies a 60-second grace to the prior
+   *  credential and mints a fresh long_lived row, returning the new
+   *  cleartext token. The token is consumed by Electron main only —
+   *  `assertApiProxyPath` blocks this route from the generic renderer
+   *  proxy, and the desktop IPC strips the token from any value that
+   *  crosses back to the renderer. */
+  hostRotateToken: (id: string) => `/api/hosts/${id}/rotate-token`,
 
   // agents
   agents: '/api/agents',

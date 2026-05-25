@@ -1,5 +1,10 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
-import type { AuthLoginInput, AuthSignupInput, UserDto } from '@silverhand/shared';
+import type {
+  AuthLoginInput,
+  AuthSignupInput,
+  HostDto,
+  UserDto,
+} from '@silverhand/shared';
 
 export interface BackendInfo {
   url: string;
@@ -58,6 +63,33 @@ export interface BackendUploadRequest {
   files: BackendUploadFile[];
 }
 
+/** Stage B.4 — return shape exposed to the renderer for both
+ *  `rotateHostToken` and `revokeHost`. Token bytes are deliberately
+ *  absent: the main IPC consumes them on-the-spot (writing
+ *  `daemon-config.json` on rotate, dropping it on revoke) and only
+ *  echoes the updated host metadata + the post-mutation local-claim
+ *  fields (mirroring `BackendInfo`'s `local_host_id` / `local_host_status`
+ *  so the renderer can refresh without a follow-up `getBackendInfo`). */
+export type DesktopHostMutationResult =
+  | {
+      ok: true;
+      host: HostDto;
+      local_host_id: BackendInfo['local_host_id'];
+      local_host_status: BackendInfo['local_host_status'];
+    }
+  | {
+      ok: false;
+      code:
+        | 'unauthorized'
+        | 'not_current_host'
+        | 'host_not_found'
+        | 'host_revoked'
+        | 'kind_not_supported'
+        | 'invalid_response'
+        | 'network_error';
+      message?: string;
+    };
+
 const api = {
   getBackendInfo: (): Promise<BackendInfo | null> => ipcRenderer.invoke('backend:info'),
   getAuthState: (): Promise<DesktopAuthState> => ipcRenderer.invoke('auth:getState'),
@@ -70,6 +102,18 @@ const api = {
     ipcRenderer.invoke('backend:request', input),
   backendUpload: (input: BackendUploadRequest): Promise<BackendProxyResponse> =>
     ipcRenderer.invoke('backend:upload', input),
+  /** Stage B.4 host management. Both calls are routed through
+   *  dedicated main IPCs (NOT the generic backend proxy) because:
+   *  rotate's HTTP response carries a cleartext `host_token` that
+   *  belongs in `daemon-config.json` and must never reach the
+   *  renderer; revoke has a local-config side-effect that only main
+   *  performs. The renderer return shapes never include token bytes
+   *  — main strips them before replying. See
+   *  {@link DesktopHostMutationResult}. */
+  rotateHostToken: (input: { hostId: string }): Promise<DesktopHostMutationResult> =>
+    ipcRenderer.invoke('hosts:rotate', input),
+  revokeHost: (input: { hostId: string }): Promise<DesktopHostMutationResult> =>
+    ipcRenderer.invoke('hosts:revoke', input),
   pickDirectory: (options?: { defaultPath?: string }): Promise<string | null> =>
     ipcRenderer.invoke('dialog:pickDirectory', options),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:openExternal', url),

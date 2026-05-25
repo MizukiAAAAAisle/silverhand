@@ -120,6 +120,26 @@ export class HostTokenService {
     return result.changes > 0;
   }
 
+  /** Bulk-revoke every active credential for a host (Stage B.4 host
+   *  revoke). No grace — once a host is being soft-deleted there is
+   *  no operational reason to leave any active token behind. Returns
+   *  the number of rows updated; idempotent (a re-run on an
+   *  already-swept host is a no-op). */
+  revokeAllCredentialsForHost(
+    hostId: string,
+    revokedAt: number = Date.now(),
+  ): number {
+    const result = this.db
+      .prepare(
+        `UPDATE host_credentials
+            SET revoked_at = ?
+          WHERE host_id = ?
+            AND revoked_at IS NULL`,
+      )
+      .run(revokedAt, hostId);
+    return result.changes;
+  }
+
   verifyHostToken(token: string, opts: { now?: number } = {}): VerifyHostTokenResult {
     const normalized = token.trim();
     if (!normalized) return { ok: false, code: 'missing' };

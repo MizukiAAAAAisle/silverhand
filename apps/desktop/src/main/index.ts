@@ -6,6 +6,8 @@ import { join, resolve } from 'node:path';
 import {
   AuthSessionResponseSchema,
   HostClaimOrCreateResponseSchema,
+  HostRevokeResponseSchema,
+  HostRotateTokenResponseSchema,
   ServerInfoSchema,
   UserDtoSchema,
   X_SILVERHAND_LEGACY_USER_ID_HEADER,
@@ -15,6 +17,7 @@ import {
   isSafeOpenExtension,
   type AuthLoginInput,
   type AuthSignupInput,
+  type HostDto,
   type ServerInfo,
   type UserDto,
 } from '@silverhand/shared';
@@ -32,7 +35,9 @@ import {
   loadOrCreateInstallationId,
   readDaemonHostConfig,
   removeDaemonHostConfig,
-  isTokenBearingHostClaimPath,
+  applyRotateSideEffects,
+  applyRevokeSideEffects,
+  isMainManagedHostPath,
   writeDaemonHostConfig,
   type LocalHostClaimStatus,
 } from './local-host-claim.js';
@@ -546,12 +551,194 @@ async function logoutUserSession(): Promise<{ ok: true }> {
   return { ok: true };
 }
 
+/** Renderer-facing return shape for `hosts:rotate` / `hosts:revoke`.
+ *  Deliberately omits `host_token` — main always strips it before
+ *  the IPC reply so it never crosses the renderer boundary. The
+ *  `local_host_*` fields mirror `BackendInfo` so the renderer can
+ *  refresh in one round-trip. */
+type DesktopHostMutationResult =
+  | {
+      ok: true;
+      host: HostDto;
+      local_host_id: string | null;
+      local_host_status: LocalHostClaimStatus['status'];
+    }
+  | {
+      ok: false;
+      code:
+        | 'unauthorized'
+        | 'not_current_host'
+        | 'host_not_found'
+        | 'host_revoked'
+        | 'kind_not_supported'
+        | 'invalid_response'
+        | 'network_error';
+      message?: string;
+    };
+
+function snapshotLocalHostInfo(): {
+  local_host_id: string | null;
+  local_host_status: LocalHostClaimStatus['status'];
+} {
+  return {
+    local_host_id:
+      localHostClaim.status === 'claimed' ? localHostClaim.hostId : null,
+    local_host_status: localHostClaim.status,
+  };
+}
+
+/** Rotate the long-lived credential for the desktop's CURRENT local
+ *  host. Only allowed for `hostId === daemon-config.host_id` (the
+ *  source-of-truth for what identity this desktop is currently using).
+ *  Mid-flight token bytes never cross the renderer IPC boundary. */
+async function rotateHostToken(
+  hostId: string,
+): Promise<DesktopHostMutationResult> {
+  const token = userSessionToken;
+  const running = backend;
+  if (!token || !running) {
+    return { ok: false, code: 'unauthorized' };
+  }
+  if (!hostId) {
+    return { ok: false, code: 'host_not_found', message: 'missing host id' };
+  }
+  const dir = silverhandDir();
+  const existingConfig = readDaemonHostConfig(dir);
+  if (!existingConfig || existingConfig.host_id !== hostId) {
+    // Stage B.4 hard guard: rotate is only legal for the host this
+    // desktop is currently bound to. Rotating any other owned host
+    // and writing the returned token to local daemon-config would
+    // silently re-bind the daemon to a different host identity.
+    // Refuse without contacting the server so we don't leak whether
+    // the requested host even exists.
+    return {
+      ok: false,
+      code: 'not_current_host',
+      message:
+        'rotate is only supported for the host this desktop is currently bound to',
+    };
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(backendUrl(apiPaths.hostRotateToken(hostId)), {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch (err) {
+    logger?.warn({ err }, 'host rotate-token request failed');
+    return { ok: false, code: 'network_error' };
+  }
+  const text = await res.text();
+  const body = parseJson(text);
+  if (res.status === 404) {
+    return { ok: false, code: 'host_not_found' };
+  }
+  if (res.status === 409) {
+    const code =
+      typeof body === 'object' && body !== null && 'error_code' in body
+        ? String((body as { error_code: unknown }).error_code)
+        : 'host_revoked';
+    return {
+      ok: false,
+      code: code === 'kind_not_supported' ? 'kind_not_supported' : 'host_revoked',
+    };
+  }
+  if (!res.ok) {
+    return { ok: false, code: 'network_error', message: `${res.status} ${res.statusText}` };
+  }
+
+  const parsed = HostRotateTokenResponseSchema.safeParse(body);
+  if (!parsed.success) {
+    return { ok: false, code: 'invalid_response' };
+  }
+
+  // Token bytes land here and ONLY here. Persist to daemon-config
+  // before we return; the renderer reply below has no token.
+  applyRotateSideEffects({
+    silverhandDir: dir,
+    serverUrl: running.url,
+    hostId: parsed.data.host_id,
+    hostToken: parsed.data.host_token,
+  });
+  localHostClaim = { status: 'claimed', hostId: parsed.data.host_id };
+  return {
+    ok: true,
+    host: parsed.data.host,
+    ...snapshotLocalHostInfo(),
+  };
+}
+
+/** Revoke a host the user owns. If the revoked host is the desktop's
+ *  current local host, also clear `daemon-config.json` and update
+ *  `localHostClaim` so subsequent `BackendInfo` reads reflect the
+ *  new state. Other owned hosts only update the server; local state
+ *  is unchanged. */
+async function revokeHost(
+  hostId: string,
+): Promise<DesktopHostMutationResult> {
+  const token = userSessionToken;
+  if (!token || !backend) {
+    return { ok: false, code: 'unauthorized' };
+  }
+  if (!hostId) {
+    return { ok: false, code: 'host_not_found', message: 'missing host id' };
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(backendUrl(apiPaths.hostRevoke(hostId)), {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch (err) {
+    logger?.warn({ err }, 'host revoke request failed');
+    return { ok: false, code: 'network_error' };
+  }
+  const text = await res.text();
+  const body = parseJson(text);
+  if (res.status === 404) {
+    return { ok: false, code: 'host_not_found' };
+  }
+  if (!res.ok) {
+    return {
+      ok: false,
+      code: 'network_error',
+      message: `${res.status} ${res.statusText}`,
+    };
+  }
+  const parsed = HostRevokeResponseSchema.safeParse(body);
+  if (!parsed.success) {
+    return { ok: false, code: 'invalid_response' };
+  }
+
+  // If we just revoked the host this desktop was bound to, drop the
+  // local daemon-config and surface `revoked` through the
+  // `BackendInfo` IPC so the renderer can prompt the user to log in
+  // again (which provisions a fresh active host row under the new
+  // active-only partial-unique index).
+  const reconcile = applyRevokeSideEffects({ silverhandDir: silverhandDir(), hostId });
+  if (reconcile === 'cleared') {
+    localHostClaim = { status: 'revoked', hostId };
+  }
+  return {
+    ok: true,
+    host: parsed.data.host,
+    ...snapshotLocalHostInfo(),
+  };
+}
+
 function assertApiProxyPath(path: string): void {
   if (!path.startsWith('/api/')) {
     throw new Error(`desktop backend proxy only accepts /api/* paths: ${path}`);
   }
-  if (isTokenBearingHostClaimPath(path)) {
-    throw new Error('desktop backend proxy refuses token-bearing host claim route');
+  if (isMainManagedHostPath(path)) {
+    // Stage B.4: claim/rotate carry token bytes; revoke carries a
+    // local daemon-config side-effect. All three are owned by
+    // dedicated main IPC handlers — refusing them at the proxy
+    // boundary keeps the renderer from accidentally observing a
+    // token or skipping the local sync step.
+    throw new Error(`desktop backend proxy refuses main-managed host route: ${path}`);
   }
 }
 
@@ -961,8 +1148,7 @@ ipcMain.handle('backend:info', () => {
     // user session token via `backend:request`; do not expose
     // `user_token` to the renderer.
     event_auth_token: backend.context.serverConfig.auth_token,
-    local_host_id: localHostClaim.status === 'claimed' ? localHostClaim.hostId : null,
-    local_host_status: localHostClaim.status,
+    ...snapshotLocalHostInfo(),
   };
 });
 
@@ -984,6 +1170,14 @@ ipcMain.handle('backend:request', (_event, input: BackendProxyRequest) =>
 
 ipcMain.handle('backend:upload', (_event, input: BackendUploadRequest) =>
   proxyBackendUpload(input),
+);
+
+ipcMain.handle('hosts:rotate', (_event, input: { hostId: string }) =>
+  rotateHostToken(input?.hostId ?? ''),
+);
+
+ipcMain.handle('hosts:revoke', (_event, input: { hostId: string }) =>
+  revokeHost(input?.hostId ?? ''),
 );
 
 ipcMain.handle('dialog:pickDirectory', async (event, options?: { defaultPath?: string }) => {

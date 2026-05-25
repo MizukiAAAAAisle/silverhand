@@ -12,6 +12,8 @@ function rowToDto(row: HostRow): HostDto {
     name: row.name,
     kind: row.kind,
     created_at: row.created_at,
+    revoked_at: row.revoked_at,
+    last_seen_at: row.last_seen_at,
   };
 }
 
@@ -36,6 +38,26 @@ export class HostRepo {
       .prepare<[], HostRow>('SELECT * FROM hosts ORDER BY created_at ASC')
       .all();
     return rows.map(rowToDto);
+  }
+
+  /** Owner-scoped list used by `GET /api/hosts` (Stage B.4 viewer
+   *  filter). Includes revoked rows so the user can see audit
+   *  history; sort active rows first then by created_at. */
+  listForUser(userId: string): HostDto[] {
+    const rows = this.db
+      .prepare<[string], HostRow>(
+        `SELECT * FROM hosts
+          WHERE user_id = ?
+          ORDER BY (CASE WHEN revoked_at IS NULL THEN 0 ELSE 1 END) ASC,
+                   created_at ASC`,
+      )
+      .all(userId);
+    return rows.map(rowToDto);
+  }
+
+  /** DTO conversion exposed for routes that already hold a row. */
+  toDto(row: HostRow): HostDto {
+    return rowToDto(row);
   }
 
   get(id: string): HostRow | null {
@@ -75,12 +97,18 @@ export class HostRepo {
     return row;
   }
 
+  /** Active-only lookup. Stage B.4 changed the partial-unique index
+   *  on `(user_id, installation_id)` to active-only so `claim-or-create`
+   *  can mint a fresh active row for a recurring installation after
+   *  revoke; this lookup matches that invariant. Revoked rows stay in
+   *  the table for audit history but never surface here. */
   getByUserInstallation(userId: string, installationId: string): HostRow | null {
     const row = this.db
       .prepare<[string, string], HostRow>(
         `SELECT * FROM hosts
           WHERE user_id = ?
-            AND installation_id = ?`,
+            AND installation_id = ?
+            AND revoked_at IS NULL`,
       )
       .get(userId, installationId);
     return row ?? null;
@@ -136,11 +164,12 @@ export class HostRepo {
     now?: number;
   }): ClaimLocalHostResult {
     const now = input.now ?? Date.now();
+    // Active-only lookup (Stage B.4). If a prior host for the same
+    // (user, installation) was revoked, it is no longer surfaced here
+    // and the path falls through to legacy/unclaimed reuse or to a
+    // fresh `create`, matching the active-only partial-unique index.
     const existing = this.getByUserInstallation(input.userId, input.installationId);
     if (existing) {
-      if (existing.revoked_at !== null) {
-        return { host: existing, created: false };
-      }
       this.touchLastSeen(existing.id, now);
       const touched = this.get(existing.id);
       if (!touched) {

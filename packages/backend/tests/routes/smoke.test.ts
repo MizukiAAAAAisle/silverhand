@@ -19,17 +19,30 @@ describe('route harness smoke', () => {
     expect(typeof body.ts).toBe('number');
   });
 
-  it('GET /api/hosts returns the bootstrapped local host', async () => {
+  it('GET /api/hosts returns the viewer\'s owned hosts (Stage B.4 owner-scoped)', async () => {
     t = buildTestApp();
-    const res = await http(t).get('/api/hosts');
-    const body = await res.json() as any;
+    const userToken = t.ctx.authSessions.issueSession({
+      userId: t.viewerUserId,
+    }).userToken;
+    const res = await http(t, {
+      authorization: `Bearer ${userToken}`,
+    }).get('/api/hosts');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
     expect(body.hosts.some((host: any) => host.kind === 'local')).toBe(true);
   });
 
   it('serves common /api collection routes when the bearer token is present', async () => {
     t = buildTestApp();
+    const userToken = t.ctx.authSessions.issueSession({
+      userId: t.viewerUserId,
+    }).userToken;
+    const sessionAuth = { authorization: `Bearer ${userToken}` };
     const workspaces = await http(t).get('/api/workspaces');
-    const hosts = await http(t).get('/api/hosts');
+    // Stage B.4: GET /api/hosts requires a session bearer; legacy
+    // embedded auth_token gets a 401 here so we point this hop at
+    // a real session token.
+    const hosts = await http(t, sessionAuth).get('/api/hosts');
     expect(workspaces.status).toBe(200);
     expect(hosts.status).toBe(200);
   });

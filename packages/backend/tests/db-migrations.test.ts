@@ -2207,4 +2207,76 @@ describe('database migrations', () => {
       }
     });
   });
+
+  describe('migration v31 (active-only host installation UNIQUE)', () => {
+    it('replaces the v30 unique index with an active-only variant so revoked rows do not block re-claim', () => {
+      const db = openDbAt(30);
+      try {
+        // Pre-state: v30 index name present.
+        const indexNamesAt30 = (
+          db
+            .prepare<[], { name: string }>(
+              `SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'hosts'`,
+            )
+            .all() as Array<{ name: string }>
+        ).map(r => r.name);
+        expect(indexNamesAt30).toContain('uniq_hosts_user_installation_when_set');
+        expect(indexNamesAt30).not.toContain(
+          'uniq_hosts_user_installation_when_active',
+        );
+
+        // Seed a user + a revoked host occupying the (user, installation)
+        // pair. Under v30 a second active row with the same pair would
+        // violate the partial UNIQUE.
+        const now = Date.now();
+        db.prepare(
+          `INSERT INTO users (id, name, display_name, created_at, updated_at)
+           VALUES ('u1', 'u1-test', 'U1', ?, ?)`,
+        ).run(now, now);
+        db.prepare(
+          `INSERT INTO hosts
+             (id, name, kind, user_id, installation_id, revoked_at, created_at)
+           VALUES ('h-revoked', 'h-revoked', 'local', 'u1', 'inst-1', ?, ?)`,
+        ).run(now - 1000, now - 2000);
+
+        // Apply v31.
+        runMigrations(db);
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 31`).get(),
+        ).toBeDefined();
+
+        const indexNamesAt31 = (
+          db
+            .prepare<[], { name: string }>(
+              `SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'hosts'`,
+            )
+            .all() as Array<{ name: string }>
+        ).map(r => r.name);
+        expect(indexNamesAt31).not.toContain('uniq_hosts_user_installation_when_set');
+        expect(indexNamesAt31).toContain('uniq_hosts_user_installation_when_active');
+
+        // Now a fresh active row with the SAME (user_id, installation_id)
+        // is allowed, because the partial predicate excludes the
+        // revoked row.
+        db.prepare(
+          `INSERT INTO hosts
+             (id, name, kind, user_id, installation_id, created_at)
+           VALUES ('h-active', 'h-active', 'local', 'u1', 'inst-1', ?)`,
+        ).run(now);
+
+        // But two active rows for the same pair still violate.
+        expect(() =>
+          db
+            .prepare(
+              `INSERT INTO hosts
+                 (id, name, kind, user_id, installation_id, created_at)
+               VALUES ('h-active-dup', 'h-active-dup', 'local', 'u1', 'inst-1', ?)`,
+            )
+            .run(now),
+        ).toThrow(/UNIQUE constraint failed/);
+      } finally {
+        db.close();
+      }
+    });
+  });
 });

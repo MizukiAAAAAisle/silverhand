@@ -699,7 +699,16 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     return c.json({ runtimes });
   });
 
-  app.get(apiPaths.hosts, c => c.json({ hosts: hosts.list() }));
+  // GET /api/hosts — owner-scoped list (Stage B.4 viewer filter).
+  // Session bearer required; legacy embedded auth_token rejected so a
+  // pre-Stage-A renderer cannot enumerate other users' hosts. Returns
+  // every host (active + revoked) belonging to the caller, sorted
+  // active-first then by created_at.
+  app.get(apiPaths.hosts, c => {
+    const userId = requireSessionBearerUser(c, ctx);
+    if (userId instanceof Response) return userId;
+    return c.json({ hosts: hosts.listForUser(userId) });
+  });
 
   app.post(apiPaths.hostClaimOrCreate, async c => {
     const userId = requireSessionBearerUser(c, ctx);
@@ -711,20 +720,17 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
 
+    // Stage B.4: `claimOrCreateLocal` filters revoked rows out of the
+    // `(user, installation)` lookup, so this call always returns an
+    // active host (either freshly minted, legacy reused, or an active
+    // existing claim). The caller no longer needs a `host_revoked`
+    // 409 branch here — re-claim after revoke transparently mints a
+    // new active row, matching the active-only partial-unique index.
     const claimed = hosts.claimOrCreateLocal({
       userId,
       installationId: parsed.data.installation_id,
       preferredName: parsed.data.label,
     });
-    if (claimed.host.revoked_at !== null) {
-      return c.json(
-        {
-          error: 'host has been revoked',
-          error_code: 'host_revoked',
-        },
-        409,
-      );
-    }
 
     let hostToken: string | undefined;
     if (
@@ -735,6 +741,10 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
         hostToken = hostTokens.issueHostToken({ hostId: claimed.host.id }).hostToken;
       } catch (err) {
         if (err instanceof HostCredentialIssueError && err.code === 'host_revoked') {
+          // Defensive: the active-only filter above should make this
+          // unreachable, but leave the typed mapping in place so a
+          // future regression in the lookup surfaces as 409 rather
+          // than as a 500.
           return c.json(
             {
               error: 'host has been revoked',
@@ -749,16 +759,114 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
 
     const response = {
       host_id: claimed.host.id,
-      host: {
-        id: claimed.host.id,
-        name: claimed.host.name,
-        kind: claimed.host.kind,
-        created_at: claimed.host.created_at,
-      },
+      host: hosts.toDto(claimed.host),
       server_url: ctx.serverConfig.url,
       ...(hostToken ? { host_token: hostToken } : {}),
     };
     return c.json(response);
+  });
+
+  // POST /api/hosts/:id/revoke — Stage B.4 soft-delete. Owner-only,
+  // 404 on cross-user/missing (no enumeration), idempotent. Always
+  // sweeps `host_credentials.revoked_at IS NULL` for the host even if
+  // `hosts.revoked_at` is already set, so a half-failed prior revoke
+  // is reconciled. Does NOT cascade-delete agents / workspaces /
+  // conversations — those rows stay; runtime placement is the
+  // boundary that fails closed afterwards.
+  app.post('/api/hosts/:id/revoke', async c => {
+    const userId = requireSessionBearerUser(c, ctx);
+    if (userId instanceof Response) return userId;
+
+    const hostId = c.req.param('id');
+    const host = hosts.get(hostId);
+    if (!host || host.user_id !== userId) {
+      // Cross-user / missing collapse to 404 to avoid host_id
+      // enumeration (matches the route ACL spec from A.3).
+      return c.json({ error: 'host not found', error_code: 'host_not_found' }, 404);
+    }
+
+    const now = Date.now();
+    ctx.db.transaction(() => {
+      if (host.revoked_at === null) {
+        hosts.revoke(hostId, now);
+      }
+      // Always sweep — covers idempotent re-revoke and reconciles
+      // half-failed prior runs (host row revoked, credentials still
+      // active).
+      hostTokens.revokeAllCredentialsForHost(hostId, now);
+    })();
+
+    const updated = hosts.get(hostId);
+    if (!updated) {
+      // Unreachable: SELECT immediately after a transaction we just
+      // committed. Surface as 500 if it ever happens so the contract
+      // stays loud.
+      throw new Error(`HostRepo.get returned null for revoked host ${hostId}`);
+    }
+    return c.json({ host: hosts.toDto(updated) });
+  });
+
+  // POST /api/hosts/:id/rotate-token — Stage B.4 long-lived token
+  // rotation. Owner-only, 404 on cross-user/missing, 409 if the host
+  // is already revoked or is not a `local` kind (V1 surface only
+  // rotates the user's local host). Returns a fresh long_lived token
+  // with the prior credential put on a 60s grace window. The
+  // response carries cleartext token bytes; Electron main consumes
+  // it and writes `daemon-config.json` before any value crosses the
+  // renderer IPC boundary.
+  app.post('/api/hosts/:id/rotate-token', async c => {
+    const userId = requireSessionBearerUser(c, ctx);
+    if (userId instanceof Response) return userId;
+
+    const hostId = c.req.param('id');
+    const host = hosts.get(hostId);
+    if (!host || host.user_id !== userId) {
+      return c.json({ error: 'host not found', error_code: 'host_not_found' }, 404);
+    }
+    if (host.revoked_at !== null) {
+      return c.json(
+        {
+          error: 'host has been revoked',
+          error_code: 'host_revoked',
+        },
+        409,
+      );
+    }
+    if (host.kind !== 'local') {
+      return c.json(
+        {
+          error: 'rotate is only supported for local hosts',
+          error_code: 'kind_not_supported',
+        },
+        409,
+      );
+    }
+
+    let issued: ReturnType<HostTokenService['rotateHostToken']>;
+    try {
+      issued = hostTokens.rotateHostToken({ hostId });
+    } catch (err) {
+      if (err instanceof HostCredentialIssueError && err.code === 'host_revoked') {
+        return c.json(
+          {
+            error: 'host has been revoked',
+            error_code: 'host_revoked',
+          },
+          409,
+        );
+      }
+      throw err;
+    }
+
+    const refreshed = hosts.get(hostId);
+    if (!refreshed) {
+      throw new Error(`HostRepo.get returned null for rotated host ${hostId}`);
+    }
+    return c.json({
+      host_id: hostId,
+      host: hosts.toDto(refreshed),
+      host_token: issued.hostToken,
+    });
   });
 
   function resolveCreateHostId(

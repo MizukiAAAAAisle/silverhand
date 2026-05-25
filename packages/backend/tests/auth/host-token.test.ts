@@ -162,6 +162,45 @@ describe('HostTokenService', () => {
       code: 'credential_not_usable',
     });
   });
+
+  // Stage B.4: bulk-revoke for the host-revoke route. No grace,
+  // idempotent, and reconciles half-failed prior runs.
+  it('revokeAllCredentialsForHost sweeps every active credential and is idempotent', () => {
+    const { db, viewerUserId } = openTestDb();
+    const { hostId, tokens } = createOwnedHostTokenFixture(db, viewerUserId);
+    tokens.issueHostToken({ hostId });
+    tokens.issueHostToken({ hostId });
+    // Manufacture a row that is already revoked — should be skipped
+    // by the sweep (its `revoked_at` must not be overwritten).
+    const stale = tokens.issueHostToken({ hostId });
+    const staleRevokedAt = 1_700_000_000_000;
+    db.prepare(`UPDATE host_credentials SET revoked_at = ? WHERE id = ?`).run(
+      staleRevokedAt,
+      stale.credential.id,
+    );
+
+    const updated = tokens.revokeAllCredentialsForHost(hostId, 1_777_777_777_777);
+    expect(updated).toBe(2);
+    expect(
+      db
+        .prepare<[string], { c: number }>(
+          `SELECT COUNT(*) AS c FROM host_credentials
+            WHERE host_id = ? AND revoked_at IS NULL`,
+        )
+        .get(hostId)?.c ?? 0,
+    ).toBe(0);
+    expect(
+      db
+        .prepare<[string], { revoked_at: number | null }>(
+          `SELECT revoked_at FROM host_credentials WHERE id = ?`,
+        )
+        .get(stale.credential.id)?.revoked_at,
+    ).toBe(staleRevokedAt);
+
+    // Idempotent re-sweep returns 0 and does not touch existing
+    // revoked_at timestamps.
+    expect(tokens.revokeAllCredentialsForHost(hostId, 1_888_888_888_888)).toBe(0);
+  });
 });
 
 function createOwnedHostTokenFixture(db: Db, userId: string) {

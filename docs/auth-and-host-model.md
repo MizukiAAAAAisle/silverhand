@@ -397,15 +397,21 @@ A.5 for the future track.
 ### 6.3 Host revoke
 
 ```
-authenticated user → desktop Hosts page → select host → Revoke
-[main] POST /api/hosts/{id}/revoke (Authorization: Bearer <user_token>)
-[server] mark host.revoked_at = now
-         mark active host_credentials.revoked_at = now (no grace; see below)
+authenticated user → desktop Settings → Local host → Revoke
+[renderer] window.agentHub.revokeHost({ hostId })
+[main]   POST /api/hosts/{id}/revoke (Authorization: Bearer <user_token>)
+[server] BEGIN
+           mark host.revoked_at = now (only when not already revoked)
+           bulk-mark host_credentials.revoked_at = now WHERE revoked_at IS NULL
+         COMMIT
          broadcast disconnect to that host's WS
 [daemon on revoked host] receives WS close → attempts reconnect
                           → server returns 401 host_revoked
                           → daemon transitions to
                           "revoked, manual intervention required"
+[main]   if revoked host == current local host:
+           remove daemon-config.json, set local_host_status = 'revoked'
+[renderer] re-fetch BackendInfo; user is prompted to sign in again.
 ```
 
 **Revoke has no grace window.** Revocation is the user's "this host should
@@ -416,18 +422,87 @@ fast — the token-validator's primary check is `host_credentials.revoked_at
 IS NULL AND host.revoked_at IS NULL` (and missing-row → deny). The 60s
 grace described in §6.4 applies to **rotation only**, never to revoke.
 
-Soft-delete on both the `hosts` row (`hosts.revoked_at`) and the active
+Soft-delete on both the `hosts` row (`hosts.revoked_at`) and every active
 `host_credentials` row (`host_credentials.revoked_at = now`). The rows
 stay for audit / placement-history continuity; physical row removal is a
 future compaction concern, not a revoke responsibility. Token-validator
 treats `revoked_at != NULL` and missing row identically (deny).
 
+**Stage B.4 invariants:**
+
+- The route is **idempotent**: revoking an already-revoked host is a 200
+  OK and still sweeps any straggler `host_credentials` rows whose
+  `revoked_at` is NULL (reconciles half-failed prior runs). The
+  `hosts.revoked_at` tombstone timestamp is NOT advanced on re-revoke —
+  the original revocation moment is the audit anchor.
+- **No row cascade.** `agents`, `workspaces`, `conversation_agents`,
+  `conversations` rows that reference the revoked host are kept. The
+  runtime placement boundary (`RuntimeHostPlacementResolver`) is what
+  fails closed: any agent whose `host_id` resolves to a revoked host
+  rejects start / message-deliver / clear-session at the runtime entrypoint.
+  This means after revoke, **records remain but runtime capability is
+  lost** until a future re-bind or migration. Confirm copy and docs MUST
+  distinguish these two facts so users do not believe revoke deletes
+  their conversation history.
+- **Active-only `(user_id, installation_id)` UNIQUE** (migration v31).
+  Re-claiming the same installation after revoke transparently mints a
+  new active host row; the old revoked row is preserved. This prevents
+  "revoked your own local host → permanently locked out from this
+  desktop" without any local-state surgery (the previous design had the
+  partial-unique cover any non-null pair, which made re-claim 409).
+- **Owner check uses 404, not 403,** for missing or cross-user host ids
+  (matches the route ACL convention from A.3 §2.5: "non-visible →
+  404"). No `host_id` enumeration through this surface.
+- The route requires a **session bearer** (`requireSessionBearerUser`);
+  legacy embedded auth_token is rejected with `code:
+  session_bearer_required` so a pre-Stage-A renderer cannot reach it.
+
 ### 6.4 Host_token rotation
 
 `host_token` rotation is **not** implicit on every claim. Implicit rotation breaks the daemon's existing connection or creates double-token races. Explicit rotation:
 
-- `POST /api/hosts/{id}/rotate-token` issues a new token; old token remains valid for 60s grace; daemon picks up new token via authenticated rotation channel.
+- `POST /api/hosts/{id}/rotate-token` issues a new long_lived token; the
+  prior credential's `expires_at` is set to `min(now+60_000, prior)` so it
+  remains valid for the 60-second grace window; the new token is returned
+  to the desktop main process, which writes `daemon-config.json` (mode
+  0600) atomically before the IPC return crosses the renderer boundary.
 - Daily auto-rotation by server is a future hardening option; V1 does no auto-rotation.
+
+**Stage B.4 invariants:**
+
+- **Owner-only,** session bearer required. Cross-user / missing host id
+  → 404 (no enumeration). Already-revoked host → 409
+  `error_code: host_revoked`. Non-`local` kind → 409
+  `error_code: kind_not_supported` (V1 surface only rotates the user's
+  local host; remote / sandbox hosts have no UI yet, so their rotation
+  channel is reserved for the future remote-daemon era).
+- **Renderer never sees `host_token`.** The route response carries the
+  cleartext token; `assertApiProxyPath` refuses to proxy
+  `/api/hosts/*/rotate-token` through the generic `backend:request`
+  IPC. Rotation flows exclusively through the dedicated
+  `hosts:rotate` IPC, whose return shape strips the token and only
+  echoes the updated `HostDto` plus a snapshot of
+  `BackendInfo.local_host_*`.
+- **Current-host hard guard.** `hosts:rotate` refuses any `hostId` that
+  doesn't match `daemon-config.host_id`. Otherwise rotating an owned-
+  but-non-current host and writing the response token to local
+  daemon-config would silently re-bind this desktop to a different
+  identity. The renderer also disables the rotate button for
+  non-current rows; the main-side check is the authority.
+
+### 6.5 Listing hosts
+
+`GET /api/hosts` is **owner-scoped** (Stage B.4 viewer filter):
+
+- Session bearer required; legacy embedded auth_token → 401
+  `code: session_bearer_required`.
+- Returns every host owned by the caller, including revoked rows
+  (sorted active-first, then by `created_at`). `HostDto` includes
+  `revoked_at` and `last_seen_at` so the Settings page can render
+  audit history.
+- The previous unscoped behaviour ("return all rows in the `hosts`
+  table") is gone. There is no production caller that needed
+  cross-user host visibility.
 
 ---
 

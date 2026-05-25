@@ -97,8 +97,62 @@ export function buildHostClaimInput(input: {
   });
 }
 
-export function isTokenBearingHostClaimPath(path: string): boolean {
-  return path === apiPaths.hostClaimOrCreate;
+/** Routes that the desktop main process owns end-to-end and that
+ *  must NEVER be reachable through the generic renderer proxy
+ *  (`backend:request` / `backend:upload`). Two reasons:
+ *
+ *  - `claim-or-create` and `rotate-token` responses carry cleartext
+ *    `host_token` bytes that belong in `daemon-config.json`, not in
+ *    any value the renderer can read.
+ *  - `revoke` has a local side-effect (clearing daemon-config when
+ *    the user revokes the current host) that only the dedicated
+ *    main IPC performs. Letting the renderer hit the route through
+ *    the proxy would leave the local daemon-config out of sync.
+ *
+ *  GET `/api/hosts` is intentionally NOT in this set — it is owner-
+ *  filtered server-side and returns no token. The renderer uses the
+ *  generic proxy to populate the Hosts settings page. */
+export function isMainManagedHostPath(path: string): boolean {
+  if (path === apiPaths.hostClaimOrCreate) return true;
+  if (path.startsWith('/api/hosts/') && path.endsWith('/rotate-token')) return true;
+  if (path.startsWith('/api/hosts/') && path.endsWith('/revoke')) return true;
+  return false;
+}
+
+/** @deprecated Stage B.4 superseded by {@link isMainManagedHostPath}.
+ *  The old guard only covered `claim-or-create`; the new name covers
+ *  the full main-managed surface (claim + rotate + revoke). Kept as
+ *  a re-export so external callers don't break, but new code should
+ *  reference {@link isMainManagedHostPath} directly. */
+export const isTokenBearingHostClaimPath = isMainManagedHostPath;
+
+/** Persist a freshly rotated host token. Pure side-effect helper —
+ *  reused by the `hosts:rotate` IPC and unit-tested separately. The
+ *  main process wraps this in network I/O + token bookkeeping. */
+export function applyRotateSideEffects(input: {
+  silverhandDir: string;
+  serverUrl: string;
+  hostId: string;
+  hostToken: string;
+}): void {
+  writeDaemonHostConfig(input.silverhandDir, {
+    server_url: input.serverUrl,
+    host_id: input.hostId,
+    host_token: input.hostToken,
+  });
+}
+
+/** Reconcile local daemon-config when a host is revoked. Returns
+ *  `'cleared'` when the revoked host id matches the desktop's current
+ *  local-host binding (config dropped), `'unchanged'` otherwise. */
+export function applyRevokeSideEffects(input: {
+  silverhandDir: string;
+  hostId: string;
+}): 'cleared' | 'unchanged' {
+  const existing = readDaemonHostConfig(input.silverhandDir);
+  if (existing?.host_id !== input.hostId) return 'unchanged';
+  removeDaemonHostConfig(input.silverhandDir);
+  return 'cleared';
 }
 
 function writeSecretFile(path: string, content: string): void {

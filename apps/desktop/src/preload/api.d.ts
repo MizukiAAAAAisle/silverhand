@@ -1,4 +1,9 @@
-import type { AuthLoginInput, AuthSignupInput, UserDto } from '@silverhand/shared';
+import type {
+  AuthLoginInput,
+  AuthSignupInput,
+  HostDto,
+  UserDto,
+} from '@silverhand/shared';
 
 export interface BackendInfo {
   url: string;
@@ -57,6 +62,28 @@ export interface BackendUploadRequest {
   files: BackendUploadFile[];
 }
 
+/** Stage B.4 — see `apps/desktop/src/preload/index.ts` for the
+ *  invariants. Token bytes never appear in this shape. */
+export type DesktopHostMutationResult =
+  | {
+      ok: true;
+      host: HostDto;
+      local_host_id: BackendInfo['local_host_id'];
+      local_host_status: BackendInfo['local_host_status'];
+    }
+  | {
+      ok: false;
+      code:
+        | 'unauthorized'
+        | 'not_current_host'
+        | 'host_not_found'
+        | 'host_revoked'
+        | 'kind_not_supported'
+        | 'invalid_response'
+        | 'network_error';
+      message?: string;
+    };
+
 declare global {
   interface Window {
     agentHub: {
@@ -67,6 +94,8 @@ declare global {
       logout(): Promise<{ ok: true }>;
       backendRequest(input: BackendProxyRequest): Promise<BackendProxyResponse>;
       backendUpload(input: BackendUploadRequest): Promise<BackendProxyResponse>;
+      rotateHostToken(input: { hostId: string }): Promise<DesktopHostMutationResult>;
+      revokeHost(input: { hostId: string }): Promise<DesktopHostMutationResult>;
       pickDirectory(options?: { defaultPath?: string }): Promise<string | null>;
       openExternal(url: string): Promise<void>;
       openAttachmentExternal(input: {

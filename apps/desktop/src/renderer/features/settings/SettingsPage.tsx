@@ -17,6 +17,7 @@ import {
   Palette,
   RotateCcw,
   Save,
+  Server,
   Type,
   User,
 } from 'lucide-react';
@@ -53,6 +54,7 @@ import {
   PROSE_FONT_PRESETS,
   type FontPreset,
 } from '@/settings/font-presets';
+import { HostsPane } from './HostsPane';
 
 const settingsKey = ['settings'] as const;
 
@@ -126,10 +128,11 @@ function parseRuntimes(raw: string | undefined | null): RuntimeKind[] {
  *  page-internal sub-nav; selection is local React state, persisted to
  *  localStorage so a refresh stays put. (No URL routing yet — settings
  *  deep-links are rare and the URL slot belongs to the chat router.) */
-type SettingsSection = 'appearance' | 'profile' | 'proxy';
+type SettingsSection = 'appearance' | 'profile' | 'hosts' | 'proxy';
 const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   'appearance',
   'profile',
+  'hosts',
   'proxy',
 ];
 const SETTINGS_SECTION_KEY = 'silverhand:settings-section';
@@ -265,6 +268,8 @@ export function SettingsPage(): JSX.Element {
             />
           ) : section === 'profile' ? (
             <ProfilePane />
+          ) : section === 'hosts' ? (
+            <HostsPane />
           ) : (
             <ProxyPane
               proxyUrl={proxyUrl}
@@ -306,6 +311,7 @@ function SettingsSubNav({
   }> = [
     { id: 'appearance', label: 'Appearance', icon: <Palette className="size-3.5" /> },
     { id: 'profile', label: 'Profile', icon: <User className="size-3.5" /> },
+    { id: 'hosts', label: 'Local host', icon: <Server className="size-3.5" /> },
     { id: 'proxy', label: 'Proxy', icon: <Network className="size-3.5" /> },
   ];
 

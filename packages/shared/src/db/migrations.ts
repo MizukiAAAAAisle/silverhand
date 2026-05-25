@@ -2225,4 +2225,24 @@ export const migrations: Migration[] = [
         ON host_credentials(host_id, kind, revoked_at, expires_at);
     `,
   },
+  {
+    version: 31,
+    name: 'host_installation_unique_active_only',
+    // Stage B.4: revoking a local host must not lock the same desktop
+    // installation out forever. The B.1 partial-unique index keyed
+    // (user_id, installation_id) for any non-null pair, so a revoked
+    // row blocked the next claim for the same installation. Switch the
+    // partial predicate to active-only — revoked rows are kept for
+    // audit history, but a new claim for the same (user, installation)
+    // pair mints a fresh active host row. `claimOrCreateLocal` /
+    // `getByUserInstallation` filter on `revoked_at IS NULL` to match.
+    up: `
+      DROP INDEX IF EXISTS uniq_hosts_user_installation_when_set;
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_hosts_user_installation_when_active
+        ON hosts(user_id, installation_id)
+        WHERE user_id IS NOT NULL
+          AND installation_id IS NOT NULL
+          AND revoked_at IS NULL;
+    `,
+  },
 ];

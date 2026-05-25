@@ -4,9 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { apiPaths } from '@silverhand/shared';
 import {
+  applyRevokeSideEffects,
+  applyRotateSideEffects,
   buildHostClaimInput,
   daemonHostConfigPath,
   installationIdPath,
+  isMainManagedHostPath,
   isTokenBearingHostClaimPath,
   loadOrCreateInstallationId,
   readDaemonHostConfig,
@@ -95,9 +98,81 @@ describe('desktop local host claim helpers', () => {
     });
   });
 
-  it('marks the token-bearing claim route as not renderer-proxyable', () => {
+  it('marks every main-managed host route as not renderer-proxyable', () => {
+    // Stage B.4: claim + rotate + revoke all bypass the generic
+    // backend proxy. Old `isTokenBearingHostClaimPath` is kept as a
+    // deprecated alias.
+    expect(isMainManagedHostPath(apiPaths.hostClaimOrCreate)).toBe(true);
+    expect(isMainManagedHostPath(apiPaths.hostRotateToken('host-x'))).toBe(true);
+    expect(isMainManagedHostPath(apiPaths.hostRevoke('host-x'))).toBe(true);
+    expect(isMainManagedHostPath(apiPaths.hosts)).toBe(false);
+    // Deprecated alias still exposes the same matcher (covers the
+    // claim path; we rely on the active name for rotate/revoke).
     expect(isTokenBearingHostClaimPath(apiPaths.hostClaimOrCreate)).toBe(true);
     expect(isTokenBearingHostClaimPath(apiPaths.hosts)).toBe(false);
+  });
+
+  it('rotate side-effect persists the new token to daemon-config 0o600', () => {
+    const dir = tempDir();
+    // Pre-existing config with the old token.
+    writeDaemonHostConfig(dir, {
+      server_url: 'http://127.0.0.1:4321',
+      host_id: 'host-local',
+      host_token: 'old-token',
+    });
+
+    applyRotateSideEffects({
+      silverhandDir: dir,
+      serverUrl: 'http://127.0.0.1:4321',
+      hostId: 'host-local',
+      hostToken: 'new-token-cleartext',
+    });
+
+    expect(readDaemonHostConfig(dir)).toEqual({
+      server_url: 'http://127.0.0.1:4321',
+      host_id: 'host-local',
+      host_token: 'new-token-cleartext',
+    });
+    expect(fileMode(daemonHostConfigPath(dir))).toBe(0o600);
+  });
+
+  it('revoke side-effect clears daemon-config when revoked host is the current local one', () => {
+    const dir = tempDir();
+    writeDaemonHostConfig(dir, {
+      server_url: 'http://127.0.0.1:4321',
+      host_id: 'host-local',
+      host_token: 'live-token',
+    });
+
+    expect(
+      applyRevokeSideEffects({ silverhandDir: dir, hostId: 'host-local' }),
+    ).toBe('cleared');
+    expect(readDaemonHostConfig(dir)).toBeNull();
+  });
+
+  it('revoke side-effect leaves daemon-config alone for non-current owned hosts', () => {
+    const dir = tempDir();
+    writeDaemonHostConfig(dir, {
+      server_url: 'http://127.0.0.1:4321',
+      host_id: 'host-local',
+      host_token: 'live-token',
+    });
+
+    expect(
+      applyRevokeSideEffects({ silverhandDir: dir, hostId: 'some-other-host' }),
+    ).toBe('unchanged');
+    expect(readDaemonHostConfig(dir)).toEqual({
+      server_url: 'http://127.0.0.1:4321',
+      host_id: 'host-local',
+      host_token: 'live-token',
+    });
+  });
+
+  it('revoke side-effect is a no-op when no daemon-config exists', () => {
+    const dir = tempDir();
+    expect(
+      applyRevokeSideEffects({ silverhandDir: dir, hostId: 'whatever' }),
+    ).toBe('unchanged');
   });
 
   function tempDir(): string {

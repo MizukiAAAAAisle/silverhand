@@ -17,11 +17,25 @@ import {
 } from '../db/schema.js';
 
 // ── Host ─────────────────────────────────────────────────────────
+//
+// Single source-of-truth shape for every host the user owns. Both the
+// owner-filtered `GET /api/hosts` list and the `POST /api/hosts/claim-
+// or-create` response inline this DTO so renderer + desktop main share
+// one parser. `revoked_at` and `last_seen_at` are owner-scoped
+// metadata and are never returned outside the owning user (Stage B.4
+// viewer filter at the route boundary).
 export const HostDtoSchema = z.object({
   id: z.string(),
   name: z.string(),
   kind: HostKindSchema,
   created_at: z.number(),
+  /** Soft-delete tombstone. Null while the host is active. After
+   *  revoke the row stays around (audit history) but every credential
+   *  and runtime placement using it fails closed. */
+  revoked_at: z.number().nullable(),
+  /** Last claim-or-create touch timestamp. Null only for legacy /
+   *  migration-seeded hosts that have not been claimed yet. */
+  last_seen_at: z.number().nullable(),
 });
 export type HostDto = z.infer<typeof HostDtoSchema>;
 
@@ -40,6 +54,36 @@ export const HostClaimOrCreateResponseSchema = z.object({
 });
 export type HostClaimOrCreateResponse = z.infer<
   typeof HostClaimOrCreateResponseSchema
+>;
+
+/** Owner-scoped list response from `GET /api/hosts`. The route filters
+ *  to the current viewer's owned hosts only. */
+export const HostListResponseSchema = z.object({
+  hosts: z.array(HostDtoSchema),
+});
+export type HostListResponse = z.infer<typeof HostListResponseSchema>;
+
+/** `POST /api/hosts/{id}/revoke` response. Returns the updated DTO so
+ *  the caller can refresh local UI without a follow-up GET. */
+export const HostRevokeResponseSchema = z.object({
+  host: HostDtoSchema,
+});
+export type HostRevokeResponse = z.infer<typeof HostRevokeResponseSchema>;
+
+/** `POST /api/hosts/{id}/rotate-token` response.
+ *
+ *  IMPORTANT: this shape is consumed exclusively by Electron main —
+ *  `host_token` is cleartext and is written to `daemon-config.json`
+ *  before any return value crosses the IPC boundary. The renderer
+ *  never sees this schema; the renderer-facing IPC return strips
+ *  the token and only echoes `{ ok, host_id, status }`. */
+export const HostRotateTokenResponseSchema = z.object({
+  host_id: z.string(),
+  host: HostDtoSchema,
+  host_token: z.string().min(1),
+});
+export type HostRotateTokenResponse = z.infer<
+  typeof HostRotateTokenResponseSchema
 >;
 
 // ── User ─────────────────────────────────────────────────────────
