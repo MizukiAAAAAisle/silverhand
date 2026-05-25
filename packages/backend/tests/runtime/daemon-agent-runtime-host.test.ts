@@ -54,6 +54,8 @@ import { UserRepo } from '../../src/repos/user-repo.js';
 import { SettingsRepo } from '../../src/repos/settings-repo.js';
 import { RuntimeDeliveryCoordinator } from '../../src/runtime/delivery-coordinator.js';
 import { combineGatedBatch } from '../../src/runtime/stdin-format.js';
+import { RuntimeHostPlacementError } from '../../src/host-placement-errors.js';
+import type { RuntimeHostPlacement } from '../../src/runtime/host-placement.js';
 import { MembershipService } from '../../src/services/membership-service.js';
 import { AgentTokenStore } from '../../src/auth/agent-token-store.js';
 import type { BackendLogger, SilverhandCliLauncher } from '../../src/context.js';
@@ -137,6 +139,30 @@ const noopWorkspaceRepo = {
   get: () => null,
   listForAgent: () => [],
 } as unknown as WorkspaceRepo;
+const noopPlacement = {
+  assertActiveHost: () => ({
+    id: 'host-local',
+    name: 'local',
+    kind: 'local',
+    user_id: 'local',
+    installation_id: 'test-install',
+    last_seen_at: null,
+    revoked_at: null,
+    created_at: 1,
+  }),
+  resolveForAgent: () => ({
+    host: {
+      id: 'host-local',
+      name: 'local',
+      kind: 'local',
+      user_id: 'local',
+      installation_id: 'test-install',
+      last_seen_at: null,
+      revoked_at: null,
+      created_at: 1,
+    },
+  }),
+} satisfies RuntimeHostPlacement;
 const noopMembership = {
   listMembers: () => [],
 } as unknown as MembershipService;
@@ -215,6 +241,7 @@ function makeHost(
     coordinator?: RuntimeDeliveryCoordinator;
     cache?: RunStateCache;
     workspaces?: WorkspaceRepo;
+    placement?: RuntimeHostPlacement;
     membership?: MembershipService;
     silverhandDir?: string;
     silverhandCli?: SilverhandCliLauncher;
@@ -274,6 +301,7 @@ function makeHost(
     settings,
     coordinator,
     workspaces: extraDeps.workspaces ?? noopWorkspaceRepo,
+    placement: extraDeps.placement ?? noopPlacement,
     membership: extraDeps.membership ?? noopMembership,
     silverhandDir: extraDeps.silverhandDir ?? '/tmp/silverhand-stub-dir',
     silverhandCli: extraDeps.silverhandCli ?? noopSilverhandCli,
@@ -304,6 +332,55 @@ function fakeRunState(patch: Partial<AgentRunState> = {}): AgentRunState {
     ...patch,
   };
 }
+
+function throwingPlacement(calls: string[] = []): RuntimeHostPlacement {
+  const err = new RuntimeHostPlacementError(
+    'host_revoked',
+    'host host-local has been revoked',
+  );
+  return {
+    assertActiveHost: () => {
+      throw err;
+    },
+    resolveForAgent: agentId => {
+      calls.push(agentId);
+      throw err;
+    },
+  };
+}
+
+describe('DaemonAgentRuntimeHost — placement guard', () => {
+  it('fails closed before every runtime intent when the agent host is revoked', async () => {
+    const entrypoints: Array<{
+      name: string;
+      invoke: (host: DaemonAgentRuntimeHost) => Promise<unknown>;
+    }> = [
+      { name: 'start', invoke: host => host.start(CONV, AGENT_X) },
+      { name: 'stop', invoke: host => host.stop(CONV, AGENT_X, 'hard') },
+      {
+        name: 'clearSession',
+        invoke: host => host.clearSession(CONV, AGENT_X, 'local'),
+      },
+      {
+        name: 'deliverMessage',
+        invoke: host => host.deliverMessage(CONV, AGENT_X, 'msg-1'),
+      },
+      { name: 'drainPending', invoke: host => host.drainPending(CONV, AGENT_X) },
+    ];
+
+    for (const entrypoint of entrypoints) {
+      const calls: string[] = [];
+      const { host } = makeHost({}, noopConversationRepo, {
+        placement: throwingPlacement(calls),
+      });
+
+      await expect(entrypoint.invoke(host), entrypoint.name).rejects.toMatchObject({
+        code: 'host_revoked',
+      });
+      expect(calls, entrypoint.name).toEqual([AGENT_X]);
+    }
+  });
+});
 
 describe('DaemonAgentRuntimeHost — read methods', () => {
   it('getAgentRunStates returns every (conv, *) entry with an active runState', () => {
@@ -762,6 +839,7 @@ describe('DaemonAgentRuntimeHost — stop (soft)', () => {
         inboxAck: { markDelivered: () => {} },
       }),
       workspaces: noopWorkspaceRepo,
+      placement: noopPlacement,
       membership: noopMembership,
       silverhandDir: '/tmp/silverhand-stub-dir',
       silverhandCli: noopSilverhandCli,
@@ -871,6 +949,7 @@ describe('DaemonAgentRuntimeHost — constructor', () => {
             inboxAck: { markDelivered: () => {} },
           }),
           workspaces: noopWorkspaceRepo,
+          placement: noopPlacement,
           membership: noopMembership,
           silverhandDir: '/tmp/silverhand-stub-dir',
           silverhandCli: noopSilverhandCli,
@@ -1967,6 +2046,7 @@ describe('DaemonAgentRuntimeHost — deliverMessage', () => {
         settings: fix.settings,
         coordinator,
         workspaces: noopWorkspaceRepo,
+        placement: noopPlacement,
         membership: noopMembership,
         silverhandDir: '/tmp/silverhand-stub-dir',
         silverhandCli: noopSilverhandCli,

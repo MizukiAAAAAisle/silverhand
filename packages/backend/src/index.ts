@@ -38,6 +38,7 @@ import {
   RuntimeEventHandler,
   type InboxAckSink,
 } from './runtime/event-handler.js';
+import { RuntimeHostPlacementResolver } from './runtime/host-placement.js';
 import { DbRuntimeStatusProjector } from './runtime/status-projector.js';
 import { AgentRepo } from './repos/agent-repo.js';
 import { AttachmentRepo } from './repos/attachment-repo.js';
@@ -190,6 +191,11 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   };
   const bridge = new RuntimeBridge(opts.hostClient, proxySettings);
   const cache = new RunStateCache();
+  const placement = new RuntimeHostPlacementResolver({
+    hosts: new HostRepo(db),
+    agents: new AgentRepo(db),
+    workspaces: new WorkspaceRepo(db, { workspacesRoot }),
+  });
   const activityLog = new JsonlActivityLogWriter({
     logDir: ctx.logDir,
     logger,
@@ -305,6 +311,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     settings: new SettingsRepo(db),
     coordinator,
     workspaces: new WorkspaceRepo(db, { workspacesRoot }),
+    placement,
     membership: new MembershipService({
       agents: new AgentRepo(db),
       users: new UserRepo(db),

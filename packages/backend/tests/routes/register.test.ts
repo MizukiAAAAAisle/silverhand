@@ -38,7 +38,7 @@ describe('POST /api/register', () => {
   }
 
   it('atomically INSERTs the user row and writes viewer_user_id', async () => {
-    t = buildTestApp();
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     unregisterViewer(t);
 
     const res = await noPrincipalHttp(t).post(apiPaths.register, {
@@ -71,7 +71,7 @@ describe('POST /api/register', () => {
   });
 
   it('display_name defaults to name when omitted', async () => {
-    t = buildTestApp();
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     unregisterViewer(t);
 
     const res = await noPrincipalHttp(t).post(apiPaths.register, { name: 'shiki' });
@@ -82,7 +82,7 @@ describe('POST /api/register', () => {
   });
 
   it('rejects a second call with 409 already_registered', async () => {
-    t = buildTestApp();
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     // Fixture has viewer_user_id set + 'local' user row inserted, so
     // calling /api/register models a duplicate registration.
     const res = await http(t).post(apiPaths.register, { name: 'shiki' });
@@ -92,7 +92,7 @@ describe('POST /api/register', () => {
   });
 
   it('rejects a name that collides with an existing agents.name', async () => {
-    t = buildTestApp();
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     // Seed a colliding agent via raw SQL with a *different* creator user so
     // unregistering 'local' isn't blocked by the new ON DELETE RESTRICT FK
     // from agents.created_by_user_id (v26).
@@ -126,7 +126,7 @@ describe('POST /api/register', () => {
   });
 
   it('rejects malformed names with 400', async () => {
-    t = buildTestApp();
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     unregisterViewer(t);
 
     // Too short.
@@ -152,7 +152,7 @@ describe('POST /api/register', () => {
   });
 
   it('backfills workspace_users and conversation_users for every existing row at registration time', async () => {
-    t = buildTestApp();
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     // Drop the test-fixture auto-seed triggers so we can observe
     // *only* the register-time backfill behavior without other
     // fixture users being snapshot in. Production has no such triggers.
@@ -229,7 +229,7 @@ describe('POST /api/register', () => {
       'ps\u2029here', // U+2029 PARAGRAPH SEPARATOR
     ];
     for (const display_name of cases) {
-      t = buildTestApp();
+      t = buildTestApp({ ownedLocalHostUserIds: [] });
       // Each iteration owns its own app (single-shot register endpoint).
       t.ctx.db
         .prepare(`DELETE FROM app_settings WHERE key = 'viewer_user_id'`)

@@ -237,7 +237,7 @@ export const CreateAgentInputSchema = z.object({
   model: z.string().optional(),
   reasoning_effort: ReasoningEffortSchema.optional(),
   fast_mode: FastModeSchema.optional(),
-  host_id: z.string().optional(), // defaults to local
+  host_id: z.string().optional(), // defaults to the current user's owned local host
   description: z.string().optional(),
 });
 export type CreateAgentInput = z.infer<typeof CreateAgentInputSchema>;

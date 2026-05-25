@@ -114,6 +114,8 @@ import { UserServiceError } from './services/user-service.js';
 import { AgentServiceError } from './services/agent-service.js';
 import { MembershipService } from './services/membership-service.js';
 import { UserRepo } from './repos/user-repo.js';
+import { RuntimeHostPlacementError } from './host-placement-errors.js';
+import { RuntimeHostPlacementResolver } from './runtime/host-placement.js';
 import {
   type AppEnv,
   getAgentPrincipal,
@@ -153,6 +155,27 @@ const repoErrorStatusMap: Record<string, 400 | 404 | 409 | 429> = {
   thread: 400,
   not_archivable: 400,
 };
+
+const placementErrorStatusMap: Record<
+  string,
+  400 | 403 | 404 | 409
+> = {
+  agent_missing: 404,
+  host_mismatch: 409,
+  host_missing: 404,
+  host_not_owned: 403,
+  host_revoked: 409,
+  local_host_unbound: 409,
+  workspace_missing: 404,
+};
+
+function placementErrorResponse(c: Context, err: unknown): Response | null {
+  if (!(err instanceof RuntimeHostPlacementError)) return null;
+  return c.json(
+    { error: err.message, code: err.code },
+    placementErrorStatusMap[err.code] ?? 400,
+  );
+}
 
 function channelServiceErrorResponse(c: Context, err: unknown): Response | null {
   if (err instanceof WorkspaceUnsuitableError) {
@@ -611,8 +634,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     users,
     passwordCredentials: ctx.passwordCredentials,
   });
+  const placement = new RuntimeHostPlacementResolver({ hosts, agents, workspaces });
 
-  const localHost = hosts.ensureLocal();
+  hosts.ensureLocal();
 
   // ── Auth / health / runtimes / hosts ─────────────────────────────
   app.get(apiPaths.serverInfo, c =>
@@ -740,6 +764,16 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     return c.json(response);
   });
 
+  function resolveCreateHostId(
+    explicitHostId: string | undefined,
+    userId: string,
+  ): string {
+    if (explicitHostId) {
+      return placement.assertOwnedActiveHost(explicitHostId, userId).id;
+    }
+    return placement.resolveOwnedLocalForUser(userId).id;
+  }
+
   // ── Workspaces / conversations ──────────────────────────────────
   //
   // Canonical workspace/channel/thread API backed by workspaces and
@@ -777,15 +811,34 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
         400,
       );
     }
-    await initWorkspaceDir(validation.resolved);
 
     const viewerUserId = requireViewerUserId(c);
+    let workspaceHostId: string;
+    let memberAgents: AgentDto[];
+    try {
+      workspaceHostId = resolveCreateHostId(
+        parsed.data.workspace_host_id,
+        viewerUserId,
+      );
+      memberAgents = parsed.data.member_agent_ids
+        .map(id => agents.get(id))
+        .filter((agent): agent is AgentDto => agent !== null);
+      for (const agent of memberAgents) {
+        placement.assertAgentMatchesHost(agent.id, workspaceHostId);
+      }
+    } catch (err) {
+      const mapped = placementErrorResponse(c, err);
+      if (mapped) return mapped;
+      throw err;
+    }
+
+    await initWorkspaceDir(validation.resolved);
 
     const workspace = workspaces.insert({
       name: parsed.data.name,
       description: parsed.data.description ?? null,
       workspacePath: validation.resolved,
-      workspaceHostId: parsed.data.workspace_host_id ?? localHost.id,
+      workspaceHostId,
     });
 
     // v25: human membership. The actor (registered viewer) becomes a
@@ -794,9 +847,6 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     // correct — the creator is a member by default.
     workspaces.addUserMember(workspace.id, viewerUserId);
 
-    const memberAgents = parsed.data.member_agent_ids
-      .map(id => agents.get(id))
-      .filter((agent): agent is AgentDto => agent !== null);
     for (const agent of memberAgents) {
       workspaces.addMember(workspace.id, agent.id);
       const agentL1Dir = join(ctx.silverhandDir, 'agents', agent.id);
@@ -1273,7 +1323,14 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     }
     const agent = agents.get(parsed.data.agent_id);
     if (!agent) return c.json({ error: 'agent not found' }, 404);
-    const member = workspaces.addMember(workspace.id, agent.id);
+    let member: ReturnType<WorkspaceRepo['addMember']>;
+    try {
+      member = workspaces.addMember(workspace.id, agent.id);
+    } catch (err) {
+      const mapped = placementErrorResponse(c, err);
+      if (mapped) return mapped;
+      throw err;
+    }
     const agentL1Dir = join(ctx.silverhandDir, 'agents', agent.id);
     await ensureAgentL1Dir(agentL1Dir);
     await seedAgentL2({
@@ -2273,6 +2330,8 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
         { conversationId, agentId, err },
         'api: start agent failed',
       );
+      const mapped = placementErrorResponse(c, err);
+      if (mapped) return mapped;
       return c.json({ error: msg }, 400);
     }
   }
@@ -2297,8 +2356,14 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       { conversationId, agentId, mode, hasDirective: !!directive },
       'api: stop agent requested',
     );
-    await ctx.runtimeHost.stop(conversationId, agentId, mode, directive);
-    return c.json({ ok: true });
+    try {
+      await ctx.runtimeHost.stop(conversationId, agentId, mode, directive);
+      return c.json({ ok: true });
+    } catch (err) {
+      const mapped = placementErrorResponse(c, err);
+      if (mapped) return mapped;
+      throw err;
+    }
   }
 
   async function clearConversationAgentSession(
@@ -2335,6 +2400,8 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
         { conversationId, agentId, err },
         'api: clear agent session failed',
       );
+      const mapped = placementErrorResponse(c, err);
+      if (mapped) return mapped;
       return c.json({ error: msg }, 400);
     }
   }
@@ -2344,7 +2411,12 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     creatorUserId: string,
   ) {
     return ctx.db.transaction(() => {
-      const agent = agents.create(input, localHost.id, creatorUserId);
+      const hostId = resolveCreateHostId(input.host_id, creatorUserId);
+      const agent = agents.create(
+        { ...input, host_id: hostId },
+        hostId,
+        creatorUserId,
+      );
       const agentL1Dir = join(ctx.silverhandDir, 'agents', agent.id);
       const home = workspaces.insertAgentHome({
         agent,
@@ -2416,10 +2488,15 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     // NOT NULL REFERENCES users(id)`).
     const principal = getUserPrincipal(c);
     const creatorUserId = principal.userId;
-    const { agent, dm, onboardingMsg, agentL1Dir } = createAgentWithHome(
-      parsed.data,
-      creatorUserId,
-    );
+    let created: ReturnType<typeof createAgentWithHome>;
+    try {
+      created = createAgentWithHome(parsed.data, creatorUserId);
+    } catch (err) {
+      const mapped = placementErrorResponse(c, err);
+      if (mapped) return mapped;
+      throw err;
+    }
+    const { agent, dm, onboardingMsg, agentL1Dir } = created;
     await ensureAgentL1Dir(agentL1Dir);
     await ctx.runtimeHost.deliverMessage(dm.id, agent.id, onboardingMsg.id);
     ctx.runtimeHost

@@ -2193,4 +2193,18 @@ describe('database migrations', () => {
       }
     });
   });
+
+  describe('B.3 runtime host placement schema boundary', () => {
+    it('does not add a runtime_host_id column to conversation_agents', () => {
+      const db = openDbAt(30);
+      try {
+        const columnNames = (
+          db.pragma('table_info(conversation_agents)') as Array<{ name: string }>
+        ).map(c => c.name);
+        expect(columnNames).not.toContain('runtime_host_id');
+      } finally {
+        db.close();
+      }
+    });
+  });
 });

@@ -23,8 +23,7 @@ describe('route harness smoke', () => {
     t = buildTestApp();
     const res = await http(t).get('/api/hosts');
     const body = await res.json() as any;
-    expect(body.hosts).toHaveLength(1);
-    expect(body.hosts[0].kind).toBe('local');
+    expect(body.hosts.some((host: any) => host.kind === 'local')).toBe(true);
   });
 
   it('serves common /api collection routes when the bearer token is present', async () => {

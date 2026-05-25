@@ -1,5 +1,17 @@
 # Multi-daemon RuntimeHostRegistry — design
 
+> **B.3 V1 status note (2026-05-25, Cindy)**: this document describes the
+> future sandbox / multi-daemon target state. Stage B.3 V1 does **not**
+> implement the §5 cache-key expansion, §6 `conversation_agents.runtime_host_id`
+> column, or §9 single-host backward-compat migration. B.3 V1 keeps
+> runtime placement on the existing user-owned trust-domain model:
+> `agents.host_id` points at `hosts.id`; membership writes enforce
+> `agent.host_id == workspace.workspace_host_id`, and runtime intent entrypoints
+> fail closed when that host row is missing or revoked. Activating the
+> daemon-routing design in §5/§6/§9 requires a real sandbox or remote daemon
+> launch path first; until then, `RuntimeHostRegistry` remains reserved for that
+> future daemon-routing layer.
+
 > **Status**: v1 design doc. Not implementation. Landing this doc unblocks targeted PRs (registry skeleton, handshake-id wiring, `conversation_agents.runtime_host_id` migration). Two product decisions in §7 (placement) and §8 (sandbox UX) are flagged OPEN for @shiki — they shape later UI/UX surfaces but do **not** block landing this doc.
 >
 > **Reviewer**: @Cindy.

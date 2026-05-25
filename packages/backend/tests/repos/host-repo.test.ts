@@ -54,4 +54,29 @@ describe('HostRepo', () => {
     expect(repo.get(host.id)?.revoked_at).toBe(revokedAt);
     expect(repo.revoke(host.id, revokedAt + 1)).toBe(false);
   });
+
+  it('finds the newest active owned local host without returning legacy local', () => {
+    const { db, viewerUserId } = openTestDb();
+    const repo = new HostRepo(db);
+    expect(repo.getOwnedLocalForUser(viewerUserId)).toBeNull();
+
+    const older = repo.create('local-old', 'local', {
+      userId: viewerUserId,
+      installationId: 'install-old',
+      lastSeenAt: 1_700_000_000_000,
+    });
+    const newer = repo.create('local-new', 'local', {
+      userId: viewerUserId,
+      installationId: 'install-new',
+      lastSeenAt: 1_700_000_000_001,
+    });
+    repo.create('remote-owned', 'remote', {
+      userId: viewerUserId,
+      installationId: 'remote-install',
+    });
+
+    expect(repo.getOwnedLocalForUser(viewerUserId)?.id).toBe(newer.id);
+    expect(repo.revoke(newer.id)).toBe(true);
+    expect(repo.getOwnedLocalForUser(viewerUserId)?.id).toBe(older.id);
+  });
 });

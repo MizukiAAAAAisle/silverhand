@@ -3,6 +3,7 @@ import {
   encodeUserPrincipalHeader,
   X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
+import { HostRepo } from '../../src/repos/host-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 describe('POST /api/agents', () => {
@@ -26,6 +27,7 @@ describe('POST /api/agents', () => {
 
   it('creates an agent + auto-DM channel + onboarding session, fans out to ConversationManager', async () => {
     t = buildTestApp();
+    const ownedLocal = new HostRepo(t.ctx.db).getOwnedLocalForUser(t.viewerUserId);
     const res = await http(t).post('/api/agents', {
       name: 'alice',
       runtime: 'claude',
@@ -33,7 +35,7 @@ describe('POST /api/agents', () => {
     expect(res.status).toBe(201);
     const body = await res.json() as any;
     expect(body.agent.name).toBe('alice');
-    expect(body.agent.host_id).toBeTypeOf('string');
+    expect(body.agent.host_id).toBe(ownedLocal?.id);
     expect(typeof body.dm_channel_id).toBe('string');
 
     // auto-DM channel exists as a canonical dm_channel conversation.
@@ -68,6 +70,32 @@ describe('POST /api/agents', () => {
     expect(onboarding.content).toContain('global identity');
     expect(onboarding.content).toContain('L1 `system_prompt.md`');
     expect(onboarding.content).toContain('Do not mention internal file paths');
+  });
+
+  it('fails closed when the creator has no owned local host', async () => {
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
+    const res = await http(t).post('/api/agents', {
+      name: 'alice',
+      runtime: 'claude',
+    });
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: 'local_host_unbound' });
+  });
+
+  it('rejects an explicit host id owned by another user', async () => {
+    t = buildTestApp();
+    const teammateHost = new HostRepo(t.ctx.db).getOwnedLocalForUser('teammate');
+    expect(teammateHost).not.toBeNull();
+
+    const res = await http(t).post('/api/agents', {
+      name: 'alice',
+      runtime: 'claude',
+      host_id: teammateHost!.id,
+    });
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ code: 'host_not_owned' });
   });
 
   it('returns 409 on duplicate name', async () => {

@@ -13,7 +13,7 @@ describe('host routes', () => {
   });
 
   it('claims the legacy local host and stores only a host_token hash', async () => {
-    t = buildTestApp();
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     const userToken = t.ctx.authSessions.issueSession({
       userId: t.viewerUserId,
     }).userToken;
@@ -70,7 +70,7 @@ describe('host routes', () => {
   });
 
   it('reuses the existing host without minting a token when desktop already has one', async () => {
-    t = buildTestApp();
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     const userToken = t.ctx.authSessions.issueSession({
       userId: t.viewerUserId,
     }).userToken;
@@ -99,7 +99,7 @@ describe('host routes', () => {
   });
 
   it('mints a replacement token when current_host_id has no active credential', async () => {
-    t = buildTestApp();
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     const userToken = t.ctx.authSessions.issueSession({
       userId: t.viewerUserId,
     }).userToken;
@@ -138,7 +138,7 @@ describe('host routes', () => {
   });
 
   it('fails closed for a revoked existing host and does not issue a new token', async () => {
-    t = buildTestApp();
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     const userToken = t.ctx.authSessions.issueSession({
       userId: t.viewerUserId,
     }).userToken;

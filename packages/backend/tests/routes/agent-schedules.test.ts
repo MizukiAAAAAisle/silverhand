@@ -5,6 +5,7 @@ import {
   X_SILVERHAND_PRINCIPAL_HEADER,
   type ScheduleDto,
 } from '@silverhand/shared';
+import { HostRepo } from '../../src/repos/host-repo.js';
 import { ScheduleRepo } from '../../src/repos/schedule-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
@@ -311,6 +312,10 @@ describe('POST /api/agents/:id/schedules/:scheduleId/cancel', () => {
          VALUES ('desktop-user-42', 'desktop-user-42-name', 'Desktop User 42', ?, ?)`,
       )
       .run(now, now);
+    new HostRepo(t.ctx.db).claimOrCreateLocal({
+      userId: 'desktop-user-42',
+      installationId: 'desktop-user-42-install',
+    });
     const created = await (
       await http(t).post(
         '/api/agents',

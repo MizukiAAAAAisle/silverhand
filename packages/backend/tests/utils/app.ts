@@ -178,8 +178,20 @@ const TEST_PASSWORD_HASH_PARAMS: Argon2idPasswordHashParams = {
   },
 };
 
+const TEST_FIXTURE_USER_IDS = [
+  'local',
+  'alice',
+  'bob',
+  'carol',
+  'teammate',
+  'other',
+  'someone',
+  'someone-else',
+];
+
 export interface BuildTestAppOptions {
   authConfig?: Partial<AuthRuntimeConfig>;
+  ownedLocalHostUserIds?: string[];
 }
 
 export interface TestApp {
@@ -337,7 +349,19 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
 
   // routes.ts calls hosts.ensureLocal() at construction; openTestDb() does
   // the same — this is a safety net if anyone changes the helper later.
-  new HostRepo(db).ensureLocal();
+  const hosts = new HostRepo(db);
+  hosts.ensureLocal();
+  // Stage B.3 create routes require the current user to have an owned
+  // local host, matching the desktop login claim path. Most route
+  // tests use fixture users directly, so pre-claim their local hosts
+  // here; host-claim/registration tests opt out when they need legacy
+  // unclaimed-local state.
+  for (const userId of options.ownedLocalHostUserIds ?? TEST_FIXTURE_USER_IDS) {
+    hosts.claimOrCreateLocal({
+      userId,
+      installationId: `test-install-${userId}`,
+    });
+  }
 
   const app = new Hono<AppEnv>();
   app.use('*', silverhandCors());

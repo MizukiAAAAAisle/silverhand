@@ -85,6 +85,7 @@ import type { RuntimeBridge } from './bridge.js';
 import type { LiveDeliveryRequest, RuntimeDeliveryCoordinator } from './delivery-coordinator.js';
 import type { RuntimeEventHandler } from './event-handler.js';
 import type { EventPublisher } from './event-handler.js';
+import type { RuntimeHostPlacement } from './host-placement.js';
 import { buildPromptContext } from './prompt-context.js';
 import type { RunStateCache } from './run-state-cache.js';
 import { buildBridgeBaseEnv } from './spawn-env.js';
@@ -140,6 +141,11 @@ export interface DaemonAgentRuntimeHostDeps {
   /** Workspace repo — used by `start` to look up workspace metadata
    *  for prompt-context assembly + the workspace-memory index. */
   workspaces: WorkspaceRepo;
+  /** V1 host placement gate. It resolves `agent.host_id` and fails
+   *  closed when the owning host row is missing or revoked. It does
+   *  not route to another transport; daemon mode still uses the one
+   *  local socket wired into `bridge`. */
+  placement: RuntimeHostPlacement;
   /** Membership projection used by `start` to render the prompt's
    *  "Members in this conversation" block. Same instance CM uses so
    *  the two runtime hosts produce byte-identical prompts. */
@@ -220,6 +226,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
   private readonly settings: SettingsRepo;
   private readonly coordinator: RuntimeDeliveryCoordinator;
   private readonly workspaces: WorkspaceRepo;
+  private readonly placement: RuntimeHostPlacement;
   private readonly membership: MembershipService;
   private readonly silverhandDir: string;
   private readonly silverhandCli: SilverhandCliLauncher;
@@ -245,6 +252,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
     this.settings = deps.settings;
     this.coordinator = deps.coordinator;
     this.workspaces = deps.workspaces;
+    this.placement = deps.placement;
     this.membership = deps.membership;
     this.silverhandDir = deps.silverhandDir;
     this.silverhandCli = deps.silverhandCli;
@@ -309,6 +317,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
    * state.
    */
   async start(conversationId: string, agentId: string, opts: StartOptions = {}): Promise<void> {
+    this.placement.resolveForAgent(agentId);
     const conversation = this.conversations.get(conversationId);
     if (!conversation) {
       throw new Error(`conversation ${conversationId} not found`);
@@ -563,6 +572,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
     mode: 'soft' | 'hard' = 'hard',
     softDirective?: string,
   ): Promise<void> {
+    this.placement.resolveForAgent(agentId);
     if (mode === 'hard') {
       await this.bridge.runtimeStop({
         conversation_id: conversationId,
@@ -643,6 +653,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
     agentId: string,
     actorUserId: string | null = null,
   ): Promise<ClearSessionResult> {
+    this.placement.resolveForAgent(agentId);
     // 1. Validate.
     const conversation = this.conversations.get(conversationId);
     if (!conversation) {
@@ -839,6 +850,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
    *      inbox is the source of truth for retry.
    */
   async deliverMessage(conversationId: string, agentId: string, messageId: string): Promise<void> {
+    this.placement.resolveForAgent(agentId);
     const msg = this.messages.getById(messageId);
     if (!msg) {
       this.logger.warn(
@@ -1033,6 +1045,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
    * all-or-nothing semantics across the gate.
    */
   async drainPending(conversationId: string, agentId: string): Promise<void> {
+    this.placement.resolveForAgent(agentId);
     const pending = this.inboxes.listPending(conversationId, agentId);
     if (pending.length === 0) {
       this.logger.info(

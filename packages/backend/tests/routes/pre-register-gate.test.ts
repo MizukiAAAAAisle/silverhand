@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { apiPaths } from '@silverhand/shared';
+import { HostRepo } from '../../src/repos/host-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 /**
@@ -47,7 +48,7 @@ describe('Pre-register gate (requireRegisteredViewer middleware)', () => {
   }
 
   it('GET /api/me returns the registration_required shape before registration', async () => {
-    t = buildTestApp();
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     unregisterViewer(t);
     const res = await noPrincipalHttp(t).get(apiPaths.me);
     expect(res.status).toBe(200);
@@ -60,14 +61,14 @@ describe('Pre-register gate (requireRegisteredViewer middleware)', () => {
   });
 
   it('allows POST /api/register before registration', async () => {
-    t = buildTestApp();
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     unregisterViewer(t);
     const res = await noPrincipalHttp(t).post(apiPaths.register, { name: 'shiki' });
     expect(res.status).toBe(200);
   });
 
   it('blocks POST /api/workspaces with 403 registration_required', async () => {
-    t = buildTestApp();
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     unregisterViewer(t);
     const res = await noPrincipalHttp(t).post('/api/workspaces', { name: 'should-block' });
     expect(res.status).toBe(403);
@@ -76,7 +77,7 @@ describe('Pre-register gate (requireRegisteredViewer middleware)', () => {
   });
 
   it('blocks POST /api/agents with 403 registration_required', async () => {
-    t = buildTestApp();
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     unregisterViewer(t);
     const res = await noPrincipalHttp(t).post('/api/agents', {
       name: 'should-block',
@@ -92,7 +93,7 @@ describe('Pre-register gate (requireRegisteredViewer middleware)', () => {
     // ensures registration must happen via /api/register, never via
     // a side-door display_name PATCH (and pre-registration there is
     // no row to patch in the first place).
-    t = buildTestApp();
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     unregisterViewer(t);
     const res = await noPrincipalHttp(t).patch(apiPaths.me, { display_name: 'Sneaky' });
     expect(res.status).toBe(403);
@@ -103,7 +104,7 @@ describe('Pre-register gate (requireRegisteredViewer middleware)', () => {
   it('blocks GET /api/workspaces with 403 registration_required', async () => {
     // Read paths are gated too — without registration the viewer has
     // no identity for FK / audit purposes, so we deny uniformly.
-    t = buildTestApp();
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     unregisterViewer(t);
     const res = await noPrincipalHttp(t).get('/api/workspaces');
     expect(res.status).toBe(403);
@@ -112,13 +113,17 @@ describe('Pre-register gate (requireRegisteredViewer middleware)', () => {
   });
 
   it('reopens the full surface after POST /api/register succeeds', async () => {
-    t = buildTestApp();
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     unregisterViewer(t);
 
     // Register first — INSERT user + write viewer_user_id atomically.
     const reg = await noPrincipalHttp(t).post(apiPaths.register, { name: 'shiki' });
     expect(reg.status).toBe(200);
     const viewer = await reg.json() as { id: string };
+    new HostRepo(t.ctx.db).claimOrCreateLocal({
+      userId: viewer.id,
+      installationId: 'post-register-install',
+    });
 
     // With A.3 the settings pointer is not a principal fallback; the
     // caller must send an explicit session/legacy principal.
@@ -132,7 +137,7 @@ describe('Pre-register gate (requireRegisteredViewer middleware)', () => {
   it('lets registered viewers reach all routes (no regression)', async () => {
     // Default fixture pre-registers `local` — sanity check that the
     // gate does not over-fire for already-registered users.
-    t = buildTestApp();
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     const res = await http(t).get('/api/workspaces');
     expect(res.status).toBe(200);
   });
@@ -142,7 +147,7 @@ describe('Pre-register gate (requireRegisteredViewer middleware)', () => {
     // and without a viewer. The gate must not turn the pre-registration
     // case into a 403 here, or first-boot health checks would mark the
     // process unhealthy.
-    t = buildTestApp();
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     unregisterViewer(t);
     const res = await noPrincipalHttp(t).get('/api/health');
     expect(res.status).toBe(200);

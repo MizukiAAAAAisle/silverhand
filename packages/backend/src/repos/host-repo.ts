@@ -86,6 +86,20 @@ export class HostRepo {
     return row ?? null;
   }
 
+  getOwnedLocalForUser(userId: string): HostRow | null {
+    const row = this.db
+      .prepare<[string], HostRow>(
+        `SELECT * FROM hosts
+          WHERE user_id = ?
+            AND kind = 'local'
+            AND revoked_at IS NULL
+          ORDER BY COALESCE(last_seen_at, created_at) DESC,
+                   created_at DESC`,
+      )
+      .get(userId);
+    return row ?? null;
+  }
+
   bindToUserInstallation(input: {
     hostId: string;
     userId: string;
