@@ -572,10 +572,8 @@ describe('database migrations', () => {
     }
 
     it('creates an empty users table with the post-rewrite shape', () => {
-      const db = new Database(':memory:');
+      const db = openDbAt(21);
       try {
-        runMigrations(db);
-
         // Migration version recorded.
         expect(
           db.prepare(`SELECT version FROM _migrations WHERE version = 21`).get(),
@@ -2021,6 +2019,72 @@ describe('database migrations', () => {
         for (const tname of triggers) {
           expect(tname).not.toContain('handle');
         }
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  describe('migration v29 (user auth credentials)', () => {
+    it('adds nullable unique-when-set email plus password credentials and auth sessions', () => {
+      const db = openDbAt(28);
+      try {
+        runMigrations(db);
+
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 29`).get(),
+        ).toBeDefined();
+
+        const userColumns = (
+          db.pragma('table_info(users)') as Array<{ name: string; notnull: 0 | 1 }>
+        ).map(c => ({ name: c.name, notnull: c.notnull }));
+        expect(userColumns).toContainEqual({ name: 'email', notnull: 0 });
+
+        const now = Date.now();
+        db.prepare(
+          `INSERT INTO users (id, name, display_name, created_at, updated_at)
+           VALUES ('u1', 'u1-test', 'U1', ?, ?)`,
+        ).run(now, now);
+        db.prepare(
+          `INSERT INTO users (id, name, display_name, created_at, updated_at)
+           VALUES ('u2', 'u2-test', 'U2', ?, ?)`,
+        ).run(now, now);
+
+        db.prepare(`UPDATE users SET email = 'User@Example.com' WHERE id = 'u1'`).run();
+        expect(() =>
+          db.prepare(`UPDATE users SET email = 'user@example.com' WHERE id = 'u2'`).run(),
+        ).toThrow(/UNIQUE constraint failed/);
+
+        db.prepare(
+          `INSERT INTO user_password_credentials
+             (user_id, password_hash, password_hash_params, password_updated_at)
+           VALUES ('u1', '$argon2id$v=19$m=1,t=1,p=1$fake$fake',
+                   '{"algorithm":"argon2id"}', ?)`,
+        ).run(now);
+        expect(() =>
+          db.prepare(
+            `INSERT INTO user_password_credentials
+               (user_id, password_hash, password_hash_params, password_updated_at)
+             VALUES ('u2', 'hash', 'not-json', ?)`,
+          ).run(now),
+        ).toThrow(/CHECK constraint failed/);
+
+        db.prepare(
+          `INSERT INTO auth_sessions
+             (id, user_id, token_hash, created_at, last_used_at, revoked_at,
+              user_agent, ip_first_seen)
+           VALUES ('s1', 'u1', 'token-hash', ?, ?, NULL, 'vitest', '127.0.0.1')`,
+        ).run(now, now);
+
+        db.prepare(`DELETE FROM users WHERE id = 'u1'`).run();
+        expect(
+          db
+            .prepare(`SELECT COUNT(*) AS c FROM user_password_credentials`)
+            .get(),
+        ).toEqual({ c: 0 });
+        expect(
+          db.prepare(`SELECT COUNT(*) AS c FROM auth_sessions`).get(),
+        ).toEqual({ c: 0 });
       } finally {
         db.close();
       }

@@ -109,8 +109,29 @@ export interface UserRow {
    *  avatar is set. Coupled with `avatar_content_type` via CHECK. */
   avatar_storage_key: string | null;
   avatar_content_type: string | null;
+  /** Canonical login handle for remote auth. NULL rows are profile-only. */
+  email: string | null;
   created_at: number;
   updated_at: number;
+}
+
+export interface UserPasswordCredentialRow {
+  user_id: string;
+  password_hash: string;
+  /** JSON-encoded Argon2id parameter record selected by the env benchmark. */
+  password_hash_params: string;
+  password_updated_at: number;
+}
+
+export interface AuthSessionRow {
+  id: string;
+  user_id: string;
+  token_hash: string;
+  created_at: number;
+  last_used_at: number;
+  revoked_at: number | null;
+  user_agent: string | null;
+  ip_first_seen: string | null;
 }
 
 export interface WorkspaceRow {

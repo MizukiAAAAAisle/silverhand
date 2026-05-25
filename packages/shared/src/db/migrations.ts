@@ -2155,4 +2155,40 @@ export const migrations: Migration[] = [
         ON schedules(target_conversation_id);
     `,
   },
+  {
+    version: 29,
+    name: 'user_auth_credentials',
+    // Stage A.1 remote-backend auth foundation. Keep the existing
+    // profile identity model intact: `users` remains the profile root,
+    // `email` is only the nullable login handle, and password material
+    // lives in its own one-to-zero-or-one table.
+    up: `
+      ALTER TABLE users ADD COLUMN email TEXT;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_users_email_when_set
+        ON users(email COLLATE NOCASE)
+        WHERE email IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS user_password_credentials (
+        user_id               TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        password_hash         TEXT NOT NULL,
+        password_hash_params  TEXT NOT NULL CHECK (json_valid(password_hash_params)),
+        password_updated_at   INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS auth_sessions (
+        id             TEXT PRIMARY KEY,
+        user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        token_hash     TEXT NOT NULL UNIQUE,
+        created_at     INTEGER NOT NULL,
+        last_used_at   INTEGER NOT NULL,
+        revoked_at     INTEGER,
+        user_agent     TEXT,
+        ip_first_seen  TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_auth_sessions_user
+        ON auth_sessions(user_id, revoked_at, last_used_at DESC);
+    `,
+  },
 ];
