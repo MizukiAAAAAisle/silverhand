@@ -190,7 +190,7 @@ export class EventWsClient {
     try {
       const info = await getBackendInfo();
       url = eventWsUrl(info.url);
-      token = info.auth_token;
+      token = info.event_auth_token;
     } catch {
       this.scheduleReconnect();
       return;
@@ -416,8 +416,7 @@ export const VIEWER_SCOPE_ALIAS = 'viewer:self';
 /**
  * True iff `scope` is the current viewer's resolved scope. Hooks call
  * this on incoming `event`/`snapshot_required` frames so they don't
- * need to hardcode the viewer's id (it's a random hex written by
- * `POST /api/register`).
+ * need to hardcode the viewer's id.
  */
 export function isCurrentViewerScope(scope: string): boolean {
   const resolved = eventWsClient.getResolvedViewerId();

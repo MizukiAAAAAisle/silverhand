@@ -67,6 +67,7 @@ describe('auth routes', () => {
         )
         .get(signup.body.user.id)?.c,
     ).toBe(1);
+    expect(legacyViewerSetting(t)).toBe(signup.body.user.id);
 
     const sessionMe = await requestJson(
       t,
@@ -90,6 +91,7 @@ describe('auth routes', () => {
     );
     expect(logout.status).toBe(200);
     expect(logout.body).toEqual({ ok: true });
+    expect(legacyViewerSetting(t)).toBe(signup.body.user.id);
 
     const revoked = await requestJson(
       t,
@@ -119,6 +121,7 @@ describe('auth routes', () => {
     });
     expect(ok.status).toBe(200);
     expect(ok.body.user.id).toBe(created.body.user.id);
+    expect(legacyViewerSetting(t)).toBe(created.body.user.id);
 
     const duplicateSignup = await requestJson(t, 'POST', authPaths.signup, {
       email: 'login@example.com',
@@ -143,6 +146,14 @@ describe('auth routes', () => {
     }
   });
 });
+
+function legacyViewerSetting(t: TestApp): string | null {
+  return t.ctx.db
+    .prepare<[], { value: string }>(
+      `SELECT value FROM app_settings WHERE key = 'viewer_user_id'`,
+    )
+    .get()?.value ?? null;
+}
 
 function bearer(token: string): Record<string, string> {
   return { authorization: `Bearer ${token}` };

@@ -77,8 +77,10 @@ export class UserService {
   }
 
   /**
-   * The sole creator of `users` rows. Called by `POST /api/register`
-   * exactly once per machine in V1 (and once per signup in V2).
+   * Legacy profile-registration creator for the pre-auth setup path.
+   * Password signup now creates credentialed `users` rows through
+   * `UserAuthService.signup`; this method remains the atomic
+   * `/api/register` path used by tests and older profile-only setups.
    *
    * Atomically:
    *   1. Generate a fresh user id (16 hex chars).

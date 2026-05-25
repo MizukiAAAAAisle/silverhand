@@ -18,14 +18,13 @@ import { RuntimeKindSchema, type RuntimeKind } from '@silverhand/shared';
  *     that the proxy applies to. Empty/unset = no runtime gets the proxy
  *     even if `proxy_url` is set (explicit opt-in).
  *   - `viewer_user_id` — id of the registered viewer (V1 single user).
- *     Absent until `POST /api/register` runs, at which point the
- *     register service INSERTs the `users` row and writes this key in
- *     the same transaction. Its absence is the registration-required
- *     signal; the principal middleware skips principal resolution and
- *     the `requireRegisteredViewer` gate rejects every public route
- *     except the registration whitelist. V2 multi-user replaces this
- *     with token claims; the key is then dead weight and gets deleted
- *     in a future migration.
+ *     Legacy WS bridge only after Stage A.4: HTTP no longer resolves
+ *     principals from this setting, but event WS still uses it to
+ *     canonicalize `viewer:self` until Stage C moves WS to session
+ *     auth. Legacy `/api/register` writes it atomically with user
+ *     creation; `/auth/signup` and `/auth/login` also update it as a
+ *     transient bridge for desktop session users. Stage C deletes the
+ *     read and these auth-route writes together.
  */
 export class SettingsRepo {
   constructor(private readonly db: Db) {}
@@ -81,9 +80,9 @@ export class SettingsRepo {
     return out;
   }
 
-  /** V1 viewer pointer (see class docstring). Returns null in the
-   *  registration-required state — caller MUST treat null as "viewer
-   *  has not registered yet" and reject the request, NOT as corruption. */
+  /** Legacy WS viewer pointer (see class docstring). Returns null when
+   *  the transient bridge has not been seeded; WS callers must reject
+   *  null rather than guessing a viewer. */
   getViewerUserId(): string | null {
     return this.get(SETTINGS_KEYS.VIEWER_USER_ID);
   }

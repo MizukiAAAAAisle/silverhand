@@ -1,10 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import {
-  X_SILVERHAND_PRINCIPAL_HEADER,
-  encodeUserPrincipalHeader,
-} from '@silverhand/shared';
-import { getBackendInfo } from '@/lib/api';
-import { getCurrentUserId } from '@/lib/current-user';
+import { fetchBackendBlob } from '@/lib/api';
 
 /**
  * Avatar fetch hooks for agents. Mirrors `useViewerAvatarObjectUrl`
@@ -29,10 +24,9 @@ import { getCurrentUserId } from '@/lib/current-user';
  *   down as a prop. Per Cindy's PR-2 review, leaf components must
  *   never fetch internally.
  *
- * Both helpers fetch with the standard auth headers (bearer token +
- * principal header). On 4xx/5xx the URL falls back to `null` so the
- * caller renders the runtime icon — there is no second-class error
- * state for missing avatars.
+ * Both helpers fetch through the main-process auth proxy. On 4xx/5xx
+ * the URL falls back to `null` so the caller renders the runtime icon
+ * — there is no second-class error state for missing avatars.
  */
 
 async function fetchAvatarObjectUrl(
@@ -40,18 +34,13 @@ async function fetchAvatarObjectUrl(
   signal: AbortSignal,
 ): Promise<string | null> {
   try {
-    const info = await getBackendInfo();
-    const headers = new Headers();
-    headers.set('Authorization', `Bearer ${info.auth_token}`);
-    const id = getCurrentUserId();
-    if (id) {
-      headers.set(X_SILVERHAND_PRINCIPAL_HEADER, encodeUserPrincipalHeader(id));
-    }
-    const res = await fetch(`${info.url}${avatarUrl}`, { headers, signal });
-    if (!res.ok) return null;
-    const blob = await res.blob();
     if (signal.aborted) return null;
-    return URL.createObjectURL(blob);
+    const res = await fetchBackendBlob(avatarUrl);
+    if (signal.aborted) {
+      URL.revokeObjectURL(res.url);
+      return null;
+    }
+    return res.url;
   } catch {
     // Best-effort — caller falls back to the runtime placeholder.
     return null;

@@ -1,9 +1,9 @@
-import {
-  encodeUserPrincipalHeader,
-  X_SILVERHAND_PRINCIPAL_HEADER,
-} from '@silverhand/shared';
-import type { BackendInfo } from '../../preload/api';
-import { getCurrentUserId } from './current-user';
+import type {
+  BackendInfo,
+  BackendProxyResponse,
+  BackendUploadField,
+  BackendUploadFile,
+} from '../../preload/api';
 
 let cachedInfo: BackendInfo | null = null;
 
@@ -38,147 +38,138 @@ async function getInfo(forceRefresh = false): Promise<BackendInfo> {
   return info;
 }
 
-async function fetchWithInfo(
-  path: string,
-  init: RequestInit,
-  info: BackendInfo,
-): Promise<Response> {
+function bodyTextFromInit(init: RequestInit): string | undefined {
+  if (init.body === undefined || init.body === null) return undefined;
+  if (typeof init.body === 'string') return init.body;
+  if (init.body instanceof URLSearchParams) return init.body.toString();
+  throw new Error('api() only supports string or URLSearchParams request bodies');
+}
+
+function headersFromInit(init: RequestInit): Record<string, string> {
   const headers = new Headers(init.headers);
-  headers.set('Authorization', `Bearer ${info.auth_token}`);
-  // Viewer principal — sourced from the boot-time hydration of
-  // `/api/me`. Until that completes we omit the header entirely; the
-  // backend's principal middleware then resolves the viewer via its
-  // `app_settings.viewer_user_id` lookup (set by `POST /api/register`,
-  // unset pre-registration). Once the hydration runs, this header
-  // carries the real viewer id.
-  const viewerId = getCurrentUserId();
-  if (viewerId) {
+  if (init.body && !headers.has('Content-Type')) {
     headers.set(
-      X_SILVERHAND_PRINCIPAL_HEADER,
-      encodeUserPrincipalHeader(viewerId),
+      'Content-Type',
+      init.body instanceof URLSearchParams
+        ? 'application/x-www-form-urlencoded;charset=UTF-8'
+        : 'application/json',
     );
   }
-  if (init.body && !headers.has('Content-Type')) {
-    headers.set('Content-Type', 'application/json');
+  const out: Record<string, string> = {};
+  headers.forEach((value, key) => {
+    out[key] = value;
+  });
+  return out;
+}
+
+function throwIfAborted(signal: AbortSignal | null | undefined): void {
+  if (!signal?.aborted) return;
+  throw new DOMException('The operation was aborted.', 'AbortError');
+}
+
+function textResponseBody(res: BackendProxyResponse): string {
+  return res.bodyText ?? '';
+}
+
+function headerValue(headers: Record<string, string>, name: string): string | null {
+  const lower = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === lower) return value;
   }
-  return fetch(`${info.url}${path}`, { ...init, headers });
+  return null;
+}
+
+function assertOk(res: BackendProxyResponse): void {
+  if (res.status >= 200 && res.status < 300) return;
+  throw new ApiError(res.status, res.statusText, textResponseBody(res));
 }
 
 export async function api<T = unknown>(
   path: string,
   init: RequestInit = {},
 ): Promise<T> {
-  let info = await getInfo();
-  let res: Response;
-  try {
-    res = await fetchWithInfo(path, init, info);
-  } catch (err) {
-    // In dev, electron-vite can restart the main process/backend and
-    // assign a new localhost port while the renderer keeps its module
-    // cache. Refresh backend info once before surfacing a network error.
-    info = await getInfo(true);
-    res = await fetchWithInfo(path, init, info).catch(() => {
-      throw err;
-    });
-  }
-  if (res.status === 401 || res.status === 403) {
-    // Same stale-info failure mode, but for auth-token changes rather
-    // than port changes.
-    info = await getInfo(true);
-    res = await fetchWithInfo(path, init, info);
-  }
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new ApiError(res.status, res.statusText, text);
-  }
+  throwIfAborted(init.signal);
+  const res = await window.agentHub.backendRequest({
+    path,
+    method: init.method,
+    headers: headersFromInit(init),
+    bodyText: bodyTextFromInit(init),
+  });
+  throwIfAborted(init.signal);
+  assertOk(res);
   if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
+  return JSON.parse(textResponseBody(res)) as T;
 }
 
 export async function getBackendInfo(): Promise<BackendInfo> {
   return getInfo();
 }
 
-/** Multipart upload helper. Bearer auth + viewer header, no Content-Type
- *  override — FormData sets the boundary itself. Falls back to a single
- *  retry with refreshed backend info on the same failure modes as `api()`. */
+/** Multipart upload helper. The renderer serializes FormData over IPC;
+ *  main reconstructs it and injects the user session bearer. */
 export async function apiUpload<T = unknown>(
   path: string,
   formData: FormData,
 ): Promise<T> {
-  let info = await getInfo();
-  const send = async (i: BackendInfo): Promise<Response> => {
-    const headers = new Headers();
-    headers.set('Authorization', `Bearer ${i.auth_token}`);
-    const viewerId = getCurrentUserId();
-    if (viewerId) {
-      headers.set(
-        X_SILVERHAND_PRINCIPAL_HEADER,
-        encodeUserPrincipalHeader(viewerId),
-      );
+  const fields: BackendUploadField[] = [];
+  const files: BackendUploadFile[] = [];
+  for (const [name, value] of formData.entries()) {
+    if (typeof value === 'string') {
+      fields.push({ name, value });
+      continue;
     }
-    return fetch(`${i.url}${path}`, { method: 'POST', headers, body: formData });
-  };
-  let res: Response;
-  try {
-    res = await send(info);
-  } catch (err) {
-    info = await getInfo(true);
-    res = await send(info).catch(() => {
-      throw err;
+    const bytes = new Uint8Array(await value.arrayBuffer());
+    files.push({
+      fieldName: name,
+      filename: value instanceof File ? value.name : 'blob',
+      contentType: value.type || 'application/octet-stream',
+      bytes,
     });
   }
-  if (res.status === 401 || res.status === 403) {
-    info = await getInfo(true);
-    res = await send(info);
-  }
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new ApiError(res.status, res.statusText, text);
-  }
-  return (await res.json()) as T;
+  const res = await window.agentHub.backendUpload({ path, fields, files });
+  assertOk(res);
+  return JSON.parse(textResponseBody(res)) as T;
 }
 
 /** Build an absolute URL to an attachment download. The renderer doesn't
  *  share an origin with the backend, so links must include the host.
- *  Auth still travels via header, so use this for `fetchAttachmentBlob`
- *  rather than dropping into `<img src>` directly (the public attachment
- *  route requires the viewer header, not just a query token). */
+ *  It is only useful for display/debug; authenticated fetches must go
+ *  through `fetchAttachmentBlob()` so main can inject the user session. */
 export async function attachmentEndpoint(attachmentId: string): Promise<string> {
   const info = await getInfo();
   return `${info.url}/api/attachments/${encodeURIComponent(attachmentId)}`;
 }
 
-/** Fetch an attachment as a Blob using the auth headers, then return an
+/** Fetch an attachment as a Blob through the main-process auth proxy, then return an
  *  object URL the renderer can drop into `<img src>` or `window.open`.
  *  Caller is responsible for `URL.revokeObjectURL` when the URL is no
  *  longer needed (or accept the leak — Electron tears down on close). */
+export async function fetchBackendBlob(path: string): Promise<{
+  url: string;
+  contentType: string;
+  filename: string | null;
+}> {
+  const res = await window.agentHub.backendRequest({
+    path,
+    responseType: 'arrayBuffer',
+  });
+  assertOk(res);
+  const contentType = headerValue(res.headers, 'content-type') ?? 'application/octet-stream';
+  const disposition = headerValue(res.headers, 'content-disposition');
+  const filename = disposition ? extractDispositionFilename(disposition) : null;
+  const bytes = res.bodyBytes ?? new Uint8Array();
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  const blob = new Blob([copy.buffer as ArrayBuffer], { type: contentType });
+  return { url: URL.createObjectURL(blob), contentType, filename };
+}
+
 export async function fetchAttachmentBlob(attachmentId: string): Promise<{
   url: string;
   contentType: string;
   filename: string | null;
 }> {
-  const info = await getInfo();
-  const url = `${info.url}/api/attachments/${encodeURIComponent(attachmentId)}`;
-  const headers = new Headers();
-  headers.set('Authorization', `Bearer ${info.auth_token}`);
-  const viewerId = getCurrentUserId();
-  if (viewerId) {
-    headers.set(
-      X_SILVERHAND_PRINCIPAL_HEADER,
-      encodeUserPrincipalHeader(viewerId),
-    );
-  }
-  const res = await fetch(url, { headers });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new ApiError(res.status, res.statusText, text);
-  }
-  const contentType = res.headers.get('content-type') ?? 'application/octet-stream';
-  const disposition = res.headers.get('content-disposition');
-  const filename = disposition ? extractDispositionFilename(disposition) : null;
-  const blob = await res.blob();
-  return { url: URL.createObjectURL(blob), contentType, filename };
+  return fetchBackendBlob(`/api/attachments/${encodeURIComponent(attachmentId)}`);
 }
 
 function extractDispositionFilename(value: string): string | null {

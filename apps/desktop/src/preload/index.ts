@@ -1,9 +1,12 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
+import type { AuthLoginInput, AuthSignupInput, UserDto } from '@silverhand/shared';
 
 export interface BackendInfo {
   url: string;
   mode: 'embedded' | 'remote';
-  auth_token: string;
+  /** Legacy event-websocket bearer. HTTP auth is held in main and is
+   *  never exposed to the renderer. */
+  event_auth_token: string;
 }
 
 export interface ActiveConversationInfo {
@@ -11,16 +14,67 @@ export interface ActiveConversationInfo {
   conversationId: string | null;
 }
 
+export type DesktopAuthState =
+  | { status: 'authenticated'; signup_enabled: boolean; user: UserDto }
+  | { status: 'unauthenticated'; signup_enabled: boolean };
+
+export type DesktopAuthResult =
+  | { ok: true; user: UserDto }
+  | { ok: false; status: number; statusText: string; bodyText: string };
+
+export interface BackendProxyRequest {
+  path: string;
+  method?: string;
+  headers?: Record<string, string>;
+  bodyText?: string;
+  responseType?: 'text' | 'arrayBuffer';
+}
+
+export interface BackendProxyResponse {
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+  bodyText?: string;
+  bodyBytes?: Uint8Array;
+}
+
+export interface BackendUploadField {
+  name: string;
+  value: string;
+}
+
+export interface BackendUploadFile {
+  fieldName: string;
+  filename: string;
+  contentType: string;
+  bytes: Uint8Array;
+}
+
+export interface BackendUploadRequest {
+  path: string;
+  fields: BackendUploadField[];
+  files: BackendUploadFile[];
+}
+
 const api = {
   getBackendInfo: (): Promise<BackendInfo | null> => ipcRenderer.invoke('backend:info'),
+  getAuthState: (): Promise<DesktopAuthState> => ipcRenderer.invoke('auth:getState'),
+  signup: (input: AuthSignupInput): Promise<DesktopAuthResult> =>
+    ipcRenderer.invoke('auth:signup', input),
+  login: (input: AuthLoginInput): Promise<DesktopAuthResult> =>
+    ipcRenderer.invoke('auth:login', input),
+  logout: (): Promise<{ ok: true }> => ipcRenderer.invoke('auth:logout'),
+  backendRequest: (input: BackendProxyRequest): Promise<BackendProxyResponse> =>
+    ipcRenderer.invoke('backend:request', input),
+  backendUpload: (input: BackendUploadRequest): Promise<BackendProxyResponse> =>
+    ipcRenderer.invoke('backend:upload', input),
   pickDirectory: (options?: { defaultPath?: string }): Promise<string | null> =>
     ipcRenderer.invoke('dialog:pickDirectory', options),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:openExternal', url),
   /** Save attachment bytes to a per-app temp dir and hand the file off
    *  to the OS default handler (e.g. open `.html` in the user's
-   *  browser). The renderer is responsible for fetching the bytes via
-   *  the authenticated backend route — main never sees the auth token
-   *  or user principal here. See `attachment:openExternal` in main. */
+   *  browser). The renderer fetches the bytes through the main-owned
+   *  backend proxy, then hands them here for the OS boundary. */
   openAttachmentExternal: (input: {
     filename: string;
     bytes: Uint8Array;

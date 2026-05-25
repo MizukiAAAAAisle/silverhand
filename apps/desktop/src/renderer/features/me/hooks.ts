@@ -7,32 +7,36 @@ import {
 } from '@tanstack/react-query';
 import {
   apiPaths,
-  encodeUserPrincipalHeader,
-  X_SILVERHAND_PRINCIPAL_HEADER,
+  type AuthLoginInput,
+  type AuthSignupInput,
   type MeResponse,
-  type RegisterUserInput,
   type RegistrationRequired,
   type UpdateUserProfileInput,
   type UserDto,
 } from '@silverhand/shared';
-import { api, apiUpload, getBackendInfo } from '@/lib/api';
-import { getCurrentUserId, setCurrentUserId } from '@/lib/current-user';
+import { ApiError, api, apiUpload, fetchBackendBlob } from '@/lib/api';
+import { clearCurrentUser, setCurrentUserId } from '@/lib/current-user';
+import { eventWsClient } from '@/lib/ws-client';
 
 const meKey = ['me'] as const;
+
+export type SetupRequired = RegistrationRequired & {
+  signup_enabled: boolean;
+};
+
+export type ViewerState = UserDto | SetupRequired;
 
 function cacheViewer(qc: QueryClient, dto: UserDto): void {
   setCurrentUserId(dto.id, dto.display_name);
   qc.setQueryData(meKey, dto);
 }
 
-/**
- * Type guard: discriminates the `/api/me` union by the presence of the
- * `registration_required` literal flag. Both shapes are JSON objects
- * but only one carries the flag.
- */
+/** Type guard for the setup-required auth state. */
+export function isRegistrationRequired(body: ViewerState): body is SetupRequired;
+export function isRegistrationRequired(body: MeResponse): body is RegistrationRequired;
 export function isRegistrationRequired(
-  body: MeResponse,
-): body is RegistrationRequired {
+  body: MeResponse | ViewerState,
+): body is RegistrationRequired | SetupRequired {
   return (
     typeof body === 'object'
     && body !== null
@@ -42,17 +46,22 @@ export function isRegistrationRequired(
 }
 
 /**
- * React Query view of `/api/me`. Fires once at app boot, then again
- * whenever the renderer invalidates the cache (after a profile or
- * avatar mutation). When the body is a registered `UserDto`, the id is
- * forwarded to `setCurrentUserId` so the renderer's principal helpers
- * resolve against the real viewer id. When the body is the
- * `registration_required` shape, the registration gate mounts.
+ * React Query view of the main-process desktop auth state. The main
+ * process owns token persistence and validation; the renderer only
+ * receives either the resolved user dto or a setup-required marker.
  */
 export function useViewerUser() {
   const query = useQuery({
     queryKey: meKey,
-    queryFn: () => api<MeResponse>(apiPaths.me),
+    queryFn: async (): Promise<ViewerState> => {
+      const state = await window.agentHub.getAuthState();
+      if (state.status === 'authenticated') return state.user;
+      return {
+        registration_required: true,
+        suggested_name: '',
+        signup_enabled: state.signup_enabled,
+      };
+    },
     staleTime: 30 * 1000,
   });
   useEffect(() => {
@@ -63,23 +72,41 @@ export function useViewerUser() {
   return query;
 }
 
-/** POST /api/register — sole creator of the viewer's `users` row.
- *  Called from `<RegistrationGate />` on the registration form submit.
- *  Atomic INSERT users + write `app_settings.viewer_user_id`.
- *  Errors:
- *   - `name_taken` (409) — collides with an existing user/agent
- *   - `already_registered` (409) — a viewer is already registered
- *  Both surface as `ApiError` with a JSON body the gate parses. */
-export function useRegisterUser() {
+function authResultToUser(result: Awaited<ReturnType<typeof window.agentHub.signup>>): UserDto {
+  if (result.ok) return result.user;
+  throw new ApiError(result.status, result.statusText, result.bodyText);
+}
+
+export function useSignupUser() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: RegisterUserInput) =>
-      api<UserDto>(apiPaths.register, {
-        method: 'POST',
-        body: JSON.stringify(input),
-    }),
+    mutationFn: async (input: AuthSignupInput) =>
+      authResultToUser(await window.agentHub.signup(input)),
     onSuccess: dto => {
       cacheViewer(qc, dto);
+    },
+  });
+}
+
+export function useLoginUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: AuthLoginInput) =>
+      authResultToUser(await window.agentHub.login(input)),
+    onSuccess: dto => {
+      cacheViewer(qc, dto);
+    },
+  });
+}
+
+export function useLogout() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => window.agentHub.logout(),
+    onSuccess: () => {
+      clearCurrentUser();
+      eventWsClient.disconnect();
+      qc.clear();
     },
   });
 }
@@ -141,9 +168,9 @@ export function useClearAvatar() {
 /**
  * Resolve the viewer's avatar to a renderable object URL.
  *
- * `UserDto.avatar_url` is a backend path that requires an `Authorization`
- * header to fetch — `<img src>` can't carry headers, so we mirror the
- * attachment pattern: fetch the blob with auth headers, wrap in
+ * `UserDto.avatar_url` is a backend path that requires session auth.
+ * `<img src>` can't carry headers, so we mirror the attachment
+ * pattern: fetch the blob through the main-process auth proxy, wrap in
  * `URL.createObjectURL`, and revoke when the URL changes or the
  * consumer unmounts.
  *
@@ -168,21 +195,12 @@ export function useViewerAvatarObjectUrl(): string | null {
     }
     void (async () => {
       try {
-        const info = await getBackendInfo();
-        const headers = new Headers();
-        headers.set('Authorization', `Bearer ${info.auth_token}`);
-        const id = getCurrentUserId();
-        if (id) {
-          headers.set(
-            X_SILVERHAND_PRINCIPAL_HEADER,
-            encodeUserPrincipalHeader(id),
-          );
+        const res = await fetchBackendBlob(avatarUrl);
+        if (cancelled) {
+          URL.revokeObjectURL(res.url);
+          return;
         }
-        const res = await fetch(`${info.url}${avatarUrl}`, { headers });
-        if (!res.ok) return;
-        const blob = await res.blob();
-        if (cancelled) return;
-        createdUrl = URL.createObjectURL(blob);
+        createdUrl = res.url;
         setObjectUrl(createdUrl);
       } catch {
         // Best-effort — falls back to the placeholder.

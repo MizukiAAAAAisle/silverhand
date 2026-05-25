@@ -932,12 +932,12 @@ export function useMarkChannelRead() {
   });
 }
 
-/**
- * Advance the viewer's read cursor for a channel to its latest message.
- * Backed by the conversation_reads cursor — clears message unread badges.
- * The backend resolves the viewer principal from X-Silverhand-Principal
- * (injected by api()) so no body is required.
- */
+ /**
+  * Advance the viewer's read cursor for a channel to its latest message.
+  * Backed by the conversation_reads cursor — clears message unread badges.
+ * The backend resolves the viewer principal from the main-held desktop
+ * session bearer, so no body is required.
+  */
 export function useMarkMessageChannelRead() {
   const qc = useQueryClient();
   return useMutation({

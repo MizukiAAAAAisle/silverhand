@@ -11,6 +11,7 @@ import {
   Check,
   CheckCircle2,
   Code2,
+  LogOut,
   Loader2,
   Network,
   Palette,
@@ -34,6 +35,7 @@ import { useAppearance } from '@/hooks/useAppearance';
 import {
   isRegistrationRequired,
   useClearAvatar,
+  useLogout,
   useUpdateProfile,
   useUploadAvatar,
   useViewerAvatarObjectUrl,
@@ -486,6 +488,7 @@ function ProfilePane(): JSX.Element {
   const updateProfile = useUpdateProfile();
   const uploadAvatar = useUploadAvatar();
   const clearAvatar = useClearAvatar();
+  const logout = useLogout();
 
   // ProfilePane only mounts after registration (App.tsx gates the
   // shell behind <RegistrationGate />), so any `registration_required`
@@ -564,6 +567,15 @@ function ProfilePane(): JSX.Element {
     setError(null);
     try {
       await clearAvatar.mutateAsync();
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  const onLogout = async () => {
+    setError(null);
+    try {
+      await logout.mutateAsync();
     } catch (err) {
       setError(String(err));
     }
@@ -691,6 +703,28 @@ function ProfilePane(): JSX.Element {
           ) : null}
         </footer>
       </form>
+
+      <div className="flex max-w-sm items-center justify-between gap-3 border-t border-border-subtle pt-5">
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-text-secondary">Session</p>
+          <p className="text-[11px] text-text-muted">
+            Sign out of this desktop client.
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => void onLogout()}
+          disabled={logout.isPending}
+        >
+          {logout.isPending ? (
+            <Loader2 className="size-3.5 animate-spin" />
+          ) : (
+            <LogOut className="size-3.5" />
+          )}
+          Log out
+        </Button>
+      </div>
     </section>
   );
 }

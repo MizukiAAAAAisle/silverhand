@@ -20,9 +20,9 @@ import type { UserRow } from '@silverhand/shared';
  *
  * Invariant: a row in `users` represents a registered identity. There
  * is no "pending user" state — pre-registration there is simply no row.
- * `create()` is the sole INSERT path; `POST /api/register` (in the
- * service layer) is its sole caller, and the service wraps it together
- * with the `app_settings.viewer_user_id` write in a single transaction.
+ * `create()` is the sole table INSERT helper, called by the legacy
+ * profile registration service and by password signup. Callers own the
+ * surrounding transaction and any credential / legacy WS bridge writes.
  */
 export class UserRepo {
   constructor(private readonly db: Db) {}
@@ -61,9 +61,8 @@ export class UserRepo {
   }
 
   /**
-   * INSERT a new user row. The sole creator path — only the service
-   * layer's `register()` calls this, in a transaction that also writes
-   * `app_settings.viewer_user_id`.
+   * INSERT a new user row. Callers must run this inside the transaction
+   * that creates any adjacent credential or bridge rows.
    *
    * The migration v21 cross-namespace uniqueness trigger throws if
    * `name` collides with an existing `agents.name`; the column UNIQUE

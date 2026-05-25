@@ -1,7 +1,11 @@
+import type { AuthLoginInput, AuthSignupInput, UserDto } from '@silverhand/shared';
+
 export interface BackendInfo {
   url: string;
   mode: 'embedded' | 'remote';
-  auth_token: string;
+  /** Legacy event-websocket bearer. HTTP auth is held in main and is
+   *  never exposed to the renderer. */
+  event_auth_token: string;
 }
 
 export interface ActiveConversationInfo {
@@ -9,10 +13,58 @@ export interface ActiveConversationInfo {
   conversationId: string | null;
 }
 
+export type DesktopAuthState =
+  | { status: 'authenticated'; signup_enabled: boolean; user: UserDto }
+  | { status: 'unauthenticated'; signup_enabled: boolean };
+
+export type DesktopAuthResult =
+  | { ok: true; user: UserDto }
+  | { ok: false; status: number; statusText: string; bodyText: string };
+
+export interface BackendProxyRequest {
+  path: string;
+  method?: string;
+  headers?: Record<string, string>;
+  bodyText?: string;
+  responseType?: 'text' | 'arrayBuffer';
+}
+
+export interface BackendProxyResponse {
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+  bodyText?: string;
+  bodyBytes?: Uint8Array;
+}
+
+export interface BackendUploadField {
+  name: string;
+  value: string;
+}
+
+export interface BackendUploadFile {
+  fieldName: string;
+  filename: string;
+  contentType: string;
+  bytes: Uint8Array;
+}
+
+export interface BackendUploadRequest {
+  path: string;
+  fields: BackendUploadField[];
+  files: BackendUploadFile[];
+}
+
 declare global {
   interface Window {
     agentHub: {
       getBackendInfo(): Promise<BackendInfo | null>;
+      getAuthState(): Promise<DesktopAuthState>;
+      signup(input: AuthSignupInput): Promise<DesktopAuthResult>;
+      login(input: AuthLoginInput): Promise<DesktopAuthResult>;
+      logout(): Promise<{ ok: true }>;
+      backendRequest(input: BackendProxyRequest): Promise<BackendProxyResponse>;
+      backendUpload(input: BackendUploadRequest): Promise<BackendProxyResponse>;
       pickDirectory(options?: { defaultPath?: string }): Promise<string | null>;
       openExternal(url: string): Promise<void>;
       openAttachmentExternal(input: {

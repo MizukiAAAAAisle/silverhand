@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('./api', () => ({
   getBackendInfo: vi.fn().mockResolvedValue({
     url: 'http://127.0.0.1:1234',
-    auth_token: 'test-token',
+    event_auth_token: 'test-token',
   }),
 }));
 

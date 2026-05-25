@@ -338,6 +338,15 @@ function publicSettingsSnapshot(settings: SettingsRepo): Record<string, string> 
   return out;
 }
 
+function bridgeLegacyWsViewer(settings: SettingsRepo, userId: string): void {
+  // Stage A.4 -> Stage C transient bridge: event WS still authenticates
+  // with the legacy server token and resolves `viewer:self` through
+  // app_settings.viewer_user_id. Keep that pointer aligned with the
+  // authenticated desktop user until Stage C moves WS to session auth
+  // and deletes both this write and getLegacyViewerForWsScope().
+  settings.set(SETTINGS_KEYS.VIEWER_USER_ID, userId);
+}
+
 function legacyGlobalNotificationUserId(): null {
   // Stage A.3 bridge: V1 notification writers still mostly create
   // legacy global rows (`user_id IS NULL`). Keep every reader/writer
@@ -606,6 +615,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       if (!user) {
         return c.json({ error: 'created user is missing post-signup' }, 500);
       }
+      bridgeLegacyWsViewer(settings, signup.userId);
       const issued = ctx.authSessions.issueSession({
         userId: signup.userId,
         ...authSessionMetadata(c),
@@ -626,6 +636,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!user) {
       return c.json({ error: 'authenticated user is missing' }, 500);
     }
+    bridgeLegacyWsViewer(settings, verified.userId);
     const issued = ctx.authSessions.issueSession({
       userId: verified.userId,
       ...authSessionMetadata(c),

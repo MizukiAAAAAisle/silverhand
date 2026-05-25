@@ -114,11 +114,9 @@ const lastThreadByChannel = loadStringMap(LAST_THREAD_KEY);
 
 export function App(): JSX.Element {
   useAppearance();
-  // Hydrate the viewer profile (current user) so api() can stamp the
-  // X-Silverhand-Principal header against the real viewer id
-  // and `isCurrentUserId` resolves correctly. Returns either the
-  // resolved UserDto OR `{ registration_required: true, suggested_name }`
-  // when no viewer is registered yet.
+  // Hydrate the viewer profile from the main-process auth session so
+  // `isCurrentUserId` resolves correctly. Returns either the resolved
+  // UserDto or the setup-required shape that mounts the auth wizard.
   const viewer = useViewerUser();
 
   // Three-way render: loading → registration gate → registered shell.
@@ -137,12 +135,7 @@ export function App(): JSX.Element {
     );
   }
   if (isRegistrationRequired(viewer.data)) {
-    // Full-screen RegistrationGate. POST /api/register is the SOLE
-    // creator of `users` rows, and the renderer enforces the matching
-    // UI invariant by simply not mounting the shell. After registration
-    // succeeds, /api/me returns the resolved UserDto and the next
-    // render falls through to `<RegisteredAppShell />`.
-    return <RegistrationGate suggestedName={viewer.data.suggested_name} />;
+    return <RegistrationGate signupEnabled={viewer.data.signup_enabled} />;
   }
   return <RegisteredAppShell />;
 }

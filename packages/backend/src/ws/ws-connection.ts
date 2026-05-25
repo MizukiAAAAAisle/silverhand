@@ -116,7 +116,7 @@ export class EventWsConnection {
     if (!viewerUserId) {
       this.closeWithError(
         'auth_failed',
-        'no registered viewer — call POST /api/register first',
+        'no legacy WS viewer pointer — sign in first',
         1011,
       );
       return;

@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import type { RawData } from 'ws';
-import type { ClientFrame, ServerConfig, ServerFrame } from '@silverhand/shared';
+import { authPaths, type ClientFrame, type ServerConfig, type ServerFrame } from '@silverhand/shared';
 import { startBackend, type RunningBackend } from '../../src/index.js';
 import { EVENT_WS_PATH, installEventWebSocketServer } from '../../src/ws/ws-server.js';
 import type { EventWsServerController, EventWsServerOptions } from '../../src/ws/ws-server.js';
@@ -51,6 +51,29 @@ describe('event WebSocket server', () => {
     expect(authenticated).toMatchObject({
       type: 'authenticated',
       viewerId: 'local',
+      epoch: t.ctx.events.epoch,
+    });
+  });
+
+  it('uses auth signup as the transient legacy viewer source for WS', async () => {
+    t = buildTestApp();
+    t.ctx.db.prepare(`DELETE FROM app_settings WHERE key = 'viewer_user_id'`).run();
+
+    const signupRes = await http(t).post(authPaths.signup, {
+      email: 'ws-user@example.com',
+      password: 'correct-password',
+      display_name: 'WS User',
+    });
+    expect(signupRes.status).toBe(200);
+    const signup = await signupRes.json() as { user: { id: string } };
+
+    server = await openServer(t);
+    const { ws, authenticated } = await connectAuthenticated(server.url, t.authToken);
+    sockets.push(ws);
+
+    expect(authenticated).toMatchObject({
+      type: 'authenticated',
+      viewerId: signup.user.id,
       epoch: t.ctx.events.epoch,
     });
   });

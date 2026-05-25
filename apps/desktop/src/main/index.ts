@@ -1,9 +1,22 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, shell, type MenuItemConstructorOptions } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, safeStorage, shell, type MenuItemConstructorOptions } from 'electron';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { isSafeOpenExtension } from '@silverhand/shared';
+import {
+  AuthSessionResponseSchema,
+  ServerInfoSchema,
+  UserDtoSchema,
+  X_SILVERHAND_LEGACY_USER_ID_HEADER,
+  X_SILVERHAND_PRINCIPAL_HEADER,
+  apiPaths,
+  authPaths,
+  isSafeOpenExtension,
+  type AuthLoginInput,
+  type AuthSignupInput,
+  type ServerInfo,
+  type UserDto,
+} from '@silverhand/shared';
 import {
   startBackend,
   createCategorizedLoggers,
@@ -22,6 +35,8 @@ let loggers: CategorizedLoggers | null = null;
 let mainWindow: BrowserWindow | null = null;
 let eventsWindow: BrowserWindow | null = null;
 let activeConversation: ActiveConversationInfo = { workspaceId: null, conversationId: null };
+let userSessionToken: string | null = null;
+let userSessionUser: UserDto | null = null;
 
 /** Set `SILVERHAND_HEADLESS=1` to boot the backend without a window.
  *  Useful for curl-driven smoke tests and integration scripts — see
@@ -42,6 +57,48 @@ interface ActiveConversationInfo {
   workspaceId: string | null;
   conversationId: string | null;
 }
+
+type DesktopAuthState =
+  | { status: 'authenticated'; signup_enabled: boolean; user: UserDto }
+  | { status: 'unauthenticated'; signup_enabled: boolean };
+
+interface BackendProxyRequest {
+  path: string;
+  method?: string;
+  headers?: Record<string, string>;
+  bodyText?: string;
+  responseType?: 'text' | 'arrayBuffer';
+}
+
+interface BackendProxyResponse {
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+  bodyText?: string;
+  bodyBytes?: Uint8Array;
+}
+
+interface BackendUploadField {
+  name: string;
+  value: string;
+}
+
+interface BackendUploadFile {
+  fieldName: string;
+  filename: string;
+  contentType: string;
+  bytes: Uint8Array;
+}
+
+interface BackendUploadRequest {
+  path: string;
+  fields?: BackendUploadField[];
+  files: BackendUploadFile[];
+}
+
+type DesktopAuthResult =
+  | { ok: true; user: UserDto }
+  | { ok: false; status: number; statusText: string; bodyText: string };
 
 /**
  * Expose Electron's renderer targets over local-only CDP.
@@ -233,6 +290,282 @@ function daemonPaths(): DaemonPaths {
   };
 }
 
+function desktopSessionPath(): string {
+  return join(silverhandDir(), 'desktop', 'session.bin');
+}
+
+function requireBackend(): RunningBackend {
+  if (!backend) throw new Error('backend not ready');
+  return backend;
+}
+
+function backendUrl(path: string): string {
+  return new URL(path, requireBackend().url).toString();
+}
+
+function clearPersistedUserSession(): void {
+  try {
+    unlinkSync(desktopSessionPath());
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      logger?.warn({ err }, 'failed to remove desktop auth session blob');
+    }
+  }
+}
+
+function loadPersistedUserSessionToken(): string | null {
+  if (!safeStorage.isEncryptionAvailable()) {
+    logger?.warn('desktop auth session storage unavailable; encrypted session restore disabled');
+    return null;
+  }
+  const path = desktopSessionPath();
+  if (!existsSync(path)) return null;
+  try {
+    const token = safeStorage.decryptString(readFileSync(path)).trim();
+    return token.length > 0 ? token : null;
+  } catch (err) {
+    logger?.warn({ err }, 'failed to decrypt desktop auth session; clearing blob');
+    clearPersistedUserSession();
+    return null;
+  }
+}
+
+function persistUserSessionToken(token: string): void {
+  if (!safeStorage.isEncryptionAvailable()) {
+    logger?.warn('desktop auth session storage unavailable; keeping token in memory only');
+    return;
+  }
+  const path = desktopSessionPath();
+  mkdirSync(join(silverhandDir(), 'desktop'), { recursive: true });
+  writeFileSync(path, safeStorage.encryptString(token), { mode: 0o600 });
+  try {
+    chmodSync(path, 0o600);
+  } catch (err) {
+    logger?.warn({ err }, 'failed to chmod desktop auth session blob');
+  }
+}
+
+function storeUserSession(token: string, user: UserDto): void {
+  userSessionToken = token;
+  userSessionUser = user;
+  persistUserSessionToken(token);
+}
+
+function clearUserSession(): void {
+  userSessionToken = null;
+  userSessionUser = null;
+  clearPersistedUserSession();
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchServerInfo(): Promise<ServerInfo> {
+  const res = await fetch(backendUrl(apiPaths.serverInfo));
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`${res.status} ${res.statusText}: ${text}`);
+  }
+  const parsed = ServerInfoSchema.safeParse(parseJson(text));
+  if (!parsed.success) {
+    throw new Error(`invalid server info response: ${parsed.error.message}`);
+  }
+  return parsed.data;
+}
+
+async function validateUserSessionToken(token: string): Promise<UserDto | null> {
+  const res = await fetch(backendUrl(apiPaths.me), {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return null;
+  const body = await res.json().catch(() => null);
+  const parsed = UserDtoSchema.safeParse(body);
+  return parsed.success ? parsed.data : null;
+}
+
+async function hydrateDesktopSession(): Promise<void> {
+  const token = loadPersistedUserSessionToken();
+  if (!token) return;
+  const user = await validateUserSessionToken(token).catch(err => {
+    logger?.warn({ err }, 'failed to validate persisted desktop auth session');
+    return null;
+  });
+  if (!user) {
+    clearUserSession();
+    return;
+  }
+  userSessionToken = token;
+  userSessionUser = user;
+}
+
+async function desktopAuthState(): Promise<DesktopAuthState> {
+  const info = await fetchServerInfo();
+  if (userSessionToken && userSessionUser) {
+    return {
+      status: 'authenticated',
+      signup_enabled: info.signup_enabled,
+      user: userSessionUser,
+    };
+  }
+  return { status: 'unauthenticated', signup_enabled: info.signup_enabled };
+}
+
+async function postAuthSession(
+  path: typeof authPaths.signup | typeof authPaths.login,
+  input: AuthSignupInput | AuthLoginInput,
+): Promise<DesktopAuthResult> {
+  const res = await fetch(backendUrl(path), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    return {
+      ok: false,
+      status: res.status,
+      statusText: res.statusText,
+      bodyText: text,
+    };
+  }
+  const parsed = AuthSessionResponseSchema.safeParse(parseJson(text));
+  if (!parsed.success) {
+    return {
+      ok: false,
+      status: 502,
+      statusText: 'Bad Gateway',
+      bodyText: JSON.stringify({ error: 'invalid auth response' }),
+    };
+  }
+  storeUserSession(parsed.data.user_token, parsed.data.user);
+  return { ok: true, user: parsed.data.user };
+}
+
+async function logoutUserSession(): Promise<{ ok: true }> {
+  const token = userSessionToken;
+  clearUserSession();
+  if (token) {
+    await fetch(backendUrl(authPaths.logout), {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    }).catch(err => {
+      logger?.warn({ err }, 'desktop auth logout revoke failed');
+    });
+  }
+  return { ok: true };
+}
+
+function assertApiProxyPath(path: string): void {
+  if (!path.startsWith('/api/')) {
+    throw new Error(`desktop backend proxy only accepts /api/* paths: ${path}`);
+  }
+}
+
+function proxyHeaders(input: Record<string, string> | undefined): Headers {
+  const headers = new Headers();
+  const blocked = new Set([
+    'authorization',
+    X_SILVERHAND_PRINCIPAL_HEADER.toLowerCase(),
+    X_SILVERHAND_LEGACY_USER_ID_HEADER.toLowerCase(),
+    'host',
+    'content-length',
+    'connection',
+  ]);
+  for (const [name, value] of Object.entries(input ?? {})) {
+    const key = name.toLowerCase();
+    if (blocked.has(key)) continue;
+    headers.set(name, value);
+  }
+  return headers;
+}
+
+function responseHeaders(headers: Headers): Record<string, string> {
+  const out: Record<string, string> = {};
+  headers.forEach((value, key) => {
+    out[key] = value;
+  });
+  return out;
+}
+
+async function marshalBackendResponse(
+  res: Response,
+  responseType: 'text' | 'arrayBuffer',
+): Promise<BackendProxyResponse> {
+  const base = {
+    status: res.status,
+    statusText: res.statusText,
+    headers: responseHeaders(res.headers),
+  };
+  if (responseType === 'arrayBuffer' && res.ok) {
+    return {
+      ...base,
+      bodyBytes: new Uint8Array(await res.arrayBuffer()),
+    };
+  }
+  return { ...base, bodyText: await res.text() };
+}
+
+async function proxyBackendRequest(
+  input: BackendProxyRequest,
+): Promise<BackendProxyResponse> {
+  assertApiProxyPath(input.path);
+  if (!userSessionToken) {
+    return {
+      status: 401,
+      statusText: 'Unauthorized',
+      headers: { 'content-type': 'application/json' },
+      bodyText: JSON.stringify({ error: 'unauthorized' }),
+    };
+  }
+  const headers = proxyHeaders(input.headers);
+  headers.set('Authorization', `Bearer ${userSessionToken}`);
+  if (input.bodyText !== undefined && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+  const res = await fetch(backendUrl(input.path), {
+    method: input.method ?? 'GET',
+    headers,
+    body: input.bodyText,
+  });
+  return marshalBackendResponse(res, input.responseType ?? 'text');
+}
+
+async function proxyBackendUpload(
+  input: BackendUploadRequest,
+): Promise<BackendProxyResponse> {
+  assertApiProxyPath(input.path);
+  if (!userSessionToken) {
+    return {
+      status: 401,
+      statusText: 'Unauthorized',
+      headers: { 'content-type': 'application/json' },
+      bodyText: JSON.stringify({ error: 'unauthorized' }),
+    };
+  }
+  const form = new FormData();
+  for (const field of input.fields ?? []) {
+    form.append(field.name, field.value);
+  }
+  for (const file of input.files) {
+    const bytes = Buffer.from(file.bytes);
+    const blob = new Blob([bytes], {
+      type: file.contentType || 'application/octet-stream',
+    });
+    form.append(file.fieldName, blob, file.filename);
+  }
+  const res = await fetch(backendUrl(input.path), {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${userSessionToken}` },
+    body: form,
+  });
+  return marshalBackendResponse(res, 'text');
+}
+
 async function bootstrap(): Promise<void> {
   try {
     const pathResult = patchPathFromLoginShell();
@@ -319,6 +652,7 @@ async function bootstrap(): Promise<void> {
       hostClient,
     });
     await writeServerConfig(backend.context.serverConfig);
+    await hydrateDesktopSession();
   } catch (err) {
     console.error('[main] bootstrap failed:', err);
     logger?.error({ err }, 'bootstrap failed');
@@ -534,9 +868,32 @@ ipcMain.handle('backend:info', () => {
   return {
     url: backend.url,
     mode: backend.context.serverConfig.mode,
-    auth_token: backend.context.serverConfig.auth_token,
+    // Legacy event-WS bearer only. HTTP requests use the main-held
+    // user session token via `backend:request`; do not expose
+    // `user_token` to the renderer.
+    event_auth_token: backend.context.serverConfig.auth_token,
   };
 });
+
+ipcMain.handle('auth:getState', () => desktopAuthState());
+
+ipcMain.handle('auth:signup', (_event, input: AuthSignupInput) =>
+  postAuthSession(authPaths.signup, input),
+);
+
+ipcMain.handle('auth:login', (_event, input: AuthLoginInput) =>
+  postAuthSession(authPaths.login, input),
+);
+
+ipcMain.handle('auth:logout', () => logoutUserSession());
+
+ipcMain.handle('backend:request', (_event, input: BackendProxyRequest) =>
+  proxyBackendRequest(input),
+);
+
+ipcMain.handle('backend:upload', (_event, input: BackendUploadRequest) =>
+  proxyBackendUpload(input),
+);
 
 ipcMain.handle('dialog:pickDirectory', async (event, options?: { defaultPath?: string }) => {
   const win = BrowserWindow.fromWebContents(event.sender);
