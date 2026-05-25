@@ -1,0 +1,126 @@
+import { describe, expect, it } from 'vitest';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const mainRoot = fileURLToPath(new URL('..', import.meta.url));
+const rendererRoot = fileURLToPath(new URL('../../renderer', import.meta.url));
+
+const allowedBackendImports = [
+  'CategorizedLoggers',
+  'FileLogger',
+  'RunningBackend',
+  'createCategorizedLoggers',
+  'startBackend',
+].sort();
+
+const cataloguedIpcHandlers = [
+  'active-conversation:set',
+  'attachment:openExternal',
+  'auth:getState',
+  'auth:login',
+  'auth:logout',
+  'auth:signup',
+  'backend:info',
+  'backend:request',
+  'backend:upload',
+  'badge:setCount',
+  'dialog:pickDirectory',
+  'export:copyPng',
+  'export:savePng',
+  'hosts:revoke',
+  'hosts:rotate',
+  'notification:show',
+  'shell:openExternal',
+  'shell:showItemInFolder',
+  'window:setAlwaysOnTop',
+].sort();
+
+interface SourceFile {
+  path: string;
+  content: string;
+}
+
+function sourceFiles(root: string, extensions: ReadonlySet<string>): SourceFile[] {
+  const out: SourceFile[] = [];
+  const visit = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const fullPath = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== '__tests__') visit(fullPath);
+        continue;
+      }
+      if (!entry.isFile() || /\.test\.tsx?$/.test(entry.name)) continue;
+      const ext = entry.name.endsWith('.tsx') ? '.tsx' : entry.name.endsWith('.ts') ? '.ts' : '';
+      if (!extensions.has(ext)) continue;
+      out.push({ path: fullPath, content: readFileSync(fullPath, 'utf8') });
+    }
+  };
+  visit(root);
+  return out;
+}
+
+function stripComments(value: string): string {
+  return value
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '');
+}
+
+function importedBackendSymbols(source: SourceFile): string[] {
+  const symbols: string[] = [];
+  const statements = source.content.matchAll(
+    /import\s+(?:type\s+)?\{([^;]*?)\}\s+from\s+['"]@silverhand\/backend['"]/g,
+  );
+  for (const match of statements) {
+    for (const part of stripComments(match[1] ?? '').split(',')) {
+      const symbol = part
+        .trim()
+        .replace(/^type\s+/, '')
+        .split(/\s+as\s+/)[0]
+        ?.trim();
+      if (symbol) symbols.push(symbol);
+    }
+  }
+  const allBackendImports = [
+    ...source.content.matchAll(
+      /import\s+[^;]*from\s+['"]@silverhand\/backend(?:\/[^'"]*)?['"]/g,
+    ),
+  ];
+  if (allBackendImports.length > 0 && symbols.length === 0) {
+    symbols.push(`UNPARSED:${source.path}`);
+  }
+  return symbols;
+}
+
+describe('desktop protocol purity catalogue', () => {
+  it('keeps direct @silverhand/backend imports fenced to the embedded boot path allowlist', () => {
+    const imports = sourceFiles(mainRoot, new Set(['.ts']))
+      .flatMap(importedBackendSymbols)
+      .sort();
+
+    expect(imports).toEqual(allowedBackendImports);
+  });
+
+  it('keeps main IPC handlers in sync with the protocol-purity catalogue', () => {
+    const channels = sourceFiles(mainRoot, new Set(['.ts']))
+      .flatMap(source =>
+        [...source.content.matchAll(/ipcMain\.handle\(\s*['"`]([^'"`]+)['"`]/g)]
+          .map(match => match[1]),
+      )
+      .sort();
+
+    expect(channels).toEqual(cataloguedIpcHandlers);
+  });
+
+  it('keeps renderer code from importing backend internals directly', () => {
+    const offenders = sourceFiles(rendererRoot, new Set(['.ts', '.tsx']))
+      .filter(source =>
+        /from\s+['"]@silverhand\/backend(?:\/[^'"]*)?['"]/.test(source.content),
+      )
+      .map(source => source.path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it.todo('contains no renderer BackendInfo auth_token consumers (activated by C.4)');
+});

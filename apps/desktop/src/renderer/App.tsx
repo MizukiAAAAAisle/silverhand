@@ -1375,6 +1375,7 @@ function RegisteredAppShell(): JSX.Element {
                       name: w.name,
                       kind: w.kind === 'dm' ? 'dm' as const : 'regular' as const,
                       workspace_path: w.workspace_path,
+                      workspace_host_id: w.workspace_host_id,
                       dm_agent_id: w.dm_agent_id,
                       unread: messageUnreadSummary?.by_workspace?.[w.id] ?? 0,
                       pinned_at: w.pinned_at,

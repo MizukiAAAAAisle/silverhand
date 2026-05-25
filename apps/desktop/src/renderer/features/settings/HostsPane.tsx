@@ -20,41 +20,18 @@
  */
 
 import { useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Loader2, RefreshCw, ShieldOff } from 'lucide-react';
-import {
-  HostListResponseSchema,
-  type HostDto,
-  type HostListResponse,
-} from '@silverhand/shared';
+import type { HostDto } from '@silverhand/shared';
 import type { DesktopHostMutationResult } from '../../../preload/api';
-import { api } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/cn';
-
-const hostsKey = ['hosts'] as const;
-const backendInfoKey = ['backend-info'] as const;
-
-interface BackendInfoSnapshot {
-  local_host_id: string | null;
-  local_host_status: 'unclaimed' | 'claimed' | 'revoked' | 'error';
-}
-
-async function fetchHosts(): Promise<HostListResponse> {
-  const raw = await api<unknown>('/api/hosts');
-  return HostListResponseSchema.parse(raw);
-}
-
-async function fetchBackendInfo(): Promise<BackendInfoSnapshot> {
-  const info = await window.agentHub.getBackendInfo();
-  if (!info) {
-    return { local_host_id: null, local_host_status: 'error' };
-  }
-  return {
-    local_host_id: info.local_host_id,
-    local_host_status: info.local_host_status,
-  };
-}
+import {
+  backendInfoKey,
+  hostsKey,
+  useBackendInfoSnapshot,
+  useHostsQuery,
+} from '@/features/hosts/hooks';
 
 function formatTimestamp(value: number | null): string {
   if (!value) return '—';
@@ -85,14 +62,8 @@ function describeMutationFailure(result: Extract<DesktopHostMutationResult, { ok
 
 export function HostsPane(): JSX.Element {
   const qc = useQueryClient();
-  const hostsQuery = useQuery({
-    queryKey: hostsKey,
-    queryFn: fetchHosts,
-  });
-  const backendInfoQuery = useQuery({
-    queryKey: backendInfoKey,
-    queryFn: fetchBackendInfo,
-  });
+  const hostsQuery = useHostsQuery();
+  const backendInfoQuery = useBackendInfoSnapshot();
 
   const [pendingRotateId, setPendingRotateId] = useState<string | null>(null);
   const [pendingRevokeId, setPendingRevokeId] = useState<string | null>(null);

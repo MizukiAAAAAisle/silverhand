@@ -340,8 +340,10 @@ in-process shortcuts on every audit.
   - **"local-host-only UX"** (e.g.
     `showItemInFolder(workspace_path)`): allowed behind a `host.kind ===
     'local'` runtime check, NOT removed.
-- Convert `BackendInfo` IPC consumer to honour the `mode: 'embedded' |
-  'remote'` field that already exists but is currently unconsumed.
+- Convert local-host-only UX to use host provenance from
+  `BackendInfo.local_host_id` + owner-filtered `/api/hosts`; do not
+  gate filesystem affordances on backend `mode` because
+  remote-backend + local-Host remains a valid V1 topology.
 - Audit CLI (`packages/cli`) `SILVERHAND_*` env injection: confirm
   every CLI invocation routes through `SILVERHAND_SERVER_URL`, never
   through an in-process shortcut.
@@ -372,10 +374,13 @@ in-process shortcuts on every audit.
    the disposition tag (OS-IPC / data / local-host-only). No code
    change; this is the agreement layer.
 2. **C.2 Data-IPC conversions**: each "data"-tagged IPC converted to
-   HTTP. Renderer's HTTP client gains the centralised
-   `Authorization` header.
-3. **C.3 BackendInfo mode propagation**: `mode` field actually
-   consumed by renderer; local-host-only UX gated.
+   fetch-shaped HTTP semantics from the renderer's perspective, even
+   when main proxies the call to keep session/host credentials out of
+   renderer memory.
+3. **C.3 Host-provenance propagation**: `local_host_id` is consumed by
+   renderer alongside `/api/hosts`; local-host-only UX is gated by
+   `host.id === local_host_id && host.kind === 'local'`, not backend
+   mode.
 4. **C.4 Embedded bootstrap**: server-side route + the four
    constraints + desktop reads bootstrap file and POSTs over loopback;
    embedded user flows through the same `safeStorage` session path.

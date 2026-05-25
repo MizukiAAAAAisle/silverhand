@@ -17,8 +17,9 @@ fenced auto-bootstrap route**. That invariant fails today because:
 2. Several IPC routes pass server-side state or absolute server-side
    paths to the renderer. Under remote mode those paths don't exist on
    the user's machine.
-3. `BackendInfo.mode` is part of the schema but no renderer code
-   consumes it. Local-host-only UX therefore can't be gated.
+3. `BackendInfo.local_host_id` and owner-scoped host metadata were not
+   consumed by the renderer. Local-host-only UX therefore could not be
+   gated by path provenance.
 
 This document enumerates every such site, tags each with its V1
 disposition, and defines the tripwire that keeps the catalogue from
@@ -86,8 +87,16 @@ listed in the order they appear in main.
 
 | IPC channel | Preload method | Tag | Notes / V1 disposition |
 |---|---|---|---|
-| `backend:info` | `getBackendInfo` | **mixed** (see notes) | Returns `{url, mode, auth_token, local_host_id?, local_host_status}`. Tag breakdown: **protocol metadata** for `url` + `mode` + `local_host_id` + `local_host_status` — neutral dual-mode connection info the renderer needs to address the backend, choose its auth flow, and gate host-kind UX. **embedded-only** for the `auth_token` field — that field is the legacy embedded shortcut C.4 fences. Under remote mode `auth_token` is `null` and the renderer acquires its session bearer from `getSessionBearer()` (see §6.1). The route itself stays, and C.3 adds `local_host_id` / `local_host_status` as additive protocol-metadata fields; only the `auth_token` field carries the embedded-only constraint. |
-| `dialog:pickDirectory` | `pickDirectory` | **local-host-only UX** | Native open dialog. The picked path is on the user's machine; under Stage B that path can only be assigned to a local Host. Caller is `CreateWorkspaceDialog`. C.3 gates the picker on "the workspace's target host kind is `local` and equals this desktop's `local_host_id`". Backend mode is irrelevant — remote-backend + local-Host still picks user-fs paths legitimately. If/when the user has non-local hosts available (remote / sandbox), the create-workspace flow needs an additional "host placement" step that this V1 does not ship (deferred; see roadmap §5 Follow-up); until then default placement is the local Host and the picker stays. |
+| `backend:info` | `getBackendInfo` | **mixed** (see notes) | Returns `{url, mode, event_auth_token, local_host_id, local_host_status}`. Tag breakdown: **protocol metadata** for `url` + `mode` + `local_host_id` + `local_host_status` — neutral dual-mode connection info the renderer needs to address the backend and gate host-kind UX. **embedded-only** for `event_auth_token` — that field is the legacy event-WS bearer C.4 fences/removes from renderer consumption when WS moves to the same session bearer path. |
+| `auth:getState` | `getAuthState` | **data** | Main-owned auth-session proxy. Renderer receives safe auth state (`authenticated` + user DTO or `unauthenticated`) but never receives the session bearer. Kept as a narrowly-shaped HTTP proxy because main owns `safeStorage` / token lifecycle. |
+| `auth:signup` | `signup` | **data** | Main POSTs `/auth/signup`, persists the returned session bearer, and returns only `{ok, user}` or sanitized failure metadata. No token crosses IPC. |
+| `auth:login` | `login` | **data** | Same as `auth:signup`, for `/auth/login`. |
+| `auth:logout` | `logout` | **data** | Main clears its saved session and best-effort revokes it server-side. Renderer only receives `{ok:true}`. |
+| `backend:request` | `backendRequest` | **data** | Central fetch-shaped proxy for renderer HTTP data access. Renderer supplies relative `/api/...` path/method/body; main validates the path, injects the user session bearer, and returns a fetch-like response. This is the C.2 data-IPC conversion point: bespoke data IPCs should not be added outside this row. |
+| `backend:upload` | `backendUpload` | **data** | Multipart companion to `backend:request`; renderer serializes `FormData`, main reconstructs it and injects the session bearer. |
+| `hosts:rotate` | `rotateHostToken` | **mixed** (data + local-host credential side effect) | Main POSTs `/api/hosts/:id/rotate-token`, writes the returned cleartext `host_token` to `daemon-config.json`, and strips token bytes before replying. Kept as dedicated IPC because the generic `backend:request` proxy explicitly blocks token-bearing host mutation routes. |
+| `hosts:revoke` | `revokeHost` | **mixed** (data + local-host credential side effect) | Main POSTs `/api/hosts/:id/revoke`, clears local daemon config when revoking the current local host, and returns sanitized host/local-claim metadata. |
+| `dialog:pickDirectory` | `pickDirectory` | **local-host-only UX** | Native open dialog. The picked path is on the user's machine; under Stage B that path can only be assigned to a local Host. Caller is `CreateWorkspaceDialog`. C.3 gates the picker on "the target host kind is `local` and equals this desktop's `local_host_id`". Backend mode is irrelevant — remote-backend + local-Host still picks user-fs paths legitimately. If/when the user has non-local hosts available (remote / sandbox), the create-workspace flow needs an additional "host placement" step that this V1 does not ship (deferred; see roadmap §5 Follow-up); until then default placement is the local Host and the picker stays. |
 | `shell:openExternal` | `openExternal` | **OS-IPC** | Strict `https?://` allowlist already enforced. Kept as-is. |
 | `attachment:openExternal` | `openAttachmentExternal` | **OS-IPC** | Renderer fetches bytes via HTTP first; main only handles the local tmp-write + Launch Services call. Already protocol-pure. Keep. |
 | `shell:showItemInFolder` | `showItemInFolder` | **local-host-only UX** | Caller passes an absolute path served by the backend. Two call sites: `AgentWorkspaceCard` (agent dir) and `WorkspacesPanel` (workspace_path). C.3 gates the button on the **owning host** of that resource: render only when `host_id === local_host_id && host.kind === 'local'`. Under remote-backend mode the gate still surfaces the button whenever the workspace/agent is placed on the local Host — that is the common case in V1 (only kind shipped is `local`). The button only hides for the future "this workspace lives on a remote/sandbox host" case. |
@@ -102,15 +111,12 @@ listed in the order they appear in main.
 | (event) `shutdown:progress` | `onShutdownProgress` | **OS-IPC** | Kept. |
 | (event) `navigate:settings` | `onNavigateSettings` | **OS-IPC** | App-menu → renderer route. Kept. |
 
-**No "data"-tagged routes today.** That is the good news; the bad
-news is `backend:info` smuggles `auth_token` through the embedded
-short circuit, so C.4 must collapse it from "the only auth source the
-renderer trusts" into "an embedded-only legacy field that is `null`
-under remote". After C.4 `backend:info` returns pure **protocol
-metadata** (`url` + `mode` + `local_host_id`) plus that `null`able
-embedded-only field; the renderer acquires its session bearer from
-`getSessionBearer()` (§6.1) using the same signup/login flow it would
-use against a remote server.
+The only data-tagged IPCs are now either the central fetch-shaped
+backend proxy (`backend:request` / `backend:upload`) or deliberately
+narrow main-owned credential/session boundaries (`auth:*`,
+`hosts:*`). C.2's invariant is that no new bespoke renderer data
+channel appears without a catalogue row and a reason it cannot use the
+central proxy.
 
 **Acceptance test (tripwire)**: the same protocol-purity test asserts
 the set of `ipcMain.handle('<channel>', …)` channels in
@@ -125,13 +131,13 @@ place C.3 must gate on **owning host kind**, not on backend mode.
 
 | Site | Symptom | C.3 disposition |
 |---|---|---|
-| `features/agents/AgentWorkspaceCard.tsx:53` | `onReveal = () => window.agentHub.showItemInFolder(path)` | Render only when the workspace's owning host satisfies `host.id === local_host_id && host.kind === 'local'`. Backend mode irrelevant. |
-| `components/layout/WorkspacesPanel.tsx:127` | `onClick = window.agentHub.showItemInFolder(w.workspace_path)` | Same gating. Requires the workspace DTO to carry `host_id` (Stage B schema lands this on the runtime/workspace placement column; until then default-assume local). |
-| `features/workspaces/CreateWorkspaceDialog.tsx:68` | Directory picker for new workspace path | V1 default placement is local Host, so the picker stays. When the create-workspace flow grows a host placement step (follow-up phase), the picker is conditional on "chosen host is local + equals `local_host_id`". Do **not** hide the picker under remote backend — that would break the most common V1 path. |
-| `lib/api.ts` `fetchWithInfo` / `apiUpload` / `fetchAttachmentBlob` | Read `info.auth_token` (3 sites) | See §6.1 — these collapse into the single "session bearer" helper C.4 introduces. |
-| `lib/ws-client.ts` `openSocket` | Reads `info.auth_token` for WS subprotocol/header | Same — §6.1. |
-| `features/me/hooks.ts` avatar fetch | Reads `info.auth_token` manually | Same — §6.1. |
-| `features/agents/avatar-hooks.ts` agent avatar fetch | Reads `info.auth_token` manually | Same — §6.1. |
+| `features/agents/AgentWorkspaceCard.tsx` | `window.agentHub.showItemInFolder(path)` for the agent L1 dir | Render only when the agent's `host_id` satisfies `host.id === local_host_id && host.kind === 'local' && host.revoked_at === null`. Backend mode irrelevant. |
+| `components/layout/WorkspacesPanel.tsx` | `window.agentHub.showItemInFolder(w.workspace_path)` | Same gating, using `workspace.workspace_host_id` from the workspace DTO. |
+| `features/workspaces/CreateWorkspaceDialog.tsx` | Directory picker for new workspace path | V1 default placement is the current local Host, so the picker is enabled only when that host is active and local. When the create-workspace flow grows a host placement step (follow-up phase), the picker is conditional on "chosen host is local + equals `local_host_id`". Do **not** hide it under remote backend — that would break the common remote-backend / local-Host path. |
+| `lib/api.ts` `api` / `apiUpload` / `fetchBackendBlob` | Renderer data calls | Already C.2-shaped: these call `backend:request` / `backend:upload`; main injects the session bearer and the renderer never reads it. |
+| `features/me/hooks.ts` avatar fetch | Backend blob with auth | Already uses `fetchBackendBlob`, so it inherits the main-owned session proxy. |
+| `features/agents/avatar-hooks.ts` agent avatar fetch | Backend blob with auth | Already uses `fetchBackendBlob`, so it inherits the main-owned session proxy. |
+| `lib/ws-client.ts` `openSocket` | Reads `info.event_auth_token` for WS auth | Deferred to C.4 with the embedded-bootstrap/session-bearer work. It remains the only renderer `BackendInfo` token consumer in C.2/C.3. |
 
 The `viewer_user_id` header (`X_SILVERHAND_PRINCIPAL_HEADER`) flows
 through every fetch helper and is unaffected — it's set from `/api/me`
@@ -144,8 +150,9 @@ renderer through additive fields on `backend:info` (e.g.
 `local_host_id: string | null`, `local_host_status`) — that is a
 **protocol metadata** extension of an already existing IPC, not a new
 route, so it stays inside the C.3 surface without needing a separate
-disposition. Renderer caches it on `BackendInfo` and uses it for every
-host-kind gate in this table.
+disposition. Renderer combines it with owner-filtered `/api/hosts`
+results in `useHostProvenanceGate`; every local-path affordance uses
+that gate rather than `BackendInfo.mode`.
 
 ## 6. Embedded-only invariants (the `/auth/embedded-bootstrap` fence)
 
@@ -167,14 +174,16 @@ Existing embedded-only surface that C.4 must touch:
 | Site | Embedded-only assumption today | C.4 disposition |
 |---|---|---|
 | `main/config.ts:24-34` `loadOrCreateServerConfig` | Default `ServerConfig` has `mode='embedded'`, hardcoded loopback URL, freshly generated `auth_token` | Keep as embedded default. Add a sibling code path that produces `mode='remote'` when the user fills the server URL in Setup Wizard. The remote variant has `auth_token: null`. |
-| `main/index.ts:532-539` `backend:info` handler | Returns `auth_token` verbatim | C.4: when `mode === 'remote'`, omit `auth_token` from the payload (or set to `null`). Type of `BackendInfo.auth_token` becomes `string | null`. |
+| `main/index.ts` `backend:info` handler | Returns the legacy event-WS bearer as `event_auth_token` | C.4: event WS authenticates with the same session bearer path as HTTP, and renderer `BackendInfo` no longer carries any `*auth_token` field. |
 
-### 6.1 `BackendInfo.auth_token` consumers
+### 6.1 Renderer `BackendInfo` token consumers
 
-C.4 is **not** just a `fetchWithInfo` edit. Every renderer site that
-reads `info.auth_token` must either disappear or route through a
-single new helper (working title `getSessionBearer()`) that picks the
-right token source per mode:
+C.4 is **not** just a route edit. Stage A/B already moved ordinary
+HTTP reads/uploads/blob fetches behind the main-owned
+`backend:request` / `backend:upload` proxies, so the renderer no
+longer reads a bearer for those paths. The remaining renderer token
+surface is the event websocket's `event_auth_token`; C.4 removes that
+by giving WS the same session bearer source per mode:
 
 - embedded → bootstrap session persisted via `safeStorage`
   (initialised by `/auth/embedded-bootstrap` on first launch)
@@ -182,14 +191,9 @@ right token source per mode:
 
 | Site | Today | C.4 disposition |
 |---|---|---|
-| `apps/desktop/src/preload/index.ts:6` | `auth_token: string` (required) | Becomes `auth_token: string \| null` (embedded: string; remote: null). Renderer never reads it again after C.4 — kept only to let main's headless smoke handshake compile against the same type. |
-| `apps/desktop/src/preload/api.d.ts:4` | mirrors preload | Same change. |
-| `apps/desktop/src/renderer/lib/api.ts:47` `fetchWithInfo` | `Bearer ${info.auth_token}` | Switch to `Bearer ${await getSessionBearer()}`. |
-| `apps/desktop/src/renderer/lib/api.ts:112` `apiUpload` inline `send` | `Bearer ${i.auth_token}` | Same. Consider folding into `fetchWithInfo` shape so there's one auth call site. |
-| `apps/desktop/src/renderer/lib/api.ts:164` `fetchAttachmentBlob` | `Bearer ${info.auth_token}` | Same. |
-| `apps/desktop/src/renderer/lib/ws-client.ts:193` `openSocket` | `token = info.auth_token` for WS subprotocol/header | Same. The WS session reuses the HTTP bearer; no separate token. |
-| `apps/desktop/src/renderer/features/me/hooks.ts:171-181` avatar fetch | manual `Bearer ${info.auth_token}` | Same. |
-| `apps/desktop/src/renderer/features/agents/avatar-hooks.ts:43-50` agent avatar fetch | manual `Bearer ${info.auth_token}` | Same. |
+| `apps/desktop/src/preload/index.ts` | `event_auth_token: string` (required) | Remove from renderer-facing `BackendInfo` once WS uses the session bearer. |
+| `apps/desktop/src/preload/api.d.ts` | mirrors preload | Same change. |
+| `apps/desktop/src/renderer/lib/ws-client.ts` `openSocket` | `token = info.event_auth_token` for WS auth frame | Switch to the same session bearer used by the main-owned HTTP proxy/bootstrap flow. |
 | (new) `/auth/embedded-bootstrap` route | does not exist | C.4 lands the route + the four-constraint test matrix (one test per constraint × {happy, violated}). |
 | (new) `~/.silverhand/embedded-bootstrap` token file | does not exist | C.4 lands write (mode 0600) at backend boot + consume-on-first-read semantics + regenerate on reboot. |
 
@@ -241,18 +245,18 @@ the C.4 plan without consulting this doc, while keeping the suite
 green so assertions 1-3 can guard their invariants without being
 drowned out by a known failure.
 
-Whitelisted exceptions for assertion 4 (once active): in main,
-`index.ts:532-539` (`backend:info` handler) and `index.ts:852-864`
-(headless smoke handshake) remain the only permitted readers (see
-§6.2). In the renderer: none.
+Assertion 4 scans only renderer files. Main-side legacy token readers
+are tracked separately in §6: `backend:info` remains until C.4 moves
+event WS to the session bearer, while the dev-only headless smoke
+handshake remains explicitly documented in §6.2.
 
 When a PR needs to add a new IPC handler or a new backend import, the
 flow is: update this doc + add the disposition row, **then** the test
 passes, **then** ship the implementation. No drive-by additions.
 
-The test is implemented with `glob` + `node:fs` reads; no AST tooling
-needed. Keep it dependency-free so it runs in the same `pnpm test`
-sweep without driving new node_modules.
+The test is implemented with dependency-free recursive `node:fs`
+reads; no AST tooling needed. Keep it dependency-free so it runs in
+the same `pnpm test` sweep without driving new node_modules.
 
 ## 8. Acceptance criteria for closing C.1
 
@@ -299,3 +303,7 @@ this).
   - **P2 `backend:info` was wrongly single-tagged `embedded-only`**: Cindy noted §5 also requires the route to grow `local_host_id`, which is general protocol metadata, not embedded legacy. New tag **mixed** added to §2 vocabulary with a rule that the notes column must enumerate every contributing tag at field-level. `backend:info` row in §4 retagged to `mixed`, with `url` + `mode` + `local_host_id` called out as **OS-IPC** and `auth_token` as **embedded-only**. C.4's fence is field-scoped, not route-scoped.
 - 2026-05-25 (round 3) — @Cindy third pass. One P2 absorbed:
   - **Vocab mismatch — `local_host_id` was tagged both `OS-IPC` (round 2 §4) and `data` (round 1 §5)**, and shoving connection-metadata fields under OS-IPC was conceptually awkward (OS-IPC is "native desktop capability"). Resolved by adding a sixth vocab tag **protocol metadata** in §2 — neutral, dual-mode connection info (`url`, `mode`, `local_host_id`, future `host_kind`) that the renderer needs to address the backend and gate per-host UX. §4 `backend:info` row retagged accordingly (`url` + `mode` + `local_host_id` = protocol metadata; `auth_token` still embedded-only). §5 `local_host_id` propagation paragraph rewritten to use the same word. §4 closing paragraph rewritten so `backend:info` post-C.4 is described as "pure protocol metadata + a nullable embedded-only legacy field". Strictest-wins ordering extended: protocol metadata sits at the bottom (most benign) since it carries no purity hazard.
+- 2026-05-26 (C.2/C.3 implementation) — catalogue synced to the post-Stage-A/B tree:
+  - **C.2 data IPC**: auth/session, central backend proxy, upload proxy, and host rotate/revoke IPC rows added with token-boundary notes; protocol-purity test now asserts the exact `ipcMain.handle` set.
+  - **C.3 host provenance**: local-path UX rows updated to use `local_host_id` + owner-filtered `/api/hosts`; renderer gate is explicitly path provenance, not backend mode.
+  - **C.4 carry-forward**: stale `BackendInfo.auth_token` consumer list replaced with the current remaining `event_auth_token` WS surface; assertion 4 stays parked until C.4.

@@ -11,6 +11,7 @@ import {
   useAgentRuntimeState,
   useAgentWorkspace,
 } from './hooks';
+import { useHostProvenanceGate } from '@/features/hosts/hooks';
 
 const SECTION_STORAGE_KEY = 'silverhand:layout.agent-section';
 const VALID_SECTIONS: ReadonlyArray<AgentSection> = [
@@ -51,6 +52,7 @@ export function AgentView({
   const agentQuery = useAgent(agentId);
   const workspaceQuery = useAgentWorkspace(agentId);
   const runtimeQuery = useAgentRuntimeState(agentId);
+  const hostProvenance = useHostProvenanceGate();
 
   // Selected section persists globally (not per-agent) so the user
   // doesn't have to re-pick after switching agents — the more common
@@ -121,6 +123,7 @@ export function AgentView({
               <AgentWorkspaceCard
                 workspace={workspaceQuery.data}
                 isLoading={workspaceQuery.isLoading}
+                canRevealPath={hostProvenance.canUseLocalHostPathFor(agent.host_id)}
               />
             ) : null}
             {section === 'runtime' ? (
