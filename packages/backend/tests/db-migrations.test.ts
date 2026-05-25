@@ -2090,4 +2090,107 @@ describe('database migrations', () => {
       }
     });
   });
+
+  describe('migration v30 (host identity credentials)', () => {
+    it('adds host owner fields and host credential storage', () => {
+      const db = openDbAt(29);
+      try {
+        const now = Date.now();
+        db.prepare(
+          `INSERT INTO hosts (id, name, kind, created_at)
+           VALUES ('legacy-local', 'local', 'local', ?)`,
+        ).run(now);
+
+        runMigrations(db);
+
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 30`).get(),
+        ).toBeDefined();
+
+        const hostColumns = (
+          db.pragma('table_info(hosts)') as Array<{ name: string; notnull: 0 | 1 }>
+        ).map(c => ({ name: c.name, notnull: c.notnull }));
+        expect(hostColumns).toContainEqual({ name: 'user_id', notnull: 0 });
+        expect(hostColumns).toContainEqual({ name: 'installation_id', notnull: 0 });
+        expect(hostColumns).toContainEqual({ name: 'last_seen_at', notnull: 0 });
+        expect(hostColumns).toContainEqual({ name: 'revoked_at', notnull: 0 });
+
+        expect(
+          db
+            .prepare(
+              `SELECT user_id, installation_id, last_seen_at, revoked_at
+                 FROM hosts
+                WHERE id = 'legacy-local'`,
+            )
+            .get(),
+        ).toEqual({
+          user_id: null,
+          installation_id: null,
+          last_seen_at: null,
+          revoked_at: null,
+        });
+
+        db.prepare(
+          `INSERT INTO users (id, name, display_name, created_at, updated_at)
+           VALUES ('u1', 'u1-test', 'U1', ?, ?)`,
+        ).run(now, now);
+        db.prepare(
+          `INSERT INTO users (id, name, display_name, created_at, updated_at)
+           VALUES ('u2', 'u2-test', 'U2', ?, ?)`,
+        ).run(now, now);
+
+        db.prepare(
+          `INSERT INTO hosts
+             (id, name, kind, user_id, installation_id, last_seen_at, created_at)
+           VALUES ('owned-1', 'owned-1', 'local', 'u1', 'install-1', ?, ?)`,
+        ).run(now, now);
+        expect(() =>
+          db.prepare(
+            `INSERT INTO hosts
+               (id, name, kind, user_id, installation_id, created_at)
+             VALUES ('owned-dup', 'owned-dup', 'local', 'u1', 'install-1', ?)`,
+          ).run(now),
+        ).toThrow(/UNIQUE constraint failed/);
+        db.prepare(
+          `INSERT INTO hosts
+             (id, name, kind, user_id, installation_id, created_at)
+           VALUES ('owned-2', 'owned-2', 'local', 'u2', 'install-1', ?)`,
+        ).run(now);
+
+        db.prepare(
+          `INSERT INTO host_credentials
+             (id, host_id, token_hash, kind, expires_at, consumed_at, revoked_at)
+           VALUES ('hc1', 'owned-1', 'hash-1', 'long_lived', NULL, NULL, NULL)`,
+        ).run();
+        db.prepare(
+          `INSERT INTO host_credentials
+             (id, host_id, token_hash, kind, expires_at, consumed_at, revoked_at)
+           VALUES ('hc2', 'owned-1', 'hash-2', 'bootstrap', ?, NULL, NULL)`,
+        ).run(now + 60_000);
+        expect(() =>
+          db.prepare(
+            `INSERT INTO host_credentials
+               (id, host_id, token_hash, kind, expires_at, consumed_at, revoked_at)
+             VALUES ('hc3', 'owned-1', 'hash-3', 'other', NULL, NULL, NULL)`,
+          ).run(),
+        ).toThrow(/CHECK constraint failed/);
+        expect(() =>
+          db.prepare(
+            `INSERT INTO host_credentials
+               (id, host_id, token_hash, kind, expires_at, consumed_at, revoked_at)
+             VALUES ('hc4', 'owned-1', 'hash-1', 'long_lived', NULL, NULL, NULL)`,
+          ).run(),
+        ).toThrow(/UNIQUE constraint failed/);
+
+        db.prepare(`DELETE FROM hosts WHERE id = 'owned-1'`).run();
+        expect(
+          db
+            .prepare(`SELECT COUNT(*) AS c FROM host_credentials WHERE host_id = 'owned-1'`)
+            .get(),
+        ).toEqual({ c: 0 });
+      } finally {
+        db.close();
+      }
+    });
+  });
 });

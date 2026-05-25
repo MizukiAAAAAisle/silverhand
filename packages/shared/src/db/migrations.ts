@@ -2191,4 +2191,38 @@ export const migrations: Migration[] = [
         ON auth_sessions(user_id, revoked_at, last_used_at DESC);
     `,
   },
+  {
+    version: 30,
+    name: 'host_identity_credentials',
+    // Stage B.1 remote-backend host identity foundation. Existing
+    // registry hosts may be unclaimed until the local claim-or-create
+    // route binds them in B.2; credential issuance still requires a
+    // user-bound host at the service boundary.
+    up: `
+      ALTER TABLE hosts ADD COLUMN user_id TEXT REFERENCES users(id) ON DELETE CASCADE;
+      ALTER TABLE hosts ADD COLUMN installation_id TEXT;
+      ALTER TABLE hosts ADD COLUMN last_seen_at INTEGER;
+      ALTER TABLE hosts ADD COLUMN revoked_at INTEGER;
+
+      CREATE INDEX IF NOT EXISTS idx_hosts_user
+        ON hosts(user_id, revoked_at, created_at);
+
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_hosts_user_installation_when_set
+        ON hosts(user_id, installation_id)
+        WHERE user_id IS NOT NULL AND installation_id IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS host_credentials (
+        id           TEXT PRIMARY KEY,
+        host_id      TEXT NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+        token_hash   TEXT NOT NULL UNIQUE,
+        kind         TEXT NOT NULL CHECK (kind IN ('long_lived', 'bootstrap')),
+        expires_at   INTEGER,
+        consumed_at  INTEGER,
+        revoked_at   INTEGER
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_host_credentials_host
+        ON host_credentials(host_id, kind, revoked_at, expires_at);
+    `,
+  },
 ];

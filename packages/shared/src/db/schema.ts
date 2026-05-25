@@ -15,6 +15,9 @@ export type FastMode = z.infer<typeof FastModeSchema>;
 export const HostKindSchema = z.enum(['local', 'remote']);
 export type HostKind = z.infer<typeof HostKindSchema>;
 
+export const HostCredentialKindSchema = z.enum(['long_lived', 'bootstrap']);
+export type HostCredentialKind = z.infer<typeof HostCredentialKindSchema>;
+
 export const WorkspaceKindSchema = z.enum(['regular', 'agent_home']);
 export type WorkspaceKind = z.infer<typeof WorkspaceKindSchema>;
 
@@ -69,7 +72,23 @@ export interface HostRow {
   id: string;
   name: string;
   kind: HostKind;
+  /** User that owns this host. NULL only for pre-claim legacy/local rows. */
+  user_id: string | null;
+  /** Stable local install id used to deduplicate desktop local-host claims. */
+  installation_id: string | null;
+  last_seen_at: number | null;
+  revoked_at: number | null;
   created_at: number;
+}
+
+export interface HostCredentialRow {
+  id: string;
+  host_id: string;
+  token_hash: string;
+  kind: HostCredentialKind;
+  expires_at: number | null;
+  consumed_at: number | null;
+  revoked_at: number | null;
 }
 
 export interface AgentRow {
