@@ -86,6 +86,17 @@ function importedBackendSymbols(source: SourceFile): string[] {
       /import\s+[^;]*from\s+['"]@silverhand\/backend(?:\/[^'"]*)?['"]/g,
     ),
   ];
+  const unsupportedBackendImports = [
+    ...source.content.matchAll(
+      /import\s+(?:type\s+)?(?:\*\s+as\s+\w+|[A-Za-z_$][\w$]*(?:\s*,\s*(?:\*\s+as\s+\w+|\{[^;]*\}))?)\s+from\s+['"]@silverhand\/backend(?:\/[^'"]*)?['"]/g,
+    ),
+    ...source.content.matchAll(
+      /import\s+['"]@silverhand\/backend(?:\/[^'"]*)?['"]/g,
+    ),
+  ];
+  if (unsupportedBackendImports.length > 0) {
+    symbols.push(`UNPARSED:${source.path}`);
+  }
   if (allBackendImports.length > 0 && symbols.length === 0) {
     symbols.push(`UNPARSED:${source.path}`);
   }
@@ -93,6 +104,19 @@ function importedBackendSymbols(source: SourceFile): string[] {
 }
 
 describe('desktop protocol purity catalogue', () => {
+  it('fails loud on unsupported backend import forms mixed with named imports', () => {
+    const imports = importedBackendSymbols({
+      path: 'example.ts',
+      content: `
+        import { startBackend } from '@silverhand/backend';
+        import * as backend from '@silverhand/backend';
+      `,
+    });
+
+    expect(imports).toContain('startBackend');
+    expect(imports).toContain('UNPARSED:example.ts');
+  });
+
   it('keeps direct @silverhand/backend imports fenced to the embedded boot path allowlist', () => {
     const imports = sourceFiles(mainRoot, new Set(['.ts']))
       .flatMap(importedBackendSymbols)
