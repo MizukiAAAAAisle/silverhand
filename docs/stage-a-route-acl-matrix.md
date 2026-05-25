@@ -27,6 +27,7 @@ gaps without changing Stage B host ownership schema early.
 | Legacy principal headers | Keep during transition, but do not let them reintroduce a settings fallback. |
 | `hosts` ownership | Target class is direct owner, but the owner column/table belongs to Stage B.1. Do not invent a host schema in A.3. |
 | Saved messages | Current schema is global by `message_id`. A.3 can gate by message/conversation visibility, but true per-user saved state requires a later schema decision. |
+| Cross-user namespace ops | Default to 404 over 403 when denying access would otherwise leak another user's resource namespace. |
 
 ## Public/Auth/Host Metadata Routes
 
@@ -143,10 +144,10 @@ gaps without changing Stage B host ownership schema early.
 | PATCH | `/api/me` | Direct owner | `requireViewerUserId`. | Keep after fallback removal. |
 | POST | `/api/me/avatar` | Direct owner | `requireViewerUserId`. | Keep after fallback removal. |
 | DELETE | `/api/me/avatar` | Direct owner | `requireViewerUserId`. | Keep after fallback removal. |
-| GET | `/api/users/:id/avatar` | Direct owner / profile visibility | Currently any logged-in viewer can fetch any user avatar. | Decide whether V1 keeps public-profile read or adds self/workspace-member visibility. |
-| GET | `/api/notifications` | Direct owner | Currently reads global `user_id IS NULL` notifications. | Pass current viewer id to notification repo or keep legacy NULL bridge explicitly. |
-| GET | `/api/notifications/unread` | Direct owner | Currently counts global NULL notifications. | Pass current viewer id to notification repo or keep legacy NULL bridge explicitly. |
-| POST | `/api/notifications/read` | Direct owner | Currently marks global rows, then publishes to current viewer scope. | Scope mutation to current viewer id or explicit legacy bridge. |
+| GET | `/api/users/:id/avatar` | Public profile visibility | Currently any logged-in viewer can fetch any user avatar. | Keep logged-in public avatar read for V1; V2 can tighten to same-workspace if needed. |
+| GET | `/api/notifications` | Direct owner, legacy bridge | Currently reads global `user_id IS NULL` notifications. | Keep legacy NULL bridge in a named deprecated helper. |
+| GET | `/api/notifications/unread` | Direct owner, legacy bridge | Currently counts global NULL notifications. | Keep legacy NULL bridge in a named deprecated helper. |
+| POST | `/api/notifications/read` | Direct owner, legacy bridge | Currently marks global rows, then publishes to current viewer scope. | Keep legacy NULL bridge in a named deprecated helper. |
 
 ## Task Routes
 
@@ -195,7 +196,7 @@ These are not Hono route rows, but they still matter for the A.3 invariant that
 | File | Current use | A.3 action |
 | --- | --- | --- |
 | `packages/backend/src/auth/principal.ts` | `resolvePublicUserPrincipal` falls back to `SettingsRepo.getViewerUserId()`. | Remove fallback; keep explicit session/legacy principal sources. |
-| `packages/backend/src/ws/ws-connection.ts` | WebSocket auth uses legacy token and includes `viewer:<id>` scope from settings. | Stop reading settings; either require session viewer for viewer scope or omit viewer scope in legacy WS. |
+| `packages/backend/src/ws/ws-connection.ts` | WebSocket auth uses legacy token and includes `viewer:<id>` scope from settings. | Centralize as a named `getLegacyViewerForWsScope()` bridge; replace during Stage C protocol cleanup. |
 | `packages/backend/src/repos/settings-repo.ts` | Exposes `viewer_user_id` key and helper. | Keep storage for bootstrap writer, but remove route/principal reads. |
 | `packages/backend/src/services/conversation-message-service.ts` | Resolves legacy null-user authors through settings. | Replace with explicit actor/user context or leave only as historical display bridge if non-auth. |
 | `packages/backend/src/services/schedule-service.ts` | Uses settings viewer id for schedule notification scope. | Thread explicit viewer/actor where user-triggered; agent-owned routes stay agent-scoped. |
