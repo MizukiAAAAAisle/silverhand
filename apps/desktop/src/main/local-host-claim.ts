@@ -97,6 +97,22 @@ export function buildHostClaimInput(input: {
   });
 }
 
+/** Normalize a renderer-supplied path to its pathname, stripping
+ *  query strings and fragments. The renderer hands us strings like
+ *  `/api/hosts/<id>/rotate-token?x=1` or `.../revoke#frag`; the
+ *  pathname is what `backendUrl()` ultimately routes against on the
+ *  Hono side, so all sensitive matching MUST be done against the
+ *  pathname rather than the raw string. Falls back to the input on
+ *  parse failure (defense-in-depth — a malformed path will still be
+ *  rejected by `assertApiProxyPath`'s `/api/` startsWith check). */
+export function pathnameOf(rawPath: string): string {
+  try {
+    return new URL(rawPath, 'http://silverhand.local').pathname;
+  } catch {
+    return rawPath;
+  }
+}
+
 /** Routes that the desktop main process owns end-to-end and that
  *  must NEVER be reachable through the generic renderer proxy
  *  (`backend:request` / `backend:upload`). Two reasons:
@@ -111,11 +127,18 @@ export function buildHostClaimInput(input: {
  *
  *  GET `/api/hosts` is intentionally NOT in this set — it is owner-
  *  filtered server-side and returns no token. The renderer uses the
- *  generic proxy to populate the Hosts settings page. */
+ *  generic proxy to populate the Hosts settings page.
+ *
+ *  IMPORTANT: matching is done against the normalized pathname (no
+ *  query, no fragment). A naive `endsWith('/rotate-token')` against
+ *  the raw input would let `/api/hosts/<id>/rotate-token?x=1` slip
+ *  past, and the renderer could then receive cleartext `host_token`
+ *  bytes via the generic proxy. */
 export function isMainManagedHostPath(path: string): boolean {
-  if (path === apiPaths.hostClaimOrCreate) return true;
-  if (path.startsWith('/api/hosts/') && path.endsWith('/rotate-token')) return true;
-  if (path.startsWith('/api/hosts/') && path.endsWith('/revoke')) return true;
+  const pathname = pathnameOf(path);
+  if (pathname === apiPaths.hostClaimOrCreate) return true;
+  if (pathname.startsWith('/api/hosts/') && pathname.endsWith('/rotate-token')) return true;
+  if (pathname.startsWith('/api/hosts/') && pathname.endsWith('/revoke')) return true;
   return false;
 }
 

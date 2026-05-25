@@ -12,6 +12,7 @@ import {
   isMainManagedHostPath,
   isTokenBearingHostClaimPath,
   loadOrCreateInstallationId,
+  pathnameOf,
   readDaemonHostConfig,
   removeDaemonHostConfig,
   writeDaemonHostConfig,
@@ -110,6 +111,48 @@ describe('desktop local host claim helpers', () => {
     // claim path; we rely on the active name for rotate/revoke).
     expect(isTokenBearingHostClaimPath(apiPaths.hostClaimOrCreate)).toBe(true);
     expect(isTokenBearingHostClaimPath(apiPaths.hosts)).toBe(false);
+  });
+
+  it('refuses query/hash bypass attempts on rotate-token / revoke', () => {
+    // P0 regression: a naive `endsWith('/rotate-token')` against the
+    // raw path would let `?x=1` slip past the matcher, and the
+    // renderer could then read cleartext `host_token` via the generic
+    // proxy. Matching MUST normalize to the URL pathname first.
+    expect(isMainManagedHostPath(`${apiPaths.hostRotateToken('h')}?x=1`)).toBe(true);
+    expect(isMainManagedHostPath(`${apiPaths.hostRevoke('h')}?x=1`)).toBe(true);
+    expect(isMainManagedHostPath(`${apiPaths.hostClaimOrCreate}?bypass=1`)).toBe(true);
+
+    // `fetch` strips the fragment before sending, but the guard must
+    // still refuse — defense in depth against any code path that
+    // forwards the raw string further.
+    expect(isMainManagedHostPath(`${apiPaths.hostRotateToken('h')}#frag`)).toBe(true);
+    expect(isMainManagedHostPath(`${apiPaths.hostRevoke('h')}#frag`)).toBe(true);
+
+    // Combined query + fragment.
+    expect(
+      isMainManagedHostPath(`${apiPaths.hostRotateToken('h')}?x=1#frag`),
+    ).toBe(true);
+    expect(
+      isMainManagedHostPath(`${apiPaths.hostRevoke('h')}?x=1#frag`),
+    ).toBe(true);
+
+    // GET /api/hosts (no token, no side-effect) is still proxyable
+    // even with a query string — the `useQuery` cache key may add
+    // params later.
+    expect(isMainManagedHostPath(`${apiPaths.hosts}?cache=1`)).toBe(false);
+  });
+
+  it('pathnameOf strips query + fragment and falls back on malformed input', () => {
+    expect(pathnameOf('/api/hosts')).toBe('/api/hosts');
+    expect(pathnameOf('/api/hosts?x=1')).toBe('/api/hosts');
+    expect(pathnameOf('/api/hosts#frag')).toBe('/api/hosts');
+    expect(pathnameOf('/api/hosts/h/rotate-token?x=1#frag')).toBe(
+      '/api/hosts/h/rotate-token',
+    );
+    // Malformed inputs fall through verbatim — the caller's own
+    // allow-list (e.g. `assertApiProxyPath`'s `/api/` startsWith)
+    // still rejects them.
+    expect(pathnameOf('not-a-path-at-all')).toBe('/not-a-path-at-all');
   });
 
   it('rotate side-effect persists the new token to daemon-config 0o600', () => {

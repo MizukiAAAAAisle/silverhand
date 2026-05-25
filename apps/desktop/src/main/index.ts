@@ -38,6 +38,7 @@ import {
   applyRotateSideEffects,
   applyRevokeSideEffects,
   isMainManagedHostPath,
+  pathnameOf,
   writeDaemonHostConfig,
   type LocalHostClaimStatus,
 } from './local-host-claim.js';
@@ -729,7 +730,12 @@ async function revokeHost(
 }
 
 function assertApiProxyPath(path: string): void {
-  if (!path.startsWith('/api/')) {
+  // Normalize first so `?` / `#` payloads can't trick the
+  // `/api/` allow-list or the main-managed deny-list. `pathnameOf`
+  // returns the input verbatim on parse failure; that case still
+  // fails the startsWith check below for any non-`/api/` prefix.
+  const pathname = pathnameOf(path);
+  if (!pathname.startsWith('/api/')) {
     throw new Error(`desktop backend proxy only accepts /api/* paths: ${path}`);
   }
   if (isMainManagedHostPath(path)) {
