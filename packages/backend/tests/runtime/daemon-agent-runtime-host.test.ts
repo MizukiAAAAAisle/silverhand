@@ -51,7 +51,6 @@ import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 import { UserRepo } from '../../src/repos/user-repo.js';
-import { SettingsRepo } from '../../src/repos/settings-repo.js';
 import { RuntimeDeliveryCoordinator } from '../../src/runtime/delivery-coordinator.js';
 import { combineGatedBatch } from '../../src/runtime/stdin-format.js';
 import { RuntimeHostPlacementError } from '../../src/host-placement-errors.js';
@@ -127,10 +126,6 @@ const noopInboxRepo = {
 const noopUserRepo = {
   get: () => null,
 } as unknown as UserRepo;
-
-const noopSettingsRepo = {
-  getViewerUserId: () => null,
-} as unknown as SettingsRepo;
 
 // New-in-slice-4c stubs — start() reads from workspace/membership +
 // the auth/launcher/serverConfig wiring. Tests that don't exercise
@@ -237,7 +232,6 @@ function makeHost(
     db?: Database;
     inboxes?: ConversationInboxRepo;
     users?: UserRepo;
-    settings?: SettingsRepo;
     coordinator?: RuntimeDeliveryCoordinator;
     cache?: RunStateCache;
     workspaces?: WorkspaceRepo;
@@ -273,7 +267,6 @@ function makeHost(
     inboxAck: { markDelivered: () => {}, markUndelivered: () => {} },
   });
   const inboxes = extraDeps.inboxes ?? noopInboxRepo;
-  const settings = extraDeps.settings ?? noopSettingsRepo;
   const users = extraDeps.users ?? noopUserRepo;
   // Default coordinator passes through to a noop bridge / inbox sink.
   // Tests that want to observe coordinator interactions inject one
@@ -298,7 +291,6 @@ function makeHost(
     messages: extraDeps.messages ?? noopMessageRepo,
     inboxes,
     users,
-    settings,
     coordinator,
     workspaces: extraDeps.workspaces ?? noopWorkspaceRepo,
     placement: extraDeps.placement ?? noopPlacement,
@@ -832,7 +824,6 @@ describe('DaemonAgentRuntimeHost — stop (soft)', () => {
       messages: noopMessageRepo,
       inboxes: noopInboxRepo,
       users: noopUserRepo,
-      settings: noopSettingsRepo,
       coordinator: new RuntimeDeliveryCoordinator({
         bridge: { runtimeWake: () => Promise.reject(new Error('noop')) },
         cache,
@@ -940,7 +931,6 @@ describe('DaemonAgentRuntimeHost — constructor', () => {
           messages: noopMessageRepo,
           inboxes: noopInboxRepo,
           users: noopUserRepo,
-          settings: noopSettingsRepo,
           coordinator: new RuntimeDeliveryCoordinator({
             bridge: {
               runtimeWake: () => Promise.reject(new Error('noop')),
@@ -1523,7 +1513,6 @@ describe('DaemonAgentRuntimeHost — clearSession', () => {
     const messages = new MessageRepo(db);
     const inboxes = new ConversationInboxRepo(db);
     const users = new UserRepo(db);
-    const settings = new SettingsRepo(db);
 
     try {
       const ws = workspaces.insert({
@@ -1566,7 +1555,6 @@ describe('DaemonAgentRuntimeHost — clearSession', () => {
         db,
         inboxes,
         users,
-        settings,
         silverhandDir,
       });
       await host.clearSession(channel.id, cleared.id, 'alice');
@@ -1626,7 +1614,6 @@ describe('DaemonAgentRuntimeHost — clearSession', () => {
     const messages = new MessageRepo(db);
     const inboxes = new ConversationInboxRepo(db);
     const users = new UserRepo(db);
-    const settings = new SettingsRepo(db);
 
     try {
       const ws = workspaces.insert({
@@ -1681,7 +1668,6 @@ describe('DaemonAgentRuntimeHost — clearSession', () => {
         db,
         inboxes,
         users,
-        settings,
         silverhandDir,
       });
       // clearSession must still resolve — peer failure is warn-only.
@@ -1732,7 +1718,6 @@ interface DeliverFixture {
   messages: MessageRepo;
   inboxes: ConversationInboxRepo;
   users: UserRepo;
-  settings: SettingsRepo;
   /** Insert a message authored by the registered viewer and return id. */
   insertViewerMessage(content: string): string;
 }
@@ -1750,7 +1735,6 @@ function makeDeliverFixture(
   const messages = new MessageRepo(db);
   const inboxes = new ConversationInboxRepo(db);
   const users = new UserRepo(db);
-  const settings = new SettingsRepo(db);
 
   const ws = workspaces.insert({
     name: 'ws-deliver',
@@ -1773,6 +1757,10 @@ function makeDeliverFixture(
     title: 'ws-deliver',
     spawnedByAgentId: null,
   });
+  db.prepare(
+    `DELETE FROM conversation_users
+      WHERE conversation_id = ? AND user_id <> ?`,
+  ).run(channel.id, viewerUserId);
   conversations.addAgent(channel.id, agent.id);
 
   return {
@@ -1785,7 +1773,6 @@ function makeDeliverFixture(
     messages,
     inboxes,
     users,
-    settings,
     insertViewerMessage: (content: string) => {
       const dto = messages.insertForConversation({
         conversationId: channel.id,
@@ -1896,7 +1883,6 @@ describe('DaemonAgentRuntimeHost — deliverMessage', () => {
         messages: fix.messages,
         inboxes: fix.inboxes,
         users: fix.users,
-        settings: fix.settings,
         coordinator,
         db: fix.db,
       });
@@ -1930,7 +1916,6 @@ describe('DaemonAgentRuntimeHost — deliverMessage', () => {
         messages: fix.messages,
         inboxes: fix.inboxes,
         users: fix.users,
-        settings: fix.settings,
         coordinator,
         db: fix.db,
       });
@@ -1953,7 +1938,6 @@ describe('DaemonAgentRuntimeHost — deliverMessage', () => {
         messages: fix.messages,
         inboxes: fix.inboxes,
         users: fix.users,
-        settings: fix.settings,
         coordinator,
         db: fix.db,
       });
@@ -1984,7 +1968,6 @@ describe('DaemonAgentRuntimeHost — deliverMessage', () => {
         messages: fix.messages,
         inboxes: fix.inboxes,
         users: fix.users,
-        settings: fix.settings,
         coordinator,
         db: fix.db,
       });
@@ -2043,7 +2026,6 @@ describe('DaemonAgentRuntimeHost — deliverMessage', () => {
         messages: fix.messages,
         inboxes: fix.inboxes,
         users: fix.users,
-        settings: fix.settings,
         coordinator,
         workspaces: noopWorkspaceRepo,
         placement: noopPlacement,
@@ -2096,7 +2078,6 @@ describe('DaemonAgentRuntimeHost — deliverMessage', () => {
         messages: fix.messages,
         inboxes: fix.inboxes,
         users: fix.users,
-        settings: fix.settings,
         coordinator,
         cache,
         db: fix.db,
@@ -2158,7 +2139,6 @@ describe('DaemonAgentRuntimeHost — deliverMessage', () => {
         messages: fix.messages,
         inboxes: fix.inboxes,
         users: fix.users,
-        settings: fix.settings,
         coordinator,
         cache,
         db: fix.db,
@@ -2201,7 +2181,6 @@ describe('DaemonAgentRuntimeHost — deliverMessage', () => {
         messages: fix.messages,
         inboxes: fix.inboxes,
         users: fix.users,
-        settings: fix.settings,
         coordinator,
         cache,
         db: fix.db,
@@ -2319,7 +2298,6 @@ describe('DaemonAgentRuntimeHost — start', () => {
           messages: fix.messages,
           inboxes: fix.inboxes,
           users: fix.users,
-          settings: fix.settings,
           workspaces: fix.workspaces,
           membership: fix.membership,
           silverhandDir: fix.silverhandDir,
@@ -2381,7 +2359,6 @@ describe('DaemonAgentRuntimeHost — start', () => {
           messages: fix.messages,
           inboxes: fix.inboxes,
           users: fix.users,
-          settings: fix.settings,
           workspaces: fix.workspaces,
           membership: fix.membership,
           silverhandDir: fix.silverhandDir,
@@ -2445,7 +2422,6 @@ describe('DaemonAgentRuntimeHost — start', () => {
           messages: fix.messages,
           inboxes: fix.inboxes,
           users: fix.users,
-          settings: fix.settings,
           workspaces: fix.workspaces,
           membership: fix.membership,
           silverhandDir: fix.silverhandDir,
@@ -2490,7 +2466,6 @@ describe('DaemonAgentRuntimeHost — start', () => {
           messages: fix.messages,
           inboxes: fix.inboxes,
           users: fix.users,
-          settings: fix.settings,
           workspaces: fix.workspaces,
           membership: fix.membership,
           silverhandDir: fix.silverhandDir,
@@ -2552,7 +2527,6 @@ describe('DaemonAgentRuntimeHost — start', () => {
           messages: fix.messages,
           inboxes: fix.inboxes,
           users: fix.users,
-          settings: fix.settings,
           workspaces: fix.workspaces,
           membership: fix.membership,
           silverhandDir: fix.silverhandDir,
@@ -2603,7 +2577,6 @@ describe('DaemonAgentRuntimeHost — start', () => {
           messages: fix.messages,
           inboxes: fix.inboxes,
           users: fix.users,
-          settings: fix.settings,
           workspaces: fix.workspaces,
           membership: fix.membership,
           silverhandDir: fix.silverhandDir,
@@ -2665,7 +2638,6 @@ describe('DaemonAgentRuntimeHost — start', () => {
           messages: fix.messages,
           inboxes: fix.inboxes,
           users: fix.users,
-          settings: fix.settings,
           workspaces: fix.workspaces,
           membership: fix.membership,
           silverhandDir: fix.silverhandDir,
@@ -2746,7 +2718,6 @@ describe('DaemonAgentRuntimeHost — drainPending', () => {
         messages: fix.messages,
         inboxes: fix.inboxes,
         users: fix.users,
-        settings: fix.settings,
         coordinator,
         cache,
         db: fix.db,
@@ -2761,9 +2732,9 @@ describe('DaemonAgentRuntimeHost — drainPending', () => {
   it('one pending row + cache phase=ready → coordinator wakes; ack DEFERRED by B3 gate (claude)', async () => {
     const fix = makeDeliverFixture();
     try {
-      // Viewer user `local` is pre-seeded by openTestDb fixture; no
-      // need to upsert. formatLiveMessage resolves the sender handle
-      // via SettingsRepo.getViewerUserId + UserRepo.get.
+      // Viewer user `local` is pre-seeded by openTestDb fixture and
+      // is the sole human member, so formatLiveMessage resolves the
+      // sender handle through conversation membership + UserRepo.get.
       const msgId = fix.insertViewerMessage('@agent-deliver pls drain');
       fix.inboxes.ensureDelivery(fix.channelId, fix.agentId, msgId);
 
@@ -2784,7 +2755,6 @@ describe('DaemonAgentRuntimeHost — drainPending', () => {
         messages: fix.messages,
         inboxes: fix.inboxes,
         users: fix.users,
-        settings: fix.settings,
         coordinator,
         cache,
         db: fix.db,
@@ -2853,7 +2823,6 @@ describe('DaemonAgentRuntimeHost — drainPending', () => {
         messages: fix.messages,
         inboxes: fix.inboxes,
         users: fix.users,
-        settings: fix.settings,
         coordinator,
         cache,
         db: fix.db,
@@ -2942,7 +2911,6 @@ describe('DaemonAgentRuntimeHost — drainPending', () => {
         messages: fix.messages,
         inboxes: fix.inboxes,
         users: fix.users,
-        settings: fix.settings,
         coordinator,
         cache,
         db: fix.db,

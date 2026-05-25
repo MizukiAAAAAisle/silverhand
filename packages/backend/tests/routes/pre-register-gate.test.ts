@@ -1,19 +1,18 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { apiPaths } from '@silverhand/shared';
+import { apiPaths, authPaths } from '@silverhand/shared';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 /**
  * Pre-register gate enforced by `installRequireRegisteredViewerMiddleware`.
  *
- * Production identity model (post pre-ship rewrite): pre-registration
- * means `app_settings.viewer_user_id` is unset and `users` is empty.
- * The principal middleware therefore resolves no viewer; downstream
- * routes either work (whitelisted) or return 403 `registration_required`.
+ * Production identity model: pre-auth means no user principal has been
+ * resolved for the request; downstream public routes either work
+ * (whitelisted setup reads) or return 403 `registration_required`.
  *
  * Contract:
- *   - GET /api/me + POST /api/register + GET /api/health are the ONLY
- *     public routes reachable when no viewer is registered.
+ *   - GET /api/me + GET /api/health are the ONLY `/api/*` routes reachable
+ *     when no viewer is authenticated.
  *   - GET /api/me returns the discriminated `RegistrationRequired` shape
  *     (`{registration_required: true, suggested_name: 'user-XXXX'}`).
  *   - Every other public route returns 403 `registration_required`.
@@ -33,14 +32,14 @@ describe('Pre-register gate (requireRegisteredViewer middleware)', () => {
   });
 
   /**
-   * Reset the fixture into the production pre-registration state:
-   * `users` row absent + `app_settings.viewer_user_id` unset.
+   * Reset the fixture into the production pre-auth state:
+   * no users row and no legacy settings pointer.
    */
   function unregisterViewer(test: TestApp): void {
     test.ctx.db
       .prepare(`DELETE FROM app_settings WHERE key = 'viewer_user_id'`)
       .run();
-    test.ctx.db.prepare(`DELETE FROM users WHERE id = 'local'`).run();
+    test.ctx.db.prepare(`DELETE FROM users`).run();
   }
 
   function noPrincipalHttp(test: TestApp) {
@@ -60,11 +59,13 @@ describe('Pre-register gate (requireRegisteredViewer middleware)', () => {
     expect(body.suggested_name).toMatch(/^user-[0-9a-f]{8}$/);
   });
 
-  it('allows POST /api/register before registration', async () => {
+  it('does not expose legacy POST /api/register before authentication', async () => {
     t = buildTestApp({ ownedLocalHostUserIds: [] });
     unregisterViewer(t);
-    const res = await noPrincipalHttp(t).post(apiPaths.register, { name: 'shiki' });
-    expect(res.status).toBe(200);
+    const res = await noPrincipalHttp(t).post('/api/register', { name: 'shiki' });
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { code: string };
+    expect(body.code).toBe('registration_required');
   });
 
   it('blocks POST /api/workspaces with 403 registration_required', async () => {
@@ -90,9 +91,7 @@ describe('Pre-register gate (requireRegisteredViewer middleware)', () => {
 
   it('blocks PATCH /api/me with 403 registration_required', async () => {
     // PATCH /api/me is NOT whitelisted — only the read is. The gate
-    // ensures registration must happen via /api/register, never via
-    // a side-door display_name PATCH (and pre-registration there is
-    // no row to patch in the first place).
+    // prevents side-door profile creation/update before authentication.
     t = buildTestApp({ ownedLocalHostUserIds: [] });
     unregisterViewer(t);
     const res = await noPrincipalHttp(t).patch(apiPaths.me, { display_name: 'Sneaky' });
@@ -112,22 +111,26 @@ describe('Pre-register gate (requireRegisteredViewer middleware)', () => {
     expect(body.code).toBe('registration_required');
   });
 
-  it('reopens the full surface after POST /api/register succeeds', async () => {
+  it('reopens the full surface after auth signup succeeds', async () => {
     t = buildTestApp({ ownedLocalHostUserIds: [] });
     unregisterViewer(t);
 
-    // Register first — INSERT user + write viewer_user_id atomically.
-    const reg = await noPrincipalHttp(t).post(apiPaths.register, { name: 'shiki' });
-    expect(reg.status).toBe(200);
-    const viewer = await reg.json() as { id: string };
+    const signup = await noPrincipalHttp(t).post(authPaths.signup, {
+      email: 'shiki@example.test',
+      password: 'correct horse battery staple',
+      display_name: 'Shiki',
+    });
+    expect(signup.status).toBe(200);
+    const auth = await signup.json() as { user_token: string; user: { id: string } };
     new HostRepo(t.ctx.db).claimOrCreateLocal({
-      userId: viewer.id,
+      userId: auth.user.id,
       installationId: 'post-register-install',
     });
 
-    // With A.3 the settings pointer is not a principal fallback; the
-    // caller must send an explicit session/legacy principal.
-    const create = await http(t, { 'X-Silverhand-User-Id': viewer.id }).post(
+    const create = await http(t, {
+      authorization: `Bearer ${auth.user_token}`,
+      'X-Silverhand-User-Id': '',
+    }).post(
       '/api/workspaces',
       { name: 'post-register-ws' },
     );

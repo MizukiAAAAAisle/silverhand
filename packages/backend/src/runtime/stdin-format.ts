@@ -101,9 +101,9 @@ export function formatInboxBatch(
  * - `sender` is the canonical mention handle (`@<agent.name>` /
  *   `@<user.name>`) so an agent can reply with `@<handle>` directly.
  *   For pre-PR-A null-author rows or a row whose `from_user_id` is
- *   unknown, fall back to the registered viewer handle, then to the
- *   bare token `user`. System messages emit `sender=system` with no
- *   `@`.
+ *   unknown, callers may provide a conversation-scoped fallback user
+ *   handle; otherwise this degrades to the bare token `user`. System
+ *   messages emit `sender=system` with no `@`.
  * - `type` is the surface vocabulary: DB column `from_kind='user'`
  *   maps to `human` here; agent and system pass through.
  * - `time` is ISO 8601 in the local timezone (offset preserved) so

@@ -50,8 +50,8 @@ describe('embedded bootstrap auth route', () => {
         .prepare<[], { value: string }>(
           `SELECT value FROM app_settings WHERE key = 'viewer_user_id'`,
         )
-        .get()?.value,
-    ).toBe(body.user.id);
+        .get(),
+    ).toBeUndefined();
     expect(
       t.ctx.db
         .prepare<[], { c: number }>(`SELECT COUNT(*) AS c FROM users`)

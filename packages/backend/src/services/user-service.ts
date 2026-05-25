@@ -3,7 +3,6 @@ import type { UserRow } from '@silverhand/shared';
 import { apiPaths, validateAvatarFile } from '@silverhand/shared';
 import type { BlobFileStorage } from '../storage/blob-file-storage.js';
 import type { UserRepo } from '../repos/user-repo.js';
-import { SettingsRepo, SETTINGS_KEYS } from '../repos/settings-repo.js';
 
 /**
  * Domain-typed errors so the route layer can map to HTTP status codes
@@ -45,13 +44,11 @@ export class UserService {
   private readonly db: Db;
   private readonly users: UserRepo;
   private readonly blobStorage: BlobFileStorage;
-  private readonly settings: SettingsRepo;
 
   constructor(opts: UserServiceOptions) {
     this.db = opts.db;
     this.users = opts.users;
     this.blobStorage = opts.blobStorage;
-    this.settings = new SettingsRepo(opts.db);
   }
 
   /** Read the row + resolved avatar URL. The renderer never reaches
@@ -77,19 +74,16 @@ export class UserService {
   }
 
   /**
-   * Legacy profile-registration creator for the pre-auth setup path.
-   * Password signup now creates credentialed `users` rows through
-   * `UserAuthService.signup`; this method remains the atomic
-   * `/api/register` path used by tests and older profile-only setups.
+   * Embedded-only profile-registration creator. Password signup creates
+   * credentialed `users` rows through `UserAuthService.signup`; the
+   * public `/api/register` route has been removed.
    *
    * Atomically:
    *   1. Generate a fresh user id (16 hex chars).
    *   2. INSERT into `users` (name, display_name).
-   *   3. SET `app_settings.viewer_user_id` to the new id.
-   *
-   * All steps share a single transaction — partial states would
-   * otherwise leak (e.g. user row exists but the principal middleware
-   * still sees no viewer pointer). better-sqlite3's `db.transaction()`
+   * Membership backfill shares the same transaction so partial states
+   * (user row exists but is not a member of existing workspaces /
+   * conversations) are impossible. better-sqlite3's `db.transaction()`
    * wraps DDL/DML and propagates exceptions to abort.
    *
    * Note: the original V1 ship included a Deferred Adoption helper
@@ -101,15 +95,17 @@ export class UserService {
    * are still present at upgrade time.
    *
    * Throws:
-   *   - `already_registered` (409) — `app_settings.viewer_user_id` is
-   *     already set; the human must not be able to overwrite their
-   *     identity from the registration window.
+   *   - `already_registered` (409) — a V1 single-user DB already has
+   *     a user. D-stage multi-user invite/signup paths will replace
+   *     this embedded-only creator.
    *   - `name_taken` (409) — `users.name` collides with itself or
    *     `agents.name` (column UNIQUE / cross-namespace trigger).
    */
   register(input: { name: string; display_name?: string }): UserDto {
     const tx = this.db.transaction((args: { name: string; displayName: string }) => {
-      if (this.settings.getViewerUserId()) {
+      // V1 single-user gate; multi-user invite path will replace this
+      // embedded-only profile creator in D-stage.
+      if (this.users.list().length > 0) {
         throw new UserServiceError(
           'already_registered',
           'a viewer is already registered',
@@ -121,24 +117,11 @@ export class UserService {
         name: args.name,
         displayName: args.displayName,
       });
-      this.settings.set(SETTINGS_KEYS.VIEWER_USER_ID, id);
 
-      // v25 backfill on first registration. The v25 migration's INSERT
-      // ... SELECT covers DBs that were already registered before
-      // v25 shipped (shiki's case). This branch covers the OTHER
-      // path: a DB that ran v25 with no viewer_user_id (so v25's
-      // backfill SELECT returned 0 rows), then registers later. In
-      // that path, here is the only place we know "the human just
-      // came into being" AND have access to the same transaction
-      // that creates them. Add membership rows for every existing
-      // workspace and conversation now, so the permission gates
-      // (canViewWorkspace / canViewConversation) immediately reflect
-      // the new human.
-      //
-      // The pair of writes is INSERT-only (no DELETE / UPDATE). The
-      // tx envelope guarantees atomicity with the user INSERT and
-      // viewer_user_id write — partial state (user exists but is
-      // not a member of their own workspaces) is impossible.
+      // v25 backfill on first embedded registration: this branch covers
+      // a DB that has workspaces/conversations but no users yet. Add
+      // membership rows now so permission gates immediately reflect the
+      // new human.
       const now = Date.now();
       const insertWorkspaceUser = this.db.prepare(
         `INSERT OR IGNORE INTO workspace_users

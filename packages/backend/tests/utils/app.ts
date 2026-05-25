@@ -19,7 +19,6 @@ import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { NotificationRepo } from '../../src/repos/notification-repo.js';
 import { ScheduleRepo } from '../../src/repos/schedule-repo.js';
-import { SettingsRepo } from '../../src/repos/settings-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { createApiRouter, createInternalRouter } from '../../src/routes.js';
 import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
@@ -312,7 +311,6 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     messages: new MessageRepo(db),
     agents: new AgentRepo(db),
     users: new UserRepo(db),
-    settings: new SettingsRepo(db),
     notifications: new NotificationRepo(db),
     workspaces: new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot }),
     attachmentService,
@@ -349,7 +347,6 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     conversations: new ConversationRepo(db),
     messages: new MessageRepo(db),
     agents: new AgentRepo(db),
-    settings: new SettingsRepo(db),
     runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger: silentLogger,

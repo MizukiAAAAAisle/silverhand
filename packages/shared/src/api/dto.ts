@@ -107,8 +107,8 @@ export const UserDtoSchema = z.object({
 export type UserDto = z.infer<typeof UserDtoSchema>;
 
 /**
- * Pre-registration shape returned by `GET /api/me` when no `users` row
- * exists yet (i.e. `app_settings.viewer_user_id` is unset). The renderer
+ * Pre-authentication shape returned by `GET /api/me` when no user
+ * session has been established yet. The renderer
  * branches on the discriminator and shows `<RegistrationGate>` rather
  * than mounting the AppShell.
  *
@@ -160,7 +160,7 @@ const DISPLAY_NAME_FORBIDDEN_MSG =
 
 /**
  * Shared validator for any user-editable `display_name` field. Used by
- * `RegisterUserInputSchema`, `UpdateUserProfileInputSchema`, and
+ * `AuthSignupInputSchema`, `UpdateUserProfileInputSchema`, and
  * `UpdateAgentInputSchema`. Trim → 1..64 chars → reject control
  * characters (C0 U+0000–U+001F, DEL U+007F, C1 U+0080–U+009F) and
  * Unicode line separators (U+2028 / U+2029).
@@ -173,33 +173,6 @@ export const DisplayNameSchema = z
   .refine(s => !DISPLAY_NAME_FORBIDDEN_RE.test(s), {
     message: DISPLAY_NAME_FORBIDDEN_MSG,
   });
-
-// POST /api/register — the SOLE creator of `users` rows. Called once at
-// registration (V1 first launch / V2 after auth signup). Atomically
-// INSERTs the user row and writes `app_settings.viewer_user_id` in a
-// single transaction. Calling it after registration has already
-// completed returns 409 `already_registered`.
-//
-// `display_name` is optional: if omitted, defaults to the registered
-// `name`. Avatar is NOT part of registration — the renderer uploads it
-// via POST /api/me/avatar after this call succeeds (kept separate so
-// we have a single binary upload path).
-export const RegisterUserInputSchema = z.object({
-  name: z
-    .string()
-    .trim()
-    .min(2, 'name must be at least 2 characters')
-    .max(32, 'name must be at most 32 characters')
-    .regex(
-      // Aligned with MENTION_RE below: alpha-first so `@<name>` always
-      // parses as a mention. A numeric-first name would be a permanent
-      // identity that the chat surface can never link back to.
-      /^[a-zA-Z][a-zA-Z0-9_-]*$/,
-      'name must start with a letter, then letters / digits / dash / underscore',
-    ),
-  display_name: DisplayNameSchema.optional(),
-});
-export type RegisterUserInput = z.infer<typeof RegisterUserInputSchema>;
 
 const AuthEmailSchema = z.string().trim().email().max(320);
 
@@ -1592,7 +1565,7 @@ export type MarkNotificationsReadInput = z.infer<
 // Mirrors the renderer-side regex in `Markdown.tsx` and the
 // composer-side detector — the boundary check rejects emails (`me@x`)
 // and paths (`a/@b`), and the alpha-first requirement rejects issue
-// refs like `@123`. Aligned with `RegisterUserInputSchema.name`
+// refs like `@123`. Aligned with auth-signup generated user names
 // (alpha-first by design: `users.name` is the permanent mention
 // anchor). `CreateAgentInputSchema.name` is intentionally broader
 // (`/^[a-zA-Z0-9_-]+$/`, allows numeric-first); a numeric-first

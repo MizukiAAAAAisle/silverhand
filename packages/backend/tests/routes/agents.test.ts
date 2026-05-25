@@ -110,11 +110,11 @@ describe('POST /api/agents', () => {
 
   it('writes human membership for the creator (not the global viewer) on agent_home + DM (v25 PR-A blocker fix)', async () => {
     // Regression for PR-A blocker #4: createAgentWithHome used
-    // settings.getViewerUserId() instead of the principal that drove
-    // the route. With v25 permission tightening, multi-human v2 would
-    // see the *global* viewer as agent_home owner instead of the human
-    // who clicked "create agent". Drop the test-fixture autoseed so
-    // we can observe the membership writes deterministically.
+    // the old settings viewer pointer instead of the principal that
+    // drove the route. With v25 permission tightening, multi-human v2
+    // would see the *global* viewer as agent_home owner instead of the
+    // human who clicked "create agent". Drop the test-fixture autoseed
+    // so we can observe the membership writes deterministically.
     t = buildTestApp();
     t.ctx.db.exec(
       `DROP TRIGGER IF EXISTS test_seed_workspace_users;
@@ -333,8 +333,8 @@ describe('PATCH /api/agents/:id', () => {
 
   it('rejects display_name with control chars or Unicode line separators (400)', async () => {
     // Defense-in-depth: keep prompt-injection-shaped values out of
-    // `agents.display_name` from the write side. Mirrors the
-    // register / PATCH /api/me guards via shared `DisplayNameSchema`.
+    // `agents.display_name` from the write side. Mirrors the auth signup
+    // / PATCH /api/me guards via shared `DisplayNameSchema`.
     t = buildTestApp();
     const created = await (
       await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })

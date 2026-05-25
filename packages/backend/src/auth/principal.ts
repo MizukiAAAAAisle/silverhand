@@ -95,10 +95,10 @@ export function installPublicPrincipalMiddleware(
  *   - `/api/health`, `/api/server/info`, and `/auth/*` skip — they
  *     are anonymous/public or own their auth response semantics.
  *   - Whitelisted public routes pass through even pre-registration.
- *     The whitelist is intentionally tiny: `GET /api/server/info`,
+ *     The whitelist is intentionally tiny: `GET /api/server/info` and
  *     `GET /api/me` (so the renderer can branch on the
- *     registration-required shape), and `POST /api/register` (the sole
- *     creator of legacy single-viewer rows).
+ *     registration-required shape). User creation happens through
+ *     `/auth/signup` or embedded bootstrap, not a public data route.
  *   - No principal set → 403 `registration_required`. This is the
  *     pre-registration state: there is no viewer yet.
  *   - Principal set but underlying `users` row missing → 500
@@ -117,13 +117,12 @@ export function installRequireRegisteredViewerMiddleware(
 ): void {
   // Method+path tuples that bypass the gate. We narrow each whitelist
   // path to a single verb at install time so the gate doesn't accept,
-  // e.g., a stray PATCH /api/register pre-registration — the only
-  // routes we want open before registration are GET /api/me and POST
-  // /api/register; any other verb on those paths should still 403.
+  // e.g., a stray PATCH /api/me pre-registration — the only public data
+  // route we want open before authentication is GET /api/me; any other
+  // verb on that path should still 403.
   const narrowed = new Set<string>();
   for (const p of options.whitelistPaths) {
     if (p === apiPaths.me) narrowed.add(`GET ${p}`);
-    else if (p === apiPaths.register) narrowed.add(`POST ${p}`);
     else if (p === apiPaths.serverInfo) narrowed.add(`GET ${p}`);
     else {
       // Unknown whitelist path — fail loud at install time so we don't
@@ -163,8 +162,7 @@ export function installRequireRegisteredViewerMiddleware(
       // identity model "no principal" is the unregistered signal.
       return c.json(
         {
-          error:
-            'viewer has not registered yet; call POST /api/register first',
+          error: 'viewer has not authenticated yet',
           code: 'registration_required',
         },
         403,

@@ -164,9 +164,8 @@ describe('/api/me + /api/users/:id/avatar', () => {
   });
 
   it('PATCH /api/me rejects display_name with control chars or Unicode line separators (400)', async () => {
-    // See dto.ts `DisplayNameSchema`. Mirrors the register-route guard so
-    // post-registration profile edits cannot reintroduce values that the
-    // initial register call would have rejected.
+    // See dto.ts `DisplayNameSchema`. Mirrors auth signup validation so
+    // profile edits cannot reintroduce values rejected at user creation.
     t = buildTestApp();
     const cases = [
       'first\nsecond',

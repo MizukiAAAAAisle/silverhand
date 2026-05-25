@@ -147,23 +147,11 @@ export const apiPaths = {
   // host-wide app settings (proxy_url etc). Flat KV.
   settings: '/api/settings',
 
-  // current viewer (the local human user). After PR-1 (V1 single
-  // user), this resolves to the registered `users` row pointed at by
-  // `app_settings.viewer_user_id`. Pre-registration the endpoint
-  // returns the discriminated `RegistrationRequired` shape so the
-  // renderer can mount the registration gate. In V2 multi-user the
-  // same endpoints continue to work — only the principal source
-  // changes from `app_settings` to session/token claims.
+  // current viewer (the local human user). Pre-authentication the
+  // endpoint returns the discriminated `RegistrationRequired` shape so
+  // the renderer can mount the auth gate.
   me: '/api/me',
   meAvatar: '/api/me/avatar',
-  /** One-shot identity registration. Sole creator of `users` rows —
-   *  the renderer calls this on V1 first launch (when `/api/me`
-   *  returned `registration_required: true`) and V2 will call it
-   *  after auth signup. Atomically INSERTs the user row and writes
-   *  `app_settings.viewer_user_id`. Returns 409 when the viewer has
-   *  already registered. The pre-register gate whitelists only this
-   *  route + `GET /api/me` + `GET /api/health`. */
-  register: '/api/register',
   /** Public avatar fetch for any user. Returns the blob bytes (auth
    *  via the standard principal header). The DTO's `avatar_url`
    *  points here; renderer resolves it via the same auth-headers

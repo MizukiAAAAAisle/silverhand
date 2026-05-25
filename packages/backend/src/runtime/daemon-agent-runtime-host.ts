@@ -75,10 +75,10 @@ import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationInboxRepo } from '../repos/conversation-inbox-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
-import type { SettingsRepo } from '../repos/settings-repo.js';
 import type { UserRepo } from '../repos/user-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { MembershipService } from '../services/membership-service.js';
+import { singleConversationViewerUserId } from '../viewer-scope.js';
 import { prepareSpawnFiles } from '../spawn-prep.js';
 import type { ActivityLogWriter } from './activity-log-writer.js';
 import type { RuntimeBridge } from './bridge.js';
@@ -111,7 +111,7 @@ import { formatInboxBatch, formatLiveMessage, sendMessageToolName } from './stdi
  * Kept narrow — DaemonHost is intentionally thin (Cindy
  * `5Yrv3roymWkCPxo1` watchlist point 1) — only the deps actually
  * needed by methods landed in this slice appear here. Subsequent
- * slices will widen this with the inbox repo / agent repo / settings
+ * slices will widen this with the inbox repo / agent repo
  * needed for `clearSession`, `start`, and `deliverMessage`.
  */
 export interface DaemonAgentRuntimeHostDeps {
@@ -127,12 +127,10 @@ export interface DaemonAgentRuntimeHostDeps {
    *  Coordinator owns `markDelivered` timing — backend never marks
    *  rows delivered outside the wake path (Cindy `0G5uJBydO_4qt_2r`). */
   inboxes: ConversationInboxRepo;
-  /** User repo + settings repo used by `formatLiveMessage` to
-   *  resolve sender / default-viewer mention handles. Both reads
-   *  happen per-delivery; we don't cache because handle changes
+  /** User repo used by `formatLiveMessage` to resolve sender handles.
+   *  Reads happen per-delivery; we don't cache because handle changes
    *  (rename) MUST be reflected on the next message without restart. */
   users: UserRepo;
-  settings: SettingsRepo;
   /** Live-delivery decision module. DaemonHost only constructs the
    *  encoded payload + driver capability snapshot and hands them
    *  through; coordinator owns wake-vs-queue-vs-respawn routing +
@@ -223,7 +221,6 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
   private readonly messages: MessageRepo;
   private readonly inboxes: ConversationInboxRepo;
   private readonly users: UserRepo;
-  private readonly settings: SettingsRepo;
   private readonly coordinator: RuntimeDeliveryCoordinator;
   private readonly workspaces: WorkspaceRepo;
   private readonly placement: RuntimeHostPlacement;
@@ -249,7 +246,6 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
     this.messages = deps.messages;
     this.inboxes = deps.inboxes;
     this.users = deps.users;
-    this.settings = deps.settings;
     this.coordinator = deps.coordinator;
     this.workspaces = deps.workspaces;
     this.placement = deps.placement;
@@ -396,7 +392,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
         pending,
         id => this.agents.get(id)?.name,
         id => this.users.get(id)?.name,
-        this.resolveDefaultUserHandle(),
+        this.resolveDefaultUserHandle(conversationId),
         agent.name,
         sendMessageToolName(driver),
       );
@@ -943,7 +939,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
       msg,
       id => this.agents.get(id)?.name,
       id => this.users.get(id)?.name,
-      this.resolveDefaultUserHandle(),
+      this.resolveDefaultUserHandle(conversationId),
       agent.name,
       sendMessageToolName(driver),
     );
@@ -980,13 +976,12 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
     );
   }
 
-  /** Resolve the registered viewer's mention handle (used as the
-   *  fallback `sender=` when a user message has a null
-   *  `from_user_id`). Returns undefined when registration hasn't
-   *  completed yet — formatters degrade to the bare token `user`.
-   *  Mirrors CM `resolveDefaultUserHandle`. */
-  private resolveDefaultUserHandle(): string | undefined {
-    const viewerId = this.settings.getViewerUserId();
+  /** Resolve the sole human member's mention handle, used only as the
+   *  fallback `sender=` when a legacy user message has null `from_user_id`.
+   *  Multi-human / no-human conversations degrade to the bare token
+   *  `user` instead of guessing a current viewer. */
+  private resolveDefaultUserHandle(conversationId: string): string | undefined {
+    const viewerId = singleConversationViewerUserId(this.conversations, conversationId);
     if (!viewerId) return undefined;
     return this.users.get(viewerId)?.name ?? undefined;
   }
@@ -1090,7 +1085,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
       return;
     }
     const driver = getDriver(agent.runtime);
-    const defaultUserHandle = this.resolveDefaultUserHandle();
+    const defaultUserHandle = this.resolveDefaultUserHandle(conversationId);
 
     // ONE inbox-batch text covering every pending row. `formatInboxBatch`
     // is the inbox-drain wrapper (not `combineGatedBatch` which is the

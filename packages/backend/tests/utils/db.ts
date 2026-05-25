@@ -12,8 +12,8 @@ import type { Database as Db } from 'better-sqlite3';
  *
  * Production identity model (post pre-ship rewrite): the `users` table
  * is empty after migrations and `app_settings.viewer_user_id` is unset.
- * The renderer hits the registration gate; tests would have to call
- * `POST /api/register` for every test.
+ * The renderer hits the auth gate; tests would have to sign up / log in
+ * for every test.
  *
  * Test fixture compatibility: 50+ pre-rewrite route tests assume a
  * registered viewer with id `'local'`. To keep them working without
@@ -61,10 +61,9 @@ export function openTestDb(): {
     insertUser.run(u.id, u.name, u.display, now, now);
   }
 
-  // Keep the legacy viewer pointer for bootstrap/WS compatibility
-  // tests. A.3 removed it as an HTTP principal fallback; production
-  // still writes it only as a non-WS legacy current-viewer bridge
-  // (`/api/register`, auth signup/login, and embedded bootstrap).
+  // Keep a stale legacy viewer pointer in the fixture so tests prove
+  // current viewer resolution does not depend on it. Production no
+  // longer writes this key on auth/signup/bootstrap paths.
   db.prepare(
     `INSERT INTO app_settings (key, value) VALUES ('viewer_user_id', 'local')
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,

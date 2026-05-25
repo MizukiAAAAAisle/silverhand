@@ -67,7 +67,7 @@ describe('auth routes', () => {
         )
         .get(signup.body.user.id)?.c,
     ).toBe(1);
-    expect(legacyViewerSetting(t)).toBe(signup.body.user.id);
+    expect(legacyViewerSetting(t)).toBe('local');
 
     const sessionMe = await requestJson(
       t,
@@ -91,7 +91,7 @@ describe('auth routes', () => {
     );
     expect(logout.status).toBe(200);
     expect(logout.body).toEqual({ ok: true });
-    expect(legacyViewerSetting(t)).toBe(signup.body.user.id);
+    expect(legacyViewerSetting(t)).toBe('local');
 
     const revoked = await requestJson(
       t,
@@ -121,7 +121,7 @@ describe('auth routes', () => {
     });
     expect(ok.status).toBe(200);
     expect(ok.body.user.id).toBe(created.body.user.id);
-    expect(legacyViewerSetting(t)).toBe(created.body.user.id);
+    expect(legacyViewerSetting(t)).toBe('local');
 
     const duplicateSignup = await requestJson(t, 'POST', authPaths.signup, {
       email: 'login@example.com',

@@ -22,7 +22,7 @@ gaps without changing Stage B host ownership schema early.
 
 | Boundary | Decision |
 | --- | --- |
-| `app_settings.viewer_user_id` | Remove as a principal fallback. Keep `POST /api/register` bootstrap behavior until A.4 replaces setup. |
+| `app_settings.viewer_user_id` | Remove as a principal fallback. C.5 also stops auth/bootstrap writes; the row/key remains only for settings hide/reject compatibility until D-stage schema cleanup. |
 | Pre-register 403 | Preserve `registration_required` for the true no-viewer/no-setup bootstrap state. Session-bearer failures remain 401. |
 | Legacy principal headers | Keep during transition, but do not let them reintroduce a settings fallback. |
 | A.3 -> A.4 desktop dev gap | Removing the settings fallback before A.4 session UI lands means embedded desktop on the integration branch stays at `registration_required`. Manual HTTP tests must send `X-Silverhand-User-Id` or `X-Silverhand-Principal`; do not add a transient main-process compat patch that reads settings again. Treat A.3+A.4 as one releasable unit. |
@@ -139,9 +139,9 @@ gaps without changing Stage B host ownership schema early.
 | Method | Route | ACL class | Current gate | A.3 action |
 | --- | --- | --- | --- | --- |
 | GET | `/api/settings` | Direct owner / host singleton | Currently returns all settings, including legacy keys. | Hide `viewer_user_id` from output; keep other host settings. |
-| PUT | `/api/settings` | Direct owner / host singleton | Currently allows every `SETTINGS_KEYS` value. | Reject writes to `viewer_user_id`; keep bootstrap service as sole writer until A.4. |
+| PUT | `/api/settings` | Direct owner / host singleton | Currently allows every non-deprecated `SETTINGS_KEYS` value. | Reject writes to `viewer_user_id`; no live writer remains after C.5. |
 | GET | `/api/me` | Direct owner | Whitelisted pre-register; returns setup shape without principal, user DTO with principal. | Keep bootstrap shape; post-session missing/invalid viewer is 401 at middleware. |
-| POST | `/api/register` | Public bootstrap | Whitelisted pre-register; service creates legacy viewer row and writes settings pointer. | Keep until A.4. |
+| POST | `/api/register` | Removed public bootstrap | Removed in C.5. Public user creation is `/auth/signup`; embedded bootstrap may create the profile-only local user before issuing a session. | Do not reintroduce. |
 | PATCH | `/api/me` | Direct owner | `requireViewerUserId`. | Keep after fallback removal. |
 | POST | `/api/me/avatar` | Direct owner | `requireViewerUserId`. | Keep after fallback removal. |
 | DELETE | `/api/me/avatar` | Direct owner | `requireViewerUserId`. | Keep after fallback removal. |
@@ -196,10 +196,10 @@ These are not Hono route rows, but they still matter for the A.3 invariant that
 
 | File | Current use | A.3 action |
 | --- | --- | --- |
-| `packages/backend/src/auth/principal.ts` | `resolvePublicUserPrincipal` falls back to `SettingsRepo.getViewerUserId()`. | Remove fallback; keep explicit session/legacy principal sources. |
-| `packages/backend/src/ws/ws-connection.ts` | C.4: WebSocket auth now resolves `viewer:<id>` from the session cookie validated during upgrade, not from settings. | Done for WS; remaining `viewer_user_id` readers below are non-WS legacy current-viewer bridges. |
-| `packages/backend/src/repos/settings-repo.ts` | Exposes `viewer_user_id` key and helper. | Keep storage for bootstrap writer, but remove route/principal reads. |
-| `packages/backend/src/services/conversation-message-service.ts` | Resolves legacy null-user authors through settings. | Replace with explicit actor/user context or leave only as historical display bridge if non-auth. |
-| `packages/backend/src/services/schedule-service.ts` | Uses settings viewer id for schedule notification scope. | Thread explicit viewer/actor where user-triggered; agent-owned routes stay agent-scoped. |
-| `packages/backend/src/runtime/daemon-agent-runtime-host.ts` | Uses settings viewer id for emitted viewer scope. | Thread explicit viewer scope or remove viewer emission from daemon path. |
-| `packages/backend/src/mention-cc.ts` | Uses settings viewer id as mention/notification target fallback. | Replace with conversation user membership or explicit viewer target. |
+| `packages/backend/src/auth/principal.ts` | `resolvePublicUserPrincipal` resolves only session/explicit legacy principal headers; no settings fallback. | Done. |
+| `packages/backend/src/ws/ws-connection.ts` | C.4: WebSocket auth resolves `viewer:<id>` from the session cookie validated during upgrade, not from settings. | Done. |
+| `packages/backend/src/repos/settings-repo.ts` | C.5: `getViewerUserId()` removed. The `VIEWER_USER_ID` constant remains only so settings routes can hide/reject the deprecated key until D-stage schema cleanup. | Done. |
+| `packages/backend/src/services/conversation-message-service.ts` | C.5: unread invalidation and self-mention notification scope derive from `conversation_users`, not settings. | Done. |
+| `packages/backend/src/services/schedule-service.ts` | C.5: schedule-fire unread invalidation derives from target conversation membership, not settings. | Done. |
+| `packages/backend/src/runtime/daemon-agent-runtime-host.ts` | C.5: legacy null-user sender fallback uses the conversation's sole human member; ambiguous/no-human cases fall back to generic `user`. | Done. |
+| `packages/backend/src/mention-cc.ts` | C.5: null-author fallback uses source conversation membership; 0/multiple humans log+skip instead of guessing a global viewer. | Done. |

@@ -39,7 +39,6 @@ import {
   UnclaimTaskInputSchema,
   UpdateAgentInputSchema,
   UpdateUserProfileInputSchema,
-  RegisterUserInputSchema,
   UpdateWorkspaceInputSchema,
   ArchiveWorkspaceInputSchema,
   ArchiveChannelInputSchema,
@@ -397,15 +396,6 @@ function publicSettingsSnapshot(settings: SettingsRepo): Record<string, string> 
   return out;
 }
 
-function bridgeLegacyViewerForNonWsReaders(settings: SettingsRepo, userId: string): void {
-  // Stage C.4 moved event WS to session-subject auth, so this setting
-  // is no longer a WS bridge. Keep the write only for the remaining
-  // non-WS legacy readers that still publish current-viewer notices
-  // through app_settings.viewer_user_id; a later C.x cleanup removes
-  // those readers and this write together.
-  settings.set(SETTINGS_KEYS.VIEWER_USER_ID, userId);
-}
-
 function legacyGlobalNotificationUserId(): null {
   // Stage A.3 bridge: V1 notification writers still mostly create
   // legacy global rows (`user_id IS NULL`). Keep every reader/writer
@@ -622,9 +612,8 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   installPublicPrincipalMiddleware(app, ctx);
   // Registration gate: when the request has no user principal, this
   // gate refuses every public route except public setup reads
-  // (`GET /api/server/info`), `GET /api/me` (so the renderer can
-  // branch on the registration-required shape), and `POST
-  // /api/register` (the legacy single-viewer creator).
+  // (`GET /api/server/info`) and `GET /api/me` (so the renderer can
+  // branch on the registration-required shape).
   // `/api/health`, `/auth/*`, and `/internal/*` are anonymous /
   // route-owned / agent-principal and skip both layers. After
   // registration, the principal is set and the gate is a no-op for the
@@ -632,7 +621,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   // Renderer-side `App.tsx` mirrors this by mounting `<RegistrationGate />`
   // instead of the AppShell while in the registration-required state.
   installRequireRegisteredViewerMiddleware(app, ctx, {
-    whitelistPaths: [apiPaths.serverInfo, apiPaths.me, apiPaths.register],
+    whitelistPaths: [apiPaths.serverInfo, apiPaths.me],
   });
   const hosts = new HostRepo(ctx.db);
   const agents = new AgentRepo(ctx.db);
@@ -698,7 +687,6 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       );
     }
 
-    bridgeLegacyViewerForNonWsReaders(settings, userId);
     const user = ctx.userService.getDto(userId);
     if (!user) return c.json({ error: 'bootstrap user is missing' }, 500);
     const issued = ctx.authSessions.issueSession({
@@ -721,7 +709,6 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       if (!user) {
         return c.json({ error: 'created user is missing post-signup' }, 500);
       }
-      bridgeLegacyViewerForNonWsReaders(settings, signup.userId);
       const issued = ctx.authSessions.issueSession({
         userId: signup.userId,
         ...authSessionMetadata(c),
@@ -742,7 +729,6 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!user) {
       return c.json({ error: 'authenticated user is missing' }, 500);
     }
-    bridgeLegacyViewerForNonWsReaders(settings, verified.userId);
     const issued = ctx.authSessions.issueSession({
       userId: verified.userId,
       ...authSessionMetadata(c),
@@ -2616,11 +2602,10 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       // it), unlike `workspace_members` which is agent-only.
       //
       // Multi-human note: we use `creatorUserId` (passed in from the
-      // route's `getUserPrincipal(c).userId`) rather than the global
-      // `viewer_user_id` setting. v1 single-human these are always
-      // the same; v2 multi-human a second human creating their own
-      // agent must own its agent_home, not the install's primary
-      // viewer.
+      // route's `getUserPrincipal(c).userId`) rather than any global
+      // current-viewer setting. v2 multi-human a second human creating
+      // their own agent must own its agent_home, not the install's
+      // primary viewer.
       //
       // v26 made `creatorUserId` non-null (FK on agents table); the
       // user-gate middleware guarantees a user principal here, so
@@ -3164,18 +3149,16 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   });
 
   // ── Current viewer (user profile) ────────────────────────────────
-  // GET /api/me is the renderer's first read on boot. It's whitelisted
-  // by the registration gate so it works *before* `POST /api/register`
-  // — in that state it returns `{ registration_required: true,
-  // suggested_name }` so the renderer can mount `<RegistrationGate />`.
-  // Once the viewer is registered the principal middleware sets a
-  // user principal and this returns the resolved UserDto.
+  // GET /api/me is a public setup read. Before authentication it returns
+  // `{ registration_required: true, suggested_name }` so the renderer can
+  // mount `<RegistrationGate />`. Once the viewer is authenticated the
+  // principal middleware sets a user principal and this returns the
+  // resolved UserDto.
   //
   // Boundary contract:
-  //   - POST /api/register is the SOLE creator of `users` rows. Called
-  //     once per machine in V1 (per signup in V2); 409 on a second
-  //     call. Whitelisted by the gate so the renderer can reach it
-  //     pre-registration.
+  //   - `/auth/signup` is the public credentialed creator of users.
+  //   - `/auth/embedded-bootstrap` may create a profile-only local user
+  //     in embedded mode before issuing a normal session bearer.
   //   - PATCH /api/me only accepts `display_name`. Renaming is not
   //     exposed at any service / route surface.
   //   - Avatar lives on its own routes (POST/DELETE /api/me/avatar)
@@ -3197,36 +3180,6 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     }
     return c.json(dto);
   });
-
-  app.post(apiPaths.register, async c => {
-    // Whitelisted route — also runs in the registration-required state.
-    // Service layer is the source of truth for "already registered"
-    // (it checks `app_settings.viewer_user_id`); we don't need a
-    // principal here.
-    const body = await c.req.json().catch(() => null);
-    const parsed = RegisterUserInputSchema.safeParse(body);
-    if (!parsed.success) {
-      return c.json(
-        { error: parsed.error.errors[0]?.message ?? 'invalid input' },
-        400,
-      );
-    }
-    try {
-      const dto = ctx.userService.register(parsed.data);
-      return c.json(dto);
-    } catch (err) {
-      const status = userServiceErrorStatus(err);
-      if (status) return c.json(userServiceErrorBody(err), status);
-      throw err;
-    }
-  });
-  //     so we have a single binary upload path the renderer can call
-  //     after registration succeeds.
-  //
-  // V2 multi-user keeps the same endpoints — only the principal
-  // resolution moves from `app_settings` to session/token claims, and
-  // the registration call lands after auth signup instead of on
-  // first launch.
 
   app.patch(apiPaths.me, async c => {
     const viewerUserId = requireViewerUserId(c);

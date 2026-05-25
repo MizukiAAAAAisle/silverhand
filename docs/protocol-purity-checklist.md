@@ -305,3 +305,7 @@ this).
   - `/auth/embedded-bootstrap` added as the only embedded-only route delta. Backend writes `~/.silverhand/embedded-bootstrap` before listen, stores only an in-memory hash, rejects non-loopback / remote mode / stale / consumed / wrong tokens as 404, and returns a normal session bearer. `SILVERHAND_DISABLE_SIGNUP=1` does not disable this local bootstrap path.
   - Event WS moved from legacy `serverConfig.auth_token` + `app_settings.viewer_user_id` to the session subject. Electron main owns a path-scoped `HttpOnly` cookie for `/api/ws/events`; renderer sends no bearer-bearing auth frame and `BackendInfo` carries no token field.
   - Assertion 4 is active and scans preload + renderer sources for `auth_token` references. The only remaining desktop main `auth_token` read is the documented headless smoke handshake.
+- 2026-05-26 (C.5 implementation) — legacy current-viewer bridge cleanup:
+  - Auth success paths and embedded bootstrap no longer write `app_settings.viewer_user_id`; `/api/register` was removed from the public router and shared path catalogue.
+  - `SettingsRepo.getViewerUserId()` was removed. Remaining live viewer-scope events derive from `conversation_users`; legacy null-user formatting falls back only when the conversation has exactly one human member.
+  - Backend tripwire `legacy-viewer-bridge.test.ts` fails loud on `getViewerUserId`, `bridgeLegacyViewer*`, or new `settings.set(SETTINGS_KEYS.VIEWER_USER_ID)` writes under `packages/backend/src`.

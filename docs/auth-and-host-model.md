@@ -603,7 +603,10 @@ Three classes of changes:
 
 ### 8.2 Reinterpret (existing column, new semantic)
 
-- `app_settings.viewer_user_id` — currently the global single-user fallback when no principal header is present. V1: deprecated as fallback; `viewer_user_id` is sourced strictly from the resolved session subject. The column may stay during migration but routes MUST stop reading it.
+- `app_settings.viewer_user_id` — deprecated legacy row. V1 no longer
+  writes or reads it as a current-viewer bridge; viewer identity is
+  sourced from the resolved session subject, and viewer-scope fanout uses
+  membership tables. The row/key may stay until D-stage schema cleanup.
 - `hosts` table — currently registry-scoped. V1: becomes the user-facing
   Host concept (per `multi-daemon-registry.md`). `kind` enum stays
   `local|remote`. Add `installation_id`, `revoked_at`, `last_seen_at` if

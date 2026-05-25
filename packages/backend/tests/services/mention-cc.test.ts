@@ -160,12 +160,13 @@ describe('ccMentionsFromUserMessage — human membership writes (v25 PR-A blocke
     }
   });
 
-  it('falls back to registered viewer when message has no from_user_id', async () => {
+  it('falls back to the source conversation sole human member when message has no from_user_id', async () => {
     const t = bootstrap();
     try {
+      t.conversations.addUser(t.sourceChannel.id, 'local');
       // Legacy null-author message — pre-v25 messages may carry
-      // from_user_id = null. The fallback chain resolves to the
-      // registered viewer ('local').
+      // from_user_id = null. The fallback chain resolves to the sole
+      // human member in the source conversation ('local').
       const userMsg = t.messages.insertForConversation({
         conversationId: t.sourceChannel.id,
         fromKind: 'user',
@@ -205,15 +206,12 @@ describe('ccMentionsFromUserMessage — human membership writes (v25 PR-A blocke
 
   it('logs and skips membership writes when no user id is resolvable', async () => {
     // Per Cindy's instruction: "如果最终仍拿不到 user id, 宁可
-    // log+skip user membership, 不要写空 membership". We wipe both the
-    // message author and the registered viewer pointer; the function
-    // must NOT insert any conversation_users / workspace_users rows
-    // for the lazily-created Mentions DM.
+    // log+skip user membership, 不要写空 membership". With a legacy
+    // null author and no source-conversation human member, the function
+    // must NOT insert any conversation_users / workspace_users rows for
+    // the lazily-created Mentions DM.
     const t = bootstrap();
     try {
-      // Wipe viewer pointer so SettingsRepo.getViewerUserId() → null.
-      t.db.prepare(`DELETE FROM app_settings WHERE key = 'viewer_user_id'`).run();
-
       const userMsg = t.messages.insertForConversation({
         conversationId: t.sourceChannel.id,
         fromKind: 'user',
@@ -254,6 +252,49 @@ describe('ccMentionsFromUserMessage — human membership writes (v25 PR-A blocke
         .all(t.aliceHome.id);
       expect(homeMembers).toHaveLength(0);
       // The skip path must log a warning so this isn't silent.
+      expect(t.logger.warn).toHaveBeenCalled();
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('logs and skips membership writes when a null-author source has multiple human members', async () => {
+    const t = bootstrap();
+    try {
+      t.conversations.addUser(t.sourceChannel.id, 'local');
+      t.conversations.addUser(t.sourceChannel.id, 'teammate');
+
+      const userMsg = t.messages.insertForConversation({
+        conversationId: t.sourceChannel.id,
+        fromKind: 'user',
+        fromUserId: null,
+        content: 'hey @alice ambiguous human',
+      });
+
+      await ccMentionsFromUserMessage({
+        message: userMsg,
+        sourceConversation: t.sourceChannel,
+        sourceWorkspace: t.sourceWorkspace,
+        db: t.db,
+        agents: t.agents,
+        conversations: t.conversations,
+        messages: t.messages,
+        notifications: t.notifications,
+        runtimeHost: t.fake as unknown as AgentRuntimeHost,
+        logger: t.logger,
+        events: t.events,
+      });
+
+      const mentionsDm = t.conversations.findDmChannelForAgent(t.alice.id, {
+        title: 'Mentions',
+      });
+      expect(mentionsDm).not.toBeNull();
+      const dmMembers = t.db
+        .prepare<[string], { user_id: string }>(
+          `SELECT user_id FROM conversation_users WHERE conversation_id = ?`,
+        )
+        .all(mentionsDm!.id);
+      expect(dmMembers).toHaveLength(0);
       expect(t.logger.warn).toHaveBeenCalled();
     } finally {
       t.cleanup();
