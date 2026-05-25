@@ -352,8 +352,11 @@ in-process shortcuts on every audit.
 
 - Removing the local-host-only UX (`showItemInFolder` etc.). They are
   legitimate features, just gated by `host.kind`.
-- The server-process split itself (that's Stage D).
-- The daemon's outbound protocol upgrade (that's the follow-up phase).
+- The server-process split itself (that's Stage D1).
+- The daemon's outbound protocol upgrade (that's Stage D2, not
+  Stage C).
+- The orchestration boundary decision for remote-local (that's
+  Stage D2.0, not Stage C).
 
 **PR breakdown (suggested)**:
 
@@ -481,6 +484,71 @@ masked under D2 transport churn.
 
 ---
 
+#### D2.0 — Orchestration boundary for desktop-local remote (design pass)
+
+**Goal**: before any D2 transport code lands, decide and document
+**which `DaemonAgentRuntimeHost` responsibilities stay server-owned vs
+move to daemon-host** for the `kind=local` remote case. This is not
+optional architecture cleanup — once remote server and desktop daemon
+sit on different machines, the current backend behaviours that
+materialize host-local fs state (e.g. `packages/backend/src/spawn-prep.ts`
+preparing spawn dirs, system-prompt-file paths, workspace fs paths,
+env injection for the agent CLI) execute inside the server Docker
+container, where the agent process on the user's desktop cannot read
+them. D2 cannot just be "wire WS transport and reuse HostClient
+surface" — that surface assumed co-location.
+
+This was previously parked in §5 Follow-up as "orchestration boundary
+decision". Round 4 review (Cindy) correctly pointed out that with
+Stage D scoped to close the remote-local loop, the V1-minimum boundary
+must be locked **before** D2 transport implementation, not after the
+follow-up phase.
+
+**In scope**:
+
+- Catalogue of `DaemonAgentRuntimeHost` responsibilities currently on
+  the backend side. Items known to require a decision:
+  - `spawn-prep.ts`-style spawn-files materialization (system prompt
+    file, memory file injection, working dir setup)
+  - env-var injection for agent CLI (`SILVERHAND_*`)
+  - workspace fs path resolution (currently host-local absolute paths)
+  - blob path resolution
+  - inbox-drain stdin formatting
+  - run-state cache + snippet accumulation
+  - SSE event fan-out
+  - L1/L2 system-prompt assembly + 16KB cap reads
+- For each item, V1 decision: **server-owned** (data crosses the
+  transport on demand), **daemon-host-owned** (daemon does the work
+  locally given metadata), or **both** (server prepares, daemon
+  applies, contract defines the handoff).
+- V1 guiding principle (proposal — to be locked in this milestone):
+  any work that requires **direct host fs access** (writing spawn
+  files, reading workspace fs, resolving blob paths to local files)
+  moves to daemon-host. Server stays authoritative on **data** (prompt
+  context content, env values, inbox payload) and ships it over the
+  transport; daemon owns **fs materialization** locally.
+- Output: `docs/orchestration-boundary-v1.md` design doc listing each
+  item with its V1 decision and rationale.
+- Identify what new WS frame shapes D2 needs to support the boundary
+  (e.g. spawn frame carries prompt-content + env-map; does NOT carry
+  spawn-dir absolute path).
+
+**Out of scope for D2.0**:
+
+- Implementation of any boundary change. D2.0 produces the design
+  doc; D2 implements it.
+- Headless / sandbox boundary generalisation — still follow-up.
+
+**Acceptance criteria for D2.0**:
+
+- `docs/orchestration-boundary-v1.md` committed with one row per
+  responsibility above + the V1 decision + rationale.
+- WS frame schema (`docs/daemon-outbound-protocol.md`) draft cites
+  this boundary doc for frame payload shapes.
+- Alice + Cindy review sign-off before D2.a implementation PR opens.
+
+---
+
 #### D2 — Daemon outbound transport (desktop-local host only)
 
 **In scope**:
@@ -490,23 +558,47 @@ masked under D2 transport churn.
 - `host_token` presented on connection upgrade (`Authorization: Bearer`).
   Server validates via Stage B's `verifyHostToken()` — no new
   validation primitive.
-- Server-initiated control frames over the WS: `spawn`, `wake`,
-  `status`, `event` (frame shape defined alongside the PR, mirroring
-  current `HostClient` ↔ daemon unix-socket protocol). The frame
-  vocabulary stays minimal and matches today's HostClient surface;
-  daemon-side handlers reuse existing supervisor entry points.
+- WS frame vocabulary, split into two directions (frame shapes
+  defined alongside D2.a per the D2.0 boundary doc):
+  - **server → daemon commands**: `spawn`, `wake`, `status`, `stop`
+    (and whatever else D2.0 identifies). These map to existing
+    supervisor entry points on the daemon side; payload shapes come
+    from the boundary doc (e.g. `spawn` carries prompt-content + env-map,
+    NOT spawn-dir absolute paths).
+  - **daemon → server events**: `state`, `output`, `ready`, `exit`,
+    `tool_use` (mirroring today's `ParsedEvent` surface). These flow
+    from the daemon's supervisor / driver parser into the existing
+    backend event-fan-out path.
 - WS lifecycle: connection establishment, ping/pong heartbeat,
-  reconnect with backoff, backpressure (queue with bounded depth +
-  drop-or-fail policy explicit), connection-loss-during-active-spawn
-  recovery contract.
+  reconnect with bounded backoff, **bounded per-connection write
+  buffer** (not a durable queue — see "Durability invariant" below),
+  connection-loss-during-active-spawn recovery contract.
 - Online/offline presence: server tracks `hosts.last_seen_at` from WS
   heartbeats; deriving `host.online: bool` is a function of
   `last_seen_at` recency (no separate column).
 - Token-rotation channel: when server issues a new `host_token`, the
-  WS delivers it as a control frame; daemon swaps file + token in
-  memory; old token's 60s grace covers the swap window.
+  WS delivers it as a server → daemon `rotate_token` command; daemon
+  swaps file + token in memory; old token's 60s grace covers the swap
+  window.
 - TLS required on non-loopback WS connections (loopback exempted for
   embedded mode).
+
+**Durability invariant** (carried from the existing daemon PR-2 +
+`multi-daemon-registry.md` baseline — D2 MUST NOT violate it):
+
+> **The DB inbox / `RuntimeDeliveryCoordinator` is the only durable
+> intent queue.** The WS transport MUST NOT invent a second durable
+> queue. When the WS is disconnected or its write buffer is saturated,
+> server-side dispatch of `spawn` / `wake` / `status` / `stop` /
+> `rotate_token` MUST fail with an explicit reason
+> (`host_disconnected` / `host_backpressure`); the originating
+> delivery row stays `pending` in the DB inbox and the existing
+> `RuntimeDeliveryCoordinator` retries it once the host is
+> reconnected and `ready`. Control-plane commands are
+> **non-droppable**. Only raw runtime output (high-volume log/event
+> stream) MAY have droppable semantics, and only when the drop is
+> explicitly logged with sequence numbers so the receiver detects the
+> gap.
 
 **Out of scope for D2**: anything that ties daemon outbound to a host
 kind other than `local`. Headless daemon binary, remote-host
@@ -516,35 +608,55 @@ provisioning UI, sandbox capability — all still deferred (§2).
 
 - **D2.a** WS protocol frame schema + server endpoint
   (`/api/hosts/connect`) + token validation via `verifyHostToken()`.
-- **D2.b** Daemon WS client + reconnect/backoff + heartbeat.
-- **D2.c** Server-initiated control frames (spawn/wake/status/event)
-  mapped to existing supervisor entry points; today's `HostClient`
-  becomes a thin shim that routes to either the unix-socket transport
-  (embedded loopback fallback) or the WS transport (remote).
-- **D2.d** Backpressure policy + connection-loss-during-active-spawn
-  recovery test matrix.
-- **D2.e** Token rotation over WS.
+  Frame schema cites D2.0's `docs/orchestration-boundary-v1.md` for
+  payload shapes.
+- **D2.b** Daemon WS client + reconnect/backoff + heartbeat + bounded
+  write buffer (no durable queue).
+- **D2.c** Server → daemon command frames (`spawn` / `wake` / `status`
+  / `stop` / `rotate_token`) mapped to existing supervisor entry
+  points; today's `HostClient` becomes a thin shim that routes to
+  either the unix-socket transport (embedded loopback fallback) or
+  the WS transport (remote).
+- **D2.d** Daemon → server event frames (`state` / `output` / `ready`
+  / `exit` / `tool_use`) wired into the backend's existing event
+  fan-out.
+- **D2.e** Disconnect / backpressure / connection-loss recovery
+  contract: `RuntimeDeliveryCoordinator` integration so dispatch
+  fails fast with explicit reason and DB inbox retry takes over.
+- **D2.f** Token rotation over WS (`rotate_token` command).
 
 **Acceptance criteria for D2**:
 
 - WS handshake succeeds with valid `host_token`, rejected with 401
   on revoked / rotated-past-grace / missing token.
-- Server-initiated `spawn` frame triggers the same supervisor path as
+- Server → daemon `spawn` frame triggers the same supervisor path as
   today's `HostClient` call, verified by a transport-agnostic test
   that runs both unix-socket and WS transports against the same
   supervisor fixtures.
+- Daemon → server `state` / `output` / `exit` events surface in the
+  backend event fan-out identically to today's path, verified by the
+  same parity test.
 - WS reconnect after server restart: daemon reconnects within bounded
-  backoff; pending intents queued during disconnect are delivered on
-  reconnect; duplicate-delivery suppression matches current behaviour.
-- Backpressure: when server queue depth exceeds bound, the configured
-  policy (drop-with-log OR fail-fast-to-caller) is applied; never
-  silent memory growth.
+  backoff. **No transport-side durable queue exists**; pending
+  deliveries are still in the DB inbox marked pending and
+  `RuntimeDeliveryCoordinator` re-dispatches them when the host
+  reports `ready` after reconnect; duplicate-delivery suppression
+  uses the existing inbox `delivered_at` + `dedupKey` path.
+- **Backpressure / disconnect dispatch failure**: when the WS write
+  buffer is saturated or the connection is down, dispatch of any
+  control command (`spawn` / `wake` / `status` / `stop` /
+  `rotate_token`) returns an explicit error (`host_disconnected` or
+  `host_backpressure`); the inbox row stays pending; no command is
+  silently dropped or queued off-DB. Verified by an integration test
+  that yanks the WS connection mid-dispatch and asserts the inbox
+  row's state.
 - Connection loss during active spawn: agent process is not orphaned;
-  on reconnect, state converges (either resumed or marked failed with
-  explicit reason). Test matrix covers loss at every supervisor
-  lifecycle stage.
+  on reconnect, state converges via the same `RuntimeDeliveryCoordinator`
+  recovery path daemon PR-2 already established (either resumed or
+  marked failed with explicit reason). Test matrix covers loss at every
+  supervisor lifecycle stage.
 - `host_token` rotation over WS: new token takes effect within one
-  control-frame roundtrip; old token honoured for 60s grace; daemon
+  command-frame roundtrip; old token honoured for 60s grace; daemon
   config file refreshed atomically (no partial write).
 - TLS required on non-loopback WS; loopback exempted for embedded.
 
@@ -674,12 +786,20 @@ written alongside D2 implementation).
             │ D1 server deployable runtime                         │
             │    (HARD prerequisite on C; ships + soaks first)     │
             └──┬───────────────────────────────────────────────────┘
-               │ soak before D2 starts
+               │ soak before D2.0 starts
+               ▼
+            ┌─────────────────────────────────────────────────────┐
+            │ D2.0 orchestration boundary design pass              │
+            │      (locks what crosses the WS transport for V1     │
+            │       remote-local; no code, design doc only)        │
+            └──┬───────────────────────────────────────────────────┘
+               │ sign-off before D2.a opens
                ▼
             ┌─────────────────────────────────────────────────────┐
             │ D2 daemon outbound transport (desktop-local host)    │
             │    (uses Stage B's verifyHostToken() — no new        │
             │     identity primitive; new caller only)             │
+            │    DB inbox remains the only durable intent queue    │
             └──┬───────────────────────────────────────────────────┘
                │ soak before D3 starts
                ▼
@@ -763,14 +883,12 @@ this list — round 4 of this roadmap moved it into Stage D2.
   "Add remote host" desktop UI. Threat model for bootstrap token leak,
   exchange replay, multi-pair attacks.
 - **Sandbox capability layer** (Appendix A.5 in `auth-and-host-model.md`).
-- **Orchestration boundary decision**: which `DaemonAgentRuntimeHost`
-  responsibilities (prompt context / spawn files / token / inbox
-  delivery / run-state cache / SSE) stay server-side vs move to
-  daemon-host. Alice owns this proposal as a follow-up prerequisite —
-  Stage D2 ships the *transport* for server-initiated control, but the
-  *exact division* of which responsibilities cross that transport vs
-  stay daemon-side requires its own design pass before the
-  generalisation work (headless binary + remote host) begins.
+- **Orchestration boundary generalisation** for headless / sandbox /
+  multi-Host-kind cases. V1's `kind=local` boundary is locked in
+  Stage D2.0; this follow-up item is the second-pass review that asks
+  "are the D2.0 decisions still right when daemon runs in a Docker
+  container without a desktop?" — possible new transport frames,
+  possible boundary moves. Reusing the Stage D2 transport surface.
 - **V1.5 multi-user invite + workspace sharing** (Appendix A.3 in
   `auth-and-host-model.md`).
 - **V2 OAuth providers** (Appendix A.2 in `auth-and-host-model.md`).
@@ -874,3 +992,55 @@ this list — round 4 of this roadmap moved it into Stage D2.
     `verifyHostToken()` / placement only. Token presentation over a
     real outbound transport is Stage D2's responsibility, using Stage
     B's primitive as a caller.
+- 2026-05-25 — Round 5 architecture-correctness fix (Alice). Addresses
+  Cindy review round 4 P1/P2:
+  - **P1 orchestration boundary moved into V1**: new milestone
+    **D2.0 orchestration boundary design pass** inserted before D2.
+    Once remote server and desktop daemon sit on different machines,
+    backend behaviours that materialize host-local fs state
+    (`spawn-prep.ts`, env injection for agent CLI, workspace fs path
+    resolution, blob path resolution) execute inside the server
+    container where the agent process cannot read them. D2 cannot
+    just be "wire WS transport and reuse `HostClient` surface" —
+    that surface assumed co-location. D2.0 produces
+    `docs/orchestration-boundary-v1.md` listing each responsibility
+    with its V1 server-owned / daemon-host-owned / both decision +
+    rationale. Guiding principle (proposal): any work requiring
+    direct host fs access moves to daemon-host; server stays
+    authoritative on data and ships it over the transport.
+    Follow-up phase keeps only the "headless / sandbox
+    generalisation review" of these decisions, not the initial
+    decision itself.
+  - **P1 DB inbox is the only durable queue**: D2 in-scope and
+    acceptance rewritten to honour the existing daemon PR-2 +
+    `multi-daemon-registry.md` baseline invariant — backend does NOT
+    invent a second durable intent queue. New "Durability invariant"
+    callout in D2's in-scope section. WS write buffer is bounded
+    and **non-durable**; on disconnect or saturation, dispatch of
+    `spawn` / `wake` / `status` / `stop` / `rotate_token` returns
+    explicit `host_disconnected` or `host_backpressure`; the
+    originating delivery row stays pending in the DB inbox and the
+    existing `RuntimeDeliveryCoordinator` retries after the host
+    reconnects and reports `ready`. Control-plane commands are
+    non-droppable; only raw runtime output (high-volume log stream)
+    MAY have droppable semantics, and only when the drop is
+    explicitly sequence-numbered. Acceptance criteria rewritten
+    accordingly; new D2.e "disconnect/backpressure recovery"
+    sub-PR.
+  - **P2 Stage C out-of-scope stale**: "daemon outbound is follow-up
+    phase" line in §3 Stage C out-of-scope updated to "daemon
+    outbound is Stage D2"; orchestration boundary added as Stage
+    D2.0, also not Stage C.
+  - **P2 frame direction**: D2 in-scope and acceptance criteria
+    rewritten to split frames into two directions explicitly —
+    *server → daemon commands* (`spawn` / `wake` / `status` / `stop`
+    / `rotate_token`) and *daemon → server events* (`state` /
+    `output` / `ready` / `exit` / `tool_use`). `event` is no longer
+    misclassified as a server-initiated frame.
+  - §4 dependency graph updated to include D2.0 between D1 and D2
+    with "sign-off before D2.a opens" gating; D2 box now annotates
+    "DB inbox remains the only durable intent queue".
+  - §5 follow-up phase: orchestration boundary entry rewritten as
+    "generalisation review for headless/sandbox" — V1 boundary
+    decision is now made in D2.0, follow-up reviews it for
+    multi-Host-kind cases.
