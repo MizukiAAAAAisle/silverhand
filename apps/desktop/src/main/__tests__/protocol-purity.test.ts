@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const mainRoot = fileURLToPath(new URL('..', import.meta.url));
+const preloadRoot = fileURLToPath(new URL('../../preload', import.meta.url));
 const rendererRoot = fileURLToPath(new URL('../../renderer', import.meta.url));
 
 const allowedBackendImports = [
@@ -146,5 +147,14 @@ describe('desktop protocol purity catalogue', () => {
     expect(offenders).toEqual([]);
   });
 
-  it.todo('contains no renderer BackendInfo auth_token consumers (activated by C.4)');
+  it('contains no renderer-facing BackendInfo auth_token consumers', () => {
+    const offenders = [
+      ...sourceFiles(preloadRoot, new Set(['.ts'])),
+      ...sourceFiles(rendererRoot, new Set(['.ts', '.tsx'])),
+    ]
+      .filter(source => /\bauth_token\b|\.auth_token\b/.test(source.content))
+      .map(source => source.path);
+
+    expect(offenders).toEqual([]);
+  });
 });

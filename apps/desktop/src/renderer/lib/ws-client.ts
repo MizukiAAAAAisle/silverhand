@@ -186,11 +186,9 @@ export class EventWsClient {
     this.clearReconnectTimer();
     this.setStatus('connecting');
     let url: string;
-    let token: string;
     try {
       const info = await getBackendInfo();
       url = eventWsUrl(info.url);
-      token = info.event_auth_token;
     } catch {
       this.scheduleReconnect();
       return;
@@ -204,7 +202,6 @@ export class EventWsClient {
     ws.addEventListener('open', () => {
       if (this.ws !== ws) return;
       this.setStatus('authenticating');
-      this.sendOnSocket(ws, { type: 'auth', token });
     });
 
     ws.addEventListener('message', raw => {

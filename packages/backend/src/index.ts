@@ -18,6 +18,11 @@ import {
 } from './context.js';
 import { AgentTokenStore } from './auth/agent-token-store.js';
 import { resolveAuthRuntimeConfig } from './auth/config.js';
+import {
+  cleanupEmbeddedBootstrap,
+  createDisabledEmbeddedBootstrapState,
+  prepareEmbeddedBootstrap,
+} from './auth/embedded-bootstrap.js';
 import { PasswordCredentialService } from './auth/password.js';
 import { AuthSessionService } from './auth/session.js';
 import { HostRepo } from './repos/host-repo.js';
@@ -97,6 +102,7 @@ export interface RunningBackend {
 }
 
 export async function startBackend(opts: CreateBackendOptions): Promise<RunningBackend> {
+  const listenHostname = '127.0.0.1';
   const logger = opts.logger ?? consoleLogger;
   const loggers: BackendLoggers = {
     system: opts.loggers?.system ?? logger,
@@ -146,6 +152,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     db,
     serverConfig: opts.serverConfig,
     authConfig,
+    embeddedBootstrap: createDisabledEmbeddedBootstrapState(opts.silverhandDir),
     logger,
     loggers,
     logControl,
@@ -421,6 +428,23 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     );
   }
 
+  ctx.embeddedBootstrap = await prepareEmbeddedBootstrap({
+    silverhandDir: opts.silverhandDir,
+    serverConfig: ctx.serverConfig,
+    listenHostname,
+    logger,
+  });
+  logger.info(
+    {
+      enabled: ctx.embeddedBootstrap.enabled,
+      reason: ctx.embeddedBootstrap.reason,
+      listenHostname,
+    },
+    ctx.embeddedBootstrap.enabled
+      ? 'Embedded bootstrap: enabled (loopback)'
+      : 'Embedded bootstrap: disabled',
+  );
+
   const app = new Hono<AppEnv>();
   app.use('*', silverhandCors());
   app.route('/', createApiRouter(ctx));
@@ -429,7 +453,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   return new Promise<RunningBackend>((resolve, reject) => {
     let eventWs: EventWsServerController | null = null;
     const server = serve(
-      { fetch: app.fetch, hostname: '127.0.0.1', port: 0 },
+      { fetch: app.fetch, hostname: listenHostname, port: 0 },
       info => {
         const address = info as AddressInfo;
         const port = address.port;
@@ -451,6 +475,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
 
             // Phase 2: close WS lifecycle before the HTTP drain removes sockets.
             await eventWs?.close();
+            await cleanupEmbeddedBootstrap(ctx.embeddedBootstrap, logger);
 
             // Phase 3: flush activity log AND drain the HTTP server
             // concurrently — they are independent of each other.

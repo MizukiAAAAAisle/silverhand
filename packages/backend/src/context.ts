@@ -13,6 +13,7 @@ import type { UserService } from './services/user-service.js';
 import type { BlobFileStorage } from './storage/blob-file-storage.js';
 import type { AgentTokenStore } from './auth/agent-token-store.js';
 import type { AuthRuntimeConfig } from './auth/config.js';
+import type { EmbeddedBootstrapState } from './auth/embedded-bootstrap.js';
 import type { PasswordCredentialService } from './auth/password.js';
 import type { AuthSessionService } from './auth/session.js';
 import type { LogLevelControl } from './logger.js';
@@ -63,6 +64,8 @@ export interface BackendContext {
   serverConfig: ServerConfig;
   /** Auth/setup config resolved once during backend startup. */
   authConfig: AuthRuntimeConfig;
+  /** Embedded-only one-shot session bootstrap state for this backend boot. */
+  embeddedBootstrap: EmbeddedBootstrapState;
   logger: BackendLogger;
   /** Categorized sinks. Always present; defaults to `{ system, agent,
    *  cli } = { logger, logger, logger }` when no file logger is in use

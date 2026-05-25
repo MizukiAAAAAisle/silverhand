@@ -63,8 +63,8 @@ export function openTestDb(): {
 
   // Keep the legacy viewer pointer for bootstrap/WS compatibility
   // tests. A.3 removed it as an HTTP principal fallback; production
-  // still writes it only as a legacy WS bridge (`/api/register` and
-  // transient Stage A.4 auth signup/login).
+  // still writes it only as a non-WS legacy current-viewer bridge
+  // (`/api/register`, auth signup/login, and embedded bootstrap).
   db.prepare(
     `INSERT INTO app_settings (key, value) VALUES ('viewer_user_id', 'local')
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,

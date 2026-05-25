@@ -197,7 +197,7 @@ These are not Hono route rows, but they still matter for the A.3 invariant that
 | File | Current use | A.3 action |
 | --- | --- | --- |
 | `packages/backend/src/auth/principal.ts` | `resolvePublicUserPrincipal` falls back to `SettingsRepo.getViewerUserId()`. | Remove fallback; keep explicit session/legacy principal sources. |
-| `packages/backend/src/ws/ws-connection.ts` | WebSocket auth uses legacy token and includes `viewer:<id>` scope from settings. | Centralize as a named `getLegacyViewerForWsScope()` bridge; replace during Stage C protocol cleanup. |
+| `packages/backend/src/ws/ws-connection.ts` | C.4: WebSocket auth now resolves `viewer:<id>` from the session cookie validated during upgrade, not from settings. | Done for WS; remaining `viewer_user_id` readers below are non-WS legacy current-viewer bridges. |
 | `packages/backend/src/repos/settings-repo.ts` | Exposes `viewer_user_id` key and helper. | Keep storage for bootstrap writer, but remove route/principal reads. |
 | `packages/backend/src/services/conversation-message-service.ts` | Resolves legacy null-user authors through settings. | Replace with explicit actor/user context or leave only as historical display bridge if non-auth. |
 | `packages/backend/src/services/schedule-service.ts` | Uses settings viewer id for schedule notification scope. | Thread explicit viewer/actor where user-triggered; agent-owned routes stay agent-scoped. |

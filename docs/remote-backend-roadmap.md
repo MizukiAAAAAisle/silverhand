@@ -349,13 +349,18 @@ in-process shortcuts on every audit.
   through an in-process shortcut.
 - `/auth/embedded-bootstrap` route + flow: server in embedded mode
   writes a one-shot `bootstrap_session_token` to
-  `~/.silverhand/embedded-bootstrap` (0600); desktop reads file →
-  POSTs `/auth/embedded-bootstrap { token }` over loopback. Four
-  constraints (loopback only + one-shot + boot-session-scoped + only
-  when `mode=embedded`) MUST all hold; failing any returns 404.
+  `~/.silverhand/embedded-bootstrap` (0600) before HTTP listen; desktop
+  reads file → POSTs `/auth/embedded-bootstrap { token }` over
+  loopback. Four constraints (loopback only + one-shot +
+  boot-session-scoped + only when `mode=embedded`) MUST all hold;
+  failing any returns 404. This route is independent of
+  `SILVERHAND_DISABLE_SIGNUP`.
 - Renderer never sees `user_token` plaintext for embedded mode either;
   bootstrap returns a normal session that's persisted via
-  `safeStorage` just like the remote signup path.
+  `safeStorage` just like the remote signup path. Event WS uses that
+  same session subject via an Electron-main-owned `HttpOnly` cookie
+  scoped to `/api/ws/events`; renderer never receives a bearer field in
+  `BackendInfo`.
 
 **Out of scope** (push back if asked):
 

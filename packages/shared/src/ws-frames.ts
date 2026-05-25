@@ -2,8 +2,10 @@
  * WebSocket frame type definitions for the Silverhand single-connection event bus.
  *
  * Transport contract:
- * - Client connects, sends AuthFrame first.
- * - Server validates and responds with AuthenticatedFrame (viewerId, epoch).
+ * - Client connects with the main-owned session cookie scoped to the
+ *   websocket path.
+ * - Server validates the upgrade and immediately sends AuthenticatedFrame
+ *   (viewerId, epoch).
  * - Client then sends SubscribeFrame / UnsubscribeFrame / ResumeFrame.
  * - Server pushes EventFrame for each scoped event; PingFrame every 30s.
  * - Client replies PongFrame within 5s or server closes the connection.
@@ -17,10 +19,12 @@
 
 // ── Client → Server ──────────────────────────────────────────────────────────
 
-/** First frame after connect. Must arrive within 5 s or server closes. */
+/** Legacy frame retained so old clients are rejected explicitly. C.4
+ *  authenticates the websocket upgrade from the main-owned session
+ *  cookie; new clients must not send a bearer in-band. */
 export interface AuthFrame {
   type: 'auth';
-  /** Session token or 'local' for v1 single-user compat. */
+  /** Deprecated; ignored/rejected by the server. */
   token: string;
 }
 

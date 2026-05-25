@@ -575,10 +575,12 @@ These commands talk to the same DB the running server uses; SQLite's WAL allows 
 
 Embedded mode is the desktop app spawning the server in-process for fully-local users. Same image / Node module is imported and a server is started inside the Electron main process. Listen is loopback (`127.0.0.1:0`, OS-picked port). Auth bootstrap differs only in that the desktop has direct file access to bootstrap a session:
 
-- Server first start: writes a one-shot `bootstrap_session_token` to `~/.silverhand/embedded-bootstrap` (mode 0600, owner-only).
+- Server boot: writes a one-shot `bootstrap_session_token` to `~/.silverhand/embedded-bootstrap` (mode 0600, owner-only) before HTTP listen, and keeps only its hash in process memory.
 - Desktop reads file → POSTs `/auth/embedded-bootstrap { token }` over loopback.
 - Endpoint constraints (all four MUST hold): listen address is loopback ∈ `{127.0.0.1, ::1, unix-socket}`; route enabled only when `mode=embedded`; token is one-shot (consumed on first call); token is boot-session-scoped (server restart invalidates).
-- On success: server returns a normal `user_token` (creates a user row if `users` is empty using a default email like `<os.username>@local`).
+- On success: server returns a normal `user_token` (creates a profile-only local user if `users` is empty, reuses the sole existing user when exactly one exists, and fails loud with `bootstrap_ambiguous_user` when 2+ users exist). The bootstrap user has no `user_password_credentials` row; password login for that profile follows the ordinary missing-credential failure path.
+- `SILVERHAND_DISABLE_SIGNUP=1` closes `/auth/signup` only. It does not disable embedded bootstrap, otherwise a local embedded first launch could self-lock.
+- Event WS uses the same session subject via an Electron-main-owned `HttpOnly`, `SameSite=Strict`, `/api/ws/events` cookie. Ordinary REST routes still accept only `Authorization: Bearer <user_token>` from Electron main and do not read that cookie.
 
 This makes embedded a deployment variant of remote, not a separate auth path. No HTTP-skipping privileged API exists.
 

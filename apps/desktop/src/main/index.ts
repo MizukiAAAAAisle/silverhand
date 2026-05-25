@@ -1,10 +1,12 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, safeStorage, shell, type MenuItemConstructorOptions } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, safeStorage, session as electronSession, shell, type MenuItemConstructorOptions } from 'electron';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
   AuthSessionResponseSchema,
+  EMBEDDED_BOOTSTRAP_FILENAME,
+  EVENT_WS_SESSION_COOKIE,
   HostClaimOrCreateResponseSchema,
   HostRevokeResponseSchema,
   HostRotateTokenResponseSchema,
@@ -310,6 +312,10 @@ function desktopSessionPath(): string {
   return join(silverhandDir(), 'desktop', 'session.bin');
 }
 
+function embeddedBootstrapPath(): string {
+  return join(silverhandDir(), EMBEDDED_BOOTSTRAP_FILENAME);
+}
+
 function requireBackend(): RunningBackend {
   if (!backend) throw new Error('backend not ready');
   return backend;
@@ -317,6 +323,64 @@ function requireBackend(): RunningBackend {
 
 function backendUrl(path: string): string {
   return new URL(path, requireBackend().url).toString();
+}
+
+function eventWsCookieUrl(): string {
+  return new URL(apiPaths.eventWebSocket, requireBackend().url).toString();
+}
+
+function backendOrigin(): string {
+  return new URL(requireBackend().url).origin;
+}
+
+async function syncEventWsSessionCookie(token: string | null): Promise<void> {
+  if (!backend) return;
+  const url = eventWsCookieUrl();
+  await electronSession.defaultSession.cookies
+    .remove(url, EVENT_WS_SESSION_COOKIE)
+    .catch(err => {
+      logger?.warn({ err }, 'failed to clear event websocket session cookie');
+    });
+  if (!token) return;
+  await electronSession.defaultSession.cookies
+    .set({
+      url,
+      name: EVENT_WS_SESSION_COOKIE,
+      value: token,
+      httpOnly: true,
+      sameSite: 'strict',
+      secure: new URL(requireBackend().url).protocol === 'https:',
+      path: apiPaths.eventWebSocket,
+    })
+    .catch(err => {
+      logger?.warn({ err }, 'failed to set event websocket session cookie');
+    });
+}
+
+function installEventWsOriginOverride(): void {
+  const running = backend;
+  if (!running) return;
+  const expectedOrigin = backendOrigin();
+  const expectedUrl = new URL(apiPaths.eventWebSocket, running.url);
+  expectedUrl.protocol = expectedUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+  electronSession.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: [`${expectedUrl.protocol}//${expectedUrl.host}${apiPaths.eventWebSocket}`] },
+    (details, callback) => {
+      const url = new URL(details.url);
+      if (url.origin === expectedUrl.origin && url.pathname === apiPaths.eventWebSocket) {
+        delete details.requestHeaders.origin;
+        delete details.requestHeaders.cookie;
+        details.requestHeaders.Origin = expectedOrigin;
+        if (userSessionToken) {
+          details.requestHeaders.Cookie =
+            `${EVENT_WS_SESSION_COOKIE}=${encodeURIComponent(userSessionToken)}`;
+        } else {
+          delete details.requestHeaders.Cookie;
+        }
+      }
+      callback({ requestHeaders: details.requestHeaders });
+    },
+  );
 }
 
 function clearPersistedUserSession(): void {
@@ -361,22 +425,30 @@ function persistUserSessionToken(token: string): void {
   }
 }
 
-function storeUserSession(token: string, user: UserDto): void {
+async function storeUserSession(token: string, user: UserDto): Promise<void> {
   userSessionToken = token;
   userSessionUser = user;
   persistUserSessionToken(token);
+  await syncEventWsSessionCookie(token);
 }
 
-function clearUserSession(): void {
+async function clearUserSession(): Promise<void> {
   userSessionToken = null;
   userSessionUser = null;
   localHostClaim = { status: 'unclaimed', hostId: null };
   clearPersistedUserSession();
+  await syncEventWsSessionCookie(null);
   try {
     removeDaemonHostConfig(silverhandDir());
   } catch (err) {
     logger?.warn({ err }, 'failed to remove daemon host config');
   }
+}
+
+async function clearUserSessionAfterUnauthorized(source: string): Promise<void> {
+  if (!userSessionToken && !userSessionUser) return;
+  logger?.warn({ source }, 'desktop auth session rejected; clearing local session');
+  await clearUserSession();
 }
 
 function parseJson(text: string): unknown {
@@ -410,20 +482,20 @@ async function validateUserSessionToken(token: string): Promise<UserDto | null> 
   return parsed.success ? parsed.data : null;
 }
 
-async function hydrateDesktopSession(): Promise<void> {
+async function hydrateDesktopSession(): Promise<boolean> {
   const token = loadPersistedUserSessionToken();
-  if (!token) return;
+  if (!token) return false;
   const user = await validateUserSessionToken(token).catch(err => {
     logger?.warn({ err }, 'failed to validate persisted desktop auth session');
     return null;
   });
   if (!user) {
-    clearUserSession();
-    return;
+    await clearUserSession();
+    return false;
   }
-  userSessionToken = token;
-  userSessionUser = user;
+  await storeUserSession(token, user);
   await claimLocalHostForUserSession();
+  return true;
 }
 
 async function desktopAuthState(): Promise<DesktopAuthState> {
@@ -465,9 +537,41 @@ async function postAuthSession(
       bodyText: JSON.stringify({ error: 'invalid auth response' }),
     };
   }
-  storeUserSession(parsed.data.user_token, parsed.data.user);
+  await storeUserSession(parsed.data.user_token, parsed.data.user);
   await claimLocalHostForUserSession();
   return { ok: true, user: parsed.data.user };
+}
+
+async function bootstrapEmbeddedUserSession(): Promise<boolean> {
+  if (requireBackend().context.serverConfig.mode !== 'embedded') return false;
+  const path = embeddedBootstrapPath();
+  if (!existsSync(path)) return false;
+  const token = readFileSync(path, 'utf8').trim();
+  if (!token) return false;
+  const res = await fetch(backendUrl(authPaths.embeddedBootstrap), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    logger?.warn(
+      { status: res.status, statusText: res.statusText },
+      'embedded bootstrap session request failed',
+    );
+    return false;
+  }
+  const parsed = AuthSessionResponseSchema.safeParse(parseJson(text));
+  if (!parsed.success) {
+    logger?.warn(
+      { err: parsed.error.message },
+      'embedded bootstrap returned invalid auth response',
+    );
+    return false;
+  }
+  await storeUserSession(parsed.data.user_token, parsed.data.user);
+  await claimLocalHostForUserSession();
+  return true;
 }
 
 async function claimLocalHostForUserSession(): Promise<void> {
@@ -496,6 +600,10 @@ async function claimLocalHostForUserSession(): Promise<void> {
     });
     const text = await res.text();
 
+    if (res.status === 401) {
+      await clearUserSessionAfterUnauthorized('local host claim');
+      return;
+    }
     if (res.status === 409) {
       localHostClaim = {
         status: 'revoked',
@@ -539,7 +647,7 @@ async function claimLocalHostForUserSession(): Promise<void> {
 
 async function logoutUserSession(): Promise<{ ok: true }> {
   const token = userSessionToken;
-  clearUserSession();
+  await clearUserSession();
   if (token) {
     await fetch(backendUrl(authPaths.logout), {
       method: 'POST',
@@ -631,6 +739,10 @@ async function rotateHostToken(
   }
   const text = await res.text();
   const body = parseJson(text);
+  if (res.status === 401) {
+    await clearUserSessionAfterUnauthorized('host rotate');
+    return { ok: false, code: 'unauthorized' };
+  }
   if (res.status === 404) {
     return { ok: false, code: 'host_not_found' };
   }
@@ -697,6 +809,10 @@ async function revokeHost(
   }
   const text = await res.text();
   const body = parseJson(text);
+  if (res.status === 401) {
+    await clearUserSessionAfterUnauthorized('host revoke');
+    return { ok: false, code: 'unauthorized' };
+  }
   if (res.status === 404) {
     return { ok: false, code: 'host_not_found' };
   }
@@ -794,6 +910,9 @@ async function proxyBackendRequest(
     headers,
     body: input.bodyText,
   });
+  if (res.status === 401) {
+    await clearUserSessionAfterUnauthorized('backend request');
+  }
   return marshalBackendResponse(res, input.responseType ?? 'text');
 }
 
@@ -825,6 +944,9 @@ async function proxyBackendUpload(
     headers: { Authorization: `Bearer ${userSessionToken}` },
     body: form,
   });
+  if (res.status === 401) {
+    await clearUserSessionAfterUnauthorized('backend upload');
+  }
   return marshalBackendResponse(res, 'text');
 }
 
@@ -914,7 +1036,11 @@ async function bootstrap(): Promise<void> {
       hostClient,
     });
     await writeServerConfig(backend.context.serverConfig);
-    await hydrateDesktopSession();
+    installEventWsOriginOverride();
+    const hydrated = await hydrateDesktopSession();
+    if (!hydrated) {
+      await bootstrapEmbeddedUserSession();
+    }
   } catch (err) {
     console.error('[main] bootstrap failed:', err);
     logger?.error({ err }, 'bootstrap failed');
@@ -1130,10 +1256,6 @@ ipcMain.handle('backend:info', () => {
   return {
     url: backend.url,
     mode: backend.context.serverConfig.mode,
-    // Legacy event-WS bearer only. HTTP requests use the main-held
-    // user session token via `backend:request`; do not expose
-    // `user_token` to the renderer.
-    event_auth_token: backend.context.serverConfig.auth_token,
     ...snapshotLocalHostInfo(),
   };
 });

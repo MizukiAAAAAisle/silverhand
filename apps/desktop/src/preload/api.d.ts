@@ -8,9 +8,6 @@ import type {
 export interface BackendInfo {
   url: string;
   mode: 'embedded' | 'remote';
-  /** Legacy event-websocket bearer. HTTP auth is held in main and is
-   *  never exposed to the renderer. */
-  event_auth_token: string;
   local_host_id: string | null;
   local_host_status: 'unclaimed' | 'claimed' | 'revoked' | 'error';
 }

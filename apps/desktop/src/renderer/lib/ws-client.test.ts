@@ -7,7 +7,6 @@ vi.mock('./api', () => ({
   getBackendInfo: vi.fn().mockResolvedValue({
     url: 'http://127.0.0.1:1234',
     mode: 'embedded',
-    event_auth_token: 'test-token',
     local_host_id: 'host-local',
     local_host_status: 'claimed',
   }),
@@ -161,8 +160,9 @@ describe('EventWsClient — viewer scope canonicalisation', () => {
     const ws = createdSockets[0]!;
 
     ws.fireOpen();
-    // `auth` frame goes out first.
-    expect(ws.sent[0]).toEqual({ type: 'auth', token: 'test-token' });
+    // Auth is owned by Electron main's HttpOnly websocket cookie; the
+    // renderer must not send any bearer-bearing frame.
+    expect(ws.sent).toEqual([]);
 
     ws.fireMessage({
       type: 'authenticated',

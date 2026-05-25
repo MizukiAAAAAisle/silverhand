@@ -28,6 +28,7 @@ import {
   DEFAULT_AUTH_SESSION_TTL_MS,
   type AuthRuntimeConfig,
 } from '../../src/auth/config.js';
+import { createDisabledEmbeddedBootstrapState } from '../../src/auth/embedded-bootstrap.js';
 import {
   Argon2idPasswordHasher,
   PasswordCredentialService,
@@ -269,6 +270,7 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     db,
     serverConfig,
     authConfig,
+    embeddedBootstrap: createDisabledEmbeddedBootstrapState(tmp.silverhandDir),
     logger: silentLogger,
     loggers: { system: silentLogger, agent: silentLogger, cli: silentLogger },
     logControl: createLogLevelControl('warn'),

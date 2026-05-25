@@ -17,14 +17,12 @@ import { RuntimeKindSchema, type RuntimeKind } from '@silverhand/shared';
  *   - `proxy_runtimes` — comma-separated runtime kinds (e.g. `codex,cursor`)
  *     that the proxy applies to. Empty/unset = no runtime gets the proxy
  *     even if `proxy_url` is set (explicit opt-in).
- *   - `viewer_user_id` — id of the registered viewer (V1 single user).
- *     Legacy WS bridge only after Stage A.4: HTTP no longer resolves
- *     principals from this setting, but event WS still uses it to
- *     canonicalize `viewer:self` until Stage C moves WS to session
- *     auth. Legacy `/api/register` writes it atomically with user
- *     creation; `/auth/signup` and `/auth/login` also update it as a
- *     transient bridge for desktop session users. Stage C deletes the
- *     read and these auth-route writes together.
+ *   - `viewer_user_id` — legacy current-viewer bridge (V1 single user).
+ *     HTTP principals and event WS no longer resolve from this setting.
+ *     Legacy `/api/register` writes it atomically with user creation;
+ *     `/auth/signup`, `/auth/login`, and embedded bootstrap also update
+ *     it for the remaining non-WS legacy current-viewer readers. A later
+ *     C.x cleanup deletes those reads and these auth-route writes together.
  */
 export class SettingsRepo {
   constructor(private readonly db: Db) {}
@@ -80,9 +78,7 @@ export class SettingsRepo {
     return out;
   }
 
-  /** Legacy WS viewer pointer (see class docstring). Returns null when
-   *  the transient bridge has not been seeded; WS callers must reject
-   *  null rather than guessing a viewer. */
+  /** Legacy current-viewer pointer for non-WS readers (see class docstring). */
   getViewerUserId(): string | null {
     return this.get(SETTINGS_KEYS.VIEWER_USER_ID);
   }

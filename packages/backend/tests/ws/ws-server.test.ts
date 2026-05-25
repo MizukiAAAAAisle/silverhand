@@ -1,13 +1,20 @@
 import { createServer, type Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import type { RawData } from 'ws';
-import { authPaths, type ClientFrame, type ServerConfig, type ServerFrame } from '@silverhand/shared';
+import {
+  EVENT_WS_SESSION_COOKIE,
+  EMBEDDED_BOOTSTRAP_FILENAME,
+  authPaths,
+  type ClientFrame,
+  type ServerConfig,
+  type ServerFrame,
+} from '@silverhand/shared';
 import { startBackend, type RunningBackend } from '../../src/index.js';
 import { EVENT_WS_PATH, installEventWebSocketServer } from '../../src/ws/ws-server.js';
 import type { EventWsServerController, EventWsServerOptions } from '../../src/ws/ws-server.js';
@@ -41,11 +48,14 @@ describe('event WebSocket server', () => {
     t = null;
   });
 
-  it('authenticates with the configured token', async () => {
+  it('authenticates with a session cookie', async () => {
     t = buildTestApp();
     server = await openServer(t);
 
-    const { ws, authenticated } = await connectAuthenticated(server.url, t.authToken);
+    const { ws, authenticated } = await connectAuthenticated(
+      server.url,
+      t.ctx.authSessions.issueSession({ userId: 'local' }).userToken,
+    );
     sockets.push(ws);
 
     expect(authenticated).toMatchObject({
@@ -55,60 +65,51 @@ describe('event WebSocket server', () => {
     });
   });
 
-  it('uses auth signup as the transient legacy viewer source for WS', async () => {
+  it('uses the session subject instead of the legacy viewer setting for WS', async () => {
     t = buildTestApp();
     t.ctx.db.prepare(`DELETE FROM app_settings WHERE key = 'viewer_user_id'`).run();
 
-    const signupRes = await http(t).post(authPaths.signup, {
-      email: 'ws-user@example.com',
-      password: 'correct-password',
-      display_name: 'WS User',
-    });
-    expect(signupRes.status).toBe(200);
-    const signup = await signupRes.json() as { user: { id: string } };
-
     server = await openServer(t);
-    const { ws, authenticated } = await connectAuthenticated(server.url, t.authToken);
+    const { ws, authenticated } = await connectAuthenticated(
+      server.url,
+      t.ctx.authSessions.issueSession({ userId: 'local' }).userToken,
+    );
     sockets.push(ws);
 
     expect(authenticated).toMatchObject({
       type: 'authenticated',
-      viewerId: signup.user.id,
+      viewerId: 'local',
       epoch: t.ctx.events.epoch,
     });
   });
 
-  it('rejects non-auth frames before authentication', async () => {
+  it('rejects legacy server auth_token cookies before upgrade', async () => {
     t = buildTestApp();
     server = await openServer(t);
-    const ws = await connect(server.url);
-    sockets.push(ws);
 
-    const errorFrame = readFrame(ws);
-    sendFrame(ws, { type: 'subscribe', scope: 'app' });
-
-    const error = await errorFrame;
-    expect(error).toMatchObject({ type: 'error', code: 'auth_required' });
-    const closed = await waitForClose(ws);
-    expect(closed.code).toBe(1008);
+    await expect(connectAuthenticated(server.url, t.authToken)).rejects.toThrow();
   });
 
-  it('enforces the auth timeout', async () => {
+  it('rejects websocket upgrades without the backend origin', async () => {
     t = buildTestApp();
-    server = await openServer(t, { authTimeoutMs: 20 });
-    const ws = await connect(server.url);
-    sockets.push(ws);
+    server = await openServer(t);
 
-    const error = await readFrame(ws);
-    expect(error).toMatchObject({ type: 'error', code: 'auth_required' });
-    const closed = await waitForClose(ws);
-    expect(closed.code).toBe(1008);
+    await expect(
+      connectAuthenticated(
+        server.url,
+        t.ctx.authSessions.issueSession({ userId: 'local' }).userToken,
+        { origin: 'http://evil.example' },
+      ),
+    ).rejects.toThrow();
   });
 
   it('subscribes to app scope and receives scoped events', async () => {
     t = buildTestApp();
     server = await openServer(t);
-    const { ws } = await connectAuthenticated(server.url, t.authToken);
+    const { ws } = await connectAuthenticated(
+      server.url,
+      t.ctx.authSessions.issueSession({ userId: 'local' }).userToken,
+    );
     sockets.push(ws);
 
     const subscribedFrame = readFrame(ws);
@@ -137,7 +138,10 @@ describe('event WebSocket server', () => {
   it('rewrites viewer:self and forbids subscribing to another viewer', async () => {
     t = buildTestApp();
     server = await openServer(t);
-    const { ws } = await connectAuthenticated(server.url, t.authToken);
+    const { ws } = await connectAuthenticated(
+      server.url,
+      t.ctx.authSessions.issueSession({ userId: 'local' }).userToken,
+    );
     sockets.push(ws);
 
     const viewerSelfFrame = readFrame(ws);
@@ -159,7 +163,10 @@ describe('event WebSocket server', () => {
     t = buildTestApp();
     const conversationId = await createWorkspaceAndConversation(t);
     server = await openServer(t);
-    const { ws } = await connectAuthenticated(server.url, t.authToken);
+    const { ws } = await connectAuthenticated(
+      server.url,
+      t.ctx.authSessions.issueSession({ userId: 'local' }).userToken,
+    );
     sockets.push(ws);
 
     const subscribedFrame = readFrame(ws);
@@ -186,7 +193,10 @@ describe('event WebSocket server', () => {
     t = buildTestApp();
     const conversationId = await createWorkspaceAndConversation(t);
     server = await openServer(t);
-    const { ws } = await connectAuthenticated(server.url, t.authToken);
+    const { ws } = await connectAuthenticated(
+      server.url,
+      t.ctx.authSessions.issueSession({ userId: 'local' }).userToken,
+    );
     sockets.push(ws);
 
     const subscribedFrame = readFrame(ws);
@@ -221,7 +231,10 @@ describe('event WebSocket server', () => {
     t.ctx.events.publishToScope('app', 'a', { n: 1 });
     t.ctx.events.publishToScope('app', 'b', { n: 2 });
     server = await openServer(t);
-    const { ws } = await connectAuthenticated(server.url, t.authToken);
+    const { ws } = await connectAuthenticated(
+      server.url,
+      t.ctx.authSessions.issueSession({ userId: 'local' }).userToken,
+    );
     sockets.push(ws);
 
     const replayedFrames = readFrames(ws, 2);
@@ -239,7 +252,10 @@ describe('event WebSocket server', () => {
     t = buildTestApp();
     t.ctx.events.publishToScope('app', 'a', null);
     server = await openServer(t);
-    const { ws } = await connectAuthenticated(server.url, t.authToken);
+    const { ws } = await connectAuthenticated(
+      server.url,
+      t.ctx.authSessions.issueSession({ userId: 'local' }).userToken,
+    );
     sockets.push(ws);
 
     const snapshotFrame = readFrame(ws);
@@ -261,7 +277,10 @@ describe('event WebSocket server', () => {
       t.ctx.events.publishToScope('app', 'ev', { i });
     }
     server = await openServer(t);
-    const { ws } = await connectAuthenticated(server.url, t.authToken);
+    const { ws } = await connectAuthenticated(
+      server.url,
+      t.ctx.authSessions.issueSession({ userId: 'local' }).userToken,
+    );
     sockets.push(ws);
 
     const snapshotFrame = readFrame(ws);
@@ -280,7 +299,10 @@ describe('event WebSocket server', () => {
   it('closes active WebSocket clients during server shutdown', async () => {
     t = buildTestApp();
     server = await openServer(t);
-    const { ws } = await connectAuthenticated(server.url, t.authToken);
+    const { ws } = await connectAuthenticated(
+      server.url,
+      t.ctx.authSessions.issueSession({ userId: 'local' }).userToken,
+    );
     sockets.push(ws);
     expect(server.controller.activeConnectionCount()).toBe(1);
 
@@ -333,22 +355,23 @@ describe('event WebSocket server', () => {
       hostClient: stubHostClient,
     });
 
-    // Pre-ship rewrite: a fresh DB has no registered viewer, so the
-    // public WS auth handshake refuses with `auth_failed`. Register
-    // first to seed `app_settings.viewer_user_id`.
-    const regRes = await fetch(`${runningBackend.url}/api/register`, {
+    const bootstrapToken = readFileSync(
+      join(tmp, EMBEDDED_BOOTSTRAP_FILENAME),
+      'utf8',
+    ).trim();
+    const bootstrapRes = await fetch(`${runningBackend.url}${authPaths.embeddedBootstrap}`, {
       method: 'POST',
       headers: {
-        authorization: `Bearer ${config.auth_token}`,
         'content-type': 'application/json',
       },
-      body: JSON.stringify({ name: 'shiki' }),
+      body: JSON.stringify({ token: bootstrapToken }),
     });
-    expect(regRes.status).toBe(200);
+    expect(bootstrapRes.status).toBe(200);
+    const bootstrap = await bootstrapRes.json() as { user_token: string };
 
     const { ws } = await connectAuthenticated(
       runningBackend.url.replace(/^http:/, 'ws:') + EVENT_WS_PATH,
-      config.auth_token,
+      bootstrap.user_token,
     );
     sockets.push(ws);
     const closed = waitForClose(ws);
@@ -374,6 +397,7 @@ async function openServer(
   });
   await new Promise<void>(resolve => httpServer.listen(0, '127.0.0.1', resolve));
   const port = (httpServer.address() as AddressInfo).port;
+  t.ctx.serverConfig = { ...t.ctx.serverConfig, url: `http://127.0.0.1:${port}` };
   return {
     url: `ws://127.0.0.1:${port}${EVENT_WS_PATH}`,
     controller,
@@ -405,13 +429,50 @@ async function connect(url: string): Promise<WebSocket> {
 async function connectAuthenticated(
   url: string,
   token: string,
+  opts: { origin?: string } = {},
 ): Promise<{ ws: WebSocket; authenticated: ServerFrame }> {
-  const ws = await connect(url);
+  const origin = opts.origin ?? wsOrigin(url);
+  const ws = new WebSocket(url, {
+    headers: {
+      Origin: origin,
+      Cookie: `${EVENT_WS_SESSION_COOKIE}=${encodeURIComponent(token)}`,
+    },
+  });
   const authenticatedFrame = readFrame(ws);
-  sendFrame(ws, { type: 'auth', token });
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      ws.off('open', onOpen);
+      ws.off('error', onError);
+      ws.off('unexpected-response', onUnexpectedResponse);
+    };
+    const onOpen = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (err: Error) => {
+      cleanup();
+      reject(err);
+    };
+    const onUnexpectedResponse = (_req: unknown, res: { statusCode?: number }) => {
+      cleanup();
+      reject(new Error(`unexpected response ${res.statusCode ?? 'unknown'}`));
+    };
+    ws.once('open', onOpen);
+    ws.once('error', onError);
+    ws.once('unexpected-response', onUnexpectedResponse);
+  });
   const authenticated = await authenticatedFrame;
   expect(authenticated.type).toBe('authenticated');
   return { ws, authenticated };
+}
+
+function wsOrigin(url: string): string {
+  const parsed = new URL(url);
+  parsed.protocol = parsed.protocol === 'wss:' ? 'https:' : 'http:';
+  parsed.pathname = '/';
+  parsed.search = '';
+  parsed.hash = '';
+  return parsed.origin;
 }
 
 function sendFrame(ws: WebSocket, frame: ClientFrame): void {

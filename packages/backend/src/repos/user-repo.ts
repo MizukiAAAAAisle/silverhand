@@ -22,7 +22,7 @@ import type { UserRow } from '@silverhand/shared';
  * is no "pending user" state — pre-registration there is simply no row.
  * `create()` is the sole table INSERT helper, called by the legacy
  * profile registration service and by password signup. Callers own the
- * surrounding transaction and any credential / legacy WS bridge writes.
+ * surrounding transaction and any credential / legacy current-viewer bridge writes.
  */
 export class UserRepo {
   constructor(private readonly db: Db) {}

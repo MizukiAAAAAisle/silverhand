@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { apiPaths } from '@silverhand/shared';
+import { EVENT_WS_SESSION_COOKIE, apiPaths } from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 describe('Public bearer enforcement on /api/*', () => {
@@ -17,6 +17,19 @@ describe('Public bearer enforcement on /api/*', () => {
     expect(res.status).toBe(401);
     const body = await res.json() as any;
     expect(body.error).toBe('unauthorized');
+  });
+
+  it('does not treat the event websocket cookie as REST API auth', async () => {
+    t = buildTestApp();
+    const token = t.ctx.authSessions.issueSession({ userId: 'local' }).userToken;
+    const res = await t.app.fetch(
+      new Request('http://localhost/api/workspaces', {
+        method: 'GET',
+        headers: { cookie: `${EVENT_WS_SESSION_COOKIE}=${token}` },
+      }),
+    );
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ error: 'unauthorized' });
   });
 
   it('rejects /api/* requests with a wrong bearer token (401)', async () => {

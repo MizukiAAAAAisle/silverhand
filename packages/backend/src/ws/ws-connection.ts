@@ -7,7 +7,6 @@ import type {
   ServerFrame,
 } from '@silverhand/shared';
 import type { BackendContext } from '../context.js';
-import { SettingsRepo } from '../repos/settings-repo.js';
 import {
   canSubscribeScope,
   parseWsScope,
@@ -16,52 +15,45 @@ import {
 import type { ScopedEvent } from './scope-event-bus.js';
 
 export interface EventWsConnectionOptions {
-  authTimeoutMs?: number;
-  authFrameMaxBytes?: number;
+  viewerUserId: string;
   pingIntervalMs?: number;
   pongTimeoutMs?: number;
 }
 
-const DEFAULT_AUTH_TIMEOUT_MS = 5_000;
-const DEFAULT_AUTH_FRAME_MAX_BYTES = 4 * 1024;
 const DEFAULT_PING_INTERVAL_MS = 30_000;
 const DEFAULT_PONG_TIMEOUT_MS = 5_000;
 
 export class EventWsConnection {
-  private readonly authTimeoutMs: number;
-  private readonly authFrameMaxBytes: number;
   private readonly pingIntervalMs: number;
   private readonly pongTimeoutMs: number;
   private readonly subscriptions = new Map<string, () => void>();
-  private authenticated = false;
-  private viewerUserId: string | null = null;
-  private authTimer: NodeJS.Timeout | null = null;
+  private viewerUserId: string;
   private pingTimer: NodeJS.Timeout | null = null;
   private pongTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly ws: WebSocket,
     private readonly ctx: BackendContext,
-    opts: EventWsConnectionOptions = {},
+    opts: EventWsConnectionOptions,
   ) {
-    this.authTimeoutMs = opts.authTimeoutMs ?? DEFAULT_AUTH_TIMEOUT_MS;
-    this.authFrameMaxBytes = opts.authFrameMaxBytes ?? DEFAULT_AUTH_FRAME_MAX_BYTES;
     this.pingIntervalMs = opts.pingIntervalMs ?? DEFAULT_PING_INTERVAL_MS;
     this.pongTimeoutMs = opts.pongTimeoutMs ?? DEFAULT_PONG_TIMEOUT_MS;
+    this.viewerUserId = opts.viewerUserId;
   }
 
   start(): void {
-    this.authTimer = setTimeout(() => {
-      this.closeWithError('auth_required', 'auth frame required', 1008);
-    }, this.authTimeoutMs);
-    this.authTimer.unref?.();
-
     this.ws.on('message', data => this.handleMessage(data));
     this.ws.on('close', () => this.cleanup());
     this.ws.on('error', err => {
       this.ctx.logger.warn({ err }, 'ws: connection error');
       this.cleanup();
     });
+    this.send({
+      type: 'authenticated',
+      viewerId: this.viewerUserId,
+      epoch: this.ctx.events.epoch,
+    });
+    this.startHeartbeat();
   }
 
   closeForShutdown(): void {
@@ -82,53 +74,13 @@ export class EventWsConnection {
   }
 
   private handleMessage(data: RawData): void {
-    if (!this.authenticated && rawDataBytes(data) > this.authFrameMaxBytes) {
-      this.closeWithError('invalid_frame', 'auth frame too large', 1009);
-      return;
-    }
-
     const frame = parseJsonFrame(data);
     if (!frame) {
       this.closeWithError('invalid_frame', 'frame must be a JSON object', 1002);
       return;
     }
 
-    if (!this.authenticated) {
-      this.handleAuthFrame(frame);
-      return;
-    }
-
     this.handleAuthenticatedFrame(frame);
-  }
-
-  private handleAuthFrame(frame: ClientFrame): void {
-    if (frame.type !== 'auth') {
-      this.closeWithError('auth_required', 'first frame must be auth', 1008);
-      return;
-    }
-    if (typeof frame.token !== 'string' || frame.token !== this.ctx.serverConfig.auth_token) {
-      this.closeWithError('auth_failed', 'invalid auth token', 1008);
-      return;
-    }
-
-    this.authenticated = true;
-    const viewerUserId = getLegacyViewerForWsScope(this.ctx);
-    if (!viewerUserId) {
-      this.closeWithError(
-        'auth_failed',
-        'no legacy WS viewer pointer — sign in first',
-        1011,
-      );
-      return;
-    }
-    this.viewerUserId = viewerUserId;
-    this.clearAuthTimer();
-    this.send({
-      type: 'authenticated',
-      viewerId: this.viewerUserId,
-      epoch: this.ctx.events.epoch,
-    });
-    this.startHeartbeat();
   }
 
   private handleAuthenticatedFrame(frame: ClientFrame): void {
@@ -238,7 +190,7 @@ export class EventWsConnection {
     const scope = this.resolveKnownScope(rawScope);
     if (!scope) return null;
     const viewerUserId = this.viewerUserId;
-    if (!viewerUserId || !canSubscribeScope(this.ctx, viewerUserId, scope)) {
+    if (!canSubscribeScope(this.ctx, viewerUserId, scope)) {
       this.sendError('forbidden', `not allowed to subscribe to ${scope.scope}`);
       return null;
     }
@@ -251,10 +203,6 @@ export class EventWsConnection {
       return null;
     }
     const viewerUserId = this.viewerUserId;
-    if (!viewerUserId) {
-      this.sendError('auth_required', 'connection is not authenticated');
-      return null;
-    }
     const parsed = parseWsScope(rawScope, viewerUserId);
     if (!parsed) {
       this.sendError('unknown_scope', `unknown scope: ${rawScope}`);
@@ -300,7 +248,6 @@ export class EventWsConnection {
   }
 
   private cleanup(): void {
-    this.clearAuthTimer();
     this.clearPongTimer();
     if (this.pingTimer) {
       clearInterval(this.pingTimer);
@@ -312,25 +259,11 @@ export class EventWsConnection {
     this.subscriptions.clear();
   }
 
-  private clearAuthTimer(): void {
-    if (!this.authTimer) return;
-    clearTimeout(this.authTimer);
-    this.authTimer = null;
-  }
-
   private clearPongTimer(): void {
     if (!this.pongTimer) return;
     clearTimeout(this.pongTimer);
     this.pongTimer = null;
   }
-}
-
-function getLegacyViewerForWsScope(ctx: BackendContext): string | null {
-  // Stage A.3 bridge: the legacy WS auth frame still carries only the
-  // embedded server token, so it has no session subject to derive
-  // `viewer:<id>` subscriptions from. Keep the settings read isolated
-  // here until Stage C / session-auth WS replaces the handshake.
-  return new SettingsRepo(ctx.db).getViewerUserId();
 }
 
 function scopedEventToFrame(event: ScopedEvent): EventFrame {
@@ -359,13 +292,6 @@ function rawDataToString(data: RawData): string {
   if (Array.isArray(data)) return Buffer.concat(data).toString('utf8');
   if (data instanceof ArrayBuffer) return Buffer.from(data).toString('utf8');
   return data.toString('utf8');
-}
-
-function rawDataBytes(data: RawData): number {
-  if (typeof data === 'string') return Buffer.byteLength(data);
-  if (Array.isArray(data)) return data.reduce((sum, chunk) => sum + chunk.length, 0);
-  if (data instanceof ArrayBuffer) return data.byteLength;
-  return data.length;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

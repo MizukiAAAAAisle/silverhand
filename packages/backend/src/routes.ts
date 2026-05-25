@@ -1,4 +1,5 @@
 import { Hono, type Context } from 'hono';
+import { getConnInfo } from '@hono/node-server/conninfo';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -124,6 +125,10 @@ import {
   installRequireRegisteredViewerMiddleware,
 } from './auth/principal.js';
 import { installPublicBearerMiddleware } from './auth/bearer.js';
+import {
+  consumeEmbeddedBootstrapToken,
+  isLoopbackAddress,
+} from './auth/embedded-bootstrap.js';
 import { UserAuthService } from './auth/user-auth-service.js';
 import {
   canAgentAccessWorkspace,
@@ -335,6 +340,22 @@ function authSessionMetadata(c: Context): {
   };
 }
 
+function notFound(c: Context): Response {
+  return c.text('404 Not Found', 404);
+}
+
+function isLoopbackRequest(c: Context): boolean {
+  try {
+    return isLoopbackAddress(getConnInfo(c).remote.address);
+  } catch {
+    try {
+      return isLoopbackAddress(new URL(c.req.url).hostname);
+    } catch {
+      return false;
+    }
+  }
+}
+
 function firstForwardedFor(value: string | undefined): string | null {
   const first = value?.split(',')[0]?.trim();
   return first || null;
@@ -376,12 +397,12 @@ function publicSettingsSnapshot(settings: SettingsRepo): Record<string, string> 
   return out;
 }
 
-function bridgeLegacyWsViewer(settings: SettingsRepo, userId: string): void {
-  // Stage A.4 -> Stage C transient bridge: event WS still authenticates
-  // with the legacy server token and resolves `viewer:self` through
-  // app_settings.viewer_user_id. Keep that pointer aligned with the
-  // authenticated desktop user until Stage C moves WS to session auth
-  // and deletes both this write and getLegacyViewerForWsScope().
+function bridgeLegacyViewerForNonWsReaders(settings: SettingsRepo, userId: string): void {
+  // Stage C.4 moved event WS to session-subject auth, so this setting
+  // is no longer a WS bridge. Keep the write only for the remaining
+  // non-WS legacy readers that still publish current-viewer notices
+  // through app_settings.viewer_user_id; a later C.x cleanup removes
+  // those readers and this write together.
   settings.set(SETTINGS_KEYS.VIEWER_USER_ID, userId);
 }
 
@@ -640,6 +661,53 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     c.json({ signup_enabled: ctx.authConfig.signupEnabled }),
   );
 
+  app.post(authPaths.embeddedBootstrap, async c => {
+    if (ctx.serverConfig.mode !== 'embedded') return notFound(c);
+    if (!isLoopbackRequest(c)) return notFound(c);
+    const body = await c.req.json().catch(() => null);
+    const token =
+      body && typeof body === 'object' && typeof (body as { token?: unknown }).token === 'string'
+        ? (body as { token: string }).token.trim()
+        : '';
+    if (!token) return notFound(c);
+
+    const ok = await consumeEmbeddedBootstrapToken(
+      ctx.embeddedBootstrap,
+      token,
+      ctx.logger,
+    );
+    if (!ok) return notFound(c);
+
+    const allUsers = users.list();
+    let userId: string;
+    if (allUsers.length === 0) {
+      const user = ctx.userService.register({
+        name: 'local',
+        display_name: 'Local User',
+      });
+      userId = user.id;
+    } else if (allUsers.length === 1) {
+      userId = allUsers[0]!.id;
+    } else {
+      return c.json(
+        {
+          error: 'embedded bootstrap cannot choose among multiple users',
+          code: 'bootstrap_ambiguous_user',
+        },
+        409,
+      );
+    }
+
+    bridgeLegacyViewerForNonWsReaders(settings, userId);
+    const user = ctx.userService.getDto(userId);
+    if (!user) return c.json({ error: 'bootstrap user is missing' }, 500);
+    const issued = ctx.authSessions.issueSession({
+      userId,
+      ...authSessionMetadata(c),
+    });
+    return c.json({ user_token: issued.userToken, user });
+  });
+
   if (ctx.authConfig.signupEnabled) {
     app.post(authPaths.signup, async c => {
       const body = await c.req.json().catch(() => null);
@@ -653,7 +721,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       if (!user) {
         return c.json({ error: 'created user is missing post-signup' }, 500);
       }
-      bridgeLegacyWsViewer(settings, signup.userId);
+      bridgeLegacyViewerForNonWsReaders(settings, signup.userId);
       const issued = ctx.authSessions.issueSession({
         userId: signup.userId,
         ...authSessionMetadata(c),
@@ -674,7 +742,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!user) {
       return c.json({ error: 'authenticated user is missing' }, 500);
     }
-    bridgeLegacyWsViewer(settings, verified.userId);
+    bridgeLegacyViewerForNonWsReaders(settings, verified.userId);
     const issued = ctx.authSessions.issueSession({
       userId: verified.userId,
       ...authSessionMetadata(c),
@@ -692,6 +760,10 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
 
   app.get(apiPaths.health, c =>
     c.json({ ok: true, mode: ctx.serverConfig.mode, ts: Date.now() }),
+  );
+
+  app.get(apiPaths.eventWebSocket, c =>
+    c.json({ error: 'event websocket requires a websocket upgrade' }, 401),
   );
 
   app.get(apiPaths.runtimes, async c => {

@@ -2,6 +2,7 @@ export const apiPaths = {
   health: '/api/health',
   serverInfo: '/api/server/info',
   runtimes: '/api/runtimes',
+  eventWebSocket: '/api/ws/events',
 
   // hosts
   hosts: '/api/hosts',
@@ -185,6 +186,7 @@ export const apiPaths = {
 } as const;
 
 export const authPaths = {
+  embeddedBootstrap: '/auth/embedded-bootstrap',
   signup: '/auth/signup',
   login: '/auth/login',
   logout: '/auth/logout',

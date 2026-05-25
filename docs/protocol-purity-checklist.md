@@ -87,7 +87,7 @@ listed in the order they appear in main.
 
 | IPC channel | Preload method | Tag | Notes / V1 disposition |
 |---|---|---|---|
-| `backend:info` | `getBackendInfo` | **mixed** (see notes) | Returns `{url, mode, event_auth_token, local_host_id, local_host_status}`. Tag breakdown: **protocol metadata** for `url` + `mode` + `local_host_id` + `local_host_status` — neutral dual-mode connection info the renderer needs to address the backend and gate host-kind UX. **embedded-only** for `event_auth_token` — that field is the legacy event-WS bearer C.4 fences/removes from renderer consumption when WS moves to the same session bearer path. |
+| `backend:info` | `getBackendInfo` | **protocol metadata** | Returns `{url, mode, local_host_id, local_host_status}` only. Renderer needs this neutral connection/host metadata to address the backend and gate host-kind UX; no bearer or embedded-only auth token crosses IPC after C.4. |
 | `auth:getState` | `getAuthState` | **data** | Main-owned auth-session proxy. Renderer receives safe auth state (`authenticated` + user DTO or `unauthenticated`) but never receives the session bearer. Kept as a narrowly-shaped HTTP proxy because main owns `safeStorage` / token lifecycle. |
 | `auth:signup` | `signup` | **data** | Main POSTs `/auth/signup`, persists the returned session bearer, and returns only `{ok, user}` or sanitized failure metadata. No token crosses IPC. |
 | `auth:login` | `login` | **data** | Same as `auth:signup`, for `/auth/login`. |
@@ -137,7 +137,7 @@ place C.3 must gate on **owning host kind**, not on backend mode.
 | `lib/api.ts` `api` / `apiUpload` / `fetchBackendBlob` | Renderer data calls | Already C.2-shaped: these call `backend:request` / `backend:upload`; main injects the session bearer and the renderer never reads it. |
 | `features/me/hooks.ts` avatar fetch | Backend blob with auth | Already uses `fetchBackendBlob`, so it inherits the main-owned session proxy. |
 | `features/agents/avatar-hooks.ts` agent avatar fetch | Backend blob with auth | Already uses `fetchBackendBlob`, so it inherits the main-owned session proxy. |
-| `lib/ws-client.ts` `openSocket` | Reads `info.event_auth_token` for WS auth | Deferred to C.4 with the embedded-bootstrap/session-bearer work. It remains the only renderer `BackendInfo` token consumer in C.2/C.3. |
+| `lib/ws-client.ts` `openSocket` | Opens the event websocket URL from `BackendInfo.url` | C.4 moved WS auth to a main-owned `HttpOnly` session cookie scoped to `/api/ws/events`; renderer sends no bearer-bearing auth frame and only waits for the server `authenticated` frame. |
 
 The `viewer_user_id` header (`X_SILVERHAND_PRINCIPAL_HEADER`) flows
 through every fetch helper and is unaffected — it's set from `/api/me`
@@ -174,16 +174,16 @@ Existing embedded-only surface that C.4 must touch:
 | Site | Embedded-only assumption today | C.4 disposition |
 |---|---|---|
 | `main/config.ts:24-34` `loadOrCreateServerConfig` | Default `ServerConfig` has `mode='embedded'`, hardcoded loopback URL, freshly generated `auth_token` | Keep as embedded default. Add a sibling code path that produces `mode='remote'` when the user fills the server URL in Setup Wizard. The remote variant has `auth_token: null`. |
-| `main/index.ts` `backend:info` handler | Returns the legacy event-WS bearer as `event_auth_token` | C.4: event WS authenticates with the same session bearer path as HTTP, and renderer `BackendInfo` no longer carries any `*auth_token` field. |
+| `main/index.ts` `backend:info` handler | Previously returned the legacy event-WS bearer as `event_auth_token` | C.4 removed that field. Event WS authenticates from the same session subject as HTTP, but the session bearer stays main-owned and travels to WS only as a path-scoped `HttpOnly` cookie. |
 
 ### 6.1 Renderer `BackendInfo` token consumers
 
 C.4 is **not** just a route edit. Stage A/B already moved ordinary
 HTTP reads/uploads/blob fetches behind the main-owned
 `backend:request` / `backend:upload` proxies, so the renderer no
-longer reads a bearer for those paths. The remaining renderer token
-surface is the event websocket's `event_auth_token`; C.4 removes that
-by giving WS the same session bearer source per mode:
+longer reads a bearer for those paths. C.4 also removed the remaining
+renderer token surface (`event_auth_token`) by giving WS the same
+session subject per mode:
 
 - embedded → bootstrap session persisted via `safeStorage`
   (initialised by `/auth/embedded-bootstrap` on first launch)
@@ -191,15 +191,16 @@ by giving WS the same session bearer source per mode:
 
 | Site | Today | C.4 disposition |
 |---|---|---|
-| `apps/desktop/src/preload/index.ts` | `event_auth_token: string` (required) | Remove from renderer-facing `BackendInfo` once WS uses the session bearer. |
-| `apps/desktop/src/preload/api.d.ts` | mirrors preload | Same change. |
-| `apps/desktop/src/renderer/lib/ws-client.ts` `openSocket` | `token = info.event_auth_token` for WS auth frame | Switch to the same session bearer used by the main-owned HTTP proxy/bootstrap flow. |
-| (new) `/auth/embedded-bootstrap` route | does not exist | C.4 lands the route + the four-constraint test matrix (one test per constraint × {happy, violated}). |
-| (new) `~/.silverhand/embedded-bootstrap` token file | does not exist | C.4 lands write (mode 0600) at backend boot + consume-on-first-read semantics + regenerate on reboot. |
+| `apps/desktop/src/preload/index.ts` | `event_auth_token: string` used to be required | Removed from renderer-facing `BackendInfo`. |
+| `apps/desktop/src/preload/api.d.ts` | mirrored preload | Same change. |
+| `apps/desktop/src/renderer/lib/ws-client.ts` `openSocket` | used to send `token = info.event_auth_token` in an auth frame | Now opens the socket from `info.url` only. Electron main maintains an `HttpOnly`, `SameSite=Strict`, `/api/ws/events` cookie and normalizes the WS `Origin`; backend validates the cookie/session before upgrade. |
+| `/auth/embedded-bootstrap` route | did not exist | C.4 lands the route + constraint matrix. It is independent of `SILVERHAND_DISABLE_SIGNUP`; disabled signup does not disable embedded bootstrap. |
+| `~/.silverhand/embedded-bootstrap` token file | did not exist | C.4 writes the file (0600) before HTTP listen, stores only an in-memory hash, consumes/removes it on successful exchange, and regenerates per backend boot. |
 
-The tripwire test §7 carries a fourth assertion — **renderer source
-tree contains zero references to `auth_token` / `\.auth_token`** —
-that is checked in during C.1 as `it.todo()` (or `it.skip()` with a
+The tripwire test §7 now carries an active fourth assertion —
+**renderer-facing source contains zero references to `auth_token` /
+`\.auth_token`**. It was checked in during C.1 as `it.todo()` and
+activated by C.4 after the WS/session cleanup landed.
 TODO comment) and is flipped to `it()` by C.4. See §7 for the full
 lifecycle; C.1 ships green, C.4 ships green with the assertion
 active.
@@ -233,22 +234,15 @@ total — **three active in C.1, one parked as `it.todo` until C.4**:
 | # | Assertion | C.1 state | Activated by |
 |---|---|---|---|
 | 1 | Imports from `@silverhand/backend` in `apps/desktop/src/main/**/*.ts` equals exactly the set in §3. | `it()` — active, must pass against the current tree. | C.1 |
-| 2 | `ipcMain.handle` channels registered in `apps/desktop/src/main/**/*.ts` equals exactly the set in §4 (including the `mixed`-tagged `backend:info`). | `it()` — active, must pass. | C.1 |
+| 2 | `ipcMain.handle` channels registered in `apps/desktop/src/main/**/*.ts` equals exactly the set in §4. | `it()` — active, must pass. | C.1 |
 | 3 | Renderer source tree contains zero references to `from '@silverhand/backend'` or `from '@silverhand/backend/...'` (type-only re-exports through `@silverhand/shared` are fine and actively encouraged — shared is the protocol layer). | `it()` — active, must pass. | C.1 |
-| 4 | `apps/desktop/src/renderer/**/*.{ts,tsx}` contains zero references to `\.auth_token` or `auth_token:` reads. | `it.todo()` (or `it.skip()` with a TODO comment pointing at this doc §6.1) — checked in but **does not execute** in C.1. | C.4 — its acceptance includes flipping this from `it.todo()` to `it()` and having the suite stay green. |
+| 4 | `apps/desktop/src/preload/**/*.{ts,tsx}` + `apps/desktop/src/renderer/**/*.{ts,tsx}` contain zero references to `\.auth_token` or `auth_token:` reads. | `it()` — active, must pass. | C.4 |
 
-Why park assertion 4 instead of running it red: a permanently-red
-test trains the team to ignore it (and breaks CI gates we want green
-for the C.2 / C.3 work that lands in between). Parking it as
-`it.todo()` keeps the **intent** in the test file so a reviewer sees
-the C.4 plan without consulting this doc, while keeping the suite
-green so assertions 1-3 can guard their invariants without being
-drowned out by a known failure.
-
-Assertion 4 scans only renderer files. Main-side legacy token readers
-are tracked separately in §6: `backend:info` remains until C.4 moves
-event WS to the session bearer, while the dev-only headless smoke
-handshake remains explicitly documented in §6.2.
+Assertion 4 scans renderer-facing files. Main-side embedded token
+readers are tracked separately in §6: the dev-only headless smoke
+handshake remains explicitly documented in §6.2, and the
+`/auth/embedded-bootstrap` file reader lives in Electron main only long
+enough to exchange for a normal session bearer.
 
 When a PR needs to add a new IPC handler or a new backend import, the
 flow is: update this doc + add the disposition row, **then** the test
@@ -306,4 +300,8 @@ this).
 - 2026-05-26 (C.2/C.3 implementation) — catalogue synced to the post-Stage-A/B tree:
   - **C.2 data IPC**: auth/session, central backend proxy, upload proxy, and host rotate/revoke IPC rows added with token-boundary notes; protocol-purity test now asserts the exact `ipcMain.handle` set.
   - **C.3 host provenance**: local-path UX rows updated to use `local_host_id` + owner-filtered `/api/hosts`; renderer gate is explicitly path provenance, not backend mode.
-  - **C.4 carry-forward**: stale `BackendInfo.auth_token` consumer list replaced with the current remaining `event_auth_token` WS surface; assertion 4 stays parked until C.4.
+  - **C.4 carry-forward**: stale `BackendInfo.auth_token` consumer list replaced with the then-current `event_auth_token` WS surface; assertion 4 stayed parked until C.4.
+- 2026-05-26 (C.4 implementation) — embedded bootstrap + renderer token cleanup:
+  - `/auth/embedded-bootstrap` added as the only embedded-only route delta. Backend writes `~/.silverhand/embedded-bootstrap` before listen, stores only an in-memory hash, rejects non-loopback / remote mode / stale / consumed / wrong tokens as 404, and returns a normal session bearer. `SILVERHAND_DISABLE_SIGNUP=1` does not disable this local bootstrap path.
+  - Event WS moved from legacy `serverConfig.auth_token` + `app_settings.viewer_user_id` to the session subject. Electron main owns a path-scoped `HttpOnly` cookie for `/api/ws/events`; renderer sends no bearer-bearing auth frame and `BackendInfo` carries no token field.
+  - Assertion 4 is active and scans preload + renderer sources for `auth_token` references. The only remaining desktop main `auth_token` read is the documented headless smoke handshake.
