@@ -38,7 +38,6 @@ import {
   applyRotateSideEffects,
   applyRevokeSideEffects,
   assertApiProxyPath,
-  isMainManagedHostPath,
   writeDaemonHostConfig,
   type LocalHostClaimStatus,
 } from './local-host-claim.js';
