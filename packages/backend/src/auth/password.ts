@@ -9,6 +9,8 @@ type Argon2HashOptions = NonNullable<Parameters<typeof argon2Hash>[1]>;
 
 const ARGON2ID_ALGORITHM = 2;
 const ARGON2_VERSION_0X13 = 1;
+const ARGON2_FLOOR_MEMORY_KIB = 19 * 1024;
+const ARGON2_FLOOR_TIME_COST = 2;
 
 export interface Argon2idCostCandidate {
   memoryCostKiB: number;
@@ -28,6 +30,10 @@ export interface Argon2idPasswordHashParams extends Argon2idCostCandidate {
     selectedAt: number;
     cpuCount: number;
     totalMemoryMiB: number;
+    flooredFrom?: {
+      memoryCostKiB: number;
+      timeCost: number;
+    };
   };
 }
 
@@ -121,7 +127,20 @@ export class PasswordCredentialService {
     userId: string,
     password: string,
   ): Promise<UserPasswordCredentialRow> {
-    const { passwordHash, passwordHashParams } = await this.hasher.hashPassword(password);
+    return this.setPreparedUserPasswordCredential(
+      userId,
+      await this.hashPasswordCredential(password),
+    );
+  }
+
+  async hashPasswordCredential(password: string): Promise<PasswordHashResult> {
+    return this.hasher.hashPassword(password);
+  }
+
+  setPreparedUserPasswordCredential(
+    userId: string,
+    { passwordHash, passwordHashParams }: PasswordHashResult,
+  ): UserPasswordCredentialRow {
     const now = Date.now();
     this.db
       .prepare(
@@ -194,11 +213,25 @@ export async function benchmarkPasswordHashParams(
     if (measuredMs >= targetMs) break;
   }
 
+  const flooredFrom =
+    selected.memoryCostKiB < ARGON2_FLOOR_MEMORY_KIB
+    || selected.timeCost < ARGON2_FLOOR_TIME_COST
+      ? {
+          memoryCostKiB: selected.memoryCostKiB,
+          timeCost: selected.timeCost,
+        }
+      : undefined;
+  const floored = {
+    ...selected,
+    memoryCostKiB: Math.max(selected.memoryCostKiB, ARGON2_FLOOR_MEMORY_KIB),
+    timeCost: Math.max(selected.timeCost, ARGON2_FLOOR_TIME_COST),
+  };
+
   return {
     algorithm: 'argon2id',
     library: '@node-rs/argon2',
     version: '0x13',
-    ...selected,
+    ...floored,
     benchmark: {
       targetMs,
       measuredMs,
@@ -206,6 +239,7 @@ export async function benchmarkPasswordHashParams(
       selectedAt: Date.now(),
       cpuCount: cpuCount(),
       totalMemoryMiB: Math.round(totalmem() / 1024 / 1024),
+      ...(flooredFrom ? { flooredFrom } : {}),
     },
   };
 }

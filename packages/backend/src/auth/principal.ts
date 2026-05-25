@@ -1,5 +1,6 @@
 import type { Context, Hono } from 'hono';
 import {
+  apiPaths,
   decodeUserPrincipalHeader,
   X_SILVERHAND_LEGACY_USER_ID_HEADER,
   X_SILVERHAND_PRINCIPAL_HEADER,
@@ -64,10 +65,17 @@ export function installPublicPrincipalMiddleware(
       await next();
       return;
     }
-    // Liveness probe is anonymous by contract — supervisors don't hold
-    // credentials and have no identity. Skip principal resolution
-    // entirely; the downstream gate also skips this path.
-    if (c.req.path === '/api/health') {
+    // Anonymous/public paths skip principal resolution entirely; session
+    // bearer requests already have their principal set by bearer.ts.
+    if (
+      c.req.path === apiPaths.health
+      || c.req.path === apiPaths.serverInfo
+      || c.req.path.startsWith('/auth/')
+    ) {
+      await next();
+      return;
+    }
+    if (c.get(PRINCIPAL_CONTEXT_KEY)) {
       await next();
       return;
     }
@@ -91,11 +99,13 @@ export function installPublicPrincipalMiddleware(
  *
  *   - Internal routes (agent principal) skip — agents have no identity
  *     state and run with their own (cid, aid) auth.
- *   - `/api/health` skips — liveness is anonymous.
+ *   - `/api/health`, `/api/server/info`, and `/auth/*` skip — they
+ *     are anonymous/public or own their auth response semantics.
  *   - Whitelisted public routes pass through even pre-registration.
- *     The whitelist is intentionally tiny: `GET /api/me` (so the
- *     renderer can branch on the registration-required shape) and
- *     `POST /api/register` (the sole creator of `users` rows).
+ *     The whitelist is intentionally tiny: `GET /api/server/info`,
+ *     `GET /api/me` (so the renderer can branch on the
+ *     registration-required shape), and `POST /api/register` (the sole
+ *     creator of legacy single-viewer rows).
  *   - No principal set → 403 `registration_required`. This is the
  *     pre-registration state: there is no viewer yet.
  *   - Principal set but underlying `users` row missing → 500
@@ -119,8 +129,9 @@ export function installRequireRegisteredViewerMiddleware(
   // /api/register; any other verb on those paths should still 403.
   const narrowed = new Set<string>();
   for (const p of options.whitelistPaths) {
-    if (p === '/api/me') narrowed.add(`GET ${p}`);
-    else if (p === '/api/register') narrowed.add(`POST ${p}`);
+    if (p === apiPaths.me) narrowed.add(`GET ${p}`);
+    else if (p === apiPaths.register) narrowed.add(`POST ${p}`);
+    else if (p === apiPaths.serverInfo) narrowed.add(`GET ${p}`);
     else {
       // Unknown whitelist path — fail loud at install time so we don't
       // silently widen the gate. New whitelisted routes must be
@@ -138,7 +149,11 @@ export function installRequireRegisteredViewerMiddleware(
       await next();
       return;
     }
-    if (c.req.path === '/api/health') {
+    if (
+      c.req.path === apiPaths.health
+      || c.req.path === apiPaths.serverInfo
+      || c.req.path.startsWith('/auth/')
+    ) {
       await next();
       return;
     }

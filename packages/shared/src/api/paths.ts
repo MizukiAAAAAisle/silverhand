@@ -1,5 +1,6 @@
 export const apiPaths = {
   health: '/api/health',
+  serverInfo: '/api/server/info',
   runtimes: '/api/runtimes',
 
   // hosts
@@ -163,6 +164,12 @@ export const apiPaths = {
   taskClaim: (messageId: string) => `/api/tasks/${messageId}/claim`,
   taskUnclaim: (messageId: string) => `/api/tasks/${messageId}/unclaim`,
   taskStatus: (messageId: string) => `/api/tasks/${messageId}/status`,
+} as const;
+
+export const authPaths = {
+  signup: '/auth/signup',
+  login: '/auth/login',
+  logout: '/auth/logout',
 } as const;
 
 export const internalPaths = {

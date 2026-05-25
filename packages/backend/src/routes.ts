@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import {
   apiPaths,
+  authPaths,
   internalPaths,
   AddWorkspaceMemberInputSchema,
   AgentCloseThreadInputSchema,
@@ -28,6 +29,8 @@ import {
   ScheduleCancelInputSchema,
   ScheduleCreateInputSchema,
   CliTraceInputSchema,
+  AuthLoginInputSchema,
+  AuthSignupInputSchema,
   ScheduleListInputSchema,
   SearchQueryInputSchema,
   SendMessageInputSchema,
@@ -118,6 +121,7 @@ import {
   installRequireRegisteredViewerMiddleware,
 } from './auth/principal.js';
 import { installPublicBearerMiddleware } from './auth/bearer.js';
+import { UserAuthService } from './auth/user-auth-service.js';
 import {
   canAgentAccessWorkspace,
   canDeleteAttachment,
@@ -267,6 +271,34 @@ function threadServiceErrorResponse(c: Context, err: unknown): Response | null {
 
 function resolveViewerUserId(c: Context): string {
   return getUserPrincipal(c).userId;
+}
+
+function authFailed(c: Context): Response {
+  return c.json({ error_code: 'auth_failed' }, 401);
+}
+
+function bearerToken(c: Context): string | null {
+  const header = c.req.header('authorization') ?? '';
+  const token = header.replace(/^Bearer\s+/i, '').trim();
+  return token || null;
+}
+
+function authSessionMetadata(c: Context): {
+  userAgent: string | null;
+  ipFirstSeen: string | null;
+} {
+  return {
+    userAgent: c.req.header('user-agent') ?? null,
+    ipFirstSeen:
+      firstForwardedFor(c.req.header('x-forwarded-for'))
+      ?? c.req.header('x-real-ip')
+      ?? null,
+  };
+}
+
+function firstForwardedFor(value: string | undefined): string | null {
+  const first = value?.split(',')[0]?.trim();
+  return first || null;
 }
 
 const scheduleErrorStatusMap: Record<ScheduleErrorCode, 400 | 403 | 404 | 409 | 429> = {
@@ -492,22 +524,23 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   installPublicBearerMiddleware(app, ctx, {
     // Liveness probe stays open so a process supervisor can health-check
     // without holding the auth token.
-    allowlist: [apiPaths.health],
+    allowlist: [apiPaths.health, apiPaths.serverInfo],
   });
   installPublicPrincipalMiddleware(app, ctx);
   // Registration gate: when no viewer is registered yet (no
   // `app_settings.viewer_user_id`), the principal middleware sets no
-  // principal and this gate refuses every public route except
-  // `GET /api/me` (so the renderer can branch on the
-  // registration-required shape) and `POST /api/register` (the sole
-  // creator of `users` rows). `/api/health` and `/internal/*` are
-  // anonymous / agent-principal and skip both layers. After
+  // principal and this gate refuses every public route except public
+  // setup reads (`GET /api/server/info`), `GET /api/me` (so the
+  // renderer can branch on the registration-required shape), and
+  // `POST /api/register` (the legacy single-viewer creator).
+  // `/api/health`, `/auth/*`, and `/internal/*` are anonymous /
+  // route-owned / agent-principal and skip both layers. After
   // registration, the principal is set and the gate is a no-op for the
   // viewer; under DB corruption (principal set but row missing) it 500s.
   // Renderer-side `App.tsx` mirrors this by mounting `<RegistrationGate />`
   // instead of the AppShell while in the registration-required state.
   installRequireRegisteredViewerMiddleware(app, ctx, {
-    whitelistPaths: [apiPaths.me, apiPaths.register],
+    whitelistPaths: [apiPaths.serverInfo, apiPaths.me, apiPaths.register],
   });
   const hosts = new HostRepo(ctx.db);
   const agents = new AgentRepo(ctx.db);
@@ -523,10 +556,67 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   const conversationReads = new ConversationReadRepo(ctx.db);
   const users = new UserRepo(ctx.db);
   const membership = new MembershipService({ agents, users, conversations });
+  const userAuth = new UserAuthService({
+    db: ctx.db,
+    users,
+    passwordCredentials: ctx.passwordCredentials,
+  });
 
   const localHost = hosts.ensureLocal();
 
-  // ── Health / runtimes / hosts ────────────────────────────────────
+  // ── Auth / health / runtimes / hosts ─────────────────────────────
+  app.get(apiPaths.serverInfo, c =>
+    c.json({ signup_enabled: ctx.authConfig.signupEnabled }),
+  );
+
+  if (ctx.authConfig.signupEnabled) {
+    app.post(authPaths.signup, async c => {
+      const body = await c.req.json().catch(() => null);
+      const parsed = AuthSignupInputSchema.safeParse(body);
+      if (!parsed.success) {
+        return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+      }
+      const signup = await userAuth.signup(parsed.data);
+      if (!signup.ok) return authFailed(c);
+      const user = ctx.userService.getDto(signup.userId);
+      if (!user) {
+        return c.json({ error: 'created user is missing post-signup' }, 500);
+      }
+      const issued = ctx.authSessions.issueSession({
+        userId: signup.userId,
+        ...authSessionMetadata(c),
+      });
+      return c.json({ user_token: issued.userToken, user });
+    });
+  }
+
+  app.post(authPaths.login, async c => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = AuthLoginInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    const verified = await ctx.passwordCredentials.verifyLoginPassword(parsed.data);
+    if (!verified.ok) return authFailed(c);
+    const user = ctx.userService.getDto(verified.userId);
+    if (!user) {
+      return c.json({ error: 'authenticated user is missing' }, 500);
+    }
+    const issued = ctx.authSessions.issueSession({
+      userId: verified.userId,
+      ...authSessionMetadata(c),
+    });
+    return c.json({ user_token: issued.userToken, user });
+  });
+
+  app.post(authPaths.logout, c => {
+    const token = bearerToken(c);
+    if (!token || !ctx.authSessions.revokeSessionToken(token)) {
+      return c.json({ error: 'unauthorized' }, 401);
+    }
+    return c.json({ ok: true });
+  });
+
   app.get(apiPaths.health, c =>
     c.json({ ok: true, mode: ctx.serverConfig.mode, ts: Date.now() }),
   );

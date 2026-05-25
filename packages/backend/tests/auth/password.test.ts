@@ -101,14 +101,18 @@ describe('Argon2id password auth helpers', () => {
     expect(params).toMatchObject({
       algorithm: 'argon2id',
       library: '@node-rs/argon2',
-      memoryCostKiB: 256,
-      timeCost: 1,
+      memoryCostKiB: 19 * 1024,
+      timeCost: 2,
       parallelism: 1,
       outputLen: 16,
       benchmark: {
         targetMs: 25,
         measuredMs: 32,
         candidateCount: 3,
+        flooredFrom: {
+          memoryCostKiB: 256,
+          timeCost: 1,
+        },
       },
     });
   });

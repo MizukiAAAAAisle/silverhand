@@ -21,6 +21,16 @@ import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { createApiRouter, createInternalRouter } from '../../src/routes.js';
 import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
 import { AgentTokenStore } from '../../src/auth/agent-token-store.js';
+import {
+  DEFAULT_AUTH_SESSION_TTL_MS,
+  type AuthRuntimeConfig,
+} from '../../src/auth/config.js';
+import {
+  Argon2idPasswordHasher,
+  PasswordCredentialService,
+  type Argon2idPasswordHashParams,
+} from '../../src/auth/password.js';
+import { AuthSessionService } from '../../src/auth/session.js';
 import { AttachmentService } from '../../src/services/attachment-service.js';
 import { AgentService } from '../../src/services/agent-service.js';
 import { ChannelService } from '../../src/services/channel-service.js';
@@ -147,6 +157,28 @@ const silentLogger: BackendLogger = {
   error() {},
 };
 
+const TEST_PASSWORD_HASH_PARAMS: Argon2idPasswordHashParams = {
+  algorithm: 'argon2id',
+  library: '@node-rs/argon2',
+  version: '0x13',
+  memoryCostKiB: 64,
+  timeCost: 1,
+  parallelism: 1,
+  outputLen: 16,
+  benchmark: {
+    targetMs: 1,
+    measuredMs: 1,
+    candidateCount: 1,
+    selectedAt: 1,
+    cpuCount: 1,
+    totalMemoryMiB: 1,
+  },
+};
+
+export interface BuildTestAppOptions {
+  authConfig?: Partial<AuthRuntimeConfig>;
+}
+
 export interface TestApp {
   app: Hono<AppEnv>;
   ctx: BackendContext;
@@ -164,7 +196,7 @@ export interface TestApp {
  * the real one would try to spawn agent CLI subprocesses on every
  * channel provision, which we don't want in unit tests.
  */
-export function buildTestApp(): TestApp {
+export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
   const { db, viewerUserId } = openTestDb();
   const tmp = makeTempSilverhandDir();
   // The real `startBackend` mkdirs workspacesRoot before mounting routes.
@@ -183,6 +215,11 @@ export function buildTestApp(): TestApp {
       max_depth: 1,
     },
   };
+  const authConfig: AuthRuntimeConfig = Object.freeze({
+    signupEnabled: options.authConfig?.signupEnabled ?? true,
+    sessionTtlMs:
+      options.authConfig?.sessionTtlMs ?? DEFAULT_AUTH_SESSION_TTL_MS,
+  });
 
   const blobStorage = createLocalBlobFileStorage({ silverhandDir: tmp.silverhandDir });
   const attachmentService = new AttachmentService({
@@ -199,10 +236,18 @@ export function buildTestApp(): TestApp {
     agents: new AgentRepo(db),
     blobStorage,
   });
+  const passwordCredentials = new PasswordCredentialService(
+    db,
+    new Argon2idPasswordHasher({
+      paramsProvider: async () => TEST_PASSWORD_HASH_PARAMS,
+      dummyPassword: 'test-dummy-password',
+    }),
+  );
 
   const ctx: BackendContext = {
     db,
     serverConfig,
+    authConfig,
     logger: silentLogger,
     loggers: { system: silentLogger, agent: silentLogger, cli: silentLogger },
     logControl: createLogLevelControl('warn'),
@@ -221,6 +266,10 @@ export function buildTestApp(): TestApp {
     events: new ScopeEventBus(),
     silverhandCliLauncher: { command: 'noop', args: [] },
     agentTokens: new AgentTokenStore(),
+    passwordCredentials,
+    authSessions: new AuthSessionService(db, {
+      sessionTtlMs: authConfig.sessionTtlMs,
+    }),
     runtimeHost: fake as unknown as AgentRuntimeHost,
   };
   ctx.channelService = new ChannelService({

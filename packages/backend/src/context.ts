@@ -12,6 +12,9 @@ import type { ThreadService } from './services/thread-service.js';
 import type { UserService } from './services/user-service.js';
 import type { BlobFileStorage } from './storage/blob-file-storage.js';
 import type { AgentTokenStore } from './auth/agent-token-store.js';
+import type { AuthRuntimeConfig } from './auth/config.js';
+import type { PasswordCredentialService } from './auth/password.js';
+import type { AuthSessionService } from './auth/session.js';
 import type { LogLevelControl } from './logger.js';
 
 export interface BackendLogger {
@@ -57,6 +60,8 @@ export interface SilverhandCliLauncher {
 export interface BackendContext {
   db: Db;
   serverConfig: ServerConfig;
+  /** Auth/setup config resolved once during backend startup. */
+  authConfig: AuthRuntimeConfig;
   logger: BackendLogger;
   /** Categorized sinks. Always present; defaults to `{ system, agent,
    *  cli } = { logger, logger, logger }` when no file logger is in use
@@ -103,6 +108,10 @@ export interface BackendContext {
   silverhandCliLauncher: SilverhandCliLauncher;
   /** Per-process bearer tokens scoped to one agent/conversation runtime. */
   agentTokens: AgentTokenStore;
+  /** Password credential storage and verification. */
+  passwordCredentials: PasswordCredentialService;
+  /** User session token issuer/validator. */
+  authSessions: AuthSessionService;
   /**
    * Backend-side facade for agent runtime lifecycle. Services and
    * routes route every spawn / stop / wake / clearSession / inbox

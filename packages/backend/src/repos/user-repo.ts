@@ -41,6 +41,15 @@ export class UserRepo {
     return row ?? null;
   }
 
+  getByEmail(email: string): UserRow | null {
+    const row = this.db
+      .prepare<[string], UserRow>(
+        'SELECT * FROM users WHERE email = ? COLLATE NOCASE',
+      )
+      .get(email);
+    return row ?? null;
+  }
+
   /**
    * List every user. V1 has at most one row (created at registration);
    * exposed for tests + future V2 admin views.
@@ -65,16 +74,24 @@ export class UserRepo {
     id: string;
     name: string;
     displayName: string;
+    email?: string | null;
   }): UserRow {
     const now = Date.now();
     this.db
       .prepare(
         `INSERT INTO users
            (id, name, display_name, avatar_storage_key, avatar_content_type,
-            created_at, updated_at)
-         VALUES (?, ?, ?, NULL, NULL, ?, ?)`,
+            email, created_at, updated_at)
+         VALUES (?, ?, ?, NULL, NULL, ?, ?, ?)`,
       )
-      .run(input.id, input.name, input.displayName, now, now);
+      .run(
+        input.id,
+        input.name,
+        input.displayName,
+        input.email ?? null,
+        now,
+        now,
+      );
     const row = this.get(input.id);
     if (!row) {
       throw new Error(`UserRepo.create: row not found post-INSERT for id=${input.id}`);

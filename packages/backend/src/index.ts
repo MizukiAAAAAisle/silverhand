@@ -17,6 +17,9 @@ import {
   type SilverhandCliLauncher,
 } from './context.js';
 import { AgentTokenStore } from './auth/agent-token-store.js';
+import { resolveAuthRuntimeConfig } from './auth/config.js';
+import { PasswordCredentialService } from './auth/password.js';
+import { AuthSessionService } from './auth/session.js';
 import { HostRepo } from './repos/host-repo.js';
 import { ensureWorkspacesRoot } from './provision.js';
 import { ScopeEventBus } from './ws/scope-event-bus.js';
@@ -100,6 +103,11 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     cli: opts.loggers?.cli ?? logger,
   };
   const logControl = resolveLogControl(loggers.system);
+  const authConfig = resolveAuthRuntimeConfig();
+  logger.info(
+    { signupEnabled: authConfig.signupEnabled },
+    `Signup: ${authConfig.signupEnabled ? 'enabled' : 'disabled'}`,
+  );
   const db = openDatabase(opts.dbPath);
   const workspacesRoot = join(opts.silverhandDir, 'workspaces');
   const blobStorage = createLocalBlobFileStorage({ silverhandDir: opts.silverhandDir });
@@ -131,6 +139,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   const ctx: BackendContext = {
     db,
     serverConfig: opts.serverConfig,
+    authConfig,
     logger,
     loggers,
     logControl,
@@ -150,6 +159,10 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     events: new ScopeEventBus(),
     silverhandCliLauncher: opts.silverhandCliLauncher,
     agentTokens: new AgentTokenStore(),
+    passwordCredentials: new PasswordCredentialService(db),
+    authSessions: new AuthSessionService(db, {
+      sessionTtlMs: authConfig.sessionTtlMs,
+    }),
     // Filled immediately below when the daemon runtime host is constructed.
     runtimeHost: undefined as unknown as AgentRuntimeHost,
   };

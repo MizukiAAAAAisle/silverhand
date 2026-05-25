@@ -68,6 +68,11 @@ export const MeResponseSchema = z.union([
 ]);
 export type MeResponse = z.infer<typeof MeResponseSchema>;
 
+export const ServerInfoSchema = z.object({
+  signup_enabled: z.boolean(),
+});
+export type ServerInfo = z.infer<typeof ServerInfoSchema>;
+
 // `display_name` is rendered into the agent system prompt (PR-B
 // "Members in this conversation:" block) and persisted on `users`
 // and `agents`. Reject every character that could survive `.trim()`
@@ -134,6 +139,32 @@ export const RegisterUserInputSchema = z.object({
   display_name: DisplayNameSchema.optional(),
 });
 export type RegisterUserInput = z.infer<typeof RegisterUserInputSchema>;
+
+const AuthEmailSchema = z.string().trim().email().max(320);
+
+export const AuthSignupInputSchema = z.object({
+  email: AuthEmailSchema,
+  password: z.string().min(8).max(1024),
+  display_name: DisplayNameSchema.optional(),
+});
+export type AuthSignupInput = z.infer<typeof AuthSignupInputSchema>;
+
+export const AuthLoginInputSchema = z.object({
+  email: AuthEmailSchema,
+  password: z.string().min(1).max(1024),
+});
+export type AuthLoginInput = z.infer<typeof AuthLoginInputSchema>;
+
+export const AuthSessionResponseSchema = z.object({
+  user_token: z.string().min(1),
+  user: UserDtoSchema,
+});
+export type AuthSessionResponse = z.infer<typeof AuthSessionResponseSchema>;
+
+export const AuthLogoutResponseSchema = z.object({
+  ok: z.literal(true),
+});
+export type AuthLogoutResponse = z.infer<typeof AuthLogoutResponseSchema>;
 
 // PATCH /api/me — post-registration profile update. By design `name`
 // is NOT in this schema: the registration boundary is the only public
