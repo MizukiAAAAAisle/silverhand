@@ -16,6 +16,7 @@ import type { AuthRuntimeConfig } from './auth/config.js';
 import type { PasswordCredentialService } from './auth/password.js';
 import type { AuthSessionService } from './auth/session.js';
 import type { LogLevelControl } from './logger.js';
+import type { RuntimeHostPlacementResolver } from './runtime/host-placement.js';
 
 export interface BackendLogger {
   info(obj: unknown, msg?: string): void;
@@ -112,6 +113,8 @@ export interface BackendContext {
   passwordCredentials: PasswordCredentialService;
   /** User session token issuer/validator. */
   authSessions: AuthSessionService;
+  /** Shared B.3 host-placement guard for create, membership, and runtime intent paths. */
+  placement: RuntimeHostPlacementResolver;
   /**
    * Backend-side facade for agent runtime lifecycle. Services and
    * routes route every spawn / stop / wake / clearSession / inbox

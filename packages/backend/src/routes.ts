@@ -115,7 +115,6 @@ import { AgentServiceError } from './services/agent-service.js';
 import { MembershipService } from './services/membership-service.js';
 import { UserRepo } from './repos/user-repo.js';
 import { RuntimeHostPlacementError } from './host-placement-errors.js';
-import { RuntimeHostPlacementResolver } from './runtime/host-placement.js';
 import {
   type AppEnv,
   getAgentPrincipal,
@@ -634,8 +633,6 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     users,
     passwordCredentials: ctx.passwordCredentials,
   });
-  const placement = new RuntimeHostPlacementResolver({ hosts, agents, workspaces });
-
   hosts.ensureLocal();
 
   // ── Auth / health / runtimes / hosts ─────────────────────────────
@@ -769,9 +766,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     userId: string,
   ): string {
     if (explicitHostId) {
-      return placement.assertOwnedActiveHost(explicitHostId, userId).id;
+      return ctx.placement.assertOwnedActiveHost(explicitHostId, userId).id;
     }
-    return placement.resolveOwnedLocalForUser(userId).id;
+    return ctx.placement.resolveOwnedLocalForUser(userId).id;
   }
 
   // ── Workspaces / conversations ──────────────────────────────────
@@ -824,7 +821,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
         .map(id => agents.get(id))
         .filter((agent): agent is AgentDto => agent !== null);
       for (const agent of memberAgents) {
-        placement.assertAgentMatchesHost(agent.id, workspaceHostId);
+        ctx.placement.assertAgentMatchesHost(agent.id, workspaceHostId);
       }
     } catch (err) {
       const mapped = placementErrorResponse(c, err);

@@ -778,6 +778,9 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
    * Stop every runtime the daemon tracks. Used on backend shutdown so
    * daemon doesn't keep orphan children running after backend exits.
    * Always hard mode (graceful shutdown is the user's job, not ours).
+   *
+   * Intentionally not placement-gated: shutdown/recovery sweeps must
+   * still be able to stop children after a host has been revoked.
    */
   async stopAll(): Promise<void> {
     await this.bridge.runtimeStopAll();

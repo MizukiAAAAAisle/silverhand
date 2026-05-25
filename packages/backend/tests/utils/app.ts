@@ -46,6 +46,7 @@ import { UserRepo } from '../../src/repos/user-repo.js';
 import { createLocalBlobFileStorage } from '../../src/storage/blob-file-storage.js';
 import { createLogLevelControl } from '../../src/logger.js';
 import { makeTempSilverhandDir, openTestDb } from './db.js';
+import { RuntimeHostPlacementResolver } from '../../src/runtime/host-placement.js';
 
 /**
  * Records every call routes / provision make into the runtime host.
@@ -258,6 +259,11 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
       dummyPassword: 'test-dummy-password',
     }),
   );
+  const placement = new RuntimeHostPlacementResolver({
+    hosts: new HostRepo(db),
+    agents: new AgentRepo(db),
+    workspaces: new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot }),
+  });
 
   const ctx: BackendContext = {
     db,
@@ -285,6 +291,7 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     authSessions: new AuthSessionService(db, {
       sessionTtlMs: authConfig.sessionTtlMs,
     }),
+    placement,
     runtimeHost: fake as unknown as AgentRuntimeHost,
   };
   ctx.channelService = new ChannelService({

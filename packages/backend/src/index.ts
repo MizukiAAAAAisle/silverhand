@@ -136,6 +136,11 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     agents: new AgentRepo(db),
     blobStorage,
   });
+  const placement = new RuntimeHostPlacementResolver({
+    hosts: new HostRepo(db),
+    agents: new AgentRepo(db),
+    workspaces: new WorkspaceRepo(db, { workspacesRoot }),
+  });
 
   const ctx: BackendContext = {
     db,
@@ -164,6 +169,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     authSessions: new AuthSessionService(db, {
       sessionTtlMs: authConfig.sessionTtlMs,
     }),
+    placement,
     // Filled immediately below when the daemon runtime host is constructed.
     runtimeHost: undefined as unknown as AgentRuntimeHost,
   };
@@ -191,11 +197,6 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   };
   const bridge = new RuntimeBridge(opts.hostClient, proxySettings);
   const cache = new RunStateCache();
-  const placement = new RuntimeHostPlacementResolver({
-    hosts: new HostRepo(db),
-    agents: new AgentRepo(db),
-    workspaces: new WorkspaceRepo(db, { workspacesRoot }),
-  });
   const activityLog = new JsonlActivityLogWriter({
     logDir: ctx.logDir,
     logger,
