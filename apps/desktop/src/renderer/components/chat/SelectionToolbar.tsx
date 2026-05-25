@@ -72,19 +72,24 @@ export function SelectionToolbar({
   );
 }
 
-function ToolbarButton({
+function ToolbarButton(props: ToolbarButtonProps): JSX.Element {
+  return <SelectionActionButton {...props} />;
+}
+
+/**
+ * Shared "selection action" button — exported for reuse by the image
+ * preview modal so its Cancel / Copy / Save row visually matches the
+ * SelectionToolbar at the top of the message list. Same border /
+ * radius / width / font-bold contract, same primary/neutral hover
+ * fork. See SelectionToolbar's docblock for the rationale.
+ */
+export function SelectionActionButton({
   variant,
   icon,
   label,
   disabled,
   onClick,
-}: {
-  variant: 'primary' | 'neutral';
-  icon?: React.ReactNode;
-  label: string;
-  disabled?: boolean;
-  onClick?: () => void;
-}): JSX.Element {
+}: ToolbarButtonProps): JSX.Element {
   // Static base — radius, border width, padding, font weight, lift
   // transition. All three buttons share `font-bold` at rest; the only
   // per-variant divergence is hover bg/text.
@@ -118,4 +123,12 @@ function ToolbarButton({
       <span>{label}</span>
     </button>
   );
+}
+
+interface ToolbarButtonProps {
+  variant: 'primary' | 'neutral';
+  icon?: React.ReactNode;
+  label: string;
+  disabled?: boolean;
+  onClick?: () => void;
 }

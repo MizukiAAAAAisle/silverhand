@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import type { AgentDto, MessageDto, UserDto } from '@silverhand/shared';
 import { MessageScreenshotView } from './MessageScreenshotView';
 import { suggestImageFilename } from './markdownTranscript';
+import { SelectionActionButton } from './SelectionToolbar';
 import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
 
@@ -233,14 +234,12 @@ export function ImagePreviewModal({
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-[90] bg-black/40" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-[91] flex max-h-[80vh] w-[820px] -translate-x-1/2 -translate-y-1/2 flex-col rounded-[var(--floating-radius,var(--radius-md))] border border-border bg-bg-floating p-4 shadow-xl">
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-[91] flex max-h-[80vh] w-[820px] -translate-x-1/2 -translate-y-1/2 flex-col rounded-[var(--floating-radius,var(--radius-md))] border-[length:var(--control-border-width)] border-[color:var(--border-row-selected)] bg-bg-floating p-4 shadow-xl">
           <Dialog.Title className="text-sm font-semibold text-text-primary">
-            导出预览
+            图片预览
           </Dialog.Title>
           <Dialog.Description className="mt-1 text-xs text-text-muted">
-            {messages.length === 0
-              ? '请选择至少一条消息'
-              : `共 ${messages.length} 条消息`}
+            {messages.length === 0 ? '请选择至少一条消息' : ''}
           </Dialog.Description>
 
           <div className="mt-3 min-h-[200px] flex-1 overflow-auto rounded-[var(--control-radius)] border border-border-subtle bg-bg-elevated p-2">
@@ -261,30 +260,24 @@ export function ImagePreviewModal({
             ) : null}
           </div>
 
-          <div className="mt-3 flex items-center justify-end gap-2">
-            <button
-              type="button"
+          <div className="mt-3 flex items-center justify-end gap-2 text-xs">
+            <SelectionActionButton
+              variant="neutral"
+              label="Cancel"
               onClick={() => onOpenChange(false)}
-              className="rounded-[var(--control-radius)] border border-border-subtle bg-bg-elevated px-3 py-1.5 text-xs text-text-primary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
+            />
+            <SelectionActionButton
+              variant="primary"
+              label="Copy"
               disabled={phase !== 'ready' || busy}
               onClick={onCopy}
-              className="rounded-[var(--control-radius)] border border-border-subtle bg-bg-elevated px-3 py-1.5 text-xs text-text-primary hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-bg-elevated focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
-            >
-              Copy
-            </button>
-            <button
-              type="button"
+            />
+            <SelectionActionButton
+              variant="primary"
+              label="Save"
               disabled={phase !== 'ready' || busy}
               onClick={onSave}
-              className="rounded-[var(--control-radius)] border border-accent bg-accent px-3 py-1.5 text-xs font-semibold text-text-on-accent hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
-            >
-              Save
-            </button>
+            />
           </div>
 
           {/* Offscreen render target. Positioned far off-canvas so the

@@ -1102,6 +1102,36 @@ function MessageList({
     jumpToMessageId,
   });
 
+  // ESC exits selection mode (shiki `9J_EUts8PMReL6p1`). We only bind
+  // the listener while selection is active AND the image preview modal
+  // is closed — Radix Dialog already consumes ESC to close itself, and
+  // we don't want the same keystroke both closing the modal and
+  // dropping the selection (which would lose the user's queue for a
+  // possible retry). We use the bubble phase + check `event.defaultPrevented`
+  // so a focused composer / input that calls preventDefault on Escape
+  // (e.g. IME cancel) wins; otherwise fall through to selection exit.
+  useEffect(() => {
+    if (!selection.active || imagePreviewOpen) return;
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      // Avoid stealing ESC from inputs/textareas — those have their
+      // own meaning for ESC (blur, IME cancel).
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (
+        tag === 'INPUT' ||
+        tag === 'TEXTAREA' ||
+        target?.isContentEditable
+      ) {
+        return;
+      }
+      event.preventDefault();
+      selection.exit();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selection, imagePreviewOpen]);
+
   // Per-row Share entry: enter selection mode with this message
   // preselected. `enter` is idempotent — re-entering from selecting
   // just adds another message. Used by MessageItem's right-click menu.
