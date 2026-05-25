@@ -37,8 +37,8 @@ import {
   removeDaemonHostConfig,
   applyRotateSideEffects,
   applyRevokeSideEffects,
+  assertApiProxyPath,
   isMainManagedHostPath,
-  pathnameOf,
   writeDaemonHostConfig,
   type LocalHostClaimStatus,
 } from './local-host-claim.js';
@@ -727,25 +727,6 @@ async function revokeHost(
     host: parsed.data.host,
     ...snapshotLocalHostInfo(),
   };
-}
-
-function assertApiProxyPath(path: string): void {
-  // Normalize first so `?` / `#` payloads can't trick the
-  // `/api/` allow-list or the main-managed deny-list. `pathnameOf`
-  // returns the input verbatim on parse failure; that case still
-  // fails the startsWith check below for any non-`/api/` prefix.
-  const pathname = pathnameOf(path);
-  if (!pathname.startsWith('/api/')) {
-    throw new Error(`desktop backend proxy only accepts /api/* paths: ${path}`);
-  }
-  if (isMainManagedHostPath(path)) {
-    // Stage B.4: claim/rotate carry token bytes; revoke carries a
-    // local daemon-config side-effect. All three are owned by
-    // dedicated main IPC handlers — refusing them at the proxy
-    // boundary keeps the renderer from accidentally observing a
-    // token or skipping the local sync step.
-    throw new Error(`desktop backend proxy refuses main-managed host route: ${path}`);
-  }
 }
 
 function proxyHeaders(input: Record<string, string> | undefined): Headers {

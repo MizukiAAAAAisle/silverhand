@@ -102,9 +102,14 @@ export function buildHostClaimInput(input: {
  *  `/api/hosts/<id>/rotate-token?x=1` or `.../revoke#frag`; the
  *  pathname is what `backendUrl()` ultimately routes against on the
  *  Hono side, so all sensitive matching MUST be done against the
- *  pathname rather than the raw string. Falls back to the input on
- *  parse failure (defense-in-depth — a malformed path will still be
- *  rejected by `assertApiProxyPath`'s `/api/` startsWith check). */
+ *  pathname rather than the raw string.
+ *
+ *  This helper is intentionally lossy and does NOT validate the
+ *  input — anything `new URL(input, base)` can resolve becomes a
+ *  pathname (including absolute URLs like `http://evil/api/x` and
+ *  bare strings like `not-a-path`). Callers that need to reject
+ *  non-relative input (e.g. {@link assertApiProxyPath}) must run a
+ *  raw check on the original string FIRST. */
 export function pathnameOf(rawPath: string): string {
   try {
     return new URL(rawPath, 'http://silverhand.local').pathname;
@@ -148,6 +153,33 @@ export function isMainManagedHostPath(path: string): boolean {
  *  a re-export so external callers don't break, but new code should
  *  reference {@link isMainManagedHostPath} directly. */
 export const isTokenBearingHostClaimPath = isMainManagedHostPath;
+
+/** Gate applied to every renderer-issued `backend:request` /
+ *  `backend:upload` proxy call. Two layers:
+ *
+ *  1. RAW startsWith `/api/`. This rejects absolute URLs
+ *     (`http://evil.example/api/x`) and protocol-relative URLs
+ *     (`//evil.example/api/x`) before any normalization happens.
+ *     Without this layer, `pathnameOf()` would happily extract
+ *     `/api/x` from an attacker-controlled origin, the deny-list
+ *     would miss because the path isn't in the main-managed set, and
+ *     `backendUrl()` (which uses `new URL(path, backendBase)` —
+ *     `new URL('http://evil/api/x', base)` keeps the evil origin)
+ *     would then forward the user's session bearer to the
+ *     attacker's host.
+ *  2. Main-managed deny-list (`isMainManagedHostPath`). After the
+ *     raw gate accepts only relative `/api/...` strings, this
+ *     normalizes the pathname (stripping `?` and `#`) and rejects
+ *     claim / rotate / revoke so renderer can't reach those routes
+ *     through the generic proxy. */
+export function assertApiProxyPath(path: string): void {
+  if (!path.startsWith('/api/')) {
+    throw new Error(`desktop backend proxy only accepts /api/* paths: ${path}`);
+  }
+  if (isMainManagedHostPath(path)) {
+    throw new Error(`desktop backend proxy refuses main-managed host route: ${path}`);
+  }
+}
 
 /** Persist a freshly rotated host token. Pure side-effect helper —
  *  reused by the `hosts:rotate` IPC and unit-tested separately. The

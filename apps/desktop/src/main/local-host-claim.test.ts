@@ -6,6 +6,7 @@ import { apiPaths } from '@silverhand/shared';
 import {
   applyRevokeSideEffects,
   applyRotateSideEffects,
+  assertApiProxyPath,
   buildHostClaimInput,
   daemonHostConfigPath,
   installationIdPath,
@@ -142,17 +143,66 @@ describe('desktop local host claim helpers', () => {
     expect(isMainManagedHostPath(`${apiPaths.hosts}?cache=1`)).toBe(false);
   });
 
-  it('pathnameOf strips query + fragment and falls back on malformed input', () => {
+  it('pathnameOf strips query + fragment and resolves relative paths against a fake base', () => {
     expect(pathnameOf('/api/hosts')).toBe('/api/hosts');
     expect(pathnameOf('/api/hosts?x=1')).toBe('/api/hosts');
     expect(pathnameOf('/api/hosts#frag')).toBe('/api/hosts');
     expect(pathnameOf('/api/hosts/h/rotate-token?x=1#frag')).toBe(
       '/api/hosts/h/rotate-token',
     );
-    // Malformed inputs fall through verbatim — the caller's own
-    // allow-list (e.g. `assertApiProxyPath`'s `/api/` startsWith)
-    // still rejects them.
+    // Bare strings get resolved as relative paths against the
+    // synthetic base, NOT rejected — the helper is intentionally
+    // lossy. The caller's own raw allow-list (e.g.
+    // `assertApiProxyPath`'s `/api/` startsWith on the *raw* input)
+    // is what rejects non-API strings, not pathnameOf.
     expect(pathnameOf('not-a-path-at-all')).toBe('/not-a-path-at-all');
+  });
+
+  it('assertApiProxyPath rejects absolute / protocol-relative URLs even when their pathname looks like /api/', () => {
+    // P0 (round 2): `pathnameOf('http://evil/api/x') === '/api/x'`,
+    // so any guard that *only* checked the normalized pathname would
+    // accept the absolute URL, and `new URL(absolute, backendBase)`
+    // keeps the evil origin — the renderer's session bearer would
+    // get exfiltrated. The raw startsWith gate must run first.
+    expect(() => assertApiProxyPath('http://evil.example/api/workspaces')).toThrow(
+      /only accepts \/api\/\*/,
+    );
+    expect(() => assertApiProxyPath('https://evil.example/api/hosts')).toThrow(
+      /only accepts \/api\/\*/,
+    );
+    expect(() => assertApiProxyPath('//evil.example/api/workspaces')).toThrow(
+      /only accepts \/api\/\*/,
+    );
+    expect(() => assertApiProxyPath('not-a-path')).toThrow(
+      /only accepts \/api\/\*/,
+    );
+    // Empty + control inputs.
+    expect(() => assertApiProxyPath('')).toThrow(/only accepts \/api\/\*/);
+    expect(() => assertApiProxyPath('/foo')).toThrow(/only accepts \/api\/\*/);
+  });
+
+  it('assertApiProxyPath refuses main-managed routes including query/hash bypass attempts', () => {
+    // Sensitive routes — bare and with query/hash — all rejected.
+    expect(() => assertApiProxyPath(apiPaths.hostClaimOrCreate)).toThrow(
+      /main-managed host route/,
+    );
+    expect(() => assertApiProxyPath(apiPaths.hostRotateToken('h'))).toThrow(
+      /main-managed host route/,
+    );
+    expect(() => assertApiProxyPath(apiPaths.hostRevoke('h'))).toThrow(
+      /main-managed host route/,
+    );
+    expect(() =>
+      assertApiProxyPath(`${apiPaths.hostRotateToken('h')}?x=1`),
+    ).toThrow(/main-managed host route/);
+    expect(() =>
+      assertApiProxyPath(`${apiPaths.hostRevoke('h')}?x=1#frag`),
+    ).toThrow(/main-managed host route/);
+
+    // Non-sensitive `/api/*` routes pass cleanly.
+    expect(() => assertApiProxyPath(apiPaths.hosts)).not.toThrow();
+    expect(() => assertApiProxyPath(`${apiPaths.hosts}?cache=1`)).not.toThrow();
+    expect(() => assertApiProxyPath('/api/workspaces')).not.toThrow();
   });
 
   it('rotate side-effect persists the new token to daemon-config 0o600', () => {
