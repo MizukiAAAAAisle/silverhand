@@ -35,9 +35,14 @@ Every IPC route / main-process backend interaction gets exactly one tag.
 | **local-host-only UX** | Legitimate "reveal in Finder", "open in default app" style affordance that only makes sense when the path lives on the user's machine. **Backend mode is orthogonal**: under remote-backend mode the desktop is still a local Host (Stage B `host.kind='local'`) and workspaces/agent dirs placed on that host are still on the user's filesystem. | Keep, but gate by **path provenance**: only when the path's owning host satisfies `host_id === local_host_id && host.kind === 'local'` (the local Host this desktop registered with the server in Stage B). **Never** gate on backend mode — that would hide legitimate UX from the remote-backend / local-Host case. C.3 lands the gate. |
 | **in-process shortcut** | main-process code that imports backend symbols directly (`startBackend`, `BackendContext`, `createCategorizedLoggers`, …) rather than going over HTTP. | Stays in **embedded** boot path only; Stage D1 extracts the symbols into `packages/server` and main launches that as a child process or in-proc adapter. |
 | **embedded-only** | Code that holds embedded-mode invariants (auth_token plaintext, loopback URL, `mode='embedded'` constant). | Keep, but **fence** behind a `mode === 'embedded'` check in **C.4**. Any new caller without the fence is a regression. |
+| **mixed** | A single IPC route / file carries fields with different tags (e.g. `backend:info` returns both general protocol metadata and an embedded-only `auth_token`). | The row's notes column MUST enumerate every contributing tag at field-level. Any field promotion (e.g. an OS-IPC field that grows embedded-only assumptions) is a regression unless the table is updated in the same PR. |
 
-> A site can carry only one tag. If two seem to fit, the strictest one
-> wins: **data** beats **OS-IPC** beats **local-host-only UX**.
+> Each **field** carries exactly one tag. If two seem to fit the same
+> field, the strictest one wins: **in-process shortcut** beats **data**
+> beats **embedded-only** beats **local-host-only UX** beats **OS-IPC**.
+> When a route exposes multiple fields with different tags, tag the
+> route as **mixed** and break the contributing tags down per field in
+> the notes column (e.g. `backend:info`).
 
 ## 3. Main-process direct backend imports
 
@@ -79,7 +84,7 @@ listed in the order they appear in main.
 
 | IPC channel | Preload method | Tag | Notes / V1 disposition |
 |---|---|---|---|
-| `backend:info` | `getBackendInfo` | **embedded-only** | Returns `{url, mode, auth_token}` from `ServerConfig`. Under remote mode `auth_token` must be `null` / absent; renderer's auth header comes from the session that signup/login produced (Stage A). C.3 propagates `mode` to renderer; C.4 strips `auth_token` from remote-mode payload and switches renderer's `fetchWithInfo` to read the session token instead. |
+| `backend:info` | `getBackendInfo` | **mixed** (see notes) | Returns `{url, mode, auth_token, local_host_id?}`. Tag breakdown: **OS-IPC** for `url` + `mode` + `local_host_id` — single source of truth lives in main (`ServerConfig` + the host-claim outcome from Stage B); the renderer needs them to address the backend, choose its auth flow, and gate host-kind UX. **embedded-only** for the `auth_token` field — that field is the legacy embedded shortcut C.4 fences. Under remote mode `auth_token` is `null` and the renderer acquires its session bearer from `getSessionBearer()` (see §6.1). The route itself stays, and C.3 adds `local_host_id` as an additive field; only the `auth_token` field carries the embedded-only constraint. |
 | `dialog:pickDirectory` | `pickDirectory` | **local-host-only UX** | Native open dialog. The picked path is on the user's machine; under Stage B that path can only be assigned to a local Host. Caller is `CreateWorkspaceDialog`. C.3 gates the picker on "the workspace's target host kind is `local` and equals this desktop's `local_host_id`". Backend mode is irrelevant — remote-backend + local-Host still picks user-fs paths legitimately. If/when the user has non-local hosts available (remote / sandbox), the create-workspace flow needs an additional "host placement" step that this V1 does not ship (deferred; see roadmap §5 Follow-up); until then default placement is the local Host and the picker stays. |
 | `shell:openExternal` | `openExternal` | **OS-IPC** | Strict `https?://` allowlist already enforced. Kept as-is. |
 | `attachment:openExternal` | `openAttachmentExternal` | **OS-IPC** | Renderer fetches bytes via HTTP first; main only handles the local tmp-write + Launch Services call. Already protocol-pure. Keep. |
@@ -183,10 +188,12 @@ right token source per mode:
 | (new) `/auth/embedded-bootstrap` route | does not exist | C.4 lands the route + the four-constraint test matrix (one test per constraint × {happy, violated}). |
 | (new) `~/.silverhand/embedded-bootstrap` token file | does not exist | C.4 lands write (mode 0600) at backend boot + consume-on-first-read semantics + regenerate on reboot. |
 
-The tripwire test §7 grows an assertion that **renderer source tree
-contains zero references to `auth_token` or `\.auth_token`** after
-C.4 lands. Until then the assertion is checked-in but expected to
-fail — that's how we know C.4 isn't finished.
+The tripwire test §7 carries a fourth assertion — **renderer source
+tree contains zero references to `auth_token` / `\.auth_token`** —
+that is checked in during C.1 as `it.todo()` (or `it.skip()` with a
+TODO comment) and is flipped to `it()` by C.4. See §7 for the full
+lifecycle; C.1 ships green, C.4 ships green with the assertion
+active.
 
 ### 6.2 Headless smoke path (dev / `pnpm dev:headless`)
 
@@ -211,24 +218,28 @@ forgotten:
 ## 7. Catalogue invariant test
 
 `apps/desktop/src/main/__tests__/protocol-purity.test.ts` is the
-single-file tripwire that keeps this document honest. Four assertions:
+single-file tripwire that keeps this document honest. Four assertions
+total — **three active in C.1, one parked as `it.todo` until C.4**:
 
-1. **Imports from `@silverhand/backend` in `apps/desktop/src/main/**/*.ts`**
-   equals exactly the set in §3.
-2. **`ipcMain.handle` channels registered in `apps/desktop/src/main/**/*.ts`**
-   equals exactly the set in §4.
-3. **Renderer source tree** contains zero references to
-   `from '@silverhand/backend'` or `from '@silverhand/backend/...'`.
-   (Type-only re-exports through `@silverhand/shared` are fine and
-   actively encouraged — shared is the protocol layer.)
-4. **`apps/desktop/src/renderer/**/*.{ts,tsx}` contains zero
-   references to `\.auth_token` or `auth_token:` reads.** This
-   assertion is checked-in immediately and is **expected to fail
-   until C.4 lands** — the failing test is how we know C.4 is not
-   finished. Whitelisted exceptions: none in the renderer. In main,
-   `index.ts:532-539` (`backend:info` handler) and `index.ts:852-864`
-   (headless smoke handshake) remain the only permitted readers (see
-   §6.2).
+| # | Assertion | C.1 state | Activated by |
+|---|---|---|---|
+| 1 | Imports from `@silverhand/backend` in `apps/desktop/src/main/**/*.ts` equals exactly the set in §3. | `it()` — active, must pass against the current tree. | C.1 |
+| 2 | `ipcMain.handle` channels registered in `apps/desktop/src/main/**/*.ts` equals exactly the set in §4 (including the `mixed`-tagged `backend:info`). | `it()` — active, must pass. | C.1 |
+| 3 | Renderer source tree contains zero references to `from '@silverhand/backend'` or `from '@silverhand/backend/...'` (type-only re-exports through `@silverhand/shared` are fine and actively encouraged — shared is the protocol layer). | `it()` — active, must pass. | C.1 |
+| 4 | `apps/desktop/src/renderer/**/*.{ts,tsx}` contains zero references to `\.auth_token` or `auth_token:` reads. | `it.todo()` (or `it.skip()` with a TODO comment pointing at this doc §6.1) — checked in but **does not execute** in C.1. | C.4 — its acceptance includes flipping this from `it.todo()` to `it()` and having the suite stay green. |
+
+Why park assertion 4 instead of running it red: a permanently-red
+test trains the team to ignore it (and breaks CI gates we want green
+for the C.2 / C.3 work that lands in between). Parking it as
+`it.todo()` keeps the **intent** in the test file so a reviewer sees
+the C.4 plan without consulting this doc, while keeping the suite
+green so assertions 1-3 can guard their invariants without being
+drowned out by a known failure.
+
+Whitelisted exceptions for assertion 4 (once active): in main,
+`index.ts:532-539` (`backend:info` handler) and `index.ts:852-864`
+(headless smoke handshake) remain the only permitted readers (see
+§6.2). In the renderer: none.
 
 When a PR needs to add a new IPC handler or a new backend import, the
 flow is: update this doc + add the disposition row, **then** the test
@@ -241,9 +252,12 @@ sweep without driving new node_modules.
 ## 8. Acceptance criteria for closing C.1
 
 - [ ] This document reviewed by Cindy + shiki LGTM.
-- [ ] Tripwire test `protocol-purity.test.ts` lands and passes against
-      the current tree.
-- [ ] Every IPC handler in main has a row in §4 with a non-blank tag.
+- [ ] Tripwire test `protocol-purity.test.ts` lands and the suite is
+      **green against the current tree**: assertions 1-3 active and
+      passing; assertion 4 checked in as `it.todo()` / `it.skip()`
+      (its activation is part of C.4's acceptance, not C.1's — see §7).
+- [ ] Every IPC handler in main has a row in §4 with a non-blank tag
+      (or `mixed` plus a per-field breakdown in the notes column).
 - [ ] Every `@silverhand/backend` symbol imported by main has a row in §3.
 - [ ] Roadmap §Stage C "PR breakdown C.1" item references this file.
 
@@ -275,3 +289,6 @@ this).
   - **P1 local-host-only UX gate**: §2/§4/§5 rewritten. `showItemInFolder` / `pickDirectory` / `CreateWorkspaceDialog` gate is now **path provenance** (`host.id === local_host_id && host.kind === 'local'`), not backend mode. Backend mode is orthogonal to host kind — under remote-backend mode the desktop is still a local Host and user-fs paths remain legitimate. §5 also defines how `local_host_id` reaches the renderer (additive field on `backend:info`).
   - **P1 auth_token consumer list**: §6 split into §6.1 — full enumeration of all 8 sites (3 in `lib/api.ts`, 1 in `ws-client.ts`, 1 in `me/hooks.ts`, 1 in `agents/avatar-hooks.ts`, 2 preload type declarations). §7 grows a 4th tripwire assertion that **renderer source tree contains zero `auth_token` references** — checked in immediately, fails until C.4 lands. Whitelist limited to main's `backend:info` handler and headless smoke handshake.
   - **P2 headless stdout token**: new §6.2 documents the embedded-only dev surface, requires `auth_token: null` (or omit) under remote mode, calls it out of scope for C.4 renderer changes, pins it as the single permitted `auth_token` reader in main post-C.4. D1 reshapes it via `packages/server` entry point.
+- 2026-05-25 (round 2) — @Cindy second pass. Two more issues absorbed:
+  - **P1 §7 vs §8 contradiction**: §7 originally said assertion 4 was "checked-in and expected to fail until C.4", but §8 required the test to pass against the current tree — C.1 cannot land a default-failing test. Resolved by parking assertion 4 as `it.todo()` (or `.skip` with a TODO comment), keeping suite green through C.1 → C.4; C.4's acceptance includes flipping the assertion to `it()`. §7 rewritten into a per-assertion table; §6.1 closing paragraph aligned; §8 first checkbox restated.
+  - **P2 `backend:info` was wrongly single-tagged `embedded-only`**: Cindy noted §5 also requires the route to grow `local_host_id`, which is general protocol metadata, not embedded legacy. New tag **mixed** added to §2 vocabulary with a rule that the notes column must enumerate every contributing tag at field-level. `backend:info` row in §4 retagged to `mixed`, with `url` + `mode` + `local_host_id` called out as **OS-IPC** and `auth_token` as **embedded-only**. C.4's fence is field-scoped, not route-scoped.
