@@ -32,7 +32,7 @@ Every IPC route / main-process backend interaction gets exactly one tag.
 |---|---|---|
 | **OS-IPC** | Native desktop capability the renderer cannot do itself — clipboard, file dialog, system notification, dock badge, window controls. Acceptable forever. | Keep. Audit only for input validation. |
 | **data** | Anything the backend already owns (or should own). The renderer must see it via HTTP, even if main proxies the request. | Convert in **C.2**. |
-| **local-host-only UX** | Legitimate "reveal in Finder", "open in default app" style affordance that only makes sense when the host is `kind=local` and the path exists on the user's machine. | Keep, but gate behind `info.mode === 'embedded' && host.kind === 'local'` in **C.3**. |
+| **local-host-only UX** | Legitimate "reveal in Finder", "open in default app" style affordance that only makes sense when the path lives on the user's machine. **Backend mode is orthogonal**: under remote-backend mode the desktop is still a local Host (Stage B `host.kind='local'`) and workspaces/agent dirs placed on that host are still on the user's filesystem. | Keep, but gate by **path provenance**: only when the path's owning host satisfies `host_id === local_host_id && host.kind === 'local'` (the local Host this desktop registered with the server in Stage B). **Never** gate on backend mode — that would hide legitimate UX from the remote-backend / local-Host case. C.3 lands the gate. |
 | **in-process shortcut** | main-process code that imports backend symbols directly (`startBackend`, `BackendContext`, `createCategorizedLoggers`, …) rather than going over HTTP. | Stays in **embedded** boot path only; Stage D1 extracts the symbols into `packages/server` and main launches that as a child process or in-proc adapter. |
 | **embedded-only** | Code that holds embedded-mode invariants (auth_token plaintext, loopback URL, `mode='embedded'` constant). | Keep, but **fence** behind a `mode === 'embedded'` check in **C.4**. Any new caller without the fence is a regression. |
 
@@ -80,10 +80,10 @@ listed in the order they appear in main.
 | IPC channel | Preload method | Tag | Notes / V1 disposition |
 |---|---|---|---|
 | `backend:info` | `getBackendInfo` | **embedded-only** | Returns `{url, mode, auth_token}` from `ServerConfig`. Under remote mode `auth_token` must be `null` / absent; renderer's auth header comes from the session that signup/login produced (Stage A). C.3 propagates `mode` to renderer; C.4 strips `auth_token` from remote-mode payload and switches renderer's `fetchWithInfo` to read the session token instead. |
-| `dialog:pickDirectory` | `pickDirectory` | **OS-IPC** | Native open dialog. Kept. Only ever used by `CreateWorkspaceDialog`. Under remote mode the picked path is a path on the user's machine — and the new workspace would live on the **server**'s filesystem. C.3 must either disable this control under remote mode or redefine it as "browse server-side directories via HTTP" (out of scope for V1; UI hides the button when `mode !== 'embedded'`). |
+| `dialog:pickDirectory` | `pickDirectory` | **local-host-only UX** | Native open dialog. The picked path is on the user's machine; under Stage B that path can only be assigned to a local Host. Caller is `CreateWorkspaceDialog`. C.3 gates the picker on "the workspace's target host kind is `local` and equals this desktop's `local_host_id`". Backend mode is irrelevant — remote-backend + local-Host still picks user-fs paths legitimately. If/when the user has non-local hosts available (remote / sandbox), the create-workspace flow needs an additional "host placement" step that this V1 does not ship (deferred; see roadmap §5 Follow-up); until then default placement is the local Host and the picker stays. |
 | `shell:openExternal` | `openExternal` | **OS-IPC** | Strict `https?://` allowlist already enforced. Kept as-is. |
 | `attachment:openExternal` | `openAttachmentExternal` | **OS-IPC** | Renderer fetches bytes via HTTP first; main only handles the local tmp-write + Launch Services call. Already protocol-pure. Keep. |
-| `shell:showItemInFolder` | `showItemInFolder` | **local-host-only UX** | Caller passes server-side absolute path. Two call sites: `AgentWorkspaceCard` (reveals agent dir) and `WorkspacesPanel` (reveals workspace_path). Under remote mode those paths don't exist on the user's machine. C.3 gates the button: only render when `info.mode === 'embedded'` AND the path's host is `kind=local`. Don't remove the affordance — it's the only "where did my files go" handle a power user has. |
+| `shell:showItemInFolder` | `showItemInFolder` | **local-host-only UX** | Caller passes an absolute path served by the backend. Two call sites: `AgentWorkspaceCard` (agent dir) and `WorkspacesPanel` (workspace_path). C.3 gates the button on the **owning host** of that resource: render only when `host_id === local_host_id && host.kind === 'local'`. Under remote-backend mode the gate still surfaces the button whenever the workspace/agent is placed on the local Host — that is the common case in V1 (only kind shipped is `local`). The button only hides for the future "this workspace lives on a remote/sandbox host" case. |
 | `window:setAlwaysOnTop` | `setWindowAlwaysOnTop` | **OS-IPC** | Pin Events Window. Kept. |
 | `active-conversation:set` | `setActiveConversation` | **OS-IPC** | Renderer ↔ Events-window coupling. No backend touch. Kept. |
 | `badge:setCount` | `setBadgeCount` | **OS-IPC** | macOS dock badge. Kept. |
@@ -110,20 +110,32 @@ New handlers fail until added with a tag.
 
 ## 5. Renderer → host fs / server-state references
 
-Pure-renderer code (no IPC hop, no fetch) that still assumes co-located
-host fs. Each entry is a place C.3 must gate behind
-`info.mode === 'embedded'`.
+Pure-renderer code (no IPC hop, no fetch) that still assumes the
+resource it points at lives on the user's machine. Each entry is a
+place C.3 must gate on **owning host kind**, not on backend mode.
 
 | Site | Symptom | C.3 disposition |
 |---|---|---|
-| `features/agents/AgentWorkspaceCard.tsx:53` | `onReveal = () => window.agentHub.showItemInFolder(path)` | Render the button only under embedded + `host.kind=local`. |
-| `components/layout/WorkspacesPanel.tsx:127` | `onClick = window.agentHub.showItemInFolder(w.workspace_path)` | Same gating. |
-| `features/workspaces/CreateWorkspaceDialog.tsx:68` | Directory picker for new workspace path | Under remote mode, hide the picker and require the user to choose a server-known workspace root (V1: forbid create-workspace under remote, surface "remote workspaces are managed server-side"). |
-| `lib/api.ts` `fetchWithInfo` | Sends `Authorization: Bearer ${info.auth_token}` unconditionally | C.4 splits paths: embedded → loopback bootstrap session, remote → signed-in session. The eventual bearer token is *the same shape*; only the source differs. |
+| `features/agents/AgentWorkspaceCard.tsx:53` | `onReveal = () => window.agentHub.showItemInFolder(path)` | Render only when the workspace's owning host satisfies `host.id === local_host_id && host.kind === 'local'`. Backend mode irrelevant. |
+| `components/layout/WorkspacesPanel.tsx:127` | `onClick = window.agentHub.showItemInFolder(w.workspace_path)` | Same gating. Requires the workspace DTO to carry `host_id` (Stage B schema lands this on the runtime/workspace placement column; until then default-assume local). |
+| `features/workspaces/CreateWorkspaceDialog.tsx:68` | Directory picker for new workspace path | V1 default placement is local Host, so the picker stays. When the create-workspace flow grows a host placement step (follow-up phase), the picker is conditional on "chosen host is local + equals `local_host_id`". Do **not** hide the picker under remote backend — that would break the most common V1 path. |
+| `lib/api.ts` `fetchWithInfo` / `apiUpload` / `fetchAttachmentBlob` | Read `info.auth_token` (3 sites) | See §6.1 — these collapse into the single "session bearer" helper C.4 introduces. |
+| `lib/ws-client.ts` `openSocket` | Reads `info.auth_token` for WS subprotocol/header | Same — §6.1. |
+| `features/me/hooks.ts` avatar fetch | Reads `info.auth_token` manually | Same — §6.1. |
+| `features/agents/avatar-hooks.ts` agent avatar fetch | Reads `info.auth_token` manually | Same — §6.1. |
 
 The `viewer_user_id` header (`X_SILVERHAND_PRINCIPAL_HEADER`) flows
-through `fetchWithInfo` and is unaffected — it's set from `/api/me`
+through every fetch helper and is unaffected — it's set from `/api/me`
 hydration, identical under both modes.
+
+**`local_host_id` propagation to renderer**: Stage B introduces the
+`hosts` table and assigns this desktop's local host id when the daemon
+claims/registers. Main exposes it to the renderer through an additive
+field on `backend:info` (e.g. `local_host_id: string`) — that is a
+**data**-tagged extension of an already existing IPC, not a new route,
+so it stays inside the C.3 surface without needing a separate
+disposition. Renderer caches it on `BackendInfo` and uses it for every
+host-kind gate in this table.
 
 ## 6. Embedded-only invariants (the `/auth/embedded-bootstrap` fence)
 
@@ -145,15 +157,61 @@ Existing embedded-only surface that C.4 must touch:
 | Site | Embedded-only assumption today | C.4 disposition |
 |---|---|---|
 | `main/config.ts:24-34` `loadOrCreateServerConfig` | Default `ServerConfig` has `mode='embedded'`, hardcoded loopback URL, freshly generated `auth_token` | Keep as embedded default. Add a sibling code path that produces `mode='remote'` when the user fills the server URL in Setup Wizard. The remote variant has `auth_token: null`. |
-| `main/index.ts:532-539` `backend:info` handler | Returns `auth_token` verbatim | C.4: when `mode === 'remote'`, omit `auth_token` from the payload (or set to `null`). |
-| `renderer/lib/api.ts:35` `getInfo` consumer | Trusts `info.auth_token` exists | C.4: under remote, read bearer from `safeStorage`-backed session instead. `BackendInfo` becomes `{url, mode}` only on the wire; auth is acquired separately. |
+| `main/index.ts:532-539` `backend:info` handler | Returns `auth_token` verbatim | C.4: when `mode === 'remote'`, omit `auth_token` from the payload (or set to `null`). Type of `BackendInfo.auth_token` becomes `string | null`. |
+
+### 6.1 `BackendInfo.auth_token` consumers
+
+C.4 is **not** just a `fetchWithInfo` edit. Every renderer site that
+reads `info.auth_token` must either disappear or route through a
+single new helper (working title `getSessionBearer()`) that picks the
+right token source per mode:
+
+- embedded → bootstrap session persisted via `safeStorage`
+  (initialised by `/auth/embedded-bootstrap` on first launch)
+- remote → signup/login session persisted via `safeStorage`
+
+| Site | Today | C.4 disposition |
+|---|---|---|
+| `apps/desktop/src/preload/index.ts:6` | `auth_token: string` (required) | Becomes `auth_token: string \| null` (embedded: string; remote: null). Renderer never reads it again after C.4 — kept only to let main's headless smoke handshake compile against the same type. |
+| `apps/desktop/src/preload/api.d.ts:4` | mirrors preload | Same change. |
+| `apps/desktop/src/renderer/lib/api.ts:47` `fetchWithInfo` | `Bearer ${info.auth_token}` | Switch to `Bearer ${await getSessionBearer()}`. |
+| `apps/desktop/src/renderer/lib/api.ts:112` `apiUpload` inline `send` | `Bearer ${i.auth_token}` | Same. Consider folding into `fetchWithInfo` shape so there's one auth call site. |
+| `apps/desktop/src/renderer/lib/api.ts:164` `fetchAttachmentBlob` | `Bearer ${info.auth_token}` | Same. |
+| `apps/desktop/src/renderer/lib/ws-client.ts:193` `openSocket` | `token = info.auth_token` for WS subprotocol/header | Same. The WS session reuses the HTTP bearer; no separate token. |
+| `apps/desktop/src/renderer/features/me/hooks.ts:171-181` avatar fetch | manual `Bearer ${info.auth_token}` | Same. |
+| `apps/desktop/src/renderer/features/agents/avatar-hooks.ts:43-50` agent avatar fetch | manual `Bearer ${info.auth_token}` | Same. |
 | (new) `/auth/embedded-bootstrap` route | does not exist | C.4 lands the route + the four-constraint test matrix (one test per constraint × {happy, violated}). |
 | (new) `~/.silverhand/embedded-bootstrap` token file | does not exist | C.4 lands write (mode 0600) at backend boot + consume-on-first-read semantics + regenerate on reboot. |
+
+The tripwire test §7 grows an assertion that **renderer source tree
+contains zero references to `auth_token` or `\.auth_token`** after
+C.4 lands. Until then the assertion is checked-in but expected to
+fail — that's how we know C.4 isn't finished.
+
+### 6.2 Headless smoke path (dev / `pnpm dev:headless`)
+
+`apps/desktop/src/main/index.ts:852-864` prints the embedded
+`auth_token` on stdout as a JSON handshake so `curl`-driven smoke
+tests can authenticate. This is a **dev-only embedded-only** surface
+and is **out of scope for C.4 renderer changes**, but it is part of
+the same embedded-token attack surface and must not be silently
+forgotten:
+
+- It is acceptable under embedded mode (loopback only, dev-only flag).
+- Under remote mode it must print `auth_token: null` (or omit the
+  field). Headless + remote is not a supported V1 flow — the
+  expectation is that `dev:headless` only runs against embedded.
+- D1 reshapes this when `packages/server` becomes the real headless
+  entry point; until then it stays as-is.
+- Tripwire whitelist: `main/index.ts:852-864` is the single permitted
+  `auth_token` reader in main after C.4. Recorded here so a later
+  pass that "removes all auth_token references" doesn't accidentally
+  break the dev smoke path.
 
 ## 7. Catalogue invariant test
 
 `apps/desktop/src/main/__tests__/protocol-purity.test.ts` is the
-single-file tripwire that keeps this document honest. Three assertions:
+single-file tripwire that keeps this document honest. Four assertions:
 
 1. **Imports from `@silverhand/backend` in `apps/desktop/src/main/**/*.ts`**
    equals exactly the set in §3.
@@ -163,6 +221,14 @@ single-file tripwire that keeps this document honest. Three assertions:
    `from '@silverhand/backend'` or `from '@silverhand/backend/...'`.
    (Type-only re-exports through `@silverhand/shared` are fine and
    actively encouraged — shared is the protocol layer.)
+4. **`apps/desktop/src/renderer/**/*.{ts,tsx}` contains zero
+   references to `\.auth_token` or `auth_token:` reads.** This
+   assertion is checked-in immediately and is **expected to fail
+   until C.4 lands** — the failing test is how we know C.4 is not
+   finished. Whitelisted exceptions: none in the renderer. In main,
+   `index.ts:532-539` (`backend:info` handler) and `index.ts:852-864`
+   (headless smoke handshake) remain the only permitted readers (see
+   §6.2).
 
 When a PR needs to add a new IPC handler or a new backend import, the
 flow is: update this doc + add the disposition row, **then** the test
@@ -205,3 +271,7 @@ this).
 ## Review log
 
 - 2026-05-25 — Initial draft by @Alice (Stage C.1 deliverable).
+- 2026-05-25 (round 1) — @Cindy review (#task:574). Two P1 + one P2 absorbed:
+  - **P1 local-host-only UX gate**: §2/§4/§5 rewritten. `showItemInFolder` / `pickDirectory` / `CreateWorkspaceDialog` gate is now **path provenance** (`host.id === local_host_id && host.kind === 'local'`), not backend mode. Backend mode is orthogonal to host kind — under remote-backend mode the desktop is still a local Host and user-fs paths remain legitimate. §5 also defines how `local_host_id` reaches the renderer (additive field on `backend:info`).
+  - **P1 auth_token consumer list**: §6 split into §6.1 — full enumeration of all 8 sites (3 in `lib/api.ts`, 1 in `ws-client.ts`, 1 in `me/hooks.ts`, 1 in `agents/avatar-hooks.ts`, 2 preload type declarations). §7 grows a 4th tripwire assertion that **renderer source tree contains zero `auth_token` references** — checked in immediately, fails until C.4 lands. Whitelist limited to main's `backend:info` handler and headless smoke handshake.
+  - **P2 headless stdout token**: new §6.2 documents the embedded-only dev surface, requires `auth_token: null` (or omit) under remote mode, calls it out of scope for C.4 renderer changes, pins it as the single permitted `auth_token` reader in main post-C.4. D1 reshapes it via `packages/server` entry point.
