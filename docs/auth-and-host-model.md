@@ -328,8 +328,21 @@ This flow runs in the Electron **main** process; the renderer only sees
 [main] write {host_id, host_token, server_url} to
        ~/.silverhand/daemon-config.json (mode 0600, owner-only)
 [main] spawn local daemon (or signal existing daemon to reload config)
-[daemon] outbound-connects with host_token; server marks (user_id, host_id) online
+[daemon] holds host_token on disk; presents it on whatever transport
+         the daemon ↔ server channel uses (see transport note below)
 ```
+
+**Transport note**: V1 (Stage B in `remote-backend-roadmap.md`) keeps
+the existing pre-outbound transport — backend / Electron main dials the
+daemon's Unix socket via `HostClient`. The daemon does NOT initiate
+HTTP/WS calls to the backend in V1. Adding `host_token` to the request
+shape of an outbound daemon-initiated channel is the
+**follow-up phase** (daemon outbound protocol). Stage B's contract for
+`host_token` is: it is issued, persisted, validated by a generic
+`verifyHostToken()` server-side, and used to authorize host-scoped
+operations the server performs (placement routing, revoke enforcement).
+Stage B does NOT introduce a new daemon-initiated authenticated
+connection.
 
 Renderer-side surface: the renderer sends "log me in" / "log me out" IPCs
 to main and observes connection state via subscription. It never receives
@@ -750,3 +763,18 @@ This doc deliberately leaves the following undecided:
     (remote create) and `POST /api/hosts/{id}/exchange` move with the
     headless daemon binary into Phase 4 / V1.5 so we don't expose
     bootstrap-exchange surface ahead of its caller.
+- 2026-05-25 — Round 4 transport-truth fix (Alice). Addresses the
+  cross-doc finding from Cindy on `remote-backend-roadmap.md` round 2:
+  - §6.1 last diagram line previously read "[daemon] outbound-connects
+    with host_token; server marks (user_id, host_id) online". This
+    overstated V1's transport — V1 keeps the pre-outbound model where
+    backend/Electron main dials the daemon's Unix socket via
+    `HostClient`; the daemon does NOT initiate HTTP/WS to the backend.
+    Rewritten to "daemon holds host_token on disk; presents it on
+    whatever transport the daemon ↔ server channel uses" + new
+    "Transport note" paragraph clarifying that the daemon-initiated
+    authenticated connection lands in the **follow-up phase** (daemon
+    outbound protocol), not Stage B. Stage B's `host_token` contract:
+    issued + persisted + validated by `verifyHostToken()` + used to
+    authorize host-scoped server-side operations (placement, revoke
+    enforcement). No new daemon-initiated channel.
