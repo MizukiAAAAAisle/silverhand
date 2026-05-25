@@ -34,12 +34,14 @@ Every IPC route / main-process backend interaction gets exactly one tag.
 | **data** | Anything the backend already owns (or should own). The renderer must see it via HTTP, even if main proxies the request. | Convert in **C.2**. |
 | **local-host-only UX** | Legitimate "reveal in Finder", "open in default app" style affordance that only makes sense when the path lives on the user's machine. **Backend mode is orthogonal**: under remote-backend mode the desktop is still a local Host (Stage B `host.kind='local'`) and workspaces/agent dirs placed on that host are still on the user's filesystem. | Keep, but gate by **path provenance**: only when the path's owning host satisfies `host_id === local_host_id && host.kind === 'local'` (the local Host this desktop registered with the server in Stage B). **Never** gate on backend mode — that would hide legitimate UX from the remote-backend / local-Host case. C.3 lands the gate. |
 | **in-process shortcut** | main-process code that imports backend symbols directly (`startBackend`, `BackendContext`, `createCategorizedLoggers`, …) rather than going over HTTP. | Stays in **embedded** boot path only; Stage D1 extracts the symbols into `packages/server` and main launches that as a child process or in-proc adapter. |
+| **protocol metadata** | Neutral, dual-mode connection info the renderer needs to address the backend and gate per-host UX — `url`, `mode`, `local_host_id`, future `host_kind`. Visible under both embedded and remote modes; carries no embedded-only assumption. Not a "purity hazard"; called out so the catalogue has a precise word that isn't OS-IPC (which would imply native capability) or data (which would imply renderer-readable resource state). | Keep. New protocol-metadata fields are additive on existing IPC routes (typically `backend:info`); they MUST be listed in the relevant §4/§5 row in the same PR they land. |
 | **embedded-only** | Code that holds embedded-mode invariants (auth_token plaintext, loopback URL, `mode='embedded'` constant). | Keep, but **fence** behind a `mode === 'embedded'` check in **C.4**. Any new caller without the fence is a regression. |
-| **mixed** | A single IPC route / file carries fields with different tags (e.g. `backend:info` returns both general protocol metadata and an embedded-only `auth_token`). | The row's notes column MUST enumerate every contributing tag at field-level. Any field promotion (e.g. an OS-IPC field that grows embedded-only assumptions) is a regression unless the table is updated in the same PR. |
+| **mixed** | A single IPC route / file carries fields with different tags (e.g. `backend:info` returns both protocol metadata and an embedded-only `auth_token`). | The row's notes column MUST enumerate every contributing tag at field-level. Any field promotion (e.g. a protocol-metadata field that grows embedded-only assumptions) is a regression unless the table is updated in the same PR. |
 
 > Each **field** carries exactly one tag. If two seem to fit the same
 > field, the strictest one wins: **in-process shortcut** beats **data**
-> beats **embedded-only** beats **local-host-only UX** beats **OS-IPC**.
+> beats **embedded-only** beats **local-host-only UX** beats **OS-IPC**
+> beats **protocol metadata**.
 > When a route exposes multiple fields with different tags, tag the
 > route as **mixed** and break the contributing tags down per field in
 > the notes column (e.g. `backend:info`).
@@ -84,7 +86,7 @@ listed in the order they appear in main.
 
 | IPC channel | Preload method | Tag | Notes / V1 disposition |
 |---|---|---|---|
-| `backend:info` | `getBackendInfo` | **mixed** (see notes) | Returns `{url, mode, auth_token, local_host_id?}`. Tag breakdown: **OS-IPC** for `url` + `mode` + `local_host_id` — single source of truth lives in main (`ServerConfig` + the host-claim outcome from Stage B); the renderer needs them to address the backend, choose its auth flow, and gate host-kind UX. **embedded-only** for the `auth_token` field — that field is the legacy embedded shortcut C.4 fences. Under remote mode `auth_token` is `null` and the renderer acquires its session bearer from `getSessionBearer()` (see §6.1). The route itself stays, and C.3 adds `local_host_id` as an additive field; only the `auth_token` field carries the embedded-only constraint. |
+| `backend:info` | `getBackendInfo` | **mixed** (see notes) | Returns `{url, mode, auth_token, local_host_id?}`. Tag breakdown: **protocol metadata** for `url` + `mode` + `local_host_id` — neutral dual-mode connection info the renderer needs to address the backend, choose its auth flow, and gate host-kind UX. **embedded-only** for the `auth_token` field — that field is the legacy embedded shortcut C.4 fences. Under remote mode `auth_token` is `null` and the renderer acquires its session bearer from `getSessionBearer()` (see §6.1). The route itself stays, and C.3 adds `local_host_id` as an additive protocol-metadata field; only the `auth_token` field carries the embedded-only constraint. |
 | `dialog:pickDirectory` | `pickDirectory` | **local-host-only UX** | Native open dialog. The picked path is on the user's machine; under Stage B that path can only be assigned to a local Host. Caller is `CreateWorkspaceDialog`. C.3 gates the picker on "the workspace's target host kind is `local` and equals this desktop's `local_host_id`". Backend mode is irrelevant — remote-backend + local-Host still picks user-fs paths legitimately. If/when the user has non-local hosts available (remote / sandbox), the create-workspace flow needs an additional "host placement" step that this V1 does not ship (deferred; see roadmap §5 Follow-up); until then default placement is the local Host and the picker stays. |
 | `shell:openExternal` | `openExternal` | **OS-IPC** | Strict `https?://` allowlist already enforced. Kept as-is. |
 | `attachment:openExternal` | `openAttachmentExternal` | **OS-IPC** | Renderer fetches bytes via HTTP first; main only handles the local tmp-write + Launch Services call. Already protocol-pure. Keep. |
@@ -100,13 +102,15 @@ listed in the order they appear in main.
 | (event) `shutdown:progress` | `onShutdownProgress` | **OS-IPC** | Kept. |
 | (event) `navigate:settings` | `onNavigateSettings` | **OS-IPC** | App-menu → renderer route. Kept. |
 
-**No "data"-tagged routes today.** That is the good news; the bad news
-is `backend:info` smuggles the auth_token through the embedded short
-circuit, so C.4 must turn it from "data the renderer trusts" into
-"opaque mode hint plus loopback URL". After C.4 the renderer treats
-the `auth_token` field as **embedded-only** and acquires the bearer
-token through the same signup/login flow it would use against a remote
-server.
+**No "data"-tagged routes today.** That is the good news; the bad
+news is `backend:info` smuggles `auth_token` through the embedded
+short circuit, so C.4 must collapse it from "the only auth source the
+renderer trusts" into "an embedded-only legacy field that is `null`
+under remote". After C.4 `backend:info` returns pure **protocol
+metadata** (`url` + `mode` + `local_host_id`) plus that `null`able
+embedded-only field; the renderer acquires its session bearer from
+`getSessionBearer()` (§6.1) using the same signup/login flow it would
+use against a remote server.
 
 **Acceptance test (tripwire)**: the same protocol-purity test asserts
 the set of `ipcMain.handle('<channel>', …)` channels in
@@ -137,8 +141,8 @@ hydration, identical under both modes.
 `hosts` table and assigns this desktop's local host id when the daemon
 claims/registers. Main exposes it to the renderer through an additive
 field on `backend:info` (e.g. `local_host_id: string`) — that is a
-**data**-tagged extension of an already existing IPC, not a new route,
-so it stays inside the C.3 surface without needing a separate
+**protocol metadata** extension of an already existing IPC, not a new
+route, so it stays inside the C.3 surface without needing a separate
 disposition. Renderer caches it on `BackendInfo` and uses it for every
 host-kind gate in this table.
 
@@ -292,3 +296,5 @@ this).
 - 2026-05-25 (round 2) — @Cindy second pass. Two more issues absorbed:
   - **P1 §7 vs §8 contradiction**: §7 originally said assertion 4 was "checked-in and expected to fail until C.4", but §8 required the test to pass against the current tree — C.1 cannot land a default-failing test. Resolved by parking assertion 4 as `it.todo()` (or `.skip` with a TODO comment), keeping suite green through C.1 → C.4; C.4's acceptance includes flipping the assertion to `it()`. §7 rewritten into a per-assertion table; §6.1 closing paragraph aligned; §8 first checkbox restated.
   - **P2 `backend:info` was wrongly single-tagged `embedded-only`**: Cindy noted §5 also requires the route to grow `local_host_id`, which is general protocol metadata, not embedded legacy. New tag **mixed** added to §2 vocabulary with a rule that the notes column must enumerate every contributing tag at field-level. `backend:info` row in §4 retagged to `mixed`, with `url` + `mode` + `local_host_id` called out as **OS-IPC** and `auth_token` as **embedded-only**. C.4's fence is field-scoped, not route-scoped.
+- 2026-05-25 (round 3) — @Cindy third pass. One P2 absorbed:
+  - **Vocab mismatch — `local_host_id` was tagged both `OS-IPC` (round 2 §4) and `data` (round 1 §5)**, and shoving connection-metadata fields under OS-IPC was conceptually awkward (OS-IPC is "native desktop capability"). Resolved by adding a sixth vocab tag **protocol metadata** in §2 — neutral, dual-mode connection info (`url`, `mode`, `local_host_id`, future `host_kind`) that the renderer needs to address the backend and gate per-host UX. §4 `backend:info` row retagged accordingly (`url` + `mode` + `local_host_id` = protocol metadata; `auth_token` still embedded-only). §5 `local_host_id` propagation paragraph rewritten to use the same word. §4 closing paragraph rewritten so `backend:info` post-C.4 is described as "pure protocol metadata + a nullable embedded-only legacy field". Strictest-wins ordering extended: protocol metadata sits at the bottom (most benign) since it carries no purity hazard.
