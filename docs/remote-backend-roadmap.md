@@ -408,8 +408,9 @@ only" definition. shiki selected the wider scope (round 4 product call)
 because the V1 prep goal is "future remote + multi-user 不返工 **and**
 现在 fill URL 就能用". The cost is ~4-5 weeks total and a higher
 regression surface; the mitigation is **strict milestone separation**:
-D1 ships and soaks before D2 starts; D2 ships and soaks before D3
-integrates; D4 is the e2e acceptance milestone. Do NOT merge daemon
+D1 ships and soaks before D2.0 starts; D2.0 signs off before D2;
+D2 ships and soaks before D3 integrates; D4 is the e2e acceptance
+milestone. Do NOT merge daemon
 outbound changes into D1 PRs or vice versa.
 
 **Critical scope note** (carried from Stage B): the host-identity
@@ -478,9 +479,9 @@ remote control-plane only; daemon transport is D2.
   startup.
 
 **Soak requirement**: D1 ships and runs in production-like usage
-(embedded + at least one remote-mode deployment) before D2 starts. The
-soak surface is large; we do not want D1 control-plane regressions
-masked under D2 transport churn.
+(embedded + at least one remote-mode deployment) before D2.0 starts.
+The soak surface is large; we do not want D1 control-plane regressions
+masked under later milestones' churn.
 
 ---
 
@@ -588,17 +589,33 @@ follow-up phase.
 
 > **The DB inbox / `RuntimeDeliveryCoordinator` is the only durable
 > intent queue.** The WS transport MUST NOT invent a second durable
-> queue. When the WS is disconnected or its write buffer is saturated,
-> server-side dispatch of `spawn` / `wake` / `status` / `stop` /
-> `rotate_token` MUST fail with an explicit reason
-> (`host_disconnected` / `host_backpressure`); the originating
-> delivery row stays `pending` in the DB inbox and the existing
-> `RuntimeDeliveryCoordinator` retries it once the host is
-> reconnected and `ready`. Control-plane commands are
-> **non-droppable**. Only raw runtime output (high-volume log/event
-> stream) MAY have droppable semantics, and only when the drop is
-> explicitly logged with sequence numbers so the receiver detects the
-> gap.
+> queue. WS write buffer is bounded and **non-durable**.
+>
+> Server → daemon commands split into two categories with different
+> failure semantics; D2 implementations MUST distinguish them:
+>
+> - **delivery-backed commands** — a `wake` triggered by user message
+>   inbox delivery, or a `spawn` with a startup-delivery payload.
+>   These have a corresponding `pending` row in the inbox. On
+>   `host_disconnected` / `host_backpressure`, the originating inbox
+>   row stays `pending` and `RuntimeDeliveryCoordinator` retries the
+>   dispatch when the host reconnects and reports `ready`. The
+>   command itself is non-droppable because the inbox row is.
+> - **non-delivery control commands** — `status`, `stop`,
+>   `rotate_token`, and any `spawn` not driven by a delivery (e.g.
+>   placement/start lifecycle). These have NO inbox row. On
+>   `host_disconnected` / `host_backpressure`, dispatch fails
+>   synchronously to the caller with the explicit reason; **the
+>   server MUST NOT fabricate an off-DB pending queue** for them.
+>   Whether to retry is the caller's decision (UI prompt, scheduler
+>   re-issue, etc.) — typically a no-op until the user retries the
+>   action.
+>
+> Both categories are **non-droppable in the dispatch path** — the
+> failure is always observable to either the inbox-coordinator or
+> the direct caller. Only raw runtime output (high-volume
+> `output` events) MAY have droppable semantics, and only when the
+> drop is sequence-numbered so the receiver detects the gap.
 
 **Out of scope for D2**: anything that ties daemon outbound to a host
 kind other than `local`. Headless daemon binary, remote-host
@@ -620,9 +637,12 @@ provisioning UI, sandbox capability — all still deferred (§2).
 - **D2.d** Daemon → server event frames (`state` / `output` / `ready`
   / `exit` / `tool_use`) wired into the backend's existing event
   fan-out.
-- **D2.e** Disconnect / backpressure / connection-loss recovery
-  contract: `RuntimeDeliveryCoordinator` integration so dispatch
-  fails fast with explicit reason and DB inbox retry takes over.
+- **D2.e** Delivery-backed dispatch recovery: integrate with
+  `RuntimeDeliveryCoordinator` so delivery-backed commands fail with
+  explicit reason on disconnect/backpressure and the inbox-coordinator
+  re-dispatches on reconnect+ready. **Non-delivery control commands
+  (`status` / `stop` / `rotate_token` / delivery-less `spawn`) only
+  fail-fast to the caller; they do NOT enter the coordinator.**
 - **D2.f** Token rotation over WS (`rotate_token` command).
 
 **Acceptance criteria for D2**:
@@ -638,18 +658,25 @@ provisioning UI, sandbox capability — all still deferred (§2).
   same parity test.
 - WS reconnect after server restart: daemon reconnects within bounded
   backoff. **No transport-side durable queue exists**; pending
-  deliveries are still in the DB inbox marked pending and
-  `RuntimeDeliveryCoordinator` re-dispatches them when the host
-  reports `ready` after reconnect; duplicate-delivery suppression
-  uses the existing inbox `delivered_at` + `dedupKey` path.
-- **Backpressure / disconnect dispatch failure**: when the WS write
-  buffer is saturated or the connection is down, dispatch of any
-  control command (`spawn` / `wake` / `status` / `stop` /
-  `rotate_token`) returns an explicit error (`host_disconnected` or
-  `host_backpressure`); the inbox row stays pending; no command is
-  silently dropped or queued off-DB. Verified by an integration test
-  that yanks the WS connection mid-dispatch and asserts the inbox
-  row's state.
+  *delivery-backed* commands are still in the DB inbox marked
+  pending and `RuntimeDeliveryCoordinator` re-dispatches them when
+  the host reports `ready` after reconnect; duplicate-delivery
+  suppression uses the existing inbox `delivered_at` + `dedupKey`
+  path.
+- **Delivery-backed dispatch failure**: when WS is disconnected /
+  saturated and the failing command is a `wake` or delivery-bearing
+  `spawn`, the originating inbox row stays `pending`; reconnect +
+  `ready` triggers `RuntimeDeliveryCoordinator` to re-dispatch.
+  Verified by an integration test that yanks the WS mid-dispatch
+  with a queued user message and asserts the inbox row + retry path.
+- **Non-delivery control dispatch failure**: when WS is disconnected
+  / saturated and the failing command is `status` / `stop` /
+  `rotate_token` / delivery-less `spawn`, dispatch returns
+  `host_disconnected` or `host_backpressure` synchronously to the
+  caller; **no inbox row is created and no off-DB queue is
+  fabricated**. Verified by an integration test that asserts no new
+  inbox row appears and no retry happens on reconnect (caller's
+  responsibility).
 - Connection loss during active spawn: agent process is not orphaned;
   on reconnect, state converges via the same `RuntimeDeliveryCoordinator`
   recovery path daemon PR-2 already established (either resumed or
@@ -829,12 +856,14 @@ written alongside D2 implementation).
   discussion. Splitting the server process before scrubbing in-process
   shortcuts means each shortcut becomes either a crash or a leak at
   cutover. C is cheap; rework after D is expensive.
-- **D1 must ship and soak before D2 starts**, **D2 before D3**, **D3
-  before D4**: Stage D is the only "wide" stage in V1; mixing control-
-  plane split with daemon outbound transport with desktop lifecycle
-  changes in a single change window is exactly the anti-pattern that
-  earlier rounds of this roadmap nearly fell into. The four milestones
-  exist precisely to keep that surface separable.
+- **D1 must ship and soak before D2.0 starts**, **D2.0 must sign off
+  before D2.a opens**, **D2 must ship and soak before D3**, **D3
+  before D4**: Stage D is the only "wide" stage in V1; mixing
+  control-plane split with orchestration boundary design with daemon
+  outbound transport with desktop lifecycle changes in a single
+  change window is exactly the anti-pattern that earlier rounds of
+  this roadmap nearly fell into. The five milestones (D1, D2.0, D2,
+  D3, D4) exist precisely to keep that surface separable.
 - **Follow-up phase must wait for D4**: distribution / new Host kinds
   / capability layers are *intentionally* held back so V1 ships a
   closed loop on `kind=local` before generalising.
@@ -848,22 +877,26 @@ written alongside D2 implementation).
 - **C.1 (audit catalogue) can start anytime**: it's a doc/test
   artifact, not code. Doing it early surfaces hidden coupling early
   and pre-sizes C's PR queue.
-- **D1 and D2 design/spec work can overlap with C**: the
-  `docs/daemon-outbound-protocol.md` frame schema and the
-  `docs/server-env-config.md` env contract can both be drafted while
-  Stage C audit and conversions are landing — these are doc artifacts,
-  not implementation. Implementation order remains C → D1 → D2 → D3 → D4.
+- **D1, D2.0, D2 design/spec work can overlap with C**: the
+  `docs/orchestration-boundary-v1.md` (D2.0 deliverable),
+  `docs/daemon-outbound-protocol.md` (D2.a frame schema), and
+  `docs/server-env-config.md` (D1 env contract) can all be drafted
+  while Stage C audit and conversions are landing — these are doc
+  artifacts, not implementation. Implementation order remains
+  C → D1 → D2.0 → D2 → D3 → D4.
 
 **Anti-pattern to avoid**:
 
-> "Let's bundle D1 + D2 into one big Stage D PR set so it ships faster."
+> "Let's bundle D1 + D2 (or D2.0 + D2) into one big Stage D PR set so
+> it ships faster."
 
 This is the trap that caused two earlier rounds of this roadmap to
 leak daemon outbound into the wrong stage. D1 is *control-plane only*;
-D2 is *new transport, new failure modes*. Mixing them means a
-control-plane regression and a transport regression land in the same
-change window, and the bisect surface is the union of both. The whole
-point of the D1→D2→D3→D4 split is to keep regression bisects narrow.
+D2.0 is *boundary design with no implementation*; D2 is *new transport,
+new failure modes*. Mixing any two means regressions of distinct kinds
+land in the same change window and the bisect surface is the union of
+both. The whole point of the D1 → D2.0 → D2 → D3 → D4 split is to keep
+regression bisects narrow.
 
 ---
 
@@ -1044,3 +1077,30 @@ this list — round 4 of this roadmap moved it into Stage D2.
     "generalisation review for headless/sandbox" — V1 boundary
     decision is now made in D2.0, follow-up reviews it for
     multi-Host-kind cases.
+- 2026-05-25 — Round 6 durable-queue scope fix (Alice). Addresses
+  Cindy review round 5 P1/P2:
+  - **P1 durable queue applies only to delivery-backed commands**:
+    earlier durability invariant wording bound *every* control
+    command to an inbox row, but only `wake` (always) and `spawn` (when
+    driven by startup delivery) are delivery-backed; `status` /
+    `stop` / `rotate_token` and delivery-less `spawn` are
+    non-delivery control commands with no inbox row. Rewritten the
+    Durability invariant callout to split the two categories with
+    distinct dispatch-failure semantics: delivery-backed →
+    `RuntimeDeliveryCoordinator` retry path; non-delivery → fail-fast
+    to caller, no fabricated off-DB queue. Acceptance criteria split
+    into two corresponding test paths (one yanks WS with a queued
+    user message → asserts inbox row + retry; one yanks WS with a
+    `status`/`stop` call → asserts no inbox row appears and no
+    retry happens).
+  - **P2 sequence-consistency cleanup**: all "before D2 starts" /
+    "D1→D2→D3→D4" phrasings updated to include D2.0 between D1 and
+    D2 — soak requirement, hard constraints, soft constraints,
+    anti-pattern, implementation order ("C → D1 → D2.0 → D2 → D3 →
+    D4"), dependency graph already updated in round 5.
+  - **P2 D2.e rename**: D2.e "Disconnect / backpressure /
+    connection-loss recovery contract" → "Delivery-backed dispatch
+    recovery"; same sub-PR now also documents the non-delivery
+    fail-fast contract in the same place, so a reader looking at
+    D2.e sees both categories of failure handling and doesn't
+    assume every control command flows through RDC.
