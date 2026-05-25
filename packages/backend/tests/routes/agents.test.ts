@@ -142,6 +142,47 @@ describe('GET/DELETE /api/agents', () => {
     expect(list.agents.map((a: any) => a.name)).toEqual(['a', 'b']);
   });
 
+  it('filters agent list to owned or workspace-visible agents', async () => {
+    t = buildTestApp();
+    t.ctx.db.exec(
+      `DROP TRIGGER IF EXISTS test_seed_workspace_users;
+       DROP TRIGGER IF EXISTS test_seed_conversation_users;`,
+    );
+    const teammateHeaders = {
+      [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
+    };
+    const created = await (
+      await http(t).post(
+        '/api/agents',
+        { name: 'teammate-agent', runtime: 'claude' },
+        { headers: teammateHeaders },
+      )
+    ).json() as any;
+
+    let localList = await (await http(t).get('/api/agents')).json() as any;
+    expect(localList.agents.map((a: any) => a.id)).not.toContain(created.agent.id);
+
+    const ws = await (
+      await http(t).post(
+        '/api/workspaces',
+        {
+          name: 'shared',
+          member_agent_ids: [created.agent.id],
+        },
+        { headers: teammateHeaders },
+      )
+    ).json() as any;
+    t.ctx.db
+      .prepare(
+        `INSERT INTO workspace_users (workspace_id, user_id, joined_at)
+         VALUES (?, 'local', ?)`,
+      )
+      .run(ws.workspace.id, Date.now());
+
+    localList = await (await http(t).get('/api/agents')).json() as any;
+    expect(localList.agents.map((a: any) => a.id)).toContain(created.agent.id);
+  });
+
   it('DELETE without confirm flag is rejected (400)', async () => {
     t = buildTestApp();
     const created = await (
@@ -327,6 +368,43 @@ describe('PATCH /api/agents/:id', () => {
     );
     expect(allowed.status).toBe(200);
   });
+
+  it('keeps profile mutation owner-only even when the agent is workspace-visible', async () => {
+    t = buildTestApp();
+    t.ctx.db.exec(
+      `DROP TRIGGER IF EXISTS test_seed_workspace_users;
+       DROP TRIGGER IF EXISTS test_seed_conversation_users;`,
+    );
+    const teammateHeaders = {
+      [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
+    };
+    const created = await (
+      await http(t).post(
+        '/api/agents',
+        { name: 'shared-agent', runtime: 'claude' },
+        { headers: teammateHeaders },
+      )
+    ).json() as any;
+    const ws = await (
+      await http(t).post(
+        '/api/workspaces',
+        { name: 'visible-ws', member_agent_ids: [created.agent.id] },
+        { headers: teammateHeaders },
+      )
+    ).json() as any;
+    t.ctx.db
+      .prepare(
+        `INSERT INTO workspace_users (workspace_id, user_id, joined_at)
+         VALUES (?, 'local', ?)`,
+      )
+      .run(ws.workspace.id, Date.now());
+
+    expect((await http(t).get(`/api/agents/${created.agent.id}`)).status).toBe(200);
+    const denied = await http(t).patch(`/api/agents/${created.agent.id}`, {
+      display_name: 'Nope',
+    });
+    expect(denied.status).toBe(403);
+  });
 });
 
 describe('GET /api/agents/:id/workspace', () => {
@@ -420,6 +498,41 @@ describe('POST /api/agents/:id/stop', () => {
     const body = await res.json() as any;
     expect(body.stopped).toBe(0);
     expect(t.fake.stops).toHaveLength(0);
+  });
+
+  it('keeps stop owner-only even when the agent is workspace-visible', async () => {
+    t = buildTestApp();
+    t.ctx.db.exec(
+      `DROP TRIGGER IF EXISTS test_seed_workspace_users;
+       DROP TRIGGER IF EXISTS test_seed_conversation_users;`,
+    );
+    const teammateHeaders = {
+      [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
+    };
+    const created = await (
+      await http(t).post(
+        '/api/agents',
+        { name: 'owned-by-teammate', runtime: 'claude' },
+        { headers: teammateHeaders },
+      )
+    ).json() as any;
+    const ws = await (
+      await http(t).post(
+        '/api/workspaces',
+        { name: 'stop-visible', member_agent_ids: [created.agent.id] },
+        { headers: teammateHeaders },
+      )
+    ).json() as any;
+    t.ctx.db
+      .prepare(
+        `INSERT INTO workspace_users (workspace_id, user_id, joined_at)
+         VALUES (?, 'local', ?)`,
+      )
+      .run(ws.workspace.id, Date.now());
+
+    expect((await http(t).get(`/api/agents/${created.agent.id}`)).status).toBe(200);
+    const denied = await http(t).post(`/api/agents/${created.agent.id}/stop`);
+    expect(denied.status).toBe(403);
   });
 });
 

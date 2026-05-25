@@ -8,21 +8,14 @@ import {
 import type { BackendContext } from '../context.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
-import { SettingsRepo } from '../repos/settings-repo.js';
 import { UserRepo } from '../repos/user-repo.js';
 
 /**
- * V1 (single user): the principal middleware resolves the registered
- * viewer's id from `app_settings.viewer_user_id`. The pointer is only
- * present after `POST /api/register` has run; before then, no user
- * principal is set at all (see `installPublicPrincipalMiddleware`).
- *
- * Once set, `userId` is non-null. The downstream gate
- * (`installRequireRegisteredViewerMiddleware`) refuses every public
- * route except the registration whitelist when no principal is set.
- *
- * V2 (multi-user, post token-claims): the same field is populated from
- * session/token claims; the type stays the same.
+ * Public user principal resolved from the request itself. Stage A.3
+ * removes the old `app_settings.viewer_user_id` fallback: callers must
+ * present a session bearer (preferred) or an explicit legacy principal
+ * header during the transition. No request-bound principal means the
+ * registration gate sees "no viewer" and refuses non-whitelisted routes.
  */
 export type UserPrincipal = { kind: 'user'; userId: string };
 export type AgentPrincipal = {
@@ -65,7 +58,7 @@ export function installPublicPrincipalMiddleware(
       await next();
       return;
     }
-    // Anonymous/public paths skip principal resolution entirely; session
+    // Anonymous/public paths skip principal resolution entirely. Session
     // bearer requests already have their principal set by bearer.ts.
     if (
       c.req.path === apiPaths.health
@@ -82,9 +75,9 @@ export function installPublicPrincipalMiddleware(
     const resolved = resolvePublicUserPrincipal(c, ctx);
     if (resolved instanceof Response) return resolved;
     if (resolved === null) {
-      // Registration-required state: no viewer pointer yet, no client
-      // header. Don't set a principal — the gate downstream will refuse
-      // all non-whitelisted routes with 403 `registration_required`.
+      // Registration-required / no-principal state. Don't set a
+      // principal — the gate downstream will refuse all non-whitelisted
+      // routes with 403 `registration_required`.
       await next();
       return;
     }
@@ -223,7 +216,6 @@ export function resolvePublicUserPrincipal(
   ctx: BackendContext,
 ): UserPrincipal | null | Response {
   const users = new UserRepo(ctx.db);
-  const settings = new SettingsRepo(ctx.db);
 
   const principalHeader = c.req.header(X_SILVERHAND_PRINCIPAL_HEADER)?.trim();
   if (principalHeader) {
@@ -245,19 +237,7 @@ export function resolvePublicUserPrincipal(
     return { kind: 'user', userId: legacyUserId };
   }
 
-  // No client-supplied principal — fall back to the registered viewer.
-  // The pointer is absent until `POST /api/register` runs; treat that
-  // as a real signal (registration-required) and return null. The gate
-  // downstream rejects all non-whitelisted routes; the registration
-  // whitelist is reachable without any principal at all.
-  const viewerUserId = settings.getViewerUserId();
-  if (!viewerUserId) {
-    return null;
-  }
-  if (!users.get(viewerUserId)) {
-    return c.json({ error: 'viewer user pointer is dangling' }, 500);
-  }
-  return { kind: 'user', userId: viewerUserId };
+  return null;
 }
 
 export function setPrincipal(c: AppContext, principal: Principal): void {

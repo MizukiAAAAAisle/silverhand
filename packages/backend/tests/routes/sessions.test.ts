@@ -306,8 +306,7 @@ describe('canonical channel/thread routes', () => {
       content: 'mine',
     });
 
-    const res = await http(t, { 'x-silverhand-user-id': 'local' })
-      .get('/api/message-unread-summary');
+    const res = await http(t).get('/api/message-unread-summary');
     expect(res.status).toBe(200);
     const body = await res.json() as any;
     expect(body.by_workspace).toEqual({ [workspace.id]: 1 });
@@ -338,6 +337,29 @@ describe('canonical channel/thread routes', () => {
     expect(deleted.status).toBe(204);
     const afterDelete = await (await http(t).get('/api/saved')).json() as any;
     expect(afterDelete.saved).toEqual([]);
+  });
+
+  it('gates saved-message operations by source conversation visibility', async () => {
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t, ['alice']);
+    const msg = await (
+      await http(t).post(`/api/channels/${channelId}/messages`, {
+        content: 'hidden save',
+      })
+    ).json() as any;
+    const saved = await http(t).post(`/api/messages/${msg.message.id}/save`);
+    expect(saved.status).toBe(201);
+
+    t.ctx.db
+      .prepare(`DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = 'local'`)
+      .run(channelId);
+    const listed = await (await http(t).get('/api/saved')).json() as any;
+    expect(listed.saved).toEqual([]);
+
+    const resave = await http(t).post(`/api/messages/${msg.message.id}/save`);
+    expect(resave.status).toBe(404);
+    const unsave = await http(t).del(`/api/messages/${msg.message.id}/save`);
+    expect(unsave.status).toBe(404);
   });
 
   it('starts and stops channel/thread agents through canonical routes', async () => {

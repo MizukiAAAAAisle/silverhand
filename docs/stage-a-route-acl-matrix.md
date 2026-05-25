@@ -25,6 +25,7 @@ gaps without changing Stage B host ownership schema early.
 | `app_settings.viewer_user_id` | Remove as a principal fallback. Keep `POST /api/register` bootstrap behavior until A.4 replaces setup. |
 | Pre-register 403 | Preserve `registration_required` for the true no-viewer/no-setup bootstrap state. Session-bearer failures remain 401. |
 | Legacy principal headers | Keep during transition, but do not let them reintroduce a settings fallback. |
+| A.3 -> A.4 desktop dev gap | Removing the settings fallback before A.4 session UI lands means embedded desktop on the integration branch stays at `registration_required`. Manual HTTP tests must send `X-Silverhand-User-Id` or `X-Silverhand-Principal`; do not add a transient main-process compat patch that reads settings again. Treat A.3+A.4 as one releasable unit. |
 | `hosts` ownership | Target class is direct owner, but the owner column/table belongs to Stage B.1. Do not invent a host schema in A.3. |
 | Saved messages | Current schema is global by `message_id`. A.3 can gate by message/conversation visibility, but true per-user saved state requires a later schema decision. |
 | Cross-user namespace ops | Default to 404 over 403 when denying access would otherwise leak another user's resource namespace. |

@@ -199,11 +199,20 @@ export class NotificationRepo {
     return row?.c ?? 0;
   }
 
-  markRead(id: string): boolean {
+  markRead(id: string, userId?: string | null): boolean {
     const now = Date.now();
+    const userPredicate =
+      userId === undefined || userId === null ? 'user_id IS NULL' : 'user_id = ?';
+    const args = userId == null ? [now, id] : [now, userId, id];
     const r = this.db
-      .prepare(`UPDATE notifications SET read_at = ? WHERE id = ? AND read_at IS NULL`)
-      .run(now, id);
+      .prepare(
+        `UPDATE notifications
+            SET read_at = ?
+          WHERE ${userPredicate}
+            AND id = ?
+            AND read_at IS NULL`,
+      )
+      .run(...args);
     return r.changes > 0;
   }
 

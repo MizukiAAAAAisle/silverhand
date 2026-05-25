@@ -16,14 +16,12 @@ import type { Database as Db } from 'better-sqlite3';
  * `POST /api/register` for every test.
  *
  * Test fixture compatibility: 50+ pre-rewrite route tests assume a
- * registered viewer with id `'local'` and rely on the principal
- * middleware resolving without an explicit header. To keep them
- * working without per-test registration calls, this helper INSERTs a
- * fixed set of **test fixture registered users** (NOT a product
- * fallback) and points `app_settings.viewer_user_id` at the `'local'`
- * row. Tests that need to exercise the registration-required state
- * should use a fresh DB without calling this helper, or wipe
- * `app_settings.viewer_user_id` explicitly afterwards.
+ * registered viewer with id `'local'`. To keep them working without
+ * per-test registration calls, this helper INSERTs a fixed set of
+ * **test fixture registered users** (NOT a product fallback). The HTTP
+ * test helper sends an explicit legacy user header by default; tests
+ * that need the registration-required state should override that header
+ * to an empty value and/or wipe the legacy settings pointer.
  */
 export function openTestDb(): {
   db: Db;
@@ -63,12 +61,9 @@ export function openTestDb(): {
     insertUser.run(u.id, u.name, u.display, now, now);
   }
 
-  // Point the viewer pointer at the 'local' fixture row so the
-  // principal middleware (which falls back to
-  // `app_settings.viewer_user_id` when no header is supplied)
-  // resolves the legacy id pre-rewrite tests expect. Production
-  // never sees this — `app_settings.viewer_user_id` is written only
-  // by `POST /api/register`.
+  // Keep the legacy viewer pointer for bootstrap/WS compatibility
+  // tests. A.3 removed it as an HTTP principal fallback; production
+  // still only writes this through `POST /api/register`.
   db.prepare(
     `INSERT INTO app_settings (key, value) VALUES ('viewer_user_id', 'local')
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,

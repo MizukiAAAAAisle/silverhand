@@ -99,6 +99,8 @@ export interface SearchOptions {
    *  filter id matches the resolved viewer; pre-PR1 NULL-authored
    *  legacy messages are surfaced as "from current viewer". */
   includeNullAuthor?: boolean;
+  /** User visibility bottom guard for public search routes. */
+  visibleUserId?: string;
 }
 
 export class SearchRepo {
@@ -125,8 +127,8 @@ export class SearchRepo {
 
     if (includeNamedEntities) {
       results.push(
-        ...this.searchWorkspaces(input, query, Math.min(20, limit)),
-        ...this.searchConversations(input, query, Math.min(30, limit)),
+        ...this.searchWorkspaces(input, query, Math.min(20, limit), opts),
+        ...this.searchConversations(input, query, Math.min(30, limit), opts),
       );
     }
 
@@ -138,6 +140,7 @@ export class SearchRepo {
     input: SearchQueryInput,
     query: string,
     limit: number,
+    opts: SearchOptions,
   ): SearchResultDto[] {
     const where: string[] = [
       `(workspace_name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\')`,
@@ -145,6 +148,17 @@ export class SearchRepo {
     const params: SqlValue[] = [likeNeedle(query), likeNeedle(query)];
     applyNamedScopeFilters(where, params, input);
     applyTimeFilters(where, params, input, 'created_at');
+    if (opts.visibleUserId) {
+      where.push(
+        `EXISTS (
+           SELECT 1
+            FROM workspace_users wu
+            WHERE wu.workspace_id = search_ws.workspace_id
+              AND wu.user_id = ?
+         )`,
+      );
+      params.push(opts.visibleUserId);
+    }
     params.push(limit);
 
     const rows = this.db
@@ -162,7 +176,7 @@ export class SearchRepo {
                w.updated_at AS updated_at
               FROM workspaces w
              WHERE w.workspace_kind IN ('regular', 'agent_home')
-           )
+           ) search_ws
           WHERE ${where.join(' AND ')}
           ORDER BY updated_at DESC
           LIMIT ?`,
@@ -187,11 +201,13 @@ export class SearchRepo {
     input: SearchQueryInput,
     query: string,
     limit: number,
+    opts: SearchOptions,
   ): SearchResultDto[] {
     const where: string[] = [`conv.title LIKE ? ESCAPE '\\'`];
     const params: SqlValue[] = [likeNeedle(query)];
     applyConversationScopeFilters(where, params, input, 'conv', 'root', 'w');
     applyTimeFilters(where, params, input, 'conv.created_at');
+    applyConversationUserVisibility(where, params, opts, 'conv');
     params.push(limit);
 
     const rows = this.db
@@ -241,6 +257,7 @@ export class SearchRepo {
     }
     applyConversationScopeFilters(where, params, input, 'conv', 'root', 'w');
     applyTimeFilters(where, params, input, 'm.created_at');
+    applyConversationUserVisibility(where, params, opts, 'conv');
     if (input.user_id) {
       where.push(`m.from_kind = 'user'`);
       // Legacy NULL-authored messages are surfaced as "from current
@@ -297,6 +314,24 @@ export class SearchRepo {
       agent_name: row.agent_name,
     }));
   }
+}
+
+function applyConversationUserVisibility(
+  where: string[],
+  params: SqlValue[],
+  opts: SearchOptions,
+  conversationAlias: string,
+): void {
+  if (!opts.visibleUserId) return;
+  where.push(
+    `EXISTS (
+       SELECT 1
+         FROM conversation_users cu
+        WHERE cu.conversation_id = ${conversationAlias}.id
+          AND cu.user_id = ?
+     )`,
+  );
+  params.push(opts.visibleUserId);
 }
 
 function applyNamedScopeFilters(

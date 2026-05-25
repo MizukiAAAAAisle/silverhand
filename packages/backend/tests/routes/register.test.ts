@@ -33,11 +33,15 @@ describe('POST /api/register', () => {
     test.ctx.db.prepare(`DELETE FROM users WHERE id = 'local'`).run();
   }
 
+  function noPrincipalHttp(test: TestApp) {
+    return http(test, { 'X-Silverhand-User-Id': '' });
+  }
+
   it('atomically INSERTs the user row and writes viewer_user_id', async () => {
     t = buildTestApp();
     unregisterViewer(t);
 
-    const res = await http(t).post(apiPaths.register, {
+    const res = await noPrincipalHttp(t).post(apiPaths.register, {
       name: 'shiki',
       display_name: 'Shiki',
     });
@@ -70,7 +74,7 @@ describe('POST /api/register', () => {
     t = buildTestApp();
     unregisterViewer(t);
 
-    const res = await http(t).post(apiPaths.register, { name: 'shiki' });
+    const res = await noPrincipalHttp(t).post(apiPaths.register, { name: 'shiki' });
     expect(res.status).toBe(200);
     const body = (await res.json()) as any;
     expect(body.name).toBe('shiki');
@@ -115,7 +119,7 @@ describe('POST /api/register', () => {
       .run(hostId, now, now);
     unregisterViewer(t);
 
-    const res = await http(t).post(apiPaths.register, { name: 'collide' });
+    const res = await noPrincipalHttp(t).post(apiPaths.register, { name: 'collide' });
     expect(res.status).toBe(409);
     const body = (await res.json()) as any;
     expect(body.code).toBe('name_taken');
@@ -126,24 +130,24 @@ describe('POST /api/register', () => {
     unregisterViewer(t);
 
     // Too short.
-    const tooShort = await http(t).post(apiPaths.register, { name: 'a' });
+    const tooShort = await noPrincipalHttp(t).post(apiPaths.register, { name: 'a' });
     expect(tooShort.status).toBe(400);
 
     // Disallowed character.
-    const bad = await http(t).post(apiPaths.register, { name: 'has space' });
+    const bad = await noPrincipalHttp(t).post(apiPaths.register, { name: 'has space' });
     expect(bad.status).toBe(400);
 
     // Numeric-first names break MENTION_RE (@<name>) which requires an
     // alpha first char. `users.name` is the permanent identity anchor,
     // so the registration schema must keep numeric-first out — otherwise
     // a user could register `123` and no one could ever @-mention them.
-    const numericFirst = await http(t).post(apiPaths.register, {
+    const numericFirst = await noPrincipalHttp(t).post(apiPaths.register, {
       name: '123abc',
     });
     expect(numericFirst.status).toBe(400);
 
     // Dash- / underscore-leading is also out (same alpha-first contract).
-    const dashFirst = await http(t).post(apiPaths.register, { name: '-shiki' });
+    const dashFirst = await noPrincipalHttp(t).post(apiPaths.register, { name: '-shiki' });
     expect(dashFirst.status).toBe(400);
   });
 
@@ -189,7 +193,7 @@ describe('POST /api/register', () => {
       )
       .run(now, now);
 
-    const res = await http(t).post(apiPaths.register, { name: 'shiki' });
+    const res = await noPrincipalHttp(t).post(apiPaths.register, { name: 'shiki' });
     expect(res.status).toBe(200);
     const body = (await res.json()) as any;
     const newId: string = body.id;
@@ -232,7 +236,7 @@ describe('POST /api/register', () => {
         .run();
       t.ctx.db.prepare(`DELETE FROM users WHERE id = 'local'`).run();
 
-      const res = await http(t).post(apiPaths.register, {
+      const res = await noPrincipalHttp(t).post(apiPaths.register, {
         name: 'shiki',
         display_name,
       });

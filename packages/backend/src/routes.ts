@@ -129,6 +129,7 @@ import {
   canManageMembers,
   canMutateWorkspace,
   canPostToConversation,
+  canViewAgent,
   canViewAttachment,
   canViewConversation,
   canViewOwnedState,
@@ -331,6 +332,30 @@ function requireViewerUserId(c: Context): string {
   return resolveViewerUserId(c);
 }
 
+function publicSettingsSnapshot(settings: SettingsRepo): Record<string, string> {
+  const out = { ...settings.all() };
+  delete out[SETTINGS_KEYS.VIEWER_USER_ID];
+  return out;
+}
+
+function legacyGlobalNotificationUserId(): null {
+  // Stage A.3 bridge: V1 notification writers still mostly create
+  // legacy global rows (`user_id IS NULL`). Keep every reader/writer
+  // call site grep-able until the per-user notification migration.
+  return null;
+}
+
+function listLegacyGlobalNotifications(
+  notifications: NotificationRepo,
+  opts: { unread?: boolean; limit?: number } = {},
+) {
+  return notifications.list({
+    userId: legacyGlobalNotificationUserId(),
+    unread: opts.unread,
+    limit: opts.limit,
+  });
+}
+
 const userServiceErrorStatusMap: Partial<
   Record<UserServiceError['code'], 400 | 404 | 409 | 413 | 415>
 > = {
@@ -527,12 +552,11 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     allowlist: [apiPaths.health, apiPaths.serverInfo],
   });
   installPublicPrincipalMiddleware(app, ctx);
-  // Registration gate: when no viewer is registered yet (no
-  // `app_settings.viewer_user_id`), the principal middleware sets no
-  // principal and this gate refuses every public route except public
-  // setup reads (`GET /api/server/info`), `GET /api/me` (so the
-  // renderer can branch on the registration-required shape), and
-  // `POST /api/register` (the legacy single-viewer creator).
+  // Registration gate: when the request has no user principal, this
+  // gate refuses every public route except public setup reads
+  // (`GET /api/server/info`), `GET /api/me` (so the renderer can
+  // branch on the registration-required shape), and `POST
+  // /api/register` (the legacy single-viewer creator).
   // `/api/health`, `/auth/*`, and `/internal/*` are anonymous /
   // route-owned / agent-principal and skip both layers. After
   // registration, the principal is set and the gate is a no-op for the
@@ -1455,11 +1479,10 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
    * dm_channel / thread) by id. Designed to back cross-workspace
    * secondary-pane resolution and the `#conv:<id>` sigil renderer (PR-3).
    *
-   * Permission: `canViewWorkspace(user, workspace_id)` only — the
-   * caller must be allowed to *see* the conversation's workspace.
-   * This route is on the user-facing surface only (no `/internal`
-   * twin), so agent principals never reach it. Do NOT generalise to
-   * agents without a dedicated ACL helper.
+   * Permission: `canViewConversation` — strict conversation membership.
+   * The route is user-facing only (no `/internal` twin), so agent
+   * principals never reach it. Do NOT generalise to agents without a
+   * dedicated ACL helper.
    *
    * Response intentionally excludes messages and per-user unread
    * state — those go through the existing window/cursor endpoints.
@@ -1471,7 +1494,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!id) return c.json({ error: 'conversation id required' }, 400);
     const conversation = conversations.get(id);
     if (!conversation) return c.json({ error: 'conversation not found' }, 404);
-    if (!canViewWorkspace(ctx, getUserPrincipal(c), conversation.workspace_id)) {
+    if (!canViewConversation(ctx, getUserPrincipal(c), conversation.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
     const workspace = workspaces.get(conversation.workspace_id);
@@ -1893,7 +1916,10 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     return c.json({ threads });
   });
 
-  app.get(apiPaths.saved, c => c.json({ saved: saved.list() }));
+  app.get(apiPaths.saved, c => {
+    const principal = getUserPrincipal(c);
+    return c.json({ saved: saved.listForUser(principal.userId) });
+  });
 
   // ── Attachments ──────────────────────────────────────────────────
   // Upload via channel/thread context so the server resolves the access
@@ -1967,6 +1993,10 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   app.post(apiPaths.messageSave(':id'), c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'message id required' }, 400);
+    const message = messages.getById(id);
+    if (!message || !canViewConversation(ctx, getUserPrincipal(c), message.conversation_id)) {
+      return c.json({ error: 'message not found' }, 404);
+    }
     const row = saved.save(id);
     if (!row) return c.json({ error: 'message not found' }, 404);
     // Notify the resolved viewer's private scope so the saved list
@@ -1984,6 +2014,10 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   app.delete(apiPaths.messageSave(':id'), c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'message id required' }, 400);
+    const message = messages.getById(id);
+    if (!message || !canViewConversation(ctx, getUserPrincipal(c), message.conversation_id)) {
+      return c.json({ error: 'message not found' }, 404);
+    }
     saved.remove(id);
     const viewerUserId = requireViewerUserId(c);
     ctx.events.publishToScope(
@@ -2007,7 +2041,10 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     const viewerUserId = requireViewerUserId(c);
     const includeNullAuthor =
       parsed.data.user_id !== undefined && parsed.data.user_id === viewerUserId;
-    const results = search.search(parsed.data, { includeNullAuthor });
+    const results = search.search(parsed.data, {
+      includeNullAuthor,
+      visibleUserId: viewerUserId,
+    });
     return c.json({ query: parsed.data, results });
   });
 
@@ -2157,6 +2194,10 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     agentId: string,
     c: Context,
   ): Promise<Response> {
+    if (!agents.get(agentId)) return c.json({ error: 'agent not found' }, 404);
+    if (!conversations.getAgent(conversationId, agentId)) {
+      return c.json({ error: 'agent is not a member of this conversation' }, 400);
+    }
     if (!canPostToConversation(ctx, getUserPrincipal(c), conversationId)) {
       return c.json({ error: 'forbidden' }, 403);
     }
@@ -2265,7 +2306,12 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   }
 
   // ── Agents ───────────────────────────────────────────────────────
-  app.get(apiPaths.agents, c => c.json({ agents: agents.list() }));
+  app.get(apiPaths.agents, c => {
+    const principal = getUserPrincipal(c);
+    return c.json({
+      agents: agents.list().filter(agent => canViewAgent(ctx, principal, agent.id)),
+    });
+  });
 
   app.post(apiPaths.agents, async c => {
     const body = await c.req.json().catch(() => ({}));
@@ -2300,8 +2346,12 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   });
 
   app.get('/api/agents/:id', c => {
-    const agent = agents.get(c.req.param('id'));
+    const id = c.req.param('id');
+    const agent = agents.get(id);
     if (!agent) return c.json({ error: 'agent not found' }, 404);
+    if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
+      return c.json({ error: 'agent not found' }, 404);
+    }
     return c.json({ agent });
   });
 
@@ -2323,6 +2373,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     const id = c.req.param('id');
     const agent = agents.get(id);
     if (!agent) return c.json({ error: 'agent not found' }, 404);
+    if (!canViewAgent(ctx, getUserPrincipal(c), id)) {
+      return c.json({ error: 'agent not found' }, 404);
+    }
     if (!canEditAgent(ctx, getUserPrincipal(c), id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
@@ -2360,6 +2413,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'agent id required' }, 400);
     if (!agents.get(id)) return c.json({ error: 'agent not found' }, 404);
+    if (!canViewAgent(ctx, getUserPrincipal(c), id)) {
+      return c.json({ error: 'agent not found' }, 404);
+    }
     if (!canEditAgent(ctx, getUserPrincipal(c), id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
@@ -2392,6 +2448,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'agent id required' }, 400);
     if (!agents.get(id)) return c.json({ error: 'agent not found' }, 404);
+    if (!canViewAgent(ctx, getUserPrincipal(c), id)) {
+      return c.json({ error: 'agent not found' }, 404);
+    }
     if (!canEditAgent(ctx, getUserPrincipal(c), id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
@@ -2413,6 +2472,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'agent id required' }, 400);
     if (!agents.get(id)) return c.json({ error: 'agent not found' }, 404);
+    if (!canViewAgent(ctx, getUserPrincipal(c), id)) {
+      return c.json({ error: 'agent not found' }, 404);
+    }
     const ref = ctx.agentService.getAvatarStorageRef(id);
     if (!ref) return c.json({ error: 'avatar not found' }, 404);
     return ctx.blobStorage.serve(
@@ -2424,6 +2486,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   app.get('/api/agents/:id/workspace', async c => {
     const agent = agents.get(c.req.param('id'));
     if (!agent) return c.json({ error: 'agent not found' }, 404);
+    if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
+      return c.json({ error: 'agent not found' }, 404);
+    }
     const l1Dir = join(ctx.silverhandDir, 'agents', agent.id);
     const workspace = await buildAgentWorkspaceDto(l1Dir);
     return c.json({ workspace });
@@ -2432,6 +2497,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   app.get('/api/agents/:id/runtime-state', c => {
     const agent = agents.get(c.req.param('id'));
     if (!agent) return c.json({ error: 'agent not found' }, 404);
+    if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
+      return c.json({ error: 'agent not found' }, 404);
+    }
     return c.json({ conversation_agents: agents.listRuntimeConversations(agent.id) });
   });
 
@@ -2446,6 +2514,12 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!id) return c.json({ error: 'agent id required' }, 400);
     const agent = agents.get(id);
     if (!agent) return c.json({ error: 'agent not found' }, 404);
+    if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
+      return c.json({ error: 'agent not found' }, 404);
+    }
+    if (!canEditAgent(ctx, getUserPrincipal(c), agent.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const parsed = ScheduleListInputSchema.safeParse({
       status: c.req.query('status') || undefined,
       // limit comes through the URL as a string; coerce upfront so the
@@ -2474,12 +2548,18 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     }
     const agent = agents.get(agentId);
     if (!agent) return c.json({ error: 'agent not found' }, 404);
+    if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
+      return c.json({ error: 'agent not found' }, 404);
+    }
+    if (!canEditAgent(ctx, getUserPrincipal(c), agent.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     try {
       const schedule = ctx.scheduleService.cancel(scheduleId, agent.id);
       // Audit hook (no separate audit infra in v1 — single-host model
-      // means logger is the audit trail). Resolves the viewer via the
-      // public principal middleware: an explicit principal header wins
-      // over the registered `app_settings.viewer_user_id` lookup.
+      // means logger is the audit trail). The viewer id comes from the
+      // request principal resolved by session bearer or explicit legacy
+      // principal header.
       ctx.logger.info(
         {
           user_id: resolveViewerUserId(c),
@@ -2503,6 +2583,12 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     const id = c.req.param('id');
     const agent = agents.get(id);
     if (!agent) return c.json({ error: 'agent not found' }, 404);
+    if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
+      return c.json({ error: 'agent not found' }, 404);
+    }
+    if (!canEditAgent(ctx, getUserPrincipal(c), agent.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const live = agents
       .listRuntimeConversations(id)
       .filter(s => s.status === 'starting' || s.status === 'active');
@@ -2523,6 +2609,12 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   app.get('/api/agents/:id/delete-impact', c => {
     const agent = agents.get(c.req.param('id'));
     if (!agent) return c.json({ error: 'agent not found' }, 404);
+    if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
+      return c.json({ error: 'agent not found' }, 404);
+    }
+    if (!canEditAgent(ctx, getUserPrincipal(c), agent.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     return c.json({ impact: computeDeleteImpact(agent.id) });
   });
 
@@ -2533,6 +2625,12 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     const id = c.req.param('id');
     const agent = agents.get(id);
     if (!agent) return c.body(null, 204); // idempotent on unknown id
+    if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
+      return c.body(null, 204);
+    }
+    if (!canEditAgent(ctx, getUserPrincipal(c), agent.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const body = await c.req.json().catch(() => ({}));
     const parsed = DeleteAgentInputSchema.safeParse(body);
     if (!parsed.success) {
@@ -2698,7 +2796,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
 
   // ── Host-wide settings ───────────────────────────────────────────
   // Flat KV. Currently exposes `proxy_url`. Empty string deletes the row.
-  app.get(apiPaths.settings, c => c.json({ settings: settings.all() }));
+  app.get(apiPaths.settings, c =>
+    c.json({ settings: publicSettingsSnapshot(settings) }),
+  );
 
   app.put(apiPaths.settings, async c => {
     const body = await c.req.json().catch(() => null);
@@ -2707,6 +2807,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     }
     const allowed = new Set<string>(Object.values(SETTINGS_KEYS));
     for (const [k, v] of Object.entries(body as Record<string, unknown>)) {
+      if (k === SETTINGS_KEYS.VIEWER_USER_ID) {
+        return c.json({ error: `unknown settings key: ${k}` }, 400);
+      }
       if (!allowed.has(k)) {
         return c.json({ error: `unknown settings key: ${k}` }, 400);
       }
@@ -2715,7 +2818,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       }
       settings.set(k, v);
     }
-    return c.json({ settings: settings.all() });
+    return c.json({ settings: publicSettingsSnapshot(settings) });
   });
 
   // ── Current viewer (user profile) ────────────────────────────────
@@ -2866,7 +2969,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     const unread = c.req.query('unread') === '1';
     const limit = parseLimit(c.req.query('limit'), 100);
     return c.json({
-      notifications: notifications.list({ unread, limit }),
+      notifications: listLegacyGlobalNotifications(notifications, { unread, limit }),
     });
   });
 
@@ -2877,7 +2980,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       ctx,
       'notifications.unreadCount',
       {},
-      () => notifications.unreadCount(),
+      () => notifications.unreadCount(legacyGlobalNotificationUserId()),
       result => ({ total: result }),
     );
     const byWorkspace = Object.fromEntries(
@@ -2885,7 +2988,8 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
         ctx,
         'notifications.unreadCountsByWorkspace',
         {},
-        () => notifications.unreadCountsByWorkspace(),
+        () =>
+          notifications.unreadCountsByWorkspace(legacyGlobalNotificationUserId()),
         result => ({ workspaceCount: result.size }),
       ).entries(),
     );
@@ -2894,7 +2998,8 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
         ctx,
         'notifications.latestUnreadByWorkspace',
         {},
-        () => notifications.latestUnreadByWorkspace(),
+        () =>
+          notifications.latestUnreadByWorkspace(legacyGlobalNotificationUserId()),
         result => ({ workspaceCount: result.size }),
       ).entries(),
     );
@@ -2916,14 +3021,20 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     const { id, workspace_id, conversation_id, all } = parsed.data;
     let marked = 0;
     if (id) {
-      const ok = notifications.markRead(id);
+      const ok = notifications.markRead(id, legacyGlobalNotificationUserId());
       marked = ok ? 1 : 0;
     } else if (workspace_id) {
-      marked = notifications.markWorkspaceRead(workspace_id);
+      marked = notifications.markWorkspaceRead(
+        workspace_id,
+        legacyGlobalNotificationUserId(),
+      );
     } else if (conversation_id) {
-      marked = notifications.markConversationRead(conversation_id);
+      marked = notifications.markConversationRead(
+        conversation_id,
+        legacyGlobalNotificationUserId(),
+      );
     } else if (all) {
-      marked = notifications.markAllRead();
+      marked = notifications.markAllRead(legacyGlobalNotificationUserId());
     } else {
       // Unreachable thanks to the schema refine, but TS doesn't narrow.
       return c.json({ error: 'invalid input' }, 400);

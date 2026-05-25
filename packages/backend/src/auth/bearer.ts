@@ -19,10 +19,11 @@ export interface PublicBearerOptions {
  * probes). Match is exact, not prefix — a future probe under
  * `/api/health/...` would need to be added explicitly.
  *
- * Stage A.2 transition: a public API bearer can be either the legacy
+ * Stage A transition: a public API bearer can be either the legacy
  * embedded server token or a user session token. Session tokens set the
- * user principal here; the legacy token intentionally falls through to
- * the existing principal-header / `app_settings.viewer_user_id` resolver.
+ * user principal here; legacy bearer requests must also supply an
+ * explicit principal header until the desktop UI moves fully to session
+ * bearer.
  */
 export function installPublicBearerMiddleware(
   app: Hono<AppEnv>,

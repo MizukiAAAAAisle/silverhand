@@ -148,6 +148,41 @@ describe('GET /api/agents/:id/schedules', () => {
     const res = await http(t).get(apiPaths.agentSchedules('no-such-agent'));
     expect(res.status).toBe(404);
   });
+
+  it('keeps schedules owner-only for workspace-visible non-owners', async () => {
+    t = buildTestApp();
+    t.ctx.db.exec(
+      `DROP TRIGGER IF EXISTS test_seed_workspace_users;
+       DROP TRIGGER IF EXISTS test_seed_conversation_users;`,
+    );
+    const teammateHeaders = {
+      [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
+    };
+    const created = await (
+      await http(t).post(
+        '/api/agents',
+        { name: 'teammate-scheduled', runtime: 'claude' },
+        { headers: teammateHeaders },
+      )
+    ).json() as any;
+    const ws = await (
+      await http(t).post(
+        '/api/workspaces',
+        { name: 'schedules-visible', member_agent_ids: [created.agent.id] },
+        { headers: teammateHeaders },
+      )
+    ).json() as any;
+    t.ctx.db
+      .prepare(
+        `INSERT INTO workspace_users (workspace_id, user_id, joined_at)
+         VALUES (?, 'local', ?)`,
+      )
+      .run(ws.workspace.id, Date.now());
+    seedSchedule(t, created.agent.id);
+
+    const res = await http(t).get(apiPaths.agentSchedules(created.agent.id));
+    expect(res.status).toBe(403);
+  });
 });
 
 describe('POST /api/agents/:id/schedules/:scheduleId/cancel', () => {
@@ -219,6 +254,44 @@ describe('POST /api/agents/:id/schedules/:scheduleId/cancel', () => {
     expect((await res.json() as any).code).toBe('not_cancellable');
   });
 
+  it('keeps cancel owner-only for workspace-visible non-owners', async () => {
+    t = buildTestApp();
+    t.ctx.db.exec(
+      `DROP TRIGGER IF EXISTS test_seed_workspace_users;
+       DROP TRIGGER IF EXISTS test_seed_conversation_users;`,
+    );
+    const teammateHeaders = {
+      [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
+    };
+    const created = await (
+      await http(t).post(
+        '/api/agents',
+        { name: 'teammate-cancel', runtime: 'claude' },
+        { headers: teammateHeaders },
+      )
+    ).json() as any;
+    const ws = await (
+      await http(t).post(
+        '/api/workspaces',
+        { name: 'cancel-visible', member_agent_ids: [created.agent.id] },
+        { headers: teammateHeaders },
+      )
+    ).json() as any;
+    t.ctx.db
+      .prepare(
+        `INSERT INTO workspace_users (workspace_id, user_id, joined_at)
+         VALUES (?, 'local', ?)`,
+      )
+      .run(ws.workspace.id, Date.now());
+    const seeded = seedSchedule(t, created.agent.id);
+
+    const res = await http(t).post(
+      apiPaths.agentScheduleCancel(created.agent.id, seeded.id),
+      undefined,
+    );
+    expect(res.status).toBe(403);
+  });
+
   it('audit log captures viewer id from the X-Silverhand-Principal header', async () => {
     // Regression for Cindy's PR-3a round-1 review: the audit hook had
     // been logging `ctx.serverConfig.user_id` (always null in the
@@ -228,7 +301,6 @@ describe('POST /api/agents/:id/schedules/:scheduleId/cancel', () => {
     // re-introduce the null-id audit.
     t = buildTestApp();
     const infoSpy = vi.spyOn(t.ctx.logger, 'info');
-    const { aliceId } = await setupTwoAgents(t);
     // Seed the desktop user the test impersonates via the principal
     // header. Without this row the v21-tightened middleware rejects
     // the request as "principal user does not exist".
@@ -239,9 +311,22 @@ describe('POST /api/agents/:id/schedules/:scheduleId/cancel', () => {
          VALUES ('desktop-user-42', 'desktop-user-42-name', 'Desktop User 42', ?, ?)`,
       )
       .run(now, now);
-    const seeded = seedSchedule(t, aliceId);
+    const created = await (
+      await http(t).post(
+        '/api/agents',
+        { name: 'desktop-audited', runtime: 'claude' },
+        {
+          headers: {
+            [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader(
+              'desktop-user-42',
+            ),
+          },
+        },
+      )
+    ).json() as any;
+    const seeded = seedSchedule(t, created.agent.id);
     const res = await http(t).post(
-      apiPaths.agentScheduleCancel(aliceId, seeded.id),
+      apiPaths.agentScheduleCancel(created.agent.id, seeded.id),
       undefined,
       {
         headers: {
@@ -258,7 +343,7 @@ describe('POST /api/agents/:id/schedules/:scheduleId/cancel', () => {
     expect(auditCall).toBeDefined();
     expect(auditCall?.[0]).toMatchObject({
       user_id: 'desktop-user-42',
-      agent_id: aliceId,
+      agent_id: created.agent.id,
       schedule_id: seeded.id,
     });
   });

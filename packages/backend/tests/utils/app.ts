@@ -5,6 +5,9 @@ import type {
   AgentRunTerminalReason,
   ServerConfig,
 } from '@silverhand/shared';
+import {
+  X_SILVERHAND_LEGACY_USER_ID_HEADER as LEGACY_USER_ID_HEADER,
+} from '@silverhand/shared';
 import type { BackendContext, BackendLogger } from '../../src/context.js';
 import { silverhandCors } from '../../src/cors.js';
 import type { AppEnv } from '../../src/auth/principal.js';
@@ -363,6 +366,7 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
 export interface HttpHelper {
   get(path: string, init?: RequestInit): Promise<Response>;
   post(path: string, body?: unknown, init?: RequestInit): Promise<Response>;
+  put(path: string, body?: unknown, init?: RequestInit): Promise<Response>;
   patch(path: string, body?: unknown, init?: RequestInit): Promise<Response>;
   del(path: string, init?: RequestInit): Promise<Response>;
   json<T = any>(res: Promise<Response> | Response): Promise<T>;
@@ -376,7 +380,10 @@ export function http(
     typeof value === 'object' && value !== null && 'authToken' in value && 'app' in value;
   const app = isTestApp(target) ? target.app : target;
   const publicAuthHeaders: Record<string, string> = isTestApp(target)
-    ? { authorization: `Bearer ${target.authToken}` }
+    ? {
+        authorization: `Bearer ${target.authToken}`,
+        [LEGACY_USER_ID_HEADER]: target.viewerUserId,
+      }
     : {};
   const headers: Record<string, string> = { ...publicAuthHeaders, ...defaultHeaders };
   const base = 'http://localhost';
@@ -395,7 +402,7 @@ export function http(
   };
   const jsonReq = (
     path: string,
-    method: 'POST' | 'PATCH',
+    method: 'POST' | 'PUT' | 'PATCH',
     body: unknown,
     init?: RequestInit,
   ) =>
@@ -410,6 +417,8 @@ export function http(
       app.fetch(new Request(base + p, merge(p, { method: 'GET', ...init }))),
     post: async (p, body, init) =>
       app.fetch(new Request(base + p, jsonReq(p, 'POST', body, init))),
+    put: async (p, body, init) =>
+      app.fetch(new Request(base + p, jsonReq(p, 'PUT', body, init))),
     patch: async (p, body, init) =>
       app.fetch(new Request(base + p, jsonReq(p, 'PATCH', body, init))),
     del: async (p, init) =>

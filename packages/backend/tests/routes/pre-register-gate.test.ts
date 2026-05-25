@@ -42,10 +42,14 @@ describe('Pre-register gate (requireRegisteredViewer middleware)', () => {
     test.ctx.db.prepare(`DELETE FROM users WHERE id = 'local'`).run();
   }
 
+  function noPrincipalHttp(test: TestApp) {
+    return http(test, { 'X-Silverhand-User-Id': '' });
+  }
+
   it('GET /api/me returns the registration_required shape before registration', async () => {
     t = buildTestApp();
     unregisterViewer(t);
-    const res = await http(t).get(apiPaths.me);
+    const res = await noPrincipalHttp(t).get(apiPaths.me);
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       registration_required?: boolean;
@@ -58,14 +62,14 @@ describe('Pre-register gate (requireRegisteredViewer middleware)', () => {
   it('allows POST /api/register before registration', async () => {
     t = buildTestApp();
     unregisterViewer(t);
-    const res = await http(t).post(apiPaths.register, { name: 'shiki' });
+    const res = await noPrincipalHttp(t).post(apiPaths.register, { name: 'shiki' });
     expect(res.status).toBe(200);
   });
 
   it('blocks POST /api/workspaces with 403 registration_required', async () => {
     t = buildTestApp();
     unregisterViewer(t);
-    const res = await http(t).post('/api/workspaces', { name: 'should-block' });
+    const res = await noPrincipalHttp(t).post('/api/workspaces', { name: 'should-block' });
     expect(res.status).toBe(403);
     const body = (await res.json()) as { code: string; error: string };
     expect(body.code).toBe('registration_required');
@@ -74,7 +78,7 @@ describe('Pre-register gate (requireRegisteredViewer middleware)', () => {
   it('blocks POST /api/agents with 403 registration_required', async () => {
     t = buildTestApp();
     unregisterViewer(t);
-    const res = await http(t).post('/api/agents', {
+    const res = await noPrincipalHttp(t).post('/api/agents', {
       name: 'should-block',
       runtime: 'claude',
     });
@@ -90,7 +94,7 @@ describe('Pre-register gate (requireRegisteredViewer middleware)', () => {
     // no row to patch in the first place).
     t = buildTestApp();
     unregisterViewer(t);
-    const res = await http(t).patch(apiPaths.me, { display_name: 'Sneaky' });
+    const res = await noPrincipalHttp(t).patch(apiPaths.me, { display_name: 'Sneaky' });
     expect(res.status).toBe(403);
     const body = (await res.json()) as { code: string };
     expect(body.code).toBe('registration_required');
@@ -101,7 +105,7 @@ describe('Pre-register gate (requireRegisteredViewer middleware)', () => {
     // no identity for FK / audit purposes, so we deny uniformly.
     t = buildTestApp();
     unregisterViewer(t);
-    const res = await http(t).get('/api/workspaces');
+    const res = await noPrincipalHttp(t).get('/api/workspaces');
     expect(res.status).toBe(403);
     const body = (await res.json()) as { code: string };
     expect(body.code).toBe('registration_required');
@@ -112,13 +116,16 @@ describe('Pre-register gate (requireRegisteredViewer middleware)', () => {
     unregisterViewer(t);
 
     // Register first — INSERT user + write viewer_user_id atomically.
-    const reg = await http(t).post(apiPaths.register, { name: 'shiki' });
+    const reg = await noPrincipalHttp(t).post(apiPaths.register, { name: 'shiki' });
     expect(reg.status).toBe(200);
+    const viewer = await reg.json() as { id: string };
 
-    // Now the previously-blocked route works.
-    const create = await http(t).post('/api/workspaces', {
-      name: 'post-register-ws',
-    });
+    // With A.3 the settings pointer is not a principal fallback; the
+    // caller must send an explicit session/legacy principal.
+    const create = await http(t, { 'X-Silverhand-User-Id': viewer.id }).post(
+      '/api/workspaces',
+      { name: 'post-register-ws' },
+    );
     expect(create.status).toBe(201);
   });
 
@@ -137,7 +144,7 @@ describe('Pre-register gate (requireRegisteredViewer middleware)', () => {
     // process unhealthy.
     t = buildTestApp();
     unregisterViewer(t);
-    const res = await http(t).get('/api/health');
+    const res = await noPrincipalHttp(t).get('/api/health');
     expect(res.status).toBe(200);
   });
 });

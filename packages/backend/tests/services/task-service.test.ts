@@ -903,6 +903,71 @@ describe('TaskService.list / getByMessageId', () => {
     }
   });
 
+  it('user list and getByMessageId require conversation membership', async () => {
+    const t = bootstrapTwoWorkspaces();
+    try {
+      await createTask(t, t.alice.id, 'visible');
+      const hidden = await t.service.createTasks({
+        conversationId: t.ws2Channel.id,
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.ws2Channel.id },
+        tasks: [{ title: 'hidden' }],
+      });
+      if (!('tasks' in hidden)) throw new Error();
+
+      t.conversations.removeUser(t.ws2Channel.id, 'local');
+
+      const list = t.service.list({ actor: { kind: 'user', userId: 'local' } });
+      expect(list.map(x => x.title)).toEqual(['visible']);
+      expect(
+        t.service.getByMessageId(hidden.tasks[0]!.message_id, {
+          kind: 'user',
+          userId: 'local',
+        }),
+      ).toBe(null);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('user message-id mutations hide tasks outside conversation membership', async () => {
+    const t = bootstrapTwoWorkspaces();
+    try {
+      const hidden = await t.service.createTasks({
+        conversationId: t.ws2Channel.id,
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.ws2Channel.id },
+        tasks: [{ title: 'hidden' }],
+      });
+      if (!('tasks' in hidden)) throw new Error();
+      const messageId = hidden.tasks[0]!.message_id;
+
+      t.conversations.removeUser(t.ws2Channel.id, 'local');
+
+      const claim = await t.service.claimTask({
+        actor: { kind: 'user', userId: 'local' },
+        by: { messageId },
+      });
+      expect(claim.success).toBe(false);
+      expect(claim.code).toBe('not_a_task');
+
+      const unclaim = await t.service.unclaimTask({
+        actor: { kind: 'user', userId: 'local' },
+        by: { messageId },
+      });
+      expect(unclaim.success).toBe(false);
+      expect(unclaim.code).toBe('not_a_task');
+
+      const status = await t.service.updateStatus({
+        actor: { kind: 'user', userId: 'local' },
+        by: { messageId },
+        status: 'in_review',
+      });
+      expect(status.success).toBe(false);
+      expect(status.code).toBe('not_a_task');
+    } finally {
+      t.cleanup();
+    }
+  });
+
   it('user list filtered by workspaceId narrows to that workspace', async () => {
     const t = bootstrap();
     try {

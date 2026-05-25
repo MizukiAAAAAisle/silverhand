@@ -36,6 +36,18 @@ describe('Public bearer enforcement on /api/*', () => {
     expect(res.status).toBe(200);
   });
 
+  it('does not resolve legacy bearer into a viewer without an explicit principal', async () => {
+    t = buildTestApp();
+    const res = await t.app.fetch(
+      new Request('http://localhost/api/workspaces', {
+        method: 'GET',
+        headers: { authorization: `Bearer ${t.authToken}` },
+      }),
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ code: 'registration_required' });
+  });
+
   it(`allowlists ${apiPaths.health} so liveness probes bypass the bearer check`, async () => {
     t = buildTestApp();
     const res = await t.app.fetch(

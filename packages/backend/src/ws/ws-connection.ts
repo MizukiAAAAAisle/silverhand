@@ -112,14 +112,7 @@ export class EventWsConnection {
     }
 
     this.authenticated = true;
-    // V1 single-user: the viewer pointer lives in
-    // `app_settings.viewer_user_id` and is written by `POST
-    // /api/register` (the sole creator of `users` rows). Pre-
-    // registration the pointer is absent; the WS handshake refuses
-    // because no user principal can be attached to the connection.
-    // V2 multi-user replaces this with token-claim resolution; the
-    // public WS handshake itself stays the same.
-    const viewerUserId = new SettingsRepo(this.ctx.db).getViewerUserId();
+    const viewerUserId = getLegacyViewerForWsScope(this.ctx);
     if (!viewerUserId) {
       this.closeWithError(
         'auth_failed',
@@ -330,6 +323,14 @@ export class EventWsConnection {
     clearTimeout(this.pongTimer);
     this.pongTimer = null;
   }
+}
+
+function getLegacyViewerForWsScope(ctx: BackendContext): string | null {
+  // Stage A.3 bridge: the legacy WS auth frame still carries only the
+  // embedded server token, so it has no session subject to derive
+  // `viewer:<id>` subscriptions from. Keep the settings read isolated
+  // here until Stage C / session-auth WS replaces the handshake.
+  return new SettingsRepo(ctx.db).getViewerUserId();
 }
 
 function scopedEventToFrame(event: ScopedEvent): EventFrame {

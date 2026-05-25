@@ -211,6 +211,22 @@ export function canEditAgent(
   return principal.agentId === agentId;
 }
 
+export function canViewAgent(
+  ctx: BackendContext,
+  principal: Principal,
+  agentId: string,
+): boolean {
+  if (principal.kind === 'system') return true;
+  const repo = new AgentRepo(ctx.db);
+  const agent = repo.get(agentId);
+  if (!agent) return false;
+  if (principal.kind === 'agent') return principal.agentId === agentId;
+  if (agent.created_by_user_id === principal.userId) return true;
+  return workspaceRepo(ctx)
+    .listForAgent(agentId)
+    .some(workspace => canViewWorkspace(ctx, principal, workspace.id));
+}
+
 export function canViewAttachment(
   ctx: BackendContext,
   principal: Principal,

@@ -149,12 +149,9 @@ describe('GET /api/conversations/:id/ref', () => {
   });
 
   it('exposes refs across workspaces (no per-workspace narrowing)', async () => {
-    // v1 user permission model = any user can view any workspace
-    // (canViewWorkspace returns true for user principals as long as
-    // the workspace exists). The ref endpoint must follow that
-    // contract — users can resolve a conversation in workspace B
-    // while their main pane is on workspace A. This is the whole
-    // point of PR-2.
+    // The ref endpoint is not narrowed to the currently-open
+    // workspace. A user can resolve any conversation they are a member
+    // of, even if the main pane is on a different workspace.
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     const wsA = await createRegularWorkspace(t, 'ws-a', [alice.agentId]);
@@ -170,6 +167,21 @@ describe('GET /api/conversations/:id/ref', () => {
     expect(res.status).toBe(200);
     const { ref } = await res.json() as any;
     expect(ref.workspace_id).toBe(wsB.workspaceId);
+  });
+
+  it('rejects a workspace member who is not a conversation member', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const reg = await createRegularWorkspace(t, 'team-secret-ref', [alice.agentId]);
+    const channelId = await createChannel(t, reg.workspaceId, 'private', [
+      alice.agentId,
+    ]);
+    t.ctx.db
+      .prepare(`DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = 'local'`)
+      .run(channelId);
+
+    const res = await http(t).get(refPath(channelId));
+    expect(res.status).toBe(403);
   });
 
   it('rejects unauthorized callers with 401 (token guard upstream)', async () => {
