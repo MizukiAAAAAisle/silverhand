@@ -59,12 +59,13 @@ make embedded ≡ remote possible, and the dual-token model.
 To keep the V1 prep scope honest, the following are explicitly **not**
 part of Stage A–D and MUST NOT be conflated with them:
 
-- **Daemon outbound host protocol** (server-initiated control of a
-  remote daemon over a daemon's outbound WS). Belongs in the follow-up
-  phase, after A–D are stable. Mixing it into the server-split work
-  doubles the disruption surface.
-- **Headless / sandbox daemon binary distribution**. Schema arm exists
-  (`hosts.kind = local|remote`), but no V1 surface ships.
+- **Headless / remote daemon binary distribution**. Schema arm exists
+  (`hosts.kind = local|remote`), but no V1 surface ships. V1's daemon
+  outbound (Stage D2) is **desktop-local-host only** — the daemon binary
+  stays bundled with the desktop app, just learns to connect outbound to
+  a remote server.
+- **Remote-host provisioning UI** ("Add remote host" page, bootstrap
+  token display). Out of V1 together with the headless binary.
 - **Sandbox capability layer** (chroot / seccomp / namespace mounts /
   ephemeral fs / network egress policy). Orthogonal to Host `kind`; see
   `auth-and-host-model.md` Appendix A.5.
@@ -79,6 +80,15 @@ part of Stage A–D and MUST NOT be conflated with them:
 Each item has a parking lot in `auth-and-host-model.md` Appendix A or
 `remote-server-target-architecture.md`; the rule is *not yet*, not
 *never*.
+
+**Note on daemon outbound scope**: an earlier version of this roadmap
+deferred *the entire daemon-outbound protocol* to follow-up phase. shiki
+selected the larger Stage D scope (option 2) so that V1 closes the
+"fill in a server URL → app actually works end-to-end" loop. The
+deferred items above are the **remaining** boundary: V1 still does NOT
+ship distribution channels (headless binary) or new Host kinds
+(remote-host UI) or capability layers (sandbox). It only teaches
+desktop's bundled daemon to speak outbound to a remote server.
 
 ---
 
@@ -382,18 +392,40 @@ in-process shortcuts on every audit.
 
 ---
 
-### Stage D — Server deployable runtime
+### Stage D — Server deployable runtime + daemon outbound (desktop-local host)
 
-**Goal**: backend becomes a deployable artifact. The same process that
-embedded mode imports is also the entry point for `docker run` and
-`systemd`-style deployments. Configuration is env-driven; admin
-operations exist as recovery utilities, not as a CLI lifecycle tool.
+**Goal**: backend becomes a deployable artifact, AND desktop's bundled
+daemon learns to speak outbound to a remote server. After Stage D,
+"fill in a server URL → the app actually works end-to-end" is closed
+for the desktop-local host case (agent still runs on the user's
+desktop, but control plane runs remotely).
+
+This stage is intentionally larger than the original "server split
+only" definition. shiki selected the wider scope (round 4 product call)
+because the V1 prep goal is "future remote + multi-user 不返工 **and**
+现在 fill URL 就能用". The cost is ~4-5 weeks total and a higher
+regression surface; the mitigation is **strict milestone separation**:
+D1 ships and soaks before D2 starts; D2 ships and soaks before D3
+integrates; D4 is the e2e acceptance milestone. Do NOT merge daemon
+outbound changes into D1 PRs or vice versa.
+
+**Critical scope note** (carried from Stage B): the host-identity
+model from Stage B still does NOT presume a daemon-initiated outbound
+channel. Stage D2 is where that channel is actually introduced and
+where `host_token` is finally presented over a real outbound transport.
+This means Stage B's `verifyHostToken()` contract is unchanged — Stage
+D2 wires the existing primitive into a new caller, it does not
+redefine the primitive.
+
+---
+
+#### D1 — Server deployable runtime (control plane split)
 
 **In scope**:
 
 - New `packages/server` binary that wraps `startBackend(...)`. Single
-  entry point used by both `apps/desktop` (embedded) and the
-  standalone deployment.
+  entry point used by both `apps/desktop` (embedded) and the standalone
+  deployment.
 - Env-driven config: `SILVERHAND_LISTEN`, `SILVERHAND_DATA_DIR`,
   `SILVERHAND_DISABLE_SIGNUP`, `SILVERHAND_LOG_LEVEL`. Replace
   constructor-argument config; document the full env contract in
@@ -413,56 +445,206 @@ operations exist as recovery utilities, not as a CLI lifecycle tool.
   way standalone deployments do — no special embedded code path beyond
   the listen address and `/auth/embedded-bootstrap` enablement.
 
-**Out of scope** (push back if asked):
+**Out of scope for D1**: anything touching daemon transport. D1 ships
+remote control-plane only; daemon transport is D2.
 
-- TLS termination inside the image (reverse proxy responsibility).
-- Backup/restore tooling.
-- CLI lifecycle tool (`server start`, `server stop` — use Docker /
-  systemd; admin subcommands are *one-shot recovery operations* only).
-- Multi-tenant work (single tenant per server in V1).
+**PR breakdown**:
 
-**PR breakdown (suggested)**:
+- **D1.a** `packages/server` entrypoint + env config; embedded mode
+  imports it.
+- **D1.b** Dockerfile + healthcheck + volume layout + image build CI.
+- **D1.c** Admin recovery subcommands (`reset-password` first).
+- **D1.d** Migration runner hardening + idempotent startup + version
+  check.
 
-1. **D.1 packages/server entrypoint + env config**: new package,
-   `startBackend` wrapped, env contract documented. Desktop's embedded
-   mode now imports this entry point.
-2. **D.2 Dockerfile + healthcheck + volume layout**: image build, CI
-   workflow, healthcheck route, volume schema.
-3. **D.3 Admin recovery subcommands**: `admin reset-password` first
-   (highest recovery value), then list/revoke commands.
-4. **D.4 Migration runner hardening**: idempotent on startup, schema
-   version check, fail-loud on incompatibility.
+**Acceptance criteria for D1**:
 
-**Acceptance criteria**:
-
-- `docker run` produces a working server reachable over the bound
-  port; embedded mode imports the same entry point with no code-path
+- `docker run` produces a working server reachable over the bound port.
+- Desktop in "remote" mode (server URL in Settings) successfully signs
+  up, logs in, lists/creates workspaces, sends a message, receives
+  server-side state updates — i.e. **the full control-plane surface
+  works against a remote server**. Agent execution NOT yet validated
+  in remote mode (that's D4).
+- Embedded mode imports the same entry point with no code-path
   divergence beyond config and `/auth/embedded-bootstrap` enablement.
-- Desktop in "remote" mode (server URL set in Settings) successfully
-  signs up, logs in, lists/creates workspaces, sends a message, and
-  receives server-side state updates — i.e. **the full control-plane
-  surface works against a remote server**.
-- **Out-of-scope verification**: Stage D does NOT claim "remote server
-  drives the user's desktop daemon to run an agent." That path requires
-  daemon outbound (follow-up phase) and is intentionally NOT a Stage D
-  acceptance gate. With a remote server in Stage D, running agents
-  still requires daemon and server to be co-located — i.e. the user
-  uses embedded mode for actual agent runs. Remote control-plane + local
-  agent execution is the follow-up phase contract.
-- Env contract is complete: no required config goes through a non-env
-  channel; admin subcommands need only env to find the DB.
 - `docker exec silverhand-server silverhand-server admin reset-password
-  --email <x>` works; password reset revokes all sessions for that
-  user.
+  --email <x>` works; revokes all sessions for that user.
 - Healthcheck returns 200 once migrations are applied and the listen
   socket is open.
 - Embedded mode startup time within 10% of the previous in-process
-  startup. (No accidental performance regression from going through the
-  HTTP layer for local-loopback traffic — this is fine for protocol
-  parity but should be measured.)
+  startup.
 
-**Detail spec**: `auth-and-host-model.md` §7;
-`remote-server-target-architecture.md` §4 phase 2.
+**Soak requirement**: D1 ships and runs in production-like usage
+(embedded + at least one remote-mode deployment) before D2 starts. The
+soak surface is large; we do not want D1 control-plane regressions
+masked under D2 transport churn.
+
+---
+
+#### D2 — Daemon outbound transport (desktop-local host only)
+
+**In scope**:
+
+- Daemon-initiated WS connection from desktop's bundled daemon to the
+  server URL.
+- `host_token` presented on connection upgrade (`Authorization: Bearer`).
+  Server validates via Stage B's `verifyHostToken()` — no new
+  validation primitive.
+- Server-initiated control frames over the WS: `spawn`, `wake`,
+  `status`, `event` (frame shape defined alongside the PR, mirroring
+  current `HostClient` ↔ daemon unix-socket protocol). The frame
+  vocabulary stays minimal and matches today's HostClient surface;
+  daemon-side handlers reuse existing supervisor entry points.
+- WS lifecycle: connection establishment, ping/pong heartbeat,
+  reconnect with backoff, backpressure (queue with bounded depth +
+  drop-or-fail policy explicit), connection-loss-during-active-spawn
+  recovery contract.
+- Online/offline presence: server tracks `hosts.last_seen_at` from WS
+  heartbeats; deriving `host.online: bool` is a function of
+  `last_seen_at` recency (no separate column).
+- Token-rotation channel: when server issues a new `host_token`, the
+  WS delivers it as a control frame; daemon swaps file + token in
+  memory; old token's 60s grace covers the swap window.
+- TLS required on non-loopback WS connections (loopback exempted for
+  embedded mode).
+
+**Out of scope for D2**: anything that ties daemon outbound to a host
+kind other than `local`. Headless daemon binary, remote-host
+provisioning UI, sandbox capability — all still deferred (§2).
+
+**PR breakdown**:
+
+- **D2.a** WS protocol frame schema + server endpoint
+  (`/api/hosts/connect`) + token validation via `verifyHostToken()`.
+- **D2.b** Daemon WS client + reconnect/backoff + heartbeat.
+- **D2.c** Server-initiated control frames (spawn/wake/status/event)
+  mapped to existing supervisor entry points; today's `HostClient`
+  becomes a thin shim that routes to either the unix-socket transport
+  (embedded loopback fallback) or the WS transport (remote).
+- **D2.d** Backpressure policy + connection-loss-during-active-spawn
+  recovery test matrix.
+- **D2.e** Token rotation over WS.
+
+**Acceptance criteria for D2**:
+
+- WS handshake succeeds with valid `host_token`, rejected with 401
+  on revoked / rotated-past-grace / missing token.
+- Server-initiated `spawn` frame triggers the same supervisor path as
+  today's `HostClient` call, verified by a transport-agnostic test
+  that runs both unix-socket and WS transports against the same
+  supervisor fixtures.
+- WS reconnect after server restart: daemon reconnects within bounded
+  backoff; pending intents queued during disconnect are delivered on
+  reconnect; duplicate-delivery suppression matches current behaviour.
+- Backpressure: when server queue depth exceeds bound, the configured
+  policy (drop-with-log OR fail-fast-to-caller) is applied; never
+  silent memory growth.
+- Connection loss during active spawn: agent process is not orphaned;
+  on reconnect, state converges (either resumed or marked failed with
+  explicit reason). Test matrix covers loss at every supervisor
+  lifecycle stage.
+- `host_token` rotation over WS: new token takes effect within one
+  control-frame roundtrip; old token honoured for 60s grace; daemon
+  config file refreshed atomically (no partial write).
+- TLS required on non-loopback WS; loopback exempted for embedded.
+
+**Soak requirement**: D2 ships and runs in production-like usage
+before D3 starts. WS transport regressions in early production hours
+should not be hidden under D3 lifecycle wiring.
+
+---
+
+#### D3 — Desktop local-daemon lifecycle wired to outbound
+
+**In scope**:
+
+- Desktop spawns / restarts the bundled daemon as part of normal
+  startup, with `~/.silverhand/daemon-config.json` (from Stage B)
+  pointing at the configured `server_url`.
+- Daemon-config writer in Electron main updates `server_url` when the
+  user changes server URL in Settings; daemon picks up the change on
+  next restart (no live config-reload contract in V1).
+- Desktop UI shows local-host online/offline state derived from
+  server-side presence (Stage B's Hosts page learns to display
+  online state).
+- Desktop UI shows clear "connecting / connected / disconnected /
+  revoked" state for the local host's outbound connection.
+- Logout flow leaves the daemon running by default (per
+  `auth-and-host-model.md §3.3`); "Sign out and disable this host"
+  affordance triggers `POST /api/hosts/{id}/revoke` and the daemon's
+  outbound WS receives 401 and transitions to revoked state.
+
+**Out of scope for D3**: any remote-host UI ("Add remote host", etc.).
+Local host only.
+
+**PR breakdown**:
+
+- **D3.a** Desktop daemon lifecycle: spawn / restart / signal on
+  config change.
+- **D3.b** Server-URL change flow in Settings + daemon config refresh
+  + daemon restart prompt.
+- **D3.c** Hosts page online/offline indicator.
+- **D3.d** Outbound connection state UI surface (connecting /
+  connected / disconnected / revoked) + logout-vs-disable affordance.
+
+**Acceptance criteria for D3**:
+
+- Fresh desktop launch in remote mode → daemon starts → WS connects
+  → server marks `(user_id, host_id)` online — verified by an e2e
+  smoke test against a Docker server.
+- User changes server URL in Settings → daemon config refreshed →
+  daemon restart triggered → new WS connection succeeds → old
+  `(user_id, host_id_old)` online flag clears within heartbeat
+  timeout.
+- Revoke from another device → outbound WS receives 401 within one
+  reconnect attempt → daemon transitions to revoked state → local
+  agents are NOT cascade-deleted; UI shows revoked status.
+- Logout default leaves daemon running; "Sign out and disable this
+  host" triggers revoke + WS drop.
+
+---
+
+#### D4 — Remote-mode end-to-end (the actual "fill URL → works" gate)
+
+**In scope**:
+
+- E2E acceptance pipeline that exercises the full closed loop:
+  desktop in remote mode → signup/login → workspace + agent created →
+  user sends message → server queues intent → server-initiated spawn
+  frame to desktop-local daemon over WS → daemon spawns agent process
+  on user's machine → agent replies via existing CLI surface → server
+  routes reply back to UI.
+- Failure-mode tests: server restart mid-conversation, daemon restart
+  mid-conversation, WS drop mid-spawn, network partition with
+  reconnect.
+
+**Out of scope for D4**: anything other than acceptance + observability.
+D4 is the gate, not new features.
+
+**PR breakdown**:
+
+- **D4.a** E2E test harness (Docker server + Electron client +
+  scripted agent driver).
+- **D4.b** Failure-mode scenarios in the same harness.
+- **D4.c** Observability: WS connection metric, intent latency
+  histogram, reconnect counter, error code distribution. These live
+  in the existing logging surface (`~/.silverhand/logs/`); no new
+  metrics infra in V1.
+
+**Acceptance criteria for D4**:
+
+- E2E happy path passes in CI against a Docker server.
+- Failure-mode matrix passes: server restart, daemon restart, WS
+  drop mid-spawn, network partition with reconnect.
+- Observability surface exposes the four signals above in a way that
+  an operator can debug "why is this remote install not running my
+  agent" without source access.
+
+**Detail spec**: `auth-and-host-model.md` §7 (server deployment);
+`remote-server-target-architecture.md` §4 phase 2; the WS frame
+schema + reconnect/backpressure contract lands as
+`docs/daemon-outbound-protocol.md` together with D2.a (to be
+written alongside D2 implementation).
 
 ---
 
@@ -476,7 +658,7 @@ operations exist as recovery utilities, not as a CLI lifecycle tool.
               │ (A.1–A.3 must land; A.4 desktop UI can lag)
               │
         ┌─────▼──────┐
-        │  Stage B   │ Hosts model + credential binding
+        │  Stage B   │ Hosts identity + token + verifier + placement
         │   hosts    │       (can start B.1 once A.1 lands;
         └─────┬──────┘        B.2 needs A.2 user_token)
               │
@@ -485,16 +667,37 @@ operations exist as recovery utilities, not as a CLI lifecycle tool.
         │  protocol  │     (audit can begin earlier;
         └─────┬──────┘      C.4 needs A and B)
               │
-        ┌─────▼──────┐
-        │  Stage D   │ Server deployable runtime
-        │   server   │     (HARD prerequisite on C; ships remote
-        └─────┬──────┘      control-plane only — see below)
-              │
-        ┌─────▼──────┐
-        │ Follow-up  │ Daemon outbound + remote host + sandbox
-        │  phase     │     (HARD prerequisite on D; this is what
-        └────────────┘      makes "remote server drives desktop
-                            daemon" actually work)
+              │   ┌──────────────────────────────────────────────┐
+              │   │  Stage D — server runtime + daemon outbound  │
+              ▼   │  (desktop-local host only)                   │
+            ┌─────────────────────────────────────────────────────┐
+            │ D1 server deployable runtime                         │
+            │    (HARD prerequisite on C; ships + soaks first)     │
+            └──┬───────────────────────────────────────────────────┘
+               │ soak before D2 starts
+               ▼
+            ┌─────────────────────────────────────────────────────┐
+            │ D2 daemon outbound transport (desktop-local host)    │
+            │    (uses Stage B's verifyHostToken() — no new        │
+            │     identity primitive; new caller only)             │
+            └──┬───────────────────────────────────────────────────┘
+               │ soak before D3 starts
+               ▼
+            ┌─────────────────────────────────────────────────────┐
+            │ D3 desktop local-daemon lifecycle wired to outbound  │
+            └──┬───────────────────────────────────────────────────┘
+               │
+               ▼
+            ┌─────────────────────────────────────────────────────┐
+            │ D4 remote-mode end-to-end acceptance + observability │
+            │    (the actual "fill URL → works" gate)              │
+            └──┬───────────────────────────────────────────────────┘
+               │
+               ▼
+        ┌─────────────┐
+        │ Follow-up   │ Headless / remote daemon binary,
+        │   phase     │ remote-host provisioning UI,
+        └─────────────┘ sandbox capability, V1.5 invite, V2 OAuth
 ```
 
 **Hard constraints**:
@@ -506,46 +709,55 @@ operations exist as recovery utilities, not as a CLI lifecycle tool.
   discussion. Splitting the server process before scrubbing in-process
   shortcuts means each shortcut becomes either a crash or a leak at
   cutover. C is cheap; rework after D is expensive.
-- **Follow-up phase must wait for D**: daemon outbound protocol +
-  remote / headless host distribution + sandbox capability are
-  *intentionally* held back so the server-process split lands without
-  also redesigning the execution plane in the same change window.
+- **D1 must ship and soak before D2 starts**, **D2 before D3**, **D3
+  before D4**: Stage D is the only "wide" stage in V1; mixing control-
+  plane split with daemon outbound transport with desktop lifecycle
+  changes in a single change window is exactly the anti-pattern that
+  earlier rounds of this roadmap nearly fell into. The four milestones
+  exist precisely to keep that surface separable.
+- **Follow-up phase must wait for D4**: distribution / new Host kinds
+  / capability layers are *intentionally* held back so V1 ships a
+  closed loop on `kind=local` before generalising.
 
 **Soft constraints (partial parallelism)**:
 
 - **A and B overlap**: A.1 (schema + Argon2id) unblocks B.1 (hosts
-  schema + registry skeleton) immediately. B.2 (claim flow) needs A.2
-  (user_token issued) before it can authenticate. A.4 (desktop UI) can
-  lag a bit because nothing else gates on it.
+  schema + registry skeleton + `verifyHostToken()`) immediately. B.2
+  (claim flow) needs A.2 (user_token issued) before it can authenticate.
+  A.4 (desktop UI) can lag a bit because nothing else gates on it.
 - **C.1 (audit catalogue) can start anytime**: it's a doc/test
   artifact, not code. Doing it early surfaces hidden coupling early
   and pre-sizes C's PR queue.
+- **D1 and D2 design/spec work can overlap with C**: the
+  `docs/daemon-outbound-protocol.md` frame schema and the
+  `docs/server-env-config.md` env contract can both be drafted while
+  Stage C audit and conversions are landing — these are doc artifacts,
+  not implementation. Implementation order remains C → D1 → D2 → D3 → D4.
 
 **Anti-pattern to avoid**:
 
-> "Let's roll Stage B and the daemon outbound protocol together because
-> they're both about Hosts."
+> "Let's bundle D1 + D2 into one big Stage D PR set so it ships faster."
 
-This is exactly the trap the lock-in discussion warned against: don't
-change the process boundary and the execution model in the same change
-window. Stage B teaches the codebase that Hosts have identity and
-credentials; the follow-up phase teaches it that Hosts can live
-elsewhere. One thing at a time.
+This is the trap that caused two earlier rounds of this roadmap to
+leak daemon outbound into the wrong stage. D1 is *control-plane only*;
+D2 is *new transport, new failure modes*. Mixing them means a
+control-plane regression and a transport regression land in the same
+change window, and the bisect surface is the union of both. The whole
+point of the D1→D2→D3→D4 split is to keep regression bisects narrow.
 
 ---
 
 ## 5. Follow-up phase (after Stage D)
 
-For forward-reference only. Detail will be planned when Stage D
-acceptance is met.
+For forward-reference only. Detail will be planned when Stage D4
+acceptance is met. Note that daemon outbound protocol is **NOT** in
+this list — round 4 of this roadmap moved it into Stage D2.
 
-- **Daemon outbound host protocol**: server-initiated control of a
-  remote daemon over its outbound WS. Long-lived WS auth via
-  `host_token`. Backpressure, reconnect, idempotency on
-  intent re-delivery. (`remote-server-target-architecture.md` Phase 4.)
 - **Headless / remote daemon binary**: standalone build of the daemon
   for non-desktop hosts. Config from env, log to stdout, signal
-  handling, packaging story (Docker image? plain binary? both?).
+  handling, packaging story (Docker image? plain binary? both?). Reuses
+  the Stage D2 outbound protocol; the binary is just a different
+  execution wrapper.
 - **Remote host provisioning routes**: `POST /api/hosts` (kind=remote),
   `POST /api/hosts/{id}/exchange` (bootstrap → long-lived swap),
   "Add remote host" desktop UI. Threat model for bootstrap token leak,
@@ -554,7 +766,11 @@ acceptance is met.
 - **Orchestration boundary decision**: which `DaemonAgentRuntimeHost`
   responsibilities (prompt context / spawn files / token / inbox
   delivery / run-state cache / SSE) stay server-side vs move to
-  daemon-host. Alice owns this proposal as a Phase 4 prerequisite.
+  daemon-host. Alice owns this proposal as a follow-up prerequisite —
+  Stage D2 ships the *transport* for server-initiated control, but the
+  *exact division* of which responsibilities cross that transport vs
+  stay daemon-side requires its own design pass before the
+  generalisation work (headless binary + remote host) begins.
 - **V1.5 multi-user invite + workspace sharing** (Appendix A.3 in
   `auth-and-host-model.md`).
 - **V2 OAuth providers** (Appendix A.2 in `auth-and-host-model.md`).
@@ -625,3 +841,36 @@ acceptance is met.
     outbound-connects with host_token" diagram line + add a Transport
     note paragraph deferring daemon-initiated outbound to follow-up
     phase.
+- 2026-05-25 — Round 4 product-call expansion (Alice). shiki selected
+  option 2: pull daemon outbound (for the desktop-local host case)
+  into Stage D so that V1 closes the "fill in a server URL → app
+  actually works end-to-end" loop. Trade-off: Stage D scope ~1 week →
+  ~4-5 weeks, regression surface widens. Mitigation: strict milestone
+  separation enforced in the doc.
+  - §2 Non-goals: removed "daemon outbound host protocol" (moved into
+    Stage D2). Remaining deferrals: headless / remote daemon binary,
+    remote-host provisioning UI, sandbox capability, multi-user
+    invite, OAuth, TLS in image, email password recovery, backups.
+  - §3 Stage D rewritten into four milestones (D1/D2/D3/D4 per
+    Cindy's review proposal):
+    - D1 = server deployable runtime (control plane split) — ships
+      and soaks first.
+    - D2 = daemon outbound transport (desktop-local host only) — uses
+      Stage B's `verifyHostToken()` primitive, no new identity work.
+    - D3 = desktop local-daemon lifecycle wired to outbound.
+    - D4 = remote-mode e2e acceptance + observability (the actual
+      "fill URL → works" gate).
+    - Each milestone has its own in-scope / out-of-scope / PR breakdown
+      / acceptance criteria + an explicit soak requirement between
+      consecutive milestones.
+  - §4 dependency graph redrawn to show Stage D as a four-milestone
+    pipeline; new hard constraint "D1 must ship and soak before D2
+    starts, D2 before D3, D3 before D4"; new anti-pattern warning
+    against bundling D1+D2 into one PR set.
+  - §5 Follow-up phase: removed daemon outbound (now in D2); remaining
+    follow-up items annotated to reflect that they reuse the Stage D2
+    transport.
+  - Stage B remains unchanged: still ships identity / token /
+    `verifyHostToken()` / placement only. Token presentation over a
+    real outbound transport is Stage D2's responsibility, using Stage
+    B's primitive as a caller.
