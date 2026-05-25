@@ -45,6 +45,28 @@ describe('embedded bootstrap auth route', () => {
     expect(res.status).toBe(200);
     const body = await res.json() as { user: { id: string; name: string } };
     expect(body.user.name).toBe('local');
+    const workspaceCount = t.ctx.db
+      .prepare<[], { c: number }>(`SELECT COUNT(*) AS c FROM workspaces`)
+      .get()?.c ?? 0;
+    const conversationCount = t.ctx.db
+      .prepare<[], { c: number }>(`SELECT COUNT(*) AS c FROM conversations`)
+      .get()?.c ?? 0;
+    expect(workspaceCount).toBeGreaterThan(0);
+    expect(conversationCount).toBeGreaterThan(0);
+    expect(
+      t.ctx.db
+        .prepare<[string], { c: number }>(
+          `SELECT COUNT(*) AS c FROM workspace_users WHERE user_id = ?`,
+        )
+        .get(body.user.id)?.c,
+    ).toBe(workspaceCount);
+    expect(
+      t.ctx.db
+        .prepare<[string], { c: number }>(
+          `SELECT COUNT(*) AS c FROM conversation_users WHERE user_id = ?`,
+        )
+        .get(body.user.id)?.c,
+    ).toBe(conversationCount);
     expect(
       t.ctx.db
         .prepare<[], { value: string }>(
@@ -146,6 +168,33 @@ function freshUserApp(): TestApp {
   const app = buildTestApp({ ownedLocalHostUserIds: [] });
   app.ctx.db.prepare(`DELETE FROM app_settings WHERE key = 'viewer_user_id'`).run();
   app.ctx.db.prepare(`DELETE FROM users`).run();
+  // Exercise UserService.register's first-user membership backfill.
+  const host = app.ctx.db
+    .prepare<[], { id: string }>(`SELECT id FROM hosts WHERE name = 'local'`)
+    .get();
+  if (!host) throw new Error('local host missing from test DB');
+  const now = Date.now();
+  const workspacePath = `${app.ctx.workspacesRoot}/pre-user-bootstrap`;
+  app.ctx.db
+    .prepare<[string, string, number, number]>(
+      `INSERT INTO workspaces
+       (id, name, description, workspace_kind, workspace_path, workspace_host_id,
+        owner_agent_id, archived_at, created_at, updated_at)
+       VALUES ('pre-user-bootstrap', 'pre-user-bootstrap', NULL, 'regular',
+               ?, ?, NULL, NULL, ?, ?)`,
+    )
+    .run(workspacePath, host.id, now, now);
+  app.ctx.db
+    .prepare<[string, number, number]>(
+      `INSERT INTO conversations
+       (id, workspace_id, workspace_path, kind, parent_conversation_id,
+        title, status, spawned_by_agent_id, closed_at, close_summary,
+        pinned_at, created_at, updated_at)
+       VALUES ('pre-user-bootstrap-channel', 'pre-user-bootstrap', ?,
+               'channel', NULL, 'pre-user-bootstrap', 'idle', NULL,
+               NULL, NULL, NULL, ?, ?)`,
+    )
+    .run(workspacePath, now, now);
   return app;
 }
 
