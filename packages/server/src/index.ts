@@ -44,6 +44,12 @@ export {
   type RunningBackend,
 };
 
+export {
+  runAdminCommand,
+  type CommandSink,
+  type ServerAdminCommandIo,
+} from './admin.js';
+
 export interface StartEmbeddedSilverhandServerOptions {
   dataDir: string;
   serverConfig: ServerConfig;

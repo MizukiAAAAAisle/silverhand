@@ -457,10 +457,12 @@ redefine the primitive.
   Docker image is deferred to an independent post-soak stage.
 - Persistent state layout per `auth-and-host-model.md §7.1`:
   `/var/lib/silverhand/silverhand.db`, `blobs/`, `workspaces/`.
-- Admin recovery subcommands (NOT product flow): `admin reset-password`,
-  `admin list-users`, `admin list-hosts`, `admin revoke-host`. Each
-  acquires the same DB connection lock the running server uses
-  (single-process writes invariant from `CLAUDE.md`).
+- Admin recovery subcommand (NOT product flow): `admin reset-password`
+  first. It acquires the same DB connection lock the running server uses
+  (single-process writes invariant from `CLAUDE.md`), writes an audit log
+  entry, and revokes the target user's active sessions. List/revoke-style
+  commands are deferred until their auth and audit surface is intentionally
+  scoped.
 - Readiness (`GET /readyz`) for process supervisors; existing `/api/health`
   remains process liveness only.
 - Migration runner: idempotent on startup, fails loud on inconsistent

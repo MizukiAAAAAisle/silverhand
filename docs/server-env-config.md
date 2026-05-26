@@ -73,6 +73,43 @@ and ensure native dependencies such as `better-sqlite3` are built for that Node
 ABI. If the deployment target differs from the build machine, rebuild native
 dependencies on the target host before starting the service.
 
+## Admin Recovery
+
+Admin recovery is CLI-only; there are no `/admin/*` HTTP routes in V1.
+
+Reset a registered user's password against the configured data dir:
+
+```bash
+SILVERHAND_DATA_DIR=/var/lib/silverhand \
+silverhand-server admin reset-password --email shiki@example.com
+```
+
+By default the command reads the new password from a masked TTY prompt. For
+non-interactive recovery, pass a one-shot owner-only file:
+
+```bash
+umask 177
+read -r -s NEW_SILVERHAND_PASSWORD
+printf '%s\n' "$NEW_SILVERHAND_PASSWORD" > /tmp/silverhand-new-password
+unset NEW_SILVERHAND_PASSWORD
+SILVERHAND_DATA_DIR=/var/lib/silverhand \
+silverhand-server admin reset-password \
+  --email shiki@example.com \
+  --password-from-file /tmp/silverhand-new-password
+```
+
+`--password` is intentionally unsupported so shell history never captures the
+secret. `--password-from-file` requires no group/other permissions and unlinks
+the file after reading it. Successful reset updates the credential through the
+normal password service, revokes every active session for that user, and writes
+an audit line to `logs/cli-<utc>.log` with `admin_op`, `user_email`, `success`,
+and `ts` fields. Unknown email fails with `user_not_found`; admin never creates
+users.
+
+Admin commands use the same SQLite database and acquire a write lock with
+fail-fast semantics. If another process is writing the DB, the command exits
+non-zero with `db_locked`; retry after the write lock is free.
+
 ## Examples
 
 Local standalone process:

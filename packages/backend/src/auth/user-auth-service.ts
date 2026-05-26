@@ -6,20 +6,30 @@ import {
   normalizeLoginEmail,
   type PasswordCredentialService,
 } from './password.js';
+import type { AuthSessionService } from './session.js';
+
+export interface UserPasswordResetResult {
+  userId: string;
+  email: string;
+  sessionsRevoked: number;
+}
 
 export class UserAuthService {
   private readonly db: Db;
   private readonly users: UserRepo;
   private readonly passwordCredentials: PasswordCredentialService;
+  private readonly authSessions: AuthSessionService;
 
   constructor(opts: {
     db: Db;
     users: UserRepo;
     passwordCredentials: PasswordCredentialService;
+    authSessions: AuthSessionService;
   }) {
     this.db = opts.db;
     this.users = opts.users;
     this.passwordCredentials = opts.passwordCredentials;
+    this.authSessions = opts.authSessions;
   }
 
   async signup(
@@ -80,6 +90,35 @@ export class UserAuthService {
       }
     }
     throw new Error('UserAuthService.signup: could not allocate unique user identity');
+  }
+
+  async resetPassword(input: {
+    email: string;
+    password: string;
+  }): Promise<
+    | { ok: true; reset: UserPasswordResetResult }
+    | { ok: false; code: 'user_not_found' }
+  > {
+    const email = normalizeLoginEmail(input.email);
+    const user = this.users.getByEmail(email);
+    if (!user) return { ok: false, code: 'user_not_found' };
+
+    const credential = await this.passwordCredentials.hashPasswordCredential(
+      input.password,
+    );
+    const tx = this.db.transaction((): UserPasswordResetResult => {
+      this.passwordCredentials.setPreparedUserPasswordCredential(
+        user.id,
+        credential,
+      );
+      return {
+        userId: user.id,
+        email: user.email ?? email,
+        sessionsRevoked: this.authSessions.revokeAllForUser(user.id),
+      };
+    });
+
+    return { ok: true, reset: tx.immediate() };
   }
 }
 

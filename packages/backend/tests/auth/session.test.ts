@@ -76,4 +76,28 @@ describe('AuthSessionService', () => {
       code: 'auth_failed',
     });
   });
+
+  it('revokes every active session for one user only', () => {
+    const opened = openTestDb();
+    db = opened.db;
+    const sessions = new AuthSessionService(db);
+    const localOne = sessions.issueSession({ userId: 'local' });
+    const localTwo = sessions.issueSession({ userId: 'local' });
+    const alice = sessions.issueSession({ userId: 'alice' });
+
+    expect(sessions.revokeAllForUser('local')).toBe(2);
+    expect(sessions.validateSessionToken(localOne.userToken)).toEqual({
+      ok: false,
+      code: 'auth_failed',
+    });
+    expect(sessions.validateSessionToken(localTwo.userToken)).toEqual({
+      ok: false,
+      code: 'auth_failed',
+    });
+    expect(sessions.validateSessionToken(alice.userToken)).toMatchObject({
+      ok: true,
+      session: { user_id: 'alice' },
+    });
+    expect(sessions.revokeAllForUser('local')).toBe(0);
+  });
 });

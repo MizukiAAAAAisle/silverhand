@@ -566,10 +566,13 @@ The server package includes `silverhand-server admin <subcommand>` for one-shot 
 
 Available admin subcommands in V1:
 
-- `silverhand-server admin reset-password --email <x>` — interactive prompt for new password; updates `password_hash`; revokes all sessions for that user.
-- `silverhand-server admin list-users` — emits `(id, email, created_at)` for diagnostic use.
-- `silverhand-server admin list-hosts [--user <email>]` — emits host rows including `revoked_at`.
-- `silverhand-server admin revoke-host --host-id <x>` — revokes a host server-side regardless of UI state.
+- `silverhand-server admin reset-password --email <x>` — masked prompt for new password; updates the credential through `PasswordCredentialService`; revokes all sessions for that user.
+
+`--password` is intentionally unsupported. For non-interactive recovery, use
+`--password-from-file <path>` with an owner-only secret file; the CLI unlinks it
+after reading. Unknown emails fail with `user_not_found` and never create a new
+user. List/revoke-style admin commands are deferred until their auth and audit
+surface is intentionally scoped.
 
 Invocation: `SILVERHAND_DATA_DIR=/var/lib/silverhand silverhand-server admin reset-password --email shiki@example.com`.
 

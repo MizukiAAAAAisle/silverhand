@@ -722,6 +722,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     db: ctx.db,
     users,
     passwordCredentials: ctx.passwordCredentials,
+    authSessions: ctx.authSessions,
   });
 
   // ── Auth / health / runtimes / hosts ─────────────────────────────

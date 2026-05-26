@@ -422,6 +422,13 @@ export type {
 export type { AuthRuntimeConfig } from './auth/config.js';
 export { resolveAuthRuntimeConfig } from './auth/config.js';
 export {
+  AdminResetPasswordError,
+  resetAdminPassword,
+  type AdminResetPasswordErrorCode,
+  type AdminResetPasswordOptions,
+} from './admin.js';
+
+export {
   createCategorizedLoggers,
   createFileLogger,
   createLogLevelControl,

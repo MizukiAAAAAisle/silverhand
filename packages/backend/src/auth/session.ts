@@ -92,6 +92,18 @@ export class AuthSessionService {
     return result.changes > 0;
   }
 
+  revokeAllForUser(userId: string, revokedAt = Date.now()): number {
+    const result = this.db
+      .prepare(
+        `UPDATE auth_sessions
+            SET revoked_at = ?
+          WHERE user_id = ?
+            AND revoked_at IS NULL`,
+      )
+      .run(revokedAt, userId);
+    return result.changes;
+  }
+
   getByTokenHash(tokenHash: string): AuthSessionRow | null {
     const row = this.db
       .prepare<[string], AuthSessionRow>(
