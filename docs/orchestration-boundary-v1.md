@@ -1,6 +1,6 @@
 # Orchestration boundary — V1 (D2.0 design pass)
 
-**Status**: DRAFT Rev 1. D1 complete; D2.0 design pass while D1 soaks. No code change in this stage — this doc only locks the contract for where each responsibility lives in the V1 remote-backend topology. Revision 1 (2026-05-26) folds @Cindy's three blockers + one major + relocation map nits + closes Q1/Q2/Q3 in §8 per shiki/Cindy alignment; see §9.
+**Status**: DRAFT Rev 2. D1 complete; D2.0 design pass while D1 soaks. No code change in this stage — this doc only locks the contract for where each responsibility lives in the V1 remote-backend topology. Revision 1 (2026-05-26) folded @Cindy round-1 review (three blockers + one major + relocation nits + Q1/Q2/Q3 closures). Revision 2 (2026-05-26) folds @Cindy round-2 review (two real blockers + nits): delivery-text-vs-encoding boundary fix (Option A v2), activity-log writer relocated back to server, plus protocol-shape and env-var corrections. See §9.
 
 **Predecessor docs to read first**:
 - `docs/remote-server-target-architecture.md` — target topology
@@ -33,8 +33,12 @@ every host-fs call becomes a lie.
 
 D2.0 names every such call site, decides which side of the boundary it
 belongs on, and freezes the protocol intent that carries the work across.
-D2 (durable intent queue) and D3 (daemon outbound transport) implement
-against this contract. **Without D2.0 locked, D2/D3 become moving targets.**
+**D2** (daemon outbound transport, desktop-local host only) and
+**D3** (desktop local-daemon lifecycle wired to outbound) implement
+against this contract. **D2.1** (file → DB migration for prompt-composition
+surfaces, §6.1) lands separately and is a hard prerequisite for any
+actually-remote deployment. **Without D2.0 locked, D2/D3 become moving
+targets.** Stage names match `docs/remote-backend-roadmap.md`.
 
 ## 3. Two-sided contract
 
@@ -65,17 +69,26 @@ Server owns and is the only writer of:
   changing this contract (see §6).
 - Intent issuance: when the server decides "agent X in conversation Y
   must wake", that decision is server-side.
-- **Delivery payload composition**: `stream-json` user-message
-  hydration from inbox rows (today: `formatInboxAsUserMessages` →
-  `runtime_wake.payload`) — driver-protocol-aware data assembly is
-  server-side; daemon only writes the assembled bytes to stdin. Same
-  rule for `startup_delivery` on `runtime_start`.
+- **Delivery text hydration / message formatting**: composing the
+  *unencoded* delivery text the daemon will hand to its driver
+  (today: `formatInboxBatch` / `formatLiveMessage` /
+  `combineGatedBatch`, plus attachment suffix, sender handle prefix,
+  delivery instruction). Server owns hydration; the **driver-specific
+  stdin encoding** is daemon-side (Option A v2 lock,
+  `packages/host/src/protocol.ts:300-310` + `:387-417`). Same rule
+  for `startup_delivery.text` on `runtime_start` and `soft_directive`
+  on `runtime_stop`.
+- Inbox row writes (`ensureDelivery`, `listPending`, `markDelivered`)
+  — daemon never opens the inbox repo.
+- **Activity log JSONL persistence** (`runtime/activity-log-writer.ts`):
+  daemon emits `runtime_output` / control events; server persists the
+  JSONL file and republishes to renderers via SSE. PR-2 §4.2 + §4.3
+  lock this — `runtime_close_activity_log` semantics = daemon flushes
+  outbound buffers, server then closes its writer.
 - Run-state cache projection mirror: daemon is source of truth for
   per-host execution-plane state; server caches a projection for ACL'd
   HTTP / SSE consumers. (See §5.)
 - SSE / event-bus fanout to renderers.
-- Inbox row writes (`ensureDelivery`, `listPending`, `markDelivered`)
-  — daemon never opens the inbox repo.
 
 Server **must not**:
 
@@ -113,9 +126,19 @@ Daemon-host owns and is the only writer of:
   `bin/silverhand` shim, deciding `process.env` composition, invoking
   driver CLI
 - Agent process lifecycle: spawn, supervise, stdin write, stdout
-  parse, stop/clear, run-state cache (source of truth, per host),
-  activity log JSONL writer (PR-2 §4.2; activity-log file lifetime is
-  daemon-bound)
+  parse, stop/clear, run-state cache (source of truth, per host).
+  Daemon emits `runtime_output` + control events; **server**
+  persists the activity-log JSONL (see §3.1; PR-2 §4.2).
+- **Driver-specific stdin encoding** via the in-process driver
+  instance whose state is authoritative: `driver.encodeStdinMessage(text, cliSessionId)`,
+  readiness gating / `driver_not_ready` short-circuit, codex thread
+  state, soft-directive encoding (Option A v2 lock,
+  `packages/host/src/protocol.ts:300-310` + `:387-417`). Backend
+  ships unencoded text (§3.1 delivery hydration); daemon encodes per
+  driver.
+- Daemon-local logs: `~/.silverhand/run/daemon-<utc>.log`, pid file,
+  installation log, supervisor's own structured logs. **Excludes**
+  the activity-log JSONL — that is server-persisted (see §3.1).
 - L1/L2/CONSENSUS **prompt-file materialization**: rendering daemon-local
   absolute paths into the per-spawn `system-prompt.md` and into prompt
   text that points the agent at workspace paths. **Data hydration**
@@ -132,10 +155,15 @@ Daemon-host **must not**:
 - Mutate authoritative DB rows directly (daemon talks protocol → server →
   DB; no direct DB connection from daemon process)
 - Persist control-plane state beyond its own machine-local needs
-  (installation_id, host token, run-state cache, activity log JSONL —
-  none of these are "the durable record"; the server's DB is)
-- Compose `stream-json` payloads for inbox drain or `runtime_wake`
-  (server-owned per §3.1; daemon only writes the bytes it receives)
+  (installation_id, host token, run-state cache — none of these are
+  "the durable record"; the server's DB is)
+- Persist the activity-log JSONL — that is server-side per PR-2
+  §4.2. Daemon emits events; server's `activity-log-writer.ts`
+  consumes and persists.
+- Hydrate delivery text from DB rows (server-owned per §3.1; daemon
+  only encodes the unencoded text it receives)
+- Pre-encode stream-json on the server (Option A v2 lock — that
+  would freeze driver state outside the in-process driver instance)
 - Read or write blob bytes (V1 main; future sandbox tier may add a
   daemon-local blob cache, see §5.1)
 
@@ -156,13 +184,13 @@ daemon, no reply — server fans out via the activity log / SSE bus.
 
 | Intent | Request params | Response arms |
 |--------|----------------|---------------|
-| `runtime_start` | `{ conversation_id, agent_id, options, startup_delivery? }` where `options` carries `model`, `reasoning_effort`, `fast_mode`, `cli_session_id?` + workspace bundle (§4.1) + session bundle (§4.0) + agent profile bundle (§4.2) + env policy (§4.3), and `startup_delivery?` carries the delivery bundle (§4.5) | `started` / `failed{reason}` |
-| `runtime_stop` | `{ conversation_id, agent_id, reason }` | `stopped` / `not_running` |
+| `runtime_start` | `{ conversation_id, agent_id, options, startup_delivery? }` where `options` carries `runtime` (driver kind), `model`, `reasoning_effort`, `fast_mode`, `cli_session_id?` + workspace bundle (§4.1) + session bundle (§4.0) + agent profile bundle (§4.2) + env policy (§4.3); `startup_delivery?` = `{ delivery_ids[], text }` per Option A v2 (unencoded text — daemon encodes) | discriminated by `started`: `{ started: true, pid, started_at, startup_delivery_accepted? }` / `{ started: false, reason: 'init_cooldown', cooldown_until }`. Note `startup_delivery_accepted` is "attempt accepted", NOT "consumed" — the async `runtime_startup_delivery_consumed` event is the consumed signal. |
+| `runtime_stop` | `{ conversation_id, agent_id, mode: 'soft' \| 'hard', soft_directive? }` per PR-2 Option A v2: `soft_directive` is **required** when `mode === 'soft'` (unencoded text, daemon encodes), **forbidden** when `mode === 'hard'` | discriminated by `mode`: `hard: { mode: 'hard', stopped, exit_code? }` (`exit_code` may be `null` if SIGTERM cascade pending — real value rides on `runtime_exit` event) / `soft: { mode: 'soft', directive_delivered, reason? in ['not_running' \| 'write_failed' \| 'driver_refused'] }`. **`directive_delivered === false` does NOT mean stopped** — soft never terminates the runtime. |
 | `runtime_clear_session` | `{ conversation_id, agent_id }` | `cleared` / `not_running` |
-| `runtime_wake` | `{ conversation_id, agent_id, delivery_ids[], kind, payload }` where `payload` is the server-composed `stream-json` user-message bytes (see §4.5) | `delivered{delivery_ids[]}` / `failed{reason}` (all-or-nothing per PR-2 §4.3) |
-| `runtime_status` | `{ conversation_id?, agent_id? }` (PR-2 filter shape; both optional — narrow by tuple, by agent, or none = host-wide) | snapshot of run-state cache projection scoped to this host |
+| `runtime_wake` | `{ conversation_id, agent_id, delivery_ids[], text }` where `text` is the server-hydrated *unencoded* delivery text (Option A v2 — daemon's driver instance encodes via `encodeStdinMessage(text, cliSessionId)` before writing stdin) | `{ delivered: true, delivery_ids[] }` / `{ delivered: false, reason }` (all-or-nothing per PR-2 §4.3) |
+| `runtime_status` | `{ conversation_id?, agent_id? }` (PR-2 filter shape; both optional) | cache snapshot constrained by filter — empty filter = full snapshot known to this daemon. Filter is a narrowing operator, not a topology key; host placement is decided server-side before the call. |
 | `runtime_stop_all` | `{}` (boot/shutdown sweep) | `{stopped_count}` + per-agent `runtime_exit` events |
-| `runtime_close_activity_log` | `{}` (shutdown) | `ack` |
+| `runtime_close_activity_log` | `{}` (shutdown) | `ack`. Semantics: daemon flushes outbound buffers; **server then closes its activity-log writer** (per §3.1 + PR-2 §4.3). |
 | `runtime_output_pause` / `_resume` | `{ conversation_id, agent_id }` (PR-2 §2.2; backend stays in always-flowing mode in v0) | ack |
 
 **Daemon → server unsolicited events (no reply; activity log / SSE fanout):**
@@ -257,10 +285,10 @@ block renders).
   server-owned, capped at `MEMORY_INJECT_CAP_BYTES` (16KB) per
   current `readFileWithCap` contract (V1 transitional shim; D2.1 →
   DB row keyed `(workspace_id, agent_id)`)
-- `role_pointer` — informational pointer back to the L1 file location
-  on this daemon-host (so the prompt can say "edit
-  `~/.silverhand/agents/<id>/system_prompt.md`"). The daemon renders
-  the pointer locally; the server only ships the logical agent id.
+- `role_pointer` — **logical pointer / label** the daemon expands
+  locally into a fs path when rendering the prompt (so the prompt
+  can say "edit `~/.silverhand/agents/<id>/system_prompt.md`").
+  Server never ships an absolute path; the daemon owns the path map.
 
 **Runtime options** (carried on `runtime_start.options` alongside
 this bundle): `model`, `reasoning_effort`, `fast_mode`,
@@ -276,9 +304,10 @@ hint about notes, the **daemon** enumerates and renders locally.
 
 The server does NOT compose `process.env`. The server ships an **env policy**:
 
-- `silverhand_vars` — `SILVERHAND_BACKEND_URL`, `SILVERHAND_AGENT_TOKEN`,
-  `SILVERHAND_WORKSPACE_ID`, `SILVERHAND_CONVERSATION_ID`,
-  `SILVERHAND_AGENT_ID` — values the server computes, daemon applies as-is
+- `silverhand_vars` — `SILVERHAND_SERVER_URL`, `SILVERHAND_AUTH_TOKEN`
+  (see `packages/shared/src/config.ts`), `SILVERHAND_WORKSPACE_ID`,
+  `SILVERHAND_CONVERSATION_ID`, `SILVERHAND_AGENT_ID` — values the
+  server computes, daemon applies as-is
 - `driver_vars` — driver-specific keys (e.g. `ANTHROPIC_API_KEY` policy:
   whose key, which model). V1 daemon-local fallback only (Q3); the
   server does **not** ship provider secrets to the daemon in V1. Any
@@ -304,12 +333,12 @@ workspace fs. The boundary contract:
   embedded subset in `messages.metadata.attachments`).
 - Server serves downloads via existing routes (`serveForViewer` /
   avatar fetch), reading the bytes back from its own data dir.
-- Daemon never sees blob bytes. When a delivery payload references
-  attachments, the server's hydrated payload carries the
-  `AttachmentSnapshot[]` (metadata only); if the agent's driver tools
-  later need to read the attachment file (e.g. `silverhand file view`),
-  the resolution goes back through server HTTP, not through a
-  daemon-local path.
+- Daemon never sees blob bytes. When a delivery text bundle (§4.5)
+  references attachments, the server's hydrated `text` already inlines
+  the attachment-suffix block; `attachment_snapshots[]` rides along as
+  metadata only. If the agent's driver tools later need to read the
+  attachment file (e.g. `silverhand file view`), the resolution goes
+  back through server HTTP, not through a daemon-local path.
 
 Implication for `silverhand file view` in remote-deploy: returns a
 server download URL (signed / ACL'd via existing routes), not a
@@ -320,34 +349,55 @@ the agent sees is "URL or URL-like handle, fetch via http".
 Daemon-local blob cache / sandbox blob tier is a future storage
 optimization, not V1; see §5.1.
 
-### 4.5 Delivery payload bundle (per wake / per startup_delivery)
+### 4.5 Delivery bundle (per wake / per startup_delivery / per soft_directive)
 
-`runtime_wake` and `runtime_start.startup_delivery` carry a delivery
-bundle. Server-composed; daemon-opaque (daemon only writes bytes to
-stdin).
+`runtime_wake` / `runtime_start.startup_delivery` / `runtime_stop.soft_directive`
+all carry an unencoded delivery text bundle. **Boundary lock (Option
+A v2)**: server hydrates the text from DB rows; the daemon's
+in-process driver instance — which holds authoritative driver state
+(cli_session_id, codex thread state, readiness) — does the
+driver-specific stdin encoding via `encodeStdinMessage(text, cliSessionId)`
+and writes to stdin. Backend MUST NOT pre-encode (locked by Cindy
+`UMGu36zoTDVuKWXi` in PR-2 review; see `packages/host/src/protocol.ts:300-310`
+and `:387-417`).
+
+Server-side hydration produces (and ships in `text`):
 
 - `delivery_ids[]` — inbox row ids covered by this batch. PR-2 §4.3
-  all-or-nothing markDelivered rule applies.
-- `kind` — one of `startup_delivery` / `channel_message` / `wake` /
-  `system` / `schedule_fire` / `task_event` / `agent_message` / etc.
-  Drives any per-kind framing the server's stream-json formatter
-  applies.
-- `hydrated_text` (a.k.a. `payload` on the wire) — the assembled
-  `stream-json` user-message bytes. Server runs the existing
-  `formatInboxAsUserMessages` (and per-driver framing) before sending.
+  all-or-nothing markDelivered rule applies (wake / startup_delivery
+  only; `soft_directive` is a single non-inbox directive).
+- `text` — the unencoded delivery text. Server-side helpers today:
+  `formatInboxBatch` (multi-row batched drain),
+  `formatLiveMessage` (single live delivery),
+  `combineGatedBatch` (compose under driver gating rules), plus
+  attachment suffix rendering, sender handle prefix, delivery
+  instruction. Output is **plain text**; it is NOT a
+  pre-serialized `stream-json` user message.
 - `attachment_snapshots[]` — `AttachmentSnapshot` records for any
-  attachments referenced by the messages in this batch (id +
-  filename + size + content_type, per `AttachmentSnapshotSchema`).
-  Daemon does not resolve them; they ride along so the agent's
-  rendered prompt block matches what the renderer shows.
-- `driver_capabilities` — minimal hint set so the formatter knows
-  which attachment kinds make sense to render (e.g. images for
-  claude vision-capable models). Computed server-side from the
-  agent's runtime + model.
+  attachments referenced (id + filename + size + content_type, per
+  `AttachmentSnapshotSchema`). These are passed through to the
+  formatter for inline rendering inside `text`; daemon does not
+  re-resolve them.
 
-V1 ships this bundle whether the embedded daemon needs it or not;
-having the contract locked means D3 / remote-deploy doesn't need to
-re-derive payload composition rules.
+Daemon-side, per delivery (per `text` field):
+
+- `driver.encodeStdinMessage(text, cliSessionId)` — driver-specific
+  framing into stream-json or whatever the runtime expects on stdin.
+  This is the **only** place stream-json encoding happens for V1.
+- Readiness gating: `driver_not_ready` short-circuit before write
+  attempt; codex thread state held in driver; soft-directive encoding.
+- The async `runtime_startup_delivery_consumed` / `_failed` events
+  carry the daemon's per-delivery outcome (PR-2 §3.2).
+
+`driver_capabilities` (e.g. claude vision support) is **computed
+server-side from the agent's runtime + model** and consumed at
+hydration time (whether to inline an image attachment, etc.). It is
+not shipped as a separate field — the resulting `text` already
+reflects the decision.
+
+V1 ships the bundle whether the embedded daemon needs the
+contract-strictness or not; locking it now means D2 implementation
+does not re-derive the encoding boundary mid-PR.
 
 ## 5. Code-relocation map
 
@@ -356,24 +406,24 @@ Each row names the V1 destination + the migration step (D2 / D2.1 / D3).
 
 | Module | Today | V1 destination | Step | Notes |
 |--------|-------|----------------|------|-------|
-| `spawn-prep.ts` | backend writes per-spawn shim + system-prompt.md | **daemon-host** | D2 | Already isolated; backend wraps as `runtime_start.startup_delivery` payload + session/workspace/profile bundles (§4.0/§4.1/§4.2); daemon executes |
+| `spawn-prep.ts` | backend writes per-spawn shim + system-prompt.md | **daemon-host** | D2 | Already isolated; backend wraps as `runtime_start` params (session + workspace + profile + env-policy bundles per §4.0–§4.3) + optional `startup_delivery.text` (§4.5 Option A v2); daemon executes |
 | `workspace-files.ts` | backend reads/writes workspace `.silverhand/` | **daemon-host** | D2 | Materialization moves to daemon; server ships workspace bundle (§4.1) |
 | `agent-profile.ts` | path construction for L1/L2 dirs | **split** | D2 | Logical agent profile data + DTOs → server. **Daemon-local absolute/relative L1/L2 path rendering** (`activeAgentProfileDir`, `agentL1ProfileDir`, `agentMemoryDirFor`) → daemon. Server **never** renders a server-side path into anything the agent can use. |
 | `agent-workspace.ts` | backend ensures workspace dir exists per agent | **daemon-host** | D2 | Pure materialization |
 | `storage/blob-file-storage.ts` | backend `node:fs` blob R/W | **server (unchanged)** | — | **Q1 decision**: blob bytes are server data (§3.1 / §4.4). No relocation; the existing put/serve/locate/delete + sweep stays server-side. |
 | `runtime/spawn-env.ts` | backend composes spawn env | **split** | D2 | Policy composition (§4.3, including `silverhand_vars` value computation) → server. `process.env` merge + per-spawn shim path + `driver.applyEnv(process.env)` invocation → daemon. **Server never invokes `driver.applyEnv`** — that's a daemon-side step against the daemon's own process env. |
 | `runtime/prompt-context.ts` | backend reads L1/L2/CONSENSUS files + composes `DriverPromptContext` | **split** | D2 / D2.1 | **Data hydration & capping** (`readFileWithCap`, `MEMORY_INJECT_CAP_BYTES`, `CONSENSUS_INJECT_CAP_BYTES`, `buildWorkspaceMemoryIndex`) → server (in D2.1 reads from DB; V1 transitional reads from daemon-local fs). **Host-local prompt-file materialization & absolute path rendering** (writing the per-spawn `system-prompt.md`, rendering MEMORY.md path tokens to absolute fs paths) → daemon. Shared formatter helpers move to `packages/shared` so both sides use the same byte-identical assembly. |
-| `runtime/activity-log-writer.ts` | backend writes activity JSONL | **daemon-host** | D2 | Already daemon-side under PR-2 (`runtime_output` events; daemon owns JSONL file lifetime); backend wrapper retires |
+| `runtime/activity-log-writer.ts` | backend writes activity JSONL from daemon events | **server (unchanged)** | — | PR-2 §4.2 + §4.3 lock: daemon emits `runtime_output` + control events; server persists JSONL and republishes via SSE. `runtime_close_activity_log` semantics = daemon flushes outbound buffers → server closes its writer. |
 | `runtime/run-state-cache.ts` | in-memory cache server-side | **daemon-host primary**, server projection mirror | D2 | Daemon is source of truth (per host); server caches a per-host projection for ACL'd HTTP / SSE consumers. Server projection is rebuilt from `runtime_state` events; not persisted. |
 | `runtime/daemon-agent-runtime-host.ts` | backend proxy to daemon | **server (unchanged)** | — | Server-side IPC client — correct boundary already |
 | `runtime/daemon-runtime-wiring.ts` | backend wires daemon for embedded | **server (unchanged)** | — | Dynamic-import boundary stays; standalone mode skips this entirely |
 | `runtime/control-plane-runtime-host.ts` | standalone fail-loud stub | **server (unchanged)** | — | Correct |
 | `runtime/delivery-coordinator.ts` | backend orchestrates deliveries | **server (unchanged)** | — | Server-owned per §3.1. PR-2 §4.3 locks this. |
-| `runtime/stdin-format.ts` (`formatInboxAsUserMessages`) | backend hydrates inbox rows into `stream-json` payload | **server (unchanged)** | — | Server-owned per §3.1 / §4.5. Driver-protocol-aware data assembly; daemon receives bytes and writes to stdin. |
+| delivery-text formatter helpers (`formatInboxBatch` / `formatLiveMessage` / `combineGatedBatch`) | backend hydrates inbox/live rows into **unencoded** delivery text + attachment suffix + sender prefix | **server (unchanged)** | — | Server-owned per §3.1 / §4.5. Option A v2: backend ships unencoded text; daemon's driver encodes via `encodeStdinMessage(text, cliSessionId)`. **Backend MUST NOT pre-encode** (`packages/host/src/protocol.ts:300-310` + `:387-417`). |
 | `runtime/status-projector.ts` | backend projects daemon snapshots into HTTP / SSE | **server (unchanged)** | — | Projection consumer of run-state cache (see above) |
 | `auth/embedded-bootstrap.ts` | backend writes one-shot bootstrap file | **daemon-host** | D2 | File is host-machine-local; daemon owns write/read. Server issues the bootstrap token over protocol |
 | `provision.ts` | backend creates workspace dirs / onboarding messages | **split** | D2 | Workspace **fs** materialization → daemon (via materialization intent). Onboarding **DB** row writes (inbox, conversation_agents, messages) → server. |
-| `routes.ts` direct host-fs callers | `initWorkspaceDir`, `ensureAgentL1Dir`, `seedAgentL2` on workspace/agent create; `fs.rm` of L1/L2 on agent delete | **daemon-host** for fs ops | D2 | Route handler stays server (DB writes + ACL); fs side-effects become typed materialization intents to daemon (`workspace_materialize`, `agent_l1_seed`, `agent_l2_seed`, `agent_l1_rm`, `agent_l2_rm`) |
+| `routes.ts` direct host-fs callers | `initWorkspaceDir`, `ensureAgentL1Dir`, `seedAgentL2` on workspace/agent create; `fs.rm` of L1/L2 on agent delete | **daemon-host** for fs ops | D2 | Route handler stays server (DB writes + ACL); fs side-effects become typed materialization intents to daemon. **Intent names below are illustrative — concrete vocab lives in the D2 implementation PR, not frozen in §3.3 V1 surface**: `workspace_materialize` / `agent_l1_seed` / `agent_l2_seed` / `agent_l1_rm` / `agent_l2_rm`. |
 | `index.ts` boot direct host-fs callers | `mkdirSync(workspacesRoot)`, blob storage dir create, embedded CLI `existsSync/execFileSync` probe | **split** | D2 | Server data dir create (DB + blobs) stays server. Workspace root dir + embedded CLI probe → daemon-host (the runtime that will spawn the CLI). |
 | `logger.ts` | reads `SILVERHAND_LOG_LEVEL` env, writes log files to `<data_dir>/logs/` | **split** | D2 | Server has its own log dir; daemon has its own. Today's backend logger conflates them |
 | `db.ts` + migrations | reads/writes SQLite at `<data_dir>/silverhand.db` | **server (unchanged)** | — | Server is the DB owner; daemon never opens the DB file |
@@ -492,10 +542,13 @@ D2.0 acceptance = **this doc accepted by shiki**. Concretely:
    D2/D2.1/D3 implementation review
 8. Decisions on Q1/Q2/Q3 (§8) accepted
 
-**Out of scope for D2.0**: protocol wire format details, message framing,
-backpressure rules, retry / durability — all of that is D2 (durability
-invariant) and D3 (transport). D2.0 is the *what lives where* contract; D2
-is *how it's queued*; D3 is *how it's transported*.
+**Out of scope for D2.0**: protocol wire format details, message
+framing, backpressure rules, retry / durability — those are D2
+(daemon outbound transport) and D3 (desktop local-daemon lifecycle
+wired to outbound). D2.0 is the *what lives where* contract; D2 is
+*how the daemon talks outbound*; D3 is *how desktop wires the daemon
+lifecycle into that transport*. Stage names match
+`docs/remote-backend-roadmap.md`.
 
 ## 8. Decisions taken (was: open questions)
 
@@ -567,3 +620,54 @@ expanded in PR descriptions.
     `provision.ts` split (fs → daemon, DB → server).
   - §8 closed Q1 / Q2 / Q3 with decisions; original open questions
     moved here.
+- 2026-05-26 — **Revision 2 (Alice, post Cindy round-2 review
+  `nRawYpLX7wklaoJH` against `b8641e3`)**. Folds two real blockers
+  + nits without re-opening the round-1 closures:
+  - Blocker 1 (delivery payload encoding boundary, Option A v2):
+    Revision 1 erroneously wrote "server pre-encodes `stream-json`
+    user-message bytes; daemon writes bytes to stdin", contradicting
+    PR-2 protocol (`packages/host/src/protocol.ts:300-310`,
+    `:387-417`) which holds Option A v2: server hydrates *unencoded*
+    text; daemon's in-process driver encodes via
+    `encodeStdinMessage(text, cliSessionId)`. Fixed §3.1 ("Delivery
+    text hydration / message formatting"), §3.2 (added
+    "Driver-specific stdin encoding" to daemon-only; added must-not
+    "Hydrate delivery text from DB rows" / "Pre-encode stream-json
+    on the server"), §3.3 `runtime_wake` wire field renamed
+    `payload` → `text` with Option A v2 note, §4.4 attachment-suffix
+    is server-inlined into `text`, §4.5 rewritten end-to-end as
+    delivery text bundle (text vs encoding split, real helper names
+    `formatInboxBatch` / `formatLiveMessage` / `combineGatedBatch`),
+    §5 map row corrected (no `stdin-format.ts` / no
+    `formatInboxAsUserMessages` — those names did not exist).
+  - Blocker 2 (`activity-log-writer.ts` mis-placement): Revision 1
+    erroneously relocated to daemon-host; PR-2 §4.2 + §4.3 keep it
+    server-side (daemon emits `runtime_output` + control events,
+    server persists JSONL + republishes SSE,
+    `runtime_close_activity_log` = daemon flushes outbound buffers
+    → server closes its writer). Fixed §3.1 (added "Activity log
+    JSONL persistence"), §3.2 (removed from daemon-owned list;
+    added "Daemon-local logs" with explicit exclusion of activity
+    JSONL; added must-not "Persist the activity-log JSONL"), §3.3
+    `runtime_close_activity_log` semantics row, §5 map row reverted
+    to server-unchanged.
+  - Nits folded: §3.3 `runtime_start` response = discriminated union
+    on `started` with `init_cooldown` arm (`{started:false, reason,
+    cooldown_until}`) and `startup_delivery_accepted` field
+    explained; `runtime_stop` shape corrected to PR-2 Option A v2
+    (`mode: 'soft'|'hard'`, `soft_directive?` required-iff-soft,
+    discriminated response with `hard:{stopped,exit_code?}` /
+    `soft:{directive_delivered,reason?}`); `runtime_wake` response
+    `{delivered:true, delivery_ids[]}` / `{delivered:false, reason}`;
+    `runtime_status` filter wording clarified as narrowing operator
+    (not a topology key); §4.3 env-var names corrected to
+    `SILVERHAND_SERVER_URL` / `SILVERHAND_AUTH_TOKEN` (per
+    `packages/shared/src/config.ts:56-57`) — Revision 1's
+    `SILVERHAND_BACKEND_URL` / `SILVERHAND_AGENT_TOKEN` were
+    fabricated; §2 and §7 stage references corrected to roadmap
+    truth (D2 = daemon outbound transport, D3 = desktop
+    local-daemon lifecycle wired to outbound — Revision 1's "D2
+    durability / D3 transport" was wrong); §4.2 `role_pointer`
+    clarified as logical pointer/label (not server-generated
+    absolute path); §5 `routes.ts` materialization-intent names
+    explicitly marked illustrative (not D2.0 frozen vocab).
