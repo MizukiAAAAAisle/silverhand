@@ -382,7 +382,21 @@ export class OutboundDaemonClient {
     let response: OutboundDaemonToServerCommandResponseFrame;
     try {
       const dispatched = await dispatcher(command);
-      response = toOutboundCommandResponse(command, dispatched);
+      const mapped = toOutboundCommandResponse(command, dispatched);
+      response = mapped.frame;
+      if (mapped.drift) {
+        this.opts.logger.warn(
+          {
+            kind: 'outbound_ws',
+            action: 'command_response_shape_drift',
+            command_kind: command.kind,
+            request_id: command.id,
+            response_summary: mapped.drift.summary,
+            issues: mapped.drift.issues,
+          },
+          'daemon outbound command response shape drift; returning internal_error',
+        );
+      }
     } catch (err) {
       response = {
         direction: 'daemon_to_server',
@@ -751,7 +765,10 @@ async function defaultCommandDispatcher(
 function toOutboundCommandResponse(
   command: OutboundServerToDaemonCommandFrame,
   response: ResponseFrame,
-): OutboundDaemonToServerCommandResponseFrame {
+): {
+  frame: OutboundDaemonToServerCommandResponseFrame;
+  drift?: { summary: Record<string, unknown>; issues: string[] };
+} {
   const candidate = 'error' in response
     ? {
         direction: 'daemon_to_server',
@@ -770,17 +787,43 @@ function toOutboundCommandResponse(
   const parsed = OutboundDaemonToServerCommandResponseFrameSchema.safeParse(
     candidate,
   );
-  if (parsed.success) return parsed.data;
+  if (parsed.success) return { frame: parsed.data };
   return {
-    direction: 'daemon_to_server',
-    type: 'command_response',
-    id: command.id,
-    kind: command.kind,
-    error: {
-      code: 'internal_error',
-      message: `daemon outbound command response drift for ${command.kind}`,
+    frame: {
+      direction: 'daemon_to_server',
+      type: 'command_response',
+      id: command.id,
+      kind: command.kind,
+      error: {
+        code: 'internal_error',
+        message: `daemon outbound command response drift for ${command.kind}`,
+      },
+    } as OutboundDaemonToServerCommandResponseFrame,
+    drift: {
+      summary: summarizeResponseFrame(response),
+      issues: parsed.error.errors.map(e => `${e.path.join('.')}: ${e.message}`),
     },
-  } as OutboundDaemonToServerCommandResponseFrame;
+  };
+}
+
+function summarizeResponseFrame(response: ResponseFrame): Record<string, unknown> {
+  if ('error' in response) {
+    return {
+      arm: 'error',
+      id: response.id,
+      error_code: response.error.code,
+    };
+  }
+  const result = response.result;
+  return {
+    arm: 'result',
+    id: response.id,
+    result_type: Array.isArray(result) ? 'array' : typeof result,
+    result_keys:
+      result && typeof result === 'object' && !Array.isArray(result)
+        ? Object.keys(result).slice(0, 10)
+        : undefined,
+  };
 }
 
 export function readHostConfig(

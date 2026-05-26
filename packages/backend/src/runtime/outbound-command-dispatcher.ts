@@ -24,6 +24,8 @@ export interface OutboundRuntimeCommandDispatcherOptions {
   placement: RuntimeHostPlacement;
   /** Host target for host-wide commands with no `(conversation_id, agent_id)`. */
   defaultHostId?: () => string | null;
+  /** Optional direct-wake ack sink. D2.e coordinator replay stays separate. */
+  inboxAck?: { markDelivered(deliveryIds: readonly number[]): void };
 }
 
 /**
@@ -45,7 +47,11 @@ export class OutboundRuntimeCommandDispatcher {
   }
 
   async runtimeWake(params: RuntimeWakeParams): Promise<RuntimeWakeResult> {
-    return this.sendAgentCommand('runtime_wake', params);
+    const result = await this.sendAgentCommand('runtime_wake', params);
+    if (result.delivered) {
+      this.opts.inboxAck?.markDelivered(result.delivery_ids);
+    }
+    return result;
   }
 
   async runtimeStatus(params: RuntimeStatusParams = {}): Promise<RuntimeStatusResult> {

@@ -156,6 +156,66 @@ describe('host outbound WebSocket server', () => {
     expect(closed.code).toBe(1002);
   });
 
+  it('forwards authenticated daemon event frames to the configured fanout sink once', async () => {
+    t = buildTestApp();
+    const events: Array<{ hostId: string; kind: string }> = [];
+    server = await openServer(t, {
+      eventSink: {
+        onEvent: (hostId, event) => events.push({ hostId, kind: event.kind }),
+      },
+    });
+    const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: host.id,
+    });
+    const ws = await connectHost(server.url, issued.hostToken);
+    sockets.push(ws);
+
+    ws.send(JSON.stringify({
+      direction: 'daemon_to_server',
+      type: 'event',
+      kind: 'ready',
+      protocol_version: OUTBOUND_PROTOCOL_VERSION,
+      daemon_version: '0.0.0-test',
+      daemon_id: 'local',
+      instance_id: 'instance-1',
+      host_descriptor: { name: 'local', kind: 'local' },
+      capabilities: [...KNOWN_CAPABILITIES_V1],
+      daemon_pid: 123,
+      started_at: 1700000000000,
+    }));
+
+    await waitFor(() => events.length === 1);
+    expect(events).toEqual([{ hostId: host.id, kind: 'ready' }]);
+  });
+
+  it('notifies the fanout sink of a replaced connection disconnect once', async () => {
+    t = buildTestApp();
+    const disconnects: string[] = [];
+    server = await openServer(t, {
+      eventSink: {
+        onEvent: () => {},
+        onDisconnect: hostId => disconnects.push(hostId),
+      },
+    });
+    const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: host.id,
+    });
+    const first = await connectHost(server.url, issued.hostToken);
+    sockets.push(first);
+
+    const firstClosed = waitForClose(first);
+    const second = await connectHost(server.url, issued.hostToken);
+    sockets.push(second);
+    await expect(firstClosed).resolves.toMatchObject({
+      code: 1000,
+      reason: 'host_connection_replaced',
+    });
+
+    expect(disconnects).toEqual([host.id]);
+  });
+
   it('responds to app-level daemon heartbeat pings', async () => {
     t = buildTestApp();
     server = await openServer(t, { pingIntervalMs: 0 });
@@ -255,13 +315,13 @@ describe('host outbound WebSocket server', () => {
       { conversation_id: 'c1', agent_id: 'a1' },
       { timeoutMs: 500 },
     );
+    const firstFrame = await readJsonFrame(ws) as Record<string, unknown>;
     const second = server.controller.sendCommand(
       host.id,
       'runtime_status',
       { conversation_id: 'c1', agent_id: 'a2' },
       { timeoutMs: 500 },
     );
-    const firstFrame = await readJsonFrame(ws) as Record<string, unknown>;
     const secondFrame = await readJsonFrame(ws) as Record<string, unknown>;
     ws.send(runtimeStatusResponse(String(secondFrame.id), 'a2'));
     ws.send(runtimeStatusResponse(String(firstFrame.id), 'a1'));
@@ -331,6 +391,66 @@ describe('host outbound WebSocket server', () => {
       server.controller.sendCommand('missing-host', 'runtime_status', {}),
     ).rejects.toMatchObject({
       code: 'transport_no_connection',
+    });
+  });
+
+  it('fails fast with transport_invalid_command before writing invalid params', async () => {
+    t = buildTestApp();
+    server = await openServer(t, { pingIntervalMs: 0 });
+    const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: host.id,
+    });
+    const ws = await connectHost(server.url, issued.hostToken);
+    sockets.push(ws);
+
+    await expect(
+      server.controller.sendCommand(
+        host.id,
+        'runtime_wake',
+        {
+          conversation_id: 'c1',
+          agent_id: 'a1',
+          delivery_ids: [],
+          kind: 'message',
+          text: 'hello',
+        } as never,
+      ),
+    ).rejects.toMatchObject({ code: 'transport_invalid_command' });
+    await expect(noMessageWithin(ws, 25)).resolves.toBeUndefined();
+  });
+
+  it('fails fast with transport_response_mismatch and closes on wrong response kind', async () => {
+    t = buildTestApp();
+    server = await openServer(t, { pingIntervalMs: 0 });
+    const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: host.id,
+    });
+    const ws = await connectHost(server.url, issued.hostToken);
+    sockets.push(ws);
+    const pending = server.controller.sendCommand(
+      host.id,
+      'runtime_status',
+      {},
+      { timeoutMs: 500 },
+    );
+    const frame = await readJsonFrame(ws) as Record<string, unknown>;
+
+    ws.send(encodeOutboundFrame({
+      direction: 'daemon_to_server',
+      type: 'command_response',
+      id: String(frame.id),
+      kind: 'runtime_stop',
+      result: { mode: 'hard', stopped: true, exit_code: 0 },
+    }));
+
+    await expect(pending).rejects.toMatchObject({
+      code: 'transport_response_mismatch',
+    });
+    await expect(waitForClose(ws)).resolves.toMatchObject({
+      code: 1002,
+      reason: 'command_response_kind_mismatch',
     });
   });
 });
@@ -434,6 +554,33 @@ async function noCloseWithin(ws: WebSocket, ms: number): Promise<void> {
     };
     ws.once('close', onClose);
   });
+}
+
+async function noMessageWithin(ws: WebSocket, ms: number): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    const onMessage = () => {
+      cleanup();
+      reject(new Error('received unexpected message'));
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      ws.off('message', onMessage);
+    };
+    ws.once('message', onMessage);
+  });
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (predicate()) return;
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  throw new Error('timed out waiting for condition');
 }
 
 interface CommandCase {

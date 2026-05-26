@@ -88,6 +88,22 @@ Before sending an agent-scoped runtime command, server-side callers must resolve
 the agent through `RuntimeHostPlacementResolver`. Missing/revoked/mismatched
 host placement fails before any frame is written to the wire.
 
+Default command timeout is 30 seconds. Callers should override it by command
+shape rather than treating the default as product policy:
+
+| Command | Recommended timeout | Reason |
+| --- | ---: | --- |
+| `runtime_status` | 5s | read-only snapshot; used for reconnect hydrate |
+| `runtime_wake` | 10s | stdin write / driver refusal should settle quickly |
+| `runtime_stop` hard | 10s | signal dispatch ack, not full process-drain guarantee |
+| `runtime_stop` soft | 15s | directive encode + stdin write |
+| `runtime_start` without `startup_delivery` | 30s | spawn acceptance and pid report |
+| `runtime_start` with `startup_delivery` | 60s | spawn plus first delivery acceptance; consumed ack is still async |
+| `runtime_clear_session` | 15s | hard-stop + session reset ack |
+| `runtime_stop_all` / `runtime_close_activity_log` | 30s | shutdown/drain control path |
+| `runtime_output_pause` / `runtime_output_resume` | 5s | local daemon bookkeeping |
+| `rotate_token` | 10s | daemon config atomic write |
+
 ## Heartbeat
 
 Heartbeat is an app-level protocol frame, not only a WebSocket ping:
@@ -146,6 +162,29 @@ renamed to envelope `kind`:
 `runtime_output` is the only droppable runtime event. All lifecycle,
 delivery-ack, parsed-event, and shutdown events are non-droppable from the
 daemon's perspective.
+
+## Event fanout
+
+D2.d wires outbound daemon events into the same backend projection sink used by
+the Unix-socket daemon path: `RuntimeEventHandler` plus `RunStateCache`,
+`DbRuntimeStatusProjector`, inbox ack, SSE, and activity-log writer. The
+outbound WebSocket is only a new ingress; it must not grow a parallel DB/SSE
+projection.
+
+In standalone server mode, `/api/hosts/connect` forwards authenticated
+daemon-to-server event frames into that sink. In embedded mode the existing
+Unix-socket `HostClient` subscription remains the event source, and outbound
+frames are shape-gated but not projected. This prevents the daemon's current
+dual broadcast (`server.broadcast(event); outboundClient?.sendEvent(event)`)
+from applying the same event twice.
+
+On a fresh outbound `ready`, the server issues `runtime_status` to the same
+connected host and hydrates `RunStateCache` from the snapshot. This is the
+recovery path for non-buffered events lost while disconnected: daemon does not
+replay an event queue, and server reconciles current phase/run-state from the
+snapshot. `runtime_parsed_event_dropped` remains metadata-only; backend does
+not fabricate a parsed event payload and only projects a lossy diagnostic onto
+the existing run-state shape when a run-state entry is present.
 
 ## Durability
 

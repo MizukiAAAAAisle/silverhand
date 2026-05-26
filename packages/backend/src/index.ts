@@ -40,6 +40,7 @@ import {
 } from './ws/host-ws-server.js';
 import type { AgentRuntimeHost } from './runtime/agent-runtime-host.js';
 import { ControlPlaneRuntimeHost } from './runtime/control-plane-runtime-host.js';
+import { OutboundRuntimeEventFanout } from './runtime/outbound-event-fanout.js';
 import {
   DisabledRuntimeHostPlacement,
   RuntimeHostPlacementResolver,
@@ -222,6 +223,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     agents: new AgentRepo(db),
     workspaces: new WorkspaceRepo(db, { workspacesRoot }),
   });
+  let outboundFanout: OutboundRuntimeEventFanout | null = null;
 
   const ctx: BackendContext = {
     db,
@@ -280,7 +282,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
       'agent runtime: silverhand-daemon',
     );
   } else {
-    ctx.runtimeHost = new ControlPlaneRuntimeHost(logger);
+    ctx.runtimeHost = new ControlPlaneRuntimeHost(logger, () => outboundFanout);
     logger.warn(
       { runtime: 'control-plane-only' },
       'agent runtime: disabled in standalone server mode',
@@ -425,6 +427,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
               eventWs?.close(),
               hostWs?.close(),
             ]);
+            await outboundFanout?.close();
             await cleanupEmbeddedBootstrap(ctx.embeddedBootstrap, logger);
 
             // Phase 3: flush activity log AND drain the HTTP server
@@ -455,7 +458,18 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
       },
     );
     eventWs = installEventWebSocketServer(server as HttpServer, ctx);
-    hostWs = installHostWebSocketServer(server as HttpServer, ctx);
+    if (opts.mode === 'standalone') {
+      outboundFanout = new OutboundRuntimeEventFanout({
+        db,
+        events: ctx.events,
+        transport: () => hostWs,
+        logger,
+        logDir: ctx.logDir,
+      });
+    }
+    hostWs = installHostWebSocketServer(server as HttpServer, ctx, {
+      eventSink: outboundFanout ?? undefined,
+    });
     server.on('error', reject);
   });
 }

@@ -1017,7 +1017,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
     expect(payload.event.input.command).toContain('<truncated');
   });
 
-  it('runtime_parsed_event_dropped does NOT produce an agent_event (logged-only)', async () => {
+  it('runtime_parsed_event_dropped does NOT produce a fake agent_event', async () => {
     const cache = new RunStateCache();
     const { client, emit } = makeFakeClient();
     const { bridge } = makeBridge({
@@ -1057,10 +1057,60 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
       reason: 'frame_too_large',
       ts: 1700000001200,
     });
-    // No SSE publish (renderer has no UI for dropped frames yet).
+    // No fake parsed event publish.
     expect(published.find(p => p.kind === 'agent_event')).toBeUndefined();
     // But the operator-visible warn lands so SREs can see it in logs.
     expect(warns.some(w => (w as { event?: string }).event === 'runtime_parsed_event_dropped')).toBe(true);
+  });
+
+  it('runtime_parsed_event_dropped projects metadata-only loss onto existing run state', async () => {
+    const cache = new RunStateCache();
+    const { client, emit } = makeFakeClient();
+    const runState = {
+      ...RUN_STATE,
+      conversationId: 'c1',
+      agentId: 'a1',
+      status: 'tool_running' as const,
+    };
+    const { bridge } = makeBridge({
+      runtimes: [
+        {
+          conversation_id: 'c1',
+          agent_id: 'a1',
+          pid: 1234,
+          phase: 'ready',
+          run_state: runState,
+          started_at: 1700000000000,
+        },
+      ],
+    });
+    const { publisher, published } = makePublisher();
+    const { sink } = makeInboxAck();
+    const handler = makeHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: sink,
+    });
+    await handler.start();
+
+    emit({
+      event: 'runtime_parsed_event_dropped',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed_kind: 'tool_call',
+      encoded_bytes: 2_000_000,
+      reason: 'frame_too_large',
+      ts: 1700000001200,
+    });
+
+    expect(published.find(p => p.kind === 'agent_event')).toBeUndefined();
+    const activity = published.find(p => p.kind === 'agent_activity');
+    expect(activity?.payload).toMatchObject({
+      status: 'tool_running',
+      detail: 'parsed_event_dropped:tool_call:frame_too_large:2000000',
+    });
   });
 });
 

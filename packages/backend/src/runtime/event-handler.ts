@@ -58,10 +58,9 @@
  *     reason. Handler hands rows back to the inbox sink so the next
  *     spawn replays them.
  */
-import type { EventFrame, HostClient } from '@silverhand/host';
-import type { ParsedEvent } from '@silverhand/shared';
+import type { EventFrame, HostClient, RuntimeStatusResult } from '@silverhand/host';
+import type { AgentRunState, ParsedEvent } from '@silverhand/shared';
 import type { ActivityLogWriter } from './activity-log-writer.js';
-import type { RuntimeBridge } from './bridge.js';
 import type { RunStateCache } from './run-state-cache.js';
 import { sanitizeParsedEventForBroadcast } from './event-sanitize.js';
 import { NOOP_STATUS_PROJECTOR, type RuntimeStatusProjector } from './status-projector.js';
@@ -89,6 +88,10 @@ export interface InboxAckSink {
     deliveryIds: readonly number[],
     reason: 'child_exit' | 'init_watchdog' | 'write_failed' | 'driver_refused',
   ): void;
+}
+
+export interface RuntimeStatusBridge {
+  runtimeStatus(): Promise<RuntimeStatusResult>;
 }
 
 /**
@@ -162,7 +165,7 @@ const NOOP_LOGGER: RuntimeEventHandlerLogger = {
 
 export interface RuntimeEventHandlerDeps {
   client: HostClient;
-  bridge: RuntimeBridge;
+  bridge: RuntimeStatusBridge;
   cache: RunStateCache;
   events: EventPublisher;
   inboxAck: InboxAckSink;
@@ -203,7 +206,7 @@ function makeDaemonInstanceKey(daemonPid: number, startedAt: number): string {
 
 export class RuntimeEventHandler {
   private readonly client: HostClient;
-  private readonly bridge: RuntimeBridge;
+  private readonly bridge: RuntimeStatusBridge;
   private readonly cache: RunStateCache;
   private readonly events: EventPublisher;
   private readonly inboxAck: InboxAckSink;
@@ -507,26 +510,12 @@ export class RuntimeEventHandler {
         return;
       // `runtime_parsed_event_dropped` carries metadata-only (no
       // payload) when the encoded parsed event exceeded
-      // `MAX_FRAME_BYTES`. CM has no equivalent (in-process never
-      // hit a wire cap). For commit 5 unit 1 we DO NOT project it
-      // yet — the renderer has no UI for "an event was dropped";
-      // dispatching a typed degenerate `agent_event` here would
-      // confuse listeners that assume `event` is the real ParsedEvent.
-      // A dedicated SSE kind for dropped frames is a follow-up
-      // (out of scope for this commit).
+      // `MAX_FRAME_BYTES`. Never synthesize a fake `agent_event` here:
+      // when a cache entry exists we only annotate the existing
+      // AgentRunState with a lossy diagnostic in its existing `detail`
+      // field, then publish the normal `agent_activity` shape.
       case 'runtime_parsed_event_dropped':
-        this.logger.warn(
-          {
-            kind: 'event',
-            event: 'runtime_parsed_event_dropped',
-            conversationId: frame.conversation_id,
-            agent_id: frame.agent_id,
-            parsed_kind: frame.parsed_kind,
-            bytes: frame.encoded_bytes,
-            reason: frame.reason,
-          },
-          'parsed event dropped at wire (no SSE projection)',
-        );
+        this.onParsedEventDropped(frame);
         return;
       // Other frames we acknowledge but currently route nowhere —
       // kept here so the exhaustive `switch` doesn't fall through
@@ -544,6 +533,46 @@ export class RuntimeEventHandler {
         return;
       }
     }
+  }
+
+  private onParsedEventDropped(
+    frame: Extract<EventFrame, { event: 'runtime_parsed_event_dropped' }>,
+  ): void {
+    const key = this.cache.daemonInstanceKey;
+    let state: AgentRunState | null = null;
+    if (key) {
+      state = this.cache.applyParsedEventDropped(
+        key,
+        frame.conversation_id,
+        frame.agent_id,
+        {
+          parsedKind: frame.parsed_kind,
+          encodedBytes: frame.encoded_bytes,
+          reason: frame.reason,
+          ts: frame.ts,
+        },
+      );
+    }
+    if (state) {
+      this.events.publish(frame.conversation_id, {
+        kind: 'agent_activity',
+        payload: state,
+      });
+      this.activityLog?.write(state);
+    }
+    this.logger.warn(
+      {
+        kind: 'event',
+        event: 'runtime_parsed_event_dropped',
+        conversationId: frame.conversation_id,
+        agent_id: frame.agent_id,
+        parsed_kind: frame.parsed_kind,
+        bytes: frame.encoded_bytes,
+        reason: frame.reason,
+        projected_lossy_state: state !== null,
+      },
+      'parsed event dropped at wire; projected metadata-only run-state loss marker',
+    );
   }
 
   private forwardInitTimeout(

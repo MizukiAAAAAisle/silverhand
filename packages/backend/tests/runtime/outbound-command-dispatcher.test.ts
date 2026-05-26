@@ -14,9 +14,11 @@ describe('OutboundRuntimeCommandDispatcher', () => {
   it('resolves agent placement before sending an outbound runtime command', async () => {
     const transport = new FakeTransport();
     const placement = new FakePlacement({ hostId: 'host-1' });
+    const delivered: number[][] = [];
     const dispatcher = new OutboundRuntimeCommandDispatcher({
       transport,
       placement,
+      inboxAck: { markDelivered: ids => delivered.push([...ids]) },
     });
 
     await expect(
@@ -30,6 +32,7 @@ describe('OutboundRuntimeCommandDispatcher', () => {
     ).resolves.toEqual({ delivered: true, delivery_ids: [1] });
 
     expect(placement.resolveCalls).toEqual(['a1']);
+    expect(delivered).toEqual([[1]]);
     expect(transport.calls).toEqual([
       {
         hostId: 'host-1',

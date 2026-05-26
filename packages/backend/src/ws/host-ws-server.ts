@@ -10,6 +10,7 @@ import {
   encodeOutboundFrame,
   type OutboundFrame,
   type OutboundDaemonToServerCommandResponseFrame,
+  type OutboundDaemonToServerEventFrame,
   type OutboundHeartbeatFrame,
   type OutboundServerCommandKind,
   type OutboundServerCommandParams,
@@ -30,6 +31,7 @@ export interface HostWsServerOptions {
   pingIntervalMs?: number;
   pongTimeoutMs?: number;
   commandTimeoutMs?: number;
+  eventSink?: HostWsEventSink;
 }
 
 export interface HostWsServerController {
@@ -42,6 +44,11 @@ export interface HostWsServerController {
     opts?: { timeoutMs?: number },
   ): Promise<OutboundServerCommandResult<K>>;
   close(): Promise<void>;
+}
+
+export interface HostWsEventSink {
+  onEvent(hostId: string, event: OutboundDaemonToServerEventFrame): void;
+  onDisconnect?(hostId: string): void;
 }
 
 interface AuthenticatedHost {
@@ -137,6 +144,7 @@ export function installHostWebSocketServer(
         pongTimeoutMs: opts.pongTimeoutMs ?? DEFAULT_PONG_TIMEOUT_MS,
         commandTimeoutMs: opts.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS,
         nextCommandId: () => `${commandIdPrefix}-${++commandSeq}`,
+        eventSink: opts.eventSink,
       });
       connections.set(ws, connection);
       connectionsByHost.set(auth.host.hostId, connection);
@@ -209,6 +217,7 @@ class HostWsConnection {
   private readonly pendingCommands = new Map<string, PendingCommand>();
   private pingTimer: NodeJS.Timeout | null = null;
   private pongTimer: NodeJS.Timeout | null = null;
+  private cleanedUp = false;
 
   constructor(
     private readonly ws: WebSocket,
@@ -219,13 +228,17 @@ class HostWsConnection {
       pongTimeoutMs: number;
       commandTimeoutMs: number;
       nextCommandId: () => string;
+      eventSink?: HostWsEventSink;
     },
   ) {
     this.pingIntervalMs = opts.pingIntervalMs;
     this.pongTimeoutMs = opts.pongTimeoutMs;
     this.commandTimeoutMs = opts.commandTimeoutMs;
     this.nextCommandId = opts.nextCommandId;
+    this.eventSink = opts.eventSink;
   }
+
+  private readonly eventSink?: HostWsEventSink;
 
   start(): void {
     this.ws.on('message', data => this.handleMessage(data));
@@ -400,7 +413,7 @@ class HostWsConnection {
 
     const event = OutboundDaemonToServerEventFrameSchema.safeParse(frame);
     if (event.success) {
-      // D2.d wires backend fanout. D2.a only gates the frame shape.
+      this.handleDaemonEvent(event.data);
       return;
     }
 
@@ -418,11 +431,31 @@ class HostWsConnection {
   }
 
   private cleanup(): void {
+    if (this.cleanedUp) return;
+    this.cleanedUp = true;
     this.clearPingTimer();
     this.clearPongTimer();
     this.rejectPendingDisconnected(
       `host ${this.host.hostId} websocket disconnected`,
     );
+    this.eventSink?.onDisconnect?.(this.host.hostId);
+  }
+
+  private handleDaemonEvent(frame: OutboundDaemonToServerEventFrame): void {
+    if (!this.eventSink) return;
+    try {
+      this.eventSink.onEvent(this.host.hostId, frame);
+    } catch (err) {
+      this.ctx.logger.error(
+        {
+          err: (err as Error).message,
+          hostId: this.host.hostId,
+          eventKind: frame.kind,
+        },
+        'host-ws: outbound daemon event fanout failed',
+      );
+      this.ws.close(1011, 'event_fanout_failed');
+    }
   }
 
   private handleCommandResponse(

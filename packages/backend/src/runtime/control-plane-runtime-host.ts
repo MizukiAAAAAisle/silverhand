@@ -12,6 +12,20 @@ import type {
 const UNAVAILABLE_REASON =
   'agent runtime is unavailable in standalone server control-plane mode; daemon outbound is D2';
 
+export interface ControlPlaneRuntimeProjection {
+  getAgentRunStates(conversationId: string): AgentRunState[];
+  resolveRun(
+    conversationId: string,
+    agentId: string,
+    reason: AgentRunTerminalReason,
+    runId?: string,
+  ): void;
+  resolveConversationRuns(
+    conversationId: string,
+    reason?: AgentRunTerminalReason,
+  ): void;
+}
+
 export class HostRuntimeDisabledError extends Error {
   readonly code = 'host_runtime_disabled';
 
@@ -30,7 +44,10 @@ export class HostRuntimeDisabledError extends Error {
  * later.
  */
 export class ControlPlaneRuntimeHost implements AgentRuntimeHost {
-  constructor(private readonly logger: BackendLogger) {}
+  constructor(
+    private readonly logger: BackendLogger,
+    private readonly projection?: () => ControlPlaneRuntimeProjection | null,
+  ) {}
 
   async start(
     conversationId: string,
@@ -87,23 +104,23 @@ export class ControlPlaneRuntimeHost implements AgentRuntimeHost {
   }
 
   getAgentRunStates(_conversationId: string): AgentRunState[] {
-    return [];
+    return this.projection?.()?.getAgentRunStates(_conversationId) ?? [];
   }
 
   resolveRun(
-    _conversationId: string,
-    _agentId: string,
-    _reason: AgentRunTerminalReason,
-    _runId?: string,
+    conversationId: string,
+    agentId: string,
+    reason: AgentRunTerminalReason,
+    runId?: string,
   ): void {
-    // No active runs exist in control-plane mode.
+    this.projection?.()?.resolveRun(conversationId, agentId, reason, runId);
   }
 
   resolveConversationRuns(
-    _conversationId: string,
-    _reason: AgentRunTerminalReason = 'conversation_closed',
+    conversationId: string,
+    reason: AgentRunTerminalReason = 'conversation_closed',
   ): void {
-    // No active runs exist in control-plane mode.
+    this.projection?.()?.resolveConversationRuns(conversationId, reason);
   }
 
   private unavailable(
