@@ -1,6 +1,6 @@
 # Daemon outbound protocol — D2
 
-Status: D2.c server command dispatch + correlation.
+Status: D2.e delivery-backed dispatch recovery.
 
 This document defines the WebSocket transport introduced in Stage D2 for the
 desktop-local daemon. The orchestration boundary remains
@@ -186,6 +186,53 @@ snapshot. `runtime_parsed_event_dropped` remains metadata-only; backend does
 not fabricate a parsed event payload and only projects a lossy diagnostic onto
 the existing run-state shape when a run-state entry is present.
 
+## Delivery-backed replay
+
+D2.e connects the durable DB inbox to outbound WebSocket command dispatch. The
+DB inbox remains the only durable queue; the host WS command `Map<id, pending>`
+is still only a per-command correlation table and is cleared on disconnect.
+
+Replay is triggered by daemon `runtime_ready_for_drain` for a specific
+`(conversation_id, agent_id)`, not by the top-level daemon `ready` handshake.
+This matters for stateful drivers such as Codex: the daemon must first know
+that the driver can encode stdin before server sends delivery-backed wake.
+
+For each ready-for-drain pair, server claims pending inbox rows FIFO by inbox
+row id in a SQL transaction:
+
+1. `pending -> in_flight`: rows with `delivered_at IS NULL`,
+   `failed_at IS NULL`, and no `in_flight_owner` are claimed for the current
+   host WebSocket connection id.
+2. Server dispatches one `runtime_wake` with the claimed `delivery_ids` in row
+   order.
+3. `{ delivered: true, delivery_ids }` is the only ack that marks rows
+   delivered.
+4. `{ delivered: false, reason }`, timeout, send failure, or disconnect rolls
+   rows back to pending so the next ready-for-drain can retry.
+
+Repeated ready-for-drain events while a row is in flight do not double-send
+that row. When a host WebSocket disconnects or is replaced, server sweeps rows
+owned by that connection id back to pending before the next connection can
+claim them.
+
+Startup delivery uses the same inbox rows but chooses command shape by current
+daemon status:
+
+- Existing runtime with phase `ready`: replay as `runtime_wake`.
+- No runtime, `idle`, or `exited`: send `runtime_start` with
+  `startup_delivery`. The D2.e implementation does not ship
+  daemon-local absolute workspace or spawn-prep paths in this command; the full
+  workspace/session/profile bundles remain the D2.0 contract for later
+  materialization work.
+- `startup_pending`, `spawning`, or `draining`: leave rows pending until daemon
+  emits ready-for-drain or a later status snapshot shows a fresh start is
+  needed.
+
+Non-delivery controls remain fail-fast. A disconnected in-flight
+`runtime_status`, `runtime_stop`, `rotate_token`, `runtime_clear_session`, or
+delivery-less `runtime_start` is rejected to the caller and is not retried on
+reconnect.
+
 ## Durability
 
 The DB inbox plus `RuntimeDeliveryCoordinator` is the only durable delivery
@@ -195,10 +242,9 @@ non-durable.
 On disconnect or backpressure:
 
 - Delivery-backed `runtime_wake` and startup-delivery `runtime_start` leave
-  their inbox rows pending on transport failure. D2.c still returns
-  fail-fast transport errors; reconnect plus daemon `ready` /
-  `runtime_ready_for_drain` replay through `RuntimeDeliveryCoordinator` is a
-  D2.e integration, not an in-memory queue in this transport layer.
+  their inbox rows pending on transport failure. Reconnect plus
+  `runtime_ready_for_drain` replays through DB claim/rollback and
+  `RuntimeDeliveryCoordinator`, not an in-memory transport queue.
 - Non-delivery controls (`runtime_status`, `runtime_stop`, `rotate_token`,
   delivery-less `runtime_start`, etc.) fail fast to the caller with an explicit
   transport reason. The server and daemon must not fabricate an off-DB pending
@@ -223,10 +269,8 @@ The close reason intentionally stays short because WebSocket close reason
 payloads are limited. The structured daemon log is the durable diagnostic
 record for the event that triggered fail-loud overflow.
 
-## D2.c limit
+## D2.e limit
 
-D2.c authenticates/connects/reconnects the daemon client, handles app-level
-heartbeat, enforces bounded non-durable writes, and dispatches server commands
-with strict correlation. It still does not wire daemon event fanout into DB/UI
-projection, add DB-inbox replay on reconnect, or rotate tokens over the live
-connection. Those remain D2.d-D2.f.
+D2.e covers delivery-backed replay and startup-delivery recovery. It still does
+not implement live token rotation lifecycle, D3 desktop lifecycle UI, headless
+remote host provisioning, sandbox capability, or D2.1 file-to-DB migration.

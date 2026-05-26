@@ -158,10 +158,11 @@ describe('host outbound WebSocket server', () => {
 
   it('forwards authenticated daemon event frames to the configured fanout sink once', async () => {
     t = buildTestApp();
-    const events: Array<{ hostId: string; kind: string }> = [];
+    const events: Array<{ hostId: string; kind: string; connectionId: string }> = [];
     server = await openServer(t, {
       eventSink: {
-        onEvent: (hostId, event) => events.push({ hostId, kind: event.kind }),
+        onEvent: (hostId, event, connectionId) =>
+          events.push({ hostId, kind: event.kind, connectionId }),
       },
     });
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
@@ -186,7 +187,65 @@ describe('host outbound WebSocket server', () => {
     }));
 
     await waitFor(() => events.length === 1);
-    expect(events).toEqual([{ hostId: host.id, kind: 'ready' }]);
+    expect(events).toEqual([
+      {
+        hostId: host.id,
+        kind: 'ready',
+        connectionId: server.controller.connectionIdForHost(host.id),
+      },
+    ]);
+  });
+
+  it('warns once when embedded mode receives outbound daemon events without a fanout sink', async () => {
+    t = buildTestApp();
+    const warnings: Array<{ meta: Record<string, unknown>; msg: string }> = [];
+    t.ctx.logger = {
+      info() {},
+      warn: (meta, msg) =>
+        warnings.push({
+          meta: meta as Record<string, unknown>,
+          msg: String(msg),
+        }),
+      error() {},
+    };
+    server = await openServer(t, { pingIntervalMs: 0 });
+    const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: host.id,
+    });
+    const ws = await connectHost(server.url, issued.hostToken);
+    sockets.push(ws);
+
+    ws.send(JSON.stringify({
+      direction: 'daemon_to_server',
+      type: 'event',
+      kind: 'ready',
+      protocol_version: OUTBOUND_PROTOCOL_VERSION,
+      daemon_version: '0.0.0-test',
+      daemon_id: 'local',
+      instance_id: 'instance-1',
+      host_descriptor: { name: 'local', kind: 'local' },
+      capabilities: [...KNOWN_CAPABILITIES_V1],
+      daemon_pid: 123,
+      started_at: 1700000000000,
+    }));
+    ws.send(JSON.stringify({
+      direction: 'daemon_to_server',
+      type: 'event',
+      kind: 'runtime_output_paused',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+    }));
+
+    await waitFor(() => warnings.length === 1);
+    expect(warnings[0]).toMatchObject({
+      meta: {
+        hostId: host.id,
+        eventKind: 'ready',
+      },
+      msg: 'host-ws: outbound daemon event received without fanout sink; embedded backend may be misconfigured',
+    });
+    expect(warnings).toHaveLength(1);
   });
 
   it('notifies the fanout sink of a replaced connection disconnect once', async () => {
@@ -378,6 +437,33 @@ describe('host outbound WebSocket server', () => {
     await expect(pending).rejects.toMatchObject({
       code: 'transport_disconnected',
     });
+  });
+
+  it('does not replay non-delivery commands after reconnect', async () => {
+    t = buildTestApp();
+    server = await openServer(t, { pingIntervalMs: 0 });
+    const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: host.id,
+    });
+    const first = await connectHost(server.url, issued.hostToken);
+    sockets.push(first);
+    const pending = server.controller.sendCommand(
+      host.id,
+      'runtime_status',
+      {},
+      { timeoutMs: 500 },
+    );
+    await readJsonFrame(first);
+    first.close(1001, 'test_disconnect');
+
+    await expect(pending).rejects.toMatchObject({
+      code: 'transport_disconnected',
+    });
+
+    const second = await connectHost(server.url, issued.hostToken);
+    sockets.push(second);
+    await expect(noMessageWithin(second, 25)).resolves.toBeUndefined();
   });
 
   it('fails fast before wire send when no host connection exists', async () => {

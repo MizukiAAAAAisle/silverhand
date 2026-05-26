@@ -2245,6 +2245,26 @@ export const migrations: Migration[] = [
           AND revoked_at IS NULL;
     `,
   },
+  {
+    version: 32,
+    name: 'conversation_inbox_delivery_in_flight',
+    // D2.e: DB inbox remains the only durable delivery queue. In-flight
+    // columns are a short lease owned by the current host WS connection so
+    // reconnect/replacement can roll rows back to pending instead of relying
+    // on a process-local replay queue.
+    up: `
+      ALTER TABLE conversation_inboxes ADD COLUMN in_flight_owner TEXT;
+      ALTER TABLE conversation_inboxes ADD COLUMN in_flight_at INTEGER;
+      ALTER TABLE conversation_inboxes ADD COLUMN failed_at INTEGER;
+      ALTER TABLE conversation_inboxes ADD COLUMN failed_reason TEXT;
+
+      CREATE INDEX idx_conversation_inbox_replay_pending
+        ON conversation_inboxes(conversation_id, agent_id, delivered_at, failed_at, in_flight_owner, id);
+
+      CREATE INDEX idx_conversation_inbox_in_flight_owner
+        ON conversation_inboxes(in_flight_owner, delivered_at, failed_at);
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

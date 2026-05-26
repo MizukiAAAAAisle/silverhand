@@ -37,18 +37,23 @@ export interface HostWsServerOptions {
 export interface HostWsServerController {
   activeConnectionCount(): number;
   connectedHostIds(): string[];
+  connectionIdForHost(hostId: string): string | null;
   sendCommand<K extends OutboundServerCommandKind>(
     hostId: string,
     kind: K,
     params: OutboundServerCommandParams<K>,
-    opts?: { timeoutMs?: number },
+    opts?: { timeoutMs?: number; expectedConnectionId?: string },
   ): Promise<OutboundServerCommandResult<K>>;
   close(): Promise<void>;
 }
 
 export interface HostWsEventSink {
-  onEvent(hostId: string, event: OutboundDaemonToServerEventFrame): void;
-  onDisconnect?(hostId: string): void;
+  onEvent(
+    hostId: string,
+    event: OutboundDaemonToServerEventFrame,
+    connectionId: string,
+  ): void;
+  onDisconnect?(hostId: string, connectionId: string): void;
 }
 
 interface AuthenticatedHost {
@@ -116,6 +121,7 @@ export function installHostWebSocketServer(
   const connectionsByHost = new Map<string, HostWsConnection>();
   const commandIdPrefix = `hostws-${randomUUID()}`;
   let commandSeq = 0;
+  let connectionSeq = 0;
   let closing = false;
 
   const onUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer) => {
@@ -139,7 +145,9 @@ export function installHostWebSocketServer(
     wss.handleUpgrade(req, socket, head, ws => {
       const previous = connectionsByHost.get(auth.host.hostId);
       previous?.closeForReplacement();
+      const connectionId = `${commandIdPrefix}-conn-${++connectionSeq}`;
       const connection = new HostWsConnection(ws, ctx, auth.host, {
+        connectionId,
         pingIntervalMs: opts.pingIntervalMs ?? DEFAULT_PING_INTERVAL_MS,
         pongTimeoutMs: opts.pongTimeoutMs ?? DEFAULT_PONG_TIMEOUT_MS,
         commandTimeoutMs: opts.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS,
@@ -164,6 +172,8 @@ export function installHostWebSocketServer(
   return {
     activeConnectionCount: () => connections.size,
     connectedHostIds: () => [...connectionsByHost.keys()],
+    connectionIdForHost: hostId =>
+      connectionsByHost.get(hostId)?.connectionId ?? null,
     sendCommand: (hostId, kind, params, commandOpts) => {
       const connection = connectionsByHost.get(hostId);
       if (!connection) {
@@ -172,6 +182,21 @@ export function installHostWebSocketServer(
             'transport_no_connection',
             `host ${hostId} is not connected to outbound websocket`,
             { hostId, commandKind: kind },
+          ),
+        );
+      }
+      if (
+        commandOpts?.expectedConnectionId &&
+        connection.connectionId !== commandOpts.expectedConnectionId
+      ) {
+        return Promise.reject(
+          new HostWsCommandTransportError(
+            'transport_disconnected',
+            `host ${hostId} websocket connection changed before ${kind}`,
+            {
+              hostId,
+              commandKind: kind,
+            },
           ),
         );
       }
@@ -210,6 +235,7 @@ interface PendingCommand {
 }
 
 class HostWsConnection {
+  readonly connectionId: string;
   private readonly pingIntervalMs: number;
   private readonly pongTimeoutMs: number;
   private readonly commandTimeoutMs: number;
@@ -218,12 +244,14 @@ class HostWsConnection {
   private pingTimer: NodeJS.Timeout | null = null;
   private pongTimer: NodeJS.Timeout | null = null;
   private cleanedUp = false;
+  private warnedNoEventSink = false;
 
   constructor(
     private readonly ws: WebSocket,
     private readonly ctx: BackendContext,
     private readonly host: AuthenticatedHost,
     opts: {
+      connectionId: string;
       pingIntervalMs: number;
       pongTimeoutMs: number;
       commandTimeoutMs: number;
@@ -231,6 +259,7 @@ class HostWsConnection {
       eventSink?: HostWsEventSink;
     },
   ) {
+    this.connectionId = opts.connectionId;
     this.pingIntervalMs = opts.pingIntervalMs;
     this.pongTimeoutMs = opts.pongTimeoutMs;
     this.commandTimeoutMs = opts.commandTimeoutMs;
@@ -393,6 +422,7 @@ class HostWsConnection {
   }
 
   private handleMessage(data: RawData): void {
+    if (this.cleanedUp) return;
     const frame = parseJsonFrame(data);
     if (!frame) {
       this.closeWithProtocolError('frame must be a JSON object');
@@ -438,13 +468,26 @@ class HostWsConnection {
     this.rejectPendingDisconnected(
       `host ${this.host.hostId} websocket disconnected`,
     );
-    this.eventSink?.onDisconnect?.(this.host.hostId);
+    this.eventSink?.onDisconnect?.(this.host.hostId, this.connectionId);
   }
 
   private handleDaemonEvent(frame: OutboundDaemonToServerEventFrame): void {
-    if (!this.eventSink) return;
+    if (!this.eventSink) {
+      if (!this.warnedNoEventSink) {
+        this.warnedNoEventSink = true;
+        this.ctx.logger.warn(
+          {
+            hostId: this.host.hostId,
+            connectionId: this.connectionId,
+            eventKind: frame.kind,
+          },
+          'host-ws: outbound daemon event received without fanout sink; embedded backend may be misconfigured',
+        );
+      }
+      return;
+    }
     try {
-      this.eventSink.onEvent(this.host.hostId, frame);
+      this.eventSink.onEvent(this.host.hostId, frame, this.connectionId);
     } catch (err) {
       this.ctx.logger.error(
         {

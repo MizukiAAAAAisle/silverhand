@@ -11,6 +11,10 @@ export interface PendingConversationInboxItem {
   message: MessageRow;
 }
 
+export interface ClaimedConversationInboxItem extends PendingConversationInboxItem {
+  inFlightOwner: string;
+}
+
 type JoinedRow = MessageRow & { inbox_id: number };
 type DeliveryRow = {
   id: number;
@@ -63,6 +67,8 @@ export class ConversationInboxRepo {
          WHERE i.conversation_id = ?
            AND i.agent_id = ?
            AND i.delivered_at IS NULL
+           AND i.failed_at IS NULL
+           AND i.in_flight_owner IS NULL
          ORDER BY i.id ASC`,
       )
       .all(conversationId, agentId);
@@ -76,7 +82,11 @@ export class ConversationInboxRepo {
     if (inboxIds.length === 0) return;
     const now = Date.now();
     const stmt = this.db.prepare(
-      `UPDATE conversation_inboxes SET delivered_at = ? WHERE id = ?`,
+      `UPDATE conversation_inboxes
+          SET delivered_at = ?,
+              in_flight_owner = NULL,
+              in_flight_at = NULL
+        WHERE id = ?`,
     );
     const tx = this.db.transaction((ids: number[]) => {
       for (const id of ids) stmt.run(now, id);
@@ -84,12 +94,121 @@ export class ConversationInboxRepo {
     tx(inboxIds);
   }
 
+  claimPending(
+    conversationId: string,
+    agentId: string,
+    inFlightOwner: string,
+  ): ClaimedConversationInboxItem[] {
+    const now = Date.now();
+    const select = this.db.prepare<[string, string], JoinedRow>(
+      `SELECT i.id AS inbox_id, m.*
+         FROM conversation_inboxes i
+         JOIN messages m ON m.id = i.message_id
+        WHERE i.conversation_id = ?
+          AND i.agent_id = ?
+          AND i.delivered_at IS NULL
+          AND i.failed_at IS NULL
+          AND i.in_flight_owner IS NULL
+        ORDER BY i.id ASC`,
+    );
+    const update = this.db.prepare(
+      `UPDATE conversation_inboxes
+          SET in_flight_owner = ?,
+              in_flight_at = ?
+        WHERE id = ?
+          AND delivered_at IS NULL
+          AND failed_at IS NULL
+          AND in_flight_owner IS NULL`,
+    );
+    return this.db.transaction(() => {
+      const rows = select.all(conversationId, agentId);
+      const claimed: ClaimedConversationInboxItem[] = [];
+      for (const { inbox_id, ...message } of rows) {
+        const changed = update.run(inFlightOwner, now, inbox_id).changes;
+        if (changed === 0) continue;
+        claimed.push({
+          inboxId: inbox_id,
+          message,
+          inFlightOwner,
+        });
+      }
+      return claimed;
+    }).exclusive();
+  }
+
+  rollbackInFlight(
+    inboxIds: readonly number[],
+    inFlightOwner: string,
+  ): void {
+    if (inboxIds.length === 0) return;
+    const stmt = this.db.prepare(
+      `UPDATE conversation_inboxes
+          SET in_flight_owner = NULL,
+              in_flight_at = NULL
+        WHERE id = ?
+          AND in_flight_owner = ?
+          AND delivered_at IS NULL
+          AND failed_at IS NULL`,
+    );
+    const tx = this.db.transaction((ids: readonly number[]) => {
+      for (const id of ids) stmt.run(id, inFlightOwner);
+    });
+    tx.exclusive(inboxIds);
+  }
+
+  rollbackInFlightAnyOwner(inboxIds: readonly number[]): void {
+    if (inboxIds.length === 0) return;
+    const stmt = this.db.prepare(
+      `UPDATE conversation_inboxes
+          SET in_flight_owner = NULL,
+              in_flight_at = NULL
+        WHERE id = ?
+          AND delivered_at IS NULL
+          AND failed_at IS NULL`,
+    );
+    const tx = this.db.transaction((ids: readonly number[]) => {
+      for (const id of ids) stmt.run(id);
+    });
+    tx.exclusive(inboxIds);
+  }
+
+  rollbackInFlightForOwner(inFlightOwner: string): void {
+    this.db.prepare(
+      `UPDATE conversation_inboxes
+          SET in_flight_owner = NULL,
+              in_flight_at = NULL
+        WHERE in_flight_owner = ?
+          AND delivered_at IS NULL
+          AND failed_at IS NULL`,
+    ).run(inFlightOwner);
+  }
+
+  listInFlightForOwner(inFlightOwner: string): ConversationDeliveryRecord[] {
+    const rows = this.db
+      .prepare<[string], DeliveryRow>(
+        `SELECT id, delivered_at
+           FROM conversation_inboxes
+          WHERE in_flight_owner = ?
+            AND delivered_at IS NULL
+            AND failed_at IS NULL
+          ORDER BY id ASC`,
+      )
+      .all(inFlightOwner);
+    return rows.map(row => ({
+      inboxId: row.id,
+      deliveredAt: row.delivered_at,
+    }));
+  }
+
   countPendingForAgent(agentId: string): number {
     const row = this.db
       .prepare<[string], { c: number }>(
         `SELECT COUNT(*) AS c
          FROM conversation_inboxes
-         WHERE agent_id = ? AND delivered_at IS NULL`,
+         WHERE agent_id = ?
+           AND delivered_at IS NULL
+           AND failed_at IS NULL
+           AND in_flight_owner IS NULL`,
       )
       .get(agentId);
     return row?.c ?? 0;

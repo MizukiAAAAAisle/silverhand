@@ -869,6 +869,40 @@ describe('database migrations', () => {
     }
   });
 
+  it('v32 adds in-flight delivery columns for outbound replay recovery', () => {
+    const db = openDbAt(31);
+    try {
+      runMigrations(db);
+      expect(
+        db.prepare(`SELECT version FROM _migrations WHERE version = 32`).get(),
+      ).toBeDefined();
+
+      const cols = (db.pragma('table_info(conversation_inboxes)') as Array<{
+        name: string;
+      }>).map(c => c.name);
+      expect(cols).toEqual(
+        expect.arrayContaining([
+          'in_flight_owner',
+          'in_flight_at',
+          'failed_at',
+          'failed_reason',
+        ]),
+      );
+
+      const indexes = (db.pragma('index_list(conversation_inboxes)') as Array<{
+        name: string;
+      }>).map(r => r.name);
+      expect(indexes).toEqual(
+        expect.arrayContaining([
+          'idx_conversation_inbox_replay_pending',
+          'idx_conversation_inbox_in_flight_owner',
+        ]),
+      );
+    } finally {
+      db.close();
+    }
+  });
+
   describe('v21 users registry (Deferred Adoption)', () => {
     /**
      * Deferred Adoption contract: `users` is empty after migration and

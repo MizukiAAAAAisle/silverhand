@@ -13,6 +13,12 @@ const UNAVAILABLE_REASON =
   'agent runtime is unavailable in standalone server control-plane mode; daemon outbound is D2';
 
 export interface ControlPlaneRuntimeProjection {
+  startDeliveryBacked(conversationId: string, agentId: string): Promise<boolean>;
+  deliverMessage(
+    conversationId: string,
+    agentId: string,
+    messageId: string,
+  ): Promise<void>;
   getAgentRunStates(conversationId: string): AgentRunState[];
   resolveRun(
     conversationId: string,
@@ -54,6 +60,11 @@ export class ControlPlaneRuntimeHost implements AgentRuntimeHost {
     agentId: string,
     _opts: StartOptions = {},
   ): Promise<void> {
+    const handled = await this.projection?.()?.startDeliveryBacked(
+      conversationId,
+      agentId,
+    );
+    if (handled) return;
     throw this.unavailable('start', { conversationId, agentId });
   }
 
@@ -96,6 +107,11 @@ export class ControlPlaneRuntimeHost implements AgentRuntimeHost {
     agentId: string,
     messageId: string,
   ): Promise<void> {
+    const projection = this.projection?.();
+    if (projection) {
+      await projection.deliverMessage(conversationId, agentId, messageId);
+      return;
+    }
     throw this.unavailable('deliverMessage', { conversationId, agentId, messageId });
   }
 

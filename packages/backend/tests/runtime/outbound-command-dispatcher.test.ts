@@ -98,6 +98,10 @@ class FakeTransport implements HostWsServerController {
     return ['host-1'];
   }
 
+  connectionIdForHost(_hostId: string): string | null {
+    return 'conn-1';
+  }
+
   sendCommand<K extends OutboundServerCommandKind>(
     hostId: string,
     kind: K,

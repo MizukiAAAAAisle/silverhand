@@ -582,6 +582,56 @@ export class RuntimeDeliveryCoordinator {
   }
 
   /**
+   * Replay DB-owned inbox rows after daemon emitted `runtime_ready_for_drain`.
+   * This path intentionally bypasses the coordinator's process-local gated
+   * pending queue: the durable DB claim already owns ordering/idempotency, and
+   * ready_for_drain is the daemon's explicit signal that a wake may be sent.
+   */
+  async submitReadyForDrainDeliveryBatch(
+    conversationId: string,
+    agentId: string,
+    batch: readonly LiveDeliveryRequest[],
+  ): Promise<LiveDeliveryDecision> {
+    if (batch.length === 0) {
+      throw new Error(
+        'submitReadyForDrainDeliveryBatch: empty batch — caller must no-op ' +
+          'when listPending is empty rather than calling through with [].',
+      );
+    }
+    const deliveryIds = batch.flatMap(item => [...item.deliveryIds]);
+    const head = batch[0]!;
+    const entry = this.cache.get(conversationId, agentId);
+    if (!entry) {
+      this.logger.info(
+        { conversationId, agentId, deliveryIds, batchSize: batch.length },
+        'deliver: ready_for_drain replay saw no cache entry; rows stay pending',
+      );
+      return { kind: 'noop_no_runtime' };
+    }
+    if (entry.phase !== 'ready') {
+      this.logger.info(
+        {
+          conversationId,
+          agentId,
+          deliveryIds,
+          batchSize: batch.length,
+          phase: entry.phase,
+        },
+        'deliver: ready_for_drain replay saw non-ready phase; rows stay pending',
+      );
+      return { kind: 'noop_phase', phase: entry.phase };
+    }
+    if (head.driver.busyDeliveryMode === 'none') {
+      this.logger.info(
+        { conversationId, agentId, deliveryIds, batchSize: batch.length },
+        'deliver: oneShot driver ready_for_drain replay refused; rows stay pending',
+      );
+      return { kind: 'noop_oneshot_live' };
+    }
+    return this.dispatchWake(conversationId, agentId, [...batch]);
+  }
+
+  /**
    * Parsed-event hook called by EventHandler on every
    * `runtime_parsed_event`. Updates busy tracker; if the boundary
    * just reopened, schedules a flush.
