@@ -78,6 +78,8 @@ Backup retention is operator-owned. Silverhand creates a new timestamped
 sibling directory for every opted-in migration and does not prune older backups.
 Startup and admin commands hold a sibling `<data_dir>.migration.lock` directory
 only for the migration phase so concurrent upgrade attempts fail fast.
+If startup fails with `migration_locked` after a crashed migration attempt,
+manually remove the lock directory shown in the error message before retrying.
 
 ## Health And Readiness
 

@@ -117,6 +117,9 @@ function pragmaNumber(db: Database.Database, name: string): number {
   return Object.values(row[0] ?? {})[0] ?? 0;
 }
 
+const SYNTHETIC_UPGRADE_BASE_VERSION = MIN_SUPPORTED_SCHEMA_VERSION;
+const SYNTHETIC_UPGRADE_TARGET_VERSION = MIN_SUPPORTED_SCHEMA_VERSION + 1;
+
 function seedV15SystemDmFixture(db: Database.Database): void {
   const now = 1_700_000_000_000;
   db.exec(`
@@ -227,23 +230,23 @@ describe('database migrations', () => {
           applied_at INTEGER NOT NULL
         );
         INSERT INTO _migrations (version, name, applied_at)
-        VALUES (31, 'current', 1);
+        VALUES (${SYNTHETIC_UPGRADE_BASE_VERSION}, 'current', 1);
       `);
       expect(() =>
         runMigrations(db, {
           migrations: [
             {
-              version: 32,
+              version: SYNTHETIC_UPGRADE_TARGET_VERSION,
               name: 'future',
               up: `CREATE TABLE future_rows (id TEXT PRIMARY KEY);`,
             },
           ],
-          expectedVersion: 32,
-          minimumSupportedVersion: 31,
+          expectedVersion: SYNTHETIC_UPGRADE_TARGET_VERSION,
+          minimumSupportedVersion: SYNTHETIC_UPGRADE_BASE_VERSION,
           allowSchemaUpgrade: false,
         }),
       ).toThrow(/SILVERHAND_MIGRATE=1/);
-      expect(currentSchemaVersion(db)).toBe(31);
+      expect(currentSchemaVersion(db)).toBe(SYNTHETIC_UPGRADE_BASE_VERSION);
       expect(
         db
           .prepare(
@@ -275,7 +278,7 @@ describe('database migrations', () => {
           applied_at INTEGER NOT NULL
         );
         INSERT INTO _migrations (version, name, applied_at)
-        VALUES (31, 'current', 1);
+        VALUES (${SYNTHETIC_UPGRADE_BASE_VERSION}, 'current', 1);
 
         CREATE TABLE preserved_rows (id TEXT PRIMARY KEY);
         INSERT INTO preserved_rows (id) VALUES ('before');
@@ -283,22 +286,22 @@ describe('database migrations', () => {
       const result = runMigrations(db, {
         migrations: [
           {
-            version: 32,
+            version: SYNTHETIC_UPGRADE_TARGET_VERSION,
             name: 'future',
             up: `CREATE TABLE future_rows (id TEXT PRIMARY KEY);`,
           },
         ],
-        expectedVersion: 32,
-        minimumSupportedVersion: 31,
+        expectedVersion: SYNTHETIC_UPGRADE_TARGET_VERSION,
+        minimumSupportedVersion: SYNTHETIC_UPGRADE_BASE_VERSION,
         allowSchemaUpgrade: true,
         backupBeforeMigration: info =>
           backupDataDirBeforeMigration(db, { dbPath, ...info }),
       });
-      expect(result.beforeVersion).toBe(31);
-      expect(result.afterVersion).toBe(32);
-      expect(result.appliedVersions).toEqual([32]);
+      expect(result.beforeVersion).toBe(SYNTHETIC_UPGRADE_BASE_VERSION);
+      expect(result.afterVersion).toBe(SYNTHETIC_UPGRADE_TARGET_VERSION);
+      expect(result.appliedVersions).toEqual([SYNTHETIC_UPGRADE_TARGET_VERSION]);
       expect(result.backupPath).toMatch(/\.silverhand-backup-\d{8}T\d{6}Z$/);
-      expect(currentSchemaVersion(db)).toBe(32);
+      expect(currentSchemaVersion(db)).toBe(SYNTHETIC_UPGRADE_TARGET_VERSION);
       expect(
         db
           .prepare(
@@ -325,7 +328,9 @@ describe('database migrations', () => {
         { readonly: true },
       );
       try {
-        expect(currentSchemaVersion(backupDb)).toBe(31);
+        expect(currentSchemaVersion(backupDb)).toBe(
+          SYNTHETIC_UPGRADE_BASE_VERSION,
+        );
         expect(
           backupDb.prepare(`SELECT id FROM preserved_rows`).get(),
         ).toEqual({ id: 'before' });
@@ -355,26 +360,26 @@ describe('database migrations', () => {
           applied_at INTEGER NOT NULL
         );
         INSERT INTO _migrations (version, name, applied_at)
-        VALUES (31, 'current', 1);
+        VALUES (${SYNTHETIC_UPGRADE_BASE_VERSION}, 'current', 1);
       `);
       expect(() =>
         runMigrations(db, {
           migrations: [
             {
-              version: 32,
+              version: SYNTHETIC_UPGRADE_TARGET_VERSION,
               name: 'future',
               up: `CREATE TABLE future_rows (id TEXT PRIMARY KEY);`,
             },
           ],
-          expectedVersion: 32,
-          minimumSupportedVersion: 31,
+          expectedVersion: SYNTHETIC_UPGRADE_TARGET_VERSION,
+          minimumSupportedVersion: SYNTHETIC_UPGRADE_BASE_VERSION,
           allowSchemaUpgrade: true,
           backupBeforeMigration: () => {
             throw new Error('backup path is not writable');
           },
         }),
       ).toThrow(/backup path is not writable/);
-      expect(currentSchemaVersion(db)).toBe(31);
+      expect(currentSchemaVersion(db)).toBe(SYNTHETIC_UPGRADE_BASE_VERSION);
       expect(
         db
           .prepare(
