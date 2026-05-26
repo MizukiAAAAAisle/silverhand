@@ -1,10 +1,11 @@
 import { createServer, type Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { WebSocket } from 'ws';
+import { WebSocket, type RawData } from 'ws';
 import {
   KNOWN_CAPABILITIES_V1,
   OUTBOUND_PROTOCOL_VERSION,
+  encodeOutboundFrame,
 } from '@silverhand/host';
 import { apiPaths } from '@silverhand/shared';
 import { HostTokenService } from '../../src/auth/host-token.js';
@@ -152,6 +153,54 @@ describe('host outbound WebSocket server', () => {
     const closed = await waitForClose(ws);
     expect(closed.code).toBe(1002);
   });
+
+  it('responds to app-level daemon heartbeat pings', async () => {
+    t = buildTestApp();
+    server = await openServer(t, { pingIntervalMs: 0 });
+    const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: host.id,
+    });
+    const ws = await connectHost(server.url, issued.hostToken);
+    sockets.push(ws);
+
+    ws.send(encodeOutboundFrame({
+      direction: 'daemon_to_server',
+      type: 'heartbeat',
+      kind: 'ping',
+      ts: 1700000000000,
+    }));
+
+    await expect(readJsonFrame(ws)).resolves.toMatchObject({
+      direction: 'server_to_daemon',
+      type: 'heartbeat',
+      kind: 'pong',
+      echo_ts: 1700000000000,
+    });
+  });
+
+  it('closes when daemon misses a server heartbeat pong', async () => {
+    t = buildTestApp();
+    server = await openServer(t, { pingIntervalMs: 10, pongTimeoutMs: 10 });
+    const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: host.id,
+    });
+    const ws = await connectHost(server.url, issued.hostToken);
+    sockets.push(ws);
+
+    await expect(readJsonFrame(ws)).resolves.toMatchObject({
+      direction: 'server_to_daemon',
+      type: 'heartbeat',
+      kind: 'ping',
+    });
+
+    const closed = await waitForClose(ws);
+    expect(closed).toMatchObject({
+      code: 1008,
+      reason: 'heartbeat_timeout',
+    });
+  });
 });
 
 async function openServer(
@@ -211,6 +260,29 @@ async function waitForClose(ws: WebSocket): Promise<{ code: number; reason: stri
     ws.once('close', (code, reason) => {
       resolve({ code, reason: reason.toString() });
     });
+  });
+}
+
+async function readJsonFrame(ws: WebSocket): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const onMessage = (data: RawData) => {
+      cleanup();
+      try {
+        resolve(JSON.parse(data.toString('utf8')) as unknown);
+      } catch (err) {
+        reject(err);
+      }
+    };
+    const onClose = (code: number) => {
+      cleanup();
+      reject(new Error(`closed before message ${code}`));
+    };
+    const cleanup = () => {
+      ws.off('message', onMessage);
+      ws.off('close', onClose);
+    };
+    ws.once('message', onMessage);
+    ws.once('close', onClose);
   });
 }
 

@@ -9,7 +9,7 @@
  *
  * Envelope rule:
  *   - `direction` is the outer discriminator.
- *   - `type` separates command / command_response / event frames.
+ *   - `type` separates command / command_response / event / heartbeat frames.
  *   - `kind` is scoped by `type`; server commands and daemon events
  *     are separate catalogues.
  */
@@ -199,6 +199,41 @@ export const OutboundDaemonToServerCommandResponseFrameSchema = z.union(
 export type OutboundDaemonToServerCommandResponseFrame = z.infer<
   typeof OutboundDaemonToServerCommandResponseFrameSchema
 >;
+
+// ── heartbeat frames ───────────────────────────────────────────────
+
+const HeartbeatTimestampSchema = z.number().int().nonnegative();
+
+export const OutboundHeartbeatPingFrameSchema = z
+  .object({
+    direction: z.enum(['server_to_daemon', 'daemon_to_server']),
+    type: z.literal('heartbeat'),
+    kind: z.literal('ping'),
+    ts: HeartbeatTimestampSchema,
+  })
+  .strict();
+export type OutboundHeartbeatPingFrame = z.infer<
+  typeof OutboundHeartbeatPingFrameSchema
+>;
+
+export const OutboundHeartbeatPongFrameSchema = z
+  .object({
+    direction: z.enum(['server_to_daemon', 'daemon_to_server']),
+    type: z.literal('heartbeat'),
+    kind: z.literal('pong'),
+    ts: HeartbeatTimestampSchema,
+    echo_ts: HeartbeatTimestampSchema,
+  })
+  .strict();
+export type OutboundHeartbeatPongFrame = z.infer<
+  typeof OutboundHeartbeatPongFrameSchema
+>;
+
+export const OutboundHeartbeatFrameSchema = z.discriminatedUnion('kind', [
+  OutboundHeartbeatPingFrameSchema,
+  OutboundHeartbeatPongFrameSchema,
+]);
+export type OutboundHeartbeatFrame = z.infer<typeof OutboundHeartbeatFrameSchema>;
 
 // ── daemon → server event catalogue ────────────────────────────────
 
@@ -447,6 +482,7 @@ export const OUTBOUND_DAEMON_EVENT_KINDS = OutboundDaemonToServerEventFrameSchem
 export const OutboundFrameSchema = z.union([
   OutboundServerToDaemonCommandFrameSchema,
   OutboundDaemonToServerCommandResponseFrameSchema,
+  OutboundHeartbeatFrameSchema,
   OutboundDaemonToServerEventFrameSchema,
 ]);
 export type OutboundFrame = z.infer<typeof OutboundFrameSchema>;

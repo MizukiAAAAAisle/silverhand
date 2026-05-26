@@ -10,6 +10,7 @@
  *   --socket-path <abs>   (required) where to bind the Unix socket
  *   --pid-file   <abs>    (required) where to write the pid lock file
  *   --log-dir    <abs>    (required) where to write daemon-*.log
+ *   --host-config <abs>   optional daemon outbound WS config
  *   --stderr              optional; mirror log lines to stderr too
  *
  * Stdout:
@@ -38,6 +39,7 @@ interface ParsedArgv {
   socketPath: string;
   pidFilePath: string;
   logDir: string;
+  hostConfigPath: string | null;
   alsoStderr: boolean;
 }
 
@@ -45,6 +47,7 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
   let socketPath: string | null = null;
   let pidFilePath: string | null = null;
   let logDir: string | null = null;
+  let hostConfigPath: string | null = null;
   let alsoStderr = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -57,6 +60,9 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
         break;
       case '--log-dir':
         logDir = argv[++i] ?? null;
+        break;
+      case '--host-config':
+        hostConfigPath = argv[++i] ?? null;
         break;
       case '--stderr':
         alsoStderr = true;
@@ -71,7 +77,10 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
   if (!socketPath.startsWith('/')) return { error: '--socket-path must be absolute' };
   if (!pidFilePath.startsWith('/')) return { error: '--pid-file must be absolute' };
   if (!logDir.startsWith('/')) return { error: '--log-dir must be absolute' };
-  return { socketPath, pidFilePath, logDir, alsoStderr };
+  if (hostConfigPath !== null && !hostConfigPath.startsWith('/')) {
+    return { error: '--host-config must be absolute' };
+  }
+  return { socketPath, pidFilePath, logDir, hostConfigPath, alsoStderr };
 }
 
 async function main(): Promise<void> {
@@ -85,6 +94,7 @@ async function main(): Promise<void> {
       socketPath: parsed.socketPath,
       pidFilePath: parsed.pidFilePath,
       logDir: parsed.logDir,
+      hostConfigPath: parsed.hostConfigPath,
       installSignals: true,
       writeStdoutHandshake: true,
       alsoStderr: parsed.alsoStderr,

@@ -12,6 +12,7 @@ import {
   OutboundDaemonToServerCommandResponseFrameSchema,
   OutboundDaemonToServerEventFrameSchema,
   OutboundFrameSchema,
+  OutboundHeartbeatFrameSchema,
   OutboundServerToDaemonCommandFrameSchema,
   RotateTokenParamsSchema,
   encodeOutboundFrame,
@@ -202,6 +203,27 @@ describe('outbound protocol — frame envelope', () => {
         ts: 1700000000000,
       }).success,
     ).toBe(false);
+  });
+
+  it('parses bidirectional app-level heartbeat frames', () => {
+    expect(
+      OutboundHeartbeatFrameSchema.safeParse({
+        direction: 'daemon_to_server',
+        type: 'heartbeat',
+        kind: 'ping',
+        ts: 1700000000000,
+      }).success,
+    ).toBe(true);
+
+    expect(
+      OutboundHeartbeatFrameSchema.safeParse({
+        direction: 'server_to_daemon',
+        type: 'heartbeat',
+        kind: 'pong',
+        ts: 1700000000100,
+        echo_ts: 1700000000000,
+      }).success,
+    ).toBe(true);
   });
 
   it('encodes a single JSON frame and enforces the shared frame cap', () => {

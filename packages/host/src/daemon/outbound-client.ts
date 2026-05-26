@@ -1,0 +1,785 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { WebSocket, type RawData } from 'ws';
+import {
+  DAEMON_HOST_CONFIG_FILENAME,
+  DaemonHostConfigSchema,
+  apiPaths,
+  type DaemonHostConfig,
+} from '@silverhand/shared';
+import {
+  OUTBOUND_PROTOCOL_VERSION,
+  OutboundFrameSchema,
+  OutboundServerToDaemonCommandFrameSchema,
+  OutboundHeartbeatFrameSchema,
+  encodeOutboundFrame,
+  type OutboundDaemonToServerEventFrame,
+  type OutboundFrame,
+  type OutboundHeartbeatFrame,
+} from '../outbound-protocol.js';
+import type { EventFrame } from '../protocol.js';
+import type { DaemonLogger } from './logger.js';
+
+export interface OutboundDaemonClientOptions {
+  configPath: string;
+  logger: DaemonLogger;
+  readyEvent: () => Extract<EventFrame, { event: 'ready' }>;
+  configPollMs?: number;
+  backoff?: Partial<ReconnectBackoffOptions>;
+  heartbeat?: Partial<HeartbeatOptions>;
+  buffer?: Partial<OutboundWriteBufferOptions>;
+  random?: () => number;
+  now?: () => number;
+}
+
+export interface ReconnectBackoffOptions {
+  minDelayMs: number;
+  maxDelayMs: number;
+  factor: number;
+  jitterRatio: number;
+}
+
+export interface HeartbeatOptions {
+  pingIntervalMs: number;
+  pongTimeoutMs: number;
+}
+
+export interface OutboundWriteBufferOptions {
+  maxFrames: number;
+  maxBytes: number;
+}
+
+interface ActiveConfig {
+  raw: DaemonHostConfig;
+  key: string;
+  wsUrl: string;
+}
+
+interface OutboundEventMetadata {
+  kind: string;
+  conversation_id?: string;
+  agent_id?: string;
+  ts?: number;
+}
+
+type SendResult = 'sent' | 'dropped' | 'overflow' | 'failed';
+
+const DEFAULT_CONFIG_POLL_MS = 1_000;
+const DEFAULT_BACKOFF: ReconnectBackoffOptions = {
+  minDelayMs: 1_000,
+  maxDelayMs: 60_000,
+  factor: 2,
+  jitterRatio: 0.25,
+};
+const DEFAULT_HEARTBEAT: HeartbeatOptions = {
+  pingIntervalMs: 30_000,
+  pongTimeoutMs: 5_000,
+};
+const DEFAULT_BUFFER: OutboundWriteBufferOptions = {
+  maxFrames: 1024,
+  maxBytes: 4 * 1024 * 1024,
+};
+
+export class OutboundDaemonClient {
+  private readonly configPollMs: number;
+  private readonly backoff: ReconnectBackoffOptions;
+  private readonly heartbeat: HeartbeatOptions;
+  private readonly random: () => number;
+  private readonly now: () => number;
+  private readonly writeBuffer: OutboundWriteBuffer;
+  private configTimer: NodeJS.Timeout | null = null;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private pingTimer: NodeJS.Timeout | null = null;
+  private pongTimer: NodeJS.Timeout | null = null;
+  private ws: WebSocket | null = null;
+  private desiredConfig: ActiveConfig | null = null;
+  private connectedConfigKey: string | null = null;
+  private reconnectAttempt = 0;
+  private started = false;
+  private stopping = false;
+
+  constructor(private readonly opts: OutboundDaemonClientOptions) {
+    this.configPollMs = opts.configPollMs ?? DEFAULT_CONFIG_POLL_MS;
+    this.backoff = { ...DEFAULT_BACKOFF, ...(opts.backoff ?? {}) };
+    this.heartbeat = { ...DEFAULT_HEARTBEAT, ...(opts.heartbeat ?? {}) };
+    this.random = opts.random ?? Math.random;
+    this.now = opts.now ?? Date.now;
+    this.writeBuffer = new OutboundWriteBuffer({
+      ...DEFAULT_BUFFER,
+      ...(opts.buffer ?? {}),
+    });
+  }
+
+  start(): void {
+    if (this.started) return;
+    this.started = true;
+    this.stopping = false;
+    this.pollConfig();
+    if (this.configPollMs > 0) {
+      this.configTimer = setInterval(() => this.pollConfig(), this.configPollMs);
+      this.configTimer.unref?.();
+    }
+  }
+
+  stop(reason = 'daemon_shutdown'): void {
+    this.stopping = true;
+    this.clearConfigTimer();
+    this.clearReconnectTimer();
+    this.clearHeartbeatTimers();
+    const ws = this.ws;
+    this.ws = null;
+    this.connectedConfigKey = null;
+    if (
+      ws &&
+      (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)
+    ) {
+      ws.close(1000, reason);
+    }
+  }
+
+  sendEvent(event: EventFrame): SendResult {
+    const frame = toOutboundEventFrame(event);
+    const metadata = eventMetadata(event);
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      this.handleUnavailableSend(metadata);
+      return metadata.kind === 'runtime_output' ? 'dropped' : 'failed';
+    }
+
+    const result = this.writeBuffer.send({
+      ws,
+      frame,
+      metadata,
+      logger: this.opts.logger,
+    });
+    if (result === 'overflow') {
+      this.opts.logger.warn(
+        {
+          kind: 'outbound_ws',
+          action: 'buffer_overflow_close',
+          event_kind: metadata.kind,
+          conversation_id: metadata.conversation_id,
+          agent_id: metadata.agent_id,
+          ts: metadata.ts,
+          pending_frames: this.writeBuffer.pendingFrames,
+          pending_bytes: this.writeBuffer.pendingBytes,
+        },
+        'daemon outbound ws buffer overflow on non-droppable event; closing connection',
+      );
+      ws.close(1013, 'outbound_buffer_overflow');
+    }
+    return result;
+  }
+
+  state(): {
+    connected: boolean;
+    desiredConfigLoaded: boolean;
+    reconnectAttempt: number;
+    pendingFrames: number;
+    pendingBytes: number;
+  } {
+    return {
+      connected: this.ws?.readyState === WebSocket.OPEN,
+      desiredConfigLoaded: this.desiredConfig !== null,
+      reconnectAttempt: this.reconnectAttempt,
+      pendingFrames: this.writeBuffer.pendingFrames,
+      pendingBytes: this.writeBuffer.pendingBytes,
+    };
+  }
+
+  private pollConfig(): void {
+    if (this.stopping) return;
+    const next = readHostConfig(this.opts.configPath);
+    if (!next.ok) {
+      if (this.desiredConfig !== null || this.ws !== null) {
+        this.opts.logger.warn(
+          {
+            kind: 'outbound_ws',
+            action: 'config_unavailable',
+            config_path: redactConfigPath(this.opts.configPath),
+            reason: next.reason,
+          },
+          'daemon outbound config unavailable; disconnecting',
+        );
+      }
+      this.desiredConfig = null;
+      this.closeForConfigChange('config_unavailable');
+      return;
+    }
+
+    let wsUrl: string;
+    try {
+      wsUrl = hostConnectWebSocketUrl(next.config.server_url);
+    } catch (err) {
+      this.opts.logger.warn(
+        {
+          kind: 'outbound_ws',
+          action: 'config_invalid',
+          config_path: redactConfigPath(this.opts.configPath),
+          reason: (err as Error).message,
+        },
+        'daemon outbound config rejected',
+      );
+      this.desiredConfig = null;
+      this.closeForConfigChange('config_invalid');
+      return;
+    }
+
+    const key = configKey(next.config);
+    if (this.desiredConfig?.key === key) {
+      if (!this.ws || this.ws.readyState === WebSocket.CLOSED) {
+        this.scheduleReconnect('config_poll');
+      }
+      return;
+    }
+
+    this.desiredConfig = { raw: next.config, key, wsUrl };
+    this.reconnectAttempt = 0;
+    this.opts.logger.info(
+      {
+        kind: 'outbound_ws',
+        action: 'config_loaded',
+        host_id: next.config.host_id,
+        server_origin: new URL(next.config.server_url).origin,
+      },
+      'daemon outbound config loaded',
+    );
+    this.closeForConfigChange('config_changed');
+    this.connectNow();
+  }
+
+  private connectNow(): void {
+    if (this.stopping) return;
+    const config = this.desiredConfig;
+    if (!config) return;
+    if (
+      this.ws &&
+      (this.ws.readyState === WebSocket.OPEN ||
+        this.ws.readyState === WebSocket.CONNECTING)
+    ) {
+      return;
+    }
+
+    this.clearReconnectTimer();
+    const ws = new WebSocket(config.wsUrl, {
+      headers: {
+        Authorization: `Bearer ${config.raw.host_token}`,
+      },
+    });
+    this.ws = ws;
+    this.connectedConfigKey = config.key;
+    this.opts.logger.info(
+      {
+        kind: 'outbound_ws',
+        action: 'connect_attempt',
+        host_id: config.raw.host_id,
+        server_origin: new URL(config.raw.server_url).origin,
+      },
+      'daemon outbound ws connecting',
+    );
+
+    ws.on('open', () => {
+      this.reconnectAttempt = 0;
+      this.writeBuffer.reset();
+      this.opts.logger.info(
+        {
+          kind: 'outbound_ws',
+          action: 'connected',
+          host_id: config.raw.host_id,
+        },
+        'daemon outbound ws connected',
+      );
+      this.sendEvent(this.opts.readyEvent());
+      this.startHeartbeat();
+    });
+
+    ws.on('message', data => this.handleMessage(data));
+    ws.on('error', err => {
+      this.opts.logger.warn(
+        {
+          kind: 'outbound_ws',
+          action: 'socket_error',
+          err: (err as Error).message,
+          host_id: config.raw.host_id,
+        },
+        'daemon outbound ws error',
+      );
+    });
+    ws.on('close', (code, reason) => {
+      this.clearHeartbeatTimers();
+      this.writeBuffer.reset();
+      if (this.ws === ws) this.ws = null;
+      this.opts.logger.warn(
+        {
+          kind: 'outbound_ws',
+          action: 'closed',
+          code,
+          reason: reason.toString(),
+          close_class: closeClass(code),
+          host_id: config.raw.host_id,
+        },
+        'daemon outbound ws closed',
+      );
+      if (this.stopping) return;
+      if (this.desiredConfig?.key !== this.connectedConfigKey) return;
+      this.scheduleReconnect(`close_${closeClass(code)}`);
+    });
+  }
+
+  private handleMessage(data: RawData): void {
+    const parsed = parseJsonFrame(data);
+    if (!parsed) {
+      this.closeProtocolError('invalid_json');
+      return;
+    }
+
+    const heartbeat = OutboundHeartbeatFrameSchema.safeParse(parsed);
+    if (heartbeat.success) {
+      this.handleHeartbeat(heartbeat.data);
+      return;
+    }
+
+    const command = OutboundServerToDaemonCommandFrameSchema.safeParse(parsed);
+    if (command.success) {
+      this.opts.logger.warn(
+        {
+          kind: 'outbound_ws',
+          action: 'unsupported_command',
+          command_kind: command.data.kind,
+          request_id: command.data.id,
+        },
+        'daemon outbound command received before D2.c dispatcher is wired',
+      );
+      this.closeProtocolError('unsupported_command');
+      return;
+    }
+
+    const any = OutboundFrameSchema.safeParse(parsed);
+    if (!any.success) {
+      this.closeProtocolError('invalid_frame');
+      return;
+    }
+    this.closeProtocolError('wrong_direction');
+  }
+
+  private handleHeartbeat(frame: OutboundHeartbeatFrame): void {
+    if (frame.direction !== 'server_to_daemon') {
+      this.closeProtocolError('wrong_direction_heartbeat');
+      return;
+    }
+    if (frame.kind === 'ping') {
+      this.sendControlFrame({
+        direction: 'daemon_to_server',
+        type: 'heartbeat',
+        kind: 'pong',
+        ts: this.now(),
+        echo_ts: frame.ts,
+      });
+      return;
+    }
+    this.clearPongTimer();
+  }
+
+  private startHeartbeat(): void {
+    this.clearHeartbeatTimers();
+    if (this.heartbeat.pingIntervalMs <= 0) return;
+    this.pingTimer = setInterval(() => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+      const ts = this.now();
+      if (
+        !this.sendControlFrame({
+          direction: 'daemon_to_server',
+          type: 'heartbeat',
+          kind: 'ping',
+          ts,
+        })
+      ) {
+        return;
+      }
+      this.clearPongTimer();
+      this.pongTimer = setTimeout(() => {
+        this.opts.logger.warn(
+          {
+            kind: 'outbound_ws',
+            action: 'heartbeat_timeout',
+            timeout_ms: this.heartbeat.pongTimeoutMs,
+          },
+          'daemon outbound heartbeat timeout; closing connection',
+        );
+        this.ws?.close(1008, 'heartbeat_timeout');
+      }, this.heartbeat.pongTimeoutMs);
+      this.pongTimer.unref?.();
+    }, this.heartbeat.pingIntervalMs);
+    this.pingTimer.unref?.();
+  }
+
+  private sendControlFrame(frame: OutboundFrame): boolean {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    try {
+      ws.send(encodeOutboundFrame(frame));
+      return true;
+    } catch (err) {
+      this.opts.logger.warn(
+        {
+          kind: 'outbound_ws',
+          action: 'control_send_failed',
+          err: (err as Error).message,
+        },
+        'daemon outbound control frame send failed; closing connection',
+      );
+      ws.close(1011, 'control_send_failed');
+      return false;
+    }
+  }
+
+  private scheduleReconnect(reason: string): void {
+    if (this.stopping || !this.desiredConfig || this.reconnectTimer) return;
+    const delayMs = reconnectDelayMs(
+      this.reconnectAttempt++,
+      this.backoff,
+      this.random,
+    );
+    this.opts.logger.info(
+      {
+        kind: 'outbound_ws',
+        action: 'reconnect_scheduled',
+        reason,
+        delay_ms: delayMs,
+        attempt: this.reconnectAttempt,
+      },
+      'daemon outbound ws reconnect scheduled',
+    );
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connectNow();
+    }, delayMs);
+    this.reconnectTimer.unref?.();
+  }
+
+  private closeProtocolError(reason: string): void {
+    this.ws?.close(1002, reason);
+  }
+
+  private closeForConfigChange(reason: string): void {
+    this.clearReconnectTimer();
+    this.clearHeartbeatTimers();
+    const ws = this.ws;
+    this.ws = null;
+    this.connectedConfigKey = null;
+    if (
+      ws &&
+      (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)
+    ) {
+      ws.close(1000, reason);
+    }
+  }
+
+  private handleUnavailableSend(metadata: OutboundEventMetadata): void {
+    const level = metadata.kind === 'runtime_output' ? 'debug' : 'warn';
+    this.opts.logger[level](
+      {
+        kind: 'outbound_ws',
+        action: metadata.kind === 'runtime_output' ? 'drop_disconnected' : 'event_disconnected',
+        event_kind: metadata.kind,
+        conversation_id: metadata.conversation_id,
+        agent_id: metadata.agent_id,
+        ts: metadata.ts,
+      },
+      'daemon outbound event emitted while disconnected',
+    );
+  }
+
+  private clearConfigTimer(): void {
+    if (!this.configTimer) return;
+    clearInterval(this.configTimer);
+    this.configTimer = null;
+  }
+
+  private clearReconnectTimer(): void {
+    if (!this.reconnectTimer) return;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+  }
+
+  private clearHeartbeatTimers(): void {
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
+    this.clearPongTimer();
+  }
+
+  private clearPongTimer(): void {
+    if (!this.pongTimer) return;
+    clearTimeout(this.pongTimer);
+    this.pongTimer = null;
+  }
+}
+
+class OutboundWriteBuffer {
+  pendingFrames = 0;
+  pendingBytes = 0;
+  private droppedRuntimeOutput = 0;
+
+  constructor(private readonly opts: OutboundWriteBufferOptions) {}
+
+  send(input: {
+    ws: WebSocket;
+    frame: OutboundDaemonToServerEventFrame;
+    metadata: OutboundEventMetadata;
+    logger: DaemonLogger;
+  }): SendResult {
+    let encoded: string;
+    try {
+      encoded = encodeOutboundFrame(input.frame);
+    } catch (err) {
+      if (input.metadata.kind === 'runtime_output') {
+        this.logRuntimeOutputDrop(input, 0, (err as Error).message);
+        return 'dropped';
+      }
+      this.logOverflow(input, 0, (err as Error).message);
+      return 'overflow';
+    }
+
+    const encodedBytes = Buffer.byteLength(encoded, 'utf8');
+    const totalBytes =
+      this.pendingBytes + encodedBytes + Math.max(0, input.ws.bufferedAmount);
+    const totalFrames = this.pendingFrames + 1;
+    if (totalBytes > this.opts.maxBytes || totalFrames > this.opts.maxFrames) {
+      if (input.metadata.kind === 'runtime_output') {
+        this.logRuntimeOutputDrop(input, encodedBytes, 'buffer_limit');
+        return 'dropped';
+      }
+      this.logOverflow(input, encodedBytes, 'buffer_limit');
+      return 'overflow';
+    }
+
+    this.pendingFrames++;
+    this.pendingBytes += encodedBytes;
+    try {
+      input.ws.send(encoded, err => {
+        this.pendingFrames = Math.max(0, this.pendingFrames - 1);
+        this.pendingBytes = Math.max(0, this.pendingBytes - encodedBytes);
+        if (err) {
+          input.logger.warn(
+            {
+              kind: 'outbound_ws',
+              action: 'event_send_callback_error',
+              err: err.message,
+              event_kind: input.metadata.kind,
+              conversation_id: input.metadata.conversation_id,
+              agent_id: input.metadata.agent_id,
+              ts: input.metadata.ts,
+            },
+            'daemon outbound event send callback failed',
+          );
+        }
+      });
+      return 'sent';
+    } catch (err) {
+      this.pendingFrames = Math.max(0, this.pendingFrames - 1);
+      this.pendingBytes = Math.max(0, this.pendingBytes - encodedBytes);
+      input.logger.warn(
+        {
+          kind: 'outbound_ws',
+          action: 'event_send_failed',
+          err: (err as Error).message,
+          event_kind: input.metadata.kind,
+          conversation_id: input.metadata.conversation_id,
+          agent_id: input.metadata.agent_id,
+          ts: input.metadata.ts,
+        },
+        'daemon outbound event send failed',
+      );
+      return 'failed';
+    }
+  }
+
+  reset(): void {
+    this.pendingFrames = 0;
+    this.pendingBytes = 0;
+  }
+
+  private logRuntimeOutputDrop(
+    input: {
+      metadata: OutboundEventMetadata;
+      logger: DaemonLogger;
+    },
+    encodedBytes: number,
+    reason: string,
+  ): void {
+    this.droppedRuntimeOutput++;
+    input.logger.warn(
+      {
+        kind: 'outbound_ws',
+        action: 'runtime_output_dropped',
+        event_kind: input.metadata.kind,
+        conversation_id: input.metadata.conversation_id,
+        agent_id: input.metadata.agent_id,
+        ts: input.metadata.ts,
+        encoded_bytes: encodedBytes,
+        pending_frames: this.pendingFrames,
+        pending_bytes: this.pendingBytes,
+        dropped_count: this.droppedRuntimeOutput,
+        reason,
+      },
+      'daemon outbound runtime_output dropped under write-buffer pressure',
+    );
+  }
+
+  private logOverflow(
+    input: {
+      metadata: OutboundEventMetadata;
+      logger: DaemonLogger;
+    },
+    encodedBytes: number,
+    reason: string,
+  ): void {
+    input.logger.warn(
+      {
+        kind: 'outbound_ws',
+        action: 'non_droppable_overflow',
+        event_kind: input.metadata.kind,
+        conversation_id: input.metadata.conversation_id,
+        agent_id: input.metadata.agent_id,
+        ts: input.metadata.ts,
+        encoded_bytes: encodedBytes,
+        pending_frames: this.pendingFrames,
+        pending_bytes: this.pendingBytes,
+        reason,
+      },
+      'daemon outbound non-droppable event exceeded write-buffer cap',
+    );
+  }
+}
+
+export function readHostConfig(
+  path: string,
+): { ok: true; config: DaemonHostConfig } | { ok: false; reason: string } {
+  if (!existsSync(path)) return { ok: false, reason: 'missing' };
+  try {
+    const parsed = DaemonHostConfigSchema.safeParse(
+      JSON.parse(readFileSync(path, 'utf8')) as unknown,
+    );
+    if (!parsed.success) return { ok: false, reason: 'invalid_shape' };
+    return { ok: true, config: parsed.data };
+  } catch {
+    return { ok: false, reason: 'invalid_json' };
+  }
+}
+
+export function defaultDaemonHostConfigPath(silverhandDir: string): string {
+  return join(silverhandDir, DAEMON_HOST_CONFIG_FILENAME);
+}
+
+export function hostConnectWebSocketUrl(serverUrl: string): string {
+  const url = new URL(apiPaths.hostConnect, serverUrl);
+  if (url.protocol === 'http:') {
+    if (!isLoopbackHost(url.hostname)) {
+      throw new Error('tls_required_for_non_loopback_host_ws');
+    }
+    url.protocol = 'ws:';
+    return url.toString();
+  }
+  if (url.protocol === 'https:') {
+    url.protocol = 'wss:';
+    return url.toString();
+  }
+  throw new Error(`unsupported_server_url_protocol:${url.protocol}`);
+}
+
+function reconnectDelayMs(
+  attempt: number,
+  opts: ReconnectBackoffOptions,
+  random: () => number,
+): number {
+  const unclamped = opts.minDelayMs * Math.pow(opts.factor, attempt);
+  const base = Math.min(opts.maxDelayMs, unclamped);
+  if (opts.jitterRatio <= 0) return Math.round(base);
+  const spread = base * opts.jitterRatio;
+  const jittered = base - spread + random() * spread * 2;
+  return Math.max(0, Math.round(Math.min(opts.maxDelayMs, jittered)));
+}
+
+function configKey(config: DaemonHostConfig): string {
+  return `${config.server_url}\0${config.host_id}\0${config.host_token}`;
+}
+
+function parseJsonFrame(data: RawData): unknown | null {
+  try {
+    const parsed = JSON.parse(rawDataToString(data)) as unknown;
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function rawDataToString(data: RawData): string {
+  if (typeof data === 'string') return data;
+  if (Array.isArray(data)) return Buffer.concat(data).toString('utf8');
+  if (data instanceof ArrayBuffer) return Buffer.from(data).toString('utf8');
+  return data.toString('utf8');
+}
+
+function closeClass(code: number): 'normal' | 'going_away' | 'abnormal' | 'other' {
+  if (code === 1000) return 'normal';
+  if (code === 1001) return 'going_away';
+  if (code === 1006) return 'abnormal';
+  return 'other';
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]';
+}
+
+function redactConfigPath(path: string): string {
+  return path.endsWith(`/${DAEMON_HOST_CONFIG_FILENAME}`)
+    ? `.../${DAEMON_HOST_CONFIG_FILENAME}`
+    : '.../daemon-config';
+}
+
+function eventMetadata(event: EventFrame): OutboundEventMetadata {
+  return {
+    kind: event.event,
+    conversation_id: 'conversation_id' in event ? event.conversation_id : undefined,
+    agent_id: 'agent_id' in event ? event.agent_id : undefined,
+    ts: 'ts' in event && typeof event.ts === 'number' ? event.ts : undefined,
+  };
+}
+
+function toOutboundEventFrame(event: EventFrame): OutboundDaemonToServerEventFrame {
+  switch (event.event) {
+    case 'ready': {
+      const {
+        event: _event,
+        socket_path: _socketPath,
+        protocol_version: _protocolVersion,
+        ...rest
+      } = event;
+      return {
+        direction: 'daemon_to_server',
+        type: 'event',
+        kind: 'ready',
+        protocol_version: OUTBOUND_PROTOCOL_VERSION,
+        ...rest,
+      };
+    }
+    case 'shutting_down': {
+      const { event: _event, ...rest } = event;
+      return { direction: 'daemon_to_server', type: 'event', kind: event.event, ...rest };
+    }
+    default: {
+      const { event: _event, ...rest } = event;
+      return {
+        direction: 'daemon_to_server',
+        type: 'event',
+        kind: event.event,
+        ...rest,
+      } as OutboundDaemonToServerEventFrame;
+    }
+  }
+}

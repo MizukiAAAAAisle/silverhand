@@ -9,4 +9,14 @@ export { IntentDispatcher } from './dispatcher.js';
 export { DaemonServer } from './server.js';
 export { createDaemonLogControl, createDaemonLogger, type DaemonLogger } from './logger.js';
 export { claimPidFile, releasePidFile, installShutdownHandlers } from './lifecycle.js';
+export {
+  OutboundDaemonClient,
+  defaultDaemonHostConfigPath,
+  hostConnectWebSocketUrl,
+  readHostConfig,
+  type HeartbeatOptions,
+  type OutboundDaemonClientOptions,
+  type OutboundWriteBufferOptions,
+  type ReconnectBackoffOptions,
+} from './outbound-client.js';
 export { DAEMON_VERSION } from './version.js';

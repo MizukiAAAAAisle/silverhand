@@ -34,6 +34,7 @@ import {
   defaultDaemonIdentityPath,
   readOrCreateDaemonIdentity,
 } from './identity.js';
+import { OutboundDaemonClient } from './outbound-client.js';
 import {
   buildDaemonInstanceId,
   defaultRuntimePidRootDir,
@@ -48,6 +49,13 @@ export interface RunDaemonOptions {
   pidFilePath: string;
   /** Directory for the daemon's own JSONL log file. */
   logDir: string;
+  /**
+   * Optional Stage D2 daemon-outbound host config. When present, the daemon
+   * polls this atomic JSON file and opens `/api/hosts/connect` with its
+   * long-lived host token. Omit/null keeps protocol tests on the Unix socket
+   * only.
+   */
+  hostConfigPath?: string | null;
   /** Install SIGTERM/SIGINT handlers. Defaults to true. Tests pass
    *  false so a daemon running in-process doesn't intercept the test
    *  runner's own signal handling. */
@@ -167,6 +175,13 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
       ? undefined
       : readOrCreateDaemonIdentity(daemonIdentityPath);
   const helloResult = createDaemonHelloResult(daemonInstanceId, daemonIdentity);
+  const readyEvent = (): Extract<EventFrame, { event: 'ready' }> => ({
+    event: 'ready',
+    ...helloResult,
+    socket_path: opts.socketPath,
+    daemon_pid: process.pid,
+    started_at: startedAt,
+  });
   const logger =
     opts.logger ??
     createDaemonLogger({
@@ -229,6 +244,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   // supervisor is constructed but won't fire events before
   // `server.start()` returns anyway.
   let broadcaster: (event: EventFrame) => void = () => {};
+  let outboundClient: OutboundDaemonClient | null = null;
   const supervisor = opts.supervisorFactory
     ? opts.supervisorFactory({
         emit: event => broadcaster(event),
@@ -248,7 +264,10 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     dispatcher,
     logger,
   });
-  broadcaster = event => server.broadcast(event);
+  broadcaster = event => {
+    server.broadcast(event);
+    outboundClient?.sendEvent(event);
+  };
 
   try {
     await server.start();
@@ -267,14 +286,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   // server.start() so a parent process that reads "ready" can connect
   // immediately without retry.
   if (opts.writeStdoutHandshake ?? true) {
-    const readyEvent: EventFrame = {
-      event: 'ready',
-      ...helloResult,
-      socket_path: opts.socketPath,
-      daemon_pid: process.pid,
-      started_at: startedAt,
-    };
-    process.stdout.write(encodeFrame(readyEvent));
+    process.stdout.write(encodeFrame(readyEvent()));
   }
   logger.info(
     {
@@ -290,12 +302,22 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     socket_path: opts.socketPath,
     pid_file_path: opts.pidFilePath,
   });
+  if (opts.hostConfigPath) {
+    outboundClient = new OutboundDaemonClient({
+      configPath: opts.hostConfigPath,
+      logger,
+      readyEvent,
+    });
+    outboundClient.start();
+  }
 
   let stopped = false;
   const stop = async (reason: string): Promise<void> => {
     if (stopped) return;
     stopped = true;
     logDaemon(logger, { action: 'shutting_down', pid: process.pid });
+    outboundClient?.sendEvent({ event: 'shutting_down', reason });
+    outboundClient?.stop(reason);
     try {
       await server.stop(reason);
     } catch (err) {
@@ -319,7 +341,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     socketPath: opts.socketPath,
     pidFilePath: opts.pidFilePath,
     logger,
-    broadcast: event => server.broadcast(event),
+    broadcast: event => broadcaster(event),
     stop,
   };
 }

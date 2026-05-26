@@ -35,6 +35,7 @@ import { loadOrCreateServerConfig, silverhandDir, writeServerConfig } from './co
 import {
   buildHostClaimInput,
   loadOrCreateInstallationId,
+  daemonHostConfigPath,
   readDaemonHostConfig,
   removeDaemonHostConfig,
   applyRotateSideEffects,
@@ -293,6 +294,7 @@ interface DaemonPaths {
   socketPath: string;
   pidFilePath: string;
   logDir: string;
+  hostConfigPath: string;
 }
 
 function daemonPaths(): DaemonPaths {
@@ -305,6 +307,7 @@ function daemonPaths(): DaemonPaths {
     socketPath: join(runDir, 'daemon.sock'),
     pidFilePath: join(runDir, 'daemon.pid'),
     logDir: join(silverhandDir(), 'logs'),
+    hostConfigPath: daemonHostConfigPath(silverhandDir()),
   };
 }
 
@@ -994,6 +997,7 @@ async function bootstrap(): Promise<void> {
       socketPath: paths.socketPath,
       pidFilePath: paths.pidFilePath,
       logDir: paths.logDir,
+      hostConfigPath: paths.hostConfigPath,
       alsoStderr: !app.isPackaged,
     });
     logger.info(

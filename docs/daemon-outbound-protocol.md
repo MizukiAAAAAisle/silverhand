@@ -1,6 +1,6 @@
 # Daemon outbound protocol — D2
 
-Status: D2.a initial wire contract and server endpoint.
+Status: D2.b daemon WS client lifecycle.
 
 This document defines the WebSocket transport introduced in Stage D2 for the
 desktop-local daemon. The orchestration boundary remains
@@ -30,12 +30,46 @@ The schema source of truth is `packages/host/src/outbound-protocol.ts`.
 Frames are JSON objects with three layers:
 
 - `direction`: outer discriminator, `server_to_daemon` or `daemon_to_server`.
-- `type`: `command`, `command_response`, or `event`.
+- `type`: `command`, `command_response`, `event`, or `heartbeat`.
 - `kind`: scoped by `type`; server commands and daemon events are separate
   catalogues.
 
 This avoids mixing command names and event names into one namespace while
 keeping frames readable in logs.
+
+## Connection lifecycle
+
+The desktop main process starts the local daemon with
+`--host-config ~/.silverhand/daemon-config.json`. The daemon polls that file
+and opens one WebSocket to `/api/hosts/connect` when the file contains a valid
+Stage B host token. Missing or invalid config closes the outbound connection
+without affecting the local Unix socket.
+
+Reconnect uses jittered exponential backoff capped at 60 seconds. Close-code
+handling is explicit:
+
+- `1000` (`normal`) from daemon shutdown does not reconnect; `1000` from the
+  server while the daemon is still running reconnects after backoff.
+- `1001` (`going_away`, including `server_shutdown`) reconnects after backoff,
+  never as a tight loop.
+- `1006` (`abnormal`) reconnects after backoff.
+- Other close codes are logged as `other` and also reconnect after backoff
+  while the daemon still has valid host config.
+
+Reconnect starts a fresh WebSocket. It does not replay any frame that was in
+the prior socket's process-local write buffer.
+
+## Heartbeat
+
+Heartbeat is an app-level protocol frame, not only a WebSocket ping:
+
+- Daemon sends `daemon_to_server / heartbeat / ping`; server answers
+  `server_to_daemon / heartbeat / pong`.
+- Server sends `server_to_daemon / heartbeat / ping`; daemon answers
+  `daemon_to_server / heartbeat / pong`.
+- Each side closes with `1008 heartbeat_timeout` when its own ping does not
+  receive the matching pong before timeout. That close then follows the
+  reconnect rules above unless it was part of daemon shutdown.
 
 ## Server commands
 
@@ -100,8 +134,28 @@ On disconnect or backpressure:
   transport reason. The server and daemon must not fabricate an off-DB pending
   queue for these commands.
 
-## D2.a limit
+## Bounded write buffer
 
-D2.a authenticates the endpoint and gates daemon-to-server frame shape. It does
-not yet dispatch server commands, reconnect the daemon client, wire backend
-fanout, or rotate tokens over the live connection. Those are D2.b-D2.f.
+The daemon outbound client has a process-local write buffer capped by both
+frame count and total encoded bytes. The cap exists only to bound memory while
+the OS/WebSocket writer is under pressure; it is not durable state.
+
+Overflow behavior:
+
+- `runtime_output` is droppable. The daemon drops it, logs
+  `runtime_output_dropped`, and keeps the socket open.
+- Every other daemon event is non-droppable. Overflow logs
+  `non_droppable_overflow` plus `buffer_overflow_close` with event metadata
+  (`event_kind`, `conversation_id`, `agent_id`, `ts`) and closes the socket
+  with short reason `outbound_buffer_overflow`.
+
+The close reason intentionally stays short because WebSocket close reason
+payloads are limited. The structured daemon log is the durable diagnostic
+record for the event that triggered fail-loud overflow.
+
+## D2.b limit
+
+D2.b authenticates/connects/reconnects the daemon client, handles app-level
+heartbeat, and enforces bounded non-durable writes. It still does not dispatch
+server commands, wire backend event fanout into DB/UI projection, or rotate
+tokens over the live connection. Those remain D2.c-D2.f.

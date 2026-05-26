@@ -54,6 +54,8 @@ export interface SpawnDaemonOptions {
   socketPath: string;
   pidFilePath: string;
   logDir: string;
+  /** Optional Stage D2 outbound WS host-token config path. */
+  hostConfigPath?: string | null;
   /** Mirror daemon log lines to stderr too. Default true in dev. */
   alsoStderr?: boolean;
   /** Max time to wait for the `ready` handshake. Default 10_000ms. */
@@ -143,6 +145,7 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
       '--socket-path', opts.socketPath,
       '--pid-file', opts.pidFilePath,
       '--log-dir', opts.logDir,
+      ...(opts.hostConfigPath ? ['--host-config', opts.hostConfigPath] : []),
       ...(alsoStderr ? ['--stderr'] : []),
     ];
     const proc = spawn(

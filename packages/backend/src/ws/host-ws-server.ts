@@ -4,6 +4,10 @@ import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import {
   OutboundDaemonToServerCommandResponseFrameSchema,
   OutboundDaemonToServerEventFrameSchema,
+  OutboundHeartbeatFrameSchema,
+  encodeOutboundFrame,
+  type OutboundFrame,
+  type OutboundHeartbeatFrame,
 } from '@silverhand/host';
 import { apiPaths } from '@silverhand/shared';
 import { HostTokenService } from '../auth/host-token.js';
@@ -16,6 +20,8 @@ export interface HostWsServerOptions {
   path?: string;
   maxPayloadBytes?: number;
   shutdownGraceMs?: number;
+  pingIntervalMs?: number;
+  pongTimeoutMs?: number;
 }
 
 export interface HostWsServerController {
@@ -31,6 +37,8 @@ interface AuthenticatedHost {
 
 const DEFAULT_MAX_PAYLOAD_BYTES = 256 * 1024;
 const DEFAULT_SHUTDOWN_GRACE_MS = 1_500;
+const DEFAULT_PING_INTERVAL_MS = 30_000;
+const DEFAULT_PONG_TIMEOUT_MS = 5_000;
 
 export function installHostWebSocketServer(
   server: HttpServer,
@@ -65,7 +73,10 @@ export function installHostWebSocketServer(
     }
 
     wss.handleUpgrade(req, socket, head, ws => {
-      const connection = new HostWsConnection(ws, ctx, auth.host);
+      const connection = new HostWsConnection(ws, ctx, auth.host, {
+        pingIntervalMs: opts.pingIntervalMs ?? DEFAULT_PING_INTERVAL_MS,
+        pongTimeoutMs: opts.pongTimeoutMs ?? DEFAULT_PONG_TIMEOUT_MS,
+      });
       connections.set(ws, connection);
       ws.on('close', () => {
         connections.delete(ws);
@@ -104,11 +115,20 @@ export function installHostWebSocketServer(
 }
 
 class HostWsConnection {
+  private readonly pingIntervalMs: number;
+  private readonly pongTimeoutMs: number;
+  private pingTimer: NodeJS.Timeout | null = null;
+  private pongTimer: NodeJS.Timeout | null = null;
+
   constructor(
     private readonly ws: WebSocket,
     private readonly ctx: BackendContext,
     private readonly host: AuthenticatedHost,
-  ) {}
+    opts: { pingIntervalMs: number; pongTimeoutMs: number },
+  ) {
+    this.pingIntervalMs = opts.pingIntervalMs;
+    this.pongTimeoutMs = opts.pongTimeoutMs;
+  }
 
   start(): void {
     this.ws.on('message', data => this.handleMessage(data));
@@ -128,6 +148,7 @@ class HostWsConnection {
       },
       'host-ws: connected',
     );
+    this.startHeartbeat();
   }
 
   closeForShutdown(): void {
@@ -160,6 +181,12 @@ class HostWsConnection {
       return;
     }
 
+    const heartbeat = OutboundHeartbeatFrameSchema.safeParse(frame);
+    if (heartbeat.success) {
+      this.handleHeartbeat(heartbeat.data);
+      return;
+    }
+
     const event = OutboundDaemonToServerEventFrameSchema.safeParse(frame);
     if (event.success) {
       // D2.d wires backend fanout. D2.a only gates the frame shape.
@@ -180,7 +207,75 @@ class HostWsConnection {
   }
 
   private cleanup(): void {
-    // Reserved for D2.b heartbeat timers and D2.c command waiters.
+    this.clearPingTimer();
+    this.clearPongTimer();
+    // Reserved for D2.c command waiters.
+  }
+
+  private handleHeartbeat(frame: OutboundHeartbeatFrame): void {
+    if (frame.direction !== 'daemon_to_server') {
+      this.closeWithProtocolError('wrong_direction_heartbeat');
+      return;
+    }
+    if (frame.kind === 'ping') {
+      this.send({
+        direction: 'server_to_daemon',
+        type: 'heartbeat',
+        kind: 'pong',
+        ts: Date.now(),
+        echo_ts: frame.ts,
+      });
+      return;
+    }
+    this.clearPongTimer();
+  }
+
+  private startHeartbeat(): void {
+    if (this.pingIntervalMs <= 0) return;
+    this.pingTimer = setInterval(() => {
+      if (this.ws.readyState !== WebSocket.OPEN) return;
+      const ts = Date.now();
+      this.send({
+        direction: 'server_to_daemon',
+        type: 'heartbeat',
+        kind: 'ping',
+        ts,
+      });
+      this.clearPongTimer();
+      this.pongTimer = setTimeout(() => {
+        this.ctx.logger.warn(
+          { hostId: this.host.hostId, timeoutMs: this.pongTimeoutMs },
+          'host-ws: heartbeat timeout',
+        );
+        this.ws.close(1008, 'heartbeat_timeout');
+      }, this.pongTimeoutMs);
+      this.pongTimer.unref?.();
+    }, this.pingIntervalMs);
+    this.pingTimer.unref?.();
+  }
+
+  private send(frame: OutboundFrame): void {
+    if (this.ws.readyState !== WebSocket.OPEN) return;
+    try {
+      this.ws.send(encodeOutboundFrame(frame));
+    } catch (err) {
+      this.ctx.logger.warn(
+        { err, hostId: this.host.hostId },
+        'host-ws: send failed',
+      );
+    }
+  }
+
+  private clearPingTimer(): void {
+    if (!this.pingTimer) return;
+    clearInterval(this.pingTimer);
+    this.pingTimer = null;
+  }
+
+  private clearPongTimer(): void {
+    if (!this.pongTimer) return;
+    clearTimeout(this.pongTimer);
+    this.pongTimer = null;
   }
 }
 
