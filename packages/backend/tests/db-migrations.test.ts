@@ -4,8 +4,10 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -259,16 +261,24 @@ describe('database migrations', () => {
     }
   });
 
-  it('backs up the whole data directory before an opted-in schema upgrade', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'silverhand-migration-backup-test-'));
-    const dataDir = join(dir, '.silverhand');
+  it('backs up the whole data directory before an opted-in schema upgrade', async () => {
+    const dir = mkdtempSync('/tmp/shmig-');
+    const dataDir = join(dir, 'data');
     const dbPath = join(dataDir, 'silverhand.db');
     mkdirSync(join(dataDir, 'blobs'), { recursive: true });
     mkdirSync(join(dataDir, 'logs'), { recursive: true });
+    mkdirSync(join(dataDir, 'run'), { recursive: true });
     mkdirSync(join(dataDir, 'workspaces'), { recursive: true });
     writeFileSync(join(dataDir, 'blobs', 'blob.txt'), 'blob bytes');
     writeFileSync(join(dataDir, 'logs', 'backend.log'), 'log bytes');
     writeFileSync(join(dataDir, 'workspaces', 'workspace.txt'), 'workspace bytes');
+    symlinkSync('../blobs/blob.txt', join(dataDir, 'logs', 'blob-link'));
+    const socketPath = join(dataDir, 'run', 'daemon.sock');
+    const socketServer = createServer();
+    await new Promise<void>((resolve, reject) => {
+      socketServer.once('error', reject);
+      socketServer.listen(socketPath, resolve);
+    });
     const db = new Database(dbPath);
     try {
       db.exec(`
@@ -300,7 +310,7 @@ describe('database migrations', () => {
       expect(result.beforeVersion).toBe(SYNTHETIC_UPGRADE_BASE_VERSION);
       expect(result.afterVersion).toBe(SYNTHETIC_UPGRADE_TARGET_VERSION);
       expect(result.appliedVersions).toEqual([SYNTHETIC_UPGRADE_TARGET_VERSION]);
-      expect(result.backupPath).toMatch(/\.silverhand-backup-\d{8}T\d{6}Z$/);
+      expect(result.backupPath).toMatch(/data-backup-\d{8}T\d{6}Z$/);
       expect(currentSchemaVersion(db)).toBe(SYNTHETIC_UPGRADE_TARGET_VERSION);
       expect(
         db
@@ -322,6 +332,12 @@ describe('database migrations', () => {
           'utf8',
         ),
       ).toBe('workspace bytes');
+      expect(
+        readFileSync(join(result.backupPath!, 'logs', 'blob-link'), 'utf8'),
+      ).toBe('blob bytes');
+      expect(() =>
+        readFileSync(join(result.backupPath!, 'run', 'daemon.sock')),
+      ).toThrow();
 
       const backupDb = new Database(
         join(result.backupPath!, 'silverhand.db'),
@@ -346,6 +362,7 @@ describe('database migrations', () => {
       }
     } finally {
       db.close();
+      await new Promise<void>(resolve => socketServer.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
     }
   });

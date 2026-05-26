@@ -1,4 +1,12 @@
-import { cpSync, mkdirSync, rmSync } from 'node:fs';
+import {
+  copyFileSync,
+  lstatSync,
+  mkdirSync,
+  readlinkSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+} from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import Database from 'better-sqlite3';
 import type { Database as Db } from 'better-sqlite3';
@@ -308,13 +316,30 @@ export function backupDataDirBeforeMigration(
     dirname(dataDir),
     `${basename(dataDir)}-backup-${ts}`,
   );
-  cpSync(dataDir, backupPath, {
-    recursive: true,
-    preserveTimestamps: true,
-    errorOnExist: true,
-    force: false,
-  });
+  copyBackupTree(dataDir, backupPath);
   return backupPath;
+}
+
+function copyBackupTree(src: string, dest: string): void {
+  const info = lstatSync(src);
+  if (info.isDirectory()) {
+    mkdirSync(dest, { mode: info.mode & 0o777 });
+    for (const entry of readdirSync(src)) {
+      copyBackupTree(join(src, entry), join(dest, entry));
+    }
+    return;
+  }
+  if (info.isFile()) {
+    copyFileSync(src, dest);
+    return;
+  }
+  if (info.isSymbolicLink()) {
+    symlinkSync(readlinkSync(src), dest);
+    return;
+  }
+  // Unix sockets, FIFOs, and device nodes are runtime artifacts, not
+  // restorable Silverhand state. Node's recursive copy throws on sockets; skip
+  // these ephemeral filesystem entries so data-dir backups still complete.
 }
 
 function acquireMigrationLock(dbPath: string): () => void {

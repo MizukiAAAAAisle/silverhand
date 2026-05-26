@@ -69,6 +69,8 @@ databases behave differently:
   data directory to a sibling backup directory named
   `<data_dir>-backup-<utc>/`, then applies pending migrations. Example:
   `/var/lib/silverhand` backs up to `/var/lib/silverhand-backup-20260526T140000Z/`.
+  Runtime-only filesystem nodes such as Unix sockets, FIFOs, and device nodes
+  are skipped because they are not restorable Silverhand state.
 - If backup copy fails, migrations do not run and startup exits non-zero.
 - If the DB schema is newer than this server binary supports, startup always
   fails, even with `SILVERHAND_MIGRATE=1`; restore a compatible backup instead
