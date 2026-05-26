@@ -181,6 +181,8 @@ function placementErrorResponse(c: Context, err: unknown): Response | null {
   );
 }
 
+// D2 followup: split read-only deployment-unavailable routes to 503/404 while
+// keeping work-intent routes on 409 host_runtime_disabled.
 function hostRuntimeDisabledResponse(c: Context, action: string): Response {
   return c.json(
     {
@@ -664,11 +666,6 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     users,
     passwordCredentials: ctx.passwordCredentials,
   });
-  if (ctx.deploymentMode === 'embedded') {
-    hosts.ensureLocal();
-  } else {
-    hosts.ensureStandaloneServer();
-  }
 
   // ── Auth / health / runtimes / hosts ─────────────────────────────
   app.get(apiPaths.serverInfo, c =>

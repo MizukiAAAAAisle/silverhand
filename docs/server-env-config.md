@@ -40,6 +40,10 @@ as embedded mode:
 - `workspaces/`
 - `logs/`
 
+Carrying an embedded-mode DB into standalone mode is unsupported in V1:
+standalone control-plane mode does not reconcile embedded daemon runtime state,
+and old schedules may target a disabled host runtime.
+
 D1.b will add the Dockerfile, healthcheck wiring, and container volume
 contract around this layout.
 

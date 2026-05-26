@@ -7,7 +7,7 @@ import {
   startBackend,
   type BackendListenOptions,
   type CategorizedLoggers,
-  type CreateBackendOptions,
+  type EmbeddedBackendOptions,
   type FileLogger,
   type RunningBackend,
 } from '@silverhand/backend';
@@ -47,12 +47,9 @@ export {
 export interface StartEmbeddedSilverhandServerOptions {
   dataDir: string;
   serverConfig: ServerConfig;
-  hostClient: Extract<CreateBackendOptions, { mode: 'embedded' }>['hostClient'];
-  silverhandCliLauncher: Extract<
-    CreateBackendOptions,
-    { mode: 'embedded' }
-  >['silverhandCliLauncher'];
-  logger?: CreateBackendOptions['logger'];
+  hostClient: EmbeddedBackendOptions['hostClient'];
+  silverhandCliLauncher: EmbeddedBackendOptions['silverhandCliLauncher'];
+  logger?: EmbeddedBackendOptions['logger'];
   loggers?: Partial<CategorizedLoggers>;
   logDir?: string;
   listen?: BackendListenOptions;

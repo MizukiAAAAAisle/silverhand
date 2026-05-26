@@ -66,7 +66,8 @@ export class ControlPlaneRuntimeHost implements AgentRuntimeHost {
     _enabled: boolean,
     _expiresAt?: number | null,
   ): Promise<void> {
-    // Backend-local logging still changes; there is no daemon mirror to sync.
+    // Caller (`/api/conversations/:id/log-debug`) already toggled ctx.logControl;
+    // standalone mode has no daemon mirror to sync.
   }
 
   async closeActivityLog(): Promise<void> {

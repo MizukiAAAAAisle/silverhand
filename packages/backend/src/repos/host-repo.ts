@@ -230,6 +230,9 @@ export class HostRepo {
   }
 
   ensureStandaloneServer(): HostRow {
+    // D1 standalone uses one shared control-plane placeholder. D2 remote
+    // daemon placement must introduce per-user host ownership before any
+    // agent placement path treats this row as executable.
     const existing = this.getByName(STANDALONE_SERVER_HOST_NAME);
     if (existing) return existing;
     return this.create(STANDALONE_SERVER_HOST_NAME, 'remote');

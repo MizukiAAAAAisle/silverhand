@@ -357,10 +357,7 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     disableAutoTick: true,
   });
 
-  // routes.ts calls hosts.ensureLocal() at construction; openTestDb() does
-  // the same — this is a safety net if anyone changes the helper later.
   const hosts = new HostRepo(db);
-  hosts.ensureLocal();
   // Stage B.3 create routes require the current user to have an owned
   // local host, matching the desktop login claim path. Most route
   // tests use fixture users directly, so pre-claim their local hosts

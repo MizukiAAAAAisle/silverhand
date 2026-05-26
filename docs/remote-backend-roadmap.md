@@ -545,6 +545,9 @@ follow-up phase.
   moves to daemon-host. Server stays authoritative on **data** (prompt
   context content, env values, inbox payload) and ships it over the
   transport; daemon owns **fs materialization** locally.
+- D1.a's shared `standalone-server` host row is V1 control-plane-only;
+  D2 must define per-user host claim/ownership before remote daemon
+  placement can rely on `host.user_id`.
 - Output: `docs/orchestration-boundary-v1.md` design doc listing each
   item with its V1 decision and rationale.
 - Identify what new WS frame shapes D2 needs to support the boundary
