@@ -1,6 +1,6 @@
 # Orchestration boundary — V1 (D2.0 design pass)
 
-**Status**: DRAFT Rev 2. D1 complete; D2.0 design pass while D1 soaks. No code change in this stage — this doc only locks the contract for where each responsibility lives in the V1 remote-backend topology. Revision 1 (2026-05-26) folded @Cindy round-1 review (three blockers + one major + relocation nits + Q1/Q2/Q3 closures). Revision 2 (2026-05-26) folds @Cindy round-2 review (two real blockers + nits): delivery-text-vs-encoding boundary fix (Option A v2), activity-log writer relocated back to server, plus protocol-shape and env-var corrections. See §9.
+**Status**: DRAFT Rev 3. D1 complete; D2.0 design pass while D1 soaks. No code change in this stage — this doc only locks the contract for where each responsibility lives in the V1 remote-backend topology. Revision 1 (2026-05-26) folded @Cindy round-1 review; Revision 2 (2026-05-26) folded @Cindy round-2 review; Revision 3 (2026-05-26) folds @Cindy round-3 mechanical-shape-drift findings in §3.3 (no design change, table aligned to `packages/host/src/protocol.ts` canonical schemas). See §9.
 
 **Predecessor docs to read first**:
 - `docs/remote-server-target-architecture.md` — target topology
@@ -185,13 +185,14 @@ daemon, no reply — server fans out via the activity log / SSE bus.
 | Intent | Request params | Response arms |
 |--------|----------------|---------------|
 | `runtime_start` | `{ conversation_id, agent_id, options, startup_delivery? }` where `options` carries `runtime` (driver kind), `model`, `reasoning_effort`, `fast_mode`, `cli_session_id?` + workspace bundle (§4.1) + session bundle (§4.0) + agent profile bundle (§4.2) + env policy (§4.3); `startup_delivery?` = `{ delivery_ids[], text }` per Option A v2 (unencoded text — daemon encodes) | discriminated by `started`: `{ started: true, pid, started_at, startup_delivery_accepted? }` / `{ started: false, reason: 'init_cooldown', cooldown_until }`. Note `startup_delivery_accepted` is "attempt accepted", NOT "consumed" — the async `runtime_startup_delivery_consumed` event is the consumed signal. |
-| `runtime_stop` | `{ conversation_id, agent_id, mode: 'soft' \| 'hard', soft_directive? }` per PR-2 Option A v2: `soft_directive` is **required** when `mode === 'soft'` (unencoded text, daemon encodes), **forbidden** when `mode === 'hard'` | discriminated by `mode`: `hard: { mode: 'hard', stopped, exit_code? }` (`exit_code` may be `null` if SIGTERM cascade pending — real value rides on `runtime_exit` event) / `soft: { mode: 'soft', directive_delivered, reason? in ['not_running' \| 'write_failed' \| 'driver_refused'] }`. **`directive_delivered === false` does NOT mean stopped** — soft never terminates the runtime. |
-| `runtime_clear_session` | `{ conversation_id, agent_id }` | `cleared` / `not_running` |
-| `runtime_wake` | `{ conversation_id, agent_id, delivery_ids[], text }` where `text` is the server-hydrated *unencoded* delivery text (Option A v2 — daemon's driver instance encodes via `encodeStdinMessage(text, cliSessionId)` before writing stdin) | `{ delivered: true, delivery_ids[] }` / `{ delivered: false, reason }` (all-or-nothing per PR-2 §4.3) |
-| `runtime_status` | `{ conversation_id?, agent_id? }` (PR-2 filter shape; both optional) | cache snapshot constrained by filter — empty filter = full snapshot known to this daemon. Filter is a narrowing operator, not a topology key; host placement is decided server-side before the call. |
-| `runtime_stop_all` | `{}` (boot/shutdown sweep) | `{stopped_count}` + per-agent `runtime_exit` events |
-| `runtime_close_activity_log` | `{}` (shutdown) | `ack`. Semantics: daemon flushes outbound buffers; **server then closes its activity-log writer** (per §3.1 + PR-2 §4.3). |
-| `runtime_output_pause` / `_resume` | `{ conversation_id, agent_id }` (PR-2 §2.2; backend stays in always-flowing mode in v0) | ack |
+| `runtime_stop` | `{ conversation_id, agent_id, mode: 'soft' \| 'hard', soft_directive? }` per PR-2 Option A v2: `soft_directive` is **required** when `mode === 'soft'` (unencoded text, daemon encodes), **forbidden** when `mode === 'hard'` | discriminated by `mode`: `hard: { mode: 'hard', stopped, exit_code: number \| null }` (`exit_code` required-nullable — real value may ride on `runtime_exit` event when SIGTERM cascade still pending) / `soft: { mode: 'soft', directive_delivered, reason? in ['not_running' \| 'write_failed' \| 'driver_refused'] }` where `reason` is **required iff `directive_delivered === false`** and **forbidden iff `=== true`** (PR-2 `eMcEhycw8fQwucis` discriminator). **`directive_delivered === false` does NOT mean stopped** — soft never terminates the runtime. |
+| `runtime_clear_session` | `{ conversation_id, agent_id }` | `{ cleared: boolean }` |
+| `runtime_wake` | `{ conversation_id, agent_id, delivery_ids[], kind: 'message' \| 'schedule_fire', text }` where `text` is the server-hydrated *unencoded* delivery text (Option A v2 — daemon's driver instance encodes via `encodeStdinMessage(text, cliSessionId)` before writing stdin). `kind` is the PR-2 enum; expanding it requires a D2.0 amendment. | `{ delivered: true, delivery_ids[] }` / `{ delivered: false, delivery_ids[], reason in ['not_running' \| 'not_initialized' \| 'startup_pending' \| 'draining' \| 'driver_not_ready' \| 'driver_refused'] }` (failure carries the same `delivery_ids` so the caller keeps every row pending — no partial mark, per PR-2 §4.3 all-or-nothing) |
+| `runtime_status` | `{ conversation_id?, agent_id? }` (PR-2 filter shape; both optional) | `{ runtimes: RuntimeStateDto[] }` — cache snapshot constrained by filter; empty filter = full snapshot known to this daemon. Filter is a narrowing operator, not a topology key; host placement is decided server-side before the call. |
+| `runtime_stop_all` | `{}` (boot/shutdown sweep) | `{ stopped_count }` + per-agent `runtime_exit` events |
+| `runtime_close_activity_log` | `{}` (shutdown) | `{ flushed: boolean }`. Semantics: daemon flushes outbound buffers; **server then closes its activity-log writer** (per §3.1 + PR-2 §4.3). |
+| `runtime_output_pause` | `{ conversation_id, agent_id }` (PR-2 §2.2; backend stays in always-flowing mode in v0) | `{ paused: boolean }` |
+| `runtime_output_resume` | `{ conversation_id, agent_id }` | `{ resumed: boolean }` |
 
 **Daemon → server unsolicited events (no reply; activity log / SSE fanout):**
 
@@ -671,3 +672,30 @@ expanded in PR descriptions.
     clarified as logical pointer/label (not server-generated
     absolute path); §5 `routes.ts` materialization-intent names
     explicitly marked illustrative (not D2.0 frozen vocab).
+- 2026-05-26 — **Revision 3 (Alice, post Cindy round-3 review
+  `Ck4KOLu_2rxPIphZ` against `88c7272`)**. No design change; §3.3
+  table mechanically aligned to `packages/host/src/protocol.ts`
+  canonical schemas after Cindy's `git diff --check b8641e3..88c7272`
+  clean confirmation. Six drifts fixed:
+  - `runtime_wake` request: restored `kind: 'message' | 'schedule_fire'`
+    field (Rev 2 dropped it; PR-2 `protocol.ts:491-506` keeps it as
+    a frozen 2-arm enum — expansion needs explicit D2.0 amendment).
+  - `runtime_wake` failure response: added `delivery_ids[]` (Rev 2
+    omitted; all-or-nothing markDelivered needs the round-trip
+    context); reason enum tightened to PR-2's
+    `not_running | not_initialized | startup_pending | draining | driver_not_ready | driver_refused`
+    (`protocol.ts:509-534`).
+  - `runtime_clear_session` response: `{ cleared: boolean }` not
+    `cleared / not_running` flat strings (`protocol.ts:582-584`).
+  - `runtime_close_activity_log` response: `{ flushed: boolean }`
+    not bare `ack` (`protocol.ts:604-606`); flush-then-close
+    semantics retained.
+  - `runtime_output_pause` / `_resume` responses: `{ paused: boolean }`
+    / `{ resumed: boolean }` (`protocol.ts:623-635`); pause and
+    resume split into two rows since their result shapes diverge.
+  - `runtime_stop` `hard` arm: `exit_code: number | null` required-
+    nullable (Rev 2 wrote optional `exit_code?`, which would let the
+    daemon omit the field entirely — discriminator weaker than
+    `protocol.ts:420-432`). `soft` arm `reason` invariant made
+    explicit (required-iff-`directive_delivered===false`,
+    forbidden-iff-`===true`) per PR-2 `eMcEhycw8fQwucis` superRefine.
