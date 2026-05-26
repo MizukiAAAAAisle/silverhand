@@ -59,9 +59,6 @@ importers:
       '@radix-ui/react-tooltip':
         specifier: ^1.2.8
         version: 1.2.8(@types/react-dom@18.3.7(@types/react@18.3.28))(@types/react@18.3.28)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
-      '@silverhand/server':
-        specifier: workspace:*
-        version: link:../../packages/server
       '@tailwindcss/vite':
         specifier: ^4.2.4
         version: 4.2.4(vite@5.4.21(@types/node@22.19.17)(lightningcss@1.32.0))
@@ -129,6 +126,9 @@ importers:
       '@silverhand/host':
         specifier: workspace:*
         version: link:../../packages/host
+      '@silverhand/server':
+        specifier: workspace:*
+        version: link:../../packages/server
       '@silverhand/shared':
         specifier: workspace:*
         version: link:../../packages/shared
