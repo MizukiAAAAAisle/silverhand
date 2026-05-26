@@ -9,6 +9,7 @@
     ".": "./src/index.ts",
     "./daemon": "./src/daemon/index.ts",
     "./drivers": "./src/drivers/index.ts",
+    "./outbound-protocol": "./src/outbound-protocol.ts",
     "./protocol": "./src/protocol.ts",
     "./runtimes": "./src/runtimes.ts"
   },

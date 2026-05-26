@@ -79,4 +79,28 @@ export {
   type RuntimeOutputResumeParams,
   type RuntimeOutputResumeResult,
 } from './protocol.js';
+export {
+  OUTBOUND_DAEMON_EVENT_KINDS,
+  OUTBOUND_PROTOCOL_VERSION,
+  OUTBOUND_SERVER_COMMAND_KINDS,
+  OutboundCommandErrorSchema,
+  OutboundDaemonToServerCommandResponseFrameSchema,
+  OutboundDaemonToServerEventFrameSchema,
+  OutboundFrameSchema,
+  OutboundReadyEventFrameSchema,
+  OutboundServerToDaemonCommandFrameSchema,
+  RotateTokenParamsSchema,
+  RotateTokenResultSchema,
+  encodeOutboundFrame,
+  outboundServerCommandSchemas,
+  type OutboundCommandError,
+  type OutboundDaemonEventKind,
+  type OutboundDaemonToServerCommandResponseFrame,
+  type OutboundDaemonToServerEventFrame,
+  type OutboundFrame,
+  type OutboundServerCommandKind,
+  type OutboundServerToDaemonCommandFrame,
+  type RotateTokenParams,
+  type RotateTokenResult,
+} from './outbound-protocol.js';
 export { DAEMON_VERSION } from './daemon/version.js';

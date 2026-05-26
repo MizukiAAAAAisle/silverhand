@@ -840,6 +840,10 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     c.json({ error: 'event websocket requires a websocket upgrade' }, 401),
   );
 
+  app.get(apiPaths.hostConnect, c =>
+    c.json({ error: 'host websocket requires a websocket upgrade' }, 401),
+  );
+
   app.get(apiPaths.runtimes, async c => {
     if (standaloneMode(ctx)) {
       return hostRuntimeDisabledResponse(c, 'runtime detection', 503);

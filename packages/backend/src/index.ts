@@ -34,6 +34,10 @@ import {
   installEventWebSocketServer,
   type EventWsServerController,
 } from './ws/ws-server.js';
+import {
+  installHostWebSocketServer,
+  type HostWsServerController,
+} from './ws/host-ws-server.js';
 import type { AgentRuntimeHost } from './runtime/agent-runtime-host.js';
 import { ControlPlaneRuntimeHost } from './runtime/control-plane-runtime-host.js';
 import {
@@ -393,6 +397,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
 
   return new Promise<RunningBackend>((resolve, reject) => {
     let eventWs: EventWsServerController | null = null;
+    let hostWs: HostWsServerController | null = null;
     const server = serve(
       { fetch: app.fetch, hostname: listenHostname, port: listenPort },
       info => {
@@ -416,7 +421,10 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
             await ctx.runtimeHost.stopAll().catch(() => undefined);
 
             // Phase 2: close WS lifecycle before the HTTP drain removes sockets.
-            await eventWs?.close();
+            await Promise.all([
+              eventWs?.close(),
+              hostWs?.close(),
+            ]);
             await cleanupEmbeddedBootstrap(ctx.embeddedBootstrap, logger);
 
             // Phase 3: flush activity log AND drain the HTTP server
@@ -447,6 +455,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
       },
     );
     eventWs = installEventWebSocketServer(server as HttpServer, ctx);
+    hostWs = installHostWebSocketServer(server as HttpServer, ctx);
     server.on('error', reject);
   });
 }

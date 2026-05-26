@@ -6,6 +6,10 @@ export const apiPaths = {
 
   // hosts
   hosts: '/api/hosts',
+  /** D2 daemon-outbound WebSocket endpoint. The bundled desktop daemon
+   *  presents `Authorization: Bearer <host_token>` during upgrade;
+   *  this is host-token auth, not a user-session route. */
+  hostConnect: '/api/hosts/connect',
   hostClaimOrCreate: '/api/hosts/claim-or-create',
   /** Soft-delete a host the caller owns (Stage B.4). Sets
    *  `hosts.revoked_at` and bulk-revokes every active row in
