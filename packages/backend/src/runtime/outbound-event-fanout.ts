@@ -237,7 +237,21 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         } satisfies RuntimeStartParams,
         { timeoutMs: 60_000, expectedConnectionId: connectionId },
       );
-      if (!result.started || result.startup_delivery_accepted !== true) {
+      if (result.started && result.startup_delivery_accepted !== true) {
+        this.opts.logger.warn(
+          {
+            kind: 'inbox',
+            action: 'startup_delivery_not_accepted_after_start',
+            hostId,
+            conversationId,
+            agent_id: agentId,
+            delivery_ids: batch.deliveryIds,
+            result: summarizeStartupDeliveryResult(result),
+          },
+          'outbound startup delivery was not accepted after runtime_start reported started; rows remain pending',
+        );
+        this.inboxRepo.rollbackInFlight(batch.deliveryIds, connectionId);
+      } else if (!result.started) {
         this.inboxRepo.rollbackInFlight(batch.deliveryIds, connectionId);
       }
       return true;
@@ -572,4 +586,23 @@ function noopHostClient(): HostClient {
 
 function daemonKeyFromReady(daemonPid: number, startedAt: number): string {
   return `${daemonPid}@${startedAt}`;
+}
+
+function summarizeStartupDeliveryResult(result: {
+  started: boolean;
+  startup_delivery_accepted?: boolean;
+  pid?: number | null;
+  started_at?: number;
+  error?: unknown;
+}): Record<string, unknown> {
+  return {
+    started: result.started,
+    startup_delivery_accepted: result.startup_delivery_accepted,
+    pid: result.pid,
+    started_at: result.started_at,
+    error:
+      result.error && typeof result.error === 'object' && !Array.isArray(result.error)
+        ? Object.keys(result.error as Record<string, unknown>).slice(0, 10)
+        : result.error,
+  };
 }

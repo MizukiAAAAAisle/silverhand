@@ -41,11 +41,18 @@ describe('HostTokenService', () => {
     const fresh = tokens.rotateHostToken({ hostId, now });
 
     const oldCredential = db
-      .prepare<[string], { expires_at: number | null }>(
-        `SELECT expires_at FROM host_credentials WHERE id = ?`,
+      .prepare<
+        [string],
+        { expires_at: number | null; consumed_at: number | null; revoked_at: number | null }
+      >(
+        `SELECT expires_at, consumed_at, revoked_at FROM host_credentials WHERE id = ?`,
       )
       .get(old.credential.id);
-    expect(oldCredential?.expires_at).toBe(now + HOST_TOKEN_ROTATION_GRACE_MS);
+    expect(oldCredential).toMatchObject({
+      expires_at: null,
+      consumed_at: now,
+      revoked_at: now + HOST_TOKEN_ROTATION_GRACE_MS,
+    });
 
     expect(
       tokens.verifyHostToken(old.hostToken, {
@@ -69,6 +76,47 @@ describe('HostTokenService', () => {
       ok: true,
       hostId,
       userId: viewerUserId,
+    });
+  });
+
+  it('prepares rotation without mutating credentials until completion', () => {
+    const { db, viewerUserId } = openTestDb();
+    const { hostId, tokens } = createOwnedHostTokenFixture(db, viewerUserId);
+    const old = tokens.issueHostToken({ hostId });
+    const now = 1_700_000_000_000;
+
+    const prepared = tokens.prepareHostTokenRotation({ hostId, now });
+
+    expect(prepared).toMatchObject({
+      hostId,
+      issuedAt: now,
+      graceUntil: now + HOST_TOKEN_ROTATION_GRACE_MS,
+    });
+    expect(
+      db
+        .prepare<[string], { c: number }>(
+          `SELECT COUNT(*) AS c FROM host_credentials WHERE host_id = ?`,
+        )
+        .get(hostId)?.c ?? 0,
+    ).toBe(1);
+    expect(tokens.verifyHostToken(old.hostToken, { now })).toMatchObject({
+      ok: true,
+      hostId,
+    });
+
+    const fresh = tokens.completePreparedHostTokenRotation(prepared);
+
+    expect(fresh.hostToken).toBe(prepared.hostToken);
+    expect(
+      db
+        .prepare<[string], { c: number }>(
+          `SELECT COUNT(*) AS c FROM host_credentials WHERE host_id = ?`,
+        )
+        .get(hostId)?.c ?? 0,
+    ).toBe(2);
+    expect(tokens.verifyHostToken(fresh.hostToken, { now })).toMatchObject({
+      ok: true,
+      hostId,
     });
   });
 

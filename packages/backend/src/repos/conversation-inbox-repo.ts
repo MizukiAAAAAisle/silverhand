@@ -100,6 +100,9 @@ export class ConversationInboxRepo {
     inFlightOwner: string,
   ): ClaimedConversationInboxItem[] {
     const now = Date.now();
+    // `in_flight_at` is written for rotation/reconnect diagnostics and a
+    // future stale in-flight watchdog. Current replay correctness is owned by
+    // the per-connection `in_flight_owner` lease plus disconnect sweep.
     const select = this.db.prepare<[string, string], JoinedRow>(
       `SELECT i.id AS inbox_id, m.*
          FROM conversation_inboxes i

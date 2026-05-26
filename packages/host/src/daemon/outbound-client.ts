@@ -1,5 +1,14 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { dirname, join } from 'node:path';
 import { WebSocket, type RawData } from 'ws';
 import {
   DAEMON_HOST_CONFIG_FILENAME,
@@ -19,6 +28,8 @@ import {
   type OutboundFrame,
   type OutboundHeartbeatFrame,
   type OutboundServerToDaemonCommandFrame,
+  type RotateTokenParams,
+  type RotateTokenResult,
 } from '../outbound-protocol.js';
 import type { EventFrame, ResponseFrame } from '../protocol.js';
 import type { DaemonLogger } from './logger.js';
@@ -32,6 +43,7 @@ export interface OutboundDaemonClientOptions {
   heartbeat?: Partial<HeartbeatOptions>;
   buffer?: Partial<OutboundWriteBufferOptions>;
   dispatchCommand?: OutboundCommandDispatcher;
+  writeHostConfig?: HostConfigWriter;
   random?: () => number;
   now?: () => number;
 }
@@ -39,6 +51,7 @@ export interface OutboundDaemonClientOptions {
 export type OutboundCommandDispatcher = (
   command: OutboundServerToDaemonCommandFrame,
 ) => Promise<ResponseFrame>;
+export type HostConfigWriter = (path: string, config: DaemonHostConfig) => void;
 
 export interface ReconnectBackoffOptions {
   minDelayMs: number;
@@ -94,6 +107,7 @@ export class OutboundDaemonClient {
   private readonly heartbeat: HeartbeatOptions;
   private readonly random: () => number;
   private readonly now: () => number;
+  private readonly writeHostConfig: HostConfigWriter;
   private readonly writeBuffer: OutboundWriteBuffer;
   private configTimer: NodeJS.Timeout | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
@@ -101,7 +115,6 @@ export class OutboundDaemonClient {
   private pongTimer: NodeJS.Timeout | null = null;
   private ws: WebSocket | null = null;
   private desiredConfig: ActiveConfig | null = null;
-  private connectedConfigKey: string | null = null;
   private reconnectAttempt = 0;
   private started = false;
   private stopping = false;
@@ -112,6 +125,7 @@ export class OutboundDaemonClient {
     this.heartbeat = { ...DEFAULT_HEARTBEAT, ...(opts.heartbeat ?? {}) };
     this.random = opts.random ?? Math.random;
     this.now = opts.now ?? Date.now;
+    this.writeHostConfig = opts.writeHostConfig ?? writeHostConfigAtomic;
     this.writeBuffer = new OutboundWriteBuffer({
       ...DEFAULT_BUFFER,
       ...(opts.buffer ?? {}),
@@ -136,7 +150,6 @@ export class OutboundDaemonClient {
     this.clearHeartbeatTimers();
     const ws = this.ws;
     this.ws = null;
-    this.connectedConfigKey = null;
     if (
       ws &&
       (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)
@@ -274,9 +287,7 @@ export class OutboundDaemonClient {
         Authorization: `Bearer ${config.raw.host_token}`,
       },
     });
-    const connectionKey = config.key;
     this.ws = ws;
-    this.connectedConfigKey = connectionKey;
     this.opts.logger.info(
       {
         kind: 'outbound_ws',
@@ -317,9 +328,9 @@ export class OutboundDaemonClient {
     ws.on('close', (code, reason) => {
       this.clearHeartbeatTimers();
       this.writeBuffer.reset();
-      if (this.ws === ws) this.ws = null;
-      if (this.connectedConfigKey === connectionKey) {
-        this.connectedConfigKey = null;
+      const wasCurrent = this.ws === ws;
+      if (wasCurrent) {
+        this.ws = null;
       }
       this.opts.logger.warn(
         {
@@ -333,7 +344,7 @@ export class OutboundDaemonClient {
         'daemon outbound ws closed',
       );
       if (this.stopping) return;
-      if (this.desiredConfig?.key !== connectionKey) return;
+      if (!wasCurrent) return;
       this.scheduleReconnect(`close_${closeClass(code)}`);
     });
   }
@@ -381,21 +392,31 @@ export class OutboundDaemonClient {
     );
     let response: OutboundDaemonToServerCommandResponseFrame;
     try {
-      const dispatched = await dispatcher(command);
-      const mapped = toOutboundCommandResponse(command, dispatched);
-      response = mapped.frame;
-      if (mapped.drift) {
-        this.opts.logger.warn(
-          {
-            kind: 'outbound_ws',
-            action: 'command_response_shape_drift',
-            command_kind: command.kind,
-            request_id: command.id,
-            response_summary: mapped.drift.summary,
-            issues: mapped.drift.issues,
-          },
-          'daemon outbound command response shape drift; returning internal_error',
-        );
+      if (command.kind === 'rotate_token') {
+        response = {
+          direction: 'daemon_to_server',
+          type: 'command_response',
+          id: command.id,
+          kind: command.kind,
+          result: this.handleRotateToken(command.params),
+        } as OutboundDaemonToServerCommandResponseFrame;
+      } else {
+        const dispatched = await dispatcher(command);
+        const mapped = toOutboundCommandResponse(command, dispatched);
+        response = mapped.frame;
+        if (mapped.drift) {
+          this.opts.logger.warn(
+            {
+              kind: 'outbound_ws',
+              action: 'command_response_shape_drift',
+              command_kind: command.kind,
+              request_id: command.id,
+              response_summary: mapped.drift.summary,
+              issues: mapped.drift.issues,
+            },
+            'daemon outbound command response shape drift; returning internal_error',
+          );
+        }
       }
     } catch (err) {
       response = {
@@ -454,6 +475,77 @@ export class OutboundDaemonClient {
           : 'daemon outbound command response sent',
       );
     });
+  }
+
+  private handleRotateToken(params: RotateTokenParams): RotateTokenResult {
+    const current = this.desiredConfig;
+    if (!current || current.raw.host_id !== params.host_id) {
+      this.opts.logger.warn(
+        {
+          kind: 'outbound_ws',
+          action: 'rotate_token_host_mismatch',
+          expected_host_id: current?.raw.host_id,
+          command_host_id: params.host_id,
+        },
+        'daemon outbound rotate_token rejected: host mismatch',
+      );
+      return { rotated: false, reason: 'host_mismatch' };
+    }
+
+    const parsed = DaemonHostConfigSchema.safeParse({
+      ...current.raw,
+      host_token: params.host_token,
+    });
+    if (!parsed.success) {
+      this.opts.logger.warn(
+        {
+          kind: 'outbound_ws',
+          action: 'rotate_token_invalid_config',
+          issues: parsed.error.errors.map(e => `${e.path.join('.')}: ${e.message}`),
+        },
+        'daemon outbound rotate_token rejected: generated config invalid',
+      );
+      return { rotated: false, reason: 'invalid_config' };
+    }
+
+    try {
+      this.writeHostConfig(this.opts.configPath, parsed.data);
+    } catch (err) {
+      this.opts.logger.warn(
+        {
+          kind: 'outbound_ws',
+          action: 'rotate_token_write_failed',
+          err: (err as Error).message,
+        },
+        'daemon outbound rotate_token failed to refresh config',
+      );
+      return {
+        rotated: false,
+        reason: 'write_failed',
+        message: (err as Error).message,
+      };
+    }
+
+    const next = {
+      raw: parsed.data,
+      key: configKey(parsed.data),
+      wsUrl: current.wsUrl,
+    };
+    this.desiredConfig = next;
+    this.opts.logger.info(
+      {
+        kind: 'outbound_ws',
+        action: 'rotate_token_refreshed',
+        host_id: parsed.data.host_id,
+        grace_until: params.grace_until,
+      },
+      'daemon outbound host token refreshed in config and memory',
+    );
+    return {
+      rotated: true,
+      host_id: parsed.data.host_id,
+      config_refreshed_at: this.now(),
+    };
   }
 
   private handleHeartbeat(frame: OutboundHeartbeatFrame): void {
@@ -560,7 +652,6 @@ export class OutboundDaemonClient {
     this.clearHeartbeatTimers();
     const ws = this.ws;
     this.ws = null;
-    this.connectedConfigKey = null;
     if (
       ws &&
       (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)
@@ -838,6 +929,24 @@ export function readHostConfig(
     return { ok: true, config: parsed.data };
   } catch {
     return { ok: false, reason: 'invalid_json' };
+  }
+}
+
+export function writeHostConfigAtomic(path: string, config: DaemonHostConfig): void {
+  const parsed = DaemonHostConfigSchema.parse(config);
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.tmp-${process.pid}-${randomUUID()}`;
+  try {
+    writeFileSync(tmp, `${JSON.stringify(parsed, null, 2)}\n`, { mode: 0o600 });
+    renameSync(tmp, path);
+    chmodSync(path, 0o600);
+  } catch (err) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // Best-effort cleanup only.
+    }
+    throw err;
   }
 }
 

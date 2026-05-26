@@ -224,6 +224,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     workspaces: new WorkspaceRepo(db, { workspacesRoot }),
   });
   let outboundFanout: OutboundRuntimeEventFanout | null = null;
+  let hostWs: HostWsServerController | null = null;
 
   const ctx: BackendContext = {
     db,
@@ -262,6 +263,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
       opts.mode === 'embedded'
         ? placement
         : new DisabledRuntimeHostPlacement(),
+    hostWsController: () => hostWs,
     // Filled immediately below when the daemon runtime host is constructed.
     runtimeHost: undefined as unknown as AgentRuntimeHost,
   };
@@ -399,7 +401,6 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
 
   return new Promise<RunningBackend>((resolve, reject) => {
     let eventWs: EventWsServerController | null = null;
-    let hostWs: HostWsServerController | null = null;
     const server = serve(
       { fetch: app.fetch, hostname: listenHostname, port: listenPort },
       info => {

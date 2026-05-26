@@ -71,6 +71,11 @@ import { AgentRepo } from './repos/agent-repo.js';
 import { AttachmentRepo } from './repos/attachment-repo.js';
 import { HostRepo } from './repos/host-repo.js';
 import { HostCredentialIssueError, HostTokenService } from './auth/host-token.js';
+import { HostWsCommandTransportError } from './ws/host-ws-server.js';
+import {
+  HostTokenRotationCoordinator,
+  HostTokenRotationError,
+} from './ws/host-token-rotation.js';
 import { MessageRepo, messageRowToDto, AnchorMessageNotInConversationError } from './repos/message-repo.js';
 import { NotificationRepo } from './repos/notification-repo.js';
 import { SavedMessageRepo } from './repos/saved-message-repo.js';
@@ -968,17 +973,14 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   // POST /api/hosts/:id/rotate-token — Stage B.4 long-lived token
   // rotation. Owner-only, 404 on cross-user/missing, 409 if the host
   // is already revoked or is not a `local` kind (V1 surface only
-  // rotates the user's local host). Returns a fresh long_lived token
-  // with the prior credential put on a 60s grace window. The
-  // response carries cleartext token bytes; Electron main consumes
-  // it and writes `daemon-config.json` before any value crosses the
-  // renderer IPC boundary.
+  // rotates the user's local host). Embedded mode returns a fresh
+  // long_lived token for Electron main to write to daemon-config
+  // before IPC returns to the renderer. Standalone mode sends the
+  // cleartext replacement only over the host WebSocket `rotate_token`
+  // command and returns no token bytes in the HTTP response.
   app.post('/api/hosts/:id/rotate-token', async c => {
     const userId = requireSessionBearerUser(c, ctx);
     if (userId instanceof Response) return userId;
-    if (standaloneMode(ctx)) {
-      return hostRuntimeDisabledResponse(c, 'host token rotation');
-    }
 
     const hostId = c.req.param('id');
     const host = hosts.get(hostId);
@@ -1002,6 +1004,60 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
         },
         409,
       );
+    }
+
+    if (standaloneMode(ctx)) {
+      const transport = ctx.hostWsController?.();
+      if (!transport) {
+        return hostRuntimeDisabledResponse(c, 'host token rotation', 503);
+      }
+      try {
+        await new HostTokenRotationCoordinator({
+          hostTokens,
+          transport,
+          logger: ctx.logger,
+        }).rotateHostToken(hostId);
+      } catch (err) {
+        if (err instanceof HostCredentialIssueError && err.code === 'host_revoked') {
+          return c.json(
+            {
+              error: 'host has been revoked',
+              error_code: 'host_revoked',
+            },
+            409,
+          );
+        }
+        if (err instanceof HostWsCommandTransportError) {
+          return c.json(
+            {
+              error: 'host token rotation transport failed',
+              error_code: err.code,
+            },
+            err.code === 'transport_no_connection' ? 503 : 502,
+          );
+        }
+        if (err instanceof HostTokenRotationError) {
+          return c.json(
+            {
+              error: 'host token rotation rejected by daemon',
+              error_code: 'host_token_rotation_failed',
+              reason: err.details.daemonReason,
+            },
+            502,
+          );
+        }
+        throw err;
+      }
+
+      const refreshed = hosts.get(hostId);
+      if (!refreshed) {
+        throw new Error(`HostRepo.get returned null for rotated host ${hostId}`);
+      }
+      return c.json({
+        host_id: hostId,
+        host: hosts.toDto(refreshed),
+        status: 'rotated',
+      });
     }
 
     let issued: ReturnType<HostTokenService['rotateHostToken']>;

@@ -10,7 +10,11 @@ import {
   X_SILVERHAND_LEGACY_USER_ID_HEADER as LEGACY_USER_ID_HEADER,
   X_SILVERHAND_PRINCIPAL_HEADER as PRINCIPAL_HEADER,
 } from '@silverhand/shared';
-import type { BackendContext, BackendLogger } from '../../src/context.js';
+import type {
+  BackendContext,
+  BackendDeploymentMode,
+  BackendLogger,
+} from '../../src/context.js';
 import { silverhandCors } from '../../src/cors.js';
 import type { AppEnv } from '../../src/auth/principal.js';
 import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
@@ -49,6 +53,7 @@ import { createLocalBlobFileStorage } from '../../src/storage/blob-file-storage.
 import { createLogLevelControl } from '../../src/logger.js';
 import { makeTempSilverhandDir, openTestDb } from './db.js';
 import { RuntimeHostPlacementResolver } from '../../src/runtime/host-placement.js';
+import type { HostWsServerController } from '../../src/ws/host-ws-server.js';
 
 /**
  * Records every call routes / provision make into the runtime host.
@@ -195,6 +200,8 @@ const TEST_FIXTURE_USER_IDS = [
 export interface BuildTestAppOptions {
   authConfig?: Partial<AuthRuntimeConfig>;
   ownedLocalHostUserIds?: string[];
+  deploymentMode?: BackendDeploymentMode;
+  hostWsController?: () => HostWsServerController | null;
 }
 
 export interface TestApp {
@@ -223,8 +230,9 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
 
   const fake = new FakeConversationManager();
   const legacyServerAuthToken = 'a'.repeat(32);
+  const deploymentMode = options.deploymentMode ?? 'embedded';
   const serverConfig: ServerConfig = {
-    mode: 'embedded',
+    mode: deploymentMode === 'standalone' ? 'remote' : 'embedded',
     url: 'http://127.0.0.1:0',
     auth_token: legacyServerAuthToken,
     refresh_token: null,
@@ -270,7 +278,7 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
 
   const ctx: BackendContext = {
     db,
-    deploymentMode: 'embedded',
+    deploymentMode,
     readiness: {
       migrationsApplied: true,
       listenReady: true,
@@ -301,6 +309,7 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
       sessionTtlMs: authConfig.sessionTtlMs,
     }),
     placement,
+    hostWsController: options.hostWsController,
     runtimeHost: fake as unknown as AgentRuntimeHost,
   };
   ctx.channelService = new ChannelService({

@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { apiPaths } from '@silverhand/shared';
+import type {
+  OutboundServerCommandKind,
+  OutboundServerCommandParams,
+  OutboundServerCommandResult,
+} from '@silverhand/host';
 import { HostTokenService, hashHostToken } from '../../src/auth/host-token.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
+import type { HostWsServerController } from '../../src/ws/host-ws-server.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 describe('host routes', () => {
@@ -404,11 +410,19 @@ describe('host routes', () => {
       expect(body.host_token).not.toBe(oldToken);
       expect(body.host).toMatchObject({ id: claimed.host_id, revoked_at: null });
 
-      // 2 rows: prior cred has expires_at in [before+60s, after+60s];
-      // new cred has expires_at = NULL.
+      // 2 rows: prior cred has a scheduled grace revoke in [before+60s, after+60s]
+      // and records the rotation handoff in consumed_at; new cred is active.
       const rows = t.ctx.db
-        .prepare<[string], { token_hash: string; expires_at: number | null; revoked_at: number | null }>(
-          `SELECT token_hash, expires_at, revoked_at
+        .prepare<
+          [string],
+          {
+            token_hash: string;
+            expires_at: number | null;
+            consumed_at: number | null;
+            revoked_at: number | null;
+          }
+        >(
+          `SELECT token_hash, expires_at, consumed_at, revoked_at
              FROM host_credentials
             WHERE host_id = ?
             ORDER BY rowid ASC`,
@@ -419,20 +433,123 @@ describe('host routes', () => {
       const newRow = rows.find(r => r.token_hash === hashHostToken(body.host_token));
       expect(oldRow).toBeDefined();
       expect(newRow).toBeDefined();
-      expect(oldRow!.expires_at).toBeGreaterThanOrEqual(before + 60_000);
-      expect(oldRow!.expires_at).toBeLessThanOrEqual(after + 60_000);
-      expect(oldRow!.revoked_at).toBeNull();
+      expect(oldRow!.expires_at).toBeNull();
+      expect(oldRow!.consumed_at).toBeGreaterThanOrEqual(before);
+      expect(oldRow!.consumed_at).toBeLessThanOrEqual(after);
+      expect(oldRow!.revoked_at).toBeGreaterThanOrEqual(before + 60_000);
+      expect(oldRow!.revoked_at).toBeLessThanOrEqual(after + 60_000);
       expect(newRow!.expires_at).toBeNull();
+      expect(newRow!.consumed_at).toBeNull();
+      expect(newRow!.revoked_at).toBeNull();
 
       // Within the grace window the old token still verifies.
       const verifier = new HostTokenService(t.ctx.db);
       expect(verifier.verifyHostToken(oldToken)).toMatchObject({ ok: true });
       // Past the grace window, it's expired.
       expect(
-        verifier.verifyHostToken(oldToken, { now: oldRow!.expires_at! + 1 }),
+        verifier.verifyHostToken(oldToken, { now: oldRow!.revoked_at! + 1 }),
       ).toMatchObject({ ok: false, code: 'credential_expired' });
       // New token verifies indefinitely.
       expect(verifier.verifyHostToken(body.host_token)).toMatchObject({ ok: true });
+    });
+
+    it('standalone rotates over host websocket without returning cleartext token', async () => {
+      let controller: FakeHostWsController | null = null;
+      t = buildTestApp({
+        deploymentMode: 'standalone',
+        hostWsController: () => controller,
+      });
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const host = new HostRepo(t.ctx.db).getOwnedLocalForUser(t.viewerUserId);
+      expect(host).not.toBeNull();
+      const tokens = new HostTokenService(t.ctx.db);
+      const old = tokens.issueHostToken({ hostId: host!.id });
+      controller = new FakeHostWsController(async call => {
+        expect(call).toMatchObject({
+          hostId: host!.id,
+          kind: 'rotate_token',
+        });
+        expect(call.params.host_token).not.toBe(old.hostToken);
+        return {
+          rotated: true,
+          host_id: host!.id,
+          config_refreshed_at: 1_700_000_000_123,
+        };
+      });
+
+      const res = await sessionHttp(t, userToken).post(
+        apiPaths.hostRotateToken(host!.id),
+      );
+
+      expect(res.status).toBe(200);
+      const body = await res.json() as Record<string, unknown>;
+      expect(body).toMatchObject({
+        host_id: host!.id,
+        status: 'rotated',
+      });
+      expect(body).not.toHaveProperty('host_token');
+      expect(controller!.calls).toHaveLength(1);
+      expect(tokens.verifyHostToken(old.hostToken)).toMatchObject({
+        ok: true,
+        hostId: host!.id,
+      });
+      const oldRow = t.ctx.db
+        .prepare<[string], { consumed_at: number | null; revoked_at: number | null }>(
+          `SELECT consumed_at, revoked_at FROM host_credentials WHERE id = ?`,
+        )
+        .get(old.credential.id);
+      expect(oldRow?.consumed_at).toEqual(expect.any(Number));
+      expect(oldRow?.revoked_at).toEqual(expect.any(Number));
+    });
+
+    it('standalone leaves credentials unchanged when daemon rejects rotate', async () => {
+      let controller: FakeHostWsController | null = null;
+      t = buildTestApp({
+        deploymentMode: 'standalone',
+        hostWsController: () => controller,
+      });
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const host = new HostRepo(t.ctx.db).getOwnedLocalForUser(t.viewerUserId)!;
+      const tokens = new HostTokenService(t.ctx.db);
+      const old = tokens.issueHostToken({ hostId: host.id });
+      const beforeRows = t.ctx.db
+        .prepare<[string], Record<string, unknown>>(
+          `SELECT id, token_hash, consumed_at, revoked_at
+             FROM host_credentials
+            WHERE host_id = ?
+            ORDER BY rowid ASC`,
+        )
+        .all(host.id);
+      controller = new FakeHostWsController(async () => ({
+        rotated: false,
+        reason: 'write_failed',
+        message: 'EACCES',
+      }));
+
+      const res = await sessionHttp(t, userToken).post(
+        apiPaths.hostRotateToken(host.id),
+      );
+
+      expect(res.status).toBe(502);
+      expect(await res.json()).toMatchObject({
+        error_code: 'host_token_rotation_failed',
+        reason: 'write_failed',
+      });
+      expect(
+        t.ctx.db
+          .prepare<[string], Record<string, unknown>>(
+            `SELECT id, token_hash, consumed_at, revoked_at
+               FROM host_credentials
+              WHERE host_id = ?
+              ORDER BY rowid ASC`,
+          )
+          .all(host.id),
+      ).toEqual(beforeRows);
+      expect(tokens.verifyHostToken(old.hostToken)).toMatchObject({ ok: true });
     });
 
     it('returns 404 for cross-user rotate (no enumeration)', async () => {
@@ -503,4 +620,46 @@ function sessionHttp(t: TestApp, token: string) {
 
 function legacyServerAuthHttp(t: TestApp) {
   return http(t, { authorization: `Bearer ${t.legacyServerAuthToken}` });
+}
+
+class FakeHostWsController implements HostWsServerController {
+  readonly calls: Array<{
+    hostId: string;
+    kind: OutboundServerCommandKind;
+    params: any;
+  }> = [];
+
+  constructor(
+    private readonly handler: (call: {
+      hostId: string;
+      kind: OutboundServerCommandKind;
+      params: any;
+    }) => Promise<unknown>,
+  ) {}
+
+  activeConnectionCount(): number {
+    return 1;
+  }
+
+  connectedHostIds(): string[] {
+    return ['host'];
+  }
+
+  connectionIdForHost(): string | null {
+    return 'conn-1';
+  }
+
+  async sendCommand<K extends OutboundServerCommandKind>(
+    hostId: string,
+    kind: K,
+    params: OutboundServerCommandParams<K>,
+  ): Promise<OutboundServerCommandResult<K>> {
+    const call = { hostId, kind, params };
+    this.calls.push(call);
+    return await this.handler(call) as OutboundServerCommandResult<K>;
+  }
+
+  async close(): Promise<void> {
+    // no-op
+  }
 }

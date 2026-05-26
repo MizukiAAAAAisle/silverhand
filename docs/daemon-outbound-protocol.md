@@ -1,6 +1,6 @@
 # Daemon outbound protocol — D2
 
-Status: D2.e delivery-backed dispatch recovery.
+Status: D2.f host token rotation over outbound WebSocket.
 
 This document defines the WebSocket transport introduced in Stage D2 for the
 desktop-local daemon. The orchestration boundary remains
@@ -136,6 +136,46 @@ The `runtime_*` payloads are the accepted D2.0 request surface. `rotate_token`
 is D2's transport-local host credential refresh command; the daemon must write
 the new `daemon-config.json` atomically before acknowledging success.
 
+## Host token rotation
+
+D2.f supports server-initiated rotation only. Daemon-initiated "please rotate
+me" self-healing is a future protocol extension and is not part of V1 prep.
+
+Rotation is a two-phase handshake so the server never revokes the old token
+before the daemon has durably learned the replacement:
+
+```text
+server                 daemon                 fs                  db
+  | prepare token bytes  |                    |                   |
+  | rotate_token -------->                    |                   |
+  |                       | tmp write+rename --> daemon-config    |
+  |                       | chmod 0600         |                   |
+  |                       | update memory token                    |
+  | <------ rotated:true |                    |                   |
+  | insert new credential + mark old consumed_at=issued_at,       |
+  | revoked_at=issued_at+60s ------------------------------------> |
+```
+
+If the daemon cannot write `daemon-config.json`, it replies
+`{ rotated:false, reason:'write_failed' }`; the server leaves
+`host_credentials` unchanged and the caller receives a rotation failure. The
+server also leaves DB rows unchanged for daemon host mismatch or malformed
+config rejection.
+
+After a successful ack the existing WebSocket stays open. Host-token auth is a
+handshake-time check, so the old authenticated connection continues until its
+natural reconnect or heartbeat lifecycle. The daemon does not clear its bounded
+write buffer on rotate; any already-buffered frames on the old connection may
+finish sending. The daemon does, however, update both disk and in-memory config
+before acking, so the next reconnect presents the new token immediately.
+
+The old credential remains valid for a 60s grace window by setting
+`host_credentials.revoked_at = issued_at + 60_000` and recording
+`consumed_at = issued_at` as the rotation handoff timestamp. Stage B
+`verifyHostToken()` accepts that credential only while `revoked_at` is in the
+future; once the grace window passes, reconnect with the old token fails during
+upgrade. Immediate host/credential revocation still has no grace window.
+
 ## Daemon events
 
 Daemon events mirror the existing daemon runtime event surface, with `event`
@@ -269,8 +309,8 @@ The close reason intentionally stays short because WebSocket close reason
 payloads are limited. The structured daemon log is the durable diagnostic
 record for the event that triggered fail-loud overflow.
 
-## D2.e limit
+## D2.f limit
 
-D2.e covers delivery-backed replay and startup-delivery recovery. It still does
-not implement live token rotation lifecycle, D3 desktop lifecycle UI, headless
-remote host provisioning, sandbox capability, or D2.1 file-to-DB migration.
+D2.f covers host token rotation over the outbound WebSocket. It still does not
+implement daemon-initiated rotation, D3 desktop lifecycle UI, headless remote
+host provisioning, sandbox capability, or D2.1 file-to-DB migration.

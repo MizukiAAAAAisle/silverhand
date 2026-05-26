@@ -12,6 +12,13 @@ export interface IssuedHostToken {
   credential: HostCredentialRow;
 }
 
+export interface PreparedHostTokenRotation {
+  hostId: string;
+  hostToken: string;
+  issuedAt: number;
+  graceUntil: number;
+}
+
 export type VerifyHostTokenFailureCode =
   | 'missing'
   | 'credential_not_usable'
@@ -59,28 +66,66 @@ export class HostTokenService {
     const kind = input.kind ?? 'long_lived';
     this.assertHostCanReceiveCredential(input.hostId);
 
-    const hostToken = randomBytes(32).toString('base64url');
-    const tokenHash = hashHostToken(hostToken);
-    const id = randomBytes(12).toString('base64url');
-    this.db
-      .prepare(
-        `INSERT INTO host_credentials
-           (id, host_id, token_hash, kind, expires_at, consumed_at, revoked_at)
-         VALUES (?, ?, ?, ?, ?, ?, NULL)`,
-      )
-      .run(
-        id,
-        input.hostId,
-        tokenHash,
-        kind,
-        input.expiresAt ?? null,
-        input.consumedAt ?? null,
-      );
-    const credential = this.getCredentialById(id);
-    if (!credential) {
-      throw new Error(`HostTokenService.issueHostToken: row missing for id=${id}`);
+    return this.insertHostToken({
+      hostId: input.hostId,
+      hostToken: randomBytes(32).toString('base64url'),
+      kind,
+      expiresAt: input.expiresAt ?? null,
+      consumedAt: input.consumedAt ?? null,
+    });
+  }
+
+  prepareHostTokenRotation(input: {
+    hostId: string;
+    now?: number;
+    graceMs?: number;
+  }): PreparedHostTokenRotation {
+    const issuedAt = input.now ?? Date.now();
+    const graceUntil = issuedAt + (input.graceMs ?? HOST_TOKEN_ROTATION_GRACE_MS);
+    this.assertHostCanReceiveCredential(input.hostId);
+    return {
+      hostId: input.hostId,
+      hostToken: randomBytes(32).toString('base64url'),
+      issuedAt,
+      graceUntil,
+    };
+  }
+
+  completePreparedHostTokenRotation(
+    input: PreparedHostTokenRotation,
+  ): IssuedHostToken {
+    if (input.graceUntil <= input.issuedAt) {
+      throw new Error('HostTokenService.completePreparedHostTokenRotation: invalid grace window');
     }
-    return { hostToken, credential };
+    return this.db.transaction(() => {
+      this.assertHostCanReceiveCredential(input.hostId);
+      const issued = this.insertHostToken({
+        hostId: input.hostId,
+        hostToken: input.hostToken,
+        kind: 'long_lived',
+        expiresAt: null,
+        consumedAt: null,
+      });
+      this.db
+        .prepare(
+          `UPDATE host_credentials
+              SET revoked_at = ?,
+                  consumed_at = COALESCE(consumed_at, ?)
+            WHERE host_id = ?
+              AND id <> ?
+              AND kind = 'long_lived'
+              AND revoked_at IS NULL
+              AND (expires_at IS NULL OR expires_at > ?)`,
+        )
+        .run(
+          input.graceUntil,
+          input.issuedAt,
+          input.hostId,
+          issued.credential.id,
+          input.issuedAt,
+        );
+      return issued;
+    })();
   }
 
   rotateHostToken(input: {
@@ -88,24 +133,9 @@ export class HostTokenService {
     now?: number;
     graceMs?: number;
   }): IssuedHostToken {
-    const now = input.now ?? Date.now();
-    const graceUntil = now + (input.graceMs ?? HOST_TOKEN_ROTATION_GRACE_MS);
-    return this.db.transaction(() => {
-      this.db
-        .prepare(
-          `UPDATE host_credentials
-              SET expires_at = CASE
-                    WHEN expires_at IS NULL OR expires_at > ? THEN ?
-                    ELSE expires_at
-                  END
-            WHERE host_id = ?
-              AND kind = 'long_lived'
-              AND revoked_at IS NULL
-              AND (expires_at IS NULL OR expires_at > ?)`,
-        )
-        .run(graceUntil, graceUntil, input.hostId, now);
-      return this.issueHostToken({ hostId: input.hostId });
-    })();
+    return this.completePreparedHostTokenRotation(
+      this.prepareHostTokenRotation(input),
+    );
   }
 
   revokeCredential(credentialId: string, revokedAt = Date.now()): boolean {
@@ -162,12 +192,21 @@ export class HostTokenService {
       .get(hashHostToken(normalized));
 
     if (!row) return { ok: false, code: 'missing' };
-    if (row.kind !== 'long_lived' || row.consumed_at !== null) {
+    const now = opts.now ?? Date.now();
+    if (row.kind !== 'long_lived') {
       return { ok: false, code: 'credential_not_usable' };
     }
-    if (row.revoked_at !== null) return { ok: false, code: 'credential_revoked' };
-
-    const now = opts.now ?? Date.now();
+    if (row.revoked_at !== null) {
+      if (row.consumed_at !== null) {
+        if (row.revoked_at <= now) {
+          return { ok: false, code: 'credential_expired' };
+        }
+      } else {
+        return { ok: false, code: 'credential_revoked' };
+      }
+    } else if (row.consumed_at !== null) {
+      return { ok: false, code: 'credential_not_usable' };
+    }
     if (row.expires_at !== null && row.expires_at <= now) {
       return { ok: false, code: 'credential_expired' };
     }
@@ -211,6 +250,36 @@ export class HostTokenService {
       )
       .get(id);
     return row ?? null;
+  }
+
+  private insertHostToken(input: {
+    hostId: string;
+    hostToken: string;
+    kind: HostCredentialKind;
+    expiresAt: number | null;
+    consumedAt: number | null;
+  }): IssuedHostToken {
+    const tokenHash = hashHostToken(input.hostToken);
+    const id = randomBytes(12).toString('base64url');
+    this.db
+      .prepare(
+        `INSERT INTO host_credentials
+           (id, host_id, token_hash, kind, expires_at, consumed_at, revoked_at)
+         VALUES (?, ?, ?, ?, ?, ?, NULL)`,
+      )
+      .run(
+        id,
+        input.hostId,
+        tokenHash,
+        input.kind,
+        input.expiresAt,
+        input.consumedAt,
+      );
+    const credential = this.getCredentialById(id);
+    if (!credential) {
+      throw new Error(`HostTokenService.insertHostToken: row missing for id=${id}`);
+    }
+    return { hostToken: input.hostToken, credential };
   }
 
   private assertHostCanReceiveCredential(hostId: string): void {

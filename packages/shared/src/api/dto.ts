@@ -70,18 +70,34 @@ export const HostRevokeResponseSchema = z.object({
 });
 export type HostRevokeResponse = z.infer<typeof HostRevokeResponseSchema>;
 
-/** `POST /api/hosts/{id}/rotate-token` response.
+/** Embedded `POST /api/hosts/{id}/rotate-token` response.
  *
- *  IMPORTANT: this shape is consumed exclusively by Electron main —
- *  `host_token` is cleartext and is written to `daemon-config.json`
+ *  IMPORTANT: this shape is consumed by Electron main only —
+ *  `host_token` is cleartext and must be written to `daemon-config.json`
  *  before any return value crosses the IPC boundary. The renderer
  *  never sees this schema; the renderer-facing IPC return strips
  *  the token and only echoes `{ ok, host_id, status }`. */
-export const HostRotateTokenResponseSchema = z.object({
+export const HostRotateTokenEmbeddedResponseSchema = z.object({
   host_id: z.string(),
   host: HostDtoSchema,
   host_token: z.string().min(1),
 });
+
+/** Standalone D2 outbound rotation response.
+ *
+ *  The cleartext replacement token is delivered only over the authenticated
+ *  host WebSocket `rotate_token` command; the HTTP caller only learns that the
+ *  rotation completed. */
+export const HostRotateTokenStandaloneResponseSchema = z.object({
+  host_id: z.string(),
+  host: HostDtoSchema,
+  status: z.literal('rotated'),
+});
+
+export const HostRotateTokenResponseSchema = z.union([
+  HostRotateTokenEmbeddedResponseSchema,
+  HostRotateTokenStandaloneResponseSchema,
+]);
 export type HostRotateTokenResponse = z.infer<
   typeof HostRotateTokenResponseSchema
 >;

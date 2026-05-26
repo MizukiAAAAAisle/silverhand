@@ -9,7 +9,7 @@ import {
   EVENT_WS_SESSION_COOKIE,
   HostClaimOrCreateResponseSchema,
   HostRevokeResponseSchema,
-  HostRotateTokenResponseSchema,
+  HostRotateTokenEmbeddedResponseSchema,
   ServerInfoSchema,
   UserDtoSchema,
   X_SILVERHAND_LEGACY_USER_ID_HEADER,
@@ -763,7 +763,7 @@ async function rotateHostToken(
     return { ok: false, code: 'network_error', message: `${res.status} ${res.statusText}` };
   }
 
-  const parsed = HostRotateTokenResponseSchema.safeParse(body);
+  const parsed = HostRotateTokenEmbeddedResponseSchema.safeParse(body);
   if (!parsed.success) {
     return { ok: false, code: 'invalid_response' };
   }

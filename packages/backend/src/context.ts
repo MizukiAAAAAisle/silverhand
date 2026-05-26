@@ -18,6 +18,7 @@ import type { PasswordCredentialService } from './auth/password.js';
 import type { AuthSessionService } from './auth/session.js';
 import type { LogLevelControl } from './logger.js';
 import type { RuntimeHostPlacementControl } from './runtime/host-placement.js';
+import type { HostWsServerController } from './ws/host-ws-server.js';
 
 export type BackendDeploymentMode = 'embedded' | 'standalone';
 
@@ -125,6 +126,8 @@ export interface BackendContext {
   authSessions: AuthSessionService;
   /** Shared B.3 host-placement guard for create, membership, and runtime intent paths. */
   placement: RuntimeHostPlacementControl;
+  /** Late-bound outbound host WebSocket controller for standalone daemon transport. */
+  hostWsController?: () => HostWsServerController | null;
   /**
    * Backend-side facade for agent runtime lifecycle. Services and
    * routes route every spawn / stop / wake / clearSession / inbox

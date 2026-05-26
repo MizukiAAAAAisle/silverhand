@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -200,6 +200,113 @@ describe('outbound daemon websocket client', () => {
     });
   });
 
+  it('handles rotate_token by refreshing config, memory token, and next reconnect auth', async () => {
+    const server = await FakeOutboundServer.start();
+    cleanup.push(() => server.close());
+    const now = 1_700_000_000_000;
+    const { client, logger, dir } = startClient(server.url, {
+      now: () => now,
+      backoff: { minDelayMs: 10, maxDelayMs: 10, factor: 2, jitterRatio: 0 },
+    });
+    cleanup.push(() => client.stop('test_done'));
+
+    const first = await server.waitForConnectionCount(1);
+    expect(first.request.headers.authorization).toBe('Bearer host-token');
+    first.ws.send(encodeOutboundFrame({
+      direction: 'server_to_daemon',
+      type: 'command',
+      id: 'rotate-1',
+      kind: 'rotate_token',
+      params: {
+        host_id: 'host-1',
+        host_token: 'new-host-token',
+        issued_at: now,
+        grace_until: now + 60_000,
+      },
+    }));
+
+    await expect(
+      server.waitForFrame(frame =>
+        frame.type === 'command_response' && frame.id === 'rotate-1',
+      ),
+    ).resolves.toMatchObject({
+      direction: 'daemon_to_server',
+      type: 'command_response',
+      id: 'rotate-1',
+      kind: 'rotate_token',
+      result: {
+        rotated: true,
+        host_id: 'host-1',
+        config_refreshed_at: now,
+      },
+    });
+    expect(readConfig(dir)).toMatchObject({
+      server_url: server.url,
+      host_id: 'host-1',
+      host_token: 'new-host-token',
+    });
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({
+        level: 'info',
+        action: 'rotate_token_refreshed',
+        host_id: 'host-1',
+      }),
+    );
+
+    first.ws.close(1001, 'force_reconnect');
+    const second = await server.waitForConnectionCount(2);
+    expect(second.request.headers.authorization).toBe('Bearer new-host-token');
+  });
+
+  it('nacks rotate_token write failure without switching reconnect token', async () => {
+    const server = await FakeOutboundServer.start();
+    cleanup.push(() => server.close());
+    const { client, dir } = startClient(server.url, {
+      writeHostConfig: () => {
+        throw new Error('EACCES');
+      },
+      backoff: { minDelayMs: 10, maxDelayMs: 10, factor: 2, jitterRatio: 0 },
+    });
+    cleanup.push(() => client.stop('test_done'));
+
+    const first = await server.waitForConnectionCount(1);
+    first.ws.send(encodeOutboundFrame({
+      direction: 'server_to_daemon',
+      type: 'command',
+      id: 'rotate-fail',
+      kind: 'rotate_token',
+      params: {
+        host_id: 'host-1',
+        host_token: 'new-host-token',
+        issued_at: 1_700_000_000_000,
+        grace_until: 1_700_000_060_000,
+      },
+    }));
+
+    await expect(
+      server.waitForFrame(frame =>
+        frame.type === 'command_response' && frame.id === 'rotate-fail',
+      ),
+    ).resolves.toMatchObject({
+      direction: 'daemon_to_server',
+      type: 'command_response',
+      id: 'rotate-fail',
+      kind: 'rotate_token',
+      result: {
+        rotated: false,
+        reason: 'write_failed',
+        message: 'EACCES',
+      },
+    });
+    expect(readConfig(dir)).toMatchObject({
+      host_token: 'host-token',
+    });
+
+    first.ws.close(1001, 'force_reconnect');
+    const second = await server.waitForConnectionCount(2);
+    expect(second.request.headers.authorization).toBe('Bearer host-token');
+  });
+
   it('drops runtime_output on bounded-buffer pressure without closing', async () => {
     const server = await FakeOutboundServer.start();
     cleanup.push(() => server.close());
@@ -344,6 +451,12 @@ function testReadyEvent(): Extract<EventFrame, { event: 'ready' }> {
     daemon_pid: 123,
     started_at: 1700000000000,
   };
+}
+
+function readConfig(dir: string): Record<string, unknown> {
+  return JSON.parse(
+    readFileSync(join(dir, DAEMON_HOST_CONFIG_FILENAME), 'utf8'),
+  ) as Record<string, unknown>;
 }
 
 class CapturingDaemonLogger implements DaemonLogger {
