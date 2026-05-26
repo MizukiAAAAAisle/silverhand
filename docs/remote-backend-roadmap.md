@@ -466,7 +466,11 @@ redefine the primitive.
 - Readiness (`GET /readyz`) for process supervisors; existing `/api/health`
   remains process liveness only.
 - Migration runner: idempotent on startup, fails loud on inconsistent
-  state.
+  state, refuses existing DB upgrades unless `SILVERHAND_MIGRATE=1`, backs up
+  the whole data directory to a sibling `<data_dir>-backup-<utc>/` before
+  applying opted-in migrations, uses a migration-phase lock to reject
+  concurrent upgrade attempts, and rejects newer-than-supported schemas even
+  with the env gate set.
 - Embedded mode now imports the server entry point exactly the same
   way standalone deployments do — no special embedded code path beyond
   the listen address and `/auth/embedded-bootstrap` enablement.
@@ -498,6 +502,9 @@ remote control-plane only; daemon transport is D2.
   configured data dir; revokes all sessions for that user.
 - Readiness returns 200 once migrations are applied, the DB is writable, and
   the listen socket is open; liveness stays process-only.
+- Existing DB schema upgrades require `SILVERHAND_MIGRATE=1`; opted-in
+  upgrades write a sibling whole-data-dir backup before applying, while
+  same-version boots do not backup or migrate.
 - Embedded mode startup time within 10% of the previous in-process
   startup.
 

@@ -13,6 +13,7 @@ import {
 } from '@silverhand/backend';
 import type { ServerConfig } from '@silverhand/shared';
 import {
+  resolveMigrationEnv,
   resolveStandaloneServerEnv,
   type StandaloneServerEnvConfig,
 } from './config.js';
@@ -21,17 +22,21 @@ export {
   DEFAULT_SILVERHAND_DATA_DIR,
   DEFAULT_SILVERHAND_DISABLE_SIGNUP,
   DEFAULT_SILVERHAND_LISTEN,
+  DEFAULT_SILVERHAND_MIGRATE,
   DEFAULT_SILVERHAND_SERVER_LOG_LEVEL,
   SILVERHAND_DATA_DIR_ENV,
   SILVERHAND_DISABLE_SIGNUP_ENV,
   SILVERHAND_LISTEN_ENV,
+  SILVERHAND_MIGRATE_ENV,
   SILVERHAND_SERVER_LOG_LEVEL_ENV,
   ServerEnvConfigError,
   parseDataDir,
   parseDisableSignup,
   parseListen,
   parseLogLevel,
+  parseMigrate,
   resolveStandaloneServerEnv,
+  resolveMigrationEnv,
   type ListenConfig,
   type ResolvedValue,
   type StandaloneServerEnvConfig,
@@ -52,6 +57,7 @@ export {
 
 export interface StartEmbeddedSilverhandServerOptions {
   dataDir: string;
+  env?: NodeJS.ProcessEnv;
   serverConfig: ServerConfig;
   hostClient: EmbeddedBackendOptions['hostClient'];
   silverhandCliLauncher: EmbeddedBackendOptions['silverhandCliLauncher'];
@@ -68,6 +74,7 @@ export interface StartStandaloneSilverhandServerOptions {
 export async function startEmbeddedSilverhandServer(
   opts: StartEmbeddedSilverhandServerOptions,
 ): Promise<RunningBackend> {
+  const migrate = resolveMigrationEnv(opts.env ?? process.env);
   return startBackend({
     mode: 'embedded',
     dbPath: join(opts.dataDir, 'silverhand.db'),
@@ -77,6 +84,9 @@ export async function startEmbeddedSilverhandServer(
     logger: opts.logger,
     loggers: opts.loggers,
     logDir: opts.logDir,
+    schemaUpgrade: {
+      allow: migrate.value,
+    },
     hostClient: opts.hostClient,
     listen: opts.listen ?? { hostname: '127.0.0.1', port: 0 },
   });
@@ -115,6 +125,10 @@ export async function startStandaloneSilverhandServer(
         value: config.logLevel.value,
         source: config.logLevel.source,
       },
+      migrate: {
+        value: config.migrate.value,
+        source: config.migrate.source,
+      },
     },
     'silverhand-server config resolved',
   );
@@ -130,6 +144,9 @@ export async function startStandaloneSilverhandServer(
     logger,
     loggers,
     logDir: join(config.dataDir.value, 'logs'),
+    schemaUpgrade: {
+      allow: config.migrate.value,
+    },
     listen: config.listen.value,
   });
 }

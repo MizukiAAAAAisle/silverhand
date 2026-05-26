@@ -8,11 +8,13 @@ export const SILVERHAND_LISTEN_ENV = 'SILVERHAND_LISTEN';
 export const SILVERHAND_DATA_DIR_ENV = 'SILVERHAND_DATA_DIR';
 export const SILVERHAND_DISABLE_SIGNUP_ENV = 'SILVERHAND_DISABLE_SIGNUP';
 export const SILVERHAND_SERVER_LOG_LEVEL_ENV = 'SILVERHAND_LOG_LEVEL';
+export const SILVERHAND_MIGRATE_ENV = 'SILVERHAND_MIGRATE';
 
 export const DEFAULT_SILVERHAND_LISTEN = '127.0.0.1:8080';
 export const DEFAULT_SILVERHAND_DATA_DIR = '/var/lib/silverhand';
 export const DEFAULT_SILVERHAND_DISABLE_SIGNUP = false;
 export const DEFAULT_SILVERHAND_SERVER_LOG_LEVEL: SilverhandLogLevel = 'info';
+export const DEFAULT_SILVERHAND_MIGRATE = false;
 
 export interface ListenConfig {
   hostname: string;
@@ -29,6 +31,7 @@ export interface StandaloneServerEnvConfig {
   dataDir: ResolvedValue<string>;
   disableSignup: ResolvedValue<boolean>;
   logLevel: ResolvedValue<SilverhandLogLevel>;
+  migrate: ResolvedValue<boolean>;
 }
 
 export class ServerEnvConfigError extends Error {
@@ -69,7 +72,19 @@ export function resolveStandaloneServerEnv(
       SILVERHAND_SERVER_LOG_LEVEL_ENV,
       DEFAULT_SILVERHAND_SERVER_LOG_LEVEL,
     ),
+    migrate: resolveMigrationEnv(env),
   };
+}
+
+export function resolveMigrationEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): ResolvedValue<boolean> {
+  return resolveValue(
+    env[SILVERHAND_MIGRATE_ENV],
+    parseMigrate,
+    SILVERHAND_MIGRATE_ENV,
+    DEFAULT_SILVERHAND_MIGRATE,
+  );
 }
 
 function resolveValue<T>(
@@ -131,10 +146,14 @@ export function parseDisableSignup(
   raw: string,
   variable = SILVERHAND_DISABLE_SIGNUP_ENV,
 ): boolean {
-  const value = raw.trim();
-  if (value === '0') return false;
-  if (value === '1') return true;
-  throw new ServerEnvConfigError(variable, 'must be 0 or 1');
+  return parseBoolean01(raw, variable);
+}
+
+export function parseMigrate(
+  raw: string,
+  variable = SILVERHAND_MIGRATE_ENV,
+): boolean {
+  return parseBoolean01(raw, variable);
 }
 
 export function parseLogLevel(
@@ -149,4 +168,11 @@ export function parseLogLevel(
     variable,
     `must be one of ${SILVERHAND_LOG_LEVELS.join(', ')}`,
   );
+}
+
+function parseBoolean01(raw: string, variable: string): boolean {
+  const value = raw.trim();
+  if (value === '0') return false;
+  if (value === '1') return true;
+  throw new ServerEnvConfigError(variable, 'must be 0 or 1');
 }

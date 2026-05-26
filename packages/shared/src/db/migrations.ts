@@ -2246,3 +2246,11 @@ export const migrations: Migration[] = [
     `,
   },
 ];
+
+export const CURRENT_SCHEMA_VERSION =
+  migrations[migrations.length - 1]?.version ?? 0;
+
+// D1.d remote-backend V1 startup guard: automatic startup migration is only
+// supported from the hardened D1 schema forward. Brand-new empty databases are
+// still initialized from scratch.
+export const MIN_SUPPORTED_SCHEMA_VERSION = 31;

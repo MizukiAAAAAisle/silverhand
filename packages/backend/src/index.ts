@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 import { silverhandCors } from './cors.js';
 import { openDatabase } from './db.js';
+import type { MigrationRunResult } from './db.js';
 import { createApiRouter, createInternalRouter } from './routes.js';
 import type { AppEnv } from './auth/principal.js';
 import {
@@ -82,6 +83,9 @@ interface BaseBackendOptions {
   loggers?: Partial<BackendLoggers>;
   /** Where the file logger writes. Optional. */
   logDir?: string;
+  schemaUpgrade?: {
+    allow: boolean;
+  };
 }
 
 export interface EmbeddedBackendOptions extends BaseBackendOptions {
@@ -134,7 +138,46 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     },
     `Backend boot: mode=${opts.mode}; signup=${authConfig.signupEnabled ? 'enabled' : 'disabled'}`,
   );
-  const db = openDatabase(opts.dbPath);
+  let migrationsApplied = false;
+  const migrationResult: { current: MigrationRunResult | null } = { current: null };
+  const migrationStartedAt = performance.now();
+  let db: ReturnType<typeof openDatabase>;
+  try {
+    db = openDatabase(opts.dbPath, {
+      allowSchemaUpgrade: opts.schemaUpgrade?.allow ?? false,
+      onMigrationResult: result => {
+        migrationResult.current = result;
+      },
+      onMigrationsApplied: () => {
+        migrationsApplied = true;
+      },
+    });
+  } catch (err) {
+    logger.error(
+      {
+        code: migrationErrorCode(err),
+        error: errorMessage(err),
+        elapsedMs: elapsedSince(migrationStartedAt),
+      },
+      'Migration aborted',
+    );
+    throw err;
+  }
+  if (
+    migrationResult.current
+    && migrationResult.current.appliedVersions.length > 0
+  ) {
+    logger.info(
+      {
+        fromVersion: migrationResult.current.beforeVersion,
+        toVersion: migrationResult.current.afterVersion,
+        appliedVersions: migrationResult.current.appliedVersions,
+        backupPath: migrationResult.current.backupPath,
+        elapsedMs: elapsedSince(migrationStartedAt),
+      },
+      `Migration applied: v${migrationResult.current.beforeVersion} -> v${migrationResult.current.afterVersion}, backup at ${migrationResult.current.backupPath ?? 'none'}`,
+    );
+  }
   const workspacesRoot = join(opts.silverhandDir, 'workspaces');
   const blobStorage = createLocalBlobFileStorage({ silverhandDir: opts.silverhandDir });
   await ensureWorkspacesRoot(workspacesRoot);
@@ -180,7 +223,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     db,
     deploymentMode: opts.mode,
     readiness: {
-      migrationsApplied: false,
+      migrationsApplied,
       listenReady: false,
     },
     serverConfig: opts.serverConfig,
@@ -216,11 +259,6 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     // Filled immediately below when the daemon runtime host is constructed.
     runtimeHost: undefined as unknown as AgentRuntimeHost,
   };
-  // `openDatabase()` runs migrations synchronously today. Keep this flip
-  // explicit so D1.d can move it to the hardened migration runner completion
-  // point without auditing the default.
-  ctx.readiness.migrationsApplied = true;
-
   // ── Runtime host wiring ─────────────────────────────────────────
   if (opts.mode === 'embedded') {
     const { createDaemonRuntimeHost } = await import('./runtime/daemon-runtime-wiring.js');
@@ -422,6 +460,19 @@ export type {
 export type { AuthRuntimeConfig } from './auth/config.js';
 export { resolveAuthRuntimeConfig } from './auth/config.js';
 export {
+  CURRENT_SCHEMA_VERSION,
+  MIN_SUPPORTED_SCHEMA_VERSION,
+} from '@silverhand/shared';
+export {
+  DatabaseMigrationError,
+  currentSchemaVersion,
+  type DatabaseMigrationErrorCode,
+  type MigrationBackupInfo,
+  type MigrationRunResult,
+  type OpenDatabaseOptions,
+  type RunMigrationsOptions,
+} from './db.js';
+export {
   AdminResetPasswordError,
   resetAdminPassword,
   type AdminResetPasswordErrorCode,
@@ -437,6 +488,22 @@ export {
   type FileLoggerOptions,
   type LogLevelControl,
 } from './logger.js';
+
+function elapsedSince(startedAt: number): number {
+  return Math.round((performance.now() - startedAt) * 10) / 10;
+}
+
+function migrationErrorCode(err: unknown): string {
+  if (err && typeof err === 'object' && 'code' in err) {
+    return String((err as { code?: unknown }).code);
+  }
+  return 'migration_failed';
+}
+
+function errorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
 
 const DISABLED_SILVERHAND_CLI_LAUNCHER: SilverhandCliLauncher = {
   command: 'silverhand',

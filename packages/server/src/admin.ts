@@ -6,6 +6,7 @@ import {
   AdminResetPasswordError,
   createCategorizedLoggers,
   createLogLevelControl,
+  DatabaseMigrationError,
   resetAdminPassword,
   type CategorizedLoggers,
   type FileLogger,
@@ -15,10 +16,12 @@ import {
   DEFAULT_SILVERHAND_DATA_DIR,
   DEFAULT_SILVERHAND_SERVER_LOG_LEVEL,
   SILVERHAND_DATA_DIR_ENV,
+  SILVERHAND_MIGRATE_ENV,
   SILVERHAND_SERVER_LOG_LEVEL_ENV,
   ServerEnvConfigError,
   parseDataDir,
   parseLogLevel,
+  parseMigrate,
   type ResolvedValue,
 } from './config.js';
 
@@ -86,6 +89,7 @@ export async function runAdminCommand(
       dbPath: join(config.dataDir.value, 'silverhand.db'),
       email: input.data.email,
       password: input.data.password,
+      allowSchemaUpgrade: config.migrate.value,
       logger: loggers.cli,
     });
     stdout.write(
@@ -269,6 +273,7 @@ async function promptMaskedPassword(): Promise<string> {
 interface StandaloneAdminEnvConfig {
   dataDir: ResolvedValue<string>;
   logLevel: ResolvedValue<ReturnType<typeof parseLogLevel>>;
+  migrate: ResolvedValue<boolean>;
 }
 
 function resolveStandaloneAdminEnv(
@@ -286,6 +291,12 @@ function resolveStandaloneAdminEnv(
       parseLogLevel,
       SILVERHAND_SERVER_LOG_LEVEL_ENV,
       DEFAULT_SILVERHAND_SERVER_LOG_LEVEL,
+    ),
+    migrate: resolveAdminValue(
+      env[SILVERHAND_MIGRATE_ENV],
+      parseMigrate,
+      SILVERHAND_MIGRATE_ENV,
+      false,
     ),
   };
 }
@@ -330,6 +341,9 @@ function mapAdminCommandError(err: unknown): { code: string; message: string } {
     return { code: err.code, message: err.message };
   }
   if (err instanceof AdminResetPasswordError) {
+    return { code: err.code, message: err.message };
+  }
+  if (err instanceof DatabaseMigrationError) {
     return { code: err.code, message: err.message };
   }
   if (err instanceof ServerEnvConfigError) {

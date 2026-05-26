@@ -26,6 +26,7 @@ runtime difference is explicit config (`mode='embedded'` plus a daemon
 | `SILVERHAND_DATA_DIR` | `/var/lib/silverhand` | absolute path | `dataDir.source` |
 | `SILVERHAND_DISABLE_SIGNUP` | `0` | `0` or `1` | `disableSignup.source` |
 | `SILVERHAND_LOG_LEVEL` | `info` | `error`, `warn`, `info`, or `debug` | `logLevel.source` |
+| `SILVERHAND_MIGRATE` | `0` | `0` or `1` | `migrate.source` |
 
 `source` is `default` when the process used the default and `env` when the
 variable was supplied. Invalid values fail before the HTTP listener starts.
@@ -53,6 +54,30 @@ is single-replica SQLite/WAL only.
 Carrying an embedded-mode DB into standalone mode is unsupported in V1:
 standalone control-plane mode does not reconcile embedded daemon runtime state,
 and old schedules may target a disabled host runtime.
+
+## Schema Migrations
+
+Fresh installs initialize the current schema without an opt-in. Existing
+databases behave differently:
+
+- If `silverhand.db` is already at the current code-supported schema version,
+  startup is idempotent: no backup and no migration.
+- If `silverhand.db` is older than the current code-supported schema version,
+  startup fails by default with a message that includes the detected version,
+  target version, sibling backup path pattern, and `SILVERHAND_MIGRATE=1`.
+- With `SILVERHAND_MIGRATE=1`, startup first checkpoints WAL, copies the entire
+  data directory to a sibling backup directory named
+  `<data_dir>-backup-<utc>/`, then applies pending migrations. Example:
+  `/var/lib/silverhand` backs up to `/var/lib/silverhand-backup-20260526T140000Z/`.
+- If backup copy fails, migrations do not run and startup exits non-zero.
+- If the DB schema is newer than this server binary supports, startup always
+  fails, even with `SILVERHAND_MIGRATE=1`; restore a compatible backup instead
+  of running an older binary against a newer DB.
+
+Backup retention is operator-owned. Silverhand creates a new timestamped
+sibling directory for every opted-in migration and does not prune older backups.
+Startup and admin commands hold a sibling `<data_dir>.migration.lock` directory
+only for the migration phase so concurrent upgrade attempts fail fast.
 
 ## Health And Readiness
 
@@ -108,7 +133,9 @@ users.
 
 Admin commands use the same SQLite database and acquire a write lock with
 fail-fast semantics. If another process is writing the DB, the command exits
-non-zero with `db_locked`; retry after the write lock is free.
+non-zero with `db_locked`; retry after the write lock is free. If another
+startup or admin process is in the migration phase, the command exits
+non-zero with `migration_locked`.
 
 ## Examples
 
@@ -119,6 +146,14 @@ SILVERHAND_LISTEN=127.0.0.1:8080 \
 SILVERHAND_DATA_DIR=/var/lib/silverhand \
 SILVERHAND_DISABLE_SIGNUP=1 \
 SILVERHAND_LOG_LEVEL=info \
+pnpm --filter @silverhand/server start
+```
+
+Opt-in schema upgrade:
+
+```bash
+SILVERHAND_MIGRATE=1 \
+SILVERHAND_DATA_DIR=/var/lib/silverhand \
 pnpm --filter @silverhand/server start
 ```
 

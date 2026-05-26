@@ -1,7 +1,25 @@
 import Database from 'better-sqlite3';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { migrations } from '@silverhand/shared';
-import { runMigrations } from '../src/db.js';
+import {
+  CURRENT_SCHEMA_VERSION,
+  MIN_SUPPORTED_SCHEMA_VERSION,
+  migrations,
+} from '@silverhand/shared';
+import {
+  backupDataDirBeforeMigration,
+  currentSchemaVersion,
+  openDatabase,
+  runMigrations,
+} from '../src/db.js';
 
 function openDbAt(version: number): Database.Database {
   const db = new Database(':memory:');
@@ -164,6 +182,357 @@ function seedV15SystemDmFixture(db: Database.Database): void {
 }
 
 describe('database migrations', () => {
+  it('initializes a clean DB to the current schema version', () => {
+    let completed = false;
+    const db = openDatabase(':memory:', {
+      onMigrationsApplied: () => {
+        completed = true;
+      },
+    });
+    try {
+      expect(completed).toBe(true);
+      expect(currentSchemaVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('reruns idempotently when the DB is already at the current version', () => {
+    const db = openDatabase(':memory:');
+    try {
+      const first = currentSchemaVersion(db);
+      const second = runMigrations(db, {
+        expectedVersion: CURRENT_SCHEMA_VERSION,
+        minimumSupportedVersion: MIN_SUPPORTED_SCHEMA_VERSION,
+      });
+      expect(first).toBe(CURRENT_SCHEMA_VERSION);
+      expect(second).toEqual({
+        beforeVersion: CURRENT_SCHEMA_VERSION,
+        afterVersion: CURRENT_SCHEMA_VERSION,
+        appliedVersions: [],
+        backupPath: null,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it('requires env-style opt-in before upgrading an existing DB', () => {
+    const db = new Database(':memory:');
+    try {
+      db.exec(`
+        CREATE TABLE _migrations (
+          version INTEGER PRIMARY KEY,
+          name    TEXT NOT NULL,
+          applied_at INTEGER NOT NULL
+        );
+        INSERT INTO _migrations (version, name, applied_at)
+        VALUES (31, 'current', 1);
+      `);
+      expect(() =>
+        runMigrations(db, {
+          migrations: [
+            {
+              version: 32,
+              name: 'future',
+              up: `CREATE TABLE future_rows (id TEXT PRIMARY KEY);`,
+            },
+          ],
+          expectedVersion: 32,
+          minimumSupportedVersion: 31,
+          allowSchemaUpgrade: false,
+        }),
+      ).toThrow(/SILVERHAND_MIGRATE=1/);
+      expect(currentSchemaVersion(db)).toBe(31);
+      expect(
+        db
+          .prepare(
+            `SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'future_rows'`,
+          )
+          .get(),
+      ).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('backs up the whole data directory before an opted-in schema upgrade', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'silverhand-migration-backup-test-'));
+    const dataDir = join(dir, '.silverhand');
+    const dbPath = join(dataDir, 'silverhand.db');
+    mkdirSync(join(dataDir, 'blobs'), { recursive: true });
+    mkdirSync(join(dataDir, 'logs'), { recursive: true });
+    mkdirSync(join(dataDir, 'workspaces'), { recursive: true });
+    writeFileSync(join(dataDir, 'blobs', 'blob.txt'), 'blob bytes');
+    writeFileSync(join(dataDir, 'logs', 'backend.log'), 'log bytes');
+    writeFileSync(join(dataDir, 'workspaces', 'workspace.txt'), 'workspace bytes');
+    const db = new Database(dbPath);
+    try {
+      db.exec(`
+        CREATE TABLE _migrations (
+          version INTEGER PRIMARY KEY,
+          name    TEXT NOT NULL,
+          applied_at INTEGER NOT NULL
+        );
+        INSERT INTO _migrations (version, name, applied_at)
+        VALUES (31, 'current', 1);
+
+        CREATE TABLE preserved_rows (id TEXT PRIMARY KEY);
+        INSERT INTO preserved_rows (id) VALUES ('before');
+      `);
+      const result = runMigrations(db, {
+        migrations: [
+          {
+            version: 32,
+            name: 'future',
+            up: `CREATE TABLE future_rows (id TEXT PRIMARY KEY);`,
+          },
+        ],
+        expectedVersion: 32,
+        minimumSupportedVersion: 31,
+        allowSchemaUpgrade: true,
+        backupBeforeMigration: info =>
+          backupDataDirBeforeMigration(db, { dbPath, ...info }),
+      });
+      expect(result.beforeVersion).toBe(31);
+      expect(result.afterVersion).toBe(32);
+      expect(result.appliedVersions).toEqual([32]);
+      expect(result.backupPath).toMatch(/\.silverhand-backup-\d{8}T\d{6}Z$/);
+      expect(currentSchemaVersion(db)).toBe(32);
+      expect(
+        db
+          .prepare(
+            `SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'future_rows'`,
+          )
+          .get(),
+      ).toBeDefined();
+
+      expect(
+        readFileSync(join(result.backupPath!, 'blobs', 'blob.txt'), 'utf8'),
+      ).toBe('blob bytes');
+      expect(
+        readFileSync(join(result.backupPath!, 'logs', 'backend.log'), 'utf8'),
+      ).toBe('log bytes');
+      expect(
+        readFileSync(
+          join(result.backupPath!, 'workspaces', 'workspace.txt'),
+          'utf8',
+        ),
+      ).toBe('workspace bytes');
+
+      const backupDb = new Database(
+        join(result.backupPath!, 'silverhand.db'),
+        { readonly: true },
+      );
+      try {
+        expect(currentSchemaVersion(backupDb)).toBe(31);
+        expect(
+          backupDb.prepare(`SELECT id FROM preserved_rows`).get(),
+        ).toEqual({ id: 'before' });
+        expect(
+          backupDb
+            .prepare(
+              `SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'future_rows'`,
+            )
+            .get(),
+        ).toBeUndefined();
+      } finally {
+        backupDb.close();
+      }
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not apply migrations when the pre-migration backup fails', () => {
+    const db = new Database(':memory:');
+    try {
+      db.exec(`
+        CREATE TABLE _migrations (
+          version INTEGER PRIMARY KEY,
+          name    TEXT NOT NULL,
+          applied_at INTEGER NOT NULL
+        );
+        INSERT INTO _migrations (version, name, applied_at)
+        VALUES (31, 'current', 1);
+      `);
+      expect(() =>
+        runMigrations(db, {
+          migrations: [
+            {
+              version: 32,
+              name: 'future',
+              up: `CREATE TABLE future_rows (id TEXT PRIMARY KEY);`,
+            },
+          ],
+          expectedVersion: 32,
+          minimumSupportedVersion: 31,
+          allowSchemaUpgrade: true,
+          backupBeforeMigration: () => {
+            throw new Error('backup path is not writable');
+          },
+        }),
+      ).toThrow(/backup path is not writable/);
+      expect(currentSchemaVersion(db)).toBe(31);
+      expect(
+        db
+          .prepare(
+            `SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'future_rows'`,
+          )
+          .get(),
+      ).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('rolls back a failed migration and does not call the completion hook', () => {
+    const db = new Database(':memory:');
+    let completed = false;
+    try {
+      expect(() =>
+        runMigrations(db, {
+          migrations: [
+            {
+              version: 1,
+              name: 'stable',
+              up: `CREATE TABLE stable_rows (id TEXT PRIMARY KEY);`,
+            },
+            {
+              version: 2,
+              name: 'broken',
+              up: `
+                CREATE TABLE broken_rows (id TEXT PRIMARY KEY);
+                INSERT INTO missing_table VALUES ('fail');
+              `,
+            },
+          ],
+          onMigrationsApplied: () => {
+            completed = true;
+          },
+        }),
+      ).toThrow(/missing_table/);
+      expect(completed).toBe(false);
+      expect(currentSchemaVersion(db)).toBe(1);
+      expect(
+        db
+          .prepare(
+            `SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'stable_rows'`,
+          )
+          .get(),
+      ).toBeDefined();
+      expect(
+        db
+          .prepare(
+            `SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'broken_rows'`,
+          )
+          .get(),
+      ).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('rejects startup when the DB schema is older than the minimum supported version', () => {
+    const db = new Database(':memory:');
+    try {
+      db.exec(`
+        CREATE TABLE _migrations (
+          version INTEGER PRIMARY KEY,
+          name    TEXT NOT NULL,
+          applied_at INTEGER NOT NULL
+        );
+        INSERT INTO _migrations (version, name, applied_at)
+        VALUES (1, 'initial', 1);
+      `);
+      expect(() =>
+        runMigrations(db, {
+          expectedVersion: CURRENT_SCHEMA_VERSION,
+          minimumSupportedVersion: MIN_SUPPORTED_SCHEMA_VERSION,
+        }),
+      ).toThrow(/older than minimum supported/);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('rejects unsupported pre-migration application DBs without creating _migrations', () => {
+    const db = new Database(':memory:');
+    try {
+      db.exec(`CREATE TABLE legacy_rows (id TEXT PRIMARY KEY);`);
+      expect(() =>
+        runMigrations(db, {
+          expectedVersion: CURRENT_SCHEMA_VERSION,
+          minimumSupportedVersion: MIN_SUPPORTED_SCHEMA_VERSION,
+        }),
+      ).toThrow(/older than minimum supported/);
+      expect(
+        db
+          .prepare(
+            `SELECT name FROM sqlite_schema WHERE type = 'table' AND name = '_migrations'`,
+          )
+          .get(),
+      ).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('rejects startup when the DB schema is newer than this code supports', () => {
+    const db = new Database(':memory:');
+    try {
+      db.exec(`
+        CREATE TABLE _migrations (
+          version INTEGER PRIMARY KEY,
+          name    TEXT NOT NULL,
+          applied_at INTEGER NOT NULL
+        );
+        INSERT INTO _migrations (version, name, applied_at)
+        VALUES (999, 'future', 1);
+      `);
+      expect(() =>
+        runMigrations(db, {
+          expectedVersion: CURRENT_SCHEMA_VERSION,
+          minimumSupportedVersion: MIN_SUPPORTED_SCHEMA_VERSION,
+        }),
+      ).toThrow(/newer than supported/);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('fails fast when the migration phase cannot acquire the SQLite write lock', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'silverhand-migration-lock-test-'));
+    const dbPath = join(dir, 'silverhand.db');
+    const db = openDatabase(dbPath);
+    try {
+      db.exec('BEGIN EXCLUSIVE');
+      try {
+        expect(() => openDatabase(dbPath)).toThrow(/database is locked|SQLITE_BUSY/i);
+      } finally {
+        db.exec('ROLLBACK');
+      }
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails fast when another process owns the migration lock directory', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'silverhand-migration-dir-lock-test-'));
+    const dataDir = join(dir, '.silverhand');
+    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(join(dir, '.silverhand.migration.lock'));
+    try {
+      expect(() => openDatabase(join(dataDir, 'silverhand.db'))).toThrow(
+        /migration lock/,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('v16 splits the legacy system DM workspace into one multi-channel agent_home', () => {
     const db = openDbAt(15);
     try {

@@ -1,4 +1,5 @@
 import { mkdtemp, rm } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -11,6 +12,12 @@ import {
 } from '../src/index.js';
 
 const tmpDirs: string[] = [];
+const require = createRequire(import.meta.url);
+const Database = require('better-sqlite3') as new (path: string) => {
+  pragma(sql: string): unknown;
+  exec(sql: string): void;
+  close(): void;
+};
 
 afterEach(async () => {
   await Promise.all(
@@ -32,6 +39,15 @@ describe('standalone server env config', () => {
     });
     expect(resolved.disableSignup).toEqual({ value: false, source: 'default' });
     expect(resolved.logLevel).toEqual({ value: 'info', source: 'default' });
+    expect(resolved.migrate).toEqual({
+      value: false,
+      source: 'default',
+    });
+
+    expect(resolveStandaloneServerEnv({ SILVERHAND_MIGRATE: '1' }).migrate).toEqual({
+      value: true,
+      source: 'env',
+    });
   });
 
   it('validates env values before boot', () => {
@@ -46,6 +62,9 @@ describe('standalone server env config', () => {
     ).toThrow(ServerEnvConfigError);
     expect(() =>
       resolveStandaloneServerEnv({ SILVERHAND_LOG_LEVEL: 'trace' }),
+    ).toThrow(ServerEnvConfigError);
+    expect(() =>
+      resolveStandaloneServerEnv({ SILVERHAND_MIGRATE: 'true' }),
     ).toThrow(ServerEnvConfigError);
   });
 
@@ -171,6 +190,31 @@ describe('standalone server env config', () => {
       });
     } finally {
       await running.close();
+    }
+  });
+
+  it('fails fast when startup cannot acquire the migration lock', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'silverhand-server-test-'));
+    tmpDirs.push(dataDir);
+    const env = {
+      SILVERHAND_LISTEN: '127.0.0.1:0',
+      SILVERHAND_DATA_DIR: dataDir,
+      SILVERHAND_LOG_LEVEL: 'warn',
+    };
+    const initialized = await startStandaloneSilverhandServer({ env });
+    await initialized.close();
+
+    const lockDb = new Database(join(dataDir, 'silverhand.db'));
+    lockDb.pragma('journal_mode = WAL');
+    lockDb.pragma('busy_timeout = 0');
+    lockDb.exec('BEGIN EXCLUSIVE');
+    try {
+      await expect(startStandaloneSilverhandServer({ env })).rejects.toThrow(
+        /database is locked|SQLITE_BUSY/i,
+      );
+    } finally {
+      lockDb.exec('ROLLBACK');
+      lockDb.close();
     }
   });
 });

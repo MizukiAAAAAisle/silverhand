@@ -24,6 +24,7 @@ export interface AdminResetPasswordOptions {
   dbPath: string;
   email: string;
   password: string;
+  allowSchemaUpgrade?: boolean;
   logger?: BackendLogger;
 }
 
@@ -32,7 +33,10 @@ export async function resetAdminPassword(
 ): Promise<UserPasswordResetResult> {
   let db: ReturnType<typeof openDatabase>;
   try {
-    db = openDatabase(opts.dbPath, { busyTimeoutMs: 0 });
+    db = openDatabase(opts.dbPath, {
+      busyTimeoutMs: 0,
+      allowSchemaUpgrade: opts.allowSchemaUpgrade ?? false,
+    });
   } catch (err) {
     mapAdminDbError(err);
   }
