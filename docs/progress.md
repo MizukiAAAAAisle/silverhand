@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-05-26 — Remote backend V1 prep Stage C.6：server-config bearer 退役
+
+- `server-config.json.auth_token` 软退役：shared schema 只做 optional read-compat，新写配置省略该字段，desktop 不再生成随机 long-lived bearer。
+- Public `/api/*` bearer 只接受 user session token；旧 server-config token 即使带 legacy viewer/principal header 也只是 401 invalid bearer。Host claim/list/revoke/rotate 继续要求 session bearer，但不再 special-case 旧 token。
+- Event WS cookie 只校验 session token；不再读取 `serverConfig.auth_token`。
+- `pnpm dev:headless` stdout 改为 `{ url, port, bootstrap_token_path, silverhand_dir }`，headless smoke 通过 one-shot `embedded-bootstrap` 文件调用 `/auth/embedded-bootstrap` 换取 user session bearer；Electron main 只在非 headless 模式自动消费 bootstrap 文件。
+- docs 同步 `auth-and-host-model.md`、`protocol-purity-checklist.md`、`testing.md`、`cli-system.md` 等当前操作路径。
+
+---
+
 ## 2026-05-21 — `silverhand-daemon` PR-1（AgentHost runtime boundary, IPC skeleton）
 
 - **新 package `@silverhand/host`** 落地 `#task:510`。包含三块：
@@ -2011,4 +2021,3 @@ messages → activity runs (clusterable subtype + 相邻 + 5min gap) → split b
 - #task:5 in_review，工作树**未 commit**（按 @shiki 标准纪律）
 - 质量门：`pnpm -r typecheck` ✅ / backend 59 files / 718 tests ✅ / desktop 11 files / 191 tests ✅ / `git diff --check` ✅
 - 等 @shiki 用备份做真实验收 → commit 决定（commit 时倾向拆成 "shared/migrations + backend/adoption" 两个 commit）
-

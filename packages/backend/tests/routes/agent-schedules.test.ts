@@ -298,13 +298,12 @@ describe('POST /api/agents/:id/schedules/:scheduleId/cancel', () => {
     // been logging `ctx.serverConfig.user_id` (always null in the
     // single-host desktop setup), which silently dropped the desktop
     // viewer's id. Switching to `resolveViewerUserId` makes the
-    // principal header authoritative — pin it so a regression cannot
+    // request principal authoritative — pin it so a regression cannot
     // re-introduce the null-id audit.
     t = buildTestApp();
     const infoSpy = vi.spyOn(t.ctx.logger, 'info');
-    // Seed the desktop user the test impersonates via the principal
-    // header. Without this row the v21-tightened middleware rejects
-    // the request as "principal user does not exist".
+    // Seed the desktop user the test impersonates. The test helper
+    // mints the matching session bearer from the request headers.
     const now = Date.now();
     t.ctx.db
       .prepare(

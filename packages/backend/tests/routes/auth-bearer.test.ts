@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { EVENT_WS_SESSION_COOKIE, apiPaths } from '@silverhand/shared';
+import {
+  EVENT_WS_SESSION_COOKIE,
+  X_SILVERHAND_LEGACY_USER_ID_HEADER,
+  apiPaths,
+} from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 describe('Public bearer enforcement on /api/*', () => {
@@ -43,22 +47,25 @@ describe('Public bearer enforcement on /api/*', () => {
     expect(res.status).toBe(401);
   });
 
-  it('accepts /api/* requests with the correct bearer token (200)', async () => {
+  it('accepts /api/* requests with a user session bearer (200)', async () => {
     t = buildTestApp();
     const res = await http(t).get('/api/workspaces');
     expect(res.status).toBe(200);
   });
 
-  it('does not resolve legacy bearer into a viewer without an explicit principal', async () => {
+  it('rejects the retired server-config bearer even with a fabricated viewer header', async () => {
     t = buildTestApp();
     const res = await t.app.fetch(
       new Request('http://localhost/api/workspaces', {
         method: 'GET',
-        headers: { authorization: `Bearer ${t.authToken}` },
+        headers: {
+          authorization: `Bearer ${t.legacyServerAuthToken}`,
+          [X_SILVERHAND_LEGACY_USER_ID_HEADER]: 'local',
+        },
       }),
     );
-    expect(res.status).toBe(403);
-    expect(await res.json()).toMatchObject({ code: 'registration_required' });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ error: 'unauthorized' });
   });
 
   it(`allowlists ${apiPaths.health} so liveness probes bypass the bearer check`, async () => {

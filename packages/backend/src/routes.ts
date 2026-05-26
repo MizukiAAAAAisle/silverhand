@@ -304,7 +304,7 @@ function resolveViewerUserId(c: Context): string {
 
 function requireSessionBearerUser(c: Context, ctx: BackendContext): Response | string {
   const token = bearerToken(c);
-  if (!token || token === ctx.serverConfig.auth_token) {
+  if (!token) {
     return c.json(
       {
         error: 'host claim requires a user session bearer',
@@ -313,7 +313,17 @@ function requireSessionBearerUser(c: Context, ctx: BackendContext): Response | s
       401,
     );
   }
-  return getUserPrincipal(c).userId;
+  const session = ctx.authSessions.validateSessionToken(token);
+  if (!session.ok) {
+    return c.json(
+      {
+        error: 'host claim requires a user session bearer',
+        code: 'session_bearer_required',
+      },
+      401,
+    );
+  }
+  return session.session.user_id;
 }
 
 function authFailed(c: Context): Response {
@@ -609,17 +619,13 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     // without holding the auth token.
     allowlist: [apiPaths.health, apiPaths.serverInfo],
   });
-  installPublicPrincipalMiddleware(app, ctx);
-  // Registration gate: when the request has no user principal, this
-  // gate refuses every public route except public setup reads
-  // (`GET /api/server/info`) and `GET /api/me` (so the renderer can
-  // branch on the registration-required shape).
-  // `/api/health`, `/auth/*`, and `/internal/*` are anonymous /
-  // route-owned / agent-principal and skip both layers. After
-  // registration, the principal is set and the gate is a no-op for the
-  // viewer; under DB corruption (principal set but row missing) it 500s.
-  // Renderer-side `App.tsx` mirrors this by mounting `<RegistrationGate />`
-  // instead of the AppShell while in the registration-required state.
+  installPublicPrincipalMiddleware(app);
+  // Registration gate: after the public bearer middleware authenticates
+  // a session, this verifies the user row still exists before public
+  // data routes run. `/api/health`, `/api/server/info`, `/auth/*`, and
+  // `/internal/*` are anonymous / route-owned / agent-principal and skip
+  // the relevant public layers. Under DB corruption (principal set but
+  // row missing) it 500s.
   installRequireRegisteredViewerMiddleware(app, ctx, {
     whitelistPaths: [apiPaths.serverInfo, apiPaths.me],
   });
@@ -758,8 +764,8 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   });
 
   // GET /api/hosts — owner-scoped list (Stage B.4 viewer filter).
-  // Session bearer required; legacy embedded auth_token rejected so a
-  // pre-Stage-A renderer cannot enumerate other users' hosts. Returns
+  // Session bearer required; pre-session callers cannot enumerate
+  // other users' hosts. Returns
   // every host (active + revoked) belonging to the caller, sorted
   // active-first then by created_at.
   app.get(apiPaths.hosts, c => {
@@ -2885,8 +2891,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       const schedule = ctx.scheduleService.cancel(scheduleId, agent.id);
       // Audit hook (no separate audit infra in v1 — single-host model
       // means logger is the audit trail). The viewer id comes from the
-      // request principal resolved by session bearer or explicit legacy
-      // principal header.
+      // request principal resolved by session bearer.
       ctx.logger.info(
         {
           user_id: resolveViewerUserId(c),
@@ -3149,11 +3154,10 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   });
 
   // ── Current viewer (user profile) ────────────────────────────────
-  // GET /api/me is a public setup read. Before authentication it returns
-  // `{ registration_required: true, suggested_name }` so the renderer can
-  // mount `<RegistrationGate />`. Once the viewer is authenticated the
-  // principal middleware sets a user principal and this returns the
-  // resolved UserDto.
+  // GET /api/me returns the resolved UserDto for the authenticated
+  // session subject. The unauthenticated setup path lives under
+  // `/auth/*` / desktop `auth:getState`; public `/api/*` no longer
+  // accepts the retired server-config bearer.
   //
   // Boundary contract:
   //   - `/auth/signup` is the public credentialed creator of users.
@@ -3163,9 +3167,8 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   //     exposed at any service / route surface.
   //   - Avatar lives on its own routes (POST/DELETE /api/me/avatar)
   app.get(apiPaths.me, c => {
-    // Whitelisted route — principal may be absent in the
-    // registration-required state. Branch on its presence rather than
-    // calling `requireViewerUserId` (which throws).
+    // Kept defensive for tests or future setup allowlists. Normal C.6+
+    // public API traffic reaches this route with a session principal.
     const principal = c.get('principal');
     if (!principal || principal.kind !== 'user') {
       return c.json({

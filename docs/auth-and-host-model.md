@@ -453,9 +453,10 @@ treats `revoked_at != NULL` and missing row identically (deny).
 - **Owner check uses 404, not 403,** for missing or cross-user host ids
   (matches the route ACL convention from A.3 §2.5: "non-visible →
   404"). No `host_id` enumeration through this surface.
-- The route requires a **session bearer** (`requireSessionBearerUser`);
-  legacy embedded auth_token is rejected with `code:
-  session_bearer_required` so a pre-Stage-A renderer cannot reach it.
+- The route requires a **session bearer** (`requireSessionBearerUser`).
+  The retired embedded server-config token is not accepted by public
+  bearer auth at all, so a pre-Stage-A renderer cannot reach it by
+  forging viewer headers.
 
 ### 6.4 Host_token rotation
 
@@ -494,8 +495,8 @@ treats `revoked_at != NULL` and missing row identically (deny).
 
 `GET /api/hosts` is **owner-scoped** (Stage B.4 viewer filter):
 
-- Session bearer required; legacy embedded auth_token → 401
-  `code: session_bearer_required`.
+- Session bearer required. A retired server-config bearer is treated as
+  an invalid public bearer (401) before the host route runs.
 - Returns every host owned by the caller, including revoked rows
   (sorted active-first, then by `created_at`). `HostDto` includes
   `revoked_at` and `last_seen_at` so the Settings page can render

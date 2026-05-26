@@ -14,7 +14,7 @@ export const apiPaths = {
    *  credentials but does not move the original tombstone timestamp.
    *  No row cascade — agents/conversations bound to the host are
    *  preserved; runtime placement fails closed instead. Bearer must
-   *  be a session bearer (legacy embedded auth_token rejected). */
+   *  be a user session bearer. */
   hostRevoke: (id: string) => `/api/hosts/${id}/revoke`,
   /** Rotate the long-lived credential for a host the caller owns
    *  (Stage B.4). Server applies a 60-second grace to the prior

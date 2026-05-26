@@ -1,8 +1,6 @@
 import type { Context, Hono } from 'hono';
 import {
   apiPaths,
-  decodeUserPrincipalHeader,
-  X_SILVERHAND_LEGACY_USER_ID_HEADER,
   X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
 import type { BackendContext } from '../context.js';
@@ -11,11 +9,10 @@ import type { ConversationRepo } from '../repos/conversation-repo.js';
 import { UserRepo } from '../repos/user-repo.js';
 
 /**
- * Public user principal resolved from the request itself. Stage A.3
- * removes the old `app_settings.viewer_user_id` fallback: callers must
- * present a session bearer (preferred) or an explicit legacy principal
- * header during the transition. No request-bound principal means the
- * registration gate sees "no viewer" and refuses non-whitelisted routes.
+ * Public user principal resolved from the request itself. Public API
+ * callers must present a user session bearer; the bearer middleware sets
+ * the principal. No request-bound principal means the registration gate
+ * sees "no viewer" and refuses non-whitelisted routes.
  */
 export type UserPrincipal = { kind: 'user'; userId: string };
 export type AgentPrincipal = {
@@ -49,10 +46,7 @@ export class PrincipalConversationMismatchError extends Error {
 
 const PRINCIPAL_CONTEXT_KEY = 'principal';
 
-export function installPublicPrincipalMiddleware(
-  app: Hono<AppEnv>,
-  ctx: BackendContext,
-): void {
+export function installPublicPrincipalMiddleware(app: Hono<AppEnv>): void {
   app.use('*', async (c, next) => {
     if (c.req.path.startsWith('/internal/')) {
       await next();
@@ -72,16 +66,9 @@ export function installPublicPrincipalMiddleware(
       await next();
       return;
     }
-    const resolved = resolvePublicUserPrincipal(c, ctx);
-    if (resolved instanceof Response) return resolved;
-    if (resolved === null) {
-      // Registration-required / no-principal state. Don't set a
-      // principal — the gate downstream will refuse all non-whitelisted
-      // routes with 403 `registration_required`.
-      await next();
-      return;
-    }
-    setPrincipal(c, resolved);
+    // Registration-required / no-principal state. Don't synthesize a
+    // principal from legacy headers; the bearer middleware is the only
+    // public principal source after Stage C.6.
     await next();
   });
 }
@@ -94,13 +81,11 @@ export function installPublicPrincipalMiddleware(
  *     state and run with their own (cid, aid) auth.
  *   - `/api/health`, `/api/server/info`, and `/auth/*` skip — they
  *     are anonymous/public or own their auth response semantics.
- *   - Whitelisted public routes pass through even pre-registration.
- *     The whitelist is intentionally tiny: `GET /api/server/info` and
- *     `GET /api/me` (so the renderer can branch on the
- *     registration-required shape). User creation happens through
- *     `/auth/signup` or embedded bootstrap, not a public data route.
- *   - No principal set → 403 `registration_required`. This is the
- *     pre-registration state: there is no viewer yet.
+ *   - Whitelisted public routes pass through this gate. In C.6+
+ *     `/api/server/info` remains anonymous at the bearer layer; `GET
+ *     /api/me` is kept here only as a defensive setup-route allowlist.
+ *   - No principal set → 403 `registration_required` if a future route
+ *     reaches the gate without bearer authentication.
  *   - Principal set but underlying `users` row missing → 500
  *     (`viewer user pointer is dangling`). Indicates DB corruption.
  *   - Otherwise → next.
@@ -116,10 +101,8 @@ export function installRequireRegisteredViewerMiddleware(
   options: { whitelistPaths: ReadonlyArray<string> },
 ): void {
   // Method+path tuples that bypass the gate. We narrow each whitelist
-  // path to a single verb at install time so the gate doesn't accept,
-  // e.g., a stray PATCH /api/me pre-registration — the only public data
-  // route we want open before authentication is GET /api/me; any other
-  // verb on that path should still 403.
+  // path to a single verb at install time so this gate does not widen
+  // setup-route access if the bearer allowlist changes later.
   const narrowed = new Set<string>();
   for (const p of options.whitelistPaths) {
     if (p === apiPaths.me) narrowed.add(`GET ${p}`);
@@ -207,35 +190,6 @@ export function installInternalPrincipalMiddleware(
     setPrincipal(c, { kind: 'agent', agentId: aid, conversationId: cid });
     await next();
   });
-}
-
-export function resolvePublicUserPrincipal(
-  c: AppContext,
-  ctx: BackendContext,
-): UserPrincipal | null | Response {
-  const users = new UserRepo(ctx.db);
-
-  const principalHeader = c.req.header(X_SILVERHAND_PRINCIPAL_HEADER)?.trim();
-  if (principalHeader) {
-    const userId = decodeUserPrincipalHeader(principalHeader);
-    if (!userId) {
-      return c.json({ error: 'invalid principal header' }, 400);
-    }
-    if (!users.get(userId)) {
-      return c.json({ error: 'principal user does not exist' }, 401);
-    }
-    return { kind: 'user', userId };
-  }
-
-  const legacyUserId = c.req.header(X_SILVERHAND_LEGACY_USER_ID_HEADER)?.trim();
-  if (legacyUserId) {
-    if (!users.get(legacyUserId)) {
-      return c.json({ error: 'principal user does not exist' }, 401);
-    }
-    return { kind: 'user', userId: legacyUserId };
-  }
-
-  return null;
 }
 
 export function setPrincipal(c: AppContext, principal: Principal): void {

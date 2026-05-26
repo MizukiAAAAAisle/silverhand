@@ -39,9 +39,8 @@ describe('route harness smoke', () => {
     }).userToken;
     const sessionAuth = { authorization: `Bearer ${userToken}` };
     const workspaces = await http(t).get('/api/workspaces');
-    // Stage B.4: GET /api/hosts requires a session bearer; legacy
-    // embedded auth_token gets a 401 here so we point this hop at
-    // a real session token.
+    // GET /api/hosts requires a session bearer, so keep this hop
+    // explicit even though the generic helper also defaults to one.
     const hosts = await http(t, sessionAuth).get('/api/hosts');
     expect(workspaces.status).toBe(200);
     expect(hosts.status).toBe(200);

@@ -1037,9 +1037,11 @@ async function bootstrap(): Promise<void> {
     });
     await writeServerConfig(backend.context.serverConfig);
     installEventWsOriginOverride();
-    const hydrated = await hydrateDesktopSession();
-    if (!hydrated) {
-      await bootstrapEmbeddedUserSession();
+    if (!HEADLESS) {
+      const hydrated = await hydrateDesktopSession();
+      if (!hydrated) {
+        await bootstrapEmbeddedUserSession();
+      }
     }
   } catch (err) {
     console.error('[main] bootstrap failed:', err);
@@ -1608,7 +1610,9 @@ app.whenReady().then(async () => {
       JSON.stringify({
         url: backend!.url,
         port: backend!.port,
-        auth_token: backend!.context.serverConfig.auth_token,
+        bootstrap_token_path: backend!.context.embeddedBootstrap.enabled
+          ? backend!.context.embeddedBootstrap.filePath
+          : null,
         silverhand_dir: silverhandDir(),
       }) + '\n',
     );

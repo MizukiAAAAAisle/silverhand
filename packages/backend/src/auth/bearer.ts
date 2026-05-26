@@ -19,11 +19,9 @@ export interface PublicBearerOptions {
  * probes). Match is exact, not prefix — a future probe under
  * `/api/health/...` would need to be added explicitly.
  *
- * Stage A transition: a public API bearer can be either the legacy
- * embedded server token or a user session token. Session tokens set the
- * user principal here; legacy bearer requests must also supply an
- * explicit principal header until the desktop UI moves fully to session
- * bearer.
+ * Public API requests must carry a user session bearer. The retired
+ * embedded server-config token is not accepted here; embedded startup
+ * uses `/auth/embedded-bootstrap` to mint a normal user session instead.
  */
 export function installPublicBearerMiddleware(
   app: Hono<AppEnv>,
@@ -48,10 +46,6 @@ export function installPublicBearerMiddleware(
         'public: unauthorized request',
       );
       return c.json({ error: 'unauthorized' }, 401);
-    }
-    if (token === ctx.serverConfig.auth_token) {
-      await next();
-      return;
     }
     const session = ctx.authSessions.validateSessionToken(token);
     if (session.ok) {

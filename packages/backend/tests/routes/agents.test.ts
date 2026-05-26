@@ -121,7 +121,7 @@ describe('POST /api/agents', () => {
        DROP TRIGGER IF EXISTS test_seed_conversation_users;`,
     );
     // Fixture seeds 'local' as global viewer; have 'teammate' (a
-    // different fixture user) drive the route via principal header.
+    // different fixture user) drive the route via the session subject.
     const created = await http(t).post('/api/agents', { name: 'creator-test', runtime: 'claude' }, {
       headers: {
         [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),

@@ -14,7 +14,7 @@ export type ChildSessionLimits = z.infer<typeof ChildSessionLimitsSchema>;
 export const ServerConfigSchema = z.object({
   mode: ServerModeSchema,
   url: z.string().url(),
-  auth_token: z.string().min(16),
+  auth_token: z.string().min(16).optional(),
   refresh_token: z.string().nullable().default(null),
   child_sessions: ChildSessionLimitsSchema.default({
     max_concurrent_per_parent: null,

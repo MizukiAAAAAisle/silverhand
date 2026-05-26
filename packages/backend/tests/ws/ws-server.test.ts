@@ -83,11 +83,13 @@ describe('event WebSocket server', () => {
     });
   });
 
-  it('rejects legacy server auth_token cookies before upgrade', async () => {
+  it('rejects retired server-config token cookies before upgrade', async () => {
     t = buildTestApp();
     server = await openServer(t);
 
-    await expect(connectAuthenticated(server.url, t.authToken)).rejects.toThrow();
+    await expect(
+      connectAuthenticated(server.url, t.legacyServerAuthToken),
+    ).rejects.toThrow();
   });
 
   it('rejects websocket upgrades without the backend origin', async () => {

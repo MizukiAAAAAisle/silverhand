@@ -36,8 +36,8 @@ Every IPC route / main-process backend interaction gets exactly one tag.
 | **local-host-only UX** | Legitimate "reveal in Finder", "open in default app" style affordance that only makes sense when the path lives on the user's machine. **Backend mode is orthogonal**: under remote-backend mode the desktop is still a local Host (Stage B `host.kind='local'`) and workspaces/agent dirs placed on that host are still on the user's filesystem. | Keep, but gate by **path provenance**: only when the path's owning host satisfies `host_id === local_host_id && host.kind === 'local'` (the local Host this desktop registered with the server in Stage B). **Never** gate on backend mode — that would hide legitimate UX from the remote-backend / local-Host case. C.3 lands the gate. |
 | **in-process shortcut** | main-process code that imports backend symbols directly (`startBackend`, `BackendContext`, `createCategorizedLoggers`, …) rather than going over HTTP. | Stays in **embedded** boot path only; Stage D1 extracts the symbols into `packages/server` and main launches that as a child process or in-proc adapter. |
 | **protocol metadata** | Neutral, dual-mode connection info the renderer needs to address the backend and gate per-host UX — `url`, `mode`, `local_host_id`, future `host_kind`. Visible under both embedded and remote modes; carries no embedded-only assumption. Not a "purity hazard"; called out so the catalogue has a precise word that isn't OS-IPC (which would imply native capability) or data (which would imply renderer-readable resource state). | Keep. New protocol-metadata fields are additive on existing IPC routes (typically `backend:info`); they MUST be listed in the relevant §4/§5 row in the same PR they land. |
-| **embedded-only** | Code that holds embedded-mode invariants (auth_token plaintext, loopback URL, `mode='embedded'` constant). | Keep, but **fence** behind a `mode === 'embedded'` check in **C.4**. Any new caller without the fence is a regression. |
-| **mixed** | A single IPC route / file carries fields with different tags (e.g. `backend:info` returns both protocol metadata and an embedded-only `auth_token`). | The row's notes column MUST enumerate every contributing tag at field-level. Any field promotion (e.g. a protocol-metadata field that grows embedded-only assumptions) is a regression unless the table is updated in the same PR. |
+| **embedded-only** | Code that holds embedded-mode invariants (one-shot bootstrap token file, loopback URL, `mode='embedded'` constant). | Keep, but **fence** behind a `mode === 'embedded'` check. Any new caller without the fence is a regression. |
+| **mixed** | A single IPC route / file carries fields with different tags. | The row's notes column MUST enumerate every contributing tag at field-level. Any field promotion (e.g. a protocol-metadata field that grows embedded-only assumptions) is a regression unless the table is updated in the same PR. |
 
 > Each **field** carries exactly one tag. If two seem to fit the same
 > field, the strictest one wins: **in-process shortcut** beats **data**
@@ -173,7 +173,7 @@ Existing embedded-only surface that C.4 must touch:
 
 | Site | Embedded-only assumption today | C.4 disposition |
 |---|---|---|
-| `main/config.ts:24-34` `loadOrCreateServerConfig` | Default `ServerConfig` has `mode='embedded'`, hardcoded loopback URL, freshly generated `auth_token` | Keep as embedded default. Add a sibling code path that produces `mode='remote'` when the user fills the server URL in Setup Wizard. The remote variant has `auth_token: null`. |
+| `main/config.ts` `loadOrCreateServerConfig` | Default `ServerConfig` has `mode='embedded'` and a hardcoded loopback URL. C.6 stopped generating the retired long-lived `auth_token`; read-compat remains for old config files only. | Keep as embedded default. Add a sibling code path that produces `mode='remote'` when the user fills the server URL in Setup Wizard. New config writes omit `auth_token`. |
 | `main/index.ts` `backend:info` handler | Previously returned the legacy event-WS bearer as `event_auth_token` | C.4 removed that field. Event WS authenticates from the same session subject as HTTP, but the session bearer stays main-owned and travels to WS only as a path-scoped `HttpOnly` cookie. |
 
 ### 6.1 Renderer `BackendInfo` token consumers
@@ -207,23 +207,26 @@ active.
 
 ### 6.2 Headless smoke path (dev / `pnpm dev:headless`)
 
-`apps/desktop/src/main/index.ts:852-864` prints the embedded
-`auth_token` on stdout as a JSON handshake so `curl`-driven smoke
-tests can authenticate. This is a **dev-only embedded-only** surface
-and is **out of scope for C.4 renderer changes**, but it is part of
-the same embedded-token attack surface and must not be silently
-forgotten:
+`pnpm dev:headless` no longer prints or accepts the retired
+server-config `auth_token`. Its stdout JSON handshake contains
+`{ url, port, bootstrap_token_path, silverhand_dir }`; smoke scripts
+read the one-shot token file and exchange it through
+`/auth/embedded-bootstrap` for a normal user session bearer:
 
-- It is acceptable under embedded mode (loopback only, dev-only flag).
-- Under remote mode it must print `auth_token: null` (or omit the
-  field). Headless + remote is not a supported V1 flow — the
-  expectation is that `dev:headless` only runs against embedded.
-- D1 reshapes this when `packages/server` becomes the real headless
-  entry point; until then it stays as-is.
-- Tripwire whitelist: `main/index.ts:852-864` is the single permitted
-  `auth_token` reader in main after C.4. Recorded here so a later
-  pass that "removes all auth_token references" doesn't accidentally
-  break the dev smoke path.
+```sh
+BOOTSTRAP=$(tr -d '\n' < "$BOOTSTRAP_TOKEN_PATH")
+AUTH=$(curl -sS -X POST "$URL/auth/embedded-bootstrap" \
+  -H 'content-type: application/json' \
+  -d "{\"token\":\"$BOOTSTRAP\"}" | jq -r .user_token)
+```
+
+Headless does not auto-consume the bootstrap file in Electron main,
+because there is no renderer session to hydrate. Non-headless embedded
+startup still consumes the same file internally to persist the desktop
+session. D1 may reshape the entrypoint when `packages/server` becomes
+the real headless binary, but it must keep this invariant: no
+long-lived server-config bearer on stdout and no runtime reads of
+`serverConfig.auth_token`.
 
 ## 7. Catalogue invariant test
 
@@ -304,8 +307,12 @@ this).
 - 2026-05-26 (C.4 implementation) — embedded bootstrap + renderer token cleanup:
   - `/auth/embedded-bootstrap` added as the only embedded-only route delta. Backend writes `~/.silverhand/embedded-bootstrap` before listen, stores only an in-memory hash, rejects non-loopback / remote mode / stale / consumed / wrong tokens as 404, and returns a normal session bearer. `SILVERHAND_DISABLE_SIGNUP=1` does not disable this local bootstrap path.
   - Event WS moved from legacy `serverConfig.auth_token` + `app_settings.viewer_user_id` to the session subject. Electron main owns a path-scoped `HttpOnly` cookie for `/api/ws/events`; renderer sends no bearer-bearing auth frame and `BackendInfo` carries no token field.
-  - Assertion 4 is active and scans preload + renderer sources for `auth_token` references. The only remaining desktop main `auth_token` read is the documented headless smoke handshake.
+  - Assertion 4 is active and scans preload + renderer sources for `auth_token` references. C.6 removes the documented headless smoke exception.
 - 2026-05-26 (C.5 implementation) — legacy current-viewer bridge cleanup:
   - Auth success paths and embedded bootstrap no longer write `app_settings.viewer_user_id`; `/api/register` was removed from the public router and shared path catalogue.
   - `SettingsRepo.getViewerUserId()` was removed. Remaining live viewer-scope events derive from `conversation_users`; legacy null-user formatting falls back only when the conversation has exactly one human member.
   - Backend tripwire `legacy-viewer-bridge.test.ts` fails loud on `getViewerUserId`, `bridgeLegacyViewer*`, or new `settings.set(SETTINGS_KEYS.VIEWER_USER_ID)` writes under `packages/backend/src`.
+- 2026-05-26 (C.6 implementation) — server-config bearer retirement:
+  - Public `/api/*` bearer auth accepts only user session tokens; a retired `serverConfig.auth_token` value is just an invalid bearer, even if a legacy viewer/principal header is present.
+  - Event WS cookie auth accepts only user session tokens. `serverConfig.auth_token` is optional read-compat in `ServerConfigSchema`; new desktop writes omit it and runtime code does not read it.
+  - `dev:headless` smoke uses the embedded-bootstrap token file and endpoint rather than printing a long-lived bearer on stdout.

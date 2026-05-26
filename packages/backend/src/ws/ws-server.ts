@@ -112,7 +112,7 @@ function resolveViewerUserIdFromCookie(
   ctx: BackendContext,
 ): string | null {
   const token = parseCookie(req.headers.cookie ?? '')[EVENT_WS_SESSION_COOKIE]?.trim();
-  if (!token || token === ctx.serverConfig.auth_token) return null;
+  if (!token) return null;
   const session = ctx.authSessions.validateSessionToken(token);
   return session.ok ? session.session.user_id : null;
 }

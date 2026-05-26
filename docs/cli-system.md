@@ -550,7 +550,7 @@ Troubleshooting recipe:
 
    ```sh
    URL=$(jq -r .url ~/.silverhand/server-config.json)
-   AUTH=$(jq -r .auth_token ~/.silverhand/server-config.json)
+   AUTH=<user-session-bearer>
    CONV=<conversation-id>
 
    curl -sS -X POST "$URL/api/conversations/$CONV/log-debug" \
@@ -561,6 +561,11 @@ Troubleshooting recipe:
    tail -n 200 ~/.silverhand/logs/backend-*.log ~/.silverhand/logs/agent-*.log \
      ~/.silverhand/logs/cli-*.log ~/.silverhand/logs/daemon-*.log
    ```
+
+   In `pnpm dev:headless`, mint `AUTH` from the one-shot
+   `bootstrap_token_path` printed in the stdout JSON by posting it to
+   `/auth/embedded-bootstrap`. `server-config.json` no longer contains
+   or grants a public bearer.
 
 3. Close the window early when done:
 

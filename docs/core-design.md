@@ -560,7 +560,7 @@ System prompt 必须写明：**频繁双向通信通常是 spawn 决策本身有
 ```
 ~/.silverhand/
 ├─ silverhand.db                 ← 主数据库
-├─ server-config.json            ← embedded server URL + auth token（mode 0600）
+├─ server-config.json            ← embedded server URL + child-session limits（mode 0600；shared auth_token retired in Stage C.6）
 ├─ agents/
 │  └─ <agent-id>/                ← L1：agent 全局 home（真实文件，唯一权威源）
 │     ├─ identity.json           ← {name, runtime, model, host_id}

@@ -6,7 +6,9 @@ import type {
   ServerConfig,
 } from '@silverhand/shared';
 import {
+  decodeUserPrincipalHeader,
   X_SILVERHAND_LEGACY_USER_ID_HEADER as LEGACY_USER_ID_HEADER,
+  X_SILVERHAND_PRINCIPAL_HEADER as PRINCIPAL_HEADER,
 } from '@silverhand/shared';
 import type { BackendContext, BackendLogger } from '../../src/context.js';
 import { silverhandCors } from '../../src/cors.js';
@@ -200,6 +202,7 @@ export interface TestApp {
   ctx: BackendContext;
   fake: FakeConversationManager;
   authToken: string;
+  legacyServerAuthToken: string;
   /** The resolved viewer id for this test fixture. Always `'local'` —
    *  see `openTestDb` for the test fixture registered users. */
   viewerUserId: string;
@@ -219,11 +222,11 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
   mkdirSync(tmp.workspacesRoot, { recursive: true });
 
   const fake = new FakeConversationManager();
-  const authToken = 'a'.repeat(32);
+  const legacyServerAuthToken = 'a'.repeat(32);
   const serverConfig: ServerConfig = {
     mode: 'embedded',
     url: 'http://127.0.0.1:0',
-    auth_token: authToken,
+    auth_token: legacyServerAuthToken,
     refresh_token: null,
     child_sessions: {
       max_concurrent_per_parent: null,
@@ -369,6 +372,8 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     });
   }
 
+  const authToken = ctx.authSessions.issueSession({ userId: viewerUserId }).userToken;
+
   const app = new Hono<AppEnv>();
   app.use('*', silverhandCors());
   app.route('/', createApiRouter(ctx));
@@ -379,6 +384,7 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     ctx,
     fake,
     authToken,
+    legacyServerAuthToken,
     viewerUserId,
     cleanup: () => {
       ctx.scheduleService.stop();
@@ -409,13 +415,7 @@ export function http(
   const isTestApp = (value: unknown): value is TestApp =>
     typeof value === 'object' && value !== null && 'authToken' in value && 'app' in value;
   const app = isTestApp(target) ? target.app : target;
-  const publicAuthHeaders: Record<string, string> = isTestApp(target)
-    ? {
-        authorization: `Bearer ${target.authToken}`,
-        [LEGACY_USER_ID_HEADER]: target.viewerUserId,
-      }
-    : {};
-  const headers: Record<string, string> = { ...publicAuthHeaders, ...defaultHeaders };
+  const headers: Record<string, string> = { ...defaultHeaders };
   const base = 'http://localhost';
   const merge = (path: string, init?: RequestInit): RequestInit => {
     const mergedHeaders = {
@@ -423,7 +423,11 @@ export function http(
       ...(init?.headers as Record<string, string> | undefined),
     };
     if (isTestApp(target)) {
-      patchInternalAuthHeader(target, path, mergedHeaders);
+      if (path.startsWith('/internal/')) {
+        patchInternalAuthHeader(target, path, mergedHeaders);
+      } else {
+        ensurePublicSessionHeader(target, mergedHeaders);
+      }
     }
     return {
       ...init,
@@ -481,4 +485,23 @@ function patchInternalAuthHeader(
     decodeURIComponent(conversationId),
     decodeURIComponent(agentId),
   )}`;
+}
+
+function ensurePublicSessionHeader(
+  target: TestApp,
+  headers: Record<string, string>,
+): void {
+  if (headers.authorization || headers.Authorization) return;
+  const userId = requestedPublicUserId(headers) ?? target.viewerUserId;
+  if (userId === target.viewerUserId) {
+    headers.authorization = `Bearer ${target.authToken}`;
+    return;
+  }
+  headers.authorization = `Bearer ${target.ctx.authSessions.issueSession({ userId }).userToken}`;
+}
+
+function requestedPublicUserId(headers: Record<string, string>): string | null {
+  const principal = headers[PRINCIPAL_HEADER]?.trim();
+  if (principal) return decodeUserPrincipalHeader(principal);
+  return headers[LEGACY_USER_ID_HEADER]?.trim() || null;
 }

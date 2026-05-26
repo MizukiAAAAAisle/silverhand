@@ -4,7 +4,6 @@ import {
   apiPaths,
   encodeUserPrincipalHeader,
   internalPaths,
-  X_SILVERHAND_LEGACY_USER_ID_HEADER,
   X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
@@ -32,7 +31,12 @@ function pngFile(name = 'avatar.png'): File {
 function localViewerHeaders(t: TestApp): Record<string, string> {
   return {
     authorization: `Bearer ${t.authToken}`,
-    [X_SILVERHAND_LEGACY_USER_ID_HEADER]: 'local',
+  };
+}
+
+function userSessionHeaders(t: TestApp, userId: string): Record<string, string> {
+  return {
+    authorization: `Bearer ${t.ctx.authSessions.issueSession({ userId }).userToken}`,
   };
 }
 
@@ -125,10 +129,7 @@ describe('POST /api/agents/:id/avatar', () => {
     const allowed = await t.app.fetch(
       new Request(`http://localhost${apiPaths.agentAvatar(id)}`, {
         method: 'POST',
-        headers: {
-          ...localViewerHeaders(t),
-          [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
-        },
+        headers: userSessionHeaders(t, 'teammate'),
         body: allowedForm,
       }),
     );

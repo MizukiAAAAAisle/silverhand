@@ -184,17 +184,14 @@ describe('host routes', () => {
     expect(newRow?.revoked_at).toBeNull();
   });
 
-  it('rejects legacy embedded bearer access to the token-bearing claim route', async () => {
+  it('rejects retired server-config bearer access to the token-bearing claim route', async () => {
     t = buildTestApp();
-    const res = await http(t).post(apiPaths.hostClaimOrCreate, {
+    const res = await legacyServerAuthHttp(t).post(apiPaths.hostClaimOrCreate, {
       installation_id: '44444444-4444-4444-8444-444444444444',
     });
 
     expect(res.status).toBe(401);
-    expect(await res.json()).toEqual({
-      error: 'host claim requires a user session bearer',
-      code: 'session_bearer_required',
-    });
+    expect(await res.json()).toMatchObject({ error: 'unauthorized' });
     const count = t.ctx.db
       .prepare<[], { c: number }>(`SELECT COUNT(*) AS c FROM host_credentials`)
       .get();
@@ -232,14 +229,11 @@ describe('host routes', () => {
       }
     });
 
-    it('rejects legacy embedded bearer (no cross-user enumeration via auth_token)', async () => {
+    it('rejects retired server-config bearer (no cross-user enumeration)', async () => {
       t = buildTestApp();
-      const res = await http(t).get(apiPaths.hosts);
+      const res = await legacyServerAuthHttp(t).get(apiPaths.hosts);
       expect(res.status).toBe(401);
-      expect(await res.json()).toEqual({
-        error: 'host claim requires a user session bearer',
-        code: 'session_bearer_required',
-      });
+      expect(await res.json()).toMatchObject({ error: 'unauthorized' });
     });
 
     it('includes both active and revoked rows (audit history) for the owner', async () => {
@@ -376,11 +370,11 @@ describe('host routes', () => {
       expect(res.status).toBe(404);
     });
 
-    it('rejects legacy embedded bearer', async () => {
+    it('rejects retired server-config bearer', async () => {
       t = buildTestApp();
-      const res = await http(t).post(apiPaths.hostRevoke('whatever'));
+      const res = await legacyServerAuthHttp(t).post(apiPaths.hostRevoke('whatever'));
       expect(res.status).toBe(401);
-      expect(await res.json()).toMatchObject({ code: 'session_bearer_required' });
+      expect(await res.json()).toMatchObject({ error: 'unauthorized' });
     });
   });
 
@@ -494,15 +488,19 @@ describe('host routes', () => {
       expect(await res.json()).toMatchObject({ error_code: 'kind_not_supported' });
     });
 
-    it('rejects legacy embedded bearer', async () => {
+    it('rejects retired server-config bearer', async () => {
       t = buildTestApp();
-      const res = await http(t).post(apiPaths.hostRotateToken('whatever'));
+      const res = await legacyServerAuthHttp(t).post(apiPaths.hostRotateToken('whatever'));
       expect(res.status).toBe(401);
-      expect(await res.json()).toMatchObject({ code: 'session_bearer_required' });
+      expect(await res.json()).toMatchObject({ error: 'unauthorized' });
     });
   });
 });
 
 function sessionHttp(t: TestApp, token: string) {
   return http(t, { authorization: `Bearer ${token}` });
+}
+
+function legacyServerAuthHttp(t: TestApp) {
+  return http(t, { authorization: `Bearer ${t.legacyServerAuthToken}` });
 }
