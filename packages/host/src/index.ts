@@ -105,6 +105,8 @@ export {
   type OutboundHeartbeatPingFrame,
   type OutboundHeartbeatPongFrame,
   type OutboundServerCommandKind,
+  type OutboundServerCommandParams,
+  type OutboundServerCommandResult,
   type OutboundServerToDaemonCommandFrame,
   type RotateTokenParams,
   type RotateTokenResult,

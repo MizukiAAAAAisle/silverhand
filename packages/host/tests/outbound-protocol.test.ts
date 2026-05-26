@@ -65,6 +65,17 @@ describe('outbound protocol — command catalogue', () => {
     );
   });
 
+  it('keeps every runtime_* intent reachable through the outbound command catalogue', () => {
+    const runtimeIntentKinds = Object.keys(intentSchemas)
+      .filter(kind => kind.startsWith('runtime_'))
+      .sort();
+    const outboundRuntimeCommandKinds = OUTBOUND_SERVER_COMMAND_KINDS
+      .filter(kind => kind.startsWith('runtime_'))
+      .sort();
+
+    expect(outboundRuntimeCommandKinds).toEqual(runtimeIntentKinds);
+  });
+
   it('parses a server_to_daemon runtime command frame', () => {
     const parsed = OutboundServerToDaemonCommandFrameSchema.safeParse({
       direction: 'server_to_daemon',

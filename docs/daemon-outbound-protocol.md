@@ -1,6 +1,6 @@
 # Daemon outbound protocol — D2
 
-Status: D2.b daemon WS client lifecycle.
+Status: D2.c server command dispatch + correlation.
 
 This document defines the WebSocket transport introduced in Stage D2 for the
 desktop-local daemon. The orchestration boundary remains
@@ -58,6 +58,35 @@ handling is explicit:
 
 Reconnect starts a fresh WebSocket. It does not replay any frame that was in
 the prior socket's process-local write buffer.
+
+## Command dispatch and correlation
+
+Server-issued commands are request/response frames over the currently-open
+host WebSocket:
+
+- Server sends `server_to_daemon / command` with a unique `id`, command
+  `kind`, and typed `params`.
+- Daemon dispatches the command through the same `IntentDispatcher` path used
+  by the local Unix socket runtime API.
+- Daemon replies with `daemon_to_server / command_response`, echoing the exact
+  same `id` and `kind`, and carrying either typed `result` or typed `error`.
+
+The server keeps an in-memory `Map<id, pending>` only for response correlation.
+It is not durable and is cleared on timeout, disconnect, or server shutdown.
+Multiple commands may be in flight concurrently; responses are demultiplexed by
+`id`, not by arrival order.
+
+Command transport failures are fail-fast:
+
+- `transport_no_connection` when no daemon is connected for the target host.
+- `transport_timeout` when no response arrives before the caller's timeout.
+- `transport_disconnected` when the socket closes while a command is in flight.
+- `transport_send_failed` / `transport_invalid_command` /
+  `transport_response_mismatch` for local send/schema/correlation faults.
+
+Before sending an agent-scoped runtime command, server-side callers must resolve
+the agent through `RuntimeHostPlacementResolver`. Missing/revoked/mismatched
+host placement fails before any frame is written to the wire.
 
 ## Heartbeat
 
@@ -127,8 +156,10 @@ non-durable.
 On disconnect or backpressure:
 
 - Delivery-backed `runtime_wake` and startup-delivery `runtime_start` leave
-  their inbox rows pending; reconnect plus daemon `ready` /
-  `runtime_ready_for_drain` drives replay through the existing coordinator.
+  their inbox rows pending on transport failure. D2.c still returns
+  fail-fast transport errors; reconnect plus daemon `ready` /
+  `runtime_ready_for_drain` replay through `RuntimeDeliveryCoordinator` is a
+  D2.e integration, not an in-memory queue in this transport layer.
 - Non-delivery controls (`runtime_status`, `runtime_stop`, `rotate_token`,
   delivery-less `runtime_start`, etc.) fail fast to the caller with an explicit
   transport reason. The server and daemon must not fabricate an off-DB pending
@@ -153,9 +184,10 @@ The close reason intentionally stays short because WebSocket close reason
 payloads are limited. The structured daemon log is the durable diagnostic
 record for the event that triggered fail-loud overflow.
 
-## D2.b limit
+## D2.c limit
 
-D2.b authenticates/connects/reconnects the daemon client, handles app-level
-heartbeat, and enforces bounded non-durable writes. It still does not dispatch
-server commands, wire backend event fanout into DB/UI projection, or rotate
-tokens over the live connection. Those remain D2.c-D2.f.
+D2.c authenticates/connects/reconnects the daemon client, handles app-level
+heartbeat, enforces bounded non-durable writes, and dispatches server commands
+with strict correlation. It still does not wire daemon event fanout into DB/UI
+projection, add DB-inbox replay on reconnect, or rotate tokens over the live
+connection. Those remain D2.d-D2.f.

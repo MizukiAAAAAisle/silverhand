@@ -6,12 +6,14 @@ import {
   KNOWN_CAPABILITIES_V1,
   OUTBOUND_PROTOCOL_VERSION,
   encodeOutboundFrame,
+  type OutboundServerCommandKind,
 } from '@silverhand/host';
 import { apiPaths } from '@silverhand/shared';
 import { HostTokenService } from '../../src/auth/host-token.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import {
   HOST_WS_PATH,
+  HostWsCommandTransportError,
   installHostWebSocketServer,
   type HostWsServerController,
   type HostWsServerOptions,
@@ -201,6 +203,136 @@ describe('host outbound WebSocket server', () => {
       reason: 'heartbeat_timeout',
     });
   });
+
+  it('round-trips every server command with correlated command_response frames', async () => {
+    t = buildTestApp();
+    server = await openServer(t, { pingIntervalMs: 0 });
+    const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: host.id,
+    });
+    const ws = await connectHost(server.url, issued.hostToken);
+    sockets.push(ws);
+    const cases = commandCases(host.id);
+    const received: Array<{ id: string; kind: string }> = [];
+    const results = [];
+
+    for (const testCase of cases) {
+      const pending = sendTestCommand(server.controller, host.id, testCase);
+      const frame = await readJsonFrame(ws) as Record<string, unknown>;
+      expect(frame.type).toBe('command');
+      received.push({ id: String(frame.id), kind: String(frame.kind) });
+      const match = cases.find(c => c.kind === frame.kind)!;
+      ws.send(encodeOutboundFrame({
+        direction: 'daemon_to_server',
+        type: 'command_response',
+        id: String(frame.id),
+        kind: match.kind,
+        result: match.result,
+      } as never));
+      results.push(await pending);
+    }
+
+    expect(received.map(c => c.kind)).toEqual(cases.map(c => c.kind));
+    expect(results).toEqual(cases.map(c => c.result));
+    for (const [index, command] of received.entries()) {
+      expect(command.id).toMatch(new RegExp(`-${index + 1}$`));
+    }
+  });
+
+  it('demuxes multiple in-flight command responses by id, not arrival order', async () => {
+    t = buildTestApp();
+    server = await openServer(t, { pingIntervalMs: 0 });
+    const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: host.id,
+    });
+    const ws = await connectHost(server.url, issued.hostToken);
+    sockets.push(ws);
+    const first = server.controller.sendCommand(
+      host.id,
+      'runtime_status',
+      { conversation_id: 'c1', agent_id: 'a1' },
+      { timeoutMs: 500 },
+    );
+    const second = server.controller.sendCommand(
+      host.id,
+      'runtime_status',
+      { conversation_id: 'c1', agent_id: 'a2' },
+      { timeoutMs: 500 },
+    );
+    const firstFrame = await readJsonFrame(ws) as Record<string, unknown>;
+    const secondFrame = await readJsonFrame(ws) as Record<string, unknown>;
+    ws.send(runtimeStatusResponse(String(secondFrame.id), 'a2'));
+    ws.send(runtimeStatusResponse(String(firstFrame.id), 'a1'));
+
+    await expect(first).resolves.toMatchObject({
+      runtimes: [{ agent_id: 'a1' }],
+    });
+    await expect(second).resolves.toMatchObject({
+      runtimes: [{ agent_id: 'a2' }],
+    });
+  });
+
+  it('fails fast with transport_timeout when daemon does not respond', async () => {
+    t = buildTestApp();
+    server = await openServer(t, { pingIntervalMs: 0 });
+    const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: host.id,
+    });
+    const ws = await connectHost(server.url, issued.hostToken);
+    sockets.push(ws);
+
+    const pending = server.controller.sendCommand(
+      host.id,
+      'runtime_status',
+      {},
+      { timeoutMs: 10 },
+    );
+    await readJsonFrame(ws);
+
+    await expect(pending).rejects.toMatchObject({
+      code: 'transport_timeout',
+    });
+  });
+
+  it('fails fast with transport_disconnected when socket closes mid-command', async () => {
+    t = buildTestApp();
+    server = await openServer(t, { pingIntervalMs: 0 });
+    const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: host.id,
+    });
+    const ws = await connectHost(server.url, issued.hostToken);
+    sockets.push(ws);
+    const pending = server.controller.sendCommand(
+      host.id,
+      'runtime_status',
+      {},
+      { timeoutMs: 500 },
+    );
+    await readJsonFrame(ws);
+    ws.close(1001, 'test_disconnect');
+
+    await expect(pending).rejects.toMatchObject({
+      code: 'transport_disconnected',
+    });
+  });
+
+  it('fails fast before wire send when no host connection exists', async () => {
+    t = buildTestApp();
+    server = await openServer(t, { pingIntervalMs: 0 });
+
+    await expect(
+      server.controller.sendCommand('missing-host', 'runtime_status', {}),
+    ).rejects.toBeInstanceOf(HostWsCommandTransportError);
+    await expect(
+      server.controller.sendCommand('missing-host', 'runtime_status', {}),
+    ).rejects.toMatchObject({
+      code: 'transport_no_connection',
+    });
+  });
 });
 
 async function openServer(
@@ -301,6 +433,116 @@ async function noCloseWithin(ws: WebSocket, ms: number): Promise<void> {
       ws.off('close', onClose);
     };
     ws.once('close', onClose);
+  });
+}
+
+interface CommandCase {
+  kind: OutboundServerCommandKind;
+  params: unknown;
+  result: unknown;
+}
+
+function commandCases(hostId: string): CommandCase[] {
+  return [
+    {
+      kind: 'runtime_start',
+      params: { conversation_id: 'c1', agent_id: 'a1', options: { runtime: 'codex' } },
+      result: { started: true, pid: 123, started_at: 1700000000000 },
+    },
+    {
+      kind: 'runtime_stop',
+      params: { conversation_id: 'c1', agent_id: 'a1', mode: 'hard' },
+      result: { mode: 'hard', stopped: true, exit_code: 0 },
+    },
+    {
+      kind: 'runtime_wake',
+      params: {
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [1],
+        kind: 'message',
+        text: 'hello',
+      },
+      result: { delivered: true, delivery_ids: [1] },
+    },
+    {
+      kind: 'runtime_status',
+      params: { conversation_id: 'c1', agent_id: 'a1' },
+      result: { runtimes: [] },
+    },
+    {
+      kind: 'runtime_clear_session',
+      params: { conversation_id: 'c1', agent_id: 'a1' },
+      result: { cleared: true },
+    },
+    {
+      kind: 'runtime_stop_all',
+      params: {},
+      result: { stopped_count: 1 },
+    },
+    {
+      kind: 'runtime_close_activity_log',
+      params: {},
+      result: { flushed: true },
+    },
+    {
+      kind: 'runtime_output_pause',
+      params: { conversation_id: 'c1', agent_id: 'a1' },
+      result: { paused: true },
+    },
+    {
+      kind: 'runtime_output_resume',
+      params: { conversation_id: 'c1', agent_id: 'a1' },
+      result: { resumed: true },
+    },
+    {
+      kind: 'rotate_token',
+      params: {
+        host_id: hostId,
+        host_token: 'new-host-token',
+        issued_at: 1700000000000,
+        grace_until: 1700000060000,
+      },
+      result: {
+        rotated: true,
+        host_id: hostId,
+        config_refreshed_at: 1700000000100,
+      },
+    },
+  ];
+}
+
+function sendTestCommand(
+  controller: HostWsServerController,
+  hostId: string,
+  testCase: CommandCase,
+): Promise<unknown> {
+  return controller.sendCommand(
+    hostId,
+    testCase.kind as never,
+    testCase.params as never,
+    { timeoutMs: 500 },
+  );
+}
+
+function runtimeStatusResponse(id: string, agentId: string): string {
+  return encodeOutboundFrame({
+    direction: 'daemon_to_server',
+    type: 'command_response',
+    id,
+    kind: 'runtime_status',
+    result: {
+      runtimes: [
+        {
+          conversation_id: 'c1',
+          agent_id: agentId,
+          pid: null,
+          phase: 'idle',
+          run_state: null,
+          started_at: null,
+        },
+      ],
+    },
   });
 }
 

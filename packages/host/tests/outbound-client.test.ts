@@ -94,6 +94,28 @@ describe('outbound daemon websocket client', () => {
     );
   });
 
+  it('reconnects when the server closes 1000 while daemon is still running', async () => {
+    const server = await FakeOutboundServer.start();
+    cleanup.push(() => server.close());
+    const { client, logger } = startClient(server.url, {
+      backoff: { minDelayMs: 20, maxDelayMs: 20, factor: 2, jitterRatio: 0 },
+    });
+    cleanup.push(() => client.stop('test_done'));
+
+    const first = await server.waitForConnectionCount(1);
+    setTimeout(() => first.ws.close(1000, 'server_test'), 5);
+
+    await server.waitForCloseCount(1);
+    await server.waitForConnectionCount(2);
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({
+        level: 'info',
+        action: 'reconnect_scheduled',
+        reason: 'close_normal',
+      }),
+    );
+  });
+
   it('closes and reconnects after daemon heartbeat timeout', async () => {
     const server = await FakeOutboundServer.start();
     cleanup.push(() => server.close());
@@ -142,6 +164,39 @@ describe('outbound daemon websocket client', () => {
       type: 'heartbeat',
       kind: 'pong',
       echo_ts: 1700000000000,
+    });
+  });
+
+  it('dispatches server command frames and returns correlated responses', async () => {
+    const server = await FakeOutboundServer.start();
+    cleanup.push(() => server.close());
+    const { client } = startClient(server.url, {
+      dispatchCommand: async command => ({
+        id: command.id,
+        result: { runtimes: [] },
+      }),
+    });
+    cleanup.push(() => client.stop('test_done'));
+
+    const first = await server.waitForConnectionCount(1);
+    first.ws.send(encodeOutboundFrame({
+      direction: 'server_to_daemon',
+      type: 'command',
+      id: 'cmd-1',
+      kind: 'runtime_status',
+      params: {},
+    }));
+
+    await expect(
+      server.waitForFrame(frame =>
+        frame.type === 'command_response' && frame.id === 'cmd-1',
+      ),
+    ).resolves.toMatchObject({
+      direction: 'daemon_to_server',
+      type: 'command_response',
+      id: 'cmd-1',
+      kind: 'runtime_status',
+      result: { runtimes: [] },
     });
   });
 

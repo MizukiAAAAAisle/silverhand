@@ -138,6 +138,10 @@ export const outboundServerCommandSchemas = {
 } as const;
 
 export type OutboundServerCommandKind = keyof typeof outboundServerCommandSchemas;
+export type OutboundServerCommandParams<K extends OutboundServerCommandKind> =
+  z.infer<(typeof outboundServerCommandSchemas)[K]['params']>;
+export type OutboundServerCommandResult<K extends OutboundServerCommandKind> =
+  z.infer<(typeof outboundServerCommandSchemas)[K]['result']>;
 
 export const OUTBOUND_SERVER_COMMAND_KINDS = Object.keys(
   outboundServerCommandSchemas,

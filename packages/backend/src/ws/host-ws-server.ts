@@ -1,13 +1,20 @@
 import type { IncomingMessage, Server as HttpServer } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import {
   OutboundDaemonToServerCommandResponseFrameSchema,
   OutboundDaemonToServerEventFrameSchema,
   OutboundHeartbeatFrameSchema,
+  OutboundServerToDaemonCommandFrameSchema,
   encodeOutboundFrame,
   type OutboundFrame,
+  type OutboundDaemonToServerCommandResponseFrame,
   type OutboundHeartbeatFrame,
+  type OutboundServerCommandKind,
+  type OutboundServerCommandParams,
+  type OutboundServerCommandResult,
+  type ResponseError,
 } from '@silverhand/host';
 import { apiPaths } from '@silverhand/shared';
 import { HostTokenService } from '../auth/host-token.js';
@@ -22,10 +29,18 @@ export interface HostWsServerOptions {
   shutdownGraceMs?: number;
   pingIntervalMs?: number;
   pongTimeoutMs?: number;
+  commandTimeoutMs?: number;
 }
 
 export interface HostWsServerController {
   activeConnectionCount(): number;
+  connectedHostIds(): string[];
+  sendCommand<K extends OutboundServerCommandKind>(
+    hostId: string,
+    kind: K,
+    params: OutboundServerCommandParams<K>,
+    opts?: { timeoutMs?: number },
+  ): Promise<OutboundServerCommandResult<K>>;
   close(): Promise<void>;
 }
 
@@ -39,6 +54,45 @@ const DEFAULT_MAX_PAYLOAD_BYTES = 256 * 1024;
 const DEFAULT_SHUTDOWN_GRACE_MS = 1_500;
 const DEFAULT_PING_INTERVAL_MS = 30_000;
 const DEFAULT_PONG_TIMEOUT_MS = 5_000;
+const DEFAULT_COMMAND_TIMEOUT_MS = 30_000;
+
+export type HostWsCommandTransportErrorCode =
+  | 'transport_no_connection'
+  | 'transport_timeout'
+  | 'transport_disconnected'
+  | 'transport_send_failed'
+  | 'transport_invalid_command'
+  | 'transport_response_mismatch';
+
+export class HostWsCommandTransportError extends Error {
+  constructor(
+    readonly code: HostWsCommandTransportErrorCode,
+    message: string,
+    readonly details: {
+      hostId: string;
+      commandKind?: OutboundServerCommandKind;
+      requestId?: string;
+    },
+  ) {
+    super(message);
+    this.name = 'HostWsCommandTransportError';
+  }
+}
+
+export class HostWsCommandResponseError extends Error {
+  constructor(
+    readonly code: ResponseError['code'],
+    message: string,
+    readonly details: {
+      hostId: string;
+      commandKind: OutboundServerCommandKind;
+      requestId: string;
+    },
+  ) {
+    super(message);
+    this.name = 'HostWsCommandResponseError';
+  }
+}
 
 export function installHostWebSocketServer(
   server: HttpServer,
@@ -52,6 +106,9 @@ export function installHostWebSocketServer(
     maxPayload: opts.maxPayloadBytes ?? DEFAULT_MAX_PAYLOAD_BYTES,
   });
   const connections = new Map<WebSocket, HostWsConnection>();
+  const connectionsByHost = new Map<string, HostWsConnection>();
+  const commandIdPrefix = `hostws-${randomUUID()}`;
+  let commandSeq = 0;
   let closing = false;
 
   const onUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer) => {
@@ -73,13 +130,21 @@ export function installHostWebSocketServer(
     }
 
     wss.handleUpgrade(req, socket, head, ws => {
+      const previous = connectionsByHost.get(auth.host.hostId);
+      previous?.closeForReplacement();
       const connection = new HostWsConnection(ws, ctx, auth.host, {
         pingIntervalMs: opts.pingIntervalMs ?? DEFAULT_PING_INTERVAL_MS,
         pongTimeoutMs: opts.pongTimeoutMs ?? DEFAULT_PONG_TIMEOUT_MS,
+        commandTimeoutMs: opts.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS,
+        nextCommandId: () => `${commandIdPrefix}-${++commandSeq}`,
       });
       connections.set(ws, connection);
+      connectionsByHost.set(auth.host.hostId, connection);
       ws.on('close', () => {
         connections.delete(ws);
+        if (connectionsByHost.get(auth.host.hostId) === connection) {
+          connectionsByHost.delete(auth.host.hostId);
+        }
       });
       wss.emit('connection', ws, req);
       connection.start();
@@ -90,6 +155,20 @@ export function installHostWebSocketServer(
 
   return {
     activeConnectionCount: () => connections.size,
+    connectedHostIds: () => [...connectionsByHost.keys()],
+    sendCommand: (hostId, kind, params, commandOpts) => {
+      const connection = connectionsByHost.get(hostId);
+      if (!connection) {
+        return Promise.reject(
+          new HostWsCommandTransportError(
+            'transport_no_connection',
+            `host ${hostId} is not connected to outbound websocket`,
+            { hostId, commandKind: kind },
+          ),
+        );
+      }
+      return connection.sendCommand(kind, params, commandOpts);
+    },
     close: async () => {
       if (closing) return;
       closing = true;
@@ -114,9 +193,20 @@ export function installHostWebSocketServer(
   };
 }
 
+interface PendingCommand {
+  id: string;
+  kind: OutboundServerCommandKind;
+  timer: NodeJS.Timeout;
+  resolve: (value: unknown) => void;
+  reject: (err: Error) => void;
+}
+
 class HostWsConnection {
   private readonly pingIntervalMs: number;
   private readonly pongTimeoutMs: number;
+  private readonly commandTimeoutMs: number;
+  private readonly nextCommandId: () => string;
+  private readonly pendingCommands = new Map<string, PendingCommand>();
   private pingTimer: NodeJS.Timeout | null = null;
   private pongTimer: NodeJS.Timeout | null = null;
 
@@ -124,10 +214,17 @@ class HostWsConnection {
     private readonly ws: WebSocket,
     private readonly ctx: BackendContext,
     private readonly host: AuthenticatedHost,
-    opts: { pingIntervalMs: number; pongTimeoutMs: number },
+    opts: {
+      pingIntervalMs: number;
+      pongTimeoutMs: number;
+      commandTimeoutMs: number;
+      nextCommandId: () => string;
+    },
   ) {
     this.pingIntervalMs = opts.pingIntervalMs;
     this.pongTimeoutMs = opts.pongTimeoutMs;
+    this.commandTimeoutMs = opts.commandTimeoutMs;
+    this.nextCommandId = opts.nextCommandId;
   }
 
   start(): void {
@@ -161,11 +258,125 @@ class HostWsConnection {
     }
   }
 
+  closeForReplacement(): void {
+    this.rejectPendingDisconnected(
+      `host ${this.host.hostId} websocket was replaced`,
+    );
+    this.cleanup();
+    if (
+      this.ws.readyState === WebSocket.OPEN ||
+      this.ws.readyState === WebSocket.CONNECTING
+    ) {
+      this.ws.close(1000, 'host_connection_replaced');
+    }
+  }
+
   terminate(): void {
+    this.rejectPendingDisconnected(
+      `host ${this.host.hostId} websocket was terminated`,
+    );
     this.cleanup();
     if (this.ws.readyState !== WebSocket.CLOSED) {
       this.ws.terminate();
     }
+  }
+
+  sendCommand<K extends OutboundServerCommandKind>(
+    kind: K,
+    params: OutboundServerCommandParams<K>,
+    opts?: { timeoutMs?: number },
+  ): Promise<OutboundServerCommandResult<K>> {
+    if (this.ws.readyState !== WebSocket.OPEN) {
+      return Promise.reject(
+        new HostWsCommandTransportError(
+          'transport_disconnected',
+          `host ${this.host.hostId} websocket is not open`,
+          { hostId: this.host.hostId, commandKind: kind },
+        ),
+      );
+    }
+    const id = this.nextCommandId();
+    const frame = {
+      direction: 'server_to_daemon',
+      type: 'command',
+      id,
+      kind,
+      params,
+    };
+    const parsed = OutboundServerToDaemonCommandFrameSchema.safeParse(frame);
+    if (!parsed.success) {
+      return Promise.reject(
+        new HostWsCommandTransportError(
+          'transport_invalid_command',
+          `invalid outbound command ${kind}: ${parsed.error.errors
+            .map(e => e.path.join('.'))
+            .join(', ')}`,
+          { hostId: this.host.hostId, commandKind: kind, requestId: id },
+        ),
+      );
+    }
+    let encoded: string;
+    try {
+      encoded = encodeOutboundFrame(parsed.data);
+    } catch (err) {
+      return Promise.reject(
+        new HostWsCommandTransportError(
+          'transport_invalid_command',
+          (err as Error).message,
+          { hostId: this.host.hostId, commandKind: kind, requestId: id },
+        ),
+      );
+    }
+
+    return new Promise<OutboundServerCommandResult<K>>((resolve, reject) => {
+      const timeoutMs = opts?.timeoutMs ?? this.commandTimeoutMs;
+      const timer = setTimeout(() => {
+        this.pendingCommands.delete(id);
+        reject(
+          new HostWsCommandTransportError(
+            'transport_timeout',
+            `outbound command ${kind} timed out after ${timeoutMs}ms`,
+            { hostId: this.host.hostId, commandKind: kind, requestId: id },
+          ),
+        );
+      }, timeoutMs);
+      timer.unref?.();
+      this.pendingCommands.set(id, {
+        id,
+        kind,
+        timer,
+        resolve: value => resolve(value as OutboundServerCommandResult<K>),
+        reject,
+      });
+      try {
+        this.ws.send(encoded, err => {
+          if (!err) return;
+          const pending = this.pendingCommands.get(id);
+          if (!pending) return;
+          this.pendingCommands.delete(id);
+          clearTimeout(pending.timer);
+          pending.reject(
+            new HostWsCommandTransportError(
+              'transport_send_failed',
+              err.message,
+              { hostId: this.host.hostId, commandKind: kind, requestId: id },
+            ),
+          );
+        });
+      } catch (err) {
+        const pending = this.pendingCommands.get(id);
+        if (!pending) return;
+        this.pendingCommands.delete(id);
+        clearTimeout(pending.timer);
+        pending.reject(
+          new HostWsCommandTransportError(
+            'transport_send_failed',
+            (err as Error).message,
+            { hostId: this.host.hostId, commandKind: kind, requestId: id },
+          ),
+        );
+      }
+    });
   }
 
   private handleMessage(data: RawData): void {
@@ -177,7 +388,7 @@ class HostWsConnection {
 
     const response = OutboundDaemonToServerCommandResponseFrameSchema.safeParse(frame);
     if (response.success) {
-      // D2.c wires command correlation. D2.a only gates the frame shape.
+      this.handleCommandResponse(response.data);
       return;
     }
 
@@ -209,7 +420,72 @@ class HostWsConnection {
   private cleanup(): void {
     this.clearPingTimer();
     this.clearPongTimer();
-    // Reserved for D2.c command waiters.
+    this.rejectPendingDisconnected(
+      `host ${this.host.hostId} websocket disconnected`,
+    );
+  }
+
+  private handleCommandResponse(
+    frame: OutboundDaemonToServerCommandResponseFrame,
+  ): void {
+    const pending = this.pendingCommands.get(frame.id);
+    if (!pending) {
+      this.ctx.logger.warn(
+        {
+          hostId: this.host.hostId,
+          requestId: frame.id,
+          commandKind: frame.kind,
+        },
+        'host-ws: received command response with no pending request',
+      );
+      return;
+    }
+    if (pending.kind !== frame.kind) {
+      this.pendingCommands.delete(frame.id);
+      clearTimeout(pending.timer);
+      pending.reject(
+        new HostWsCommandTransportError(
+          'transport_response_mismatch',
+          `outbound command response kind mismatch: expected ${pending.kind}, got ${frame.kind}`,
+          {
+            hostId: this.host.hostId,
+            commandKind: pending.kind,
+            requestId: frame.id,
+          },
+        ),
+      );
+      this.closeWithProtocolError('command_response_kind_mismatch');
+      return;
+    }
+    this.pendingCommands.delete(frame.id);
+    clearTimeout(pending.timer);
+    if ('error' in frame) {
+      pending.reject(
+        new HostWsCommandResponseError(frame.error.code, frame.error.message, {
+          hostId: this.host.hostId,
+          commandKind: frame.kind,
+          requestId: frame.id,
+        }),
+      );
+      return;
+    }
+    pending.resolve(frame.result);
+  }
+
+  private rejectPendingDisconnected(message: string): void {
+    if (this.pendingCommands.size === 0) return;
+    const pending = [...this.pendingCommands.values()];
+    this.pendingCommands.clear();
+    for (const command of pending) {
+      clearTimeout(command.timer);
+      command.reject(
+        new HostWsCommandTransportError('transport_disconnected', message, {
+          hostId: this.host.hostId,
+          commandKind: command.kind,
+          requestId: command.id,
+        }),
+      );
+    }
   }
 
   private handleHeartbeat(frame: OutboundHeartbeatFrame): void {

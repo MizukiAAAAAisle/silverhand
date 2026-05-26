@@ -12,12 +12,15 @@ import {
   OutboundFrameSchema,
   OutboundServerToDaemonCommandFrameSchema,
   OutboundHeartbeatFrameSchema,
+  OutboundDaemonToServerCommandResponseFrameSchema,
   encodeOutboundFrame,
+  type OutboundDaemonToServerCommandResponseFrame,
   type OutboundDaemonToServerEventFrame,
   type OutboundFrame,
   type OutboundHeartbeatFrame,
+  type OutboundServerToDaemonCommandFrame,
 } from '../outbound-protocol.js';
-import type { EventFrame } from '../protocol.js';
+import type { EventFrame, ResponseFrame } from '../protocol.js';
 import type { DaemonLogger } from './logger.js';
 
 export interface OutboundDaemonClientOptions {
@@ -28,9 +31,14 @@ export interface OutboundDaemonClientOptions {
   backoff?: Partial<ReconnectBackoffOptions>;
   heartbeat?: Partial<HeartbeatOptions>;
   buffer?: Partial<OutboundWriteBufferOptions>;
+  dispatchCommand?: OutboundCommandDispatcher;
   random?: () => number;
   now?: () => number;
 }
+
+export type OutboundCommandDispatcher = (
+  command: OutboundServerToDaemonCommandFrame,
+) => Promise<ResponseFrame>;
 
 export interface ReconnectBackoffOptions {
   minDelayMs: number;
@@ -266,8 +274,9 @@ export class OutboundDaemonClient {
         Authorization: `Bearer ${config.raw.host_token}`,
       },
     });
+    const connectionKey = config.key;
     this.ws = ws;
-    this.connectedConfigKey = config.key;
+    this.connectedConfigKey = connectionKey;
     this.opts.logger.info(
       {
         kind: 'outbound_ws',
@@ -309,6 +318,9 @@ export class OutboundDaemonClient {
       this.clearHeartbeatTimers();
       this.writeBuffer.reset();
       if (this.ws === ws) this.ws = null;
+      if (this.connectedConfigKey === connectionKey) {
+        this.connectedConfigKey = null;
+      }
       this.opts.logger.warn(
         {
           kind: 'outbound_ws',
@@ -321,7 +333,7 @@ export class OutboundDaemonClient {
         'daemon outbound ws closed',
       );
       if (this.stopping) return;
-      if (this.desiredConfig?.key !== this.connectedConfigKey) return;
+      if (this.desiredConfig?.key !== connectionKey) return;
       this.scheduleReconnect(`close_${closeClass(code)}`);
     });
   }
@@ -341,16 +353,7 @@ export class OutboundDaemonClient {
 
     const command = OutboundServerToDaemonCommandFrameSchema.safeParse(parsed);
     if (command.success) {
-      this.opts.logger.warn(
-        {
-          kind: 'outbound_ws',
-          action: 'unsupported_command',
-          command_kind: command.data.kind,
-          request_id: command.data.id,
-        },
-        'daemon outbound command received before D2.c dispatcher is wired',
-      );
-      this.closeProtocolError('unsupported_command');
+      void this.handleCommand(command.data);
       return;
     }
 
@@ -360,6 +363,83 @@ export class OutboundDaemonClient {
       return;
     }
     this.closeProtocolError('wrong_direction');
+  }
+
+  private async handleCommand(
+    command: OutboundServerToDaemonCommandFrame,
+  ): Promise<void> {
+    const dispatcher = this.opts.dispatchCommand ?? defaultCommandDispatcher;
+    const startedAt = this.now();
+    this.opts.logger.info(
+      {
+        kind: 'outbound_ws',
+        action: 'command_received',
+        command_kind: command.kind,
+        request_id: command.id,
+      },
+      'daemon outbound command received',
+    );
+    let response: OutboundDaemonToServerCommandResponseFrame;
+    try {
+      const dispatched = await dispatcher(command);
+      response = toOutboundCommandResponse(command, dispatched);
+    } catch (err) {
+      response = {
+        direction: 'daemon_to_server',
+        type: 'command_response',
+        id: command.id,
+        kind: command.kind,
+        error: {
+          code: 'internal_error',
+          message: err instanceof Error ? err.message : String(err),
+        },
+      } as OutboundDaemonToServerCommandResponseFrame;
+    }
+    let encoded: string;
+    try {
+      encoded = encodeOutboundFrame(response);
+    } catch (err) {
+      this.opts.logger.warn(
+        {
+          kind: 'outbound_ws',
+          action: 'command_response_encode_failed',
+          command_kind: command.kind,
+          request_id: command.id,
+          err: (err as Error).message,
+        },
+        'daemon outbound command response encode failed; closing connection',
+      );
+      this.ws?.close(1011, 'command_response_encode_failed');
+      return;
+    }
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      this.opts.logger.warn(
+        {
+          kind: 'outbound_ws',
+          action: 'command_response_disconnected',
+          command_kind: command.kind,
+          request_id: command.id,
+        },
+        'daemon outbound command response dropped because socket is disconnected',
+      );
+      return;
+    }
+    ws.send(encoded, err => {
+      this.opts.logger[err ? 'warn' : 'info'](
+        {
+          kind: 'outbound_ws',
+          action: err ? 'command_response_send_failed' : 'command_response_sent',
+          command_kind: command.kind,
+          request_id: command.id,
+          duration_ms: this.now() - startedAt,
+          err: err?.message,
+        },
+        err
+          ? 'daemon outbound command response send failed'
+          : 'daemon outbound command response sent',
+      );
+    });
   }
 
   private handleHeartbeat(frame: OutboundHeartbeatFrame): void {
@@ -543,6 +623,8 @@ class OutboundWriteBuffer {
     }
 
     const encodedBytes = Buffer.byteLength(encoded, 'utf8');
+    // Conservative on purpose: pendingBytes and ws.bufferedAmount can overlap
+    // briefly for in-flight sends; prefer early backpressure to unbounded RAM.
     const totalBytes =
       this.pendingBytes + encodedBytes + Math.max(0, input.ws.bufferedAmount);
     const totalFrames = this.pendingFrames + 1;
@@ -652,6 +734,53 @@ class OutboundWriteBuffer {
       'daemon outbound non-droppable event exceeded write-buffer cap',
     );
   }
+}
+
+async function defaultCommandDispatcher(
+  command: OutboundServerToDaemonCommandFrame,
+): Promise<ResponseFrame> {
+  return {
+    id: command.id,
+    error: {
+      code: 'internal_error',
+      message: 'daemon outbound command dispatcher is not wired',
+    },
+  };
+}
+
+function toOutboundCommandResponse(
+  command: OutboundServerToDaemonCommandFrame,
+  response: ResponseFrame,
+): OutboundDaemonToServerCommandResponseFrame {
+  const candidate = 'error' in response
+    ? {
+        direction: 'daemon_to_server',
+        type: 'command_response',
+        id: command.id,
+        kind: command.kind,
+        error: response.error,
+      }
+    : {
+        direction: 'daemon_to_server',
+        type: 'command_response',
+        id: command.id,
+        kind: command.kind,
+        result: response.result,
+      };
+  const parsed = OutboundDaemonToServerCommandResponseFrameSchema.safeParse(
+    candidate,
+  );
+  if (parsed.success) return parsed.data;
+  return {
+    direction: 'daemon_to_server',
+    type: 'command_response',
+    id: command.id,
+    kind: command.kind,
+    error: {
+      code: 'internal_error',
+      message: `daemon outbound command response drift for ${command.kind}`,
+    },
+  } as OutboundDaemonToServerCommandResponseFrame;
 }
 
 export function readHostConfig(

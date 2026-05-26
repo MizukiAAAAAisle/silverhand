@@ -307,6 +307,8 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
       configPath: opts.hostConfigPath,
       logger,
       readyEvent,
+      dispatchCommand: command =>
+        dispatcher.dispatch(command.id, String(command.kind), command.params),
     });
     outboundClient.start();
   }
