@@ -84,6 +84,46 @@ sandboxing is a Host capability / mount concern, not an enum tag. A future
 sandbox-provisioning flow (Appendix A.5) MUST come with its own HostKind
 redesign decision; V1 does not pre-commit either schema or provisioning.
 
+### 1.1 HOSTS uniformity (top-level invariant)
+
+`local` Hosts and `remote` Hosts are the **same first-class entity** at the
+auth and wire layers. All differences are confined to provisioning and
+capability metadata; the credential, validation, transport, and lifecycle
+control plane are identical.
+
+| Concern | local Host | remote Host |
+|---|---|---|
+| DB row | `hosts` (one row, `kind='local'`) | `hosts` (one row, `kind='remote'`) |
+| Credential row | `host_credentials` (one or more `kind=long_lived`) | `host_credentials` (one `kind=bootstrap` consumed at first exchange, then one or more `kind=long_lived`) |
+| Mint authority | `user_token` session via `POST /api/hosts/claim-or-create` (§6.1) | `user_token` session via `POST /api/hosts` (§6.2) — desktop is always the trust anchor |
+| Wire auth | `Authorization: Bearer <host_token>` on `GET /api/hosts/connect` | identical |
+| Server validator | `HostTokenService.verifyHostToken()` | identical (no separate code path) |
+| Outbound transport | one outbound WebSocket per Host (D2) | identical |
+| Rotation | `POST /api/hosts/{id}/rotate-token` + `rotate_token` WS command + 60s grace (§6.4 / D2.f) | identical |
+| Revoke | `POST /api/hosts/{id}/revoke` (hard deny, no grace) | identical |
+| Placement key | `agent.host_id` → `RuntimeHostPlacementResolver` | identical (resolver is host-kind-agnostic) |
+| Capability layer | `host_capabilities.*` rows describe local fs / mounts | identical mechanism; sandbox profile etc. attach here (Appendix A.5) |
+
+What this invariant buys:
+- Adding a new Host kind in the future (`remote_sandbox`, `cloud`, …) requires
+  only enum extension + a new provisioning entry route. **Wire schema, auth
+  validator, transport, rotation, revoke, and placement code paths do not
+  change.**
+- A user-facing "create sandbox" UX is the same shape as remote-host
+  provisioning (§6.2): desktop UI calls server, server mints a Host row +
+  bootstrap token, the user delivers the bootstrap into the target environment.
+  The sandbox daemon then exchanges to long-lived `host_token` and connects
+  via the same `/api/hosts/connect` endpoint as the local daemon.
+- The desktop is always the trust anchor for any new Host. There is no
+  zero-trust path where a Host claims itself into existence — every Host's
+  first credential is minted by a logged-in user session in the desktop UI,
+  whether the daemon will run on the desktop machine or elsewhere.
+
+V1 narrows the active surface to `local` only (D2 endpoint, claim-or-create
+route, desktop UI) but the schema, protocol, and code paths are already
+shaped for `remote` to be opened later by enum widening + provisioning UI,
+not by re-architecting the auth model.
+
 ---
 
 ## 2. Resource ownership model

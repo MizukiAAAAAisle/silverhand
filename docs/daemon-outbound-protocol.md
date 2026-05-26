@@ -23,6 +23,26 @@ intent and events across that boundary.
 User session cookies are not accepted on this endpoint. `host_token` remains
 daemon-only and must not be exposed to renderer or agent process credentials.
 
+### Host kind narrowing
+
+The `kind === 'local'` constraint above is a V1-prep scope boundary, not a
+permanent protocol limitation. `auth-and-host-model.md` §1.1 establishes that
+`local` and `remote` Hosts are the same entity at the auth and wire layers —
+they share the credential schema, the `verifyHostToken()` validator, this
+WebSocket endpoint, the rotation flow, and the placement resolver.
+
+When the headless / remote-host phase opens (Phase 4 / V1.5 per
+`auth-and-host-model.md` §9), enabling remote Hosts on this endpoint is a
+single change: relax the kind check from `=== 'local'` to the full set the
+deployment supports. **No wire schema, frame format, authentication code path,
+or rotation flow changes.** Sandboxing remains orthogonal: a sandbox daemon
+runs as a Host (typically `kind=remote`) plus a capability layer
+(`auth-and-host-model.md` Appendix A.5), not as a new HostKind enum value.
+
+The narrowing exists so V1 prep cannot accidentally accept a remote Host
+upgrade before the matching provisioning UI, headless daemon binary, and
+threat-model review for that surface ship together.
+
 ## Envelope
 
 The schema source of truth is `packages/host/src/outbound-protocol.ts`.
