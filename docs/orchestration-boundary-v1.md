@@ -287,10 +287,16 @@ daemon, no reply — server fans out via the activity log / SSE bus.
 | `shutting_down` | `{}` | daemon-initiated shutdown notice |
 
 **V1 simplification**: embedded mode keeps server + daemon-host on the
-same machine. The protocol surface is identical in standalone /
-remote-deploy; the wire transport changes (D3), and any cross-machine
-data dependency is named explicitly (the prompt-context fs reads in
-§3.1 collapse via D2.1).
+same machine, but the protocol contract above is the single contract
+for both embedded and standalone / remote-deploy — same intents, same
+shapes, same path / byte invariant. D2 changes the wire transport
+(daemon outbound); D3 wires the desktop local-daemon lifecycle into
+that transport. **Any cross-machine data dependency that does not
+already exist in this contract requires an explicit D2.0 amendment
+before it can ride on a new field, sub-bundle, or "passthrough"
+option.** No prompt-context fs reads on server, no D2.1 collapse —
+under Rev 4 those reads are daemon-local (§4.6) and never were
+server's job.
 
 **What is NOT in the V1 surface** (deferred):
 
@@ -896,7 +902,15 @@ expanded in PR descriptions.
     daemon intent parameter forbidden from carrying server-resolved
     fs paths, byte content of L1/L2/CONSENSUS, or composed
     `process.env`. Closes the `RuntimeStart.options` passthrough
-    leak that Cindy flagged in the kickoff.
+    leak that Cindy flagged in the kickoff. **V1 simplification
+    paragraph at end of §3.3 rewritten** (Cindy round-1 review fold,
+    blocker 1 against `1db02b1`): old wording leaked Rev 3 stage
+    names ("wire transport changes (D3)") and Rev 3 framing ("the
+    prompt-context fs reads in §3.1 collapse via D2.1"), both of
+    which contradict Rev 4. New wording: same contract embedded vs
+    remote-deploy; D2 = wire transport, D3 = desktop lifecycle; new
+    cross-machine data dependency requires D2.0 amendment; no
+    prompt-context fs reads on server, no D2.1 collapse.
   - **§4.1**: dropped `consensus_text`; pointed daemon-host self-read
     in §4.6.
   - **§4.2**: dropped `system_prompt_text`, `memory_text`; pointed
