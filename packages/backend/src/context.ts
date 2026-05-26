@@ -17,7 +17,9 @@ import type { EmbeddedBootstrapState } from './auth/embedded-bootstrap.js';
 import type { PasswordCredentialService } from './auth/password.js';
 import type { AuthSessionService } from './auth/session.js';
 import type { LogLevelControl } from './logger.js';
-import type { RuntimeHostPlacementResolver } from './runtime/host-placement.js';
+import type { RuntimeHostPlacementControl } from './runtime/host-placement.js';
+
+export type BackendDeploymentMode = 'embedded' | 'standalone';
 
 export interface BackendLogger {
   info(obj: unknown, msg?: string): void;
@@ -61,6 +63,7 @@ export interface SilverhandCliLauncher {
 
 export interface BackendContext {
   db: Db;
+  deploymentMode: BackendDeploymentMode;
   serverConfig: ServerConfig;
   /** Auth/setup config resolved once during backend startup. */
   authConfig: AuthRuntimeConfig;
@@ -117,17 +120,15 @@ export interface BackendContext {
   /** User session token issuer/validator. */
   authSessions: AuthSessionService;
   /** Shared B.3 host-placement guard for create, membership, and runtime intent paths. */
-  placement: RuntimeHostPlacementResolver;
+  placement: RuntimeHostPlacementControl;
   /**
    * Backend-side facade for agent runtime lifecycle. Services and
    * routes route every spawn / stop / wake / clearSession / inbox
    * delivery / run-state read through this single interface.
    *
-   * The only implementation is `DaemonAgentRuntimeHost`
-   * (silverhand-daemon over `RuntimeBridge`). The in-process
-   * `ConversationManager` runtime was removed in #task:512 cleanup
-   * Commit B and the `SILVERHAND_RUNTIME_HOST` env switch was removed
-   * in Commit C — there is no runtime fallback.
+   * Embedded mode uses `DaemonAgentRuntimeHost` (silverhand-daemon
+   * over `RuntimeBridge`). Standalone mode uses a fail-loud
+   * control-plane-only implementation until D2 daemon outbound exists.
    */
   runtimeHost: AgentRuntimeHost;
 }

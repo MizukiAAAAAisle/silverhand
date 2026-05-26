@@ -270,6 +270,7 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
 
   const ctx: BackendContext = {
     db,
+    deploymentMode: 'embedded',
     serverConfig,
     authConfig,
     embeddedBootstrap: createDisabledEmbeddedBootstrapState(tmp.silverhandDir),

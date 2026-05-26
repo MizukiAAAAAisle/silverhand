@@ -57,7 +57,7 @@ export interface LogLevelControl {
  * `{ ts, level, msg, ...fields }`.
  *
  * Level is debug|info|warn|error. `SILVERHAND_LOG_LEVEL` accepts
- * warn|info|debug and defaults to warn. Per-conversation debug
+ * error|warn|info|debug and defaults to warn. Per-conversation debug
  * windows are held in the shared `LogLevelControl`; a line must carry
  * `conversationId` to be lifted by that window.
  */

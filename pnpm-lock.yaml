@@ -59,6 +59,9 @@ importers:
       '@radix-ui/react-tooltip':
         specifier: ^1.2.8
         version: 1.2.8(@types/react-dom@18.3.7(@types/react@18.3.28))(@types/react@18.3.28)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@silverhand/server':
+        specifier: workspace:*
+        version: link:../../packages/server
       '@tailwindcss/vite':
         specifier: ^4.2.4
         version: 4.2.4(vite@5.4.21(@types/node@22.19.17)(lightningcss@1.32.0))
@@ -243,6 +246,37 @@ importers:
       '@types/node':
         specifier: ^22.7.5
         version: 22.19.17
+      esbuild:
+        specifier: ^0.28.0
+        version: 0.28.0
+      tsx:
+        specifier: ^4.19.1
+        version: 4.21.0
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.5
+        version: 2.1.9(@types/node@22.19.17)(lightningcss@1.32.0)
+
+  packages/server:
+    dependencies:
+      '@node-rs/argon2':
+        specifier: ^2.0.2
+        version: 2.0.2
+      '@silverhand/backend':
+        specifier: workspace:*
+        version: link:../backend
+      '@silverhand/shared':
+        specifier: workspace:*
+        version: link:../shared
+      better-sqlite3:
+        specifier: ^11.3.0
+        version: 11.10.0
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+    devDependencies:
       esbuild:
         specifier: ^0.28.0
         version: 0.28.0

@@ -18,6 +18,7 @@ function rowToDto(row: HostRow): HostDto {
 }
 
 export const LOCAL_HOST_NAME = 'local';
+export const STANDALONE_SERVER_HOST_NAME = 'standalone-server';
 
 export interface CreateHostOptions {
   userId?: string | null;
@@ -226,6 +227,12 @@ export class HostRepo {
     const existing = this.getByName(LOCAL_HOST_NAME);
     if (existing) return existing;
     return this.create(LOCAL_HOST_NAME, 'local');
+  }
+
+  ensureStandaloneServer(): HostRow {
+    const existing = this.getByName(STANDALONE_SERVER_HOST_NAME);
+    if (existing) return existing;
+    return this.create(STANDALONE_SERVER_HOST_NAME, 'remote');
   }
 
   private getUnclaimedLocal(): HostRow | null {

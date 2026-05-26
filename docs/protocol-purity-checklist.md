@@ -11,9 +11,10 @@ Stage C's invariant is: **the renderer's view of the world is
 indistinguishable between embedded and remote backends, except for one
 fenced auto-bootstrap route**. That invariant fails today because:
 
-1. The main process imports backend internals as JS (`startBackend`,
-   `BackendContext`, log sinks) instead of speaking HTTP to them. Under
-   remote mode there is nothing to import.
+1. The embedded main process imports the shared server entrypoint as JS
+   (`startEmbeddedSilverhandServer`, `RunningBackend`, log sinks)
+   instead of speaking HTTP to it. Under remote mode there is no local
+   backend handle to import.
 2. Several IPC routes pass server-side state or absolute server-side
    paths to the renderer. Under remote mode those paths don't exist on
    the user's machine.
@@ -34,7 +35,7 @@ Every IPC route / main-process backend interaction gets exactly one tag.
 | **OS-IPC** | Native desktop capability the renderer cannot do itself — clipboard, file dialog, system notification, dock badge, window controls. Acceptable forever. | Keep. Audit only for input validation. |
 | **data** | Anything the backend already owns (or should own). The renderer must see it via HTTP, even if main proxies the request. | Convert in **C.2**. |
 | **local-host-only UX** | Legitimate "reveal in Finder", "open in default app" style affordance that only makes sense when the path lives on the user's machine. **Backend mode is orthogonal**: under remote-backend mode the desktop is still a local Host (Stage B `host.kind='local'`) and workspaces/agent dirs placed on that host are still on the user's filesystem. | Keep, but gate by **path provenance**: only when the path's owning host satisfies `host_id === local_host_id && host.kind === 'local'` (the local Host this desktop registered with the server in Stage B). **Never** gate on backend mode — that would hide legitimate UX from the remote-backend / local-Host case. C.3 lands the gate. |
-| **in-process shortcut** | main-process code that imports backend symbols directly (`startBackend`, `BackendContext`, `createCategorizedLoggers`, …) rather than going over HTTP. | Stays in **embedded** boot path only; Stage D1 extracts the symbols into `packages/server` and main launches that as a child process or in-proc adapter. |
+| **in-process shortcut** | main-process code that imports server/backend symbols directly (`startEmbeddedSilverhandServer`, `BackendContext`, `createCategorizedLoggers`, …) rather than going over HTTP. | Stays in **embedded** boot path only. Stage D1.a moved the embedded launcher to `@silverhand/server`; standalone mode uses the same package with explicit config. |
 | **protocol metadata** | Neutral, dual-mode connection info the renderer needs to address the backend and gate per-host UX — `url`, `mode`, `local_host_id`, future `host_kind`. Visible under both embedded and remote modes; carries no embedded-only assumption. Not a "purity hazard"; called out so the catalogue has a precise word that isn't OS-IPC (which would imply native capability) or data (which would imply renderer-readable resource state). | Keep. New protocol-metadata fields are additive on existing IPC routes (typically `backend:info`); they MUST be listed in the relevant §4/§5 row in the same PR they land. |
 | **embedded-only** | Code that holds embedded-mode invariants (one-shot bootstrap token file, loopback URL, `mode='embedded'` constant). | Keep, but **fence** behind a `mode === 'embedded'` check. Any new caller without the fence is a regression. |
 | **mixed** | A single IPC route / file carries fields with different tags. | The row's notes column MUST enumerate every contributing tag at field-level. Any field promotion (e.g. a protocol-metadata field that grows embedded-only assumptions) is a regression unless the table is updated in the same PR. |
@@ -53,17 +54,17 @@ Single file: `apps/desktop/src/main/index.ts`.
 
 ```ts
 import {
-  startBackend,
   createCategorizedLoggers,
+  startEmbeddedSilverhandServer,
   type CategorizedLoggers,
   type RunningBackend,
   type FileLogger,
-} from '@silverhand/backend';
+} from '@silverhand/server';
 ```
 
 | Symbol | Tag | V1 disposition |
 |---|---|---|
-| `startBackend` | in-process shortcut | Stays the embedded boot path. Under D1 the implementation moves to `packages/server`; embedded mode re-exports it for in-proc launch, remote mode skips the call entirely. |
+| `startEmbeddedSilverhandServer` | in-process shortcut | Stays the embedded boot path. D1.a moved the shared entrypoint into `packages/server`; embedded mode passes host-derived paths and a `HostClient`, standalone passes env-derived paths and no runtime host. |
 | `RunningBackend` (type) | in-process shortcut | Type-only; survives D1 because the embedded launcher still needs the handle. Remote mode never holds one. |
 | `createCategorizedLoggers`, `CategorizedLoggers`, `FileLogger` | OS-IPC (sort of — local fs only) | Logger lives on the desktop regardless of where backend runs (we always want desktop-local diagnostics). D1 keeps the call here; backend gets its own server-side logger. |
 

@@ -167,6 +167,7 @@ const placementErrorStatusMap: Record<
   host_mismatch: 409,
   host_missing: 404,
   host_not_owned: 403,
+  host_runtime_disabled: 409,
   host_revoked: 409,
   local_host_unbound: 409,
   workspace_missing: 404,
@@ -178,6 +179,20 @@ function placementErrorResponse(c: Context, err: unknown): Response | null {
     { error: err.message, code: err.code },
     placementErrorStatusMap[err.code] ?? 400,
   );
+}
+
+function hostRuntimeDisabledResponse(c: Context, action: string): Response {
+  return c.json(
+    {
+      error: `${action} requires a daemon-host runtime; standalone server mode is control-plane only until D2`,
+      code: 'host_runtime_disabled',
+    },
+    409,
+  );
+}
+
+function standaloneMode(ctx: BackendContext): boolean {
+  return ctx.deploymentMode === 'standalone';
 }
 
 function channelServiceErrorResponse(c: Context, err: unknown): Response | null {
@@ -649,58 +664,64 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     users,
     passwordCredentials: ctx.passwordCredentials,
   });
-  hosts.ensureLocal();
+  if (ctx.deploymentMode === 'embedded') {
+    hosts.ensureLocal();
+  } else {
+    hosts.ensureStandaloneServer();
+  }
 
   // ── Auth / health / runtimes / hosts ─────────────────────────────
   app.get(apiPaths.serverInfo, c =>
     c.json({ signup_enabled: ctx.authConfig.signupEnabled }),
   );
 
-  app.post(authPaths.embeddedBootstrap, async c => {
-    if (ctx.serverConfig.mode !== 'embedded') return notFound(c);
-    if (!isLoopbackRequest(c)) return notFound(c);
-    const body = await c.req.json().catch(() => null);
-    const token =
-      body && typeof body === 'object' && typeof (body as { token?: unknown }).token === 'string'
-        ? (body as { token: string }).token.trim()
-        : '';
-    if (!token) return notFound(c);
+  if (ctx.deploymentMode === 'embedded') {
+    app.post(authPaths.embeddedBootstrap, async c => {
+      if (ctx.serverConfig.mode !== 'embedded') return notFound(c);
+      if (!isLoopbackRequest(c)) return notFound(c);
+      const body = await c.req.json().catch(() => null);
+      const token =
+        body && typeof body === 'object' && typeof (body as { token?: unknown }).token === 'string'
+          ? (body as { token: string }).token.trim()
+          : '';
+      if (!token) return notFound(c);
 
-    const ok = await consumeEmbeddedBootstrapToken(
-      ctx.embeddedBootstrap,
-      token,
-      ctx.logger,
-    );
-    if (!ok) return notFound(c);
-
-    const allUsers = users.list();
-    let userId: string;
-    if (allUsers.length === 0) {
-      const user = ctx.userService.register({
-        name: 'local',
-        display_name: 'Local User',
-      });
-      userId = user.id;
-    } else if (allUsers.length === 1) {
-      userId = allUsers[0]!.id;
-    } else {
-      return c.json(
-        {
-          error: 'embedded bootstrap cannot choose among multiple users',
-          code: 'bootstrap_ambiguous_user',
-        },
-        409,
+      const ok = await consumeEmbeddedBootstrapToken(
+        ctx.embeddedBootstrap,
+        token,
+        ctx.logger,
       );
-    }
+      if (!ok) return notFound(c);
 
-    const user = ctx.userService.getDto(userId);
-    if (!user) return c.json({ error: 'bootstrap user is missing' }, 500);
-    const issued = ctx.authSessions.issueSession({
-      userId,
-      ...authSessionMetadata(c),
+      const allUsers = users.list();
+      let userId: string;
+      if (allUsers.length === 0) {
+        const user = ctx.userService.register({
+          name: 'local',
+          display_name: 'Local User',
+        });
+        userId = user.id;
+      } else if (allUsers.length === 1) {
+        userId = allUsers[0]!.id;
+      } else {
+        return c.json(
+          {
+            error: 'embedded bootstrap cannot choose among multiple users',
+            code: 'bootstrap_ambiguous_user',
+          },
+          409,
+        );
+      }
+
+      const user = ctx.userService.getDto(userId);
+      if (!user) return c.json({ error: 'bootstrap user is missing' }, 500);
+      const issued = ctx.authSessions.issueSession({
+        userId,
+        ...authSessionMetadata(c),
+      });
+      return c.json({ user_token: issued.userToken, user });
     });
-    return c.json({ user_token: issued.userToken, user });
-  });
+  }
 
   if (ctx.authConfig.signupEnabled) {
     app.post(authPaths.signup, async c => {
@@ -759,6 +780,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   );
 
   app.get(apiPaths.runtimes, async c => {
+    if (standaloneMode(ctx)) {
+      return hostRuntimeDisabledResponse(c, 'runtime detection');
+    }
     const runtimes = await detectRuntimes();
     return c.json({ runtimes });
   });
@@ -777,6 +801,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   app.post(apiPaths.hostClaimOrCreate, async c => {
     const userId = requireSessionBearerUser(c, ctx);
     if (userId instanceof Response) return userId;
+    if (standaloneMode(ctx)) {
+      return hostRuntimeDisabledResponse(c, 'local host claim');
+    }
 
     const body = await c.req.json().catch(() => null);
     const parsed = HostClaimOrCreateInputSchema.safeParse(body);
@@ -840,6 +867,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   app.post('/api/hosts/:id/revoke', async c => {
     const userId = requireSessionBearerUser(c, ctx);
     if (userId instanceof Response) return userId;
+    if (standaloneMode(ctx)) {
+      return hostRuntimeDisabledResponse(c, 'host revoke');
+    }
 
     const hostId = c.req.param('id');
     const host = hosts.get(hostId);
@@ -881,6 +911,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   app.post('/api/hosts/:id/rotate-token', async c => {
     const userId = requireSessionBearerUser(c, ctx);
     if (userId instanceof Response) return userId;
+    if (standaloneMode(ctx)) {
+      return hostRuntimeDisabledResponse(c, 'host token rotation');
+    }
 
     const hostId = c.req.param('id');
     const host = hosts.get(hostId);
@@ -966,6 +999,16 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (workspaces.getByName(parsed.data.name)) {
       return c.json({ error: 'workspace name already exists' }, 409);
     }
+    if (
+      standaloneMode(ctx) &&
+      (
+        parsed.data.workspace_path ||
+        parsed.data.workspace_host_id ||
+        parsed.data.member_agent_ids.length > 0
+      )
+    ) {
+      return hostRuntimeDisabledResponse(c, 'host-bound workspace creation');
+    }
 
     const workspacePath =
       parsed.data.workspace_path?.trim() || workspaces.workspacePathFor(parsed.data.name);
@@ -985,10 +1028,12 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     let workspaceHostId: string;
     let memberAgents: AgentDto[];
     try {
-      workspaceHostId = resolveCreateHostId(
-        parsed.data.workspace_host_id,
-        viewerUserId,
-      );
+      workspaceHostId = standaloneMode(ctx)
+        ? hosts.ensureStandaloneServer().id
+        : resolveCreateHostId(
+            parsed.data.workspace_host_id,
+            viewerUserId,
+          );
       memberAgents = parsed.data.member_agent_ids
         .map(id => agents.get(id))
         .filter((agent): agent is AgentDto => agent !== null);
@@ -1090,6 +1135,14 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     }
     if (!canMutateWorkspace(ctx, getUserPrincipal(c), workspace.id)) {
       return c.json({ error: 'forbidden' }, 403);
+    }
+    if (
+      standaloneMode(ctx) &&
+      conversations
+        .listAllChannelsForWorkspace(workspace.id)
+        .some(channel => conversations.listAgents(channel.id).length > 0)
+    ) {
+      return hostRuntimeDisabledResponse(c, 'workspace mutation with agent members');
     }
     const body = await c.req.json().catch(() => ({}));
     const parsed = UpdateWorkspaceInputSchema.safeParse(body);
@@ -1208,6 +1261,14 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     const workspaceConversations = conversations
       .list()
       .filter(conversation => conversation.workspace_id === workspace.id);
+    if (
+      standaloneMode(ctx) &&
+      workspaceConversations.some(
+        conversation => conversations.listAgents(conversation.id).length > 0,
+      )
+    ) {
+      return hostRuntimeDisabledResponse(c, 'workspace deletion with agent members');
+    }
     for (const conversation of workspaceConversations) {
       ctx.runtimeHost.resolveConversationRuns(conversation.id, 'conversation_closed');
       for (const ca of conversations.listAgents(conversation.id)) {
@@ -1446,6 +1507,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       });
       return c.json({ channel }, 201);
     }
+    if (standaloneMode(ctx) && parsed.data.member_agent_ids.length > 0) {
+      return hostRuntimeDisabledResponse(c, 'agent-backed channel creation');
+    }
     try {
       const result = await ctx.channelService.createChannel({
         workspaceId: id,
@@ -1489,6 +1553,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     const parsed = AddWorkspaceMemberInputSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    if (standaloneMode(ctx)) {
+      return hostRuntimeDisabledResponse(c, 'workspace agent membership');
     }
     const agent = agents.get(parsed.data.agent_id);
     if (!agent) return c.json({ error: 'agent not found' }, 404);
@@ -2147,6 +2214,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
+    if (standaloneMode(ctx) && conversations.listAgents(channel.id).length > 0) {
+      return hostRuntimeDisabledResponse(c, 'sending to an agent-backed conversation');
+    }
     try {
       const result = await ctx.conversationMessageService.sendMessage({
         conversationId: channel.id,
@@ -2174,6 +2244,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     const parsed = SendMessageInputSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    if (standaloneMode(ctx) && conversations.listAgents(thread.id).length > 0) {
+      return hostRuntimeDisabledResponse(c, 'sending to an agent-backed conversation');
     }
     try {
       const result = await ctx.conversationMessageService.sendMessage({
@@ -2370,6 +2443,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!canPostToConversation(ctx, getUserPrincipal(c), message.conversation_id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
+    if (standaloneMode(ctx) && conversations.listAgents(message.conversation_id).length > 0) {
+      return hostRuntimeDisabledResponse(c, 'thread creation in an agent-backed conversation');
+    }
     try {
       const result = await ctx.threadService.createThreadFromMessage({
         messageId,
@@ -2490,6 +2566,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       { conversationId, agentId },
       'api: start agent requested',
     );
+    if (standaloneMode(ctx)) {
+      return hostRuntimeDisabledResponse(c, 'agent start');
+    }
     try {
       await ctx.runtimeHost.start(conversationId, agentId);
       return c.json({ ok: true });
@@ -2525,6 +2604,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       { conversationId, agentId, mode, hasDirective: !!directive },
       'api: stop agent requested',
     );
+    if (standaloneMode(ctx)) {
+      return hostRuntimeDisabledResponse(c, 'agent stop');
+    }
     try {
       await ctx.runtimeHost.stop(conversationId, agentId, mode, directive);
       return c.json({ ok: true });
@@ -2552,6 +2634,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       { conversationId, agentId },
       'api: clear agent session requested',
     );
+    if (standaloneMode(ctx)) {
+      return hostRuntimeDisabledResponse(c, 'agent session clear');
+    }
     try {
       const result = await ctx.runtimeHost.clearSession(
         conversationId,
@@ -2649,6 +2734,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     }
     if (agents.getByName(parsed.data.name)) {
       return c.json({ error: 'agent name already exists' }, 409);
+    }
+    if (standaloneMode(ctx)) {
+      return hostRuntimeDisabledResponse(c, 'agent creation');
     }
     // The user-gate middleware guarantees `principal.kind === 'user'`
     // on every public route, so `creatorUserId` is always non-null
@@ -2822,6 +2910,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
       return c.json({ error: 'agent not found' }, 404);
     }
+    if (standaloneMode(ctx)) {
+      return hostRuntimeDisabledResponse(c, 'agent workspace resolution');
+    }
     const l1Dir = join(ctx.silverhandDir, 'agents', agent.id);
     const workspace = await buildAgentWorkspaceDto(l1Dir);
     return c.json({ workspace });
@@ -2920,6 +3011,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     }
     if (!canEditAgent(ctx, getUserPrincipal(c), agent.id)) {
       return c.json({ error: 'forbidden' }, 403);
+    }
+    if (standaloneMode(ctx)) {
+      return hostRuntimeDisabledResponse(c, 'agent stop');
     }
     const live = agents
       .listRuntimeConversations(id)

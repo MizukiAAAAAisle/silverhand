@@ -1,6 +1,6 @@
 export const SILVERHAND_LOG_LEVEL_ENV = 'SILVERHAND_LOG_LEVEL';
 
-export const SILVERHAND_LOG_LEVELS = ['warn', 'info', 'debug'] as const;
+export const SILVERHAND_LOG_LEVELS = ['error', 'warn', 'info', 'debug'] as const;
 export type SilverhandLogLevel = (typeof SILVERHAND_LOG_LEVELS)[number];
 
 export const DEFAULT_SILVERHAND_LOG_LEVEL: SilverhandLogLevel = 'warn';
@@ -25,7 +25,12 @@ export const FORBIDDEN_LOG_FIELD_PREFIXES = ['env_'] as const;
 export function parseSilverhandLogLevel(
   value: string | undefined,
 ): SilverhandLogLevel {
-  if (value === 'warn' || value === 'info' || value === 'debug') return value;
+  if (
+    value === 'error' ||
+    value === 'warn' ||
+    value === 'info' ||
+    value === 'debug'
+  ) return value;
   return DEFAULT_SILVERHAND_LOG_LEVEL;
 }
 

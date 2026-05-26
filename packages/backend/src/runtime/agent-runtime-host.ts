@@ -1,10 +1,11 @@
 /**
  * `AgentRuntimeHost` — the backend-side facade for agent runtime
  * lifecycle (start/stop/wake/clear-session/inbox delivery/run-state).
- * The only implementation is `DaemonAgentRuntimeHost`, which delegates
- * to `silverhand-daemon` over `RuntimeBridge` and reads passive
- * run-state from `RunStateCache` (events flow back through
- * `RuntimeEventHandler`).
+ * Embedded mode uses `DaemonAgentRuntimeHost`, which delegates to
+ * `silverhand-daemon` over `RuntimeBridge` and reads passive run-state
+ * from `RunStateCache` (events flow back through `RuntimeEventHandler`).
+ * Standalone mode uses a fail-loud control-plane-only implementation
+ * until D2 daemon outbound exists.
  *
  * **NOT related to workspace host identity.** The `host_id` column on
  * agents / workspaces and the `HostRepo` row identify a physical host
@@ -38,7 +39,7 @@ export interface ClearSessionResult {
 
 /**
  * Backend-side facade for the per-(conversation, agent) runtime
- * lifecycle. Only implementation: `DaemonAgentRuntimeHost`.
+ * lifecycle.
  */
 export interface AgentRuntimeHost {
   // ── lifecycle ───────────────────────────────────────────────────

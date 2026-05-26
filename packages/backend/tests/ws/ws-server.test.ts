@@ -15,6 +15,7 @@ import {
   type ServerConfig,
   type ServerFrame,
 } from '@silverhand/shared';
+import type { HostClient } from '@silverhand/host';
 import { startBackend, type RunningBackend } from '../../src/index.js';
 import { EVENT_WS_PATH, installEventWebSocketServer } from '../../src/ws/ws-server.js';
 import type { EventWsServerController, EventWsServerOptions } from '../../src/ws/ws-server.js';
@@ -347,8 +348,9 @@ describe('event WebSocket server', () => {
       onReconnect: () => () => {},
       close: () => Promise.resolve(),
       runtimeStatus: () => Promise.resolve({ runtimes: [] as unknown[] }),
-    } as unknown as Parameters<typeof startBackend>[0]['hostClient'];
+    } as unknown as HostClient;
     runningBackend = await startBackend({
+      mode: 'embedded',
       dbPath: join(tmp, 'silverhand.db'),
       silverhandDir: tmp,
       serverConfig: config,

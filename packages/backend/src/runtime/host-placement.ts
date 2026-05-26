@@ -9,7 +9,14 @@ export interface RuntimeHostPlacement {
   resolveForAgent(agentId: string): { host: HostRow };
 }
 
-export class RuntimeHostPlacementResolver implements RuntimeHostPlacement {
+export interface RuntimeHostPlacementControl extends RuntimeHostPlacement {
+  assertOwnedActiveHost(hostId: string, userId: string): HostRow;
+  resolveOwnedLocalForUser(userId: string): HostRow;
+  assertAgentMatchesHost(agentId: string, hostId: string): void;
+  assertHostEqualityForMembership(agentId: string, workspaceId: string): void;
+}
+
+export class RuntimeHostPlacementResolver implements RuntimeHostPlacementControl {
   constructor(
     private readonly deps: {
       hosts: HostRepo;
@@ -75,4 +82,34 @@ export class RuntimeHostPlacementResolver implements RuntimeHostPlacement {
   assertHostEqualityForMembership(agentId: string, workspaceId: string): void {
     this.deps.workspaces.assertHostEqualityForMembership(agentId, workspaceId);
   }
+}
+
+export class DisabledRuntimeHostPlacement implements RuntimeHostPlacementControl {
+  assertActiveHost(hostId: string): HostRow {
+    throw disabled(`host ${hostId} cannot be resolved in standalone mode`);
+  }
+
+  assertOwnedActiveHost(hostId: string, _userId: string): HostRow {
+    throw disabled(`host ${hostId} cannot be resolved in standalone mode`);
+  }
+
+  resolveOwnedLocalForUser(userId: string): HostRow {
+    throw disabled(`user ${userId} has no local runtime host in standalone mode`);
+  }
+
+  resolveForAgent(agentId: string): { host: HostRow } {
+    throw disabled(`agent ${agentId} has no runtime host in standalone mode`);
+  }
+
+  assertAgentMatchesHost(agentId: string, _hostId: string): void {
+    throw disabled(`agent ${agentId} host placement is disabled in standalone mode`);
+  }
+
+  assertHostEqualityForMembership(agentId: string, _workspaceId: string): void {
+    throw disabled(`agent ${agentId} host placement is disabled in standalone mode`);
+  }
+}
+
+function disabled(message: string): RuntimeHostPlacementError {
+  return new RuntimeHostPlacementError('host_runtime_disabled', message);
 }

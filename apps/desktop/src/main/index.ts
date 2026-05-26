@@ -24,14 +24,14 @@ import {
   type UserDto,
 } from '@silverhand/shared';
 import {
-  startBackend,
   createCategorizedLoggers,
+  startEmbeddedSilverhandServer,
   type CategorizedLoggers,
   type RunningBackend,
   type FileLogger,
-} from '@silverhand/backend';
+} from '@silverhand/server';
 import { HostClient, spawnDaemonChild, type DaemonHandle } from '@silverhand/host';
-import { loadOrCreateServerConfig, databasePath, silverhandDir, writeServerConfig } from './config.js';
+import { loadOrCreateServerConfig, silverhandDir, writeServerConfig } from './config.js';
 import {
   buildHostClaimInput,
   loadOrCreateInstallationId,
@@ -1025,9 +1025,8 @@ async function bootstrap(): Promise<void> {
         'silverhand-daemon exited and exceeded restart budget',
       );
     });
-    backend = await startBackend({
-      dbPath: databasePath(),
-      silverhandDir: silverhandDir(),
+    backend = await startEmbeddedSilverhandServer({
+      dataDir: silverhandDir(),
       serverConfig: config,
       silverhandCliLauncher: resolveSilverhandCliLauncher(),
       logger,

@@ -41,12 +41,11 @@
  *     `publishInitCooldown`); the success arm flips the row to
  *     `starting` + the daemon-reported pid.
  *
- * Daemon is the only supported runtime path. The legacy in-process
+ * Daemon is the only embedded runtime path. The legacy in-process
  * ConversationManager runtime was removed in #task:512 cleanup
  * Commit B; the `SILVERHAND_RUNTIME_HOST` env switch was removed in
- * Commit C. There is no runtime fallback — backend `startBackend`
- * throws if no `HostClient` is passed; `silverhand-daemon` is
- * mandatory.
+ * Commit C. Standalone server mode wires a separate fail-loud
+ * control-plane-only host until D2 daemon outbound exists.
  *
  * # Why throws (and how this file uses them, preserved from 2a)
  *

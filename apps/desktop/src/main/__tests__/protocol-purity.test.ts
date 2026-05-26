@@ -8,11 +8,14 @@ const preloadRoot = fileURLToPath(new URL('../../preload', import.meta.url));
 const rendererRoot = fileURLToPath(new URL('../../renderer', import.meta.url));
 
 const allowedBackendImports = [
+].sort();
+
+const allowedServerImports = [
   'CategorizedLoggers',
   'FileLogger',
   'RunningBackend',
   'createCategorizedLoggers',
-  'startBackend',
+  'startEmbeddedSilverhandServer',
 ].sort();
 
 const cataloguedIpcHandlers = [
@@ -67,10 +70,14 @@ function stripComments(value: string): string {
     .replace(/\/\/.*$/gm, '');
 }
 
-function importedBackendSymbols(source: SourceFile): string[] {
+function importedPackageSymbols(source: SourceFile, packageName: string): string[] {
+  const escapedPackageName = packageName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const symbols: string[] = [];
   const statements = source.content.matchAll(
-    /import\s+(?:type\s+)?\{([^;]*?)\}\s+from\s+['"]@silverhand\/backend['"]/g,
+    new RegExp(
+      `import\\s+(?:type\\s+)?\\{([^;]*?)\\}\\s+from\\s+['"]${escapedPackageName}['"]`,
+      'g',
+    ),
   );
   for (const match of statements) {
     for (const part of stripComments(match[1] ?? '').split(',')) {
@@ -84,15 +91,24 @@ function importedBackendSymbols(source: SourceFile): string[] {
   }
   const allBackendImports = [
     ...source.content.matchAll(
-      /import\s+[^;]*from\s+['"]@silverhand\/backend(?:\/[^'"]*)?['"]/g,
+      new RegExp(
+        `import\\s+[^;]*from\\s+['"]${escapedPackageName}(?:\\/[^'"]*)?['"]`,
+        'g',
+      ),
     ),
   ];
   const unsupportedBackendImports = [
     ...source.content.matchAll(
-      /import\s+(?:type\s+)?(?:\*\s+as\s+\w+|[A-Za-z_$][\w$]*(?:\s*,\s*(?:\*\s+as\s+\w+|\{[^;]*\}))?)\s+from\s+['"]@silverhand\/backend(?:\/[^'"]*)?['"]/g,
+      new RegExp(
+        `import\\s+(?:type\\s+)?(?:\\*\\s+as\\s+\\w+|[A-Za-z_$][\\w$]*(?:\\s*,\\s*(?:\\*\\s+as\\s+\\w+|\\{[^;]*\\}))?)\\s+from\\s+['"]${escapedPackageName}(?:\\/[^'"]*)?['"]`,
+        'g',
+      ),
     ),
     ...source.content.matchAll(
-      /import\s+['"]@silverhand\/backend(?:\/[^'"]*)?['"]/g,
+      new RegExp(
+        `import\\s+['"]${escapedPackageName}(?:\\/[^'"]*)?['"]`,
+        'g',
+      ),
     ),
   ];
   if (unsupportedBackendImports.length > 0) {
@@ -106,13 +122,13 @@ function importedBackendSymbols(source: SourceFile): string[] {
 
 describe('desktop protocol purity catalogue', () => {
   it('fails loud on unsupported backend import forms mixed with named imports', () => {
-    const imports = importedBackendSymbols({
+    const imports = importedPackageSymbols({
       path: 'example.ts',
       content: `
         import { startBackend } from '@silverhand/backend';
         import * as backend from '@silverhand/backend';
       `,
-    });
+    }, '@silverhand/backend');
 
     expect(imports).toContain('startBackend');
     expect(imports).toContain('UNPARSED:example.ts');
@@ -120,10 +136,18 @@ describe('desktop protocol purity catalogue', () => {
 
   it('keeps direct @silverhand/backend imports fenced to the embedded boot path allowlist', () => {
     const imports = sourceFiles(mainRoot, new Set(['.ts']))
-      .flatMap(importedBackendSymbols)
+      .flatMap(source => importedPackageSymbols(source, '@silverhand/backend'))
       .sort();
 
     expect(imports).toEqual(allowedBackendImports);
+  });
+
+  it('keeps direct @silverhand/server imports fenced to the embedded boot path allowlist', () => {
+    const imports = sourceFiles(mainRoot, new Set(['.ts']))
+      .flatMap(source => importedPackageSymbols(source, '@silverhand/server'))
+      .sort();
+
+    expect(imports).toEqual(allowedServerImports);
   });
 
   it('keeps main IPC handlers in sync with the protocol-purity catalogue', () => {

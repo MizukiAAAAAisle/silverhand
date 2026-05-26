@@ -524,7 +524,7 @@ The backend writes three categorized JSONL logs under
 | `agent-<utc>.log` | `loggers.agent` | ConversationManager spawn / drain / exit / compaction. |
 | `cli-<utc>.log` | `loggers.cli` | Every `silverhand` CLI invocation + CLI-side pre-flight failures. |
 
-Log volume is controlled by `SILVERHAND_LOG_LEVEL=warn|info|debug`.
+Log volume is controlled by `SILVERHAND_LOG_LEVEL=error|warn|info|debug`.
 Default is `warn`, so `info` lifecycle lines are suppressed unless the
 operator opts in. Filtering happens at the logger sink; child loggers inherit
 the same level/window state. A temporary per-conversation debug window can
