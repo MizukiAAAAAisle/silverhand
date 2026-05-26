@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import desktopPackage from '../../../package.json';
 
 const mainRoot = fileURLToPath(new URL('..', import.meta.url));
 const preloadRoot = fileURLToPath(new URL('../../preload', import.meta.url));
@@ -160,6 +161,14 @@ describe('desktop protocol purity catalogue', () => {
     expect(config).toMatch(
       /const workspaceDeps = \[[\s\S]*'@silverhand\/server'[\s\S]*\];/,
     );
+  });
+
+  it('keeps bundled workspace packages out of packaged app runtime dependencies', () => {
+    const workspaceRuntimeDeps = Object.keys(desktopPackage.dependencies)
+      .filter(name => name.startsWith('@silverhand/'))
+      .sort();
+
+    expect(workspaceRuntimeDeps).toEqual([]);
   });
 
   it('keeps main IPC handlers in sync with the protocol-purity catalogue', () => {
