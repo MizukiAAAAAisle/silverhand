@@ -182,8 +182,6 @@ function placementErrorResponse(c: Context, err: unknown): Response | null {
   );
 }
 
-const READINESS_PROBE_KEY = '__silverhand_readiness_probe__';
-
 function hostRuntimeDisabledResponse(
   c: Context,
   action: string,
@@ -240,19 +238,8 @@ function readinessResponse(ctx: BackendContext): {
 function probeDbWritable(ctx: BackendContext): { ok: true } | { ok: false; error: string } {
   try {
     ctx.db.exec('BEGIN IMMEDIATE');
-    try {
-      ctx.db
-        .prepare('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)')
-        .run(READINESS_PROBE_KEY, String(Date.now()));
-      ctx.db
-        .prepare('DELETE FROM app_settings WHERE key = ?')
-        .run(READINESS_PROBE_KEY);
-      ctx.db.exec('COMMIT');
-      return { ok: true };
-    } catch (err) {
-      safeRollback(ctx);
-      throw err;
-    }
+    ctx.db.exec('ROLLBACK');
+    return { ok: true };
   } catch (err) {
     safeRollback(ctx);
     return { ok: false, error: err instanceof Error ? err.message : String(err) };

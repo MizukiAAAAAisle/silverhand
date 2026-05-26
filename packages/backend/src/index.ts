@@ -180,7 +180,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     db,
     deploymentMode: opts.mode,
     readiness: {
-      migrationsApplied: true,
+      migrationsApplied: false,
       listenReady: false,
     },
     serverConfig: opts.serverConfig,
@@ -216,6 +216,10 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     // Filled immediately below when the daemon runtime host is constructed.
     runtimeHost: undefined as unknown as AgentRuntimeHost,
   };
+  // `openDatabase()` runs migrations synchronously today. Keep this flip
+  // explicit so D1.d can move it to the hardened migration runner completion
+  // point without auditing the default.
+  ctx.readiness.migrationsApplied = true;
 
   // ── Runtime host wiring ─────────────────────────────────────────
   if (opts.mode === 'embedded') {
