@@ -1,6 +1,7 @@
 import type { Context, Hono } from 'hono';
 import {
   apiPaths,
+  probePaths,
   X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
 import type { BackendContext } from '../context.js';
@@ -46,6 +47,15 @@ export class PrincipalConversationMismatchError extends Error {
 
 const PRINCIPAL_CONTEXT_KEY = 'principal';
 
+function skipsPublicSetupGates(path: string): boolean {
+  return (
+    path === apiPaths.health
+    || path === apiPaths.serverInfo
+    || path === probePaths.readyz
+    || path.startsWith('/auth/')
+  );
+}
+
 export function installPublicPrincipalMiddleware(app: Hono<AppEnv>): void {
   app.use('*', async (c, next) => {
     if (c.req.path.startsWith('/internal/')) {
@@ -54,11 +64,7 @@ export function installPublicPrincipalMiddleware(app: Hono<AppEnv>): void {
     }
     // Anonymous/public paths skip principal resolution entirely. Session
     // bearer requests already have their principal set by bearer.ts.
-    if (
-      c.req.path === apiPaths.health
-      || c.req.path === apiPaths.serverInfo
-      || c.req.path.startsWith('/auth/')
-    ) {
+    if (skipsPublicSetupGates(c.req.path)) {
       await next();
       return;
     }
@@ -79,8 +85,9 @@ export function installPublicPrincipalMiddleware(app: Hono<AppEnv>): void {
  *
  *   - Internal routes (agent principal) skip — agents have no identity
  *     state and run with their own (cid, aid) auth.
- *   - `/api/health`, `/api/server/info`, and `/auth/*` skip — they
- *     are anonymous/public or own their auth response semantics.
+ *   - liveness/readiness probes, `/api/server/info`, and `/auth/*`
+ *     skip — they are anonymous/public or own their auth response
+ *     semantics.
  *   - Whitelisted public routes pass through this gate. In C.6+
  *     `/api/server/info` remains anonymous at the bearer layer; `GET
  *     /api/me` is kept here only as a defensive setup-route allowlist.
@@ -124,11 +131,7 @@ export function installRequireRegisteredViewerMiddleware(
       await next();
       return;
     }
-    if (
-      c.req.path === apiPaths.health
-      || c.req.path === apiPaths.serverInfo
-      || c.req.path.startsWith('/auth/')
-    ) {
+    if (skipsPublicSetupGates(c.req.path)) {
       await next();
       return;
     }

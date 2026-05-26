@@ -7,6 +7,7 @@ import {
   apiPaths,
   authPaths,
   internalPaths,
+  probePaths,
   AddWorkspaceMemberInputSchema,
   AgentCloseThreadInputSchema,
   AgentCreateChannelInputSchema,
@@ -181,20 +182,89 @@ function placementErrorResponse(c: Context, err: unknown): Response | null {
   );
 }
 
-// D2 followup: split read-only deployment-unavailable routes to 503/404 while
-// keeping work-intent routes on 409 host_runtime_disabled.
-function hostRuntimeDisabledResponse(c: Context, action: string): Response {
+const READINESS_PROBE_KEY = '__silverhand_readiness_probe__';
+
+function hostRuntimeDisabledResponse(
+  c: Context,
+  action: string,
+  status: 409 | 503 = 409,
+): Response {
   return c.json(
     {
       error: `${action} requires a daemon-host runtime; standalone server mode is control-plane only until D2`,
       code: 'host_runtime_disabled',
     },
-    409,
+    status,
   );
 }
 
 function standaloneMode(ctx: BackendContext): boolean {
   return ctx.deploymentMode === 'standalone';
+}
+
+function readinessResponse(ctx: BackendContext): {
+  body: {
+    ok: boolean;
+    mode: string;
+    deployment_mode: string;
+    checks: {
+      migrations_applied: boolean;
+      listen_ready: boolean;
+      db_writable: boolean;
+    };
+    error?: string;
+    ts: number;
+  };
+  status: 200 | 503;
+} {
+  const writable = probeDbWritable(ctx);
+  const checks = {
+    migrations_applied: ctx.readiness.migrationsApplied,
+    listen_ready: ctx.readiness.listenReady,
+    db_writable: writable.ok,
+  };
+  const ok = checks.migrations_applied && checks.listen_ready && checks.db_writable;
+  return {
+    status: ok ? 200 : 503,
+    body: {
+      ok,
+      mode: ctx.serverConfig.mode,
+      deployment_mode: ctx.deploymentMode,
+      checks,
+      ...(writable.ok ? {} : { error: writable.error }),
+      ts: Date.now(),
+    },
+  };
+}
+
+function probeDbWritable(ctx: BackendContext): { ok: true } | { ok: false; error: string } {
+  try {
+    ctx.db.exec('BEGIN IMMEDIATE');
+    try {
+      ctx.db
+        .prepare('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)')
+        .run(READINESS_PROBE_KEY, String(Date.now()));
+      ctx.db
+        .prepare('DELETE FROM app_settings WHERE key = ?')
+        .run(READINESS_PROBE_KEY);
+      ctx.db.exec('COMMIT');
+      return { ok: true };
+    } catch (err) {
+      safeRollback(ctx);
+      throw err;
+    }
+  } catch (err) {
+    safeRollback(ctx);
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+function safeRollback(ctx: BackendContext): void {
+  try {
+    if (ctx.db.inTransaction) ctx.db.exec('ROLLBACK');
+  } catch {
+    // Best-effort cleanup after a failed readiness write probe.
+  }
 }
 
 function channelServiceErrorResponse(c: Context, err: unknown): Response | null {
@@ -633,16 +703,16 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   installApiTimingMiddleware(app, ctx);
   installPublicBearerMiddleware(app, ctx, {
     // Liveness probe stays open so a process supervisor can health-check
-    // without holding the auth token.
+    // without holding a user session token. `/readyz` is outside `/api/*`.
     allowlist: [apiPaths.health, apiPaths.serverInfo],
   });
   installPublicPrincipalMiddleware(app);
   // Registration gate: after the public bearer middleware authenticates
   // a session, this verifies the user row still exists before public
-  // data routes run. `/api/health`, `/api/server/info`, `/auth/*`, and
-  // `/internal/*` are anonymous / route-owned / agent-principal and skip
-  // the relevant public layers. Under DB corruption (principal set but
-  // row missing) it 500s.
+  // data routes run. Probe paths, `/api/server/info`, `/auth/*`, and
+  // `/internal/*` are anonymous / route-owned / agent-principal and skip the
+  // relevant public layers. Under DB corruption (principal set but row missing)
+  // it 500s.
   installRequireRegisteredViewerMiddleware(app, ctx, {
     whitelistPaths: [apiPaths.serverInfo, apiPaths.me],
   });
@@ -772,13 +842,19 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     c.json({ ok: true, mode: ctx.serverConfig.mode, ts: Date.now() }),
   );
 
+  const handleReady = (c: Context): Response => {
+    const ready = readinessResponse(ctx);
+    return c.json(ready.body, ready.status);
+  };
+  app.get(probePaths.readyz, handleReady);
+
   app.get(apiPaths.eventWebSocket, c =>
     c.json({ error: 'event websocket requires a websocket upgrade' }, 401),
   );
 
   app.get(apiPaths.runtimes, async c => {
     if (standaloneMode(ctx)) {
-      return hostRuntimeDisabledResponse(c, 'runtime detection');
+      return hostRuntimeDisabledResponse(c, 'runtime detection', 503);
     }
     const runtimes = await detectRuntimes();
     return c.json({ runtimes });
@@ -2908,7 +2984,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       return c.json({ error: 'agent not found' }, 404);
     }
     if (standaloneMode(ctx)) {
-      return hostRuntimeDisabledResponse(c, 'agent workspace resolution');
+      return hostRuntimeDisabledResponse(c, 'agent workspace resolution', 503);
     }
     const l1Dir = join(ctx.silverhandDir, 'agents', agent.id);
     const workspace = await buildAgentWorkspaceDto(l1Dir);

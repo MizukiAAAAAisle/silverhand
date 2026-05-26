@@ -271,6 +271,10 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
   const ctx: BackendContext = {
     db,
     deploymentMode: 'embedded',
+    readiness: {
+      migrationsApplied: true,
+      listenReady: true,
+    },
     serverConfig,
     authConfig,
     embeddedBootstrap: createDisabledEmbeddedBootstrapState(tmp.silverhandDir),

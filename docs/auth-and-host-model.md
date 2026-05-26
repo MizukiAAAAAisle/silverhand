@@ -509,43 +509,46 @@ treats `revoked_at != NULL` and missing row identically (deny).
 
 ## 7. Server deployment form
 
-The server is **not** a CLI tool to be invoked locally. It is a deployable artifact. V1 ships in two forms (same image, two deployment paths):
+The server is **not** a desktop-only helper. It is a deployable Node server
+artifact. V1 route 1 ships the Node process first; an official Docker image is
+deferred until the server has passed local/remote soak.
 
-### 7.1 Docker image
+### 7.1 Standalone Node.js process
 
-Primary distribution form:
+Primary V1 distribution form:
 
-- `silverhand/silverhand-server:vX.Y.Z` published image
-- Single container; Node.js 24+ runtime; `silverhand-server` is the container's primary process
-- Persistent state: `/var/lib/silverhand` (volume-mount required)
+- Node.js 24+ runtime; `silverhand-server` is the primary process.
+- Persistent state: `/var/lib/silverhand` or another absolute
+  `SILVERHAND_DATA_DIR`.
   - `silverhand.db` (SQLite WAL)
+  - `silverhand.db-wal` / `silverhand.db-shm` beside the DB file
   - `blobs/` (local blob storage)
   - `workspaces/` (per-workspace fs roots; future host-bound resolution per `[depends: workspace-fs-decision]`)
-- Listen: `0.0.0.0:8080` inside container; mapped externally per deployer's reverse proxy / Tailscale / etc.
-- Logs to stdout/stderr (Docker captures)
+- `silverhand.db`, `silverhand.db-wal`, and `silverhand.db-shm` must remain in
+  the same directory on the same filesystem.
+- Listen: default `127.0.0.1:8080`; bind and expose it through the deployer's
+  process supervisor / reverse proxy / Tailscale / etc.
+- Logs write to stdout/stderr and to `logs/` under the data root when file
+  logging is enabled.
 
 Deployment example:
-
-```
-docker run -d --name silverhand-server \
-  -p 127.0.0.1:8080:8080 \
-  -v silverhand-state:/var/lib/silverhand \
-  -e SILVERHAND_LISTEN=0.0.0.0:8080 \
-  silverhand/silverhand-server:v1.0.0
-```
-
-### 7.2 Standalone Node.js process
-
-Equivalent to the image's primary process — for users who don't want Docker, want NODE_OPTIONS overrides, want to run it as a systemd service, etc.
 
 ```
 NODE_ENV=production \
 SILVERHAND_DATA_DIR=/var/lib/silverhand \
 SILVERHAND_LISTEN=127.0.0.1:8080 \
-node dist/server.js
+node packages/server/dist/server.js
 ```
 
-The container image is just a thin wrapper around this process.
+Operators running under systemd, pm2, or a bare Node process own native
+dependency installation/rebuild for the target Node ABI (`better-sqlite3`
+included).
+
+### 7.2 Future Docker image
+
+The official Docker image is deferred until after V1 route-1 soak. When it
+lands, it must preserve the same env contract, data-root layout, and single
+replica SQLite/WAL invariant.
 
 ### 7.3 Configuration interface
 
@@ -559,7 +562,7 @@ The container image is just a thin wrapper around this process.
 
 ### 7.4 Admin operations (recovery / maintenance)
 
-The server image includes `silverhand-server admin <subcommand>` for one-shot operational tasks. These are NOT part of the V1 product flow; they are recovery tools. They exist because losing all desktop sessions or forgetting an email's password should not require re-deploying the server.
+The server package includes `silverhand-server admin <subcommand>` for one-shot operational tasks. These are NOT part of the V1 product flow; they are recovery tools. They exist because losing all desktop sessions or forgetting an email's password should not require re-deploying the server.
 
 Available admin subcommands in V1:
 
@@ -568,13 +571,13 @@ Available admin subcommands in V1:
 - `silverhand-server admin list-hosts [--user <email>]` — emits host rows including `revoked_at`.
 - `silverhand-server admin revoke-host --host-id <x>` — revokes a host server-side regardless of UI state.
 
-Invocation in Docker: `docker exec silverhand-server silverhand-server admin reset-password --email shiki@example.com`.
+Invocation: `SILVERHAND_DATA_DIR=/var/lib/silverhand silverhand-server admin reset-password --email shiki@example.com`.
 
 These commands talk to the same DB the running server uses; SQLite's WAL allows safe read-only or single-writer access. Admin commands MUST acquire the same connection lock the server uses (single-process writes).
 
 ### 7.5 Embedded mode
 
-Embedded mode is the desktop app spawning the server in-process for fully-local users. Same image / Node module is imported and a server is started inside the Electron main process. Listen is loopback (`127.0.0.1:0`, OS-picked port). Auth bootstrap differs only in that the desktop has direct file access to bootstrap a session:
+Embedded mode is the desktop app spawning the server in-process for fully-local users. The same Node server module is imported and a server is started inside the Electron main process. Listen is loopback (`127.0.0.1:0`, OS-picked port). Auth bootstrap differs only in that the desktop has direct file access to bootstrap a session:
 
 - Server boot: writes a one-shot `bootstrap_session_token` to `~/.silverhand/embedded-bootstrap` (mode 0600, owner-only) before HTTP listen, and keeps only its hash in process memory.
 - Desktop reads file → POSTs `/auth/embedded-bootstrap { token }` over loopback.
@@ -667,9 +670,12 @@ Make `packages/backend` a deployable service:
 
 - New `packages/server` binary that wraps `startBackend(...)` for non-embedded use.
 - Env-driven config (per §7.3); replace constructor args.
-- Dockerfile + multi-stage build; image publish workflow.
-- Persistent volume layout per §7.1.
-- TLS not committed in V1 image — deployer's reverse proxy is responsible.
+- Node process deployment/runbook for systemd, pm2, or bare Node.
+- Persistent state layout per §7.1.
+- Official Dockerfile + multi-stage image publish workflow deferred until
+  after V1 route-1 soak.
+- TLS not committed in V1 server package — deployer's reverse proxy is
+  responsible.
 
 ### Phase 3 — Desktop remote connection skeleton + signup/login UI (1–2 weeks)
 

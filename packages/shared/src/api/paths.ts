@@ -173,6 +173,10 @@ export const apiPaths = {
   taskStatus: (messageId: string) => `/api/tasks/${messageId}/status`,
 } as const;
 
+export const probePaths = {
+  readyz: '/readyz',
+} as const;
+
 export const authPaths = {
   embeddedBootstrap: '/auth/embedded-bootstrap',
   signup: '/auth/signup',

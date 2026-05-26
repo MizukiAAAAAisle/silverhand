@@ -70,6 +70,19 @@ describe('standalone server env config', () => {
       expect(health.status).toBe(200);
       expect(await health.json()).toMatchObject({ ok: true, mode: 'remote' });
 
+      const ready = await fetch(`${running.url}/readyz`);
+      expect(ready.status).toBe(200);
+      expect(await ready.json()).toMatchObject({
+        ok: true,
+        mode: 'remote',
+        deployment_mode: 'standalone',
+        checks: {
+          migrations_applied: true,
+          listen_ready: true,
+          db_writable: true,
+        },
+      });
+
       const bootstrap = await fetch(`${running.url}/auth/embedded-bootstrap`, {
         method: 'POST',
         body: JSON.stringify({ token: 'unused' }),
@@ -104,6 +117,27 @@ describe('standalone server env config', () => {
       });
       expect(signup.status).toBe(200);
       const session = await signup.json() as { user_token: string };
+
+      const runtimes = await fetch(`${running.url}${apiPaths.runtimes}`, {
+        headers: { authorization: `Bearer ${session.user_token}` },
+      });
+      expect(runtimes.status).toBe(503);
+      expect(await runtimes.json()).toMatchObject({
+        code: 'host_runtime_disabled',
+      });
+
+      const agentCreate = await fetch(`${running.url}${apiPaths.agents}`, {
+        method: 'POST',
+        body: JSON.stringify({ name: 'standalone_agent', runtime: 'codex' }),
+        headers: {
+          authorization: `Bearer ${session.user_token}`,
+          'content-type': 'application/json',
+        },
+      });
+      expect(agentCreate.status).toBe(409);
+      expect(await agentCreate.json()).toMatchObject({
+        code: 'host_runtime_disabled',
+      });
 
       const workspace = await fetch(`${running.url}${apiPaths.workspaces}`, {
         method: 'POST',

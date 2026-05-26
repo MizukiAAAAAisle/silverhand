@@ -179,6 +179,10 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   const ctx: BackendContext = {
     db,
     deploymentMode: opts.mode,
+    readiness: {
+      migrationsApplied: true,
+      listenReady: false,
+    },
     serverConfig: opts.serverConfig,
     authConfig,
     embeddedBootstrap: createDisabledEmbeddedBootstrapState(opts.silverhandDir),
@@ -354,6 +358,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
         const port = address.port;
         const url = urlForListenAddress(listenHostname, port);
         ctx.serverConfig = { ...opts.serverConfig, url };
+        ctx.readiness.listenReady = true;
         logger.info({ url, listenHostname, port }, 'backend listening');
         resolve({
           url,

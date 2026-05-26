@@ -14,8 +14,9 @@ runtime difference is explicit config (`mode='embedded'` plus a daemon
   loopback, one-shot token, and `serverConfig.mode === 'embedded'`.
 - `standalone`: `silverhand-server` owns data/control-plane state only. Agent
   runtime, spawn files, local workspace path materialization, and daemon
-  outbound remain D2. Routes that would require a host runtime return
-  `409 { code: "host_runtime_disabled" }` instead of silently dropping work.
+  outbound remain D2. Routes that would require host work fail loudly with
+  `code: "host_runtime_disabled"` instead of silently dropping work. Work-intent
+  routes return `409`; read-only runtime availability probes return `503`.
 
 ## Variables
 
@@ -31,8 +32,9 @@ variable was supplied. Invalid values fail before the HTTP listener starts.
 
 ## Data Layout
 
-`SILVERHAND_DATA_DIR` is the persistent state root. D1.a uses the same layout
-as embedded mode:
+`SILVERHAND_DATA_DIR` is the persistent state root. The default is
+`/var/lib/silverhand`; systemd, pm2, and bare Node deployments should mount or
+back up this directory as one state unit:
 
 - `silverhand.db`
 - `silverhand.db-wal` / `silverhand.db-shm` when SQLite WAL is active
@@ -40,12 +42,36 @@ as embedded mode:
 - `workspaces/`
 - `logs/`
 
+`silverhand.db`, `silverhand.db-wal`, and `silverhand.db-shm` must live on the
+same volume and filesystem. Do not split the SQLite sidecar files across
+separate bind mounts; WAL mode relies on same-directory locking semantics.
+
+`blobs/`, `workspaces/`, and `logs/` may be split in a future layout, but D1.b's
+deployment contract treats the whole data root as one state unit. V1 standalone
+is single-replica SQLite/WAL only.
+
 Carrying an embedded-mode DB into standalone mode is unsupported in V1:
 standalone control-plane mode does not reconcile embedded daemon runtime state,
 and old schedules may target a disabled host runtime.
 
-D1.b will add the Dockerfile, healthcheck wiring, and container volume
-contract around this layout.
+## Health And Readiness
+
+- `GET /api/health`: liveness only. It keeps the existing public shape and
+  returns 200 when the process can answer HTTP.
+- `GET /readyz`: readiness. It returns 200 only after migrations have been
+  applied, the listen socket is ready, and a DB write probe succeeds. Otherwise
+  it returns 503 with per-check booleans.
+
+Use `/readyz` for process supervisors that support readiness checks. Do not use
+`/api/health` as a traffic-readiness signal.
+
+## Native Dependencies
+
+Route 1 V1 ships a Node server package, not an official server image. Operators
+running it under systemd, pm2, or a bare Node process must install with Node 24
+and ensure native dependencies such as `better-sqlite3` are built for that Node
+ABI. If the deployment target differs from the build machine, rebuild native
+dependencies on the target host before starting the service.
 
 ## Examples
 

@@ -64,6 +64,10 @@ export interface SilverhandCliLauncher {
 export interface BackendContext {
   db: Db;
   deploymentMode: BackendDeploymentMode;
+  readiness: {
+    migrationsApplied: boolean;
+    listenReady: boolean;
+  };
   serverConfig: ServerConfig;
   /** Auth/setup config resolved once during backend startup. */
   authConfig: AuthRuntimeConfig;

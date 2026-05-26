@@ -71,8 +71,10 @@ part of Stage A–D and MUST NOT be conflated with them:
   `auth-and-host-model.md` Appendix A.5.
 - **Multi-user invite / workspace sharing** (V1.5).
 - **OAuth providers** (GitHub Device Flow, Google OIDC) — V2.
-- **TLS termination in the server image**. Deployers use a reverse
-  proxy (Caddy / Tailscale / nginx); the image listens plain.
+- **Official server image / image TLS termination**. V1 route 1 ships a
+  Node server package first; a maintained server image is deferred until the
+  server has passed local/remote soak. Deployers use a reverse proxy (Caddy /
+  Tailscale / nginx) for TLS.
 - **Password recovery via email** (V1 uses `silverhand-server admin
   reset-password` recovery utility).
 - **Backup/restore tooling**.
@@ -451,15 +453,16 @@ redefine the primitive.
   `SILVERHAND_DISABLE_SIGNUP`, `SILVERHAND_LOG_LEVEL`. Replace
   constructor-argument config; document the full env contract in
   `docs/server-env-config.md` (to be written alongside this stage).
-- Dockerfile (multi-stage), image publish workflow,
-  `silverhand/silverhand-server:vX.Y.Z` tag.
-- Persistent volume layout per `auth-and-host-model.md §7.1`:
+- Node server deployment/runbook for systemd, pm2, or bare Node. Official
+  Docker image is deferred to an independent post-soak stage.
+- Persistent state layout per `auth-and-host-model.md §7.1`:
   `/var/lib/silverhand/silverhand.db`, `blobs/`, `workspaces/`.
 - Admin recovery subcommands (NOT product flow): `admin reset-password`,
   `admin list-users`, `admin list-hosts`, `admin revoke-host`. Each
   acquires the same DB connection lock the running server uses
   (single-process writes invariant from `CLAUDE.md`).
-- Healthcheck endpoint (`GET /healthz`) for container orchestrators.
+- Readiness (`GET /readyz`) for process supervisors; existing `/api/health`
+  remains process liveness only.
 - Migration runner: idempotent on startup, fails loud on inconsistent
   state.
 - Embedded mode now imports the server entry point exactly the same
@@ -473,14 +476,15 @@ remote control-plane only; daemon transport is D2.
 
 - **D1.a** `packages/server` entrypoint + env config; embedded mode
   imports it.
-- **D1.b** Dockerfile + healthcheck + volume layout + image build CI.
+- **D1.b** readiness + data layout docs + Node deployment runbook.
 - **D1.c** Admin recovery subcommands (`reset-password` first).
 - **D1.d** Migration runner hardening + idempotent startup + version
   check.
 
 **Acceptance criteria for D1**:
 
-- `docker run` produces a working server reachable over the bound port.
+- A built Node server process starts successfully and is reachable over the
+  bound port.
 - Desktop in "remote" mode (server URL in Settings) successfully signs
   up, logs in, lists/creates workspaces, sends a message, receives
   server-side state updates — i.e. **the full control-plane surface
@@ -488,15 +492,16 @@ remote control-plane only; daemon transport is D2.
   in remote mode (that's D4).
 - Embedded mode imports the same entry point with no code-path
   divergence beyond config and `/auth/embedded-bootstrap` enablement.
-- `docker exec silverhand-server silverhand-server admin reset-password
-  --email <x>` works; revokes all sessions for that user.
-- Healthcheck returns 200 once migrations are applied and the listen
-  socket is open.
+- `silverhand-server admin reset-password --email <x>` works against the
+  configured data dir; revokes all sessions for that user.
+- Readiness returns 200 once migrations are applied, the DB is writable, and
+  the listen socket is open; liveness stays process-only.
 - Embedded mode startup time within 10% of the previous in-process
   startup.
 
 **Soak requirement**: D1 ships and runs in production-like usage
 (embedded + at least one remote-mode deployment) before D2.0 starts.
+Official server image work is intentionally deferred until this soak passes.
 The soak surface is large; we do not want D1 control-plane regressions
 masked under later milestones' churn.
 
