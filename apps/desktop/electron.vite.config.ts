@@ -3,7 +3,11 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { resolve } from 'node:path';
 
-const workspaceDeps = ['@silverhand/shared', '@silverhand/backend'];
+const workspaceDeps = [
+  '@silverhand/shared',
+  '@silverhand/backend',
+  '@silverhand/server',
+];
 const nativeExternalDeps = [
   '@node-rs/argon2',
   'bufferutil',

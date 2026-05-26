@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 const mainRoot = fileURLToPath(new URL('..', import.meta.url));
 const preloadRoot = fileURLToPath(new URL('../../preload', import.meta.url));
 const rendererRoot = fileURLToPath(new URL('../../renderer', import.meta.url));
+const desktopRoot = fileURLToPath(new URL('../../../', import.meta.url));
 
 const allowedBackendImports = [
 ].sort();
@@ -148,6 +149,17 @@ describe('desktop protocol purity catalogue', () => {
       .sort();
 
     expect(imports).toEqual(allowedServerImports);
+  });
+
+  it('bundles workspace server code into the desktop main build', () => {
+    const config = readFileSync(
+      join(desktopRoot, 'electron.vite.config.ts'),
+      'utf8',
+    );
+
+    expect(config).toMatch(
+      /const workspaceDeps = \[[\s\S]*'@silverhand\/server'[\s\S]*\];/,
+    );
   });
 
   it('keeps main IPC handlers in sync with the protocol-purity catalogue', () => {
