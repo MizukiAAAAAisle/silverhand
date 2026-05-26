@@ -106,6 +106,47 @@ Pre-flight failures (exit 1, code `validation_error`):
 | `invalid_utf8` | Stdin contained byte sequences that are not valid UTF-8. The CLI does NOT silently substitute U+FFFD — re-encode upstream and retry. |
 | `unexpected_arguments` | Any positional argument or `--`-trailing token (rejected globally; see §4.1). |
 
+#### Planned: create initial prompts become stdin-only
+
+Decision note, 2026-05-26: `silverhand thread create` and
+`silverhand channel create` should use the same heredoc / pipe model for
+their initial prompt body as `silverhand message send`. The focused plan lives
+in `docs/thread-channel-create-initial-prompt-stdin.md`.
+
+Target semantics for the follow-up implementation:
+
+- `--context-summary <text>` remains a required inline string flag. It is
+  intentionally short and auditable. If it truly needs multiple lines,
+  callers should capture a shell variable and pass that quoted variable.
+- `--initial-prompt` is removed. The command reads the whole initial prompt
+  body from **STDIN**.
+- Do not introduce `@-`, `@<path>`, bare `-`, or file-input sentinels. They
+  create an unnecessary second text-source convention; `@<path>` also
+  conflicts with Silverhand's first-class `@<handle>` mention syntax.
+- Supplying the removed `--initial-prompt` flag should fail loudly with
+  `validation_error/flag_removed` and a heredoc / pipe migration hint, not a
+  generic `unknown_flag`.
+- Stdin pre-flight should match `message send`: TTY stdin fails, 0-byte stdin
+  fails, and invalid UTF-8 fails.
+
+Target call shape:
+
+```bash
+silverhand thread create \
+  --title "Stage X" \
+  --context-summary "Short summary for recovery and audit." <<'SILVERHAND_EOF'
+Initial prompt body. Quotes, backticks, $vars, multi-line markdown — all safe.
+SILVERHAND_EOF
+
+printf "%s" "Short initial prompt" | silverhand channel create \
+  --title "New topic" \
+  --context-summary "Why this channel exists."
+```
+
+Until that follow-up lands, the current CLI still requires
+`--initial-prompt <text>`; do not use this planned call shape as an
+operational instruction.
+
 ### 3.2 `silverhand task list --status` filter macros
 
 The DB-side `tasks.status` column is always one of the four canonical

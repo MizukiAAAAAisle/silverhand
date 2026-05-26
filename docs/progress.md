@@ -4,6 +4,55 @@
 
 ---
 
+## 2026-05-26 — Thread/channel create initial prompt stdin-only 目标语义
+
+### 背景
+
+最近几个由 agent 创建的 Thread 首条消息只包含字面量 `@-`。取证结论：
+
+- `silverhand thread create` / `silverhand channel create` 当前只把
+  `--initial-prompt <text>` 当普通 argv 字符串读取，不读 stdin。
+- `@-` 不是 Silverhand CLI 的 stdin 哨兵，也没有 backend 特判。
+- heredoc 写入了进程 stdin，但 create 命令没有消费 stdin，所以 argv 里的
+  `@-` 原样进入 `initial_prompt` 并落库。
+
+### 决议
+
+统一 heredoc 语义：后续实现中，`thread create` / `channel create` 的
+`initial_prompt` 应与 `message send` 的 body 使用同一模型——从 stdin
+直读，不再使用 `@-`、`@<path>` 或裸 `-` 这类哨兵。
+
+目标 CLI 形态：
+
+```bash
+silverhand thread create \
+  --title "Stage X" \
+  --context-summary "Short recovery/audit summary." <<'SILVERHAND_EOF'
+Initial prompt body.
+SILVERHAND_EOF
+```
+
+具体边界：
+
+- `--context-summary` 仍是 required inline string。它应该短、便于恢复和审计；
+  真要多行时由调用方用 shell 变量捕获后传入。
+- `--initial-prompt` 未来删除；旧 flag 必须报
+  `validation_error/flag_removed`，并给 heredoc / pipe 迁移提示，不能退化成
+  generic unknown flag。
+- stdin fail-loud 行为对齐 `message send`：TTY stdin、0-byte stdin、invalid
+  UTF-8 都直接失败。
+- 不支持文件输入。文件输入会引入多余工具操作和临时文件，也会和
+  Silverhand 的 `@<handle>` mention 语义产生不必要冲突。
+
+### 当前状态
+
+本次只先落文档决议。当前 CLI 尚未实现该目标语义，仍要求
+`--initial-prompt <text>`；在实现 PR 合入前，多行 initial prompt 需要先用
+shell heredoc 捕获到变量，再把变量作为 `--initial-prompt "$PROMPT"` 传入，
+不要使用 `--initial-prompt @-`。
+
+单独规范文档：`docs/thread-channel-create-initial-prompt-stdin.md`。
+
 ## 2026-05-21 — `silverhand-daemon` PR-1（AgentHost runtime boundary, IPC skeleton）
 
 - **新 package `@silverhand/host`** 落地 `#task:510`。包含三块：
