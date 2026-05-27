@@ -2,13 +2,17 @@
  * D3.c Commit 1 — single-source-of-truth tests for the V1 server URL
  * acceptance policy that ships in `@silverhand/shared`.
  *
- * D4.a Commit 1 extension: classifier widened to admit `kind: 'remote'`
- * for non-loopback https and (with dev flag) non-loopback http. The
- * D3.c raw-host strict-allowlist regression coverage (obfuscated IPv4,
- * expanded IPv6, userinfo refusal, IPv6 bracket-suffix smuggling) is
- * preserved verbatim — those inputs now classify as `kind: 'remote'`
- * or `malformed_url` depending on the failure mode, but they NEVER
- * classify as loopback, regardless of `allowInsecureRemote`.
+ * D4.a Commit 1 extension (+ review tightening 2026-05-28):
+ * classifier widened to admit `kind: 'remote'` for non-loopback
+ * https (always) and non-loopback http (only under the dev flag).
+ * The D3.c raw-host strict-allowlist regression coverage (obfuscated
+ * IPv4, expanded IPv6, userinfo refusal, IPv6 bracket-suffix
+ * smuggling) is preserved verbatim — but obfuscated forms are now
+ * **rejected outright** as `obfuscated_loopback_disallowed`
+ * regardless of scheme and flag, NOT classified as remote. The
+ * positive loopback allowlist gate and the negative obfuscated-form
+ * gate are two halves of the same "visible URL form must match the
+ * host the daemon actually connects to" invariant.
  *
  * Why these tests live in the backend test runner:
  *   - `@silverhand/shared` is a host-agnostic types/utility package
@@ -362,24 +366,44 @@ describe('classifyServerUrl — V1 acceptance policy', () => {
   });
 
   it('rejects `http://[::1%25lo0]:18080` (percent-encoded IPv6 zone-id — same "URL parser semantic equivalence" family as expanded IPv6)', () => {
-    // Cindy's spec wanted `non_loopback_host` here so the raw form
-    // `[::1%25lo0]` shows up in the rejection message; in this Node
-    // version the URL constructor refuses to parse the percent-
-    // encoded zone-id at all, so the input lands in `malformed_url`
-    // before the raw extractor runs. The load-bearing invariant is
-    // "rejected, period" — pin whichever rejection path the runtime
-    // takes so we notice if a future Node release loosens its
-    // parser and starts normalizing zone-id forms to `[::1]`
-    // (which is exactly the "URL parser semantic equivalence"
-    // class we explicitly do NOT want to admit into the allowlist).
+    // Cindy's spec originally wanted the raw-extract path to fire
+    // here so the literal `[::1%25lo0]` shows up in the rejection
+    // message; in the current Node version the URL constructor
+    // refuses to parse the percent-encoded zone-id at all, so the
+    // input lands in `malformed_url` before the raw extractor runs.
+    // The load-bearing invariant is "rejected, period" — pin
+    // whichever rejection path the runtime takes so we notice if a
+    // future Node release loosens its parser and starts normalizing
+    // zone-id forms to `[::1]` (which is exactly the "URL parser
+    // semantic equivalence" class we explicitly do NOT want to
+    // admit into the loopback allowlist).
+    //
+    // D4.a Commit 1 review (Cindy 2026-05-28): if a future Node DOES
+    // accept the zone-id and normalize hostname to `[::1]`, this
+    // input would route through the new
+    // `obfuscated_loopback_disallowed` gate (raw host
+    // `[::1%25lo0]` not in allowlist, but `parsed.hostname === '[::1]'`
+    // which IS in allowlist). Either rejection path is acceptable;
+    // BOTH `non_loopback_host` (the old D3 reason, no longer
+    // defined under D4.a so it cannot appear) and the new typed
+    // reasons keep us covered.
     const out = classifyServerUrl('http://[::1%25lo0]:18080');
     expect(out.ok).toBe(false);
     if (out.ok) throw new Error('unreachable');
-    // Acceptable reasons: malformed_url (URL constructor refused)
-    // OR non_loopback_host (constructor accepted, raw extractor
-    // saw `[::1%25lo0]` which is not in the allowlist). Both prove
-    // the strict-allowlist invariant holds.
-    expect(['malformed_url', 'non_loopback_host']).toContain(out.reason);
+    // Acceptable reasons under D4.a:
+    //   - `malformed_url` (URL constructor refused — current Node).
+    //   - `obfuscated_loopback_disallowed` (constructor accepted +
+    //      hostname normalized to `[::1]` — hypothetical future Node).
+    //   - `insecure_remote_http_disallowed` (constructor accepted +
+    //      hostname stayed `[::1%25lo0]` — also unlikely but pin
+    //      defensively).
+    // The old D3 `non_loopback_host` is GONE under D4.a; tests must
+    // NOT carry it forward.
+    expect([
+      'malformed_url',
+      'obfuscated_loopback_disallowed',
+      'insecure_remote_http_disallowed',
+    ]).toContain(out.reason);
   });
 
   // ── Discriminator hygiene ──────────────────────────────────────

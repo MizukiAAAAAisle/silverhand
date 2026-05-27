@@ -17,17 +17,17 @@
  *     `insecure_remote_http_disallowed`.
  *
  * Raw-host strict-allowlist contract preserved from D3.c (Cindy
- * `#task:631`): the loopback check runs against the **raw authority
+ * `#task:631`) and tightened in D4.a Commit 1 review (Cindy
+ * 2026-05-28): the loopback check runs against the **raw authority
  * host** extracted from the input string, NOT against `URL.hostname`.
  * Obfuscated forms (`http://0x7f000001`, `http://127.000.000.001`,
  * `http://[0:0:0:0:0:0:0:1]`) parse to canonical loopback under
- * `new URL(...)` — but their raw authority is not in the allowlist,
- * so they classify as `kind: 'remote'` (subject to scheme rules), NOT
- * as loopback. This stays true regardless of `allowInsecureRemote`
- * (Cindy D4.a Commit 1 constraint: "dev flag must not let obfuscated
- * loopback / userinfo / weird URL forms flow back to acceptable
- * loopback input"). Userinfo (`user@host`) and IPv6 bracket-suffix
- * smuggling (`[::1]evil`) are still rejected outright by
+ * `new URL(...)` — their raw authority is not in the allowlist, AND
+ * the URL parser would resolve them to a loopback IP, so they are
+ * **rejected outright** as `obfuscated_loopback_disallowed`
+ * regardless of scheme and regardless of the `allowInsecureRemote`
+ * dev flag. Userinfo (`user@host`) and IPv6 bracket-suffix smuggling
+ * (`[::1]evil`) are still rejected outright by
  * {@link extractRawAuthorityHost} regardless of flag.
  *
  * Why a shared module:
@@ -300,17 +300,21 @@ export interface ClassifyServerUrlOptions {
  * through the daemon's `hostConnectWebSocketUrl` so the
  * http→ws / https→wss transformation stays in one place.
  *
- * Strict-allowlist contract preserved from D3.c (Cindy `#task:631`):
- * the loopback check runs against the **raw authority host** from
- * the input string, NOT against `URL.hostname`. The URL parser would
+ * Strict-allowlist contract preserved from D3.c (Cindy `#task:631`)
+ * and tightened in D4.a Commit 1 review (Cindy 2026-05-28): the
+ * loopback check runs against the **raw authority host** from the
+ * input string, NOT against `URL.hostname`. The URL parser would
  * otherwise normalize numeric obfuscations (`127.000.000.001` /
  * `0177.0.0.1` / `2130706433` / `0x7f000001`) and expanded IPv6
  * (`[0:0:0:0:0:0:0:1]`) into the canonical allowlist literals —
- * accepting those AS LOOPBACK would silently widen the V1 policy
- * beyond what the Wizard/Settings UI claims. Under D4.a those
- * obfuscated inputs classify as `kind: 'remote'` (subject to scheme
- * rules) rather than loopback; the dev flag's only effect is on
- * non-loopback http acceptance, not on loopback classification.
+ * accepting those AS LOOPBACK would silently widen the policy past
+ * what the Wizard/Settings UI claims, AND classifying them as
+ * `kind: 'remote'` would still resolve to loopback at the IP layer
+ * (re-admitting the regression). Under D4.a those obfuscated inputs
+ * are **rejected outright** as `obfuscated_loopback_disallowed`,
+ * regardless of scheme and regardless of the `allowInsecureRemote`
+ * dev flag. The dev flag's only effect is on non-loopback http
+ * acceptance — never on the loopback classification path.
  *
  * The `URL` constructor is still invoked because it gives us the
  * cheapest scheme validation and the normalized URL object the
