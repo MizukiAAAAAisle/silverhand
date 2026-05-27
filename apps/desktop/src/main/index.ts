@@ -19,6 +19,7 @@ import {
   classifyServerUrl,
   isSafeOpenExtension,
   readAllowInsecureRemoteFlag,
+  readForceEmbeddedFlag,
   redactServerConnectionProfile,
   type AuthLoginInput,
   type AuthSignupInput,
@@ -65,6 +66,10 @@ import {
   readServerConnectionProfileViewOrNull,
   writeServerConnectionProfile,
 } from './server-connection-profile.js';
+import {
+  decideBackendBootMode,
+  RemoteModeNotYetWiredError,
+} from './backend-boot-mode.js';
 import {
   probeServerInfo,
   type ProbeServerInfoResult,
@@ -1275,6 +1280,55 @@ async function bootstrap(): Promise<void> {
         pathPatch: pathResult,
       },
       'logger initialized',
+    );
+    // D4.a Commit 3 — boot-mode decision. We compute it AFTER the
+    // logger is initialized so the decision can be logged actionably,
+    // but BEFORE we spawn the daemon / start the embedded backend so
+    // the trip wire (remote mode → throw) fires before any partial
+    // state lands on disk. Inputs are taken from the existing
+    // `safeStorage`-backed profile reader and the strict env helpers
+    // in `@silverhand/shared/config`. See `backend-boot-mode.ts` for
+    // the full decision matrix and the trip-wire rationale.
+    const bootProfileView = readServerConnectionProfileViewOrNull({
+      silverhandRoot: silverhandDir(),
+      safe: safeStorage,
+      logger: logger
+        ? {
+            warn: (payload, msg) => logger?.warn(payload, msg),
+            info: (payload, msg) => logger?.info(payload, msg),
+          }
+        : undefined,
+    });
+    const bootDecision = decideBackendBootMode({
+      profileView: bootProfileView,
+      forceEmbedded: readForceEmbeddedFlag(process.env),
+      allowInsecureRemote: readAllowInsecureRemoteFlag(process.env),
+    });
+    if (bootDecision.mode === 'remote') {
+      logger.warn(
+        {
+          serverUrl: bootDecision.serverUrl,
+          insecure: bootDecision.insecure,
+        },
+        'D4.a Commit 3 trip wire: remote-mode boot detected but not yet implemented; throwing',
+      );
+      // Throw a typed error so a future remote-mode regression (e.g.
+      // someone widening the Setup Wizard to accept remote URLs
+      // without landing the Commit 5 bootstrap branch) fails loud
+      // instead of silently falling back to embedded. Today the
+      // Settings save pipeline returns `remote_backend_not_yet_supported`
+      // for non-loopback URLs, so this path is structurally
+      // unreachable in production builds — the throw is a
+      // forward-compat regression gate.
+      throw new RemoteModeNotYetWiredError(bootDecision);
+    }
+    logger.info(
+      {
+        reason: bootDecision.reason,
+        profileUrl: bootDecision.profileUrl,
+        classifyMessage: bootDecision.classifyMessage,
+      },
+      'D4.a Commit 3 boot decision: embedded',
     );
     if (remoteDebugging.enabled) {
       logger.info(

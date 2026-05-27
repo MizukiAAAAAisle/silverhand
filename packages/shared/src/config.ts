@@ -94,3 +94,39 @@ export function readAllowInsecureRemoteFlag(
 ): boolean {
   return env[SILVERHAND_ALLOW_INSECURE_REMOTE_ENV] === '1';
 }
+
+/**
+ * D4.a Commit 3 — dev-only escape hatch that forces the desktop main
+ * process to boot the EMBEDDED backend even when a server connection
+ * profile (`docs/remote-backend-d4-design.md` §7) is present and would
+ * otherwise route to remote mode.
+ *
+ * Intended use cases (all dev-only):
+ *   - A developer has a committed remote profile but wants to debug
+ *     the embedded code path without clearing the profile.
+ *   - The remote backend is temporarily unreachable and the developer
+ *     wants the app to come up against embedded so the rest of the
+ *     surface remains testable.
+ *   - Regression tests for the embedded boot path that share a
+ *     `~/.silverhand/` fixture with a remote profile.
+ *
+ * The flag does NOT:
+ *   - clear or modify the profile file (the profile remains exactly
+ *     as the user committed it; the next launch without the flag
+ *     resumes remote mode);
+ *   - widen any classifier acceptance (independent of
+ *     `SILVERHAND_ALLOW_INSECURE_REMOTE`, which only affects URL
+ *     classification);
+ *   - leak into the daemon (daemon does NOT read the profile or this
+ *     flag — Cindy R4 / §7.2 "Daemon never reads the profile").
+ *
+ * Strict-equality semantics matches the rest of our env contract:
+ * only the literal `'1'` activates it.
+ */
+export const SILVERHAND_FORCE_EMBEDDED_ENV = 'SILVERHAND_FORCE_EMBEDDED';
+
+export function readForceEmbeddedFlag(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return env[SILVERHAND_FORCE_EMBEDDED_ENV] === '1';
+}
