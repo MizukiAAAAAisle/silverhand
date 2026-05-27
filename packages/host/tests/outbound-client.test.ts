@@ -39,14 +39,39 @@ describe('outbound daemon websocket client', () => {
   });
 
   it('converts host config server URLs to the websocket endpoint', () => {
+    // V1 loopback-only policy (Cindy `#task:631` D3.c P1): http and
+    // https BOTH require loopback in V1 because remote backend
+    // support is gated to V1.1. The previous test treated `https://`
+    // as a free-pass scheme (V0 era); under the locked V1 policy any
+    // non-loopback host must throw on the daemon side regardless of
+    // scheme, matching the renderer + main classifier.
     expect(hostConnectWebSocketUrl('http://127.0.0.1:1234')).toBe(
       'ws://127.0.0.1:1234/api/hosts/connect',
     );
-    expect(hostConnectWebSocketUrl('https://example.test/base')).toBe(
-      'wss://example.test/api/hosts/connect',
+    expect(hostConnectWebSocketUrl('https://localhost:1234/base')).toBe(
+      'wss://localhost:1234/api/hosts/connect',
     );
     expect(() => hostConnectWebSocketUrl('http://example.test')).toThrow(
       'tls_required_for_non_loopback_host_ws',
+    );
+    // https-to-non-loopback now rejected with the same legacy error
+    // name so existing log greps still hit. (Slightly misleading
+    // string preserved for operator runbook continuity — see the
+    // comment in `hostConnectWebSocketUrl`.)
+    expect(() => hostConnectWebSocketUrl('https://example.test/base')).toThrow(
+      'tls_required_for_non_loopback_host_ws',
+    );
+    // Obfuscated IPv4 form that `new URL().hostname` would normalize
+    // to `127.0.0.1` — must still be rejected because the raw
+    // authority host is not in the literal allowlist.
+    expect(() => hostConnectWebSocketUrl('http://0x7f000001:1234')).toThrow(
+      'tls_required_for_non_loopback_host_ws',
+    );
+    // ws:// is not a valid backend server URL — rejected as
+    // unsupported scheme (the http→ws transformation lives inside
+    // this function, callers pass http/https).
+    expect(() => hostConnectWebSocketUrl('ws://127.0.0.1:1234')).toThrow(
+      /unsupported_server_url_protocol/,
     );
   });
 

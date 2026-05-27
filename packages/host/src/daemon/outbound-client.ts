@@ -14,7 +14,7 @@ import {
   DAEMON_HOST_CONFIG_FILENAME,
   DaemonHostConfigSchema,
   apiPaths,
-  isLoopbackHost as sharedIsLoopbackHost,
+  classifyServerUrl,
   type DaemonHostConfig,
 } from '@silverhand/shared';
 import {
@@ -956,19 +956,44 @@ export function defaultDaemonHostConfigPath(silverhandDir: string): string {
 }
 
 export function hostConnectWebSocketUrl(serverUrl: string): string {
-  const url = new URL(apiPaths.hostConnect, serverUrl);
-  if (url.protocol === 'http:') {
-    if (!isLoopbackHost(url.hostname)) {
+  // D3.c Commit 1 P1 (Cindy `#task:631`): delegate the V1 server-URL
+  // acceptance check to `classifyServerUrl` so renderer / main /
+  // daemon all gate on the same allowlist. Without this delegation,
+  // a hand-edited `daemon-config.json` carrying an obfuscated IPv4
+  // (`http://0x7f000001:18080`, `http://2130706433:18080`, etc.) or
+  // expanded IPv6 (`http://[0:0:0:0:0:0:0:1]:18080`) would slip past
+  // the daemon because `new URL(...).hostname` would normalize those
+  // forms back to the canonical allowlist literals — even though
+  // Settings UI + main process correctly rejected the identical
+  // string. Strict allowlist must be enforced against the RAW
+  // authority host on every hop.
+  const classification = classifyServerUrl(serverUrl);
+  if (!classification.ok) {
+    if (classification.reason === 'non_loopback_host') {
+      // Preserve the legacy error name so existing log greps /
+      // alerting on `tls_required_for_non_loopback_host_ws` still
+      // fire. (The string is now slightly misleading — V1 also
+      // rejects https-to-non-loopback per Cindy's lock — but
+      // renaming would break operator runbooks.)
       throw new Error('tls_required_for_non_loopback_host_ws');
     }
+    if (classification.reason === 'unsupported_scheme') {
+      throw new Error(`unsupported_server_url_protocol:${serverUrl}`);
+    }
+    throw new Error(`invalid_server_url:${classification.reason}`);
+  }
+  // Re-derive the WS URL from the parsed URL (path appended) so we
+  // share the URL parser's normalization with the rest of the file
+  // (origin / port / etc.). The loopback gate already passed.
+  const url = new URL(apiPaths.hostConnect, classification.url);
+  if (url.protocol === 'http:') {
     url.protocol = 'ws:';
     return url.toString();
   }
-  if (url.protocol === 'https:') {
-    url.protocol = 'wss:';
-    return url.toString();
-  }
-  throw new Error(`unsupported_server_url_protocol:${url.protocol}`);
+  // Classifier only succeeds for http: / https:, so this branch is
+  // the only remaining possibility.
+  url.protocol = 'wss:';
+  return url.toString();
 }
 
 function reconnectDelayMs(
@@ -1011,15 +1036,6 @@ function closeClass(code: number): 'normal' | 'going_away' | 'abnormal' | 'other
   if (code === 1001) return 'going_away';
   if (code === 1006) return 'abnormal';
   return 'other';
-}
-
-function isLoopbackHost(hostname: string): boolean {
-  // D3.c Commit 1: delegate to the shared `@silverhand/shared`
-  // classifier so renderer / main / daemon never drift on what
-  // "loopback host in V1" means. The local thunk stays so the rest
-  // of this file reads the same, but the allowlist itself lives in
-  // exactly one place.
-  return sharedIsLoopbackHost(hostname);
 }
 
 function redactConfigPath(path: string): string {

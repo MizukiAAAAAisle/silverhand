@@ -192,6 +192,53 @@ describe('classifyServerUrl — V1 acceptance policy', () => {
     expectReject('http://127.0.0.2:18080', 'non_loopback_host');
   });
 
+  // ── Obfuscated IP forms (Cindy `#task:631` D3.c P1) ────────────
+  //
+  // Strict-allowlist regression coverage. All five of these inputs
+  // have `new URL(input).hostname === '127.0.0.1'` (IPv4 cases) or
+  // `=== '[::1]'` (IPv6 case) because `URL` normalizes them — so a
+  // naive `isLoopbackHost(url.hostname)` check would accept them
+  // and silently widen the V1 policy past what Settings UI claims.
+  // The classifier compares against the RAW authority host instead,
+  // which preserves the literal form the user wrote and falls
+  // outside the allowlist.
+
+  it('rejects dotted-decimal with leading zeros (`127.000.000.001`) — URL.hostname normalizes to 127.0.0.1', () => {
+    const msg = expectReject('http://127.000.000.001:18080', 'non_loopback_host');
+    // Message must surface the RAW host as written so the user can
+    // see exactly which token failed the allowlist — comparing
+    // against the URL-normalized canonical `127.0.0.1` would be
+    // confusing here ("but I typed 127.000.000.001!").
+    expect(msg).toContain('127.000.000.001');
+  });
+
+  it('rejects octal first octet (`0177.0.0.1`) — URL.hostname normalizes to 127.0.0.1', () => {
+    const msg = expectReject('http://0177.0.0.1:18080', 'non_loopback_host');
+    expect(msg).toContain('0177.0.0.1');
+  });
+
+  it('rejects 32-bit decimal IPv4 (`2130706433` = 0x7f000001) — URL.hostname normalizes to 127.0.0.1', () => {
+    const msg = expectReject('http://2130706433:18080', 'non_loopback_host');
+    expect(msg).toContain('2130706433');
+  });
+
+  it('rejects 32-bit hex IPv4 (`0x7f000001`) — URL.hostname normalizes to 127.0.0.1', () => {
+    const msg = expectReject('http://0x7f000001:18080', 'non_loopback_host');
+    expect(msg).toContain('0x7f000001');
+  });
+
+  it('rejects expanded IPv6 (`[0:0:0:0:0:0:0:1]`) — URL.hostname normalizes to [::1]', () => {
+    // Pin the IPv6 branch of the obfuscation defense: the expanded
+    // form is semantically equivalent to `::1` but the V1 policy
+    // accepts ONLY the literal allowlist entries. Comparing against
+    // the raw authority host (`[0:0:0:0:0:0:0:1]`) rejects it.
+    const msg = expectReject(
+      'http://[0:0:0:0:0:0:0:1]:18080',
+      'non_loopback_host',
+    );
+    expect(msg).toContain('[0:0:0:0:0:0:0:1]');
+  });
+
   // ── Discriminator hygiene ──────────────────────────────────────
 
   it('the success arm carries kind:"loopback" so V1.1 can add kind:"remote" without breaking callers', () => {
