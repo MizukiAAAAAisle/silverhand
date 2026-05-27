@@ -2,6 +2,9 @@ import type {
   AuthLoginInput,
   AuthSignupInput,
   HostDto,
+  ServerConnectionProfileView,
+  ServerInfo,
+  TlsErrorCode,
   UserDto,
 } from '@silverhand/shared';
 
@@ -196,6 +199,77 @@ export type DesktopSaveServerUrlResult =
     }
   | { ok: false; kind: 'no_attachment_controller'; message: string };
 
+/**
+ * D4.a Commit 2 — Setup Wizard / Settings server-connection-profile
+ * IPC result types.
+ *
+ * Structural mirror of:
+ *   - `ProbeServerInfoResult` in `main/server-connection-test.ts`
+ *   - `ProfileSaveWithTestResult` in `main/index.ts`
+ *
+ * Kept here (not in `@silverhand/shared`) because they are
+ * renderer-only consumers — the daemon and backend never see these
+ * shapes. The mirror is tiny enough that hand-sync is cheaper than
+ * hoisting to shared. If this surface grows beyond Commit 2 (e.g.
+ * Commit 5 adds the phase-2 daemon-config bridge) the types should
+ * move to shared at that point.
+ */
+export type DesktopProbeServerInfoResult =
+  | {
+      ok: true;
+      kind: 'system_ca_verified' | 'loopback_ok' | 'insecure_dev_remote';
+      info: ServerInfo;
+    }
+  | {
+      ok: false;
+      kind: 'classify_rejected';
+      // The discriminator strings mirror `ServerUrlRejectionReason`
+      // in `@silverhand/shared`. Kept inline so the preload doesn't
+      // depend on a separate type re-export.
+      reason:
+        | 'malformed_url'
+        | 'unsupported_scheme'
+        | 'insecure_remote_http_disallowed'
+        | 'obfuscated_loopback_disallowed';
+      message: string;
+    }
+  | { ok: false; kind: 'tls_failed'; code: TlsErrorCode; message: string }
+  | {
+      ok: false;
+      kind: 'http_failed';
+      status: number;
+      statusText: string;
+      bodyText: string;
+    }
+  | { ok: false; kind: 'network_failed'; message: string }
+  | { ok: false; kind: 'invalid_response'; message: string };
+
+export type DesktopProfileSaveWithTestResult =
+  | {
+      ok: true;
+      test: DesktopProbeServerInfoResult & { ok: true };
+      profile: ServerConnectionProfileView;
+    }
+  | {
+      ok: false;
+      phase: 'test';
+      test: DesktopProbeServerInfoResult & { ok: false };
+    }
+  | {
+      ok: false;
+      phase: 'write';
+      reason: 'storage_unavailable' | 'write_failed';
+      detail?: string;
+    };
+
+/**
+ * D4.a Commit 2 — `profile:clear` result. Idempotent; reports whether
+ * a file was actually removed.
+ */
+export type DesktopClearProfileResult =
+  | { ok: true; cleared: boolean }
+  | { ok: false; reason: 'unlink_failed'; detail: string };
+
 declare global {
   interface Window {
     agentHub: {
@@ -218,6 +292,36 @@ declare global {
        * `host_token` from `daemon-config.json` itself.
        */
       saveServerUrl(input: { serverUrl: string }): Promise<DesktopSaveServerUrlResult>;
+      /**
+       * D4.a Commit 2 — read the persisted server connection profile,
+       * if any. Returns the renderer-safe redacted view (just
+       * `server_url + updated_at`); encrypted bytes never cross IPC.
+       * Null when no profile is persisted (pre-Wizard state) or when
+       * the on-disk blob failed to decrypt — the renderer should
+       * surface a "reset profile" affordance in the failure case
+       * (and the storage layer logs the diagnostic so an operator
+       * can correlate).
+       */
+      getServerConnectionProfile(): Promise<ServerConnectionProfileView | null>;
+      /**
+       * D4.a Commit 2 — Setup Wizard / Settings save pipeline. Runs
+       * `classifyServerUrl` → test connect against
+       * `GET /api/server/info` → commit to disk. Returns a typed
+       * outcome with `phase` discriminator when it fails so the
+       * renderer can render the right copy ("URL invalid" vs
+       * "TLS cert expired" vs "couldn't write profile"). Token bytes
+       * are never involved — the profile is pre-auth.
+       */
+      saveServerConnectionProfile(input: {
+        serverUrl: string;
+      }): Promise<DesktopProfileSaveWithTestResult>;
+      /**
+       * D4.a Commit 2 — explicit reset / disconnect affordance.
+       * Idempotent — reports whether it actually removed a file. Used
+       * for both the "disconnect from remote backend" UX and recovery
+       * from a wedged on-disk blob.
+       */
+      clearServerConnectionProfile(): Promise<DesktopClearProfileResult>;
       pickDirectory(options?: { defaultPath?: string }): Promise<string | null>;
       openExternal(url: string): Promise<void>;
       openAttachmentExternal(input: {
@@ -238,6 +342,13 @@ declare global {
       setBadgeCount(count: number): Promise<void>;
       onShutdownProgress(handler: (step: string) => void): () => void;
       onNavigateSettings(handler: () => void): () => void;
+      /**
+       * D4.a Commit 2 — fired by the App menu's "Connect to backend…"
+       * item so the renderer can mount the Setup Wizard modal/route.
+       * Main focuses the window before emitting; the handler only
+       * needs to open the Wizard UI.
+       */
+      onNavigateSetupWizard(handler: () => void): () => void;
       savePngExport(input: {
         pngBytes: Uint8Array;
         suggestedName: string;

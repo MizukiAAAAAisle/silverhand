@@ -18,6 +18,7 @@ import { useAppearance } from '@/hooks/useAppearance';
 import { useLayoutSettings } from '@/hooks/useLayoutSettings';
 import { isRegistrationRequired, useViewerUser } from '@/features/me/hooks';
 import { RegistrationGate } from '@/features/me/RegistrationGate';
+import { SetupWizardModal } from '@/features/setup/SetupWizard';
 import { useResizableWidth } from '@/hooks/useResizableWidth';
 import { CreateWorkspaceDialog } from '@/features/workspaces/CreateWorkspaceDialog';
 import { CreateChannelDialog } from '@/features/workspaces/CreateChannelDialog';
@@ -127,17 +128,36 @@ export function App(): JSX.Element {
   // call dozens more hooks than the pre-registration render and React
   // would crash with "Rendered more hooks than during the previous
   // render".
+  //
+  // D4.a Commit 2 — `SetupWizardModal` is mounted at this fixed
+  // position regardless of branch so the App menu's
+  // "Connect to backend…" item can pop it open in any state (pre-auth
+  // registration gate, loading, or post-auth shell). The modal owns
+  // its own hooks; App's hook order is unchanged.
   if (!viewer.data) {
     return (
-      <div className="grid h-screen w-screen place-items-center bg-bg-base text-xs text-text-muted">
-        Loading…
-      </div>
+      <>
+        <div className="grid h-screen w-screen place-items-center bg-bg-base text-xs text-text-muted">
+          Loading…
+        </div>
+        <SetupWizardModal />
+      </>
     );
   }
   if (isRegistrationRequired(viewer.data)) {
-    return <RegistrationGate signupEnabled={viewer.data.signup_enabled} />;
+    return (
+      <>
+        <RegistrationGate signupEnabled={viewer.data.signup_enabled} />
+        <SetupWizardModal />
+      </>
+    );
   }
-  return <RegisteredAppShell />;
+  return (
+    <>
+      <RegisteredAppShell />
+      <SetupWizardModal />
+    </>
+  );
 }
 
 function RegisteredAppShell(): JSX.Element {

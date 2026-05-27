@@ -18,9 +18,12 @@ import {
   authPaths,
   classifyServerUrl,
   isSafeOpenExtension,
+  readAllowInsecureRemoteFlag,
+  redactServerConnectionProfile,
   type AuthLoginInput,
   type AuthSignupInput,
   type HostDto,
+  type ServerConnectionProfileView,
   type ServerInfo,
   type UserDto,
 } from '@silverhand/shared';
@@ -57,6 +60,15 @@ import {
   type OutboundReloadOutcome,
 } from './outbound-reload.js';
 import { gracefullyDetachOutbound } from './outbound-detach.js';
+import {
+  clearServerConnectionProfile,
+  readServerConnectionProfileViewOrNull,
+  writeServerConnectionProfile,
+} from './server-connection-profile.js';
+import {
+  probeServerInfo,
+  type ProbeServerInfoResult,
+} from './server-connection-test.js';
 
 let backend: RunningBackend | null = null;
 let daemon: DaemonHandle | null = null;
@@ -1610,6 +1622,17 @@ function buildAppMenu(): Menu {
             accelerator: 'CmdOrCtrl+,',
             click: () => openSettings(),
           },
+          {
+            // D4.a Commit 2 — explicit-user-action entry to the Setup
+            // Wizard. Lives in the App submenu (where Settings is) so
+            // it's discoverable in the same place users look for
+            // configuration. No accelerator on purpose — Commit 3's
+            // boot-gate will offer the same affordance from the
+            // pre-auth screen, and we don't want a stray shortcut
+            // popping the modal mid-conversation.
+            label: 'Connect to backend…',
+            click: () => openSetupWizard(),
+          },
           { type: 'separator' },
           { role: 'services' },
           { type: 'separator' },
@@ -1664,6 +1687,38 @@ function openSettings(): void {
   win.focus();
   const send = (): void => {
     if (!win.isDestroyed()) win.webContents.send('navigate:settings');
+  };
+  if (win.webContents.isLoading()) {
+    win.webContents.once('did-finish-load', send);
+  } else {
+    send();
+  }
+}
+
+/**
+ * D4.a Commit 2 — analog of {@link openSettings} for the Setup Wizard.
+ * Fires `navigate:setupWizard` so the renderer can mount the Wizard
+ * (a modal at the App level — see `apps/desktop/src/renderer/features/setup/SetupWizard.tsx`).
+ *
+ * Triggered by the App menu's "Connect to backend…" item. This is the
+ * **only** discovery path for the Wizard in Commit 2 — the explicit
+ * boot-time decision (no profile → require Wizard) lands in Commit 3.
+ *
+ * The "explicit user action" trigger discipline (Cindy v2 slicing) is
+ * preserved: a user has to deliberately pick the menu item; there is
+ * no auto-popup, no after-first-launch nudge.
+ */
+function openSetupWizard(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+  }
+  const win = mainWindow;
+  if (!win) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+  const send = (): void => {
+    if (!win.isDestroyed()) win.webContents.send('navigate:setupWizard');
   };
   if (win.webContents.isLoading()) {
     win.webContents.once('did-finish-load', send);
@@ -1734,6 +1789,134 @@ ipcMain.handle(
   'settings:saveServerUrl',
   (_event, input: { serverUrl: string }) =>
     saveServerUrlFromSettings(input?.serverUrl ?? ''),
+);
+
+/**
+ * D4.a Commit 2 — Server connection profile IPC surface.
+ *
+ * Pre-auth Setup Wizard / Settings UI uses these handlers to read,
+ * test, and commit the on-disk server connection profile (per
+ * `docs/remote-backend-d4-design.md` §7).
+ *
+ * Boundary discipline:
+ *   - `profile:get` returns a redacted view (`server_url + updated_at`
+ *     only). The encrypted blob bytes NEVER cross IPC. Schema metadata
+ *     (`version`, `created_at`) stays in main.
+ *   - `profile:saveWithTest` runs the validate → test-connect →
+ *     commit pipeline atomically. Renderer never sees the
+ *     intermediate "validated but not yet committed" state — if any
+ *     step fails, nothing lands on disk and the renderer gets a
+ *     typed failure with the failing phase.
+ *   - `profile:clear` is the explicit reset affordance (recovery
+ *     from `decrypt_failed` / `parse_failed` reads, and the
+ *     "disconnect from remote backend" UX).
+ *
+ * Commit 2 scope:
+ *   - No phase-2 daemon-config derivation here — that lands in
+ *     Commit 5 alongside the `partial_apply_pending` state machine.
+ *   - No automatic boot-time remote-mode activation — that lands in
+ *     Commit 3 (boot gate).
+ *   - After a successful save the renderer surfaces a manual
+ *     "restart to connect" prompt; we deliberately do NOT auto-
+ *     restart the app here so the user sees their action committed
+ *     before the window goes away.
+ */
+
+/**
+ * Result shape of `profile:saveWithTest`. Kept structurally separate
+ * from the `ProbeServerInfoResult` because the renderer needs to
+ * know which phase failed (test vs write).
+ */
+export type ProfileSaveWithTestResult =
+  | {
+      ok: true;
+      test: ProbeServerInfoResult & { ok: true };
+      profile: ServerConnectionProfileView;
+    }
+  | {
+      ok: false;
+      phase: 'test';
+      test: ProbeServerInfoResult & { ok: false };
+    }
+  | {
+      ok: false;
+      phase: 'write';
+      reason: 'storage_unavailable' | 'write_failed';
+      detail?: string;
+    };
+
+async function handleProfileSaveWithTest(
+  input: { serverUrl: string } | undefined,
+): Promise<ProfileSaveWithTestResult> {
+  const serverUrl = (input?.serverUrl ?? '').trim();
+  const allowInsecureRemote = readAllowInsecureRemoteFlag(process.env);
+  // Phase A — test the candidate URL against the live backend.
+  const test = await probeServerInfo({ serverUrl, allowInsecureRemote });
+  if (!test.ok) {
+    logger?.warn(
+      { kind: test.kind, serverUrl },
+      'D4.a profile:saveWithTest test phase failed',
+    );
+    return { ok: false, phase: 'test', test };
+  }
+  // Phase B — commit profile. We deliberately re-classify inside the
+  // storage primitive only to the extent the schema does — the URL
+  // string itself is round-tripped, not normalized. The probe already
+  // ran `classifyServerUrl`; this write is the post-validation commit.
+  const writeResult = writeServerConnectionProfile({
+    silverhandRoot: silverhandDir(),
+    safe: safeStorage,
+    serverUrl,
+    logger: logger ?? undefined,
+  });
+  if (!writeResult.ok) {
+    logger?.warn(
+      { reason: writeResult.reason, serverUrl },
+      'D4.a profile:saveWithTest write phase failed',
+    );
+    return {
+      ok: false,
+      phase: 'write',
+      reason: writeResult.reason,
+      detail: 'detail' in writeResult ? writeResult.detail : undefined,
+    };
+  }
+  logger?.info(
+    {
+      serverUrl,
+      classification: test.kind,
+      profileVersion: writeResult.profile.version,
+    },
+    'D4.a profile:saveWithTest committed',
+  );
+  return {
+    ok: true,
+    test,
+    profile: redactServerConnectionProfile(writeResult.profile),
+  };
+}
+
+ipcMain.handle(
+  'profile:get',
+  (): ServerConnectionProfileView | null =>
+    readServerConnectionProfileViewOrNull({
+      silverhandRoot: silverhandDir(),
+      safe: safeStorage,
+      logger: logger ?? undefined,
+    }),
+);
+
+ipcMain.handle(
+  'profile:saveWithTest',
+  (_event, input: { serverUrl: string }) => handleProfileSaveWithTest(input),
+);
+
+ipcMain.handle('profile:clear', () =>
+  clearServerConnectionProfile({
+    silverhandRoot: silverhandDir(),
+    safe: safeStorage,
+    logger: logger ?? undefined,
+  }),
 );
 
 ipcMain.handle('dialog:pickDirectory', async (event, options?: { defaultPath?: string }) => {

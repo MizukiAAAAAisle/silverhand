@@ -53,6 +53,12 @@ const cataloguedIpcHandlers = [
   'hosts:revoke',
   'hosts:rotate',
   'notification:show',
+  // D4.a Commit 2 — Setup Wizard / Settings server connection profile
+  // IPC surface (see `main/index.ts` "D4.a Commit 2 — Server connection
+  // profile IPC surface" block for the boundary discipline).
+  'profile:clear',
+  'profile:get',
+  'profile:saveWithTest',
   'settings:saveServerUrl',
   'shell:openExternal',
   'shell:showItemInFolder',

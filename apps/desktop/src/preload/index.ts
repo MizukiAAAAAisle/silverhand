@@ -3,6 +3,9 @@ import type {
   AuthLoginInput,
   AuthSignupInput,
   HostDto,
+  ServerConnectionProfileView,
+  ServerInfo,
+  TlsErrorCode,
   UserDto,
 } from '@silverhand/shared';
 
@@ -166,6 +169,59 @@ export type DesktopSaveServerUrlResult =
     }
   | { ok: false; kind: 'no_attachment_controller'; message: string };
 
+/** D4.a Commit 2 — server connection profile probe + save outcome
+ *  types. Structural mirror of `api.d.ts`; see the JSDoc there for
+ *  the per-arm semantics. Kept here so `contextBridge.exposeInMainWorld`
+ *  can be typed against the same shape the renderer consumes. */
+export type DesktopProbeServerInfoResult =
+  | {
+      ok: true;
+      kind: 'system_ca_verified' | 'loopback_ok' | 'insecure_dev_remote';
+      info: ServerInfo;
+    }
+  | {
+      ok: false;
+      kind: 'classify_rejected';
+      reason:
+        | 'malformed_url'
+        | 'unsupported_scheme'
+        | 'insecure_remote_http_disallowed'
+        | 'obfuscated_loopback_disallowed';
+      message: string;
+    }
+  | { ok: false; kind: 'tls_failed'; code: TlsErrorCode; message: string }
+  | {
+      ok: false;
+      kind: 'http_failed';
+      status: number;
+      statusText: string;
+      bodyText: string;
+    }
+  | { ok: false; kind: 'network_failed'; message: string }
+  | { ok: false; kind: 'invalid_response'; message: string };
+
+export type DesktopProfileSaveWithTestResult =
+  | {
+      ok: true;
+      test: DesktopProbeServerInfoResult & { ok: true };
+      profile: ServerConnectionProfileView;
+    }
+  | {
+      ok: false;
+      phase: 'test';
+      test: DesktopProbeServerInfoResult & { ok: false };
+    }
+  | {
+      ok: false;
+      phase: 'write';
+      reason: 'storage_unavailable' | 'write_failed';
+      detail?: string;
+    };
+
+export type DesktopClearProfileResult =
+  | { ok: true; cleared: boolean }
+  | { ok: false; reason: 'unlink_failed'; detail: string };
+
 const api = {
   getBackendInfo: (): Promise<BackendInfo | null> => ipcRenderer.invoke('backend:info'),
   getAuthState: (): Promise<DesktopAuthState> => ipcRenderer.invoke('auth:getState'),
@@ -198,6 +254,21 @@ const api = {
    *  claims on the success arm — see `DesktopSaveServerUrlResult`. */
   saveServerUrl: (input: { serverUrl: string }): Promise<DesktopSaveServerUrlResult> =>
     ipcRenderer.invoke('settings:saveServerUrl', input),
+  /** D4.a Commit 2 — read the persisted server connection profile or
+   *  null. Renderer-safe redacted view; encrypted blob never crosses. */
+  getServerConnectionProfile: (): Promise<ServerConnectionProfileView | null> =>
+    ipcRenderer.invoke('profile:get'),
+  /** D4.a Commit 2 — Setup Wizard / Settings full save pipeline. Test
+   *  connect runs first; on success the profile commits and the
+   *  redacted view comes back. On failure the `phase` discriminator
+   *  tells the renderer where to render the error copy. */
+  saveServerConnectionProfile: (input: {
+    serverUrl: string;
+  }): Promise<DesktopProfileSaveWithTestResult> =>
+    ipcRenderer.invoke('profile:saveWithTest', input),
+  /** D4.a Commit 2 — explicit reset of the persisted profile. */
+  clearServerConnectionProfile: (): Promise<DesktopClearProfileResult> =>
+    ipcRenderer.invoke('profile:clear'),
   pickDirectory: (options?: { defaultPath?: string }): Promise<string | null> =>
     ipcRenderer.invoke('dialog:pickDirectory', options),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:openExternal', url),
@@ -238,6 +309,13 @@ const api = {
     const listener = (_event: IpcRendererEvent) => handler();
     ipcRenderer.on('navigate:settings', listener);
     return () => ipcRenderer.off('navigate:settings', listener);
+  },
+  /** D4.a Commit 2 — fired by the App menu's "Connect to backend…"
+   *  item. Renderer mounts the Setup Wizard modal in response. */
+  onNavigateSetupWizard: (handler: () => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent) => handler();
+    ipcRenderer.on('navigate:setupWizard', listener);
+    return () => ipcRenderer.off('navigate:setupWizard', listener);
   },
   showSystemNotification: (opts: {
     title: string;
