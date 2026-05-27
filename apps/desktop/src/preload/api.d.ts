@@ -332,7 +332,13 @@ export type DesktopProfilePhase2Outcome =
       reason:
         | 'config_write_failed'
         | 'reload_rejected'
-        | 'no_attachment_controller';
+        | 'no_attachment_controller'
+        // D4.a Commit 5c-2 fixup (Cindy P1) — claimed host but no
+        // token in daemon-config (missing / corrupt). Distinct from
+        // `no_op_no_host_claim` (genuine pre-auth) because the
+        // profile commit upstream landed and the daemon is now on
+        // the previous-generation config.
+        | 'host_token_missing';
       reloadRejectionReason:
         | 'not_attached'
         | 'config_unreadable'
@@ -361,7 +367,8 @@ export type DesktopPartialApplyState =
       reason:
         | 'config_write_failed'
         | 'reload_rejected'
-        | 'no_attachment_controller';
+        | 'no_attachment_controller'
+        | 'host_token_missing';
       reloadRejectionReason:
         | 'not_attached'
         | 'config_unreadable'

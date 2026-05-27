@@ -160,12 +160,31 @@ describe('performProfilePhase2 — no_op_no_host_claim short-circuit', () => {
     expect(state.watchdogCalls).toEqual([]);
   });
 
-  it('returns no_op_no_host_claim when hostToken is null (post-revoke / pre-relogin)', async () => {
-    const { deps, state } = makeDeps({ hostToken: null });
-    const out = await performProfilePhase2({ profile: makeProfile() }, deps);
-    expect(out).toEqual({ kind: 'no_op_no_host_claim', profileVersion: 3 });
+  // Cindy 5c-2 review P1 — flipped from the original test.
+  // `hostId !== null && hostToken === null` is NOT the pre-auth path:
+  // we have a claimed host on this desktop but daemon-config is
+  // missing/corrupt/has no token. The profile commit upstream already
+  // landed durable, so the daemon (if running) is on a stale config.
+  // Surfacing this as `no_op_no_host_claim` (and thence `fully_applied`
+  // via `derivePartialApplyState`) would silently mask real drift.
+  // Must be `partial_apply_pending/host_token_missing` so UI shows
+  // Retry + 5c-3 boot reconciliation can act on it.
+  it('returns partial_apply_pending/host_token_missing when hostId is set but hostToken is null', async () => {
+    const { deps, state } = makeDeps({ hostId: 'host-1', hostToken: null });
+    const out = await performProfilePhase2({ profile: makeProfile({ version: 7 }) }, deps);
+    expect(out).toEqual({
+      kind: 'partial_apply_pending',
+      profileVersion: 7,
+      reason: 'host_token_missing',
+      reloadRejectionReason: null,
+      detail: 'no host token in daemon-config for claimed host',
+    });
+    // host_token_missing is detected BEFORE write — there's no token
+    // to put in daemon-config, so we MUST NOT scribble a tokenless
+    // config or fire reload IPC.
     expect(state.writeCalls).toEqual([]);
     expect(state.reloadCalls).toBe(0);
+    expect(state.watchdogCalls).toEqual([]);
   });
 
   // Distinct-from-partial-apply-pending pin: the typed kind matters.
@@ -179,6 +198,29 @@ describe('performProfilePhase2 — no_op_no_host_claim short-circuit', () => {
     expect(derivePartialApplyState(outcome, 1_700_000_020_000)).toEqual({
       kind: 'fully_applied',
     });
+  });
+
+  // Cindy 5c-2 review P1 — explicit pin: host_token_missing must
+  // NOT collapse to fully_applied. If `derivePartialApplyState`
+  // grew a default-collapse arm in the future, this pins the
+  // boundary.
+  it('derivePartialApplyState carries through host_token_missing as partial_apply_pending', () => {
+    const outcome: ProfilePhase2Outcome = {
+      kind: 'partial_apply_pending',
+      profileVersion: 4,
+      reason: 'host_token_missing',
+      reloadRejectionReason: null,
+      detail: 'no host token in daemon-config for claimed host',
+    };
+    const state = derivePartialApplyState(outcome, 1_700_000_030_000);
+    expect(state).toEqual({
+      kind: 'partial_apply_pending',
+      profileVersion: 4,
+      reason: 'host_token_missing',
+      reloadRejectionReason: null,
+      detail: 'no host token in daemon-config for claimed host',
+      lastAttemptAt: 1_700_000_030_000,
+    } satisfies PartialApplyPendingState);
   });
 });
 

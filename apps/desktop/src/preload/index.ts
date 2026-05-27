@@ -257,7 +257,10 @@ export type DesktopProfilePhase2Outcome =
       reason:
         | 'config_write_failed'
         | 'reload_rejected'
-        | 'no_attachment_controller';
+        | 'no_attachment_controller'
+        // D4.a Commit 5c-2 fixup (Cindy P1) — claimed host with no
+        // daemon-config token. See `api.d.ts` for rationale.
+        | 'host_token_missing';
       reloadRejectionReason:
         | 'not_attached'
         | 'config_unreadable'
@@ -277,7 +280,8 @@ export type DesktopPartialApplyState =
       reason:
         | 'config_write_failed'
         | 'reload_rejected'
-        | 'no_attachment_controller';
+        | 'no_attachment_controller'
+        | 'host_token_missing';
       reloadRejectionReason:
         | 'not_attached'
         | 'config_unreadable'

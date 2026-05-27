@@ -87,17 +87,27 @@ import type {
  *     §7.5 "save successful + connection re-establishing" UX).
  *
  * **`kind: 'no_op_no_host_claim'`** — there is no current host claim
- * (Setup Wizard pre-auth, or post-revoke / pre-relogin). Phase-2
- * cannot run because there is no token to write into daemon-config.
- * This is NOT `partial_apply_pending` — there is nothing to
- * reconcile; the next sign-in's `claimLocalHostForUserSession`
- * naturally picks up the profile.
+ * (Setup Wizard pre-auth, or post-revoke / pre-relogin where the
+ * `localHostClaim` is no longer `claimed`). Phase-2 cannot run because
+ * there is no claimed host id to anchor a daemon-config to. This is
+ * NOT `partial_apply_pending` — there is nothing to reconcile; the
+ * next sign-in's `claimLocalHostForUserSession` naturally picks up
+ * the profile.
  *
  * **`kind: 'partial_apply_pending'`** — phase-2 failed at one of
- * write / IPC / ack. Profile is at the new version; daemon is at the
- * previous version. Caller MUST set in-memory state so the renderer
- * banner + Retry button surface, and so the next desktop restart's
- * reconciliation pass (5c-3) re-attempts.
+ * write / IPC / ack / token-lookup. Profile is at the new version;
+ * daemon is at the previous version. Caller MUST set in-memory state
+ * so the renderer banner + Retry button surface, and so the next
+ * desktop restart's reconciliation pass (5c-3) re-attempts.
+ *
+ * The `host_token_missing` reason — distinct from
+ * `no_op_no_host_claim` — surfaces when we DO have a claimed host id
+ * but daemon-config is missing/corrupt/unreadable so we can't recover
+ * the host token. The profile commit upstream already landed, so
+ * collapsing this to "fully_applied" would silently mask the daemon
+ * still running on the previous-generation config. The Retry path
+ * (which re-reads daemon-config) or 5c-3 boot reconciliation is the
+ * convergence route. Cindy 5c-2 review P1.
  */
 export type ProfilePhase2Outcome =
   | {
@@ -118,10 +128,11 @@ export type ProfilePhase2Outcome =
       reason:
         | 'config_write_failed'
         | 'reload_rejected'
-        | 'no_attachment_controller';
+        | 'no_attachment_controller'
+        | 'host_token_missing';
       /** Surfaces the daemon's reload-rejection reason verbatim when
-       *  applicable (`reason: 'reload_rejected'`); for write/no-controller
-       *  arms this is null. */
+       *  applicable (`reason: 'reload_rejected'`); for write/no-controller/
+       *  host-token-missing arms this is null. */
       reloadRejectionReason: HostOutboundReloadFailureReason | null;
       /** Operator-readable detail string. Renderer surfaces a copy
        *  derived from `reason`; this is the diagnostic content. */
@@ -147,11 +158,15 @@ export interface PerformProfilePhase2Deps {
   /** Returns the local host id this desktop is currently bound to,
    *  or null when no claim is active. Phase-2 short-circuits with
    *  `no_op_no_host_claim` (NOT `partial_apply_pending`) when null —
-   *  there is no token to derive daemon-config from. */
+   *  this is genuinely the pre-auth path (no claim, nothing stale to
+   *  reconcile). Cindy 5c-2 review P1: distinct from
+   *  `currentHostToken === null`, which IS partial_apply_pending. */
   currentLocalHostId: () => string | null;
   /** Returns the current `host_token` to persist alongside the new
    *  server URL. Pulled lazily so the token never appears in caller-
-   *  supplied input. Null when no current attachment. */
+   *  supplied input. Null when daemon-config is missing/corrupt or
+   *  has no token field — combined with a non-null `currentLocalHostId`,
+   *  this surfaces as `partial_apply_pending/host_token_missing`. */
   currentHostToken: () => string | null;
   /** Test seam for `startAttachWatchdog`. Production passes
    *  `startAttachWatchdog` from `outbound-attach.ts`; tests supply a
@@ -175,15 +190,36 @@ export async function performProfilePhase2(
   const startedAt = now();
   const profileVersion = input.profile.version;
 
-  // Pre-auth path: no host claim → nothing to reload. Setup Wizard
-  // commits the profile before sign-in; the next claim picks up the
-  // profile naturally via 5c-1. Distinct from `partial_apply_pending`
-  // because there is no inconsistency between profile and daemon-config
-  // — we just haven't created daemon-config yet.
+  // Pre-auth path: no host claim → nothing to reload AND nothing
+  // stale to reconcile. Setup Wizard commits the profile before
+  // sign-in; the next claim picks up the profile naturally via 5c-1.
+  // Distinct from `partial_apply_pending` because there is no
+  // inconsistency between profile and daemon-config — we just
+  // haven't created daemon-config yet.
   const hostId = deps.currentLocalHostId();
   const hostToken = deps.currentHostToken();
-  if (hostId === null || hostToken === null) {
+  if (hostId === null) {
     return { kind: 'no_op_no_host_claim', profileVersion };
+  }
+  // Claimed host but no token in daemon-config (missing / corrupt /
+  // partial-write). The profile is durable at the new generation;
+  // the daemon (if running) is on the previous-generation config.
+  // This is structurally `partial_apply_pending` — collapsing it to
+  // `no_op_no_host_claim` (and thence `fully_applied`) would silently
+  // mask real drift between profile and daemon. Convergence routes:
+  // (a) Retry — re-reads daemon-config, may pick up a freshly-rotated
+  // token; (b) 5c-3 boot reconciliation — re-derives state from
+  // profile.version vs daemon-config.profile_version; (c) explicit
+  // user re-login — refreshes daemon-config via `claimLocalHost
+  // ForUserSession`. Cindy 5c-2 review P1.
+  if (hostToken === null) {
+    return {
+      kind: 'partial_apply_pending',
+      profileVersion,
+      reason: 'host_token_missing',
+      reloadRejectionReason: null,
+      detail: 'no host token in daemon-config for claimed host',
+    };
   }
 
   // Snapshot BEFORE write. The lower bound must precede every
@@ -339,7 +375,8 @@ export type PartialApplyPendingState =
       reason:
         | 'config_write_failed'
         | 'reload_rejected'
-        | 'no_attachment_controller';
+        | 'no_attachment_controller'
+        | 'host_token_missing';
       reloadRejectionReason: HostOutboundReloadFailureReason | null;
       detail: string;
       lastAttemptAt: number;
