@@ -771,6 +771,80 @@ export type RuntimeOutputResumeResult = z.infer<
   typeof RuntimeOutputResumeResultSchema
 >;
 
+// ── host_outbound_attach (Stage D3.a Commit 3) ─────────────────────
+//
+// Late-attach control intent the desktop main process uses to tell a
+// running daemon "you now have credentials; load this host config and
+// open the outbound websocket". Decouples daemon spawn from credential
+// availability so the desktop launcher does not have to either (a)
+// hold the spawn until after login, or (b) spawn the daemon with a
+// stale `daemon-config.json` left over from a previous user.
+//
+// Contract:
+//   - `config_path` MUST be an absolute path to a regular file (a
+//     symlink-to-file is fine; a directory is rejected).
+//   - The daemon validates the path, reads + parses the config, and
+//     **only on success** swaps the active outbound client. If
+//     validation or parsing fails, the existing outbound client (if
+//     any) keeps running untouched — a bad Settings change must not
+//     take down a working daemon.
+//   - Idempotency:
+//       - same path, client already attached → `{ attached: true,
+//         action: 'noop' }`.
+//       - same path, client not yet started → `{ attached: true,
+//         action: 'started' }`.
+//       - different valid path → `{ attached: true, action:
+//         'switched' }` (graceful stop of the previous client, then
+//         start with the new config).
+//   - Errors carry a typed `reason` so callers don't have to string-
+//     match. None of the error reasons cause side effects on the
+//     existing client.
+
+export const HostOutboundAttachParamsSchema = z
+  .object({
+    config_path: z.string().min(1),
+  })
+  .strict();
+export type HostOutboundAttachParams = z.infer<
+  typeof HostOutboundAttachParamsSchema
+>;
+
+export const HostOutboundAttachFailureReasonSchema = z.enum([
+  'path_not_absolute',
+  'path_not_found',
+  'path_not_a_file',
+  'parse_failed',
+  'invalid_server_url',
+]);
+export type HostOutboundAttachFailureReason = z.infer<
+  typeof HostOutboundAttachFailureReasonSchema
+>;
+
+export const HostOutboundAttachResultSchema = z.discriminatedUnion('attached', [
+  z
+    .object({
+      attached: z.literal(true),
+      config_path: z.string().min(1),
+      /**
+       * What the daemon did with the request. Mirrors the idempotency
+       * matrix above so callers can log it and tests can assert
+       * branch coverage.
+       */
+      action: z.enum(['started', 'switched', 'noop']),
+    })
+    .strict(),
+  z
+    .object({
+      attached: z.literal(false),
+      reason: HostOutboundAttachFailureReasonSchema,
+      message: z.string().optional(),
+    })
+    .strict(),
+]);
+export type HostOutboundAttachResult = z.infer<
+  typeof HostOutboundAttachResultSchema
+>;
+
 
 /**
  * Single source of truth for the intent ↔ params/result type pairing.
@@ -835,6 +909,10 @@ export const intentSchemas = {
   runtime_output_resume: {
     params: RuntimeOutputResumeParamsSchema,
     result: RuntimeOutputResumeResultSchema,
+  },
+  host_outbound_attach: {
+    params: HostOutboundAttachParamsSchema,
+    result: HostOutboundAttachResultSchema,
   },
 } as const;
 

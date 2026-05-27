@@ -29,6 +29,8 @@ import {
   type HelloResult,
   intentSchemas,
   type ConversationLogDebugParams,
+  type HostOutboundAttachParams,
+  type HostOutboundAttachResult,
   type IntentName,
   type ResponseError,
   type ResponseFrame,
@@ -61,6 +63,19 @@ export interface DispatcherOptions {
    * concrete `Supervisor`.
    */
   supervisor?: SupervisorContract;
+  /**
+   * Stage D3.a Commit 3 — handler for the `host_outbound_attach`
+   * intent. The daemon's `OutboundSupervisor.attach` is the
+   * production wiring; tests pass a stub. `undefined` means the
+   * intent is not wired and the dispatcher throws (translated to
+   * `internal_error` by the catch arm). This shape mirrors the
+   * `supervisor` field rather than passing the supervisor object
+   * directly so the dispatcher stays free of `OutboundSupervisor`'s
+   * concrete dependencies (filesystem, ws, etc.).
+   */
+  hostOutboundAttachHandler?: (
+    params: HostOutboundAttachParams,
+  ) => HostOutboundAttachResult | Promise<HostOutboundAttachResult>;
 }
 
 export class IntentDispatcher {
@@ -69,6 +84,11 @@ export class IntentDispatcher {
   private readonly now: () => number;
   private readonly helloResult: HelloResult;
   private readonly supervisor: SupervisorContract | undefined;
+  private readonly hostOutboundAttachHandler:
+    | ((
+        params: HostOutboundAttachParams,
+      ) => HostOutboundAttachResult | Promise<HostOutboundAttachResult>)
+    | undefined;
   private intentCount = 0;
   private shuttingDown = false;
 
@@ -86,6 +106,7 @@ export class IntentDispatcher {
     this.helloResult =
       opts.helloResult ?? createDaemonHelloResult('__test_instance__');
     this.supervisor = opts.supervisor;
+    this.hostOutboundAttachHandler = opts.hostOutboundAttachHandler;
   }
 
   /** Signal that subsequent intents should be rejected with
@@ -331,6 +352,15 @@ export class IntentDispatcher {
         return this.requireSupervisor().resumeOutput(
           params as RuntimeOutputResumeParams,
         );
+      case 'host_outbound_attach':
+        // Late-attach is a daemon-control intent, not a runtime_*
+        // intent, so it has its own handler slot. When a daemon is
+        // launched in the protocol-only test surface no handler is
+        // wired; the require helper throws, the catch arm in
+        // `dispatch()` projects that as `internal_error`.
+        return this.requireHostOutboundAttachHandler()(
+          params as HostOutboundAttachParams,
+        );
     }
   }
 
@@ -343,5 +373,16 @@ export class IntentDispatcher {
       );
     }
     return this.supervisor;
+  }
+
+  private requireHostOutboundAttachHandler(): (
+    params: HostOutboundAttachParams,
+  ) => HostOutboundAttachResult | Promise<HostOutboundAttachResult> {
+    if (!this.hostOutboundAttachHandler) {
+      throw new Error(
+        'host_outbound_attach intent reached dispatcher with no handler wired',
+      );
+    }
+    return this.hostOutboundAttachHandler;
   }
 }

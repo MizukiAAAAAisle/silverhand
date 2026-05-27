@@ -272,6 +272,17 @@ const REQUESTS: WireFixture[] = [
     }),
     kind: { kind: 'request', intent: 'runtime_output_resume' },
   },
+  {
+    name: 'request/host_outbound_attach',
+    description:
+      'Late-attach the daemon outbound WS to a daemon-config.json (D3.a Commit 3).',
+    frame: enc({
+      id: 'req-outbound-attach',
+      intent: 'host_outbound_attach',
+      params: { config_path: '/var/silverhand/daemon-config.json' },
+    }),
+    kind: { kind: 'request', intent: 'host_outbound_attach' },
+  },
 ];
 
 // ── Successful response fixtures ───────────────────────────────────
@@ -624,6 +635,118 @@ const RESPONSES_SUCCESS: WireFixture[] = [
     description: 'output_resume result — droppable stream is now flowing.',
     frame: enc({ id: 'req-resume', result: { resumed: true } }),
     kind: { kind: 'response_success', intent: 'runtime_output_resume' },
+  },
+  {
+    name: 'response/host_outbound_attach-started',
+    description:
+      'Late-attach success first time: action=started, fresh outbound client spawned.',
+    frame: enc({
+      id: 'req-outbound-attach',
+      result: {
+        attached: true,
+        config_path: '/var/silverhand/daemon-config.json',
+        action: 'started',
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'host_outbound_attach' },
+  },
+  {
+    name: 'response/host_outbound_attach-noop',
+    description:
+      'Late-attach success on same path with live client: action=noop, no respawn.',
+    frame: enc({
+      id: 'req-outbound-attach',
+      result: {
+        attached: true,
+        config_path: '/var/silverhand/daemon-config.json',
+        action: 'noop',
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'host_outbound_attach' },
+  },
+  {
+    name: 'response/host_outbound_attach-switched',
+    description:
+      'Late-attach success on a different path: prior client stopped, new client started.',
+    frame: enc({
+      id: 'req-outbound-attach',
+      result: {
+        attached: true,
+        config_path: '/var/silverhand/daemon-config-v2.json',
+        action: 'switched',
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'host_outbound_attach' },
+  },
+  {
+    name: 'response/host_outbound_attach-failed-path_not_absolute',
+    description:
+      'Late-attach refusal: config_path must be absolute. Existing client untouched.',
+    frame: enc({
+      id: 'req-outbound-attach',
+      result: {
+        attached: false,
+        reason: 'path_not_absolute',
+        message: 'config_path must be absolute: daemon-config.json',
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'host_outbound_attach' },
+  },
+  {
+    name: 'response/host_outbound_attach-failed-path_not_found',
+    description:
+      'Late-attach refusal: config_path does not exist on disk. Existing client untouched.',
+    frame: enc({
+      id: 'req-outbound-attach',
+      result: {
+        attached: false,
+        reason: 'path_not_found',
+        message: 'ENOENT: no such file or directory',
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'host_outbound_attach' },
+  },
+  {
+    name: 'response/host_outbound_attach-failed-path_not_a_file',
+    description:
+      'Late-attach refusal: config_path resolves to a directory. Existing client untouched.',
+    frame: enc({
+      id: 'req-outbound-attach',
+      result: {
+        attached: false,
+        reason: 'path_not_a_file',
+        message: 'config_path is a directory: /var/silverhand',
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'host_outbound_attach' },
+  },
+  {
+    name: 'response/host_outbound_attach-failed-parse_failed',
+    description:
+      'Late-attach refusal: config JSON is unparseable or shape-invalid. Existing client untouched.',
+    frame: enc({
+      id: 'req-outbound-attach',
+      result: {
+        attached: false,
+        reason: 'parse_failed',
+        message: 'Unexpected token { in JSON at position 1',
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'host_outbound_attach' },
+  },
+  {
+    name: 'response/host_outbound_attach-failed-invalid_server_url',
+    description:
+      'Late-attach refusal: server_url rejected by WS resolver (e.g. non-loopback http). Existing client untouched.',
+    frame: enc({
+      id: 'req-outbound-attach',
+      result: {
+        attached: false,
+        reason: 'invalid_server_url',
+        message: 'tls_required for non-loopback http server_url',
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'host_outbound_attach' },
   },
 ];
 

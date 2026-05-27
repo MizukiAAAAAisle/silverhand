@@ -34,7 +34,8 @@ import {
   defaultDaemonIdentityPath,
   readOrCreateDaemonIdentity,
 } from './identity.js';
-import { OutboundDaemonClient } from './outbound-client.js';
+import { OutboundSupervisor } from './outbound-supervisor.js';
+import type { OutboundCommandDispatcher } from './outbound-client.js';
 import {
   buildDaemonInstanceId,
   defaultRuntimePidRootDir,
@@ -244,7 +245,32 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   // supervisor is constructed but won't fire events before
   // `server.start()` returns anyway.
   let broadcaster: (event: EventFrame) => void = () => {};
-  let outboundClient: OutboundDaemonClient | null = null;
+  // D3.a Commit 3: the outbound client is no longer constructed
+  // unconditionally at boot. The OutboundSupervisor encapsulates the
+  // `attach(configPath)` decision tree (validate, idempotency,
+  // graceful swap) and is consumed by both the legacy CLI `--host-config`
+  // auto-start path (below) and the new `host_outbound_attach` IPC
+  // intent (wired into the dispatcher).
+  //
+  // Note the deliberate forward-declaration dance: OutboundSupervisor
+  // needs a `dispatchCommand` callback that routes outbound-WS
+  // commands into the dispatcher, but the dispatcher itself needs a
+  // `hostOutboundAttachHandler` that calls into the supervisor. We
+  // close the loop with a mutable `commandForwarder` placeholder that
+  // is assigned to the real `dispatcher.dispatch` once the dispatcher
+  // exists. Calling the forwarder before that point throws — but no
+  // outbound socket can be open before this function returns, so the
+  // throw is unreachable in practice.
+  let commandForwarder: OutboundCommandDispatcher = () => {
+    throw new Error(
+      'outbound dispatchCommand invoked before dispatcher was wired',
+    );
+  };
+  const outboundSupervisor = new OutboundSupervisor({
+    logger,
+    readyEvent,
+    dispatchCommand: command => commandForwarder(command),
+  });
   const supervisor = opts.supervisorFactory
     ? opts.supervisorFactory({
         emit: event => broadcaster(event),
@@ -258,7 +284,10 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     startedAt,
     helloResult,
     supervisor,
+    hostOutboundAttachHandler: params => outboundSupervisor.attach(params),
   });
+  commandForwarder = command =>
+    dispatcher.dispatch(command.id, String(command.kind), command.params);
   const server = new DaemonServer({
     socketPath: opts.socketPath,
     dispatcher,
@@ -266,7 +295,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   });
   broadcaster = event => {
     server.broadcast(event);
-    outboundClient?.sendEvent(event);
+    outboundSupervisor.sendEvent(event);
   };
 
   try {
@@ -303,14 +332,32 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     pid_file_path: opts.pidFilePath,
   });
   if (opts.hostConfigPath) {
-    outboundClient = new OutboundDaemonClient({
-      configPath: opts.hostConfigPath,
-      logger,
-      readyEvent,
-      dispatchCommand: command =>
-        dispatcher.dispatch(command.id, String(command.kind), command.params),
+    // Legacy `--host-config` CLI auto-start path, preserved for
+    // standalone / manual daemon launches that have a credential file
+    // ready at spawn time (e.g. headless server hosts, protocol
+    // fixtures). Desktop main does NOT take this path under D3.a —
+    // it spawns without `--host-config` and triggers attach via the
+    // `host_outbound_attach` IPC after login. Both paths funnel
+    // through the same `OutboundSupervisor.attach`, which means the
+    // validation, idempotency, and swap semantics are identical.
+    const cliAttach = outboundSupervisor.attach({
+      config_path: opts.hostConfigPath,
     });
-    outboundClient.start();
+    if (!cliAttach.attached) {
+      // Don't fail-loud the whole daemon boot — the supervisor's
+      // failure path leaves state untouched and a later
+      // host_outbound_attach IPC can recover. Just log so the
+      // operator can see why outbound never connected.
+      logger.warn(
+        {
+          kind: 'outbound_supervisor',
+          action: 'cli_auto_attach_failed',
+          reason: cliAttach.reason,
+          message: cliAttach.message,
+        },
+        'daemon outbound CLI auto-attach failed; outbound is inactive until host_outbound_attach IPC arrives',
+      );
+    }
   }
 
   let stopped = false;
@@ -318,8 +365,8 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     if (stopped) return;
     stopped = true;
     logDaemon(logger, { action: 'shutting_down', pid: process.pid });
-    outboundClient?.sendEvent({ event: 'shutting_down', reason });
-    outboundClient?.stop(reason);
+    outboundSupervisor.sendEvent({ event: 'shutting_down', reason });
+    outboundSupervisor.stop(reason);
     try {
       await server.stop(reason);
     } catch (err) {

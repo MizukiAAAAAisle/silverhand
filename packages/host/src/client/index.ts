@@ -56,6 +56,7 @@ import {
   type RuntimeStatusParams,
   type RuntimeClearSessionParams,
   type ConversationLogDebugParams,
+  type HostOutboundAttachParams,
 } from '../protocol.js';
 import type { DecodedFrame, Transport } from './transport.js';
 import { SocketTransport } from './socket-transport.js';
@@ -382,6 +383,25 @@ export class HostClient {
 
   runtimeCloseActivityLog(): Promise<IntentResult<'runtime_close_activity_log'>> {
     return this.call('runtime_close_activity_log', {});
+  }
+
+  /**
+   * Stage D3.a Commit 3 — late-attach the daemon's outbound websocket
+   * to the host config at `configPath`. The desktop main process
+   * calls this after login (and on every supervisor restart of the
+   * daemon) so the daemon never tries to consume a stale
+   * `daemon-config.json` from a previous user.
+   *
+   * Errors are returned as `{ attached: false, reason }` discriminated
+   * union members, NOT thrown — callers should `switch (result.attached)`
+   * and `result.reason` rather than relying on `try/catch`. A genuine
+   * IPC transport failure (socket closed, daemon dead) still throws
+   * via the underlying `call()`.
+   */
+  hostOutboundAttach(
+    params: HostOutboundAttachParams,
+  ): Promise<IntentResult<'host_outbound_attach'>> {
+    return this.call('host_outbound_attach', params);
   }
 
   /**
