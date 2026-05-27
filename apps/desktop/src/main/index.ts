@@ -1973,14 +1973,20 @@ async function handleProfileSaveWithTest(
       test,
     };
   }
-  // Phase B — commit profile. We deliberately re-classify inside the
-  // storage primitive only to the extent the schema does — the URL
-  // string itself is round-tripped, not normalized. The probe already
-  // ran `classifyServerUrl`; this write is the post-validation commit.
+  // Phase B — commit profile. The probe already classified `serverUrl`
+  // and the §7.1 origin-only invariant guarantees the canonical
+  // persistable form is `test.originUrl` (= `new URL(serverUrl).origin`).
+  // We persist that, NOT the raw string (closes Cindy D4.a Commit 2
+  // review nit — `server-url.ts` JSDoc previously said the writer
+  // "tests and persists `${parsed.origin}`" but main passed the raw
+  // string through; the two statements are now reconciled). Every
+  // downstream desktop transport reads `server_url` from the persisted
+  // profile, so canonicalizing once at write time means the rest of
+  // the system never sees the un-canonicalized round-trip.
   const writeResult = writeServerConnectionProfile({
     silverhandRoot: silverhandDir(),
     safe: safeStorage,
-    serverUrl,
+    serverUrl: test.originUrl,
     logger: logger ?? undefined,
   });
   if (!writeResult.ok) {

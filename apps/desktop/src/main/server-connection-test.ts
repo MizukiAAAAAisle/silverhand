@@ -61,6 +61,28 @@ export type ProbeServerInfoResult =
       ok: true;
       kind: 'system_ca_verified' | 'loopback_ok' | 'insecure_dev_remote';
       info: ServerInfo;
+      /**
+       * D4.a Commit 5 — canonical origin string for the URL that was
+       * actually probed. Equal to `new URL(serverUrl).origin` after
+       * passing the §7.1 origin-only invariant (`classifyServerUrl`
+       * rejects path / query / fragment, so by the time we see ok=true
+       * the origin is the entire server-side meaningful component of
+       * the URL the user typed).
+       *
+       * This is the value the caller MUST persist when committing the
+       * server connection profile (closes Cindy D4.a Commit 2 review
+       * nit "别让 'canonical' 和 'raw round-trip' 两套说法继续并存"):
+       * the rest of the desktop main process derives `server_url`
+       * from the persisted profile, so canonicalizing once at write
+       * time means every downstream transport reads the same origin.
+       *
+       * Examples (post-classification — values that PASS the probe):
+       *   `http://localhost:3000/` → `http://localhost:3000`
+       *   `https://example.com`    → `https://example.com`
+       *   `https://example.com:443`→ `https://example.com`
+       *   `http://[::1]:8080/`     → `http://[::1]:8080`
+       */
+      originUrl: string;
     }
   | {
       ok: false;
@@ -316,7 +338,15 @@ export async function probeServerInfo(
       : classification.insecure
         ? 'insecure_dev_remote'
         : 'system_ca_verified';
-  return { ok: true, kind: successKind, info: schema.data };
+  return {
+    ok: true,
+    kind: successKind,
+    info: schema.data,
+    // §7.1 origin-only invariant — `classifyServerUrl` already
+    // rejected non-origin URLs upstream, so `classification.url.origin`
+    // is the canonical persistable form of the user-typed URL.
+    originUrl: classification.url.origin,
+  };
 }
 
 async function safeReadText(res: {

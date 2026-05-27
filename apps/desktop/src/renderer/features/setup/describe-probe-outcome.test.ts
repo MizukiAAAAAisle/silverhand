@@ -18,6 +18,7 @@ describe('describeProbeOutcome — success arms', () => {
       ok: true,
       kind: 'system_ca_verified',
       info: { signup_enabled: true },
+      originUrl: 'https://backend.example.test',
     });
     expect(r.tone).toBe('success');
     expect(r.title.length).toBeGreaterThan(0);
@@ -29,6 +30,7 @@ describe('describeProbeOutcome — success arms', () => {
       ok: true,
       kind: 'system_ca_verified',
       info: { signup_enabled: false },
+      originUrl: 'https://backend.example.test',
     });
     expect(r.description.toLowerCase()).toContain('disabled');
   });
@@ -39,6 +41,7 @@ describe('describeProbeOutcome — success arms', () => {
       ok: true,
       kind: 'loopback_ok',
       info: { signup_enabled: true },
+      originUrl: 'http://127.0.0.1:7321',
     });
     expect(r.tone).toBe('success');
     expect(r.title.toLowerCase()).not.toContain('tls verified');
@@ -50,6 +53,7 @@ describe('describeProbeOutcome — success arms', () => {
       ok: true,
       kind: 'insecure_dev_remote',
       info: { signup_enabled: true },
+      originUrl: 'http://10.0.0.5:8080',
     });
     expect(r.tone).toBe('warn');
     expect(r.title.toLowerCase()).toMatch(/unencrypted|insecure/);

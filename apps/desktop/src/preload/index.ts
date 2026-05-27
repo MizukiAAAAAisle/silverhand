@@ -180,6 +180,9 @@ export type DesktopProbeServerInfoResult =
       ok: true;
       kind: 'system_ca_verified' | 'loopback_ok' | 'insecure_dev_remote';
       info: ServerInfo;
+      // D4.a Commit 5 — canonical origin string. See `api.d.ts` for
+      // the contract; written into the persisted profile in main.
+      originUrl: string;
     }
   | {
       ok: false;

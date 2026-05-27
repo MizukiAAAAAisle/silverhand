@@ -222,6 +222,15 @@ export type DesktopProbeServerInfoResult =
       ok: true;
       kind: 'system_ca_verified' | 'loopback_ok' | 'insecure_dev_remote';
       info: ServerInfo;
+      /**
+       * D4.a Commit 5 — canonical origin form of the URL the user
+       * typed. Source: `new URL(serverUrl).origin` after the §7.1
+       * origin-only classifier admitted the input. Renderer surfaces
+       * may show this back to the user (so they see what was actually
+       * persisted), but the actual write happens in main —
+       * the renderer does NOT pass this back through `profile:saveWithTest`.
+       */
+      originUrl: string;
     }
   | {
       ok: false;

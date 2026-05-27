@@ -41,6 +41,10 @@ describe('probeServerInfo — success arms', () => {
       ok: true,
       kind: 'loopback_ok',
       info: { signup_enabled: true },
+      // D4.a Commit 5 — canonical origin string is included on every
+      // success arm. For a no-port url the origin keeps the explicit
+      // port; for `http://127.0.0.1:7321` (no path) the origin === input.
+      originUrl: 'http://127.0.0.1:7321',
     });
   });
 
@@ -54,6 +58,7 @@ describe('probeServerInfo — success arms', () => {
       ok: true,
       kind: 'system_ca_verified',
       info: { signup_enabled: false },
+      originUrl: 'https://backend.example.test',
     });
   });
 
@@ -67,7 +72,48 @@ describe('probeServerInfo — success arms', () => {
       ok: true,
       kind: 'insecure_dev_remote',
       info: { signup_enabled: true },
+      originUrl: 'http://10.0.0.5:8080',
     });
+  });
+
+  // D4.a Commit 5 — canonical origin pins. The Setup Wizard / Settings
+  // UI persist `originUrl` (NOT the raw user input), so the rest of the
+  // desktop main process never sees a non-canonical round-trip. These
+  // tests pin the canonical-form transformation across:
+  //   - explicit default port (https on 443) gets dropped,
+  //   - trailing slash on origin gets dropped,
+  //   - mixed-case scheme/host get lowercased by URL parsing.
+  it('canonicalizes the origin: explicit default port is dropped', async () => {
+    const result = await probeServerInfo({
+      serverUrl: 'https://backend.example.test:443',
+      allowInsecureRemote: false,
+      fetcher: jsonFetcher({ signup_enabled: false }),
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.originUrl).toBe('https://backend.example.test');
+  });
+
+  it('canonicalizes the origin: trailing slash is dropped', async () => {
+    const result = await probeServerInfo({
+      serverUrl: 'http://127.0.0.1:7321/',
+      allowInsecureRemote: false,
+      fetcher: jsonFetcher({ signup_enabled: true }),
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.originUrl).toBe('http://127.0.0.1:7321');
+  });
+
+  it('canonicalizes the origin: mixed-case scheme and host are lowercased', async () => {
+    const result = await probeServerInfo({
+      serverUrl: 'HTTPS://Backend.Example.Test',
+      allowInsecureRemote: false,
+      fetcher: jsonFetcher({ signup_enabled: false }),
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.originUrl).toBe('https://backend.example.test');
   });
 
   it('targets `/api/server/info` against the input base URL', async () => {
