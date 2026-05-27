@@ -335,6 +335,31 @@ describe('performOutboundReload — anchor 3: reloaded ≠ connected', () => {
     expect(state.watchdogCalls).toEqual([]);
   });
 
+  it('action=unchanged succeeds even when getAttachment is null — no_attachment_controller MUST gate only the reloaded-watchdog path (Cindy `#task:634` review note 2)', async () => {
+    // Concern: if the orchestrator gated `no_attachment_controller`
+    // before the unchanged short-circuit, a save-with-no-byte-change
+    // would surface as `no_attachment_controller` whenever the
+    // backend mode lacks a HostWsController — even though there's
+    // no swap and no reconnect to verify. The controller check
+    // belongs strictly on the path that actually NEEDS a fresh
+    // attachment.
+    const { deps, state } = makeDeps({
+      reloadResult: {
+        reloaded: true,
+        action: 'unchanged',
+        config_path: '/fake',
+        host_id: 'host-1',
+      },
+    });
+    deps.getAttachment = null;
+    const out = await performOutboundReload(
+      { serverUrl: 'http://127.0.0.1:8765' },
+      deps,
+    );
+    expect(out).toEqual({ ok: true, kind: 'unchanged' });
+    expect(state.watchdogCalls).toEqual([]);
+  });
+
   it('action=reloaded fires the watchdog with the pre-write snapshot', async () => {
     const prev = makeAttachment({ connectionId: 'conn-pre', attachedAt: 1_699_999_000_000 });
     const { deps, state } = makeDeps({ attachment: prev });
