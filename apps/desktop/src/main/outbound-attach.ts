@@ -73,6 +73,19 @@ export interface ExpectedAttachWindow {
  * unit test for the freshness contract does not need a fake clock,
  * fake controller, or fake IPC. The polling loop simply re-evaluates
  * this against the latest controller snapshot.
+ *
+ * Semantics (positive form — see file header for the OR rationale):
+ *   accept ⇔ attachment is non-null
+ *            AND attachment.hostId === expectedHostId
+ *            AND ( attachedAt >= expectAttachSince
+ *                  OR ( previousConnectionId !== null
+ *                       AND connectionId !== previousConnectionId ) )
+ *
+ * Reject form is intentionally NOT used here (per Cindy review on
+ * `Ofs303uqD1M22yWT`): an earlier rejection-list version only
+ * compared `attachedAt` when `previousConnectionId !== null`, which
+ * let stale registry values slip through when the desktop had no
+ * snapshot of a prior connection (cold start / first claim).
  */
 export function attachmentSatisfies(
   attachment: HostWsAttachment | null,
@@ -81,16 +94,24 @@ export function attachmentSatisfies(
   if (attachment === null) return false;
   // hostId fail-loud guard: see file header rationale.
   if (attachment.hostId !== window.expectedHostId) return false;
-  // EITHER a new connection-id OR an `attachedAt` >= the pre-IPC
-  // lower bound. The OR is load-bearing: see file header.
+  // Primary branch: a fresh `attachedAt` proves the attachment was
+  // written to the registry AFTER we captured the lower bound, so it
+  // cannot be a stale pre-existing value.
+  if (attachment.attachedAt >= window.expectAttachSince) return true;
+  // Secondary branch: covers "daemon attached before its IPC ack
+  // returned to main, so attachedAt got stamped before
+  // expectAttachSince". A different `connectionId` from the pre-IPC
+  // snapshot proves the WS was actually re-attached, regardless of
+  // the clock. Requires `previousConnectionId !== null` — if we had
+  // no prior snapshot, a connection-id-difference is meaningless and
+  // we MUST fall back to the attachedAt lower bound.
   if (
     window.previousConnectionId !== null &&
-    attachment.connectionId === window.previousConnectionId &&
-    attachment.attachedAt < window.expectAttachSince
+    attachment.connectionId !== window.previousConnectionId
   ) {
-    return false;
+    return true;
   }
-  return true;
+  return false;
 }
 
 export interface AttachWatchdogDeps {

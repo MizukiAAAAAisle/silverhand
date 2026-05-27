@@ -11,6 +11,15 @@ export interface BackendInfo {
   mode: 'embedded' | 'remote';
   local_host_id: string | null;
   local_host_status: 'unclaimed' | 'claimed' | 'revoked' | 'error';
+  /**
+   * D3.a Commit 4 — diagnostic timestamp from
+   * `HostWsServerController.getAttachment(local_host_id)?.attachedAt`.
+   * `null` when no live outbound WS attachment for this host.
+   * Renderer can surface as "connected since" but must NOT derive a
+   * new status word — the user-facing status enum stays
+   * `local_host_status` and nothing else.
+   */
+  local_host_ws_attached_at: number | null;
 }
 
 export interface ActiveConversationInfo {
@@ -73,6 +82,7 @@ export type DesktopHostMutationResult =
       host: HostDto;
       local_host_id: BackendInfo['local_host_id'];
       local_host_status: BackendInfo['local_host_status'];
+      local_host_ws_attached_at: BackendInfo['local_host_ws_attached_at'];
     }
   | {
       ok: false;

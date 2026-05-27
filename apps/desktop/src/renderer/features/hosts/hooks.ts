@@ -14,6 +14,13 @@ export const backendInfoKey = ['backend-info'] as const;
 export interface BackendInfoSnapshot {
   local_host_id: string | null;
   local_host_status: 'unclaimed' | 'claimed' | 'revoked' | 'error';
+  /**
+   * D3.a Commit 4 — diagnostic timestamp from the backend's
+   * `HostWsServerController.getAttachment` for `local_host_id`.
+   * `null` when no live attachment. Renderer may show a "connected
+   * since" string but must NOT derive a new status word.
+   */
+  local_host_ws_attached_at: number | null;
 }
 
 async function fetchHosts(): Promise<HostListResponse> {
@@ -24,11 +31,16 @@ async function fetchHosts(): Promise<HostListResponse> {
 async function fetchBackendInfo(): Promise<BackendInfoSnapshot> {
   const info = await window.agentHub.getBackendInfo();
   if (!info) {
-    return { local_host_id: null, local_host_status: 'error' };
+    return {
+      local_host_id: null,
+      local_host_status: 'error',
+      local_host_ws_attached_at: null,
+    };
   }
   return {
     local_host_id: info.local_host_id,
     local_host_status: info.local_host_status,
+    local_host_ws_attached_at: info.local_host_ws_attached_at,
   };
 }
 

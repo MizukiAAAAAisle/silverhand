@@ -66,6 +66,26 @@ describe('attachmentSatisfies — freshness predicate', () => {
     ).toBe(true);
   });
 
+  it('CRITICAL no-previous-snapshot stale guard: previousConnectionId=null AND attachedAt < expectAttachSince → false (Cindy review Ofs303uqD1M22yWT)', () => {
+    // First-claim / cold-start path: main has no prior snapshot of an
+    // attachment. The OR-rewrite must still reject any registry value
+    // whose `attachedAt` predates our lower bound — otherwise a stale
+    // attachment left over from a previous boot would pass purely
+    // because `previousConnectionId === null` short-circuits the
+    // connection-id branch. The earlier rejection-list form had this
+    // bug; this case pins the fix.
+    const att = makeAttachment({
+      connectionId: 'conn-leftover',
+      attachedAt: 500_000,
+    });
+    expect(
+      attachmentSatisfies(
+        att,
+        makeWindow({ previousConnectionId: null, expectAttachSince: 1_000_000 }),
+      ),
+    ).toBe(false);
+  });
+
   it('CRITICAL fresh-connection-id branch: accepts an attachment whose connectionId differs from the snapshot even if attachedAt is < lower-bound (covers "daemon attached before IPC response")', () => {
     // Pre-IPC snapshot saw `conn-OLD` attached at t=1_500_000. Watchdog
     // captures expectAttachSince=t=2_000_000 right before sending IPC.

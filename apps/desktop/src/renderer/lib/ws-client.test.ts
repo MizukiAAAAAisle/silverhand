@@ -9,6 +9,7 @@ vi.mock('./api', () => ({
     mode: 'embedded',
     local_host_id: 'host-local',
     local_host_status: 'claimed',
+    local_host_ws_attached_at: null,
   }),
 }));
 
