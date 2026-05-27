@@ -169,7 +169,7 @@ export interface RuntimeEventHandlerDeps {
   cache: RunStateCache;
   events: EventPublisher;
   inboxAck: InboxAckSink;
-  /** Sink for the four events that mutate `conversation_agents` AND
+  /** Sink for events that mutate `conversation_agents` AND
    *  publish `agent_status` SSE. Default is the noop projector — tests
    *  that don't exercise DB projection don't need to inject one.
    *  Production wires `DbRuntimeStatusProjector` in `index.ts`. See
@@ -723,6 +723,10 @@ export class RuntimeEventHandler {
       // Phase-only patch so we don't clobber the existing runState.
       this.cache.applyPhase(key, frame.conversation_id, frame.agent_id, 'ready');
     }
+    this.statusProjector.runtimeReady({
+      conversationId: frame.conversation_id,
+      agentId: frame.agent_id,
+    });
     if (this.onReadyForDrain) {
       try {
         const result = this.onReadyForDrain(frame.conversation_id, frame.agent_id);
