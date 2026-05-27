@@ -26,6 +26,23 @@ export interface BackendInfo {
    * flip into `failed`.
    */
   local_host_ws_attached_at: number | null;
+  /**
+   * D3.c Commit 4 — `server_url` currently persisted in
+   * `daemon-config.json` (i.e. the address the daemon dials to
+   * reach the backend). DISTINCT from `url` above, which is the
+   * URL of the desktop's embedded backend; in V1 they happen to be
+   * the same loopback address in the common case, but Settings'
+   * "save server URL" path edits THIS value, not the embedded
+   * backend URL.
+   *
+   * `null` when no daemon-config exists yet (pre-claim state). The
+   * Settings pane falls back to `url` for display when this is null
+   * so the user has a sensible hint at what would be used after
+   * claim; the Save button still requires a real claim before it
+   * can succeed (main's `saveServerUrlFromSettings` short-circuits
+   * with `reload_rejected/not_attached` in unclaimed state).
+   */
+  local_host_server_url: string | null;
 }
 
 export interface ActiveConversationInfo {

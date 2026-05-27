@@ -12,8 +12,10 @@ export const hostsKey = ['hosts'] as const;
 export const backendInfoKey = ['backend-info'] as const;
 
 export interface BackendInfoSnapshot {
-  /** D3.c Commit 4 — server URL the renderer-side Settings form seeds
-   *  from. Sourced from `BackendInfo.url`. */
+  /** D3.c Commit 4 — embedded backend's listen URL (where the
+   *  renderer's HTTP API calls go). Used as fallback display when
+   *  `local_host_server_url` is null (pre-claim). NOT the value
+   *  the Settings "Server" pane saves — that's `local_host_server_url`. */
   url: string;
   local_host_id: string | null;
   local_host_status: 'unclaimed' | 'claimed' | 'revoked' | 'error' | 'failed';
@@ -24,6 +26,16 @@ export interface BackendInfoSnapshot {
    * since" string but must NOT derive a new status word.
    */
   local_host_ws_attached_at: number | null;
+  /**
+   * D3.c Commit 4 — `server_url` currently in `daemon-config.json`,
+   * i.e. the address the daemon dials to reach the backend. This
+   * is what the Settings "Server" pane edits and the post-save
+   * invalidation refetches. `null` when no daemon-config exists yet
+   * (pre-claim). Distinct from `url` above (the embedded backend
+   * listener) — see `preload/api.d.ts` `BackendInfo` for the full
+   * rationale.
+   */
+  local_host_server_url: string | null;
 }
 
 async function fetchHosts(): Promise<HostListResponse> {
@@ -39,6 +51,7 @@ async function fetchBackendInfo(): Promise<BackendInfoSnapshot> {
       local_host_id: null,
       local_host_status: 'error',
       local_host_ws_attached_at: null,
+      local_host_server_url: null,
     };
   }
   return {
@@ -46,6 +59,7 @@ async function fetchBackendInfo(): Promise<BackendInfoSnapshot> {
     local_host_id: info.local_host_id,
     local_host_status: info.local_host_status,
     local_host_ws_attached_at: info.local_host_ws_attached_at,
+    local_host_server_url: info.local_host_server_url,
   };
 }
 

@@ -36,6 +36,7 @@ import type {
 } from './outbound-attach.js';
 import {
   performOutboundReload,
+  bindAttachmentAccessor,
   type PerformOutboundReloadDeps,
 } from './outbound-reload.js';
 
@@ -503,5 +504,66 @@ describe('performOutboundReload — happy path end-to-end shape', () => {
       host_id: 'host-1',
       host_token: 'secret-from-main-memory',
     });
+  });
+});
+
+describe('bindAttachmentAccessor — controller snapshot contract (Cindy `#task:634` review P2)', () => {
+  it('returns null when controller is null — orchestrator no_attachment_controller arm reachable', () => {
+    // Load-bearing: without this contract, main wiring that always
+    // returns a non-null function (even one whose body returns null)
+    // would make `no_attachment_controller` unreachable in
+    // production. Every "missing controller" case would silently
+    // fall through to the watchdog, polling nothing for 10s, and
+    // surface as `connectivity_unverified` — wasting the budget AND
+    // lying about which mode-specific edge happened.
+    const accessor = bindAttachmentAccessor(null);
+    expect(accessor).toBeNull();
+  });
+
+  it('returns a delegating function when controller is non-null', () => {
+    const fakeAttachment = makeAttachment({ connectionId: 'conn-1' });
+    const controller = {
+      getAttachment: (_id: string) => fakeAttachment,
+    };
+    const accessor = bindAttachmentAccessor(controller);
+    expect(accessor).not.toBeNull();
+    expect(accessor?.('host-1')).toBe(fakeAttachment);
+  });
+
+  it('end-to-end: bindAttachmentAccessor(null) + orchestrator action=reloaded → no_attachment_controller (NOT watchdog timeout)', async () => {
+    // Composition pin: the helper plus the orchestrator together
+    // must produce `no_attachment_controller` for the missing-
+    // controller production case. Without the helper, main's old
+    // wiring `(hostId) => controller?.getAttachment(hostId) ?? null`
+    // produced a non-null function and the orchestrator started the
+    // watchdog → connectivity_unverified after 10s.
+    const { deps, state } = makeDeps();
+    deps.getAttachment = bindAttachmentAccessor(null);
+    const out = await performOutboundReload(
+      { serverUrl: 'http://127.0.0.1:8765' },
+      deps,
+    );
+    expect(out.ok).toBe(false);
+    if (out.ok) throw new Error('unreachable');
+    expect(out.kind).toBe('no_attachment_controller');
+    expect(state.watchdogCalls).toEqual([]);
+  });
+
+  it('end-to-end: bindAttachmentAccessor(real) + action=reloaded → watchdog runs → reloaded outcome', async () => {
+    const fresh = makeAttachment({ connectionId: 'conn-new', attachedAt: 1_700_000_011_000 });
+    const controller = {
+      getAttachment: (_id: string) => fresh,
+    };
+    const { deps } = makeDeps({
+      watchdogOutcome: { ok: true, attachment: fresh, elapsedMs: 25 },
+    });
+    deps.getAttachment = bindAttachmentAccessor(controller);
+    const out = await performOutboundReload(
+      { serverUrl: 'http://127.0.0.1:8765' },
+      deps,
+    );
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error('unreachable');
+    expect(out.kind).toBe('reloaded');
   });
 });

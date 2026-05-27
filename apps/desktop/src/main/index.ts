@@ -53,6 +53,7 @@ import {
 } from './outbound-attach.js';
 import {
   performOutboundReload,
+  bindAttachmentAccessor,
   type OutboundReloadOutcome,
 } from './outbound-reload.js';
 import { gracefullyDetachOutbound } from './outbound-detach.js';
@@ -728,6 +729,7 @@ function snapshotLocalHostInfo(): {
   local_host_id: string | null;
   local_host_status: LocalHostClaimStatus['status'];
   local_host_ws_attached_at: number | null;
+  local_host_server_url: string | null;
 } {
   return {
     local_host_id:
@@ -742,6 +744,15 @@ function snapshotLocalHostInfo(): {
       localHostClaim.status === 'claimed'
         ? backend?.context.hostWsController?.()?.getAttachment(localHostClaim.hostId)?.attachedAt ?? null
         : null,
+    // D3.c Commit 4: surface the daemon-config `server_url` so the
+    // Settings "Server" pane (and any future Hosts page readout) can
+    // distinguish "what the daemon dials" from `backend.url` ("what
+    // this desktop's embedded backend listens on"). Sourced directly
+    // from `readDaemonHostConfig`; returns null when no daemon-config
+    // exists (pre-claim state). Re-reads on every `backend:info`
+    // refetch so post-save invalidation surfaces the new URL.
+    local_host_server_url:
+      readDaemonHostConfig(silverhandDir())?.server_url ?? null,
   };
 }
 
@@ -1063,14 +1074,25 @@ async function saveServerUrlFromSettings(
   }
 
   const dir = silverhandDir();
+  // **Controller snapshot (Cindy `#task:634` review P2)**: bind
+  // `getAttachment` to a NON-NULL controller ONLY when one exists.
+  // If we instead passed a function that always returns null, the
+  // orchestrator's `no_attachment_controller` arm would be
+  // unreachable in production — every "missing controller" case
+  // would silently fall through to starting the watchdog, polling
+  // nothing for 10s, and surfacing as `connectivity_unverified`.
+  // Snapshotting upfront makes the arm reachable and saves a full
+  // watchdog budget when verification is structurally impossible.
+  // Mirrors the D3.b `host_outbound_detach` controller-snapshot
+  // pattern.
+  const controller = running.context.hostWsController?.() ?? null;
   const outcome = await performOutboundReload(
     { serverUrl: rawServerUrl },
     {
       classifyServerUrl,
       writeDaemonHostConfig: config => writeDaemonHostConfig(dir, config),
       hostOutboundReload: () => client.hostOutboundReload(),
-      getAttachment: hostId =>
-        running.context.hostWsController?.()?.getAttachment(hostId) ?? null,
+      getAttachment: bindAttachmentAccessor(controller),
       currentLocalHostId: () =>
         localHostClaim.status === 'claimed' ? localHostClaim.hostId : null,
       currentHostToken: () => readDaemonHostConfig(dir)?.host_token ?? null,

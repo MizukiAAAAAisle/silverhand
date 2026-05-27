@@ -44,7 +44,18 @@ import {
 export function ServerUrlPane(): JSX.Element {
   const qc = useQueryClient();
   const backendInfoQuery = useBackendInfoSnapshot();
-  const currentUrl = backendInfoQuery.data?.url ?? '';
+  // **Source of truth pin (Cindy `#task:634` review P1)**: the
+  // Settings save path writes `daemon-config.json.server_url`, NOT
+  // the embedded backend's listen URL. We MUST seed from
+  // `local_host_server_url` (the daemon-config view) so that after
+  // a successful save the post-invalidation refetch returns the new
+  // value and the form re-seeds correctly. Falling back to `url`
+  // only when `local_host_server_url` is null (pre-claim) gives the
+  // user a sensible hint without misleading them about what's
+  // actually saved.
+  const savedUrl = backendInfoQuery.data?.local_host_server_url ?? null;
+  const fallbackUrl = backendInfoQuery.data?.url ?? '';
+  const currentUrl = savedUrl ?? fallbackUrl;
   const localHostId = backendInfoQuery.data?.local_host_id ?? null;
 
   // Local form state seeded from the snapshot. Re-seeds whenever

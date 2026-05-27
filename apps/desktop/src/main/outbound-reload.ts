@@ -413,3 +413,29 @@ export async function performOutboundReload(
     elapsedMs: outcome.elapsedMs,
   };
 }
+
+/**
+ * Bind the orchestrator's `GetHostAttachmentFn` dep to a controller
+ * snapshot. Returns `null` (NOT a function returning null) when the
+ * controller is itself null so the orchestrator's
+ * `no_attachment_controller` arm is reachable — Cindy `#task:634`
+ * review P2.
+ *
+ * The naive form `(hostId) => controller?.getAttachment(hostId) ?? null`
+ * looks equivalent but is subtly wrong: the orchestrator can't
+ * distinguish "controller exists but returns no attachment for this
+ * id" from "controller doesn't exist at all", so it always starts
+ * the watchdog. When the controller is structurally missing (mode-
+ * specific edge), that watchdog polls nothing for its full 10s
+ * budget and surfaces as `connectivity_unverified` instead of
+ * `no_attachment_controller` — wasting the budget AND lying about
+ * what kind of mode-specific edge happened.
+ */
+export function bindAttachmentAccessor(
+  controller:
+    | { getAttachment(hostId: string): HostWsAttachment | null }
+    | null,
+): GetHostAttachmentFn | null {
+  if (controller === null) return null;
+  return hostId => controller.getAttachment(hostId);
+}
