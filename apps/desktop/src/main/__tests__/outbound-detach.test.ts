@@ -383,3 +383,128 @@ describe('gracefullyDetachOutbound — degradation paths', () => {
     expect(out.budgetExhausted).toBe(false);
   });
 });
+
+describe('gracefullyDetachOutbound — never-throws contract (Cindy #task:630 P1-B)', () => {
+  it('client.hostOutboundDetach() synchronously throws → helper resolves with rpc.ok:false, never rejects', async () => {
+    // Production HostClient always returns a Promise, but the
+    // helper accepts any Pick<HostClient, ...>-shaped object —
+    // future remote-client adapters / test seams could throw
+    // synchronously. A reject here would terminate the shutdown
+    // sequence partway through; we must catch and surface as data.
+    const syncThrowingClient: Pick<HostClient, 'hostOutboundDetach'> = {
+      hostOutboundDetach: () => {
+        throw new Error('sync throw from client');
+      },
+    };
+    const { promise } = startHelper({
+      client: syncThrowingClient,
+      hostId: 'host-x',
+      snapshots: [null],
+    });
+    // The test simply awaits the promise; if the contract were
+    // broken this await would reject and the test would fail.
+    const out = await promise;
+    expect(out.rpc).toEqual({
+      ok: false,
+      error: 'sync throw from client',
+    });
+    // Poll still ran because budget remained; registry was empty so
+    // we got the cleared signal. Demonstrates the sync throw didn't
+    // skip the verification phase.
+    expect(out.registryCleared).toBe(true);
+    expect(out.budgetExhausted).toBe(false);
+  });
+
+  it('getAttachment throws on the sync initial probe → registryCleared:"error" with the message, helper resolves', async () => {
+    // Models a registry implementation bug or a partial-teardown
+    // race where the accessor itself blows up. Helper must capture
+    // this as data and let shutdown continue — the IPC hint already
+    // landed, so the daemon-side cleanup is still on track.
+    const throwingAccessor = (_hostId: string): unknown => {
+      throw new Error('registry boom');
+    };
+    const clock = new FakeClock();
+    const promise = gracefullyDetachOutbound({
+      client: mkClientResolving('detached'),
+      hostId: 'host-x',
+      getAttachment: throwingAccessor,
+      budgetMs: 1500,
+      pollIntervalMs: 100,
+      now: clock.now,
+      setTimeoutImpl: clock.setTimeout,
+      clearTimeoutImpl: clock.clearTimeout,
+    });
+    const out = await promise;
+    expect(out.rpc).toEqual({ ok: true, action: 'detached' });
+    expect(out.registryCleared).toBe('error');
+    expect(out.registryError).toBe('registry boom');
+    // Distinct from budget-exhausted: the loop stopped because the
+    // accessor failed, not because we ran out of time.
+    expect(out.budgetExhausted).toBe(false);
+  });
+
+  it('getAttachment throws on a scheduled poll tick (not the sync probe) → same registry-error outcome', async () => {
+    // Pin both code paths: the helper has two probe sites (sync
+    // initial + scheduled tick). A throw on the tick path must
+    // resolve the helper just like a throw on the sync path,
+    // including timer cleanup so no zombie timer fires later.
+    let callCount = 0;
+    const flakyAccessor = (_hostId: string): unknown => {
+      callCount += 1;
+      if (callCount === 1) {
+        // Sync probe sees stale (not null) → schedule a poll.
+        return STALE;
+      }
+      // First scheduled poll tick throws.
+      throw new Error('registry blew up mid-poll');
+    };
+    const clock = new FakeClock();
+    const promise = gracefullyDetachOutbound({
+      client: mkClientResolving('detached'),
+      hostId: 'host-x',
+      getAttachment: flakyAccessor,
+      budgetMs: 1500,
+      pollIntervalMs: 100,
+      now: clock.now,
+      setTimeoutImpl: clock.setTimeout,
+      clearTimeoutImpl: clock.clearTimeout,
+    });
+    await flushMicrotasks();
+    clock.advance(100);
+    await flushMicrotasks();
+    const out = await promise;
+    expect(out.rpc).toEqual({ ok: true, action: 'detached' });
+    expect(out.registryCleared).toBe('error');
+    expect(out.registryError).toBe('registry blew up mid-poll');
+    // Sanity: helper stopped on the throw; no further accessor
+    // calls happen even if we advance the clock past the budget.
+    const callsAtResolve = callCount;
+    clock.advance(2_000);
+    await flushMicrotasks();
+    expect(callCount).toBe(callsAtResolve);
+  });
+
+  it('getAttachment throws a non-Error value → still captured as registryError string', async () => {
+    // Defensive symmetry with the RPC non-Error-throw test: the
+    // accessor might throw a string or plain object. Helper must
+    // not crash trying to read `.message`.
+    const stringThrowAccessor = (_hostId: string): unknown => {
+      // eslint-disable-next-line @typescript-eslint/no-throw-literal
+      throw 'a string error, somehow';
+    };
+    const clock = new FakeClock();
+    const promise = gracefullyDetachOutbound({
+      client: mkClientResolving('detached'),
+      hostId: 'host-x',
+      getAttachment: stringThrowAccessor,
+      budgetMs: 1500,
+      pollIntervalMs: 100,
+      now: clock.now,
+      setTimeoutImpl: clock.setTimeout,
+      clearTimeoutImpl: clock.clearTimeout,
+    });
+    const out = await promise;
+    expect(out.registryCleared).toBe('error');
+    expect(out.registryError).toBe('a string error, somehow');
+  });
+});

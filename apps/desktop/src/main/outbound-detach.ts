@@ -80,8 +80,20 @@ export interface GracefulDetachOutcome {
    *              prove it within 1.5s.
    *  - `'skipped'` — no `hostId` provided or no `getAttachment`
    *              accessor available. The degradation path.
+   *  - `'error'`   — the `getAttachment` accessor threw (sync probe
+   *              or poll tick). Helper stops polling and resolves;
+   *              the error message is captured in `registryError`
+   *              for the structured-log line. Distinct from
+   *              `'skipped'` so main can surface this as a real
+   *              "registry observation failure" signal rather than
+   *              a benign degradation. (Cindy #task:630 P1-B.)
    */
-  registryCleared: boolean | 'skipped';
+  registryCleared: boolean | 'skipped' | 'error';
+  /** Populated only when `registryCleared === 'error'`. Plain
+   *  string message extracted from whatever the accessor threw;
+   *  the helper never propagates the thrown value itself, in
+   *  keeping with the never-throws contract. */
+  registryError?: string;
   /** Total wall-clock cost of the helper. Always ≤ `budgetMs`. */
   elapsedMs: number;
   /** True iff the helper hit the budget without a terminal poll
@@ -191,9 +203,28 @@ export async function gracefullyDetachOutbound(
   // WS before its IPC ack returns. By the time we get here the
   // registry has often already cleared, and an extra `pollInterval`
   // of wait would just bloat shutdown latency for no gain.
+  //
+  // Every `getAttachment` call goes through `safeProbe` so an
+  // accessor that throws (registry implementation bug, partial
+  // teardown race) is captured as `registryCleared: 'error'` data
+  // rather than rejecting the helper promise. The never-throws
+  // contract in this module's header is load-bearing — the caller
+  // is `shutdown()` and a reject would terminate the shutdown
+  // sequence partway through (Cindy #task:630 P1-B).
   const hostId = deps.hostId!;
   const getAttachment = deps.getAttachment!;
-  if (getAttachment(hostId) === null) {
+  const safeProbe = (): { ok: true; value: unknown } | { ok: false; error: string } => {
+    try {
+      return { ok: true, value: getAttachment(hostId) };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  };
+  const initial = safeProbe();
+  if (!initial.ok) {
+    return finishWithRegistryError(rpcOutcome, initial.error, now() - startedAt);
+  }
+  if (initial.value === null) {
     return finish(rpcOutcome, true, now() - startedAt, false);
   }
   if (remaining() === 0) {
@@ -205,7 +236,13 @@ export async function gracefullyDetachOutbound(
   return new Promise<GracefulDetachOutcome>(resolve => {
     let timer: unknown = null;
     const tick = (): void => {
-      if (getAttachment(hostId) === null) {
+      const probe = safeProbe();
+      if (!probe.ok) {
+        if (timer !== null) clearT(timer);
+        resolve(finishWithRegistryError(rpcOutcome, probe.error, now() - startedAt));
+        return;
+      }
+      if (probe.value === null) {
         if (timer !== null) clearT(timer);
         resolve(finish(rpcOutcome, true, now() - startedAt, false));
         return;
@@ -231,7 +268,15 @@ export async function gracefullyDetachOutbound(
 /** Internal: race `client.hostOutboundDetach()` against the shared
  *  budget. On timer-side win returns a synthetic `rpc.ok: false`
  *  with a `synthetic_timeout` marker so logs distinguish it from
- *  a real `HostClientError('timeout')`. */
+ *  a real `HostClientError('timeout')`.
+ *
+ *  Also defends against a synchronous throw from
+ *  `client.hostOutboundDetach()` itself: while the production
+ *  `HostClient.hostOutboundDetach` always returns a Promise, the
+ *  helper accepts any `Pick<HostClient, ...>`-shaped object (test
+ *  seams, future remote-client adapters) where a sync throw is
+ *  possible. A reject here would break the helper's
+ *  never-throws contract (Cindy #task:630 P1-B). */
 async function raceRpc(
   client: Pick<HostClient, 'hostOutboundDetach'>,
   remaining: () => number,
@@ -244,8 +289,17 @@ async function raceRpc(
     // bother dispatching — go straight to a synthetic timeout.
     return { ok: false, error: 'budget exhausted before RPC dispatch', code: 'synthetic_timeout' };
   }
+  // Wrap the sync call so an implementation that throws synchronously
+  // (rather than returning a rejecting Promise) maps to the same
+  // `rpc.ok: false` data path as an async rejection.
+  let rpcThenable: Promise<{ detached: true; action: 'detached' | 'noop' }>;
+  try {
+    rpcThenable = client.hostOutboundDetach();
+  } catch (err) {
+    return rpcErrorFromUnknown(err);
+  }
   let timerHandle: unknown = null;
-  const rpcPromise = client.hostOutboundDetach().then(
+  const rpcPromise = rpcThenable.then(
     res => ({ kind: 'ok' as const, action: res.action }),
     (err: unknown) => ({ kind: 'err' as const, err }),
   );
@@ -264,7 +318,10 @@ async function raceRpc(
       code: 'synthetic_timeout',
     };
   }
-  const err = winner.err;
+  return rpcErrorFromUnknown(winner.err);
+}
+
+function rpcErrorFromUnknown(err: unknown): GracefulDetachOutcome['rpc'] {
   if (err instanceof Error) {
     const code =
       typeof (err as HostClientError).code === 'string'
@@ -273,6 +330,14 @@ async function raceRpc(
     return { ok: false, error: err.message, code };
   }
   return { ok: false, error: String(err) };
+}
+
+function finishWithRegistryError(
+  rpc: GracefulDetachOutcome['rpc'],
+  registryError: string,
+  elapsedMs: number,
+): GracefulDetachOutcome {
+  return { rpc, registryCleared: 'error', registryError, elapsedMs, budgetExhausted: false };
 }
 
 function finish(

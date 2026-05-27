@@ -1968,9 +1968,16 @@ async function shutdown(): Promise<void> {
     if (hostClient) {
       const claimedHostId =
         localHostClaim.status === 'claimed' ? localHostClaim.hostId : null;
-      const getAttachment = backend
-        ? (hostId: string) =>
-            backend!.context.hostWsController?.()?.getAttachment(hostId) ?? null
+      // Take the controller ONCE; only inject the accessor if it's
+      // actually available. A `null` controller (registry already
+      // torn down, embedded backend never booted) must NOT be
+      // smuggled through as a zero-arg accessor that returns null —
+      // the helper would then interpret that as "registry cleared
+      // successfully" instead of the truthful "we couldn't observe
+      // the registry at all" (Cindy #task:630 P1-A).
+      const hostWsController = backend?.context.hostWsController?.() ?? null;
+      const getAttachment = hostWsController
+        ? (hostId: string) => hostWsController.getAttachment(hostId)
         : undefined;
       const detachOutcome = await gracefullyDetachOutbound({
         client: hostClient,
@@ -1987,6 +1994,7 @@ async function shutdown(): Promise<void> {
             ? detachOutcome.rpc.code ?? null
             : null,
           registry_cleared: detachOutcome.registryCleared,
+          registry_error: detachOutcome.registryError ?? null,
           elapsed_ms: detachOutcome.elapsedMs,
           budget_exhausted: detachOutcome.budgetExhausted,
           host_id: claimedHostId,
