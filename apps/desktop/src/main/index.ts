@@ -32,6 +32,7 @@ import {
 } from '@silverhand/server';
 import { HostClient, spawnDaemonChild, type DaemonHandle } from '@silverhand/host';
 import { loadOrCreateServerConfig, silverhandDir, writeServerConfig } from './config.js';
+import { waitForDaemonGeneration } from './daemon-generation-attach.js';
 import {
   buildHostClaimInput,
   loadOrCreateInstallationId,
@@ -1263,12 +1264,30 @@ async function bootstrap(): Promise<void> {
         try {
           // HostClient.connect() is idempotent and serialises on its
           // internal readyPromise; if the socket is still reconnecting
-          // we await the same handle as the live consumers.
-          await client.connect();
+          // we await the same handle as the live consumers. But
+          // connect() ALONE doesn't prove the transport is talking to
+          // *this* daemon generation (Cindy `#task:627` P1-A): it can
+          // return a still-resolved readyPromise pointing at the old
+          // generation's transport, or land on a different generation
+          // mid-reconnect. The generation gate observes the client's
+          // own reconnect loop until `negotiated.instanceId` matches
+          // the one we got from the supervisor's hook.
+          const ready = await waitForDaemonGeneration(client, info.instanceId);
+          if (!ready.ok) {
+            logger?.warn(
+              {
+                instanceId: info.instanceId,
+                reason: ready.reason,
+                err: ready.error,
+              },
+              'D3.b host client did not reach expected daemon generation; skipping re-attach',
+            );
+            return;
+          }
         } catch (err) {
           logger?.warn(
             { err, instanceId: info.instanceId },
-            'D3.b host client connect failed after daemon respawn',
+            'D3.b host client generation gate threw unexpectedly',
           );
           return;
         }

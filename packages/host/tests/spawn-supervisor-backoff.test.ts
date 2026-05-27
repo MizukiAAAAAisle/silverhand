@@ -165,23 +165,40 @@ class FakeChildProcess extends EventEmitter {
   readonly stderr = new FakeStdStream();
   /** Signals the supervisor sent to this child, in order. */
   readonly killSignals: Array<NodeJS.Signals | number | undefined> = [];
+  // Mirror Node ChildProcess state surface so supervisor code that
+  // probes `exitCode` / `signalCode` to detect "already dead" sees
+  // realistic values. `null` while alive; populated on `exit`.
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
   exited = false;
 
   kill(signal?: NodeJS.Signals | number): boolean {
     this.killSignals.push(signal);
-    const wasAlive = !this.exited;
-    // Mirror "OS delivers signal → exit event arrives shortly" so the
-    // supervisor's `await new Promise(... proc.once('exit', ...))`
-    // resolves. queueMicrotask gives the supervisor's `.once('exit')`
-    // listener a chance to register before the event fires. Even when
-    // the child is already dead we still re-fire an exit so test
-    // cleanup that calls `handle.kill()` on a previously-crashed
-    // child doesn't hang waiting for an event that already happened.
+    if (this.exited) {
+      // Real Node ChildProcess: kill() on an already-exited child
+      // returns false and does NOT re-emit `exit`. Honour that
+      // semantic so tests that probe the "crash → pending respawn →
+      // kill() must not hang" path actually exercise the supervisor
+      // bug fix (Cindy #task:627 P1) instead of being masked by a
+      // fake-only courtesy re-emit.
+      return false;
+    }
+    // Live child got a signal — simulate OS-driven exit-after-signal
+    // in a microtask so the supervisor's `proc.once('exit', ...)`
+    // listener registers first.
     queueMicrotask(() => {
+      if (this.exited) return;
       this.exited = true;
-      this.emit('exit', null);
+      // Convention: kill-driven exits mirror Node's signalCode path
+      // when the signal name is a NodeJS.Signals string.
+      if (typeof signal === 'string') {
+        this.signalCode = signal;
+      } else {
+        this.exitCode = 0;
+      }
+      this.emit('exit', this.exitCode);
     });
-    return wasAlive;
+    return true;
   }
 
   /** Drive a successful handshake. The supervisor will resolve.
@@ -195,6 +212,7 @@ class FakeChildProcess extends EventEmitter {
   emitExit(code: number | null): void {
     if (this.exited) return;
     this.exited = true;
+    this.exitCode = code;
     this.emit('exit', code);
   }
 }
@@ -382,20 +400,34 @@ describe('spawnDaemonChild supervisor — backoff + respawn', () => {
    * The "do not resurrect after quit" invariant: if `kill()` runs
    * while a backoff timer is pending, that timer must NOT spawn
    * another daemon when the clock later advances.
+   *
+   * This is also the regression for Cindy `#task:627` P1-B: in real
+   * Node the crashed child's `ChildProcess` has already emitted its
+   * single `exit`; `proc.once('exit', resolve)` registered later
+   * never fires, and `proc.kill(SIGTERM)` is a no-op. Pre-fix
+   * `kill()` would hang forever waiting on that exit event. The
+   * supervisor's `proc.exitCode !== null` early-return resolves
+   * immediately when the current child has already died. The fake
+   * now mirrors real Node by NOT re-emitting `exit` on
+   * already-dead `kill()`, so this test would hang pre-fix.
    */
-  it('kill() cancels a pending respawn timer so no daemon resurrects', async () => {
+  it('kill() resolves immediately when called during pending respawn window (does not hang on dead child)', async () => {
     const fx = await spawnAndHandshake();
     liveHandles.push(fx.handle);
 
     fx.children[0]!.emitExit(1);
     expect(fx.clock.pendingCount).toBeGreaterThan(0); // backoff timer armed
 
-    // Don't await the kill — it's waiting on the child's exit event,
-    // and we already emitted exit. Drive it forward in parallel.
+    // Don't await the kill — kill() awaits an inner Promise; the
+    // supervisor's exitCode early-return must short-circuit it.
     const killP = fx.handle.kill({ gracefulMs: 10 });
     await Promise.resolve();
     // kill() must clear pending timers (restart + success-reset).
     expect(fx.clock.pendingCount).toBe(0);
+
+    // The kill promise must resolve WITHOUT us advancing the clock,
+    // i.e. without relying on the gracefulMs fallback SIGKILL timer.
+    await killP;
 
     // Even advancing far past the would-be backoff fires nothing.
     fx.clock.advance(60_000);
@@ -403,7 +435,6 @@ describe('spawnDaemonChild supervisor — backoff + respawn', () => {
     await Promise.resolve();
     expect(fx.children).toHaveLength(1);
     expect(fx.generationEvents).toEqual([]);
-    await killP;
   });
 
   /**

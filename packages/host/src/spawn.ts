@@ -515,6 +515,18 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
       pendingSuccessResetTimer = null;
       const proc = child;
       if (!proc) return;
+      // Cindy `#task:627` P1: if the current child has already exited
+      // (typical scenario: daemon crashed → backoff timer pending →
+      // app quit calls kill()), the real Node `ChildProcess` will NOT
+      // re-emit `exit` for a freshly-registered `once('exit')` listener
+      // and `proc.kill(SIGTERM)` is a no-op false return. Without this
+      // early exit, the Promise below would wait forever for an event
+      // that already happened (only the SIGKILL fallback would fire,
+      // and it doesn't resolve either). Detecting via `exitCode` /
+      // `signalCode` mirrors Node's own ChildProcess state machine.
+      if (proc.exitCode !== null || proc.signalCode !== null) {
+        return;
+      }
       const gracefulMs = killOpts?.gracefulMs ?? 5_000;
       await new Promise<void>(resolve => {
         killResolve = resolve;
