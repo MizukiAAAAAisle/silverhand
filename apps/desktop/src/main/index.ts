@@ -1199,6 +1199,95 @@ async function bootstrap(): Promise<void> {
         'silverhand-daemon exited and exceeded restart budget',
       );
     });
+    // D3.b Commit 1 — re-attach outbound after daemon generation change.
+    //
+    // Why this hook exists: D3.a Commit 4 deliberately spawns the local
+    // daemon WITHOUT `--host-config` so it never dials a stale config
+    // pre-login. When `spawnDaemonChild` respawns after a crash, the
+    // new daemon process is "empty" — its `OutboundSupervisor` has no
+    // attach config loaded — so main must re-fire `host_outbound_attach`
+    // for the currently-claimed local host. Without this, a daemon
+    // crash silently drops outbound and never recovers.
+    //
+    // Architectural framing (R1/R4): this IPC is a V1 desktop-embedded
+    // local supervisor adapter. It is NOT part of the server↔daemon
+    // formal protocol — terminal-state daemon is started by launchd
+    // with a keychain-loaded host_token and attaches without main, at
+    // which point this hook (and `spawnDaemonChild`) disappear.
+    //
+    // Dedup by `instanceId` only — the canonical daemon-generation
+    // discriminator. `attachmentSatisfies` freshness (connectionId /
+    // attachedAt) remains the only attach-success proof; this set is
+    // strictly hook-reentry guard.
+    const reattachedGenerations = new Set<string>();
+    daemon.onDaemonGenerationChanged(info => {
+      if (reattachedGenerations.has(info.instanceId)) {
+        logger?.debug?.(
+          { instanceId: info.instanceId, attempt: info.attempt },
+          'D3.b daemon generation hook: already reattached, skipping',
+        );
+        return;
+      }
+      reattachedGenerations.add(info.instanceId);
+      void (async () => {
+        logger?.info(
+          {
+            pid: info.pid,
+            daemonVersion: info.daemonVersion,
+            instanceId: info.instanceId,
+            startedAt: info.startedAt,
+            attempt: info.attempt,
+          },
+          'D3.b daemon generation changed (post-crash respawn)',
+        );
+        const claim = localHostClaim;
+        if (claim.status !== 'claimed' || claim.hostId === null) {
+          // No active host claim yet — login flow has not run, or the
+          // user is logged out. The post-login claim path will fire
+          // its own `triggerLocalHostOutboundAttach` against the fresh
+          // daemon when it runs.
+          logger?.info(
+            { instanceId: info.instanceId, status: claim.status },
+            'D3.b daemon generation changed but no active local host claim; skipping re-attach',
+          );
+          return;
+        }
+        const client = hostClient;
+        if (!client) {
+          logger?.warn(
+            { instanceId: info.instanceId },
+            'D3.b daemon generation changed but hostClient is null; skipping re-attach',
+          );
+          return;
+        }
+        try {
+          // HostClient.connect() is idempotent and serialises on its
+          // internal readyPromise; if the socket is still reconnecting
+          // we await the same handle as the live consumers.
+          await client.connect();
+        } catch (err) {
+          logger?.warn(
+            { err, instanceId: info.instanceId },
+            'D3.b host client connect failed after daemon respawn',
+          );
+          return;
+        }
+        const localHostId = claim.hostId;
+        // Re-capture freshness window — the previous attachment died
+        // with the old daemon, so its `previousConnectionId` is stale.
+        const attachWindow = captureAttachWindow(localHostId);
+        await triggerLocalHostOutboundAttach({
+          localHostId,
+          configPath: daemonHostConfigPath(silverhandDir()),
+          attachWindow,
+        });
+      })().catch(err => {
+        logger?.error(
+          { err, instanceId: info.instanceId },
+          'D3.b daemon generation re-attach unexpectedly threw',
+        );
+      });
+    });
     backend = await startEmbeddedSilverhandServer({
       dataDir: silverhandDir(),
       serverConfig: config,

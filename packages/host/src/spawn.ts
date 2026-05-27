@@ -7,20 +7,57 @@
  *   spawnDaemonChild({ launcher, socketPath, pidFilePath, logDir })
  *     → spawns `<launcher.command> <launcher.args>... <daemon args>`
  *     → reads stdout line-by-line waiting for the `ready` handshake
- *     → resolves with `{ pid, socketPath, kill, onExit }`
+ *     → resolves with `{ pid, socketPath, kill, onExit, onDaemonGenerationChanged }`
  *
  * The launcher is host-supplied (Electron main resolves it via the
  * same `process.execPath + ELECTRON_RUN_AS_NODE=1` trick used for the
  * CLI; tests can hand it a plain `node` + daemon entry script path).
  *
- * Restart policy:
+ * Restart policy (D3.b refinement of PR-1's capped restart loop):
  *
- *  - PR-1 ships a *capped restart loop*: if the daemon exits non-zero
- *    within `restartWindowMs`, restart it; if it crashes
- *    `maxRestarts` times within the window, give up and propagate the
- *    failure via `onExit({ fatal: true })`.
- *  - PR-2 may upgrade this to a circuit breaker; the API surface
- *    here is designed to absorb that without breaking callers.
+ *  - On non-zero exit (or signal): schedule a respawn after a delay
+ *    pulled from `backoffSchedule` (default `[500, 1000, 2000, 4000,
+ *    8000, 30000]`ms; consecutive failures past the array length
+ *    repeat the last value). This is the local supervisor's "give the
+ *    OS a moment" backoff — it is NOT the server↔daemon formal
+ *    protocol.
+ *  - Per-attempt counter is the same as the sliding-window crash
+ *    counter (`exitTimes.length`); both reset together when the
+ *    daemon has run successfully for `successResetMs` (default 5000)
+ *    after a handshake. This avoids drift between "do I schedule
+ *    aggressively?" and "have I exceeded budget?".
+ *  - If `exitTimes.length > maxRestarts` within `restartWindowMs`,
+ *    give up: fire `onExit({reason, code})` and stop scheduling
+ *    respawns. Default `maxRestarts=5` is the conservative core
+ *    floor; Electron main may pass a different value to express
+ *    UI-layer policy (see D3.b Commit 2).
+ *  - On successful respawn handshake, the consumer is notified via
+ *    `onDaemonGenerationChanged({pid, daemonVersion, instanceId,
+ *    startedAt, attempt})`. The consumer's job is to re-establish
+ *    anything tied to *this* daemon process — notably the post-login
+ *    `host_outbound_attach` (the fresh daemon is spawned WITHOUT
+ *    `--host-config` per D3.a Commit 4, so its outbound supervisor
+ *    is dormant until main re-attaches). `instanceId` is the
+ *    handshake `instance_id`, the canonical daemon-generation id;
+ *    consumers should dedupe by `instanceId`, not by `pid` (macOS
+ *    pids are reusable) or `daemonVersion` (constant across
+ *    restarts of the same binary).
+ *
+ * Terminal-state disposition (R1/R4 framing — see `notes/`):
+ *
+ *  - In the long-run target topology the local daemon is started by
+ *    launchd (or a per-OS service manager) with its host_token loaded
+ *    from the OS keychain, and it attaches to its assigned backend
+ *    without any desktop main process involvement. At that point
+ *    `spawnDaemonChild` and `onDaemonGenerationChanged` both go away
+ *    along with the rest of `apps/desktop/src/main/index.ts`'s
+ *    spawn/IPC supervisor surface.
+ *  - Until then, desktop main is the OS-parent of the local daemon
+ *    purely as a packaging convenience. This file is a
+ *    **V1 desktop-embedded local supervisor adapter** — it is NOT a
+ *    server↔daemon formal communication channel, and nothing in this
+ *    file or in `onDaemonGenerationChanged` callbacks should be
+ *    surfaced to backend, renderer, or wire-protocol semantics.
  *
  * Stderr piping:
  *
@@ -28,8 +65,22 @@
  *    The daemon itself only writes to stderr when `--stderr` is set,
  *    and even then it's prefixed `[daemon ...]` so it doesn't get
  *    confused with backend logs.
+ *
+ * Test seams (D3.b Commit 1):
+ *
+ *  - `clock` lets unit tests advance backoff timers without sleeping.
+ *  - `spawnProcess` lets unit tests substitute a fake ChildProcess so
+ *    the whole supervisor loop can be exercised without `tsx` on
+ *    PATH. The seam is package-internal; production callers should
+ *    never pass it. The seam is positioned at the lowest layer
+ *    (`node:child_process.spawn`) so handshake parsing and pid
+ *    lifecycle are still exercised end-to-end in the test.
  */
-import { spawn, type ChildProcess } from 'node:child_process';
+import {
+  spawn as nodeSpawn,
+  type ChildProcess,
+  type SpawnOptions,
+} from 'node:child_process';
 import {
   EventFrameSchema,
   HOST_PROTOCOL_VERSION,
@@ -49,12 +100,61 @@ export interface DaemonLauncher {
   env?: Record<string, string>;
 }
 
+/** Test-only injection seam: replaces `node:child_process.spawn`. */
+export type SpawnProcessImpl = (
+  command: string,
+  args: ReadonlyArray<string>,
+  options: SpawnOptions,
+) => ChildProcess;
+
+/**
+ * Test-only clock seam. The default uses `Date.now()` and
+ * `setTimeout` (with `.unref()` so the timer doesn't keep Node
+ * alive during shutdown). Unit tests substitute a fake that
+ * advances synchronously.
+ */
+export interface SpawnClock {
+  now(): number;
+  /** Schedule `fn` after `ms` and return a handle whose `clear()`
+   *  prevents the firing. Calling `clear()` after the timer fired
+   *  is a no-op. */
+  setTimeout(fn: () => void, ms: number): SpawnTimer;
+}
+
+export interface SpawnTimer {
+  clear(): void;
+}
+
+const REAL_CLOCK: SpawnClock = {
+  now: () => Date.now(),
+  setTimeout: (fn, ms) => {
+    const t = setTimeout(fn, ms);
+    t.unref?.();
+    return {
+      clear: () => clearTimeout(t),
+    };
+  },
+};
+
+/** Default backoff between restart attempts. The last entry caps
+ *  subsequent attempts (i.e. attempt N >= length uses index length-1). */
+export const DEFAULT_BACKOFF_SCHEDULE_MS: ReadonlyArray<number> = [
+  500, 1_000, 2_000, 4_000, 8_000, 30_000,
+];
+
+/** Default "ran successfully this long after handshake → reset
+ *  backoff" threshold. Picked so flapping crashes still escalate
+ *  but a normal long-lived daemon stays at attempt 0. */
+export const DEFAULT_SUCCESS_RESET_MS = 5_000;
+
 export interface SpawnDaemonOptions {
   launcher: DaemonLauncher;
   socketPath: string;
   pidFilePath: string;
   logDir: string;
-  /** Optional Stage D2 outbound WS host-token config path. */
+  /** Optional Stage D2 outbound WS host-token config path. Note that
+   *  D3.a Commit 4 removed this from the desktop spawn path; it is
+   *  preserved here for standalone / manual / test callers. */
   hostConfigPath?: string | null;
   /** Mirror daemon log lines to stderr too. Default true in dev. */
   alsoStderr?: boolean;
@@ -64,6 +164,10 @@ export interface SpawnDaemonOptions {
   maxRestarts?: number;
   /** Sliding window for `maxRestarts`. Default 60_000ms. */
   restartWindowMs?: number;
+  /** Per-attempt restart delay schedule. See `DEFAULT_BACKOFF_SCHEDULE_MS`. */
+  backoffSchedule?: ReadonlyArray<number>;
+  /** Successful-run threshold for backoff reset. See `DEFAULT_SUCCESS_RESET_MS`. */
+  successResetMs?: number;
   /**
    * Stale-daemon reclaim toggle. When true (default), the parent
    * inspects the pid file before spawning and, if it points at a
@@ -75,6 +179,38 @@ export interface SpawnDaemonOptions {
   reclaimStaleDaemon?: boolean;
   /** Test override for reclaim deps; production paths use defaults. */
   reclaimDeps?: Partial<ReclaimDeps>;
+  /** Test seam — see `SpawnClock`. Production paths use real timers. */
+  clock?: SpawnClock;
+  /** Test seam — see `SpawnProcessImpl`. Production paths use `node:child_process.spawn`. */
+  spawnProcess?: SpawnProcessImpl;
+}
+
+export interface DaemonGenerationInfo {
+  /** OS pid of the freshly-spawned daemon. macOS pids are reusable,
+   *  so do NOT use this for generation dedup — use `instanceId`. */
+  pid: number;
+  /** Daemon version string from the new handshake. Constant across
+   *  restarts of the same binary; useful for diagnostic logs but
+   *  not a generation discriminator. */
+  daemonVersion: string;
+  /**
+   * Handshake `instance_id` — the canonical daemon-generation id.
+   * Changes on every daemon boot. Consumers should dedupe their
+   * generation-change reactions by this field; pid is reusable and
+   * daemonVersion doesn't move across restarts.
+   */
+  instanceId: string;
+  /** Handshake `started_at` (ms epoch). Diagnostic only. */
+  startedAt: number;
+  /**
+   * 1-indexed consecutive crash-restart counter inside the current
+   * `restartWindowMs` sliding window. Resets to 0 after the
+   * supervisor observes `successResetMs` of healthy uptime; the next
+   * crash after a reset fires with `attempt=1` again. This is NOT a
+   * lifetime restart count — it's the supervisor's local view of
+   * "how aggressive should backoff be right now?".
+   */
+  attempt: number;
 }
 
 export interface DaemonHandle {
@@ -89,14 +225,35 @@ export interface DaemonHandle {
   /**
    * Send SIGTERM to the daemon and wait for exit. Falls back to
    * SIGKILL after `gracefulMs` (default 5_000ms). Disables auto-
-   * restart so the daemon stays down. Idempotent.
+   * restart so the daemon stays down. Idempotent. Cancels any
+   * pending restart-backoff timer and success-reset timer so a
+   * delayed respawn cannot resurrect the daemon after quit.
    */
   kill(opts?: { gracefulMs?: number }): Promise<void>;
   /**
    * Subscribe to fatal-exit notifications: fired when the daemon
-   * exceeds the restart budget. NOT fired on intentional `kill()`.
+   * exceeds the restart budget OR when a respawn attempt fails its
+   * handshake. NOT fired on intentional `kill()` or transient
+   * crashes that are recovered by `onDaemonGenerationChanged`.
    */
   onExit(handler: (info: { reason: string; code: number | null }) => void): () => void;
+  /**
+   * Subscribe to daemon-generation-change notifications: fired AFTER
+   * a crash-triggered restart's handshake succeeds. Used by the
+   * desktop supervisor to re-fire post-login `host_outbound_attach`
+   * — the fresh daemon has no outbound supervisor running until
+   * main re-attaches.
+   *
+   * NOT fired for the initial spawn (use the resolved `DaemonHandle`
+   * for that), NOT fired on `kill()`, and NOT fired when a respawn
+   * attempt fails (those go to `onExit`).
+   *
+   * Consumers should dedupe reactions by `info.instanceId`. This hook
+   * is a V1 local-supervisor adapter — it is NOT part of the
+   * server↔daemon protocol and will disappear with `spawnDaemonChild`
+   * when local daemon is managed by launchd in the terminal state.
+   */
+  onDaemonGenerationChanged(handler: (info: DaemonGenerationInfo) => void): () => void;
 }
 
 export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<DaemonHandle> {
@@ -104,13 +261,26 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
   const restartWindowMs = opts.restartWindowMs ?? 60_000;
   const readyTimeoutMs = opts.readyTimeoutMs ?? 10_000;
   const alsoStderr = opts.alsoStderr ?? true;
+  const backoffSchedule = opts.backoffSchedule ?? DEFAULT_BACKOFF_SCHEDULE_MS;
+  const successResetMs = opts.successResetMs ?? DEFAULT_SUCCESS_RESET_MS;
+  const clock = opts.clock ?? REAL_CLOCK;
+  const spawnImpl = opts.spawnProcess ?? (nodeSpawn as SpawnProcessImpl);
+  if (backoffSchedule.length === 0) {
+    throw new Error('spawnDaemonChild: backoffSchedule must not be empty');
+  }
   const exitHandlers = new Set<(info: { reason: string; code: number | null }) => void>();
+  const generationHandlers = new Set<(info: DaemonGenerationInfo) => void>();
   const exitTimes: number[] = [];
 
   let child: ChildProcess | null = null;
   let lastHandshake: Extract<EventFrame, { event: 'ready' }> | null = null;
   let killed = false;
   let killResolve: (() => void) | null = null;
+  /** Pending restart-backoff timer; cleared on kill() or when fired. */
+  let pendingRestartTimer: SpawnTimer | null = null;
+  /** Pending success-reset timer; cleared on next exit, on kill(), or
+   *  when fired (which resets the backoff state). */
+  let pendingSuccessResetTimer: SpawnTimer | null = null;
 
   // ── Stale-daemon reclaim (PR-2 step 1) ───────────────────────────
   // Run BEFORE the first spawn so a crashed-prior-session daemon
@@ -148,7 +318,7 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
       ...(opts.hostConfigPath ? ['--host-config', opts.hostConfigPath] : []),
       ...(alsoStderr ? ['--stderr'] : []),
     ];
-    const proc = spawn(
+    const proc = spawnImpl(
       opts.launcher.command,
       [...opts.launcher.args, ...daemonArgs],
       {
@@ -228,46 +398,97 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
     });
   };
 
+  /** Arm a fresh success-reset timer. Called after every successful
+   *  handshake (initial + each respawn). Cancels any prior pending
+   *  one so a fast crash-restart-crash cycle never has two armed at
+   *  once. */
+  const armSuccessReset = (): void => {
+    pendingSuccessResetTimer?.clear();
+    pendingSuccessResetTimer = clock.setTimeout(() => {
+      pendingSuccessResetTimer = null;
+      // We ran successfully for `successResetMs` without crashing →
+      // wipe the consecutive-crash bookkeeping so the next isolated
+      // crash starts at backoff[0] again.
+      exitTimes.length = 0;
+    }, successResetMs);
+  };
+
+  /** Fire fatal `onExit` handlers with the given info. Idempotent
+   *  callers must already have decided this exit is terminal. */
+  const emitFatalExit = (info: { reason: string; code: number | null }): void => {
+    for (const h of exitHandlers) {
+      try { h(info); } catch { /* swallow */ }
+    }
+  };
+
+  /** Attempt a respawn: spawnOnce, on success update handle + arm
+   *  success-reset + notify onDaemonGenerationChanged; on failure
+   *  emit fatal exit. `attempt` is the consecutive-restart counter
+   *  (1-indexed) used by the generation hook's consumer. */
+  const tryRespawn = async (attempt: number): Promise<void> => {
+    try {
+      const handshake = await spawnOnce();
+      lastHandshake = handshake;
+      handle.pid = handshake.daemon_pid;
+      handle.daemonVersion = handshake.daemon_version;
+      attachExit();
+      armSuccessReset();
+      for (const h of generationHandlers) {
+        try {
+          h({
+            pid: handshake.daemon_pid,
+            daemonVersion: handshake.daemon_version,
+            instanceId: handshake.instance_id,
+            startedAt: handshake.started_at,
+            attempt,
+          });
+        } catch { /* swallow */ }
+      }
+    } catch (err) {
+      emitFatalExit({
+        reason: `daemon restart failed: ${(err as Error).message}`,
+        code: null,
+      });
+    }
+  };
+
   const onExit = (code: number | null): void => {
     if (killed) {
       killResolve?.();
       return;
     }
-    // Trim exit-time window
-    const now = Date.now();
+    // The previous incarnation exited before its success-reset
+    // window elapsed → cancel the pending reset so we DON'T clear
+    // the consecutive-crash counter (this exit is one of those
+    // consecutive crashes).
+    pendingSuccessResetTimer?.clear();
+    pendingSuccessResetTimer = null;
+
+    const now = clock.now();
     exitTimes.push(now);
+    // Trim sliding window
     while (exitTimes.length > 0 && exitTimes[0]! < now - restartWindowMs) {
       exitTimes.shift();
     }
     if (exitTimes.length > maxRestarts) {
-      const info = {
+      emitFatalExit({
         reason: `daemon crashed ${exitTimes.length} times within ${restartWindowMs}ms; giving up`,
         code,
-      };
-      for (const h of exitHandlers) {
-        try { h(info); } catch { /* swallow */ }
-      }
+      });
       return;
     }
-    // Best-effort restart. Errors here propagate to onExit handlers
-    // since we no longer have a settle path.
-    void (async () => {
-      try {
-        const handshake = await spawnOnce();
-        lastHandshake = handshake;
-        handle.pid = handshake.daemon_pid;
-        handle.daemonVersion = handshake.daemon_version;
-        attachExit();
-      } catch (err) {
-        const info = {
-          reason: `daemon restart failed: ${(err as Error).message}`,
-          code: null,
-        };
-        for (const h of exitHandlers) {
-          try { h(info); } catch { /* swallow */ }
-        }
-      }
-    })();
+    // attempt = consecutive-crash counter; equals exitTimes.length
+    // immediately after the push above. backoffSchedule indexed by
+    // (attempt-1) clamped to last entry.
+    const attempt = exitTimes.length;
+    const idx = Math.min(attempt - 1, backoffSchedule.length - 1);
+    const delayMs = backoffSchedule[idx]!;
+    pendingRestartTimer = clock.setTimeout(() => {
+      pendingRestartTimer = null;
+      // Defensive: if kill() ran between schedule and fire, abort.
+      if (killed) return;
+      void tryRespawn(attempt);
+    }, delayMs);
   };
 
   const attachExit = (): void => {
@@ -277,6 +498,7 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
   const firstHandshake = await spawnOnce();
   lastHandshake = firstHandshake;
   attachExit();
+  armSuccessReset();
 
   const handle: DaemonHandle = {
     pid: firstHandshake.daemon_pid,
@@ -285,6 +507,12 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
     async kill(killOpts) {
       if (killed) return;
       killed = true;
+      // Cancel pending restart + success-reset so a delayed respawn
+      // can't resurrect the daemon after the host has decided to quit.
+      pendingRestartTimer?.clear();
+      pendingRestartTimer = null;
+      pendingSuccessResetTimer?.clear();
+      pendingSuccessResetTimer = null;
       const proc = child;
       if (!proc) return;
       const gracefulMs = killOpts?.gracefulMs ?? 5_000;
@@ -307,6 +535,10 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
     onExit(handler) {
       exitHandlers.add(handler);
       return () => { exitHandlers.delete(handler); };
+    },
+    onDaemonGenerationChanged(handler) {
+      generationHandlers.add(handler);
+      return () => { generationHandlers.delete(handler); };
     },
   };
   // Use the captured firstHandshake (`lastHandshake` is updated across
