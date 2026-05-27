@@ -50,6 +50,7 @@ import {
   startAttachWatchdog,
   type ExpectedAttachWindow,
 } from './outbound-attach.js';
+import { gracefullyDetachOutbound } from './outbound-detach.js';
 
 let backend: RunningBackend | null = null;
 let daemon: DaemonHandle | null = null;
@@ -1953,6 +1954,52 @@ async function shutdown(): Promise<void> {
       /* window may already be destroyed — ignore */
     }
   };
+
+  try {
+    // D3.b Commit 3 — best-effort outbound-detach hint, sent BEFORE
+    // `backend.close()` because the backend itself owns the
+    // `HostWsServerController` registry we want to observe go null.
+    // Closing backend first would tear down the registry and reduce
+    // this step to a fire-and-forget daemon-only signal (still
+    // useful, just less observable). The detach is bounded by an
+    // internal 1.5s budget and never blocks shutdown — any
+    // outcome (RPC throw, timeout, registry never clears) just gets
+    // logged. See `outbound-detach.ts` for the full contract.
+    if (hostClient) {
+      const claimedHostId =
+        localHostClaim.status === 'claimed' ? localHostClaim.hostId : null;
+      const getAttachment = backend
+        ? (hostId: string) =>
+            backend!.context.hostWsController?.()?.getAttachment(hostId) ?? null
+        : undefined;
+      const detachOutcome = await gracefullyDetachOutbound({
+        client: hostClient,
+        hostId: claimedHostId,
+        getAttachment,
+      });
+      logger?.info(
+        {
+          kind: 'shutdown.outbound_detach',
+          rpc_ok: detachOutcome.rpc.ok,
+          rpc_action: detachOutcome.rpc.ok ? detachOutcome.rpc.action : null,
+          rpc_error: !detachOutcome.rpc.ok ? detachOutcome.rpc.error : null,
+          rpc_error_code: !detachOutcome.rpc.ok
+            ? detachOutcome.rpc.code ?? null
+            : null,
+          registry_cleared: detachOutcome.registryCleared,
+          elapsed_ms: detachOutcome.elapsedMs,
+          budget_exhausted: detachOutcome.budgetExhausted,
+          host_id: claimedHostId,
+        },
+        'outbound detach hint result on shutdown',
+      );
+    }
+  } catch (err) {
+    // The helper itself never throws — this catch covers truly
+    // unexpected exceptions (e.g. logger blowing up). Swallow so
+    // the rest of shutdown still runs.
+    console.error('[main] outbound detach hint failed unexpectedly:', err);
+  }
 
   try {
     if (backend) {

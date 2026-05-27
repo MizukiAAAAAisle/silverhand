@@ -31,6 +31,7 @@ import {
   type ConversationLogDebugParams,
   type HostOutboundAttachParams,
   type HostOutboundAttachResult,
+  type HostOutboundDetachResult,
   type IntentName,
   type ResponseError,
   type ResponseFrame,
@@ -76,6 +77,17 @@ export interface DispatcherOptions {
   hostOutboundAttachHandler?: (
     params: HostOutboundAttachParams,
   ) => HostOutboundAttachResult | Promise<HostOutboundAttachResult>;
+  /**
+   * Stage D3.b Commit 3 — handler for the `host_outbound_detach`
+   * intent. Production wiring: `OutboundSupervisor.detach`. Mirrors
+   * the `hostOutboundAttachHandler` slot pattern so the dispatcher
+   * stays free of supervisor concrete dependencies. `undefined`
+   * means the intent is not wired and the dispatcher throws
+   * (translated to `internal_error` by the catch arm).
+   */
+  hostOutboundDetachHandler?: () =>
+    | HostOutboundDetachResult
+    | Promise<HostOutboundDetachResult>;
 }
 
 export class IntentDispatcher {
@@ -88,6 +100,9 @@ export class IntentDispatcher {
     | ((
         params: HostOutboundAttachParams,
       ) => HostOutboundAttachResult | Promise<HostOutboundAttachResult>)
+    | undefined;
+  private readonly hostOutboundDetachHandler:
+    | (() => HostOutboundDetachResult | Promise<HostOutboundDetachResult>)
     | undefined;
   private intentCount = 0;
   private shuttingDown = false;
@@ -107,6 +122,7 @@ export class IntentDispatcher {
       opts.helloResult ?? createDaemonHelloResult('__test_instance__');
     this.supervisor = opts.supervisor;
     this.hostOutboundAttachHandler = opts.hostOutboundAttachHandler;
+    this.hostOutboundDetachHandler = opts.hostOutboundDetachHandler;
   }
 
   /** Signal that subsequent intents should be rejected with
@@ -361,6 +377,11 @@ export class IntentDispatcher {
         return this.requireHostOutboundAttachHandler()(
           params as HostOutboundAttachParams,
         );
+      case 'host_outbound_detach':
+        // Detach is the symmetric daemon-control intent. No params
+        // (validated to `{}` by the schema before reaching here).
+        // Same protocol-only-surface caveat as attach.
+        return this.requireHostOutboundDetachHandler()();
     }
   }
 
@@ -384,5 +405,16 @@ export class IntentDispatcher {
       );
     }
     return this.hostOutboundAttachHandler;
+  }
+
+  private requireHostOutboundDetachHandler(): () =>
+    | HostOutboundDetachResult
+    | Promise<HostOutboundDetachResult> {
+    if (!this.hostOutboundDetachHandler) {
+      throw new Error(
+        'host_outbound_detach intent reached dispatcher with no handler wired',
+      );
+    }
+    return this.hostOutboundDetachHandler;
   }
 }

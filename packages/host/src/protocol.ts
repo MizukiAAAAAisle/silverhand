@@ -846,6 +846,60 @@ export type HostOutboundAttachResult = z.infer<
 >;
 
 
+// ── host_outbound_detach (Stage D3.b Commit 3) ─────────────────────
+//
+// Counterpart to `host_outbound_attach`: tell a running daemon to
+// gracefully stop its currently-attached outbound websocket so the
+// backend can drop the attachment without waiting for heartbeat /
+// socket-close timeout. The desktop main process sends this from its
+// `before-quit` cleanup path as a **latency optimization hint** — it
+// is NOT a backend correctness dependency. The server-side cleanup
+// still falls back to WS-close detection and heartbeat timeout if
+// the hint never lands.
+//
+// Contract:
+//   - No params. Detach is unconditional: there is nothing to
+//     validate, no file to read, no URL to parse.
+//   - Idempotent. With an active client: stop it cleanly, return
+//     `action: 'detached'`. With no client: noop, return
+//     `action: 'noop'`. Both arms have `detached: true` because the
+//     post-condition ("no active outbound client") is satisfied
+//     either way.
+//   - **Domain result has no failure arm** because there are no
+//     input or I/O failure modes. Transport / dispatcher errors
+//     (`shutting_down`, `internal_error`, `closed`, network etc.)
+//     still surface as `ResponseError` frames per the standard
+//     response envelope — callers must treat those as failures, not
+//     as a missing result.
+//   - Detach does NOT make the daemon's `OutboundSupervisor`
+//     terminal. The supervisor can be re-attached later via
+//     `host_outbound_attach` in the same daemon process (e.g.
+//     log-out → log-in-as-different-user). Daemon shutdown is a
+//     separate path — `OutboundSupervisor.stop()` (called from
+//     `runDaemon` shutdown) is the one-way close.
+
+export const HostOutboundDetachParamsSchema = z.object({}).strict();
+export type HostOutboundDetachParams = z.infer<
+  typeof HostOutboundDetachParamsSchema
+>;
+
+export const HostOutboundDetachResultSchema = z
+  .object({
+    detached: z.literal(true),
+    /**
+     * `detached` = there was an active outbound client and it was
+     *              stopped as part of this call.
+     * `noop`     = no active client (pre-attach state, or already
+     *              detached). The hint is harmless either way.
+     */
+    action: z.enum(['detached', 'noop']),
+  })
+  .strict();
+export type HostOutboundDetachResult = z.infer<
+  typeof HostOutboundDetachResultSchema
+>;
+
+
 /**
  * Single source of truth for the intent ↔ params/result type pairing.
  * The client uses it to enforce that `host.call('echo', {...})` only
@@ -913,6 +967,10 @@ export const intentSchemas = {
   host_outbound_attach: {
     params: HostOutboundAttachParamsSchema,
     result: HostOutboundAttachResultSchema,
+  },
+  host_outbound_detach: {
+    params: HostOutboundDetachParamsSchema,
+    result: HostOutboundDetachResultSchema,
   },
 } as const;
 

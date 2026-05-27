@@ -61,6 +61,7 @@ import type {
   HostOutboundAttachFailureReason,
   HostOutboundAttachParams,
   HostOutboundAttachResult,
+  HostOutboundDetachResult,
 } from '../protocol.js';
 import {
   OutboundDaemonClient,
@@ -226,6 +227,56 @@ export class OutboundSupervisor {
    */
   sendEvent(event: EventFrame): void {
     this.current?.client.sendEvent(event);
+  }
+
+  /**
+   * D3.b Commit 3 — gracefully detach the current outbound client
+   * without making the supervisor terminal. Used by the desktop
+   * main process from its `before-quit` cleanup as a latency
+   * optimization: a clean WS close lets the backend drop the
+   * attachment immediately rather than waiting for heartbeat /
+   * socket-timeout detection.
+   *
+   * Strict distinction from {@link stop}:
+   *   - `detach()` clears the active client and returns; the
+   *     supervisor remains usable for a future
+   *     `host_outbound_attach` call in the same daemon process
+   *     (e.g. log-out → log-in-as-different-user; or any future
+   *     UI affordance that detaches without quitting the daemon).
+   *   - `stop()` marks the supervisor terminal — subsequent attach
+   *     calls are rejected. Production callers: only `runDaemon`
+   *     shutdown path.
+   *
+   * Best-effort by contract — never throws for absence of client
+   * (returns `noop` instead) and never reports config-shape
+   * failures (there is no config to read). Transport / dispatcher
+   * errors are handled by the caller's response-frame envelope,
+   * not by this method.
+   *
+   * Idempotency: detach after detach returns `noop`; detach after
+   * `stop()` also returns `noop` (client already torn down).
+   */
+  detach(): HostOutboundDetachResult {
+    if (this.current) {
+      // 'host_outbound_detach' as the stop reason gives downstream
+      // log readers / outbound-client diagnostics a grep-friendly
+      // signal that this teardown was a deliberate hint, not a
+      // crash / heartbeat-driven close.
+      this.current.client.stop('host_outbound_detach');
+      this.current = null;
+      this.deps.logger.info(
+        {
+          kind: 'outbound_supervisor',
+          action: 'detached',
+        },
+        'daemon outbound detached on host_outbound_detach hint',
+      );
+      return { detached: true, action: 'detached' };
+    }
+    // No active client (pre-attach state, or previously detached /
+    // stopped). The hint is harmless either way — caller logs the
+    // action and moves on.
+    return { detached: true, action: 'noop' };
   }
 
   /** Tear down the active client (if any) on daemon shutdown.

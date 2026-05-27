@@ -405,6 +405,22 @@ export class HostClient {
   }
 
   /**
+   * Stage D3.b Commit 3 — symmetric detach hint sent by the desktop
+   * main process from its `before-quit` cleanup so the daemon can
+   * close its outbound WS cleanly before the process is signalled.
+   *
+   * Best-effort by contract: the result has no failure arm
+   * (`detached: true, action: 'detached' | 'noop'` always). Real
+   * IPC transport failures (socket closed, daemon dead, dispatcher
+   * shutting down) still throw via the underlying `call()` — the
+   * caller is expected to wrap this in a bounded `Promise.race`
+   * and treat any throw as a non-blocking hint that didn't land.
+   */
+  hostOutboundDetach(): Promise<IntentResult<'host_outbound_detach'>> {
+    return this.call('host_outbound_detach', {});
+  }
+
+  /**
    * Subscribe to **unsolicited events** the daemon emits — runtime_*
    * lifecycle (state, output, exit, ready_for_drain,
    * startup_delivery_consumed/_failed, output_dropped/_paused/_resumed)

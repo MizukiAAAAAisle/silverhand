@@ -283,6 +283,17 @@ const REQUESTS: WireFixture[] = [
     }),
     kind: { kind: 'request', intent: 'host_outbound_attach' },
   },
+  {
+    name: 'request/host_outbound_detach',
+    description:
+      'Best-effort detach hint sent from desktop before-quit cleanup (D3.b Commit 3). Empty params; result has no failure arm.',
+    frame: enc({
+      id: 'req-outbound-detach',
+      intent: 'host_outbound_detach',
+      params: {},
+    }),
+    kind: { kind: 'request', intent: 'host_outbound_detach' },
+  },
 ];
 
 // ── Successful response fixtures ───────────────────────────────────
@@ -747,6 +758,32 @@ const RESPONSES_SUCCESS: WireFixture[] = [
       },
     }),
     kind: { kind: 'response_success', intent: 'host_outbound_attach' },
+  },
+  {
+    name: 'response/host_outbound_detach-detached',
+    description:
+      'Detach hint with an active outbound client: action=detached, client stopped cleanly (D3.b Commit 3).',
+    frame: enc({
+      id: 'req-outbound-detach',
+      result: {
+        detached: true,
+        action: 'detached',
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'host_outbound_detach' },
+  },
+  {
+    name: 'response/host_outbound_detach-noop',
+    description:
+      'Detach hint with no active client (pre-attach state or already detached): action=noop, harmless.',
+    frame: enc({
+      id: 'req-outbound-detach',
+      result: {
+        detached: true,
+        action: 'noop',
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'host_outbound_detach' },
   },
 ];
 

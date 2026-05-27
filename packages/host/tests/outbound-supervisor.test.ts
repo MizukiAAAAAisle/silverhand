@@ -400,3 +400,93 @@ describe('OutboundSupervisor — stop()', () => {
     expect(f.spawned[0]!.stopCalls).toEqual([{ reason: 'first' }]);
   });
 });
+
+describe('OutboundSupervisor — detach() (D3.b Commit 3)', () => {
+  let f: SupervisorFixture | null = null;
+  afterEach(() => {
+    f?.cleanup();
+    f = null;
+  });
+
+  it('detach with no active client returns action=noop without spawning anything', () => {
+    // Pre-attach state — desktop never logged in but still cleans up
+    // on quit. The hint is harmless; the supervisor reports no work.
+    f = makeFixture();
+    const res = f.supervisor.detach();
+    expect(res).toEqual({ detached: true, action: 'noop' });
+    expect(f.spawned).toEqual([]);
+    expect(f.supervisor.currentConfigPath()).toBeNull();
+  });
+
+  it('detach with an active client returns action=detached and stops the client with a grep-friendly reason', () => {
+    // The 'host_outbound_detach' stop reason is the load-bearing
+    // signal — it lets log readers and outbound-client diagnostics
+    // distinguish a deliberate quit-time hint from a crash /
+    // heartbeat-driven close. Future readers may grep on it.
+    f = makeFixture();
+    const path = f.writeValidConfig();
+    f.supervisor.attach({ config_path: path });
+    expect(f.spawned).toHaveLength(1);
+    const client = f.spawned[0]!;
+
+    const res = f.supervisor.detach();
+    expect(res).toEqual({ detached: true, action: 'detached' });
+    expect(client.stopCalls).toEqual([{ reason: 'host_outbound_detach' }]);
+    expect(f.supervisor.currentConfigPath()).toBeNull();
+  });
+
+  it('detach is NOT terminal — a later attach succeeds and spawns a fresh client', () => {
+    // Strict distinction from stop(): detach clears the active client
+    // but leaves the supervisor usable. Models the log-out →
+    // log-in-as-different-user flow in one daemon process; also
+    // covers any future UI affordance that detaches without quitting
+    // the daemon.
+    f = makeFixture();
+    const pathA = f.writeValidConfig('a.json');
+    const pathB = f.writeValidConfig('b.json');
+    f.supervisor.attach({ config_path: pathA });
+    expect(f.spawned).toHaveLength(1);
+    f.supervisor.detach();
+    expect(f.supervisor.currentConfigPath()).toBeNull();
+
+    // Re-attach must succeed AND must use a fresh client (not revive
+    // the stopped one). Action is 'started' because there is no
+    // current client at this point — same as a first-time attach.
+    const res = f.supervisor.attach({ config_path: pathB });
+    expect(res).toEqual({ attached: true, config_path: pathB, action: 'started' });
+    expect(f.spawned).toHaveLength(2);
+    expect(f.spawned[1]!.startCalls).toBe(1);
+  });
+
+  it('detach is idempotent — calling it twice in a row returns noop the second time', () => {
+    // A defensive case: if the desktop main process somehow sends
+    // the hint twice (retry / race), the second call must be a
+    // harmless noop with no further client side-effects.
+    f = makeFixture();
+    const path = f.writeValidConfig();
+    f.supervisor.attach({ config_path: path });
+    const first = f.supervisor.detach();
+    expect(first.action).toBe('detached');
+    const second = f.supervisor.detach();
+    expect(second).toEqual({ detached: true, action: 'noop' });
+    // Client received exactly one stop.
+    expect(f.spawned[0]!.stopCalls).toEqual([
+      { reason: 'host_outbound_detach' },
+    ]);
+  });
+
+  it('detach AFTER stop() returns noop (terminal stop already cleared the client)', () => {
+    // stop() is the terminal teardown path; detach() called after it
+    // must NOT throw, must NOT revive the supervisor, and must NOT
+    // re-stop a non-existent client. Returns noop because the
+    // post-condition ("no active client") is satisfied.
+    f = makeFixture();
+    const path = f.writeValidConfig();
+    f.supervisor.attach({ config_path: path });
+    f.supervisor.stop('daemon_quit');
+    const res = f.supervisor.detach();
+    expect(res).toEqual({ detached: true, action: 'noop' });
+    // The stop call from stop() is the only stop the client received.
+    expect(f.spawned[0]!.stopCalls).toEqual([{ reason: 'daemon_quit' }]);
+  });
+});
