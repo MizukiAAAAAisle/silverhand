@@ -16,8 +16,12 @@
  *     mapping.
  */
 import { describe, expect, it } from 'vitest';
+import type { DaemonFatalExitInfo } from '@silverhand/host';
 import type { LocalHostClaimStatus } from '../local-host-claim.js';
-import { flipToFailedOnBudgetExhausted } from '../local-host-failure.js';
+import {
+  applyFatalExitToClaim,
+  flipToFailedOnBudgetExhausted,
+} from '../local-host-failure.js';
 
 describe('flipToFailedOnBudgetExhausted', () => {
   it('maps unclaimed → failed with hostId=null (no host ever existed)', () => {
@@ -36,17 +40,23 @@ describe('flipToFailedOnBudgetExhausted', () => {
     });
   });
 
-  it('maps revoked → failed preserving hostId (supervisor crash trumps revoke surface)', () => {
-    // Edge case: if the daemon dies in the moments after a revoke
-    // landed but before the user dismissed the revoke notice, we
-    // want the more recent failure to win so the user sees the
-    // actionable "daemon stopped" message. hostId is preserved so
-    // the renderer can still reference the host row by id.
+  it('LEAVES revoked unchanged — credential removal trumps daemon liveness', () => {
+    // Cindy `#task:629` P1-B: revoked means the server-side credential
+    // is gone and recovery is "re-claim via Hosts settings", NOT
+    // "restart the daemon". Flipping to `failed` would route the user
+    // to the wrong remediation surface. The supervisor's terminal
+    // liveness signal and the credential lifecycle are two different
+    // surfaces; if the product ever needs to express both at once,
+    // that belongs in a separate diagnostic/overlay field.
     const current: LocalHostClaimStatus = { status: 'revoked', hostId: 'host-xyz' };
-    expect(flipToFailedOnBudgetExhausted(current)).toEqual({
-      status: 'failed',
-      hostId: 'host-xyz',
-    });
+    const next = flipToFailedOnBudgetExhausted(current);
+    expect(next).toBe(current);
+    expect(next).toEqual({ status: 'revoked', hostId: 'host-xyz' });
+  });
+
+  it('LEAVES revoked unchanged even when hostId is null (post-revoke without id)', () => {
+    const current: LocalHostClaimStatus = { status: 'revoked', hostId: null };
+    expect(flipToFailedOnBudgetExhausted(current)).toBe(current);
   });
 
   it('maps error → failed preserving hostId', () => {
@@ -73,5 +83,57 @@ describe('flipToFailedOnBudgetExhausted', () => {
     const next = flipToFailedOnBudgetExhausted(current);
     expect(next).not.toBe(current);
     expect(current).toEqual({ status: 'claimed', hostId: 'host-frozen' });
+  });
+});
+
+describe('applyFatalExitToClaim — kind gate (Cindy #task:629 P1-A)', () => {
+  const claimed: LocalHostClaimStatus = { status: 'claimed', hostId: 'host-abc' };
+
+  it('flips claimed → failed on restart_budget_exhausted', () => {
+    const info: DaemonFatalExitInfo = {
+      kind: 'restart_budget_exhausted',
+      reason: 'daemon crashed 6 times within 60000ms; giving up',
+      code: 1,
+    };
+    expect(applyFatalExitToClaim(claimed, info)).toEqual({
+      status: 'failed',
+      hostId: 'host-abc',
+    });
+  });
+
+  it('LEAVES claimed unchanged on respawn_handshake_failed', () => {
+    // Strict source rule: handshake failure is recovery-surface
+    // ambiguous (bad daemon binary path, stderr-only daemon, port
+    // collision the user can fix). It must NOT lock UI into the
+    // "supervisor gave up" end-state. Logged by caller; no mutation.
+    const info: DaemonFatalExitInfo = {
+      kind: 'respawn_handshake_failed',
+      reason: 'daemon restart failed: daemon did not emit ready handshake within 10000ms',
+      code: null,
+    };
+    const next = applyFatalExitToClaim(claimed, info);
+    expect(next).toBe(claimed);
+  });
+
+  it('LEAVES revoked unchanged on restart_budget_exhausted (helper carve-out wins)', () => {
+    // Even when the supervisor genuinely exhausted budget, a revoked
+    // credential trumps daemon-liveness signal — recovery is re-claim.
+    const revoked: LocalHostClaimStatus = { status: 'revoked', hostId: 'host-xyz' };
+    const info: DaemonFatalExitInfo = {
+      kind: 'restart_budget_exhausted',
+      reason: 'giving up',
+      code: 1,
+    };
+    expect(applyFatalExitToClaim(revoked, info)).toBe(revoked);
+  });
+
+  it('LEAVES revoked unchanged on respawn_handshake_failed (both rules concur)', () => {
+    const revoked: LocalHostClaimStatus = { status: 'revoked', hostId: 'host-xyz' };
+    const info: DaemonFatalExitInfo = {
+      kind: 'respawn_handshake_failed',
+      reason: 'whatever',
+      code: null,
+    };
+    expect(applyFatalExitToClaim(revoked, info)).toBe(revoked);
   });
 });

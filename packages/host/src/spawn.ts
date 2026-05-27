@@ -136,8 +136,42 @@ const REAL_CLOCK: SpawnClock = {
   },
 };
 
-/** Default backoff between restart attempts. The last entry caps
- *  subsequent attempts (i.e. attempt N >= length uses index length-1). */
+/**
+ * Discriminator for `DaemonHandle.onExit` fatal-exit callbacks. The
+ * supervisor has two distinct terminal failure modes, and downstream
+ * consumers may want to react differently:
+ *
+ *  - `restart_budget_exhausted` — daemon crashed `> maxRestarts`
+ *    times inside `restartWindowMs`. Recovery requires a fresh app
+ *    launch (the supervisor will not schedule any further respawns).
+ *  - `respawn_handshake_failed` — a single respawn attempt failed
+ *    its ready handshake (e.g. daemon binary returned non-zero, or
+ *    its `ready` frame never arrived within `readyTimeoutMs`). The
+ *    surrounding sliding-window budget may still have room, but THIS
+ *    attempt is dead; the supervisor falls through to fatal because
+ *    a failed respawn handshake means we can't reach the daemon at
+ *    all on the current attempt.
+ *
+ * Cindy `#task:629` D3.b Commit 2 review gate: desktop main's
+ * `local_host_status: 'failed'` flip is gated to
+ * `restart_budget_exhausted` only — handshake failures are recovery-
+ * surface ambiguous (might be a transient bad config the user can
+ * fix) and shouldn't lock the UI into the same end-state as
+ * "supervisor gave up". Without this discriminator the strict-source
+ * rule from `local-host-failure.ts` would be silently violated.
+ */
+export type DaemonFatalExitKind =
+  | 'restart_budget_exhausted'
+  | 'respawn_handshake_failed';
+
+export interface DaemonFatalExitInfo {
+  kind: DaemonFatalExitKind;
+  reason: string;
+  /** Process exit code from the last incarnation. `null` for
+   *  handshake-failure paths where we never observed an OS exit
+   *  (e.g. handshake reject before the child died). */
+  code: number | null;
+}
 export const DEFAULT_BACKOFF_SCHEDULE_MS: ReadonlyArray<number> = [
   500, 1_000, 2_000, 4_000, 8_000, 30_000,
 ];
@@ -231,12 +265,17 @@ export interface DaemonHandle {
    */
   kill(opts?: { gracefulMs?: number }): Promise<void>;
   /**
-   * Subscribe to fatal-exit notifications: fired when the daemon
-   * exceeds the restart budget OR when a respawn attempt fails its
-   * handshake. NOT fired on intentional `kill()` or transient
-   * crashes that are recovered by `onDaemonGenerationChanged`.
+   * Subscribe to fatal-exit notifications. The supervisor distinguishes
+   * `kind: 'restart_budget_exhausted'` (gave up after exceeding
+   * `maxRestarts` within `restartWindowMs`) from
+   * `kind: 'respawn_handshake_failed'` (a single respawn attempt
+   * couldn't reach a healthy daemon — non-zero exit before
+   * handshake, or `readyTimeoutMs` elapsed). See {@link
+   * DaemonFatalExitInfo}. NOT fired on intentional `kill()` or
+   * transient crashes that are recovered by
+   * `onDaemonGenerationChanged`.
    */
-  onExit(handler: (info: { reason: string; code: number | null }) => void): () => void;
+  onExit(handler: (info: DaemonFatalExitInfo) => void): () => void;
   /**
    * Subscribe to daemon-generation-change notifications: fired AFTER
    * a crash-triggered restart's handshake succeeds. Used by the
@@ -268,7 +307,7 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
   if (backoffSchedule.length === 0) {
     throw new Error('spawnDaemonChild: backoffSchedule must not be empty');
   }
-  const exitHandlers = new Set<(info: { reason: string; code: number | null }) => void>();
+  const exitHandlers = new Set<(info: DaemonFatalExitInfo) => void>();
   const generationHandlers = new Set<(info: DaemonGenerationInfo) => void>();
   const exitTimes: number[] = [];
 
@@ -414,8 +453,10 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
   };
 
   /** Fire fatal `onExit` handlers with the given info. Idempotent
-   *  callers must already have decided this exit is terminal. */
-  const emitFatalExit = (info: { reason: string; code: number | null }): void => {
+   *  callers must already have decided this exit is terminal.
+   *  Callers must classify the failure via `DaemonFatalExitInfo.kind`
+   *  so consumers can apply different recovery semantics. */
+  const emitFatalExit = (info: DaemonFatalExitInfo): void => {
     for (const h of exitHandlers) {
       try { h(info); } catch { /* swallow */ }
     }
@@ -446,6 +487,7 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
       }
     } catch (err) {
       emitFatalExit({
+        kind: 'respawn_handshake_failed',
         reason: `daemon restart failed: ${(err as Error).message}`,
         code: null,
       });
@@ -472,6 +514,7 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
     }
     if (exitTimes.length > maxRestarts) {
       emitFatalExit({
+        kind: 'restart_budget_exhausted',
         reason: `daemon crashed ${exitTimes.length} times within ${restartWindowMs}ms; giving up`,
         code,
       });

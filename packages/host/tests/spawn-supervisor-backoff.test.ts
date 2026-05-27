@@ -28,8 +28,9 @@ import { EventEmitter } from 'node:events';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import {
   spawnDaemonChild,
-  type DaemonHandle,
+  type DaemonFatalExitInfo,
   type DaemonGenerationInfo,
+  type DaemonHandle,
   type SpawnClock,
   type SpawnProcessImpl,
   type SpawnTimer,
@@ -225,7 +226,7 @@ interface SupervisorFixture {
   children: FakeChildProcess[];
   spawnImpl: SpawnProcessImpl;
   generationEvents: DaemonGenerationInfo[];
-  exitEvents: Array<{ reason: string; code: number | null }>;
+  exitEvents: DaemonFatalExitInfo[];
 }
 
 function setupFixture(): SupervisorFixture {
@@ -462,7 +463,11 @@ describe('spawnDaemonChild supervisor — backoff + respawn', () => {
 
     expect(fx.generationEvents).toEqual([]);
     expect(fx.exitEvents).toHaveLength(1);
+    expect(fx.exitEvents[0]!.kind).toBe('respawn_handshake_failed');
     expect(fx.exitEvents[0]!.reason).toContain('daemon restart failed');
+    // Code is null on handshake-failure path — no OS exit observed
+    // before the supervisor decided the attempt was terminal.
+    expect(fx.exitEvents[0]!.code).toBeNull();
   });
 
   /**
@@ -490,7 +495,9 @@ describe('spawnDaemonChild supervisor — backoff + respawn', () => {
     fx.children[fx.children.length - 1]!.emitExit(1);
     await Promise.resolve();
     expect(fx.exitEvents).toHaveLength(1);
+    expect(fx.exitEvents[0]!.kind).toBe('restart_budget_exhausted');
     expect(fx.exitEvents[0]!.reason).toContain('giving up');
+    expect(fx.exitEvents[0]!.code).toBe(1);
     // And critically: no new spawn was scheduled.
     fx.clock.advance(60_000);
     await Promise.resolve();

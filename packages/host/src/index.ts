@@ -30,6 +30,9 @@ export {
   spawnDaemonChild,
   type DaemonLauncher,
   type DaemonHandle,
+  type DaemonFatalExitInfo,
+  type DaemonFatalExitKind,
+  type DaemonGenerationInfo,
   type SpawnDaemonOptions,
 } from './spawn.js';
 export {
