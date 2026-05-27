@@ -16,6 +16,7 @@ import {
   X_SILVERHAND_PRINCIPAL_HEADER,
   apiPaths,
   authPaths,
+  classifyServerUrl,
   isSafeOpenExtension,
   type AuthLoginInput,
   type AuthSignupInput,
@@ -50,6 +51,10 @@ import {
   startAttachWatchdog,
   type ExpectedAttachWindow,
 } from './outbound-attach.js';
+import {
+  performOutboundReload,
+  type OutboundReloadOutcome,
+} from './outbound-reload.js';
 import { gracefullyDetachOutbound } from './outbound-detach.js';
 
 let backend: RunningBackend | null = null;
@@ -1014,6 +1019,98 @@ async function revokeHost(
   };
 }
 
+/**
+ * D3.c Commit 3 — Settings "save server URL" handler.
+ *
+ * Wires the IPC payload to `performOutboundReload` with real
+ * deps. The orchestrator (`outbound-reload.ts`) owns the full
+ * decision tree; this thin handler only:
+ *   - Pulls the current `host_token` from `daemon-config.json`
+ *     via `readDaemonHostConfig` — the token NEVER appears in
+ *     the renderer-supplied input. Treats missing/parse failure
+ *     as `not_attached` (orchestrator's reason enum).
+ *   - Pulls the current `local_host_id` from `localHostClaim`
+ *     (the desktop's single source of truth for "what host am
+ *     I bound to right now").
+ *   - Aborts any active attach watchdog on success — analogous
+ *     to the rotate-token / re-login paths that also pass
+ *     through `triggerLocalHostOutboundAttach` and don't want
+ *     two pollers racing for the same hostId.
+ *
+ * The returned `OutboundReloadOutcome` is structurally
+ * identical to the renderer-side `DesktopSaveServerUrlResult`
+ * declared in `preload/api.d.ts`; the IPC layer serializes the
+ * tagged-union shape directly so both sides see the same
+ * `kind`/`reason` discriminator.
+ */
+async function saveServerUrlFromSettings(
+  rawServerUrl: string,
+): Promise<OutboundReloadOutcome> {
+  const client = hostClient;
+  const running = backend;
+  if (!client || !running) {
+    // Pre-backend / post-shutdown — the orchestrator would itself
+    // surface this as a reload IPC transport failure mapped to
+    // `not_attached`, but we short-circuit here so the renderer
+    // sees the actionable reason without the daemon-side
+    // round-trip-attempt log spam.
+    return {
+      ok: false,
+      kind: 'reload_rejected',
+      reason: 'not_attached',
+      message: 'backend or host client not ready',
+    };
+  }
+
+  const dir = silverhandDir();
+  const outcome = await performOutboundReload(
+    { serverUrl: rawServerUrl },
+    {
+      classifyServerUrl,
+      writeDaemonHostConfig: config => writeDaemonHostConfig(dir, config),
+      hostOutboundReload: () => client.hostOutboundReload(),
+      getAttachment: hostId =>
+        running.context.hostWsController?.()?.getAttachment(hostId) ?? null,
+      currentLocalHostId: () =>
+        localHostClaim.status === 'claimed' ? localHostClaim.hostId : null,
+      currentHostToken: () => readDaemonHostConfig(dir)?.host_token ?? null,
+    },
+  );
+
+  // On a save that actually re-attached we cancel any in-flight
+  // post-login attach watchdog — the reload-side watchdog inside
+  // `performOutboundReload` already observed the fresh
+  // attachment, so the old poll has no work to do. Mirrors the
+  // rotate-token path (which also calls
+  // `triggerLocalHostOutboundAttach` to spawn a fresh watchdog
+  // and aborts the previous one inside that helper).
+  if (outcome.ok && outcome.kind === 'reloaded') {
+    activeAttachWatchdog?.abort();
+    activeAttachWatchdog = null;
+  }
+
+  // Diagnostic logging — every outcome arm gets a single line so
+  // operators can correlate Settings saves against subsequent
+  // daemon / backend log entries.
+  if (outcome.ok) {
+    logger?.info(
+      { kind: outcome.kind, elapsedMs: 'elapsedMs' in outcome ? outcome.elapsedMs : null },
+      'D3.c settings:saveServerUrl ok',
+    );
+  } else {
+    logger?.warn(
+      {
+        kind: outcome.kind,
+        reason: 'reason' in outcome ? outcome.reason : null,
+        message: 'message' in outcome ? outcome.message : null,
+      },
+      'D3.c settings:saveServerUrl failed',
+    );
+  }
+
+  return outcome;
+}
+
 function proxyHeaders(input: Record<string, string> | undefined): Headers {
   const headers = new Headers();
   const blocked = new Set([
@@ -1584,6 +1681,33 @@ ipcMain.handle('hosts:rotate', (_event, input: { hostId: string }) =>
 
 ipcMain.handle('hosts:revoke', (_event, input: { hostId: string }) =>
   revokeHost(input?.hostId ?? ''),
+);
+
+/**
+ * D3.c Commit 3 — Settings "save server URL" entry point.
+ *
+ * Pipeline (full detail in `outbound-reload.ts` orchestrator):
+ *   1. Validate raw input via `classifyServerUrl` (defense in
+ *      depth — renderer's live validator is convenience).
+ *   2. Atomically rewrite `daemon-config.json` (tmp + write +
+ *      rename via `writeDaemonHostConfig`).
+ *   3. Send `host_outbound_reload` IPC to the daemon.
+ *   4. On `action: 'reloaded'`, start the same fresh-attach
+ *      watchdog used at post-login attach time.
+ *
+ * Strict boundary: the renderer supplies ONLY `serverUrl`. The
+ * `host_token` is read from `daemon-config.json` inside main via
+ * `readDaemonHostConfig` — token bytes never cross the IPC.
+ *
+ * On any reload-watchdog success this also invalidates the
+ * previous activeAttachWatchdog (analogous to the
+ * rotate-token / re-login paths) so two polling timers don't
+ * race after a save during an in-flight attach.
+ */
+ipcMain.handle(
+  'settings:saveServerUrl',
+  (_event, input: { serverUrl: string }) =>
+    saveServerUrlFromSettings(input?.serverUrl ?? ''),
 );
 
 ipcMain.handle('dialog:pickDirectory', async (event, options?: { defaultPath?: string }) => {

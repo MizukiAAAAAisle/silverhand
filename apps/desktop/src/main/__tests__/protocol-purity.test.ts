@@ -53,6 +53,7 @@ const cataloguedIpcHandlers = [
   'hosts:revoke',
   'hosts:rotate',
   'notification:show',
+  'settings:saveServerUrl',
   'shell:openExternal',
   'shell:showItemInFolder',
   'window:setAlwaysOnTop',

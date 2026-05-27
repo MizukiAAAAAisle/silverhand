@@ -98,6 +98,50 @@ export type DesktopHostMutationResult =
       message?: string;
     };
 
+/**
+ * D3.c Commit 3 — Settings "save server URL" outcome surfaced to
+ * the renderer. Structural mirror of `OutboundReloadOutcome` in
+ * `apps/desktop/src/main/outbound-reload.ts` — the orchestrator
+ * already strips token bytes by construction (it reads
+ * `daemon-config.json` server-side and only echoes back metadata),
+ * so the renderer-facing shape is just a re-declaration here for
+ * preload/IPC boundary purposes. Main's orchestrator type and
+ * this type are kept in sync by hand (small surface; alternative
+ * would be to hoist the type to `@silverhand/shared` which is
+ * overkill for a renderer-only consumer).
+ *
+ * Success arms convey progressively weaker connectivity claims:
+ *   - `reloaded`              — daemon swapped + fresh attachment observed
+ *   - `unchanged`             — fingerprint match, no swap, no reconnect needed
+ *   - `connectivity_unverified` — daemon swapped, watchdog budget exceeded
+ *
+ * Renderer rule (Cindy #task:634 note 1): `connectivity_unverified`
+ * MUST NOT be rendered as "Connected". Copy keys off the discriminator
+ * directly so the UI can't accidentally collapse the two success arms.
+ */
+export type DesktopSaveServerUrlResult =
+  | { ok: true; kind: 'reloaded'; elapsedMs: number; attachedAt: number }
+  | { ok: true; kind: 'unchanged' }
+  | { ok: true; kind: 'connectivity_unverified'; elapsedMs: number }
+  | {
+      ok: false;
+      kind: 'classify_rejected';
+      reason: 'malformed_url' | 'unsupported_scheme' | 'non_loopback_host';
+      message: string;
+    }
+  | { ok: false; kind: 'config_write_failed'; message: string }
+  | {
+      ok: false;
+      kind: 'reload_rejected';
+      reason:
+        | 'not_attached'
+        | 'config_unreadable'
+        | 'parse_failed'
+        | 'invalid_server_url';
+      message: string;
+    }
+  | { ok: false; kind: 'no_attachment_controller'; message: string };
+
 declare global {
   interface Window {
     agentHub: {
@@ -110,6 +154,16 @@ declare global {
       backendUpload(input: BackendUploadRequest): Promise<BackendProxyResponse>;
       rotateHostToken(input: { hostId: string }): Promise<DesktopHostMutationResult>;
       revokeHost(input: { hostId: string }): Promise<DesktopHostMutationResult>;
+      /**
+       * D3.c Commit 3 — Settings "save server URL" entry point. The
+       * renderer hands a raw URL string; main classifies, atomically
+       * rewrites `daemon-config.json`, calls `host_outbound_reload`,
+       * and (on `action: 'reloaded'`) awaits a fresh attachment via
+       * the same predicate the post-login attach uses. Token bytes
+       * NEVER flow through this IPC — main pulls the current
+       * `host_token` from `daemon-config.json` itself.
+       */
+      saveServerUrl(input: { serverUrl: string }): Promise<DesktopSaveServerUrlResult>;
       pickDirectory(options?: { defaultPath?: string }): Promise<string | null>;
       openExternal(url: string): Promise<void>;
       openAttachmentExternal(input: {

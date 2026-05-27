@@ -102,6 +102,35 @@ export type DesktopHostMutationResult =
       message?: string;
     };
 
+/** D3.c Commit 3 — Settings "save server URL" result. See
+ *  `api.d.ts` for the per-arm semantics; structural twin of
+ *  `OutboundReloadOutcome` in `main/outbound-reload.ts` so the
+ *  IPC boundary stays typed end-to-end. Token bytes deliberately
+ *  absent — main pulls `host_token` from `daemon-config.json`,
+ *  renderer only supplies `serverUrl`. */
+export type DesktopSaveServerUrlResult =
+  | { ok: true; kind: 'reloaded'; elapsedMs: number; attachedAt: number }
+  | { ok: true; kind: 'unchanged' }
+  | { ok: true; kind: 'connectivity_unverified'; elapsedMs: number }
+  | {
+      ok: false;
+      kind: 'classify_rejected';
+      reason: 'malformed_url' | 'unsupported_scheme' | 'non_loopback_host';
+      message: string;
+    }
+  | { ok: false; kind: 'config_write_failed'; message: string }
+  | {
+      ok: false;
+      kind: 'reload_rejected';
+      reason:
+        | 'not_attached'
+        | 'config_unreadable'
+        | 'parse_failed'
+        | 'invalid_server_url';
+      message: string;
+    }
+  | { ok: false; kind: 'no_attachment_controller'; message: string };
+
 const api = {
   getBackendInfo: (): Promise<BackendInfo | null> => ipcRenderer.invoke('backend:info'),
   getAuthState: (): Promise<DesktopAuthState> => ipcRenderer.invoke('auth:getState'),
@@ -126,6 +155,14 @@ const api = {
     ipcRenderer.invoke('hosts:rotate', input),
   revokeHost: (input: { hostId: string }): Promise<DesktopHostMutationResult> =>
     ipcRenderer.invoke('hosts:revoke', input),
+  /** D3.c Commit 3 — Settings "save server URL". Main owns the
+   *  full pipeline: classify raw input → atomic write
+   *  `daemon-config.json` → `host_outbound_reload` IPC to daemon →
+   *  fresh-attach watchdog. Renderer NEVER sees `host_token`. The
+   *  result discriminator carries progressively weaker connectivity
+   *  claims on the success arm — see `DesktopSaveServerUrlResult`. */
+  saveServerUrl: (input: { serverUrl: string }): Promise<DesktopSaveServerUrlResult> =>
+    ipcRenderer.invoke('settings:saveServerUrl', input),
   pickDirectory: (options?: { defaultPath?: string }): Promise<string | null> =>
     ipcRenderer.invoke('dialog:pickDirectory', options),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:openExternal', url),
