@@ -160,6 +160,24 @@ describe('performProfilePhase2 — no_op_no_host_claim short-circuit', () => {
     expect(state.watchdogCalls).toEqual([]);
   });
 
+  // Cindy 5c-2 review nit: the pre-auth path (`hostId === null`)
+  // must short-circuit BEFORE reading `currentHostToken()`. Production
+  // `currentHostToken` is null-safe, but the pre-auth path can be
+  // called from contexts where daemon-config is structurally absent;
+  // making it zero-touch on that path keeps the boundary clean.
+  // Defended with a deps helper that throws if `currentHostToken` is
+  // called — if a future regression re-orders the reads, this test
+  // fails loud.
+  it('does NOT read currentHostToken when hostId is null (pre-auth path is daemon-config-free)', async () => {
+    const { deps, state } = makeDeps({ hostId: null });
+    deps.currentHostToken = () => {
+      throw new Error('currentHostToken must not be called when hostId is null');
+    };
+    const out = await performProfilePhase2({ profile: makeProfile() }, deps);
+    expect(out).toEqual({ kind: 'no_op_no_host_claim', profileVersion: 3 });
+    expect(state.writeCalls).toEqual([]);
+  });
+
   // Cindy 5c-2 review P1 — flipped from the original test.
   // `hostId !== null && hostToken === null` is NOT the pre-auth path:
   // we have a claimed host on this desktop but daemon-config is

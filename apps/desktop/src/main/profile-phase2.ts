@@ -196,8 +196,13 @@ export async function performProfilePhase2(
   // Distinct from `partial_apply_pending` because there is no
   // inconsistency between profile and daemon-config — we just
   // haven't created daemon-config yet.
+  //
+  // Cindy 5c-2 fixup nit — read `hostId` first and short-circuit
+  // BEFORE touching `currentHostToken()`. The pre-auth path then
+  // makes literally zero `daemon-config.json` reads, which keeps
+  // this branch safe to call from contexts where daemon-config is
+  // structurally absent (no claim ever happened).
   const hostId = deps.currentLocalHostId();
-  const hostToken = deps.currentHostToken();
   if (hostId === null) {
     return { kind: 'no_op_no_host_claim', profileVersion };
   }
@@ -212,6 +217,7 @@ export async function performProfilePhase2(
   // profile.version vs daemon-config.profile_version; (c) explicit
   // user re-login — refreshes daemon-config via `claimLocalHost
   // ForUserSession`. Cindy 5c-2 review P1.
+  const hostToken = deps.currentHostToken();
   if (hostToken === null) {
     return {
       kind: 'partial_apply_pending',
