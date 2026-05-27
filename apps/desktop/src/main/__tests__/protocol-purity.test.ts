@@ -18,6 +18,14 @@ const allowedBackendImports = [
   // wider "desktop main does not import backend runtime" fence — only
   // a shape type crosses, never a function or class.
   'HostWsAttachment',
+  // D3.c Commit 3: `outbound-reload.ts` is the Settings save
+  // orchestrator and threads the same `HostWsAttachment` shape
+  // through its `GetHostAttachmentFn` dep so the fresh-attach
+  // watchdog after a `host_outbound_reload` IPC uses the same
+  // predicate as the attach path. Same structural type, same
+  // zero-runtime guarantee — second occurrence allowed for the
+  // second consumer file.
+  'HostWsAttachment',
 ].sort();
 
 const allowedServerImports = [

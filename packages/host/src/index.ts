@@ -81,6 +81,14 @@ export {
   type RuntimeOutputPauseResult,
   type RuntimeOutputResumeParams,
   type RuntimeOutputResumeResult,
+  type HostOutboundAttachParams,
+  type HostOutboundAttachResult,
+  type HostOutboundAttachFailureReason,
+  type HostOutboundDetachParams,
+  type HostOutboundDetachResult,
+  type HostOutboundReloadParams,
+  type HostOutboundReloadResult,
+  type HostOutboundReloadFailureReason,
 } from './protocol.js';
 export {
   OUTBOUND_DAEMON_EVENT_KINDS,
