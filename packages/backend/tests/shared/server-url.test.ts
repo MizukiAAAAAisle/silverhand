@@ -213,29 +213,32 @@ describe('classifyServerUrl — V1 acceptance policy', () => {
     expectReject('http://127.0.0.2:18080', 'insecure_remote_http_disallowed');
   });
 
-  // ── Obfuscated IP forms (Cindy `#task:631` D3.c P1) ────────────
+  // ── Obfuscated IP forms (Cindy `#task:631` D3.c P1 + D4.a C1 review) ─
   //
   // Strict-allowlist regression coverage. All five of these inputs
   // have `new URL(input).hostname === '127.0.0.1'` (IPv4 cases) or
   // `=== '[::1]'` (IPv6 case) because `URL` normalizes them — so a
   // naive `isLoopbackHost(url.hostname)` check would accept them AS
-  // LOOPBACK and silently widen the policy. The classifier compares
-  // against the RAW authority host instead, which preserves the
-  // literal form the user wrote and falls outside the allowlist.
+  // LOOPBACK and silently widen the policy.
   //
-  // D4.a Commit 1 invariant (Cindy lock): the dev flag
-  // `allowInsecureRemote` does NOT let these forms flow back to
-  // loopback acceptance. With http+no-flag they reject as
-  // `insecure_remote_http_disallowed`; with the flag they classify
-  // as `kind: 'remote'` (HONEST — they are not loopback even if
-  // they resolve to loopback at the IP layer). The
-  // `dev-flag-doesn't-relax-loopback-defense` block below pins
-  // the flag-on case explicitly.
+  // D4.a Commit 1 invariant strengthened by Cindy review 2026-05-28:
+  // these forms are **rejected outright** with a dedicated
+  // `obfuscated_loopback_disallowed` reason, IGNORING scheme and the
+  // `allowInsecureRemote` dev flag. Without this strengthening, the
+  // dev flag would let an obfuscated loopback form classify as
+  // `kind: 'remote', insecure: true` — but the URL would still
+  // resolve to loopback at the IP layer, re-admitting the exact
+  // regression D3.c's raw-host gate was designed to block.
+  //
+  // The strict-loopback allowlist gate is positive-only; this
+  // obfuscated-form gate is the negative half of the same invariant.
+  // Both halves are pinned by the `obfuscation-defense-regardless-
+  // of-flag` block below.
 
-  it('rejects dotted-decimal with leading zeros (`127.000.000.001`) over http+no-flag — URL.hostname would normalize to 127.0.0.1', () => {
+  it('rejects dotted-decimal with leading zeros (`127.000.000.001`) — URL.hostname normalizes to 127.0.0.1', () => {
     const msg = expectReject(
       'http://127.000.000.001:18080',
-      'insecure_remote_http_disallowed',
+      'obfuscated_loopback_disallowed',
     );
     // Message must surface the RAW host as written so the user can
     // see exactly which token failed — comparing against the
@@ -244,32 +247,54 @@ describe('classifyServerUrl — V1 acceptance policy', () => {
     expect(msg).toContain('127.000.000.001');
   });
 
-  it('rejects octal first octet (`0177.0.0.1`) over http+no-flag — URL.hostname would normalize to 127.0.0.1', () => {
-    const msg = expectReject('http://0177.0.0.1:18080', 'insecure_remote_http_disallowed');
+  it('rejects octal first octet (`0177.0.0.1`) — URL.hostname normalizes to 127.0.0.1', () => {
+    const msg = expectReject('http://0177.0.0.1:18080', 'obfuscated_loopback_disallowed');
     expect(msg).toContain('0177.0.0.1');
   });
 
-  it('rejects 32-bit decimal IPv4 (`2130706433` = 0x7f000001) over http+no-flag — URL.hostname would normalize to 127.0.0.1', () => {
-    const msg = expectReject('http://2130706433:18080', 'insecure_remote_http_disallowed');
+  it('rejects 32-bit decimal IPv4 (`2130706433` = 0x7f000001) — URL.hostname normalizes to 127.0.0.1', () => {
+    const msg = expectReject('http://2130706433:18080', 'obfuscated_loopback_disallowed');
     expect(msg).toContain('2130706433');
   });
 
-  it('rejects 32-bit hex IPv4 (`0x7f000001`) over http+no-flag — URL.hostname would normalize to 127.0.0.1', () => {
-    const msg = expectReject('http://0x7f000001:18080', 'insecure_remote_http_disallowed');
+  it('rejects 32-bit hex IPv4 (`0x7f000001`) — URL.hostname normalizes to 127.0.0.1', () => {
+    const msg = expectReject('http://0x7f000001:18080', 'obfuscated_loopback_disallowed');
     expect(msg).toContain('0x7f000001');
   });
 
-  it('rejects expanded IPv6 (`[0:0:0:0:0:0:0:1]`) over http+no-flag — URL.hostname would normalize to [::1]', () => {
-    // Pin the IPv6 branch of the obfuscation defense: the expanded
-    // form is semantically equivalent to `::1` but the policy
-    // accepts ONLY the literal allowlist entries as loopback.
-    // Comparing against the raw authority host (`[0:0:0:0:0:0:0:1]`)
-    // keeps it out of the loopback bucket.
+  it('rejects expanded IPv6 (`[0:0:0:0:0:0:0:1]`) — URL.hostname normalizes to [::1]', () => {
+    // Pin the IPv6 branch of the obfuscation defense.
     const msg = expectReject(
       'http://[0:0:0:0:0:0:0:1]:18080',
-      'insecure_remote_http_disallowed',
+      'obfuscated_loopback_disallowed',
     );
     expect(msg).toContain('[0:0:0:0:0:0:0:1]');
+  });
+
+  it('rejects obfuscated IPv4 over https — gate is scheme-agnostic (Cindy D4.a C1 review)', () => {
+    // The obfuscated-loopback gate ignores scheme — putting https in
+    // front of `0x7f000001` does NOT make it a legitimate remote
+    // host. Pin this so a future "let's only gate http" refactor
+    // can't quietly re-admit https-disguised loopback.
+    const msg = expectReject('https://0x7f000001:8443', 'obfuscated_loopback_disallowed');
+    expect(msg).toContain('0x7f000001');
+  });
+
+  it('rejects obfuscated IPv4 with dev flag off and on — gate is flag-agnostic (Cindy D4.a C1 review)', () => {
+    // Bookend pin: this is the http+no-flag case, which under the
+    // OLD wrong-implementation rejected as `insecure_remote_http_
+    // disallowed`. The corrected gate routes it through the
+    // dedicated obfuscated-form reason instead so UI / logs can
+    // distinguish "disguised loopback" from "non-loopback http".
+    const noFlag = classifyServerUrl('http://0x7f000001:18080');
+    const withFlag = classifyServerUrl('http://0x7f000001:18080', {
+      allowInsecureRemote: true,
+    });
+    expect(noFlag.ok).toBe(false);
+    expect(withFlag.ok).toBe(false);
+    if (noFlag.ok || withFlag.ok) throw new Error('unreachable');
+    expect(noFlag.reason).toBe('obfuscated_loopback_disallowed');
+    expect(withFlag.reason).toBe('obfuscated_loopback_disallowed');
   });
 
   // ── Userinfo refusal (Cindy `#task:631` D3.c P1 round 2) ───────
@@ -504,43 +529,43 @@ describe('classifyServerUrl — V1 acceptance policy', () => {
       expect(out.reason).toBe('malformed_url');
     });
 
-    it('flag does NOT relax loopback strict-allowlist — obfuscated IPv4 (`0x7f000001`) classifies as kind=remote, NOT loopback, with flag on', () => {
-      // Load-bearing for the Cindy lock "dev flag must not let
-      // obfuscated loopback / userinfo / weird URL forms flow back
-      // to acceptable loopback input": these forms resolve to
-      // 127.0.0.1 at the IP layer, but they MUST NOT classify as
-      // loopback because the strict allowlist is by literal text.
-      // With the flag they classify as `kind: 'remote', insecure: true`
-      // — honest about what was typed. Without the flag they reject.
+    it('flag does NOT relax loopback strict-allowlist — obfuscated IPv4 (`0x7f000001`) is rejected as obfuscated_loopback_disallowed, NOT classified as remote, with flag on', () => {
+      // Load-bearing for the Cindy review of D4.a Commit 1 (round 1):
+      // these forms resolve to 127.0.0.1 at the IP layer. Classifying
+      // them as `kind: 'remote', insecure: true` under the flag would
+      // re-admit the exact regression D3.c's raw-host gate was
+      // designed to block — the dev flag is for non-loopback http,
+      // NOT for disguised loopback. Outright rejection (regardless
+      // of flag) keeps the visible URL form aligned with the host
+      // the daemon would actually connect to.
       const out = classifyServerUrl(
         'http://0x7f000001:18080',
         { allowInsecureRemote: true },
       );
-      expect(out.ok).toBe(true);
-      if (!out.ok) throw new Error('unreachable');
-      expect(out.kind).toBe('remote');
-      if (out.kind !== 'remote') throw new Error('unreachable');
-      expect(out.insecure).toBe(true);
+      expect(out.ok).toBe(false);
+      if (out.ok) throw new Error('unreachable');
+      expect(out.reason).toBe('obfuscated_loopback_disallowed');
+      expect(out.message).toContain('0x7f000001');
     });
 
-    it('flag does NOT relax loopback strict-allowlist — dotted-decimal-zeros (`127.000.000.001`) classifies as kind=remote with flag on', () => {
+    it('flag does NOT relax loopback strict-allowlist — dotted-decimal-zeros (`127.000.000.001`) is rejected as obfuscated_loopback_disallowed with flag on', () => {
       const out = classifyServerUrl(
         'http://127.000.000.001:18080',
         { allowInsecureRemote: true },
       );
-      expect(out.ok).toBe(true);
-      if (!out.ok) throw new Error('unreachable');
-      expect(out.kind).toBe('remote');
+      expect(out.ok).toBe(false);
+      if (out.ok) throw new Error('unreachable');
+      expect(out.reason).toBe('obfuscated_loopback_disallowed');
     });
 
-    it('flag does NOT relax loopback strict-allowlist — expanded IPv6 (`[0:0:0:0:0:0:0:1]`) classifies as kind=remote with flag on', () => {
+    it('flag does NOT relax loopback strict-allowlist — expanded IPv6 (`[0:0:0:0:0:0:0:1]`) is rejected as obfuscated_loopback_disallowed with flag on', () => {
       const out = classifyServerUrl(
         'http://[0:0:0:0:0:0:0:1]:18080',
         { allowInsecureRemote: true },
       );
-      expect(out.ok).toBe(true);
-      if (!out.ok) throw new Error('unreachable');
-      expect(out.kind).toBe('remote');
+      expect(out.ok).toBe(false);
+      if (out.ok) throw new Error('unreachable');
+      expect(out.reason).toBe('obfuscated_loopback_disallowed');
     });
 
     it('absent options object behaves identically to {allowInsecureRemote: false}', () => {

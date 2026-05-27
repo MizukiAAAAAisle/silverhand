@@ -1066,6 +1066,15 @@ export function hostConnectWebSocketUrl(serverUrl: string): string {
       // hatch. Preserve the legacy error name for ops continuity.
       throw new Error('tls_required_for_non_loopback_host_ws');
     }
+    if (classification.reason === 'obfuscated_loopback_disallowed') {
+      // D4.a Commit 1 review — disguised loopback rejection. Map to
+      // the same legacy error name so existing ops alerting on
+      // `tls_required_for_non_loopback_host_ws` still fires (the
+      // daemon's WS gate is still loopback-only in D4.a; this branch
+      // is just defense-in-depth against a hand-edited daemon-config
+      // that smuggled in an obfuscated loopback form).
+      throw new Error('tls_required_for_non_loopback_host_ws');
+    }
     if (classification.reason === 'unsupported_scheme') {
       throw new Error(`unsupported_server_url_protocol:${serverUrl}`);
     }

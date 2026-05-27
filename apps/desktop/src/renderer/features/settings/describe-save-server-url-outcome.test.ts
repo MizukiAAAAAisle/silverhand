@@ -98,6 +98,15 @@ describe('describeSaveServerUrlOutcome — classify_rejected reasons', () => {
       reason: 'insecure_remote_http_disallowed',
       titleMatch: /https:\/\/.*SILVERHAND_ALLOW_INSECURE_REMOTE/i,
     },
+    // D4.a Commit 1 review — disguised loopback. Title must mention
+    // the "disguised loopback" framing so the user understands the
+    // gate fired because their URL form mismatched the host it
+    // would actually connect to (not a "this URL is malformed"
+    // false positive).
+    {
+      reason: 'obfuscated_loopback_disallowed',
+      titleMatch: /disguised loopback/i,
+    },
   ];
 
   for (const c of cases) {

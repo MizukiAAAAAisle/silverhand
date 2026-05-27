@@ -154,6 +154,12 @@ function describeClassifyReason(
       // user is most likely typing a LAN box or public domain over
       // http; point them at the two valid options.
       return 'Server URL must use https:// for non-loopback addresses (or set SILVERHAND_ALLOW_INSECURE_REMOTE=1 for dev use).';
+    case 'obfuscated_loopback_disallowed':
+      // D4.a Commit 1 review — disguised loopback form (raw host
+      // looks remote but URL parser resolves it to a loopback IP).
+      // Tell the user the gate caught the mismatch and what the two
+      // legitimate intents are.
+      return 'Server URL looks like a disguised loopback address (e.g. 0x7f000001 / [0:0:0:0:0:0:0:1]). Use a literal loopback host (127.0.0.1, localhost, [::1]) if loopback was intended.';
     default: {
       const _exhaustive: never = reason;
       return _exhaustive;

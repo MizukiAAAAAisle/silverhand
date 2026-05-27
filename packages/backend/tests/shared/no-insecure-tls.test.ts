@@ -202,24 +202,69 @@ describe('D4.a §8.3 — rejectUnauthorized:false production-path ban (CI grep g
     );
   });
 
-  it('the production-path scope list is non-empty and points at real directories', async () => {
-    // Meta-test: pin that the scope list itself stays in sync with
-    // the on-disk layout. If a package directory is renamed or
-    // removed, the gate becomes a no-op silently — this test catches
-    // that drift. Tolerates `apps/desktop/src/preload` being absent
-    // (renderer-only builds) so it doesn't have to exist on disk,
-    // but at least ONE production path must resolve.
+  it('every production-path scope entry exists on disk AND scans at least one source file', async () => {
+    // Meta-test pin (strengthened per Cindy D4.a Commit 1 review
+    // 2026-05-28): the previous version only required ≥ 1 path to
+    // resolve, which would silently let a renamed / typo'd path
+    // become a no-op scan of a real production directory. The
+    // strengthened contract is "every PRODUCTION_PATHS entry MUST
+    // exist on disk AND MUST contain ≥ 1 source file under the
+    // SOURCE_EXTENSIONS allowlist".
+    //
+    // If a future scope becomes genuinely optional (e.g.
+    // `apps/desktop/src/preload` is removed in a renderer-only
+    // build), add an explicit `OPTIONAL_PRODUCTION_PATHS` allowlist
+    // with a comment justifying each entry — silent tolerance for
+    // missing scope is the failure mode this test was rewritten to
+    // catch.
     expect(PRODUCTION_PATHS.length).toBeGreaterThan(0);
-    const resolvedCount = (await Promise.all(
+    const reports = await Promise.all(
       PRODUCTION_PATHS.map(async p => {
+        const abs = join(REPO_ROOT, p);
+        let exists = false;
         try {
-          await readdir(join(REPO_ROOT, p));
-          return 1;
+          await readdir(abs);
+          exists = true;
         } catch {
-          return 0;
+          exists = false;
         }
+        const files = exists ? await walkSourceFiles(abs) : [];
+        return { path: p, exists, fileCount: files.length };
       }),
-    )).reduce<number>((a, b) => a + b, 0);
-    expect(resolvedCount).toBeGreaterThan(0);
+    );
+    // Report ALL violations at once so a maintainer fixing scope
+    // drift sees the complete picture, not one error at a time.
+    const missingDirs = reports.filter(r => !r.exists).map(r => r.path);
+    const emptyDirs = reports
+      .filter(r => r.exists && r.fileCount === 0)
+      .map(r => r.path);
+    if (missingDirs.length > 0 || emptyDirs.length > 0) {
+      const lines: string[] = ['Production-path scope drift detected:'];
+      if (missingDirs.length > 0) {
+        lines.push(`  Missing directories:`);
+        for (const p of missingDirs) lines.push(`    - ${p}`);
+      }
+      if (emptyDirs.length > 0) {
+        lines.push(`  Directories with no source files:`);
+        for (const p of emptyDirs) lines.push(`    - ${p}`);
+      }
+      lines.push('');
+      lines.push(
+        'Either fix the scope list, or — if the path is genuinely optional —',
+      );
+      lines.push(
+        'introduce an explicit OPTIONAL_PRODUCTION_PATHS allowlist and add a',
+      );
+      lines.push(
+        'comment justifying each entry. Silent no-op scans are exactly the',
+      );
+      lines.push('regression this test exists to prevent.');
+      throw new Error(lines.join('\n'));
+    }
+    // Final sanity: total file count must be > 0 (defensive — would
+    // be covered by the per-path check above, but pinning the
+    // aggregate gives an easy invariant for future readers).
+    const totalFiles = reports.reduce((acc, r) => acc + r.fileCount, 0);
+    expect(totalFiles).toBeGreaterThan(0);
   });
 });

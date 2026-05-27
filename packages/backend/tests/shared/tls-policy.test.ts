@@ -82,24 +82,49 @@ describe('classifyTlsError — cause-chain walk (Node 18+ wrapper shape)', () =>
     // the OpenSSL verify failure with a generic outer error whose
     // own `code` is `ERR_SSL_CERTIFICATE_VERIFY_FAILED`. The
     // specific reason (e.g. `CERT_HAS_EXPIRED`) lives on `cause`.
-    // The walker MUST find the specific reason so the operator
-    // sees "your cert expired" rather than the catch-all
-    // "chain invalid".
+    // Specificity precedence (Cindy D4.a Commit 1 review): the
+    // walker MUST descend through the outer chain wrapper and
+    // return the specific `host_tls_expired` so the operator sees
+    // "your cert expired" rather than the generic "chain invalid".
     const wrapped = errWith(
       'ERR_SSL_CERTIFICATE_VERIFY_FAILED',
       errWith('CERT_HAS_EXPIRED'),
     );
-    // First-match-wins means the outer wrapper resolves to
-    // chain_invalid IMMEDIATELY without descending. Pin this so
-    // the walker's specificity contract is explicit: "outer
-    // matches → outer wins; only descend when outer doesn't match".
-    // For specificity we'd want the cause's expired to win — but
-    // operationally, if Node ever surfaces only the wrapper code
-    // (no cause), we'd at least classify as chain_invalid (still
-    // typed). The test pins the actual behavior the code emits;
-    // a future change to prefer cause-specificity would be a
-    // deliberate design decision (Cindy review will catch).
+    expect(classifyTlsError(wrapped)).toBe('host_tls_expired');
+  });
+
+  it('finds the specific hostname-mismatch code on cause when outer code is the generic verify wrapper', () => {
+    // Symmetric precedence test for hostname mismatch — the
+    // d4-design §8.2 runbook explicitly distinguishes this case
+    // from chain-invalid, so the specificity precedence must hold
+    // for both specific categories, not just expired.
+    const wrapped = errWith(
+      'ERR_SSL_CERTIFICATE_VERIFY_FAILED',
+      errWith('ERR_TLS_CERT_ALTNAME_INVALID'),
+    );
+    expect(classifyTlsError(wrapped)).toBe('host_tls_hostname_mismatch');
+  });
+
+  it('returns chain_invalid only when no specific code appears anywhere in the chain', () => {
+    // Pin the fallback path: if the entire chain is chain-class
+    // (e.g. self-signed wrapped in generic verify wrapper, no
+    // expired / hostname mismatch anywhere), then chain_invalid is
+    // the correct typed answer.
+    const wrapped = errWith(
+      'ERR_SSL_CERTIFICATE_VERIFY_FAILED',
+      errWith('DEPTH_ZERO_SELF_SIGNED_CERT'),
+    );
     expect(classifyTlsError(wrapped)).toBe('host_tls_chain_invalid');
+  });
+
+  it('returns chain_invalid for a single chain-class code with no cause (Node may surface only the wrapper)', () => {
+    // Boundary: if Node ever surfaces only the wrapper without a
+    // cause, we still classify as TLS (typed chain_invalid) rather
+    // than null. The runbook always wants one of the three typed
+    // codes for a TLS-class failure.
+    expect(classifyTlsError(errWith('ERR_SSL_CERTIFICATE_VERIFY_FAILED'))).toBe(
+      'host_tls_chain_invalid',
+    );
   });
 
   it('finds expired on cause when outer code is not a recognized TLS code (descent succeeds)', () => {
@@ -117,6 +142,16 @@ describe('classifyTlsError — cause-chain walk (Node 18+ wrapper shape)', () =>
     const leaf = errWith('ERR_TLS_CERT_ALTNAME_INVALID');
     const mid = errWith('GENERIC_WRAPPER_A', leaf);
     const outer = errWith('GENERIC_WRAPPER_B', mid);
+    expect(classifyTlsError(outer)).toBe('host_tls_hostname_mismatch');
+  });
+
+  it('prefers a shallower specific code when both layers carry specific codes (depth-first first-match precedence)', () => {
+    // Within the specific category, first match wins (depth-first).
+    // This is deterministic by design — pinning so a future
+    // refactor doesn't accidentally swap to last-match-wins, which
+    // would silently mis-classify multi-layer wrapped errors.
+    const inner = errWith('CERT_HAS_EXPIRED');
+    const outer = errWith('ERR_TLS_CERT_ALTNAME_INVALID', inner);
     expect(classifyTlsError(outer)).toBe('host_tls_hostname_mismatch');
   });
 

@@ -156,7 +156,16 @@ export type DesktopSaveServerUrlResult =
         // env flag (`SILVERHAND_ALLOW_INSECURE_REMOTE=1`). The
         // user-facing message points at the two valid escape routes
         // (use https, or set the flag).
-        | 'insecure_remote_http_disallowed';
+        | 'insecure_remote_http_disallowed'
+        // D4.a Commit 1 review (Cindy 2026-05-28) — disguised
+        // loopback form (`http://0x7f000001`, `http://127.000.000.001`,
+        // `http://[0:0:0:0:0:0:0:1]`, etc.) where the raw authority
+        // is not a literal loopback allowlist entry but the URL
+        // parser would resolve it to one. Rejected outright
+        // regardless of scheme or dev flag — keeps the visible URL
+        // form aligned with the host the daemon would actually
+        // connect to.
+        | 'obfuscated_loopback_disallowed';
       message: string;
     }
   | {

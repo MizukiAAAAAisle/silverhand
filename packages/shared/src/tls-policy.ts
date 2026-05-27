@@ -141,15 +141,29 @@ const MAX_CAUSE_DEPTH = 8;
  *
  * Detection strategy:
  *   - Read `error.code` (string only — numeric codes are ignored).
- *   - If the code is recognized, return the corresponding typed code.
- *   - Otherwise descend into `error.cause` and repeat. This is needed
- *     for Node 18+ which wraps OpenSSL verify failures inside an outer
- *     `Error('certificate has expired')` whose own `code` may just be
- *     `ERR_SSL_CERTIFICATE_VERIFY_FAILED` while the specific
- *     `CERT_HAS_EXPIRED` lives on the `cause`. Walking the chain
- *     preserves accuracy for the runbook-cited triage.
- *   - First match wins. We prefer the most specific category we can
- *     find before falling back to chain-invalid.
+ *   - Walk the `Error.cause` chain.
+ *   - **Specific-wins precedence** (Cindy D4.a Commit 1 review
+ *     2026-05-28): the canonical Node 18+ shape wraps the OpenSSL
+ *     X509 verify failure with a generic outer
+ *     `ERR_SSL_CERTIFICATE_VERIFY_FAILED` whose specific reason
+ *     (e.g. `CERT_HAS_EXPIRED`) lives on `cause`. If we returned
+ *     `host_tls_chain_invalid` on the outer match we would lose the
+ *     operator-meaningful "expired" / "hostname mismatch" signal that
+ *     the runbook needs. So:
+ *       1. If ANY node in the cause chain has an `_expired` or
+ *          `_hostname_mismatch` code, return that immediately —
+ *          specific codes always win.
+ *       2. Otherwise, if ANY node carries a chain-class code, return
+ *          `host_tls_chain_invalid` as the typed fallback.
+ *       3. Otherwise return `null` (not TLS-related — caller routes
+ *          via its own network/DNS/timeout typed surface).
+ *   - First match wins WITHIN a category. If a deeper expired and a
+ *     shallower hostname-mismatch are both present we return the
+ *     shallower hostname-mismatch (depth-first walk + immediate
+ *     return on first specific match). In practice the cause chain
+ *     carries at most one TLS code per category, so this ordering
+ *     is harmless; pinning it explicitly keeps the contract
+ *     deterministic.
  *
  * Returns `null` if no recognized code appears anywhere in the chain
  * — caller treats it as non-TLS (network / DNS / timeout / etc.)
@@ -161,6 +175,7 @@ const MAX_CAUSE_DEPTH = 8;
 export function classifyTlsError(err: unknown): TlsErrorCode | null {
   const visited = new WeakSet<object>();
   let current: unknown = err;
+  let chainFallback: TlsErrorCode | null = null;
   for (let depth = 0; depth < MAX_CAUSE_DEPTH && current != null; depth++) {
     if (typeof current !== 'object') break;
     const obj = current as object;
@@ -168,13 +183,25 @@ export function classifyTlsError(err: unknown): TlsErrorCode | null {
     visited.add(obj);
     const code = (current as { code?: unknown }).code;
     if (typeof code === 'string') {
+      // Specific codes win immediately — operator runbooks
+      // distinguish "expired" / "hostname mismatch" from generic
+      // "chain invalid", so the deepest accurate label matters.
       if (TLS_EXPIRED_CODES.has(code)) return 'host_tls_expired';
       if (TLS_HOSTNAME_CODES.has(code)) return 'host_tls_hostname_mismatch';
-      if (TLS_CHAIN_CODES.has(code)) return 'host_tls_chain_invalid';
+      // Chain code: remember as fallback but keep walking the chain.
+      // A deeper specific code (Node 18+ wraps OpenSSL's specific
+      // X509 verify codes inside generic outer
+      // `ERR_SSL_CERTIFICATE_VERIFY_FAILED`) should win over a
+      // shallower chain wrapper — without this two-pass behavior we
+      // would mis-report "expired" cases as "chain invalid", which
+      // the d4-design §8.2 runbook explicitly differentiates.
+      if (TLS_CHAIN_CODES.has(code) && chainFallback === null) {
+        chainFallback = 'host_tls_chain_invalid';
+      }
     }
     current = (current as { cause?: unknown }).cause;
   }
-  return null;
+  return chainFallback;
 }
 
 /**

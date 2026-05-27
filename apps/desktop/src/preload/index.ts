@@ -139,7 +139,10 @@ export type DesktopSaveServerUrlResult =
         | 'unsupported_scheme'
         // D4.a Commit 1 — replaces D3's `non_loopback_host`. See
         // `api.d.ts` for the user-facing rationale.
-        | 'insecure_remote_http_disallowed';
+        | 'insecure_remote_http_disallowed'
+        // D4.a Commit 1 review — disguised loopback rejection.
+        // See `api.d.ts` for rationale.
+        | 'obfuscated_loopback_disallowed';
       message: string;
     }
   | {

@@ -251,7 +251,20 @@ export type ServerUrlRejectionReason =
    *  `SILVERHAND_ALLOW_INSECURE_REMOTE=1` is not set). Use https://
    *  for production, or set the dev env flag for unencrypted dev
    *  scaffolding (`http://10.0.0.5`, `http://mybox.local`, etc.). */
-  | 'insecure_remote_http_disallowed';
+  | 'insecure_remote_http_disallowed'
+  /** Raw authority host is not a literal loopback allowlist entry,
+   *  but `URL.hostname` normalizes to one (`http://0x7f000001`,
+   *  `http://127.000.000.001`, `http://[0:0:0:0:0:0:0:1]`, etc.).
+   *  These would resolve to loopback at the IP layer but the
+   *  classifier refuses them outright — regardless of scheme,
+   *  regardless of the `allowInsecureRemote` dev flag — so the
+   *  policy never accepts a URL whose visible form disagrees with
+   *  the host it would actually connect to (Cindy review of D4.a
+   *  Commit 1: dev flag must not let obfuscated loopback forms
+   *  flow into accepted input). The strict-loopback allowlist gate
+   *  is positive-only; this obfuscated-form gate is the negative
+   *  half of the same invariant. */
+  | 'obfuscated_loopback_disallowed';
 
 /**
  * Options for {@link classifyServerUrl}.
@@ -355,6 +368,34 @@ export function classifyServerUrl(
     // is always accepted). This is the embedded-backend and
     // local-dev case.
     return { ok: true, kind: 'loopback', url: parsed };
+  }
+  // Obfuscated-loopback gate (Cindy D4.a Commit 1 review): if the
+  // raw authority host is NOT in the literal loopback allowlist but
+  // the URL parser's normalized hostname IS, the user typed an
+  // obfuscated loopback form (`http://0x7f000001`,
+  // `http://127.000.000.001`, `http://[0:0:0:0:0:0:0:1]`, etc.).
+  // These would resolve to loopback at the IP layer regardless of
+  // scheme, so accepting them as `kind: 'remote'` even under the
+  // dev flag would silently re-admit the exact regression the D3.c
+  // raw-host gate was designed to block. Refuse outright — scheme
+  // and flag are ignored on this branch — and route through a
+  // dedicated reason so UI / logs can distinguish "you typed a
+  // disguised loopback form" from "you typed garbage" or "you
+  // typed a non-loopback URL we want over https".
+  if (isLoopbackHost(parsed.hostname)) {
+    return {
+      ok: false,
+      reason: 'obfuscated_loopback_disallowed',
+      // Surface the RAW host so the operator sees the disguised
+      // form they actually typed. Resist normalizing this message
+      // to the canonical `127.0.0.1` — the entire point of the
+      // gate is to point at the literal text that triggered it.
+      message:
+        `Backend host '${rawHost}' is a disguised loopback form ` +
+        `(URL parser would resolve it to '${parsed.hostname}'). ` +
+        `Use a literal loopback address (127.0.0.1 / localhost / [::1]) ` +
+        `if loopback is intended, or a non-loopback hostname for remote.`,
+    };
   }
   // Non-loopback host. Scheme decides what's required:
   //   - https: always accepted; system-default TLS verifies at connect.
