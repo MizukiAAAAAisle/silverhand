@@ -37,6 +37,7 @@ import {
 import {
   installHostWebSocketServer,
   type HostWsServerController,
+  type HostWsAttachment,
 } from './ws/host-ws-server.js';
 import type { AgentRuntimeHost } from './runtime/agent-runtime-host.js';
 import { ControlPlaneRuntimeHost } from './runtime/control-plane-runtime-host.js';
@@ -503,6 +504,10 @@ export type {
   BackendLogger,
   BackendLoggers,
 } from './context.js';
+export type {
+  HostWsAttachment,
+  HostWsServerController,
+} from './ws/host-ws-server.js';
 export type { AuthRuntimeConfig } from './auth/config.js';
 export { resolveAuthRuntimeConfig } from './auth/config.js';
 export {

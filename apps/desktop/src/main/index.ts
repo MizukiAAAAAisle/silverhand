@@ -44,6 +44,10 @@ import {
   writeDaemonHostConfig,
   type LocalHostClaimStatus,
 } from './local-host-claim.js';
+import {
+  startAttachWatchdog,
+  type ExpectedAttachWindow,
+} from './outbound-attach.js';
 
 let backend: RunningBackend | null = null;
 let daemon: DaemonHandle | null = null;
@@ -439,6 +443,11 @@ async function clearUserSession(): Promise<void> {
   userSessionToken = null;
   userSessionUser = null;
   localHostClaim = { status: 'unclaimed', hostId: null };
+  // D3.a Commit 4: any in-flight attach watchdog targets the session
+  // we're about to drop. Abort it so the polling timer doesn't outlive
+  // the credential it was meant to verify.
+  activeAttachWatchdog?.abort();
+  activeAttachWatchdog = null;
   clearPersistedUserSession();
   await syncEventWsSessionCookie(null);
   try {
@@ -633,12 +642,31 @@ async function claimLocalHostForUserSession(): Promise<void> {
       throw new Error('local host claim response omitted host_token without reusable config');
     }
 
+    // D3.a Commit 4: capture freshness window BEFORE writing the
+    // config + firing the IPC. The daemon may attach the outbound WS
+    // before its `host_outbound_attach` ack returns to main, so an
+    // "after-ack" lower bound would exclude the very attach we want.
+    // See `outbound-attach.ts` for the full freshness contract.
+    const localHostId = parsed.data.host_id;
+    const attachWindow = captureAttachWindow(localHostId);
+
     writeDaemonHostConfig(dir, {
       server_url: running.url,
-      host_id: parsed.data.host_id,
+      host_id: localHostId,
       host_token: hostToken,
     });
-    localHostClaim = { status: 'claimed', hostId: parsed.data.host_id };
+    localHostClaim = { status: 'claimed', hostId: localHostId };
+
+    // Fire-and-forget: the claim itself has succeeded; the outbound
+    // attach is a parallel control-plane action. UI keeps showing
+    // `connecting` until the watchdog observes a fresh attachment;
+    // attach failures stay diagnostic and do NOT mutate the
+    // user-facing `local_host_status` enum.
+    void triggerLocalHostOutboundAttach({
+      localHostId,
+      configPath: daemonHostConfigPath(dir),
+      attachWindow,
+    });
   } catch (err) {
     localHostClaim = {
       status: 'error',
@@ -673,6 +701,7 @@ type DesktopHostMutationResult =
       host: HostDto;
       local_host_id: string | null;
       local_host_status: LocalHostClaimStatus['status'];
+      local_host_ws_attached_at: number | null;
     }
   | {
       ok: false;
@@ -690,12 +719,147 @@ type DesktopHostMutationResult =
 function snapshotLocalHostInfo(): {
   local_host_id: string | null;
   local_host_status: LocalHostClaimStatus['status'];
+  local_host_ws_attached_at: number | null;
 } {
   return {
     local_host_id:
       localHostClaim.status === 'claimed' ? localHostClaim.hostId : null,
     local_host_status: localHostClaim.status,
+    // D3.a Commit 4: diagnostic-only field. The renderer can display
+    // "connected since" but MUST NOT use this to derive a new status
+    // word — the user-facing status enum is the 5-value
+    // `local_host_status` and nothing else (per the D3.a/D3.d locked
+    // scope on host status semantics).
+    local_host_ws_attached_at:
+      localHostClaim.status === 'claimed'
+        ? backend?.context.hostWsController?.()?.getAttachment(localHostClaim.hostId)?.attachedAt ?? null
+        : null,
   };
+}
+
+/**
+ * D3.a Commit 4 — snapshot the freshness window BEFORE writing
+ * `daemon-config.json` and firing the `host_outbound_attach` IPC.
+ * See `outbound-attach.ts` for the full freshness contract: the
+ * daemon may attach the outbound WS before its IPC ack returns,
+ * which is exactly why the lower bound has to be captured here
+ * (pre-IPC) rather than after `await`.
+ */
+function captureAttachWindow(localHostId: string): ExpectedAttachWindow {
+  const controller = backend?.context.hostWsController?.() ?? null;
+  const prev = controller?.getAttachment(localHostId) ?? null;
+  return {
+    expectedHostId: localHostId,
+    previousConnectionId: prev?.connectionId ?? null,
+    expectAttachSince: Date.now(),
+  };
+}
+
+/** Aborts the active attach watchdog, if any, so logout / app quit
+ *  doesn't leak a polling timer past its useful life. */
+let activeAttachWatchdog: { abort(): void } | null = null;
+
+/**
+ * D3.a Commit 4 — fire the `host_outbound_attach` IPC and spawn a
+ * watchdog that polls the backend's `HostWsServerController` until a
+ * fresh attachment for `localHostId` lands (or the timeout budget
+ * elapses). All outcomes are diagnostic; nothing here mutates
+ * `localHostClaim` or the user-facing status enum.
+ *
+ * The "fresh" predicate is the load-bearing detail (see
+ * `outbound-attach.ts` header). Two non-obvious choices baked in:
+ *   - `attachWindow.expectAttachSince` is captured BEFORE the IPC
+ *     by the caller (in `captureAttachWindow`), not here, because
+ *     the daemon may attach before its IPC ack returns.
+ *   - On attach IPC failure we log the typed reason but do NOT
+ *     fail the surrounding claim flow — the host row is already
+ *     valid server-side; subsequent rotate-token / re-login can
+ *     re-attempt the attach.
+ */
+async function triggerLocalHostOutboundAttach(input: {
+  localHostId: string;
+  configPath: string;
+  attachWindow: ExpectedAttachWindow;
+}): Promise<void> {
+  const client = hostClient;
+  const running = backend;
+  if (!client || !running) {
+    logger?.warn(
+      { localHostId: input.localHostId },
+      'D3.a host_outbound_attach skipped — host client or backend not ready',
+    );
+    return;
+  }
+
+  let result;
+  try {
+    result = await client.hostOutboundAttach({ config_path: input.configPath });
+  } catch (err) {
+    // Genuine IPC transport error (socket closed, daemon dead). Logs
+    // only — D3.b supervisor restart will retry.
+    logger?.warn(
+      { err, localHostId: input.localHostId },
+      'D3.a host_outbound_attach IPC failed (transport)',
+    );
+    return;
+  }
+
+  if (!result.attached) {
+    logger?.warn(
+      {
+        localHostId: input.localHostId,
+        reason: result.reason,
+        message: result.message,
+      },
+      'D3.a host_outbound_attach refused by daemon',
+    );
+    return;
+  }
+
+  logger?.info(
+    {
+      localHostId: input.localHostId,
+      action: result.action,
+    },
+    'D3.a host_outbound_attach ack',
+  );
+
+  // Cancel any previously-running watchdog (rotate-token / re-login
+  // can fire while a prior one is still polling).
+  activeAttachWatchdog?.abort();
+  const controller = running.context.hostWsController?.() ?? null;
+  if (!controller) {
+    // No controller (mode-specific edge); we still acked the IPC, so
+    // attach itself is fine — just can't observe it from main.
+    return;
+  }
+  const watchdog = startAttachWatchdog(input.attachWindow, {
+    getAttachment: hostId => controller.getAttachment(hostId),
+  });
+  activeAttachWatchdog = watchdog;
+  watchdog.promise
+    .then(outcome => {
+      if (activeAttachWatchdog === watchdog) activeAttachWatchdog = null;
+      if (outcome.ok) {
+        logger?.info(
+          {
+            localHostId: input.localHostId,
+            elapsedMs: outcome.elapsedMs,
+            attachedAt: outcome.attachment.attachedAt,
+            connectionId: outcome.attachment.connectionId,
+          },
+          'D3.a host outbound WS attached',
+        );
+      } else if (outcome.reason === 'timeout') {
+        logger?.warn(
+          { localHostId: input.localHostId, elapsedMs: outcome.elapsedMs },
+          'D3.a host outbound WS attach watchdog timed out (UI status stays connecting)',
+        );
+      }
+    })
+    .catch(err => {
+      logger?.warn({ err }, 'D3.a attach watchdog promise rejected unexpectedly');
+    });
 }
 
 /** Rotate the long-lived credential for the desktop's CURRENT local
@@ -997,7 +1161,13 @@ async function bootstrap(): Promise<void> {
       socketPath: paths.socketPath,
       pidFilePath: paths.pidFilePath,
       logDir: paths.logDir,
-      hostConfigPath: paths.hostConfigPath,
+      // D3.a Commit 4: the daemon is spawned WITHOUT --host-config so
+      // it cannot dial a stale `daemon-config.json` left over from a
+      // previous user. Outbound attach is triggered after login via
+      // the `host_outbound_attach` IPC (see `attachLocalHostOutbound`
+      // below). `paths.hostConfigPath` is still the destination the
+      // post-login claim writes to — only the CLI-time auto-start is
+      // removed from this code path.
       alsoStderr: !app.isPackaged,
     });
     logger.info(

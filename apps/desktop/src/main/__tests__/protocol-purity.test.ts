@@ -10,6 +10,14 @@ const rendererRoot = fileURLToPath(new URL('../../renderer', import.meta.url));
 const desktopRoot = fileURLToPath(new URL('../../../', import.meta.url));
 
 const allowedBackendImports = [
+  // D3.a Commit 4: the freshness predicate in `outbound-attach.ts`
+  // takes a `HostWsAttachment | null` snapshot so its unit tests can
+  // assert the predicate purely without spinning up the backend. The
+  // type is structural (hostId / connectionId / attachedAt scalars)
+  // and carries no runtime dependency. Adding it does NOT relax the
+  // wider "desktop main does not import backend runtime" fence — only
+  // a shape type crosses, never a function or class.
+  'HostWsAttachment',
 ].sort();
 
 const allowedServerImports = [
