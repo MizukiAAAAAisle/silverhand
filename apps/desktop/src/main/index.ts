@@ -24,6 +24,7 @@ import {
   type AuthLoginInput,
   type AuthSignupInput,
   type HostDto,
+  type ServerConnectionProfile,
   type ServerConnectionProfileView,
   type ServerInfo,
   type UserDto,
@@ -60,6 +61,13 @@ import {
   bindAttachmentAccessor,
   type OutboundReloadOutcome,
 } from './outbound-reload.js';
+import {
+  performProfilePhase2,
+  derivePartialApplyState,
+  type PartialApplyPendingState,
+  type PerformProfilePhase2Deps,
+  type ProfilePhase2Outcome,
+} from './profile-phase2.js';
 import { gracefullyDetachOutbound } from './outbound-detach.js';
 import {
   clearServerConnectionProfile,
@@ -89,6 +97,26 @@ let activeConversation: ActiveConversationInfo = { workspaceId: null, conversati
 let userSessionToken: string | null = null;
 let userSessionUser: UserDto | null = null;
 let localHostClaim: LocalHostClaimStatus = { status: 'unclaimed', hostId: null };
+
+/**
+ * D4.a Commit 5c-2 — in-memory state describing whether the desktop's
+ * view of the server connection profile has been fully applied to the
+ * daemon's running config (per `docs/remote-backend-d4-design.md` §7.5).
+ *
+ * Lives on the desktop main process only — NOT serialized to disk
+ * (the source of truth is the comparison `profile.version` vs
+ * `daemon-config.profile_version`, which 5c-3 reconciliation re-derives
+ * on boot). NOT crossed into the wire / daemon protocol per §7.6 — R4
+ * boundary: this is a local desktop UX concept, not a backend-observable
+ * fact.
+ *
+ * Initial value is `{ kind: 'fully_applied' }`. Phase-2 transitions it
+ * to `partial_apply_pending` on failure; a successful Retry or boot
+ * reconciliation transitions it back. Renderer reads via the
+ * `partialApply:get` IPC and triggers a re-attempt via
+ * `partialApply:retry`.
+ */
+let partialApplyState: PartialApplyPendingState = { kind: 'fully_applied' };
 
 /** Set `SILVERHAND_HEADLESS=1` to boot the backend without a window.
  *  Useful for curl-driven smoke tests and integration scripts — see
@@ -1928,6 +1956,29 @@ export type ProfileSaveWithTestResult =
       ok: true;
       test: ProbeServerInfoResult & { ok: true };
       profile: ServerConnectionProfileView;
+      /**
+       * D4.a Commit 5c-2 — phase-2 outcome from
+       * `performProfilePhase2` after the profile commit succeeded
+       * (`docs/remote-backend-d4-design.md` §7.5).
+       *
+       * Three high-level kinds; renderer copy keys off the
+       * discriminator:
+       *   - `fully_applied` — profile + daemon-config in sync at this
+       *     generation. Sub-arms (`reloaded` / `unchanged` /
+       *     `connectivity_unverified`) reflect the reload IPC's action
+       *     plus post-IPC connectivity observation but all three mean
+       *     "config saved + daemon swapped (or no swap needed)".
+       *   - `no_op_no_host_claim` — phase-2 cannot run without a host
+       *     claim (Setup Wizard pre-auth). Profile is committed; the
+       *     next sign-in's `claimLocalHostForUserSession` (5c-1)
+       *     stamps `profile_version` into daemon-config naturally. NOT
+       *     a failure — there is nothing to reconcile.
+       *   - `partial_apply_pending` — phase-2 failed at write / IPC
+       *     ack. Profile is at the new version, daemon is on the old
+       *     config. Renderer surfaces a banner + Retry button via the
+       *     `partialApply:get` / `partialApply:retry` IPCs.
+       */
+      phase2: ProfilePhase2Outcome;
     }
   | {
       ok: false;
@@ -1960,6 +2011,90 @@ export type ProfileSaveWithTestResult =
       reason: 'storage_unavailable' | 'write_failed';
       detail?: string;
     };
+
+/**
+ * D4.a Commit 5c-2 — `partialApply:retry` outcome.
+ *
+ * Three branches:
+ *   - `ok: true` — phase-2 ran. Echo the new state + the raw outcome
+ *     so the renderer can show the right copy.
+ *   - `ok: false; reason: 'no_profile'` — no profile is committed (e.g.
+ *     user pressed Retry without ever saving). Caller should send
+ *     them through the Wizard, not surface a generic error.
+ *   - `ok: false; reason: 'profile_unreadable'` — profile blob exists
+ *     but read failed (decrypt / parse / storage_unavailable). 5c-2
+ *     surfaces this as-is; 5c-3 reconciliation owns the typed repair
+ *     state (`unusable_profile`) per Cindy's 5c-1 review note.
+ */
+export type PartialApplyRetryResult =
+  | {
+      ok: true;
+      outcome: ProfilePhase2Outcome;
+      state: PartialApplyPendingState;
+    }
+  | {
+      ok: false;
+      reason: 'no_profile';
+    }
+  | {
+      ok: false;
+      reason: 'profile_unreadable';
+      detail: string;
+    };
+
+/**
+ * D4.a Commit 5c-2 — assemble phase-2 deps from current main process
+ * state. Returns `null` when the backend or host client is not ready
+ * (pre-bootstrap / mid-shutdown); callers map that to a typed failure
+ * outcome so the renderer doesn't see an exception.
+ *
+ * Mirrors the dep-binding pattern of `saveServerUrlFromSettings` but
+ * without the URL classifier (phase-2's input is a pre-validated
+ * profile, not a raw URL — §7.5 contract).
+ */
+function buildProfilePhase2Deps(): PerformProfilePhase2Deps | null {
+  const client = hostClient;
+  const running = backend;
+  if (!client || !running) return null;
+  const dir = silverhandDir();
+  const controller = running.context.hostWsController?.() ?? null;
+  return {
+    writeDaemonHostConfig: config => writeDaemonHostConfig(dir, config),
+    hostOutboundReload: () => client.hostOutboundReload(),
+    getAttachment: bindAttachmentAccessor(controller),
+    currentLocalHostId: () =>
+      localHostClaim.status === 'claimed' ? localHostClaim.hostId : null,
+    currentHostToken: () => readDaemonHostConfig(dir)?.host_token ?? null,
+  };
+}
+
+/**
+ * D4.a Commit 5c-2 — run phase-2 against the just-committed profile
+ * (or the on-disk profile for the Retry path) and update the in-memory
+ * `partialApplyState`. Pure orchestration — `performProfilePhase2` owns
+ * the decision tree.
+ */
+async function runProfilePhase2(
+  profile: ServerConnectionProfile,
+): Promise<ProfilePhase2Outcome> {
+  const deps = buildProfilePhase2Deps();
+  if (!deps) {
+    // Backend / host client not ready (pre-bootstrap or mid-shutdown).
+    // Return `partial_apply_pending` rather than throwing so the IPC
+    // handler can surface a typed result and the in-memory state
+    // stays in a Retry-able shape. `no_attachment_controller` is the
+    // structural-impossibility arm that matches this case (the legacy
+    // outbound-reload path uses the same kind for the same reason).
+    return {
+      kind: 'partial_apply_pending',
+      profileVersion: profile.version,
+      reason: 'no_attachment_controller',
+      reloadRejectionReason: null,
+      detail: 'backend or host client not ready',
+    };
+  }
+  return performProfilePhase2({ profile }, deps);
+}
 
 async function handleProfileSaveWithTest(
   input: { serverUrl: string } | undefined,
@@ -2033,11 +2168,105 @@ async function handleProfileSaveWithTest(
     },
     'D4.a profile:saveWithTest committed',
   );
+  // Phase 2 — derive daemon-config + reload (§7.5). Failures land on
+  // disk only as `partial_apply_pending` in-memory state; the profile
+  // commit above is already durable so we never roll it back.
+  const phase2 = await runProfilePhase2(writeResult.profile);
+  partialApplyState = derivePartialApplyState(phase2, Date.now());
+  if (phase2.kind === 'partial_apply_pending') {
+    logger?.warn(
+      {
+        profileVersion: phase2.profileVersion,
+        reason: phase2.reason,
+        reloadRejectionReason: phase2.reloadRejectionReason,
+      },
+      'D4.a profile:saveWithTest phase-2 partial_apply_pending',
+    );
+  } else if (phase2.kind === 'fully_applied') {
+    logger?.info(
+      {
+        profileVersion: phase2.profileVersion,
+        reloadKind: phase2.reloadKind,
+        elapsedMs: phase2.elapsedMs,
+      },
+      'D4.a profile:saveWithTest phase-2 fully_applied',
+    );
+  } else {
+    logger?.info(
+      { profileVersion: phase2.profileVersion },
+      'D4.a profile:saveWithTest phase-2 no_op_no_host_claim (pre-auth)',
+    );
+  }
   return {
     ok: true,
     test,
     profile: redactServerConnectionProfile(writeResult.profile),
+    phase2,
   };
+}
+
+/**
+ * D4.a Commit 5c-2 — Retry handler for `partial_apply_pending`.
+ *
+ * Re-reads the on-disk profile (it may have changed via another path
+ * since the last attempt), runs phase-2, updates the in-memory state.
+ *
+ * Why re-read instead of caching the profile object: the renderer can
+ * trigger Retry minutes after the failed save, and another window /
+ * IPC could have committed a newer profile in the meantime. Reading
+ * fresh keeps Retry idempotent against the latest committed state.
+ *
+ * Profile read failure is surfaced as a typed `profile_unreadable`
+ * outcome WITHOUT mutating `partialApplyState` — Cindy's 5c-1 review
+ * note pins the boundary: profile read failure ≠ profile absent ≠
+ * fully-applied, and the typed repair state for that case lands in
+ * 5c-3's boot reconciliation pass. 5c-2 just refuses to mask the
+ * failure as success.
+ */
+async function handlePartialApplyRetry(): Promise<PartialApplyRetryResult> {
+  const read = readServerConnectionProfile({
+    silverhandRoot: silverhandDir(),
+    safe: safeStorage,
+    logger: logger ?? undefined,
+  });
+  if (!read.ok) {
+    if (read.reason === 'not_found') {
+      logger?.warn(
+        {},
+        'D4.a partialApply:retry — no committed profile (renderer triggered without a save)',
+      );
+      return { ok: false, reason: 'no_profile' };
+    }
+    // decrypt_failed / parse_failed / storage_unavailable — typed
+    // repair state lives in 5c-3 boot reconciliation. For 5c-2 we
+    // surface the structural failure verbatim so the renderer can
+    // tell the user the profile is wedged and offer a "reset"
+    // affordance via the existing `profile:clear` IPC.
+    const detail = 'detail' in read ? read.detail : read.reason;
+    logger?.warn(
+      { reason: read.reason, detail },
+      'D4.a partialApply:retry — profile read failed (typed repair state lands in 5c-3)',
+    );
+    return { ok: false, reason: 'profile_unreadable', detail };
+  }
+  const outcome = await runProfilePhase2(read.profile);
+  partialApplyState = derivePartialApplyState(outcome, Date.now());
+  if (outcome.kind === 'partial_apply_pending') {
+    logger?.warn(
+      {
+        profileVersion: outcome.profileVersion,
+        reason: outcome.reason,
+        reloadRejectionReason: outcome.reloadRejectionReason,
+      },
+      'D4.a partialApply:retry — still partial_apply_pending',
+    );
+  } else {
+    logger?.info(
+      { kind: outcome.kind, profileVersion: outcome.profileVersion },
+      'D4.a partialApply:retry — phase-2 succeeded',
+    );
+  }
+  return { ok: true, outcome, state: partialApplyState };
 }
 
 ipcMain.handle(
@@ -2062,6 +2291,29 @@ ipcMain.handle('profile:clear', () =>
     logger: logger ?? undefined,
   }),
 );
+
+/**
+ * D4.a Commit 5c-2 — partial_apply_pending IPC surface.
+ *
+ * `partialApply:get` returns the current in-memory state; the
+ * renderer reads on settings-pane mount + after every relevant
+ * mutation (profile save, login completion, etc.).
+ *
+ * `partialApply:retry` re-runs phase-2 against the on-disk profile.
+ * No input — Retry always targets the current committed profile. See
+ * `handlePartialApplyRetry` for the semantics around profile read
+ * failures vs absence.
+ */
+ipcMain.handle(
+  'partialApply:get',
+  (): PartialApplyPendingState => partialApplyState,
+);
+
+ipcMain.handle(
+  'partialApply:retry',
+  (): Promise<PartialApplyRetryResult> => handlePartialApplyRetry(),
+);
+
 
 ipcMain.handle('dialog:pickDirectory', async (event, options?: { defaultPath?: string }) => {
   const win = BrowserWindow.fromWebContents(event.sender);

@@ -264,6 +264,24 @@ export type DesktopProfileSaveWithTestResult =
       ok: true;
       test: DesktopProbeServerInfoResult & { ok: true };
       profile: ServerConnectionProfileView;
+      /**
+       * D4.a Commit 5c-2 — phase-2 outcome from `performProfilePhase2`
+       * after the profile commit (`docs/remote-backend-d4-design.md`
+       * §7.5). Renderer keys copy off `kind`:
+       *   - `fully_applied` — daemon's running config is at
+       *     `profileVersion`; sub-arms `reloaded` / `unchanged` /
+       *     `connectivity_unverified` differentiate the IPC action
+       *     and post-IPC connectivity observation. All three mean
+       *     "config + daemon in sync at this generation".
+       *   - `no_op_no_host_claim` — Setup Wizard pre-auth path. The
+       *     next sign-in stamps `profile_version` into daemon-config
+       *     naturally; no Retry needed.
+       *   - `partial_apply_pending` — phase-2 failed at write / IPC
+       *     ack. Profile committed; daemon on old config. Renderer
+       *     surfaces a banner + Retry button via `partialApply:get`
+       *     / `partialApply:retry`.
+       */
+      phase2: DesktopProfilePhase2Outcome;
     }
   | {
       ok: false;
@@ -286,6 +304,90 @@ export type DesktopProfileSaveWithTestResult =
       reason: 'storage_unavailable' | 'write_failed';
       detail?: string;
     };
+
+/**
+ * D4.a Commit 5c-2 — phase-2 outcome surfaced to the renderer.
+ * Structural mirror of `ProfilePhase2Outcome` in
+ * `main/profile-phase2.ts`. See `phase2` field on
+ * {@link DesktopProfileSaveWithTestResult} for usage.
+ *
+ * `reloadRejectionReason` is the daemon's typed reason — passed
+ * through verbatim so the renderer can branch on the exact same set
+ * the daemon defines.
+ */
+export type DesktopProfilePhase2Outcome =
+  | {
+      kind: 'fully_applied';
+      profileVersion: number;
+      reloadKind: 'reloaded' | 'unchanged' | 'connectivity_unverified';
+      elapsedMs: number;
+    }
+  | {
+      kind: 'no_op_no_host_claim';
+      profileVersion: number;
+    }
+  | {
+      kind: 'partial_apply_pending';
+      profileVersion: number;
+      reason:
+        | 'config_write_failed'
+        | 'reload_rejected'
+        | 'no_attachment_controller';
+      reloadRejectionReason:
+        | 'not_attached'
+        | 'config_unreadable'
+        | 'parse_failed'
+        | 'invalid_server_url'
+        | null;
+      detail: string;
+    };
+
+/**
+ * D4.a Commit 5c-2 — in-memory partial-apply state mirror. Renderer
+ * reads via `partialApply:get` and renders a banner + Retry button
+ * when `kind === 'partial_apply_pending'`.
+ *
+ * NOT serialized to disk in main (the source of truth is
+ * `profile.version` vs `daemon-config.profile_version`); 5c-3 boot
+ * reconciliation re-derives this on launch. NOT crossed into the
+ * wire / daemon protocol per §7.6 (R4 boundary — local desktop UX
+ * concept, not a backend-observable fact).
+ */
+export type DesktopPartialApplyState =
+  | { kind: 'fully_applied' }
+  | {
+      kind: 'partial_apply_pending';
+      profileVersion: number;
+      reason:
+        | 'config_write_failed'
+        | 'reload_rejected'
+        | 'no_attachment_controller';
+      reloadRejectionReason:
+        | 'not_attached'
+        | 'config_unreadable'
+        | 'parse_failed'
+        | 'invalid_server_url'
+        | null;
+      detail: string;
+      lastAttemptAt: number;
+    };
+
+/**
+ * D4.a Commit 5c-2 — `partialApply:retry` outcome. See
+ * `handlePartialApplyRetry` in `main/index.ts` for the per-arm
+ * semantics. `profile_unreadable` is the typed repair-state stub —
+ * 5c-3 boot reconciliation owns full repair; for 5c-2 the renderer
+ * surfaces the failure with a "reset profile" affordance keyed off
+ * the existing `profile:clear` IPC.
+ */
+export type DesktopPartialApplyRetryResult =
+  | {
+      ok: true;
+      outcome: DesktopProfilePhase2Outcome;
+      state: DesktopPartialApplyState;
+    }
+  | { ok: false; reason: 'no_profile' }
+  | { ok: false; reason: 'profile_unreadable'; detail: string };
 
 /**
  * D4.a Commit 2 — `profile:clear` result. Idempotent; reports whether
@@ -347,6 +449,23 @@ declare global {
        * from a wedged on-disk blob.
        */
       clearServerConnectionProfile(): Promise<DesktopClearProfileResult>;
+      /**
+       * D4.a Commit 5c-2 — read the in-memory partial-apply state.
+       * Renderer reads on Settings-pane mount + after every relevant
+       * mutation to decide whether to render the banner + Retry
+       * button. NOT durable — boot reconciliation (5c-3) re-derives
+       * from `profile.version` vs `daemon-config.profile_version`.
+       */
+      getPartialApplyState(): Promise<DesktopPartialApplyState>;
+      /**
+       * D4.a Commit 5c-2 — re-run phase-2 against the on-disk
+       * profile. Reads the profile fresh (it may have changed since
+       * the last attempt), runs phase-2, returns the new outcome +
+       * state. Profile read failures surface as a typed
+       * `profile_unreadable` outcome that does NOT mutate the
+       * in-memory state — 5c-3 owns the full typed repair state.
+       */
+      retryPartialApply(): Promise<DesktopPartialApplyRetryResult>;
       pickDirectory(options?: { defaultPath?: string }): Promise<string | null>;
       openExternal(url: string): Promise<void>;
       openAttachmentExternal(input: {

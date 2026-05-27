@@ -26,6 +26,12 @@ const allowedBackendImports = [
   // zero-runtime guarantee — second occurrence allowed for the
   // second consumer file.
   'HostWsAttachment',
+  // D4.a Commit 5c-2: `profile-phase2.ts` is the profile-driven
+  // sibling of `outbound-reload.ts` (§7.5 phase-2 orchestrator).
+  // Same structural `HostWsAttachment` dep for the same fresh-attach
+  // watchdog predicate — third occurrence allowed for the third
+  // consumer file.
+  'HostWsAttachment',
 ].sort();
 
 const allowedServerImports = [
@@ -53,6 +59,13 @@ const cataloguedIpcHandlers = [
   'hosts:revoke',
   'hosts:rotate',
   'notification:show',
+  // D4.a Commit 5c-2 — partial_apply_pending state machine IPC.
+  // `partialApply:get` returns the in-memory state; `partialApply:retry`
+  // re-runs phase-2 against the on-disk profile. Both are local
+  // desktop UX concerns — NOT crossed into the wire / daemon protocol
+  // per §7.6 (R4 boundary).
+  'partialApply:get',
+  'partialApply:retry',
   // D4.a Commit 2 — Setup Wizard / Settings server connection profile
   // IPC surface (see `main/index.ts` "D4.a Commit 2 — Server connection
   // profile IPC surface" block for the boundary discipline).

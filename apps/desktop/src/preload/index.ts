@@ -212,6 +212,8 @@ export type DesktopProfileSaveWithTestResult =
       ok: true;
       test: DesktopProbeServerInfoResult & { ok: true };
       profile: ServerConnectionProfileView;
+      /** D4.a Commit 5c-2 — phase-2 outcome. See `api.d.ts`. */
+      phase2: DesktopProfilePhase2Outcome;
     }
   | {
       ok: false;
@@ -234,6 +236,67 @@ export type DesktopProfileSaveWithTestResult =
       reason: 'storage_unavailable' | 'write_failed';
       detail?: string;
     };
+
+/** D4.a Commit 5c-2 — phase-2 outcome. Structural twin of
+ *  `ProfilePhase2Outcome` in `main/profile-phase2.ts`. See
+ *  `api.d.ts` for per-arm semantics. */
+export type DesktopProfilePhase2Outcome =
+  | {
+      kind: 'fully_applied';
+      profileVersion: number;
+      reloadKind: 'reloaded' | 'unchanged' | 'connectivity_unverified';
+      elapsedMs: number;
+    }
+  | {
+      kind: 'no_op_no_host_claim';
+      profileVersion: number;
+    }
+  | {
+      kind: 'partial_apply_pending';
+      profileVersion: number;
+      reason:
+        | 'config_write_failed'
+        | 'reload_rejected'
+        | 'no_attachment_controller';
+      reloadRejectionReason:
+        | 'not_attached'
+        | 'config_unreadable'
+        | 'parse_failed'
+        | 'invalid_server_url'
+        | null;
+      detail: string;
+    };
+
+/** D4.a Commit 5c-2 — in-memory partial-apply state. Mirrors
+ *  `PartialApplyPendingState` in `main/profile-phase2.ts`. */
+export type DesktopPartialApplyState =
+  | { kind: 'fully_applied' }
+  | {
+      kind: 'partial_apply_pending';
+      profileVersion: number;
+      reason:
+        | 'config_write_failed'
+        | 'reload_rejected'
+        | 'no_attachment_controller';
+      reloadRejectionReason:
+        | 'not_attached'
+        | 'config_unreadable'
+        | 'parse_failed'
+        | 'invalid_server_url'
+        | null;
+      detail: string;
+      lastAttemptAt: number;
+    };
+
+/** D4.a Commit 5c-2 — `partialApply:retry` outcome. */
+export type DesktopPartialApplyRetryResult =
+  | {
+      ok: true;
+      outcome: DesktopProfilePhase2Outcome;
+      state: DesktopPartialApplyState;
+    }
+  | { ok: false; reason: 'no_profile' }
+  | { ok: false; reason: 'profile_unreadable'; detail: string };
 
 export type DesktopClearProfileResult =
   | { ok: true; cleared: boolean }
@@ -286,6 +349,16 @@ const api = {
   /** D4.a Commit 2 — explicit reset of the persisted profile. */
   clearServerConnectionProfile: (): Promise<DesktopClearProfileResult> =>
     ipcRenderer.invoke('profile:clear'),
+  /** D4.a Commit 5c-2 — read in-memory partial-apply state. The
+   *  renderer renders a banner + Retry button when
+   *  `kind === 'partial_apply_pending'`. */
+  getPartialApplyState: (): Promise<DesktopPartialApplyState> =>
+    ipcRenderer.invoke('partialApply:get'),
+  /** D4.a Commit 5c-2 — re-run phase-2 against the on-disk profile.
+   *  Profile read failures surface as a typed `profile_unreadable`
+   *  outcome that does NOT mutate state — 5c-3 owns full repair. */
+  retryPartialApply: (): Promise<DesktopPartialApplyRetryResult> =>
+    ipcRenderer.invoke('partialApply:retry'),
   pickDirectory: (options?: { defaultPath?: string }): Promise<string | null> =>
     ipcRenderer.invoke('dialog:pickDirectory', options),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:openExternal', url),
