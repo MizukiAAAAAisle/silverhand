@@ -32,10 +32,16 @@
  * Centralising the transition here means a future commit that
  * considers routing a new failure mode through `failed` has to
  * change THIS file, which surfaces the gate question explicitly in
- * the review diff. Grepping for `flipToFailedOnBudgetExhausted`
- * should always return exactly one call site (the supervisor
- * `daemon.onExit` handler in `main/index.ts`); if it returns more,
- * the strict source rule above has been broken.
+ * the review diff. The production chokepoint is
+ * {@link applyFatalExitToClaim} — grepping for `applyFatalExitToClaim`
+ * should always return exactly one production call site (the
+ * supervisor `daemon.onExit` handler in `main/index.ts`); if it
+ * returns more, the strict source rule above has been broken.
+ * {@link flipToFailedOnBudgetExhausted} is an internal helper of
+ * {@link applyFatalExitToClaim} (it implements the revoked carve-out
+ * + flip step) and must NOT acquire a second production caller — new
+ * fatal-exit consumers route through `applyFatalExitToClaim` so the
+ * `kind` gate stays in one place.
  *
  * Terminal-state framing: like the rest of the supervisor adapter
  * (`spawnDaemonChild`, `onDaemonGenerationChanged`,

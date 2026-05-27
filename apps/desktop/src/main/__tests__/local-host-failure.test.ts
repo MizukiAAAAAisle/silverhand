@@ -1,18 +1,23 @@
 /**
  * Unit tests for `flipToFailedOnBudgetExhausted` (D3.b Commit 2).
  *
- * The helper is the SINGLE chokepoint where `local_host_status`
- * flips to `'failed'`. These tests pin two things:
+ * The helper is the inner mapping step inside the
+ * `applyFatalExitToClaim` chokepoint — the SINGLE place
+ * `local_host_status` flips to `'failed'`. These tests pin two
+ * things:
  *
  *  1. The mapping itself for every input variant: preserve `hostId`
  *     when present, surface `null` when not.
- *  2. The strict source rule is a property of the call graph: this
- *     helper has only one production call site (the supervisor
+ *  2. The strict source rule is a property of the call graph:
+ *     `flipToFailedOnBudgetExhausted` has exactly one production
+ *     caller (`applyFatalExitToClaim` in the same module), which in
+ *     turn has exactly one production caller (the supervisor
  *     `daemon.onExit` handler in `main/index.ts`). Future commits
  *     that add a new failure surface must change THIS file to do
  *     so, which surfaces the gate question in the diff. The grep-
  *     based assertion in the README of `local-host-failure.ts`
- *     covers the call-site invariant — these tests cover the pure
+ *     covers the call-site invariant (grep `applyFatalExitToClaim`
+ *     for the production chokepoint) — these tests cover the pure
  *     mapping.
  */
 import { describe, expect, it } from 'vitest';
