@@ -32,11 +32,58 @@ import {
   useBackendInfoSnapshot,
   useHostsQuery,
 } from '@/features/hosts/hooks';
+import {
+  describeConnectionState,
+  type ConnectionStateView,
+  type ConnectionTone,
+} from '@/features/hosts/connection-state';
 
 function formatTimestamp(value: number | null): string {
   if (!value) return '—';
   const d = new Date(value);
   return d.toLocaleString();
+}
+
+/**
+ * Tone → token mapping for the connection pill (D3.d). Every value
+ * resolves to existing theme tokens defined in BOTH `warm-script.css`
+ * AND `forza6.css` — no new tokens, no per-theme branches, no
+ * hardcoded colors. Border + bg use the soft-fill pattern (border
+ * picks up tone, bg stays neutral `bg-bg-floating`) so the pill stays
+ * readable on the forza6 cool-neutral chat card without painting a
+ * loud filled wedge over an already-saturated frame.
+ */
+const TONE_CLASS: Record<ConnectionTone, string> = {
+  hidden: '',
+  accent: 'border-accent text-accent',
+  success: 'border-success text-success',
+  muted: 'border-border-subtle text-text-muted',
+  warning: 'border-warning text-warning',
+  error: 'border-error text-error',
+};
+
+function ConnectionPill({ view }: { view: ConnectionStateView }): JSX.Element | null {
+  if (!view.visible) return null;
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1 rounded-full border bg-bg-floating px-2 py-0.5 text-[10px] font-medium',
+        TONE_CLASS[view.tone],
+      )}
+      // a11y: convey the tone semantically as well as visually so a
+      // screen reader user gets "Connected" rather than just the
+      // colored chip. `aria-label` keeps the visible label compact.
+      role="status"
+      aria-label={
+        view.detail ? `${view.label} ${view.detail}` : view.label
+      }
+    >
+      <span>{view.label}</span>
+      {view.detail && (
+        <span className="text-text-muted">· {view.detail}</span>
+      )}
+    </span>
+  );
 }
 
 function describeMutationFailure(result: Extract<DesktopHostMutationResult, { ok: false }>): string {
@@ -140,6 +187,17 @@ export function HostsPane(): JSX.Element {
   });
 
   const currentLocalHostId = backendInfoQuery.data?.local_host_id ?? null;
+  const localHostStatus = backendInfoQuery.data?.local_host_status ?? 'unclaimed';
+  const localHostAttachedAt =
+    backendInfoQuery.data?.local_host_ws_attached_at ?? null;
+  // D3.d: presentation-only view. Mapper enforces "no new durable
+  // status word" via type-level `never` exhaustiveness; this view is
+  // re-derived on every render so `attached_at` flipping null→number
+  // (post-WS-attach) lights up the pill without an extra refetch.
+  const localConnectionView = useMemo(
+    () => describeConnectionState(localHostStatus, localHostAttachedAt, Date.now()),
+    [localHostStatus, localHostAttachedAt],
+  );
   const hosts: ReadonlyArray<HostDto> = useMemo(
     () => hostsQuery.data?.hosts ?? [],
     [hostsQuery.data],
@@ -206,6 +264,13 @@ export function HostsPane(): JSX.Element {
                     {host.id}
                   </span>
                 </div>
+                {/* D3.d connection pill — only painted on the current
+                    local host card. Other owned hosts (future remote /
+                    other-desktop rows) don't have a daemon view from
+                    this desktop, so showing "Disconnected" on them
+                    would be a lie. The pill stays in sync with
+                    `backendInfoQuery` polling; no extra IPC needed. */}
+                {isCurrent && <ConnectionPill view={localConnectionView} />}
                 <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5 text-text-secondary">
                   <dt className="text-text-muted">Kind</dt>
                   <dd>{host.kind}</dd>
