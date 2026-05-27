@@ -64,7 +64,8 @@ import {
 import {
   performProfilePhase2,
   derivePartialApplyState,
-  type PartialApplyPendingState,
+  reconcilePartialApplyAtBoot,
+  type PartialApplyState,
   type PerformProfilePhase2Deps,
   type ProfilePhase2Outcome,
 } from './profile-phase2.js';
@@ -116,7 +117,7 @@ let localHostClaim: LocalHostClaimStatus = { status: 'unclaimed', hostId: null }
  * `partialApply:get` IPC and triggers a re-attempt via
  * `partialApply:retry`.
  */
-let partialApplyState: PartialApplyPendingState = { kind: 'fully_applied' };
+let partialApplyState: PartialApplyState = { kind: 'fully_applied' };
 
 /** Set `SILVERHAND_HEADLESS=1` to boot the backend without a window.
  *  Useful for curl-driven smoke tests and integration scripts — see
@@ -1598,10 +1599,82 @@ async function bootstrap(): Promise<void> {
         await bootstrapEmbeddedUserSession();
       }
     }
+    // D4.a Commit 5c-3 — boot-time partial-apply reconciliation.
+    // Cindy review gate 4: trigger AFTER hostClient/backend are
+    // ready (above) AND AFTER the auth-bootstrap claim attempt has
+    // settled (above) — the claim path may have written a fresh
+    // daemon-config so we want reconcile to see the post-claim
+    // state. Fire-and-forget so the renderer doesn't block on
+    // either the disk reads or a possible phase-2 IPC roundtrip.
+    // bootstrap() must continue regardless: the embedded backend
+    // and IPC handlers are already up; reconcile only updates the
+    // banner that the renderer reads via `partialApply:get`.
+    void runBootReconciliation();
   } catch (err) {
     console.error('[main] bootstrap failed:', err);
     logger?.error({ err }, 'bootstrap failed');
     throw err;
+  }
+}
+
+/**
+ * D4.a Commit 5c-3 — fire-and-forget reconcile at end of bootstrap.
+ *
+ * Pulls live profile + daemon-config snapshots, runs phase-2 if
+ * there's drift, and replaces the in-memory `partialApplyState` with
+ * the derived `PartialApplyState`. Logs the resulting kind so an
+ * operator can correlate the launch's reconciliation outcome with
+ * subsequent renderer-banner state (e.g. "user reports stuck Retry
+ * button → check the boot log for `partial_apply_pending`").
+ *
+ * Catches all exceptions so a reconciliation bug NEVER bubbles into
+ * the bootstrap promise (Cindy review gate 4: must not block
+ * embedded normal startup).
+ */
+async function runBootReconciliation(): Promise<void> {
+  try {
+    const state = await reconcilePartialApplyAtBoot({
+      readProfile: () =>
+        readServerConnectionProfile({
+          silverhandRoot: silverhandDir(),
+          safe: safeStorage,
+          logger: logger ?? undefined,
+        }),
+      readDaemonHostConfig: () => readDaemonHostConfig(silverhandDir()),
+      runPhase2: profile => runProfilePhase2(profile),
+    });
+    partialApplyState = state;
+    if (state.kind === 'partial_apply_pending') {
+      logger?.warn(
+        {
+          profileVersion: state.profileVersion,
+          reason: state.reason,
+          reloadRejectionReason: state.reloadRejectionReason,
+        },
+        'D4.a 5c-3 boot reconciliation: partial_apply_pending — Retry button surfaced',
+      );
+    } else if (state.kind === 'unusable_profile') {
+      logger?.warn(
+        { reason: state.reason, detail: state.detail },
+        'D4.a 5c-3 boot reconciliation: unusable_profile — renderer should offer reset affordance',
+      );
+    } else {
+      logger?.info(
+        { kind: state.kind },
+        'D4.a 5c-3 boot reconciliation: ok',
+      );
+    }
+  } catch (err) {
+    // Reconciliation failed unexpectedly. Leave `partialApplyState`
+    // at its initial `fully_applied` so the renderer doesn't surface
+    // a banner with stale info; log the error so the issue is
+    // visible to operators. Re-throwing here would propagate into
+    // bootstrap() because of the `void` site, but `void` swallows
+    // it — keeping this try/catch makes the swallow explicit.
+    logger?.error(
+      { err },
+      'D4.a 5c-3 boot reconciliation threw unexpectedly — leaving partialApplyState=fully_applied',
+    );
   }
 }
 
@@ -2030,7 +2103,7 @@ export type PartialApplyRetryResult =
   | {
       ok: true;
       outcome: ProfilePhase2Outcome;
-      state: PartialApplyPendingState;
+      state: PartialApplyState;
     }
   | {
       ok: false;
@@ -2216,12 +2289,16 @@ async function handleProfileSaveWithTest(
  * IPC could have committed a newer profile in the meantime. Reading
  * fresh keeps Retry idempotent against the latest committed state.
  *
- * Profile read failure is surfaced as a typed `profile_unreadable`
- * outcome WITHOUT mutating `partialApplyState` — Cindy's 5c-1 review
- * note pins the boundary: profile read failure ≠ profile absent ≠
- * fully-applied, and the typed repair state for that case lands in
- * 5c-3's boot reconciliation pass. 5c-2 just refuses to mask the
- * failure as success.
+ * Profile read failure now (5c-3) ALSO mutates `partialApplyState`
+ * to `unusable_profile` so the renderer banner reflects the latest
+ * known repair state, not the stale `partial_apply_pending` from
+ * before. The typed `profile_unreadable` retry outcome carries the
+ * detail to the caller; the state mutation is the side-effect.
+ *
+ * `not_found` (no profile committed) returns `no_profile` retry
+ * outcome AND mutates state to `no_profile` — same idea, the user
+ * may have just cleared the profile via `profile:clear` and the
+ * Retry button shouldn't pretend there's something to retry.
  */
 async function handlePartialApplyRetry(): Promise<PartialApplyRetryResult> {
   const read = readServerConnectionProfile({
@@ -2235,18 +2312,30 @@ async function handlePartialApplyRetry(): Promise<PartialApplyRetryResult> {
         {},
         'D4.a partialApply:retry — no committed profile (renderer triggered without a save)',
       );
+      // 5c-3: mutate state to match the on-disk reality. If the
+      // profile was cleared between the failed save and the retry,
+      // the previous `partial_apply_pending` banner is no longer
+      // accurate.
+      partialApplyState = { kind: 'no_profile' };
       return { ok: false, reason: 'no_profile' };
     }
     // decrypt_failed / parse_failed / storage_unavailable — typed
-    // repair state lives in 5c-3 boot reconciliation. For 5c-2 we
-    // surface the structural failure verbatim so the renderer can
-    // tell the user the profile is wedged and offer a "reset"
-    // affordance via the existing `profile:clear` IPC.
+    // repair state. 5c-3 reconciliation produces the same
+    // `unusable_profile` from the same on-disk read. We mutate
+    // `partialApplyState` here so the renderer banner shows the
+    // reset affordance immediately after a failed Retry, not only
+    // after the next launch.
     const detail = 'detail' in read ? read.detail : read.reason;
     logger?.warn(
       { reason: read.reason, detail },
-      'D4.a partialApply:retry — profile read failed (typed repair state lands in 5c-3)',
+      'D4.a partialApply:retry — profile read failed → unusable_profile state',
     );
+    partialApplyState = {
+      kind: 'unusable_profile',
+      reason: read.reason,
+      detail,
+      lastReadAt: Date.now(),
+    };
     return { ok: false, reason: 'profile_unreadable', detail };
   }
   const outcome = await runProfilePhase2(read.profile);
@@ -2306,7 +2395,7 @@ ipcMain.handle('profile:clear', () =>
  */
 ipcMain.handle(
   'partialApply:get',
-  (): PartialApplyPendingState => partialApplyState,
+  (): PartialApplyState => partialApplyState,
 );
 
 ipcMain.handle(

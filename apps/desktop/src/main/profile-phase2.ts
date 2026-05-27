@@ -68,6 +68,7 @@ import type {
   HostOutboundReloadFn,
   WriteDaemonHostConfigFn,
 } from './outbound-reload.js';
+import type { ReadProfileResult } from './server-connection-profile.js';
 
 /**
  * Outcome of one phase-2 attempt.
@@ -360,21 +361,53 @@ export async function performProfilePhase2(
 }
 
 /**
- * In-memory state describing whether the desktop's view of the
- * profile has been fully applied to the daemon's running config.
+ * D4.a Commit 5c-3 — in-memory state describing whether the desktop's
+ * view of the server connection profile has been fully applied to
+ * the daemon's running config (§7.5/§7.6).
+ *
+ * Four kinds:
+ *   - `fully_applied` — profile + daemon-config in sync at this
+ *     generation, OR there is genuinely nothing to reconcile (e.g.
+ *     pre-claim). No banner.
+ *   - `no_profile` — no profile is committed (Setup Wizard never
+ *     completed, or `profile:clear` was invoked). Distinct from
+ *     `fully_applied` for telemetry / future UX even though both
+ *     render no banner today.
+ *   - `unusable_profile` — profile blob exists but the storage layer
+ *     could not return it (`storage_unavailable` / `decrypt_failed`
+ *     / `parse_failed`). Cindy 5c-1 review note: profile read
+ *     failure ≠ profile absent — the typed repair state must
+ *     surface so the renderer offers a "reset profile" affordance
+ *     instead of pretending the profile is in-sync.
+ *   - `partial_apply_pending` — profile present, daemon drifted (or
+ *     phase-2 IPC failed). Renderer surfaces banner + Retry button.
  *
  * Lives on the desktop main process only — NOT serialized to disk
  * (the source of truth is the comparison `profile.version` vs
- * `daemon-config.profile_version`, which 5c-3 reconciliation uses on
- * boot to re-derive this state). NOT crossed into the wire / daemon
- * protocol per §7.6.
+ * `daemon-config.profile_version`, which 5c-3 reconciliation re-
+ * derives on each boot). NOT crossed into the wire / daemon protocol
+ * per §7.6 — R4 boundary: this is a local desktop UX concept, not a
+ * backend-observable fact.
  *
- * Initial value is `{ kind: 'fully_applied' }`. Phase-2 transitions
- * it to `partial_apply_pending` on failure; a successful Retry or
- * boot reconciliation transitions it back.
+ * Initial value is `{ kind: 'fully_applied' }`; bootstrap
+ * reconciliation (5c-3) replaces it with the derived value before
+ * the renderer reads it.
+ *
+ * Type was named `PartialApplyPendingState` in 5c-2 when the union
+ * was just `fully_applied` + `partial_apply_pending`; 5c-3 expands
+ * it and renames to drop the misleading "Pending" suffix. The
+ * preload mirror is already named `DesktopPartialApplyState` (no
+ * "Pending"), so this brings them into alignment.
  */
-export type PartialApplyPendingState =
+export type PartialApplyState =
   | { kind: 'fully_applied' }
+  | { kind: 'no_profile' }
+  | {
+      kind: 'unusable_profile';
+      reason: 'storage_unavailable' | 'decrypt_failed' | 'parse_failed';
+      detail: string;
+      lastReadAt: number;
+    }
   | {
       kind: 'partial_apply_pending';
       profileVersion: number;
@@ -401,7 +434,7 @@ export type PartialApplyPendingState =
 export function derivePartialApplyState(
   outcome: ProfilePhase2Outcome,
   attemptedAt: number,
-): PartialApplyPendingState {
+): PartialApplyState {
   if (outcome.kind === 'partial_apply_pending') {
     return {
       kind: 'partial_apply_pending',
@@ -413,4 +446,115 @@ export function derivePartialApplyState(
     };
   }
   return { kind: 'fully_applied' };
+}
+
+/**
+ * D4.a Commit 5c-3 — boot-time reconciliation per §7.5.
+ *
+ * Re-derives `PartialApplyState` from on-disk profile + daemon-config.
+ * Runs once at desktop launch (after `hostClient` / backend are ready
+ * AND after the auth-bootstrap claim attempt has settled) so the
+ * renderer's banner reflects reality even when the previous session
+ * crashed mid-phase-2 or the user mutated the on-disk blob between
+ * launches.
+ *
+ * State machine (priority top-down):
+ *   1. profile read fails (`storage_unavailable` / `decrypt_failed` /
+ *      `parse_failed`) → `unusable_profile`. Cindy 5c-1 review note:
+ *      profile read failure ≠ profile absent — the typed repair
+ *      state must NOT collapse to `<none>` / `fully_applied`. UI
+ *      surfaces a "reset profile" affordance keyed off this.
+ *   2. profile read returns `not_found` → `no_profile`. No drift to
+ *      reconcile; next Setup Wizard / Settings save creates one.
+ *   3. profile present + daemon-config absent OR profile_version
+ *      mismatch → run phase-2 once. The phase-2 orchestrator handles
+ *      the sub-cases (claimed-but-no-token → host_token_missing,
+ *      no claim → no_op_no_host_claim, full re-derive on
+ *      version-mismatch). Outcome flows through
+ *      `derivePartialApplyState` for the final state.
+ *   4. profile_version matches daemon-config → `fully_applied` fast
+ *      path (skip the IPC roundtrip).
+ *
+ * Cindy 5c-3 review baseline (4 gates, all must hold):
+ *   - profile read failure ⇒ `unusable_profile` (gate 1)
+ *   - daemon-config missing/unreadable + profile present ⇒ NOT
+ *     direct success — must run phase-2 to learn the right arm (gate 2)
+ *   - auto-retry failure ⇒ `partial_apply_pending` + Retry preserved
+ *     (gate 3, enforced by `derivePartialApplyState`)
+ *   - bootstrap trigger point: AFTER hostClient/backend ready AND
+ *     does NOT block embedded normal startup (gate 4, enforced by
+ *     fire-and-forget call site in `bootstrap()`)
+ *
+ * Pure-ish: side effects flow through deps. The caller assembles
+ * deps from the live process (`readServerConnectionProfile`,
+ * `readDaemonHostConfig`, `runProfilePhase2`); tests substitute
+ * fixtures so reconciliation is exercised without disk / IPC.
+ */
+export interface ReconcilePartialApplyDeps {
+  /** Read the on-disk server connection profile. Production binding
+   *  is `readServerConnectionProfile({silverhandRoot, safe, logger})`. */
+  readProfile: () => ReadProfileResult;
+  /** Read the on-disk daemon-config. Production binding is
+   *  `readDaemonHostConfig(silverhandDir)`. Returns `null` when the
+   *  config is missing OR unreadable (matches the existing
+   *  fail-closed semantics in `local-host-claim.ts`). */
+  readDaemonHostConfig: () => DaemonHostConfig | null;
+  /** Run phase-2 against a profile. Production binding wraps
+   *  `performProfilePhase2` with current main deps. Decoupled here
+   *  so reconciliation tests can substitute deterministic outcomes
+   *  without spinning up a fake `HostClient`. */
+  runPhase2: (profile: ServerConnectionProfile) => Promise<ProfilePhase2Outcome>;
+  /** Test clock; defaults to `Date.now`. */
+  now?: () => number;
+}
+
+export async function reconcilePartialApplyAtBoot(
+  deps: ReconcilePartialApplyDeps,
+): Promise<PartialApplyState> {
+  const now = deps.now ?? (() => Date.now());
+  const read = deps.readProfile();
+  if (!read.ok) {
+    if (read.reason === 'not_found') {
+      // No profile committed — pre-Wizard state. Distinct from
+      // `fully_applied` for telemetry; same UX (no banner).
+      return { kind: 'no_profile' };
+    }
+    // Cindy 5c-3 gate 1: profile blob exists but the storage layer
+    // could not return it. Surface the typed repair state — do NOT
+    // fall through to "fully_applied" or "no_profile". `parse_failed`
+    // carries a `detail`; the other two arms reuse the reason name.
+    return {
+      kind: 'unusable_profile',
+      reason: read.reason,
+      detail: 'detail' in read ? read.detail : read.reason,
+      lastReadAt: now(),
+    };
+  }
+  const profile = read.profile;
+  const daemonConfig = deps.readDaemonHostConfig();
+  // Fast path: profile_version matches daemon-config.profile_version
+  // → no drift, skip the phase-2 IPC roundtrip. Both `daemonConfig`
+  // and its `profile_version` field must be present; absence
+  // (legacy D3.x config without 5b's additive field) does NOT match
+  // any profile.version (which is `>= 1`), so falls through to
+  // phase-2 re-derivation.
+  if (
+    daemonConfig !== null &&
+    daemonConfig.profile_version === profile.version
+  ) {
+    return { kind: 'fully_applied' };
+  }
+  // Cindy 5c-3 gate 2: any drift (config absent / version mismatch
+  // / legacy config without `profile_version`) goes through phase-2
+  // — never collapse to direct success without learning the right
+  // partial-apply arm. The orchestrator handles the sub-cases:
+  //   - claim absent + config absent → no_op_no_host_claim → fully_applied
+  //   - claim present + config absent (no token) → host_token_missing
+  //   - mismatch + claim + token → write fresh + reload IPC → success or fail
+  //
+  // Cindy 5c-3 gate 3: phase-2 failure surfaces as
+  // `partial_apply_pending` via `derivePartialApplyState`; the Retry
+  // button stays available and the next boot will re-run reconcile.
+  const outcome = await deps.runPhase2(profile);
+  return derivePartialApplyState(outcome, now());
 }

@@ -270,10 +270,19 @@ export type DesktopProfilePhase2Outcome =
       detail: string;
     };
 
-/** D4.a Commit 5c-2 — in-memory partial-apply state. Mirrors
- *  `PartialApplyPendingState` in `main/profile-phase2.ts`. */
+/** D4.a Commit 5c-3 — in-memory partial-apply state. Mirrors
+ *  `PartialApplyState` in `main/profile-phase2.ts`. Four arms:
+ *  `fully_applied` / `no_profile` / `unusable_profile` /
+ *  `partial_apply_pending`. See `api.d.ts` for per-arm semantics. */
 export type DesktopPartialApplyState =
   | { kind: 'fully_applied' }
+  | { kind: 'no_profile' }
+  | {
+      kind: 'unusable_profile';
+      reason: 'storage_unavailable' | 'decrypt_failed' | 'parse_failed';
+      detail: string;
+      lastReadAt: number;
+    }
   | {
       kind: 'partial_apply_pending';
       profileVersion: number;

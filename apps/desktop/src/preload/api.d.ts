@@ -349,9 +349,11 @@ export type DesktopProfilePhase2Outcome =
     };
 
 /**
- * D4.a Commit 5c-2 — in-memory partial-apply state mirror. Renderer
+ * D4.a Commit 5c-3 — in-memory partial-apply state mirror. Renderer
  * reads via `partialApply:get` and renders a banner + Retry button
- * when `kind === 'partial_apply_pending'`.
+ * when `kind === 'partial_apply_pending'`, a "reset profile"
+ * affordance when `kind === 'unusable_profile'`, and no banner
+ * for `fully_applied` / `no_profile`.
  *
  * NOT serialized to disk in main (the source of truth is
  * `profile.version` vs `daemon-config.profile_version`); 5c-3 boot
@@ -361,6 +363,17 @@ export type DesktopProfilePhase2Outcome =
  */
 export type DesktopPartialApplyState =
   | { kind: 'fully_applied' }
+  | { kind: 'no_profile' }
+  | {
+      kind: 'unusable_profile';
+      // D4.a Commit 5c-3 (Cindy 5c-1 review note) — profile blob
+      // exists but the storage layer could not return it. Distinct
+      // from `no_profile` (file absent) — renderer surfaces "reset
+      // profile" affordance, not "configure backend".
+      reason: 'storage_unavailable' | 'decrypt_failed' | 'parse_failed';
+      detail: string;
+      lastReadAt: number;
+    }
   | {
       kind: 'partial_apply_pending';
       profileVersion: number;

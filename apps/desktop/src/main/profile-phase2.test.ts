@@ -44,10 +44,13 @@ import type {
 import {
   performProfilePhase2,
   derivePartialApplyState,
-  type PartialApplyPendingState,
+  reconcilePartialApplyAtBoot,
+  type PartialApplyState,
   type PerformProfilePhase2Deps,
   type ProfilePhase2Outcome,
+  type ReconcilePartialApplyDeps,
 } from './profile-phase2.js';
+import type { ReadProfileResult } from './server-connection-profile.js';
 
 interface FakeState {
   writeCalls: DaemonHostConfig[];
@@ -238,7 +241,7 @@ describe('performProfilePhase2 — no_op_no_host_claim short-circuit', () => {
       reloadRejectionReason: null,
       detail: 'no host token in daemon-config for claimed host',
       lastAttemptAt: 1_700_000_030_000,
-    } satisfies PartialApplyPendingState);
+    } satisfies PartialApplyState);
   });
 });
 
@@ -493,7 +496,7 @@ describe('derivePartialApplyState — pure state-derivation helper', () => {
       reloadRejectionReason: 'config_unreadable',
       detail: 'permission denied',
       lastAttemptAt: 1_700_000_055_000,
-    } satisfies PartialApplyPendingState);
+    } satisfies PartialApplyState);
   });
 
   it('lastAttemptAt updates per-attempt (not preserved across calls)', () => {
@@ -510,5 +513,296 @@ describe('derivePartialApplyState — pure state-derivation helper', () => {
     if (state2.kind !== 'partial_apply_pending') throw new Error('unreachable');
     expect(state1.lastAttemptAt).toBe(1_700_000_001_000);
     expect(state2.lastAttemptAt).toBe(1_700_000_002_000);
+  });
+});
+
+/**
+ * D4.a Commit 5c-3 — `reconcilePartialApplyAtBoot` tests.
+ *
+ * Cindy 5c-3 review baseline (4 gates):
+ *   1. profile read failure ⇒ `unusable_profile`
+ *   2. daemon-config absent + profile present ⇒ NOT direct success
+ *   3. auto-retry failure ⇒ `partial_apply_pending` + Retry preserved
+ *   4. bootstrap trigger doesn't block embedded startup (verified at
+ *      the call site in `index.ts`; reconcile itself is unit-tested
+ *      against substituted phase-2 deps)
+ *
+ * Strategy: substitute phase-2 with a deterministic stub that
+ * records the inputs it received. Reconcile becomes a pure
+ * orchestration test driven by the (profile-read, daemon-config,
+ * phase-2-outcome) triple.
+ */
+interface ReconcileFakeState {
+  phase2Calls: ServerConnectionProfile[];
+}
+
+interface ReconcileFakeOptions {
+  read: ReadProfileResult;
+  daemonConfig: DaemonHostConfig | null;
+  phase2Outcome?: ProfilePhase2Outcome;
+  /** Defaults to fixed clock at 1_700_000_500_000. */
+  now?: () => number;
+}
+
+function makeReconcileDeps(opts: ReconcileFakeOptions): {
+  deps: ReconcilePartialApplyDeps;
+  state: ReconcileFakeState;
+} {
+  const state: ReconcileFakeState = { phase2Calls: [] };
+  const phase2Outcome: ProfilePhase2Outcome =
+    opts.phase2Outcome ??
+    {
+      kind: 'fully_applied',
+      profileVersion: 0,
+      reloadKind: 'reloaded',
+      elapsedMs: 0,
+    };
+  const deps: ReconcilePartialApplyDeps = {
+    readProfile: () => opts.read,
+    readDaemonHostConfig: () => opts.daemonConfig,
+    runPhase2: async profile => {
+      state.phase2Calls.push(profile);
+      return phase2Outcome;
+    },
+    now: opts.now ?? (() => 1_700_000_500_000),
+  };
+  return { deps, state };
+}
+
+describe('reconcilePartialApplyAtBoot — Cindy gate 1: profile read failure → unusable_profile', () => {
+  // Pin all three failing read reasons separately. The discriminator
+  // must reach `state.reason` verbatim — `parse_failed` carries a
+  // detail; the other two reuse the reason name as detail.
+  it('decrypt_failed → unusable_profile/decrypt_failed', async () => {
+    const { deps, state } = makeReconcileDeps({
+      read: { ok: false, reason: 'decrypt_failed' },
+      daemonConfig: null,
+    });
+    const out = await reconcilePartialApplyAtBoot(deps);
+    expect(out).toEqual({
+      kind: 'unusable_profile',
+      reason: 'decrypt_failed',
+      detail: 'decrypt_failed',
+      lastReadAt: 1_700_000_500_000,
+    });
+    // gate 1 invariant: phase-2 MUST NOT run when profile is
+    // unreadable — there's no profile to derive daemon-config from.
+    expect(state.phase2Calls).toEqual([]);
+  });
+
+  it('parse_failed → unusable_profile/parse_failed (detail propagated)', async () => {
+    const { deps, state } = makeReconcileDeps({
+      read: { ok: false, reason: 'parse_failed', detail: 'invalid version field' },
+      daemonConfig: null,
+    });
+    const out = await reconcilePartialApplyAtBoot(deps);
+    expect(out).toEqual({
+      kind: 'unusable_profile',
+      reason: 'parse_failed',
+      detail: 'invalid version field',
+      lastReadAt: 1_700_000_500_000,
+    });
+    expect(state.phase2Calls).toEqual([]);
+  });
+
+  it('storage_unavailable → unusable_profile/storage_unavailable', async () => {
+    const { deps, state } = makeReconcileDeps({
+      read: { ok: false, reason: 'storage_unavailable' },
+      daemonConfig: null,
+    });
+    const out = await reconcilePartialApplyAtBoot(deps);
+    expect(out).toEqual({
+      kind: 'unusable_profile',
+      reason: 'storage_unavailable',
+      detail: 'storage_unavailable',
+      lastReadAt: 1_700_000_500_000,
+    });
+    expect(state.phase2Calls).toEqual([]);
+  });
+
+  // Distinct-from-no_profile pin: even if the daemon-config is
+  // ALSO absent (so the cheap inference might be "nothing
+  // configured"), an unreadable profile blob is still
+  // `unusable_profile`. Cindy 5c-1 note explicitly forbade
+  // collapsing to `<none>` / `no_profile` here.
+  it('decrypt_failed + no daemon-config → still unusable_profile (NOT no_profile)', async () => {
+    const { deps } = makeReconcileDeps({
+      read: { ok: false, reason: 'decrypt_failed' },
+      daemonConfig: null,
+    });
+    const out = await reconcilePartialApplyAtBoot(deps);
+    expect(out.kind).toBe('unusable_profile');
+  });
+});
+
+describe('reconcilePartialApplyAtBoot — no profile (not_found)', () => {
+  it('not_found → no_profile', async () => {
+    const { deps, state } = makeReconcileDeps({
+      read: { ok: false, reason: 'not_found' },
+      daemonConfig: null,
+    });
+    const out = await reconcilePartialApplyAtBoot(deps);
+    expect(out).toEqual({ kind: 'no_profile' });
+    expect(state.phase2Calls).toEqual([]);
+  });
+
+  // Even if a stale daemon-config exists from a previous claim, no
+  // profile = no profile to apply. The daemon's running config will
+  // be reconciled when the user next configures one (or signs in).
+  it('not_found + stale daemon-config → no_profile (still no profile to reconcile)', async () => {
+    const { deps, state } = makeReconcileDeps({
+      read: { ok: false, reason: 'not_found' },
+      daemonConfig: {
+        server_url: 'http://127.0.0.1:4321',
+        host_id: 'host-1',
+        host_token: 'tok-1',
+        profile_version: 5,
+      },
+    });
+    const out = await reconcilePartialApplyAtBoot(deps);
+    expect(out).toEqual({ kind: 'no_profile' });
+    expect(state.phase2Calls).toEqual([]);
+  });
+});
+
+describe('reconcilePartialApplyAtBoot — fast path: profile_version match', () => {
+  it('profile.version === daemon.profile_version → fully_applied (no phase-2)', async () => {
+    const { deps, state } = makeReconcileDeps({
+      read: { ok: true, profile: makeProfile({ version: 7 }) },
+      daemonConfig: {
+        server_url: 'http://127.0.0.1:4321',
+        host_id: 'host-1',
+        host_token: 'tok-1',
+        profile_version: 7,
+      },
+    });
+    const out = await reconcilePartialApplyAtBoot(deps);
+    expect(out).toEqual({ kind: 'fully_applied' });
+    // Fast-path: skip the phase-2 IPC roundtrip when there's
+    // demonstrably no drift.
+    expect(state.phase2Calls).toEqual([]);
+  });
+});
+
+describe('reconcilePartialApplyAtBoot — Cindy gate 2: drift triggers phase-2', () => {
+  // The phase-2 orchestrator owns the sub-cases (claim absent vs
+  // claim present + token absent vs full mismatch); reconcile just
+  // delegates. These tests pin the dispatch — that reconcile DOES
+  // call phase-2 with the right profile and routes the outcome
+  // through `derivePartialApplyState`.
+  it('profile present + daemon-config absent → runs phase-2 with the read profile', async () => {
+    const profile = makeProfile({ version: 4 });
+    const { deps, state } = makeReconcileDeps({
+      read: { ok: true, profile },
+      daemonConfig: null,
+      phase2Outcome: {
+        kind: 'fully_applied',
+        profileVersion: 4,
+        reloadKind: 'reloaded',
+        elapsedMs: 12,
+      },
+    });
+    const out = await reconcilePartialApplyAtBoot(deps);
+    expect(state.phase2Calls).toEqual([profile]);
+    expect(out).toEqual({ kind: 'fully_applied' });
+  });
+
+  it('profile_version mismatch → runs phase-2 (NOT fast-path)', async () => {
+    const profile = makeProfile({ version: 9 });
+    const { deps, state } = makeReconcileDeps({
+      read: { ok: true, profile },
+      daemonConfig: {
+        server_url: 'http://127.0.0.1:4321',
+        host_id: 'host-1',
+        host_token: 'tok-1',
+        profile_version: 8,
+      },
+    });
+    await reconcilePartialApplyAtBoot(deps);
+    expect(state.phase2Calls).toEqual([profile]);
+  });
+
+  // Legacy D3.x daemon-config has no `profile_version` field; it
+  // can't match anything (`undefined !== profile.version`), so we
+  // fall through to phase-2 to re-derive — never fast-path-skip.
+  it('legacy daemon-config without profile_version → runs phase-2 (no fast-path)', async () => {
+    const profile = makeProfile({ version: 1 });
+    const { deps, state } = makeReconcileDeps({
+      read: { ok: true, profile },
+      daemonConfig: {
+        server_url: 'http://127.0.0.1:4321',
+        host_id: 'host-1',
+        host_token: 'tok-1',
+        // intentionally no profile_version field
+      },
+    });
+    await reconcilePartialApplyAtBoot(deps);
+    expect(state.phase2Calls).toEqual([profile]);
+  });
+});
+
+describe('reconcilePartialApplyAtBoot — Cindy gate 3: phase-2 failure → partial_apply_pending', () => {
+  it('drift + phase-2 returns host_token_missing → partial_apply_pending preserves Retry', async () => {
+    const profile = makeProfile({ version: 6 });
+    const { deps } = makeReconcileDeps({
+      read: { ok: true, profile },
+      daemonConfig: null, // claimed host but no token
+      phase2Outcome: {
+        kind: 'partial_apply_pending',
+        profileVersion: 6,
+        reason: 'host_token_missing',
+        reloadRejectionReason: null,
+        detail: 'no host token in daemon-config for claimed host',
+      },
+      now: () => 1_700_000_700_000,
+    });
+    const out = await reconcilePartialApplyAtBoot(deps);
+    expect(out).toEqual({
+      kind: 'partial_apply_pending',
+      profileVersion: 6,
+      reason: 'host_token_missing',
+      reloadRejectionReason: null,
+      detail: 'no host token in daemon-config for claimed host',
+      lastAttemptAt: 1_700_000_700_000,
+    } satisfies PartialApplyState);
+  });
+
+  it('drift + phase-2 returns reload_rejected → partial_apply_pending with daemon reason', async () => {
+    const profile = makeProfile({ version: 2 });
+    const { deps } = makeReconcileDeps({
+      read: { ok: true, profile },
+      daemonConfig: {
+        server_url: 'http://127.0.0.1:4321',
+        host_id: 'host-1',
+        host_token: 'tok-1',
+        profile_version: 1,
+      },
+      phase2Outcome: {
+        kind: 'partial_apply_pending',
+        profileVersion: 2,
+        reason: 'reload_rejected',
+        reloadRejectionReason: 'invalid_server_url',
+        detail: 'daemon refused new server_url',
+      },
+    });
+    const out = await reconcilePartialApplyAtBoot(deps);
+    if (out.kind !== 'partial_apply_pending') throw new Error('unreachable');
+    expect(out.reason).toBe('reload_rejected');
+    expect(out.reloadRejectionReason).toBe('invalid_server_url');
+  });
+
+  // Cindy 5c-3 gate 3 explicit pin: NO_OP_NO_HOST_CLAIM (e.g. profile
+  // present but no claim yet) collapses to `fully_applied` via
+  // `derivePartialApplyState`. Verify that drift ⇒ phase-2 ⇒
+  // `no_op_no_host_claim` ⇒ `fully_applied` reaches the right state.
+  it('drift + no claim → phase-2 returns no_op_no_host_claim → fully_applied', async () => {
+    const profile = makeProfile({ version: 3 });
+    const { deps } = makeReconcileDeps({
+      read: { ok: true, profile },
+      daemonConfig: null,
+      phase2Outcome: { kind: 'no_op_no_host_claim', profileVersion: 3 },
+    });
+    const out = await reconcilePartialApplyAtBoot(deps);
+    expect(out).toEqual({ kind: 'fully_applied' });
   });
 });
