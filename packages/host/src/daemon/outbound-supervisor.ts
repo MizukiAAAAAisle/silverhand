@@ -38,7 +38,11 @@
  * Validation order (fail-closed, never mutate active client on error):
  *   1. `path_not_absolute`  — `!path.isAbsolute(configPath)`
  *   2. `path_not_found`     — `statSync` throws ENOENT
- *   3. `path_not_a_file`    — `statSync(...).isDirectory()`
+ *   3. `path_not_a_file`    — `!statSync(...).isFile()` (rejects
+ *                              directory, FIFO, socket, char/block
+ *                              device — anything that isn't a regular
+ *                              file). symlink-to-file is fine because
+ *                              `statSync` follows symlinks.
  *   4. `parse_failed`       — `readHostConfig` returns non-ok
  *   5. `invalid_server_url` — `hostConnectWebSocketUrl` throws
  *
@@ -132,10 +136,18 @@ export class OutboundSupervisor {
         (err as NodeJS.ErrnoException).message,
       );
     }
-    if (stat.isDirectory()) {
+    if (!stat.isFile()) {
+      // Rejects directory, FIFO, socket, char/block device, and any
+      // other non-regular file. The FIFO case is the dangerous one:
+      // a later `readFileSync` on a FIFO would block the daemon
+      // event loop indefinitely, which would freeze the IPC
+      // dispatcher and break the "bad attach request must not take
+      // down a working daemon" contract. `statSync` follows symlinks
+      // so symlink-to-file is accepted; symlink-to-directory /
+      // symlink-to-FIFO are rejected here (the target stat decides).
       return failure(
         'path_not_a_file',
-        `config_path is a directory: ${configPath}`,
+        `config_path is not a regular file: ${configPath}`,
       );
     }
 

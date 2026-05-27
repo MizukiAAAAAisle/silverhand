@@ -202,6 +202,19 @@ describe('OutboundSupervisor — validation matrix (fail-closed; never mutates a
     expect(f.spawned).toEqual([]);
   });
 
+  it('rejects non-regular file (character device /dev/null) with reason=path_not_a_file — guards against FIFO/socket/device readFileSync hang (Cindy review)', () => {
+    // /dev/null is a character device on macOS + Linux: statSync says
+    // !isFile() && !isDirectory(). If the supervisor fell through to
+    // readHostConfig, /dev/null would yield an empty string and we'd
+    // wrongly land in parse_failed; a FIFO would actually block the
+    // daemon event loop indefinitely. Both classes must be rejected
+    // at the stat layer before any read happens.
+    f = makeFixture();
+    const res = f.supervisor.attach({ config_path: '/dev/null' });
+    expect(res).toMatchObject({ attached: false, reason: 'path_not_a_file' });
+    expect(f.spawned).toEqual([]);
+  });
+
   it('rejects unparseable JSON with reason=parse_failed', () => {
     f = makeFixture();
     const path = f.writeInvalidJson();
@@ -245,6 +258,7 @@ describe('OutboundSupervisor — validation matrix (fail-closed; never mutates a
     f.supervisor.attach({ config_path: 'relative.json' });
     f.supervisor.attach({ config_path: join(f.tmp, 'missing.json') });
     f.supervisor.attach({ config_path: f.writeDirectory('dir2') });
+    f.supervisor.attach({ config_path: '/dev/null' });
     f.supervisor.attach({ config_path: f.writeInvalidJson('bad-json.json') });
     f.supervisor.attach({ config_path: f.writeInvalidShape('bad-shape.json') });
     f.supervisor.attach({
