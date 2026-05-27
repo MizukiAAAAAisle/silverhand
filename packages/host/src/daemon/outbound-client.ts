@@ -14,6 +14,7 @@ import {
   DAEMON_HOST_CONFIG_FILENAME,
   DaemonHostConfigSchema,
   apiPaths,
+  isLoopbackHost as sharedIsLoopbackHost,
   type DaemonHostConfig,
 } from '@silverhand/shared';
 import {
@@ -1013,8 +1014,12 @@ function closeClass(code: number): 'normal' | 'going_away' | 'abnormal' | 'other
 }
 
 function isLoopbackHost(hostname: string): boolean {
-  const h = hostname.toLowerCase();
-  return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]';
+  // D3.c Commit 1: delegate to the shared `@silverhand/shared`
+  // classifier so renderer / main / daemon never drift on what
+  // "loopback host in V1" means. The local thunk stays so the rest
+  // of this file reads the same, but the allowlist itself lives in
+  // exactly one place.
+  return sharedIsLoopbackHost(hostname);
 }
 
 function redactConfigPath(path: string): string {
