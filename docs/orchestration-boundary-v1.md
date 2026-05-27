@@ -1,6 +1,6 @@
 # Orchestration boundary — V1 (D2.0 design pass)
 
-**Status**: DRAFT Rev 4. D1 complete; D2.0 design pass while D1 soaks. No code change in this stage — this doc only locks the contract for where each responsibility lives in the V1 remote-backend topology. Revision 1 (2026-05-26) folded @Cindy round-1 review; Revision 2 (2026-05-26) folded @Cindy round-2 review; Revision 3 (2026-05-26) folded @Cindy round-3 mechanical-shape-drift findings in §3.3. **Revision 4 (2026-05-27)** corrects the prompt/memory/consensus byte-ownership claim: under the V1 topology lock (daemon + agent always run on the user's desktop; server is control/state plane only), `system_prompt.md` / `MEMORY.md` / `CONSENSUS.md` byte content is **daemon-host local-fs truth**, not server-owned data. D2.1 (file → DB migration) is downgraded from "remote-deploy hard prerequisite" to **future / triggered by sandbox host or multi-device memory sync**. See §9.
+**Status**: DRAFT Rev 5. D1 complete; D2.0 design pass while D1 soaks. No code change in this stage — this doc only locks the contract for where each responsibility lives in the V1 remote-backend topology. Revision 1 (2026-05-26) folded @Cindy round-1 review; Revision 2 (2026-05-26) folded @Cindy round-2 review; Revision 3 (2026-05-26) folded @Cindy round-3 mechanical-shape-drift findings in §3.3. **Revision 4 (2026-05-27, contract anchor `81996a6`)** corrects the prompt/memory/consensus byte-ownership claim: under the V1 topology lock (daemon + agent always run on the user's desktop; server is control/state plane only), `system_prompt.md` / `MEMORY.md` / `CONSENSUS.md` byte content is **daemon-host local-fs truth**, not server-owned data. **Revision 5 (2026-05-27, D2.g corrective slice)** clarifies the path boundary: server DB path metadata (`agent.home_dir`, `workspace.path`, `workspace_memory_index[].path`) may cross as typed records; daemon-host derives cwd, prompt paths, spawn dirs, and env locally. D2.1 (file -> DB migration) is downgraded from "remote-deploy hard prerequisite" to **future / triggered by sandbox host or multi-device memory sync**. See §9.
 
 **Predecessor docs to read first**:
 - `docs/remote-server-target-architecture.md` — target topology
@@ -42,10 +42,11 @@ Therefore, in V1:
   anything server-side; the prompt rendered to the agent is rendered
   on the daemon-host from daemon-local fs reads.
 - **Server still owns identity** (which agent / which workspace /
-  which conversation) and **logical metadata** (workspace kind, agent
-  handle, role labels, path-strategy tokens). Daemon-host expands
-  identity + metadata into local fs paths and reads bytes from those
-  paths.
+  which conversation) and **metadata** (workspace kind, agent handle,
+  role labels, `agent.home_dir`, `workspace.path`). These path strings
+  are DB metadata, not server-side fs operations. Daemon-host expands
+  the typed metadata into cwd, prompt-file paths, spawn dirs, and
+  local reads.
 
 This corollary is what makes "server is in a different trust domain"
 work without D2.1: there is nothing for the server to ship down,
@@ -93,8 +94,8 @@ Server owns and is the only writer of:
   (Future sandbox / daemon-local blob cache is a separate storage tier;
   see §5.1.)
 - **Agent / workspace identity & metadata** — DB-row content for agents
-  (`agents` row: id, display_name, handle, runtime, model, role-label,
-  …), workspaces (`workspaces` row: id, kind, name, path-strategy, …),
+  (`agents` row: id, display_name, handle, runtime, model, home_dir,
+  …), workspaces (`workspaces` row: id, kind, name, path, …),
   workspace consensus *metadata* (e.g. revision pointer, member list).
   Server is the only writer. **Server does NOT own the byte content
   of `system_prompt.md`, `MEMORY.md`, or `CONSENSUS.md` — those are
@@ -131,12 +132,12 @@ Server owns and is the only writer of:
 Server **must not**:
 
 - Read/write the user's filesystem (no `node:fs` against user-machine
-  paths — `workspace_path` / agent L1 (`~/.silverhand/agents/<id>`) /
-  agent L2 (`<workspace>/.silverhand/agents/<id>`) / per-spawn shim dirs
-  / driver-tool working dirs)
-- Resolve workspace local paths (`workspace.workspace_path` is opaque
-  from server's perspective; only the daemon-host knows the real
-  on-disk path)
+  paths — workspace path metadata, agent L1 home, agent L2 directories,
+  per-spawn shim dirs, or driver-tool working dirs)
+- Treat DB path metadata as an execution handle. The server may store
+  and send `agent.home_dir` / `workspace.path` as typed metadata, but
+  must not `stat`, `open`, `readFile`, `writeFile`, `mkdir`, `rm`, or
+  derive cwd/spawn/prompt paths from those strings.
 - Compose agent `process.env` (no `SILVERHAND_*` env synthesis bound
   to a daemon process; server ships an env *policy*, daemon applies)
 - Spawn child processes or write per-spawn shim files
@@ -150,9 +151,10 @@ Server **must not**:
   CONSENSUS bytes attached to any intent or response).
 - **Compose the agent's prompt block** (no server-side
   `buildPromptContext`, `buildSystemPromptFor`, `prepareSpawnFiles`,
-  or any helper that materializes the per-spawn `system-prompt.md`).
-  Prompt assembly is daemon-host work; server ships identity +
-  metadata bundles (§4) and a `runtime_start` intent.
+  or any helper that materializes the per-spawn `system-prompt.md`
+  from prompt/memory/consensus bytes). Prompt assembly is daemon-host
+  work; server ships identity + metadata bundles (§4) and a
+  `runtime_start` intent.
 
 ### 3.2 Daemon-host-only (machine-local execution)
 
@@ -164,8 +166,8 @@ Daemon-host owns and is the only writer of:
   in V1 main (server data dir — see §3.1).
 - Workspace materialization: creating `<workspace>/.silverhand/`
   directory tree, seeding agent L2 (`MEMORY.md` / `notes/` /
-  `CONSENSUS.md` skeleton), resolving `workspace_path` from logical
-  workspace id to absolute path on this host
+  `CONSENSUS.md` skeleton), and deriving local runtime paths from the
+  typed `workspace.path` metadata it receives.
 - Agent L1/L2 fs mutation: `~/.silverhand/agents/<id>/system_prompt.md`
   + `MEMORY.md` + `notes/*.md` writes, `<workspace>/.silverhand/agents/<id>/`
   scaffolding, agent-deletion `fs.rm` of L1/L2 directories
@@ -195,9 +197,10 @@ Daemon-host owns and is the only writer of:
   on the same daemon-host edits them via its own driver tools.
 - L1/L2/CONSENSUS **prompt-file materialization & path rendering**:
   rendering daemon-local absolute paths into the per-spawn
-  `system-prompt.md`, expanding `role_pointer` / memory-index path
-  tokens to absolute paths, writing the per-spawn shim. This is the
-  same fs the bytes live on — so materialization is purely local.
+  `system-prompt.md`, deriving memory paths from `agent.home_dir`,
+  `workspace.path`, and `workspace_memory_index[].path`, writing the
+  per-spawn shim. This is the same fs the bytes live on — so
+  materialization is purely local.
 - `notes/*.md` content lifecycle: notes are daemon-host local working
   storage for agent runtime (agent uses Read/Write tools at runtime).
   See §6 for the explicit decision and three guardrails.
@@ -237,23 +240,30 @@ this section reproduces the canonical shapes (preserving PR-2's
 V1 vocabulary. **Additions need an explicit D2.0 amendment, not silent
 expansion in D2/D3 PRs.**
 
-**Path / byte invariant (Rev 4 LOCK)**: every server → daemon intent
-parameter that has the shape of a path, a directory, a cwd, an env
-value, or a content-bytes blob is **forbidden** from carrying
-server-resolved fs values. Concretely, `runtime_start.options` (and
-its `.session` / `.workspace` / `.agent_profile` / `.env_policy`
-sub-bundles per §4.0–§4.3) MUST NOT contain:
+**Path / byte invariant (Rev 5 LOCK, D2.g)**: path strings that are
+server DB metadata may cross the boundary as typed records. In V1 that
+means `agent.home_dir`, `workspace.path`, and
+`workspace_memory_index[].path`. What may **not** cross are
+daemon-derived execution artifacts, prompt/memory/consensus bytes, or
+precomposed child-process env maps. Concretely,
+`runtime_start.options` MUST be `.strict()` typed metadata and MUST
+NOT contain:
 
-- absolute fs paths the server resolved (e.g. `system_prompt_path`,
-  `cwd`, `workspace_path`, `agent_l2_dir`, per-spawn shim dirs)
-- the *content* of `system_prompt.md` / `MEMORY.md` /
-  `CONSENSUS.md` / `notes/*.md`
-- composed `process.env` maps with daemon-process-resolved values
+- `cwd`
+- legacy flat `workspace_path`
+- `system_prompt_path`
+- `spawn_dir`
+- `system_prompt` / `system_prompt_text`
+- `memory_text`
+- `consensus_text`
+- precomposed `env` maps
 
-These would all break the moment server runs in a different trust
-domain from daemon (and even in V1 embedded mode they violate the
-contract). Schema reviews for the protocol package must reject any
-such field on sight; "passthrough options" is not an escape hatch.
+Allowed path metadata is data; forbidden fields are behavior or bytes.
+The daemon-host uses the allowed base metadata to derive cwd, L1/L2 /
+CONSENSUS paths, per-spawn `system-prompt.md`, shim dirs, and final
+child env locally. Schema reviews for the protocol package must reject
+unknown keys and the blacklist above on sight; "passthrough options" is
+not an escape hatch.
 
 **Direction key**: "Req" = request from server, daemon replies with a
 matching **response** (sync, single arm). "Event" = unsolicited from
@@ -263,7 +273,7 @@ daemon, no reply — server fans out via the activity log / SSE bus.
 
 | Intent | Request params | Response arms |
 |--------|----------------|---------------|
-| `runtime_start` | `{ conversation_id, agent_id, options, startup_delivery? }` where `options` carries `runtime` (driver kind), `model`, `reasoning_effort`, `fast_mode`, `cli_session_id?` + workspace bundle (§4.1) + session bundle (§4.0) + agent profile bundle (§4.2) + env policy (§4.3); `startup_delivery?` = `{ delivery_ids[], text }` per Option A v2 (unencoded text — daemon encodes) | discriminated by `started`: `{ started: true, pid, started_at, startup_delivery_accepted? }` / `{ started: false, reason: 'init_cooldown', cooldown_until }`. Note `startup_delivery_accepted` is "attempt accepted", NOT "consumed" — the async `runtime_startup_delivery_consumed` event is the consumed signal. |
+| `runtime_start` | `{ conversation_id, agent_id, options, startup_delivery? }` where `options` carries typed server metadata: `agent: { id, name, home_dir }`, `workspace: { id, name, kind, path }`, `workspace_memory_index[]`, `session: { conversation_id, kind, title, parent_conversation_id?, parent_title?, spawned_by_agent_id?, members[] }`, `driver: { kind, cli_session_id?, model?, reasoning_effort?, fast_mode? }`, and `env_policy` (§4.3). `startup_delivery?` = `{ delivery_ids[], text }` per Option A v2 (unencoded text — daemon encodes or passes as oneShot initial input). | discriminated by `started`: `{ started: true, pid, started_at, startup_delivery_accepted? }` / `{ started: false, reason: 'init_cooldown', cooldown_until }`. Note `startup_delivery_accepted` is "attempt accepted", NOT "consumed" — the async `runtime_startup_delivery_consumed` event is the consumed signal. |
 | `runtime_stop` | `{ conversation_id, agent_id, mode: 'soft' \| 'hard', soft_directive? }` per PR-2 Option A v2: `soft_directive` is **required** when `mode === 'soft'` (unencoded text, daemon encodes), **forbidden** when `mode === 'hard'` | discriminated by `mode`: `hard: { mode: 'hard', stopped, exit_code: number \| null }` (`exit_code` required-nullable — real value may ride on `runtime_exit` event when SIGTERM cascade still pending) / `soft: { mode: 'soft', directive_delivered, reason? in ['not_running' \| 'write_failed' \| 'driver_refused'] }` where `reason` is **required iff `directive_delivered === false`** and **forbidden iff `=== true`** (PR-2 `eMcEhycw8fQwucis` discriminator). **`directive_delivered === false` does NOT mean stopped** — soft never terminates the runtime. |
 | `runtime_clear_session` | `{ conversation_id, agent_id }` | `{ cleared: boolean }` |
 | `runtime_wake` | `{ conversation_id, agent_id, delivery_ids[], kind: 'message' \| 'schedule_fire', text }` where `text` is the server-hydrated *unencoded* delivery text (Option A v2 — daemon's driver instance encodes via `encodeStdinMessage(text, cliSessionId)` before writing stdin). `kind` is the PR-2 enum; expanding it requires a D2.0 amendment. | `{ delivered: true, delivery_ids[] }` / `{ delivered: false, delivery_ids[], reason in ['not_running' \| 'not_initialized' \| 'startup_pending' \| 'draining' \| 'driver_not_ready' \| 'driver_refused'] }` (failure carries the same `delivery_ids` so the caller keeps every row pending — no partial mark, per PR-2 §4.3 all-or-nothing) |
@@ -317,26 +327,25 @@ versioned together with the protocol vocabulary in §3.3.
 ### 4.0 Session bundle (per spawn / wake)
 
 The session bundle answers "which conversation, with whom, with what
-parentage" — the data `buildPromptContext` consumes today to render
+parentage" — the data daemon-host prompt hydration consumes to render
 the platform prompt's session-context block. It rides on
 `runtime_start.options` (and is implicit context for any subsequent
 `runtime_wake` against the same conversation).
 
-- `conversation_id`, `conversation_kind` (`channel` | `dm_channel` |
-  `thread`), `conversation_title`
-- `thread_parent_id?`, `thread_parent_title?` — populated when
-  `conversation_kind == 'thread'`
+- `conversation_id`, `kind` (`channel` | `dm_channel` |
+  `thread`), `title`
+- `parent_conversation_id?`, `parent_title?` — populated when
+  `kind == 'thread'`
 - `spawned_by_agent_id?` — non-null when this thread was opened by
   another agent (drives the "agent-spawned child session" framing)
-- `conversation_members[]` — ids + display names + handles + kind
+- `members[]` — ids + display names + handles + kind
   (agent / human) from `conversation_agents` × `membership` (NOT
   workspace_users; the prompt's "Members" list is conversation-scoped)
 - `workspace_memory_index[]` — for this agent, every workspace it is
-  a member of, with a label and a *logical* memory path token. The
-  daemon renders the token to an absolute path locally (it owns the
-  path map); the server only ships the workspace id + workspace kind
-  + label so the daemon can compute "`<workspace>/.silverhand/agents/<id>/MEMORY.md`"
-  vs "`~/.silverhand/agents/<id>/MEMORY.md`" for `agent_home`.
+  a member of, as typed metadata `{ id, name, kind, path }`. `path` is
+  the workspace base path stored in the server DB. The daemon renders
+  `<path>/.silverhand/agents/<agent_id>/MEMORY.md` locally; it does
+  not receive memory bytes.
 
 ### 4.1 Workspace bundle (per spawn)
 
@@ -344,12 +353,13 @@ The workspace bundle is the per-spawn workspace context — distinct
 from the session bundle because workspace data is stable across
 conversations within a workspace.
 
-- `workspace_id`, `workspace_kind` (`regular` | `dm` | `agent_home`),
-  `workspace_name`
-- `workspace_path_strategy` — a logical instruction for "where this
-  daemon puts workspaces of this kind" (V1 local daemon already has a
-  convention: `~/.silverhand/workspaces/<id>`); future remote daemon
-  defines its own convention. Server never ships an absolute path.
+- `id`, `kind` (`regular` | `dm` | `agent_home`), `name`, `path`
+- `path` is the workspace base path stored in the server DB. It may be
+  the default convention (`~/.silverhand/workspaces/<id-or-name>`) or
+  an arbitrary user-selected project directory such as
+  `/Users/shiki/workspace/silverhand`. The server may ship this string
+  as metadata; the daemon-host is the side that uses it as a local fs
+  base.
 
 **Explicitly NOT in this bundle**: `consensus_text`. Consensus
 *byte content* lives on daemon-host disk (`<workspace>/.silverhand/CONSENSUS.md`),
@@ -363,18 +373,18 @@ that lives in §4.0 (conversation-scoped), not workspace (workspace
 membership is a different list and is not what the prompt's "Members"
 block renders).
 
-### 4.2 Agent profile bundle (per spawn)
+### 4.2 Agent bundle (per spawn)
 
-- `agent_id`, `display_name`, `handle`, `runtime` (`claude` | `codex` | ...)
-- `role_pointer` — **logical pointer / label** the daemon expands
-  locally into a fs path when rendering the prompt (so the prompt
-  can say "edit `~/.silverhand/agents/<id>/system_prompt.md`").
-  Server never ships an absolute path; the daemon owns the path map.
+- `id`, `name`, `home_dir`
+- `home_dir` is the agent L1 base path stored in the server DB (or the
+  server's compatibility fallback for legacy rows). The daemon-host
+  renders `<home_dir>/system_prompt.md` locally and reads the bytes
+  there; the server never reads or ships those bytes.
 
-**Runtime options** (carried on `runtime_start.options` alongside
-this bundle): `model`, `reasoning_effort`, `fast_mode`,
-`cli_session_id?`. These are listed here for completeness; they are
-not "profile data" but per-spawn driver options.
+**Runtime options** (carried in `runtime_start.options.driver`):
+`kind`, `model`, `reasoning_effort`, `fast_mode`, `cli_session_id?`.
+These are listed here for completeness; they are not "profile data"
+but per-spawn driver options.
 
 **Explicitly NOT in this bundle**: `system_prompt_text`, `memory_text`,
 `notes_index[]`. The byte content of `system_prompt.md` and `MEMORY.md`
@@ -385,22 +395,20 @@ to hint about notes, the **daemon** enumerates and renders locally.
 
 ### 4.3 Env policy (per spawn)
 
-The server does NOT compose `process.env`. The server ships an **env policy**:
+The server does NOT compose `process.env`. The server ships an **env
+policy** with explicit fields:
 
-- `silverhand_vars` — `SILVERHAND_SERVER_URL`, `SILVERHAND_AUTH_TOKEN`
-  (see `packages/shared/src/config.ts`), `SILVERHAND_WORKSPACE_ID`,
-  `SILVERHAND_CONVERSATION_ID`, `SILVERHAND_AGENT_ID` — values the
-  server computes, daemon applies as-is
-- `driver_vars` — driver-specific keys (e.g. `ANTHROPIC_API_KEY` policy:
-  whose key, which model). V1 daemon-local fallback only (Q3); the
-  server does **not** ship provider secrets to the daemon in V1. Any
-  per-user secret routing is deferred to D3 alongside secret store /
-  encryption / rotation / audit design.
-- `path_prefix` — name of the per-spawn shim dir the daemon will create
-  (daemon decides absolute path, server only knows the name)
+- `silverhand: { server_url, auth_token }` — values the daemon applies
+  as `SILVERHAND_SERVER_URL` / `SILVERHAND_AUTH_TOKEN` plus the
+  protocol ids it already has (`conversation_id`, `agent_id`).
+- `silverhand_cli: { command, args, env_vars? }` — launcher metadata
+  for the local `silverhand` shim. `env_vars` is an explicit launcher
+  field, not a generic child env map.
+- `proxy: { url, allowlist }` — the user-configured proxy policy from
+  server settings; daemon applies it only when the runtime is allowed.
 
-The daemon merges policy into its own `process.env` + per-spawn shim
-+ `driver.applyEnv()` (driver-specific env transform; daemon-side only,
+The daemon merges policy into its own `process.env` + per-spawn shim +
+`driver.applyEnv()` (driver-specific env transform; daemon-side only,
 never invoked on the server), spawns the child, wires stdin/stdout.
 
 ### 4.4 Blob bytes (server-owned in V1 main)
@@ -487,21 +495,22 @@ does not re-derive the encoding boundary mid-PR.
 The daemon-host is the only side that reads prompt / memory /
 consensus byte content. At spawn time (handling a `runtime_start`
 intent), the daemon reads the following from its **own local fs**,
-keyed entirely by identity / metadata received in §4.0–§4.3:
+keyed entirely by typed metadata received in §4.0–§4.3:
 
 | Source | Path (daemon resolves locally) | Cap | Use |
 |--------|--------------------------------|-----|-----|
-| Agent identity (L1) | `~/.silverhand/agents/<agent_id>/system_prompt.md` | none (file is small) | "Initial role" block in per-spawn `system-prompt.md` |
-| Workspace memory (L2) | `<workspace_path>/.silverhand/agents/<agent_id>/MEMORY.md` | `MEMORY_INJECT_CAP_BYTES` (16KB) | "Active Workspace Memory" block |
-| Workspace consensus | `<workspace_path>/.silverhand/CONSENSUS.md` | `CONSENSUS_INJECT_CAP_BYTES` (4KB) | "Workspace Consensus" block; skipped when `workspace_kind ∈ {dm, agent_home}` |
-| Memory index | enumerate every workspace this agent is in (from §4.0 `workspace_memory_index[]`) → resolve each entry's `<workspace>/.silverhand/agents/<agent_id>/MEMORY.md` path | path-only, no read | "Workspace Memory Index" block (paths only, current workspace's MEMORY.md is the one read above) |
+| Agent identity (L1) | `<agent.home_dir>/system_prompt.md` | none (file is small) | "Initial role" block in per-spawn `system-prompt.md` |
+| Workspace memory (L2) | `<workspace.path>/.silverhand/agents/<agent.id>/MEMORY.md` | `MEMORY_INJECT_CAP_BYTES` (16KB) | "Active Workspace Memory" block |
+| Workspace consensus | `<workspace.path>/.silverhand/CONSENSUS.md` | `CONSENSUS_INJECT_CAP_BYTES` (4KB) | "Workspace Consensus" block; skipped when `workspace.kind ∈ {dm, agent_home}` |
+| Memory index | use each `workspace_memory_index[].path` to render `<path>/.silverhand/agents/<agent.id>/MEMORY.md` | path-only, no read | "Workspace Memory Index" block (paths only, current workspace's MEMORY.md is the one read above) |
 
-The shared formatter helpers that build each block (today
-`buildPromptContext` / `buildSystemPromptFor` and the read-with-cap
-utilities) live in `packages/shared` and are invoked **by the daemon
-process only**. The byte-identical-assembly rule still holds: server
-and daemon use the same formatter contract, but in V1 only daemon
-calls it. Server has no caller, no fs read, no helper invocation.
+The shared formatter helper that renders the final prompt text
+(`buildSystemPromptFor`) lives in `packages/shared` and is invoked
+**by the daemon process only**. Daemon-only helpers own local
+read-with-cap and `DriverPromptContext` construction. The
+byte-identical-assembly rule still holds through the shared formatter
+contract, but in V1 only daemon calls it. Server has no caller, no fs
+read, no prompt context builder invocation.
 
 If a file is missing or unreadable, the daemon emits the section
 header with an empty body or omits the section per current
@@ -515,16 +524,16 @@ Each row names the V1 destination + the migration step (D2 / D2.1 / D3).
 
 | Module | Today | V1 destination | Step | Notes |
 |--------|-------|----------------|------|-------|
-| `spawn-prep.ts` | backend writes per-spawn shim + system-prompt.md | **daemon-host** | D2 | Already isolated; backend wraps as `runtime_start` params (session + workspace + profile + env-policy bundles per §4.0–§4.3) + optional `startup_delivery.text` (§4.5 Option A v2); daemon executes |
+| `spawn-prep.ts` | backend wrote per-spawn shim + system-prompt.md | **daemon-host** | D2.g implemented | Backend helper deleted. Daemon writes per-spawn `system-prompt.md` + `bin/silverhand` shim from typed `runtime_start.options`; backend sends session + workspace + agent + env-policy metadata (§4.0–§4.3) + optional `startup_delivery.text` (§4.5 Option A v2) only |
 | `workspace-files.ts` | backend reads/writes workspace `.silverhand/` | **daemon-host** | D2 | Materialization moves to daemon; server ships workspace bundle (§4.1) |
-| `agent-profile.ts` | path construction for L1/L2 dirs | **split** | D2 | Logical agent profile data + DTOs → server. **Daemon-local absolute/relative L1/L2 path rendering** (`activeAgentProfileDir`, `agentL1ProfileDir`, `agentMemoryDirFor`) → daemon. Server **never** renders a server-side path into anything the agent can use. |
+| `agent-profile.ts` | path construction for L1/L2 dirs | **split** | D2.g implemented for runtime_start | Agent/workspace path metadata rows stay server-owned and cross as typed `agent.home_dir` / `workspace.path`. **Daemon-local L1/L2 path rendering** (`<home_dir>/system_prompt.md`, `<workspace.path>/.silverhand/agents/<id>/MEMORY.md`) happens on daemon-host. |
 | `agent-workspace.ts` | backend ensures workspace dir exists per agent | **daemon-host** | D2 | Pure materialization |
 | `storage/blob-file-storage.ts` | backend `node:fs` blob R/W | **server (unchanged)** | — | **Q1 decision**: blob bytes are server data (§3.1 / §4.4). No relocation; the existing put/serve/locate/delete + sweep stays server-side. |
-| `runtime/spawn-env.ts` | backend composes spawn env | **split** | D2 | Policy composition (§4.3, including `silverhand_vars` value computation) → server. `process.env` merge + per-spawn shim path + `driver.applyEnv(process.env)` invocation → daemon. **Server never invokes `driver.applyEnv`** — that's a daemon-side step against the daemon's own process env. |
-| `runtime/prompt-context.ts` | backend reads L1/L2/CONSENSUS files + composes `DriverPromptContext` | **daemon-host** | D2 | Rev 4 LOCK: in V1 topology server has no business reading these bytes (§1.1 / §3.1). All of `readFileWithCap`, `MEMORY_INJECT_CAP_BYTES`, `CONSENSUS_INJECT_CAP_BYTES`, `buildWorkspaceMemoryIndex`, `buildPromptContext`, `buildSystemPromptFor`, and per-spawn `system-prompt.md` materialization run on the daemon. Shared formatter helpers move to `packages/shared` so the byte-identical-assembly contract stays a *contract* (today only daemon calls it). **Server backend MUST NOT import or call any helper that reads these files** — this is a calling-boundary rule, not just a module-location rule (§5.2). |
+| `runtime/spawn-env.ts` | backend composed spawn env | **daemon-host** | D2.g implemented for runtime_start | Backend helper deleted from the runtime_start path. Env policy (§4.3, including server URL/token, launcher metadata, proxy policy) is built in `runtime-start-options.ts`; `process.env` merge + per-spawn shim path + `driver.applyEnv(process.env)` invocation happens in daemon-host `spawn-env.ts`. **Server never sends a generic env map and never invokes `driver.applyEnv`**. |
+| `runtime/prompt-context.ts` | backend reads L1/L2/CONSENSUS files + composes `DriverPromptContext` | **daemon-host** | D2.g implemented | Rev 5 LOCK: in V1 topology server has no business reading these bytes (§1.1 / §3.1). Daemon-local helpers perform read-with-cap, memory-index path rendering, `DriverPromptContext` construction, shared `buildSystemPromptFor` invocation, and per-spawn `system-prompt.md` materialization. **Server backend MUST NOT import or call any helper that reads these files or returns composed prompt text** — this is a calling-boundary rule, not just a module-location rule (§5.2). |
 | `runtime/activity-log-writer.ts` | backend writes activity JSONL from daemon events | **server (unchanged)** | — | PR-2 §4.2 + §4.3 lock: daemon emits `runtime_output` + control events; server persists JSONL and republishes via SSE. `runtime_close_activity_log` semantics = daemon flushes outbound buffers → server closes its writer. |
 | `runtime/run-state-cache.ts` | in-memory cache server-side | **daemon-host primary**, server projection mirror | D2 | Daemon is source of truth (per host); server caches a per-host projection for ACL'd HTTP / SSE consumers. Server projection is rebuilt from `runtime_state` events; not persisted. |
-| `runtime/daemon-agent-runtime-host.ts` | backend proxy to daemon | **server (unchanged)** | — | Server-side IPC client — correct boundary already |
+| `runtime/daemon-agent-runtime-host.ts` | backend proxy to daemon | **server (unchanged)** | D2.g corrected | Server-side IPC client. It may format server-owned delivery text and build typed `runtime_start.options`, but MUST NOT hydrate prompt bytes, prepare spawn files, derive cwd/spawn paths, or compose child env. |
 | `runtime/daemon-runtime-wiring.ts` | backend wires daemon for embedded | **server (unchanged)** | — | Dynamic-import boundary stays; standalone mode skips this entirely |
 | `runtime/control-plane-runtime-host.ts` | standalone fail-loud stub | **server (unchanged)** | — | Correct |
 | `runtime/delivery-coordinator.ts` | backend orchestrates deliveries | **server (unchanged)** | — | Server-owned per §3.1. PR-2 §4.3 locks this. |
@@ -555,7 +564,7 @@ Each row names the V1 destination + the migration step (D2 / D2.1 / D3).
 - OAuth / invite / multi-tenant — out of V1 entirely.
 - `notes/` portability across hosts — see §6 guardrail 3.
 
-### 5.2 Calling-boundary rule (Rev 4 LOCK)
+### 5.2 Calling-boundary rule (Rev 5 LOCK, anchor `81996a6`)
 
 Code-relocation map rows above name the *destination package* for each
 module. That's necessary but not sufficient — server backend can
@@ -565,14 +574,14 @@ helper that reads daemon-host files, even if the helper "lives" in
 
 - **Server backend (`packages/backend`) MUST NOT call any function
   whose effect is to read `system_prompt.md` / `MEMORY.md` /
-  `CONSENSUS.md` / `notes/*.md` bytes from disk, or to materialize
-  per-spawn `system-prompt.md`, regardless of which package the
-  function is declared in.** This includes `buildPromptContext`,
-  `buildSystemPromptFor`, `prepareSpawnFiles`, `readFileWithCap`
-  against any of those files, `buildWorkspaceMemoryIndex` (when the
-  index includes file content), and any future helper that takes an
-  agent_id / workspace_id and returns prompt/memory/consensus bytes
-  or composed prompt text.
+  `CONSENSUS.md` / `notes/*.md` bytes from disk, derive daemon
+  execution paths (`cwd`, `system_prompt_path`, `spawn_dir`), compose
+  child `process.env`, or materialize per-spawn `system-prompt.md`,
+  regardless of which package the function is declared in.** This
+  includes daemon prompt-context builders, daemon spawn-prep helpers,
+  read-with-cap against any of those files, and any future helper that
+  takes an agent_id / workspace_id and returns prompt/memory/consensus
+  bytes or composed prompt text.
 - The daemon-host (today `packages/host`, plus the in-process daemon
   inside `apps/desktop` Electron main) is the only legitimate caller.
 - D2 implementation reviews must run a static check (manual grep is
@@ -581,9 +590,9 @@ helper that reads daemon-host files, even if the helper "lives" in
   amendment-required signal, not a "fix it later" item.
 
 This rule prevents the failure mode Cindy flagged in the kickoff:
-`RuntimeStart.options` passthrough silently carrying server-resolved
-fs values. The protocol schema (§3.3) blocks the *wire format* side;
-this rule blocks the *call-graph* side.
+`RuntimeStart.options` passthrough silently carrying derived fs values,
+prompt bytes, or composed env. The protocol schema (§3.3) blocks the
+*wire format* side; this rule blocks the *call-graph* side.
 
 ## 6. Storage boundary follow-ups
 
@@ -690,7 +699,9 @@ D2.0 acceptance = **this doc accepted by shiki**. Concretely:
    (server→daemon requests + daemon→server unsolicited events;
    additions need explicit D2.0 amendment, not silent expansion in
    D2 PRs); the path / byte invariant in §3.3 lead-in is binding —
-   no `RuntimeStart.options` passthrough of server-resolved fs values
+   `RuntimeStart.options` is strict typed metadata, allowing
+   `agent.home_dir` / `workspace.path` path records but forbidding
+   cwd / prompt paths / spawn dirs / prompt bytes / env maps
 4. Data bundles (§4.0–§4.6) accepted as the cross-boundary data
    contract; §4.6 daemon-host self-hydration is the only place
    prompt/memory/consensus bytes are read in V1
@@ -742,11 +753,13 @@ Revision 1 closed all three open questions per shiki/Cindy alignment
   end-to-end; server has zero responsibility for these bytes.**
   Server owns identity rows + logical metadata; daemon-host reads
   from local fs at spawn time (§4.6) and composes the per-spawn
-  prompt locally. The protocol surface (§3.3) carries no path / no
-  bytes / no composed prompt. The calling-boundary rule (§5.2)
-  enforces this on the call-graph side. This closes the contradiction
-  Rev 1–3 carried (server "conceptually owns" + V1 "transitional fs
-  shim"): V1 had no ownership to begin with, so there is no shim.
+  prompt locally. The protocol surface (§3.3) carries only typed base
+  path metadata (`agent.home_dir`, `workspace.path`), never
+  derived cwd / prompt paths / spawn dirs / bytes / composed env.
+  The calling-boundary rule (§5.2) enforces this on the call-graph
+  side. This closes the contradiction Rev 1–3 carried (server
+  "conceptually owns" + V1 "transitional fs shim"): V1 had no
+  ownership to begin with, so there is no shim.
 
 If new open questions surface during D2/D2.1/D3 implementation
 reviews, they go back into this section as Q4+, not silently
@@ -948,3 +961,21 @@ expanded in PR descriptions.
     `DaemonAgentRuntimeHost.start()` prompt composition into
     daemon-host) is owned by Cindy in a separate thread, anchored
     to this revision's commit hash.
+- 2026-05-27 — **Revision 5 (Cindy, D2.g corrective implementation;
+  contract anchor `81996a6`)**. Clarifies the path side of the Rev 4
+  byte-ownership rule after shiki/Alice/Cindy alignment:
+  - Path strings that are server DB metadata may cross the boundary as
+    typed records: `agent.home_dir`, `workspace.path`, and
+    `workspace_memory_index[].path`.
+  - Derived execution artifacts remain forbidden on
+    `runtime_start.options`: `cwd`, legacy flat `workspace_path`,
+    `system_prompt_path`, `spawn_dir`, prompt/memory/consensus bytes,
+    composed prompt text, and generic `env` maps.
+  - §3.3 `runtime_start` canonical shape now matches D2.g wire code:
+    `agent`, `workspace`, `workspace_memory_index`, `session`,
+    `driver`, `env_policy`, and optional `startup_delivery.text`.
+  - §4.0–§4.3 now spell the typed records the server sends; §4.6
+    spells the daemon-local derivation from those base paths.
+  - §5 map and §5.2 now reflect the implemented calling boundary:
+    backend may build typed metadata and delivery text, but daemon
+    owns prompt hydration, spawn-prep, cwd derivation, and final env.
