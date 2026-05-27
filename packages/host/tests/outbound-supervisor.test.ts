@@ -33,6 +33,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { OutboundSupervisor, type OutboundClientLike } from '../src/daemon/outbound-supervisor.js';
 import { createDaemonLogControl, type DaemonLogger } from '../src/daemon/logger.js';
+import { daemonHostConfigFingerprint } from '../src/daemon/outbound-client.js';
 import type { EventFrame, ResponseFrame } from '../src/protocol.js';
 
 interface FakeClient extends OutboundClientLike {
@@ -871,5 +872,123 @@ describe('OutboundSupervisor — reload() (D3.c Commit 2)', () => {
     // Only two clients ever spawned — the second reload did NOT
     // create a third.
     expect(f.spawned).toHaveLength(2);
+  });
+
+  // ── D4.a Commit 5b: profile_version is part of the fingerprint
+  //    (per docs/remote-backend-d4-design.md §7.6 daemon nuance) ────
+
+  it('changes to profile_version alone flip unchanged → reloaded (5b: profile_version is in the fingerprint)', () => {
+    // §7.6 daemon nuance: a profile commit that bumps `profile_version`
+    // but does not change `server_url` (e.g. metadata-only commit)
+    // MUST NOT be treated as a no-op reload. Without including
+    // `profile_version` in the fingerprint, desktop's
+    // partial_apply_pending reconciliation (5c) can't converge by
+    // re-running phase 2 — the daemon would just say "unchanged" and
+    // leave its in-memory state at the previous generation.
+    f = makeFixture();
+    const path = f.writeValidConfig();
+    f.supervisor.attach({ config_path: path });
+    // First write the config WITH a profile_version. This is the new
+    // baseline (D3.x configs without the field also work — the next
+    // test pins absence-vs-explicit).
+    writeFileSync(
+      path,
+      JSON.stringify({
+        server_url: 'http://127.0.0.1:8765',
+        host_id: 'host-1',
+        host_token: 'token-1',
+        profile_version: 1,
+      }),
+      'utf8',
+    );
+    const first = f.supervisor.reload();
+    expect(first.reloaded).toBe(true);
+    if (!first.reloaded) throw new Error('unreachable');
+    expect(first.action).toBe('reloaded');
+
+    // Now bump profile_version with NO other change. Must be a real reload.
+    writeFileSync(
+      path,
+      JSON.stringify({
+        server_url: 'http://127.0.0.1:8765',
+        host_id: 'host-1',
+        host_token: 'token-1',
+        profile_version: 2,
+      }),
+      'utf8',
+    );
+    const second = f.supervisor.reload();
+    expect(second.reloaded).toBe(true);
+    if (!second.reloaded) throw new Error('unreachable');
+    expect(second.action).toBe('reloaded');
+  });
+
+  it('absent profile_version is a distinct fingerprint bucket from explicit profile_version (5b: <none> ≠ any number)', () => {
+    // The fingerprint encodes `undefined` as the literal `<none>` so a
+    // D3.x config that never had a profile fingerprints differently
+    // from one with `profile_version = 0`. Otherwise the first 5c
+    // write that adds the field to a previously-absent config would
+    // collide with `profile_version: 0` and the daemon would no-op.
+    f = makeFixture();
+    const path = f.writeValidConfig();
+    f.supervisor.attach({ config_path: path });
+    // Existing baseline carries no profile_version field (matches
+    // legacy D3.x configs).
+    writeFileSync(
+      path,
+      JSON.stringify({
+        server_url: 'http://127.0.0.1:8765',
+        host_id: 'host-1',
+        host_token: 'token-1',
+        profile_version: 0,
+      }),
+      'utf8',
+    );
+    const flipped = f.supervisor.reload();
+    expect(flipped.reloaded).toBe(true);
+    if (!flipped.reloaded) throw new Error('unreachable');
+    expect(flipped.action).toBe('reloaded');
+  });
+});
+
+describe('daemonHostConfigFingerprint — D4.a Commit 5b profile_version coverage', () => {
+  // Direct helper-level pins for the byte set the fingerprint
+  // covers. The supervisor tests above already exercise behavior
+  // end-to-end; these unit pins document the contract verbatim so a
+  // future field addition forces a fixture decision.
+  const baseConfig = {
+    server_url: 'http://127.0.0.1:8765',
+    host_id: 'host-1',
+    host_token: 'token-1',
+  };
+
+  it('absent profile_version produces the same fingerprint regardless of call site', () => {
+    expect(daemonHostConfigFingerprint(baseConfig)).toEqual(
+      daemonHostConfigFingerprint({ ...baseConfig }),
+    );
+  });
+
+  it('absent profile_version differs from explicit profile_version: 0', () => {
+    expect(daemonHostConfigFingerprint(baseConfig)).not.toEqual(
+      daemonHostConfigFingerprint({ ...baseConfig, profile_version: 0 }),
+    );
+  });
+
+  it('different profile_versions produce different fingerprints (URL/host/token unchanged)', () => {
+    const a = daemonHostConfigFingerprint({ ...baseConfig, profile_version: 1 });
+    const b = daemonHostConfigFingerprint({ ...baseConfig, profile_version: 2 });
+    const c = daemonHostConfigFingerprint({ ...baseConfig, profile_version: 1 });
+    expect(a).not.toEqual(b);
+    expect(a).toEqual(c);
+  });
+
+  it('profile_version is independent of the other three fields (changing URL alone still flips even with same profile_version)', () => {
+    const a = daemonHostConfigFingerprint({ ...baseConfig, profile_version: 1 });
+    const b = daemonHostConfigFingerprint({
+      ...baseConfig,
+      server_url: 'http://127.0.0.1:9999',
+      profile_version: 1,
+    });
+    expect(a).not.toEqual(b);
   });
 });

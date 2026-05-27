@@ -48,7 +48,14 @@ describe('outbound daemon websocket client', () => {
     expect(hostConnectWebSocketUrl('http://127.0.0.1:1234')).toBe(
       'ws://127.0.0.1:1234/api/hosts/connect',
     );
-    expect(hostConnectWebSocketUrl('https://localhost:1234/base')).toBe(
+    // D4.a Commit 2 origin-only invariant (§7.1) — the classifier
+    // rejects URLs with non-trivial path / query / fragment, so the
+    // daemon-side `hostConnectWebSocketUrl` only sees origin-shaped
+    // inputs in production. Pin the loopback-https → wss conversion
+    // with the canonical origin form (was previously
+    // `https://localhost:1234/base`, but Commit 2 tightened the
+    // classifier so subpath inputs no longer reach this helper).
+    expect(hostConnectWebSocketUrl('https://localhost:1234')).toBe(
       'wss://localhost:1234/api/hosts/connect',
     );
     expect(() => hostConnectWebSocketUrl('http://example.test')).toThrow(
@@ -57,8 +64,11 @@ describe('outbound daemon websocket client', () => {
     // https-to-non-loopback now rejected with the same legacy error
     // name so existing log greps still hit. (Slightly misleading
     // string preserved for operator runbook continuity — see the
-    // comment in `hostConnectWebSocketUrl`.)
-    expect(() => hostConnectWebSocketUrl('https://example.test/base')).toThrow(
+    // comment in `hostConnectWebSocketUrl`.) Origin form per §7.1
+    // (Commit 2 origin-only invariant — the previous fixture
+    // `https://example.test/base` is now rejected as `non_origin_url`
+    // before the loopback gate runs).
+    expect(() => hostConnectWebSocketUrl('https://example.test')).toThrow(
       'tls_required_for_non_loopback_host_ws',
     );
     // Obfuscated IPv4 form that `new URL().hostname` would normalize

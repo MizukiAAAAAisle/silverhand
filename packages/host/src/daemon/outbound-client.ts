@@ -1016,15 +1016,35 @@ export function writeHostConfigAtomic(path: string, config: DaemonHostConfig): v
  * compute "same config?" the same way or reload's `unchanged` arm
  * drifts away from what the client treats as no-op-worthy.
  *
- * Bytes covered: `server_url`, `host_id`, `host_token`. Adding new
- * fields to `DaemonHostConfigSchema` that should also gate the
- * reload's `unchanged` decision means updating this fingerprint —
+ * Bytes covered: `server_url`, `host_id`, `host_token`, and (D4.a
+ * Commit 5b, per `docs/remote-backend-d4-design.md` §7.6 daemon
+ * fingerprint nuance) `profile_version` — the local-config consistency
+ * anchor that links daemon-config to the server connection profile
+ * generation. Without it, a profile commit that changes only
+ * timestamps would write a config that fingerprints identically to
+ * the previous generation, so the daemon would treat it as no-op
+ * and desktop's `partial_apply_pending` reconciliation (5c) would
+ * never converge. `undefined` (D3.x configs that never had a profile,
+ * embedded-mode boot before any profile commit) is encoded as the
+ * literal `<none>` so it occupies its own fingerprint bucket — the
+ * absence of a value is itself a meaningful state we don't want to
+ * collide with `0`.
+ *
+ * Adding new fields to `DaemonHostConfigSchema` that should also gate
+ * the reload's `unchanged` decision means updating this fingerprint —
  * the typecheck on `DaemonHostConfig` won't catch the omission, but
  * a deliberate test in `outbound-supervisor.test.ts` pins the byte
  * set so a new field forces a fixture decision.
  */
 export function daemonHostConfigFingerprint(config: DaemonHostConfig): string {
-  return `${config.server_url}\0${config.host_id}\0${config.host_token}`;
+  const profileVersionToken =
+    config.profile_version === undefined
+      ? '<none>'
+      : String(config.profile_version);
+  return (
+    `${config.server_url}\0${config.host_id}\0${config.host_token}` +
+    `\0pv=${profileVersionToken}`
+  );
 }
 
 export function defaultDaemonHostConfigPath(silverhandDir: string): string {
