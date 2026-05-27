@@ -526,6 +526,24 @@ export function planBackendStartup(decision: BackendBootMode): BackendStartupPla
  * embedded arm is the ONLY one that calls `deps.loadOrCreateServerConfig`;
  * the remote / refuse arms must not.
  *
+ * **Production dispatch — what actually executes through the adapter**:
+ *
+ *   - Embedded plans: dispatched through the adapter — load config,
+ *     start embedded, persist resolved port.
+ *   - Remote plans: dispatched through the adapter — `buildRemoteHandle`
+ *     only; no embedded artifact touched.
+ *   - Refuse plans: in `bootstrap()`, intercepted by a pre-daemon
+ *     `if (startupPlan.mode === 'refuse')` guard and thrown as
+ *     `ProfileUnusableError` BEFORE the adapter is invoked. That
+ *     pre-daemon guard exists because we want fail-loud to land
+ *     before any daemon spawn / IPC subscribe / WS init runs.
+ *
+ *     The adapter's `refuse` arm is therefore **defense-in-depth
+ *     seam** — kept in the type union so a future refactor that
+ *     drops the pre-daemon guard still fails loud (the executor
+ *     would call `deps.refuse(plan)` and throw). Production never
+ *     reaches it under the current call ordering.
+ *
  * **Test seam (Cindy 5d-fixup constraint)**: the unit test injects
  * spies for `loadOrCreateServerConfig` / `startEmbeddedAndPersistConfig`
  * / `buildRemoteHandle` / `refuse` and pins:
@@ -571,10 +589,15 @@ export interface ExecuteBackendStartupDeps<RunningBackendT, RemoteBackendHandleT
     insecure: boolean;
   }) => RemoteBackendHandleT;
   /**
-   * Refuse arm — bootstrap throws `ProfileUnusableError` here. Typed
-   * as `(plan) => never` so the type system can narrow after the
-   * call (the executor returns through this branch only by the
-   * function never returning).
+   * Refuse arm — defense-in-depth seam. In production `bootstrap()`
+   * intercepts `startupPlan.mode === 'refuse'` BEFORE invoking the
+   * adapter and throws `ProfileUnusableError` itself, so the
+   * executor's refuse branch is unreachable under current call
+   * ordering. Kept here so a future refactor that drops the
+   * pre-daemon guard still fails loud (the adapter calls
+   * `deps.refuse(plan)` which is typed `(plan) => never`). Tests
+   * cover both the called-and-throws and called-and-buggy-returns
+   * cases for that scenario.
    */
   refuse: (plan: Extract<BackendStartupPlan, { mode: 'refuse' }>) => never;
 }
@@ -592,10 +615,16 @@ export async function executeBackendStartup<
 ): Promise<ExecutedBackendHandle<RunningBackendT, RemoteBackendHandleT>> {
   switch (plan.mode) {
     case 'refuse':
-      // `refuse` is `(plan) => never`; bootstrap throws via this
-      // helper. We still return an "unreachable" sentinel so the
-      // function is well-typed; if a refuse impl ever returns
-      // (regression) the throw below catches it.
+      // Defense-in-depth path. Production `bootstrap()` intercepts
+      // `mode === 'refuse'` BEFORE calling the adapter (so a profile
+      // classifier reject fails loud before any daemon spawn / IPC
+      // subscribe / WS init), which means this arm is unreachable
+      // under current call ordering. We keep it here so a future
+      // refactor that drops the pre-daemon guard still fails loud:
+      // `deps.refuse(plan)` is typed `(plan) => never` and throws
+      // `ProfileUnusableError`. The trailing throw catches a buggy
+      // refuse impl that returns instead of throwing (regression
+      // bait).
       deps.refuse(plan);
       throw new Error(
         'executeBackendStartup: refuse() returned (expected `never`)',

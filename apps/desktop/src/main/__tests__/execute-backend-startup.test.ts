@@ -14,6 +14,17 @@
  * a remote profile boot the legacy `loadOrCreateServerConfig()` side
  * effect (it creates the file if missing) NEVER runs.
  *
+ * Production dispatch reminder (Cindy 5d-fixup follow-up):
+ *
+ *   - Embedded / remote plans: dispatched through the adapter in
+ *     production.
+ *   - Refuse plans: intercepted by a pre-daemon guard in
+ *     `bootstrap()` BEFORE the adapter is called. The adapter's
+ *     refuse arm is **defense-in-depth seam** — kept so a future
+ *     refactor that drops the pre-daemon guard still fails loud.
+ *     The "refuse plan" tests below pin that defense-in-depth
+ *     behavior; they do not represent the production call path.
+ *
  * The adapter is generic so we can substitute opaque sentinels for
  * `RunningBackend` / `RemoteBackendHandle` and observe purely through
  * spy call counts.
@@ -198,7 +209,7 @@ describe('executeBackendStartup — remote plan (§4.2 hard gate: NO embedded ar
   });
 });
 
-describe('executeBackendStartup — refuse plan (profile_invalid: throws, embedded artifacts untouched)', () => {
+describe('executeBackendStartup — refuse plan (defense-in-depth: production bootstrap intercepts before this point)', () => {
   it('refuse plan calls ONLY refuse — embedded helpers never run', async () => {
     const { deps, spies } = makeDeps();
     const plan: BackendStartupPlan = {

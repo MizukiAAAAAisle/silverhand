@@ -1799,11 +1799,20 @@ async function bootstrap(): Promise<void> {
     // all routed through `deps.startEmbeddedAndPersistConfig` ONLY
     // on the embedded arm. The remote arm calls
     // `buildRemoteBackendHandle` and never touches the legacy
-    // server-config artifact. The refuse arm throws
-    // `ProfileUnusableError` and never reaches the embedded helpers
-    // either. The unit-tested seam in
-    // `__tests__/execute-backend-startup.test.ts` pins this — it
-    // was the load-bearing fix for Cindy 5d-fixup P1-1.
+    // server-config artifact.
+    //
+    // Production dispatch: this call only ever sees `embedded` or
+    // `remote` plans. The `refuse` arm is intercepted by the
+    // pre-daemon guard above (`if (startupPlan.mode === 'refuse')`)
+    // which throws `ProfileUnusableError` BEFORE we get here — that
+    // ordering exists so a profile classifier reject fails loud
+    // before any daemon spawn / IPC subscribe / WS init runs. The
+    // adapter's `refuse` arm is therefore defense-in-depth seam,
+    // covered by unit tests in case a future refactor drops the
+    // pre-daemon guard.
+    //
+    // Seam pin: `__tests__/execute-backend-startup.test.ts` — the
+    // load-bearing fix for Cindy 5d-fixup P1-1.
     backend = await executeBackendStartup<
       RunningBackend,
       RemoteBackendHandle
