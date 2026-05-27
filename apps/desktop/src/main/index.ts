@@ -63,6 +63,7 @@ import {
 import { gracefullyDetachOutbound } from './outbound-detach.js';
 import {
   clearServerConnectionProfile,
+  readServerConnectionProfile,
   readServerConnectionProfileViewOrNull,
   writeServerConnectionProfile,
 } from './server-connection-profile.js';
@@ -678,10 +679,27 @@ async function claimLocalHostForUserSession(): Promise<void> {
     const localHostId = parsed.data.host_id;
     const attachWindow = captureAttachWindow(localHostId);
 
+    // D4.a Commit 5c-1 (per `docs/remote-backend-d4-design.md` §7.6):
+    // when a server connection profile is committed, claim writes the
+    // profile generation into daemon-config so the daemon's fingerprint
+    // (5b) stays in sync with desktop's view of the current profile.
+    // Embedded mode without a profile (no Setup Wizard run yet) leaves
+    // the field undefined — the on-disk file omits it, the daemon
+    // fingerprint treats it as `<none>`, and the absence is itself a
+    // stable state distinct from any explicit version.
+    const profileRead = readServerConnectionProfile({
+      silverhandRoot: silverhandDir(),
+      safe: safeStorage,
+      logger: logger ?? undefined,
+    });
+    const profileVersion =
+      profileRead.ok ? profileRead.profile.version : undefined;
+
     writeDaemonHostConfig(dir, {
       server_url: running.url,
       host_id: localHostId,
       host_token: hostToken,
+      ...(profileVersion !== undefined ? { profile_version: profileVersion } : {}),
     });
     localHostClaim = { status: 'claimed', hostId: localHostId };
 
@@ -1119,6 +1137,12 @@ async function saveServerUrlFromSettings(
       currentLocalHostId: () =>
         localHostClaim.status === 'claimed' ? localHostClaim.hostId : null,
       currentHostToken: () => readDaemonHostConfig(dir)?.host_token ?? null,
+      // 5c-1: pull `profile_version` from the on-disk config so the
+      // legacy settings:saveServerUrl path doesn't drop the field
+      // when it rewrites the file. Legacy save is NOT a profile
+      // commit; it should preserve whatever generation the existing
+      // daemon-config (post-claim) was stamped with.
+      currentProfileVersion: () => readDaemonHostConfig(dir)?.profile_version,
     },
   );
 

@@ -236,6 +236,65 @@ describe('desktop local host claim helpers', () => {
     expect(fileMode(daemonHostConfigPath(dir))).toBe(0o600);
   });
 
+  // D4.a Commit 5c-1 (per docs/remote-backend-d4-design.md §7.6):
+  // rotate must NOT silently drop `profile_version`. Rotate doesn't
+  // change the profile generation, so the new daemon-config reflects
+  // the same generation as before — otherwise the daemon's
+  // `<none>` ↔ value distinction would mis-attribute fingerprint
+  // changes to the rotate, not to the next legitimate profile commit.
+  it('rotate preserves profile_version when the existing config carries one', () => {
+    const dir = tempDir();
+    writeDaemonHostConfig(dir, {
+      server_url: 'http://127.0.0.1:4321',
+      host_id: 'host-local',
+      host_token: 'old-token',
+      profile_version: 7,
+    });
+
+    applyRotateSideEffects({
+      silverhandDir: dir,
+      serverUrl: 'http://127.0.0.1:4321',
+      hostId: 'host-local',
+      hostToken: 'new-token-cleartext',
+    });
+
+    expect(readDaemonHostConfig(dir)).toEqual({
+      server_url: 'http://127.0.0.1:4321',
+      host_id: 'host-local',
+      host_token: 'new-token-cleartext',
+      profile_version: 7,
+    });
+  });
+
+  it('rotate omits profile_version when the existing config has none', () => {
+    const dir = tempDir();
+    // Legacy D3.x config — no profile_version field.
+    writeDaemonHostConfig(dir, {
+      server_url: 'http://127.0.0.1:4321',
+      host_id: 'host-local',
+      host_token: 'old-token',
+    });
+
+    applyRotateSideEffects({
+      silverhandDir: dir,
+      serverUrl: 'http://127.0.0.1:4321',
+      hostId: 'host-local',
+      hostToken: 'new-token-cleartext',
+    });
+
+    const after = readDaemonHostConfig(dir);
+    // Field is absent — NOT explicit `undefined`. The daemon
+    // fingerprint encodes absent as `<none>` and explicit `0` as `0`,
+    // so we must not slip a `profile_version: undefined` key into the
+    // serialized JSON either.
+    expect(after).toEqual({
+      server_url: 'http://127.0.0.1:4321',
+      host_id: 'host-local',
+      host_token: 'new-token-cleartext',
+    });
+    expect(after && 'profile_version' in after).toBe(false);
+  });
+
   it('revoke side-effect clears daemon-config when revoked host is the current local one', () => {
     const dir = tempDir();
     writeDaemonHostConfig(dir, {

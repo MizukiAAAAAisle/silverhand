@@ -69,6 +69,13 @@ interface FakeOptions {
   watchdogOutcome?: AttachWatchdogOutcome;
   hostId?: string | null;
   hostToken?: string | null;
+  /** D4.a Commit 5c-1: optional `currentProfileVersion` dep — when
+   *  `null` the dep is omitted entirely from the deps object so the
+   *  test exercises the "unwired in tests" path; when a number, it
+   *  is returned as the current value; when `undefined` (i.e. caller
+   *  did not set the field), the dep is wired but returns
+   *  `undefined` (matching a config that has no `profile_version`). */
+  currentProfileVersion?: number | undefined | null;
   /** Defaults to a fixed clock starting at 1_700_000_010_000. */
   now?: () => number;
 }
@@ -115,6 +122,15 @@ function makeDeps(opts: FakeOptions = {}): {
       opts.hostId === undefined ? 'host-1' : opts.hostId,
     currentHostToken: () =>
       opts.hostToken === undefined ? 'tok-1' : opts.hostToken,
+    // 5c-1 carry-through dep. `null` opt-out exercises the
+    // "currentProfileVersion not wired" path (matches D3.x callers /
+    // tests written before 5c-1). Local capture narrows the closure
+    // type from `number | null | undefined` to `number | undefined`.
+    ...(() => {
+      if (opts.currentProfileVersion === null) return {};
+      const captured: number | undefined = opts.currentProfileVersion;
+      return { currentProfileVersion: () => captured };
+    })(),
     startWatchdog: (window, watchdogDeps) => {
       state.watchdogCalls.push({ window, deps: watchdogDeps });
       const outcome: AttachWatchdogOutcome =
@@ -563,6 +579,65 @@ describe('performOutboundReload — happy path end-to-end shape', () => {
       host_id: 'host-1',
       host_token: 'secret-from-main-memory',
     });
+  });
+
+  // ── D4.a Commit 5c-1: profile_version carry-through (per
+  //    docs/remote-backend-d4-design.md §7.6) ──────────────────────
+
+  it('writes profile_version when currentProfileVersion returns a value (legacy save preserves the field)', async () => {
+    // Legacy `settings:saveServerUrl` is NOT a profile commit — it
+    // does not bump the version. Carrying through whatever the
+    // current daemon-config has stamped means the daemon's
+    // `<none>` ↔ value transitions reflect ONLY profile commits.
+    const { deps, state } = makeDeps({ currentProfileVersion: 7 });
+    await performOutboundReload(
+      { serverUrl: 'http://127.0.0.1:8765' },
+      deps,
+    );
+    expect(state.writeCalls[0]).toEqual({
+      server_url: 'http://127.0.0.1:8765/',
+      host_id: 'host-1',
+      host_token: 'tok-1',
+      profile_version: 7,
+    });
+  });
+
+  it('omits profile_version when currentProfileVersion returns undefined (legacy save on a D3.x config)', async () => {
+    // Default `undefined` mirrors a D3.x daemon-config that pre-dates
+    // the 5b schema field. The orchestrator MUST emit absent (not
+    // explicit undefined) so the daemon fingerprint encodes `<none>`,
+    // matching the existing on-disk state.
+    const { deps, state } = makeDeps({ currentProfileVersion: undefined });
+    await performOutboundReload(
+      { serverUrl: 'http://127.0.0.1:8765' },
+      deps,
+    );
+    const written = state.writeCalls[0]!;
+    expect(written).toEqual({
+      server_url: 'http://127.0.0.1:8765/',
+      host_id: 'host-1',
+      host_token: 'tok-1',
+    });
+    expect('profile_version' in written).toBe(false);
+  });
+
+  it('omits profile_version when the dep is unwired entirely (D3.x callers / pre-5c-1 tests)', async () => {
+    // `currentProfileVersion: null` opts out of wiring the dep at all —
+    // simulates a caller that hasn't been updated to 5c-1 yet. The
+    // orchestrator must not throw and must produce a config without
+    // the field.
+    const { deps, state } = makeDeps({ currentProfileVersion: null });
+    await performOutboundReload(
+      { serverUrl: 'http://127.0.0.1:8765' },
+      deps,
+    );
+    const written = state.writeCalls[0]!;
+    expect(written).toEqual({
+      server_url: 'http://127.0.0.1:8765/',
+      host_id: 'host-1',
+      host_token: 'tok-1',
+    });
+    expect('profile_version' in written).toBe(false);
   });
 });
 

@@ -218,6 +218,19 @@ export interface PerformOutboundReloadDeps {
    */
   currentHostToken: () => string | null;
   /**
+   * D4.a Commit 5c-1 (per `docs/remote-backend-d4-design.md` §7.6):
+   * returns the current `profile_version` from the on-disk
+   * daemon-config, or undefined when the field is absent (D3.x
+   * config or embedded boot pre-Setup-Wizard). The legacy
+   * `settings:saveServerUrl` path is NOT a profile commit — it does
+   * not bump `profile_version`. We pass through whatever value the
+   * current config carried so the daemon-fingerprint behaviour
+   * (`<none>` ↔ value transitions) reflects only profile commits,
+   * not raw URL edits. Commit 5d redirects this entry point to the
+   * profile-driven phase-2 flow and removes the legacy carry-through.
+   */
+  currentProfileVersion?: () => number | undefined;
+  /**
    * Test seam for `startAttachWatchdog`. Production passes
    * `startAttachWatchdog` from `outbound-attach.ts`; tests supply a
    * fake that resolves deterministically.
@@ -356,6 +369,15 @@ export async function performOutboundReload(
     server_url: classified.url.toString(),
     host_id: hostId,
     host_token: hostToken,
+    // 5c-1 carry-through. Legacy settings:saveServerUrl is not a
+    // profile commit, so the daemon's `<none>` ↔ explicit-value
+    // distinction must reflect only profile commits — not raw URL
+    // edits. When `currentProfileVersion` is unwired (legacy callers
+    // / tests), or the on-disk config has no field, omit it so the
+    // serialized JSON matches the previous state.
+    ...(deps.currentProfileVersion?.() !== undefined
+      ? { profile_version: deps.currentProfileVersion!() }
+      : {}),
   };
   try {
     deps.writeDaemonHostConfig(newConfig);

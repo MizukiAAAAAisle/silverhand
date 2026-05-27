@@ -217,17 +217,35 @@ export function assertApiProxyPath(path: string): void {
 
 /** Persist a freshly rotated host token. Pure side-effect helper —
  *  reused by the `hosts:rotate` IPC and unit-tested separately. The
- *  main process wraps this in network I/O + token bookkeeping. */
+ *  main process wraps this in network I/O + token bookkeeping.
+ *
+ *  D4.a Commit 5c-1 (per `docs/remote-backend-d4-design.md` §7.6):
+ *  rotate does NOT change the profile generation, so it MUST preserve
+ *  the existing `profile_version` from the current daemon-config. A
+ *  rotate that silently drops the field would force the daemon to
+ *  treat the next legitimate profile commit (5c-2 phase-2 reload) as
+ *  a fingerprint flip from `<none>` to a value, even though both
+ *  versions match — diagnostic logs would mis-attribute the reload
+ *  to the rotate, not the profile commit.
+ */
 export function applyRotateSideEffects(input: {
   silverhandDir: string;
   serverUrl: string;
   hostId: string;
   hostToken: string;
 }): void {
+  const existing = readDaemonHostConfig(input.silverhandDir);
   writeDaemonHostConfig(input.silverhandDir, {
     server_url: input.serverUrl,
     host_id: input.hostId,
     host_token: input.hostToken,
+    // Preserve when present; omit (-> undefined in JSON / absent in
+    // the on-disk file) when the current config doesn't have it. The
+    // 5b fingerprint encoding keeps `<none>` and explicit values in
+    // distinct buckets.
+    ...(existing?.profile_version !== undefined
+      ? { profile_version: existing.profile_version }
+      : {}),
   });
 }
 
