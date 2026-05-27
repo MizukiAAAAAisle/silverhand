@@ -190,11 +190,27 @@ export class OutboundSupervisor {
 
     if (this.current) {
       if (this.current.configPath === configPath) {
-        // Same path + live client → no-op. We intentionally do NOT
-        // re-read the file contents here: rotate-token already keeps
-        // the in-memory config fresh, and a defensive re-read on every
-        // attach would let a partial write between rotate and a
-        // redundant attach desync the in-memory state from disk.
+        // **Path-binding-only contract** (Cindy `#task:633` D3.c
+        // Commit 2 P2): same-path attach returns `noop` regardless of
+        // the file bytes — even if the on-disk bytes have changed
+        // since the original attach. attach BINDS the daemon to a
+        // configPath; consuming new bytes for the SAME path is
+        // `host_outbound_reload`'s job. Splitting the two verbs makes
+        // the caller's intent explicit:
+        //   - Bootstrap a new attachment → `attach(path)`.
+        //   - Apply byte changes (Settings save / rotate-token) →
+        //     `reload()` (which is fingerprint-aware and validates-
+        //     first-then-swaps).
+        // We deliberately do NOT re-read the file contents here:
+        // (1) silently swapping on `attach` would let any caller that
+        // accidentally re-attaches bounce the WS; (2) the safe path
+        // for "I just rewrote daemon-config.json, please pick it up"
+        // is `reload`; (3) the rotate-token in-process write already
+        // keeps the in-memory config fresh without the disk dance.
+        // The Commit 2 supervisor test
+        // 'same-path attach with NEW valid bytes is still action=noop'
+        // pins this contract so a future caller can't drift attach
+        // into a half-reload.
         return success(configPath, 'noop');
       }
       // Different path → graceful stop, then start fresh.
@@ -286,20 +302,26 @@ export class OutboundSupervisor {
 
     // Re-read the CURRENT path. Reload cannot swap to a different
     // config file — that's by design (`host_outbound_attach`'s job).
-    // We deliberately do NOT re-stat for `path_not_a_file` etc. here:
-    // those were validated at attach time, and re-validating every
-    // single field would let the file-not-found path race with an
-    // attach that happened-and-completed in another in-flight call.
-    // The `readHostConfig` call below handles ENOENT / EACCES / bad
-    // bytes uniformly via its ok/reason result.
+    // `readHostConfig` is the safe-read chokepoint (Cindy `#task:633`
+    // P1): it stat-checks for regular file BEFORE opening so a FIFO
+    // substituted for the path can't block `readFileSync` and hang
+    // the dispatcher event loop, and a directory at the path produces
+    // a clean `not_a_file` reason instead of an EISDIR throw that
+    // would mis-categorize as `invalid_json` → `parse_failed`. Every
+    // reader of `daemon-config.json` shares this contract.
     const probe = readHostConfig(current.configPath);
     if (!probe.ok) {
-      // Map readHostConfig's reasons to our two failure arms. `missing`
-      // / IO errors are `config_unreadable`; JSON / shape errors are
-      // `parse_failed`. The reasons string from readHostConfig is
-      // preserved in `message` for diagnostics.
+      // Map readHostConfig's typed reasons to our two failure arms.
+      // I/O class (missing / not-a-file / io_error) → `config_unreadable`;
+      // bytes-arrived-but-bad (invalid_json / invalid_shape) →
+      // `parse_failed`. Reason string preserved in `message` for
+      // diagnostics.
       const reason: HostOutboundReloadFailureReason =
-        probe.reason === 'missing' ? 'config_unreadable' : 'parse_failed';
+        probe.reason === 'missing' ||
+        probe.reason === 'not_a_file' ||
+        probe.reason === 'io_error'
+          ? 'config_unreadable'
+          : 'parse_failed';
       return reloadFailure(reason, probe.reason);
     }
 

@@ -1,9 +1,9 @@
 import {
   chmodSync,
-  existsSync,
   mkdirSync,
   readFileSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -918,19 +918,76 @@ function summarizeResponseFrame(response: ResponseFrame): Record<string, unknown
   };
 }
 
+/**
+ * Possible failure reasons from {@link readHostConfig}. Stable so
+ * callers can map them onto their own typed errors (supervisor
+ * reload → `HostOutboundReloadFailureReason`; attach uses its own
+ * stat path that fires before reaching here).
+ *
+ * Safety boundary (Cindy `#task:633` D3.c Commit 2 P1): `not_a_file`
+ * is the load-bearing reason — without the upfront stat check, a
+ * FIFO substituted for the config path would block `readFileSync`
+ * indefinitely and hang the daemon IPC dispatcher; a directory would
+ * throw EISDIR and surface as `invalid_json`, mis-categorizing an
+ * I/O failure as a JSON failure. The stat-first contract lives here
+ * (rather than at each caller) so every reader of `daemon-config.json`
+ * — supervisor reload, internal poll loop, future health checks —
+ * gets the same fail-closed treatment.
+ */
+export type ReadHostConfigFailureReason =
+  /** statSync threw ENOENT. */
+  | 'missing'
+  /** statSync threw a non-ENOENT errno (EACCES, EIO, etc.). */
+  | 'io_error'
+  /** Path resolved to a directory / FIFO / socket / char/block
+   *  device — `statSync().isFile()` returned false. statSync follows
+   *  symlinks, so symlink-to-file is fine and symlink-to-FIFO is
+   *  rejected here. */
+  | 'not_a_file'
+  /** `readFileSync` succeeded but the bytes failed JSON.parse. */
+  | 'invalid_json'
+  /** JSON parsed but failed `DaemonHostConfigSchema` validation. */
+  | 'invalid_shape';
+
 export function readHostConfig(
   path: string,
-): { ok: true; config: DaemonHostConfig } | { ok: false; reason: string } {
-  if (!existsSync(path)) return { ok: false, reason: 'missing' };
+):
+  | { ok: true; config: DaemonHostConfig }
+  | { ok: false; reason: ReadHostConfigFailureReason } {
+  // Stat first, fail-closed on non-regular files. This is the FIFO /
+  // directory guard the supervisor reload path needs (Cindy
+  // `#task:633` P1). statSync follows symlinks, so the target's mode
+  // is what decides — symlink-to-file is accepted; symlink-to-FIFO,
+  // -directory, etc. are rejected.
+  let stat: ReturnType<typeof statSync>;
   try {
-    const parsed = DaemonHostConfigSchema.safeParse(
-      JSON.parse(readFileSync(path, 'utf8')) as unknown,
-    );
-    if (!parsed.success) return { ok: false, reason: 'invalid_shape' };
-    return { ok: true, config: parsed.data };
+    stat = statSync(path);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return { ok: false, reason: 'missing' };
+    return { ok: false, reason: 'io_error' };
+  }
+  if (!stat.isFile()) {
+    return { ok: false, reason: 'not_a_file' };
+  }
+  let raw: string;
+  try {
+    raw = readFileSync(path, 'utf8');
+  } catch {
+    // Permission flipped between stat and read, partial-write race,
+    // etc. — surface as the I/O class rather than letting it bubble
+    // and look like a parse failure.
+    return { ok: false, reason: 'io_error' };
+  }
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(raw);
   } catch {
     return { ok: false, reason: 'invalid_json' };
   }
+  const parsed = DaemonHostConfigSchema.safeParse(parsedJson);
+  if (!parsed.success) return { ok: false, reason: 'invalid_shape' };
+  return { ok: true, config: parsed.data };
 }
 
 export function writeHostConfigAtomic(path: string, config: DaemonHostConfig): void {

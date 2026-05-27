@@ -298,6 +298,50 @@ describe('OutboundSupervisor — idempotency matrix (started / noop / switched)'
     expect(f.spawned[0]!.startCalls).toBe(1);
   });
 
+  it('same-path attach with NEW valid bytes is STILL action=noop — attach binds path, byte changes must go via reload (Cindy #task:633 D3.c P2)', () => {
+    // Contract pin: attach is path-binding-only. Even when the bytes
+    // on disk have changed between the first attach and a redundant
+    // re-attach with the same path, attach returns `noop` — it does
+    // NOT silently swap the client. That work belongs to
+    // `host_outbound_reload`, which is fingerprint-aware and
+    // validates-first-then-swaps. Without this regression, a future
+    // caller could drift attach into a half-reload (read new bytes
+    // but never start a new client; or worse, bounce the WS on a
+    // redundant re-attach).
+    f = makeFixture();
+    const path = f.writeValidConfig();
+    const first = f.supervisor.attach({ config_path: path });
+    expect(first.attached).toBe(true);
+    if (!first.attached) throw new Error('unreachable');
+    expect(first.action).toBe('started');
+
+    // Rewrite the SAME path with valid but different bytes (rotated
+    // token). attach must still return `noop`.
+    writeFileSync(
+      path,
+      JSON.stringify({
+        server_url: 'http://127.0.0.1:8765',
+        host_id: 'host-1',
+        host_token: 'token-rotated-but-attach-ignores-it',
+      }),
+      'utf8',
+    );
+    const second = f.supervisor.attach({ config_path: path });
+    expect(second).toEqual({ attached: true, config_path: path, action: 'noop' });
+    expect(f.spawned).toHaveLength(1);
+    expect(f.spawned[0]!.stopCalls).toEqual([]);
+
+    // Sanity: reload is the proper verb for the same-path byte
+    // change — calling it AFTER the no-op attach picks up the new
+    // bytes and spawns a fresh client.
+    const reloaded = f.supervisor.reload();
+    expect(reloaded.reloaded).toBe(true);
+    if (!reloaded.reloaded) throw new Error('unreachable');
+    expect(reloaded.action).toBe('reloaded');
+    expect(f.spawned).toHaveLength(2);
+    expect(f.spawned[0]!.stopCalls).toEqual([{ reason: 'config_reload' }]);
+  });
+
   it('attach with a different valid path returns action=switched, stopping the old client BEFORE the new starts', () => {
     // Order matters: stop must come before start in the lifecycle
     // trace so backend doesn't see two attachments for the same host
@@ -542,6 +586,34 @@ describe('OutboundSupervisor — reload() (D3.c Commit 2)', () => {
     expect(res.reason).toBe('config_unreadable');
     // CRITICAL: the old client was NOT stopped — a bad reload must
     // not take down a working outbound. spawned.length stays 1.
+    expect(f.spawned).toHaveLength(1);
+    expect(f.spawned[0]!.stopCalls).toEqual([]);
+  });
+
+  it('FIFO / directory substitution at the config path → reason=config_unreadable, no readFileSync hang, no parse_failed mis-categorization (Cindy #task:633 P1)', () => {
+    // Load-bearing safety regression: without the stat-first contract
+    // in `readHostConfig`, a directory at the path would throw EISDIR
+    // inside readFileSync → caught as `invalid_json` → mis-mapped to
+    // `parse_failed`. A FIFO would block readFileSync indefinitely
+    // and hang the dispatcher event loop. The test uses a directory
+    // (cheap + portable; same code path as the FIFO case via
+    // `!isFile()`) to assert: (a) reason is `config_unreadable`, not
+    // `parse_failed`; (b) old client untouched. FIFO not built here
+    // to avoid platform-dependent mknod / mkfifo calls.
+    f = makeFixture();
+    const path = f.writeValidConfig();
+    f.supervisor.attach({ config_path: path });
+    // Replace the file with a directory at the same path. With the
+    // stat guard the supervisor rejects BEFORE opening; without it
+    // the rest of the assertion below would fail in distinctive ways
+    // (parse_failed message instead of config_unreadable; in the FIFO
+    // case the test would simply hang).
+    rmSync(path);
+    mkdirSync(path);
+    const res = f.supervisor.reload();
+    expect(res.reloaded).toBe(false);
+    if (res.reloaded) throw new Error('unreachable');
+    expect(res.reason).toBe('config_unreadable');
     expect(f.spawned).toHaveLength(1);
     expect(f.spawned[0]!.stopCalls).toEqual([]);
   });
