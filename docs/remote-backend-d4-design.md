@@ -45,7 +45,8 @@ The pass also locked four cross-cutting concerns that any D4
 implementation must respect:
 
 - task decomposition (avoid over-slicing)
-- TLS policy (system CA / SPKI pin / typed fail)
+- TLS policy (system-default CA verification only; typed fail; no
+  SPKI pin / no self-signed support in D4)
 - first-user / signup model (Option A: default-on signup + 5 hard
   lock-in conditions, no admin role)
 - R4 deferral mechanics (grep-able TODO anchor format)
@@ -396,14 +397,18 @@ Any later expansion goes through its own design pass.
 ## 7. Server connection profile (pre-auth + post-auth single source)
 
 This section closes the gap surfaced in Cindy round-1 blocker 2.
-Before this section existed, TLS pinning was scoped to "Hosts config"
-— but Hosts come into existence only AFTER login (via B.2
-`claim-or-create`). Pre-auth desktop traffic (`GET /api/server/info`,
-`POST /auth/signup`, `POST /auth/login`, plus the SSE event WS
-under the session bearer) had no defined SPKI-pin storage and no
-defined TLS contract. The server connection profile fills that gap
-by being the **single source of `{server_url, spki_pin?}`** for
-every desktop→backend transport across both auth phases.
+Before this section existed, no spec said which desktop-side
+component owned the `server_url` source of truth — pre-auth desktop
+traffic (`GET /api/server/info`, `POST /auth/signup`,
+`POST /auth/login`, plus the SSE event WS under the session bearer)
+runs before any Host is claimed, so the pre-D2 "Hosts config"
+abstraction did not apply, and there was no defined contract for
+who held `server_url` and who validated TLS for that traffic. The
+server connection profile fills that gap by being the **single
+source of `server_url`** for every desktop→backend transport across
+both auth phases, plus the canonical anchor for the
+`partial_apply_pending` mechanism that keeps profile and
+daemon-config in sync across URL changes (§7.5).
 
 ### 7.1 Data shape
 
