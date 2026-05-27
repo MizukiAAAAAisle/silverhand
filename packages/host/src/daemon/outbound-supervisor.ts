@@ -37,17 +37,23 @@
  *
  * Validation order (fail-closed, never mutate active client on error):
  *   1. `path_not_absolute`  — `!path.isAbsolute(configPath)`
- *   2. `path_not_found`     — `statSync` throws ENOENT
- *   3. `path_not_a_file`    — `!statSync(...).isFile()` (rejects
+ *   2. **same-path no-op short-circuit** — if `current.configPath ===
+ *      configPath`, return `action: 'noop'` BEFORE any disk read.
+ *      Path-binding-only contract: attach binds a path; byte changes
+ *      go through `reload()`. A transient file-replaced-with-directory
+ *      between two same-path attaches must NOT fail the second attach.
+ *   3. `path_not_found`     — `statSync` throws ENOENT
+ *   4. `path_not_a_file`    — `!statSync(...).isFile()` (rejects
  *                              directory, FIFO, socket, char/block
  *                              device — anything that isn't a regular
  *                              file). symlink-to-file is fine because
  *                              `statSync` follows symlinks.
- *   4. `parse_failed`       — `readHostConfig` returns non-ok
- *   5. `invalid_server_url` — `hostConnectWebSocketUrl` throws
+ *   5. `parse_failed`       — `readHostConfig` returns non-ok
+ *   6. `invalid_server_url` — `hostConnectWebSocketUrl` throws
  *
  * Idempotency:
  *   - same path + active client          → `action: 'noop'`
+ *     (no disk read; see contract above)
  *   - same path + no client (e.g. after `stop()`) → `action: 'started'`
  *   - different valid path + active client → `stop()` + new client +
  *     `action: 'switched'`
@@ -137,6 +143,35 @@ export class OutboundSupervisor {
       return failure('path_not_absolute', `config_path must be absolute: ${configPath}`);
     }
 
+    // **Path-binding-only short-circuit** (Cindy `#task:633` D3.c
+    // Commit 2 P2 round 2): same-path attach returns `noop` BEFORE
+    // any disk read / URL validation. The contract is "attach binds
+    // a path; byte changes must go via reload", so a redundant
+    // re-attach with the same path MUST be a pure no-op regardless
+    // of what happened to the file in the meantime. If we ran the
+    // validation pipeline first (stat → readHostConfig → URL classify)
+    // a transient file-replace-with-directory or rotate-mid-write
+    // would return `path_not_a_file` / `parse_failed` /
+    // `invalid_server_url` instead of `noop` — which contradicts the
+    // contract and tears down callers that re-attach defensively.
+    //
+    // The check is purely in-memory (string equality against
+    // `current.configPath`, which was already absolute-validated at
+    // its own attach time). It runs AFTER `isAbsolute` so that
+    // obviously malformed input is still rejected uniformly, never
+    // silently accepted just because it happens to string-match.
+    //
+    // Callers that need to consume new bytes for the same path MUST
+    // call `host_outbound_reload` — that's the verb that's
+    // fingerprint-aware and validates-first-then-swaps. Splitting
+    // the two verbs makes intent explicit:
+    //   - Bootstrap a new attachment → `attach(path)`.
+    //   - Apply byte changes (Settings save / rotate-token) →
+    //     `reload()`.
+    if (this.current && this.current.configPath === configPath) {
+      return success(configPath, 'noop');
+    }
+
     // statSync throws ENOENT for missing paths; catch and translate
     // to a typed reason so callers don't have to inspect errno.
     let stat;
@@ -185,34 +220,17 @@ export class OutboundSupervisor {
     }
 
     // ── At this point all validation has passed. Decide the action.
+    //
+    // The same-path noop was short-circuited above before any disk
+    // I/O. The only remaining cases are: (a) a fresh attach with no
+    // current client, or (b) a different valid path swapping the old
+    // client out. Both consume the just-validated `probe.config` and
+    // record its fingerprint as the new baseline for reload's
+    // `unchanged` comparison.
 
     const fingerprint = daemonHostConfigFingerprint(probe.config);
 
     if (this.current) {
-      if (this.current.configPath === configPath) {
-        // **Path-binding-only contract** (Cindy `#task:633` D3.c
-        // Commit 2 P2): same-path attach returns `noop` regardless of
-        // the file bytes — even if the on-disk bytes have changed
-        // since the original attach. attach BINDS the daemon to a
-        // configPath; consuming new bytes for the SAME path is
-        // `host_outbound_reload`'s job. Splitting the two verbs makes
-        // the caller's intent explicit:
-        //   - Bootstrap a new attachment → `attach(path)`.
-        //   - Apply byte changes (Settings save / rotate-token) →
-        //     `reload()` (which is fingerprint-aware and validates-
-        //     first-then-swaps).
-        // We deliberately do NOT re-read the file contents here:
-        // (1) silently swapping on `attach` would let any caller that
-        // accidentally re-attaches bounce the WS; (2) the safe path
-        // for "I just rewrote daemon-config.json, please pick it up"
-        // is `reload`; (3) the rotate-token in-process write already
-        // keeps the in-memory config fresh without the disk dance.
-        // The Commit 2 supervisor test
-        // 'same-path attach with NEW valid bytes is still action=noop'
-        // pins this contract so a future caller can't drift attach
-        // into a half-reload.
-        return success(configPath, 'noop');
-      }
       // Different path → graceful stop, then start fresh.
       this.current.client.stop('config_path_changed');
       this.current = null;

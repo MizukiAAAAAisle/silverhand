@@ -342,6 +342,104 @@ describe('OutboundSupervisor — idempotency matrix (started / noop / switched)'
     expect(f.spawned[0]!.stopCalls).toEqual([{ reason: 'config_reload' }]);
   });
 
+  // ── Path-binding-only contract enforcement (Cindy `#task:633` D3.c
+  //    Commit 2 P2 round 2): same-path attach must short-circuit to
+  //    `noop` BEFORE any disk read / URL validation. Three regressions
+  //    each pair a "make the path unreadable in a different way" with
+  //    a same-path re-attach, asserting:
+  //      (a) the re-attach STILL returns `action: 'noop'` (not the
+  //          typed failure the disk state would otherwise produce), and
+  //      (b) the live client is untouched (no spurious WS bounce), and
+  //      (c) reload — the proper verb for byte-level state — DOES
+  //          return the typed failure for the bad bytes.
+  //    Without the short-circuit, attach would return path_not_a_file
+  //    / parse_failed / invalid_server_url respectively, tearing down
+  //    callers that defensively re-attach (e.g. desktop main on focus,
+  //    or a future reconnect-after-restart path).
+
+  it('same-path attach AFTER the file was replaced with a directory STILL returns noop (path-binding contract; reload is the verb that surfaces config_unreadable)', () => {
+    f = makeFixture();
+    const path = f.writeValidConfig();
+    const first = f.supervisor.attach({ config_path: path });
+    expect(first.attached).toBe(true);
+    if (!first.attached) throw new Error('unreachable');
+
+    // Make the path unreadable in the "directory-substituted" way that
+    // would otherwise hit `path_not_a_file` in the validation pipeline.
+    rmSync(path);
+    mkdirSync(path);
+
+    const second = f.supervisor.attach({ config_path: path });
+    expect(second).toEqual({ attached: true, config_path: path, action: 'noop' });
+    expect(f.spawned).toHaveLength(1);
+    expect(f.spawned[0]!.stopCalls).toEqual([]);
+
+    // Reload — fingerprint-aware verb — surfaces the typed failure
+    // and STILL leaves the old client running.
+    const reloaded = f.supervisor.reload();
+    expect(reloaded.reloaded).toBe(false);
+    if (reloaded.reloaded) throw new Error('unreachable');
+    expect(reloaded.reason).toBe('config_unreadable');
+    expect(f.spawned).toHaveLength(1);
+    expect(f.spawned[0]!.stopCalls).toEqual([]);
+  });
+
+  it('same-path attach AFTER the file was overwritten with invalid JSON STILL returns noop (path-binding contract; reload surfaces parse_failed)', () => {
+    f = makeFixture();
+    const path = f.writeValidConfig();
+    const first = f.supervisor.attach({ config_path: path });
+    expect(first.attached).toBe(true);
+    if (!first.attached) throw new Error('unreachable');
+
+    // Corrupt the bytes in a way that would otherwise hit
+    // `parse_failed` in the validation pipeline.
+    writeFileSync(path, '{not even json', 'utf8');
+
+    const second = f.supervisor.attach({ config_path: path });
+    expect(second).toEqual({ attached: true, config_path: path, action: 'noop' });
+    expect(f.spawned).toHaveLength(1);
+    expect(f.spawned[0]!.stopCalls).toEqual([]);
+
+    const reloaded = f.supervisor.reload();
+    expect(reloaded.reloaded).toBe(false);
+    if (reloaded.reloaded) throw new Error('unreachable');
+    expect(reloaded.reason).toBe('parse_failed');
+    expect(f.spawned).toHaveLength(1);
+    expect(f.spawned[0]!.stopCalls).toEqual([]);
+  });
+
+  it('same-path attach AFTER the file was overwritten with a non-loopback URL STILL returns noop (path-binding contract; reload surfaces invalid_server_url)', () => {
+    f = makeFixture();
+    const path = f.writeValidConfig();
+    const first = f.supervisor.attach({ config_path: path });
+    expect(first.attached).toBe(true);
+    if (!first.attached) throw new Error('unreachable');
+
+    // Plant a config that would fail URL classification on a fresh
+    // attach (V1 loopback-only gate).
+    writeFileSync(
+      path,
+      JSON.stringify({
+        server_url: 'http://example.com:8765',
+        host_id: 'host-1',
+        host_token: 'token-1',
+      }),
+      'utf8',
+    );
+
+    const second = f.supervisor.attach({ config_path: path });
+    expect(second).toEqual({ attached: true, config_path: path, action: 'noop' });
+    expect(f.spawned).toHaveLength(1);
+    expect(f.spawned[0]!.stopCalls).toEqual([]);
+
+    const reloaded = f.supervisor.reload();
+    expect(reloaded.reloaded).toBe(false);
+    if (reloaded.reloaded) throw new Error('unreachable');
+    expect(reloaded.reason).toBe('invalid_server_url');
+    expect(f.spawned).toHaveLength(1);
+    expect(f.spawned[0]!.stopCalls).toEqual([]);
+  });
+
   it('attach with a different valid path returns action=switched, stopping the old client BEFORE the new starts', () => {
     // Order matters: stop must come before start in the lifecycle
     // trace so backend doesn't see two attachments for the same host
