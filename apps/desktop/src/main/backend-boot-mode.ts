@@ -328,11 +328,14 @@ export class ProfileUnusableError extends Error {
         `classifier refused it (D4.a Commit 3 boot gate). ` +
         `Profile URL: '${decision.profileUrl}'. ` +
         `Classifier message: ${decision.classifyMessage} ` +
-        `Repair: clear the profile via Settings → "Connect to backend…" → ` +
-        `Clear saved profile, or set the env flag that made the URL ` +
-        `acceptable at write time (e.g. SILVERHAND_ALLOW_INSECURE_REMOTE=1 ` +
-        `for http remote URLs), or set SILVERHAND_FORCE_EMBEDDED=1 to ` +
-        `boot the embedded backend and ignore the profile.`,
+        `Repair options: ` +
+        `(1) restore the env flag that made the URL acceptable at write ` +
+        `time (e.g. SILVERHAND_ALLOW_INSECURE_REMOTE=1 for http remote ` +
+        `URLs) and relaunch; ` +
+        `(2) set SILVERHAND_FORCE_EMBEDDED=1 to boot the embedded backend ` +
+        `(this ignores the profile but does NOT delete it — once the UI ` +
+        `is up you can clear the profile via Settings → "Connect to ` +
+        `backend…" → Clear saved profile, then unset FORCE_EMBEDDED).`,
     );
     this.name = 'ProfileUnusableError';
     this.profileUrl = decision.profileUrl;
