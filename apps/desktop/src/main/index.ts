@@ -33,6 +33,7 @@ import {
 import { HostClient, spawnDaemonChild, type DaemonHandle } from '@silverhand/host';
 import { loadOrCreateServerConfig, silverhandDir, writeServerConfig } from './config.js';
 import { waitForDaemonGeneration } from './daemon-generation-attach.js';
+import { flipToFailedOnBudgetExhausted } from './local-host-failure.js';
 import {
   buildHostClaimInput,
   loadOrCreateInstallationId,
@@ -1199,6 +1200,14 @@ async function bootstrap(): Promise<void> {
         { reason: info.reason, code: info.code },
         'silverhand-daemon exited and exceeded restart budget',
       );
+      // D3.b Commit 2 — flip `local_host_status` to `'failed'` so the
+      // renderer can surface "daemon stopped responding" to the user.
+      // This is the ONLY call site of `flipToFailedOnBudgetExhausted`;
+      // the strict source rule (Cindy `#task:627` review gate) says
+      // attach-watchdog timeout / typed `host_outbound_attach` failure
+      // / backend 401 must NOT route through `failed`. See
+      // `local-host-failure.ts` for the full rationale.
+      localHostClaim = flipToFailedOnBudgetExhausted(localHostClaim);
     });
     // D3.b Commit 1 — re-attach outbound after daemon generation change.
     //

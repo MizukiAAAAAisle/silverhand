@@ -13,7 +13,7 @@ export const backendInfoKey = ['backend-info'] as const;
 
 export interface BackendInfoSnapshot {
   local_host_id: string | null;
-  local_host_status: 'unclaimed' | 'claimed' | 'revoked' | 'error';
+  local_host_status: 'unclaimed' | 'claimed' | 'revoked' | 'error' | 'failed';
   /**
    * D3.a Commit 4 — diagnostic timestamp from the backend's
    * `HostWsServerController.getAttachment` for `local_host_id`.

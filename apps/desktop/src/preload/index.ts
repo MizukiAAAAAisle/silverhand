@@ -10,7 +10,7 @@ export interface BackendInfo {
   url: string;
   mode: 'embedded' | 'remote';
   local_host_id: string | null;
-  local_host_status: 'unclaimed' | 'claimed' | 'revoked' | 'error';
+  local_host_status: 'unclaimed' | 'claimed' | 'revoked' | 'error' | 'failed';
   /**
    * D3.a Commit 4 — diagnostic timestamp from
    * `HostWsServerController.getAttachment(local_host_id)?.attachedAt`.
@@ -18,6 +18,11 @@ export interface BackendInfo {
    * Renderer can surface as "connected since" but must NOT derive a
    * new status word — the user-facing status enum stays
    * `local_host_status` and nothing else.
+   *
+   * D3.b Commit 2 — `'failed'` value added: surfaced when the daemon
+   * supervisor budget is exhausted (see `local-host-failure.ts`).
+   * `local_host_ws_attached_at` stays a separate diagnostic field;
+   * renderer must not derive status from it.
    */
   local_host_ws_attached_at: number | null;
 }

@@ -27,7 +27,17 @@ export type LocalHostClaimStatus =
   | { status: 'unclaimed'; hostId: null }
   | { status: 'claimed'; hostId: string }
   | { status: 'revoked'; hostId: string | null }
-  | { status: 'error'; hostId: string | null };
+  | { status: 'error'; hostId: string | null }
+  // D3.b Commit 2 — daemon supervisor budget exhausted (i.e.
+  // `spawnDaemonChild` gave up restarting after exceeding
+  // `maxRestarts` within `restartWindowMs`). The local host row is
+  // still valid server-side; the renderer can show "Host stopped
+  // responding" and prompt the user to restart the app. Strict
+  // source rule (Cindy `#task:627` review gate): ONLY the supervisor's
+  // `onExit` fatal callback may flip into this state. Attach
+  // watchdog timeout / typed `host_outbound_attach` failure / 401 /
+  // revoked are NOT routed through `failed`.
+  | { status: 'failed'; hostId: string | null };
 
 export function installationIdPath(silverhandDir: string): string {
   return join(silverhandDir, INSTALLATION_ID_FILENAME);

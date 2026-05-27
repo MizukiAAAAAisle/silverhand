@@ -9,7 +9,7 @@ export interface BackendInfo {
   url: string;
   mode: 'embedded' | 'remote';
   local_host_id: string | null;
-  local_host_status: 'unclaimed' | 'claimed' | 'revoked' | 'error';
+  local_host_status: 'unclaimed' | 'claimed' | 'revoked' | 'error' | 'failed';
   /**
    * D3.a Commit 4 — diagnostic timestamp of the daemon outbound WS
    * attachment for `local_host_id`, as reported by the backend's
@@ -18,7 +18,12 @@ export interface BackendInfo {
    *
    * Renderer may surface this as "connected since" UI. It MUST NOT
    * be used to derive a new status word — the user-facing status
-   * enum stays the 4-value `local_host_status` and nothing else.
+   * enum stays the 5-value `local_host_status` and nothing else.
+   *
+   * D3.b Commit 2 — `'failed'` value added: surfaced when the daemon
+   * supervisor budget is exhausted. Single source of truth is the
+   * `daemon.onExit` callback in `main/index.ts`; no other path may
+   * flip into `failed`.
    */
   local_host_ws_attached_at: number | null;
 }
