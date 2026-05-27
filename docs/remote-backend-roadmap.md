@@ -793,7 +793,7 @@ short summary only.
   **deferred to D5**.
 - Stage D4 honours **R1 / R2 / R3** from the terminal-state guard;
   R4 drift is captured by grep-able `TODO(D5,R4)` anchors per the
-  design contract §8.
+  design contract §9.
 
 **Task breakdown**: D4.0 (design contract, this doc + pointer) /
 D4.a (G1) / D4.b (G2) / D4.c (G3). No second-level slicing at design
@@ -801,15 +801,23 @@ time.
 
 **Cross-cutting locks** (full text in design contract):
 
-- TLS policy: two accept states (`system_ca_verified` |
-  `pinned_spki_verified`), everything else typed fail; http
-  loopback-only; `*.local` / LAN IP requires `SILVERHAND_ALLOW_INSECURE_REMOTE=1`
-  dev flag (not V1 supported remote path).
+- TLS policy: single accept state `system_ca_verified` (cert
+  chain to system CA + hostname + expiry; revocation best-effort).
+  http allowed only for loopback literals; non-loopback http
+  requires `SILVERHAND_ALLOW_INSECURE_REMOTE=1` dev flag (not V1
+  supported remote path). Self-signed / SPKI pin / TOFU / custom
+  TLS verifier all **non-goals for V1** (round-3 simplification by
+  shiki + Cindy); operators with private CAs install them into the
+  system trust store. `rejectUnauthorized: false` absolute ban
+  across the full TLS client surface, no helper exception.
 - First-user / signup: Option A (default signup on, operator manually
   locks via `SILVERHAND_DISABLE_SIGNUP=1`); 5 hard lock-in conditions
   (private-deployment supported model / lock-down runbook /
   non-loopback + signup-enabled WARN / no admin role / G3 signup
-  toggle negatives).
+  toggle negatives). `/auth/signup` route stays mounted under D4
+  and returns `403 { code: 'signup_disabled' }` when disabled
+  (**changes A.2 hide-as-missing behaviour**; D4.a updates A.2 test
+  in the same PR).
 - R4 deferral: `TODO(D5,R4)` anchor format mandatory at drift
   hotspots; PR description must declare "this IPC is local
   supervisor/control, not server↔daemon formal semantics".
@@ -1167,25 +1175,51 @@ this list — round 4 of this roadmap moved it into Stage D2.
     D2.e sees both categories of failure handling and doesn't
     assume every control command flows through RDC.
 - 2026-05-28 — D4.0 design pass output (Alice). Thread
-  `#conv:z8B7l4UPhwUc0OOB` converged the D4 framing locks (P1: R4
-  deferred to D5 / P2: G1·G2·G3 gate ladder / P3: D4 and D5 split),
-  4-task decomposition (D4.0 / D4.a-G1 / D4.b-G2 / D4.c-G3, no
-  second-level slicing), TLS policy (`system_ca_verified` |
-  `pinned_spki_verified` accept matrix; loopback-only http;
-  `*.local` / LAN IP gated behind `SILVERHAND_ALLOW_INSECURE_REMOTE`
-  dev flag), first-user / signup (Option A — default signup on +
-  operator manual lock-down — with 5 hard Cindy-locked conditions:
-  private-deployment supported model, lock-down runbook, non-loopback
-  + signup-enabled WARN with structured `bind_address_scope` field,
-  no admin role, G3 signup-toggle negative coverage), R4 deferral
-  mechanics (mandatory `TODO(D5,R4)` anchor format with required
-  reference to design contract §8; PR description must declare local
-  supervisor/control transport scope), and doc structure (separate
-  `docs/remote-backend-d4-design.md` as the lock-semantics owner;
-  this roadmap holds a short summary + pointer only — Cindy nit).
-  Stage D §3 D4 section rewritten; new D5 placeholder section
-  inserted; dependency graph + hard-constraint ordering updated to
-  include the D4 → D5 gate. shiki product-confirmed Option A and
-  P1-P3 OK. Cindy preview-aligned on review angle. Full draft
-  pending Cindy review on
-  `feature/remote-backend-v1-stage-d4-design`.
+  `#conv:z8B7l4UPhwUc0OOB` converged across three review rounds
+  with @Cindy + shiki. Final shape committed to
+  `feature/remote-backend-v1-stage-d4-design`:
+  - D4 framing locks (P1: R4 deferred to D5 / P2: G1·G2·G3 gate
+    ladder / P3: D4 and D5 split)
+  - 4-task decomposition (D4.0 / D4.a-G1 / D4.b-G2 / D4.c-G3, no
+    second-level slicing)
+  - TLS policy simplified to single accept state
+    `system_ca_verified` (round 3 — shiki product call + Cindy
+    endorsement to drop SPKI pin / self-signed / custom verifier
+    from V1; operators install private CAs into system trust
+    store); loopback-only http; `*.local` / LAN IP gated behind
+    `SILVERHAND_ALLOW_INSECURE_REMOTE` dev flag; absolute
+    `rejectUnauthorized: false` ban on the full TLS client
+    surface, no helper exception
+  - First-user / signup (Option A — default signup on + operator
+    manual lock-down — with 5 hard Cindy-locked conditions:
+    private-deployment supported model, lock-down runbook,
+    non-loopback + signup-enabled WARN with structured
+    `bind_address_scope` field, no admin role, G3 signup-toggle
+    negative coverage); `/auth/signup` stays mounted under D4
+    and returns `403 { code: 'signup_disabled' }` when disabled
+    (D4.a updates A.2's hide-as-missing test in the same PR)
+  - Server connection profile (§7) as single source of `server_url`
+    for all desktop→backend transports across pre-auth + post-auth;
+    minimal shape `{ version, server_url, created_at, updated_at }`
+    (no SPKI pin, no insecure_dev); desktop-main exclusive owner,
+    `safeStorage`-encrypted; daemon never reads profile, only
+    reads derived daemon-config; daemon-config is additive
+    migration (preserves existing `server_url` / `host_id` /
+    `host_token`, adds `profile_version` only); profile update
+    flow is validated-first + phase-1 + phase-2 + recoverable
+    `partial_apply_pending` state (Retry / desktop restart /
+    daemon restart all converge)
+  - R4 deferral mechanics (mandatory `TODO(D5,R4)` anchor format
+    with required reference to design contract §9; PR description
+    must declare local supervisor/control transport scope)
+  - Doc structure (separate `docs/remote-backend-d4-design.md` as
+    the lock-semantics owner; this roadmap holds a short summary +
+    pointer only — Cindy nit)
+  - Stage D §3 D4 section rewritten; new D5 placeholder section
+    inserted; dependency graph + hard-constraint ordering updated
+    to include the D4 → D5 gate
+  - Full per-round audit trail (draft 1 / round 2 / round 3) lives
+    in design contract §13.
+  shiki product-confirmed Option A signup default, P1-P3 framing,
+  task split, and round-3 TLS simplification. Cindy review-aligned
+  on all rounds; round-3 review pending.
