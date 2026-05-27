@@ -12,6 +12,9 @@ export const hostsKey = ['hosts'] as const;
 export const backendInfoKey = ['backend-info'] as const;
 
 export interface BackendInfoSnapshot {
+  /** D3.c Commit 4 — server URL the renderer-side Settings form seeds
+   *  from. Sourced from `BackendInfo.url`. */
+  url: string;
   local_host_id: string | null;
   local_host_status: 'unclaimed' | 'claimed' | 'revoked' | 'error' | 'failed';
   /**
@@ -32,12 +35,14 @@ async function fetchBackendInfo(): Promise<BackendInfoSnapshot> {
   const info = await window.agentHub.getBackendInfo();
   if (!info) {
     return {
+      url: '',
       local_host_id: null,
       local_host_status: 'error',
       local_host_ws_attached_at: null,
     };
   }
   return {
+    url: info.url,
     local_host_id: info.local_host_id,
     local_host_status: info.local_host_status,
     local_host_ws_attached_at: info.local_host_ws_attached_at,

@@ -55,6 +55,7 @@ import {
   type FontPreset,
 } from '@/settings/font-presets';
 import { HostsPane } from './HostsPane';
+import { ServerUrlPane } from './ServerUrlPane';
 
 const settingsKey = ['settings'] as const;
 
@@ -128,10 +129,11 @@ function parseRuntimes(raw: string | undefined | null): RuntimeKind[] {
  *  page-internal sub-nav; selection is local React state, persisted to
  *  localStorage so a refresh stays put. (No URL routing yet — settings
  *  deep-links are rare and the URL slot belongs to the chat router.) */
-type SettingsSection = 'appearance' | 'profile' | 'hosts' | 'proxy';
+type SettingsSection = 'appearance' | 'profile' | 'server' | 'hosts' | 'proxy';
 const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   'appearance',
   'profile',
+  'server',
   'hosts',
   'proxy',
 ];
@@ -268,6 +270,8 @@ export function SettingsPage(): JSX.Element {
             />
           ) : section === 'profile' ? (
             <ProfilePane />
+          ) : section === 'server' ? (
+            <ServerUrlPane />
           ) : section === 'hosts' ? (
             <HostsPane />
           ) : (
@@ -311,6 +315,7 @@ function SettingsSubNav({
   }> = [
     { id: 'appearance', label: 'Appearance', icon: <Palette className="size-3.5" /> },
     { id: 'profile', label: 'Profile', icon: <User className="size-3.5" /> },
+    { id: 'server', label: 'Server', icon: <Server className="size-3.5" /> },
     { id: 'hosts', label: 'Local host', icon: <Server className="size-3.5" /> },
     { id: 'proxy', label: 'Proxy', icon: <Network className="size-3.5" /> },
   ];
