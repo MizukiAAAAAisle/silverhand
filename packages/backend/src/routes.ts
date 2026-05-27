@@ -770,7 +770,10 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
 
   // ── Auth / health / runtimes / hosts ─────────────────────────────
   app.get(apiPaths.serverInfo, c =>
-    c.json({ signup_enabled: ctx.authConfig.signupEnabled }),
+    c.json({
+      signup_enabled: ctx.authConfig.signupEnabled,
+      bind_address_scope: ctx.bindAddressScope,
+    }),
   );
 
   if (ctx.deploymentMode === 'embedded') {
@@ -821,26 +824,40 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     });
   }
 
-  if (ctx.authConfig.signupEnabled) {
-    app.post(authPaths.signup, async c => {
-      const body = await c.req.json().catch(() => null);
-      const parsed = AuthSignupInputSchema.safeParse(body);
-      if (!parsed.success) {
-        return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
-      }
-      const signup = await userAuth.signup(parsed.data);
-      if (!signup.ok) return authFailed(c);
-      const user = ctx.userService.getDto(signup.userId);
-      if (!user) {
-        return c.json({ error: 'created user is missing post-signup' }, 500);
-      }
-      const issued = ctx.authSessions.issueSession({
-        userId: signup.userId,
-        ...authSessionMetadata(c),
-      });
-      return c.json({ user_token: issued.userToken, user });
+  // D4.a Commit 4 (per `docs/remote-backend-d4-design.md` §6.2):
+  // `/auth/signup` is **always mounted**. The handler branches on
+  // `signupEnabled` and returns a typed `403 { code:
+  // 'signup_disabled' }` body when disabled — a change from the
+  // A.2 hide-as-missing behaviour. Desktop and ops tooling read the
+  // structured body (plus `/api/server/info.signup_enabled`) instead
+  // of a generic 404.
+  app.post(authPaths.signup, async c => {
+    if (!ctx.authConfig.signupEnabled) {
+      return c.json(
+        {
+          error: 'signup is disabled on this backend',
+          code: 'signup_disabled',
+        },
+        403,
+      );
+    }
+    const body = await c.req.json().catch(() => null);
+    const parsed = AuthSignupInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    const signup = await userAuth.signup(parsed.data);
+    if (!signup.ok) return authFailed(c);
+    const user = ctx.userService.getDto(signup.userId);
+    if (!user) {
+      return c.json({ error: 'created user is missing post-signup' }, 500);
+    }
+    const issued = ctx.authSessions.issueSession({
+      userId: signup.userId,
+      ...authSessionMetadata(c),
     });
-  }
+    return c.json({ user_token: issued.userToken, user });
+  });
 
   app.post(authPaths.login, async c => {
     const body = await c.req.json().catch(() => null);

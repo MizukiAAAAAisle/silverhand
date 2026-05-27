@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import type {
   AgentRunState,
   AgentRunTerminalReason,
+  BindAddressScope,
   ServerConfig,
 } from '@silverhand/shared';
 import {
@@ -202,6 +203,14 @@ export interface BuildTestAppOptions {
   ownedLocalHostUserIds?: string[];
   deploymentMode?: BackendDeploymentMode;
   hostWsController?: () => HostWsServerController | null;
+  /**
+   * D4.a Commit 4 — override the bind-address classification for
+   * `/api/server/info` and any route that reads it. Defaults to
+   * `'loopback'` because the test app does not actually bind a
+   * socket; production callers compute this at boot from the
+   * resolved `SILVERHAND_LISTEN` value via `classifyBindAddressScope`.
+   */
+  bindAddressScope?: BindAddressScope;
 }
 
 export interface TestApp {
@@ -289,6 +298,7 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
       outboundEventFanoutInstalled: true,
     },
     serverConfig,
+    bindAddressScope: options.bindAddressScope ?? 'loopback',
     authConfig,
     embeddedBootstrap: createDisabledEmbeddedBootstrapState(tmp.silverhandDir),
     logger: silentLogger,

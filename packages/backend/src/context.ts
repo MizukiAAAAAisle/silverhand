@@ -1,5 +1,5 @@
 import type { Database as Db } from 'better-sqlite3';
-import type { ServerConfig } from '@silverhand/shared';
+import type { BindAddressScope, ServerConfig } from '@silverhand/shared';
 import type { ScopeEventBus } from './ws/scope-event-bus.js';
 import type { AgentRuntimeHost } from './runtime/agent-runtime-host.js';
 import type { AttachmentService } from './services/attachment-service.js';
@@ -86,6 +86,21 @@ export interface BackendContext {
     outboundEventFanoutInstalled: boolean;
   };
   serverConfig: ServerConfig;
+  /**
+   * D4.a Commit 4 — classification of the address the backend
+   * is bound to. Surfaced on `/api/server/info` so desktop / ops
+   * tooling can read `(signup_enabled, bind_address_scope)`
+   * together, and used at boot to decide whether to emit the
+   * "non-loopback bind + signup enabled" WARN line (per
+   * `docs/remote-backend-d4-design.md` §6.3 condition 3).
+   *
+   * Derived once at boot via `classifyBindAddressScope(listenHostname)`;
+   * stored on the context so handlers don't re-derive (the
+   * classification is deterministic but pinning it once at boot
+   * keeps the log line and the response surface consistent for the
+   * life of the process).
+   */
+  bindAddressScope: BindAddressScope;
   /** Auth/setup config resolved once during backend startup. */
   authConfig: AuthRuntimeConfig;
   /** Embedded-only one-shot session bootstrap state for this backend boot. */

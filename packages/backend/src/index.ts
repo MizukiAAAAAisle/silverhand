@@ -64,7 +64,11 @@ import { TaskService } from './services/task-service.js';
 import { UserService } from './services/user-service.js';
 import { UserRepo } from './repos/user-repo.js';
 import { createLocalBlobFileStorage } from './storage/blob-file-storage.js';
-import type { ServerConfig } from '@silverhand/shared';
+import {
+  classifyBindAddressScope,
+  type BindAddressScope,
+  type ServerConfig,
+} from '@silverhand/shared';
 import type { HostClient } from '@silverhand/host';
 import type { Server as HttpServer } from 'node:http';
 import { createLogLevelControl, type LogLevelControl } from './logger.js';
@@ -136,15 +140,39 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   };
   const logControl = resolveLogControl(loggers.system);
   const authConfig = opts.authConfig ?? resolveAuthRuntimeConfig();
+  // D4.a Commit 4 — classify the bind address once at boot. Pinning
+  // the value on `ctx.bindAddressScope` keeps the boot-time WARN
+  // line (below) and the `/api/server/info` response surface
+  // consistent for the life of the process.
+  const bindAddressScope: BindAddressScope = classifyBindAddressScope(listenHostname);
   logger.info(
     {
       mode: opts.mode,
       listenHostname,
       listenPort,
       signupEnabled: authConfig.signupEnabled,
+      bindAddressScope,
     },
-    `Backend boot: mode=${opts.mode}; signup=${authConfig.signupEnabled ? 'enabled' : 'disabled'}`,
+    `Backend boot: mode=${opts.mode}; signup=${authConfig.signupEnabled ? 'enabled' : 'disabled'}; bind=${bindAddressScope}`,
   );
+  // §6.3 condition 3 — non-loopback bind + signup enabled is the
+  // single combination that lets a passerby register on a backend
+  // reachable beyond `127.0.0.1`. Emit a visible WARN that points
+  // at the lock-down runbook so operators see it on first boot
+  // and can either narrow the bind or set `SILVERHAND_DISABLE_SIGNUP=1`.
+  if (bindAddressScope !== 'loopback' && authConfig.signupEnabled) {
+    logger.warn(
+      {
+        listenHostname,
+        bindAddressScope,
+        signupEnabled: true,
+        runbookSection: 'remote-backend-runbook §12 (lock-down)',
+      },
+      `Backend is bound to a ${bindAddressScope} address with signup ENABLED. ` +
+        `Set SILVERHAND_DISABLE_SIGNUP=1 once your account is created. ` +
+        `See remote-backend runbook §12 (lock-down).`,
+    );
+  }
   let migrationsApplied = false;
   const migrationResult: { current: MigrationRunResult | null } = { current: null };
   const migrationStartedAt = performance.now();
@@ -237,6 +265,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
       outboundEventFanoutInstalled: false,
     },
     serverConfig: opts.serverConfig,
+    bindAddressScope,
     authConfig,
     embeddedBootstrap: createDisabledEmbeddedBootstrapState(opts.silverhandDir),
     logger,

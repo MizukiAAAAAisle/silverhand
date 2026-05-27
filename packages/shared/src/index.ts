@@ -1,4 +1,5 @@
 export * from './api/index.js';
+export * from './bind-address-scope.js';
 export * from './db/index.js';
 export * from './driver/index.js';
 export * from './config.js';

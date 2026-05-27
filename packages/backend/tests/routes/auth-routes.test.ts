@@ -10,23 +10,57 @@ describe('auth routes', () => {
     t = null;
   });
 
-  it('exposes immutable server info and hides disabled signup as a missing route', async () => {
-    t = buildTestApp({ authConfig: { signupEnabled: false } });
+  it('exposes server info with bind scope and serves typed 403 when signup is disabled', async () => {
+    // D4.a Commit 4 contract (per docs/remote-backend-d4-design.md §6.2):
+    //   - `/api/server/info` exposes both `signup_enabled` AND
+    //     `bind_address_scope` so desktop/ops tooling can read the
+    //     "exposure + signup" combination programmatically.
+    //   - `/auth/signup` is ALWAYS mounted; the handler branches on
+    //     `signupEnabled` and returns a typed `403 { code:
+    //     'signup_disabled' }` body when disabled (reversing the
+    //     A.2 hide-as-missing behaviour, see §6.2 for rationale).
+    t = buildTestApp({
+      authConfig: { signupEnabled: false },
+      bindAddressScope: 'lan',
+    });
 
     const info = await requestJson(t, 'GET', apiPaths.serverInfo);
     expect(info.status).toBe(200);
-    expect(info.body).toEqual({ signup_enabled: false });
+    expect(info.body).toEqual({
+      signup_enabled: false,
+      bind_address_scope: 'lan',
+    });
 
-    const disabled = await requestText(t, 'POST', authPaths.signup, {
+    const disabled = await requestJson(t, 'POST', authPaths.signup, {
       email: 'closed@example.com',
       password: 'correct-password',
     });
+    expect(disabled.status).toBe(403);
+    expect(disabled.body).toMatchObject({ code: 'signup_disabled' });
+
+    // The missing-route 404 still works for unrelated paths — pin that
+    // the typed 403 is a real handler decision, not a routing accident.
     const missing = await requestText(t, 'POST', '/auth/not-a-route', {
       email: 'closed@example.com',
       password: 'correct-password',
     });
-    expect(disabled.status).toBe(404);
-    expect(disabled).toEqual(missing);
+    expect(missing.status).toBe(404);
+  });
+
+  it('reports bind_address_scope=loopback by default and surfaces public when overridden', async () => {
+    // D4.a Commit 4 (per §6.3 condition 3) — the field is required on
+    // production `/api/server/info`. Default in tests must surface
+    // `loopback` so route tests do not have to special-case it.
+    t = buildTestApp();
+    const def = await requestJson(t, 'GET', apiPaths.serverInfo);
+    expect(def.status).toBe(200);
+    expect(def.body.bind_address_scope).toBe('loopback');
+    t.cleanup();
+
+    t = buildTestApp({ bindAddressScope: 'public' });
+    const wide = await requestJson(t, 'GET', apiPaths.serverInfo);
+    expect(wide.status).toBe(200);
+    expect(wide.body.bind_address_scope).toBe('public');
   });
 
   it('signs up a password user, prioritizes user_token principal, and revokes on logout', async () => {
