@@ -239,6 +239,50 @@ describe('classifyServerUrl — V1 acceptance policy', () => {
     expect(msg).toContain('[0:0:0:0:0:0:0:1]');
   });
 
+  // ── Userinfo refusal (Cindy `#task:631` D3.c P1 round 2) ───────
+  //
+  // The earlier draft of `extractRawAuthorityHost` silently dropped
+  // `user[:pass]@` and continued classifying the trailing host.
+  // That bypassed the V1 allowlist gate because
+  // `http://api.example.com@localhost:18080` would extract to
+  // `localhost` and pass — even though the WHOLE URL carries an
+  // attacker-controlled cosmetic prefix, AND the success-path
+  // `URL.toString()` would propagate it into the wsUrl the daemon
+  // connects to (where ws:// Basic-auth userinfo semantics could
+  // collide with our Bearer header). V1 has no use case for HTTP
+  // basic-auth on the backend URL, so the policy refuses the
+  // construct entirely. Surfaced under the existing `malformed_url`
+  // reason (no new UI branch).
+
+  it('rejects `http://user@localhost:18080` (userinfo would mask a non-loopback host check)', () => {
+    const msg = expectReject('http://user@localhost:18080', 'malformed_url');
+    // Message must be actionable: the user needs to know which
+    // construct was refused, not just "URL is invalid".
+    expect(msg).toMatch(/credentials/i);
+  });
+
+  it('rejects `http://user:pass@127.0.0.1:18080` (userinfo with password also refused)', () => {
+    expectReject('http://user:pass@127.0.0.1:18080', 'malformed_url');
+  });
+
+  it('rejects `http://api.example.com@localhost:18080` (the load-bearing attacker-shape case)', () => {
+    // Without the userinfo refusal this URL would pass: the host
+    // after `@` is `localhost`, an allowlist entry. Pinning this
+    // input keeps anyone from "fixing" the helper by re-adding the
+    // silent-drop behavior under the misguided belief that the
+    // remaining authority is the only thing that matters.
+    expectReject('http://api.example.com@localhost:18080', 'malformed_url');
+  });
+
+  it('still accepts `?foo=bar@baz` in the query string (@ outside the authority is fine)', () => {
+    // Guard against an over-broad userinfo refusal that would also
+    // reject `@` appearing in path / query / fragment. The helper
+    // strips path/query/fragment BEFORE checking for `@`, so this
+    // input must classify successfully.
+    const u = expectLoopback('http://localhost:18080/api?token=a@b');
+    expect(u.hostname).toBe('localhost');
+  });
+
   // ── Discriminator hygiene ──────────────────────────────────────
 
   it('the success arm carries kind:"loopback" so V1.1 can add kind:"remote" without breaking callers', () => {

@@ -114,27 +114,46 @@ export function isLoopbackHost(hostname: string): boolean {
  *     IP-literal = "[" IPv6address "]"
  *
  * Algorithm: cut input at `://` (scheme separator), then at first
- * `/`, `?`, or `#` (path/query/fragment), then drop everything up
- * to and including the last `@` (userinfo), then strip the port
- * with IPv6 bracket awareness.
+ * `/`, `?`, or `#` (path/query/fragment), then **refuse userinfo
+ * entirely** (any `@` in the authority slice → null), then strip
+ * the port with IPv6 bracket awareness.
+ *
+ * Userinfo refusal (Cindy `#task:631` D3.c P1 round 2): the
+ * earlier draft silently dropped `user[:pass]@` and continued
+ * classifying the trailing host. That bypassed the allowlist gate
+ * because `http://api.example.com@localhost:18080` would extract
+ * to `localhost` and pass — even though the **WHOLE URL** the user
+ * provided carries an attacker-controlled cosmetic prefix (and the
+ * URL constructor's success-path `.toString()` would propagate it
+ * into the wsUrl we hand to the daemon, where `ws://`'s Basic-auth
+ * userinfo interpretation could collide with our Bearer auth
+ * header). V1 has no use case for HTTP basic-auth on the backend
+ * URL, so we refuse the construct entirely. Classifier surfaces
+ * this as `malformed_url` (reused on purpose to avoid expanding
+ * the UI rejection-reason surface for this edge case).
  *
  * Returns `null` if the input doesn't look like an authority-form
- * URL (no `://`, mid-string `]` without leading `[`, etc.); the
- * caller falls back to a `malformed_url` rejection in that case.
+ * URL (no `://`, mid-string `]` without leading `[`, userinfo
+ * present, etc.); the caller falls back to a `malformed_url`
+ * rejection in that case.
  */
 export function extractRawAuthorityHost(input: string): string | null {
   const schemeIdx = input.indexOf('://');
   if (schemeIdx < 0) return null;
   let rest = input.slice(schemeIdx + 3);
   // Trim at path/query/fragment boundary so we don't pick up
-  // `/api` or `?foo=bar` as part of the host.
+  // `/api` or `?foo=bar` as part of the host. (Also so a `@` in a
+  // query string or fragment doesn't trigger the userinfo refusal
+  // below.)
   const pathIdx = rest.search(/[/?#]/);
   if (pathIdx >= 0) rest = rest.slice(0, pathIdx);
-  // Userinfo: `user:pass@host` — drop everything up to and
-  // including the LAST `@` (raw passwords can in theory contain
-  // `@`, though we don't accept userinfo in V1 anyway).
-  const atIdx = rest.lastIndexOf('@');
-  if (atIdx >= 0) rest = rest.slice(atIdx + 1);
+  // Userinfo refusal: any `@` here is part of `[userinfo "@"]`
+  // (path/query/fragment were already stripped). V1 does not accept
+  // URL credentials on the backend URL — return null so the caller
+  // rejects as `malformed_url`. Do NOT try to "be helpful" by
+  // dropping the userinfo and continuing; that silently widened the
+  // policy in the previous draft.
+  if (rest.includes('@')) return null;
   // IPv6 literal: `[...]` optionally followed by `:port`. The
   // host text is the bracketed portion INCLUDING the brackets —
   // matches the allowlist's `[::1]` entry literally.
@@ -235,14 +254,24 @@ export function classifyServerUrl(input: string): ServerUrlClassification {
   const rawHost = extractRawAuthorityHost(input);
   // `parsed` succeeded for `http://` / `https://`, so the raw
   // extractor should also have found an authority host. A null
-  // here would mean the input slipped past both layers — surface
-  // it as malformed rather than silently accepting it.
+  // here means either (a) the input slipped past both layers, or
+  // (b) the authority included userinfo (`user[:pass]@host`),
+  // which the V1 policy refuses outright — see the comment on
+  // `extractRawAuthorityHost`. Surface it as `malformed_url`
+  // (intentionally reusing the existing reason rather than minting
+  // a `userinfo_present` reason — the UI doesn't need a new branch
+  // for what is effectively a typo / hostile-prefix case).
   if (rawHost === null) {
-    return {
-      ok: false,
-      reason: 'malformed_url',
-      message: 'Could not extract authority host from URL',
-    };
+    // Detect userinfo specifically so the surfaced message is
+    // actionable. The detection mirrors the helper's algorithm
+    // (post-`://`, pre-path/query/fragment) but only cares whether
+    // an `@` is present, not where.
+    const afterScheme = input.slice(input.indexOf('://') + 3);
+    const beforePath = afterScheme.replace(/[/?#].*$/, '');
+    const message = beforePath.includes('@')
+      ? 'URL credentials (user@host) are not accepted'
+      : 'Could not extract authority host from URL';
+    return { ok: false, reason: 'malformed_url', message };
   }
   if (!isLoopbackHost(rawHost)) {
     return {

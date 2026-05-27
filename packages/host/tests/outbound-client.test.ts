@@ -73,6 +73,18 @@ describe('outbound daemon websocket client', () => {
     expect(() => hostConnectWebSocketUrl('ws://127.0.0.1:1234')).toThrow(
       /unsupported_server_url_protocol/,
     );
+    // Userinfo refusal (Cindy `#task:631` D3.c P1 round 2):
+    // hand-edited daemon-config with `user[:pass]@host` must also
+    // be rejected here, otherwise the success-path `URL.toString()`
+    // would propagate the userinfo into the wsUrl the daemon
+    // connects to (where ws:// Basic-auth semantics could collide
+    // with our Bearer header).
+    expect(() => hostConnectWebSocketUrl('http://user@localhost:1234')).toThrow(
+      /invalid_server_url:malformed_url/,
+    );
+    expect(() =>
+      hostConnectWebSocketUrl('http://api.example.com@localhost:1234'),
+    ).toThrow(/invalid_server_url:malformed_url/);
   });
 
   it('reconnects with backoff after server shutdown without replaying a queue', async () => {
