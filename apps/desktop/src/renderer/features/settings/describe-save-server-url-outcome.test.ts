@@ -90,7 +90,14 @@ describe('describeSaveServerUrlOutcome — classify_rejected reasons', () => {
   }> = [
     { reason: 'malformed_url', titleMatch: /not a valid url/i },
     { reason: 'unsupported_scheme', titleMatch: /http:\/\/ or https:\/\//i },
-    { reason: 'non_loopback_host', titleMatch: /loopback/i },
+    // D4.a Commit 1 — replaces D3's `non_loopback_host` case. Title
+    // must point the user at the two valid escape routes (use
+    // https, or set the dev env flag) rather than the obsolete
+    // "loopback only" message.
+    {
+      reason: 'insecure_remote_http_disallowed',
+      titleMatch: /https:\/\/.*SILVERHAND_ALLOW_INSECURE_REMOTE/i,
+    },
   ];
 
   for (const c of cases) {
@@ -106,6 +113,27 @@ describe('describeSaveServerUrlOutcome — classify_rejected reasons', () => {
       expect(banner.description).toBe('classifier verbatim message');
     });
   }
+
+  // D4.a Commit 1 — the `remote_backend_not_yet_supported` arm is
+  // a NEW outcome (not a classify_rejected reason) introduced by
+  // widening the classifier to admit `kind: 'remote'`. Pin both
+  // insecure variants render an error banner with a stable headline.
+  it.each([true, false])(
+    'remote_backend_not_yet_supported (insecure=%s) → tone=error with not-yet-enabled headline',
+    insecure => {
+      const banner = describeSaveServerUrlOutcome({
+        ok: false,
+        kind: 'remote_backend_not_yet_supported',
+        insecure,
+        message: insecure
+          ? 'Remote backend support is not yet enabled in this build (input was non-loopback over http).'
+          : 'Remote backend support is not yet enabled in this build (input was non-loopback over https).',
+      });
+      expect(banner.tone).toBe('error');
+      expect(banner.title).toMatch(/not yet enabled/i);
+      expect(banner.description).toContain('not yet enabled');
+    },
+  );
 });
 
 describe('describeSaveServerUrlOutcome — reload_rejected reasons', () => {

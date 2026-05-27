@@ -134,7 +134,20 @@ export type DesktopSaveServerUrlResult =
   | {
       ok: false;
       kind: 'classify_rejected';
-      reason: 'malformed_url' | 'unsupported_scheme' | 'non_loopback_host';
+      reason:
+        | 'malformed_url'
+        | 'unsupported_scheme'
+        // D4.a Commit 1 — replaces D3's `non_loopback_host`. See
+        // `api.d.ts` for the user-facing rationale.
+        | 'insecure_remote_http_disallowed';
+      message: string;
+    }
+  | {
+      // D4.a Commit 1 — see `api.d.ts` for rationale. Removed when
+      // Commit 5 lands remote daemon acceptance.
+      ok: false;
+      kind: 'remote_backend_not_yet_supported';
+      insecure: boolean;
       message: string;
     }
   | { ok: false; kind: 'config_write_failed'; message: string }

@@ -8,4 +8,5 @@ export * from './platform-prompt.js';
 export * from './proxy-env.js';
 export * from './server-url.js';
 export * from './system-messages.js';
+export * from './tls-policy.js';
 export * from './ws-frames.js';

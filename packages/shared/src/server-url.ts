@@ -2,32 +2,53 @@
  * `@silverhand/shared` — server URL classification primitive used by
  * desktop renderer, desktop main, host daemon, and backend.
  *
- * V1 SCOPE: the only acceptable backend deployment is **loopback**
- * (the embedded backend that ships with Electron). Remote backend
- * support is gated to V1.1. This module owns the single source of
- * truth for "is this server URL acceptable in V1?".
+ * V1 SCOPE (D4.a Commit 1):
+ *   - **loopback http/https** is always accepted (the embedded backend
+ *     case from D3 and Wizard local-server case).
+ *   - **remote https** is accepted as `kind: 'remote', insecure: false`.
+ *     TLS verification at connect time is the **system-default** Node
+ *     pipeline — this classifier does NOT verify certificates, parse
+ *     CA chains, or pin anything. The typed surface lives in
+ *     `tls-policy.ts`.
+ *   - **remote http** is accepted as `kind: 'remote', insecure: true`
+ *     ONLY when the caller passes `allowInsecureRemote: true` (read
+ *     from the dev env flag `SILVERHAND_ALLOW_INSECURE_REMOTE=1`).
+ *     Without the flag, remote http is rejected as
+ *     `insecure_remote_http_disallowed`.
+ *
+ * Raw-host strict-allowlist contract preserved from D3.c (Cindy
+ * `#task:631`): the loopback check runs against the **raw authority
+ * host** extracted from the input string, NOT against `URL.hostname`.
+ * Obfuscated forms (`http://0x7f000001`, `http://127.000.000.001`,
+ * `http://[0:0:0:0:0:0:0:1]`) parse to canonical loopback under
+ * `new URL(...)` — but their raw authority is not in the allowlist,
+ * so they classify as `kind: 'remote'` (subject to scheme rules), NOT
+ * as loopback. This stays true regardless of `allowInsecureRemote`
+ * (Cindy D4.a Commit 1 constraint: "dev flag must not let obfuscated
+ * loopback / userinfo / weird URL forms flow back to acceptable
+ * loopback input"). Userinfo (`user@host`) and IPv6 bracket-suffix
+ * smuggling (`[::1]evil`) are still rejected outright by
+ * {@link extractRawAuthorityHost} regardless of flag.
  *
  * Why a shared module:
- *   - Renderer Settings UI needs to disable the Save button when the
- *     user enters a non-loopback URL (UX).
+ *   - Renderer Settings / Setup Wizard needs to enable/disable Save
+ *     based on classification (UX).
  *   - Desktop main IPC handler needs to re-validate the URL it
  *     receives from the renderer — never trust renderer input
  *     (security boundary).
- *   - Daemon outbound client needs to reject non-loopback http://
- *     URLs at the WS resolution step (Stage D2.f fail-closed).
- *   - All three MUST agree, or the user sees "I clicked Save and it
- *     looked accepted, then the daemon errored out". The drift
- *     this module exists to prevent (per Cindy D3.c lock C).
+ *   - Daemon outbound client needs to gate the WS resolution step.
+ *   - All hops MUST agree, or the user sees "I clicked Save and it
+ *     looked accepted, then the daemon errored out" (the drift this
+ *     module exists to prevent — Cindy D3.c lock C).
  *
  * What this module does NOT do:
- *   - It doesn't decide V1.1's remote-backend acceptance policy.
- *     When remote backend support lands, extend the result to
- *     `kind: 'remote'` and add the relevant trust/TLS checks there.
- *   - It doesn't authenticate or probe the URL — purely structural
- *     classification.
- *   - It doesn't normalize trailing slashes / port defaults
- *     beyond what `URL` does (we return the parsed `URL` object
- *     so callers can read .href / .hostname / .port as needed).
+ *   - It does NOT authenticate or probe the URL — purely structural.
+ *   - It does NOT verify TLS certificates — that lives in the Node
+ *     TLS layer; this module just decides whether the URL shape is
+ *     acceptable.
+ *   - It does NOT normalize trailing slashes / port defaults beyond
+ *     what `URL` does (we return the parsed `URL` so callers can
+ *     read `.href` / `.hostname` / `.port` directly).
  */
 
 /**
@@ -184,17 +205,29 @@ export function extractRawAuthorityHost(input: string): string | null {
 
 /**
  * Why this is a discriminated union rather than a boolean:
- * different rejection reasons surface different UI messages
- * ("Remote backend coming in V1.1" vs "Use http:// or https://")
- * and the renderer / main / daemon all benefit from a typed
- * `reason` they can branch on without parsing strings.
+ * different acceptance kinds and rejection reasons surface different
+ * UI messages (loopback vs remote, http vs https, with/without dev
+ * flag) and the renderer / main / daemon all benefit from a typed
+ * variant they can branch on without parsing strings.
  *
  * On the `ok: true` path we also hand back the parsed `URL` so
  * callers don't have to re-parse it (and so the structural
  * normalization — e.g. default port stripping — is shared).
+ *
+ * Discriminator semantics:
+ *   - `kind: 'loopback'` — raw authority host is in the V1 loopback
+ *     allowlist (`localhost` / `127.0.0.1` / `::1` / `[::1]`).
+ *   - `kind: 'remote', insecure: false` — non-loopback over https://.
+ *     TLS verification will be Node's system-default at connect time.
+ *   - `kind: 'remote', insecure: true` — non-loopback over http://
+ *     accepted ONLY because the caller passed `allowInsecureRemote`
+ *     (i.e. the dev env flag was set). Callers SHOULD surface a
+ *     "connection is unencrypted" warning in any UI that consumes
+ *     this variant.
  */
 export type ServerUrlClassification =
   | { ok: true; kind: 'loopback'; url: URL }
+  | { ok: true; kind: 'remote'; url: URL; insecure: boolean }
   | {
       ok: false;
       reason: ServerUrlRejectionReason;
@@ -204,44 +237,76 @@ export type ServerUrlClassification =
     };
 
 export type ServerUrlRejectionReason =
-  /** `URL` constructor threw (empty, garbage, missing scheme). */
+  /** `URL` constructor threw (empty, garbage, missing scheme). Also
+   *  used for the userinfo-refusal and IPv6-bracket-suffix-smuggling
+   *  cases — see {@link extractRawAuthorityHost} (reused on purpose
+   *  to avoid expanding the UI rejection-reason surface). */
   | 'malformed_url'
-  /** Not http: or https: (rejects ws://, file://, ftp://, etc.). */
+  /** Not http: or https: (rejects ws://, file://, ftp://, etc.).
+   *  The dev `allowInsecureRemote` flag does NOT widen this — only
+   *  http / https are ever acceptable schemes. */
   | 'unsupported_scheme'
-  /** Hostname is not in the V1 loopback allowlist. Covers LAN
-   *  IPs, public DNS names, `0.0.0.0`, non-canonical loopback
-   *  literals — anything that isn't a literal entry of
-   *  {@link isLoopbackHost}. The V1 message points the user at
-   *  V1.1 for remote backend support. */
-  | 'non_loopback_host';
+  /** Non-loopback host over http://, and the caller did NOT pass
+   *  `allowInsecureRemote: true` (i.e.
+   *  `SILVERHAND_ALLOW_INSECURE_REMOTE=1` is not set). Use https://
+   *  for production, or set the dev env flag for unencrypted dev
+   *  scaffolding (`http://10.0.0.5`, `http://mybox.local`, etc.). */
+  | 'insecure_remote_http_disallowed';
 
 /**
- * Classify a raw server URL string against the V1 acceptance
- * policy. Pure, throw-free; the result is data the caller can
- * branch on. Callers that need to convert to a WS URL should still
- * go through the daemon's `hostConnectWebSocketUrl` so the
+ * Options for {@link classifyServerUrl}.
+ */
+export interface ClassifyServerUrlOptions {
+  /**
+   * When true, accept non-loopback http:// URLs as
+   * `{ kind: 'remote', insecure: true }`. Default false.
+   *
+   * Scope (Cindy D4.a Commit 1 invariant): this flag ONLY widens the
+   * non-loopback http acceptance path. It does NOT:
+   *   - relax TLS verification on https:// URLs (those still go
+   *     through Node's system-default CA pipeline at connect time),
+   *   - widen the scheme allowlist (ws/wss/file/ftp still rejected),
+   *   - affect the loopback http path (which never needs it),
+   *   - change raw-host strict-allowlist behavior (obfuscated forms,
+   *     userinfo, IPv6 bracket-suffix smuggling still rejected /
+   *     classified as remote, never loopback).
+   *
+   * Callers are expected to derive this from the dev env flag
+   * `SILVERHAND_ALLOW_INSECURE_REMOTE=1` via
+   * {@link readAllowInsecureRemoteFlag} (`./config.ts`). The flag
+   * value MUST NOT be persisted into the server connection profile
+   * (would create profile↔runtime drift if the env toggled).
+   */
+  allowInsecureRemote?: boolean;
+}
+
+/**
+ * Classify a raw server URL string against the D4.a acceptance
+ * policy. Pure, throw-free; the result is data the caller branches
+ * on. Callers that need to convert to a WS URL should still go
+ * through the daemon's `hostConnectWebSocketUrl` so the
  * http→ws / https→wss transformation stays in one place.
  *
- * Returning `kind: 'loopback'` (rather than a bare `true`) leaves
- * room for V1.1 to add `kind: 'remote'` without breaking the
- * signature — callers will get a typecheck failure when remote
- * backend acceptance lands and they need to think about whether
- * "loopback OR remote" is acceptable for their call site.
+ * Strict-allowlist contract preserved from D3.c (Cindy `#task:631`):
+ * the loopback check runs against the **raw authority host** from
+ * the input string, NOT against `URL.hostname`. The URL parser would
+ * otherwise normalize numeric obfuscations (`127.000.000.001` /
+ * `0177.0.0.1` / `2130706433` / `0x7f000001`) and expanded IPv6
+ * (`[0:0:0:0:0:0:0:1]`) into the canonical allowlist literals —
+ * accepting those AS LOOPBACK would silently widen the V1 policy
+ * beyond what the Wizard/Settings UI claims. Under D4.a those
+ * obfuscated inputs classify as `kind: 'remote'` (subject to scheme
+ * rules) rather than loopback; the dev flag's only effect is on
+ * non-loopback http acceptance, not on loopback classification.
  *
- * Strict-allowlist contract (Cindy `#task:631` D3.c P1): the
- * loopback check runs against the **raw authority host** from
- * the input string, NOT against `URL.hostname`. The URL parser
- * would otherwise normalize numeric obfuscations
- * (`127.000.000.001` / `0177.0.0.1` / `2130706433` /
- * `0x7f000001`) and expanded IPv6 (`[0:0:0:0:0:0:0:1]`) into
- * the canonical allowlist literals — accepting those would
- * widen the V1 policy past what the user-facing docs and
- * Settings UI claim. The `URL` constructor is still invoked
- * because it gives us the cheapest scheme validation and the
- * normalized URL object the caller wants to consume on the
- * success path.
+ * The `URL` constructor is still invoked because it gives us the
+ * cheapest scheme validation and the normalized URL object the
+ * caller wants to consume on the success path.
  */
-export function classifyServerUrl(input: string): ServerUrlClassification {
+export function classifyServerUrl(
+  input: string,
+  options?: ClassifyServerUrlOptions,
+): ServerUrlClassification {
   let parsed: URL;
   try {
     parsed = new URL(input);
@@ -266,12 +331,12 @@ export function classifyServerUrl(input: string): ServerUrlClassification {
   // `parsed` succeeded for `http://` / `https://`, so the raw
   // extractor should also have found an authority host. A null
   // here means either (a) the input slipped past both layers, or
-  // (b) the authority included userinfo (`user[:pass]@host`),
-  // which the V1 policy refuses outright — see the comment on
-  // `extractRawAuthorityHost`. Surface it as `malformed_url`
-  // (intentionally reusing the existing reason rather than minting
-  // a `userinfo_present` reason — the UI doesn't need a new branch
-  // for what is effectively a typo / hostile-prefix case).
+  // (b) the authority included userinfo (`user[:pass]@host`) or
+  // an IPv6 bracket suffix (`[::1]evil`) — both refused outright
+  // by the extractor. Surface as `malformed_url` (intentionally
+  // reusing the existing reason rather than minting a
+  // `userinfo_present` / `ipv6_suffix` reason — the UI doesn't
+  // need a new branch for these typo / hostile-prefix cases).
   if (rawHost === null) {
     // Detect userinfo specifically so the surfaced message is
     // actionable. The detection mirrors the helper's algorithm
@@ -284,18 +349,32 @@ export function classifyServerUrl(input: string): ServerUrlClassification {
       : 'Could not extract authority host from URL';
     return { ok: false, reason: 'malformed_url', message };
   }
-  if (!isLoopbackHost(rawHost)) {
-    return {
-      ok: false,
-      reason: 'non_loopback_host',
-      // Surface the RAW host as written so the user can see
-      // exactly which token failed the allowlist — important for
-      // the obfuscated-IP cases where `parsed.hostname` would
-      // misleadingly show the normalized canonical form.
-      message:
-        `Backend host '${rawHost}' is not a loopback address. ` +
-        `Remote backend support is coming in V1.1.`,
-    };
+  if (isLoopbackHost(rawHost)) {
+    // Loopback path: scheme doesn't matter (both http and https
+    // accepted), `allowInsecureRemote` doesn't matter (loopback http
+    // is always accepted). This is the embedded-backend and
+    // local-dev case.
+    return { ok: true, kind: 'loopback', url: parsed };
   }
-  return { ok: true, kind: 'loopback', url: parsed };
+  // Non-loopback host. Scheme decides what's required:
+  //   - https: always accepted; system-default TLS verifies at connect.
+  //   - http: accepted ONLY with `allowInsecureRemote`. Without the
+  //     flag, surface a typed rejection that points the operator at
+  //     the two valid escape routes (use https, or set the dev env).
+  if (parsed.protocol === 'https:') {
+    return { ok: true, kind: 'remote', url: parsed, insecure: false };
+  }
+  if (options?.allowInsecureRemote === true) {
+    return { ok: true, kind: 'remote', url: parsed, insecure: true };
+  }
+  return {
+    ok: false,
+    reason: 'insecure_remote_http_disallowed',
+    // Surface the RAW host as written so the operator can see
+    // exactly which token they typed — same rationale as the D3.c
+    // obfuscated-IP messages.
+    message:
+      `Backend host '${rawHost}' is non-loopback over http://. ` +
+      `Use https://, or set SILVERHAND_ALLOW_INSECURE_REMOTE=1 for dev use.`,
+  };
 }

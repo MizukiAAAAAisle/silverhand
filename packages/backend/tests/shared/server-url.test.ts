@@ -2,6 +2,14 @@
  * D3.c Commit 1 — single-source-of-truth tests for the V1 server URL
  * acceptance policy that ships in `@silverhand/shared`.
  *
+ * D4.a Commit 1 extension: classifier widened to admit `kind: 'remote'`
+ * for non-loopback https and (with dev flag) non-loopback http. The
+ * D3.c raw-host strict-allowlist regression coverage (obfuscated IPv4,
+ * expanded IPv6, userinfo refusal, IPv6 bracket-suffix smuggling) is
+ * preserved verbatim — those inputs now classify as `kind: 'remote'`
+ * or `malformed_url` depending on the failure mode, but they NEVER
+ * classify as loopback, regardless of `allowInsecureRemote`.
+ *
  * Why these tests live in the backend test runner:
  *   - `@silverhand/shared` is a host-agnostic types/utility package
  *     that ships no test config of its own.
@@ -18,7 +26,12 @@
  *      "if hostname starts with 127" implementations
  *      (`127.0.0.2`, `0.0.0.0`, IPv6 short forms, DNS aliases that
  *      *resolve* to loopback but should still be rejected).
- *   4. `kind: 'loopback'` discriminant + URL passthrough.
+ *   4. `kind: 'loopback' | 'remote'` discriminant + URL passthrough
+ *      + insecure flag honesty.
+ *   5. D4.a dev-flag scope invariant (Cindy lock): flag only affects
+ *      non-loopback http acceptance — does NOT affect https TLS
+ *      verify path, does NOT widen scheme allowlist, does NOT relax
+ *      raw-host strict-allowlist defenses.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -166,30 +179,38 @@ describe('classifyServerUrl — V1 acceptance policy', () => {
     expectReject('ftp://localhost', 'unsupported_scheme');
   });
 
-  it('rejects non-loopback hostnames (the V1.1 banner case)', () => {
-    const msg = expectReject('http://api.example.com', 'non_loopback_host');
-    // The message points the user at V1.1, which the Settings UI
-    // surfaces as the "Remote backend coming in V1.1" banner.
-    expect(msg).toMatch(/V1\.1/);
+  it('rejects non-loopback hostnames over http without dev flag (the "use https or set the flag" case)', () => {
+    // D4.a Commit 1 widened the classifier: non-loopback http used to
+    // be `non_loopback_host`; under D4.a it is
+    // `insecure_remote_http_disallowed`. Same wire effect (rejection)
+    // but the new reason points the operator at the two valid escape
+    // routes (use https, or set SILVERHAND_ALLOW_INSECURE_REMOTE=1).
+    const msg = expectReject('http://api.example.com', 'insecure_remote_http_disallowed');
+    expect(msg).toMatch(/SILVERHAND_ALLOW_INSECURE_REMOTE/);
   });
 
-  it('rejects LAN IP — the most common typo when someone copies their dev box IP', () => {
-    expectReject('http://192.168.1.10:18080', 'non_loopback_host');
-    expectReject('http://10.0.0.5:18080', 'non_loopback_host');
+  it('rejects LAN IP over http without dev flag — the most common typo when someone copies their dev box IP', () => {
+    expectReject('http://192.168.1.10:18080', 'insecure_remote_http_disallowed');
+    expectReject('http://10.0.0.5:18080', 'insecure_remote_http_disallowed');
   });
 
-  it('rejects 0.0.0.0 (some platforms accept it as bind-all but we must not connect to it)', () => {
-    expectReject('http://0.0.0.0:18080', 'non_loopback_host');
+  it('rejects 0.0.0.0 over http (some platforms accept it as bind-all but we must not connect to it)', () => {
+    expectReject('http://0.0.0.0:18080', 'insecure_remote_http_disallowed');
   });
 
-  it('rejects mybox.local (mDNS alias that could resolve to loopback but is not in the allowlist)', () => {
+  it('rejects mybox.local over http without dev flag (mDNS alias that could resolve to loopback but is not in the allowlist)', () => {
     // Pinning this case is the load-bearing test for the strict
-    // "literal allowlist, not DNS resolution" policy.
-    expectReject('http://mybox.local:18080', 'non_loopback_host');
+    // "literal allowlist, not DNS resolution" policy. Cindy D3.c
+    // round 1 wording: "TLS http exception not for `*.local`".
+    expectReject('http://mybox.local:18080', 'insecure_remote_http_disallowed');
   });
 
-  it('rejects 127.0.0.2 even though it is loopback in the RFC sense', () => {
-    expectReject('http://127.0.0.2:18080', 'non_loopback_host');
+  it('rejects 127.0.0.2 over http without dev flag — RFC 1122 loopback but outside the strict allowlist', () => {
+    // Strict allowlist holds across the D4.a widening: 127.0.0.2 is
+    // not a literal allowlist entry, so it never classifies as
+    // loopback. Under http+no-flag it rejects; under https or
+    // http+flag it would classify as remote (NOT loopback).
+    expectReject('http://127.0.0.2:18080', 'insecure_remote_http_disallowed');
   });
 
   // ── Obfuscated IP forms (Cindy `#task:631` D3.c P1) ────────────
@@ -197,44 +218,56 @@ describe('classifyServerUrl — V1 acceptance policy', () => {
   // Strict-allowlist regression coverage. All five of these inputs
   // have `new URL(input).hostname === '127.0.0.1'` (IPv4 cases) or
   // `=== '[::1]'` (IPv6 case) because `URL` normalizes them — so a
-  // naive `isLoopbackHost(url.hostname)` check would accept them
-  // and silently widen the V1 policy past what Settings UI claims.
-  // The classifier compares against the RAW authority host instead,
-  // which preserves the literal form the user wrote and falls
-  // outside the allowlist.
+  // naive `isLoopbackHost(url.hostname)` check would accept them AS
+  // LOOPBACK and silently widen the policy. The classifier compares
+  // against the RAW authority host instead, which preserves the
+  // literal form the user wrote and falls outside the allowlist.
+  //
+  // D4.a Commit 1 invariant (Cindy lock): the dev flag
+  // `allowInsecureRemote` does NOT let these forms flow back to
+  // loopback acceptance. With http+no-flag they reject as
+  // `insecure_remote_http_disallowed`; with the flag they classify
+  // as `kind: 'remote'` (HONEST — they are not loopback even if
+  // they resolve to loopback at the IP layer). The
+  // `dev-flag-doesn't-relax-loopback-defense` block below pins
+  // the flag-on case explicitly.
 
-  it('rejects dotted-decimal with leading zeros (`127.000.000.001`) — URL.hostname normalizes to 127.0.0.1', () => {
-    const msg = expectReject('http://127.000.000.001:18080', 'non_loopback_host');
+  it('rejects dotted-decimal with leading zeros (`127.000.000.001`) over http+no-flag — URL.hostname would normalize to 127.0.0.1', () => {
+    const msg = expectReject(
+      'http://127.000.000.001:18080',
+      'insecure_remote_http_disallowed',
+    );
     // Message must surface the RAW host as written so the user can
-    // see exactly which token failed the allowlist — comparing
-    // against the URL-normalized canonical `127.0.0.1` would be
-    // confusing here ("but I typed 127.000.000.001!").
+    // see exactly which token failed — comparing against the
+    // URL-normalized canonical `127.0.0.1` would be confusing here
+    // ("but I typed 127.000.000.001!").
     expect(msg).toContain('127.000.000.001');
   });
 
-  it('rejects octal first octet (`0177.0.0.1`) — URL.hostname normalizes to 127.0.0.1', () => {
-    const msg = expectReject('http://0177.0.0.1:18080', 'non_loopback_host');
+  it('rejects octal first octet (`0177.0.0.1`) over http+no-flag — URL.hostname would normalize to 127.0.0.1', () => {
+    const msg = expectReject('http://0177.0.0.1:18080', 'insecure_remote_http_disallowed');
     expect(msg).toContain('0177.0.0.1');
   });
 
-  it('rejects 32-bit decimal IPv4 (`2130706433` = 0x7f000001) — URL.hostname normalizes to 127.0.0.1', () => {
-    const msg = expectReject('http://2130706433:18080', 'non_loopback_host');
+  it('rejects 32-bit decimal IPv4 (`2130706433` = 0x7f000001) over http+no-flag — URL.hostname would normalize to 127.0.0.1', () => {
+    const msg = expectReject('http://2130706433:18080', 'insecure_remote_http_disallowed');
     expect(msg).toContain('2130706433');
   });
 
-  it('rejects 32-bit hex IPv4 (`0x7f000001`) — URL.hostname normalizes to 127.0.0.1', () => {
-    const msg = expectReject('http://0x7f000001:18080', 'non_loopback_host');
+  it('rejects 32-bit hex IPv4 (`0x7f000001`) over http+no-flag — URL.hostname would normalize to 127.0.0.1', () => {
+    const msg = expectReject('http://0x7f000001:18080', 'insecure_remote_http_disallowed');
     expect(msg).toContain('0x7f000001');
   });
 
-  it('rejects expanded IPv6 (`[0:0:0:0:0:0:0:1]`) — URL.hostname normalizes to [::1]', () => {
+  it('rejects expanded IPv6 (`[0:0:0:0:0:0:0:1]`) over http+no-flag — URL.hostname would normalize to [::1]', () => {
     // Pin the IPv6 branch of the obfuscation defense: the expanded
-    // form is semantically equivalent to `::1` but the V1 policy
-    // accepts ONLY the literal allowlist entries. Comparing against
-    // the raw authority host (`[0:0:0:0:0:0:0:1]`) rejects it.
+    // form is semantically equivalent to `::1` but the policy
+    // accepts ONLY the literal allowlist entries as loopback.
+    // Comparing against the raw authority host (`[0:0:0:0:0:0:0:1]`)
+    // keeps it out of the loopback bucket.
     const msg = expectReject(
       'http://[0:0:0:0:0:0:0:1]:18080',
-      'non_loopback_host',
+      'insecure_remote_http_disallowed',
     );
     expect(msg).toContain('[0:0:0:0:0:0:0:1]');
   });
@@ -326,13 +359,229 @@ describe('classifyServerUrl — V1 acceptance policy', () => {
 
   // ── Discriminator hygiene ──────────────────────────────────────
 
-  it('the success arm carries kind:"loopback" so V1.1 can add kind:"remote" without breaking callers', () => {
-    // Pin the discriminant; future remote-backend acceptance will
-    // either widen the union to `'loopback' | 'remote'` or add a
-    // separate `classifyRemoteServerUrl` — either way, callers that
-    // strictly check `kind === 'loopback'` here MUST be revisited.
+  it('the success arm carries kind:"loopback" for loopback inputs', () => {
+    // Pin the loopback discriminant. Callers branching on
+    // `kind === 'loopback'` (e.g. the daemon outbound-WS gate that
+    // preserves the D3 loopback-only contract until D4.b) MUST be
+    // revisited whenever this changes.
     const out = classifyServerUrl('http://localhost:18080');
     expect(out.ok).toBe(true);
     if (out.ok) expect(out.kind).toBe('loopback');
+  });
+
+  // ── D4.a Commit 1 — remote acceptance (https + http+dev-flag) ──
+  //
+  // Coverage strategy:
+  //   - https://<remote> always accepted as kind:'remote', insecure:false.
+  //   - http://<remote> + allowInsecureRemote:true accepted as
+  //     kind:'remote', insecure:true.
+  //   - http://<remote> + no flag rejected (covered above).
+  //   - loopback always accepts regardless of flag.
+  //   - Dev flag MUST NOT widen scheme allowlist, MUST NOT relax
+  //     raw-host strict-allowlist defense (Cindy lock).
+
+  function expectRemote(
+    input: string,
+    options?: { allowInsecureRemote?: boolean },
+    expectedInsecure?: boolean,
+  ): URL {
+    const out = classifyServerUrl(input, options);
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error('unreachable');
+    expect(out.kind).toBe('remote');
+    if (out.kind !== 'remote') throw new Error('unreachable');
+    if (typeof expectedInsecure === 'boolean') {
+      expect(out.insecure).toBe(expectedInsecure);
+    }
+    return out.url;
+  }
+
+  describe('D4.a — remote https (no dev flag needed)', () => {
+    it('accepts https://api.example.com as remote+secure', () => {
+      const u = expectRemote('https://api.example.com', undefined, false);
+      expect(u.protocol).toBe('https:');
+      expect(u.hostname).toBe('api.example.com');
+    });
+
+    it('accepts https://192.168.1.10:8443 as remote+secure (LAN with TLS termination is fine)', () => {
+      expectRemote('https://192.168.1.10:8443', undefined, false);
+    });
+
+    it('accepts https://mybox.local:8443 as remote+secure (mDNS with mkcert/private CA is fine — TLS verify is system-default at connect)', () => {
+      // Cindy round-1 wording: "TLS http exception not for `*.local`".
+      // The flip side: https IS allowed for `*.local` because TLS
+      // verification happens at connect via the system trust store,
+      // not via hostname allowlist.
+      expectRemote('https://mybox.local:8443', undefined, false);
+    });
+  });
+
+  describe('D4.a — remote http with dev flag', () => {
+    it('accepts http://api.example.com when allowInsecureRemote:true (kind=remote, insecure=true)', () => {
+      const u = expectRemote(
+        'http://api.example.com',
+        { allowInsecureRemote: true },
+        true,
+      );
+      expect(u.protocol).toBe('http:');
+    });
+
+    it('accepts http://10.0.0.5:18080 when allowInsecureRemote:true (dev LAN box without TLS)', () => {
+      expectRemote(
+        'http://10.0.0.5:18080',
+        { allowInsecureRemote: true },
+        true,
+      );
+    });
+
+    it('accepts http://mybox.local:18080 when allowInsecureRemote:true (dev mDNS escape)', () => {
+      expectRemote(
+        'http://mybox.local:18080',
+        { allowInsecureRemote: true },
+        true,
+      );
+    });
+
+    it('still accepts http://localhost when allowInsecureRemote:true (loopback unchanged; insecure flag is irrelevant)', () => {
+      const out = classifyServerUrl('http://localhost', { allowInsecureRemote: true });
+      expect(out.ok).toBe(true);
+      if (out.ok) expect(out.kind).toBe('loopback');
+    });
+
+    it('still accepts http://127.0.0.1:18080 when allowInsecureRemote:true (loopback path)', () => {
+      const out = classifyServerUrl('http://127.0.0.1:18080', { allowInsecureRemote: true });
+      expect(out.ok).toBe(true);
+      if (out.ok) expect(out.kind).toBe('loopback');
+    });
+  });
+
+  describe('D4.a — dev flag scope invariant (Cindy lock 2026-05-28)', () => {
+    // The dev flag is for ONE thing: widening non-loopback http
+    // acceptance. The four blocks below pin everything it must NOT
+    // do, so a future "helpful" refactor can't quietly broaden it.
+
+    it('flag does NOT widen scheme allowlist — ws:// still rejected with flag on', () => {
+      const out = classifyServerUrl(
+        'ws://api.example.com:8080',
+        { allowInsecureRemote: true },
+      );
+      expect(out.ok).toBe(false);
+      if (out.ok) throw new Error('unreachable');
+      expect(out.reason).toBe('unsupported_scheme');
+    });
+
+    it('flag does NOT widen scheme allowlist — file:// still rejected with flag on', () => {
+      const out = classifyServerUrl(
+        'file:///etc/passwd',
+        { allowInsecureRemote: true },
+      );
+      expect(out.ok).toBe(false);
+      if (out.ok) throw new Error('unreachable');
+      expect(out.reason).toBe('unsupported_scheme');
+    });
+
+    it('flag does NOT bypass userinfo refusal — `http://user@api.example.com` still malformed_url with flag on', () => {
+      // Without this guard the flag could let an attacker disguise
+      // a non-loopback URL with cosmetic prefix that Bearer-auth
+      // header collisions could exploit. Userinfo refusal is in
+      // `extractRawAuthorityHost`, before any flag handling.
+      const out = classifyServerUrl(
+        'http://user@api.example.com',
+        { allowInsecureRemote: true },
+      );
+      expect(out.ok).toBe(false);
+      if (out.ok) throw new Error('unreachable');
+      expect(out.reason).toBe('malformed_url');
+    });
+
+    it('flag does NOT bypass IPv6 bracket-suffix smuggling refusal — `http://[::1]evil:18080` still malformed_url with flag on', () => {
+      const out = classifyServerUrl(
+        'http://[::1]evil:18080',
+        { allowInsecureRemote: true },
+      );
+      expect(out.ok).toBe(false);
+      if (out.ok) throw new Error('unreachable');
+      expect(out.reason).toBe('malformed_url');
+    });
+
+    it('flag does NOT relax loopback strict-allowlist — obfuscated IPv4 (`0x7f000001`) classifies as kind=remote, NOT loopback, with flag on', () => {
+      // Load-bearing for the Cindy lock "dev flag must not let
+      // obfuscated loopback / userinfo / weird URL forms flow back
+      // to acceptable loopback input": these forms resolve to
+      // 127.0.0.1 at the IP layer, but they MUST NOT classify as
+      // loopback because the strict allowlist is by literal text.
+      // With the flag they classify as `kind: 'remote', insecure: true`
+      // — honest about what was typed. Without the flag they reject.
+      const out = classifyServerUrl(
+        'http://0x7f000001:18080',
+        { allowInsecureRemote: true },
+      );
+      expect(out.ok).toBe(true);
+      if (!out.ok) throw new Error('unreachable');
+      expect(out.kind).toBe('remote');
+      if (out.kind !== 'remote') throw new Error('unreachable');
+      expect(out.insecure).toBe(true);
+    });
+
+    it('flag does NOT relax loopback strict-allowlist — dotted-decimal-zeros (`127.000.000.001`) classifies as kind=remote with flag on', () => {
+      const out = classifyServerUrl(
+        'http://127.000.000.001:18080',
+        { allowInsecureRemote: true },
+      );
+      expect(out.ok).toBe(true);
+      if (!out.ok) throw new Error('unreachable');
+      expect(out.kind).toBe('remote');
+    });
+
+    it('flag does NOT relax loopback strict-allowlist — expanded IPv6 (`[0:0:0:0:0:0:0:1]`) classifies as kind=remote with flag on', () => {
+      const out = classifyServerUrl(
+        'http://[0:0:0:0:0:0:0:1]:18080',
+        { allowInsecureRemote: true },
+      );
+      expect(out.ok).toBe(true);
+      if (!out.ok) throw new Error('unreachable');
+      expect(out.kind).toBe('remote');
+    });
+
+    it('absent options object behaves identically to {allowInsecureRemote: false}', () => {
+      // The classifier signature has an optional options bag; pin
+      // that "no options" and "explicit false" produce identical
+      // outcomes so call sites that forget to pass options don't
+      // accidentally get the dev-flag behavior.
+      const noOpts = classifyServerUrl('http://api.example.com');
+      const explicitFalse = classifyServerUrl(
+        'http://api.example.com',
+        { allowInsecureRemote: false },
+      );
+      expect(noOpts.ok).toBe(false);
+      expect(explicitFalse.ok).toBe(false);
+      if (noOpts.ok || explicitFalse.ok) throw new Error('unreachable');
+      expect(noOpts.reason).toBe('insecure_remote_http_disallowed');
+      expect(explicitFalse.reason).toBe('insecure_remote_http_disallowed');
+    });
+
+    it('https with flag on is unchanged from https without flag (flag has zero https-path effect)', () => {
+      // Belt-and-braces: pin that toggling the flag does NOT
+      // change anything about how https URLs classify. (The TLS
+      // verify behavior at connect time is governed by Node's
+      // system-default CA — not by this classifier — but pinning
+      // the classifier invariant catches a future refactor that
+      // tried to gate https acceptance on the flag.)
+      const flagOff = classifyServerUrl('https://api.example.com');
+      const flagOn = classifyServerUrl(
+        'https://api.example.com',
+        { allowInsecureRemote: true },
+      );
+      expect(flagOff.ok).toBe(true);
+      expect(flagOn.ok).toBe(true);
+      if (!flagOff.ok || !flagOn.ok) throw new Error('unreachable');
+      expect(flagOff.kind).toBe('remote');
+      expect(flagOn.kind).toBe('remote');
+      if (flagOff.kind !== 'remote' || flagOn.kind !== 'remote') {
+        throw new Error('unreachable');
+      }
+      expect(flagOff.insecure).toBe(false);
+      expect(flagOn.insecure).toBe(false);
+    });
   });
 });

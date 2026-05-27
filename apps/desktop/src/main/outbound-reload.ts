@@ -116,6 +116,28 @@ export type OutboundReloadOutcome =
       message: string;
     }
   | {
+      // D4.a Commit 1 — Settings layer is still locked to loopback
+      // backends only. The classifier admits non-loopback https (and
+      // non-loopback http with the dev flag) as `kind: 'remote'`, but
+      // the Settings → save-server-url pipeline does not yet wire
+      // through to a remote daemon attach (that's the G2 / Commit 5
+      // work). When the user enters a remote URL we short-circuit
+      // here with a typed outcome so the UI can render an honest
+      // "not yet supported in this build" banner rather than writing
+      // an invalid config to disk and watching the daemon fail
+      // mid-reload.
+      //
+      // Will be removed once Commit 5 lands the profile update flow
+      // and outbound-reload accepts remote daemon-config writes.
+      ok: false;
+      kind: 'remote_backend_not_yet_supported';
+      /** Honest insecure flag from the classifier (https → false,
+       *  http+dev-flag → true). Caller may surface a slightly
+       *  different message for the insecure variant. */
+      insecure: boolean;
+      message: string;
+    }
+  | {
       ok: false;
       kind: 'config_write_failed';
       message: string;
@@ -265,6 +287,25 @@ export async function performOutboundReload(
       kind: 'classify_rejected',
       reason: classified.reason,
       message: classified.message,
+    };
+  }
+  // 1b. D4.a Commit 1 — Settings layer still loopback-only. The
+  //     classifier may admit `kind: 'remote'` (https or http+dev-flag),
+  //     but writing a remote URL into daemon-config would race the
+  //     daemon's still-loopback-only WS gate (`outbound-client.ts`
+  //     `hostConnectWebSocketUrl` throws `tls_required_for_non_loopback
+  //     _host_ws` for remote kinds in D4.a Commit 1). Short-circuit
+  //     here so we never write a half-broken config. Removed when
+  //     Commit 5 lands the profile/phase-2 update flow.
+  //     TODO(D4.a,C5): drop this guard alongside remote acceptance.
+  if (classified.kind === 'remote') {
+    return {
+      ok: false,
+      kind: 'remote_backend_not_yet_supported',
+      insecure: classified.insecure,
+      message: classified.insecure
+        ? 'Remote backend support is not yet enabled in this build (input was non-loopback over http).'
+        : 'Remote backend support is not yet enabled in this build (input was non-loopback over https).',
     };
   }
 

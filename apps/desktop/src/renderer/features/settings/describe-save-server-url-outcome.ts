@@ -98,6 +98,17 @@ export function describeSaveServerUrlOutcome(
         // can't include without runtime substitution.
         description: result.message,
       };
+    case 'remote_backend_not_yet_supported':
+      // D4.a Commit 1 — the classifier admitted a remote URL but the
+      // Settings → save pipeline is still loopback-only in this
+      // build. Render an honest banner so the user knows the URL
+      // shape is fine but the *feature* isn't wired through yet.
+      // Removed when Commit 5 lands the profile update flow.
+      return {
+        tone: 'error',
+        title: 'Remote backend support is not yet enabled in this build.',
+        description: result.message,
+      };
     case 'config_write_failed':
       return {
         tone: 'error',
@@ -138,8 +149,11 @@ function describeClassifyReason(
       return 'Server URL is not a valid URL.';
     case 'unsupported_scheme':
       return 'Server URL must start with http:// or https://.';
-    case 'non_loopback_host':
-      return 'Server URL must point at a loopback address (127.0.0.1, localhost, [::1]).';
+    case 'insecure_remote_http_disallowed':
+      // D4.a Commit 1 — replaces D3's `non_loopback_host` copy. The
+      // user is most likely typing a LAN box or public domain over
+      // http; point them at the two valid options.
+      return 'Server URL must use https:// for non-loopback addresses (or set SILVERHAND_ALLOW_INSECURE_REMOTE=1 for dev use).';
     default: {
       const _exhaustive: never = reason;
       return _exhaustive;

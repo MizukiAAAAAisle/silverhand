@@ -148,7 +148,30 @@ export type DesktopSaveServerUrlResult =
   | {
       ok: false;
       kind: 'classify_rejected';
-      reason: 'malformed_url' | 'unsupported_scheme' | 'non_loopback_host';
+      reason:
+        | 'malformed_url'
+        | 'unsupported_scheme'
+        // D4.a Commit 1 — replaces D3's `non_loopback_host`. Surfaced
+        // when the user types a non-loopback http URL without the dev
+        // env flag (`SILVERHAND_ALLOW_INSECURE_REMOTE=1`). The
+        // user-facing message points at the two valid escape routes
+        // (use https, or set the flag).
+        | 'insecure_remote_http_disallowed';
+      message: string;
+    }
+  | {
+      // D4.a Commit 1 — classifier admits non-loopback https (and
+      // non-loopback http with the dev flag) as `kind: 'remote'`, but
+      // the Settings → save pipeline is still loopback-only in this
+      // build (daemon outbound-WS still rejects remote in
+      // `outbound-client.ts` until Commit 5 / G2). Surface a typed
+      // "not yet supported" outcome so the renderer can render an
+      // honest banner instead of treating the URL as accepted.
+      ok: false;
+      kind: 'remote_backend_not_yet_supported';
+      /** Honest insecure flag from the classifier: true when the
+       *  input was http+dev-flag, false when the input was https. */
+      insecure: boolean;
       message: string;
     }
   | { ok: false; kind: 'config_write_failed'; message: string }

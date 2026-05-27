@@ -148,22 +148,81 @@ describe('performOutboundReload — anchor 1: raw input classify', () => {
     expect(state.watchdogCalls).toEqual([]);
   });
 
-  it('classify_rejected with non_loopback_host short-circuits identically', async () => {
+  it('classify_rejected with insecure_remote_http_disallowed short-circuits identically', async () => {
+    // D4.a Commit 1 — replaces D3's `non_loopback_host` test. Same
+    // wire behavior (no write, no reload IPC), new typed reason
+    // pointing at the dev-flag / https escape routes.
     const { deps, state } = makeDeps({
       classify: () => ({
         ok: false,
-        reason: 'non_loopback_host',
-        message: "Backend host 'example.com' is not a loopback address.",
+        reason: 'insecure_remote_http_disallowed',
+        message:
+          "Backend host 'example.com' is non-loopback over http://. " +
+          'Use https://, or set SILVERHAND_ALLOW_INSECURE_REMOTE=1 for dev use.',
       }),
     });
     const out = await performOutboundReload({ serverUrl: 'http://example.com' }, deps);
     expect(out.ok).toBe(false);
     if (out.ok) throw new Error('unreachable');
     if (out.kind !== 'classify_rejected') throw new Error('unreachable');
-    expect(out.reason).toBe('non_loopback_host');
+    expect(out.reason).toBe('insecure_remote_http_disallowed');
     expect(state.writeCalls).toEqual([]);
     expect(state.reloadCalls).toBe(0);
   });
+
+  // D4.a Commit 1 — when the classifier successfully admits a remote
+  // URL (https or http+dev-flag), the Settings layer must still
+  // short-circuit with the typed `remote_backend_not_yet_supported`
+  // outcome because daemon outbound-WS hasn't been widened yet.
+  // This pins the boundary: writes / reloads MUST NOT fire.
+  it.each<{
+    label: string;
+    classified: { ok: true; kind: 'remote'; url: URL; insecure: boolean };
+    expectedInsecure: boolean;
+  }>([
+    {
+      label: 'remote https',
+      classified: {
+        ok: true,
+        kind: 'remote',
+        url: new URL('https://api.example.com'),
+        insecure: false,
+      },
+      expectedInsecure: false,
+    },
+    {
+      label: 'remote http with dev flag',
+      classified: {
+        ok: true,
+        kind: 'remote',
+        url: new URL('http://10.0.0.5:8080'),
+        insecure: true,
+      },
+      expectedInsecure: true,
+    },
+  ])(
+    'remote_backend_not_yet_supported short-circuits with insecure=$expectedInsecure ($label)',
+    async ({ classified, expectedInsecure }) => {
+      const { deps, state } = makeDeps({ classify: () => classified });
+      const out = await performOutboundReload(
+        { serverUrl: classified.url.toString() },
+        deps,
+      );
+      expect(out.ok).toBe(false);
+      if (out.ok) throw new Error('unreachable');
+      if (out.kind !== 'remote_backend_not_yet_supported') {
+        throw new Error('unreachable');
+      }
+      expect(out.insecure).toBe(expectedInsecure);
+      expect(out.message).toMatch(/not yet enabled/i);
+      // Critical invariant: NO write to daemon-config, NO reload IPC.
+      // A regression here would corrupt the daemon's loopback-only
+      // config and leave the WS in a broken state.
+      expect(state.writeCalls).toEqual([]);
+      expect(state.reloadCalls).toBe(0);
+      expect(state.watchdogCalls).toEqual([]);
+    },
+  );
 
   it('classify_rejected with unsupported_scheme short-circuits identically', async () => {
     const { deps, state } = makeDeps({
