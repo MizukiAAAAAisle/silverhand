@@ -77,6 +77,13 @@ export function describeProbeOutcome(
             title: 'Only http:// and https:// URLs are accepted.',
             description: result.message,
           };
+        case 'non_origin_url':
+          return {
+            tone: 'error',
+            title: 'Backend URL must be an origin (scheme + host + port).',
+            description:
+              'Drop the path / query / fragment from the URL. Subpath deployments are not supported in this release.',
+          };
         case 'insecure_remote_http_disallowed':
           return {
             tone: 'error',

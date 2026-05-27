@@ -90,6 +90,11 @@ describe('describeSaveServerUrlOutcome — classify_rejected reasons', () => {
   }> = [
     { reason: 'malformed_url', titleMatch: /not a valid url/i },
     { reason: 'unsupported_scheme', titleMatch: /http:\/\/ or https:\/\//i },
+    // D4.a Commit 2 fixup (Cindy review) — non_origin_url. Title
+    // must mention "origin" so the user understands the rejection
+    // shape rather than treating it as a generic URL-validity
+    // failure.
+    { reason: 'non_origin_url', titleMatch: /origin/i },
     // D4.a Commit 1 — replaces D3's `non_loopback_host` case. Title
     // must point the user at the two valid escape routes (use
     // https, or set the dev env flag) rather than the obsolete

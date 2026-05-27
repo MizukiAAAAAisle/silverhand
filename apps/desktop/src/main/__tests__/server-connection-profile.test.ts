@@ -188,7 +188,11 @@ describe('server-connection-profile storage', () => {
       expect(readResult.profile).toEqual(writeResult.profile);
     });
 
-    it('preserves created_at on overwrite and bumps updated_at', () => {
+    it('preserves created_at on overwrite and bumps updated_at AND increments version generation', () => {
+      // Cindy D4.a Commit 2 fixup: `version` is a generation counter
+      // (per §7.1), not a schema literal. Each commit advances by 1
+      // so phase-2 (Commit 5) can compare `profile.version` vs
+      // `daemon-config.profile_version` to detect pending derivation.
       const firstWrite = writeServerConnectionProfile({
         silverhandRoot: root,
         safe: makeFakeSafeStorage(),
@@ -196,6 +200,9 @@ describe('server-connection-profile storage', () => {
         now: () => 1000,
       });
       expect(firstWrite.ok).toBe(true);
+      if (!firstWrite.ok) throw new Error('unreachable');
+      expect(firstWrite.profile.version).toBe(1);
+
       const secondWrite = writeServerConnectionProfile({
         silverhandRoot: root,
         safe: makeFakeSafeStorage(),
@@ -205,11 +212,50 @@ describe('server-connection-profile storage', () => {
       expect(secondWrite.ok).toBe(true);
       if (!secondWrite.ok) throw new Error('unreachable');
       expect(secondWrite.profile).toEqual({
-        version: 1,
+        version: 2, // bumped — generation counter
         server_url: 'https://second.example.test',
         created_at: 1000, // preserved
         updated_at: 2000, // bumped
       });
+    });
+
+    it('bumps version on overwrite even when the URL did not change', () => {
+      // §7.6 daemon fingerprint inclusion: profile_version MUST change
+      // when metadata-only commits land, otherwise daemon-config
+      // generation tracking diverges from desktop's. Pin that the
+      // generation advance is unconditional on URL equality.
+      writeServerConnectionProfile({
+        silverhandRoot: root,
+        safe: makeFakeSafeStorage(),
+        serverUrl: 'https://same.example.test',
+        now: () => 1000,
+      });
+      const second = writeServerConnectionProfile({
+        silverhandRoot: root,
+        safe: makeFakeSafeStorage(),
+        serverUrl: 'https://same.example.test',
+        now: () => 2000,
+      });
+      expect(second.ok).toBe(true);
+      if (!second.ok) throw new Error('unreachable');
+      expect(second.profile.version).toBe(2);
+    });
+
+    it('keeps version monotonic across many sequential overwrites', () => {
+      let last = 0;
+      for (let i = 0; i < 5; i++) {
+        const r = writeServerConnectionProfile({
+          silverhandRoot: root,
+          safe: makeFakeSafeStorage(),
+          serverUrl: `https://x${i}.example.test`,
+          now: () => 1000 + i,
+        });
+        expect(r.ok).toBe(true);
+        if (!r.ok) throw new Error('unreachable');
+        expect(r.profile.version).toBe(i + 1);
+        expect(r.profile.version).toBeGreaterThan(last);
+        last = r.profile.version;
+      }
     });
 
     it('writes file with mode 0600', () => {

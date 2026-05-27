@@ -246,6 +246,25 @@ export type ServerUrlRejectionReason =
    *  The dev `allowInsecureRemote` flag does NOT widen this — only
    *  http / https are ever acceptable schemes. */
   | 'unsupported_scheme'
+  /** The URL has a non-trivial path, query, or fragment (e.g.
+   *  `https://x/foo`, `https://x?bar=1`, `https://x/#frag`). The
+   *  server connection profile is an origin-only concept (per
+   *  `docs/remote-backend-d4-design.md` §7.1: "server_url: canonical
+   *  URL string (scheme + host + port)"). Subpath / search / fragment
+   *  semantics are not supported; admitting them would let the
+   *  Setup Wizard test one base (we strip path before fetching
+   *  `/api/server/info`) while persisting another (the user-typed
+   *  string), then later transports could read the persisted form
+   *  and resolve relative paths against a different base than the
+   *  one tested. Rejecting at the classifier keeps every consumer
+   *  on the same canonical origin. Applies regardless of
+   *  loopback / remote / scheme / dev flag — the contract is
+   *  uniform.
+   *
+   *  Allowed pathnames: empty string or `/` (both yield the same
+   *  canonical origin under `new URL(...).origin`). Anything else
+   *  rejects. */
+  | 'non_origin_url'
   /** Non-loopback host over http://, and the caller did NOT pass
    *  `allowInsecureRemote: true` (i.e.
    *  `SILVERHAND_ALLOW_INSECURE_REMOTE=1` is not set). Use https://
@@ -342,6 +361,36 @@ export function classifyServerUrl(
       ok: false,
       reason: 'unsupported_scheme',
       message: `Unsupported scheme '${parsed.protocol}'. Use http:// or https://.`,
+    };
+  }
+  // Origin-only gate (Cindy D4.a Commit 2 review): the server
+  // connection profile is `{ scheme, host, port }` only — no path,
+  // no query, no fragment. Admitting subpath / search / hash
+  // semantics would let probe and persistence disagree (probe
+  // strips down to origin when fetching `/api/server/info`; the
+  // profile would persist the user-typed string verbatim), and
+  // subsequent transports reading the profile would resolve
+  // relative paths against a different base than the one the
+  // Wizard tested. Reject uniformly — applies to loopback, remote,
+  // and the dev-flag insecure path equally; there is no `pathBase`
+  // concept in the V1 contract. Allowed forms: `parsed.pathname`
+  // is `''` or `'/'` (both yield the same canonical origin),
+  // `parsed.search` is `''`, `parsed.hash` is `''`.
+  const isPathnameOriginShaped =
+    parsed.pathname === '' || parsed.pathname === '/';
+  if (
+    !isPathnameOriginShaped ||
+    parsed.search !== '' ||
+    parsed.hash !== ''
+  ) {
+    return {
+      ok: false,
+      reason: 'non_origin_url',
+      message:
+        `Backend URL must be an origin (scheme + host + port). ` +
+        `Drop the path / query / fragment from '${input}' — the wizard ` +
+        `tests and persists '${parsed.origin}', and admitting subpath / ` +
+        `query / fragment would let those drift apart.`,
     };
   }
   const rawHost = extractRawAuthorityHost(input);

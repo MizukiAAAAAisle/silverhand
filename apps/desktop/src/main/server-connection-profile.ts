@@ -37,7 +37,7 @@ import { chmodSync, existsSync, mkdirSync, renameSync, unlinkSync, writeFileSync
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
-  SERVER_CONNECTION_PROFILE_VERSION,
+  SERVER_CONNECTION_PROFILE_MIN_VERSION,
   redactServerConnectionProfile,
   safeParseServerConnectionProfile,
   type ServerConnectionProfile,
@@ -268,22 +268,29 @@ export function writeServerConnectionProfile(
     return { ok: false, reason: 'storage_unavailable' };
   }
 
-  // Preserve `created_at` across overwrites so the renderer can show a
-  // "connected since" hint even after the URL is updated. If reading
+  // Preserve `created_at` across overwrites AND advance `version` as a
+  // generation counter (Cindy D4.a Commit 2 review fixup): the §7.5
+  // phase-2 reconciliation compares `profile.version` vs
+  // `daemon-config.profile_version` to decide whether a daemon-config
+  // derivation is pending — so each successful commit MUST bump the
+  // generation, regardless of whether the URL changed. If reading
   // the prior profile fails for any non-`not_found` reason we still
-  // proceed with a fresh `created_at` rather than refusing the
-  // write — a wedged old blob must not prevent the user from setting
-  // a new URL.
+  // proceed with a fresh `created_at` AND restart the generation
+  // at the floor — a wedged old blob must not prevent the user from
+  // setting a new URL, and inheriting a generation we couldn't parse
+  // would be worse than starting clean.
   const existing = readServerConnectionProfile({
     silverhandRoot: opts.silverhandRoot,
     safe,
     logger,
   });
-  const createdAt =
-    existing.ok ? existing.profile.created_at : now;
+  const createdAt = existing.ok ? existing.profile.created_at : now;
+  const nextVersion = existing.ok
+    ? existing.profile.version + 1
+    : SERVER_CONNECTION_PROFILE_MIN_VERSION;
 
   const profile: ServerConnectionProfile = {
-    version: SERVER_CONNECTION_PROFILE_VERSION,
+    version: nextVersion,
     server_url: opts.serverUrl,
     created_at: createdAt,
     updated_at: now,

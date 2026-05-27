@@ -140,6 +140,8 @@ export type DesktopSaveServerUrlResult =
       reason:
         | 'malformed_url'
         | 'unsupported_scheme'
+        // D4.a Commit 2 fixup — see shared `server-url.ts`.
+        | 'non_origin_url'
         // D4.a Commit 1 — replaces D3's `non_loopback_host`. See
         // `api.d.ts` for the user-facing rationale.
         | 'insecure_remote_http_disallowed'
@@ -185,6 +187,8 @@ export type DesktopProbeServerInfoResult =
       reason:
         | 'malformed_url'
         | 'unsupported_scheme'
+        // D4.a Commit 2 fixup — origin-only invariant.
+        | 'non_origin_url'
         | 'insecure_remote_http_disallowed'
         | 'obfuscated_loopback_disallowed';
       message: string;

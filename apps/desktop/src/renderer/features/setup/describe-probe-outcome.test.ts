@@ -61,6 +61,7 @@ describe('describeProbeOutcome — classify_rejected arms', () => {
   it.each([
     'malformed_url',
     'unsupported_scheme',
+    'non_origin_url',
     'insecure_remote_http_disallowed',
     'obfuscated_loopback_disallowed',
   ] as const)('reason %s → error tone with distinct title', reason => {
@@ -74,10 +75,28 @@ describe('describeProbeOutcome — classify_rejected arms', () => {
     expect(r.title.length).toBeGreaterThan(0);
   });
 
+  it('non_origin_url copy explicitly mentions origin (scheme + host + port) so the operator understands the shape', () => {
+    // D4.a Commit 2 fixup pin (Cindy review): non_origin_url must
+    // surface the "origin only" framing so the user doesn't think
+    // it's a generic URL-validity failure. The headline should
+    // mention "origin"; the description should mention dropping
+    // path/query/fragment.
+    const r = describeProbeOutcome({
+      ok: false,
+      kind: 'classify_rejected',
+      reason: 'non_origin_url',
+      message: 'classifier verbatim',
+    });
+    expect(r.tone).toBe('error');
+    expect(r.title.toLowerCase()).toContain('origin');
+    expect(r.description.toLowerCase()).toMatch(/path|query|fragment/);
+  });
+
   it('every classify_rejected reason yields a UNIQUE title (no copy collapse)', () => {
     const reasons = [
       'malformed_url',
       'unsupported_scheme',
+      'non_origin_url',
       'insecure_remote_http_disallowed',
       'obfuscated_loopback_disallowed',
     ] as const;

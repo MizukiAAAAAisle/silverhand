@@ -154,6 +154,9 @@ export type DesktopSaveServerUrlResult =
       reason:
         | 'malformed_url'
         | 'unsupported_scheme'
+        // D4.a Commit 2 fixup — server connection profile is
+        // origin-only. See `packages/shared/src/server-url.ts`.
+        | 'non_origin_url'
         // D4.a Commit 1 — replaces D3's `non_loopback_host`. Surfaced
         // when the user types a non-loopback http URL without the dev
         // env flag (`SILVERHAND_ALLOW_INSECURE_REMOTE=1`). The
@@ -229,6 +232,9 @@ export type DesktopProbeServerInfoResult =
       reason:
         | 'malformed_url'
         | 'unsupported_scheme'
+        // D4.a Commit 2 fixup — origin-only invariant. See shared
+        // `server-url.ts` for the contract rationale.
+        | 'non_origin_url'
         | 'insecure_remote_http_disallowed'
         | 'obfuscated_loopback_disallowed';
       message: string;

@@ -42,38 +42,56 @@
 import { z } from 'zod';
 
 /**
- * Current profile schema version. Bump when the shape changes
- * non-additively. Reads MUST tolerate older versions for forward
- * compatibility — see `safeParseServerConnectionProfile` below.
+ * Profile **generation** version. Per
+ * `docs/remote-backend-d4-design.md` §7.1:
  *
- * D4.a V1 ships at version 1. Subsequent commits in D4.a (Commit 5
- * adds the phase-2 daemon-config bridge) do NOT bump this — they add
- * a derived field to the daemon-config artifact, not to the profile.
+ *   `version: int // monotonic; increments on every commit`
+ *
+ * This is the GENERATION number, NOT a schema version. Each successful
+ * commit (first-write or overwrite) emits the next integer; the
+ * §7.5/§7.6 phase-2 reconciliation compares
+ * `profile.version` vs `daemon-config.profile_version` to decide
+ * whether the derived daemon-config is in sync with the persisted
+ * profile.
+ *
+ * The minimum legal value is `1` — first commit starts the sequence.
+ * `0` is never persisted; reads tolerate older shapes via
+ * {@link safeParseServerConnectionProfile}, but the schema floor is
+ * `1`.
+ *
+ * Future schema migrations (e.g. adding a new required field, renaming
+ * a field) MUST use a separate top-level marker (e.g. a sibling
+ * `schema_version` field added later, or a wrapping envelope), NOT
+ * this `version` field — overloading generation with schema version
+ * would break the §7.5 reconciliation invariant.
  */
-export const SERVER_CONNECTION_PROFILE_VERSION = 1;
+export const SERVER_CONNECTION_PROFILE_MIN_VERSION = 1;
 
 /**
  * Persisted shape of the server connection profile.
  *
  * Field contract (per §7.1):
- *   - `version` — monotonic schema version. Currently always `1`.
- *     Round-trips through the storage layer without modification. The
- *     §7.5 update flow uses the profile's GENERATION (separate concept,
- *     bumped on every commit) inside daemon-config as `profile_version`;
- *     `version` here is the SCHEMA version, not the generation count.
- *     (Design language reuses "version" for both — clarified here to
- *     prevent future readers from conflating the two.)
+ *   - `version` — monotonic GENERATION counter. Bumped on every
+ *     successful commit (first write = 1; each subsequent overwrite =
+ *     previous version + 1). Used by §7.5/§7.6 phase-2 reconciliation
+ *     to detect "profile committed but daemon-config not yet
+ *     derived from this generation" via
+ *     `profile.version > daemon-config.profile_version`. Distinct
+ *     from any future schema migration marker — see
+ *     {@link SERVER_CONNECTION_PROFILE_MIN_VERSION} JSDoc.
  *   - `server_url` — canonical URL string. Validation contract:
  *     `classifyServerUrl(server_url)` MUST succeed; this module does NOT
  *     re-run that check (callers do). Persisted as the user-typed
  *     string after URL parsing, so round-trips through `new URL()`.
+ *     The classifier's `non_origin_url` rejection guarantees the
+ *     persisted value is origin-shaped (no path / query / fragment).
  *   - `created_at` / `updated_at` — unix milliseconds. `created_at` is
  *     the first commit ts; `updated_at` is the latest commit ts. Both
  *     are populated by the storage layer at write time, NOT by the
  *     caller.
  */
 export const ServerConnectionProfileSchema = z.object({
-  version: z.literal(SERVER_CONNECTION_PROFILE_VERSION),
+  version: z.number().int().gte(SERVER_CONNECTION_PROFILE_MIN_VERSION),
   server_url: z.string().min(1),
   created_at: z.number().int().nonnegative(),
   updated_at: z.number().int().nonnegative(),

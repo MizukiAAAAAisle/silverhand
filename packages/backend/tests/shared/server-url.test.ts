@@ -336,13 +336,15 @@ describe('classifyServerUrl — V1 acceptance policy', () => {
     expectReject('http://api.example.com@localhost:18080', 'malformed_url');
   });
 
-  it('still accepts `?foo=bar@baz` in the query string (@ outside the authority is fine)', () => {
+  it('still rejects `@` outside the authority via the non_origin gate, not via userinfo malformed_url', () => {
     // Guard against an over-broad userinfo refusal that would also
-    // reject `@` appearing in path / query / fragment. The helper
-    // strips path/query/fragment BEFORE checking for `@`, so this
-    // input must classify successfully.
-    const u = expectLoopback('http://localhost:18080/api?token=a@b');
-    expect(u.hostname).toBe('localhost');
+    // reject `@` appearing in path / query / fragment. After D4.a
+    // Commit 2 fixup the URL gets rejected by the origin-only gate
+    // (path + query both make it non-origin-shaped), NOT by the
+    // userinfo `malformed_url` branch. The point of this test is to
+    // pin that `@` in non-authority contexts is NOT what fails the
+    // input — the shape of the URL is.
+    expectReject('http://localhost:18080/api?token=a@b', 'non_origin_url');
   });
 
   // ── IPv6 bracket-suffix validation (Cindy `#task:631` D3.c P1 r3)
@@ -631,6 +633,93 @@ describe('classifyServerUrl — V1 acceptance policy', () => {
       }
       expect(flagOff.insecure).toBe(false);
       expect(flagOn.insecure).toBe(false);
+    });
+  });
+
+  describe('D4.a Commit 2 fixup — non_origin_url rejection (Cindy review 2026-05-28)', () => {
+    // Contract (`docs/remote-backend-d4-design.md` §7.1): the server
+    // connection profile is `{ scheme, host, port }` only. The
+    // classifier MUST reject any input with non-trivial path / query
+    // / fragment, BEFORE branching on loopback / remote, so the
+    // wizard (which strips down to origin when fetching
+    // `/api/server/info`) cannot test one base while persistence
+    // commits another. Applies uniformly: scheme-agnostic,
+    // dev-flag-agnostic, loopback / remote / obfuscated paths all
+    // reject equally.
+
+    it('accepts empty path (`https://x.example.test`)', () => {
+      const out = classifyServerUrl('https://x.example.test');
+      expect(out.ok).toBe(true);
+    });
+
+    it('accepts trailing slash (`https://x.example.test/`)', () => {
+      const out = classifyServerUrl('https://x.example.test/');
+      expect(out.ok).toBe(true);
+    });
+
+    it('rejects non-trivial pathname (`https://x.example.test/foo`)', () => {
+      const msg = expectReject('https://x.example.test/foo', 'non_origin_url');
+      expect(msg).toContain('/foo');
+      expect(msg).toContain('https://x.example.test');
+    });
+
+    it('rejects nested pathname (`https://x.example.test/foo/bar`)', () => {
+      expectReject('https://x.example.test/foo/bar', 'non_origin_url');
+    });
+
+    it('rejects query (`https://x.example.test?bar=1`)', () => {
+      expectReject('https://x.example.test?bar=1', 'non_origin_url');
+    });
+
+    it('rejects fragment (`https://x.example.test/#frag`)', () => {
+      expectReject('https://x.example.test/#frag', 'non_origin_url');
+    });
+
+    it('rejects path + query + fragment combo', () => {
+      expectReject(
+        'https://x.example.test/api?foo=1#bar',
+        'non_origin_url',
+      );
+    });
+
+    it('rejects loopback with path (gate is loopback-agnostic)', () => {
+      expectReject('http://127.0.0.1:18080/foo', 'non_origin_url');
+    });
+
+    it('rejects loopback with query (gate is loopback-agnostic)', () => {
+      expectReject('http://localhost?x=1', 'non_origin_url');
+    });
+
+    it('rejects dev-flag insecure-remote with path (gate is flag-agnostic)', () => {
+      const out = classifyServerUrl('http://10.0.0.5/foo', {
+        allowInsecureRemote: true,
+      });
+      expect(out.ok).toBe(false);
+      if (out.ok) throw new Error('unreachable');
+      expect(out.reason).toBe('non_origin_url');
+    });
+
+    it('rejects obfuscated-loopback with path — fires before the obfuscated-loopback gate', () => {
+      // Order matters: the non_origin check runs BEFORE the
+      // obfuscated-loopback check, so an obfuscated input with a path
+      // surfaces as non_origin_url rather than
+      // obfuscated_loopback_disallowed. Either is a rejection but the
+      // first-rule-to-fire deterministic order is the contract we
+      // pin so callers can rely on the reason string.
+      const out = classifyServerUrl('http://0x7f000001/foo');
+      expect(out.ok).toBe(false);
+      if (out.ok) throw new Error('unreachable');
+      expect(out.reason).toBe('non_origin_url');
+    });
+
+    it('rejects unsupported scheme even with a clean path — unsupported_scheme still wins', () => {
+      // Conversely, unsupported_scheme is checked BEFORE non_origin
+      // because the URL parser may produce surprising
+      // path/host pairs for non-http(s) schemes. Pin the precedence.
+      const out = classifyServerUrl('ws://x.example.test/foo');
+      expect(out.ok).toBe(false);
+      if (out.ok) throw new Error('unreachable');
+      expect(out.reason).toBe('unsupported_scheme');
     });
   });
 });

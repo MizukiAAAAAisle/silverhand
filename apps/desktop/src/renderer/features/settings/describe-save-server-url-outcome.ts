@@ -149,6 +149,11 @@ function describeClassifyReason(
       return 'Server URL is not a valid URL.';
     case 'unsupported_scheme':
       return 'Server URL must start with http:// or https://.';
+    case 'non_origin_url':
+      // D4.a Commit 2 fixup — origin-only invariant (no path / query /
+      // fragment). The classifier rejects so probe and persistence
+      // cannot drift apart.
+      return 'Server URL must be an origin (scheme + host + port). Drop the path / query / fragment.';
     case 'insecure_remote_http_disallowed':
       // D4.a Commit 1 — replaces D3's `non_loopback_host` copy. The
       // user is most likely typing a LAN box or public domain over
