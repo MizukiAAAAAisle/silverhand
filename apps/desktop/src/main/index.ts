@@ -2373,13 +2373,26 @@ ipcMain.handle(
   (_event, input: { serverUrl: string }) => handleProfileSaveWithTest(input),
 );
 
-ipcMain.handle('profile:clear', () =>
-  clearServerConnectionProfile({
+ipcMain.handle('profile:clear', () => {
+  const result = clearServerConnectionProfile({
     silverhandRoot: silverhandDir(),
     safe: safeStorage,
     logger: logger ?? undefined,
-  }),
-);
+  });
+  if (result.ok) {
+    // D4.a Commit 5c-3 P2 (Cindy review) — `no_profile` is defined
+    // as "profile:clear has been invoked / there is no on-disk
+    // profile". Sync the in-memory state synchronously so the
+    // renderer banner stops showing a stale `partial_apply_pending`
+    // / `unusable_profile` after a successful clear. Both
+    // `cleared: true` and `cleared: false` mean the file is now
+    // absent — `no_profile` is correct in both. On failure
+    // (`unlink_failed`), leave state alone: the file may still
+    // exist and the previous diagnosis is still the truthful one.
+    partialApplyState = { kind: 'no_profile' };
+  }
+  return result;
+});
 
 /**
  * D4.a Commit 5c-2 — partial_apply_pending IPC surface.
