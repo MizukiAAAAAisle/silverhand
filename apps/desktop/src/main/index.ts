@@ -79,6 +79,7 @@ import {
 import {
   decideBackendBootMode,
   evaluateProfileCommitGuard,
+  executeBackendStartup,
   planBackendStartup,
   ProfileUnusableError,
 } from './backend-boot-mode.js';
@@ -163,7 +164,12 @@ interface ActiveConversationInfo {
 
 type DesktopAuthState =
   | { status: 'authenticated'; signup_enabled: boolean; user: UserDto }
-  | { status: 'unauthenticated'; signup_enabled: boolean };
+  | { status: 'unauthenticated'; signup_enabled: boolean }
+  // D4.a Commit 5d-fixup (Cindy P1-2): typed backend-unreachable arm.
+  // Pinned to `preload/index.ts` and `preload/api.d.ts` — the three
+  // copies stay in lock-step. **No `signup_enabled`** — unknown
+  // when the server is unreachable.
+  | { status: 'backend_unreachable'; server_url: string; message: string };
 
 interface BackendProxyRequest {
   path: string;
@@ -651,7 +657,32 @@ async function hydrateDesktopSession(): Promise<boolean> {
 }
 
 async function desktopAuthState(): Promise<DesktopAuthState> {
-  const info = await fetchServerInfo();
+  // D4.a Commit 5d-fixup (Cindy P1-2): typed surface for backend
+  // unreachability. On the remote arm a network failure (server
+  // down / DNS / TLS / unreachable) MUST land on a typed
+  // `backend_unreachable` arm so the renderer renders a connect
+  // gate instead of the IPC promise rejecting and leaving the UI
+  // stuck on a Loading spinner. We deliberately do NOT include
+  // `signup_enabled` in this arm — when the server is unreachable
+  // we don't know its policy, and a default would leak a guess
+  // into the gate UI. Intentionally narrow what we catch:
+  // `fetch` rejections + `Error` instances thrown by `fetchServerInfo`.
+  let info: ServerInfo;
+  try {
+    info = await fetchServerInfo();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const url = backendUrl('');
+    logger?.warn(
+      { err, server_url: url },
+      'desktopAuthState: backend unreachable (server_info fetch failed)',
+    );
+    return {
+      status: 'backend_unreachable',
+      server_url: url,
+      message,
+    };
+  }
   if (userSessionToken && userSessionUser) {
     return {
       status: 'authenticated',
@@ -666,11 +697,29 @@ async function postAuthSession(
   path: typeof authPaths.signup | typeof authPaths.login,
   input: AuthSignupInput | AuthLoginInput,
 ): Promise<DesktopAuthResult> {
-  const res = await fetch(backendUrl(path), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(input),
-  });
+  // D4.a Commit 5d-fixup (Cindy P1-2): typed network-failure surface.
+  // A remote backend that disappears between renderer mount and
+  // login submit MUST NOT throw an untyped IPC rejection; we report
+  // `status: 0` ("Network Error") with a typed body so the renderer
+  // surfaces a connect gate instead of a generic "something went
+  // wrong". `ApiError` on the renderer special-cases status 0 and
+  // exposes `kind: 'backend_unreachable'`.
+  let res: Response;
+  try {
+    res = await fetch(backendUrl(path), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      ok: false,
+      status: 0,
+      statusText: 'Network Error',
+      bodyText: JSON.stringify({ error: 'backend_unreachable', message }),
+    };
+  }
   const text = await res.text();
   if (!res.ok) {
     return {
@@ -1379,11 +1428,27 @@ async function proxyBackendRequest(
   if (input.bodyText !== undefined && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
-  const res = await fetch(backendUrl(input.path), {
-    method: input.method ?? 'GET',
-    headers,
-    body: input.bodyText,
-  });
+  // D4.a Commit 5d-fixup (Cindy P1-2): typed network-failure surface
+  // for backend proxy. A remote backend that disappears mid-session
+  // MUST NOT throw an untyped IPC rejection; the renderer's
+  // `ApiError` special-cases `status: 0` and tags it
+  // `kind: 'backend_unreachable'`.
+  let res: Response;
+  try {
+    res = await fetch(backendUrl(input.path), {
+      method: input.method ?? 'GET',
+      headers,
+      body: input.bodyText,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      status: 0,
+      statusText: 'Network Error',
+      headers: { 'content-type': 'application/json' },
+      bodyText: JSON.stringify({ error: 'backend_unreachable', message }),
+    };
+  }
   if (res.status === 401) {
     await clearUserSessionAfterUnauthorized('backend request');
   }
@@ -1413,11 +1478,25 @@ async function proxyBackendUpload(
     });
     form.append(file.fieldName, blob, file.filename);
   }
-  const res = await fetch(backendUrl(input.path), {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${userSessionToken}` },
-    body: form,
-  });
+  // D4.a Commit 5d-fixup (Cindy P1-2): same typed network-failure
+  // surface as `proxyBackendRequest` — symmetric handling so the
+  // renderer can rely on `status: 0` regardless of which proxy ran.
+  let res: Response;
+  try {
+    res = await fetch(backendUrl(input.path), {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${userSessionToken}` },
+      body: form,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      status: 0,
+      statusText: 'Network Error',
+      headers: { 'content-type': 'application/json' },
+      bodyText: JSON.stringify({ error: 'backend_unreachable', message }),
+    };
+  }
   if (res.status === 401) {
     await clearUserSessionAfterUnauthorized('backend upload');
   }
@@ -1427,7 +1506,18 @@ async function proxyBackendUpload(
 async function bootstrap(): Promise<void> {
   try {
     const pathResult = patchPathFromLoginShell();
-    const config = await loadOrCreateServerConfig();
+    // D4.a Commit 5d fixup (Cindy P1-1): NOTE — `loadOrCreateServerConfig()`
+    // is intentionally NOT called here. The legacy
+    // `~/.silverhand/server-config.json` is an embedded-only boot
+    // artifact (it remembered the embedded server's chosen port +
+    // mode for cross-launch persistence). Calling it before the
+    // boot-mode decision would touch — and on missing/corrupt
+    // files **write** — embedded artifacts on a remote-profile
+    // boot, breaking the §4.2 hard gate ("remote profile saved →
+    // next launch must not crash, must not fall back to embedded").
+    // The loader now lives behind `executeBackendStartup`'s
+    // embedded arm only (see below); a unit-tested seam pins that
+    // remote / refuse plans never reach it.
     loggers = createCategorizedLoggers({
       dir: join(silverhandDir(), 'logs'),
       alsoConsole: !app.isPackaged,
@@ -1703,51 +1793,60 @@ async function bootstrap(): Promise<void> {
         );
       });
     });
-    if (startupPlan.mode === 'embedded') {
-      const running = await startEmbeddedSilverhandServer({
-        dataDir: silverhandDir(),
-        serverConfig: config,
-        silverhandCliLauncher: resolveSilverhandCliLauncher(),
-        logger,
-        loggers: loggers ?? undefined,
-        logDir: join(silverhandDir(), 'logs'),
-        hostClient,
-      });
-      backend = { kind: 'embedded', running };
-      await writeServerConfig(running.context.serverConfig);
-    } else {
-      // D4.a Commit 5d remote-mode bootstrap branch (Cindy review
-      // boundary 4 — §4.2 hard gate):
-      //   - Skip `startEmbeddedSilverhandServer`. There is no
-      //     in-process backend; every HTTP / SSE / WS request leaves
-      //     the desktop and lands on the configured remote backend.
-      //   - Skip `writeServerConfig`. The legacy
-      //     `~/.silverhand/server-config.json` is an embedded-only
-      //     boot artifact (it carried the embedded server's chosen
-      //     port + mode for cross-launch persistence). On the remote
-      //     arm the source of truth is `server-profile.bin` (§7) and
-      //     the daemon-config carries the daemon's view; there is
-      //     no embedded URL to remember.
-      //   - Build a `RemoteBackendHandle` from the canonical origin.
-      //     Every downstream `backendUrl(...)` / `requireBackendUrl()`
-      //     consumer (auth fetch, server-info probe, host-claim, WS
-      //     proxy, event-WS origin override) reads through the same
-      //     accessor and resolves the remote origin transparently.
-      //
-      // **Throw-free invariant**: this branch must never throw, even
-      // if the remote backend is unreachable. Remote HTTP failures
-      // are funnelled through `claimLocalHostForUserSession`'s
-      // try/catch (typed `error` claim status), `validateUserSessionToken`'s
-      // `.catch(() => null)`, and the `backend:request` proxy
-      // (typed BackendProxyResponse). The only failure that can
-      // throw inside this branch is the local daemon socket failing
-      // to connect — same fatal as embedded mode (the daemon path
-      // is local on both arms in V1).
-      backend = buildRemoteBackendHandle({
-        serverUrl: startupPlan.serverUrl,
-        insecure: startupPlan.insecure,
-      });
-    }
+    // D4.a Commit 5d fixup (Cindy P1-1) — dispatch via the
+    // `executeBackendStartup` adapter. `loadOrCreateServerConfig`,
+    // `startEmbeddedSilverhandServer`, and `writeServerConfig` are
+    // all routed through `deps.startEmbeddedAndPersistConfig` ONLY
+    // on the embedded arm. The remote arm calls
+    // `buildRemoteBackendHandle` and never touches the legacy
+    // server-config artifact. The refuse arm throws
+    // `ProfileUnusableError` and never reaches the embedded helpers
+    // either. The unit-tested seam in
+    // `__tests__/execute-backend-startup.test.ts` pins this — it
+    // was the load-bearing fix for Cindy 5d-fixup P1-1.
+    backend = await executeBackendStartup<
+      RunningBackend,
+      RemoteBackendHandle
+    >(startupPlan, {
+      loadOrCreateServerConfig: () => loadOrCreateServerConfig(),
+      startEmbeddedAndPersistConfig: async config => {
+        const running = await startEmbeddedSilverhandServer({
+          dataDir: silverhandDir(),
+          // The embedded arm trusts the loaded ServerConfig; runtime
+          // shape is asserted by `loadOrCreateServerConfig` /
+          // `ServerConfigSchema.parse` upstream.
+          serverConfig: config as Awaited<
+            ReturnType<typeof loadOrCreateServerConfig>
+          >,
+          silverhandCliLauncher: resolveSilverhandCliLauncher(),
+          logger: logger ?? undefined,
+          loggers: loggers ?? undefined,
+          logDir: join(silverhandDir(), 'logs'),
+          hostClient: hostClient!,
+        });
+        await writeServerConfig(running.context.serverConfig);
+        return running;
+      },
+      buildRemoteHandle: input => buildRemoteBackendHandle(input),
+      refuse: refusePlan => {
+        // Throws — typed as `(plan) => never` so the union narrows
+        // for the caller. Logged on the way out so a pre-bootstrap
+        // crash trace carries the same diagnosis as the embedded
+        // boot's WARN line above.
+        logger?.error(
+          {
+            profileUrl: refusePlan.profileUrl,
+            classifyMessage: refusePlan.classifyMessage,
+          },
+          'D4.a Commit 5d-fixup executor: refuse arm reached; throwing ProfileUnusableError',
+        );
+        throw new ProfileUnusableError({
+          mode: 'profile_invalid',
+          profileUrl: refusePlan.profileUrl,
+          classifyMessage: refusePlan.classifyMessage,
+        });
+      },
+    });
     installBackendEventWsOriginOverride();
     if (!HEADLESS) {
       // D4.a Commit 5d: `hydrateDesktopSession` works on both arms —

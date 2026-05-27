@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useViewerUser, isRegistrationRequired } from './hooks';
+import { useViewerUser, isRegistrationRequired, isBackendUnreachable } from './hooks';
 import { HumanHeader } from './HumanHeader';
 import { HumanProfileCard } from './HumanProfileCard';
 
@@ -37,7 +37,9 @@ export function HumanView({
   // miss — the App-level redirect picks the viewer's id (or the
   // agents-first fallback) on the next paint.
   const dto =
-    viewer.data && !isRegistrationRequired(viewer.data)
+    viewer.data
+    && !isRegistrationRequired(viewer.data)
+    && !isBackendUnreachable(viewer.data)
       ? viewer.data
       : null;
   const reachable = dto != null && dto.id === userId;

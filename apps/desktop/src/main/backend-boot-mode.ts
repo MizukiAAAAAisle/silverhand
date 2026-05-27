@@ -509,3 +509,112 @@ export function planBackendStartup(decision: BackendBootMode): BackendStartupPla
     }
   }
 }
+
+/**
+ * D4.a Commit 5d fixup (Cindy P1-1 review) — executor adapter.
+ *
+ * **Why this exists**: Cindy review found that `bootstrap()` was
+ * calling `loadOrCreateServerConfig()` BEFORE the boot-mode decision,
+ * which meant a remote-profile boot still touched (and on missing /
+ * corrupt files, **wrote**) the embedded-only `server-config.json`.
+ * That contradicted the 5d remote-arm comment ("server-config is
+ * embedded-only artifact") and broke the §4.2 hard gate (a broken
+ * legacy config could fail the boot before remote arm was reached).
+ *
+ * The fix is structural: a small executor adapter that takes the
+ * plan + injectable deps and dispatches to the right arm. The
+ * embedded arm is the ONLY one that calls `deps.loadOrCreateServerConfig`;
+ * the remote / refuse arms must not.
+ *
+ * **Test seam (Cindy 5d-fixup constraint)**: the unit test injects
+ * spies for `loadOrCreateServerConfig` / `startEmbeddedAndPersistConfig`
+ * / `buildRemoteHandle` / `refuse` and pins:
+ *   - embedded plan calls `loadOrCreateServerConfig` then
+ *     `startEmbeddedAndPersistConfig`; does NOT call `buildRemoteHandle`
+ *     or `refuse`
+ *   - remote plan calls `buildRemoteHandle` ONLY; does NOT call
+ *     `loadOrCreateServerConfig` or any embedded helper
+ *   - refuse plan calls `refuse` ONLY; does NOT call any embedded
+ *     helper or `buildRemoteHandle`
+ *
+ * This is the load-bearing pin Cindy asked for — typecheck alone
+ * cannot tell you whether the legacy config loader runs on the
+ * remote path; only an injected spy can.
+ *
+ * **Generic over `RunningBackendT` and `RemoteBackendHandleT`** so
+ * the adapter does not depend on the embedded backend / remote
+ * handle modules at compile time. The bootstrap site fills in the
+ * real types; tests fill in lightweight fakes.
+ */
+export interface ExecuteBackendStartupDeps<RunningBackendT, RemoteBackendHandleT> {
+  /**
+   * Reads `~/.silverhand/server-config.json`, creates a fresh embedded
+   * default if missing/corrupt. Embedded-only — calling on a remote
+   * profile would touch the legacy artifact (the bug 5d-fixup is
+   * preventing).
+   */
+  loadOrCreateServerConfig: () => Promise<unknown>;
+  /**
+   * Starts the embedded backend with the given config and persists
+   * the resolved `serverConfig` (with the chosen port) back to disk.
+   * The two side effects are bundled here because they are always
+   * paired in bootstrap and have the same embedded-only scope.
+   */
+  startEmbeddedAndPersistConfig: (config: unknown) => Promise<RunningBackendT>;
+  /**
+   * Builds the remote-arm handle from the plan's serverUrl + insecure
+   * flag. Trivial in production (`buildRemoteBackendHandle`); a fake
+   * in tests.
+   */
+  buildRemoteHandle: (input: {
+    serverUrl: string;
+    insecure: boolean;
+  }) => RemoteBackendHandleT;
+  /**
+   * Refuse arm — bootstrap throws `ProfileUnusableError` here. Typed
+   * as `(plan) => never` so the type system can narrow after the
+   * call (the executor returns through this branch only by the
+   * function never returning).
+   */
+  refuse: (plan: Extract<BackendStartupPlan, { mode: 'refuse' }>) => never;
+}
+
+export type ExecutedBackendHandle<RunningBackendT, RemoteBackendHandleT> =
+  | { kind: 'embedded'; running: RunningBackendT }
+  | RemoteBackendHandleT;
+
+export async function executeBackendStartup<
+  RunningBackendT,
+  RemoteBackendHandleT,
+>(
+  plan: BackendStartupPlan,
+  deps: ExecuteBackendStartupDeps<RunningBackendT, RemoteBackendHandleT>,
+): Promise<ExecutedBackendHandle<RunningBackendT, RemoteBackendHandleT>> {
+  switch (plan.mode) {
+    case 'refuse':
+      // `refuse` is `(plan) => never`; bootstrap throws via this
+      // helper. We still return an "unreachable" sentinel so the
+      // function is well-typed; if a refuse impl ever returns
+      // (regression) the throw below catches it.
+      deps.refuse(plan);
+      throw new Error(
+        'executeBackendStartup: refuse() returned (expected `never`)',
+      );
+    case 'embedded': {
+      const config = await deps.loadOrCreateServerConfig();
+      const running = await deps.startEmbeddedAndPersistConfig(config);
+      return { kind: 'embedded', running };
+    }
+    case 'remote':
+      return deps.buildRemoteHandle({
+        serverUrl: plan.serverUrl,
+        insecure: plan.insecure,
+      });
+    default: {
+      const exhaustive: never = plan;
+      throw new Error(
+        `executeBackendStartup: unhandled plan: ${JSON.stringify(exhaustive)}`,
+      );
+    }
+  }
+}

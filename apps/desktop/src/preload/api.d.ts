@@ -55,7 +55,10 @@ export interface ActiveConversationInfo {
 
 export type DesktopAuthState =
   | { status: 'authenticated'; signup_enabled: boolean; user: UserDto }
-  | { status: 'unauthenticated'; signup_enabled: boolean };
+  | { status: 'unauthenticated'; signup_enabled: boolean }
+  // D4.a Commit 5d-fixup (Cindy P1-2): typed backend-unreachable arm.
+  // No `signup_enabled` — unknown when the server is unreachable.
+  | { status: 'backend_unreachable'; server_url: string; message: string };
 
 export type DesktopAuthResult =
   | { ok: true; user: UserDto }

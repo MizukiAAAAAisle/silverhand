@@ -24,7 +24,22 @@ export type SetupRequired = RegistrationRequired & {
   signup_enabled: boolean;
 };
 
-export type ViewerState = UserDto | SetupRequired;
+/**
+ * D4.a Commit 5d-fixup (Cindy P1-2): typed renderer arm for a
+ * remote backend that is unreachable at fetch time. Pinned to the
+ * preload `DesktopAuthState.backend_unreachable` arm so a
+ * profile-saved-then-server-down boot lands on a typed UI gate
+ * instead of the IPC promise rejecting and pinning the renderer
+ * on a Loading spinner. **No `signup_enabled`** — when the server
+ * is unreachable we don't know its policy.
+ */
+export interface BackendUnreachable {
+  backend_unreachable: true;
+  server_url: string;
+  message: string;
+}
+
+export type ViewerState = UserDto | SetupRequired | BackendUnreachable;
 
 function cacheViewer(qc: QueryClient, dto: UserDto): void {
   setCurrentUserId(dto.id, dto.display_name);
@@ -46,9 +61,25 @@ export function isRegistrationRequired(
 }
 
 /**
+ * D4.a Commit 5d-fixup (Cindy P1-2): type guard for the
+ * backend-unreachable arm. Renderer gates (App.tsx) check this
+ * BEFORE `isRegistrationRequired` so the connect-banner takes
+ * precedence over the setup wizard.
+ */
+export function isBackendUnreachable(body: ViewerState): body is BackendUnreachable {
+  return (
+    typeof body === 'object'
+    && body !== null
+    && 'backend_unreachable' in body
+    && (body as { backend_unreachable: unknown }).backend_unreachable === true
+  );
+}
+
+/**
  * React Query view of the main-process desktop auth state. The main
  * process owns token persistence and validation; the renderer only
- * receives either the resolved user dto or a setup-required marker.
+ * receives either the resolved user dto, a setup-required marker,
+ * or (D4.a Commit 5d-fixup) a backend-unreachable marker.
  */
 export function useViewerUser() {
   const query = useQuery({
@@ -56,6 +87,16 @@ export function useViewerUser() {
     queryFn: async (): Promise<ViewerState> => {
       const state = await window.agentHub.getAuthState();
       if (state.status === 'authenticated') return state.user;
+      if (state.status === 'backend_unreachable') {
+        // D4.a Commit 5d-fixup (Cindy P1-2): map IPC arm → renderer
+        // arm. Intentionally does NOT carry `signup_enabled` — see
+        // BackendUnreachable doc.
+        return {
+          backend_unreachable: true,
+          server_url: state.server_url,
+          message: state.message,
+        };
+      }
       return {
         registration_required: true,
         suggested_name: '',
@@ -65,7 +106,11 @@ export function useViewerUser() {
     staleTime: 30 * 1000,
   });
   useEffect(() => {
-    if (query.data && !isRegistrationRequired(query.data)) {
+    if (
+      query.data
+      && !isRegistrationRequired(query.data)
+      && !isBackendUnreachable(query.data)
+    ) {
       setCurrentUserId(query.data.id, query.data.display_name);
     }
   }, [query.data]);
@@ -74,7 +119,15 @@ export function useViewerUser() {
 
 function authResultToUser(result: Awaited<ReturnType<typeof window.agentHub.signup>>): UserDto {
   if (result.ok) return result.user;
-  throw new ApiError(result.status, result.statusText, result.bodyText);
+  // D4.a Commit 5d-fixup (Cindy P1-2): preserve the typed
+  // backend-unreachable signal end-to-end. `status: 0` is the
+  // sentinel main-process proxy uses to report that the
+  // signup/login fetch never reached the server; we tag the
+  // ApiError so callers branching on `err.kind` get the typed
+  // arm instead of a generic "0 Network Error" HTTP error.
+  const kind: 'http' | 'backend_unreachable' =
+    result.status === 0 ? 'backend_unreachable' : 'http';
+  throw new ApiError(result.status, result.statusText, result.bodyText, kind);
 }
 
 export function useSignupUser() {
@@ -312,7 +365,9 @@ export function useClearAvatar() {
 export function useViewerAvatarObjectUrl(): string | null {
   const { data } = useViewerUser();
   const avatarUrl =
-    data && !isRegistrationRequired(data) ? data.avatar_url : null;
+    data && !isRegistrationRequired(data) && !isBackendUnreachable(data)
+      ? data.avatar_url
+      : null;
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;

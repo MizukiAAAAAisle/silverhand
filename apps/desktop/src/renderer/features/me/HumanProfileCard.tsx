@@ -16,6 +16,7 @@ import {
 } from '@/features/common/ProfileSummarySections';
 import {
   useClearAvatar,
+  isBackendUnreachable,
   useUpdateProfile,
   useUploadAvatar,
   useViewerAvatarObjectUrl,
@@ -47,7 +48,12 @@ interface HumanProfileCardProps {
  */
 export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
   const { data: viewer } = useViewerUser();
-  const canEdit = canEditUserProfile(viewer, user);
+  // D4.a Commit 5d-fixup (Cindy P1-2): map BackendUnreachable arm
+  // to `undefined` so the permissions helper (typed as
+  // `MeResponse | undefined`) sees a known shape.
+  const viewerForPermissions =
+    viewer && isBackendUnreachable(viewer) ? undefined : viewer;
+  const canEdit = canEditUserProfile(viewerForPermissions, user);
   const update = useUpdateProfile();
   const upload = useUploadAvatar();
   const clear = useClearAvatar();

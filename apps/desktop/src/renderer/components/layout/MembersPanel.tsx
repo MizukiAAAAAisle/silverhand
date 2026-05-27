@@ -4,6 +4,7 @@ import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { CreateAgentDialog } from '@/features/agents/CreateAgentDialog';
 import {
+  isBackendUnreachable,
   isRegistrationRequired,
   useViewerAvatarObjectUrl,
   useViewerUser,
@@ -38,7 +39,9 @@ export function MembersPanel({
   const viewerQuery = useViewerUser();
   const viewerAvatarObjectUrl = useViewerAvatarObjectUrl();
   const viewer =
-    viewerQuery.data && !isRegistrationRequired(viewerQuery.data)
+    viewerQuery.data
+    && !isRegistrationRequired(viewerQuery.data)
+    && !isBackendUnreachable(viewerQuery.data)
       ? viewerQuery.data
       : null;
 

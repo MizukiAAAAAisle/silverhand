@@ -16,8 +16,13 @@ import { Titlebar } from '@/components/layout/Titlebar';
 import { VerticalSplitter } from '@/components/layout/VerticalSplitter';
 import { useAppearance } from '@/hooks/useAppearance';
 import { useLayoutSettings } from '@/hooks/useLayoutSettings';
-import { isRegistrationRequired, useViewerUser } from '@/features/me/hooks';
+import {
+  isBackendUnreachable,
+  isRegistrationRequired,
+  useViewerUser,
+} from '@/features/me/hooks';
 import { RegistrationGate } from '@/features/me/RegistrationGate';
+import { BackendUnreachableGate } from '@/features/me/BackendUnreachableGate';
 import { SetupWizardModal } from '@/features/setup/SetupWizard';
 import { useResizableWidth } from '@/hooks/useResizableWidth';
 import { CreateWorkspaceDialog } from '@/features/workspaces/CreateWorkspaceDialog';
@@ -140,6 +145,26 @@ export function App(): JSX.Element {
         <div className="grid h-screen w-screen place-items-center bg-bg-base text-xs text-text-muted">
           Loading…
         </div>
+        <SetupWizardModal />
+      </>
+    );
+  }
+  // D4.a Commit 5d-fixup (Cindy P1-2): backend-unreachable gate
+  // takes precedence over the registration / setup wizard. The
+  // user MUST repair the connection (or clear the saved profile)
+  // before any further auth state can be inferred — pretending the
+  // user is "unauthenticated, signup_enabled=false" would push them
+  // toward the wrong CTA.
+  if (isBackendUnreachable(viewer.data)) {
+    return (
+      <>
+        <BackendUnreachableGate
+          serverUrl={viewer.data.server_url}
+          message={viewer.data.message}
+          onRetry={() => {
+            void viewer.refetch();
+          }}
+        />
         <SetupWizardModal />
       </>
     );

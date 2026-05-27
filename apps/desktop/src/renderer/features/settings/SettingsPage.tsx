@@ -36,6 +36,7 @@ import { cn } from '@/lib/cn';
 import { useAppearance } from '@/hooks/useAppearance';
 import { useBackendInfoSnapshot } from '@/features/hosts/hooks';
 import {
+  isBackendUnreachable,
   isRegistrationRequired,
   useClearAvatar,
   useLogout,
@@ -519,7 +520,11 @@ function ProfilePane(): JSX.Element {
   // shape here is a transient race during refetch. Narrow once and
   // treat it as `undefined` for the rest of the pane.
   const dto =
-    viewer.data && !isRegistrationRequired(viewer.data) ? viewer.data : undefined;
+    viewer.data
+    && !isRegistrationRequired(viewer.data)
+    && !isBackendUnreachable(viewer.data)
+      ? viewer.data
+      : undefined;
 
   const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState<string | null>(null);

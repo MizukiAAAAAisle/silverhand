@@ -43,6 +43,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { describeProbeOutcome } from './describe-probe-outcome';
+import { subscribeOpenSetupWizard } from './openWizardEvent';
 import type {
   DesktopProbeServerInfoResult,
   DesktopProfileSaveWithTestResult,
@@ -88,6 +89,13 @@ export function SetupWizardModal(): JSX.Element {
     // content) so the menu can open the modal even if the user has
     // never interacted with the renderer before.
     return window.agentHub.onNavigateSetupWizard(() => setOpen(true));
+  }, []);
+  // D4.a Commit 5d-fixup (Cindy P1-2): renderer-only DOM event so
+  // the BackendUnreachableGate can pop the wizard without a
+  // round-trip through main. Subscribed in addition to (not in
+  // place of) the IPC subscription above.
+  useEffect(() => {
+    return subscribeOpenSetupWizard(() => setOpen(true));
   }, []);
   return (
     <Dialog open={open} onOpenChange={setOpen}>

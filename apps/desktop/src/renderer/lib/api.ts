@@ -8,9 +8,22 @@ import type {
 let cachedInfo: BackendInfo | null = null;
 
 /**
- * Structured HTTP error thrown by `api()` / `apiUpload()` so callers
- * can branch on `status` (e.g. 403 vs 404) without parsing the
+ * Structured HTTP / network error thrown by `api()` / `apiUpload()`
+ * so callers can branch on `kind` + `status` without parsing the
  * Error message.
+ *
+ * `kind` discriminates two failure shapes:
+ *   - `'http'`: the request reached the backend and got a real
+ *     non-2xx response. `status` ∈ [400, 599] (or other valid HTTP
+ *     codes). Use `err.status` to branch on 401/403/404.
+ *   - `'backend_unreachable'` (D4.a Commit 5d-fixup, Cindy P1-2):
+ *     the request never reached the backend (network failure, DNS
+ *     fail, TLS fail, server down). Marshalled by the main-process
+ *     proxy as `status: 0` with a typed body
+ *     `{ error: 'backend_unreachable', message }`. Renderer should
+ *     show a "can't reach <server>" gate, not a generic "something
+ *     went wrong" — the network DID fail, but the SOFTWARE is fine
+ *     and a retry/profile-clear can recover.
  *
  * Pre-PR-2 callers used to read `(err as Error).message` (a string of
  * the form `"403 Forbidden: {body}"`); that still works because the
@@ -18,12 +31,19 @@ let cachedInfo: BackendInfo | null = null;
  * `err instanceof ApiError && err.status === 404` instead.
  */
 export class ApiError extends Error {
+  readonly kind: 'http' | 'backend_unreachable';
   readonly status: number;
   readonly statusText: string;
   readonly body: string;
-  constructor(status: number, statusText: string, body: string) {
+  constructor(
+    status: number,
+    statusText: string,
+    body: string,
+    kind: 'http' | 'backend_unreachable' = 'http',
+  ) {
     super(`${status} ${statusText}: ${body}`);
     this.name = 'ApiError';
+    this.kind = kind;
     this.status = status;
     this.statusText = statusText;
     this.body = body;
@@ -81,6 +101,21 @@ function headerValue(headers: Record<string, string>, name: string): string | nu
 
 function assertOk(res: BackendProxyResponse): void {
   if (res.status >= 200 && res.status < 300) return;
+  // D4.a Commit 5d-fixup (Cindy P1-2): `status: 0` is the typed
+  // sentinel main-process proxy uses to report backend
+  // unreachability — DO NOT let it fall through as a "normal"
+  // HTTP error (the message would say "0 Network Error: ..." which
+  // a renderer might wrongly route to a generic toast). Tag it
+  // `kind: 'backend_unreachable'` so callers branching on
+  // `err.kind` get a typed signal.
+  if (res.status === 0) {
+    throw new ApiError(
+      0,
+      res.statusText || 'Network Error',
+      textResponseBody(res),
+      'backend_unreachable',
+    );
+  }
   throw new ApiError(res.status, res.statusText, textResponseBody(res));
 }
 

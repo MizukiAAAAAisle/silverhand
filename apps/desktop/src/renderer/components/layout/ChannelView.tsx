@@ -69,6 +69,7 @@ import {
 } from '@/features/threads/hooks';
 import { useSavedMessageIds, useToggleSave } from '@/features/saved/hooks';
 import {
+  isBackendUnreachable,
   isRegistrationRequired,
   useViewerAvatarObjectUrl,
   useViewerUser,
@@ -656,7 +657,7 @@ function MemberStrip({
   // UI meaning for chips and is intentionally not filtered.
   const membersResult = useConversationMembers(channelId);
   const { data: viewer } = useViewerUser();
-  const viewerUserId = viewer && !isRegistrationRequired(viewer) ? viewer.id : null;
+  const viewerUserId = viewer && !isRegistrationRequired(viewer) && !isBackendUnreachable(viewer) ? viewer.id : null;
 
   const visibleMembers = useMemo(() => {
     if (membersResult.status !== 'resolved') return [];
@@ -978,7 +979,7 @@ function MessageList({
   }, [agents]);
   const humansByName = useMemo(() => {
     const byName = new Map<string, UserDto>();
-    if (viewer && !isRegistrationRequired(viewer)) {
+    if (viewer && !isRegistrationRequired(viewer) && !isBackendUnreachable(viewer)) {
       byName.set(viewer.name, viewer);
     }
     return byName;
@@ -1162,7 +1163,7 @@ function MessageList({
     if (snapshots.length === 0) return;
     const text = buildMarkdownTranscript(snapshots, {
       agentsById,
-      viewer: viewer && !isRegistrationRequired(viewer) ? viewer : undefined,
+      viewer: viewer && !isRegistrationRequired(viewer) && !isBackendUnreachable(viewer) ? viewer : undefined,
     });
     // shiki `vBRFDuOuOqhsYzow`: multi-select share is clipboard, not a
     // save dialog. Same destination as the single-message Copy markdown
@@ -1472,7 +1473,7 @@ function MessageList({
           onStartThread={onThreadCreated ? handleStartThread : undefined}
           threadReplyCount={threadByAnchor?.get(m.id)?.reply_count}
           viewerAvatarObjectUrl={viewerAvatarObjectUrl}
-          viewer={viewer && !isRegistrationRequired(viewer) ? viewer : undefined}
+          viewer={viewer && !isRegistrationRequired(viewer) && !isBackendUnreachable(viewer) ? viewer : undefined}
           agentAvatarUrls={agentAvatarUrls}
           highlighted={
             highlightedMessageId != null && m.id === highlightedMessageId
@@ -1534,7 +1535,7 @@ function MessageList({
         humansByName={humansByName}
         channelsByName={channelsByName}
         agentAvatarUrls={agentAvatarUrls}
-        viewer={viewer && !isRegistrationRequired(viewer) ? viewer : undefined}
+        viewer={viewer && !isRegistrationRequired(viewer) && !isBackendUnreachable(viewer) ? viewer : undefined}
         viewerAvatarObjectUrl={viewerAvatarObjectUrl}
       />
       <div className="relative min-h-0 min-w-0 flex-1">

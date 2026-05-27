@@ -50,7 +50,19 @@ export interface ActiveConversationInfo {
 
 export type DesktopAuthState =
   | { status: 'authenticated'; signup_enabled: boolean; user: UserDto }
-  | { status: 'unauthenticated'; signup_enabled: boolean };
+  | { status: 'unauthenticated'; signup_enabled: boolean }
+  // D4.a Commit 5d-fixup (Cindy P1-2): when the active backend is
+  // unreachable (remote profile, server down / DNS fail / TLS fail
+  // / etc.), `desktopAuthState()` returns this typed arm instead of
+  // letting the underlying `fetchServerInfo()` rejection propagate
+  // through IPC. Carries `serverUrl` so the renderer can show
+  // "can't reach <url>". **Intentionally does NOT carry
+  // `signup_enabled`** — when the server is unreachable we DO NOT
+  // know whether signup is open, and defaulting to true/false would
+  // leak a guess into the gate UI. Renderer must treat it as
+  // unknown and avoid rendering signup CTAs until the next
+  // re-fetch.
+  | { status: 'backend_unreachable'; server_url: string; message: string };
 
 export type DesktopAuthResult =
   | { ok: true; user: UserDto }
