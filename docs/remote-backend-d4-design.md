@@ -113,7 +113,7 @@ They are decoupled by direction:
 - D5 does **not** change deployment topology.
 
 D5 has its own design contract (TBD). It is **not** within the scope
-of this doc beyond §8 (R4 deferral mechanics).
+of this doc beyond §9 (R4 deferral mechanics).
 
 ---
 
@@ -192,12 +192,12 @@ This section is the V1 deployment recipe operators follow.
   `<DATA_DIR>/workspaces/`.
 - TLS termination: reverse proxy (Caddy / Tailscale / nginx) recommended
   for V1; backend itself does not terminate TLS. **Daemon refuses to
-  attach over a non-loopback non-TLS server URL** — §7.
+  attach over a non-loopback non-TLS server URL** — §8.
 - Readiness probe: `GET /readyz` returns 200 once migrations applied,
   DB writable, listen socket open.
 
 **Operator runbook** (will live in `docs/remote-backend-d4-design.md`
-tail — §11 of this doc, drafted in D4.a alongside the implementation).
+tail — §12 of this doc, drafted in D4.a alongside the implementation).
 
 ---
 
@@ -211,9 +211,11 @@ All three gates must pass to call D4 complete.
 
 - Standalone backend boots on a remote machine, `/readyz` returns 200.
 - Desktop in remote mode points at `https://<remote>` (or
-  loopback-http per §7) and reaches it.
+  loopback-http per §8) and reaches it.
 - `POST /auth/signup` works (when signup enabled) end-to-end against
-  remote.
+  remote. **When signup disabled**: `POST /auth/signup` returns
+  `403 { code: 'signup_disabled' }` (route always mounted under D4 —
+  see §6.2; this updates the A.2 hide-as-missing behaviour).
 - `POST /auth/login` works end-to-end against remote.
 - `GET /api/server/info` returns the expected `signup_enabled` /
   `bind_address_scope` (§6) fields.
@@ -247,7 +249,7 @@ with the wrong shape):
 **Must work**:
 
 - Desktop daemon attaches to remote backend over WSS (or loopback ws
-  per §7); attachment is observable in Hosts UI within `connecting →
+  per §8); attachment is observable in Hosts UI within `connecting →
   connected` transition window.
 - Agent spawn in a remote-backed conversation: backend dispatches
   intent → daemon receives → daemon spawns agent CLI on desktop →
@@ -326,10 +328,22 @@ locked into D4 acceptance.
 ### 6.2 Operator lock-down
 
 - Operator runs: set `SILVERHAND_DISABLE_SIGNUP=1`, restart backend.
-- On boot with `DISABLE_SIGNUP=1`, the `/auth/signup` route is
-  **not mounted** (same boot-time gate as A.2).
+- On boot with `DISABLE_SIGNUP=1`, the `/auth/signup` route is **still
+  mounted** and returns `403 { code: 'signup_disabled', message:
+  <human-readable> }`. This is a **change from A.2** (which hid the
+  route as `404 missing`); D4 prefers a typed body over enumeration
+  resistance because (a) every other negative across G1/G2/G3 is
+  typed, (b) V1 remote is a personal/private deployment so
+  enumeration resistance is a weak argument, and (c) desktop UX needs
+  a deterministic signal to hide the signup form rather than relying
+  on both `/api/server/info.signup_enabled` and a generic 404
+  fallback. **D4.a updates the A.2 contract** (mount the route
+  unconditionally, branch on `signup_enabled` inside the handler);
+  the A.2 routes test (`packages/backend/tests/routes/auth-routes.test.ts`)
+  is updated in the same PR.
 - Operator can re-enable by clearing the env and restarting. No
   admin API for live toggle in D4 (would expand auth surface).
+- Other auth routes (`/auth/login`, `/auth/logout`) are unaffected.
 
 ### 6.3 Five hard conditions (Cindy lock)
 
@@ -378,86 +392,282 @@ Any later expansion goes through its own design pass.
 
 ---
 
-## 7. TLS policy
+## 7. Server connection profile (pre-auth + post-auth single source)
 
-This section is the V1 daemon-side TLS verification contract for the
-desktop daemon's outbound connection to the remote backend.
+This section closes the gap surfaced in Cindy round-1 blocker 2.
+Before this section existed, TLS pinning was scoped to "Hosts config"
+— but Hosts come into existence only AFTER login (via B.2
+`claim-or-create`). Pre-auth desktop traffic (`GET /api/server/info`,
+`POST /auth/signup`, `POST /auth/login`, plus the SSE event WS
+under the session bearer) had no defined SPKI-pin storage and no
+defined TLS contract. The server connection profile fills that gap
+by being the **single source of `{server_url, spki_pin?}`** for
+every desktop→backend transport across both auth phases.
 
-### 7.1 Accept matrix (Cindy phrasing lock)
+### 7.1 Data shape
+
+```
+ServerConnectionProfile {
+  version: int             // monotonic; increments on every commit
+  server_url: string       // canonical URL string (scheme + host + port)
+  spki_pin?: string        // hex-encoded sha256 of subject public key info
+  insecure_dev?: boolean   // set iff SILVERHAND_ALLOW_INSECURE_REMOTE=1
+                           //   was active at profile creation; surfaces
+                           //   to UI as the "Insecure dev" badge (§8.4)
+  created_at: int          // unix ms
+  updated_at: int          // unix ms
+}
+```
+
+### 7.2 Storage and ownership
+
+- **Desktop main process exclusive owner**. File path:
+  `~/.silverhand/desktop/server-profile.bin`, mode `0600`, contents
+  encrypted via `safeStorage.encryptString` (same primitive A.4
+  already uses for the user session bearer).
+- **Renderer never sees the profile bytes**. Renderer-facing IPC
+  surfaces (Settings UI, Setup Wizard) get a redacted view:
+  `{ server_url, has_pin: boolean, insecure_dev, updated_at }` only.
+  `spki_pin` itself is never IPC'd to renderer — same threat model
+  as bearer tokens (Cindy A.4 condition).
+- **Daemon never reads the profile**. Daemon only reads
+  daemon-config (§7.6). Profile is a desktop-main concept; keeping
+  it out of the daemon's read path preserves R4 hygiene (profile
+  versioning does not leak into daemon ↔ backend protocol).
+
+### 7.3 Coverage — which transports the profile owns
+
+Single source of `server_url` + `spki_pin` for:
+
+- Pre-auth `GET /api/server/info`
+- Pre-auth `POST /auth/signup` (when enabled) / `POST /auth/login`
+- Post-auth `GET/POST /api/*` over `backend:request` proxy
+- Session validation refresh
+- SSE / event WS subscription
+- B.2 `POST /api/hosts/claim-or-create`
+- D2 daemon outbound WSS (delivered via the derived daemon-config)
+- D3 daemon-config writer (the derived artifact)
+
+All of those resolve `{server_url, spki_pin}` from this single
+profile. There is no "look up server_url from app_settings" /
+"look up pin from Hosts config" parallel path. The grep gate (§8.3)
+treats any other resolution path in non-test code as a finding.
+
+### 7.4 Pre-auth UX: how a pin gets entered for a self-signed remote
+
+Setup Wizard's "Connect to backend" first screen:
+
+1. User enters `server_url` (required) and optionally clicks
+   "Advanced" to reveal a `spki_pin` text field.
+2. Wizard performs a test connection (`GET /api/server/info`) using
+   the entered profile (no commit yet).
+3. **Outcome A — `system_ca_verified`**: profile commits. Continue
+   to signup/login screen.
+4. **Outcome B — `host_tls_chain_invalid`**: Wizard surfaces a
+   typed error explaining "this server's certificate is not trusted
+   by your system CA". The error UI shows the observed SPKI
+   fingerprint as **diagnostic text only** (selectable for copy, no
+   "trust this" button — Cindy lock §8.3). Instructions point the
+   user to verify the fingerprint out-of-band (`openssl s_client`
+   recipe in §12 runbook), then paste it into the `spki_pin` field
+   manually and re-test. Wizard does **not** offer a one-click trust
+   path.
+5. **Outcome C — other typed fail** (`hostname_mismatch`, `expired`,
+   `pin_mismatch`): typed error surfaced; Wizard does not commit;
+   user must fix `server_url`, fix the cert at the server end, or
+   correct the pasted pin.
+
+### 7.5 Profile update flow (Settings → atomic phase-1 + phase-2)
+
+When user updates profile from Settings (server URL change, pin
+rotation, or both):
+
+**Phase 0 — validate**
+
+- Run a test connection against the proposed `{server_url, spki_pin}`.
+- Fail-fast on any typed TLS code; nothing committed; UI shows the
+  typed error.
+
+**Phase 1 — commit profile**
+
+- Write next-version profile to temp file in
+  `~/.silverhand/desktop/`, `fsync`, `rename` over the current
+  profile file (atomic at the filesystem level for a single file).
+- After this rename succeeds, the profile is **committed**. There
+  is no way to atomically un-commit it across the boundary into
+  daemon-config (Cindy correction: do not pretend cross-file
+  transactions exist).
+
+**Phase 2 — derive daemon-config and reload**
+
+- Build new daemon-config from `{profile.version, profile.server_url,
+  profile.spki_pin, host_id, host_token}` (the last two from the
+  D3-already-persisted host claim state).
+- Write daemon-config to temp file, `fsync`, `rename`.
+- Send `host_outbound_reload` IPC to daemon.
+- Await daemon's reload ack frame.
+
+**Failure handling for phase 2**
+
+- If phase 2 fails (daemon-config write / IPC / reload ack any
+  step): profile is **already** at the new version, daemon is
+  **still** running on the old config. Mark in-memory desktop state
+  `partial_apply_pending = true`. Settings UI does NOT show
+  "success"; shows a typed `partial_apply_pending` indicator with
+  a "Retry" affordance.
+- Recovery (Cindy requirement — partial_apply_pending must be
+  recoverable):
+  - **User clicks Retry** → re-run phase 2 with current profile.
+  - **Desktop restart** → on launch, compare
+    `profile.version` vs `daemon-config.profile_version`;
+    mismatch → automatically re-run phase 2 in the background.
+  - **Daemon restart (D3.b)** → desktop supervisor's daemon-attach
+    path re-derives daemon-config from current profile before
+    spawning the new daemon, so a daemon respawn naturally
+    converges the two if they were out of sync.
+- Acceptance (G1): `partial_apply_pending` must converge to
+  `fully_applied` after at least one of {Retry click, desktop
+  restart, daemon restart}. No code path leaves it stuck.
+
+### 7.6 daemon-config (the derived artifact)
+
+`~/.silverhand/daemon-config.json` mode `0600` (D3 existing layout)
+gains explicit fields:
+
+```
+{
+  profile_version: int       // mirror of profile.version at derivation
+  effective_url: string      // mirror of profile.server_url
+  spki_pin?: string          // mirror of profile.spki_pin
+  host_id: string            // from claim-or-create
+  host_token: string         // from claim-or-create
+  // ... existing D3 fields ...
+}
+```
+
+**Daemon fingerprint inclusion** (Cindy nuance): when daemon
+computes a config fingerprint to short-circuit no-op reload IPCs,
+`profile_version` MUST be part of the hash input. Otherwise a
+profile commit that changes only metadata (timestamps) without
+changing URL or pin would be treated as a no-op, and desktop's
+generation tracking would diverge from daemon's. `profile_version`
+is **local config consistency only** — it is NOT sent in any
+outbound WSS frame, not in any auth header, not in any backend
+request. Keeping it local-only preserves R4 future-unification
+scope.
+
+### 7.7 Out of scope for §7
+
+- **Multiple concurrent profiles** (e.g. switch between two remote
+  backends): V1 has one profile at a time. Multi-profile support
+  is a follow-up.
+- **Profile bootstrap from environment variables** (auto-provision
+  for CI / dogfood): out of D4 scope; if added later, treat env as
+  a one-shot seed for the profile file, not a parallel source.
+- **Sharing the profile between desktop and a future headless
+  daemon binary**: covered when headless daemon ships (follow-up
+  phase, §10).
+
+---
+
+## 8. TLS policy
+
+This section is the V1 TLS verification contract for **every**
+desktop→backend transport — `apps/desktop` main-process fetch
+(pre-auth `/api/server/info`, `/auth/signup`, `/auth/login`,
+post-auth `/api/*`), SSE / event WS, B.2 `claim-or-create`, D2
+daemon outbound WSS. The single source of `{server_url, spki_pin?}`
+for all of these is the server connection profile defined in §7.
+
+### 8.1 Accept matrix (Cindy phrasing lock)
 
 The verification has **exactly two accept states**:
 
-| Accept state | Meaning |
-|--------------|---------|
-| `system_ca_verified` | Cert chain to a system-trusted CA, valid hostname, not expired. **No pin required.** |
-| `pinned_spki_verified` | Cert is not chain-verified by system CA, but the user has provided an explicit SPKI sha256 pin in the Hosts config and the observed cert's SPKI matches. |
+| Accept state | Required conjunction |
+|--------------|----------------------|
+| `system_ca_verified` | (1) cert chain to a system-trusted CA **AND** (2) hostname matches `server_url` **AND** (3) cert not expired. No pin required. |
+| `pinned_spki_verified` | (1) configured SPKI sha256 pin matches observed SPKI **AND** (2) hostname matches `server_url` **AND** (3) cert not expired. System CA chain trust is **not** required and **not** consulted. |
 
-Everything else is a typed fail. There is **no third accept state**.
+Everything else is a typed fail (§8.2). There is **no third accept
+state**. The pinned path **replaces only the chain-trust step**, not
+hostname or expiry — those baseline checks remain mandatory in both
+accept states.
 
-### 7.2 Typed failure codes
+### 8.2 Typed failure codes
 
 Failures are surfaced with specific typed codes (not a generic
-`tls_error`):
+`tls_error`). Evaluation order (first matching code wins):
 
-- `host_tls_chain_invalid` — cert does not chain to system CA and no
-  pin is configured.
-- `host_tls_hostname_mismatch` — chain valid but hostname doesn't
-  match.
-- `host_tls_expired` — cert (or any cert in chain) past its `notAfter`.
-- `host_tls_pin_mismatch` — pin configured, observed SPKI does not
-  match. Error detail carries `{ host_id, expected_spki_sha256,
-  observed_spki_sha256 }` (no full cert, no chain, to avoid leaking a
-  half-trusted artifact into the error path).
+1. **Pin configured, observed SPKI does not match** →
+   `host_tls_pin_mismatch`. Error detail carries `{ profile_id,
+   expected_spki_sha256, observed_spki_sha256 }` (no full cert, no
+   chain — see §8.3 diagnostic policy).
+2. **No pin configured AND no system-CA chain** → `host_tls_chain_invalid`.
+   Error detail carries `{ profile_id, observed_spki_sha256 }` —
+   the SPKI is the value the user would paste if they elect to pin
+   after out-of-band verification.
+3. **Chain or pin satisfied, but hostname mismatch** →
+   `host_tls_hostname_mismatch`. Error detail carries
+   `{ profile_id, expected_hostname, observed_san_list }`.
+4. **Chain or pin and hostname satisfied, but expired** →
+   `host_tls_expired`. Error detail carries
+   `{ profile_id, expired_at }`.
 
-### 7.3 SPKI pin specifics
+The order matters: a server presenting a chain-invalid expired cert
+with a configured pin that mismatches → `host_tls_pin_mismatch` wins
+(the pin is the strongest configured policy and its mismatch is the
+most actionable signal).
 
-- Pin object: **SPKI sha256 fingerprint** (subject public key info),
-  not leaf cert fingerprint. Reason: SPKI survives leaf cert renewal
-  on the same key without re-pin; key rotation correctly forces
-  explicit re-pin (fail-loud is intentional).
-- Pin storage: in the Hosts config alongside `server_url`. Owner-only
-  file (0600), already covered by D3 daemon-config-file semantics.
-- Pin rotation flow (Hosts UI in D3.d gains a "rotate pin" affordance
-  in D4.a):
-  1. User pastes new SPKI fingerprint in Hosts UI.
-  2. Daemon dry-runs a TLS handshake against `server_url` using the
-     new pin.
-  3. Handshake success → atomically replace pin in config.
-  4. Handshake fail → keep old pin, surface typed error.
-- **No TOFU**. Unknown self-signed cert without a configured pin →
-  reject with `host_tls_chain_invalid` (not "accept once and pin
-  automatically").
+### 8.3 SPKI pin specifics
+
+- **Pin object**: **SPKI sha256 fingerprint** (subject public key
+  info), not leaf cert fingerprint. Reason: SPKI survives leaf cert
+  renewal on the same key without re-pin; key rotation correctly
+  forces explicit re-pin (fail-loud is intentional).
+- **Pin storage**: in the **server connection profile** (§7),
+  desktop-main-only. Daemon receives the pin via daemon-config
+  (derived artifact, §7.6). Daemon does **not** read the profile.
+- **Pin rotation**: through §7.5 profile update flow (Settings UI).
+  Per-Hosts UI rotation is **not** a separate path in D4.
+- **No TOFU** (Cindy lock). Unknown self-signed cert without a
+  configured pin → `host_tls_chain_invalid`. The error detail's
+  `observed_spki_sha256` field is **diagnostic only** — UI MUST
+  present it as text the user can copy after out-of-band verification,
+  and MUST NOT offer a one-click "trust this fingerprint" button.
+  The pin entry path is always manual paste into the profile editor.
 - **No `rejectUnauthorized: false`** anywhere in non-test code. CI
-  grep gate enforces this on `packages/host/**` and
-  `packages/backend/**`. Test-only escapes live in
-  `packages/*/src/**/__tests__/**` only.
+  grep gate enforces this across the full TLS client surface:
+  `apps/desktop/src/main/**`, `apps/desktop/src/preload/**`,
+  `packages/host/**`, `packages/backend/**`, `packages/shared/**`,
+  `packages/cli/**`. Test-only escapes live in
+  `packages/*/src/**/__tests__/**` and `apps/desktop/src/**/__tests__/**`
+  only.
 
-### 7.4 http vs https
+### 8.4 http vs https
 
 - **System-CA path is the V1 supported remote path**. Most operators
   will terminate TLS at a reverse proxy with a Let's Encrypt or
-  commercial CA cert; daemon verifies that path via standard
-  system-CA chain validation.
+  commercial CA cert; verification goes through `system_ca_verified`.
 - **http is allowed only for loopback literals**: `127.0.0.1`,
   `localhost`, `::1`. This preserves the embedded loopback case
-  without opening a remote-http hole.
+  without opening a remote-http hole. Loopback-http profiles skip the
+  TLS verification entirely (there is no TLS).
 - **`*.local`, LAN IP literals, any non-loopback hostname over http**:
-  requires `SILVERHAND_ALLOW_INSECURE_REMOTE=1` env (developer escape
-  hatch). When this flag is set:
+  requires `SILVERHAND_ALLOW_INSECURE_REMOTE=1` env (developer
+  escape hatch). When this flag is set:
   - UI Hosts page marks the host with a visible "Insecure dev (HTTP,
     non-loopback)" warning badge.
-  - `backend-<utc>.log` host attach event includes
-    `insecure: true`.
+  - `backend-<utc>.log` host attach event includes `insecure: true`.
   - This combination is **not a V1 supported remote path**. The
     runbook explicitly says so.
 
-### 7.5 Revocation
+### 8.5 Revocation
 
 OCSP / CRL revocation checking in Node TLS is famously inconsistent
 across runtime versions and platforms. D4 acceptance is shaped
 accordingly:
 
-- chain / hostname / expiry: **fail-loud**, required.
+- chain / pin / hostname / expiry: **fail-loud**, required.
 - revocation: best-effort. Use whatever the platform / Node standard
   TLS surface provides. **Do not bypass** (no disabling OCSP, no
   mocking revoked = valid). But revocation correctness is **not** a
@@ -466,12 +676,12 @@ accordingly:
 
 ---
 
-## 8. R4 deferral mechanics
+## 9. R4 deferral mechanics
 
 R4 paydown is D5 work (per P1). D4 must leave the drift in a state
 where D5 can find and close it cleanly.
 
-### 8.1 What the drift is
+### 9.1 What the drift is
 
 Today, in embedded deployment:
 
@@ -489,14 +699,14 @@ R4 ("wire protocol is deployment-invariant") wants this normalized:
 - Transport adapter (loopback Unix socket / in-proc / TCP+TLS+WSS)
   may differ. The **envelope** does not.
 
-### 8.2 What D4 does about it
+### 9.2 What D4 does about it
 
 - D4 **does not** refactor `HostClient` or the embedded subscribe
   path.
 - D4 **does** add grep-able TODO anchors at every drift hotspot, in a
   uniform format so D5 can audit-grep them in one pass.
 
-### 8.3 Anchor format (mandatory)
+### 9.3 Anchor format (mandatory)
 
 Every D4 code change that touches a drift hotspot (or that would
 otherwise paper over it) must add (or preserve) the anchor:
@@ -508,13 +718,13 @@ otherwise paper over it) must add (or preserve) the anchor:
 //   outbound frame envelope. D5 unifies the envelope and reduces
 //   embedded transport to a Unix-socket / in-proc adapter carrying
 //   the same envelope frames.
-//   See: docs/remote-backend-d4-design.md §8.
+//   See: docs/remote-backend-d4-design.md §9.
 ```
 
 Required elements:
 
 - `TODO(D5,R4)` literal — both tokens are part of the grep contract.
-- Reference to this doc's §8 (so D5 reviewers can read the framing
+- Reference to this doc's §9 (so D5 reviewers can read the framing
   without re-discovering it).
 - A one-paragraph "what this place does today" note (so the anchor
   is self-explaining without git blame archaeology).
@@ -526,19 +736,19 @@ Forbidden phrasings (will fail D4 review):
   unverifiable. The anchor must point at a specific D5 target.
 - Missing `R4` tag: D5 audit will grep for `D5,R4` together.
 
-### 8.4 Code review enforcement
+### 9.4 Code review enforcement
 
 D4 PR descriptions must explicitly state:
 
 > "This IPC / RPC surface is local supervisor / control transport,
 > not server↔daemon formal semantics. R4 drift is captured by
-> `TODO(D5,R4)` anchors per `docs/remote-backend-d4-design.md §8`."
+> `TODO(D5,R4)` anchors per `docs/remote-backend-d4-design.md §9`."
 
 This phrasing was agreed with Cindy for D3.b/c and continues for D4.
 
 ---
 
-## 9. Non-goals (push back if asked)
+## 10. Non-goals (push back if asked)
 
 The following are out of scope for D4 and must not be conflated with
 G1/G2/G3 acceptance:
@@ -562,14 +772,14 @@ G1/G2/G3 acceptance:
   desktop artifact for remote-only builds) — possibly V1.1.
 - **Live config reload of `DISABLE_SIGNUP`** — env + restart only.
 - **TLS termination by backend itself** — D4 expects reverse proxy.
-- **OCSP / CRL revocation as a hard gate** — best-effort per §7.5.
+- **OCSP / CRL revocation as a hard gate** — best-effort per §8.5.
 
 Each item has a place either in the roadmap follow-up phase, a later
 V1.x, or D5. The rule remains *not yet*, not *never*.
 
 ---
 
-## 10. Hard ordering
+## 11. Hard ordering
 
 ```
 G1 (standalone control plane)
@@ -590,18 +800,72 @@ in parallel with D4.a coding, but no G2 code merges before G1 closes.
 
 ---
 
-## 11. Runbook (drafted in D4.a)
+## 12. Runbook (drafted in D4.a)
 
-This section is a placeholder. The standalone deployment runbook —
-how to provision a host, install the backend, configure env, terminate
-TLS at a reverse proxy, perform the post-signup lock-down — is drafted
-**inside D4.a** alongside the implementation that backs it, so the
-two stay in sync. Final form: appended here in §11 in D4.a's commit
-chain.
+This section is a placeholder. The standalone deployment runbook is
+drafted **inside D4.a** alongside the implementation that backs it,
+so the two stay in sync. Final form: appended here in §12 in D4.a's
+commit chain.
+
+To prevent D4.a from forgetting a step, the runbook skeleton headings
+are locked here at D4.0; D4.a fills the prose under each:
+
+### 12.1 Prerequisites
+- TLS termination plan (reverse proxy: Caddy / Tailscale Funnel /
+  nginx); CA cert strategy (Let's Encrypt / commercial / self-signed
+  + SPKI pin)
+- Persistent data directory (`SILVERHAND_DATA_DIR`) on the deploy
+  host; backup expectations
+- Network reachability checklist (port open from desktop's
+  perspective; firewall / VPN topology)
+
+### 12.2 First-time deploy
+- Install `silverhand-server` binary (D1.b deliverable)
+- Set env: `SILVERHAND_LISTEN`, `SILVERHAND_DATA_DIR`,
+  `SILVERHAND_LOG_LEVEL`. **Do not** set `DISABLE_SIGNUP=1` yet
+  (operator needs to create their account first)
+- Start service; verify `/readyz` returns 200
+- Configure reverse proxy + cert; verify https reachable
+  end-to-end
+
+### 12.3 Desktop first connect (server connection profile setup)
+- Open desktop, enter `server_url` in Setup Wizard "Connect to
+  backend" screen
+- If self-signed cert: obtain SPKI fingerprint out-of-band
+  (`openssl s_client -connect <host>:443 | openssl x509 -noout
+  -pubkey | openssl pkey -pubin -outform DER | sha256sum`) and
+  paste into the "Advanced → SPKI pin" field
+- Wizard test-connects; profile commits on success
+
+### 12.4 Account creation
+- Signup the operator's account through the Setup Wizard
+- Verify login / session persistence across restart
+
+### 12.5 Post-signup lock-down (5 hard conditions §6.3)
+- Set `SILVERHAND_DISABLE_SIGNUP=1` in deployment env
+- Restart `silverhand-server`
+- Verify: `POST /auth/signup` returns `403 { code:
+  'signup_disabled' }`; existing operator login still works;
+  desktop UI hides signup form (driven off
+  `/api/server/info.signup_enabled`)
+- Verify `GET /api/server/info` reports `signup_enabled: false`
+  and the expected `bind_address_scope`
+
+### 12.6 Adding subsequent users (V1: signup-then-relock)
+- Temporarily set `SILVERHAND_DISABLE_SIGNUP=0`, restart
+- New user signs up via their desktop
+- Re-set `DISABLE_SIGNUP=1`, restart
+
+### 12.7 Troubleshooting
+- `host_tls_*` typed codes → §8.2 mapping table
+- `partial_apply_pending` → §7.5 recovery flow
+- Daemon attach failures → D3 Hosts pane diagnostics
+- Backend logs → `~/.silverhand/logs/backend-<utc>.log` location
+  on deploy host
 
 ---
 
-## 12. Review log
+## 13. Review log
 
 - **2026-05-28 — Draft 1 (Alice)**. Thread `#conv:z8B7l4UPhwUc0OOB`
   converged P1/P2/P3 framing + 4-task split (D4.0 / D4.a/G1 /
@@ -611,4 +875,48 @@ chain.
   (separate design contract + roadmap link, not roadmap-only). shiki
   product-confirmed Option A and "P1-P3 OK". Cindy preview-aligned
   on review angle: lock P1/P2/P3, G1/G2/G3 acceptance observable,
-  no sub-slice mixing R4 paydown. Pending Cindy review of full draft.
+  no sub-slice mixing R4 paydown.
+- **2026-05-28 — Round 2 (Alice)**. Addresses Cindy round-1 review:
+  - **B1 signup-disabled contract contradiction**: §6.2 rewrote
+    operator lock-down to "route stays mounted, returns `403
+    { code: 'signup_disabled' }`" (changes A.2 hide-as-missing
+    behaviour; D4.a updates the A.2 routes test in the same PR).
+    §5.1 G1 acceptance line updated to match.
+  - **B2 TLS pinning didn't cover pre-auth desktop flow**: new §7
+    "Server connection profile" inserted as the single source of
+    `{server_url, spki_pin?}` for all desktop→backend transport
+    across pre-auth + post-auth. Storage is desktop-main exclusive
+    (`safeStorage`-encrypted, mode 0600); daemon never reads the
+    profile, only reads the derived daemon-config artifact (Cindy
+    correction). Profile update flow is "validated-first + staged
+    writes + old retained on pre-commit failure; post-profile-commit
+    daemon-config/reload failure surfaces typed
+    `partial_apply_pending` state and blocks success UI"; no
+    cross-file transaction pretence (Cindy correction). Recovery is
+    explicit: user Retry / desktop restart / daemon restart all
+    converge `partial_apply_pending` → `fully_applied`, never stuck.
+    `profile_version` enters daemon-config fingerprint to avoid
+    no-op reload misjudgement, but stays local-only — never in any
+    outbound frame or auth header (Cindy R4-scope nuance). Setup
+    Wizard self-signed UX uses out-of-band SPKI verification with
+    diagnostic-only fingerprint display (no one-click trust, Cindy
+    lock). `rejectUnauthorized: false` grep gate extended to
+    `apps/desktop/src/**` and `packages/shared/**` /
+    `packages/cli/**` per Cindy boundary.
+  - **B3 pinned_spki_verified bypassed hostname/expiry**: §8.1
+    accept matrix rewrote pinned path as conjunction "(pin match)
+    AND (hostname match) AND (not expired)". §8.2 typed failure
+    codes given explicit evaluation order (pin mismatch first;
+    chain invalid; hostname mismatch; expired). SPKI pin replaces
+    only chain trust, not hostname or expiry.
+  - **Doc structure refinements**: Renumbered §7 (TLS) → §8 to make
+    room for new §7 (Server connection profile); subsequent
+    sections shift accordingly (§9 R4 / §10 Non-goals / §11 Hard
+    ordering / §12 Runbook / §13 Review log). Cross-refs updated.
+  - **§12 Runbook skeleton**: locked seven skeleton sub-headings
+    so D4.a cannot accidentally drop pre-auth profile setup,
+    SPKI pin entry recipe, or post-signup lock-down steps. Prose
+    stays D4.a's responsibility.
+  - **§11 Hard ordering soak**: kept informal per Cindy's review
+    point answer (no fixed 48h window).
+  - Pending Cindy round 2 review.
