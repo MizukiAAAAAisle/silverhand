@@ -145,6 +145,34 @@ describe('wire contract — fixture catalogue invariants', () => {
     expect(dup, `duplicate fixture names: ${dup.join(', ')}`).toEqual([]);
   });
 
+  it('D2.g runtime_start fixtures do not carry derived fs artifacts or env maps', () => {
+    const forbiddenKeys = [
+      'cwd',
+      'workspace_path',
+      'system_prompt_path',
+      'spawn_dir',
+      'system_prompt',
+      'memory_text',
+      'consensus_text',
+      'env',
+    ];
+    const runtimeStartFixtures = wireFixtures.filter(
+      f => f.kind.kind === 'request' && f.kind.intent === 'runtime_start',
+    );
+    expect(runtimeStartFixtures.length).toBeGreaterThan(0);
+    for (const fixture of runtimeStartFixtures) {
+      const parsed = JSON.parse(fixture.frame) as { params: unknown };
+      const paramsJson = JSON.stringify(parsed.params);
+      for (const key of forbiddenKeys) {
+        expect(
+          paramsJson.includes(`"${key}"`),
+          `${fixture.name} contains forbidden runtime_start key ${key}`,
+        ).toBe(false);
+      }
+      expect(paramsJson.includes('/spawn-'), fixture.name).toBe(false);
+    }
+  });
+
   it('every intent has at least one request fixture', () => {
     const missing: IntentName[] = [];
     for (const intent of ALL_INTENTS) {

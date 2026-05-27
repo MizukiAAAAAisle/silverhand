@@ -5,7 +5,7 @@ import { AgentRepo } from '../repos/agent-repo.js';
 import { ConversationInboxRepo } from '../repos/conversation-inbox-repo.js';
 import { ConversationRepo } from '../repos/conversation-repo.js';
 import { MessageRepo } from '../repos/message-repo.js';
-import { SettingsRepo } from '../repos/settings-repo.js';
+import { SETTINGS_KEYS, SettingsRepo } from '../repos/settings-repo.js';
 import { UserRepo } from '../repos/user-repo.js';
 import { WorkspaceRepo } from '../repos/workspace-repo.js';
 import { MembershipService } from '../services/membership-service.js';
@@ -14,7 +14,7 @@ import type { AgentRuntimeHost } from './agent-runtime-host.js';
 import { DaemonAgentRuntimeHost } from './daemon-agent-runtime-host.js';
 import { RuntimeDeliveryCoordinator } from './delivery-coordinator.js';
 import { RuntimeEventHandler, type InboxAckSink } from './event-handler.js';
-import { RuntimeBridge, type ProxySettingsSource } from './bridge.js';
+import { RuntimeBridge } from './bridge.js';
 import { RunStateCache } from './run-state-cache.js';
 import { DbRuntimeStatusProjector } from './status-projector.js';
 import { combineGatedBatch } from './stdin-format.js';
@@ -33,17 +33,14 @@ export function createDaemonRuntimeHost(
   opts: CreateDaemonRuntimeHostOptions,
 ): AgentRuntimeHost {
   const { ctx, db, hostClient, logger, workspacesRoot } = opts;
-  const proxySettings: ProxySettingsSource = {
-    get: (key: 'proxy_url' | 'proxy_runtimes') =>
-      new SettingsRepo(db).get(key),
-  };
-  const bridge = new RuntimeBridge(hostClient, proxySettings);
+  const bridge = new RuntimeBridge(hostClient);
   const cache = new RunStateCache();
   const activityLog = new JsonlActivityLogWriter({
     logDir: ctx.logDir,
     logger,
   });
   const inboxRepo = new ConversationInboxRepo(db);
+  const settings = new SettingsRepo(db);
   const inboxAck: InboxAckSink = {
     markDelivered: (deliveryIds: readonly number[]) =>
       inboxRepo.markDelivered([...deliveryIds]),
@@ -131,6 +128,10 @@ export function createDaemonRuntimeHost(
     silverhandDir: opts.silverhandDir,
     silverhandCli: opts.silverhandCliLauncher,
     agentTokens: ctx.agentTokens,
+    proxyPolicy: () => ({
+      url: settings.get(SETTINGS_KEYS.PROXY_URL),
+      allowlist: settings.getProxyRuntimes(),
+    }),
     // serverConfig is read fresh on every start() so it picks up the
     // bound port after the Hono server listens (ctx.serverConfig is
     // mutated mid-boot from placeholder to the real URL).

@@ -4,5 +4,7 @@ export * from './driver/index.js';
 export * from './config.js';
 export * from './logging.js';
 export * from './mime.js';
+export * from './platform-prompt.js';
+export * from './proxy-env.js';
 export * from './system-messages.js';
 export * from './ws-frames.js';

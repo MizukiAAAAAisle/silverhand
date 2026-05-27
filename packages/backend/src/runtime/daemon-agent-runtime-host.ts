@@ -29,13 +29,12 @@
  *     wake-vs-queue-vs-respawn routing + `markDelivered` timing
  *     (Cindy `5Yrv3roymWkCPxo1` #4: oneShot respawn ONLY via
  *     `start()+startup_delivery`).
- *   - **Start** — `start` lifts CM's prompt-context assembly into the
- *     shared `runtime/prompt-context.ts` module, drives
- *     `prepareSpawnFiles`, composes either `startup_delivery`
- *     (streamed drivers) or `initial_prompt` (oneShot drivers) from
- *     the pending inbox, builds the spawn env via the existing
- *     `buildAgentSpawnEnv` helper, and ships the whole bundle through
- *     `bridge.runtimeStart`. The `{started:false, reason:'init_cooldown'}`
+ *   - **Start** — `start` formats server-owned pending inbox rows into
+ *     optional `startup_delivery.text`, builds typed
+ *     `runtime_start.options` metadata (agent/workspace/session/driver/
+ *     env_policy), and ships that intent through `bridge.runtimeStart`.
+ *     Daemon-host owns prompt hydration, spawn-prep, cwd derivation,
+ *     and final child env. The `{started:false, reason:'init_cooldown'}`
  *     arm is projected to an `agent_status` SSE with
  *     `reason:'init_cooldown'` + `cooldown_until` (mirrors CM's
  *     `publishInitCooldown`); the success arm flips the row to
@@ -69,7 +68,6 @@ import type {
   StartOptions,
 } from './agent-runtime-host.js';
 import type { AgentTokenStore } from '../auth/agent-token-store.js';
-import { buildSystemPromptFor } from '../drivers/index.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationInboxRepo } from '../repos/conversation-inbox-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
@@ -78,16 +76,17 @@ import type { UserRepo } from '../repos/user-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { MembershipService } from '../services/membership-service.js';
 import { singleConversationViewerUserId } from '../viewer-scope.js';
-import { prepareSpawnFiles } from '../spawn-prep.js';
 import type { ActivityLogWriter } from './activity-log-writer.js';
 import type { RuntimeBridge } from './bridge.js';
 import type { LiveDeliveryRequest, RuntimeDeliveryCoordinator } from './delivery-coordinator.js';
 import type { RuntimeEventHandler } from './event-handler.js';
 import type { EventPublisher } from './event-handler.js';
 import type { RuntimeHostPlacement } from './host-placement.js';
-import { buildPromptContext } from './prompt-context.js';
+import {
+  buildRuntimeStartOptions,
+  type RuntimeStartProxyPolicy,
+} from './runtime-start-options.js';
 import type { RunStateCache } from './run-state-cache.js';
-import { buildBridgeBaseEnv } from './spawn-env.js';
 import { formatInboxBatch, formatLiveMessage, sendMessageToolName } from './stdin-format.js';
 
 /**
@@ -131,45 +130,46 @@ export interface DaemonAgentRuntimeHostDeps {
    *  (rename) MUST be reflected on the next message without restart. */
   users: UserRepo;
   /** Live-delivery decision module. DaemonHost only constructs the
-   *  encoded payload + driver capability snapshot and hands them
-   *  through; coordinator owns wake-vs-queue-vs-respawn routing +
+   *  server-owned unencoded delivery text and driver capability
+   *  snapshot; coordinator owns wake-vs-queue-vs-respawn routing +
    *  inbox-ack timing. */
   coordinator: RuntimeDeliveryCoordinator;
-  /** Workspace repo — used by `start` to look up workspace metadata
-   *  for prompt-context assembly + the workspace-memory index. */
+  /** Workspace repo — used by `start` to look up typed workspace
+   *  metadata for `runtime_start.options` and the workspace-memory
+   *  index. */
   workspaces: WorkspaceRepo;
   /** V1 host placement gate. It resolves `agent.host_id` and fails
    *  closed when the owning host row is missing or revoked. It does
    *  not route to another transport; daemon mode still uses the one
    *  local socket wired into `bridge`. */
   placement: RuntimeHostPlacement;
-  /** Membership projection used by `start` to render the prompt's
-   *  "Members in this conversation" block. Same instance CM uses so
-   *  the two runtime hosts produce byte-identical prompts. */
+  /** Membership projection used by `start` to populate the typed
+   *  session members bundle. Daemon renders the prompt from this
+   *  metadata. */
   membership: MembershipService;
-  /** Path to the `~/.silverhand` directory used by `start` to locate
-   *  L1 `system_prompt.md` for the spawning agent. Wired from
-   *  `BackendContext.silverhandDir` at boot. */
+  /** Path to the `~/.silverhand` directory. Used only as the legacy
+   *  fallback for deriving `agent.home_dir` metadata when no
+   *  agent_home workspace row exists. */
   silverhandDir: string;
-  /** `silverhand` CLI launcher passed to `prepareSpawnFiles`. CLI shim
-   *  inside the spawn dir resolves to this command. */
+  /** `silverhand` CLI launcher metadata. Sent as typed env policy;
+   *  daemon writes the actual shim in its per-spawn dir. */
   silverhandCli: SilverhandCliLauncher;
   /** Per-spawn auth token issuer for the agent's CLI. The token is
-   *  embedded in the spawn env and rotates on every `start`. */
+   *  shipped as explicit daemon env policy and rotates on every `start`. */
   agentTokens: AgentTokenStore;
+  /** Backend-owned proxy policy snapshot. It is sent as typed policy,
+   *  never as a precomposed `env` map; daemon materializes the actual
+   *  proxy env locally at spawn time. */
+  proxyPolicy?: () => RuntimeStartProxyPolicy;
   /** Backend's HTTP URL — read once per `start` and embedded in the
-   *  spawn env so the agent's `silverhand` CLI can reach the internal
+   *  env policy so the agent's `silverhand` CLI can reach the internal
    *  routes. Wired as a thunk because `BackendContext.serverConfig`
    *  is mutated after the Hono server binds its port. */
   serverConfig: () => ServerConfig;
   /**
-   * Parent process environment used as the inherited base for the
-   * spawn env. Defaults to `process.env`. **Production must NOT
-   * override this** — the parent's proxy vars (HTTP_PROXY etc.) MUST
-   * propagate to codex so it can reach the model endpoint behind a
-   * corporate proxy (shiki invariant). The seam exists purely so
-   * tests can pin "wire env contains only SILVERHAND_* + PATH" with
-   * a deterministic `{}` instead of the developer's shell env.
+   * Legacy test seam retained for fixture compatibility. D2.g moved
+   * final env materialization to daemon-host, so backend no longer
+   * reads this when building `runtime_start`.
    */
   baseProcessEnv?: NodeJS.ProcessEnv;
   /** Backend-owned `agent_activity` JSONL writer. The daemon itself
@@ -227,8 +227,8 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
   private readonly silverhandDir: string;
   private readonly silverhandCli: SilverhandCliLauncher;
   private readonly agentTokens: AgentTokenStore;
+  private readonly proxyPolicy: () => RuntimeStartProxyPolicy;
   private readonly serverConfig: () => ServerConfig;
-  private readonly baseProcessEnv: NodeJS.ProcessEnv;
   private readonly activityLog?: ActivityLogWriter;
   private readonly db: Database;
   private readonly logger: BackendLogger;
@@ -252,8 +252,8 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
     this.silverhandDir = deps.silverhandDir;
     this.silverhandCli = deps.silverhandCli;
     this.agentTokens = deps.agentTokens;
+    this.proxyPolicy = deps.proxyPolicy ?? (() => ({ url: null, allowlist: [] }));
     this.serverConfig = deps.serverConfig;
-    this.baseProcessEnv = deps.baseProcessEnv ?? process.env;
     this.activityLog = deps.activityLog;
     this.db = deps.db;
     this.logger = deps.logger;
@@ -262,9 +262,10 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
 
   // ── lifecycle ───────────────────────────────────────────────────
   /**
-   * Spawn a runtime via the daemon. Mirrors CM's `start` orchestration
-   * but delegates the actual child-process management to the daemon
-   * over the IPC bridge:
+   * Spawn a runtime via the daemon. Backend owns lifecycle decisions,
+   * DB lookups, delivery-text formatting, and state projection; daemon
+   * owns prompt hydration, spawn-prep, cwd/path derivation, child env,
+   * and child-process management:
    *
    *   1. Resolve conversation / agent / workspace + ensure the
    *      `(conv, agent)` join row exists.
@@ -272,25 +273,19 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
    *      already exists, no-op. The daemon-side `runtime_start` is
    *      itself idempotent (returns the existing pid on repeat), but
    *      we still short-circuit here so we don't waste a round-trip
-   *      + re-run prompt assembly.
-   *   3. Issue a fresh per-spawn agent token + build the prompt
-   *      context (lifted to `runtime/prompt-context.ts` so CM and
-   *      daemon mode produce byte-identical system prompts) + write
-   *      spawn files via `prepareSpawnFiles`.
-   *   4. Compose inbox payload:
-   *        - oneShot drivers (cursor) — drain inbox now; the formatted
-   *          text becomes `options.initial_prompt` (argv body for
-   *          cursor-agent). Daemon never emits a delivery-consumed
-   *          event for this path, so we `markDelivered` ourselves on
-   *          the success arm.
-   *        - streamed drivers (claude/codex) — drain inbox + encode
-   *          one stream-json line, ship as `startup_delivery`. Daemon
-   *          emits `runtime_startup_delivery_consumed` on success;
-   *          `RuntimeEventHandler` routes that event to
-   *          `inbox.markDelivered`. We DO NOT mark here.
-   *   5. Build the spawn env (same `buildAgentSpawnEnv` CM uses) and
-   *      call `bridge.runtimeStart` — the bridge layers proxy keys
-   *      on top of `baseEnv` per the allowlist.
+   *      + rebuild the typed metadata.
+   *   3. Issue a fresh per-spawn agent token and build typed
+   *      `runtime_start.options`: agent/workspace base path metadata,
+   *      workspace memory index, session members, driver options, and
+   *      env policy.
+   *   4. Compose optional startup delivery from pending inbox rows.
+   *      The text is unencoded server-owned delivery text; daemon
+   *      decides streamed stdin write vs oneShot initial input. Both
+   *      paths ack via `runtime_startup_delivery_consumed`; backend
+   *      does not mark rows delivered inside `start`.
+   *   5. Call `bridge.runtimeStart` with typed options and optional
+   *      `startup_delivery`. No cwd, spawn dir, prompt path, prompt
+   *      bytes, or generic env map is sent.
    *   6. Project the response:
    *        - `{started: true}` → flip the row to `starting` + publish
    *          `agent_status`. Daemon will emit `runtime_state` /
@@ -353,38 +348,13 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
       sessionAgent = this.conversations.addAgent(conversationId, agentId);
     }
 
-    const driver = getDriver(agent.runtime);
     const agentToken = this.agentTokens.issue(conversationId, agentId);
 
-    // Synthesize prompt + write spawn files.
-    const promptCtx = await buildPromptContext({
-      conversation,
-      workspace,
-      agent,
-      silverhandDir: this.silverhandDir,
-      listMembers: id => this.membership.listMembers(id),
-      listWorkspacesForAgent: id => this.workspaces.listForAgent(id),
-      getConversation: id => this.conversations.get(id),
-    });
-    const systemPromptText = buildSystemPromptFor(driver.kind, promptCtx);
-    const spawnPrep = await prepareSpawnFiles({
-      conversationId,
-      agentId,
-      systemPromptText,
-      silverhandCli: this.silverhandCli,
-    });
-
-    // Drain inbox per driver kind. For oneShot drivers the inbox
-    // can't ride over stdin — there is no persistent stdin loop on
-    // the daemon side either — so we drain now and pass the formatted
-    // text as `initial_prompt`. For streamed drivers we hand the
-    // daemon the raw text and let it encode via its in-process driver
-    // instance (Option A v2 — Cindy `UMGu36zoTDVuKWXi`); the legacy
-    // backend-side `driver.encodeStdinMessage` call was the codex
-    // delivery blocker (stateless instance, no threadId).
-    let initialPrompt = '';
+    // Drain inbox into protocol-owned delivery text only. The daemon
+    // decides whether this becomes a oneShot initial prompt or a
+    // streamed stdin write; backend does not assemble prompt bytes,
+    // cwd, spawn dirs, or env.
     let startupDelivery: { delivery_ids: number[]; text: string } | undefined;
-    let oneShotPreDrainedIds: number[] = [];
     const pending = this.inboxes.listPending(conversationId, agentId);
     if (pending.length > 0) {
       const text = formatInboxBatch(
@@ -393,47 +363,32 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
         id => this.users.get(id)?.name,
         this.resolveDefaultUserHandle(conversationId),
         agent.name,
-        sendMessageToolName(driver),
+        sendMessageToolName(),
       );
-      if (driver.oneShot) {
-        initialPrompt = text;
-        oneShotPreDrainedIds = pending.map(p => p.inboxId);
-      } else {
-        startupDelivery = {
-          delivery_ids: pending.map(p => p.inboxId),
-          text,
-        };
-      }
+      startupDelivery = {
+        delivery_ids: pending.map(p => p.inboxId),
+        text,
+      };
     }
 
-    // Build the spawn env via `buildBridgeBaseEnv` — the *base* env
-    // contract the bridge expects. Bridge layers proxy keys on top
-    // per the `proxy_runtimes` allowlist; we MUST NOT pre-apply proxy
-    // here (would either double-overlay or bypass the bridge's
-    // single-point proxy-injection boundary — Cindy B5 contract from
-    // commit 5 unit 1 `spawn-env.ts` docstring).
-    const baseEnv = buildBridgeBaseEnv({
-      driver,
-      runtime: agent.runtime,
-      conversationId,
-      agentId,
+    const parentConversation = conversation.parent_conversation_id
+      ? this.conversations.get(conversation.parent_conversation_id)
+      : null;
+    const options = buildRuntimeStartOptions({
+      conversation,
+      parentConversation,
+      workspace,
+      agent,
+      sessionAgent,
+      members: this.membership.listMembers(conversation.id),
+      workspacesForAgent: this.workspaces.listForAgent(agent.id),
+      silverhandDir: this.silverhandDir,
+      silverhandCli: this.silverhandCli,
       serverUrl: this.serverConfig().url,
-      token: agentToken,
-      binDir: spawnPrep.binDir,
-      baseProcessEnv: this.baseProcessEnv,
+      agentToken,
+      proxy: this.proxyPolicy(),
+      modelOverride: opts.model ?? null,
     });
-
-    const options: NonNullable<Parameters<RuntimeBridge['runtimeStart']>[0]['options']> = {
-      runtime: agent.runtime,
-      cwd: conversation.workspace_path,
-      agent_name: agent.name,
-      cli_session_id: sessionAgent.cli_session_id,
-      model: opts.model ?? agent.model,
-      reasoning_effort: agent.reasoning_effort,
-      fast_mode: agent.fast_mode,
-      system_prompt_path: spawnPrep.systemPromptPath,
-      initial_prompt: initialPrompt,
-    };
 
     this.logger.info(
       {
@@ -443,7 +398,6 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
         agent_id: agentId,
         runtime: agent.runtime,
         has_startup_delivery: startupDelivery !== undefined,
-        one_shot: driver.oneShot,
         pending_inbox_count: pending.length,
       },
       'start: requesting runtime_start',
@@ -452,8 +406,6 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
     const result = await this.bridge.runtimeStart({
       conversationId,
       agentId,
-      runtime: agent.runtime,
-      baseEnv,
       options,
       ...(startupDelivery ? { startupDelivery } : {}),
     });
@@ -507,17 +459,6 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
       },
     });
 
-    // oneShot drivers consume `initial_prompt` synchronously at
-    // child-spawn time, and daemon does NOT emit a delivery-consumed
-    // event for that path (it has no batch to ack). Mark the rows we
-    // pre-drained delivered now — leaving them pending would cause
-    // the next spawn to redeliver the same content. Streamed drivers
-    // are acked async via `runtime_startup_delivery_consumed`, which
-    // `RuntimeEventHandler` already routes to `inbox.markDelivered`.
-    if (oneShotPreDrainedIds.length > 0) {
-      this.inboxes.markDelivered(oneShotPreDrainedIds);
-    }
-
     this.logger.info(
       {
         kind: 'runtime',
@@ -527,7 +468,6 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
         pid: result.pid,
         started_at: result.started_at,
         startup_delivery_accepted: result.startup_delivery_accepted ?? null,
-        one_shot_marked_delivered: oneShotPreDrainedIds.length,
       },
       'start: daemon accepted runtime_start',
     );
@@ -636,12 +576,9 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
    *      session badge) and `message` SSE (so the audit appears in
    *      chat).
    *
-   * Per-agent delivery of the audit (CM does `deliverMessage` for
-   * every other agent in the conversation so they see the system
-   * message immediately) is DEFERRED to slice 4 — it requires
-   * `deliverMessage`, which lifts CM's spawn-prep + format-inbox
-   * helpers. For now the audit lands on the SSE bus and in the
-   * messages table; agents will pick it up on their next wake.
+   * Per-agent delivery of the audit follows the normal delivery path:
+   * backend formats server-owned message text, while daemon-host owns
+   * any runtime spawn/prompt/env work needed to wake an idle agent.
    */
   async clearSession(
     conversationId: string,
@@ -940,7 +877,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
       id => this.users.get(id)?.name,
       this.resolveDefaultUserHandle(conversationId),
       agent.name,
-      sendMessageToolName(driver),
+      sendMessageToolName(),
     );
     // Option A v2 (Cindy `UMGu36zoTDVuKWXi`): no backend-side encode
     // probe. Daemon owns encoding via its in-process driver instance;
@@ -1102,7 +1039,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
       id => this.users.get(id)?.name,
       defaultUserHandle,
       agent.name,
-      sendMessageToolName(driver),
+      sendMessageToolName(),
     );
 
     const deliveryIds = pending.map(row => row.inboxId);

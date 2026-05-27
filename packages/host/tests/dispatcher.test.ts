@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { IntentDispatcher } from '../src/daemon/dispatcher.js';
 import { DAEMON_VERSION } from '../src/daemon/version.js';
 import { FakeSupervisor } from './_helpers/fake-supervisor.js';
+import { testStartOptions } from './_helpers/runtime-start-options.js';
 import { createDaemonLogControl, type DaemonLogger } from '../src/daemon/logger.js';
 import { HOST_PROTOCOL_VERSION, KNOWN_CAPABILITIES_V1 } from '../src/protocol.js';
 
@@ -187,7 +188,7 @@ describe('IntentDispatcher — runtime_* routing', () => {
     const r = await d.dispatch('req-1', 'runtime_start', {
       conversation_id: 'c1',
       agent_id: 'a1',
-      options: {},
+      options: testStartOptions(),
     });
     expect('result' in r).toBe(true);
     if ('result' in r) {
@@ -209,7 +210,7 @@ describe('IntentDispatcher — runtime_* routing', () => {
     await d.dispatch('s', 'runtime_start', {
       conversation_id: 'c1',
       agent_id: 'a1',
-      options: {},
+      options: testStartOptions(),
     });
     while (queue.length) queue.shift()!(); // flush to ready
     const r = await d.dispatch('w', 'runtime_wake', {
@@ -241,7 +242,7 @@ describe('IntentDispatcher — runtime_* routing', () => {
     await d.dispatch('s', 'runtime_start', {
       conversation_id: 'c1',
       agent_id: 'a1',
-      options: {},
+      options: testStartOptions(),
     });
     while (queue.length) queue.shift()!();
     const r = await d.dispatch('q', 'runtime_status', {});
@@ -258,7 +259,7 @@ describe('IntentDispatcher — runtime_* routing', () => {
     const r = await d.dispatch('s', 'runtime_start', {
       conversation_id: 'c1',
       agent_id: 'a1',
-      options: {},
+      options: testStartOptions(),
     });
     expect('error' in r).toBe(true);
     if ('error' in r) {
@@ -308,7 +309,7 @@ describe('IntentDispatcher — runtime_* routing', () => {
     // Now start a runtime synchronously (no flush — fake's start
     // returns synchronously even before the scheduled ready emit,
     // and pauseOutput accepts any non-exited phase).
-    supervisor.start({ conversation_id: 'c1', agent_id: 'a1', options: {} });
+    supervisor.start({ conversation_id: 'c1', agent_id: 'a1', options: testStartOptions() });
     const pauseLive = await d.dispatch('p2', 'runtime_output_pause', {
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -339,7 +340,7 @@ describe('IntentDispatcher — runtime_* routing', () => {
     await d.dispatch('s', 'runtime_start', {
       conversation_id: 'c1',
       agent_id: 'a1',
-      options: {},
+      options: testStartOptions(),
     });
     while (queue.length) queue.shift()!();
     const r = await d.dispatch('q', 'status', {});

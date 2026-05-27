@@ -3,7 +3,7 @@ import { COMMAND_GROUPS } from '@silverhand/cli';
 import {
   buildPlatformPrompt,
   type InjectedFileContent,
-} from '../../src/drivers/platform-prompt.js';
+} from '@silverhand/shared';
 
 function prompt(): string {
   return buildPlatformPrompt({

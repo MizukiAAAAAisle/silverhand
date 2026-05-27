@@ -247,7 +247,7 @@ function makeHost(
   } = {},
 ): HostFixture {
   const client = makeFakeClient(clientOverrides);
-  const bridge = new RuntimeBridge(client, { get: () => null });
+  const bridge = new RuntimeBridge(client);
   const cache = extraDeps.cache ?? new RunStateCache();
   const events: HostFixture['events'] = { publishes: [] };
   const publisher: EventPublisher = {
@@ -790,7 +790,7 @@ describe('DaemonAgentRuntimeHost — stop (soft)', () => {
     const agents = makeAgentRepoStub([{ id: AGENT_X, name: 'alice', runtime: 'claude' }]);
     const conversations = makeConvRepoStub([{ conversation_id: CONV, agent_id: AGENT_X, cli_session_id: null }]);
     const client = makeFakeClient({ runtimeStop });
-    const bridge = new RuntimeBridge(client, { get: () => null });
+    const bridge = new RuntimeBridge(client);
     const cache = new RunStateCache();
     const events: HostFixture['events'] = { publishes: [] };
     const publisher: EventPublisher = {
@@ -908,7 +908,7 @@ describe('DaemonAgentRuntimeHost — stopAll / closeActivityLog', () => {
 describe('DaemonAgentRuntimeHost — constructor', () => {
   it('accepts the deps shape without throwing', () => {
     const client = makeFakeClient();
-    const bridge = new RuntimeBridge(client, { get: () => null });
+    const bridge = new RuntimeBridge(client);
     const cache = new RunStateCache();
     const events: EventPublisher = { publish: () => {} };
     const eventHandler = new RuntimeEventHandler({
@@ -1998,7 +1998,7 @@ describe('DaemonAgentRuntimeHost — deliverMessage', () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any;
       const client = makeFakeClient({});
-      const bridge = new RuntimeBridge(client, { get: () => null });
+      const bridge = new RuntimeBridge(client);
       const events: HostFixture['events'] = { publishes: [] };
       const publisher: EventPublisher = {
         publish: (cid, payload) =>
@@ -2204,11 +2204,11 @@ describe('DaemonAgentRuntimeHost — deliverMessage', () => {
 
 // ── slice 4c: DaemonHost.start ─────────────────────────────────────
 //
-// `start()` orchestrates spawn intent: it builds the prompt context,
-// writes spawn files, optionally composes startup_delivery (streamed)
-// or initial_prompt (oneShot), and calls `bridge.runtimeStart`. The
-// real spawn happens daemon-side; backend only wires the request and
-// projects the response.
+// `start()` orchestrates spawn intent: it builds typed runtime_start
+// metadata, optionally composes startup_delivery text, and calls
+// `bridge.runtimeStart`. The real prompt hydration, spawn-prep, cwd,
+// and env materialization happen daemon-side; backend only wires the
+// request and projects the response.
 //
 // Behavioral surface covered here:
 //
@@ -2219,14 +2219,13 @@ describe('DaemonAgentRuntimeHost — deliverMessage', () => {
 //      `crashed` + null pid; SSE carries `reason:'init_cooldown'` +
 //      `cooldown_until`. Mirrors CM `publishInitCooldown`.
 //   3. Idempotency — cache shows live entry → no-op (no bridge call).
-//   4. Streamed startup_delivery — inbox has rows; one stream-json
-//      line composed + shipped as `startup_delivery`. markDelivered
-//      NOT called here (daemon's runtime_startup_delivery_consumed
-//      event is the async ack).
-//   5. oneShot drain — cursor agent with inbox; initial_prompt
-//      populated, NO startup_delivery, markDelivered IS called after
-//      the success arm (daemon does not emit consumed event for the
-//      argv-content path).
+//   4. Streamed startup_delivery — inbox has rows; one unencoded text
+//      batch is shipped as `startup_delivery`. markDelivered NOT
+//      called here (daemon's runtime_startup_delivery_consumed event
+//      is the async ack).
+//   5. oneShot drain — cursor agent with inbox; same
+//      `startup_delivery.text` path, daemon consumes it as initial
+//      input and emits the async consumed ack.
 //   6. Transport throw — bridge throws → start() propagates the error;
 //      DB row untouched.
 
@@ -2317,6 +2316,21 @@ describe('DaemonAgentRuntimeHost — start', () => {
       expect(startCalls[0]!.agent_id).toBe(fix.agentId);
       // No inbox → no startup_delivery.
       expect(startCalls[0]!.startup_delivery).toBeUndefined();
+      expect(startCalls[0]!.options.agent).toMatchObject({
+        id: fix.agentId,
+        home_dir: expect.any(String),
+      });
+      expect(startCalls[0]!.options.workspace.path).toBe(
+        fix.conversations.get(fix.channelId)?.workspace_path,
+      );
+      const wireJson = JSON.stringify(startCalls[0]);
+      expect(wireJson).not.toContain('"cwd"');
+      expect(wireJson).not.toContain('"system_prompt_path"');
+      expect(wireJson).not.toContain('"spawn_dir"');
+      expect(wireJson).not.toContain('"system_prompt"');
+      expect(wireJson).not.toContain('"memory_text"');
+      expect(wireJson).not.toContain('"consensus_text"');
+      expect(wireJson).not.toContain('"env"');
 
       // DB row updated.
       const row = fix.db
@@ -2502,7 +2516,7 @@ describe('DaemonAgentRuntimeHost — start', () => {
     }
   });
 
-  it('oneShot driver with pending inbox → initial_prompt populated; rows marked delivered after success', async () => {
+  it('oneShot driver with pending inbox → startup_delivery text crosses boundary; rows wait for daemon ack', async () => {
     const fix = makeStartFixture({ agentRuntime: 'cursor' });
     try {
       const cache = new RunStateCache();
@@ -2541,21 +2555,21 @@ describe('DaemonAgentRuntimeHost — start', () => {
       await host.start(fix.channelId, fix.agentId);
 
       expect(startCalls.length).toBe(1);
-      // oneShot: NO startup_delivery; initial_prompt has the text.
-      expect(startCalls[0]!.startup_delivery).toBeUndefined();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const options = startCalls[0]!.options as any;
-      expect(typeof options.initial_prompt).toBe('string');
-      expect(options.initial_prompt).toContain('hello cursor');
+      expect(startCalls[0]!.startup_delivery).toBeDefined();
+      expect(startCalls[0]!.startup_delivery?.text).toContain('hello cursor');
+      expect(startCalls[0]!.options.driver.kind).toBe('cursor');
+      expect(JSON.stringify(startCalls[0]!.options)).not.toContain(
+        'initial_prompt',
+      );
 
-      // oneShot: markDelivered IS called (daemon has no async ack
-      // route for argv-content drains).
+      // oneShot delivery is now acked by daemon via
+      // `runtime_startup_delivery_consumed`, same as streamed drivers.
       const row = fix.db
         .prepare<[string], { delivered_at: number | null }>(
           'SELECT delivered_at FROM conversation_inboxes WHERE message_id = ?',
         )
         .get(msgId);
-      expect(row?.delivered_at).not.toBeNull();
+      expect(row?.delivered_at).toBeNull();
     } finally {
       fix.cleanup();
     }
@@ -2609,14 +2623,7 @@ describe('DaemonAgentRuntimeHost — start', () => {
     }
   });
 
-  it('B5: bridge receives env === applyProxyEnv(buildBridgeBaseEnv(...)) — DaemonHost MUST NOT call buildAgentSpawnEnv', async () => {
-    // The wire-level invariant: backend ships `buildBridgeBaseEnv`
-    // (driver.applyEnv + SILVERHAND_* + bin shim, NO proxy) as
-    // `RuntimeStartInput.baseEnv`; the bridge layers `applyProxyEnv`
-    // on top per the allowlist. DaemonHost calling `buildAgentSpawnEnv`
-    // would either double-overlay proxy (already in baseEnv + bridge
-    // re-adds) or bypass the bridge's single-point proxy boundary —
-    // both break the spawn-env contract from commit 5 unit 1.
+  it('D2.g: bridge receives typed env policy, never a precomposed env map', async () => {
     const fix = makeStartFixture(); // claude — proxy_runtimes includes claude
     try {
       const cache = new RunStateCache();
@@ -2646,31 +2653,23 @@ describe('DaemonAgentRuntimeHost — start', () => {
           serverConfig: fix.serverConfig,
           cache,
           db: fix.db,
-          // B5 deterministic env: production inherits `process.env` so
-          // the parent's HTTP_PROXY etc. propagate (shiki invariant —
-          // codex needs proxy export). The test pins a `{}` baseProcessEnv
-          // seam so the wire-env assertion below is independent of the
-          // developer's shell (Cindy `nKFVSvx4CyBLxPNq` blocker 1).
           baseProcessEnv: {},
         },
       );
       await host.start(fix.channelId, fix.agentId);
       expect(startCalls.length).toBe(1);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const wireEnv = (startCalls[0]!.options as any).env as NodeJS.ProcessEnv;
-
-      // Required SILVERHAND_* vars from buildBridgeBaseEnv → present.
-      expect(wireEnv.SILVERHAND_CONVERSATION_ID).toBe(fix.channelId);
-      expect(wireEnv.SILVERHAND_AGENT_ID).toBe(fix.agentId);
-      // bin shim prepended to PATH.
-      expect(wireEnv.PATH?.split(':')[0]).toMatch(/spawn-.+\/bin$/);
-      // No proxy settings configured in fixture + deterministic empty
-      // baseProcessEnv → bridge's applyProxyEnv is identity, so no
-      // HTTP_PROXY / HTTPS_PROXY surfaces.
-      expect(wireEnv.HTTP_PROXY).toBeUndefined();
-      expect(wireEnv.HTTPS_PROXY).toBeUndefined();
-      expect(wireEnv.http_proxy).toBeUndefined();
-      expect(wireEnv.https_proxy).toBeUndefined();
+      const options = startCalls[0]!.options;
+      expect(options.env_policy.silverhand.server_url).toBe(
+        fix.serverConfig().url,
+      );
+      expect(options.env_policy.silverhand.auth_token).toEqual(
+        expect.any(String),
+      );
+      expect(options.env_policy.silverhand_cli.command).toBe(
+        fix.silverhandCli.command,
+      );
+      expect(JSON.stringify(options)).not.toContain('"env"');
+      expect(JSON.stringify(options)).not.toContain('spawn-');
     } finally {
       fix.cleanup();
     }

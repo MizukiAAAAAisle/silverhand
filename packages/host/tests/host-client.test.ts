@@ -5,6 +5,7 @@ import {
   ProtocolVersionMismatchError,
 } from '../src/client/index.js';
 import { createFakeTransportPair } from './_helpers/fake-transport.js';
+import { testStartOptions } from './_helpers/runtime-start-options.js';
 import { HOST_PROTOCOL_VERSION, KNOWN_CAPABILITIES_V1 } from '../src/protocol.js';
 
 const FIXED_RNG = () => 0.5; // deterministic backoff jitter
@@ -365,7 +366,7 @@ describe('HostClient — runtime_* typed helpers (PR-2 step 1)', () => {
     const promise = client.runtimeStart({
       conversation_id: 'conv1',
       agent_id: 'agent1',
-      options: {},
+      options: testStartOptions(),
     });
     await new Promise(setImmediate);
     expect(peer.received).toHaveLength(1);

@@ -8,7 +8,8 @@ import {
 } from '@silverhand/host';
 import { getDriver } from '@silverhand/host/drivers';
 import type { AgentRunState, AgentRunTerminalReason } from '@silverhand/shared';
-import type { BackendLogger } from '../context.js';
+import type { AgentTokenStore } from '../auth/agent-token-store.js';
+import type { BackendLogger, SilverhandCliLauncher } from '../context.js';
 import { AgentRepo } from '../repos/agent-repo.js';
 import {
   ConversationInboxRepo,
@@ -17,6 +18,8 @@ import {
 import { ConversationRepo } from '../repos/conversation-repo.js';
 import { HostRepo } from '../repos/host-repo.js';
 import { UserRepo } from '../repos/user-repo.js';
+import { WorkspaceRepo } from '../repos/workspace-repo.js';
+import { MembershipService } from '../services/membership-service.js';
 import type {
   HostWsEventSink,
   HostWsServerController,
@@ -37,12 +40,22 @@ import {
   sendMessageToolName,
 } from './stdin-format.js';
 import { DbRuntimeStatusProjector } from './status-projector.js';
+import {
+  buildRuntimeStartOptions,
+  type RuntimeStartProxyPolicy,
+} from './runtime-start-options.js';
 
 export interface OutboundRuntimeEventFanoutOptions {
   db: Database;
   events: EventPublisher;
   transport: () => HostWsServerController | null;
   logger: BackendLogger;
+  silverhandDir: string;
+  workspacesRoot: string;
+  silverhandCli: SilverhandCliLauncher;
+  agentTokens: AgentTokenStore;
+  serverUrl: () => string;
+  proxyPolicy: () => RuntimeStartProxyPolicy;
   logDir?: string;
   activityLog?: ActivityLogWriter | null;
 }
@@ -59,7 +72,6 @@ interface PendingDeliveryBatch {
   deliveryIds: number[];
   text: string;
   agentRuntime: string;
-  agentName: string;
   driver: ReturnType<typeof getDriver>;
 }
 
@@ -76,6 +88,8 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
   private readonly agents: AgentRepo;
   private readonly hosts: HostRepo;
   private readonly users: UserRepo;
+  private readonly workspaces: WorkspaceRepo;
+  private readonly membership: MembershipService;
   private readonly inboxAck: InboxAckSink;
   private readonly activityLog: ActivityLogWriter | null;
   private readonly ownsActivityLog: boolean;
@@ -86,6 +100,14 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     this.agents = new AgentRepo(opts.db);
     this.hosts = new HostRepo(opts.db);
     this.users = new UserRepo(opts.db);
+    this.workspaces = new WorkspaceRepo(opts.db, {
+      workspacesRoot: opts.workspacesRoot,
+    });
+    this.membership = new MembershipService({
+      agents: new AgentRepo(opts.db),
+      users: new UserRepo(opts.db),
+      conversations: new ConversationRepo(opts.db),
+    });
     this.inboxAck = {
       markDelivered: ids => this.inboxRepo.markDelivered([...ids]),
       markUndelivered: (ids, reason) => {
@@ -217,6 +239,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     );
     if (claimed.length === 0) return false;
     const batch = this.pendingBatch(conversationId, agentId, claimed);
+    const options = this.runtimeStartOptions(conversationId, agentId);
     const transport = this.requireTransport();
     try {
       const result = await transport.sendCommand(
@@ -225,11 +248,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         {
           conversation_id: conversationId,
           agent_id: agentId,
-          options: {
-            runtime: batch.agentRuntime,
-            agent_name: batch.agentName,
-            initial_prompt: '',
-          },
+          options,
           startup_delivery: {
             delivery_ids: batch.deliveryIds,
             text: batch.text,
@@ -259,6 +278,44 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       this.inboxRepo.rollbackInFlight(batch.deliveryIds, connectionId);
       throw err;
     }
+  }
+
+  private runtimeStartOptions(
+    conversationId: string,
+    agentId: string,
+  ): RuntimeStartParams['options'] {
+    const conversation = this.conversations.get(conversationId);
+    if (!conversation) throw new Error(`conversation ${conversationId} not found`);
+    const workspace = this.workspaces.get(conversation.workspace_id);
+    if (!workspace) {
+      throw new Error(`workspace ${conversation.workspace_id} not found`);
+    }
+    const agent = this.agents.get(agentId);
+    if (!agent) throw new Error(`agent ${agentId} not found`);
+    const sessionAgent = this.conversations.getAgent(conversationId, agentId);
+    if (!sessionAgent) {
+      throw new Error(
+        `conversation_agent row missing for ${conversationId}/${agentId}`,
+      );
+    }
+    const parentConversation = conversation.parent_conversation_id
+      ? this.conversations.get(conversation.parent_conversation_id)
+      : null;
+
+    return buildRuntimeStartOptions({
+      conversation,
+      parentConversation,
+      workspace,
+      agent,
+      sessionAgent,
+      members: this.membership.listMembers(conversation.id),
+      workspacesForAgent: this.workspaces.listForAgent(agent.id),
+      silverhandDir: this.opts.silverhandDir,
+      silverhandCli: this.opts.silverhandCli,
+      serverUrl: this.opts.serverUrl(),
+      agentToken: this.opts.agentTokens.issue(conversationId, agentId),
+      proxy: this.opts.proxyPolicy(),
+    });
   }
 
   getAgentRunStates(conversationId: string): AgentRunState[] {
@@ -510,10 +567,9 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         id => this.users.get(id)?.name,
         this.defaultUserHandle(conversationId),
         agent.name,
-        sendMessageToolName(driver),
+        sendMessageToolName(),
       ),
       agentRuntime: agent.runtime,
-      agentName: agent.name,
       driver,
     };
   }

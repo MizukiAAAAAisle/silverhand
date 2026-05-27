@@ -30,6 +30,7 @@ import {
   ResponseFrameSchema,
   type IntentName,
 } from '../../../src/protocol.js';
+import { testStartOptions } from '../../_helpers/runtime-start-options.js';
 
 export type WireFixtureKind =
   | { kind: 'request'; intent: IntentName }
@@ -57,6 +58,15 @@ const TS = 1_700_000_000_000;
 const COOLDOWN = 1_700_000_300_000;
 const PID = 12345;
 const DELIVERY_IDS = [101, 102];
+const RUNTIME_START_OPTIONS = testStartOptions({
+  conversationId: C,
+  agentId: A,
+  agentName: 'agent-fixture',
+  runtime: 'codex',
+  workspacePath: '/Users/shiki/workspace/silverhand',
+  agentHomeDir: '/Users/shiki/.silverhand/agents/a1',
+  model: 'gpt-5',
+});
 
 // ── Helper: re-emit a parsed object as a stable single-line frame.
 //    Lets us keep the registry source readable while ensuring every
@@ -117,11 +127,12 @@ const REQUESTS: WireFixture[] = [
   },
   {
     name: 'request/runtime_start-bare',
-    description: 'runtime_start without optional startup_delivery batch.',
+    description:
+      'D2.g canonical runtime_start: typed metadata only, no derived cwd/spawn/env/prompt bytes.',
     frame: enc({
       id: 'req-start-1',
       intent: 'runtime_start',
-      params: { conversation_id: C, agent_id: A, options: {} },
+      params: { conversation_id: C, agent_id: A, options: RUNTIME_START_OPTIONS },
     }),
     kind: { kind: 'request', intent: 'runtime_start' },
   },
@@ -135,7 +146,7 @@ const REQUESTS: WireFixture[] = [
       params: {
         conversation_id: C,
         agent_id: A,
-        options: {},
+        options: RUNTIME_START_OPTIONS,
         startup_delivery: { delivery_ids: DELIVERY_IDS, text: 'queued user message' },
       },
     }),

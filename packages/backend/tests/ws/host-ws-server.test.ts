@@ -679,7 +679,11 @@ function commandCases(hostId: string): CommandCase[] {
   return [
     {
       kind: 'runtime_start',
-      params: { conversation_id: 'c1', agent_id: 'a1', options: { runtime: 'codex' } },
+      params: {
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        options: runtimeStartOptions(),
+      },
       result: { started: true, pid: 123, started_at: 1700000000000 },
     },
     {
@@ -743,6 +747,68 @@ function commandCases(hostId: string): CommandCase[] {
       },
     },
   ];
+}
+
+function runtimeStartOptions(): unknown {
+  return {
+    agent: {
+      id: 'a1',
+      name: 'alice',
+      home_dir: '/Users/test/.silverhand/agents/a1',
+    },
+    workspace: {
+      id: 'w1',
+      name: 'workspace',
+      kind: 'regular',
+      path: '/Users/test/workspace/project',
+    },
+    workspace_memory_index: [
+      {
+        id: 'w1',
+        name: 'workspace',
+        kind: 'regular',
+        path: '/Users/test/workspace/project',
+      },
+    ],
+    session: {
+      conversation_id: 'c1',
+      kind: 'channel',
+      title: 'workspace',
+      parent_conversation_id: null,
+      parent_title: null,
+      spawned_by_agent_id: null,
+      members: [
+        {
+          kind: 'agent',
+          agent_id: 'a1',
+          name: 'alice',
+          display_name: 'Alice',
+          runtime: 'codex',
+        },
+      ],
+    },
+    driver: {
+      kind: 'codex',
+      cli_session_id: null,
+      model: null,
+      reasoning_effort: null,
+      fast_mode: null,
+    },
+    env_policy: {
+      silverhand: {
+        server_url: 'http://127.0.0.1:8765',
+        auth_token: 'agent-token',
+      },
+      silverhand_cli: {
+        command: 'silverhand',
+        args: [],
+      },
+      proxy: {
+        url: null,
+        allowlist: [],
+      },
+    },
+  };
 }
 
 function sendTestCommand(

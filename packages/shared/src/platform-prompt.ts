@@ -1,4 +1,5 @@
-import type { MemberDto, RuntimeKind } from '@silverhand/shared';
+import type { MemberDto } from './api/dto.js';
+import type { RuntimeKind } from './db/schema.js';
 
 type WorkspaceUiKind = 'regular' | 'dm';
 type ToolName =
@@ -108,6 +109,17 @@ export interface SessionContextInput {
   /** Distinguishes agent-spawned children from user-opened Threads so
    *  Threads can require user confirmation before close. */
   isAgentSpawnedChild?: boolean;
+}
+
+export interface DriverPromptContext {
+  agentId: string;
+  agentName: string;
+  activeProfileDir: string;
+  roleSystemPrompt: string;
+  currentMemory: InjectedFileContent;
+  currentConsensus: InjectedFileContent | null;
+  workspaceMemoryIndex: WorkspaceMemoryIndexEntry[];
+  sessionContext: SessionContextInput;
 }
 
 /**
@@ -648,6 +660,23 @@ ${sendMessage}. If no action is needed, send a brief no-op reply and stop.
 
 ${input.roleSystemPrompt.trim() || '_(role not yet defined — wait for the user to shape it during onboarding)_'}
 `;
+}
+
+export function buildSystemPromptFor(
+  kind: RuntimeKind,
+  ctx: DriverPromptContext,
+): string {
+  return buildPlatformPrompt({
+    agentId: ctx.agentId,
+    agentName: ctx.agentName,
+    runtime: kind,
+    activeProfileDir: ctx.activeProfileDir,
+    roleSystemPrompt: ctx.roleSystemPrompt,
+    currentMemory: ctx.currentMemory,
+    currentConsensus: ctx.currentConsensus,
+    workspaceMemoryIndex: ctx.workspaceMemoryIndex,
+    sessionContext: ctx.sessionContext,
+  });
 }
 
 function normalizeProfileDir(dir: string): string {

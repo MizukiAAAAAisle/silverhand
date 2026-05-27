@@ -1,29 +1,17 @@
-import { chmod, mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { SilverhandCliLauncher } from './context.js';
 
-/**
- * Per-spawn temp-file scaffolding. We materialize the synthesized system
- * prompt to disk because some coding-agent CLIs accept it only as
- * `--system-prompt-file <path>`; they do not take long inline strings
- * safely (see core-design §4.2).
- *
- * Layout under `<os.tmpdir()>/silverhand/<conversationId>/<agentId>/<spawn>/`:
- *   - system-prompt.md   buildSystemPromptFor(driver.kind, …) output
- *   - bin/silverhand     stable CLI entrypoint injected at the front of PATH
- *
- * Lifecycle: `DaemonAgentRuntimeHost.start` calls `prepareSpawnFiles`
- * before issuing `bridge.runtimeStart`, then `cleanup()` after the
- * runtime exits. Crashed leaves stragglers — fine, OS tmp gets reaped
- * eventually.
- */
+export interface SilverhandCliLauncher {
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
+}
 
 export interface SpawnPrepInput {
   conversationId: string;
   agentId: string;
   systemPromptText: string;
-  /** Host-specific launcher that the per-spawn `bin/silverhand` shim forwards to. */
   silverhandCli: SilverhandCliLauncher;
 }
 
@@ -43,7 +31,6 @@ export async function prepareSpawnFiles(
   const systemPromptPath = join(dir, 'system-prompt.md');
   const binDir = join(dir, 'bin');
   const silverhandShimPath = join(binDir, 'silverhand');
-
   const shim = renderSilverhandShim(input.silverhandCli);
 
   await Promise.all([

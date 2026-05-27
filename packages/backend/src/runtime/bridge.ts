@@ -11,20 +11,7 @@
  *     (`DaemonAgentRuntimeHost` owns that)
  *
  * Concretely, the bridge is a thin typed proxy over `HostClient`
- * intents that injects two backend-only concerns the daemon cannot
- * compute on its own:
- *
- *   1. **Proxy env layering.** Backend is the only Settings/DB reader
- *      (Cindy `KzTBo4xxUmcx77yR` + shiki `piIb3YZgFjA5qaaE`). Daemon
- *      stays dumb — it never reads `app_settings`. The bridge looks
- *      up `proxy_url` / `proxy_runtimes` from the caller-supplied
- *      `ProxySettingsSource` and layers `applyProxyEnv()` over the
- *      caller's `options.env` BEFORE shipping `runtime_start` to the
- *      daemon. The daemon's own merge step
- *      (`{ ...process.env, ...wire.env }`) will pick the proxy
- *      vars up unchanged.
- *
- *   2. **Naming clarity for `clearRuntimeSession`** (Cindy
+ * intents. Naming clarity for `clearRuntimeSession` (Cindy
  *      `KMJFmcS4hf_tJ5hj` boundary 4). The daemon intent
  *      `runtime_clear_session` ONLY tears down host-side runtime
  *      state; backend's user-level `clearSession` (DB tx, audit
@@ -62,66 +49,26 @@ import type {
   RuntimeWakeParams,
   RuntimeWakeResult,
 } from '@silverhand/host';
-import { applyProxyEnv, parseProxyRuntimes } from './proxy-env.js';
-
-/**
- * Caller-supplied read-only view of backend Settings. Kept tiny so
- * tests can pass an in-memory `{get: () => ...}` without dragging in
- * `SettingsRepo` / DB. The bridge calls this on every spawn — it does
- * NOT cache the result. Proxy URL changes in Settings take effect on
- * the next runtime_start without restart.
- */
-export interface ProxySettingsSource {
-  /** Returns the raw stored value, or `null` if unset. */
-  get(key: 'proxy_url' | 'proxy_runtimes'): string | null;
-}
 
 /**
  * Spawn input the bridge translates into a `runtime_start` request.
- *
- * `baseEnv` is the env the caller already shaped (silverhand vars +
- * driver.applyEnv merge if any) — the bridge layers proxy keys on
- * top per the allowlist. `runtime` is the agent's runtime kind
- * (`'claude' | 'codex' | 'cursor' | 'gemini'`), used to check the
- * proxy allowlist; `options` is the daemon-side spawn options
- * (driver kind, cwd, cli session id, etc).
- *
- * The `options.env` field is what daemon spreads into the child env;
- * we replace it with `applyProxyEnv(baseEnv, runtime, ...)`. Callers
- * MUST therefore pass the env they want the child to see via
- * `baseEnv`, NOT pre-populate `options.env`.
  */
 export interface RuntimeStartInput {
   conversationId: string;
   agentId: string;
-  /** Used only for proxy allowlist matching. Daemon already knows
-   *  the runtime from `options.runtime`; we don't re-derive it from
-   *  there to avoid coupling allowlist semantics to the wire shape. */
-  runtime: string;
-  /** Env caller wants the child to see, minus proxy keys (the bridge
-   *  layers them on per allowlist). */
-  baseEnv: NodeJS.ProcessEnv;
-  /** Daemon-side spawn options. The bridge OVERWRITES `env` on this
-   *  object; any other fields (`runtime`, `cwd`, `cli_session_id`,
-   *  driver-specific argv) flow through verbatim. */
-  options: Omit<RuntimeStartParams['options'], 'env'> & {
-    env?: NodeJS.ProcessEnv;
-  };
+  /** Typed daemon-side spawn metadata. No cwd/system_prompt_path/env
+   *  map is allowed by the protocol schema. */
+  options: RuntimeStartParams['options'];
   /** Optional spawn-time inbox drain. Same shape as
    *  `RuntimeStartParams.startup_delivery`. */
   startupDelivery?: RuntimeStartParams['startup_delivery'];
 }
 
 export class RuntimeBridge {
-  constructor(
-    private readonly client: HostClient,
-    private readonly proxySettings: ProxySettingsSource,
-  ) {}
+  constructor(private readonly client: HostClient) {}
 
   /**
-   * Start a runtime. Layers proxy env per `proxy_url` /
-   * `proxy_runtimes` Settings, then forwards to
-   * `HostClient.runtimeStart`. Returns the daemon's typed result —
+   * Start a runtime. Forwards typed metadata to HostClient. Returns the daemon's typed result —
    * either `{started: true, pid, started_at, startup_delivery_accepted?}`
    * or the business-state arm `{started: false, reason: 'init_cooldown', cooldown_until}`.
    *
@@ -129,14 +76,10 @@ export class RuntimeBridge {
    * caller handles those separately from business state.
    */
   async runtimeStart(input: RuntimeStartInput): Promise<RuntimeStartResult> {
-    const env = applyProxyEnv(input.baseEnv, input.runtime, {
-      proxyUrl: this.proxySettings.get('proxy_url'),
-      allowlist: parseProxyRuntimes(this.proxySettings.get('proxy_runtimes')),
-    });
     const params: RuntimeStartParams = {
       conversation_id: input.conversationId,
       agent_id: input.agentId,
-      options: { ...input.options, env },
+      options: input.options,
       ...(input.startupDelivery
         ? { startup_delivery: input.startupDelivery }
         : {}),

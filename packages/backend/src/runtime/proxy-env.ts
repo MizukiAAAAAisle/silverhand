@@ -4,28 +4,26 @@
  * onto a base env when the runtime is in the user-configured proxy
  * allowlist.
  *
- * Why this lives here (not as a private CM method anymore): the
- * silverhand-daemon refactor (PR-2) introduces `RuntimeBridge` as
- * backend's command-side seam to the daemon. Bridge must inject the
- * same proxy env into `runtime_start.options.env` so the daemon-spawned
- * runtime sees the same Settings-derived env CM has always assembled.
- * Cindy's commit 4/5 review blocker (`KzTBo4xxUmcx77yR` /
- * `QDF5xr23ehj1RhzY` / shiki `piIb3YZgFjA5qaaE`) explicitly requires:
+ * Why this lives here (not as a private CM method anymore): proxy env
+ * expansion is shared by backend parity tests and daemon-side env
+ * materialization. D2.g tightened the runtime_start boundary: backend
+ * ships a typed proxy policy, daemon expands it into final child env
+ * locally.
  *
  *   - PRESERVE existing CM semantics — same `SettingsRepo.get(PROXY_URL)`
  *     + comma-separated `PROXY_RUNTIMES` allowlist + `expandProxyEnv()`
  *     parsing as today; do NOT redesign.
- *   - DAEMON STAYS DUMB — it never reads SettingsRepo / DB. backend is
- *     the only proxy-config reader; daemon just spreads `options.env`
- *     into the child env via `driver.applyEnv` and `spawn`.
- *   - SAME HELPER on BOTH sides — CM (today) and RuntimeBridge
- *     (post-flip) call the SAME function so the codex proxy
- *     allowlist behavior is provably identical across the cutover.
+ *   - DAEMON DOES NOT READ SETTINGS — backend is the only
+ *     proxy-config reader; daemon receives typed policy and applies it
+ *     to its own process env at spawn time.
+ *   - SAME PARSER on BOTH sides — backend and daemon use the same
+ *     parser/expander so codex proxy allowlist behavior is provably
+ *     identical across the boundary.
  *
  * Pure: no DB read, no logging, no side effects. Callers own the
  * settings read so this helper can be tested with literal values.
  */
-import { expandProxyEnv } from '../proxy.js';
+import { expandProxyEnv } from '@silverhand/shared';
 
 /**
  * Apply proxy env if the given runtime is in the user's allowlist.
@@ -42,8 +40,8 @@ import { expandProxyEnv } from '../proxy.js';
  * purpose: settings store the allowlist as a free-form
  * comma-separated string, so a typo there should silently miss every
  * runtime, not crash. Validation of the allowlist contents stays the
- * caller's responsibility (CM uses `parseRuntimeList`; the bridge
- * uses the same helper — see `parseProxyRuntimes` below).
+ * caller's responsibility (backend policy construction and daemon env
+ * materialization use the same helper — see `parseProxyRuntimes` below).
  *
  * @param baseEnv      env produced by the upstream driver / process
  *                     env merge — proxy keys layer on top.
@@ -73,11 +71,10 @@ export function applyProxyEnv(
  * Parse a comma-separated `proxy_runtimes` settings value (CM's
  * historic format) into a Set, robust to whitespace and empty entries.
  *
- * Pulled out as a sibling helper so both CM and `RuntimeBridge` use
- * the exact same parsing — keeps the codex / claude allowlist behavior
- * stable across the commit-5 cutover. (Behavior matches CM's prior
- * private `parseRuntimeList` verbatim; we did not relax or tighten
- * any rule.)
+ * Pulled out as a sibling helper so backend policy construction and
+ * daemon env materialization use the exact same parsing. (Behavior
+ * matches CM's prior private `parseRuntimeList` verbatim; we did not
+ * relax or tighten any rule.)
  */
 export function parseProxyRuntimes(raw: string | null): Set<string> {
   if (!raw) return new Set();

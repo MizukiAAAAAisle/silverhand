@@ -22,7 +22,14 @@ import { join } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { execPath } from 'node:process';
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 
 import { Supervisor } from '../src/daemon/supervisor/index.js';
@@ -30,6 +37,7 @@ import type { Driver, DriverSpawnContext, ParsedEvent } from '../src/drivers/ind
 import { createDaemonLogControl, type DaemonLogger } from '../src/daemon/logger.js';
 import type { EventFrame, RuntimeStartResult } from '../src/protocol.js';
 import { runtimePidFilePath } from '../src/daemon/runtime-pidfiles.js';
+import { testStartOptions } from './_helpers/runtime-start-options.js';
 
 const FIXTURE = join(__dirname, '_fixtures', 'echo-runtime.cjs');
 /** 3c-b watchdog fixture — produces zero bytes until killed. See
@@ -167,7 +175,12 @@ function makeSupervisor(opts: {
 const baseStartParams = {
   conversation_id: 'c1',
   agent_id: 'a1',
-  options: { runtime: 'claude' as const, agent_name: 'tester' },
+  options: testStartOptions({
+    conversationId: 'c1',
+    agentId: 'a1',
+    agentName: 'tester',
+    runtime: 'claude',
+  }),
 };
 
 async function waitFor(
@@ -217,6 +230,82 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
     });
 
     await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+
+  it('hydrates prompt/spawn/env on daemon side from typed runtime_start options and drains startup_delivery', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'silverhand-d2g-hydrate-'));
+    const agentHome = join(dir, 'agents', 'a1');
+    const workspacePath = join(dir, 'workspace');
+    const memoryDir = join(workspacePath, '.silverhand', 'agents', 'a1');
+    mkdirSync(agentHome, { recursive: true });
+    mkdirSync(memoryDir, { recursive: true });
+    writeFileSync(join(agentHome, 'system_prompt.md'), 'ROLE_D2G', 'utf8');
+    writeFileSync(join(memoryDir, 'MEMORY.md'), 'MEMORY_D2G', 'utf8');
+    writeFileSync(
+      join(workspacePath, '.silverhand', 'CONSENSUS.md'),
+      'CONSENSUS_D2G',
+      'utf8',
+    );
+
+    let promptText = '';
+    const captured: { ctx?: DriverSpawnContext } = {};
+    const driver: Driver = {
+      ...makeFakeDriver(['--echo-stdin']),
+      buildArgs: ctx => {
+        captured.ctx = ctx;
+        promptText = readFileSync(ctx.systemPromptPath, 'utf8');
+        return [FIXTURE, '--echo-stdin'];
+      },
+    };
+    const spy = makeEmitSpy();
+    const supervisor = new Supervisor({
+      emit: spy.emit,
+      logger: silentLogger(),
+      driverFor: () => driver,
+      resolveBinary: async (_kind, fallback) => fallback,
+      spawnFn: (bin, args, options) =>
+        spawn(execPath, [bin, ...args.slice(1)], options),
+      sigtermToSigkillMs: 50,
+      sigkillTimeoutMs: 200,
+    });
+
+    try {
+      const res = await supervisor.start({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        options: testStartOptions({
+          conversationId: 'c1',
+          agentId: 'a1',
+          agentHomeDir: agentHome,
+          workspacePath,
+        }),
+        startup_delivery: {
+          delivery_ids: [11],
+          text: 'startup delivery D2G',
+        },
+      });
+      assertStarted(res);
+      expect(captured.ctx).toBeDefined();
+      const ctx = captured.ctx!;
+      expect(ctx.workspacePath).toBe(workspacePath);
+      expect(ctx.systemPromptPath).toMatch(/spawn-.+system-prompt\.md$/);
+      expect(promptText).toContain('ROLE_D2G');
+      expect(promptText).toContain('MEMORY_D2G');
+      expect(promptText).toContain('CONSENSUS_D2G');
+      await waitFor(() =>
+        spy.events.some(e => e.event === 'runtime_startup_delivery_consumed'),
+      );
+      expect(
+        spy.events.some(
+          e =>
+            e.event === 'runtime_startup_delivery_consumed' &&
+            e.delivery_ids[0] === 11,
+        ),
+      ).toBe(true);
+      await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('writes a runtime pidfile after spawn and unlinks it when the child exits', async () => {
@@ -292,15 +381,15 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
     await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
   });
 
-  it('start throws when options.runtime is missing', async () => {
+  it('start throws on malformed direct-call options', async () => {
     const { supervisor } = makeSupervisor();
     await expect(
       supervisor.start({
         conversation_id: 'c1',
         agent_id: 'a1',
-        options: {},
+        options: {} as never,
       }),
-    ).rejects.toThrow(/options.runtime is required/);
+    ).rejects.toThrow();
   });
 
   it('start throws when the binary resolver returns null', async () => {
@@ -2340,7 +2429,7 @@ describe('Supervisor 3c-b — round-2 regressions (Cindy `HyC05fC-FEs94uoZ` B2/B
     //
     // Test setup: no-output fixture with --ignore-sigterm so the
     // child stays alive in the SIGTERM grace window. initWatchdogMs
-    // is widened to 500ms so node has time to cold-boot the fixture
+    // is widened to 1000ms so node has time to cold-boot the fixture
     // AND register the SIGTERM handler before the timer fires (a
     // signal that arrives mid-bootstrap falls back to default
     // action — terminate — defeating --ignore-sigterm). Long
@@ -2352,7 +2441,7 @@ describe('Supervisor 3c-b — round-2 regressions (Cindy `HyC05fC-FEs94uoZ` B2/B
         binary: NO_OUTPUT_FIXTURE,
         buildArgs: () => [NO_OUTPUT_FIXTURE, '--ignore-sigterm'],
       }),
-      initWatchdogMs: 500,
+      initWatchdogMs: 1_000,
       initMaxRetries: 0,
       initFailureCooldownThreshold: 10,
       sigtermToSigkillMs: 800,
@@ -2400,7 +2489,7 @@ describe('Supervisor 3c-b — round-2 regressions (Cindy `HyC05fC-FEs94uoZ` B2/B
     //      ready runtime
     //
     // Same fixture configuration rationale as the B3 test above:
-    // --ignore-sigterm + 500ms watchdog so node boots and registers
+    // --ignore-sigterm + 1000ms watchdog so node boots and registers
     // the handler before the timer fires; 800ms SIGTERM grace so the
     // dying handle stays observable.
     const { supervisor, events } = make3cSupervisor({
@@ -2409,7 +2498,7 @@ describe('Supervisor 3c-b — round-2 regressions (Cindy `HyC05fC-FEs94uoZ` B2/B
         binary: NO_OUTPUT_FIXTURE,
         buildArgs: () => [NO_OUTPUT_FIXTURE, '--ignore-sigterm'],
       }),
-      initWatchdogMs: 500,
+      initWatchdogMs: 1_000,
       initMaxRetries: 1, // first failure → retry
       initFailureCooldownThreshold: 10, // don't engage cooldown
       sigtermToSigkillMs: 800,

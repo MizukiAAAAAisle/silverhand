@@ -58,9 +58,14 @@
 import { z } from 'zod';
 import {
   AgentRunStateSchema,
+  ConversationKindSchema,
   HostKindSchema,
+  MemberDtoSchema,
   ParsedEventKindSchema,
   ParsedEventSchema,
+  ReasoningEffortSchema,
+  RuntimeKindSchema,
+  WorkspaceKindSchema,
 } from '@silverhand/shared';
 
 // ── Protocol handshake ─────────────────────────────────────────────
@@ -253,15 +258,144 @@ export type ConversationLogDebugResult = z.infer<
 export const RuntimeMessageTextSchema = z.string().min(1);
 export type RuntimeMessageText = z.infer<typeof RuntimeMessageTextSchema>;
 
+const SilverhandCliLauncherSchema = z
+  .object({
+    command: z.string().min(1),
+    args: z.array(z.string()),
+    /**
+     * Explicit launcher metadata for the per-spawn `silverhand` shim.
+     * Named `env_vars` so the protocol can keep `env` itself reserved
+     * for the forbidden pre-composed child environment map.
+     */
+    env_vars: z.record(z.string()).optional(),
+  })
+  .strict();
+
+const RuntimeStartWorkspaceRefSchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string().min(1),
+    kind: WorkspaceKindSchema,
+    /**
+     * Server DB metadata: the daemon-host local filesystem base for
+     * this workspace. This is allowed to cross the boundary as data.
+     * Derivatives such as cwd, per-spawn dirs, and system_prompt_path
+     * remain daemon-local and are forbidden below.
+     */
+    path: z.string().min(1),
+  })
+  .strict();
+
+const RuntimeStartAgentRefSchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string().min(1),
+    /**
+     * Server DB metadata for the agent's L1 profile base. The daemon
+     * resolves `system_prompt.md` under this base locally.
+     */
+    home_dir: z.string().min(1),
+  })
+  .strict();
+
+const RuntimeStartDriverOptionsSchema = z
+  .object({
+    kind: RuntimeKindSchema,
+    cli_session_id: z.string().min(1).nullable(),
+    model: z.string().nullable(),
+    reasoning_effort: ReasoningEffortSchema.nullable(),
+    fast_mode: z.boolean().nullable(),
+  })
+  .strict();
+
+const RuntimeStartSessionSchema = z
+  .object({
+    conversation_id: z.string().min(1),
+    kind: ConversationKindSchema,
+    title: z.string(),
+    parent_conversation_id: z.string().min(1).nullable(),
+    parent_title: z.string().nullable(),
+    spawned_by_agent_id: z.string().min(1).nullable(),
+    members: z.array(MemberDtoSchema),
+  })
+  .strict();
+
+const RuntimeStartEnvPolicySchema = z
+  .object({
+    silverhand: z
+      .object({
+        server_url: z.string().url(),
+        auth_token: z.string().min(1),
+      })
+      .strict(),
+    silverhand_cli: SilverhandCliLauncherSchema,
+    proxy: z
+      .object({
+        url: z.string().nullable(),
+        allowlist: z.array(z.string()),
+      })
+      .strict(),
+  })
+  .strict();
+
+const FORBIDDEN_RUNTIME_START_OPTION_KEYS = new Set([
+  'cwd',
+  'workspace_path',
+  'system_prompt_path',
+  'spawn_dir',
+  'system_prompt',
+  'system_prompt_text',
+  'memory_text',
+  'consensus_text',
+  'env',
+]);
+
+function rejectForbiddenRuntimeStartOptionKeys(
+  value: unknown,
+  ctx: z.RefinementCtx,
+  path: Array<string | number> = [],
+): void {
+  if (value === null || typeof value !== 'object') return;
+  if (Array.isArray(value)) {
+    value.forEach((item, index) =>
+      rejectForbiddenRuntimeStartOptionKeys(item, ctx, [...path, index]),
+    );
+    return;
+  }
+  for (const [key, nested] of Object.entries(value)) {
+    const nextPath = [...path, key];
+    if (FORBIDDEN_RUNTIME_START_OPTION_KEYS.has(key)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: nextPath,
+        message:
+          `runtime_start.options.${nextPath.join('.')} is forbidden by the D2.0 path/byte boundary; ` +
+          'daemon-host must derive cwd/spawn paths/prompt bytes/env locally.',
+      });
+    }
+    rejectForbiddenRuntimeStartOptionKeys(nested, ctx, nextPath);
+  }
+}
+
 /**
- * StartOptions — placeholder. Step 1 keeps this loose because the
- * fake supervisor doesn't care about the contents. Step 2 will lift
- * the full shape verbatim out of CM (mock CLI override, init retry
- * tier config, driver kind, etc.) and replace this with a strict
- * schema. The wire is forward-compatible: step 2 narrows the schema,
- * doesn't add new top-level fields.
+ * Runtime start metadata. This schema is deliberately strict: path
+ * base metadata (`agent.home_dir`, `workspace.path`) is allowed as
+ * typed server DB state, but server-derived execution artifacts and
+ * prompt bytes are not.
  */
-export const StartOptionsSchema = z.object({}).passthrough();
+export const StartOptionsSchema = z
+  .object({
+    agent: RuntimeStartAgentRefSchema,
+    workspace: RuntimeStartWorkspaceRefSchema,
+    workspace_memory_index: z.array(RuntimeStartWorkspaceRefSchema),
+    session: RuntimeStartSessionSchema,
+    driver: RuntimeStartDriverOptionsSchema,
+    env_policy: RuntimeStartEnvPolicySchema,
+  })
+  .strict()
+  .superRefine((val, ctx) =>
+    rejectForbiddenRuntimeStartOptionKeys(val, ctx),
+  );
 export type StartOptions = z.infer<typeof StartOptionsSchema>;
 
 /** A single (conversation, agent) supervised runtime as the daemon

@@ -20,6 +20,7 @@ import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
+import { AgentTokenStore } from '../../src/auth/agent-token-store.js';
 import { RuntimeEventHandler, type EventPublisher } from '../../src/runtime/event-handler.js';
 import {
   OutboundRuntimeEventFanout,
@@ -455,9 +456,8 @@ interface Fixture {
 
 function makeFixture(opts: { runtime?: RuntimeKind } = {}): Fixture {
   const { db, viewerUserId, localHostId } = openTestDb();
-  const workspaces = new WorkspaceRepo(db, {
-    workspacesRoot: join(tmpdir(), 'silverhand-outbound-fanout-test'),
-  });
+  const workspacesRoot = join(tmpdir(), 'silverhand-outbound-fanout-test');
+  const workspaces = new WorkspaceRepo(db, { workspacesRoot });
   const workspacePath = workspaces.workspacePathFor('fanout-ws');
   const workspace = workspaces.insert({
     name: 'fanout-ws',
@@ -492,6 +492,12 @@ function makeFixture(opts: { runtime?: RuntimeKind } = {}): Fixture {
     events: publisher,
     transport: () => transport,
     logger: SILENT_LOGGER,
+    silverhandDir: join(tmpdir(), 'silverhand-outbound-fanout-silverhand'),
+    workspacesRoot,
+    silverhandCli: { command: 'silverhand', args: [] },
+    agentTokens: new AgentTokenStore(),
+    serverUrl: () => 'http://127.0.0.1:1',
+    proxyPolicy: () => ({ url: null, allowlist: [] }),
     activityLog: null,
   });
   const messages = new MessageRepo(db);

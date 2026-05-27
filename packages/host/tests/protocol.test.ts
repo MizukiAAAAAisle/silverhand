@@ -18,6 +18,7 @@ import {
   intentSchemas,
   splitNdjson,
 } from '../src/protocol.js';
+import { testStartOptions } from './_helpers/runtime-start-options.js';
 
 const HELLO_IDENTITY = {
   daemon_id: 'local',
@@ -207,7 +208,7 @@ describe('protocol — runtime_* registry', () => {
     const ok = RuntimeStartParamsSchema.safeParse({
       conversation_id: 'c1',
       agent_id: 'a1',
-      options: {},
+      options: testStartOptions(),
       startup_delivery: {
         delivery_ids: [101, 102, 103],
         text: 'hello',
@@ -218,16 +219,70 @@ describe('protocol — runtime_* registry', () => {
     const okNoDelivery = RuntimeStartParamsSchema.safeParse({
       conversation_id: 'c1',
       agent_id: 'a1',
-      options: {},
+      options: testStartOptions(),
     });
     expect(okNoDelivery.success).toBe(true);
+  });
+
+  it('runtime_start.options is strict typed metadata and rejects unknown keys', () => {
+    const parsed = RuntimeStartParamsSchema.safeParse({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      options: {
+        ...testStartOptions(),
+        unexpected: true,
+      },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('runtime_start.options rejects forbidden server-derived fs/env keys', () => {
+    for (const key of [
+      'cwd',
+      'workspace_path',
+      'system_prompt_path',
+      'spawn_dir',
+      'system_prompt',
+      'memory_text',
+      'consensus_text',
+      'env',
+    ]) {
+      const parsed = RuntimeStartParamsSchema.safeParse({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        options: {
+          ...testStartOptions(),
+          [key]: key === 'env' ? { PATH: '/usr/bin' } : '/tmp/derived',
+        },
+      });
+      expect(parsed.success, key).toBe(false);
+    }
+  });
+
+  it('runtime_start.options allows typed path metadata and launcher env_vars', () => {
+    const parsed = RuntimeStartParamsSchema.safeParse({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      options: {
+        ...testStartOptions(),
+        env_policy: {
+          ...testStartOptions().env_policy,
+          silverhand_cli: {
+            command: 'silverhand',
+            args: ['--stdio'],
+            env_vars: { ELECTRON_RUN_AS_NODE: '1' },
+          },
+        },
+      },
+    });
+    expect(parsed.success).toBe(true);
   });
 
   it('runtime_start rejects empty startup_delivery.delivery_ids', () => {
     const r = RuntimeStartParamsSchema.safeParse({
       conversation_id: 'c1',
       agent_id: 'a1',
-      options: {},
+      options: testStartOptions(),
       startup_delivery: { delivery_ids: [], text: 'x' },
     });
     expect(r.success).toBe(false);
@@ -293,7 +348,7 @@ describe('protocol — runtime_* registry', () => {
     const missing = RuntimeStartParamsSchema.safeParse({
       conversation_id: 'c1',
       agent_id: 'a1',
-      options: {},
+      options: testStartOptions(),
       startup_delivery: { delivery_ids: [101] },
     });
     expect(missing.success).toBe(false);
@@ -301,7 +356,7 @@ describe('protocol — runtime_* registry', () => {
     const empty = RuntimeStartParamsSchema.safeParse({
       conversation_id: 'c1',
       agent_id: 'a1',
-      options: {},
+      options: testStartOptions(),
       startup_delivery: { delivery_ids: [101], text: '' },
     });
     expect(empty.success).toBe(false);

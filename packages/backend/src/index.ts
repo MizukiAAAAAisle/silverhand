@@ -51,6 +51,7 @@ import { ConversationRepo } from './repos/conversation-repo.js';
 import { MessageRepo } from './repos/message-repo.js';
 import { NotificationRepo } from './repos/notification-repo.js';
 import { ScheduleRepo } from './repos/schedule-repo.js';
+import { SETTINGS_KEYS, SettingsRepo } from './repos/settings-repo.js';
 import { WorkspaceRepo } from './repos/workspace-repo.js';
 import { AttachmentService } from './services/attachment-service.js';
 import { AgentService } from './services/agent-service.js';
@@ -460,11 +461,21 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     );
     eventWs = installEventWebSocketServer(server as HttpServer, ctx);
     if (opts.mode === 'standalone') {
+      const settings = new SettingsRepo(db);
       outboundFanout = new OutboundRuntimeEventFanout({
         db,
         events: ctx.events,
         transport: () => hostWs,
         logger,
+        silverhandDir: ctx.silverhandDir,
+        workspacesRoot,
+        silverhandCli: ctx.silverhandCliLauncher,
+        agentTokens: ctx.agentTokens,
+        serverUrl: () => ctx.serverConfig.url,
+        proxyPolicy: () => ({
+          url: settings.get(SETTINGS_KEYS.PROXY_URL),
+          allowlist: settings.getProxyRuntimes(),
+        }),
         logDir: ctx.logDir,
       });
     }

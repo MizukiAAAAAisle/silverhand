@@ -6,10 +6,8 @@
  *
  * The behaviors we lock in here:
  *
- * 1. Proxy env semantics (Cindy `KzTBo4xxUmcx77yR` + `QDF5xr23ehj1RhzY`):
- *    - codex in allowlist → proxy keys land on `options.env`
- *    - claude NOT in allowlist → no proxy keys leak
- *    - empty allowlist → no proxy keys at all
+ * 1. `runtimeStart` is a thin typed proxy. It must not add backend
+ *    cwd/system-prompt/env derivatives to `options`.
  *
  * 2. `clearRuntimeSession` naming (Cindy `KMJFmcS4hf_tJ5hj` boundary 4):
  *    bridge method is called `clearRuntimeSession` (NOT `clearSession`)
@@ -94,96 +92,98 @@ function makeFakeClient(): {
   return { client: fake, calls, setNext };
 }
 
-function settings(map: Record<string, string | null>) {
+function startOptions(): RuntimeStartParams['options'] {
   return {
-    get(key: 'proxy_url' | 'proxy_runtimes') {
-      return map[key] ?? null;
+    agent: {
+      id: 'a1',
+      name: 'Cindy',
+      home_dir: '/Users/shiki/.silverhand/agents/a1',
+    },
+    workspace: {
+      id: 'ws1',
+      name: 'silverhand',
+      kind: 'regular',
+      path: '/Users/shiki/workspace/silverhand',
+    },
+    workspace_memory_index: [
+      {
+        id: 'ws1',
+        name: 'silverhand',
+        kind: 'regular',
+        path: '/Users/shiki/workspace/silverhand',
+      },
+    ],
+    session: {
+      conversation_id: 'c1',
+      kind: 'channel',
+      title: 'runtime-start',
+      parent_conversation_id: null,
+      parent_title: null,
+      spawned_by_agent_id: null,
+      members: [
+        {
+          kind: 'agent',
+          agent_id: 'a1',
+          name: 'Cindy',
+          display_name: 'Cindy',
+          runtime: 'codex',
+        },
+      ],
+    },
+    driver: {
+      kind: 'codex',
+      cli_session_id: null,
+      model: 'gpt-5',
+      reasoning_effort: null,
+      fast_mode: null,
+    },
+    env_policy: {
+      silverhand: {
+        server_url: 'http://127.0.0.1:1984',
+        auth_token: 'agent-token',
+      },
+      silverhand_cli: {
+        command: 'silverhand',
+        args: [],
+      },
+      proxy: {
+        url: 'http://127.0.0.1:7897',
+        allowlist: ['codex'],
+      },
     },
   };
 }
 
-const PROXY_URL = 'http://127.0.0.1:7897';
-
-describe('RuntimeBridge.runtimeStart — proxy env layering', () => {
-  it('injects proxy env when runtime is codex AND codex is in allowlist', async () => {
+describe('RuntimeBridge.runtimeStart — typed passthrough', () => {
+  it('forwards typed options without adding cwd/system_prompt_path/env', async () => {
     const { client, calls } = makeFakeClient();
-    const bridge = new RuntimeBridge(
-      client,
-      settings({ proxy_url: PROXY_URL, proxy_runtimes: 'codex' }),
-    );
+    const bridge = new RuntimeBridge(client);
+    const options = startOptions();
     await bridge.runtimeStart({
       conversationId: 'c1',
       agentId: 'a1',
-      runtime: 'codex',
-      baseEnv: { PATH: '/usr/bin', SILVERHAND_AGENT_ID: 'a1' },
-      options: { runtime: 'codex' },
+      options,
     });
     expect(calls).toHaveLength(1);
     const params = calls[0]!.params as RuntimeStartParams;
-    const env = params.options.env as Record<string, string>;
-    expect(env.PATH).toBe('/usr/bin');
-    expect(env.SILVERHAND_AGENT_ID).toBe('a1');
-    expect(env.HTTP_PROXY).toBe(PROXY_URL);
-    expect(env.https_proxy).toBe(PROXY_URL);
-    expect(env.ALL_PROXY).toBe('socks5://127.0.0.1:7897');
-  });
-
-  it('does NOT inject proxy env when runtime is claude AND allowlist=codex', async () => {
-    const { client, calls } = makeFakeClient();
-    const bridge = new RuntimeBridge(
-      client,
-      settings({ proxy_url: PROXY_URL, proxy_runtimes: 'codex' }),
-    );
-    await bridge.runtimeStart({
-      conversationId: 'c1',
-      agentId: 'a1',
-      runtime: 'claude',
-      baseEnv: { PATH: '/usr/bin' },
-      options: { runtime: 'claude' },
+    expect(params).toEqual({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      options,
     });
-    const env = (calls[0]!.params as RuntimeStartParams).options.env as Record<
-      string,
-      string
-    >;
-    expect(env.PATH).toBe('/usr/bin');
-    expect(env.HTTP_PROXY).toBeUndefined();
-    expect(env.https_proxy).toBeUndefined();
-    expect(env.ALL_PROXY).toBeUndefined();
-  });
-
-  it('does NOT inject proxy env when allowlist is empty (Settings unset)', async () => {
-    const { client, calls } = makeFakeClient();
-    const bridge = new RuntimeBridge(
-      client,
-      settings({ proxy_url: PROXY_URL, proxy_runtimes: '' }),
-    );
-    await bridge.runtimeStart({
-      conversationId: 'c1',
-      agentId: 'a1',
-      runtime: 'codex',
-      baseEnv: { PATH: '/usr/bin' },
-      options: { runtime: 'codex' },
-    });
-    const env = (calls[0]!.params as RuntimeStartParams).options.env as Record<
-      string,
-      string
-    >;
-    expect(env.PATH).toBe('/usr/bin');
-    expect(env.HTTP_PROXY).toBeUndefined();
+    expect(JSON.stringify(params)).not.toContain('"cwd"');
+    expect(JSON.stringify(params)).not.toContain('"system_prompt_path"');
+    expect(JSON.stringify(params)).not.toContain('"spawn_dir"');
+    expect(JSON.stringify(params)).not.toContain('"env"');
   });
 
   it('forwards startup_delivery verbatim when caller provides it', async () => {
     const { client, calls } = makeFakeClient();
-    const bridge = new RuntimeBridge(
-      client,
-      settings({ proxy_url: null, proxy_runtimes: null }),
-    );
+    const bridge = new RuntimeBridge(client);
     await bridge.runtimeStart({
       conversationId: 'c1',
       agentId: 'a1',
-      runtime: 'claude',
-      baseEnv: {},
-      options: { runtime: 'claude' },
+      options: startOptions(),
       startupDelivery: {
         delivery_ids: [101, 102],
         text: 'hello',
@@ -194,35 +194,6 @@ describe('RuntimeBridge.runtimeStart — proxy env layering', () => {
     expect(params.startup_delivery?.text).toEqual('hello');
   });
 
-  it('overwrites caller-supplied options.env (proxy layering is authoritative)', async () => {
-    // Caller passes a stale HTTP_PROXY in options.env by mistake.
-    // Bridge must NOT trust it — it should be replaced by the
-    // freshly-computed env from baseEnv + applyProxyEnv.
-    const { client, calls } = makeFakeClient();
-    const bridge = new RuntimeBridge(
-      client,
-      settings({ proxy_url: PROXY_URL, proxy_runtimes: 'codex' }),
-    );
-    await bridge.runtimeStart({
-      conversationId: 'c1',
-      agentId: 'a1',
-      runtime: 'codex',
-      baseEnv: { PATH: '/usr/bin' },
-      options: {
-        runtime: 'codex',
-        env: { HTTP_PROXY: 'http://stale-proxy:1' },
-      },
-    });
-    const env = (calls[0]!.params as RuntimeStartParams).options.env as Record<
-      string,
-      string
-    >;
-    expect(env.HTTP_PROXY).toBe(PROXY_URL);
-    // The caller-supplied stale env entirely disappears: bridge
-    // rebuilds from baseEnv.
-    expect(env.PATH).toBe('/usr/bin');
-  });
-
   it('passes through business-state init_cooldown result without throwing', async () => {
     const { client, calls, setNext } = makeFakeClient();
     setNext('runtime_start', {
@@ -230,16 +201,11 @@ describe('RuntimeBridge.runtimeStart — proxy env layering', () => {
       reason: 'init_cooldown',
       cooldown_until: 1700001000000,
     } satisfies RuntimeStartResult);
-    const bridge = new RuntimeBridge(
-      client,
-      settings({ proxy_url: null, proxy_runtimes: null }),
-    );
+    const bridge = new RuntimeBridge(client);
     const result = await bridge.runtimeStart({
       conversationId: 'c1',
       agentId: 'a1',
-      runtime: 'claude',
-      baseEnv: {},
-      options: { runtime: 'claude' },
+      options: startOptions(),
     });
     expect(result).toEqual({
       started: false,
@@ -253,10 +219,7 @@ describe('RuntimeBridge.runtimeStart — proxy env layering', () => {
 describe('RuntimeBridge.clearRuntimeSession — naming + intent routing', () => {
   it('forwards to daemon intent runtime_clear_session', async () => {
     const { client, calls } = makeFakeClient();
-    const bridge = new RuntimeBridge(
-      client,
-      settings({ proxy_url: null, proxy_runtimes: null }),
-    );
+    const bridge = new RuntimeBridge(client);
     await bridge.clearRuntimeSession('c1', 'a1');
     expect(calls).toHaveLength(1);
     expect(calls[0]).toEqual({
@@ -267,10 +230,7 @@ describe('RuntimeBridge.clearRuntimeSession — naming + intent routing', () => 
 
   it('method is named clearRuntimeSession, NOT clearSession (compile-time guard)', () => {
     const { client } = makeFakeClient();
-    const bridge = new RuntimeBridge(
-      client,
-      settings({ proxy_url: null, proxy_runtimes: null }),
-    );
+    const bridge = new RuntimeBridge(client);
     // Surface check: the public method exists with the prefixed
     // name. If someone renames it back to `clearSession` this fails
     // at runtime and the failure name is unambiguous.
@@ -282,10 +242,7 @@ describe('RuntimeBridge.clearRuntimeSession — naming + intent routing', () => 
 describe('RuntimeBridge — other passthrough intents', () => {
   it('runtimeWake forwards params untouched', async () => {
     const { client, calls } = makeFakeClient();
-    const bridge = new RuntimeBridge(
-      client,
-      settings({ proxy_url: null, proxy_runtimes: null }),
-    );
+    const bridge = new RuntimeBridge(client);
     await bridge.runtimeWake({
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -301,10 +258,7 @@ describe('RuntimeBridge — other passthrough intents', () => {
 
   it('runtimeStop forwards mode+directive untouched', async () => {
     const { client, calls } = makeFakeClient();
-    const bridge = new RuntimeBridge(
-      client,
-      settings({ proxy_url: null, proxy_runtimes: null }),
-    );
+    const bridge = new RuntimeBridge(client);
     await bridge.runtimeStop({
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -318,20 +272,14 @@ describe('RuntimeBridge — other passthrough intents', () => {
 
   it('runtimeStatus omits empty params (matches HostClient default arg)', async () => {
     const { client, calls } = makeFakeClient();
-    const bridge = new RuntimeBridge(
-      client,
-      settings({ proxy_url: null, proxy_runtimes: null }),
-    );
+    const bridge = new RuntimeBridge(client);
     await bridge.runtimeStatus();
     expect(calls[0]!.params).toEqual({});
   });
 
   it('runtimeStatus narrows by conversationId+agentId when supplied', async () => {
     const { client, calls } = makeFakeClient();
-    const bridge = new RuntimeBridge(
-      client,
-      settings({ proxy_url: null, proxy_runtimes: null }),
-    );
+    const bridge = new RuntimeBridge(client);
     await bridge.runtimeStatus({ conversationId: 'c1', agentId: 'a1' });
     expect(calls[0]!.params).toEqual({
       conversation_id: 'c1',
@@ -341,10 +289,7 @@ describe('RuntimeBridge — other passthrough intents', () => {
 
   it('runtimeStopAll + runtimeCloseActivityLog are no-arg passthroughs', async () => {
     const { client, calls } = makeFakeClient();
-    const bridge = new RuntimeBridge(
-      client,
-      settings({ proxy_url: null, proxy_runtimes: null }),
-    );
+    const bridge = new RuntimeBridge(client);
     await bridge.runtimeStopAll();
     await bridge.runtimeCloseActivityLog();
     expect(calls.map(c => c.intent)).toEqual([
