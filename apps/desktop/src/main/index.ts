@@ -79,15 +79,37 @@ import {
 import {
   decideBackendBootMode,
   evaluateProfileCommitGuard,
+  planBackendStartup,
   ProfileUnusableError,
-  RemoteModeNotYetWiredError,
 } from './backend-boot-mode.js';
+import {
+  buildRemoteBackendHandle,
+  type RemoteBackendHandle,
+} from './remote-backend-handle.js';
 import {
   probeServerInfo,
   type ProbeServerInfoResult,
 } from './server-connection-test.js';
 
-let backend: RunningBackend | null = null;
+/**
+ * D4.a Commit 5d — typed union of the two boot-time backend
+ * adapters. The desktop main process always has either a local
+ * embedded backend (`startEmbeddedSilverhandServer` produced a
+ * `RunningBackend`) or a remote one (the user's profile pointed at a
+ * remote URL; main built a `RemoteBackendHandle` instead). Code that
+ * needs the URL goes through {@link requireBackendUrl}; code that
+ * actually depends on in-process embedded surface (the
+ * `BackendContext`, the local `HostWsServerController` registry, the
+ * `ServerConfig` for legacy on-disk persistence) goes through
+ * {@link requireEmbeddedBackend} or {@link getEmbeddedHostWsController}
+ * — both of which `null` / typed-fail on the remote arm so a remote
+ * boot can never silently consume an embedded-only side effect.
+ */
+type BackendHandle =
+  | { readonly kind: 'embedded'; readonly running: RunningBackend }
+  | RemoteBackendHandle;
+
+let backend: BackendHandle | null = null;
 let daemon: DaemonHandle | null = null;
 let hostClient: HostClient | null = null;
 let logger: FileLogger | null = null;
@@ -381,21 +403,67 @@ function embeddedBootstrapPath(): string {
   return join(silverhandDir(), EMBEDDED_BOOTSTRAP_FILENAME);
 }
 
-function requireBackend(): RunningBackend {
+/**
+ * D4.a Commit 5d — narrow accessors over the {@link BackendHandle}
+ * union. Replaced the legacy `requireBackend()` (which returned the
+ * embedded-only `RunningBackend` directly) so callers cannot
+ * accidentally read embedded-only context (`backend.context.*`) on
+ * the remote arm via optional-chain or `as` cast. Every callsite
+ * picks the helper that matches its actual dependency:
+ *
+ *   - {@link requireBackendUrl} — works on both arms; returns the
+ *     active backend's URL (embedded loopback or remote origin).
+ *     Use for HTTP/WS/proxy URL construction and origin overrides.
+ *
+ *   - {@link requireEmbeddedBackend} — typed-throw on remote arm.
+ *     Use ONLY for code that genuinely depends on in-process
+ *     embedded surface (e.g. the `BackendContext`, `ServerConfig`
+ *     for legacy on-disk write). The `reason` argument is logged
+ *     in the throw so a regression that calls this on the remote
+ *     arm fails loud at the offending site.
+ *
+ *   - {@link getEmbeddedHostWsController} — `null` on remote arm.
+ *     Use for graceful-shutdown detach observability: on remote
+ *     there is no in-process registry to observe, so the helper
+ *     returns `null` and the consumer falls back to RPC-only path.
+ *     This MUST be `null`, not `undefined`, so the caller can
+ *     distinguish "registry deliberately absent" from "registry
+ *     accessor missing because of an upstream bug".
+ */
+function requireBackendUrl(): string {
   if (!backend) throw new Error('backend not ready');
-  return backend;
+  return backend.kind === 'embedded' ? backend.running.url : backend.url;
+}
+
+function requireEmbeddedBackend(reason: string): RunningBackend {
+  if (!backend) {
+    throw new Error(`backend not ready (caller: ${reason})`);
+  }
+  if (backend.kind !== 'embedded') {
+    throw new Error(
+      `embedded backend required but desktop is in remote mode (caller: ${reason})`,
+    );
+  }
+  return backend.running;
+}
+
+function getEmbeddedHostWsController(): ReturnType<
+  NonNullable<RunningBackend['context']['hostWsController']>
+> | null {
+  if (!backend || backend.kind !== 'embedded') return null;
+  return backend.running.context.hostWsController?.() ?? null;
 }
 
 function backendUrl(path: string): string {
-  return new URL(path, requireBackend().url).toString();
+  return new URL(path, requireBackendUrl()).toString();
 }
 
 function eventWsCookieUrl(): string {
-  return new URL(apiPaths.eventWebSocket, requireBackend().url).toString();
+  return new URL(apiPaths.eventWebSocket, requireBackendUrl()).toString();
 }
 
 function backendOrigin(): string {
-  return new URL(requireBackend().url).origin;
+  return new URL(requireBackendUrl()).origin;
 }
 
 async function syncEventWsSessionCookie(token: string | null): Promise<void> {
@@ -414,7 +482,7 @@ async function syncEventWsSessionCookie(token: string | null): Promise<void> {
       value: token,
       httpOnly: true,
       sameSite: 'strict',
-      secure: new URL(requireBackend().url).protocol === 'https:',
+      secure: new URL(requireBackendUrl()).protocol === 'https:',
       path: apiPaths.eventWebSocket,
     })
     .catch(err => {
@@ -422,11 +490,25 @@ async function syncEventWsSessionCookie(token: string | null): Promise<void> {
     });
 }
 
-function installEventWsOriginOverride(): void {
-  const running = backend;
-  if (!running) return;
+/**
+ * D4.a Commit 5d (Cindy review boundary 3) — install the Origin /
+ * Cookie override for the event-WS upgrade. Works on **both**
+ * embedded and remote arms: the origin is read from the active
+ * {@link BackendHandle} via {@link backendOrigin}, and the URL filter
+ * pattern is built from `requireBackendUrl()`. The function does NOT
+ * assume embedded loopback — for a remote https profile the protocol
+ * flips to `wss:`, the host is the remote backend's host, and the
+ * `Origin` header is the remote backend's origin (which is exactly
+ * what its CORS policy expects).
+ *
+ * Renamed from `installEventWsOriginOverride` to
+ * {@link installBackendEventWsOriginOverride} so the name no longer
+ * suggests an embedded-only assumption.
+ */
+function installBackendEventWsOriginOverride(): void {
+  if (!backend) return;
   const expectedOrigin = backendOrigin();
-  const expectedUrl = new URL(apiPaths.eventWebSocket, running.url);
+  const expectedUrl = new URL(apiPaths.eventWebSocket, requireBackendUrl());
   expectedUrl.protocol = expectedUrl.protocol === 'https:' ? 'wss:' : 'ws:';
   electronSession.defaultSession.webRequest.onBeforeSendHeaders(
     { urls: [`${expectedUrl.protocol}//${expectedUrl.host}${apiPaths.eventWebSocket}`] },
@@ -613,7 +695,12 @@ async function postAuthSession(
 }
 
 async function bootstrapEmbeddedUserSession(): Promise<boolean> {
-  if (requireBackend().context.serverConfig.mode !== 'embedded') return false;
+  // D4.a Commit 5d — embedded-only path. The bootstrap token comes
+  // from a file the embedded backend itself writes on first run; on
+  // the remote arm there is no such file and no embedded backend —
+  // login flows through `/auth/login` driven by user input. Guard on
+  // the union discriminator (no `as` / no `?.`).
+  if (backend?.kind !== 'embedded') return false;
   const path = embeddedBootstrapPath();
   if (!existsSync(path)) return false;
   const token = readFileSync(path, 'utf8').trim();
@@ -646,12 +733,23 @@ async function bootstrapEmbeddedUserSession(): Promise<boolean> {
 
 async function claimLocalHostForUserSession(): Promise<void> {
   const token = userSessionToken;
-  const running = backend;
-  if (!token || !running) {
+  if (!token || !backend) {
     localHostClaim = { status: 'unclaimed', hostId: null };
     return;
   }
 
+  // D4.a Commit 5d (Cindy 5d review boundary 2 + 4): the claim path
+  // works on BOTH embedded and remote arms. `backendUrl()` resolves
+  // against `requireBackendUrl()`, which returns the active backend
+  // URL — embedded loopback on the embedded arm, the canonical
+  // remote origin on the remote arm. The fetch failure path below
+  // (try/catch around lines `localHostClaim = { status: 'error', … }`)
+  // already handles a remote backend that's unreachable: claim is
+  // logged + status flips to `error`; no throw escapes, no embedded
+  // fallback, no main crash. This satisfies the §4.2 hard gate
+  // "remote profile saved → next launch must not crash even if the
+  // remote backend is down".
+  const backendUrlSnapshot = requireBackendUrl();
   const dir = silverhandDir();
   const existingConfig = readDaemonHostConfig(dir);
   try {
@@ -725,7 +823,7 @@ async function claimLocalHostForUserSession(): Promise<void> {
       profileRead.ok ? profileRead.profile.version : undefined;
 
     writeDaemonHostConfig(dir, {
-      server_url: running.url,
+      server_url: backendUrlSnapshot,
       host_id: localHostId,
       host_token: hostToken,
       ...(profileVersion !== undefined ? { profile_version: profileVersion } : {}),
@@ -812,7 +910,7 @@ function snapshotLocalHostInfo(): {
     // scope on host status semantics).
     local_host_ws_attached_at:
       localHostClaim.status === 'claimed'
-        ? backend?.context.hostWsController?.()?.getAttachment(localHostClaim.hostId)?.attachedAt ?? null
+        ? getEmbeddedHostWsController()?.getAttachment(localHostClaim.hostId)?.attachedAt ?? null
         : null,
     // D3.c Commit 4: surface the daemon-config `server_url` so the
     // Settings "Server" pane (and any future Hosts page readout) can
@@ -835,7 +933,7 @@ function snapshotLocalHostInfo(): {
  * (pre-IPC) rather than after `await`.
  */
 function captureAttachWindow(localHostId: string): ExpectedAttachWindow {
-  const controller = backend?.context.hostWsController?.() ?? null;
+  const controller = getEmbeddedHostWsController();
   const prev = controller?.getAttachment(localHostId) ?? null;
   return {
     expectedHostId: localHostId,
@@ -871,8 +969,7 @@ async function triggerLocalHostOutboundAttach(input: {
   attachWindow: ExpectedAttachWindow;
 }): Promise<void> {
   const client = hostClient;
-  const running = backend;
-  if (!client || !running) {
+  if (!client || !backend) {
     logger?.warn(
       { localHostId: input.localHostId },
       'D3.a host_outbound_attach skipped — host client or backend not ready',
@@ -916,10 +1013,18 @@ async function triggerLocalHostOutboundAttach(input: {
   // Cancel any previously-running watchdog (rotate-token / re-login
   // can fire while a prior one is still polling).
   activeAttachWatchdog?.abort();
-  const controller = running.context.hostWsController?.() ?? null;
+  // D4.a Commit 5d — controller is `null` on the remote arm (no
+  // in-process registry) AND on the embedded arm if `hostWsController`
+  // is unavailable. Both cases mean "we acked the attach IPC but
+  // can't observe the WS attachment locally"; the watchdog stays
+  // un-armed and the user-facing status enum simply waits for
+  // `local_host_status` updates from a different surface (renderer
+  // poll / typed claim error) instead of from registry observation.
+  const controller = getEmbeddedHostWsController();
   if (!controller) {
-    // No controller (mode-specific edge); we still acked the IPC, so
-    // attach itself is fine — just can't observe it from main.
+    // No controller (remote arm, or embedded edge); we still acked
+    // the IPC, so attach itself is fine — just can't observe it
+    // from main.
     return;
   }
   const watchdog = startAttachWatchdog(input.attachWindow, {
@@ -959,8 +1064,7 @@ async function rotateHostToken(
   hostId: string,
 ): Promise<DesktopHostMutationResult> {
   const token = userSessionToken;
-  const running = backend;
-  if (!token || !running) {
+  if (!token || !backend) {
     return { ok: false, code: 'unauthorized' };
   }
   if (!hostId) {
@@ -1025,7 +1129,7 @@ async function rotateHostToken(
   // before we return; the renderer reply below has no token.
   applyRotateSideEffects({
     silverhandDir: dir,
-    serverUrl: running.url,
+    serverUrl: requireBackendUrl(),
     hostId: parsed.data.host_id,
     hostToken: parsed.data.host_token,
   });
@@ -1128,8 +1232,7 @@ async function saveServerUrlFromSettings(
   rawServerUrl: string,
 ): Promise<OutboundReloadOutcome> {
   const client = hostClient;
-  const running = backend;
-  if (!client || !running) {
+  if (!client || !backend) {
     // Pre-backend / post-shutdown — the orchestrator would itself
     // surface this as a reload IPC transport failure mapped to
     // `not_attached`, but we short-circuit here so the renderer
@@ -1155,7 +1258,13 @@ async function saveServerUrlFromSettings(
   // watchdog budget when verification is structurally impossible.
   // Mirrors the D3.b `host_outbound_detach` controller-snapshot
   // pattern.
-  const controller = running.context.hostWsController?.() ?? null;
+  //
+  // D4.a Commit 5d: `getEmbeddedHostWsController()` returns `null`
+  // on the remote arm. The orchestrator's `no_attachment_controller`
+  // arm is the typed reason the renderer surfaces ("connection
+  // verification not available") — we do NOT pretend to verify a
+  // remote attachment from main.
+  const controller = getEmbeddedHostWsController();
   const outcome = await performOutboundReload(
     { serverUrl: rawServerUrl },
     {
@@ -1359,31 +1468,19 @@ async function bootstrap(): Promise<void> {
       forceEmbedded: readForceEmbeddedFlag(process.env),
       allowInsecureRemote: readAllowInsecureRemoteFlag(process.env),
     });
-    if (bootDecision.mode === 'remote') {
-      logger.warn(
-        {
-          serverUrl: bootDecision.serverUrl,
-          insecure: bootDecision.insecure,
-        },
-        'D4.a Commit 3 trip wire: remote-mode boot detected but not yet implemented; throwing',
-      );
-      // Throw a typed error so a future remote-mode regression (e.g.
-      // someone widening the Setup Wizard to accept remote URLs
-      // without landing the Commit 5 bootstrap branch) fails loud
-      // instead of silently falling back to embedded. Today the
-      // Settings save pipeline + Setup Wizard save guard refuse to
-      // persist remote profiles (Commit 3 fixup: `evaluateProfileCommitGuard`),
-      // so this path is structurally unreachable in production
-      // builds — the throw is a forward-compat regression gate.
-      throw new RemoteModeNotYetWiredError(bootDecision);
-    }
-    if (bootDecision.mode === 'profile_invalid') {
+    // D4.a Commit 5d — convert the boot decision into a startup plan
+    // via the pure adapter (`backend-boot-mode.ts`). The adapter is
+    // unit-tested for every decision arm so the bootstrap site below
+    // only has to switch on `plan.mode` — it can't accidentally
+    // forget an arm and silently fall through.
+    const startupPlan = planBackendStartup(bootDecision);
+    if (startupPlan.mode === 'refuse') {
       logger.error(
         {
-          profileUrl: bootDecision.profileUrl,
-          classifyMessage: bootDecision.classifyMessage,
+          profileUrl: startupPlan.profileUrl,
+          classifyMessage: startupPlan.classifyMessage,
         },
-        'D4.a Commit 3 boot gate: profile present but classifier refused it; throwing (no silent embedded fallback)',
+        'D4.a Commit 3 boot gate (5d adapter): profile present but classifier refused it; throwing (no silent embedded fallback)',
       );
       // Throw rather than silently boot embedded (Cindy D4.a Commit
       // 3 review P1-B). A present-but-unusable profile is data the
@@ -1392,15 +1489,39 @@ async function bootstrap(): Promise<void> {
       // profile yet; using embedded". Repair path is in the error
       // message: clear profile via Settings, or set the env flag
       // that made the URL acceptable, or set `SILVERHAND_FORCE_EMBEDDED=1`.
-      throw new ProfileUnusableError(bootDecision);
+      //
+      // Construct the `profile_invalid` decision shape from the
+      // refuse-arm plan (the planner is `decision → plan` losslessly
+      // for this arm) so the error class' constructor gets exactly
+      // the variant it expects.
+      throw new ProfileUnusableError({
+        mode: 'profile_invalid',
+        profileUrl: startupPlan.profileUrl,
+        classifyMessage: startupPlan.classifyMessage,
+      });
     }
-    logger.info(
-      {
-        reason: bootDecision.reason,
-        profileUrl: bootDecision.profileUrl,
-      },
-      'D4.a Commit 3 boot decision: embedded',
-    );
+    if (startupPlan.mode === 'remote') {
+      logger.info(
+        {
+          serverUrl: startupPlan.serverUrl,
+          insecure: startupPlan.insecure,
+        },
+        'D4.a Commit 5d boot decision: remote',
+      );
+      if (startupPlan.insecure) {
+        logger.warn(
+          { serverUrl: startupPlan.serverUrl },
+          'D4.a Commit 5d remote-mode boot admitted insecure http URL via SILVERHAND_ALLOW_INSECURE_REMOTE=1; see runbook §12 for production guidance',
+        );
+      }
+    } else {
+      logger.info(
+        {
+          reason: startupPlan.embeddedReason,
+        },
+        'D4.a Commit 5d boot decision: embedded',
+      );
+    }
     if (remoteDebugging.enabled) {
       logger.info(
         {
@@ -1582,18 +1703,62 @@ async function bootstrap(): Promise<void> {
         );
       });
     });
-    backend = await startEmbeddedSilverhandServer({
-      dataDir: silverhandDir(),
-      serverConfig: config,
-      silverhandCliLauncher: resolveSilverhandCliLauncher(),
-      logger,
-      loggers: loggers ?? undefined,
-      logDir: join(silverhandDir(), 'logs'),
-      hostClient,
-    });
-    await writeServerConfig(backend.context.serverConfig);
-    installEventWsOriginOverride();
+    if (startupPlan.mode === 'embedded') {
+      const running = await startEmbeddedSilverhandServer({
+        dataDir: silverhandDir(),
+        serverConfig: config,
+        silverhandCliLauncher: resolveSilverhandCliLauncher(),
+        logger,
+        loggers: loggers ?? undefined,
+        logDir: join(silverhandDir(), 'logs'),
+        hostClient,
+      });
+      backend = { kind: 'embedded', running };
+      await writeServerConfig(running.context.serverConfig);
+    } else {
+      // D4.a Commit 5d remote-mode bootstrap branch (Cindy review
+      // boundary 4 — §4.2 hard gate):
+      //   - Skip `startEmbeddedSilverhandServer`. There is no
+      //     in-process backend; every HTTP / SSE / WS request leaves
+      //     the desktop and lands on the configured remote backend.
+      //   - Skip `writeServerConfig`. The legacy
+      //     `~/.silverhand/server-config.json` is an embedded-only
+      //     boot artifact (it carried the embedded server's chosen
+      //     port + mode for cross-launch persistence). On the remote
+      //     arm the source of truth is `server-profile.bin` (§7) and
+      //     the daemon-config carries the daemon's view; there is
+      //     no embedded URL to remember.
+      //   - Build a `RemoteBackendHandle` from the canonical origin.
+      //     Every downstream `backendUrl(...)` / `requireBackendUrl()`
+      //     consumer (auth fetch, server-info probe, host-claim, WS
+      //     proxy, event-WS origin override) reads through the same
+      //     accessor and resolves the remote origin transparently.
+      //
+      // **Throw-free invariant**: this branch must never throw, even
+      // if the remote backend is unreachable. Remote HTTP failures
+      // are funnelled through `claimLocalHostForUserSession`'s
+      // try/catch (typed `error` claim status), `validateUserSessionToken`'s
+      // `.catch(() => null)`, and the `backend:request` proxy
+      // (typed BackendProxyResponse). The only failure that can
+      // throw inside this branch is the local daemon socket failing
+      // to connect — same fatal as embedded mode (the daemon path
+      // is local on both arms in V1).
+      backend = buildRemoteBackendHandle({
+        serverUrl: startupPlan.serverUrl,
+        insecure: startupPlan.insecure,
+      });
+    }
+    installBackendEventWsOriginOverride();
     if (!HEADLESS) {
+      // D4.a Commit 5d: `hydrateDesktopSession` works on both arms —
+      // it tries the persisted user session token against
+      // `backendUrl(/api/me)`. On remote unreachable, validation
+      // returns `null` (falsy → fresh login required); on success,
+      // `claimLocalHostForUserSession` runs against the same active
+      // backend. `bootstrapEmbeddedUserSession` is the only step
+      // gated to the embedded arm: there's no embedded-bootstrap
+      // token on disk for a remote backend, and login flows through
+      // `/auth/login` driven by the user.
       const hydrated = await hydrateDesktopSession();
       if (!hydrated) {
         await bootstrapEmbeddedUserSession();
@@ -1926,9 +2091,14 @@ function openSetupWizard(): void {
 
 ipcMain.handle('backend:info', () => {
   if (!backend) return null;
+  // D4.a Commit 5d — `mode` is the union discriminator on
+  // {@link BackendHandle}, not derived from the embedded-only
+  // `serverConfig.mode`. Both happen to render the same string set
+  // (`'embedded' | 'remote'`), so the renderer-facing `BackendInfo`
+  // contract is unchanged.
   return {
-    url: backend.url,
-    mode: backend.context.serverConfig.mode,
+    url: requireBackendUrl(),
+    mode: backend.kind,
     ...snapshotLocalHostInfo(),
   };
 });
@@ -2060,12 +2230,18 @@ export type ProfileSaveWithTestResult =
     }
   | {
       // D4.a Commit 3 review fixup (Cindy P1-A) — probe succeeded
-      // but the commit guard refused the URL because remote-mode
-      // bootstrap is not yet wired. Persisting would land a profile
-      // that crashes the next launch on the `RemoteModeNotYetWiredError`
-      // trip wire. The renderer surfaces this as a typed "this build
-      // cannot connect to a remote backend yet" banner; the bytes
-      // never reach disk.
+      // but the commit guard refused the URL.
+      //
+      // **5d note**: the guard now `{ allow: true }` for every
+      // currently-supported probe success kind (loopback / system_ca /
+      // insecure_dev_remote), because the bootstrap site has the
+      // real remote-mode branch. The `commit_guard` failure arm is
+      // therefore **structurally unreachable** in the current
+      // matrix; it is kept on the type surface for forward use
+      // (future TLS-policy / remote-prerequisite gates) and so
+      // pre-5d binaries' renderer still understands the shape if
+      // the main process is rolled back. See `evaluateProfileCommitGuard`
+      // in `backend-boot-mode.ts` for the lifted policy.
       ok: false;
       phase: 'commit_guard';
       reason: 'remote_backend_not_yet_supported';
@@ -2127,10 +2303,13 @@ export type PartialApplyRetryResult =
  */
 function buildProfilePhase2Deps(): PerformProfilePhase2Deps | null {
   const client = hostClient;
-  const running = backend;
-  if (!client || !running) return null;
+  if (!client || !backend) return null;
   const dir = silverhandDir();
-  const controller = running.context.hostWsController?.() ?? null;
+  // D4.a Commit 5d — `null` on remote arm. The orchestrator's
+  // `no_attachment_controller` arm surfaces a typed
+  // `partial_apply_pending` so the renderer can render its banner
+  // without claiming to have verified attachment from main.
+  const controller = getEmbeddedHostWsController();
   return {
     writeDaemonHostConfig: config => writeDaemonHostConfig(dir, config),
     hostOutboundReload: () => client.hostOutboundReload(),
@@ -2183,19 +2362,21 @@ async function handleProfileSaveWithTest(
     );
     return { ok: false, phase: 'test', test };
   }
-  // Phase A.5 — Commit 3 review fixup (Cindy P1-A): refuse to
-  // persist remote URLs until Commit 5 lands remote-mode boot.
-  // Without this gate, the Setup Wizard's "Test & save" button
-  // happily persists a remote profile that crashes the NEXT launch
-  // on `RemoteModeNotYetWiredError`. The guard lives in
-  // `backend-boot-mode.ts` so the same module that decides "can
-  // bootstrap consume this URL?" also decides "can the writer
-  // persist this URL?" — the two invariants must stay in sync.
+  // Phase A.5 — Commit 3 review fixup (Cindy P1-A) → 5d lift: the
+  // commit guard now `allow: true` for every probe success kind
+  // (the bootstrap site has the real remote-mode branch, see
+  // `backend-boot-mode.ts` JSDoc). The call is kept here so future
+  // TLS-policy / remote-prerequisite gates can refuse without
+  // restructuring the save pipeline; today the guard is a
+  // structural pass-through. The `commit_guard` failure arm of
+  // `ProfileSaveWithTestResult` therefore never fires in the
+  // current matrix — the renderer's `commit_guard` branch is
+  // forward-compat plumbing only.
   const guard = evaluateProfileCommitGuard(test.kind);
   if (!guard.allow) {
     logger?.warn(
       { kind: test.kind, serverUrl, reason: guard.reason },
-      'D4.a profile:saveWithTest commit-guard refused (remote profile blocked until Commit 5)',
+      'D4.a profile:saveWithTest commit-guard refused (forward-compat arm — should be unreachable in current 5d matrix)',
     );
     return {
       ok: false,
@@ -2733,12 +2914,19 @@ app.whenReady().then(async () => {
   if (HEADLESS) {
     // One-line machine-readable handshake on stdout. Test scripts pipe
     // and JSON.parse this. Human-readable extras go to stderr below.
+    //
+    // D4.a Commit 5d — HEADLESS is an embedded-only mode. The whole
+    // point is "boot the backend without a window for smoke tests";
+    // a remote backend has nothing to expose locally on this code
+    // path. Typed-fail loudly if a regression boots HEADLESS with a
+    // remote profile (e.g. CI accidentally inherits `server-profile.bin`).
+    const embedded = requireEmbeddedBackend('HEADLESS handshake (SILVERHAND_HEADLESS=1)');
     process.stdout.write(
       JSON.stringify({
-        url: backend!.url,
-        port: backend!.port,
-        bootstrap_token_path: backend!.context.embeddedBootstrap.enabled
-          ? backend!.context.embeddedBootstrap.filePath
+        url: embedded.url,
+        port: embedded.port,
+        bootstrap_token_path: embedded.context.embeddedBootstrap.enabled
+          ? embedded.context.embeddedBootstrap.filePath
           : null,
         silverhand_dir: silverhandDir(),
       }) + '\n',
@@ -2801,12 +2989,20 @@ async function shutdown(): Promise<void> {
         localHostClaim.status === 'claimed' ? localHostClaim.hostId : null;
       // Take the controller ONCE; only inject the accessor if it's
       // actually available. A `null` controller (registry already
-      // torn down, embedded backend never booted) must NOT be
-      // smuggled through as a zero-arg accessor that returns null —
-      // the helper would then interpret that as "registry cleared
-      // successfully" instead of the truthful "we couldn't observe
-      // the registry at all" (Cindy #task:630 P1-A).
-      const hostWsController = backend?.context.hostWsController?.() ?? null;
+      // torn down, embedded backend never booted, or the desktop is
+      // in remote mode where there is no in-process registry to
+      // observe) must NOT be smuggled through as a zero-arg
+      // accessor that returns null — the helper would then
+      // interpret that as "registry cleared successfully" instead
+      // of the truthful "we couldn't observe the registry at all"
+      // (Cindy #task:630 P1-A).
+      //
+      // D4.a Commit 5d: on the remote arm `getEmbeddedHostWsController()`
+      // returns `null`, so the detach helper runs RPC-only — exactly
+      // the right thing (the WS attachment registry lives on the
+      // remote backend and the daemon's outbound socket close is
+      // observed there, not from main).
+      const hostWsController = getEmbeddedHostWsController();
       const getAttachment = hostWsController
         ? (hostId: string) => hostWsController.getAttachment(hostId)
         : undefined;
@@ -2843,7 +3039,11 @@ async function shutdown(): Promise<void> {
   try {
     if (backend) {
       pushProgress('正在停止 agents…');
-      await backend.close();
+      // D4.a Commit 5d — `close()` exists on both arms. Embedded
+      // owns a Hono server / runtime host / scheduler; remote's
+      // `close()` is a no-op (nothing to tear down — the server is
+      // remote, daemon + hostClient teardown happen below).
+      await (backend.kind === 'embedded' ? backend.running.close() : backend.close());
       pushProgress('清理完成');
       backend = null;
     }

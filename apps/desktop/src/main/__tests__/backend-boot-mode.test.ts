@@ -1,5 +1,6 @@
 /**
- * D4.a Commit 3 — unit tests for the boot-mode decision primitive.
+ * D4.a Commit 3 → 5d — unit tests for the boot-mode decision
+ * primitive + the 5d adapter (`planBackendStartup`).
  *
  * Coverage per arm:
  *   - forceEmbedded short-circuit (wins over a remote profile,
@@ -16,15 +17,22 @@
  *     `URL(input).origin`, not the raw user input
  *   - RemoteModeNotYetWiredError carries serverUrl + insecure
  *   - ProfileUnusableError carries profileUrl + classifyMessage
- *   - evaluateProfileCommitGuard: allow loopback_ok, reject the two
- *     remote arms with typed `remote_backend_not_yet_supported`
+ *   - evaluateProfileCommitGuard (5d lift): every probe success
+ *     kind allows persistence; the persistence ↔ boot invariant
+ *     pins that allowed kinds map to a non-throwing boot arm
+ *     (`embedded` or `remote`), never `profile_invalid`.
+ *   - planBackendStartup (5d adapter): every BackendBootMode arm
+ *     maps to exactly one BackendStartupPlan arm; serverUrl /
+ *     insecure / classifyMessage flow through unchanged.
  */
 import { describe, expect, it } from 'vitest';
 import {
   decideBackendBootMode,
   evaluateProfileCommitGuard,
+  planBackendStartup,
   ProfileUnusableError,
   RemoteModeNotYetWiredError,
+  type BackendBootMode,
 } from '../backend-boot-mode.js';
 
 describe('decideBackendBootMode — embedded short-circuits', () => {
@@ -328,48 +336,160 @@ describe('ProfileUnusableError', () => {
   });
 });
 
-describe('evaluateProfileCommitGuard (Cindy P1-A: persistence must not write what boot will refuse)', () => {
-  it('allows loopback_ok — the only currently-supported commit kind', () => {
+describe('evaluateProfileCommitGuard (D4.a 5d lift: every probe success kind is now safe to persist)', () => {
+  it('allows loopback_ok — embedded boot path', () => {
     expect(evaluateProfileCommitGuard('loopback_ok')).toEqual({ allow: true });
   });
 
-  it('refuses system_ca_verified with typed `remote_backend_not_yet_supported`', () => {
-    const outcome = evaluateProfileCommitGuard('system_ca_verified');
-    expect(outcome.allow).toBe(false);
-    if (outcome.allow) throw new Error('unreachable');
-    expect(outcome.reason).toBe('remote_backend_not_yet_supported');
-    expect(outcome.message.toLowerCase()).toContain('remote backend');
-    expect(outcome.message).toContain('Commit 5');
+  it('allows system_ca_verified — remote boot path (https / valid CA)', () => {
+    expect(evaluateProfileCommitGuard('system_ca_verified')).toEqual({ allow: true });
   });
 
-  it('refuses insecure_dev_remote and explicitly mentions the dev flag in the message', () => {
-    const outcome = evaluateProfileCommitGuard('insecure_dev_remote');
-    expect(outcome.allow).toBe(false);
-    if (outcome.allow) throw new Error('unreachable');
-    expect(outcome.reason).toBe('remote_backend_not_yet_supported');
-    // The dev-flag-specific copy distinguishes "you set the dev env
-    // and it admitted the URL" from "you typed an https URL" so the
-    // operator knows which knob to twist.
-    expect(outcome.message).toContain('SILVERHAND_ALLOW_INSECURE_REMOTE');
+  it('allows insecure_dev_remote — remote boot path admitted via dev flag', () => {
+    expect(evaluateProfileCommitGuard('insecure_dev_remote')).toEqual({ allow: true });
   });
 
-  it('persistence ↔ boot invariant: every probe kind the guard ALLOWS must boot embedded (loopback) — never trip a wire', () => {
-    // Cross-check: if the guard says "allow", the resulting saved
-    // profile MUST land in an embedded boot arm (not remote, not
-    // profile_invalid) on the next launch. This is the load-bearing
-    // contract Cindy P1-A pins.
+  it('persistence ↔ boot invariant: every probe kind the guard ALLOWS must map to a non-throwing boot arm — never profile_invalid', () => {
+    // Cross-check (Cindy 5d review boundary 4): if the guard says
+    // "allow", the resulting saved profile MUST land in a
+    // non-throwing boot-mode arm (`embedded` or `remote`) on the
+    // next launch. This is the load-bearing contract — saving a
+    // profile must never crash next launch.
     const allowedKinds: Array<'loopback_ok' | 'system_ca_verified' | 'insecure_dev_remote'> = [
       'loopback_ok',
       'system_ca_verified',
       'insecure_dev_remote',
     ];
+    // Map each kind to the URL the writer would persist (origin-only
+    // per §7.1); decideBackendBootMode would then re-classify and
+    // produce a boot decision.
+    const kindToUrl = {
+      loopback_ok: 'http://127.0.0.1:8080',
+      system_ca_verified: 'https://backend.example.test',
+      insecure_dev_remote: 'http://10.0.0.5:8080',
+    } as const;
+    // Whether dev flag was set at write time. `insecure_dev_remote`
+    // requires it; the others don't depend on it.
+    const allowInsecureRemote = true;
     for (const kind of allowedKinds) {
       const guard = evaluateProfileCommitGuard(kind);
-      if (!guard.allow) continue;
-      // If we ever widen the guard, the boot-mode side MUST land in
-      // a non-throwing arm. Today only loopback_ok is allowed and
-      // boots embedded — pin it.
-      expect(kind).toBe('loopback_ok');
+      if (!guard.allow) {
+        throw new Error(`5d guard regressed: ${kind} should be allowed`);
+      }
+      const decision = decideBackendBootMode({
+        profileView: { server_url: kindToUrl[kind], updated_at: 0 },
+        forceEmbedded: false,
+        allowInsecureRemote,
+      });
+      // The whole point of the invariant: allowed kinds must NOT
+      // land in `profile_invalid` on next boot.
+      expect(decision.mode === 'embedded' || decision.mode === 'remote').toBe(true);
     }
+  });
+});
+
+describe('planBackendStartup (D4.a 5d adapter — pure decision → plan converter)', () => {
+  it('embedded/no_profile → plan: embedded with no_profile reason', () => {
+    const decision: BackendBootMode = {
+      mode: 'embedded',
+      reason: 'no_profile',
+      profileUrl: '',
+    };
+    const plan = planBackendStartup(decision);
+    expect(plan).toEqual({ mode: 'embedded', embeddedReason: 'no_profile' });
+  });
+
+  it('embedded/forced_by_env → plan: embedded with forced_by_env reason', () => {
+    const decision: BackendBootMode = {
+      mode: 'embedded',
+      reason: 'forced_by_env',
+      profileUrl: '',
+    };
+    const plan = planBackendStartup(decision);
+    expect(plan).toEqual({ mode: 'embedded', embeddedReason: 'forced_by_env' });
+  });
+
+  it('embedded/profile_is_loopback → plan: embedded with profile_is_loopback reason', () => {
+    const decision: BackendBootMode = {
+      mode: 'embedded',
+      reason: 'profile_is_loopback',
+      profileUrl: 'http://127.0.0.1:8080',
+    };
+    const plan = planBackendStartup(decision);
+    expect(plan).toEqual({ mode: 'embedded', embeddedReason: 'profile_is_loopback' });
+  });
+
+  it('remote/insecure=false → plan: remote with serverUrl + insecure=false (https / valid CA)', () => {
+    const decision: BackendBootMode = {
+      mode: 'remote',
+      serverUrl: 'https://backend.example.test',
+      insecure: false,
+    };
+    const plan = planBackendStartup(decision);
+    expect(plan).toEqual({
+      mode: 'remote',
+      serverUrl: 'https://backend.example.test',
+      insecure: false,
+    });
+  });
+
+  it('remote/insecure=true → plan: remote with serverUrl + insecure=true (admitted via dev flag)', () => {
+    const decision: BackendBootMode = {
+      mode: 'remote',
+      serverUrl: 'http://10.0.0.5:8080',
+      insecure: true,
+    };
+    const plan = planBackendStartup(decision);
+    expect(plan).toEqual({
+      mode: 'remote',
+      serverUrl: 'http://10.0.0.5:8080',
+      insecure: true,
+    });
+  });
+
+  it('profile_invalid → plan: refuse with classifier message preserved', () => {
+    const decision: BackendBootMode = {
+      mode: 'profile_invalid',
+      profileUrl: 'http://10.0.0.5:8080',
+      classifyMessage: 'http remote requires SILVERHAND_ALLOW_INSECURE_REMOTE=1',
+    };
+    const plan = planBackendStartup(decision);
+    expect(plan).toEqual({
+      mode: 'refuse',
+      reason: 'profile_invalid',
+      profileUrl: 'http://10.0.0.5:8080',
+      classifyMessage: 'http remote requires SILVERHAND_ALLOW_INSECURE_REMOTE=1',
+    });
+  });
+
+  it('plan never silently widens: a remote decision MUST produce a remote plan, NOT an embedded plan, NOT a refuse plan', () => {
+    // Cindy 5d review boundary 5: the test seam pins that a remote
+    // decision is converted into a `remote` plan verbatim. A
+    // refactor that accidentally collapses `mode: 'remote'` into
+    // an embedded plan (e.g. by reading the wrong field) breaks
+    // this assertion.
+    const decision: BackendBootMode = {
+      mode: 'remote',
+      serverUrl: 'https://backend.example.test',
+      insecure: false,
+    };
+    const plan = planBackendStartup(decision);
+    expect(plan.mode).toBe('remote');
+    if (plan.mode !== 'remote') throw new Error('unreachable');
+    expect(plan.serverUrl).toBe('https://backend.example.test');
+    expect(plan.insecure).toBe(false);
+  });
+
+  it('plan does NOT throw on profile_invalid — bootstrap site owns the throw', () => {
+    // The adapter is pure / throw-free. The bootstrap site is the
+    // only place that decides whether to throw `ProfileUnusableError`.
+    // This keeps the plan/decision conversion easy to unit-test
+    // without standing up the error class' constructor.
+    const decision: BackendBootMode = {
+      mode: 'profile_invalid',
+      profileUrl: 'http://10.0.0.5:8080',
+      classifyMessage: 'oops',
+    };
+    expect(() => planBackendStartup(decision)).not.toThrow();
   });
 });

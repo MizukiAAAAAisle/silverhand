@@ -344,41 +344,49 @@ export class ProfileUnusableError extends Error {
 }
 
 /**
- * D4.a Commit 3 review fixup (Cindy P1-A) — guard that
- * `handleProfileSaveWithTest` consults BEFORE persisting a probed
- * URL.
+ * D4.a Commit 3 fixup (Cindy P1-A) → Commit 5d lift — the persistence
+ * guard that `handleProfileSaveWithTest` consults BEFORE writing a
+ * probed URL to disk.
  *
- * The hazard: the test-then-commit pipeline accepts any URL the
- * classifier admits (loopback, system_ca_verified, insecure_dev_remote).
- * For Commit 3, persisting a remote URL is unsafe — the next launch
- * would land on the {@link RemoteModeNotYetWiredError} trip wire,
- * turning a "click Save in Setup Wizard" action into a crash on
- * next launch. We MUST refuse to commit remote profiles until
- * Commit 5 lands the actual remote-mode bootstrap branch.
+ * **Original purpose (D4.a Commit 3)**: refuse to persist remote
+ * URLs while the boot path was still trip-wired with
+ * {@link RemoteModeNotYetWiredError}. Persisting a remote profile
+ * under the trip wire would have turned a "click Save in Setup
+ * Wizard" into a crash on next launch.
  *
- * Why a separate pure guard (not inlined in `handleProfileSaveWithTest`):
- *   - The decision is exactly the same shape as the boot-mode
- *     decision — "is the desktop ready to consume this URL?". Keeping
- *     both pure-decision sites in this file lets us unit-test the
- *     full commit→boot lifecycle invariant in one place: anything
- *     the guard permits to write MUST be a boot-time `embedded` or
- *     `remote` arm; nothing the guard rejects can land on disk.
- *   - Pure helpers are easy to extend in Commit 5 (delete the
- *     remote-arm refusal; commit will then succeed and boot will
- *     route through `RemoteBackendHandle`).
+ * **Lifted in Commit 5d**: now that the boot path includes a real
+ * remote-mode branch (skips embedded backend, builds
+ * `RemoteBackendHandle`, drives daemon attach against the remote
+ * URL — see `index.ts` bootstrap), every probe-success kind is safe
+ * to persist:
+ *   - `loopback_ok` → embedded boot (unchanged).
+ *   - `system_ca_verified` → remote boot, https / valid CA chain.
+ *   - `insecure_dev_remote` → remote boot, admitted by
+ *     `SILVERHAND_ALLOW_INSECURE_REMOTE=1`.
  *
- * Discriminated outcome:
- *   - `{ allow: true }` — caller may proceed to write.
- *   - `{ allow: false, reason: 'remote_backend_not_yet_supported',
- *        message }` — caller MUST NOT write; surface `reason` to the
- *      renderer so it renders the typed "this build cannot connect
- *      to a remote backend yet" banner.
+ * The guard's discriminated `allow: false` arm is kept in the type
+ * surface (rather than collapsed to `boolean`) for two reasons:
+ *   1. **Forward use.** Future TLS-policy / remote-prerequisite gates
+ *      (e.g. "this build refuses non-Tailscale remote URLs",
+ *      "remote-mode requires a host claim before persistence") will
+ *      slot into the `allow: false` arm without rewriting the IPC
+ *      contract.
+ *   2. **Wire stability.** The renderer's `commit_guard` failure arm
+ *      in `DesktopProfileSaveWithTestResult` references this shape;
+ *      keeping it typed avoids a pre-A.4 binary's renderer choking
+ *      on a narrowed `boolean` if a 5d-or-later main rolls back
+ *      partially.
+ *
+ * Today the function returns `{ allow: true }` for every supported
+ * probe kind. The persistence ↔ boot invariant test in
+ * `backend-boot-mode.test.ts` pins this: anything the guard permits
+ * MUST land in a non-throwing boot-mode arm
+ * (`embedded` or `remote`), never `profile_invalid`.
  *
  * Inputs: the discriminator of {@link ProbeServerInfoResult} on the
- * success path. We accept the kind directly (not the whole
- * result) so this module does not need to import `ProbeServerInfoResult`
- * — the types are in different bytecode units and this keeps
- * `backend-boot-mode.ts` free of `server-connection-test.ts` deps.
+ * success path. Accepting the kind directly (not the whole result)
+ * keeps `backend-boot-mode.ts` free of `server-connection-test.ts`
+ * dependencies.
  */
 export type ProbeSuccessKind =
   | 'loopback_ok'
@@ -396,21 +404,108 @@ export type ProfileCommitGuardOutcome =
 export function evaluateProfileCommitGuard(
   probeKind: ProbeSuccessKind,
 ): ProfileCommitGuardOutcome {
-  if (probeKind === 'loopback_ok') {
-    return { allow: true };
+  // Commit 5d: every probe-success kind is now safe to persist. The
+  // boot path covers all three (loopback → embedded; system_ca / dev
+  // remote → remote-mode handle). The exhaustive switch keeps the
+  // door open for future kinds: adding a new arm to
+  // `ProbeSuccessKind` makes `kind` non-`never` here, forcing the
+  // author to make an explicit allow/deny decision.
+  switch (probeKind) {
+    case 'loopback_ok':
+    case 'system_ca_verified':
+    case 'insecure_dev_remote':
+      return { allow: true };
+    default: {
+      const exhaustive: never = probeKind;
+      throw new Error(
+        `evaluateProfileCommitGuard: unhandled probe success kind: ${String(exhaustive)}`,
+      );
+    }
   }
-  // `system_ca_verified` and `insecure_dev_remote` are both remote
-  // arms — the URL is non-loopback and will activate remote-mode
-  // boot on next launch. Commit 3 has no remote bootstrap path
-  // implemented, so persisting here would create a "save → restart
-  // → crash" footgun. Refuse with a typed reason the renderer
-  // already knows from D4.a Commit 1 / `outbound-reload.ts`.
-  return {
-    allow: false,
-    reason: 'remote_backend_not_yet_supported',
-    message:
-      probeKind === 'insecure_dev_remote'
-        ? `This build cannot connect to a remote backend yet. The URL was admitted only because SILVERHAND_ALLOW_INSECURE_REMOTE=1 is set; remote-mode bootstrap lands in D4.a Commit 5. Use a loopback URL (127.0.0.1 / localhost / [::1]) for now.`
-        : `This build cannot connect to a remote backend yet. Remote-mode bootstrap lands in D4.a Commit 5. Use a loopback URL (127.0.0.1 / localhost / [::1]) for now.`,
-  };
+}
+
+/**
+ * D4.a Commit 5d — pure adapter that converts a {@link BackendBootMode}
+ * decision into a startup plan the bootstrap site executes.
+ *
+ * **Why this exists (Cindy 5d review boundary 5)**: the decision
+ * (`decideBackendBootMode`) tells you _what_ the desktop should do
+ * (boot embedded / talk to remote / refuse). The bootstrap site
+ * (`index.ts`) executes that plan but is hard to unit-test directly
+ * because it owns Electron, the file system, daemon spawn, and the
+ * HTTP listener. By extracting a pure adapter, every "what should
+ * happen on this arm" assertion lives in a unit test:
+ *   - "for every embedded decision, the plan says embedded with the
+ *     same reason" → guards against a refactor accidentally turning
+ *     an embedded reason into a remote plan.
+ *   - "for the remote decision, the plan carries the canonical
+ *     `serverUrl` and `insecure` flag verbatim" → guards against a
+ *     refactor losing the insecure flag mid-pipe.
+ *   - "for `profile_invalid`, the plan is `refuse` and carries the
+ *     classifier message" → guards against the bootstrap site
+ *     silently swallowing the diagnosis.
+ *
+ * **Why discriminated `mode: 'refuse'` instead of throwing here**:
+ * `planBackendStartup` is pure and throw-free; the bootstrap site
+ * remains the only place that decides whether to throw
+ * {@link ProfileUnusableError}. This keeps the adapter pinned by
+ * type tests (every arm of the input maps to exactly one arm of the
+ * output) without dragging the error class' constructor surface into
+ * the adapter test.
+ */
+export type BackendStartupPlan =
+  | {
+      mode: 'embedded';
+      /**
+       * Mirrors `BackendBootMode.embedded.reason` — preserved so the
+       * bootstrap site's log line and any future "embedded but for
+       * what reason" UI keeps the same discriminator.
+       */
+      embeddedReason: 'no_profile' | 'forced_by_env' | 'profile_is_loopback';
+    }
+  | {
+      mode: 'remote';
+      /** Canonical origin URL (post-classify + origin-normalize). */
+      serverUrl: string;
+      /** Admitted via `SILVERHAND_ALLOW_INSECURE_REMOTE=1`. */
+      insecure: boolean;
+    }
+  | {
+      /**
+       * `profile_invalid` decision arm — the bootstrap site MUST
+       * throw {@link ProfileUnusableError} on this plan. The
+       * adapter does not throw; bootstrap consumes the plan and
+       * decides what to do, so all "if I see this plan I do X"
+       * branches are visible in one place.
+       */
+      mode: 'refuse';
+      reason: 'profile_invalid';
+      profileUrl: string;
+      classifyMessage: string;
+    };
+
+export function planBackendStartup(decision: BackendBootMode): BackendStartupPlan {
+  switch (decision.mode) {
+    case 'embedded':
+      return { mode: 'embedded', embeddedReason: decision.reason };
+    case 'remote':
+      return {
+        mode: 'remote',
+        serverUrl: decision.serverUrl,
+        insecure: decision.insecure,
+      };
+    case 'profile_invalid':
+      return {
+        mode: 'refuse',
+        reason: 'profile_invalid',
+        profileUrl: decision.profileUrl,
+        classifyMessage: decision.classifyMessage,
+      };
+    default: {
+      const exhaustive: never = decision;
+      throw new Error(
+        `planBackendStartup: unhandled boot decision: ${JSON.stringify(exhaustive)}`,
+      );
+    }
+  }
 }
