@@ -283,6 +283,47 @@ describe('classifyServerUrl — V1 acceptance policy', () => {
     expect(u.hostname).toBe('localhost');
   });
 
+  // ── IPv6 bracket-suffix validation (Cindy `#task:631` D3.c P1 r3)
+  //
+  // The authority grammar `IP-literal [ ":" port ]` permits only an
+  // empty tail or `:port` after the closing bracket. Inputs that
+  // smuggle text after `]` must be rejected by the extractor itself
+  // — not by relying on `new URL()` to refuse the form, which is a
+  // brittle two-layer dependency we explicitly don't want. Zone-id
+  // / percent forms remain rejected via the non-loopback allowlist
+  // (their raw text never matches `[::1]` literally).
+
+  it('rejects `http://[::1]evil:18080` (text after the closing bracket — extractor must NOT silently return `[::1]`)', () => {
+    // Load-bearing: without the suffix validation the extractor
+    // would slice out `[::1]`, the allowlist would accept it, and
+    // we'd silently allow attacker-controlled trailing text in the
+    // raw authority. We rely on the extractor's own grammar check,
+    // not on URL parser refusal, so the test asserts `malformed_url`
+    // (matches the null→malformed_url branch).
+    expectReject('http://[::1]evil:18080', 'malformed_url');
+  });
+
+  it('rejects `http://[::1%25lo0]:18080` (percent-encoded IPv6 zone-id — same "URL parser semantic equivalence" family as expanded IPv6)', () => {
+    // Cindy's spec wanted `non_loopback_host` here so the raw form
+    // `[::1%25lo0]` shows up in the rejection message; in this Node
+    // version the URL constructor refuses to parse the percent-
+    // encoded zone-id at all, so the input lands in `malformed_url`
+    // before the raw extractor runs. The load-bearing invariant is
+    // "rejected, period" — pin whichever rejection path the runtime
+    // takes so we notice if a future Node release loosens its
+    // parser and starts normalizing zone-id forms to `[::1]`
+    // (which is exactly the "URL parser semantic equivalence"
+    // class we explicitly do NOT want to admit into the allowlist).
+    const out = classifyServerUrl('http://[::1%25lo0]:18080');
+    expect(out.ok).toBe(false);
+    if (out.ok) throw new Error('unreachable');
+    // Acceptable reasons: malformed_url (URL constructor refused)
+    // OR non_loopback_host (constructor accepted, raw extractor
+    // saw `[::1%25lo0]` which is not in the allowlist). Both prove
+    // the strict-allowlist invariant holds.
+    expect(['malformed_url', 'non_loopback_host']).toContain(out.reason);
+  });
+
   // ── Discriminator hygiene ──────────────────────────────────────
 
   it('the success arm carries kind:"loopback" so V1.1 can add kind:"remote" without breaking callers', () => {

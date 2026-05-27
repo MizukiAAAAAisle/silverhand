@@ -160,6 +160,17 @@ export function extractRawAuthorityHost(input: string): string | null {
   if (rest.startsWith('[')) {
     const bracketEnd = rest.indexOf(']');
     if (bracketEnd < 0) return null;
+    // IPv6 bracket suffix validation (Cindy `#task:631` D3.c P1
+    // round 3): the authority grammar permits ONLY an empty tail
+    // or `:port` after the closing bracket. Inputs like
+    // `http://[::1]evil:18080` are rejected here because the
+    // extractor's contract is "raw authority host per RFC 3986",
+    // not "whatever survives URL parsing". Without this check the
+    // helper would return `[::1]` (allowlist hit!) for the `]evil`
+    // suffix case and we'd rely on `new URL()` to reject — which
+    // is a brittle two-layer dependency we explicitly don't want.
+    const suffix = rest.slice(bracketEnd + 1);
+    if (suffix !== '' && !/^:\d*$/.test(suffix)) return null;
     return rest.slice(0, bracketEnd + 1);
   }
   // IPv4 / reg-name: port is the optional `:N` suffix. A `:` that
