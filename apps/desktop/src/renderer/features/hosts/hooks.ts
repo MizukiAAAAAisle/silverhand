@@ -63,11 +63,68 @@ async function fetchBackendInfo(): Promise<BackendInfoSnapshot> {
   };
 }
 
-export function useBackendInfoSnapshot() {
+export function useBackendInfoSnapshot(options?: {
+  /**
+   * D3.d follow-up (Cindy `#task:636` review P1) — opt-in narrow
+   * polling so the connection pill flips Connecting → Connected
+   * without a user-triggered refetch.
+   *
+   * The base `useQuery` has no polling / no subscription; before this
+   * opt-in, a renderer that mounted in `claimed && attached_at===null`
+   * never saw `attached_at` flip to a number unless some other
+   * mutation invalidated `backendInfoKey`. That left the pill stuck
+   * on "Connecting…" indefinitely.
+   *
+   * When opted in we poll ONLY while the snapshot is actually in the
+   * connecting window (`claimed + attached_at===null`); the moment
+   * attached_at lands or the status moves to a terminal arm
+   * (revoked / error / failed) we stop polling. Callers that don't
+   * render the connection pill should NOT opt in — there's no other
+   * field on `BackendInfoSnapshot` that flips out-of-band.
+   */
+  pollWhileConnecting?: boolean;
+}) {
   return useQuery({
     queryKey: backendInfoKey,
     queryFn: fetchBackendInfo,
+    refetchInterval: options?.pollWhileConnecting
+      ? query => connectingRefetchIntervalMs(query.state.data ?? null)
+      : false,
   });
+}
+
+/**
+ * Pure helper that decides whether the next `refetchInterval` tick
+ * fires — extracted so a unit test pins the "stop polling on
+ * terminal / attached" matrix without spinning up React Query.
+ *
+ * Returns:
+ *   - `false` (no refetch) for terminal / attached / pre-claim states
+ *   - `CONNECTING_POLL_MS` (number) for the transitional connecting
+ *     window so the pill flips Connecting → Connected within ~1
+ *     poll cycle after the daemon's outbound WS lands.
+ *
+ * Chosen interval (1500ms) is a balance: short enough that the user
+ * doesn't sit on "Connecting…" for visibly long after the daemon
+ * actually attaches; long enough that we don't hammer the embedded
+ * backend on a slow / never-attaches branch. The attach watchdog's
+ * own budget is 10s (`outbound-attach.ts`), so worst-case 6-7 polls
+ * over the entire connecting window — cheap.
+ */
+export const CONNECTING_POLL_MS = 1500;
+
+export function connectingRefetchIntervalMs(
+  data: BackendInfoSnapshot | null,
+): number | false {
+  if (!data) return false;
+  // Only poll while we're explicitly waiting for the outbound WS
+  // to land. Any other state — including `claimed + attached_at`
+  // (already connected), `revoked` / `error` / `failed` (terminal),
+  // and `unclaimed` (pre-claim, nothing to attach) — stops the
+  // poll loop.
+  if (data.local_host_status !== 'claimed') return false;
+  if (data.local_host_ws_attached_at !== null) return false;
+  return CONNECTING_POLL_MS;
 }
 
 export function useHostsQuery(options?: { enabled?: boolean }) {

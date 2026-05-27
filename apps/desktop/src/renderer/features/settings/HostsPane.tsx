@@ -110,7 +110,12 @@ function describeMutationFailure(result: Extract<DesktopHostMutationResult, { ok
 export function HostsPane(): JSX.Element {
   const qc = useQueryClient();
   const hostsQuery = useHostsQuery();
-  const backendInfoQuery = useBackendInfoSnapshot();
+  // D3.d follow-up (Cindy `#task:636` review P1) — HostsPane is the
+  // ONLY surface that renders the connection pill, so it's the only
+  // caller that opts into narrow `claimed + attached_at===null`
+  // polling. The query auto-stops the moment attached_at lands or
+  // status moves to a terminal arm (see `connectingRefetchIntervalMs`).
+  const backendInfoQuery = useBackendInfoSnapshot({ pollWhileConnecting: true });
 
   const [pendingRotateId, setPendingRotateId] = useState<string | null>(null);
   const [pendingRevokeId, setPendingRevokeId] = useState<string | null>(null);
