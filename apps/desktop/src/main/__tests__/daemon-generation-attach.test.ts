@@ -19,6 +19,7 @@
  * real client's socket/reconnect machinery into a pure-logic test.
  */
 import { describe, expect, it } from 'vitest';
+import { HostClientError } from '@silverhand/host';
 import {
   waitForDaemonGeneration,
   type WaitForDaemonGenerationOptions,
@@ -201,6 +202,76 @@ describe('waitForDaemonGeneration', () => {
     if (!result.ok) {
       expect(result.reason).toBe('connect_failed');
       expect(result.error).toBe(boom);
+    }
+    expect(stub.handlerCount).toBe(0);
+    expect(timer.isArmed()).toBe(false);
+  });
+
+  /**
+   * Cindy `#task:627` re-review blocker: the hard `timeoutMs` deadline
+   * must cover the `client.connect()` step itself. HostClient's own
+   * reconnect loop can wedge such that the readyPromise never settles
+   * — pre-fix the helper armed its timer AFTER `await connect()`, so a
+   * stuck reconnect made the gate hang forever and main never got a
+   * typed skip warning.
+   *
+   * This test simulates the stuck reconnect by making `connectImpl`
+   * return a Promise that never resolves; firing the timer is the
+   * only path out, and it must produce a clean `timeout` + drained
+   * reconnect handler.
+   */
+  it('hits timeout even when client.connect() never resolves (stuck reconnect loop)', async () => {
+    const stub = new FakeHostClient();
+    stub.negotiated = null;
+    // Stuck reconnect loop semantics: HostClient.connect() returns the
+    // current readyPromise which never settles while reconnect keeps
+    // failing internally without rejecting.
+    stub.connectImpl = () => new Promise<void>(() => {
+      /* never resolves, never rejects */
+    });
+    const timer = makeFakeTimer();
+
+    const pending = waitForDaemonGeneration(asHostClient(stub), 'gen-any', {
+      setTimer: timer.setTimer,
+    });
+
+    // Drain microtasks: the helper must arm its timer and subscribe to
+    // onReconnect synchronously (before awaiting connect), so even
+    // though connect is permanently pending the helper is observable.
+    await flushMicrotasks();
+    expect(timer.isArmed()).toBe(true);
+    expect(stub.handlerCount).toBe(1);
+
+    // Only the timer can settle this; fire it.
+    timer.fire();
+    const result = await pending;
+
+    expect(result).toEqual({ ok: false, reason: 'timeout' });
+    // No residual subscription leaked even though connect() is still
+    // pending in the background.
+    expect(stub.handlerCount).toBe(0);
+  });
+
+  /**
+   * `client_closed` is the typed reason for the "client was already
+   * closed" path. HostClient throws `HostClientError('closed', ...)`
+   * from `connect()` after `close()` has been called; main treats
+   * this as a benign skip (the supervisor has decided to shut down).
+   */
+  it('maps HostClientError("closed") from connect() to client_closed', async () => {
+    const stub = new FakeHostClient();
+    const closedErr = new HostClientError('closed', 'client is closed');
+    stub.connectImpl = () => Promise.reject(closedErr);
+    const timer = makeFakeTimer();
+
+    const result = await waitForDaemonGeneration(asHostClient(stub), 'gen-any', {
+      setTimer: timer.setTimer,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe('client_closed');
+      expect(result.error).toBe(closedErr);
     }
     expect(stub.handlerCount).toBe(0);
     expect(timer.isArmed()).toBe(false);
