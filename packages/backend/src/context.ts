@@ -68,6 +68,22 @@ export interface BackendContext {
   readiness: {
     migrationsApplied: boolean;
     listenReady: boolean;
+    /**
+     * Standalone-only: flips `true` once the
+     * `OutboundRuntimeEventFanout` is constructed and registered as the
+     * `HostWsServer`'s `eventSink`. Strictly a **backend-side wiring
+     * indicator** — not a signal that any daemon host has connected
+     * over the outbound WebSocket. The daemon-side connection lifecycle
+     * is reported through `HostWsServerController.getAttachment(...)`
+     * (added in D3.a Commit 1) and is independent of this flag.
+     *
+     * Embedded mode intentionally never wires this fanout (runtime
+     * events flow over Unix-socket IPC) and therefore must NOT include
+     * this check in `/readyz`; including it would deadlock embedded
+     * readiness forever. `readinessResponse` switches on
+     * `deploymentMode` for that reason.
+     */
+    outboundEventFanoutInstalled: boolean;
   };
   serverConfig: ServerConfig;
   /** Auth/setup config resolved once during backend startup. */

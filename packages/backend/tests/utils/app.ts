@@ -282,6 +282,11 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     readiness: {
       migrationsApplied: true,
       listenReady: true,
+      // Tests default to "fanout already installed" so readiness
+      // probes pass for both embedded and standalone fixtures. Tests
+      // that exercise the standalone fail-loud gate flip this to
+      // `false` explicitly via direct ctx mutation.
+      outboundEventFanoutInstalled: true,
     },
     serverConfig,
     authConfig,

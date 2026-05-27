@@ -214,6 +214,22 @@ function readinessResponse(ctx: BackendContext): {
       migrations_applied: boolean;
       listen_ready: boolean;
       db_writable: boolean;
+      /**
+       * Standalone-only check: present only when
+       * `deployment_mode === 'standalone'`. Reports whether the
+       * backend's `OutboundRuntimeEventFanout` was constructed and
+       * registered as the `HostWsServer.eventSink`. This is a
+       * **backend-side wiring readiness** signal — it does NOT mean
+       * any daemon host has connected over the outbound websocket.
+       * Daemon-side attachment is reported through
+       * `HostWsServerController.getAttachment(hostId)` (D3.a Commit 1).
+       *
+       * Embedded mode never wires this fanout (runtime events flow
+       * over Unix-socket IPC) and the field is OMITTED from `checks`
+       * to avoid the false impression that embedded readiness depends
+       * on it.
+       */
+      outbound_event_fanout_installed?: boolean;
     };
     error?: string;
     ts: number;
@@ -221,12 +237,34 @@ function readinessResponse(ctx: BackendContext): {
   status: 200 | 503;
 } {
   const writable = probeDbWritable(ctx);
-  const checks = {
+  const baseChecks = {
     migrations_applied: ctx.readiness.migrationsApplied,
     listen_ready: ctx.readiness.listenReady,
     db_writable: writable.ok,
   };
-  const ok = checks.migrations_applied && checks.listen_ready && checks.db_writable;
+  // Standalone backends require the outbound runtime event fanout to be
+  // wired before they can correctly route daemon events to clients;
+  // missing it is a config bug, not a transient condition, so /readyz
+  // must fail-loud at 503 to keep orchestrators from rolling forward.
+  // Embedded backends intentionally never construct this fanout
+  // (runtime events flow over Unix-socket IPC), so the check is OMITTED
+  // for embedded mode rather than included-and-defaulted-true — keeping
+  // it out of the response makes the mode boundary explicit to anyone
+  // reading the JSON.
+  const checks: typeof baseChecks & { outbound_event_fanout_installed?: boolean } =
+    ctx.deploymentMode === 'standalone'
+      ? {
+          ...baseChecks,
+          outbound_event_fanout_installed:
+            ctx.readiness.outboundEventFanoutInstalled,
+        }
+      : baseChecks;
+  const ok =
+    checks.migrations_applied &&
+    checks.listen_ready &&
+    checks.db_writable &&
+    (ctx.deploymentMode !== 'standalone' ||
+      checks.outbound_event_fanout_installed === true);
   return {
     status: ok ? 200 : 503,
     body: {

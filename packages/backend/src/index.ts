@@ -233,6 +233,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     readiness: {
       migrationsApplied,
       listenReady: false,
+      outboundEventFanoutInstalled: false,
     },
     serverConfig: opts.serverConfig,
     authConfig,
@@ -462,6 +463,15 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     eventWs = installEventWebSocketServer(server as HttpServer, ctx);
     if (opts.mode === 'standalone') {
       const settings = new SettingsRepo(db);
+      // Order is intentional: construct the fanout, then — only after
+      // the constructor returns without throwing — flip the readiness
+      // bit, then install the WS server with the fanout as `eventSink`.
+      // A throw inside the constructor must leave
+      // `outboundEventFanoutInstalled === false` so `/readyz` keeps
+      // returning 503 and orchestrators do not promote a half-wired
+      // backend to "ready". This flag is a backend-side wiring
+      // indicator only; the daemon-side WS attachment lifecycle is
+      // reported separately through `HostWsServerController.getAttachment`.
       outboundFanout = new OutboundRuntimeEventFanout({
         db,
         events: ctx.events,
@@ -478,6 +488,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
         }),
         logDir: ctx.logDir,
       });
+      ctx.readiness.outboundEventFanoutInstalled = true;
     }
     hostWs = installHostWebSocketServer(server as HttpServer, ctx, {
       eventSink: outboundFanout ?? undefined,
