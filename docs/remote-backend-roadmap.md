@@ -777,47 +777,66 @@ Local host only.
 
 ---
 
-#### D4 — Remote-mode end-to-end (the actual "fill URL → works" gate)
+#### D4 — Remote backend e2e (deployment + runtime + multi-host)
 
-**In scope**:
+**Detail spec**: `docs/remote-backend-d4-design.md` — D4.0 design
+pass output. Lock semantics live there; this section is a pointer +
+short summary only.
 
-- E2E acceptance pipeline that exercises the full closed loop:
-  desktop in remote mode → signup/login → workspace + agent created →
-  user sends message → server queues intent → server-initiated spawn
-  frame to desktop-local daemon over WS → daemon spawns agent process
-  on user's machine → agent replies via existing CLI surface → server
-  routes reply back to UI.
-- Failure-mode tests: server restart mid-conversation, daemon restart
-  mid-conversation, WS drop mid-spawn, network partition with
-  reconnect.
+**Shape** (locked in D4.0):
 
-**Out of scope for D4**: anything other than acceptance + observability.
-D4 is the gate, not new features.
+- D4 ships as **three sequential gates**: G1 (standalone control
+  plane) → G2 (remote runtime e2e) → G3 (multi-host + ACL
+  negatives).
+- D4 ships **on top of the existing IPC shape** for embedded mode;
+  R4 (single outbound frame envelope across embedded / standalone) is
+  **deferred to D5**.
+- Stage D4 honours **R1 / R2 / R3** from the terminal-state guard;
+  R4 drift is captured by grep-able `TODO(D5,R4)` anchors per the
+  design contract §8.
 
-**PR breakdown**:
+**Task breakdown**: D4.0 (design contract, this doc + pointer) /
+D4.a (G1) / D4.b (G2) / D4.c (G3). No second-level slicing at design
+time.
 
-- **D4.a** E2E test harness (Docker server + Electron client +
-  scripted agent driver).
-- **D4.b** Failure-mode scenarios in the same harness.
-- **D4.c** Observability: WS connection metric, intent latency
-  histogram, reconnect counter, error code distribution. These live
-  in the existing logging surface (`~/.silverhand/logs/`); no new
-  metrics infra in V1.
+**Cross-cutting locks** (full text in design contract):
 
-**Acceptance criteria for D4**:
+- TLS policy: two accept states (`system_ca_verified` |
+  `pinned_spki_verified`), everything else typed fail; http
+  loopback-only; `*.local` / LAN IP requires `SILVERHAND_ALLOW_INSECURE_REMOTE=1`
+  dev flag (not V1 supported remote path).
+- First-user / signup: Option A (default signup on, operator manually
+  locks via `SILVERHAND_DISABLE_SIGNUP=1`); 5 hard lock-in conditions
+  (private-deployment supported model / lock-down runbook /
+  non-loopback + signup-enabled WARN / no admin role / G3 signup
+  toggle negatives).
+- R4 deferral: `TODO(D5,R4)` anchor format mandatory at drift
+  hotspots; PR description must declare "this IPC is local
+  supervisor/control, not server↔daemon formal semantics".
 
-- E2E happy path passes in CI against a Docker server.
-- Failure-mode matrix passes: server restart, daemon restart, WS
-  drop mid-spawn, network partition with reconnect.
-- Observability surface exposes the four signals above in a way that
-  an operator can debug "why is this remote install not running my
-  agent" without source access.
+See `docs/remote-backend-d4-design.md` for the full G1/G2/G3
+acceptance lists, the non-goals table, hard ordering, and the
+deployment runbook (drafted inside D4.a).
 
-**Detail spec**: `auth-and-host-model.md` §7 (server deployment);
-`remote-server-target-architecture.md` §4 phase 2; the WS frame
-schema + reconnect/backpressure contract lands as
-`docs/daemon-outbound-protocol.md` together with D2.a (to be
-written alongside D2 implementation).
+---
+
+#### D5 — Wire protocol envelope unification (placeholder)
+
+**Status**: framed in D4.0, design pass not yet started.
+
+**Goal**: close the R4 drift left open by D4. Daemon ↔ backend
+always speak the same outbound frame envelope; embedded deployment
+becomes a transport adapter (Unix socket / in-proc) carrying the same
+envelope, not a parallel RPC API. Handler code unchanged; only the
+transport / adapter layer changes.
+
+**Hard prerequisite**: D4 closed (all three gates green).
+
+**Out of scope here**: any deployment-shape change. D5 is a protocol
+refactor inside the V1 topology that D4 ships.
+
+D5 will get its own design contract before any code lands; this
+section exists so the roadmap reader sees the deferral target.
 
 ---
 
@@ -870,8 +889,15 @@ written alongside D2 implementation).
                │
                ▼
             ┌─────────────────────────────────────────────────────┐
-            │ D4 remote-mode end-to-end acceptance + observability │
-            │    (the actual "fill URL → works" gate)              │
+            │ D4 remote backend e2e (deployment + runtime + multi- │
+            │    host); ships as G1 → G2 → G3; honours R1/R2/R3;   │
+            │    R4 deferred to D5. See remote-backend-d4-design.md│
+            └──┬───────────────────────────────────────────────────┘
+               │ D4 closed (all three gates) before D5 starts
+               ▼
+            ┌─────────────────────────────────────────────────────┐
+            │ D5 wire protocol envelope unification (R4 paydown)   │
+            │    placeholder — own design contract TBD             │
             └──┬───────────────────────────────────────────────────┘
                │
                ▼
@@ -892,12 +918,14 @@ written alongside D2 implementation).
   cutover. C is cheap; rework after D is expensive.
 - **D1 must ship and soak before D2.0 starts**, **D2.0 must sign off
   before D2.a opens**, **D2 must ship and soak before D3**, **D3
-  before D4**: Stage D is the only "wide" stage in V1; mixing
+  before D4**, **D4 closed (all three gates) before D5 starts**:
+  Stage D is the only "wide" stage in V1; mixing
   control-plane split with orchestration boundary design with daemon
   outbound transport with desktop lifecycle changes in a single
   change window is exactly the anti-pattern that earlier rounds of
-  this roadmap nearly fell into. The five milestones (D1, D2.0, D2,
-  D3, D4) exist precisely to keep that surface separable.
+  this roadmap nearly fell into. The five-plus-one milestones (D1,
+  D2.0, D2, D3, D4, D5) exist precisely to keep that surface
+  separable.
 - **Follow-up phase must wait for D4**: distribution / new Host kinds
   / capability layers are *intentionally* held back so V1 ships a
   closed loop on `kind=local` before generalising.
@@ -1138,3 +1166,26 @@ this list — round 4 of this roadmap moved it into Stage D2.
     fail-fast contract in the same place, so a reader looking at
     D2.e sees both categories of failure handling and doesn't
     assume every control command flows through RDC.
+- 2026-05-28 — D4.0 design pass output (Alice). Thread
+  `#conv:z8B7l4UPhwUc0OOB` converged the D4 framing locks (P1: R4
+  deferred to D5 / P2: G1·G2·G3 gate ladder / P3: D4 and D5 split),
+  4-task decomposition (D4.0 / D4.a-G1 / D4.b-G2 / D4.c-G3, no
+  second-level slicing), TLS policy (`system_ca_verified` |
+  `pinned_spki_verified` accept matrix; loopback-only http;
+  `*.local` / LAN IP gated behind `SILVERHAND_ALLOW_INSECURE_REMOTE`
+  dev flag), first-user / signup (Option A — default signup on +
+  operator manual lock-down — with 5 hard Cindy-locked conditions:
+  private-deployment supported model, lock-down runbook, non-loopback
+  + signup-enabled WARN with structured `bind_address_scope` field,
+  no admin role, G3 signup-toggle negative coverage), R4 deferral
+  mechanics (mandatory `TODO(D5,R4)` anchor format with required
+  reference to design contract §8; PR description must declare local
+  supervisor/control transport scope), and doc structure (separate
+  `docs/remote-backend-d4-design.md` as the lock-semantics owner;
+  this roadmap holds a short summary + pointer only — Cindy nit).
+  Stage D §3 D4 section rewritten; new D5 placeholder section
+  inserted; dependency graph + hard-constraint ordering updated to
+  include the D4 → D5 gate. shiki product-confirmed Option A and
+  P1-P3 OK. Cindy preview-aligned on review angle. Full draft
+  pending Cindy review on
+  `feature/remote-backend-v1-stage-d4-design`.
