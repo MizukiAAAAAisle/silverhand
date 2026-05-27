@@ -101,6 +101,11 @@ export type DesktopHostMutationResult =
       local_host_id: BackendInfo['local_host_id'];
       local_host_status: BackendInfo['local_host_status'];
       local_host_ws_attached_at: BackendInfo['local_host_ws_attached_at'];
+      /** D3.c Commit 4 — see `preload/index.ts` for the rationale.
+       *  Built from `...snapshotLocalHostInfo()` so the typed surface
+       *  must include it; renderer post-mutation refresh keys off this
+       *  same field via `useBackendInfoSnapshot`. */
+      local_host_server_url: BackendInfo['local_host_server_url'];
     }
   | {
       ok: false;

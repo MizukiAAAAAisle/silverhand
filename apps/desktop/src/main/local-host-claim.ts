@@ -4,6 +4,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -63,7 +64,30 @@ export function readDaemonHostConfig(
   silverhandDir: string,
 ): DaemonHostConfig | null {
   const path = daemonHostConfigPath(silverhandDir);
-  if (!existsSync(path)) return null;
+  // Stat-first safe read (Cindy `#task:634` re-review P1). The daemon
+  // side already uses this pattern in `readHostConfig`
+  // (`packages/host/src/daemon/outbound-client.ts`) for the same
+  // reason: a non-regular file at this path (FIFO / directory /
+  // device) would otherwise either hang `readFileSync` indefinitely
+  // (renderer-triggered `backend:info` → main blocked) or surface as
+  // a misleading parse error. `statSync` follows symlinks, so symlink-
+  // to-file is fine and symlink-to-FIFO is correctly rejected.
+  //
+  // Desktop policy is fail-closed/null on every failure class — main
+  // doesn't need typed reasons here (the renderer Settings pane only
+  // needs "have a value or don't"); the daemon-side `readHostConfig`
+  // exposes a typed reason because the supervisor reload IPC must
+  // report different rejects to the caller.
+  let stat: ReturnType<typeof statSync>;
+  try {
+    stat = statSync(path);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    // EACCES / EIO / etc. — fail-closed; the renderer just sees null
+    // and falls back to the embedded backend URL hint.
+    return null;
+  }
+  if (!stat.isFile()) return null;
   try {
     const parsed = DaemonHostConfigSchema.safeParse(
       JSON.parse(readFileSync(path, 'utf8')) as unknown,

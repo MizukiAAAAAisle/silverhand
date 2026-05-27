@@ -25,6 +25,19 @@ export interface BackendInfo {
    * renderer must not derive status from it.
    */
   local_host_ws_attached_at: number | null;
+  /**
+   * D3.c Commit 4 — `server_url` currently persisted in
+   * `daemon-config.json` (the address the daemon dials to reach the
+   * backend). DISTINCT from `url` above, which is the URL of the
+   * desktop's embedded backend listener. In V1 they're typically the
+   * same loopback address, but Settings' "save server URL" path edits
+   * THIS value; the post-save invalidation refetches `BackendInfo`
+   * and the Settings pane re-seeds from this field, so the structural
+   * twin in `api.d.ts` MUST stay in sync.
+   *
+   * `null` when no daemon-config exists yet (pre-claim).
+   */
+  local_host_server_url: string | null;
 }
 
 export interface ActiveConversationInfo {
@@ -88,6 +101,12 @@ export type DesktopHostMutationResult =
       local_host_id: BackendInfo['local_host_id'];
       local_host_status: BackendInfo['local_host_status'];
       local_host_ws_attached_at: BackendInfo['local_host_ws_attached_at'];
+      /** D3.c Commit 4 — same field as `BackendInfo.local_host_server_url`.
+       *  Mutation success payloads are built via
+       *  `...snapshotLocalHostInfo()`, so this field is structurally
+       *  guaranteed to be present alongside the other `local_host_*`
+       *  fields and must be reflected in the typed surface. */
+      local_host_server_url: BackendInfo['local_host_server_url'];
     }
   | {
       ok: false;

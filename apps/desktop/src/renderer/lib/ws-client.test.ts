@@ -10,6 +10,12 @@ vi.mock('./api', () => ({
     local_host_id: 'host-local',
     local_host_status: 'claimed',
     local_host_ws_attached_at: null,
+    // D3.c Commit 4 — `BackendInfo` snapshot now carries the
+    // daemon-config `server_url` view. ws-client doesn't read this
+    // field, but the mock matches the typed surface so future typed
+    // mocks (and the structural twin between `preload/index.ts` and
+    // `api.d.ts`) stay in sync.
+    local_host_server_url: 'http://127.0.0.1:1234',
   }),
 }));
 

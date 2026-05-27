@@ -703,7 +703,10 @@ async function logoutUserSession(): Promise<{ ok: true }> {
  *  Deliberately omits `host_token` — main always strips it before
  *  the IPC reply so it never crosses the renderer boundary. The
  *  `local_host_*` fields mirror `BackendInfo` so the renderer can
- *  refresh in one round-trip. */
+ *  refresh in one round-trip. D3.c Commit 4 added
+ *  `local_host_server_url` to the `BackendInfo` surface, and these
+ *  mutation payloads are built via `...snapshotLocalHostInfo()`, so
+ *  the typed surface MUST include it (Cindy `#task:634` re-review P2). */
 type DesktopHostMutationResult =
   | {
       ok: true;
@@ -711,6 +714,7 @@ type DesktopHostMutationResult =
       local_host_id: string | null;
       local_host_status: LocalHostClaimStatus['status'];
       local_host_ws_attached_at: number | null;
+      local_host_server_url: string | null;
     }
   | {
       ok: false;

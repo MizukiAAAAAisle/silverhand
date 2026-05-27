@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { apiPaths } from '@silverhand/shared';
@@ -266,6 +273,31 @@ describe('desktop local host claim helpers', () => {
     expect(
       applyRevokeSideEffects({ silverhandDir: dir, hostId: 'whatever' }),
     ).toBe('unchanged');
+  });
+
+  // Cindy `#task:634` re-review P1 — `readDaemonHostConfig` is now
+  // called on every `backend:info` IPC because Settings exposes
+  // `local_host_server_url` to the renderer. A non-regular file at
+  // the daemon-config path (FIFO / directory / socket) would have
+  // either hung `readFileSync` indefinitely (renderer-triggered
+  // hang of the desktop main process) or surfaced as a confusing
+  // parse error. Stat-first / `isFile()` guard makes the desktop
+  // side fail-closed with null, same fail mode as a missing file.
+  //
+  // Portable proxy: substitute a directory at the config path. Same
+  // `!isFile()` branch as FIFO/socket without requiring `mkfifo` or
+  // platform-specific tooling.
+  it('readDaemonHostConfig returns null (not throw) when path is a directory', () => {
+    const dir = tempDir();
+    mkdirSync(daemonHostConfigPath(dir), { recursive: true });
+    expect(statSync(daemonHostConfigPath(dir)).isDirectory()).toBe(true);
+    expect(readDaemonHostConfig(dir)).toBeNull();
+  });
+
+  it('readDaemonHostConfig returns null for missing path', () => {
+    const dir = tempDir();
+    expect(existsSync(daemonHostConfigPath(dir))).toBe(false);
+    expect(readDaemonHostConfig(dir)).toBeNull();
   });
 
   function tempDir(): string {
