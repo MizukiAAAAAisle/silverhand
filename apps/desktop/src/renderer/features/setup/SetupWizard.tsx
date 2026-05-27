@@ -57,6 +57,18 @@ type SubmitState =
   | { status: 'idle' }
   | { status: 'submitting' }
   | { status: 'failed_test'; test: DesktopProbeServerInfoResult & { ok: false } }
+  | {
+      // D4.a Commit 3 review fixup (Cindy P1-A) — probe succeeded
+      // but main refused the URL because remote-mode boot is not
+      // yet wired (Commit 5 lifts this). UI MUST distinguish this
+      // from `failed_test` (the URL works — the build doesn't
+      // support it yet) AND from `failed_write` (the bytes were
+      // never written, no disk failure occurred).
+      status: 'failed_commit_guard';
+      reason: 'remote_backend_not_yet_supported';
+      message: string;
+      test: DesktopProbeServerInfoResult & { ok: true };
+    }
   | { status: 'failed_write'; reason: string; detail?: string }
   | {
       status: 'succeeded';
@@ -159,6 +171,15 @@ function SetupWizardBody({
     }
     if (result.phase === 'test') {
       setSubmit({ status: 'failed_test', test: result.test });
+      return;
+    }
+    if (result.phase === 'commit_guard') {
+      setSubmit({
+        status: 'failed_commit_guard',
+        reason: result.reason,
+        message: result.message,
+        test: result.test,
+      });
       return;
     }
     setSubmit({
@@ -300,6 +321,23 @@ function ProbeBannerView({ submit }: { submit: SubmitState }): JSX.Element | nul
     return (
       <BannerShell tone={banner.tone} title={banner.title}>
         <p className="text-[11px] text-text-muted">{banner.description}</p>
+      </BannerShell>
+    );
+  }
+  if (submit.status === 'failed_commit_guard') {
+    // D4.a Commit 3 review fixup (Cindy P1-A) — typed copy for the
+    // "probe succeeded but build cannot persist remote URL yet"
+    // arm. We deliberately render this as `warn` (not `error`):
+    // the user's URL is structurally valid AND the backend
+    // responded — what's missing is the local desktop build's
+    // remote-mode bootstrap path. Distinguishing tone from
+    // `failed_test` (error) keeps the message honest.
+    return (
+      <BannerShell
+        tone="warn"
+        title="Cannot save remote backend URL in this build yet."
+      >
+        <p className="text-[11px] text-text-muted">{submit.message}</p>
       </BannerShell>
     );
   }

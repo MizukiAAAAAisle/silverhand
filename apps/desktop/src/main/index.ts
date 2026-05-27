@@ -68,6 +68,8 @@ import {
 } from './server-connection-profile.js';
 import {
   decideBackendBootMode,
+  evaluateProfileCommitGuard,
+  ProfileUnusableError,
   RemoteModeNotYetWiredError,
 } from './backend-boot-mode.js';
 import {
@@ -1316,17 +1318,33 @@ async function bootstrap(): Promise<void> {
       // someone widening the Setup Wizard to accept remote URLs
       // without landing the Commit 5 bootstrap branch) fails loud
       // instead of silently falling back to embedded. Today the
-      // Settings save pipeline returns `remote_backend_not_yet_supported`
-      // for non-loopback URLs, so this path is structurally
-      // unreachable in production builds — the throw is a
-      // forward-compat regression gate.
+      // Settings save pipeline + Setup Wizard save guard refuse to
+      // persist remote profiles (Commit 3 fixup: `evaluateProfileCommitGuard`),
+      // so this path is structurally unreachable in production
+      // builds — the throw is a forward-compat regression gate.
       throw new RemoteModeNotYetWiredError(bootDecision);
+    }
+    if (bootDecision.mode === 'profile_invalid') {
+      logger.error(
+        {
+          profileUrl: bootDecision.profileUrl,
+          classifyMessage: bootDecision.classifyMessage,
+        },
+        'D4.a Commit 3 boot gate: profile present but classifier refused it; throwing (no silent embedded fallback)',
+      );
+      // Throw rather than silently boot embedded (Cindy D4.a Commit
+      // 3 review P1-B). A present-but-unusable profile is data the
+      // user committed deliberately — silently falling back would
+      // muddle "configured backend is broken; please fix" with "no
+      // profile yet; using embedded". Repair path is in the error
+      // message: clear profile via Settings, or set the env flag
+      // that made the URL acceptable, or set `SILVERHAND_FORCE_EMBEDDED=1`.
+      throw new ProfileUnusableError(bootDecision);
     }
     logger.info(
       {
         reason: bootDecision.reason,
         profileUrl: bootDecision.profileUrl,
-        classifyMessage: bootDecision.classifyMessage,
       },
       'D4.a Commit 3 boot decision: embedded',
     );
@@ -1893,6 +1911,26 @@ export type ProfileSaveWithTestResult =
       test: ProbeServerInfoResult & { ok: false };
     }
   | {
+      // D4.a Commit 3 review fixup (Cindy P1-A) — probe succeeded
+      // but the commit guard refused the URL because remote-mode
+      // bootstrap is not yet wired. Persisting would land a profile
+      // that crashes the next launch on the `RemoteModeNotYetWiredError`
+      // trip wire. The renderer surfaces this as a typed "this build
+      // cannot connect to a remote backend yet" banner; the bytes
+      // never reach disk.
+      ok: false;
+      phase: 'commit_guard';
+      reason: 'remote_backend_not_yet_supported';
+      message: string;
+      /**
+       * The probe result that the guard rejected. Echoed back so
+       * the renderer can show "we successfully reached <host>
+       * (system_ca_verified) but cannot save the URL in this build"
+       * rather than implying the probe failed.
+       */
+      test: ProbeServerInfoResult & { ok: true };
+    }
+  | {
       ok: false;
       phase: 'write';
       reason: 'storage_unavailable' | 'write_failed';
@@ -1912,6 +1950,28 @@ async function handleProfileSaveWithTest(
       'D4.a profile:saveWithTest test phase failed',
     );
     return { ok: false, phase: 'test', test };
+  }
+  // Phase A.5 — Commit 3 review fixup (Cindy P1-A): refuse to
+  // persist remote URLs until Commit 5 lands remote-mode boot.
+  // Without this gate, the Setup Wizard's "Test & save" button
+  // happily persists a remote profile that crashes the NEXT launch
+  // on `RemoteModeNotYetWiredError`. The guard lives in
+  // `backend-boot-mode.ts` so the same module that decides "can
+  // bootstrap consume this URL?" also decides "can the writer
+  // persist this URL?" — the two invariants must stay in sync.
+  const guard = evaluateProfileCommitGuard(test.kind);
+  if (!guard.allow) {
+    logger?.warn(
+      { kind: test.kind, serverUrl, reason: guard.reason },
+      'D4.a profile:saveWithTest commit-guard refused (remote profile blocked until Commit 5)',
+    );
+    return {
+      ok: false,
+      phase: 'commit_guard',
+      reason: guard.reason,
+      message: guard.message,
+      test,
+    };
   }
   // Phase B — commit profile. We deliberately re-classify inside the
   // storage primitive only to the extent the schema does — the URL

@@ -71,43 +71,51 @@ import {
  * ("forced by env" vs "no profile yet" vs "profile URL is loopback")
  * without re-deriving from the inputs.
  *
- * Why `'profile_classify_failed'` exists: D4.a Commit 2's writer
- * already runs the classifier before persisting, so the on-disk
- * profile **should** always classify. But we re-run the classifier
- * at boot anyway (defense in depth: the env flag for
- * `allowInsecureRemote` might have toggled between write and read, a
- * future schema migration might have widened the persisted shape,
- * etc.). If the profile cannot classify at boot time, we treat it
- * as "no profile" for routing purposes (boot embedded) and surface
- * the underlying message so the operator can see what happened.
- * We deliberately do NOT delete or rewrite the profile here —
- * automatic cleanup of persisted config that the user can see in
- * the file system is a footgun (Cindy A.4 review precedent).
+ * **Three terminal arms** (Cindy D4.a Commit 3 review P1-B):
+ *
+ *   - `mode: 'embedded'` — bootstrap proceeds with the existing
+ *     embedded path. ONLY reached for forced_by_env (dev escape),
+ *     no_profile (first run), or profile_is_loopback (user's
+ *     committed URL is a loopback literal and we treat it as
+ *     "embedded backend is correct"). NEVER reached as a silent
+ *     fallback from a present-but-unacceptable profile.
+ *
+ *   - `mode: 'remote'` — bootstrap MUST skip embedded and route
+ *     through the remote transport. Commit 3 trip-wires this via
+ *     {@link RemoteModeNotYetWiredError}; Commit 5 lands the actual
+ *     branch.
+ *
+ *   - `mode: 'profile_invalid'` — a profile is present on disk but
+ *     the boot-time classifier refused it (e.g. obfuscated loopback
+ *     persisted by an older binary, http remote URL committed under
+ *     a dev flag that's now off, non-origin URL committed by a
+ *     pre-Commit-2 binary). Bootstrap MUST refuse to boot embedded
+ *     on this branch — silently falling back would (a) violate the
+ *     user's explicit configuration intent (a present profile is
+ *     data, not a hint) and (b) muddle "configured remote backend
+ *     is broken; please fix" with "no profile yet; using embedded".
+ *     The dev escape is `SILVERHAND_FORCE_EMBEDDED=1`, which the
+ *     decision honors at the top of the matrix and which surfaces
+ *     as `embedded/forced_by_env`. There is no implicit escape.
+ *
+ * Why no auto-rewrite of an unusable profile: automatic cleanup of
+ * persisted config that the user can see in the file system is a
+ * footgun (A.4 secret-handling review precedent). The repair path
+ * is "operator explicitly clears the profile via Settings or sets
+ * `SILVERHAND_FORCE_EMBEDDED=1`", not "main process silently
+ * deletes user data on launch".
  */
 export type BackendBootMode =
   | {
       mode: 'embedded';
-      reason:
-        | 'no_profile'
-        | 'forced_by_env'
-        | 'profile_is_loopback'
-        | 'profile_classify_failed';
+      reason: 'no_profile' | 'forced_by_env' | 'profile_is_loopback';
       /**
-       * Present on `'profile_classify_failed'`: the classifier's
-       * raw message so the bootstrap log line carries enough context
-       * to debug without round-tripping through the file. Empty
-       * string on the other reasons.
-       */
-      classifyMessage: string;
-      /**
-       * Present on `'profile_is_loopback'` and
-       * `'profile_classify_failed'`: the raw URL string from the
-       * profile (for log lines). Empty string on the other reasons.
-       * Note: even when the classifier admitted the URL as loopback,
-       * the profile's URL is NOT (yet — Commit 5 may change this)
-       * what the embedded backend binds to; embedded boots its
-       * default loopback bind. Commit 5 will widen this to "embedded
-       * binds to the profile's URL if the URL is loopback".
+       * Present on `'profile_is_loopback'`: the raw URL string from
+       * the profile (for log lines). Empty string on the other
+       * embedded reasons. Note: even when the classifier admitted
+       * the URL as loopback, the profile's URL is NOT (yet —
+       * Commit 5 may change this) what the embedded backend binds
+       * to; embedded boots its default loopback bind.
        */
       profileUrl: string;
     }
@@ -126,6 +134,26 @@ export type BackendBootMode =
        * referencing the runbook on this branch.
        */
       insecure: boolean;
+    }
+  | {
+      /**
+       * A profile is present but the boot-time classifier refused
+       * it. Bootstrap throws {@link ProfileUnusableError}; never
+       * silently falls through to embedded (Cindy D4.a Commit 3
+       * review P1-B). Repair path: user clears the profile in
+       * Settings, or sets `SILVERHAND_FORCE_EMBEDDED=1` to override.
+       */
+      mode: 'profile_invalid';
+      /** Raw URL string from the profile (for log lines + UI). */
+      profileUrl: string;
+      /**
+       * The classifier's raw message so the error / log carries
+       * enough context to debug without round-tripping through the
+       * file. Typically points at the specific gate that fired
+       * ("non-loopback http requires SILVERHAND_ALLOW_INSECURE_REMOTE=1",
+       * "disguised loopback form", etc.).
+       */
+      classifyMessage: string;
     };
 
 /**
@@ -181,12 +209,19 @@ export interface DecideBackendBootModeInput {
  *      "user has a saved loopback profile" from "fresh install".
  *   4. Profile URL classifies as `remote` → `remote/serverUrl`.
  *      Bootstrap MUST skip embedded and route through the remote
- *      transport (Commit 5 wires this; Commit 3 trip-wires it).
- *   5. Profile URL fails classification → `embedded/profile_classify_failed`.
- *      Defense in depth: writer should have rejected this at commit
- *      time, but boot-time env (e.g. `allowInsecureRemote` toggled
- *      off) might have changed acceptance. Boot embedded and surface
- *      the classifier message for diagnosis.
+ *      transport (Commit 5 wires this; Commit 3 trip-wires it via
+ *      {@link RemoteModeNotYetWiredError}).
+ *   5. Profile URL fails classification → `profile_invalid`.
+ *      Real-world drift cases this covers: writer ran under
+ *      `allowInsecureRemote: true` but that env flag is now off, an
+ *      older binary persisted an obfuscated loopback or non-origin
+ *      URL, a future schema migration widened the persisted shape.
+ *      Bootstrap MUST throw {@link ProfileUnusableError} on this
+ *      arm — silently falling back to embedded would violate the
+ *      "profile present is data, not a hint" boundary (Cindy
+ *      D4.a Commit 3 review P1-B). The dev escape is
+ *      `SILVERHAND_FORCE_EMBEDDED=1`, which is honored at the top
+ *      of the matrix; this arm has no implicit fallback.
  *
  * The function is pure, throw-free, and deterministic over its
  * inputs — bootstrap can unit-test every arm without standing up
@@ -199,7 +234,6 @@ export function decideBackendBootMode(
     return {
       mode: 'embedded',
       reason: 'forced_by_env',
-      classifyMessage: '',
       profileUrl: input.profileView?.server_url ?? '',
     };
   }
@@ -207,7 +241,6 @@ export function decideBackendBootMode(
     return {
       mode: 'embedded',
       reason: 'no_profile',
-      classifyMessage: '',
       profileUrl: '',
     };
   }
@@ -216,17 +249,15 @@ export function decideBackendBootMode(
   });
   if (!classification.ok) {
     return {
-      mode: 'embedded',
-      reason: 'profile_classify_failed',
-      classifyMessage: classification.message,
+      mode: 'profile_invalid',
       profileUrl: input.profileView.server_url,
+      classifyMessage: classification.message,
     };
   }
   if (classification.kind === 'loopback') {
     return {
       mode: 'embedded',
       reason: 'profile_is_loopback',
-      classifyMessage: '',
       profileUrl: input.profileView.server_url,
     };
   }
@@ -269,4 +300,114 @@ export class RemoteModeNotYetWiredError extends Error {
     this.serverUrl = decision.serverUrl;
     this.insecure = decision.insecure;
   }
+}
+
+/**
+ * Thrown by bootstrap when {@link decideBackendBootMode} returns
+ * `mode: 'profile_invalid'` — a profile is present but the boot-
+ * time classifier refused it. This error surfaces the underlying
+ * classifier message so the operator can fix the profile (clear it
+ * in Settings, or set the env flag that made the URL acceptable at
+ * write time, e.g. `SILVERHAND_ALLOW_INSECURE_REMOTE=1`).
+ *
+ * Rationale (Cindy D4.a Commit 3 review P1-B): silently falling
+ * back to embedded when the user has a present-but-unusable profile
+ * would (a) violate the user's explicit configuration intent and
+ * (b) hide a profile-pipeline regression behind a working embedded
+ * UI. Throwing is correct; the dev escape is
+ * `SILVERHAND_FORCE_EMBEDDED=1`, NOT an implicit fallback.
+ */
+export class ProfileUnusableError extends Error {
+  readonly profileUrl: string;
+  readonly classifyMessage: string;
+  constructor(
+    decision: Extract<BackendBootMode, { mode: 'profile_invalid' }>,
+  ) {
+    super(
+      `A server connection profile is present but the boot-time URL ` +
+        `classifier refused it (D4.a Commit 3 boot gate). ` +
+        `Profile URL: '${decision.profileUrl}'. ` +
+        `Classifier message: ${decision.classifyMessage} ` +
+        `Repair: clear the profile via Settings → "Connect to backend…" → ` +
+        `Clear saved profile, or set the env flag that made the URL ` +
+        `acceptable at write time (e.g. SILVERHAND_ALLOW_INSECURE_REMOTE=1 ` +
+        `for http remote URLs), or set SILVERHAND_FORCE_EMBEDDED=1 to ` +
+        `boot the embedded backend and ignore the profile.`,
+    );
+    this.name = 'ProfileUnusableError';
+    this.profileUrl = decision.profileUrl;
+    this.classifyMessage = decision.classifyMessage;
+  }
+}
+
+/**
+ * D4.a Commit 3 review fixup (Cindy P1-A) — guard that
+ * `handleProfileSaveWithTest` consults BEFORE persisting a probed
+ * URL.
+ *
+ * The hazard: the test-then-commit pipeline accepts any URL the
+ * classifier admits (loopback, system_ca_verified, insecure_dev_remote).
+ * For Commit 3, persisting a remote URL is unsafe — the next launch
+ * would land on the {@link RemoteModeNotYetWiredError} trip wire,
+ * turning a "click Save in Setup Wizard" action into a crash on
+ * next launch. We MUST refuse to commit remote profiles until
+ * Commit 5 lands the actual remote-mode bootstrap branch.
+ *
+ * Why a separate pure guard (not inlined in `handleProfileSaveWithTest`):
+ *   - The decision is exactly the same shape as the boot-mode
+ *     decision — "is the desktop ready to consume this URL?". Keeping
+ *     both pure-decision sites in this file lets us unit-test the
+ *     full commit→boot lifecycle invariant in one place: anything
+ *     the guard permits to write MUST be a boot-time `embedded` or
+ *     `remote` arm; nothing the guard rejects can land on disk.
+ *   - Pure helpers are easy to extend in Commit 5 (delete the
+ *     remote-arm refusal; commit will then succeed and boot will
+ *     route through `RemoteBackendHandle`).
+ *
+ * Discriminated outcome:
+ *   - `{ allow: true }` — caller may proceed to write.
+ *   - `{ allow: false, reason: 'remote_backend_not_yet_supported',
+ *        message }` — caller MUST NOT write; surface `reason` to the
+ *      renderer so it renders the typed "this build cannot connect
+ *      to a remote backend yet" banner.
+ *
+ * Inputs: the discriminator of {@link ProbeServerInfoResult} on the
+ * success path. We accept the kind directly (not the whole
+ * result) so this module does not need to import `ProbeServerInfoResult`
+ * — the types are in different bytecode units and this keeps
+ * `backend-boot-mode.ts` free of `server-connection-test.ts` deps.
+ */
+export type ProbeSuccessKind =
+  | 'loopback_ok'
+  | 'system_ca_verified'
+  | 'insecure_dev_remote';
+
+export type ProfileCommitGuardOutcome =
+  | { allow: true }
+  | {
+      allow: false;
+      reason: 'remote_backend_not_yet_supported';
+      message: string;
+    };
+
+export function evaluateProfileCommitGuard(
+  probeKind: ProbeSuccessKind,
+): ProfileCommitGuardOutcome {
+  if (probeKind === 'loopback_ok') {
+    return { allow: true };
+  }
+  // `system_ca_verified` and `insecure_dev_remote` are both remote
+  // arms — the URL is non-loopback and will activate remote-mode
+  // boot on next launch. Commit 3 has no remote bootstrap path
+  // implemented, so persisting here would create a "save → restart
+  // → crash" footgun. Refuse with a typed reason the renderer
+  // already knows from D4.a Commit 1 / `outbound-reload.ts`.
+  return {
+    allow: false,
+    reason: 'remote_backend_not_yet_supported',
+    message:
+      probeKind === 'insecure_dev_remote'
+        ? `This build cannot connect to a remote backend yet. The URL was admitted only because SILVERHAND_ALLOW_INSECURE_REMOTE=1 is set; remote-mode bootstrap lands in D4.a Commit 5. Use a loopback URL (127.0.0.1 / localhost / [::1]) for now.`
+        : `This build cannot connect to a remote backend yet. Remote-mode bootstrap lands in D4.a Commit 5. Use a loopback URL (127.0.0.1 / localhost / [::1]) for now.`,
+  };
 }

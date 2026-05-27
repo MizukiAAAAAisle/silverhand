@@ -262,6 +262,16 @@ export type DesktopProfileSaveWithTestResult =
       test: DesktopProbeServerInfoResult & { ok: false };
     }
   | {
+      // D4.a Commit 3 review fixup (Cindy P1-A) — probe succeeded
+      // but the main-side commit guard refused the URL because
+      // remote-mode bootstrap is not yet wired (Commit 5 lifts this).
+      ok: false;
+      phase: 'commit_guard';
+      reason: 'remote_backend_not_yet_supported';
+      message: string;
+      test: DesktopProbeServerInfoResult & { ok: true };
+    }
+  | {
       ok: false;
       phase: 'write';
       reason: 'storage_unavailable' | 'write_failed';
