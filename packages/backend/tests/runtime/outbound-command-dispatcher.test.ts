@@ -102,6 +102,11 @@ class FakeTransport implements HostWsServerController {
     return 'conn-1';
   }
 
+  getAttachment(): null {
+    // Dispatcher tests don't depend on boot-readiness wiring.
+    return null;
+  }
+
   sendCommand<K extends OutboundServerCommandKind>(
     hostId: string,
     kind: K,

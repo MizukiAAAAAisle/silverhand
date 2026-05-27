@@ -611,6 +611,11 @@ class FakeTransport implements HostWsServerController {
     return this.connectionId;
   }
 
+  getAttachment(): null {
+    // Fanout-coordinator tests don't depend on boot-readiness wiring.
+    return null;
+  }
+
   sendCommand<K extends OutboundServerCommandKind>(
     hostId: string,
     kind: K,

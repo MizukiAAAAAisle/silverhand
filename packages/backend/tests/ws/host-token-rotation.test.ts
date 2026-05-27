@@ -160,6 +160,11 @@ class FakeHostWsController implements HostWsServerController {
     return 'conn-1';
   }
 
+  getAttachment(): null {
+    // Token-rotation tests don't depend on the attachment registry.
+    return null;
+  }
+
   async sendCommand<K extends OutboundServerCommandKind>(
     hostId: string,
     kind: K,

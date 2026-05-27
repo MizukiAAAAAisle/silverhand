@@ -649,6 +649,12 @@ class FakeHostWsController implements HostWsServerController {
     return 'conn-1';
   }
 
+  getAttachment(): null {
+    // Route tests don't exercise the attachment registry; D3.a's
+    // boot-readiness invariant is covered in host-ws-server tests.
+    return null;
+  }
+
   async sendCommand<K extends OutboundServerCommandKind>(
     hostId: string,
     kind: K,

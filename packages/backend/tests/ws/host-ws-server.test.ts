@@ -196,8 +196,75 @@ describe('host outbound WebSocket server', () => {
     ]);
   });
 
-  it('warns once when embedded mode receives outbound daemon events without a fanout sink', async () => {
+  it('logs info-not-warn once when embedded mode receives outbound daemon events without a fanout sink', async () => {
     t = buildTestApp();
+    const warnings: Array<{ meta: Record<string, unknown>; msg: string }> = [];
+    const infos: Array<{ meta: Record<string, unknown>; msg: string }> = [];
+    t.ctx.logger = {
+      info: (meta, msg) =>
+        infos.push({
+          meta: meta as Record<string, unknown>,
+          msg: String(msg),
+        }),
+      warn: (meta, msg) =>
+        warnings.push({
+          meta: meta as Record<string, unknown>,
+          msg: String(msg),
+        }),
+      error() {},
+    };
+    server = await openServer(t, { pingIntervalMs: 0 });
+    const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: host.id,
+    });
+    const ws = await connectHost(server.url, issued.hostToken);
+    sockets.push(ws);
+
+    ws.send(JSON.stringify({
+      direction: 'daemon_to_server',
+      type: 'event',
+      kind: 'ready',
+      protocol_version: OUTBOUND_PROTOCOL_VERSION,
+      daemon_version: '0.0.0-test',
+      daemon_id: 'local',
+      instance_id: 'instance-1',
+      host_descriptor: { name: 'local', kind: 'local' },
+      capabilities: [...KNOWN_CAPABILITIES_V1],
+      daemon_pid: 123,
+      started_at: 1700000000000,
+    }));
+    ws.send(JSON.stringify({
+      direction: 'daemon_to_server',
+      type: 'event',
+      kind: 'runtime_output_paused',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+    }));
+
+    // Filter to the dropped-event log message specifically because
+    // `info` also captures the `host-ws: connected` registration line.
+    const droppedLogs = () =>
+      infos.filter(line =>
+        line.msg.startsWith('host-ws: outbound event ignored'),
+      );
+    await waitFor(() => droppedLogs().length === 1);
+    expect(droppedLogs()[0]).toMatchObject({
+      meta: {
+        hostId: host.id,
+        eventKind: 'ready',
+        deploymentMode: 'embedded',
+      },
+      msg: 'host-ws: outbound event ignored (embedded: runtime events flow via IPC; WS reserved for control)',
+    });
+    expect(droppedLogs()).toHaveLength(1);
+    // Embedded mode must NOT warn — that semantics is reserved for
+    // standalone backends where a missing sink is a real config bug.
+    expect(warnings).toEqual([]);
+  });
+
+  it('warns once when standalone mode receives outbound daemon events without a fanout sink', async () => {
+    t = buildTestApp({ deploymentMode: 'standalone' });
     const warnings: Array<{ meta: Record<string, unknown>; msg: string }> = [];
     t.ctx.logger = {
       info() {},
@@ -242,10 +309,113 @@ describe('host outbound WebSocket server', () => {
       meta: {
         hostId: host.id,
         eventKind: 'ready',
+        deploymentMode: 'standalone',
       },
-      msg: 'host-ws: outbound daemon event received without fanout sink; embedded backend may be misconfigured',
+      msg: 'host-ws: outbound daemon event received without fanout sink; backend is misconfigured',
     });
     expect(warnings).toHaveLength(1);
+  });
+
+  // ── Attachment registry (D3.a Commit 1) ──────────────────────────
+  // The controller exposes `getAttachment(hostId)` so D3.a phase-2
+  // boot can wait for daemon outbound WS attached without relying on
+  // `eventSink.onEvent('ready', ...)`. Embedded backend has no event
+  // sink wired, so this registry must update from the connection
+  // lifecycle alone.
+
+  it('exposes a non-null attachment snapshot for connected hosts (no eventSink wired)', async () => {
+    t = buildTestApp();
+    server = await openServer(t);
+    const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: host.id,
+    });
+
+    const t0 = Date.now();
+    const ws = await connectHost(server.url, issued.hostToken);
+    sockets.push(ws);
+    // Allow upgrade tick to register the connection in the controller.
+    await waitFor(() => server!.controller.getAttachment(host.id) !== null);
+    const t1 = Date.now();
+
+    const attachment = server.controller.getAttachment(host.id);
+    expect(attachment).not.toBeNull();
+    expect(attachment!.hostId).toBe(host.id);
+    expect(attachment!.connectionId).toBe(
+      server.controller.connectionIdForHost(host.id),
+    );
+    expect(attachment!.attachedAt).toBeGreaterThanOrEqual(t0);
+    expect(attachment!.attachedAt).toBeLessThanOrEqual(t1);
+  });
+
+  it('clears the attachment snapshot when the connection closes', async () => {
+    t = buildTestApp();
+    server = await openServer(t);
+    const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: host.id,
+    });
+    const ws = await connectHost(server.url, issued.hostToken);
+    sockets.push(ws);
+    await waitFor(() => server!.controller.getAttachment(host.id) !== null);
+
+    const closed = waitForClose(ws);
+    ws.close(1000, 'test_done');
+    await closed;
+
+    await waitFor(() => server!.controller.getAttachment(host.id) === null);
+    expect(server.controller.getAttachment(host.id)).toBeNull();
+  });
+
+  it('replacement-safe: stale close from the replaced connection does not wipe the fresh attachment', async () => {
+    // Regression contract: when conn B replaces conn A for the same
+    // host, A's deferred `close` handler must compare its captured
+    // `connectionId` against the registry and skip the delete when
+    // the slot has moved on to B. Without this, the replaced
+    // connection's cleanup could erase the live attachment record
+    // moments after it was created.
+    t = buildTestApp();
+    server = await openServer(t);
+    const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: host.id,
+    });
+
+    const first = await connectHost(server.url, issued.hostToken);
+    sockets.push(first);
+    await waitFor(() => server!.controller.getAttachment(host.id) !== null);
+    const firstAttachment = server.controller.getAttachment(host.id)!;
+
+    const firstClosed = waitForClose(first);
+    const second = await connectHost(server.url, issued.hostToken);
+    sockets.push(second);
+    // The replacement-safe assertion: by the time the second connection
+    // is open the controller's snapshot must already point at the new
+    // connection id (not null, not the old id).
+    await waitFor(() => {
+      const cur = server!.controller.getAttachment(host.id);
+      return cur !== null && cur.connectionId !== firstAttachment.connectionId;
+    });
+    const secondAttachment = server.controller.getAttachment(host.id)!;
+    expect(secondAttachment.connectionId).not.toBe(firstAttachment.connectionId);
+
+    // Wait for the displaced first connection to finish closing so its
+    // deferred `close` handler runs; if the handler isn't connectionId-
+    // guarded, this is exactly when it would erase B's entry.
+    await firstClosed;
+    // Give the close listener a couple of ticks to actually execute.
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    const after = server.controller.getAttachment(host.id);
+    expect(after).not.toBeNull();
+    expect(after!.connectionId).toBe(secondAttachment.connectionId);
+    expect(after!.attachedAt).toBe(secondAttachment.attachedAt);
+  });
+
+  it('returns null from getAttachment for hosts that never connected', async () => {
+    t = buildTestApp();
+    server = await openServer(t);
+    expect(server.controller.getAttachment('never-connected-host')).toBeNull();
   });
 
   it('notifies the fanout sink of a replaced connection disconnect once', async () => {
