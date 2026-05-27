@@ -951,6 +951,25 @@ export function writeHostConfigAtomic(path: string, config: DaemonHostConfig): v
   }
 }
 
+/**
+ * Single source of truth for the daemon-host-config fingerprint used
+ * by both the outbound client's internal config-poll loop AND by the
+ * `OutboundSupervisor`'s reload path (Cindy `#task:631` D3.c Commit 2
+ * review item 3: "config fingerprint 单源共用"). Two callers MUST
+ * compute "same config?" the same way or reload's `unchanged` arm
+ * drifts away from what the client treats as no-op-worthy.
+ *
+ * Bytes covered: `server_url`, `host_id`, `host_token`. Adding new
+ * fields to `DaemonHostConfigSchema` that should also gate the
+ * reload's `unchanged` decision means updating this fingerprint —
+ * the typecheck on `DaemonHostConfig` won't catch the omission, but
+ * a deliberate test in `outbound-supervisor.test.ts` pins the byte
+ * set so a new field forces a fixture decision.
+ */
+export function daemonHostConfigFingerprint(config: DaemonHostConfig): string {
+  return `${config.server_url}\0${config.host_id}\0${config.host_token}`;
+}
+
 export function defaultDaemonHostConfigPath(silverhandDir: string): string {
   return join(silverhandDir, DAEMON_HOST_CONFIG_FILENAME);
 }
@@ -1010,7 +1029,10 @@ function reconnectDelayMs(
 }
 
 function configKey(config: DaemonHostConfig): string {
-  return `${config.server_url}\0${config.host_id}\0${config.host_token}`;
+  // Single-source: delegate to the exported fingerprint helper so
+  // the OutboundSupervisor's reload path (D3.c Commit 2) computes
+  // "same config?" the same way the internal poll loop does.
+  return daemonHostConfigFingerprint(config);
 }
 
 function parseJsonFrame(data: RawData): unknown | null {

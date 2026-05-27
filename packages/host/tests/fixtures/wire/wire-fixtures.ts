@@ -294,6 +294,17 @@ const REQUESTS: WireFixture[] = [
     }),
     kind: { kind: 'request', intent: 'host_outbound_detach' },
   },
+  {
+    name: 'request/host_outbound_reload',
+    description:
+      'Reload the SAME daemon-config.json the daemon is currently attached to after Settings atomically rewrote the file (D3.c Commit 2). Empty params; daemon re-reads its current configPath.',
+    frame: enc({
+      id: 'req-outbound-reload',
+      intent: 'host_outbound_reload',
+      params: {},
+    }),
+    kind: { kind: 'request', intent: 'host_outbound_reload' },
+  },
 ];
 
 // ── Successful response fixtures ───────────────────────────────────
@@ -784,6 +795,92 @@ const RESPONSES_SUCCESS: WireFixture[] = [
       },
     }),
     kind: { kind: 'response_success', intent: 'host_outbound_detach' },
+  },
+  {
+    name: 'response/host_outbound_reload-reloaded',
+    description:
+      'Reload swapped to fresh config bytes (D3.c Commit 2): old client stopped, new client started, action=reloaded. WS handshake not yet complete — caller verifies via backend attachment freshness.',
+    frame: enc({
+      id: 'req-outbound-reload',
+      result: {
+        reloaded: true,
+        action: 'reloaded',
+        config_path: '/var/silverhand/daemon-config.json',
+        host_id: 'host-loopback-1',
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'host_outbound_reload' },
+  },
+  {
+    name: 'response/host_outbound_reload-unchanged',
+    description:
+      'Reload no-op: new config bytes fingerprint identically to in-memory ones (D3.c Commit 2). Old client kept; no WS bounce.',
+    frame: enc({
+      id: 'req-outbound-reload',
+      result: {
+        reloaded: true,
+        action: 'unchanged',
+        config_path: '/var/silverhand/daemon-config.json',
+        host_id: 'host-loopback-1',
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'host_outbound_reload' },
+  },
+  {
+    name: 'response/host_outbound_reload-failed-not_attached',
+    description:
+      'Hard reject (D3.c Commit 2 lock B): no current outbound client — caller must use host_outbound_attach to bootstrap. Reload MUST NOT silently fall through to attach.',
+    frame: enc({
+      id: 'req-outbound-reload',
+      result: {
+        reloaded: false,
+        reason: 'not_attached',
+        message: 'no current outbound client; use host_outbound_attach to bootstrap',
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'host_outbound_reload' },
+  },
+  {
+    name: 'response/host_outbound_reload-failed-config_unreadable',
+    description:
+      'Reload refusal: configured path now ENOENT / unreadable (e.g. atomic-rename clobbered mid-write). Old client untouched.',
+    frame: enc({
+      id: 'req-outbound-reload',
+      result: {
+        reloaded: false,
+        reason: 'config_unreadable',
+        message: 'missing',
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'host_outbound_reload' },
+  },
+  {
+    name: 'response/host_outbound_reload-failed-parse_failed',
+    description:
+      'Reload refusal: config JSON / shape invalid (partial write, hand-edit). Old client untouched.',
+    frame: enc({
+      id: 'req-outbound-reload',
+      result: {
+        reloaded: false,
+        reason: 'parse_failed',
+        message: 'invalid_json',
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'host_outbound_reload' },
+  },
+  {
+    name: 'response/host_outbound_reload-failed-invalid_server_url',
+    description:
+      'Reload refusal: new server_url failed loopback policy gate (e.g. user hand-edited to a non-loopback host bypassing Settings UI). Old client untouched.',
+    frame: enc({
+      id: 'req-outbound-reload',
+      result: {
+        reloaded: false,
+        reason: 'invalid_server_url',
+        message: 'tls_required_for_non_loopback_host_ws',
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'host_outbound_reload' },
   },
 ];
 

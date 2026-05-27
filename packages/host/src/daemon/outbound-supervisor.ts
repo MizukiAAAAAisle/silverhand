@@ -62,9 +62,12 @@ import type {
   HostOutboundAttachParams,
   HostOutboundAttachResult,
   HostOutboundDetachResult,
+  HostOutboundReloadFailureReason,
+  HostOutboundReloadResult,
 } from '../protocol.js';
 import {
   OutboundDaemonClient,
+  daemonHostConfigFingerprint,
   readHostConfig,
   hostConnectWebSocketUrl,
   type OutboundCommandDispatcher,
@@ -98,7 +101,15 @@ export interface OutboundClientLike {
 }
 
 export class OutboundSupervisor {
-  private current: { configPath: string; client: OutboundClientLike } | null = null;
+  private current: {
+    configPath: string;
+    /** Fingerprint of the config bytes most recently loaded for this
+     *  client. Computed via `daemonHostConfigFingerprint` (same helper
+     *  the outbound client uses internally) so reload's `unchanged`
+     *  arm can NOT drift away from what the client treats as no-op. */
+    fingerprint: string;
+    client: OutboundClientLike;
+  } | null = null;
   private stopped = false;
 
   constructor(private readonly deps: OutboundSupervisorDeps) {}
@@ -175,6 +186,8 @@ export class OutboundSupervisor {
 
     // ── At this point all validation has passed. Decide the action.
 
+    const fingerprint = daemonHostConfigFingerprint(probe.config);
+
     if (this.current) {
       if (this.current.configPath === configPath) {
         // Same path + live client → no-op. We intentionally do NOT
@@ -188,7 +201,7 @@ export class OutboundSupervisor {
       this.current.client.stop('config_path_changed');
       this.current = null;
       const next = this.spawnClient(configPath);
-      this.current = { configPath, client: next };
+      this.current = { configPath, fingerprint, client: next };
       next.start();
       this.deps.logger.info(
         {
@@ -205,7 +218,7 @@ export class OutboundSupervisor {
     // and recovery (e.g. supervisor restart after daemon process
     // restart). Tests for "same path, no client" exercise this arm.
     const fresh = this.spawnClient(configPath);
-    this.current = { configPath, client: fresh };
+    this.current = { configPath, fingerprint, client: fresh };
     fresh.start();
     this.deps.logger.info(
       {
@@ -216,6 +229,145 @@ export class OutboundSupervisor {
       'daemon outbound started from host config',
     );
     return success(configPath, 'started');
+  }
+
+  /**
+   * D3.c Commit 2 — re-read the SAME `daemon-config.json` the daemon
+   * is currently attached to and swap to the new bytes if and only if
+   * everything validates. Used by the desktop main process from its
+   * Settings save path AFTER it has atomically rewritten the config
+   * file (write-temp + fsync + rename → reload IPC).
+   *
+   * Strict invariants:
+   *   - **Hard-rejects `not_attached`** when there is no current
+   *     client. MUST NOT silently fall through to "attach" — the
+   *     caller (desktop main) explicitly chose `reload` vs `attach`
+   *     and silent fallback hides logout-races and stale-state bugs.
+   *   - **Validate-first-then-swap**: read + parse + URL-classify
+   *     fully BEFORE stopping the old client. Any failure leaves the
+   *     existing client running untouched (failure arm returned to
+   *     caller; old client keeps streaming). A bad Settings save must
+   *     not take down a working outbound.
+   *   - **`unchanged` keeps the old client** when the new bytes
+   *     fingerprint identically to the in-memory ones. No WS bounce
+   *     for a no-op write (e.g. user opened Settings, made no edit,
+   *     hit Save).
+   *   - **Returns business state, not transport errors**: typed
+   *     `reason` arms (`not_attached` / `config_unreadable` /
+   *     `parse_failed` / `invalid_server_url`) live in the result
+   *     discriminator. `ResponseError` codes are reserved for
+   *     transport / dispatcher failures.
+   *
+   * Note that `action: 'reloaded'` only means the daemon started a
+   * new client with the new bytes — WS handshake / backend attachment
+   * freshness is a separate signal the caller verifies via backend's
+   * `HostWsServerController.getAttachment(hostId)` (Commit 3 concern).
+   * The reload intent's job is to hand the new bytes to the daemon;
+   * waiting for connected is not.
+   */
+  reload(): HostOutboundReloadResult {
+    if (this.stopped) {
+      // Supervisor is terminal (daemon shutting down). Reject reload
+      // for symmetry with attach's stopped-path; classify as
+      // `not_attached` because the caller's recovery is the same —
+      // there is no active client to refresh.
+      return reloadFailure('not_attached', 'supervisor stopped');
+    }
+
+    const current = this.current;
+    if (!current) {
+      // Hard reject: caller must explicitly use `host_outbound_attach`
+      // when no client is attached. Reload MUST NOT silently bootstrap.
+      return reloadFailure(
+        'not_attached',
+        'no current outbound client; use host_outbound_attach to bootstrap',
+      );
+    }
+
+    // Re-read the CURRENT path. Reload cannot swap to a different
+    // config file — that's by design (`host_outbound_attach`'s job).
+    // We deliberately do NOT re-stat for `path_not_a_file` etc. here:
+    // those were validated at attach time, and re-validating every
+    // single field would let the file-not-found path race with an
+    // attach that happened-and-completed in another in-flight call.
+    // The `readHostConfig` call below handles ENOENT / EACCES / bad
+    // bytes uniformly via its ok/reason result.
+    const probe = readHostConfig(current.configPath);
+    if (!probe.ok) {
+      // Map readHostConfig's reasons to our two failure arms. `missing`
+      // / IO errors are `config_unreadable`; JSON / shape errors are
+      // `parse_failed`. The reasons string from readHostConfig is
+      // preserved in `message` for diagnostics.
+      const reason: HostOutboundReloadFailureReason =
+        probe.reason === 'missing' ? 'config_unreadable' : 'parse_failed';
+      return reloadFailure(reason, probe.reason);
+    }
+
+    // Validate the new server_url before deciding swap-or-keep. This
+    // catches the case where the user (or a stale field) wrote a
+    // non-loopback URL straight into the file, bypassing the Settings
+    // UI validation. Delegates to `classifyServerUrl` via
+    // `hostConnectWebSocketUrl` so the V1 loopback-only lock applies
+    // here just as it does at attach time.
+    try {
+      hostConnectWebSocketUrl(probe.config.server_url);
+    } catch (err) {
+      return reloadFailure('invalid_server_url', (err as Error).message);
+    }
+
+    // Fingerprint decision. Computed via the shared helper so
+    // "unchanged" here is byte-for-byte the same predicate the
+    // outbound client's internal poll uses for its own no-op gate.
+    const nextFingerprint = daemonHostConfigFingerprint(probe.config);
+    if (nextFingerprint === current.fingerprint) {
+      // No-op write — leave the active client running. Caller can
+      // skip the attachment-freshness poll because nothing reconnected.
+      this.deps.logger.info(
+        {
+          kind: 'outbound_supervisor',
+          action: 'reload_unchanged',
+          config_path: redactPath(current.configPath),
+          host_id: probe.config.host_id,
+        },
+        'daemon outbound reload no-op (config bytes unchanged)',
+      );
+      return {
+        reloaded: true,
+        action: 'unchanged',
+        config_path: current.configPath,
+        host_id: probe.config.host_id,
+      };
+    }
+
+    // ── Validation passed AND config differs → validate-first-then-
+    //    swap. Stop the old client THEN start the new one. Order is
+    //    strict: if any of the validation steps above had failed we
+    //    would have returned without touching the old client.
+
+    current.client.stop('config_reload');
+    this.current = null;
+    const next = this.spawnClient(current.configPath);
+    this.current = {
+      configPath: current.configPath,
+      fingerprint: nextFingerprint,
+      client: next,
+    };
+    next.start();
+    this.deps.logger.info(
+      {
+        kind: 'outbound_supervisor',
+        action: 'reload_swapped',
+        config_path: redactPath(current.configPath),
+        host_id: probe.config.host_id,
+      },
+      'daemon outbound reloaded with fresh config bytes',
+    );
+    return {
+      reloaded: true,
+      action: 'reloaded',
+      config_path: current.configPath,
+      host_id: probe.config.host_id,
+    };
   }
 
   /**
@@ -326,6 +478,13 @@ function failure(
   message: string,
 ): HostOutboundAttachResult {
   return { attached: false, reason, message };
+}
+
+function reloadFailure(
+  reason: HostOutboundReloadFailureReason,
+  message: string,
+): HostOutboundReloadResult {
+  return { reloaded: false, reason, message };
 }
 
 function redactPath(path: string): string {

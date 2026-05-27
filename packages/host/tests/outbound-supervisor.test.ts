@@ -490,3 +490,216 @@ describe('OutboundSupervisor — detach() (D3.b Commit 3)', () => {
     expect(f.spawned[0]!.stopCalls).toEqual([{ reason: 'daemon_quit' }]);
   });
 });
+
+describe('OutboundSupervisor — reload() (D3.c Commit 2)', () => {
+  let f: SupervisorFixture | null = null;
+  afterEach(() => {
+    f?.cleanup();
+    f = null;
+  });
+
+  // ── Hard-reject not_attached (Cindy review point 1) ──────────────
+
+  it('reload BEFORE attach returns reason=not_attached and does NOT spawn any client', () => {
+    // Load-bearing: reload MUST NOT silently fall through to attach.
+    // If a user clicks Save in Settings before login somehow lands,
+    // reload tells the caller explicitly so they can route to attach
+    // (or surface the bug); it does NOT auto-bootstrap.
+    f = makeFixture();
+    const res = f.supervisor.reload();
+    expect(res.reloaded).toBe(false);
+    if (res.reloaded) throw new Error('unreachable');
+    expect(res.reason).toBe('not_attached');
+    expect(f.spawned).toHaveLength(0);
+  });
+
+  it('reload AFTER stop() returns reason=not_attached (supervisor terminal — caller must NOT reuse it)', () => {
+    f = makeFixture();
+    const path = f.writeValidConfig();
+    f.supervisor.attach({ config_path: path });
+    f.supervisor.stop('daemon_quit');
+    const res = f.supervisor.reload();
+    expect(res.reloaded).toBe(false);
+    if (res.reloaded) throw new Error('unreachable');
+    expect(res.reason).toBe('not_attached');
+    // Only the stop call from stop() — reload didn't touch the client.
+    expect(f.spawned[0]!.stopCalls).toEqual([{ reason: 'daemon_quit' }]);
+  });
+
+  // ── Validate-first-then-swap: failures leave old client untouched
+  //    (Cindy review point 2: 失败不动旧 client) ───────────────────────
+
+  it('config_unreadable (file deleted between attach and reload) → leaves old client running and returns reason=config_unreadable', () => {
+    f = makeFixture();
+    const path = f.writeValidConfig();
+    f.supervisor.attach({ config_path: path });
+    // Simulate the file vanishing after attach (the daemon's
+    // currently-attached configPath now points at nothing).
+    rmSync(path);
+    const res = f.supervisor.reload();
+    expect(res.reloaded).toBe(false);
+    if (res.reloaded) throw new Error('unreachable');
+    expect(res.reason).toBe('config_unreadable');
+    // CRITICAL: the old client was NOT stopped — a bad reload must
+    // not take down a working outbound. spawned.length stays 1.
+    expect(f.spawned).toHaveLength(1);
+    expect(f.spawned[0]!.stopCalls).toEqual([]);
+  });
+
+  it('parse_failed (config now contains invalid JSON / wrong shape) → leaves old client running and returns reason=parse_failed', () => {
+    f = makeFixture();
+    const path = f.writeValidConfig();
+    f.supervisor.attach({ config_path: path });
+    // Overwrite the SAME path with garbage. Reload re-reads current
+    // path; cannot swap to a different path by design.
+    writeFileSync(path, '{not even json', 'utf8');
+    const res = f.supervisor.reload();
+    expect(res.reloaded).toBe(false);
+    if (res.reloaded) throw new Error('unreachable');
+    expect(res.reason).toBe('parse_failed');
+    expect(f.spawned).toHaveLength(1);
+    expect(f.spawned[0]!.stopCalls).toEqual([]);
+  });
+
+  it('invalid_server_url (non-loopback host snuck into the file) → leaves old client running and returns reason=invalid_server_url', () => {
+    // Defense-in-depth: Settings UI rejects non-loopback (Commit 4),
+    // main re-validates (Commit 3), AND daemon checks here. Tests
+    // pin the daemon-side gate — a hand-edited config carrying a
+    // non-loopback host gets rejected without taking down the old
+    // client, even if the upper layers somehow allow it through.
+    f = makeFixture();
+    const path = f.writeValidConfig();
+    f.supervisor.attach({ config_path: path });
+    writeFileSync(
+      path,
+      JSON.stringify({
+        server_url: 'http://example.com:8765',
+        host_id: 'host-1',
+        host_token: 'token-2',
+      }),
+      'utf8',
+    );
+    const res = f.supervisor.reload();
+    expect(res.reloaded).toBe(false);
+    if (res.reloaded) throw new Error('unreachable');
+    expect(res.reason).toBe('invalid_server_url');
+    expect(f.spawned).toHaveLength(1);
+    expect(f.spawned[0]!.stopCalls).toEqual([]);
+  });
+
+  // ── Success arms: unchanged / reloaded ───────────────────────────
+
+  it('reload with byte-identical config returns action=unchanged and does NOT swap the client (no WS bounce on no-op Save)', () => {
+    f = makeFixture();
+    const path = f.writeValidConfig();
+    f.supervisor.attach({ config_path: path });
+    // Don't touch the file — same bytes on re-read.
+    const res = f.supervisor.reload();
+    expect(res.reloaded).toBe(true);
+    if (!res.reloaded) throw new Error('unreachable');
+    expect(res.action).toBe('unchanged');
+    expect(res.config_path).toBe(path);
+    expect(res.host_id).toBe('host-1');
+    // Critically: the old client is still the only spawned client and
+    // has NOT been stopped. A no-op Save must not bounce the WS.
+    expect(f.spawned).toHaveLength(1);
+    expect(f.spawned[0]!.stopCalls).toEqual([]);
+  });
+
+  it('reload with new bytes swaps the client (validate-first-then-swap order: stop old then start new) and returns action=reloaded', () => {
+    f = makeFixture();
+    const path = f.writeValidConfig();
+    f.supervisor.attach({ config_path: path });
+    // Rewrite with a different host_token so fingerprint differs.
+    writeFileSync(
+      path,
+      JSON.stringify({
+        server_url: 'http://127.0.0.1:8765',
+        host_id: 'host-1',
+        host_token: 'token-2-rotated',
+      }),
+      'utf8',
+    );
+    const res = f.supervisor.reload();
+    expect(res.reloaded).toBe(true);
+    if (!res.reloaded) throw new Error('unreachable');
+    expect(res.action).toBe('reloaded');
+    expect(res.config_path).toBe(path);
+    expect(res.host_id).toBe('host-1');
+    // Two clients spawned in order; the first was stopped with a
+    // grep-friendly reason BEFORE the second was started.
+    expect(f.spawned).toHaveLength(2);
+    expect(f.spawned[0]!.stopCalls).toEqual([{ reason: 'config_reload' }]);
+    expect(f.spawned[1]!.startCalls).toBe(1);
+  });
+
+  // ── Fingerprint behavior pinning (Cindy review point 3:
+  //    config fingerprint 单源共用) ──────────────────────────────────
+
+  it('changes to server_url alone are enough to flip unchanged → reloaded (fingerprint covers the URL byte)', () => {
+    f = makeFixture();
+    const path = f.writeValidConfig();
+    f.supervisor.attach({ config_path: path });
+    writeFileSync(
+      path,
+      JSON.stringify({
+        server_url: 'http://127.0.0.1:8766',
+        host_id: 'host-1',
+        host_token: 'token-1',
+      }),
+      'utf8',
+    );
+    const res = f.supervisor.reload();
+    expect(res.reloaded).toBe(true);
+    if (!res.reloaded) throw new Error('unreachable');
+    expect(res.action).toBe('reloaded');
+  });
+
+  it('changes to host_id alone flip unchanged → reloaded (fingerprint covers the host_id byte)', () => {
+    f = makeFixture();
+    const path = f.writeValidConfig();
+    f.supervisor.attach({ config_path: path });
+    writeFileSync(
+      path,
+      JSON.stringify({
+        server_url: 'http://127.0.0.1:8765',
+        host_id: 'host-2',
+        host_token: 'token-1',
+      }),
+      'utf8',
+    );
+    const res = f.supervisor.reload();
+    expect(res.reloaded).toBe(true);
+    if (!res.reloaded) throw new Error('unreachable');
+    expect(res.action).toBe('reloaded');
+    expect(res.host_id).toBe('host-2');
+  });
+
+  it('reload after a successful reload re-establishes the new fingerprint baseline (second identical reload returns unchanged)', () => {
+    // Pins that reload updates the supervisor's in-memory fingerprint
+    // so a subsequent unchanged reload reports unchanged (not reloaded
+    // again). Failure mode this guards against: forgetting to update
+    // the fingerprint after swap → every reload becomes a WS bounce.
+    f = makeFixture();
+    const path = f.writeValidConfig();
+    f.supervisor.attach({ config_path: path });
+    writeFileSync(
+      path,
+      JSON.stringify({
+        server_url: 'http://127.0.0.1:8765',
+        host_id: 'host-1',
+        host_token: 'token-rotated',
+      }),
+      'utf8',
+    );
+    expect(f.supervisor.reload().reloaded).toBe(true);
+    // Don't touch the file — same bytes on the SECOND reload.
+    const second = f.supervisor.reload();
+    expect(second.reloaded).toBe(true);
+    if (!second.reloaded) throw new Error('unreachable');
+    expect(second.action).toBe('unchanged');
+    // Only two clients ever spawned — the second reload did NOT
+    // create a third.
+    expect(f.spawned).toHaveLength(2);
+  });
+});

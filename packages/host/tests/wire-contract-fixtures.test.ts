@@ -3,6 +3,8 @@ import { ParsedEventKindSchema } from '@silverhand/shared';
 import {
   AnyFrameSchema,
   encodeFrame,
+  HostOutboundReloadFailureReasonSchema,
+  HostOutboundReloadResultSchema,
   intentSchemas,
   MAX_FRAME_BYTES,
   ResponseErrorSchema,
@@ -458,6 +460,107 @@ describe('wire contract — fixture catalogue invariants', () => {
     expect(
       missing,
       `runtime_wake reasons missing fixture: ${missing.join(', ')}`,
+    ).toEqual([]);
+  });
+
+  // ── host_outbound_reload arm coverage (D3.c Commit 2) ────────────
+  //
+  // Mirrors the runtime_wake reason-derived test: arms / reasons are
+  // pulled directly from the protocol schema so a new arm or failure
+  // reason added in protocol.ts immediately fails this test until a
+  // fixture lands. Cindy's Commit 2 review explicitly named
+  // `reloaded / unchanged / not_attached` as the load-bearing trio;
+  // these tests pin all four reasons too so the validate-first-then-
+  // swap failure surface stays observable on the wire.
+
+  it('host_outbound_reload.result covers every `reloaded` arm (true/false)', () => {
+    const arms = HostOutboundReloadResultSchema.options.map((o) =>
+      String(literalValue(o.shape.reloaded)),
+    );
+    const missing = arms.filter(
+      (arm) =>
+        !wireFixtures.some((f) => {
+          if (
+            f.kind.kind !== 'response_success' ||
+            f.kind.intent !== 'host_outbound_reload'
+          )
+            return false;
+          const parsed = JSON.parse(f.frame) as {
+            result?: { reloaded?: boolean };
+          };
+          return String(parsed.result?.reloaded) === arm;
+        }),
+    );
+    expect(
+      missing,
+      `host_outbound_reload reloaded arms missing fixture: ${missing.join(
+        ', ',
+      )}`,
+    ).toEqual([]);
+  });
+
+  it('host_outbound_reload.result success arm covers every `action` slot (reloaded/unchanged)', () => {
+    // The success arm's `action` is `z.enum(['reloaded', 'unchanged'])`.
+    // New action value here => mandatory new fixture.
+    const successArm = HostOutboundReloadResultSchema.options.find(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (o: any) => literalValue(o.shape.reloaded) === true,
+    );
+    const actions: readonly string[] = (successArm as { shape: { action: { options: readonly string[] } } }).shape.action.options;
+    const missing = actions.filter(
+      (action) =>
+        !wireFixtures.some((f) => {
+          if (
+            f.kind.kind !== 'response_success' ||
+            f.kind.intent !== 'host_outbound_reload'
+          )
+            return false;
+          const parsed = JSON.parse(f.frame) as {
+            result?: { reloaded?: boolean; action?: string };
+          };
+          return (
+            parsed.result?.reloaded === true &&
+            parsed.result?.action === action
+          );
+        }),
+    );
+    expect(
+      missing,
+      `host_outbound_reload success actions missing fixture: ${missing.join(
+        ', ',
+      )}`,
+    ).toEqual([]);
+  });
+
+  it('host_outbound_reload.result failure arm covers every `reason` slot (incl. not_attached)', () => {
+    // Derived from HostOutboundReloadFailureReasonSchema — Cindy's
+    // Commit 2 review point 4 ("wire fixtures 覆盖 reloaded /
+    // unchanged / not_attached"). Including the validation-failure
+    // reasons (config_unreadable / parse_failed / invalid_server_url)
+    // makes the validate-first-then-swap surface observable on the
+    // wire too.
+    const reasons = HostOutboundReloadFailureReasonSchema.options;
+    const missing = reasons.filter(
+      (reason) =>
+        !wireFixtures.some((f) => {
+          if (
+            f.kind.kind !== 'response_success' ||
+            f.kind.intent !== 'host_outbound_reload'
+          )
+            return false;
+          const parsed = JSON.parse(f.frame) as {
+            result?: { reloaded?: boolean; reason?: string };
+          };
+          return (
+            parsed.result?.reloaded === false && parsed.result?.reason === reason
+          );
+        }),
+    );
+    expect(
+      missing,
+      `host_outbound_reload failure reasons missing fixture: ${missing.join(
+        ', ',
+      )}`,
     ).toEqual([]);
   });
 });

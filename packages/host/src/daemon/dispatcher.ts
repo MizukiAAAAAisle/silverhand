@@ -32,6 +32,7 @@ import {
   type HostOutboundAttachParams,
   type HostOutboundAttachResult,
   type HostOutboundDetachResult,
+  type HostOutboundReloadResult,
   type IntentName,
   type ResponseError,
   type ResponseFrame,
@@ -88,6 +89,18 @@ export interface DispatcherOptions {
   hostOutboundDetachHandler?: () =>
     | HostOutboundDetachResult
     | Promise<HostOutboundDetachResult>;
+  /**
+   * Stage D3.c Commit 2 — handler for the `host_outbound_reload`
+   * intent. Production wiring: `OutboundSupervisor.reload`. Same
+   * slot pattern as attach/detach so the dispatcher stays free of
+   * supervisor concrete dependencies. Reload is a daemon-control
+   * intent (not a runtime_* intent), so it has its own slot.
+   * `undefined` means the intent is not wired and the dispatcher
+   * throws (translated to `internal_error` by the catch arm).
+   */
+  hostOutboundReloadHandler?: () =>
+    | HostOutboundReloadResult
+    | Promise<HostOutboundReloadResult>;
 }
 
 export class IntentDispatcher {
@@ -103,6 +116,9 @@ export class IntentDispatcher {
     | undefined;
   private readonly hostOutboundDetachHandler:
     | (() => HostOutboundDetachResult | Promise<HostOutboundDetachResult>)
+    | undefined;
+  private readonly hostOutboundReloadHandler:
+    | (() => HostOutboundReloadResult | Promise<HostOutboundReloadResult>)
     | undefined;
   private intentCount = 0;
   private shuttingDown = false;
@@ -123,6 +139,7 @@ export class IntentDispatcher {
     this.supervisor = opts.supervisor;
     this.hostOutboundAttachHandler = opts.hostOutboundAttachHandler;
     this.hostOutboundDetachHandler = opts.hostOutboundDetachHandler;
+    this.hostOutboundReloadHandler = opts.hostOutboundReloadHandler;
   }
 
   /** Signal that subsequent intents should be rejected with
@@ -382,6 +399,12 @@ export class IntentDispatcher {
         // (validated to `{}` by the schema before reaching here).
         // Same protocol-only-surface caveat as attach.
         return this.requireHostOutboundDetachHandler()();
+      case 'host_outbound_reload':
+        // Reload is the third daemon-control intent (D3.c Commit 2).
+        // No params — daemon re-reads its currently-attached
+        // configPath. Hard-rejects `not_attached` via a typed result
+        // arm, not via `ResponseError` (business state vs transport).
+        return this.requireHostOutboundReloadHandler()();
     }
   }
 
@@ -416,5 +439,16 @@ export class IntentDispatcher {
       );
     }
     return this.hostOutboundDetachHandler;
+  }
+
+  private requireHostOutboundReloadHandler(): () =>
+    | HostOutboundReloadResult
+    | Promise<HostOutboundReloadResult> {
+    if (!this.hostOutboundReloadHandler) {
+      throw new Error(
+        'host_outbound_reload intent reached dispatcher with no handler wired',
+      );
+    }
+    return this.hostOutboundReloadHandler;
   }
 }

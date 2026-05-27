@@ -421,6 +421,37 @@ export class HostClient {
   }
 
   /**
+   * Stage D3.c Commit 2 — tell the daemon to re-read the SAME
+   * `daemon-config.json` it's currently attached to and swap to the
+   * new bytes if validation passes. Desktop main calls this from its
+   * Settings save path AFTER atomically rewriting the config file
+   * (write-temp + fsync + rename → reload IPC).
+   *
+   * Strict semantics (see `HostOutboundReloadResultSchema` for the
+   * full discriminator):
+   *   - **Hard-rejects `not_attached`** when no current client exists;
+   *     caller must explicitly call `hostOutboundAttach` to bootstrap.
+   *     Reload MUST NOT silently fall through to attach.
+   *   - **Validate-first-then-swap**: I/O / parse / URL failures leave
+   *     the existing client untouched and surface via `{ reloaded:
+   *     false, reason }`. The old client keeps streaming.
+   *   - **`action: 'reloaded'`** means the daemon started a new client
+   *     with the new bytes; the WS handshake has NOT yet completed.
+   *     Caller verifies "actually connected" via backend
+   *     `HostWsServerController.getAttachment(hostId)` separately.
+   *   - **`action: 'unchanged'`** means the bytes fingerprint
+   *     identically; old client kept untouched (no WS bounce).
+   *
+   * Errors are returned as `{ reloaded: false, reason }` discriminated
+   * union members, NOT thrown. Real IPC transport failures (socket
+   * closed, daemon dead, dispatcher shutting down) still throw via
+   * the underlying `call()`.
+   */
+  hostOutboundReload(): Promise<IntentResult<'host_outbound_reload'>> {
+    return this.call('host_outbound_reload', {});
+  }
+
+  /**
    * Subscribe to **unsolicited events** the daemon emits — runtime_*
    * lifecycle (state, output, exit, ready_for_drain,
    * startup_delivery_consumed/_failed, output_dropped/_paused/_resumed)

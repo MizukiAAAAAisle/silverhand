@@ -900,6 +900,125 @@ export type HostOutboundDetachResult = z.infer<
 >;
 
 
+// ── host_outbound_reload (Stage D3.c Commit 2) ─────────────────────
+//
+// Tell a running daemon "re-read the SAME daemon-config.json you're
+// already attached to, validate it, and swap to the new bytes if and
+// only if everything checks out". The desktop main process sends this
+// from its Settings save path AFTER it has atomically rewritten
+// `daemon-config.json` (write-temp + fsync + rename → reload IPC).
+//
+// Why a separate intent rather than re-using `host_outbound_attach`:
+//   - **Hard-rejects `not_attached`**: if no client is currently
+//     attached, reload must FAIL — it MUST NOT silently fall through
+//     to "attach". The caller (desktop main) needs to decide
+//     explicitly whether the right verb here is `attach`
+//     (post-login bootstrap) or `reload` (Settings save / token
+//     rotation). Silent fallback hides logout-races and stale-state
+//     bugs.
+//   - **Validate-first-then-swap**: any I/O / parse / URL validation
+//     failure leaves the existing client running untouched. A bad
+//     Settings save must not take down a working outbound — the user
+//     gets a typed error in Settings, and the daemon keeps streaming.
+//   - **Result success ≠ connected**: `action: 'reloaded'` means the
+//     daemon started a NEW client with the new config. WS open /
+//     attachment-fresh is a separate signal the desktop verifies via
+//     backend `HostWsServerController.getAttachment(hostId)` after
+//     the reload returns (Commit 3 concern; this intent's job is to
+//     hand the new bytes to the daemon, not to wait for socket
+//     handshake).
+//
+// Contract:
+//   - No params: reload re-reads the daemon's CURRENT config_path.
+//     Path changes belong to `host_outbound_attach` — by design,
+//     reload cannot swap to a different config file.
+//   - Success arms:
+//       - `action: 'reloaded'` — config bytes differ from the
+//         in-memory fingerprint; new client started after old client
+//         was stopped (validate-first-then-swap order strict).
+//       - `action: 'unchanged'` — config bytes are byte-identical
+//         to the in-memory fingerprint (rotate / no-op). Old client
+//         keeps running uninterrupted; no WS bounce.
+//   - Failure arms (typed business state, NOT ResponseError):
+//       - `not_attached`         — no current client; caller must use
+//                                  `host_outbound_attach` instead.
+//       - `config_unreadable`    — disk read failed (ENOENT after
+//                                  attach, EACCES, FIFO substitution,
+//                                  etc.). Old client kept.
+//       - `parse_failed`         — config JSON / shape invalid. Old
+//                                  client kept.
+//       - `invalid_server_url`   — `hostConnectWebSocketUrl` threw on
+//                                  the NEW server_url (e.g. user edited
+//                                  to a non-loopback host that bypassed
+//                                  Settings UI validation). Old client
+//                                  kept.
+//
+// Result shape mirrors `host_outbound_attach`: discriminated on a
+// boolean flag so callers branch on `result.reloaded` without
+// inspecting nested fields. Failure arm includes `message` for log /
+// diagnostic continuity; success arm includes `host_id` so the
+// caller (desktop main, Commit 3) can hand it straight to the
+// backend attachment-freshness check without re-reading the config.
+
+export const HostOutboundReloadParamsSchema = z.object({}).strict();
+export type HostOutboundReloadParams = z.infer<
+  typeof HostOutboundReloadParamsSchema
+>;
+
+export const HostOutboundReloadFailureReasonSchema = z.enum([
+  'not_attached',
+  'config_unreadable',
+  'parse_failed',
+  'invalid_server_url',
+]);
+export type HostOutboundReloadFailureReason = z.infer<
+  typeof HostOutboundReloadFailureReasonSchema
+>;
+
+export const HostOutboundReloadResultSchema = z.discriminatedUnion('reloaded', [
+  z
+    .object({
+      reloaded: z.literal(true),
+      /**
+       * `reloaded`  — config bytes differed; old client stopped, new
+       *               client started. WS handshake not yet complete.
+       * `unchanged` — config bytes identical to in-memory fingerprint;
+       *               old client kept untouched. Caller can skip the
+       *               attachment-freshness poll Commit 3 runs for the
+       *               `reloaded` case (nothing reconnected).
+       */
+      action: z.enum(['reloaded', 'unchanged']),
+      /**
+       * The config_path the reload was performed against — echoed back
+       * for log correlation. Always the daemon's currently-attached
+       * path; reload cannot change paths.
+       */
+      config_path: z.string().min(1),
+      /**
+       * `host_id` from the (re)loaded config. The caller uses it as
+       * the key for backend `HostWsServerController.getAttachment`
+       * polling after a `reloaded` response. For `unchanged` it's the
+       * same host_id that was already attached — caller can use it to
+       * sanity-check no concurrent attach swapped under it.
+       */
+      host_id: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      reloaded: z.literal(false),
+      reason: HostOutboundReloadFailureReasonSchema,
+      /** Free-text diagnostic. Renderer should branch on `reason`
+       *  for UI copy; `message` is for logs / dev console only. */
+      message: z.string().optional(),
+    })
+    .strict(),
+]);
+export type HostOutboundReloadResult = z.infer<
+  typeof HostOutboundReloadResultSchema
+>;
+
+
 /**
  * Single source of truth for the intent ↔ params/result type pairing.
  * The client uses it to enforce that `host.call('echo', {...})` only
@@ -971,6 +1090,10 @@ export const intentSchemas = {
   host_outbound_detach: {
     params: HostOutboundDetachParamsSchema,
     result: HostOutboundDetachResultSchema,
+  },
+  host_outbound_reload: {
+    params: HostOutboundReloadParamsSchema,
+    result: HostOutboundReloadResultSchema,
   },
 } as const;
 

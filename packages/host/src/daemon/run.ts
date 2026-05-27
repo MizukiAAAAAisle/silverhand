@@ -286,6 +286,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     supervisor,
     hostOutboundAttachHandler: params => outboundSupervisor.attach(params),
     hostOutboundDetachHandler: () => outboundSupervisor.detach(),
+    hostOutboundReloadHandler: () => outboundSupervisor.reload(),
   });
   commandForwarder = command =>
     dispatcher.dispatch(command.id, String(command.kind), command.params);
