@@ -42,6 +42,7 @@ import { randomBytes } from 'node:crypto';
 import {
   HOST_PROTOCOL_VERSION,
   encodeFrame,
+  intentErrorSchema,
   intentSchemas,
   type EventFrame,
   type HelloResult,
@@ -49,7 +50,6 @@ import {
   type IntentParams,
   type IntentResult,
   type RequestFrame,
-  type ResponseError,
   type RuntimeStartParams,
   type RuntimeStopParams,
   type RuntimeWakeParams,
@@ -63,18 +63,27 @@ import { SocketTransport } from './socket-transport.js';
 
 /**
  * Typed error thrown by `HostClient.call()` and friends. Carries the
- * daemon's `ResponseError.code` when the failure came from the daemon,
- * or a synthetic code when the failure is local to the client (timeout,
+ * daemon's response code when the failure came from the daemon, or a
+ * synthetic code when the failure is local to the client (timeout,
  * disconnect, never_connected). Callers branch on `.code`.
+ *
+ * The `code` type is intentionally widened to `string` (Cindy D2
+ * P1-1). For typed intents — currently just `agent_materialize` —
+ * the daemon may surface per-intent codes (e.g. `agent_dir_collision`,
+ * `fs_quota_exceeded`) that are not in the 5-code generic
+ * `ResponseError` enum. `HostClient.handleFrame` validates the
+ * incoming `code` against `intentErrorSchema(intent)` before
+ * constructing this error, so the string is always one of:
+ *   - a generic `ResponseError['code']` (any intent), OR
+ *   - a per-intent typed code (only that intent), OR
+ *   - one of the local-only synthetic codes below.
+ * Callers that want exhaustive type narrowing should use the per-
+ * intent error type `IntentError<'agent_materialize'>` exported
+ * from `protocol.ts`.
  */
 export class HostClientError extends Error {
   constructor(
-    public readonly code:
-      | ResponseError['code']
-      | 'disconnected'
-      | 'timeout'
-      | 'closed'
-      | 'protocol_mismatch',
+    public readonly code: string,
     message: string,
   ) {
     super(message);
@@ -598,7 +607,45 @@ export class HostClient {
     clearTimeout(pending.timer);
     this.pending.delete(frame.id);
     if ('error' in frame) {
-      pending.reject(new HostClientError(frame.error.code, frame.error.message));
+      // Validate the LOOSE error frame against the intent's typed
+      // error schema (Cindy D2 P1-1). The transport delivered a
+      // `{code: string, message: string}` because at frame-arrival
+      // time it didn't know which intent this id correlates to. We
+      // know now (via `pending.intent`), so we narrow:
+      //
+      //   - Match → reject with a typed HostClientError carrying
+      //     the validated code verbatim. For `agent_materialize`
+      //     this admits the 5 generic + 6 materialize-specific
+      //     codes; for every other intent only the 5 generic.
+      //   - Mismatch → drift. Reject with `internal_error` so the
+      //     caller's catch-arm exhaustive code branch isn't
+      //     surprised by an unrecognized string. Also log so a
+      //     skew between daemon and client is observable.
+      const errorSchema = intentErrorSchema(pending.intent as IntentName);
+      const validatedErr = errorSchema.safeParse(frame.error);
+      if (validatedErr.success) {
+        pending.reject(
+          new HostClientError(validatedErr.data.code, validatedErr.data.message),
+        );
+        return;
+      }
+      const issues = validatedErr.error.errors
+        .map(e => `${e.path.join('.')}: ${e.message}`)
+        .join('; ');
+      this.logger.warn(
+        {
+          intent: pending.intent,
+          received_code: frame.error.code,
+          issues,
+        },
+        'host client received response error code that is not valid for intent',
+      );
+      pending.reject(
+        new HostClientError(
+          'internal_error',
+          `drift: error code "${frame.error.code}" for ${pending.intent} is not in this intent's error taxonomy (${issues})`,
+        ),
+      );
       return;
     }
     // Mirror-validate the result against the schema we know for the

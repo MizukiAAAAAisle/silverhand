@@ -1019,12 +1019,217 @@ export type HostOutboundReloadResult = z.infer<
 >;
 
 
+// ── D4.d: agent_materialize (server↔daemon formal semantics) ──────
+//
+// Unlike the runtime_* intents (local supervisor / control —
+// scheduling, lifecycle, output paging) and the `host_outbound_*`
+// intents (transport plumbing), `agent_materialize` IS formal
+// server↔daemon semantics by design: it is the canonical way the
+// server asks the daemon-owning host to create an agent's L1 home
+// (= the DM workspace path; CLAUDE.md §3 / docs/agent-system-prompt-
+// memory.md). The schemas live here so the IPC dispatcher can
+// validate them through the same `intentSchemas` catalogue used by
+// every other intent; the outbound WS frame layer re-exports them
+// from `outbound-protocol.ts` so the wire surface (additive,
+// per-command error scoping — see Cindy D1 round-1 P1) stays a
+// thin envelope around the same Zod definitions.
+//
+// See docs/remote-backend-d4d-design.md §3.1 / §3.4 / §4.6 / §8.
+
+export const AgentMaterializeParamsSchema = z
+  .object({
+    /**
+     * Server-allocated; base64url 16-char string from
+     * randomBytes(12).toString('base64url')
+     * (packages/backend/src/repos/agent-repo.ts).
+     * Schema-level validation is intentionally loose (`min(1)`);
+     * the route layer is responsible for tighter format checks
+     * (Cindy round-2 P1 #5).
+     */
+    agent_id: z.string().min(1),
+    /**
+     * Server-allocated; follows the existing helper
+     * `agentHomeWorkspaceId(agentId)` → `wsah_<agentId>`.
+     */
+    agent_home_workspace_id: z.string().min(1),
+    name: z.string().min(1).max(64),
+    runtime: RuntimeKindSchema,
+    model: z.string().nullable().optional(),
+    description: z.string().nullable().optional(),
+    /**
+     * Template choice for the agent-home bootstrap (system_prompt,
+     * MEMORY.md, notes/ skeleton). D2 implements 'default' only;
+     * 'onboarding' and 'minimal' return `unsupported_template`
+     * until they get a template.
+     */
+    template_choice: z
+      .enum(['default', 'onboarding', 'minimal'])
+      .default('default'),
+  })
+  .strict();
+export type AgentMaterializeParams = z.infer<typeof AgentMaterializeParamsSchema>;
+
+export const AgentMaterializeResultSchema = z
+  .object({
+    ok: z.literal(true),
+    /**
+     * Absolute path to the materialized agent home / L1 dir,
+     * daemon-side. The server never inspects what the daemon
+     * wrote here — `agent_dir` is opaque from the server's
+     * perspective.
+     */
+    agent_dir: z.string().min(1),
+    /**
+     * MUST equal `agent_dir`. Per `docs/agent-system-prompt-memory.md`
+     * and CLAUDE.md §3, the DM workspace path coincides with L1
+     * (`agent_home` workspace's `workspace_path` IS the agent's L1
+     * dir). The daemon returns the same string for both fields to
+     * make this invariant explicit on the wire — the server uses
+     * `agent_home_workspace_path` verbatim when it INSERTs the
+     * `agent_home` workspace row (see design §6.5).
+     *
+     * Cindy D2 P1-2: the equality is enforced by the schema's
+     * `superRefine` below, NOT just by convention. A handler that
+     * drifts (or a future stub that diverges the two strings)
+     * would otherwise let a wrong workspace path land in the
+     * server's L3a `workspace` row — the kind of silent
+     * corruption a schema constraint is supposed to catch.
+     */
+    agent_home_workspace_path: z.string().min(1),
+    /**
+     * Opaque-to-server timestamp used only for audit. The row's
+     * `created_at` remains the server's authoritative time.
+     */
+    materialized_at: z.number().int().positive(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.agent_home_workspace_path !== value.agent_dir) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['agent_home_workspace_path'],
+        message:
+          'agent_home_workspace_path must equal agent_dir (§6.5 invariant: the DM workspace path IS the L1 dir)',
+      });
+    }
+  });
+export type AgentMaterializeResult = z.infer<typeof AgentMaterializeResultSchema>;
+
 /**
- * Single source of truth for the intent ↔ params/result type pairing.
- * The client uses it to enforce that `host.call('echo', {...})` only
- * accepts echo-shaped params and returns echo-shaped results; the
- * daemon dispatcher uses it to parse incoming params before handing
- * to a handler.
+ * Typed error codes returned by the daemon's `agent_materialize`
+ * handler. The HTTP-layer wrapper in `POST /api/agents` adds
+ * server-side codes (materialize_timeout, host_attach_pending,
+ * dependent_row_insert_failed, backend_crash_during_materialize)
+ * that never appear on the wire — they describe failures the
+ * server observes locally. See design §3.4 for the
+ * wire→HTTP mapping table.
+ */
+export const AgentMaterializeErrorCodeSchema = z.enum([
+  'fs_quota_exceeded',
+  'fs_unavailable',
+  /**
+   * `agent_dir_collision` (not `already_exists`): the dir is
+   * unexpectedly populated by foreign content without the
+   * `.materialized` sentinel, or the sentinel exists but does
+   * not match the requested (agent_id, template_choice, runtime)
+   * triple (sentinel "template_match" per §4.6 / §14 Q3).
+   * Idempotent re-call of an already-materialized `agent_id`
+   * (all three sentinel fields match) returns `ok: true` and is
+   * NOT an error.
+   */
+  'agent_dir_collision',
+  'unsupported_template',
+  'unsupported_runtime',
+  'internal_error',
+]);
+export type AgentMaterializeErrorCode = z.infer<
+  typeof AgentMaterializeErrorCodeSchema
+>;
+
+
+/**
+ * Canonical generic-error code taxonomy. The 5 transport-level codes
+ * the daemon may emit independent of any intent. Kept small and
+ * stable so the client can branch on them without scanning
+ * `message` strings:
+ *
+ *  - `unknown_intent`     — `intent` name not in the registry
+ *  - `invalid_params`     — params failed zod validation
+ *  - `internal_error`     — handler threw / returned an unexpected error
+ *  - `shutting_down`      — request arrived after SIGTERM/SIGINT
+ *  - `request_too_large`  — incoming frame exceeded the per-frame cap
+ *
+ * Single source of truth — referenced by `ResponseErrorSchema`
+ * (generic frame) AND by per-intent typed-error schemas (e.g.
+ * `AgentMaterializeIpcErrorSchema`) so a new generic code added here
+ * automatically widens both surfaces. Cindy D2 round-2 P2 caught
+ * the previous hand-copy in `AgentMaterializeIpcErrorSchema`; the
+ * extract removes that drift axis.
+ */
+export const ResponseErrorCodeSchema = z.enum([
+  'unknown_intent',
+  'invalid_params',
+  'internal_error',
+  'shutting_down',
+  'request_too_large',
+]);
+export type ResponseErrorCode = z.infer<typeof ResponseErrorCodeSchema>;
+
+
+/**
+ * Per-intent typed-error schemas.
+ *
+ * Default = `ResponseErrorSchema` (the 5 transport-level codes).
+ * Intents that may legitimately surface daemon-business typed
+ * codes — currently just `agent_materialize` — override with a
+ * wider schema that unions the 5 generic codes with the intent's
+ * own taxonomy (here, `AgentMaterializeErrorCodeSchema`).
+ *
+ * Why per-intent and NOT a single global widened union (Cindy
+ * D2 P1-1 + D1 round-1 P1): a global union would let any intent
+ * carry any other intent's typed code on the wire — exactly the
+ * scoping failure Cindy caught at D1 round-1. Per-intent scoping
+ * keeps each intent's error surface narrow at validation time.
+ *
+ * This registry is consumed by:
+ *   - `IntentDispatcher.dispatch` (daemon side) — to validate the
+ *     error code it's about to emit on the wire.
+ *   - `HostClient.handleFrame` (client side) — to validate
+ *     incoming `error.code` against the intent the caller
+ *     dispatched, before resolving as a typed `HostClientError`.
+ *   - `SocketTransport.deliverFrame` does NOT consult this map;
+ *     it uses `LooseAnyFrameSchema` so a typed code doesn't get
+ *     silently dropped at the transport layer. Validation happens
+ *     at the client layer above, where the intent name is known.
+ */
+const AgentMaterializeIpcErrorSchema = z
+  .object({
+    code: z.union([
+      ResponseErrorCodeSchema,
+      AgentMaterializeErrorCodeSchema,
+    ]),
+    message: z.string(),
+  })
+  .strict();
+
+
+/**
+ * Single source of truth for the intent ↔ params / result / error
+ * type triple. The client uses it to enforce that
+ * `host.call('echo', {...})` only accepts echo-shaped params and
+ * returns echo-shaped results; the daemon dispatcher uses it to
+ * parse incoming params before handing to a handler, AND to
+ * validate the typed error code it is about to emit on the wire.
+ *
+ * `error` is OPTIONAL on the entry shape. Intents without an
+ * explicit `error` entry use `ResponseErrorSchema` (the 5
+ * transport-level codes) at IPC validation time. Only intents
+ * that may legitimately surface daemon-business typed codes —
+ * at D4.d, just `agent_materialize` — declare their own widened
+ * error schema. The wire surface stays per-intent-scoped (Cindy
+ * D2 P1-1 + D1 round-1 P1): a typed code in one intent's error
+ * arm cannot leak into another intent's error arm at validation
+ * time.
  */
 export const intentSchemas = {
   hello: {
@@ -1095,6 +1300,22 @@ export const intentSchemas = {
     params: HostOutboundReloadParamsSchema,
     result: HostOutboundReloadResultSchema,
   },
+  // D4.d D2: agent_materialize is server↔daemon formal semantics
+  // (see comment block above `AgentMaterializeParamsSchema`). The
+  // handler is wired through DispatcherOptions.agentMaterializeHandler
+  // in `daemon/dispatcher.ts`; when the slot is empty (e.g., legacy
+  // test wiring), the dispatcher returns `internal_error` like every
+  // other handler slot. `error` widens to the 5 generic codes plus
+  // the materialize-specific taxonomy (Cindy D2 P1-1: this is what
+  // lets `HostClient.handleFrame` reject typed codes via the wire
+  // for the local IPC adapter — without the per-intent error entry
+  // here, the transport would silently drop typed-error frames
+  // because the strict `ResponseErrorSchema` wouldn't accept them).
+  agent_materialize: {
+    params: AgentMaterializeParamsSchema,
+    result: AgentMaterializeResultSchema,
+    error: AgentMaterializeIpcErrorSchema,
+  },
 } as const;
 
 export type IntentName = keyof typeof intentSchemas;
@@ -1104,6 +1325,39 @@ export type IntentParams<N extends IntentName> = z.infer<
 export type IntentResult<N extends IntentName> = z.infer<
   (typeof intentSchemas)[N]['result']
 >;
+export type IntentError<N extends IntentName> =
+  (typeof intentSchemas)[N] extends { error: infer E extends z.ZodType }
+    ? z.infer<E>
+    : ResponseError;
+
+/**
+ * Resolve the per-intent typed-error schema, falling back to
+ * `ResponseErrorSchema` for intents whose entry has no `error`
+ * field. Consumed by `IntentDispatcher.dispatch` to validate the
+ * typed code it emits, and by `HostClient.handleFrame` to validate
+ * the typed code it receives. The fallback is the load-bearing
+ * piece — without it the 17 intents that don't override would each
+ * need a no-op `error: ResponseErrorSchema` line just to keep the
+ * lookup total.
+ *
+ * Also tolerates `intent` strings NOT in the registry (e.g. an
+ * older client dispatching a removed-since-v0 name like
+ * `runtime_inject_env`): the daemon answers `unknown_intent`,
+ * which IS in the generic taxonomy, so `ResponseErrorSchema` is
+ * the right default. Without this tolerance the lookup would crash
+ * with `Cannot read properties of undefined (reading 'error')` and
+ * the client would translate a clean rejection into a hang.
+ */
+export function intentErrorSchema(
+  intent: string,
+): z.ZodType<{ code: string; message: string }> {
+  const entry = (intentSchemas as Record<string, { error?: unknown } | undefined>)[
+    intent
+  ];
+  const error = entry?.error;
+  if (error) return error as z.ZodType<{ code: string; message: string }>;
+  return ResponseErrorSchema;
+}
 
 // ── Frame schemas ───────────────────────────────────────────────────
 
@@ -1115,24 +1369,13 @@ export const RequestFrameSchema = z.object({
 export type RequestFrame = z.infer<typeof RequestFrameSchema>;
 
 /**
- * Typed error codes the daemon may return in a response frame. Kept
- * small and stable so the client can branch on them without scanning
- * `message` strings:
- *
- *  - `unknown_intent`     — `intent` name not in the registry
- *  - `invalid_params`     — params failed zod validation
- *  - `internal_error`     — handler threw / returned an unexpected error
- *  - `shutting_down`      — request arrived after SIGTERM/SIGINT
- *  - `request_too_large`  — incoming frame exceeded the per-frame cap
+ * Generic-error frame. The `code` enum lives at
+ * `ResponseErrorCodeSchema` above so per-intent typed-error
+ * schemas (e.g. `AgentMaterializeIpcErrorSchema`) can reference
+ * the same enum without drift.
  */
 export const ResponseErrorSchema = z.object({
-  code: z.enum([
-    'unknown_intent',
-    'invalid_params',
-    'internal_error',
-    'shutting_down',
-    'request_too_large',
-  ]),
+  code: ResponseErrorCodeSchema,
   message: z.string(),
 });
 export type ResponseError = z.infer<typeof ResponseErrorSchema>;
@@ -1152,6 +1395,51 @@ export const ResponseFrameSchema = z.union([
     .strict(),
 ]);
 export type ResponseFrame = z.infer<typeof ResponseFrameSchema>;
+
+/**
+ * Transport-layer loose variant of `ResponseFrame` (Cindy D2 P1-1).
+ *
+ * The strict `ResponseFrameSchema` above only admits the 5 generic
+ * `ResponseErrorSchema` codes in the `error.code` field. The
+ * transport layer (`SocketTransport.deliverFrame`) sits BELOW the
+ * intent dispatcher, so at frame-arrival time it does not yet know
+ * which intent the response correlates to — and therefore which
+ * typed-error code set is legal. Using the strict frame schema at
+ * that layer would cause it to silently drop response frames
+ * carrying per-intent typed codes (e.g. `agent_dir_collision` from
+ * `agent_materialize`), leaving the pending IPC request to time
+ * out. That's the bug Cindy identified.
+ *
+ * The loose schema accepts `error.code: string` so the transport
+ * can deliver the frame upward; `HostClient.handleFrame` then
+ * looks up the pending request's intent name and validates the
+ * received code against `intentErrorSchema(intent)` before
+ * rejecting the typed `HostClientError`. Drift (unknown code for
+ * that intent) is itself surfaced as a typed `internal_error` so
+ * the caller still gets a clean reject path.
+ */
+const LooseResponseErrorSchema = z
+  .object({
+    code: z.string().min(1),
+    message: z.string(),
+  })
+  .strict();
+
+export const LooseResponseFrameSchema = z.union([
+  z
+    .object({
+      id: z.string().min(1),
+      result: z.unknown(),
+    })
+    .strict(),
+  z
+    .object({
+      id: z.string().min(1),
+      error: LooseResponseErrorSchema,
+    })
+    .strict(),
+]);
+export type LooseResponseFrame = z.infer<typeof LooseResponseFrameSchema>;
 
 /**
  * Unsolicited events. Two categories:
@@ -1458,6 +1746,21 @@ export const AnyFrameSchema = z.union([
   EventFrameSchema,
 ]);
 export type AnyFrame = z.infer<typeof AnyFrameSchema>;
+
+/**
+ * Transport-layer loose variant of `AnyFrameSchema` (Cindy D2 P1-1).
+ * Substitutes `LooseResponseFrameSchema` for `ResponseFrameSchema`
+ * so per-intent typed error codes survive the transport-layer
+ * frame validation. The intent-aware validation happens one layer
+ * up, in `HostClient.handleFrame`. See `LooseResponseFrameSchema`
+ * for the full rationale.
+ */
+export const LooseAnyFrameSchema = z.union([
+  RequestFrameSchema,
+  LooseResponseFrameSchema,
+  EventFrameSchema,
+]);
+export type LooseAnyFrame = z.infer<typeof LooseAnyFrameSchema>;
 
 // ── Wire encoding ───────────────────────────────────────────────────
 

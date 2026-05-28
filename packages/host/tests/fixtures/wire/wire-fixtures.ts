@@ -26,6 +26,7 @@ import type { z } from 'zod';
 import {
   EventFrameSchema,
   intentSchemas,
+  LooseResponseFrameSchema,
   RequestFrameSchema,
   ResponseFrameSchema,
   type IntentName,
@@ -36,6 +37,27 @@ export type WireFixtureKind =
   | { kind: 'request'; intent: IntentName }
   | { kind: 'response_success'; intent: IntentName }
   | { kind: 'response_error' }
+  /**
+   * Per-intent typed-error response fixtures (Cindy D2 P2-1).
+   *
+   * The generic `response_error` fixture kind validates against
+   * `ResponseFrameSchema`, which narrows `error.code` to the 5
+   * transport-level codes — too narrow for `agent_materialize`'s
+   * typed taxonomy (`agent_dir_collision`, `fs_quota_exceeded`,
+   * etc.). `response_error_typed` carries the intent name so the
+   * round-trip test can validate the bytes through:
+   *   1. `LooseResponseFrameSchema` (transport layer accepts the
+   *      typed code as `string`), AND
+   *   2. `intentSchemas[intent].error` (the per-intent typed
+   *      taxonomy, when defined; otherwise the generic schema —
+   *      keeps the kind general-purpose).
+   *
+   * The wire-contract catalogue test pins that every code in an
+   * intent's typed error taxonomy has at least one fixture, so a
+   * future addition (new typed code, new typed intent) cannot
+   * land without a byte-level pin.
+   */
+  | { kind: 'response_error_typed'; intent: IntentName }
   | { kind: 'event' };
 
 export interface WireFixture {
@@ -304,6 +326,23 @@ const REQUESTS: WireFixture[] = [
       params: {},
     }),
     kind: { kind: 'request', intent: 'host_outbound_reload' },
+  },
+  {
+    name: 'request/agent_materialize-default',
+    description:
+      'D4.d D2: server asks daemon to materialize an agent home (L1 dir). Server-allocated agent_id + workspace id, default template, claude runtime. agent_materialize is server↔daemon formal semantics — unlike runtime_*/host_outbound_* this carries business state, not transport plumbing.',
+    frame: enc({
+      id: 'req-agent-materialize-1',
+      intent: 'agent_materialize',
+      params: {
+        agent_id: 'aid_FpzaAEM',
+        agent_home_workspace_id: 'wsah_aid_FpzaAEM',
+        name: 'Materialize Test Agent',
+        runtime: 'claude',
+        template_choice: 'default',
+      },
+    }),
+    kind: { kind: 'request', intent: 'agent_materialize' },
   },
 ];
 
@@ -882,6 +921,22 @@ const RESPONSES_SUCCESS: WireFixture[] = [
     }),
     kind: { kind: 'response_success', intent: 'host_outbound_reload' },
   },
+  {
+    name: 'response/agent_materialize-ok',
+    description:
+      'D4.d D2: daemon materialized the agent home — sentinel written, template seeded. agent_home_workspace_path equals agent_dir (§6.5 invariant: the DM workspace path IS the L1 dir).',
+    frame: enc({
+      id: 'req-agent-materialize-1',
+      result: {
+        ok: true,
+        agent_dir: '/home/silverhand/.silverhand/agents/aid_FpzaAEM',
+        agent_home_workspace_path:
+          '/home/silverhand/.silverhand/agents/aid_FpzaAEM',
+        materialized_at: 1_730_000_000_000,
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'agent_materialize' },
+  },
 ];
 
 // ── Error response fixtures ────────────────────────────────────────
@@ -936,6 +991,94 @@ const RESPONSES_ERROR: WireFixture[] = [
       error: { code: 'request_too_large', message: 'frame > 1 MiB' },
     }),
     kind: { kind: 'response_error' },
+  },
+];
+
+// ── Per-intent typed error response fixtures (Cindy D2 P2-1) ─────
+//    One per intent × typed-error-code pairing. Currently only
+//    `agent_materialize` exposes typed codes; the wire-contract
+//    catalogue test asserts every typed code in every typed intent
+//    has a fixture, so a future addition (new typed code, new
+//    typed intent) cannot land without a byte-level pin.
+
+const RESPONSES_ERROR_TYPED: WireFixture[] = [
+  {
+    name: 'response/agent_materialize-error-agent_dir_collision',
+    description:
+      'Daemon refused to seed because the agent_dir is populated by foreign content (no sentinel) or carries a sentinel whose (agent_id, template_choice, runtime) triple does not match the request. §4.6 collision arms.',
+    frame: enc({
+      id: 'req-agent-materialize-1',
+      error: {
+        code: 'agent_dir_collision',
+        message: 'agent_dir already materialized with mismatched metadata; sentinel.runtime=codex but request.runtime=claude',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_materialize' },
+  },
+  {
+    name: 'response/agent_materialize-error-fs_quota_exceeded',
+    description:
+      'Recoverable fs failure — ENOSPC / EDQUOT mapped to fs_quota_exceeded so the route layer can return 507 + operator runbook hint (Cindy D2 pre-gate #3).',
+    frame: enc({
+      id: 'req-agent-materialize-1',
+      error: {
+        code: 'fs_quota_exceeded',
+        message: 'failed to seed template under /home/silverhand/.silverhand/agents/aid_X: ENOSPC: no space left on device',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_materialize' },
+  },
+  {
+    name: 'response/agent_materialize-error-fs_unavailable',
+    description:
+      'Recoverable fs failure — EACCES / EPERM / EROFS mapped to fs_unavailable so the route layer can return 503 + retry-after hint.',
+    frame: enc({
+      id: 'req-agent-materialize-1',
+      error: {
+        code: 'fs_unavailable',
+        message: 'failed to read /home/silverhand/.silverhand/agents: EACCES: permission denied',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_materialize' },
+  },
+  {
+    name: 'response/agent_materialize-error-unsupported_template',
+    description:
+      'template_choice is structurally valid (passes the wire enum) but the daemon has no template entry for it. D2 ships `default` only; `onboarding`/`minimal` reserved.',
+    frame: enc({
+      id: 'req-agent-materialize-1',
+      error: {
+        code: 'unsupported_template',
+        message: "daemon does not have a template definition for template_choice='onboarding'",
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_materialize' },
+  },
+  {
+    name: 'response/agent_materialize-error-unsupported_runtime',
+    description:
+      'runtime is structurally valid (passes the wire enum) but the daemon has no support for it on this host. Reserved arm — emitted by future runtime-capability gating; included here for forward-compat byte pinning.',
+    frame: enc({
+      id: 'req-agent-materialize-1',
+      error: {
+        code: 'unsupported_runtime',
+        message: 'this daemon does not support runtime=cursor on the host platform',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_materialize' },
+  },
+  {
+    name: 'response/agent_materialize-error-internal_error',
+    description:
+      'Catch-all for unrecognized fs errno (default arm of classifyFsError). Travels via the typed arm because IPC `ResponseError` is also a legal subset of `AgentMaterializeIpcErrorSchema`.',
+    frame: enc({
+      id: 'req-agent-materialize-1',
+      error: {
+        code: 'internal_error',
+        message: 'failed to seed template under /home/silverhand/.silverhand/agents/aid_X: EIO: i/o error',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_materialize' },
   },
 ];
 
@@ -1399,6 +1542,7 @@ export const wireFixtures: readonly WireFixture[] = [
   ...REQUESTS,
   ...RESPONSES_SUCCESS,
   ...RESPONSES_ERROR,
+  ...RESPONSES_ERROR_TYPED,
   ...EVENTS,
 ];
 
@@ -1416,6 +1560,28 @@ export function schemaForFixture(kind: WireFixtureKind): {
       return { frame: ResponseFrameSchema, inner: intentSchemas[kind.intent].result };
     case 'response_error':
       return { frame: ResponseFrameSchema };
+    case 'response_error_typed': {
+      // Per-intent typed error fixtures (Cindy D2 P2-1) validate
+      // against the LOOSE frame schema (transport-level acceptance)
+      // plus the intent's `error` schema as the `inner` validator
+      // (per-intent typed-code taxonomy).
+      //
+      // Cindy D2 round-2 P2: throw if the intent has NO `error`
+      // entry. The `response_error_typed` kind's semantics are
+      // "this intent declares typed codes beyond the generic
+      // ResponseError enum"; using it for an intent without a typed
+      // taxonomy would silently fall back to no inner validation
+      // and let drift land. The wire-contract catalogue test also
+      // pins the same invariant from the opposite direction so a
+      // missing schema fails at test-discovery time too.
+      const entry = intentSchemas[kind.intent] as { error?: z.ZodTypeAny };
+      if (entry.error === undefined) {
+        throw new Error(
+          `response_error_typed fixture used for intent '${kind.intent}' which has no per-intent 'error' schema in intentSchemas; either declare one or use kind:'response_error' for the generic taxonomy.`,
+        );
+      }
+      return { frame: LooseResponseFrameSchema, inner: entry.error };
+    }
     case 'event':
       return { frame: EventFrameSchema };
   }

@@ -36,6 +36,7 @@ import {
 } from './identity.js';
 import { OutboundSupervisor } from './outbound-supervisor.js';
 import type { OutboundCommandDispatcher } from './outbound-client.js';
+import { materializeAgent } from './agent-materialize/index.js';
 import {
   buildDaemonInstanceId,
   defaultRuntimePidRootDir,
@@ -287,6 +288,15 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     hostOutboundAttachHandler: params => outboundSupervisor.attach(params),
     hostOutboundDetachHandler: () => outboundSupervisor.detach(),
     hostOutboundReloadHandler: () => outboundSupervisor.reload(),
+    // D4.d D2 — server↔daemon formal semantics. `materializeAgent`
+    // owns the §4.6 idempotency decision tree + atomic seed +
+    // sentinel write. `homeDir` defaults to the daemon process's
+    // own `homedir()`, which is correct in production (the daemon
+    // runs as the user whose `~/.silverhand/agents/` is the target
+    // L1 root). Tests wire a stubbed handler via the dispatcher
+    // slot directly so they can point at a tmp dir without touching
+    // this wiring.
+    agentMaterializeHandler: params => materializeAgent(params),
   });
   commandForwarder = command =>
     dispatcher.dispatch(command.id, String(command.kind), command.params);

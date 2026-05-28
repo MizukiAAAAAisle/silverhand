@@ -6,6 +6,7 @@ import {
   HostOutboundReloadFailureReasonSchema,
   HostOutboundReloadResultSchema,
   intentSchemas,
+  LooseAnyFrameSchema,
   MAX_FRAME_BYTES,
   ResponseErrorSchema,
   RuntimeStartResultSchema,
@@ -15,6 +16,7 @@ import {
   RuntimeWakeResultSchema,
   type IntentName,
 } from '../src/protocol.js';
+import { AgentMaterializeErrorCodeSchema } from '../src/outbound-protocol.js';
 import {
   schemaForFixture,
   wireFixtures,
@@ -85,7 +87,7 @@ describe('wire contract — every fixture is JSON + schema valid', () => {
             )}`,
       ).toBe(true);
 
-      // (3) Inner params / result.
+      // (3) Inner params / result / typed-error.
       if (inner !== undefined) {
         if (fixture.kind.kind === 'request') {
           // RequestFrame.params
@@ -113,6 +115,22 @@ describe('wire contract — every fixture is JSON + schema valid', () => {
             innerResult.success
               ? ''
               : `result schema rejected ${fixture.name}: ${JSON.stringify(
+                  innerResult.error.issues,
+                  null,
+                  2,
+                )}`,
+          ).toBe(true);
+        } else if (fixture.kind.kind === 'response_error_typed') {
+          // Per-intent typed error arm carries `.error`. The inner
+          // schema is the intent's `error` entry (Cindy D2 P2-1).
+          const innerResult = inner.safeParse(
+            (parsed as { error: unknown }).error,
+          );
+          expect(
+            innerResult.success,
+            innerResult.success
+              ? ''
+              : `typed-error schema rejected ${fixture.name}: ${JSON.stringify(
                   innerResult.error.issues,
                   null,
                   2,
@@ -270,18 +288,85 @@ describe('wire contract — fixture catalogue invariants', () => {
     ).toEqual([]);
   });
 
-  it('AnyFrameSchema accepts every fixture frame', () => {
-    // Sanity: every fixture must also pass through the catch-all
-    // AnyFrameSchema — that is what daemon and client actually use to
-    // reject unknown shapes at the read site.
+  it('AnyFrameSchema accepts every non-typed fixture frame', () => {
+    // Sanity: every fixture (other than per-intent typed-error frames)
+    // must also pass through the catch-all AnyFrameSchema — that is the
+    // strict generic envelope. Typed-error fixtures intentionally use
+    // codes outside the generic ResponseError enum, so we exempt them
+    // here and verify them against LooseAnyFrameSchema below
+    // (Cindy D2 P1-1 / P2-1: typed codes must survive at transport).
     const failures: string[] = [];
     for (const f of wireFixtures) {
+      if (f.kind.kind === 'response_error_typed') continue;
       const parsed = JSON.parse(f.frame);
       if (!AnyFrameSchema.safeParse(parsed).success) failures.push(f.name);
     }
     expect(
       failures,
       `AnyFrameSchema rejected: ${failures.join(', ')}`,
+    ).toEqual([]);
+  });
+
+  it('LooseAnyFrameSchema accepts every fixture frame (including typed-error)', () => {
+    // The transport layer parses with LooseAnyFrameSchema so per-intent
+    // typed error codes (e.g. agent_dir_collision) survive intact until
+    // the intent-aware HostClient.handleFrame admission. This pin proves
+    // every typed-error fixture passes the loose envelope.
+    const failures: string[] = [];
+    for (const f of wireFixtures) {
+      const parsed = JSON.parse(f.frame);
+      if (!LooseAnyFrameSchema.safeParse(parsed).success) failures.push(f.name);
+    }
+    expect(
+      failures,
+      `LooseAnyFrameSchema rejected: ${failures.join(', ')}`,
+    ).toEqual([]);
+  });
+
+  it('every agent_materialize typed error code has at least one fixture', () => {
+    // Derived from AgentMaterializeErrorCodeSchema so adding a new
+    // typed code in outbound-protocol.ts immediately fails this
+    // assertion until a fixture lands. Mirrors the generic-error
+    // catalogue test above; Cindy D2 P2-1.
+    const expectedCodes = AgentMaterializeErrorCodeSchema.options;
+    const missing: string[] = [];
+    for (const code of expectedCodes) {
+      const has = wireFixtures.some((f) => {
+        if (f.kind.kind !== 'response_error_typed') return false;
+        if (f.kind.intent !== 'agent_materialize') return false;
+        const parsed = JSON.parse(f.frame) as { error?: { code?: string } };
+        return parsed.error?.code === code;
+      });
+      if (!has) missing.push(code);
+    }
+    expect(
+      missing,
+      `agent_materialize typed error codes missing a fixture: ${missing.join(', ')}`,
+    ).toEqual([]);
+  });
+
+  it('every response_error_typed fixture targets an intent with a declared error schema', () => {
+    // Cindy D2 round-2 P2: structural pin paired with the
+    // `schemaForFixture` throw. The kind `response_error_typed`
+    // means "this intent has a per-intent typed taxonomy"; using
+    // it for an intent without an `error` entry in `intentSchemas`
+    // would silently fall back to no inner validation. This test
+    // catches misuse at test-discovery time so a wrong-intent
+    // fixture cannot land even if a developer skips running
+    // `schemaForFixture` in isolation.
+    const offenders: string[] = [];
+    for (const f of wireFixtures) {
+      if (f.kind.kind !== 'response_error_typed') continue;
+      const entry = intentSchemas[f.kind.intent] as {
+        error?: unknown;
+      };
+      if (entry.error === undefined) {
+        offenders.push(`${f.name} (intent='${f.kind.intent}')`);
+      }
+    }
+    expect(
+      offenders,
+      `response_error_typed fixtures pointing at intents with no 'error' schema: ${offenders.join(', ')}`,
     ).toEqual([]);
   });
 

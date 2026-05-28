@@ -29,9 +29,9 @@
  */
 import { Socket } from 'node:net';
 import {
-  AnyFrameSchema,
+  LooseAnyFrameSchema,
   splitNdjson,
-  type ResponseFrame,
+  type LooseResponseFrame,
   type EventFrame,
 } from '../protocol.js';
 import type { DecodedFrame, Transport, TransportEvents } from './transport.js';
@@ -184,13 +184,13 @@ export class SocketTransport implements Transport {
       // logs its outgoing frames.
       return;
     }
-    const validated = AnyFrameSchema.safeParse(parsed);
+    const validated = LooseAnyFrameSchema.safeParse(parsed);
     if (!validated.success) return;
     if ('intent' in validated.data) {
       // Daemon should never send request frames; ignore.
       return;
     }
-    const decoded: DecodedFrame = validated.data as ResponseFrame | EventFrame;
+    const decoded: DecodedFrame = validated.data as LooseResponseFrame | EventFrame;
     for (const h of this.handlers.frame) h(decoded);
   }
 

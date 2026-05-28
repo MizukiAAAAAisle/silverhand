@@ -18,9 +18,11 @@ import {
   AgentRunStateSchema,
   ParsedEventKindSchema,
   ParsedEventSchema,
-  RuntimeKindSchema,
 } from '@silverhand/shared';
 import {
+  AgentMaterializeErrorCodeSchema,
+  AgentMaterializeParamsSchema,
+  AgentMaterializeResultSchema,
   HelloResultSchema,
   MAX_FRAME_BYTES,
   ResponseErrorSchema,
@@ -42,6 +44,20 @@ import {
   RuntimeStopResultSchema,
   RuntimeWakeParamsSchema,
   RuntimeWakeResultSchema,
+} from './protocol.js';
+
+// D4.d D2: agent_materialize schemas live in `protocol.ts` so the
+// daemon's IPC `intentSchemas` catalogue can validate them through
+// the same path as every other intent. We re-export from this file
+// to keep the wire surface coherent (callers who only deal with
+// outbound WS frames still see them here).
+export {
+  AgentMaterializeErrorCodeSchema,
+  AgentMaterializeParamsSchema,
+  AgentMaterializeResultSchema,
+  type AgentMaterializeErrorCode,
+  type AgentMaterializeParams,
+  type AgentMaterializeResult,
 } from './protocol.js';
 
 const FrameIdSchema = z.string().min(1);
@@ -89,116 +105,6 @@ export const RotateTokenResultSchema = z.discriminatedUnion('rotated', [
     .strict(),
 ]);
 export type RotateTokenResult = z.infer<typeof RotateTokenResultSchema>;
-
-// ── D4.d: agent_materialize (server↔daemon formal semantics) ──────
-//
-// Unlike the rest of the server↔daemon commands in this catalogue,
-// `agent_materialize` is NOT a control-plane / supervisor message —
-// it IS the formal semantics for creating an agent's L1 home on the
-// daemon-owning host. The route `POST /api/agents` reserves an
-// `agents` row in `materialization_status='pending_materialization'`
-// and then sends this intent over the same outbound WS that carries
-// runtime_* frames; the daemon's handler creates `agent_dir` (which
-// is also the DM workspace path, see design §6.5 / §8) and writes
-// the agent-home bootstrap (system_prompt + MEMORY + notes/ +
-// .materialized sentinel) before acking. Daemon-side idempotency
-// (§4.6) uses the sentinel to distinguish "same agent_id seen
-// before, already materialized" (idempotent ok) from "agent_dir
-// pre-populated by something else" (`agent_dir_collision` error).
-//
-// See docs/remote-backend-d4d-design.md §3.1 / §6 / §8 for the
-// design contract. This schema is additive under the R4 acceptance
-// gate (Cindy I1 / round-2 review): same outbound envelope, no
-// protocol fork.
-
-export const AgentMaterializeParamsSchema = z
-  .object({
-    /**
-     * Server-allocated; base64url 16-char string from
-     * randomBytes(12).toString('base64url')
-     * (packages/backend/src/repos/agent-repo.ts).
-     * Schema-level validation is intentionally loose
-     * (`min(1)`); the route layer is responsible for tighter
-     * format checks. Cindy round-2 P1 #5.
-     */
-    agent_id: z.string().min(1),
-    /**
-     * Server-allocated; follows the existing helper
-     * `agentHomeWorkspaceId(agentId)` → `wsah_<agentId>`.
-     */
-    agent_home_workspace_id: z.string().min(1),
-    name: z.string().min(1).max(64),
-    runtime: RuntimeKindSchema,
-    model: z.string().nullable().optional(),
-    description: z.string().nullable().optional(),
-    /**
-     * Template choice for the agent-home bootstrap (system_prompt,
-     * MEMORY.md, notes/ skeleton). Defaults to 'default' for first
-     * cut; richer choices land with D2.
-     */
-    template_choice: z
-      .enum(['default', 'onboarding', 'minimal'])
-      .default('default'),
-  })
-  .strict();
-export type AgentMaterializeParams = z.infer<typeof AgentMaterializeParamsSchema>;
-
-export const AgentMaterializeResultSchema = z
-  .object({
-    ok: z.literal(true),
-    /**
-     * Absolute path to the materialized agent home / L1 dir,
-     * daemon-side. The server never inspects what the daemon
-     * wrote here — `agent_dir` is opaque from the server's
-     * perspective.
-     */
-    agent_dir: z.string().min(1),
-    /**
-     * MUST equal `agent_dir`. Per `docs/agent-system-prompt-memory.md`
-     * and CLAUDE.md §3, the DM workspace path coincides with L1
-     * (`agent_home` workspace's `workspace_path` IS the agent's L1
-     * dir). The daemon returns the same string for both fields to
-     * make this invariant explicit on the wire — the server uses
-     * `agent_home_workspace_path` verbatim when it INSERTs the
-     * `agent_home` workspace row (see design §6.5).
-     */
-    agent_home_workspace_path: z.string().min(1),
-    /**
-     * Opaque-to-server timestamp used only for audit. The row's
-     * `created_at` remains the server's authoritative time.
-     */
-    materialized_at: z.number().int().positive(),
-  })
-  .strict();
-export type AgentMaterializeResult = z.infer<typeof AgentMaterializeResultSchema>;
-
-/**
- * Typed error codes returned by the daemon's `agent_materialize`
- * handler. The HTTP-layer wrapper in `POST /api/agents` adds
- * server-side codes (materialize_timeout, host_attach_pending,
- * dependent_row_insert_failed, backend_crash_during_materialize)
- * that never appear on the wire — they describe failures the
- * server observes locally. See design §3.4 for the
- * wire→HTTP mapping table.
- */
-export const AgentMaterializeErrorCodeSchema = z.enum([
-  'fs_quota_exceeded',
-  'fs_unavailable',
-  /**
-   * `agent_dir_collision` (not `already_exists`): the dir is
-   * unexpectedly populated by foreign content without the
-   * `.materialized` sentinel. Idempotent re-call of an
-   * already-materialized `agent_id` returns `ok: true` and is NOT
-   * an error.
-   */
-  'agent_dir_collision',
-  'unsupported_template',
-  'unsupported_runtime',
-  'internal_error',
-]);
-export type AgentMaterializeErrorCode = z.infer<
-  typeof AgentMaterializeErrorCodeSchema
->;
 
 /**
  * Per-command error schema for `agent_materialize` (D4.d D1).

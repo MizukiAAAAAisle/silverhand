@@ -561,3 +561,159 @@ describe('HostClient — subscribe (unsolicited events)', () => {
     await client.close();
   });
 });
+
+/**
+ * Cindy D2 P1-1: typed per-intent error codes must survive the
+ * local IPC adapter, not be silently dropped at the transport
+ * layer.
+ *
+ * Before the loose-transport refactor:
+ *   - Transport validated frames with `AnyFrameSchema`, whose
+ *     error arm narrows `code` to the 5 generic `ResponseError`
+ *     codes.
+ *   - A daemon returning `agent_dir_collision` for
+ *     `agent_materialize` would emit a frame whose `error.code`
+ *     fails that narrow validation → transport drops the frame
+ *     → pending request times out (the actual P1-1 bug).
+ *
+ * After the refactor:
+ *   - Transport uses `LooseAnyFrameSchema` (`error.code: string`)
+ *     so the frame reaches `HostClient.handleFrame`.
+ *   - `handleFrame` validates `error.code` against
+ *     `intentErrorSchema(pending.intent)`. For agent_materialize
+ *     that schema admits the 5 generic + 6 materialize-typed
+ *     codes.
+ *   - Match → typed `HostClientError` with the verbatim code.
+ *   - Mismatch (drift) → typed `internal_error` (no silent drop).
+ */
+describe('HostClient — per-intent typed error scoping (Cindy D2 P1-1)', () => {
+  const materializeParams = {
+    agent_id: 'aid_local_ipc',
+    agent_home_workspace_id: 'wsah_aid_local_ipc',
+    name: 'IPC Test Agent',
+    runtime: 'claude' as const,
+    template_choice: 'default' as const,
+  };
+
+  it('surfaces agent_materialize typed error codes verbatim (not dropped at transport)', async () => {
+    const { transport, peer } = createFakeTransportPair();
+    const client = new HostClient({
+      transportFactory: () => transport,
+      rng: FIXED_RNG,
+    });
+    await client.connect();
+
+    const promise = client.call('agent_materialize', materializeParams);
+    await new Promise(setImmediate);
+    expect(peer.received).toHaveLength(1);
+    const req = peer.received[0]!;
+
+    peer.send({
+      id: req.id,
+      // Typed code — not in the 5-generic ResponseError enum. This
+      // is the frame the transport must NOT drop (P1-1 bug case).
+      error: {
+        code: 'agent_dir_collision',
+        message: 'sentinel runtime mismatch',
+      },
+    });
+
+    await expect(promise).rejects.toBeInstanceOf(HostClientError);
+    await expect(promise).rejects.toMatchObject({
+      code: 'agent_dir_collision',
+      message: 'sentinel runtime mismatch',
+    });
+
+    await client.close();
+  });
+
+  it.each([
+    'fs_quota_exceeded',
+    'fs_unavailable',
+    'unsupported_template',
+    'unsupported_runtime',
+    'internal_error',
+  ] as const)(
+    'surfaces agent_materialize typed code: %s',
+    async code => {
+      const { transport, peer } = createFakeTransportPair();
+      const client = new HostClient({
+        transportFactory: () => transport,
+        rng: FIXED_RNG,
+      });
+      await client.connect();
+
+      const promise = client.call('agent_materialize', materializeParams);
+      await new Promise(setImmediate);
+      peer.send({
+        id: peer.received[0]!.id,
+        error: { code, message: `seeded ${code}` },
+      });
+      await expect(promise).rejects.toMatchObject({ code });
+
+      await client.close();
+    },
+  );
+
+  it('rejects unknown typed code with internal_error (drift catch on the client side)', async () => {
+    const { transport, peer } = createFakeTransportPair();
+    const client = new HostClient({
+      transportFactory: () => transport,
+      rng: FIXED_RNG,
+    });
+    await client.connect();
+
+    const promise = client.call('agent_materialize', materializeParams);
+    await new Promise(setImmediate);
+    peer.send({
+      id: peer.received[0]!.id,
+      // This code is NOT in agent_materialize's error taxonomy
+      // (and not in the 5 generic). A real-world scenario: client
+      // is older than daemon, daemon added a new typed code that
+      // this client doesn't know about yet.
+      error: {
+        code: 'future_taxonomy_code_v2',
+        message: 'daemon got ahead of client',
+      },
+    });
+
+    await expect(promise).rejects.toMatchObject({
+      code: 'internal_error',
+      // The message preserves the offending code so an operator
+      // can trace the skew across daemon and client builds.
+      message: expect.stringContaining('future_taxonomy_code_v2'),
+    });
+
+    await client.close();
+  });
+
+  it('does NOT widen the error surface for echo (non-typed intent)', async () => {
+    // Pin the per-intent scoping (Cindy D2 P1-1 fix vs D1 round-1 P1
+    // regression): a daemon that mistakenly emits an agent_materialize
+    // typed code on an `echo` response MUST surface as drift on the
+    // client side, not as a typed echo error.
+    const { transport, peer } = createFakeTransportPair();
+    const client = new HostClient({
+      transportFactory: () => transport,
+      rng: FIXED_RNG,
+    });
+    await client.connect();
+
+    const promise = client.echo('hi');
+    await new Promise(setImmediate);
+    peer.send({
+      id: peer.received[0]!.id,
+      error: {
+        code: 'agent_dir_collision', // typed for materialize, NOT for echo
+        message: 'wrong arm',
+      },
+    });
+
+    await expect(promise).rejects.toMatchObject({
+      code: 'internal_error',
+      message: expect.stringContaining('agent_dir_collision'),
+    });
+
+    await client.close();
+  });
+});
