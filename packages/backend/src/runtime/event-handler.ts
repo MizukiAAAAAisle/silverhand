@@ -188,6 +188,24 @@ export interface RuntimeEventHandlerDeps {
   /** Fires on runtime init-timeout/cooldown paths so the delivery
    *  coordinator can clear any live-wake stuck indicator. */
   onInitTimeout?: RuntimeInitTimeoutHandler;
+  /**
+   * D4.b P1-2 (Cindy round-2 `0Hd5ComnzYxHJ6Rk` P1): fires AFTER a
+   * `runtime_status` hydrate completes (cache reflects the
+   * daemon's authoritative snapshot). Used by
+   * `OutboundRuntimeEventFanout` to drive automatic drain of
+   * pending inbox rows on daemon reattach — deferring the drain
+   * to post-hydrate is required so the per-pair `startDeliveryBacked`
+   * sees the right cache phase (`ready` → wake path; absent → spawn
+   * path). Firing on `ready` (pre-hydrate) would race the hydrate
+   * and take the wrong branch.
+   *
+   * `trigger` mirrors `hydrateSafely`'s trigger argument so the
+   * callback can distinguish initial-attach drain from
+   * reconnect-recovery drain if needed.
+   */
+  onHydrateComplete?: (
+    trigger: 'initial' | 'reconnect' | 'daemon_ready',
+  ) => void | Promise<void>;
   /** Optional backend-owned JSONL sink for `agent_activity` parity
    * with the original ConversationManager runtime contract. Writing
    * must never block or fail the SSE publish path. */
@@ -215,6 +233,9 @@ export class RuntimeEventHandler {
   private readonly onParsedEventCb?: ParsedEventHandler;
   private readonly onRuntimeExitCb?: RuntimeExitHandler;
   private readonly onInitTimeoutCb?: RuntimeInitTimeoutHandler;
+  private readonly onHydrateCompleteCb?: (
+    trigger: 'initial' | 'reconnect' | 'daemon_ready',
+  ) => void | Promise<void>;
   private readonly activityLog?: ActivityLogWriter;
   private readonly logger: RuntimeEventHandlerLogger;
 
@@ -260,6 +281,7 @@ export class RuntimeEventHandler {
     this.onParsedEventCb = deps.onParsedEvent;
     this.onRuntimeExitCb = deps.onRuntimeExit;
     this.onInitTimeoutCb = deps.onInitTimeout;
+    this.onHydrateCompleteCb = deps.onHydrateComplete;
     this.activityLog = deps.activityLog;
     this.logger = deps.logger ?? NOOP_LOGGER;
   }
@@ -800,6 +822,26 @@ export class RuntimeEventHandler {
         },
         'cache hydrated from runtime_status',
       );
+      // D4.b P1-2: invoke post-hydrate callback now that the cache
+      // reflects the daemon's authoritative snapshot. The fanout
+      // uses this to drive auto-drain of pending inbox rows on
+      // reattach — deferred to post-hydrate so per-pair phase
+      // checks see the right state.
+      if (this.onHydrateCompleteCb) {
+        try {
+          await this.onHydrateCompleteCb(trigger);
+        } catch (err) {
+          this.logger.warn(
+            {
+              kind: 'event',
+              action: 'hydrate_complete_callback',
+              trigger,
+              err: (err as Error).message,
+            },
+            'post-hydrate callback threw; auto-drain may be incomplete',
+          );
+        }
+      }
     } catch (err) {
       this.logger.error(
         {

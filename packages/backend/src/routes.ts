@@ -2914,9 +2914,30 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       { conversationId, agentId },
       'api: clear agent session requested',
     );
-    // D4.b P1-1: same lift as start/stop. ClearSession dispatches
-    // a runtime stop + DB write; typed `host_attach_pending`
-    // surfaces naturally if no daemon attached.
+    // D4.b P1-1 (Cindy round-2 `0Hd5ComnzYxHJ6Rk` P1): clear-session
+    // is **deferred to D4.c**, NOT lifted in D4.b. The previous
+    // round's lift made things worse — `ControlPlaneRuntimeHost.clearSession`
+    // still throws `HostRuntimeDisabledError`, which `placementErrorResponse`
+    // does NOT recognize, so the route fell through to a generic
+    // `{ error: msg }` at HTTP 400 (no typed `code` field). That's
+    // strictly worse than the pre-lift typed `host_runtime_disabled`
+    // (409) — the renderer lost the ability to branch on the code.
+    //
+    // Properly implementing clearSession in standalone control-plane
+    // mode requires (a) dispatching a hard `runtime_stop` over the
+    // outbound WS, (b) waiting for the resulting `runtime_exit`
+    // projection to land, and (c) atomically clearing
+    // `cli_session_id` on the row + writing an audit message. This
+    // is the same shape as embedded `DaemonAgentRuntimeHost.clearSession`
+    // but the synchronization across outbound dispatch + projection
+    // wake is non-trivial. Defer to D4.c (placement / CRUD pass), not
+    // a runtime-transport gap.
+    //
+    // Until then the guard returns typed `host_runtime_disabled`
+    // (409), matching the contract every other deferred path uses.
+    if (standaloneMode(ctx)) {
+      return hostRuntimeDisabledResponse(c, 'clearing agent session');
+    }
     try {
       const result = await ctx.runtimeHost.clearSession(
         conversationId,
@@ -3305,24 +3326,71 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!canEditAgent(ctx, getUserPrincipal(c), agent.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
-    // D4.b P1-1: bulk stop variant — kept lifted in parallel with
-    // `stopConversationAgent`. Stop calls are best-effort (caught
-    // + logged) so the bulk path returns the attempted count
-    // regardless of per-conversation typed errors.
+    // D4.b P1-1 (Cindy round-2 `0Hd5ComnzYxHJ6Rk` P1): bulk stop
+    // variant. Lifted in parallel with `stopConversationAgent`, BUT
+    // per-conversation errors must surface as a typed response — the
+    // pre-round-2 implementation swallowed every `.catch(warn)` and
+    // returned `{ stopped: live.length }` even when every underlying
+    // `runtime_stop` actually failed (e.g. standalone + no daemon →
+    // every call throws `HostWsCommandTransportError('transport_no_connection')`
+    // → silent 200 success). That hit the D4 contract's "no silent
+    // no-op" gate.
+    //
+    // Semantics (post-fix):
+    //   - `live.length === 0` → 200 `{ stopped: 0 }` (true no-op).
+    //   - All calls succeeded → 200 `{ stopped: <count> }` (unchanged
+    //     happy path).
+    //   - All calls failed with a typed
+    //     placement/transport-no-connection error → surface that error
+    //     via `placementErrorResponse` (503 `host_attach_pending` /
+    //     409 `local_host_unbound` / etc.). This is the typed-fail
+    //     contract Cindy required.
+    //   - All calls failed with non-typed errors → 500 with
+    //     `{ stopped: 0, error: <first message> }`.
+    //   - Mixed (some succeeded, some failed) → log each failure +
+    //     return 200 `{ stopped: <success count> }`. Partial success
+    //     stays a 200 because the bulk endpoint historically reports
+    //     a count, not all-or-nothing; the unsuccessful conversations
+    //     stay in `status='active'` and the user can retry.
     const live = agents
       .listRuntimeConversations(id)
       .filter(s => s.status === 'starting' || s.status === 'active');
-    await Promise.all(
-      live.map(s =>
-        ctx.runtimeHost.stop(s.conversation_id, id, 'hard').catch(err =>
-          ctx.logger.warn(
-            { conversationId: s.conversation_id, agentId: id, err },
-            'agent stop: conversation stop failed',
-          ),
-        ),
-      ),
+    if (live.length === 0) {
+      return c.json({ stopped: 0 });
+    }
+    const settled = await Promise.allSettled(
+      live.map(s => ctx.runtimeHost.stop(s.conversation_id, id, 'hard')),
     );
-    return c.json({ stopped: live.length });
+    const failures: { conversationId: string; err: unknown }[] = [];
+    let successCount = 0;
+    settled.forEach((r, idx) => {
+      if (r.status === 'fulfilled') {
+        successCount += 1;
+      } else {
+        failures.push({
+          conversationId: live[idx]!.conversation_id,
+          err: r.reason,
+        });
+        ctx.logger.warn(
+          { conversationId: live[idx]!.conversation_id, agentId: id, err: r.reason },
+          'agent bulk stop: conversation stop failed',
+        );
+      }
+    });
+    if (successCount === 0 && failures.length > 0) {
+      // Every stop failed. Try to surface a typed placement / transport
+      // error from the first failure so the renderer can branch on
+      // `host_attach_pending` exactly like the per-conversation stop
+      // route does.
+      const mapped = placementErrorResponse(c, failures[0]!.err);
+      if (mapped) return mapped;
+      const msg =
+        failures[0]!.err instanceof Error
+          ? failures[0]!.err.message
+          : String(failures[0]!.err);
+      return c.json({ stopped: 0, error: msg }, 500);
+    }
+    return c.json({ stopped: successCount });
   });
 
   // GET /delete-impact — drives the destructive-confirm dialog.

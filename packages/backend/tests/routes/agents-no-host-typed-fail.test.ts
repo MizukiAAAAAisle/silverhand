@@ -273,4 +273,157 @@ describe('agent start/stop — typed-fail gate (D4.a Commit 6 G1)', () => {
       expect(t.fake.starts).toEqual([{ conversationId: channelId, agentId }]);
     });
   });
+
+  describe('bulk stop POST /api/agents/:id/stop — typed aggregation (Cindy round-2 P1)', () => {
+    /**
+     * Pre-fix the bulk-stop route swallowed every per-conversation
+     * stop error with `.catch(warn)` and returned `{ stopped: live.length }`
+     * regardless of whether ANY underlying stop succeeded. In
+     * standalone + no-daemon, every call throws typed
+     * `HostWsCommandTransportError('transport_no_connection')`, so the
+     * route's response was a silent 200 — exactly the "no silent
+     * no-op" arm D4 forbids.
+     *
+     * Post-fix:
+     *   - 0 live conversations → 200 `{ stopped: 0 }` (true no-op,
+     *     not failure-shaped).
+     *   - All live stops fail with a typed transport/placement error
+     *     → surface that error via `placementErrorResponse` (503
+     *     `host_attach_pending` etc.).
+     *   - All live stops succeed → 200 `{ stopped: <count> }`.
+     *
+     * Tested via direct DB seed to bypass the conversation creation
+     * routes (and put rows in `status='active'` so the bulk path
+     * actually iterates).
+     */
+
+    async function seedActiveConversation(
+      t: TestApp,
+      channelId: string,
+      agentId: string,
+    ): Promise<void> {
+      t.ctx.db
+        .prepare(
+          `UPDATE conversation_agents
+              SET status = 'active', pid = 12345
+            WHERE conversation_id = ? AND agent_id = ?`,
+        )
+        .run(channelId, agentId);
+    }
+
+    it('all live stops failing with transport_no_connection → 503 host_attach_pending (NOT silent 200)', async () => {
+      t = buildTestApp();
+      const { channelId, agentId } = await createChannelWithAgent(t);
+      await seedActiveConversation(t, channelId, agentId);
+      t.fake.stop = async () => {
+        throw new HostWsCommandTransportError(
+          'transport_no_connection',
+          `host h-bulk is not connected to outbound websocket`,
+          { hostId: 'h-bulk', commandKind: 'runtime_stop' },
+        );
+      };
+      const res = await http(t).post(`/api/agents/${agentId}/stop`);
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as { code: string; error: string; stopped?: number };
+      expect(body.code).toBe('host_attach_pending');
+      // Regression bait: pre-fix this returned 200 `{ stopped: 1 }`.
+      expect(res.status).not.toBe(200);
+    });
+
+    it('all live stops failing with local_host_unbound → 409 typed', async () => {
+      t = buildTestApp();
+      const { channelId, agentId } = await createChannelWithAgent(t);
+      await seedActiveConversation(t, channelId, agentId);
+      t.fake.stop = async () => {
+        throw new RuntimeHostPlacementError(
+          'local_host_unbound',
+          'no claimed local host',
+        );
+      };
+      const res = await http(t).post(`/api/agents/${agentId}/stop`);
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as { code: string };
+      expect(body.code).toBe('local_host_unbound');
+    });
+
+    it('no live conversations → 200 { stopped: 0 } (true no-op, fake.stop never called)', async () => {
+      t = buildTestApp();
+      const { agentId } = await createChannelWithAgent(t);
+      // Don't seed active — the channel's conversation_agents row
+      // remains in 'idle' so the bulk path's filter excludes it.
+      let stopCalled = false;
+      t.fake.stop = async () => {
+        stopCalled = true;
+      };
+      const res = await http(t).post(`/api/agents/${agentId}/stop`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { stopped: number };
+      expect(body.stopped).toBe(0);
+      expect(stopCalled).toBe(false);
+    });
+
+    it('all live stops succeed → 200 { stopped: <count> } (happy path)', async () => {
+      t = buildTestApp();
+      const { channelId, agentId } = await createChannelWithAgent(t);
+      await seedActiveConversation(t, channelId, agentId);
+      // Default fake.stop succeeds and records into t.fake.stops.
+      const res = await http(t).post(`/api/agents/${agentId}/stop`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { stopped: number };
+      expect(body.stopped).toBe(1);
+      expect(t.fake.stops).toHaveLength(1);
+      expect(t.fake.stops[0]!.conversationId).toBe(channelId);
+      expect(t.fake.stops[0]!.mode).toBe('hard');
+    });
+  });
+
+  describe('clear-session POST /api/channels/:id/agents/:aid/clear-session — D4.c deferral (Cindy round-2 P1)', () => {
+    /**
+     * D4.b round-1 lifted the standalone guard here, but
+     * `ControlPlaneRuntimeHost.clearSession` still throws
+     * `HostRuntimeDisabledError`, which `placementErrorResponse`
+     * does NOT recognize — so the route fell through to generic
+     * `{ error: msg }` at HTTP 400 (no `code` field). That's
+     * strictly WORSE than the pre-lift typed 409. Round-2 restores
+     * the typed guard and defers proper standalone clear-session
+     * implementation to D4.c.
+     *
+     * `t.fake.deploymentMode` doesn't exist on the fake stub; the
+     * standalone gate is the BackendContext.deploymentMode field
+     * which `buildTestApp` defaults to `'embedded'`. To exercise
+     * the typed-fail arm we set `deploymentMode: 'standalone'` on
+     * `buildTestApp`.
+     */
+
+    it('standalone backend → 409 host_runtime_disabled (typed, NOT generic 400)', async () => {
+      // Build in embedded mode so the workspace/agent CRUD routes
+      // (B-class, still guarded) succeed during setup, then flip the
+      // deploymentMode field to exercise the clear-session guard
+      // without re-architecting the test fixture.
+      t = buildTestApp();
+      const { channelId, agentId } = await createChannelWithAgent(t);
+      (t.ctx as { deploymentMode: string }).deploymentMode = 'standalone';
+      const res = await http(t).post(
+        `/api/channels/${channelId}/agents/${agentId}/clear-session`,
+      );
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as { code: string; error: string };
+      expect(body.code).toBe('host_runtime_disabled');
+      // Regression bait: round-1 returned 400 with no `code` field.
+      expect(res.status).not.toBe(400);
+      expect(body.code).not.toBeUndefined();
+    });
+
+    it('embedded backend (happy path) → 200 + fake.clearedSessions recorded', async () => {
+      t = buildTestApp();
+      const { channelId, agentId } = await createChannelWithAgent(t);
+      const res = await http(t).post(
+        `/api/channels/${channelId}/agents/${agentId}/clear-session`,
+      );
+      expect(res.status).toBe(200);
+      expect(t.fake.clearedSessions).toHaveLength(1);
+      expect(t.fake.clearedSessions[0]!.conversationId).toBe(channelId);
+      expect(t.fake.clearedSessions[0]!.agentId).toBe(agentId);
+    });
+  });
 });
