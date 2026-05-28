@@ -23,6 +23,7 @@ import {
 } from '@/features/me/hooks';
 import { RegistrationGate } from '@/features/me/RegistrationGate';
 import { BackendUnreachableGate } from '@/features/me/BackendUnreachableGate';
+import { BackendUnreachableBanner } from '@/features/me/BackendUnreachableBanner';
 import { SetupWizardModal } from '@/features/setup/SetupWizard';
 import { useResizableWidth } from '@/hooks/useResizableWidth';
 import { CreateWorkspaceDialog } from '@/features/workspaces/CreateWorkspaceDialog';
@@ -1629,6 +1630,18 @@ function RegisteredAppShell(): JSX.Element {
         />
       ) : null}
       <Toaster position="bottom-right" richColors />
+
+      {/* D4.a Commit 6 (4) — mid-session "Can't reach server" banner.
+        * Mounted INSIDE the registered shell on purpose: boot-time
+        * unreachability is the BackendUnreachableGate's job (full-
+        * screen, App-root level); this banner only fires after the
+        * user got past the boot gate and a subsequent query/mutation
+        * threw ApiError.kind === 'backend_unreachable'.
+        *
+        * Renders nothing when no recent backend_unreachable error
+        * has fired since the last clear. Owns its own click target
+        * + retry handler — see useBackendUnreachableSnitch. */}
+      <BackendUnreachableBanner />
 
       {/* Shutdown progress overlay — shown during graceful quit so the
         * user sees activity instead of a frozen window. Rendered above
