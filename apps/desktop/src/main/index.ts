@@ -11,7 +11,6 @@ import {
   HostRevokeResponseSchema,
   HostRotateTokenEmbeddedResponseSchema,
   ServerInfoSchema,
-  UserDtoSchema,
   X_SILVERHAND_LEGACY_USER_ID_HEADER,
   X_SILVERHAND_PRINCIPAL_HEADER,
   apiPaths,
@@ -40,6 +39,12 @@ import { HostClient, spawnDaemonChild, type DaemonHandle } from '@silverhand/hos
 import { loadOrCreateServerConfig, silverhandDir, writeServerConfig } from './config.js';
 import { waitForDaemonGeneration } from './daemon-generation-attach.js';
 import { applyFatalExitToClaim } from './local-host-failure.js';
+import {
+  classifyMeFetchOutcome,
+  executeHydrate,
+  type HydrateOutcome,
+  type SessionValidationResult,
+} from './auth-hydrate.js';
 import {
   buildHostClaimInput,
   loadOrCreateInstallationId,
@@ -630,30 +635,68 @@ async function fetchServerInfo(): Promise<ServerInfo> {
   return parsed.data;
 }
 
-async function validateUserSessionToken(token: string): Promise<UserDto | null> {
-  const res = await fetch(backendUrl(apiPaths.me), {
-    headers: { Authorization: `Bearer ${token}` },
+async function validateUserSessionToken(
+  token: string,
+): Promise<SessionValidationResult> {
+  // D4.a Commit 6 fixup (Cindy P1 #task:658 follow-up): the
+  // previous implementation returned `UserDto | null` and the
+  // `null` arm collapsed "server rejected (401/403)" with
+  // "couldn't reach the server (DNS/TLS/5xx/throw)". The latter
+  // was used by `hydrateDesktopSession` to clear local state,
+  // which violated D4.a's `backend_unreachable` recoverability
+  // invariant. We now return a typed three-arm union via the
+  // pure `classifyMeFetchOutcome` classifier (see auth-hydrate.ts).
+  let res: Response;
+  try {
+    res = await fetch(backendUrl(apiPaths.me), {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch (err) {
+    return classifyMeFetchOutcome({ kind: 'throw', error: err });
+  }
+  // Only attempt to read the body when the status is 2xx — the
+  // classifier doesn't need a body for non-2xx arms (it routes
+  // on status alone), and pulling bytes off a 5xx response wastes
+  // time on the failure path.
+  let body: unknown = null;
+  if (res.ok) {
+    body = await res.json().catch(() => null);
+  }
+  return classifyMeFetchOutcome({
+    kind: 'response',
+    status: res.status,
+    body,
   });
-  if (!res.ok) return null;
-  const body = await res.json().catch(() => null);
-  const parsed = UserDtoSchema.safeParse(body);
-  return parsed.success ? parsed.data : null;
+}
+
+// D4.a Commit 6 fixup (Cindy P1 #task:658 follow-up): in-flight
+// guard so concurrent IPC handlers (boot-time bootstrap +
+// renderer `getAuthState` poll) cannot race two `executeHydrate`
+// orchestrations against the same persisted token. `store` /
+// `claim` are not idempotent against concurrent re-runs.
+let hydrateInFlight: Promise<HydrateOutcome> | null = null;
+
+async function runHydrate(): Promise<HydrateOutcome> {
+  if (hydrateInFlight) return hydrateInFlight;
+  hydrateInFlight = executeHydrate({
+    loadToken: loadPersistedUserSessionToken,
+    validate: validateUserSessionToken,
+    store: storeUserSession,
+    clear: clearUserSession,
+    claim: claimLocalHostForUserSession,
+    log: {
+      info: (obj, msg) => logger?.info(obj, msg),
+      warn: (obj, msg) => logger?.warn(obj, msg),
+    },
+  }).finally(() => {
+    hydrateInFlight = null;
+  });
+  return hydrateInFlight;
 }
 
 async function hydrateDesktopSession(): Promise<boolean> {
-  const token = loadPersistedUserSessionToken();
-  if (!token) return false;
-  const user = await validateUserSessionToken(token).catch(err => {
-    logger?.warn({ err }, 'failed to validate persisted desktop auth session');
-    return null;
-  });
-  if (!user) {
-    await clearUserSession();
-    return false;
-  }
-  await storeUserSession(token, user);
-  await claimLocalHostForUserSession();
-  return true;
+  const outcome = await runHydrate();
+  return outcome === 'authenticated';
 }
 
 async function desktopAuthState(): Promise<DesktopAuthState> {
@@ -683,11 +726,46 @@ async function desktopAuthState(): Promise<DesktopAuthState> {
       message,
     };
   }
+  // D4.a Commit 6 fixup (Cindy P1 #task:658 follow-up): recovery
+  // path. If our in-memory session is empty but a persisted token
+  // still sits on disk, hydrate was deferred at boot due to a
+  // transient `backend_unreachable` (rather than rejected — the
+  // rejected arm would have cleared the persisted blob). Now that
+  // `fetchServerInfo()` just succeeded, retry validation against
+  // the live backend. On valid → promote to in-memory session +
+  // claim host, no re-login required. On rejected → clear. On
+  // still-unreachable (e.g. `/api/me` 5xx while `/api/server/info`
+  // is OK) → fall through and we'll surface a backend_unreachable
+  // arm below rather than push the user toward unauthenticated.
+  if (
+    (!userSessionToken || !userSessionUser) &&
+    loadPersistedUserSessionToken()
+  ) {
+    await runHydrate();
+  }
   if (userSessionToken && userSessionUser) {
     return {
       status: 'authenticated',
       signup_enabled: info.signup_enabled,
       user: userSessionUser,
+    };
+  }
+  // D4.a Commit 6 fixup (Cindy P1 #task:658 follow-up): if we
+  // still have a persisted token on disk but nothing in memory
+  // after the hydrate attempt above, validation hit the
+  // `unreachable` arm (rejected would have cleared the blob).
+  // Surface as `backend_unreachable` so the renderer shows the
+  // unreachable gate and the user can click Retry — DO NOT route
+  // them to the registration / login gate, because their
+  // persisted session is still valid as far as we know; we just
+  // can't ask the server right now.
+  if (loadPersistedUserSessionToken()) {
+    const url = backendUrl('');
+    return {
+      status: 'backend_unreachable',
+      server_url: url,
+      message:
+        'session validation pending — /api/me did not return a verdict',
     };
   }
   return { status: 'unauthenticated', signup_enabled: info.signup_enabled };
@@ -1860,13 +1938,25 @@ async function bootstrap(): Promise<void> {
     if (!HEADLESS) {
       // D4.a Commit 5d: `hydrateDesktopSession` works on both arms —
       // it tries the persisted user session token against
-      // `backendUrl(/api/me)`. On remote unreachable, validation
-      // returns `null` (falsy → fresh login required); on success,
-      // `claimLocalHostForUserSession` runs against the same active
-      // backend. `bootstrapEmbeddedUserSession` is the only step
-      // gated to the embedded arm: there's no embedded-bootstrap
-      // token on disk for a remote backend, and login flows through
-      // `/auth/login` driven by the user.
+      // `backendUrl(/api/me)`.
+      //
+      // D4.a Commit 6 fixup (Cindy P1 #task:658 follow-up):
+      // validation now returns a typed three-arm union
+      // (`valid` / `rejected` / `unreachable`). The wrapper still
+      // returns a boolean (was-authenticated) here for the
+      // bootstrap fallback below, but the `unreachable` arm keeps
+      // the persisted token + daemon-host config on disk so that
+      // a transient `backend_unreachable` at boot does NOT cost
+      // the user a re-login. The renderer's
+      // `BackendUnreachableGate` + `desktopAuthState()` recovery
+      // path re-validates against the same persisted token when
+      // the user clicks Retry / backend recovers.
+      //
+      // `bootstrapEmbeddedUserSession` is the only step gated to
+      // the embedded arm: it short-circuits on remote backends
+      // (no embedded-bootstrap token on disk), so calling it on
+      // an unreachable remote arm is a no-op rather than a
+      // re-login prompt.
       const hydrated = await hydrateDesktopSession();
       if (!hydrated) {
         await bootstrapEmbeddedUserSession();
