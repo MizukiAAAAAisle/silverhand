@@ -123,9 +123,21 @@ describe('HostRepo', () => {
       repo.listOwnedActiveLocalForUser(viewerUserId).map(h => h.id),
     ).toEqual([b.id, a.id]);
 
-    // (per-user filter is exercised by `listForUser` / repo
-    // ownership tests above; we don't re-create cross-user fixtures
-    // here because the test fixture only seeds the viewer user.)
+    // D4.c C1 Cindy round-1 P1: another fixture user's local host
+    // must not leak into the viewer's list. This pins the SQL
+    // `user_id = ?` filter directly — a future regression that drops
+    // it would otherwise pass every same-user case but expose
+    // cross-tenant hosts.
+    const aliceHost = repo.create('alice-local', 'local', {
+      userId: 'alice',
+      installationId: 'install-alice',
+    });
+    expect(
+      repo.listOwnedActiveLocalForUser(viewerUserId).map(h => h.id),
+    ).toEqual([b.id, a.id]);
+    expect(
+      repo.listOwnedActiveLocalForUser('alice').map(h => h.id),
+    ).toEqual([aliceHost.id]);
 
     // revoked rows excluded (active-only invariant matches the
     // single-row variant)

@@ -125,6 +125,22 @@ describe('RuntimeHostPlacementResolver', () => {
     expect(t.placement.resolveOwnedLocalForUser(t.viewerUserId).id).toBe(
       first.id,
     );
+
+    // D4.c C1 Cindy round-1 P1: another user's local host must not
+    // affect this user's resolve decision. Insert one for `alice`
+    // and prove the viewer still resolves to `first` (not ambiguous,
+    // not pointing at alice).
+    t.hosts.create('alice-local', 'local', {
+      userId: 'alice',
+      installationId: 'install-alice-resolve',
+    });
+    expect(t.placement.resolveOwnedLocalForUser(t.viewerUserId).id).toBe(
+      first.id,
+    );
+    // And alice resolves to her own single host, not to the viewer's.
+    expect(t.placement.resolveOwnedLocalForUser('alice').id).not.toBe(
+      first.id,
+    );
   });
 
   it('exposes listOwnedActiveLocalForUser with 0 / 1 / N visibility (D4.c C1)', () => {
@@ -157,9 +173,26 @@ describe('RuntimeHostPlacementResolver', () => {
     expect(ids).toHaveLength(2);
     expect(new Set(ids)).toEqual(new Set([a.id, b.id]));
 
-    // Per-user / per-kind filtering is covered at the repo layer
-    // (`tests/repos/host-repo.test.ts`); this test only pins the
-    // resolver's delegation contract.
+    // D4.c C1 Cindy round-1 P1: cross-user negative pin must be a
+    // first-class assertion on the resolver — this helper is the
+    // basis of G3 cross-tenant placement, and a future regression
+    // (e.g. SQL dropping `user_id = ?`) would otherwise pass every
+    // same-user 0 / 1 / N case. Insert another fixture user's local
+    // host and prove the viewer's list does not surface it.
+    t.hosts.create('alice-local', 'local', {
+      userId: 'alice',
+      installationId: 'install-alice',
+    });
+    const stillViewerOnly = t.placement
+      .listOwnedActiveLocalForUser(t.viewerUserId)
+      .map(h => h.id);
+    expect(stillViewerOnly).toHaveLength(2);
+    expect(new Set(stillViewerOnly)).toEqual(new Set([a.id, b.id]));
+    // And from the alice side, only alice's host shows up.
+    const aliceOnly = t.placement
+      .listOwnedActiveLocalForUser('alice')
+      .map(h => h.id);
+    expect(aliceOnly).toHaveLength(1);
 
     // Revoke one and the list shrinks accordingly (no resurrection
     // of the silent-pick behavior).
