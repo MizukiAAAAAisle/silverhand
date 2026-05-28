@@ -25,7 +25,7 @@
  * Daemon-level frames (no `agent_id` — currently `ready` and
  * `shutting_down`) are admitted by construction.
  *
- * Pinned contracts (10 / 10 pass):
+ * Pinned contracts (9 / 9 pass):
  *
  *   1. Same-host happy path (control).
  *   2. Cross-host runtime_ready_for_drain (kind with PRE-DISPATCH
