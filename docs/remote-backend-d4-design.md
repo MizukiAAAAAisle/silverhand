@@ -905,11 +905,218 @@ are locked here at D4.0; D4.a fills the prose under each:
 - Re-set `DISABLE_SIGNUP=1`, restart
 
 ### 12.7 Troubleshooting
-- `host_tls_*` typed codes → §8.2 mapping table
-- `partial_apply_pending` → §7.5 recovery flow
-- Daemon attach failures → D3 Hosts pane diagnostics
-- Backend logs → `~/.silverhand/logs/backend-<utc>.log` location
-  on deploy host
+
+#### 12.7.1 `host_tls_*` typed codes
+
+When the Setup Wizard or Settings → Connect dialog surfaces a
+`host_tls_*` code, route the operator straight to §8.2 — the
+mapping table there names the underlying cert / chain / SNI
+problem and the fix. There is **no** in-app TLS bypass (§8.3
+hard ban); the only path forward is to repair the cert/proxy
+setup on the deploy host.
+
+#### 12.7.2 `partial_apply_pending` (Settings → Connect update half-applied)
+
+Indicator origin: §7.5 phase-2 failed after phase-1 committed.
+The desktop's profile file is at the new version; daemon-config
+is still at the old version. Settings UI shows the typed
+`partial_apply_pending` chip + a Retry button.
+
+Three recovery paths converge to `fully_applied` (§7.5
+acceptance):
+
+1. **User clicks Retry** in Settings. Re-runs phase-2 against
+   the current profile.
+2. **Restart the desktop.** On launch, desktop compares
+   `profile.version` against `daemon-config.profile_version`;
+   on mismatch it re-runs phase-2 in the background. The
+   user does not need to click anything.
+3. **Restart the daemon** (e.g. the supervisor respawns it).
+   The daemon-attach path derives daemon-config from the
+   **current** profile before spawning the new daemon, so a
+   respawn naturally converges.
+
+If none of the three converges, capture
+`~/.silverhand/desktop/server-profile.json` +
+`~/.silverhand/daemon-config.json` and the desktop logs and
+escalate — this should be a real bug, not normal operation.
+
+#### 12.7.3 "Can't reach this Silverhand backend" boot-time gate
+
+What the user sees: full-screen card with the saved server URL
+and the captured fetch error, plus two buttons — **Retry
+connection** and **Open Setup Wizard…** — and a footer line
+about `SILVERHAND_FORCE_EMBEDDED=1`.
+
+When it fires: the desktop has a saved (remote or
+`dev_local_remote`) profile, but on the most recent
+`getAuthState()` call the underlying `fetchServerInfo()` threw
+before reaching the server (DNS / TLS / refused / not running).
+The renderer routes through `BackendUnreachableGate` —
+intentionally **without** any signup form, because the server's
+signup policy is unknown when it's unreachable (Cindy 5d-fixup
+P1-2).
+
+Triage in order:
+
+1. **Reachability sanity check from the desktop machine.** Run
+   the equivalent of `curl https://<server>/api/server/info`
+   from the desktop's shell (no `-k`). The shell error message
+   is usually a more specific version of the gate's `message`
+   line.
+2. **DNS / VPN.** If the server is on a Tailscale network or
+   private VPN, confirm the desktop is connected to the right
+   tailnet / VPN.
+3. **TLS / proxy regression.** If `curl` reports a TLS error,
+   §12.7.1 + §8.2 are the fix path. The boot gate intentionally
+   does NOT show `host_tls_*` typed codes because the
+   pre-auth fetch path collapses every TLS failure into the
+   generic "fetch failed" message at the OS layer.
+4. **Server is genuinely down / restarting.** Click **Retry
+   connection** once the operator confirms the server is back.
+
+If the user needs to bypass the saved profile entirely (to
+re-enter a new URL, or to fall back to embedded), click **Open
+Setup Wizard…** — the wizard owns the "clear server profile"
+affordance.
+
+If the user is *locked out* — the saved profile points at a
+backend they have no way to bring up right now — they can boot
+embedded via §12.7.5 (`SILVERHAND_FORCE_EMBEDDED=1`).
+
+#### 12.7.4 "Can't reach server" mid-session banner
+
+What the user sees: a small top-center banner with **"Can't
+reach server"** + a Retry button. Shown while signed in (i.e.
+past the boot gate) when any tracked query / mutation throws
+`ApiError.kind === 'backend_unreachable'`.
+
+When it fires: same network-layer root causes as the boot gate
+(§12.7.3), but encountered mid-session (server restarted, VPN
+dropped, etc.). The renderer subscribes to React Query's query
++ mutation caches and watches for the typed kind; generic 4xx /
+5xx errors do NOT trigger it (they belong to per-route copy).
+
+Recovery:
+
+1. The banner auto-clears the moment any subsequent query /
+   mutation succeeds — typically the user does not need to do
+   anything if the server comes back quickly.
+2. **Retry button** runs `queryClient.invalidateQueries()` (no
+   filter) so every active query is re-issued and acts as a
+   liveness probe.
+3. If the banner persists across multiple Retry clicks, treat
+   the situation like §12.7.3 — the underlying connectivity
+   problem is not transient. Capture the desktop logs and
+   the deploy-host backend logs; the next sign-in/launch will
+   surface the same condition as the boot-time gate, which
+   provides the richer diagnostic surface.
+
+There is intentionally no auto-poll / "Reconnecting…" affordance.
+The renderer trusts the user to decide when to retry.
+
+#### 12.7.5 `SILVERHAND_FORCE_EMBEDDED=1` escape hatch
+
+What it does: skips the saved remote profile **for that launch
+only**. The profile file on disk is preserved; the desktop boots
+with the embedded backend at `http://127.0.0.1:<port>` instead.
+
+When to use it:
+
+- Operator is locked out of a remote deployment they can't
+  bring back up right now and needs to access embedded data /
+  settings.
+- Operator wants to verify whether a "can't reach server" gate
+  is a network problem (FORCE_EMBEDDED boots fine → network
+  problem) vs a desktop-side bug (FORCE_EMBEDDED also fails →
+  bug, escalate).
+- Operator is replacing the remote URL: boot with FORCE_EMBEDDED,
+  open Setup Wizard, enter the new URL, commit. On the next
+  launch (without FORCE_EMBEDDED) the new profile is used.
+
+How to use:
+
+```
+SILVERHAND_FORCE_EMBEDDED=1 /Applications/Silverhand.app/Contents/MacOS/Silverhand
+```
+
+(or invoke `electron` with the same env var in dev). The next
+launch without the env var goes back to using the saved
+profile.
+
+**What it does NOT do:**
+- It does not delete or rewrite the saved profile. To clear the
+  profile, use the Setup Wizard's "clear" affordance, not a
+  filesystem `rm` (the latter leaves stale daemon-config
+  unless desktop catches up).
+- It does not bypass any auth — the embedded backend still
+  requires its single-user bootstrap or the operator's
+  embedded-side account.
+
+#### 12.7.6 `~/.silverhand/server-config.json` is embedded-only
+
+This artifact is the **legacy embedded backend's** persisted
+config (port, bind address, embedded auth token). It is
+created lazily by the desktop's `loadOrCreateServerConfig()`
+helper on the embedded boot path **only**.
+
+Hard contract (Cindy 5d-fixup P1-1, pinned by
+`apps/desktop/src/main/__tests__/execute-backend-startup.test.ts`):
+
+- On an **embedded** boot, the file MAY be created if missing.
+- On a **remote** boot, the file MUST NOT be touched. If it
+  already exists from a previous embedded launch on the same
+  machine, that's fine — it's just sitting on disk unused.
+- On a **refuse** boot (profile classified `profile_invalid`
+  before the daemon launches), the file MUST NOT be touched
+  either. Production bootstrap intercepts the refuse arm
+  before the adapter is called; the
+  `executeBackendStartup` adapter still pins the negative
+  case as defense-in-depth.
+
+Operator implications:
+
+- **Do not** rely on this file existing or being valid for a
+  remote-mode deploy. The remote-mode boot path reads
+  `~/.silverhand/desktop/server-profile.json` (§7.2), not
+  this file.
+- Deleting this file is safe on a remote-mode desktop and
+  triggers no behavior change. On an embedded-mode desktop
+  it will be re-created at next launch.
+- If `~/.silverhand/server-config.json` mysteriously updates
+  its mtime on a remote-mode boot, file a bug with the
+  desktop logs from that boot — the §4.2 hard gate has
+  regressed.
+
+#### 12.7.7 Daemon attach failures
+
+D3 Hosts pane diagnostics (`#task:626` and later) cover the
+daemon-side connection state — outbound WS attach, host token
+revocation, etc. Operator entry point: open the desktop's
+Hosts page; statuses there map to the daemon's view of the
+outbound WS.
+
+If a daemon attach failure is preventing sign-in (e.g. the
+desktop is stuck on "Initializing host…" past the budget),
+the desktop falls into one of the typed local-host states
+(`local_host_unbound` / `local_host_failed`). Capture the
+desktop logs and the daemon logs (latter at the deploy-host
+backend's logs, since the daemon connects out).
+
+#### 12.7.8 Where to find logs
+
+- **Desktop renderer + main logs:** macOS console (`log
+  stream --predicate 'process == "Silverhand"'`) plus
+  `~/Library/Logs/Silverhand/*.log` if logging-to-file is
+  enabled in the build.
+- **Backend logs (deploy host):**
+  `~/.silverhand/logs/backend-<utc>.log` per the global
+  CLAUDE.md logging convention. One file per backend boot;
+  agent + CLI logs are separate sibling files.
+- **Desktop-side daemon (D3 supervisor):** colocated with
+  the desktop log directory; the supervisor's lifecycle
+  events are tagged `local_host_supervisor.*` in the main
+  process log.
 
 ---
 
