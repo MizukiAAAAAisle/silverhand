@@ -452,8 +452,8 @@
         </p>
         <p class="ms-scope">
           <strong>包含</strong>：Foundations（已 done）· D3 desktop daemon lifecycle 全套 ·
-          D4.a/b/c/d/e（含 create-agent materialize intent + local data-plane sync）·
-          D5.a/b（R4 envelope unification + workspace materialize）· T1 内的 multi-daemon 路由 + Remote UX 收口。
+          D4.a/b/c/d/e（含 create-agent materialize intent + daemon-owned data-plane proxy）·
+          D5.a（R4 envelope unification）· T1 内的 sticky host ownership / Remote UX 收口。
           <br><strong>不包含</strong>：production deploy infra / 容器化 / 云端 TLS / observability shipping / 多用户云端 auth 加固 / cloud soak。
         </p>
       </div>
@@ -490,7 +490,7 @@
       <div class="summary-cell"><span class="count" style="color: var(--blue)">2</span><div><div class="lbl">in-progress</div></div></div>
       <div class="summary-cell"><span class="count" style="color: var(--purple)">0</span><div><div class="lbl">in-review</div></div></div>
       <div class="summary-cell"><span class="count" style="color: var(--orange)">4</span><div><div class="lbl">planned</div></div></div>
-      <div class="summary-cell"><span class="count" style="color: var(--gray)">12</span><div><div class="lbl">future</div></div></div>
+      <div class="summary-cell"><span class="count" style="color: var(--gray)">11</span><div><div class="lbl">future</div></div></div>
     </div>
 
     <!-- ========================================== -->
@@ -750,7 +750,7 @@
             <br>
             • C2 standalone lift <code>POST /api/hosts/claim_or_create</code> + <code>POST /api/hosts/:id/revoke</code>，<code>HostWsServerController.disconnectHost(hostId)</code> 触发 1008 / <code>host_revoked</code> close（best-effort kick after commit；daemon reconnect 不 suppress，DB 端是权威）。
             <br>
-            • C3 standalone lift workspace POST/PATCH/DELETE/add-member，新 helper <code>assertWorkspaceAgentsMatchHost</code> 扫全 conversation kinds（含 thread / dm_channel），新 route-local <code>workspace_path_not_supported</code>（不进 placement taxonomy）。fs materialization 推 D4.e。
+            • C3 standalone lift workspace POST/PATCH/DELETE/add-member，新 helper <code>assertWorkspaceAgentsMatchHost</code> 扫全 conversation kinds（含 thread / dm_channel），新 route-local <code>workspace_path_not_supported</code>（不进 placement taxonomy）。daemon-owned fs materialization / proxy 推 D4.d–D4.e。
             <br>
             • C4 marker：<code>POST /api/agents</code> standalone gate 推 D4.d，renderer guidance 校正成「deferred until D4.d」。
             <br>
@@ -775,7 +775,8 @@
           <p class="card-body">
             新 <code>agent_materialize</code> intent kind（outbound envelope <strong>additive 扩容</strong>，非 fork）：
             desktop → server (ACL/placement/分配 agent_id) → daemon materialize <code>~/.silverhand/agents/&lt;id&gt;</code> / L1 → ack → server 激活 row。
-            需 design pass：幂等 / typed errors / daemon 离线 pending / 失败回滚 / 多 host 路由策略。
+            M1 只做最小链路：daemon 在线才执行，离线 fail-fast + 用户 retry；不做 durable offline queue / 自动补偿 / 自动多 host 迁移。
+            需 design pass：幂等 / typed errors / 失败回滚 / explicit host ownership。
           </p>
           <div class="card-meta">
             <span class="m-tag m1">M1</span>
@@ -785,12 +786,13 @@
 
         <div class="card future">
           <div class="card-head">
-            <h3 class="card-title">D4.e — local data-plane sync</h3>
+            <h3 class="card-title">D4.e — daemon-owned data-plane proxy</h3>
             <span class="badge future">future</span>
           </div>
           <p class="card-body">
-            create-agent 之后的<strong>持续 sync</strong>：system_prompt / MEMORY / notes / CONSENSUS 的 server↔daemon authority 分工 + 编辑冲突策略。
-            <code>/api/agents/:id/workspace</code> + runtime detection 这类 desktop-local fs surface 的「daemon proxy vs permanent embedded-only」决断。
+            system_prompt / MEMORY / notes / CONSENSUS 的 truth 始终在 owning daemon 的本地 fs，<strong>不向 server 同步正文</strong>。
+            desktop 需要查看或编辑时走 desktop → server (ACL/routing) → daemon request/response proxy；server 不持久化这些 bytes。
+            <code>/api/agents/:id/workspace</code> + runtime detection 这类 desktop-local fs surface 走同一类 daemon proxy，或明确 permanent embedded-only。
           </p>
           <div class="card-meta">
             <span class="m-tag m1">M1</span>
@@ -810,7 +812,7 @@
           <h2><span class="tier-banner t0">T0</span>Stage D5 · R4 envelope unification</h2>
           <p class="group-note">
             <strong>已知 R4 drift</strong>：当前 embedded 模式 daemon ↔ backend 走 <code>HostClient</code> Unix socket IPC subscribe，<strong>暴露的是一套 daemon RPC / subscribe API，不是 outbound frame envelope 的 adapter</strong>。
-            不修，「one wire protocol」承诺就是嘴上的。
+            不修，「one wire protocol」承诺就是嘴上的。D5 只做 transport/envelope 统一，<strong>不承载 materialize 业务语义</strong>。
           </p>
         </div>
       </div>
@@ -824,21 +826,6 @@
           <p class="card-body">
             重构 <code>HostClient</code>：embedded transport 仍是 Unix socket / in-proc，但<strong>承载 frame envelope 与 standalone WSS 完全同形</strong>。
             backend 端 dispatch 路径统一。<strong>R4 acceptance gate: protocol parity test 扩展到 embedded</strong>。
-          </p>
-          <div class="card-meta">
-            <span class="m-tag m1">M1</span>
-          </div>
-        </div>
-
-        <div class="card future">
-          <div class="card-head">
-            <h3 class="card-title">D5.b — Workspace / member materialize intent</h3>
-            <span class="badge future">future</span>
-          </div>
-          <p class="card-body">
-            和 D4.d 同形态延伸：创建 workspace 时 daemon 建 <code>.silverhand/</code>；
-            add agent 时 daemon 建 L2 <code>MEMORY.md</code> / <code>notes/</code>。
-            统一在 envelope 里加 <code>workspace_materialize</code> / <code>workspace_member_materialize</code> intent。
           </p>
           <div class="card-meta">
             <span class="m-tag m1">M1</span>
@@ -898,7 +885,7 @@
           </div>
           <p class="card-body">
             <code>workspace.fs_path</code> 在 standalone 下必须是「daemon 看到的路径」。
-            D4.c 只加 comment，真改要 D4.d/D5 同期做。
+            D4.c 只加 comment；M1 不做云端 path 语义，真正 remote-deploy path policy 归 M2。
           </p>
           <div class="card-meta">
             <span class="m-tag m2">M2</span>
@@ -907,12 +894,12 @@
 
         <div class="card future">
           <div class="card-head">
-            <h3 class="card-title">多 daemon 同 user 状态合并</h3>
+            <h3 class="card-title">Sticky host ownership / no auto migration</h3>
             <span class="badge future">future</span>
           </div>
           <p class="card-body">
-            用户同时开了 desktop + laptop daemon → spawn agent 选哪个 / 跨 daemon migrate 可能吗 / 另一个 daemon 看到的 agent 状态怎么投影。
-            V1 大概率禁用 migrate，但 spec 必须写明。
+            用户同时开 desktop + laptop daemon 时，M1 采用 sticky ownership：agent / workspace / runtime / local files 归一个 host。
+            不做自动状态合并、自动 failover、跨 daemon live migration；迁移如果要做，必须是显式操作和独立 design。
           </p>
           <div class="card-meta">
             <span class="m-tag m1">M1</span>
@@ -1116,8 +1103,8 @@
         <strong>Milestone 1 路径</strong>（这期）：
         D3.b（in-progress）+ D4.c（in-progress，C1–C6 done，C7–C9 待）并行 →
         D4.d（create-agent materialize intent）→
-        D4.e（local data-plane sync）+ D5.a/b（envelope unification + workspace materialize）并行 →
-        T1 内 M1 子项（multi-daemon 状态合并 + Remote UX 收口）→
+        D4.e（daemon-owned data-plane proxy）+ D5.a（envelope adapter unification）并行 →
+        T1 内 M1 子项（sticky host ownership + Remote UX 收口）→
         <strong>= M1 达成（final-form 协议，embedded 部署）</strong>。
       </p>
       <p>
