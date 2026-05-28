@@ -41,21 +41,33 @@
  * main ↔ backend IPC supervisor channel is not exercised here at
  * all.
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import {
+  spawn as nodeSpawn,
+  type ChildProcess,
+  type SpawnOptions,
+} from 'node:child_process';
+import { execPath } from 'node:process';
 import type { OutboundDaemonToServerEventFrame } from '@silverhand/host';
 import {
   OutboundDaemonClient,
   createDaemonHelloResult,
   writeHostConfigAtomic,
   createDaemonLogControl,
+  runDaemon,
+  Supervisor,
+  type RunningDaemon,
+  type SupervisorOptions,
   type OutboundDaemonClientOptions,
   type DaemonLogger,
 } from '@silverhand/host/daemon';
+import type { Driver } from '@silverhand/host/drivers';
 import {
   DAEMON_HOST_CONFIG_FILENAME,
   type DaemonHostConfig,
+  type RuntimeKind,
   type ServerConfig,
 } from '@silverhand/shared';
 import {
@@ -121,6 +133,11 @@ export interface G2Harness {
   /** Path of the daemon's `daemon-config.json` (per
    *  `defaultDaemonHostConfigPath`). */
   daemonConfigPath: string;
+  /** The `.silverhand` directory the backend + daemon share. Tests
+   *  that boot a real daemon (`bootDaemonWithSupervisor`) place
+   *  socket / pidfile / logs / runtime-pids under this root so the
+   *  whole fixture tears down with a single `rmSync(tempDir)`. */
+  silverhandDir: string;
   /** Boots a real `OutboundDaemonClient` against the harness'
    *  config. Returns a stop handle. Tests may call this multiple
    *  times in sequence (later commits' reconnect tests). */
@@ -247,6 +264,7 @@ export async function bootG2Harness(
     hostToken,
     serverUrl: backend.url,
     daemonConfigPath,
+    silverhandDir,
     events,
     disconnects,
     bootDaemon: async () => bootHarnessDaemon(daemonConfigPath),
@@ -312,6 +330,118 @@ async function bootHarnessDaemon(configPath: string): Promise<{
   return {
     client,
     stop: (reason = 'g2_harness_shutdown') => client.stop(reason),
+  };
+}
+
+/**
+ * D4.b-2 — Boot a real in-process daemon with a real `Supervisor`
+ * wired in. Use this instead of `harness.bootDaemon()` when the test
+ * needs to exercise the full backend→daemon `runtime_*` dispatch +
+ * `runtime_parsed_event` projection path (not just attach / ready
+ * frame parity).
+ *
+ * Composition (per Cindy `_5NUY2CzOF9N80pM` boundary #1: real
+ * listener / WS / HostClient / dispatcher / fanout; only the runtime
+ * driver is fake):
+ *
+ *   - Real `runDaemon(...)` constructs the production
+ *     `IntentDispatcher` + `OutboundSupervisor` + `DaemonServer`.
+ *   - `hostConfigPath` points at the harness's daemon-config.json so
+ *     the CLI auto-attach path opens the outbound WS to the backend
+ *     (same code production runs on a manual `--host-config` daemon
+ *     launch).
+ *   - The injected `SupervisorContract` is a real `Supervisor` whose
+ *     `driverFor` / `resolveBinary` / `spawnFn` seams are wired to a
+ *     test-supplied fake driver + fixture binary. The supervisor
+ *     itself is unchanged from production: it owns the spawn,
+ *     stdout pump, `driver.parseLine` invocation, and
+ *     `runtime_parsed_event` emission. Only the *interpretation* of
+ *     stdout lines (i.e. the Driver) is faked.
+ *
+ * **R4 (this IPC is local supervisor/control, not server↔daemon
+ * formal semantics)**: the Unix socket the daemon binds for IPC
+ * isn't exercised by these tests; we never open a `HostClient`
+ * against `socketPath`. The outbound WS path is what's under test.
+ */
+export interface DaemonWithSupervisorOptions {
+  /** Fake Driver factory; called by Supervisor on each
+   *  `driverFor(kind)`. Test passes a stub whose `binary` points at
+   *  a fixture script and whose `parseLine` interprets a sentinel
+   *  stdout line as the parsed event the test wants to fan out. */
+  driverFor: (kind: RuntimeKind) => Driver;
+  /** Pin the resolved binary path. Defaults to returning the
+   *  driver's declared `.binary` verbatim — i.e. tests that point
+   *  the driver at an absolute fixture path get that path used
+   *  unchanged. */
+  resolveBinary?: SupervisorOptions['resolveBinary'];
+  /** Override `child_process.spawn`. Defaults to invoking the
+   *  resolved binary via the same node interpreter (`execPath`) so
+   *  `.cjs` fixtures don't need `chmod +x`. */
+  spawnFn?: SupervisorOptions['spawnFn'];
+}
+
+export interface DaemonWithSupervisorHandle {
+  daemon: RunningDaemon;
+  stop: (reason?: string) => Promise<void>;
+}
+
+export async function bootDaemonWithSupervisor(
+  harness: G2Harness,
+  opts: DaemonWithSupervisorOptions,
+): Promise<DaemonWithSupervisorHandle> {
+  const daemonDir = join(harness.silverhandDir, 'daemon');
+  const logDir = join(daemonDir, 'logs');
+  const runtimePidRootDir = join(daemonDir, 'runtime-pids');
+  mkdirSync(logDir, { recursive: true });
+  mkdirSync(runtimePidRootDir, { recursive: true });
+  const socketPath = join(daemonDir, 'daemon.sock');
+  const pidFilePath = join(daemonDir, 'daemon.pid');
+
+  // Default spawn: launch the resolved binary via node so .cjs
+  // fixtures don't need to be marked executable. This is the same
+  // pattern `packages/host/tests/supervisor.test.ts` uses.
+  const defaultSpawnFn: NonNullable<SupervisorOptions['spawnFn']> = (
+    bin,
+    args,
+    options,
+  ): ChildProcess =>
+    nodeSpawn(execPath, [bin, ...args.slice(1)], options as SpawnOptions);
+
+  const daemon = await runDaemon({
+    socketPath,
+    pidFilePath,
+    logDir,
+    hostConfigPath: harness.daemonConfigPath,
+    installSignals: false,
+    writeStdoutHandshake: false,
+    alsoStderr: false,
+    runtimePidRootDir,
+    daemonIdentityPath: null,
+    supervisorFactory: ({ emit, logger, daemonInstanceId, runtimePidRootDir: pidRoot }) =>
+      new Supervisor({
+        emit,
+        logger,
+        driverFor: opts.driverFor,
+        resolveBinary:
+          opts.resolveBinary ?? (async (_kind, fallback) => fallback),
+        spawnFn: opts.spawnFn ?? defaultSpawnFn,
+        daemonInstanceId,
+        runtimePidRootDir: pidRoot,
+        // Tight watchdogs so a misbehaving fixture surfaces fast
+        // rather than hanging at the production-default 5min cap.
+        initLivenessSilenceMs: 10_000,
+        initPreProtocolCapMs: 10_000,
+        initPostProtocolMs: 10_000,
+        sigtermToSigkillMs: 200,
+        sigkillTimeoutMs: 1_000,
+      }),
+  });
+
+  return {
+    daemon,
+    stop: async (reason = 'g2_harness_shutdown') => {
+      await daemon.stop(reason).catch(() => undefined);
+    },
   };
 }
 

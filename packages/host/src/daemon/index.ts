@@ -7,6 +7,8 @@
 export { runDaemon, type RunDaemonOptions, type RunningDaemon } from './run.js';
 export { IntentDispatcher } from './dispatcher.js';
 export { DaemonServer } from './server.js';
+export { Supervisor, type SupervisorOptions } from './supervisor/index.js';
+export type { SupervisorContract } from './supervisor-contract.js';
 export { createDaemonLogControl, createDaemonLogger, type DaemonLogger } from './logger.js';
 export { claimPidFile, releasePidFile, installShutdownHandlers } from './lifecycle.js';
 export {
