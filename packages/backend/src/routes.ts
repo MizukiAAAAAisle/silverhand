@@ -1282,12 +1282,15 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
    * rename system message insert, runtime stop, attachment sweep,
    * or workspaces.delete.
    *
-   * The check iterates `conversations.listAllChannelsForWorkspace`
-   * and `conversations.listAgents` (returns
-   * `ConversationAgentDto[]`, agent ids live on `.agent_id`). A
-   * mismatch causes immediate fail-closed; the catch block in the
-   * caller maps it to 409 + `host_mismatch` exactly the same way
-   * the workspace POST loop does for new-member candidates.
+   * Coverage MUST match the downstream side-effect loop. DELETE
+   * iterates `conversations.list().filter(workspace_id === id)`
+   * which scans EVERY conversation kind (channel, dm_channel,
+   * thread). The preflight does the same — using
+   * `conversations.listAllChannelsForWorkspace` (channels only)
+   * would silently miss a cross-host agent attached to a thread
+   * or dm_channel and let DELETE walk the runtime stop / sweep /
+   * delete path on a workspace that should fail-closed (Cindy
+   * round-1 P1).
    *
    * NOTE: This is a control-plane placement check. fs side-effect
    * boundaries (`initWorkspaceDir` / `ensureAgentL1Dir` /
@@ -1295,14 +1298,17 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
    * placeholders in standalone mode pending the D4.e workspace
    * materialize intent. The fail-closed contract here is
    * "rejected path leaks no fs / DB / message side effect", which
-   * is already true because the call sits before every write.
+   * is true because the call sits before every write.
    */
   function assertWorkspaceAgentsMatchHost(
     workspaceId: string,
     expectedHostId: string,
   ): void {
-    for (const channel of conversations.listAllChannelsForWorkspace(workspaceId)) {
-      for (const ca of conversations.listAgents(channel.id)) {
+    const workspaceConversations = conversations
+      .list()
+      .filter(conversation => conversation.workspace_id === workspaceId);
+    for (const conversation of workspaceConversations) {
+      for (const ca of conversations.listAgents(conversation.id)) {
         ctx.placement.assertAgentMatchesHost(ca.agent_id, expectedHostId);
       }
     }

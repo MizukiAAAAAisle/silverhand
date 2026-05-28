@@ -216,7 +216,6 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
   });
 
   // ── DELETE /api/workspaces/:id ──────────────────────────────
-
   it('DELETE /api/workspaces/:id — cross-host agent → 409 `host_mismatch`, workspace + channel + agents all still present', async () => {
     t = buildTestApp({ deploymentMode: 'standalone' });
     const viewerHost = new HostRepo(t.ctx.db).getOwnedLocalForUser(
@@ -272,6 +271,136 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
       .get(agentId);
     expect(agentRow).toBeDefined();
     // Runtime stop never called.
+    expect(t.fake.starts).toEqual([]);
+  });
+
+  // D4.c C3 round-1 P1 (Cindy `BWZz2ps68DuvMKsW`): the helper must
+  // cover every conversation kind, not just `kind = 'channel'`.
+  // `listAllChannelsForWorkspace` returns channels only — a
+  // cross-host agent attached to a thread or dm_channel would
+  // bypass the preflight while DELETE's downstream loop
+  // (`conversations.list().filter(workspace_id===id)`) would still
+  // walk the runtime stop / delete path on it. This test seeds
+  // a thread (the dm_channel case is structurally identical at
+  // the conversation_agents layer; thread is sufficient to pin
+  // the helper's coverage contract) carrying a cross-host agent
+  // and asserts BOTH PATCH and DELETE 409 + zero side effect.
+  it('PATCH/DELETE — cross-host agent attached to a THREAD (not channel) is also caught by the preflight (Cindy round-1 P1)', async () => {
+    t = buildTestApp({ deploymentMode: 'standalone' });
+    const viewerHost = new HostRepo(t.ctx.db).getOwnedLocalForUser(
+      t.viewerUserId,
+    )!;
+    const teammateHost = new HostRepo(t.ctx.db).getOwnedLocalForUser(
+      'teammate',
+    )!;
+
+    const wsRes = await http(t).post('/api/workspaces', {
+      name: 'thread-cross-host',
+      member_agent_ids: [],
+    });
+    expect(wsRes.status).toBe(201);
+    const ws = (await wsRes.json()) as any;
+    expect(ws.workspace.workspace_host_id).toBe(viewerHost.id);
+
+    // Direct-INSERT a thread row under the onboarding channel.
+    // (`ConversationRepo.insertThread` requires spawn-context
+    // setup; raw INSERT with the same column shape gives us the
+    // `kind = 'thread'` row the preflight must cover.)
+    const threadId = `cross-host-thread-${Date.now()}`;
+    const now = Date.now();
+    t.ctx.db
+      .prepare(
+        `INSERT INTO conversations
+          (id, workspace_id, workspace_path, kind, parent_conversation_id,
+           title, status, spawned_by_agent_id, closed_at, close_summary,
+           pinned_at, created_at, updated_at)
+         VALUES (?, ?, ?, 'thread', ?, ?, 'idle', NULL, NULL, NULL, NULL, ?, ?)`,
+      )
+      .run(
+        threadId,
+        ws.workspace.id,
+        ws.workspace.workspace_path,
+        ws.onboarding_channel_id,
+        'thread under onboarding',
+        now,
+        now,
+      );
+
+    // Insert cross-host agent + attach to the thread (NOT the
+    // onboarding channel). The pre-fix helper scanned channels
+    // only and would miss this row.
+    const agentId = `cross-host-thread-agent-${Date.now()}`;
+    t.ctx.db
+      .prepare(
+        `INSERT INTO agents (id, name, runtime, host_id, created_by_user_id, created_at, updated_at)
+         VALUES (?, ?, 'claude', ?, ?, ?, ?)`,
+      )
+      .run(agentId, 'cross-host-th', teammateHost.id, 'teammate', now, now);
+    t.ctx.db
+      .prepare(
+        `INSERT INTO conversation_agents (conversation_id, agent_id, status, joined_at)
+         VALUES (?, ?, 'idle', ?)`,
+      )
+      .run(threadId, agentId, now);
+
+    // PATCH must 409 + leave metadata / system message / runtime
+    // delivery untouched.
+    const beforeRow = t.ctx.db
+      .prepare<[string], { name: string; description: string | null; updated_at: number }>(
+        'SELECT name, description, updated_at FROM workspaces WHERE id = ?',
+      )
+      .get(ws.workspace.id)!;
+    const sysMsgCountBefore = t.ctx.db
+      .prepare<[string], { c: number }>(
+        `SELECT COUNT(*) AS c FROM messages
+          WHERE conversation_id = ? AND from_kind = 'system'`,
+      )
+      .get(ws.onboarding_channel_id)!.c;
+
+    const patchRes = await http(t).patch(`/api/workspaces/${ws.workspace.id}`, {
+      name: 'thread-rename-attempt',
+    });
+    expect(patchRes.status).toBe(409);
+    expect(await patchRes.json()).toMatchObject({ code: 'host_mismatch' });
+
+    const afterRow = t.ctx.db
+      .prepare<[string], { name: string; description: string | null; updated_at: number }>(
+        'SELECT name, description, updated_at FROM workspaces WHERE id = ?',
+      )
+      .get(ws.workspace.id)!;
+    expect(afterRow).toEqual(beforeRow);
+    const sysMsgCountAfter = t.ctx.db
+      .prepare<[string], { c: number }>(
+        `SELECT COUNT(*) AS c FROM messages
+          WHERE conversation_id = ? AND from_kind = 'system'`,
+      )
+      .get(ws.onboarding_channel_id)!.c;
+    expect(sysMsgCountAfter).toBe(sysMsgCountBefore);
+    expect(t.fake.delivered).toEqual([]);
+
+    // DELETE must 409 + leave workspace / thread / agent intact +
+    // not call runtime stop.
+    const delRes = await http(t).del(`/api/workspaces/${ws.workspace.id}`);
+    expect(delRes.status).toBe(409);
+    expect(await delRes.json()).toMatchObject({ code: 'host_mismatch' });
+
+    expect(
+      t.ctx.db
+        .prepare<[string], { id: string }>('SELECT id FROM workspaces WHERE id = ?')
+        .get(ws.workspace.id),
+    ).toBeDefined();
+    expect(
+      t.ctx.db
+        .prepare<[string], { id: string }>(
+          'SELECT id FROM conversations WHERE id = ?',
+        )
+        .get(threadId),
+    ).toBeDefined();
+    expect(
+      t.ctx.db
+        .prepare<[string], { id: string }>('SELECT id FROM agents WHERE id = ?')
+        .get(agentId),
+    ).toBeDefined();
     expect(t.fake.starts).toEqual([]);
   });
 
