@@ -30,6 +30,23 @@ export interface StartOptions {
   model?: string | null;
 }
 
+/**
+ * Default `soft_directive` shipped on `runtime_stop({mode:'soft'})` when
+ * the caller doesn't supply one.
+ *
+ * Per `RuntimeStopParamsSchema.superRefine` (`packages/host/src/protocol.ts`):
+ * `mode='soft'` REQUIRES `soft_directive`; "backend MUST supply the
+ * directive bytes (default phrasing is backend's responsibility)".
+ * Both `DaemonAgentRuntimeHost` (embedded) and
+ * `OutboundRuntimeEventFanout` (standalone) must mirror this default so
+ * the protocol contract holds across deployment modes (R4 — same wire
+ * envelope, transport-only divergence). Hard stops MUST omit
+ * `soft_directive`; this constant is irrelevant there.
+ */
+export const DEFAULT_SOFT_DIRECTIVE =
+  '[user requested a course correction — pause your current direction and ' +
+  'wait for the next instruction]';
+
 /** Pre-clear snapshot returned by `clearSession()`. Callers use this
  *  to decide whether to publish an audit message and what to log. */
 export interface ClearSessionResult {

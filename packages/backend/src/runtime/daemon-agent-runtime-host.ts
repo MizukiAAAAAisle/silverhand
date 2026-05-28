@@ -62,10 +62,11 @@ import type { HostClient } from '@silverhand/host';
 import { getDriver } from '@silverhand/host/drivers';
 import type { Database } from 'better-sqlite3';
 import type { BackendLogger, SilverhandCliLauncher } from '../context.js';
-import type {
-  AgentRuntimeHost,
-  ClearSessionResult,
-  StartOptions,
+import {
+  DEFAULT_SOFT_DIRECTIVE,
+  type AgentRuntimeHost,
+  type ClearSessionResult,
+  type StartOptions,
 } from './agent-runtime-host.js';
 import type { AgentTokenStore } from '../auth/agent-token-store.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
@@ -519,9 +520,7 @@ export class DaemonAgentRuntimeHost implements AgentRuntimeHost {
     // soft
     const agent = this.agents.get(agentId);
     if (!agent) throw new Error(`agent ${agentId} not found`);
-    const directive =
-      softDirective ??
-      '[user requested a course correction — pause your current direction and ' + 'wait for the next instruction]';
+    const directive = softDirective ?? DEFAULT_SOFT_DIRECTIVE;
     // Option A v2 (Cindy `UMGu36zoTDVuKWXi`): ship raw directive text;
     // daemon encodes via its in-process driver instance whose state
     // (codex threadId etc.) is authoritative. Pre-`readyToEncode()`

@@ -27,6 +27,7 @@ import type {
 } from '../ws/host-ws-server.js';
 import { singleConversationViewerUserId } from '../viewer-scope.js';
 import { JsonlActivityLogWriter, type ActivityLogWriter } from './activity-log-writer.js';
+import { DEFAULT_SOFT_DIRECTIVE } from './agent-runtime-host.js';
 import { RuntimeDeliveryCoordinator } from './delivery-coordinator.js';
 import {
   RuntimeEventHandler,
@@ -214,10 +215,16 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
    * D4.b-4: dispatch `runtime_stop` over the outbound WS. The
    * standalone backend owns the projection of the resulting
    * `runtime_exit` event (`RuntimeStatusProjector.runtimeExit`).
-   * Per `RuntimeStopParamsSchema`'s `superRefine`, `mode='hard'`
-   * MUST omit `soft_directive` and `mode='soft'` REQUIRES one — we
-   * forward the optional `softDirective` only when the contract
-   * allows it.
+   *
+   * Per `RuntimeStopParamsSchema`'s `superRefine`:
+   *   - `mode='hard'` MUST omit `soft_directive`.
+   *   - `mode='soft'` REQUIRES a `soft_directive`. When the caller
+   *     doesn't pass one we substitute `DEFAULT_SOFT_DIRECTIVE`,
+   *     mirroring `DaemonAgentRuntimeHost.stop` so both deployment
+   *     adapters land the same default phrasing on the wire (R4 —
+   *     same envelope, transport-only divergence). Sending soft
+   *     without a directive would otherwise hit
+   *     `daemon → runtime_stop_params_invalid` and fail the user.
    */
   async stop(
     conversationId: string,
@@ -228,12 +235,12 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     const hostId = this.hostIdForAgent(agentId);
     const transport = this.requireTransport();
     const params: RuntimeStopParams =
-      mode === 'soft' && softDirective !== undefined
+      mode === 'soft'
         ? {
             conversation_id: conversationId,
             agent_id: agentId,
             mode,
-            soft_directive: softDirective,
+            soft_directive: softDirective ?? DEFAULT_SOFT_DIRECTIVE,
           }
         : {
             conversation_id: conversationId,
