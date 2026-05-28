@@ -684,8 +684,11 @@ describe('OutboundRuntimeEventFanout', () => {
           { cliSessionId: 'sess-orphan' },
         );
 
-        // Daemon reports `cleared:false` — handle absent on its
-        // side. Backend's fast path skips the bounded wait.
+        // Daemon authoritatively reports `cleared:false` — handle
+        // absent on its side. Backend's fast path skips the bounded
+        // wait. Cindy `Z3drVLxYkw5GUvGd` P1: only `cleared:false`
+        // is a legitimate fast-path source; cache state alone is
+        // not.
         fix.transport.setNextClearResult({ cleared: false });
 
         fix.events.length = 0;
@@ -706,6 +709,64 @@ describe('OutboundRuntimeEventFanout', () => {
         expect(
           fix.events.filter(e => e.kind === 'message'),
         ).toHaveLength(1);
+      } finally {
+        fix.cleanup();
+      }
+    });
+
+    // D4.c C7 round-2 (Cindy `Z3drVLxYkw5GUvGd` P1) regression.
+    //
+    // The earlier C7 implementation gated the bounded wait on
+    // backend cache state (`wasRunning && stillRunningAfterDispatch`).
+    // That broke the contract whenever the cache was stale: a
+    // backend restart / pre-hydrate window / recent disconnect can
+    // leave the cache empty even though the daemon still owns a
+    // live handle. With `cleared:true` from the daemon, the DB tx
+    // would commit before `runtime_exit` landed — defeating the
+    // reason C7 introduced the bounded wait at all.
+    //
+    // Round-2 fix: only `result.cleared === false` is a legitimate
+    // fast-path skip. `cleared:true` always enters the wait, even
+    // when the cache currently reports nothing. This regression
+    // pins the new behavior — without it, the previous logic
+    // would silently 200 + clear the DB.
+    it('cache empty + daemon ack {cleared:true} + no runtime_exit → ClearSessionExitTimeoutError + DB UNCHANGED (Cindy round-2 P1 regression)', async () => {
+      const fix = makeFixture({ clearSessionExitTimeoutMs: 30 });
+      try {
+        // Empty snapshot — cache is empty across the entire test.
+        // No `readyEvent` either, so we don't even hydrate; the
+        // daemon-instance key is unset. This simulates a
+        // backend-restart-style stale view where the cache cannot
+        // be trusted as a "no live runtime" oracle.
+        fix.transport.snapshot = { runtimes: [] };
+
+        new ConversationRepo(fix.db).updateAgentRuntime(
+          fix.channelId,
+          fix.agentId,
+          { cliSessionId: 'sess-pre-restart' },
+        );
+
+        // Daemon authoritatively says it DID hold a handle and
+        // triggered the kill — a `runtime_exit` is on its way.
+        fix.transport.setNextClearResult({ cleared: true });
+
+        fix.events.length = 0;
+
+        // No `emitRuntimeExit(fix)` — the bound must elapse and
+        // `clearSession` must throw, NOT fast-path via the
+        // (formerly cache-derived) `wasRunning` check.
+        await expect(
+          fix.fanout.clearSession(fix.channelId, fix.agentId, null),
+        ).rejects.toBeInstanceOf(ClearSessionExitTimeoutError);
+
+        // DB UNCHANGED: cli_session_id intact, no audit row, no SSE.
+        expect(fix.row().cli_session_id).toBe('sess-pre-restart');
+        expect(
+          fix.events.filter(e => e.kind === 'message'),
+        ).toHaveLength(0);
+        expect(
+          fix.events.filter(e => e.kind === 'agent_status'),
+        ).toHaveLength(0);
       } finally {
         fix.cleanup();
       }

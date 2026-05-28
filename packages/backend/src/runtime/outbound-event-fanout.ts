@@ -511,18 +511,23 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
    *      `expectedConnectionId` so a daemon-bounce mid-flight surfaces
    *      as `transport_disconnected` (→ 503 `host_attach_pending`)
    *      with DB untouched.
-   *   6. Bounded wait for `runtime_exit` projection landed:
-   *      - Fast path: cache shows `phase === 'exited'` (or pair
-   *        absent) at dispatch entry → skip wait. This covers the
-   *        `cleared:false` arm (daemon's handle gone) and the
-   *        already-exited race. Strict equality is unnecessary —
-   *        if the daemon claims `cleared:true` but the cache is
-   *        already exited, the waiter would resolve immediately
-   *        from a prior event anyway.
-   *      - Otherwise: race the waiter promise against
-   *        `clearSessionExitTimeoutMs`. On timeout throw
+   *   6. Bounded wait for `runtime_exit` projection landed. The
+   *      daemon's `cleared` flag is the AUTHORITATIVE signal of
+   *      "did the daemon trigger a kill?":
+   *      - `cleared === true` → bounded wait MUST happen. Even if
+   *        the cache currently shows empty / `phase === 'exited'`,
+   *        the cache can be stale across a backend restart, a
+   *        pre-hydrate window, or a recent reattach (Cindy
+   *        `Z3drVLxYkw5GUvGd` P1). If the waiter is already
+   *        latched (the matching `runtime_exit` raced the command
+   *        response, which it can on the same WS), the wait
+   *        resolves immediately. Otherwise it races
+   *        `clearSessionExitTimeoutMs`; on timeout throw
    *        {@link ClearSessionExitTimeoutError} — DB UNCHANGED, no
    *        audit, no `cli_session_id` clear.
+   *      - `cleared === false` → daemon authoritatively reports it
+   *        had no handle; skip wait. Covers `cleared:false` /
+   *        already-exited / orphan-row clears.
    *   7. `coordinator.clearRuntime` mirrors the embedded path's
    *      delivery-state cleanup (cancel wake watchdog, drop
    *      pending/busy markers).
@@ -592,7 +597,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         hostId,
         'runtime_clear_session',
       );
-      await this.requireTransport().sendCommand(
+      const result = await this.requireTransport().sendCommand(
         hostId,
         'runtime_clear_session',
         { conversation_id: conversationId, agent_id: agentId },
@@ -600,14 +605,28 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       );
 
       // 6. Bounded wait for runtime_exit projection landed.
-      //    If the cache already shows the runtime is gone (waiter
-      //    fired during dispatch, OR the daemon's handle was already
-      //    absent at clear time), skip the wait.
-      const cacheAfterDispatch = state.cache.get(conversationId, agentId);
-      const stillRunningAfterDispatch =
-        cacheAfterDispatch !== undefined &&
-        cacheAfterDispatch.phase !== 'exited';
-      if (wasRunning && !waiter.exited && stillRunningAfterDispatch) {
+      //    The daemon's `cleared` flag is the AUTHORITATIVE signal
+      //    of "did the daemon trigger a kill?". Backend cache alone
+      //    is NOT trustworthy: across a backend restart, a stale
+      //    hydrate, or a disconnect-and-reattach window, the cache
+      //    can be empty (or stale `exited`) while the daemon still
+      //    holds a handle. If we let the cache fast-path skip the
+      //    wait when the daemon answered `{cleared:true}`, the DB
+      //    tx would commit a `cli_session_id=null` + audit before
+      //    the runtime_exit landed — exactly what C7 was meant to
+      //    prevent (Cindy `Z3drVLxYkw5GUvGd` P1).
+      //
+      //    Rules:
+      //      - `result.cleared === true` → MUST wait. The waiter
+      //        may already be latched (synchronous runtime_exit
+      //        during dispatch) — `awaitRuntimeExitLanded` resolves
+      //        immediately when `waiter.exited` is true, otherwise
+      //        races the configured bound. On timeout throw
+      //        `ClearSessionExitTimeoutError`; DB UNCHANGED.
+      //      - `result.cleared === false` → daemon had no handle
+      //        for this pair; skip wait. This is the legitimate
+      //        fast path for already-exited / orphan-row clears.
+      if (result.cleared) {
         await this.awaitRuntimeExitLanded(waiter, conversationId, agentId);
       }
 
