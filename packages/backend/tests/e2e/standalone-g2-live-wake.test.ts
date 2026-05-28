@@ -283,6 +283,18 @@ describe('Standalone G2 — live wake + inbox delivery marker', () => {
     // `runtime_output` frame containing our payload substring. We
     // pin the count to 1 so the dedupe assertion below can show
     // the count did NOT increment after the second deliver call.
+    //
+    // `delivered_at` is written when the daemon ACKs the wake — that
+    // ACK can land BEFORE the fixture has finished reading stdin and
+    // echoing back. Use `waitFor` so the count assertion is bound to
+    // the durable post-echo observable rather than a same-tick race.
+    await waitFor(
+      () => (countStdinEchoes(harness!, secondBody) === 1 ? true : null),
+      {
+        timeoutMs: 5_000,
+        label: 'live wake STDIN: echo lands on the wrapped sink',
+      },
+    );
     const stdinEchoesBefore = countStdinEchoes(harness, secondBody);
     expect(stdinEchoesBefore).toBe(1);
 

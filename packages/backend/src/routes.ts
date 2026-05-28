@@ -1245,6 +1245,16 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
         parsed.data.member_agent_ids.length > 0
       )
     ) {
+      // D4.b P1-1 (B-class deferral): kept fail-closed because
+      // standalone workspace creation with a caller-supplied
+      // host_id / workspace_path / agent members needs a proper
+      // placement decision (which claimed-host hosts the workspace,
+      // how does it map to `workspace_host_id`, what default applies
+      // for agentless standalone workspaces). That work belongs to
+      // D4.c / G3 alongside the agent + workspace_members placement
+      // refactor — NOT to runtime transport unavailability. A
+      // typed `host_runtime_disabled` 409 here means "placement /
+      // CRUD route deferral", not "no daemon attached".
       return hostRuntimeDisabledResponse(c, 'host-bound workspace creation');
     }
 
@@ -1380,6 +1390,11 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
         .listAllChannelsForWorkspace(workspace.id)
         .some(channel => conversations.listAgents(channel.id).length > 0)
     ) {
+      // D4.b P1-1 (B-class deferral): workspace mutation that
+      // touches existing agent-backed channels needs the agent
+      // CRUD placement model (D4.c / G3). Typed
+      // `host_runtime_disabled` here means CRUD deferral, NOT
+      // runtime transport unavailable.
       return hostRuntimeDisabledResponse(c, 'workspace mutation with agent members');
     }
     const body = await c.req.json().catch(() => ({}));
@@ -1505,6 +1520,10 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
         conversation => conversations.listAgents(conversation.id).length > 0,
       )
     ) {
+      // D4.b P1-1 (B-class deferral): workspace deletion of an
+      // agent-backed workspace needs the agent CRUD teardown
+      // model (D4.c / G3). Typed `host_runtime_disabled` here
+      // means CRUD deferral, NOT runtime transport unavailable.
       return hostRuntimeDisabledResponse(c, 'workspace deletion with agent members');
     }
     for (const conversation of workspaceConversations) {
@@ -1746,6 +1765,10 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       return c.json({ channel }, 201);
     }
     if (standaloneMode(ctx) && parsed.data.member_agent_ids.length > 0) {
+      // D4.b P1-1 (B-class deferral): agent-backed channel
+      // creation needs the agent CRUD placement model (D4.c /
+      // G3). Typed `host_runtime_disabled` here means CRUD
+      // deferral, NOT runtime transport unavailable.
       return hostRuntimeDisabledResponse(c, 'agent-backed channel creation');
     }
     try {
@@ -1793,6 +1816,10 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
     if (standaloneMode(ctx)) {
+      // D4.b P1-1 (B-class deferral): workspace add-agent-member
+      // needs the agent CRUD placement model (D4.c / G3). Typed
+      // `host_runtime_disabled` here means CRUD deferral, NOT
+      // runtime transport unavailable.
       return hostRuntimeDisabledResponse(c, 'workspace agent membership');
     }
     const agent = agents.get(parsed.data.agent_id);
@@ -2452,9 +2479,17 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
-    if (standaloneMode(ctx) && conversations.listAgents(channel.id).length > 0) {
-      return hostRuntimeDisabledResponse(c, 'sending to an agent-backed conversation');
-    }
+    // D4.b P1-1: standalone send-to-agent-backed is GOOD when the
+    // workspace's daemon-host is attached over outbound WS — the
+    // downstream `OutboundRuntimeEventFanout.deliverMessage` /
+    // `startDeliveryBacked` paths produce typed
+    // `host_attach_pending` (503) via `connectedConnectionId` →
+    // `HostWsCommandTransportError('transport_no_connection')` →
+    // `mapTransportErrorToPlacement` when no daemon is attached.
+    // The blanket `standaloneMode(ctx)` fail-closed guard that
+    // lived here pre-D4.b was the D4.a placeholder; lifting it is
+    // the runtime-trigger half of Cindy P1-1 (see Stage D4.b PR
+    // for the typed-fail negative coverage).
     try {
       const result = await ctx.conversationMessageService.sendMessage({
         conversationId: channel.id,
@@ -2483,9 +2518,8 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
-    if (standaloneMode(ctx) && conversations.listAgents(thread.id).length > 0) {
-      return hostRuntimeDisabledResponse(c, 'sending to an agent-backed conversation');
-    }
+    // D4.b P1-1: standalone send-to-agent-backed lifted (same
+    // rationale as channelMessages above).
     try {
       const result = await ctx.conversationMessageService.sendMessage({
         conversationId: thread.id,
@@ -2681,9 +2715,13 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!canPostToConversation(ctx, getUserPrincipal(c), message.conversation_id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
-    if (standaloneMode(ctx) && conversations.listAgents(message.conversation_id).length > 0) {
-      return hostRuntimeDisabledResponse(c, 'thread creation in an agent-backed conversation');
-    }
+    // D4.b P1-1: thread creation in an agent-backed conversation
+    // doesn't itself dispatch any runtime command; it only creates
+    // the child conversation row. The original D4.a guard was
+    // over-broad — once the agent IS attached we want the thread
+    // to be creatable in standalone too. Lifted; the downstream
+    // "first message to the thread agent" path is what surfaces
+    // typed `host_attach_pending` if no daemon.
     try {
       const result = await ctx.threadService.createThreadFromMessage({
         messageId,
@@ -2804,9 +2842,15 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       { conversationId, agentId },
       'api: start agent requested',
     );
-    if (standaloneMode(ctx)) {
-      return hostRuntimeDisabledResponse(c, 'agent start');
-    }
+    // D4.b P1-1: blanket `standaloneMode(ctx)` guard lifted. When
+    // the workspace's daemon-host is attached, `ctx.runtimeHost.start`
+    // dispatches `runtime_start` over the outbound WS like the
+    // embedded path. When no daemon is attached, the outbound
+    // transport throws a typed
+    // `HostWsCommandTransportError('transport_no_connection')` →
+    // `placementErrorResponse` → 503 `host_attach_pending`. The
+    // pre-D4.b 409 `host_runtime_disabled` collapsed both arms
+    // into "this mode never runs agents" — wrong for D4.b.
     try {
       await ctx.runtimeHost.start(conversationId, agentId);
       return c.json({ ok: true });
@@ -2842,9 +2886,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       { conversationId, agentId, mode, hasDirective: !!directive },
       'api: stop agent requested',
     );
-    if (standaloneMode(ctx)) {
-      return hostRuntimeDisabledResponse(c, 'agent stop');
-    }
+    // D4.b P1-1: same lift as start (see startConversationAgent).
     try {
       await ctx.runtimeHost.stop(conversationId, agentId, mode, directive);
       return c.json({ ok: true });
@@ -2872,9 +2914,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       { conversationId, agentId },
       'api: clear agent session requested',
     );
-    if (standaloneMode(ctx)) {
-      return hostRuntimeDisabledResponse(c, 'agent session clear');
-    }
+    // D4.b P1-1: same lift as start/stop. ClearSession dispatches
+    // a runtime stop + DB write; typed `host_attach_pending`
+    // surfaces naturally if no daemon attached.
     try {
       const result = await ctx.runtimeHost.clearSession(
         conversationId,
@@ -2974,6 +3016,12 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       return c.json({ error: 'agent name already exists' }, 409);
     }
     if (standaloneMode(ctx)) {
+      // D4.b P1-1 (B-class deferral): agent creation needs the
+      // agent host_id placement model (which claimed host owns
+      // the agent; how does it map to `agents.host_id`; what
+      // applies for legacy embedded agents). Defer to D4.c / G3.
+      // Typed `host_runtime_disabled` here means CRUD deferral,
+      // NOT runtime transport unavailable.
       return hostRuntimeDisabledResponse(c, 'agent creation');
     }
     // The user-gate middleware guarantees `principal.kind === 'user'`
@@ -3149,6 +3197,13 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       return c.json({ error: 'agent not found' }, 404);
     }
     if (standaloneMode(ctx)) {
+      // D4.b P1-1 (local filesystem op): agent workspace
+      // resolution reads `ctx.silverhandDir/agents/<id>` — the
+      // agent's L1 dir lives on the desktop, not the server. This
+      // route is fundamentally local-only; the guard is correct
+      // (NOT a runtime transport unavailable scenario, NOT a
+      // CRUD deferral). D2.0 daemon-host data-plane will likely
+      // proxy the L1 dir read; until then 503 is honest.
       return hostRuntimeDisabledResponse(c, 'agent workspace resolution', 503);
     }
     const l1Dir = join(ctx.silverhandDir, 'agents', agent.id);
@@ -3250,9 +3305,10 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!canEditAgent(ctx, getUserPrincipal(c), agent.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
-    if (standaloneMode(ctx)) {
-      return hostRuntimeDisabledResponse(c, 'agent stop');
-    }
+    // D4.b P1-1: bulk stop variant — kept lifted in parallel with
+    // `stopConversationAgent`. Stop calls are best-effort (caught
+    // + logged) so the bulk path returns the attempted count
+    // regardless of per-conversation typed errors.
     const live = agents
       .listRuntimeConversations(id)
       .filter(s => s.status === 'starting' || s.status === 'active');

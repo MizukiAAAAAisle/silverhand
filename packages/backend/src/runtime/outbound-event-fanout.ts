@@ -4,6 +4,7 @@ import {
   type EventFrame,
   type HostClient,
   type OutboundDaemonToServerEventFrame,
+  type OutboundServerCommandKind,
   type RuntimeStartParams,
   type RuntimeStopParams,
 } from '@silverhand/host';
@@ -25,6 +26,7 @@ import type {
   HostWsEventSink,
   HostWsServerController,
 } from '../ws/host-ws-server.js';
+import { HostWsCommandTransportError } from '../ws/host-ws-server.js';
 import { singleConversationViewerUserId } from '../viewer-scope.js';
 import { JsonlActivityLogWriter, type ActivityLogWriter } from './activity-log-writer.js';
 import { DEFAULT_SOFT_DIRECTIVE } from './agent-runtime-host.js';
@@ -195,7 +197,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     );
     if (delivery.deliveredAt !== null) return;
     const hostId = this.hostIdForAgent(agentId);
-    const connectionId = this.connectedConnectionId(hostId);
+    const connectionId = this.connectedConnectionId(hostId, 'runtime_wake');
     const entry = this.stateForHost(hostId).cache.get(conversationId, agentId);
     if (!entry || entry.phase === 'idle' || entry.phase === 'exited') {
       await this.startDeliveryBacked(conversationId, agentId);
@@ -258,7 +260,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       return false;
     }
     const hostId = this.hostIdForAgent(agentId);
-    const connectionId = this.connectedConnectionId(hostId);
+    const connectionId = this.connectedConnectionId(hostId, 'runtime_start');
     const state = this.stateForHost(hostId);
     const entry = state.cache.get(conversationId, agentId);
     if (entry && entry.phase !== 'idle' && entry.phase !== 'exited') {
@@ -637,11 +639,32 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     return host.id;
   }
 
-  private connectedConnectionId(hostId: string): string {
+  /**
+   * Resolve the current outbound WS connectionId for the host, or
+   * throw a TYPED `HostWsCommandTransportError('transport_no_connection')`
+   * so route handlers' `placementErrorResponse` /
+   * `mapTransportErrorToPlacement` (`routes.ts:214`) can promote it
+   * to `host_attach_pending` (503). Without the typed shape the
+   * lifted A-class runtime routes would surface a generic 500/400
+   * for "daemon not attached yet" — which is the exact regression
+   * Cindy P1-1 (`wY_2I5y4l-FXO19h`) calls out.
+   *
+   * `commandKind` is required so the typed error carries enough
+   * context for log → response correlation; pass the kind that
+   * WOULD have been dispatched if the connection existed.
+   */
+  private connectedConnectionId(
+    hostId: string,
+    commandKind: OutboundServerCommandKind,
+  ): string {
     const transport = this.requireTransport();
     const connectionId = transport.connectionIdForHost(hostId);
     if (!connectionId) {
-      throw new Error(`outbound host ${hostId} is not connected`);
+      throw new HostWsCommandTransportError(
+        'transport_no_connection',
+        `outbound host ${hostId} is not connected`,
+        { hostId, commandKind },
+      );
     }
     return connectionId;
   }

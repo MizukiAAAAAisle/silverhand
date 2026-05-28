@@ -321,13 +321,20 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
     expect(t.fake.starts).toEqual([]);
   });
 
-  it('POST /api/channels/:id/messages on standalone refuses to send to an agent-backed channel with host_runtime_disabled (409)', async () => {
-    // We can't create an agent on standalone (`POST /api/agents` is
-    // blocked too), so simulate the negative arm by adding an agent
-    // row directly via the test database, then flipping the channel
-    // to include it. The route's send-time `standaloneMode(ctx) &&
-    // conversations.listAgents(...).length > 0` gate must fire BEFORE
-    // the message service runs.
+  it('POST /api/channels/:id/messages on standalone delivers to agent-backed channel via fake runtime (D4.b P1-1 lift)', async () => {
+    // D4.b P1-1 lift: the blanket `standaloneMode(ctx)` guard on
+    // send-to-agent-backed was removed because standalone with an
+    // attached daemon must accept user messages and surface them
+    // through the outbound dispatch path. With `buildTestApp`'s
+    // FakeConversationManager standing in for runtimeHost,
+    // `deliverMessage` is recorded on `t.fake.delivered`.
+    //
+    // The pre-D4.b test asserted 409 `host_runtime_disabled` here;
+    // that arm is now obsolete (the gate is gone). The "no daemon
+    // attached" scenario produces typed `host_attach_pending` (503)
+    // through `OutboundRuntimeEventFanout.connectedConnectionId`
+    // and is covered end-to-end by the G2 route e2e
+    // (`standalone-g2-route-runtime.test.ts`).
     t = buildTestApp({ deploymentMode: 'standalone', bindAddressScope: 'lan' });
     const token = await signupReturnToken(t, 'fail.send@example.test');
     const ws = await fetchJson(
@@ -351,9 +358,8 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
 
     // Side-door: insert a synthetic agent row + add it to the
     // channel directly. The route handler doesn't care whether the
-    // agent is "live" on a daemon; the gate is purely a count check.
-    // Reuse the standalone-server host row (already materialized by
-    // the workspace create above) to satisfy `agents.host_id NOT NULL`.
+    // agent is "live" on a daemon; the fake records any
+    // deliverMessage call regardless.
     const standaloneHostId = t.ctx.db
       .prepare<[], { id: string }>(
         `SELECT id FROM hosts WHERE name = 'standalone-server'`,
@@ -362,8 +368,6 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
     expect(standaloneHostId).toEqual(expect.any(String));
     const agentId = `synthetic-agent-${randomSlug()}`;
     const now = Date.now();
-    // Resolve the freshly-signed-up user id from the workspace owner
-    // bearer — agents.created_by_user_id is NOT NULL FK to users.id.
     const ownerUserId = t.ctx.db
       .prepare<[], { id: string }>(
         `SELECT id FROM users WHERE email = 'fail.send@example.test'`,
@@ -394,12 +398,21 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
       t,
       'POST',
       apiPaths.channelMessages(channelId),
-      { content: 'should be refused' },
+      { content: 'delivered via fake' },
       bearer(token),
     );
-    expect(send.status).toBe(409);
-    expect(send.body).toMatchObject({ code: 'host_runtime_disabled' });
-    expect(t.fake.delivered).toEqual([]);
+    expect(send.status).toBe(201);
+    expect(send.body.message.content).toBe('delivered via fake');
+    // Lift contract: deliverMessage IS called now (was blocked
+    // pre-lift). The fake records the (conv, agent, messageId)
+    // tuple so a regression that re-adds the gate flips this
+    // assertion red.
+    expect(t.fake.delivered).toHaveLength(1);
+    expect(t.fake.delivered[0]).toMatchObject({
+      conversationId: channelId,
+      agentId,
+      messageId: send.body.message.id,
+    });
   });
 });
 
