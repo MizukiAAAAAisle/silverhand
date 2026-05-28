@@ -35,13 +35,22 @@
  *       scoped, not "X received nothing" — heartbeat / maintenance
  *       frames must not fail the test.
  *
- *   I5 disconnect isolation
- *       Daemon X disconnects (raw `ws.close()`). Once the server
+ *   I5 disconnect isolation (cache cleanup, not just controller map)
+ *       Daemon X drives the full `ready` → `runtime_status` hydrate
+ *       round-trip so the fanout's `RunStateCache` is observably
+ *       populated (`getAgentRunStates(convX).length === 1`). Then
+ *       daemon X disconnects (raw `ws.close()`). Once the server
  *       observes the close: `connectionIdForHost(X)` becomes null,
- *       `connectionIdForHost(Y)` is unchanged, and daemon Y's
- *       legitimate event still flows to conv Y SSE. (Single
- *       direction is sufficient — we're proving cleanup of one
- *       host's slot doesn't touch the other; symmetry is implied.)
+ *       `getAgentRunStates(convX) === []` (proof
+ *       `state.cache.clearAll()` + `coordinator.clearRuntime` ran on
+ *       the disconnect path — Cindy `mZoTQikfvPoJ2C45` P1),
+ *       `connectionIdForHost(Y)` is unchanged, daemon Y's
+ *       legitimate event still flows to conv Y SSE. We deliberately
+ *       do NOT require the `states` Map slot itself to be deleted —
+ *       production semantics preserve the slot, and Cindy's review
+ *       OK'd that. (Single direction is sufficient — we're proving
+ *       cleanup of one host's slot doesn't touch the other; symmetry
+ *       is implied.)
  *
  * Out of scope (deferred to C9 / acceptance):
  *   - Real driver / agent CLI subprocess.
@@ -534,9 +543,9 @@ describe('D4.c C6 — two-daemon isolation e2e', () => {
     expect(xSawTarget).toBeUndefined();
   });
 
-  // ── I5 disconnect isolation ─────────────────────────────────
+  // ── I5 disconnect isolation (cache cleanup, not just controller map) ───
 
-  it('I5 — daemon X disconnect clears host X slot only; daemon Y stays attached and its events still publish', async () => {
+  it('I5 — daemon X disconnect clears host X runtime cache / live state; daemon Y connection + cache + publishes unchanged', async () => {
     fix = await makeTwoDaemonFixture();
     const url = fixtureUrl(fix);
 
@@ -548,20 +557,79 @@ describe('D4.c C6 — two-daemon isolation e2e', () => {
     const connY = fix.controller.connectionIdForHost(fix.hostY.id);
     expect(connY).not.toBeNull();
 
-    // Drive a legitimate daemon X event so host X actually has a
-    // fanout state slot to clear on disconnect (otherwise the
-    // disconnect path is a no-op for the cache and we'd be
-    // testing nothing).
+    // Cindy `mZoTQikfvPoJ2C45` P1: I5 must actually pin fanout
+    // cache cleanup, not just controller map removal. Drive the
+    // full `ready` → `runtime_status` hydrate round-trip so host X's
+    // RunStateCache observably has content (not just an empty
+    // state slot from a parsed_event-only path):
+    //
+    //   1. Daemon X sends `ready` → fanout's onDaemonReady triggers
+    //      an async hydrate via `bridge.runtimeStatus()` →
+    //      controller dispatches `runtime_status` command frame to
+    //      daemon X over the WS.
+    //   2. Daemon X's recorder catches the command, replies with a
+    //      snapshot containing a runtime + populated run_state.
+    //   3. Backend's RuntimeEventHandler applies the snapshot via
+    //      `cache.applyRuntimeState`, populating
+    //      `state.cache.list()`.
+    //   4. We assert `getAgentRunStates(convX).length === 1` — proof
+    //      the cache really has content.
+    //
+    // Then disconnect daemon X and assert
+    // `getAgentRunStates(convX) === []` — proof
+    // `OutboundRuntimeEventFanout.onDisconnect` cleared inner cache
+    // / coordinator refs (it preserves the `states` Map slot itself
+    // by current production semantics; we don't require slot
+    // deletion).
+    recX.ws.send(encodeOutboundFrame(readyEvent(123)));
+    const statusCmd = await untilFrame(
+      recX,
+      f =>
+        f.direction === 'server_to_daemon' &&
+        f.type === 'command' &&
+        f.kind === 'runtime_status',
+    );
     recX.ws.send(
-      encodeOutboundFrame(
-        legitimateParsedEvent(fix.hostX.channelId, fix.hostX.agentId, 'sess-x'),
-      ),
+      encodeOutboundFrame({
+        direction: 'daemon_to_server',
+        type: 'command_response',
+        id: statusCmd.id as string,
+        kind: 'runtime_status',
+        result: {
+          runtimes: [
+            {
+              conversation_id: fix.hostX.channelId,
+              agent_id: fix.hostX.agentId,
+              pid: 123,
+              phase: 'ready',
+              run_state: {
+                runId: 'run-x-1',
+                agentId: fix.hostX.agentId,
+                conversationId: fix.hostX.channelId,
+                status: 'thinking',
+                startedAt: 1700000000000,
+                updatedAt: 1700000000000,
+                lastActivityAt: 1700000000000,
+              },
+              started_at: 1700000000000,
+            },
+          ],
+        },
+      }),
     );
-    await waitFor(() =>
-      fix!.events.some(
-        e => e.conv === fix!.hostX.channelId && e.kind === 'agent_event',
-      ),
+
+    // Cache is observably populated.
+    await waitFor(
+      () => fix!.fanout.getAgentRunStates(fix!.hostX.channelId).length === 1,
     );
+    expect(
+      fix.fanout.getAgentRunStates(fix.hostX.channelId)[0],
+    ).toMatchObject({
+      runId: 'run-x-1',
+      conversationId: fix.hostX.channelId,
+      agentId: fix.hostX.agentId,
+      status: 'thinking',
+    });
 
     // Disconnect daemon X.
     recX.ws.close();
@@ -569,12 +637,21 @@ describe('D4.c C6 — two-daemon isolation e2e', () => {
       () => fix!.controller.connectionIdForHost(fix!.hostX.id) === null,
     );
 
-    // Y's connection is unchanged — same connectionId, still
-    // active.
+    // **The P1 assertion**: host X's runtime cache is cleared.
+    // `getAgentRunStates` filters by populated runState across all
+    // host state slots' caches; an empty result means
+    // `state.cache.clearAll()` ran (and `coordinator.clearRuntime`
+    // for every entry, by the same code path). The `states` Map
+    // slot may persist (production semantics) but its inner cache
+    // / live refs are gone.
+    expect(fix.fanout.getAgentRunStates(fix.hostX.channelId)).toEqual([]);
+
+    // Y's connection + cache untouched.
     expect(fix.controller.connectionIdForHost(fix.hostY.id)).toBe(connY);
     expect(fix.controller.activeConnectionCount()).toBe(1);
 
-    // Y can still drive a legitimate event end-to-end.
+    // Y can still drive a legitimate event end-to-end (publisher
+    // bus didn't break, perimeter still admits same-host frames).
     const eventsBefore = fix.events.length;
     recY.ws.send(
       encodeOutboundFrame(
@@ -625,9 +702,3 @@ async function waitFor(
   }
   throw new Error('waitFor: predicate did not become true within timeout');
 }
-
-// `readyEvent` is exported for symmetry with single-host tests but
-// currently unused — daemon-level frames are not exercised in the
-// isolation invariants. Keeping the helper makes future host-level
-// tests (D5) shorter.
-void readyEvent;
