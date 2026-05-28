@@ -53,30 +53,47 @@ owned by User B on any `/api/*` route → returns 404 / 403 per
 | Workspace (create with foreign host_id) | `test:tests/routes/workspace-conversation-routes.test.ts::POST /api/workspaces::rejects an explicit workspace host owned by another user` — 403 `host_not_owned` preflight. |
 | Workspace (cross-host member agents) | C3 `commit:a726f85` (+ fixup `73ba31a`). `test:tests/routes/d4-c3-workspace-placement.test.ts::create::cross-host member_agent_ids → 409 host_mismatch`. |
 | Conversation members | `test:tests/routes/conversation-members.test.ts::GET /api/conversations/:id/members::rejects a non-member user with 403`. |
-| Agent (`GET /api/agents/:id`) | **C9** `commit:<combined>`. `test:tests/routes/agents.test.ts::GET /api/agents/:id::cross-user GET returns 404 (not 403) — anti-enumeration (G3 ACL #1)`. Closes the gap audited in C9 review (`Acsun_kzRmpNmXZo`). |
+| Agent (`GET /api/agents/:id`) | **C9** `commit:f28facc`. `test:tests/routes/agents.test.ts::GET /api/agents/:id::cross-user GET returns 404 (not 403) — anti-enumeration (G3 ACL #1)`. Closes the gap audited in C9 review (`Acsun_kzRmpNmXZo`). |
 
-### ACL #2 — Invalid / revoked host_token at WS upgrade returns 401, no leak
+### ACL #2 — Invalid / revoked / wrong-kind credential at WS upgrade returns 401/403, no leak
 
-**Spec (§5.3, recast per Cindy review)**: outbound WS attach does
-NOT have a "daemon claims a host_id" parameter — `host_id` is
-derived from `HostTokenService.verifyHostToken`. The correct
-negative is: invalid / revoked / foreign `host_token` at the
-upgrade is rejected with **401 Unauthorized**, and the response
-does not leak `host_id` / `user_id` / row existence.
+**Spec (§5.3, recast per Cindy review)**: outbound WS attach has
+NO "daemon claims a host_id" parameter — the `host_id` is derived
+server-side from `HostTokenService.verifyHostToken(bearer)`. The
+correct negatives are:
+
+- **Invalid / unknown / revoked `host_token`** → 401 Unauthorized;
+  body does not leak `host_id` / `user_id` / row existence.
+- **Wrong credential kind** (e.g. a user-session bearer presented
+  as a host token, or a non-`long_lived` credential) → 401 by the
+  same path; the kind check is part of `verifyHostToken`.
+- **Valid `host_token` whose host is not a local-kind host
+  supported by V1 standalone** → 403 (a distinct error separating
+  "auth failed" from "this host kind is not supported by this
+  deployment").
+
+We deliberately do NOT enumerate "foreign host_token" as a
+distinct negative: a `host_token` is a bearer credential. If a
+caller presents a syntactically valid token issued for some other
+user's host, the server cannot distinguish that from the rightful
+owner using the bearer alone — that scenario is **credential
+compromise**, not a G3 negative. The G3 perimeter is the
+verify-and-reject behavior on invalid / revoked / wrong-kind
+inputs.
 
 | # | Layer | Evidence |
 |---|---|---|
-| #2.a | Token service (missing) | `test:tests/auth/host-token.test.ts::verifyHostToken::denies empty/unknown tokens as missing` → `{ok:false, code:'missing'}`, no `hostId` / `userId` in the failure arm. |
+| #2.a | Token service (missing / unknown) | `test:tests/auth/host-token.test.ts::verifyHostToken::denies empty/unknown tokens as missing` → `{ok:false, code:'missing'}`. No `hostId` / `userId` in the failure arm. |
 | #2.b | Token service (credential revoked) | Same file ::`denies revoked credential` → `{ok:false, code:'credential_revoked'}`. |
 | #2.c | Token service (host revoked) | Same file ::`denies token for revoked host` → `{ok:false, code:'host_revoked'}`. |
-| #2.d | WS upgrade | `test:tests/ws/host-ws-server.test.ts::authenticateHost::rejects missing, unknown, revoked host tokens before upgrade` — HTTP 401 (`unexpected response 401`). Body is the generic 401, not a host/credential payload. |
-| #2.e | WS upgrade (non-local host with valid token) | Same file ::`rejects non-local hosts even with valid token` — 403 (a distinct error, separating "auth failed" from "this host kind is not supported by V1 standalone"). |
+| #2.d | WS upgrade — invalid / revoked → 401 | `test:tests/ws/host-ws-server.test.ts::authenticateHost::rejects missing, unknown, revoked host tokens before upgrade` — HTTP 401 from the upgrade response. Body is the generic 401, not a host/credential payload. |
+| #2.e | WS upgrade — non-local host kind → 403 | Same file ::`rejects non-local hosts even with valid token` — a typed 403, distinct from the 401 auth-failed surface. |
 
-**Note**: the earlier `host_token_owner_mismatch` typed code referenced
-in some draft documents was removed during B.4 / C.x because the
-correct upgrade flow has no "daemon-declared host_id" surface;
-ownership is established by token verification, not by daemon
-self-assertion.
+**Note**: the earlier `host_token_owner_mismatch` typed code that
+appeared in some draft documents was removed during B.4 / C.x
+because the correct upgrade flow has no "daemon-declared host_id"
+surface; ownership is established by token verification, not by
+daemon self-assertion.
 
 ### ACL #3 — Host A spawn into User B's workspace rejected typed
 
@@ -86,7 +103,7 @@ User B's workspace → server rejects with typed code.
 | # | Acceptance | Evidence |
 |---|---|---|
 | #3.a | Workspace create / patch / add-member with cross-host agent → preflight rejects before any side effect. | C3 `commit:a726f85`. `test:tests/routes/d4-c3-workspace-placement.test.ts::create::cross-host member_agent_ids → 409 host_mismatch`. Preflight runs `assertWorkspaceAgentsMatchHost` before `initWorkspaceDir`; workspace count unchanged on rejection. |
-| #3.b | The helper scans ALL conversation kinds (channels + threads + dm_channels). | Same test file, P1 round-1 coverage; `assertWorkspaceAgentsMatchHost` source in `src/services/workspace-host-guards.ts` (or equivalent). |
+| #3.b | The helper scans ALL conversation kinds (channels + threads + dm_channels). | Same test file, P1 round-1 coverage; the helper `assertWorkspaceAgentsMatchHost` is defined at `packages/backend/src/routes.ts:1307` and invoked from the workspace POST / add-member routes. |
 
 **Code mapping**: the implementation's typed code is `host_mismatch`
 (409). The spec referenced `host_workspace_not_owned` as a candidate;
@@ -153,7 +170,7 @@ suite load on earlier branch tips:
 | Flake | Cause class | Fix | Evidence |
 |---|---|---|---|
 | Flake A — revoke close `activeConnectionCount` | Test asserted on `activeConnectionCount` / `getAttachment` / `connectionIdForHost` synchronously after the client-side close promise resolved, but the server-side `'close'` listener that clears those maps runs on the next event-loop tick. Cindy P1: the three maps are independent — hand-deleting any one in `disconnectHost` would either fail to flip `activeConnectionCount` or compete with the close listener's cleanup. | C9-1 `commit:0e404bb`. Test-only fix: bounded `waitFor` that polls all three observables simultaneously. No production code change. | `test:tests/ws/host-ws-server.test.ts::disconnectHost::disconnectHost kicks the live attachment with code 1008 / host_revoked (D4.c C2)`. |
-| Flake B — `standalone-g2-backend-restart` 12.74s timeout (post-restart second `session_init` projection) | Could not be reproduced after C9-1 across 12 isolated runs + 5 full-suite runs. Not proven as product bug. | C9 combined: (a) `waitForFreshAttachment(controller, hostId, prevConnectionId)` harness helper that explicitly waits for a NEW `hostws-*` connectionId, not any non-null attachment — defensive determinism; (b) permanent `onTimeout` diagnostic on the failing `waitFor` to capture observable state (DB row, attachment, active connection count) if the flake recurs. | `test:tests/e2e/standalone-g2-backend-restart.test.ts`. |
+| Flake B — `standalone-g2-backend-restart` 12.74s timeout (post-restart second `session_init` projection) | Could not be reproduced after C9-1 across 12 isolated runs + 5 full-suite runs. **Not proven as product bug. No specific root-cause scenario implied** (the post-restart controller is a fresh instance; it cannot return entries from a prior backend's controller, so "stale entries" is not a candidate root cause). | C9 combined: (a) `waitForFreshAttachment(controller, hostId, prevConnectionId)` harness helper that makes the post-restart attach predicate semantically precise — it waits for a fresh `hostws-*` connectionId distinct from the pre-restart one, rather than "any non-null attachment". Defensive determinism. (b) Permanent `onTimeout` diagnostic on the failing `waitFor` to capture observable state (DB row, attachment, active connection count) if the flake recurs. | `test:tests/e2e/standalone-g2-backend-restart.test.ts`. |
 
 The `onTimeout` hook on `waitFor` (added to `tests/e2e/g2-harness.ts`)
 is permanent infrastructure: it fires only on failure, so it is a
@@ -190,10 +207,10 @@ part of G3 closure:
 - Worktree: `/Users/shiki/workspace/silverhand-wt-d4-c` (not pushed
   to remote per shiki's autonomous-mandate constraint).
 - Commit chain (D4.c only, newest first):
-  - C9 (combined: harness helpers + ACL #1 test + docs + runbook
-    §12.8) — pending after C9-1.
-  - C9-1 `0e404bb` fix(d4.c-9-1): two-daemon revoke close test waits
-    for cleanup observable (flake A).
+  - C9 `f28facc` (combined: harness helpers + ACL #1 test + docs +
+    runbook §12.8).
+  - C9-1 `0e404bb` fix(d4.c-9-1): two-daemon revoke close test
+    waits for cleanup observable (flake A).
   - C8 fixup `0f513c7` + C8 `3452d37`.
   - C7 fixup `bb0f2db` + C7 `96f0222`.
   - C6 fixup `95bf4e7` + C6 `6a17947`.

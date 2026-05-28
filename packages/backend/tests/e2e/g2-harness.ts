@@ -645,17 +645,19 @@ export async function waitForAttachment(
  * a NEW attachment whose `connectionId` differs from `prevConnectionId`.
  *
  * Use this in restart / reconnect tests where `waitForAttachment`'s
- * "any non-null attachment" predicate is too permissive: a stale
- * attachment from a previous controller iteration could satisfy it
- * before the daemon's actual reconnect lands. The "fresh" predicate
- * binds the wait to the observable state transition the test
- * actually cares about — a fresh `hostws-*` connectionId.
+ * "any non-null attachment" predicate is semantically weaker than
+ * what the test actually wants. The "fresh" predicate explicitly
+ * waits for the observable state transition the test cares about —
+ * a fresh `hostws-*` connectionId distinct from `prevConnectionId`.
  *
- * **Cindy boundary** (`Acsun_kzRmpNmXZo`): this helper is defensive
- * harness cleanup; it does not by itself prove a product-side race.
- * If a flake recurs after this helper is in place, the timeout
- * `onTimeout` diagnostic on the calling `waitFor` should capture
- * the observable state for root-cause analysis.
+ * **Cindy boundary** (`Acsun_kzRmpNmXZo` + `cXpfB1KnydlUosFO`): this
+ * helper is **defensive harness cleanup** to make the restart-flow
+ * assertion semantically precise. It does NOT by itself prove a
+ * product-side race or any stale-snapshot scenario; the post-restart
+ * controller is a fresh instance and cannot return entries from a
+ * prior backend's controller. If a flake recurs after this helper
+ * is in place, the timeout `onTimeout` diagnostic on the calling
+ * `waitFor` should capture observable state for root-cause analysis.
  */
 export async function waitForFreshAttachment(
   controller: HostWsServerController,

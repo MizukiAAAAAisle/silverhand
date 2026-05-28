@@ -261,16 +261,15 @@ describe('Standalone G2 — backend restart + persistent attach recovery', () =>
     // attachment for `hostIdBefore`; we wait for the daemon to
     // reconnect on its config-poll cadence (50ms) and the new
     // backend's authenticateHost path to register a fresh
-    // connection. New connectionId proves it's a NEW attachment,
-    // not a stale reference from the closed backend.
+    // connection. New connectionId proves it's a NEW attachment.
     //
     // **D4.c C9-2** — use `waitForFreshAttachment` with the explicit
     // pre-restart connectionId rather than `waitForAttachment`'s
-    // "any non-null" predicate. This binds the wait to the actual
-    // observable state transition the test cares about (a new
-    // `hostws-*` connectionId), not to the weaker "controller has
-    // some attachment" condition. Defensive harness cleanup; not
-    // proven to fix any product-side race.
+    // "any non-null" predicate. This makes the wait predicate
+    // semantically precise: we are waiting for a fresh `hostws-*`
+    // connectionId distinct from the pre-restart one, not for "any
+    // non-null entry". Defensive harness cleanup; not a fix for any
+    // proven product race.
     const controller2 = harness.backend.context.hostWsController?.();
     if (!controller2) throw new Error('controller missing post-restart');
     const attached2 = await waitForFreshAttachment(

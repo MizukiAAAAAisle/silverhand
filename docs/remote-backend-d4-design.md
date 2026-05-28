@@ -288,13 +288,28 @@ pass):
 - User A → request workspace / conversation / agent owned by User B
   on any `/api/*` route → returns 404 / 403 per the
   `auth-and-host-model.md §2` layering. No row leakage in error body.
-- Daemon configured with User A's `host_token` attempts to attach to
-  a host slot owned by User B → server rejects with
-  `host_token_owner_mismatch` (or equivalent typed code). No silent
-  cross-tenant attach.
-- Daemon for host A attempts to spawn agent into User B's workspace
-  → server rejects with typed code (candidate:
-  `host_workspace_not_owned`).
+- Outbound WS attach has NO "daemon-declared host_id" parameter;
+  the server derives `host_id` from `HostTokenService.verifyHostToken(bearer)`.
+  The three credential negatives at the upgrade are:
+  - Invalid / unknown / revoked `host_token` → **401 Unauthorized**;
+    body does not leak `host_id` / `user_id` / row existence.
+  - Wrong credential kind (e.g. user-session bearer presented as a
+    host token, or a non-`long_lived` credential) → **401** via the
+    same `verifyHostToken` path.
+  - Valid token whose host is not a local-kind host supported by V1
+    standalone → **403** (distinct from 401 "auth failed"; this is
+    "this host kind is not supported by this deployment").
+  We deliberately do NOT enumerate "foreign host_token" as a
+  distinct negative: a `host_token` is a bearer credential. A
+  syntactically valid token issued for another user's host cannot be
+  distinguished from the rightful owner using the bearer alone —
+  that is **credential compromise**, not a G3 negative.
+- Daemon for host A attempts to spawn / membership-add an agent
+  pinned to host B's workspace (or vice versa) → server rejects
+  with typed code **`host_mismatch`** (409). The check
+  (`assertWorkspaceAgentsMatchHost` in `packages/backend/src/routes.ts`)
+  is a preflight that runs before any side effect (no `initWorkspaceDir`,
+  no row insert).
 - Both daemons online simultaneously: messages / events for User A do
   **not** appear in User B's daemon's event stream and vice versa.
 
@@ -303,7 +318,9 @@ pass):
 - Create two users via default signup (`DISABLE_SIGNUP=0`).
 - Operator sets `DISABLE_SIGNUP=1` and restarts backend.
 - After restart: existing User A's session bearer still authenticates
-  (no forced logout). Daemon A's host attach is unaffected. New
+  (no forced logout). Daemon A's host_token credential row is not
+  consumed, revoked, or rotated; the daemon can reconnect with the
+  same token through the standard attach path. New
   `POST /auth/signup` returns `403 { code: 'signup_disabled' }` —
   the route stays mounted; the handler branches on `signup_enabled`
   and returns the typed body when disabled (see §6.2; this is the
@@ -1212,9 +1229,13 @@ To lock down signup after the operator has created their account:
 What does **not** happen across the toggle (pinned by C8):
 
 - Existing user-session bearers remain valid. No forced logout.
-- Existing host_token rows remain valid; daemons stay attached.
-  `host_credentials` rows are not consumed, revoked, or rotated
-  on the restart.
+- Existing `host_token` credentials are **not** consumed, revoked,
+  or rotated by the restart. Daemons can reconnect with the same
+  token through the standard outbound-WS attach path.
+
+(The backend restart itself drops every live outbound WS; the
+reattach behavior is the general capability covered by G2 / C9
+acceptance, not a signup-toggle-specific guarantee.)
 
 The toggle is reversible: setting `SILVERHAND_DISABLE_SIGNUP=0`
 (or removing the env var) and restarting re-opens signup.
