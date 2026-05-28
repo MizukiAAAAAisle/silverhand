@@ -486,8 +486,8 @@
     </section>
 
     <div class="summary">
-      <div class="summary-cell"><span class="count" style="color: var(--green)">14</span><div><div class="lbl">done</div></div></div>
-      <div class="summary-cell"><span class="count" style="color: var(--blue)">2</span><div><div class="lbl">in-progress</div></div></div>
+      <div class="summary-cell"><span class="count" style="color: var(--green)">15</span><div><div class="lbl">done</div></div></div>
+      <div class="summary-cell"><span class="count" style="color: var(--blue)">1</span><div><div class="lbl">in-progress</div></div></div>
       <div class="summary-cell"><span class="count" style="color: var(--purple)">0</span><div><div class="lbl">in-review</div></div></div>
       <div class="summary-cell"><span class="count" style="color: var(--orange)">4</span><div><div class="lbl">planned</div></div></div>
       <div class="summary-cell"><span class="count" style="color: var(--gray)">11</span><div><div class="lbl">future</div></div></div>
@@ -736,15 +736,14 @@
           </div>
         </div>
 
-        <div class="card in-progress">
+        <div class="card done">
           <div class="card-head">
             <h3 class="card-title">D4.c — G3 security &amp; multi-host acceptance</h3>
-            <span class="badge in-progress">in progress (6 / 9)</span>
+            <span class="badge done">done</span>
           </div>
           <p class="card-body">
-            9 commits（v2 slicing），<strong>不含</strong> create-agent（已 defer 到 D4.d）。
-            <br>
-            <strong>C1–C6 ✅ done + Cindy LGTM</strong>：
+            9 commits（v2 slicing）+ C9 两轮 docs fixup，<strong>不含</strong> create-agent（已 defer 到 D4.d）。
+            <strong>D4.c closes G3 — security &amp; multi-host acceptance</strong>（不是 D4 final form complete）。Cindy round-3 LGTM。
             <br>
             • C1 standalone bootstrap → 真 <code>RuntimeHostPlacementResolver</code>，<code>local_host_unbound</code> / <code>local_host_ambiguous</code> typed 409，<code>listOwnedActiveLocalForUser</code> 0/1/N 不 silent-pick。
             <br>
@@ -758,12 +757,17 @@
             <br>
             • C6 two-daemon isolation e2e（real <code>host-ws-server</code> + real <code>OutboundRuntimeEventFanout</code> + 双 raw WS clients），5 invariants：simultaneous attach / SSE 双向隔离 / 实时多路复用下的 perimeter / 命令路由按 id+kind 否定（避 heartbeat flake）/ disconnect cache cleanup（真跑 ready+runtime_status hydrate 让 cache 可观察）。
             <br>
-            <strong>C7–C9 待</strong>：clear-session bounded timeout / signup-toggle 真重启 / G3 runbook + acceptance。
+            • C7 standalone <code>clearSession</code>：<code>CLEAR_SESSION_EXIT_TIMEOUT_MS = 10_000</code> bounded wait gate = daemon ack <code>result.cleared</code>（cache 不可信，restart/pre-hydrate/reattach 都不动摇），typed 503 <code>clear_session_timeout</code> + 409 <code>clear_session_in_progress</code> 都不进 placement taxonomy；DB tx 内 atomic clear cli_session_id + audit。
+            <br>
+            • C8 signup-toggle 真重启 e2e：三 phase 跑 enabled→disabled→enabled，user-session bearer 跨 restart 仍认（auth_sessions persisted），host_credentials 行 byte-equal 钉 toggle 不偷偷 revoke / consume / rotate（双向 knob 不是 trapdoor）。
+            <br>
+            • C9 G3 closure：新 <code>docs/d4-c-g3-acceptance.md</code>（7 段，每行挂 commit sha + test name）+ design <code>§5.3</code> ACL 终态模型（删 <code>host_token_owner_mismatch</code> / <code>host_workspace_not_owned</code>，统一 <code>host_mismatch</code>，明文 deliberately do NOT enumerate "foreign host_token" because bearer credentials are credential compromise, not a G3 perimeter）+ design <code>§12.8</code> 5 段 runbook（bring-up / revoke / signup boot-frozen / clearSession 503/409 / multi-daemon sticky no failover）。补 <code>GET /api/agents/:id</code> cross-user 404 anti-enumeration explicit pin（route 实现已对，C9 补 evidence）。Flake B（B6 post-restart timeout）未证产品 bug，落 <code>waitForFreshAttachment</code> + <code>onTimeout</code> 防御性 harness helper 让下次复现自带 evidence。
           </p>
           <div class="card-meta">
             <span class="m-tag m1">M1</span>
-            <span class="meta-tag">worktree silverhand-wt-d4-c</span>
-            <span class="meta-tag">success = G3 closed</span>
+            <span class="meta-tag">branch feature/remote-backend-v1-stage-d4-c-g3 tip 1498ccb</span>
+            <span class="meta-tag">acceptance docs/d4-c-g3-acceptance.md</span>
+            <span class="meta-tag">success = G3 closed ✓</span>
           </div>
         </div>
 
@@ -1101,8 +1105,9 @@
     <footer>
       <p>
         <strong>Milestone 1 路径</strong>（这期）：
-        D3.b（in-progress）+ D4.c（in-progress，C1–C6 done，C7–C9 待）并行 →
-        D4.d（create-agent materialize intent）→
+        D3.b（in-progress） →
+        <strong>D4.c ✅ done — G3 closed 2026-05-28（branch <code>feature/remote-backend-v1-stage-d4-c-g3</code> tip <code>1498ccb</code>）</strong> →
+        D4.d（create-agent materialize intent，next） →
         D4.e（daemon-owned data-plane proxy）+ D5.a（envelope adapter unification）并行 →
         T1 内 M1 子项（sticky host ownership + Remote UX 收口）→
         <strong>= M1 达成（final-form 协议，embedded 部署）</strong>。
