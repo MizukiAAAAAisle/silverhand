@@ -15,6 +15,9 @@
  *  --echo-stderr TEXT   write TEXT + '\n' to stderr, then keep running.
  *  --sleep MS           keep the process alive at least MS milliseconds
  *                       before voluntarily exiting (0).
+ *  --exit-code N        voluntary-exit with code N instead of 0. Used by
+ *                       D4 e2e tests to simulate an unintentional crash
+ *                       (non-zero + supervisor-didn't-stop → 'crashed').
  *  --ignore-sigterm     install a SIGTERM handler that logs but does
  *                       not exit, forcing the supervisor's SIGKILL
  *                       escalation path. Default: SIGTERM exits 143.
@@ -32,6 +35,7 @@
  */
 const args = process.argv.slice(2);
 let sleepMs = 60_000; // 60s default — long enough for any test to finish before timeout
+let exitCode = 0;
 let ignoreSigterm = false;
 let echoStdin = false;
 const toEcho = [];
@@ -47,6 +51,8 @@ for (let i = 0; i < args.length; i++) {
     toEcho.push({ stream: 'stderr', text: v });
   } else if (a === '--sleep') {
     sleepMs = Number(args[++i] ?? '60000');
+  } else if (a === '--exit-code') {
+    exitCode = Number(args[++i] ?? '0');
   } else if (a === '--ignore-sigterm') {
     ignoreSigterm = true;
   } else if (a === '--echo-stdin') {
@@ -98,5 +104,8 @@ for (const line of emitLines) {
 
 // Voluntary exit after `--sleep` so tests that DON'T issue a stop
 // still see a clean exit (with `intentional:false`, i.e. crashed).
-setTimeout(() => process.exit(0), sleepMs);
+// `--exit-code N` lets the test choose 0 (idle on the projector's
+// `code === 0` arm) or non-zero (crashed on the projector's
+// "otherwise" arm).
+setTimeout(() => process.exit(exitCode), sleepMs);
 
