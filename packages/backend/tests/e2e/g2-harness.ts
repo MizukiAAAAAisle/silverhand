@@ -188,7 +188,14 @@ export async function bootG2Harness(
     listen: { hostname: opts.hostname ?? '127.0.0.1', port: 0 },
     logger: verbose ? consoleBackendLogger() : silentBackendLogger,
     testHooks: {
-      wrapHostWsEventSink: real => makeRecordingSink(real, events, disconnects),
+      // Cindy P1 #task:660: the wrapper FAILS loud if `startBackend`
+      // hands the wrap factory `undefined` (i.e. standalone mode did
+      // not install `OutboundRuntimeEventFanout`). Without that
+      // strict check a regression that drops the fanout install
+      // would still see B1's ready-frame tests stay green because
+      // the recording observer would happily capture frames in
+      // isolation.
+      wrapHostWsEventSink: wrapWithStrictRecording(events, disconnects),
     },
   });
 
@@ -311,42 +318,82 @@ async function bootHarnessDaemon(configPath: string): Promise<{
 /**
  * Wrap the real fanout sink in a recording observer.
  *
- * The wrapper is **append-only**: it pushes every observed event
- * into `events[]`, then delegates to the real sink. If `real` is
- * `undefined` (embedded mode would do this; here we always have a
- * standalone fanout, but the type lets the wrapper handle the
- * embedded shape too), the delegate becomes a no-op and the
- * observer records frames in isolation. Either way the wrapper
- * never modifies the frame, swaps the connection id, or short-
- * circuits the production path.
+ * The wrapper is **strictly delegating**:
+ *
+ *   - `onEvent` calls `real.onEvent(...)` **first**; only if the
+ *     real fanout returns without throwing does the wrapper push
+ *     the frame into `events[]`. A real-fanout throw therefore
+ *     never leaves a captured frame behind — `waitForReadyFrame`
+ *     fails / times out and the test fails for the right reason
+ *     (Cindy P1 #task:660: "fake real sink throw → event must
+ *     not enter events[]").
+ *   - `onDisconnect` mirrors the same ordering (delegate first,
+ *     then record) so disconnect semantics stay consistent.
+ *   - `real === undefined` is **not** a legitimate input for B1 /
+ *     B2 / G2. The whole point of the harness is that the
+ *     standalone backend installs `OutboundRuntimeEventFanout`.
+ *     If a future standalone-mode regression drops the fanout
+ *     install, the wrap factory `wrapHostWsEventSink` must fail
+ *     loud rather than let the harness keep recording in
+ *     isolation (which would mask the missing-fanout bug).
  *
  * The observer is exposed through `harness.events` only — no
  * subscription / unsubscribe API. Tests inspect the array
  * directly and rely on the harness teardown to drop the wrapper.
  */
-function makeRecordingSink(
-  real: HostWsEventSink | undefined,
+export function makeRecordingSink(
+  real: HostWsEventSink,
   events: CapturedHostWsEvent[],
   disconnects: CapturedHostWsDisconnect[],
 ): HostWsEventSink {
   return {
     onEvent: (hostId, frame, connectionId) => {
+      // Delegate first. If the real fanout throws, the rethrow
+      // propagates out of `HostWsConnection.onMessage` exactly as
+      // it would in production, AND the wrapper does NOT record
+      // the frame — so a test that asserts on `events[]` will
+      // observe the failure rather than be fooled by an
+      // observer-only success path.
+      real.onEvent(hostId, frame, connectionId);
       events.push({
         hostId,
         connectionId,
         frame,
         observedAt: Date.now(),
       });
-      real?.onEvent?.(hostId, frame, connectionId);
     },
     onDisconnect: (hostId, connectionId) => {
+      real.onDisconnect?.(hostId, connectionId);
       disconnects.push({
         hostId,
         connectionId,
         observedAt: Date.now(),
       });
-      real?.onDisconnect?.(hostId, connectionId);
     },
+  };
+}
+
+/**
+ * The wrap factory passed to `startBackend`'s `testHooks`. Cindy
+ * P1 #task:660: if `startBackend` does not install a real fanout
+ * (i.e. passes `undefined` into the wrap), fail the harness boot
+ * loudly instead of returning a recording-in-isolation sink — a
+ * silent fallback would let B1 stay green even after a regression
+ * dropped the production fanout install.
+ */
+function wrapWithStrictRecording(
+  events: CapturedHostWsEvent[],
+  disconnects: CapturedHostWsDisconnect[],
+): (real: HostWsEventSink | undefined) => HostWsEventSink {
+  return real => {
+    if (!real) {
+      throw new Error(
+        'g2-harness: wrapHostWsEventSink received undefined fanout — ' +
+          'standalone backend must install OutboundRuntimeEventFanout ' +
+          'for G2 harness assertions to be meaningful',
+      );
+    }
+    return makeRecordingSink(real, events, disconnects);
   };
 }
 
