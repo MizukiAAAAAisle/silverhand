@@ -120,7 +120,7 @@ describe('mapAuthStateToViewer — three IPC arms (D4.a Commit 6 part 2)', () =>
 });
 
 describe('isBackendUnreachable / isRegistrationRequired type guards', () => {
-  it('isBackendUnreachable true ONLY for BackendUnreachable shape', () => {
+  it('isBackendUnreachable true for BackendUnreachable shape (exclusivity comes from gate order, not this guard)', () => {
     expect(
       isBackendUnreachable({
         backend_unreachable: true,
@@ -138,7 +138,7 @@ describe('isBackendUnreachable / isRegistrationRequired type guards', () => {
     expect(isBackendUnreachable(userDto())).toBe(false);
   });
 
-  it('isRegistrationRequired true ONLY for SetupRequired shape', () => {
+  it('isRegistrationRequired true for SetupRequired shape (exclusivity comes from gate order, not this guard)', () => {
     expect(
       isRegistrationRequired({
         registration_required: true,
