@@ -1,5 +1,5 @@
 /**
- * D4.c C7 (G3) — Standalone signup-toggle real restart e2e.
+ * D4.c C8 (G3) — Standalone signup-toggle real restart e2e.
  *
  * **What this pins**: the `authConfig.signupEnabled` boundary in
  * `startBackend` is a **boot-time-frozen** input. Toggling it at
@@ -46,6 +46,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import type { Database as Db } from 'better-sqlite3';
 import {
   apiPaths,
   authPaths,
@@ -56,7 +57,7 @@ import {
   type RunningBackend,
 } from '../../src/index.js';
 import type { BackendLogger } from '../../src/context.js';
-import { HostTokenService } from '../../src/auth/host-token.js';
+import { HostTokenService, hashHostToken } from '../../src/auth/host-token.js';
 
 const silentBackendLogger: BackendLogger = {
   info: () => {},
@@ -214,6 +215,45 @@ describe('Standalone G3 — signup-toggle real restart (D4.c C8)', () => {
       const hostId1 = claimRes.body.host_id as string;
       const hostToken = claimRes.body.host_token as string;
 
+      // Cindy P1 (`T9pFj34JhTdg_01V`): snapshot the full
+      // `host_credentials` rows for `hostId1` BEFORE the restart, so
+      // phase 2 can deep-equal them. The previous "row count + state
+      // fields" check could not distinguish "credential preserved"
+      // from "credential silently rotated within the rotation grace
+      // window" — a regression that minted a NEW row + revoked the
+      // old one would still see `verifyHostToken` succeed (grace) and
+      // a single state-clean latest row. Pinning byte-equal of every
+      // column (including `id` and `token_hash`) closes that gap.
+      type HostCredentialFullRow = {
+        id: string;
+        host_id: string;
+        token_hash: string;
+        kind: string;
+        expires_at: number | null;
+        consumed_at: number | null;
+        revoked_at: number | null;
+      };
+      const dumpCredentials = (db: Db) =>
+        db
+          .prepare<[string], HostCredentialFullRow>(
+            `SELECT id, host_id, token_hash, kind, expires_at,
+                    consumed_at, revoked_at
+               FROM host_credentials
+              WHERE host_id = ?
+              ORDER BY rowid ASC`,
+          )
+          .all(hostId1);
+      const preCredentials = dumpCredentials(active.backend.context.db);
+      // claim-or-create on a fresh host mints exactly one long_lived
+      // credential. Pin the count explicitly so a future "issue extra
+      // bootstrap on claim" regression surfaces here.
+      expect(preCredentials).toHaveLength(1);
+      const [preCredential] = preCredentials;
+      // Sanity: the cleartext `hostToken` we received from the route
+      // hashes to the row's `token_hash` (proves the snapshot truly
+      // covers THE credential under test, not a sibling row).
+      expect(preCredential!.token_hash).toBe(hashHostToken(hostToken));
+
       // ─── Phase 2: real close + restart with signup DISABLED ───────
       const phase1State = {
         dbPath: active.dbPath,
@@ -269,6 +309,15 @@ describe('Standalone G3 — signup-toggle real restart (D4.c C8)', () => {
       // rows so a regression that strips token state silently (e.g.
       // marks revoked_at on restart) would surface here, not later
       // at WS attach time.
+      //
+      // **Cindy P1 (`T9pFj34JhTdg_01V`)**: a `verifyHostToken: ok` +
+      // "latest row clean" assertion is not enough — within the
+      // rotation grace window, an erroneous restart-time
+      // `rotateHostToken` would: (i) leave the old row valid (grace),
+      // (ii) mint a new row that *also* looks clean. The rigorous
+      // contract is "the credential row is byte-identical pre/post
+      // restart, and the same row is the one `verifyHostToken`
+      // resolves to". Pin both.
       {
         const tokens = new HostTokenService(active.backend.context.db);
         const verified = tokens.verifyHostToken(hostToken);
@@ -276,7 +325,9 @@ describe('Standalone G3 — signup-toggle real restart (D4.c C8)', () => {
         if (verified.ok) {
           expect(verified.hostId).toBe(hostId1);
           expect(verified.userId).toBe(userId1);
-          expect(typeof verified.credentialId).toBe('string');
+          // Same `credential_id` as pre-restart — the resolved row
+          // is the very row we snapshotted, not a fresh rotation.
+          expect(verified.credentialId).toBe(preCredential!.id);
         }
 
         // Underlying host row not revoked.
@@ -289,21 +340,13 @@ describe('Standalone G3 — signup-toggle real restart (D4.c C8)', () => {
         expect(hostRow?.revoked_at).toBeNull();
         expect(hostRow?.user_id).toBe(userId1);
 
-        // Underlying credential row not consumed and not revoked.
-        const credRow = active.backend.context.db
-          .prepare<
-            [string],
-            { consumed_at: number | null; revoked_at: number | null; kind: string }
-          >(
-            `SELECT consumed_at, revoked_at, kind
-               FROM host_credentials WHERE host_id = ?
-               ORDER BY rowid DESC LIMIT 1`,
-          )
-          .get(hostId1);
-        expect(credRow).toBeTruthy();
-        expect(credRow?.consumed_at).toBeNull();
-        expect(credRow?.revoked_at).toBeNull();
-        expect(credRow?.kind).toBe('long_lived');
+        // Cindy P1 deep-equal: every column of every host_credentials
+        // row for this host is unchanged. Catches silent rotate /
+        // reissue / extra-row mint scenarios that the pre-fix latest-
+        // row-only assertion would have missed.
+        const postCredentials = dumpCredentials(active.backend.context.db);
+        expect(postCredentials).toHaveLength(1);
+        expect(postCredentials).toEqual(preCredentials);
       }
 
       // ─── Phase 3 (P2.a, secondary): real close + restart with
