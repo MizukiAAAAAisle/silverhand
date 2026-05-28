@@ -44,7 +44,6 @@ import type { AgentRuntimeHost } from './runtime/agent-runtime-host.js';
 import { ControlPlaneRuntimeHost } from './runtime/control-plane-runtime-host.js';
 import { OutboundRuntimeEventFanout } from './runtime/outbound-event-fanout.js';
 import {
-  DisabledRuntimeHostPlacement,
   RuntimeHostPlacementResolver,
 } from './runtime/host-placement.js';
 import { AgentRepo } from './repos/agent-repo.js';
@@ -315,9 +314,25 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
       sessionTtlMs: authConfig.sessionTtlMs,
     }),
     placement:
-      opts.mode === 'embedded'
-        ? placement
-        : new DisabledRuntimeHostPlacement(),
+      // D4.c C1 — standalone now uses the same `RuntimeHostPlacementResolver`
+      // as embedded. Pre-D4.c the standalone branch wired
+      // `DisabledRuntimeHostPlacement` (every method threw
+      // `host_runtime_disabled`) because the original Stage B/C
+      // sketch treated standalone as "no host placement at all".
+      // M1 turns that around: standalone has a real hosts table
+      // populated by remote desktop daemons attaching over outbound
+      // WSS, so placement = authoritative DB lookup either way.
+      // The D2.0 guiding principle ("server doesn't pretend to own
+      // user filesystem") lives at the route / data-plane layer,
+      // not here — the resolver is just identity / ACL / equality
+      // checks against the DB. Note: this means routes that used
+      // to early-return `host_runtime_disabled` purely because they
+      // hit `ctx.placement.*` in standalone now return real
+      // 404/403/409 responses driven by actual DB state. The
+      // CRUD-deferral routes that explicitly `standaloneMode(ctx)`
+      // fork into `hostRuntimeDisabledResponse()` are unaffected;
+      // those are C2/C3 work to lift properly.
+      placement,
     hostWsController: () => hostWs,
     // Filled immediately below when the daemon runtime host is constructed.
     runtimeHost: undefined as unknown as AgentRuntimeHost,

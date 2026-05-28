@@ -80,6 +80,61 @@ describe('HostRepo', () => {
     expect(repo.getOwnedLocalForUser(viewerUserId)?.id).toBe(older.id);
   });
 
+  // D4.c C1 — list-form companion of `getOwnedLocalForUser`. Same
+  // active-only / sort-by-recency / per-user filter, just returns the
+  // full set instead of the silent-pick "best" row. Used by
+  // `RuntimeHostPlacementResolver.resolveOwnedLocalForUser` to
+  // detect 0 / 1 / N branches and surface `local_host_ambiguous`
+  // for N≥2.
+  it('listOwnedActiveLocalForUser enumerates 0 / 1 / N active local hosts per user', () => {
+    const { db, viewerUserId } = openTestDb();
+    const repo = new HostRepo(db);
+
+    // 0
+    expect(repo.listOwnedActiveLocalForUser(viewerUserId)).toEqual([]);
+
+    // 1
+    const a = repo.create('local-a', 'local', {
+      userId: viewerUserId,
+      installationId: 'install-a',
+      lastSeenAt: 1_700_000_000_000,
+    });
+    expect(repo.listOwnedActiveLocalForUser(viewerUserId).map(h => h.id)).toEqual([
+      a.id,
+    ]);
+
+    // N (most-recently-seen first matches getOwnedLocalForUser's
+    // sort, so unit tests downstream can assert deterministic order)
+    const b = repo.create('local-b', 'local', {
+      userId: viewerUserId,
+      installationId: 'install-b',
+      lastSeenAt: 1_700_000_000_002,
+    });
+    expect(
+      repo.listOwnedActiveLocalForUser(viewerUserId).map(h => h.id),
+    ).toEqual([b.id, a.id]);
+
+    // remote hosts of the same user excluded
+    repo.create('remote-owned', 'remote', {
+      userId: viewerUserId,
+      installationId: 'remote-install',
+    });
+    expect(
+      repo.listOwnedActiveLocalForUser(viewerUserId).map(h => h.id),
+    ).toEqual([b.id, a.id]);
+
+    // (per-user filter is exercised by `listForUser` / repo
+    // ownership tests above; we don't re-create cross-user fixtures
+    // here because the test fixture only seeds the viewer user.)
+
+    // revoked rows excluded (active-only invariant matches the
+    // single-row variant)
+    expect(repo.revoke(b.id)).toBe(true);
+    expect(
+      repo.listOwnedActiveLocalForUser(viewerUserId).map(h => h.id),
+    ).toEqual([a.id]);
+  });
+
   // Stage B.4: re-claim after revoke must succeed under the active-only
   // partial UNIQUE. The lookup path filters revoked rows so
   // `claimOrCreateLocal` reaches its `create` branch with a fresh row.

@@ -176,6 +176,13 @@ const placementErrorStatusMap: Record<
   host_runtime_disabled: 409,
   host_revoked: 409,
   local_host_unbound: 409,
+  // D4.c C1 — multi-host placement ambiguity. 409 (Conflict) matches
+  // `local_host_unbound`'s semantics: the route's required precondition
+  // (a single resolvable local host) does not hold, the caller can
+  // recover by picking an explicit `host_id`. Distinct code lets the
+  // renderer surface a "you have N hosts — pick one" UX instead of the
+  // "no daemon found" UX it shows for `local_host_unbound`.
+  local_host_ambiguous: 409,
   workspace_missing: 404,
   // D4.a Commit 6 (3): transient transport-down → 503 Service
   // Unavailable. Differs from `host_runtime_disabled` (409: standalone

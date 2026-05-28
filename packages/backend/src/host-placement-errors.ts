@@ -6,6 +6,17 @@ export type RuntimeHostPlacementErrorCode =
   | 'host_runtime_disabled'
   | 'host_revoked'
   | 'local_host_unbound'
+  // D4.c C1 — typed-fail for the multi-host placement case in
+  // standalone mode: user has more than one active local host
+  // (e.g. local daemon + sandbox daemon co-resident, or two
+  // desktop machines attached to the same remote backend), so the
+  // pre-D4.c "most-recently-seen wins" silent-pick is no longer
+  // safe. Routes that need a single default placement (e.g. host
+  // creation without explicit `host_id`) must surface this so the
+  // caller can pick explicitly. Differs from `local_host_unbound`
+  // (= zero hosts, user has no daemon) by carrying "you have
+  // multiple — pick one" semantics rather than "you have none".
+  | 'local_host_ambiguous'
   | 'workspace_missing'
   // D4.a Commit 6 (3) — typed-fail for the narrow case where host
   // placement RESOLVED (a live host record exists, owned, not

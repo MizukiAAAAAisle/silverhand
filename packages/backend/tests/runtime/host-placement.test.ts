@@ -80,6 +80,97 @@ describe('RuntimeHostPlacementResolver', () => {
     );
   });
 
+  // D4.c C1 — 0/1/N branch pin for the default-placement helper.
+  // The N case is the new behavior shift: pre-D4.c
+  // `resolveOwnedLocalForUser` silently returned the "best"
+  // (most-recently-seen) row when the user had multiple active
+  // local hosts. M1 makes that explicit: the caller must pick.
+  it('rejects with local_host_ambiguous when user has multiple active local hosts (D4.c C1)', () => {
+    const t = makeResolver();
+
+    // 0 hosts — covered above, repeated here for visual clarity
+    // of the 0/1/N enumeration this test pins.
+    expect(() =>
+      t.placement.resolveOwnedLocalForUser(t.viewerUserId),
+    ).toThrowError(expect.objectContaining({ code: 'local_host_unbound' }));
+
+    // 1 host — single resolution still works.
+    const first = t.hosts.create('owned-local-1', 'local', {
+      userId: t.viewerUserId,
+      installationId: 'install-1',
+    });
+    expect(t.placement.resolveOwnedLocalForUser(t.viewerUserId).id).toBe(
+      first.id,
+    );
+
+    // ≥2 hosts — ambiguous, must throw the typed code so the
+    // caller can prompt the user to pick. Add a second active
+    // local host with a *different* installation id (the active
+    // unique index is `(user_id, installation_id)`).
+    t.hosts.create('owned-local-2', 'local', {
+      userId: t.viewerUserId,
+      installationId: 'install-2',
+    });
+    expect(() =>
+      t.placement.resolveOwnedLocalForUser(t.viewerUserId),
+    ).toThrowError(
+      expect.objectContaining({ code: 'local_host_ambiguous' }),
+    );
+
+    // Revoked rows do not count toward ambiguity: revoke the
+    // second one and the resolver is once again unambiguous.
+    const all = t.hosts.listForUser(t.viewerUserId);
+    const second = all.find(h => h.id !== first.id)!;
+    t.hosts.revoke(second.id, Date.now());
+    expect(t.placement.resolveOwnedLocalForUser(t.viewerUserId).id).toBe(
+      first.id,
+    );
+  });
+
+  it('exposes listOwnedActiveLocalForUser with 0 / 1 / N visibility (D4.c C1)', () => {
+    const t = makeResolver();
+
+    // 0
+    expect(t.placement.listOwnedActiveLocalForUser(t.viewerUserId)).toEqual([]);
+
+    // 1
+    const a = t.hosts.create('owned-local-a', 'local', {
+      userId: t.viewerUserId,
+      installationId: 'install-a',
+    });
+    expect(
+      t.placement
+        .listOwnedActiveLocalForUser(t.viewerUserId)
+        .map(h => h.id),
+    ).toEqual([a.id]);
+
+    // N — visibility matches `getOwnedLocalForUser`'s active-only +
+    // recency-sorted invariant, but as an array instead of a single
+    // pick. Revoked rows are excluded.
+    const b = t.hosts.create('owned-local-b', 'local', {
+      userId: t.viewerUserId,
+      installationId: 'install-b',
+    });
+    const ids = t.placement
+      .listOwnedActiveLocalForUser(t.viewerUserId)
+      .map(h => h.id);
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids)).toEqual(new Set([a.id, b.id]));
+
+    // Per-user / per-kind filtering is covered at the repo layer
+    // (`tests/repos/host-repo.test.ts`); this test only pins the
+    // resolver's delegation contract.
+
+    // Revoke one and the list shrinks accordingly (no resurrection
+    // of the silent-pick behavior).
+    t.hosts.revoke(b.id, Date.now());
+    expect(
+      t.placement
+        .listOwnedActiveLocalForUser(t.viewerUserId)
+        .map(h => h.id),
+    ).toEqual([a.id]);
+  });
+
   it('enforces agent/workspace host equality for membership', () => {
     const t = makeResolver();
     const hostA = t.hosts.create('owned-a', 'local', {

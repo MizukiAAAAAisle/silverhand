@@ -129,6 +129,40 @@ export class HostRepo {
     return row ?? null;
   }
 
+  /**
+   * D4.c C1 — list every active local host owned by `userId`,
+   * sorted with the most-recently-seen first (same secondary sort
+   * key as `getOwnedLocalForUser`).
+   *
+   * Why a separate method:
+   * - `getOwnedLocalForUser` silently picks the "best" single host
+   *   when the user has multiple active local hosts (e.g. local
+   *   daemon + sandbox daemon on the same machine, or two desktop
+   *   hosts both attached to the same remote backend). In M1
+   *   multi-host scenarios this silent-pick is no longer safe —
+   *   the placement layer needs to either get a single row or
+   *   surface a typed `local_host_ambiguous` error so the caller
+   *   picks explicitly.
+   * - This list view is the basis for that ambiguity detection in
+   *   `RuntimeHostPlacementResolver.resolveOwnedLocalForUser`:
+   *   0 rows → `local_host_unbound`, 1 row → return, ≥2 rows →
+   *   `local_host_ambiguous`.
+   * - Revoked rows are excluded (same as the single-row variant);
+   *   they live in the table for audit history only.
+   */
+  listOwnedActiveLocalForUser(userId: string): HostRow[] {
+    return this.db
+      .prepare<[string], HostRow>(
+        `SELECT * FROM hosts
+          WHERE user_id = ?
+            AND kind = 'local'
+            AND revoked_at IS NULL
+          ORDER BY COALESCE(last_seen_at, created_at) DESC,
+                   created_at DESC`,
+      )
+      .all(userId);
+  }
+
   bindToUserInstallation(input: {
     hostId: string;
     userId: string;
