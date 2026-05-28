@@ -228,59 +228,114 @@ describe('Standalone G2 — runtime_start dispatch + session_init projection', (
     if (!controller) throw new Error('host ws controller missing');
     await waitForAttachment(controller, harness.hostId);
 
-    // Production trigger: same call path the delivery-coordinator
-    // takes in production. `start` → `startDeliveryBacked` claims
-    // the pending inbox row, builds a `RuntimeStartParams` from
-    // workspace/agent/conversation DB state, and dispatches
-    // `runtime_start` over the outbound WS.
-    await harness.backend.context.runtimeHost.start(conversationId, agentId);
-
-    // Observable #1: the captured `runtime_parsed_event` frame
-    // round-tripped through the real fanout. We assert on the
-    // normalized object the schema parsed (Cindy boundary #2 —
-    // protocol objects, not transport bytes).
-    const captured = await waitFor(
-      () =>
-        harness!.events.find(
-          e =>
-            e.frame.kind === 'runtime_parsed_event' &&
-            e.frame.parsed.kind === 'session_init' &&
-            e.frame.parsed.sessionId === expectedSessionId,
-        ) ?? null,
-      { timeoutMs: 10_000, label: 'session_init parsed event' },
-    );
-    expect(captured.hostId).toBe(harness.hostId);
-    expect(captured.frame.kind).toBe('runtime_parsed_event');
-    if (captured.frame.kind !== 'runtime_parsed_event') {
-      throw new Error('frame.kind narrowing failed');
-    }
-    expect(captured.frame.conversation_id).toBe(conversationId);
-    expect(captured.frame.agent_id).toBe(agentId);
-    expect(captured.frame.parsed).toEqual({
-      kind: 'session_init',
-      sessionId: expectedSessionId,
-    });
-
-    // Observable #2: the DB projection landed. This is the
-    // load-bearing assertion for backend-visible state (Cindy
-    // boundary #3) — without this row update the renderer / future
-    // wake paths can't know the runtime is live.
-    const sessionRow = await waitFor(
-      () => {
-        const row = db
-          .prepare<[string, string], { status: string; cli_session_id: string | null }>(
-            `SELECT status, cli_session_id
-               FROM conversation_agents
-              WHERE conversation_id = ? AND agent_id = ?`,
-          )
-          .get(conversationId, agentId);
-        if (!row) return null;
-        if (row.cli_session_id !== expectedSessionId) return null;
-        return row;
+    // Observable #3 (Cindy P1 follow-up `OvXzRQmTQ6dSw7nU`):
+    // subscribe to the real `ScopeEventBus` BEFORE issuing the
+    // intent so we catch the `agent_status` publish from
+    // `StatusProjector.sessionInit`. This is the renderer-visible
+    // half of the projection — DB writes alone don't prove the
+    // event bus published, and a future regression that updates
+    // the DB but skips `events.publish(...)` would silently break
+    // remote-runtime UI updates without this assertion.
+    const busEvents: Array<{ kind: string; payload: unknown }> = [];
+    const unsubscribe = harness.backend.context.events.subscribe(
+      conversationId,
+      event => {
+        busEvents.push(event);
       },
-      { timeoutMs: 10_000, label: 'conversation_agents.cli_session_id projection' },
     );
-    expect(sessionRow.status).toBe('active');
-    expect(sessionRow.cli_session_id).toBe(expectedSessionId);
+
+    try {
+      // Production trigger: same call path the delivery-coordinator
+      // takes in production. `start` → `startDeliveryBacked` claims
+      // the pending inbox row, builds a `RuntimeStartParams` from
+      // workspace/agent/conversation DB state, and dispatches
+      // `runtime_start` over the outbound WS.
+      await harness.backend.context.runtimeHost.start(conversationId, agentId);
+
+      // Observable #1: the captured `runtime_parsed_event` frame
+      // round-tripped through the real fanout. We assert on the
+      // normalized object the schema parsed (Cindy boundary #2 —
+      // protocol objects, not transport bytes).
+      const captured = await waitFor(
+        () =>
+          harness!.events.find(
+            e =>
+              e.frame.kind === 'runtime_parsed_event' &&
+              e.frame.parsed.kind === 'session_init' &&
+              e.frame.parsed.sessionId === expectedSessionId,
+          ) ?? null,
+        { timeoutMs: 10_000, label: 'session_init parsed event' },
+      );
+      expect(captured.hostId).toBe(harness.hostId);
+      expect(captured.frame.kind).toBe('runtime_parsed_event');
+      if (captured.frame.kind !== 'runtime_parsed_event') {
+        throw new Error('frame.kind narrowing failed');
+      }
+      expect(captured.frame.conversation_id).toBe(conversationId);
+      expect(captured.frame.agent_id).toBe(agentId);
+      expect(captured.frame.parsed).toEqual({
+        kind: 'session_init',
+        sessionId: expectedSessionId,
+      });
+
+      // Observable #2: the DB projection landed. This is the
+      // load-bearing assertion for backend-visible state (Cindy
+      // boundary #3) — without this row update the renderer /
+      // future wake paths can't know the runtime is live.
+      const sessionRow = await waitFor(
+        () => {
+          const row = db
+            .prepare<[string, string], { status: string; cli_session_id: string | null }>(
+              `SELECT status, cli_session_id
+                 FROM conversation_agents
+                WHERE conversation_id = ? AND agent_id = ?`,
+            )
+            .get(conversationId, agentId);
+          if (!row) return null;
+          if (row.cli_session_id !== expectedSessionId) return null;
+          return row;
+        },
+        { timeoutMs: 10_000, label: 'conversation_agents.cli_session_id projection' },
+      );
+      expect(sessionRow.status).toBe('active');
+      expect(sessionRow.cli_session_id).toBe(expectedSessionId);
+
+      // Observable #3 assertion: ScopeEventBus published the
+      // renderer-visible `agent_status` event. Cindy P1: a
+      // regression where the projector writes the DB but forgets
+      // `events.publish(...)` would leave observation #2 green
+      // while remote-runtime UI silently breaks. Pin payload
+      // shape (`agent_id`, `status='active'`, `cli_session_id`)
+      // explicitly so a partial publish (e.g. status without
+      // cli_session_id) also fails loud.
+      const agentStatusEvent = await waitFor(
+        () => {
+          const candidate = busEvents.find(e => {
+            if (e.kind !== 'agent_status') return false;
+            const payload = e.payload as
+              | { agent_id?: unknown; status?: unknown; cli_session_id?: unknown }
+              | null;
+            if (!payload) return false;
+            return (
+              payload.agent_id === agentId &&
+              payload.status === 'active' &&
+              payload.cli_session_id === expectedSessionId
+            );
+          });
+          return candidate ?? null;
+        },
+        { timeoutMs: 10_000, label: 'agent_status bus event' },
+      );
+      const payload = agentStatusEvent.payload as {
+        agent_id: string;
+        status: string;
+        cli_session_id: string;
+      };
+      expect(payload.agent_id).toBe(agentId);
+      expect(payload.status).toBe('active');
+      expect(payload.cli_session_id).toBe(expectedSessionId);
+    } finally {
+      unsubscribe();
+    }
   });
 });

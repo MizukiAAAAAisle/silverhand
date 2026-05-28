@@ -7,6 +7,16 @@
 export { runDaemon, type RunDaemonOptions, type RunningDaemon } from './run.js';
 export { IntentDispatcher } from './dispatcher.js';
 export { DaemonServer } from './server.js';
+/**
+ * @internal Exposed for backend e2e harnesses that need to inject a
+ * real `Supervisor` with test `driverFor` / `spawnFn` seams (see
+ * `packages/backend/tests/e2e/g2-harness.ts`'s
+ * `bootDaemonWithSupervisor`). Production code MUST go through
+ * `runDaemon({ supervisorFactory: ... })` — never `new Supervisor`
+ * directly, since `runDaemon` is what wires the dispatcher +
+ * outbound supervisor + lifecycle around it. A future re-organize
+ * may move these behind a `./daemon/testing` subpath export.
+ */
 export { Supervisor, type SupervisorOptions } from './supervisor/index.js';
 export type { SupervisorContract } from './supervisor-contract.js';
 export { createDaemonLogControl, createDaemonLogger, type DaemonLogger } from './logger.js';
