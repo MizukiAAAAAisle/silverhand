@@ -167,7 +167,7 @@ const repoErrorStatusMap: Record<string, 400 | 404 | 409 | 429> = {
 
 const placementErrorStatusMap: Record<
   string,
-  400 | 403 | 404 | 409
+  400 | 403 | 404 | 409 | 503
 > = {
   agent_missing: 404,
   host_mismatch: 409,
@@ -177,14 +177,76 @@ const placementErrorStatusMap: Record<
   host_revoked: 409,
   local_host_unbound: 409,
   workspace_missing: 404,
+  // D4.a Commit 6 (3): transient transport-down → 503 Service
+  // Unavailable. Differs from `host_runtime_disabled` (409: standalone
+  // backend, no daemon at all — config decision) by carrying
+  // "try again in a moment" semantics rather than "this server
+  // mode never runs agents".
+  host_attach_pending: 503,
 };
 
-function placementErrorResponse(c: Context, err: unknown): Response | null {
-  if (!(err instanceof RuntimeHostPlacementError)) return null;
-  return c.json(
-    { error: err.message, code: err.code },
-    placementErrorStatusMap[err.code] ?? 400,
+/**
+ * D4.a Commit 6 (3) — map a narrow subset of
+ * `HostWsCommandTransportError` codes to the typed
+ * `host_attach_pending` placement-error code.
+ *
+ * **Why narrow**: only the two transport codes that mean "host is
+ * temporarily unreachable" are collapsed into `host_attach_pending`:
+ *   - `transport_no_connection` — host record resolved by placement,
+ *     but no live WS connection at send time.
+ *   - `transport_disconnected` — WS connection dropped between
+ *     dispatch and send.
+ *
+ * Other `HostWsCommandTransportError` codes have different recovery
+ * semantics and intentionally fall through to the generic 400
+ * fallback in `startConversationAgent` / `stopConversationAgent`:
+ *   - `transport_timeout` — daemon ACK'd receipt but never
+ *     responded; could be a daemon bug, not "attach pending".
+ *   - `transport_send_failed` — local WS write failure; could be a
+ *     backend bug, not the daemon's problem.
+ *   - `transport_invalid_command` — payload schema mismatch;
+ *     protocol bug, callers must not retry blindly.
+ *   - `transport_response_mismatch` — protocol bug, same.
+ *
+ * This is the load-bearing gate Cindy 5d/6 review called out: don't
+ * collapse all transport errors into one user-facing code.
+ */
+function mapTransportErrorToPlacement(
+  err: unknown,
+): RuntimeHostPlacementError | null {
+  if (!(err instanceof HostWsCommandTransportError)) return null;
+  if (
+    err.code !== 'transport_no_connection'
+    && err.code !== 'transport_disconnected'
+  ) {
+    return null;
+  }
+  return new RuntimeHostPlacementError(
+    'host_attach_pending',
+    `daemon host ${err.details.hostId} is not currently attached; retry in a moment`,
   );
+}
+
+function placementErrorResponse(c: Context, err: unknown): Response | null {
+  // RuntimeHostPlacementError thrown by `placement.resolveForAgent`
+  // (pre-send) — direct match.
+  if (err instanceof RuntimeHostPlacementError) {
+    return c.json(
+      { error: err.message, code: err.code },
+      placementErrorStatusMap[err.code] ?? 400,
+    );
+  }
+  // D4.a Commit 6 (3): HostWsCommandTransportError thrown by the
+  // outbound dispatcher AFTER placement resolved — promote the
+  // narrow "host unreachable" subset to `host_attach_pending`.
+  const promoted = mapTransportErrorToPlacement(err);
+  if (promoted) {
+    return c.json(
+      { error: promoted.message, code: promoted.code },
+      placementErrorStatusMap[promoted.code] ?? 400,
+    );
+  }
+  return null;
 }
 
 function hostRuntimeDisabledResponse(
