@@ -1272,6 +1272,42 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     return ctx.placement.resolveOwnedLocalForUser(userId).id;
   }
 
+  /**
+   * D4.c C3 — preflight that rejects any workspace-level mutation
+   * (PATCH metadata, DELETE) when one of the workspace's existing
+   * agent-backed conversations carries an agent that no longer
+   * matches `expectedHostId`. Throws the placement layer's
+   * `host_mismatch` error (typed 409 via `placementErrorResponse`)
+   * BEFORE the route runs any side effect — metadata write,
+   * rename system message insert, runtime stop, attachment sweep,
+   * or workspaces.delete.
+   *
+   * The check iterates `conversations.listAllChannelsForWorkspace`
+   * and `conversations.listAgents` (returns
+   * `ConversationAgentDto[]`, agent ids live on `.agent_id`). A
+   * mismatch causes immediate fail-closed; the catch block in the
+   * caller maps it to 409 + `host_mismatch` exactly the same way
+   * the workspace POST loop does for new-member candidates.
+   *
+   * NOTE: This is a control-plane placement check. fs side-effect
+   * boundaries (`initWorkspaceDir` / `ensureAgentL1Dir` /
+   * `seedAgentL2`) are NOT moved by C3 — they remain server-side
+   * placeholders in standalone mode pending the D4.e workspace
+   * materialize intent. The fail-closed contract here is
+   * "rejected path leaks no fs / DB / message side effect", which
+   * is already true because the call sits before every write.
+   */
+  function assertWorkspaceAgentsMatchHost(
+    workspaceId: string,
+    expectedHostId: string,
+  ): void {
+    for (const channel of conversations.listAllChannelsForWorkspace(workspaceId)) {
+      for (const ca of conversations.listAgents(channel.id)) {
+        ctx.placement.assertAgentMatchesHost(ca.agent_id, expectedHostId);
+      }
+    }
+  }
+
   // ── Workspaces / conversations ──────────────────────────────────
   //
   // Canonical workspace/channel/thread API backed by workspaces and
@@ -1295,25 +1331,25 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (workspaces.getByName(parsed.data.name)) {
       return c.json({ error: 'workspace name already exists' }, 409);
     }
-    if (
-      standaloneMode(ctx) &&
-      (
-        parsed.data.workspace_path ||
-        parsed.data.workspace_host_id ||
-        parsed.data.member_agent_ids.length > 0
-      )
-    ) {
-      // D4.b P1-1 (B-class deferral): kept fail-closed because
-      // standalone workspace creation with a caller-supplied
-      // host_id / workspace_path / agent members needs a proper
-      // placement decision (which claimed-host hosts the workspace,
-      // how does it map to `workspace_host_id`, what default applies
-      // for agentless standalone workspaces). That work belongs to
-      // D4.c / G3 alongside the agent + workspace_members placement
-      // refactor — NOT to runtime transport unavailability. A
-      // typed `host_runtime_disabled` 409 here means "placement /
-      // CRUD route deferral", not "no daemon attached".
-      return hostRuntimeDisabledResponse(c, 'host-bound workspace creation');
+    // D4.c C3 — `workspace_path` is fs concept that lives on the
+    // **daemon-host**'s filesystem. In embedded mode the daemon
+    // and the backend share that fs (the user's machine) so a
+    // caller-supplied `workspace_path` is meaningful. In
+    // standalone mode the backend's fs is the server box, which
+    // the user does NOT control; per D2.0 ("server doesn't
+    // pretend to own user filesystem") accepting an arbitrary
+    // path here would be a contract violation. Reject with a
+    // route-local typed code rather than overloading the runtime
+    // host placement taxonomy. The fs materialization redesign
+    // (workspace_path → daemon-host) lives in D4.e.
+    if (standaloneMode(ctx) && parsed.data.workspace_path) {
+      return c.json(
+        {
+          error: 'workspace_path is not supported in standalone mode',
+          error_code: 'workspace_path_not_supported',
+        },
+        409,
+      );
     }
 
     const workspacePath =
@@ -1334,12 +1370,18 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     let workspaceHostId: string;
     let memberAgents: AgentDto[];
     try {
-      workspaceHostId = standaloneMode(ctx)
-        ? hosts.ensureStandaloneServer().id
-        : resolveCreateHostId(
-            parsed.data.workspace_host_id,
-            viewerUserId,
-          );
+      // D4.c C3 — unified placement decision: both embedded and
+      // standalone go through `resolveCreateHostId`. Caller-supplied
+      // `workspace_host_id` → `assertOwnedActiveHost(host, user)`;
+      // caller omitted → `resolveOwnedLocalForUser(user)` which is
+      // the C1-installed 0/1/N policy (`local_host_unbound` /
+      // `local_host_ambiguous` typed 409). The pre-D4.c branch that
+      // synthesized a `STANDALONE_SERVER` placeholder host is no
+      // longer reached.
+      workspaceHostId = resolveCreateHostId(
+        parsed.data.workspace_host_id,
+        viewerUserId,
+      );
       memberAgents = parsed.data.member_agent_ids
         .map(id => agents.get(id))
         .filter((agent): agent is AgentDto => agent !== null);
@@ -1442,23 +1484,32 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!canMutateWorkspace(ctx, getUserPrincipal(c), workspace.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
-    if (
-      standaloneMode(ctx) &&
-      conversations
-        .listAllChannelsForWorkspace(workspace.id)
-        .some(channel => conversations.listAgents(channel.id).length > 0)
-    ) {
-      // D4.b P1-1 (B-class deferral): workspace mutation that
-      // touches existing agent-backed channels needs the agent
-      // CRUD placement model (D4.c / G3). Typed
-      // `host_runtime_disabled` here means CRUD deferral, NOT
-      // runtime transport unavailable.
-      return hostRuntimeDisabledResponse(c, 'workspace mutation with agent members');
-    }
     const body = await c.req.json().catch(() => ({}));
     const parsed = UpdateWorkspaceInputSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    // D4.c C3 — replaced the standalone-mode `host_runtime_disabled`
+    // short-circuit with an actual placement preflight that runs in
+    // both deployment modes. Iterate every existing agent-backed
+    // conversation in this workspace; if any agent's host placement
+    // no longer matches the workspace's `workspace_host_id`,
+    // fail-closed with 409 `host_mismatch`. This MUST run before
+    // any side effect: metadata write
+    // (`updateMutableMetadata`), the rename system message
+    // insert, or `runtimeHost.deliverMessage`. The pre-D4.c
+    // standalone short-circuit was a deferral placeholder; now
+    // the same DB-level placement contract applies in both modes,
+    // so the route can run identically. (NOTE: agent-host
+    // assignments don't change today, but the preflight makes the
+    // invariant explicit so future agent-rebind paths can't
+    // silently break workspace metadata writes.)
+    try {
+      assertWorkspaceAgentsMatchHost(workspace.id, workspace.workspace_host_id);
+    } catch (err) {
+      const mapped = placementErrorResponse(c, err);
+      if (mapped) return mapped;
+      throw err;
     }
     if (parsed.data.name && parsed.data.name !== workspace.name) {
       const collision = workspaces.getByName(parsed.data.name);
@@ -1572,17 +1623,20 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     const workspaceConversations = conversations
       .list()
       .filter(conversation => conversation.workspace_id === workspace.id);
-    if (
-      standaloneMode(ctx) &&
-      workspaceConversations.some(
-        conversation => conversations.listAgents(conversation.id).length > 0,
-      )
-    ) {
-      // D4.b P1-1 (B-class deferral): workspace deletion of an
-      // agent-backed workspace needs the agent CRUD teardown
-      // model (D4.c / G3). Typed `host_runtime_disabled` here
-      // means CRUD deferral, NOT runtime transport unavailable.
-      return hostRuntimeDisabledResponse(c, 'workspace deletion with agent members');
+    // D4.c C3 — replaced the standalone-mode `host_runtime_disabled`
+    // short-circuit with an explicit placement preflight that runs
+    // in both deployment modes. This MUST run before any side
+    // effect: `runtimeHost.resolveConversationRuns`, runtime stop,
+    // `attachmentService.sweepForChannel`, `workspaces.delete`. If
+    // any agent's host placement no longer matches the workspace,
+    // fail-closed with 409 `host_mismatch` and leave every
+    // conversation / blob / row untouched.
+    try {
+      assertWorkspaceAgentsMatchHost(workspace.id, workspace.workspace_host_id);
+    } catch (err) {
+      const mapped = placementErrorResponse(c, err);
+      if (mapped) return mapped;
+      throw err;
     }
     for (const conversation of workspaceConversations) {
       ctx.runtimeHost.resolveConversationRuns(conversation.id, 'conversation_closed');
@@ -1873,13 +1927,14 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
-    if (standaloneMode(ctx)) {
-      // D4.b P1-1 (B-class deferral): workspace add-agent-member
-      // needs the agent CRUD placement model (D4.c / G3). Typed
-      // `host_runtime_disabled` here means CRUD deferral, NOT
-      // runtime transport unavailable.
-      return hostRuntimeDisabledResponse(c, 'workspace agent membership');
-    }
+    // D4.c C3 — lifted the standalone `host_runtime_disabled`
+    // short-circuit. The DB-level placement check still runs
+    // inside `WorkspaceRepo.addMember` →
+    // `assertAgentMatchesHost`, which throws BEFORE any fs side
+    // effect (`ensureAgentL1Dir` / `seedAgentL2`). The catch
+    // block below maps the placement error to 409
+    // `host_mismatch`. So the fail-closed contract holds without
+    // the deployment-mode short-circuit.
     const agent = agents.get(parsed.data.agent_id);
     if (!agent) return c.json({ error: 'agent not found' }, 404);
     let member: ReturnType<WorkspaceRepo['addMember']>;

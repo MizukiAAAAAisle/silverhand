@@ -151,20 +151,34 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
     expect(wrong.body).toEqual({ error_code: 'auth_failed' });
   });
 
-  it('POST /api/workspaces on a standalone backend creates a no-agent workspace (server-side host) with an onboarding channel', async () => {
-    // Standalone-specific assertion: the workspace's host is
-    // `hosts.ensureStandaloneServer()` — NOT the viewer's local
-    // host. The route resolves that automatically when no
-    // `workspace_host_id` is provided AND `member_agent_ids` is
-    // empty. A regression that fell into the embedded
-    // `resolveCreateHostId(undefined, viewerUserId)` branch on
-    // standalone would surface as `host_not_owned` (the viewer has
-    // no local host claimed in a remote deployment) — this test
-    // catches that by asserting the 201 + the workspace host id
-    // matches the standalone server row.
+  it('POST /api/workspaces on standalone — without a claimed local host fails closed with `local_host_unbound`; with one claimed, creates a workspace bound to that host', async () => {
+    // D4.c C3 — the standalone path no longer mints a synthetic
+    // `STANDALONE_SERVER` host on workspace create. Default placement
+    // is `resolveOwnedLocalForUser(viewerUserId)`, which returns the
+    // C1-installed 0/1/N typed result. The pre-D4.c contract here
+    // (workspace bound to a server-side `STANDALONE_SERVER` row
+    // independent of the viewer) is retired; the new contract is
+    // "workspace lives on the user's claimed local host", same as
+    // embedded.
     t = buildTestApp({ deploymentMode: 'standalone', bindAddressScope: 'lan' });
     const token = await signupReturnToken(t, 'ws.owner@example.test');
 
+    // No host claimed yet → typed 409 `local_host_unbound` (per C1
+    // 0-host policy). The synthetic standalone-server pre-D4.c
+    // fallback is GONE.
+    const beforeClaim = await fetchJson(
+      t,
+      'POST',
+      apiPaths.workspaces,
+      { name: `g1-pre-${randomSlug()}` },
+      bearer(token),
+    );
+    expect(beforeClaim.status).toBe(409);
+    expect(beforeClaim.body).toMatchObject({ code: 'local_host_unbound' });
+
+    // After claiming → 201, workspace bound to the user's claimed
+    // host (NOT the synthetic standalone-server row).
+    const claimedHostId = await claimLocalHost(t, token);
     const create = await fetchJson(
       t,
       'POST',
@@ -175,30 +189,49 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
     expect(create.status).toBe(201);
     expect(create.body.workspace).toMatchObject({
       name: expect.stringMatching(/^g1-/),
+      workspace_host_id: claimedHostId,
     });
     expect(create.body.onboarding_channel_id).toEqual(expect.any(String));
-
-    // Verify host pointer matches the standalone server host row.
-    // The standalone host row is created lazily on first standalone
-    // workspace create via `hosts.ensureStandaloneServer()`; the row
-    // is identified by its well-known name (kind='remote').
-    const standaloneHostId = t.ctx.db
-      .prepare<[], { id: string }>(
-        `SELECT id FROM hosts WHERE name = 'standalone-server'`,
-      )
-      .get()?.id;
-    expect(standaloneHostId).toEqual(expect.any(String));
-    expect(create.body.workspace.workspace_host_id).toBe(standaloneHostId);
   });
 
-  it('POST /api/workspaces with member_agent_ids on standalone → typed host_runtime_disabled (409, no agent path)', async () => {
-    // Negative pin: even if the renderer or a malformed client tries
-    // to slip agent ids past the gate, standalone backends MUST refuse
-    // with the typed `host_runtime_disabled` body. Without this the
-    // workspace create would fall through to placement.assertAgentMatchesHost
-    // and produce a less typed error.
+  it('POST /api/workspaces with workspace_path on standalone → typed 409 `workspace_path_not_supported` (D4.c C3)', async () => {
+    // C3 — `workspace_path` is fs concept that lives on the
+    // daemon-host. In standalone the backend's fs is the server
+    // box, which the user does not control; per D2.0 the server
+    // does not pretend to own user fs. Reject with a route-local
+    // typed code, NOT the runtime placement taxonomy.
+    t = buildTestApp({ deploymentMode: 'standalone', bindAddressScope: 'lan' });
+    const token = await signupReturnToken(t, 'ws.path@example.test');
+    await claimLocalHost(t, token);
+    const res = await fetchJson(
+      t,
+      'POST',
+      apiPaths.workspaces,
+      {
+        name: `g1path-${randomSlug()}`,
+        workspace_path: '/tmp/some-arbitrary-path',
+      },
+      bearer(token),
+    );
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({
+      error_code: 'workspace_path_not_supported',
+    });
+  });
+
+  it('POST /api/workspaces with nonexistent member_agent_ids on standalone — silently filtered (existing pattern), workspace creates', async () => {
+    // D4.c C3 — pre-C3 this returned typed
+    // `host_runtime_disabled` because standalone POST short-circuited.
+    // After C3 the route runs the same path as embedded:
+    // `agents.get(id)` resolves to null, the filter drops it, and
+    // workspace creation proceeds with `memberAgents = []`. This is
+    // the embedded behavior carried into standalone — no special
+    // case. The replacement negative pin (real but cross-host
+    // agent → 409 `host_mismatch`) lives in the workspace route
+    // tests, not the G1 happy-path file.
     t = buildTestApp({ deploymentMode: 'standalone', bindAddressScope: 'lan' });
     const token = await signupReturnToken(t, 'ws.refuse@example.test');
+    await claimLocalHost(t, token);
     const res = await fetchJson(
       t,
       'POST',
@@ -209,13 +242,14 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
       },
       bearer(token),
     );
-    expect(res.status).toBe(409);
-    expect(res.body).toMatchObject({ code: 'host_runtime_disabled' });
+    expect(res.status).toBe(201);
+    expect(res.body.workspace.member_agent_ids ?? []).toEqual([]);
   });
 
   it('POST /api/workspaces/:id/channels (no agents) on standalone creates a channel and publishes workspace_channels_changed', async () => {
     t = buildTestApp({ deploymentMode: 'standalone', bindAddressScope: 'lan' });
     const token = await signupReturnToken(t, 'channel.owner@example.test');
+    await claimLocalHost(t, token);
 
     const ws = await fetchJson(
       t,
@@ -267,6 +301,7 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
     // view in the absence of any daemon-side activity.
     t = buildTestApp({ deploymentMode: 'standalone', bindAddressScope: 'lan' });
     const token = await signupReturnToken(t, 'sender@example.test');
+    await claimLocalHost(t, token);
     const ws = await fetchJson(
       t,
       'POST',
@@ -337,6 +372,7 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
     // (`standalone-g2-route-runtime.test.ts`).
     t = buildTestApp({ deploymentMode: 'standalone', bindAddressScope: 'lan' });
     const token = await signupReturnToken(t, 'fail.send@example.test');
+    const claimedHostId = await claimLocalHost(t, token);
     const ws = await fetchJson(
       t,
       'POST',
@@ -356,16 +392,12 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
     expect(channel.status).toBe(201);
     const channelId = channel.body.channel.id as string;
 
-    // Side-door: insert a synthetic agent row + add it to the
-    // channel directly. The route handler doesn't care whether the
-    // agent is "live" on a daemon; the fake records any
-    // deliverMessage call regardless.
-    const standaloneHostId = t.ctx.db
-      .prepare<[], { id: string }>(
-        `SELECT id FROM hosts WHERE name = 'standalone-server'`,
-      )
-      .get()?.id;
-    expect(standaloneHostId).toEqual(expect.any(String));
+    // D4.c C3 — the synthetic agent must live on the same host as
+    // the workspace (the user's claimed local host). Pre-C3 this
+    // test inserted the agent under `STANDALONE_SERVER`; that
+    // host_id no longer matches the workspace's
+    // `workspace_host_id`, so `assertAgentMatchesHost` would
+    // fail-closed at delivery time. Bind to `claimedHostId` instead.
     const agentId = `synthetic-agent-${randomSlug()}`;
     const now = Date.now();
     const ownerUserId = t.ctx.db
@@ -382,7 +414,7 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
       .run(
         agentId,
         `synthetic-${randomSlug()}`,
-        standaloneHostId!,
+        claimedHostId,
         ownerUserId!,
         now,
         now,
@@ -439,6 +471,34 @@ async function signupReturnToken(t: TestApp, email: string): Promise<string> {
     );
   }
   return signup.body.user_token as string;
+}
+
+/**
+ * D4.c C3 helper — claim a local host for the bearer's user. After
+ * C3 the standalone POST /api/workspaces path goes through
+ * `resolveOwnedLocalForUser`, so a freshly signed-up user with no
+ * claimed host fails closed with 409 `local_host_unbound`. The
+ * pre-D4.c synthetic `STANDALONE_SERVER` host placeholder is gone.
+ * Real users / desktops get here by running the host claim flow
+ * once on first login (Stage B.4 + the desktop main process
+ * onboarding); tests have to do the same.
+ */
+async function claimLocalHost(t: TestApp, token: string): Promise<string> {
+  const res = await fetchJson(
+    t,
+    'POST',
+    apiPaths.hostClaimOrCreate,
+    { installation_id: crypto.randomUUID() },
+    bearer(token),
+  );
+  if (res.status !== 200) {
+    throw new Error(
+      `claimLocalHost: unexpected status ${res.status}: ${JSON.stringify(
+        res.body,
+      )}`,
+    );
+  }
+  return res.body.host_id as string;
 }
 
 /**
