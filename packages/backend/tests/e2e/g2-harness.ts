@@ -149,6 +149,18 @@ export interface G2Harness {
   events: CapturedHostWsEvent[];
   /** All disconnects the wrapper has observed, in order. */
   disconnects: CapturedHostWsDisconnect[];
+  /**
+   * D4.b-6: close the current `backend` and bring up a fresh one
+   * against the SAME `dbPath` / `silverhandDir`, re-writing
+   * `daemon-config.json` with the new bound port (and the
+   * unchanged `host_id` / `host_token` — proving credentials
+   * persist across a backend restart). The harness's `backend` /
+   * `serverUrl` / `events` / `disconnects` are swapped in place
+   * so subsequent assertions transparently target the new
+   * backend. The daemon (if running) will reconnect to the new
+   * URL on its next config poll.
+   */
+  restartBackend: () => Promise<void>;
   /** Tear everything down — close daemon, close backend, rm temp dir. */
   shutdown: () => Promise<void>;
 }
@@ -268,8 +280,35 @@ export async function bootG2Harness(
     events,
     disconnects,
     bootDaemon: async () => bootHarnessDaemon(daemonConfigPath),
+    restartBackend: async () => {
+      // Close the current backend cleanly so its port releases. The
+      // daemon's still-alive OutboundDaemonClient will drop the WS
+      // here; it then polls `daemon-config.json` and reconnects on
+      // the next desired-config swap. We rewrite the config with
+      // the SAME `host_id` / `host_token` to prove the credential
+      // survives a backend restart on the same DB.
+      await harness.backend.close().catch(() => undefined);
+      const newBackend = await startBackend({
+        mode: 'standalone',
+        dbPath,
+        silverhandDir,
+        serverConfig,
+        listen: { hostname: opts.hostname ?? '127.0.0.1', port: 0 },
+        logger: verbose ? consoleBackendLogger() : silentBackendLogger,
+        testHooks: {
+          wrapHostWsEventSink: wrapWithStrictRecording(events, disconnects),
+        },
+      });
+      harness.backend = newBackend;
+      harness.serverUrl = newBackend.url;
+      writeHostConfigAtomic(daemonConfigPath, {
+        server_url: newBackend.url,
+        host_id: host.id,
+        host_token: hostToken,
+      });
+    },
     shutdown: async () => {
-      await backend.close().catch(() => undefined);
+      await harness.backend.close().catch(() => undefined);
       rmSync(tempDir, { recursive: true, force: true });
     },
   };
