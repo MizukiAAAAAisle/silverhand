@@ -83,11 +83,13 @@ inputs.
 
 | # | Layer | Evidence |
 |---|---|---|
-| #2.a | Token service (missing / unknown) | `test:tests/auth/host-token.test.ts::verifyHostToken::denies empty/unknown tokens as missing` → `{ok:false, code:'missing'}`. No `hostId` / `userId` in the failure arm. |
-| #2.b | Token service (credential revoked) | Same file ::`denies revoked credential` → `{ok:false, code:'credential_revoked'}`. |
-| #2.c | Token service (host revoked) | Same file ::`denies token for revoked host` → `{ok:false, code:'host_revoked'}`. |
-| #2.d | WS upgrade — invalid / revoked → 401 | `test:tests/ws/host-ws-server.test.ts::authenticateHost::rejects missing, unknown, revoked host tokens before upgrade` — HTTP 401 from the upgrade response. Body is the generic 401, not a host/credential payload. |
-| #2.e | WS upgrade — non-local host kind → 403 | Same file ::`rejects non-local hosts even with valid token` — a typed 403, distinct from the 401 auth-failed surface. |
+| #2.a | Token service (missing / unknown) | `test:tests/auth/host-token.test.ts::HostTokenService::denies empty or unknown tokens as missing` → `{ok:false, code:'missing'}`. No `hostId` / `userId` in the failure arm. |
+| #2.b | Token service (credential revoked) | Same file ::`denies a revoked credential without a grace window` → `{ok:false, code:'credential_revoked'}`. |
+| #2.c | Token service (host revoked) | Same file ::`denies a token for a revoked host even when the credential is active` → `{ok:false, code:'host_revoked'}`. |
+| #2.d | Token service (wrong credential kind) | Same file ::`does not accept bootstrap credentials as long-lived host tokens` → `{ok:false, code:'credential_not_usable'}`. Bootstrap credentials are not minted via the same lifecycle as `long_lived` host tokens; presenting one at the WS upgrade path produces this typed failure inside `verifyHostToken`. |
+| #2.e | WS upgrade — invalid / revoked → 401 | `test:tests/ws/host-ws-server.test.ts::host outbound WebSocket server::rejects missing, unknown, and revoked host tokens before upgrade` — HTTP 401 from the upgrade response. Body is the generic 401, not a host/credential payload. |
+| #2.f | WS upgrade — wrong credential kind (user-session bearer) → 401 | Same file ::`rejects user-session bearer tokens before upgrade` — a user-session bearer minted by `authSessions.issueSession(...)` is presented as a host token at the outbound WS upgrade; the upgrade response is HTTP 401. Closes the "wrong-kind credential at the wire perimeter" leg of ACL #2. |
+| #2.g | WS upgrade — non-local host kind → 403 | Same file ::`rejects non-local hosts even with a valid host token` — a typed 403, distinct from the 401 auth-failed surface. |
 
 **Note**: the earlier `host_token_owner_mismatch` typed code that
 appeared in some draft documents was removed during B.4 / C.x
