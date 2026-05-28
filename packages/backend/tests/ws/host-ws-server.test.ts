@@ -478,8 +478,26 @@ describe('host outbound WebSocket server', () => {
       code: 1008,
       reason: 'host_revoked',
     });
-    expect(server.controller.activeConnectionCount()).toBe(0);
-    expect(server.controller.getAttachment(host.id)).toBeNull();
+    // D4.c C9-1: server-side cleanup is asynchronous (the
+    // controller's `'close'` listener clears
+    // `connections` / `connectionsByHost` / `attachmentsByHost` on
+    // the next event-loop tick). The client-side `closed` promise
+    // resolves as soon as the close frame round-trips, which can
+    // race ahead of the listener; the previous synchronous
+    // `expect(activeConnectionCount === 0)` was the source of a
+    // pre-existing flake on this test (Cindy `Acsun_kzRmpNmXZo`).
+    // Wait on ALL three observable state fields simultaneously —
+    // `activeConnectionCount` reads `connections.size`,
+    // `getAttachment` reads `attachmentsByHost`, and
+    // `connectionIdForHost` reads `connectionsByHost`; the three
+    // maps are populated/cleared independently, so all three must
+    // flip before the assertion holds. Bounded wait, no sleep.
+    await waitFor(
+      () =>
+        server!.controller.activeConnectionCount() === 0 &&
+        server!.controller.getAttachment(host.id) === null &&
+        server!.controller.connectionIdForHost(host.id) === null,
+    );
 
     // Idempotent on already-disconnected hosts.
     expect(server.controller.disconnectHost(host.id)).toBe(false);
