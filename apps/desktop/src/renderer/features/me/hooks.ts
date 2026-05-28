@@ -76,6 +76,41 @@ export function isBackendUnreachable(body: ViewerState): body is BackendUnreacha
 }
 
 /**
+ * D4.a Commit 6 (2) — pure mapping from the main-process IPC arm to
+ * the renderer's `ViewerState` union. Extracted out of `useViewerUser`
+ * so the three-way IPC → renderer mapping is testable without
+ * React-DOM + React Query plumbing.
+ *
+ * The mapping is intentionally narrow:
+ *   - `authenticated`        → `UserDto` (the `state.user` object)
+ *   - `backend_unreachable`  → `BackendUnreachable` (NO `signup_enabled`)
+ *   - `unauthenticated`      → `SetupRequired` (`signup_enabled` from IPC)
+ *
+ * The `backend_unreachable` arm intentionally drops `signup_enabled`
+ * because the main process didn't successfully read it from the
+ * unreachable server. Letting it leak through would re-introduce the
+ * "default to disabled / push wrong CTA" footgun Cindy 5d-fixup P1-2
+ * called out.
+ */
+export function mapAuthStateToViewer(
+  state: Awaited<ReturnType<typeof window.agentHub.getAuthState>>,
+): ViewerState {
+  if (state.status === 'authenticated') return state.user;
+  if (state.status === 'backend_unreachable') {
+    return {
+      backend_unreachable: true,
+      server_url: state.server_url,
+      message: state.message,
+    };
+  }
+  return {
+    registration_required: true,
+    suggested_name: '',
+    signup_enabled: state.signup_enabled,
+  };
+}
+
+/**
  * React Query view of the main-process desktop auth state. The main
  * process owns token persistence and validation; the renderer only
  * receives either the resolved user dto, a setup-required marker,
@@ -84,25 +119,8 @@ export function isBackendUnreachable(body: ViewerState): body is BackendUnreacha
 export function useViewerUser() {
   const query = useQuery({
     queryKey: meKey,
-    queryFn: async (): Promise<ViewerState> => {
-      const state = await window.agentHub.getAuthState();
-      if (state.status === 'authenticated') return state.user;
-      if (state.status === 'backend_unreachable') {
-        // D4.a Commit 5d-fixup (Cindy P1-2): map IPC arm → renderer
-        // arm. Intentionally does NOT carry `signup_enabled` — see
-        // BackendUnreachable doc.
-        return {
-          backend_unreachable: true,
-          server_url: state.server_url,
-          message: state.message,
-        };
-      }
-      return {
-        registration_required: true,
-        suggested_name: '',
-        signup_enabled: state.signup_enabled,
-      };
-    },
+    queryFn: async (): Promise<ViewerState> =>
+      mapAuthStateToViewer(await window.agentHub.getAuthState()),
     staleTime: 30 * 1000,
   });
   useEffect(() => {
@@ -117,7 +135,7 @@ export function useViewerUser() {
   return query;
 }
 
-function authResultToUser(result: Awaited<ReturnType<typeof window.agentHub.signup>>): UserDto {
+export function authResultToUser(result: Awaited<ReturnType<typeof window.agentHub.signup>>): UserDto {
   if (result.ok) return result.user;
   // D4.a Commit 5d-fixup (Cindy P1-2): preserve the typed
   // backend-unreachable signal end-to-end. `status: 0` is the
