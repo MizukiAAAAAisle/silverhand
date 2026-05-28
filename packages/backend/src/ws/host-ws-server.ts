@@ -88,11 +88,16 @@ export interface HostWsServerController {
    *
    * The implementation routes through the connection's
    * `closeForRevoke()` which uses close code 1008 +
-   * `host_revoked` reason so the daemon can suppress reconnect
-   * attempts on this credential. Reconnect with the revoked
-   * credential would fail at upgrade-auth anyway, but kicking
-   * the socket here means the renderer's BackendInfo flips
-   * immediately instead of waiting for the next heartbeat.
+   * `host_revoked` reason. The current daemon outbound client
+   * reconnects on every close code (see
+   * `packages/host/src/daemon/outbound-client.ts:349`); the
+   * reconnect attempt fails at upgrade-auth because the
+   * credential is already revoked. Branching on
+   * `host_revoked` to suppress reconnect is a follow-up (D3.e /
+   * D4.d) — what this call buys today is **immediate
+   * disconnect**, so the renderer's BackendInfo flips on the
+   * next attachment heartbeat instead of waiting for the
+   * daemon to lose its current socket on its own.
    */
   disconnectHost(hostId: string): boolean;
   close(): Promise<void>;
@@ -410,14 +415,18 @@ class HostWsConnection {
   /**
    * D4.c C2 — close the websocket because the host's credentials
    * were revoked. Uses RFC 6455 close code `1008` (Policy
-   * Violation) with reason `host_revoked` so the daemon's
-   * outbound client can branch on the close code (vs. heartbeat
-   * timeout / shutdown / replacement) to decide whether to
-   * suppress reconnect attempts. The credential is already
-   * revoked at the DB layer when this fires; reconnect would
-   * fail at upgrade-auth anyway, but kicking the live socket
-   * here means the renderer's BackendInfo flips immediately
-   * instead of waiting for the next heartbeat round-trip.
+   * Violation) with reason `host_revoked`. The credential is
+   * already revoked at the DB layer when this fires, and the
+   * daemon's current outbound client (`packages/host/src/daemon/
+   * outbound-client.ts:349`) reconnects on every close code; the
+   * reconnect attempt is rejected at upgrade-auth because the
+   * token verifier no longer accepts the revoked credential. The
+   * `1008/host_revoked` close-frame is therefore a forward-looking
+   * label so a future daemon close-handler can branch on this
+   * code to suppress reconnect (D3.e / D4.d follow-up). What this
+   * call buys today is **immediate disconnect** — the renderer's
+   * BackendInfo flips on the next attachment heartbeat instead of
+   * waiting for the daemon to lose its current socket on its own.
    */
   closeForRevoke(): void {
     this.rejectPendingDisconnected(

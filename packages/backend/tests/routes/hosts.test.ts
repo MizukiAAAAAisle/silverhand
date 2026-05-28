@@ -508,6 +508,41 @@ describe('host routes', () => {
       // And the controller was indeed asked.
       expect(controller!.disconnects).toEqual([host.id]);
     });
+
+    /**
+     * D4.c C2 round-1 fixup (Cindy nit) — pin that the standalone
+     * lift didn't smuggle a path past the owner check. Pre-D4.c the
+     * standalone guard would have short-circuited at
+     * `host_runtime_disabled` BEFORE the cross-user check; if a
+     * future refactor accidentally swaps the order, the cross-user
+     * 404 test under default (embedded) mode wouldn't catch it.
+     * This test pins both: standalone returns 404 (not 403, not
+     * `host_runtime_disabled`) for cross-user revoke, AND the WS
+     * controller's `disconnectHost` is never called.
+     */
+    it('standalone — cross-user revoke still 404 + does NOT call disconnectHost', async () => {
+      let controller: FakeHostWsController | null = null;
+      t = buildTestApp({
+        deploymentMode: 'standalone',
+        ownedLocalHostUserIds: ['alice', 'bob'],
+        hostWsController: () => controller,
+      });
+      const aliceToken = t.ctx.authSessions.issueSession({ userId: 'alice' }).userToken;
+      const bobHost = new HostRepo(t.ctx.db).getOwnedLocalForUser('bob');
+      expect(bobHost).not.toBeNull();
+      controller = new FakeHostWsController(async () => ({}));
+
+      const res = await sessionHttp(t, aliceToken).post(apiPaths.hostRevoke(bobHost!.id));
+
+      expect(res.status).toBe(404);
+      // Bob's host stays active.
+      expect(new HostRepo(t.ctx.db).get(bobHost!.id)).toMatchObject({
+        revoked_at: null,
+      });
+      // The kick is never invoked — owner check rejects before the
+      // best-effort disconnect runs.
+      expect(controller!.disconnects).toEqual([]);
+    });
   });
 
   // ── POST /api/hosts/:id/rotate-token (Stage B.4) ─────────────

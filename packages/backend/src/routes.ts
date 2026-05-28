@@ -1077,15 +1077,19 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     // soft-delete + credential sweep; the in-DB action is identical
     // in embedded and standalone. Standalone adds one extra step:
     // if the revoked host currently has a live outbound websocket,
-    // close it with code 1008 / reason `host_revoked` so the
-    // attached daemon can suppress reconnect attempts on the dead
-    // credential. Reconnect would fail at upgrade-auth anyway, but
-    // kicking the socket here flips the renderer's BackendInfo
-    // immediately instead of waiting for the next heartbeat. The
-    // revoke and credential sweep run inside a single transaction;
-    // the disconnect happens AFTER commit so the credential is
-    // already revoked when the daemon's reconnect attempt arrives.
-    // R4: HTTP route + outbound WS close-frame, no protocol change.
+    // close it with code 1008 / reason `host_revoked` to flip the
+    // renderer's BackendInfo immediately instead of waiting for
+    // the daemon to lose its current socket on its own. The
+    // current daemon outbound client reconnects on every close
+    // code (`packages/host/src/daemon/outbound-client.ts:349`);
+    // the reconnect attempt is rejected at upgrade-auth because
+    // `verifyHostToken` no longer accepts the credential. Branching
+    // on `host_revoked` to suppress reconnect is a follow-up (D3.e
+    // / D4.d). The revoke and credential sweep run inside a single
+    // transaction; the disconnect happens AFTER commit so the
+    // credential is already revoked when the daemon's reconnect
+    // arrives. R4: HTTP route + outbound WS close-frame, no
+    // protocol change.
 
     const hostId = c.req.param('id');
     const host = hosts.get(hostId);
