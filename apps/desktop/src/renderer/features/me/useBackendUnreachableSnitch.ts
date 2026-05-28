@@ -36,8 +36,9 @@
  * render commits — so a refetch that fails immediately would be
  * swallowed by the `if (!visibleRef.current) setVisible(true)`
  * guard reading the stale `true`. We now drop the ref entirely
- * and use functional state updates; React dedupes same-value
- * setState calls cheaply.
+ * and call `setVisible(next)` directly with whatever the reducer
+ * returned; React bails out on same-value setState internally, so
+ * we get the dedup behaviour for free without a manual ref guard.
  */
 import { useEffect, useState } from 'react';
 import type { QueryClient } from '@tanstack/react-query';
@@ -126,12 +127,12 @@ export function useBackendUnreachableSnitch(
     const apply = (event: SnitchCacheEvent): void => {
       const next = decideNextVisible(event);
       if (next === null) return;
-      // Functional setState — React will bail out when next ===
-      // prev internally, so we don't need a separate ref guard.
-      // This is the Cindy P1 fix: the prior version's
-      // `visibleRef.current` guard could be stale after a
-      // `retry()` setVisible(false) that hadn't committed yet,
-      // swallowing a follow-up backend_unreachable error.
+      // Direct setState — React bails out when next === prev
+      // internally, so we don't need a separate ref guard. This
+      // is the Cindy P1 fix: the prior version's `visibleRef.current`
+      // guard could be stale after a `retry()` setVisible(false)
+      // that hadn't committed yet, swallowing a follow-up
+      // backend_unreachable error.
       setVisible(next);
     };
 
