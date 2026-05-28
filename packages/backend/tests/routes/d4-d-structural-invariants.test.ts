@@ -1,101 +1,663 @@
 /**
- * D4.d structural-invariant test stubs (D1 commit).
+ * D4.d structural-invariant tests.
  *
  * Three invariants Cindy declared at design-pass close (and Alice
- * agreed to pin explicitly across D1–D5). They are landed in D1 as
- * `.skip` stubs with the failure mode each one prevents written out
- * in plain English. The D-commit that implements the corresponding
- * server-side path is responsible for un-skipping the relevant
- * arms and turning the prose into executable assertions.
+ * agreed to pin explicitly across D1–D5). D1 landed them as `.skip`
+ * stubs; D3 un-skips invariants 1 + 3 (this commit); D5 un-skips
+ * invariant 2.
  *
  * Cross-referenced from `docs/remote-backend-d4d-design.md`:
  *   - §3.2  + §6.1 (metadata mismatch precedence)
- *   - §4.1  + §7.3 + §10.3 (ACL-first list/get widener)
+ *   - §4.1  + §7.3 + §10.3 (ACL-first list/get widener — D5)
  *   - §6.3  L3a/L3b + §10.3 (L3a tx atomicity contract)
  *
- * Why stubs (not deferred): the failure modes these pin against are
- * easy to re-introduce when D3 / D5 re-shape the route, and they are
- * the exact pieces the design pass spent the most rounds locking
- * down. Having them in the test tree at D1 means D3 / D5 reviewers
- * see them as `.skip` regressions waiting to be activated, instead
- * of writing fresh tests from memory.
+ * These pin the failure modes that are easy to re-introduce when
+ * D3 / D5 re-shape the route. They are NOT happy-path coverage —
+ * there are separate tests for that. Each invariant captures one
+ * specific regression mode the design pass spent the most rounds
+ * locking down.
  */
 
-import { describe, it } from 'vitest';
+import { randomBytes } from 'node:crypto';
+import { afterEach, describe, expect, it } from 'vitest';
+import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
-describe('D4.d structural invariants (D1 stubs — un-skip per D-commit)', () => {
+function freshKey(): string {
+  return `k-${randomBytes(8).toString('base64url')}`;
+}
+
+interface CreateAgentOk {
+  agent: { id: string; name: string };
+  agent_home_workspace_id: string;
+  dm_channel_id: string;
+  onboarding_message_id: string;
+}
+
+describe('D4.d structural invariants', () => {
   describe('Invariant 1: metadata mismatch precedence (§3.2 / §6.1)', () => {
-    // D3 owns the un-skip. The matrix is parameterized two dimensions:
+    // For each (row-status, field) pair: prime the DB so a same-key
+    // agent row exists in row-status, then POST /api/agents with the
+    // same idempotency key + a body that differs in `field`. The
+    // route MUST return 400 `idempotency_metadata_mismatch` with
+    // `mismatched_field === field`, NOT a status-dispatch response
+    // (200 echo / 409 in-progress / 409 previously-failed).
     //
-    //   row-status ∈ { 'pending_materialization', 'active', 'failed' }
-    //   field      ∈ { 'name', 'runtime', 'model',
-    //                  'description', 'template_choice', 'host_id' }
+    // `template_choice` is excluded from the matrix: the route
+    // hardcodes 'default' for both stored and request snapshot (D2
+    // ships only 'default'), so mismatch on that axis is structurally
+    // impossible until a later stage introduces a `template_choice`
+    // column. The 5 remaining fields are exercised below.
     //
-    // Repeat call with same Idempotency-Key, body field N differs
-    // from stored snapshot → 400 `idempotency_metadata_mismatch`
-    // BEFORE any status-dispatch path runs (no 409
-    // `materialization_in_progress`, no 409
-    // `materialization_previously_failed`, no 200 echo).
-    //
-    // The `no-row` cell is intentionally OUT of this matrix —
-    // there is no stored snapshot to compare against, so it falls
-    // through to the new-attempt path (Cindy correction).
-    it.skip('400 idempotency_metadata_mismatch fires before status dispatch (3×6 matrix)', () => {
-      // pending: should NOT return 409 materialization_in_progress
-      // active:  should NOT return 200 echo
-      // failed:  should NOT return 409 materialization_previously_failed
+    // `host_id` mismatch needs the second user to have their own
+    // local host — `TEST_FIXTURE_USER_IDS` provisions one per user,
+    // so passing a different `host_id` in the body resolves to a
+    // host the caller doesn't own → 403 placement_error BEFORE the
+    // mismatch check (placement resolves first by design). To keep
+    // host_id in the matrix we exercise it via a placement-valid but
+    // semantically-different path: insert two owned local hosts for
+    // the caller (via the test helper) and have the reserved row
+    // carry one while the request carries the other.
+
+    const ROW_STATUSES = ['pending_materialization', 'active', 'failed'] as const;
+    type RowStatus = (typeof ROW_STATUSES)[number];
+
+    interface FieldCase {
+      field: 'name' | 'runtime' | 'model' | 'description' | 'host_id';
+      base: {
+        name: string;
+        runtime: string;
+        model?: string | null;
+        description?: string | null;
+      };
+      // Returns body mutating only `field`.
+      mutate: (
+        body: ReturnType<FieldCase['baseFor']>,
+      ) => Record<string, unknown>;
+      baseFor: () => {
+        name: string;
+        runtime: string;
+        model?: string | null;
+        description?: string | null;
+      };
+    }
+
+    const fieldCases: FieldCase[] = [
+      {
+        field: 'name',
+        baseFor: () => ({ name: 'mm-name', runtime: 'claude' }),
+        base: { name: 'mm-name', runtime: 'claude' },
+        mutate: body => ({ ...body, name: `${body.name}-differs` }),
+      },
+      {
+        field: 'runtime',
+        baseFor: () => ({ name: 'mm-runtime', runtime: 'claude' }),
+        base: { name: 'mm-runtime', runtime: 'claude' },
+        mutate: body => ({ ...body, runtime: 'codex' }),
+      },
+      {
+        field: 'model',
+        baseFor: () => ({
+          name: 'mm-model',
+          runtime: 'claude',
+          model: 'sonnet',
+        }),
+        base: { name: 'mm-model', runtime: 'claude', model: 'sonnet' },
+        mutate: body => ({ ...body, model: 'opus' }),
+      },
+      {
+        field: 'description',
+        baseFor: () => ({
+          name: 'mm-desc',
+          runtime: 'claude',
+          description: 'original',
+        }),
+        base: { name: 'mm-desc', runtime: 'claude', description: 'original' },
+        mutate: body => ({ ...body, description: 'modified' }),
+      },
+      {
+        field: 'host_id',
+        baseFor: () => ({ name: 'mm-host', runtime: 'claude' }),
+        base: { name: 'mm-host', runtime: 'claude' },
+        // host_id mutation handled per-test (needs a second host id
+        // owned by the same user) — mutate is the identity here and
+        // the test overrides the field directly.
+        mutate: body => body,
+      },
+    ];
+
+    async function primeRow(
+      t: TestApp,
+      key: string,
+      base: FieldCase['base'],
+      status: RowStatus,
+      hostIdOverride?: string,
+    ): Promise<string> {
+      // For active rows: hit the route normally so dependent rows
+      // exist (the active dispatch path requires a DM channel to
+      // echo back); we then snapshot the agent id and rewrite its
+      // status to whatever the test needs. For pending/failed rows
+      // we still hit the route to get dependent rows in place,
+      // then flip the status by direct UPDATE. This isolates the
+      // L0 mismatch comparator from any L1/L2/L3 plumbing details.
+      const created = (await http(t)
+        .post(
+          '/api/agents',
+          hostIdOverride ? { ...base, host_id: hostIdOverride } : base,
+          {
+            headers: { 'Idempotency-Key': key },
+          },
+        )
+        .then(r => r.json())) as CreateAgentOk;
+      expect(created.agent?.id, 'agent prime failed').toBeTruthy();
+      const id = created.agent.id;
+      if (status === 'pending_materialization') {
+        t.ctx.db
+          .prepare(
+            `UPDATE agents
+                SET materialization_status = 'pending_materialization',
+                    materialization_failed_code = NULL,
+                    materialization_failed_at = NULL
+              WHERE id = ?`,
+          )
+          .run(id);
+      } else if (status === 'failed') {
+        t.ctx.db
+          .prepare(
+            `UPDATE agents
+                SET materialization_status = 'failed',
+                    materialization_failed_code = 'host_attach_pending',
+                    materialization_failed_at = ?
+              WHERE id = ?`,
+          )
+          .run(Date.now(), id);
+      }
+      return id;
+    }
+
+    for (const status of ROW_STATUSES) {
+      for (const fcase of fieldCases) {
+        it(`status=${status} × field=${fcase.field} → 400 idempotency_metadata_mismatch (mismatch BEFORE dispatch)`, async () => {
+          const t = buildTestApp();
+          tests.push(t);
+          const key = freshKey();
+          // Cindy D3 round-1 P1: existing-row dispatch path does
+          // NOT call placement. The mismatch comparator compares
+          // `request.host_id ?? row.host_id` literally to
+          // `row.host_id` — any differing string trips mismatch
+          // without ownership checks. The test no longer needs a
+          // second owned-active local host; we just hand the
+          // request a literal string that differs from the stored
+          // row's host_id.
+          await primeRow(t, key, fcase.base, status);
+
+          // Build the mismatched body.
+          let body: Record<string, unknown>;
+          if (fcase.field === 'host_id') {
+            const storedHostId = t.ctx.db
+              .prepare<[string], { host_id: string }>(
+                `SELECT host_id FROM agents WHERE idempotency_key = ?`,
+              )
+              .get(key)!.host_id;
+            body = {
+              ...fcase.base,
+              host_id: `${storedHostId}-mismatch`,
+            };
+          } else {
+            body = fcase.mutate({ ...fcase.base });
+          }
+
+          const res = await http(t).post('/api/agents', body, {
+            headers: { 'Idempotency-Key': key },
+          });
+
+          // The load-bearing invariant: mismatch BEFORE dispatch.
+          expect(res.status, await res.clone().text()).toBe(400);
+          const payload = (await res.json()) as {
+            code: string;
+            mismatched_field?: string;
+            error?: string;
+          };
+          expect(payload.code).toBe('idempotency_metadata_mismatch');
+          expect(payload.mismatched_field).toBe(fcase.field);
+
+          // Negative pins: NONE of the status-dispatch shapes are
+          // returned. This is what makes the test exercise
+          // "precedence", not just "mismatch is detected somewhere".
+          expect(payload.code).not.toBe('materialization_in_progress');
+          expect(payload.code).not.toBe('materialization_previously_failed');
+          // 200 echo would have status 200 and code undefined — the
+          // 400 status assertion above already rules it out.
+        });
+      }
+    }
+
+    // Cindy D3 round-1 P1 negative pin: same-key retry that
+    // OMITS host_id MUST treat the stored row's host_id as the
+    // effective value and short-circuit to the dispatch path
+    // (here, 200 echo on an active row). Without the
+    // `?? existingRow.host_id` fallback the comparator would
+    // either flag mismatch (if it stored undefined) or call
+    // placement (which is the bug). This test pins the omission
+    // semantics.
+    it('same-key retry omitting host_id → 200 echo on active row (no placement call)', async () => {
+      const t = buildTestApp();
+      tests.push(t);
+      const key = freshKey();
+      const created = (await http(t)
+        .post(
+          '/api/agents',
+          { name: 'omit-host-id', runtime: 'claude' },
+          { headers: { 'Idempotency-Key': key } },
+        )
+        .then(r => r.json())) as CreateAgentOk;
+      expect(created.agent?.id).toBeTruthy();
+      const retry = await http(t).post(
+        '/api/agents',
+        // Body OMITS host_id; comparator must fall back to
+        // stored row's host_id and NOT trip mismatch.
+        { name: 'omit-host-id', runtime: 'claude' },
+        { headers: { 'Idempotency-Key': key } },
+      );
+      expect(retry.status, await retry.clone().text()).toBe(200);
+      const body = (await retry.json()) as CreateAgentOk;
+      expect(body.agent.id).toBe(created.agent.id);
     });
   });
 
   describe('Invariant 2: ?include_failed=1 ACL-first (§4.1 / §7.3 / §10.3)', () => {
-    // D5 owns the un-skip. ACL/creator filter MUST run before the
-    // status widener — `?include_failed=1` is a row-visibility
-    // toggle for the CALLER's own rows, never a cross-user widener.
-    // A regression here would turn a UI affordance into a
-    // privilege-escalation side channel.
-    it.skip('list: ?include_failed=1 from user B does NOT widen to user A failed rows', () => {
-      // GET /api/agents?include_failed=1 with user B's bearer must
-      // return only user-B-created rows, with default list
-      // semantics (active + B's failed). User A's failed rows
-      // must NOT appear regardless of how `?include_failed` is
-      // spelled.
-    });
-    it.skip('get: cross-user GET /api/agents/:id with ?include_failed=1 returns 404', () => {
-      // User B requests user A's failed-row id with
-      // `?include_failed=1`. ACL filter rejects with 404 (not
-      // "row exists but you can't see it" 403; the existence
-      // itself is not leaked). This is the negative arm of
-      // §7.3 Q6.a.
-    });
+    // D5 owns the un-skip. Pin the regression mode now (a
+    // privilege-escalation side channel) so D5 can't accidentally
+    // ship the widener before the ACL filter.
+    it.skip('list: ?include_failed=1 from user B does NOT widen to user A failed rows', () => {});
+    it.skip('get: cross-user GET /api/agents/:id with ?include_failed=1 returns 404', () => {});
   });
 
   describe('Invariant 3: L3a tx atomicity (§6.3 L3a/L3b)', () => {
-    // D3 owns the un-skip. When the dependent-row INSERT inside
-    // the L3a transaction throws (e.g., `agent_home` workspace,
-    // DM conversation, conversation_agents, workspace_users,
-    // conversation_users, or onboarding `messages`), three
-    // observables MUST hold simultaneously:
+    // Force a dependent-row INSERT inside the L3a transaction to
+    // throw by installing a `BEFORE INSERT` trigger on
+    // `conversations` that ABORTs when the row is a DM channel.
+    // `conversations.insertDmChannel` is the 2nd dependent op in
+    // the route's L3a tx (right after `workspaces.insertAgentHome`),
+    // so the trigger fires inside the transaction, the tx rolls
+    // back, and the route's catch arm MUST flip the row to failed
+    // via a SEPARATE tx — that's the structural call Cindy locked
+    // down: "do NOT rely on implicit rollback leaving the row in
+    // pending_materialization for a boot reconciler to clean up".
     //
-    //   (a) materialization_status does NOT flip to 'active'
-    //   (b) zero dependent rows survive across:
-    //       agent_home / dm conversations / conversation_agents /
-    //       workspace_users / conversation_users / onboarding messages
-    //   (c) the row ends up in materialization_status='failed' with
-    //       failed_code='dependent_row_insert_failed' and
-    //       failed_at IS NOT NULL
+    // Single test asserts all three observables simultaneously
+    // because they're all consequences of the same L3a failure.
+
+    it('L3a dependent-row failure → (a) status != active, (b) zero dependent rows, (c) explicit L3b failed + code + ts', async () => {
+      const t = buildTestApp();
+      tests.push(t);
+
+      // Install the trigger BEFORE the POST. ABORT inside a tx
+      // rolls the whole tx back.
+      t.ctx.db.exec(
+        `CREATE TRIGGER d4d_inv3_fail_dm_insert
+           BEFORE INSERT ON conversations
+           WHEN NEW.kind = 'dm_channel'
+         BEGIN
+           SELECT RAISE(ABORT, 'd4d-inv3: forced dependent-row failure');
+         END`,
+      );
+
+      const beforeAgents = t.ctx.db
+        .prepare<[], { c: number }>('SELECT COUNT(*) AS c FROM agents')
+        .get()!.c;
+
+      const res = await http(t).post('/api/agents', {
+        name: 'inv3-l3a-fail',
+        runtime: 'claude',
+      });
+
+      // The route reports dependent_row_insert_failed (500) when
+      // the L3a tx throws.
+      expect(res.status, await res.clone().text()).toBe(500);
+      const body = (await res.json()) as { code: string; error?: string };
+      expect(body.code).toBe('dependent_row_insert_failed');
+
+      // Drop the trigger so subsequent DB inspection isn't affected
+      // (it would only fire on further DM inserts, but cleaner to
+      // drop it before assertions read other tables).
+      t.ctx.db.exec(`DROP TRIGGER d4d_inv3_fail_dm_insert`);
+
+      const agentRows = t.ctx.db
+        .prepare<
+          [],
+          {
+            id: string;
+            name: string;
+            materialization_status: string;
+            materialization_failed_code: string | null;
+            materialization_failed_at: number | null;
+          }
+        >(
+          `SELECT id, name, materialization_status,
+                  materialization_failed_code, materialization_failed_at
+             FROM agents
+            WHERE name = 'inv3-l3a-fail'`,
+        )
+        .all();
+      expect(agentRows).toHaveLength(1);
+      const agent = agentRows[0]!;
+
+      // (a) status does NOT flip to 'active' (Cindy invariant #1).
+      expect(agent.materialization_status).not.toBe('active');
+      // (c) explicit L3b flipped row to failed with the typed code
+      //     + non-null failed_at (Cindy invariant #3 — explicit L3b
+      //     catch, NOT implicit rollback).
+      expect(agent.materialization_status).toBe('failed');
+      expect(agent.materialization_failed_code).toBe(
+        'dependent_row_insert_failed',
+      );
+      expect(agent.materialization_failed_at).not.toBeNull();
+      expect(typeof agent.materialization_failed_at).toBe('number');
+
+      // (b) zero dependent rows survive across every dependent
+      //     table. Each count below is keyed by the agent id so a
+      //     dirty leftover from a different agent row in the same
+      //     fixture wouldn't mask the assertion.
+      const dependentCounts = {
+        agent_home: t.ctx.db
+          .prepare<[string], { c: number }>(
+            `SELECT COUNT(*) AS c FROM workspaces
+              WHERE workspace_kind = 'agent_home'
+                AND owner_agent_id = ?`,
+          )
+          .get(agent.id)!.c,
+        dm_channels: t.ctx.db
+          .prepare<[string], { c: number }>(
+            `SELECT COUNT(*) AS c FROM conversations c
+               JOIN conversation_agents ca ON ca.conversation_id = c.id
+              WHERE c.kind = 'dm_channel' AND ca.agent_id = ?`,
+          )
+          .get(agent.id)!.c,
+        conversation_agents: t.ctx.db
+          .prepare<[string], { c: number }>(
+            `SELECT COUNT(*) AS c FROM conversation_agents WHERE agent_id = ?`,
+          )
+          .get(agent.id)!.c,
+        workspace_users: t.ctx.db
+          .prepare<[string], { c: number }>(
+            `SELECT COUNT(*) AS c FROM workspace_users
+              WHERE workspace_id = ?`,
+          )
+          .get(`wsah_${agent.id}`)!.c,
+        conversation_users: t.ctx.db
+          .prepare<[string], { c: number }>(
+            `SELECT COUNT(*) AS c FROM conversation_users
+              WHERE conversation_id IN (
+                SELECT id FROM conversations WHERE workspace_id = ?
+              )`,
+          )
+          .get(`wsah_${agent.id}`)!.c,
+        onboarding_messages: t.ctx.db
+          .prepare<[string], { c: number }>(
+            `SELECT COUNT(*) AS c FROM messages
+              WHERE conversation_id IN (
+                SELECT id FROM conversations WHERE workspace_id = ?
+              )`,
+          )
+          .get(`wsah_${agent.id}`)!.c,
+      };
+      // Every dependent count is exactly 0.
+      expect(dependentCounts).toEqual({
+        agent_home: 0,
+        dm_channels: 0,
+        conversation_agents: 0,
+        workspace_users: 0,
+        conversation_users: 0,
+        onboarding_messages: 0,
+      });
+
+      // Sanity: exactly one new agent row exists (the failed one);
+      // no orphan duplicates from re-tries inside the failed path.
+      const afterAgents = t.ctx.db
+        .prepare<[], { c: number }>('SELECT COUNT(*) AS c FROM agents')
+        .get()!.c;
+      expect(afterAgents).toBe(beforeAgents + 1);
+    });
+  });
+
+  describe('Standalone happy path (D4.d D3 lift)', () => {
+    // The standalone gate (D4.c C4 marker) was removed in D3. POST
+    // /api/agents in standalone mode now dispatches the
+    // `agent_materialize` wire intent and, on ack, lands the same
+    // 201 payload as embedded mode. This pin makes the lift
+    // observable: if a regression brings back the 409
+    // `host_runtime_disabled` short-circuit it fails here first.
+    it('standalone backend with healthy controller → 201 with agent + DM + onboarding ids', async () => {
+      const t = buildTestApp({ deploymentMode: 'standalone' });
+      tests.push(t);
+      const res = await http(t).post('/api/agents', {
+        name: `standalone-happy-${randomBytes(4).toString('base64url')}`,
+        runtime: 'claude',
+      });
+      expect(res.status, await res.clone().text()).toBe(201);
+      const body = (await res.json()) as CreateAgentOk;
+      expect(body.agent?.id).toBeTruthy();
+      expect(body.agent_home_workspace_id).toBe(`wsah_${body.agent.id}`);
+      expect(body.dm_channel_id).toBeTruthy();
+      expect(body.onboarding_message_id).toBeTruthy();
+      // The newly-created agent row should be active + clean.
+      const row = t.ctx.db
+        .prepare<
+          [string],
+          {
+            materialization_status: string;
+            materialization_failed_code: string | null;
+            materialization_failed_at: number | null;
+          }
+        >(
+          `SELECT materialization_status, materialization_failed_code,
+                  materialization_failed_at
+             FROM agents WHERE id = ?`,
+        )
+        .get(body.agent.id)!;
+      expect(row.materialization_status).toBe('active');
+      expect(row.materialization_failed_code).toBeNull();
+      expect(row.materialization_failed_at).toBeNull();
+      // And the wire intent was actually dispatched on this host.
+      const calls =
+        t.fakeHostWs?.calls.filter(c => c.kind === 'agent_materialize') ?? [];
+      expect(calls).toHaveLength(1);
+      const call = calls[0]!;
+      expect(
+        (call.params as { agent_id: string }).agent_id,
+      ).toBe(body.agent.id);
+    });
+  });
+
+  describe('Round-1 P1.3 — active idempotent echo shape == 201 fresh shape', () => {
+    // Cindy D3 round-1 P1.3: same-key retry on an active row must
+    // return the EXACT same 4-field payload as the fresh 201 success
+    // (agent / agent_home_workspace_id / dm_channel_id /
+    // onboarding_message_id). Without this, clients can't treat
+    // retry and original create as interchangeable.
+    it('active row same-key retry → 200 with identical 4-field shape (agent + home + DM + onboarding)', async () => {
+      const t = buildTestApp();
+      tests.push(t);
+      const key = freshKey();
+      const first = await http(t).post(
+        '/api/agents',
+        { name: 'echo-shape', runtime: 'claude' },
+        { headers: { 'Idempotency-Key': key } },
+      );
+      expect(first.status, await first.clone().text()).toBe(201);
+      const firstBody = (await first.json()) as CreateAgentOk;
+
+      const retry = await http(t).post(
+        '/api/agents',
+        { name: 'echo-shape', runtime: 'claude' },
+        { headers: { 'Idempotency-Key': key } },
+      );
+      expect(retry.status, await retry.clone().text()).toBe(200);
+      const echoBody = (await retry.json()) as CreateAgentOk;
+
+      // Same shape: every key is present and the dependent ids
+      // round-trip to the same values the 201 returned.
+      expect(echoBody.agent.id).toBe(firstBody.agent.id);
+      expect(echoBody.agent_home_workspace_id).toBe(
+        firstBody.agent_home_workspace_id,
+      );
+      expect(echoBody.dm_channel_id).toBe(firstBody.dm_channel_id);
+      expect(echoBody.onboarding_message_id).toBe(
+        firstBody.onboarding_message_id,
+      );
+      // Negative pin: echo NEVER strips a field to undefined / null.
+      expect(echoBody.onboarding_message_id).toBeTruthy();
+      expect(echoBody.agent_home_workspace_id).toBeTruthy();
+    });
+
+    // Cindy refinement `m-K0qV09mGuRqwtu` #2: if a dependent-row
+    // lookup fails on the echo path (DM or onboarding missing), the
+    // route MUST 500 `internal_error` — never silently downgrade to
+    // a null field. An active agent row without its onboarding seed
+    // is a corrupt dependent graph, not a permitted state.
+    it('active row whose onboarding message was deleted → 500 internal_error (no null fallback)', async () => {
+      const t = buildTestApp();
+      tests.push(t);
+      const key = freshKey();
+      const created = (await http(t)
+        .post(
+          '/api/agents',
+          { name: 'echo-corrupt', runtime: 'claude' },
+          { headers: { 'Idempotency-Key': key } },
+        )
+        .then(r => r.json())) as CreateAgentOk;
+      // External mutation: wipe the onboarding system message in
+      // the DM.
+      t.ctx.db
+        .prepare(
+          `DELETE FROM messages
+            WHERE conversation_id = ?
+              AND from_kind = 'system'
+              AND json_extract(metadata, '$.subtype') = 'onboarding'`,
+        )
+        .run(created.dm_channel_id);
+      const retry = await http(t).post(
+        '/api/agents',
+        { name: 'echo-corrupt', runtime: 'claude' },
+        { headers: { 'Idempotency-Key': key } },
+      );
+      expect(retry.status, await retry.clone().text()).toBe(500);
+      const body = (await retry.json()) as { code: string };
+      expect(body.code).toBe('internal_error');
+    });
+  });
+
+  describe('Round-1 P1.4 — L4 post-commit best-effort', () => {
+    // Cindy D3 round-1 P1.4: L3a commit IS the create-succeeded
+    // boundary. L4 `deliverMessage` / `start` failures only log; the
+    // HTTP response stays 201, the row stays active, and all
+    // dependent rows are present. Without this, a transient daemon
+    // hiccup between materialize ack and deliver leaves an active
+    // agent that the route reported as failed — and the next
+    // same-key retry would 200 echo, the worst possible
+    // "looks-failed-but-already-created" UX.
+    it('deliverMessage throws after L3a commit → still 201 + row active + dependent rows present', async () => {
+      const t = buildTestApp();
+      tests.push(t);
+      t.fake.deliverError = new Error('simulated post-commit deliver failure');
+      const res = await http(t).post('/api/agents', {
+        name: 'l4-deliver-fail',
+        runtime: 'claude',
+      });
+      expect(res.status, await res.clone().text()).toBe(201);
+      const body = (await res.json()) as CreateAgentOk;
+      // Row active + clean.
+      const row = t.ctx.db
+        .prepare<
+          [string],
+          {
+            materialization_status: string;
+            materialization_failed_code: string | null;
+            materialization_failed_at: number | null;
+          }
+        >(
+          `SELECT materialization_status, materialization_failed_code,
+                  materialization_failed_at
+             FROM agents WHERE id = ?`,
+        )
+        .get(body.agent.id)!;
+      expect(row.materialization_status).toBe('active');
+      expect(row.materialization_failed_code).toBeNull();
+      expect(row.materialization_failed_at).toBeNull();
+      // Dependent rows all present (the L3a tx committed
+      // BEFORE deliverMessage was attempted).
+      const dm = t.ctx.db
+        .prepare<[string], { id: string }>(
+          `SELECT c.id FROM conversations c
+             JOIN conversation_agents ca ON ca.conversation_id = c.id
+            WHERE c.kind = 'dm_channel' AND ca.agent_id = ?`,
+        )
+        .get(body.agent.id);
+      expect(dm?.id).toBeTruthy();
+      const onboardingCount = t.ctx.db
+        .prepare<[string], { c: number }>(
+          `SELECT COUNT(*) AS c FROM messages
+            WHERE conversation_id = ?
+              AND from_kind = 'system'
+              AND json_extract(metadata, '$.subtype') = 'onboarding'`,
+        )
+        .get(dm!.id)!.c;
+      expect(onboardingCount).toBe(1);
+      // The fake recorded zero delivers (the throw fired before
+      // `delivered.push`). A successful create would have recorded 1.
+      expect(t.fake.delivered).toHaveLength(0);
+    });
+  });
+
+  describe('Round-1 P1.2 — Idempotency-Key header required', () => {
+    // Cindy D3 round-1 P1.2: `POST /api/agents` requires an
+    // `Idempotency-Key` header per design §14 Q1. The
+    // `tests/utils/app.ts` http helper auto-injects a random one
+    // so legacy tests stay valid; this test deliberately bypasses
+    // the helper to pin the unmediated public contract — a request
+    // without the header MUST 400 before any DB write.
     //
-    // Implementation contract: (c) MUST be produced by an
-    // EXPLICIT L3b catch that opens its own tx to flip the row to
-    // failed. It is NOT acceptable to rely on implicit "tx
-    // rollback leaves the row in pending_materialization and the
-    // boot reconciler will pick it up later" — the request
-    // lifecycle MUST close out the row state synchronously
-    // (Cindy structural call).
-    it.skip('L3a dependent-row failure: (a) status stays != active', () => {});
-    it.skip('L3a dependent-row failure: (b) zero dependent rows survive', () => {});
-    it.skip(
-      'L3a dependent-row failure: (c) explicit L3b catch flips row to failed + dependent_row_insert_failed + failed_at',
-      () => {},
-    );
+    // This catches the regression mode that masked the renderer
+    // hook bug (`apps/desktop/.../hooks.ts` was sending no header
+    // until D3 round-1 fixup); the auto-inject in test scaffolding
+    // would have hidden the bad client.
+    it('missing Idempotency-Key (raw app.fetch) → 400 + agent count unchanged', async () => {
+      const t = buildTestApp();
+      tests.push(t);
+      const before = t.ctx.db
+        .prepare<[], { c: number }>('SELECT COUNT(*) AS c FROM agents')
+        .get()!.c;
+      // Bypass the http() helper's auto-inject: build the Request
+      // manually so headers stay exactly what we set.
+      const res = await t.app.fetch(
+        new Request('http://localhost/api/agents', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            authorization: `Bearer ${t.authToken}`,
+          },
+          body: JSON.stringify({ name: 'no-key', runtime: 'claude' }),
+        }),
+      );
+      expect(res.status, await res.clone().text()).toBe(400);
+      const body = (await res.json()) as { code?: string; error?: string };
+      // The exact code key is whatever d3ParseIdempotencyKey returns
+      // — assert it surfaces a typed code and that the error text
+      // mentions the header name so the regression is unambiguous.
+      expect(body.code ?? body.error).toBeTruthy();
+      expect(JSON.stringify(body)).toContain('dempotency-Key');
+      // No DB write happened.
+      const after = t.ctx.db
+        .prepare<[], { c: number }>('SELECT COUNT(*) AS c FROM agents')
+        .get()!.c;
+      expect(after).toBe(before);
+    });
+  });
+
+  const tests: TestApp[] = [];
+  afterEach(() => {
+    while (tests.length > 0) {
+      tests.pop()!.cleanup();
+    }
   });
 });

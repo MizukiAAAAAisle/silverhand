@@ -44,10 +44,39 @@ export function useCreateAgent() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: CreateAgentInput) => {
-      const res = await api<{ agent: AgentDto; dm_channel_id: string }>(
-        '/api/agents',
-        { method: 'POST', body: JSON.stringify(input) },
-      );
+      // D4.d D3 — `POST /api/agents` now REQUIRES an
+      // `Idempotency-Key` header (1..64, `[A-Za-z0-9_-]`) per
+      // design §14 Q1. The key is generated inside this
+      // `mutationFn` closure and lives for exactly the single
+      // `api()` HTTP attempt below.
+      //
+      // Scope note (Cindy D3 round-2 P2): D3 ONLY commits to
+      // "every HTTP attempt carries an Idempotency-Key". We do
+      // NOT commit to key reuse across React Query's builtin
+      // retry surface — each invocation of `mutationFn`
+      // (whether from a fresh `mutate()` call or from React
+      // Query's automatic retry) re-enters this scope and
+      // generates a new key. If a future UX wants a "Retry"
+      // button to round-trip the original create's idempotent
+      // state, the key must be lifted out of `mutationFn` into
+      // mutation context / component state — that's an explicit
+      // future change, not an emergent property of the current
+      // code.
+      //
+      // `crypto.randomUUID()` is RFC 4122 v4 — 36 chars,
+      // [0-9a-f-] only, well within the route's 1..64
+      // `[A-Za-z0-9_-]` window. No need for any extra encoding.
+      const idempotencyKey = crypto.randomUUID();
+      const res = await api<{
+        agent: AgentDto;
+        agent_home_workspace_id: string;
+        dm_channel_id: string;
+        onboarding_message_id: string;
+      }>('/api/agents', {
+        method: 'POST',
+        body: JSON.stringify(input),
+        headers: { 'Idempotency-Key': idempotencyKey },
+      });
       return res;
     },
     onSuccess: () => {

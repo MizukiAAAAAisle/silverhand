@@ -119,6 +119,177 @@ export class AgentRepo {
     return row;
   }
 
+  // ── D4.d D3: materialization lifecycle methods ──────────────────
+  //
+  // §6.1 + §6.3 give the route 4 mutations on `agents` it must
+  // own through the materialize lifecycle:
+  //
+  //   1. Lookup by `(created_by_user_id, idempotency_key)` to
+  //      decide short-circuit / mismatch / fresh attempt.
+  //   2. Reserve a `pending_materialization` row with metadata
+  //      snapshot before dispatching the wire intent (L1).
+  //   3. Flip the reserved row to `active` after daemon ack +
+  //      dependent-row inserts succeed (L3a).
+  //   4. Flip the reserved row to `failed` with a typed code
+  //      after daemon typed err / timeout / dependent-row insert
+  //      failure (L3b).
+  //
+  // Idempotency-Key is per-creator scoped — the v33 partial
+  // unique index is `(created_by_user_id, idempotency_key)
+  // WHERE idempotency_key IS NOT NULL`. Cross-user existence side
+  // channel is impossible at the SQL layer (Cindy round-2 P1 #5).
+  //
+  // The flip helpers do NOT return the projected DTO — they're
+  // mutation-only. Routes call `getRow` after flip when they need
+  // the projection (e.g. for the 201 response payload).
+
+  /**
+   * Lookup an agent row by `(created_by_user_id, idempotency_key)`.
+   * Returns `null` if no such row exists — that's the fresh-attempt
+   * path. Returns the row (in ANY status: pending, active, failed)
+   * if one exists — that's the short-circuit path the route then
+   * dispatches based on `materialization_status`.
+   *
+   * Note: this returns `AgentRow` (with `idempotency_key` field)
+   * NOT `AgentDto` (which deliberately drops it per Cindy D1
+   * round-2 P2). The mismatch check needs the metadata snapshot
+   * fields, which the DTO carries, but the route also needs to
+   * confirm key match — so giving it the full row is cleaner.
+   */
+  findByIdempotencyKey(
+    createdByUserId: string,
+    idempotencyKey: string,
+  ): AgentRow | null {
+    const row = this.db
+      .prepare<[string, string], AgentRow>(
+        `SELECT * FROM agents
+           WHERE created_by_user_id = ?
+             AND idempotency_key = ?`,
+      )
+      .get(createdByUserId, idempotencyKey);
+    return row ?? null;
+  }
+
+  /**
+   * Insert a fresh agent row in `pending_materialization` state
+   * with the supplied `idempotency_key` captured into the row
+   * (the unique index enforces per-creator uniqueness — caller
+   * must have called `findByIdempotencyKey` first and ensured
+   * the slot is free).
+   *
+   * Returns the new row's `AgentRow` (with all v33 fields). The
+   * route's L1 phase calls this BEFORE dispatching the wire intent,
+   * so the resulting row carries everything the L2 dispatch needs:
+   * `id` (= `agent_id` in the wire arm), `host_id` (= placement
+   * resolution), `name` / `runtime` / `model` / `description` /
+   * `idempotency_key` (the metadata snapshot the L0 mismatch check
+   * compares against on later retries).
+   *
+   * The v33 column `materialization_status` defaults to `'active'`
+   * for backfill rows; we explicitly set it to
+   * `'pending_materialization'` here so the new lifecycle is
+   * observable from the moment the row exists.
+   */
+  reserveForMaterialize(
+    input: CreateAgentInput,
+    defaultHostId: string,
+    createdByUserId: string,
+    idempotencyKey: string,
+  ): AgentRow {
+    const id = newId();
+    const now = Date.now();
+    this.db
+      .prepare(
+        `INSERT INTO agents
+         (id, name, display_name, runtime, model, reasoning_effort, fast_mode,
+          host_id, description, created_by_user_id,
+          materialization_status, idempotency_key,
+          created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                 'pending_materialization', ?,
+                 ?, ?)`,
+      )
+      .run(
+        id,
+        input.name,
+        input.name,
+        input.runtime,
+        input.model ?? null,
+        input.reasoning_effort ?? null,
+        input.fast_mode === undefined ? null : input.fast_mode ? 1 : 0,
+        input.host_id ?? defaultHostId,
+        input.description ?? null,
+        createdByUserId,
+        idempotencyKey,
+        now,
+        now,
+      );
+    const row = this.getRow(id);
+    if (!row) throw new Error('reserve insert failed');
+    return row;
+  }
+
+  /**
+   * Flip a `pending_materialization` row to `'active'`. Called by
+   * the route's L3a tx after the daemon ack arrives ok AND all
+   * dependent rows have been inserted in the same tx.
+   *
+   * No-op if the row is already active (legal under same-key
+   * retry hitting an active row — the route should have
+   * short-circuited at L0 dispatch, but defensive idempotence
+   * doesn't hurt). Refuses to flip `failed → active` — that's
+   * never legal (Cindy round-2 P1 #5: `failed → active` requires
+   * `?retry=true` which goes through the reserve path again, NOT
+   * an in-place flip).
+   */
+  flipToActive(id: string): void {
+    this.db
+      .prepare(
+        `UPDATE agents
+            SET materialization_status = 'active',
+                materialization_failed_code = NULL,
+                materialization_failed_at   = NULL,
+                updated_at = ?
+          WHERE id = ?
+            AND materialization_status IN ('pending_materialization', 'active')`,
+      )
+      .run(Date.now(), id);
+  }
+
+  /**
+   * Flip a `pending_materialization` row to `'failed'` with a
+   * typed failure code + the failure timestamp. Called by the
+   * route's L3b path on:
+   *
+   *   - daemon ack typed err (`agent_dir_collision`,
+   *     `fs_quota_exceeded`, `fs_unavailable`, `unsupported_template`,
+   *     `unsupported_runtime`, `internal_error`)
+   *   - daemon ack timeout (`materialize_timeout`)
+   *   - L3a tx failure (`dependent_row_insert_failed`)
+   *   - daemon ack `agent_dir !== agent_home_workspace_path` skew
+   *     (`daemon_internal_error`, §6.5)
+   *
+   * AND by the D4 boot reconciler with code
+   * `backend_crash_during_materialize` for stale pending rows.
+   *
+   * Refuses to flip from `'active'` — once a row is active, the
+   * failure surface is via destructive DELETE, not in-place flip
+   * (Cindy round-1 P1 #2: active-row destructive flow is unchanged).
+   */
+  flipToFailed(id: string, failedCode: string, failedAt: number): void {
+    this.db
+      .prepare(
+        `UPDATE agents
+            SET materialization_status      = 'failed',
+                materialization_failed_code = ?,
+                materialization_failed_at   = ?,
+                updated_at = ?
+          WHERE id = ?
+            AND materialization_status IN ('pending_materialization', 'failed')`,
+      )
+      .run(failedCode, failedAt, Date.now(), id);
+  }
+
   /**
    * Partial update. Only keys present in `input` are written. Returns
    * the updated row, or null if the agent does not exist. Caller is

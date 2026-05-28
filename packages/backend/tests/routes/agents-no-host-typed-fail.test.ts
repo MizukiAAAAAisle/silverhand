@@ -463,43 +463,54 @@ describe('agent start/stop — typed-fail gate (D4.a Commit 6 G1)', () => {
     });
   });
 
-  // D4.c C4 — POST /api/agents in standalone mode is intentionally
-  // STILL gated. The pre-existing C2/C3 lifts unblocked the rest of
-  // the multi-host control plane (host claim/revoke,
-  // workspace POST/PATCH/DELETE, add-member). Agent CREATION is the
-  // one remaining route in the standalone short-circuit because it
-  // depends on the not-yet-designed `agent_materialize` outbound
-  // intent (D4.d). G3 acceptance uses pre-existing / seeded agents
-  // for everything else; this test pins the gate so the C4 marker
-  // doesn't silently drift into a runtime regression once D4.d
-  // designs the lift.
-  describe('POST /api/agents — standalone gate is C4-deferred to D4.d', () => {
-    it('returns typed `host_runtime_disabled` (409) and creates no `agents` row', async () => {
-      t = buildTestApp({ deploymentMode: 'standalone' });
+  // D4.d D3 — POST /api/agents standalone gate REMOVED. The route now
+  // dispatches the `agent_materialize` wire intent in both deployment
+  // modes (R4 invariant: handlers do not fork by deployment). When the
+  // outbound controller is not installed (or has no live attachment),
+  // the route returns 503 `host_attach_pending` — same shape as D4.b
+  // runtime intents.
+  //
+  // Cindy D3 round-1 P1 §6.2 invariant: the online check fires BEFORE
+  // L1 reserve, so a daemon-offline scenario must NOT leak an agent
+  // row at all (the prior "reserve then flip to failed" was wrong).
+  // This test pins both halves: 503 response shape + zero new rows.
+  describe('POST /api/agents — daemon offline (fail-fast, NO reserve)', () => {
+    it('no live host controller → 503 host_attach_pending + agent count UNCHANGED', async () => {
+      t = buildTestApp({
+        deploymentMode: 'standalone',
+        // Force the "no controller installed" branch — same observable
+        // surface a real standalone deployment with the daemon offline
+        // would show.
+        hostWsController: () => null,
+      });
       const agentCountBefore = t.ctx.db
         .prepare<[], { c: number }>('SELECT COUNT(*) AS c FROM agents')
         .get()!.c;
 
       const res = await http(t).post('/api/agents', {
-        name: `c4-marker-${Date.now()}`,
+        name: `d3-daemon-offline-${Date.now()}`,
         runtime: 'claude',
       });
 
-      expect(res.status).toBe(409);
+      expect(res.status).toBe(503);
       const body = (await res.json()) as { code: string; error?: string };
-      expect(body.code).toBe('host_runtime_disabled');
-      // Error string is part of the renderer-facing contract — pin
-      // the "agent creation" thread so a future refactor doesn't
-      // accidentally lose the action-name token the desktop UI
-      // keys off.
-      expect(body.error).toContain('agent creation');
+      expect(body.code).toBe('host_attach_pending');
 
-      // The gate runs BEFORE any DB write — `agents` row count
-      // unchanged.
+      // Cindy D3 round-1 P1 — §6.2: online check runs BEFORE
+      // reserve, so daemon-offline MUST leave the agents table
+      // untouched. Pin both total count AND that no
+      // pending/failed/active row was orphaned for this name.
       const agentCountAfter = t.ctx.db
         .prepare<[], { c: number }>('SELECT COUNT(*) AS c FROM agents')
         .get()!.c;
       expect(agentCountAfter).toBe(agentCountBefore);
+      const orphans = t.ctx.db
+        .prepare<[], { c: number }>(
+          `SELECT COUNT(*) AS c FROM agents
+            WHERE name LIKE 'd3-daemon-offline-%'`,
+        )
+        .get()!.c;
+      expect(orphans).toBe(0);
     });
   });
 });

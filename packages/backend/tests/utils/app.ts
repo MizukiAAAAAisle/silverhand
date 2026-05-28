@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { mkdirSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import type {
   AgentRunState,
   AgentRunTerminalReason,
@@ -55,6 +56,13 @@ import { createLogLevelControl } from '../../src/logger.js';
 import { makeTempSilverhandDir, openTestDb } from './db.js';
 import { RuntimeHostPlacementResolver } from '../../src/runtime/host-placement.js';
 import type { HostWsServerController } from '../../src/ws/host-ws-server.js';
+import type {
+  OutboundServerCommandKind,
+  OutboundServerCommandParams,
+  OutboundServerCommandResult,
+} from '@silverhand/host';
+import { ensureAgentL1Dir } from '../../src/workspace-files.js';
+import { join as joinPath } from 'node:path';
 
 /**
  * Records every call routes / provision make into the runtime host.
@@ -95,6 +103,13 @@ export class FakeConversationManager {
 
   /** Override to make `.start` reject. */
   startError: Error | null = null;
+  /**
+   * D4.d D3 round-1 P1.4 — inject a thrown error from
+   * `deliverMessage` to exercise the route's post-commit
+   * best-effort path (the `await runtimeHost.deliverMessage(...)`
+   * call must catch+log and NOT turn the HTTP response into 5xx).
+   */
+  deliverError: Error | null = null;
   /**
    * D4.c C7 — inject a thrown error from `clearSession`. Unit tests
    * cover the route's typed-error mapping (`ClearSessionExitTimeoutError`
@@ -158,6 +173,7 @@ export class FakeConversationManager {
     agentId: string,
     messageId: string,
   ): Promise<void> {
+    if (this.deliverError) throw this.deliverError;
     this.delivered.push({ conversationId, agentId, messageId });
   }
   async setConversationLogDebug(
@@ -170,6 +186,119 @@ export class FakeConversationManager {
       enabled,
       expiresAt: expiresAt ?? null,
     });
+  }
+}
+
+/**
+ * D4.d D3 — default in-process fake for `HostWsServerController`.
+ *
+ * The new `POST /api/agents` route is deployment-agnostic: it always
+ * dispatches `agent_materialize` via `ctx.hostWsController?.()`. Pre-D3
+ * tests posted to `/api/agents` without ever standing up an outbound
+ * transport, and would now fall through to the 503 `host_attach_pending`
+ * "no controller installed" branch. To keep legacy tests creating agents
+ * working without per-file scaffolding, `buildTestApp` installs this
+ * fake by default whenever `options.hostWsController` is unset.
+ *
+ * Behavior:
+ *   - `agent_materialize` auto-acks with
+ *     `{ ok: true, agent_dir, agent_home_workspace_path, materialized_at }`
+ *     where `agent_dir === agent_home_workspace_path` (§6.5 invariant).
+ *     The path matches what a real local daemon would produce —
+ *     `<silverhandDir>/agents/<agentId>` — so downstream code that
+ *     records the path on `workspaces.workspace_path` stays
+ *     consistent with `AgentSystemPromptMemory` conventions.
+ *   - Every other command kind returns `{}` (typed-erased) so the
+ *     class can be passed wherever the controller interface is
+ *     needed without per-kind branches.
+ *   - Tests can opt out by passing an explicit factory (including
+ *     `() => null` to exercise the "no controller" path) or by
+ *     swapping in their own implementation.
+ *   - Tests that need to inject typed/transport errors can either
+ *     set `sendCommandError` on this instance or supply a custom
+ *     controller via `BuildTestAppOptions.hostWsController`.
+ */
+export class FakeHostWsServerController implements HostWsServerController {
+  calls: Array<{
+    hostId: string;
+    kind: OutboundServerCommandKind;
+    params: Record<string, unknown>;
+  }> = [];
+  /** Inject an error from `sendCommand` (any kind). */
+  sendCommandError: Error | null = null;
+  /**
+   * Override the `agent_materialize` ack body. Tests that want to
+   * exercise the `agent_dir !== agent_home_workspace_path` skew or
+   * a different path can swap this.
+   */
+  agentMaterializeAckOverride:
+    | ((
+        agentId: string,
+        agentHomeWorkspaceId: string,
+      ) => OutboundServerCommandResult<'agent_materialize'>)
+    | null = null;
+
+  constructor(private readonly silverhandDir: string) {}
+
+  activeConnectionCount(): number {
+    return 1;
+  }
+  connectedHostIds(): string[] {
+    return ['local'];
+  }
+  connectionIdForHost(_hostId: string): string | null {
+    return 'conn-fake-1';
+  }
+  getAttachment(): null {
+    return null;
+  }
+  async sendCommand<K extends OutboundServerCommandKind>(
+    hostId: string,
+    kind: K,
+    params: OutboundServerCommandParams<K>,
+  ): Promise<OutboundServerCommandResult<K>> {
+    this.calls.push({
+      hostId,
+      kind,
+      params: params as Record<string, unknown>,
+    });
+    if (this.sendCommandError) throw this.sendCommandError;
+    if (kind === 'agent_materialize') {
+      const p = params as OutboundServerCommandParams<'agent_materialize'>;
+      if (this.agentMaterializeAckOverride) {
+        return this.agentMaterializeAckOverride(
+          p.agent_id,
+          p.agent_home_workspace_id,
+        ) as OutboundServerCommandResult<K>;
+      }
+      const dir = joinPath(this.silverhandDir, 'agents', p.agent_id);
+      // Seed the agent's L1 home with the embedded backend's
+      // semantic clone of the daemon's template (per
+      // `docs/agent-system-prompt-memory.md`). Backend routes that
+      // read these files (e.g. `GET /api/agents/:id/workspace`)
+      // can then see the expected shape without per-test
+      // scaffolding. `ensureAgentL1Dir` is idempotent — same-key
+      // retries reuse the existing files.
+      //
+      // The dependency-guard tripwire forbids backend code from
+      // importing the daemon's `agent-materialize/template.ts`
+      // directly. The clone in `workspace-files.ts` is allowed by
+      // design; this fake uses it for the same reason.
+      await ensureAgentL1Dir(dir);
+      return {
+        ok: true as const,
+        agent_dir: dir,
+        agent_home_workspace_path: dir,
+        materialized_at: Date.now(),
+      } as OutboundServerCommandResult<K>;
+    }
+    return {} as OutboundServerCommandResult<K>;
+  }
+  disconnectHost(_hostId: string): boolean {
+    return false;
+  }
+  async close(): Promise<void> {
+    // no-op
   }
 }
 
@@ -227,6 +356,12 @@ export interface TestApp {
   app: Hono<AppEnv>;
   ctx: BackendContext;
   fake: FakeConversationManager;
+  /**
+   * The default in-process fake host controller installed when
+   * `BuildTestAppOptions.hostWsController` is unset. Tests that pass
+   * their own controller factory get `null` here.
+   */
+  fakeHostWs: FakeHostWsServerController | null;
   authToken: string;
   legacyServerAuthToken: string;
   /** The resolved viewer id for this test fixture. Always `'local'` —
@@ -248,6 +383,16 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
   mkdirSync(tmp.workspacesRoot, { recursive: true });
 
   const fake = new FakeConversationManager();
+  // D4.d D3 — default fake outbound controller. If the test supplies
+  // its own factory, we honor it verbatim (including `() => null` for
+  // the "no controller installed" path). Otherwise install a fake that
+  // auto-acks `agent_materialize` so legacy agent-creating tests stay
+  // on the happy path without per-file scaffolding.
+  const fakeHostWs = options.hostWsController
+    ? null
+    : new FakeHostWsServerController(tmp.silverhandDir);
+  const hostWsControllerFactory: () => HostWsServerController | null =
+    options.hostWsController ?? (() => fakeHostWs);
   const legacyServerAuthToken = 'a'.repeat(32);
   const deploymentMode = options.deploymentMode ?? 'embedded';
   const serverConfig: ServerConfig = {
@@ -334,7 +479,7 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
       sessionTtlMs: authConfig.sessionTtlMs,
     }),
     placement,
-    hostWsController: options.hostWsController,
+    hostWsController: hostWsControllerFactory,
     runtimeHost: fake as unknown as AgentRuntimeHost,
   };
   ctx.channelService = new ChannelService({
@@ -419,6 +564,7 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     app,
     ctx,
     fake,
+    fakeHostWs,
     authToken,
     legacyServerAuthToken,
     viewerUserId,
@@ -475,13 +621,37 @@ export function http(
     method: 'POST' | 'PUT' | 'PATCH',
     body: unknown,
     init?: RequestInit,
-  ) =>
-    merge(path, {
+  ) => {
+    const mergedInit: RequestInit = {
       method,
       headers: { 'content-type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
       ...init,
-    });
+    };
+    // D4.d D3: `POST /api/agents` requires an `Idempotency-Key`
+    // header (1..64, [A-Za-z0-9_-]) per §14 Q1. Pre-D3 tests
+    // posted without one — auto-inject a per-request random key
+    // so legacy test intent (single fresh attempt) stays valid.
+    // Tests that exercise idempotency semantics explicitly should
+    // pass their own Idempotency-Key in `init.headers`; the
+    // request init merge below preserves user-supplied values.
+    if (
+      method === 'POST' &&
+      (path === '/api/agents' || path.startsWith('/api/agents?'))
+    ) {
+      const existing = (mergedInit.headers as Record<string, string>) ?? {};
+      const hasKey = Object.keys(existing).some(
+        k => k.toLowerCase() === 'idempotency-key',
+      );
+      if (!hasKey) {
+        mergedInit.headers = {
+          ...existing,
+          'Idempotency-Key': `t-${randomBytes(8).toString('base64url')}`,
+        };
+      }
+    }
+    return merge(path, mergedInit);
+  };
   return {
     get: async (p, init) =>
       app.fetch(new Request(base + p, merge(p, { method: 'GET', ...init }))),
