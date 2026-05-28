@@ -98,6 +98,81 @@
       line-height: 1.55;
     }
 
+    .milestones {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin: 16px 0 6px;
+    }
+
+    .ms-card {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 14px 16px;
+      background: var(--paper);
+      position: relative;
+    }
+
+    .ms-card.current {
+      border-color: #fcd34d;
+      background: linear-gradient(180deg, #fffbeb 0%, #fff 65%);
+      box-shadow: 0 1px 0 #fde68a;
+    }
+
+    .ms-card.later {
+      background: #f8fafc;
+    }
+
+    .ms-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+      margin-bottom: 6px;
+    }
+
+    .ms-title {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 800;
+      color: var(--ink);
+    }
+
+    .ms-pin {
+      font-size: 10.5px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #92400e;
+      color: #fffbeb;
+    }
+
+    .ms-pin.gray {
+      background: #475569;
+      color: #f1f5f9;
+    }
+
+    .ms-body {
+      margin: 0;
+      font-size: 12.5px;
+      color: #374151;
+      line-height: 1.6;
+    }
+
+    .ms-scope {
+      margin: 8px 0 0;
+      font-size: 11.5px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .ms-scope strong { color: var(--ink); }
+
+    @media (max-width: 760px) {
+      .milestones { grid-template-columns: 1fr; }
+    }
+
     .legend {
       display: flex;
       flex-wrap: wrap;
@@ -243,6 +318,27 @@
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     }
 
+    .m-tag {
+      font-size: 10.5px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      padding: 2px 7px;
+      border-radius: 4px;
+      border: 1px solid transparent;
+    }
+
+    .m-tag.m1 {
+      background: #fef3c7;
+      color: #92400e;
+      border-color: #fcd34d;
+    }
+
+    .m-tag.m2 {
+      background: #e2e8f0;
+      color: #334155;
+      border-color: #cbd5e1;
+    }
+
     code {
       border: 1px solid #e5e7eb;
       background: #f9fafb;
@@ -326,6 +422,8 @@
           Silverhand 从「Electron 单机自用」走向「one backend codebase · one wire protocol · multiple deployment adapters」终态的工作清单。
           每张卡片是一个 Stage / Phase 级单元（不是 commit 级），按状态分类，按依赖顺序成组。
           终态约束已 lock 在 <code>docs/daemon-server-link-flow.html</code>（Panel 3 + 底部矩阵），本文档不复述，只跟踪进度。
+          整体路径分两个 milestone：<strong>M1 = final-form 语义完成 + backend 仍 embedded 跑在 desktop</strong>；
+          <strong>M2 = backend 可随时部署到云上</strong>。<strong>这期目标 = M1</strong>。
         </p>
       </div>
       <div class="stamp">
@@ -340,6 +438,43 @@
       状态变化时手工 PR 更新；不要把未做事项当作已排期。Stage / Phase 的「成功定义」写在卡片正文里，避免和「final form complete」混淆——
       比如 D4.c 的成功定义是 <em>G3 — security &amp; multi-host acceptance closed</em>，不是 final form。
     </div>
+
+    <section class="milestones" aria-label="milestone split">
+      <div class="ms-card current">
+        <div class="ms-head">
+          <h3 class="ms-title">Milestone 1 — Final-form 语义完成（这期目标）</h3>
+          <span class="ms-pin">CURRENT</span>
+        </div>
+        <p class="ms-body">
+          协议 / daemon / materialization / data-plane 模型按 R1-R4 终态正确实现；
+          backend 仍通过 adapter 跑在本地（embedded in Electron main），<strong>不要求云部署形态成熟</strong>。
+          换句话说：代码长得已经像 standalone，但实际部署还是 embedded，「切到 standalone」是 deployment 动作而非代码改造。
+        </p>
+        <p class="ms-scope">
+          <strong>包含</strong>：Foundations（已 done）· D3 desktop daemon lifecycle 全套 ·
+          D4.a/b/c/d/e（含 create-agent materialize intent + local data-plane sync）·
+          D5.a/b（R4 envelope unification + workspace materialize）· T1 内的 multi-daemon 路由 + Remote UX 收口。
+          <br><strong>不包含</strong>：production deploy infra / 容器化 / 云端 TLS / observability shipping / 多用户云端 auth 加固 / cloud soak。
+        </p>
+      </div>
+      <div class="ms-card later">
+        <div class="ms-head">
+          <h3 class="ms-title">Milestone 2 — Backend 可随时部署到云上</h3>
+          <span class="ms-pin gray">LATER</span>
+        </div>
+        <p class="ms-body">
+          M1 完成后，backend 才有资格出门——把这份 codebase 拿到云上 host，多用户从公网接进来，
+          各自的 desktop daemon 通过 outbound WSS 接入同一个 backend。
+          目标是 production deploy infra 成熟，<strong>不再做协议/语义层改动</strong>。
+        </p>
+        <p class="ms-scope">
+          <strong>包含</strong>：Docker / container 镜像 · 反向代理 &amp; TLS · 可观测（log shipping / metrics / alarms） ·
+          Auth 加固（email verification / 2FA / password reset） · 备份 / migration 工具 · cloud soak gate ·
+          T1 内的 blob remote 中转 / driver template 分发 / workspace path remote 语义。
+          <br><strong>不包含</strong>：sandbox host / web client / mobile push / 横向扩展——那些是 T3 V2+。
+        </p>
+      </div>
+    </section>
 
     <section class="legend" aria-label="status legend">
       <span class="chip"><span class="dot done"></span>done · 已 merge / 已 accept</span>
@@ -383,6 +518,7 @@
             cross-user 404-not-403 boundary 立住。
           </p>
           <div class="card-meta">
+            <span class="m-tag m1">M1</span>
             <span class="meta-tag">A.1–A.4</span>
             <span class="meta-tag">shiki accepted</span>
           </div>
@@ -398,6 +534,7 @@
             host-equality enforced at membership time。
           </p>
           <div class="card-meta">
+            <span class="m-tag m1">M1</span>
             <span class="meta-tag">B.1–B.2</span>
           </div>
         </div>
@@ -412,6 +549,9 @@
             ACL legacy bridge 全部具名 grep-able（<code>getLegacyViewerForWsScope</code> 等）。
             wizard 走真 HTTP，无 in-process shortcut。
           </p>
+          <div class="card-meta">
+            <span class="m-tag m1">M1</span>
+          </div>
         </div>
 
         <div class="card done">
@@ -423,6 +563,9 @@
             spawn-prep.ts / workspace path / blob path / env injection 全部映射为 daemon-host 职责。
             这条 lock 后才能谈 D4.d 创建链路。
           </p>
+          <div class="card-meta">
+            <span class="m-tag m1">M1</span>
+          </div>
         </div>
 
         <div class="card done">
@@ -436,6 +579,7 @@
             D4.d / D5 设计都从这一句话推。
           </p>
           <div class="card-meta">
+            <span class="m-tag m1">M1</span>
             <span class="meta-tag">shiki lock</span>
           </div>
         </div>
@@ -450,6 +594,9 @@
             delivery-backed vs non-delivery dispatch 双路径分类。
             <code>ConversationInboxRepo</code> claim/rollback/in-flight lease 全套语义就位。
           </p>
+          <div class="card-meta">
+            <span class="m-tag m1">M1</span>
+          </div>
         </div>
 
       </div>
@@ -479,6 +626,9 @@
             BackendInfo plumbing / <code>captureAttachWindow</code> / <code>attachmentSatisfies</code> freshness gate。
             7 commits（<code>5a8e498 ← 79a9477 ← b451ada …</code>）shiki accepted 2026-05-27。
           </p>
+          <div class="card-meta">
+            <span class="m-tag m1">M1</span>
+          </div>
         </div>
 
         <div class="card in-progress">
@@ -492,6 +642,7 @@
             Commit 3 = <code>host_outbound_detach</code> IPC + Electron <code>before-quit</code>（best-effort optimization）。
           </p>
           <div class="card-meta">
+            <span class="m-tag m1">M1</span>
             <span class="meta-tag">Cindy review gate</span>
           </div>
         </div>
@@ -505,6 +656,9 @@
             backend bind 地址变更后 daemon-config.json 重写 + daemon 端 reload 走干净路径。
             未开工。
           </p>
+          <div class="card-meta">
+            <span class="m-tag m1">M1</span>
+          </div>
         </div>
 
         <div class="card planned">
@@ -516,6 +670,9 @@
             list / status / rotate-token / revoke / reclaim 的 UI 状态机。
             multi-host pending / failed / online 的展示。
           </p>
+          <div class="card-meta">
+            <span class="m-tag m1">M1</span>
+          </div>
         </div>
 
         <div class="card planned">
@@ -527,6 +684,9 @@
             「我退出我的账号」 vs 「我这台机器不再当 host」的清晰分流；
             session revoke / host revoke 分开 UX。
           </p>
+          <div class="card-meta">
+            <span class="m-tag m1">M1</span>
+          </div>
         </div>
 
       </div>
@@ -556,6 +716,9 @@
             phase-2 orchestrator + partial_apply_pending state / boot reconciliation。
             <strong>R4 acceptance gate: protocol parity test 钉死 embedded vs standalone normalized frame 一致</strong>。
           </p>
+          <div class="card-meta">
+            <span class="m-tag m1">M1</span>
+          </div>
         </div>
 
         <div class="card done">
@@ -568,6 +731,9 @@
             bulk-stop typed aggregation / post-hydrate auto-drain hook / <code>/messages</code> best-effort 口径收窄。
             Cindy round-3 LGTM。
           </p>
+          <div class="card-meta">
+            <span class="m-tag m1">M1</span>
+          </div>
         </div>
 
         <div class="card planned">
@@ -582,6 +748,7 @@
             <strong>不含</strong> create-agent（已 defer 到 D4.d）。
           </p>
           <div class="card-meta">
+            <span class="m-tag m1">M1</span>
             <span class="meta-tag">pending shiki OK</span>
             <span class="meta-tag">success = G3 closed</span>
           </div>
@@ -598,6 +765,7 @@
             需 design pass：幂等 / typed errors / daemon 离线 pending / 失败回滚 / 多 host 路由策略。
           </p>
           <div class="card-meta">
+            <span class="m-tag m1">M1</span>
             <span class="meta-tag">shiki unlocked 2026-05-28</span>
           </div>
         </div>
@@ -612,6 +780,7 @@
             <code>/api/agents/:id/workspace</code> + runtime detection 这类 desktop-local fs surface 的「daemon proxy vs permanent embedded-only」决断。
           </p>
           <div class="card-meta">
+            <span class="m-tag m1">M1</span>
             <span class="meta-tag">Cindy item 4</span>
           </div>
         </div>
@@ -643,6 +812,9 @@
             重构 <code>HostClient</code>：embedded transport 仍是 Unix socket / in-proc，但<strong>承载 frame envelope 与 standalone WSS 完全同形</strong>。
             backend 端 dispatch 路径统一。<strong>R4 acceptance gate: protocol parity test 扩展到 embedded</strong>。
           </p>
+          <div class="card-meta">
+            <span class="m-tag m1">M1</span>
+          </div>
         </div>
 
         <div class="card future">
@@ -655,6 +827,9 @@
             add agent 时 daemon 建 L2 <code>MEMORY.md</code> / <code>notes/</code>。
             统一在 envelope 里加 <code>workspace_materialize</code> / <code>workspace_member_materialize</code> intent。
           </p>
+          <div class="card-meta">
+            <span class="m-tag m1">M1</span>
+          </div>
         </div>
 
       </div>
@@ -683,6 +858,9 @@
             当前 attachment 假设 local fs 路径。远端需要决定：daemon 上传 server 中转？P2P？跨 host 共享？
             <strong>未做 design</strong>。
           </p>
+          <div class="card-meta">
+            <span class="m-tag m2">M2</span>
+          </div>
         </div>
 
         <div class="card future">
@@ -695,6 +873,9 @@
             remote 下 daemon 是从 server 拉模板，还是 daemon binary 自带、server 下发 override？
             driver presets (claude / codex / cursor) 的 version 协商。
           </p>
+          <div class="card-meta">
+            <span class="m-tag m2">M2</span>
+          </div>
         </div>
 
         <div class="card future">
@@ -706,6 +887,9 @@
             <code>workspace.fs_path</code> 在 standalone 下必须是「daemon 看到的路径」。
             D4.c 只加 comment，真改要 D4.d/D5 同期做。
           </p>
+          <div class="card-meta">
+            <span class="m-tag m2">M2</span>
+          </div>
         </div>
 
         <div class="card future">
@@ -717,6 +901,9 @@
             用户同时开了 desktop + laptop daemon → spawn agent 选哪个 / 跨 daemon migrate 可能吗 / 另一个 daemon 看到的 agent 状态怎么投影。
             V1 大概率禁用 migrate，但 spec 必须写明。
           </p>
+          <div class="card-meta">
+            <span class="m-tag m1">M1</span>
+          </div>
         </div>
 
         <div class="card future">
@@ -729,6 +916,9 @@
             和 D3.d/e + D4.d 衔接。
             <em>Cindy item 5</em>。
           </p>
+          <div class="card-meta">
+            <span class="m-tag m1">M1</span>
+          </div>
         </div>
 
       </div>
@@ -743,6 +933,7 @@
           <h2><span class="tier-banner t2">T2</span>Tier 2 · Production deploy</h2>
           <p class="group-note">
             把 standalone backend 真正放到云上能开放给非自己使用的人。Soak gate hard requirement。
+            <strong>本组全部归 M2，不是这期的目标</strong>——M1 期间 backend 仍 embedded 跑。
           </p>
         </div>
       </div>
@@ -757,6 +948,9 @@
             Docker image（headless，no Electron） / 环境变量 config 模型 / 持久化 volume strategy / 备份 / migration 工具。
             SQLite WAL 单进程写 → 容器只能单 replica（要规模化得换 Postgres）。
           </p>
+          <div class="card-meta">
+            <span class="m-tag m2">M2</span>
+          </div>
         </div>
 
         <div class="card future">
@@ -767,6 +961,9 @@
           <p class="card-body">
             WSS 终止策略 / 多 user origin / cookie / CSRF 模型 / cert 自动续期。
           </p>
+          <div class="card-meta">
+            <span class="m-tag m2">M2</span>
+          </div>
         </div>
 
         <div class="card future">
@@ -777,6 +974,9 @@
           <p class="card-body">
             structured log shipping / metrics endpoint / 健康检查 / alarm 阈值。
           </p>
+          <div class="card-meta">
+            <span class="m-tag m2">M2</span>
+          </div>
         </div>
 
         <div class="card future">
@@ -788,6 +988,9 @@
             email verification / password reset / 2FA / session device list UI。
             OAuth/SSO 可选。
           </p>
+          <div class="card-meta">
+            <span class="m-tag m2">M2</span>
+          </div>
         </div>
 
         <div class="card future">
@@ -800,6 +1003,9 @@
             backend restart / daemon restart / desktop restart / signup lock-down / host revoke/rotate 全跑一遍。
             <em>Cindy item 6</em>。
           </p>
+          <div class="card-meta">
+            <span class="m-tag m2">M2</span>
+          </div>
         </div>
 
       </div>
@@ -829,6 +1035,9 @@
             复用同一套 outbound WS 协议。
             Panel 4 已画过 placement 模型。
           </p>
+          <div class="card-meta">
+            <span class="meta-tag">V2+</span>
+          </div>
         </div>
 
         <div class="card future">
@@ -840,6 +1049,9 @@
             browser → server，无 daemon 不能执行 agent。
             只读消息 / 发消息走 user daemon 投递。
           </p>
+          <div class="card-meta">
+            <span class="meta-tag">V2+</span>
+          </div>
         </div>
 
         <div class="card future">
@@ -851,6 +1063,9 @@
             mention / pending agent / host offline 等关键事件推送。
             APNs / FCM。
           </p>
+          <div class="card-meta">
+            <span class="meta-tag">V2+</span>
+          </div>
         </div>
 
         <div class="card future">
@@ -861,6 +1076,9 @@
           <p class="card-body">
             真有规模需求时：SQLite → Postgres / 分离 control plane &amp; event plane / 多 replica。
           </p>
+          <div class="card-meta">
+            <span class="meta-tag">V2+</span>
+          </div>
         </div>
 
         <div class="card future">
@@ -872,6 +1090,9 @@
             remote-only desktop 不打包 backend；embedded-only desktop 不带 WS server 模块。
             优化项，不是 final form 核心。
           </p>
+          <div class="card-meta">
+            <span class="meta-tag">V2+</span>
+          </div>
         </div>
 
       </div>
@@ -879,12 +1100,17 @@
 
     <footer>
       <p>
-        <strong>依赖图</strong>（精简）：
+        <strong>Milestone 1 路径</strong>（这期）：
         D3.b（in-progress）+ D4.c（planned，等 OK）并行 →
-        D4.d（create-agent materialize）→
-        D4.e（local data-plane sync）+ D5.a（envelope unification）并行 →
-        Remote UX 收口 + Production deploy + Soak gate →
-        <strong>= Final form 达成</strong>。
+        D4.d（create-agent materialize intent）→
+        D4.e（local data-plane sync）+ D5.a/b（envelope unification + workspace materialize）并行 →
+        T1 内 M1 子项（multi-daemon 状态合并 + Remote UX 收口）→
+        <strong>= M1 达成（final-form 协议，embedded 部署）</strong>。
+      </p>
+      <p>
+        <strong>Milestone 2 路径</strong>（后续）：
+        M1 完成后再开 → Backend container + 反向代理/TLS + 可观测 + Auth 加固 + T1 剩余子项（blob remote 中转 / driver template 分发 / workspace path remote）→
+        Cloud soak gate (hard) → <strong>= backend 可上云</strong>。
       </p>
       <p>
         <strong>更新规则</strong>：每个 Stage 状态变化时手工 PR 编辑本文件；不要让本文件依赖任何脚本生成。
