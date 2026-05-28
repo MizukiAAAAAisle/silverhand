@@ -426,4 +426,44 @@ describe('agent start/stop — typed-fail gate (D4.a Commit 6 G1)', () => {
       expect(t.fake.clearedSessions[0]!.agentId).toBe(agentId);
     });
   });
+
+  // D4.c C4 — POST /api/agents in standalone mode is intentionally
+  // STILL gated. The pre-existing C2/C3 lifts unblocked the rest of
+  // the multi-host control plane (host claim/revoke,
+  // workspace POST/PATCH/DELETE, add-member). Agent CREATION is the
+  // one remaining route in the standalone short-circuit because it
+  // depends on the not-yet-designed `agent_materialize` outbound
+  // intent (D4.d). G3 acceptance uses pre-existing / seeded agents
+  // for everything else; this test pins the gate so the C4 marker
+  // doesn't silently drift into a runtime regression once D4.d
+  // designs the lift.
+  describe('POST /api/agents — standalone gate is C4-deferred to D4.d', () => {
+    it('returns typed `host_runtime_disabled` (409) and creates no `agents` row', async () => {
+      t = buildTestApp({ deploymentMode: 'standalone' });
+      const agentCountBefore = t.ctx.db
+        .prepare<[], { c: number }>('SELECT COUNT(*) AS c FROM agents')
+        .get()!.c;
+
+      const res = await http(t).post('/api/agents', {
+        name: `c4-marker-${Date.now()}`,
+        runtime: 'claude',
+      });
+
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as { code: string; error?: string };
+      expect(body.code).toBe('host_runtime_disabled');
+      // Error string is part of the renderer-facing contract — pin
+      // the "agent creation" thread so a future refactor doesn't
+      // accidentally lose the action-name token the desktop UI
+      // keys off.
+      expect(body.error).toContain('agent creation');
+
+      // The gate runs BEFORE any DB write — `agents` row count
+      // unchanged.
+      const agentCountAfter = t.ctx.db
+        .prepare<[], { c: number }>('SELECT COUNT(*) AS c FROM agents')
+        .get()!.c;
+      expect(agentCountAfter).toBe(agentCountBefore);
+    });
+  });
 });

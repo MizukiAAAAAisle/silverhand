@@ -3171,12 +3171,24 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       return c.json({ error: 'agent name already exists' }, 409);
     }
     if (standaloneMode(ctx)) {
-      // D4.b P1-1 (B-class deferral): agent creation needs the
-      // agent host_id placement model (which claimed host owns
-      // the agent; how does it map to `agents.host_id`; what
-      // applies for legacy embedded agents). Defer to D4.c / G3.
-      // Typed `host_runtime_disabled` here means CRUD deferral,
-      // NOT runtime transport unavailable.
+      // D4.c C4 scope marker (not lifted — deferred to D4.d):
+      // create-agent in standalone deployment requires the
+      // final-form materialize flow:
+      //   desktop → server (ACL + placement decision) → daemon
+      //   materialize local L1 → ack → server activates the row.
+      // That sequence introduces a NEW outbound wire intent
+      // (`agent_materialize` envelope) and shifts L1 fs
+      // ownership to the daemon-host. It is the body of work for
+      // **D4.d**, not D4.c — D4.c/G3 acceptance uses pre-existing
+      // / seeded agents to validate the rest of the multi-host
+      // control plane (placement / membership / WS / revoke)
+      // without entangling agent CRUD with the materialize
+      // redesign. Until D4.d lands, the gate returns typed
+      // `host_runtime_disabled` (409). Renderer guidance is
+      // "agent creation in standalone is deferred until D4.d" —
+      // the gate is NOT about a missing host claim (the user may
+      // already have a claimed host); it's about the
+      // materialize intent that doesn't exist yet.
       return hostRuntimeDisabledResponse(c, 'agent creation');
     }
     // The user-gate middleware guarantees `principal.kind === 'user'`
