@@ -3,46 +3,54 @@
  *
  * The connection is authenticated to `hostId` at the WS layer
  * (host token verify in `host-ws-server`). What we DON'T trust is
- * the `agent_id` daemon X claims to act on inside each event
- * frame: a buggy or malicious daemon attached as host X could emit
- * an event referencing an agent owned by host Y. Pre-C5 the event
- * would flow into `stateForHost(connectionHostId)`, allocate a
- * state slot for that hostId, write `currentConnectionId` /
- * `currentDaemonKey`, mutate `cache.applyPhase` for the wrong
- * host's pair, and dispatch into `state.handler` (projection +
- * DB + bus).
+ * the runtime claim daemon X carries inside each event frame:
+ * "agent A on conversation C just produced event E". A buggy or
+ * malicious daemon attached as host X could (a) emit an event
+ * referencing an agent owned by host Y, OR (b) emit an event
+ * using its own agent but TARGETING a conversation owned by host
+ * Y, OR (c) emit an event for an agent that isn't a member of
+ * the target conversation. Pre-C5 any of these would publish
+ * into projection / DB / bus.
  *
- * C5 installs `assertEventOwnership` BEFORE `stateForHost`. The
- * intended invariants pinned here:
+ * C5 installs `assertEventOwnership` BEFORE `stateForHost` (so
+ * `this.states` Map stays clean on rejection). The full validation
+ * chain for per-agent frames (short-circuited; first failure wins):
  *
- *   1. Same-host happy path: control case showing legitimate
- *      events still pass and produce side effects.
- *   2. Cross-host mismatch on `runtime_ready_for_drain` — the
- *      event with a PRE-DISPATCH cache mutation. Assert that NO
- *      state slot is created, no cache entry is written, no
- *      handler dispatch happens, and no downstream WS RPC is
- *      issued. A warn log is emitted.
- *   3. Cross-host mismatch on `runtime_parsed_event` — the
- *      generic projection event. Same drop guarantee, proves the
- *      perimeter is kind-agnostic for any per-agent frame.
- *   4. Unknown agent_id → drop + warn. Same security posture
- *      (host references a non-existent agent).
- *   5. `ready` (daemon-level, no `agent_id`) passes — owned by
- *      the connection's hostId by construction.
- *   6. `shutting_down` (daemon-level, no `agent_id`) passes —
- *      same rationale; future daemon-level kinds without
- *      `agent_id` admitted automatically by `'agent_id' in event`.
- *   7. Sequence pin: a mismatch frame followed by a valid frame
- *      on the same connection still processes the valid frame
- *      cleanly. (Pre-C5 the mismatch would have set the host's
- *      `currentConnectionId` and could leave residue affecting
- *      the next valid frame; C5 leaves the host slot completely
- *      untouched on mismatch.)
+ *   1. agents.get(agent_id) exists.
+ *   2. agent.host_id === hostId.
+ *   3. conversations.get(conversation_id) exists.
+ *   4. workspaces.get(conversation.workspace_id).workspace_host_id === hostId.
+ *   5. conversations.getAgent(conversation_id, agent_id) exists.
+ *
+ * Daemon-level frames (no `agent_id` — currently `ready` and
+ * `shutting_down`) are admitted by construction.
+ *
+ * Pinned contracts (10 / 10 pass):
+ *
+ *   1. Same-host happy path (control).
+ *   2. Cross-host runtime_ready_for_drain (kind with PRE-DISPATCH
+ *      cache mutation) → drop, reason `agent_host_mismatch`,
+ *      states.size === 0.
+ *   3. Cross-host runtime_parsed_event (generic projection kind) →
+ *      same drop, kind-agnostic.
+ *   4. Unknown agent_id → drop, action
+ *      `outbound_event_unknown_agent`.
+ *   5. (Cindy P1.a) host X agent X + host Y conversation → drop,
+ *      reason `conversation_host_mismatch`. agent ownership passes;
+ *      this is what step (2) alone would have leaked.
+ *   6. (Cindy P1.b) host X agent X + host X conversation but the
+ *      (cid, aid) pair is NOT in `conversation_agents` → drop,
+ *      reason `agent_not_in_conversation`.
+ *   7. Daemon-level `ready` admitted; runtime_status hydrate fires.
+ *   8. Daemon-level `shutting_down` admitted.
+ *   9. Sequence pin — mismatch frame on conn-1 then valid frame on
+ *      conn-1 still processes; states.size goes 0 → 0 → 1 across
+ *      the two onEvent calls.
  *
  * R4 boundary: this IPC is local supervisor/control, not
- * server↔daemon formal semantics. C5 changes only the
- * server-side check applied to outbound event frames; no wire
- * envelope shape changes.
+ * server↔daemon formal semantics. C5 changes only the server-side
+ * check applied to outbound event frames; no wire envelope shape
+ * changes.
  */
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -73,6 +81,10 @@ interface PerimeterFixture {
   warns: Array<{ obj: unknown; msg: string | undefined }>;
   hostX: { id: string; channelId: string; agentId: string };
   hostY: { id: string; channelId: string; agentId: string };
+  /** Test helper: insert a fresh channel under hostX's workspace
+   *  WITHOUT adding any agent to its `conversation_agents`. Used by
+   *  the `agent_not_in_conversation` regression. */
+  insertHostXChannelWithoutAgent(title: string): string;
   cleanup(): void;
 }
 
@@ -173,6 +185,19 @@ function makePerimeterFixture(): PerimeterFixture {
     warns,
     hostX: { id: hostXId, channelId: channelX.id, agentId: agentX.id },
     hostY: { id: hostY.id, channelId: channelY.id, agentId: agentY.id },
+    insertHostXChannelWithoutAgent: (title: string): string => {
+      // Fresh channel under hostX's workspace. No `conversation_agents`
+      // row inserted — the agent is NOT a member of this conversation.
+      // Used by the `agent_not_in_conversation` regression to assert
+      // the perimeter rejects events whose `(cid, aid)` claim has no
+      // membership backing.
+      const channel = conversations.insertChannel({
+        workspaceId: wsX.id,
+        workspacePath: wsX.workspace_path,
+        title,
+      });
+      return channel.id;
+    },
     cleanup: () => {
       db.close();
     },
@@ -300,28 +325,18 @@ describe('OutboundRuntimeEventFanout — D4.c C5 perimeter', () => {
       );
       expect(agentEvent).toBeDefined();
       // No perimeter warn for the legitimate path.
-      expect(
-        fix.warns.filter(
-          w =>
-            isRecord(w.obj) &&
-            (w.obj.action === 'outbound_event_perimeter_mismatch' ||
-              w.obj.action === 'outbound_event_unknown_agent'),
-        ),
-      ).toEqual([]);
+      expect(perimeterWarns(fix.warns)).toEqual([]);
     } finally {
       fix.cleanup();
     }
   });
 
-  it('drops cross-host runtime_ready_for_drain BEFORE stateForHost — no state slot, no cache, no dispatch, no RPC; warn logged', () => {
+  it('drops cross-host runtime_ready_for_drain BEFORE stateForHost — states.size stays 0, no SSE / no RPC, warn tagged agent_host_mismatch', () => {
     const fix = makePerimeterFixture();
     try {
       // Host X's connection emits a frame referencing host Y's
-      // agent. Pre-C5 this would (a) lazy-create a state slot for
-      // hostX, (b) write `currentDaemonKey` was already null so the
-      // pre-dispatch cache mutation gates on it — but the dispatch
-      // into the handler would still happen for hostX with the
-      // wrong agent.
+      // agent + host Y's conversation. The earliest failure is
+      // step (2): `agent.host_id !== hostId`.
       fix.fanout.onEvent(
         fix.hostX.id,
         readyForDrainEvent(fix.hostY.channelId, fix.hostY.agentId),
@@ -333,29 +348,28 @@ describe('OutboundRuntimeEventFanout — D4.c C5 perimeter', () => {
       expect(fix.events).toEqual([]);
       expect(fix.transport.calls).toEqual([]);
 
-      // No state slot created for hostX → getAgentRunStates
-      // returns empty for either conversation.
-      expect(fix.fanout.getAgentRunStates(fix.hostX.channelId)).toEqual([]);
-      expect(fix.fanout.getAgentRunStates(fix.hostY.channelId)).toEqual([]);
+      // P2 (Cindy `dgCAVQ3fbHoOFvvN`): direct kill on the load-bearing
+      // "no per-host state slot lazy-created" invariant. `states.size`
+      // is the source of truth; `getAgentRunStates` is downstream and
+      // could mask state-without-runState.
+      expect(fanoutStatesSize(fix.fanout)).toBe(0);
 
-      // Warn log fired with the perimeter action tag.
-      const mismatchWarns = fix.warns.filter(
-        w =>
-          isRecord(w.obj) && w.obj.action === 'outbound_event_perimeter_mismatch',
-      );
-      expect(mismatchWarns.length).toBe(1);
-      expect(mismatchWarns[0]!.obj).toMatchObject({
+      const warns = perimeterWarns(fix.warns);
+      expect(warns.length).toBe(1);
+      expect(warns[0]!.obj).toMatchObject({
         connectionHostId: fix.hostX.id,
         agentId: fix.hostY.agentId,
         agentHostId: fix.hostY.id,
         eventKind: 'runtime_ready_for_drain',
+        reason: 'agent_host_mismatch',
+        action: 'outbound_event_perimeter_mismatch',
       });
     } finally {
       fix.cleanup();
     }
   });
 
-  it('drops cross-host runtime_parsed_event (generic projection kind) — no SSE / no RPC; warn logged', () => {
+  it('drops cross-host runtime_parsed_event (generic projection kind) — states.size stays 0, no SSE / no RPC, warn tagged agent_host_mismatch', () => {
     const fix = makePerimeterFixture();
     try {
       fix.fanout.onEvent(
@@ -366,26 +380,24 @@ describe('OutboundRuntimeEventFanout — D4.c C5 perimeter', () => {
 
       expect(fix.events).toEqual([]);
       expect(fix.transport.calls).toEqual([]);
-      expect(fix.fanout.getAgentRunStates(fix.hostX.channelId)).toEqual([]);
-      expect(fix.fanout.getAgentRunStates(fix.hostY.channelId)).toEqual([]);
+      expect(fanoutStatesSize(fix.fanout)).toBe(0);
 
-      const mismatchWarns = fix.warns.filter(
-        w =>
-          isRecord(w.obj) && w.obj.action === 'outbound_event_perimeter_mismatch',
-      );
-      expect(mismatchWarns.length).toBe(1);
-      expect(mismatchWarns[0]!.obj).toMatchObject({
+      const warns = perimeterWarns(fix.warns);
+      expect(warns.length).toBe(1);
+      expect(warns[0]!.obj).toMatchObject({
         connectionHostId: fix.hostX.id,
         agentId: fix.hostY.agentId,
         agentHostId: fix.hostY.id,
         eventKind: 'runtime_parsed_event',
+        reason: 'agent_host_mismatch',
+        action: 'outbound_event_perimeter_mismatch',
       });
     } finally {
       fix.cleanup();
     }
   });
 
-  it('drops events that reference an unknown agent_id — no state, no dispatch; warn tagged outbound_event_unknown_agent', () => {
+  it('drops events that reference an unknown agent_id — states.size stays 0, warn tagged outbound_event_unknown_agent', () => {
     const fix = makePerimeterFixture();
     try {
       fix.fanout.onEvent(
@@ -396,7 +408,7 @@ describe('OutboundRuntimeEventFanout — D4.c C5 perimeter', () => {
 
       expect(fix.events).toEqual([]);
       expect(fix.transport.calls).toEqual([]);
-      expect(fix.fanout.getAgentRunStates(fix.hostX.channelId)).toEqual([]);
+      expect(fanoutStatesSize(fix.fanout)).toBe(0);
 
       const unknownWarns = fix.warns.filter(
         w =>
@@ -407,6 +419,86 @@ describe('OutboundRuntimeEventFanout — D4.c C5 perimeter', () => {
         connectionHostId: fix.hostX.id,
         agentId: 'agent-does-not-exist',
         eventKind: 'runtime_parsed_event',
+      });
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  // Cindy `dgCAVQ3fbHoOFvvN` P1 (a): host X uses ITS OWN agent but
+  // targets HOST Y's conversation. agent_host_mismatch wouldn't catch
+  // this — agent.host_id IS hostId. Without conversation_host_mismatch
+  // the event would publish into host Y's conversation (cross-tenant
+  // SSE / DB projection leak).
+  it('drops host X agent X + host Y conversation — states.size stays 0, no SSE / no RPC, warn tagged conversation_host_mismatch (Cindy P1.a)', () => {
+    const fix = makePerimeterFixture();
+    try {
+      // hostX agent + hostY conversation. agent ownership passes,
+      // step (4) catches `workspace.workspace_host_id !== hostId`.
+      fix.fanout.onEvent(
+        fix.hostX.id,
+        parsedEventFrame(fix.hostY.channelId, fix.hostX.agentId),
+        'conn-1',
+      );
+
+      expect(fix.events).toEqual([]);
+      expect(fix.transport.calls).toEqual([]);
+      expect(fanoutStatesSize(fix.fanout)).toBe(0);
+
+      const warns = perimeterWarns(fix.warns);
+      expect(warns.length).toBe(1);
+      expect(warns[0]!.obj).toMatchObject({
+        connectionHostId: fix.hostX.id,
+        agentId: fix.hostX.agentId,
+        conversationId: fix.hostY.channelId,
+        workspaceHostId: fix.hostY.id,
+        eventKind: 'runtime_parsed_event',
+        reason: 'conversation_host_mismatch',
+        action: 'outbound_event_perimeter_mismatch',
+      });
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  // Cindy `dgCAVQ3fbHoOFvvN` P1 (b): host X uses its own agent on
+  // host X's conversation, but the (cid, aid) pair is NOT in
+  // `conversation_agents` — i.e. the agent is not a member of that
+  // conversation. agent_host_mismatch / conversation_host_mismatch
+  // both pass. Without `agent_not_in_conversation` the event would
+  // publish into a conversation the agent doesn't legitimately
+  // participate in, projecting `agent_status` / `agent_event` onto
+  // a row that has no `conversation_agents` membership.
+  it('drops host X agent X + host X conversation but agent NOT in conversation_agents — states.size stays 0, warn tagged agent_not_in_conversation (Cindy P1.b)', () => {
+    const fix = makePerimeterFixture();
+    try {
+      // Insert a SECOND host X conversation (so the workspace host
+      // matches), but DO NOT add the agent to `conversation_agents`
+      // for that conversation. The agent stays a member only of
+      // `fix.hostX.channelId` (seeded in the fixture).
+      const otherChannelId = fix.insertHostXChannelWithoutAgent(
+        'perimeter-x-bare',
+      );
+
+      fix.fanout.onEvent(
+        fix.hostX.id,
+        parsedEventFrame(otherChannelId, fix.hostX.agentId),
+        'conn-1',
+      );
+
+      expect(fix.events).toEqual([]);
+      expect(fix.transport.calls).toEqual([]);
+      expect(fanoutStatesSize(fix.fanout)).toBe(0);
+
+      const warns = perimeterWarns(fix.warns);
+      expect(warns.length).toBe(1);
+      expect(warns[0]!.obj).toMatchObject({
+        connectionHostId: fix.hostX.id,
+        agentId: fix.hostX.agentId,
+        conversationId: otherChannelId,
+        eventKind: 'runtime_parsed_event',
+        reason: 'agent_not_in_conversation',
+        action: 'outbound_event_perimeter_mismatch',
       });
     } finally {
       fix.cleanup();
@@ -426,14 +518,7 @@ describe('OutboundRuntimeEventFanout — D4.c C5 perimeter', () => {
       );
 
       // No perimeter warns at all.
-      expect(
-        fix.warns.filter(
-          w =>
-            isRecord(w.obj) &&
-            (w.obj.action === 'outbound_event_perimeter_mismatch' ||
-              w.obj.action === 'outbound_event_unknown_agent'),
-        ),
-      ).toEqual([]);
+      expect(perimeterWarns(fix.warns)).toEqual([]);
     } finally {
       fix.cleanup();
     }
@@ -446,14 +531,7 @@ describe('OutboundRuntimeEventFanout — D4.c C5 perimeter', () => {
 
       // No perimeter warns: `'agent_id' in event` is false, so
       // `assertEventOwnership` returns true.
-      expect(
-        fix.warns.filter(
-          w =>
-            isRecord(w.obj) &&
-            (w.obj.action === 'outbound_event_perimeter_mismatch' ||
-              w.obj.action === 'outbound_event_unknown_agent'),
-        ),
-      ).toEqual([]);
+      expect(perimeterWarns(fix.warns)).toEqual([]);
     } finally {
       fix.cleanup();
     }
@@ -471,6 +549,11 @@ describe('OutboundRuntimeEventFanout — D4.c C5 perimeter', () => {
         readyForDrainEvent(fix.hostY.channelId, fix.hostY.agentId),
         'conn-1',
       );
+      // states.size MUST still be 0 immediately after the mismatch
+      // — the second-frame test below would also expose any
+      // mismatch-induced residue, but pinning here is more direct.
+      expect(fanoutStatesSize(fix.fanout)).toBe(0);
+
       // Then: a legitimate same-host frame on the same connection.
       fix.fanout.onEvent(
         fix.hostX.id,
@@ -485,13 +568,15 @@ describe('OutboundRuntimeEventFanout — D4.c C5 perimeter', () => {
       );
       expect(agentEvents.length).toBe(1);
 
+      // After the valid frame, exactly one host slot exists
+      // (host X — created lazily when the valid frame called
+      // `stateForHost`).
+      expect(fanoutStatesSize(fix.fanout)).toBe(1);
+
       // Exactly one perimeter warn from the first (mismatch)
       // frame — the second valid frame did not produce one.
-      const mismatchWarns = fix.warns.filter(
-        w =>
-          isRecord(w.obj) && w.obj.action === 'outbound_event_perimeter_mismatch',
-      );
-      expect(mismatchWarns.length).toBe(1);
+      const warns = perimeterWarns(fix.warns);
+      expect(warns.length).toBe(1);
     } finally {
       fix.cleanup();
     }
@@ -500,6 +585,32 @@ describe('OutboundRuntimeEventFanout — D4.c C5 perimeter', () => {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Cindy `dgCAVQ3fbHoOFvvN` P2: load-bearing assertion that perimeter
+ * rejects leave NO per-host residue. `getAgentRunStates` is downstream
+ * (filters states by populated runState), so a state slot with empty
+ * cache would slip past it. Reaching into `(fanout as any).states.size`
+ * is the most direct kill — if the perimeter ever lazy-creates a slot
+ * via `stateForHost` before checking, this assertion catches it.
+ */
+function fanoutStatesSize(fanout: OutboundRuntimeEventFanout): number {
+  const states = (fanout as unknown as { states: Map<string, unknown> }).states;
+  return states.size;
+}
+
+/** Filter `warns` to perimeter-tagged entries (mismatch + unknown
+ *  agent) — used in both positive and negative shape checks. */
+function perimeterWarns(
+  warns: ReadonlyArray<{ obj: unknown; msg: string | undefined }>,
+): Array<{ obj: unknown; msg: string | undefined }> {
+  return warns.filter(
+    w =>
+      isRecord(w.obj) &&
+      (w.obj.action === 'outbound_event_perimeter_mismatch' ||
+        w.obj.action === 'outbound_event_unknown_agent'),
+  );
 }
 
 async function waitFor(
