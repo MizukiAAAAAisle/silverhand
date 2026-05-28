@@ -14,9 +14,10 @@ export {
   defaultDaemonHostConfigPath,
   hostConnectWebSocketUrl,
   readHostConfig,
+  writeHostConfigAtomic,
   type HeartbeatOptions,
   type OutboundDaemonClientOptions,
   type OutboundWriteBufferOptions,
   type ReconnectBackoffOptions,
 } from './outbound-client.js';
-export { DAEMON_VERSION } from './version.js';
+export { DAEMON_VERSION, createDaemonHelloResult } from './version.js';

@@ -38,6 +38,7 @@ import {
   installHostWebSocketServer,
   type HostWsServerController,
   type HostWsAttachment,
+  type HostWsEventSink,
 } from './ws/host-ws-server.js';
 import type { AgentRuntimeHost } from './runtime/agent-runtime-host.js';
 import { ControlPlaneRuntimeHost } from './runtime/control-plane-runtime-host.js';
@@ -96,6 +97,28 @@ interface BaseBackendOptions {
   logDir?: string;
   schemaUpgrade?: {
     allow: boolean;
+  };
+  /**
+   * D4.b-1 — TEST ONLY. Wrap the `HostWsEventSink` installed on the
+   * outbound WS server. The wrapper receives the real fanout (or
+   * `undefined` in embedded mode where no fanout is installed) and
+   * returns a sink that will be installed in its place. Production
+   * callers MUST NOT pass this; the default behaviour is identity
+   * (the real fanout flows through unchanged).
+   *
+   * Used by `packages/backend/tests/e2e/g2-harness.ts` to attach a
+   * recording observer for parity / delivery assertions WITHOUT
+   * bypassing the real `OutboundRuntimeEventFanout` — the wrapper
+   * always delegates onEvent/onDisconnect to the real sink, so the
+   * production projection path runs exactly as in shipped code.
+   * The fanout instance is still the one constructed by this
+   * `startBackend` call; the wrap does not change which class
+   * processes the event, only adds a non-mutating observer.
+   */
+  testHooks?: {
+    wrapHostWsEventSink?: (
+      real: HostWsEventSink | undefined,
+    ) => HostWsEventSink | undefined;
   };
 }
 
@@ -521,7 +544,9 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
       ctx.readiness.outboundEventFanoutInstalled = true;
     }
     hostWs = installHostWebSocketServer(server as HttpServer, ctx, {
-      eventSink: outboundFanout ?? undefined,
+      eventSink: opts.testHooks?.wrapHostWsEventSink
+        ? opts.testHooks.wrapHostWsEventSink(outboundFanout ?? undefined)
+        : outboundFanout ?? undefined,
     });
     server.on('error', reject);
   });
@@ -536,6 +561,7 @@ export type {
 export type {
   HostWsAttachment,
   HostWsServerController,
+  HostWsEventSink,
 } from './ws/host-ws-server.js';
 export type { AuthRuntimeConfig } from './auth/config.js';
 export { resolveAuthRuntimeConfig } from './auth/config.js';
