@@ -142,6 +142,31 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     event: OutboundDaemonToServerEventFrame,
     connectionId: string,
   ): void {
+    // D4.c C5 — runtime perimeter check. The connection is
+    // already authenticated to `hostId` at the WS layer (host
+    // token verify). What we DON'T trust is the per-event
+    // `agent_id` daemon X claims to act on: a bug or malicious
+    // daemon can attach as host X and emit events that reference
+    // an agent owned by host Y, which would otherwise:
+    //
+    //   - allocate / mutate `this.states` for hostId via
+    //     `stateForHost` (lazy `Map.set` even if no fields are
+    //     written, polluting the host index)
+    //   - write `currentConnectionId` / `currentDaemonKey`
+    //   - mutate `cache.applyPhase` for the wrong host
+    //   - dispatch the event into `state.handler` and onward
+    //     into projection / DB / bus
+    //
+    // We reject mismatches BEFORE `stateForHost` to keep the
+    // promise that a rejected event leaves zero per-host state
+    // residue. We deliberately do NOT close the WS — a single
+    // mismatch frame may be a transient bug (race, refactor
+    // glitch); kicking the socket would also break the host's
+    // legitimate runtimes. Anti-abuse rate-counting is out of
+    // scope (D5 / T2).
+    if (!this.assertEventOwnership(hostId, event)) {
+      return;
+    }
     const state = this.stateForHost(hostId);
     state.currentConnectionId = connectionId;
     if (event.kind === 'ready') {
@@ -174,6 +199,59 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       );
     }
     state.handler.dispatch(outboundEventToEventFrame(event));
+  }
+
+  /**
+   * D4.c C5 — runtime perimeter check. Returns `true` when the
+   * event is allowed to proceed into per-host state mutation
+   * + dispatch; `false` after logging and dropping a mismatch.
+   *
+   * Daemon-level frames (no `agent_id` — currently `ready` and
+   * `shutting_down`) are owned by the connection's hostId by
+   * construction and always pass. Future daemon-level event
+   * kinds without `agent_id` will be admitted automatically.
+   *
+   * Per-agent frames must satisfy `agents.get(agent_id).host_id
+   * === hostId`. Unknown agent_id → drop with warn (host is
+   * referencing a non-existent agent — same security posture
+   * as cross-host).
+   */
+  private assertEventOwnership(
+    hostId: string,
+    event: OutboundDaemonToServerEventFrame,
+  ): boolean {
+    if (!('agent_id' in event)) {
+      // Daemon-level frame — owned by the connection's hostId by
+      // construction (no per-agent target), admitted.
+      return true;
+    }
+    const agent = this.agents.get(event.agent_id);
+    if (!agent) {
+      this.opts.logger.warn(
+        {
+          connectionHostId: hostId,
+          agentId: event.agent_id,
+          eventKind: event.kind,
+          action: 'outbound_event_unknown_agent',
+        },
+        'outbound event references unknown agent — dropped (D4.c C5 perimeter)',
+      );
+      return false;
+    }
+    if (agent.host_id !== hostId) {
+      this.opts.logger.warn(
+        {
+          connectionHostId: hostId,
+          agentId: event.agent_id,
+          agentHostId: agent.host_id,
+          eventKind: event.kind,
+          action: 'outbound_event_perimeter_mismatch',
+        },
+        'outbound event from host A references agent owned by host B — dropped (D4.c C5 perimeter)',
+      );
+      return false;
+    }
+    return true;
   }
 
   onDisconnect(hostId: string, connectionId: string): void {
