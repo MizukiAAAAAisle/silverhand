@@ -126,6 +126,11 @@ class FakeTransport implements HostWsServerController {
     return Promise.resolve({}) as Promise<OutboundServerCommandResult<K>>;
   }
 
+  // D4.c C2 — dispatcher tests don't drive the revoke route.
+  disconnectHost(_hostId: string): boolean {
+    return false;
+  }
+
   async close(): Promise<void> {
     // no-op
   }

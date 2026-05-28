@@ -995,9 +995,21 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   app.post(apiPaths.hostClaimOrCreate, async c => {
     const userId = requireSessionBearerUser(c, ctx);
     if (userId instanceof Response) return userId;
-    if (standaloneMode(ctx)) {
-      return hostRuntimeDisabledResponse(c, 'local host claim');
-    }
+    // D4.c C2 — lifted the standalone guard. claim-or-create is the
+    // entry point for the desktop main process to register itself
+    // with the backend and obtain a host_token to write into
+    // daemon-config.json. In standalone deployment the same
+    // sequence runs: the desktop's renderer logs in (session
+    // bearer), main calls claim-or-create with `installation_id`,
+    // backend mints a host row + host_token, main writes
+    // daemon-config so the local daemon can attach via outbound
+    // WSS. There is no architectural reason to forbid this in
+    // standalone — the pre-D4.c guard was a placeholder while
+    // multi-host ACL was sorted out (Stage A.3 / B.4). Now that
+    // those are landed and host_token rotation works in both
+    // modes, claim-or-create runs identically. R4: this is a
+    // backend-internal HTTP route, not a server↔daemon protocol
+    // change.
 
     const body = await c.req.json().catch(() => null);
     const parsed = HostClaimOrCreateInputSchema.safeParse(body);
@@ -1061,9 +1073,19 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   app.post('/api/hosts/:id/revoke', async c => {
     const userId = requireSessionBearerUser(c, ctx);
     if (userId instanceof Response) return userId;
-    if (standaloneMode(ctx)) {
-      return hostRuntimeDisabledResponse(c, 'host revoke');
-    }
+    // D4.c C2 — lifted the standalone guard. Revoke is owner-only
+    // soft-delete + credential sweep; the in-DB action is identical
+    // in embedded and standalone. Standalone adds one extra step:
+    // if the revoked host currently has a live outbound websocket,
+    // close it with code 1008 / reason `host_revoked` so the
+    // attached daemon can suppress reconnect attempts on the dead
+    // credential. Reconnect would fail at upgrade-auth anyway, but
+    // kicking the socket here flips the renderer's BackendInfo
+    // immediately instead of waiting for the next heartbeat. The
+    // revoke and credential sweep run inside a single transaction;
+    // the disconnect happens AFTER commit so the credential is
+    // already revoked when the daemon's reconnect attempt arrives.
+    // R4: HTTP route + outbound WS close-frame, no protocol change.
 
     const hostId = c.req.param('id');
     const host = hosts.get(hostId);
@@ -1091,6 +1113,31 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       // stays loud.
       throw new Error(`HostRepo.get returned null for revoked host ${hostId}`);
     }
+
+    // D4.c C2 — best-effort connection drop. Runs AFTER the
+    // commit so the credential is already revoked when the
+    // daemon's reconnect arrives at upgrade-auth. Always safe
+    // to call: idempotent for hosts with no live attachment
+    // (returns false) and replacement-safe for the connection
+    // map (cleanup is driven by the socket's `close` listener,
+    // not by this call). In embedded mode `hostWsController`
+    // resolves to the same registry that local-supervisor
+    // attach goes through, so revoking the local host kicks
+    // the daemon's outbound WS too — desired uniform behavior.
+    const wsController = ctx.hostWsController?.();
+    if (wsController) {
+      try {
+        wsController.disconnectHost(hostId);
+      } catch (err) {
+        // Connection close is optimistic UX, never the
+        // authoritative revoke effect; log and swallow.
+        ctx.logger.warn(
+          { err, hostId, action: 'host_revoke_disconnect' },
+          'host_revoke disconnect failed (non-blocking)',
+        );
+      }
+    }
+
     return c.json({ host: hosts.toDto(updated) });
   });
 

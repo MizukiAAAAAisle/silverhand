@@ -175,6 +175,12 @@ class FakeHostWsController implements HostWsServerController {
     return await this.handler(call) as OutboundServerCommandResult<K>;
   }
 
+  // D4.c C2 — token-rotation tests don't drive the revoke route, so
+  // disconnectHost is a no-op stub for type-shape only.
+  disconnectHost(_hostId: string): boolean {
+    return false;
+  }
+
   async close(): Promise<void> {
     // no-op
   }

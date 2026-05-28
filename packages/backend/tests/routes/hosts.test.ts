@@ -204,6 +204,56 @@ describe('host routes', () => {
     expect(count?.c).toBe(0);
   });
 
+  // ── POST /api/hosts/claim_or_create — standalone (D4.c C2) ───
+  describe('POST /api/hosts/claim_or_create (standalone)', () => {
+    /**
+     * D4.c C2 — pre-D4.c the standalone branch in routes.ts short-
+     * circuited every host-mutation route to `host_runtime_disabled`
+     * (409). C2 lifts that guard: standalone now owns a real hosts
+     * table populated by remote daemons attaching over outbound WSS,
+     * so claim_or_create has to succeed and persist a credential just
+     * like embedded.
+     *
+     * R4 boundary: this test exercises the SAME HTTP route, the SAME
+     * DB write, and the SAME host_token contract regardless of
+     * deployment mode — there is no wire-protocol fork.
+     */
+    it('claims a host and mints a credential under standalone (no host_runtime_disabled)', async () => {
+      t = buildTestApp({
+        deploymentMode: 'standalone',
+        ownedLocalHostUserIds: [],
+      });
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+
+      const res = await sessionHttp(t, userToken).post(apiPaths.hostClaimOrCreate, {
+        installation_id: '5a000001-1111-4111-8111-111111111111',
+        label: 'Standalone Mac',
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json() as any;
+      expect(body).toMatchObject({
+        host_id: expect.any(String),
+        host: {
+          id: body.host_id,
+          kind: 'local',
+          revoked_at: null,
+        },
+        host_token: expect.any(String),
+      });
+      // The new credential is verifiable end-to-end — same shape as
+      // embedded mode.
+      expect(new HostTokenService(t.ctx.db).verifyHostToken(body.host_token))
+        .toMatchObject({
+          ok: true,
+          hostId: body.host_id,
+          userId: t.viewerUserId,
+        });
+    });
+  });
+
   // ── GET /api/hosts viewer filter (Stage B.4) ─────────────────
   describe('GET /api/hosts viewer filter', () => {
     it('returns only hosts owned by the session bearer (Alice cannot see Bob\'s host)', async () => {
@@ -381,6 +431,82 @@ describe('host routes', () => {
       const res = await legacyServerAuthHttp(t).post(apiPaths.hostRevoke('whatever'));
       expect(res.status).toBe(401);
       expect(await res.json()).toMatchObject({ error: 'unauthorized' });
+    });
+
+    /**
+     * D4.c C2 — pre-D4.c the standalone branch short-circuited
+     * /api/hosts/:id/revoke to `host_runtime_disabled`. C2 lifts the
+     * guard AND adds a best-effort `wsController.disconnectHost(id)`
+     * call after the revoke transaction commits, so the kicked
+     * daemon learns its credential is gone via WS close 1008
+     * (`host_revoked`) instead of waiting for the next heartbeat /
+     * attachment timeout.
+     *
+     * R4 boundary: the disconnect is a transport-layer hint, not a
+     * server↔daemon protocol mechanism. The credential is already
+     * revoked at the DB level; if the disconnect throws or the host
+     * isn't currently attached, the revoke still succeeds (best-
+     * effort, log-and-swallow) — backend correctness still rests on
+     * `verifyHostToken` rejecting the credential on the next attach.
+     */
+    it('standalone revoke succeeds and asks the WS controller to kick the live attachment', async () => {
+      let controller: FakeHostWsController | null = null;
+      t = buildTestApp({
+        deploymentMode: 'standalone',
+        hostWsController: () => controller,
+      });
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const host = new HostRepo(t.ctx.db).getOwnedLocalForUser(t.viewerUserId)!;
+      controller = new FakeHostWsController(async () => ({}));
+
+      const res = await sessionHttp(t, userToken).post(apiPaths.hostRevoke(host.id));
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { host: any };
+      expect(body.host).toMatchObject({
+        id: host.id,
+        revoked_at: expect.any(Number),
+      });
+      // DB-level revoke did happen (the authoritative bit).
+      expect(new HostRepo(t.ctx.db).get(host.id)).toMatchObject({
+        revoked_at: expect.any(Number),
+      });
+      // Best-effort kick: controller saw exactly this host id.
+      expect(controller!.disconnects).toEqual([host.id]);
+    });
+
+    it('standalone revoke still succeeds when the WS controller throws (best-effort)', async () => {
+      class ThrowingController extends FakeHostWsController {
+        constructor() {
+          super(async () => ({}));
+        }
+        override disconnectHost(hostId: string): boolean {
+          this.disconnects.push(hostId);
+          throw new Error('synthetic disconnect failure');
+        }
+      }
+      let controller: ThrowingController | null = null;
+      t = buildTestApp({
+        deploymentMode: 'standalone',
+        hostWsController: () => controller,
+      });
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const host = new HostRepo(t.ctx.db).getOwnedLocalForUser(t.viewerUserId)!;
+      controller = new ThrowingController();
+
+      const res = await sessionHttp(t, userToken).post(apiPaths.hostRevoke(host.id));
+
+      expect(res.status).toBe(200);
+      // Even though the controller threw, the revoke is committed.
+      expect(new HostRepo(t.ctx.db).get(host.id)).toMatchObject({
+        revoked_at: expect.any(Number),
+      });
+      // And the controller was indeed asked.
+      expect(controller!.disconnects).toEqual([host.id]);
     });
   });
 
@@ -628,6 +754,7 @@ class FakeHostWsController implements HostWsServerController {
     kind: OutboundServerCommandKind;
     params: any;
   }> = [];
+  readonly disconnects: string[] = [];
 
   constructor(
     private readonly handler: (call: {
@@ -663,6 +790,15 @@ class FakeHostWsController implements HostWsServerController {
     const call = { hostId, kind, params };
     this.calls.push(call);
     return await this.handler(call) as OutboundServerCommandResult<K>;
+  }
+
+  // D4.c C2 — record the disconnect call so tests can assert the
+  // revoke route invoked it. Returns true unconditionally; the
+  // route's contract is "best-effort, log and swallow", so the
+  // value isn't load-bearing for the route side.
+  disconnectHost(hostId: string): boolean {
+    this.disconnects.push(hostId);
+    return true;
   }
 
   async close(): Promise<void> {

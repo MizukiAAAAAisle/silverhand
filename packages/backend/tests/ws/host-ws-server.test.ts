@@ -445,6 +445,48 @@ describe('host outbound WebSocket server', () => {
     expect(disconnects).toEqual([host.id]);
   });
 
+  // D4.c C2 — `disconnectHost` is the controller-level primitive
+  // the host-revoke route uses to kick a daemon's outbound WS the
+  // moment its credential is revoked. Three behaviors to pin:
+  //   1. With a live attachment: returns true, socket sees close
+  //      code 1008 + reason `host_revoked`, attachment registry
+  //      clears on the same tick the close listener fires.
+  //   2. With no attachment: returns false (idempotent — route
+  //      can call this without checking attachment state first).
+  //   3. After replacement: only the current connection is
+  //      affected (registry replacement-safe).
+  it('disconnectHost kicks the live attachment with code 1008 / host_revoked (D4.c C2)', async () => {
+    t = buildTestApp();
+    server = await openServer(t);
+    const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: host.id,
+    });
+
+    // No attachment yet → idempotent false.
+    expect(server.controller.disconnectHost(host.id)).toBe(false);
+
+    const ws = await connectHost(server.url, issued.hostToken);
+    sockets.push(ws);
+    expect(server.controller.activeConnectionCount()).toBe(1);
+    expect(server.controller.getAttachment(host.id)).not.toBeNull();
+
+    const closed = waitForClose(ws);
+    expect(server.controller.disconnectHost(host.id)).toBe(true);
+
+    await expect(closed).resolves.toMatchObject({
+      code: 1008,
+      reason: 'host_revoked',
+    });
+    expect(server.controller.activeConnectionCount()).toBe(0);
+    expect(server.controller.getAttachment(host.id)).toBeNull();
+
+    // Idempotent on already-disconnected hosts.
+    expect(server.controller.disconnectHost(host.id)).toBe(false);
+    // And on hosts that never attached at all.
+    expect(server.controller.disconnectHost('phantom-host')).toBe(false);
+  });
+
   it('responds to app-level daemon heartbeat pings', async () => {
     t = buildTestApp();
     server = await openServer(t, { pingIntervalMs: 0 });

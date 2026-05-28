@@ -77,6 +77,24 @@ export interface HostWsServerController {
     params: OutboundServerCommandParams<K>,
     opts?: { timeoutMs?: number; expectedConnectionId?: string },
   ): Promise<OutboundServerCommandResult<K>>;
+  /**
+   * D4.c C2 — close the live outbound websocket for `hostId`
+   * because the host's credentials were revoked. Returns `true`
+   * when an attached connection existed and was kicked, `false`
+   * when no live connection was registered (idempotent — the
+   * route can call this without first checking attachment state;
+   * the credential revoke and DB row mutation are the
+   * authoritative effect, this is the optimistic UX flip).
+   *
+   * The implementation routes through the connection's
+   * `closeForRevoke()` which uses close code 1008 +
+   * `host_revoked` reason so the daemon can suppress reconnect
+   * attempts on this credential. Reconnect with the revoked
+   * credential would fail at upgrade-auth anyway, but kicking
+   * the socket here means the renderer's BackendInfo flips
+   * immediately instead of waiting for the next heartbeat.
+   */
+  disconnectHost(hostId: string): boolean;
   close(): Promise<void>;
 }
 
@@ -262,6 +280,19 @@ export function installHostWebSocketServer(
       }
       return connection.sendCommand(kind, params, commandOpts);
     },
+    disconnectHost: hostId => {
+      const connection = connectionsByHost.get(hostId);
+      if (!connection) return false;
+      connection.closeForRevoke();
+      // The `close` listener registered in the upgrade handler
+      // (line ~209) will clean `connectionsByHost` and
+      // `attachmentsByHost` on the same tick the underlying
+      // socket fires its close event. We do NOT pre-clean here
+      // because that would race with the per-connection
+      // bookkeeping (which compares connectionId against the
+      // current registry entry to stay replacement-safe).
+      return true;
+    },
     close: async () => {
       if (closing) return;
       closing = true;
@@ -373,6 +404,31 @@ class HostWsConnection {
       this.ws.readyState === WebSocket.CONNECTING
     ) {
       this.ws.close(1000, 'host_connection_replaced');
+    }
+  }
+
+  /**
+   * D4.c C2 — close the websocket because the host's credentials
+   * were revoked. Uses RFC 6455 close code `1008` (Policy
+   * Violation) with reason `host_revoked` so the daemon's
+   * outbound client can branch on the close code (vs. heartbeat
+   * timeout / shutdown / replacement) to decide whether to
+   * suppress reconnect attempts. The credential is already
+   * revoked at the DB layer when this fires; reconnect would
+   * fail at upgrade-auth anyway, but kicking the live socket
+   * here means the renderer's BackendInfo flips immediately
+   * instead of waiting for the next heartbeat round-trip.
+   */
+  closeForRevoke(): void {
+    this.rejectPendingDisconnected(
+      `host ${this.host.hostId} websocket was closed because credentials were revoked`,
+    );
+    this.cleanup();
+    if (
+      this.ws.readyState === WebSocket.OPEN ||
+      this.ws.readyState === WebSocket.CONNECTING
+    ) {
+      this.ws.close(1008, 'host_revoked');
     }
   }
 

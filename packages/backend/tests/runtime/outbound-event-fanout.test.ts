@@ -768,6 +768,11 @@ class FakeTransport implements HostWsServerController {
     this.nextWakeRefusal = { reason };
   }
 
+  // D4.c C2 — fanout-coordinator tests don't drive the revoke route.
+  disconnectHost(_hostId: string): boolean {
+    return false;
+  }
+
   async close(): Promise<void> {
     // no-op
   }
