@@ -487,9 +487,9 @@
 
     <div class="summary">
       <div class="summary-cell"><span class="count" style="color: var(--green)">14</span><div><div class="lbl">done</div></div></div>
-      <div class="summary-cell"><span class="count" style="color: var(--blue)">1</span><div><div class="lbl">in-progress</div></div></div>
+      <div class="summary-cell"><span class="count" style="color: var(--blue)">2</span><div><div class="lbl">in-progress</div></div></div>
       <div class="summary-cell"><span class="count" style="color: var(--purple)">0</span><div><div class="lbl">in-review</div></div></div>
-      <div class="summary-cell"><span class="count" style="color: var(--orange)">5</span><div><div class="lbl">planned</div></div></div>
+      <div class="summary-cell"><span class="count" style="color: var(--orange)">4</span><div><div class="lbl">planned</div></div></div>
       <div class="summary-cell"><span class="count" style="color: var(--gray)">12</span><div><div class="lbl">future</div></div></div>
     </div>
 
@@ -736,20 +736,33 @@
           </div>
         </div>
 
-        <div class="card planned">
+        <div class="card in-progress">
           <div class="card-head">
             <h3 class="card-title">D4.c — G3 security &amp; multi-host acceptance</h3>
-            <span class="badge planned">planned</span>
+            <span class="badge in-progress">in progress (6 / 9)</span>
           </div>
           <p class="card-body">
-            9 commits（v2 slicing） — standalone bootstrap 切到 <code>RuntimeHostPlacementResolver</code> + <code>local_host_ambiguous</code> typed code /
-            claim/revoke lift + connection drop / runtime perimeter mismatch-before-claim / two-daemon e2e /
-            clear-session bounded timeout / signup-toggle 真重启 / G3 runbook。
-            <strong>不含</strong> create-agent（已 defer 到 D4.d）。
+            9 commits（v2 slicing），<strong>不含</strong> create-agent（已 defer 到 D4.d）。
+            <br>
+            <strong>C1–C6 ✅ done + Cindy LGTM</strong>：
+            <br>
+            • C1 standalone bootstrap → 真 <code>RuntimeHostPlacementResolver</code>，<code>local_host_unbound</code> / <code>local_host_ambiguous</code> typed 409，<code>listOwnedActiveLocalForUser</code> 0/1/N 不 silent-pick。
+            <br>
+            • C2 standalone lift <code>POST /api/hosts/claim_or_create</code> + <code>POST /api/hosts/:id/revoke</code>，<code>HostWsServerController.disconnectHost(hostId)</code> 触发 1008 / <code>host_revoked</code> close（best-effort kick after commit；daemon reconnect 不 suppress，DB 端是权威）。
+            <br>
+            • C3 standalone lift workspace POST/PATCH/DELETE/add-member，新 helper <code>assertWorkspaceAgentsMatchHost</code> 扫全 conversation kinds（含 thread / dm_channel），新 route-local <code>workspace_path_not_supported</code>（不进 placement taxonomy）。fs materialization 推 D4.e。
+            <br>
+            • C4 marker：<code>POST /api/agents</code> standalone gate 推 D4.d，renderer guidance 校正成「deferred until D4.d」。
+            <br>
+            • C5 outbound event perimeter，<code>OutboundRuntimeEventFanout.assertEventOwnership</code> 在 <code>stateForHost</code> <strong>之前</strong>跑五步短路：agent exists / agent.host_id===hostId / conversation exists / workspace.workspace_host_id===hostId / <code>(cid, aid)</code> 在 <code>conversation_agents</code>。9 pins，<code>states.size === 0</code> 直接钉零残留。
+            <br>
+            • C6 two-daemon isolation e2e（real <code>host-ws-server</code> + real <code>OutboundRuntimeEventFanout</code> + 双 raw WS clients），5 invariants：simultaneous attach / SSE 双向隔离 / 实时多路复用下的 perimeter / 命令路由按 id+kind 否定（避 heartbeat flake）/ disconnect cache cleanup（真跑 ready+runtime_status hydrate 让 cache 可观察）。
+            <br>
+            <strong>C7–C9 待</strong>：clear-session bounded timeout / signup-toggle 真重启 / G3 runbook + acceptance。
           </p>
           <div class="card-meta">
             <span class="m-tag m1">M1</span>
-            <span class="meta-tag">pending shiki OK</span>
+            <span class="meta-tag">worktree silverhand-wt-d4-c</span>
             <span class="meta-tag">success = G3 closed</span>
           </div>
         </div>
@@ -1101,7 +1114,7 @@
     <footer>
       <p>
         <strong>Milestone 1 路径</strong>（这期）：
-        D3.b（in-progress）+ D4.c（planned，等 OK）并行 →
+        D3.b（in-progress）+ D4.c（in-progress，C1–C6 done，C7–C9 待）并行 →
         D4.d（create-agent materialize intent）→
         D4.e（local data-plane sync）+ D5.a/b（envelope unification + workspace materialize）并行 →
         T1 内 M1 子项（multi-daemon 状态合并 + Remote UX 收口）→
