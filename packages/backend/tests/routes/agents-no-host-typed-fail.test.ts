@@ -51,6 +51,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { RuntimeHostPlacementError } from '../../src/host-placement-errors.js';
 import { HostWsCommandTransportError } from '../../src/ws/host-ws-server.js';
+import {
+  ClearSessionExitTimeoutError,
+  ClearSessionInProgressError,
+} from '../../src/runtime/agent-runtime-host.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 async function createChannelWithAgent(
@@ -377,41 +381,73 @@ describe('agent start/stop — typed-fail gate (D4.a Commit 6 G1)', () => {
     });
   });
 
-  describe('clear-session POST /api/channels/:id/agents/:aid/clear-session — D4.c deferral (Cindy round-2 P1)', () => {
+  describe('clear-session POST /api/channels/:id/agents/:aid/clear-session — D4.c C7', () => {
     /**
-     * D4.b round-1 lifted the standalone guard here, but
-     * `ControlPlaneRuntimeHost.clearSession` still throws
-     * `HostRuntimeDisabledError`, which `placementErrorResponse`
-     * does NOT recognize — so the route fell through to generic
-     * `{ error: msg }` at HTTP 400 (no `code` field). That's
-     * strictly WORSE than the pre-lift typed 409. Round-2 restores
-     * the typed guard and defers proper standalone clear-session
-     * implementation to D4.c.
+     * D4.c C7 lifted the standalone guard. The route now delegates
+     * to `runtimeHost.clearSession`, which (in the standalone
+     * fanout) dispatches `runtime_clear_session` over the outbound
+     * WS, bounded-waits for `runtime_exit` projection landed, and
+     * commits the audit + cli_session_id clear in one DB tx.
      *
-     * `t.fake.deploymentMode` doesn't exist on the fake stub; the
-     * standalone gate is the BackendContext.deploymentMode field
-     * which `buildTestApp` defaults to `'embedded'`. To exercise
-     * the typed-fail arm we set `deploymentMode: 'standalone'` on
-     * `buildTestApp`.
+     * Three new typed-error arms the route promotes:
+     *   - `HostWsCommandTransportError('transport_no_connection')`
+     *     → 503 `host_attach_pending` (placement-error fall-through).
+     *   - `ClearSessionExitTimeoutError` → 503 `clear_session_timeout`
+     *     (route-local; intentionally NOT in the placement taxonomy
+     *     per Cindy `nPqEVJjCLjuNDH-6` constraint #1).
+     *   - `ClearSessionInProgressError` → 409
+     *     `clear_session_in_progress` (route-local; concurrent
+     *     same-(cid, aid) is misuse, not a coordination hazard).
+     *
+     * `t.fake.clearError` is the injection knob (mirrors
+     * `t.fake.startError`); the fake's `clearedSessions` recorder
+     * stays untouched on the error arms because the fake throws
+     * before recording.
      */
 
-    it('standalone backend → 409 host_runtime_disabled (typed, NOT generic 400)', async () => {
-      // Build in embedded mode so the workspace/agent CRUD routes
-      // (B-class, still guarded) succeed during setup, then flip the
-      // deploymentMode field to exercise the clear-session guard
-      // without re-architecting the test fixture.
+    it('no daemon attached → 503 host_attach_pending (typed)', async () => {
       t = buildTestApp();
       const { channelId, agentId } = await createChannelWithAgent(t);
-      (t.ctx as { deploymentMode: string }).deploymentMode = 'standalone';
+      t.fake.clearError = new HostWsCommandTransportError(
+        'transport_no_connection',
+        'no live outbound WS for host local',
+        { hostId: 'local', commandKind: 'runtime_clear_session' },
+      );
+      const res = await http(t).post(
+        `/api/channels/${channelId}/agents/${agentId}/clear-session`,
+      );
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as { code: string; error: string };
+      expect(body.code).toBe('host_attach_pending');
+      expect(t.fake.clearedSessions).toHaveLength(0);
+    });
+
+    it('runtime_exit projection times out → 503 clear_session_timeout (route-local typed)', async () => {
+      t = buildTestApp();
+      const { channelId, agentId } = await createChannelWithAgent(t);
+      t.fake.clearError = new ClearSessionExitTimeoutError(channelId, agentId);
+      const res = await http(t).post(
+        `/api/channels/${channelId}/agents/${agentId}/clear-session`,
+      );
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as { code: string; error: string };
+      expect(body.code).toBe('clear_session_timeout');
+      // Regression bait — must NOT collapse into placement taxonomy.
+      expect(body.code).not.toBe('host_attach_pending');
+      expect(t.fake.clearedSessions).toHaveLength(0);
+    });
+
+    it('concurrent same-(cid, aid) → 409 clear_session_in_progress (route-local typed)', async () => {
+      t = buildTestApp();
+      const { channelId, agentId } = await createChannelWithAgent(t);
+      t.fake.clearError = new ClearSessionInProgressError(channelId, agentId);
       const res = await http(t).post(
         `/api/channels/${channelId}/agents/${agentId}/clear-session`,
       );
       expect(res.status).toBe(409);
       const body = (await res.json()) as { code: string; error: string };
-      expect(body.code).toBe('host_runtime_disabled');
-      // Regression bait: round-1 returned 400 with no `code` field.
-      expect(res.status).not.toBe(400);
-      expect(body.code).not.toBeUndefined();
+      expect(body.code).toBe('clear_session_in_progress');
+      expect(t.fake.clearedSessions).toHaveLength(0);
     });
 
     it('embedded backend (happy path) → 200 + fake.clearedSessions recorded', async () => {

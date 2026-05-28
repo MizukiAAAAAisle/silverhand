@@ -55,6 +55,75 @@ export interface ClearSessionResult {
 }
 
 /**
+ * D4.c C7 — bounded wait the standalone fanout uses while
+ * `clearSession` blocks on the post-`runtime_clear_session`
+ * `runtime_exit` event landing in projection.
+ *
+ * 10s mirrors `runtime_wake`'s round-trip ceiling and is the
+ * largest "user-explicit" interactive action we want to make a
+ * caller block on. Bigger and the renderer's spinner becomes
+ * indistinguishable from a hang; smaller and a healthy daemon
+ * SIGKILL grace window can race the bound on a slow box. The
+ * fanout exposes an injectable override so unit tests can
+ * collapse the bound to a few ms without sleeping.
+ */
+export const CLEAR_SESSION_EXIT_TIMEOUT_MS = 10_000;
+
+/**
+ * D4.c C7 — typed error the standalone fanout throws when a
+ * dispatched `runtime_clear_session` succeeded on the daemon side
+ * (`{cleared:true}`) but the resulting `runtime_exit` event did not
+ * land in projection within `CLEAR_SESSION_EXIT_TIMEOUT_MS`.
+ *
+ * Per Cindy `nPqEVJjCLjuNDH-6`: NOT in `placementErrorStatusMap` —
+ * this is a route-local error code. The `clearConversationAgentSession`
+ * handler maps it directly to HTTP 503 + `code: 'clear_session_timeout'`.
+ *
+ * On timeout the backend leaves the DB row UNCHANGED — no audit, no
+ * `cli_session_id` clear — so the next `clear-session` retry picks
+ * up the same pre-state and tries again cleanly.
+ */
+export class ClearSessionExitTimeoutError extends Error {
+  readonly code = 'clear_session_timeout' as const;
+  readonly conversationId: string;
+  readonly agentId: string;
+
+  constructor(conversationId: string, agentId: string) {
+    super(
+      `clear-session for ${conversationId}/${agentId} timed out waiting for ` +
+        'runtime_exit projection landed',
+    );
+    this.name = 'ClearSessionExitTimeoutError';
+    this.conversationId = conversationId;
+    this.agentId = agentId;
+  }
+}
+
+/**
+ * D4.c C7 — typed error thrown when a second `clearSession` arrives
+ * for the same `(conversation, agent)` pair while the first is still
+ * waiting on the `runtime_exit` projection. Clear-session is a
+ * user-explicit one-shot action; concurrent dispatch is misuse, not
+ * a coordination hazard worth a shared-waiter implementation.
+ *
+ * Routed to HTTP 409 + `code: 'clear_session_in_progress'`.
+ */
+export class ClearSessionInProgressError extends Error {
+  readonly code = 'clear_session_in_progress' as const;
+  readonly conversationId: string;
+  readonly agentId: string;
+
+  constructor(conversationId: string, agentId: string) {
+    super(
+      `clear-session is already in progress for ${conversationId}/${agentId}`,
+    );
+    this.name = 'ClearSessionInProgressError';
+    this.conversationId = conversationId;
+    this.agentId = agentId;
+  }
+}
+
+/**
  * Backend-side facade for the per-(conversation, agent) runtime
  * lifecycle.
  */

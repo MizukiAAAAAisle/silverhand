@@ -122,6 +122,10 @@ import { MembershipService } from './services/membership-service.js';
 import { UserRepo } from './repos/user-repo.js';
 import { RuntimeHostPlacementError } from './host-placement-errors.js';
 import {
+  ClearSessionExitTimeoutError,
+  ClearSessionInProgressError,
+} from './runtime/agent-runtime-host.js';
+import {
   type AppEnv,
   getAgentPrincipal,
   getUserPrincipal,
@@ -3048,30 +3052,32 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       { conversationId, agentId },
       'api: clear agent session requested',
     );
-    // D4.b P1-1 (Cindy round-2 `0Hd5ComnzYxHJ6Rk` P1): clear-session
-    // is **deferred to D4.c**, NOT lifted in D4.b. The previous
-    // round's lift made things worse — `ControlPlaneRuntimeHost.clearSession`
-    // still throws `HostRuntimeDisabledError`, which `placementErrorResponse`
-    // does NOT recognize, so the route fell through to a generic
-    // `{ error: msg }` at HTTP 400 (no typed `code` field). That's
-    // strictly worse than the pre-lift typed `host_runtime_disabled`
-    // (409) — the renderer lost the ability to branch on the code.
+    // D4.c C7 — standalone guard lifted. The standalone fanout's
+    // `clearSession` (Cindy `szDHSdeKwtEUlxZb` P1 + `nPqEVJjCLjuNDH-6`)
+    // dispatches `runtime_clear_session` over the outbound WS,
+    // bounded-waits for the resulting `runtime_exit` projection
+    // landed, then atomically clears `cli_session_id` + writes the
+    // audit row in one DB tx — same wire shape as embedded
+    // `DaemonAgentRuntimeHost.clearSession` (R4 envelope invariant).
     //
-    // Properly implementing clearSession in standalone control-plane
-    // mode requires (a) dispatching a hard `runtime_stop` over the
-    // outbound WS, (b) waiting for the resulting `runtime_exit`
-    // projection to land, and (c) atomically clearing
-    // `cli_session_id` on the row + writing an audit message. This
-    // is the same shape as embedded `DaemonAgentRuntimeHost.clearSession`
-    // but the synchronization across outbound dispatch + projection
-    // wake is non-trivial. Defer to D4.c (placement / CRUD pass), not
-    // a runtime-transport gap.
+    // Two route-local typed errors that are NOT in the placement
+    // taxonomy (Cindy `nPqEVJjCLjuNDH-6` constraint #1):
+    //   - `ClearSessionExitTimeoutError` → 503
+    //     `clear_session_timeout`. Daemon ACK'd
+    //     `runtime_clear_session` but the resulting `runtime_exit`
+    //     never landed within the bound (e.g. SIGKILL grace window
+    //     stuck child). DB UNCHANGED — retry is safe.
+    //   - `ClearSessionInProgressError` → 409
+    //     `clear_session_in_progress`. A previous clear-session for
+    //     the same (cid, aid) is still waiting on `runtime_exit`.
+    //     Clear-session is a user-explicit one-shot — fail-fast
+    //     beats share-waiter complexity.
     //
-    // Until then the guard returns typed `host_runtime_disabled`
-    // (409), matching the contract every other deferred path uses.
-    if (standaloneMode(ctx)) {
-      return hostRuntimeDisabledResponse(c, 'clearing agent session');
-    }
+    // Transport-down at dispatch time still surfaces as 503
+    // `host_attach_pending` via `placementErrorResponse`.
+    //
+    // **This IPC is local supervisor/control, not server↔daemon
+    // formal semantics.**
     try {
       const result = await ctx.runtimeHost.clearSession(
         conversationId,
@@ -3084,6 +3090,16 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
         was_running: result.wasRunning,
       });
     } catch (err) {
+      if (err instanceof ClearSessionExitTimeoutError) {
+        ctx.logger.warn(
+          { conversationId, agentId, code: err.code },
+          'api: clear agent session timed out waiting for runtime_exit projection',
+        );
+        return c.json({ error: err.message, code: err.code }, 503);
+      }
+      if (err instanceof ClearSessionInProgressError) {
+        return c.json({ error: err.message, code: err.code }, 409);
+      }
       const msg = err instanceof Error ? err.message : String(err);
       ctx.logger.error(
         { conversationId, agentId, err },

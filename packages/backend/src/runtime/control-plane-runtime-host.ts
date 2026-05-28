@@ -27,6 +27,21 @@ export interface ControlPlaneRuntimeProjection {
     mode: 'soft' | 'hard',
     softDirective?: string,
   ): Promise<void>;
+  /**
+   * D4.c C7 — dispatch `runtime_clear_session` over the outbound
+   * WS, bounded-wait for the resulting `runtime_exit` projection
+   * landed, then atomically clear `cli_session_id` + insert audit
+   * row in one DB tx. Throws typed
+   * {@link import('./agent-runtime-host.js').ClearSessionExitTimeoutError}
+   * /
+   * {@link import('./agent-runtime-host.js').ClearSessionInProgressError}
+   * the route translates to 503 / 409.
+   */
+  clearSession(
+    conversationId: string,
+    agentId: string,
+    actorUserId: string | null,
+  ): Promise<ClearSessionResult>;
   deliverMessage(
     conversationId: string,
     agentId: string,
@@ -98,8 +113,12 @@ export class ControlPlaneRuntimeHost implements AgentRuntimeHost {
   async clearSession(
     conversationId: string,
     agentId: string,
-    _actorUserId?: string | null,
+    actorUserId?: string | null,
   ): Promise<ClearSessionResult> {
+    const projection = this.projection?.();
+    if (projection) {
+      return projection.clearSession(conversationId, agentId, actorUserId ?? null);
+    }
     throw this.unavailable('clearSession', { conversationId, agentId });
   }
 

@@ -95,6 +95,15 @@ export class FakeConversationManager {
 
   /** Override to make `.start` reject. */
   startError: Error | null = null;
+  /**
+   * D4.c C7 — inject a thrown error from `clearSession`. Unit tests
+   * cover the route's typed-error mapping (`ClearSessionExitTimeoutError`
+   * → 503 `clear_session_timeout`, `ClearSessionInProgressError` →
+   * 409 `clear_session_in_progress`, `HostWsCommandTransportError` →
+   * 503 `host_attach_pending`) without standing up a real fanout +
+   * outbound transport.
+   */
+  clearError: Error | null = null;
   clearSessionResult = { prevCliSessionId: 'prev-session-1', wasRunning: false };
 
   reconcileOnBoot(): void {
@@ -137,6 +146,7 @@ export class FakeConversationManager {
     agentId: string,
     actorUserId: string | null = null,
   ): Promise<{ prevCliSessionId: string | null; wasRunning: boolean }> {
+    if (this.clearError) throw this.clearError;
     this.clearedSessions.push({ conversationId, agentId, actorUserId });
     return this.clearSessionResult;
   }

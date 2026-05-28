@@ -12,6 +12,7 @@ import { getDriver } from '@silverhand/host/drivers';
 import type { AgentRunState, AgentRunTerminalReason } from '@silverhand/shared';
 import type { AgentTokenStore } from '../auth/agent-token-store.js';
 import type { BackendLogger, SilverhandCliLauncher } from '../context.js';
+import { systemSubtype } from '@silverhand/shared';
 import { AgentRepo } from '../repos/agent-repo.js';
 import {
   ConversationInboxRepo,
@@ -19,6 +20,7 @@ import {
 } from '../repos/conversation-inbox-repo.js';
 import { ConversationRepo } from '../repos/conversation-repo.js';
 import { HostRepo } from '../repos/host-repo.js';
+import { MessageRepo } from '../repos/message-repo.js';
 import { UserRepo } from '../repos/user-repo.js';
 import { WorkspaceRepo } from '../repos/workspace-repo.js';
 import { MembershipService } from '../services/membership-service.js';
@@ -29,7 +31,13 @@ import type {
 import { HostWsCommandTransportError } from '../ws/host-ws-server.js';
 import { singleConversationViewerUserId } from '../viewer-scope.js';
 import { JsonlActivityLogWriter, type ActivityLogWriter } from './activity-log-writer.js';
-import { DEFAULT_SOFT_DIRECTIVE } from './agent-runtime-host.js';
+import {
+  CLEAR_SESSION_EXIT_TIMEOUT_MS,
+  ClearSessionExitTimeoutError,
+  ClearSessionInProgressError,
+  DEFAULT_SOFT_DIRECTIVE,
+  type ClearSessionResult,
+} from './agent-runtime-host.js';
 import { RuntimeDeliveryCoordinator } from './delivery-coordinator.js';
 import {
   RuntimeEventHandler,
@@ -62,6 +70,14 @@ export interface OutboundRuntimeEventFanoutOptions {
   proxyPolicy: () => RuntimeStartProxyPolicy;
   logDir?: string;
   activityLog?: ActivityLogWriter | null;
+  /**
+   * D4.c C7 — override the bounded wait `clearSession` blocks on
+   * the post-`runtime_clear_session` `runtime_exit` event landing
+   * in projection. Tests inject a small value (a few ms) to
+   * exercise the timeout branch without `setTimeout(10000)`.
+   * Defaults to {@link CLEAR_SESSION_EXIT_TIMEOUT_MS} (10s).
+   */
+  clearSessionExitTimeoutMs?: number;
 }
 
 interface HostFanoutState {
@@ -70,6 +86,31 @@ interface HostFanoutState {
   handler: RuntimeEventHandler;
   currentConnectionId: string | null;
   currentDaemonKey: string | null;
+}
+
+/**
+ * D4.c C7 — one-shot waiter for `clearSession`'s bounded wait on
+ * the post-`runtime_clear_session` `runtime_exit` event landing in
+ * projection. Cindy `szDHSdeKwtEUlxZb` P1 + `nPqEVJjCLjuNDH-6` final.
+ *
+ * Lifecycle:
+ *
+ *   1. Registered BEFORE `transport.sendCommand('runtime_clear_session')`
+ *      so a `runtime_exit` that lands during the WS round-trip cannot
+ *      be missed (the daemon emits the event from `onChildExit`,
+ *      which can race the command response).
+ *   2. `notifyExit` is called from `stateForHost.onRuntimeExit`'s
+ *      callback wrapper after the cache/SSE has already updated.
+ *      Latches `exited = true` and resolves any awaiter.
+ *   3. `clearSession` calls `awaitExit(timeoutMs)` after dispatch;
+ *      either resolves immediately (latched) or races the timeout.
+ *   4. `finally` cleanup (Cindy `nPqEVJjCLjuNDH-6` constraint #2)
+ *      removes the entry from `clearSessionWaiters` regardless of
+ *      success/timeout/dispatch-fail/DB-tx-fail.
+ */
+interface ClearSessionWaiter {
+  exited: boolean;
+  resolveExited: (() => void) | null;
 }
 
 interface PendingDeliveryBatch {
@@ -93,10 +134,19 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
   private readonly hosts: HostRepo;
   private readonly users: UserRepo;
   private readonly workspaces: WorkspaceRepo;
+  private readonly messages: MessageRepo;
   private readonly membership: MembershipService;
   private readonly inboxAck: InboxAckSink;
   private readonly activityLog: ActivityLogWriter | null;
   private readonly ownsActivityLog: boolean;
+  /**
+   * D4.c C7 — keyed by `${conversationId}|${agentId}`. Presence of
+   * an entry means a `clearSession` is awaiting `runtime_exit` for
+   * that pair; concurrent dispatch on the same pair fails fast with
+   * {@link ClearSessionInProgressError}.
+   */
+  private readonly clearSessionWaiters = new Map<string, ClearSessionWaiter>();
+  private readonly clearSessionExitTimeoutMs: number;
 
   constructor(private readonly opts: OutboundRuntimeEventFanoutOptions) {
     this.inboxRepo = new ConversationInboxRepo(opts.db);
@@ -107,11 +157,14 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     this.workspaces = new WorkspaceRepo(opts.db, {
       workspacesRoot: opts.workspacesRoot,
     });
+    this.messages = new MessageRepo(opts.db);
     this.membership = new MembershipService({
       agents: new AgentRepo(opts.db),
       users: new UserRepo(opts.db),
       conversations: new ConversationRepo(opts.db),
     });
+    this.clearSessionExitTimeoutMs =
+      opts.clearSessionExitTimeoutMs ?? CLEAR_SESSION_EXIT_TIMEOUT_MS;
     this.inboxAck = {
       markDelivered: ids => this.inboxRepo.markDelivered([...ids]),
       markUndelivered: (ids, reason) => {
@@ -429,6 +482,305 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     await transport.sendCommand(hostId, 'runtime_stop', params);
   }
 
+  /**
+   * D4.c C7 — standalone-side `clearSession`.
+   *
+   * Mirrors `DaemonAgentRuntimeHost.clearSession` (embedded path)
+   * with one architectural addition: a bounded wait for the
+   * `runtime_exit` event to land in projection BEFORE we touch the
+   * DB, so the audit row + `cli_session_id=null` write sees a
+   * coherent post-exit state and the renderer's `agent_status` SSE
+   * follows the death event in the right order.
+   *
+   * Sequence (Cindy `szDHSdeKwtEUlxZb` P1 + `nPqEVJjCLjuNDH-6` final):
+   *
+   *   1. Validate the (conv, agent) triplet against the DB.
+   *   2. Concurrent same-(cid,aid) → fail-fast
+   *      {@link ClearSessionInProgressError}; clear-session is a
+   *      user-explicit one-shot, share-waiter would be over-engineered.
+   *   3. Snapshot pre-state (`prevCliSessionId`, `wasRunning` from
+   *      the cache) — captured BEFORE dispatch so the post-state
+   *      observed under `runtime_exit` doesn't pollute the audit
+   *      content.
+   *   4. Register the one-shot `runtime_exit` waiter BEFORE
+   *      `transport.sendCommand`. The daemon emits `runtime_exit`
+   *      from `onChildExit` synchronously after the SIGKILL grace
+   *      window, which can race the command response on the WS;
+   *      registering first guarantees no missed notification.
+   *   5. Dispatch `runtime_clear_session` with
+   *      `expectedConnectionId` so a daemon-bounce mid-flight surfaces
+   *      as `transport_disconnected` (→ 503 `host_attach_pending`)
+   *      with DB untouched.
+   *   6. Bounded wait for `runtime_exit` projection landed:
+   *      - Fast path: cache shows `phase === 'exited'` (or pair
+   *        absent) at dispatch entry → skip wait. This covers the
+   *        `cleared:false` arm (daemon's handle gone) and the
+   *        already-exited race. Strict equality is unnecessary —
+   *        if the daemon claims `cleared:true` but the cache is
+   *        already exited, the waiter would resolve immediately
+   *        from a prior event anyway.
+   *      - Otherwise: race the waiter promise against
+   *        `clearSessionExitTimeoutMs`. On timeout throw
+   *        {@link ClearSessionExitTimeoutError} — DB UNCHANGED, no
+   *        audit, no `cli_session_id` clear.
+   *   7. `coordinator.clearRuntime` mirrors the embedded path's
+   *      delivery-state cleanup (cancel wake watchdog, drop
+   *      pending/busy markers).
+   *   8. DB transaction (Cindy `szDHSdeKwtEUlxZb` P3): the
+   *      `updateAgentRuntime(cliSessionId: null)` write AND the
+   *      audit-message insert MUST land in the same SQLite tx so a
+   *      crash between them can't leave a row with a dangling audit
+   *      pointer (or vice versa).
+   *   9. Outside the tx (best-effort, mirrors embedded):
+   *      - Publish `agent_status` SSE.
+   *      - Publish `message` SSE for the audit row.
+   *      - Per-peer `deliverMessage` so each OTHER agent in the
+   *        conversation sees the cleared-session signal (their own
+   *        chat history / inbox-if-offline). Per-delivery failures
+   *        are warn-level only — clearSession-as-a-whole stays
+   *        successful.
+   *
+   *  10. `finally` (Cindy `nPqEVJjCLjuNDH-6` constraint #2): delete
+   *      the waiter from the resolver table regardless of which
+   *      branch we exited through (success / timeout / dispatch
+   *      throw / DB tx throw).
+   */
+  async clearSession(
+    conversationId: string,
+    agentId: string,
+    actorUserId: string | null = null,
+  ): Promise<ClearSessionResult> {
+    // 1. Validate.
+    const conversation = this.conversations.get(conversationId);
+    if (!conversation) {
+      throw new Error(`conversation ${conversationId} not found`);
+    }
+    const agent = this.agents.get(agentId);
+    if (!agent) throw new Error(`agent ${agentId} not found`);
+    const existing = this.conversations.getAgent(conversationId, agentId);
+    if (!existing) {
+      throw new Error(
+        `agent ${agentId} is not a member of conversation ${conversationId}`,
+      );
+    }
+
+    // 2. Concurrent guard.
+    const waiterKey = clearSessionKey(conversationId, agentId);
+    if (this.clearSessionWaiters.has(waiterKey)) {
+      throw new ClearSessionInProgressError(conversationId, agentId);
+    }
+
+    const hostId = this.hostIdForAgent(agentId);
+    const state = this.stateForHost(hostId);
+
+    // 3. Snapshot pre-state.
+    const prevCliSessionId = existing.cli_session_id;
+    const cacheEntryBefore = state.cache.get(conversationId, agentId);
+    const wasRunning =
+      cacheEntryBefore !== undefined && cacheEntryBefore.phase !== 'exited';
+
+    // 4. Register waiter BEFORE dispatch.
+    const waiter: ClearSessionWaiter = { exited: false, resolveExited: null };
+    this.clearSessionWaiters.set(waiterKey, waiter);
+
+    try {
+      // 5. Dispatch over WS. Connection must exist; outbound
+      //    transport throws typed `transport_no_connection` /
+      //    `transport_disconnected` which the route maps to 503
+      //    `host_attach_pending`. DB is still untouched on throw.
+      const connectionId = this.connectedConnectionId(
+        hostId,
+        'runtime_clear_session',
+      );
+      await this.requireTransport().sendCommand(
+        hostId,
+        'runtime_clear_session',
+        { conversation_id: conversationId, agent_id: agentId },
+        { timeoutMs: 10_000, expectedConnectionId: connectionId },
+      );
+
+      // 6. Bounded wait for runtime_exit projection landed.
+      //    If the cache already shows the runtime is gone (waiter
+      //    fired during dispatch, OR the daemon's handle was already
+      //    absent at clear time), skip the wait.
+      const cacheAfterDispatch = state.cache.get(conversationId, agentId);
+      const stillRunningAfterDispatch =
+        cacheAfterDispatch !== undefined &&
+        cacheAfterDispatch.phase !== 'exited';
+      if (wasRunning && !waiter.exited && stillRunningAfterDispatch) {
+        await this.awaitRuntimeExitLanded(waiter, conversationId, agentId);
+      }
+
+      // 7. Coordinator-side cleanup.
+      state.coordinator.clearRuntime(conversationId, agentId, 'stopped');
+
+      // 8. DB tx — audit insert + cli_session_id clear in one shot.
+      const shouldAudit = wasRunning || prevCliSessionId !== null;
+      const { updated, auditMessage } = this.opts.db.transaction(() => {
+        const updated = this.conversations.updateAgentRuntime(
+          conversationId,
+          agentId,
+          { cliSessionId: null },
+        );
+        if (!updated) {
+          throw new Error(
+            `agent ${agentId} is not a member of conversation ${conversationId}`,
+          );
+        }
+        const auditMessage = shouldAudit
+          ? this.insertSessionClearedAuditMessage({
+              conversationId,
+              agentId,
+              agentName: agent.name,
+              actorUserId,
+              prevCliSessionId,
+              wasRunning,
+            })
+          : null;
+        return { updated, auditMessage };
+      })();
+
+      // 9. SSE + per-peer best-effort delivery (outside tx).
+      this.opts.events.publish(conversationId, {
+        kind: 'agent_status',
+        payload: {
+          agent_id: agentId,
+          status: updated.status,
+          pid: updated.pid,
+          cli_session_id: null,
+        },
+      });
+      if (auditMessage) {
+        this.opts.events.publish(conversationId, {
+          kind: 'message',
+          payload: { message: auditMessage },
+        });
+        for (const ca of this.conversations.listAgents(conversationId)) {
+          if (ca.agent_id === agentId) continue;
+          await this.deliverMessage(
+            conversationId,
+            ca.agent_id,
+            auditMessage.id,
+          ).catch(err =>
+            this.opts.logger.warn(
+              {
+                kind: 'runtime',
+                mode: 'standalone',
+                conversationId,
+                agent_id: ca.agent_id,
+                msg_id: auditMessage.id,
+                err: err instanceof Error ? err.message : String(err),
+              },
+              'clear-session: audit delivery to peer agent failed',
+            ),
+          );
+        }
+      }
+
+      return { prevCliSessionId, wasRunning };
+    } finally {
+      // 10. Finally cleanup — Cindy `nPqEVJjCLjuNDH-6` #2.
+      this.clearSessionWaiters.delete(waiterKey);
+    }
+  }
+
+  /**
+   * D4.c C7 — race a one-shot `runtime_exit` waiter against the
+   * configured timeout. Throws {@link ClearSessionExitTimeoutError}
+   * on timeout; resolves on `runtime_exit` projection landed.
+   *
+   * The waiter is held by `clearSession`'s `try/finally`; this
+   * helper does NOT delete the entry — the caller's `finally` does
+   * that for both branches (success & timeout).
+   */
+  private awaitRuntimeExitLanded(
+    waiter: ClearSessionWaiter,
+    conversationId: string,
+    agentId: string,
+  ): Promise<void> {
+    if (waiter.exited) return Promise.resolve();
+    return new Promise<void>((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+        timer = null;
+        // Detach the resolver so a late `runtime_exit` doesn't try
+        // to call `resolve` on an already-rejected promise.
+        waiter.resolveExited = null;
+        reject(new ClearSessionExitTimeoutError(conversationId, agentId));
+      }, this.clearSessionExitTimeoutMs);
+      waiter.resolveExited = () => {
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
+        }
+        waiter.resolveExited = null;
+        resolve();
+      };
+    });
+  }
+
+  /**
+   * D4.c C7 — invoked from the `RuntimeEventHandler.onRuntimeExit`
+   * callback wrapper after the cache and SSE have already updated.
+   * Latches `exited = true` on any in-flight waiter for this pair
+   * and resolves the awaiter (if one is parked).
+   *
+   * Idempotent: a second `runtime_exit` for the same pair is a
+   * no-op (the resolver is null after first fire).
+   */
+  private notifyClearSessionWaiter(
+    conversationId: string,
+    agentId: string,
+  ): void {
+    const waiter = this.clearSessionWaiters.get(
+      clearSessionKey(conversationId, agentId),
+    );
+    if (!waiter) return;
+    waiter.exited = true;
+    const resolve = waiter.resolveExited;
+    if (resolve) resolve();
+  }
+
+  /**
+   * D4.c C7 — mirrors `DaemonAgentRuntimeHost.insertSessionClearedAuditMessage`
+   * (`daemon-agent-runtime-host.ts:679-705`). Lifted inline rather
+   * than shared because the embedded path is the legacy duplicate;
+   * once D4 is fully cut over the standalone version is the single
+   * implementation. R4 invariant: same audit row shape on both
+   * deployment adapters.
+   */
+  private insertSessionClearedAuditMessage(params: {
+    conversationId: string;
+    agentId: string;
+    agentName: string;
+    actorUserId: string | null;
+    prevCliSessionId: string | null;
+    wasRunning: boolean;
+  }) {
+    const actor = params.actorUserId ? `@${params.actorUserId}` : 'A user';
+    const prevLabel = params.prevCliSessionId
+      ? `${params.prevCliSessionId.slice(0, 8)}...`
+      : 'none';
+    return this.messages.insertForConversation({
+      conversationId: params.conversationId,
+      fromKind: 'system',
+      fromUserId: params.actorUserId,
+      content:
+        `${actor} cleared @${params.agentName}'s CLI session context ` +
+        `(prev session: ${prevLabel}). Next start will use a fresh session; ` +
+        'pending deliveries remain queued.',
+      metadata: {
+        subtype: systemSubtype('session_cleared'),
+        agent_id: params.agentId,
+        agent_name: params.agentName,
+        actor_user_id: params.actorUserId,
+        previous_cli_session_id_prefix: params.prevCliSessionId
+          ? params.prevCliSessionId.slice(0, 8)
+          : null,
+        was_running: params.wasRunning,
+      },
+    });
+  }
+
   async startDeliveryBacked(
     conversationId: string,
     agentId: string,
@@ -686,8 +1038,15 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       ),
       onParsedEvent: (cid, aid, event) =>
         coordinator.onParsedEvent(cid, aid, event),
-      onRuntimeExit: (cid, aid, meta) =>
-        coordinator.onRuntimeExit(cid, aid, meta),
+      onRuntimeExit: (cid, aid, meta) => {
+        // D4.c C7 — notify any in-flight `clearSession` waiter
+        // BEFORE handing off to the coordinator. The coordinator's
+        // own respawn-gate logic doesn't care whether a clear-session
+        // is awaiting; the waiter does. Order: waiter first so a
+        // synchronous resolve cannot race the next microtask.
+        this.notifyClearSessionWaiter(cid, aid);
+        coordinator.onRuntimeExit(cid, aid, meta);
+      },
       onInitTimeout: (cid, aid) =>
         coordinator.clearWakeWatchdog(cid, aid, 'timeout'),
       onReadyForDrain: (cid, aid) => {
@@ -982,6 +1341,10 @@ function noopHostClient(): HostClient {
 
 function daemonKeyFromReady(daemonPid: number, startedAt: number): string {
   return `${daemonPid}@${startedAt}`;
+}
+
+function clearSessionKey(conversationId: string, agentId: string): string {
+  return `${conversationId}|${agentId}`;
 }
 
 function summarizeStartupDeliveryResult(result: {

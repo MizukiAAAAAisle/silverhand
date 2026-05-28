@@ -22,7 +22,11 @@ import { MessageRepo } from '../../src/repos/message-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { AgentTokenStore } from '../../src/auth/agent-token-store.js';
 import { RuntimeEventHandler, type EventPublisher } from '../../src/runtime/event-handler.js';
-import { DEFAULT_SOFT_DIRECTIVE } from '../../src/runtime/agent-runtime-host.js';
+import {
+  ClearSessionExitTimeoutError,
+  ClearSessionInProgressError,
+  DEFAULT_SOFT_DIRECTIVE,
+} from '../../src/runtime/agent-runtime-host.js';
 import {
   OutboundRuntimeEventFanout,
   outboundEventToEventFrame,
@@ -505,7 +509,284 @@ describe('OutboundRuntimeEventFanout', () => {
       fix.cleanup();
     }
   });
+
+  // D4.c C7 — clearSession bounded-wait for runtime_exit projection.
+  // Cindy `szDHSdeKwtEUlxZb` P1 + `nPqEVJjCLjuNDH-6` final.
+  //
+  // Four behaviors pinned here:
+  //
+  //   1. ack → exit lands → DB falls (prev session id cleared, audit
+  //      message inserted, agent_status SSE published).
+  //   2. ack → exit timeout → typed `ClearSessionExitTimeoutError`,
+  //      DB UNCHANGED (no cli_session_id clear, no audit row).
+  //   3. wasRunning=false fast path: cache empty → skip wait,
+  //      proceed to DB tx; audit still fires when prev session id
+  //      was non-null.
+  //   4. concurrent same-(cid, aid) → fail-fast typed
+  //      `ClearSessionInProgressError`. After the first call's
+  //      `finally` cleanup runs, the lock releases and a third call
+  //      can succeed.
+  describe('clearSession (D4.c C7)', () => {
+    it('clears cli_session_id + inserts audit + publishes SSE when runtime_exit lands within bound', async () => {
+      const fix = makeFixture({ clearSessionExitTimeoutMs: 200 });
+      try {
+        // 1. Seed a running runtime (cache shows phase='ready').
+        fix.transport.snapshot = {
+          runtimes: [
+            runtimeDto(fix.channelId, fix.agentId, 'ready', {
+              ...RUN_STATE,
+              conversationId: fix.channelId,
+              agentId: fix.agentId,
+              status: 'thinking',
+            }),
+          ],
+        };
+        fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+        await waitFor(
+          () => fix.fanout.getAgentRunStates(fix.channelId).length === 1,
+        );
+
+        // 2. Seed a known cli_session_id so the audit row fires.
+        new ConversationRepo(fix.db).updateAgentRuntime(
+          fix.channelId,
+          fix.agentId,
+          { cliSessionId: 'sess-abcdef-12345' },
+        );
+
+        // 3. Capture only post-clearSession events.
+        fix.events.length = 0;
+
+        // 4. Kick off clearSession; it parks on the runtime_exit
+        //    waiter. After dispatch microtasks settle, emit the exit
+        //    event so the waiter resolves.
+        const promise = fix.fanout.clearSession(
+          fix.channelId,
+          fix.agentId,
+          null,
+        );
+        await new Promise(resolve => setImmediate(resolve));
+        emitRuntimeExit(fix);
+
+        const result = await promise;
+        expect(result).toEqual({
+          prevCliSessionId: 'sess-abcdef-12345',
+          wasRunning: true,
+        });
+
+        // 5. Wire shape — `runtime_clear_session` was dispatched
+        //    with the exact (cid, aid) pair, no extra fields.
+        const clearCalls = fix.transport.clearSessionCalls();
+        expect(clearCalls).toHaveLength(1);
+        expect(clearCalls[0]!.params).toEqual({
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+        });
+
+        // 6. DB tx landed.
+        expect(fix.row().cli_session_id).toBeNull();
+
+        // 7. Audit message published as a `message` SSE.
+        const messageEvents = fix.events.filter(
+          e => e.kind === 'message' && e.conv === fix.channelId,
+        );
+        expect(messageEvents).toHaveLength(1);
+        const auditMessage = (
+          messageEvents[0]!.payload as {
+            message: { metadata: Record<string, unknown> | null };
+          }
+        ).message;
+        expect(auditMessage.metadata).toMatchObject({
+          subtype: 'session_cleared',
+          previous_cli_session_id_prefix: 'sess-abc',
+          was_running: true,
+        });
+
+        // 8. agent_status SSE includes a payload with cli_session_id=null.
+        const statusEvents = fix.events.filter(
+          e => e.kind === 'agent_status' && e.conv === fix.channelId,
+        );
+        expect(
+          statusEvents.some(
+            e =>
+              (e.payload as { cli_session_id: string | null })
+                .cli_session_id === null,
+          ),
+        ).toBe(true);
+      } finally {
+        fix.cleanup();
+      }
+    });
+
+    it('rejects with ClearSessionExitTimeoutError when runtime_exit does not land in time; DB UNCHANGED', async () => {
+      const fix = makeFixture({ clearSessionExitTimeoutMs: 30 });
+      try {
+        fix.transport.snapshot = {
+          runtimes: [
+            runtimeDto(fix.channelId, fix.agentId, 'ready', {
+              ...RUN_STATE,
+              conversationId: fix.channelId,
+              agentId: fix.agentId,
+              status: 'thinking',
+            }),
+          ],
+        };
+        fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+        await waitFor(
+          () => fix.fanout.getAgentRunStates(fix.channelId).length === 1,
+        );
+
+        new ConversationRepo(fix.db).updateAgentRuntime(
+          fix.channelId,
+          fix.agentId,
+          { cliSessionId: 'sess-old' },
+        );
+
+        fix.events.length = 0;
+
+        // No emitRuntimeExit — the waiter must time out.
+        await expect(
+          fix.fanout.clearSession(fix.channelId, fix.agentId, null),
+        ).rejects.toBeInstanceOf(ClearSessionExitTimeoutError);
+
+        // DB UNCHANGED: prev cli_session_id intact, no audit.
+        expect(fix.row().cli_session_id).toBe('sess-old');
+        expect(
+          fix.events.filter(e => e.kind === 'message'),
+        ).toHaveLength(0);
+        expect(
+          fix.events.filter(e => e.kind === 'agent_status'),
+        ).toHaveLength(0);
+
+        // The waiter map must have been cleaned up via `finally`,
+        // so a follow-up clearSession on the same pair gets past
+        // the in-progress check (it'll then time out again, which
+        // is fine — we only assert it does NOT reject as
+        // `ClearSessionInProgressError`).
+        await expect(
+          fix.fanout.clearSession(fix.channelId, fix.agentId, null),
+        ).rejects.not.toBeInstanceOf(ClearSessionInProgressError);
+      } finally {
+        fix.cleanup();
+      }
+    });
+
+    it('skips bounded wait when cache shows runtime is not running; DB tx still fires audit if prevCliSessionId !== null', async () => {
+      const fix = makeFixture({ clearSessionExitTimeoutMs: 5_000 });
+      try {
+        // Hydrate empty snapshot — cache stays empty so wasRunning=false.
+        fix.transport.snapshot = { runtimes: [] };
+        fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+        // No need to wait — empty hydrate is a no-op for cache.
+
+        new ConversationRepo(fix.db).updateAgentRuntime(
+          fix.channelId,
+          fix.agentId,
+          { cliSessionId: 'sess-orphan' },
+        );
+
+        // Daemon reports `cleared:false` — handle absent on its
+        // side. Backend's fast path skips the bounded wait.
+        fix.transport.setNextClearResult({ cleared: false });
+
+        fix.events.length = 0;
+
+        const result = await fix.fanout.clearSession(
+          fix.channelId,
+          fix.agentId,
+          null,
+        );
+        expect(result).toEqual({
+          prevCliSessionId: 'sess-orphan',
+          wasRunning: false,
+        });
+
+        // DB still cleared, audit still fires (prevCliSessionId was
+        // non-null — the user explicitly asked for a fresh session).
+        expect(fix.row().cli_session_id).toBeNull();
+        expect(
+          fix.events.filter(e => e.kind === 'message'),
+        ).toHaveLength(1);
+      } finally {
+        fix.cleanup();
+      }
+    });
+
+    it('rejects concurrent clearSession on same (cid, aid) with ClearSessionInProgressError; finally cleanup releases the lock', async () => {
+      const fix = makeFixture({ clearSessionExitTimeoutMs: 30 });
+      try {
+        fix.transport.snapshot = {
+          runtimes: [
+            runtimeDto(fix.channelId, fix.agentId, 'ready', {
+              ...RUN_STATE,
+              conversationId: fix.channelId,
+              agentId: fix.agentId,
+              status: 'thinking',
+            }),
+          ],
+        };
+        fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+        await waitFor(
+          () => fix.fanout.getAgentRunStates(fix.channelId).length === 1,
+        );
+
+        // First call parks on the waiter (no runtime_exit emitted).
+        const first = fix.fanout.clearSession(
+          fix.channelId,
+          fix.agentId,
+          null,
+        );
+
+        // Concurrent same-pair call must fast-fail typed.
+        await expect(
+          fix.fanout.clearSession(fix.channelId, fix.agentId, null),
+        ).rejects.toBeInstanceOf(ClearSessionInProgressError);
+
+        // Drain the first call's timeout so its `finally` runs.
+        await expect(first).rejects.toBeInstanceOf(
+          ClearSessionExitTimeoutError,
+        );
+
+        // After `finally`, the lock is released. Demonstrate by
+        // running a third call on the same pair that lands the
+        // happy path: emit runtime_exit so it resolves.
+        const third = fix.fanout.clearSession(
+          fix.channelId,
+          fix.agentId,
+          null,
+        );
+        await new Promise(resolve => setImmediate(resolve));
+        emitRuntimeExit(fix);
+        await expect(third).resolves.toEqual({
+          // runtime_exit clears the cache → wasRunning depends on
+          // whether the cache was still 'ready' at clearSession entry.
+          // For this assertion we only care it didn't reject as
+          // ClearSessionInProgress.
+          prevCliSessionId: null,
+          wasRunning: expect.any(Boolean),
+        });
+      } finally {
+        fix.cleanup();
+      }
+    });
+  });
 });
+
+function emitRuntimeExit(fix: Fixture): void {
+  fix.fanout.onEvent(
+    fix.hostId,
+    {
+      direction: 'daemon_to_server',
+      type: 'event',
+      kind: 'runtime_exit',
+      conversation_id: fix.channelId,
+      agent_id: fix.agentId,
+      code: 0,
+      intentional: true,
+      ts: 1700000010000,
+    },
+    'conn-1',
+  );
+}
 
 interface Fixture {
   db: ReturnType<typeof openTestDb>['db'];
@@ -521,7 +802,9 @@ interface Fixture {
   cleanup(): void;
 }
 
-function makeFixture(opts: { runtime?: RuntimeKind } = {}): Fixture {
+function makeFixture(
+  opts: { runtime?: RuntimeKind; clearSessionExitTimeoutMs?: number } = {},
+): Fixture {
   const { db, viewerUserId, localHostId } = openTestDb();
   const workspacesRoot = join(tmpdir(), 'silverhand-outbound-fanout-test');
   const workspaces = new WorkspaceRepo(db, { workspacesRoot });
@@ -566,6 +849,9 @@ function makeFixture(opts: { runtime?: RuntimeKind } = {}): Fixture {
     serverUrl: () => 'http://127.0.0.1:1',
     proxyPolicy: () => ({ url: null, allowlist: [] }),
     activityLog: null,
+    ...(opts.clearSessionExitTimeoutMs !== undefined
+      ? { clearSessionExitTimeoutMs: opts.clearSessionExitTimeoutMs }
+      : {}),
   });
   const messages = new MessageRepo(db);
   const inbox = new ConversationInboxRepo(db);
@@ -665,6 +951,7 @@ class FakeTransport implements HostWsServerController {
         reason: 'driver_not_ready';
       }
     | null = null;
+  private nextClearResult: { cleared: boolean } | null = null;
 
   activeConnectionCount(): number {
     return 1;
@@ -734,7 +1021,23 @@ class FakeTransport implements HostWsServerController {
           : {}),
       }) as Promise<OutboundServerCommandResult<K>>;
     }
+    if (kind === 'runtime_clear_session') {
+      // D4.c C7 — `runtime_clear_session` returns `{ cleared }`.
+      // Tests inject `nextClearResult` to drive `cleared:false`
+      // (handle absent) without rewriting the whole transport.
+      const next = this.nextClearResult ?? { cleared: true };
+      this.nextClearResult = null;
+      return Promise.resolve(next) as Promise<OutboundServerCommandResult<K>>;
+    }
     return Promise.resolve({}) as Promise<OutboundServerCommandResult<K>>;
+  }
+
+  setNextClearResult(result: { cleared: boolean }): void {
+    this.nextClearResult = result;
+  }
+
+  clearSessionCalls(): Array<{ params: Record<string, unknown> }> {
+    return this.calls.filter(call => call.kind === 'runtime_clear_session');
   }
 
   wakeCalls(): Array<{ params: Record<string, unknown> }> {
