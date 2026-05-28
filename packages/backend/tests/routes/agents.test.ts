@@ -250,6 +250,57 @@ describe('GET /api/agents/:id', () => {
     const res = await http(t).get('/api/agents/does-not-exist');
     expect(res.status).toBe(404);
   });
+
+  // D4.c C9 (G3 ACL #1 anti-enumeration): a known-but-unowned agent
+  // returns 404, NOT 403 and NOT 200. The 404 surface must be
+  // indistinguishable from "unknown id" so the response cannot be
+  // used to enumerate agent ids belonging to other users. The route
+  // implementation at `src/routes.ts` `GET /api/agents/:id` runs
+  // `canViewAgent` and returns the same 404 body shape for both
+  // missing and forbidden cases — this test pins that contract.
+  //
+  // Coverage gap closed by Cindy `mWQVcAFMbuzFfd3U`: workspace +
+  // host + conversation cross-user paths already had explicit pins
+  // (see `docs/d4-c-g3-acceptance.md` ACL #1 row); the agent-by-id
+  // surface was the missing piece.
+  it('cross-user GET returns 404 (not 403) — anti-enumeration (G3 ACL #1)', async () => {
+    t = buildTestApp();
+    // Drop the test fixture's auto-seed triggers — they normally
+    // mirror every user into every new workspace's `workspace_users`,
+    // which would make teammate's `agent_home` workspace
+    // automatically visible to `local`. Production has no such
+    // trigger; cross-user agents are NOT auto-shared.
+    t.ctx.db.exec(
+      `DROP TRIGGER IF EXISTS test_seed_workspace_users;
+       DROP TRIGGER IF EXISTS test_seed_conversation_users;`,
+    );
+
+    // Teammate creates an agent owned only by them. No shared
+    // workspace afterwards — `canViewAgent` falls through:
+    // `created_by_user_id !== local && no shared workspace` → false
+    // → 404.
+    const teammateHeaders = {
+      [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
+    };
+    const created = await (
+      await http(t).post(
+        '/api/agents',
+        { name: 'teammate-private', runtime: 'claude' },
+        { headers: teammateHeaders },
+      )
+    ).json() as any;
+    expect(created.agent.created_by_user_id).toBe('teammate');
+
+    // Default fixture viewer is `local`. With auto-seed dropped,
+    // no teammate-owned agent is visible to `local`.
+    const res = await http(t).get(`/api/agents/${created.agent.id}`);
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { error: string };
+    // Same body shape as the unknown-id 404 above — no `agent`
+    // payload, no row enumeration.
+    expect(body.error).toBe('agent not found');
+    expect((body as Record<string, unknown>).agent).toBeUndefined();
+  });
 });
 
 describe('PATCH /api/agents/:id', () => {

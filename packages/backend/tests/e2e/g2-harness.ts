@@ -578,7 +578,23 @@ function wrapWithStrictRecording(
  */
 export async function waitFor<T>(
   predicate: () => T | null | undefined | false,
-  opts: { timeoutMs?: number; intervalMs?: number; label?: string } = {},
+  opts: {
+    timeoutMs?: number;
+    intervalMs?: number;
+    label?: string;
+    /**
+     * D4.c C9-2: optional diagnostic hook fired on timeout. The
+     * returned value is appended to the thrown Error's message via
+     * `JSON.stringify`. Use it to capture observable state at the
+     * moment of failure (e.g. DB row, controller attachment, cache
+     * size) so an intermittent flake leaves enough evidence on the
+     * next occurrence to root-cause it without re-running. Errors
+     * thrown by the hook are caught and reported as
+     * `{ onTimeoutError: <message> }` rather than overriding the
+     * original timeout error.
+     */
+    onTimeout?: () => unknown;
+  } = {},
 ): Promise<T> {
   const timeoutMs = opts.timeoutMs ?? 2_000;
   const intervalMs = opts.intervalMs ?? 10;
@@ -593,8 +609,22 @@ export async function waitFor<T>(
     const result = predicate();
     if (result) return result as T;
   }
+  let diagnostic: unknown;
+  if (opts.onTimeout) {
+    try {
+      diagnostic = opts.onTimeout();
+    } catch (err) {
+      diagnostic = {
+        onTimeoutError: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+  const suffix =
+    diagnostic === undefined
+      ? ''
+      : ` :: diagnostic=${JSON.stringify(diagnostic)}`;
   throw new Error(
-    `waitFor: timed out after ${timeoutMs}ms waiting for ${label}`,
+    `waitFor: timed out after ${timeoutMs}ms waiting for ${label}${suffix}`,
   );
 }
 
@@ -607,6 +637,43 @@ export async function waitForAttachment(
   return waitFor(
     () => controller.getAttachment(hostId) ?? null,
     { timeoutMs, label: `attachment for host ${hostId}` },
+  );
+}
+
+/**
+ * D4.c C9-2 — wait until `controller.getAttachment(hostId)` returns
+ * a NEW attachment whose `connectionId` differs from `prevConnectionId`.
+ *
+ * Use this in restart / reconnect tests where `waitForAttachment`'s
+ * "any non-null attachment" predicate is too permissive: a stale
+ * attachment from a previous controller iteration could satisfy it
+ * before the daemon's actual reconnect lands. The "fresh" predicate
+ * binds the wait to the observable state transition the test
+ * actually cares about — a fresh `hostws-*` connectionId.
+ *
+ * **Cindy boundary** (`Acsun_kzRmpNmXZo`): this helper is defensive
+ * harness cleanup; it does not by itself prove a product-side race.
+ * If a flake recurs after this helper is in place, the timeout
+ * `onTimeout` diagnostic on the calling `waitFor` should capture
+ * the observable state for root-cause analysis.
+ */
+export async function waitForFreshAttachment(
+  controller: HostWsServerController,
+  hostId: string,
+  prevConnectionId: string | null,
+  timeoutMs = 2_000,
+): Promise<NonNullable<ReturnType<HostWsServerController['getAttachment']>>> {
+  return waitFor(
+    () => {
+      const attached = controller.getAttachment(hostId);
+      if (!attached) return null;
+      if (attached.connectionId === prevConnectionId) return null;
+      return attached;
+    },
+    {
+      timeoutMs,
+      label: `fresh attachment for host ${hostId} (prev=${prevConnectionId ?? 'null'})`,
+    },
   );
 }
 

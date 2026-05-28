@@ -61,6 +61,7 @@ import {
   bootG2Harness,
   waitFor,
   waitForAttachment,
+  waitForFreshAttachment,
   type DaemonWithSupervisorHandle,
   type G2Harness,
 } from './g2-harness.js';
@@ -262,9 +263,21 @@ describe('Standalone G2 — backend restart + persistent attach recovery', () =>
     // backend's authenticateHost path to register a fresh
     // connection. New connectionId proves it's a NEW attachment,
     // not a stale reference from the closed backend.
+    //
+    // **D4.c C9-2** — use `waitForFreshAttachment` with the explicit
+    // pre-restart connectionId rather than `waitForAttachment`'s
+    // "any non-null" predicate. This binds the wait to the actual
+    // observable state transition the test cares about (a new
+    // `hostws-*` connectionId), not to the weaker "controller has
+    // some attachment" condition. Defensive harness cleanup; not
+    // proven to fix any product-side race.
     const controller2 = harness.backend.context.hostWsController?.();
     if (!controller2) throw new Error('controller missing post-restart');
-    const attached2 = await waitForAttachment(controller2, hostIdBefore);
+    const attached2 = await waitForFreshAttachment(
+      controller2,
+      hostIdBefore,
+      connectionIdBefore,
+    );
     expect(attached2.hostId).toBe(hostIdBefore);
     expect(attached2.connectionId).toMatch(/^hostws-/);
     expect(attached2.connectionId).not.toBe(connectionIdBefore);
@@ -330,7 +343,43 @@ describe('Standalone G2 — backend restart + persistent attach recovery', () =>
           .get(conversationId, agentId);
         return row && row.cli_session_id === sessionIdSecond ? true : null;
       },
-      { timeoutMs: 10_000, label: 'post-restart second session_init projection' },
+      {
+        timeoutMs: 10_000,
+        label: 'post-restart second session_init projection',
+        // D4.c C9-2 (Cindy `mWQVcAFMbuzFfd3U`): an intermittent
+        // flake on this waitFor was observed under suite-load on
+        // earlier branch tips; reproduction attempts post-C9-1
+        // across 12 isolated + 5 full-suite runs did not surface
+        // it again, so the root cause was not directly captured.
+        // Leave this `onTimeout` diagnostic in place permanently
+        // so the next occurrence (in CI or local) attaches the
+        // observable state to the thrown error message — DB row,
+        // controller attachment connectionId, fanout state slot
+        // count for this (host, cid, aid) — without requiring a
+        // re-run to gather evidence.
+        onTimeout: () => {
+          const dbRow = harness?.backend.context.db
+            .prepare<
+              [string, string],
+              { cli_session_id: string | null; status: string; pid: number | null }
+            >(
+              `SELECT cli_session_id, status, pid FROM conversation_agents
+                WHERE conversation_id = ? AND agent_id = ?`,
+            )
+            .get(conversationId, agentId);
+          const controllerNow = harness?.backend.context.hostWsController?.();
+          const attachmentNow =
+            controllerNow?.getAttachment(hostIdBefore) ?? null;
+          return {
+            expectedSessionId: sessionIdSecond,
+            dbRow: dbRow ?? null,
+            attachmentNow,
+            activeConnections: controllerNow?.activeConnectionCount() ?? null,
+            connectionIdMatchesPostRestart:
+              attachmentNow?.connectionId === attached2.connectionId,
+          };
+        },
+      },
     );
     // Final assertion: the post-restart backend's
     // conversation_agents row now carries the second session id.

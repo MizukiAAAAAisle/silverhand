@@ -1141,6 +1141,133 @@ daemon errors in the backend log:
   events are tagged `local_host_supervisor.*` in the main
   process log.
 
+### 12.8 D4.c surface — operator notes (added in D4.c G3 closure)
+
+The operator-facing acceptance evidence for D4.c (G3) and a
+test-name index live in [`docs/d4-c-g3-acceptance.md`](./d4-c-g3-acceptance.md).
+This subsection only captures runbook-relevant behavior for
+operators who manage a standalone deployment.
+
+#### 12.8.1 Standalone bring-up order
+
+The required order on a fresh deploy:
+
+1. Start `silverhand-server` (the backend binary). Verify
+   `/readyz` returns 200.
+2. Open the desktop, complete Setup Wizard with `server_url`
+   pointing at the backend.
+3. Desktop signup or login (mints a user-session bearer).
+4. Desktop's main process calls `POST /api/hosts/claim-or-create`
+   with its `installation_id` (the renderer's session bearer is
+   the auth principal). Backend mints a host row + host_token,
+   returns both, and the desktop writes them to
+   `daemon-config.json`.
+5. Local daemon (the D3 supervisor) reads
+   `daemon-config.json` and opens its outbound WS to the
+   backend. The backend's `HostWsServerController` registers a
+   fresh `hostws-*` connection id; the desktop's BackendInfo
+   pill turns green.
+
+Do not invert steps 3 and 4. The claim-or-create route requires
+a user-session bearer; without signup/login first, the desktop
+has no principal to present.
+
+#### 12.8.2 Host revoke
+
+`POST /api/hosts/:id/revoke` is the operator-facing soft-delete:
+
+- The host row's `revoked_at` is set; the row is preserved for
+  audit history.
+- Every `host_credentials` row for the host with
+  `revoked_at IS NULL` is swept (idempotent: a half-failed prior
+  revoke is reconciled).
+- If a live outbound WS is currently attached for that host,
+  the controller closes it with WS code **1008** and reason
+  **`host_revoked`** (D4.c C2). The renderer reacts immediately
+  (no waiting for the next heartbeat / config-poll cycle).
+- Cross-user revoke attempts return 404 (not 403) and do NOT
+  call `disconnectHost` — anti-enumeration boundary.
+- Re-claim after revoke transparently mints a fresh active host
+  row for the same `(user, installation_id)`; the partial-unique
+  index is keyed on active rows only (B.4).
+
+#### 12.8.3 Signup toggle — config is boot-frozen
+
+The `signupEnabled` flag (resolved from `SILVERHAND_DISABLE_SIGNUP`)
+is **read once at backend boot** and frozen on the
+`BackendContext`. Hot-toggle (change config without restart) is
+forbidden by design.
+
+To lock down signup after the operator has created their account:
+
+1. Edit the deployment's env / `EnvironmentFile`:
+   `SILVERHAND_DISABLE_SIGNUP=1`.
+2. Restart the backend service (`systemctl restart silverhand-server`
+   or equivalent). The new boot picks up the value.
+3. Verify: `GET /api/server/info` returns `signup_enabled: false`.
+   `POST /auth/signup` returns 403 with body
+   `{ code: 'signup_disabled' }` (always-mounted route per D4.a
+   Commit 4).
+
+What does **not** happen across the toggle (pinned by C8):
+
+- Existing user-session bearers remain valid. No forced logout.
+- Existing host_token rows remain valid; daemons stay attached.
+  `host_credentials` rows are not consumed, revoked, or rotated
+  on the restart.
+
+The toggle is reversible: setting `SILVERHAND_DISABLE_SIGNUP=0`
+(or removing the env var) and restarting re-opens signup.
+
+#### 12.8.4 `clearSession` — `503` / `409` typed codes (C7)
+
+`POST /api/agents/:id/clear-session` clears the resumable
+`cli_session_id` on a `(conversation, agent)` pair so the next
+`runtime_start` is a fresh spawn rather than a `--resume`. In
+standalone mode the route's typed-error responses:
+
+- **`503 clear_session_timeout`** — backend dispatched
+  `runtime_clear_session` to the daemon and received the daemon's
+  `result.cleared` acknowledgement, but the corresponding
+  `runtime_exit` projection did not land within
+  `CLEAR_SESSION_EXIT_TIMEOUT_MS` (10s). The DB row is left
+  UNCHANGED (no partial commit). **Operator action**: safe to
+  retry; the next attempt either lands `runtime_exit` and
+  commits, or surfaces a stable error (e.g. daemon detached).
+- **`409 clear_session_in_progress`** — a concurrent
+  `clearSession` for the same `(conv, agent)` pair is in
+  flight. **Operator action**: do not retry immediately; let the
+  first call complete (success or `503`) and only then issue the
+  next.
+
+Neither code is in the placement taxonomy
+(`placementErrorStatusMap`); both are route-local typed errors
+because they describe transient lifecycle conditions, not
+placement decisions.
+
+#### 12.8.5 Multi-daemon — sticky host ownership, no auto failover
+
+V1 does **not** auto-migrate or auto-failover an agent between
+daemons. An agent's `host_id` is set at the membership / first-claim
+moment and stays there. If a user has multiple desktops with
+multiple daemons:
+
+- Agents created on desktop A stay pinned to host A; their
+  runtime can only run on the daemon attached to host A.
+- The cross-host perimeter (C5/C6) drops any frame whose
+  `agent.host_id` does not match the connection's hostId, so
+  there is no silent cross-pollination.
+- If host A is offline, agents pinned to host A surface as
+  unavailable (`host_attach_pending`). They do **not** transparently
+  start on host B.
+
+Operator-side recovery from a permanently lost desktop: revoke
+host A, then re-claim against host B with the same
+`installation_id` (Stage B.4 minted-on-claim partial-unique index
+makes this safe). The pinned agents stay where they were unless
+the operator explicitly moves them; M1 has no automated migration
+tool. T1 / M2 may layer one on later.
+
 ---
 
 ## 13. Review log
