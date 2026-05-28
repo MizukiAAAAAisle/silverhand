@@ -14,6 +14,19 @@ const UNAVAILABLE_REASON =
 
 export interface ControlPlaneRuntimeProjection {
   startDeliveryBacked(conversationId: string, agentId: string): Promise<boolean>;
+  /**
+   * D4.b-4: dispatch `runtime_stop` to the daemon over the outbound
+   * WS. The standalone server owns the projection of the resulting
+   * `runtime_exit` event (`RuntimeStatusProjector.runtimeExit`),
+   * which clears pid and flips status while preserving
+   * `cli_session_id` for the next `--resume`.
+   */
+  stop(
+    conversationId: string,
+    agentId: string,
+    mode: 'soft' | 'hard',
+    softDirective?: string,
+  ): Promise<void>;
   deliverMessage(
     conversationId: string,
     agentId: string,
@@ -71,9 +84,14 @@ export class ControlPlaneRuntimeHost implements AgentRuntimeHost {
   async stop(
     conversationId: string,
     agentId: string,
-    _mode: 'soft' | 'hard' = 'hard',
-    _softDirective?: string,
+    mode: 'soft' | 'hard' = 'hard',
+    softDirective?: string,
   ): Promise<void> {
+    const projection = this.projection?.();
+    if (projection) {
+      await projection.stop(conversationId, agentId, mode, softDirective);
+      return;
+    }
     throw this.unavailable('stop', { conversationId, agentId });
   }
 

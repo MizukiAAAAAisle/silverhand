@@ -5,6 +5,7 @@ import {
   type HostClient,
   type OutboundDaemonToServerEventFrame,
   type RuntimeStartParams,
+  type RuntimeStopParams,
 } from '@silverhand/host';
 import { getDriver } from '@silverhand/host/drivers';
 import type { AgentRunState, AgentRunTerminalReason } from '@silverhand/shared';
@@ -207,6 +208,39 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         agentId,
       );
     }
+  }
+
+  /**
+   * D4.b-4: dispatch `runtime_stop` over the outbound WS. The
+   * standalone backend owns the projection of the resulting
+   * `runtime_exit` event (`RuntimeStatusProjector.runtimeExit`).
+   * Per `RuntimeStopParamsSchema`'s `superRefine`, `mode='hard'`
+   * MUST omit `soft_directive` and `mode='soft'` REQUIRES one — we
+   * forward the optional `softDirective` only when the contract
+   * allows it.
+   */
+  async stop(
+    conversationId: string,
+    agentId: string,
+    mode: 'soft' | 'hard',
+    softDirective?: string,
+  ): Promise<void> {
+    const hostId = this.hostIdForAgent(agentId);
+    const transport = this.requireTransport();
+    const params: RuntimeStopParams =
+      mode === 'soft' && softDirective !== undefined
+        ? {
+            conversation_id: conversationId,
+            agent_id: agentId,
+            mode,
+            soft_directive: softDirective,
+          }
+        : {
+            conversation_id: conversationId,
+            agent_id: agentId,
+            mode,
+          };
+    await transport.sendCommand(hostId, 'runtime_stop', params);
   }
 
   async startDeliveryBacked(
