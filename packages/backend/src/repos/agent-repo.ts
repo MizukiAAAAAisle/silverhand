@@ -291,6 +291,76 @@ export class AgentRepo {
   }
 
   /**
+   * D4.d §5 boot reconciler primitive — mark stale
+   * `pending_materialization` rows as `failed` with the canonical
+   * `backend_crash_during_materialize` code. "Stale" means the row
+   * was created strictly more than `olderThanMs` before `now`.
+   *
+   * This is a **mark-failed-only** operation — it does NOT attempt to
+   * compensate by re-driving the materialize intent. The design choice
+   * is intentional: any row that has been pending past the threshold
+   * has, by definition, outlived the HTTP lifecycle that owns the
+   * per-request flip (commandTimeoutMs default 30s, §3.4); the backend
+   * has no in-process context to resume from, the daemon may or may
+   * not have completed its half, and a compensating retry would
+   * either double-materialize (if the daemon completed) or reissue an
+   * intent the operator already abandoned. The user's recovery path
+   * is `?retry=true` on the failed row via the management UI — that's
+   * a fresh attempt with a new wire intent, not a continuation.
+   *
+   * Caller invariants:
+   *   - Runs SYNCHRONOUSLY during backend bootstrap, after migrations
+   *     are applied and BEFORE the HTTP listener binds (§5). See
+   *     `runBootMaterializeReconciler` in
+   *     `packages/backend/src/runtime/materialize-reconciler.ts` for
+   *     the wired call site.
+   *   - `now` and `olderThanMs` are both wall-clock millisecond
+   *     values; the WHERE clause filters by `created_at < now -
+   *     olderThanMs`. `created_at` for materialize-lifecycle rows is
+   *     stamped at L1 reserve (`reserveForMaterialize`).
+   *   - Rows NEWER than the threshold are left in
+   *     `pending_materialization` intact (they might be genuine
+   *     in-flight requests if a sibling backend instance ever exists;
+   *     today CLAUDE.md pins single-process write, but the threshold
+   *     is the right guard if that model ever changes).
+   *
+   * Returns `{ affected: <count>, ids: <agent_id[]> }`. The ID list
+   * is captured via `UPDATE ... RETURNING id`; callers use it for
+   * structured logging so operators can grep for "which rows did the
+   * reconciler touch on this boot".
+   */
+  markStaleMaterializationsFailed(params: {
+    now: number;
+    olderThanMs: number;
+  }): { affected: number; ids: string[] } {
+    const { now, olderThanMs } = params;
+    const cutoff = now - olderThanMs;
+    // SQLite `UPDATE ... RETURNING` returns one row per updated row
+    // (better-sqlite3 surfaces it via `.all()`). The `RETURNING id`
+    // clause lets the boot log enumerate the affected agent ids
+    // without an extra SELECT round-trip.
+    const rows = this.db
+      .prepare<
+        [number, number, number],
+        { id: string }
+      >(
+        `UPDATE agents
+            SET materialization_status      = 'failed',
+                materialization_failed_code = 'backend_crash_during_materialize',
+                materialization_failed_at   = ?,
+                updated_at = ?
+          WHERE materialization_status = 'pending_materialization'
+            AND created_at < ?
+          RETURNING id`,
+      )
+      .all(now, now, cutoff);
+    return {
+      affected: rows.length,
+      ids: rows.map(r => r.id),
+    };
+  }
+
+  /**
    * Partial update. Only keys present in `input` are written. Returns
    * the updated row, or null if the agent does not exist. Caller is
    * responsible for higher-level invariants such as "no runtime change

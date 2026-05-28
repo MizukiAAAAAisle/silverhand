@@ -46,6 +46,7 @@ import { OutboundRuntimeEventFanout } from './runtime/outbound-event-fanout.js';
 import {
   RuntimeHostPlacementResolver,
 } from './runtime/host-placement.js';
+import { runBootMaterializeReconciler } from './runtime/materialize-reconciler.js';
 import { AgentRepo } from './repos/agent-repo.js';
 import { AttachmentRepo } from './repos/attachment-repo.js';
 import { ConversationRepo } from './repos/conversation-repo.js';
@@ -416,6 +417,19 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     agents: new AgentRepo(db),
     runtimeHost: ctx.runtimeHost,
     events: ctx.events,
+    logger,
+  });
+  // D4.d §5 — boot-time materialization reconciler. Marks stale
+  // `pending_materialization` rows as `failed` with
+  // `backend_crash_during_materialize`. SYNCHRONOUS by contract:
+  // must complete before the HTTP listener binds so the first
+  // `GET /api/agents?include_failed=1` (D5) sees a coherent state,
+  // and so list/get callers never observe an orphaned pending row
+  // left over from a prior crash. NOT a compensating executor — see
+  // module header in `runtime/materialize-reconciler.ts` for the
+  // boundary.
+  runBootMaterializeReconciler({
+    agents: new AgentRepo(db),
     logger,
   });
   // Boot recovery (daemon hydrate from `runtime_status` then diff
