@@ -937,7 +937,9 @@ acceptance):
    respawn naturally converges.
 
 If none of the three converges, capture
-`~/.silverhand/desktop/server-profile.json` +
+`~/.silverhand/desktop/server-profile.bin` (the safeStorage-
+encrypted profile blob — do NOT expect to be able to open it
+directly; capture as-is) +
 `~/.silverhand/daemon-config.json` and the desktop logs and
 escalate — this should be a real bug, not normal operation.
 
@@ -1056,9 +1058,12 @@ profile.
 #### 12.7.6 `~/.silverhand/server-config.json` is embedded-only
 
 This artifact is the **legacy embedded backend's** persisted
-config (port, bind address, embedded auth token). It is
-created lazily by the desktop's `loadOrCreateServerConfig()`
-helper on the embedded boot path **only**.
+config (embedded backend URL / port / bind address; legacy
+configs written before C.6 may still contain a retired
+`auth_token` field — current writers no longer emit it, but
+the reader stays tolerant). It is created lazily by the
+desktop's `loadOrCreateServerConfig()` helper on the embedded
+boot path **only**.
 
 Hard contract (Cindy 5d-fixup P1-1, pinned by
 `apps/desktop/src/main/__tests__/execute-backend-startup.test.ts`):
@@ -1078,7 +1083,8 @@ Operator implications:
 
 - **Do not** rely on this file existing or being valid for a
   remote-mode deploy. The remote-mode boot path reads
-  `~/.silverhand/desktop/server-profile.json` (§7.2), not
+  `~/.silverhand/desktop/server-profile.bin` (§7.2; a
+  safeStorage-encrypted blob, not human-readable JSON), not
   this file.
 - Deleting this file is safe on a remote-mode desktop and
   triggers no behavior change. On an embedded-mode desktop
@@ -1099,9 +1105,26 @@ outbound WS.
 If a daemon attach failure is preventing sign-in (e.g. the
 desktop is stuck on "Initializing host…" past the budget),
 the desktop falls into one of the typed local-host states
-(`local_host_unbound` / `local_host_failed`). Capture the
-desktop logs and the daemon logs (latter at the deploy-host
-backend's logs, since the daemon connects out).
+(`local_host_unbound` / `local_host_failed`). To diagnose,
+collect logs from all three sides — the daemon lives on the
+**desktop**, not on the deploy host, so do not look for
+daemon errors in the backend log:
+
+- **Desktop main / renderer** — the setup-wizard / Hosts page
+  state machine and the IPC plumbing. See §12.7.8 for the
+  macOS console + log-file locations.
+- **Desktop-side daemon + supervisor** — the daemon process
+  itself plus the D3 supervisor that respawns it. Lifecycle
+  events appear in the desktop main-process log tagged
+  `local_host_supervisor.*`; the daemon's own stdout/stderr
+  also lands there.
+- **Deploy-host backend** — only the *server-side acceptance*
+  of the outbound WS attach is visible here
+  (`~/.silverhand/logs/backend-<utc>.log` on the deploy host).
+  Use it to confirm whether the attach reached the server at
+  all, or whether the server rejected it (e.g. revoked token,
+  unknown host). Connection-side failures (DNS, TLS, retry
+  backoff) live on the desktop, not here.
 
 #### 12.7.8 Where to find logs
 
