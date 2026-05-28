@@ -24,6 +24,7 @@ import {
   OutboundHeartbeatFrameSchema,
   OutboundDaemonToServerCommandResponseFrameSchema,
   encodeOutboundFrame,
+  type OutboundCommandError,
   type OutboundDaemonToServerCommandResponseFrame,
   type OutboundDaemonToServerEventFrame,
   type OutboundFrame,
@@ -32,7 +33,7 @@ import {
   type RotateTokenParams,
   type RotateTokenResult,
 } from '../outbound-protocol.js';
-import type { EventFrame, ResponseFrame } from '../protocol.js';
+import type { EventFrame } from '../protocol.js';
 import type { DaemonLogger } from './logger.js';
 
 export interface OutboundDaemonClientOptions {
@@ -51,7 +52,28 @@ export interface OutboundDaemonClientOptions {
 
 export type OutboundCommandDispatcher = (
   command: OutboundServerToDaemonCommandFrame,
-) => Promise<ResponseFrame>;
+) => Promise<OutboundDispatcherResponse>;
+
+/**
+ * Dispatcher response shape. Identical to the host-IPC
+ * `ResponseFrame` shape (id + result|error) but with a wider error
+ * code surface: callers may return `OutboundCommandError` codes
+ * (the per-command typed error union — currently just the
+ * `agent_materialize` typed codes in addition to the five
+ * transport-level codes from `ResponseErrorSchema`). Generic
+ * IPC `ResponseFrame` values are still assignable here because
+ * the IPC error union is a subset.
+ *
+ * The wire layer (`toOutboundCommandResponse`) re-validates the
+ * frame against the per-command response schema before sending,
+ * so a dispatcher that returns a typed code on the wrong command
+ * still gets caught at the wire boundary instead of silently
+ * leaking the wider surface to other command kinds (Cindy D1
+ * round-1 P1).
+ */
+export type OutboundDispatcherResponse =
+  | { id: string; result?: unknown }
+  | { id: string; error: OutboundCommandError };
 export type HostConfigWriter = (path: string, config: DaemonHostConfig) => void;
 
 export interface ReconnectBackoffOptions {
@@ -844,7 +866,7 @@ class OutboundWriteBuffer {
 
 async function defaultCommandDispatcher(
   command: OutboundServerToDaemonCommandFrame,
-): Promise<ResponseFrame> {
+): Promise<OutboundDispatcherResponse> {
   return {
     id: command.id,
     error: {
@@ -856,7 +878,7 @@ async function defaultCommandDispatcher(
 
 function toOutboundCommandResponse(
   command: OutboundServerToDaemonCommandFrame,
-  response: ResponseFrame,
+  response: OutboundDispatcherResponse,
 ): {
   frame: OutboundDaemonToServerCommandResponseFrame;
   drift?: { summary: Record<string, unknown>; issues: string[] };
@@ -898,7 +920,7 @@ function toOutboundCommandResponse(
   };
 }
 
-function summarizeResponseFrame(response: ResponseFrame): Record<string, unknown> {
+function summarizeResponseFrame(response: OutboundDispatcherResponse): Record<string, unknown> {
   if ('error' in response) {
     return {
       arm: 'error',

@@ -38,6 +38,12 @@ export function agentRowToDto(row: AgentRow): AgentDto {
     avatar_url: row.avatar_storage_key
       ? `${apiPaths.agentAvatar(row.id)}?v=${row.updated_at}`
       : null,
+    // v33 (D4.d): materialization lifecycle. `idempotency_key` is
+    // intentionally NOT projected — retry uses a route-local
+    // management payload, not the default DTO (Cindy D1 round-2 P2).
+    materialization_status: row.materialization_status,
+    materialization_failed_code: row.materialization_failed_code,
+    materialization_failed_at: row.materialization_failed_at,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };

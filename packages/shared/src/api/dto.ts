@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  AgentMaterializationStatusSchema,
   AttachmentCreatorKindSchema,
   ConversationAgentStatusSchema,
   ConversationKindSchema,
@@ -283,6 +284,30 @@ export const AgentDtoSchema = z.object({
    *  storage wired); PR-2 flips this on once the storage / route
    *  pair lands. */
   avatar_url: z.string().nullable(),
+  /** v33 (D4.d): agent-home materialization lifecycle. Required
+   *  because every v33 row has a non-null status — default-list
+   *  callers see `'active'`; the failed-row management view
+   *  (Q6.a, §7.3) opts in via `?include_failed=1` and reads
+   *  `'failed'` here together with the two diagnostic fields
+   *  below. `'pending_materialization'` is reserved for the
+   *  in-flight window between row reserve and L3a/L3b — readers
+   *  see it only when the materialize wire round-trip is still
+   *  pending. Note: `idempotency_key` is intentionally NOT
+   *  exposed on the default DTO — same-key retry uses a
+   *  route-local management payload (Cindy D1 round-2 P2). */
+  materialization_status: AgentMaterializationStatusSchema,
+  /** v33 (D4.d): populated only when
+   *  `materialization_status='failed'`. Mirrors the §3.4 wire→HTTP
+   *  error-code mapping plus server-side codes. Kept as
+   *  `string | null` (not a narrow enum) so the row column / DTO
+   *  / migration do not need a coordinated schema change when a
+   *  new server-side code is added — the route layer pins the
+   *  exact code set it produces. */
+  materialization_failed_code: z.string().nullable(),
+  /** v33 (D4.d): epoch ms set together with
+   *  `materialization_failed_code`; NULL while the row is in
+   *  `pending_materialization` or `active`. */
+  materialization_failed_at: z.number().nullable(),
   created_at: z.number(),
   updated_at: z.number(),
 });

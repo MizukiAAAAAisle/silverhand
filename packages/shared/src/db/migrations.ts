@@ -2265,6 +2265,50 @@ export const migrations: Migration[] = [
         ON conversation_inboxes(in_flight_owner, delivered_at, failed_at);
     `,
   },
+  {
+    version: 33,
+    name: 'agent_materialization_status',
+    // D4.d (additive, server↔daemon formal semantics; see
+    // docs/remote-backend-d4d-design.md §4.1): tag the `agents` row
+    // with the daemon-side materialization lifecycle so
+    // `POST /api/agents` can keep the row reserved across the wire
+    // round-trip and so failed/in-progress rows are excluded from
+    // default reads.
+    //
+    // - materialization_status:    enum {pending_materialization, active, failed}.
+    //   Existing rows backfill to 'active' — they were written through
+    //   the legacy backend-direct-fs path, so the L1 dir already
+    //   exists. New rows START in 'pending_materialization' and flip
+    //   to 'active' on daemon ack (L3a) or 'failed' on typed error /
+    //   timeout (L3b).
+    // - materialization_failed_code / materialization_failed_at:
+    //   populated only when status='failed'. failed_code mirrors the
+    //   wire AgentMaterializeErrorCodeSchema plus server-side codes
+    //   (materialize_timeout / host_attach_pending /
+    //   dependent_row_insert_failed / backend_crash_during_materialize).
+    // - idempotency_key: client-supplied opaque retry key, 1..64
+    //   chars, [A-Za-z0-9_-], stored verbatim and unique PER CREATOR
+    //   (NOT globally). A globally-unique index would leak the
+    //   existence of another user's row through "your key is taken";
+    //   per-user scoping preserves HTTP idempotency within each
+    //   caller while eliminating that side channel. All lookup paths
+    //   MUST filter by (created_by_user_id, idempotency_key) — never
+    //   by key alone.
+    up: `
+      ALTER TABLE agents ADD COLUMN materialization_status TEXT NOT NULL
+        DEFAULT 'active'
+        CHECK (materialization_status IN (
+          'pending_materialization', 'active', 'failed'
+        ));
+      ALTER TABLE agents ADD COLUMN materialization_failed_code TEXT;
+      ALTER TABLE agents ADD COLUMN materialization_failed_at INTEGER;
+      ALTER TABLE agents ADD COLUMN idempotency_key TEXT;
+
+      CREATE UNIQUE INDEX idx_agents_idempotency_key_per_user
+        ON agents (created_by_user_id, idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

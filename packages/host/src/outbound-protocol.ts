@@ -18,6 +18,7 @@ import {
   AgentRunStateSchema,
   ParsedEventKindSchema,
   ParsedEventSchema,
+  RuntimeKindSchema,
 } from '@silverhand/shared';
 import {
   HelloResultSchema,
@@ -89,51 +90,213 @@ export const RotateTokenResultSchema = z.discriminatedUnion('rotated', [
 ]);
 export type RotateTokenResult = z.infer<typeof RotateTokenResultSchema>;
 
+// ── D4.d: agent_materialize (server↔daemon formal semantics) ──────
+//
+// Unlike the rest of the server↔daemon commands in this catalogue,
+// `agent_materialize` is NOT a control-plane / supervisor message —
+// it IS the formal semantics for creating an agent's L1 home on the
+// daemon-owning host. The route `POST /api/agents` reserves an
+// `agents` row in `materialization_status='pending_materialization'`
+// and then sends this intent over the same outbound WS that carries
+// runtime_* frames; the daemon's handler creates `agent_dir` (which
+// is also the DM workspace path, see design §6.5 / §8) and writes
+// the agent-home bootstrap (system_prompt + MEMORY + notes/ +
+// .materialized sentinel) before acking. Daemon-side idempotency
+// (§4.6) uses the sentinel to distinguish "same agent_id seen
+// before, already materialized" (idempotent ok) from "agent_dir
+// pre-populated by something else" (`agent_dir_collision` error).
+//
+// See docs/remote-backend-d4d-design.md §3.1 / §6 / §8 for the
+// design contract. This schema is additive under the R4 acceptance
+// gate (Cindy I1 / round-2 review): same outbound envelope, no
+// protocol fork.
+
+export const AgentMaterializeParamsSchema = z
+  .object({
+    /**
+     * Server-allocated; base64url 16-char string from
+     * randomBytes(12).toString('base64url')
+     * (packages/backend/src/repos/agent-repo.ts).
+     * Schema-level validation is intentionally loose
+     * (`min(1)`); the route layer is responsible for tighter
+     * format checks. Cindy round-2 P1 #5.
+     */
+    agent_id: z.string().min(1),
+    /**
+     * Server-allocated; follows the existing helper
+     * `agentHomeWorkspaceId(agentId)` → `wsah_<agentId>`.
+     */
+    agent_home_workspace_id: z.string().min(1),
+    name: z.string().min(1).max(64),
+    runtime: RuntimeKindSchema,
+    model: z.string().nullable().optional(),
+    description: z.string().nullable().optional(),
+    /**
+     * Template choice for the agent-home bootstrap (system_prompt,
+     * MEMORY.md, notes/ skeleton). Defaults to 'default' for first
+     * cut; richer choices land with D2.
+     */
+    template_choice: z
+      .enum(['default', 'onboarding', 'minimal'])
+      .default('default'),
+  })
+  .strict();
+export type AgentMaterializeParams = z.infer<typeof AgentMaterializeParamsSchema>;
+
+export const AgentMaterializeResultSchema = z
+  .object({
+    ok: z.literal(true),
+    /**
+     * Absolute path to the materialized agent home / L1 dir,
+     * daemon-side. The server never inspects what the daemon
+     * wrote here — `agent_dir` is opaque from the server's
+     * perspective.
+     */
+    agent_dir: z.string().min(1),
+    /**
+     * MUST equal `agent_dir`. Per `docs/agent-system-prompt-memory.md`
+     * and CLAUDE.md §3, the DM workspace path coincides with L1
+     * (`agent_home` workspace's `workspace_path` IS the agent's L1
+     * dir). The daemon returns the same string for both fields to
+     * make this invariant explicit on the wire — the server uses
+     * `agent_home_workspace_path` verbatim when it INSERTs the
+     * `agent_home` workspace row (see design §6.5).
+     */
+    agent_home_workspace_path: z.string().min(1),
+    /**
+     * Opaque-to-server timestamp used only for audit. The row's
+     * `created_at` remains the server's authoritative time.
+     */
+    materialized_at: z.number().int().positive(),
+  })
+  .strict();
+export type AgentMaterializeResult = z.infer<typeof AgentMaterializeResultSchema>;
+
+/**
+ * Typed error codes returned by the daemon's `agent_materialize`
+ * handler. The HTTP-layer wrapper in `POST /api/agents` adds
+ * server-side codes (materialize_timeout, host_attach_pending,
+ * dependent_row_insert_failed, backend_crash_during_materialize)
+ * that never appear on the wire — they describe failures the
+ * server observes locally. See design §3.4 for the
+ * wire→HTTP mapping table.
+ */
+export const AgentMaterializeErrorCodeSchema = z.enum([
+  'fs_quota_exceeded',
+  'fs_unavailable',
+  /**
+   * `agent_dir_collision` (not `already_exists`): the dir is
+   * unexpectedly populated by foreign content without the
+   * `.materialized` sentinel. Idempotent re-call of an
+   * already-materialized `agent_id` returns `ok: true` and is NOT
+   * an error.
+   */
+  'agent_dir_collision',
+  'unsupported_template',
+  'unsupported_runtime',
+  'internal_error',
+]);
+export type AgentMaterializeErrorCode = z.infer<
+  typeof AgentMaterializeErrorCodeSchema
+>;
+
+/**
+ * Per-command error schema for `agent_materialize` (D4.d D1).
+ *
+ * Daemon-side typed errors travel in the response frame's `error`
+ * slot, just like the five generic transport-level codes from
+ * `ResponseErrorSchema`. The wire union accepts EITHER set so the
+ * daemon handler can return e.g. `internal_error` (generic) OR
+ * `agent_dir_collision` (command-specific). Per-route mapping in
+ * §3.4 translates wire codes to HTTP.
+ *
+ * Scoped per-command (not global) so other commands (runtime_* /
+ * rotate_token) do NOT accidentally accept `agent_dir_collision`
+ * in their error arm — that was the Cindy D1 round-1 P1 failure
+ * mode: a global union widened every command's error surface.
+ */
+export const AgentMaterializeWireErrorSchema = z
+  .object({
+    code: z.union([
+      ResponseErrorSchema.shape.code,
+      AgentMaterializeErrorCodeSchema,
+    ]),
+    message: z.string(),
+  })
+  .strict();
+export type AgentMaterializeWireError = z.infer<
+  typeof AgentMaterializeWireErrorSchema
+>;
+
 /**
  * Source of truth for D2 server-issued commands. The runtime_* entries
  * are the D2.0 request surface; rotate_token is D2.f's transport-local
- * credential refresh command.
+ * credential refresh command. Each entry pins (a) the params shape,
+ * (b) the success-result shape, and (c) the WIRE ERROR shape — the
+ * error arm in the response frame is built from `error` rather than
+ * a single global error schema, so command-specific typed codes
+ * cannot leak across kinds (Cindy D1 round-1 P1).
+ *
+ * Default `error` is `ResponseErrorSchema` (the five generic
+ * transport-level codes). Commands that may legitimately surface
+ * typed daemon-business errors (currently just `agent_materialize`)
+ * override with their own wider schema.
  */
 export const outboundServerCommandSchemas = {
   runtime_start: {
     params: RuntimeStartParamsSchema,
     result: RuntimeStartResultSchema,
+    error: ResponseErrorSchema,
   },
   runtime_stop: {
     params: RuntimeStopParamsSchema,
     result: RuntimeStopResultSchema,
+    error: ResponseErrorSchema,
   },
   runtime_wake: {
     params: RuntimeWakeParamsSchema,
     result: RuntimeWakeResultSchema,
+    error: ResponseErrorSchema,
   },
   runtime_status: {
     params: RuntimeStatusParamsSchema,
     result: RuntimeStatusResultSchema,
+    error: ResponseErrorSchema,
   },
   runtime_clear_session: {
     params: RuntimeClearSessionParamsSchema,
     result: RuntimeClearSessionResultSchema,
+    error: ResponseErrorSchema,
   },
   runtime_stop_all: {
     params: RuntimeStopAllParamsSchema,
     result: RuntimeStopAllResultSchema,
+    error: ResponseErrorSchema,
   },
   runtime_close_activity_log: {
     params: RuntimeCloseActivityLogParamsSchema,
     result: RuntimeCloseActivityLogResultSchema,
+    error: ResponseErrorSchema,
   },
   runtime_output_pause: {
     params: RuntimeOutputPauseParamsSchema,
     result: RuntimeOutputPauseResultSchema,
+    error: ResponseErrorSchema,
   },
   runtime_output_resume: {
     params: RuntimeOutputResumeParamsSchema,
     result: RuntimeOutputResumeResultSchema,
+    error: ResponseErrorSchema,
   },
   rotate_token: {
     params: RotateTokenParamsSchema,
     result: RotateTokenResultSchema,
+    error: ResponseErrorSchema,
+  },
+  agent_materialize: {
+    params: AgentMaterializeParamsSchema,
+    result: AgentMaterializeResultSchema,
+    error: AgentMaterializeWireErrorSchema,
   },
 } as const;
 
@@ -142,6 +305,8 @@ export type OutboundServerCommandParams<K extends OutboundServerCommandKind> =
   z.infer<(typeof outboundServerCommandSchemas)[K]['params']>;
 export type OutboundServerCommandResult<K extends OutboundServerCommandKind> =
   z.infer<(typeof outboundServerCommandSchemas)[K]['result']>;
+export type OutboundServerCommandError<K extends OutboundServerCommandKind> =
+  z.infer<(typeof outboundServerCommandSchemas)[K]['error']>;
 
 export const OUTBOUND_SERVER_COMMAND_KINDS = Object.keys(
   outboundServerCommandSchemas,
@@ -173,8 +338,19 @@ export type OutboundServerToDaemonCommandFrame = z.infer<
 
 // ── daemon → server command responses ──────────────────────────────
 
-export const OutboundCommandErrorSchema = ResponseErrorSchema;
-export type OutboundCommandError = z.infer<typeof OutboundCommandErrorSchema>;
+/**
+ * Aggregate wire error type for any outbound command response.
+ *
+ * Kept for callers that need a type covering "an error in any
+ * response frame, regardless of kind" (e.g., the supervisor's
+ * fallback / drift path). It is the union of every per-command
+ * error schema — NOT a single schema used for all command arms.
+ * The actual response frames use `outboundServerCommandSchemas[kind].error`
+ * so command-specific codes are scoped per kind.
+ */
+export type OutboundCommandError = {
+  [K in OutboundServerCommandKind]: OutboundServerCommandError<K>;
+}[OutboundServerCommandKind];
 
 const commandResponseFrameOptions = OUTBOUND_SERVER_COMMAND_KINDS.flatMap(kind => [
   z
@@ -192,7 +368,7 @@ const commandResponseFrameOptions = OUTBOUND_SERVER_COMMAND_KINDS.flatMap(kind =
       type: z.literal('command_response'),
       id: FrameIdSchema,
       kind: z.literal(kind),
-      error: OutboundCommandErrorSchema,
+      error: outboundServerCommandSchemas[kind].error,
     })
     .strict(),
 ]) as unknown as [z.ZodTypeAny, z.ZodTypeAny, ...z.ZodTypeAny[]];

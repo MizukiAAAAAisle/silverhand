@@ -903,6 +903,146 @@ describe('database migrations', () => {
     }
   });
 
+  it('v33 adds agent materialization columns and creator-scoped idempotency_key index', () => {
+    // D4.d D1 (additive schema; design §4.1). Pin:
+    //   (a) the four new columns exist on `agents`;
+    //   (b) the CHECK on materialization_status accepts only the
+    //       three documented values;
+    //   (c) the partial unique index is keyed
+    //       (created_by_user_id, idempotency_key) — NOT keyed
+    //       (idempotency_key) alone, so two distinct users colliding
+    //       on the same opaque key can both succeed (Cindy round-2
+    //       P1 #5: globally-unique index would leak existence
+    //       across users);
+    //   (d) idempotency_key=NULL rows are NOT subject to the
+    //       partial index (so legacy/active rows can coexist with
+    //       NULL keys without unique-constraint friction).
+    const db = openDbAt(32);
+    try {
+      runMigrations(db);
+      expect(
+        db.prepare(`SELECT version FROM _migrations WHERE version = 33`).get(),
+      ).toBeDefined();
+
+      const cols = (db.pragma('table_info(agents)') as Array<{
+        name: string;
+        notnull: number;
+        dflt_value: string | null;
+      }>);
+      const colNames = cols.map(c => c.name);
+      expect(colNames).toEqual(
+        expect.arrayContaining([
+          'materialization_status',
+          'materialization_failed_code',
+          'materialization_failed_at',
+          'idempotency_key',
+        ]),
+      );
+
+      const statusCol = cols.find(c => c.name === 'materialization_status')!;
+      // Backfill default is 'active' (existing rows pre-D4.d went
+      // through the legacy backend-direct-fs path; their L1 dirs
+      // already exist).
+      expect(statusCol.notnull).toBe(1);
+      expect(statusCol.dflt_value).toBe("'active'");
+
+      const indexes = (db.pragma('index_list(agents)') as Array<{
+        name: string;
+        unique: number;
+      }>);
+      const idemIndex = indexes.find(i => i.name === 'idx_agents_idempotency_key_per_user');
+      expect(idemIndex).toBeDefined();
+      expect(idemIndex!.unique).toBe(1);
+
+      // Pin keyed columns explicitly: (created_by_user_id, idempotency_key).
+      const idxCols = (db.pragma(
+        'index_info(idx_agents_idempotency_key_per_user)',
+      ) as Array<{ seqno: number; name: string }>).map(c => c.name);
+      expect(idxCols).toEqual(['created_by_user_id', 'idempotency_key']);
+
+      // Seed a viewer + host so we can exercise the new columns.
+      db.exec(`
+        INSERT INTO hosts (id, name, kind, created_at)
+        VALUES ('h1', 'local', 'local', 1);
+        INSERT INTO users
+          (id, name, display_name, created_at, updated_at)
+        VALUES
+          ('u1', 'alice_u', 'Alice U', 1, 1),
+          ('u2', 'bob_u',   'Bob U',   2, 2);
+      `);
+
+      // CHECK constraint: only the three documented status values
+      // are accepted.
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO agents
+               (id, name, runtime, host_id, created_at, updated_at,
+                created_by_user_id, materialization_status)
+             VALUES ('a_bad', 'bad', 'claude', 'h1', 1, 1, 'u1', 'archived')`,
+          )
+          .run(),
+      ).toThrow(/CHECK/);
+
+      // NULL idempotency_key is NOT subject to the partial unique
+      // index; two rows with NULL keys (different ids) coexist.
+      db.prepare(
+        `INSERT INTO agents
+           (id, name, runtime, host_id, created_at, updated_at,
+            created_by_user_id)
+         VALUES ('a_n1', 'n1', 'claude', 'h1', 1, 1, 'u1')`,
+      ).run();
+      db.prepare(
+        `INSERT INTO agents
+           (id, name, runtime, host_id, created_at, updated_at,
+            created_by_user_id)
+         VALUES ('a_n2', 'n2', 'claude', 'h1', 1, 1, 'u1')`,
+      ).run();
+
+      // Same (user, key) twice rejected. Different users with the
+      // same key both succeed (this is the whole point of the
+      // creator-scoped index).
+      db.prepare(
+        `INSERT INTO agents
+           (id, name, runtime, host_id, created_at, updated_at,
+            created_by_user_id, idempotency_key)
+         VALUES ('a1', 'a1', 'claude', 'h1', 1, 1, 'u1', 'k-shared')`,
+      ).run();
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO agents
+               (id, name, runtime, host_id, created_at, updated_at,
+                created_by_user_id, idempotency_key)
+             VALUES ('a1b', 'a1b', 'claude', 'h1', 1, 1, 'u1', 'k-shared')`,
+          )
+          .run(),
+      ).toThrow(/UNIQUE/);
+
+      db.prepare(
+        `INSERT INTO agents
+           (id, name, runtime, host_id, created_at, updated_at,
+            created_by_user_id, idempotency_key)
+         VALUES ('a2', 'a2', 'claude', 'h1', 1, 1, 'u2', 'k-shared')`,
+      ).run();
+
+      const sharedRows = db
+        .prepare(
+          `SELECT id, created_by_user_id
+             FROM agents
+             WHERE idempotency_key = 'k-shared'
+             ORDER BY id`,
+        )
+        .all() as Array<{ id: string; created_by_user_id: string }>;
+      expect(sharedRows).toEqual([
+        { id: 'a1', created_by_user_id: 'u1' },
+        { id: 'a2', created_by_user_id: 'u2' },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
   describe('v21 users registry (Deferred Adoption)', () => {
     /**
      * Deferred Adoption contract: `users` is empty after migration and
