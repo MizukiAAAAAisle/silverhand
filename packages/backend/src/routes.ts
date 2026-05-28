@@ -2479,17 +2479,32 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
-    // D4.b P1-1: standalone send-to-agent-backed is GOOD when the
-    // workspace's daemon-host is attached over outbound WS — the
-    // downstream `OutboundRuntimeEventFanout.deliverMessage` /
-    // `startDeliveryBacked` paths produce typed
-    // `host_attach_pending` (503) via `connectedConnectionId` →
-    // `HostWsCommandTransportError('transport_no_connection')` →
-    // `mapTransportErrorToPlacement` when no daemon is attached.
-    // The blanket `standaloneMode(ctx)` fail-closed guard that
-    // lived here pre-D4.b was the D4.a placeholder; lifting it is
-    // the runtime-trigger half of Cindy P1-1 (see Stage D4.b PR
-    // for the typed-fail negative coverage).
+    // D4.b P1-1 (Cindy round-3 cleanup): lift `standaloneMode(ctx)`
+    // fail-closed guard. The send-message route is **best-effort
+    // delivery** — `ConversationMessageService.sendMessage` always
+    // persists the message and returns 201 to the user, and the
+    // per-agent `runtimeHost.deliverMessage(...)` fan-out is
+    // wrapped in a top-level catch so a transient daemon-down
+    // state does NOT bubble up as an HTTP error. The message stays
+    // in `conversation_inboxes` as pending; the daemon's next
+    // reattach drives the post-hydrate auto-drain (see
+    // `OutboundRuntimeEventFanout.onHydrateComplete`) and the
+    // inbox row's `delivered_at` flips then. So:
+    //
+    //   - No daemon attached → 201 success; message pending;
+    //     auto-drain handles delivery on next reattach. The typed
+    //     `HostWsCommandTransportError('transport_no_connection')`
+    //     fires inside `deliverMessage` but is logged + swallowed
+    //     by `sendMessage`'s `try/catch`. The HTTP response does
+    //     NOT surface `host_attach_pending` here.
+    //   - Daemon attached, runtime errors → same: 201 + logged.
+    //
+    // The typed `host_attach_pending` (503) surface lives on the
+    // explicit lifecycle routes (`/start` / `/stop` /
+    // `/clear-session` deferred), where the user is explicitly
+    // asking the runtime to do something synchronously. That's
+    // where the renderer needs the typed branch; for "send a
+    // message" the persistent inbox IS the recovery mechanism.
     try {
       const result = await ctx.conversationMessageService.sendMessage({
         conversationId: channel.id,
