@@ -444,6 +444,91 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
+  // ── D5.a-3 boundary pins (Cindy `Ixbm39eKMSQpZ-LW`) ──
+  //
+  // After D5.a unified embedded + standalone onto this single fanout +
+  // OutboundFrameAdapter there is exactly ONE runtime/materialize code
+  // path. These pins therefore lock the cross-mode contract: the only
+  // permitted divergence is the transport instance behind
+  // `transport()` — the dispatch decisions below are mode-agnostic.
+
+  // Pin 1 — `start` is delivery-backed. An EMPTY pending inbox dispatches
+  // NOTHING (no `runtime_start`) and returns false. The pending→
+  // runtime_start arm is covered by 'uses startup_delivery when no
+  // runtime exists …' above. Pre-D5.a the embedded path could spawn on
+  // an empty inbox; both modes now agree on "no pending ⇒ no dispatch".
+  it('startDeliveryBacked with an empty pending inbox dispatches nothing (delivery-backed; identical embedded/standalone)', async () => {
+    const fix = makeFixture({ runtime: 'codex' });
+    try {
+      await expect(
+        fix.fanout.startDeliveryBacked(fix.channelId, fix.agentId),
+      ).resolves.toBe(false);
+      expect(fix.transport.calls).toEqual([]);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  // P1-2 — the dispatched `runtime_start` carries the resolved server URL,
+  // never a placeholder. The fanout reads `serverUrl()` lazily at dispatch
+  // time; production index.ts wires `() => ctx.serverConfig.url` and only
+  // connects the embedded adapter AFTER the port is bound, so the first
+  // `runtime_start` already ships the real URL.
+  it('runtime_start options.server_url is the resolved serverUrl(), not a placeholder (P1-2)', async () => {
+    const fix = makeFixture({ runtime: 'codex' });
+    try {
+      enqueueMessage(fix, 'start me');
+      await expect(
+        fix.fanout.startDeliveryBacked(fix.channelId, fix.agentId),
+      ).resolves.toBe(true);
+      const start = fix.transport.calls.find(c => c.kind === 'runtime_start');
+      expect(start).toBeDefined();
+      expect(
+        (
+          start!.params as {
+            options: { env_policy: { silverhand: { server_url: string } } };
+          }
+        ).options.env_policy.silverhand.server_url,
+      ).toBe('http://127.0.0.1:1');
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  // Pin 3 — bulk shutdown dispatches the EXISTING outbound commands to
+  // every connected host (never a silent no-op, which would orphan daemon
+  // children). `connectedHostIds()` is the fan-out set; the fake reports
+  // one host ('local').
+  it('stopAll dispatches runtime_stop_all to every connected host', async () => {
+    const fix = makeFixture();
+    try {
+      await fix.fanout.stopAll();
+      const stopAlls = fix.transport.calls.filter(
+        c => c.kind === 'runtime_stop_all',
+      );
+      expect(stopAlls).toHaveLength(1);
+      expect(stopAlls[0]!.hostId).toBe('local');
+      expect(stopAlls[0]!.params).toEqual({});
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('closeActivityLog dispatches runtime_close_activity_log to every connected host', async () => {
+    const fix = makeFixture();
+    try {
+      await fix.fanout.closeActivityLog();
+      const closes = fix.transport.calls.filter(
+        c => c.kind === 'runtime_close_activity_log',
+      );
+      expect(closes).toHaveLength(1);
+      expect(closes[0]!.hostId).toBe('local');
+      expect(closes[0]!.params).toEqual({});
+    } finally {
+      fix.cleanup();
+    }
+  });
+
   // ── P2 (D4.b post-review) — soft stop default directive ──
   //
   // Pins the `RuntimeStopParamsSchema.superRefine` contract that

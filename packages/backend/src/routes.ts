@@ -74,6 +74,7 @@ import { AttachmentRepo } from './repos/attachment-repo.js';
 import { HostRepo } from './repos/host-repo.js';
 import { HostCredentialIssueError, HostTokenService } from './auth/host-token.js';
 import { HostWsCommandTransportError, HostWsCommandResponseError, type HostWsServerController } from './ws/host-ws-server.js';
+import type { OutboundFrameAdapter } from './runtime/outbound-frame-adapter.js';
 import {
   HostTokenRotationCoordinator,
   HostTokenRotationError,
@@ -3441,7 +3442,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
    */
   async function d5RunMaterializeFromReserved(deps: {
     reservedRow: AgentRow;
-    controller: HostWsServerController;
+    controller: OutboundFrameAdapter;
     connectionId: string;
     creatorUserId: string;
   }): Promise<
@@ -3784,7 +3785,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
           // bounce failed → pending → failed in vain, and any
           // observer between the two flips would see a misleading
           // `pending_materialization` status).
-          const controller = ctx.hostWsController?.();
+          // D5.a-3 P1-3 — formal dispatch via the deployment-neutral
+          // `outboundFrameAdapter` (not WS-only `hostWsController`).
+          const controller = ctx.outboundFrameAdapter?.();
           const connectionId =
             controller?.connectionIdForHost(existingRow.host_id) ?? null;
           if (!controller || !connectionId) {
@@ -3928,7 +3931,12 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     // when daemon offline"). The captured `connectionId` is then
     // passed to `sendCommand` as `expectedConnectionId` to lock the
     // check → dispatch window against a reattach race.
-    const controller = ctx.hostWsController?.();
+    //
+    // D5.a-3 P1-3 — formal `agent_materialize` dispatch goes through the
+    // deployment-neutral `outboundFrameAdapter`, not `hostWsController`
+    // (which is WS-only and null in embedded). Embedded resolves to the
+    // local-Unix adapter; standalone to the WSS-backed adapter.
+    const controller = ctx.outboundFrameAdapter?.();
     const connectionId = controller?.connectionIdForHost(resolvedHostId) ?? null;
     if (!controller || !connectionId) {
       // Daemon not currently attached for this host. Fail-fast with

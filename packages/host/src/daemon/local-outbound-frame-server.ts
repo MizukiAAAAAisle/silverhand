@@ -50,6 +50,7 @@ import {
   type OutboundServerToDaemonCommandFrame,
 } from '../outbound-protocol.js';
 import { MAX_FRAME_BYTES, splitNdjson, type EventFrame } from '../protocol.js';
+import type { OutboundDaemonToServerEventFrame } from '../outbound-protocol.js';
 import type { DaemonLogger } from './logger.js';
 import {
   toOutboundCommandResponse,
@@ -84,6 +85,21 @@ export interface LocalOutboundFrameServerOptions {
   dispatchCommand: OutboundCommandDispatcher;
   logger: DaemonLogger;
   /**
+   * D5.a-3 P1-1 — connection-scoped handshake. When set, the server
+   * writes ONE `ready` event to each NEW connection immediately on
+   * accept, mapped through {@link toOutboundEventFrame} (which strips
+   * the daemon-local `socket_path` and stamps the outbound protocol
+   * version). This mirrors the standalone WSS client, which sends
+   * `readyEvent()` on `ws.open` — the embedded backend's adapter
+   * needs the same `ready` to latch the daemon key and fire its
+   * fanout hydrate. Unlike {@link broadcast}, the handshake targets
+   * ONLY the accepting socket (a late joiner must not replay another
+   * connection's handshake), and `ready` is non-droppable: if it
+   * overflows the fresh buffer the connection is torn down rather
+   * than left un-hydrated.
+   */
+  readyEvent?: () => Extract<EventFrame, { event: 'ready' }>;
+  /**
    * Per-connection bounded write-buffer caps. Defaults to the same
    * 1024-frame / 4 MiB policy the standalone WSS path uses
    * ({@link DEFAULT_OUTBOUND_WRITE_BUFFER}); tests trim it to force the
@@ -96,6 +112,7 @@ export class LocalOutboundFrameServer {
   private readonly socketPath: string;
   private readonly dispatchCommand: OutboundCommandDispatcher;
   private readonly logger: DaemonLogger;
+  private readonly readyEvent?: () => Extract<EventFrame, { event: 'ready' }>;
   private readonly server: Server;
   private readonly liveSockets = new Set<Socket>();
   /**
@@ -111,6 +128,7 @@ export class LocalOutboundFrameServer {
     this.socketPath = opts.socketPath;
     this.dispatchCommand = opts.dispatchCommand;
     this.logger = opts.logger;
+    this.readyEvent = opts.readyEvent;
     this.writeBufferOptions = {
       ...DEFAULT_OUTBOUND_WRITE_BUFFER,
       ...(opts.writeBuffer ?? {}),
@@ -201,30 +219,46 @@ export class LocalOutboundFrameServer {
     const metadata = eventMetadata(event);
     for (const socket of this.liveSockets) {
       if (socket.destroyed) continue;
-      const buffer = this.writeBuffers.get(socket);
-      if (!buffer) continue;
-      const result = buffer.send({
-        writer: unixSocketFrameWriter(socket),
-        frame,
-        metadata,
-        logger: this.logger,
-      });
-      if (result === 'overflow') {
-        this.logger.warn(
-          {
-            kind: 'local_outbound',
-            action: 'buffer_overflow_close',
-            event_kind: metadata.kind,
-            conversation_id: metadata.conversation_id,
-            agent_id: metadata.agent_id,
-            ts: metadata.ts,
-            pending_frames: buffer.pendingFrames,
-            pending_bytes: buffer.pendingBytes,
-          },
-          'local outbound buffer overflow on non-droppable event; closing connection',
-        );
-        socket.destroy();
-      }
+      this.sendEventToSocket(socket, frame, metadata);
+    }
+  }
+
+  /**
+   * Write one already-mapped outbound event frame to a single socket
+   * through its bounded {@link OutboundWriteBuffer}. Shared by
+   * {@link broadcast} (fan-out to every live connection) and the
+   * connection-scoped `ready` handshake. On a non-droppable overflow
+   * the socket is destroyed rather than letting the daemon grow an
+   * unbounded write queue against a slow/stuck backend (P1-2 parity).
+   */
+  private sendEventToSocket(
+    socket: Socket,
+    frame: OutboundDaemonToServerEventFrame,
+    metadata: ReturnType<typeof eventMetadata>,
+  ): void {
+    const buffer = this.writeBuffers.get(socket);
+    if (!buffer) return;
+    const result = buffer.send({
+      writer: unixSocketFrameWriter(socket),
+      frame,
+      metadata,
+      logger: this.logger,
+    });
+    if (result === 'overflow') {
+      this.logger.warn(
+        {
+          kind: 'local_outbound',
+          action: 'buffer_overflow_close',
+          event_kind: metadata.kind,
+          conversation_id: metadata.conversation_id,
+          agent_id: metadata.agent_id,
+          ts: metadata.ts,
+          pending_frames: buffer.pendingFrames,
+          pending_bytes: buffer.pendingBytes,
+        },
+        'local outbound buffer overflow on non-droppable event; closing connection',
+      );
+      socket.destroy();
     }
   }
 
@@ -234,6 +268,20 @@ export class LocalOutboundFrameServer {
       socket,
       new OutboundWriteBuffer(this.writeBufferOptions, 'local_outbound'),
     );
+    // D5.a-3 P1-1 — connection-scoped handshake. Emit ONE `ready`
+    // to just-accepted socket (never a broadcast) so the embedded
+    // backend's adapter latches the daemon key and triggers its
+    // fanout hydrate, exactly as the standalone WSS client does on
+    // `ws.open`. `ready` is non-droppable: an overflow here tears the
+    // fresh connection down rather than leaving it un-hydrated.
+    if (this.readyEvent) {
+      const ready = this.readyEvent();
+      this.sendEventToSocket(
+        socket,
+        toOutboundEventFrame(ready),
+        eventMetadata(ready),
+      );
+    }
     let buffer = '';
     socket.setEncoding('utf8');
     socket.on('data', chunk => {

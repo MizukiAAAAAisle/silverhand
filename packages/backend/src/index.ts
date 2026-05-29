@@ -41,8 +41,13 @@ import {
   type HostWsEventSink,
 } from './ws/host-ws-server.js';
 import type { AgentRuntimeHost } from './runtime/agent-runtime-host.js';
-import { ControlPlaneRuntimeHost } from './runtime/control-plane-runtime-host.js';
+import { OutboundAgentRuntimeHost } from './runtime/outbound-agent-runtime-host.js';
 import { OutboundRuntimeEventFanout } from './runtime/outbound-event-fanout.js';
+import {
+  StandaloneOutboundFrameAdapter,
+  type OutboundFrameAdapter,
+} from './runtime/outbound-frame-adapter.js';
+import { EmbeddedUnixOutboundFrameAdapter } from './runtime/embedded-unix-outbound-frame-adapter.js';
 import {
   RuntimeHostPlacementResolver,
 } from './runtime/host-placement.js';
@@ -70,7 +75,7 @@ import {
   type BindAddressScope,
   type ServerConfig,
 } from '@silverhand/shared';
-import type { HostClient } from '@silverhand/host';
+import { deriveLocalOutboundFrameSocketPath } from '@silverhand/host';
 import type { Server as HttpServer } from 'node:http';
 import { createLogLevelControl, type LogLevelControl } from './logger.js';
 import type { AuthRuntimeConfig } from './auth/config.js';
@@ -126,19 +131,24 @@ export interface EmbeddedBackendOptions extends BaseBackendOptions {
   mode: 'embedded';
   silverhandCliLauncher: SilverhandCliLauncher;
   /**
-   * Connected `silverhand-daemon` client. **Required.** Backend
-   * routes every spawn / wake / clearSession / inbox delivery /
-   * run-state read through this client; without it the boot throws.
-   * Legacy in-process spawn was removed in #task:512 cleanup
-   * Commit B and the env switch in Commit C — there is no embedded
-   * runtime fallback.
+   * Path to the daemon's local outbound frame socket
+   * (`daemon-outbound.sock`). The backend dials this socket and speaks
+   * the SAME outbound frame envelope the standalone WSS path uses (D5.a).
+   * Optional — defaults to {@link deriveLocalOutboundFrameSocketPath}
+   * (`~/.silverhand/run/daemon-outbound.sock`). The desktop main process
+   * spawns the daemon with the matching `localOutboundSocketPath`.
+   *
+   * The embedded backend no longer holds a `HostClient`: the local
+   * daemon RPC was a second expression of the same server↔daemon
+   * semantics (the R4 drift D5.a closed). Host-control IPC (spawn the
+   * daemon, revoke, etc.) stays in the desktop main process, not here.
    */
-  hostClient: HostClient;
+  outboundSocketPath?: string;
 }
 
 export interface StandaloneBackendOptions extends BaseBackendOptions {
   mode: 'standalone';
-  hostClient?: never;
+  outboundSocketPath?: never;
 }
 
 export type CreateBackendOptions = EmbeddedBackendOptions | StandaloneBackendOptions;
@@ -278,6 +288,24 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   });
   let outboundFanout: OutboundRuntimeEventFanout | null = null;
   let hostWs: HostWsServerController | null = null;
+  // D5.a-3 — the deployment-specific outbound transport the fanout
+  // dispatches through (standalone = WSS-backed adapter wrapping
+  // `hostWs`; embedded = local Unix-socket adapter). Installed once the
+  // HTTP server binds; the fanout reads it via `() => outboundAdapter`.
+  let outboundAdapter: OutboundFrameAdapter | null = null;
+  // Embedded local-Unix adapter kept here so the server-close path can
+  // close the connection it owns (the standalone adapter only *views* a
+  // controller owned by the bootstrap, so it has nothing to close).
+  let embeddedOutboundAdapter: EmbeddedUnixOutboundFrameAdapter | null = null;
+  // D5.a-3 P1-1 (Cindy `KuHXrKuCv9nPU28M`) — the embedded adapter is
+  // CONSTRUCTED synchronously after `serve()` returns (so `outboundAdapter`
+  // is non-null before any route handler can run), but its `connect()` is
+  // deferred behind this thunk and fired from inside the listen callback,
+  // AFTER `ctx.serverConfig.url` is swapped from the input placeholder to
+  // the real bound URL. Otherwise the connect — and the `runtime_start`
+  // it eventually carries — could race ahead of URL finalization and ship
+  // a placeholder `server_url`. Stays null for standalone (daemon dials in).
+  let startEmbeddedOutboundConnect: (() => void) | null = null;
 
   const ctx: BackendContext = {
     db,
@@ -335,32 +363,28 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
       // those are C2/C3 work to lift properly.
       placement,
     hostWsController: () => hostWs,
+    // D5.a-3 P1-3 — the formal server↔daemon dispatch port. Routes that
+    // send commands (POST /api/agents materialize, retry) go through this
+    // accessor so they never branch on deployment mode; `hostWsController`
+    // stays for WS-only lifecycle (revoke/disconnect) in standalone.
+    outboundFrameAdapter: () => outboundAdapter,
     // Filled immediately below when the daemon runtime host is constructed.
     runtimeHost: undefined as unknown as AgentRuntimeHost,
   };
   // ── Runtime host wiring ─────────────────────────────────────────
-  if (opts.mode === 'embedded') {
-    const { createDaemonRuntimeHost } = await import('./runtime/daemon-runtime-wiring.js');
-    ctx.runtimeHost = createDaemonRuntimeHost({
-      ctx,
-      db,
-      hostClient: opts.hostClient,
-      logger,
-      silverhandDir: opts.silverhandDir,
-      workspacesRoot,
-      silverhandCliLauncher,
-    });
-    logger.info(
-      { runtime: 'daemon' },
-      'agent runtime: silverhand-daemon',
-    );
-  } else {
-    ctx.runtimeHost = new ControlPlaneRuntimeHost(logger, () => outboundFanout);
-    logger.warn(
-      { runtime: 'control-plane-only' },
-      'agent runtime: disabled in standalone server mode',
-    );
-  }
+  // D5.a-3 — embedded and standalone are ONE runtime host over the
+  // outbound frame transport. The host delegates to the
+  // `OutboundRuntimeEventFanout` projection; the deployment-specific
+  // `OutboundFrameAdapter` (standalone = WSS-backed; embedded = local
+  // Unix socket) is installed below once the HTTP server binds. The
+  // `() => outboundFanout` thunk defers the projection lookup so this
+  // assignment can precede the fanout construction (which needs the
+  // bound server / finalized `serverConfig.url`).
+  ctx.runtimeHost = new OutboundAgentRuntimeHost(logger, () => outboundFanout);
+  logger.info(
+    { runtime: 'outbound', mode: opts.mode },
+    'agent runtime: outbound frame transport',
+  );
 
   ctx.channelService = new ChannelService({
     db,
@@ -439,28 +463,6 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   ctx.scheduleService.start();
   const stopEventLoopLagProbe = startEventLoopLagProbe(logger);
 
-  if (opts.mode === 'embedded') {
-    // Daemon liveness ping. The daemon shim's first real call will
-    // surface a disconnect more concretely than the ping; this is a
-    // best-effort smoke confirming the IPC channel is alive at boot.
-    try {
-      const ping = await opts.hostClient.ping();
-      logger.info(
-        {
-          daemon_pid: ping.daemon_pid,
-          daemon_version: ping.daemon_version,
-          started_at: ping.started_at,
-        },
-        'silverhand-daemon ping ok',
-      );
-    } catch (err) {
-      logger.warn(
-        { err: err instanceof Error ? err.message : String(err) },
-        'silverhand-daemon ping failed at boot',
-      );
-    }
-  }
-
   ctx.embeddedBootstrap = await prepareEmbeddedBootstrap({
     silverhandDir: opts.silverhandDir,
     serverConfig: ctx.serverConfig,
@@ -494,6 +496,10 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
         ctx.serverConfig = { ...opts.serverConfig, url };
         ctx.readiness.listenReady = true;
         logger.info({ url, listenHostname, port }, 'backend listening');
+        // P1-1 — now that `ctx.serverConfig.url` is the real bound URL,
+        // it is safe to dial the embedded daemon (the first `runtime_start`
+        // will read this finalized URL). No-op for standalone.
+        startEmbeddedOutboundConnect?.();
         resolve({
           url,
           port,
@@ -503,20 +509,33 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
             // Stop the scheduler before any agent shutdown so we don't
             // race a fire mid-teardown (would write to a dying CM).
             ctx.scheduleService.stop();
-            // Phase 1: stop all agents (must finish before activity-log flush
-            // so terminal events are written before the stream closes).
+            // Phase 1: runtime shutdown — stop all agents, then flush +
+            // close the activity log, WHILE the outbound transport is
+            // still connected. `closeActivityLog()` dispatches
+            // `runtime_close_activity_log` to every connected host, so it
+            // MUST run before the WS/adapter/fanout teardown below
+            // (P1-2, Cindy `KuHXrKuCv9nPU28M`) — otherwise the dispatch
+            // is a silent no-op. stopAll runs first so terminal events
+            // are written before the activity stream closes. The activity
+            // writer's own `close()` is idempotent (`closed` guard), so
+            // the later `outboundFanout.close()` re-closing it is safe.
             await ctx.runtimeHost.stopAll().catch(() => undefined);
+            await ctx.runtimeHost.closeActivityLog().catch(() => undefined);
 
             // Phase 2: close WS lifecycle before the HTTP drain removes sockets.
             await Promise.all([
               eventWs?.close(),
               hostWs?.close(),
             ]);
+            // Close the embedded local-Unix adapter's socket (the
+            // standalone adapter only views the bootstrap-owned hostWs,
+            // so its close() is a no-op).
+            await embeddedOutboundAdapter?.close().catch(() => undefined);
             await outboundFanout?.close();
             await cleanupEmbeddedBootstrap(ctx.embeddedBootstrap, logger);
 
-            // Phase 3: flush activity log AND drain the HTTP server
-            // concurrently — they are independent of each other.
+            // Phase 3: drain the HTTP server. (Activity-log flush moved to
+            // phase 1 so it dispatches while the transport is still up.)
             //
             // Order matters for the server drain:
             //   1. `server.close()` first — stops accepting new connections
@@ -527,10 +546,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
             // this method (we always use HTTP/1.1, but the type is a union).
             const serverDrained = new Promise<void>(res => server.close(() => res()));
             if ('closeAllConnections' in server) server.closeAllConnections();
-            await Promise.allSettled([
-              ctx.runtimeHost.closeActivityLog(),
-              serverDrained,
-            ]);
+            await serverDrained;
 
             // Phase 4: close the DB. At this point all connections —
             // including in-flight HTTP requests — have been forcibly
@@ -543,21 +559,21 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
       },
     );
     eventWs = installEventWebSocketServer(server as HttpServer, ctx);
-    if (opts.mode === 'standalone') {
+    {
       const settings = new SettingsRepo(db);
+      // D5.a-3 — the fanout is the shared projection for BOTH modes.
       // Order is intentional: construct the fanout, then — only after
       // the constructor returns without throwing — flip the readiness
-      // bit, then install the WS server with the fanout as `eventSink`.
-      // A throw inside the constructor must leave
-      // `outboundEventFanoutInstalled === false` so `/readyz` keeps
-      // returning 503 and orchestrators do not promote a half-wired
-      // backend to "ready". This flag is a backend-side wiring
-      // indicator only; the daemon-side WS attachment lifecycle is
-      // reported separately through `HostWsServerController.getAttachment`.
+      // bit, then install the transport adapter. A throw inside the
+      // constructor must leave `outboundEventFanoutInstalled === false`
+      // so `/readyz` keeps returning 503 and orchestrators do not
+      // promote a half-wired backend to "ready". This flag is a
+      // backend-side wiring indicator only; the daemon-side attachment
+      // lifecycle is reported separately via `getAttachment`.
       outboundFanout = new OutboundRuntimeEventFanout({
         db,
         events: ctx.events,
-        transport: () => hostWs,
+        transport: () => outboundAdapter,
         logger,
         silverhandDir: ctx.silverhandDir,
         workspacesRoot,
@@ -577,7 +593,92 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
         ? opts.testHooks.wrapHostWsEventSink(outboundFanout ?? undefined)
         : outboundFanout ?? undefined,
     });
+    // Construct the deployment-specific outbound transport. This runs
+    // synchronously before the listen callback fires, so `outboundAdapter`
+    // is wired before any request can arrive. For embedded the actual
+    // `connect()` is deferred to the listen callback (P1-1) so the first
+    // `runtime_start` never ships a placeholder `server_url`.
+    if (opts.mode === 'standalone') {
+      // Standalone: the daemon dials the backend over WSS; the adapter
+      // is a thin view of the `hostWs` controller (owned by this
+      // bootstrap, so the adapter's `close()` is a no-op).
+      outboundAdapter = new StandaloneOutboundFrameAdapter(() => hostWs);
+    } else {
+      // Embedded: the backend dials the daemon's local outbound socket.
+      const localHostId = hostRepo.ensureLocal().id;
+      const socketPath =
+        opts.outboundSocketPath ?? deriveLocalOutboundFrameSocketPath();
+      const adapter = new EmbeddedUnixOutboundFrameAdapter({
+        socketPath,
+        hostId: localHostId,
+        onEvent: (hostId, event, connectionId) =>
+          outboundFanout?.onEvent(hostId, event, connectionId),
+        onDisconnect: (hostId, connectionId) =>
+          outboundFanout?.onDisconnect(hostId, connectionId),
+        logger,
+      });
+      embeddedOutboundAdapter = adapter;
+      outboundAdapter = adapter;
+      // Defer the connect to the listen callback (P1-1): construct now so
+      // `outboundAdapter` is wired, but dial only after the bound URL is
+      // finalized. Fire-and-forget once triggered (mirrors the standalone
+      // ready→hydrate model). On the daemon's connection-scoped `ready`
+      // the fanout latches the daemon key and hydrates `runtime_status`.
+      // Until the socket is up, runtime routes return 503 `host_attach_pending`.
+      startEmbeddedOutboundConnect = () => {
+        void connectEmbeddedOutboundAdapter(adapter, socketPath, logger);
+      };
+    }
     server.on('error', reject);
+  });
+}
+
+/**
+ * Connect the embedded local-Unix outbound adapter to the daemon's
+ * `daemon-outbound.sock`, retrying briefly to absorb the boot race where
+ * the desktop main process has spawned the daemon but its socket is not
+ * yet listening. Best-effort: on persistent failure we log a warning and
+ * return — runtime routes surface `host_attach_pending` (503) until the
+ * socket becomes reachable. (Reconnect-on-drop after a daemon bounce is a
+ * follow-up; in embedded the desktop main supervises the daemon's
+ * lifecycle and would re-run boot wiring on a restart.)
+ */
+async function connectEmbeddedOutboundAdapter(
+  adapter: EmbeddedUnixOutboundFrameAdapter,
+  socketPath: string,
+  logger: BackendLogger,
+): Promise<void> {
+  const maxAttempts = 20;
+  const intervalMs = 100;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await adapter.connect();
+      logger.info(
+        { socketPath, attempt },
+        'embedded outbound adapter connected to daemon socket',
+      );
+      return;
+    } catch (err) {
+      if (attempt === maxAttempts) {
+        logger.warn(
+          {
+            socketPath,
+            attempts: attempt,
+            err: err instanceof Error ? err.message : String(err),
+          },
+          'embedded outbound adapter failed to connect; runtime routes return host_attach_pending until the daemon socket is reachable',
+        );
+        return;
+      }
+      await delayMs(intervalMs);
+    }
+  }
+}
+
+function delayMs(ms: number): Promise<void> {
+  return new Promise(resolve => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
   });
 }
 

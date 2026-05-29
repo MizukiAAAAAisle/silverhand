@@ -15,7 +15,6 @@ import {
   type ServerConfig,
   type ServerFrame,
 } from '@silverhand/shared';
-import type { HostClient } from '@silverhand/host';
 import { startBackend, type RunningBackend } from '../../src/index.js';
 import { EVENT_WS_PATH, installEventWebSocketServer } from '../../src/ws/ws-server.js';
 import type { EventWsServerController, EventWsServerOptions } from '../../src/ws/ws-server.js';
@@ -331,24 +330,12 @@ describe('event WebSocket server', () => {
       },
     };
     // Cleanup Commit B removed the in-process `ConversationManager`
-    // runtime, so the only path through `startBackend` is daemon mode
-    // — which needs a connected HostClient. This test exercises ws
-    // shutdown end-to-end (orthogonal to runtime host); we hand a
-    // minimal stub HostClient so the boot can proceed without a real
-    // daemon. The stub never receives runtime intents because the
-    // test never spawns an agent.
-    const stubHostClient = {
-      ping: () =>
-        Promise.resolve({
-          daemon_pid: 12345,
-          daemon_version: '0.0.0-test-ws',
-          started_at: 0,
-        }),
-      subscribe: () => () => {},
-      onReconnect: () => () => {},
-      close: () => Promise.resolve(),
-      runtimeStatus: () => Promise.resolve({ runtimes: [] as unknown[] }),
-    } as unknown as HostClient;
+    // runtime; embedded boot now dials the daemon's local outbound frame
+    // socket for runtime/materialize (D5.a R4 unification). This test
+    // exercises ws shutdown end-to-end (orthogonal to the runtime host),
+    // so we point `outboundSocketPath` at a tmp path with no daemon
+    // behind it — the adapter connect is best-effort (async, non-blocking)
+    // and the test never spawns an agent, so no runtime intent is sent.
     runningBackend = await startBackend({
       mode: 'embedded',
       dbPath: join(tmp, 'silverhand.db'),
@@ -356,7 +343,7 @@ describe('event WebSocket server', () => {
       serverConfig: config,
       silverhandCliLauncher: { command: 'true', args: [] },
       logger: { info() {}, warn() {}, error() {} },
-      hostClient: stubHostClient,
+      outboundSocketPath: join(tmp, 'daemon-outbound.sock'),
     });
 
     const bootstrapToken = readFileSync(

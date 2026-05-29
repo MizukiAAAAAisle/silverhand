@@ -390,6 +390,9 @@ interface DaemonPaths {
   pidFilePath: string;
   logDir: string;
   hostConfigPath: string;
+  /** Local outbound frame socket — the daemon binds it and the embedded
+   *  backend dials it for the D5.a R4-unified outbound envelope. */
+  localOutboundSocketPath: string;
 }
 
 function daemonPaths(): DaemonPaths {
@@ -403,6 +406,7 @@ function daemonPaths(): DaemonPaths {
     pidFilePath: join(runDir, 'daemon.pid'),
     logDir: join(silverhandDir(), 'logs'),
     hostConfigPath: daemonHostConfigPath(silverhandDir()),
+    localOutboundSocketPath: join(runDir, 'daemon-outbound.sock'),
   };
 }
 
@@ -1713,6 +1717,13 @@ async function bootstrap(): Promise<void> {
       socketPath: paths.socketPath,
       pidFilePath: paths.pidFilePath,
       logDir: paths.logDir,
+      // D5.a-3: the daemon binds its local outbound frame server here so
+      // the embedded backend can dial it and speak the same outbound
+      // envelope as the standalone WSS path (R4 unification). This is the
+      // formal server↔daemon runtime/materialize transport; it is
+      // distinct from the host-control IPC the desktop HostClient below
+      // keeps using (revoke/disconnect/rotate/status).
+      localOutboundSocketPath: paths.localOutboundSocketPath,
       // D3.a Commit 4: the daemon is spawned WITHOUT --host-config so
       // it cannot dial a stale `daemon-config.json` left over from a
       // previous user. Outbound attach is triggered after login via
@@ -1909,7 +1920,13 @@ async function bootstrap(): Promise<void> {
           logger: logger ?? undefined,
           loggers: loggers ?? undefined,
           logDir: join(silverhandDir(), 'logs'),
-          hostClient: hostClient!,
+          // D5.a-3 (A6): the embedded backend no longer receives the
+          // desktop HostClient. It dials the daemon's local outbound
+          // frame socket itself and speaks the same R4-unified outbound
+          // envelope as standalone. The desktop HostClient is retained
+          // purely for host-control IPC (revoke/disconnect/rotate-token/
+          // status); it is NOT a runtime/materialize transport anymore.
+          outboundSocketPath: paths.localOutboundSocketPath,
         });
         await writeServerConfig(running.context.serverConfig);
         return running;

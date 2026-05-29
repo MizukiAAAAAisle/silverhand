@@ -480,6 +480,14 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     }),
     placement,
     hostWsController: hostWsControllerFactory,
+    // D5.a-3 — `POST /api/agents` materialize + retry dispatch through
+    // `ctx.outboundFrameAdapter`, not `hostWsController`. In production the
+    // standalone adapter wraps the same `hostWs` transport, so the test
+    // fake host controller doubles as the outbound adapter here (it
+    // satisfies the narrower `OutboundFrameAdapter` surface). Tests that
+    // override `hostWsController` (incl. `() => null`) therefore also
+    // steer the materialize path, preserving pre-D5.a semantics.
+    outboundFrameAdapter: hostWsControllerFactory,
     runtimeHost: fake as unknown as AgentRuntimeHost,
   };
   ctx.channelService = new ChannelService({

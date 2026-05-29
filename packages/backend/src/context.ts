@@ -18,6 +18,7 @@ import type { PasswordCredentialService } from './auth/password.js';
 import type { AuthSessionService } from './auth/session.js';
 import type { LogLevelControl } from './logger.js';
 import type { RuntimeHostPlacementControl } from './runtime/host-placement.js';
+import type { OutboundFrameAdapter } from './runtime/outbound-frame-adapter.js';
 import type { HostWsServerController } from './ws/host-ws-server.js';
 
 export type BackendDeploymentMode = 'embedded' | 'standalone';
@@ -159,6 +160,16 @@ export interface BackendContext {
   placement: RuntimeHostPlacementControl;
   /** Late-bound outbound host WebSocket controller for standalone daemon transport. */
   hostWsController?: () => HostWsServerController | null;
+  /**
+   * D5.a-3 P1-3 — late-bound formal server↔daemon dispatch port. Routes
+   * that send commands (POST /api/agents materialize, retry) go through
+   * this accessor so they never branch on deployment mode. Standalone
+   * resolves to a `StandaloneOutboundFrameAdapter` (WSS-backed); embedded
+   * to an `EmbeddedUnixOutboundFrameAdapter` (local Unix socket). Distinct
+   * from `hostWsController`, which stays for WS-only lifecycle
+   * (revoke/disconnect) and is `null` in embedded mode.
+   */
+  outboundFrameAdapter?: () => OutboundFrameAdapter | null;
   /**
    * Backend-side facade for agent runtime lifecycle. Services and
    * routes route every spawn / stop / wake / clearSession / inbox

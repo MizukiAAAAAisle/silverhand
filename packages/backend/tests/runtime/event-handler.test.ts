@@ -23,28 +23,28 @@ import {
   HOST_PROTOCOL_VERSION,
   KNOWN_CAPABILITIES_V1,
   type EventFrame,
-  type HostClient,
   type RuntimeStatusResult,
 } from '@silverhand/host';
 import type { AgentRunState } from '@silverhand/shared';
 import { RunStateCache } from '../../src/runtime/run-state-cache.js';
-import { RuntimeBridge } from '../../src/runtime/bridge.js';
 import {
   RuntimeEventHandler,
   type EventPublisher,
   type InboxAckSink,
   type RuntimeEventHandlerDeps,
+  type RuntimeEventSource,
+  type RuntimeStatusBridge,
 } from '../../src/runtime/event-handler.js';
 import type { RuntimeStatusProjector } from '../../src/runtime/status-projector.js';
 
 function makeFakeClient(): {
-  client: HostClient;
+  client: RuntimeEventSource;
   emit: (frame: EventFrame) => void;
   triggerReconnect: () => void;
 } {
   const eventHandlers = new Set<(frame: EventFrame) => void>();
   const reconnectHandlers = new Set<() => void>();
-  const fake = {
+  const fake: RuntimeEventSource = {
     subscribe(handler: (frame: EventFrame) => void) {
       eventHandlers.add(handler);
       return () => eventHandlers.delete(handler);
@@ -53,7 +53,7 @@ function makeFakeClient(): {
       reconnectHandlers.add(handler);
       return () => reconnectHandlers.delete(handler);
     },
-  } as unknown as HostClient;
+  };
   return {
     client: fake,
     emit(frame) {
@@ -66,7 +66,7 @@ function makeFakeClient(): {
 }
 
 function makeBridge(snapshot: RuntimeStatusResult): {
-  bridge: RuntimeBridge;
+  bridge: RuntimeStatusBridge;
   statusCalls: () => number;
 } {
   let count = 0;
@@ -75,7 +75,7 @@ function makeBridge(snapshot: RuntimeStatusResult): {
       count += 1;
       return snapshot;
     },
-  } as unknown as RuntimeBridge;
+  } as unknown as RuntimeStatusBridge;
   return { bridge, statusCalls: () => count };
 }
 
@@ -320,7 +320,7 @@ describe('RuntimeEventHandler — hydrate on reconnect', () => {
     };
     const bridge = {
       runtimeStatus: async () => snapshot,
-    } as unknown as RuntimeBridge;
+    } as unknown as RuntimeStatusBridge;
     const { publisher } = makePublisher();
     const { sink } = makeInboxAck();
     const handler = makeHandler({
@@ -360,7 +360,7 @@ describe('RuntimeEventHandler — daemon pid change (daemon swap)', () => {
     };
     const bridge = {
       runtimeStatus: async () => snapshot,
-    } as unknown as RuntimeBridge;
+    } as unknown as RuntimeStatusBridge;
     const { publisher } = makePublisher();
     const { sink } = makeInboxAck();
     const handler = makeHandler({
@@ -406,7 +406,7 @@ describe('RuntimeEventHandler — daemon pid change (daemon swap)', () => {
           ],
         } as RuntimeStatusResult;
       },
-    } as unknown as RuntimeBridge;
+    } as unknown as RuntimeStatusBridge;
     const { publisher } = makePublisher();
     const { sink } = makeInboxAck();
     const handler = makeHandler({
@@ -649,7 +649,7 @@ describe('RuntimeEventHandler — event routing', () => {
         new Promise<RuntimeStatusResult>(resolve => {
           resolveStatus = resolve;
         }),
-    } as unknown as RuntimeBridge;
+    } as unknown as RuntimeStatusBridge;
     const { publisher, published } = makePublisher();
     const { sink } = makeInboxAck();
     const handler = makeHandler({
@@ -1142,7 +1142,7 @@ describe('RuntimeEventHandler — cache-not-ready safety', () => {
         new Promise<RuntimeStatusResult>(resolve => {
           resolveStatus = resolve;
         }),
-    } as unknown as RuntimeBridge;
+    } as unknown as RuntimeStatusBridge;
     const { publisher, published } = makePublisher();
     const { sink } = makeInboxAck();
     const handler = makeHandler({

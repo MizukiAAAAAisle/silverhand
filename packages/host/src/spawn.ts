@@ -190,6 +190,15 @@ export interface SpawnDaemonOptions {
    *  D3.a Commit 4 removed this from the desktop spawn path; it is
    *  preserved here for standalone / manual / test callers. */
   hostConfigPath?: string | null;
+  /**
+   * Optional path to bind the daemon's local outbound frame server. When
+   * set, the daemon starts a `LocalOutboundFrameServer` on this Unix
+   * socket and the embedded backend dials it to receive the D5.a
+   * R4-unified outbound envelope (same schemas/error-taxonomy as the
+   * standalone WSS path). Omit for callers that don't run an embedded
+   * backend against this daemon. Forwarded as
+   * `--local-outbound-socket-path` to the daemon entry. */
+  localOutboundSocketPath?: string | null;
   /** Mirror daemon log lines to stderr too. Default true in dev. */
   alsoStderr?: boolean;
   /** Max time to wait for the `ready` handshake. Default 10_000ms. */
@@ -355,6 +364,9 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
       '--pid-file', opts.pidFilePath,
       '--log-dir', opts.logDir,
       ...(opts.hostConfigPath ? ['--host-config', opts.hostConfigPath] : []),
+      ...(opts.localOutboundSocketPath
+        ? ['--local-outbound-socket-path', opts.localOutboundSocketPath]
+        : []),
       ...(alsoStderr ? ['--stderr'] : []),
     ];
     const proc = spawnImpl(

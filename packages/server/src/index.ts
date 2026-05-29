@@ -59,7 +59,14 @@ export interface StartEmbeddedSilverhandServerOptions {
   dataDir: string;
   env?: NodeJS.ProcessEnv;
   serverConfig: ServerConfig;
-  hostClient: EmbeddedBackendOptions['hostClient'];
+  /**
+   * Path to the daemon's local outbound frame socket. The embedded
+   * backend dials it and speaks the same outbound envelope as standalone
+   * (D5.a). Optional — defaults to `~/.silverhand/run/daemon-outbound.sock`.
+   * Replaces the former `hostClient` (the local daemon RPC was the R4
+   * drift D5.a closed; host-control IPC stays in the desktop main process).
+   */
+  outboundSocketPath?: EmbeddedBackendOptions['outboundSocketPath'];
   silverhandCliLauncher: EmbeddedBackendOptions['silverhandCliLauncher'];
   logger?: EmbeddedBackendOptions['logger'];
   loggers?: Partial<CategorizedLoggers>;
@@ -87,7 +94,9 @@ export async function startEmbeddedSilverhandServer(
     schemaUpgrade: {
       allow: migrate.value,
     },
-    hostClient: opts.hostClient,
+    ...(opts.outboundSocketPath
+      ? { outboundSocketPath: opts.outboundSocketPath }
+      : {}),
     listen: opts.listen ?? { hostname: '127.0.0.1', port: 0 },
   });
 }

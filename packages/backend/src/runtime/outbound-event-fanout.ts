@@ -2,7 +2,6 @@ import type { Database } from 'better-sqlite3';
 import {
   EventFrameSchema,
   type EventFrame,
-  type HostClient,
   type OutboundDaemonToServerEventFrame,
   type OutboundServerCommandKind,
   type RuntimeStartParams,
@@ -24,11 +23,11 @@ import { MessageRepo } from '../repos/message-repo.js';
 import { UserRepo } from '../repos/user-repo.js';
 import { WorkspaceRepo } from '../repos/workspace-repo.js';
 import { MembershipService } from '../services/membership-service.js';
-import type {
-  HostWsEventSink,
-  HostWsServerController,
-} from '../ws/host-ws-server.js';
-import { HostWsCommandTransportError } from '../ws/host-ws-server.js';
+import type { HostWsEventSink } from '../ws/host-ws-server.js';
+import {
+  OutboundFrameTransportError,
+  type OutboundFrameAdapter,
+} from './outbound-frame-adapter.js';
 import { singleConversationViewerUserId } from '../viewer-scope.js';
 import { JsonlActivityLogWriter, type ActivityLogWriter } from './activity-log-writer.js';
 import {
@@ -43,6 +42,7 @@ import {
   RuntimeEventHandler,
   type EventPublisher,
   type InboxAckSink,
+  type RuntimeEventSource,
   type RuntimeStatusBridge,
 } from './event-handler.js';
 import { RunStateCache } from './run-state-cache.js';
@@ -60,7 +60,7 @@ import {
 export interface OutboundRuntimeEventFanoutOptions {
   db: Database;
   events: EventPublisher;
-  transport: () => HostWsServerController | null;
+  transport: () => OutboundFrameAdapter | null;
   logger: BackendLogger;
   silverhandDir: string;
   workspacesRoot: string;
@@ -982,6 +982,65 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     if (this.ownsActivityLog) await this.activityLog?.close();
   }
 
+  /**
+   * D5.a-3 P1-4 — bulk shutdown across every connected outbound host.
+   *
+   * The old embedded path routed `stopAll` to `bridge.runtimeStopAll()`
+   * (one daemon); the unified outbound path can hold several connected
+   * hosts, so we dispatch `runtime_stop_all` to each `connectedHostIds()`
+   * over the SAME outbound command (`outbound-protocol.ts` →
+   * `runtime_stop_all`). Per-host failures are best-effort/warn so one
+   * unreachable host cannot block the rest of shutdown. Never a no-op:
+   * the previous `ControlPlaneRuntimeHost.stopAll` silently dropped this,
+   * which would orphan daemon children after backend exit.
+   */
+  async stopAll(): Promise<void> {
+    const transport = this.opts.transport();
+    if (!transport) return;
+    for (const hostId of transport.connectedHostIds()) {
+      try {
+        await transport.sendCommand(hostId, 'runtime_stop_all', {});
+      } catch (err) {
+        this.opts.logger.warn(
+          { kind: 'runtime', action: 'stop_all_dispatch_failed', hostId, err },
+          'outbound runtime_stop_all dispatch failed for host; continuing shutdown',
+        );
+      }
+    }
+  }
+
+  /**
+   * D5.a-3 P1-4 — flush + close the activity log on shutdown.
+   *
+   * Asks every connected host to flush its runtime-side buffers via the
+   * existing outbound `runtime_close_activity_log` command (mirrors the
+   * old `bridge.runtimeCloseActivityLog()`), then closes the
+   * backend-owned activity JSONL writer. Per-host dispatch is
+   * best-effort/warn. Not a no-op (the old `ControlPlaneRuntimeHost`
+   * silently dropped both halves).
+   */
+  async closeActivityLog(): Promise<void> {
+    const transport = this.opts.transport();
+    if (transport) {
+      for (const hostId of transport.connectedHostIds()) {
+        try {
+          await transport.sendCommand(hostId, 'runtime_close_activity_log', {});
+        } catch (err) {
+          this.opts.logger.warn(
+            {
+              kind: 'runtime',
+              action: 'close_activity_log_dispatch_failed',
+              hostId,
+              err,
+            },
+            'outbound runtime_close_activity_log dispatch failed for host; continuing',
+          );
+        }
+      }
+    }
+    if (this.ownsActivityLog) await this.activityLog?.close();
+  }
+
   private stateForHost(hostId: string): HostFanoutState {
     const existing = this.states.get(hostId);
     if (existing) return existing;
@@ -1046,7 +1105,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       logger: this.opts.logger,
     });
     const handler = new RuntimeEventHandler({
-      client: noopHostClient(),
+      client: noopRuntimeEventSource(),
       bridge,
       cache,
       events: this.opts.events,
@@ -1314,7 +1373,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     const transport = this.requireTransport();
     const connectionId = transport.connectionIdForHost(hostId);
     if (!connectionId) {
-      throw new HostWsCommandTransportError(
+      throw new OutboundFrameTransportError(
         'transport_no_connection',
         `outbound host ${hostId} is not connected`,
         { hostId, commandKind },
@@ -1323,7 +1382,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     return connectionId;
   }
 
-  private requireTransport(): HostWsServerController {
+  private requireTransport(): OutboundFrameAdapter {
     const transport = this.opts.transport();
     if (!transport) {
       throw new Error('outbound host command transport is not installed');
@@ -1351,11 +1410,11 @@ export function outboundEventToEventFrame(
   return parsed.data;
 }
 
-function noopHostClient(): HostClient {
+function noopRuntimeEventSource(): RuntimeEventSource {
   return {
     subscribe: () => () => {},
     onReconnect: () => () => {},
-  } as unknown as HostClient;
+  };
 }
 
 function daemonKeyFromReady(daemonPid: number, startedAt: number): string {

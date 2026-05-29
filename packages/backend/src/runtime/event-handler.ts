@@ -58,7 +58,7 @@
  *     reason. Handler hands rows back to the inbox sink so the next
  *     spawn replays them.
  */
-import type { EventFrame, HostClient, RuntimeStatusResult } from '@silverhand/host';
+import type { EventFrame, RuntimeStatusResult } from '@silverhand/host';
 import type { AgentRunState, ParsedEvent } from '@silverhand/shared';
 import type { ActivityLogWriter } from './activity-log-writer.js';
 import type { RunStateCache } from './run-state-cache.js';
@@ -92,6 +92,21 @@ export interface InboxAckSink {
 
 export interface RuntimeStatusBridge {
   runtimeStatus(): Promise<RuntimeStatusResult>;
+}
+
+/**
+ * Narrow event-source the handler subscribes to. This is the subset of
+ * the old `HostClient` the handler ever used (`subscribe` + `onReconnect`)
+ * — extracted so backend `src/` carries ZERO `HostClient` imports (D5.a
+ * A1). The embedded path is now an outbound-frame transport like
+ * standalone, not a `HostClient`; `OutboundRuntimeEventFanout` dispatches
+ * events directly via `handler.dispatch(...)` and supplies a noop source
+ * (it never calls `start()`), so this interface is the only coupling the
+ * handler keeps to "where events come from".
+ */
+export interface RuntimeEventSource {
+  subscribe(onFrame: (frame: EventFrame) => void): () => void;
+  onReconnect(onReconnect: () => void): () => void;
 }
 
 /**
@@ -164,7 +179,7 @@ const NOOP_LOGGER: RuntimeEventHandlerLogger = {
 };
 
 export interface RuntimeEventHandlerDeps {
-  client: HostClient;
+  client: RuntimeEventSource;
   bridge: RuntimeStatusBridge;
   cache: RunStateCache;
   events: EventPublisher;
@@ -223,7 +238,7 @@ function makeDaemonInstanceKey(daemonPid: number, startedAt: number): string {
 }
 
 export class RuntimeEventHandler {
-  private readonly client: HostClient;
+  private readonly client: RuntimeEventSource;
   private readonly bridge: RuntimeStatusBridge;
   private readonly cache: RunStateCache;
   private readonly events: EventPublisher;

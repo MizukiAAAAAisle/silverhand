@@ -387,6 +387,11 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
           socketPath: opts.localOutboundSocketPath,
           dispatchCommand: command => commandForwarder(command),
           logger,
+          // Same handshake the standalone WSS client sends on connect
+          // (`outbound-client.ts` → `sendEvent(readyEvent())`). The
+          // embedded adapter relies on it to latch the daemon key and
+          // hydrate, so embedded and standalone share the `ready` path.
+          readyEvent,
         })
       : null;
   broadcaster = event => {

@@ -90,7 +90,10 @@ afterEach(async () => {
 
 async function makeHarness(
   dispatch: Dispatch,
-  opts?: { writeBuffer?: { maxFrames?: number; maxBytes?: number } },
+  opts?: {
+    writeBuffer?: { maxFrames?: number; maxBytes?: number };
+    readyEvent?: () => Extract<EventFrame, { event: 'ready' }>;
+  },
 ): Promise<Harness> {
   const socketPath = join(tmpdir(), `sh-d5a-server-${process.pid}-${++socketSeq}.sock`);
   if (existsSync(socketPath)) unlinkSync(socketPath);
@@ -100,6 +103,7 @@ async function makeHarness(
     dispatchCommand: dispatch,
     logger,
     writeBuffer: opts?.writeBuffer,
+    ...(opts?.readyEvent ? { readyEvent: opts.readyEvent } : {}),
   });
   await server.start();
   const client = await RawClient.connect(socketPath);
@@ -477,4 +481,63 @@ describe('LocalOutboundFrameServer', () => {
       ts: 1717000000,
     });
   });
+
+  it('emits a connection-scoped ready as the first frame on a new connection (P1-1)', async () => {
+    // The embedded adapter relies on this handshake (mirrors the
+    // standalone WSS client's `sendEvent(readyEvent())` on open) to
+    // latch the daemon key and trigger its fanout hydrate. The ready is
+    // mapped through `toOutboundEventFrame`, so the daemon-local
+    // `socket_path` is stripped and the outbound protocol version is
+    // stamped.
+    const { client } = await makeHarness(
+      async command => ({ id: command.id, result: {} }),
+      { readyEvent: makeReadyEvent },
+    );
+
+    const raw = await client.nextFrame();
+    const parsed = OutboundDaemonToServerEventFrameSchema.parse(raw);
+    expect(parsed).toMatchObject({
+      direction: 'daemon_to_server',
+      type: 'event',
+      kind: 'ready',
+      daemon_pid: 4242,
+      started_at: 1717000000,
+    });
+    // socket_path is daemon-local and MUST NOT cross the outbound wire.
+    expect('socket_path' in parsed).toBe(false);
+  });
+
+  it('does not replay a prior connection ready to a later joiner (P1-1 connection-scoped)', async () => {
+    // A second client connecting after the first must receive ITS OWN
+    // ready exactly once — not a broadcast/replay of another socket's
+    // handshake. We assert the second client sees a single ready and no
+    // duplicate.
+    const { socketPath } = await makeHarness(
+      async command => ({ id: command.id, result: {} }),
+      { readyEvent: makeReadyEvent },
+    );
+
+    const second = await RawClient.connect(socketPath);
+    cleanups.push(async () => second.destroy());
+    const raw = await second.nextFrame();
+    const parsed = OutboundDaemonToServerEventFrameSchema.parse(raw);
+    expect(parsed).toMatchObject({ kind: 'ready' });
+    // No second handshake frame queued for this socket.
+    await expect(second.nextFrame(60)).rejects.toThrow(/no frame/i);
+  });
 });
+
+function makeReadyEvent(): Extract<EventFrame, { event: 'ready' }> {
+  return {
+    event: 'ready',
+    protocol_version: 1,
+    daemon_version: 'test',
+    daemon_id: 'local',
+    instance_id: 'inst-1',
+    host_descriptor: { name: 'local', kind: 'local' },
+    capabilities: [],
+    socket_path: '/tmp/should-be-stripped.sock',
+    daemon_pid: 4242,
+    started_at: 1717000000,
+  } as Extract<EventFrame, { event: 'ready' }>;
+}
