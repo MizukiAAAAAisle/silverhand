@@ -486,11 +486,11 @@
     </section>
 
     <div class="summary">
-      <div class="summary-cell"><span class="count" style="color: var(--green)">16</span><div><div class="lbl">done</div></div></div>
+      <div class="summary-cell"><span class="count" style="color: var(--green)">17</span><div><div class="lbl">done</div></div></div>
       <div class="summary-cell"><span class="count" style="color: var(--blue)">1</span><div><div class="lbl">in-progress</div></div></div>
       <div class="summary-cell"><span class="count" style="color: var(--purple)">0</span><div><div class="lbl">in-review</div></div></div>
       <div class="summary-cell"><span class="count" style="color: var(--orange)">3</span><div><div class="lbl">planned</div></div></div>
-      <div class="summary-cell"><span class="count" style="color: var(--gray)">11</span><div><div class="lbl">future</div></div></div>
+      <div class="summary-cell"><span class="count" style="color: var(--gray)">10</span><div><div class="lbl">future</div></div></div>
     </div>
 
     <!-- ========================================== -->
@@ -835,21 +835,34 @@
         <div>
           <h2><span class="tier-banner t0">T0</span>Stage D5 · R4 envelope unification</h2>
           <p class="group-note">
-            <strong>已知 R4 drift</strong>：当前 embedded 模式 daemon ↔ backend 走 <code>HostClient</code> Unix socket IPC subscribe，<strong>暴露的是一套 daemon RPC / subscribe API，不是 outbound frame envelope 的 adapter</strong>。
-            不修，「one wire protocol」承诺就是嘴上的。D5 只做 transport/envelope 统一，<strong>不承载 materialize 业务语义</strong>。
+            <strong>R4 drift（D5.a 已闭合）</strong>：D5.a 之前，embedded 模式 daemon ↔ backend 走 <code>HostClient</code> Unix socket IPC subscribe，<strong>暴露的是一套 daemon RPC / subscribe API，不是 outbound frame envelope 的 adapter</strong>——「one wire protocol」承诺当时只是嘴上的。
+            D5.a 把这条统一掉：embedded + standalone 经同一 outbound frame envelope（仅 transport 不同），backend formal path 不再 import <code>HostClient</code>。D5 只做 transport/envelope 统一，<strong>不承载 materialize 业务语义</strong>。
           </p>
         </div>
       </div>
       <div class="grid">
 
-        <div class="card future">
+        <div class="card done">
           <div class="card-head">
             <h3 class="card-title">D5.a — HostClient → OutboundFrameAdapter</h3>
-            <span class="badge future">future</span>
+            <span class="badge done">done</span>
           </div>
           <p class="card-body">
-            重构 <code>HostClient</code>：embedded transport 仍是 Unix socket / in-proc，但<strong>承载 frame envelope 与 standalone WSS 完全同形</strong>。
-            backend 端 dispatch 路径统一。<strong>R4 acceptance gate: protocol parity test 扩展到 embedded</strong>。
+            design + 5 slices，squash 成 6-commit chain（base D4.d <code>38a4b12</code>），已并入 main（merge <code>2e5fd60</code>，branch tip <code>2826cd1</code>）。
+            backend 的 formal server↔daemon plane <strong>不再走 <code>HostClient</code></strong>：embedded + standalone 经<strong>同一 <code>OutboundFrameAdapter</code> envelope</strong>，仅 transport 不同（embedded = 本地 <code>daemon-outbound.sock</code> via <code>EmbeddedUnixOutboundFrameAdapter</code>，standalone = WSS）。
+            <strong>R4 drift 闭合</strong>：<code>packages/backend/src</code> 零 <code>HostClient</code> import（dependency-guard 钉死），<code>HostClient</code> 仅剩 desktop host-control IPC（ping/status/respawn-attach）。Cindy 全程 LGTM。
+            <br>
+            • D5.a-1 <code>OutboundFrameAdapter</code> port + <code>StandaloneOutboundFrameAdapter</code> + 共享 <code>runOutboundFrameAdapterContract</code> harness。
+            <br>
+            • D5.a-2 daemon <code>LocalOutboundFrameServer</code>（独立 <code>daemon-outbound.sock</code> 0o600）+ <code>EmbeddedUnixOutboundFrameAdapter</code> + 共享 mapping / write-buffer（1024/4MiB 背压，无 unbounded daemon 写队列）。
+            <br>
+            • D5.a-3 embedded rewire：embedded + standalone 共享 <code>OutboundAgentRuntimeHost</code>（rename from <code>ControlPlaneRuntimeHost</code>）+ <code>OutboundRuntimeEventFanout</code>；删 bridge.ts / daemon-agent-runtime-host.ts / daemon-runtime-wiring.ts。
+            <br>
+            • D5.a-4 parity e2e：embedded + standalone 跑同一 <code>outbound-parity-contract</code>（runtime_start→真 daemon spawn→session_init / POST <code>/api/agents</code>→真 <code>materializeAgent</code> / connection-id replacement guard）+ connection-staleness e2e。
+            <br>
+            • D5.a-5 acceptance doc <code>docs/d5-a-r4-acceptance.md</code>（A1–A6 矩阵，A1 zero-<code>HostClient</code>-import 为核心 R4 gate）+ <code>routes.ts</code> 注释清理 + <code>silverhand-daemon.md</code> 口径更新 + g2-harness teardown-race fix。
+            <br>
+            Gates @ tip <code>2826cd1</code>：<code>pnpm -r typecheck</code> clean；backend full 1383 pass | 1 skip；host 636 pass。
           </p>
           <div class="card-meta">
             <span class="m-tag m1">M1</span>
@@ -1128,7 +1141,8 @@
         D3.b（in-progress） →
         D4.c ✅ done — G3 closed 2026-05-28（branch <code>feature/remote-backend-v1-stage-d4-c-g3</code> tip <code>1498ccb</code>） →
         <strong>D4.d ✅ done — D1–D6 closed 2026-05-29（branch <code>feature/remote-backend-v1-stage-d4-d-design</code> tip <code>38a4b12</code>）</strong> →
-        D4.e（daemon-owned data-plane proxy，next）+ D5.a（envelope adapter unification）并行 →
+        <strong>D5.a ✅ done — R4 envelope adapter unification，merged into main <code>2e5fd60</code>（branch tip <code>2826cd1</code>）</strong> →
+        D4.e（daemon-owned data-plane proxy，next）→
         T1 内 M1 子项（sticky host ownership + Remote UX 收口）→
         <strong>= M1 达成（final-form 协议，embedded 部署）</strong>。
       </p>
