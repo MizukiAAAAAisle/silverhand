@@ -291,6 +291,56 @@ export class AgentRepo {
   }
 
   /**
+   * D4.d D5 — flip a `failed` row back to `pending_materialization`
+   * to support `POST /api/agents` `?retry=true` (§3.2 (a) same-row
+   * retry). Clears `materialization_failed_code` /
+   * `materialization_failed_at` so the next L3b (if this retry also
+   * fails) writes a fresh failure stamp, not a stale one.
+   *
+   * STRICTLY `failed → pending_materialization` ONLY. The status
+   * guard is intentionally narrow:
+   *   - `pending_materialization` → reject. A second in-flight
+   *     retry would race the first; the route layer enforces
+   *     same-row retry serializability via the existing-row
+   *     dispatch (`materialization_in_progress` for pending) which
+   *     fires BEFORE this helper is reached.
+   *   - `active` → reject. The row is already where the user wants
+   *     it; reopening it for retry would needlessly drop the
+   *     `active` dependent-row graph guarantee from §6.3 (an active
+   *     row ALWAYS has its full dependents).
+   *   - `failed` → flip + clear failed_*.
+   *
+   * Returns the agent id on success, or `null` if the guard rejected
+   * (i.e., the row's status was not `failed` at the moment of the
+   * UPDATE). Caller MUST treat `null` as a route-layer 409
+   * `retry_target_not_failed` — the retry race lost to a concurrent
+   * mutation, and the response must not lie about the outcome.
+   *
+   * Why a separate helper instead of reusing `flipToActive` or
+   * `reserveForMaterialize`:
+   *   - `reserveForMaterialize` INSERTs a brand-new row; retry
+   *     UPDATEs the existing row.
+   *   - `flipToActive` carries the wrong status guard
+   *     (`pending_materialization`/`active`) and the wrong
+   *     direction (failed → active is never legal per §3.2; failed
+   *     rows can only re-enter the lifecycle through pending).
+   */
+  flipFailedToReserveAgain(id: string): string | null {
+    const result = this.db
+      .prepare(
+        `UPDATE agents
+            SET materialization_status      = 'pending_materialization',
+                materialization_failed_code = NULL,
+                materialization_failed_at   = NULL,
+                updated_at = ?
+          WHERE id = ?
+            AND materialization_status = 'failed'`,
+      )
+      .run(Date.now(), id);
+    return result.changes === 1 ? id : null;
+  }
+
+  /**
    * D4.d §5 boot reconciler primitive — mark stale
    * `pending_materialization` rows as `failed` with the canonical
    * `backend_crash_during_materialize` code. "Stale" means the row

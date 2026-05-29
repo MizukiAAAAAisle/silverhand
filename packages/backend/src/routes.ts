@@ -72,7 +72,7 @@ import { AgentRepo } from './repos/agent-repo.js';
 import { AttachmentRepo } from './repos/attachment-repo.js';
 import { HostRepo } from './repos/host-repo.js';
 import { HostCredentialIssueError, HostTokenService } from './auth/host-token.js';
-import { HostWsCommandTransportError, HostWsCommandResponseError } from './ws/host-ws-server.js';
+import { HostWsCommandTransportError, HostWsCommandResponseError, type HostWsServerController } from './ws/host-ws-server.js';
 import {
   HostTokenRotationCoordinator,
   HostTokenRotationError,
@@ -3411,10 +3411,191 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   }
 
   // ── Agents ───────────────────────────────────────────────────────
+
+  /**
+   * D4.d D5 — shared L2/L3a/L3b/L4 dispatch from a row already in
+   * `pending_materialization`. Used by both the fresh-create path
+   * (after L0/L1 reserve) and the same-row retry path (after
+   * `?retry=true` flips a failed row back to pending). Keeping the
+   * post-reserve sequence in one place is the load-bearing way to
+   * guarantee Cindy D5 guard rail #2 (retry uses the SAME L2 / L3a /
+   * L3b helpers as fresh create — failed dispatch on retry must land
+   * the row back at `failed` with refreshed code/at, never leave
+   * pending) and guard rail #3 (no new protocol surface — retry
+   * reuses the exact `agent_materialize` send the fresh path uses,
+   * including `expectedConnectionId` lock and the §6.5 cross-check).
+   *
+   * The reservedRow's stored metadata is the source of truth for the
+   * wire payload — NOT the HTTP request body. For fresh create this
+   * is trivially true (body just got written into the row at
+   * reserve). For retry the §3.2 immutable-metadata invariant
+   * matters: the body equals the row's snapshot (mismatch already
+   * rejected at L0.4) but reading from the row makes the contract
+   * explicit and survives any later refactor.
+   *
+   * Returns the post-L3a inserted dependent rows + a flag indicating
+   * whether L4 best-effort fires. On failure returns a typed code +
+   * HTTP status + the caller-visible message; the caller renders the
+   * 4xx/5xx body.
+   */
+  async function d5RunMaterializeFromReserved(deps: {
+    reservedRow: AgentRow;
+    controller: HostWsServerController;
+    connectionId: string;
+    creatorUserId: string;
+  }): Promise<
+    | {
+        kind: 'ok';
+        inserted: ReturnType<typeof d3InsertDependentRowsAtomic>;
+      }
+    | {
+        kind: 'failed';
+        failedCode: string;
+        message: string;
+        status: 400 | 409 | 500 | 502 | 503 | 504 | 507;
+      }
+  > {
+    const { reservedRow, controller, connectionId, creatorUserId } = deps;
+    // ── L2 wire intent ──────────────────────────────────────────────
+    let ackResult: { agent_dir: string; agent_home_workspace_path: string };
+    try {
+      const result = await controller.sendCommand(
+        reservedRow.host_id,
+        'agent_materialize',
+        {
+          agent_id: reservedRow.id,
+          agent_home_workspace_id: agentHomeWorkspaceId(reservedRow.id),
+          name: reservedRow.name,
+          runtime: reservedRow.runtime,
+          model: reservedRow.model ?? null,
+          description: reservedRow.description ?? null,
+          template_choice: 'default',
+        },
+        { timeoutMs: 60_000, expectedConnectionId: connectionId },
+      );
+      ackResult = {
+        agent_dir: result.agent_dir,
+        agent_home_workspace_path: result.agent_home_workspace_path,
+      };
+    } catch (err) {
+      // L3b — SEPARATE tx (Cindy D2 invariant #3). For the retry
+      // path this OVERWRITES the previous failure stamp with this
+      // attempt's code/at, which is the Cindy D5 guard rail #2
+      // contract: a retry that fails must update failure metadata,
+      // not preserve the old one. `flipToFailed` is one UPDATE
+      // outside any wrapping tx so concurrent rollback elsewhere
+      // cannot remove it.
+      const now = Date.now();
+      let failedCode: string;
+      let status: 400 | 409 | 502 | 503 | 504 | 507;
+      if (err instanceof HostWsCommandResponseError) {
+        const mapped = d3MapMaterializeWireError(err);
+        failedCode = mapped.failedCode;
+        status = mapped.status;
+      } else if (err instanceof HostWsCommandTransportError) {
+        if (
+          err.code === 'transport_no_connection' ||
+          err.code === 'transport_disconnected'
+        ) {
+          failedCode = 'host_attach_pending';
+          status = 503;
+        } else if (err.code === 'transport_timeout') {
+          failedCode = 'materialize_timeout';
+          status = 504;
+        } else {
+          failedCode = 'daemon_internal_error';
+          status = 502;
+        }
+      } else {
+        ctx.logger.error(
+          { err, agentId: reservedRow.id },
+          'unexpected error during agent_materialize dispatch',
+        );
+        failedCode = 'daemon_internal_error';
+        status = 502;
+      }
+      agents.flipToFailed(reservedRow.id, failedCode, now);
+      return {
+        kind: 'failed',
+        failedCode,
+        message: err instanceof Error ? err.message : String(err),
+        status,
+      };
+    }
+
+    // §6.5 cross-check: daemon ack invariant (agent_dir must equal
+    // agent_home_workspace_path; both schemas already enforce, but
+    // server-side defense-in-depth keeps the route honest).
+    if (ackResult.agent_dir !== ackResult.agent_home_workspace_path) {
+      agents.flipToFailed(reservedRow.id, 'daemon_internal_error', Date.now());
+      ctx.logger.error(
+        {
+          agentId: reservedRow.id,
+          agent_dir: ackResult.agent_dir,
+          agent_home_workspace_path: ackResult.agent_home_workspace_path,
+        },
+        'daemon ack carried mismatched agent_dir vs agent_home_workspace_path',
+      );
+      return {
+        kind: 'failed',
+        failedCode: 'daemon_internal_error',
+        message:
+          'daemon ack invariant violation (agent_dir != agent_home_workspace_path)',
+        status: 502,
+      };
+    }
+
+    // ── L3a flip-active + dependent rows tx ───────────────────────
+    let inserted: ReturnType<typeof d3InsertDependentRowsAtomic>;
+    try {
+      inserted = d3InsertDependentRowsAtomic(
+        reservedRow,
+        ackResult.agent_dir,
+        creatorUserId,
+      );
+    } catch (err) {
+      ctx.logger.error(
+        { err, agentId: reservedRow.id },
+        'L3a dependent-row insert tx failed; flipping to failed',
+      );
+      agents.flipToFailed(
+        reservedRow.id,
+        'dependent_row_insert_failed',
+        Date.now(),
+      );
+      return {
+        kind: 'failed',
+        failedCode: 'dependent_row_insert_failed',
+        message: err instanceof Error ? err.message : String(err),
+        status: 500,
+      };
+    }
+    return { kind: 'ok', inserted };
+  }
+
   app.get(apiPaths.agents, c => {
     const principal = getUserPrincipal(c);
+    // D4.d D5 — Q6.a list filter. Default view hides `failed` rows
+    // (they're management-view material, not the agent dropdown the
+    // user normally interacts with). `?include_failed=1` widens to
+    // include failed rows, but ACL still runs second — Cindy
+    // `gMpODJXMetG39cKq` lock: `?include_failed=1` is ACL-first /
+    // creator-scoped, NOT a cross-user widener. `canViewAgent` is
+    // already creator-scoped for failed rows (failed rows have no
+    // dependent workspace, so the workspace-membership branch can
+    // never match), so reusing it here is correct: cross-user
+    // `?include_failed=1` returns only the caller's own failed
+    // rows + their normal active set.
+    const includeFailed = c.req.query('include_failed') === '1';
     return c.json({
-      agents: agents.list().filter(agent => canViewAgent(ctx, principal, agent.id)),
+      agents: agents
+        .list()
+        .filter(agent => {
+          if (agent.materialization_status === 'failed' && !includeFailed) {
+            return false;
+          }
+          return canViewAgent(ctx, principal, agent.id);
+        }),
     });
   });
 
@@ -3451,10 +3632,22 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     // contract requires that a same-key retry returns the same
     // outcome it returned the first time, NOT a fresh placement
     // error. Online check + reserve only fire on the no-row path.
+    //
+    // D5 adds: `?retry=true` — same-row retry on a stored `failed`
+    // row (§3.2 (a)). Cindy D5 guard rails locked:
+    //   1. `?retry=true` only succeeds against (this creator,
+    //      this key, status='failed') with body matching the row's
+    //      stored metadata snapshot. Metadata mismatch still
+    //      rejects FIRST (no body field becomes implicitly
+    //      mutable via the retry verb).
+    //   2. retry uses the SAME L2/L3a/L3b helpers as fresh create
+    //      via `d5RunMaterializeFromReserved`. Dispatch failure
+    //      flips the row back to `failed` with this attempt's
+    //      code/at — never preserved-old, never stuck-pending.
+    //   3. No new wire / daemon / protocol surface. Retry reuses
+    //      the same `agent_materialize` send the fresh path uses.
 
-    // L0.1 — parse body shape. The user-gate middleware (installed
-    // before route registration) already guaranteed
-    // `principal.kind === 'user'`.
+    // L0.1 — parse body shape.
     const body = await c.req.json().catch(() => ({}));
     const parsed = CreateAgentInputSchema.safeParse(body);
     if (!parsed.success) {
@@ -3464,29 +3657,25 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     const creatorUserId = principal.userId;
 
     // L0.2 — Idempotency-Key header MUST be present + shape-valid
-    // (design §14 Q1). Missing or malformed → 400 before we touch
-    // the DB.
+    // (design §14 Q1).
     const keyParse = d3ParseIdempotencyKey(c);
     if (!keyParse.ok) return keyParse.response;
     const idempotencyKey = keyParse.key;
 
-    // L0.3 — Idempotency lookup. Returns either an existing row
-    // (any status) or null (fresh attempt).
+    // L0.2b (D5) — `?retry=true` is parsed here so the existing-row
+    // dispatch branches can route on it; semantically it's a
+    // modifier on the existing-row + failed arm only.
+    const retryFlag = c.req.query('retry') === 'true';
+
+    // L0.3 — Idempotency lookup (creator-scoped via the v33 partial
+    // unique index; cross-creator collisions are impossible at SQL).
     const existingRow = agents.findByIdempotencyKey(
       creatorUserId,
       idempotencyKey,
     );
 
     // L0.4 — if a row exists, metadata-mismatch check fires BEFORE
-    // status dispatch (Cindy final-review P1 invariant: "mismatch
-    // BEFORE dispatch"). A same-key repeat with different body
-    // 400s instead of silently reusing the stored row's state.
-    //
-    // Mismatch comparator does NOT call placement (Cindy D3
-    // round-1 P1). `host_id` comparison falls back to the stored
-    // row's host when the body omits it; an explicit body host_id
-    // that differs from the stored value trips the mismatch arm
-    // without an ownership check.
+    // status dispatch (Cindy final-review P1 + D5 guard rail #1).
     if (existingRow) {
       const mismatchField = d3CompareMetadataSnapshot(
         d3RowSnapshot(existingRow),
@@ -3507,18 +3696,13 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       }
 
       // L0.5 — metadata matches; dispatch on materialization_status
-      // per §3.2.
+      // per §3.2 (D5 routes the `failed` arm via `?retry=true`).
       switch (existingRow.materialization_status) {
         case 'active': {
-          // 200 echo — caller is retrying a successful create.
-          // Return the EXACT same payload shape as a fresh L4
-          // completion (Cindy D3 round-1 P1.3): every field of the
-          // 201 success body must be present so clients can treat
-          // retry and original create as interchangeable. Any
-          // dependent-row lookup that fails here (DM missing,
-          // onboarding message missing) is treated as a corrupt
-          // invariant — 500 `internal_error`, never a silent null
-          // fallback (Cindy refinement `m-K0qV09mGuRqwtu` #2).
+          // 200 echo — caller is retrying a successful create (or
+          // passed `?retry=true` against an already-active row,
+          // which is also a no-op same-key outcome). Either way the
+          // response is the same fresh-L4 4-field payload.
           const dm = conversations.findDmChannelForAgent(existingRow.id);
           if (!dm) {
             ctx.logger.error(
@@ -3556,7 +3740,11 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
         }
         case 'pending_materialization':
           // Another in-flight request with the same key is still
-          // dispatching. Renderer can silently retry; UI suppresses.
+          // dispatching. Same response regardless of `?retry=true`:
+          // the caller's intent is "make this attempt succeed",
+          // which it might still be doing on a sibling request.
+          // 409 `materialization_in_progress` — renderer silently
+          // retries with backoff.
           return c.json(
             {
               error: 'an in-flight materialize for this key is still pending',
@@ -3564,24 +3752,149 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
             },
             409,
           );
-        case 'failed':
-          // D3 ships the basic 409 path. The `?retry=true` recovery
-          // surface + the `failed` row management UI ship in D5;
-          // until then a failed row can only be cleared via DELETE
-          // (also added in D5).
+        case 'failed': {
+          // D5: `?retry=true` enters same-row retry; otherwise
+          // 409 (unchanged from D3, minus the "(D5)" suffix).
+          if (!retryFlag) {
+            return c.json(
+              {
+                error: `previous materialize attempt failed (${existingRow.materialization_failed_code}); resend with ?retry=true to retry this row, or use a fresh Idempotency-Key for a new attempt`,
+                code: 'materialization_previously_failed',
+                failed_code: existingRow.materialization_failed_code,
+                failed_at: existingRow.materialization_failed_at,
+              },
+              409,
+            );
+          }
+
+          // ── L1 (retry) — online check BEFORE flipping the row.
+          // Cindy D5 guard rail #2: do NOT flip failed → pending
+          // when the daemon is offline (the row would otherwise
+          // bounce failed → pending → failed in vain, and any
+          // observer between the two flips would see a misleading
+          // `pending_materialization` status).
+          const controller = ctx.hostWsController?.();
+          const connectionId =
+            controller?.connectionIdForHost(existingRow.host_id) ?? null;
+          if (!controller || !connectionId) {
+            return c.json(
+              {
+                error: 'host runtime is not currently attached',
+                code: 'host_attach_pending',
+              },
+              503,
+            );
+          }
+
+          // Daemon attached — flip failed → pending atomically.
+          // The helper's `WHERE status = 'failed'` guard handles
+          // the race window where a sibling mutation (e.g.,
+          // another tab clicking Delete) flips the row out from
+          // under us: 409 retry_target_not_failed surfaces in
+          // that case, never silently re-flipping a non-failed
+          // row.
+          const flipped = agents.flipFailedToReserveAgain(existingRow.id);
+          if (!flipped) {
+            return c.json(
+              {
+                error: 'agent row is no longer in failed state; refresh and try again',
+                code: 'retry_target_not_failed',
+              },
+              409,
+            );
+          }
+          // Re-read post-flip so the L2 helper sees the
+          // authoritative `pending_materialization` shape (the row
+          // has the same metadata; the failed_* fields are NULL
+          // again).
+          const rowToRetry = agents.getRow(existingRow.id);
+          if (!rowToRetry) {
+            ctx.logger.error(
+              { agentId: existingRow.id },
+              'agent row vanished between flipFailedToReserveAgain and re-read; treating as internal error',
+            );
+            return c.json(
+              { error: 'agent row vanished post-flip', code: 'internal_error' },
+              500,
+            );
+          }
+
+          // L2 / L3a / L3b via the shared helper. On any failure
+          // the helper has already flipped the row back to
+          // `failed` with this attempt's code/at (Cindy D5
+          // guard rail #2).
+          const retryResult = await d5RunMaterializeFromReserved({
+            reservedRow: rowToRetry,
+            controller,
+            connectionId,
+            creatorUserId,
+          });
+          if (retryResult.kind === 'failed') {
+            return c.json(
+              { error: retryResult.message, code: retryResult.failedCode },
+              retryResult.status,
+            );
+          }
+          // L4 deliver + auto-start (post-commit best-effort) —
+          // identical to fresh create. Use 201 because this is
+          // the first time this row reaches `active`.
+          ctx.runtimeHost
+            .deliverMessage(
+              retryResult.inserted.dm.id,
+              rowToRetry.id,
+              retryResult.inserted.onboardingMsg.id,
+            )
+            .catch(err =>
+              ctx.logger.error(
+                {
+                  conversationId: retryResult.inserted.dm.id,
+                  agentId: rowToRetry.id,
+                  err,
+                },
+                'onboarding message deliver failed (post-commit best-effort)',
+              ),
+            );
+          ctx.runtimeHost
+            .start(retryResult.inserted.dm.id, rowToRetry.id)
+            .catch(err =>
+              ctx.logger.error(
+                {
+                  conversationId: retryResult.inserted.dm.id,
+                  agentId: rowToRetry.id,
+                  err,
+                },
+                'dm onboarding spawn failed (post-commit best-effort)',
+              ),
+            );
           return c.json(
             {
-              error: `previous materialize attempt failed (${existingRow.materialization_failed_code}); use ?retry=true (D5) to retry`,
-              code: 'materialization_previously_failed',
-              failed_code: existingRow.materialization_failed_code,
-              failed_at: existingRow.materialization_failed_at,
+              agent: agents.get(rowToRetry.id)!,
+              agent_home_workspace_id: retryResult.inserted.home.id,
+              dm_channel_id: retryResult.inserted.dm.id,
+              onboarding_message_id: retryResult.inserted.onboardingMsg.id,
             },
-            409,
+            201,
           );
+        }
       }
     }
 
-    // ── L0.6 — no idempotency row → fresh attempt. Placement /
+    // L0.6 (D5) — `?retry=true` without an existing row is a
+    // client misuse: caller asked to retry something we never
+    // recorded. 404 explicit instead of silent fresh-create
+    // fallthrough (which would be surprising and would mask UI
+    // bugs that send retry=true with the wrong key).
+    if (retryFlag) {
+      return c.json(
+        {
+          error: 'no prior agent found for this Idempotency-Key; use a fresh-key POST to create a new agent',
+          code: 'retry_target_not_found',
+        },
+        404,
+      );
+    }
+
+    // ── L0.7 — no idempotency row → fresh attempt. Placement /
     //          name uniqueness / online check ALL run here, NOT in
     //          the existing-row path above (Cindy D3 round-1 P1).
     let resolvedHostId: string;
@@ -3621,10 +3934,6 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     }
 
     // ── L1 reserve ─────────────────────────────────────────────────
-    //
-    // Insert a `pending_materialization` row with the idempotency key
-    // captured. No dependent rows yet — those land in L3a after the
-    // wire intent succeeds (design §6.4).
     let reservedRow: AgentRow;
     try {
       reservedRow = agents.reserveForMaterialize(
@@ -3634,9 +3943,6 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
         idempotencyKey,
       );
     } catch (err) {
-      // Could be a name-collision trigger (v21) firing late if a
-      // concurrent insert won the slot between L0.6's getByName and
-      // here. Surface as 409 — same outcome as L0.6.
       ctx.logger.warn(
         { err, agentName: parsed.data.name, idempotencyKey },
         'reserveForMaterialize INSERT failed',
@@ -3647,132 +3953,19 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       );
     }
 
-    // ── L2 wire intent ────────────────────────────────────────────
-    //
-    // `agent_materialize` is server↔daemon FORMAL semantics. The
-    // route dispatches via the same `hostWsController.sendCommand`
-    // path that runtime_start uses (D4.b convention). The captured
-    // `connectionId` from the pre-reserve online check is passed as
-    // `expectedConnectionId` so a reattach landing between check and
-    // dispatch surfaces as `transport_no_connection` (mapped to 503
-    // host_attach_pending below) instead of silently routing to the
-    // new connection.
-    let ackResult: { agent_dir: string; agent_home_workspace_path: string };
-    try {
-      const result = await controller.sendCommand(
-        resolvedHostId,
-        'agent_materialize',
-        {
-          agent_id: reservedRow.id,
-          agent_home_workspace_id: agentHomeWorkspaceId(reservedRow.id),
-          name: reservedRow.name,
-          runtime: reservedRow.runtime,
-          model: reservedRow.model ?? null,
-          description: reservedRow.description ?? null,
-          template_choice: 'default',
-        },
-        { timeoutMs: 60_000, expectedConnectionId: connectionId },
-      );
-      ackResult = {
-        agent_dir: result.agent_dir,
-        agent_home_workspace_path: result.agent_home_workspace_path,
-      };
-    } catch (err) {
-      // L3b — flip the reservation to failed in a SEPARATE tx so the
-      // failed row persists regardless of any later rollback (Cindy
-      // D2 invariant #3).
-      const now = Date.now();
-      let failedCode: string;
-      let status: 400 | 409 | 502 | 503 | 504 | 507;
-      if (err instanceof HostWsCommandResponseError) {
-        const mapped = d3MapMaterializeWireError(err);
-        failedCode = mapped.failedCode;
-        status = mapped.status;
-      } else if (err instanceof HostWsCommandTransportError) {
-        // Transport-level errors. `transport_no_connection` +
-        // `transport_disconnected` mean "daemon temporarily offline"
-        // — promote to host_attach_pending (503). `transport_timeout`
-        // is its own thing (504 materialize_timeout).
-        if (
-          err.code === 'transport_no_connection' ||
-          err.code === 'transport_disconnected'
-        ) {
-          failedCode = 'host_attach_pending';
-          status = 503;
-        } else if (err.code === 'transport_timeout') {
-          failedCode = 'materialize_timeout';
-          status = 504;
-        } else {
-          // transport_send_failed / transport_invalid_command /
-          // transport_response_mismatch — all backend-side bugs.
-          failedCode = 'daemon_internal_error';
-          status = 502;
-        }
-      } else {
-        ctx.logger.error(
-          { err, agentId: reservedRow.id },
-          'unexpected error during agent_materialize dispatch',
-        );
-        failedCode = 'daemon_internal_error';
-        status = 502;
-      }
-      agents.flipToFailed(reservedRow.id, failedCode, now);
+    // L2 / L3a / L3b via the shared helper. Same as the retry path —
+    // both fresh and retry hit `d5RunMaterializeFromReserved`, which
+    // guarantees Cindy D5 guard rail #3 (no new protocol surface).
+    const freshResult = await d5RunMaterializeFromReserved({
+      reservedRow,
+      controller,
+      connectionId,
+      creatorUserId,
+    });
+    if (freshResult.kind === 'failed') {
       return c.json(
-        {
-          error: err instanceof Error ? err.message : String(err),
-          code: failedCode,
-        },
-        status,
-      );
-    }
-
-    // L2 cross-check (§6.5): the daemon ack's `agent_dir` MUST equal
-    // `agent_home_workspace_path` (the daemon-side schema enforces
-    // this via .superRefine; defense-in-depth at the server boundary
-    // pins it once more).
-    if (ackResult.agent_dir !== ackResult.agent_home_workspace_path) {
-      agents.flipToFailed(reservedRow.id, 'daemon_internal_error', Date.now());
-      ctx.logger.error(
-        {
-          agentId: reservedRow.id,
-          agent_dir: ackResult.agent_dir,
-          agent_home_workspace_path: ackResult.agent_home_workspace_path,
-        },
-        'daemon ack carried mismatched agent_dir vs agent_home_workspace_path',
-      );
-      return c.json(
-        {
-          error: 'daemon ack invariant violation (agent_dir != agent_home_workspace_path)',
-          code: 'daemon_internal_error',
-        },
-        502,
-      );
-    }
-
-    // ── L3a flip-active + dependent rows tx ───────────────────────
-    let inserted: ReturnType<typeof d3InsertDependentRowsAtomic>;
-    try {
-      inserted = d3InsertDependentRowsAtomic(
-        reservedRow,
-        ackResult.agent_dir,
-        creatorUserId,
-      );
-    } catch (err) {
-      // L3a tx rolled back. Open a SEPARATE L3b tx (Cindy D2
-      // invariant #3) to flip the reservation to failed —
-      // `flipToFailed` is one UPDATE outside any wrapping tx, so
-      // L3a's rollback cannot remove it.
-      ctx.logger.error(
-        { err, agentId: reservedRow.id },
-        'L3a dependent-row insert tx failed; flipping to failed',
-      );
-      agents.flipToFailed(reservedRow.id, 'dependent_row_insert_failed', Date.now());
-      return c.json(
-        {
-          error: err instanceof Error ? err.message : String(err),
-          code: 'dependent_row_insert_failed',
-        },
-        500,
+        { error: freshResult.message, code: freshResult.failedCode },
+        freshResult.status,
       );
     }
 
@@ -3780,26 +3973,32 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     //
     // Cindy D3 round-1 P1.4: L3a commit IS the "create succeeded"
     // boundary. L4 runtime delivery / spawn are post-commit
-    // best-effort surfaces — failure ONLY logs, never flips the
-    // active row back to failed and never turns the HTTP response
-    // into 5xx. Otherwise a transient daemon hiccup between
-    // materialize ack and deliver would leave the user with an
-    // active agent row that the route reported as failed, and a
-    // same-key retry would echo 200 — the worst possible
-    // "looks-failed-but-already-created" UX.
+    // best-effort surfaces — failure ONLY logs.
     ctx.runtimeHost
-      .deliverMessage(inserted.dm.id, reservedRow.id, inserted.onboardingMsg.id)
+      .deliverMessage(
+        freshResult.inserted.dm.id,
+        reservedRow.id,
+        freshResult.inserted.onboardingMsg.id,
+      )
       .catch(err =>
         ctx.logger.error(
-          { conversationId: inserted.dm.id, agentId: reservedRow.id, err },
+          {
+            conversationId: freshResult.inserted.dm.id,
+            agentId: reservedRow.id,
+            err,
+          },
           'onboarding message deliver failed (post-commit best-effort)',
         ),
       );
     ctx.runtimeHost
-      .start(inserted.dm.id, reservedRow.id)
+      .start(freshResult.inserted.dm.id, reservedRow.id)
       .catch(err =>
         ctx.logger.error(
-          { conversationId: inserted.dm.id, agentId: reservedRow.id, err },
+          {
+            conversationId: freshResult.inserted.dm.id,
+            agentId: reservedRow.id,
+            err,
+          },
           'dm onboarding spawn failed (post-commit best-effort)',
         ),
       );
@@ -3807,9 +4006,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     return c.json(
       {
         agent: agents.get(reservedRow.id)!,
-        agent_home_workspace_id: inserted.home.id,
-        dm_channel_id: inserted.dm.id,
-        onboarding_message_id: inserted.onboardingMsg.id,
+        agent_home_workspace_id: freshResult.inserted.home.id,
+        dm_channel_id: freshResult.inserted.dm.id,
+        onboarding_message_id: freshResult.inserted.onboardingMsg.id,
       },
       201,
     );
@@ -3819,6 +4018,17 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     const id = c.req.param('id');
     const agent = agents.get(id);
     if (!agent) return c.json({ error: 'agent not found' }, 404);
+    // D4.d D5 — Q6.a single-get filter, ACL-first / creator-scoped.
+    // Default view hides `failed` rows behind 404 so callers without
+    // the management-view intent treat them as gone. `?include_failed=1`
+    // widens but ACL still runs second — `canViewAgent` is already
+    // creator-scoped for failed rows (no dependent workspace → no
+    // workspace-membership branch can match), so cross-user
+    // `?include_failed=1` on someone else's failed row still 404s.
+    const includeFailed = c.req.query('include_failed') === '1';
+    if (agent.materialization_status === 'failed' && !includeFailed) {
+      return c.json({ error: 'agent not found' }, 404);
+    }
     if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
       return c.json({ error: 'agent not found' }, 404);
     }
@@ -4161,6 +4371,67 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!canEditAgent(ctx, getUserPrincipal(c), agent.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
+
+    // D4.d D5 — materialization-aware DELETE dispatch:
+    //
+    //   pending_materialization → 409 (another request is mid-
+    //     flight; DELETE during reserve→flip would race the L3a/L3b
+    //     tx and leave half-state). Operator must wait for the
+    //     pending → active|failed transition; if it's stuck past
+    //     the §5 reconciler threshold (60s default), the boot
+    //     reconciler will flip it to failed and the operator can
+    //     DELETE then. Same error code the POST `pending` arm
+    //     uses, so the renderer can render one banner for both.
+    //
+    //   failed → 204 row-only delete. Failed rows have NO
+    //     dependent rows (L3a never ran; the §6.3 invariant says
+    //     dependent rows are inserted in the same tx as the
+    //     flip-active, so a failed row by definition has the
+    //     pre-L3a shape — agent row only). Skip the entire
+    //     stop/sweep/L1/L2 flow that the active-row path runs,
+    //     just drop the agents row. The §3.2 contract permits
+    //     this: failed rows are exactly the management-view's
+    //     "delete or retry" surface.
+    //
+    //   active → unchanged from D3 (full destructive flow below).
+    //     This branch must remain backward-compatible — Cindy
+    //     round-1 P1 #2 invariant + every existing
+    //     active-delete test pins this.
+    if (agent.materialization_status === 'pending_materialization') {
+      return c.json(
+        {
+          error: 'an in-flight materialize for this agent is still pending; wait for it to complete (or for the §5 boot reconciler to mark it failed) before deleting',
+          code: 'materialization_in_progress',
+        },
+        409,
+      );
+    }
+    if (agent.materialization_status === 'failed') {
+      // No dependent rows to sweep — the row was inserted in L1
+      // reserve and never reached L3a flip-active + dependents.
+      // No L1 dir either, in general: the daemon may have written
+      // a partial dir for some failure codes (§4.5 Group B/C), but
+      // we deliberately do NOT issue a remote `agent_demolish` —
+      // §4.5 explicitly keeps DELETE DB-only so D4.d does not
+      // expand the wire protocol surface. Operators with a real
+      // disk-cleanup need use host shell access (runbook §12.8).
+      agents.delete(id);
+      ctx.logger.info(
+        {
+          agentId: id,
+          agentName: agent.name,
+          failedCode: agent.materialization_failed_code,
+        },
+        'failed agent row deleted (D5: row-only, no dependents)',
+      );
+      return c.body(null, 204);
+    }
+    // ── active branch: existing destructive flow (preserved
+    //                   verbatim, including the `confirm: true`
+    //                   body guard which is the click-through
+    //                   safety on the heavy DM-channel + L1/L2
+    //                   sweep path).
+
     const body = await c.req.json().catch(() => ({}));
     const parsed = DeleteAgentInputSchema.safeParse(body);
     if (!parsed.success) {

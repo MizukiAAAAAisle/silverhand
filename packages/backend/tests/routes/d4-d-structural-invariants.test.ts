@@ -20,7 +20,52 @@
 
 import { randomBytes } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
+import { X_SILVERHAND_LEGACY_USER_ID_HEADER } from '@silverhand/shared';
+import { AgentRepo } from '../../src/repos/agent-repo.js';
+import { HostRepo } from '../../src/repos/host-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
+
+/**
+ * Seed a `materialization_status = 'failed'` row that matches the
+ * shape a real L3b leaves behind: ONLY the `agents` row exists, NO
+ * dependent rows (no `agent_home` workspace, no DM channel, no
+ * `workspace_users` membership entry). The L3a transaction that
+ * inserts those dependents rolls back atomically on failure, so a
+ * "failed" row in production is structurally bare.
+ *
+ * The cross-user ACL pins below depend on this shape: with no
+ * dependent workspaces, `canViewAgent` short-circuits to creator-only,
+ * which is exactly the structural property the "ACL-first" contract
+ * relies on. Routing through `POST /api/agents` first (full L3a) and
+ * then flipping the status leaves an agent_home workspace + a
+ * workspace_users row behind, which would let `canViewAgent` match
+ * via the workspace branch and mask the contract this test is meant
+ * to lock down.
+ */
+function seedFailedAgent(
+  t: TestApp,
+  createdByUserId: string,
+  name: string,
+  idempotencyKey: string,
+): string {
+  const hosts = new HostRepo(t.ctx.db);
+  const owned = hosts.listOwnedActiveLocalForUser(createdByUserId);
+  if (owned.length === 0) {
+    throw new Error(
+      `seedFailedAgent: user ${createdByUserId} has no owned local host (test fixture did not pre-claim)`,
+    );
+  }
+  const hostId = owned[0]!.id;
+  const agents = new AgentRepo(t.ctx.db);
+  const row = agents.reserveForMaterialize(
+    { name, runtime: 'claude' },
+    hostId,
+    createdByUserId,
+    idempotencyKey,
+  );
+  agents.flipToFailed(row.id, 'host_attach_pending', Date.now());
+  return row.id;
+}
 
 function freshKey(): string {
   return `k-${randomBytes(8).toString('base64url')}`;
@@ -265,11 +310,82 @@ describe('D4.d structural invariants', () => {
   });
 
   describe('Invariant 2: ?include_failed=1 ACL-first (§4.1 / §7.3 / §10.3)', () => {
-    // D5 owns the un-skip. Pin the regression mode now (a
-    // privilege-escalation side channel) so D5 can't accidentally
-    // ship the widener before the ACL filter.
-    it.skip('list: ?include_failed=1 from user B does NOT widen to user A failed rows', () => {});
-    it.skip('get: cross-user GET /api/agents/:id with ?include_failed=1 returns 404', () => {});
+    // D5 un-skips. The regression mode this guards against: a future
+    // refactor reordering `?include_failed=1` so it widens the result
+    // set BEFORE the ACL gate runs. That would leak the existence of
+    // every other user's failed agent rows through the management
+    // view — a privilege-escalation side channel.
+    //
+    // The "ACL-first" contract is enforced by the structure of the
+    // route filter: `canViewAgent` runs second, and for failed rows
+    // `canViewAgent` already short-circuits to creator-only (failed
+    // rows have NO dependent workspaces, so the workspace-membership
+    // branch of `canViewAgent` can never match). Both tests below
+    // exercise the cross-user negative path; the third
+    // (own-rows-visible) pin is in `d5-failed-recovery.test.ts`.
+
+    it('list: ?include_failed=1 from user B does NOT widen to user A failed rows', async () => {
+      const t = buildTestApp();
+      tests.push(t);
+
+      // user A primes a failed row in its production shape: ONLY
+      // the agents row, no dependent agent_home / DM / membership
+      // rows. See `seedFailedAgent` for why a POST-then-flip
+      // shortcut would mask the ACL contract this test pins.
+      const userA = 'alice';
+      const userB = 'bob';
+      const failedAgentName = `inv2-user-a-failed-${freshKey()}`;
+      const userAAgentId = seedFailedAgent(
+        t,
+        userA,
+        failedAgentName,
+        freshKey(),
+      );
+
+      // user B lists with ?include_failed=1. They should see their
+      // own agents (none failed in this fixture) but NOT user A's
+      // failed row.
+      const userBList = await http(t).get('/api/agents?include_failed=1', {
+        headers: {
+          [X_SILVERHAND_LEGACY_USER_ID_HEADER]: userB,
+        },
+      });
+      expect(userBList.status, await userBList.clone().text()).toBe(200);
+      const body = (await userBList.json()) as {
+        agents: Array<{ id: string; name: string }>;
+      };
+      const ids = body.agents.map(a => a.id);
+      expect(ids).not.toContain(userAAgentId);
+      const names = body.agents.map(a => a.name);
+      expect(names).not.toContain(failedAgentName);
+    });
+
+    it('get: cross-user GET /api/agents/:id with ?include_failed=1 returns 404', async () => {
+      const t = buildTestApp();
+      tests.push(t);
+
+      const userA = 'alice';
+      const userB = 'bob';
+      const userAAgentId = seedFailedAgent(
+        t,
+        userA,
+        `inv2-cross-${freshKey()}`,
+        freshKey(),
+      );
+
+      // user B → 404 even with the widener. ACL gate fires after
+      // the failed-status filter, so cross-user lookup of someone
+      // else's failed row stays invisible.
+      const cross = await http(t).get(
+        `/api/agents/${userAAgentId}?include_failed=1`,
+        {
+          headers: {
+            [X_SILVERHAND_LEGACY_USER_ID_HEADER]: userB,
+          },
+        },
+      );
+      expect(cross.status).toBe(404);
+    });
   });
 
   describe('Invariant 3: L3a tx atomicity (§6.3 L3a/L3b)', () => {
