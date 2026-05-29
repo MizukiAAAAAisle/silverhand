@@ -31,7 +31,6 @@ import {
   encodeFrame,
   type EventFrame,
   type AgentMaterializeParams,
-  type AgentMaterializeResult,
 } from '../protocol.js';
 import { DAEMON_VERSION, createDaemonHelloResult } from './version.js';
 import { logDaemon } from './daemon-logging.js';
@@ -41,7 +40,10 @@ import {
 } from './identity.js';
 import { OutboundSupervisor } from './outbound-supervisor.js';
 import type { OutboundCommandDispatcher } from './outbound-client.js';
-import { materializeAgent } from './agent-materialize/index.js';
+import {
+  AgentMaterializeError,
+  materializeAgent,
+} from './agent-materialize/index.js';
 import {
   buildDaemonInstanceId,
   defaultRuntimePidRootDir,
@@ -148,23 +150,43 @@ export interface RunDaemonOptions {
       }) => SupervisorContract)
     | null;
   /**
-   * D4.d D6 test-injection seam — override the daemon's
-   * `agent_materialize` handler. Production omits this and gets the
-   * real `materializeAgent` (writes to `~/.silverhand/agents/<id>/`).
-   * Tests pass a closure that points `materializeAgent` at a tmp
-   * dir, or that returns typed `AgentMaterializeError` on demand to
-   * drive the §3.2 retry path through the real wire without
-   * touching the real user home.
+   * D4.d D6 — **test-only** hooks. NOT part of the embedder
+   * contract. Production MUST omit this field. The dispatcher
+   * slot ALWAYS calls `materializeAgent(...)` — there is no
+   * embedder-facing seam to replace the handler. The two hooks
+   * below are narrow test surfaces:
    *
-   * Boundary: this is the SAME slot `dispatcher.ts` exposes; the
-   * dispatcher's typed-error handling (`AgentMaterializeError`
-   * narrowing → wire `error.code` instead of `internal_error`) is
-   * unchanged regardless of which implementation runs behind the
-   * slot. Cindy D2 pre-gate #3 still holds.
+   *   - `agentMaterializeHomeDir` overrides the parent dir
+   *     `materializeAgent` joins onto (`<homeDir>/.silverhand/
+   *     agents/<id>/`); without it, the real
+   *     `materializeAgent` would write into the daemon process's
+   *     `homedir()`, which is unacceptable in tests.
+   *   - `agentMaterializeFaultInjector` is a deterministic
+   *     typed-error pre-hook: if it returns an
+   *     `AgentMaterializeError`, the dispatcher surfaces the
+   *     typed wire code (Cindy D2 pre-gate #3 narrowing path);
+   *     if it returns `undefined`, the real `materializeAgent`
+   *     runs. The injector cannot return a synthetic success
+   *     result, cannot mutate handler behavior, and is fired
+   *     BEFORE `materializeAgent` — so the only behavior under
+   *     test control is "fail this dispatch with code X" or
+   *     "let the real handler run".
+   *
+   * Cindy D6-2 P1-1 (`d4IID_Nnn1VShRa5`): a previous draft
+   * exposed `agentMaterializeHandler?` at the top of
+   * `RunDaemonOptions`, which read like an embedder-facing
+   * seam to replace formal server↔daemon semantics. This
+   * narrow `testHooks` namespace makes the test-only scope
+   * explicit in the API shape and preserves the D4.d invariant
+   * that the wire arm is additive only — no fork, no
+   * replacement.
    */
-  agentMaterializeHandler?: (
-    params: AgentMaterializeParams,
-  ) => AgentMaterializeResult | Promise<AgentMaterializeResult>;
+  testHooks?: {
+    agentMaterializeHomeDir?: string;
+    agentMaterializeFaultInjector?: (
+      params: AgentMaterializeParams,
+    ) => AgentMaterializeError | undefined;
+  };
 }
 
 export interface RunningDaemon {
@@ -316,12 +338,19 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     // sentinel write. `homeDir` defaults to the daemon process's
     // own `homedir()`, which is correct in production (the daemon
     // runs as the user whose `~/.silverhand/agents/` is the target
-    // L1 root). D4.d D6 added the `agentMaterializeHandler` opt for
-    // e2e tests that need to route through the real wire + real
-    // dispatcher but with a tmp `homeDir` and/or a controlled
-    // failure injection.
-    agentMaterializeHandler:
-      opts.agentMaterializeHandler ?? (params => materializeAgent(params)),
+    // L1 root). D4.d D6 narrowed the test seam to `testHooks` per
+    // Cindy `d4IID_Nnn1VShRa5` P1-1: there is NO embedder-facing
+    // handler-replacement option. The dispatcher slot ALWAYS
+    // invokes `materializeAgent`; tests may inject a tmp `homeDir`
+    // and/or a deterministic typed-error fault BEFORE the real
+    // handler runs.
+    agentMaterializeHandler: async params => {
+      const fault = opts.testHooks?.agentMaterializeFaultInjector?.(params);
+      if (fault) throw fault;
+      return materializeAgent(params, {
+        homeDir: opts.testHooks?.agentMaterializeHomeDir,
+      });
+    },
   });
   commandForwarder = command =>
     dispatcher.dispatch(command.id, String(command.kind), command.params);

@@ -418,18 +418,18 @@ export interface DaemonWithSupervisorOptions {
    *  `.cjs` fixtures don't need `chmod +x`. */
   spawnFn?: SupervisorOptions['spawnFn'];
   /**
-   * D4.d D6 — inject the daemon's `agent_materialize` handler. The
-   * production default writes to `~/.silverhand/agents/<id>/`,
-   * which would touch the real user home; tests instead pass a
-   * closure that points `materializeAgent` at a tmp dir, or that
-   * returns typed `AgentMaterializeError` once before deferring to
-   * the real handler on retry. The dispatcher's typed-error
-   * narrowing (`AgentMaterializeError` → wire `error.code`) is
-   * unchanged regardless of which implementation runs.
+   * D4.d D6 — narrow test hooks on `RunDaemonOptions.testHooks`,
+   * pinned by Cindy P1-1 (`d4IID_Nnn1VShRa5`). The production
+   * dispatcher slot ALWAYS calls the real `materializeAgent`;
+   * tests can only:
+   *   - point `materializeAgent` at a tmp `homeDir` instead of
+   *     the daemon process's real `homedir()`;
+   *   - inject a deterministic typed `AgentMaterializeError`
+   *     BEFORE `materializeAgent` runs.
+   * No handler-replacement seam, no embedder-facing API for
+   * rewriting `agent_materialize` formal semantics.
    */
-  agentMaterializeHandler?: NonNullable<
-    Parameters<typeof runDaemon>[0]['agentMaterializeHandler']
-  >;
+  testHooks?: NonNullable<Parameters<typeof runDaemon>[0]['testHooks']>;
 }
 
 export interface DaemonWithSupervisorHandle {
@@ -469,7 +469,7 @@ export async function bootDaemonWithSupervisor(
     alsoStderr: false,
     runtimePidRootDir,
     daemonIdentityPath: null,
-    agentMaterializeHandler: opts.agentMaterializeHandler,
+    testHooks: opts.testHooks,
     supervisorFactory: ({ emit, logger, daemonInstanceId, runtimePidRootDir: pidRoot }) =>
       new Supervisor({
         emit,
