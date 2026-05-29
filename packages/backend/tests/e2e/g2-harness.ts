@@ -417,6 +417,19 @@ export interface DaemonWithSupervisorOptions {
    *  resolved binary via the same node interpreter (`execPath`) so
    *  `.cjs` fixtures don't need `chmod +x`. */
   spawnFn?: SupervisorOptions['spawnFn'];
+  /**
+   * D4.d D6 — inject the daemon's `agent_materialize` handler. The
+   * production default writes to `~/.silverhand/agents/<id>/`,
+   * which would touch the real user home; tests instead pass a
+   * closure that points `materializeAgent` at a tmp dir, or that
+   * returns typed `AgentMaterializeError` once before deferring to
+   * the real handler on retry. The dispatcher's typed-error
+   * narrowing (`AgentMaterializeError` → wire `error.code`) is
+   * unchanged regardless of which implementation runs.
+   */
+  agentMaterializeHandler?: NonNullable<
+    Parameters<typeof runDaemon>[0]['agentMaterializeHandler']
+  >;
 }
 
 export interface DaemonWithSupervisorHandle {
@@ -456,6 +469,7 @@ export async function bootDaemonWithSupervisor(
     alsoStderr: false,
     runtimePidRootDir,
     daemonIdentityPath: null,
+    agentMaterializeHandler: opts.agentMaterializeHandler,
     supervisorFactory: ({ emit, logger, daemonInstanceId, runtimePidRootDir: pidRoot }) =>
       new Supervisor({
         emit,

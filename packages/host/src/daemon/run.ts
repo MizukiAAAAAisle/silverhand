@@ -27,7 +27,12 @@ import {
 import { IntentDispatcher } from './dispatcher.js';
 import { DaemonServer } from './server.js';
 import { createDaemonLogger, type DaemonLogger } from './logger.js';
-import { encodeFrame, type EventFrame } from '../protocol.js';
+import {
+  encodeFrame,
+  type EventFrame,
+  type AgentMaterializeParams,
+  type AgentMaterializeResult,
+} from '../protocol.js';
 import { DAEMON_VERSION, createDaemonHelloResult } from './version.js';
 import { logDaemon } from './daemon-logging.js';
 import {
@@ -142,6 +147,24 @@ export interface RunDaemonOptions {
         runtimePidRootDir: string | null;
       }) => SupervisorContract)
     | null;
+  /**
+   * D4.d D6 test-injection seam — override the daemon's
+   * `agent_materialize` handler. Production omits this and gets the
+   * real `materializeAgent` (writes to `~/.silverhand/agents/<id>/`).
+   * Tests pass a closure that points `materializeAgent` at a tmp
+   * dir, or that returns typed `AgentMaterializeError` on demand to
+   * drive the §3.2 retry path through the real wire without
+   * touching the real user home.
+   *
+   * Boundary: this is the SAME slot `dispatcher.ts` exposes; the
+   * dispatcher's typed-error handling (`AgentMaterializeError`
+   * narrowing → wire `error.code` instead of `internal_error`) is
+   * unchanged regardless of which implementation runs behind the
+   * slot. Cindy D2 pre-gate #3 still holds.
+   */
+  agentMaterializeHandler?: (
+    params: AgentMaterializeParams,
+  ) => AgentMaterializeResult | Promise<AgentMaterializeResult>;
 }
 
 export interface RunningDaemon {
@@ -293,10 +316,12 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     // sentinel write. `homeDir` defaults to the daemon process's
     // own `homedir()`, which is correct in production (the daemon
     // runs as the user whose `~/.silverhand/agents/` is the target
-    // L1 root). Tests wire a stubbed handler via the dispatcher
-    // slot directly so they can point at a tmp dir without touching
-    // this wiring.
-    agentMaterializeHandler: params => materializeAgent(params),
+    // L1 root). D4.d D6 added the `agentMaterializeHandler` opt for
+    // e2e tests that need to route through the real wire + real
+    // dispatcher but with a tmp `homeDir` and/or a controlled
+    // failure injection.
+    agentMaterializeHandler:
+      opts.agentMaterializeHandler ?? (params => materializeAgent(params)),
   });
   commandForwarder = command =>
     dispatcher.dispatch(command.id, String(command.kind), command.params);

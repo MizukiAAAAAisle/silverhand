@@ -137,3 +137,21 @@ export {
   type RotateTokenResult,
 } from './outbound-protocol.js';
 export { DAEMON_VERSION } from './daemon/version.js';
+/**
+ * D4.d D6 — re-export the daemon-side typed materialize error so
+ * embedders (and e2e tests) that inject a custom
+ * `agentMaterializeHandler` via `runDaemon` can throw the same
+ * `AgentMaterializeError` the production handler does. The
+ * dispatcher narrows this class via `instanceof` to surface the
+ * typed wire code instead of collapsing to `internal_error`
+ * (`dispatcher.ts` line 328); without a public export, the only way
+ * to land on that branch would be to reach into the internal
+ * subtree, which the `dependency-guard-agent-materialize.test.ts`
+ * tripwire blocks for backend code.
+ *
+ * Boundary: this export does NOT re-expose `materializeAgent`,
+ * `getAgentHomeTemplate`, or any other implementation detail of
+ * the agent-home subtree — only the throwable error class that's
+ * part of the daemon ↔ embedder contract.
+ */
+export { AgentMaterializeError } from './daemon/agent-materialize/index.js';
