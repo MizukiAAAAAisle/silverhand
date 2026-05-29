@@ -286,7 +286,7 @@ commit/test where the lock landed.
 | `packages/backend/tests/permissions.test.ts` (`canViewAgent` describe) | (D5-fixup1) | `canViewAgent` ACL-first ordering + system/agent-self/creator/workspace-member ACL branches. |
 | `packages/backend/tests/e2e/standalone-d4-d6-materialize-wire.test.ts` | 1 (3 phases) | Real-wire e2e: happy + typed-fault injection + `?retry=true` + §3.2 echo. Runs real `materializeAgent` via the production dispatcher slot. |
 
-Gates at D6-3 tip `f559eac` (after D6-2 fixup `d1e1763` re-pin):
+Gates at D6-3 tip `15085c5` (D6-3 doc + evidence-correction fixup, after D6-2 fixup `d1e1763` re-pin):
 
 - D6-2 e2e: 1/1 pass (real `materializeAgent`).
 - Host `agent-materialize/handler.test.ts`: 18/18.
