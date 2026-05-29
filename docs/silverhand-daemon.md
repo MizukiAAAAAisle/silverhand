@@ -1,14 +1,33 @@
-# silverhand-daemon (AgentHost runtime boundary — PR-1)
+# silverhand-daemon (AgentHost runtime boundary)
 
-Status: PR-1 (IPC skeleton only). Not yet on the critical path.
+**Status (current, post-D5.a)**: the daemon is **on the critical
+path**. It owns runtime spawn/supervision and the
+`agent_materialize` flow, and the backend's **formal** server↔daemon
+plane (runtime commands + materialize + runtime-event projection)
+goes through the `OutboundFrameAdapter` port — embedded over the
+local `daemon-outbound.sock`, standalone over WSS (see "Local
+outbound frame socket (D5.a)" below and `docs/d5-a-r4-acceptance.md`).
+`HostClient` over the control socket (`daemon.sock`) is now scoped to
+**desktop host-control IPC only** (ping / status / daemon-respawn
+re-attach), not the formal data plane.
 
-## What it is
+> **Historical note.** The "What it is", "PR-2 hand-off", and "Open
+> questions" sections below describe the **PR-1 skeleton** as it
+> originally shipped. They are retained for context; where they say
+> "backend connects via `HostClient`", "`ConversationManager` still
+> lives in backend", or "PR-2 will make `hostClient` required", read
+> them as the PR-1 starting point that the D-series (and D5.a in
+> particular) has since superseded.
+
+## What it is (PR-1 origin)
 
 `silverhand-daemon` is a long-running child process that Electron main
 (and `dev:headless`) spawns at startup. It owns a Unix-domain socket
-under `~/.silverhand/run/daemon.sock`; the backend connects to that
-socket through `HostClient` and speaks a tiny newline-delimited JSON
-protocol.
+under `~/.silverhand/run/daemon.sock`. In the PR-1 skeleton the
+backend connected to that socket through `HostClient` for everything;
+**post-D5.a** that control socket carries only desktop host-control
+IPC, while the formal server↔daemon plane uses the separate
+`daemon-outbound.sock` (below).
 
 PR-1 deliberately ships a minimum-viable surface — `ping`, `status`,
 `echo` — so we can validate:
@@ -24,6 +43,11 @@ The daemon does **not** spawn agent CLIs yet — `ConversationManager`
 still lives in `packages/backend`. PR-2 will migrate
 spawn/inbox-drain/run-state into the daemon and the daemon will
 become the only place those processes are owned.
+
+> *(Historical PR-1 text — superseded: the D-series moved runtime
+> spawn/supervision and the `agent_materialize` flow into the daemon;
+> the backend reaches them over the formal outbound frame plane, not a
+> `HostClient` RPC. See `docs/d5-a-r4-acceptance.md`.)*
 
 ## Why a separate process
 
@@ -71,6 +95,22 @@ reasoning, same shape, so we don't ship two runtimes.
 - `packages/host/src/spawn.ts` — `spawnDaemonChild()` helper for
   Electron main / dev:headless launchers.
 
+Outbound frame socket (added in D5.a — see "Local outbound frame
+socket" below):
+
+- `packages/host/src/daemon/local-outbound-frame-server.ts` — daemon
+  server bound on a **separate** `daemon-outbound.sock` (0o600) that
+  speaks the server↔daemon `OutboundFrame` envelope (NDJSON).
+- `packages/host/src/daemon/outbound-frame-mapping.ts` — command /
+  response / event mapping shared with the WSS outbound path.
+- `packages/host/src/daemon/outbound-write-buffer.ts` —
+  transport-neutral `OutboundFrameWriter` + 1024/4MiB backpressure
+  policy (same for WSS and local socket; no unbounded daemon write
+  queue).
+- `packages/host/src/daemon/outbound-client.ts` /
+  `packages/host/src/outbound-protocol.ts` — outbound frame schemas +
+  helpers.
+
 ## Intent surface (PR-1)
 
 | intent    | params               | result                                                                            |
@@ -103,10 +143,46 @@ Error codes (returned in `ResponseFrame.error.code`):
 
 ## Backend integration
 
-`startBackend({ ..., hostClient })` accepts an optional `HostClient`.
-When present, backend pings the daemon at boot and logs the version.
-Failure is logged as a warning, never fatal — PR-1 backend still works
-without the daemon. PR-2 promotes this to required.
+> *(PR-1 origin — partially superseded by D5.a; see the "Local
+> outbound frame socket (D5.a)" section below for the current formal
+> plane.)*
+
+In the PR-1 skeleton, `startBackend({ ..., hostClient })` accepted an
+optional `HostClient`: backend pinged the daemon at boot and logged
+the version, failure non-fatal. **Post-D5.a** the embedded backend's
+formal server↔daemon path no longer rides `HostClient` at all — it
+dials the `OutboundFrameAdapter` (local `daemon-outbound.sock`).
+`HostClient` survives only as desktop-main host-control IPC.
+
+## Local outbound frame socket (D5.a)
+
+D5.a unifies how the backend talks to the daemon's **formal**
+server↔daemon plane (runtime commands + `agent_materialize` +
+runtime-event projection) across both deployment modes. The backend
+no longer reaches the embedded daemon through an in-process
+`HostClient`; instead it dials a deployment-neutral
+`OutboundFrameAdapter` port:
+
+- **Standalone**: the daemon attaches to the backend over WSS; the
+  adapter is `StandaloneOutboundFrameAdapter` wrapping
+  `HostWsServerController`.
+- **Embedded** (Electron main / `dev:headless`): the daemon binds an
+  extra `LocalOutboundFrameServer` on `daemon-outbound.sock` (separate
+  from the PR-1 control socket above, 0o600), and the backend dials it
+  via `EmbeddedUnixOutboundFrameAdapter`. The daemon is started with
+  `--local-outbound-socket-path` (forwarded by `entry.ts` / `spawn.ts`;
+  desktop derives it next to the control socket).
+
+Both transports carry the **identical** `OutboundFrame` envelope and
+share the command/response/event mapping
+(`outbound-frame-mapping.ts`) and the 1024/4MiB write-backpressure
+policy (`outbound-write-buffer.ts`). Liveness is socket-close only —
+there is no durable transport queue or heartbeat; a dropped socket
+rejects in-flight commands. `HostClient` survives **only** as
+desktop-main host-control IPC (ping / status / daemon-respawn
+re-attach), never for runtime/materialize data-plane business
+commands. See `docs/remote-backend-d5a-design.md` and
+`docs/d5-a-r4-acceptance.md`.
 
 ## CLI surface
 
@@ -118,6 +194,12 @@ the agent. See `docs/architecture-principles.md` §9.3 for the
 rationale (host control plane vs. agent business plane).
 
 ## PR-2 hand-off
+
+> *(Historical PR-1 plan — largely superseded. The D-series has since
+> moved runtime spawn/supervision and `agent_materialize` into the
+> daemon and added the runtime command/event surface; the formal
+> backend↔daemon transport is the outbound frame envelope, not a
+> required `HostClient`. Kept for the original framing.)*
 
 The follow-up PR will:
 
@@ -132,7 +214,11 @@ The follow-up PR will:
 The wire format here is designed to absorb (2) and (3) without breaking
 existing intents.
 
-## Open questions to resolve before PR-2
+## Historical PR-1 open questions (pre-PR-2)
+
+> *(PR-1-era framing — retained for context; the D-series has since
+> moved runtime ownership into the daemon and unified the formal
+> transport, so these are no longer open "before PR-2" decisions.)*
 
 These need an explicit decision before `hostClient` becomes required;
 PR-1 punts on them because backend still boots without the daemon, so

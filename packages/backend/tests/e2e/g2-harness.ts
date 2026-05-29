@@ -452,12 +452,28 @@ export async function bootDaemonWithSupervisor(
   // Default spawn: launch the resolved binary via node so .cjs
   // fixtures don't need to be marked executable. This is the same
   // pattern `packages/host/tests/supervisor.test.ts` uses.
+  //
+  // A benign 'error' listener is attached to every spawned child: a
+  // late delivery/restart can ask the supervisor to spawn a runtime
+  // *after* the suite's `afterAll` has `rmSync`'d the runtime cwd,
+  // which makes Node emit an async `spawn ... ENOENT` on the child.
+  // The supervisor only listens for 'exit'/'close', so that error
+  // would otherwise surface as an unhandled exception that fails the
+  // run even though every test passed (observed only under full-suite
+  // timing). We own the returned child here, so swallowing its error
+  // is the correct place to absorb the teardown race — it does not
+  // suppress the supervisor's own exit/close-based failure handling.
   const defaultSpawnFn: NonNullable<SupervisorOptions['spawnFn']> = (
     bin,
     args,
     options,
-  ): ChildProcess =>
-    nodeSpawn(execPath, [bin, ...args.slice(1)], options as SpawnOptions);
+  ): ChildProcess => {
+    const child = nodeSpawn(execPath, [bin, ...args.slice(1)], options as SpawnOptions);
+    child.on('error', () => {
+      /* swallow teardown-race spawn ENOENT (cwd rm'd during shutdown) */
+    });
+    return child;
+  };
 
   const daemon = await runDaemon({
     socketPath,

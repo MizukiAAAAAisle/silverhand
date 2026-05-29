@@ -1357,10 +1357,14 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     // to call: idempotent for hosts with no live attachment
     // (returns false) and replacement-safe for the connection
     // map (cleanup is driven by the socket's `close` listener,
-    // not by this call). In embedded mode `hostWsController`
-    // resolves to the same registry that local-supervisor
-    // attach goes through, so revoking the local host kicks
-    // the daemon's outbound WS too — desired uniform behavior.
+    // not by this call). This kick is a WS-only concern (it is
+    // deliberately NOT part of `OutboundFrameAdapter`): it only
+    // bites the standalone path, where the daemon attaches over
+    // WSS. In embedded mode the daemon does not dial in over WS
+    // (the backend dials the daemon's local Unix socket instead),
+    // so there is no outbound WS attachment to drop here — the
+    // revoke's authoritative effect is the DB credential flip
+    // above, and `disconnectHost` is a harmless no-op.
     const wsController = ctx.hostWsController?.();
     if (wsController) {
       try {
@@ -3627,12 +3631,15 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
    *   dependents → L4 deliver + auto-start.
    *
    * Standalone vs embedded: this route does NOT branch on deployment
-   * mode. Both modes dispatch the same wire intent via the same
-   * `hostWsController.sendCommand`. Embedded mode supplies a
-   * loopback adapter for the WS controller; standalone mode reaches
-   * the real daemon over WS. The only mode-visible behavior is
-   * "daemon offline → 503 host_attach_pending", which mirrors
-   * D4.b runtime intent routes.
+   * mode. Both modes dispatch the same wire intent via the
+   * deployment-neutral `ctx.outboundFrameAdapter()` port (D5.a-3):
+   * standalone reaches the real daemon over the WSS-backed adapter;
+   * embedded dials the daemon's local `daemon-outbound.sock` via the
+   * `EmbeddedUnixOutboundFrameAdapter`. Both carry the identical
+   * outbound frame envelope — there is no loopback-over-WS adapter and
+   * no `hostWsController.sendCommand` on this path anymore. The only
+   * mode-visible behavior is "daemon offline → 503 host_attach_pending",
+   * which mirrors D4.b runtime intent routes.
    */
   app.post(apiPaths.agents, async c => {
     // ── L0 preflight ───────────────────────────────────────────────

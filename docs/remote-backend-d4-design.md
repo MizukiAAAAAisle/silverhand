@@ -720,6 +720,16 @@ accordingly:
 
 ## 9. R4 deferral mechanics
 
+> **Resolved (D5.a).** R4 has been paid down: the embedded backend no
+> longer uses `HostClient` for the formal server↔daemon plane — both
+> embedded and standalone now dispatch the same outbound frame
+> envelope through one `OutboundFrameAdapter` port (embedded = local
+> `daemon-outbound.sock`, standalone = WSS). The §9.3 `TODO(D5,R4)`
+> anchor count is zero and `packages/backend/src/**` imports no
+> `HostClient`. See `docs/remote-backend-d5a-design.md` and
+> `docs/d5-a-r4-acceptance.md`. The deferral framing below is retained
+> for historical context.
+
 R4 paydown is D5 work (per P1). D4 must leave the drift in a state
 where D5 can find and close it cleanly.
 
