@@ -65,6 +65,7 @@ import {
   type SendMessageTarget,
   systemSubtype,
   TEMP_CONVERSATION_DEBUG_WINDOW_MS,
+  type AgentMaterializationStatus,
 } from '@silverhand/shared';
 import type { BackendContext } from './context.js';
 import { createCliInvokeMiddleware } from './observability/cli-invoke-middleware.js';
@@ -3433,10 +3434,10 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
    * rejected at L0.4) but reading from the row makes the contract
    * explicit and survives any later refactor.
    *
-   * Returns the post-L3a inserted dependent rows + a flag indicating
-   * whether L4 best-effort fires. On failure returns a typed code +
-   * HTTP status + the caller-visible message; the caller renders the
-   * 4xx/5xx body.
+   * Returns the post-L3a inserted dependent rows (caller fires L4
+   * best-effort deliver + auto-start outside this helper). On
+   * failure returns a typed code + HTTP status + the caller-visible
+   * message; the caller renders the 4xx/5xx body.
    */
   async function d5RunMaterializeFromReserved(deps: {
     reservedRow: AgentRow;
@@ -3575,27 +3576,30 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
 
   app.get(apiPaths.agents, c => {
     const principal = getUserPrincipal(c);
-    // D4.d D5 — Q6.a list filter. Default view hides `failed` rows
-    // (they're management-view material, not the agent dropdown the
-    // user normally interacts with). `?include_failed=1` widens to
-    // include failed rows, but ACL still runs second — Cindy
-    // `gMpODJXMetG39cKq` lock: `?include_failed=1` is ACL-first /
-    // creator-scoped, NOT a cross-user widener. `canViewAgent` is
-    // already creator-scoped for failed rows (failed rows have no
-    // dependent workspace, so the workspace-membership branch can
-    // never match), so reusing it here is correct: cross-user
-    // `?include_failed=1` returns only the caller's own failed
-    // rows + their normal active set.
+    // D4.d D5 — Q6.a list filter, lifted into `canViewAgent` per
+    // Cindy `vB9vzUo4y_vgSZf8` P1 + design §I3 / §4.1: default
+    // hides BOTH `pending_materialization` AND `failed`. Pending
+    // rows are management-view material; default-hiding them keeps
+    // §5 boot reconciler residue out of the everyday product
+    // surface. `?include_failed=1` widens to include the caller's
+    // own failed rows; ACL still runs FIRST (Cindy
+    // `gMpODJXMetG39cKq` lock + `f0JxEM9nMhsVfLIo` refinement) so
+    // the flag is never a cross-user widener — it cannot reveal
+    // another user's failed row. `?include_pending=1` widener
+    // (§7.3 management view) is deferred to D6; the boot
+    // reconciler flips stuck pending → failed within ~60s default,
+    // so `?include_failed=1` covers the management surface with a
+    // bounded lag.
     const includeFailed = c.req.query('include_failed') === '1';
+    const includeStatuses: AgentMaterializationStatus[] = includeFailed
+      ? ['active', 'failed']
+      : ['active'];
     return c.json({
       agents: agents
         .list()
-        .filter(agent => {
-          if (agent.materialization_status === 'failed' && !includeFailed) {
-            return false;
-          }
-          return canViewAgent(ctx, principal, agent.id);
-        }),
+        .filter(agent =>
+          canViewAgent(ctx, principal, agent.id, { includeStatuses }),
+        ),
     });
   });
 
@@ -4018,18 +4022,18 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     const id = c.req.param('id');
     const agent = agents.get(id);
     if (!agent) return c.json({ error: 'agent not found' }, 404);
-    // D4.d D5 — Q6.a single-get filter, ACL-first / creator-scoped.
-    // Default view hides `failed` rows behind 404 so callers without
-    // the management-view intent treat them as gone. `?include_failed=1`
-    // widens but ACL still runs second — `canViewAgent` is already
-    // creator-scoped for failed rows (no dependent workspace → no
-    // workspace-membership branch can match), so cross-user
-    // `?include_failed=1` on someone else's failed row still 404s.
+    // D4.d D5 — Q6.a single-get filter, lifted into `canViewAgent`
+    // per Cindy `vB9vzUo4y_vgSZf8` P1. Default view hides BOTH
+    // `failed` AND `pending_materialization` behind 404; the
+    // `?include_failed=1` widener exposes the caller's own failed
+    // row only (cross-user widener stays 404 — ACL runs FIRST).
     const includeFailed = c.req.query('include_failed') === '1';
-    if (agent.materialization_status === 'failed' && !includeFailed) {
-      return c.json({ error: 'agent not found' }, 404);
-    }
-    if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
+    const includeStatuses: AgentMaterializationStatus[] = includeFailed
+      ? ['active', 'failed']
+      : ['active'];
+    if (
+      !canViewAgent(ctx, getUserPrincipal(c), agent.id, { includeStatuses })
+    ) {
       return c.json({ error: 'agent not found' }, 404);
     }
     return c.json({ agent });
@@ -4346,6 +4350,12 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   });
 
   // GET /delete-impact — drives the destructive-confirm dialog.
+  // Default-active only (Cindy `f0JxEM9nMhsVfLIo` refinement): the
+  // management view's affordances on failed / pending rows are
+  // `Delete` + `Retry`, NOT a destructive impact preview. Returning
+  // 404 here for failed/pending avoids the misleading "this delete
+  // will sweep N conversations" panel on a row that has zero
+  // dependents to begin with.
   app.get('/api/agents/:id/delete-impact', c => {
     const agent = agents.get(c.req.param('id'));
     if (!agent) return c.json({ error: 'agent not found' }, 404);
@@ -4361,11 +4371,27 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   // DELETE — full destructive flow. See docs/progress.md (this PR's
   // entry). Caller must pass `{ confirm: true }` so wallet-fingers
   // can't drop a heavy DM channel by accident from devtools.
+  //
+  // Status widener (D5 fixup, Cindy `vB9vzUo4y_vgSZf8` P1): DELETE
+  // opts in to ALL three statuses so the §3.2 status dispatch below
+  // can reach `pending_materialization → 409` and `failed → 204`.
+  // Without the opt-in, `canViewAgent`'s default-active filter
+  // would 204 (idempotent unknown id) every DELETE on a
+  // non-active row, hiding the management surface.
+  const DELETE_INCLUDE_STATUSES: AgentMaterializationStatus[] = [
+    'active',
+    'pending_materialization',
+    'failed',
+  ];
   app.delete('/api/agents/:id', async c => {
     const id = c.req.param('id');
     const agent = agents.get(id);
     if (!agent) return c.body(null, 204); // idempotent on unknown id
-    if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
+    if (
+      !canViewAgent(ctx, getUserPrincipal(c), agent.id, {
+        includeStatuses: DELETE_INCLUDE_STATUSES,
+      })
+    ) {
       return c.body(null, 204);
     }
     if (!canEditAgent(ctx, getUserPrincipal(c), agent.id)) {

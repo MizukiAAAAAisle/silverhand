@@ -513,4 +513,143 @@ describe('D4.d D5: failed-row recovery surface', () => {
       expect(body.agent.materialization_status).toBe('active');
     });
   });
+
+  // ──────────────────────────────────────────────────────────────────
+  //   canViewAgent status filter (D5 fixup, Cindy `vB9vzUo4y_vgSZf8`
+  //   P1): pending and failed are invisible to default reads + to
+  //   PATCH / avatar / workspace / runtime / schedules / stop. The
+  //   filter is what locks the §3.2 immutable-metadata invariant —
+  //   without it a creator could PATCH a failed row's snapshot and
+  //   break `?retry=true`.
+  // ──────────────────────────────────────────────────────────────────
+  describe('default read paths hide non-active rows', () => {
+    it('GET /api/agents (no flag) does NOT include pending rows', async () => {
+      const t = buildTestApp();
+      tests.push(t);
+      const pendingName = `default-pending-${freshKey()}`;
+      const pendingId = seedPendingAgent(
+        t,
+        t.viewerUserId,
+        pendingName,
+        freshKey(),
+      );
+      const list = (await http(t)
+        .get('/api/agents')
+        .then(r => r.json())) as { agents: Array<{ id: string }> };
+      expect(list.agents.map(a => a.id)).not.toContain(pendingId);
+      // Sanity: `?include_failed=1` alone does NOT widen to pending
+      // either (`?include_pending=1` widener is deferred to D6).
+      const wide = (await http(t)
+        .get('/api/agents?include_failed=1')
+        .then(r => r.json())) as { agents: Array<{ id: string }> };
+      expect(wide.agents.map(a => a.id)).not.toContain(pendingId);
+    });
+
+    it('GET /api/agents/:id (no flag) returns 404 for pending rows', async () => {
+      const t = buildTestApp();
+      tests.push(t);
+      const pendingId = seedPendingAgent(
+        t,
+        t.viewerUserId,
+        `default-pending-get-${freshKey()}`,
+        freshKey(),
+      );
+      const res = await http(t).get(`/api/agents/${pendingId}`);
+      expect(res.status).toBe(404);
+      // And `?include_failed=1` still 404s (pending widener
+      // deferred).
+      const wide = await http(t).get(
+        `/api/agents/${pendingId}?include_failed=1`,
+      );
+      expect(wide.status).toBe(404);
+    });
+  });
+
+  describe('PATCH /api/agents/:id: non-active rows are immutable (locks §3.2 snapshot invariant)', () => {
+    // The most security-critical consequence of the
+    // `canViewAgent` status filter: a creator can NOT mutate a
+    // failed row's stored metadata snapshot. That snapshot is the
+    // comparator for `?retry=true`; if PATCH could change it, a
+    // retry would no longer be "same metadata" by any meaningful
+    // definition and the §3.2 immutable-metadata invariant would
+    // be a lie.
+
+    it('PATCH on a failed row returns 404 and does NOT mutate description/runtime/model', async () => {
+      const t = buildTestApp();
+      tests.push(t);
+      const key = freshKey();
+      const name = `patch-failed-${freshKey()}`;
+      const agentId = seedFailedAgent(
+        t,
+        t.viewerUserId,
+        { name, description: 'original-description' },
+        key,
+      );
+      const before = readRow(t, agentId)!;
+
+      const res = await http(t).patch(`/api/agents/${agentId}`, {
+        description: 'malicious-mutation',
+        model: 'malicious-model',
+      });
+      expect(res.status).toBe(404);
+
+      // Row metadata untouched. Re-read via raw SQL because the
+      // public GET would also 404 on a failed row by default; we
+      // want to confirm the underlying snapshot is intact, not
+      // just hidden.
+      const after = t.ctx.db
+        .prepare(
+          `SELECT description, model, runtime
+             FROM agents WHERE id = ?`,
+        )
+        .get(agentId) as {
+        description: string | null;
+        model: string | null;
+        runtime: string;
+      };
+      expect(after.description).toBe('original-description');
+      expect(after.model).toBeNull();
+      expect(after.runtime).toBe('claude');
+      // Status unchanged too.
+      expect(readRow(t, agentId)?.materialization_status).toBe(
+        before.materialization_status,
+      );
+
+      // Subsequent `?retry=true` with the ORIGINAL body still
+      // passes — the snapshot the retry compares against is the
+      // one we asserted above, not the failed PATCH attempt.
+      const retry = await http(t).post(
+        '/api/agents?retry=true',
+        {
+          name,
+          runtime: 'claude',
+          description: 'original-description',
+        },
+        { headers: { 'Idempotency-Key': key } },
+      );
+      expect(retry.status, await retry.clone().text()).toBe(201);
+      const body = (await retry.json()) as CreateAgentOk;
+      expect(body.agent.id).toBe(agentId);
+      expect(body.agent.materialization_status).toBe('active');
+    });
+
+    it('PATCH on a pending row returns 404 (status filter applies to all non-active states)', async () => {
+      const t = buildTestApp();
+      tests.push(t);
+      const agentId = seedPendingAgent(
+        t,
+        t.viewerUserId,
+        `patch-pending-${freshKey()}`,
+        freshKey(),
+      );
+      const res = await http(t).patch(`/api/agents/${agentId}`, {
+        description: 'should-not-apply',
+      });
+      expect(res.status).toBe(404);
+      const after = t.ctx.db
+        .prepare(`SELECT description FROM agents WHERE id = ?`)
+        .get(agentId) as { description: string | null };
+      expect(after.description).toBeNull();
+    });
+  });
 });

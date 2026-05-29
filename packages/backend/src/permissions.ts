@@ -1,4 +1,4 @@
-import type { AttachmentRow } from '@silverhand/shared';
+import type { AttachmentRow, AgentMaterializationStatus } from '@silverhand/shared';
 import type { BackendContext } from './context.js';
 import type { Principal, UserPrincipal } from './auth/principal.js';
 import { AgentRepo } from './repos/agent-repo.js';
@@ -211,21 +211,97 @@ export function canEditAgent(
   return principal.agentId === agentId;
 }
 
+/**
+ * D4.d D5 fixup (Cindy `vB9vzUo4y_vgSZf8` P1) — options surface for
+ * `canViewAgent`'s `materialization_status` widener. Default-active
+ * is the load-bearing contract:
+ *
+ * - `pending_materialization` and `failed` rows are hidden from
+ *   every read / edit path that does NOT opt in. This is what
+ *   keeps the management surface (default GET list, GET single,
+ *   default sidebar / search / @-mention) free of boot-reconciler
+ *   residue + failed clutter.
+ *
+ * - It is also what locks the §3.2 immutable-metadata invariant:
+ *   `PATCH /api/agents/:id` runs against `canViewAgent` default,
+ *   so a creator can NOT mutate a failed row's stored
+ *   `description` / `runtime` / `model` snapshot. That snapshot
+ *   is the comparator for `?retry=true` same-key retry — once a
+ *   row is failed, its metadata is frozen until either retry
+ *   succeeds (row goes active) or the row is deleted.
+ *
+ * Management routes opt in explicitly:
+ *
+ *   GET    /api/agents?include_failed=1         → ['active', 'failed']
+ *   GET    /api/agents/:id?include_failed=1     → ['active', 'failed']
+ *   GET    /api/agents/:id/delete-impact         → all three (renderer
+ *                                                 previews delete for
+ *                                                 management rows)
+ *   DELETE /api/agents/:id                       → all three (D5 status
+ *                                                 dispatch needs to
+ *                                                 reach pending → 409
+ *                                                 and failed → 204)
+ *
+ * System principals bypass the status filter — mirrors `canEditAgent`'s
+ * "system unconditional" pattern. Agent principals are status-gated
+ * because in practice they only exist for active rows (the runtime
+ * that spawns the agent principal is what flips the row to active),
+ * so the gate is forward-correct and never observable in normal flow.
+ *
+ * `?include_pending=1` widener (design §7.3) is deferred — the §5
+ * boot reconciler flips stuck pending rows to `failed` within ~60s
+ * default, so `?include_failed=1` covers the management surface
+ * with a bounded lag. D6 will add the pending widener for parity.
+ */
+export interface CanViewAgentOptions {
+  /**
+   * Allowed `materialization_status` values for this view. Defaults
+   * to `['active']` per design §I3 / §4.1: pending and failed rows
+   * are invisible until the caller opts in.
+   */
+  includeStatuses?: ReadonlyArray<AgentMaterializationStatus>;
+}
+
 export function canViewAgent(
   ctx: BackendContext,
   principal: Principal,
   agentId: string,
+  options: CanViewAgentOptions = {},
 ): boolean {
+  // System bypasses everything (status + ACL). Mirrors
+  // `canEditAgent` — system principals come from internal hosts
+  // and migration jobs, not public surfaces.
   if (principal.kind === 'system') return true;
   const repo = new AgentRepo(ctx.db);
   const agent = repo.get(agentId);
   if (!agent) return false;
-  if (principal.kind === 'agent') return principal.agentId === agentId;
-  if (agent.created_by_user_id === principal.userId) return true;
-  return workspaceRepo(ctx)
-    .listForAgent(agentId)
-    .some(workspace => canViewWorkspace(ctx, principal, workspace.id));
+
+  // ── ACL-first (Cindy `f0JxEM9nMhsVfLIo` refinement) ─────────────
+  // Run the ACL/principal gate BEFORE the status widener, even
+  // though the outcome is equivalent (the result is ACL ∩ status
+  // regardless of evaluation order). The structural reason is that
+  // status is a WIDENER on the already-ACL-scoped candidate set —
+  // it cannot reveal another principal's rows. Writing the gate in
+  // status-first order would invite future readers to treat
+  // `includeStatuses` as an ACL-relaxing knob, which it is NOT.
+  let aclPass: boolean;
+  if (principal.kind === 'agent') {
+    aclPass = principal.agentId === agentId;
+  } else if (agent.created_by_user_id === principal.userId) {
+    aclPass = true;
+  } else {
+    aclPass = workspaceRepo(ctx)
+      .listForAgent(agentId)
+      .some(workspace => canViewWorkspace(ctx, principal, workspace.id));
+  }
+  if (!aclPass) return false;
+
+  // ── Status widener (default active-only) ─────────────────────────
+  const includeStatuses = options.includeStatuses ?? ACTIVE_ONLY;
+  return includeStatuses.includes(agent.materialization_status);
 }
+
+const ACTIVE_ONLY: ReadonlyArray<AgentMaterializationStatus> = ['active'];
 
 export function canViewAttachment(
   ctx: BackendContext,
