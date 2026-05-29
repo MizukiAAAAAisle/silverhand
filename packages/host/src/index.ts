@@ -138,6 +138,19 @@ export {
 } from './outbound-protocol.js';
 export { DAEMON_VERSION } from './daemon/version.js';
 /**
+ * D5.a-2 — daemon-side local outbound frame server + its default socket
+ * path helper. The embedded backend (D5.a-3) starts the daemon with
+ * `localOutboundSocketPath = deriveLocalOutboundFrameSocketPath()` and
+ * dials it with `EmbeddedUnixOutboundFrameAdapter`, so embedded and
+ * standalone share the one outbound frame envelope. The class is exported
+ * for the host-side unit test; the path helper for backend wiring.
+ */
+export {
+  LocalOutboundFrameServer,
+  deriveLocalOutboundFrameSocketPath,
+  type LocalOutboundFrameServerOptions,
+} from './daemon/local-outbound-frame-server.js';
+/**
  * D4.d D6 — re-export the daemon-side typed materialize error so
  * e2e tests that inject a deterministic typed-error fault via
  * `runDaemon`'s `testHooks.agentMaterializeFaultInjector` can

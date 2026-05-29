@@ -215,12 +215,18 @@ export function runOutboundFrameAdapterContract(
         { conversation_id: 'c1', agent_id: 'a1' },
         { timeoutMs: 1000 },
       );
-      await daemon.nextCommand();
-      await daemon.disconnect();
-
-      await expect(pending).rejects.toMatchObject({
+      // Attach the rejection expectation BEFORE dropping the connection.
+      // A local Unix transport tears down synchronously, so the pending
+      // command can reject inside `disconnect()` — before a
+      // post-disconnect assertion would attach — surfacing a transient
+      // unhandled rejection. Capturing the assertion first makes the
+      // contract robust across fast and slow transports.
+      const settled = expect(pending).rejects.toMatchObject({
         code: 'transport_disconnected',
       });
+      await daemon.nextCommand();
+      await daemon.disconnect();
+      await settled;
     });
 
     it('fails fast when expectedConnectionId no longer matches the live connection', async () => {

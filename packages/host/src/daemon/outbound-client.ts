@@ -18,13 +18,10 @@ import {
   type DaemonHostConfig,
 } from '@silverhand/shared';
 import {
-  OUTBOUND_PROTOCOL_VERSION,
   OutboundFrameSchema,
   OutboundServerToDaemonCommandFrameSchema,
   OutboundHeartbeatFrameSchema,
-  OutboundDaemonToServerCommandResponseFrameSchema,
   encodeOutboundFrame,
-  type OutboundCommandError,
   type OutboundDaemonToServerCommandResponseFrame,
   type OutboundDaemonToServerEventFrame,
   type OutboundFrame,
@@ -34,6 +31,21 @@ import {
   type RotateTokenResult,
 } from '../outbound-protocol.js';
 import type { EventFrame } from '../protocol.js';
+import {
+  toOutboundCommandResponse,
+  toOutboundEventFrame,
+  type OutboundCommandDispatcher,
+  type OutboundDispatcherResponse,
+} from './outbound-frame-mapping.js';
+import {
+  DEFAULT_OUTBOUND_WRITE_BUFFER,
+  OutboundWriteBuffer,
+  eventMetadata,
+  webSocketFrameWriter,
+  type OutboundEventMetadata,
+  type OutboundWriteBufferOptions,
+  type SendResult,
+} from './outbound-write-buffer.js';
 import type { DaemonLogger } from './logger.js';
 
 export interface OutboundDaemonClientOptions {
@@ -50,30 +62,19 @@ export interface OutboundDaemonClientOptions {
   now?: () => number;
 }
 
-export type OutboundCommandDispatcher = (
-  command: OutboundServerToDaemonCommandFrame,
-) => Promise<OutboundDispatcherResponse>;
-
 /**
- * Dispatcher response shape. Identical to the host-IPC
- * `ResponseFrame` shape (id + result|error) but with a wider error
- * code surface: callers may return `OutboundCommandError` codes
- * (the per-command typed error union — currently just the
- * `agent_materialize` typed codes in addition to the five
- * transport-level codes from `ResponseErrorSchema`). Generic
- * IPC `ResponseFrame` values are still assignable here because
- * the IPC error union is a subset.
- *
- * The wire layer (`toOutboundCommandResponse`) re-validates the
- * frame against the per-command response schema before sending,
- * so a dispatcher that returns a typed code on the wrong command
- * still gets caught at the wire boundary instead of silently
- * leaking the wider surface to other command kinds (Cindy D1
- * round-1 P1).
+ * Re-exported from {@link ./outbound-frame-mapping.js} so existing
+ * importers (`run.ts`, `outbound-supervisor.ts`) keep their import path.
+ * The canonical definitions of {@link OutboundCommandDispatcher},
+ * {@link OutboundDispatcherResponse}, and the command/event mapping
+ * helpers now live in `outbound-frame-mapping.ts` and are shared by both
+ * daemon outbound transports (standalone WSS + embedded local Unix), so
+ * the wire envelope cannot drift between them.
  */
-export type OutboundDispatcherResponse =
-  | { id: string; result?: unknown }
-  | { id: string; error: OutboundCommandError };
+export type {
+  OutboundCommandDispatcher,
+  OutboundDispatcherResponse,
+} from './outbound-frame-mapping.js';
 export type HostConfigWriter = (path: string, config: DaemonHostConfig) => void;
 
 export interface ReconnectBackoffOptions {
@@ -88,25 +89,13 @@ export interface HeartbeatOptions {
   pongTimeoutMs: number;
 }
 
-export interface OutboundWriteBufferOptions {
-  maxFrames: number;
-  maxBytes: number;
-}
+export type { OutboundWriteBufferOptions } from './outbound-write-buffer.js';
 
 interface ActiveConfig {
   raw: DaemonHostConfig;
   key: string;
   wsUrl: string;
 }
-
-interface OutboundEventMetadata {
-  kind: string;
-  conversation_id?: string;
-  agent_id?: string;
-  ts?: number;
-}
-
-type SendResult = 'sent' | 'dropped' | 'overflow' | 'failed';
 
 const DEFAULT_CONFIG_POLL_MS = 1_000;
 const DEFAULT_BACKOFF: ReconnectBackoffOptions = {
@@ -118,10 +107,6 @@ const DEFAULT_BACKOFF: ReconnectBackoffOptions = {
 const DEFAULT_HEARTBEAT: HeartbeatOptions = {
   pingIntervalMs: 30_000,
   pongTimeoutMs: 5_000,
-};
-const DEFAULT_BUFFER: OutboundWriteBufferOptions = {
-  maxFrames: 1024,
-  maxBytes: 4 * 1024 * 1024,
 };
 
 export class OutboundDaemonClient {
@@ -150,7 +135,7 @@ export class OutboundDaemonClient {
     this.now = opts.now ?? Date.now;
     this.writeHostConfig = opts.writeHostConfig ?? writeHostConfigAtomic;
     this.writeBuffer = new OutboundWriteBuffer({
-      ...DEFAULT_BUFFER,
+      ...DEFAULT_OUTBOUND_WRITE_BUFFER,
       ...(opts.buffer ?? {}),
     });
   }
@@ -191,7 +176,7 @@ export class OutboundDaemonClient {
     }
 
     const result = this.writeBuffer.send({
-      ws,
+      writer: webSocketFrameWriter(ws),
       frame,
       metadata,
       logger: this.opts.logger,
@@ -725,145 +710,6 @@ export class OutboundDaemonClient {
   }
 }
 
-class OutboundWriteBuffer {
-  pendingFrames = 0;
-  pendingBytes = 0;
-  private droppedRuntimeOutput = 0;
-
-  constructor(private readonly opts: OutboundWriteBufferOptions) {}
-
-  send(input: {
-    ws: WebSocket;
-    frame: OutboundDaemonToServerEventFrame;
-    metadata: OutboundEventMetadata;
-    logger: DaemonLogger;
-  }): SendResult {
-    let encoded: string;
-    try {
-      encoded = encodeOutboundFrame(input.frame);
-    } catch (err) {
-      if (input.metadata.kind === 'runtime_output') {
-        this.logRuntimeOutputDrop(input, 0, (err as Error).message);
-        return 'dropped';
-      }
-      this.logOverflow(input, 0, (err as Error).message);
-      return 'overflow';
-    }
-
-    const encodedBytes = Buffer.byteLength(encoded, 'utf8');
-    // Conservative on purpose: pendingBytes and ws.bufferedAmount can overlap
-    // briefly for in-flight sends; prefer early backpressure to unbounded RAM.
-    const totalBytes =
-      this.pendingBytes + encodedBytes + Math.max(0, input.ws.bufferedAmount);
-    const totalFrames = this.pendingFrames + 1;
-    if (totalBytes > this.opts.maxBytes || totalFrames > this.opts.maxFrames) {
-      if (input.metadata.kind === 'runtime_output') {
-        this.logRuntimeOutputDrop(input, encodedBytes, 'buffer_limit');
-        return 'dropped';
-      }
-      this.logOverflow(input, encodedBytes, 'buffer_limit');
-      return 'overflow';
-    }
-
-    this.pendingFrames++;
-    this.pendingBytes += encodedBytes;
-    try {
-      input.ws.send(encoded, err => {
-        this.pendingFrames = Math.max(0, this.pendingFrames - 1);
-        this.pendingBytes = Math.max(0, this.pendingBytes - encodedBytes);
-        if (err) {
-          input.logger.warn(
-            {
-              kind: 'outbound_ws',
-              action: 'event_send_callback_error',
-              err: err.message,
-              event_kind: input.metadata.kind,
-              conversation_id: input.metadata.conversation_id,
-              agent_id: input.metadata.agent_id,
-              ts: input.metadata.ts,
-            },
-            'daemon outbound event send callback failed',
-          );
-        }
-      });
-      return 'sent';
-    } catch (err) {
-      this.pendingFrames = Math.max(0, this.pendingFrames - 1);
-      this.pendingBytes = Math.max(0, this.pendingBytes - encodedBytes);
-      input.logger.warn(
-        {
-          kind: 'outbound_ws',
-          action: 'event_send_failed',
-          err: (err as Error).message,
-          event_kind: input.metadata.kind,
-          conversation_id: input.metadata.conversation_id,
-          agent_id: input.metadata.agent_id,
-          ts: input.metadata.ts,
-        },
-        'daemon outbound event send failed',
-      );
-      return 'failed';
-    }
-  }
-
-  reset(): void {
-    this.pendingFrames = 0;
-    this.pendingBytes = 0;
-  }
-
-  private logRuntimeOutputDrop(
-    input: {
-      metadata: OutboundEventMetadata;
-      logger: DaemonLogger;
-    },
-    encodedBytes: number,
-    reason: string,
-  ): void {
-    this.droppedRuntimeOutput++;
-    input.logger.warn(
-      {
-        kind: 'outbound_ws',
-        action: 'runtime_output_dropped',
-        event_kind: input.metadata.kind,
-        conversation_id: input.metadata.conversation_id,
-        agent_id: input.metadata.agent_id,
-        ts: input.metadata.ts,
-        encoded_bytes: encodedBytes,
-        pending_frames: this.pendingFrames,
-        pending_bytes: this.pendingBytes,
-        dropped_count: this.droppedRuntimeOutput,
-        reason,
-      },
-      'daemon outbound runtime_output dropped under write-buffer pressure',
-    );
-  }
-
-  private logOverflow(
-    input: {
-      metadata: OutboundEventMetadata;
-      logger: DaemonLogger;
-    },
-    encodedBytes: number,
-    reason: string,
-  ): void {
-    input.logger.warn(
-      {
-        kind: 'outbound_ws',
-        action: 'non_droppable_overflow',
-        event_kind: input.metadata.kind,
-        conversation_id: input.metadata.conversation_id,
-        agent_id: input.metadata.agent_id,
-        ts: input.metadata.ts,
-        encoded_bytes: encodedBytes,
-        pending_frames: this.pendingFrames,
-        pending_bytes: this.pendingBytes,
-        reason,
-      },
-      'daemon outbound non-droppable event exceeded write-buffer cap',
-    );
-  }
-}
-
 async function defaultCommandDispatcher(
   command: OutboundServerToDaemonCommandFrame,
 ): Promise<OutboundDispatcherResponse> {
@@ -873,70 +719,6 @@ async function defaultCommandDispatcher(
       code: 'internal_error',
       message: 'daemon outbound command dispatcher is not wired',
     },
-  };
-}
-
-function toOutboundCommandResponse(
-  command: OutboundServerToDaemonCommandFrame,
-  response: OutboundDispatcherResponse,
-): {
-  frame: OutboundDaemonToServerCommandResponseFrame;
-  drift?: { summary: Record<string, unknown>; issues: string[] };
-} {
-  const candidate = 'error' in response
-    ? {
-        direction: 'daemon_to_server',
-        type: 'command_response',
-        id: command.id,
-        kind: command.kind,
-        error: response.error,
-      }
-    : {
-        direction: 'daemon_to_server',
-        type: 'command_response',
-        id: command.id,
-        kind: command.kind,
-        result: response.result,
-      };
-  const parsed = OutboundDaemonToServerCommandResponseFrameSchema.safeParse(
-    candidate,
-  );
-  if (parsed.success) return { frame: parsed.data };
-  return {
-    frame: {
-      direction: 'daemon_to_server',
-      type: 'command_response',
-      id: command.id,
-      kind: command.kind,
-      error: {
-        code: 'internal_error',
-        message: `daemon outbound command response drift for ${command.kind}`,
-      },
-    } as OutboundDaemonToServerCommandResponseFrame,
-    drift: {
-      summary: summarizeResponseFrame(response),
-      issues: parsed.error.errors.map(e => `${e.path.join('.')}: ${e.message}`),
-    },
-  };
-}
-
-function summarizeResponseFrame(response: OutboundDispatcherResponse): Record<string, unknown> {
-  if ('error' in response) {
-    return {
-      arm: 'error',
-      id: response.id,
-      error_code: response.error.code,
-    };
-  }
-  const result = response.result;
-  return {
-    arm: 'result',
-    id: response.id,
-    result_type: Array.isArray(result) ? 'array' : typeof result,
-    result_keys:
-      result && typeof result === 'object' && !Array.isArray(result)
-        ? Object.keys(result).slice(0, 10)
-        : undefined,
   };
 }
 
@@ -1193,46 +975,4 @@ function redactConfigPath(path: string): string {
   return path.endsWith(`/${DAEMON_HOST_CONFIG_FILENAME}`)
     ? `.../${DAEMON_HOST_CONFIG_FILENAME}`
     : '.../daemon-config';
-}
-
-function eventMetadata(event: EventFrame): OutboundEventMetadata {
-  return {
-    kind: event.event,
-    conversation_id: 'conversation_id' in event ? event.conversation_id : undefined,
-    agent_id: 'agent_id' in event ? event.agent_id : undefined,
-    ts: 'ts' in event && typeof event.ts === 'number' ? event.ts : undefined,
-  };
-}
-
-function toOutboundEventFrame(event: EventFrame): OutboundDaemonToServerEventFrame {
-  switch (event.event) {
-    case 'ready': {
-      const {
-        event: _event,
-        socket_path: _socketPath,
-        protocol_version: _protocolVersion,
-        ...rest
-      } = event;
-      return {
-        direction: 'daemon_to_server',
-        type: 'event',
-        kind: 'ready',
-        protocol_version: OUTBOUND_PROTOCOL_VERSION,
-        ...rest,
-      };
-    }
-    case 'shutting_down': {
-      const { event: _event, ...rest } = event;
-      return { direction: 'daemon_to_server', type: 'event', kind: event.event, ...rest };
-    }
-    default: {
-      const { event: _event, ...rest } = event;
-      return {
-        direction: 'daemon_to_server',
-        type: 'event',
-        kind: event.event,
-        ...rest,
-      } as OutboundDaemonToServerEventFrame;
-    }
-  }
 }

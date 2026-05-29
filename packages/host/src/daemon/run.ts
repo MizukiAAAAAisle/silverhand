@@ -40,6 +40,7 @@ import {
 } from './identity.js';
 import { OutboundSupervisor } from './outbound-supervisor.js';
 import type { OutboundCommandDispatcher } from './outbound-client.js';
+import { LocalOutboundFrameServer } from './local-outbound-frame-server.js';
 import {
   AgentMaterializeError,
   materializeAgent,
@@ -111,6 +112,21 @@ export interface RunDaemonOptions {
    * different file before boot.
    */
   daemonIdentityPath?: string | null;
+  /**
+   * D5.a-2 — optional local outbound frame socket path. When set
+   * (non-null), the daemon starts a {@link LocalOutboundFrameServer} on
+   * this Unix socket alongside the control `DaemonServer`. It speaks the
+   * SAME outbound frame envelope the standalone WSS client speaks and
+   * routes commands through the same `IntentDispatcher`, so the embedded
+   * backend reaches the daemon over the unified formal path (closing R4)
+   * instead of the legacy `HostClient` IPC protocol.
+   *
+   * Omitted/`null` keeps the daemon control-socket-only — every existing
+   * protocol test and the standalone deployment leave this unset. The
+   * embedded backend wiring (D5.a-3) sets it to
+   * `deriveLocalOutboundFrameSocketPath()`.
+   */
+  localOutboundSocketPath?: string | null;
   /**
    * SupervisorContract factory — REQUIRED, but explicitly nullable (Cindy
    * `XuKGmdna3GWZcY2G` + shiki `Go9ZiB4OnwTbELZU`). The daemon
@@ -359,9 +375,24 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     dispatcher,
     logger,
   });
+  // D5.a-2 — embedded formal path. The local outbound frame server shares
+  // the exact `commandForwarder` (→ `dispatcher.dispatch`) and the same
+  // outbound envelope mapping as the standalone WSS client, so embedded
+  // and standalone are one dispatch path, not two protocols. Constructed
+  // only when a socket path is supplied (embedded mode); standalone and
+  // protocol-only tests leave it null.
+  const localOutboundServer =
+    opts.localOutboundSocketPath != null
+      ? new LocalOutboundFrameServer({
+          socketPath: opts.localOutboundSocketPath,
+          dispatchCommand: command => commandForwarder(command),
+          logger,
+        })
+      : null;
   broadcaster = event => {
     server.broadcast(event);
     outboundSupervisor.sendEvent(event);
+    localOutboundServer?.broadcast(event);
   };
 
   try {
@@ -374,6 +405,24 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     releasePidFile(opts.pidFilePath);
     await logger.close();
     throw err;
+  }
+
+  if (localOutboundServer) {
+    try {
+      await localOutboundServer.start();
+    } catch (err) {
+      logger.error(
+        {
+          err: (err as Error).message,
+          socketPath: opts.localOutboundSocketPath,
+        },
+        'failed to bind local outbound frame socket',
+      );
+      await server.stop('local_outbound_bind_failed');
+      releasePidFile(opts.pidFilePath);
+      await logger.close();
+      throw err;
+    }
   }
 
   // The handshake is the contract the spawn helper relies on to know
@@ -433,6 +482,16 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     logDaemon(logger, { action: 'shutting_down', pid: process.pid });
     outboundSupervisor.sendEvent({ event: 'shutting_down', reason });
     outboundSupervisor.stop(reason);
+    if (localOutboundServer) {
+      try {
+        await localOutboundServer.stop();
+      } catch (err) {
+        logger.error(
+          { err: (err as Error).message },
+          'local outbound server stop threw; continuing teardown',
+        );
+      }
+    }
     try {
       await server.stop(reason);
     } catch (err) {
