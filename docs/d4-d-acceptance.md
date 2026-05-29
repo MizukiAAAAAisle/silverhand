@@ -24,8 +24,9 @@ implementation commit(s) and test(s) that pin it.
 **R4 anchoring** (`docs/remote-backend-d4-design.md` §9.3): the
 `agent_materialize` intent **is** server↔daemon formal
 semantics — the standard "this IPC is local supervisor/
-control" carve-out does NOT apply to D1/D2/D3/D6 wire commits.
-D4 (boot reconciler) and D5 (DELETE + Q6.a visibility) are
+control" carve-out does NOT apply to D1/D2/D3/D6-2 wire
+commits. D4 (boot reconciler), D5 (DELETE + Q6.a visibility),
+D6-1 (visibility widener), and D6-3 (this doc) are
 server-internal and the carve-out applies trivially. The
 per-commit R4 anchor lines are summarized in §8 below.
 
@@ -39,7 +40,9 @@ first; fixups grouped with their parent):
 
 | Slice | Commit | Scope |
 |---|---|---|
-| D6-2 | `253e350` | Real-wire `agent_materialize` e2e (this commit's evidence in §6). |
+| D6-3 | `f559eac` | This acceptance doc. |
+| D6-2 fixup | `d1e1763` | Narrow `testHooks` + real `materializeAgent` in e2e (Cindy `d4IID_Nnn1VShRa5` P1-1 + P1-2). |
+| D6-2 | `253e350` | Real-wire `agent_materialize` e2e (this commit's evidence in §6; superseded API surface fixed in `d1e1763`). |
 | D6-1 | `2dc3f6b` | `?include_pending=1` widener parity (this commit's evidence in §5). |
 | D5-fixup2 | `0dd7450` | `permissions.ts` doc drift — delete-impact stays active-only (Cindy `lYctOahGX8f6Us8d` P2). |
 | D5-fixup1 | `58ba65e` | Lift status filter into `canViewAgent` — close D5 round-1 P1/P2 (Cindy `vB9vzUo4y_vgSZf8` + `f0JxEM9nMhsVfLIo`). |
@@ -66,7 +69,7 @@ parameterized) locked; `agents` table additive columns
 
 | # | Acceptance | Evidence |
 |---|---|---|
-| W1 | New `agent_materialize` arm on `OutboundServerCommandKind` + zod params/result + wire-error schemas live in `packages/host/src/outbound-protocol.ts`; re-exported from the public `@silverhand/host` barrel. | D1 `commit:4b8bff1`. `test:packages/host/tests/outbound-protocol.test.ts` (param/result/error round-trip). |
+| W1 | New `agent_materialize` arm on `OutboundServerCommandKind` + zod params/result + wire-error schemas live in `packages/host/src/protocol.ts` (`AgentMaterializeParamsSchema` at line 1039, `AgentMaterializeResultSchema` at line 1072); `packages/host/src/outbound-protocol.ts` re-exports them as part of the host public surface; both reach the `@silverhand/host` barrel. | D1 `commit:4b8bff1`. `test:packages/host/tests/outbound-protocol.test.ts` (param/result/error round-trip). |
 | W2 | Migration v33 applies cleanly on existing DBs; `materialization_status='active'` backfill for pre-existing rows; creator-scoped unique index `WHERE idempotency_key IS NOT NULL` (partial index — fresh-key creates can coexist with NULL legacy rows). | D1 `commit:4b8bff1`. `test:packages/backend/tests/db-migrations.test.ts::v33 adds agent materialization columns and creator-scoped idempotency_key index`. |
 | W3 | Wire arm is additive only — no rename, no field removal, no envelope shape change (R4 invariant I1). | Verified by absence: no diff to `OutboundFrame` shape, only a new union arm. Tripwire `test:packages/host/tests/wire-contract-fixtures.test.ts` would fail if envelope fixtures drifted. |
 
@@ -85,7 +88,7 @@ rule §4.6 (sentinel match → reuse, sentinel mismatch → typed
 | H1 | `IntentDispatcher` slot `agentMaterializeHandler` is wired and typed-error narrowing routes `AgentMaterializeError` → wire `error.code` instead of collapsing to `internal_error`. | D2 `commit:501776a`. `test:packages/host/tests/agent-materialize/dispatcher-integration.test.ts::IntentDispatcher.agent_materialize slot::preserves the typed AgentMaterializeError.code on the response frame`. |
 | H2 | First-call materialize seeds full template tree (`system_prompt.md` + `MEMORY.md` + `notes/` + `.materialized` sentinel) atomically; sentinel content matches `{ version, template_choice, runtime, materialized_at }`. | D2 `commit:501776a`. `test:packages/host/tests/agent-materialize/handler.test.ts::materializeAgent — §4.6 decision tree::first-time materialize: missing dir → seed + sentinel + ok`. |
 | H3 | Re-call with matching sentinel → reuse (no rewrite, returns same `agent_dir` / `agent_home_workspace_path`); re-call with mismatched sentinel → typed `agent_dir_collision`; re-call with foreign content (no sentinel) → typed `agent_dir_collision`; sentinel JSON corrupt → `agent_dir_collision` (fail-closed). | Same file: `idempotent re-call` + `foreign content in dir (no sentinel) → agent_dir_collision` + `sentinel JSON corrupt → agent_dir_collision (fail-closed)` + the `it.each(['agent_id', 'template_choice', 'runtime'])` mismatch matrix. |
-| H4 | `host_templates`-style file boundary enforced — backend code may not import from `packages/host/src/daemon/agent-materialize/**`. Public `@silverhand/host` barrel re-exports the throwable `AgentMaterializeError` only (for embedder/test injection), NOT `materializeAgent` / `getAgentHomeTemplate` / template bytes. | D2 `commit:501776a` + tripwire `commit:8869fc5` + barrel re-export D6-2 `commit:253e350`. `test:packages/backend/tests/dependency-guard-agent-materialize.test.ts` (2/2 pass). Public-barrel allowance documented at `packages/host/src/index.ts:140-156`. |
+| H4 | `host_templates`-style file boundary enforced — backend code may not import from `packages/host/src/daemon/agent-materialize/**`. Public `@silverhand/host` barrel re-exports the throwable `AgentMaterializeError` only (for the e2e fault-injector hook), NOT `materializeAgent` / `getAgentHomeTemplate` / template bytes. | D2 `commit:501776a` + tripwire `commit:8869fc5` + barrel re-export `commit:d1e1763` (D6-2 fixup). `test:packages/backend/tests/dependency-guard-agent-materialize.test.ts` (2/2 pass). Public-barrel allowance documented at `packages/host/src/index.ts:140-159`. |
 
 ---
 
@@ -125,13 +128,13 @@ provenance per §6.5.
 `materialization_status='pending_materialization'` AND
 `created_at < now - threshold` (default 60s,
 `SILVERHAND_MATERIALIZE_RECONCILE_THRESHOLD_MS` override). Mark
-each as `failed` with code `reconciler_swept`. Runs BEFORE HTTP
-listen. No daemon-side cleanup, no L1 dir touch (per §4.4 +
-§4.5.1).
+each as `failed` with code `backend_crash_during_materialize`.
+Runs BEFORE HTTP listen. No daemon-side cleanup, no L1 dir
+touch (per §4.4 + §4.5.1).
 
 | # | Acceptance | Evidence |
 |---|---|---|
-| R1 | Stale `pending_materialization` rows (`now - created_at > threshold`) flip to `failed` / `reconciler_swept` before `listen()` returns. | D4 `commit:2617d6c`. `test:packages/backend/tests/runtime/materialize-reconciler.test.ts::D4.d §5 — markStaleMaterializationsFailed (repo primitive)::flips a pending row older than the threshold; leaves a fresher one alone`. |
+| R1 | Stale `pending_materialization` rows (`now - created_at > threshold`) flip to `failed` with code `backend_crash_during_materialize`; fresh rows are left alone. (Pre-listen sequencing pinned by R5.) | D4 `commit:2617d6c`. `test:packages/backend/tests/runtime/materialize-reconciler.test.ts::D4.d §5 — markStaleMaterializationsFailed (repo primitive)::flips a pending row older than the threshold; leaves a fresher one alone`. |
 | R2 | Fresh `pending_materialization` rows (`< threshold`) left untouched; the in-flight request still owns the row. | Same file, boundary test `row exactly at the cutoff boundary ... is NOT flipped (strict ´<´ semantics)`. |
 | R3 | Reconciler is mark-failed-only — no daemon RPC, no L1 dir touch, no DELETE. §4.4 "no background sweep beyond boot reconciliation" honored. | Same file, `already-active rows are left untouched` + `already-failed rows are left untouched` + `idempotent: a second call ... is a no-op`. |
 | R4 | Threshold override resolves env → integer → fallback 60_000ms; invalid env value falls back with a WARN line. | Same file, `D4.d §5 — resolveReconcileThresholdMs (env knob)` describe (7 cases: unset / empty / valid / non-integer / zero / negative / etc). |
@@ -156,23 +159,23 @@ DELETE + retry (Cindy D5 round-1 P1 `vB9vzUo4y_vgSZf8`).
 
 | # | Acceptance | Evidence |
 |---|---|---|
-| F1 | `DELETE /api/agents/:id` on a `failed` row → 204 row-only delete (no daemon RPC, no L1 dir touch). | D5 `commit:8869fc5`. `test:packages/backend/tests/routes/d5-failed-recovery.test.ts` `DELETE failed` describe. |
-| F2 | `DELETE /api/agents/:id` on a `pending_materialization` row → 409 `materialization_in_progress` (preserves the in-flight request's claim). | Same file, `DELETE pending` describe. |
-| F3 | `POST /api/agents?retry=true` on a `failed` row (same key + matching body) → `failed → pending_materialization → active` atomic flip; same `agent_id` reused; 201 on success. | Same file, `?retry=true happy` describe. |
-| F4 | `?retry=true` with NO matching idempotency_key row → 404 `retry_target_not_found` (explicit misuse, not silent fresh-create). | Same file, `?retry=true with no row` describe. |
-| F5 | `?retry=true` with non-`failed` row → 409 `retry_target_not_failed`. | Same file, `?retry=true non-failed` describe. |
-| F6 | Retry online check runs BEFORE row flip — daemon offline at retry time → 503 `host_attach_pending`, row stays `failed` (Cindy D5 guard rail #2). | Same file, `?retry=true offline` describe. |
-| F7 | Same-key retry preserves immutable metadata snapshot (§3.2): the failed row's stored `(name, runtime, description, model, host_id)` is the comparator on the retry request's body. PATCH cannot mutate it (see F12 below). | Same file, `metadata snapshot immutable` describe. |
+| F1 | `DELETE /api/agents/:id` on a `failed` row → 204 row-only delete (no daemon RPC, no L1 dir touch). | D5 `commit:8869fc5`. `test:packages/backend/tests/routes/d5-failed-recovery.test.ts::DELETE /api/agents/:id materialization dispatch::failed → 204 row-only delete`. |
+| F2 | `DELETE /api/agents/:id` on a `pending_materialization` row → 409 `materialization_in_progress` (preserves the in-flight request's claim). | Same file, `DELETE /api/agents/:id materialization dispatch::pending_materialization → 409 materialization_in_progress`. |
+| F3 | `POST /api/agents?retry=true` on a `failed` row (same key + matching body + daemon attached) → `failed → pending_materialization → active` atomic flip; same `agent_id` reused; 201 on success. | Same file, `?retry=true same-row retry matrix::failed + matching metadata + daemon attached → 201 + row reaches active`. |
+| F4 | `?retry=true` with NO matching idempotency_key row → 404 `retry_target_not_found` (explicit misuse, not silent fresh-create). | Same file, `?retry=true same-row retry matrix::no-row + retry=true → 404 retry_target_not_found (not silent fresh-create)`. |
+| F5 | `?retry=true` on a non-`failed` existing row follows the §3.2 dispatch (NOT a single error code): `active` → 200 echo of the original 4-field payload; `pending_materialization` → 409 `materialization_in_progress`. `retry_target_not_failed` is **not** the general non-failed response — it is only the defensive 409 raised by `flipFailedToReserveAgain` when the row was `failed` at the dispatch entry but a concurrent mutation flipped it out from under us between the dispatch check and the atomic flip (route source `packages/backend/src/routes.ts:3807-3815`). | Same file, `?retry=true same-row retry matrix::active + retry=true → 200 echo (no-op for already-good rows)` + `pending + retry=true → 409 materialization_in_progress (same regardless of retry flag)`. |
+| F6 | Retry online check runs BEFORE row flip — daemon offline at retry time → 503 `host_attach_pending`, row stays `failed` (Cindy D5 guard rail #2; no `failed → pending → failed` bounce). | Same file, `?retry=true same-row retry matrix::failed + daemon offline → 503 host_attach_pending, row STAYS failed (no failed → pending bounce)`. |
+| F7 | Same-key retry preserves immutable metadata snapshot (§3.2): the failed row's stored `(name, runtime, description, model, host_id)` is the comparator on the retry request's body; mismatching body → 400 `idempotency_metadata_mismatch` FIRST, retry verb does NOT mutate. PATCH cannot mutate the snapshot (see F12 below). | Same file, `?retry=true same-row retry matrix::failed + mismatching metadata → 400 idempotency_metadata_mismatch FIRST (retry verb does NOT mutate)`. |
 
 ### 5.2 `canViewAgent` ACL-first status filter (D5-fixup1 + D5-fixup2)
 
 | # | Acceptance | Evidence |
 |---|---|---|
-| F8 | `canViewAgent(ctx, principal, agentId, { includeStatuses? })` orders: row exists → principal ACL pass (system / agent-self / creator / workspace member) → status in `includeStatuses` (default `['active']`). ACL false short-circuits to false BEFORE the status check. | D5-fixup1 `commit:58ba65e`. `packages/backend/src/permissions.ts` `canViewAgent`. `test:packages/backend/tests/permissions/can-view-agent.test.ts` `ACL-first` describe. |
-| F9 | Default list (`GET /api/agents`) and single (`GET /api/agents/:id`) call `canViewAgent` with default `includeStatuses=['active']`. Failed AND pending rows return 404 by default. | D5 `commit:8869fc5` + fixup `58ba65e`. `test:packages/backend/tests/routes/d5-failed-recovery.test.ts` `default hides failed/pending` pins. |
-| F10 | `?include_failed=1` widens to `['active','failed']`; `?include_pending=1` widens to `['active','pending_materialization']`; both flags compose to `['active','failed','pending_materialization']` (D6-1). Flags are independent dimensions. | D6-1 `commit:2dc3f6b`. `test:packages/backend/tests/routes/d5-failed-recovery.test.ts` `D6 widener` describe (6 pins). |
-| F11 | Cross-user `?include_failed=1` / `?include_pending=1` still 404 — ACL-first ordering means pending/failed rows (which have no dependent workspaces, since L3a never ran) cannot match the workspace-membership ACL branch. Neither flag is a cross-user enumeration surface. | Same file, `cross-user pending invisible` + `cross-user failed invisible` pins. |
-| F12 | PATCH still 404 for `pending_materialization` / `failed` rows even with `?include_*` flags — the widener is read-only; PATCH/avatar/workspace/runtime-state/schedules/stop sub-routes do NOT opt-in and stay at default active-only. Closes Cindy D5 round-1 P1 (PATCH could mutate failed-row metadata snapshot). | D5-fixup1 `commit:58ba65e`. `test:packages/backend/tests/routes/d5-failed-recovery.test.ts` `PATCH failed → 404 + snapshot intact` + `PATCH pending → 404` pins. |
+| F8 | `canViewAgent(ctx, principal, agentId, { includeStatuses? })` orders: row exists → principal ACL pass (system / agent-self / creator / workspace member) → status in `includeStatuses` (default `['active']`). ACL false short-circuits to false BEFORE the status check. | D5-fixup1 `commit:58ba65e`. `packages/backend/src/permissions.ts` `canViewAgent`. `test:packages/backend/tests/permissions.test.ts::canViewAgent`. |
+| F9 | Default list (`GET /api/agents`) and single (`GET /api/agents/:id`) call `canViewAgent` with default `includeStatuses=['active']`. Failed AND pending rows return 404 by default. | D5 `commit:8869fc5` + fixup `58ba65e`. `test:packages/backend/tests/routes/d5-failed-recovery.test.ts::default read paths hide non-active rows` (2 pins: list + single GET both 404 for pending). |
+| F10 | `?include_failed=1` widens to `['active','failed']`; `?include_pending=1` widens to `['active','pending_materialization']`; both flags compose to `['active','failed','pending_materialization']` (D6-1). Flags are independent dimensions. | D6-1 `commit:2dc3f6b`. `test:packages/backend/tests/routes/d5-failed-recovery.test.ts::?include_failed=1 widener semantics` (2 pins) + `::?include_pending=1 widener (D6)::list: ?include_failed=1&include_pending=1 widens to BOTH (management view)`. |
+| F11 | Cross-user `?include_failed=1` / `?include_pending=1` still 404 — ACL-first ordering means pending/failed rows (which have no dependent workspaces, since L3a never ran) cannot match the workspace-membership ACL branch. Neither flag is a cross-user enumeration surface. | Same file, `::?include_pending=1 widener (D6)::list: ?include_pending=1 from user B does NOT widen to user A's pending rows` + `single: ?include_pending=1 cross-user → 404 (ACL-first creator-scoped)`. |
+| F12 | PATCH still 404 for `pending_materialization` / `failed` rows even with `?include_*` flags — the widener is read-only; PATCH/avatar/workspace/runtime-state/schedules/stop sub-routes do NOT opt-in and stay at default active-only. Closes Cindy D5 round-1 P1 (PATCH could mutate failed-row metadata snapshot). | D5-fixup1 `commit:58ba65e`. `test:packages/backend/tests/routes/d5-failed-recovery.test.ts::PATCH /api/agents/:id: non-active rows are immutable (locks §3.2 snapshot invariant)` (2 pins: PATCH on failed + PATCH on pending) + `::?include_pending=1 widener (D6)::PATCH/avatar/etc still 404 for pending even with ?include_pending=1 (widener is read-only)`. |
 | F13 | `DELETE /api/agents/:id` opts in to all three statuses via module-local `DELETE_INCLUDE_STATUSES = ['active','pending_materialization','failed']` so §3.2 status dispatch reaches 409/204; `GET /api/agents/:id/delete-impact` stays at default active-only (management rows have only Delete + Retry; impact computation is for active-row destructive flow only — Cindy `f0JxEM9nMhsVfLIo`). | D5-fixup1 `commit:58ba65e` + D5-fixup2 `commit:0dd7450` (doc drift fix). `packages/backend/src/routes.ts` DELETE handler + delete-impact handler. |
 
 ---
@@ -193,7 +196,7 @@ outbound frames.
 | E2 | Typed-failure injection (real wire) | Pre-handler fault hook returns `AgentMaterializeError('agent_dir_collision', ...)` once → dispatcher narrows typed → wire `error.code='agent_dir_collision'` → HTTP 409 → row `failed` / `materialization_failed_code='agent_dir_collision'`. Fault hook short-circuits BEFORE `materializeAgent` runs, so no L1 dir is written for the failed `agent_id`. | Same file, phase 2 first leg. Asserted by `existsSync(agentL1Dir(...)) === false` post-fail. |
 | E3 | Same-row `?retry=true` over real wire | Fault hook is exhausted → real `materializeAgent` runs → row `failed → pending_materialization → active` over the SAME wire → 201 + same `agent_id` + L1 dir for the same `agent_id` appears with `.materialized` + `MEMORY.md` + `notes/onboarding-faq.md` (real template). Proves wire is reusable, not one-shot. | Same file, phase 2 second leg. |
 | E4 | §3.2 echo over real wire | Same key + same body as phase 1 → 200 echo + 4-field payload identical to phase 1 + NO second daemon dispatch. Verified via on-disk dir count: three POSTs produce only two L1 dirs (happy + retry; echo short-circuits at the route layer before reaching the wire). | Same file, phase 3 + final assertion. |
-| E5 | Wire-path realness — narrow test seam | `bootG2Harness` uses real `startBackend({ mode: 'standalone' })` (real `installHostWebSocketServer`, real `OutboundRuntimeEventFanout`); `bootDaemonWithSupervisor` uses real `runDaemon` (real `IntentDispatcher`, real `OutboundDaemonClient`). The dispatcher slot ALWAYS calls real `materializeAgent` — there is no embedder-facing handler-replacement option. The only test seam is `RunDaemonOptions.testHooks?` with two narrow knobs: `agentMaterializeHomeDir` (tmp dir override for `materializeAgent`'s `homeDir` param) and `agentMaterializeFaultInjector` (deterministic typed-error pre-hook). Production omits `testHooks` entirely. Cindy D2 pre-gate #3 holds; Cindy D6-2 P1-1 (`d4IID_Nnn1VShRa5`) narrowing satisfied. | `packages/host/src/daemon/run.ts:142-186` (`testHooks` field + production-fixed `materializeAgent` call). `packages/backend/tests/e2e/g2-harness.ts` `bootDaemonWithSupervisor` (passes `testHooks` through verbatim). |
+| E5 | Wire-path realness — narrow test seam | `bootG2Harness` uses real `startBackend({ mode: 'standalone' })` (real `installHostWebSocketServer`, real `OutboundRuntimeEventFanout`); `bootDaemonWithSupervisor` uses real `runDaemon` (real `IntentDispatcher`, real `OutboundDaemonClient`). The dispatcher slot ALWAYS calls real `materializeAgent` — there is no embedder-facing handler-replacement option. The only test seam is `RunDaemonOptions.testHooks?` with two narrow knobs: `agentMaterializeHomeDir` (tmp dir override for `materializeAgent`'s `homeDir` param) and `agentMaterializeFaultInjector` (deterministic typed-error pre-hook). Production omits `testHooks` entirely. Cindy D2 pre-gate #3 holds; Cindy D6-2 P1-1 (`d4IID_Nnn1VShRa5`) narrowing satisfied. | `packages/host/src/daemon/run.ts:153-189` (`testHooks` field + production-fixed `materializeAgent` call). `packages/backend/tests/e2e/g2-harness.ts` `bootDaemonWithSupervisor` (passes `testHooks` through verbatim). |
 
 ---
 
@@ -237,7 +240,8 @@ commits.
 | D4 `2617d6c` | Server-internal (boot reconciler, no wire). Carve-out applies trivially. |
 | D5 `8869fc5` (+ fixups `58ba65e` / `0dd7450`) | Server-internal (DELETE branch + visibility). Carve-out applies trivially. |
 | D6-1 `2dc3f6b` | Server-internal (visibility widener). Carve-out applies trivially. |
-| D6-2 `253e350` | Formal semantics. E2E asserts the wire stays correct. Carve-out does NOT apply. |
+| D6-2 `253e350` (+ fixup `d1e1763`) | Formal semantics. E2E asserts the wire stays correct. The fixup narrows the test seam to `RunDaemonOptions.testHooks` so the formal-semantics boundary cannot be replaced by future embedders. Carve-out does NOT apply. |
+| D6-3 `f559eac` | Server-internal (this doc). Carve-out applies trivially. |
 
 ---
 
@@ -249,19 +253,19 @@ commit/test where the lock landed.
 
 | Lock | Source | Landed at |
 |---|---|---|
-| §6.1 ACL preflight ordering (creator scope → host ownership → name uniqueness) BEFORE any reservation. | Cindy round-2 P2. | D3 `commit:c2a2016` + `test:packages/backend/tests/routes/d3-agent-materialize-lifecycle.test.ts` `L0 ACL` describe. |
-| §6.2 online check BEFORE reserve — daemon offline never reserves a row. | Cindy round-1 P1. | D3 `commit:c2a2016` + `L0.7 fresh` describe. |
-| §6.3 P1.4 L3a commit IS the success boundary — L4 deliver / auto-start are post-commit best-effort, failures only log. | Cindy round-1 P1.4. | D3 `commit:c2a2016` + `L4 post-commit` describe. |
-| §4.5.1 failed-row DELETE does NOT call daemon — row-only delete; daemon's stale L1 dir is orphaned and reclaimed by sentinel-mismatch logic on next attempt with the same id (which cannot recur because `agent_id` is fresh per attempt). | Cindy round-2 P1 #4. | D5 `commit:8869fc5` + `DELETE failed` describe. |
-| §3.2 same-key retry MUST return the same outcome it returned the first time without re-dispatching — `active` row → 200 echo, no second wire call. | Cindy D3 round-1 P1. | D3 `commit:c2a2016` + `L0.5 active echo` pin; e2e pin E4. |
-| §3.2 metadata snapshot is immutable — failed-row's stored `(name, runtime, description, model, host_id)` is the comparator on retry; PATCH must NOT mutate it. | Cindy D5 round-1 P1 `vB9vzUo4y_vgSZf8`. | D5-fixup1 `commit:58ba65e`. PATCH defaults to `canViewAgent` active-only; failed rows 404 → no path to mutate. Pinned by `PATCH failed → 404 + snapshot intact`. |
-| `canViewAgent` ACL-first ordering (row → principal ACL → if pass, then status) — not status-first. | Cindy D5 fixup `f0JxEM9nMhsVfLIo`. | D5-fixup1 `commit:58ba65e`. `permissions.ts` `canViewAgent`. |
-| Q6 ACL filter runs BEFORE status widener — `?include_failed=1` and `?include_pending=1` cannot reveal another user's rows. | Cindy Q6 lock `gMpODJXMetG39cKq`. | D5 `commit:8869fc5` + D6-1 `commit:2dc3f6b`. Pinned by `cross-user pending invisible` + `cross-user failed invisible`. |
+| §6.1 ACL preflight ordering (creator scope → host ownership → name uniqueness) BEFORE any reservation. | Cindy round-2 P2. | D3 `commit:c2a2016` + `test:packages/backend/tests/routes/d4-d-structural-invariants.test.ts::Invariant 1: metadata mismatch precedence (§3.2 / §6.1)`. |
+| §6.2 online check BEFORE reserve — daemon offline never reserves a row. | Cindy round-1 P1. | D3 `commit:c2a2016` + `test:packages/backend/tests/routes/agents-no-host-typed-fail.test.ts::POST /api/agents — daemon offline (fail-fast, NO reserve)`. |
+| §6.3 P1.4 L3a commit IS the success boundary — L4 deliver / auto-start are post-commit best-effort, failures only log. | Cindy round-1 P1.4. | D3 `commit:c2a2016` + `test:packages/backend/tests/routes/d4-d-structural-invariants.test.ts::Round-1 P1.4 — L4 post-commit best-effort`. |
+| §4.5.1 failed-row DELETE does NOT call daemon — row-only delete; daemon's stale L1 dir is orphaned and reclaimed by sentinel-mismatch logic on next attempt with the same id (which cannot recur because `agent_id` is fresh per attempt). | Cindy round-2 P1 #4. | D5 `commit:8869fc5` + `test:packages/backend/tests/routes/d5-failed-recovery.test.ts::DELETE /api/agents/:id materialization dispatch::failed → 204 row-only delete`. |
+| §3.2 same-key retry MUST return the same outcome it returned the first time without re-dispatching — `active` row → 200 echo, no second wire call. | Cindy D3 round-1 P1. | D3 `commit:c2a2016` + `test:packages/backend/tests/routes/d4-d-structural-invariants.test.ts::Round-1 P1.3 — active idempotent echo shape == 201 fresh shape`; e2e pin E4. |
+| §3.2 metadata snapshot is immutable — failed-row's stored `(name, runtime, description, model, host_id)` is the comparator on retry; PATCH must NOT mutate it. | Cindy D5 round-1 P1 `vB9vzUo4y_vgSZf8`. | D5-fixup1 `commit:58ba65e`. PATCH defaults to `canViewAgent` active-only; failed rows 404 → no path to mutate. Pinned by `test:packages/backend/tests/routes/d5-failed-recovery.test.ts::PATCH /api/agents/:id: non-active rows are immutable (locks §3.2 snapshot invariant)::PATCH on a failed row returns 404 and does NOT mutate description/runtime/model`. |
+| `canViewAgent` ACL-first ordering (row → principal ACL → if pass, then status) — not status-first. | Cindy D5 fixup `f0JxEM9nMhsVfLIo`. | D5-fixup1 `commit:58ba65e`. `packages/backend/src/permissions.ts` `canViewAgent`. `test:packages/backend/tests/permissions.test.ts::canViewAgent`. |
+| Q6 ACL filter runs BEFORE status widener — `?include_failed=1` and `?include_pending=1` cannot reveal another user's rows. | Cindy Q6 lock `gMpODJXMetG39cKq`. | D5 `commit:8869fc5` + D6-1 `commit:2dc3f6b`. Pinned by `test:packages/backend/tests/routes/d5-failed-recovery.test.ts::?include_pending=1 widener (D6)::list: ?include_pending=1 from user B does NOT widen to user A's pending rows` + `single: ?include_pending=1 cross-user → 404 (ACL-first creator-scoped)`. |
 | `delete-impact` stays at default active-only — management rows have only Delete + Retry; impact computation is for active-row destructive flow only. | Cindy `f0JxEM9nMhsVfLIo`. | D5-fixup1 `commit:58ba65e` + doc drift fix D5-fixup2 `commit:0dd7450`. |
-| D5 guard rail #2 — retry online check runs BEFORE row flip; daemon offline at retry time leaves row `failed`, does NOT bounce `failed → pending → failed`. | Cindy D5 round-1. | D5 `commit:8869fc5` + `?retry=true offline` pin. |
-| D5 guard rail #3 — no new protocol surface for retry. Fresh and retry both hit `d5RunMaterializeFromReserved`. | Cindy D5 round-1. | D5 `commit:8869fc5`. Shared helper in `routes.ts`. |
-| E2E real-wire criterion — drive `POST /api/agents` through real WS + real daemon; the dispatcher slot must ALWAYS call real `materializeAgent`. Test seam is a narrow `testHooks` namespace on `RunDaemonOptions`, NOT an embedder-facing handler-replacement option. | Cindy `hkIP6tEkWJ2VcYfq` D6 review #1 + D6-2 P1-1 `d4IID_Nnn1VShRa5`. | D6-2 `commit:253e350` + fixup. Pin E5. |
-| Public-barrel re-export discipline — `AgentMaterializeError` allowed (throwable class needed by the `agentMaterializeFaultInjector` test-hook return value); `materializeAgent` / `getAgentHomeTemplate` / template bytes NOT exported. Backend tests must construct the typed error via the public barrel, not the forbidden deep path. | Cindy `hkIP6tEkWJ2VcYfq` D6 review #3. | D6-2 `commit:253e350` + fixup. `packages/host/src/index.ts:140-159` boundary comment. `test:packages/backend/tests/dependency-guard-agent-materialize.test.ts` (2/2 pass — backend deep-path import still tripwired). |
+| D5 guard rail #2 — retry online check runs BEFORE row flip; daemon offline at retry time leaves row `failed`, does NOT bounce `failed → pending → failed`. | Cindy D5 round-1. | D5 `commit:8869fc5` + `test:packages/backend/tests/routes/d5-failed-recovery.test.ts::?retry=true same-row retry matrix::failed + daemon offline → 503 host_attach_pending, row STAYS failed (no failed → pending bounce)`. |
+| D5 guard rail #3 — no new protocol surface for retry. Fresh and retry both hit `d5RunMaterializeFromReserved`. | Cindy D5 round-1. | D5 `commit:8869fc5`. Shared helper in `packages/backend/src/routes.ts`. |
+| E2E real-wire criterion — drive `POST /api/agents` through real WS + real daemon; the dispatcher slot must ALWAYS call real `materializeAgent`. Test seam is a narrow `testHooks` namespace on `RunDaemonOptions`, NOT an embedder-facing handler-replacement option. | Cindy `hkIP6tEkWJ2VcYfq` D6 review #1 + D6-2 P1-1 `d4IID_Nnn1VShRa5`. | D6-2 `commit:253e350` + fixup `commit:d1e1763`. Pin E5. |
+| Public-barrel re-export discipline — `AgentMaterializeError` allowed (throwable class needed by the `agentMaterializeFaultInjector` test-hook return value); `materializeAgent` / `getAgentHomeTemplate` / template bytes NOT exported. Backend tests must construct the typed error via the public barrel, not the forbidden deep path. | Cindy `hkIP6tEkWJ2VcYfq` D6 review #3. | D6-2 fixup `commit:d1e1763`. `packages/host/src/index.ts:140-159` boundary comment. `test:packages/backend/tests/dependency-guard-agent-materialize.test.ts` (2/2 pass — backend deep-path import still tripwired). |
 
 ---
 
@@ -269,21 +273,26 @@ commit/test where the lock landed.
 
 | Test file | Suite count | Scope |
 |---|---|---|
-| `tests/migrations/migration-v33-agents-materialization.test.ts` | (D1) | Schema migration + backfill + partial index. |
-| `tests/dependency-guard-agent-materialize.test.ts` | 2 | Public barrel allowance + deep-path tripwire. |
-| `packages/host/tests/daemon/dispatcher-agent-materialize.test.ts` | (D2) | Dispatcher slot + typed-error narrowing. |
-| `packages/host/tests/daemon/agent-materialize-handler.test.ts` | (D2) | Handler happy + idempotency matrix. |
-| `tests/routes/d3-agent-materialize-lifecycle.test.ts` | (D3) | L0/L0.5/L0.7/L1/L2/L3a/L3b/L4 + §6.5 provenance + §6.1 ACL ordering. |
-| `tests/boot/materialization-reconciler.test.ts` | (D4) | Stale sweep + threshold env + ordering before listen. |
-| `tests/routes/d5-failed-recovery.test.ts` | 24 | DELETE failed/pending + `?retry=true` matrix + Q6.a default-hide + D5-fixup1 PATCH-locked + D6-1 widener composition + cross-user ACL pin. |
-| `tests/permissions/can-view-agent.test.ts` | (D5-fixup1) | `canViewAgent` ACL-first ordering + `includeStatuses` widener. |
-| `tests/e2e/standalone-d4-d6-materialize-wire.test.ts` | 1 (3 phases) | Real-wire e2e: happy + typed-failure injection + `?retry=true` + §3.2 echo. |
+| `packages/backend/tests/db-migrations.test.ts` (v33 row only) | 1 | Schema migration v33 + backfill + partial idempotency_key index. |
+| `packages/backend/tests/dependency-guard-agent-materialize.test.ts` | 2 | Backend deep-path import tripwire + public-barrel allowance. |
+| `packages/host/tests/agent-materialize/dispatcher-integration.test.ts` | 10 | Dispatcher slot wiring + typed-error narrowing + malformed-params rejection + missing-handler internal_error fallback. |
+| `packages/host/tests/agent-materialize/handler.test.ts` | 18 | `materializeAgent` §4.6 decision tree (happy / idempotent / mismatch / corrupt sentinel / foreign content / unsupported template / EACCES / race window). |
+| `packages/host/tests/outbound-protocol.test.ts` | (D1) | Wire param/result/error schema round-trips. |
+| `packages/backend/tests/routes/agents.test.ts` (POST + GET/DELETE + GET :id + PATCH sections) | (D3) | Public CRUD surface for `/api/agents`; POST share lifecycle invariants with §3. |
+| `packages/backend/tests/routes/d4-d-structural-invariants.test.ts` | 8 describes | Invariants 1-3 + Standalone happy path + Round-1 P1.2/P1.3/P1.4 pins. |
+| `packages/backend/tests/routes/agents-no-host-typed-fail.test.ts` (POST offline + bulk-stop + clear-session sections) | (D3 + D4.a/D4.c carry-over) | Daemon-offline fail-fast (NO reserve), `host_attach_pending` mapping, bulk stop typed aggregation. |
+| `packages/backend/tests/runtime/materialize-reconciler.test.ts` | 19 (3 describes: repo primitive + env knob + sequencing) | D4 boot reconciler — stale sweep + threshold env + pre-listen sequencing. |
+| `packages/backend/tests/routes/d5-failed-recovery.test.ts` | 24 (7 describes) | DELETE failed/pending + `?retry=true` matrix (8 pins) + default-hide + `?include_failed=1` + `?include_pending=1` (D6-1, 6 pins) + PATCH-locked (D5-fixup1, 2 pins). |
+| `packages/backend/tests/permissions.test.ts` (`canViewAgent` describe) | (D5-fixup1) | `canViewAgent` ACL-first ordering + system/agent-self/creator/workspace-member ACL branches. |
+| `packages/backend/tests/e2e/standalone-d4-d6-materialize-wire.test.ts` | 1 (3 phases) | Real-wire e2e: happy + typed-fault injection + `?retry=true` + §3.2 echo. Runs real `materializeAgent` via the production dispatcher slot. |
 
-Gates at D6-2 tip `253e350`:
+Gates at D6-3 tip `f559eac` (after D6-2 fixup `d1e1763` re-pin):
 
-- D6-2 e2e: 1/1 pass.
-- D5 regression matrix: 24/24 pass.
-- Dependency tripwire: 2/2 pass.
+- D6-2 e2e: 1/1 pass (real `materializeAgent`).
+- Host `agent-materialize/handler.test.ts`: 18/18.
+- Host `agent-materialize/dispatcher-integration.test.ts`: 10/10.
+- D5 regression: 24/24.
+- Dependency tripwire: 2/2.
 - `pnpm -r typecheck`: clean.
 
 ---
@@ -295,7 +304,9 @@ Gates at D6-2 tip `253e350`:
 - Worktree: `/Users/shiki/workspace/silverhand-wt-d4-d` (not
   pushed to remote per shiki's autonomous-mandate constraint).
 - Commit chain (D4.d only, newest first):
-  - D6-2 `253e350` — real-wire `agent_materialize` e2e.
+  - D6-3 `f559eac` — this acceptance doc.
+  - D6-2 fixup `d1e1763` — narrow `testHooks` + real `materializeAgent` in e2e (Cindy `d4IID_Nnn1VShRa5` P1-1 + P1-2).
+  - D6-2 `253e350` — real-wire `agent_materialize` e2e (superseded API surface fixed in `d1e1763`).
   - D6-1 `2dc3f6b` — `?include_pending=1` widener parity.
   - D5-fixup2 `0dd7450` — `permissions.ts` doc drift.
   - D5-fixup1 `58ba65e` — lift status filter into `canViewAgent`.
