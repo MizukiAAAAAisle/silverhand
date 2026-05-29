@@ -428,7 +428,7 @@
       </div>
       <div class="stamp">
         <strong>Status</strong>: planning / non-committal<br>
-        <strong>Last updated</strong>: 2026-05-28<br>
+        <strong>Last updated</strong>: 2026-05-29<br>
         <strong>Maintainer</strong>: @Alice
       </div>
     </header>
@@ -486,10 +486,10 @@
     </section>
 
     <div class="summary">
-      <div class="summary-cell"><span class="count" style="color: var(--green)">15</span><div><div class="lbl">done</div></div></div>
+      <div class="summary-cell"><span class="count" style="color: var(--green)">16</span><div><div class="lbl">done</div></div></div>
       <div class="summary-cell"><span class="count" style="color: var(--blue)">1</span><div><div class="lbl">in-progress</div></div></div>
       <div class="summary-cell"><span class="count" style="color: var(--purple)">0</span><div><div class="lbl">in-review</div></div></div>
-      <div class="summary-cell"><span class="count" style="color: var(--orange)">4</span><div><div class="lbl">planned</div></div></div>
+      <div class="summary-cell"><span class="count" style="color: var(--orange)">3</span><div><div class="lbl">planned</div></div></div>
       <div class="summary-cell"><span class="count" style="color: var(--gray)">11</span><div><div class="lbl">future</div></div></div>
     </div>
 
@@ -771,20 +771,40 @@
           </div>
         </div>
 
-        <div class="card planned">
+        <div class="card done">
           <div class="card-head">
             <h3 class="card-title">D4.d — create-agent materialize intent flow</h3>
-            <span class="badge planned">planned</span>
+            <span class="badge done">done</span>
           </div>
           <p class="card-body">
-            新 <code>agent_materialize</code> intent kind（outbound envelope <strong>additive 扩容</strong>，非 fork）：
+            14 commits（design + D1–D6 共 6 个 stage，含 D5 两轮 fixup / D6-2 一轮 fixup / D6-3 两轮 fixup）。新 <code>agent_materialize</code> intent kind（outbound envelope <strong>additive 扩容</strong>，非 fork）：
             desktop → server (ACL/placement/分配 agent_id) → daemon materialize <code>~/.silverhand/agents/&lt;id&gt;</code> / L1 → ack → server 激活 row。
-            M1 只做最小链路：daemon 在线才执行，离线 fail-fast + 用户 retry；不做 durable offline queue / 自动补偿 / 自动多 host 迁移。
-            需 design pass：幂等 / typed errors / 失败回滚 / explicit host ownership。
+            M1 只做最小链路：daemon 在线才执行，离线 fail-fast + 用户 retry；不做 durable offline queue / 自动补偿 / 自动多 host 迁移。Cindy round-3 LGTM，task #703 → done。
+            <br>
+            • D1 schema (<code>agents_materialization</code> migration v33) + per-kind typed errors + AgentRow/DTO v33 字段；wire 错码不进 placement taxonomy。
+            <br>
+            • D2 daemon <code>agent_materialize</code> handler + dispatcher slot；real <code>materializeAgent</code> 写 <code>system_prompt.md</code> / <code>MEMORY.md</code> / <code>notes/onboarding-*.md</code> + <code>.materialized</code> sentinel（<code>{ version, agent_id, template_choice, runtime, materialized_at }</code>）。
+            <br>
+            • D3 <code>POST /api/agents</code> §6.3 6-phase lifecycle（reserve → dispatch → ack → activate；reattach-race window 在 <code>routes.ts:3931-3945</code> 显式 pin）+ §6.5 path-equality invariant。
+            <br>
+            • D4 boot reconciler <strong>mark-failed-only</strong> 边界（不是 compensating executor）；reconciler-swept 行写 <code>backend_crash_during_materialize</code>，模块头解释 boundary。
+            <br>
+            • D5 failed-row recovery surface：DELETE failed + <code>?include_failed=1</code> ACL-first widener + <code>?retry=true</code> same-row retry。Cindy 两轮 fixup 把 status filter 提进 <code>canViewAgent</code>（ACL-first，default <code>['active']</code>，opt-in via <code>includeStatuses</code>）；PATCH/avatar/workspace/runtime/schedules/stop 全 404 for non-active rows（关 §3.2 snapshot-mutation gap）；delete-impact 仍 active-only，DELETE 显式 opt-in 三状态。
+            <br>
+            • D6-1 <code>?include_pending=1</code> widener parity（ACL-first，creator-scoped）。
+            <br>
+            • D6-2 real-wire e2e：1 test / 3 phases（happy create asserts real template files + 真 sentinel；fault hook 注入 <code>AgentMaterializeError('agent_dir_collision')</code> 一次 → 409 + row failed；retry 真跑 <code>materializeAgent</code> 走通；echo 阶段 on-disk dir count = 2 钉死无 echo dispatch）。
+            一轮 Cindy fixup 把 <code>RunDaemonOptions.agentMaterializeHandler?</code> top-level option 收成 <code>testHooks?</code> 命名空间（两 knob：<code>agentMaterializeHomeDir</code> + <code>agentMaterializeFaultInjector</code>），production dispatcher slot 永远调真 <code>materializeAgent</code>，fault hook 只能注入 typed error（不能合成 success）。
+            <br>
+            • D6-3 acceptance doc <code>docs/d4-d-acceptance.md</code>（D1–D6 矩阵 + 13 Cindy guard rails + R4 per-slice carveout + test inventory + commit chain）。两轮 fixup：reconciler failed code 修正、F5 retry 三 outcome 拆开（active→200 / pending→409 in_progress / failed→409 previously_failed；<code>retry_target_not_failed</code> 仅 flip-race guard）、所有 stale test path 替换为 real <code>describe::it</code> labels、§10 gates tip pin 到 <code>15085c5</code>。
+            <br>
+            <strong>R4 carveout</strong>：<code>agent_materialize</code> 是 server↔daemon formal semantics by design，标准「local supervisor/control IPC」carveout <strong>不</strong>适用；D6-2 e2e 真跑 outbound wire path 把 wire ↔ HTTP 双侧绑死。
           </p>
           <div class="card-meta">
             <span class="m-tag m1">M1</span>
-            <span class="meta-tag">shiki unlocked 2026-05-28</span>
+            <span class="meta-tag">branch feature/remote-backend-v1-stage-d4-d-design tip 38a4b12</span>
+            <span class="meta-tag">acceptance docs/d4-d-acceptance.md</span>
+            <span class="meta-tag">success = D1–D6 closed ✓</span>
           </div>
         </div>
 
@@ -1106,9 +1126,9 @@
       <p>
         <strong>Milestone 1 路径</strong>（这期）：
         D3.b（in-progress） →
-        <strong>D4.c ✅ done — G3 closed 2026-05-28（branch <code>feature/remote-backend-v1-stage-d4-c-g3</code> tip <code>1498ccb</code>）</strong> →
-        D4.d（create-agent materialize intent，next） →
-        D4.e（daemon-owned data-plane proxy）+ D5.a（envelope adapter unification）并行 →
+        D4.c ✅ done — G3 closed 2026-05-28（branch <code>feature/remote-backend-v1-stage-d4-c-g3</code> tip <code>1498ccb</code>） →
+        <strong>D4.d ✅ done — D1–D6 closed 2026-05-29（branch <code>feature/remote-backend-v1-stage-d4-d-design</code> tip <code>38a4b12</code>）</strong> →
+        D4.e（daemon-owned data-plane proxy，next）+ D5.a（envelope adapter unification）并行 →
         T1 内 M1 子项（sticky host ownership + Remote UX 收口）→
         <strong>= M1 达成（final-form 协议，embedded 部署）</strong>。
       </p>
