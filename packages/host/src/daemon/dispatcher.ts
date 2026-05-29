@@ -27,8 +27,15 @@
  */
 import {
   type HelloResult,
+  intentErrorSchema,
   intentSchemas,
+  type AgentMaterializeParams,
+  type AgentMaterializeResult,
   type ConversationLogDebugParams,
+  type HostOutboundAttachParams,
+  type HostOutboundAttachResult,
+  type HostOutboundDetachResult,
+  type HostOutboundReloadResult,
   type IntentName,
   type ResponseError,
   type ResponseFrame,
@@ -46,6 +53,7 @@ import { DAEMON_VERSION, createDaemonHelloResult } from './version.js';
 import type { DaemonLogger } from './logger.js';
 import type { SupervisorContract } from './supervisor-contract.js';
 import { logIntent } from './daemon-logging.js';
+import { AgentMaterializeError } from './agent-materialize/index.js';
 
 export interface DispatcherOptions {
   logger: DaemonLogger;
@@ -61,6 +69,70 @@ export interface DispatcherOptions {
    * concrete `Supervisor`.
    */
   supervisor?: SupervisorContract;
+  /**
+   * Stage D3.a Commit 3 — handler for the `host_outbound_attach`
+   * intent. The daemon's `OutboundSupervisor.attach` is the
+   * production wiring; tests pass a stub. `undefined` means the
+   * intent is not wired and the dispatcher throws (translated to
+   * `internal_error` by the catch arm). This shape mirrors the
+   * `supervisor` field rather than passing the supervisor object
+   * directly so the dispatcher stays free of `OutboundSupervisor`'s
+   * concrete dependencies (filesystem, ws, etc.).
+   */
+  hostOutboundAttachHandler?: (
+    params: HostOutboundAttachParams,
+  ) => HostOutboundAttachResult | Promise<HostOutboundAttachResult>;
+  /**
+   * Stage D3.b Commit 3 — handler for the `host_outbound_detach`
+   * intent. Production wiring: `OutboundSupervisor.detach`. Mirrors
+   * the `hostOutboundAttachHandler` slot pattern so the dispatcher
+   * stays free of supervisor concrete dependencies. `undefined`
+   * means the intent is not wired and the dispatcher throws
+   * (translated to `internal_error` by the catch arm).
+   */
+  hostOutboundDetachHandler?: () =>
+    | HostOutboundDetachResult
+    | Promise<HostOutboundDetachResult>;
+  /**
+   * Stage D3.c Commit 2 — handler for the `host_outbound_reload`
+   * intent. Production wiring: `OutboundSupervisor.reload`. Same
+   * slot pattern as attach/detach so the dispatcher stays free of
+   * supervisor concrete dependencies. Reload is a daemon-control
+   * intent (not a runtime_* intent), so it has its own slot.
+   * `undefined` means the intent is not wired and the dispatcher
+   * throws (translated to `internal_error` by the catch arm).
+   */
+  hostOutboundReloadHandler?: () =>
+    | HostOutboundReloadResult
+    | Promise<HostOutboundReloadResult>;
+  /**
+   * D4.d D2 — handler for the `agent_materialize` intent. Unlike
+   * the runtime_* family (local supervisor / control) and the
+   * host_outbound_* family (transport plumbing), agent_materialize
+   * is formal server↔daemon semantics: the server asks the
+   * daemon-owning host to seed an agent's L1 home dir. Production
+   * wiring: `materializeAgent` from
+   * `./agent-materialize/handler.ts`. Tests pass a stub.
+   *
+   * `undefined` means the slot is not wired and the dispatcher
+   * throws (translated to `internal_error` by the catch arm), same
+   * pattern as the host_outbound_* slots.
+   *
+   * Typed error preservation (Cindy D2 pre-gate #3): the handler
+   * may throw `AgentMaterializeError` carrying a typed code
+   * (`fs_quota_exceeded` / `fs_unavailable` / `agent_dir_collision`
+   * / `unsupported_template` / `unsupported_runtime` /
+   * `internal_error`). The dispatcher's catch arm recognises that
+   * error class and emits the typed code on the wire instead of
+   * collapsing to `internal_error`. The outbound layer's
+   * per-command error schema (`AgentMaterializeWireErrorSchema`)
+   * already permits this widened code set; other commands keep
+   * the narrow `ResponseError` enum because their slots throw
+   * only generic Errors.
+   */
+  agentMaterializeHandler?: (
+    params: AgentMaterializeParams,
+  ) => AgentMaterializeResult | Promise<AgentMaterializeResult>;
 }
 
 export class IntentDispatcher {
@@ -69,6 +141,22 @@ export class IntentDispatcher {
   private readonly now: () => number;
   private readonly helloResult: HelloResult;
   private readonly supervisor: SupervisorContract | undefined;
+  private readonly hostOutboundAttachHandler:
+    | ((
+        params: HostOutboundAttachParams,
+      ) => HostOutboundAttachResult | Promise<HostOutboundAttachResult>)
+    | undefined;
+  private readonly hostOutboundDetachHandler:
+    | (() => HostOutboundDetachResult | Promise<HostOutboundDetachResult>)
+    | undefined;
+  private readonly hostOutboundReloadHandler:
+    | (() => HostOutboundReloadResult | Promise<HostOutboundReloadResult>)
+    | undefined;
+  private readonly agentMaterializeHandler:
+    | ((
+        params: AgentMaterializeParams,
+      ) => AgentMaterializeResult | Promise<AgentMaterializeResult>)
+    | undefined;
   private intentCount = 0;
   private shuttingDown = false;
 
@@ -86,6 +174,10 @@ export class IntentDispatcher {
     this.helloResult =
       opts.helloResult ?? createDaemonHelloResult('__test_instance__');
     this.supervisor = opts.supervisor;
+    this.hostOutboundAttachHandler = opts.hostOutboundAttachHandler;
+    this.hostOutboundDetachHandler = opts.hostOutboundDetachHandler;
+    this.hostOutboundReloadHandler = opts.hostOutboundReloadHandler;
+    this.agentMaterializeHandler = opts.agentMaterializeHandler;
   }
 
   /** Signal that subsequent intents should be rejected with
@@ -218,6 +310,56 @@ export class IntentDispatcher {
       }
       return finish({ id: requestId, result: resultValidated.data });
     } catch (err) {
+      // D4.d D2 (Cindy pre-gate #3 + P1-1): preserve typed daemon-
+      // business errors from `agent_materialize` (fs_quota_exceeded
+      // / fs_unavailable / agent_dir_collision / unsupported_template
+      // / unsupported_runtime / internal_error). Without this branch
+      // the catch arm below would squash all six codes into
+      // `internal_error`, which would lose the recoverable /
+      // unrecoverable / collision distinction the route layer needs
+      // to decide retry / 503 / 507 / 409.
+      //
+      // P1-1 closes the loop on the EMITTING side too: the typed
+      // code is validated against `intentErrorSchema(intent)` before
+      // being put on the wire, so a handler that drifts (throws a
+      // code the intent's error taxonomy doesn't cover) still gets
+      // surfaced as `internal_error` — preventing daemon-side drift
+      // from reaching the wire as it did during the bare-cast era.
+      if (err instanceof AgentMaterializeError) {
+        const errorSchema = intentErrorSchema(intent as IntentName);
+        const validated = errorSchema.safeParse({
+          code: err.code,
+          message: err.message,
+        });
+        if (validated.success) {
+          this.logger.warn(
+            {
+              intent,
+              err: err.message,
+              code: err.code,
+            },
+            'agent_materialize handler returned typed error',
+          );
+          return finish(this.typedErrorFrame(requestId, err.code, err.message));
+        }
+        this.logger.error(
+          {
+            intent,
+            err: err.message,
+            code: err.code,
+            issues: validated.error.errors
+              .map(e => `${e.path.join('.')}: ${e.message}`)
+              .join('; '),
+          },
+          'agent_materialize handler returned a code not in its IPC error taxonomy; emitting internal_error',
+        );
+        return finish(
+          this.errorFrame(requestId, {
+            code: 'internal_error',
+            message: `drift: code "${err.code}" not in ${intent} error taxonomy`,
+          }),
+        );
+      }
       this.logger.error(
         {
           intent,
@@ -236,6 +378,37 @@ export class IntentDispatcher {
 
   private errorFrame(id: string, error: ResponseError): ResponseFrame {
     return { id, error };
+  }
+
+  /**
+   * Build an error frame carrying a typed code that is NOT in the
+   * standard `ResponseError` enum. The IPC `ResponseFrame` type
+   * narrows `error.code` to the 5 generic codes; this helper
+   * bypasses that narrowing so daemon-business typed codes
+   * (currently the six `AgentMaterializeErrorCode` values) can
+   * travel through to:
+   *   - The outbound WS layer, which validates them against the
+   *     wider per-command `AgentMaterializeWireErrorSchema`.
+   *   - The local IPC transport, which uses `LooseAnyFrameSchema`
+   *     so the typed code is not dropped at frame-decode time.
+   *     `HostClient.handleFrame` then validates the code against
+   *     `intentErrorSchema(intent)` and surfaces a typed
+   *     `HostClientError` (Cindy D2 P1-1).
+   *
+   * The cast is honest: this helper IS the place the typed
+   * widening happens. The caller side has already validated the
+   * code against the per-intent error schema, so we know it's
+   * legitimate within the per-intent contract.
+   */
+  private typedErrorFrame(
+    id: string,
+    code: string,
+    message: string,
+  ): ResponseFrame {
+    return {
+      id,
+      error: { code, message } as unknown as ResponseError,
+    };
   }
 
   /**
@@ -331,6 +504,37 @@ export class IntentDispatcher {
         return this.requireSupervisor().resumeOutput(
           params as RuntimeOutputResumeParams,
         );
+      case 'host_outbound_attach':
+        // Late-attach is a daemon-control intent, not a runtime_*
+        // intent, so it has its own handler slot. When a daemon is
+        // launched in the protocol-only test surface no handler is
+        // wired; the require helper throws, the catch arm in
+        // `dispatch()` projects that as `internal_error`.
+        return this.requireHostOutboundAttachHandler()(
+          params as HostOutboundAttachParams,
+        );
+      case 'host_outbound_detach':
+        // Detach is the symmetric daemon-control intent. No params
+        // (validated to `{}` by the schema before reaching here).
+        // Same protocol-only-surface caveat as attach.
+        return this.requireHostOutboundDetachHandler()();
+      case 'host_outbound_reload':
+        // Reload is the third daemon-control intent (D3.c Commit 2).
+        // No params — daemon re-reads its currently-attached
+        // configPath. Hard-rejects `not_attached` via a typed result
+        // arm, not via `ResponseError` (business state vs transport).
+        return this.requireHostOutboundReloadHandler()();
+      case 'agent_materialize':
+        // D4.d D2 — server↔daemon formal semantics. The slot is
+        // wired by `runDaemon` to `materializeAgent` from
+        // `./agent-materialize/handler.ts`. Typed errors thrown by
+        // the handler (AgentMaterializeError) are caught in
+        // `dispatch()` and projected with their typed code; other
+        // throws still flow through the generic `internal_error`
+        // path.
+        return this.requireAgentMaterializeHandler()(
+          params as AgentMaterializeParams,
+        );
     }
   }
 
@@ -343,5 +547,49 @@ export class IntentDispatcher {
       );
     }
     return this.supervisor;
+  }
+
+  private requireHostOutboundAttachHandler(): (
+    params: HostOutboundAttachParams,
+  ) => HostOutboundAttachResult | Promise<HostOutboundAttachResult> {
+    if (!this.hostOutboundAttachHandler) {
+      throw new Error(
+        'host_outbound_attach intent reached dispatcher with no handler wired',
+      );
+    }
+    return this.hostOutboundAttachHandler;
+  }
+
+  private requireHostOutboundDetachHandler(): () =>
+    | HostOutboundDetachResult
+    | Promise<HostOutboundDetachResult> {
+    if (!this.hostOutboundDetachHandler) {
+      throw new Error(
+        'host_outbound_detach intent reached dispatcher with no handler wired',
+      );
+    }
+    return this.hostOutboundDetachHandler;
+  }
+
+  private requireHostOutboundReloadHandler(): () =>
+    | HostOutboundReloadResult
+    | Promise<HostOutboundReloadResult> {
+    if (!this.hostOutboundReloadHandler) {
+      throw new Error(
+        'host_outbound_reload intent reached dispatcher with no handler wired',
+      );
+    }
+    return this.hostOutboundReloadHandler;
+  }
+
+  private requireAgentMaterializeHandler(): (
+    params: AgentMaterializeParams,
+  ) => AgentMaterializeResult | Promise<AgentMaterializeResult> {
+    if (!this.agentMaterializeHandler) {
+      throw new Error(
+        'agent_materialize intent reached dispatcher with no handler wired',
+      );
+    }
+    return this.agentMaterializeHandler;
   }
 }

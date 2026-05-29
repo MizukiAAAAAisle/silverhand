@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { join } from 'node:path';
+import {
+  encodeUserPrincipalHeader,
+  X_SILVERHAND_PRINCIPAL_HEADER,
+} from '@silverhand/shared';
+import { HostRepo } from '../../src/repos/host-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 describe('workspace/conversation routes', () => {
@@ -80,6 +85,94 @@ describe('workspace/conversation routes', () => {
       dms.channels[0].id,
       secondary.channel.id,
     ]);
+  });
+
+  it('defaults workspace host to the creator owned local host', async () => {
+    t = buildTestApp();
+    const ownedLocal = new HostRepo(t.ctx.db).getOwnedLocalForUser(t.viewerUserId);
+    const res = await http(t).post('/api/workspaces', {
+      name: 'owned-host-default',
+      member_agent_ids: [],
+    });
+
+    expect(res.status).toBe(201);
+    const body = await res.json() as any;
+    expect(body.workspace.workspace_host_id).toBe(ownedLocal?.id);
+  });
+
+  it('fails closed when workspace creator has no owned local host', async () => {
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
+    const res = await http(t).post('/api/workspaces', {
+      name: 'no-local-host',
+      member_agent_ids: [],
+    });
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: 'local_host_unbound' });
+  });
+
+  it('rejects an explicit workspace host owned by another user', async () => {
+    t = buildTestApp();
+    const teammateHost = new HostRepo(t.ctx.db).getOwnedLocalForUser('teammate');
+    expect(teammateHost).not.toBeNull();
+    const res = await http(t).post('/api/workspaces', {
+      name: 'cross-user-host',
+      workspace_host_id: teammateHost!.id,
+      member_agent_ids: [],
+    });
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ code: 'host_not_owned' });
+  });
+
+  it('rejects workspace create members whose host does not match the workspace host', async () => {
+    t = buildTestApp();
+    const teammateHeaders = {
+      [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
+    };
+    const teammateAgent = await (
+      await http(t).post(
+        '/api/agents',
+        { name: 'teammate-agent', runtime: 'claude' },
+        { headers: teammateHeaders },
+      )
+    ).json() as any;
+
+    const res = await http(t).post('/api/workspaces', {
+      name: 'host-mismatch-create',
+      member_agent_ids: [teammateAgent.agent.id],
+    });
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: 'host_mismatch' });
+  });
+
+  it('rejects addMember when agent and workspace hosts differ', async () => {
+    t = buildTestApp();
+    const teammateHeaders = {
+      [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
+    };
+    const teammateAgent = await (
+      await http(t).post(
+        '/api/agents',
+        { name: 'teammate-member', runtime: 'claude' },
+        { headers: teammateHeaders },
+      )
+    ).json() as any;
+    const workspace = await (
+      await http(t).post('/api/workspaces', {
+        name: 'host-mismatch-add',
+        member_agent_ids: [],
+      })
+    ).json() as any;
+
+    const res = await http(t).post(
+      `/api/workspaces/${workspace.workspace.id}/members`,
+      { agent_id: teammateAgent.agent.id },
+    );
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: 'host_mismatch' });
   });
 
   it('enforces channel/thread kind guards on message routes', async () => {

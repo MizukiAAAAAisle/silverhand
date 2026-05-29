@@ -1,21 +1,20 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { apiPaths } from '@silverhand/shared';
+import { apiPaths, authPaths } from '@silverhand/shared';
+import { HostRepo } from '../../src/repos/host-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 /**
- * Pre-register gate enforced by `installRequireRegisteredViewerMiddleware`.
+ * Pre-auth public API behavior.
  *
- * Production identity model (post pre-ship rewrite): pre-registration
- * means `app_settings.viewer_user_id` is unset and `users` is empty.
- * The principal middleware therefore resolves no viewer; downstream
- * routes either work (whitelisted) or return 403 `registration_required`.
+ * Production identity model: public API callers must present a user
+ * session bearer. Pre-auth callers either use `/auth/*` or fail at the
+ * bearer layer before they can fabricate a viewer principal.
  *
  * Contract:
- *   - GET /api/me + POST /api/register + GET /api/health are the ONLY
- *     public routes reachable when no viewer is registered.
- *   - GET /api/me returns the discriminated `RegistrationRequired` shape
- *     (`{registration_required: true, suggested_name: 'user-XXXX'}`).
- *   - Every other public route returns 403 `registration_required`.
+ *   - GET /api/health + GET /api/server/info are the ONLY `/api/*`
+ *     routes reachable when no viewer is authenticated.
+ *   - Other `/api/*` routes return 401 `unauthorized` before principal
+ *     resolution or the registration gate runs.
  *   - Internal (agent-principal) routes are unaffected — agents have
  *     no registration state and should keep working even before the
  *     human registers.
@@ -24,7 +23,7 @@ import { buildTestApp, http, type TestApp } from '../utils/app.js';
  * this middleware is the security half (V2 multi-user, CLI tools,
  * any non-renderer caller).
  */
-describe('Pre-register gate (requireRegisteredViewer middleware)', () => {
+describe('Pre-auth public API', () => {
   let t: TestApp | null = null;
   afterEach(() => {
     t?.cleanup();
@@ -32,100 +31,105 @@ describe('Pre-register gate (requireRegisteredViewer middleware)', () => {
   });
 
   /**
-   * Reset the fixture into the production pre-registration state:
-   * `users` row absent + `app_settings.viewer_user_id` unset.
+   * Reset the fixture into the production pre-auth state:
+   * no users row and no legacy settings pointer.
    */
   function unregisterViewer(test: TestApp): void {
     test.ctx.db
       .prepare(`DELETE FROM app_settings WHERE key = 'viewer_user_id'`)
       .run();
-    test.ctx.db.prepare(`DELETE FROM users WHERE id = 'local'`).run();
+    test.ctx.db.prepare(`DELETE FROM users`).run();
   }
 
-  it('GET /api/me returns the registration_required shape before registration', async () => {
-    t = buildTestApp();
+  function noPrincipalHttp(test: TestApp) {
+    return http(test.app);
+  }
+
+  it('GET /api/me requires a session bearer before registration', async () => {
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     unregisterViewer(t);
-    const res = await http(t).get(apiPaths.me);
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as {
-      registration_required?: boolean;
-      suggested_name?: string;
-    };
-    expect(body.registration_required).toBe(true);
-    expect(body.suggested_name).toMatch(/^user-[0-9a-f]{8}$/);
+    const res = await noPrincipalHttp(t).get(apiPaths.me);
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ error: 'unauthorized' });
   });
 
-  it('allows POST /api/register before registration', async () => {
-    t = buildTestApp();
+  it('does not expose legacy POST /api/register before authentication', async () => {
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     unregisterViewer(t);
-    const res = await http(t).post(apiPaths.register, { name: 'shiki' });
-    expect(res.status).toBe(200);
+    const res = await noPrincipalHttp(t).post('/api/register', { name: 'shiki' });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ error: 'unauthorized' });
   });
 
-  it('blocks POST /api/workspaces with 403 registration_required', async () => {
-    t = buildTestApp();
+  it('blocks POST /api/workspaces with 401 unauthorized', async () => {
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     unregisterViewer(t);
-    const res = await http(t).post('/api/workspaces', { name: 'should-block' });
-    expect(res.status).toBe(403);
-    const body = (await res.json()) as { code: string; error: string };
-    expect(body.code).toBe('registration_required');
+    const res = await noPrincipalHttp(t).post('/api/workspaces', { name: 'should-block' });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ error: 'unauthorized' });
   });
 
-  it('blocks POST /api/agents with 403 registration_required', async () => {
-    t = buildTestApp();
+  it('blocks POST /api/agents with 401 unauthorized', async () => {
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     unregisterViewer(t);
-    const res = await http(t).post('/api/agents', {
+    const res = await noPrincipalHttp(t).post('/api/agents', {
       name: 'should-block',
       runtime: 'claude',
     });
-    expect(res.status).toBe(403);
-    const body = (await res.json()) as { code: string };
-    expect(body.code).toBe('registration_required');
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ error: 'unauthorized' });
   });
 
-  it('blocks PATCH /api/me with 403 registration_required', async () => {
-    // PATCH /api/me is NOT whitelisted — only the read is. The gate
-    // ensures registration must happen via /api/register, never via
-    // a side-door display_name PATCH (and pre-registration there is
-    // no row to patch in the first place).
-    t = buildTestApp();
+  it('blocks PATCH /api/me with 401 unauthorized', async () => {
+    // PATCH /api/me is not a setup route; the bearer middleware
+    // prevents side-door profile creation/update before authentication.
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     unregisterViewer(t);
-    const res = await http(t).patch(apiPaths.me, { display_name: 'Sneaky' });
-    expect(res.status).toBe(403);
-    const body = (await res.json()) as { code: string };
-    expect(body.code).toBe('registration_required');
+    const res = await noPrincipalHttp(t).patch(apiPaths.me, { display_name: 'Sneaky' });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ error: 'unauthorized' });
   });
 
-  it('blocks GET /api/workspaces with 403 registration_required', async () => {
+  it('blocks GET /api/workspaces with 401 unauthorized', async () => {
     // Read paths are gated too — without registration the viewer has
     // no identity for FK / audit purposes, so we deny uniformly.
-    t = buildTestApp();
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     unregisterViewer(t);
-    const res = await http(t).get('/api/workspaces');
-    expect(res.status).toBe(403);
-    const body = (await res.json()) as { code: string };
-    expect(body.code).toBe('registration_required');
+    const res = await noPrincipalHttp(t).get('/api/workspaces');
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ error: 'unauthorized' });
   });
 
-  it('reopens the full surface after POST /api/register succeeds', async () => {
-    t = buildTestApp();
+  it('reopens the full surface after auth signup succeeds', async () => {
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     unregisterViewer(t);
 
-    // Register first — INSERT user + write viewer_user_id atomically.
-    const reg = await http(t).post(apiPaths.register, { name: 'shiki' });
-    expect(reg.status).toBe(200);
-
-    // Now the previously-blocked route works.
-    const create = await http(t).post('/api/workspaces', {
-      name: 'post-register-ws',
+    const signup = await noPrincipalHttp(t).post(authPaths.signup, {
+      email: 'shiki@example.test',
+      password: 'correct horse battery staple',
+      display_name: 'Shiki',
     });
+    expect(signup.status).toBe(200);
+    const auth = await signup.json() as { user_token: string; user: { id: string } };
+    new HostRepo(t.ctx.db).claimOrCreateLocal({
+      userId: auth.user.id,
+      installationId: 'post-register-install',
+    });
+
+    const create = await http(t, {
+      authorization: `Bearer ${auth.user_token}`,
+      'X-Silverhand-User-Id': '',
+    }).post(
+      '/api/workspaces',
+      { name: 'post-register-ws' },
+    );
     expect(create.status).toBe(201);
   });
 
   it('lets registered viewers reach all routes (no regression)', async () => {
     // Default fixture pre-registers `local` — sanity check that the
     // gate does not over-fire for already-registered users.
-    t = buildTestApp();
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     const res = await http(t).get('/api/workspaces');
     expect(res.status).toBe(200);
   });
@@ -135,9 +139,9 @@ describe('Pre-register gate (requireRegisteredViewer middleware)', () => {
     // and without a viewer. The gate must not turn the pre-registration
     // case into a 403 here, or first-boot health checks would mark the
     // process unhealthy.
-    t = buildTestApp();
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
     unregisterViewer(t);
-    const res = await http(t).get('/api/health');
+    const res = await noPrincipalHttp(t).get('/api/health');
     expect(res.status).toBe(200);
   });
 });

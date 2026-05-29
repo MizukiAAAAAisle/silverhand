@@ -15,6 +15,7 @@ export interface WorkspaceItem {
   name: string;
   kind: WorkspaceUiKind;
   workspace_path: string;
+  workspace_host_id: string;
   dm_agent_id: string | null;
   pinned_at?: number | null;
   active?: boolean;
@@ -36,6 +37,7 @@ interface WorkspaceGroupProps {
   selectedWorkspaceId: string | null;
   onSelectWorkspace: (id: string) => void;
   onPinWorkspace?: (id: string, pinned: boolean) => void;
+  canRevealWorkspace?: (workspace: WorkspaceItem) => boolean;
   /** Optional `+` button. DM groups omit this — DM workspaces are
    *  auto-created when an agent is provisioned. */
   onAdd?: () => void;
@@ -61,6 +63,7 @@ export function WorkspaceGroup({
   selectedWorkspaceId,
   onSelectWorkspace,
   onPinWorkspace,
+  canRevealWorkspace,
   onAdd,
   emptyHint,
   defaultExpanded,
@@ -79,6 +82,7 @@ export function WorkspaceGroup({
         workspaces.map(w => {
           const title = w.kind === 'dm' ? displayDmName(w.name) : w.name;
           const canPin = w.kind === 'regular' && !w.archived && !!onPinWorkspace;
+          const canReveal = canRevealWorkspace?.(w) ?? false;
           const pinned = isWorkspacePinned(w);
           return (
             <AppContextMenu
@@ -121,14 +125,16 @@ export function WorkspaceGroup({
                 </AppContextMenuItem>
               ) : null}
               {canPin ? <AppContextMenuSeparator /> : null}
-              <AppContextMenuItem
-                icon={<FolderOpen className="size-3.5" />}
-                onSelect={() => {
-                  void window.agentHub.showItemInFolder(w.workspace_path);
-                }}
-              >
-                Open in Finder
-              </AppContextMenuItem>
+              {canReveal ? (
+                <AppContextMenuItem
+                  icon={<FolderOpen className="size-3.5" />}
+                  onSelect={() => {
+                    void window.agentHub.showItemInFolder(w.workspace_path);
+                  }}
+                >
+                  Open in Finder
+                </AppContextMenuItem>
+              ) : null}
               <AppContextMenuItem
                 icon={<Copy className="size-3.5" />}
                 onSelect={() => {

@@ -11,11 +11,14 @@ import {
   Check,
   CheckCircle2,
   Code2,
+  LogOut,
   Loader2,
   Network,
   Palette,
   RotateCcw,
   Save,
+  Server,
+  ShieldOff,
   Type,
   User,
 } from 'lucide-react';
@@ -31,9 +34,13 @@ import { AvatarPickerButton } from '@/components/AvatarPickerButton';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { useAppearance } from '@/hooks/useAppearance';
+import { useBackendInfoSnapshot } from '@/features/hosts/hooks';
 import {
+  isBackendUnreachable,
   isRegistrationRequired,
   useClearAvatar,
+  useLogout,
+  useLogoutAndDisableHost,
   useUpdateProfile,
   useUploadAvatar,
   useViewerAvatarObjectUrl,
@@ -51,6 +58,8 @@ import {
   PROSE_FONT_PRESETS,
   type FontPreset,
 } from '@/settings/font-presets';
+import { HostsPane } from './HostsPane';
+import { ServerUrlPane } from './ServerUrlPane';
 
 const settingsKey = ['settings'] as const;
 
@@ -124,10 +133,12 @@ function parseRuntimes(raw: string | undefined | null): RuntimeKind[] {
  *  page-internal sub-nav; selection is local React state, persisted to
  *  localStorage so a refresh stays put. (No URL routing yet — settings
  *  deep-links are rare and the URL slot belongs to the chat router.) */
-type SettingsSection = 'appearance' | 'profile' | 'proxy';
+type SettingsSection = 'appearance' | 'profile' | 'server' | 'hosts' | 'proxy';
 const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   'appearance',
   'profile',
+  'server',
+  'hosts',
   'proxy',
 ];
 const SETTINGS_SECTION_KEY = 'silverhand:settings-section';
@@ -263,6 +274,10 @@ export function SettingsPage(): JSX.Element {
             />
           ) : section === 'profile' ? (
             <ProfilePane />
+          ) : section === 'server' ? (
+            <ServerUrlPane />
+          ) : section === 'hosts' ? (
+            <HostsPane />
           ) : (
             <ProxyPane
               proxyUrl={proxyUrl}
@@ -304,6 +319,8 @@ function SettingsSubNav({
   }> = [
     { id: 'appearance', label: 'Appearance', icon: <Palette className="size-3.5" /> },
     { id: 'profile', label: 'Profile', icon: <User className="size-3.5" /> },
+    { id: 'server', label: 'Server', icon: <Server className="size-3.5" /> },
+    { id: 'hosts', label: 'Local host', icon: <Server className="size-3.5" /> },
     { id: 'proxy', label: 'Proxy', icon: <Network className="size-3.5" /> },
   ];
 
@@ -486,13 +503,28 @@ function ProfilePane(): JSX.Element {
   const updateProfile = useUpdateProfile();
   const uploadAvatar = useUploadAvatar();
   const clearAvatar = useClearAvatar();
+  const logout = useLogout();
+  // D3.e — secondary affordance: "Sign out and disable this host".
+  // Reuses `hosts:revoke` + `auth:logout` in strict sequence; the
+  // plain `logout` mutation above stays as-is so the default Log out
+  // path NEVER touches the host record (Cindy review gate 2).
+  const logoutAndDisable = useLogoutAndDisableHost();
+  const backendInfoQuery = useBackendInfoSnapshot();
+  const currentLocalHostId = backendInfoQuery.data?.local_host_id ?? null;
+  const localHostStatus =
+    backendInfoQuery.data?.local_host_status ?? 'unclaimed';
+  const [confirmDisableHost, setConfirmDisableHost] = useState(false);
 
   // ProfilePane only mounts after registration (App.tsx gates the
   // shell behind <RegistrationGate />), so any `registration_required`
   // shape here is a transient race during refetch. Narrow once and
   // treat it as `undefined` for the rest of the pane.
   const dto =
-    viewer.data && !isRegistrationRequired(viewer.data) ? viewer.data : undefined;
+    viewer.data
+    && !isRegistrationRequired(viewer.data)
+    && !isBackendUnreachable(viewer.data)
+      ? viewer.data
+      : undefined;
 
   const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -568,6 +600,52 @@ function ProfilePane(): JSX.Element {
       setError(String(err));
     }
   };
+
+  const onLogout = async () => {
+    setError(null);
+    try {
+      await logout.mutateAsync();
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  // D3.e — destructive variant. Stays a separate handler so the
+  // confirm dialog hits ONLY this path (the plain Log out is a
+  // one-click action). On revoke failure we keep the user signed in
+  // and show the typed message; the next attempt is up to them.
+  const onLogoutAndDisableHost = async () => {
+    setError(null);
+    try {
+      const result = await logoutAndDisable.mutateAsync({
+        hostId: currentLocalHostId,
+      });
+      if (!result.ok) {
+        setError(result.message);
+        // Keep the confirm dialog open ONLY on `no_current_host` so
+        // the user re-reads what went wrong. Other failures clear
+        // the confirm because the action was attempted; user retries
+        // explicitly via the button.
+        if (result.kind !== 'no_current_host') {
+          setConfirmDisableHost(false);
+        }
+        return;
+      }
+      setConfirmDisableHost(false);
+    } catch (err) {
+      setConfirmDisableHost(false);
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  // Disable the "Sign out and disable this host" button when there's
+  // no current local host (unclaimed / already revoked) — revoking
+  // an already-revoked host returns a typed `host_revoked` error
+  // that's user-confusing in this context.
+  const disableHostUnavailable =
+    currentLocalHostId === null ||
+    localHostStatus === 'revoked' ||
+    localHostStatus === 'unclaimed';
 
   if (viewer.isLoading) {
     return (
@@ -691,6 +769,109 @@ function ProfilePane(): JSX.Element {
           ) : null}
         </footer>
       </form>
+
+      <div className="flex max-w-sm flex-col gap-3 border-t border-border-subtle pt-5">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-text-secondary">Session</p>
+            <p className="text-[11px] text-text-muted">
+              Sign out of this desktop client. The local host stays
+              registered; signing back in reuses it.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void onLogout()}
+            disabled={logout.isPending || logoutAndDisable.isPending}
+          >
+            {logout.isPending ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <LogOut className="size-3.5" />
+            )}
+            Log out
+          </Button>
+        </div>
+        {/* D3.e secondary action — destructive. Layered below the
+            default Log out so a hurried click hits the safe path; the
+            destructive path requires confirm. Disabled when no
+            current local host exists (unclaimed / already revoked)
+            so the user isn't presented an action that can't succeed. */}
+        <div className="flex items-center justify-between gap-3 pt-1">
+          <div className="min-w-0">
+            <p className="text-[11px] font-medium text-text-secondary">
+              Sign out and disable this host
+            </p>
+            <p className="text-[11px] text-text-muted">
+              Revokes the local host record on the server before signing
+              out. The daemon will not reconnect until you sign in again
+              and a new host record is provisioned.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => setConfirmDisableHost(true)}
+            disabled={
+              disableHostUnavailable ||
+              logout.isPending ||
+              logoutAndDisable.isPending
+            }
+            title={
+              disableHostUnavailable
+                ? 'No current local host to disable.'
+                : undefined
+            }
+          >
+            {logoutAndDisable.isPending ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <ShieldOff className="size-3.5 text-error" />
+            )}
+            <span className="text-error">Disable & sign out</span>
+          </Button>
+        </div>
+        {confirmDisableHost && (
+          <div className="rounded-md border border-error bg-bg-row-hover px-3 py-2 text-[11px] text-text-secondary">
+            <p>
+              This immediately revokes this desktop's host token on the
+              server, stops the local daemon from delivering messages,
+              and signs you out.{' '}
+              <span className="text-text-primary">
+                Existing agents and conversations are kept
+              </span>{' '}
+              — but you'll need to sign in again and provision a new
+              host record before this desktop can deliver messages.
+            </p>
+            <div className="mt-2 flex gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setConfirmDisableHost(false)}
+                disabled={logoutAndDisable.isPending}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="danger"
+                onClick={() => void onLogoutAndDisableHost()}
+                disabled={logoutAndDisable.isPending}
+              >
+                {logoutAndDisable.isPending ? (
+                  <Loader2 className="mr-1 size-3.5 animate-spin" />
+                ) : (
+                  <ShieldOff className="mr-1 size-3.5" />
+                )}
+                Disable & sign out
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
     </section>
   );
 }

@@ -125,4 +125,33 @@ describe('ConversationInboxRepo', () => {
     expect(remaining).toHaveLength(1);
     expect(remaining[0]!.message.content).toBe('2');
   });
+
+  it('claims pending rows FIFO and rolls in-flight rows back to pending', () => {
+    const { channel, messages, inbox, agentA } = bootstrap();
+    const m1 = messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      content: '1',
+    });
+    const m2 = messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      content: '2',
+    });
+    inbox.enqueue(channel.id, agentA, m1.id);
+    inbox.enqueue(channel.id, agentA, m2.id);
+
+    const claimed = inbox.claimPending(channel.id, agentA, 'conn-1');
+    expect(claimed.map(row => row.message.content)).toEqual(['1', '2']);
+    expect(inbox.listPending(channel.id, agentA)).toEqual([]);
+    expect(inbox.claimPending(channel.id, agentA, 'conn-2')).toEqual([]);
+
+    inbox.rollbackInFlight([claimed[0]!.inboxId], 'conn-1');
+    expect(inbox.listPending(channel.id, agentA).map(row => row.message.content)).toEqual([
+      '1',
+    ]);
+
+    inbox.markDelivered([claimed[1]!.inboxId]);
+    expect(inbox.listInFlightForOwner('conn-1')).toEqual([]);
+  });
 });

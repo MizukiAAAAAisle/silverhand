@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { X_SILVERHAND_LEGACY_USER_ID_HEADER } from '@silverhand/shared';
 import { formatAttachmentSuffix } from '../../src/runtime/stdin-format.js';
 import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
@@ -466,6 +467,7 @@ describe('Attachment lifecycle on workspace delete', () => {
         headers: {
           'content-type': 'application/json',
           authorization: `Bearer ${t.authToken}`,
+          [X_SILVERHAND_LEGACY_USER_ID_HEADER]: 'local',
         },
         body: JSON.stringify({ confirm: true }),
       }),

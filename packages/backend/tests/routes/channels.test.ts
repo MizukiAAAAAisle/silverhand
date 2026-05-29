@@ -153,15 +153,23 @@ describe('workspace metadata and membership routes', () => {
       await http(t).post('/api/workspaces', { name: 'pin-second' })
     ).json() as any;
 
+    const firstPinnedAt = Date.now();
+    const secondPinnedAt = firstPinnedAt + 1_000;
     const now = vi.spyOn(Date, 'now');
-    now.mockReturnValueOnce(1_000).mockReturnValueOnce(2_000);
+    now
+      .mockReturnValueOnce(firstPinnedAt)
+      .mockReturnValueOnce(firstPinnedAt)
+      .mockReturnValueOnce(firstPinnedAt)
+      .mockReturnValueOnce(secondPinnedAt)
+      .mockReturnValueOnce(secondPinnedAt)
+      .mockReturnValueOnce(secondPinnedAt);
     try {
       const pin = await http(t).post(
         `/api/workspaces/${first.workspace.id}/pin`,
       );
       expect(pin.status).toBe(200);
       const pinned = await pin.json() as any;
-      expect(pinned.workspace.pinned_at).toBe(1_000);
+      expect(pinned.workspace.pinned_at).toBe(firstPinnedAt);
       const secondPin = await http(t).post(
         `/api/workspaces/${second.workspace.id}/pin`,
       );

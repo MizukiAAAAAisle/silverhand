@@ -280,6 +280,44 @@ export class RunStateCache {
   }
 
   /**
+   * Metadata-only projection for `runtime_parsed_event_dropped`.
+   *
+   * We deliberately do NOT synthesize a fake ParsedEvent. The daemon told us
+   * the parsed payload exceeded the wire cap, so the only safe cache mutation
+   * is to annotate the existing run state with a lossy diagnostic in fields
+   * already present on `AgentRunState`.
+   */
+  applyParsedEventDropped(
+    daemonInstanceKey: string,
+    conversationId: string,
+    agentId: string,
+    meta: {
+      parsedKind: string;
+      encodedBytes: number;
+      reason: string;
+      ts: number;
+    },
+  ): AgentRunState | null {
+    if (!this.acceptDaemonKey(daemonInstanceKey)) return null;
+    const k = key(conversationId, agentId);
+    const prev = this.entries.get(k);
+    if (!prev?.runState) return null;
+    const nextState: AgentRunState = {
+      ...prev.runState,
+      updatedAt: meta.ts,
+      lastActivityAt: Math.max(prev.runState.lastActivityAt, meta.ts),
+      detail: `parsed_event_dropped:${meta.parsedKind}:${meta.reason}:${meta.encodedBytes}`,
+    };
+    this.entries.set(k, {
+      ...prev,
+      runState: nextState,
+      daemonInstanceKey,
+      updatedAt: meta.ts,
+    });
+    return nextState;
+  }
+
+  /**
    * Drop an entry entirely — used by `RuntimeBridge.clearRuntimeSession`
    * after backend cleared the user-level session (DB tx, audit, etc.)
    * and the daemon acknowledged its `runtime_clear_session`.

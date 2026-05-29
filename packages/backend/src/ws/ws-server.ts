@@ -1,12 +1,13 @@
 import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
+import { apiPaths, EVENT_WS_SESSION_COOKIE } from '@silverhand/shared';
 import type { BackendContext } from '../context.js';
 import { EventWsConnection, type EventWsConnectionOptions } from './ws-connection.js';
 
-export const EVENT_WS_PATH = '/api/ws/events';
+export const EVENT_WS_PATH = apiPaths.eventWebSocket;
 
-export interface EventWsServerOptions extends EventWsConnectionOptions {
+export interface EventWsServerOptions extends Omit<EventWsConnectionOptions, 'viewerUserId'> {
   path?: string;
   maxPayloadBytes?: number;
   shutdownGraceMs?: number;
@@ -37,12 +38,28 @@ export function installEventWebSocketServer(
   const onUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     const pathname = requestPathname(req);
     if (pathname !== path) return;
+    if (!isWebSocketUpgrade(req)) {
+      rejectUpgrade(socket, 400, 'Bad Request');
+      return;
+    }
+    if (!hasExpectedOrigin(req, ctx)) {
+      rejectUpgrade(socket, 403, 'Forbidden');
+      return;
+    }
+    const viewerUserId = resolveViewerUserIdFromCookie(req, ctx);
+    if (!viewerUserId) {
+      rejectUpgrade(socket, 401, 'Unauthorized');
+      return;
+    }
     if (closing) {
       rejectUpgrade(socket, 503, 'Service Unavailable');
       return;
     }
     wss.handleUpgrade(req, socket, head, ws => {
-      const connection = new EventWsConnection(ws, ctx, opts);
+      const connection = new EventWsConnection(ws, ctx, {
+        ...opts,
+        viewerUserId,
+      });
       connections.set(ws, connection);
       ws.on('close', () => {
         connections.delete(ws);
@@ -78,6 +95,43 @@ export function installEventWebSocketServer(
       await new Promise<void>(resolve => wss.close(() => resolve()));
     },
   };
+}
+
+function isWebSocketUpgrade(req: IncomingMessage): boolean {
+  return String(req.headers.upgrade ?? '').toLowerCase() === 'websocket';
+}
+
+function hasExpectedOrigin(req: IncomingMessage, ctx: BackendContext): boolean {
+  const origin = req.headers.origin;
+  if (typeof origin !== 'string') return false;
+  return origin === new URL(ctx.serverConfig.url).origin;
+}
+
+function resolveViewerUserIdFromCookie(
+  req: IncomingMessage,
+  ctx: BackendContext,
+): string | null {
+  const token = parseCookie(req.headers.cookie ?? '')[EVENT_WS_SESSION_COOKIE]?.trim();
+  if (!token) return null;
+  const session = ctx.authSessions.validateSessionToken(token);
+  return session.ok ? session.session.user_id : null;
+}
+
+function parseCookie(header: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const part of header.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx <= 0) continue;
+    const key = part.slice(0, idx).trim();
+    const value = part.slice(idx + 1).trim();
+    if (!key) continue;
+    try {
+      out[key] = decodeURIComponent(value);
+    } catch {
+      out[key] = value;
+    }
+  }
+  return out;
 }
 
 function requestPathname(req: IncomingMessage): string {

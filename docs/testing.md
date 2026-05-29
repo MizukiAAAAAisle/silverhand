@@ -158,7 +158,25 @@ afterEach(() => h.cleanup());
 pnpm dev:headless
 ```
 
-它会启动 Electron 主进程但跳过 `BrowserWindow`，把 `{ url, port, auth_token, silverhand_dir }` 以一行 JSON 打到 stdout，Ctrl-C 退出。需要隔离状态目录时：
+它会启动 Electron 主进程但跳过 `BrowserWindow`，把 `{ url, port, bootstrap_token_path, silverhand_dir }` 以一行 JSON 打到 stdout，Ctrl-C 退出。stdout 不再暴露 long-lived `auth_token`；需要 curl 公共 API 时，先用 one-shot bootstrap 文件换 session bearer：
+
+```bash
+# 终端 A：保持进程运行，复制 stdout 的第一行 JSON
+SILVERHAND_DIR=/tmp/sh-sandbox pnpm dev:headless
+
+# 终端 B：把上一步复制的 JSON 放进 READY
+READY='{"url":"http://127.0.0.1:12345","port":12345,"bootstrap_token_path":"/tmp/sh-sandbox/embedded-bootstrap","silverhand_dir":"/tmp/sh-sandbox"}'
+URL=$(jq -r .url <<<"$READY")
+BOOTSTRAP_PATH=$(jq -r .bootstrap_token_path <<<"$READY")
+BOOTSTRAP=$(tr -d '\n' < "$BOOTSTRAP_PATH")
+AUTH=$(curl -sS -X POST "$URL/auth/embedded-bootstrap" \
+  -H 'content-type: application/json' \
+  -d "{\"token\":\"$BOOTSTRAP\"}" | jq -r .user_token)
+
+curl -H "authorization: Bearer $AUTH" "$URL/api/workspaces"
+```
+
+需要隔离状态目录时：
 
 ```bash
 SILVERHAND_DIR=/tmp/sh-sandbox pnpm dev:headless

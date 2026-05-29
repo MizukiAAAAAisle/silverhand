@@ -101,7 +101,7 @@ describe('message routes', () => {
     );
   });
 
-  it('accepts the public principal header for user routes', async () => {
+  it('routes user requests through the session bearer subject', async () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t, ['alice']);
     const post = await http(t).post(

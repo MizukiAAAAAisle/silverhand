@@ -1,31 +1,15 @@
 /**
- * The current viewer's user id, as resolved at app boot.
+ * The current viewer's user id, as resolved from the main-process
+ * desktop auth session.
  *
- * Pre-PR1 (V1): the renderer hard-coded `'local'` because the backend
- * row was synthesized from `serverConfig.user_id` at request time —
- * there was no real `users` row.
- *
- * Post pre-ship rewrite (V1): `users` is empty until the human runs
- * `POST /api/register`, which atomically INSERTs a row with a 16-hex
- * random id and writes `app_settings.viewer_user_id`. The renderer
- * reads `/api/me` at boot; while the response is the
- * `registration_required` shape the renderer mounts the registration
- * gate INSTEAD of the shell, so `setCurrentUserId` is never called
- * pre-registration. After registration succeeds, `useViewerUser()`
- * receives the resolved `UserDto` and calls
- * `setCurrentUserId(viewer.id, viewer.display_name)` once; from then
- * on `getCurrentUserId()` / `isCurrentUserId()` resolve against the
- * real id.
- *
- * Until the boot fetch returns, `getCurrentUserId()` returns `null`.
- * The api() helper interprets that as "do not stamp the
- * X-Silverhand-Principal header" — the backend's principal middleware
- * then resolves the viewer via `app_settings.viewer_user_id` (set by
- * registration). The literal `'local'` is NOT a valid viewer id under
- * this model and is not aliased to "me" anywhere.
- *
- * V2 (multi-user): the same setter is called from the auth-resolved
- * session/token claims; the rest of the renderer stays untouched.
+ * The renderer never receives the `user_token`. On boot,
+ * `useViewerUser()` asks main for the auth state; main decrypts /
+ * validates the safeStorage-backed session and returns only the
+ * resolved `UserDto`. When unauthenticated, the app mounts the setup
+ * wizard instead of the shell, so `setCurrentUserId` is never called.
+ * After signup/login succeeds, main stores the token and returns the
+ * user dto; from then on `getCurrentUserId()` / `isCurrentUserId()`
+ * resolve against the real id.
  */
 let currentUserId: string | null = null;
 let currentUserDisplayName: string = 'you';
@@ -33,6 +17,11 @@ let currentUserDisplayName: string = 'you';
 export function setCurrentUserId(id: string, displayName?: string): void {
   currentUserId = id;
   if (displayName) currentUserDisplayName = displayName;
+}
+
+export function clearCurrentUser(): void {
+  currentUserId = null;
+  currentUserDisplayName = 'you';
 }
 
 /** Resolved viewer id, or null until the boot-time hydration finishes. */

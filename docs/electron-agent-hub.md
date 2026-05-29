@@ -270,7 +270,8 @@ CREATE INDEX idx_reminders_pending ON reminders(status, fire_at);
 
 **核心原则**：chat-bridge 不假设后端在哪里。它只知道：
 - 一个 `server_url`（可以是 `http://127.0.0.1:54321` 也可以是 `https://hub.example.com`）
-- 一个 `auth_token`
+- 一个 bearer token（当前实现为 per-agent / user session bearer；早期
+  `server-config.json` 里的共享 `auth_token` 已在 Stage C.6 退役）
 - 自己服务于哪个 `session_id`
 
 这三样都通过启动参数注入：
@@ -290,7 +291,6 @@ chat-bridge \
 ```
 ServerConfig {
   url:           string;     // http(s)://host:port，必填
-  auth_token:    string;     // 必填
   mode:          'embedded' | 'remote';
   // remote 模式专属
   user_id?:      string;
@@ -300,7 +300,8 @@ ServerConfig {
 ```
 
 存在 `<userData>/server-config.json`（mode 0600）。
-- **embedded** 模式：app 启动时拉起内嵌 server，写 url + 随机 token 进配置
+- **embedded** 模式：app 启动时拉起内嵌 server，写 url 进配置；用户 session
+  通过 `/auth/embedded-bootstrap` 的 one-shot token file 初始化
 - **remote** 模式：用户从设置面板填远程 URL + 登录获取 token；内嵌 server 不启动
 
 UI 里有"后端"切换面板：embedded（默认）/ remote。切换后所有新 spawn 的 chat-bridge 都拿新配置。
@@ -440,7 +441,7 @@ async function spawnCliForSession(session) {
     buildMcpConfig({
       sessionId: session.id,
       serverUrl: serverConfig.url,        // ← 从配置读，不硬编码
-      authToken: serverConfig.authToken,  // ← 同上
+      authToken: session.agentBearerToken,
     }));
 
   const args = driver.buildArgs(session, { mcpConfigPath, systemPromptPath });

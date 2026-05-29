@@ -1,5 +1,5 @@
 import type { Database as Db } from 'better-sqlite3';
-import type { ServerConfig } from '@silverhand/shared';
+import type { BindAddressScope, ServerConfig } from '@silverhand/shared';
 import type { ScopeEventBus } from './ws/scope-event-bus.js';
 import type { AgentRuntimeHost } from './runtime/agent-runtime-host.js';
 import type { AttachmentService } from './services/attachment-service.js';
@@ -12,7 +12,16 @@ import type { ThreadService } from './services/thread-service.js';
 import type { UserService } from './services/user-service.js';
 import type { BlobFileStorage } from './storage/blob-file-storage.js';
 import type { AgentTokenStore } from './auth/agent-token-store.js';
+import type { AuthRuntimeConfig } from './auth/config.js';
+import type { EmbeddedBootstrapState } from './auth/embedded-bootstrap.js';
+import type { PasswordCredentialService } from './auth/password.js';
+import type { AuthSessionService } from './auth/session.js';
 import type { LogLevelControl } from './logger.js';
+import type { RuntimeHostPlacementControl } from './runtime/host-placement.js';
+import type { OutboundFrameAdapter } from './runtime/outbound-frame-adapter.js';
+import type { HostWsServerController } from './ws/host-ws-server.js';
+
+export type BackendDeploymentMode = 'embedded' | 'standalone';
 
 export interface BackendLogger {
   info(obj: unknown, msg?: string): void;
@@ -56,7 +65,47 @@ export interface SilverhandCliLauncher {
 
 export interface BackendContext {
   db: Db;
+  deploymentMode: BackendDeploymentMode;
+  readiness: {
+    migrationsApplied: boolean;
+    listenReady: boolean;
+    /**
+     * Standalone-only: flips `true` once the
+     * `OutboundRuntimeEventFanout` is constructed and registered as the
+     * `HostWsServer`'s `eventSink`. Strictly a **backend-side wiring
+     * indicator** — not a signal that any daemon host has connected
+     * over the outbound WebSocket. The daemon-side connection lifecycle
+     * is reported through `HostWsServerController.getAttachment(...)`
+     * (added in D3.a Commit 1) and is independent of this flag.
+     *
+     * Embedded mode intentionally never wires this fanout (runtime
+     * events flow over Unix-socket IPC) and therefore must NOT include
+     * this check in `/readyz`; including it would deadlock embedded
+     * readiness forever. `readinessResponse` switches on
+     * `deploymentMode` for that reason.
+     */
+    outboundEventFanoutInstalled: boolean;
+  };
   serverConfig: ServerConfig;
+  /**
+   * D4.a Commit 4 — classification of the address the backend
+   * is bound to. Surfaced on `/api/server/info` so desktop / ops
+   * tooling can read `(signup_enabled, bind_address_scope)`
+   * together, and used at boot to decide whether to emit the
+   * "non-loopback bind + signup enabled" WARN line (per
+   * `docs/remote-backend-d4-design.md` §6.3 condition 3).
+   *
+   * Derived once at boot via `classifyBindAddressScope(listenHostname)`;
+   * stored on the context so handlers don't re-derive (the
+   * classification is deterministic but pinning it once at boot
+   * keeps the log line and the response surface consistent for the
+   * life of the process).
+   */
+  bindAddressScope: BindAddressScope;
+  /** Auth/setup config resolved once during backend startup. */
+  authConfig: AuthRuntimeConfig;
+  /** Embedded-only one-shot session bootstrap state for this backend boot. */
+  embeddedBootstrap: EmbeddedBootstrapState;
   logger: BackendLogger;
   /** Categorized sinks. Always present; defaults to `{ system, agent,
    *  cli } = { logger, logger, logger }` when no file logger is in use
@@ -103,16 +152,32 @@ export interface BackendContext {
   silverhandCliLauncher: SilverhandCliLauncher;
   /** Per-process bearer tokens scoped to one agent/conversation runtime. */
   agentTokens: AgentTokenStore;
+  /** Password credential storage and verification. */
+  passwordCredentials: PasswordCredentialService;
+  /** User session token issuer/validator. */
+  authSessions: AuthSessionService;
+  /** Shared B.3 host-placement guard for create, membership, and runtime intent paths. */
+  placement: RuntimeHostPlacementControl;
+  /** Late-bound outbound host WebSocket controller for standalone daemon transport. */
+  hostWsController?: () => HostWsServerController | null;
+  /**
+   * D5.a-3 P1-3 — late-bound formal server↔daemon dispatch port. Routes
+   * that send commands (POST /api/agents materialize, retry) go through
+   * this accessor so they never branch on deployment mode. Standalone
+   * resolves to a `StandaloneOutboundFrameAdapter` (WSS-backed); embedded
+   * to an `EmbeddedUnixOutboundFrameAdapter` (local Unix socket). Distinct
+   * from `hostWsController`, which stays for WS-only lifecycle
+   * (revoke/disconnect) and is `null` in embedded mode.
+   */
+  outboundFrameAdapter?: () => OutboundFrameAdapter | null;
   /**
    * Backend-side facade for agent runtime lifecycle. Services and
    * routes route every spawn / stop / wake / clearSession / inbox
    * delivery / run-state read through this single interface.
    *
-   * The only implementation is `DaemonAgentRuntimeHost`
-   * (silverhand-daemon over `RuntimeBridge`). The in-process
-   * `ConversationManager` runtime was removed in #task:512 cleanup
-   * Commit B and the `SILVERHAND_RUNTIME_HOST` env switch was removed
-   * in Commit C — there is no runtime fallback.
+   * Embedded mode uses `DaemonAgentRuntimeHost` (silverhand-daemon
+   * over `RuntimeBridge`). Standalone mode uses a fail-loud
+   * control-plane-only implementation until D2 daemon outbound exists.
    */
   runtimeHost: AgentRuntimeHost;
 }

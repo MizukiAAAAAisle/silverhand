@@ -3,14 +3,26 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { resolve } from 'node:path';
 
-const workspaceDeps = ['@silverhand/shared', '@silverhand/backend'];
+const workspaceDeps = [
+  '@silverhand/shared',
+  '@silverhand/backend',
+  '@silverhand/server',
+];
+// Workspace packages are bundled here and must stay out of packaged app
+// production dependencies; electron-builder follows pnpm workspace symlinks
+// outside apps/desktop and fails packaging.
+const nativeExternalDeps = [
+  '@node-rs/argon2',
+  'bufferutil',
+  'utf-8-validate',
+];
 
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin({ exclude: workspaceDeps })],
     build: {
       rollupOptions: {
-        external: ['bufferutil', 'utf-8-validate'],
+        external: nativeExternalDeps,
         input: { index: resolve(__dirname, 'src/main/index.ts') },
       },
     },

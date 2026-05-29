@@ -1,10 +1,25 @@
 # Multi-daemon RuntimeHostRegistry — design
 
+> **B.3 V1 status note (2026-05-25, Cindy)**: this document describes the
+> future sandbox / multi-daemon target state. Stage B.3 V1 does **not**
+> implement the §5 cache-key expansion, §6 `conversation_agents.runtime_host_id`
+> column, or §9 single-host backward-compat migration. B.3 V1 keeps
+> runtime placement on the existing user-owned trust-domain model:
+> `agents.host_id` points at `hosts.id`; membership writes enforce
+> `agent.host_id == workspace.workspace_host_id`, and runtime intent entrypoints
+> fail closed when that host row is missing or revoked. Activating the
+> daemon-routing design in §5/§6/§9 requires a real sandbox or remote daemon
+> launch path first; until then, `RuntimeHostRegistry` remains reserved for that
+> future daemon-routing layer.
+
 > **Status**: v1 design doc. Not implementation. Landing this doc unblocks targeted PRs (registry skeleton, handshake-id wiring, `conversation_agents.runtime_host_id` migration). Two product decisions in §7 (placement) and §8 (sandbox UX) are flagged OPEN for @shiki — they shape later UI/UX surfaces but do **not** block landing this doc.
 >
 > **Reviewer**: @Cindy.
 >
 > **Must-read first**: `architecture-principles.md` §9 (control plane vs execution plane), `silverhand-daemon.md` (daemon scope + PR-1 intent surface).
+> For the broader remote-server target topology and migration phase order, read
+> `remote-server-target-architecture.md` first. This document owns only the
+> RuntimeHostRegistry slice.
 >
 > **Revision history**: v1 (2026-05-22, Alice) — initial draft. v2 (2026-05-22, Alice) — Cindy round 1 review: identity model rewritten so daemon never reports `hosts.id` and never writes its own identity file from backend; §3 stops repeating handshake schema and flags the registry-identity payload as a cross-thread spec dependency; §6 tightens `runtime_host_id` as opaque placement key (not FK); cross-references fixed. v3 (2026-05-23, Alice) — Cindy round 2 review: `host_descriptor.kind` no longer includes `sandbox` (sandbox is a capability, not a host-kind — see §2.1); §2.5 added to close the identity-file locator loop via launcher-supplied `--daemon-home`; §3.2 names a concrete coordination requirement with #task:521 and a fallback `register_identity` intent if #521 has already merged; §4.1/§4.2 collapse identity resolution into a single `register({ client })` seam (no out-of-seam `hostRepo.getByName/create`); §3.3 `transport.*` capability reframed as post-connect observation, not connect-strategy input. v4 (2026-05-23, Cindy) — #task:521 absorbed `daemon_id`, `instance_id`, and `host_descriptor` into `HelloResult` / ready under `protocol_version=1`; the `register_identity` fallback is retired.
 >
@@ -43,8 +58,8 @@ Today's invariants (verified by code search 2026-05-22):
 Why this stops working soon:
 
 1. **Local + sandbox**. We want a "sandbox daemon" (restricted fs / no system PATH / different API keys) alongside the regular local daemon. The user picks per-workspace or per-agent which one runs the CLI. Today there's no place to even store that choice.
-2. **Multiple desktop clients per user** (1 backend / N desktops). The desktops are passive observers of backend state; daemons are the only spawn surface; the backend needs a registry so any of them can answer "where does this (conv, agent) run".
-3. **Future remote daemon**. Same shape, just with `transport.tcp` instead of `transport.unix_socket`. If we don't generalize now, we'll have to re-shape every PR-2-era struct later.
+2. **Multiple execution hosts**. Desktop includes one local daemon host; sandbox is a headless daemon host. The server needs a registry so it can answer "where does this (conv, agent) run" without assuming the only daemon is the desktop-local one.
+3. **Future remote daemon-host transport**. Same runtime placement shape, but daemon hosts connect to the server over an authenticated outbound transport instead of a local Unix socket. If we don't generalize now, we'll have to re-shape every PR-2-era struct later.
 
 Per `architecture-principles.md` §9.3:
 

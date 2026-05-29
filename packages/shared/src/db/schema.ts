@@ -15,6 +15,9 @@ export type FastMode = z.infer<typeof FastModeSchema>;
 export const HostKindSchema = z.enum(['local', 'remote']);
 export type HostKind = z.infer<typeof HostKindSchema>;
 
+export const HostCredentialKindSchema = z.enum(['long_lived', 'bootstrap']);
+export type HostCredentialKind = z.infer<typeof HostCredentialKindSchema>;
+
 export const WorkspaceKindSchema = z.enum(['regular', 'agent_home']);
 export type WorkspaceKind = z.infer<typeof WorkspaceKindSchema>;
 
@@ -65,11 +68,44 @@ export const ConversationEventKindSchema = z.enum([
 ]);
 export type ConversationEventKind = z.infer<typeof ConversationEventKindSchema>;
 
+/**
+ * D4.d v33 (additive): agent-materialization lifecycle on the
+ * server side. Existing rows backfill to 'active' (they went
+ * through the legacy backend-direct-fs path so the L1 already
+ * exists). New rows START in 'pending_materialization' and flip
+ * to 'active' on daemon ack (L3a) or 'failed' on typed error /
+ * timeout (L3b). See `docs/remote-backend-d4d-design.md` §4.1.
+ */
+export const AgentMaterializationStatusSchema = z.enum([
+  'pending_materialization',
+  'active',
+  'failed',
+]);
+export type AgentMaterializationStatus = z.infer<
+  typeof AgentMaterializationStatusSchema
+>;
+
 export interface HostRow {
   id: string;
   name: string;
   kind: HostKind;
+  /** User that owns this host. NULL only for pre-claim legacy/local rows. */
+  user_id: string | null;
+  /** Stable local install id used to deduplicate desktop local-host claims. */
+  installation_id: string | null;
+  last_seen_at: number | null;
+  revoked_at: number | null;
   created_at: number;
+}
+
+export interface HostCredentialRow {
+  id: string;
+  host_id: string;
+  token_hash: string;
+  kind: HostCredentialKind;
+  expires_at: number | null;
+  consumed_at: number | null;
+  revoked_at: number | null;
 }
 
 export interface AgentRow {
@@ -93,6 +129,34 @@ export interface AgentRow {
    *  (mirrors `users` v21). */
   avatar_storage_key: string | null;
   avatar_content_type: string | null;
+  /** v33 (D4.d): agent-home materialization lifecycle on the
+   *  server side. Existing rows backfill to 'active'; new rows
+   *  start at 'pending_materialization' and flip on daemon ack
+   *  (L3a → 'active') or typed error / timeout (L3b → 'failed').
+   *  Default-hidden from list/get; explicit `?include_failed=1`
+   *  opt-in is ACL/creator-scoped (see §4.1 / §7.3). */
+  materialization_status: AgentMaterializationStatus;
+  /** v33 (D4.d): populated only when `materialization_status='failed'`.
+   *  Mirrors the wire `AgentMaterializeErrorCodeSchema` plus
+   *  server-side codes (`materialize_timeout` /
+   *  `host_attach_pending` / `dependent_row_insert_failed` /
+   *  `backend_crash_during_materialize`). Kept as `string | null`
+   *  in shared schema — the route layer pins the exact code set
+   *  it produces; this row column intentionally accepts the
+   *  superset so the boot reconciler / future codes do not need
+   *  a coordinated migration. */
+  materialization_failed_code: string | null;
+  /** v33 (D4.d): epoch ms set together with
+   *  `materialization_failed_code`; NULL while the row is in
+   *  `pending_materialization` or `active`. */
+  materialization_failed_at: number | null;
+  /** v33 (D4.d): client-supplied opaque retry key, 1..64 chars,
+   *  `[A-Za-z0-9_-]`, stored verbatim. Unique per creator (NOT
+   *  globally) — `idx_agents_idempotency_key_per_user` on
+   *  `(created_by_user_id, idempotency_key) WHERE NOT NULL`. All
+   *  lookup paths MUST filter by `(created_by_user_id, idempotency_key)`
+   *  — never by key alone (Cindy round-2 P1 #5). */
+  idempotency_key: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -109,8 +173,29 @@ export interface UserRow {
    *  avatar is set. Coupled with `avatar_content_type` via CHECK. */
   avatar_storage_key: string | null;
   avatar_content_type: string | null;
+  /** Canonical login handle for remote auth. NULL rows are profile-only. */
+  email: string | null;
   created_at: number;
   updated_at: number;
+}
+
+export interface UserPasswordCredentialRow {
+  user_id: string;
+  password_hash: string;
+  /** JSON-encoded Argon2id parameter record selected by the env benchmark. */
+  password_hash_params: string;
+  password_updated_at: number;
+}
+
+export interface AuthSessionRow {
+  id: string;
+  user_id: string;
+  token_hash: string;
+  created_at: number;
+  last_used_at: number;
+  revoked_at: number | null;
+  user_agent: string | null;
+  ip_first_seen: string | null;
 }
 
 export interface WorkspaceRow {

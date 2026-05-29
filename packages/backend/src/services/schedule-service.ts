@@ -18,9 +18,9 @@ import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
 import type { ScheduleRepo } from '../repos/schedule-repo.js';
-import type { SettingsRepo } from '../repos/settings-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
+import { publishUnreadUpdatedToConversationViewers } from '../viewer-scope.js';
 
 /** Reasons a `schedule` request is rejected. The MCP route in PR-2 maps
  *  these to the agent-facing JSON error payload; failure to deliver wakes
@@ -62,9 +62,6 @@ export interface ScheduleServiceOptions {
   conversations: ConversationRepo;
   messages: MessageRepo;
   agents: AgentRepo;
-  /** Used to resolve the current viewer id from
-   *  `app_settings.viewer_user_id` for the WS scope on schedule fire. */
-  settings: SettingsRepo;
   runtimeHost: AgentRuntimeHost;
   events: ScopeEventBus;
   logger: BackendLogger;
@@ -106,7 +103,6 @@ export class ScheduleService {
   private readonly conversations: ConversationRepo;
   private readonly messages: MessageRepo;
   private readonly agents: AgentRepo;
-  private readonly settings: SettingsRepo;
   private readonly runtimeHost: AgentRuntimeHost;
   private readonly events: ScopeEventBus;
   private readonly logger: BackendLogger;
@@ -125,7 +121,6 @@ export class ScheduleService {
     this.conversations = opts.conversations;
     this.messages = opts.messages;
     this.agents = opts.agents;
-    this.settings = opts.settings;
     this.runtimeHost = opts.runtimeHost;
     this.events = opts.events;
     this.logger = opts.logger;
@@ -623,15 +618,11 @@ export class ScheduleService {
       kind: 'message',
       payload: { message: msg },
     });
-    // Push to the resolved viewer's private scope so the renderer's
-    // unread hooks invalidate without polling. Pre-PR1 hardcoded
-    // 'viewer:local'.
-    const viewerUserId = this.settings.getViewerUserId();
-    if (viewerUserId) {
-      this.events.publishToScope(`viewer:${viewerUserId}`, 'unread_updated', {
-        conversation_id: targetConvId,
-      });
-    }
+    publishUnreadUpdatedToConversationViewers(
+      this.events,
+      this.conversations,
+      targetConvId,
+    );
     // Order matters: `start()` is required for non-oneShot drivers
     // (claude). If start fails, the inbox row sits unread until some
     // other path starts the agent — which is misleading because the
@@ -683,14 +674,11 @@ export class ScheduleService {
         kind: 'message',
         payload: { message: msg },
       });
-      const viewerUserId = this.settings.getViewerUserId();
-      if (viewerUserId) {
-        this.events.publishToScope(
-          `viewer:${viewerUserId}`,
-          'unread_updated',
-          { conversation_id: home.dm_channel_id },
-        );
-      }
+      publishUnreadUpdatedToConversationViewers(
+        this.events,
+        this.conversations,
+        home.dm_channel_id,
+      );
     } catch (err) {
       this.logger.warn(
         { scheduleId: dto.id, err },

@@ -20,9 +20,9 @@ import type { UserRow } from '@silverhand/shared';
  *
  * Invariant: a row in `users` represents a registered identity. There
  * is no "pending user" state — pre-registration there is simply no row.
- * `create()` is the sole INSERT path; `POST /api/register` (in the
- * service layer) is its sole caller, and the service wraps it together
- * with the `app_settings.viewer_user_id` write in a single transaction.
+ * `create()` is the sole table INSERT helper, called by the legacy
+ * profile registration service and by password signup. Callers own the
+ * surrounding transaction and any credential / legacy current-viewer bridge writes.
  */
 export class UserRepo {
   constructor(private readonly db: Db) {}
@@ -41,6 +41,15 @@ export class UserRepo {
     return row ?? null;
   }
 
+  getByEmail(email: string): UserRow | null {
+    const row = this.db
+      .prepare<[string], UserRow>(
+        'SELECT * FROM users WHERE email = ? COLLATE NOCASE',
+      )
+      .get(email);
+    return row ?? null;
+  }
+
   /**
    * List every user. V1 has at most one row (created at registration);
    * exposed for tests + future V2 admin views.
@@ -52,9 +61,8 @@ export class UserRepo {
   }
 
   /**
-   * INSERT a new user row. The sole creator path — only the service
-   * layer's `register()` calls this, in a transaction that also writes
-   * `app_settings.viewer_user_id`.
+   * INSERT a new user row. Callers must run this inside the transaction
+   * that creates any adjacent credential or bridge rows.
    *
    * The migration v21 cross-namespace uniqueness trigger throws if
    * `name` collides with an existing `agents.name`; the column UNIQUE
@@ -65,16 +73,24 @@ export class UserRepo {
     id: string;
     name: string;
     displayName: string;
+    email?: string | null;
   }): UserRow {
     const now = Date.now();
     this.db
       .prepare(
         `INSERT INTO users
            (id, name, display_name, avatar_storage_key, avatar_content_type,
-            created_at, updated_at)
-         VALUES (?, ?, ?, NULL, NULL, ?, ?)`,
+            email, created_at, updated_at)
+         VALUES (?, ?, ?, NULL, NULL, ?, ?, ?)`,
       )
-      .run(input.id, input.name, input.displayName, now, now);
+      .run(
+        input.id,
+        input.name,
+        input.displayName,
+        input.email ?? null,
+        now,
+        now,
+      );
     const row = this.get(input.id);
     if (!row) {
       throw new Error(`UserRepo.create: row not found post-INSERT for id=${input.id}`);

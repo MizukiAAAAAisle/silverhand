@@ -13,6 +13,7 @@ import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:c
 import { setTimeout as setTimer } from 'node:timers';
 import { randomUUID } from 'node:crypto';
 import {
+  buildSystemPromptFor,
   type AgentRunState,
   type ParsedEvent,
   ParsedEventSchema,
@@ -46,10 +47,13 @@ import {
   type RuntimeWakeResult,
 } from '../../protocol.js';
 import type { DaemonLogger } from '../logger.js';
+import { buildPromptContextFromRuntimeStartOptions } from '../prompt-context.js';
 import {
   unlinkRuntimePidfile,
   writeRuntimePidfile,
 } from '../runtime-pidfiles.js';
+import { buildDaemonSpawnEnv } from '../spawn-env.js';
+import { prepareSpawnFiles } from '../spawn-prep.js';
 import type { SupervisorContract } from '../supervisor-contract.js';
 import type {
   ActivitySnippetKind,
@@ -177,22 +181,6 @@ export interface SupervisorOptions {
  *  implementations stay clean. */
 function key(conversationId: string, agentId: string): string {
   return `${conversationId}\x00${agentId}`;
-}
-
-/** Required spawn-context fields the host receives from backend on
- *  `runtime_start`. We narrow them with this shape so type errors
- *  surface if the protocol changes underneath the supervisor. */
-interface StartOptionsFromWire {
-  runtime?: RuntimeKind;
-  cwd?: string;
-  env?: Record<string, string>;
-  agent_name?: string;
-  cli_session_id?: string | null;
-  model?: string | null;
-  reasoning_effort?: string | null;
-  fast_mode?: boolean | null;
-  system_prompt_path?: string;
-  initial_prompt?: string;
 }
 
 export class Supervisor implements SupervisorContract {
@@ -344,14 +332,8 @@ export class Supervisor implements SupervisorContract {
       };
     }
 
-    const wire = (params.options ?? {}) as StartOptionsFromWire;
-    const runtimeKind = wire.runtime;
-    if (!runtimeKind) {
-      // The backend always populates `options.runtime`; if it's
-      // missing the request is malformed. Throwing surfaces as
-      // `internal_error` via the dispatcher.
-      throw new Error('runtime_start: options.runtime is required');
-    }
+    const startOptions = params.options;
+    const runtimeKind = startOptions.driver.kind;
 
     const driver = this.driverFor(runtimeKind);
     const binary = await this.resolveBinary(runtimeKind, driver.binary);
@@ -361,20 +343,42 @@ export class Supervisor implements SupervisorContract {
       );
     }
 
+    const promptCtx =
+      await buildPromptContextFromRuntimeStartOptions(startOptions);
+    const systemPromptText = buildSystemPromptFor(runtimeKind, promptCtx);
+    const spawnPrep = await prepareSpawnFiles({
+      conversationId: params.conversation_id,
+      agentId: params.agent_id,
+      systemPromptText,
+      silverhandCli: {
+        command: startOptions.env_policy.silverhand_cli.command,
+        args: startOptions.env_policy.silverhand_cli.args,
+        ...(startOptions.env_policy.silverhand_cli.env_vars
+          ? { env: startOptions.env_policy.silverhand_cli.env_vars }
+          : {}),
+      },
+    });
+
     const spawnCtx = {
       agentId: params.agent_id,
-      agentName: wire.agent_name ?? params.agent_id,
-      workspacePath: wire.cwd ?? process.cwd(),
-      cliSessionId: wire.cli_session_id ?? null,
-      model: wire.model ?? null,
-      reasoningEffort: wire.reasoning_effort ?? null,
-      fastMode: wire.fast_mode ?? null,
-      systemPromptPath: wire.system_prompt_path ?? '',
-      initialPrompt: wire.initial_prompt ?? '',
+      agentName: startOptions.agent.name,
+      workspacePath: startOptions.workspace.path,
+      cliSessionId: startOptions.driver.cli_session_id,
+      model: startOptions.driver.model,
+      reasoningEffort: startOptions.driver.reasoning_effort,
+      fastMode: startOptions.driver.fast_mode,
+      systemPromptPath: spawnPrep.systemPromptPath,
+      initialPrompt: driver.oneShot ? params.startup_delivery?.text ?? '' : '',
     };
 
     const args = driver.buildArgs(spawnCtx);
-    const env = driver.applyEnv({ ...process.env, ...(wire.env ?? {}) });
+    const env = buildDaemonSpawnEnv({
+      driver,
+      options: startOptions,
+      conversationId: params.conversation_id,
+      agentId: params.agent_id,
+      binDir: spawnPrep.binDir,
+    });
     const startedAt = this.now();
 
     const child = this.spawnFn(binary, args, {
@@ -415,7 +419,7 @@ export class Supervisor implements SupervisorContract {
     // startup_delivery, the runtime starts in `startup_pending` and
     // the gate stays closed until the supervisor settles the batch.
     // Without startup_delivery the gate is already open.
-    const startupBatch = params.startup_delivery
+    const startupBatch = params.startup_delivery && !driver.oneShot
       ? {
           deliveryIds: [...params.startup_delivery.delivery_ids],
           text: params.startup_delivery.text,
@@ -485,6 +489,13 @@ export class Supervisor implements SupervisorContract {
     this.emitState(handle);
 
     this.attachChildListeners(handle);
+
+    if (driver.oneShot && params.startup_delivery) {
+      this.emitStartupDeliveryConsumed(
+        handle,
+        params.startup_delivery.delivery_ids,
+      );
+    }
 
     // 3c-b: driver-side init handshake. Codex needs `bindIO` to send
     // its JSON-RPC `initialize` → `thread/start` immediately after
@@ -780,6 +791,7 @@ export class Supervisor implements SupervisorContract {
    *                                        stateless drivers always
    *                                        return true)
    *   - !readyForDrainEmitted             (one-shot per run)
+   *   - !driver.oneShot                   (one-shot runtimes cannot live-drain)
    *
    * Explicitly NOT gated on `initObserved` — see Cindy plan v2.
    * `requires_first_message + empty-inbox` claude reaches `ready`
@@ -792,6 +804,7 @@ export class Supervisor implements SupervisorContract {
   private maybeEmitReadyForDrain(handle: RuntimeHandle): void {
     if (handle.readyForDrainEmitted) return;
     if (handle.phase !== 'ready') return;
+    if (handle.driver.oneShot) return;
     if (handle.startupDelivery !== null) return;
     if (!driverReadyToEncode(handle.driver)) return;
     handle.readyForDrainEmitted = true;

@@ -11,21 +11,15 @@ import { RuntimeKindSchema, type RuntimeKind } from '@silverhand/shared';
  *     `proxy_runtimes` allowlist. Lets users with corporate firewalls /
  *     local proxies point per-runtime CLIs (e.g. just codex) at one URL
  *     without having to remember to `export http_proxy=...` before
- *     `pnpm dev`. The composition lives in `runtime/spawn-env.ts`
- *     (`applyProxyEnv`); `RuntimeBridge` reads these settings at wake
- *     time so the daemon never needs DB access.
+ *     `pnpm dev`. Backend reads these settings into typed
+ *     `runtime_start.env_policy`; daemon-host applies the proxy env
+ *     locally at spawn time so it never needs DB access.
  *   - `proxy_runtimes` — comma-separated runtime kinds (e.g. `codex,cursor`)
  *     that the proxy applies to. Empty/unset = no runtime gets the proxy
  *     even if `proxy_url` is set (explicit opt-in).
- *   - `viewer_user_id` — id of the registered viewer (V1 single user).
- *     Absent until `POST /api/register` runs, at which point the
- *     register service INSERTs the `users` row and writes this key in
- *     the same transaction. Its absence is the registration-required
- *     signal; the principal middleware skips principal resolution and
- *     the `requireRegisteredViewer` gate rejects every public route
- *     except the registration whitelist. V2 multi-user replaces this
- *     with token claims; the key is then dead weight and gets deleted
- *     in a future migration.
+ * `viewer_user_id` may still exist in old databases. C.5 stops treating
+ * it as a current-viewer bridge; settings routes keep hiding/rejecting
+ * the key until a later schema cleanup drops the row entirely.
  */
 export class SettingsRepo {
   constructor(private readonly db: Db) {}
@@ -80,13 +74,6 @@ export class SettingsRepo {
     }
     return out;
   }
-
-  /** V1 viewer pointer (see class docstring). Returns null in the
-   *  registration-required state — caller MUST treat null as "viewer
-   *  has not registered yet" and reject the request, NOT as corruption. */
-  getViewerUserId(): string | null {
-    return this.get(SETTINGS_KEYS.VIEWER_USER_ID);
-  }
 }
 
 export const SETTINGS_KEYS = {
@@ -97,6 +84,6 @@ export const SETTINGS_KEYS = {
    *  proxy applies to. Empty (or unset) means **no runtime** gets the
    *  proxy even if `PROXY_URL` is set — explicit opt-in per runtime. */
   PROXY_RUNTIMES: 'proxy_runtimes',
-  /** V1 viewer pointer (see class docstring). */
+  /** Deprecated persisted key retained only for hide/reject compatibility. */
   VIEWER_USER_ID: 'viewer_user_id',
 } as const;

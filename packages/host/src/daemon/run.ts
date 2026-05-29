@@ -27,13 +27,24 @@ import {
 import { IntentDispatcher } from './dispatcher.js';
 import { DaemonServer } from './server.js';
 import { createDaemonLogger, type DaemonLogger } from './logger.js';
-import { encodeFrame, type EventFrame } from '../protocol.js';
+import {
+  encodeFrame,
+  type EventFrame,
+  type AgentMaterializeParams,
+} from '../protocol.js';
 import { DAEMON_VERSION, createDaemonHelloResult } from './version.js';
 import { logDaemon } from './daemon-logging.js';
 import {
   defaultDaemonIdentityPath,
   readOrCreateDaemonIdentity,
 } from './identity.js';
+import { OutboundSupervisor } from './outbound-supervisor.js';
+import type { OutboundCommandDispatcher } from './outbound-client.js';
+import { LocalOutboundFrameServer } from './local-outbound-frame-server.js';
+import {
+  AgentMaterializeError,
+  materializeAgent,
+} from './agent-materialize/index.js';
 import {
   buildDaemonInstanceId,
   defaultRuntimePidRootDir,
@@ -48,6 +59,13 @@ export interface RunDaemonOptions {
   pidFilePath: string;
   /** Directory for the daemon's own JSONL log file. */
   logDir: string;
+  /**
+   * Optional Stage D2 daemon-outbound host config. When present, the daemon
+   * polls this atomic JSON file and opens `/api/hosts/connect` with its
+   * long-lived host token. Omit/null keeps protocol tests on the Unix socket
+   * only.
+   */
+  hostConfigPath?: string | null;
   /** Install SIGTERM/SIGINT handlers. Defaults to true. Tests pass
    *  false so a daemon running in-process doesn't intercept the test
    *  runner's own signal handling. */
@@ -95,6 +113,21 @@ export interface RunDaemonOptions {
    */
   daemonIdentityPath?: string | null;
   /**
+   * D5.a-2 — optional local outbound frame socket path. When set
+   * (non-null), the daemon starts a {@link LocalOutboundFrameServer} on
+   * this Unix socket alongside the control `DaemonServer`. It speaks the
+   * SAME outbound frame envelope the standalone WSS client speaks and
+   * routes commands through the same `IntentDispatcher`, so the embedded
+   * backend reaches the daemon over the unified formal path (closing R4)
+   * instead of the legacy `HostClient` IPC protocol.
+   *
+   * Omitted/`null` keeps the daemon control-socket-only — every existing
+   * protocol test and the standalone deployment leave this unset. The
+   * embedded backend wiring (D5.a-3) sets it to
+   * `deriveLocalOutboundFrameSocketPath()`.
+   */
+  localOutboundSocketPath?: string | null;
+  /**
    * SupervisorContract factory — REQUIRED, but explicitly nullable (Cindy
    * `XuKGmdna3GWZcY2G` + shiki `Go9ZiB4OnwTbELZU`). The daemon
    * constructs the supervisor AFTER the server is bound, passing an
@@ -132,6 +165,44 @@ export interface RunDaemonOptions {
         runtimePidRootDir: string | null;
       }) => SupervisorContract)
     | null;
+  /**
+   * D4.d D6 — **test-only** hooks. NOT part of the embedder
+   * contract. Production MUST omit this field. The dispatcher
+   * slot ALWAYS calls `materializeAgent(...)` — there is no
+   * embedder-facing seam to replace the handler. The two hooks
+   * below are narrow test surfaces:
+   *
+   *   - `agentMaterializeHomeDir` overrides the parent dir
+   *     `materializeAgent` joins onto (`<homeDir>/.silverhand/
+   *     agents/<id>/`); without it, the real
+   *     `materializeAgent` would write into the daemon process's
+   *     `homedir()`, which is unacceptable in tests.
+   *   - `agentMaterializeFaultInjector` is a deterministic
+   *     typed-error pre-hook: if it returns an
+   *     `AgentMaterializeError`, the dispatcher surfaces the
+   *     typed wire code (Cindy D2 pre-gate #3 narrowing path);
+   *     if it returns `undefined`, the real `materializeAgent`
+   *     runs. The injector cannot return a synthetic success
+   *     result, cannot mutate handler behavior, and is fired
+   *     BEFORE `materializeAgent` — so the only behavior under
+   *     test control is "fail this dispatch with code X" or
+   *     "let the real handler run".
+   *
+   * Cindy D6-2 P1-1 (`d4IID_Nnn1VShRa5`): a previous draft
+   * exposed `agentMaterializeHandler?` at the top of
+   * `RunDaemonOptions`, which read like an embedder-facing
+   * seam to replace formal server↔daemon semantics. This
+   * narrow `testHooks` namespace makes the test-only scope
+   * explicit in the API shape and preserves the D4.d invariant
+   * that the wire arm is additive only — no fork, no
+   * replacement.
+   */
+  testHooks?: {
+    agentMaterializeHomeDir?: string;
+    agentMaterializeFaultInjector?: (
+      params: AgentMaterializeParams,
+    ) => AgentMaterializeError | undefined;
+  };
 }
 
 export interface RunningDaemon {
@@ -167,6 +238,13 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
       ? undefined
       : readOrCreateDaemonIdentity(daemonIdentityPath);
   const helloResult = createDaemonHelloResult(daemonInstanceId, daemonIdentity);
+  const readyEvent = (): Extract<EventFrame, { event: 'ready' }> => ({
+    event: 'ready',
+    ...helloResult,
+    socket_path: opts.socketPath,
+    daemon_pid: process.pid,
+    started_at: startedAt,
+  });
   const logger =
     opts.logger ??
     createDaemonLogger({
@@ -229,6 +307,32 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   // supervisor is constructed but won't fire events before
   // `server.start()` returns anyway.
   let broadcaster: (event: EventFrame) => void = () => {};
+  // D3.a Commit 3: the outbound client is no longer constructed
+  // unconditionally at boot. The OutboundSupervisor encapsulates the
+  // `attach(configPath)` decision tree (validate, idempotency,
+  // graceful swap) and is consumed by both the legacy CLI `--host-config`
+  // auto-start path (below) and the new `host_outbound_attach` IPC
+  // intent (wired into the dispatcher).
+  //
+  // Note the deliberate forward-declaration dance: OutboundSupervisor
+  // needs a `dispatchCommand` callback that routes outbound-WS
+  // commands into the dispatcher, but the dispatcher itself needs a
+  // `hostOutboundAttachHandler` that calls into the supervisor. We
+  // close the loop with a mutable `commandForwarder` placeholder that
+  // is assigned to the real `dispatcher.dispatch` once the dispatcher
+  // exists. Calling the forwarder before that point throws — but no
+  // outbound socket can be open before this function returns, so the
+  // throw is unreachable in practice.
+  let commandForwarder: OutboundCommandDispatcher = () => {
+    throw new Error(
+      'outbound dispatchCommand invoked before dispatcher was wired',
+    );
+  };
+  const outboundSupervisor = new OutboundSupervisor({
+    logger,
+    readyEvent,
+    dispatchCommand: command => commandForwarder(command),
+  });
   const supervisor = opts.supervisorFactory
     ? opts.supervisorFactory({
         emit: event => broadcaster(event),
@@ -242,13 +346,59 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     startedAt,
     helloResult,
     supervisor,
+    hostOutboundAttachHandler: params => outboundSupervisor.attach(params),
+    hostOutboundDetachHandler: () => outboundSupervisor.detach(),
+    hostOutboundReloadHandler: () => outboundSupervisor.reload(),
+    // D4.d D2 — server↔daemon formal semantics. `materializeAgent`
+    // owns the §4.6 idempotency decision tree + atomic seed +
+    // sentinel write. `homeDir` defaults to the daemon process's
+    // own `homedir()`, which is correct in production (the daemon
+    // runs as the user whose `~/.silverhand/agents/` is the target
+    // L1 root). D4.d D6 narrowed the test seam to `testHooks` per
+    // Cindy `d4IID_Nnn1VShRa5` P1-1: there is NO embedder-facing
+    // handler-replacement option. The dispatcher slot ALWAYS
+    // invokes `materializeAgent`; tests may inject a tmp `homeDir`
+    // and/or a deterministic typed-error fault BEFORE the real
+    // handler runs.
+    agentMaterializeHandler: async params => {
+      const fault = opts.testHooks?.agentMaterializeFaultInjector?.(params);
+      if (fault) throw fault;
+      return materializeAgent(params, {
+        homeDir: opts.testHooks?.agentMaterializeHomeDir,
+      });
+    },
   });
+  commandForwarder = command =>
+    dispatcher.dispatch(command.id, String(command.kind), command.params);
   const server = new DaemonServer({
     socketPath: opts.socketPath,
     dispatcher,
     logger,
   });
-  broadcaster = event => server.broadcast(event);
+  // D5.a-2 — embedded formal path. The local outbound frame server shares
+  // the exact `commandForwarder` (→ `dispatcher.dispatch`) and the same
+  // outbound envelope mapping as the standalone WSS client, so embedded
+  // and standalone are one dispatch path, not two protocols. Constructed
+  // only when a socket path is supplied (embedded mode); standalone and
+  // protocol-only tests leave it null.
+  const localOutboundServer =
+    opts.localOutboundSocketPath != null
+      ? new LocalOutboundFrameServer({
+          socketPath: opts.localOutboundSocketPath,
+          dispatchCommand: command => commandForwarder(command),
+          logger,
+          // Same handshake the standalone WSS client sends on connect
+          // (`outbound-client.ts` → `sendEvent(readyEvent())`). The
+          // embedded adapter relies on it to latch the daemon key and
+          // hydrate, so embedded and standalone share the `ready` path.
+          readyEvent,
+        })
+      : null;
+  broadcaster = event => {
+    server.broadcast(event);
+    outboundSupervisor.sendEvent(event);
+    localOutboundServer?.broadcast(event);
+  };
 
   try {
     await server.start();
@@ -262,19 +412,30 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     throw err;
   }
 
+  if (localOutboundServer) {
+    try {
+      await localOutboundServer.start();
+    } catch (err) {
+      logger.error(
+        {
+          err: (err as Error).message,
+          socketPath: opts.localOutboundSocketPath,
+        },
+        'failed to bind local outbound frame socket',
+      );
+      await server.stop('local_outbound_bind_failed');
+      releasePidFile(opts.pidFilePath);
+      await logger.close();
+      throw err;
+    }
+  }
+
   // The handshake is the contract the spawn helper relies on to know
   // the daemon is *ready to accept connections*. Print it AFTER
   // server.start() so a parent process that reads "ready" can connect
   // immediately without retry.
   if (opts.writeStdoutHandshake ?? true) {
-    const readyEvent: EventFrame = {
-      event: 'ready',
-      ...helloResult,
-      socket_path: opts.socketPath,
-      daemon_pid: process.pid,
-      started_at: startedAt,
-    };
-    process.stdout.write(encodeFrame(readyEvent));
+    process.stdout.write(encodeFrame(readyEvent()));
   }
   logger.info(
     {
@@ -290,12 +451,52 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     socket_path: opts.socketPath,
     pid_file_path: opts.pidFilePath,
   });
+  if (opts.hostConfigPath) {
+    // Legacy `--host-config` CLI auto-start path, preserved for
+    // standalone / manual daemon launches that have a credential file
+    // ready at spawn time (e.g. headless server hosts, protocol
+    // fixtures). Desktop main does NOT take this path under D3.a —
+    // it spawns without `--host-config` and triggers attach via the
+    // `host_outbound_attach` IPC after login. Both paths funnel
+    // through the same `OutboundSupervisor.attach`, which means the
+    // validation, idempotency, and swap semantics are identical.
+    const cliAttach = outboundSupervisor.attach({
+      config_path: opts.hostConfigPath,
+    });
+    if (!cliAttach.attached) {
+      // Don't fail-loud the whole daemon boot — the supervisor's
+      // failure path leaves state untouched and a later
+      // host_outbound_attach IPC can recover. Just log so the
+      // operator can see why outbound never connected.
+      logger.warn(
+        {
+          kind: 'outbound_supervisor',
+          action: 'cli_auto_attach_failed',
+          reason: cliAttach.reason,
+          message: cliAttach.message,
+        },
+        'daemon outbound CLI auto-attach failed; outbound is inactive until host_outbound_attach IPC arrives',
+      );
+    }
+  }
 
   let stopped = false;
   const stop = async (reason: string): Promise<void> => {
     if (stopped) return;
     stopped = true;
     logDaemon(logger, { action: 'shutting_down', pid: process.pid });
+    outboundSupervisor.sendEvent({ event: 'shutting_down', reason });
+    outboundSupervisor.stop(reason);
+    if (localOutboundServer) {
+      try {
+        await localOutboundServer.stop();
+      } catch (err) {
+        logger.error(
+          { err: (err as Error).message },
+          'local outbound server stop threw; continuing teardown',
+        );
+      }
+    }
     try {
       await server.stop(reason);
     } catch (err) {
@@ -319,7 +520,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     socketPath: opts.socketPath,
     pidFilePath: opts.pidFilePath,
     logger,
-    broadcast: event => server.broadcast(event),
+    broadcast: event => broadcaster(event),
     stop,
   };
 }

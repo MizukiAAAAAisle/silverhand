@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { useHostProvenanceGate } from '@/features/hosts/hooks';
 import { useAgents } from '@/features/agents/hooks';
 import { AgentPicker } from './AgentPicker';
 import { useCreateWorkspace } from './hooks';
@@ -32,6 +33,7 @@ export function CreateWorkspaceDialog({
 
   const { data: agents = [] } = useAgents();
   const createWorkspace = useCreateWorkspace();
+  const hostProvenance = useHostProvenanceGate();
 
   const reset = () => {
     setName('');
@@ -101,7 +103,18 @@ export function CreateWorkspaceDialog({
                 placeholder="留空则自动生成在 ~/.silverhand/workspaces/<name>"
                 className="font-mono text-xs"
               />
-              <Button type="button" variant="outline" size="md" onClick={pickDirectory}>
+              <Button
+                type="button"
+                variant="outline"
+                size="md"
+                onClick={pickDirectory}
+                disabled={!hostProvenance.canUseCurrentLocalHostPath}
+                title={
+                  hostProvenance.canUseCurrentLocalHostPath
+                    ? undefined
+                    : 'Local host is not available'
+                }
+              >
                 <FolderOpen className="size-4" />
                 浏览
               </Button>

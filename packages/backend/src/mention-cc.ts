@@ -11,10 +11,10 @@ import type { AgentRepo } from './repos/agent-repo.js';
 import type { ConversationRepo } from './repos/conversation-repo.js';
 import type { MessageRepo } from './repos/message-repo.js';
 import type { NotificationRepo } from './repos/notification-repo.js';
-import { SettingsRepo } from './repos/settings-repo.js';
 import type { AgentRuntimeHost } from './runtime/agent-runtime-host.js';
 import type { BackendLogger } from './context.js';
 import type { ScopeEventBus } from './ws/scope-event-bus.js';
+import { singleConversationViewerUserId } from './viewer-scope.js';
 
 export interface MentionCcOpts {
   /** The user message that triggered this CC pass. Only `from_kind='user'`
@@ -26,8 +26,7 @@ export interface MentionCcOpts {
   sourceConversation: ConversationDto;
   /** Source workspace for context surfacing. */
   sourceWorkspace: WorkspaceDto;
-  /** SQLite handle — used to resolve the viewer id from
-   *  `app_settings.viewer_user_id` for the WS push scope. */
+  /** SQLite handle — used for membership writes around lazy Mentions DMs. */
   db: Db;
   agents: AgentRepo;
   conversations: ConversationRepo;
@@ -123,25 +122,22 @@ async function deliverOne(
   // is INSERT OR IGNORE, so re-running is a no-op.
   opts.conversations.addAgent(mentionsConversation.id, agent.id);
 
-  // v25 human membership: the original message author must be a
-  // member of the Mentions conversation, otherwise the v25 permission
-  // gates won't let them GET /messages on a DM that is literally
-  // about *their own* @-mention. Resolution order:
-  //   1. The triggering user message's `from_user_id` (the natural
-  //      "this human caused this CC" answer).
-  //   2. Legacy null user id → fall back to the registered viewer.
-  //   3. No viewer either → log+skip the membership writes (do NOT
-  //      insert empty rows). PR-A's `UserService.register()` backfill
-  //      will add this human to every existing conversation when a
-  //      human eventually registers.
+  // v25 human membership: the original message author must be a member
+  // of the Mentions conversation, otherwise the v25 permission gates
+  // won't let them GET /messages on a DM that is literally about their
+  // own @-mention. Resolution order:
+  //   1. The triggering user message's `from_user_id`.
+  //   2. Legacy null user id → source conversation's sole human member.
+  //   3. No unique answer → log+skip membership writes (do NOT insert
+  //      empty or guessed membership rows).
   // We also defensively `addUserMember` on the agent_home workspace
   // — pre-v25 agents are backfilled by the migration, post-v25
   // agents created via createAgentWithHome get the creator added,
   // but a multi-human v2 may have agents whose home was never
   // explicitly joined by this particular human.
-  const messageAuthorId = opts.message.from_user_id ?? null;
-  const fallbackViewerId = new SettingsRepo(opts.db).getViewerUserId();
-  const humanMemberId = messageAuthorId ?? fallbackViewerId;
+  const humanMemberId =
+    opts.message.from_user_id
+    ?? singleConversationViewerUserId(opts.conversations, opts.sourceConversation.id);
   if (humanMemberId) {
     opts.conversations.addUser(mentionsConversation.id, humanMemberId);
     // workspace_users is INSERT OR IGNORE — safe to re-run.
@@ -159,7 +155,7 @@ async function deliverOne(
         sourceConversationId: opts.sourceConversation.id,
         sourceMessageId: opts.message.id,
       },
-      'mention-cc: no human member id available (legacy null author + no registered viewer); skipping user membership writes',
+      'mention-cc: no unique human member id available for legacy null author; skipping user membership writes',
     );
   }
 
@@ -212,12 +208,8 @@ async function deliverOne(
       mention_excerpt: excerpt(opts.message.content),
     },
   });
-  // Push to the resolved viewer's private scope so notification hooks
-  // invalidate without polling. Pre-PR1 hardcoded 'viewer:local'; the
-  // registered random-id viewer needs the resolved id.
-  const viewerUserId = new SettingsRepo(opts.db).getViewerUserId();
-  if (viewerUserId) {
-    opts.events.publishToScope(`viewer:${viewerUserId}`, 'notification', {
+  if (humanMemberId) {
+    opts.events.publishToScope(`viewer:${humanMemberId}`, 'notification', {
       kind: 'mention_external',
       conversation_id: mentionsConversation.id,
     });

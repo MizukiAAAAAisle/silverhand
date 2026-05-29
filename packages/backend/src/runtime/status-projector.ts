@@ -1,5 +1,5 @@
 /**
- * `RuntimeStatusProjector` — sink for the four runtime status events
+ * `RuntimeStatusProjector` — sink for the runtime status events
  * that mutate `conversation_agents.{status,pid,cli_session_id}` AND
  * publish the matching `agent_status` SSE.
  *
@@ -29,7 +29,7 @@
  *
  * ## Idempotence
  *
- * All four methods are idempotent at the DB layer (re-applying the
+ * All methods are idempotent at the DB layer (re-applying the
  * same `updateAgentRuntime` call is a no-op write) and at the SSE
  * layer (a re-broadcast of an identical `agent_status` payload is a
  * benign duplicate for the renderer). `session_init` in particular
@@ -53,6 +53,11 @@ export interface SessionInitProjection {
   conversationId: string;
   agentId: string;
   cliSessionId: string;
+}
+
+export interface RuntimeReadyProjection {
+  conversationId: string;
+  agentId: string;
 }
 
 export interface RuntimeExitProjection {
@@ -82,6 +87,7 @@ export interface InitCooldownProjection {
 
 export interface RuntimeStatusProjector {
   sessionInit(input: SessionInitProjection): void;
+  runtimeReady(input: RuntimeReadyProjection): void;
   runtimeExit(input: RuntimeExitProjection): void;
   initRetrying(input: InitRetryingProjection): void;
   initCooldown(input: InitCooldownProjection): void;
@@ -122,6 +128,28 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
         agent_id: agentId,
         status: 'active',
         cli_session_id: cliSessionId,
+      },
+    });
+  }
+
+  /**
+   * `runtime_ready_for_drain` is the daemon-side signal that the
+   * child process is live and can receive stdin. Claude can withhold
+   * `session_init` until the first real user message, so restart with
+   * an empty inbox must not leave UI presence stuck on "Connecting".
+   *
+   * This deliberately preserves `cli_session_id`; `sessionInit()` will
+   * fill/refresh it once the driver emits a real session id.
+   */
+  runtimeReady({ conversationId, agentId }: RuntimeReadyProjection): void {
+    this.conversations.updateAgentRuntime(conversationId, agentId, {
+      status: 'active',
+    });
+    this.events.publish(conversationId, {
+      kind: 'agent_status',
+      payload: {
+        agent_id: agentId,
+        status: 'active',
       },
     });
   }
@@ -242,6 +270,7 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
  *  EventHandler's existing tests that don't exercise projection. */
 export const NOOP_STATUS_PROJECTOR: RuntimeStatusProjector = {
   sessionInit: () => {},
+  runtimeReady: () => {},
   runtimeExit: () => {},
   initRetrying: () => {},
   initCooldown: () => {},

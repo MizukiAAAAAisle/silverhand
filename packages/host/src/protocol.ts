@@ -58,9 +58,14 @@
 import { z } from 'zod';
 import {
   AgentRunStateSchema,
+  ConversationKindSchema,
   HostKindSchema,
+  MemberDtoSchema,
   ParsedEventKindSchema,
   ParsedEventSchema,
+  ReasoningEffortSchema,
+  RuntimeKindSchema,
+  WorkspaceKindSchema,
 } from '@silverhand/shared';
 
 // ── Protocol handshake ─────────────────────────────────────────────
@@ -253,15 +258,144 @@ export type ConversationLogDebugResult = z.infer<
 export const RuntimeMessageTextSchema = z.string().min(1);
 export type RuntimeMessageText = z.infer<typeof RuntimeMessageTextSchema>;
 
+const SilverhandCliLauncherSchema = z
+  .object({
+    command: z.string().min(1),
+    args: z.array(z.string()),
+    /**
+     * Explicit launcher metadata for the per-spawn `silverhand` shim.
+     * Named `env_vars` so the protocol can keep `env` itself reserved
+     * for the forbidden pre-composed child environment map.
+     */
+    env_vars: z.record(z.string()).optional(),
+  })
+  .strict();
+
+const RuntimeStartWorkspaceRefSchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string().min(1),
+    kind: WorkspaceKindSchema,
+    /**
+     * Server DB metadata: the daemon-host local filesystem base for
+     * this workspace. This is allowed to cross the boundary as data.
+     * Derivatives such as cwd, per-spawn dirs, and system_prompt_path
+     * remain daemon-local and are forbidden below.
+     */
+    path: z.string().min(1),
+  })
+  .strict();
+
+const RuntimeStartAgentRefSchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string().min(1),
+    /**
+     * Server DB metadata for the agent's L1 profile base. The daemon
+     * resolves `system_prompt.md` under this base locally.
+     */
+    home_dir: z.string().min(1),
+  })
+  .strict();
+
+const RuntimeStartDriverOptionsSchema = z
+  .object({
+    kind: RuntimeKindSchema,
+    cli_session_id: z.string().min(1).nullable(),
+    model: z.string().nullable(),
+    reasoning_effort: ReasoningEffortSchema.nullable(),
+    fast_mode: z.boolean().nullable(),
+  })
+  .strict();
+
+const RuntimeStartSessionSchema = z
+  .object({
+    conversation_id: z.string().min(1),
+    kind: ConversationKindSchema,
+    title: z.string(),
+    parent_conversation_id: z.string().min(1).nullable(),
+    parent_title: z.string().nullable(),
+    spawned_by_agent_id: z.string().min(1).nullable(),
+    members: z.array(MemberDtoSchema),
+  })
+  .strict();
+
+const RuntimeStartEnvPolicySchema = z
+  .object({
+    silverhand: z
+      .object({
+        server_url: z.string().url(),
+        auth_token: z.string().min(1),
+      })
+      .strict(),
+    silverhand_cli: SilverhandCliLauncherSchema,
+    proxy: z
+      .object({
+        url: z.string().nullable(),
+        allowlist: z.array(z.string()),
+      })
+      .strict(),
+  })
+  .strict();
+
+const FORBIDDEN_RUNTIME_START_OPTION_KEYS = new Set([
+  'cwd',
+  'workspace_path',
+  'system_prompt_path',
+  'spawn_dir',
+  'system_prompt',
+  'system_prompt_text',
+  'memory_text',
+  'consensus_text',
+  'env',
+]);
+
+function rejectForbiddenRuntimeStartOptionKeys(
+  value: unknown,
+  ctx: z.RefinementCtx,
+  path: Array<string | number> = [],
+): void {
+  if (value === null || typeof value !== 'object') return;
+  if (Array.isArray(value)) {
+    value.forEach((item, index) =>
+      rejectForbiddenRuntimeStartOptionKeys(item, ctx, [...path, index]),
+    );
+    return;
+  }
+  for (const [key, nested] of Object.entries(value)) {
+    const nextPath = [...path, key];
+    if (FORBIDDEN_RUNTIME_START_OPTION_KEYS.has(key)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: nextPath,
+        message:
+          `runtime_start.options.${nextPath.join('.')} is forbidden by the D2.0 path/byte boundary; ` +
+          'daemon-host must derive cwd/spawn paths/prompt bytes/env locally.',
+      });
+    }
+    rejectForbiddenRuntimeStartOptionKeys(nested, ctx, nextPath);
+  }
+}
+
 /**
- * StartOptions — placeholder. Step 1 keeps this loose because the
- * fake supervisor doesn't care about the contents. Step 2 will lift
- * the full shape verbatim out of CM (mock CLI override, init retry
- * tier config, driver kind, etc.) and replace this with a strict
- * schema. The wire is forward-compatible: step 2 narrows the schema,
- * doesn't add new top-level fields.
+ * Runtime start metadata. This schema is deliberately strict: path
+ * base metadata (`agent.home_dir`, `workspace.path`) is allowed as
+ * typed server DB state, but server-derived execution artifacts and
+ * prompt bytes are not.
  */
-export const StartOptionsSchema = z.object({}).passthrough();
+export const StartOptionsSchema = z
+  .object({
+    agent: RuntimeStartAgentRefSchema,
+    workspace: RuntimeStartWorkspaceRefSchema,
+    workspace_memory_index: z.array(RuntimeStartWorkspaceRefSchema),
+    session: RuntimeStartSessionSchema,
+    driver: RuntimeStartDriverOptionsSchema,
+    env_policy: RuntimeStartEnvPolicySchema,
+  })
+  .strict()
+  .superRefine((val, ctx) =>
+    rejectForbiddenRuntimeStartOptionKeys(val, ctx),
+  );
 export type StartOptions = z.infer<typeof StartOptionsSchema>;
 
 /** A single (conversation, agent) supervised runtime as the daemon
@@ -637,13 +771,465 @@ export type RuntimeOutputResumeResult = z.infer<
   typeof RuntimeOutputResumeResultSchema
 >;
 
+// ── host_outbound_attach (Stage D3.a Commit 3) ─────────────────────
+//
+// Late-attach control intent the desktop main process uses to tell a
+// running daemon "you now have credentials; load this host config and
+// open the outbound websocket". Decouples daemon spawn from credential
+// availability so the desktop launcher does not have to either (a)
+// hold the spawn until after login, or (b) spawn the daemon with a
+// stale `daemon-config.json` left over from a previous user.
+//
+// Contract:
+//   - `config_path` MUST be an absolute path to a regular file (a
+//     symlink-to-file is fine; a directory is rejected).
+//   - The daemon validates the path, reads + parses the config, and
+//     **only on success** swaps the active outbound client. If
+//     validation or parsing fails, the existing outbound client (if
+//     any) keeps running untouched — a bad Settings change must not
+//     take down a working daemon.
+//   - Idempotency:
+//       - same path, client already attached → `{ attached: true,
+//         action: 'noop' }`.
+//       - same path, client not yet started → `{ attached: true,
+//         action: 'started' }`.
+//       - different valid path → `{ attached: true, action:
+//         'switched' }` (graceful stop of the previous client, then
+//         start with the new config).
+//   - Errors carry a typed `reason` so callers don't have to string-
+//     match. None of the error reasons cause side effects on the
+//     existing client.
+
+export const HostOutboundAttachParamsSchema = z
+  .object({
+    config_path: z.string().min(1),
+  })
+  .strict();
+export type HostOutboundAttachParams = z.infer<
+  typeof HostOutboundAttachParamsSchema
+>;
+
+export const HostOutboundAttachFailureReasonSchema = z.enum([
+  'path_not_absolute',
+  'path_not_found',
+  'path_not_a_file',
+  'parse_failed',
+  'invalid_server_url',
+]);
+export type HostOutboundAttachFailureReason = z.infer<
+  typeof HostOutboundAttachFailureReasonSchema
+>;
+
+export const HostOutboundAttachResultSchema = z.discriminatedUnion('attached', [
+  z
+    .object({
+      attached: z.literal(true),
+      config_path: z.string().min(1),
+      /**
+       * What the daemon did with the request. Mirrors the idempotency
+       * matrix above so callers can log it and tests can assert
+       * branch coverage.
+       */
+      action: z.enum(['started', 'switched', 'noop']),
+    })
+    .strict(),
+  z
+    .object({
+      attached: z.literal(false),
+      reason: HostOutboundAttachFailureReasonSchema,
+      message: z.string().optional(),
+    })
+    .strict(),
+]);
+export type HostOutboundAttachResult = z.infer<
+  typeof HostOutboundAttachResultSchema
+>;
+
+
+// ── host_outbound_detach (Stage D3.b Commit 3) ─────────────────────
+//
+// Counterpart to `host_outbound_attach`: tell a running daemon to
+// gracefully stop its currently-attached outbound websocket so the
+// backend can drop the attachment without waiting for heartbeat /
+// socket-close timeout. The desktop main process sends this from its
+// `before-quit` cleanup path as a **latency optimization hint** — it
+// is NOT a backend correctness dependency. The server-side cleanup
+// still falls back to WS-close detection and heartbeat timeout if
+// the hint never lands.
+//
+// Contract:
+//   - No params. Detach is unconditional: there is nothing to
+//     validate, no file to read, no URL to parse.
+//   - Idempotent. With an active client: stop it cleanly, return
+//     `action: 'detached'`. With no client: noop, return
+//     `action: 'noop'`. Both arms have `detached: true` because the
+//     post-condition ("no active outbound client") is satisfied
+//     either way.
+//   - **Domain result has no failure arm** because there are no
+//     input or I/O failure modes. Transport / dispatcher errors
+//     (`shutting_down`, `internal_error`, `closed`, network etc.)
+//     still surface as `ResponseError` frames per the standard
+//     response envelope — callers must treat those as failures, not
+//     as a missing result.
+//   - Detach does NOT make the daemon's `OutboundSupervisor`
+//     terminal. The supervisor can be re-attached later via
+//     `host_outbound_attach` in the same daemon process (e.g.
+//     log-out → log-in-as-different-user). Daemon shutdown is a
+//     separate path — `OutboundSupervisor.stop()` (called from
+//     `runDaemon` shutdown) is the one-way close.
+
+export const HostOutboundDetachParamsSchema = z.object({}).strict();
+export type HostOutboundDetachParams = z.infer<
+  typeof HostOutboundDetachParamsSchema
+>;
+
+export const HostOutboundDetachResultSchema = z
+  .object({
+    detached: z.literal(true),
+    /**
+     * `detached` = there was an active outbound client and it was
+     *              stopped as part of this call.
+     * `noop`     = no active client (pre-attach state, or already
+     *              detached). The hint is harmless either way.
+     */
+    action: z.enum(['detached', 'noop']),
+  })
+  .strict();
+export type HostOutboundDetachResult = z.infer<
+  typeof HostOutboundDetachResultSchema
+>;
+
+
+// ── host_outbound_reload (Stage D3.c Commit 2) ─────────────────────
+//
+// Tell a running daemon "re-read the SAME daemon-config.json you're
+// already attached to, validate it, and swap to the new bytes if and
+// only if everything checks out". The desktop main process sends this
+// from its Settings save path AFTER it has atomically rewritten
+// `daemon-config.json` (write-temp + fsync + rename → reload IPC).
+//
+// Why a separate intent rather than re-using `host_outbound_attach`:
+//   - **Hard-rejects `not_attached`**: if no client is currently
+//     attached, reload must FAIL — it MUST NOT silently fall through
+//     to "attach". The caller (desktop main) needs to decide
+//     explicitly whether the right verb here is `attach`
+//     (post-login bootstrap) or `reload` (Settings save / token
+//     rotation). Silent fallback hides logout-races and stale-state
+//     bugs.
+//   - **Validate-first-then-swap**: any I/O / parse / URL validation
+//     failure leaves the existing client running untouched. A bad
+//     Settings save must not take down a working outbound — the user
+//     gets a typed error in Settings, and the daemon keeps streaming.
+//   - **Result success ≠ connected**: `action: 'reloaded'` means the
+//     daemon started a NEW client with the new config. WS open /
+//     attachment-fresh is a separate signal the desktop verifies via
+//     backend `HostWsServerController.getAttachment(hostId)` after
+//     the reload returns (Commit 3 concern; this intent's job is to
+//     hand the new bytes to the daemon, not to wait for socket
+//     handshake).
+//
+// Contract:
+//   - No params: reload re-reads the daemon's CURRENT config_path.
+//     Path changes belong to `host_outbound_attach` — by design,
+//     reload cannot swap to a different config file.
+//   - Success arms:
+//       - `action: 'reloaded'` — config bytes differ from the
+//         in-memory fingerprint; new client started after old client
+//         was stopped (validate-first-then-swap order strict).
+//       - `action: 'unchanged'` — config bytes are byte-identical
+//         to the in-memory fingerprint (rotate / no-op). Old client
+//         keeps running uninterrupted; no WS bounce.
+//   - Failure arms (typed business state, NOT ResponseError):
+//       - `not_attached`         — no current client; caller must use
+//                                  `host_outbound_attach` instead.
+//       - `config_unreadable`    — disk read failed (ENOENT after
+//                                  attach, EACCES, FIFO substitution,
+//                                  etc.). Old client kept.
+//       - `parse_failed`         — config JSON / shape invalid. Old
+//                                  client kept.
+//       - `invalid_server_url`   — `hostConnectWebSocketUrl` threw on
+//                                  the NEW server_url (e.g. user edited
+//                                  to a non-loopback host that bypassed
+//                                  Settings UI validation). Old client
+//                                  kept.
+//
+// Result shape mirrors `host_outbound_attach`: discriminated on a
+// boolean flag so callers branch on `result.reloaded` without
+// inspecting nested fields. Failure arm includes `message` for log /
+// diagnostic continuity; success arm includes `host_id` so the
+// caller (desktop main, Commit 3) can hand it straight to the
+// backend attachment-freshness check without re-reading the config.
+
+export const HostOutboundReloadParamsSchema = z.object({}).strict();
+export type HostOutboundReloadParams = z.infer<
+  typeof HostOutboundReloadParamsSchema
+>;
+
+export const HostOutboundReloadFailureReasonSchema = z.enum([
+  'not_attached',
+  'config_unreadable',
+  'parse_failed',
+  'invalid_server_url',
+]);
+export type HostOutboundReloadFailureReason = z.infer<
+  typeof HostOutboundReloadFailureReasonSchema
+>;
+
+export const HostOutboundReloadResultSchema = z.discriminatedUnion('reloaded', [
+  z
+    .object({
+      reloaded: z.literal(true),
+      /**
+       * `reloaded`  — config bytes differed; old client stopped, new
+       *               client started. WS handshake not yet complete.
+       * `unchanged` — config bytes identical to in-memory fingerprint;
+       *               old client kept untouched. Caller can skip the
+       *               attachment-freshness poll Commit 3 runs for the
+       *               `reloaded` case (nothing reconnected).
+       */
+      action: z.enum(['reloaded', 'unchanged']),
+      /**
+       * The config_path the reload was performed against — echoed back
+       * for log correlation. Always the daemon's currently-attached
+       * path; reload cannot change paths.
+       */
+      config_path: z.string().min(1),
+      /**
+       * `host_id` from the (re)loaded config. The caller uses it as
+       * the key for backend `HostWsServerController.getAttachment`
+       * polling after a `reloaded` response. For `unchanged` it's the
+       * same host_id that was already attached — caller can use it to
+       * sanity-check no concurrent attach swapped under it.
+       */
+      host_id: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      reloaded: z.literal(false),
+      reason: HostOutboundReloadFailureReasonSchema,
+      /** Free-text diagnostic. Renderer should branch on `reason`
+       *  for UI copy; `message` is for logs / dev console only. */
+      message: z.string().optional(),
+    })
+    .strict(),
+]);
+export type HostOutboundReloadResult = z.infer<
+  typeof HostOutboundReloadResultSchema
+>;
+
+
+// ── D4.d: agent_materialize (server↔daemon formal semantics) ──────
+//
+// Unlike the runtime_* intents (local supervisor / control —
+// scheduling, lifecycle, output paging) and the `host_outbound_*`
+// intents (transport plumbing), `agent_materialize` IS formal
+// server↔daemon semantics by design: it is the canonical way the
+// server asks the daemon-owning host to create an agent's L1 home
+// (= the DM workspace path; CLAUDE.md §3 / docs/agent-system-prompt-
+// memory.md). The schemas live here so the IPC dispatcher can
+// validate them through the same `intentSchemas` catalogue used by
+// every other intent; the outbound WS frame layer re-exports them
+// from `outbound-protocol.ts` so the wire surface (additive,
+// per-command error scoping — see Cindy D1 round-1 P1) stays a
+// thin envelope around the same Zod definitions.
+//
+// See docs/remote-backend-d4d-design.md §3.1 / §3.4 / §4.6 / §8.
+
+export const AgentMaterializeParamsSchema = z
+  .object({
+    /**
+     * Server-allocated; base64url 16-char string from
+     * randomBytes(12).toString('base64url')
+     * (packages/backend/src/repos/agent-repo.ts).
+     * Schema-level validation is intentionally loose (`min(1)`);
+     * the route layer is responsible for tighter format checks
+     * (Cindy round-2 P1 #5).
+     */
+    agent_id: z.string().min(1),
+    /**
+     * Server-allocated; follows the existing helper
+     * `agentHomeWorkspaceId(agentId)` → `wsah_<agentId>`.
+     */
+    agent_home_workspace_id: z.string().min(1),
+    name: z.string().min(1).max(64),
+    runtime: RuntimeKindSchema,
+    model: z.string().nullable().optional(),
+    description: z.string().nullable().optional(),
+    /**
+     * Template choice for the agent-home bootstrap (system_prompt,
+     * MEMORY.md, notes/ skeleton). D2 implements 'default' only;
+     * 'onboarding' and 'minimal' return `unsupported_template`
+     * until they get a template.
+     */
+    template_choice: z
+      .enum(['default', 'onboarding', 'minimal'])
+      .default('default'),
+  })
+  .strict();
+export type AgentMaterializeParams = z.infer<typeof AgentMaterializeParamsSchema>;
+
+export const AgentMaterializeResultSchema = z
+  .object({
+    ok: z.literal(true),
+    /**
+     * Absolute path to the materialized agent home / L1 dir,
+     * daemon-side. The server never inspects what the daemon
+     * wrote here — `agent_dir` is opaque from the server's
+     * perspective.
+     */
+    agent_dir: z.string().min(1),
+    /**
+     * MUST equal `agent_dir`. Per `docs/agent-system-prompt-memory.md`
+     * and CLAUDE.md §3, the DM workspace path coincides with L1
+     * (`agent_home` workspace's `workspace_path` IS the agent's L1
+     * dir). The daemon returns the same string for both fields to
+     * make this invariant explicit on the wire — the server uses
+     * `agent_home_workspace_path` verbatim when it INSERTs the
+     * `agent_home` workspace row (see design §6.5).
+     *
+     * Cindy D2 P1-2: the equality is enforced by the schema's
+     * `superRefine` below, NOT just by convention. A handler that
+     * drifts (or a future stub that diverges the two strings)
+     * would otherwise let a wrong workspace path land in the
+     * server's L3a `workspace` row — the kind of silent
+     * corruption a schema constraint is supposed to catch.
+     */
+    agent_home_workspace_path: z.string().min(1),
+    /**
+     * Opaque-to-server timestamp used only for audit. The row's
+     * `created_at` remains the server's authoritative time.
+     */
+    materialized_at: z.number().int().positive(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.agent_home_workspace_path !== value.agent_dir) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['agent_home_workspace_path'],
+        message:
+          'agent_home_workspace_path must equal agent_dir (§6.5 invariant: the DM workspace path IS the L1 dir)',
+      });
+    }
+  });
+export type AgentMaterializeResult = z.infer<typeof AgentMaterializeResultSchema>;
 
 /**
- * Single source of truth for the intent ↔ params/result type pairing.
- * The client uses it to enforce that `host.call('echo', {...})` only
- * accepts echo-shaped params and returns echo-shaped results; the
- * daemon dispatcher uses it to parse incoming params before handing
- * to a handler.
+ * Typed error codes returned by the daemon's `agent_materialize`
+ * handler. The HTTP-layer wrapper in `POST /api/agents` adds
+ * server-side codes (materialize_timeout, host_attach_pending,
+ * dependent_row_insert_failed, backend_crash_during_materialize)
+ * that never appear on the wire — they describe failures the
+ * server observes locally. See design §3.4 for the
+ * wire→HTTP mapping table.
+ */
+export const AgentMaterializeErrorCodeSchema = z.enum([
+  'fs_quota_exceeded',
+  'fs_unavailable',
+  /**
+   * `agent_dir_collision` (not `already_exists`): the dir is
+   * unexpectedly populated by foreign content without the
+   * `.materialized` sentinel, or the sentinel exists but does
+   * not match the requested (agent_id, template_choice, runtime)
+   * triple (sentinel "template_match" per §4.6 / §14 Q3).
+   * Idempotent re-call of an already-materialized `agent_id`
+   * (all three sentinel fields match) returns `ok: true` and is
+   * NOT an error.
+   */
+  'agent_dir_collision',
+  'unsupported_template',
+  'unsupported_runtime',
+  'internal_error',
+]);
+export type AgentMaterializeErrorCode = z.infer<
+  typeof AgentMaterializeErrorCodeSchema
+>;
+
+
+/**
+ * Canonical generic-error code taxonomy. The 5 transport-level codes
+ * the daemon may emit independent of any intent. Kept small and
+ * stable so the client can branch on them without scanning
+ * `message` strings:
+ *
+ *  - `unknown_intent`     — `intent` name not in the registry
+ *  - `invalid_params`     — params failed zod validation
+ *  - `internal_error`     — handler threw / returned an unexpected error
+ *  - `shutting_down`      — request arrived after SIGTERM/SIGINT
+ *  - `request_too_large`  — incoming frame exceeded the per-frame cap
+ *
+ * Single source of truth — referenced by `ResponseErrorSchema`
+ * (generic frame) AND by per-intent typed-error schemas (e.g.
+ * `AgentMaterializeIpcErrorSchema`) so a new generic code added here
+ * automatically widens both surfaces. Cindy D2 round-2 P2 caught
+ * the previous hand-copy in `AgentMaterializeIpcErrorSchema`; the
+ * extract removes that drift axis.
+ */
+export const ResponseErrorCodeSchema = z.enum([
+  'unknown_intent',
+  'invalid_params',
+  'internal_error',
+  'shutting_down',
+  'request_too_large',
+]);
+export type ResponseErrorCode = z.infer<typeof ResponseErrorCodeSchema>;
+
+
+/**
+ * Per-intent typed-error schemas.
+ *
+ * Default = `ResponseErrorSchema` (the 5 transport-level codes).
+ * Intents that may legitimately surface daemon-business typed
+ * codes — currently just `agent_materialize` — override with a
+ * wider schema that unions the 5 generic codes with the intent's
+ * own taxonomy (here, `AgentMaterializeErrorCodeSchema`).
+ *
+ * Why per-intent and NOT a single global widened union (Cindy
+ * D2 P1-1 + D1 round-1 P1): a global union would let any intent
+ * carry any other intent's typed code on the wire — exactly the
+ * scoping failure Cindy caught at D1 round-1. Per-intent scoping
+ * keeps each intent's error surface narrow at validation time.
+ *
+ * This registry is consumed by:
+ *   - `IntentDispatcher.dispatch` (daemon side) — to validate the
+ *     error code it's about to emit on the wire.
+ *   - `HostClient.handleFrame` (client side) — to validate
+ *     incoming `error.code` against the intent the caller
+ *     dispatched, before resolving as a typed `HostClientError`.
+ *   - `SocketTransport.deliverFrame` does NOT consult this map;
+ *     it uses `LooseAnyFrameSchema` so a typed code doesn't get
+ *     silently dropped at the transport layer. Validation happens
+ *     at the client layer above, where the intent name is known.
+ */
+const AgentMaterializeIpcErrorSchema = z
+  .object({
+    code: z.union([
+      ResponseErrorCodeSchema,
+      AgentMaterializeErrorCodeSchema,
+    ]),
+    message: z.string(),
+  })
+  .strict();
+
+
+/**
+ * Single source of truth for the intent ↔ params / result / error
+ * type triple. The client uses it to enforce that
+ * `host.call('echo', {...})` only accepts echo-shaped params and
+ * returns echo-shaped results; the daemon dispatcher uses it to
+ * parse incoming params before handing to a handler, AND to
+ * validate the typed error code it is about to emit on the wire.
+ *
+ * `error` is OPTIONAL on the entry shape. Intents without an
+ * explicit `error` entry use `ResponseErrorSchema` (the 5
+ * transport-level codes) at IPC validation time. Only intents
+ * that may legitimately surface daemon-business typed codes —
+ * at D4.d, just `agent_materialize` — declare their own widened
+ * error schema. The wire surface stays per-intent-scoped (Cindy
+ * D2 P1-1 + D1 round-1 P1): a typed code in one intent's error
+ * arm cannot leak into another intent's error arm at validation
+ * time.
  */
 export const intentSchemas = {
   hello: {
@@ -702,6 +1288,34 @@ export const intentSchemas = {
     params: RuntimeOutputResumeParamsSchema,
     result: RuntimeOutputResumeResultSchema,
   },
+  host_outbound_attach: {
+    params: HostOutboundAttachParamsSchema,
+    result: HostOutboundAttachResultSchema,
+  },
+  host_outbound_detach: {
+    params: HostOutboundDetachParamsSchema,
+    result: HostOutboundDetachResultSchema,
+  },
+  host_outbound_reload: {
+    params: HostOutboundReloadParamsSchema,
+    result: HostOutboundReloadResultSchema,
+  },
+  // D4.d D2: agent_materialize is server↔daemon formal semantics
+  // (see comment block above `AgentMaterializeParamsSchema`). The
+  // handler is wired through DispatcherOptions.agentMaterializeHandler
+  // in `daemon/dispatcher.ts`; when the slot is empty (e.g., legacy
+  // test wiring), the dispatcher returns `internal_error` like every
+  // other handler slot. `error` widens to the 5 generic codes plus
+  // the materialize-specific taxonomy (Cindy D2 P1-1: this is what
+  // lets `HostClient.handleFrame` reject typed codes via the wire
+  // for the local IPC adapter — without the per-intent error entry
+  // here, the transport would silently drop typed-error frames
+  // because the strict `ResponseErrorSchema` wouldn't accept them).
+  agent_materialize: {
+    params: AgentMaterializeParamsSchema,
+    result: AgentMaterializeResultSchema,
+    error: AgentMaterializeIpcErrorSchema,
+  },
 } as const;
 
 export type IntentName = keyof typeof intentSchemas;
@@ -711,6 +1325,39 @@ export type IntentParams<N extends IntentName> = z.infer<
 export type IntentResult<N extends IntentName> = z.infer<
   (typeof intentSchemas)[N]['result']
 >;
+export type IntentError<N extends IntentName> =
+  (typeof intentSchemas)[N] extends { error: infer E extends z.ZodType }
+    ? z.infer<E>
+    : ResponseError;
+
+/**
+ * Resolve the per-intent typed-error schema, falling back to
+ * `ResponseErrorSchema` for intents whose entry has no `error`
+ * field. Consumed by `IntentDispatcher.dispatch` to validate the
+ * typed code it emits, and by `HostClient.handleFrame` to validate
+ * the typed code it receives. The fallback is the load-bearing
+ * piece — without it the 17 intents that don't override would each
+ * need a no-op `error: ResponseErrorSchema` line just to keep the
+ * lookup total.
+ *
+ * Also tolerates `intent` strings NOT in the registry (e.g. an
+ * older client dispatching a removed-since-v0 name like
+ * `runtime_inject_env`): the daemon answers `unknown_intent`,
+ * which IS in the generic taxonomy, so `ResponseErrorSchema` is
+ * the right default. Without this tolerance the lookup would crash
+ * with `Cannot read properties of undefined (reading 'error')` and
+ * the client would translate a clean rejection into a hang.
+ */
+export function intentErrorSchema(
+  intent: string,
+): z.ZodType<{ code: string; message: string }> {
+  const entry = (intentSchemas as Record<string, { error?: unknown } | undefined>)[
+    intent
+  ];
+  const error = entry?.error;
+  if (error) return error as z.ZodType<{ code: string; message: string }>;
+  return ResponseErrorSchema;
+}
 
 // ── Frame schemas ───────────────────────────────────────────────────
 
@@ -722,24 +1369,13 @@ export const RequestFrameSchema = z.object({
 export type RequestFrame = z.infer<typeof RequestFrameSchema>;
 
 /**
- * Typed error codes the daemon may return in a response frame. Kept
- * small and stable so the client can branch on them without scanning
- * `message` strings:
- *
- *  - `unknown_intent`     — `intent` name not in the registry
- *  - `invalid_params`     — params failed zod validation
- *  - `internal_error`     — handler threw / returned an unexpected error
- *  - `shutting_down`      — request arrived after SIGTERM/SIGINT
- *  - `request_too_large`  — incoming frame exceeded the per-frame cap
+ * Generic-error frame. The `code` enum lives at
+ * `ResponseErrorCodeSchema` above so per-intent typed-error
+ * schemas (e.g. `AgentMaterializeIpcErrorSchema`) can reference
+ * the same enum without drift.
  */
 export const ResponseErrorSchema = z.object({
-  code: z.enum([
-    'unknown_intent',
-    'invalid_params',
-    'internal_error',
-    'shutting_down',
-    'request_too_large',
-  ]),
+  code: ResponseErrorCodeSchema,
   message: z.string(),
 });
 export type ResponseError = z.infer<typeof ResponseErrorSchema>;
@@ -759,6 +1395,51 @@ export const ResponseFrameSchema = z.union([
     .strict(),
 ]);
 export type ResponseFrame = z.infer<typeof ResponseFrameSchema>;
+
+/**
+ * Transport-layer loose variant of `ResponseFrame` (Cindy D2 P1-1).
+ *
+ * The strict `ResponseFrameSchema` above only admits the 5 generic
+ * `ResponseErrorSchema` codes in the `error.code` field. The
+ * transport layer (`SocketTransport.deliverFrame`) sits BELOW the
+ * intent dispatcher, so at frame-arrival time it does not yet know
+ * which intent the response correlates to — and therefore which
+ * typed-error code set is legal. Using the strict frame schema at
+ * that layer would cause it to silently drop response frames
+ * carrying per-intent typed codes (e.g. `agent_dir_collision` from
+ * `agent_materialize`), leaving the pending IPC request to time
+ * out. That's the bug Cindy identified.
+ *
+ * The loose schema accepts `error.code: string` so the transport
+ * can deliver the frame upward; `HostClient.handleFrame` then
+ * looks up the pending request's intent name and validates the
+ * received code against `intentErrorSchema(intent)` before
+ * rejecting the typed `HostClientError`. Drift (unknown code for
+ * that intent) is itself surfaced as a typed `internal_error` so
+ * the caller still gets a clean reject path.
+ */
+const LooseResponseErrorSchema = z
+  .object({
+    code: z.string().min(1),
+    message: z.string(),
+  })
+  .strict();
+
+export const LooseResponseFrameSchema = z.union([
+  z
+    .object({
+      id: z.string().min(1),
+      result: z.unknown(),
+    })
+    .strict(),
+  z
+    .object({
+      id: z.string().min(1),
+      error: LooseResponseErrorSchema,
+    })
+    .strict(),
+]);
+export type LooseResponseFrame = z.infer<typeof LooseResponseFrameSchema>;
 
 /**
  * Unsolicited events. Two categories:
@@ -1065,6 +1746,21 @@ export const AnyFrameSchema = z.union([
   EventFrameSchema,
 ]);
 export type AnyFrame = z.infer<typeof AnyFrameSchema>;
+
+/**
+ * Transport-layer loose variant of `AnyFrameSchema` (Cindy D2 P1-1).
+ * Substitutes `LooseResponseFrameSchema` for `ResponseFrameSchema`
+ * so per-intent typed error codes survive the transport-layer
+ * frame validation. The intent-aware validation happens one layer
+ * up, in `HostClient.handleFrame`. See `LooseResponseFrameSchema`
+ * for the full rationale.
+ */
+export const LooseAnyFrameSchema = z.union([
+  RequestFrameSchema,
+  LooseResponseFrameSchema,
+  EventFrameSchema,
+]);
+export type LooseAnyFrame = z.infer<typeof LooseAnyFrameSchema>;
 
 // ── Wire encoding ───────────────────────────────────────────────────
 

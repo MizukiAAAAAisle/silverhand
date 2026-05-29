@@ -11,7 +11,6 @@ import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { ScheduleRepo } from '../../src/repos/schedule-repo.js';
-import { SettingsRepo } from '../../src/repos/settings-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import {
   ScheduleError,
@@ -122,7 +121,6 @@ function bootstrap(): Fixture {
     conversations,
     messages,
     agents,
-    settings: new SettingsRepo(db),
     runtimeHost: fake as unknown as AgentRuntimeHost,
     events,
     logger,

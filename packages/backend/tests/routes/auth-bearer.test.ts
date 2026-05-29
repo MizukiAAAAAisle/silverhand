@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { apiPaths } from '@silverhand/shared';
+import {
+  EVENT_WS_SESSION_COOKIE,
+  X_SILVERHAND_LEGACY_USER_ID_HEADER,
+  apiPaths,
+} from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 describe('Public bearer enforcement on /api/*', () => {
@@ -19,6 +23,19 @@ describe('Public bearer enforcement on /api/*', () => {
     expect(body.error).toBe('unauthorized');
   });
 
+  it('does not treat the event websocket cookie as REST API auth', async () => {
+    t = buildTestApp();
+    const token = t.ctx.authSessions.issueSession({ userId: 'local' }).userToken;
+    const res = await t.app.fetch(
+      new Request('http://localhost/api/workspaces', {
+        method: 'GET',
+        headers: { cookie: `${EVENT_WS_SESSION_COOKIE}=${token}` },
+      }),
+    );
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ error: 'unauthorized' });
+  });
+
   it('rejects /api/* requests with a wrong bearer token (401)', async () => {
     t = buildTestApp();
     const res = await t.app.fetch(
@@ -30,10 +47,25 @@ describe('Public bearer enforcement on /api/*', () => {
     expect(res.status).toBe(401);
   });
 
-  it('accepts /api/* requests with the correct bearer token (200)', async () => {
+  it('accepts /api/* requests with a user session bearer (200)', async () => {
     t = buildTestApp();
     const res = await http(t).get('/api/workspaces');
     expect(res.status).toBe(200);
+  });
+
+  it('rejects the retired server-config bearer even with a fabricated viewer header', async () => {
+    t = buildTestApp();
+    const res = await t.app.fetch(
+      new Request('http://localhost/api/workspaces', {
+        method: 'GET',
+        headers: {
+          authorization: `Bearer ${t.legacyServerAuthToken}`,
+          [X_SILVERHAND_LEGACY_USER_ID_HEADER]: 'local',
+        },
+      }),
+    );
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ error: 'unauthorized' });
   });
 
   it(`allowlists ${apiPaths.health} so liveness probes bypass the bearer check`, async () => {

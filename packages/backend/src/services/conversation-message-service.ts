@@ -14,9 +14,12 @@ import type { MessageRepo } from '../repos/message-repo.js';
 import type { NotificationRepo } from '../repos/notification-repo.js';
 import type { UserRepo } from '../repos/user-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
-import type { SettingsRepo } from '../repos/settings-repo.js';
 import type { AttachmentService } from './attachment-service.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
+import {
+  conversationViewerUserIds,
+  publishUnreadUpdatedToConversationViewers,
+} from '../viewer-scope.js';
 import {
   assertActorConversationMatch,
   type AgentPrincipal,
@@ -178,7 +181,6 @@ export interface ConversationMessageServiceOptions {
   messages: MessageRepo;
   agents: AgentRepo;
   users: UserRepo;
-  settings: SettingsRepo;
   notifications: NotificationRepo;
   workspaces: WorkspaceRepo;
   attachmentService: AttachmentService;
@@ -215,7 +217,6 @@ export class ConversationMessageService {
   private readonly messages: MessageRepo;
   private readonly agents: AgentRepo;
   private readonly users: UserRepo;
-  private readonly settings: SettingsRepo;
   private readonly notifications: NotificationRepo;
   private readonly workspaces: WorkspaceRepo;
   private readonly attachmentService: AttachmentService;
@@ -229,7 +230,6 @@ export class ConversationMessageService {
     this.messages = opts.messages;
     this.agents = opts.agents;
     this.users = opts.users;
-    this.settings = opts.settings;
     this.notifications = opts.notifications;
     this.workspaces = opts.workspaces;
     this.attachmentService = opts.attachmentService;
@@ -478,65 +478,61 @@ export class ConversationMessageService {
     return resolved.snapshots;
   }
 
-  /**
-   * Resolves the current viewer id from `app_settings.viewer_user_id`
-   * and publishes an `unread_updated` frame to that viewer's private
-   * scope. Used after every persisted user/agent message so the
-   * renderer's notification & unread hooks invalidate without polling.
-   * Pre-PR1 this hardcoded `'local'`; the registered random-id
-   * viewer needs the resolved id or the renderer never sees the event.
-   */
+  /** Publish `unread_updated` to every human member of this conversation. */
   private publishUnreadUpdated(conversationId: string): void {
-    const viewerUserId = this.settings.getViewerUserId();
-    if (!viewerUserId) return;
-    this.events.publishToScope(`viewer:${viewerUserId}`, 'unread_updated', {
-      conversation_id: conversationId,
-    });
+    publishUnreadUpdatedToConversationViewers(
+      this.events,
+      this.conversations,
+      conversationId,
+    );
   }
 
   private notifyViewerMentionBestEffort(
     conversation: NonNullable<ReturnType<ConversationRepo['get']>>,
     message: MessageDto,
   ): void {
-    let viewerUserId: string | null = null;
     try {
-      viewerUserId = this.settings.getViewerUserId();
-      if (!viewerUserId) return;
-      if (message.from_kind === 'user' && message.from_user_id === viewerUserId) return;
+      const mentionedHandles = new Set(extractMentions(message.content));
+      if (mentionedHandles.size === 0) return;
 
-      const viewer = this.users.get(viewerUserId);
-      if (!viewer) return;
-      const mentioned = extractMentions(message.content).includes(viewer.name);
-      if (!mentioned) return;
+      for (const viewerUserId of conversationViewerUserIds(
+        this.conversations,
+        conversation.id,
+      )) {
+        if (message.from_kind === 'user' && message.from_user_id === viewerUserId) {
+          continue;
+        }
+        const viewer = this.users.get(viewerUserId);
+        if (!viewer || !mentionedHandles.has(viewer.name)) continue;
 
-      this.notifications.insert({
-        kind: 'mention_self',
-        // Notification routes still read v1 rows through user_id IS NULL.
-        userId: null,
-        workspaceId: conversation.workspace_id,
-        conversationId: conversation.id,
-        messageId: message.id,
-        sourceWorkspaceId: conversation.workspace_id,
-        sourceConversationId: conversation.id,
-        sourceMessageId: message.id,
-        payload: {
-          conversation_title: conversation.title,
-          trigger_name: this.resolveMessageSenderName(message),
-          mentioned_name: viewer.name,
-          mention_excerpt: excerpt(message.content),
-        },
-      });
-      this.events.publishToScope(`viewer:${viewerUserId}`, 'notification', {
-        kind: 'mention_self',
-        conversation_id: conversation.id,
-        message_id: message.id,
-      });
+        this.notifications.insert({
+          kind: 'mention_self',
+          // Notification routes still read v1 rows through user_id IS NULL.
+          userId: null,
+          workspaceId: conversation.workspace_id,
+          conversationId: conversation.id,
+          messageId: message.id,
+          sourceWorkspaceId: conversation.workspace_id,
+          sourceConversationId: conversation.id,
+          sourceMessageId: message.id,
+          payload: {
+            conversation_title: conversation.title,
+            trigger_name: this.resolveMessageSenderName(message),
+            mentioned_name: viewer.name,
+            mention_excerpt: excerpt(message.content),
+          },
+        });
+        this.events.publishToScope(`viewer:${viewerUserId}`, 'notification', {
+          kind: 'mention_self',
+          conversation_id: conversation.id,
+          message_id: message.id,
+        });
+      }
     } catch (err) {
       this.logger.warn(
         {
           conversationId: conversation.id,
           messageId: message.id,
-          viewerUserId,
           err,
         },
         'conversation-message-service: viewer mention notification failed',

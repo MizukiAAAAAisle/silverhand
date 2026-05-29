@@ -27,7 +27,7 @@ import { useUpdateAgent } from './hooks';
 import { useAgentAvatarObjectUrl } from './avatar-hooks';
 import { canEditAgentProfile } from './permissions';
 import { EditableAgentAvatar } from './EditableAgentAvatar';
-import { useViewerUser } from '@/features/me/hooks';
+import { isBackendUnreachable, useViewerUser } from '@/features/me/hooks';
 
 const RUNTIMES: { value: RuntimeKind; label: string }[] = [
   { value: 'claude', label: 'Claude Code' },
@@ -80,7 +80,14 @@ export function AgentProfileCard({
   runtimeState,
 }: AgentProfileCardProps): JSX.Element {
   const { data: viewer } = useViewerUser();
-  const canEdit = canEditAgentProfile(viewer, agent);
+  // D4.a Commit 5d-fixup (Cindy P1-2): the BackendUnreachable arm
+  // never reaches the registered shell — but if it ever does, the
+  // permissions helper expects a `MeResponse | undefined`, so map
+  // the unreachable arm to `undefined` (deny edit, mirror the loading
+  // state).
+  const viewerForPermissions =
+    viewer && isBackendUnreachable(viewer) ? undefined : viewer;
+  const canEdit = canEditAgentProfile(viewerForPermissions, agent);
   const update = useUpdateAgent(agent.id);
   const avatarObjectUrl = useAgentAvatarObjectUrl(agent.avatar_url);
 

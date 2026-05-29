@@ -38,6 +38,12 @@ export function agentRowToDto(row: AgentRow): AgentDto {
     avatar_url: row.avatar_storage_key
       ? `${apiPaths.agentAvatar(row.id)}?v=${row.updated_at}`
       : null,
+    // v33 (D4.d): materialization lifecycle. `idempotency_key` is
+    // intentionally NOT projected — retry uses a route-local
+    // management payload, not the default DTO (Cindy D1 round-2 P2).
+    materialization_status: row.materialization_status,
+    materialization_failed_code: row.materialization_failed_code,
+    materialization_failed_at: row.materialization_failed_at,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -111,6 +117,297 @@ export class AgentRepo {
     const row = this.get(id);
     if (!row) throw new Error('insert failed');
     return row;
+  }
+
+  // ── D4.d D3: materialization lifecycle methods ──────────────────
+  //
+  // §6.1 + §6.3 give the route 4 mutations on `agents` it must
+  // own through the materialize lifecycle:
+  //
+  //   1. Lookup by `(created_by_user_id, idempotency_key)` to
+  //      decide short-circuit / mismatch / fresh attempt.
+  //   2. Reserve a `pending_materialization` row with metadata
+  //      snapshot before dispatching the wire intent (L1).
+  //   3. Flip the reserved row to `active` after daemon ack +
+  //      dependent-row inserts succeed (L3a).
+  //   4. Flip the reserved row to `failed` with a typed code
+  //      after daemon typed err / timeout / dependent-row insert
+  //      failure (L3b).
+  //
+  // Idempotency-Key is per-creator scoped — the v33 partial
+  // unique index is `(created_by_user_id, idempotency_key)
+  // WHERE idempotency_key IS NOT NULL`. Cross-user existence side
+  // channel is impossible at the SQL layer (Cindy round-2 P1 #5).
+  //
+  // The flip helpers do NOT return the projected DTO — they're
+  // mutation-only. Routes call `getRow` after flip when they need
+  // the projection (e.g. for the 201 response payload).
+
+  /**
+   * Lookup an agent row by `(created_by_user_id, idempotency_key)`.
+   * Returns `null` if no such row exists — that's the fresh-attempt
+   * path. Returns the row (in ANY status: pending, active, failed)
+   * if one exists — that's the short-circuit path the route then
+   * dispatches based on `materialization_status`.
+   *
+   * Note: this returns `AgentRow` (with `idempotency_key` field)
+   * NOT `AgentDto` (which deliberately drops it per Cindy D1
+   * round-2 P2). The mismatch check needs the metadata snapshot
+   * fields, which the DTO carries, but the route also needs to
+   * confirm key match — so giving it the full row is cleaner.
+   */
+  findByIdempotencyKey(
+    createdByUserId: string,
+    idempotencyKey: string,
+  ): AgentRow | null {
+    const row = this.db
+      .prepare<[string, string], AgentRow>(
+        `SELECT * FROM agents
+           WHERE created_by_user_id = ?
+             AND idempotency_key = ?`,
+      )
+      .get(createdByUserId, idempotencyKey);
+    return row ?? null;
+  }
+
+  /**
+   * Insert a fresh agent row in `pending_materialization` state
+   * with the supplied `idempotency_key` captured into the row
+   * (the unique index enforces per-creator uniqueness — caller
+   * must have called `findByIdempotencyKey` first and ensured
+   * the slot is free).
+   *
+   * Returns the new row's `AgentRow` (with all v33 fields). The
+   * route's L1 phase calls this BEFORE dispatching the wire intent,
+   * so the resulting row carries everything the L2 dispatch needs:
+   * `id` (= `agent_id` in the wire arm), `host_id` (= placement
+   * resolution), `name` / `runtime` / `model` / `description` /
+   * `idempotency_key` (the metadata snapshot the L0 mismatch check
+   * compares against on later retries).
+   *
+   * The v33 column `materialization_status` defaults to `'active'`
+   * for backfill rows; we explicitly set it to
+   * `'pending_materialization'` here so the new lifecycle is
+   * observable from the moment the row exists.
+   */
+  reserveForMaterialize(
+    input: CreateAgentInput,
+    defaultHostId: string,
+    createdByUserId: string,
+    idempotencyKey: string,
+  ): AgentRow {
+    const id = newId();
+    const now = Date.now();
+    this.db
+      .prepare(
+        `INSERT INTO agents
+         (id, name, display_name, runtime, model, reasoning_effort, fast_mode,
+          host_id, description, created_by_user_id,
+          materialization_status, idempotency_key,
+          created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                 'pending_materialization', ?,
+                 ?, ?)`,
+      )
+      .run(
+        id,
+        input.name,
+        input.name,
+        input.runtime,
+        input.model ?? null,
+        input.reasoning_effort ?? null,
+        input.fast_mode === undefined ? null : input.fast_mode ? 1 : 0,
+        input.host_id ?? defaultHostId,
+        input.description ?? null,
+        createdByUserId,
+        idempotencyKey,
+        now,
+        now,
+      );
+    const row = this.getRow(id);
+    if (!row) throw new Error('reserve insert failed');
+    return row;
+  }
+
+  /**
+   * Flip a `pending_materialization` row to `'active'`. Called by
+   * the route's L3a tx after the daemon ack arrives ok AND all
+   * dependent rows have been inserted in the same tx.
+   *
+   * No-op if the row is already active (legal under same-key
+   * retry hitting an active row — the route should have
+   * short-circuited at L0 dispatch, but defensive idempotence
+   * doesn't hurt). Refuses to flip `failed → active` — that's
+   * never legal (Cindy round-2 P1 #5: `failed → active` requires
+   * `?retry=true` which goes through the reserve path again, NOT
+   * an in-place flip).
+   */
+  flipToActive(id: string): void {
+    this.db
+      .prepare(
+        `UPDATE agents
+            SET materialization_status = 'active',
+                materialization_failed_code = NULL,
+                materialization_failed_at   = NULL,
+                updated_at = ?
+          WHERE id = ?
+            AND materialization_status IN ('pending_materialization', 'active')`,
+      )
+      .run(Date.now(), id);
+  }
+
+  /**
+   * Flip a `pending_materialization` row to `'failed'` with a
+   * typed failure code + the failure timestamp. Called by the
+   * route's L3b path on:
+   *
+   *   - daemon ack typed err (`agent_dir_collision`,
+   *     `fs_quota_exceeded`, `fs_unavailable`, `unsupported_template`,
+   *     `unsupported_runtime`, `internal_error`)
+   *   - daemon ack timeout (`materialize_timeout`)
+   *   - L3a tx failure (`dependent_row_insert_failed`)
+   *   - daemon ack `agent_dir !== agent_home_workspace_path` skew
+   *     (`daemon_internal_error`, §6.5)
+   *
+   * AND by the D4 boot reconciler with code
+   * `backend_crash_during_materialize` for stale pending rows.
+   *
+   * Refuses to flip from `'active'` — once a row is active, the
+   * failure surface is via destructive DELETE, not in-place flip
+   * (Cindy round-1 P1 #2: active-row destructive flow is unchanged).
+   */
+  flipToFailed(id: string, failedCode: string, failedAt: number): void {
+    this.db
+      .prepare(
+        `UPDATE agents
+            SET materialization_status      = 'failed',
+                materialization_failed_code = ?,
+                materialization_failed_at   = ?,
+                updated_at = ?
+          WHERE id = ?
+            AND materialization_status IN ('pending_materialization', 'failed')`,
+      )
+      .run(failedCode, failedAt, Date.now(), id);
+  }
+
+  /**
+   * D4.d D5 — flip a `failed` row back to `pending_materialization`
+   * to support `POST /api/agents` `?retry=true` (§3.2 (a) same-row
+   * retry). Clears `materialization_failed_code` /
+   * `materialization_failed_at` so the next L3b (if this retry also
+   * fails) writes a fresh failure stamp, not a stale one.
+   *
+   * STRICTLY `failed → pending_materialization` ONLY. The status
+   * guard is intentionally narrow:
+   *   - `pending_materialization` → reject. A second in-flight
+   *     retry would race the first; the route layer enforces
+   *     same-row retry serializability via the existing-row
+   *     dispatch (`materialization_in_progress` for pending) which
+   *     fires BEFORE this helper is reached.
+   *   - `active` → reject. The row is already where the user wants
+   *     it; reopening it for retry would needlessly drop the
+   *     `active` dependent-row graph guarantee from §6.3 (an active
+   *     row ALWAYS has its full dependents).
+   *   - `failed` → flip + clear failed_*.
+   *
+   * Returns the agent id on success, or `null` if the guard rejected
+   * (i.e., the row's status was not `failed` at the moment of the
+   * UPDATE). Caller MUST treat `null` as a route-layer 409
+   * `retry_target_not_failed` — the retry race lost to a concurrent
+   * mutation, and the response must not lie about the outcome.
+   *
+   * Why a separate helper instead of reusing `flipToActive` or
+   * `reserveForMaterialize`:
+   *   - `reserveForMaterialize` INSERTs a brand-new row; retry
+   *     UPDATEs the existing row.
+   *   - `flipToActive` carries the wrong status guard
+   *     (`pending_materialization`/`active`) and the wrong
+   *     direction (failed → active is never legal per §3.2; failed
+   *     rows can only re-enter the lifecycle through pending).
+   */
+  flipFailedToReserveAgain(id: string): string | null {
+    const result = this.db
+      .prepare(
+        `UPDATE agents
+            SET materialization_status      = 'pending_materialization',
+                materialization_failed_code = NULL,
+                materialization_failed_at   = NULL,
+                updated_at = ?
+          WHERE id = ?
+            AND materialization_status = 'failed'`,
+      )
+      .run(Date.now(), id);
+    return result.changes === 1 ? id : null;
+  }
+
+  /**
+   * D4.d §5 boot reconciler primitive — mark stale
+   * `pending_materialization` rows as `failed` with the canonical
+   * `backend_crash_during_materialize` code. "Stale" means the row
+   * was created strictly more than `olderThanMs` before `now`.
+   *
+   * This is a **mark-failed-only** operation — it does NOT attempt to
+   * compensate by re-driving the materialize intent. The design choice
+   * is intentional: any row that has been pending past the threshold
+   * has, by definition, outlived the HTTP lifecycle that owns the
+   * per-request flip (commandTimeoutMs default 30s, §3.4); the backend
+   * has no in-process context to resume from, the daemon may or may
+   * not have completed its half, and a compensating retry would
+   * either double-materialize (if the daemon completed) or reissue an
+   * intent the operator already abandoned. The user's recovery path
+   * is `?retry=true` on the failed row via the management UI — that's
+   * a fresh attempt with a new wire intent, not a continuation.
+   *
+   * Caller invariants:
+   *   - Runs SYNCHRONOUSLY during backend bootstrap, after migrations
+   *     are applied and BEFORE the HTTP listener binds (§5). See
+   *     `runBootMaterializeReconciler` in
+   *     `packages/backend/src/runtime/materialize-reconciler.ts` for
+   *     the wired call site.
+   *   - `now` and `olderThanMs` are both wall-clock millisecond
+   *     values; the WHERE clause filters by `created_at < now -
+   *     olderThanMs`. `created_at` for materialize-lifecycle rows is
+   *     stamped at L1 reserve (`reserveForMaterialize`).
+   *   - Rows NEWER than the threshold are left in
+   *     `pending_materialization` intact (they might be genuine
+   *     in-flight requests if a sibling backend instance ever exists;
+   *     today CLAUDE.md pins single-process write, but the threshold
+   *     is the right guard if that model ever changes).
+   *
+   * Returns `{ affected: <count>, ids: <agent_id[]> }`. The ID list
+   * is captured via `UPDATE ... RETURNING id`; callers use it for
+   * structured logging so operators can grep for "which rows did the
+   * reconciler touch on this boot".
+   */
+  markStaleMaterializationsFailed(params: {
+    now: number;
+    olderThanMs: number;
+  }): { affected: number; ids: string[] } {
+    const { now, olderThanMs } = params;
+    const cutoff = now - olderThanMs;
+    // SQLite `UPDATE ... RETURNING` returns one row per updated row
+    // (better-sqlite3 surfaces it via `.all()`). The `RETURNING id`
+    // clause lets the boot log enumerate the affected agent ids
+    // without an extra SELECT round-trip.
+    const rows = this.db
+      .prepare<
+        [number, number, number],
+        { id: string }
+      >(
+        `UPDATE agents
+            SET materialization_status      = 'failed',
+                materialization_failed_code = 'backend_crash_during_materialize',
+                materialization_failed_at   = ?,
+                updated_at = ?
+          WHERE materialization_status = 'pending_materialization'
+            AND created_at < ?
+          RETURNING id`,
+      )
+      .all(now, now, cutoff);
+    return {
+      affected: rows.length,
+      ids: rows.map(r => r.id),
+    };
   }
 
   /**

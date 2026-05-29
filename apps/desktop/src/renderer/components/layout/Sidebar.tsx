@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { Archive, Bookmark, Search } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { useHostProvenanceGate } from '@/features/hosts/hooks';
 import { WorkspaceGroup, type WorkspaceItem } from './WorkspacesPanel';
 
 interface SidebarProps {
@@ -26,6 +27,7 @@ interface SidebarProps {
 }
 
 export function Sidebar(props: SidebarProps): JSX.Element {
+  const hostProvenance = useHostProvenanceGate();
   const { dms, regular, archived } = useMemo(() => {
     const dms: WorkspaceItem[] = [];
     const regular: WorkspaceItem[] = [];
@@ -119,6 +121,9 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           workspaces={dms}
           selectedWorkspaceId={workspaceHighlight}
           onSelectWorkspace={props.onSelectWorkspace}
+          canRevealWorkspace={workspace =>
+            hostProvenance.canUseLocalHostPathFor(workspace.workspace_host_id)
+          }
           emptyHint="新建 agent 时会自动创建 DM"
         />
         <WorkspaceGroup
@@ -128,6 +133,9 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           selectedWorkspaceId={workspaceHighlight}
           onSelectWorkspace={props.onSelectWorkspace}
           onPinWorkspace={props.onPinWorkspace}
+          canRevealWorkspace={workspace =>
+            hostProvenance.canUseLocalHostPathFor(workspace.workspace_host_id)
+          }
           onAdd={props.onCreateWorkspace}
           emptyHint={
             <>
@@ -143,6 +151,9 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             workspaces={archived}
             selectedWorkspaceId={workspaceHighlight}
             onSelectWorkspace={props.onSelectWorkspace}
+            canRevealWorkspace={workspace =>
+              hostProvenance.canUseLocalHostPathFor(workspace.workspace_host_id)
+            }
             defaultExpanded={false}
           />
         ) : null}

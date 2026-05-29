@@ -6,7 +6,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('./api', () => ({
   getBackendInfo: vi.fn().mockResolvedValue({
     url: 'http://127.0.0.1:1234',
-    auth_token: 'test-token',
+    mode: 'embedded',
+    local_host_id: 'host-local',
+    local_host_status: 'claimed',
+    local_host_ws_attached_at: null,
+    // D3.c Commit 4 — `BackendInfo` snapshot now carries the
+    // daemon-config `server_url` view. ws-client doesn't read this
+    // field, but the mock matches the typed surface so future typed
+    // mocks (and the structural twin between `preload/index.ts` and
+    // `api.d.ts`) stay in sync.
+    local_host_server_url: 'http://127.0.0.1:1234',
   }),
 }));
 
@@ -158,8 +167,9 @@ describe('EventWsClient — viewer scope canonicalisation', () => {
     const ws = createdSockets[0]!;
 
     ws.fireOpen();
-    // `auth` frame goes out first.
-    expect(ws.sent[0]).toEqual({ type: 'auth', token: 'test-token' });
+    // Auth is owned by Electron main's HttpOnly websocket cookie; the
+    // renderer must not send any bearer-bearing frame.
+    expect(ws.sent).toEqual([]);
 
     ws.fireMessage({
       type: 'authenticated',

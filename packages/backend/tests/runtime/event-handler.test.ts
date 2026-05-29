@@ -23,28 +23,28 @@ import {
   HOST_PROTOCOL_VERSION,
   KNOWN_CAPABILITIES_V1,
   type EventFrame,
-  type HostClient,
   type RuntimeStatusResult,
 } from '@silverhand/host';
 import type { AgentRunState } from '@silverhand/shared';
 import { RunStateCache } from '../../src/runtime/run-state-cache.js';
-import { RuntimeBridge } from '../../src/runtime/bridge.js';
 import {
   RuntimeEventHandler,
   type EventPublisher,
   type InboxAckSink,
   type RuntimeEventHandlerDeps,
+  type RuntimeEventSource,
+  type RuntimeStatusBridge,
 } from '../../src/runtime/event-handler.js';
 import type { RuntimeStatusProjector } from '../../src/runtime/status-projector.js';
 
 function makeFakeClient(): {
-  client: HostClient;
+  client: RuntimeEventSource;
   emit: (frame: EventFrame) => void;
   triggerReconnect: () => void;
 } {
   const eventHandlers = new Set<(frame: EventFrame) => void>();
   const reconnectHandlers = new Set<() => void>();
-  const fake = {
+  const fake: RuntimeEventSource = {
     subscribe(handler: (frame: EventFrame) => void) {
       eventHandlers.add(handler);
       return () => eventHandlers.delete(handler);
@@ -53,7 +53,7 @@ function makeFakeClient(): {
       reconnectHandlers.add(handler);
       return () => reconnectHandlers.delete(handler);
     },
-  } as unknown as HostClient;
+  };
   return {
     client: fake,
     emit(frame) {
@@ -66,7 +66,7 @@ function makeFakeClient(): {
 }
 
 function makeBridge(snapshot: RuntimeStatusResult): {
-  bridge: RuntimeBridge;
+  bridge: RuntimeStatusBridge;
   statusCalls: () => number;
 } {
   let count = 0;
@@ -75,7 +75,7 @@ function makeBridge(snapshot: RuntimeStatusResult): {
       count += 1;
       return snapshot;
     },
-  } as unknown as RuntimeBridge;
+  } as unknown as RuntimeStatusBridge;
   return { bridge, statusCalls: () => count };
 }
 
@@ -127,6 +127,15 @@ function makeForwardingProjector(publisher: EventPublisher): RuntimeStatusProjec
           agent_id: agentId,
           status: 'active',
           cli_session_id: cliSessionId,
+        },
+      });
+    },
+    runtimeReady({ conversationId, agentId }) {
+      publisher.publish(conversationId, {
+        kind: 'agent_status',
+        payload: {
+          agent_id: agentId,
+          status: 'active',
         },
       });
     },
@@ -311,7 +320,7 @@ describe('RuntimeEventHandler — hydrate on reconnect', () => {
     };
     const bridge = {
       runtimeStatus: async () => snapshot,
-    } as unknown as RuntimeBridge;
+    } as unknown as RuntimeStatusBridge;
     const { publisher } = makePublisher();
     const { sink } = makeInboxAck();
     const handler = makeHandler({
@@ -351,7 +360,7 @@ describe('RuntimeEventHandler — daemon pid change (daemon swap)', () => {
     };
     const bridge = {
       runtimeStatus: async () => snapshot,
-    } as unknown as RuntimeBridge;
+    } as unknown as RuntimeStatusBridge;
     const { publisher } = makePublisher();
     const { sink } = makeInboxAck();
     const handler = makeHandler({
@@ -397,7 +406,7 @@ describe('RuntimeEventHandler — daemon pid change (daemon swap)', () => {
           ],
         } as RuntimeStatusResult;
       },
-    } as unknown as RuntimeBridge;
+    } as unknown as RuntimeStatusBridge;
     const { publisher } = makePublisher();
     const { sink } = makeInboxAck();
     const handler = makeHandler({
@@ -640,7 +649,7 @@ describe('RuntimeEventHandler — event routing', () => {
         new Promise<RuntimeStatusResult>(resolve => {
           resolveStatus = resolve;
         }),
-    } as unknown as RuntimeBridge;
+    } as unknown as RuntimeStatusBridge;
     const { publisher, published } = makePublisher();
     const { sink } = makeInboxAck();
     const handler = makeHandler({
@@ -878,7 +887,7 @@ describe('RuntimeEventHandler — event routing', () => {
     expect(payload).not.toHaveProperty('timeout_reason');
   });
 
-  it('runtime_ready_for_drain → invokes onReadyForDrain callback (cache phase updated)', async () => {
+  it('runtime_ready_for_drain → projects active and invokes onReadyForDrain callback', async () => {
     const cache = new RunStateCache();
     const { client, emit } = makeFakeClient();
     const { bridge } = makeBridge({
@@ -893,7 +902,7 @@ describe('RuntimeEventHandler — event routing', () => {
         },
       ],
     });
-    const { publisher } = makePublisher();
+    const { publisher, published } = makePublisher();
     const { sink } = makeInboxAck();
     const calls: Array<[string, string]> = [];
     const handler = makeHandler({
@@ -915,6 +924,14 @@ describe('RuntimeEventHandler — event routing', () => {
     });
     expect(calls).toEqual([['c1', 'a1']]);
     expect(cache.get('c1', 'a1')?.phase).toBe('ready');
+    expect(published).toContainEqual({
+      conv: 'c1',
+      kind: 'agent_status',
+      payload: {
+        agent_id: 'a1',
+        status: 'active',
+      },
+    });
   });
 });
 
@@ -1017,7 +1034,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
     expect(payload.event.input.command).toContain('<truncated');
   });
 
-  it('runtime_parsed_event_dropped does NOT produce an agent_event (logged-only)', async () => {
+  it('runtime_parsed_event_dropped does NOT produce a fake agent_event', async () => {
     const cache = new RunStateCache();
     const { client, emit } = makeFakeClient();
     const { bridge } = makeBridge({
@@ -1057,10 +1074,60 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
       reason: 'frame_too_large',
       ts: 1700000001200,
     });
-    // No SSE publish (renderer has no UI for dropped frames yet).
+    // No fake parsed event publish.
     expect(published.find(p => p.kind === 'agent_event')).toBeUndefined();
     // But the operator-visible warn lands so SREs can see it in logs.
     expect(warns.some(w => (w as { event?: string }).event === 'runtime_parsed_event_dropped')).toBe(true);
+  });
+
+  it('runtime_parsed_event_dropped projects metadata-only loss onto existing run state', async () => {
+    const cache = new RunStateCache();
+    const { client, emit } = makeFakeClient();
+    const runState = {
+      ...RUN_STATE,
+      conversationId: 'c1',
+      agentId: 'a1',
+      status: 'tool_running' as const,
+    };
+    const { bridge } = makeBridge({
+      runtimes: [
+        {
+          conversation_id: 'c1',
+          agent_id: 'a1',
+          pid: 1234,
+          phase: 'ready',
+          run_state: runState,
+          started_at: 1700000000000,
+        },
+      ],
+    });
+    const { publisher, published } = makePublisher();
+    const { sink } = makeInboxAck();
+    const handler = makeHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: sink,
+    });
+    await handler.start();
+
+    emit({
+      event: 'runtime_parsed_event_dropped',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed_kind: 'tool_call',
+      encoded_bytes: 2_000_000,
+      reason: 'frame_too_large',
+      ts: 1700000001200,
+    });
+
+    expect(published.find(p => p.kind === 'agent_event')).toBeUndefined();
+    const activity = published.find(p => p.kind === 'agent_activity');
+    expect(activity?.payload).toMatchObject({
+      status: 'tool_running',
+      detail: 'parsed_event_dropped:tool_call:frame_too_large:2000000',
+    });
   });
 });
 
@@ -1075,7 +1142,7 @@ describe('RuntimeEventHandler — cache-not-ready safety', () => {
         new Promise<RuntimeStatusResult>(resolve => {
           resolveStatus = resolve;
         }),
-    } as unknown as RuntimeBridge;
+    } as unknown as RuntimeStatusBridge;
     const { publisher, published } = makePublisher();
     const { sink } = makeInboxAck();
     const handler = makeHandler({
@@ -1671,14 +1738,14 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
   });
 });
 
-// B1 (Cindy `usjxj8AxX4AvJ5E-`): the handler routes the four
+// B1 (Cindy `usjxj8AxX4AvJ5E-`): the handler routes
 // status-mutating events to the `RuntimeStatusProjector` sink. These
 // tests pin the routing contract — they don't re-test the sink's
 // DB+SSE behavior (that's in status-projector.test.ts) — only that
 // the handler hands the projector the right input for each event.
 describe('RuntimeEventHandler — projector routing (B1)', () => {
   interface ProjectorCall {
-    kind: 'sessionInit' | 'runtimeExit' | 'initRetrying' | 'initCooldown';
+    kind: 'sessionInit' | 'runtimeReady' | 'runtimeExit' | 'initRetrying' | 'initCooldown';
     input: Record<string, unknown>;
   }
 
@@ -1689,6 +1756,7 @@ describe('RuntimeEventHandler — projector routing (B1)', () => {
     const calls: ProjectorCall[] = [];
     const projector: RuntimeStatusProjector = {
       sessionInit: input => calls.push({ kind: 'sessionInit', input: { ...input } }),
+      runtimeReady: input => calls.push({ kind: 'runtimeReady', input: { ...input } }),
       runtimeExit: input => calls.push({ kind: 'runtimeExit', input: { ...input } }),
       initRetrying: input => calls.push({ kind: 'initRetrying', input: { ...input } }),
       initCooldown: input => calls.push({ kind: 'initCooldown', input: { ...input } }),
@@ -1755,6 +1823,39 @@ describe('RuntimeEventHandler — projector routing (B1)', () => {
       ts: 1700000001000,
     });
     expect(calls).toHaveLength(0);
+  });
+
+  it('runtime_ready_for_drain → projector.runtimeReady before first session_init', async () => {
+    const cache = new RunStateCache();
+    const { client, emit } = makeFakeClient();
+    const { bridge } = makeBridge({ runtimes: [] });
+    const { publisher } = makePublisher();
+    const { sink } = makeInboxAck();
+    const { projector, calls } = makeRecordingProjector();
+    const handler = new RuntimeEventHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: sink,
+      statusProjector: projector,
+    });
+    await handler.start();
+    emit({
+      event: 'runtime_ready_for_drain',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      ts: 1700000001000,
+    });
+    expect(calls).toEqual([
+      {
+        kind: 'runtimeReady',
+        input: {
+          conversationId: 'c1',
+          agentId: 'a1',
+        },
+      },
+    ]);
   });
 
   it('runtime_exit → projector.runtimeExit with intentional+code+initTimedOut+fatalError+runState', async () => {

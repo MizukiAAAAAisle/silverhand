@@ -1,6 +1,11 @@
 # Silverhand — Permissions Design
 
-> **Status**: Spec aligned 2026-05-07 in #attachment-鉴权讨论 channel; awaiting Slice A' implementation (task #125). Until A' lands, the code reflects the "Current v1 model" in §3, not the "Target model" in §4.
+> **Status**: Historical pre-session design note, originally aligned
+> 2026-05-07. Current auth/host truth lives in
+> [`auth-and-host-model.md`](./auth-and-host-model.md) and
+> [`cli-system.md`](./cli-system.md). Stage C.6 retired the shared
+> `server-config.json` `auth_token`; public `/api/*` uses user session
+> bearers and `/internal/*` uses scoped per-agent bearers.
 >
 > 与 [`core-design.md`](./core-design.md) 的产品/数据模型对齐——本 doc 在数据模型旁定义"谁能对资源做什么"。
 >
@@ -12,7 +17,7 @@
 
 ## 1. 为什么需要这份 doc
 
-silverhand 的鉴权状态今天是"能跑起来但概念散落"——`auth_token`、`X-Silverhand-User-Id`、`SendMessageActor / ChannelActor / TaskActor / ThreadActor`、`createdByKind/createdById`、`canViewWorkspace`/`canViewConversation` 占位函数，分布在 routes / services / repos / WS 各处，每个都在用自己的话说"谁在操作"。
+silverhand 的早期鉴权状态是"能跑起来但概念散落"——共享 `auth_token`、`X-Silverhand-User-Id`、`SendMessageActor / ChannelActor / TaskActor / ThreadActor`、`createdByKind/createdById`、`canViewWorkspace`/`canViewConversation` 占位函数，分布在 routes / services / repos / WS 各处，每个都在用自己的话说"谁在操作"。
 
 随着 v1 单机收尾、远端/多人在地平线，必须把这些散落的概念折成**一套统一的鉴权模型**：
 
@@ -32,8 +37,8 @@ silverhand 的鉴权状态今天是"能跑起来但概念散落"——`auth_toke
 Request
   │
   ├── 1. Authentication —— 门票对不对？
-  │     v1: Bearer auth_token （shared）
-  │     未来: per-principal session token / JWT
+  │     current: user session bearer / scoped per-agent bearer
+  │     historical v1: shared Bearer auth_token（retired in Stage C.6）
   │
   ├── 2. Principal resolution —— 这次请求是谁？
   │     输出: Principal = user / agent / system
@@ -56,11 +61,11 @@ Request
 
 ---
 
-## 3. 当前 v1 模型（实际跑的）
+## 3. 历史 v1 模型（已被 session / host work 取代）
 
 ### 3.1 Authentication
 
-- 共享 `auth_token`：backend 启动时随机生成，写入 `~/.silverhand/server-config.json`。
+- 共享 `auth_token`：backend 启动时随机生成，写入 `~/.silverhand/server-config.json`。（已在 Stage C.6 退役）
 - renderer 启动时拿到共享 token；agent CLI 请求使用 per-launch
   `SILVERHAND_AUTH_TOKEN`。
 - `/internal/*` 路由强制 Bearer 校验；`/api/*` 路由**不校验**（已知缺口，归 Slice B）。
@@ -405,7 +410,7 @@ Task 是 message 的 promotion，ACL 继承所在 conversation。
 |---|---|---|
 | `users(id, ...)` | human 用户表 | v1 没有；renderer hardcode `local` |
 | `human_workspace_members(workspace_id, user_id, role)` | human ↔ workspace ACL 表 | **不要复用 `workspace_members`**（已是 agent 表）|
-| Per-principal session token | 替代共享 `auth_token` | 落地时 Bearer middleware 改解析；Principal middleware 改从 claims 取身份 |
+| Per-principal session token | 替代共享 `auth_token` | 已落地；public Bearer middleware 只接受 user session token |
 | Backend-signed agent token | spawn 时 backend 签 short-lived token，claims 锁 agent_id + conversation_id | 替代当前"信任 URL 路径推断"|
 | `attachment-view-token` | 短期签 URL，给 `<img src>` 用 | mint 必须 backend 做，secret 不下发 renderer |
 | `attachment-share-link` | 外部分享链接 | 独立路由 / 独立签发器 / 独立撤销列表，**不与 view-token 复用 helper**|

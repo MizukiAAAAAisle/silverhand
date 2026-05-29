@@ -2155,4 +2155,166 @@ export const migrations: Migration[] = [
         ON schedules(target_conversation_id);
     `,
   },
+  {
+    version: 29,
+    name: 'user_auth_credentials',
+    // Stage A.1 remote-backend auth foundation. Keep the existing
+    // profile identity model intact: `users` remains the profile root,
+    // `email` is only the nullable login handle, and password material
+    // lives in its own one-to-zero-or-one table.
+    up: `
+      ALTER TABLE users ADD COLUMN email TEXT;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_users_email_when_set
+        ON users(email COLLATE NOCASE)
+        WHERE email IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS user_password_credentials (
+        user_id               TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        password_hash         TEXT NOT NULL,
+        password_hash_params  TEXT NOT NULL CHECK (json_valid(password_hash_params)),
+        password_updated_at   INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS auth_sessions (
+        id             TEXT PRIMARY KEY,
+        user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        token_hash     TEXT NOT NULL UNIQUE,
+        created_at     INTEGER NOT NULL,
+        last_used_at   INTEGER NOT NULL,
+        revoked_at     INTEGER,
+        user_agent     TEXT,
+        ip_first_seen  TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_auth_sessions_user
+        ON auth_sessions(user_id, revoked_at, last_used_at DESC);
+    `,
+  },
+  {
+    version: 30,
+    name: 'host_identity_credentials',
+    // Stage B.1 remote-backend host identity foundation. Existing
+    // registry hosts may be unclaimed until the local claim-or-create
+    // route binds them in B.2; credential issuance still requires a
+    // user-bound host at the service boundary.
+    up: `
+      ALTER TABLE hosts ADD COLUMN user_id TEXT REFERENCES users(id) ON DELETE CASCADE;
+      ALTER TABLE hosts ADD COLUMN installation_id TEXT;
+      ALTER TABLE hosts ADD COLUMN last_seen_at INTEGER;
+      ALTER TABLE hosts ADD COLUMN revoked_at INTEGER;
+
+      CREATE INDEX IF NOT EXISTS idx_hosts_user
+        ON hosts(user_id, revoked_at, created_at);
+
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_hosts_user_installation_when_set
+        ON hosts(user_id, installation_id)
+        WHERE user_id IS NOT NULL AND installation_id IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS host_credentials (
+        id           TEXT PRIMARY KEY,
+        host_id      TEXT NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+        token_hash   TEXT NOT NULL UNIQUE,
+        kind         TEXT NOT NULL CHECK (kind IN ('long_lived', 'bootstrap')),
+        expires_at   INTEGER,
+        consumed_at  INTEGER,
+        revoked_at   INTEGER
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_host_credentials_host
+        ON host_credentials(host_id, kind, revoked_at, expires_at);
+    `,
+  },
+  {
+    version: 31,
+    name: 'host_installation_unique_active_only',
+    // Stage B.4: revoking a local host must not lock the same desktop
+    // installation out forever. The B.1 partial-unique index keyed
+    // (user_id, installation_id) for any non-null pair, so a revoked
+    // row blocked the next claim for the same installation. Switch the
+    // partial predicate to active-only — revoked rows are kept for
+    // audit history, but a new claim for the same (user, installation)
+    // pair mints a fresh active host row. `claimOrCreateLocal` /
+    // `getByUserInstallation` filter on `revoked_at IS NULL` to match.
+    up: `
+      DROP INDEX IF EXISTS uniq_hosts_user_installation_when_set;
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_hosts_user_installation_when_active
+        ON hosts(user_id, installation_id)
+        WHERE user_id IS NOT NULL
+          AND installation_id IS NOT NULL
+          AND revoked_at IS NULL;
+    `,
+  },
+  {
+    version: 32,
+    name: 'conversation_inbox_delivery_in_flight',
+    // D2.e: DB inbox remains the only durable delivery queue. In-flight
+    // columns are a short lease owned by the current host WS connection so
+    // reconnect/replacement can roll rows back to pending instead of relying
+    // on a process-local replay queue.
+    up: `
+      ALTER TABLE conversation_inboxes ADD COLUMN in_flight_owner TEXT;
+      ALTER TABLE conversation_inboxes ADD COLUMN in_flight_at INTEGER;
+      ALTER TABLE conversation_inboxes ADD COLUMN failed_at INTEGER;
+      ALTER TABLE conversation_inboxes ADD COLUMN failed_reason TEXT;
+
+      CREATE INDEX idx_conversation_inbox_replay_pending
+        ON conversation_inboxes(conversation_id, agent_id, delivered_at, failed_at, in_flight_owner, id);
+
+      CREATE INDEX idx_conversation_inbox_in_flight_owner
+        ON conversation_inboxes(in_flight_owner, delivered_at, failed_at);
+    `,
+  },
+  {
+    version: 33,
+    name: 'agent_materialization_status',
+    // D4.d (additive, server↔daemon formal semantics; see
+    // docs/remote-backend-d4d-design.md §4.1): tag the `agents` row
+    // with the daemon-side materialization lifecycle so
+    // `POST /api/agents` can keep the row reserved across the wire
+    // round-trip and so failed/in-progress rows are excluded from
+    // default reads.
+    //
+    // - materialization_status:    enum {pending_materialization, active, failed}.
+    //   Existing rows backfill to 'active' — they were written through
+    //   the legacy backend-direct-fs path, so the L1 dir already
+    //   exists. New rows START in 'pending_materialization' and flip
+    //   to 'active' on daemon ack (L3a) or 'failed' on typed error /
+    //   timeout (L3b).
+    // - materialization_failed_code / materialization_failed_at:
+    //   populated only when status='failed'. failed_code mirrors the
+    //   wire AgentMaterializeErrorCodeSchema plus server-side codes
+    //   (materialize_timeout / host_attach_pending /
+    //   dependent_row_insert_failed / backend_crash_during_materialize).
+    // - idempotency_key: client-supplied opaque retry key, 1..64
+    //   chars, [A-Za-z0-9_-], stored verbatim and unique PER CREATOR
+    //   (NOT globally). A globally-unique index would leak the
+    //   existence of another user's row through "your key is taken";
+    //   per-user scoping preserves HTTP idempotency within each
+    //   caller while eliminating that side channel. All lookup paths
+    //   MUST filter by (created_by_user_id, idempotency_key) — never
+    //   by key alone.
+    up: `
+      ALTER TABLE agents ADD COLUMN materialization_status TEXT NOT NULL
+        DEFAULT 'active'
+        CHECK (materialization_status IN (
+          'pending_materialization', 'active', 'failed'
+        ));
+      ALTER TABLE agents ADD COLUMN materialization_failed_code TEXT;
+      ALTER TABLE agents ADD COLUMN materialization_failed_at INTEGER;
+      ALTER TABLE agents ADD COLUMN idempotency_key TEXT;
+
+      CREATE UNIQUE INDEX idx_agents_idempotency_key_per_user
+        ON agents (created_by_user_id, idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
+    `,
+  },
 ];
+
+export const CURRENT_SCHEMA_VERSION =
+  migrations[migrations.length - 1]?.version ?? 0;
+
+// D1.d remote-backend V1 startup guard: this is the current `main` baseline at
+// the D1 cutover. Older DBs must upgrade through an intermediate release first.
+// Brand-new empty databases are still initialized from scratch.
+export const MIN_SUPPORTED_SCHEMA_VERSION = 28;

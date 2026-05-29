@@ -1,7 +1,7 @@
 /**
  * Tests for `DbRuntimeStatusProjector` — the narrow sink that owns
  * both the DB write to `conversation_agents` AND the matching
- * `agent_status` SSE for the four status-mutating runtime events.
+ * `agent_status` SSE for status-mutating runtime events.
  *
  * Cindy `usjxj8AxX4AvJ5E-` B1 pin:
  *   - status mapping lives HERE, not in EventHandler
@@ -141,6 +141,35 @@ describe('DbRuntimeStatusProjector — sessionInit', () => {
       });
       expect(fix.row().status).toBe('active');
       expect(fix.events).toHaveLength(2);
+    } finally {
+      fix.cleanup();
+    }
+  });
+});
+
+describe('DbRuntimeStatusProjector — runtimeReady', () => {
+  it('writes status=active without touching cli_session_id, publishes agent_status', () => {
+    const fix = makeFixture({ initialStatus: 'starting', initialCliSessionId: 'sess-existing' });
+    try {
+      fix.projector.runtimeReady({
+        conversationId: fix.channelId,
+        agentId: fix.agentId,
+      });
+      expect(fix.row()).toEqual({
+        status: 'active',
+        pid: null,
+        cli_session_id: 'sess-existing',
+      });
+      expect(fix.events).toHaveLength(1);
+      expect(fix.events[0]).toMatchObject({
+        conv: fix.channelId,
+        kind: 'agent_status',
+        payload: {
+          agent_id: fix.agentId,
+          status: 'active',
+        },
+      });
+      expect(fix.events[0]!.payload).not.toHaveProperty('cli_session_id');
     } finally {
       fix.cleanup();
     }

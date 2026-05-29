@@ -1,9 +1,33 @@
 export const apiPaths = {
   health: '/api/health',
+  serverInfo: '/api/server/info',
   runtimes: '/api/runtimes',
+  eventWebSocket: '/api/ws/events',
 
   // hosts
   hosts: '/api/hosts',
+  /** D2 daemon-outbound WebSocket endpoint. The bundled desktop daemon
+   *  presents `Authorization: Bearer <host_token>` during upgrade;
+   *  this is host-token auth, not a user-session route. */
+  hostConnect: '/api/hosts/connect',
+  hostClaimOrCreate: '/api/hosts/claim-or-create',
+  /** Soft-delete a host the caller owns (Stage B.4). Sets
+   *  `hosts.revoked_at` and bulk-revokes every active row in
+   *  `host_credentials` for that host in one transaction. Idempotent:
+   *  re-revoking an already-revoked host still sweeps any straggler
+   *  credentials but does not move the original tombstone timestamp.
+   *  No row cascade — agents/conversations bound to the host are
+   *  preserved; runtime placement fails closed instead. Bearer must
+   *  be a user session bearer. */
+  hostRevoke: (id: string) => `/api/hosts/${id}/revoke`,
+  /** Rotate the long-lived credential for a host the caller owns
+   *  (Stage B.4). Server applies a 60-second grace to the prior
+   *  credential and mints a fresh long_lived row, returning the new
+   *  cleartext token. The token is consumed by Electron main only —
+   *  `assertApiProxyPath` blocks this route from the generic renderer
+   *  proxy, and the desktop IPC strips the token from any value that
+   *  crosses back to the renderer. */
+  hostRotateToken: (id: string) => `/api/hosts/${id}/rotate-token`,
 
   // agents
   agents: '/api/agents',
@@ -127,23 +151,11 @@ export const apiPaths = {
   // host-wide app settings (proxy_url etc). Flat KV.
   settings: '/api/settings',
 
-  // current viewer (the local human user). After PR-1 (V1 single
-  // user), this resolves to the registered `users` row pointed at by
-  // `app_settings.viewer_user_id`. Pre-registration the endpoint
-  // returns the discriminated `RegistrationRequired` shape so the
-  // renderer can mount the registration gate. In V2 multi-user the
-  // same endpoints continue to work — only the principal source
-  // changes from `app_settings` to session/token claims.
+  // current viewer (the local human user). Pre-authentication the
+  // endpoint returns the discriminated `RegistrationRequired` shape so
+  // the renderer can mount the auth gate.
   me: '/api/me',
   meAvatar: '/api/me/avatar',
-  /** One-shot identity registration. Sole creator of `users` rows —
-   *  the renderer calls this on V1 first launch (when `/api/me`
-   *  returned `registration_required: true`) and V2 will call it
-   *  after auth signup. Atomically INSERTs the user row and writes
-   *  `app_settings.viewer_user_id`. Returns 409 when the viewer has
-   *  already registered. The pre-register gate whitelists only this
-   *  route + `GET /api/me` + `GET /api/health`. */
-  register: '/api/register',
   /** Public avatar fetch for any user. Returns the blob bytes (auth
    *  via the standard principal header). The DTO's `avatar_url`
    *  points here; renderer resolves it via the same auth-headers
@@ -163,6 +175,17 @@ export const apiPaths = {
   taskClaim: (messageId: string) => `/api/tasks/${messageId}/claim`,
   taskUnclaim: (messageId: string) => `/api/tasks/${messageId}/unclaim`,
   taskStatus: (messageId: string) => `/api/tasks/${messageId}/status`,
+} as const;
+
+export const probePaths = {
+  readyz: '/readyz',
+} as const;
+
+export const authPaths = {
+  embeddedBootstrap: '/auth/embedded-bootstrap',
+  signup: '/auth/signup',
+  login: '/auth/login',
+  logout: '/auth/logout',
 } as const;
 
 export const internalPaths = {

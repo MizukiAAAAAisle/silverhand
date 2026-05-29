@@ -1,6 +1,6 @@
 import type { Hono } from 'hono';
 import type { BackendContext } from '../context.js';
-import type { AppEnv } from './principal.js';
+import { setPrincipal, type AppEnv } from './principal.js';
 
 export interface PublicBearerOptions {
   /** Paths that bypass the Bearer check (matched exactly). */
@@ -18,6 +18,10 @@ export interface PublicBearerOptions {
  * `allowlist` paths bypass the check (e.g. `/api/health` for liveness
  * probes). Match is exact, not prefix — a future probe under
  * `/api/health/...` would need to be added explicitly.
+ *
+ * Public API requests must carry a user session bearer. The retired
+ * embedded server-config token is not accepted here; embedded startup
+ * uses `/auth/embedded-bootstrap` to mint a normal user session instead.
  */
 export function installPublicBearerMiddleware(
   app: Hono<AppEnv>,
@@ -32,7 +36,7 @@ export function installPublicBearerMiddleware(
     }
     const header = c.req.header('authorization') ?? '';
     const token = header.replace(/^Bearer\s+/i, '').trim();
-    if (!token || token !== ctx.serverConfig.auth_token) {
+    if (!token) {
       ctx.logger.warn(
         {
           path: c.req.path,
@@ -43,6 +47,20 @@ export function installPublicBearerMiddleware(
       );
       return c.json({ error: 'unauthorized' }, 401);
     }
-    await next();
+    const session = ctx.authSessions.validateSessionToken(token);
+    if (session.ok) {
+      setPrincipal(c, { kind: 'user', userId: session.session.user_id });
+      await next();
+      return;
+    }
+    ctx.logger.warn(
+      {
+        path: c.req.path,
+        hasHeader: !!header,
+        tokenLen: token.length,
+      },
+      'public: unauthorized request',
+    );
+    return c.json({ error: 'unauthorized' }, 401);
   });
 }

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { X_SILVERHAND_LEGACY_USER_ID_HEADER } from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 interface SetupResult {
@@ -112,7 +113,7 @@ describe('Tasks (PR-T1)', () => {
     const h = http(t);
 
     // User posts a normal message; alice promotes it.
-    const viewer = http(t, { 'x-silverhand-user-id': 'teammate' });
+    const viewer = http(t, { [X_SILVERHAND_LEGACY_USER_ID_HEADER]: 'teammate' });
     const userMsg = await (
       await viewer.post(`/api/channels/${sessionId}/messages`, {
         content: 'please refactor auth module',
@@ -312,7 +313,7 @@ describe('Tasks (PR-T1)', () => {
       { tasks: [{ title: 'numbered task' }] },
     );
     // post a regular message for promote-and-claim
-    const viewer = http(t, { 'x-silverhand-user-id': 'teammate' });
+    const viewer = http(t, { [X_SILVERHAND_LEGACY_USER_ID_HEADER]: 'teammate' });
     const userMsg = await (
       await viewer.post(`/api/channels/${sessionId}/messages`, {
         content: 'please look into the deadlock',

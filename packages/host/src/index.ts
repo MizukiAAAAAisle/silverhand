@@ -30,6 +30,9 @@ export {
   spawnDaemonChild,
   type DaemonLauncher,
   type DaemonHandle,
+  type DaemonFatalExitInfo,
+  type DaemonFatalExitKind,
+  type DaemonGenerationInfo,
   type SpawnDaemonOptions,
 } from './spawn.js';
 export {
@@ -39,8 +42,11 @@ export {
   HelloResultSchema,
   HOST_PROTOCOL_VERSION,
   KNOWN_CAPABILITIES_V1,
+  LooseAnyFrameSchema,
+  LooseResponseFrameSchema,
   RequestFrameSchema,
   ResponseFrameSchema,
+  intentErrorSchema,
   intentSchemas,
   encodeFrame,
   splitNdjson,
@@ -48,9 +54,12 @@ export {
   type IntentName,
   type IntentParams,
   type IntentResult,
+  type IntentError,
   type HelloParams,
   type HelloResult,
   type KnownCapabilityV1,
+  type LooseAnyFrame,
+  type LooseResponseFrame,
   type RequestFrame,
   type ResponseFrame,
   type ResponseError,
@@ -78,5 +87,86 @@ export {
   type RuntimeOutputPauseResult,
   type RuntimeOutputResumeParams,
   type RuntimeOutputResumeResult,
+  type HostOutboundAttachParams,
+  type HostOutboundAttachResult,
+  type HostOutboundAttachFailureReason,
+  type HostOutboundDetachParams,
+  type HostOutboundDetachResult,
+  type HostOutboundReloadParams,
+  type HostOutboundReloadResult,
+  type HostOutboundReloadFailureReason,
 } from './protocol.js';
+export {
+  OUTBOUND_DAEMON_EVENT_KINDS,
+  OUTBOUND_PROTOCOL_VERSION,
+  OUTBOUND_SERVER_COMMAND_KINDS,
+  AgentMaterializeErrorCodeSchema,
+  AgentMaterializeParamsSchema,
+  AgentMaterializeResultSchema,
+  AgentMaterializeWireErrorSchema,
+  OutboundDaemonToServerCommandResponseFrameSchema,
+  OutboundDaemonToServerEventFrameSchema,
+  OutboundFrameSchema,
+  OutboundHeartbeatFrameSchema,
+  OutboundHeartbeatPingFrameSchema,
+  OutboundHeartbeatPongFrameSchema,
+  OutboundReadyEventFrameSchema,
+  OutboundServerToDaemonCommandFrameSchema,
+  RotateTokenParamsSchema,
+  RotateTokenResultSchema,
+  encodeOutboundFrame,
+  outboundServerCommandSchemas,
+  type AgentMaterializeErrorCode,
+  type AgentMaterializeParams,
+  type AgentMaterializeResult,
+  type AgentMaterializeWireError,
+  type OutboundCommandError,
+  type OutboundDaemonEventKind,
+  type OutboundDaemonToServerCommandResponseFrame,
+  type OutboundDaemonToServerEventFrame,
+  type OutboundFrame,
+  type OutboundHeartbeatFrame,
+  type OutboundHeartbeatPingFrame,
+  type OutboundHeartbeatPongFrame,
+  type OutboundServerCommandError,
+  type OutboundServerCommandKind,
+  type OutboundServerCommandParams,
+  type OutboundServerCommandResult,
+  type OutboundServerToDaemonCommandFrame,
+  type RotateTokenParams,
+  type RotateTokenResult,
+} from './outbound-protocol.js';
 export { DAEMON_VERSION } from './daemon/version.js';
+/**
+ * D5.a-2 — daemon-side local outbound frame server + its default socket
+ * path helper. The embedded backend (D5.a-3) starts the daemon with
+ * `localOutboundSocketPath = deriveLocalOutboundFrameSocketPath()` and
+ * dials it with `EmbeddedUnixOutboundFrameAdapter`, so embedded and
+ * standalone share the one outbound frame envelope. The class is exported
+ * for the host-side unit test; the path helper for backend wiring.
+ */
+export {
+  LocalOutboundFrameServer,
+  deriveLocalOutboundFrameSocketPath,
+  type LocalOutboundFrameServerOptions,
+} from './daemon/local-outbound-frame-server.js';
+/**
+ * D4.d D6 — re-export the daemon-side typed materialize error so
+ * e2e tests that inject a deterministic typed-error fault via
+ * `runDaemon`'s `testHooks.agentMaterializeFaultInjector` can
+ * construct the typed instance the dispatcher narrows to a wire
+ * `error.code` (per `dispatcher.ts` line 328); without a public
+ * export, the only way to land on that branch would be to reach
+ * into the internal subtree, which the
+ * `dependency-guard-agent-materialize.test.ts` tripwire blocks
+ * for backend code.
+ *
+ * Boundary: this export does NOT re-expose `materializeAgent`,
+ * `getAgentHomeTemplate`, or any other implementation detail of
+ * the agent-home subtree — only the throwable error class that's
+ * part of the daemon ↔ embedder/test contract. Cindy D6-2 P1-1
+ * (`d4IID_Nnn1VShRa5`): the only test-facing surface on
+ * `RunDaemonOptions` is the narrow `testHooks` namespace; there
+ * is no embedder-facing handler-replacement option.
+ */
+export { AgentMaterializeError } from './daemon/agent-materialize/index.js';

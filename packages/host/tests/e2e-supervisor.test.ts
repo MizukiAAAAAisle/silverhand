@@ -26,6 +26,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDaemon, type RunningDaemon } from '../src/daemon/index.js';
 import { FakeSupervisor } from './_helpers/fake-supervisor.js';
+import { testStartOptions } from './_helpers/runtime-start-options.js';
 import { HostClient } from '../src/client/index.js';
 import type { EventFrame, RuntimeStartResult } from '../src/protocol.js';
 
@@ -113,7 +114,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     const r = await client.runtimeStart({
       conversation_id: 'conv-1',
       agent_id: 'agent-1',
-      options: {},
+      options: testStartOptions(),
     });
     assertStarted(r);
     expect(r.pid).toBeGreaterThan(0);
@@ -141,7 +142,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     const r = await client.runtimeStart({
       conversation_id: 'conv-2',
       agent_id: 'agent-2',
-      options: {},
+      options: testStartOptions(),
       startup_delivery: {
         delivery_ids: [101, 102],
         text: 'hello',
@@ -171,7 +172,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     await client.runtimeStart({
       conversation_id: 'conv-3',
       agent_id: 'agent-3',
-      options: {},
+      options: testStartOptions(),
       startup_delivery: { delivery_ids: [200], text: 'stub' },
     });
     const failed = await waitForEvent(
@@ -197,7 +198,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     await client.runtimeStart({
       conversation_id: 'conv-4',
       agent_id: 'agent-4',
-      options: {},
+      options: testStartOptions(),
     });
     await waitForEvent(
       events,
@@ -240,8 +241,8 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     const client = new HostClient({ socketPath: f.socketPath });
     clients.push(client);
     await client.connect();
-    await client.runtimeStart({ conversation_id: 'c-A', agent_id: 'ag-A', options: {} });
-    await client.runtimeStart({ conversation_id: 'c-B', agent_id: 'ag-B', options: {} });
+    await client.runtimeStart({ conversation_id: 'c-A', agent_id: 'ag-A', options: testStartOptions() });
+    await client.runtimeStart({ conversation_id: 'c-B', agent_id: 'ag-B', options: testStartOptions() });
     const snap = await client.runtimeStatus();
     expect(snap.runtimes).toHaveLength(2);
     const convs = snap.runtimes.map(r => r.conversation_id).sort();
@@ -256,7 +257,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     await client.connect();
     const events: EventFrame[] = [];
     client.subscribe(e => events.push(e));
-    await client.runtimeStart({ conversation_id: 'c-X', agent_id: 'ag-X', options: {} });
+    await client.runtimeStart({ conversation_id: 'c-X', agent_id: 'ag-X', options: testStartOptions() });
     await waitForEvent(
       events,
       (e): e is Extract<EventFrame, { event: 'runtime_ready_for_drain' }> =>
@@ -288,7 +289,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     const evB: EventFrame[] = [];
     a.subscribe(e => evA.push(e));
     b.subscribe(e => evB.push(e));
-    await a.runtimeStart({ conversation_id: 'c-Y', agent_id: 'ag-Y', options: {} });
+    await a.runtimeStart({ conversation_id: 'c-Y', agent_id: 'ag-Y', options: testStartOptions() });
     const has = (events: EventFrame[]): boolean =>
       events.some(
         e => e.event === 'runtime_ready_for_drain' && e.conversation_id === 'c-Y',
@@ -315,7 +316,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     await client.runtimeStart({
       conversation_id: 'c-state',
       agent_id: 'ag-state',
-      options: {},
+      options: testStartOptions(),
     });
     // Wait for ready so we know both starting + idle states have been
     // emitted (FakeSupervisor emits state(starting) on start() and
@@ -371,7 +372,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     await client.runtimeStart({
       conversation_id: 'c-crash',
       agent_id: 'ag-crash',
-      options: {},
+      options: testStartOptions(),
       startup_delivery: { delivery_ids: [1], text: 'stub' },
     });
     await waitForEvent(
@@ -405,7 +406,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     await client.runtimeStart({
       conversation_id: 'c-flow',
       agent_id: 'ag-flow',
-      options: {},
+      options: testStartOptions(),
     });
     await waitForEvent(
       events,
@@ -493,7 +494,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     await client.runtimeStart({
       conversation_id: 'c-soft',
       agent_id: 'ag-soft',
-      options: {},
+      options: testStartOptions(),
     });
     await waitForEvent(
       events,

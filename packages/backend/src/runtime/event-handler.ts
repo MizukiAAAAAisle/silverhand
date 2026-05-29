@@ -58,10 +58,9 @@
  *     reason. Handler hands rows back to the inbox sink so the next
  *     spawn replays them.
  */
-import type { EventFrame, HostClient } from '@silverhand/host';
-import type { ParsedEvent } from '@silverhand/shared';
+import type { EventFrame, RuntimeStatusResult } from '@silverhand/host';
+import type { AgentRunState, ParsedEvent } from '@silverhand/shared';
 import type { ActivityLogWriter } from './activity-log-writer.js';
-import type { RuntimeBridge } from './bridge.js';
 import type { RunStateCache } from './run-state-cache.js';
 import { sanitizeParsedEventForBroadcast } from './event-sanitize.js';
 import { NOOP_STATUS_PROJECTOR, type RuntimeStatusProjector } from './status-projector.js';
@@ -89,6 +88,25 @@ export interface InboxAckSink {
     deliveryIds: readonly number[],
     reason: 'child_exit' | 'init_watchdog' | 'write_failed' | 'driver_refused',
   ): void;
+}
+
+export interface RuntimeStatusBridge {
+  runtimeStatus(): Promise<RuntimeStatusResult>;
+}
+
+/**
+ * Narrow event-source the handler subscribes to. This is the subset of
+ * the old `HostClient` the handler ever used (`subscribe` + `onReconnect`)
+ * — extracted so backend `src/` carries ZERO `HostClient` imports (D5.a
+ * A1). The embedded path is now an outbound-frame transport like
+ * standalone, not a `HostClient`; `OutboundRuntimeEventFanout` dispatches
+ * events directly via `handler.dispatch(...)` and supplies a noop source
+ * (it never calls `start()`), so this interface is the only coupling the
+ * handler keeps to "where events come from".
+ */
+export interface RuntimeEventSource {
+  subscribe(onFrame: (frame: EventFrame) => void): () => void;
+  onReconnect(onReconnect: () => void): () => void;
 }
 
 /**
@@ -161,12 +179,12 @@ const NOOP_LOGGER: RuntimeEventHandlerLogger = {
 };
 
 export interface RuntimeEventHandlerDeps {
-  client: HostClient;
-  bridge: RuntimeBridge;
+  client: RuntimeEventSource;
+  bridge: RuntimeStatusBridge;
   cache: RunStateCache;
   events: EventPublisher;
   inboxAck: InboxAckSink;
-  /** Sink for the four events that mutate `conversation_agents` AND
+  /** Sink for events that mutate `conversation_agents` AND
    *  publish `agent_status` SSE. Default is the noop projector — tests
    *  that don't exercise DB projection don't need to inject one.
    *  Production wires `DbRuntimeStatusProjector` in `index.ts`. See
@@ -185,6 +203,24 @@ export interface RuntimeEventHandlerDeps {
   /** Fires on runtime init-timeout/cooldown paths so the delivery
    *  coordinator can clear any live-wake stuck indicator. */
   onInitTimeout?: RuntimeInitTimeoutHandler;
+  /**
+   * D4.b P1-2 (Cindy round-2 `0Hd5ComnzYxHJ6Rk` P1): fires AFTER a
+   * `runtime_status` hydrate completes (cache reflects the
+   * daemon's authoritative snapshot). Used by
+   * `OutboundRuntimeEventFanout` to drive automatic drain of
+   * pending inbox rows on daemon reattach — deferring the drain
+   * to post-hydrate is required so the per-pair `startDeliveryBacked`
+   * sees the right cache phase (`ready` → wake path; absent → spawn
+   * path). Firing on `ready` (pre-hydrate) would race the hydrate
+   * and take the wrong branch.
+   *
+   * `trigger` mirrors `hydrateSafely`'s trigger argument so the
+   * callback can distinguish initial-attach drain from
+   * reconnect-recovery drain if needed.
+   */
+  onHydrateComplete?: (
+    trigger: 'initial' | 'reconnect' | 'daemon_ready',
+  ) => void | Promise<void>;
   /** Optional backend-owned JSONL sink for `agent_activity` parity
    * with the original ConversationManager runtime contract. Writing
    * must never block or fail the SSE publish path. */
@@ -202,8 +238,8 @@ function makeDaemonInstanceKey(daemonPid: number, startedAt: number): string {
 }
 
 export class RuntimeEventHandler {
-  private readonly client: HostClient;
-  private readonly bridge: RuntimeBridge;
+  private readonly client: RuntimeEventSource;
+  private readonly bridge: RuntimeStatusBridge;
   private readonly cache: RunStateCache;
   private readonly events: EventPublisher;
   private readonly inboxAck: InboxAckSink;
@@ -212,6 +248,9 @@ export class RuntimeEventHandler {
   private readonly onParsedEventCb?: ParsedEventHandler;
   private readonly onRuntimeExitCb?: RuntimeExitHandler;
   private readonly onInitTimeoutCb?: RuntimeInitTimeoutHandler;
+  private readonly onHydrateCompleteCb?: (
+    trigger: 'initial' | 'reconnect' | 'daemon_ready',
+  ) => void | Promise<void>;
   private readonly activityLog?: ActivityLogWriter;
   private readonly logger: RuntimeEventHandlerLogger;
 
@@ -257,6 +296,7 @@ export class RuntimeEventHandler {
     this.onParsedEventCb = deps.onParsedEvent;
     this.onRuntimeExitCb = deps.onRuntimeExit;
     this.onInitTimeoutCb = deps.onInitTimeout;
+    this.onHydrateCompleteCb = deps.onHydrateComplete;
     this.activityLog = deps.activityLog;
     this.logger = deps.logger ?? NOOP_LOGGER;
   }
@@ -507,26 +547,12 @@ export class RuntimeEventHandler {
         return;
       // `runtime_parsed_event_dropped` carries metadata-only (no
       // payload) when the encoded parsed event exceeded
-      // `MAX_FRAME_BYTES`. CM has no equivalent (in-process never
-      // hit a wire cap). For commit 5 unit 1 we DO NOT project it
-      // yet — the renderer has no UI for "an event was dropped";
-      // dispatching a typed degenerate `agent_event` here would
-      // confuse listeners that assume `event` is the real ParsedEvent.
-      // A dedicated SSE kind for dropped frames is a follow-up
-      // (out of scope for this commit).
+      // `MAX_FRAME_BYTES`. Never synthesize a fake `agent_event` here:
+      // when a cache entry exists we only annotate the existing
+      // AgentRunState with a lossy diagnostic in its existing `detail`
+      // field, then publish the normal `agent_activity` shape.
       case 'runtime_parsed_event_dropped':
-        this.logger.warn(
-          {
-            kind: 'event',
-            event: 'runtime_parsed_event_dropped',
-            conversationId: frame.conversation_id,
-            agent_id: frame.agent_id,
-            parsed_kind: frame.parsed_kind,
-            bytes: frame.encoded_bytes,
-            reason: frame.reason,
-          },
-          'parsed event dropped at wire (no SSE projection)',
-        );
+        this.onParsedEventDropped(frame);
         return;
       // Other frames we acknowledge but currently route nowhere —
       // kept here so the exhaustive `switch` doesn't fall through
@@ -544,6 +570,46 @@ export class RuntimeEventHandler {
         return;
       }
     }
+  }
+
+  private onParsedEventDropped(
+    frame: Extract<EventFrame, { event: 'runtime_parsed_event_dropped' }>,
+  ): void {
+    const key = this.cache.daemonInstanceKey;
+    let state: AgentRunState | null = null;
+    if (key) {
+      state = this.cache.applyParsedEventDropped(
+        key,
+        frame.conversation_id,
+        frame.agent_id,
+        {
+          parsedKind: frame.parsed_kind,
+          encodedBytes: frame.encoded_bytes,
+          reason: frame.reason,
+          ts: frame.ts,
+        },
+      );
+    }
+    if (state) {
+      this.events.publish(frame.conversation_id, {
+        kind: 'agent_activity',
+        payload: state,
+      });
+      this.activityLog?.write(state);
+    }
+    this.logger.warn(
+      {
+        kind: 'event',
+        event: 'runtime_parsed_event_dropped',
+        conversationId: frame.conversation_id,
+        agent_id: frame.agent_id,
+        parsed_kind: frame.parsed_kind,
+        bytes: frame.encoded_bytes,
+        reason: frame.reason,
+        projected_lossy_state: state !== null,
+      },
+      'parsed event dropped at wire; projected metadata-only run-state loss marker',
+    );
   }
 
   private forwardInitTimeout(
@@ -694,6 +760,10 @@ export class RuntimeEventHandler {
       // Phase-only patch so we don't clobber the existing runState.
       this.cache.applyPhase(key, frame.conversation_id, frame.agent_id, 'ready');
     }
+    this.statusProjector.runtimeReady({
+      conversationId: frame.conversation_id,
+      agentId: frame.agent_id,
+    });
     if (this.onReadyForDrain) {
       try {
         const result = this.onReadyForDrain(frame.conversation_id, frame.agent_id);
@@ -767,6 +837,26 @@ export class RuntimeEventHandler {
         },
         'cache hydrated from runtime_status',
       );
+      // D4.b P1-2: invoke post-hydrate callback now that the cache
+      // reflects the daemon's authoritative snapshot. The fanout
+      // uses this to drive auto-drain of pending inbox rows on
+      // reattach — deferred to post-hydrate so per-pair phase
+      // checks see the right state.
+      if (this.onHydrateCompleteCb) {
+        try {
+          await this.onHydrateCompleteCb(trigger);
+        } catch (err) {
+          this.logger.warn(
+            {
+              kind: 'event',
+              action: 'hydrate_complete_callback',
+              trigger,
+              err: (err as Error).message,
+            },
+            'post-hydrate callback threw; auto-drain may be incomplete',
+          );
+        }
+      }
     } catch (err) {
       this.logger.error(
         {

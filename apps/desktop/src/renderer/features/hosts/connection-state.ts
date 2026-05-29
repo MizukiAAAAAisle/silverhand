@@ -1,0 +1,146 @@
+/**
+ * D3.d — Outbound connection state presentation mapper.
+ *
+ * What this is and isn't:
+ *
+ *   - This file maps the (server-defined `local_host_status`,
+ *     diagnostic `local_host_ws_attached_at`) pair to a UI-only
+ *     presentation label. It does NOT mint a new status word — the
+ *     5-value `local_host_status` enum from
+ *     `BackendInfo.local_host_status` stays the single source of
+ *     truth server-side. The "Connecting" vs "Connected" split here
+ *     is a presentation hint derived from whether a fresh outbound
+ *     WS attachment has been observed yet (D3.a Commit 4 docstring:
+ *     "Renderer can surface as 'connected since' but must NOT derive
+ *     a new status word").
+ *   - All branches are exhaustively pinned by a `never` assertion so
+ *     adding a new value to `local_host_status` on the server (e.g.
+ *     a future "stale" arm) fails the typecheck here loud-and-early
+ *     instead of falling through to a confusing default label.
+ *   - Theme adapter contract: every state returns a `tone` key into
+ *     the existing status token set (`accent` / `success` / `muted`
+ *     / `warning` / `error`). The token set has AA-safe values
+ *     defined in both `warm-script.css` and `forza6.css`, so the
+ *     mapper itself is theme-agnostic — the consumer just picks the
+ *     matching Tailwind utility (`text-success` / `text-error` / …).
+ *
+ * Six-state matrix (status × attachedAt):
+ *
+ *   | status     | attachedAt | label              | tone     |
+ *   |------------|------------|--------------------|----------|
+ *   | unclaimed  | (n/a)      | (no pill rendered) | hidden   |
+ *   | claimed    | null       | Connecting…        | accent   |
+ *   | claimed    | number     | Connected          | success  |
+ *   | revoked    | (n/a)      | Revoked            | muted    |
+ *   | error      | (n/a)      | Disconnected       | warning  |
+ *   | failed     | (n/a)      | Daemon stopped     | error    |
+ *
+ * Why `error` is "Disconnected" (warning) but `failed` is "Daemon
+ * stopped" (error): `error` is a transient claim-side failure (network
+ * blip while talking to the backend), expected to self-heal on the
+ * next refresh; `failed` is the supervisor's hard-fail signal after
+ * the restart budget is exhausted (`local-host-failure.ts`), which
+ * requires explicit user action (relaunch the app).
+ */
+import type { BackendInfoSnapshot } from './hooks';
+
+export type ConnectionTone =
+  | 'hidden'
+  | 'accent'
+  | 'success'
+  | 'muted'
+  | 'warning'
+  | 'error';
+
+export interface ConnectionStateView {
+  /** Whether to render a pill at all. `unclaimed` returns false so
+   *  pre-claim users don't see a misleading "Disconnected" before they
+   *  sign in. */
+  visible: boolean;
+  /** Presentation label. Empty string when `visible: false`. */
+  label: string;
+  /** Token-key picked off the shared status palette. Consumer maps to
+   *  `text-{tone}` / `border-{tone}` classes that already exist in
+   *  both themes. */
+  tone: ConnectionTone;
+  /** Optional secondary line — currently used only for "since X" on
+   *  the Connected arm. `null` when not applicable. */
+  detail: string | null;
+}
+
+export type LocalHostStatus = BackendInfoSnapshot['local_host_status'];
+
+/**
+ * Format an `attached_at` ms timestamp as a relative "since" string.
+ * Pulled out so tests can substitute a fixed `now()` and pin the
+ * exact phrasing per duration bucket.
+ */
+export function formatAttachedSince(
+  attachedAt: number,
+  nowMs: number,
+): string {
+  const deltaMs = Math.max(0, nowMs - attachedAt);
+  const seconds = Math.floor(deltaMs / 1000);
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+export function describeConnectionState(
+  status: LocalHostStatus,
+  attachedAt: number | null,
+  nowMs: number,
+): ConnectionStateView {
+  switch (status) {
+    case 'unclaimed':
+      return { visible: false, label: '', tone: 'hidden', detail: null };
+    case 'claimed':
+      if (attachedAt === null) {
+        return {
+          visible: true,
+          label: 'Connecting…',
+          tone: 'accent',
+          detail: null,
+        };
+      }
+      return {
+        visible: true,
+        label: 'Connected',
+        tone: 'success',
+        detail: `since ${formatAttachedSince(attachedAt, nowMs)}`,
+      };
+    case 'revoked':
+      return {
+        visible: true,
+        label: 'Revoked',
+        tone: 'muted',
+        detail: null,
+      };
+    case 'error':
+      return {
+        visible: true,
+        label: 'Disconnected',
+        tone: 'warning',
+        detail: null,
+      };
+    case 'failed':
+      return {
+        visible: true,
+        label: 'Daemon stopped',
+        tone: 'error',
+        detail: null,
+      };
+    default: {
+      // Exhaustiveness gate — adding a new `local_host_status` value
+      // server-side fails the renderer typecheck here on purpose, so
+      // the new arm has to be considered for UI presentation in the
+      // same change instead of falling through to silent default copy.
+      const _exhaustive: never = status;
+      return _exhaustive;
+    }
+  }
+}

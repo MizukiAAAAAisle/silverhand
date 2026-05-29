@@ -40,8 +40,8 @@ export interface UploadAgentAvatarInput {
  * sniff, by Cindy's PR-1 review constraint). The agent create flow
  * itself stays in `routes.ts` (`createAgentWithHome`) — this service
  * exists to keep the avatar write path isolated from the create path,
- * matching how `UserService.uploadAvatar` is separated from
- * `UserService.register`.
+ * matching how `UserService.uploadAvatar` is separated from the auth /
+ * embedded-bootstrap user creation paths.
  *
  * Storage namespace: `agents/<id>/avatars/<randomBlobId>.<ext>`. A
  * fresh random blob id per upload guarantees a previously-cached

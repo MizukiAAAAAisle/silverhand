@@ -186,11 +186,9 @@ export class EventWsClient {
     this.clearReconnectTimer();
     this.setStatus('connecting');
     let url: string;
-    let token: string;
     try {
       const info = await getBackendInfo();
       url = eventWsUrl(info.url);
-      token = info.auth_token;
     } catch {
       this.scheduleReconnect();
       return;
@@ -204,7 +202,6 @@ export class EventWsClient {
     ws.addEventListener('open', () => {
       if (this.ws !== ws) return;
       this.setStatus('authenticating');
-      this.sendOnSocket(ws, { type: 'auth', token });
     });
 
     ws.addEventListener('message', raw => {
@@ -416,8 +413,7 @@ export const VIEWER_SCOPE_ALIAS = 'viewer:self';
 /**
  * True iff `scope` is the current viewer's resolved scope. Hooks call
  * this on incoming `event`/`snapshot_required` frames so they don't
- * need to hardcode the viewer's id (it's a random hex written by
- * `POST /api/register`).
+ * need to hardcode the viewer's id.
  */
 export function isCurrentViewerScope(scope: string): boolean {
   const resolved = eventWsClient.getResolvedViewerId();

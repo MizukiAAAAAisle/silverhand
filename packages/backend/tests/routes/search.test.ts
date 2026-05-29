@@ -62,4 +62,44 @@ describe('GET /api/search', () => {
       ]),
     );
   });
+
+  it('filters messages and named entities by viewer membership', async () => {
+    t = buildTestApp();
+    const agent = await (
+      await http(t).post('/api/agents', { name: 'search-agent', runtime: 'claude' })
+    ).json() as any;
+    const visible = await (
+      await http(t).post('/api/workspaces', {
+        name: 'visible-needle-ws',
+        member_agent_ids: [agent.agent.id],
+      })
+    ).json() as any;
+    const hidden = await (
+      await http(t).post('/api/workspaces', {
+        name: 'hidden-needle-ws',
+        member_agent_ids: [agent.agent.id],
+      })
+    ).json() as any;
+    await http(t).post(`/api/channels/${visible.onboarding_channel_id}/messages`, {
+      content: 'needle visible message',
+    });
+    await http(t).post(`/api/channels/${hidden.onboarding_channel_id}/messages`, {
+      content: 'needle hidden message',
+    });
+    t.ctx.db
+      .prepare(`DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = 'local'`)
+      .run(hidden.onboarding_channel_id);
+    t.ctx.db
+      .prepare(`DELETE FROM workspace_users WHERE workspace_id = ? AND user_id = 'local'`)
+      .run(hidden.workspace.id);
+
+    const res = await http(t).get('/api/search?q=needle');
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    const serialized = JSON.stringify(body.results);
+    expect(serialized).toContain('visible-needle-ws');
+    expect(serialized).toContain('needle visible message');
+    expect(serialized).not.toContain('hidden-needle-ws');
+    expect(serialized).not.toContain('needle hidden message');
+  });
 });

@@ -7,16 +7,26 @@ import { execFileSync } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 import { silverhandCors } from './cors.js';
 import { openDatabase } from './db.js';
+import type { MigrationRunResult } from './db.js';
 import { createApiRouter, createInternalRouter } from './routes.js';
 import type { AppEnv } from './auth/principal.js';
 import {
   consoleLogger,
+  type BackendDeploymentMode,
   type BackendContext,
   type BackendLogger,
   type BackendLoggers,
   type SilverhandCliLauncher,
 } from './context.js';
 import { AgentTokenStore } from './auth/agent-token-store.js';
+import { resolveAuthRuntimeConfig } from './auth/config.js';
+import {
+  cleanupEmbeddedBootstrap,
+  createDisabledEmbeddedBootstrapState,
+  prepareEmbeddedBootstrap,
+} from './auth/embedded-bootstrap.js';
+import { PasswordCredentialService } from './auth/password.js';
+import { AuthSessionService } from './auth/session.js';
 import { HostRepo } from './repos/host-repo.js';
 import { ensureWorkspacesRoot } from './provision.js';
 import { ScopeEventBus } from './ws/scope-event-bus.js';
@@ -24,28 +34,32 @@ import {
   installEventWebSocketServer,
   type EventWsServerController,
 } from './ws/ws-server.js';
-import { DaemonAgentRuntimeHost } from './runtime/daemon-agent-runtime-host.js';
-import { RuntimeDeliveryCoordinator } from './runtime/delivery-coordinator.js';
-import { combineGatedBatch } from './runtime/stdin-format.js';
-import type { AgentRuntimeHost } from './runtime/agent-runtime-host.js';
-import { JsonlActivityLogWriter } from './runtime/activity-log-writer.js';
-import { RuntimeBridge, type ProxySettingsSource } from './runtime/bridge.js';
-import { RunStateCache } from './runtime/run-state-cache.js';
 import {
-  RuntimeEventHandler,
-  type InboxAckSink,
-} from './runtime/event-handler.js';
-import { DbRuntimeStatusProjector } from './runtime/status-projector.js';
+  installHostWebSocketServer,
+  type HostWsServerController,
+  type HostWsAttachment,
+  type HostWsEventSink,
+} from './ws/host-ws-server.js';
+import type { AgentRuntimeHost } from './runtime/agent-runtime-host.js';
+import { OutboundAgentRuntimeHost } from './runtime/outbound-agent-runtime-host.js';
+import { OutboundRuntimeEventFanout } from './runtime/outbound-event-fanout.js';
+import {
+  StandaloneOutboundFrameAdapter,
+  type OutboundFrameAdapter,
+} from './runtime/outbound-frame-adapter.js';
+import { EmbeddedUnixOutboundFrameAdapter } from './runtime/embedded-unix-outbound-frame-adapter.js';
+import {
+  RuntimeHostPlacementResolver,
+} from './runtime/host-placement.js';
+import { runBootMaterializeReconciler } from './runtime/materialize-reconciler.js';
 import { AgentRepo } from './repos/agent-repo.js';
 import { AttachmentRepo } from './repos/attachment-repo.js';
 import { ConversationRepo } from './repos/conversation-repo.js';
-import { ConversationInboxRepo } from './repos/conversation-inbox-repo.js';
 import { MessageRepo } from './repos/message-repo.js';
 import { NotificationRepo } from './repos/notification-repo.js';
 import { ScheduleRepo } from './repos/schedule-repo.js';
-import { SettingsRepo } from './repos/settings-repo.js';
+import { SETTINGS_KEYS, SettingsRepo } from './repos/settings-repo.js';
 import { WorkspaceRepo } from './repos/workspace-repo.js';
-import { MembershipService } from './services/membership-service.js';
 import { AttachmentService } from './services/attachment-service.js';
 import { AgentService } from './services/agent-service.js';
 import { ChannelService } from './services/channel-service.js';
@@ -56,16 +70,29 @@ import { TaskService } from './services/task-service.js';
 import { UserService } from './services/user-service.js';
 import { UserRepo } from './repos/user-repo.js';
 import { createLocalBlobFileStorage } from './storage/blob-file-storage.js';
-import type { ServerConfig } from '@silverhand/shared';
-import type { HostClient } from '@silverhand/host';
+import {
+  classifyBindAddressScope,
+  type BindAddressScope,
+  type ServerConfig,
+} from '@silverhand/shared';
+import { deriveLocalOutboundFrameSocketPath } from '@silverhand/host';
 import type { Server as HttpServer } from 'node:http';
 import { createLogLevelControl, type LogLevelControl } from './logger.js';
+import type { AuthRuntimeConfig } from './auth/config.js';
 
-export interface CreateBackendOptions {
+export interface BackendListenOptions {
+  hostname: string;
+  port: number;
+}
+
+interface BaseBackendOptions {
+  mode: BackendDeploymentMode;
   dbPath: string;
   silverhandDir: string;
   serverConfig: ServerConfig;
-  silverhandCliLauncher: SilverhandCliLauncher;
+  silverhandCliLauncher?: SilverhandCliLauncher;
+  listen?: BackendListenOptions;
+  authConfig?: AuthRuntimeConfig;
   logger?: BackendLogger;
   /** Categorized loggers (system + agent + cli sinks). When provided
    *  this overrides whatever `logger` was passed; missing categories
@@ -73,17 +100,58 @@ export interface CreateBackendOptions {
   loggers?: Partial<BackendLoggers>;
   /** Where the file logger writes. Optional. */
   logDir?: string;
+  schemaUpgrade?: {
+    allow: boolean;
+  };
   /**
-   * Connected `silverhand-daemon` client. **Required.** Backend
-   * routes every spawn / wake / clearSession / inbox delivery /
-   * run-state read through this client; without it the boot throws.
-   * Legacy in-process spawn was removed in #task:512 cleanup
-   * Commit B and the env switch in Commit C — there is no runtime
-   * fallback. Type stays optional so existing call sites compile,
-   * but startBackend throws if it is undefined.
+   * D4.b-1 — TEST ONLY. Wrap the `HostWsEventSink` installed on the
+   * outbound WS server. The wrapper receives the real fanout (or
+   * `undefined` in embedded mode where no fanout is installed) and
+   * returns a sink that will be installed in its place. Production
+   * callers MUST NOT pass this; the default behaviour is identity
+   * (the real fanout flows through unchanged).
+   *
+   * Used by `packages/backend/tests/e2e/g2-harness.ts` to attach a
+   * recording observer for parity / delivery assertions WITHOUT
+   * bypassing the real `OutboundRuntimeEventFanout` — the wrapper
+   * always delegates onEvent/onDisconnect to the real sink, so the
+   * production projection path runs exactly as in shipped code.
+   * The fanout instance is still the one constructed by this
+   * `startBackend` call; the wrap does not change which class
+   * processes the event, only adds a non-mutating observer.
    */
-  hostClient?: HostClient;
+  testHooks?: {
+    wrapHostWsEventSink?: (
+      real: HostWsEventSink | undefined,
+    ) => HostWsEventSink | undefined;
+  };
 }
+
+export interface EmbeddedBackendOptions extends BaseBackendOptions {
+  mode: 'embedded';
+  silverhandCliLauncher: SilverhandCliLauncher;
+  /**
+   * Path to the daemon's local outbound frame socket
+   * (`daemon-outbound.sock`). The backend dials this socket and speaks
+   * the SAME outbound frame envelope the standalone WSS path uses (D5.a).
+   * Optional — defaults to {@link deriveLocalOutboundFrameSocketPath}
+   * (`~/.silverhand/run/daemon-outbound.sock`). The desktop main process
+   * spawns the daemon with the matching `localOutboundSocketPath`.
+   *
+   * The embedded backend no longer holds a `HostClient`: the local
+   * daemon RPC was a second expression of the same server↔daemon
+   * semantics (the R4 drift D5.a closed). Host-control IPC (spawn the
+   * daemon, revoke, etc.) stays in the desktop main process, not here.
+   */
+  outboundSocketPath?: string;
+}
+
+export interface StandaloneBackendOptions extends BaseBackendOptions {
+  mode: 'standalone';
+  outboundSocketPath?: never;
+}
+
+export type CreateBackendOptions = EmbeddedBackendOptions | StandaloneBackendOptions;
 
 export interface RunningBackend {
   url: string;
@@ -93,23 +161,109 @@ export interface RunningBackend {
 }
 
 export async function startBackend(opts: CreateBackendOptions): Promise<RunningBackend> {
+  const listenHostname = opts.listen?.hostname ?? '127.0.0.1';
+  const listenPort = opts.listen?.port ?? 0;
   const logger = opts.logger ?? consoleLogger;
+  const silverhandCliLauncher =
+    opts.silverhandCliLauncher ?? DISABLED_SILVERHAND_CLI_LAUNCHER;
   const loggers: BackendLoggers = {
     system: opts.loggers?.system ?? logger,
     agent: opts.loggers?.agent ?? logger,
     cli: opts.loggers?.cli ?? logger,
   };
   const logControl = resolveLogControl(loggers.system);
-  const db = openDatabase(opts.dbPath);
+  const authConfig = opts.authConfig ?? resolveAuthRuntimeConfig();
+  // D4.a Commit 4 — classify the bind address once at boot. Pinning
+  // the value on `ctx.bindAddressScope` keeps the boot-time WARN
+  // line (below) and the `/api/server/info` response surface
+  // consistent for the life of the process.
+  const bindAddressScope: BindAddressScope = classifyBindAddressScope(listenHostname);
+  logger.info(
+    {
+      mode: opts.mode,
+      listenHostname,
+      listenPort,
+      signupEnabled: authConfig.signupEnabled,
+      bindAddressScope,
+    },
+    `Backend boot: mode=${opts.mode}; signup=${authConfig.signupEnabled ? 'enabled' : 'disabled'}; bind=${bindAddressScope}`,
+  );
+  // §6.3 condition 3 — non-loopback bind + signup enabled is the
+  // single combination that lets a passerby register on a backend
+  // reachable beyond `127.0.0.1`. Emit a visible WARN that points
+  // at the lock-down runbook so operators see it on first boot
+  // and can either narrow the bind or set `SILVERHAND_DISABLE_SIGNUP=1`.
+  if (bindAddressScope !== 'loopback' && authConfig.signupEnabled) {
+    logger.warn(
+      {
+        listenHostname,
+        bindAddressScope,
+        signupEnabled: true,
+        runbookSection: 'remote-backend-runbook §12 (lock-down)',
+      },
+      `Backend is bound to a ${bindAddressScope} address with signup ENABLED. ` +
+        `Set SILVERHAND_DISABLE_SIGNUP=1 once your account is created. ` +
+        `See remote-backend runbook §12 (lock-down).`,
+    );
+  }
+  let migrationsApplied = false;
+  const migrationResult: { current: MigrationRunResult | null } = { current: null };
+  const migrationStartedAt = performance.now();
+  let db: ReturnType<typeof openDatabase>;
+  try {
+    db = openDatabase(opts.dbPath, {
+      allowSchemaUpgrade: opts.schemaUpgrade?.allow ?? false,
+      onMigrationResult: result => {
+        migrationResult.current = result;
+      },
+      onMigrationsApplied: () => {
+        migrationsApplied = true;
+      },
+    });
+  } catch (err) {
+    logger.error(
+      {
+        code: migrationErrorCode(err),
+        error: errorMessage(err),
+        elapsedMs: elapsedSince(migrationStartedAt),
+      },
+      'Migration aborted',
+    );
+    throw err;
+  }
+  if (
+    migrationResult.current
+    && migrationResult.current.appliedVersions.length > 0
+  ) {
+    logger.info(
+      {
+        fromVersion: migrationResult.current.beforeVersion,
+        toVersion: migrationResult.current.afterVersion,
+        appliedVersions: migrationResult.current.appliedVersions,
+        backupPath: migrationResult.current.backupPath,
+        elapsedMs: elapsedSince(migrationStartedAt),
+      },
+      `Migration applied: v${migrationResult.current.beforeVersion} -> v${migrationResult.current.afterVersion}, backup at ${migrationResult.current.backupPath ?? 'none'}`,
+    );
+  }
   const workspacesRoot = join(opts.silverhandDir, 'workspaces');
   const blobStorage = createLocalBlobFileStorage({ silverhandDir: opts.silverhandDir });
   await ensureWorkspacesRoot(workspacesRoot);
   await blobStorage.ensureReady();
 
-  assertLauncherResolvable(opts.silverhandCliLauncher.command, 'silverhand CLI');
+  if (opts.mode === 'embedded') {
+    assertLauncherResolvable(silverhandCliLauncher.command, 'silverhand CLI');
+  }
 
-  // Bootstrap: ensure 'local' host exists.
-  new HostRepo(db).ensureLocal();
+  // Bootstrap: embedded desktop owns the local daemon-host identity.
+  // Standalone server must not synthesize a local host that implies
+  // access to the user's machine.
+  const hostRepo = new HostRepo(db);
+  if (opts.mode === 'embedded') {
+    hostRepo.ensureLocal();
+  } else {
+    hostRepo.ensureStandaloneServer();
+  }
 
   const attachmentService = new AttachmentService({
     storage: blobStorage,
@@ -127,10 +281,44 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     agents: new AgentRepo(db),
     blobStorage,
   });
+  const placement = new RuntimeHostPlacementResolver({
+    hosts: new HostRepo(db),
+    agents: new AgentRepo(db),
+    workspaces: new WorkspaceRepo(db, { workspacesRoot }),
+  });
+  let outboundFanout: OutboundRuntimeEventFanout | null = null;
+  let hostWs: HostWsServerController | null = null;
+  // D5.a-3 — the deployment-specific outbound transport the fanout
+  // dispatches through (standalone = WSS-backed adapter wrapping
+  // `hostWs`; embedded = local Unix-socket adapter). Installed once the
+  // HTTP server binds; the fanout reads it via `() => outboundAdapter`.
+  let outboundAdapter: OutboundFrameAdapter | null = null;
+  // Embedded local-Unix adapter kept here so the server-close path can
+  // close the connection it owns (the standalone adapter only *views* a
+  // controller owned by the bootstrap, so it has nothing to close).
+  let embeddedOutboundAdapter: EmbeddedUnixOutboundFrameAdapter | null = null;
+  // D5.a-3 P1-1 (Cindy `KuHXrKuCv9nPU28M`) — the embedded adapter is
+  // CONSTRUCTED synchronously after `serve()` returns (so `outboundAdapter`
+  // is non-null before any route handler can run), but its `connect()` is
+  // deferred behind this thunk and fired from inside the listen callback,
+  // AFTER `ctx.serverConfig.url` is swapped from the input placeholder to
+  // the real bound URL. Otherwise the connect — and the `runtime_start`
+  // it eventually carries — could race ahead of URL finalization and ship
+  // a placeholder `server_url`. Stays null for standalone (daemon dials in).
+  let startEmbeddedOutboundConnect: (() => void) | null = null;
 
   const ctx: BackendContext = {
     db,
+    deploymentMode: opts.mode,
+    readiness: {
+      migrationsApplied,
+      listenReady: false,
+      outboundEventFanoutInstalled: false,
+    },
     serverConfig: opts.serverConfig,
+    bindAddressScope,
+    authConfig,
+    embeddedBootstrap: createDisabledEmbeddedBootstrapState(opts.silverhandDir),
     logger,
     loggers,
     logControl,
@@ -148,170 +336,54 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     scheduleService: undefined as unknown as ScheduleService,
     lastSpawnAtByAgent: new Map(),
     events: new ScopeEventBus(),
-    silverhandCliLauncher: opts.silverhandCliLauncher,
+    silverhandCliLauncher,
     agentTokens: new AgentTokenStore(),
+    passwordCredentials: new PasswordCredentialService(db),
+    authSessions: new AuthSessionService(db, {
+      sessionTtlMs: authConfig.sessionTtlMs,
+    }),
+    placement:
+      // D4.c C1 — standalone now uses the same `RuntimeHostPlacementResolver`
+      // as embedded. Pre-D4.c the standalone branch wired
+      // `DisabledRuntimeHostPlacement` (every method threw
+      // `host_runtime_disabled`) because the original Stage B/C
+      // sketch treated standalone as "no host placement at all".
+      // M1 turns that around: standalone has a real hosts table
+      // populated by remote desktop daemons attaching over outbound
+      // WSS, so placement = authoritative DB lookup either way.
+      // The D2.0 guiding principle ("server doesn't pretend to own
+      // user filesystem") lives at the route / data-plane layer,
+      // not here — the resolver is just identity / ACL / equality
+      // checks against the DB. Note: this means routes that used
+      // to early-return `host_runtime_disabled` purely because they
+      // hit `ctx.placement.*` in standalone now return real
+      // 404/403/409 responses driven by actual DB state. The
+      // CRUD-deferral routes that explicitly `standaloneMode(ctx)`
+      // fork into `hostRuntimeDisabledResponse()` are unaffected;
+      // those are C2/C3 work to lift properly.
+      placement,
+    hostWsController: () => hostWs,
+    // D5.a-3 P1-3 — the formal server↔daemon dispatch port. Routes that
+    // send commands (POST /api/agents materialize, retry) go through this
+    // accessor so they never branch on deployment mode; `hostWsController`
+    // stays for WS-only lifecycle (revoke/disconnect) in standalone.
+    outboundFrameAdapter: () => outboundAdapter,
     // Filled immediately below when the daemon runtime host is constructed.
     runtimeHost: undefined as unknown as AgentRuntimeHost,
   };
-
   // ── Runtime host wiring ─────────────────────────────────────────
-  // Daemon is the only supported runtime path. The host (Electron
-  // main or dev-headless) MUST spawn silverhand-daemon and pass a
-  // connected `HostClient`; without it the boot throws — there is no
-  // runtime fallback (the legacy in-process ConversationManager
-  // runtime was removed in #task:512 cleanup Commit B; the
-  // `SILVERHAND_RUNTIME_HOST` env switch was removed in Commit C).
-  if (!opts.hostClient) {
-    throw new Error(
-      'startBackend: a connected HostClient is required but received hostClient=undefined. ' +
-        'The host (Electron main or dev-headless) must spawn silverhand-daemon and pass a ' +
-        'connected HostClient. There is no runtime fallback — the legacy in-process ' +
-        'ConversationManager runtime was removed in #task:512 cleanup Commit B; the ' +
-        'SILVERHAND_RUNTIME_HOST env switch was removed in Commit C. Recovery: ensure ' +
-        'silverhand-daemon is spawnable / its socket is reachable.',
-    );
-  }
-  const proxySettings: ProxySettingsSource = {
-    get: (key: 'proxy_url' | 'proxy_runtimes') =>
-      new SettingsRepo(db).get(key),
-  };
-  const bridge = new RuntimeBridge(opts.hostClient, proxySettings);
-  const cache = new RunStateCache();
-  const activityLog = new JsonlActivityLogWriter({
-    logDir: ctx.logDir,
-    logger,
-  });
-  const inboxRepo = new ConversationInboxRepo(db);
-  const inboxAck: InboxAckSink = {
-    markDelivered: (deliveryIds: readonly number[]) =>
-      inboxRepo.markDelivered([...deliveryIds]),
-    markUndelivered: () => {},
-  };
-  // Construct the coordinator BEFORE EventHandler so the handler's
-  // forward-only callbacks can reference it. Coordinator's
-  // `respawn` callback closes over `ctx.runtimeHost` via a thunk —
-  // the field isn't populated yet, so we defer the lookup to
-  // call-time (start() is invoked from `onRuntimeExit` paths only,
-  // long after construction finishes).
-  const coordinator = new RuntimeDeliveryCoordinator({
-    bridge: {
-      runtimeWake: params => opts.hostClient!.runtimeWake(params),
-    },
-    cache,
-    inboxAck,
-    callbacks: {
-      respawn: (cid, aid) => ctx.runtimeHost.start(cid, aid),
-      hasPendingInbox: (cid, aid) =>
-        inboxRepo.listPending(cid, aid).length > 0,
-      // `combineGated` is invoked with UN-ENCODED message texts BEFORE
-      // the per-driver encode step (Cindy `Mqf1h-FKudtEbH1O`: feeding
-      // driver-encoded JSON lines through `combineGatedBatch` would
-      // produce malformed claude stdin — combine before encode). The
-      // lifted `combineGatedBatch` keeps daemon mode byte-identical
-      // to the original CM stdin formatter. Tool-name is hardcoded to
-      // match `sendMessageToolName(driver)` (currently driver-agnostic).
-      combineGated: texts =>
-        combineGatedBatch(texts, 'silverhand message send'),
-      publishActivity: state => {
-        ctx.events.publish(state.conversationId, {
-          kind: 'agent_activity',
-          payload: state,
-        });
-        activityLog.write(state);
-      },
-    },
-    logger: {
-      info: (meta, msg) => logger.info(meta, msg),
-      warn: (meta, msg) => logger.warn(meta, msg),
-      error: (meta, msg) => logger.error(meta, msg),
-    },
-  });
-  const eventHandler = new RuntimeEventHandler({
-    client: opts.hostClient,
-    bridge,
-    cache,
-    events: ctx.events,
-    inboxAck,
-    // B1 (Cindy `usjxj8AxX4AvJ5E-`): the projector owns both the DB
-    // write to `conversation_agents` AND the matching `agent_status`
-    // SSE for the four status-mutating events (session_init,
-    // runtime_exit, init_retrying, init_cooldown). EventHandler stays
-    // event-fan-out — see `runtime/status-projector.ts`.
-    statusProjector: new DbRuntimeStatusProjector(
-      new ConversationRepo(db),
-      ctx.events,
-    ),
-    // Forward parsed events to the coordinator's busy tracker
-    // (Cindy `3l4bZ5vaMvlC9DVS`: forward-only — the handler MUST
-    // NOT keep its own queue or call bridge.runtimeWake).
-    onParsedEvent: (cid, aid, ev) =>
-      coordinator.onParsedEvent(cid, aid, ev),
-    // Forward runtime_exit to the coordinator so it can clear its
-    // per-agent queue + decide oneShot auto-respawn (gated by the
-    // intentional / initTimedOut / fatalError / hasPendingInbox
-    // trio in `delivery-coordinator.ts:onRuntimeExit`).
-    onRuntimeExit: (cid, aid, meta) =>
-      coordinator.onRuntimeExit(cid, aid, meta),
-    onInitTimeout: (cid, aid) =>
-      coordinator.clearWakeWatchdog(cid, aid, 'timeout'),
-    activityLog,
-    // B2 (Cindy `usjxj8AxX4AvJ5E-`): wire `runtime_ready_for_drain`
-    // to DaemonHost.drainPending so rows that arrived during the
-    // startup_pending window are flushed when the runtime crosses
-    // into `ready` without ever being woken by submitLiveDelivery.
-    // Late-bound via the daemonHostRef closure because DaemonHost
-    // construction needs the eventHandler above. The callback only
-    // fires after `eventHandler.start()`, which DaemonHost calls
-    // from `reconcileOnBoot` — strictly after `daemonHostRef` is
-    // populated below.
-    onReadyForDrain: (cid, aid) => {
-      const host = daemonHostRef;
-      if (!host) {
-        logger.warn(
-          { kind: 'runtime', conversationId: cid, agent_id: aid },
-          'drain: ready_for_drain fired before DaemonHost wired; skipping',
-        );
-        return;
-      }
-      return host.drainPending(cid, aid);
-    },
-    logger,
-  });
-  let daemonHostRef: DaemonAgentRuntimeHost | null = null;
-  ctx.runtimeHost = new DaemonAgentRuntimeHost({
-    client: opts.hostClient,
-    bridge,
-    cache,
-    eventHandler,
-    events: ctx.events,
-    conversations: new ConversationRepo(db),
-    agents: new AgentRepo(db),
-    messages: new MessageRepo(db),
-    inboxes: inboxRepo,
-    users: new UserRepo(db),
-    settings: new SettingsRepo(db),
-    coordinator,
-    workspaces: new WorkspaceRepo(db, { workspacesRoot }),
-    membership: new MembershipService({
-      agents: new AgentRepo(db),
-      users: new UserRepo(db),
-      conversations: new ConversationRepo(db),
-    }),
-    silverhandDir: opts.silverhandDir,
-    silverhandCli: opts.silverhandCliLauncher,
-    agentTokens: ctx.agentTokens,
-    // serverConfig is read fresh on every start() so it picks up the
-    // bound port after the Hono server listens (ctx.serverConfig is
-    // mutated mid-boot from `:0` placeholder to the real URL).
-    serverConfig: () => ctx.serverConfig,
-    activityLog,
-    db,
-    logger,
-  });
-  daemonHostRef = ctx.runtimeHost as DaemonAgentRuntimeHost;
+  // D5.a-3 — embedded and standalone are ONE runtime host over the
+  // outbound frame transport. The host delegates to the
+  // `OutboundRuntimeEventFanout` projection; the deployment-specific
+  // `OutboundFrameAdapter` (standalone = WSS-backed; embedded = local
+  // Unix socket) is installed below once the HTTP server binds. The
+  // `() => outboundFanout` thunk defers the projection lookup so this
+  // assignment can precede the fanout construction (which needs the
+  // bound server / finalized `serverConfig.url`).
+  ctx.runtimeHost = new OutboundAgentRuntimeHost(logger, () => outboundFanout);
   logger.info(
-    { runtime: 'daemon' },
-    'agent runtime: silverhand-daemon (the only supported runtime)',
+    { runtime: 'outbound', mode: opts.mode },
+    'agent runtime: outbound frame transport',
   );
 
   ctx.channelService = new ChannelService({
@@ -330,7 +402,6 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     messages: new MessageRepo(db),
     agents: new AgentRepo(db),
     users: new UserRepo(db),
-    settings: new SettingsRepo(db),
     notifications: new NotificationRepo(db),
     workspaces: new WorkspaceRepo(db, { workspacesRoot }),
     attachmentService,
@@ -368,9 +439,21 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     conversations: new ConversationRepo(db),
     messages: new MessageRepo(db),
     agents: new AgentRepo(db),
-    settings: new SettingsRepo(db),
     runtimeHost: ctx.runtimeHost,
     events: ctx.events,
+    logger,
+  });
+  // D4.d §5 — boot-time materialization reconciler. Marks stale
+  // `pending_materialization` rows as `failed` with
+  // `backend_crash_during_materialize`. SYNCHRONOUS by contract:
+  // must complete before the HTTP listener binds so the first
+  // `GET /api/agents?include_failed=1` (D5) sees a coherent state,
+  // and so list/get callers never observe an orphaned pending row
+  // left over from a prior crash. NOT a compensating executor — see
+  // module header in `runtime/materialize-reconciler.ts` for the
+  // boundary.
+  runBootMaterializeReconciler({
+    agents: new AgentRepo(db),
     logger,
   });
   // Boot recovery (daemon hydrate from `runtime_status` then diff
@@ -380,25 +463,22 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   ctx.scheduleService.start();
   const stopEventLoopLagProbe = startEventLoopLagProbe(logger);
 
-  // Daemon liveness ping. The daemon shim's first real call will
-  // surface a disconnect more concretely than the ping; this is a
-  // best-effort smoke confirming the IPC channel is alive at boot.
-  try {
-    const ping = await opts.hostClient.ping();
-    logger.info(
-      {
-        daemon_pid: ping.daemon_pid,
-        daemon_version: ping.daemon_version,
-        started_at: ping.started_at,
-      },
-      'silverhand-daemon ping ok',
-    );
-  } catch (err) {
-    logger.warn(
-      { err: err instanceof Error ? err.message : String(err) },
-      'silverhand-daemon ping failed at boot',
-    );
-  }
+  ctx.embeddedBootstrap = await prepareEmbeddedBootstrap({
+    silverhandDir: opts.silverhandDir,
+    serverConfig: ctx.serverConfig,
+    listenHostname,
+    logger,
+  });
+  logger.info(
+    {
+      enabled: ctx.embeddedBootstrap.enabled,
+      reason: ctx.embeddedBootstrap.reason,
+      listenHostname,
+    },
+    ctx.embeddedBootstrap.enabled
+      ? 'Embedded bootstrap: enabled (loopback)'
+      : 'Embedded bootstrap: disabled',
+  );
 
   const app = new Hono<AppEnv>();
   app.use('*', silverhandCors());
@@ -408,13 +488,18 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   return new Promise<RunningBackend>((resolve, reject) => {
     let eventWs: EventWsServerController | null = null;
     const server = serve(
-      { fetch: app.fetch, hostname: '127.0.0.1', port: 0 },
+      { fetch: app.fetch, hostname: listenHostname, port: listenPort },
       info => {
         const address = info as AddressInfo;
         const port = address.port;
-        const url = `http://127.0.0.1:${port}`;
+        const url = urlForListenAddress(listenHostname, port);
         ctx.serverConfig = { ...opts.serverConfig, url };
-        logger.info({ url }, 'backend listening');
+        ctx.readiness.listenReady = true;
+        logger.info({ url, listenHostname, port }, 'backend listening');
+        // P1-1 — now that `ctx.serverConfig.url` is the real bound URL,
+        // it is safe to dial the embedded daemon (the first `runtime_start`
+        // will read this finalized URL). No-op for standalone.
+        startEmbeddedOutboundConnect?.();
         resolve({
           url,
           port,
@@ -424,15 +509,33 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
             // Stop the scheduler before any agent shutdown so we don't
             // race a fire mid-teardown (would write to a dying CM).
             ctx.scheduleService.stop();
-            // Phase 1: stop all agents (must finish before activity-log flush
-            // so terminal events are written before the stream closes).
+            // Phase 1: runtime shutdown — stop all agents, then flush +
+            // close the activity log, WHILE the outbound transport is
+            // still connected. `closeActivityLog()` dispatches
+            // `runtime_close_activity_log` to every connected host, so it
+            // MUST run before the WS/adapter/fanout teardown below
+            // (P1-2, Cindy `KuHXrKuCv9nPU28M`) — otherwise the dispatch
+            // is a silent no-op. stopAll runs first so terminal events
+            // are written before the activity stream closes. The activity
+            // writer's own `close()` is idempotent (`closed` guard), so
+            // the later `outboundFanout.close()` re-closing it is safe.
             await ctx.runtimeHost.stopAll().catch(() => undefined);
+            await ctx.runtimeHost.closeActivityLog().catch(() => undefined);
 
             // Phase 2: close WS lifecycle before the HTTP drain removes sockets.
-            await eventWs?.close();
+            await Promise.all([
+              eventWs?.close(),
+              hostWs?.close(),
+            ]);
+            // Close the embedded local-Unix adapter's socket (the
+            // standalone adapter only views the bootstrap-owned hostWs,
+            // so its close() is a no-op).
+            await embeddedOutboundAdapter?.close().catch(() => undefined);
+            await outboundFanout?.close();
+            await cleanupEmbeddedBootstrap(ctx.embeddedBootstrap, logger);
 
-            // Phase 3: flush activity log AND drain the HTTP server
-            // concurrently — they are independent of each other.
+            // Phase 3: drain the HTTP server. (Activity-log flush moved to
+            // phase 1 so it dispatches while the transport is still up.)
             //
             // Order matters for the server drain:
             //   1. `server.close()` first — stops accepting new connections
@@ -443,10 +546,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
             // this method (we always use HTTP/1.1, but the type is a union).
             const serverDrained = new Promise<void>(res => server.close(() => res()));
             if ('closeAllConnections' in server) server.closeAllConnections();
-            await Promise.allSettled([
-              ctx.runtimeHost.closeActivityLog(),
-              serverDrained,
-            ]);
+            await serverDrained;
 
             // Phase 4: close the DB. At this point all connections —
             // including in-flight HTTP requests — have been forcibly
@@ -459,11 +559,162 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
       },
     );
     eventWs = installEventWebSocketServer(server as HttpServer, ctx);
+    {
+      const settings = new SettingsRepo(db);
+      // D5.a-3 — the fanout is the shared projection for BOTH modes.
+      // Order is intentional: construct the fanout, then — only after
+      // the constructor returns without throwing — flip the readiness
+      // bit, then install the transport adapter. A throw inside the
+      // constructor must leave `outboundEventFanoutInstalled === false`
+      // so `/readyz` keeps returning 503 and orchestrators do not
+      // promote a half-wired backend to "ready". This flag is a
+      // backend-side wiring indicator only; the daemon-side attachment
+      // lifecycle is reported separately via `getAttachment`.
+      outboundFanout = new OutboundRuntimeEventFanout({
+        db,
+        events: ctx.events,
+        transport: () => outboundAdapter,
+        logger,
+        silverhandDir: ctx.silverhandDir,
+        workspacesRoot,
+        silverhandCli: ctx.silverhandCliLauncher,
+        agentTokens: ctx.agentTokens,
+        serverUrl: () => ctx.serverConfig.url,
+        proxyPolicy: () => ({
+          url: settings.get(SETTINGS_KEYS.PROXY_URL),
+          allowlist: settings.getProxyRuntimes(),
+        }),
+        logDir: ctx.logDir,
+      });
+      ctx.readiness.outboundEventFanoutInstalled = true;
+    }
+    hostWs = installHostWebSocketServer(server as HttpServer, ctx, {
+      eventSink: opts.testHooks?.wrapHostWsEventSink
+        ? opts.testHooks.wrapHostWsEventSink(outboundFanout ?? undefined)
+        : outboundFanout ?? undefined,
+    });
+    // Construct the deployment-specific outbound transport. This runs
+    // synchronously before the listen callback fires, so `outboundAdapter`
+    // is wired before any request can arrive. For embedded the actual
+    // `connect()` is deferred to the listen callback (P1-1) so the first
+    // `runtime_start` never ships a placeholder `server_url`.
+    if (opts.mode === 'standalone') {
+      // Standalone: the daemon dials the backend over WSS; the adapter
+      // is a thin view of the `hostWs` controller (owned by this
+      // bootstrap, so the adapter's `close()` is a no-op).
+      outboundAdapter = new StandaloneOutboundFrameAdapter(() => hostWs);
+    } else {
+      // Embedded: the backend dials the daemon's local outbound socket.
+      const localHostId = hostRepo.ensureLocal().id;
+      const socketPath =
+        opts.outboundSocketPath ?? deriveLocalOutboundFrameSocketPath();
+      const adapter = new EmbeddedUnixOutboundFrameAdapter({
+        socketPath,
+        hostId: localHostId,
+        onEvent: (hostId, event, connectionId) =>
+          outboundFanout?.onEvent(hostId, event, connectionId),
+        onDisconnect: (hostId, connectionId) =>
+          outboundFanout?.onDisconnect(hostId, connectionId),
+        logger,
+      });
+      embeddedOutboundAdapter = adapter;
+      outboundAdapter = adapter;
+      // Defer the connect to the listen callback (P1-1): construct now so
+      // `outboundAdapter` is wired, but dial only after the bound URL is
+      // finalized. Fire-and-forget once triggered (mirrors the standalone
+      // ready→hydrate model). On the daemon's connection-scoped `ready`
+      // the fanout latches the daemon key and hydrates `runtime_status`.
+      // Until the socket is up, runtime routes return 503 `host_attach_pending`.
+      startEmbeddedOutboundConnect = () => {
+        void connectEmbeddedOutboundAdapter(adapter, socketPath, logger);
+      };
+    }
     server.on('error', reject);
   });
 }
 
-export type { BackendContext, BackendLogger, BackendLoggers } from './context.js';
+/**
+ * Connect the embedded local-Unix outbound adapter to the daemon's
+ * `daemon-outbound.sock`, retrying briefly to absorb the boot race where
+ * the desktop main process has spawned the daemon but its socket is not
+ * yet listening. Best-effort: on persistent failure we log a warning and
+ * return — runtime routes surface `host_attach_pending` (503) until the
+ * socket becomes reachable. (Reconnect-on-drop after a daemon bounce is a
+ * follow-up; in embedded the desktop main supervises the daemon's
+ * lifecycle and would re-run boot wiring on a restart.)
+ */
+async function connectEmbeddedOutboundAdapter(
+  adapter: EmbeddedUnixOutboundFrameAdapter,
+  socketPath: string,
+  logger: BackendLogger,
+): Promise<void> {
+  const maxAttempts = 20;
+  const intervalMs = 100;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await adapter.connect();
+      logger.info(
+        { socketPath, attempt },
+        'embedded outbound adapter connected to daemon socket',
+      );
+      return;
+    } catch (err) {
+      if (attempt === maxAttempts) {
+        logger.warn(
+          {
+            socketPath,
+            attempts: attempt,
+            err: err instanceof Error ? err.message : String(err),
+          },
+          'embedded outbound adapter failed to connect; runtime routes return host_attach_pending until the daemon socket is reachable',
+        );
+        return;
+      }
+      await delayMs(intervalMs);
+    }
+  }
+}
+
+function delayMs(ms: number): Promise<void> {
+  return new Promise(resolve => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
+}
+
+export type {
+  BackendContext,
+  BackendDeploymentMode,
+  BackendLogger,
+  BackendLoggers,
+} from './context.js';
+export type {
+  HostWsAttachment,
+  HostWsServerController,
+  HostWsEventSink,
+} from './ws/host-ws-server.js';
+export type { AuthRuntimeConfig } from './auth/config.js';
+export { resolveAuthRuntimeConfig } from './auth/config.js';
+export {
+  CURRENT_SCHEMA_VERSION,
+  MIN_SUPPORTED_SCHEMA_VERSION,
+} from '@silverhand/shared';
+export {
+  DatabaseMigrationError,
+  currentSchemaVersion,
+  type DatabaseMigrationErrorCode,
+  type MigrationBackupInfo,
+  type MigrationRunResult,
+  type OpenDatabaseOptions,
+  type RunMigrationsOptions,
+} from './db.js';
+export {
+  AdminResetPasswordError,
+  resetAdminPassword,
+  type AdminResetPasswordErrorCode,
+  type AdminResetPasswordOptions,
+} from './admin.js';
+
 export {
   createCategorizedLoggers,
   createFileLogger,
@@ -474,9 +725,37 @@ export {
   type LogLevelControl,
 } from './logger.js';
 
+function elapsedSince(startedAt: number): number {
+  return Math.round((performance.now() - startedAt) * 10) / 10;
+}
+
+function migrationErrorCode(err: unknown): string {
+  if (err && typeof err === 'object' && 'code' in err) {
+    return String((err as { code?: unknown }).code);
+  }
+  return 'migration_failed';
+}
+
+function errorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+const DISABLED_SILVERHAND_CLI_LAUNCHER: SilverhandCliLauncher = {
+  command: 'silverhand',
+  args: [],
+};
+
 function resolveLogControl(logger: BackendLogger): LogLevelControl {
   const candidate = logger as BackendLogger & { logControl?: LogLevelControl };
   return candidate.logControl ?? createLogLevelControl();
+}
+
+function urlForListenAddress(hostname: string, port: number): string {
+  const host = hostname.includes(':') && !hostname.startsWith('[')
+    ? `[${hostname}]`
+    : hostname;
+  return `http://${host}:${port}`;
 }
 
 function assertLauncherResolvable(command: string, label = 'launcher'): void {

@@ -10,11 +10,13 @@ import { Markdown } from '@/components/chat/Markdown';
 interface AgentWorkspaceCardProps {
   workspace: AgentWorkspaceDto | undefined;
   isLoading: boolean;
+  canRevealPath: boolean;
 }
 
 export function AgentWorkspaceCard({
   workspace,
   isLoading,
+  canRevealPath,
 }: AgentWorkspaceCardProps): JSX.Element {
   return (
     <div className="flex flex-col gap-4">
@@ -28,7 +30,9 @@ export function AgentWorkspaceCard({
           own memory; other workspaces keep separate memory under their
           own paths.
         </p>
-        {workspace ? <PathBar path={workspace.l1_path} /> : null}
+        {workspace ? (
+          <PathBar path={workspace.l1_path} canRevealPath={canRevealPath} />
+        ) : null}
       </header>
 
       {isLoading ? (
@@ -48,7 +52,13 @@ export function AgentWorkspaceCard({
   );
 }
 
-function PathBar({ path }: { path: string }): JSX.Element {
+function PathBar({
+  path,
+  canRevealPath,
+}: {
+  path: string;
+  canRevealPath: boolean;
+}): JSX.Element {
   const onCopy = () => void navigator.clipboard.writeText(path);
   const onReveal = () => void window.agentHub.showItemInFolder(path);
   return (
@@ -70,15 +80,17 @@ function PathBar({ path }: { path: string }): JSX.Element {
       >
         <Copy className="size-3" />
       </button>
-      <button
-        type="button"
-        data-panel-control="row-action"
-        className="flex size-6 items-center justify-center text-text-muted hover:bg-bg-hover hover:text-text-primary"
-        title="Reveal in Finder"
-        onClick={onReveal}
-      >
-        <FolderOpen className="size-3.5" />
-      </button>
+      {canRevealPath ? (
+        <button
+          type="button"
+          data-panel-control="row-action"
+          className="flex size-6 items-center justify-center text-text-muted hover:bg-bg-hover hover:text-text-primary"
+          title="Reveal in Finder"
+          onClick={onReveal}
+        >
+          <FolderOpen className="size-3.5" />
+        </button>
+      ) : null}
     </div>
   );
 }

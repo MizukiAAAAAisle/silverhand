@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  AgentDtoSchema,
   CreateAgentInputSchema,
   UpdateAgentInputSchema,
 } from '@silverhand/shared';
@@ -49,5 +50,79 @@ describe('agent fast_mode validation', () => {
     expect(
       UpdateAgentInputSchema.safeParse({ fast_mode: 1 }).success,
     ).toBe(false);
+  });
+});
+
+describe('agent materialization fields (D4.d v33)', () => {
+  const baseAgent = {
+    id: 'a1',
+    name: 'alice',
+    display_name: 'Alice',
+    runtime: 'claude' as const,
+    model: null,
+    reasoning_effort: null,
+    fast_mode: null,
+    host_id: 'h1',
+    description: null,
+    created_by_user_id: 'u1',
+    avatar_url: null,
+    created_at: 1,
+    updated_at: 1,
+  };
+
+  it('requires materialization_status and the two failed-row diagnostic fields', () => {
+    // Active (default-list) row: status='active', no failure.
+    expect(
+      AgentDtoSchema.safeParse({
+        ...baseAgent,
+        materialization_status: 'active',
+        materialization_failed_code: null,
+        materialization_failed_at: null,
+      }).success,
+    ).toBe(true);
+    // Failed row: management view (§7.3 Q6.a) needs the diagnostics.
+    expect(
+      AgentDtoSchema.safeParse({
+        ...baseAgent,
+        materialization_status: 'failed',
+        materialization_failed_code: 'agent_dir_collision',
+        materialization_failed_at: 1700000000000,
+      }).success,
+    ).toBe(true);
+    // pending_materialization is a legal in-flight status (visible
+    // to creator briefly between row reserve and L3a/L3b).
+    expect(
+      AgentDtoSchema.safeParse({
+        ...baseAgent,
+        materialization_status: 'pending_materialization',
+        materialization_failed_code: null,
+        materialization_failed_at: null,
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects unknown materialization_status values', () => {
+    expect(
+      AgentDtoSchema.safeParse({
+        ...baseAgent,
+        materialization_status: 'archived',
+        materialization_failed_code: null,
+        materialization_failed_at: null,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('does NOT expose idempotency_key on the default DTO (Cindy round-2 P2)', () => {
+    // The DTO schema is strict-by-default (no z.passthrough); adding
+    // an unknown key should be silently dropped by parse, not surface
+    // it. The negative pin here is structural: type-level absence
+    // is enforced by `AgentDto` not having the field.
+    const parsed = AgentDtoSchema.parse({
+      ...baseAgent,
+      materialization_status: 'active',
+      materialization_failed_code: null,
+      materialization_failed_at: null,
+    });
+    expect('idempotency_key' in parsed).toBe(false);
   });
 });

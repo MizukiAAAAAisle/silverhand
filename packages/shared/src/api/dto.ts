@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  AgentMaterializationStatusSchema,
   AttachmentCreatorKindSchema,
   ConversationAgentStatusSchema,
   ConversationKindSchema,
@@ -17,13 +18,90 @@ import {
 } from '../db/schema.js';
 
 // ── Host ─────────────────────────────────────────────────────────
+//
+// Single source-of-truth shape for every host the user owns. Both the
+// owner-filtered `GET /api/hosts` list and the `POST /api/hosts/claim-
+// or-create` response inline this DTO so renderer + desktop main share
+// one parser. `revoked_at` and `last_seen_at` are owner-scoped
+// metadata and are never returned outside the owning user (Stage B.4
+// viewer filter at the route boundary).
 export const HostDtoSchema = z.object({
   id: z.string(),
   name: z.string(),
   kind: HostKindSchema,
   created_at: z.number(),
+  /** Soft-delete tombstone. Null while the host is active. After
+   *  revoke the row stays around (audit history) but every credential
+   *  and runtime placement using it fails closed. */
+  revoked_at: z.number().nullable(),
+  /** Last claim-or-create touch timestamp. Null only for legacy /
+   *  migration-seeded hosts that have not been claimed yet. */
+  last_seen_at: z.number().nullable(),
 });
 export type HostDto = z.infer<typeof HostDtoSchema>;
+
+export const HostClaimOrCreateInputSchema = z.object({
+  installation_id: z.string().uuid(),
+  label: z.string().trim().min(1).max(128).optional(),
+  current_host_id: z.string().min(1).optional(),
+}).strict();
+export type HostClaimOrCreateInput = z.infer<typeof HostClaimOrCreateInputSchema>;
+
+export const HostClaimOrCreateResponseSchema = z.object({
+  host_id: z.string(),
+  host: HostDtoSchema,
+  server_url: z.string().url(),
+  host_token: z.string().min(1).optional(),
+});
+export type HostClaimOrCreateResponse = z.infer<
+  typeof HostClaimOrCreateResponseSchema
+>;
+
+/** Owner-scoped list response from `GET /api/hosts`. The route filters
+ *  to the current viewer's owned hosts only. */
+export const HostListResponseSchema = z.object({
+  hosts: z.array(HostDtoSchema),
+});
+export type HostListResponse = z.infer<typeof HostListResponseSchema>;
+
+/** `POST /api/hosts/{id}/revoke` response. Returns the updated DTO so
+ *  the caller can refresh local UI without a follow-up GET. */
+export const HostRevokeResponseSchema = z.object({
+  host: HostDtoSchema,
+});
+export type HostRevokeResponse = z.infer<typeof HostRevokeResponseSchema>;
+
+/** Embedded `POST /api/hosts/{id}/rotate-token` response.
+ *
+ *  IMPORTANT: this shape is consumed by Electron main only —
+ *  `host_token` is cleartext and must be written to `daemon-config.json`
+ *  before any return value crosses the IPC boundary. The renderer
+ *  never sees this schema; the renderer-facing IPC return strips
+ *  the token and only echoes `{ ok, host_id, status }`. */
+export const HostRotateTokenEmbeddedResponseSchema = z.object({
+  host_id: z.string(),
+  host: HostDtoSchema,
+  host_token: z.string().min(1),
+});
+
+/** Standalone D2 outbound rotation response.
+ *
+ *  The cleartext replacement token is delivered only over the authenticated
+ *  host WebSocket `rotate_token` command; the HTTP caller only learns that the
+ *  rotation completed. */
+export const HostRotateTokenStandaloneResponseSchema = z.object({
+  host_id: z.string(),
+  host: HostDtoSchema,
+  status: z.literal('rotated'),
+});
+
+export const HostRotateTokenResponseSchema = z.union([
+  HostRotateTokenEmbeddedResponseSchema,
+  HostRotateTokenStandaloneResponseSchema,
+]);
+export type HostRotateTokenResponse = z.infer<
+  typeof HostRotateTokenResponseSchema
+>;
 
 // ── User ─────────────────────────────────────────────────────────
 // Profile-only "human" identity. Auth/credentials live in a separate
@@ -46,8 +124,8 @@ export const UserDtoSchema = z.object({
 export type UserDto = z.infer<typeof UserDtoSchema>;
 
 /**
- * Pre-registration shape returned by `GET /api/me` when no `users` row
- * exists yet (i.e. `app_settings.viewer_user_id` is unset). The renderer
+ * Pre-authentication shape returned by `GET /api/me` when no user
+ * session has been established yet. The renderer
  * branches on the discriminator and shows `<RegistrationGate>` rather
  * than mounting the AppShell.
  *
@@ -67,6 +145,39 @@ export const MeResponseSchema = z.union([
   RegistrationRequiredSchema,
 ]);
 export type MeResponse = z.infer<typeof MeResponseSchema>;
+
+export const BindAddressScopeSchema = z.enum(['loopback', 'lan', 'public']);
+export type BindAddressScope = z.infer<typeof BindAddressScopeSchema>;
+
+export const ServerInfoSchema = z.object({
+  signup_enabled: z.boolean(),
+  /**
+   * D4.a Commit 4 (per `docs/remote-backend-d4-design.md` §6.3
+   * condition 3): classification of the address the standalone /
+   * embedded backend is bound to, so desktop and ops tooling can
+   * read "signup_enabled + bind_address_scope" together
+   * programmatically.
+   *
+   *   - 'loopback' — `127.0.0.1` / `::1` / `localhost`. Embedded
+   *     backend's default. No external reachability.
+   *   - 'lan' — RFC1918 (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16),
+   *     link-local (169.254/16, fe80::/10), unique-local IPv6
+   *     (fc00::/7), or an mDNS `*.local` name. Reachable from
+   *     hosts on the same network but not the public internet.
+   *   - 'public' — anything else: a public IP, a globally
+   *     resolvable DNS name, or a wildcard bind (`0.0.0.0` / `::`)
+   *     because the latter exposes whichever interfaces the host
+   *     has, including public ones. The conservative classification
+   *     for wildcards (Cindy D4.a invariant: never under-state
+   *     exposure scope in a field used to gate a warning).
+   *
+   * Optional in the schema for backward compat — older standalone
+   * builds without the field still parse — but production
+   * `/api/server/info` MUST populate it.
+   */
+  bind_address_scope: BindAddressScopeSchema.optional(),
+});
+export type ServerInfo = z.infer<typeof ServerInfoSchema>;
 
 // `display_name` is rendered into the agent system prompt (PR-B
 // "Members in this conversation:" block) and persisted on `users`
@@ -94,7 +205,7 @@ const DISPLAY_NAME_FORBIDDEN_MSG =
 
 /**
  * Shared validator for any user-editable `display_name` field. Used by
- * `RegisterUserInputSchema`, `UpdateUserProfileInputSchema`, and
+ * `AuthSignupInputSchema`, `UpdateUserProfileInputSchema`, and
  * `UpdateAgentInputSchema`. Trim → 1..64 chars → reject control
  * characters (C0 U+0000–U+001F, DEL U+007F, C1 U+0080–U+009F) and
  * Unicode line separators (U+2028 / U+2029).
@@ -108,32 +219,31 @@ export const DisplayNameSchema = z
     message: DISPLAY_NAME_FORBIDDEN_MSG,
   });
 
-// POST /api/register — the SOLE creator of `users` rows. Called once at
-// registration (V1 first launch / V2 after auth signup). Atomically
-// INSERTs the user row and writes `app_settings.viewer_user_id` in a
-// single transaction. Calling it after registration has already
-// completed returns 409 `already_registered`.
-//
-// `display_name` is optional: if omitted, defaults to the registered
-// `name`. Avatar is NOT part of registration — the renderer uploads it
-// via POST /api/me/avatar after this call succeeds (kept separate so
-// we have a single binary upload path).
-export const RegisterUserInputSchema = z.object({
-  name: z
-    .string()
-    .trim()
-    .min(2, 'name must be at least 2 characters')
-    .max(32, 'name must be at most 32 characters')
-    .regex(
-      // Aligned with MENTION_RE below: alpha-first so `@<name>` always
-      // parses as a mention. A numeric-first name would be a permanent
-      // identity that the chat surface can never link back to.
-      /^[a-zA-Z][a-zA-Z0-9_-]*$/,
-      'name must start with a letter, then letters / digits / dash / underscore',
-    ),
+const AuthEmailSchema = z.string().trim().email().max(320);
+
+export const AuthSignupInputSchema = z.object({
+  email: AuthEmailSchema,
+  password: z.string().min(8).max(1024),
   display_name: DisplayNameSchema.optional(),
 });
-export type RegisterUserInput = z.infer<typeof RegisterUserInputSchema>;
+export type AuthSignupInput = z.infer<typeof AuthSignupInputSchema>;
+
+export const AuthLoginInputSchema = z.object({
+  email: AuthEmailSchema,
+  password: z.string().min(1).max(1024),
+});
+export type AuthLoginInput = z.infer<typeof AuthLoginInputSchema>;
+
+export const AuthSessionResponseSchema = z.object({
+  user_token: z.string().min(1),
+  user: UserDtoSchema,
+});
+export type AuthSessionResponse = z.infer<typeof AuthSessionResponseSchema>;
+
+export const AuthLogoutResponseSchema = z.object({
+  ok: z.literal(true),
+});
+export type AuthLogoutResponse = z.infer<typeof AuthLogoutResponseSchema>;
 
 // PATCH /api/me — post-registration profile update. By design `name`
 // is NOT in this schema: the registration boundary is the only public
@@ -174,6 +284,30 @@ export const AgentDtoSchema = z.object({
    *  storage wired); PR-2 flips this on once the storage / route
    *  pair lands. */
   avatar_url: z.string().nullable(),
+  /** v33 (D4.d): agent-home materialization lifecycle. Required
+   *  because every v33 row has a non-null status — default-list
+   *  callers see `'active'`; the failed-row management view
+   *  (Q6.a, §7.3) opts in via `?include_failed=1` and reads
+   *  `'failed'` here together with the two diagnostic fields
+   *  below. `'pending_materialization'` is reserved for the
+   *  in-flight window between row reserve and L3a/L3b — readers
+   *  see it only when the materialize wire round-trip is still
+   *  pending. Note: `idempotency_key` is intentionally NOT
+   *  exposed on the default DTO — same-key retry uses a
+   *  route-local management payload (Cindy D1 round-2 P2). */
+  materialization_status: AgentMaterializationStatusSchema,
+  /** v33 (D4.d): populated only when
+   *  `materialization_status='failed'`. Mirrors the §3.4 wire→HTTP
+   *  error-code mapping plus server-side codes. Kept as
+   *  `string | null` (not a narrow enum) so the row column / DTO
+   *  / migration do not need a coordinated schema change when a
+   *  new server-side code is added — the route layer pins the
+   *  exact code set it produces. */
+  materialization_failed_code: z.string().nullable(),
+  /** v33 (D4.d): epoch ms set together with
+   *  `materialization_failed_code`; NULL while the row is in
+   *  `pending_materialization` or `active`. */
+  materialization_failed_at: z.number().nullable(),
   created_at: z.number(),
   updated_at: z.number(),
 });
@@ -189,7 +323,7 @@ export const CreateAgentInputSchema = z.object({
   model: z.string().optional(),
   reasoning_effort: ReasoningEffortSchema.optional(),
   fast_mode: FastModeSchema.optional(),
-  host_id: z.string().optional(), // defaults to local
+  host_id: z.string().optional(), // defaults to the current user's owned local host
   description: z.string().optional(),
 });
 export type CreateAgentInput = z.infer<typeof CreateAgentInputSchema>;
@@ -1500,7 +1634,7 @@ export type MarkNotificationsReadInput = z.infer<
 // Mirrors the renderer-side regex in `Markdown.tsx` and the
 // composer-side detector — the boundary check rejects emails (`me@x`)
 // and paths (`a/@b`), and the alpha-first requirement rejects issue
-// refs like `@123`. Aligned with `RegisterUserInputSchema.name`
+// refs like `@123`. Aligned with auth-signup generated user names
 // (alpha-first by design: `users.name` is the permanent mention
 // anchor). `CreateAgentInputSchema.name` is intentionally broader
 // (`/^[a-zA-Z0-9_-]+$/`, allows numeric-first); a numeric-first

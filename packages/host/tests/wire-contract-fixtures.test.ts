@@ -3,7 +3,10 @@ import { ParsedEventKindSchema } from '@silverhand/shared';
 import {
   AnyFrameSchema,
   encodeFrame,
+  HostOutboundReloadFailureReasonSchema,
+  HostOutboundReloadResultSchema,
   intentSchemas,
+  LooseAnyFrameSchema,
   MAX_FRAME_BYTES,
   ResponseErrorSchema,
   RuntimeStartResultSchema,
@@ -13,6 +16,7 @@ import {
   RuntimeWakeResultSchema,
   type IntentName,
 } from '../src/protocol.js';
+import { AgentMaterializeErrorCodeSchema } from '../src/outbound-protocol.js';
 import {
   schemaForFixture,
   wireFixtures,
@@ -83,7 +87,7 @@ describe('wire contract — every fixture is JSON + schema valid', () => {
             )}`,
       ).toBe(true);
 
-      // (3) Inner params / result.
+      // (3) Inner params / result / typed-error.
       if (inner !== undefined) {
         if (fixture.kind.kind === 'request') {
           // RequestFrame.params
@@ -116,6 +120,22 @@ describe('wire contract — every fixture is JSON + schema valid', () => {
                   2,
                 )}`,
           ).toBe(true);
+        } else if (fixture.kind.kind === 'response_error_typed') {
+          // Per-intent typed error arm carries `.error`. The inner
+          // schema is the intent's `error` entry (Cindy D2 P2-1).
+          const innerResult = inner.safeParse(
+            (parsed as { error: unknown }).error,
+          );
+          expect(
+            innerResult.success,
+            innerResult.success
+              ? ''
+              : `typed-error schema rejected ${fixture.name}: ${JSON.stringify(
+                  innerResult.error.issues,
+                  null,
+                  2,
+                )}`,
+          ).toBe(true);
         }
       }
 
@@ -143,6 +163,34 @@ describe('wire contract — fixture catalogue invariants', () => {
       seen.add(f.name);
     }
     expect(dup, `duplicate fixture names: ${dup.join(', ')}`).toEqual([]);
+  });
+
+  it('D2.g runtime_start fixtures do not carry derived fs artifacts or env maps', () => {
+    const forbiddenKeys = [
+      'cwd',
+      'workspace_path',
+      'system_prompt_path',
+      'spawn_dir',
+      'system_prompt',
+      'memory_text',
+      'consensus_text',
+      'env',
+    ];
+    const runtimeStartFixtures = wireFixtures.filter(
+      f => f.kind.kind === 'request' && f.kind.intent === 'runtime_start',
+    );
+    expect(runtimeStartFixtures.length).toBeGreaterThan(0);
+    for (const fixture of runtimeStartFixtures) {
+      const parsed = JSON.parse(fixture.frame) as { params: unknown };
+      const paramsJson = JSON.stringify(parsed.params);
+      for (const key of forbiddenKeys) {
+        expect(
+          paramsJson.includes(`"${key}"`),
+          `${fixture.name} contains forbidden runtime_start key ${key}`,
+        ).toBe(false);
+      }
+      expect(paramsJson.includes('/spawn-'), fixture.name).toBe(false);
+    }
   });
 
   it('every intent has at least one request fixture', () => {
@@ -240,18 +288,85 @@ describe('wire contract — fixture catalogue invariants', () => {
     ).toEqual([]);
   });
 
-  it('AnyFrameSchema accepts every fixture frame', () => {
-    // Sanity: every fixture must also pass through the catch-all
-    // AnyFrameSchema — that is what daemon and client actually use to
-    // reject unknown shapes at the read site.
+  it('AnyFrameSchema accepts every non-typed fixture frame', () => {
+    // Sanity: every fixture (other than per-intent typed-error frames)
+    // must also pass through the catch-all AnyFrameSchema — that is the
+    // strict generic envelope. Typed-error fixtures intentionally use
+    // codes outside the generic ResponseError enum, so we exempt them
+    // here and verify them against LooseAnyFrameSchema below
+    // (Cindy D2 P1-1 / P2-1: typed codes must survive at transport).
     const failures: string[] = [];
     for (const f of wireFixtures) {
+      if (f.kind.kind === 'response_error_typed') continue;
       const parsed = JSON.parse(f.frame);
       if (!AnyFrameSchema.safeParse(parsed).success) failures.push(f.name);
     }
     expect(
       failures,
       `AnyFrameSchema rejected: ${failures.join(', ')}`,
+    ).toEqual([]);
+  });
+
+  it('LooseAnyFrameSchema accepts every fixture frame (including typed-error)', () => {
+    // The transport layer parses with LooseAnyFrameSchema so per-intent
+    // typed error codes (e.g. agent_dir_collision) survive intact until
+    // the intent-aware HostClient.handleFrame admission. This pin proves
+    // every typed-error fixture passes the loose envelope.
+    const failures: string[] = [];
+    for (const f of wireFixtures) {
+      const parsed = JSON.parse(f.frame);
+      if (!LooseAnyFrameSchema.safeParse(parsed).success) failures.push(f.name);
+    }
+    expect(
+      failures,
+      `LooseAnyFrameSchema rejected: ${failures.join(', ')}`,
+    ).toEqual([]);
+  });
+
+  it('every agent_materialize typed error code has at least one fixture', () => {
+    // Derived from AgentMaterializeErrorCodeSchema so adding a new
+    // typed code in outbound-protocol.ts immediately fails this
+    // assertion until a fixture lands. Mirrors the generic-error
+    // catalogue test above; Cindy D2 P2-1.
+    const expectedCodes = AgentMaterializeErrorCodeSchema.options;
+    const missing: string[] = [];
+    for (const code of expectedCodes) {
+      const has = wireFixtures.some((f) => {
+        if (f.kind.kind !== 'response_error_typed') return false;
+        if (f.kind.intent !== 'agent_materialize') return false;
+        const parsed = JSON.parse(f.frame) as { error?: { code?: string } };
+        return parsed.error?.code === code;
+      });
+      if (!has) missing.push(code);
+    }
+    expect(
+      missing,
+      `agent_materialize typed error codes missing a fixture: ${missing.join(', ')}`,
+    ).toEqual([]);
+  });
+
+  it('every response_error_typed fixture targets an intent with a declared error schema', () => {
+    // Cindy D2 round-2 P2: structural pin paired with the
+    // `schemaForFixture` throw. The kind `response_error_typed`
+    // means "this intent has a per-intent typed taxonomy"; using
+    // it for an intent without an `error` entry in `intentSchemas`
+    // would silently fall back to no inner validation. This test
+    // catches misuse at test-discovery time so a wrong-intent
+    // fixture cannot land even if a developer skips running
+    // `schemaForFixture` in isolation.
+    const offenders: string[] = [];
+    for (const f of wireFixtures) {
+      if (f.kind.kind !== 'response_error_typed') continue;
+      const entry = intentSchemas[f.kind.intent] as {
+        error?: unknown;
+      };
+      if (entry.error === undefined) {
+        offenders.push(`${f.name} (intent='${f.kind.intent}')`);
+      }
+    }
+    expect(
+      offenders,
+      `response_error_typed fixtures pointing at intents with no 'error' schema: ${offenders.join(', ')}`,
     ).toEqual([]);
   });
 
@@ -430,6 +545,107 @@ describe('wire contract — fixture catalogue invariants', () => {
     expect(
       missing,
       `runtime_wake reasons missing fixture: ${missing.join(', ')}`,
+    ).toEqual([]);
+  });
+
+  // ── host_outbound_reload arm coverage (D3.c Commit 2) ────────────
+  //
+  // Mirrors the runtime_wake reason-derived test: arms / reasons are
+  // pulled directly from the protocol schema so a new arm or failure
+  // reason added in protocol.ts immediately fails this test until a
+  // fixture lands. Cindy's Commit 2 review explicitly named
+  // `reloaded / unchanged / not_attached` as the load-bearing trio;
+  // these tests pin all four reasons too so the validate-first-then-
+  // swap failure surface stays observable on the wire.
+
+  it('host_outbound_reload.result covers every `reloaded` arm (true/false)', () => {
+    const arms = HostOutboundReloadResultSchema.options.map((o) =>
+      String(literalValue(o.shape.reloaded)),
+    );
+    const missing = arms.filter(
+      (arm) =>
+        !wireFixtures.some((f) => {
+          if (
+            f.kind.kind !== 'response_success' ||
+            f.kind.intent !== 'host_outbound_reload'
+          )
+            return false;
+          const parsed = JSON.parse(f.frame) as {
+            result?: { reloaded?: boolean };
+          };
+          return String(parsed.result?.reloaded) === arm;
+        }),
+    );
+    expect(
+      missing,
+      `host_outbound_reload reloaded arms missing fixture: ${missing.join(
+        ', ',
+      )}`,
+    ).toEqual([]);
+  });
+
+  it('host_outbound_reload.result success arm covers every `action` slot (reloaded/unchanged)', () => {
+    // The success arm's `action` is `z.enum(['reloaded', 'unchanged'])`.
+    // New action value here => mandatory new fixture.
+    const successArm = HostOutboundReloadResultSchema.options.find(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (o: any) => literalValue(o.shape.reloaded) === true,
+    );
+    const actions: readonly string[] = (successArm as { shape: { action: { options: readonly string[] } } }).shape.action.options;
+    const missing = actions.filter(
+      (action) =>
+        !wireFixtures.some((f) => {
+          if (
+            f.kind.kind !== 'response_success' ||
+            f.kind.intent !== 'host_outbound_reload'
+          )
+            return false;
+          const parsed = JSON.parse(f.frame) as {
+            result?: { reloaded?: boolean; action?: string };
+          };
+          return (
+            parsed.result?.reloaded === true &&
+            parsed.result?.action === action
+          );
+        }),
+    );
+    expect(
+      missing,
+      `host_outbound_reload success actions missing fixture: ${missing.join(
+        ', ',
+      )}`,
+    ).toEqual([]);
+  });
+
+  it('host_outbound_reload.result failure arm covers every `reason` slot (incl. not_attached)', () => {
+    // Derived from HostOutboundReloadFailureReasonSchema — Cindy's
+    // Commit 2 review point 4 ("wire fixtures 覆盖 reloaded /
+    // unchanged / not_attached"). Including the validation-failure
+    // reasons (config_unreadable / parse_failed / invalid_server_url)
+    // makes the validate-first-then-swap surface observable on the
+    // wire too.
+    const reasons = HostOutboundReloadFailureReasonSchema.options;
+    const missing = reasons.filter(
+      (reason) =>
+        !wireFixtures.some((f) => {
+          if (
+            f.kind.kind !== 'response_success' ||
+            f.kind.intent !== 'host_outbound_reload'
+          )
+            return false;
+          const parsed = JSON.parse(f.frame) as {
+            result?: { reloaded?: boolean; reason?: string };
+          };
+          return (
+            parsed.result?.reloaded === false && parsed.result?.reason === reason
+          );
+        }),
+    );
+    expect(
+      missing,
+      `host_outbound_reload failure reasons missing fixture: ${missing.join(
+        ', ',
+      )}`,
     ).toEqual([]);
   });
 });

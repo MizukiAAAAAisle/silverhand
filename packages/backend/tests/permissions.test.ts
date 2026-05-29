@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   canDeleteAttachment,
   canEditAgent,
+  canViewAgent,
   canManageMembers,
   canMutateWorkspace,
   canPostToConversation,
@@ -338,6 +339,51 @@ describe('permission helpers', () => {
       // User principal must consult the row, and missing → deny.
       const localUser: UserPrincipal = { kind: 'user', userId: 'local' };
       expect(canEditAgent(t.ctx, localUser, 'missing')).toBe(false);
+    });
+  });
+
+  describe('canViewAgent', () => {
+    it('allows owner and same-workspace users while keeping edits owner-only', () => {
+      t = buildTestApp();
+      const f = seed(t);
+      const localUser: UserPrincipal = { kind: 'user', userId: 'local' };
+      const teammate: UserPrincipal = { kind: 'user', userId: 'teammate' };
+      const outsider: UserPrincipal = { kind: 'user', userId: 'other' };
+
+      t.ctx.db.exec(
+        `DROP TRIGGER IF EXISTS test_seed_workspace_users;
+         DELETE FROM workspace_users WHERE workspace_id = '${f.workspace.id}';`,
+      );
+      f.workspaces.addUserMember(f.workspace.id, 'local');
+      f.workspaces.addUserMember(f.workspace.id, 'teammate');
+
+      expect(canViewAgent(t.ctx, localUser, f.alice.id)).toBe(true);
+      expect(canViewAgent(t.ctx, teammate, f.alice.id)).toBe(true);
+      expect(canViewAgent(t.ctx, outsider, f.alice.id)).toBe(false);
+
+      expect(canEditAgent(t.ctx, localUser, f.alice.id)).toBe(true);
+      expect(canEditAgent(t.ctx, teammate, f.alice.id)).toBe(false);
+    });
+
+    it('allows agent self and system, denies missing rows', () => {
+      t = buildTestApp();
+      const f = seed(t);
+      const aliceSelf: AgentPrincipal = {
+        kind: 'agent',
+        agentId: f.alice.id,
+        conversationId: f.channel.id,
+      };
+      const bob: AgentPrincipal = {
+        kind: 'agent',
+        agentId: f.bob.id,
+        conversationId: f.channel.id,
+      };
+
+      expect(canViewAgent(t.ctx, aliceSelf, f.alice.id)).toBe(true);
+      expect(canViewAgent(t.ctx, bob, f.alice.id)).toBe(false);
+      expect(canViewAgent(t.ctx, { kind: 'system' }, f.alice.id)).toBe(true);
+      expect(canViewAgent(t.ctx, { kind: 'system' }, 'missing')).toBe(true);
+      expect(canViewAgent(t.ctx, { kind: 'user', userId: 'local' }, 'missing')).toBe(false);
     });
   });
 });

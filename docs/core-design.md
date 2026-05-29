@@ -49,7 +49,7 @@
 
 ```
 Host (computer | sandbox)              ← 物理 / 虚拟宿主，v1 只有 1 个 (this machine)
-  └─ Agent (name, runtime, system_prompt, host_id)
+  └─ Agent (name, runtime, host_id, agent_home path)
                   ▲
                   │ (n:m via workspace_members)
                   ▼
@@ -96,7 +96,7 @@ Message
 | `name` | 用户起的（"claude-planner"、"codex-reviewer"）|
 | `runtime` | `claude` \| `codex` \| `cursor` \| `gemini` |
 | `model` | 可选，特定模型（如 `sonnet-4-6`）|
-| `system_prompt` | 可选，定义这个 agent 的"身份/角色"（"你是规划师，专注架构设计"）|
+| `agent_home` / L1 path | agent 全局 home（通常由 agent_home workspace 的 `workspace_path` 表示）；`system_prompt.md` 文件定义这个 agent 的"身份/角色" |
 
 **为什么需要 Agent 一等公民**：
 - 同一个 runtime 可以有多个 agent 实例，每个有不同身份（claude-planner vs claude-debugger）
@@ -210,7 +210,7 @@ messages / inbox delivery row 都不随之删除。
 |------|------------|----------|---------|
 | **A. Push 完整内容** | 把整条新消息包成伪 user message 写 stdin：`{"type":"user","message":{"content":[{"type":"text","text":"New message received: <发件人><正文>...Respond as appropriate."}]}}` | 直接读到完整消息内容，立即 reply | direct mode + inbox 非空 + driver.encodeStdinMessage 成功 |
 | **B. Push 短提示** | 写一行 ASCII：`[System notification: You have N new messages waiting. Call check_messages to read them when you're ready.]` | 读到提示后**自己调 `check_messages` MCP 工具**走 HTTP 拉正文 | 上面 A 的 encode 失败 / driver 不支持 direct push / 边缘 case |
-| **C. 不 push** | 什么都不写到 stdin | 消息留 inbox，等下次 spawn 时拼进 initial prompt，或 agent 自发 check | agent 进程不在跑 / Claude gated 模式但当前不在 safe boundary |
+| **C. 不 push** | 什么都不写到 stdin | 消息留 inbox，等下次 spawn 时作为 `runtime_start.startup_delivery.text` 交给 daemon，或 agent 自发 check | agent 进程不在跑 / Claude gated 模式但当前不在 safe boundary |
 
 **关键理解**：A 和 B **共用 stdin 通道**，区别只是 payload 复杂度。"fallback" 不是切换到别的通道，是**降级 payload 复杂度换可靠性**——A 失败的可能原因（formatting、字符转义、长度、driver 对 busy 模式只支持简单字符串），B 一行 ASCII 几乎不会失败。完整内容 push 的好处是**省一次 HTTP round-trip**（agent 不需要再调 check_messages 拉正文），所以是默认快路。
 
@@ -272,10 +272,12 @@ drain，所以清 session 不会丢尚未送达的用户意图。
 
 - Agent 进程不在跑时，新消息只写 messages + inbox，不 spawn
 - 当 channel 被打开 / 用户指名某 agent / 用户指定 "wake all members" 时，ConversationManager 才 spawn
-- spawn 时把当前未 ack 的 inbox 拼进 initial prompt 一次性 stdin 灌入（C 档的延迟交付）
+- spawn 时 server 只把当前未 ack 的 inbox 格式化成
+  `runtime_start.startup_delivery.text`；daemon 按 driver 语义决定
+  streamed stdin write 或 oneShot initial input（C 档的延迟交付）
 - 之后回到 A 档实时 push
 
-**v1 不实现 B 档**。失败处理策略：A push 失败 → 重试一次 → 仍失败则记日志 + 进程级 stop 重新 spawn（C 档延迟交付兜底）。等真碰到 driver encode 不稳的 case 再补 B。
+**v1 不实现 B 档**。失败处理策略：A push 失败 → 重试一次 → 仍失败则记日志 + 进程级 stop 重新 spawn（C 档 `startup_delivery` 延迟交付兜底）。等真碰到 driver encode 不稳的 case 再补 B。
 
 #### 已知代价
 
@@ -300,7 +302,7 @@ UI 提供两个不同语义的按钮 / 快捷键，背后走不同机制：
 
 - **Claude（首选）**：走 control protocol —— 往 stdin 写 `{"type":"control_request","request":{"subtype":"interrupt"}}`，Claude 立即终止当前 turn，输出 `turn_end` 事件，进程不退出
 - **Claude（fallback）/ Codex（待确认）**：走进程级 SIGTERM → 5s 内不退就 SIGKILL（slock 的 `stopAgent` 实现，`chunk-RNEIFBXW.js` line 3766-3780）
-- **Hard 打断后**：进程退出 / turn 终止，conversation_agents.status 变 `idle`，inbox 中尚未投递的消息保留，下次 spawn 时通过 C 档 initial prompt 重新交付
+- **Hard 打断后**：进程退出 / turn 终止，conversation_agents.status 变 `idle`，inbox 中尚未投递的消息保留，下次 spawn 时通过 C 档 `startup_delivery` 重新交付
 
 #### Codex 的 hard 打断（开放）
 
@@ -538,11 +540,14 @@ System prompt 必须写明：**频繁双向通信通常是 spawn 决策本身有
 
 | 层级 | 内容 | 谁拥有 | 谁可写 | 通过什么场景塑造 |
 |------|------|--------|--------|-----------------|
-| **L1: Agent Global** | agent 的"出厂设定" + 跨 workspace 全局认知 | agent | 该 agent（在 DM 中）+ 用户（管理界面）| **DM** |
-| **L2: Per-Workspace Per-Agent Instance** | 该 agent 在该 workspace 内的 instance 状态（角色 + 局部知识）| (workspace, agent) | 该 agent 在该 workspace 工作时 | **Workspace onboarding + 该 workspace 内的对话** |
+| **L1: Agent Global** | agent 的全局身份 / 角色定义（`system_prompt.md`）+ DM 记忆 | agent | 该 agent（在 DM 中）+ 用户（管理界面）| **DM** |
+| **L2: Per-Workspace Per-Agent Memory** | 该 agent 在该 workspace 内的局部知识（`MEMORY.md` + `notes/`）| (workspace, agent) | 该 agent 在该 workspace 工作时 | **Workspace onboarding + 该 workspace 内的对话** |
 | **L3: Workspace Consensus** | 该 workspace 内**所有 agent 都必须重视**的少数几条关键共识 | workspace | 所有 workspace member agents | **Workspace 内多 agent 对话** |
 
-> **关键设计**：L2 是 L1 的**拷贝**（workspace 创建时一次性 seed），不是 symlink、不是引用。这样 workspace 之间相互独立——claude 在 workspace A 当规划师、在 workspace B 当 reviewer，两套 system_prompt 完全分离。
+> **关键设计（D2.g 校准，2026-05-27）**：角色定义只从 L1
+> `system_prompt.md` 读取；L2 不再承载一份 workspace-scoped
+> `system_prompt.md` 拷贝。Workspace 之间的差异化知识进入各自
+> L2 `MEMORY.md` / `notes/`，全局身份和工作风格仍通过 DM 修改 L1。
 >
 > **DM 是塑造 L1 的专用场所**：DM 的 cwd **直接** = `~/.silverhand/agents/<id>/`（agent 全局 home），所以在 DM 里 agent 对自己 MEMORY 的更新等于更新 global，未来新 workspace 继承到这个新版本。
 >
@@ -560,11 +565,11 @@ System prompt 必须写明：**频繁双向通信通常是 spawn 决策本身有
 ```
 ~/.silverhand/
 ├─ silverhand.db                 ← 主数据库
-├─ server-config.json            ← embedded server URL + auth token（mode 0600）
+├─ server-config.json            ← embedded server URL + child-session limits（mode 0600；shared auth_token retired in Stage C.6）
 ├─ agents/
 │  └─ <agent-id>/                ← L1：agent 全局 home（真实文件，唯一权威源）
 │     ├─ identity.json           ← {name, runtime, model, host_id}
-│     ├─ system_prompt.md        ← 全局身份模板
+│     ├─ system_prompt.md        ← L1：全局身份模板（daemon spawn 时读取）
 │     ├─ MEMORY.md               ← 全局记忆（agent 在 DM 中迭代）
 │     └─ notes/                  ← 全局笔记
 └─ workspaces/                   ← workspace 自动生成 workspace_path 的默认根目录
@@ -577,22 +582,21 @@ System prompt 必须写明：**频繁双向通信通常是 spawn 决策本身有
    ├─ CONSENSUS.md               ← L3：workspace 关键共识（精炼、<2KB）
    └─ agents/
       ├─ <agent-id>/             ← L2：per-workspace 拷贝
-      │  ├─ system_prompt.md     ← workspace 内的角色定义（可与 L1 不同）
-      │  ├─ MEMORY.md            ← workspace 内累积的 agent 记忆
+      │  ├─ MEMORY.md            ← L2：workspace 内累积的 agent 记忆
       │  └─ notes/
       └─ <agent-id-2>/...
 
-<os.tmpdir()>/silverhand/<channel-id>/     ← 每次 spawn 的运行时临时文件
-├─ system-prompt.md              ← 平台 + L2 + channel ctx 合成
-└─ mcp.json                      ← chat-bridge 配置
+<os.tmpdir()>/silverhand/<spawn-id>/       ← 每次 spawn 的运行时临时文件
+├─ system-prompt.md              ← daemon 由 L1 + L2 MEMORY + CONSENSUS + session ctx 合成
+└─ bin/silverhand                ← 每次 spawn 的 CLI shim
 ```
 
-**为什么 `<workspace>/.silverhand/` 下没有 `channels/` 目录**：channel 的 system-prompt + mcp.json 是每次 spawn 临时合成的、只在 chat-bridge 生命周期内有用，完全可以从 `workspace.members + 当前 L2` 重算。写进 workspace 会污染用户目录（git status 看到、文件浏览器看到）、channel 多了会堆积成一大堆无关内容。改放 OS tmp（例如 `/tmp/silverhand/<channel-id>/`），spawn 前写、进程退出清，出错残留也由 OS 定期清理。**真正持久化的是 SQLite 里的 conversations / messages 行**——文件系统只负责跑起来。
+**为什么 `<workspace>/.silverhand/` 下没有 `channels/` 目录**：channel 的 system-prompt + shim 是每次 spawn 临时合成的、只在 runtime 生命周期内有用，可以从 typed `runtime_start.options` + daemon-local L1/L2/CONSENSUS 文件重算。写进 workspace 会污染用户目录（git status 看到、文件浏览器看到）、channel 多了会堆积成一大堆无关内容。改放 OS tmp，spawn 前写、进程退出清，出错残留也由 OS 定期清理。**真正持久化的是 SQLite 里的 conversations / messages 行**——文件系统只负责跑起来。
 
 **那既然可以重算，为什么还落盘？** 不是为了我们自己持久化，而是因为 **agent CLI 的 argv 接口强制要求文件路径**：
 
-- `mcp.json` 必须是文件（`claude --mcp-config <path>` / codex 同类参数都只收路径，没有 inline 选项）
 - `system-prompt` 为了跨 runtime 兼容，统一走 `--system-prompt-file <path>`（claude 支持 inline `--system-prompt`，但不是所有 runtime 都有）
+- `bin/silverhand` shim 必须以 PATH 前缀形式暴露给 child process
 - 落盘还顺便提供一个调试锚点：agent 行为异常时可以直接 `cat` 出实际喂进去的 prompt
 
 换句话说，这些 /tmp 文件是**"给 child process 传参的一次性媒介"**，不是 silverhand 的状态。生命周期 = 从 spawn 前写入到进程退出，退出后残留只等 OS 清理。`os.tmpdir()` 的语义（跨重启不保证、定期清）刚好匹配。
@@ -605,12 +609,12 @@ System prompt 必须写明：**频繁双向通信通常是 spawn 决策本身有
 
 #### 创建步骤（无表单 onboarding）
 
-用户填完 workspace 基础信息（name + 可选 description + 可选 workspace_path + 选成员 agents）点确认后，后端原子性完成：
+用户填完 workspace 基础信息（name + 可选 description + 可选 workspace_path + 选成员 agents）点确认后，系统完成：
 
 1. INSERT workspace 行
-2. 计算 + mkdir workspace_path（未填时按 §2.4 规则生成）
-3. mkdir `<workspace>/.silverhand/agents/` + 建空 `CONSENSUS.md`
-4. 对每个成员 agent：把 L1 (`~/.silverhand/agents/<id>/`) **全量拷贝**到 L2 (`<workspace>/.silverhand/agents/<id>/`)
+2. 计算 workspace_path（未填时按 §2.4 规则生成）并存入 server DB
+3. daemon-host materialize：mkdir workspace_path、mkdir `<workspace>/.silverhand/agents/`、建空 `CONSENSUS.md`
+4. daemon-host 对每个成员 agent seed L2 (`<workspace>/.silverhand/agents/<id>/MEMORY.md` + `notes/`)，不复制 L1 `system_prompt.md`
 5. 自动建一个 channel（title = `Onboarding`），spawn 所有 member agent 的 chat-bridge
 6. Backend 自动 INSERT 一条 `from_kind='system'` 的 message 进这个 channel（platform 写的"开场白"），所有 agent 通过 `check_messages` 收到
 
@@ -632,9 +636,9 @@ talk to you to refine your role for *this* workspace — e.g. "claude, in this
 workspace focus on architecture review only" / "codex, your job here is to
 write tests".
 
-When the user gives you per-workspace role guidance, update your own
-`./.silverhand/agents/<your-id>/system_prompt.md` (use Write/Edit). When
-they teach you something durable, append to your MEMORY.md.
+When the user gives durable workspace guidance, update your own
+`./.silverhand/agents/<your-id>/MEMORY.md` or notes. Global identity /
+role changes belong in your L1 `system_prompt.md`.
 
 There is no "onboarding done" signal — when the user starts asking you to
 work, just start working.
@@ -643,15 +647,15 @@ work, just start working.
 #### 流程要点
 
 - **没有"完成"状态**：onboarding channel 跟普通 channel 没本质区别，第一条消息是 system 而已。用户什么时候开始下达正经任务，onboarding 就什么时候自然结束。
-- **角色塑造由 agent 自己写文件**：用户说"你做架构师"，agent 用 Write 工具改 L2/system_prompt.md。Backend 不解析、不强制 JSON 格式。
+- **角色塑造由 agent 自己写文件**：用户说"你做架构师"，agent 用 Write 工具改 L1 `system_prompt.md`（通常在 DM 中完成）。Backend 不解析、不强制 JSON 格式。
 - **用户可以跳过**：如果用户对默认设定满意，直接开始问问题就行——agent 该 reply 还是 reply。
-- **角色反转例**：用户在 DM 中把 claude 塑造成"通用规划师"（写入 L1）。在 workspace `react-frontend` onboarding 时，对 claude 说"你这里只做前端架构"——claude 自己改 L2.system_prompt.md。在 workspace `code-review-pool` onboarding 时，对 claude 说"你这里只做严格代码 reviewer"——又一份独立 L2。三套 prompt 互不影响。
+- **workspace 差异化例**：用户在 DM 中把 claude 塑造成"通用规划师"（写入 L1）。在 workspace `react-frontend` onboarding 时，对 claude 说"这个项目的前端约束是 X"——claude 自己改该 workspace 的 L2 MEMORY/notes。在 workspace `code-review-pool` onboarding 时，对 claude 说"这里重点记录 code review 规则"——又一份独立 L2 memory。角色身份仍来自同一份 L1。
 
 ### 4.4 L1 ↔ L2 同步（仅一个方向、一个时机）
 
 | 方向 | 时机 | 触发方式 |
 |------|------|---------|
-| **L1 → L2 全量** | Workspace 创建那一刻 | 自动 |
+| **L1 → L2 全量** | 不存在 | —— |
 | **隐式自动同步** | 不存在 | —— |
 | **重置 / 提升** | 走对话——用户在 DM 中跟 agent 说"忘掉你在 workspace X 学的"或"把你在 workspace X 的设定记到 global"，agent 自己执行文件操作 | 不需要专门 UI |
 
@@ -663,12 +667,11 @@ DM 不参与同步——DM 直接操作 L1（cwd = global home）。
 <workspace>/.silverhand/
 ├─ CONSENSUS.md             ← L3（精炼、所有成员都重视的关键共识）
 └─ agents/<id>/             ← L2（DM 中此层不存在，cwd 就是 L1）
-   ├─ system_prompt.md
    ├─ MEMORY.md
    └─ notes/
 ```
 
-> channel 级的临时文件（每次 spawn 合成的 system-prompt + mcp.json）放 `<os.tmpdir()>/silverhand/<channel-id>/`，见 §4.2。不进 workspace。
+> channel 级的临时文件（每次 spawn 合成的 system-prompt + CLI shim）放 `<os.tmpdir()>/silverhand/<spawn-id>/`，见 §4.2。不进 workspace。
 
 ### 4.6 不引入 memory / consensus MCP 工具
 
@@ -678,17 +681,27 @@ DM 不参与同步——DM 直接操作 L1（cwd = global home）。
 
 ### 4.7 System prompt 合成机制
 
-每次 ConversationManager 启动一个 (channel, agent) 的 chat-bridge 时，合成最终的 system prompt 写到 `<os.tmpdir()>/silverhand/<channel-id>/system-prompt.md`（不写进 workspace，避免污染用户目录），agent CLI 通过 `--append-system-prompt`（或类似机制）拉入。合成逻辑：
+每次 daemon-host 处理 `runtime_start` 时，使用 server 传来的 typed
+metadata（`agent.home_dir`、`workspace.path`、session/members/driver/env
+policy）在本机读取 L1/L2/CONSENSUS，并把最终 system prompt 写到
+per-spawn tmp 目录的 `system-prompt.md`。Server 不读取、不缓存、不传输
+`system_prompt.md` / `MEMORY.md` / `CONSENSUS.md` bytes，也不准备 spawn
+目录、cwd 或 child env。合成逻辑：
 
 ```
 [平台层 prompt — silverhand 注入的协作教育，包含 Critical rules / Startup sequence / Compaction safety / Etiquette]
   ↓
-[L2 层 prompt — 该 workspace 内该 agent 的 system_prompt.md（agent 角色定义）]
+[Initial role — L1 `<agent.home_dir>/system_prompt.md`，daemon 本机读取]
   ↓
-[Channel 上下文 — workspace name、其他 member 列表、CONSENSUS.md 路径提示]
+[Active Workspace Memory — L2 `<workspace.path>/.silverhand/agents/<id>/MEMORY.md`，16KB cap]
   ↓
-[Initial inbox dump — 如果 spawn 时有未 ack 消息，附在末尾，见 §3.1 C 档]
+[Workspace Consensus — `<workspace.path>/.silverhand/CONSENSUS.md`，4KB cap；agent_home/DM skip]
+  ↓
+[Session 上下文 — workspace name、thread parent、conversation members、memory index 路径]
 ```
+
+Initial inbox 不拼进 system prompt；spawn-time 未投递消息通过
+`runtime_start.startup_delivery.text` 作为独立 intent payload 进入 daemon。
 
 #### 平台层 prompt 模板（基于 slock 全文研读，2026-05-01）
 
@@ -807,7 +820,7 @@ must respect. Read at startup.
 
 ## Initial role
 
-<config.system_prompt — agent's L2 role definition appended here>
+<Initial role — agent's L1 system_prompt.md appended here>
 ```
 
 #### DM 场景的特例
@@ -837,10 +850,10 @@ DM 平台 prompt 在结构上一致，但 §"Workspace & Memory" / §"Workspace 
 
 1. **首次启动 → 引导建第一个 Agent**
    - "给你的第一个 AI 助手起个名字" → 选 runtime（claude / codex 等）→ （可选）写 system prompt → 保存
-   - 后端自动建 `~/.silverhand/agents/<id>/{MEMORY.md, notes/, identity.json}`
+   - 后端/daemon 自动建 `~/.silverhand/agents/<id>/{system_prompt.md, MEMORY.md, notes/, identity.json}`
 2. **建 Workspace**
    - 表单：名称（unique）+ 描述（可选）+ 工作目录（可选，留空自动生成）+ 勾选成员（agents，至少 1 个）
-   - 提交后后端原子性完成：建 workspace 行 → mkdir workspace_path → 建 `.silverhand/{CONSENSUS.md, agents/<id>/}` → 把每个成员 agent 的 L1 **全量拷贝**到 L2 → 自动建一个 `Onboarding` channel → 自动 INSERT 一条 `from_kind='system'` 的开场白消息（见 §4.3）
+   - 提交后系统完成：server 建 workspace 行并记录 workspace_path → daemon materialize `.silverhand/{CONSENSUS.md, agents/<id>/}` + L2 MEMORY/notes → 自动建一个 `Onboarding` channel → 自动 INSERT 一条 `from_kind='system'` 的开场白消息（见 §4.3）
    - 用户进 workspace 看到的就是已经在跑的 onboarding channel，可以直接对话塑造各 agent 角色
 3. **建后续 Channel**（在某 workspace 内）
    - 标题
@@ -909,12 +922,12 @@ DM 平台 prompt 在结构上一致，但 §"Workspace & Memory" / §"Workspace 
 | `--auth-token` argv 注入 | env `AGENT_HUB_AUTH_TOKEN` | 避免 `ps` 暴露 token |
 | `.agent-hub` 目录名 | `.silverhand` | 跟 app 名统一 |
 | Memory 在 workspace 级别 | Memory 分三层（L1 agent-global / L2 workspace-instance / L3 workspace-consensus）| Agent 身份要跨 workspace 复用又要支持 workspace 内角色反转，单层 memory 做不到 |
-| L2 用 symlink 指 L1（隐式共享）| L2 是 L1 的拷贝（创建时一次性 seed，之后独立）| 不同 workspace 中同一 agent 可以是不同角色（planner vs reviewer），symlink 共享会污染 |
+| L2 用 symlink 指 L1（隐式共享）| L2 只存 workspace-scoped MEMORY/notes；L1 `system_prompt.md` 是唯一角色源 | 角色身份要全局一致且由 DM 塑造；workspace 差异化知识放 L2，避免 prompt 分叉 |
 | DM 跟普通 workspace 一样有独立 workspace_path | DM workspace_path = `~/.silverhand/agents/<id>/`（直接落 L1）| DM 是塑造 agent 全局身份的专用场所，写到独立 workspace 就跟 workspace 没区别了 |
 | 应用数据放 Electron `userData` | 全部放 `~/.silverhand/`（db / config / agents / workspaces）| 用户能直接 `cd` 进去看；跟 `~/.claude` `~/.codex` 形成对称；跨 Electron 重装保留 |
-| Workspace 创建有强制 onboarding 表单（preview + 按钮编辑 system_prompt / 清 MEMORY）| 创建后自动 post 一条 `from_kind='system'` onboarding message，用户通过对话塑造 agent 角色（agent 自己 Write L2 文件）| 与"对话即一切"的产品理念一致；表单步骤是 UI 工程量也是用户的认知负担 |
+| Workspace 创建有强制 onboarding 表单（preview + 按钮编辑 system_prompt / 清 MEMORY）| 创建后自动 post 一条 `from_kind='system'` onboarding message；global role 写 L1，workspace 知识写 L2 MEMORY/notes | 与"对话即一切"的产品理念一致；表单步骤是 UI 工程量也是用户的认知负担 |
 | Message.from_kind = `user` \| `agent` | Message.from_kind = `user` \| `agent` \| `system` | onboarding 开场白 / 后续 platform 公告需要一个非用户非 agent 的来源 |
-| Channel 运行时文件放 `<workspace>/.silverhand/channels/<channel-id>/` | 放 `<os.tmpdir()>/silverhand/<channel-id>/` | channel 的 system-prompt + mcp.json 是每次 spawn 临时合成、可重算，写进 workspace 会污染用户目录 + 堆积旧 channel 残骸 |
+| Channel 运行时文件放 `<workspace>/.silverhand/channels/<channel-id>/` | 放 `<os.tmpdir()>/silverhand/<spawn-id>/` | channel 的 system-prompt + CLI shim 是每次 spawn 临时合成、可重算，写进 workspace 会污染用户目录 + 堆积旧 channel 残骸 |
 | 消息分发方案待定（stdin vs pull 二选一） | 04-30 误判为"纯 pull + piggyback"，05-01 重读 slock 源码后改正：**stdin push 为主（A 档完整内容 / B 档短提示降级）+ HTTP pull 兜底 + spawn 时 inject**。详见 §3.1 | 第一次只看了 chat-bridge 工具描述，没追到 daemon 的 deliverNotificationToAgent + gated steering 路径，错把兜底当主路径 |
 | 没有打断机制 / "需要时加 SIGINT" | 显式两层：soft（追加新指令走 §3.1 A 档 push）+ hard（Claude control_request interrupt → SIGTERM fallback） | 用户实际需要"换方向"和"立刻停"两种语义，slock 也是这套（control 协议 + 进程信号） |
 | Server-side 上下文压缩 / chat history 裁剪 | 全部不做，跟随 slock：压缩是 agent CLI 内部行为，silverhand 只 observer + push 暂停 + watchdog；messages 表 append-only 永不裁剪 | 压缩本质损失性，由 model runtime 自己决定最合适；server 介入会双重压缩 / 触发不一致 |

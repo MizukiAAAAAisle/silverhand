@@ -176,6 +176,23 @@ export class SavedMessageRepo {
     return rows.map(rowToDto);
   }
 
+  listForUser(userId: string, limit = 200): SavedMessageDto[] {
+    const rows = this.db
+      .prepare<[string, number], JoinedRow>(
+        `${SELECT_JOINED}
+         WHERE EXISTS (
+           SELECT 1
+             FROM conversation_users cu
+            WHERE cu.conversation_id = sm.conversation_id
+              AND cu.user_id = ?
+         )
+         ORDER BY sm.saved_at DESC
+         LIMIT ?`,
+      )
+      .all(userId, limit);
+    return rows.map(rowToDto);
+  }
+
   /** Returns the existing row when the message was already saved
    *  (UNIQUE(message_id) makes this idempotent on the client). */
   save(messageId: string): SavedMessageDto | null {

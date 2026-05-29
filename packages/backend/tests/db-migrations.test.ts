@@ -1,7 +1,27 @@
 import Database from 'better-sqlite3';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { migrations } from '@silverhand/shared';
-import { runMigrations } from '../src/db.js';
+import {
+  CURRENT_SCHEMA_VERSION,
+  MIN_SUPPORTED_SCHEMA_VERSION,
+  migrations,
+} from '@silverhand/shared';
+import {
+  backupDataDirBeforeMigration,
+  currentSchemaVersion,
+  openDatabase,
+  runMigrations,
+} from '../src/db.js';
 
 function openDbAt(version: number): Database.Database {
   const db = new Database(':memory:');
@@ -99,6 +119,9 @@ function pragmaNumber(db: Database.Database, name: string): number {
   return Object.values(row[0] ?? {})[0] ?? 0;
 }
 
+const SYNTHETIC_UPGRADE_BASE_VERSION = MIN_SUPPORTED_SCHEMA_VERSION;
+const SYNTHETIC_UPGRADE_TARGET_VERSION = MIN_SUPPORTED_SCHEMA_VERSION + 1;
+
 function seedV15SystemDmFixture(db: Database.Database): void {
   const now = 1_700_000_000_000;
   db.exec(`
@@ -164,6 +187,374 @@ function seedV15SystemDmFixture(db: Database.Database): void {
 }
 
 describe('database migrations', () => {
+  it('initializes a clean DB to the current schema version', () => {
+    let completed = false;
+    const db = openDatabase(':memory:', {
+      onMigrationsApplied: () => {
+        completed = true;
+      },
+    });
+    try {
+      expect(completed).toBe(true);
+      expect(currentSchemaVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('reruns idempotently when the DB is already at the current version', () => {
+    const db = openDatabase(':memory:');
+    try {
+      const first = currentSchemaVersion(db);
+      const second = runMigrations(db, {
+        expectedVersion: CURRENT_SCHEMA_VERSION,
+        minimumSupportedVersion: MIN_SUPPORTED_SCHEMA_VERSION,
+      });
+      expect(first).toBe(CURRENT_SCHEMA_VERSION);
+      expect(second).toEqual({
+        beforeVersion: CURRENT_SCHEMA_VERSION,
+        afterVersion: CURRENT_SCHEMA_VERSION,
+        appliedVersions: [],
+        backupPath: null,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it('requires env-style opt-in before upgrading an existing DB', () => {
+    const db = new Database(':memory:');
+    try {
+      db.exec(`
+        CREATE TABLE _migrations (
+          version INTEGER PRIMARY KEY,
+          name    TEXT NOT NULL,
+          applied_at INTEGER NOT NULL
+        );
+        INSERT INTO _migrations (version, name, applied_at)
+        VALUES (${SYNTHETIC_UPGRADE_BASE_VERSION}, 'current', 1);
+      `);
+      expect(() =>
+        runMigrations(db, {
+          migrations: [
+            {
+              version: SYNTHETIC_UPGRADE_TARGET_VERSION,
+              name: 'future',
+              up: `CREATE TABLE future_rows (id TEXT PRIMARY KEY);`,
+            },
+          ],
+          expectedVersion: SYNTHETIC_UPGRADE_TARGET_VERSION,
+          minimumSupportedVersion: SYNTHETIC_UPGRADE_BASE_VERSION,
+          allowSchemaUpgrade: false,
+        }),
+      ).toThrow(/SILVERHAND_MIGRATE=1/);
+      expect(currentSchemaVersion(db)).toBe(SYNTHETIC_UPGRADE_BASE_VERSION);
+      expect(
+        db
+          .prepare(
+            `SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'future_rows'`,
+          )
+          .get(),
+      ).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('backs up the whole data directory before an opted-in schema upgrade', async () => {
+    const dir = mkdtempSync('/tmp/shmig-');
+    const dataDir = join(dir, 'data');
+    const dbPath = join(dataDir, 'silverhand.db');
+    mkdirSync(join(dataDir, 'blobs'), { recursive: true });
+    mkdirSync(join(dataDir, 'logs'), { recursive: true });
+    mkdirSync(join(dataDir, 'run'), { recursive: true });
+    mkdirSync(join(dataDir, 'workspaces'), { recursive: true });
+    writeFileSync(join(dataDir, 'blobs', 'blob.txt'), 'blob bytes');
+    writeFileSync(join(dataDir, 'logs', 'backend.log'), 'log bytes');
+    writeFileSync(join(dataDir, 'workspaces', 'workspace.txt'), 'workspace bytes');
+    symlinkSync('../blobs/blob.txt', join(dataDir, 'logs', 'blob-link'));
+    const socketPath = join(dataDir, 'run', 'daemon.sock');
+    const socketServer = createServer();
+    await new Promise<void>((resolve, reject) => {
+      socketServer.once('error', reject);
+      socketServer.listen(socketPath, resolve);
+    });
+    const db = new Database(dbPath);
+    try {
+      db.exec(`
+        CREATE TABLE _migrations (
+          version INTEGER PRIMARY KEY,
+          name    TEXT NOT NULL,
+          applied_at INTEGER NOT NULL
+        );
+        INSERT INTO _migrations (version, name, applied_at)
+        VALUES (${SYNTHETIC_UPGRADE_BASE_VERSION}, 'current', 1);
+
+        CREATE TABLE preserved_rows (id TEXT PRIMARY KEY);
+        INSERT INTO preserved_rows (id) VALUES ('before');
+      `);
+      const result = runMigrations(db, {
+        migrations: [
+          {
+            version: SYNTHETIC_UPGRADE_TARGET_VERSION,
+            name: 'future',
+            up: `CREATE TABLE future_rows (id TEXT PRIMARY KEY);`,
+          },
+        ],
+        expectedVersion: SYNTHETIC_UPGRADE_TARGET_VERSION,
+        minimumSupportedVersion: SYNTHETIC_UPGRADE_BASE_VERSION,
+        allowSchemaUpgrade: true,
+        backupBeforeMigration: info =>
+          backupDataDirBeforeMigration(db, { dbPath, ...info }),
+      });
+      expect(result.beforeVersion).toBe(SYNTHETIC_UPGRADE_BASE_VERSION);
+      expect(result.afterVersion).toBe(SYNTHETIC_UPGRADE_TARGET_VERSION);
+      expect(result.appliedVersions).toEqual([SYNTHETIC_UPGRADE_TARGET_VERSION]);
+      expect(result.backupPath).toMatch(/data-backup-\d{8}T\d{6}Z$/);
+      expect(currentSchemaVersion(db)).toBe(SYNTHETIC_UPGRADE_TARGET_VERSION);
+      expect(
+        db
+          .prepare(
+            `SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'future_rows'`,
+          )
+          .get(),
+      ).toBeDefined();
+
+      expect(
+        readFileSync(join(result.backupPath!, 'blobs', 'blob.txt'), 'utf8'),
+      ).toBe('blob bytes');
+      expect(
+        readFileSync(join(result.backupPath!, 'logs', 'backend.log'), 'utf8'),
+      ).toBe('log bytes');
+      expect(
+        readFileSync(
+          join(result.backupPath!, 'workspaces', 'workspace.txt'),
+          'utf8',
+        ),
+      ).toBe('workspace bytes');
+      expect(
+        readFileSync(join(result.backupPath!, 'logs', 'blob-link'), 'utf8'),
+      ).toBe('blob bytes');
+      expect(() =>
+        readFileSync(join(result.backupPath!, 'run', 'daemon.sock')),
+      ).toThrow();
+
+      const backupDb = new Database(
+        join(result.backupPath!, 'silverhand.db'),
+        { readonly: true },
+      );
+      try {
+        expect(currentSchemaVersion(backupDb)).toBe(
+          SYNTHETIC_UPGRADE_BASE_VERSION,
+        );
+        expect(
+          backupDb.prepare(`SELECT id FROM preserved_rows`).get(),
+        ).toEqual({ id: 'before' });
+        expect(
+          backupDb
+            .prepare(
+              `SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'future_rows'`,
+            )
+            .get(),
+        ).toBeUndefined();
+      } finally {
+        backupDb.close();
+      }
+    } finally {
+      db.close();
+      await new Promise<void>(resolve => socketServer.close(() => resolve()));
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not apply migrations when the pre-migration backup fails', () => {
+    const db = new Database(':memory:');
+    try {
+      db.exec(`
+        CREATE TABLE _migrations (
+          version INTEGER PRIMARY KEY,
+          name    TEXT NOT NULL,
+          applied_at INTEGER NOT NULL
+        );
+        INSERT INTO _migrations (version, name, applied_at)
+        VALUES (${SYNTHETIC_UPGRADE_BASE_VERSION}, 'current', 1);
+      `);
+      expect(() =>
+        runMigrations(db, {
+          migrations: [
+            {
+              version: SYNTHETIC_UPGRADE_TARGET_VERSION,
+              name: 'future',
+              up: `CREATE TABLE future_rows (id TEXT PRIMARY KEY);`,
+            },
+          ],
+          expectedVersion: SYNTHETIC_UPGRADE_TARGET_VERSION,
+          minimumSupportedVersion: SYNTHETIC_UPGRADE_BASE_VERSION,
+          allowSchemaUpgrade: true,
+          backupBeforeMigration: () => {
+            throw new Error('backup path is not writable');
+          },
+        }),
+      ).toThrow(/backup path is not writable/);
+      expect(currentSchemaVersion(db)).toBe(SYNTHETIC_UPGRADE_BASE_VERSION);
+      expect(
+        db
+          .prepare(
+            `SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'future_rows'`,
+          )
+          .get(),
+      ).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('rolls back a failed migration and does not call the completion hook', () => {
+    const db = new Database(':memory:');
+    let completed = false;
+    try {
+      expect(() =>
+        runMigrations(db, {
+          migrations: [
+            {
+              version: 1,
+              name: 'stable',
+              up: `CREATE TABLE stable_rows (id TEXT PRIMARY KEY);`,
+            },
+            {
+              version: 2,
+              name: 'broken',
+              up: `
+                CREATE TABLE broken_rows (id TEXT PRIMARY KEY);
+                INSERT INTO missing_table VALUES ('fail');
+              `,
+            },
+          ],
+          onMigrationsApplied: () => {
+            completed = true;
+          },
+        }),
+      ).toThrow(/missing_table/);
+      expect(completed).toBe(false);
+      expect(currentSchemaVersion(db)).toBe(1);
+      expect(
+        db
+          .prepare(
+            `SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'stable_rows'`,
+          )
+          .get(),
+      ).toBeDefined();
+      expect(
+        db
+          .prepare(
+            `SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'broken_rows'`,
+          )
+          .get(),
+      ).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('rejects startup when the DB schema is older than the minimum supported version', () => {
+    const db = new Database(':memory:');
+    try {
+      db.exec(`
+        CREATE TABLE _migrations (
+          version INTEGER PRIMARY KEY,
+          name    TEXT NOT NULL,
+          applied_at INTEGER NOT NULL
+        );
+        INSERT INTO _migrations (version, name, applied_at)
+        VALUES (1, 'initial', 1);
+      `);
+      expect(() =>
+        runMigrations(db, {
+          expectedVersion: CURRENT_SCHEMA_VERSION,
+          minimumSupportedVersion: MIN_SUPPORTED_SCHEMA_VERSION,
+        }),
+      ).toThrow(/older than minimum supported/);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('rejects unsupported pre-migration application DBs without creating _migrations', () => {
+    const db = new Database(':memory:');
+    try {
+      db.exec(`CREATE TABLE legacy_rows (id TEXT PRIMARY KEY);`);
+      expect(() =>
+        runMigrations(db, {
+          expectedVersion: CURRENT_SCHEMA_VERSION,
+          minimumSupportedVersion: MIN_SUPPORTED_SCHEMA_VERSION,
+        }),
+      ).toThrow(/older than minimum supported/);
+      expect(
+        db
+          .prepare(
+            `SELECT name FROM sqlite_schema WHERE type = 'table' AND name = '_migrations'`,
+          )
+          .get(),
+      ).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('rejects startup when the DB schema is newer than this code supports', () => {
+    const db = new Database(':memory:');
+    try {
+      db.exec(`
+        CREATE TABLE _migrations (
+          version INTEGER PRIMARY KEY,
+          name    TEXT NOT NULL,
+          applied_at INTEGER NOT NULL
+        );
+        INSERT INTO _migrations (version, name, applied_at)
+        VALUES (999, 'future', 1);
+      `);
+      expect(() =>
+        runMigrations(db, {
+          expectedVersion: CURRENT_SCHEMA_VERSION,
+          minimumSupportedVersion: MIN_SUPPORTED_SCHEMA_VERSION,
+        }),
+      ).toThrow(/newer than supported/);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('fails fast when the migration phase cannot acquire the SQLite write lock', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'silverhand-migration-lock-test-'));
+    const dbPath = join(dir, 'silverhand.db');
+    const db = openDatabase(dbPath);
+    try {
+      db.exec('BEGIN EXCLUSIVE');
+      try {
+        expect(() => openDatabase(dbPath)).toThrow(/database is locked|SQLITE_BUSY/i);
+      } finally {
+        db.exec('ROLLBACK');
+      }
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails fast when another process owns the migration lock directory', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'silverhand-migration-dir-lock-test-'));
+    const dataDir = join(dir, '.silverhand');
+    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(join(dir, '.silverhand.migration.lock'));
+    try {
+      expect(() => openDatabase(join(dataDir, 'silverhand.db'))).toThrow(
+        /migration lock/,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('v16 splits the legacy system DM workspace into one multi-channel agent_home', () => {
     const db = openDbAt(15);
     try {
@@ -478,6 +869,180 @@ describe('database migrations', () => {
     }
   });
 
+  it('v32 adds in-flight delivery columns for outbound replay recovery', () => {
+    const db = openDbAt(31);
+    try {
+      runMigrations(db);
+      expect(
+        db.prepare(`SELECT version FROM _migrations WHERE version = 32`).get(),
+      ).toBeDefined();
+
+      const cols = (db.pragma('table_info(conversation_inboxes)') as Array<{
+        name: string;
+      }>).map(c => c.name);
+      expect(cols).toEqual(
+        expect.arrayContaining([
+          'in_flight_owner',
+          'in_flight_at',
+          'failed_at',
+          'failed_reason',
+        ]),
+      );
+
+      const indexes = (db.pragma('index_list(conversation_inboxes)') as Array<{
+        name: string;
+      }>).map(r => r.name);
+      expect(indexes).toEqual(
+        expect.arrayContaining([
+          'idx_conversation_inbox_replay_pending',
+          'idx_conversation_inbox_in_flight_owner',
+        ]),
+      );
+    } finally {
+      db.close();
+    }
+  });
+
+  it('v33 adds agent materialization columns and creator-scoped idempotency_key index', () => {
+    // D4.d D1 (additive schema; design §4.1). Pin:
+    //   (a) the four new columns exist on `agents`;
+    //   (b) the CHECK on materialization_status accepts only the
+    //       three documented values;
+    //   (c) the partial unique index is keyed
+    //       (created_by_user_id, idempotency_key) — NOT keyed
+    //       (idempotency_key) alone, so two distinct users colliding
+    //       on the same opaque key can both succeed (Cindy round-2
+    //       P1 #5: globally-unique index would leak existence
+    //       across users);
+    //   (d) idempotency_key=NULL rows are NOT subject to the
+    //       partial index (so legacy/active rows can coexist with
+    //       NULL keys without unique-constraint friction).
+    const db = openDbAt(32);
+    try {
+      runMigrations(db);
+      expect(
+        db.prepare(`SELECT version FROM _migrations WHERE version = 33`).get(),
+      ).toBeDefined();
+
+      const cols = (db.pragma('table_info(agents)') as Array<{
+        name: string;
+        notnull: number;
+        dflt_value: string | null;
+      }>);
+      const colNames = cols.map(c => c.name);
+      expect(colNames).toEqual(
+        expect.arrayContaining([
+          'materialization_status',
+          'materialization_failed_code',
+          'materialization_failed_at',
+          'idempotency_key',
+        ]),
+      );
+
+      const statusCol = cols.find(c => c.name === 'materialization_status')!;
+      // Backfill default is 'active' (existing rows pre-D4.d went
+      // through the legacy backend-direct-fs path; their L1 dirs
+      // already exist).
+      expect(statusCol.notnull).toBe(1);
+      expect(statusCol.dflt_value).toBe("'active'");
+
+      const indexes = (db.pragma('index_list(agents)') as Array<{
+        name: string;
+        unique: number;
+      }>);
+      const idemIndex = indexes.find(i => i.name === 'idx_agents_idempotency_key_per_user');
+      expect(idemIndex).toBeDefined();
+      expect(idemIndex!.unique).toBe(1);
+
+      // Pin keyed columns explicitly: (created_by_user_id, idempotency_key).
+      const idxCols = (db.pragma(
+        'index_info(idx_agents_idempotency_key_per_user)',
+      ) as Array<{ seqno: number; name: string }>).map(c => c.name);
+      expect(idxCols).toEqual(['created_by_user_id', 'idempotency_key']);
+
+      // Seed a viewer + host so we can exercise the new columns.
+      db.exec(`
+        INSERT INTO hosts (id, name, kind, created_at)
+        VALUES ('h1', 'local', 'local', 1);
+        INSERT INTO users
+          (id, name, display_name, created_at, updated_at)
+        VALUES
+          ('u1', 'alice_u', 'Alice U', 1, 1),
+          ('u2', 'bob_u',   'Bob U',   2, 2);
+      `);
+
+      // CHECK constraint: only the three documented status values
+      // are accepted.
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO agents
+               (id, name, runtime, host_id, created_at, updated_at,
+                created_by_user_id, materialization_status)
+             VALUES ('a_bad', 'bad', 'claude', 'h1', 1, 1, 'u1', 'archived')`,
+          )
+          .run(),
+      ).toThrow(/CHECK/);
+
+      // NULL idempotency_key is NOT subject to the partial unique
+      // index; two rows with NULL keys (different ids) coexist.
+      db.prepare(
+        `INSERT INTO agents
+           (id, name, runtime, host_id, created_at, updated_at,
+            created_by_user_id)
+         VALUES ('a_n1', 'n1', 'claude', 'h1', 1, 1, 'u1')`,
+      ).run();
+      db.prepare(
+        `INSERT INTO agents
+           (id, name, runtime, host_id, created_at, updated_at,
+            created_by_user_id)
+         VALUES ('a_n2', 'n2', 'claude', 'h1', 1, 1, 'u1')`,
+      ).run();
+
+      // Same (user, key) twice rejected. Different users with the
+      // same key both succeed (this is the whole point of the
+      // creator-scoped index).
+      db.prepare(
+        `INSERT INTO agents
+           (id, name, runtime, host_id, created_at, updated_at,
+            created_by_user_id, idempotency_key)
+         VALUES ('a1', 'a1', 'claude', 'h1', 1, 1, 'u1', 'k-shared')`,
+      ).run();
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO agents
+               (id, name, runtime, host_id, created_at, updated_at,
+                created_by_user_id, idempotency_key)
+             VALUES ('a1b', 'a1b', 'claude', 'h1', 1, 1, 'u1', 'k-shared')`,
+          )
+          .run(),
+      ).toThrow(/UNIQUE/);
+
+      db.prepare(
+        `INSERT INTO agents
+           (id, name, runtime, host_id, created_at, updated_at,
+            created_by_user_id, idempotency_key)
+         VALUES ('a2', 'a2', 'claude', 'h1', 1, 1, 'u2', 'k-shared')`,
+      ).run();
+
+      const sharedRows = db
+        .prepare(
+          `SELECT id, created_by_user_id
+             FROM agents
+             WHERE idempotency_key = 'k-shared'
+             ORDER BY id`,
+        )
+        .all() as Array<{ id: string; created_by_user_id: string }>;
+      expect(sharedRows).toEqual([
+        { id: 'a1', created_by_user_id: 'u1' },
+        { id: 'a2', created_by_user_id: 'u2' },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
   describe('v21 users registry (Deferred Adoption)', () => {
     /**
      * Deferred Adoption contract: `users` is empty after migration and
@@ -572,10 +1137,8 @@ describe('database migrations', () => {
     }
 
     it('creates an empty users table with the post-rewrite shape', () => {
-      const db = new Database(':memory:');
+      const db = openDbAt(21);
       try {
-        runMigrations(db);
-
         // Migration version recorded.
         expect(
           db.prepare(`SELECT version FROM _migrations WHERE version = 21`).get(),
@@ -2021,6 +2584,261 @@ describe('database migrations', () => {
         for (const tname of triggers) {
           expect(tname).not.toContain('handle');
         }
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  describe('migration v29 (user auth credentials)', () => {
+    it('adds nullable unique-when-set email plus password credentials and auth sessions', () => {
+      const db = openDbAt(28);
+      try {
+        runMigrations(db);
+
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 29`).get(),
+        ).toBeDefined();
+
+        const userColumns = (
+          db.pragma('table_info(users)') as Array<{ name: string; notnull: 0 | 1 }>
+        ).map(c => ({ name: c.name, notnull: c.notnull }));
+        expect(userColumns).toContainEqual({ name: 'email', notnull: 0 });
+
+        const now = Date.now();
+        db.prepare(
+          `INSERT INTO users (id, name, display_name, created_at, updated_at)
+           VALUES ('u1', 'u1-test', 'U1', ?, ?)`,
+        ).run(now, now);
+        db.prepare(
+          `INSERT INTO users (id, name, display_name, created_at, updated_at)
+           VALUES ('u2', 'u2-test', 'U2', ?, ?)`,
+        ).run(now, now);
+
+        db.prepare(`UPDATE users SET email = 'User@Example.com' WHERE id = 'u1'`).run();
+        expect(() =>
+          db.prepare(`UPDATE users SET email = 'user@example.com' WHERE id = 'u2'`).run(),
+        ).toThrow(/UNIQUE constraint failed/);
+
+        db.prepare(
+          `INSERT INTO user_password_credentials
+             (user_id, password_hash, password_hash_params, password_updated_at)
+           VALUES ('u1', '$argon2id$v=19$m=1,t=1,p=1$fake$fake',
+                   '{"algorithm":"argon2id"}', ?)`,
+        ).run(now);
+        expect(() =>
+          db.prepare(
+            `INSERT INTO user_password_credentials
+               (user_id, password_hash, password_hash_params, password_updated_at)
+             VALUES ('u2', 'hash', 'not-json', ?)`,
+          ).run(now),
+        ).toThrow(/CHECK constraint failed/);
+
+        db.prepare(
+          `INSERT INTO auth_sessions
+             (id, user_id, token_hash, created_at, last_used_at, revoked_at,
+              user_agent, ip_first_seen)
+           VALUES ('s1', 'u1', 'token-hash', ?, ?, NULL, 'vitest', '127.0.0.1')`,
+        ).run(now, now);
+
+        db.prepare(`DELETE FROM users WHERE id = 'u1'`).run();
+        expect(
+          db
+            .prepare(`SELECT COUNT(*) AS c FROM user_password_credentials`)
+            .get(),
+        ).toEqual({ c: 0 });
+        expect(
+          db.prepare(`SELECT COUNT(*) AS c FROM auth_sessions`).get(),
+        ).toEqual({ c: 0 });
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  describe('migration v30 (host identity credentials)', () => {
+    it('adds host owner fields and host credential storage', () => {
+      const db = openDbAt(29);
+      try {
+        const now = Date.now();
+        db.prepare(
+          `INSERT INTO hosts (id, name, kind, created_at)
+           VALUES ('legacy-local', 'local', 'local', ?)`,
+        ).run(now);
+
+        runMigrations(db);
+
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 30`).get(),
+        ).toBeDefined();
+
+        const hostColumns = (
+          db.pragma('table_info(hosts)') as Array<{ name: string; notnull: 0 | 1 }>
+        ).map(c => ({ name: c.name, notnull: c.notnull }));
+        expect(hostColumns).toContainEqual({ name: 'user_id', notnull: 0 });
+        expect(hostColumns).toContainEqual({ name: 'installation_id', notnull: 0 });
+        expect(hostColumns).toContainEqual({ name: 'last_seen_at', notnull: 0 });
+        expect(hostColumns).toContainEqual({ name: 'revoked_at', notnull: 0 });
+
+        expect(
+          db
+            .prepare(
+              `SELECT user_id, installation_id, last_seen_at, revoked_at
+                 FROM hosts
+                WHERE id = 'legacy-local'`,
+            )
+            .get(),
+        ).toEqual({
+          user_id: null,
+          installation_id: null,
+          last_seen_at: null,
+          revoked_at: null,
+        });
+
+        db.prepare(
+          `INSERT INTO users (id, name, display_name, created_at, updated_at)
+           VALUES ('u1', 'u1-test', 'U1', ?, ?)`,
+        ).run(now, now);
+        db.prepare(
+          `INSERT INTO users (id, name, display_name, created_at, updated_at)
+           VALUES ('u2', 'u2-test', 'U2', ?, ?)`,
+        ).run(now, now);
+
+        db.prepare(
+          `INSERT INTO hosts
+             (id, name, kind, user_id, installation_id, last_seen_at, created_at)
+           VALUES ('owned-1', 'owned-1', 'local', 'u1', 'install-1', ?, ?)`,
+        ).run(now, now);
+        expect(() =>
+          db.prepare(
+            `INSERT INTO hosts
+               (id, name, kind, user_id, installation_id, created_at)
+             VALUES ('owned-dup', 'owned-dup', 'local', 'u1', 'install-1', ?)`,
+          ).run(now),
+        ).toThrow(/UNIQUE constraint failed/);
+        db.prepare(
+          `INSERT INTO hosts
+             (id, name, kind, user_id, installation_id, created_at)
+           VALUES ('owned-2', 'owned-2', 'local', 'u2', 'install-1', ?)`,
+        ).run(now);
+
+        db.prepare(
+          `INSERT INTO host_credentials
+             (id, host_id, token_hash, kind, expires_at, consumed_at, revoked_at)
+           VALUES ('hc1', 'owned-1', 'hash-1', 'long_lived', NULL, NULL, NULL)`,
+        ).run();
+        db.prepare(
+          `INSERT INTO host_credentials
+             (id, host_id, token_hash, kind, expires_at, consumed_at, revoked_at)
+           VALUES ('hc2', 'owned-1', 'hash-2', 'bootstrap', ?, NULL, NULL)`,
+        ).run(now + 60_000);
+        expect(() =>
+          db.prepare(
+            `INSERT INTO host_credentials
+               (id, host_id, token_hash, kind, expires_at, consumed_at, revoked_at)
+             VALUES ('hc3', 'owned-1', 'hash-3', 'other', NULL, NULL, NULL)`,
+          ).run(),
+        ).toThrow(/CHECK constraint failed/);
+        expect(() =>
+          db.prepare(
+            `INSERT INTO host_credentials
+               (id, host_id, token_hash, kind, expires_at, consumed_at, revoked_at)
+             VALUES ('hc4', 'owned-1', 'hash-1', 'long_lived', NULL, NULL, NULL)`,
+          ).run(),
+        ).toThrow(/UNIQUE constraint failed/);
+
+        db.prepare(`DELETE FROM hosts WHERE id = 'owned-1'`).run();
+        expect(
+          db
+            .prepare(`SELECT COUNT(*) AS c FROM host_credentials WHERE host_id = 'owned-1'`)
+            .get(),
+        ).toEqual({ c: 0 });
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  describe('B.3 runtime host placement schema boundary', () => {
+    it('does not add a runtime_host_id column to conversation_agents', () => {
+      const db = openDbAt(30);
+      try {
+        const columnNames = (
+          db.pragma('table_info(conversation_agents)') as Array<{ name: string }>
+        ).map(c => c.name);
+        expect(columnNames).not.toContain('runtime_host_id');
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  describe('migration v31 (active-only host installation UNIQUE)', () => {
+    it('replaces the v30 unique index with an active-only variant so revoked rows do not block re-claim', () => {
+      const db = openDbAt(30);
+      try {
+        // Pre-state: v30 index name present.
+        const indexNamesAt30 = (
+          db
+            .prepare<[], { name: string }>(
+              `SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'hosts'`,
+            )
+            .all() as Array<{ name: string }>
+        ).map(r => r.name);
+        expect(indexNamesAt30).toContain('uniq_hosts_user_installation_when_set');
+        expect(indexNamesAt30).not.toContain(
+          'uniq_hosts_user_installation_when_active',
+        );
+
+        // Seed a user + a revoked host occupying the (user, installation)
+        // pair. Under v30 a second active row with the same pair would
+        // violate the partial UNIQUE.
+        const now = Date.now();
+        db.prepare(
+          `INSERT INTO users (id, name, display_name, created_at, updated_at)
+           VALUES ('u1', 'u1-test', 'U1', ?, ?)`,
+        ).run(now, now);
+        db.prepare(
+          `INSERT INTO hosts
+             (id, name, kind, user_id, installation_id, revoked_at, created_at)
+           VALUES ('h-revoked', 'h-revoked', 'local', 'u1', 'inst-1', ?, ?)`,
+        ).run(now - 1000, now - 2000);
+
+        // Apply v31.
+        runMigrations(db);
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 31`).get(),
+        ).toBeDefined();
+
+        const indexNamesAt31 = (
+          db
+            .prepare<[], { name: string }>(
+              `SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'hosts'`,
+            )
+            .all() as Array<{ name: string }>
+        ).map(r => r.name);
+        expect(indexNamesAt31).not.toContain('uniq_hosts_user_installation_when_set');
+        expect(indexNamesAt31).toContain('uniq_hosts_user_installation_when_active');
+
+        // Now a fresh active row with the SAME (user_id, installation_id)
+        // is allowed, because the partial predicate excludes the
+        // revoked row.
+        db.prepare(
+          `INSERT INTO hosts
+             (id, name, kind, user_id, installation_id, created_at)
+           VALUES ('h-active', 'h-active', 'local', 'u1', 'inst-1', ?)`,
+        ).run(now);
+
+        // But two active rows for the same pair still violate.
+        expect(() =>
+          db
+            .prepare(
+              `INSERT INTO hosts
+                 (id, name, kind, user_id, installation_id, created_at)
+               VALUES ('h-active-dup', 'h-active-dup', 'local', 'u1', 'inst-1', ?)`,
+            )
+            .run(now),
+        ).toThrow(/UNIQUE constraint failed/);
       } finally {
         db.close();
       }

@@ -280,9 +280,20 @@ export class TaskService {
       const effectiveWs = filters.workspaceId ?? conv.workspace_id;
       clauses.push('m.task_workspace_id = ?');
       args.push(effectiveWs);
-    } else if (filters.workspaceId) {
-      clauses.push('m.task_workspace_id = ?');
-      args.push(filters.workspaceId);
+    } else {
+      clauses.push(
+        `EXISTS (
+          SELECT 1
+            FROM conversation_users cu
+           WHERE cu.conversation_id = m.conversation_id
+             AND cu.user_id = ?
+        )`,
+      );
+      args.push(filters.actor.userId);
+      if (filters.workspaceId) {
+        clauses.push('m.task_workspace_id = ?');
+        args.push(filters.workspaceId);
+      }
     }
 
     if (filters.conversationId) {
@@ -329,6 +340,8 @@ export class TaskService {
         )
         .get(messageId);
       if (physicalRow?.task_workspace_id !== conv.workspace_id) return null;
+    } else if (!this.canUserAccessConversation(actor.userId, row.conversation_id)) {
+      return null;
     }
     return this.joinedToSummary(row);
   }
@@ -685,6 +698,13 @@ export class TaskService {
           messageId: by.messageId,
         }) };
       }
+      if (!this.canUserAccessConversation(actor.userId, msg.conversation_id)) {
+        return { failure: failClaim({
+          code: 'not_a_task',
+          reason: 'not a task',
+          messageId: by.messageId,
+        }) };
+      }
       if (msg.task_status === 'done') {
         return { failure: failClaim({
           code: 'task_done',
@@ -914,6 +934,9 @@ export class TaskService {
       if (!msg || msg.task_number === null) {
         return { failure: { success: false, code: 'not_a_task', reason: 'not a task' } };
       }
+      if (!this.canUserAccessConversation(actor.userId, msg.conversation_id)) {
+        return { failure: { success: false, code: 'not_a_task', reason: 'not a task' } };
+      }
       this.db
         .prepare(
           `UPDATE messages
@@ -1126,6 +1149,9 @@ export class TaskService {
       if (!msg || msg.task_number === null) {
         return { failure: { success: false, code: 'not_a_task', reason: 'not a task' } };
       }
+      if (!this.canUserAccessConversation(actor.userId, msg.conversation_id)) {
+        return { failure: { success: false, code: 'not_a_task', reason: 'not a task' } };
+      }
       if (msg.task_status === status) {
         return { failure: {
           success: false,
@@ -1207,6 +1233,18 @@ export class TaskService {
       return ws.owner_agent_id === agentId;
     }
     return this.workspaces.isMember(ws.id, agentId);
+  }
+
+  private canUserAccessConversation(userId: string, conversationId: string): boolean {
+    return this.db
+      .prepare<[string, string], { ok: 1 }>(
+        `SELECT 1 AS ok
+           FROM conversation_users
+          WHERE conversation_id = ?
+            AND user_id = ?
+          LIMIT 1`,
+      )
+      .get(conversationId, userId) !== undefined;
   }
 
   /** Resolve the workspace whose `task_number` namespace the agent op

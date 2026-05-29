@@ -1,0 +1,389 @@
+/**
+ * D4.b-3 — Standalone G2 live-wake + inbox delivery marker e2e.
+ *
+ * Builds on B2's spawn-to-session_init substrate. Once the runtime
+ * is `ready`, a new inbox row triggers `runtime_wake` (not
+ * `runtime_start`), the daemon writes the message to the child's
+ * stdin via `driver.encodeStdinMessage`, and the backend records
+ * the inbox row as delivered.
+ *
+ * **What this test pins (Cindy `Pe0E7hK0du-S_vYC` boundary
+ * tightening — "查 DB 行 (`delivered_at` / `in_flight_owner` /
+ * dedupe)，不只 assert wake result")**:
+ *
+ *   1. **Delivery marker projection** — after a live wake,
+ *      `conversation_inboxes.delivered_at` for the new inbox row
+ *      flips from `NULL` to a real timestamp, AND `in_flight_owner`
+ *      / `in_flight_at` are cleared. This is the durable observable
+ *      that proves the wake response reached the backend's
+ *      `inboxAck.markDelivered(...)` sink (not just the daemon's
+ *      stdin write).
+ *   2. **Dedupe** — calling `deliverMessage(...)` a second time for
+ *      the same inbox row is a no-op:
+ *        - `delivered_at` is unchanged (no rewrite, no race
+ *          re-claim).
+ *        - The wrapper sees exactly ONE `runtime_output STDIN:` echo
+ *          from the fixture (proves only one `runtime_wake` reached
+ *          the runtime — the dedupe guard fired at the
+ *          `delivery.deliveredAt !== null` short-circuit in
+ *          `OutboundRuntimeEventFanout.deliverMessage`).
+ *   3. **wake takes the live-runtime path, not start** — the
+ *      session_init projection from B2's spawn is still the latest
+ *      one; no new `session_init` parsed event lands after the
+ *      wake (i.e. the runtime was NOT re-spawned).
+ *
+ * **R4 (this IPC is local supervisor/control, not server↔daemon
+ * formal semantics)**: same as B1/B2 — daemon's Unix socket isn't
+ * connected to; the entire test is the outbound WS path.
+ */
+import { afterEach, describe, expect, it } from 'vitest';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { mkdirSync } from 'node:fs';
+import type { Driver, DriverSpawnContext, ParsedEvent } from '@silverhand/host/drivers';
+import type { RuntimeKind } from '@silverhand/shared';
+import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
+import {
+  bootDaemonWithSupervisor,
+  bootG2Harness,
+  waitFor,
+  waitForAttachment,
+  type DaemonWithSupervisorHandle,
+  type G2Harness,
+} from './g2-harness.js';
+
+const FIXTURE = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '../../../host/tests/_fixtures/echo-runtime.cjs',
+);
+
+const SESSION_PREFIX = '__G2_SESSION_INIT__:';
+
+/**
+ * Same driver shape as B2: `kickoffMode: 'self_inits'` means the
+ * supervisor's `wake()` ack flows straight back to
+ * `markDelivered(...)` (no `requires_first_message` B3 gate). Tests
+ * for the `requires_first_message` claude-style gate live elsewhere
+ * (`packages/host/tests/supervisor.test.ts` covers it at the
+ * supervisor unit level; D4 e2e doesn't re-derive that contract).
+ */
+function makeSessionInitDriver(sessionId: string): Driver {
+  return {
+    kind: 'claude',
+    binary: FIXTURE,
+    kickoffMode: 'self_inits',
+    busyDeliveryMode: 'direct',
+    oneShot: false,
+    supportsNativeStandingPrompt: true,
+    initLivenessSilenceMs: 30_000,
+    initPreProtocolCapMs: 5 * 60_000,
+    initPostProtocolMs: 60_000,
+    buildArgs: (_ctx: DriverSpawnContext): string[] => [
+      FIXTURE,
+      '--emit-line',
+      `${SESSION_PREFIX}${sessionId}`,
+      '--echo-stdin',
+    ],
+    applyEnv: env => ({ ...env }),
+    encodeStdinMessage: (text: string) =>
+      JSON.stringify({ type: 'user', message: { role: 'user', content: text } }),
+    encodeInterruptControl: () => null,
+    parseLine: (line: string): ParsedEvent[] => {
+      const idx = line.indexOf(SESSION_PREFIX);
+      if (idx < 0) return [];
+      const sid = line.slice(idx + SESSION_PREFIX.length).trim();
+      return [{ kind: 'session_init', sessionId: sid }];
+    },
+    classifyInitProgress: () => null,
+  };
+}
+
+interface InboxRow {
+  id: number;
+  delivered_at: number | null;
+  in_flight_owner: string | null;
+  in_flight_at: number | null;
+}
+
+describe('Standalone G2 — live wake + inbox delivery marker', () => {
+  let harness: G2Harness | null = null;
+  let daemon: DaemonWithSupervisorHandle | null = null;
+
+  afterEach(async () => {
+    try {
+      await daemon?.stop();
+    } catch {
+      // best-effort
+    }
+    daemon = null;
+    if (harness) {
+      await harness.shutdown();
+      harness = null;
+    }
+  });
+
+  it('a second inbox row for an already-ready runtime takes the live-wake path, flips delivered_at, and is dedupe-safe on re-deliver', async () => {
+    harness = await bootG2Harness();
+    const { db } = harness.backend.context;
+
+    const now = Date.now();
+    const workspaceId = 'ws-g2-b3';
+    const agentId = 'agent-g2-b3';
+    const conversationId = 'conv-g2-b3';
+    const expectedSessionId = `g2-b3-session-${now}`;
+    const workspacePath = join(harness.silverhandDir, 'workspaces', workspaceId);
+    mkdirSync(workspacePath, { recursive: true });
+
+    db.prepare(
+      `INSERT INTO workspaces
+        (id, name, description, workspace_kind, workspace_path,
+         workspace_host_id, owner_agent_id, archived_at, created_at, updated_at)
+        VALUES (?, ?, NULL, 'regular', ?, ?, NULL, NULL, ?, ?)`,
+    ).run(workspaceId, 'g2-b3-workspace', workspacePath, harness.hostId, now, now);
+    db.prepare(
+      `INSERT INTO workspace_users (workspace_id, user_id, joined_at)
+        VALUES (?, ?, ?)`,
+    ).run(workspaceId, harness.userId, now);
+
+    db.prepare(
+      `INSERT INTO agents
+        (id, name, runtime, model, host_id, description, created_at,
+         updated_at, display_name, reasoning_effort, fast_mode,
+         created_by_user_id, avatar_storage_key, avatar_content_type)
+        VALUES (?, ?, 'claude', NULL, ?, NULL, ?, ?, ?, NULL, NULL,
+                ?, NULL, NULL)`,
+    ).run(
+      agentId,
+      'agent-g2-b3-name',
+      harness.hostId,
+      now,
+      now,
+      'Agent G2 B3',
+      harness.userId,
+    );
+    db.prepare(
+      `INSERT INTO workspace_members (workspace_id, agent_id, joined_at)
+        VALUES (?, ?, ?)`,
+    ).run(workspaceId, agentId, now);
+
+    db.prepare(
+      `INSERT INTO conversations
+        (id, workspace_id, workspace_path, kind, parent_conversation_id,
+         title, status, spawned_by_agent_id, closed_at, close_summary,
+         pinned_at, created_at, updated_at)
+        VALUES (?, ?, ?, 'channel', NULL, ?, 'active', NULL, NULL, NULL,
+                NULL, ?, ?)`,
+    ).run(conversationId, workspaceId, workspacePath, 'g2-b3-channel', now, now);
+    db.prepare(
+      `INSERT INTO conversation_users (conversation_id, user_id, joined_at)
+        VALUES (?, ?, ?)`,
+    ).run(conversationId, harness.userId, now);
+    db.prepare(
+      `INSERT INTO conversation_agents
+        (conversation_id, agent_id, cli_session_id, pid, status, joined_at)
+        VALUES (?, ?, NULL, NULL, 'idle', ?)`,
+    ).run(conversationId, agentId, now);
+
+    // First message: spawns the runtime via startup_delivery (B2 path).
+    const firstMessageId = 'msg-g2-b3-first';
+    db.prepare(
+      `INSERT INTO messages
+        (id, conversation_id, from_kind, from_agent_id, from_user_id,
+         content, metadata, seq, created_at)
+        VALUES (?, ?, 'user', NULL, ?, ?, NULL, 1, ?)`,
+    ).run(firstMessageId, conversationId, harness.userId, 'hello, agent', now);
+    const inboxRepo = new ConversationInboxRepo(db);
+    inboxRepo.enqueue(conversationId, agentId, firstMessageId);
+
+    daemon = await bootDaemonWithSupervisor(harness, {
+      driverFor: (_kind: RuntimeKind) => makeSessionInitDriver(expectedSessionId),
+    });
+
+    const controller = harness.backend.context.hostWsController?.();
+    if (!controller) throw new Error('host ws controller missing');
+    await waitForAttachment(controller, harness.hostId);
+
+    // Spawn the runtime + wait for session_init to land in DB (this
+    // is exactly the B2 happy path; we re-use it as the precondition
+    // for the live-wake assertion below). After this, phase=ready in
+    // the backend's per-host cache, so the next inbox row takes the
+    // `runtime_wake` path, not `runtime_start`.
+    await harness.backend.context.runtimeHost.start(conversationId, agentId);
+    await waitFor(
+      () => {
+        const row = db
+          .prepare<[string, string], { cli_session_id: string | null }>(
+            `SELECT cli_session_id FROM conversation_agents
+              WHERE conversation_id = ? AND agent_id = ?`,
+          )
+          .get(conversationId, agentId);
+        if (!row || row.cli_session_id !== expectedSessionId) return null;
+        return true;
+      },
+      { timeoutMs: 10_000, label: 'session_init projection (precondition)' },
+    );
+    // Record the count of session_init events at this point so the
+    // post-wake assertion can prove the runtime was NOT respawned
+    // (a respawn would emit a new session_init).
+    const sessionInitsBeforeWake = harness.events.filter(
+      e =>
+        e.frame.kind === 'runtime_parsed_event' &&
+        e.frame.parsed.kind === 'session_init',
+    ).length;
+
+    // Second message — this is the live-wake test substrate. We
+    // also seed the body so the wake's stdin write contains a
+    // unique substring we can grep for in the fixture's STDIN:
+    // echo (proves the live-wake actually reached the runtime).
+    const secondMessageId = 'msg-g2-b3-second';
+    const secondBody = `live-wake-payload-${now}`;
+    db.prepare(
+      `INSERT INTO messages
+        (id, conversation_id, from_kind, from_agent_id, from_user_id,
+         content, metadata, seq, created_at)
+        VALUES (?, ?, 'user', NULL, ?, ?, NULL, 2, ?)`,
+    ).run(secondMessageId, conversationId, harness.userId, secondBody, now);
+
+    // First deliver call: enqueues + triggers live wake.
+    await harness.backend.context.runtimeHost.deliverMessage(
+      conversationId,
+      agentId,
+      secondMessageId,
+    );
+
+    // Observable #1 (load-bearing — Cindy P1 boundary): the inbox
+    // row's `delivered_at` flips from NULL to a real timestamp via
+    // `inboxAck.markDelivered(...)` on the wake response. Also
+    // verify `in_flight_owner` / `in_flight_at` were cleared by
+    // the same `markDelivered` write — a stale in-flight lease
+    // would prevent later replays from claiming the row.
+    const deliveredRow = await waitFor(
+      () => {
+        const row = db
+          .prepare<[string, string, string], InboxRow>(
+            `SELECT id, delivered_at, in_flight_owner, in_flight_at
+               FROM conversation_inboxes
+              WHERE conversation_id = ? AND agent_id = ? AND message_id = ?`,
+          )
+          .get(conversationId, agentId, secondMessageId);
+        if (!row) return null;
+        if (row.delivered_at === null) return null;
+        return row;
+      },
+      { timeoutMs: 10_000, label: 'inbox delivered_at projection (live wake)' },
+    );
+    expect(deliveredRow.delivered_at).toBeGreaterThan(0);
+    expect(deliveredRow.delivered_at).toBeLessThanOrEqual(Date.now());
+    expect(deliveredRow.in_flight_owner).toBeNull();
+    expect(deliveredRow.in_flight_at).toBeNull();
+    const deliveredAtAfterFirst = deliveredRow.delivered_at;
+
+    // Wire-side cross-check: the fixture echoed the wake payload
+    // back via `STDIN:<encoded>` on stdout, so the wrapper saw a
+    // `runtime_output` frame containing our payload substring. We
+    // pin the count to 1 so the dedupe assertion below can show
+    // the count did NOT increment after the second deliver call.
+    //
+    // `delivered_at` is written when the daemon ACKs the wake — that
+    // ACK can land BEFORE the fixture has finished reading stdin and
+    // echoing back. Use `waitFor` so the count assertion is bound to
+    // the durable post-echo observable rather than a same-tick race.
+    await waitFor(
+      () => (countStdinEchoes(harness!, secondBody) === 1 ? true : null),
+      {
+        timeoutMs: 5_000,
+        label: 'live wake STDIN: echo lands on the wrapped sink',
+      },
+    );
+    const stdinEchoesBefore = countStdinEchoes(harness, secondBody);
+    expect(stdinEchoesBefore).toBe(1);
+
+    // Observable #2: dedupe. Calling deliverMessage again for the
+    // same inbox row hits the `delivery.deliveredAt !== null`
+    // short-circuit at the top of
+    // `OutboundRuntimeEventFanout.deliverMessage` and returns
+    // without dispatching a second `runtime_wake`. Three
+    // independent checks:
+    //   (a) the DB row's `delivered_at` is unchanged (no rewrite).
+    //   (b) `in_flight_owner` / `in_flight_at` stay null (no
+    //       transient re-claim that could race a parallel start).
+    //   (c) the wrapper's `runtime_output` STDIN: echo count for
+    //       this payload stays at 1 (the runtime never received a
+    //       second wake — the dedupe fired BEFORE the WS send).
+    await harness.backend.context.runtimeHost.deliverMessage(
+      conversationId,
+      agentId,
+      secondMessageId,
+    );
+    // Give the system a tick window to actually have sent a
+    // duplicate if the dedupe had silently failed. We're proving a
+    // negative — there's no positive event to wait for — so a
+    // short polling window is the honest way to express "we waited
+    // and nothing happened". 250ms is enough to cover the fixture
+    // STDIN echo round-trip (typical 5-20ms).
+    await new Promise(resolve => setTimeout(resolve, 250));
+
+    const reCheckRow = db
+      .prepare<[string, string, string], InboxRow>(
+        `SELECT id, delivered_at, in_flight_owner, in_flight_at
+           FROM conversation_inboxes
+          WHERE conversation_id = ? AND agent_id = ? AND message_id = ?`,
+      )
+      .get(conversationId, agentId, secondMessageId);
+    expect(reCheckRow).toBeTruthy();
+    expect(reCheckRow!.delivered_at).toBe(deliveredAtAfterFirst);
+    expect(reCheckRow!.in_flight_owner).toBeNull();
+    expect(reCheckRow!.in_flight_at).toBeNull();
+
+    const stdinEchoesAfter = countStdinEchoes(harness, secondBody);
+    expect(stdinEchoesAfter).toBe(1);
+
+    // Observable #3: the live-wake did NOT respawn the runtime — a
+    // respawn would emit a fresh session_init parsed event. The
+    // count of session_init events recorded since boot is the same
+    // before and after the wake, so the runtime kept its existing
+    // process / cli_session_id and the wake went through the
+    // `phase === 'ready'` path (not `idle` / `exited`).
+    const sessionInitsAfterWake = harness.events.filter(
+      e =>
+        e.frame.kind === 'runtime_parsed_event' &&
+        e.frame.parsed.kind === 'session_init',
+    ).length;
+    expect(sessionInitsAfterWake).toBe(sessionInitsBeforeWake);
+  });
+});
+
+/**
+ * Count the number of `runtime_output` frames whose payload
+ * contains `substr`. The fixture's `--echo-stdin` writes
+ * `STDIN:<encoded-message>` to stdout; the supervisor's output
+ * pump turns those bytes into `runtime_output` events whose
+ * outbound projection lands in `harness.events`.
+ */
+function countStdinEchoes(harness: G2Harness, substr: string): number {
+  return harness.events.filter(e => {
+    if (e.frame.kind !== 'runtime_output') return false;
+    // `runtime_output` carries the chunk bytes as a base64 or raw
+    // text field — read whichever the schema produced. We pull
+    // `text` (the decoded UTF-8 chunk) if present, falling back to
+    // a stringified version of the whole payload so the test still
+    // detects the substring if the schema gets a chunk_b64 fork.
+    const frame = e.frame as unknown as {
+      text?: string;
+      chunk?: string;
+      chunk_b64?: string;
+    };
+    if (frame.text && frame.text.includes(substr)) return true;
+    if (frame.chunk && frame.chunk.includes(substr)) return true;
+    if (frame.chunk_b64) {
+      try {
+        const decoded = Buffer.from(frame.chunk_b64, 'base64').toString('utf-8');
+        if (decoded.includes(substr)) return true;
+      } catch {
+        // ignore decode failures
+      }
+    }
+    return JSON.stringify(e.frame).includes(`STDIN:`) &&
+      JSON.stringify(e.frame).includes(substr);
+  }).length;
+}

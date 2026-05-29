@@ -16,8 +16,15 @@ import { Titlebar } from '@/components/layout/Titlebar';
 import { VerticalSplitter } from '@/components/layout/VerticalSplitter';
 import { useAppearance } from '@/hooks/useAppearance';
 import { useLayoutSettings } from '@/hooks/useLayoutSettings';
-import { isRegistrationRequired, useViewerUser } from '@/features/me/hooks';
+import {
+  isBackendUnreachable,
+  isRegistrationRequired,
+  useViewerUser,
+} from '@/features/me/hooks';
 import { RegistrationGate } from '@/features/me/RegistrationGate';
+import { BackendUnreachableGate } from '@/features/me/BackendUnreachableGate';
+import { BackendUnreachableBanner } from '@/features/me/BackendUnreachableBanner';
+import { SetupWizardModal } from '@/features/setup/SetupWizard';
 import { useResizableWidth } from '@/hooks/useResizableWidth';
 import { CreateWorkspaceDialog } from '@/features/workspaces/CreateWorkspaceDialog';
 import { CreateChannelDialog } from '@/features/workspaces/CreateChannelDialog';
@@ -114,11 +121,9 @@ const lastThreadByChannel = loadStringMap(LAST_THREAD_KEY);
 
 export function App(): JSX.Element {
   useAppearance();
-  // Hydrate the viewer profile (current user) so api() can stamp the
-  // X-Silverhand-Principal header against the real viewer id
-  // and `isCurrentUserId` resolves correctly. Returns either the
-  // resolved UserDto OR `{ registration_required: true, suggested_name }`
-  // when no viewer is registered yet.
+  // Hydrate the viewer profile from the main-process auth session so
+  // `isCurrentUserId` resolves correctly. Returns either the resolved
+  // UserDto or the setup-required shape that mounts the auth wizard.
   const viewer = useViewerUser();
 
   // Three-way render: loading → registration gate → registered shell.
@@ -129,22 +134,56 @@ export function App(): JSX.Element {
   // call dozens more hooks than the pre-registration render and React
   // would crash with "Rendered more hooks than during the previous
   // render".
+  //
+  // D4.a Commit 2 — `SetupWizardModal` is mounted at this fixed
+  // position regardless of branch so the App menu's
+  // "Connect to backend…" item can pop it open in any state (pre-auth
+  // registration gate, loading, or post-auth shell). The modal owns
+  // its own hooks; App's hook order is unchanged.
   if (!viewer.data) {
     return (
-      <div className="grid h-screen w-screen place-items-center bg-bg-base text-xs text-text-muted">
-        Loading…
-      </div>
+      <>
+        <div className="grid h-screen w-screen place-items-center bg-bg-base text-xs text-text-muted">
+          Loading…
+        </div>
+        <SetupWizardModal />
+      </>
+    );
+  }
+  // D4.a Commit 5d-fixup (Cindy P1-2): backend-unreachable gate
+  // takes precedence over the registration / setup wizard. The
+  // user MUST repair the connection (or clear the saved profile)
+  // before any further auth state can be inferred — pretending the
+  // user is "unauthenticated, signup_enabled=false" would push them
+  // toward the wrong CTA.
+  if (isBackendUnreachable(viewer.data)) {
+    return (
+      <>
+        <BackendUnreachableGate
+          serverUrl={viewer.data.server_url}
+          message={viewer.data.message}
+          onRetry={() => {
+            void viewer.refetch();
+          }}
+        />
+        <SetupWizardModal />
+      </>
     );
   }
   if (isRegistrationRequired(viewer.data)) {
-    // Full-screen RegistrationGate. POST /api/register is the SOLE
-    // creator of `users` rows, and the renderer enforces the matching
-    // UI invariant by simply not mounting the shell. After registration
-    // succeeds, /api/me returns the resolved UserDto and the next
-    // render falls through to `<RegisteredAppShell />`.
-    return <RegistrationGate suggestedName={viewer.data.suggested_name} />;
+    return (
+      <>
+        <RegistrationGate signupEnabled={viewer.data.signup_enabled} />
+        <SetupWizardModal />
+      </>
+    );
   }
-  return <RegisteredAppShell />;
+  return (
+    <>
+      <RegisteredAppShell />
+      <SetupWizardModal />
+    </>
+  );
 }
 
 function RegisteredAppShell(): JSX.Element {
@@ -1382,6 +1421,7 @@ function RegisteredAppShell(): JSX.Element {
                       name: w.name,
                       kind: w.kind === 'dm' ? 'dm' as const : 'regular' as const,
                       workspace_path: w.workspace_path,
+                      workspace_host_id: w.workspace_host_id,
                       dm_agent_id: w.dm_agent_id,
                       unread: messageUnreadSummary?.by_workspace?.[w.id] ?? 0,
                       pinned_at: w.pinned_at,
@@ -1590,6 +1630,18 @@ function RegisteredAppShell(): JSX.Element {
         />
       ) : null}
       <Toaster position="bottom-right" richColors />
+
+      {/* D4.a Commit 6 (4) — mid-session "Can't reach server" banner.
+        * Mounted INSIDE the registered shell on purpose: boot-time
+        * unreachability is the BackendUnreachableGate's job (full-
+        * screen, App-root level); this banner only fires after the
+        * user got past the boot gate and a subsequent query/mutation
+        * threw ApiError.kind === 'backend_unreachable'.
+        *
+        * Renders nothing when no recent backend_unreachable error
+        * has fired since the last clear. Owns its own click target
+        * + retry handler — see useBackendUnreachableSnitch. */}
+      <BackendUnreachableBanner />
 
       {/* Shutdown progress overlay — shown during graceful quit so the
         * user sees activity instead of a frozen window. Rendered above

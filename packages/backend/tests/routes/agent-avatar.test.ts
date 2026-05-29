@@ -28,6 +28,18 @@ function pngFile(name = 'avatar.png'): File {
   return new File([PNG_BYTES], name, { type: 'image/png' });
 }
 
+function localViewerHeaders(t: TestApp): Record<string, string> {
+  return {
+    authorization: `Bearer ${t.authToken}`,
+  };
+}
+
+function userSessionHeaders(t: TestApp, userId: string): Record<string, string> {
+  return {
+    authorization: `Bearer ${t.ctx.authSessions.issueSession({ userId }).userToken}`,
+  };
+}
+
 describe('POST /api/agents/:id/avatar', () => {
   let t: TestApp | null = null;
   afterEach(() => {
@@ -48,7 +60,7 @@ describe('POST /api/agents/:id/avatar', () => {
     const post = await t.app.fetch(
       new Request(`http://localhost${apiPaths.agentAvatar(id)}`, {
         method: 'POST',
-        headers: { authorization: `Bearer ${t.authToken}` },
+        headers: localViewerHeaders(t),
         body: form,
       }),
     );
@@ -70,7 +82,7 @@ describe('POST /api/agents/:id/avatar', () => {
     const del = await t.app.fetch(
       new Request(`http://localhost${apiPaths.agentAvatar(id)}`, {
         method: 'DELETE',
-        headers: { authorization: `Bearer ${t.authToken}` },
+        headers: localViewerHeaders(t),
       }),
     );
     expect(del.status).toBe(200);
@@ -103,7 +115,7 @@ describe('POST /api/agents/:id/avatar', () => {
     const denied = await t.app.fetch(
       new Request(`http://localhost${apiPaths.agentAvatar(id)}`, {
         method: 'POST',
-        headers: { authorization: `Bearer ${t.authToken}` },
+        headers: localViewerHeaders(t),
         body: form,
       }),
     );
@@ -117,10 +129,7 @@ describe('POST /api/agents/:id/avatar', () => {
     const allowed = await t.app.fetch(
       new Request(`http://localhost${apiPaths.agentAvatar(id)}`, {
         method: 'POST',
-        headers: {
-          authorization: `Bearer ${t.authToken}`,
-          [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
-        },
+        headers: userSessionHeaders(t, 'teammate'),
         body: allowedForm,
       }),
     );
@@ -142,7 +151,7 @@ describe('POST /api/agents/:id/avatar', () => {
     const res = await t.app.fetch(
       new Request(`http://localhost${apiPaths.agentAvatar(id)}`, {
         method: 'POST',
-        headers: { authorization: `Bearer ${t.authToken}` },
+        headers: localViewerHeaders(t),
         body: form,
       }),
     );
@@ -168,7 +177,7 @@ describe('POST /api/agents/:id/avatar', () => {
     const res = await t.app.fetch(
       new Request(`http://localhost${apiPaths.agentAvatar(id)}`, {
         method: 'POST',
-        headers: { authorization: `Bearer ${t.authToken}` },
+        headers: localViewerHeaders(t),
         body: form,
       }),
     );
@@ -184,7 +193,7 @@ describe('POST /api/agents/:id/avatar', () => {
     const res = await t.app.fetch(
       new Request(`http://localhost${apiPaths.agentAvatar('missing')}`, {
         method: 'POST',
-        headers: { authorization: `Bearer ${t.authToken}` },
+        headers: localViewerHeaders(t),
         body: form,
       }),
     );
@@ -234,7 +243,7 @@ describe('DELETE /api/agents/:id/avatar', () => {
     const res = await t.app.fetch(
       new Request(`http://localhost${apiPaths.agentAvatar(id)}`, {
         method: 'DELETE',
-        headers: { authorization: `Bearer ${t.authToken}` },
+        headers: localViewerHeaders(t),
       }),
     );
     expect(res.status).toBe(200);
@@ -260,7 +269,7 @@ describe('DELETE /api/agents/:id/avatar', () => {
     const res = await t.app.fetch(
       new Request(`http://localhost${apiPaths.agentAvatar(id)}`, {
         method: 'DELETE',
-        headers: { authorization: `Bearer ${t.authToken}` },
+        headers: localViewerHeaders(t),
       }),
     );
     expect(res.status).toBe(403);

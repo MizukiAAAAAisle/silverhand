@@ -20,9 +20,18 @@
  * Implementations live in `client/socket-transport.ts` and
  * `client/in-memory-transport.ts` (test-only).
  */
-import type { ResponseFrame, EventFrame } from '../protocol.js';
+import type { LooseResponseFrame, EventFrame } from '../protocol.js';
 
-export type DecodedFrame = ResponseFrame | EventFrame;
+/**
+ * What the transport layer hands UP to `HostClient`. The response
+ * arm is the LOOSE shape (`error.code: string`) because the
+ * transport sits below the dispatcher and does not yet know the
+ * intent the response correlates to — see `LooseResponseFrameSchema`
+ * in `protocol.ts` (Cindy D2 P1-1). `HostClient.handleFrame` is
+ * responsible for narrowing typed error codes against the
+ * intent-aware `intentErrorSchema(intent)`.
+ */
+export type DecodedFrame = LooseResponseFrame | EventFrame;
 
 export interface TransportEvents {
   frame: (frame: DecodedFrame) => void;

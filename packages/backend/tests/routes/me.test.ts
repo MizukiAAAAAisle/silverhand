@@ -1,6 +1,17 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { AVATAR_MAX_BYTES, apiPaths } from '@silverhand/shared';
+import {
+  AVATAR_MAX_BYTES,
+  apiPaths,
+  X_SILVERHAND_LEGACY_USER_ID_HEADER,
+} from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
+
+function localViewerHeaders(t: TestApp): Record<string, string> {
+  return {
+    authorization: `Bearer ${t.authToken}`,
+    [X_SILVERHAND_LEGACY_USER_ID_HEADER]: 'local',
+  };
+}
 
 describe('/api/me + /api/users/:id/avatar', () => {
   let t: TestApp | null = null;
@@ -72,7 +83,7 @@ describe('/api/me + /api/users/:id/avatar', () => {
     const post = await t.app.fetch(
       new Request(`http://localhost${apiPaths.meAvatar}`, {
         method: 'POST',
-        headers: { authorization: `Bearer ${t.authToken}` },
+        headers: localViewerHeaders(t),
         body: form,
       }),
     );
@@ -89,7 +100,7 @@ describe('/api/me + /api/users/:id/avatar', () => {
     const del = await t.app.fetch(
       new Request(`http://localhost${apiPaths.meAvatar}`, {
         method: 'DELETE',
-        headers: { authorization: `Bearer ${t.authToken}` },
+        headers: localViewerHeaders(t),
       }),
     );
     expect(del.status).toBe(200);
@@ -111,7 +122,7 @@ describe('/api/me + /api/users/:id/avatar', () => {
     const res = await t.app.fetch(
       new Request(`http://localhost${apiPaths.meAvatar}`, {
         method: 'POST',
-        headers: { authorization: `Bearer ${t.authToken}` },
+        headers: localViewerHeaders(t),
         body: form,
       }),
     );
@@ -134,7 +145,7 @@ describe('/api/me + /api/users/:id/avatar', () => {
     const res = await t.app.fetch(
       new Request(`http://localhost${apiPaths.meAvatar}`, {
         method: 'POST',
-        headers: { authorization: `Bearer ${t.authToken}` },
+        headers: localViewerHeaders(t),
         body: form,
       }),
     );
@@ -153,9 +164,8 @@ describe('/api/me + /api/users/:id/avatar', () => {
   });
 
   it('PATCH /api/me rejects display_name with control chars or Unicode line separators (400)', async () => {
-    // See dto.ts `DisplayNameSchema`. Mirrors the register-route guard so
-    // post-registration profile edits cannot reintroduce values that the
-    // initial register call would have rejected.
+    // See dto.ts `DisplayNameSchema`. Mirrors auth signup validation so
+    // profile edits cannot reintroduce values rejected at user creation.
     t = buildTestApp();
     const cases = [
       'first\nsecond',

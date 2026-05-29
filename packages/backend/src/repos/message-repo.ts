@@ -371,6 +371,45 @@ export class MessageRepo {
     return row ? messageRowWithTaskAssigneeToDto(row) : null;
   }
 
+  /**
+   * D4.d D3 round-1 P1.3 — return the first (lowest-`seq`) system
+   * message in `conversationId` whose `metadata.subtype` equals
+   * `subtype`. Used by `POST /api/agents` active-row idempotent
+   * echo to reconstruct `onboarding_message_id` (the seed message
+   * inserted in L3a's tx is identified by
+   * `from_kind='system' AND metadata.subtype='onboarding'`).
+   *
+   * Returns `null` when no such message exists. Callers MUST treat
+   * `null` as an invariant violation on a path that requires the
+   * message to exist (the route returns 500 `internal_error`,
+   * never a silent null fallback — Cindy refinement
+   * `m-K0qV09mGuRqwtu` #2: an active agent row without its
+   * onboarding seed is a corrupt dependent graph, not a permitted
+   * state).
+   *
+   * Uses sqlite `json_extract` against the JSON-stringified
+   * `metadata` column so the filter pushes down to the prepared
+   * statement (zero deserialization in JS for non-matching rows).
+   */
+  findFirstSystemSubtypeInConversation(
+    conversationId: string,
+    subtype: string,
+  ): MessageDto | null {
+    const row = this.db
+      .prepare<[string, string], MessageRowWithTaskAssignee>(
+        `SELECT m.*, aa.display_name AS task_assignee_name
+           FROM messages m
+           LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
+          WHERE m.conversation_id = ?
+            AND m.from_kind = 'system'
+            AND json_extract(m.metadata, '$.subtype') = ?
+          ORDER BY m.seq ASC
+          LIMIT 1`,
+      )
+      .get(conversationId, subtype);
+    return row ? messageRowWithTaskAssigneeToDto(row) : null;
+  }
+
   insertForConversation(params: {
     conversationId: string;
     fromKind: FromKind;

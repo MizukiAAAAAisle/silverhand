@@ -10,8 +10,7 @@
  *
  * # What's NOT here
  *
- * - `buildPromptContext` — its own module (`prompt-context.ts`).
- * - `prepareSpawnFiles` — its own module (`spawn-prep.ts`).
+ * - prompt hydration / spawn-prep — daemon-host-owned D2.g boundary.
  * - `sanitizeParsedEventForBroadcast` — its own module (`event-sanitize.ts`).
  *
  * # Surface
@@ -24,17 +23,11 @@
  */
 import { extractMentions } from '@silverhand/shared';
 import type { AttachmentSnapshot, FromKind } from '@silverhand/shared';
-import type { Driver } from '@silverhand/host/drivers';
 import type { PendingConversationInboxItem } from '../repos/conversation-inbox-repo.js';
 import { extractAttachmentSnapshotsFromRow } from '../repos/message-repo.js';
 
-/** The CLI tool name an agent should call to reply. Kept as a function
- *  signature for forward compat — if a non-claude driver ever needed a
- *  per-driver tool label we'd switch on `driver.kind` here. The arg is
- *  ignored today; the signature mirrors the lifted-from-CM helper so
- *  call sites stayed unchanged across the cutover. */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export function sendMessageToolName(_driver: Driver): string {
+/** The CLI tool name an agent should call to reply. */
+export function sendMessageToolName(): string {
   return 'silverhand message send';
 }
 
@@ -101,9 +94,9 @@ export function formatInboxBatch(
  * - `sender` is the canonical mention handle (`@<agent.name>` /
  *   `@<user.name>`) so an agent can reply with `@<handle>` directly.
  *   For pre-PR-A null-author rows or a row whose `from_user_id` is
- *   unknown, fall back to the registered viewer handle, then to the
- *   bare token `user`. System messages emit `sender=system` with no
- *   `@`.
+ *   unknown, callers may provide a conversation-scoped fallback user
+ *   handle; otherwise this degrades to the bare token `user`. System
+ *   messages emit `sender=system` with no `@`.
  * - `type` is the surface vocabulary: DB column `from_kind='user'`
  *   maps to `human` here; agent and system pass through.
  * - `time` is ISO 8601 in the local timezone (offset preserved) so

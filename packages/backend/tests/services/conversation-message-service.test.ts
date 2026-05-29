@@ -5,7 +5,6 @@ import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { NotificationRepo } from '../../src/repos/notification-repo.js';
-import { SettingsRepo } from '../../src/repos/settings-repo.js';
 import { UserRepo } from '../../src/repos/user-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { AttachmentService } from '../../src/services/attachment-service.js';
@@ -83,7 +82,6 @@ function bootstrap() {
   const conversations = new ConversationRepo(db);
   const messages = new MessageRepo(db);
   const notifications = new NotificationRepo(db);
-  const settings = new SettingsRepo(db);
   const users = new UserRepo(db);
   const attachments = new AttachmentRepo(db);
   const attachmentService = new AttachmentService({
@@ -104,7 +102,6 @@ function bootstrap() {
     messages,
     agents,
     users,
-    settings,
     notifications,
     workspaces,
     attachmentService,
