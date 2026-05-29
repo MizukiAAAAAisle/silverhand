@@ -3581,19 +3581,26 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     // hides BOTH `pending_materialization` AND `failed`. Pending
     // rows are management-view material; default-hiding them keeps
     // §5 boot reconciler residue out of the everyday product
-    // surface. `?include_failed=1` widens to include the caller's
-    // own failed rows; ACL still runs FIRST (Cindy
-    // `gMpODJXMetG39cKq` lock + `f0JxEM9nMhsVfLIo` refinement) so
-    // the flag is never a cross-user widener — it cannot reveal
-    // another user's failed row. `?include_pending=1` widener
-    // (§7.3 management view) is deferred to D6; the boot
-    // reconciler flips stuck pending → failed within ~60s default,
-    // so `?include_failed=1` covers the management surface with a
-    // bounded lag.
+    // surface.
+    //
+    // D4.d D6 — `?include_pending=1` widener parity (Cindy
+    // `hguBjY1O1GMy2JSS` D6 standards: same shape as D5
+    // `?include_failed=1` — ACL-first / creator-scoped / not a
+    // cross-user enumeration surface). Adds pending rows to the
+    // already-ACL-scoped candidate set; can combine with
+    // `?include_failed=1` so the management view's
+    // `?include_failed=1&include_pending=1` shows all three
+    // statuses the caller owns. `canViewAgent`'s ACL-first
+    // ordering means neither flag widens visibility across
+    // users — pending rows have no dependent workspaces (L3a
+    // never ran), so the workspace-membership branch of
+    // `canViewAgent` can never match cross-user, mirroring the
+    // failed-row property D5 relied on.
     const includeFailed = c.req.query('include_failed') === '1';
-    const includeStatuses: AgentMaterializationStatus[] = includeFailed
-      ? ['active', 'failed']
-      : ['active'];
+    const includePending = c.req.query('include_pending') === '1';
+    const includeStatuses: AgentMaterializationStatus[] = ['active'];
+    if (includeFailed) includeStatuses.push('failed');
+    if (includePending) includeStatuses.push('pending_materialization');
     return c.json({
       agents: agents
         .list()
@@ -4024,13 +4031,17 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!agent) return c.json({ error: 'agent not found' }, 404);
     // D4.d D5 — Q6.a single-get filter, lifted into `canViewAgent`
     // per Cindy `vB9vzUo4y_vgSZf8` P1. Default view hides BOTH
-    // `failed` AND `pending_materialization` behind 404; the
-    // `?include_failed=1` widener exposes the caller's own failed
-    // row only (cross-user widener stays 404 — ACL runs FIRST).
+    // `failed` AND `pending_materialization` behind 404.
+    //
+    // D4.d D6 — `?include_pending=1` widener parity (mirrors the
+    // list widener); both flags compose, ACL-first ordering keeps
+    // them creator-scoped — cross-user pending / failed lookups
+    // still 404 even with both flags set.
     const includeFailed = c.req.query('include_failed') === '1';
-    const includeStatuses: AgentMaterializationStatus[] = includeFailed
-      ? ['active', 'failed']
-      : ['active'];
+    const includePending = c.req.query('include_pending') === '1';
+    const includeStatuses: AgentMaterializationStatus[] = ['active'];
+    if (includeFailed) includeStatuses.push('failed');
+    if (includePending) includeStatuses.push('pending_materialization');
     if (
       !canViewAgent(ctx, getUserPrincipal(c), agent.id, { includeStatuses })
     ) {

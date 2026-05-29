@@ -233,7 +233,16 @@ export function canEditAgent(
  * Management routes opt in explicitly:
  *
  *   GET    /api/agents?include_failed=1         → ['active', 'failed']
+ *   GET    /api/agents?include_pending=1        → ['active',
+ *                                                  'pending_materialization']
+ *   GET    /api/agents?include_failed=1
+ *                     &include_pending=1         → all three (the §7.3
+ *                                                  management view's
+ *                                                  "Pending & Failed"
+ *                                                  page)
  *   GET    /api/agents/:id?include_failed=1     → ['active', 'failed']
+ *   GET    /api/agents/:id?include_pending=1    → ['active',
+ *                                                  'pending_materialization']
  *   DELETE /api/agents/:id                       → all three (D5 status
  *                                                 dispatch needs to
  *                                                 reach pending → 409
@@ -254,10 +263,15 @@ export function canEditAgent(
  * that spawns the agent principal is what flips the row to active),
  * so the gate is forward-correct and never observable in normal flow.
  *
- * `?include_pending=1` widener (design §7.3) is deferred — the §5
- * boot reconciler flips stuck pending rows to `failed` within ~60s
- * default, so `?include_failed=1` covers the management surface
- * with a bounded lag. D6 will add the pending widener for parity.
+ * `?include_pending=1` widener (D6 — Cindy `hguBjY1O1GMy2JSS`
+ * standards: same shape as `?include_failed=1`) composes with
+ * `?include_failed=1` on the GET list / single routes; the
+ * §7.3 management view's "Pending & Failed" page sends both flags
+ * together. ACL-first ordering keeps each flag creator-scoped —
+ * neither widener can reveal another user's row because pending
+ * and failed rows have no dependent workspaces (L3a never ran for
+ * pending; failed = pre-L3a by definition), so `canViewAgent`'s
+ * workspace-membership branch can never match cross-user for them.
  */
 export interface CanViewAgentOptions {
   /**

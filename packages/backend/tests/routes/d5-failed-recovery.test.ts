@@ -537,12 +537,14 @@ describe('D4.d D5: failed-row recovery surface', () => {
         .get('/api/agents')
         .then(r => r.json())) as { agents: Array<{ id: string }> };
       expect(list.agents.map(a => a.id)).not.toContain(pendingId);
-      // Sanity: `?include_failed=1` alone does NOT widen to pending
-      // either (`?include_pending=1` widener is deferred to D6).
-      const wide = (await http(t)
+      // `?include_failed=1` alone does NOT widen to pending —
+      // the two flags are independent dimensions on the
+      // includeStatuses tuple (D6 pin: pending widener is
+      // `?include_pending=1`, not a side-effect of failed widener).
+      const wideFailed = (await http(t)
         .get('/api/agents?include_failed=1')
         .then(r => r.json())) as { agents: Array<{ id: string }> };
-      expect(wide.agents.map(a => a.id)).not.toContain(pendingId);
+      expect(wideFailed.agents.map(a => a.id)).not.toContain(pendingId);
     });
 
     it('GET /api/agents/:id (no flag) returns 404 for pending rows', async () => {
@@ -556,12 +558,154 @@ describe('D4.d D5: failed-row recovery surface', () => {
       );
       const res = await http(t).get(`/api/agents/${pendingId}`);
       expect(res.status).toBe(404);
-      // And `?include_failed=1` still 404s (pending widener
-      // deferred).
-      const wide = await http(t).get(
+      // `?include_failed=1` alone still 404s — flags are
+      // independent.
+      const wideFailed = await http(t).get(
         `/api/agents/${pendingId}?include_failed=1`,
       );
-      expect(wide.status).toBe(404);
+      expect(wideFailed.status).toBe(404);
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────
+  //   D4.d D6 — `?include_pending=1` widener parity
+  //   (Cindy `hguBjY1O1GMy2JSS` standards: same shape as the D5
+  //   `?include_failed=1` widener — ACL-first, creator-scoped, not
+  //   a cross-user enumeration surface; composes with
+  //   `?include_failed=1` for the §7.3 management view).
+  // ──────────────────────────────────────────────────────────────────
+  describe('?include_pending=1 widener (D6)', () => {
+    it('list: ?include_pending=1 widens to caller\'s own pending rows', async () => {
+      const t = buildTestApp();
+      tests.push(t);
+      const pendingId = seedPendingAgent(
+        t,
+        t.viewerUserId,
+        `inc-pend-${freshKey()}`,
+        freshKey(),
+      );
+      const wide = (await http(t)
+        .get('/api/agents?include_pending=1')
+        .then(r => r.json())) as { agents: Array<{ id: string }> };
+      expect(wide.agents.map(a => a.id)).toContain(pendingId);
+    });
+
+    it('list: ?include_failed=1&include_pending=1 widens to BOTH (management view)', async () => {
+      const t = buildTestApp();
+      tests.push(t);
+      const failedId = seedFailedAgent(
+        t,
+        t.viewerUserId,
+        { name: `mgmt-failed-${freshKey()}` },
+        freshKey(),
+      );
+      const pendingId = seedPendingAgent(
+        t,
+        t.viewerUserId,
+        `mgmt-pending-${freshKey()}`,
+        freshKey(),
+      );
+      const wide = (await http(t)
+        .get('/api/agents?include_failed=1&include_pending=1')
+        .then(r => r.json())) as { agents: Array<{ id: string }> };
+      const ids = wide.agents.map(a => a.id);
+      expect(ids).toContain(failedId);
+      expect(ids).toContain(pendingId);
+    });
+
+    it('list: ?include_pending=1 from user B does NOT widen to user A\'s pending rows', async () => {
+      // ACL-first invariant — mirrors `?include_failed=1` (Invariant 2
+      // in `d4-d-structural-invariants.test.ts`). Pending rows have
+      // no dependent workspaces (L3a never ran), so
+      // `canViewAgent`'s workspace-membership branch can never match
+      // cross-user, exactly like failed rows.
+      const t = buildTestApp();
+      tests.push(t);
+      const userA = 'alice';
+      const userB = 'bob';
+      const userAPendingId = seedPendingAgent(
+        t,
+        userA,
+        `inc-pend-cross-${freshKey()}`,
+        freshKey(),
+      );
+      const wide = (await http(t).get('/api/agents?include_pending=1', {
+        headers: { [X_SILVERHAND_LEGACY_USER_ID_HEADER]: userB },
+      })) as Response;
+      expect(wide.status).toBe(200);
+      const body = (await wide.json()) as {
+        agents: Array<{ id: string }>;
+      };
+      expect(body.agents.map(a => a.id)).not.toContain(userAPendingId);
+    });
+
+    it('single: ?include_pending=1 returns 200 for caller\'s own pending row', async () => {
+      const t = buildTestApp();
+      tests.push(t);
+      const pendingId = seedPendingAgent(
+        t,
+        t.viewerUserId,
+        `inc-pend-get-${freshKey()}`,
+        freshKey(),
+      );
+      const res = await http(t).get(
+        `/api/agents/${pendingId}?include_pending=1`,
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        agent: { id: string; materialization_status: string };
+      };
+      expect(body.agent.id).toBe(pendingId);
+      expect(body.agent.materialization_status).toBe(
+        'pending_materialization',
+      );
+    });
+
+    it('single: ?include_pending=1 cross-user → 404 (ACL-first creator-scoped)', async () => {
+      const t = buildTestApp();
+      tests.push(t);
+      const userA = 'alice';
+      const userB = 'bob';
+      const userAPendingId = seedPendingAgent(
+        t,
+        userA,
+        `inc-pend-cross-get-${freshKey()}`,
+        freshKey(),
+      );
+      const cross = await http(t).get(
+        `/api/agents/${userAPendingId}?include_pending=1`,
+        { headers: { [X_SILVERHAND_LEGACY_USER_ID_HEADER]: userB } },
+      );
+      expect(cross.status).toBe(404);
+    });
+
+    it('PATCH/avatar/etc still 404 for pending even with ?include_pending=1 (widener is read-only)', async () => {
+      // The widener applies to the GET list / single routes only.
+      // PATCH and other agent-id sub-routes do NOT honor the
+      // query flag — they use `canViewAgent` default
+      // (`['active']`) and stay 404 for pending. Otherwise the
+      // PATCH metadata-mutation hole would re-open: a caller
+      // could PATCH a pending row's snapshot before its L3a
+      // finishes, breaking the §3.2 immutable-metadata invariant
+      // mid-flight.
+      const t = buildTestApp();
+      tests.push(t);
+      const pendingId = seedPendingAgent(
+        t,
+        t.viewerUserId,
+        `inc-pend-patch-${freshKey()}`,
+        freshKey(),
+      );
+      const res = await http(t).patch(
+        // Even with the query flag, PATCH does not parse it.
+        `/api/agents/${pendingId}?include_pending=1`,
+        { description: 'should-not-apply' },
+      );
+      expect(res.status).toBe(404);
+      const after = t.ctx.db
+        .prepare(`SELECT description FROM agents WHERE id = ?`)
+        .get(pendingId) as { description: string | null };
+      expect(after.description).toBeNull();
     });
   });
 
