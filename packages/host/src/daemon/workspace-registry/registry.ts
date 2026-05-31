@@ -153,9 +153,11 @@ export interface WorkspaceRegistryOptions {
    * the registry itself, and a workspace root is recursively purged, so a
    * requested path there could destroy Silverhand internals. The ONE
    * exception is a child of `legacyWorkspacesRoot` (below), so a pre-D4.e
-   * generated workspace can still be bound. Mirrors the backend's
-   * `validateWorkspacePath` (provision.ts). Injected (not derived via
-   * `dirname`) so production and tests are explicit. Absent → guard off.
+   * generated workspace can still be bound. This is the daemon-canonical
+   * form of the retired backend `validateWorkspacePath` rule (removed in
+   * D4.e-5 — the daemon is now the sole path authority). Injected (not
+   * derived via `dirname`) so production and tests are explicit. Absent →
+   * guard off.
    */
   silverhandStateRoot?: string;
   /**
@@ -414,7 +416,8 @@ export class WorkspaceRegistry {
         'requested path cannot live inside the daemon-managed workspaces root',
       );
     }
-    // State-root guard (Cindy P1-3, mirrors backend `validateWorkspacePath`):
+    // State-root guard (Cindy P1-3; the daemon-canonical form of the retired
+    // backend `validateWorkspacePath` rule, removed in D4.e-5):
     // the silverhand state subtree holds L1 agent identity (`agents/**`),
     // daemon state (`daemon/**`) and the registry itself; a workspace root
     // is recursively purged, so a requested path there could destroy

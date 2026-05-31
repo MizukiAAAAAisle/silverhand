@@ -1594,13 +1594,14 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
    * delete path on a workspace that should fail-closed (Cindy
    * round-1 P1).
    *
-   * NOTE: This is a control-plane placement check. The remaining
-   * server-side fs boundary is `initWorkspaceDir` (workspace skeleton);
-   * `seedAgentL2` was removed in D4.e-3 (L2 seeding is now daemon-mediated
-   * via `agent_l2_seed`) and `ensureAgentL1Dir` survives only as the
-   * `agent_materialize` test fake's L1 seeder. The fail-closed contract
-   * here is "rejected path leaks no fs / DB / message side effect", which
-   * is true because the call sits before every write.
+   * NOTE: This is a control-plane placement check. As of D4.e-5 the backend
+   * carries NO agent-host filesystem code at all — workspace skeleton, L1
+   * materialization, and L2 seeding are all daemon-mediated
+   * (`workspace_provision` / `agent_materialize` / `agent_l2_seed`), and the
+   * old `initWorkspaceDir` / `ensureAgentL1Dir` / `seedAgentL2` helpers were
+   * removed (invariant I6). The fail-closed contract here is "rejected path
+   * leaks no fs / DB / message side effect", which is true because the call
+   * sits before every write.
    */
   function assertWorkspaceAgentsMatchHost(
     workspaceId: string,

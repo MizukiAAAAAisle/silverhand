@@ -8,12 +8,14 @@
  * materialize/` (the tripwire test under
  * `packages/backend/tests/dependency-guard-agent-materialize.test.ts`
  * enforces this — it lives in `packages/backend` because that's the
- * package the rule restricts). The legacy backend `ensureAgentL1Dir` in
- * `packages/backend/src/workspace-files.ts` keeps a parallel copy of
- * the strings here until D3 removes the embedded-direct-fs path
- * entirely; the two are SEMANTIC clones at D2, not a shared
- * dependency. When the two drift, the daemon copy wins — `POST
- * /api/agents` in D3 routes through this module.
+ * package the rule restricts). The daemon is now the SOLE owner of L1
+ * templates: the pre-D4.e backend `ensureAgentL1Dir` semantic clone
+ * (`packages/backend/src/workspace-files.ts`) was removed in D4.e-5
+ * (invariant I6 — backend src holds no agent-host fs/template code). The
+ * embedded test fake keeps a test-only clone under
+ * `packages/backend/tests/utils/embedded-seed-fixtures.ts`; this module
+ * remains the source of truth and its bytes are pinned by the host
+ * package's own tests (acceptance A5).
  *
  * What is materialized (design §8.1): system_prompt.md + MEMORY.md
  * + notes/ skeleton + `.materialized` sentinel. **CONSENSUS.md is

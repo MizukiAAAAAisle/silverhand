@@ -2,18 +2,17 @@ import { access, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /**
- * Daemon-canonical workspace `.silverhand/` skeleton (D4.e-1). This is
- * the daemon-side owner of what the backend's `initWorkspaceDir`
- * (`packages/backend/src/workspace-files.ts`) used to create. The
- * CONSENSUS default content is kept byte-identical to the backend's
- * pre-D4.e value so adopting/seeding an existing workspace does not
- * change bytes (design §5 template ownership; acceptance A5). The
- * backend does NOT import this — only the daemon writes workspace files.
+ * Daemon-canonical workspace `.silverhand/` skeleton (D4.e-1). The daemon is
+ * the SOLE writer of workspace files; the pre-D4.e backend `initWorkspaceDir`
+ * (`packages/backend/src/workspace-files.ts`) was removed in D4.e-5 so
+ * `packages/backend/src` carries no agent-host filesystem code (invariant I6).
+ * The CONSENSUS default content is kept byte-identical to the pre-D4.e backend
+ * value so adopting/seeding an existing workspace does not change bytes
+ * (design §5 template ownership; acceptance A5).
  */
 
 /**
- * Byte-identical to the pre-D4.e backend default
- * (`workspace-files.ts initWorkspaceDir`). Do not reformat.
+ * Byte-identical to the pre-D4.e backend default. Do not reformat.
  */
 export const WORKSPACE_CONSENSUS_DEFAULT =
   '# Workspace Consensus\n\n_Add only agreements that ALL members must respect. Keep under 2KB._\n';

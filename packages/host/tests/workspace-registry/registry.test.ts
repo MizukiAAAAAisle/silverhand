@@ -312,9 +312,10 @@ describe('WorkspaceRegistry — cross-workspace overlap conflict (P1-2)', () => 
 });
 
 describe('WorkspaceRegistry — state-root guard (P1-3)', () => {
-  // Mirrors the backend `validateWorkspacePath`: a caller-proposed path may
-  // not live inside the silverhand state dir (L1 identity / daemon state /
-  // registry), EXCEPT a child of the generated workspaces root.
+  // The daemon-canonical form of the retired backend `validateWorkspacePath`
+  // rule (removed in D4.e-5): a caller-proposed path may not live inside the
+  // silverhand state dir (L1 identity / daemon state / registry), EXCEPT a
+  // child of the generated workspaces root.
   const SILVERHAND_ROOT = '/Users/someone/.silverhand';
   const LEGACY_ROOT = `${SILVERHAND_ROOT}/workspaces`;
 

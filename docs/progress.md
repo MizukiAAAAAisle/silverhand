@@ -2183,3 +2183,35 @@ messages → activity runs (clusterable subtype + 相邻 + 5min gap) → split b
 - #task:5 in_review，工作树**未 commit**（按 @shiki 标准纪律）
 - 质量门：`pnpm -r typecheck` ✅ / backend 59 files / 718 tests ✅ / desktop 11 files / 191 tests ✅ / `git diff --check` ✅
 - 等 @shiki 用备份做真实验收 → commit 决定（commit 时倾向拆成 "shared/migrations + backend/adoption" 两个 commit）
+
+---
+
+## 2026-05-30 — Remote backend D4.e-5: cleanup + A1 dependency-guard + acceptance doc
+
+D4.e (daemon = sole host-local path authority) cleanup slice. With D4.e-2…-4
+having routed every workspace/agent fs op through formal daemon intents
+(`agent_workspace_read` / `agent_l2_seed` / `agent_files_purge`,
+`workspace_provision` / `agent_workspace_index`), the backend's pre-D4.e
+agent-host fs/path modules were dead. Removed from `packages/backend/src`:
+
+- `workspace-files.ts` (workspace skeleton + L1 seed + templates) — daemon owns
+  these now; embedded test fake's stand-in moved to a test-only clone
+  `tests/utils/embedded-seed-fixtures.ts`.
+- `agent-profile.ts` (`workspace_path`-derived agent L1/L2 path builders) — zero
+  callers.
+- Their unit tests deleted (real behavior covered by the daemon's own tests).
+
+Added the **A1 structural guard** `tests/dependency-guard-no-agent-host-fs.test.ts`:
+backend/src may import `node:fs` only from a documented backend-local-infra
+allow-list (db / logs / blob storage / managed-root bootstrap / embedded auth).
+Any new fs importer trips it. The guard's scope note records that the
+path-EMISSION half of A1 (`runtime-start-options.ts` still emits a
+`workspace_path`-derived agent-home path into `runtime_start`) is NOT covered —
+it closes in **D4.e-6**.
+
+Acceptance doc `docs/d4-e-acceptance.md` (A1-A7 matrix, commit chain, invariants,
+test inventory). **M1 closure explicitly NOT claimed**: A7 open, A1/A2/I6 partial
+until D4.e-6 (`runtime_start` semantic-ids) lands.
+
+Gates: `pnpm -r typecheck` clean; backend 1451 pass | 1 skip (118 files); host
+byte-parity 62 pass.

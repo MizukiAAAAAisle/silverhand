@@ -28,7 +28,7 @@ import {
 import { PasswordCredentialService } from './auth/password.js';
 import { AuthSessionService } from './auth/session.js';
 import { HostRepo } from './repos/host-repo.js';
-import { ensureWorkspacesRoot } from './provision.js';
+import { ensureWorkspacesRoot } from './workspaces-root.js';
 import { ScopeEventBus } from './ws/scope-event-bus.js';
 import {
   installEventWebSocketServer,

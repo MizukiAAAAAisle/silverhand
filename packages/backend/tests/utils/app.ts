@@ -69,7 +69,7 @@ import type {
   OutboundServerCommandParams,
   OutboundServerCommandResult,
 } from '@silverhand/host';
-import { ensureAgentL1Dir, initWorkspaceDir } from '../../src/workspace-files.js';
+import { ensureAgentL1Dir, initWorkspaceDir } from './embedded-seed-fixtures.js';
 import { join as joinPath } from 'node:path';
 
 /**
@@ -350,18 +350,13 @@ export class FakeHostWsServerController implements HostWsServerController {
         ) as OutboundServerCommandResult<K>;
       }
       const dir = joinPath(this.silverhandDir, 'agents', p.agent_id);
-      // Seed the agent's L1 home with the embedded backend's
-      // semantic clone of the daemon's template (per
-      // `docs/agent-system-prompt-memory.md`). Backend routes that
-      // read these files (e.g. `GET /api/agents/:id/workspace`)
-      // can then see the expected shape without per-test
-      // scaffolding. `ensureAgentL1Dir` is idempotent — same-key
-      // retries reuse the existing files.
-      //
-      // The dependency-guard tripwire forbids backend code from
-      // importing the daemon's `agent-materialize/template.ts`
-      // directly. The clone in `workspace-files.ts` is allowed by
-      // design; this fake uses it for the same reason.
+      // Seed the agent's L1 home so backend routes/tests that stat the
+      // home see the expected shape without booting a real daemon. The
+      // daemon owns L1 materialization in production (`agent_materialize`);
+      // this fake mirrors it on the shared embedded test fs via a test-only
+      // clone (`embedded-seed-fixtures.ts`) — `packages/backend/src` itself
+      // no longer carries any agent-host seeding code (I6 / D4.e-5).
+      // Idempotent: same-key retries reuse the existing files.
       await ensureAgentL1Dir(dir);
       return {
         ok: true as const,

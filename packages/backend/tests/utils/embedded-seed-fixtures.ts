@@ -1,9 +1,25 @@
+/**
+ * Test-only embedded daemon-seed simulators.
+ *
+ * D4.e-5: the backend production module `packages/backend/src/workspace-files.ts`
+ * was REMOVED — host-local L1/L2/CONSENSUS seeding is now owned exclusively by
+ * the daemon (`agent_materialize` → L1, `agent_l2_seed` → L2,
+ * `workspace_provision` → workspace skeleton), and `packages/backend/src` holds
+ * zero agent-host filesystem ops (invariant I6 / acceptance A1).
+ *
+ * The embedded test fake (`utils/app.ts`) still needs to put real files on the
+ * shared embedded test fs so routes/tests that stat an agent home or workspace
+ * skeleton see the expected shape WITHOUT booting a real daemon. These helpers
+ * are that stand-in. They are a SEMANTIC clone of the daemon's canonical
+ * templates (`packages/host/src/daemon/agent-materialize/template.ts` +
+ * `workspace-registry/workspace-skeleton.ts`); the daemon copy is the source of
+ * truth and its byte-parity is pinned by the host package's own tests. Per the
+ * `dependency-guard-agent-materialize` tripwire's prescribed remedy ("copy it
+ * locally"), this clone lives in the test tree, not in `src`, and the backend
+ * production graph never imports the daemon template module.
+ */
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
-
-// ---------------------------------------------------------------------------
-// Onboarding seed note content
-// ---------------------------------------------------------------------------
 
 const ONBOARDING_GUIDE_MD = `# Silverhand Onboarding Guide
 
@@ -221,8 +237,6 @@ const SEED_NOTES = [
 
 async function seedNotesIfMissing(notesDir: string): Promise<void> {
   await fs.mkdir(notesDir, { recursive: true });
-  // Seed onboarding and memory notes if not already present. These give agents
-  // a concrete knowledge skeleton from day 1 while preserving agent edits.
   for (const [noteName, content] of SEED_NOTES) {
     const dst = join(notesDir, noteName);
     try {
@@ -234,11 +248,9 @@ async function seedNotesIfMissing(notesDir: string): Promise<void> {
 }
 
 /**
- * Initialize a workspace directory's `.silverhand/` skeleton:
- *   <workspace>/.silverhand/CONSENSUS.md
- *   <workspace>/.silverhand/agents/
- *
- * Idempotent: safe to call on existing directories.
+ * Test-only stand-in for the daemon's `workspace_provision` skeleton
+ * (`initWorkspaceSkeleton`). Creates `<workspace>/.silverhand/CONSENSUS.md` +
+ * `agents/`. Idempotent. Byte-identical to the daemon's canonical default.
  */
 export async function initWorkspaceDir(workspacePath: string): Promise<void> {
   await fs.mkdir(workspacePath, { recursive: true });
@@ -256,15 +268,10 @@ export async function initWorkspaceDir(workspacePath: string): Promise<void> {
 }
 
 /**
- * D4.e-3 — backend `seedAgentL2` is REMOVED. L2 (per-workspace) memory
- * seeding is now owned by the daemon (`agent_l2_seed` intent →
- * `packages/host/src/daemon/workspace-registry/l2-seed-handler.ts`): the
- * daemon resolves the workspace's host-local path from its own registry and
- * writes `MEMORY.md` + `notes/` (never L1 `system_prompt.md`). The backend
- * dispatches it via `dispatchAgentL2Seed` and never writes L2 itself (I1/I6).
+ * Test-only stand-in for the daemon's `agent_materialize` L1 home seed.
+ * Creates `~/.silverhand/agents/<id>/` with `system_prompt.md` + `MEMORY.md`
+ * + `notes/`. Idempotent (existing files preserved).
  */
-
-/** Ensure agent L1 directory exists (`~/.silverhand/agents/<id>/`). */
 export async function ensureAgentL1Dir(agentL1Dir: string): Promise<void> {
   await fs.mkdir(agentL1Dir, { recursive: true });
   await seedNotesIfMissing(join(agentL1Dir, 'notes'));

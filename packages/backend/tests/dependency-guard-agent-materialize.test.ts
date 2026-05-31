@@ -12,12 +12,12 @@
  *   - The L1 agent-home template (system_prompt + MEMORY + notes/
  *     skeleton) lives at `packages/host/src/daemon/agent-materialize/
  *     template.ts` because the daemon owns the materialization.
- *   - The legacy backend helper `ensureAgentL1Dir` in
- *     `packages/backend/src/workspace-files.ts` keeps a SEMANTIC
- *     clone of the strings during the D3 transition so embedded
- *     paths can still seed an L1 home without booting a daemon.
- *     They diverge intentionally: when both fire, the daemon copy
- *     wins (D3 routes `POST /api/agents` through the daemon).
+ *   - The daemon is the SOLE owner of those template strings. The
+ *     pre-D4.e backend semantic clone (`packages/backend/src/
+ *     workspace-files.ts`) was removed in D4.e-5; the only remaining
+ *     clone is the embedded test fake's `tests/utils/
+ *     embedded-seed-fixtures.ts`, which the guard's remedy ("copy it
+ *     locally") explicitly permits.
  *   - Re-coupling them by letting backend `import` from the daemon
  *     module would re-introduce the build-time dependency the
  *     design specifically broke. The tripwire here fires the
