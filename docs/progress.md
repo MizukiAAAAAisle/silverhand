@@ -54,8 +54,9 @@ carve-out，是 **M1 closure 的最后一道闸**。
 ### 结论
 
 A1/A2/A7 → DONE，I1/I6 完整成立。`docs/d4-e-acceptance.md` 收为 D4.e-1…-6
-全闭，**M1 closure 可宣告**。Commit `0d4f3db`（+ doc-pin `00d5e82`，+ Cindy
-P1/P2 fixup `b0a1d35`）。
+全闭，**M1 closure 可宣告**。Commit `bac9635`（D4.e-6 slice，已 squash；
+整条 D4.e chain 在 handoff 时按 slice 各收 1 commit，base `eb35192`，
+pre-squash 备份 tag `d4e-pre-squash-backup`）。
 
 ---
 

@@ -14,14 +14,19 @@ server↔daemon path semantic).
 
 ## 0. Commit chain (branch `feature/remote-backend-v1-stage-d4-e-design`)
 
-| Slice | Commits | What landed |
+Squashed at handoff to **one clean commit per slice** (fixups folded in), on
+base `eb35192` (D5.a-done tip). Pre-squash history preserved at tag
+`d4e-pre-squash-backup`.
+
+| Slice | Commit | What landed |
 | --- | --- | --- |
-| D4.e-1 | `19db51e` … `877bd52`, `d207c07`, `e3a31f2` | Daemon workspace **registry** + `workspace_provision` (bind) + `agent_workspace_index` (route-time resolver); lazy `WorkspaceRegistryBackfiller`; `list_workspaces` daemon-stamps `agent_dir`; A3 contract + A4 parity for the registry intents. |
-| D4.e-2 | `75ea21c`, `59b3ca8` | `agent_workspace_read` daemon intent; `GET /api/agents/:id/workspace` rewired (semantic id only); **deleted** backend `src/agent-workspace.ts`; standalone disable removed (A6). |
-| D4.e-3 | `6d8efe6`, `50132e6` | `agent_l2_seed` daemon intent; member-add + create-with-members route switch; **deleted** backend `seedAgentL2`; co-location gate lifted (universal). |
-| D4.e-4 | `65e2112`, `6dffaa4` | `agent_files_purge` daemon intent; `DELETE /api/agents/:id` rewired on the §3.3 fail-fast commit boundary; **deleted** backend `fs.rm` block + `l1_path`/`l2_paths` from the delete-impact DTO; backfill-before-purge + `skipped_unprovisioned` fail-closed. |
-| D4.e-5 | `b47325c` | Cleanup of dead agent-host fs/path code (`workspace-files.ts`, `agent-profile.ts`, `provision.ts`'s `validateWorkspacePath`) + **A1 dependency-guard** + this acceptance doc. |
-| D4.e-6 | `0d4f3db` (+ doc-pin `00d5e82`, + Cindy P1/P2 fixup `b0a1d35`) | `runtime_start` semantic-ids migration — **M1-closure gate, LANDED**. Wire `runtime_start` refs go semantic-only (`id`/`name`/`kind`); daemon resolves every host path (`registry.resolve` for `regular`, `computeAgentDir` for `agent_home`, with the `agent_home` id validated against `agentHomeWorkspaceId(agentId)`) and fails closed with typed `workspace_not_provisioned`/`registry_unavailable`; backend does a bounded lazy registry backfill before dispatch (no-dispatch + pending-rollback on partial/failed) behind an I4 host-equality gate; A1 dependency-guard extended to the path-emission half. |
+| D4.e design | `ca9eda2` | Design doc — daemon as sole host-local path authority + registry/bind model + `agent_dir` resolver (rev1→rev3). |
+| D4.e-1 | `6ea2afe` | Daemon workspace **registry** + `workspace_provision` (bind) + `agent_workspace_index` (route-time resolver); lazy `WorkspaceRegistryBackfiller`; `list_workspaces` daemon-stamps `agent_dir`; A3 contract + A4 parity for the registry intents. |
+| D4.e-2 | `e78356e` | `agent_workspace_read` daemon intent; `GET /api/agents/:id/workspace` rewired (semantic id only); **deleted** backend `src/agent-workspace.ts`; standalone disable removed (A6). |
+| D4.e-3 | `fb6d5b8` | `agent_l2_seed` daemon intent; member-add + create-with-members route switch; **deleted** backend `seedAgentL2`; co-location gate lifted (universal). |
+| D4.e-4 | `7f5433f` | `agent_files_purge` daemon intent; `DELETE /api/agents/:id` rewired on the §3.3 fail-fast commit boundary; **deleted** backend `fs.rm` block + `l1_path`/`l2_paths` from the delete-impact DTO; backfill-before-purge + `skipped_unprovisioned` fail-closed. |
+| D4.e-5 | `aea0902` | Cleanup of dead agent-host fs/path code (`workspace-files.ts`, `agent-profile.ts`, `provision.ts`'s `validateWorkspacePath`) + **A1 dependency-guard** + this acceptance doc. |
+| D4.e-6 | `bac9635` | `runtime_start` semantic-ids migration — **M1-closure gate, LANDED**. Wire `runtime_start` refs go semantic-only (`id`/`name`/`kind`); daemon resolves every host path (`registry.resolve` for `regular`, `computeAgentDir` for `agent_home`, with the `agent_home` id validated against `agentHomeWorkspaceId(agentId)`) and fails closed with typed `workspace_not_provisioned`/`registry_unavailable`; backend does a bounded lazy registry backfill before dispatch (no-dispatch + pending-rollback on partial/failed) behind an I4 host-equality gate; A1 dependency-guard extended to the path-emission half. |
 
 ---
 
@@ -203,7 +208,7 @@ claimable**. This document closes D4.e-1…-6.
 
 ---
 
-## 7. Gates at D4.e-6 tip (`b0a1d35`, Cindy P1/P2 fixup)
+## 7. Gates at D4.e-6 tip (`bac9635`)
 
 - `pnpm -r typecheck` — clean (all 6 workspace projects).
 - backend full suite — 1458 pass | 1 skip (118 files).
