@@ -29,6 +29,9 @@ import {
   AgentWorkspaceReadErrorCodeSchema,
   AgentWorkspaceReadParamsSchema,
   AgentWorkspaceReadResultSchema,
+  AgentL2SeedErrorCodeSchema,
+  AgentL2SeedParamsSchema,
+  AgentL2SeedResultSchema,
   HelloResultSchema,
   MAX_FRAME_BYTES,
   ResponseErrorSchema,
@@ -72,7 +75,7 @@ export {
 // D4.e-1: workspace_provision + agent_workspace_index schemas also live
 // in `protocol.ts` (same IPC-catalogue reason as agent_materialize);
 // re-exported here so outbound-WS callers see them. D4.e-2 adds
-// agent_workspace_read (same reason).
+// agent_workspace_read; D4.e-3 adds agent_l2_seed (same reason).
 export {
   WorkspaceProvisionParamsSchema,
   WorkspaceProvisionResultSchema,
@@ -83,6 +86,9 @@ export {
   AgentWorkspaceReadParamsSchema,
   AgentWorkspaceReadResultSchema,
   AgentWorkspaceReadErrorCodeSchema,
+  AgentL2SeedParamsSchema,
+  AgentL2SeedResultSchema,
+  AgentL2SeedErrorCodeSchema,
   type WorkspaceProvisionParams,
   type WorkspaceProvisionResult,
   type WorkspaceProvisionErrorCode,
@@ -92,6 +98,9 @@ export {
   type AgentWorkspaceReadParams,
   type AgentWorkspaceReadResult,
   type AgentWorkspaceReadErrorCode,
+  type AgentL2SeedParams,
+  type AgentL2SeedResult,
+  type AgentL2SeedErrorCode,
 } from './protocol.js';
 
 const FrameIdSchema = z.string().min(1);
@@ -213,6 +222,19 @@ export type AgentWorkspaceReadWireError = z.infer<
   typeof AgentWorkspaceReadWireErrorSchema
 >;
 
+export const AgentL2SeedWireErrorSchema = z
+  .object({
+    code: z.union([
+      ResponseErrorSchema.shape.code,
+      AgentL2SeedErrorCodeSchema,
+    ]),
+    message: z.string(),
+  })
+  .strict();
+export type AgentL2SeedWireError = z.infer<
+  typeof AgentL2SeedWireErrorSchema
+>;
+
 /**
  * Source of truth for D2 server-issued commands. The runtime_* entries
  * are the D2.0 request surface; rotate_token is D2.f's transport-local
@@ -226,7 +248,7 @@ export type AgentWorkspaceReadWireError = z.infer<
  * transport-level codes). Commands that may legitimately surface
  * typed daemon-business errors (`agent_materialize` plus the D4.e
  * workspace data-plane commands `workspace_provision` /
- * `agent_workspace_index` / `agent_workspace_read`) override with their
+ * `agent_workspace_index` / `agent_workspace_read` / `agent_l2_seed`) override with their
  * own wider schema.
  */
 export const outboundServerCommandSchemas = {
@@ -299,6 +321,11 @@ export const outboundServerCommandSchemas = {
     params: AgentWorkspaceReadParamsSchema,
     result: AgentWorkspaceReadResultSchema,
     error: AgentWorkspaceReadWireErrorSchema,
+  },
+  agent_l2_seed: {
+    params: AgentL2SeedParamsSchema,
+    result: AgentL2SeedResultSchema,
+    error: AgentL2SeedWireErrorSchema,
   },
 } as const;
 

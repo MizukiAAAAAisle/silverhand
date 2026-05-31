@@ -307,3 +307,27 @@ export function getAgentHomeTemplate(
       return null;
   }
 }
+
+/**
+ * D4.e-3 — the L2 (per-workspace) seed template: the SAME content as the
+ * agent-home (L1) template MINUS `system_prompt.md`. `system_prompt.md`
+ * is L1-ONLY — it is the agent's global identity, read from
+ * `~/.silverhand/agents/<id>/system_prompt.md` at every spawn. Copying it
+ * into an L2 dir would create stale per-workspace forks that drift from the
+ * canonical L1 identity (the historical bug the four-file model fixes). So
+ * L2 carries only `MEMORY.md` + `notes/`.
+ *
+ * Derived from the L1 template (not a second copy of the strings) so the
+ * onboarding content stays single-sourced; the ONLY structural difference
+ * is the dropped `system_prompt.md` entry. Returns `null` for the same
+ * unsupported choices as {@link getAgentHomeTemplate} (the handler maps
+ * `null` → `unsupported_template`).
+ */
+export function getAgentL2Template(choice: string): AgentHomeTemplate | null {
+  const l1 = getAgentHomeTemplate(choice);
+  if (l1 == null) return null;
+  return {
+    ...l1,
+    files: l1.files.filter(f => f.relPath !== 'system_prompt.md'),
+  };
+}

@@ -60,7 +60,10 @@ import { createLocalBlobFileStorage } from '../../src/storage/blob-file-storage.
 import { createLogLevelControl } from '../../src/logger.js';
 import { makeTempSilverhandDir, openTestDb } from './db.js';
 import { RuntimeHostPlacementResolver } from '../../src/runtime/host-placement.js';
-import type { HostWsServerController } from '../../src/ws/host-ws-server.js';
+import {
+  HostWsCommandResponseError,
+  type HostWsServerController,
+} from '../../src/ws/host-ws-server.js';
 import type {
   OutboundServerCommandKind,
   OutboundServerCommandParams,
@@ -272,6 +275,17 @@ export class FakeHostWsServerController implements HostWsServerController {
         params: OutboundServerCommandParams<'agent_workspace_read'>,
       ) => OutboundServerCommandResult<'agent_workspace_read'>)
     | null = null;
+  /**
+   * D4.e-3 — override the `agent_l2_seed` ack. Tests that want to exercise a
+   * specific `seeded`/`l2_present` result can swap this. Default seeds the
+   * member's L2 dir on the shared embedded test fs under the recorded
+   * `workspace_provision` bind (MEMORY.md + notes/, never system_prompt.md).
+   */
+  agentL2SeedAckOverride:
+    | ((
+        params: OutboundServerCommandParams<'agent_l2_seed'>,
+      ) => OutboundServerCommandResult<'agent_l2_seed'>)
+    | null = null;
 
   /**
    * D4.e-1 3b P2 (Cindy) — a tiny in-memory stand-in for the daemon
@@ -425,6 +439,35 @@ export class FakeHostWsServerController implements HostWsServerController {
       const workspace = await readFakeAgentWorkspace(dir);
       return { ok: true as const, workspace } as OutboundServerCommandResult<K>;
     }
+    if (kind === 'agent_l2_seed') {
+      const p = params as OutboundServerCommandParams<'agent_l2_seed'>;
+      if (this.agentL2SeedAckOverride) {
+        return this.agentL2SeedAckOverride(p) as OutboundServerCommandResult<K>;
+      }
+      // Mirror the daemon: resolve the workspace's host-local path from the
+      // recorded registry bind (`workspace_provision`) and seed the member's
+      // L2 dir there (MEMORY.md + notes/, NEVER L1 system_prompt.md). A
+      // never-provisioned id fails closed like the real daemon.
+      const boundPath = this.boundWorkspacePaths.get(p.workspace_id);
+      if (!boundPath) {
+        throw new HostWsCommandResponseError(
+          'workspace_not_provisioned' as never,
+          `workspace ${p.workspace_id} is not provisioned; cannot seed L2`,
+          {
+            hostId,
+            commandKind: 'agent_l2_seed',
+            requestId: 'fake',
+          },
+        );
+      }
+      const l2Dir = joinPath(boundPath, '.silverhand', 'agents', p.agent_id);
+      const seeded = await seedFakeAgentL2(l2Dir);
+      return {
+        ok: true as const,
+        seeded,
+        l2_present: true,
+      } as OutboundServerCommandResult<K>;
+    }
     return {} as OutboundServerCommandResult<K>;
   }
   disconnectHost(_hostId: string): boolean {
@@ -440,6 +483,38 @@ const silentLogger: BackendLogger = {
   warn() {},
   error() {},
 };
+
+/**
+ * D4.e-3 — the fake adapter's stand-in for the daemon's L2 seeder
+ * (`seedAgentL2`). Writes the member agent's L2 dir (MEMORY.md + notes/) on
+ * the shared embedded test fs, mirroring the daemon's `getAgentL2Template`
+ * default: identical to the L1 template MINUS `system_prompt.md` (L1-only
+ * identity). Idempotent — existing files are preserved (returns true only when
+ * a new file was written). Lets route tests assert the L2 shape without
+ * scaffolding while keeping the I1 invariant (L2 never carries system_prompt.md).
+ */
+async function seedFakeAgentL2(l2Dir: string): Promise<boolean> {
+  const files: ReadonlyArray<[string, string]> = [
+    ['MEMORY.md', '# Memory\n'],
+    ['notes/onboarding-guide.md', '# Onboarding Guide\n'],
+    ['notes/onboarding-faq.md', '# Onboarding FAQ\n'],
+    ['notes/user-preferences.md', '# User Preferences\n'],
+    ['notes/project.md', '# Project Notes\n'],
+    ['notes/work-log.md', '# Work Log\n'],
+  ];
+  await fsp.mkdir(joinPath(l2Dir, 'notes'), { recursive: true });
+  let seeded = false;
+  for (const [rel, content] of files) {
+    const path = joinPath(l2Dir, rel);
+    try {
+      await fsp.access(path);
+    } catch {
+      await fsp.writeFile(path, content);
+      seeded = true;
+    }
+  }
+  return seeded;
+}
 
 /**
  * D4.e-2 — the fake adapter's stand-in for the daemon's host-local read

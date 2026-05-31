@@ -105,6 +105,9 @@ export {
   type AgentWorkspaceReadParams,
   type AgentWorkspaceReadResult,
   type AgentWorkspaceReadErrorCode,
+  type AgentL2SeedParams,
+  type AgentL2SeedResult,
+  type AgentL2SeedErrorCode,
 } from './protocol.js';
 export {
   OUTBOUND_DAEMON_EVENT_KINDS,

@@ -15,6 +15,7 @@ export {
   AGENT_HOME_SENTINEL_FILENAME,
   AGENT_HOME_TEMPLATE_VERSION,
   getAgentHomeTemplate,
+  getAgentL2Template,
   type AgentHomeTemplate,
   type AgentHomeTemplateFile,
 } from './template.js';

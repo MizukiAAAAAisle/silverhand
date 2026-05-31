@@ -1184,7 +1184,7 @@ export type ResponseErrorCode = z.infer<typeof ResponseErrorCodeSchema>;
  * Intents that may legitimately surface daemon-business typed
  * codes — `agent_materialize` and the D4.e workspace data-plane
  * intents (`workspace_provision`, `agent_workspace_index`,
- * `agent_workspace_read`) — override with a wider schema that unions
+ * `agent_workspace_read`, `agent_l2_seed`) — override with a wider schema that unions
  * the 5 generic codes with the intent's own taxonomy (e.g.
  * `AgentMaterializeErrorCodeSchema`).
  *
@@ -1464,6 +1464,72 @@ const AgentWorkspaceReadIpcErrorSchema = z
   })
   .strict();
 
+// ── D4.e-3: agent_l2_seed ────────────────────────────────────────────
+// Seeds a member agent's L2 (per-workspace) memory dir
+// `<workspace>/.silverhand/agents/<agent_id>/` (MEMORY.md + notes/) on the
+// OWNING daemon. Replaces backend `seedAgentL2` (G1). The backend forwards
+// only semantic ids; the daemon resolves the workspace path from its
+// registry (regular-only — agent-home L2 == L1 and is already materialized
+// by `agent_materialize`, so it is never seeded here) and writes the L2
+// template, which is the L1 template MINUS `system_prompt.md` (L1-only
+// invariant). Idempotent: existing files are preserved, never overwritten.
+export const AgentL2SeedParamsSchema = z
+  .object({
+    /** The member agent whose L2 dir is seeded under the workspace. */
+    agent_id: z.string().min(1),
+    /**
+     * The REGULAR workspace to seed into. The daemon resolves its
+     * host-local path from the registry (fail-closed if not provisioned);
+     * no path crosses the wire (I1). An agent-home id is not in the
+     * registry → `workspace_not_provisioned` (this intent is regular-only;
+     * the backend never sends `kind`).
+     */
+    workspace_id: z.string().min(1),
+    /** Template identifier (matches `agent_materialize`'s wire enum). */
+    template_choice: z
+      .enum(['default', 'onboarding', 'minimal'])
+      .default('default'),
+  })
+  .strict();
+export type AgentL2SeedParams = z.infer<typeof AgentL2SeedParamsSchema>;
+
+export const AgentL2SeedResultSchema = z
+  .object({
+    ok: z.literal(true),
+    /** True when this call wrote at least one new file (false on an
+     *  idempotent re-seed where everything already existed). */
+    seeded: z.boolean(),
+    /** True when the L2 `MEMORY.md` is present after the call (always true
+     *  on success — a sanity flag the route/tests assert). */
+    l2_present: z.boolean(),
+  })
+  .strict();
+export type AgentL2SeedResult = z.infer<typeof AgentL2SeedResultSchema>;
+
+export const AgentL2SeedErrorCodeSchema = z.enum([
+  /**
+   * The workspace has no registry binding (never provisioned / adopted).
+   * Fail-closed: the daemon never derives a path from a backend-supplied
+   * value, and the L2 seed cannot proceed without the bound path.
+   */
+  'workspace_not_provisioned',
+  /** Whole-registry failure (foreign identity / corrupt file). */
+  'registry_unavailable',
+  /** `template_choice` is structurally valid but has no host-side entry. */
+  'unsupported_template',
+  /** A host-local fs write failed HARD (perm/IO/EROFS/ENOSPC). */
+  'fs_unavailable',
+  'internal_error',
+]);
+export type AgentL2SeedErrorCode = z.infer<typeof AgentL2SeedErrorCodeSchema>;
+
+const AgentL2SeedIpcErrorSchema = z
+  .object({
+    code: z.union([ResponseErrorCodeSchema, AgentL2SeedErrorCodeSchema]),
+    message: z.string(),
+  })
+  .strict();
+
 
 /**
  * Single source of truth for the intent ↔ params / result / error
@@ -1479,7 +1545,7 @@ const AgentWorkspaceReadIpcErrorSchema = z
  * that may legitimately surface daemon-business typed codes —
  * `agent_materialize` (D4.d) plus the D4.e workspace data-plane
  * intents `workspace_provision` / `agent_workspace_index` /
- * `agent_workspace_read` — declare their own widened error schema. The wire surface stays
+ * `agent_workspace_read` / `agent_l2_seed` — declare their own widened error schema. The wire surface stays
  * per-intent-scoped (Cindy D2 P1-1 + D1 round-1 P1): a typed code
  * in one intent's error arm cannot leak into another intent's
  * error arm at validation time.
@@ -1591,6 +1657,11 @@ export const intentSchemas = {
     params: AgentWorkspaceReadParamsSchema,
     result: AgentWorkspaceReadResultSchema,
     error: AgentWorkspaceReadIpcErrorSchema,
+  },
+  agent_l2_seed: {
+    params: AgentL2SeedParamsSchema,
+    result: AgentL2SeedResultSchema,
+    error: AgentL2SeedIpcErrorSchema,
   },
 } as const;
 

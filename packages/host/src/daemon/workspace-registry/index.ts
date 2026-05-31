@@ -20,6 +20,11 @@ export {
   indexAgentWorkspaces,
   type IndexAgentWorkspacesDeps,
 } from './index-handler.js';
+export {
+  AgentL2SeedError,
+  seedAgentL2,
+  type SeedAgentL2Deps,
+} from './l2-seed-handler.js';
 export { mapFsErrno, type FsErrnoCode } from './fs-errno.js';
 export {
   WORKSPACE_CONSENSUS_DEFAULT,

@@ -498,4 +498,78 @@ export function registerParityPhases(getRig: () => ParityRig): void {
     expect(ws.memory!.content.length).toBeGreaterThan(0);
     expect(Array.isArray(ws.notes)).toBe(true);
   }, 30_000);
+
+  it('Phase F — agent_l2_seed over the real daemon: seeds MEMORY.md + notes/ (NO system_prompt.md), idempotent, fail-closed on unprovisioned (same envelope)', async () => {
+    const rig = getRig();
+    const now = Date.now();
+    const suffix = `${rig.name}-${now}`;
+
+    // Create a real workspace so the live daemon registry has a binding to
+    // resolve the host-local L2 path from (mirrors Phase D's create leg).
+    const requestedPath = join(rig.silverhandDir, 'parity-l2', `ws-${suffix}`);
+    const createRes = await fetch(`${rig.baseUrl}/api/workspaces`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${rig.bearer}`,
+      },
+      body: JSON.stringify({
+        name: `parity-l2-${suffix}`,
+        workspace_host_id: rig.hostId,
+        workspace_path: requestedPath,
+      }),
+    });
+    const createBody = (await createRes.json()) as {
+      workspace?: { id: string; workspace_path: string };
+    };
+    expect(createRes.status, JSON.stringify(createBody)).toBe(201);
+    const workspaceId = createBody.workspace!.id;
+    const boundPath = createBody.workspace!.workspace_path;
+
+    const adapter = rig.adapter();
+    const conn = adapter.connectionIdForHost(rig.hostId) ?? undefined;
+    expect(conn, 'adapter must report a live connectionId for the local host').toBeTruthy();
+
+    const agentId = `agent-l2-${suffix}`;
+    // ── 1) Seed L2 on the REAL daemon over the real wire.
+    const seed = (await adapter.sendCommand(
+      rig.hostId,
+      'agent_l2_seed',
+      { agent_id: agentId, workspace_id: workspaceId, template_choice: 'default' },
+      { expectedConnectionId: conn, timeoutMs: 5_000 },
+    )) as { ok: true; seeded: boolean; l2_present: boolean };
+    expect(seed).toMatchObject({ ok: true, seeded: true, l2_present: true });
+
+    // The daemon wrote its OWN host-local L2 under the bound workspace path:
+    // MEMORY.md + notes/, NEVER L1 system_prompt.md.
+    const l2 = join(boundPath, '.silverhand', 'agents', agentId);
+    expect(existsSync(join(l2, 'MEMORY.md'))).toBe(true);
+    expect(existsSync(join(l2, 'system_prompt.md'))).toBe(false);
+    expect(existsSync(join(l2, 'notes'))).toBe(true);
+
+    // ── 2) IDEMPOTENT re-seed: an agent edit survives; nothing re-written.
+    const memPath = join(l2, 'MEMORY.md');
+    const edited = `# edited ${suffix}\n`;
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(memPath, edited, 'utf8');
+    const reseed = (await adapter.sendCommand(
+      rig.hostId,
+      'agent_l2_seed',
+      { agent_id: agentId, workspace_id: workspaceId, template_choice: 'default' },
+      { expectedConnectionId: conn, timeoutMs: 5_000 },
+    )) as { seeded: boolean; l2_present: boolean };
+    expect(reseed).toMatchObject({ seeded: false, l2_present: true });
+    expect(readFileSync(memPath, 'utf8')).toBe(edited);
+
+    // ── 3) FAIL-CLOSED: a never-provisioned workspace id has no registry
+    //    binding → typed workspace_not_provisioned (never a path guess).
+    await expect(
+      adapter.sendCommand(
+        rig.hostId,
+        'agent_l2_seed',
+        { agent_id: agentId, workspace_id: `ws-never-${suffix}`, template_choice: 'default' },
+        { expectedConnectionId: conn, timeoutMs: 5_000 },
+      ),
+    ).rejects.toMatchObject({ code: 'workspace_not_provisioned' });
+  }, 30_000);
 }

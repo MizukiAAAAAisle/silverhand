@@ -386,6 +386,21 @@ const REQUESTS: WireFixture[] = [
     kind: { kind: 'request', intent: 'agent_workspace_read' },
   },
   {
+    name: 'request/agent_l2_seed',
+    description:
+      "D4.e-3: seed a member agent's L2 (per-workspace) memory dir on the owning host. Backend sends ONLY {agent_id, workspace_id, template_choice} — no path, no kind. The daemon resolves the regular workspace's host-local path from its registry (fail-closed when not provisioned) and writes <workspace>/.silverhand/agents/<agent_id>/{MEMORY.md, notes/…} — the L1 template MINUS system_prompt.md (L1-only). Idempotent: existing files are preserved. Replaces backend seedAgentL2 (I1/I6).",
+    frame: enc({
+      id: 'req-agent-l2-seed-1',
+      intent: 'agent_l2_seed',
+      params: {
+        agent_id: 'aid_FpzaAEM',
+        workspace_id: 'ws_custom_7',
+        template_choice: 'default',
+      },
+    }),
+    kind: { kind: 'request', intent: 'agent_l2_seed' },
+  },
+  {
     name: 'request/workspace_provision-with-requested-path',
     description:
       'D4.e-1 (A — single intent): the SAME workspace_provision command, but carrying an OPTIONAL caller-proposed requested_path (M1 desktop folder picker / sandbox typed path / legacy backfill all unify here). The daemon RE-VALIDATES the path host-side (absolute / not root / not home / not inside the managed root / not already bound) before binding — it never blindly trusts the backend. The authoritative result is bound_workspace_path, not this field.',
@@ -1079,6 +1094,20 @@ const RESPONSES_SUCCESS: WireFixture[] = [
     }),
     kind: { kind: 'response_success', intent: 'agent_workspace_read' },
   },
+  {
+    name: 'response/agent_l2_seed',
+    description:
+      'D4.e-3: daemon seeded the member agent L2 dir under the resolved workspace path and returned the outcome. seeded:true = at least one new file written; l2_present:true = MEMORY.md exists post-call. An idempotent re-seed returns seeded:false / l2_present:true.',
+    frame: enc({
+      id: 'req-agent-l2-seed-1',
+      result: {
+        ok: true,
+        seeded: true,
+        l2_present: true,
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'agent_l2_seed' },
+  },
 ];
 
 // ── Error response fixtures ────────────────────────────────────────
@@ -1382,10 +1411,76 @@ const AGENT_WORKSPACE_READ_ERROR_FIXTURES: WireFixture[] = [
     kind: { kind: 'response_error_typed', intent: 'agent_workspace_read' },
   },
 ];
+// D4.e-3 agent_l2_seed typed errors. One per AgentL2SeedErrorCode slot.
+const AGENT_L2_SEED_ERROR_FIXTURES: WireFixture[] = [
+  {
+    name: 'response/agent_l2_seed-error-workspace_not_provisioned',
+    description:
+      'The workspace has no registry binding (never provisioned / adopted) — fail-closed. The daemon never derives a path from a backend-supplied value, so the L2 seed cannot proceed.',
+    frame: enc({
+      id: 'req-agent-l2-seed-1',
+      error: {
+        code: 'workspace_not_provisioned',
+        message: 'workspace ws_custom_7 is not provisioned; cannot seed L2',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_l2_seed' },
+  },
+  {
+    name: 'response/agent_l2_seed-error-registry_unavailable',
+    description:
+      'Whole-registry failure: the registry file is foreign (identity mismatch) or corrupt.',
+    frame: enc({
+      id: 'req-agent-l2-seed-1',
+      error: {
+        code: 'registry_unavailable',
+        message: 'registry identity mismatch; refusing foreign registry',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_l2_seed' },
+  },
+  {
+    name: 'response/agent_l2_seed-error-unsupported_template',
+    description:
+      'template_choice is structurally valid (passed the wire enum) but has no host-side L2 entry yet.',
+    frame: enc({
+      id: 'req-agent-l2-seed-1',
+      error: {
+        code: 'unsupported_template',
+        message: "template 'minimal' has no host-side L2 entry",
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_l2_seed' },
+  },
+  {
+    name: 'response/agent_l2_seed-error-fs_unavailable',
+    description:
+      'A host-local fs write failed hard (perm/IO/EROFS/ENOSPC) while seeding the L2 dir. Fail-closed; the daemon never falls back to a server-side path.',
+    frame: enc({
+      id: 'req-agent-l2-seed-1',
+      error: {
+        code: 'fs_unavailable',
+        message: "EACCES: permission denied, mkdir '.silverhand/agents'",
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_l2_seed' },
+  },
+  {
+    name: 'response/agent_l2_seed-error-internal_error',
+    description:
+      'Catch-all for an unexpected failure while seeding the L2 dir.',
+    frame: enc({
+      id: 'req-agent-l2-seed-1',
+      error: { code: 'internal_error', message: 'unexpected seed failure' },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_l2_seed' },
+  },
+];
 RESPONSES_ERROR_TYPED.push(
   ...WORKSPACE_PROVISION_ERROR_FIXTURES,
   ...AGENT_WORKSPACE_INDEX_ERROR_FIXTURES,
   ...AGENT_WORKSPACE_READ_ERROR_FIXTURES,
+  ...AGENT_L2_SEED_ERROR_FIXTURES,
 );
 
 // ── Event fixtures ─────────────────────────────────────────────────

@@ -441,6 +441,99 @@ export function runOutboundFrameAdapterContract(
       expect(err!.code).toBe('transport_disconnected');
     });
 
+    // ── D4.e-3 / A3 — L2 seed over the SAME envelope ─────────────────────
+    // `agent_l2_seed` is the D4.e-3 member-add L2 seeder. It must round-trip
+    // its `{ agent_id, workspace_id, template_choice }` param + `{ seeded,
+    // l2_present }` result, and honour per-command error scoping: its own
+    // `workspace_not_provisioned` rides the envelope; a foreign code is refused.
+
+    it('round-trips agent_l2_seed command → seeded result', async () => {
+      fx = await makeFixture();
+      const daemon = await fx.connectDaemon();
+
+      const pending = fx.adapter.sendCommand(
+        fx.hostId,
+        'agent_l2_seed',
+        { agent_id: 'a1', workspace_id: 'ws_1', template_choice: 'default' },
+        { timeoutMs: 500 },
+      );
+      const cmd = await daemon.nextCommand();
+      expect(cmd.kind).toBe('agent_l2_seed');
+      // The backend forwards semantic ids ONLY — no path crosses the wire.
+      expect(cmd.params).toEqual({
+        agent_id: 'a1',
+        workspace_id: 'ws_1',
+        template_choice: 'default',
+      });
+
+      daemon.respondResult(cmd.id, 'agent_l2_seed', {
+        ok: true,
+        seeded: true,
+        l2_present: true,
+      });
+
+      await expect(pending).resolves.toMatchObject({
+        seeded: true,
+        l2_present: true,
+      });
+    });
+
+    it('passes through a legal agent_l2_seed typed error (workspace_not_provisioned) with its code intact', async () => {
+      fx = await makeFixture();
+      const daemon = await fx.connectDaemon();
+
+      const pending = fx.adapter.sendCommand(
+        fx.hostId,
+        'agent_l2_seed',
+        { agent_id: 'a1', workspace_id: 'ws_unbound', template_choice: 'default' },
+        { timeoutMs: 500 },
+      );
+      const cmd = await daemon.nextCommand();
+      expect(cmd.kind).toBe('agent_l2_seed');
+
+      // `workspace_not_provisioned` is declared by `agent_l2_seed`'s error arm —
+      // it rides the envelope and is NOT collapsed into a transport_* error.
+      daemon.respondError(cmd.id, 'agent_l2_seed', {
+        code: 'workspace_not_provisioned',
+        message: 'workspace ws_unbound is not provisioned',
+      });
+
+      await expect(pending).rejects.toMatchObject({
+        code: 'workspace_not_provisioned',
+      });
+    });
+
+    it('refuses a foreign typed error code on agent_l2_seed', async () => {
+      fx = await makeFixture();
+      const daemon = await fx.connectDaemon();
+
+      const pending = fx.adapter.sendCommand(
+        fx.hostId,
+        'agent_l2_seed',
+        { agent_id: 'a1', workspace_id: 'ws_1', template_choice: 'default' },
+        { timeoutMs: 1000 },
+      );
+      const cmd = await daemon.nextCommand();
+      expect(cmd.kind).toBe('agent_l2_seed');
+
+      // `path_conflict` is a `workspace_provision` code, not declared by
+      // `agent_l2_seed`. It must be refused at the schema boundary.
+      daemon.respondError(cmd.id, 'agent_l2_seed', {
+        code: 'path_conflict',
+        message: 'foreign code must not be accepted on agent_l2_seed',
+      });
+
+      let err: { code?: string } | null = null;
+      try {
+        await pending;
+      } catch (e) {
+        err = e as { code?: string };
+      }
+      expect(err).not.toBeNull();
+      expect(err!.code).not.toBe('path_conflict');
+      expect(err!.code).toBe('transport_disconnected');
+    });
+
     it('refuses a foreign typed error code on a command that does not declare it', async () => {
       fx = await makeFixture();
       const daemon = await fx.connectDaemon();

@@ -162,14 +162,17 @@ export interface BackendContext {
   /** Late-bound outbound host WebSocket controller for standalone daemon transport. */
   hostWsController?: () => HostWsServerController | null;
   /**
-   * D4.e-1 3b P1-2 (Cindy) — the EXACT host id that shares the backend's
-   * own disk. Set ONLY in embedded mode (= `HostRepo.ensureLocal()` — the
-   * single `local`-named host the desktop runs on); `undefined` in standalone
-   * (the backend is remote, co-located with no host). Server-side L2 seeding
-   * (`seedAgentL2`) on workspace-create is only sound for this exact host, so
-   * the create gate compares `workspace_host_id === coLocatedHostId` rather
-   * than `host.kind === 'local'` — a user can own SEVERAL active local hosts
-   * (a sandbox daemon, a second desktop), and only THIS one is co-located.
+   * The EXACT host id that shares the backend's own disk. Set ONLY in
+   * embedded mode (= `HostRepo.ensureLocal()` — the single `local`-named
+   * host the desktop runs on); `undefined` in standalone (the backend is
+   * remote, co-located with no host).
+   *
+   * D4.e-1 3b introduced this to gate server-side L2 seeding to the
+   * co-located host. D4.e-3 made L2 seeding daemon-mediated
+   * (`agent_l2_seed`), so that create gate is GONE — the owning daemon now
+   * writes its OWN host-local L2 in every mode. The field stays as the
+   * identity of "the host on this machine" for diagnostics and any future
+   * co-location-aware logic; it is no longer a correctness gate.
    */
   coLocatedHostId?: string;
   /**

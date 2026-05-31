@@ -76,6 +76,7 @@ import { HostCredentialIssueError, HostTokenService } from './auth/host-token.js
 import { HostWsCommandTransportError, HostWsCommandResponseError, type HostWsServerController } from './ws/host-ws-server.js';
 import type { OutboundFrameAdapter } from './runtime/outbound-frame-adapter.js';
 import {
+  dispatchAgentL2Seed,
   dispatchAgentWorkspaceIndex,
   dispatchAgentWorkspaceRead,
   dispatchWorkspaceProvision,
@@ -96,7 +97,6 @@ import { ConversationInboxRepo } from './repos/conversation-inbox-repo.js';
 import { SettingsRepo, SETTINGS_KEYS } from './repos/settings-repo.js';
 import { WorkspaceRepo, agentHomeWorkspaceId } from './repos/workspace-repo.js';
 import { ConversationRepo, type RepoError } from './repos/conversation-repo.js';
-import { ensureAgentL1Dir, seedAgentL2 } from './workspace-files.js';
 import { detectRuntimes } from '@silverhand/host/runtimes';
 import { AttachmentRejection } from './services/attachment-service.js';
 import {
@@ -1036,6 +1036,65 @@ function elapsedSince(startedAt: number): number {
   return Math.round((performance.now() - startedAt) * 10) / 10;
 }
 
+/**
+ * D4.e-3 — seed a member agent's L2 (per-workspace) memory on the host that
+ * owns `workspace`, via the daemon (`agent_l2_seed`). Shared by
+ * create-with-members and the member-add route. The daemon is the sole
+ * authority for the host-local L2 path (I1): the backend forwards only
+ * `workspace_id` / `agent_id` and never writes the L2 itself.
+ *
+ * Returns `{ kind: 'ok' }` on success, or a fail-closed {@link DataPlaneFailure}.
+ * Cindy ordering red line: the CALLER must NOT insert the `workspace_members`
+ * row when this fails — no "member added but L2 not seeded" half-state.
+ *
+ * `ensureProvisioned` controls the lazy registry backfill: the member-add
+ * route passes `true` (a pre-D4.e legacy workspace may have no registry
+ * binding yet), while create-with-members passes `false` because the
+ * workspace was already provisioned earlier in the SAME request — re-binding
+ * it per member would be a redundant daemon round-trip.
+ */
+async function seedMemberAgentL2(
+  ctx: BackendContext,
+  hostId: string,
+  workspace: { id: string; workspace_path: string },
+  agentId: string,
+  opts: { ensureProvisioned: boolean },
+): Promise<{ kind: 'ok' } | DataPlaneFailure> {
+  // 1) Ensure the workspace is bound in the owning daemon's registry. Legacy
+  //    rows are lazily re-provisioned here; the create-with-members path
+  //    already provisioned in-request, so it skips this.
+  if (opts.ensureProvisioned) {
+    const backfill = await ctx.workspaceRegistryBackfiller?.ensure(hostId, [
+      { id: workspace.id, workspace_path: workspace.workspace_path },
+    ]);
+    if (backfill && backfill.status === 'failed') {
+      const f = backfill.failed[0];
+      return {
+        kind: 'failed',
+        code: f?.code ?? 'host_attach_pending',
+        message:
+          f?.message ?? 'workspace registry backfill failed; cannot seed agent L2',
+        status: f && !f.retriable ? 502 : 503,
+        retriable: f?.retriable ?? true,
+      };
+    }
+  }
+  // 2) Seed L2 on the owning daemon (fail-closed; never a server-side write).
+  const outbound = resolveOutboundForHost(
+    ctx.outboundFrameAdapter?.() ?? null,
+    hostId,
+  );
+  if (outbound.kind === 'failed') return outbound;
+  const seed = await dispatchAgentL2Seed(
+    outbound.adapter,
+    hostId,
+    outbound.connectionId,
+    { agent_id: agentId, workspace_id: workspace.id, template_choice: 'default' },
+  );
+  if (seed.kind === 'failed') return seed;
+  return { kind: 'ok' };
+}
+
 export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   installApiTimingMiddleware(app, ctx);
@@ -1535,12 +1594,12 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
    * delete path on a workspace that should fail-closed (Cindy
    * round-1 P1).
    *
-   * NOTE: This is a control-plane placement check. fs side-effect
-   * boundaries (`initWorkspaceDir` / `ensureAgentL1Dir` /
-   * `seedAgentL2`) are NOT moved by C3 — they remain server-side
-   * placeholders in standalone mode pending the D4.e workspace
-   * materialize intent. The fail-closed contract here is
-   * "rejected path leaks no fs / DB / message side effect", which
+   * NOTE: This is a control-plane placement check. The remaining
+   * server-side fs boundary is `initWorkspaceDir` (workspace skeleton);
+   * `seedAgentL2` was removed in D4.e-3 (L2 seeding is now daemon-mediated
+   * via `agent_l2_seed`) and `ensureAgentL1Dir` survives only as the
+   * `agent_materialize` test fake's L1 seeder. The fail-closed contract
+   * here is "rejected path leaks no fs / DB / message side effect", which
    * is true because the call sits before every write.
    */
   function assertWorkspaceAgentsMatchHost(
@@ -1620,33 +1679,16 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       throw err;
     }
 
-    // D4.e-1 3b P1-1/P1-2 (Cindy) — initial-member seeding still writes agent
-    // L1/L2 on the BACKEND filesystem (`ensureAgentL1Dir` / `seedAgentL2`
-    // below). That is only sound when the owning host is the EXACT host the
-    // backend is co-located with (`ctx.coLocatedHostId`). Gating on host KIND
-    // is insufficient: a user can own several active `kind='local'` hosts (a
-    // sandbox daemon, a second desktop), and only one of them shares this
-    // backend's disk; and standalone's claimed host is `kind='local'` too (the
-    // user's machine, not the backend's). Every non-co-located owner (a remote
-    // host, a different/second local host, or any host in standalone where
-    // `coLocatedHostId` is undefined) would mkdir/write a DIFFERENT machine's
-    // path locally — the I1 violation D4.e removes.
-    // Daemon-mediated L2 seeding is a later slice; until it lands, refuse the
-    // non-co-located combo up front (BEFORE provision — no orphan registry
-    // bind, no row) with a typed code. Memberless create is always fine.
-    const backendCoLocatedWithHost =
-      ctx.coLocatedHostId !== undefined &&
-      workspaceHostId === ctx.coLocatedHostId;
-    if (memberAgents.length > 0 && !backendCoLocatedWithHost) {
-      return c.json(
-        {
-          error:
-            'creating a workspace with initial members is only supported when the backend is co-located with the owning host (embedded mode + the backend\'s own local host); agent L2 seeding is not daemon-mediated yet — create the workspace first, members will be addable once daemon-side seeding lands',
-          code: 'workspace_member_seed_unsupported',
-        },
-        409,
-      );
-    }
+    // D4.e-3 — the co-location gate is GONE. Pre-D4.e-3, create-with-members
+    // seeded agent L2 directly on the BACKEND filesystem, which was only sound
+    // when the backend shared the owning host's disk; every non-co-located
+    // owner (remote host, a second local host, standalone) would have written
+    // a DIFFERENT machine's path locally (the I1 violation), so the combo was
+    // refused. With L2 seeding now daemon-mediated (`agent_l2_seed` below),
+    // the owning daemon writes its OWN host-local L2 in every mode — embedded,
+    // standalone, and remote alike — so create-with-members is universally
+    // supported again. Ordering red line (Cindy): each member's
+    // `workspace_members` row is inserted ONLY AFTER its daemon seed succeeds.
 
     // Dispatch `workspace_provision` to the owning daemon BEFORE inserting
     // the row: the daemon registry keys by `workspace_id`, so we
@@ -1690,19 +1732,30 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     // correct — the creator is a member by default.
     workspaces.addUserMember(workspace.id, viewerUserId);
 
+    // D4.e-3 — seed EVERY member's L2 on the owning daemon BEFORE inserting
+    // ANY agent `workspace_members` row (Cindy ordering red line, P1 fixup):
+    // a seed failure must never leave a "member added but L2 not seeded"
+    // half-state, and with N members it must never leave a PARTIAL set —
+    // e.g. a1 seeded+added, then a2's seed fails. So we run all seeds first;
+    // on any failure we return the error with agent membership still at 0
+    // (the workspace row + user member already exist — accepted residue per
+    // Cindy, no 2PC rollback). Only once every seed succeeds do we insert the
+    // membership rows + onboarding. The daemon writes its OWN host-local L2,
+    // so this is identical across embedded / standalone / remote.
+    for (const agent of memberAgents) {
+      const seed = await seedMemberAgentL2(
+        ctx,
+        workspaceHostId,
+        { id: workspace.id, workspace_path: workspace.workspace_path },
+        agent.id,
+        { ensureProvisioned: false },
+      );
+      if (seed.kind === 'failed') {
+        return c.json({ error: seed.message, code: seed.code }, seed.status);
+      }
+    }
     for (const agent of memberAgents) {
       workspaces.addMember(workspace.id, agent.id);
-      // Embedded + local-host server-side L2 seed: every non-co-located combo
-      // (standalone, or an owned remote host) is refused above (P1-1), so
-      // reaching here means the backend shares the owning host's disk. Full
-      // removal of this fs (daemon-mediated seed) is deferred to the I6 slice
-      // (D4.e-5).
-      const agentL1Dir = join(ctx.silverhandDir, 'agents', agent.id);
-      await ensureAgentL1Dir(agentL1Dir);
-      await seedAgentL2({
-        workspacePath: workspace.workspace_path,
-        agentId: agent.id,
-      });
     }
 
     const onboarding = conversations.insertChannel({
@@ -2213,16 +2266,31 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
-    // D4.c C3 — lifted the standalone `host_runtime_disabled`
-    // short-circuit. The DB-level placement check still runs
-    // inside `WorkspaceRepo.addMember` →
-    // `assertAgentMatchesHost`, which throws BEFORE any fs side
-    // effect (`ensureAgentL1Dir` / `seedAgentL2`). The catch
-    // block below maps the placement error to 409
-    // `host_mismatch`. So the fail-closed contract holds without
-    // the deployment-mode short-circuit.
+    // D4.e-3 — daemon-mediated L2 seed (I1/I6). Order is fixed (Cindy red
+    // line): fail-fast placement check, then seed L2 on the owning daemon,
+    // and ONLY on seed success insert the `workspace_members` row. A seed
+    // failure returns an error and writes no row — never a "member added but
+    // L2 not seeded" half-state. The backend writes no L2 itself.
     const agent = agents.get(parsed.data.agent_id);
     if (!agent) return c.json({ error: 'agent not found' }, 404);
+    const hostId = workspace.workspace_host_id;
+    try {
+      ctx.placement.assertAgentMatchesHost(agent.id, hostId);
+    } catch (err) {
+      const mapped = placementErrorResponse(c, err);
+      if (mapped) return mapped;
+      throw err;
+    }
+    const seed = await seedMemberAgentL2(
+      ctx,
+      hostId,
+      { id: workspace.id, workspace_path: workspace.workspace_path },
+      agent.id,
+      { ensureProvisioned: true },
+    );
+    if (seed.kind === 'failed') {
+      return c.json({ error: seed.message, code: seed.code }, seed.status);
+    }
     let member: ReturnType<WorkspaceRepo['addMember']>;
     try {
       member = workspaces.addMember(workspace.id, agent.id);
@@ -2231,12 +2299,6 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       if (mapped) return mapped;
       throw err;
     }
-    const agentL1Dir = join(ctx.silverhandDir, 'agents', agent.id);
-    await ensureAgentL1Dir(agentL1Dir);
-    await seedAgentL2({
-      workspacePath: workspace.workspace_path,
-      agentId: agent.id,
-    });
     return c.json({ member }, 201);
   });
 

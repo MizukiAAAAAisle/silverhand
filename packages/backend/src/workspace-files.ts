@@ -256,32 +256,13 @@ export async function initWorkspaceDir(workspacePath: string): Promise<void> {
 }
 
 /**
- * Seed L2 (per-workspace per-agent) directory for `<workspace>/.silverhand/
- * agents/<agent-id>/`. The directory carries this workspace's MEMORY.md,
- * notes/, and (eventually) work logs — i.e. the **workspace-scoped**
- * memory.
- *
- * **Important**: `system_prompt.md` is L1-only and is NOT seeded here.
- * The role contract is read from `~/.silverhand/agents/<id>/system_prompt.md`
- * by the system-prompt assembler at every spawn. Copying it here would
- * create stale L2 forks that drift from the canonical L1 identity (the
- * historical bug this design fixes).
+ * D4.e-3 — backend `seedAgentL2` is REMOVED. L2 (per-workspace) memory
+ * seeding is now owned by the daemon (`agent_l2_seed` intent →
+ * `packages/host/src/daemon/workspace-registry/l2-seed-handler.ts`): the
+ * daemon resolves the workspace's host-local path from its own registry and
+ * writes `MEMORY.md` + `notes/` (never L1 `system_prompt.md`). The backend
+ * dispatches it via `dispatchAgentL2Seed` and never writes L2 itself (I1/I6).
  */
-export async function seedAgentL2(params: {
-  workspacePath: string;
-  agentId: string;
-}): Promise<void> {
-  const l2Dir = join(params.workspacePath, '.silverhand', 'agents', params.agentId);
-  const notesDir = join(l2Dir, 'notes');
-  await seedNotesIfMissing(notesDir);
-
-  const memoryPath = join(l2Dir, 'MEMORY.md');
-  try {
-    await fs.access(memoryPath);
-  } catch {
-    await fs.writeFile(memoryPath, INITIAL_MEMORY_MD);
-  }
-}
 
 /** Ensure agent L1 directory exists (`~/.silverhand/agents/<id>/`). */
 export async function ensureAgentL1Dir(agentL1Dir: string): Promise<void> {

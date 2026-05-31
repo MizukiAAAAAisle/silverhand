@@ -132,14 +132,14 @@ describe('D4.e-1 3b-1 — workspace-create dispatches workspace_provision', () =
     expect(((await res.json()) as any).code).toBe('daemon_timeout');
   });
 
-  it('embedded + owned REMOTE host + member → 409 workspace_member_seed_unsupported, NO provision, NO row (P1-1 co-location gate)', async () => {
-    // D4.e-1 3b P1-1 (Cindy) — the initial-member seed gate is about
-    // CO-LOCATION (embedded backend + local host), not deployment mode alone.
-    // `assertOwnedActiveHost` accepts an owned `kind='remote'` host, so an
-    // embedded caller passing `workspace_host_id=<owned remote>` + a member on
-    // that remote host would otherwise reach the server-side `seedAgentL2`,
-    // writing the remote daemon's path on the embedded box (I1 violation). The
-    // gate must refuse it BEFORE provision — no orphan registry bind, no row.
+  it('embedded + owned REMOTE host + member → 201, daemon-mediated provision + agent_l2_seed, row + member persisted (D4.e-3 gate lifted)', async () => {
+    // D4.e-3 — the co-location gate is GONE. Pre-D4.e-3 this combo (embedded
+    // backend + a member on an owned REMOTE host) was refused 409 because the
+    // create route seeded agent L2 on the BACKEND disk, which would have
+    // written the remote daemon's path locally (I1 violation). Now L2 seeding
+    // is daemon-mediated (`agent_l2_seed`): the owning daemon writes its OWN
+    // host-local L2, so create-with-members is supported on every host. Cindy
+    // ordering: the membership row lands ONLY AFTER the daemon seed succeeds.
     t = buildTestApp();
     const db = t.ctx.db;
     const userId = t.viewerUserId;
@@ -151,7 +151,7 @@ describe('D4.e-1 3b-1 — workspace-create dispatches workspace_provision', () =
         VALUES (?, ?, 'remote', ?, ?, ?, NULL, ?)`,
     ).run('host-remote-1', 'remote-1', userId, 'inst-1', now, now);
     // An agent on that remote host — survives the member filter + host-equality
-    // check, so the request reaches the co-location gate.
+    // check, so the request reaches the daemon-mediated seed.
     const agentId = 'agent-on-remote';
     db.prepare(
       `INSERT INTO agents
@@ -159,35 +159,89 @@ describe('D4.e-1 3b-1 — workspace-create dispatches workspace_provision', () =
         VALUES (?, ?, 'claude', ?, ?, ?, ?)`,
     ).run(agentId, 'remoteagent', 'host-remote-1', userId, now, now);
 
-    const before = db
-      .prepare('SELECT COUNT(*) as n FROM workspaces')
-      .get() as { n: number };
     const res = await http(t).post('/api/workspaces', {
       name: 'remote-with-member',
       workspace_host_id: 'host-remote-1',
       member_agent_ids: [agentId],
     });
-    expect(res.status).toBe(409);
-    expect(((await res.json()) as any).code).toBe(
-      'workspace_member_seed_unsupported',
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as any;
+
+    // Provision + seed both dispatched to the owning (remote) host.
+    const provisionCalls = t.fakeHostWs!.calls.filter(
+      c => c.kind === 'workspace_provision',
     );
-    // No provision dispatched (refused before the daemon round-trip).
-    expect(
-      t.fakeHostWs!.calls.filter(c => c.kind === 'workspace_provision'),
-    ).toHaveLength(0);
-    const after = db
-      .prepare('SELECT COUNT(*) as n FROM workspaces')
-      .get() as { n: number };
-    expect(after.n).toBe(before.n);
+    expect(provisionCalls).toHaveLength(1);
+    const seedCalls = t.fakeHostWs!.calls.filter(c => c.kind === 'agent_l2_seed');
+    expect(seedCalls).toHaveLength(1);
+    expect(seedCalls[0]!.hostId).toBe('host-remote-1');
+    expect(seedCalls[0]!.params).toMatchObject({
+      agent_id: agentId,
+      workspace_id: body.workspace.id,
+    });
+
+    // Row persisted + membership recorded.
+    const row = db
+      .prepare('SELECT COUNT(*) as n FROM workspaces WHERE id = ?')
+      .get(body.workspace.id) as { n: number };
+    expect(row.n).toBe(1);
+    const member = db
+      .prepare(
+        'SELECT COUNT(*) as n FROM workspace_members WHERE workspace_id = ? AND agent_id = ?',
+      )
+      .get(body.workspace.id, agentId) as { n: number };
+    expect(member.n).toBe(1);
   });
 
-  it('embedded + owned SECOND local host (NOT co-located) + member → 409, NO provision, NO row (P1-2 co-location is host-id, not kind)', async () => {
-    // D4.e-1 3b P1-2 (Cindy) — gating on `host.kind === 'local'` is not enough:
-    // a user can own MULTIPLE active local hosts (a sandbox daemon, a second
-    // desktop). Only the backend's OWN host (`ctx.coLocatedHostId`) shares its
-    // disk. A second owned `kind='local'` host is NOT co-located, so seeding
-    // its path locally would still be the I1 violation — the gate must refuse
-    // it by exact host id, not kind.
+  it('member-seed failure → error and NO membership row (Cindy ordering red line)', async () => {
+    // The membership row must NEVER be inserted when the daemon L2 seed fails —
+    // no "member added but L2 not seeded" half-state. The workspace row may
+    // remain (no 2PC required), but the member must not.
+    t = buildTestApp();
+    const db = t.ctx.db;
+    const userId = t.viewerUserId;
+    const now = Date.now();
+    db.prepare(
+      `INSERT INTO hosts
+        (id, name, kind, user_id, installation_id, last_seen_at, revoked_at, created_at)
+        VALUES (?, ?, 'remote', ?, ?, ?, NULL, ?)`,
+    ).run('host-remote-2', 'remote-2', userId, 'inst-2', now, now);
+    const agentId = 'agent-seed-fails';
+    db.prepare(
+      `INSERT INTO agents
+        (id, name, runtime, host_id, created_by_user_id, created_at, updated_at)
+        VALUES (?, ?, 'claude', ?, ?, ?, ?)`,
+    ).run(agentId, 'failagent', 'host-remote-2', userId, now, now);
+
+    // Provision succeeds; the L2 seed fails with a typed daemon wire error.
+    t.fakeHostWs!.agentL2SeedAckOverride = () => {
+      throw new HostWsCommandResponseError(
+        'fs_unavailable' as never,
+        'EROFS: read-only file system',
+        { hostId: 'host-remote-2', commandKind: 'agent_l2_seed', requestId: 'r' },
+      );
+    };
+
+    const res = await http(t).post('/api/workspaces', {
+      name: 'seed-fails',
+      workspace_host_id: 'host-remote-2',
+      member_agent_ids: [agentId],
+    });
+    expect(res.status).toBe(503);
+    expect(((await res.json()) as any).code).toBe('fs_unavailable');
+
+    // No membership row for the agent whose seed failed.
+    const member = db
+      .prepare('SELECT COUNT(*) as n FROM workspace_members WHERE agent_id = ?')
+      .get(agentId) as { n: number };
+    expect(member.n).toBe(0);
+  });
+
+  it('embedded + owned SECOND local host (NOT co-located) + member → 201, daemon-mediated (D4.e-3 gate lifted)', async () => {
+    // D4.e-3 — pre-D4.e-3 a second owned `kind='local'` host (not the backend's
+    // co-located one) was refused 409 by the host-id co-location gate. With
+    // daemon-mediated seeding the owning daemon writes its OWN L2, so this now
+    // succeeds like any other host.
     t = buildTestApp();
     const hosts = new HostRepo(t.ctx.db);
     // A second active local host owned by the viewer, distinct from the
@@ -208,24 +262,24 @@ describe('D4.e-1 3b-1 — workspace-create dispatches workspace_provision', () =
         VALUES (?, ?, 'claude', ?, ?, ?, ?)`,
     ).run(agentId, 'secondagent', second.host.id, t.viewerUserId, now, now);
 
-    const before = db
-      .prepare('SELECT COUNT(*) as n FROM workspaces')
-      .get() as { n: number };
     const res = await http(t).post('/api/workspaces', {
       name: 'second-local-with-member',
       workspace_host_id: second.host.id,
       member_agent_ids: [agentId],
     });
-    expect(res.status).toBe(409);
-    expect(((await res.json()) as any).code).toBe(
-      'workspace_member_seed_unsupported',
-    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as any;
     expect(
       t.fakeHostWs!.calls.filter(c => c.kind === 'workspace_provision'),
-    ).toHaveLength(0);
-    const after = db
-      .prepare('SELECT COUNT(*) as n FROM workspaces')
-      .get() as { n: number };
-    expect(after.n).toBe(before.n);
+    ).toHaveLength(1);
+    const seedCalls = t.fakeHostWs!.calls.filter(c => c.kind === 'agent_l2_seed');
+    expect(seedCalls).toHaveLength(1);
+    expect(seedCalls[0]!.hostId).toBe(second.host.id);
+    const member = db
+      .prepare(
+        'SELECT COUNT(*) as n FROM workspace_members WHERE workspace_id = ? AND agent_id = ?',
+      )
+      .get(body.workspace.id, agentId) as { n: number };
+    expect(member.n).toBe(1);
   });
 });

@@ -444,9 +444,9 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
     expect(wsRes.status).toBe(201);
     const ws = (await wsRes.json()) as any;
 
-    // The route's `seedAgentL2` would write
-    // `<workspace_path>/.silverhand/agents/<agentId>`. Snapshot
-    // the path — it MUST NOT exist after a rejected add-member.
+    // D4.e-3: L2 seeding is daemon-mediated; the would-be L2 dir lives at
+    // `<workspace_path>/.silverhand/agents/<agentId>`. Snapshot the path — it
+    // MUST NOT exist after a rejected add-member.
     const expectedL2Dir = join(
       ws.workspace.workspace_path,
       '.silverhand',
@@ -463,11 +463,10 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
     expect(res.status).toBe(409);
     expect(await res.json()).toMatchObject({ code: 'host_mismatch' });
 
-    // Critical fail-closed pin: no agent L2 dir leaked. The
-    // placement check (`assertAgentMatchesHost`) runs inside
-    // `WorkspaceRepo.addMember` BEFORE `ensureAgentL1Dir` /
-    // `seedAgentL2`, so the rejected path produces no fs side
-    // effect.
+    // Critical fail-closed pin: no agent L2 dir leaked. D4.e-3 runs the
+    // placement check (`assertAgentMatchesHost`) fail-fast, BEFORE the
+    // daemon `agent_l2_seed` dispatch and the membership-row INSERT, so a
+    // rejected add-member produces no daemon seed and no fs side effect.
     expect(existsSync(expectedL2Dir)).toBe(false);
   });
 

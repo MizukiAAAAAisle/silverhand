@@ -53,6 +53,8 @@ import {
   provisionWorkspace,
   AgentWorkspaceIndexError,
   indexAgentWorkspaces,
+  AgentL2SeedError,
+  seedAgentL2,
   type RegistryBinding,
 } from './workspace-registry/index.js';
 import { readAgentWorkspace } from './agent-workspace-read/index.js';
@@ -485,6 +487,27 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
       readAgentWorkspace(params, {
         homeDir: opts.testHooks?.agentMaterializeHomeDir,
       }),
+    // D4.e-3 — agent_l2_seed: seed a member agent's L2 (per-workspace)
+    // memory dir on the owning host. Resolves the regular workspace's path
+    // from the registry (fail-closed `workspace_not_provisioned` when
+    // unbound) and writes the L2 template (L1 minus system_prompt.md),
+    // idempotent. Built lazily so the standalone binding is current.
+    agentL2SeedHandler: async params => {
+      const binding = resolveRegistryBinding();
+      if (binding == null) {
+        throw new AgentL2SeedError(
+          'registry_unavailable',
+          'daemon not attached to a control plane; cannot resolve workspace registry binding',
+        );
+      }
+      const registry = new WorkspaceRegistry({
+        stateDir: workspaceRegistryStateDir,
+        binding,
+        silverhandStateRoot,
+        legacyWorkspacesRoot,
+      });
+      return seedAgentL2(params, { registry });
+    },
   });
   commandForwarder = command =>
     dispatcher.dispatch(command.id, String(command.kind), command.params);

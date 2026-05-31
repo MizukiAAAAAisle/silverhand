@@ -1,4 +1,6 @@
 import type {
+  AgentL2SeedParams,
+  AgentL2SeedResult,
   AgentWorkspaceIndexParams,
   AgentWorkspaceIndexResult,
   AgentWorkspaceReadParams,
@@ -14,16 +16,17 @@ import type { OutboundFrameAdapter } from './outbound-frame-adapter.js';
 
 /**
  * D4.e — backend dispatch layer for the host data-plane intents
- * (`workspace_provision`, `agent_workspace_index`, `agent_workspace_read`).
+ * (`workspace_provision`, `agent_workspace_index`, `agent_workspace_read`,
+ * `agent_l2_seed`).
  * The daemon is the sole authority for host-local path resolution (I1); the
  * backend only speaks `workspace_id` / `agent_id` and forwards an optional
  * caller-PROPOSED `requested_path` at provision time. This module owns ONE
  * thing: send a data-plane command over the deployment-neutral
  * {@link OutboundFrameAdapter} and normalize every failure (transport or
  * typed wire error) into a single structured outcome so each route can
- * decide how to render it — create → HTTP status; backfill / list / read →
- * fail-closed with a diagnostic code (never a `workspace_path` / server-fs
- * fallback).
+ * decide how to render it — create → HTTP status; backfill / list / read /
+ * seed → fail-closed with a diagnostic code (never a `workspace_path` /
+ * server-fs fallback).
  */
 
 export type DataPlaneFailureCode =
@@ -37,7 +40,10 @@ export type DataPlaneFailureCode =
   | 'unsupported_workspace_kind'
   | 'fs_quota_exceeded'
   | 'fs_unavailable'
-  // typed wire code (both)
+  // typed wire codes (agent_l2_seed)
+  | 'workspace_not_provisioned'
+  | 'unsupported_template'
+  // typed wire code (multiple)
   | 'registry_unavailable';
 
 export type DataPlaneHttpStatus = 400 | 409 | 502 | 503 | 504 | 507;
@@ -63,6 +69,7 @@ export type DataPlaneOutcome<T> = { kind: 'ok'; result: T } | DataPlaneFailure;
 const PROVISION_TIMEOUT_MS = 60_000;
 const INDEX_TIMEOUT_MS = 30_000;
 const READ_TIMEOUT_MS = 30_000;
+const SEED_TIMEOUT_MS = 30_000;
 
 /**
  * Resolve the live outbound adapter + connection id for `hostId`, or a
@@ -120,6 +127,17 @@ export function mapDataPlaneError(err: unknown): DataPlaneFailure {
         return fail('fs_unavailable', err.message, 503, true);
       case 'registry_unavailable':
         return fail('registry_unavailable', err.message, 503, true);
+      case 'workspace_not_provisioned':
+        // agent_l2_seed: the workspace has no registry binding on the owning
+        // host. The seed routes ensure provisioning (backfill) BEFORE
+        // dispatch, so this is a genuine precondition conflict, not a path
+        // the caller can fix by retrying as-is.
+        return fail('workspace_not_provisioned', err.message, 409, false);
+      case 'unsupported_template':
+        // agent_l2_seed: the template_choice has no host-side L2 entry. The
+        // backend only ever sends a supported choice, so this is a 400-class
+        // request rejection, not a transient condition.
+        return fail('unsupported_template', err.message, 400, false);
       case 'internal_error':
       default:
         return fail('daemon_internal_error', err.message, 502, false);
@@ -219,6 +237,34 @@ export async function dispatchAgentWorkspaceRead(
   try {
     const result = await adapter.sendCommand(hostId, 'agent_workspace_read', params, {
       timeoutMs: READ_TIMEOUT_MS,
+      expectedConnectionId: connectionId,
+    });
+    return { kind: 'ok', result };
+  } catch (err) {
+    return mapDataPlaneError(err);
+  }
+}
+
+/**
+ * D4.e-3 — dispatch `agent_l2_seed` to the owning daemon: seed a member
+ * agent's L2 (per-workspace) memory dir on the host that owns the workspace.
+ * Replaces backend `seedAgentL2` (gap G1). The daemon resolves the
+ * workspace's host-local path from its own registry and writes
+ * `MEMORY.md` + `notes/` (NEVER L1 `system_prompt.md`) idempotently. The
+ * backend forwards only `{ agent_id, workspace_id, template_choice }`; the
+ * route MUST treat a failure as fail-closed (do NOT insert the
+ * `workspace_members` row, do NOT write any server-side L2) — no
+ * "member added but L2 not seeded" half-state.
+ */
+export async function dispatchAgentL2Seed(
+  adapter: OutboundFrameAdapter,
+  hostId: string,
+  connectionId: string,
+  params: AgentL2SeedParams,
+): Promise<DataPlaneOutcome<AgentL2SeedResult>> {
+  try {
+    const result = await adapter.sendCommand(hostId, 'agent_l2_seed', params, {
+      timeoutMs: SEED_TIMEOUT_MS,
       expectedConnectionId: connectionId,
     });
     return { kind: 'ok', result };

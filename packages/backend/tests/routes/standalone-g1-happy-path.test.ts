@@ -250,23 +250,21 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
     expect(res.body.workspace.member_agent_ids ?? []).toEqual([]);
   });
 
-  it('POST /api/workspaces with REAL member_agent_ids on standalone → 409 workspace_member_seed_unsupported, no provision dispatched, no row persisted (D4.e-1 3b P1-1)', async () => {
-    // D4.e-1 3b P1-1 (Cindy) — initial-member seeding still does a
-    // server-side `ensureAgentL1Dir` / `seedAgentL2` on the BACKEND disk.
-    // That is only sound embedded (backend co-located with the host). In
-    // standalone the owning daemon is another machine and `workspace_path`
-    // is now a daemon-provisioned (possibly remote) path, so a server-side
-    // seed would mkdir/write a remote host's path locally — the exact I1
-    // violation D4.e removes. Until daemon-mediated seeding lands, the unsafe
-    // combo must be refused UP FRONT: typed 409, BEFORE any provision
-    // dispatch, with NO orphan registry bind and NO persisted row.
+  it('POST /api/workspaces with REAL member_agent_ids on standalone → 201, daemon-mediated agent_l2_seed (D4.e-3 gate lifted)', async () => {
+    // D4.e-3 — pre-D4.e-3 this combo was refused 409
+    // `workspace_member_seed_unsupported` because the create route seeded agent
+    // L2 on the BACKEND disk, which in standalone (owning daemon is another
+    // machine) would write a remote host's path locally (I1 violation). Now L2
+    // seeding is daemon-mediated (`agent_l2_seed`): the owning daemon writes its
+    // OWN host-local L2, so create-with-members works in standalone too — the
+    // backend dispatches the seed and writes no L2 itself. Cindy ordering: the
+    // membership row lands ONLY AFTER the daemon seed succeeds.
     t = buildTestApp({ deploymentMode: 'standalone', bindAddressScope: 'lan' });
     const token = await signupReturnToken(t, 'ws.seed@example.test');
     const claimedHostId = await claimLocalHost(t, token);
 
     // A REAL agent on the claimed host — it survives the member filter +
-    // host-equality check, so the request reaches the seed preflight (a
-    // nonexistent id would be silently filtered, never exercising the gate).
+    // host-equality check, so the request reaches the daemon-mediated seed.
     const ownerUserId = t.ctx.db
       .prepare<[], { id: string }>(
         `SELECT id FROM users WHERE email = 'ws.seed@example.test'`,
@@ -290,23 +288,31 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
       { name: wsName, member_agent_ids: [agentId] },
       bearer(token),
     );
-    expect(res.status).toBe(409);
-    expect(res.body).toMatchObject({ code: 'workspace_member_seed_unsupported' });
+    expect(res.status).toBe(201);
 
-    // No provision was dispatched (refused before the daemon round-trip) —
-    // so there is no orphan registry bind.
+    // Provision + seed both dispatched to the owning (claimed) host.
     const provisionCalls = t.fakeHostWs!.calls.filter(
       c => c.kind === 'workspace_provision',
     );
-    expect(provisionCalls).toHaveLength(0);
+    expect(provisionCalls).toHaveLength(1);
+    const seedCalls = t.fakeHostWs!.calls.filter(c => c.kind === 'agent_l2_seed');
+    expect(seedCalls).toHaveLength(1);
+    expect(seedCalls[0]!.hostId).toBe(claimedHostId);
+    expect(seedCalls[0]!.params).toMatchObject({ agent_id: agentId });
 
-    // No workspace row was persisted.
+    // Workspace row + membership persisted.
     const rowCount = t.ctx.db
       .prepare<[string], { c: number }>(
         `SELECT COUNT(*) AS c FROM workspaces WHERE name = ?`,
       )
       .get(wsName)?.c;
-    expect(rowCount).toBe(0);
+    expect(rowCount).toBe(1);
+    const memberCount = t.ctx.db
+      .prepare<[string], { c: number }>(
+        `SELECT COUNT(*) AS c FROM workspace_members WHERE agent_id = ?`,
+      )
+      .get(agentId)?.c;
+    expect(memberCount).toBe(1);
   });
 
   it('POST /api/workspaces/:id/channels (no agents) on standalone creates a channel and publishes workspace_channels_changed', async () => {

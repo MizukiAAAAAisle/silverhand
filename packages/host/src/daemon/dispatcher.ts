@@ -35,6 +35,8 @@ import {
   type AgentWorkspaceIndexResult,
   type AgentWorkspaceReadParams,
   type AgentWorkspaceReadResult,
+  type AgentL2SeedParams,
+  type AgentL2SeedResult,
   type ConversationLogDebugParams,
   type HostOutboundAttachParams,
   type HostOutboundAttachResult,
@@ -174,6 +176,16 @@ export interface DispatcherOptions {
   agentWorkspaceReadHandler?: (
     params: AgentWorkspaceReadParams,
   ) => AgentWorkspaceReadResult | Promise<AgentWorkspaceReadResult>;
+  /**
+   * D4.e-3 — handler for `agent_l2_seed` (member agent L2 seed on the
+   * owning host). Production wiring: `seedAgentL2`. Typed errors
+   * (`AgentL2SeedError`) are projected with their code by the catch arm
+   * after per-intent schema validation. `undefined` → the dispatcher
+   * throws (→ `internal_error`).
+   */
+  agentL2SeedHandler?: (
+    params: AgentL2SeedParams,
+  ) => AgentL2SeedResult | Promise<AgentL2SeedResult>;
 }
 
 export class IntentDispatcher {
@@ -213,6 +225,11 @@ export class IntentDispatcher {
         params: AgentWorkspaceReadParams,
       ) => AgentWorkspaceReadResult | Promise<AgentWorkspaceReadResult>)
     | undefined;
+  private readonly agentL2SeedHandler:
+    | ((
+        params: AgentL2SeedParams,
+      ) => AgentL2SeedResult | Promise<AgentL2SeedResult>)
+    | undefined;
   private intentCount = 0;
   private shuttingDown = false;
 
@@ -237,6 +254,7 @@ export class IntentDispatcher {
     this.workspaceProvisionHandler = opts.workspaceProvisionHandler;
     this.agentWorkspaceIndexHandler = opts.agentWorkspaceIndexHandler;
     this.agentWorkspaceReadHandler = opts.agentWorkspaceReadHandler;
+    this.agentL2SeedHandler = opts.agentL2SeedHandler;
   }
 
   /** Signal that subsequent intents should be rejected with
@@ -631,6 +649,13 @@ export class IntentDispatcher {
         return this.requireAgentWorkspaceReadHandler()(
           params as AgentWorkspaceReadParams,
         );
+      case 'agent_l2_seed':
+        // D4.e-3 — member agent L2 seed on the owning host. Slot wired to
+        // `seedAgentL2`. Typed errors (AgentL2SeedError) are projected by
+        // the DaemonTypedError catch arm.
+        return this.requireAgentL2SeedHandler()(
+          params as AgentL2SeedParams,
+        );
     }
   }
 
@@ -720,5 +745,16 @@ export class IntentDispatcher {
       );
     }
     return this.agentWorkspaceReadHandler;
+  }
+
+  private requireAgentL2SeedHandler(): (
+    params: AgentL2SeedParams,
+  ) => AgentL2SeedResult | Promise<AgentL2SeedResult> {
+    if (!this.agentL2SeedHandler) {
+      throw new Error(
+        'agent_l2_seed intent reached dispatcher with no handler wired',
+      );
+    }
+    return this.agentL2SeedHandler;
   }
 }

@@ -15,10 +15,13 @@ import {
   provisionWorkspace,
   AgentWorkspaceIndexError,
   indexAgentWorkspaces,
+  AgentL2SeedError,
+  seedAgentL2,
   WORKSPACE_CONSENSUS_DEFAULT,
   type RegistryBinding,
 } from '../../src/daemon/workspace-registry/index.js';
 import { agentHomeWorkspaceId } from '@silverhand/shared';
+import { chmodSync, readdirSync } from 'node:fs';
 
 /**
  * D4.e-1 slice ② handler unit tests. The two daemon handlers sit between
@@ -477,5 +480,147 @@ describe('provisionWorkspace — skeleton-failure compensation', () => {
     // The entry remains in the real registry (rollback failed) — that is the
     // accepted residue; correctness of the error is what matters here.
     expect(real.has('ws_z')).toBe(true);
+  });
+});
+
+// D4.e-3 slice handler unit tests for `seedAgentL2` — the daemon-owned L2
+// (per-workspace) memory seeder that replaces backend `seedAgentL2` (gap
+// G1). The daemon resolves the workspace's host-local path from its own
+// registry and writes `<ws>/.silverhand/agents/<agent>/{MEMORY.md,notes/…}`.
+// Cindy D4.e-3 review focuses:
+//   #2 regular-only — agent-home / unprovisioned id fails closed
+//      (workspace_not_provisioned) purely via registry.resolve, no `kind`;
+//   #3 L2 must NEVER carry L1 `system_prompt.md`; MEMORY.md/notes/ present;
+//      idempotent re-seed preserves edited content (never overwrites).
+describe('seedAgentL2', () => {
+  const AGENT_ID = 'aid_member';
+
+  function l2DirFor(wsPath: string): string {
+    return join(wsPath, '.silverhand', 'agents', AGENT_ID);
+  }
+
+  it('seeds MEMORY.md + notes/ but NEVER system_prompt.md (L1-only)', async () => {
+    const registry = makeRegistry();
+    await provisionWorkspace({ workspace_id: 'ws_1', kind: 'regular' }, { registry });
+    const wsPath = registry.resolve('ws_1');
+
+    const r = await seedAgentL2(
+      { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'default' },
+      { registry },
+    );
+    expect(r).toEqual({ ok: true, seeded: true, l2_present: true });
+
+    const l2 = l2DirFor(wsPath);
+    // L1 identity must NOT leak into L2.
+    expect(existsSync(join(l2, 'system_prompt.md'))).toBe(false);
+    // L2 carries MEMORY.md + notes/.
+    expect(existsSync(join(l2, 'MEMORY.md'))).toBe(true);
+    expect(readdirSync(join(l2, 'notes')).sort()).toEqual([
+      'onboarding-faq.md',
+      'onboarding-guide.md',
+      'project.md',
+      'user-preferences.md',
+      'work-log.md',
+    ]);
+  });
+
+  it('is idempotent: re-seed reports seeded=false and preserves edited content', async () => {
+    const registry = makeRegistry();
+    await provisionWorkspace({ workspace_id: 'ws_1', kind: 'regular' }, { registry });
+    const wsPath = registry.resolve('ws_1');
+    const l2 = l2DirFor(wsPath);
+
+    await seedAgentL2(
+      { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'default' },
+      { registry },
+    );
+    // An agent edits its MEMORY.md after the first seed.
+    const memPath = join(l2, 'MEMORY.md');
+    writeFileSync(memPath, '# edited by the agent\n', 'utf-8');
+
+    const r = await seedAgentL2(
+      { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'default' },
+      { registry },
+    );
+    // Nothing new written; the edit survives (no clobber).
+    expect(r).toEqual({ ok: true, seeded: false, l2_present: true });
+    expect(readFileSync(memPath, 'utf-8')).toBe('# edited by the agent\n');
+  });
+
+  it('fails closed with workspace_not_provisioned for a never-provisioned id', async () => {
+    const registry = makeRegistry();
+    const err = await seedAgentL2(
+      { agent_id: AGENT_ID, workspace_id: 'ws_missing', template_choice: 'default' },
+      { registry },
+    ).catch(e => e);
+    expect(err).toBeInstanceOf(AgentL2SeedError);
+    expect((err as AgentL2SeedError).code).toBe('workspace_not_provisioned');
+  });
+
+  it('fails closed with workspace_not_provisioned for an agent-home id (regular-only, no kind param)', async () => {
+    // Cindy #2: an agent-home (DM) workspace has no registry binding, so
+    // resolve() throws not_provisioned. The handler relies on this — it does
+    // NOT take a `kind` and never seeds an agent-home L2 (== L1, already
+    // materialized by agent_materialize).
+    const registry = makeRegistry();
+    const err = await seedAgentL2(
+      {
+        agent_id: AGENT_ID,
+        workspace_id: agentHomeWorkspaceId(AGENT_ID),
+        template_choice: 'default',
+      },
+      { registry },
+    ).catch(e => e);
+    expect(err).toBeInstanceOf(AgentL2SeedError);
+    expect((err as AgentL2SeedError).code).toBe('workspace_not_provisioned');
+  });
+
+  it('rejects an unsupported template_choice with unsupported_template (no fs write)', async () => {
+    const registry = makeRegistry();
+    await provisionWorkspace({ workspace_id: 'ws_1', kind: 'regular' }, { registry });
+    const wsPath = registry.resolve('ws_1');
+    const err = await seedAgentL2(
+      { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'minimal' },
+      { registry },
+    ).catch(e => e);
+    expect(err).toBeInstanceOf(AgentL2SeedError);
+    expect((err as AgentL2SeedError).code).toBe('unsupported_template');
+    // Template is validated before any path is touched → no L2 dir created.
+    expect(existsSync(l2DirFor(wsPath))).toBe(false);
+  });
+
+  it('maps a registry_corrupt resolve to registry_unavailable (whole-registry failure)', async () => {
+    const registry = makeRegistry();
+    registry.provision('ws_1');
+    // Corrupt the registry file so resolve() throws registry_corrupt.
+    writeFileSync(registry.registryFilePath(), '{ not valid json', 'utf-8');
+    const err = await seedAgentL2(
+      { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'default' },
+      { registry },
+    ).catch(e => e);
+    expect(err).toBeInstanceOf(AgentL2SeedError);
+    expect((err as AgentL2SeedError).code).toBe('registry_unavailable');
+  });
+
+  it('fails closed with fs_unavailable on a HARD fs write error', async () => {
+    // chmod 000 on the workspace's `.silverhand/agents` dir makes the
+    // l2Dir mkdir throw EACCES — a hard write error must surface as the
+    // typed fs_unavailable (fail-closed), never a silent success.
+    if (process.getuid?.() === 0) return; // root bypasses perms — skip
+    const registry = makeRegistry();
+    await provisionWorkspace({ workspace_id: 'ws_1', kind: 'regular' }, { registry });
+    const wsPath = registry.resolve('ws_1');
+    const agentsDir = join(wsPath, '.silverhand', 'agents');
+    chmodSync(agentsDir, 0o000);
+    try {
+      const err = await seedAgentL2(
+        { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'default' },
+        { registry },
+      ).catch(e => e);
+      expect(err).toBeInstanceOf(AgentL2SeedError);
+      expect((err as AgentL2SeedError).code).toBe('fs_unavailable');
+    } finally {
+      chmodSync(agentsDir, 0o755);
+    }
   });
 });
