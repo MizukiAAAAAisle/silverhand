@@ -24,6 +24,11 @@ export interface FileLoggerOptions {
   /** Shared mutable level/window state. Categorized loggers pass one
    *  instance so system/agent/cli sinks change together. */
   logControl?: LogLevelControl;
+  /** Categories that are audit/metrics streams and must persist even
+   *  when the severity threshold would otherwise hide an info line.
+   *  Keep this scoped to a sink, not global, so ordinary diagnostic
+   *  info remains filtered. */
+  alwaysWriteCategories?: readonly string[];
 }
 
 export interface FileLogger extends BackendLogger {
@@ -71,7 +76,14 @@ export function createFileLogger(opts: FileLoggerOptions): FileLogger {
   const base: Record<string, unknown> = { pid: process.pid, ...(opts.base ?? {}) };
   const logControl = opts.logControl ?? createLogLevelControl();
 
-  return makeLogger(stream, filePath, alsoConsole, base, logControl);
+  return makeLogger(
+    stream,
+    filePath,
+    alsoConsole,
+    base,
+    logControl,
+    new Set(opts.alwaysWriteCategories ?? []),
+  );
 }
 
 /**
@@ -86,7 +98,10 @@ export function createFileLogger(opts: FileLoggerOptions): FileLogger {
  *     `DaemonAgentRuntimeHost` + `RuntimeEventHandler`).
  *     Writes `agent-<utc>.log`.
  *   - `cli`:    every `silverhand` CLI invocation (success + failure)
- *     plus pre-flight failures reported by the CLI itself.
+ *     plus pre-flight failures reported by the CLI itself. These are
+ *     audit/metrics events, so `cli.invoke` and
+ *     `cli.preflight_failure` persist even when the global diagnostic
+ *     level is warn.
  *     Writes `cli-<utc>.log`.
  *
  * All three share the same JSONL format and base fields. The split is
@@ -101,16 +116,23 @@ export interface CategorizedLoggers {
 }
 
 export function createCategorizedLoggers(
-  opts: Omit<FileLoggerOptions, 'filenamePrefix'>,
+  opts: Omit<FileLoggerOptions, 'filenamePrefix' | 'alwaysWriteCategories'>,
 ): CategorizedLoggers {
   const logControl = opts.logControl ?? createLogLevelControl();
   return {
     system: createFileLogger({ ...opts, filenamePrefix: 'backend', logControl }),
     agent: createFileLogger({ ...opts, filenamePrefix: 'agent', logControl }),
-    cli: createFileLogger({ ...opts, filenamePrefix: 'cli', logControl }),
+    cli: createFileLogger({
+      ...opts,
+      filenamePrefix: 'cli',
+      logControl,
+      alwaysWriteCategories: CLI_AUDIT_CATEGORIES,
+    }),
     logControl,
   };
 }
+
+const CLI_AUDIT_CATEGORIES = ['cli.invoke', 'cli.preflight_failure'] as const;
 
 export function createLogLevelControl(
   initialLevel: SilverhandLogLevel = parseSilverhandLogLevel(
@@ -166,6 +188,7 @@ function makeLogger(
   alsoConsole: boolean,
   base: Record<string, unknown>,
   logControl: LogLevelControl,
+  alwaysWriteCategories: ReadonlySet<string> = new Set(),
 ): FileLogger {
   const safeBase = sanitizeLogFields(base);
   const write = (level: LogEventLevel, obj: unknown, msg?: string) => {
@@ -181,7 +204,7 @@ function makeLogger(
       ...safeBase,
       ...fields,
     };
-    if (!shouldWrite(level, line, logControl)) return;
+    if (!shouldWrite(level, line, logControl, alwaysWriteCategories)) return;
     stream.write(safeStringify(line) + '\n');
     if (alsoConsole) {
       const fn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
@@ -197,7 +220,14 @@ function makeLogger(
     warn: (obj, msg) => write('warn', obj, msg),
     error: (obj, msg) => write('error', obj, msg),
     child: bindings =>
-      makeLogger(stream, filePath, alsoConsole, { ...safeBase, ...bindings }, logControl),
+      makeLogger(
+        stream,
+        filePath,
+        alsoConsole,
+        { ...safeBase, ...bindings },
+        logControl,
+        alwaysWriteCategories,
+      ),
     close: () =>
       new Promise<void>(resolve => {
         stream.end(() => resolve());
@@ -209,8 +239,11 @@ function shouldWrite(
   eventLevel: LogEventLevel,
   line: Record<string, unknown>,
   logControl: LogLevelControl,
+  alwaysWriteCategories: ReadonlySet<string>,
 ): boolean {
   if (eventLevel === 'error') return true;
+  const category = typeof line.category === 'string' ? line.category : null;
+  if (category && alwaysWriteCategories.has(category)) return true;
   const conversationId = typeof line.conversationId === 'string' ? line.conversationId : null;
   const effectiveLevel =
     conversationId && logControl.getConversationDebugStatus(conversationId).enabled

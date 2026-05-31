@@ -66,7 +66,7 @@ describe('backend file logger levels', () => {
     ]);
   });
 
-  it('keeps CLI failure audits visible at warn-level default', async () => {
+  it('keeps CLI audit metrics visible at warn-level default', async () => {
     const loggers = createCategorizedLoggers({
       dir: tempDir(),
       alsoConsole: false,
@@ -93,9 +93,11 @@ describe('backend file logger levels', () => {
     const cliLines = readLines(loggers.cli.filePath);
     expect(cliLines.map(line => line.category)).toEqual([
       'cli.invoke',
+      'cli.invoke',
       'cli.preflight_failure',
     ]);
-    expect(cliLines.map(line => line.level)).toEqual(['warn', 'warn']);
+    expect(cliLines.map(line => line.level)).toEqual(['info', 'warn', 'warn']);
+    expect(cliLines.map(line => line.status)).toEqual(['success', 'failure', 'failure']);
     expect(readLines(loggers.system.filePath)).toEqual([]);
   });
 
