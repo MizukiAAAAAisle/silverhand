@@ -22,15 +22,16 @@
  * the allow-list with justification) or it is an agent-host fs op that must
  * move to the daemon.
  *
- * SCOPE — what this guard does NOT cover (deliberately): the SECOND half of
- * A1, "no `workspace_path`-derived path emitted to the daemon or agent", is
- * still open. `runtime/runtime-start-options.ts` emits a `workspace_path`-
- * derived agent-home path into `runtime_start` options; it builds path
- * STRINGS (imports `node:path`, not `fs`) so it is invisible to an fs-import
- * guard. That residue is closed by **D4.e-6** (`runtime_start` semantic-ids
- * migration), which revokes the path carve-out and pins `runtime_start`
- * params as semantic-only. Until -6 lands, I6 is NOT fully true — A7 (M1
- * closure) must not be claimed. See `docs/d4-e-acceptance.md` A1/A7.
+ * A1 has TWO halves. The fs-import guard below enforces the first half (no
+ * agent-host fs op in backend/src). The SECOND half — "no `workspace_path`-
+ * derived path emitted to the daemon or agent" — is closed by **D4.e-6**: the
+ * `runtime_start` carve-out is revoked, `runtime_start` params are semantic-
+ * only (`id`/`name`/`kind`), and the daemon resolves every host path itself.
+ * The dedicated guard at the bottom of this file pins that closure: the
+ * runtime_start builder (`runtime/runtime-start-options.ts`) imports no
+ * `node:path`/`node:fs` and emits no host-path field, and the agent L1 home
+ * key `home_dir` appears nowhere in backend/src. With both halves enforced,
+ * I6 is fully true and A7 (M1 closure) is claimable. See `docs/d4-e-acceptance.md`.
  */
 import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -102,6 +103,7 @@ function extOf(filename: string): string {
 // module set.
 const IMPORT_RE = /(?:from\s*|import\s*\(\s*|import\s+)['"]([^'"]+)['"]/g;
 const FS_MODULES = new Set(['fs', 'fs/promises', 'node:fs', 'node:fs/promises']);
+const PATH_MODULES = new Set(['path', 'node:path', 'path/posix', 'node:path/posix']);
 
 function relKey(absPath: string): string {
   return relative(BACKEND_SRC, absPath).split('\\').join('/');
@@ -203,5 +205,61 @@ describe('backend/src → filesystem import boundary (D4.e-5 A1 / I6)', () => {
     expect(probe("import { join } from 'node:path';")).toBe(false);
     expect(probe("import { foo } from 'fs-extra';")).toBe(false);
     expect(probe("import { Hono } from 'hono';")).toBe(false);
+  });
+});
+
+// ── D4.e-6: A1 second half — runtime_start path-emission boundary ──────
+//
+// The fs-import guard above closes "no agent-host fs op". This block closes
+// the other half: "no `workspace_path`-derived host path emitted to the
+// daemon/agent". The residue lived in the `runtime_start` builder, which
+// pre-D4.e-6 computed an agent-home path from `workspace_path` with pure
+// `node:path` string ops (invisible to an fs-import guard). D4.e-6 revoked
+// that carve-out; this guard keeps it revoked.
+describe('backend/src → runtime_start path-emission boundary (D4.e-6 A1/I6)', () => {
+  const BUILDER = 'runtime/runtime-start-options.ts';
+
+  it('the runtime_start builder imports no node:path / node:fs', () => {
+    const abs = resolve(BACKEND_SRC, BUILDER);
+    const text = readFileSync(abs, 'utf8');
+    const offenders: string[] = [];
+    for (const m of text.matchAll(IMPORT_RE)) {
+      const spec = m[1];
+      if (spec === undefined) continue;
+      if (PATH_MODULES.has(spec) || FS_MODULES.has(spec)) {
+        offenders.push(m[0].replace(/\s+/g, ' ').trim());
+      }
+    }
+    expect(
+      offenders,
+      `${BUILDER} must build SEMANTIC refs only — no path/fs import. Found: ${offenders.join(', ')}`,
+    ).toEqual([]);
+  });
+
+  it('the runtime_start builder emits no host-path field (workspace_path / home_dir / silverhandDir / agentHomeDir)', () => {
+    const abs = resolve(BACKEND_SRC, BUILDER);
+    const text = readFileSync(abs, 'utf8');
+    // These tokens would each re-pierce I1 by smuggling a host path into the
+    // semantic wire frame. None may appear in the builder (code OR comment —
+    // their mere presence signals a regression of intent).
+    for (const token of ['workspace_path', 'home_dir', 'silverhandDir', 'agentHomeDir']) {
+      expect(text.includes(token), `${BUILDER} must not reference ${token}`).toBe(false);
+    }
+  });
+
+  it('no backend/src file references the retired agent-host `home_dir` key', () => {
+    // `home_dir` was the agent L1 home path the runtime_start carve-out used
+    // to emit. The daemon now resolves it (`computeAgentDir`); the key must
+    // appear nowhere in backend/src so a future change can't re-introduce a
+    // server-emitted agent-home path. (`agent_home_workspace_path` — the
+    // daemon's ACK field validated by the materialize route — is a distinct
+    // token and is intentionally not matched by `\bhome_dir\b`.)
+    const offenders: string[] = [];
+    for (const file of walkSources(BACKEND_SRC)) {
+      if (/\bhome_dir\b/.test(readFileSync(file, 'utf8'))) {
+        offenders.push(relKey(file));
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 });

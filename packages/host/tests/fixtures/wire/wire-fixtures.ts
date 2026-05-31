@@ -85,8 +85,6 @@ const RUNTIME_START_OPTIONS = testStartOptions({
   agentId: A,
   agentName: 'agent-fixture',
   runtime: 'codex',
-  workspacePath: '/Users/shiki/workspace/silverhand',
-  agentHomeDir: '/Users/shiki/.silverhand/agents/a1',
   model: 'gpt-5',
 });
 
@@ -1545,12 +1543,46 @@ const AGENT_FILES_PURGE_ERROR_FIXTURES: WireFixture[] = [
     kind: { kind: 'response_error_typed', intent: 'agent_files_purge' },
   },
 ];
+// D4.e-6 runtime_start typed errors. The carve-out that let host paths cross
+// the runtime_start wire is revoked; the daemon now resolves every host path
+// from its registry (regular) / computeAgentDir (agent_home) and fail-closes
+// with one of these two typed codes when a regular workspace is not bound or
+// the registry is unreadable. One fixture per RuntimeStartErrorCode slot.
+const RUNTIME_START_ERROR_FIXTURES: WireFixture[] = [
+  {
+    name: 'response/runtime_start-error-workspace_not_provisioned',
+    description:
+      'A regular workspace the start references has no registry binding (legacy row never backfilled / adopted). The daemon fails closed rather than derive a path from a backend-supplied value; the backend keeps the delivery pending for retry.',
+    frame: enc({
+      id: 'req-runtime-start-1',
+      error: {
+        code: 'workspace_not_provisioned',
+        message: 'workspace ws_custom_7 is not provisioned on this host',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'runtime_start' },
+  },
+  {
+    name: 'response/runtime_start-error-registry_unavailable',
+    description:
+      'Whole-registry failure while resolving the start: the registry file is foreign (identity mismatch) or corrupt. Fail-closed.',
+    frame: enc({
+      id: 'req-runtime-start-1',
+      error: {
+        code: 'registry_unavailable',
+        message: 'registry identity mismatch; refusing foreign registry',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'runtime_start' },
+  },
+];
 RESPONSES_ERROR_TYPED.push(
   ...WORKSPACE_PROVISION_ERROR_FIXTURES,
   ...AGENT_WORKSPACE_INDEX_ERROR_FIXTURES,
   ...AGENT_WORKSPACE_READ_ERROR_FIXTURES,
   ...AGENT_L2_SEED_ERROR_FIXTURES,
   ...AGENT_FILES_PURGE_ERROR_FIXTURES,
+  ...RUNTIME_START_ERROR_FIXTURES,
 );
 
 // ── Event fixtures ─────────────────────────────────────────────────

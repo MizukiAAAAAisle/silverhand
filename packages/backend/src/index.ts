@@ -590,7 +590,6 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
         events: ctx.events,
         transport: () => outboundAdapter,
         logger,
-        silverhandDir: ctx.silverhandDir,
         workspacesRoot,
         silverhandCli: ctx.silverhandCliLauncher,
         agentTokens: ctx.agentTokens,
@@ -600,6 +599,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
           allowlist: settings.getProxyRuntimes(),
         }),
         logDir: ctx.logDir,
+        workspaceRegistryBackfiller: ctx.workspaceRegistryBackfiller,
       });
       ctx.readiness.outboundEventFanoutInstalled = true;
     }

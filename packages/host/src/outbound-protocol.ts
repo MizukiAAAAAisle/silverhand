@@ -48,6 +48,7 @@ import {
   RuntimeOutputResumeResultSchema,
   RuntimeStartParamsSchema,
   RuntimeStartResultSchema,
+  RuntimeStartErrorCodeSchema,
   RuntimeStatusParamsSchema,
   RuntimeStatusResultSchema,
   RuntimeStopAllParamsSchema,
@@ -96,6 +97,7 @@ export {
   AgentFilesPurgeParamsSchema,
   AgentFilesPurgeResultSchema,
   AgentFilesPurgeErrorCodeSchema,
+  RuntimeStartErrorCodeSchema,
   type WorkspaceProvisionParams,
   type WorkspaceProvisionResult,
   type WorkspaceProvisionErrorCode,
@@ -111,6 +113,7 @@ export {
   type AgentFilesPurgeParams,
   type AgentFilesPurgeResult,
   type AgentFilesPurgeErrorCode,
+  type RuntimeStartErrorCode,
 } from './protocol.js';
 
 const FrameIdSchema = z.string().min(1);
@@ -258,6 +261,23 @@ export type AgentFilesPurgeWireError = z.infer<
   typeof AgentFilesPurgeWireErrorSchema
 >;
 
+// D4.e-6: runtime_start widens its wire error with the same per-command
+// scoping. The daemon now resolves all host paths and fails closed; the
+// backend reads `workspace_not_provisioned` (backfill + retry) vs
+// `registry_unavailable` (hard fail) off this arm.
+export const RuntimeStartWireErrorSchema = z
+  .object({
+    code: z.union([
+      ResponseErrorSchema.shape.code,
+      RuntimeStartErrorCodeSchema,
+    ]),
+    message: z.string(),
+  })
+  .strict();
+export type RuntimeStartWireError = z.infer<
+  typeof RuntimeStartWireErrorSchema
+>;
+
 /**
  * Source of truth for D2 server-issued commands. The runtime_* entries
  * are the D2.0 request surface; rotate_token is D2.f's transport-local
@@ -269,16 +289,17 @@ export type AgentFilesPurgeWireError = z.infer<
  *
  * Default `error` is `ResponseErrorSchema` (the five generic
  * transport-level codes). Commands that may legitimately surface
- * typed daemon-business errors (`agent_materialize` plus the D4.e
+ * typed daemon-business errors (`agent_materialize`; the D4.e
  * workspace data-plane commands `workspace_provision` /
- * `agent_workspace_index` / `agent_workspace_read` / `agent_l2_seed` / `agent_files_purge`) override with their
- * own wider schema.
+ * `agent_workspace_index` / `agent_workspace_read` / `agent_l2_seed` / `agent_files_purge`;
+ * and `runtime_start` — D4.e-6, codes `workspace_not_provisioned` /
+ * `registry_unavailable`) override with their own wider schema.
  */
 export const outboundServerCommandSchemas = {
   runtime_start: {
     params: RuntimeStartParamsSchema,
     result: RuntimeStartResultSchema,
-    error: ResponseErrorSchema,
+    error: RuntimeStartWireErrorSchema,
   },
   runtime_stop: {
     params: RuntimeStopParamsSchema,

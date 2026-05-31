@@ -49,6 +49,7 @@ import {
 } from './agent-materialize/index.js';
 import {
   WorkspaceRegistry,
+  WorkspaceRegistryError,
   WorkspaceProvisionError,
   provisionWorkspace,
   AgentWorkspaceIndexError,
@@ -60,6 +61,10 @@ import {
   type RegistryBinding,
 } from './workspace-registry/index.js';
 import { readAgentWorkspace } from './agent-workspace-read/index.js';
+import {
+  RuntimeStartResolveError,
+  type RuntimeStartResolveDeps,
+} from './runtime-start-resolve.js';
 import {
   buildDaemonInstanceId,
   defaultRuntimePidRootDir,
@@ -178,6 +183,14 @@ export interface RunDaemonOptions {
         logger: DaemonLogger;
         daemonInstanceId: string;
         runtimePidRootDir: string | null;
+        /**
+         * D4.e-6 — host path resolution deps for `runtime_start`. The
+         * daemon resolves semantic workspace/agent refs to absolute host
+         * paths via these (registry for `regular`, `computeAgentDir` for
+         * `agent_home`), fail-closed. `runDaemon` builds them from the
+         * workspace registry; the factory threads them into `Supervisor`.
+         */
+        runtimeStartResolveDeps: RuntimeStartResolveDeps;
       }) => SupervisorContract)
     | null;
   /**
@@ -365,14 +378,6 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     readyEvent,
     dispatchCommand: command => commandForwarder(command),
   });
-  const supervisor = opts.supervisorFactory
-    ? opts.supervisorFactory({
-        emit: event => broadcaster(event),
-        logger,
-        daemonInstanceId,
-        runtimePidRootDir,
-      })
-    : undefined;
   // D4.e-1 — workspace registry wiring. The registry is the daemon's
   // sole authority for host-local workspace paths (invariant I1). It is
   // namespaced per control-plane binding `{server_origin, host_id}`:
@@ -408,6 +413,55 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     }
     return outboundSupervisor.currentBinding();
   };
+  // D4.e-6 — runtime_start path resolution deps. The wire options are
+  // semantic-only; the supervisor resolves regular-workspace paths via the
+  // registry here (fail-closed) and agent-home via `computeAgentDir` (inside
+  // `resolveRuntimeStartPaths`). Built lazily per start so the standalone
+  // binding (known only post-attach) is current — same pattern as the
+  // data-plane handlers below. A `WorkspaceRegistryError` is mapped to the
+  // typed runtime_start taxonomy: `not_provisioned` → recoverable
+  // `workspace_not_provisioned` (backend may backfill + retry); a foreign /
+  // corrupt registry, or no binding at all, → hard `registry_unavailable`.
+  const runtimeStartResolveDeps = {
+    homeDir: opts.testHooks?.agentMaterializeHomeDir,
+    resolveRegularWorkspacePath: (workspaceId: string): string => {
+      const binding = resolveRegistryBinding();
+      if (binding == null) {
+        throw new RuntimeStartResolveError(
+          'registry_unavailable',
+          'daemon not attached to a control plane; cannot resolve workspace registry binding',
+        );
+      }
+      const registry = new WorkspaceRegistry({
+        stateDir: workspaceRegistryStateDir,
+        binding,
+        silverhandStateRoot,
+        legacyWorkspacesRoot,
+      });
+      try {
+        return registry.resolve(workspaceId);
+      } catch (err) {
+        if (err instanceof WorkspaceRegistryError) {
+          throw new RuntimeStartResolveError(
+            err.code === 'not_provisioned'
+              ? 'workspace_not_provisioned'
+              : 'registry_unavailable',
+            err.message,
+          );
+        }
+        throw err;
+      }
+    },
+  };
+  const supervisor = opts.supervisorFactory
+    ? opts.supervisorFactory({
+        emit: event => broadcaster(event),
+        logger,
+        daemonInstanceId,
+        runtimePidRootDir,
+        runtimeStartResolveDeps,
+      })
+    : undefined;
   const dispatcher = new IntentDispatcher({
     logger,
     startedAt,

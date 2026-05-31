@@ -200,7 +200,13 @@ async function bootEmbeddedRig(): Promise<EmbeddedRigInternals> {
     daemonIdentityPath: null,
     runtimePidRootDir,
     testHooks: { agentMaterializeHomeDir: agentHomeDir },
-    supervisorFactory: ({ emit, logger, daemonInstanceId, runtimePidRootDir: pidRoot }) =>
+    supervisorFactory: ({
+      emit,
+      logger,
+      daemonInstanceId,
+      runtimePidRootDir: pidRoot,
+      runtimeStartResolveDeps,
+    }) =>
       new Supervisor({
         emit,
         logger,
@@ -209,6 +215,7 @@ async function bootEmbeddedRig(): Promise<EmbeddedRigInternals> {
         spawnFn,
         daemonInstanceId,
         runtimePidRootDir: pidRoot,
+        runtimeStartResolveDeps,
         initLivenessSilenceMs: 10_000,
         initPreProtocolCapMs: 10_000,
         initPostProtocolMs: 10_000,

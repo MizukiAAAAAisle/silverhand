@@ -165,7 +165,6 @@ async function makeStandaloneStalenessFixture(): Promise<StandaloneStalenessFixt
     events: publisher,
     transport: () => controller,
     logger,
-    silverhandDir: join(tmpdir(), 'silverhand-d5a4-staleness-sh'),
     workspacesRoot,
     silverhandCli: { command: 'silverhand', args: [] },
     agentTokens: new AgentTokenStore(),

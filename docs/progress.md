@@ -4,6 +4,61 @@
 
 ---
 
+## 2026-05-30 — Remote backend D4.e-6：runtime_start 语义化 + M1 closure
+
+### 背景
+
+D4.e 把 host-local path 解析全部移交 daemon。D4.e-1…-5 切完
+create/list/member-add/delete/read 五条数据面路径后，唯一残留是
+`runtime_start`：backend 仍从 `workspace_path` 推导 agent-home 路径并把
+`workspace.path` / `agent.home_dir` 下发到 wire（carve-out）。D4.e-6 撤销该
+carve-out，是 **M1 closure 的最后一道闸**。
+
+### 实现锚点
+
+- **Wire（`packages/host/src/protocol.ts`）**：`runtime_start` workspace ref
+  收窄到 `{id,name,kind}`、agent ref 到 `{id,name}`，均 `.strict()`；
+  `home_dir` 加入 `FORBIDDEN_RUNTIME_START_OPTION_KEYS`（嵌套也禁）。新增
+  `RuntimeStartErrorCodeSchema = {workspace_not_provisioned,
+  registry_unavailable}`，按 per-command scoping union 进 `runtime_start` 的
+  error schema（不让外来 typed code 漏到它的 error arm），outbound frame schema
+  同步。
+- **Daemon resolver（`daemon/runtime-start-resolve.ts`）**：
+  `resolveRuntimeStartPaths(options, deps)` 把语义 ref →
+  `ResolvedStartOptions`（内部带路径形态）：`agent_home` + `agent.home_dir`
+  走 `computeAgentDir`，`regular` 走注入的 `resolveRegularWorkspacePath`
+  （registry）。失败抛 typed `RuntimeStartResolveError`。Supervisor 在
+  binary/prompt/spawn **之前** resolve（fail-closed：未 provision 的 regular
+  workspace 不 spawn）；`run.ts` 把 `WorkspaceRegistryError` 映射成 typed code。
+- **Backend builder（`runtime/runtime-start-options.ts`）**：纯语义，零
+  `node:path`/`node:fs`、零 `workspace_path`/`home_dir`。
+- **Backend bounded lazy backfill（`runtime/outbound-event-fanout.ts`）**：
+  dispatch `runtime_start` 前，对它引用的 regular workspace（primary +
+  memory-index；`agent_home` 跳过）先 `WorkspaceRegistryBackfiller.ensure`
+  重新绑定。`ok`/`noop` → dispatch；`partial`/`failed` → 不 dispatch + 把已
+  claim 的 deliveries rollback 回 pending（保留 retry 锚点）。这补上
+  cold-start / hydrate→pending-replay 这条本会卡死 daemon-side fail-closed 的
+  迁移洞（Cindy `2A_y70Aue5X1SlOr`）。
+- **A1 dependency-guard（`dependency-guard-no-agent-host-fs.test.ts`）**：扩到
+  path-emission 半边——runtime_start builder 不 import `node:path`/`node:fs`、
+  不引用 host-path 字段；`home_dir` 在整个 `backend/src` 不出现。
+
+### Gates
+
+- `pnpm -r typecheck` clean（6 projects）。
+- backend full 1458 pass | 1 skip（118 files）；host full 827 pass（37 files）。
+- 新增：`runtime-start-resolve.test.ts`、protocol 语义-ref reject + typed-error
+  taxonomy、supervisor fail-closed、2 条 runtime_start typed-error wire fixtures、
+  fanout backfill-before-runtime_start（成功序 + 失败回滚）。
+
+### 结论
+
+A1/A2/A7 → DONE，I1/I6 完整成立。`docs/d4-e-acceptance.md` 收为 D4.e-1…-6
+全闭，**M1 closure 可宣告**。Commit `0d4f3db`（+ doc-pin `00d5e82`，+ Cindy
+P1/P2 fixup `b0a1d35`）。
+
+---
+
 ## 2026-05-30 — Remote backend D4.e-1 3b：workspace path 主权移交 daemon
 
 ### 背景

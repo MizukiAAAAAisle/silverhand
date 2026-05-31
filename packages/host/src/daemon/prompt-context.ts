@@ -5,7 +5,10 @@ import type {
   InjectedFileContent,
   WorkspaceMemoryIndexEntry,
 } from '@silverhand/shared';
-import type { StartOptions } from '../protocol.js';
+import type {
+  ResolvedStartOptions,
+  ResolvedWorkspaceRef,
+} from './runtime-start-resolve.js';
 
 export const MEMORY_INJECT_CAP_BYTES = 16 * 1024;
 export const CONSENSUS_INJECT_CAP_BYTES = 4 * 1024;
@@ -37,7 +40,7 @@ export async function readFileWithCap(
 }
 
 export async function buildPromptContextFromRuntimeStartOptions(
-  options: StartOptions,
+  options: ResolvedStartOptions,
 ): Promise<DriverPromptContext> {
   const roleSystemPrompt = await readFile(
     join(options.agent.home_dir, 'system_prompt.md'),
@@ -86,7 +89,7 @@ export async function buildPromptContextFromRuntimeStartOptions(
 }
 
 export function buildWorkspaceMemoryIndexFromRuntimeStartOptions(
-  options: StartOptions,
+  options: ResolvedStartOptions,
 ): WorkspaceMemoryIndexEntry[] {
   return options.workspace_memory_index.map(workspace => {
     const isCurrent = workspace.id === options.workspace.id;
@@ -100,7 +103,7 @@ export function buildWorkspaceMemoryIndexFromRuntimeStartOptions(
 }
 
 function activeProfilePromptDir(
-  workspace: StartOptions['workspace'],
+  workspace: ResolvedWorkspaceRef,
   agentId: string,
 ): string {
   if (workspace.kind === 'agent_home') return '.';
@@ -108,7 +111,7 @@ function activeProfilePromptDir(
 }
 
 function memoryDirFor(
-  workspace: StartOptions['workspace'],
+  workspace: ResolvedWorkspaceRef,
   agentId: string,
 ): string {
   if (workspace.kind === 'agent_home') return workspace.path;

@@ -210,7 +210,6 @@ async function makeTwoDaemonFixture(): Promise<TwoDaemonFixture> {
     events: publisher,
     transport: () => controller,
     logger,
-    silverhandDir: join(tmpdir(), 'silverhand-c6-silverhand'),
     workspacesRoot,
     silverhandCli: { command: 'silverhand', args: [] },
     agentTokens: new AgentTokenStore(),

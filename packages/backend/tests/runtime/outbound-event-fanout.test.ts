@@ -31,6 +31,8 @@ import {
   OutboundRuntimeEventFanout,
   outboundEventToEventFrame,
 } from '../../src/runtime/outbound-event-fanout.js';
+import { WorkspaceRegistryBackfiller } from '../../src/runtime/workspace-registry-backfill.js';
+import type { OutboundFrameAdapter } from '../../src/runtime/outbound-frame-adapter.js';
 import { RunStateCache } from '../../src/runtime/run-state-cache.js';
 import { DbRuntimeStatusProjector } from '../../src/runtime/status-projector.js';
 import type { HostWsServerController } from '../../src/ws/host-ws-server.js';
@@ -426,6 +428,127 @@ describe('OutboundRuntimeEventFanout', () => {
       expect(wakeFix.transport.calls.some(call => call.kind === 'runtime_start')).toBe(false);
     } finally {
       wakeFix.cleanup();
+    }
+  });
+
+  it('D4.e-6 — re-binds a legacy regular workspace (workspace_provision) BEFORE runtime_start, and the runtime_start frame carries NO host paths', async () => {
+    const fix = makeFixture({
+      runtime: 'codex',
+      workspaceRegistryBackfiller: ({ transport, workspaces }) =>
+        new WorkspaceRegistryBackfiller({
+          workspaces,
+          outboundFrameAdapter: () =>
+            transport as unknown as OutboundFrameAdapter,
+        }),
+    });
+    try {
+      enqueueMessage(fix, 'start me');
+      await expect(
+        fix.fanout.startDeliveryBacked(fix.channelId, fix.agentId),
+      ).resolves.toBe(true);
+
+      const kinds = fix.transport.calls.map(c => c.kind);
+      const provIdx = kinds.indexOf('workspace_provision');
+      const startIdx = kinds.indexOf('runtime_start');
+      // The legacy regular workspace is re-bound FIRST, then runtime_start.
+      expect(provIdx).toBeGreaterThanOrEqual(0);
+      expect(startIdx).toBeGreaterThan(provIdx);
+
+      // The provision forwards the stored path as `requested_path` (the
+      // backfiller never assembles a path) — this is a provision/backfill
+      // seam, where carrying a host path is still legitimate.
+      const prov = fix.transport.calls[provIdx]!.params;
+      expect(prov).toMatchObject({ kind: 'regular' });
+      expect(typeof prov.requested_path).toBe('string');
+
+      // But the runtime_start frame is SEMANTIC-only: no path/home_dir
+      // anywhere in the options tree (carve-out revoked, D4.e-6).
+      const start = fix.transport.calls[startIdx]!.params;
+      const json = JSON.stringify(start);
+      expect(json).not.toMatch(/"path"/);
+      expect(json).not.toMatch(/"home_dir"/);
+      const options = start.options as {
+        workspace: Record<string, unknown>;
+        agent: Record<string, unknown>;
+        workspace_memory_index: Record<string, unknown>[];
+      };
+      expect(Object.keys(options.workspace).sort()).toEqual(['id', 'kind', 'name']);
+      expect(Object.keys(options.agent).sort()).toEqual(['id', 'name']);
+      for (const entry of options.workspace_memory_index) {
+        expect(Object.keys(entry).sort()).toEqual(['id', 'kind', 'name']);
+      }
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('D4.e-6 — a failed backfill BLOCKS runtime_start and keeps the rows pending for retry', async () => {
+    const fix = makeFixture({
+      runtime: 'codex',
+      workspaceRegistryBackfiller: () =>
+        ({
+          ensure: (hostId: string, rows: { id: string; workspace_path: string }[]) =>
+            Promise.resolve({
+              hostId,
+              status: 'failed' as const,
+              provisioned: [],
+              alreadyBound: [],
+              failed: rows.map(r => ({
+                id: r.id,
+                code: 'daemon_unavailable' as const,
+                message: 'daemon offline',
+                retriable: true,
+              })),
+            }),
+        }) as unknown as WorkspaceRegistryBackfiller,
+    });
+    try {
+      const delivery = enqueueMessage(fix, 'start me');
+      // No registry binding ⇒ do NOT dispatch runtime_start (would jam the
+      // daemon-side fail-closed); bail and keep the rows pending.
+      await expect(
+        fix.fanout.startDeliveryBacked(fix.channelId, fix.agentId),
+      ).resolves.toBe(false);
+      expect(fix.transport.calls.some(c => c.kind === 'runtime_start')).toBe(false);
+      // The claimed rows are rolled back to pending: a retry anchor, not a loss.
+      expect(
+        fix.inbox.listPending(fix.channelId, fix.agentId).map(p => p.inboxId),
+      ).toEqual([delivery.inboxId]);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('D4.e-6 — fails closed (I4) when a referenced workspace is owned by a different host: no workspace_provision, no runtime_start', async () => {
+    const fix = makeFixture({
+      runtime: 'codex',
+      workspaceRegistryBackfiller: ({ transport, workspaces }) =>
+        new WorkspaceRegistryBackfiller({
+          workspaces,
+          outboundFrameAdapter: () =>
+            transport as unknown as OutboundFrameAdapter,
+        }),
+    });
+    try {
+      const delivery = enqueueMessage(fix, 'start me');
+      // Forge an I4 violation: the conversation's (only) workspace now claims a
+      // DIFFERENT (real) host than the agent's. The host-equality gate must
+      // fire BEFORE the backfill, so neither workspace_provision nor
+      // runtime_start is dispatched, and the rows stay pending.
+      const otherHostId = new HostRepo(fix.db).create('host-other', 'local').id;
+      fix.db
+        .prepare(`UPDATE workspaces SET workspace_host_id = ?`)
+        .run(otherHostId);
+      await expect(
+        fix.fanout.startDeliveryBacked(fix.channelId, fix.agentId),
+      ).resolves.toBe(false);
+      expect(fix.transport.calls.some(c => c.kind === 'workspace_provision')).toBe(false);
+      expect(fix.transport.calls.some(c => c.kind === 'runtime_start')).toBe(false);
+      expect(
+        fix.inbox.listPending(fix.channelId, fix.agentId).map(p => p.inboxId),
+      ).toEqual([delivery.inboxId]);
+    } finally {
+      fix.cleanup();
     }
   });
 
@@ -949,7 +1072,14 @@ interface Fixture {
 }
 
 function makeFixture(
-  opts: { runtime?: RuntimeKind; clearSessionExitTimeoutMs?: number } = {},
+  opts: {
+    runtime?: RuntimeKind;
+    clearSessionExitTimeoutMs?: number;
+    workspaceRegistryBackfiller?: (ctx: {
+      transport: FakeTransport;
+      workspaces: WorkspaceRepo;
+    }) => WorkspaceRegistryBackfiller;
+  } = {},
 ): Fixture {
   const { db, viewerUserId, localHostId } = openTestDb();
   const workspacesRoot = join(tmpdir(), 'silverhand-outbound-fanout-test');
@@ -983,18 +1113,19 @@ function makeFixture(
       events.push({ conv, kind: payload.kind, payload: payload.payload }),
   };
   const transport = new FakeTransport();
+  const backfiller = opts.workspaceRegistryBackfiller?.({ transport, workspaces });
   const fanout = new OutboundRuntimeEventFanout({
     db,
     events: publisher,
     transport: () => transport,
     logger: SILENT_LOGGER,
-    silverhandDir: join(tmpdir(), 'silverhand-outbound-fanout-silverhand'),
     workspacesRoot,
     silverhandCli: { command: 'silverhand', args: [] },
     agentTokens: new AgentTokenStore(),
     serverUrl: () => 'http://127.0.0.1:1',
     proxyPolicy: () => ({ url: null, allowlist: [] }),
     activityLog: null,
+    ...(backfiller ? { workspaceRegistryBackfiller: backfiller } : {}),
     ...(opts.clearSessionExitTimeoutMs !== undefined
       ? { clearSessionExitTimeoutMs: opts.clearSessionExitTimeoutMs }
       : {}),
@@ -1165,6 +1296,17 @@ class FakeTransport implements HostWsServerController {
         ...((params as { startup_delivery?: unknown }).startup_delivery
           ? { startup_delivery_accepted: true }
           : {}),
+      }) as Promise<OutboundServerCommandResult<K>>;
+    }
+    if (kind === 'workspace_provision') {
+      // D4.e-6 — the lazy backfill re-binds a legacy regular workspace by
+      // re-provisioning it with its stored path; the daemon ack is the
+      // authoritative bound path (here, the requested path, idempotently).
+      const requested = (params as { requested_path?: string }).requested_path;
+      return Promise.resolve({
+        ok: true,
+        provisioned: true,
+        bound_workspace_path: requested ?? '/host/ws/provisioned',
       }) as Promise<OutboundServerCommandResult<K>>;
     }
     if (kind === 'runtime_clear_session') {

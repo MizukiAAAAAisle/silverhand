@@ -48,6 +48,8 @@ import {
 } from '../../protocol.js';
 import type { DaemonLogger } from '../logger.js';
 import { buildPromptContextFromRuntimeStartOptions } from '../prompt-context.js';
+import type { RuntimeStartResolveDeps } from '../runtime-start-resolve.js';
+import { resolveRuntimeStartPaths } from '../runtime-start-resolve.js';
 import {
   unlinkRuntimePidfile,
   writeRuntimePidfile,
@@ -128,6 +130,18 @@ export interface SupervisorOptions {
   /** Daemon-side structured logger (§3.4). Used for spawn / signal /
    *  exit lifecycle lines. */
   logger: DaemonLogger;
+  /**
+   * D4.e-6 — host path resolution deps for `runtime_start`. The wire
+   * options are SEMANTIC-only (no `path`/`home_dir`); the supervisor
+   * resolves every absolute host path via these deps just before building
+   * the prompt context + spawn cwd — `regular` workspaces via the registry
+   * (`resolveRegularWorkspacePath`), `agent_home` via `computeAgentDir` — and
+   * fails closed (typed `RuntimeStartResolveError`) when a regular workspace
+   * is unbound. Required (not optional) so a missing wire is a typed
+   * decision, never a silent path-resolution gap — same philosophy as
+   * `supervisorFactory` being required-but-nullable.
+   */
+  runtimeStartResolveDeps: RuntimeStartResolveDeps;
   /** Optional injection for tests:
    *   - `driverFor` lets tests substitute a fake `Driver` so they can
    *     drive `Supervisor` against a controlled binary;
@@ -187,6 +201,7 @@ export class Supervisor implements SupervisorContract {
   private readonly handles = new Map<string, RuntimeHandle>();
   private readonly emit: (event: EventFrame) => void;
   private readonly logger: DaemonLogger;
+  private readonly runtimeStartResolveDeps: RuntimeStartResolveDeps;
   private readonly driverFor: (kind: RuntimeKind) => Driver;
   private readonly resolveBinary: (
     kind: RuntimeKind,
@@ -223,6 +238,7 @@ export class Supervisor implements SupervisorContract {
   constructor(opts: SupervisorOptions) {
     this.emit = opts.emit;
     this.logger = opts.logger;
+    this.runtimeStartResolveDeps = opts.runtimeStartResolveDeps;
     this.driverFor = opts.driverFor ?? getDefaultDriver;
     this.resolveBinary = opts.resolveBinary ?? defaultResolveBinary;
     this.spawnFn = opts.spawnFn ?? nodeSpawn;
@@ -335,6 +351,19 @@ export class Supervisor implements SupervisorContract {
     const startOptions = params.options;
     const runtimeKind = startOptions.driver.kind;
 
+    // D4.e-6 — resolve every host path from the semantic wire options
+    // (registry for `regular`, `computeAgentDir` for `agent_home`). Throws a
+    // typed `RuntimeStartResolveError` (→ `workspace_not_provisioned` /
+    // `registry_unavailable`) if a regular workspace is unbound; the
+    // dispatcher projects it as the typed wire error. Done after the
+    // idempotent + cooldown gates so an already-running handle never pays a
+    // registry lookup, and before any spawn work so we never fork a child
+    // against an unresolved cwd.
+    const resolvedOptions = resolveRuntimeStartPaths(
+      startOptions,
+      this.runtimeStartResolveDeps,
+    );
+
     const driver = this.driverFor(runtimeKind);
     const binary = await this.resolveBinary(runtimeKind, driver.binary);
     if (!binary) {
@@ -344,7 +373,7 @@ export class Supervisor implements SupervisorContract {
     }
 
     const promptCtx =
-      await buildPromptContextFromRuntimeStartOptions(startOptions);
+      await buildPromptContextFromRuntimeStartOptions(resolvedOptions);
     const systemPromptText = buildSystemPromptFor(runtimeKind, promptCtx);
     const spawnPrep = await prepareSpawnFiles({
       conversationId: params.conversation_id,
@@ -362,7 +391,7 @@ export class Supervisor implements SupervisorContract {
     const spawnCtx = {
       agentId: params.agent_id,
       agentName: startOptions.agent.name,
-      workspacePath: startOptions.workspace.path,
+      workspacePath: resolvedOptions.workspace.path,
       cliSessionId: startOptions.driver.cli_session_id,
       model: startOptions.driver.model,
       reasoningEffort: startOptions.driver.reasoning_effort,

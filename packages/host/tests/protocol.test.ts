@@ -14,8 +14,10 @@ import {
   RuntimeStopResultSchema,
   RuntimeWakeParamsSchema,
   RuntimeWakeResultSchema,
+  RuntimeStartErrorCodeSchema,
   encodeFrame,
   intentSchemas,
+  intentErrorSchema,
   splitNdjson,
 } from '../src/protocol.js';
 import { testStartOptions } from './_helpers/runtime-start-options.js';
@@ -240,6 +242,7 @@ describe('protocol — runtime_* registry', () => {
     for (const key of [
       'cwd',
       'workspace_path',
+      'home_dir',
       'system_prompt_path',
       'spawn_dir',
       'system_prompt',
@@ -405,6 +408,65 @@ describe('protocol — runtime_* registry', () => {
       });
       expect(r.success).toBe(true);
     }
+  });
+});
+
+describe('protocol — runtime_start D4.e-6 semantic refs + typed errors', () => {
+  it('workspace ref rejects a host-local `path` field (carve-out revoked)', () => {
+    const parsed = RuntimeStartParamsSchema.safeParse({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      options: {
+        ...testStartOptions(),
+        workspace: {
+          ...testStartOptions().workspace,
+          path: '/host/ws/ws1',
+        },
+      },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('agent ref rejects a host-local `home_dir` field (carve-out revoked)', () => {
+    const parsed = RuntimeStartParamsSchema.safeParse({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      options: {
+        ...testStartOptions(),
+        agent: {
+          ...testStartOptions().agent,
+          home_dir: '/host/agents/a1',
+        },
+      },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('workspace_memory_index entries reject a host-local `path` field', () => {
+    const parsed = RuntimeStartParamsSchema.safeParse({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      options: {
+        ...testStartOptions(),
+        workspace_memory_index: [
+          { id: 'ws1', name: 'primary', kind: 'regular', path: '/host/ws/ws1' },
+        ],
+      },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('runtime_start error taxonomy: accepts its two typed codes + the generic codes, rejects a foreign typed code', () => {
+    const schema = intentErrorSchema('runtime_start');
+    // The two runtime_start-specific codes.
+    for (const code of RuntimeStartErrorCodeSchema.options) {
+      expect(schema.safeParse({ code, message: 'x' }).success, code).toBe(true);
+    }
+    // A generic response-error code is still admissible on this arm.
+    expect(schema.safeParse({ code: 'internal_error', message: 'x' }).success).toBe(true);
+    // A foreign per-command typed code (agent_materialize's) must NOT leak
+    // onto runtime_start's error arm — per-command scoping (D1 round-1 P1).
+    expect(schema.safeParse({ code: 'agent_dir_collision', message: 'x' }).success).toBe(false);
   });
 });
 

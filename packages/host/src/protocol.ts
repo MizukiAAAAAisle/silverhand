@@ -277,13 +277,12 @@ const RuntimeStartWorkspaceRefSchema = z
     id: z.string().min(1),
     name: z.string().min(1),
     kind: WorkspaceKindSchema,
-    /**
-     * Server DB metadata: the daemon-host local filesystem base for
-     * this workspace. This is allowed to cross the boundary as data.
-     * Derivatives such as cwd, per-spawn dirs, and system_prompt_path
-     * remain daemon-local and are forbidden below.
-     */
-    path: z.string().min(1),
+    // D4.e-6: SEMANTIC ref only — no `path`. The carve-out that let
+    // `workspace.path` cross the boundary as "server DB metadata" is
+    // REVOKED (design §3.5). The daemon is the sole authority for
+    // host-local workspace paths: it resolves `regular` workspaces via
+    // its registry (`registry.resolve(id)`) and `agent_home` via
+    // `computeAgentDir(agentId)`. No path field travels on this wire.
   })
   .strict();
 
@@ -291,11 +290,11 @@ const RuntimeStartAgentRefSchema = z
   .object({
     id: z.string().min(1),
     name: z.string().min(1),
-    /**
-     * Server DB metadata for the agent's L1 profile base. The daemon
-     * resolves `system_prompt.md` under this base locally.
-     */
-    home_dir: z.string().min(1),
+    // D4.e-6: SEMANTIC ref only — no `home_dir`. Revokes the prior
+    // carve-out (design §3.5). The daemon resolves the agent's L1
+    // profile base locally as `computeAgentDir(agentId)` — identical
+    // to how `agent_materialize`/`agent_workspace_read` already resolve
+    // it — and reads `system_prompt.md` under it.
   })
   .strict();
 
@@ -342,6 +341,11 @@ const RuntimeStartEnvPolicySchema = z
 const FORBIDDEN_RUNTIME_START_OPTION_KEYS = new Set([
   'cwd',
   'workspace_path',
+  // D4.e-6: `home_dir` joins the forbidden set — the agent L1 base is
+  // daemon-resolved (`computeAgentDir`), never server-supplied. The
+  // strict() ref schemas already reject it at the top level; listing it
+  // here also bans it from appearing nested anywhere in options.
+  'home_dir',
   'system_prompt_path',
   'spawn_dir',
   'system_prompt',
@@ -379,10 +383,12 @@ function rejectForbiddenRuntimeStartOptionKeys(
 }
 
 /**
- * Runtime start metadata. This schema is deliberately strict: path
- * base metadata (`agent.home_dir`, `workspace.path`) is allowed as
- * typed server DB state, but server-derived execution artifacts and
- * prompt bytes are not.
+ * Runtime start metadata. This schema is deliberately strict and, as of
+ * D4.e-6, carries NO host-local paths: `agent`/`workspace`/
+ * `workspace_memory_index` are semantic refs (`id`/`name`/`kind`) and the
+ * daemon resolves every absolute path locally (registry for `regular`,
+ * `computeAgentDir` for `agent_home`). Server-derived execution artifacts
+ * and prompt bytes were never allowed and remain forbidden below.
  */
 export const StartOptionsSchema = z
   .object({
@@ -1215,6 +1221,35 @@ const AgentMaterializeIpcErrorSchema = z
   })
   .strict();
 
+// ── D4.e-6: runtime_start typed-error taxonomy ───────────────────────
+//
+// Before D4.e-6 `runtime_start` shipped paths and could not fail on path
+// resolution, so it used only the 5 generic codes. Now the daemon
+// resolves `workspace.path`/`home_dir` itself (registry + computeAgentDir)
+// and FAILS CLOSED when it can't — design §3.5 / Cindy criterion 2. Two
+// daemon-business codes carry that failure with the same per-command
+// scoping as agent_materialize (a typed code here cannot leak onto any
+// other intent's wire error):
+//   - `workspace_not_provisioned`: the regular workspace id is not bound
+//     in the daemon registry (legacy row never provisioned / never
+//     read-path-backfilled). Recoverable: the backend may backfill via
+//     `workspace_provision` and retry.
+//   - `registry_unavailable`: the registry itself can't be consulted
+//     (daemon not attached to a control plane, or foreign/corrupt
+//     registry file). Hard fail-closed.
+export const RuntimeStartErrorCodeSchema = z.enum([
+  'workspace_not_provisioned',
+  'registry_unavailable',
+]);
+export type RuntimeStartErrorCode = z.infer<typeof RuntimeStartErrorCodeSchema>;
+
+const RuntimeStartIpcErrorSchema = z
+  .object({
+    code: z.union([ResponseErrorCodeSchema, RuntimeStartErrorCodeSchema]),
+    message: z.string(),
+  })
+  .strict();
+
 
 // ── D4.e-1: workspace_provision + agent_workspace_index ───────────────
 //
@@ -1646,6 +1681,12 @@ export const intentSchemas = {
   runtime_start: {
     params: RuntimeStartParamsSchema,
     result: RuntimeStartResultSchema,
+    // D4.e-6 — daemon now resolves all paths and fails closed on
+    // unresolvable workspaces; the typed taxonomy lets the backend
+    // tell `workspace_not_provisioned` (backfill + retry) from
+    // `registry_unavailable` (hard fail) apart from a generic
+    // `internal_error`. Per-command scoped like agent_materialize.
+    error: RuntimeStartIpcErrorSchema,
   },
   runtime_stop: {
     params: RuntimeStopParamsSchema,

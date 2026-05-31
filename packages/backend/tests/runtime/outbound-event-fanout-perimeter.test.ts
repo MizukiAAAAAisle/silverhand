@@ -169,7 +169,6 @@ function makePerimeterFixture(): PerimeterFixture {
     events: publisher,
     transport: () => transport,
     logger,
-    silverhandDir: join(tmpdir(), 'silverhand-outbound-perimeter-silverhand'),
     workspacesRoot,
     silverhandCli: { command: 'silverhand', args: [] },
     agentTokens: new AgentTokenStore(),

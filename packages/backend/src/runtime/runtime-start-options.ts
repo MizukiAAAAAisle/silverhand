@@ -1,4 +1,3 @@
-import { join } from 'node:path';
 import type { RuntimeStartParams } from '@silverhand/host';
 import type {
   AgentDto,
@@ -23,7 +22,6 @@ export interface BuildRuntimeStartOptionsInput {
   sessionAgent: ConversationAgentDto;
   members: MemberDto[];
   workspacesForAgent: WorkspaceDto[];
-  silverhandDir: string;
   silverhandCli: SilverhandCliLauncher;
   serverUrl: string;
   agentToken: string;
@@ -31,6 +29,14 @@ export interface BuildRuntimeStartOptionsInput {
   modelOverride?: string | null;
 }
 
+/**
+ * Build SEMANTIC `runtime_start` options (D4.e-6 / invariant I1): the
+ * backend ships `agent`/`workspace`/`workspace_memory_index` as identity
+ * refs only (`id`/`name`/`kind`). It does NOT compute, read, or transmit
+ * any host-local path — the daemon is the sole authority and resolves every
+ * absolute path itself (registry for `regular`, `computeAgentDir` for
+ * `agent_home`). No `node:path`/`node:fs` import lives here.
+ */
 export function buildRuntimeStartOptions(
   input: BuildRuntimeStartOptionsInput,
 ): RuntimeStartParams['options'] {
@@ -42,7 +48,6 @@ export function buildRuntimeStartOptions(
     agent: {
       id: input.agent.id,
       name: input.agent.name,
-      home_dir: agentHomeDir(input),
     },
     workspace: runtimeWorkspaceRef(input.workspace),
     workspace_memory_index: indexedWorkspaces.map(runtimeWorkspaceRef),
@@ -82,21 +87,14 @@ export function buildRuntimeStartOptions(
   };
 }
 
-function runtimeWorkspaceRef(workspace: WorkspaceDto): RuntimeStartParams['options']['workspace'] {
+function runtimeWorkspaceRef(
+  workspace: WorkspaceDto,
+): RuntimeStartParams['options']['workspace'] {
   return {
     id: workspace.id,
     name: workspace.name,
     kind: workspace.workspace_kind,
-    path: workspace.workspace_path,
   };
-}
-
-function agentHomeDir(input: BuildRuntimeStartOptionsInput): string {
-  return (
-    input.workspacesForAgent.find(
-      w => w.workspace_kind === 'agent_home' && w.owner_agent_id === input.agent.id,
-    )?.workspace_path ?? join(input.silverhandDir, 'agents', input.agent.id)
-  );
 }
 
 function ensureCurrentWorkspaceIndexed(

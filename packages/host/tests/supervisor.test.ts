@@ -37,7 +37,11 @@ import type { Driver, DriverSpawnContext, ParsedEvent } from '../src/drivers/ind
 import { createDaemonLogControl, type DaemonLogger } from '../src/daemon/logger.js';
 import type { EventFrame, RuntimeStartResult } from '../src/protocol.js';
 import { runtimePidFilePath } from '../src/daemon/runtime-pidfiles.js';
-import { testStartOptions } from './_helpers/runtime-start-options.js';
+import {
+  testStartOptions,
+  testRuntimeStartResolveDeps,
+} from './_helpers/runtime-start-options.js';
+import { RuntimeStartResolveError } from '../src/daemon/runtime-start-resolve.js';
 
 const FIXTURE = join(__dirname, '_fixtures', 'echo-runtime.cjs');
 /** 3c-b watchdog fixture — produces zero bytes until killed. See
@@ -146,6 +150,7 @@ function makeSupervisor(opts: {
   spawnFn?: (b: string, a: ReadonlyArray<string>, o: SpawnOptions) => ChildProcess;
   daemonInstanceId?: string;
   runtimePidRootDir?: string | null;
+  runtimeStartResolveDeps?: ReturnType<typeof testRuntimeStartResolveDeps>;
 } = {}): {
   supervisor: Supervisor;
   events: EventFrame[];
@@ -166,6 +171,8 @@ function makeSupervisor(opts: {
     spawnFn,
     daemonInstanceId: opts.daemonInstanceId,
     runtimePidRootDir: opts.runtimePidRootDir,
+    runtimeStartResolveDeps:
+      opts.runtimeStartResolveDeps ?? testRuntimeStartResolveDeps(),
     sigtermToSigkillMs: opts.sigtermToSigkillMs ?? 50,
     sigkillTimeoutMs: opts.sigkillTimeoutMs ?? 200,
   });
@@ -234,7 +241,12 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
 
   it('hydrates prompt/spawn/env on daemon side from typed runtime_start options and drains startup_delivery', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'silverhand-d2g-hydrate-'));
-    const agentHome = join(dir, 'agents', 'a1');
+    // D4.e-6: options are semantic-only; the daemon resolves home_dir via
+    // computeAgentDir(agentId, homeDir) and the regular workspace via the
+    // injected resolver. Lay out L1 under computeAgentDir so the resolved
+    // home_dir points at the system_prompt.md we write.
+    const homeDir = dir;
+    const agentHome = join(dir, '.silverhand', 'agents', 'a1');
     const workspacePath = join(dir, 'workspace');
     const memoryDir = join(workspacePath, '.silverhand', 'agents', 'a1');
     mkdirSync(agentHome, { recursive: true });
@@ -265,6 +277,10 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       resolveBinary: async (_kind, fallback) => fallback,
       spawnFn: (bin, args, options) =>
         spawn(execPath, [bin, ...args.slice(1)], options),
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps({
+        homeDir,
+        workspacePath,
+      }),
       sigtermToSigkillMs: 50,
       sigkillTimeoutMs: 200,
     });
@@ -276,8 +292,6 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
         options: testStartOptions({
           conversationId: 'c1',
           agentId: 'a1',
-          agentHomeDir: agentHome,
-          workspacePath,
         }),
         startup_delivery: {
           delivery_ids: [11],
@@ -399,8 +413,35 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       logger: silentLogger(),
       driverFor: () => makeFakeDriver(),
       resolveBinary: async () => null,
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps(),
     });
     await expect(supervisor.start(baseStartParams)).rejects.toThrow(/not found on PATH/);
+  });
+
+  it('start fails closed when the registry resolver throws (D4.e-6 — no spawn for an unprovisioned regular workspace)', async () => {
+    let spawned = false;
+    const { supervisor } = makeSupervisor({
+      spawnFn: (bin, args, options) => {
+        spawned = true;
+        return spawn(execPath, [bin, ...args.slice(1)], options);
+      },
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps({
+        resolveRegularWorkspacePath: () => {
+          throw new RuntimeStartResolveError(
+            'workspace_not_provisioned',
+            'ws1 is not bound on this host',
+          );
+        },
+      }),
+    });
+    // The typed error surfaces verbatim (the dispatcher maps its `.code`
+    // onto the runtime_start error arm); path resolution runs BEFORE
+    // binary/prompt/spawn, so nothing is spawned.
+    await expect(supervisor.start(baseStartParams)).rejects.toMatchObject({
+      code: 'workspace_not_provisioned',
+    });
+    expect(spawned).toBe(false);
+    expect(supervisor.status({}).runtimes).toHaveLength(0);
   });
 });
 
@@ -777,6 +818,7 @@ describe('Supervisor 3a — hard stop / exit', () => {
       driverFor: () => driver,
       resolveBinary: async (_kind, fallback) => fallback,
       spawnFn,
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps(),
       sigtermToSigkillMs: 50,
       sigkillTimeoutMs: 200,
     });
@@ -1114,6 +1156,7 @@ function makeSupervisorWithDriver(driver: Driver, opts: {
     driverFor: () => driver,
     resolveBinary: async (_kind, fallback) => fallback,
     spawnFn,
+    runtimeStartResolveDeps: testRuntimeStartResolveDeps(),
     sigtermToSigkillMs: opts.sigtermToSigkillMs ?? 50,
     sigkillTimeoutMs: opts.sigkillTimeoutMs ?? 200,
   });
@@ -1532,6 +1575,7 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B2: deferred startup_delive
       driverFor: () => driver,
       resolveBinary: async (_kind, fallback) => fallback,
       spawnFn,
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps(),
       sigtermToSigkillMs: 50,
       sigkillTimeoutMs: 200,
     });
@@ -1877,6 +1921,7 @@ function make3cSupervisor(
     driverFor: () => driver,
     resolveBinary: async (_kind, fallback) => fallback,
     spawnFn,
+    runtimeStartResolveDeps: testRuntimeStartResolveDeps(),
     sigtermToSigkillMs: opts.sigtermToSigkillMs ?? 50,
     sigkillTimeoutMs: opts.sigkillTimeoutMs ?? 200,
     initWatchdogMs: opts.initWatchdogMs,

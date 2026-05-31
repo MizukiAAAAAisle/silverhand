@@ -56,18 +56,31 @@ import {
   buildRuntimeStartOptions,
   type RuntimeStartProxyPolicy,
 } from './runtime-start-options.js';
+import type { WorkspaceRegistryBackfiller } from './workspace-registry-backfill.js';
 
 export interface OutboundRuntimeEventFanoutOptions {
   db: Database;
   events: EventPublisher;
   transport: () => OutboundFrameAdapter | null;
   logger: BackendLogger;
-  silverhandDir: string;
   workspacesRoot: string;
   silverhandCli: SilverhandCliLauncher;
   agentTokens: AgentTokenStore;
   serverUrl: () => string;
   proxyPolicy: () => RuntimeStartProxyPolicy;
+  /**
+   * D4.e-6 — bounded lazy backfill of the daemon workspace registry before
+   * a `runtime_start` dispatch. `runtime_start` carries semantic-only refs;
+   * the daemon resolves regular-workspace paths from its registry and fails
+   * closed if a legacy row was never provisioned. A cold-start /
+   * hydrate→pending-replay can reach `runtime_start` without any prior
+   * read-path (`list_workspaces` / `GET workspace` / member-add) having
+   * triggered the D4.e-1 lazy backfill, so the start path backfills the
+   * regular workspaces it is about to reference (Cindy `2A_y70Aue5X1SlOr`).
+   * Optional: when unwired (legacy/test) the daemon-side fail-closed remains
+   * the final boundary.
+   */
+  workspaceRegistryBackfiller?: WorkspaceRegistryBackfiller;
   logDir?: string;
   activityLog?: ActivityLogWriter | null;
   /**
@@ -850,6 +863,36 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     if (claimed.length === 0) return false;
     const batch = this.pendingBatch(conversationId, agentId, claimed);
     const options = this.runtimeStartOptions(conversationId, agentId);
+    // D4.e-6 — I4 host-equality gate (Cindy P1-2). BEFORE any backfill/dispatch
+    // side effect, verify every workspace this start references is owned by the
+    // dispatch host. A corrupt conversation row or workspace membership that
+    // points at ANOTHER host's workspace must never make us forward that host's
+    // `workspace_path` as a `requested_path` to this daemon (fs binding) or
+    // dispatch `runtime_start` against it. This mirrors the inbound-event
+    // `assertEventOwnership` perimeter; on the start path the blast radius is
+    // larger (daemon-side binding/spawn), so it fails closed here too.
+    if (!this.runtimeStartHostsConsistent(hostId, conversationId, agentId)) {
+      this.inboxRepo.rollbackInFlight(batch.deliveryIds, connectionId);
+      return false;
+    }
+    // D4.e-6 — bounded lazy backfill before dispatch. `runtime_start` carries
+    // semantic refs only; the daemon resolves regular-workspace paths from its
+    // registry and fails closed on a legacy row it never provisioned. A
+    // cold-start / hydrate→pending-replay can reach here with no prior
+    // read-path having backfilled the registry, so re-bind the regular
+    // workspaces this start references first (Cindy `2A_y70Aue5X1SlOr`). On a
+    // partial/failed backfill we do NOT dispatch: roll the claimed rows back
+    // to pending (preserving the retry anchor) and bail — the daemon-side
+    // fail-closed remains the final boundary if we proceed anyway.
+    const backfillOk = await this.backfillRuntimeStartWorkspaces(
+      hostId,
+      conversationId,
+      agentId,
+    );
+    if (!backfillOk) {
+      this.inboxRepo.rollbackInFlight(batch.deliveryIds, connectionId);
+      return false;
+    }
     const transport = this.requireTransport();
     try {
       const result = await transport.sendCommand(
@@ -920,12 +963,101 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       sessionAgent,
       members: this.membership.listMembers(conversation.id),
       workspacesForAgent: this.workspaces.listForAgent(agent.id),
-      silverhandDir: this.opts.silverhandDir,
       silverhandCli: this.opts.silverhandCli,
       serverUrl: this.opts.serverUrl(),
       agentToken: this.opts.agentTokens.issue(conversationId, agentId),
       proxy: this.opts.proxyPolicy(),
     });
+  }
+
+  /**
+   * D4.e-6 I4 gate (Cindy P1-2): every workspace a `runtime_start` references
+   * — the primary conversation workspace + the agent's memory-index workspaces
+   * (`listForAgent`) — MUST be owned by the dispatch host. Under I4 an agent's
+   * memberships are all same-host, so a mismatch is DB corruption (e.g. a
+   * conversation whose `workspace_host_id` disagrees with the agent's host, or
+   * another host's regular workspace leaking into the membership set). We fail
+   * closed rather than dispatch `workspace_provision` / `runtime_start` for a
+   * foreign-host workspace. Returns true iff every referenced workspace is on
+   * `hostId`. Both kinds are checked (a foreign `agent_home` is corruption too).
+   */
+  private runtimeStartHostsConsistent(
+    hostId: string,
+    conversationId: string,
+    agentId: string,
+  ): boolean {
+    const conversation = this.conversations.get(conversationId);
+    if (!conversation) return true; // upstream builder fails; nothing to gate
+    const referenced = [
+      this.workspaces.get(conversation.workspace_id),
+      ...this.workspaces.listForAgent(agentId),
+    ];
+    for (const ws of referenced) {
+      if (!ws || ws.workspace_host_id === hostId) continue;
+      this.opts.logger.warn(
+        {
+          kind: 'inbox',
+          action: 'runtime_start_workspace_host_mismatch',
+          hostId,
+          conversationId,
+          agent_id: agentId,
+          workspace_id: ws.id,
+          workspace_host_id: ws.workspace_host_id,
+        },
+        'runtime_start blocked: a referenced workspace is owned by a different host (I4 violation); refusing to backfill/dispatch',
+      );
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * D4.e-6 — re-bind into the daemon registry the regular workspaces a
+   * `runtime_start` is about to reference (primary conversation workspace +
+   * the regular entries of the agent's memory index). `agent_home` is skipped
+   * — the daemon resolves it homedir-side (`computeAgentDir`), never via the
+   * registry. Forwards each row's legacy `workspace_path` as `requested_path`
+   * (the backfiller never assembles a path); a `noop`/`ok` clears the dispatch
+   * to proceed, a `partial`/`failed` blocks it (caller keeps the pending
+   * anchor for retry). When no backfiller is wired the daemon-side fail-closed
+   * is the only boundary, so we proceed. Returns true iff dispatch may go on.
+   */
+  private async backfillRuntimeStartWorkspaces(
+    hostId: string,
+    conversationId: string,
+    agentId: string,
+  ): Promise<boolean> {
+    const backfiller = this.opts.workspaceRegistryBackfiller;
+    if (!backfiller) return true;
+    const conversation = this.conversations.get(conversationId);
+    if (!conversation) return true;
+    const candidates = [
+      this.workspaces.get(conversation.workspace_id),
+      ...this.workspaces.listForAgent(agentId),
+    ];
+    const rows: { id: string; workspace_path: string }[] = [];
+    const seen = new Set<string>();
+    for (const ws of candidates) {
+      if (!ws || ws.workspace_kind !== 'regular' || seen.has(ws.id)) continue;
+      seen.add(ws.id);
+      rows.push({ id: ws.id, workspace_path: ws.workspace_path });
+    }
+    if (rows.length === 0) return true;
+    const backfill = await backfiller.ensure(hostId, rows);
+    if (backfill.status === 'ok' || backfill.status === 'noop') return true;
+    this.opts.logger.warn(
+      {
+        kind: 'inbox',
+        action: 'runtime_start_workspace_backfill_incomplete',
+        hostId,
+        conversationId,
+        agent_id: agentId,
+        status: backfill.status,
+        failed: backfill.failed.map(f => ({ id: f.id, code: f.code })),
+      },
+      'runtime_start blocked: workspace registry backfill incomplete; rows kept pending for retry',
+    );
+    return false;
   }
 
   getAgentRunStates(conversationId: string): AgentRunState[] {

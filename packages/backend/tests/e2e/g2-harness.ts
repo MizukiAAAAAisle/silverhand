@@ -486,7 +486,13 @@ export async function bootDaemonWithSupervisor(
     runtimePidRootDir,
     daemonIdentityPath: null,
     testHooks: opts.testHooks,
-    supervisorFactory: ({ emit, logger, daemonInstanceId, runtimePidRootDir: pidRoot }) =>
+    supervisorFactory: ({
+      emit,
+      logger,
+      daemonInstanceId,
+      runtimePidRootDir: pidRoot,
+      runtimeStartResolveDeps,
+    }) =>
       new Supervisor({
         emit,
         logger,
@@ -496,6 +502,7 @@ export async function bootDaemonWithSupervisor(
         spawnFn: opts.spawnFn ?? defaultSpawnFn,
         daemonInstanceId,
         runtimePidRootDir: pidRoot,
+        runtimeStartResolveDeps,
         // Tight watchdogs so a misbehaving fixture surfaces fast
         // rather than hanging at the production-default 5min cap.
         initLivenessSilenceMs: 10_000,

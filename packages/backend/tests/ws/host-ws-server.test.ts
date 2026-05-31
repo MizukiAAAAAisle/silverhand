@@ -981,23 +981,21 @@ function commandCases(hostId: string): CommandCase[] {
 
 function runtimeStartOptions(): unknown {
   return {
+    // D4.e-6: SEMANTIC refs only — no `home_dir`/`path` crosses the wire.
     agent: {
       id: 'a1',
       name: 'alice',
-      home_dir: '/Users/test/.silverhand/agents/a1',
     },
     workspace: {
       id: 'w1',
       name: 'workspace',
       kind: 'regular',
-      path: '/Users/test/workspace/project',
     },
     workspace_memory_index: [
       {
         id: 'w1',
         name: 'workspace',
         kind: 'regular',
-        path: '/Users/test/workspace/project',
       },
     ],
     session: {
