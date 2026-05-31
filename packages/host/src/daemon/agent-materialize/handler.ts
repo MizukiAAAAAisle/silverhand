@@ -55,6 +55,7 @@ import {
   readSentinel,
   writeSentinelAtomic,
 } from './sentinel.js';
+import { DaemonTypedError } from '../typed-error.js';
 
 /**
  * Typed handler failure. Thrown by `materializeAgent` and
@@ -64,7 +65,7 @@ import {
  * #3 hold: the dispatcher MUST NOT squash quota / unavailable /
  * collision into `internal_error`.
  */
-export class AgentMaterializeError extends Error {
+export class AgentMaterializeError extends DaemonTypedError {
   constructor(
     readonly code: AgentMaterializeErrorCode,
     message: string,

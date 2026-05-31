@@ -4,6 +4,119 @@
 
 ---
 
+## 2026-05-30 — Remote backend D4.e-1 3b：workspace path 主权移交 daemon
+
+### 背景
+
+D4.e-1 的不变量 I1 = **daemon 是 host-local path 的唯一权威**。pre-D4.e
+backend 直接从 `workspaces.workspace_path` 列推导并使用/下发 host fs 路径。
+3b 把 create + list 两条路径切到 daemon 的两个 intent
+（`workspace_provision` / `agent_workspace_index`），server 只说
+`workspace_id` / `agent_id`，路径由 daemon 校验、绑定、解析。
+
+shiki 定的方案 A（单 intent）：folder picker / 沙箱 typed path / legacy
+backfill 统一走 `workspace_provision { workspace_id, kind, requested_path? }
+→ { ok, provisioned, bound_workspace_path }`。server 永不解释路径——只转发，
+daemon 校验+绑定。`bound_workspace_path` 是过渡 seam（backend 仅作为 legacy
+`workspace_path` 列缓存，绝不再解释拼路径）。
+
+### 切片与实现锚点
+
+- **3b-1（`11e18bc`）create → provision**：新增
+  `packages/backend/src/runtime/workspace-data-plane.ts`
+  （`resolveOutboundForHost` + `mapDataPlaneError {code,status,retriable}` +
+  `dispatchWorkspaceProvision` / `dispatchAgentWorkspaceIndex`）。`POST
+  /api/workspaces`：先解析 host→adapter→预生成 id
+  （`WorkspaceRepo.newWorkspaceId`）→ dispatch provision（body
+  `workspace_path` → `requested_path` 逐字；缺省 → daemon 托管默认）→ 仅在绑定
+  成功后 insert，`workspacePath = bound ack`（无 orphan row）。撤掉 standalone
+  `workspace_path_not_supported` 409（server 不再解释路径）。
+- **3b-2（`5fd0e76`）registry idempotent-first + backfiller**：
+  - registry 不变量修正（窄化）：existing id 重新绑定到**它当前已持有的同一
+    绝对路径** → 在 requested-path guards 之前直接 no-op
+    （`isAbsolute(req) && resolve(req)===existing.path`）；unknown id / 不同
+    路径仍走完整 managed-root/state-root/overlap 校验。让 managed-default row
+    的 backfill 可幂等，恶意把别的 id 指向 managed root 仍被拒。
+  - `runtime/workspace-registry-backfill.ts`：对某 host 每个 legacy regular
+    row 用其 stored `workspace_path` 作 `requested_path` 重新 provision；只
+    dispatch provision、不拼路径；只用 daemon ack 回写 legacy cache；返回结构化
+    结果（provisioned/alreadyBound/failed + status noop|ok|partial|failed）；
+    per-host in-flight guard；仅 full-ok 才 memoize，failed/partial 可重试
+    （非 boot-once）。
+- **3b-3（`47deb57`）list → daemon-stamped agent_dir**：`list_workspaces`
+  删掉 `join(workspace_path,...)` 推导，改为
+  `ensure(hostId)` backfill → `agent_workspace_index` → 用 daemon entries 填
+  `agent_dir`。**单 owning-host 不变量**（I4）：`Set(workspace_host_id).size>1`
+  → 显式 409 `workspace_host_ambiguous`（绝不跨 daemon 静默 fan-out / 不 partial
+  泄漏），符合 M1 sticky ownership。fail-closed：offline/backfill 全失败 → 503
+  `host_attach_pending`；index `unresolved`（含 partial-backfill 残留）→ 409
+  `workspace_unresolved`；失败响应只有 `{error,code}`，永不 workspace_path
+  回退。backfill **纯 lazy**（read-path 触发，无 boot warm-up——connect 时
+  fire-and-forget provision 会打挂不建模该 intent 的 focused e2e；read path
+  本身是正确性保证且可重试，Cindy 接受）。
+- **3b-4（本次）renderer 最小 + 文档**：`CreateWorkspaceDialog` 按 host kind
+  分流——local desktop host → 原生 folder picker 为主；remote / 沙箱 host →
+  默认 daemon 托管目录 + “高级”手动输入路径（无本地选择器）。文案改为反映
+  “路径由该 host 的 daemon 校验”。底层 IPC（`dialog:pickDirectory`）、
+  host-provenance gate、`workspace_path` 可选透传此前已就位。
+
+### Review / 协作
+
+@Cindy 全程按 commit review（方案 A + 各红线）：requested_path 仅经
+create→provision、bound_workspace_path 只作 legacy cache；read 严格 fail-closed
+不回退；standalone 放开但 server 不解释；backfill 结构化不吞错、可重试；list
+单-host invariant 用显式错误而非多 host fan-out。idempotent-first 收窄、
+lazy-only 偏离、host-ambiguous 收口均已 Cindy 确认。
+
+### 状态 / 质量门
+
+- chain：3b-1 `11e18bc` → 3b-2 `5fd0e76` → 3b-3 `47deb57` → 3b-4 → 3b fixups。
+  工作树 `silverhand-wt-d4-e`，**未 push**（按 shiki 纪律）。
+- gates：`pnpm -r typecheck` ✅；backend full **1405 pass / 1 skip**；host
+  **747 pass**；desktop typecheck ✅。
+- I6 完整 dependency-guard（seedAgentL2 / runtime_start 仍读 workspace_path）
+  顺延 D4.e-5；3b 只钉死 list DTO 不再从 workspace_path 推导。后续：slice ④
+  adapter contract + parity e2e（embedded + standalone）。
+
+### 3b review fixups（Cindy `3V4qEvxO` + `L-HIYiUYb75sBGpv`）
+
+- **P1-1 初始 member seed gate 改为「共盘」判定**：seed gate 之前是
+  `deploymentMode === 'standalone'`，挡不住 embedded 里显式选 owned
+  `kind='remote'` host（`assertOwnedActiveHost` 不限制 host kind）的情况——
+  那样会把 remote daemon 的 path 当 embedded 本机路径写（I1 违例）。改为
+  「backend 与 owning host 共盘」才允许：`deploymentMode === 'embedded' &&
+  host.kind === 'local'`，其余（standalone 任意 host / embedded+remote host）
+  provision 之前 409 `workspace_member_seed_unsupported`（无 orphan bind / 无
+  row）。pins：standalone+真 member、embedded+owned remote host+member 各一。
+- **P1-2 backfill 收窄到「当前响应可见的 regular rows」**：原 `ensure(hostId)`
+  枚举该 host 全部 regular row，会让同 host 上不可见/不相关的坏 legacy row
+  挡住当前 agent 的 list（fail-closed 粒度错位）。改为
+  `ensure(hostId, rows)`，由 list route 传当前 `listForAgent` 里的 visible
+  regular rows；agent_home 仍由 daemon 按 homedir 解析、不入 registry。memoize
+  改为 per-(host,id)、in-flight guard 改为 per-(host,id)。删除已无用的
+  `WorkspaceRepo.listRegularForHost`。pins：同 host 非 member 坏 row 不进当前
+  backfill（list 仍 200、该 id 无 provision call）；archived member row 仍被
+  backfill 绑定并返回 daemon-stamped agent_dir。
+- **P2 测试保真**：`FakeHostWsServerController` 的 `workspaceProvisionAckOverride`
+  现在也把 override 的 `bound_workspace_path` 写入 in-memory registry，避免
+  「ack 了但 registry 没写」的假象；list 的 kind-branched agent_dir 断言改为
+  daemon-stamped 口径（只断言 shape，不从 workspace_path 反推）。
+
+### 已知限制（future cleanup，非 3b 阻塞）
+
+- **create 无 2PC，无补偿**：create path 是「daemon provision 成功 → DB
+  insert」。若 insert 因唯一名 race / DB 错误失败，daemon registry 会留下一个
+  orphan binding（无 cleanup intent 回滚）。它**不会污染 server read path**
+  （孤儿 binding 无 DB row 引用，list/index 都不会解析到它），但会**占用 daemon
+  registry 的 path 槽位**：registry 有 cross-workspace path overlap /
+  `path_conflict` 校验，孤儿 binding 可能阻止后续用同一 `requested_path` 创建新
+  workspace，需 future cleanup / 补偿。后续 acceptance doc 需显式标注此 no-2PC
+  residue；彻底解法（provision + insert 的两阶段补偿，或 insert-first + 失败回滚
+  provision）留作 future cleanup。
+
+
+---
+
 ## 2026-05-26 — Remote backend V1 prep Stage C.6：server-config bearer 退役
 
 - `server-config.json.auth_token` 软退役：shared schema 只做 optional read-compat，新写配置省略该字段，desktop 不再生成随机 long-lived bearer。

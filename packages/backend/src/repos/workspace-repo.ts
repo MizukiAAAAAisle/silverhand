@@ -1,20 +1,26 @@
 import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
 import { dirname, join, relative, resolve } from 'node:path';
-import type {
-  AgentDto,
-  AgentRow,
-  UserRow,
-  WorkspaceDto,
-  WorkspaceKind,
-  WorkspaceMemberDto,
-  WorkspaceMemberRow,
-  WorkspaceRow,
-  WorkspaceUserMemberDto,
-  WorkspaceUserMemberRow,
+import {
+  agentHomeWorkspaceId,
+  type AgentDto,
+  type AgentRow,
+  type UserRow,
+  type WorkspaceDto,
+  type WorkspaceKind,
+  type WorkspaceMemberDto,
+  type WorkspaceMemberRow,
+  type WorkspaceRow,
+  type WorkspaceUserMemberDto,
+  type WorkspaceUserMemberRow,
 } from '@silverhand/shared';
 import { agentRowToDto } from './agent-repo.js';
 import { RuntimeHostPlacementError } from '../host-placement-errors.js';
+
+// Re-exported from the shared single source (`agent-home-workspace.ts`)
+// so existing backend importers (`./repos/workspace-repo.js`) keep
+// working while the convention has one definition shared with the daemon.
+export { agentHomeWorkspaceId } from '@silverhand/shared';
 
 function newId(): string {
   return randomBytes(12).toString('base64url');
@@ -210,6 +216,7 @@ export class WorkspaceRepo {
   }
 
   insert(params: {
+    id?: string;
     name: string;
     description: string | null;
     workspaceKind?: WorkspaceKind;
@@ -222,7 +229,10 @@ export class WorkspaceRepo {
     if (isUnderAgentHomeRoot(params.workspacePath, this.opts.workspacesRoot)) {
       throw new Error('regular workspace_path cannot be under agent home root');
     }
-    const id = newId();
+    // D4.e-1 3b: callers that must dispatch `workspace_provision` BEFORE the
+    // row exists (the registry keys by workspace_id) pre-generate the id via
+    // `newWorkspaceId()` and pass it here so the provision and the row agree.
+    const id = params.id ?? newId();
     const now = Date.now();
     this.db
       .prepare(
@@ -308,6 +318,32 @@ export class WorkspaceRepo {
     this.db
       .prepare(`UPDATE workspaces SET ${sets.join(', ')} WHERE id = ?`)
       .run(...values);
+    return this.get(id);
+  }
+
+  /**
+   * D4.e-1 3b: pre-generate a workspace id so the caller can dispatch
+   * `workspace_provision` (which binds the daemon registry by workspace_id)
+   * BEFORE inserting the row, and only insert on a successful provision ack.
+   */
+  newWorkspaceId(): string {
+    return newId();
+  }
+
+  /**
+   * D4.e-1 3b: refresh the legacy `workspace_path` cache column from the
+   * daemon's `bound_workspace_path` ack. The column is a TRANSITIONAL cache
+   * of the daemon-authoritative path (registry is the real authority); this
+   * is the ONLY writer for the regular-workspace path after create/backfill.
+   */
+  updateWorkspacePathCache(id: string, boundWorkspacePath: string): WorkspaceDto | null {
+    this.db
+      .prepare(
+        `UPDATE workspaces
+         SET workspace_path = ?, updated_at = ?
+         WHERE id = ? AND workspace_kind = 'regular'`,
+      )
+      .run(boundWorkspacePath, Date.now(), id);
     return this.get(id);
   }
 
@@ -511,10 +547,6 @@ export class WorkspaceRepo {
   workspacePathFor(name: string): string {
     return join(this.opts.workspacesRoot, name);
   }
-}
-
-export function agentHomeWorkspaceId(agentId: string): string {
-  return `wsah_${agentId}`;
 }
 
 function isUnderAgentHomeRoot(workspacePath: string, workspacesRoot: string): boolean {

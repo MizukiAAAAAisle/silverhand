@@ -8,6 +8,7 @@ import {
   intentSchemas,
   LooseAnyFrameSchema,
   MAX_FRAME_BYTES,
+  ResponseErrorCodeSchema,
   ResponseErrorSchema,
   RuntimeStartResultSchema,
   RuntimeStopParamsSchema,
@@ -16,7 +17,6 @@ import {
   RuntimeWakeResultSchema,
   type IntentName,
 } from '../src/protocol.js';
-import { AgentMaterializeErrorCodeSchema } from '../src/outbound-protocol.js';
 import {
   schemaForFixture,
   wireFixtures,
@@ -47,6 +47,28 @@ import {
  */
 
 const ALL_INTENTS: readonly IntentName[] = Object.keys(intentSchemas) as IntentName[];
+
+/**
+ * Per-intent typed error codes — the union arm of `intentSchemas[intent]
+ * .error.code` that is NOT the generic `ResponseErrorCodeSchema`. Returns
+ * [] for intents with no `error` schema or whose code schema is the bare
+ * generic enum (no extra typed taxonomy). Single source: the schema, not
+ * a hand-coded per-intent list (Cindy D4.e P1-2).
+ */
+function intentTypedErrorCodes(intent: IntentName): readonly string[] {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const entry = intentSchemas[intent] as any;
+  const errorSchema = entry?.error;
+  if (!errorSchema) return [];
+  const codeSchema = errorSchema.shape?.code;
+  if (!codeSchema) return [];
+  // ZodUnion of [ResponseErrorCodeSchema, <TypedCodeSchema>].
+  const arms = codeSchema._def?.options;
+  if (!Array.isArray(arms)) return [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const typedArm = arms.find((a: any) => a !== ResponseErrorCodeSchema);
+  return (typedArm?.options as string[] | undefined) ?? [];
+}
 
 // EventFrameSchema is a discriminatedUnion('event', [...]); pull the
 // canonical event names out of the schema itself so the coverage check
@@ -323,25 +345,30 @@ describe('wire contract — fixture catalogue invariants', () => {
     ).toEqual([]);
   });
 
-  it('every agent_materialize typed error code has at least one fixture', () => {
-    // Derived from AgentMaterializeErrorCodeSchema so adding a new
-    // typed code in outbound-protocol.ts immediately fails this
-    // assertion until a fixture lands. Mirrors the generic-error
-    // catalogue test above; Cindy D2 P2-1.
-    const expectedCodes = AgentMaterializeErrorCodeSchema.options;
+  it('every typed intent has a fixture for each of its typed error codes', () => {
+    // Generalized from the prior agent_materialize-only pin (Cindy D4.e
+    // P1-2): derive the per-intent typed taxonomy straight from
+    // `intentSchemas[intent].error` — the union arm that is NOT the
+    // generic `ResponseErrorCodeSchema`. Any intent that declares a typed
+    // error schema (agent_materialize + the D4.e workspace intents, plus
+    // any future one) is covered automatically; a new typed code or a new
+    // typed intent fails this until a byte-level fixture lands. No
+    // hard-coded intent list to drift.
     const missing: string[] = [];
-    for (const code of expectedCodes) {
-      const has = wireFixtures.some((f) => {
-        if (f.kind.kind !== 'response_error_typed') return false;
-        if (f.kind.intent !== 'agent_materialize') return false;
-        const parsed = JSON.parse(f.frame) as { error?: { code?: string } };
-        return parsed.error?.code === code;
-      });
-      if (!has) missing.push(code);
+    for (const intent of ALL_INTENTS) {
+      for (const code of intentTypedErrorCodes(intent)) {
+        const has = wireFixtures.some(f => {
+          if (f.kind.kind !== 'response_error_typed') return false;
+          if (f.kind.intent !== intent) return false;
+          const parsed = JSON.parse(f.frame) as { error?: { code?: string } };
+          return parsed.error?.code === code;
+        });
+        if (!has) missing.push(`${intent}:${code}`);
+      }
     }
     expect(
       missing,
-      `agent_materialize typed error codes missing a fixture: ${missing.join(', ')}`,
+      `typed intents missing a typed-error fixture: ${missing.join(', ')}`,
     ).toEqual([]);
   });
 

@@ -19,6 +19,7 @@ import type { AuthSessionService } from './auth/session.js';
 import type { LogLevelControl } from './logger.js';
 import type { RuntimeHostPlacementControl } from './runtime/host-placement.js';
 import type { OutboundFrameAdapter } from './runtime/outbound-frame-adapter.js';
+import type { WorkspaceRegistryBackfiller } from './runtime/workspace-registry-backfill.js';
 import type { HostWsServerController } from './ws/host-ws-server.js';
 
 export type BackendDeploymentMode = 'embedded' | 'standalone';
@@ -161,6 +162,17 @@ export interface BackendContext {
   /** Late-bound outbound host WebSocket controller for standalone daemon transport. */
   hostWsController?: () => HostWsServerController | null;
   /**
+   * D4.e-1 3b P1-2 (Cindy) — the EXACT host id that shares the backend's
+   * own disk. Set ONLY in embedded mode (= `HostRepo.ensureLocal()` — the
+   * single `local`-named host the desktop runs on); `undefined` in standalone
+   * (the backend is remote, co-located with no host). Server-side L2 seeding
+   * (`seedAgentL2`) on workspace-create is only sound for this exact host, so
+   * the create gate compares `workspace_host_id === coLocatedHostId` rather
+   * than `host.kind === 'local'` — a user can own SEVERAL active local hosts
+   * (a sandbox daemon, a second desktop), and only THIS one is co-located.
+   */
+  coLocatedHostId?: string;
+  /**
    * D5.a-3 P1-3 — late-bound formal server↔daemon dispatch port. Routes
    * that send commands (POST /api/agents materialize, retry) go through
    * this accessor so they never branch on deployment mode. Standalone
@@ -170,6 +182,18 @@ export interface BackendContext {
    * (revoke/disconnect) and is `null` in embedded mode.
    */
   outboundFrameAdapter?: () => OutboundFrameAdapter | null;
+  /**
+   * D4.e-1 3b-2/3b-3 (+ 3b P1-2) — migration backfiller for the daemon
+   * workspace registry. The `list_workspaces` read path calls
+   * `ensure(hostId, rows)` (scoped to the caller's VISIBLE regular rows)
+   * before dispatching `agent_workspace_index` (lazy, on-demand). A single
+   * shared instance memoizes per-`(host,id)` success and collapses concurrent
+   * callers of the same row; a failed id is left un-memoized so a later read
+   * retries (never boot-once). Optional so a minimal embedded boot or a test
+   * harness can omit it (the route then skips backfill and relies on the
+   * index alone).
+   */
+  workspaceRegistryBackfiller?: WorkspaceRegistryBackfiller;
   /**
    * Backend-side facade for agent runtime lifecycle. Services and
    * routes route every spawn / stop / wake / clearSession / inbox

@@ -111,8 +111,13 @@ a second ABI surface). Concretely:
   `agent_materialize` already does.
 - **Regular workspace (M1, locked):** the daemon picks a **deterministic
   daemon-managed path** at provision time — `<daemon-state>/<host-ns>/
-  workspaces/<workspace_id>` (root is daemon-local + identity-namespaced;
-  exact root dir is the daemon's to choose). **D4.e M1 does NOT support
+  workspaces/<workspace-slug>`, where `<host-ns>` = a hash slug of the
+  binding `(server_origin, host_id)` and `<workspace-slug>` = a hash slug
+  of the `workspace_id` (NEVER the raw id — a server-supplied semantic id
+  must not be trusted as a path component; Cindy ① P1). The id remains the
+  registry map key; only the on-disk directory is the slug. Root is
+  daemon-local + identity-namespaced; exact root dir is the daemon's to
+  choose. **D4.e M1 does NOT support
   arbitrary user-chosen folders** — letting the user bind an external
   folder is a later explicit host-control feature, and it must NOT route
   a path back through the backend. The chosen path is recorded in the
@@ -130,6 +135,35 @@ server-held — so the server simply doesn't have it, by design.
 deprecated (the server keys workspaces by id; paths live only on the
 owning daemon). D4.e cannot delete the column in one slice; the
 transitional stance is in §6.1.
+
+### 2.1 Legacy adoption seam — bounded, one-time (Cindy ① ruling)
+
+Regular workspaces created **before** D4.e have no registry entry; their
+real directory is the user-chosen path in the legacy `workspace_path`
+column, NOT a managed path. A route-time fallback that reads that column
+when the registry misses is **rejected** — it would re-pierce I1 and keep
+old/new semantics coexisting indefinitely. Instead D4.e adds a **bounded,
+one-time adoption seam**:
+
+- A migration entry imports each legacy regular workspace's existing
+  `workspace_path` into the daemon registry (`WorkspaceRegistry.adopt`),
+  so users keep their current directory and data.
+- This is the ONE place the daemon accepts a path from the backend, and
+  ONLY for pre-D4.e rows. It is a **migration seam, not a steady-state
+  API** — marked as such in code + tests. After adoption, all formal path
+  resolution (`agent_workspace_index`, seed/purge, runtime_start) reads
+  the registry only; the DB column is never read for path resolution.
+- The daemon still validates the legacy path (does not blindly trust the
+  backend): non-empty absolute, not `/`, not the home dir, not inside the
+  daemon-managed root; idempotent on identical path; an `adopt_conflict`
+  (different path for an already-bound id) is refused, never overwritten.
+- **No route-time fallback.** If a workspace is neither provisioned nor
+  adopted, ops fail closed (diagnostic error / 503) — the backend never
+  assembles a path to keep running.
+- Slicing: the registry `adopt()` primitive lands in D4.e-1 (with the
+  registry); the backend backfill that enumerates legacy rows and drives
+  adoption lands alongside the route switch in D4.e-3 (so adoption
+  precedes the first registry-only read of those workspaces).
 
 ---
 
@@ -370,9 +404,10 @@ Round-2 (rev3, Cindy locked):
    paths never read it (§6.1).
 3. **`workspace_provision` trigger** → daemon picks a deterministic
    daemon-managed path `<daemon-state>/<host-ns>/workspaces/
-   <workspace_id>`; no arbitrary user-chosen folder in D4.e M1; external
-   folder bind is a later host-control feature that must not route a
-   path through the backend (§2).
+   <workspace-slug>` (both `<host-ns>` and `<workspace-slug>` are hash
+   slugs, never raw ids — Cindy ① P1); no arbitrary user-chosen folder in
+   D4.e M1; external folder bind is a later host-control feature that must
+   not route a path through the backend (§2).
 4. **`agent_dir` mechanism** → route-time daemon resolver via
    `agent_workspace_index`; spawn-time injection rejected (stale under
    dynamic membership) (§3.4).

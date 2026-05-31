@@ -992,3 +992,50 @@ describe('daemonHostConfigFingerprint — D4.a Commit 5b profile_version coverag
     expect(a).not.toEqual(b);
   });
 });
+
+describe('OutboundSupervisor — currentBinding() (D4.e-1 registry namespace source)', () => {
+  let f: SupervisorFixture | null = null;
+  afterEach(() => {
+    f?.cleanup();
+    f = null;
+  });
+
+  it('returns null before any attach (no control-plane binding yet)', () => {
+    f = makeFixture();
+    expect(f.supervisor.currentBinding()).toBeNull();
+  });
+
+  it('exposes {server_origin, host_id} from the attached config after attach', () => {
+    f = makeFixture();
+    const path = f.writeValidConfig();
+    f.supervisor.attach({ config_path: path });
+    // server_url 'http://127.0.0.1:8765' normalizes to its origin;
+    // host_id is carried verbatim. This is the exact tuple the
+    // workspace registry hashes into its namespace slug.
+    expect(f.supervisor.currentBinding()).toEqual({
+      server_origin: 'http://127.0.0.1:8765',
+      host_id: 'host-1',
+    });
+  });
+
+  it('returns null again after detach (binding is cleared with the client)', () => {
+    f = makeFixture();
+    const path = f.writeValidConfig();
+    f.supervisor.attach({ config_path: path });
+    f.supervisor.detach();
+    expect(f.supervisor.currentBinding()).toBeNull();
+  });
+
+  it('returns a defensive copy (mutating the result does not corrupt internal state)', () => {
+    f = makeFixture();
+    const path = f.writeValidConfig();
+    f.supervisor.attach({ config_path: path });
+    const b = f.supervisor.currentBinding();
+    expect(b).not.toBeNull();
+    if (b) b.host_id = 'tampered';
+    expect(f.supervisor.currentBinding()).toEqual({
+      server_origin: 'http://127.0.0.1:8765',
+      host_id: 'host-1',
+    });
+  });
+});

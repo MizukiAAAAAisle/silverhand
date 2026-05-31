@@ -28,16 +28,24 @@ export function CreateWorkspaceDialog({
 }: CreateWorkspaceDialogProps): JSX.Element {
   const [name, setName] = useState('');
   const [workspacePath, setWorkspacePath] = useState('');
+  const [showAdvancedPath, setShowAdvancedPath] = useState(false);
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const { data: agents = [] } = useAgents();
   const createWorkspace = useCreateWorkspace();
   const hostProvenance = useHostProvenanceGate();
+  // Local desktop host → the user can pick a real folder on this machine.
+  // Remote / sandbox host → no native picker (the folder lives on another
+  // machine); default to the daemon-managed path, with an advanced typed
+  // override that the OWNING daemon validates (the server never interprets
+  // the path — D4.e-1).
+  const canPickLocalFolder = hostProvenance.canUseCurrentLocalHostPath;
 
   const reset = () => {
     setName('');
     setWorkspacePath('');
+    setShowAdvancedPath(false);
     setSelectedAgents([]);
     setError(null);
   };
@@ -95,30 +103,61 @@ export function CreateWorkspaceDialog({
 
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="ch-path">工作目录（可选）</Label>
-            <div className="flex gap-2">
-              <Input
-                id="ch-path"
-                value={workspacePath}
-                onChange={e => setWorkspacePath(e.target.value)}
-                placeholder="留空则自动生成在 ~/.silverhand/workspaces/<name>"
-                className="font-mono text-xs"
-              />
-              <Button
-                type="button"
-                variant="outline"
-                size="md"
-                onClick={pickDirectory}
-                disabled={!hostProvenance.canUseCurrentLocalHostPath}
-                title={
-                  hostProvenance.canUseCurrentLocalHostPath
-                    ? undefined
-                    : 'Local host is not available'
-                }
-              >
-                <FolderOpen className="size-4" />
-                浏览
-              </Button>
-            </div>
+            {canPickLocalFolder ? (
+              // Local host: native folder picker is the primary affordance;
+              // the typed input mirrors the picked path and stays editable.
+              <>
+                <div className="flex gap-2">
+                  <Input
+                    id="ch-path"
+                    value={workspacePath}
+                    onChange={e => setWorkspacePath(e.target.value)}
+                    placeholder="留空则由该 host 的 daemon 在其托管目录下自动创建"
+                    className="font-mono text-xs"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="md"
+                    onClick={pickDirectory}
+                  >
+                    <FolderOpen className="size-4" />
+                    浏览
+                  </Button>
+                </div>
+                <span className="text-xs text-text-muted">
+                  路径由该 host 的 daemon 校验与绑定。
+                </span>
+              </>
+            ) : (
+              // Remote / sandbox host: no native picker. Default to the
+              // daemon-managed path; expose a typed override under "高级".
+              <>
+                {!showAdvancedPath ? (
+                  <button
+                    type="button"
+                    className="self-start text-xs text-text-muted underline underline-offset-2"
+                    onClick={() => setShowAdvancedPath(true)}
+                  >
+                    使用 host 托管目录（默认）· 高级：手动指定路径
+                  </button>
+                ) : (
+                  <>
+                    <Input
+                      id="ch-path"
+                      value={workspacePath}
+                      onChange={e => setWorkspacePath(e.target.value)}
+                      placeholder="该 host 上的绝对路径（由其 daemon 校验）"
+                      className="font-mono text-xs"
+                    />
+                    <span className="text-xs text-text-muted">
+                      远程 / 沙箱 host 无法用本地选择器浏览；留空则使用 daemon
+                      托管目录。
+                    </span>
+                  </>
+                )}
+              </>
+            )}
           </div>
 
           <div className="flex flex-col gap-1.5">

@@ -169,10 +169,19 @@ describe('GET /api/agents/:id/schedules', () => {
     const ws = await (
       await http(t).post(
         '/api/workspaces',
-        { name: 'schedules-visible', member_agent_ids: [created.agent.id] },
+        { name: 'schedules-visible' },
         { headers: teammateHeaders },
       )
     ).json() as any;
+    // Membership drives visibility; attach directly since the
+    // create-with-members seed path is gated to the backend's co-located host
+    // and teammate's agent is on a separate local host (post-D4.e).
+    t.ctx.db
+      .prepare(
+        `INSERT INTO workspace_members (workspace_id, agent_id, joined_at)
+         VALUES (?, ?, ?)`,
+      )
+      .run(ws.workspace.id, created.agent.id, Date.now());
     t.ctx.db
       .prepare(
         `INSERT INTO workspace_users (workspace_id, user_id, joined_at)
@@ -274,10 +283,19 @@ describe('POST /api/agents/:id/schedules/:scheduleId/cancel', () => {
     const ws = await (
       await http(t).post(
         '/api/workspaces',
-        { name: 'cancel-visible', member_agent_ids: [created.agent.id] },
+        { name: 'cancel-visible' },
         { headers: teammateHeaders },
       )
     ).json() as any;
+    // Membership drives visibility; attach directly since the
+    // create-with-members seed path is gated to the backend's co-located host
+    // and teammate's agent is on a separate local host (post-D4.e).
+    t.ctx.db
+      .prepare(
+        `INSERT INTO workspace_members (workspace_id, agent_id, joined_at)
+         VALUES (?, ?, ?)`,
+      )
+      .run(ws.workspace.id, created.agent.id, Date.now());
     t.ctx.db
       .prepare(
         `INSERT INTO workspace_users (workspace_id, user_id, joined_at)

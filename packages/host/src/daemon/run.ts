@@ -24,6 +24,8 @@ import {
   installShutdownHandlers,
   releasePidFile,
 } from './lifecycle.js';
+import { dirname, join } from 'node:path';
+import { homedir } from 'node:os';
 import { IntentDispatcher } from './dispatcher.js';
 import { DaemonServer } from './server.js';
 import { createDaemonLogger, type DaemonLogger } from './logger.js';
@@ -45,6 +47,14 @@ import {
   AgentMaterializeError,
   materializeAgent,
 } from './agent-materialize/index.js';
+import {
+  WorkspaceRegistry,
+  WorkspaceProvisionError,
+  provisionWorkspace,
+  AgentWorkspaceIndexError,
+  indexAgentWorkspaces,
+  type RegistryBinding,
+} from './workspace-registry/index.js';
 import {
   buildDaemonInstanceId,
   defaultRuntimePidRootDir,
@@ -202,6 +212,23 @@ export interface RunDaemonOptions {
     agentMaterializeFaultInjector?: (
       params: AgentMaterializeParams,
     ) => AgentMaterializeError | undefined;
+    /**
+     * D4.e-1 — override the workspace registry's state dir (where the
+     * registry JSON + managed workspaces root live). Production derives
+     * it from `dirname(daemonIdentityPath)`; tests point it at a tmp dir
+     * so provisioning never writes into the daemon process's real
+     * `~/.silverhand/daemon`.
+     */
+    workspaceRegistryStateDir?: string;
+    /**
+     * D4.e-1 (Cindy P1-3) — override the silverhand state root used by the
+     * registry's requested-path guard (a caller-proposed path may not live
+     * inside it, except under `workspaces/`). Production derives it from
+     * `dirname(workspaceRegistryStateDir)` (= `~/.silverhand`); tests set it
+     * explicitly so the state-root rejection can be exercised against a tmp
+     * tree without depending on the real `~/.silverhand`.
+     */
+    silverhandStateRoot?: string;
   };
 }
 
@@ -341,6 +368,41 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
         runtimePidRootDir,
       })
     : undefined;
+  // D4.e-1 — workspace registry wiring. The registry is the daemon's
+  // sole authority for host-local workspace paths (invariant I1). It is
+  // namespaced per control-plane binding `{server_origin, host_id}`:
+  //   - Standalone: the live outbound binding (`currentBinding()`), so
+  //     the registry follows exactly the control plane the daemon is
+  //     attached to. Before attach there is no binding → fail-closed.
+  //   - Embedded (local outbound socket present): a fixed
+  //     `local-embedded` origin + the daemon's own identity id, since an
+  //     embedded daemon never attaches a WSS outbound client.
+  // The registry is built lazily per command because the standalone
+  // binding is only known after `host_outbound_attach`.
+  const workspaceRegistryStateDir =
+    opts.testHooks?.workspaceRegistryStateDir ??
+    (daemonIdentityPath !== null
+      ? dirname(daemonIdentityPath)
+      : `${homedir()}/.silverhand/daemon`);
+  // D4.e-1 (Cindy P1-3) — the requested-path guard roots, constructed ONCE
+  // here and injected into every registry build (NOT re-derived via
+  // homedir() inside the handler), so the validate-root can never diverge
+  // from the actual state root under testHook/packaging. The state root is
+  // the parent of the daemon state dir (`~/.silverhand/daemon` →
+  // `~/.silverhand`); the lone allowed child inside it is `workspaces/`
+  // (pre-D4.e generated roots).
+  const silverhandStateRoot =
+    opts.testHooks?.silverhandStateRoot ?? dirname(workspaceRegistryStateDir);
+  const legacyWorkspacesRoot = join(silverhandStateRoot, 'workspaces');
+  const resolveRegistryBinding = (): RegistryBinding | null => {
+    if (localOutboundServer != null) {
+      return {
+        server_origin: 'local-embedded',
+        host_id: daemonIdentity?.daemon_id ?? 'local',
+      };
+    }
+    return outboundSupervisor.currentBinding();
+  };
   const dispatcher = new IntentDispatcher({
     logger,
     startedAt,
@@ -364,6 +426,51 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
       const fault = opts.testHooks?.agentMaterializeFaultInjector?.(params);
       if (fault) throw fault;
       return materializeAgent(params, {
+        homeDir: opts.testHooks?.agentMaterializeHomeDir,
+      });
+    },
+    // D4.e-1 — workspace_provision: bind a regular workspace into the
+    // registry + create its `.silverhand/` skeleton. ONE operation, two
+    // path regimes: no `requested_path` → daemon-managed default; with one
+    // → daemon re-validates the caller-proposed path then binds it (M1
+    // folder picker / sandbox typed path / legacy backfill). Built lazily
+    // so the standalone binding (known only post-attach) is current.
+    workspaceProvisionHandler: async params => {
+      const binding = resolveRegistryBinding();
+      if (binding == null) {
+        throw new WorkspaceProvisionError(
+          'registry_unavailable',
+          'daemon not attached to a control plane; cannot resolve workspace registry binding',
+        );
+      }
+      const registry = new WorkspaceRegistry({
+        stateDir: workspaceRegistryStateDir,
+        binding,
+        silverhandStateRoot,
+        legacyWorkspacesRoot,
+      });
+      return provisionWorkspace(params, { registry, logger });
+    },
+    // D4.e-1 — agent_workspace_index: route-time `agent_dir` resolver.
+    // agent-home dirs resolve from the daemon's homedir (test override via
+    // `agentMaterializeHomeDir`); regular workspaces resolve via the
+    // registry (fail-closed, never from a backend-supplied path).
+    agentWorkspaceIndexHandler: async params => {
+      const binding = resolveRegistryBinding();
+      if (binding == null) {
+        throw new AgentWorkspaceIndexError(
+          'registry_unavailable',
+          'daemon not attached to a control plane; cannot resolve workspace registry binding',
+        );
+      }
+      const registry = new WorkspaceRegistry({
+        stateDir: workspaceRegistryStateDir,
+        binding,
+        silverhandStateRoot,
+        legacyWorkspacesRoot,
+      });
+      return indexAgentWorkspaces(params, {
+        registry,
         homeDir: opts.testHooks?.agentMaterializeHomeDir,
       });
     },

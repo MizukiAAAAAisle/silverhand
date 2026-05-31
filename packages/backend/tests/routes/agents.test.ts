@@ -195,11 +195,21 @@ describe('GET/DELETE /api/agents', () => {
         '/api/workspaces',
         {
           name: 'shared',
-          member_agent_ids: [created.agent.id],
         },
         { headers: teammateHeaders },
       )
     ).json() as any;
+    // Workspace membership is what makes the agent workspace-visible. Create
+    // memberless then attach the member directly: post-D4.e the
+    // create-with-members seed path is gated to the backend's co-located host,
+    // and teammate's agent lives on teammate's own (non-co-located) local host.
+    // The L2 seed is irrelevant to this ACL assertion.
+    t.ctx.db
+      .prepare(
+        `INSERT INTO workspace_members (workspace_id, agent_id, joined_at)
+         VALUES (?, ?, ?)`,
+      )
+      .run(ws.workspace.id, created.agent.id, Date.now());
     t.ctx.db
       .prepare(
         `INSERT INTO workspace_users (workspace_id, user_id, joined_at)
@@ -467,10 +477,19 @@ describe('PATCH /api/agents/:id', () => {
     const ws = await (
       await http(t).post(
         '/api/workspaces',
-        { name: 'visible-ws', member_agent_ids: [created.agent.id] },
+        { name: 'visible-ws' },
         { headers: teammateHeaders },
       )
     ).json() as any;
+    // Membership (not the create-with-members seed) drives visibility — attach
+    // it directly; teammate's agent is on a non-co-located local host so the
+    // seed path is gated post-D4.e.
+    t.ctx.db
+      .prepare(
+        `INSERT INTO workspace_members (workspace_id, agent_id, joined_at)
+         VALUES (?, ?, ?)`,
+      )
+      .run(ws.workspace.id, created.agent.id, Date.now());
     t.ctx.db
       .prepare(
         `INSERT INTO workspace_users (workspace_id, user_id, joined_at)
@@ -598,10 +617,18 @@ describe('POST /api/agents/:id/stop', () => {
     const ws = await (
       await http(t).post(
         '/api/workspaces',
-        { name: 'stop-visible', member_agent_ids: [created.agent.id] },
+        { name: 'stop-visible' },
         { headers: teammateHeaders },
       )
     ).json() as any;
+    // Direct membership = workspace-visible; the create-with-members seed path
+    // is gated to the co-located host and teammate's host is separate.
+    t.ctx.db
+      .prepare(
+        `INSERT INTO workspace_members (workspace_id, agent_id, joined_at)
+         VALUES (?, ?, ?)`,
+      )
+      .run(ws.workspace.id, created.agent.id, Date.now());
     t.ctx.db
       .prepare(
         `INSERT INTO workspace_users (workspace_id, user_id, joined_at)

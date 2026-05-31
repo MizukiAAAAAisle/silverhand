@@ -95,6 +95,13 @@ export {
   type HostOutboundReloadParams,
   type HostOutboundReloadResult,
   type HostOutboundReloadFailureReason,
+  type WorkspaceProvisionParams,
+  type WorkspaceProvisionResult,
+  type WorkspaceProvisionErrorCode,
+  type AgentWorkspaceIndexParams,
+  type AgentWorkspaceIndexResult,
+  type AgentWorkspaceIndexEntry,
+  type AgentWorkspaceIndexErrorCode,
 } from './protocol.js';
 export {
   OUTBOUND_DAEMON_EVENT_KINDS,

@@ -1181,9 +1181,10 @@ export type ResponseErrorCode = z.infer<typeof ResponseErrorCodeSchema>;
  *
  * Default = `ResponseErrorSchema` (the 5 transport-level codes).
  * Intents that may legitimately surface daemon-business typed
- * codes — currently just `agent_materialize` — override with a
- * wider schema that unions the 5 generic codes with the intent's
- * own taxonomy (here, `AgentMaterializeErrorCodeSchema`).
+ * codes — `agent_materialize` and the D4.e workspace data-plane
+ * intents (`workspace_provision`, `agent_workspace_index`) —
+ * override with a wider schema that unions the 5 generic codes with
+ * the intent's own taxonomy (e.g. `AgentMaterializeErrorCodeSchema`).
  *
  * Why per-intent and NOT a single global widened union (Cindy
  * D2 P1-1 + D1 round-1 P1): a global union would let any intent
@@ -1213,6 +1214,187 @@ const AgentMaterializeIpcErrorSchema = z
   .strict();
 
 
+// ── D4.e-1: workspace_provision + agent_workspace_index ───────────────
+//
+// Data-plane intents that make the daemon the sole authority for
+// host-local path resolution of regular workspaces (design rev3
+// 0e995ac §2/§3.1/§3.4). Both are server↔daemon formal semantics like
+// `agent_materialize` (NOT runtime_* control / host_outbound_* plumbing):
+// the backend speaks only semantic ids; the daemon resolves the
+// absolute path via its local workspace registry. Per-command typed
+// error scoping mirrors agent_materialize.
+
+export const WorkspaceProvisionParamsSchema = z
+  .object({
+    workspace_id: z.string().min(1),
+    /**
+     * Semantic classification (backend-owned, from the DB) — NOT a path.
+     * Only `regular` is provisioned here; `agent_home` is materialized
+     * via `agent_materialize` and is rejected with `unsupported_kind`.
+     */
+    kind: WorkspaceKindSchema,
+    /**
+     * OPTIONAL caller-PROPOSED host path for the workspace root (M1
+     * folder-picker on local desktop, or an advanced typed path on a
+     * sandbox/remote host). When ABSENT the daemon self-picks a
+     * deterministic managed path under its own root (the zero-choice
+     * default). When PRESENT the daemon RE-VALIDATES it host-side — a
+     * registry structural check (absolute / not root / not home / not
+     * inside the silverhand state dir except under `workspaces/` / not
+     * inside the managed root / not overlapping another workspace's root)
+     * — it never blindly trusts a backend-supplied path. Creatability /
+     * writability is NOT probed in the registry; it is proven at the
+     * skeleton-creation stage, where an fs errno classifies as
+     * `fs_unavailable` / `fs_quota_exceeded`. The authoritative result is
+     * always `bound_workspace_path`, NOT this field. Legacy backfill of a
+     * pre-D4.e `workspaces.workspace_path` is just a call that passes the
+     * old path here (idempotent on the same id→path). The backend NEVER
+     * interprets this path; it only decides whether to forward one.
+     */
+    requested_path: z.string().min(1).optional(),
+  })
+  .strict();
+export type WorkspaceProvisionParams = z.infer<
+  typeof WorkspaceProvisionParamsSchema
+>;
+
+export const WorkspaceProvisionResultSchema = z
+  .object({
+    ok: z.literal(true),
+    /**
+     * true when this call newly bound the workspace in the registry;
+     * false on idempotent re-provision of an already-bound workspace
+     * (same id → same path, whether daemon-managed or caller-proposed).
+     */
+    provisioned: z.boolean(),
+    /**
+     * D4.e-1 (Cindy #720 Q1): the daemon-managed-or-validated workspace
+     * root the daemon just bound/created — the AUTHORITATIVE path (the
+     * daemon self-picked it, or accepted+validated the caller's
+     * `requested_path`). **Transitional seam, NOT a return to server path
+     * authority.** Path authority stays with the daemon; the backend is
+     * only permitted to cache this into the legacy NOT-NULL
+     * `workspaces.workspace_path` column to keep pre-migration consumers
+     * (member-add seed / delete / runtime_start) working until their own
+     * D4.e-3/-4/-6 slices migrate them. It MUST NOT be used to assemble
+     * `agent_dir`, any agent-facing DTO, or a runtime formal payload —
+     * those go through `agent_workspace_index` / the registry. Same class
+     * of exception as D4.d `agent_materialize` returning `agent_dir`.
+     */
+    bound_workspace_path: z.string().min(1),
+  })
+  .strict();
+export type WorkspaceProvisionResult = z.infer<
+  typeof WorkspaceProvisionResultSchema
+>;
+
+export const WorkspaceProvisionErrorCodeSchema = z.enum([
+  /** `kind: 'agent_home'` routed here — must go via `agent_materialize`. */
+  'unsupported_kind',
+  /**
+   * A caller-supplied `requested_path` failed daemon-side STRUCTURAL
+   * validation (relative / root / home / inside the silverhand state dir
+   * except under `workspaces/` / inside the managed root). Creatability is
+   * NOT checked here — that surfaces as `fs_unavailable` /
+   * `fs_quota_exceeded` from the skeleton stage; a same-/nested-root
+   * collision with another workspace is `path_conflict`, not this. Cannot
+   * occur on the no-path default branch (daemon-chosen path is always
+   * valid).
+   */
+  'invalid_path',
+  /**
+   * Path-vs-id binding conflict: this `workspace_id` is already bound to
+   * a DIFFERENT path, OR the `requested_path` overlaps (equals OR nests
+   * with) a path already bound to a DIFFERENT workspace — two workspaces
+   * may never share or nest roots (a recursive purge of the outer would
+   * delete the inner). Refused, never silently overwritten. Same id→same
+   * path is idempotent (`provisioned:false`), not a conflict.
+   */
+  'path_conflict',
+  'fs_quota_exceeded',
+  'fs_unavailable',
+  /** Foreign/corrupt daemon registry — fail closed. */
+  'registry_unavailable',
+  'internal_error',
+]);
+export type WorkspaceProvisionErrorCode = z.infer<
+  typeof WorkspaceProvisionErrorCodeSchema
+>;
+
+const WorkspaceProvisionIpcErrorSchema = z
+  .object({
+    code: z.union([
+      ResponseErrorCodeSchema,
+      WorkspaceProvisionErrorCodeSchema,
+    ]),
+    message: z.string(),
+  })
+  .strict();
+
+export const AgentWorkspaceIndexParamsSchema = z
+  .object({
+    agent_id: z.string().min(1),
+    /** Workspace ids the backend's ACL/DB list already authorized. */
+    workspace_ids: z.array(z.string().min(1)),
+  })
+  .strict();
+export type AgentWorkspaceIndexParams = z.infer<
+  typeof AgentWorkspaceIndexParamsSchema
+>;
+
+export const AgentWorkspaceIndexEntrySchema = z
+  .object({
+    workspace_id: z.string().min(1),
+    /**
+     * Daemon-resolved absolute `agent_dir` for this (agent, workspace):
+     * agent-home → the agent's L1 dir; regular → `<ws>/.silverhand/
+     * agents/<agent_id>`. Stamped daemon-side; the backend never
+     * assembles it from `workspace_path`.
+     */
+    agent_dir: z.string().min(1),
+  })
+  .strict();
+export type AgentWorkspaceIndexEntry = z.infer<
+  typeof AgentWorkspaceIndexEntrySchema
+>;
+
+export const AgentWorkspaceIndexResultSchema = z
+  .object({
+    ok: z.literal(true),
+    entries: z.array(AgentWorkspaceIndexEntrySchema),
+    /**
+     * Regular workspaces that are neither provisioned nor adopted on this
+     * daemon (read fail-closed: no managed-path guess). The backend
+     * decides how to surface these — it MUST NOT fall back to a
+     * `workspace_path`-derived path (that would re-pierce I1).
+     */
+    unresolved: z.array(z.string().min(1)),
+  })
+  .strict();
+export type AgentWorkspaceIndexResult = z.infer<
+  typeof AgentWorkspaceIndexResultSchema
+>;
+
+export const AgentWorkspaceIndexErrorCodeSchema = z.enum([
+  /** Foreign/corrupt daemon registry — fail closed (whole call). */
+  'registry_unavailable',
+  'internal_error',
+]);
+export type AgentWorkspaceIndexErrorCode = z.infer<
+  typeof AgentWorkspaceIndexErrorCodeSchema
+>;
+
+const AgentWorkspaceIndexIpcErrorSchema = z
+  .object({
+    code: z.union([
+      ResponseErrorCodeSchema,
+      AgentWorkspaceIndexErrorCodeSchema,
+    ]),
+    message: z.string(),
+  })
+  .strict();
+
+
 /**
  * Single source of truth for the intent ↔ params / result / error
  * type triple. The client uses it to enforce that
@@ -1225,11 +1407,12 @@ const AgentMaterializeIpcErrorSchema = z
  * explicit `error` entry use `ResponseErrorSchema` (the 5
  * transport-level codes) at IPC validation time. Only intents
  * that may legitimately surface daemon-business typed codes —
- * at D4.d, just `agent_materialize` — declare their own widened
- * error schema. The wire surface stays per-intent-scoped (Cindy
- * D2 P1-1 + D1 round-1 P1): a typed code in one intent's error
- * arm cannot leak into another intent's error arm at validation
- * time.
+ * `agent_materialize` (D4.d) plus the D4.e workspace data-plane
+ * intents `workspace_provision` / `agent_workspace_index` —
+ * declare their own widened error schema. The wire surface stays
+ * per-intent-scoped (Cindy D2 P1-1 + D1 round-1 P1): a typed code
+ * in one intent's error arm cannot leak into another intent's
+ * error arm at validation time.
  */
 export const intentSchemas = {
   hello: {
@@ -1315,6 +1498,24 @@ export const intentSchemas = {
     params: AgentMaterializeParamsSchema,
     result: AgentMaterializeResultSchema,
     error: AgentMaterializeIpcErrorSchema,
+  },
+  // D4.e-1: data-plane path-authority intents. Same per-command typed
+  // error scoping as agent_materialize — each widens the 5 generic codes
+  // with its own taxonomy and nothing else, so a typed code from one
+  // intent cannot leak onto another's wire error. `workspace_provision`
+  // also carries the OPTIONAL caller-proposed `requested_path` (M1
+  // folder-picker / sandbox typed path / legacy backfill all unify here);
+  // when absent the daemon self-picks the managed default. There is NO
+  // separate adopt/bind intent — path provisioning is one operation.
+  workspace_provision: {
+    params: WorkspaceProvisionParamsSchema,
+    result: WorkspaceProvisionResultSchema,
+    error: WorkspaceProvisionIpcErrorSchema,
+  },
+  agent_workspace_index: {
+    params: AgentWorkspaceIndexParamsSchema,
+    result: AgentWorkspaceIndexResultSchema,
+    error: AgentWorkspaceIndexIpcErrorSchema,
   },
 } as const;
 

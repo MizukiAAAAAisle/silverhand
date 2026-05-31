@@ -31,6 +31,8 @@ import {
   intentSchemas,
   type AgentMaterializeParams,
   type AgentMaterializeResult,
+  type AgentWorkspaceIndexParams,
+  type AgentWorkspaceIndexResult,
   type ConversationLogDebugParams,
   type HostOutboundAttachParams,
   type HostOutboundAttachResult,
@@ -48,12 +50,14 @@ import {
   type RuntimeStopAllParams,
   type RuntimeStopParams,
   type RuntimeWakeParams,
+  type WorkspaceProvisionParams,
+  type WorkspaceProvisionResult,
 } from '../protocol.js';
 import { DAEMON_VERSION, createDaemonHelloResult } from './version.js';
 import type { DaemonLogger } from './logger.js';
 import type { SupervisorContract } from './supervisor-contract.js';
 import { logIntent } from './daemon-logging.js';
-import { AgentMaterializeError } from './agent-materialize/index.js';
+import { DaemonTypedError } from './typed-error.js';
 
 export interface DispatcherOptions {
   logger: DaemonLogger;
@@ -122,17 +126,42 @@ export interface DispatcherOptions {
    * may throw `AgentMaterializeError` carrying a typed code
    * (`fs_quota_exceeded` / `fs_unavailable` / `agent_dir_collision`
    * / `unsupported_template` / `unsupported_runtime` /
-   * `internal_error`). The dispatcher's catch arm recognises that
-   * error class and emits the typed code on the wire instead of
-   * collapsing to `internal_error`. The outbound layer's
-   * per-command error schema (`AgentMaterializeWireErrorSchema`)
-   * already permits this widened code set; other commands keep
-   * the narrow `ResponseError` enum because their slots throw
-   * only generic Errors.
+   * `internal_error`). The dispatcher's `DaemonTypedError` catch arm
+   * recognises it and emits the typed code on the wire instead of
+   * collapsing to `internal_error` — but only after re-validating
+   * the code against `intentErrorSchema(intent)`, so the typed
+   * surface stays decided by protocol schema, not the class. The
+   * outbound layer's per-command error schema
+   * (`AgentMaterializeWireErrorSchema`) already permits this widened
+   * code set; the D4.e workspace intents (`workspace_provision` /
+   * `agent_workspace_index`) are likewise typed, while
+   * runtime/default commands keep the narrow `ResponseError` enum.
    */
   agentMaterializeHandler?: (
     params: AgentMaterializeParams,
   ) => AgentMaterializeResult | Promise<AgentMaterializeResult>;
+  /**
+   * D4.e-1 — handler for `workspace_provision`. Like agent_materialize,
+   * this is server↔daemon formal data-plane semantics: the server asks
+   * the daemon to bind a regular workspace into its local registry and
+   * create the `.silverhand/` skeleton. Production wiring:
+   * `provisionWorkspace` from `./workspace-registry/`. Typed errors
+   * (`WorkspaceProvisionError`) are projected with their code by the
+   * catch arm after per-intent schema validation. `undefined` → the
+   * dispatcher throws (→ `internal_error`).
+   */
+  workspaceProvisionHandler?: (
+    params: WorkspaceProvisionParams,
+  ) => WorkspaceProvisionResult | Promise<WorkspaceProvisionResult>;
+  /**
+   * D4.e-1 — handler for `agent_workspace_index` (route-time `agent_dir`
+   * resolver). Production wiring: `indexAgentWorkspaces`. Typed errors
+   * (`AgentWorkspaceIndexError`) projected as above. `undefined` → the
+   * dispatcher throws (→ `internal_error`).
+   */
+  agentWorkspaceIndexHandler?: (
+    params: AgentWorkspaceIndexParams,
+  ) => AgentWorkspaceIndexResult | Promise<AgentWorkspaceIndexResult>;
 }
 
 export class IntentDispatcher {
@@ -157,6 +186,16 @@ export class IntentDispatcher {
         params: AgentMaterializeParams,
       ) => AgentMaterializeResult | Promise<AgentMaterializeResult>)
     | undefined;
+  private readonly workspaceProvisionHandler:
+    | ((
+        params: WorkspaceProvisionParams,
+      ) => WorkspaceProvisionResult | Promise<WorkspaceProvisionResult>)
+    | undefined;
+  private readonly agentWorkspaceIndexHandler:
+    | ((
+        params: AgentWorkspaceIndexParams,
+      ) => AgentWorkspaceIndexResult | Promise<AgentWorkspaceIndexResult>)
+    | undefined;
   private intentCount = 0;
   private shuttingDown = false;
 
@@ -178,6 +217,8 @@ export class IntentDispatcher {
     this.hostOutboundDetachHandler = opts.hostOutboundDetachHandler;
     this.hostOutboundReloadHandler = opts.hostOutboundReloadHandler;
     this.agentMaterializeHandler = opts.agentMaterializeHandler;
+    this.workspaceProvisionHandler = opts.workspaceProvisionHandler;
+    this.agentWorkspaceIndexHandler = opts.agentWorkspaceIndexHandler;
   }
 
   /** Signal that subsequent intents should be rejected with
@@ -325,7 +366,23 @@ export class IntentDispatcher {
       // code the intent's error taxonomy doesn't cover) still gets
       // surfaced as `internal_error` — preventing daemon-side drift
       // from reaching the wire as it did during the bare-cast era.
-      if (err instanceof AgentMaterializeError) {
+      // D4.d D2 / D4.e-1: preserve typed daemon-business errors thrown by
+      // a handler (any `DaemonTypedError` subclass: AgentMaterializeError,
+      // WorkspaceProvisionError, AgentWorkspaceIndexError). Without this
+      // branch the generic catch below would squash the typed code into
+      // `internal_error`, losing the recoverable / unrecoverable /
+      // collision / unresolved distinctions the route layer needs.
+      //
+      // Boundary (Cindy): the base class does NOT decide the typed
+      // surface — the code is validated against `intentErrorSchema(intent)`
+      // before going on the wire, so a code that is not in the dispatching
+      // intent's error taxonomy still collapses to `internal_error`. This
+      // keeps the wire-error scope per-intent: only intents whose schema
+      // widens (agent_materialize / workspace_provision /
+      // agent_workspace_index) can carry their typed codes; a runtime_*
+      // intent (defaulting to the 5 generic codes) rejects any foreign
+      // typed code here.
+      if (err instanceof DaemonTypedError) {
         const errorSchema = intentErrorSchema(intent as IntentName);
         const validated = errorSchema.safeParse({
           code: err.code,
@@ -338,7 +395,7 @@ export class IntentDispatcher {
               err: err.message,
               code: err.code,
             },
-            'agent_materialize handler returned typed error',
+            'intent handler returned typed error',
           );
           return finish(this.typedErrorFrame(requestId, err.code, err.message));
         }
@@ -351,7 +408,7 @@ export class IntentDispatcher {
               .map(e => `${e.path.join('.')}: ${e.message}`)
               .join('; '),
           },
-          'agent_materialize handler returned a code not in its IPC error taxonomy; emitting internal_error',
+          'intent handler returned a code not in its IPC error taxonomy; emitting internal_error',
         );
         return finish(
           this.errorFrame(requestId, {
@@ -385,10 +442,11 @@ export class IntentDispatcher {
    * standard `ResponseError` enum. The IPC `ResponseFrame` type
    * narrows `error.code` to the 5 generic codes; this helper
    * bypasses that narrowing so daemon-business typed codes
-   * (currently the six `AgentMaterializeErrorCode` values) can
-   * travel through to:
+   * (the `AgentMaterializeErrorCode` values plus the D4.e
+   * `WorkspaceProvisionErrorCode` / `AgentWorkspaceIndexErrorCode`
+   * values) can travel through to:
    *   - The outbound WS layer, which validates them against the
-   *     wider per-command `AgentMaterializeWireErrorSchema`.
+   *     wider per-command wire error schema for that intent.
    *   - The local IPC transport, which uses `LooseAnyFrameSchema`
    *     so the typed code is not dropped at frame-decode time.
    *     `HostClient.handleFrame` then validates the code against
@@ -535,6 +593,19 @@ export class IntentDispatcher {
         return this.requireAgentMaterializeHandler()(
           params as AgentMaterializeParams,
         );
+      case 'workspace_provision':
+        // D4.e-1 — server↔daemon data-plane. Slot wired by `runDaemon`
+        // to `provisionWorkspace`. Typed errors (WorkspaceProvisionError)
+        // are projected by the DaemonTypedError catch arm.
+        return this.requireWorkspaceProvisionHandler()(
+          params as WorkspaceProvisionParams,
+        );
+      case 'agent_workspace_index':
+        // D4.e-1 — route-time agent_dir resolver. Slot wired to
+        // `indexAgentWorkspaces`.
+        return this.requireAgentWorkspaceIndexHandler()(
+          params as AgentWorkspaceIndexParams,
+        );
     }
   }
 
@@ -591,5 +662,27 @@ export class IntentDispatcher {
       );
     }
     return this.agentMaterializeHandler;
+  }
+
+  private requireWorkspaceProvisionHandler(): (
+    params: WorkspaceProvisionParams,
+  ) => WorkspaceProvisionResult | Promise<WorkspaceProvisionResult> {
+    if (!this.workspaceProvisionHandler) {
+      throw new Error(
+        'workspace_provision intent reached dispatcher with no handler wired',
+      );
+    }
+    return this.workspaceProvisionHandler;
+  }
+
+  private requireAgentWorkspaceIndexHandler(): (
+    params: AgentWorkspaceIndexParams,
+  ) => AgentWorkspaceIndexResult | Promise<AgentWorkspaceIndexResult> {
+    if (!this.agentWorkspaceIndexHandler) {
+      throw new Error(
+        'agent_workspace_index intent reached dispatcher with no handler wired',
+      );
+    }
+    return this.agentWorkspaceIndexHandler;
   }
 }

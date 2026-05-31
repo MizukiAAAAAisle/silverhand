@@ -363,4 +363,99 @@ export function registerParityPhases(getRig: () => ParityRig): void {
     );
     expect(Array.isArray((result as { runtimes: unknown[] }).runtimes)).toBe(true);
   }, 20_000);
+
+  it('Phase D — workspace lifecycle: POST create → real workspace_provision bind; direct re-provision idempotent + index resolve/unresolved (same envelope)', async () => {
+    const rig = getRig();
+    const now = Date.now();
+    const suffix = `${rig.name}-${now}`;
+
+    // ── 1) CREATE via the real route → real adapter → REAL daemon
+    //    `workspace_provision` → real `WorkspaceRegistry` binds the path.
+    //
+    // MEMBERLESS on purpose. The create-with-members seed path writes agent
+    // L1/L2 on the BACKEND disk and is gated to the backend's co-located
+    // host (D4.e-1 3b): standalone's `coLocatedHostId` is undefined, so a
+    // member create would 409 there and the two rigs could not run the SAME
+    // phase. Memberless create binds the workspace path in EVERY mode, which
+    // is exactly the envelope leg under test. Membership, when a later test
+    // needs it, is attached by direct `INSERT INTO workspace_members` — the
+    // supported post-3b path — never via this gated route.
+    const requestedPath = join(rig.silverhandDir, 'parity-prov', `ws-${suffix}`);
+    const createRes = await fetch(`${rig.baseUrl}/api/workspaces`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${rig.bearer}`,
+      },
+      body: JSON.stringify({
+        name: `parity-prov-${suffix}`,
+        workspace_host_id: rig.hostId,
+        workspace_path: requestedPath,
+      }),
+    });
+    const createBody = (await createRes.json()) as {
+      workspace?: { id: string; workspace_path: string };
+      error?: string;
+      code?: string;
+    };
+    expect(createRes.status, JSON.stringify(createBody)).toBe(201);
+    const workspaceId = createBody.workspace!.id;
+    const boundPath = createBody.workspace!.workspace_path;
+    expect(boundPath).toBeTruthy();
+
+    const adapter = rig.adapter();
+    const conn = adapter.connectionIdForHost(rig.hostId) ?? undefined;
+    // Like Phase C: assert a live connection up front so a lost/replaced
+    // connection fails sharply here, not as an opaque transport error deep
+    // in the first dispatch below.
+    expect(conn, 'adapter must report a live connectionId for the local host').toBeTruthy();
+
+    // ── 2) IDEMPOTENT re-provision — proven by DIRECT dispatch, never a
+    //    second POST. POST /api/workspaces pre-generates a fresh
+    //    `workspace_id` every call, so it can NEVER exercise "same id +
+    //    same path → provisioned:false". Dispatching `workspace_provision`
+    //    straight to the live daemon with the bound id+path does: the
+    //    registry already holds that mapping → `created:false`.
+    const reprov = (await adapter.sendCommand(
+      rig.hostId,
+      'workspace_provision',
+      { workspace_id: workspaceId, kind: 'regular', requested_path: boundPath },
+      { expectedConnectionId: conn, timeoutMs: 5_000 },
+    )) as { provisioned: boolean; bound_workspace_path: string };
+    expect(reprov).toMatchObject({
+      provisioned: false,
+      bound_workspace_path: boundPath,
+    });
+
+    // ── 3) agent_workspace_index over the SAME live daemon registry:
+    //    a provisioned regular id resolves to a daemon-stamped `agent_dir`
+    //    under the bound path; a never-provisioned id comes back fail-closed
+    //    in `unresolved` (the backend must NOT synthesize a path for it).
+    //
+    //    This true-daemon `unresolved` lives at the DIRECT adapter layer on
+    //    purpose: post-3b the `list_workspaces` route first lazily
+    //    `workspace_provision(requested_path=workspace_path)`s every visible
+    //    regular row, so a never-provisioned id can never reach `index` via
+    //    the normal route — route-level fail-closed (503/409) stays covered
+    //    by the 3b fake-registry pins, and the genuine daemon `unresolved`
+    //    is asserted here against the real registry.
+    const agentId = `agent-prov-${suffix}`;
+    const neverId = `ws-never-${suffix}`;
+    const index = (await adapter.sendCommand(
+      rig.hostId,
+      'agent_workspace_index',
+      { agent_id: agentId, workspace_ids: [workspaceId, neverId] },
+      { expectedConnectionId: conn, timeoutMs: 5_000 },
+    )) as {
+      entries: { workspace_id: string; agent_dir: string }[];
+      unresolved: string[];
+    };
+    expect(index.entries).toEqual([
+      {
+        workspace_id: workspaceId,
+        agent_dir: join(boundPath, '.silverhand', 'agents', agentId),
+      },
+    ]);
+    expect(index.unresolved).toEqual([neverId]);
+  }, 30_000);
 }

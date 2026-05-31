@@ -60,6 +60,7 @@ import { NotificationRepo } from './repos/notification-repo.js';
 import { ScheduleRepo } from './repos/schedule-repo.js';
 import { SETTINGS_KEYS, SettingsRepo } from './repos/settings-repo.js';
 import { WorkspaceRepo } from './repos/workspace-repo.js';
+import { WorkspaceRegistryBackfiller } from './runtime/workspace-registry-backfill.js';
 import { AttachmentService } from './services/attachment-service.js';
 import { AgentService } from './services/agent-service.js';
 import { ChannelService } from './services/channel-service.js';
@@ -310,6 +311,11 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   const ctx: BackendContext = {
     db,
     deploymentMode: opts.mode,
+    // D4.e-1 3b P1-2 — the exact co-located host (embedded backend's own disk).
+    // In embedded that is the single `local`-named host (`ensureLocal`); in
+    // standalone the backend is remote, co-located with no host.
+    coLocatedHostId:
+      opts.mode === 'embedded' ? hostRepo.ensureLocal().id : undefined,
     readiness: {
       migrationsApplied,
       listenReady: false,
@@ -385,6 +391,15 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     { runtime: 'outbound', mode: opts.mode },
     'agent runtime: outbound frame transport',
   );
+
+  // D4.e-1 3b-2/3b-3 — one shared registry backfiller for the
+  // `list_workspaces` read path (lazy, on-demand: memoizes per-host success,
+  // collapses concurrent callers, retries after a failure). It only
+  // dispatches `workspace_provision`; it never assembles a host path.
+  ctx.workspaceRegistryBackfiller = new WorkspaceRegistryBackfiller({
+    workspaces: new WorkspaceRepo(db, { workspacesRoot }),
+    outboundFrameAdapter: () => ctx.outboundFrameAdapter?.() ?? null,
+  });
 
   ctx.channelService = new ChannelService({
     db,

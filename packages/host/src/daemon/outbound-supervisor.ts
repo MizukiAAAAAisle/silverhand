@@ -106,6 +106,26 @@ export interface OutboundClientLike {
   sendEvent(event: EventFrame): unknown;
 }
 
+/** D4.e-1 — the control-plane identity the daemon is currently attached
+ *  to. Structurally identical to the workspace registry's
+ *  `RegistryBinding` (origin + host id), kept local here to avoid a
+ *  daemon→registry import cycle; `run.ts` consumes it directly. */
+export interface OutboundBinding {
+  server_origin: string;
+  host_id: string;
+}
+
+/** Derive the registry binding from a validated host config. `server_url`
+ *  is normalized to its URL origin so cosmetic differences (trailing
+ *  slash, path, default port) never fork the namespace. */
+function deriveOutboundBinding(config: { server_url: string; host_id: string }): OutboundBinding {
+  return {
+    server_origin: new URL(config.server_url).origin,
+    host_id: config.host_id,
+  };
+}
+
+
 export class OutboundSupervisor {
   private current: {
     configPath: string;
@@ -114,6 +134,12 @@ export class OutboundSupervisor {
      *  the outbound client uses internally) so reload's `unchanged`
      *  arm can NOT drift away from what the client treats as no-op. */
     fingerprint: string;
+    /** D4.e-1 — the `{server_origin, host_id}` the daemon is currently
+     *  bound to, derived from the live config. Drives the workspace
+     *  registry namespace so the standalone registry tracks exactly the
+     *  control plane the daemon is attached to. Recomputed on every
+     *  client swap (attach/switch/reload). */
+    binding: OutboundBinding;
     client: OutboundClientLike;
   } | null = null;
   private stopped = false;
@@ -235,7 +261,7 @@ export class OutboundSupervisor {
       this.current.client.stop('config_path_changed');
       this.current = null;
       const next = this.spawnClient(configPath);
-      this.current = { configPath, fingerprint, client: next };
+      this.current = { configPath, fingerprint, binding: deriveOutboundBinding(probe.config), client: next };
       next.start();
       this.deps.logger.info(
         {
@@ -252,7 +278,7 @@ export class OutboundSupervisor {
     // and recovery (e.g. supervisor restart after daemon process
     // restart). Tests for "same path, no client" exercise this arm.
     const fresh = this.spawnClient(configPath);
-    this.current = { configPath, fingerprint, client: fresh };
+    this.current = { configPath, fingerprint, binding: deriveOutboundBinding(probe.config), client: fresh };
     fresh.start();
     this.deps.logger.info(
       {
@@ -390,6 +416,7 @@ export class OutboundSupervisor {
     this.current = {
       configPath: current.configPath,
       fingerprint: nextFingerprint,
+      binding: deriveOutboundBinding(probe.config),
       client: next,
     };
     next.start();
@@ -419,6 +446,20 @@ export class OutboundSupervisor {
    */
   sendEvent(event: EventFrame): void {
     this.current?.client.sendEvent(event);
+  }
+
+  /**
+   * D4.e-1 — the control-plane binding the daemon is currently attached
+   * to, or `null` when no outbound client is active (pre-attach, or
+   * after detach/stop). The workspace registry uses this to namespace
+   * its managed root + registry file per `{server_origin, host_id}`, so
+   * a standalone daemon's registry follows the exact control plane it is
+   * bound to. Embedded daemons never attach an outbound client, so this
+   * stays `null` for them and `run.ts` falls back to the local-embedded
+   * binding.
+   */
+  currentBinding(): OutboundBinding | null {
+    return this.current ? { ...this.current.binding } : null;
   }
 
   /**

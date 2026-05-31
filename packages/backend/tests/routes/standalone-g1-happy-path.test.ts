@@ -194,12 +194,11 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
     expect(create.body.onboarding_channel_id).toEqual(expect.any(String));
   });
 
-  it('POST /api/workspaces with workspace_path on standalone → typed 409 `workspace_path_not_supported` (D4.c C3)', async () => {
-    // C3 — `workspace_path` is fs concept that lives on the
-    // daemon-host. In standalone the backend's fs is the server
-    // box, which the user does not control; per D2.0 the server
-    // does not pretend to own user fs. Reject with a route-local
-    // typed code, NOT the runtime placement taxonomy.
+  it('POST /api/workspaces with workspace_path on standalone → forwarded to daemon as `requested_path` (D4.e-1 3b lifted the C3 409)', async () => {
+    // D4.e-1 3b — path authority moved to the owning daemon. The server no
+    // longer rejects a caller `workspace_path` in standalone; it forwards it
+    // verbatim as `requested_path` to `workspace_provision` (the daemon
+    // re-validates + binds). The fake outbound adapter acks the bind.
     t = buildTestApp({ deploymentMode: 'standalone', bindAddressScope: 'lan' });
     const token = await signupReturnToken(t, 'ws.path@example.test');
     await claimLocalHost(t, token);
@@ -213,9 +212,14 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
       },
       bearer(token),
     );
-    expect(res.status).toBe(409);
-    expect(res.body).toMatchObject({
-      error_code: 'workspace_path_not_supported',
+    expect(res.status).toBe(201);
+    const provisionCalls = t.fakeHostWs!.calls.filter(
+      c => c.kind === 'workspace_provision',
+    );
+    expect(provisionCalls).toHaveLength(1);
+    expect(provisionCalls[0]!.params).toMatchObject({
+      kind: 'regular',
+      requested_path: '/tmp/some-arbitrary-path',
     });
   });
 
@@ -244,6 +248,65 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
     );
     expect(res.status).toBe(201);
     expect(res.body.workspace.member_agent_ids ?? []).toEqual([]);
+  });
+
+  it('POST /api/workspaces with REAL member_agent_ids on standalone → 409 workspace_member_seed_unsupported, no provision dispatched, no row persisted (D4.e-1 3b P1-1)', async () => {
+    // D4.e-1 3b P1-1 (Cindy) — initial-member seeding still does a
+    // server-side `ensureAgentL1Dir` / `seedAgentL2` on the BACKEND disk.
+    // That is only sound embedded (backend co-located with the host). In
+    // standalone the owning daemon is another machine and `workspace_path`
+    // is now a daemon-provisioned (possibly remote) path, so a server-side
+    // seed would mkdir/write a remote host's path locally — the exact I1
+    // violation D4.e removes. Until daemon-mediated seeding lands, the unsafe
+    // combo must be refused UP FRONT: typed 409, BEFORE any provision
+    // dispatch, with NO orphan registry bind and NO persisted row.
+    t = buildTestApp({ deploymentMode: 'standalone', bindAddressScope: 'lan' });
+    const token = await signupReturnToken(t, 'ws.seed@example.test');
+    const claimedHostId = await claimLocalHost(t, token);
+
+    // A REAL agent on the claimed host — it survives the member filter +
+    // host-equality check, so the request reaches the seed preflight (a
+    // nonexistent id would be silently filtered, never exercising the gate).
+    const ownerUserId = t.ctx.db
+      .prepare<[], { id: string }>(
+        `SELECT id FROM users WHERE email = 'ws.seed@example.test'`,
+      )
+      .get()?.id;
+    expect(ownerUserId).toEqual(expect.any(String));
+    const agentId = `seed-agent-${randomSlug()}`;
+    const now = Date.now();
+    t.ctx.db
+      .prepare(
+        `INSERT INTO agents (id, name, runtime, host_id, created_by_user_id, created_at, updated_at)
+         VALUES (?, ?, 'claude', ?, ?, ?, ?)`,
+      )
+      .run(agentId, `seed-${randomSlug()}`, claimedHostId, ownerUserId!, now, now);
+
+    const wsName = `g1seed-${randomSlug()}`;
+    const res = await fetchJson(
+      t,
+      'POST',
+      apiPaths.workspaces,
+      { name: wsName, member_agent_ids: [agentId] },
+      bearer(token),
+    );
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ code: 'workspace_member_seed_unsupported' });
+
+    // No provision was dispatched (refused before the daemon round-trip) —
+    // so there is no orphan registry bind.
+    const provisionCalls = t.fakeHostWs!.calls.filter(
+      c => c.kind === 'workspace_provision',
+    );
+    expect(provisionCalls).toHaveLength(0);
+
+    // No workspace row was persisted.
+    const rowCount = t.ctx.db
+      .prepare<[string], { c: number }>(
+        `SELECT COUNT(*) AS c FROM workspaces WHERE name = ?`,
+      )
+      .get(wsName)?.c;
+    expect(rowCount).toBe(0);
   });
 
   it('POST /api/workspaces/:id/channels (no agents) on standalone creates a channel and publishes workspace_channels_changed', async () => {

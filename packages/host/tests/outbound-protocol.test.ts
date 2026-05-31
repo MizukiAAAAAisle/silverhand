@@ -33,9 +33,10 @@ const RUN_STATE = {
 };
 
 describe('outbound protocol — command catalogue', () => {
-  it('contains the D2.0 runtime request surface plus rotate_token and agent_materialize', () => {
+  it('contains the D2.0 runtime request surface plus rotate_token, agent_materialize, and the D4.e-1 data-plane intents', () => {
     expect([...OUTBOUND_SERVER_COMMAND_KINDS].sort()).toEqual([
       'agent_materialize',
+      'agent_workspace_index',
       'rotate_token',
       'runtime_clear_session',
       'runtime_close_activity_log',
@@ -46,6 +47,7 @@ describe('outbound protocol — command catalogue', () => {
       'runtime_stop',
       'runtime_stop_all',
       'runtime_wake',
+      'workspace_provision',
     ]);
 
     expect(OUTBOUND_SERVER_COMMAND_KINDS).not.toContain('hello' as never);
@@ -294,6 +296,89 @@ describe('outbound protocol — command catalogue', () => {
       error: { code: 'materialize_timeout', message: 'wrong scope (server-only)' },
     });
     expect(unknown.success).toBe(false);
+  });
+
+  // D4.e-1 (Cindy P1-2): the same per-kind scoping must hold for the two
+  // new data-plane intents — their typed taxonomies must not leak into
+  // each other or into agent_materialize.
+  it('per-kind error scoping: workspace_provision rejects an agent_materialize-only typed code', () => {
+    const bad = OutboundDaemonToServerCommandResponseFrameSchema.safeParse({
+      direction: 'daemon_to_server',
+      type: 'command_response',
+      id: 'cmd-wp-foreign',
+      kind: 'workspace_provision',
+      error: { code: 'agent_dir_collision', message: 'wrong scope' },
+    });
+    expect(bad.success).toBe(false);
+
+    // Accepts its own typed codes (incl. the path-bind taxonomy added for
+    // A — single intent) + the shared transport code.
+    for (const code of [
+      'unsupported_kind',
+      'invalid_path',
+      'path_conflict',
+      'fs_quota_exceeded',
+      'fs_unavailable',
+      'registry_unavailable',
+    ] as const) {
+      const typedOk = OutboundDaemonToServerCommandResponseFrameSchema.safeParse({
+        direction: 'daemon_to_server',
+        type: 'command_response',
+        id: `cmd-wp-typed-${code}`,
+        kind: 'workspace_provision',
+        error: { code, message: 'seeded' },
+      });
+      expect(typedOk.success).toBe(true);
+    }
+
+    const transportOk = OutboundDaemonToServerCommandResponseFrameSchema.safeParse({
+      direction: 'daemon_to_server',
+      type: 'command_response',
+      id: 'cmd-wp-transport',
+      kind: 'workspace_provision',
+      error: { code: 'internal_error', message: 'boom' },
+    });
+    expect(transportOk.success).toBe(true);
+  });
+
+  it('per-kind error scoping: agent_workspace_index rejects a workspace_provision-only typed code', () => {
+    const bad = OutboundDaemonToServerCommandResponseFrameSchema.safeParse({
+      direction: 'daemon_to_server',
+      type: 'command_response',
+      id: 'cmd-awi-foreign',
+      kind: 'agent_workspace_index',
+      error: { code: 'unsupported_kind', message: 'wrong scope' },
+    });
+    expect(bad.success).toBe(false);
+
+    // fs_* is a workspace_provision typed code, NOT an index code.
+    const badFs = OutboundDaemonToServerCommandResponseFrameSchema.safeParse({
+      direction: 'daemon_to_server',
+      type: 'command_response',
+      id: 'cmd-awi-fs',
+      kind: 'agent_workspace_index',
+      error: { code: 'fs_quota_exceeded', message: 'wrong scope' },
+    });
+    expect(badFs.success).toBe(false);
+
+    // Accepts its own typed code + the shared transport code.
+    const typedOk = OutboundDaemonToServerCommandResponseFrameSchema.safeParse({
+      direction: 'daemon_to_server',
+      type: 'command_response',
+      id: 'cmd-awi-typed',
+      kind: 'agent_workspace_index',
+      error: { code: 'registry_unavailable', message: 'corrupt' },
+    });
+    expect(typedOk.success).toBe(true);
+
+    const transportOk = OutboundDaemonToServerCommandResponseFrameSchema.safeParse({
+      direction: 'daemon_to_server',
+      type: 'command_response',
+      id: 'cmd-awi-transport',
+      kind: 'agent_workspace_index',
+      error: { code: 'internal_error', message: 'boom' },
+    });
+    expect(transportOk.success).toBe(true);
   });
 });
 

@@ -8,9 +8,10 @@
  * placement preflights:
  *
  *   - POST /api/workspaces:
- *       * `workspace_path` in standalone → 409
- *         `workspace_path_not_supported` (route-local typed code,
- *         NOT in the runtime placement taxonomy).
+ *       * `workspace_path` in standalone → originally 409
+ *         `workspace_path_not_supported`; **D4.e-1 3b lifted this** —
+ *         the path is now forwarded to the owning daemon as
+ *         `requested_path` (server does not interpret host paths).
  *       * default `workspace_host_id` resolves via
  *         `resolveOwnedLocalForUser` (the C1-installed 0/1/N
  *         policy). The synthetic `STANDALONE_SERVER` host row is
@@ -61,17 +62,31 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
 
   // ── POST /api/workspaces ────────────────────────────────────
 
-  it('POST /api/workspaces (standalone) — `workspace_path` rejected with route-local typed code', async () => {
+  it('POST /api/workspaces (standalone) — `workspace_path` is forwarded to the daemon as `requested_path` (D4.e-1: server no longer rejects it)', async () => {
+    // D4.e-1 3b lifted the standalone `workspace_path_not_supported` 409.
+    // Path authority moved to the owning daemon: the server does not
+    // interpret the path, it forwards it as `requested_path` to
+    // `workspace_provision` and the daemon re-validates + binds it. So a
+    // caller path is legitimate in standalone too.
     t = buildTestApp({ deploymentMode: 'standalone' });
     const res = await http(t).post('/api/workspaces', {
       name: 'with-path',
       workspace_path: '/tmp/some-arbitrary-path',
     });
 
-    expect(res.status).toBe(409);
-    expect(await res.json()).toMatchObject({
-      error_code: 'workspace_path_not_supported',
+    expect(res.status).toBe(201);
+    // The daemon received the caller path verbatim as `requested_path`.
+    const provisionCalls = t.fakeHostWs!.calls.filter(
+      c => c.kind === 'workspace_provision',
+    );
+    expect(provisionCalls).toHaveLength(1);
+    expect(provisionCalls[0]!.params).toMatchObject({
+      kind: 'regular',
+      requested_path: '/tmp/some-arbitrary-path',
     });
+    // The persisted row caches the daemon's authoritative bound path.
+    const body = (await res.json()) as any;
+    expect(body.workspace.workspace_path).toBe('/tmp/some-arbitrary-path');
   });
 
   it('POST /api/workspaces (standalone) — default placement uses `resolveOwnedLocalForUser` (no synthetic STANDALONE_SERVER host)', async () => {

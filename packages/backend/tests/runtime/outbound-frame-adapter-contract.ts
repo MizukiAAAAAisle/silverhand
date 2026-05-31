@@ -160,6 +160,189 @@ export function runOutboundFrameAdapterContract(
       });
     });
 
+    // ── D4.e-1 ④/A3 — registry intents over the SAME envelope ────────────
+    // `workspace_provision` and `agent_workspace_index` are the D4.e-1
+    // additions. Both transports must round-trip their params/result AND
+    // honour per-command error scoping exactly like agent_materialize: a
+    // legal typed code rides through; a foreign code (one another command
+    // declares) is refused at the schema boundary, never surfaced.
+
+    it('round-trips workspace_provision command → bound-path result', async () => {
+      fx = await makeFixture();
+      const daemon = await fx.connectDaemon();
+
+      const pending = fx.adapter.sendCommand(
+        fx.hostId,
+        'workspace_provision',
+        { workspace_id: 'ws-1', kind: 'regular', requested_path: '/tmp/ws-1' },
+        { timeoutMs: 500 },
+      );
+      const cmd = await daemon.nextCommand();
+      expect(cmd.kind).toBe('workspace_provision');
+      expect(cmd.params).toMatchObject({
+        workspace_id: 'ws-1',
+        kind: 'regular',
+        requested_path: '/tmp/ws-1',
+      });
+
+      daemon.respondResult(cmd.id, 'workspace_provision', {
+        ok: true,
+        provisioned: true,
+        bound_workspace_path: '/tmp/ws-1',
+      });
+
+      await expect(pending).resolves.toMatchObject({
+        provisioned: true,
+        bound_workspace_path: '/tmp/ws-1',
+      });
+    });
+
+    it('passes through a legal workspace_provision typed error (path_conflict) with its code intact', async () => {
+      fx = await makeFixture();
+      const daemon = await fx.connectDaemon();
+
+      const pending = fx.adapter.sendCommand(
+        fx.hostId,
+        'workspace_provision',
+        { workspace_id: 'ws-1', kind: 'regular', requested_path: '/tmp/other' },
+        { timeoutMs: 500 },
+      );
+      const cmd = await daemon.nextCommand();
+      expect(cmd.kind).toBe('workspace_provision');
+
+      // `path_conflict` is declared by `workspace_provision`'s error arm — it
+      // rides the envelope and is NOT collapsed into a transport_* error.
+      daemon.respondError(cmd.id, 'workspace_provision', {
+        code: 'path_conflict',
+        message: 'workspace already bound to a different path',
+      });
+
+      await expect(pending).rejects.toMatchObject({ code: 'path_conflict' });
+    });
+
+    it('refuses a foreign typed error code on workspace_provision', async () => {
+      fx = await makeFixture();
+      const daemon = await fx.connectDaemon();
+
+      const pending = fx.adapter.sendCommand(
+        fx.hostId,
+        'workspace_provision',
+        { workspace_id: 'ws-1', kind: 'regular', requested_path: '/tmp/ws-1' },
+        { timeoutMs: 1000 },
+      );
+      const cmd = await daemon.nextCommand();
+      expect(cmd.kind).toBe('workspace_provision');
+
+      // `agent_dir_collision` belongs to `agent_materialize`, not
+      // `workspace_provision`. A response carrying it is an INVALID frame for
+      // this command: reject at the schema boundary, drop, surface a
+      // transport error — never the foreign code.
+      daemon.respondError(cmd.id, 'workspace_provision', {
+        code: 'agent_dir_collision',
+        message: 'foreign code must not be accepted on workspace_provision',
+      });
+
+      let err: { code?: string } | null = null;
+      try {
+        await pending;
+      } catch (e) {
+        err = e as { code?: string };
+      }
+      expect(err).not.toBeNull();
+      expect(err!.code).not.toBe('agent_dir_collision');
+      expect(err!.code).toBe('transport_disconnected');
+    });
+
+    it('round-trips agent_workspace_index command → entries + unresolved result', async () => {
+      fx = await makeFixture();
+      const daemon = await fx.connectDaemon();
+
+      const pending = fx.adapter.sendCommand(
+        fx.hostId,
+        'agent_workspace_index',
+        { agent_id: 'a1', workspace_ids: ['ws-1', 'ws-2'] },
+        { timeoutMs: 500 },
+      );
+      const cmd = await daemon.nextCommand();
+      expect(cmd.kind).toBe('agent_workspace_index');
+      expect(cmd.params).toMatchObject({
+        agent_id: 'a1',
+        workspace_ids: ['ws-1', 'ws-2'],
+      });
+
+      daemon.respondResult(cmd.id, 'agent_workspace_index', {
+        ok: true,
+        entries: [
+          { workspace_id: 'ws-1', agent_dir: '/tmp/ws-1/.silverhand/agents/a1' },
+        ],
+        unresolved: ['ws-2'],
+      });
+
+      await expect(pending).resolves.toMatchObject({
+        entries: [
+          { workspace_id: 'ws-1', agent_dir: '/tmp/ws-1/.silverhand/agents/a1' },
+        ],
+        unresolved: ['ws-2'],
+      });
+    });
+
+    it('passes through a legal agent_workspace_index typed error (registry_unavailable) with its code intact', async () => {
+      fx = await makeFixture();
+      const daemon = await fx.connectDaemon();
+
+      const pending = fx.adapter.sendCommand(
+        fx.hostId,
+        'agent_workspace_index',
+        { agent_id: 'a1', workspace_ids: ['ws-1'] },
+        { timeoutMs: 500 },
+      );
+      const cmd = await daemon.nextCommand();
+      expect(cmd.kind).toBe('agent_workspace_index');
+
+      // `registry_unavailable` is a whole-registry failure declared by
+      // `agent_workspace_index` — rides the envelope, code intact.
+      daemon.respondError(cmd.id, 'agent_workspace_index', {
+        code: 'registry_unavailable',
+        message: 'registry temporarily unavailable',
+      });
+
+      await expect(pending).rejects.toMatchObject({
+        code: 'registry_unavailable',
+      });
+    });
+
+    it('refuses a foreign typed error code on agent_workspace_index', async () => {
+      fx = await makeFixture();
+      const daemon = await fx.connectDaemon();
+
+      const pending = fx.adapter.sendCommand(
+        fx.hostId,
+        'agent_workspace_index',
+        { agent_id: 'a1', workspace_ids: ['ws-1'] },
+        { timeoutMs: 1000 },
+      );
+      const cmd = await daemon.nextCommand();
+      expect(cmd.kind).toBe('agent_workspace_index');
+
+      // `path_conflict` is a `workspace_provision` code, not declared by
+      // `agent_workspace_index` (which scopes only whole-registry failures +
+      // generic transport codes). It must be refused, not surfaced.
+      daemon.respondError(cmd.id, 'agent_workspace_index', {
+        code: 'path_conflict',
+        message: 'foreign code must not be accepted on agent_workspace_index',
+      });
+
+      let err: { code?: string } | null = null;
+      try {
+        await pending;
+      } catch (e) {
+        err = e as { code?: string };
+      }
+      expect(err).not.toBeNull();
+      expect(err!.code).not.toBe('path_conflict');
+      expect(err!.code).toBe('transport_disconnected');
+    });
+
     it('refuses a foreign typed error code on a command that does not declare it', async () => {
       fx = await makeFixture();
       const daemon = await fx.connectDaemon();

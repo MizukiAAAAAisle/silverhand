@@ -76,6 +76,13 @@ import { HostCredentialIssueError, HostTokenService } from './auth/host-token.js
 import { HostWsCommandTransportError, HostWsCommandResponseError, type HostWsServerController } from './ws/host-ws-server.js';
 import type { OutboundFrameAdapter } from './runtime/outbound-frame-adapter.js';
 import {
+  dispatchAgentWorkspaceIndex,
+  dispatchWorkspaceProvision,
+  resolveOutboundForHost,
+  type DataPlaneFailure,
+  type DataPlaneHttpStatus,
+} from './runtime/workspace-data-plane.js';
+import {
   HostTokenRotationCoordinator,
   HostTokenRotationError,
 } from './ws/host-token-rotation.js';
@@ -88,8 +95,7 @@ import { ConversationInboxRepo } from './repos/conversation-inbox-repo.js';
 import { SettingsRepo, SETTINGS_KEYS } from './repos/settings-repo.js';
 import { WorkspaceRepo, agentHomeWorkspaceId } from './repos/workspace-repo.js';
 import { ConversationRepo, type RepoError } from './repos/conversation-repo.js';
-import { validateWorkspacePath } from './provision.js';
-import { ensureAgentL1Dir, initWorkspaceDir, seedAgentL2 } from './workspace-files.js';
+import { ensureAgentL1Dir, seedAgentL2 } from './workspace-files.js';
 import { detectRuntimes } from '@silverhand/host/runtimes';
 import { buildAgentWorkspaceDto } from './agent-workspace.js';
 import { AttachmentRejection } from './services/attachment-service.js';
@@ -1574,40 +1580,17 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (workspaces.getByName(parsed.data.name)) {
       return c.json({ error: 'workspace name already exists' }, 409);
     }
-    // D4.c C3 — `workspace_path` is fs concept that lives on the
-    // **daemon-host**'s filesystem. In embedded mode the daemon
-    // and the backend share that fs (the user's machine) so a
-    // caller-supplied `workspace_path` is meaningful. In
-    // standalone mode the backend's fs is the server box, which
-    // the user does NOT control; per D2.0 ("server doesn't
-    // pretend to own user filesystem") accepting an arbitrary
-    // path here would be a contract violation. Reject with a
-    // route-local typed code rather than overloading the runtime
-    // host placement taxonomy. The fs materialization redesign
-    // (workspace_path → daemon-host) lives in D4.e.
-    if (standaloneMode(ctx) && parsed.data.workspace_path) {
-      return c.json(
-        {
-          error: 'workspace_path is not supported in standalone mode',
-          error_code: 'workspace_path_not_supported',
-        },
-        409,
-      );
-    }
-
-    const workspacePath =
-      parsed.data.workspace_path?.trim() || workspaces.workspacePathFor(parsed.data.name);
-    const validation = validateWorkspacePath(
-      workspacePath,
-      ctx.silverhandDir,
-      ctx.workspacesRoot,
-    );
-    if (!validation.ok) {
-      return c.json(
-        { error: `invalid workspace_path: ${validation.reason}` },
-        400,
-      );
-    }
+    // D4.e-1 3b — host-local path authority moved to the owning daemon
+    // (I1). The optional body `workspace_path` is a caller-PROPOSED root —
+    // the desktop folder picker on a local host, or an advanced typed path
+    // on a sandbox/remote host. The backend NEVER interprets it (no
+    // validate / stat / mkdir): it forwards it verbatim as `requested_path`
+    // to `workspace_provision`, and the daemon re-validates + binds it.
+    // Absent → the daemon self-picks a managed default. The old standalone
+    // `workspace_path_not_supported` 409 is therefore lifted: a path is
+    // legitimate in every mode because the daemon — not the server — owns
+    // the filesystem semantics. The server still does no local fs here.
+    const requestedPath = parsed.data.workspace_path?.trim() || undefined;
 
     const viewerUserId = requireViewerUserId(c);
     let workspaceHostId: string;
@@ -1637,12 +1620,67 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       throw err;
     }
 
-    await initWorkspaceDir(validation.resolved);
+    // D4.e-1 3b P1-1/P1-2 (Cindy) — initial-member seeding still writes agent
+    // L1/L2 on the BACKEND filesystem (`ensureAgentL1Dir` / `seedAgentL2`
+    // below). That is only sound when the owning host is the EXACT host the
+    // backend is co-located with (`ctx.coLocatedHostId`). Gating on host KIND
+    // is insufficient: a user can own several active `kind='local'` hosts (a
+    // sandbox daemon, a second desktop), and only one of them shares this
+    // backend's disk; and standalone's claimed host is `kind='local'` too (the
+    // user's machine, not the backend's). Every non-co-located owner (a remote
+    // host, a different/second local host, or any host in standalone where
+    // `coLocatedHostId` is undefined) would mkdir/write a DIFFERENT machine's
+    // path locally — the I1 violation D4.e removes.
+    // Daemon-mediated L2 seeding is a later slice; until it lands, refuse the
+    // non-co-located combo up front (BEFORE provision — no orphan registry
+    // bind, no row) with a typed code. Memberless create is always fine.
+    const backendCoLocatedWithHost =
+      ctx.coLocatedHostId !== undefined &&
+      workspaceHostId === ctx.coLocatedHostId;
+    if (memberAgents.length > 0 && !backendCoLocatedWithHost) {
+      return c.json(
+        {
+          error:
+            'creating a workspace with initial members is only supported when the backend is co-located with the owning host (embedded mode + the backend\'s own local host); agent L2 seeding is not daemon-mediated yet — create the workspace first, members will be addable once daemon-side seeding lands',
+          code: 'workspace_member_seed_unsupported',
+        },
+        409,
+      );
+    }
+
+    // Dispatch `workspace_provision` to the owning daemon BEFORE inserting
+    // the row: the daemon registry keys by `workspace_id`, so we
+    // pre-generate the id and only persist the row on a successful bind.
+    // Daemon offline / typed failure → fail fast, no orphan row, no local
+    // fs. The daemon's `bound_workspace_path` ack becomes the legacy
+    // `workspace_path` cache column (the registry stays the authority).
+    const outbound = resolveOutboundForHost(
+      ctx.outboundFrameAdapter?.() ?? null,
+      workspaceHostId,
+    );
+    if (outbound.kind === 'failed') {
+      return c.json({ error: outbound.message, code: outbound.code }, outbound.status);
+    }
+    const workspaceId = workspaces.newWorkspaceId();
+    const provision = await dispatchWorkspaceProvision(
+      outbound.adapter,
+      workspaceHostId,
+      outbound.connectionId,
+      {
+        workspace_id: workspaceId,
+        kind: 'regular',
+        ...(requestedPath ? { requested_path: requestedPath } : {}),
+      },
+    );
+    if (provision.kind === 'failed') {
+      return c.json({ error: provision.message, code: provision.code }, provision.status);
+    }
 
     const workspace = workspaces.insert({
+      id: workspaceId,
       name: parsed.data.name,
       description: parsed.data.description ?? null,
-      workspacePath: validation.resolved,
+      workspacePath: provision.result.bound_workspace_path,
       workspaceHostId,
     });
 
@@ -1654,6 +1692,11 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
 
     for (const agent of memberAgents) {
       workspaces.addMember(workspace.id, agent.id);
+      // Embedded + local-host server-side L2 seed: every non-co-located combo
+      // (standalone, or an owned remote host) is refused above (P1-1), so
+      // reaching here means the backend shares the owning host's disk. Full
+      // removal of this fs (daemon-mediated seed) is deferred to the I6 slice
+      // (D4.e-5).
       const agentL1Dir = join(ctx.silverhandDir, 'agents', agent.id);
       await ensureAgentL1Dir(agentL1Dir);
       await seedAgentL2({
@@ -5419,23 +5462,127 @@ function listAgentVisibleChannels(
  * Build the cross-workspace `list_workspaces` payload for the calling
  * agent. The workspace list is the canonical
  * `WorkspaceRepo.listForAgent` (regular ∪ owned agent_home); per-row
- * `agent_dir` mirrors `activeAgentProfileDir` — for `agent_home` the
- * workspace root is itself the agent's home, for `regular` we point
- * at the nested L2 profile dir.
+ * `agent_dir` is **daemon-stamped** (D4.e-1 3b-3 / §3.4): the route does
+ * the ACL/DB list, then dispatches the narrow `agent_workspace_index`
+ * intent to the owning daemon, which resolves `agent_dir` from the
+ * registry (regular) or its own homedir (agent_home).
+ *
+ * The backend NEVER derives `agent_dir` from `workspace_path` (I1). Before
+ * dispatching, it `ensure()`s the registry backfill so a pre-D4.e legacy
+ * row is bound; an id the daemon cannot resolve (`unresolved`), an offline
+ * host, or a failed backfill all FAIL CLOSED — the response carries a
+ * diagnostic code, never a fabricated `workspace_path`-derived path.
+ *
+ * Single-host invariant (Cindy 3b-3 + I4): all of an agent's workspaces are
+ * owned by one host, so resolution targets a SINGLE owning daemon. A
+ * multi-host membership set is rejected with an explicit error rather than
+ * silently fanned out across daemons (which would break M1 sticky
+ * ownership).
  */
-function buildAgentListWorkspacesDto(
+type AgentListWorkspacesOutcome =
+  | { kind: 'ok'; dto: AgentListWorkspacesDto }
+  | { kind: 'failed'; code: string; message: string; status: DataPlaneHttpStatus };
+
+async function buildAgentListWorkspacesDto(
   ctx: BackendContext,
   agentId: string,
-): AgentListWorkspacesDto {
+): Promise<AgentListWorkspacesOutcome> {
   const workspaces = new WorkspaceRepo(ctx.db, {
     workspacesRoot: ctx.workspacesRoot,
   }).listForAgent(agentId);
-  return {
+  if (workspaces.length === 0) {
+    return { kind: 'ok', dto: { workspaces: [] } };
+  }
+
+  const adapter = ctx.outboundFrameAdapter?.() ?? null;
+
+  // Host invariant (Cindy 3b-3 + I4): every workspace an agent belongs to is
+  // owned by the agent's host — membership enforces `agent.host_id ==
+  // workspace_host_id`. This route resolves `agent_dir` against ONE owning
+  // daemon. A cross-host result would mean silently fanning out paths from
+  // different hosts in a single response, which breaks M1 sticky ownership.
+  // So a multi-host set is an EXPLICIT error, never a silent multi-host
+  // fan-out (this is the defensive realization of "I4 host equality").
+  const ownerHosts = new Set(workspaces.map(w => w.workspace_host_id));
+  if (ownerHosts.size > 1) {
+    return {
+      kind: 'failed',
+      code: 'workspace_host_ambiguous',
+      message: `agent's workspaces span multiple hosts (${[...ownerHosts].join(', ')}); refusing cross-host agent_dir resolution`,
+      status: 409,
+    };
+  }
+  const hostId = workspaces[0]!.workspace_host_id;
+  const workspaceIds = workspaces.map(w => w.id);
+  // P1-2 (Cindy): backfill ONLY the rows this response needs resolved — the
+  // VISIBLE regular workspaces (agent_home is daemon-resolved from the homedir
+  // convention, never via the registry). An unrelated same-host regular row
+  // the agent can't see must never fail-close this agent's list, so we pass
+  // the scoped rows rather than enumerating every regular row on the host.
+  const regularRows = workspaces
+    .filter(w => w.workspace_kind === 'regular')
+    .map(w => ({ id: w.id, workspace_path: w.workspace_path }));
+
+  const agentDirById = new Map<string, string>();
+  {
+    // Bind the visible legacy rows first (idempotent + retriable; never
+    // memoizes a failure, so a prior offline does not permanently skip them).
+    // No visible regular row → no registry backfill needed (agent_home only).
+    const backfill =
+      regularRows.length > 0
+        ? await ctx.workspaceRegistryBackfiller?.ensure(hostId, regularRows)
+        : undefined;
+    if (backfill && backfill.status === 'failed') {
+      // No row bound — daemon offline / registry unavailable. Fail closed.
+      const f = backfill.failed[0];
+      return {
+        kind: 'failed',
+        code: f?.code ?? 'host_attach_pending',
+        message:
+          'workspace registry backfill failed; cannot resolve agent_dir',
+        status: f && !f.retriable ? 502 : 503,
+      };
+    }
+    // A `partial` backfill leaves the still-unbound ids to surface as
+    // `unresolved` below, which trips the strict fail-closed there.
+
+    const outbound = resolveOutboundForHost(adapter, hostId);
+    if (outbound.kind === 'failed') {
+      return failedOutcome(outbound);
+    }
+    const index = await dispatchAgentWorkspaceIndex(
+      outbound.adapter,
+      hostId,
+      outbound.connectionId,
+      { agent_id: agentId, workspace_ids: workspaceIds },
+    );
+    if (index.kind === 'failed') {
+      return failedOutcome(index);
+    }
+    if (index.result.unresolved.length > 0) {
+      // Strict fail-closed (Cindy red line): a regular workspace with no
+      // registry binding has NO agent_dir. Never derive one from
+      // workspace_path — surface a typed error instead.
+      return {
+        kind: 'failed',
+        code: 'workspace_unresolved',
+        message: `daemon could not resolve agent_dir for workspace(s): ${index.result.unresolved.join(', ')}`,
+        status: 409,
+      };
+    }
+    for (const entry of index.result.entries) {
+      agentDirById.set(entry.workspace_id, entry.agent_dir);
+    }
+  }
+
+  const dto: AgentListWorkspacesDto = {
     workspaces: workspaces.map((w): AgentListedWorkspace => {
-      const agentDir =
-        w.workspace_kind === 'agent_home'
-          ? w.workspace_path
-          : join(w.workspace_path, '.silverhand', 'agents', agentId);
+      const agentDir = agentDirById.get(w.id);
+      if (!agentDir) {
+        // Unreachable: every id was resolved or tripped fail-closed above.
+        // Guard so a logic gap can never leak an empty/derived path.
+        throw new Error(`agent_dir unresolved for workspace ${w.id}`);
+      }
       return {
         id: w.id,
         name: w.name,
@@ -5446,6 +5593,16 @@ function buildAgentListWorkspacesDto(
       };
     }),
   };
+  return { kind: 'ok', dto };
+}
+
+function failedOutcome(f: DataPlaneFailure): {
+  kind: 'failed';
+  code: string;
+  message: string;
+  status: DataPlaneHttpStatus;
+} {
+  return { kind: 'failed', code: f.code, message: f.message, status: f.status };
 }
 
 function searchMessageRef(row: AgentSearchMessageRow): MessageRef {
@@ -5882,7 +6039,7 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
     return c.json(result);
   });
 
-  app.get(internalPaths.agentListWorkspaces(':cid', ':aid'), c => {
+  app.get(internalPaths.agentListWorkspaces(':cid', ':aid'), async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {
@@ -5892,17 +6049,28 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!canViewConversation(ctx, principal, principal.conversationId)) {
       return c.json({ error: 'forbidden' }, 403);
     }
-    const result = timedRouteSpan(
-      ctx,
-      'agent.list_workspaces',
-      {
-        sourceConversationId: principal.conversationId,
-        agentId: principal.agentId,
-      },
-      () => buildAgentListWorkspacesDto(ctx, principal.agentId),
-      out => ({ workspaceCount: out.workspaces.length }),
-    );
-    return c.json(result);
+    const startedAt = performance.now();
+    const outcome = await buildAgentListWorkspacesDto(ctx, principal.agentId);
+    const elapsedMs = elapsedSince(startedAt);
+    if (elapsedMs >= SLOW_ROUTE_SPAN_MS) {
+      ctx.logger.warn(
+        {
+          span: 'agent.list_workspaces',
+          elapsedMs,
+          thresholdMs: SLOW_ROUTE_SPAN_MS,
+          sourceConversationId: principal.conversationId,
+          agentId: principal.agentId,
+        },
+        'api: slow route span',
+      );
+    }
+    if (outcome.kind === 'failed') {
+      return c.json(
+        { error: outcome.message, code: outcome.code },
+        outcome.status,
+      );
+    }
+    return c.json(outcome.dto);
   });
 
   app.get(internalPaths.agentListChannels(':cid', ':aid'), c => {

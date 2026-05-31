@@ -9,6 +9,7 @@ import type {
 } from '@silverhand/shared';
 import {
   decodeUserPrincipalHeader,
+  isAgentHomeWorkspaceId,
   X_SILVERHAND_LEGACY_USER_ID_HEADER as LEGACY_USER_ID_HEADER,
   X_SILVERHAND_PRINCIPAL_HEADER as PRINCIPAL_HEADER,
 } from '@silverhand/shared';
@@ -28,6 +29,7 @@ import { MessageRepo } from '../../src/repos/message-repo.js';
 import { NotificationRepo } from '../../src/repos/notification-repo.js';
 import { ScheduleRepo } from '../../src/repos/schedule-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
+import { WorkspaceRegistryBackfiller } from '../../src/runtime/workspace-registry-backfill.js';
 import { createApiRouter, createInternalRouter } from '../../src/routes.js';
 import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
 import { AgentTokenStore } from '../../src/auth/agent-token-store.js';
@@ -61,7 +63,7 @@ import type {
   OutboundServerCommandParams,
   OutboundServerCommandResult,
 } from '@silverhand/host';
-import { ensureAgentL1Dir } from '../../src/workspace-files.js';
+import { ensureAgentL1Dir, initWorkspaceDir } from '../../src/workspace-files.js';
 import { join as joinPath } from 'node:path';
 
 /**
@@ -237,6 +239,36 @@ export class FakeHostWsServerController implements HostWsServerController {
         agentHomeWorkspaceId: string,
       ) => OutboundServerCommandResult<'agent_materialize'>)
     | null = null;
+  /**
+   * D4.e-1 3b — override the `workspace_provision` ack. Tests that want to
+   * exercise a specific `bound_workspace_path`, a provisioned=false
+   * idempotent re-bind, or skip skeleton creation can swap this.
+   */
+  workspaceProvisionAckOverride:
+    | ((
+        params: OutboundServerCommandParams<'workspace_provision'>,
+      ) => OutboundServerCommandResult<'workspace_provision'>)
+    | null = null;
+  /**
+   * D4.e-1 3b — override the `agent_workspace_index` ack. Tests that want to
+   * exercise `unresolved` (read fail-closed) or a specific daemon-stamped
+   * `agent_dir` set can swap this. Default stamps every requested id.
+   */
+  agentWorkspaceIndexAckOverride:
+    | ((
+        params: OutboundServerCommandParams<'agent_workspace_index'>,
+      ) => OutboundServerCommandResult<'agent_workspace_index'>)
+    | null = null;
+
+  /**
+   * D4.e-1 3b P2 (Cindy) — a tiny in-memory stand-in for the daemon
+   * registry: `workspace_provision` records `workspace_id → bound path`, and
+   * `agent_workspace_index` resolves regular ids from it (missing → an
+   * `unresolved` entry, like a never-provisioned id). This makes list tests
+   * actually depend on backfill/provision having run with the right
+   * `requested_path` instead of the fake always succeeding.
+   */
+  private readonly boundWorkspacePaths = new Map<string, string>();
 
   constructor(private readonly silverhandDir: string) {}
 
@@ -290,6 +322,80 @@ export class FakeHostWsServerController implements HostWsServerController {
         agent_dir: dir,
         agent_home_workspace_path: dir,
         materialized_at: Date.now(),
+      } as OutboundServerCommandResult<K>;
+    }
+    if (kind === 'workspace_provision') {
+      const p = params as OutboundServerCommandParams<'workspace_provision'>;
+      if (this.workspaceProvisionAckOverride) {
+        const ack = this.workspaceProvisionAckOverride(p);
+        // Keep the in-memory registry consistent even when a test customizes
+        // the ack: `agent_workspace_index` resolves regular ids from this map,
+        // so a custom `bound_workspace_path` MUST be recorded too — otherwise
+        // the override would ack a bind the fake registry never saw, and a
+        // follow-up list would spuriously report the id `unresolved`. A test
+        // that specifically wants "ack'd but registry empty" should drive that
+        // explicitly via `agentWorkspaceIndexAckOverride` → unresolved.
+        if (ack.ok) {
+          this.boundWorkspacePaths.set(p.workspace_id, ack.bound_workspace_path);
+        }
+        return ack as OutboundServerCommandResult<K>;
+      }
+      // Mirror the real daemon: bind to the caller-proposed path when
+      // present, else a deterministic managed default under silverhandDir,
+      // and create the `.silverhand/` skeleton so backend code that still
+      // reads the cached `workspace_path` (seed/channel) sees a real dir.
+      // The embedded test fs is shared, so this stands in for the daemon's
+      // `initWorkspaceSkeleton`.
+      const boundPath =
+        p.requested_path ??
+        joinPath(this.silverhandDir, 'workspaces', p.workspace_id);
+      await initWorkspaceDir(boundPath);
+      // Record the bind so `agent_workspace_index` resolves this id to the
+      // SAME path (mirrors the daemon registry; honours custom requested_path).
+      this.boundWorkspacePaths.set(p.workspace_id, boundPath);
+      return {
+        ok: true as const,
+        provisioned: true,
+        bound_workspace_path: boundPath,
+      } as OutboundServerCommandResult<K>;
+    }
+    if (kind === 'agent_workspace_index') {
+      const p = params as OutboundServerCommandParams<'agent_workspace_index'>;
+      if (this.agentWorkspaceIndexAckOverride) {
+        return this.agentWorkspaceIndexAckOverride(
+          p,
+        ) as OutboundServerCommandResult<K>;
+      }
+      // Default: resolve each requested id the way the real daemon would —
+      // agent_home (`wsah_<agent_id>`) from the homedir convention, regular
+      // from the recorded registry bind (`workspace_provision`). A regular id
+      // with NO recorded bind is `unresolved` (read fail-closed), so list
+      // tests must drive backfill/provision rather than relying on the fake
+      // to always succeed.
+      const entries: { workspace_id: string; agent_dir: string }[] = [];
+      const unresolved: string[] = [];
+      for (const workspace_id of p.workspace_ids) {
+        if (isAgentHomeWorkspaceId(workspace_id, p.agent_id)) {
+          entries.push({
+            workspace_id,
+            agent_dir: joinPath(this.silverhandDir, 'agents', p.agent_id),
+          });
+          continue;
+        }
+        const boundPath = this.boundWorkspacePaths.get(workspace_id);
+        if (!boundPath) {
+          unresolved.push(workspace_id);
+          continue;
+        }
+        entries.push({
+          workspace_id,
+          agent_dir: joinPath(boundPath, '.silverhand', 'agents', p.agent_id),
+        });
+      }
+      return {
+        ok: true as const,
+        entries,
+        unresolved,
       } as OutboundServerCommandResult<K>;
     }
     return {} as OutboundServerCommandResult<K>;
@@ -490,6 +596,12 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     outboundFrameAdapter: hostWsControllerFactory,
     runtimeHost: fake as unknown as AgentRuntimeHost,
   };
+  // D4.e-1 3b-2/3b-3 — the same shared registry backfiller production wires,
+  // so list_workspaces ensure()s before dispatching agent_workspace_index.
+  ctx.workspaceRegistryBackfiller = new WorkspaceRegistryBackfiller({
+    workspaces: new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot }),
+    outboundFrameAdapter: () => ctx.outboundFrameAdapter?.() ?? null,
+  });
   ctx.channelService = new ChannelService({
     db,
     conversations: new ConversationRepo(db),
@@ -559,6 +671,12 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
       userId,
       installationId: `test-install-${userId}`,
     });
+  }
+  // D4.e-1 3b P1-2 — mirror prod: the embedded backend's co-located host is the
+  // single `local`-named host (`ensureLocal`), which the `local` viewer claims
+  // above. Standalone leaves it undefined (backend is remote).
+  if (deploymentMode === 'embedded') {
+    ctx.coLocatedHostId = hosts.ensureLocal().id;
   }
 
   const authToken = ctx.authSessions.issueSession({ userId: viewerUserId }).userToken;

@@ -68,18 +68,22 @@ import { SocketTransport } from './socket-transport.js';
  * disconnect, never_connected). Callers branch on `.code`.
  *
  * The `code` type is intentionally widened to `string` (Cindy D2
- * P1-1). For typed intents — currently just `agent_materialize` —
- * the daemon may surface per-intent codes (e.g. `agent_dir_collision`,
- * `fs_quota_exceeded`) that are not in the 5-code generic
- * `ResponseError` enum. `HostClient.handleFrame` validates the
+ * P1-1). For typed intents — `agent_materialize` plus the D4.e
+ * workspace intents (`workspace_provision`, `agent_workspace_index`)
+ * — the daemon may surface per-intent codes (e.g.
+ * `agent_dir_collision`, `fs_quota_exceeded`, `registry_unavailable`)
+ * that are not in the 5-code generic `ResponseError` enum.
+ * `HostClient.handleFrame` validates the
  * incoming `code` against `intentErrorSchema(intent)` before
  * constructing this error, so the string is always one of:
  *   - a generic `ResponseError['code']` (any intent), OR
  *   - a per-intent typed code (only that intent), OR
  *   - one of the local-only synthetic codes below.
  * Callers that want exhaustive type narrowing should use the per-
- * intent error type `IntentError<'agent_materialize'>` exported
- * from `protocol.ts`.
+ * intent error type `IntentError<TIntent>` exported from
+ * `protocol.ts` (e.g. `IntentError<'agent_materialize'>`,
+ * `IntentError<'workspace_provision'>`) — every typed intent has the
+ * same exhaustiveness path, not just materialize.
  */
 export class HostClientError extends Error {
   constructor(

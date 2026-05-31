@@ -344,6 +344,49 @@ const REQUESTS: WireFixture[] = [
     }),
     kind: { kind: 'request', intent: 'agent_materialize' },
   },
+  {
+    name: 'request/workspace_provision-regular',
+    description:
+      'D4.e-1: server asks daemon to bind a regular workspace into its registry and create its .silverhand skeleton. NO requested_path → daemon self-picks a deterministic managed path (the zero-choice default). Only workspace_id + kind cross the wire. workspace_provision is server↔daemon data-plane semantics: the daemon is the sole authority for host-local workspace paths (invariant I1).',
+    frame: enc({
+      id: 'req-workspace-provision-1',
+      intent: 'workspace_provision',
+      params: {
+        workspace_id: 'ws_8K2nQ',
+        kind: 'regular',
+      },
+    }),
+    kind: { kind: 'request', intent: 'workspace_provision' },
+  },
+  {
+    name: 'request/agent_workspace_index-mixed',
+    description:
+      'D4.e-1: route-time agent_dir resolver. Backend sends only {agent_id, workspace_ids} (already ACL/DB-authorized) — no path, no kind. The daemon resolves each agent_dir host-side (agent-home → L1 dir; regular → registry), so the backend never assembles a path from workspace_path.',
+    frame: enc({
+      id: 'req-agent-workspace-index-1',
+      intent: 'agent_workspace_index',
+      params: {
+        agent_id: 'aid_FpzaAEM',
+        workspace_ids: ['wsah_aid_FpzaAEM', 'ws_8K2nQ', 'ws_missing'],
+      },
+    }),
+    kind: { kind: 'request', intent: 'agent_workspace_index' },
+  },
+  {
+    name: 'request/workspace_provision-with-requested-path',
+    description:
+      'D4.e-1 (A — single intent): the SAME workspace_provision command, but carrying an OPTIONAL caller-proposed requested_path (M1 desktop folder picker / sandbox typed path / legacy backfill all unify here). The daemon RE-VALIDATES the path host-side (absolute / not root / not home / not inside the managed root / not already bound) before binding — it never blindly trusts the backend. The authoritative result is bound_workspace_path, not this field.',
+    frame: enc({
+      id: 'req-workspace-provision-2',
+      intent: 'workspace_provision',
+      params: {
+        workspace_id: 'ws_custom_7',
+        kind: 'regular',
+        requested_path: '/Users/alice/work/my-workspace',
+      },
+    }),
+    kind: { kind: 'request', intent: 'workspace_provision' },
+  },
 ];
 
 // ── Successful response fixtures ───────────────────────────────────
@@ -937,6 +980,59 @@ const RESPONSES_SUCCESS: WireFixture[] = [
     }),
     kind: { kind: 'response_success', intent: 'agent_materialize' },
   },
+  {
+    name: 'response/workspace_provision-ok',
+    description:
+      'D4.e-1: daemon bound the workspace (newly provisioned) and created its .silverhand skeleton. provisioned=true on first bind. bound_workspace_path is the daemon-authoritative path (here a managed default); it is a TRANSITIONAL seam the backend may cache into the legacy workspace_path column only — never interpret to assemble agent_dir.',
+    frame: enc({
+      id: 'req-workspace-provision-1',
+      result: {
+        ok: true,
+        provisioned: true,
+        bound_workspace_path:
+          '/home/silverhand/.silverhand/daemon/3b1c.../workspaces/9f2a...',
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'workspace_provision' },
+  },
+  {
+    name: 'response/workspace_provision-with-path-ok',
+    description:
+      'D4.e-1 (A): daemon accepted+validated a caller-proposed requested_path and bound it. bound_workspace_path echoes the validated (resolved) path — the authoritative value the backend caches; the proposed input is never trusted as-is.',
+    frame: enc({
+      id: 'req-workspace-provision-2',
+      result: {
+        ok: true,
+        provisioned: true,
+        bound_workspace_path: '/Users/alice/work/my-workspace',
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'workspace_provision' },
+  },
+  {
+    name: 'response/agent_workspace_index-mixed',
+    description:
+      'D4.e-1: daemon stamped each agent_dir host-side. agent-home resolves to the L1 dir; the provisioned regular workspace resolves under the managed root; the never-provisioned id comes back in unresolved (read fail-closed — the backend MUST NOT fall back to a workspace_path-derived path).',
+    frame: enc({
+      id: 'req-agent-workspace-index-1',
+      result: {
+        ok: true,
+        entries: [
+          {
+            workspace_id: 'wsah_aid_FpzaAEM',
+            agent_dir: '/home/silverhand/.silverhand/agents/aid_FpzaAEM',
+          },
+          {
+            workspace_id: 'ws_8K2nQ',
+            agent_dir:
+              '/home/silverhand/.silverhand/daemon/3b1c.../workspaces/9f2a.../.silverhand/agents/aid_FpzaAEM',
+          },
+        ],
+        unresolved: ['ws_missing'],
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'agent_workspace_index' },
+  },
 ];
 
 // ── Error response fixtures ────────────────────────────────────────
@@ -1081,6 +1177,139 @@ const RESPONSES_ERROR_TYPED: WireFixture[] = [
     kind: { kind: 'response_error_typed', intent: 'agent_materialize' },
   },
 ];
+
+// D4.e-1 workspace_provision typed errors — server↔daemon data-plane
+// formal error surface. One fixture per WorkspaceProvisionErrorCodeSchema
+// slot so cross-implementation byte pins exist (Cindy P1-2).
+const WORKSPACE_PROVISION_ERROR_FIXTURES: WireFixture[] = [
+  {
+    name: 'response/workspace_provision-error-unsupported_kind',
+    description:
+      'Backend routed a kind=agent_home workspace to workspace_provision. agent_home is materialized via agent_materialize (owns the L1 dir), never here — backend misuse, surfaced typed.',
+    frame: enc({
+      id: 'req-workspace-provision-1',
+      error: {
+        code: 'unsupported_kind',
+        message:
+          'agent_home workspaces are materialized via agent_materialize, not workspace_provision',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'workspace_provision' },
+  },
+  {
+    name: 'response/workspace_provision-error-invalid_path',
+    description:
+      'A caller-supplied requested_path failed daemon-side validation (relative / root / home / inside the managed root). Cannot occur on the no-path default branch. The daemon never blindly trusts a backend path.',
+    frame: enc({
+      id: 'req-workspace-provision-2',
+      error: {
+        code: 'invalid_path',
+        message: 'requested path cannot be the home directory',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'workspace_provision' },
+  },
+  {
+    name: 'response/workspace_provision-error-path_conflict',
+    description:
+      'Path-vs-id binding conflict: the id is already bound to a different path, OR the requested_path is already bound to another workspace. Refused, never silently overwritten (same id→same path is idempotent, not a conflict).',
+    frame: enc({
+      id: 'req-workspace-provision-2',
+      error: {
+        code: 'path_conflict',
+        message:
+          'path /Users/alice/work/my-workspace is already bound to workspace ws_other',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'workspace_provision' },
+  },
+  {
+    name: 'response/workspace_provision-error-fs_quota_exceeded',
+    description:
+      'Recoverable fs failure during registry write or skeleton create — ENOSPC/EDQUOT mapped to fs_quota_exceeded (same classifier for both stages; Cindy P1-1).',
+    frame: enc({
+      id: 'req-workspace-provision-1',
+      error: {
+        code: 'fs_quota_exceeded',
+        message: 'ENOSPC: no space left on device, write registry tmp',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'workspace_provision' },
+  },
+  {
+    name: 'response/workspace_provision-error-fs_unavailable',
+    description:
+      'Recoverable fs failure — EACCES/EPERM/EROFS/ENOENT mapped to fs_unavailable so the route layer can return 503 + retry-after.',
+    frame: enc({
+      id: 'req-workspace-provision-1',
+      error: {
+        code: 'fs_unavailable',
+        message: 'EACCES: permission denied, mkdir managed workspaces root',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'workspace_provision' },
+  },
+  {
+    name: 'response/workspace_provision-error-registry_unavailable',
+    description:
+      'Daemon registry is foreign (bound to a different control plane) or corrupt — fail closed; the workspace is NOT bound.',
+    frame: enc({
+      id: 'req-workspace-provision-1',
+      error: {
+        code: 'registry_unavailable',
+        message:
+          'registry is bound to https://other.example.com/host_z, not the current binding',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'workspace_provision' },
+  },
+  {
+    name: 'response/workspace_provision-error-internal_error',
+    description:
+      'Catch-all for an unrecognized errno (default arm of the shared fs classifier) or an unexpected registry invariant breach.',
+    frame: enc({
+      id: 'req-workspace-provision-1',
+      error: {
+        code: 'internal_error',
+        message: 'EIO: i/o error during registry rename',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'workspace_provision' },
+  },
+];
+
+// D4.e-1 agent_workspace_index typed errors. Note: a never-provisioned
+// regular workspace is NOT an error — it comes back in `result.unresolved`
+// (read fail-closed). The only typed errors are whole-call failures.
+const AGENT_WORKSPACE_INDEX_ERROR_FIXTURES: WireFixture[] = [
+  {
+    name: 'response/agent_workspace_index-error-registry_unavailable',
+    description:
+      'Daemon registry foreign/corrupt — the whole index call fails typed (not a per-workspace unresolved entry).',
+    frame: enc({
+      id: 'req-agent-workspace-index-1',
+      error: {
+        code: 'registry_unavailable',
+        message: 'registry file is corrupt: unexpected end of JSON input',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_workspace_index' },
+  },
+  {
+    name: 'response/agent_workspace_index-error-internal_error',
+    description:
+      'Catch-all for an unexpected failure while resolving agent_dir entries.',
+    frame: enc({
+      id: 'req-agent-workspace-index-1',
+      error: { code: 'internal_error', message: 'unexpected resolver failure' },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_workspace_index' },
+  },
+];
+RESPONSES_ERROR_TYPED.push(
+  ...WORKSPACE_PROVISION_ERROR_FIXTURES,
+  ...AGENT_WORKSPACE_INDEX_ERROR_FIXTURES,
+);
 
 // ── Event fixtures ─────────────────────────────────────────────────
 //    Every arm of EventFrameSchema; for discriminated arms (init
