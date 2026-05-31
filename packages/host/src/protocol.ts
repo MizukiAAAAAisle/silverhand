@@ -1184,7 +1184,7 @@ export type ResponseErrorCode = z.infer<typeof ResponseErrorCodeSchema>;
  * Intents that may legitimately surface daemon-business typed
  * codes — `agent_materialize` and the D4.e workspace data-plane
  * intents (`workspace_provision`, `agent_workspace_index`,
- * `agent_workspace_read`, `agent_l2_seed`) — override with a wider schema that unions
+ * `agent_workspace_read`, `agent_l2_seed`, `agent_files_purge`) — override with a wider schema that unions
  * the 5 generic codes with the intent's own taxonomy (e.g.
  * `AgentMaterializeErrorCodeSchema`).
  *
@@ -1530,6 +1530,78 @@ const AgentL2SeedIpcErrorSchema = z
   })
   .strict();
 
+// ── D4.e-4: agent_files_purge ────────────────────────────────────────
+// Removes an agent's host-local files on the OWNING daemon. Replaces the
+// backend `DELETE /api/agents/:id` `fs.rm(l1_path / l2_paths)` block (G3):
+// the backend forwards only semantic ids + scope; the daemon resolves L1
+// (its homedir, `<home>/.silverhand/agents/<agent_id>`) and each L2
+// (`<workspace>/.silverhand/agents/<agent_id>`, workspace path from the
+// registry) itself — no fs path crosses the wire (I1). `scope:'all'` purges
+// L1 + the listed workspaces' L2; `scope:'l2'` purges only the listed L2
+// (L1 untouched). Idempotent: a target that is already gone (ENOENT) counts
+// as success, not a failure. Fail-closed (§3.3): a HARD fs error on any
+// target → typed `partial_purge` so the route keeps the DB row for retry; a
+// workspace with no registry binding has no daemon-managed L2 dir to purge
+// and is reported (`skipped_unprovisioned`), never silently dropped.
+export const AgentFilesPurgeParamsSchema = z
+  .object({
+    /** The agent whose host-local files are removed. */
+    agent_id: z.string().min(1),
+    /**
+     * `all` → purge the agent's L1 home dir AND each listed workspace's L2;
+     * `l2` → purge only the listed workspaces' L2 (L1 preserved).
+     */
+    scope: z.enum(['all', 'l2']),
+    /**
+     * REGULAR workspace ids whose L2 dir for this agent should be purged.
+     * The daemon resolves each one's host-local path from the registry
+     * (fail-closed — no path crosses the wire, I1). An id with no binding
+     * has no daemon-managed L2 dir and is counted in
+     * `skipped_unprovisioned`. Defaults to `[]` (e.g. `scope:'all'` with no
+     * regular memberships → L1-only purge).
+     */
+    workspace_ids: z.array(z.string().min(1)).default([]),
+  })
+  .strict();
+export type AgentFilesPurgeParams = z.infer<typeof AgentFilesPurgeParamsSchema>;
+
+export const AgentFilesPurgeResultSchema = z
+  .object({
+    ok: z.literal(true),
+    /** Number of target dirs that existed and were removed (ENOENT targets
+     *  are NOT counted — there was nothing to purge). */
+    purged_count: z.number().int().nonnegative(),
+    /** Number of listed workspaces with no registry binding (no
+     *  daemon-managed L2 dir to purge). Reported, never silently dropped. */
+    skipped_unprovisioned: z.number().int().nonnegative(),
+  })
+  .strict();
+export type AgentFilesPurgeResult = z.infer<typeof AgentFilesPurgeResultSchema>;
+
+export const AgentFilesPurgeErrorCodeSchema = z.enum([
+  /**
+   * One or more target dirs could not be removed because of a HARD fs error
+   * (perm/IO/EROFS/ENOSPC — NOT ENOENT). Fail-closed (§3.3): the route keeps
+   * the DB row so a later retry has its routing anchor. May be raised even
+   * when zero targets succeeded (the purge did not fully complete).
+   */
+  'partial_purge',
+  /** Whole-registry failure (foreign identity / corrupt file) — cannot
+   *  safely resolve ANY L2 path, so the purge is blocked fail-closed. */
+  'registry_unavailable',
+  'internal_error',
+]);
+export type AgentFilesPurgeErrorCode = z.infer<
+  typeof AgentFilesPurgeErrorCodeSchema
+>;
+
+const AgentFilesPurgeIpcErrorSchema = z
+  .object({
+    code: z.union([ResponseErrorCodeSchema, AgentFilesPurgeErrorCodeSchema]),
+    message: z.string(),
+  })
+  .strict();
+
 
 /**
  * Single source of truth for the intent ↔ params / result / error
@@ -1545,7 +1617,7 @@ const AgentL2SeedIpcErrorSchema = z
  * that may legitimately surface daemon-business typed codes —
  * `agent_materialize` (D4.d) plus the D4.e workspace data-plane
  * intents `workspace_provision` / `agent_workspace_index` /
- * `agent_workspace_read` / `agent_l2_seed` — declare their own widened error schema. The wire surface stays
+ * `agent_workspace_read` / `agent_l2_seed` / `agent_files_purge` — declare their own widened error schema. The wire surface stays
  * per-intent-scoped (Cindy D2 P1-1 + D1 round-1 P1): a typed code
  * in one intent's error arm cannot leak into another intent's
  * error arm at validation time.
@@ -1662,6 +1734,11 @@ export const intentSchemas = {
     params: AgentL2SeedParamsSchema,
     result: AgentL2SeedResultSchema,
     error: AgentL2SeedIpcErrorSchema,
+  },
+  agent_files_purge: {
+    params: AgentFilesPurgeParamsSchema,
+    result: AgentFilesPurgeResultSchema,
+    error: AgentFilesPurgeIpcErrorSchema,
   },
 } as const;
 

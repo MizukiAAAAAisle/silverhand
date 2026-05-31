@@ -534,6 +534,98 @@ export function runOutboundFrameAdapterContract(
       expect(err!.code).toBe('transport_disconnected');
     });
 
+    // `agent_files_purge` is the D4.e-4 delete-path purger. It must round-trip
+    // its `{ agent_id, scope, workspace_ids }` param + `{ purged_count,
+    // skipped_unprovisioned }` result, and honour per-command error scoping:
+    // its own `partial_purge` rides the envelope; a foreign code is refused.
+
+    it('round-trips agent_files_purge command → purged result', async () => {
+      fx = await makeFixture();
+      const daemon = await fx.connectDaemon();
+
+      const pending = fx.adapter.sendCommand(
+        fx.hostId,
+        'agent_files_purge',
+        { agent_id: 'a1', scope: 'all', workspace_ids: ['ws_1', 'ws_2'] },
+        { timeoutMs: 500 },
+      );
+      const cmd = await daemon.nextCommand();
+      expect(cmd.kind).toBe('agent_files_purge');
+      // The backend forwards semantic ids + scope ONLY — no path crosses the wire.
+      expect(cmd.params).toEqual({
+        agent_id: 'a1',
+        scope: 'all',
+        workspace_ids: ['ws_1', 'ws_2'],
+      });
+
+      daemon.respondResult(cmd.id, 'agent_files_purge', {
+        ok: true,
+        purged_count: 3,
+        skipped_unprovisioned: 0,
+      });
+
+      await expect(pending).resolves.toMatchObject({
+        purged_count: 3,
+        skipped_unprovisioned: 0,
+      });
+    });
+
+    it('passes through a legal agent_files_purge typed error (partial_purge) with its code intact', async () => {
+      fx = await makeFixture();
+      const daemon = await fx.connectDaemon();
+
+      const pending = fx.adapter.sendCommand(
+        fx.hostId,
+        'agent_files_purge',
+        { agent_id: 'a1', scope: 'all', workspace_ids: ['ws_1'] },
+        { timeoutMs: 500 },
+      );
+      const cmd = await daemon.nextCommand();
+      expect(cmd.kind).toBe('agent_files_purge');
+
+      // `partial_purge` is declared by `agent_files_purge`'s error arm — it
+      // rides the envelope and is NOT collapsed into a transport_* error.
+      daemon.respondError(cmd.id, 'agent_files_purge', {
+        code: 'partial_purge',
+        message: 'failed to remove 1 target(s)',
+      });
+
+      await expect(pending).rejects.toMatchObject({
+        code: 'partial_purge',
+      });
+    });
+
+    it('refuses a foreign typed error code on agent_files_purge', async () => {
+      fx = await makeFixture();
+      const daemon = await fx.connectDaemon();
+
+      const pending = fx.adapter.sendCommand(
+        fx.hostId,
+        'agent_files_purge',
+        { agent_id: 'a1', scope: 'all', workspace_ids: ['ws_1'] },
+        { timeoutMs: 1000 },
+      );
+      const cmd = await daemon.nextCommand();
+      expect(cmd.kind).toBe('agent_files_purge');
+
+      // `unsupported_template` is an `agent_l2_seed` code, not declared by
+      // `agent_files_purge`. It must be refused at the schema boundary.
+      daemon.respondError(cmd.id, 'agent_files_purge', {
+        code: 'unsupported_template',
+        message: 'foreign code must not be accepted on agent_files_purge',
+      });
+
+      let err: { code?: string } | null = null;
+      try {
+        await pending;
+      } catch (e) {
+        err = e as { code?: string };
+      }
+      expect(err).not.toBeNull();
+      expect(err!.code).not.toBe('unsupported_template');
+      expect(err!.code).toBe('transport_disconnected');
+    });
+
     it('refuses a foreign typed error code on a command that does not declare it', async () => {
       fx = await makeFixture();
       const daemon = await fx.connectDaemon();

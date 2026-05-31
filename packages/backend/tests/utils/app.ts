@@ -286,6 +286,20 @@ export class FakeHostWsServerController implements HostWsServerController {
         params: OutboundServerCommandParams<'agent_l2_seed'>,
       ) => OutboundServerCommandResult<'agent_l2_seed'>)
     | null = null;
+  /**
+   * D4.e-4 — override the `agent_files_purge` ack. Tests that want a typed
+   * failure (`partial_purge` / `registry_unavailable`) or a specific
+   * `purged_count` swap this. Default mirrors the daemon: rm L1 (scope:'all')
+   * + each resolvable workspace's L2 on the shared embedded test fs; an
+   * unbound workspace id is counted in `skipped_unprovisioned`.
+   */
+  agentFilesPurgeAckOverride:
+    | ((
+        params: OutboundServerCommandParams<'agent_files_purge'>,
+      ) =>
+        | OutboundServerCommandResult<'agent_files_purge'>
+        | Promise<OutboundServerCommandResult<'agent_files_purge'>>)
+    | null = null;
 
   /**
    * D4.e-1 3b P2 (Cindy) — a tiny in-memory stand-in for the daemon
@@ -306,8 +320,13 @@ export class FakeHostWsServerController implements HostWsServerController {
     return ['local'];
   }
   connectionIdForHost(_hostId: string): string | null {
+    if (this.connectionIdForHostOverride) {
+      return this.connectionIdForHostOverride(_hostId);
+    }
     return 'conn-fake-1';
   }
+  /** Test hook to simulate a detached host (resolveOutboundForHost → 503). */
+  connectionIdForHostOverride: ((hostId: string) => string | null) | null = null;
   getAttachment(): null {
     return null;
   }
@@ -466,6 +485,46 @@ export class FakeHostWsServerController implements HostWsServerController {
         ok: true as const,
         seeded,
         l2_present: true,
+      } as OutboundServerCommandResult<K>;
+    }
+    if (kind === 'agent_files_purge') {
+      const p = params as OutboundServerCommandParams<'agent_files_purge'>;
+      if (this.agentFilesPurgeAckOverride) {
+        return (await this.agentFilesPurgeAckOverride(
+          p,
+        )) as OutboundServerCommandResult<K>;
+      }
+      // Mirror the daemon: rm L1 (scope:'all') + each resolvable workspace's
+      // L2 on the shared embedded test fs. ENOENT is not a failure; an unbound
+      // workspace id has no daemon-managed L2 dir → skipped_unprovisioned.
+      let purgedCount = 0;
+      let skippedUnprovisioned = 0;
+      const targets: string[] = [];
+      if (p.scope === 'all') {
+        targets.push(joinPath(this.silverhandDir, 'agents', p.agent_id));
+      }
+      for (const workspaceId of p.workspace_ids) {
+        const boundPath = this.boundWorkspacePaths.get(workspaceId);
+        if (!boundPath) {
+          skippedUnprovisioned += 1;
+          continue;
+        }
+        targets.push(joinPath(boundPath, '.silverhand', 'agents', p.agent_id));
+      }
+      for (const target of targets) {
+        let existed = true;
+        try {
+          await fsp.access(target);
+        } catch {
+          existed = false;
+        }
+        await fsp.rm(target, { recursive: true, force: true });
+        if (existed) purgedCount += 1;
+      }
+      return {
+        ok: true as const,
+        purged_count: purgedCount,
+        skipped_unprovisioned: skippedUnprovisioned,
       } as OutboundServerCommandResult<K>;
     }
     return {} as OutboundServerCommandResult<K>;

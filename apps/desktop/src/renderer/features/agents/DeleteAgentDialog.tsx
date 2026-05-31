@@ -157,8 +157,9 @@ function ImpactList({ impact }: { impact: AgentDeleteImpactDto }): JSX.Element {
       ) : null}
 
       <Item>
-        Files removed: L1 directory + {impact.l2_paths.length} per-channel L2
-        director{impact.l2_paths.length === 1 ? 'y' : 'ies'}
+        Files removed: L1 directory + {impact.regular_memberships.length}{' '}
+        per-channel L2 director
+        {impact.regular_memberships.length === 1 ? 'y' : 'ies'}
       </Item>
 
       <Item subtle>

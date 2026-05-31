@@ -401,6 +401,21 @@ const REQUESTS: WireFixture[] = [
     kind: { kind: 'request', intent: 'agent_l2_seed' },
   },
   {
+    name: 'request/agent_files_purge',
+    description:
+      "D4.e-4: remove an agent's host-local files on the owning host. Backend sends ONLY {agent_id, scope, workspace_ids} — no path. The daemon resolves L1 (its homedir) and each L2 (workspace path from the registry) itself. scope:'all' purges L1 + the listed workspaces' L2; scope:'l2' only the L2. Replaces the backend DELETE fs.rm block (I1/I6).",
+    frame: enc({
+      id: 'req-agent-files-purge-1',
+      intent: 'agent_files_purge',
+      params: {
+        agent_id: 'aid_FpzaAEM',
+        scope: 'all',
+        workspace_ids: ['ws_custom_7', 'ws_custom_8'],
+      },
+    }),
+    kind: { kind: 'request', intent: 'agent_files_purge' },
+  },
+  {
     name: 'request/workspace_provision-with-requested-path',
     description:
       'D4.e-1 (A — single intent): the SAME workspace_provision command, but carrying an OPTIONAL caller-proposed requested_path (M1 desktop folder picker / sandbox typed path / legacy backfill all unify here). The daemon RE-VALIDATES the path host-side (absolute / not root / not home / not inside the managed root / not already bound) before binding — it never blindly trusts the backend. The authoritative result is bound_workspace_path, not this field.',
@@ -1108,6 +1123,20 @@ const RESPONSES_SUCCESS: WireFixture[] = [
     }),
     kind: { kind: 'response_success', intent: 'agent_l2_seed' },
   },
+  {
+    name: 'response/agent_files_purge',
+    description:
+      'D4.e-4: daemon removed the agent L1 + listed L2 dirs and returned the outcome. purged_count = dirs that existed and were removed; skipped_unprovisioned = listed workspaces with no registry binding (no daemon-managed L2 dir to purge).',
+    frame: enc({
+      id: 'req-agent-files-purge-1',
+      result: {
+        ok: true,
+        purged_count: 3,
+        skipped_unprovisioned: 0,
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'agent_files_purge' },
+  },
 ];
 
 // ── Error response fixtures ────────────────────────────────────────
@@ -1476,11 +1505,52 @@ const AGENT_L2_SEED_ERROR_FIXTURES: WireFixture[] = [
     kind: { kind: 'response_error_typed', intent: 'agent_l2_seed' },
   },
 ];
+// D4.e-4 agent_files_purge typed errors. One per AgentFilesPurgeErrorCode slot.
+const AGENT_FILES_PURGE_ERROR_FIXTURES: WireFixture[] = [
+  {
+    name: 'response/agent_files_purge-error-partial_purge',
+    description:
+      'One or more target dirs could not be removed because of a HARD fs error (perm/IO/EROFS/ENOSPC — not ENOENT). Fail-closed (§3.3): the route keeps the DB row so a retry has its routing anchor.',
+    frame: enc({
+      id: 'req-agent-files-purge-1',
+      error: {
+        code: 'partial_purge',
+        message:
+          "failed to remove 1 target(s): /home/.silverhand/agents/aid_FpzaAEM: EACCES: permission denied",
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_files_purge' },
+  },
+  {
+    name: 'response/agent_files_purge-error-registry_unavailable',
+    description:
+      'Whole-registry failure: the registry file is foreign (identity mismatch) or corrupt, so no L2 path can be safely resolved.',
+    frame: enc({
+      id: 'req-agent-files-purge-1',
+      error: {
+        code: 'registry_unavailable',
+        message: 'registry identity mismatch; refusing foreign registry',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_files_purge' },
+  },
+  {
+    name: 'response/agent_files_purge-error-internal_error',
+    description:
+      'Catch-all for an unexpected failure while purging the agent files.',
+    frame: enc({
+      id: 'req-agent-files-purge-1',
+      error: { code: 'internal_error', message: 'unexpected purge failure' },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_files_purge' },
+  },
+];
 RESPONSES_ERROR_TYPED.push(
   ...WORKSPACE_PROVISION_ERROR_FIXTURES,
   ...AGENT_WORKSPACE_INDEX_ERROR_FIXTURES,
   ...AGENT_WORKSPACE_READ_ERROR_FIXTURES,
   ...AGENT_L2_SEED_ERROR_FIXTURES,
+  ...AGENT_FILES_PURGE_ERROR_FIXTURES,
 );
 
 // ── Event fixtures ─────────────────────────────────────────────────

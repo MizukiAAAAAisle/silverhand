@@ -572,4 +572,79 @@ export function registerParityPhases(getRig: () => ParityRig): void {
       ),
     ).rejects.toMatchObject({ code: 'workspace_not_provisioned' });
   }, 30_000);
+
+  it('Phase G — agent_files_purge over the real daemon: removes the host-local L2 (scope:all tolerates missing L1), idempotent, reports skipped_unprovisioned (same envelope)', async () => {
+    const rig = getRig();
+    const now = Date.now();
+    const suffix = `${rig.name}-purge-${now}`;
+
+    // Create a real workspace + seed an L2 dir so the daemon has something to
+    // remove (resolved from its OWN registry, not a backend-supplied path).
+    const requestedPath = join(rig.silverhandDir, 'parity-purge', `ws-${suffix}`);
+    const createRes = await fetch(`${rig.baseUrl}/api/workspaces`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${rig.bearer}`,
+      },
+      body: JSON.stringify({
+        name: `parity-purge-${suffix}`,
+        workspace_host_id: rig.hostId,
+        workspace_path: requestedPath,
+      }),
+    });
+    const createBody = (await createRes.json()) as {
+      workspace?: { id: string; workspace_path: string };
+    };
+    expect(createRes.status, JSON.stringify(createBody)).toBe(201);
+    const workspaceId = createBody.workspace!.id;
+    const boundPath = createBody.workspace!.workspace_path;
+
+    const adapter = rig.adapter();
+    const conn = adapter.connectionIdForHost(rig.hostId) ?? undefined;
+    expect(conn, 'adapter must report a live connectionId for the local host').toBeTruthy();
+
+    const agentId = `agent-purge-${suffix}`;
+    await adapter.sendCommand(
+      rig.hostId,
+      'agent_l2_seed',
+      { agent_id: agentId, workspace_id: workspaceId, template_choice: 'default' },
+      { expectedConnectionId: conn, timeoutMs: 5_000 },
+    );
+    const l2 = join(boundPath, '.silverhand', 'agents', agentId);
+    expect(existsSync(l2)).toBe(true);
+
+    // ── 1) PURGE scope:'all' — removes the L2 dir (the agent's L1 home was
+    //    never materialized in this rig, so it is a missing target that
+    //    tolerates ENOENT and is simply not counted).
+    const purge = (await adapter.sendCommand(
+      rig.hostId,
+      'agent_files_purge',
+      { agent_id: agentId, scope: 'all', workspace_ids: [workspaceId] },
+      { expectedConnectionId: conn, timeoutMs: 5_000 },
+    )) as { ok: true; purged_count: number; skipped_unprovisioned: number };
+    expect(purge.ok).toBe(true);
+    expect(purge.purged_count).toBeGreaterThanOrEqual(1);
+    expect(purge.skipped_unprovisioned).toBe(0);
+    expect(existsSync(l2)).toBe(false);
+
+    // ── 2) IDEMPOTENT re-purge: targets already gone → purged_count 0, no error.
+    const repurge = (await adapter.sendCommand(
+      rig.hostId,
+      'agent_files_purge',
+      { agent_id: agentId, scope: 'all', workspace_ids: [workspaceId] },
+      { expectedConnectionId: conn, timeoutMs: 5_000 },
+    )) as { ok: true; purged_count: number; skipped_unprovisioned: number };
+    expect(repurge).toMatchObject({ ok: true, purged_count: 0, skipped_unprovisioned: 0 });
+
+    // ── 3) A never-provisioned workspace id has no daemon-managed L2 dir →
+    //    reported in skipped_unprovisioned (never an error, never a path guess).
+    const skipped = (await adapter.sendCommand(
+      rig.hostId,
+      'agent_files_purge',
+      { agent_id: agentId, scope: 'l2', workspace_ids: [`ws-never-${suffix}`] },
+      { expectedConnectionId: conn, timeoutMs: 5_000 },
+    )) as { ok: true; purged_count: number; skipped_unprovisioned: number };
+    expect(skipped).toMatchObject({ ok: true, purged_count: 0, skipped_unprovisioned: 1 });
+  }, 30_000);
 }

@@ -108,6 +108,9 @@ export {
   type AgentL2SeedParams,
   type AgentL2SeedResult,
   type AgentL2SeedErrorCode,
+  type AgentFilesPurgeParams,
+  type AgentFilesPurgeResult,
+  type AgentFilesPurgeErrorCode,
 } from './protocol.js';
 export {
   OUTBOUND_DAEMON_EVENT_KINDS,

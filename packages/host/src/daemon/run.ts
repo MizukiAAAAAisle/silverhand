@@ -55,6 +55,8 @@ import {
   indexAgentWorkspaces,
   AgentL2SeedError,
   seedAgentL2,
+  AgentFilesPurgeError,
+  purgeAgentFiles,
   type RegistryBinding,
 } from './workspace-registry/index.js';
 import { readAgentWorkspace } from './agent-workspace-read/index.js';
@@ -507,6 +509,33 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
         legacyWorkspacesRoot,
       });
       return seedAgentL2(params, { registry });
+    },
+    // D4.e-4 — agent_files_purge: remove an agent's host-local L1/L2 files
+    // on the owning host. L1 resolves from the daemon's homedir (test
+    // override via `agentMaterializeHomeDir`, same as materialize); each L2
+    // workspace resolves from the registry (fail-closed `registry_unavailable`
+    // on a whole-registry failure; an unbound id is reported via
+    // `skipped_unprovisioned`, not an error). A hard fs failure on any target
+    // → typed `partial_purge` so the route keeps the DB row. Built lazily so
+    // the standalone binding is current.
+    agentFilesPurgeHandler: async params => {
+      const binding = resolveRegistryBinding();
+      if (binding == null) {
+        throw new AgentFilesPurgeError(
+          'registry_unavailable',
+          'daemon not attached to a control plane; cannot resolve workspace registry binding',
+        );
+      }
+      const registry = new WorkspaceRegistry({
+        stateDir: workspaceRegistryStateDir,
+        binding,
+        silverhandStateRoot,
+        legacyWorkspacesRoot,
+      });
+      return purgeAgentFiles(params, {
+        registry,
+        homeDir: opts.testHooks?.agentMaterializeHomeDir,
+      });
     },
   });
   commandForwarder = command =>

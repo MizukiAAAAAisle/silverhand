@@ -419,27 +419,27 @@ export const AgentDeleteImpactDtoSchema = z.object({
   regular_memberships: z.array(
     z.object({ id: z.string(), name: z.string() }),
   ),
+  // D4.e-4 (P1-2): a NARROW window of the owned agent-home workspace, not the
+  // full WorkspaceDto. The delete-impact must NOT carry any host-local path
+  // (`workspace_path`) or other host-resolution fields (I6) — the daemon owns
+  // path resolution. `computeDeleteImpact` explicitly maps these fields rather
+  // than returning the repo DTO, so a future WorkspaceDto field can never leak
+  // a host path back into this payload.
   owned_home: z
     .object({
       id: z.string(),
       name: z.string(),
-      description: z.string().nullable(),
       workspace_kind: WorkspaceKindSchema,
-      workspace_path: z.string(),
-      workspace_host_id: z.string(),
       owner_agent_id: z.string().nullable(),
-      dm_channel_id: z.string().nullable(),
-      dm_channel_ids: z.array(z.string()),
-      archived_at: z.number().nullable(),
-      created_at: z.number(),
-      updated_at: z.number(),
     })
     .nullable(),
   attachments_count: z.number(),
   running_conversation_agents: z.array(AgentRuntimeConversationSchema),
   pending_inbox_count: z.number(),
-  l1_path: z.string(),
-  l2_paths: z.array(z.string()),
+  // D4.e-4: host-local L1/L2 fs paths are NO LONGER part of the delete
+  // impact. The daemon resolves and removes them via `agent_files_purge`
+  // (I1/I6) — the backend never derives an agent-host path. The number of
+  // L2 dirs equals `regular_memberships.length`; render from that.
 });
 export type AgentDeleteImpactDto = z.infer<typeof AgentDeleteImpactDtoSchema>;
 

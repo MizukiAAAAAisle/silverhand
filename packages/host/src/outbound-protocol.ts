@@ -32,6 +32,9 @@ import {
   AgentL2SeedErrorCodeSchema,
   AgentL2SeedParamsSchema,
   AgentL2SeedResultSchema,
+  AgentFilesPurgeErrorCodeSchema,
+  AgentFilesPurgeParamsSchema,
+  AgentFilesPurgeResultSchema,
   HelloResultSchema,
   MAX_FRAME_BYTES,
   ResponseErrorSchema,
@@ -75,7 +78,8 @@ export {
 // D4.e-1: workspace_provision + agent_workspace_index schemas also live
 // in `protocol.ts` (same IPC-catalogue reason as agent_materialize);
 // re-exported here so outbound-WS callers see them. D4.e-2 adds
-// agent_workspace_read; D4.e-3 adds agent_l2_seed (same reason).
+// agent_workspace_read; D4.e-3 adds agent_l2_seed (same reason). D4.e-4 adds
+// agent_files_purge (same reason).
 export {
   WorkspaceProvisionParamsSchema,
   WorkspaceProvisionResultSchema,
@@ -89,6 +93,9 @@ export {
   AgentL2SeedParamsSchema,
   AgentL2SeedResultSchema,
   AgentL2SeedErrorCodeSchema,
+  AgentFilesPurgeParamsSchema,
+  AgentFilesPurgeResultSchema,
+  AgentFilesPurgeErrorCodeSchema,
   type WorkspaceProvisionParams,
   type WorkspaceProvisionResult,
   type WorkspaceProvisionErrorCode,
@@ -101,6 +108,9 @@ export {
   type AgentL2SeedParams,
   type AgentL2SeedResult,
   type AgentL2SeedErrorCode,
+  type AgentFilesPurgeParams,
+  type AgentFilesPurgeResult,
+  type AgentFilesPurgeErrorCode,
 } from './protocol.js';
 
 const FrameIdSchema = z.string().min(1);
@@ -235,6 +245,19 @@ export type AgentL2SeedWireError = z.infer<
   typeof AgentL2SeedWireErrorSchema
 >;
 
+export const AgentFilesPurgeWireErrorSchema = z
+  .object({
+    code: z.union([
+      ResponseErrorSchema.shape.code,
+      AgentFilesPurgeErrorCodeSchema,
+    ]),
+    message: z.string(),
+  })
+  .strict();
+export type AgentFilesPurgeWireError = z.infer<
+  typeof AgentFilesPurgeWireErrorSchema
+>;
+
 /**
  * Source of truth for D2 server-issued commands. The runtime_* entries
  * are the D2.0 request surface; rotate_token is D2.f's transport-local
@@ -248,7 +271,7 @@ export type AgentL2SeedWireError = z.infer<
  * transport-level codes). Commands that may legitimately surface
  * typed daemon-business errors (`agent_materialize` plus the D4.e
  * workspace data-plane commands `workspace_provision` /
- * `agent_workspace_index` / `agent_workspace_read` / `agent_l2_seed`) override with their
+ * `agent_workspace_index` / `agent_workspace_read` / `agent_l2_seed` / `agent_files_purge`) override with their
  * own wider schema.
  */
 export const outboundServerCommandSchemas = {
@@ -326,6 +349,11 @@ export const outboundServerCommandSchemas = {
     params: AgentL2SeedParamsSchema,
     result: AgentL2SeedResultSchema,
     error: AgentL2SeedWireErrorSchema,
+  },
+  agent_files_purge: {
+    params: AgentFilesPurgeParamsSchema,
+    result: AgentFilesPurgeResultSchema,
+    error: AgentFilesPurgeWireErrorSchema,
   },
 } as const;
 

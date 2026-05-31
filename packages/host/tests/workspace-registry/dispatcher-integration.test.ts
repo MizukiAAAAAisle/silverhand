@@ -4,6 +4,7 @@ import {
   WorkspaceProvisionError,
   AgentWorkspaceIndexError,
   AgentL2SeedError,
+  AgentFilesPurgeError,
 } from '../../src/daemon/workspace-registry/index.js';
 import { createDaemonLogControl, type DaemonLogger } from '../../src/daemon/logger.js';
 import type {
@@ -13,6 +14,8 @@ import type {
   AgentWorkspaceIndexResult,
   AgentL2SeedParams,
   AgentL2SeedResult,
+  AgentFilesPurgeParams,
+  AgentFilesPurgeResult,
 } from '../../src/protocol.js';
 
 /**
@@ -54,6 +57,11 @@ const l2SeedParams: AgentL2SeedParams = {
   agent_id: 'aid_member',
   workspace_id: 'ws_1',
   template_choice: 'default',
+};
+const purgeParams: AgentFilesPurgeParams = {
+  agent_id: 'aid_member',
+  scope: 'all',
+  workspace_ids: ['ws_1'],
 };
 
 describe('IntentDispatcher.workspace_provision slot', () => {
@@ -409,5 +417,134 @@ describe('IntentDispatcher.agent_l2_seed slot', () => {
     if (!('error' in r)) return;
     expect(r.error.code).toBe('internal_error');
     expect(r.error.message).toContain('agent_l2_seed');
+  });
+});
+
+describe('IntentDispatcher.agent_files_purge slot', () => {
+  it('routes a valid intent to the handler and returns its result', async () => {
+    const handlerResult: AgentFilesPurgeResult = {
+      ok: true,
+      purged_count: 2,
+      skipped_unprovisioned: 0,
+    };
+    let observed: AgentFilesPurgeParams | null = null;
+    const d = new IntentDispatcher({
+      logger: silentLogger(),
+      agentFilesPurgeHandler: params => {
+        observed = params;
+        return handlerResult;
+      },
+    });
+    const r = await d.dispatch('req-afp-1', 'agent_files_purge', purgeParams);
+    expect(r).toEqual({ id: 'req-afp-1', result: handlerResult });
+    expect(observed).toEqual(purgeParams);
+  });
+
+  it('applies the workspace_ids default ([]) when omitted', async () => {
+    let observed: AgentFilesPurgeParams | null = null;
+    const d = new IntentDispatcher({
+      logger: silentLogger(),
+      agentFilesPurgeHandler: params => {
+        observed = params;
+        return { ok: true, purged_count: 0, skipped_unprovisioned: 0 };
+      },
+    });
+    await d.dispatch('req-afp-default', 'agent_files_purge', {
+      agent_id: 'aid_member',
+      scope: 'all',
+    });
+    expect((observed as AgentFilesPurgeParams | null)?.workspace_ids).toEqual([]);
+  });
+
+  it.each([
+    'partial_purge',
+    'registry_unavailable',
+    'internal_error',
+  ] as const)('preserves typed AgentFilesPurgeError code: %s', async code => {
+    const d = new IntentDispatcher({
+      logger: silentLogger(),
+      agentFilesPurgeHandler: () => {
+        throw new AgentFilesPurgeError(code, `purge ${code}`);
+      },
+    });
+    const r = await d.dispatch('req-afp', 'agent_files_purge', purgeParams);
+    expect('error' in r).toBe(true);
+    if (!('error' in r)) return;
+    expect((r.error as { code: string }).code).toBe(code);
+  });
+
+  it('re-squashes a foreign typed code not in agent_files_purge schema', async () => {
+    const d = new IntentDispatcher({
+      logger: silentLogger(),
+      agentFilesPurgeHandler: () => {
+        // `workspace_not_provisioned` belongs to agent_l2_seed, not here.
+        throw new AgentFilesPurgeError('workspace_not_provisioned' as never, 'leaked');
+      },
+    });
+    const r = await d.dispatch('req-afp-foreign', 'agent_files_purge', purgeParams);
+    expect('error' in r).toBe(true);
+    if (!('error' in r)) return;
+    expect(r.error.code).toBe('internal_error');
+  });
+
+  it('squashes a bare Error throw to internal_error', async () => {
+    const d = new IntentDispatcher({
+      logger: silentLogger(),
+      agentFilesPurgeHandler: () => {
+        throw new Error('boom');
+      },
+    });
+    const r = await d.dispatch('req-afp-bare', 'agent_files_purge', purgeParams);
+    expect('error' in r).toBe(true);
+    if (!('error' in r)) return;
+    expect(r.error.code).toBe('internal_error');
+  });
+
+  it('rejects an out-of-enum scope via intentSchemas before the handler', async () => {
+    let called = false;
+    const d = new IntentDispatcher({
+      logger: silentLogger(),
+      agentFilesPurgeHandler: () => {
+        called = true;
+        throw new Error('unreachable');
+      },
+    });
+    const r = await d.dispatch('req-afp-badscope', 'agent_files_purge', {
+      agent_id: 'aid_member',
+      scope: 'bogus',
+      workspace_ids: ['ws_1'],
+    });
+    expect('error' in r).toBe(true);
+    if (!('error' in r)) return;
+    expect(r.error.code).toBe('invalid_params');
+    expect(called).toBe(false);
+  });
+
+  it('rejects malformed params via intentSchemas before invoking the handler', async () => {
+    let called = false;
+    const d = new IntentDispatcher({
+      logger: silentLogger(),
+      agentFilesPurgeHandler: () => {
+        called = true;
+        throw new Error('unreachable');
+      },
+    });
+    // Missing required `scope`.
+    const r = await d.dispatch('req-afp-bad', 'agent_files_purge', {
+      agent_id: 'aid_member',
+    });
+    expect('error' in r).toBe(true);
+    if (!('error' in r)) return;
+    expect(r.error.code).toBe('invalid_params');
+    expect(called).toBe(false);
+  });
+
+  it('surfaces internal_error when no handler is wired', async () => {
+    const d = new IntentDispatcher({ logger: silentLogger() });
+    const r = await d.dispatch('req-afp-unwired', 'agent_files_purge', purgeParams);
+    expect('error' in r).toBe(true);
+    if (!('error' in r)) return;
+    expect(r.error.code).toBe('internal_error');
+    expect(r.error.message).toContain('agent_files_purge');
   });
 });

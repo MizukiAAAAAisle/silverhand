@@ -721,7 +721,7 @@ describe('GET /api/agents/:id/delete-impact', () => {
   let t: TestApp | null = null;
   afterEach(() => { t?.cleanup(); t = null; });
 
-  it('summarizes DM channel + regular channel membership + l1/l2 paths', async () => {
+  it('summarizes DM channel + regular channel membership (no host-local fs paths)', async () => {
     t = buildTestApp();
     const created = await (
       await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
@@ -744,9 +744,17 @@ describe('GET /api/agents/:id/delete-impact', () => {
     expect(res.impact.owned_home.owner_agent_id).toBe(created.agent.id);
     expect(res.impact.regular_workspaces).toEqual([{ id: ws.workspace.id, name: 'engineering' }]);
     expect(res.impact.regular_memberships).toEqual([{ id: ws.workspace.id, name: 'engineering' }]);
-    expect(res.impact.l1_path).toContain(created.agent.id);
-    expect(res.impact.l2_paths).toHaveLength(1);
-    expect(res.impact.l2_paths[0]).toContain(created.agent.id);
+    // D4.e-4: l1_path / l2_paths are gone from the impact DTO — host-local fs
+    // paths are never derived backend-side (I1/I6). The L2-dir count is
+    // `regular_memberships.length`.
+    expect(res.impact.l1_path).toBeUndefined();
+    expect(res.impact.l2_paths).toBeUndefined();
+    expect(res.impact.regular_memberships).toHaveLength(1);
+    // P1-2: owned_home is a narrow window — it must NOT carry the owned
+    // workspace's host-local `workspace_path` (or any other host-resolution
+    // field). The daemon owns path resolution (I6).
+    expect(res.impact.owned_home.workspace_path).toBeUndefined();
+    expect(res.impact.owned_home.workspace_host_id).toBeUndefined();
   });
 });
 

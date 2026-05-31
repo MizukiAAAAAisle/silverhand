@@ -1,6 +1,8 @@
 import type {
   AgentL2SeedParams,
   AgentL2SeedResult,
+  AgentFilesPurgeParams,
+  AgentFilesPurgeResult,
   AgentWorkspaceIndexParams,
   AgentWorkspaceIndexResult,
   AgentWorkspaceReadParams,
@@ -17,7 +19,7 @@ import type { OutboundFrameAdapter } from './outbound-frame-adapter.js';
 /**
  * D4.e — backend dispatch layer for the host data-plane intents
  * (`workspace_provision`, `agent_workspace_index`, `agent_workspace_read`,
- * `agent_l2_seed`).
+ * `agent_l2_seed`, `agent_files_purge`).
  * The daemon is the sole authority for host-local path resolution (I1); the
  * backend only speaks `workspace_id` / `agent_id` and forwards an optional
  * caller-PROPOSED `requested_path` at provision time. This module owns ONE
@@ -43,6 +45,8 @@ export type DataPlaneFailureCode =
   // typed wire codes (agent_l2_seed)
   | 'workspace_not_provisioned'
   | 'unsupported_template'
+  // typed wire code (agent_files_purge)
+  | 'partial_purge'
   // typed wire code (multiple)
   | 'registry_unavailable';
 
@@ -70,6 +74,7 @@ const PROVISION_TIMEOUT_MS = 60_000;
 const INDEX_TIMEOUT_MS = 30_000;
 const READ_TIMEOUT_MS = 30_000;
 const SEED_TIMEOUT_MS = 30_000;
+const PURGE_TIMEOUT_MS = 30_000;
 
 /**
  * Resolve the live outbound adapter + connection id for `hostId`, or a
@@ -138,6 +143,12 @@ export function mapDataPlaneError(err: unknown): DataPlaneFailure {
         // backend only ever sends a supported choice, so this is a 400-class
         // request rejection, not a transient condition.
         return fail('unsupported_template', err.message, 400, false);
+      case 'partial_purge':
+        // agent_files_purge: one or more host-local target dirs could not be
+        // removed (hard fs error). Fail-closed (§3.3): the DELETE route keeps
+        // the DB row so a later retry has its routing anchor. Retriable — the
+        // operator can clear the fs condition (perm/space) and re-issue.
+        return fail('partial_purge', err.message, 503, true);
       case 'internal_error':
       default:
         return fail('daemon_internal_error', err.message, 502, false);
@@ -265,6 +276,33 @@ export async function dispatchAgentL2Seed(
   try {
     const result = await adapter.sendCommand(hostId, 'agent_l2_seed', params, {
       timeoutMs: SEED_TIMEOUT_MS,
+      expectedConnectionId: connectionId,
+    });
+    return { kind: 'ok', result };
+  } catch (err) {
+    return mapDataPlaneError(err);
+  }
+}
+
+/**
+ * D4.e-4 — dispatch `agent_files_purge` to the owning daemon: remove an
+ * agent's host-local L1/L2 files on the host that owns them. Replaces the
+ * backend `DELETE /api/agents/:id` `fs.rm(l1_path / l2_paths)` block (gap
+ * G3). The daemon resolves L1 (its homedir) and each L2 (workspace path from
+ * its registry) itself; the backend forwards only `{ agent_id, scope,
+ * workspace_ids }`. Per the §3.3 commit boundary, the route MUST treat any
+ * failure as fail-closed: keep the DB row (do NOT delete) so a later retry
+ * has its routing anchor — never fall back to a server-side `fs.rm`.
+ */
+export async function dispatchAgentFilesPurge(
+  adapter: OutboundFrameAdapter,
+  hostId: string,
+  connectionId: string,
+  params: AgentFilesPurgeParams,
+): Promise<DataPlaneOutcome<AgentFilesPurgeResult>> {
+  try {
+    const result = await adapter.sendCommand(hostId, 'agent_files_purge', params, {
+      timeoutMs: PURGE_TIMEOUT_MS,
       expectedConnectionId: connectionId,
     });
     return { kind: 'ok', result };

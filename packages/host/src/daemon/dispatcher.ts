@@ -37,6 +37,8 @@ import {
   type AgentWorkspaceReadResult,
   type AgentL2SeedParams,
   type AgentL2SeedResult,
+  type AgentFilesPurgeParams,
+  type AgentFilesPurgeResult,
   type ConversationLogDebugParams,
   type HostOutboundAttachParams,
   type HostOutboundAttachResult,
@@ -186,6 +188,16 @@ export interface DispatcherOptions {
   agentL2SeedHandler?: (
     params: AgentL2SeedParams,
   ) => AgentL2SeedResult | Promise<AgentL2SeedResult>;
+  /**
+   * D4.e-4 — handler for `agent_files_purge` (remove an agent's host-local
+   * L1/L2 files on the owning host). Production wiring: `purgeAgentFiles`.
+   * Typed errors (`AgentFilesPurgeError`) are projected with their code by
+   * the catch arm after per-intent schema validation. `undefined` → the
+   * dispatcher throws (→ `internal_error`).
+   */
+  agentFilesPurgeHandler?: (
+    params: AgentFilesPurgeParams,
+  ) => AgentFilesPurgeResult | Promise<AgentFilesPurgeResult>;
 }
 
 export class IntentDispatcher {
@@ -230,6 +242,11 @@ export class IntentDispatcher {
         params: AgentL2SeedParams,
       ) => AgentL2SeedResult | Promise<AgentL2SeedResult>)
     | undefined;
+  private readonly agentFilesPurgeHandler:
+    | ((
+        params: AgentFilesPurgeParams,
+      ) => AgentFilesPurgeResult | Promise<AgentFilesPurgeResult>)
+    | undefined;
   private intentCount = 0;
   private shuttingDown = false;
 
@@ -255,6 +272,7 @@ export class IntentDispatcher {
     this.agentWorkspaceIndexHandler = opts.agentWorkspaceIndexHandler;
     this.agentWorkspaceReadHandler = opts.agentWorkspaceReadHandler;
     this.agentL2SeedHandler = opts.agentL2SeedHandler;
+    this.agentFilesPurgeHandler = opts.agentFilesPurgeHandler;
   }
 
   /** Signal that subsequent intents should be rejected with
@@ -656,6 +674,14 @@ export class IntentDispatcher {
         return this.requireAgentL2SeedHandler()(
           params as AgentL2SeedParams,
         );
+      case 'agent_files_purge':
+        // D4.e-4 — remove an agent's host-local L1/L2 files on the owning
+        // host. Slot wired to `purgeAgentFiles`. Typed errors
+        // (AgentFilesPurgeError) are projected by the DaemonTypedError
+        // catch arm.
+        return this.requireAgentFilesPurgeHandler()(
+          params as AgentFilesPurgeParams,
+        );
     }
   }
 
@@ -756,5 +782,16 @@ export class IntentDispatcher {
       );
     }
     return this.agentL2SeedHandler;
+  }
+
+  private requireAgentFilesPurgeHandler(): (
+    params: AgentFilesPurgeParams,
+  ) => AgentFilesPurgeResult | Promise<AgentFilesPurgeResult> {
+    if (!this.agentFilesPurgeHandler) {
+      throw new Error(
+        'agent_files_purge intent reached dispatcher with no handler wired',
+      );
+    }
+    return this.agentFilesPurgeHandler;
   }
 }

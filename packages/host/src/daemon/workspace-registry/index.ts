@@ -25,6 +25,11 @@ export {
   seedAgentL2,
   type SeedAgentL2Deps,
 } from './l2-seed-handler.js';
+export {
+  AgentFilesPurgeError,
+  purgeAgentFiles,
+  type PurgeAgentFilesDeps,
+} from './files-purge-handler.js';
 export { mapFsErrno, type FsErrnoCode } from './fs-errno.js';
 export {
   WORKSPACE_CONSENSUS_DEFAULT,

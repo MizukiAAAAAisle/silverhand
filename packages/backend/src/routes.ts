@@ -1,6 +1,5 @@
 import { Hono, type Context } from 'hono';
 import { getConnInfo } from '@hono/node-server/conninfo';
-import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import {
@@ -76,6 +75,7 @@ import { HostCredentialIssueError, HostTokenService } from './auth/host-token.js
 import { HostWsCommandTransportError, HostWsCommandResponseError, type HostWsServerController } from './ws/host-ws-server.js';
 import type { OutboundFrameAdapter } from './runtime/outbound-frame-adapter.js';
 import {
+  dispatchAgentFilesPurge,
   dispatchAgentL2Seed,
   dispatchAgentWorkspaceIndex,
   dispatchAgentWorkspaceRead,
@@ -4613,7 +4613,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
 
     // 1. Hard-stop every running conversation_agent. Must precede any DB
     //    delete — once conversation_agents rows are gone, the runtime host
-    //    can't look up handles by (conversation id, agent id).
+    //    can't look up handles by (conversation id, agent id). Stopping is
+    //    runtime-only (it does not mutate `workspace_members` or delete the
+    //    agent row), so it is safe to run before the purge fail-closed gate.
     for (const live of impact.running_conversation_agents) {
       await ctx.runtimeHost
         .stop(live.conversation_id, id, 'hard')
@@ -4625,7 +4627,90 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
         );
     }
 
-    // 2. Remove from every regular workspace and its conversations.
+    // 2. Purge the agent's host-local files on the OWNING daemon BEFORE any
+    //    DB mutation that would change the delete-impact (membership removal,
+    //    agent-row delete). The daemon resolves L1 (its homedir) + each L2
+    //    (workspace path from its registry) itself; no fs path crosses the
+    //    wire (I1) and the backend no longer runs `fs.rm` (I6 / gap G3).
+    //
+    //    §3.3 fail-fast commit boundary: the DB rows are NOT deleted until the
+    //    purge acks success. Daemon offline → 503 host_attach_pending; a hard
+    //    fs failure → typed `partial_purge`/`registry_unavailable`. In every
+    //    failure case we KEEP the agent + membership rows (the routing anchor)
+    //    so a later retry's `computeDeleteImpact` still targets the right
+    //    workspaces. This is the intentional behavior change from the old
+    //    `fs.rm({force:true})` + always-204 to remote-safe fail-fast.
+    //
+    //    P1-1: before the purge, re-bind every regular membership into the
+    //    owning daemon's registry. A pre-D4.e legacy workspace may have no
+    //    registry binding yet — its real L2 still lives under
+    //    `workspace_path/.silverhand/agents/<id>`. Without a binding the purge
+    //    can't resolve that path and reports it as `skipped_unprovisioned`,
+    //    which would silently leave the L2 tree on disk while we delete the DB
+    //    row. The backfiller forwards each `workspace_path` as `requested_path`
+    //    (an idempotent re-bind), and we fail-closed (keep the agent +
+    //    membership rows) if any row can't be bound.
+    const backfillRows: { id: string; workspace_path: string }[] = [];
+    for (const ws of impact.regular_memberships) {
+      const w = workspaces.get(ws.id);
+      if (w) backfillRows.push({ id: w.id, workspace_path: w.workspace_path });
+    }
+    if (backfillRows.length > 0) {
+      const backfill = await ctx.workspaceRegistryBackfiller?.ensure(
+        agent.host_id,
+        backfillRows,
+      );
+      if (backfill && backfill.status !== 'ok' && backfill.status !== 'noop') {
+        const f = backfill.failed[0];
+        return c.json(
+          {
+            error:
+              f?.message ??
+              'workspace registry backfill failed; cannot purge agent files',
+            code: f?.code ?? 'host_attach_pending',
+          },
+          f && !f.retriable ? 502 : 503,
+        );
+      }
+    }
+
+    const outbound = resolveOutboundForHost(
+      ctx.outboundFrameAdapter?.() ?? null,
+      agent.host_id,
+    );
+    if (outbound.kind === 'failed') {
+      return c.json({ error: outbound.message, code: outbound.code }, outbound.status);
+    }
+    const purge = await dispatchAgentFilesPurge(
+      outbound.adapter,
+      agent.host_id,
+      outbound.connectionId,
+      {
+        agent_id: id,
+        scope: 'all',
+        workspace_ids: impact.regular_memberships.map(ws => ws.id),
+      },
+    );
+    if (purge.kind === 'failed') {
+      return c.json({ error: purge.message, code: purge.code }, purge.status);
+    }
+    // P1-1: an incomplete purge is a failure, not a success. If the daemon
+    // skipped any targeted workspace (still no registry binding even after the
+    // backfill above), its L2 tree was NOT removed — keep the agent +
+    // membership rows so the un-purged tree isn't orphaned and a retry can
+    // re-target it. Surface the same retriable taxonomy as a hard partial.
+    if (purge.result.skipped_unprovisioned > 0) {
+      return c.json(
+        {
+          error: `agent files purge incomplete: ${purge.result.skipped_unprovisioned} workspace(s) unresolved on the daemon`,
+          code: 'partial_purge',
+        },
+        503,
+      );
+    }
+
+    // 3. Purge acked — commit the DB teardown. Remove from every regular
+    //    workspace and its conversations.
     for (const ws of impact.regular_memberships) {
       const workspace = workspaces.get(ws.id);
       if (!workspace) continue;
@@ -4637,7 +4722,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       workspaces.removeMember(workspace.id, id);
     }
 
-    // 3. Sweep DM blobs before deleting the agent. DB rows cascade through
+    // 4. Sweep DM blobs before deleting the agent. DB rows cascade through
     //    agent -> agent_home -> conversations, but physical files need an
     //    explicit pass. Thread uploads are channel-scoped to the dm channel.
     const dmChannels = impact.owned_home
@@ -4652,24 +4737,11 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       );
     }
 
-    // 4. Drop the agent. owner_agent_id ON DELETE CASCADE removes its
+    // 5. Drop the agent. owner_agent_id ON DELETE CASCADE removes its
     //    agent_home subtree; regular conversation history keeps deleted
-    //    sender rows via SET NULL on messages.from_agent_id.
+    //    sender rows via SET NULL on messages.from_agent_id. Host-local
+    //    L1/L2 files were already removed by the daemon purge in step 2.
     agents.delete(id);
-
-    // 5. Wipe L1 — the agent's global memory/notes/system_prompt.
-    await fs
-      .rm(impact.l1_path, { recursive: true, force: true })
-      .catch(err =>
-        ctx.logger.warn({ agentId: id, l1: impact.l1_path, err }, 'delete: L1 rm failed'),
-      );
-    await Promise.all(
-      impact.l2_paths.map(p =>
-        fs.rm(p, { recursive: true, force: true }).catch(err =>
-          ctx.logger.warn({ agentId: id, path: p, err }, 'delete: L2 rm failed'),
-        ),
-      ),
-    );
 
     ctx.logger.info(
       {
@@ -4678,6 +4750,8 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
         dmChannelId: impact.dm_channel?.id ?? null,
         regularWorkspaces: impact.regular_memberships.length,
         stoppedConversations: impact.running_conversation_agents.length,
+        purgedCount: purge.result.purged_count,
+        skippedUnprovisioned: purge.result.skipped_unprovisioned,
       },
       'agent deleted',
     );
@@ -4740,11 +4814,6 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     const running = runtimeConversations
       .filter(s => s.status === 'starting' || s.status === 'active')
 
-    const l1Path = join(ctx.silverhandDir, 'agents', agentId);
-    const l2Paths = regulars.map(c =>
-      join(c.workspace_path, '.silverhand', 'agents', agentId),
-    );
-
     return {
       agent_id: agent.id,
       agent_name: agent.name,
@@ -4752,12 +4821,20 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       dm_channel: dmChannel,
       regular_workspaces: regulars.map(c => ({ id: c.id, name: c.name })),
       regular_memberships: regulars.map(c => ({ id: c.id, name: c.name })),
-      owned_home: ownedHome,
+      // P1-2: explicitly map the owned-home window — NEVER spread the repo
+      // WorkspaceDto, which carries `workspace_path` (a host-local path that
+      // must not cross into the control-plane payload, I6).
+      owned_home: ownedHome
+        ? {
+            id: ownedHome.id,
+            name: ownedHome.name,
+            workspace_kind: ownedHome.workspace_kind,
+            owner_agent_id: ownedHome.owner_agent_id,
+          }
+        : null,
       attachments_count: attachmentsCount,
       running_conversation_agents: running,
       pending_inbox_count: conversationInboxes.countPendingForAgent(agentId),
-      l1_path: l1Path,
-      l2_paths: l2Paths,
     };
   }
 

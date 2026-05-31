@@ -35,6 +35,7 @@ const RUN_STATE = {
 describe('outbound protocol — command catalogue', () => {
   it('contains the D2.0 runtime request surface plus rotate_token, agent_materialize, and the D4.e data-plane intents', () => {
     expect([...OUTBOUND_SERVER_COMMAND_KINDS].sort()).toEqual([
+      'agent_files_purge',
       'agent_l2_seed',
       'agent_materialize',
       'agent_workspace_index',
