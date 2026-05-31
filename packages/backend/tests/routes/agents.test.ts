@@ -4,6 +4,10 @@ import {
   X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
 import { HostRepo } from '../../src/repos/host-repo.js';
+import {
+  HostWsCommandResponseError,
+  HostWsCommandTransportError,
+} from '../../src/ws/host-ws-server.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 describe('POST /api/agents', () => {
@@ -525,6 +529,77 @@ describe('GET /api/agents/:id/workspace', () => {
     expect(res.workspace.memory.content).toContain('notes/work-log.md');
     expect(Array.isArray(res.workspace.notes)).toBe(true);
     expect(res.workspace.notes.map((n: any) => n.name)).toContain('work-log.md');
+  });
+
+  // D4.e-2 — the host-local read now flows through the daemon
+  // (`agent_workspace_read`), not a backend fs read. These pin the three
+  // Cindy review focuses: (1) backend dispatches a semantic id only — no
+  // path; (2) it works in BOTH modes (the old standalone 503 disable is
+  // gone, A6); (3) every daemon-side failure fails closed with a typed
+  // code — the backend never falls back to its own disk.
+  it('dispatches agent_workspace_read with a semantic agent_id only (no path)', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
+    ).json() as any;
+    t.fakeHostWs!.calls.length = 0;
+    await http(t).get(`/api/agents/${created.agent.id}/workspace`);
+    const reads = t.fakeHostWs!.calls.filter(
+      c => c.kind === 'agent_workspace_read',
+    );
+    expect(reads).toHaveLength(1);
+    // Exactly { agent_id } — no path/workspace_path leaks to the daemon.
+    expect(reads[0]!.params).toEqual({ agent_id: created.agent.id });
+  });
+
+  it('works in standalone mode — the old standalone 503 disable is gone (A6)', async () => {
+    t = buildTestApp({ deploymentMode: 'standalone' });
+    const created = await (
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
+    ).json() as any;
+    const res = await http(t).get(`/api/agents/${created.agent.id}/workspace`);
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.workspace.system_prompt.content).toContain('Global role');
+    // Proves it went through the daemon read, not a backend fs read.
+    expect(
+      t.fakeHostWs!.calls.some(c => c.kind === 'agent_workspace_read'),
+    ).toBe(true);
+  });
+
+  it('daemon not attached → 503 host_attach_pending (fail-closed, no fs fallback)', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
+    ).json() as any;
+    t.fakeHostWs!.sendCommandError = new HostWsCommandTransportError(
+      'transport_no_connection',
+      'host local is not connected to outbound websocket',
+      { hostId: 'local', commandKind: 'agent_workspace_read', requestId: 'r' },
+    );
+    const res = await http(t).get(`/api/agents/${created.agent.id}/workspace`);
+    expect(res.status).toBe(503);
+    const body = await res.json() as any;
+    expect(body.code).toBe('host_attach_pending');
+    // Fail-closed: no workspace payload was synthesized from server disk.
+    expect(body.workspace).toBeUndefined();
+  });
+
+  it('host-local fs failure → 503 fs_unavailable (typed, no fs fallback)', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
+    ).json() as any;
+    t.fakeHostWs!.sendCommandError = new HostWsCommandResponseError(
+      'fs_unavailable' as never,
+      'host-local read failed: EACCES',
+      { hostId: 'local', commandKind: 'agent_workspace_read', requestId: 'r' },
+    );
+    const res = await http(t).get(`/api/agents/${created.agent.id}/workspace`);
+    expect(res.status).toBe(503);
+    const body = await res.json() as any;
+    expect(body.code).toBe('fs_unavailable');
+    expect(body.workspace).toBeUndefined();
   });
 });
 

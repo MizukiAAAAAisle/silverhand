@@ -355,6 +355,7 @@ describe('D5.a-4 embedded parity (real startBackend embedded + real in-process d
     expect(kinds.has('agent_materialize')).toBe(true);
     expect(kinds.has('workspace_provision')).toBe(true);
     expect(kinds.has('agent_workspace_index')).toBe(true);
+    expect(kinds.has('agent_workspace_read')).toBe(true);
 
     // NEGATIVE: the retired local `HostClient` IPC shapes must NOT satisfy
     // the outbound envelope schema — proves embedded speaks the unified

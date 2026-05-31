@@ -33,6 +33,8 @@ import {
   type AgentMaterializeResult,
   type AgentWorkspaceIndexParams,
   type AgentWorkspaceIndexResult,
+  type AgentWorkspaceReadParams,
+  type AgentWorkspaceReadResult,
   type ConversationLogDebugParams,
   type HostOutboundAttachParams,
   type HostOutboundAttachResult,
@@ -162,6 +164,16 @@ export interface DispatcherOptions {
   agentWorkspaceIndexHandler?: (
     params: AgentWorkspaceIndexParams,
   ) => AgentWorkspaceIndexResult | Promise<AgentWorkspaceIndexResult>;
+  /**
+   * D4.e-2 — handler for `agent_workspace_read` (host-local L1/agent-home
+   * read proxy for `GET /api/agents/:id/workspace`). Production wiring:
+   * `readAgentWorkspace`. Typed errors (`AgentWorkspaceReadError`) are
+   * projected with their code by the catch arm after per-intent schema
+   * validation. `undefined` → the dispatcher throws (→ `internal_error`).
+   */
+  agentWorkspaceReadHandler?: (
+    params: AgentWorkspaceReadParams,
+  ) => AgentWorkspaceReadResult | Promise<AgentWorkspaceReadResult>;
 }
 
 export class IntentDispatcher {
@@ -196,6 +208,11 @@ export class IntentDispatcher {
         params: AgentWorkspaceIndexParams,
       ) => AgentWorkspaceIndexResult | Promise<AgentWorkspaceIndexResult>)
     | undefined;
+  private readonly agentWorkspaceReadHandler:
+    | ((
+        params: AgentWorkspaceReadParams,
+      ) => AgentWorkspaceReadResult | Promise<AgentWorkspaceReadResult>)
+    | undefined;
   private intentCount = 0;
   private shuttingDown = false;
 
@@ -219,6 +236,7 @@ export class IntentDispatcher {
     this.agentMaterializeHandler = opts.agentMaterializeHandler;
     this.workspaceProvisionHandler = opts.workspaceProvisionHandler;
     this.agentWorkspaceIndexHandler = opts.agentWorkspaceIndexHandler;
+    this.agentWorkspaceReadHandler = opts.agentWorkspaceReadHandler;
   }
 
   /** Signal that subsequent intents should be rejected with
@@ -606,6 +624,13 @@ export class IntentDispatcher {
         return this.requireAgentWorkspaceIndexHandler()(
           params as AgentWorkspaceIndexParams,
         );
+      case 'agent_workspace_read':
+        // D4.e-2 — host-local L1/agent-home read proxy. Slot wired to
+        // `readAgentWorkspace`. Typed errors (AgentWorkspaceReadError)
+        // are projected by the DaemonTypedError catch arm.
+        return this.requireAgentWorkspaceReadHandler()(
+          params as AgentWorkspaceReadParams,
+        );
     }
   }
 
@@ -684,5 +709,16 @@ export class IntentDispatcher {
       );
     }
     return this.agentWorkspaceIndexHandler;
+  }
+
+  private requireAgentWorkspaceReadHandler(): (
+    params: AgentWorkspaceReadParams,
+  ) => AgentWorkspaceReadResult | Promise<AgentWorkspaceReadResult> {
+    if (!this.agentWorkspaceReadHandler) {
+      throw new Error(
+        'agent_workspace_read intent reached dispatcher with no handler wired',
+      );
+    }
+    return this.agentWorkspaceReadHandler;
   }
 }

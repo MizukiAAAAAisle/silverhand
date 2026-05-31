@@ -1,6 +1,8 @@
 import type {
   AgentWorkspaceIndexParams,
   AgentWorkspaceIndexResult,
+  AgentWorkspaceReadParams,
+  AgentWorkspaceReadResult,
   WorkspaceProvisionParams,
   WorkspaceProvisionResult,
 } from '@silverhand/host';
@@ -11,16 +13,17 @@ import {
 import type { OutboundFrameAdapter } from './outbound-frame-adapter.js';
 
 /**
- * D4.e-1 3b — backend dispatch layer for the two host data-plane intents
- * (`workspace_provision`, `agent_workspace_index`). The daemon is the sole
- * authority for host-local path resolution (I1); the backend only speaks
- * `workspace_id` / `agent_id` and forwards an optional caller-PROPOSED
- * `requested_path` at provision time. This module owns ONE thing: send a
- * data-plane command over the deployment-neutral {@link OutboundFrameAdapter}
- * and normalize every failure (transport or typed wire error) into a single
- * structured outcome so each route can decide how to render it — create →
- * HTTP status; backfill / list → fail-closed with a diagnostic code (never a
- * `workspace_path` fallback).
+ * D4.e — backend dispatch layer for the host data-plane intents
+ * (`workspace_provision`, `agent_workspace_index`, `agent_workspace_read`).
+ * The daemon is the sole authority for host-local path resolution (I1); the
+ * backend only speaks `workspace_id` / `agent_id` and forwards an optional
+ * caller-PROPOSED `requested_path` at provision time. This module owns ONE
+ * thing: send a data-plane command over the deployment-neutral
+ * {@link OutboundFrameAdapter} and normalize every failure (transport or
+ * typed wire error) into a single structured outcome so each route can
+ * decide how to render it — create → HTTP status; backfill / list / read →
+ * fail-closed with a diagnostic code (never a `workspace_path` / server-fs
+ * fallback).
  */
 
 export type DataPlaneFailureCode =
@@ -59,6 +62,7 @@ export type DataPlaneOutcome<T> = { kind: 'ok'; result: T } | DataPlaneFailure;
 
 const PROVISION_TIMEOUT_MS = 60_000;
 const INDEX_TIMEOUT_MS = 30_000;
+const READ_TIMEOUT_MS = 30_000;
 
 /**
  * Resolve the live outbound adapter + connection id for `hostId`, or a
@@ -189,6 +193,32 @@ export async function dispatchAgentWorkspaceIndex(
   try {
     const result = await adapter.sendCommand(hostId, 'agent_workspace_index', params, {
       timeoutMs: INDEX_TIMEOUT_MS,
+      expectedConnectionId: connectionId,
+    });
+    return { kind: 'ok', result };
+  } catch (err) {
+    return mapDataPlaneError(err);
+  }
+}
+
+/**
+ * D4.e-2 — dispatch `agent_workspace_read` to the owning daemon: the
+ * host-local L1/agent-home read for `GET /api/agents/:id/workspace`. The
+ * daemon resolves the agent-home dir from its own homedir and reads
+ * `system_prompt.md` / `MEMORY.md` / `notes/`, returning the
+ * `AgentWorkspaceDto` the backend relays verbatim — no server-side fs read,
+ * no path derivation. A hard host-local fs failure maps fail-closed to
+ * `fs_unavailable` (503); the backend never falls back to its own disk.
+ */
+export async function dispatchAgentWorkspaceRead(
+  adapter: OutboundFrameAdapter,
+  hostId: string,
+  connectionId: string,
+  params: AgentWorkspaceReadParams,
+): Promise<DataPlaneOutcome<AgentWorkspaceReadResult>> {
+  try {
+    const result = await adapter.sendCommand(hostId, 'agent_workspace_read', params, {
+      timeoutMs: READ_TIMEOUT_MS,
       expectedConnectionId: connectionId,
     });
     return { kind: 'ok', result };

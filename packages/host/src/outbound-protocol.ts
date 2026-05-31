@@ -26,6 +26,9 @@ import {
   AgentWorkspaceIndexErrorCodeSchema,
   AgentWorkspaceIndexParamsSchema,
   AgentWorkspaceIndexResultSchema,
+  AgentWorkspaceReadErrorCodeSchema,
+  AgentWorkspaceReadParamsSchema,
+  AgentWorkspaceReadResultSchema,
   HelloResultSchema,
   MAX_FRAME_BYTES,
   ResponseErrorSchema,
@@ -68,7 +71,8 @@ export {
 
 // D4.e-1: workspace_provision + agent_workspace_index schemas also live
 // in `protocol.ts` (same IPC-catalogue reason as agent_materialize);
-// re-exported here so outbound-WS callers see them.
+// re-exported here so outbound-WS callers see them. D4.e-2 adds
+// agent_workspace_read (same reason).
 export {
   WorkspaceProvisionParamsSchema,
   WorkspaceProvisionResultSchema,
@@ -76,12 +80,18 @@ export {
   AgentWorkspaceIndexParamsSchema,
   AgentWorkspaceIndexResultSchema,
   AgentWorkspaceIndexErrorCodeSchema,
+  AgentWorkspaceReadParamsSchema,
+  AgentWorkspaceReadResultSchema,
+  AgentWorkspaceReadErrorCodeSchema,
   type WorkspaceProvisionParams,
   type WorkspaceProvisionResult,
   type WorkspaceProvisionErrorCode,
   type AgentWorkspaceIndexParams,
   type AgentWorkspaceIndexResult,
   type AgentWorkspaceIndexErrorCode,
+  type AgentWorkspaceReadParams,
+  type AgentWorkspaceReadResult,
+  type AgentWorkspaceReadErrorCode,
 } from './protocol.js';
 
 const FrameIdSchema = z.string().min(1);
@@ -159,7 +169,7 @@ export type AgentMaterializeWireError = z.infer<
 >;
 
 /**
- * Per-command wire error schemas for the D4.e-1 data-plane intents.
+ * Per-command wire error schemas for the D4.e data-plane intents.
  * Each widens the 5 generic transport codes with ONLY its own taxonomy
  * (per-command scoping — Cindy D1 round-1 P1): a typed code from one
  * command cannot leak onto another's error arm.
@@ -190,6 +200,19 @@ export type AgentWorkspaceIndexWireError = z.infer<
   typeof AgentWorkspaceIndexWireErrorSchema
 >;
 
+export const AgentWorkspaceReadWireErrorSchema = z
+  .object({
+    code: z.union([
+      ResponseErrorSchema.shape.code,
+      AgentWorkspaceReadErrorCodeSchema,
+    ]),
+    message: z.string(),
+  })
+  .strict();
+export type AgentWorkspaceReadWireError = z.infer<
+  typeof AgentWorkspaceReadWireErrorSchema
+>;
+
 /**
  * Source of truth for D2 server-issued commands. The runtime_* entries
  * are the D2.0 request surface; rotate_token is D2.f's transport-local
@@ -203,7 +226,8 @@ export type AgentWorkspaceIndexWireError = z.infer<
  * transport-level codes). Commands that may legitimately surface
  * typed daemon-business errors (`agent_materialize` plus the D4.e
  * workspace data-plane commands `workspace_provision` /
- * `agent_workspace_index`) override with their own wider schema.
+ * `agent_workspace_index` / `agent_workspace_read`) override with their
+ * own wider schema.
  */
 export const outboundServerCommandSchemas = {
   runtime_start: {
@@ -270,6 +294,11 @@ export const outboundServerCommandSchemas = {
     params: AgentWorkspaceIndexParamsSchema,
     result: AgentWorkspaceIndexResultSchema,
     error: AgentWorkspaceIndexWireErrorSchema,
+  },
+  agent_workspace_read: {
+    params: AgentWorkspaceReadParamsSchema,
+    result: AgentWorkspaceReadResultSchema,
+    error: AgentWorkspaceReadWireErrorSchema,
   },
 } as const;
 

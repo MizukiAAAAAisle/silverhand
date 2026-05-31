@@ -373,6 +373,19 @@ const REQUESTS: WireFixture[] = [
     kind: { kind: 'request', intent: 'agent_workspace_index' },
   },
   {
+    name: 'request/agent_workspace_read',
+    description:
+      'D4.e-2: host-local L1/agent-home read proxy for GET /api/agents/:id/workspace. Backend sends ONLY {agent_id} — no path. The daemon resolves the agent-home dir from its own homedir (computeAgentDir) and reads system_prompt.md/MEMORY.md/notes there, so I1 holds (daemon = sole host-local path authority). Narrow scope: L1/agent-home read only — no workspace selector, no write, no browse.',
+    frame: enc({
+      id: 'req-agent-workspace-read-1',
+      intent: 'agent_workspace_read',
+      params: {
+        agent_id: 'aid_FpzaAEM',
+      },
+    }),
+    kind: { kind: 'request', intent: 'agent_workspace_read' },
+  },
+  {
     name: 'request/workspace_provision-with-requested-path',
     description:
       'D4.e-1 (A — single intent): the SAME workspace_provision command, but carrying an OPTIONAL caller-proposed requested_path (M1 desktop folder picker / sandbox typed path / legacy backfill all unify here). The daemon RE-VALIDATES the path host-side (absolute / not root / not home / not inside the managed root / not already bound) before binding — it never blindly trusts the backend. The authoritative result is bound_workspace_path, not this field.',
@@ -1033,6 +1046,39 @@ const RESPONSES_SUCCESS: WireFixture[] = [
     }),
     kind: { kind: 'response_success', intent: 'agent_workspace_index' },
   },
+  {
+    name: 'response/agent_workspace_read',
+    description:
+      'D4.e-2: daemon read the agent-home L1 dir host-side and returned the AgentWorkspaceDto verbatim — the daemon-resolved l1_path, the system_prompt + MEMORY previews (size-capped at 64 KiB; truncated:false here), and the notes listing (newest-first). The backend relays this with no fs read and no path derivation.',
+    frame: enc({
+      id: 'req-agent-workspace-read-1',
+      result: {
+        ok: true,
+        workspace: {
+          l1_path: '/home/silverhand/.silverhand/agents/aid_FpzaAEM',
+          system_prompt: {
+            path: '/home/silverhand/.silverhand/agents/aid_FpzaAEM/system_prompt.md',
+            size: 12,
+            mtime: 1_780_000_000_000,
+            content: '# I am Alice',
+            truncated: false,
+          },
+          memory: {
+            path: '/home/silverhand/.silverhand/agents/aid_FpzaAEM/MEMORY.md',
+            size: 9,
+            mtime: 1_780_000_000_001,
+            content: 'remember.',
+            truncated: false,
+          },
+          notes: [
+            { name: 'work-log.md', size: 240, mtime: 1_780_000_000_050 },
+            { name: 'project.md', size: 128, mtime: 1_780_000_000_010 },
+          ],
+        },
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'agent_workspace_read' },
+  },
 ];
 
 // ── Error response fixtures ────────────────────────────────────────
@@ -1306,9 +1352,40 @@ const AGENT_WORKSPACE_INDEX_ERROR_FIXTURES: WireFixture[] = [
     kind: { kind: 'response_error_typed', intent: 'agent_workspace_index' },
   },
 ];
+// D4.e-2 agent_workspace_read typed errors. A MISSING per-file (brand-new
+// agent) is NOT an error — it comes back as a `null` preview / empty notes
+// in the success result (read graceful). The only typed errors are a HARD
+// host-local fs failure (fail-closed, never a server-path fallback) and the
+// catch-all.
+const AGENT_WORKSPACE_READ_ERROR_FIXTURES: WireFixture[] = [
+  {
+    name: 'response/agent_workspace_read-error-fs_unavailable',
+    description:
+      'Host-local read failed hard (perm/IO/EROFS) — distinct from a missing file (which is a null preview). Surfaced fail-closed; the daemon never falls back to a server-side path.',
+    frame: enc({
+      id: 'req-agent-workspace-read-1',
+      error: {
+        code: 'fs_unavailable',
+        message: "EACCES: permission denied, open 'system_prompt.md'",
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_workspace_read' },
+  },
+  {
+    name: 'response/agent_workspace_read-error-internal_error',
+    description:
+      'Catch-all for an unexpected failure while assembling the agent-workspace snapshot.',
+    frame: enc({
+      id: 'req-agent-workspace-read-1',
+      error: { code: 'internal_error', message: 'unexpected read failure' },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_workspace_read' },
+  },
+];
 RESPONSES_ERROR_TYPED.push(
   ...WORKSPACE_PROVISION_ERROR_FIXTURES,
   ...AGENT_WORKSPACE_INDEX_ERROR_FIXTURES,
+  ...AGENT_WORKSPACE_READ_ERROR_FIXTURES,
 );
 
 // ── Event fixtures ─────────────────────────────────────────────────

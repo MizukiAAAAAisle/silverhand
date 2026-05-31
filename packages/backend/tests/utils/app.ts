@@ -1,9 +1,12 @@
 import { Hono } from 'hono';
 import { mkdirSync } from 'node:fs';
+import { promises as fsp } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import type {
   AgentRunState,
   AgentRunTerminalReason,
+  AgentWorkspaceDto,
+  AgentWorkspaceNote,
   BindAddressScope,
   ServerConfig,
 } from '@silverhand/shared';
@@ -259,6 +262,16 @@ export class FakeHostWsServerController implements HostWsServerController {
         params: OutboundServerCommandParams<'agent_workspace_index'>,
       ) => OutboundServerCommandResult<'agent_workspace_index'>)
     | null = null;
+  /**
+   * D4.e-2 — override the `agent_workspace_read` ack. Tests that want to
+   * exercise a typed `fs_unavailable` failure or a specific DTO can swap
+   * this. Default reads the agent's seeded L1 dir on the embedded test fs.
+   */
+  agentWorkspaceReadAckOverride:
+    | ((
+        params: OutboundServerCommandParams<'agent_workspace_read'>,
+      ) => OutboundServerCommandResult<'agent_workspace_read'>)
+    | null = null;
 
   /**
    * D4.e-1 3b P2 (Cindy) — a tiny in-memory stand-in for the daemon
@@ -398,6 +411,20 @@ export class FakeHostWsServerController implements HostWsServerController {
         unresolved,
       } as OutboundServerCommandResult<K>;
     }
+    if (kind === 'agent_workspace_read') {
+      const p = params as OutboundServerCommandParams<'agent_workspace_read'>;
+      if (this.agentWorkspaceReadAckOverride) {
+        return this.agentWorkspaceReadAckOverride(
+          p,
+        ) as OutboundServerCommandResult<K>;
+      }
+      // Mirror the daemon: read the agent's L1/agent-home dir host-side. On
+      // the embedded test fs that dir is `<silverhandDir>/agents/<agent_id>`
+      // — where the fake `agent_materialize` seeds the L1 template clone.
+      const dir = joinPath(this.silverhandDir, 'agents', p.agent_id);
+      const workspace = await readFakeAgentWorkspace(dir);
+      return { ok: true as const, workspace } as OutboundServerCommandResult<K>;
+    }
     return {} as OutboundServerCommandResult<K>;
   }
   disconnectHost(_hostId: string): boolean {
@@ -413,6 +440,56 @@ const silentLogger: BackendLogger = {
   warn() {},
   error() {},
 };
+
+/**
+ * D4.e-2 — the fake adapter's stand-in for the daemon's host-local read
+ * (`readAgentWorkspace`). Reads `system_prompt.md` / `MEMORY.md` / `notes/`
+ * from the agent's L1 dir on the shared embedded test fs and assembles the
+ * `AgentWorkspaceDto` the route relays. Mirrors the daemon body (64 KiB
+ * preview cap, newest-first notes, graceful null on missing).
+ */
+async function readFakeAgentWorkspace(dir: string): Promise<AgentWorkspaceDto> {
+  const MAX = 64 * 1024;
+  const preview = async (
+    path: string,
+  ): Promise<AgentWorkspaceDto['system_prompt']> => {
+    let stat: Awaited<ReturnType<typeof fsp.stat>>;
+    try {
+      stat = await fsp.stat(path);
+    } catch {
+      return null;
+    }
+    if (!stat.isFile()) return null;
+    const buf = await fsp.readFile(path);
+    const truncated = buf.byteLength > MAX;
+    return {
+      path,
+      size: stat.size,
+      mtime: stat.mtimeMs,
+      content: truncated ? buf.subarray(0, MAX).toString('utf8') : buf.toString('utf8'),
+      truncated,
+    };
+  };
+  let notes: AgentWorkspaceNote[] = [];
+  try {
+    const entries = await fsp.readdir(joinPath(dir, 'notes'), {
+      withFileTypes: true,
+    });
+    for (const e of entries) {
+      if (!e.isFile() || e.name.startsWith('.')) continue;
+      const s = await fsp.stat(joinPath(dir, 'notes', e.name)).catch(() => null);
+      if (s) notes.push({ name: e.name, size: s.size, mtime: s.mtimeMs });
+    }
+    notes.sort((a, b) => b.mtime - a.mtime || a.name.localeCompare(b.name));
+  } catch {
+    notes = [];
+  }
+  const [system_prompt, memory] = await Promise.all([
+    preview(joinPath(dir, 'system_prompt.md')),
+    preview(joinPath(dir, 'MEMORY.md')),
+  ]);
+  return { l1_path: dir, system_prompt, memory, notes };
+}
 
 const TEST_PASSWORD_HASH_PARAMS: Argon2idPasswordHashParams = {
   algorithm: 'argon2id',

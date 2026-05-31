@@ -343,6 +343,104 @@ export function runOutboundFrameAdapterContract(
       expect(err!.code).toBe('transport_disconnected');
     });
 
+    // ── D4.e-2 / A3 — read proxy over the SAME envelope ──────────────────
+    // `agent_workspace_read` is the D4.e-2 host-local L1 read. It must
+    // round-trip its `{ agent_id }` param + `AgentWorkspaceDto` result and
+    // honour per-command error scoping: its own `fs_unavailable` rides the
+    // envelope; a foreign code (another command's) is refused at the schema
+    // boundary, never surfaced.
+
+    it('round-trips agent_workspace_read command → workspace DTO result', async () => {
+      fx = await makeFixture();
+      const daemon = await fx.connectDaemon();
+
+      const pending = fx.adapter.sendCommand(
+        fx.hostId,
+        'agent_workspace_read',
+        { agent_id: 'a1' },
+        { timeoutMs: 500 },
+      );
+      const cmd = await daemon.nextCommand();
+      expect(cmd.kind).toBe('agent_workspace_read');
+      // The backend forwards a semantic id ONLY — no path crosses the wire.
+      expect(cmd.params).toEqual({ agent_id: 'a1' });
+
+      daemon.respondResult(cmd.id, 'agent_workspace_read', {
+        ok: true,
+        workspace: {
+          l1_path: '/home/u/.silverhand/agents/a1',
+          system_prompt: {
+            path: '/home/u/.silverhand/agents/a1/system_prompt.md',
+            size: 5,
+            mtime: 1000,
+            content: 'hello',
+            truncated: false,
+          },
+          memory: null,
+          notes: [],
+        },
+      });
+
+      await expect(pending).resolves.toMatchObject({
+        workspace: { l1_path: '/home/u/.silverhand/agents/a1' },
+      });
+    });
+
+    it('passes through a legal agent_workspace_read typed error (fs_unavailable) with its code intact', async () => {
+      fx = await makeFixture();
+      const daemon = await fx.connectDaemon();
+
+      const pending = fx.adapter.sendCommand(
+        fx.hostId,
+        'agent_workspace_read',
+        { agent_id: 'a1' },
+        { timeoutMs: 500 },
+      );
+      const cmd = await daemon.nextCommand();
+      expect(cmd.kind).toBe('agent_workspace_read');
+
+      // `fs_unavailable` is declared by `agent_workspace_read`'s error arm —
+      // it rides the envelope and is NOT collapsed into a transport_* error.
+      daemon.respondError(cmd.id, 'agent_workspace_read', {
+        code: 'fs_unavailable',
+        message: 'host-local read failed: EACCES',
+      });
+
+      await expect(pending).rejects.toMatchObject({ code: 'fs_unavailable' });
+    });
+
+    it('refuses a foreign typed error code on agent_workspace_read', async () => {
+      fx = await makeFixture();
+      const daemon = await fx.connectDaemon();
+
+      const pending = fx.adapter.sendCommand(
+        fx.hostId,
+        'agent_workspace_read',
+        { agent_id: 'a1' },
+        { timeoutMs: 1000 },
+      );
+      const cmd = await daemon.nextCommand();
+      expect(cmd.kind).toBe('agent_workspace_read');
+
+      // `path_conflict` is a `workspace_provision` code, not declared by
+      // `agent_workspace_read` (which scopes only `fs_unavailable` /
+      // `internal_error` + generic transport codes). It must be refused.
+      daemon.respondError(cmd.id, 'agent_workspace_read', {
+        code: 'path_conflict',
+        message: 'foreign code must not be accepted on agent_workspace_read',
+      });
+
+      let err: { code?: string } | null = null;
+      try {
+        await pending;
+      } catch (e) {
+        err = e as { code?: string };
+      }
+      expect(err).not.toBeNull();
+      expect(err!.code).not.toBe('path_conflict');
+      expect(err!.code).toBe('transport_disconnected');
+    });
+
     it('refuses a foreign typed error code on a command that does not declare it', async () => {
       fx = await makeFixture();
       const daemon = await fx.connectDaemon();

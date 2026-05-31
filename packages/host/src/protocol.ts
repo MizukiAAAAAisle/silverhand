@@ -58,6 +58,7 @@
 import { z } from 'zod';
 import {
   AgentRunStateSchema,
+  AgentWorkspaceDtoSchema,
   ConversationKindSchema,
   HostKindSchema,
   MemberDtoSchema,
@@ -1182,9 +1183,10 @@ export type ResponseErrorCode = z.infer<typeof ResponseErrorCodeSchema>;
  * Default = `ResponseErrorSchema` (the 5 transport-level codes).
  * Intents that may legitimately surface daemon-business typed
  * codes — `agent_materialize` and the D4.e workspace data-plane
- * intents (`workspace_provision`, `agent_workspace_index`) —
- * override with a wider schema that unions the 5 generic codes with
- * the intent's own taxonomy (e.g. `AgentMaterializeErrorCodeSchema`).
+ * intents (`workspace_provision`, `agent_workspace_index`,
+ * `agent_workspace_read`) — override with a wider schema that unions
+ * the 5 generic codes with the intent's own taxonomy (e.g.
+ * `AgentMaterializeErrorCodeSchema`).
  *
  * Why per-intent and NOT a single global widened union (Cindy
  * D2 P1-1 + D1 round-1 P1): a global union would let any intent
@@ -1394,6 +1396,74 @@ const AgentWorkspaceIndexIpcErrorSchema = z
   })
   .strict();
 
+// ── D4.e-2 — agent_workspace_read (host-local L1/agent-home read proxy) ──
+// `GET /api/agents/:id/workspace` reads the agent's host-local L1
+// (agent-home) directory — `system_prompt.md`, `MEMORY.md`, `notes/`.
+// Pre-D4.e the backend read its own disk (and 503'd in standalone, where
+// the files live on a different machine). D4.e-2 makes the daemon the
+// reader: the backend sends ONLY the agent id (never a path), the daemon
+// resolves the dir from its own homedir (`computeAgentDir`) and assembles
+// the snapshot. This is the read counterpart of the D4.e-1 data-plane
+// intents and the first step of removing host-local fs from backend src
+// (I6). Scope is deliberately narrow: L1/agent-home read only — no L2/
+// regular-workspace read (a later slice adds a workspace selector), no
+// write, no directory browse.
+export const AgentWorkspaceReadParamsSchema = z
+  .object({
+    /**
+     * The agent whose host-local L1 (agent-home) dir is read. The backend
+     * forwards ONLY this semantic id; the daemon owns the path resolution
+     * (`computeAgentDir`), so I1 (daemon = sole host-local path authority)
+     * holds — no `workspace_path` or server-derived path crosses the wire.
+     */
+    agent_id: z.string().min(1),
+  })
+  .strict();
+export type AgentWorkspaceReadParams = z.infer<
+  typeof AgentWorkspaceReadParamsSchema
+>;
+
+export const AgentWorkspaceReadResultSchema = z
+  .object({
+    ok: z.literal(true),
+    /**
+     * The agent-workspace snapshot, assembled daemon-side by reading the
+     * resolved L1 dir. Shape is the shared `AgentWorkspaceDto` so the
+     * backend route relays it verbatim — no path work, no fs read. A
+     * missing per-file (brand-new agent) is a `null` preview / empty
+     * notes, NOT an error (matches the pre-D4.e graceful read).
+     */
+    workspace: AgentWorkspaceDtoSchema,
+  })
+  .strict();
+export type AgentWorkspaceReadResult = z.infer<
+  typeof AgentWorkspaceReadResultSchema
+>;
+
+export const AgentWorkspaceReadErrorCodeSchema = z.enum([
+  /**
+   * A host-local fs read failed HARD (perm/IO/EROFS) — distinct from a
+   * missing file, which is reported gracefully as a `null` preview. The
+   * daemon never falls back to a server-side path; a hard failure is
+   * surfaced fail-closed (Cindy D4.e-2 focus #3).
+   */
+  'fs_unavailable',
+  'internal_error',
+]);
+export type AgentWorkspaceReadErrorCode = z.infer<
+  typeof AgentWorkspaceReadErrorCodeSchema
+>;
+
+const AgentWorkspaceReadIpcErrorSchema = z
+  .object({
+    code: z.union([
+      ResponseErrorCodeSchema,
+      AgentWorkspaceReadErrorCodeSchema,
+    ]),
+    message: z.string(),
+  })
+  .strict();
+
 
 /**
  * Single source of truth for the intent ↔ params / result / error
@@ -1408,8 +1478,8 @@ const AgentWorkspaceIndexIpcErrorSchema = z
  * transport-level codes) at IPC validation time. Only intents
  * that may legitimately surface daemon-business typed codes —
  * `agent_materialize` (D4.d) plus the D4.e workspace data-plane
- * intents `workspace_provision` / `agent_workspace_index` —
- * declare their own widened error schema. The wire surface stays
+ * intents `workspace_provision` / `agent_workspace_index` /
+ * `agent_workspace_read` — declare their own widened error schema. The wire surface stays
  * per-intent-scoped (Cindy D2 P1-1 + D1 round-1 P1): a typed code
  * in one intent's error arm cannot leak into another intent's
  * error arm at validation time.
@@ -1516,6 +1586,11 @@ export const intentSchemas = {
     params: AgentWorkspaceIndexParamsSchema,
     result: AgentWorkspaceIndexResultSchema,
     error: AgentWorkspaceIndexIpcErrorSchema,
+  },
+  agent_workspace_read: {
+    params: AgentWorkspaceReadParamsSchema,
+    result: AgentWorkspaceReadResultSchema,
+    error: AgentWorkspaceReadIpcErrorSchema,
   },
 } as const;
 

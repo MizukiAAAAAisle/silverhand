@@ -55,6 +55,7 @@ import {
   indexAgentWorkspaces,
   type RegistryBinding,
 } from './workspace-registry/index.js';
+import { readAgentWorkspace } from './agent-workspace-read/index.js';
 import {
   buildDaemonInstanceId,
   defaultRuntimePidRootDir,
@@ -474,6 +475,16 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
         homeDir: opts.testHooks?.agentMaterializeHomeDir,
       });
     },
+    // D4.e-2 — agent_workspace_read: host-local L1/agent-home read proxy
+    // for `GET /api/agents/:id/workspace`. Resolves the agent-home dir from
+    // the daemon's homedir (test override via `agentMaterializeHomeDir`) and
+    // reads system_prompt/MEMORY/notes there. No registry binding needed:
+    // agent-home is homedir-derived, never registry-backed (L2/regular read
+    // is a later slice).
+    agentWorkspaceReadHandler: async params =>
+      readAgentWorkspace(params, {
+        homeDir: opts.testHooks?.agentMaterializeHomeDir,
+      }),
   });
   commandForwarder = command =>
     dispatcher.dispatch(command.id, String(command.kind), command.params);

@@ -77,6 +77,7 @@ import { HostWsCommandTransportError, HostWsCommandResponseError, type HostWsSer
 import type { OutboundFrameAdapter } from './runtime/outbound-frame-adapter.js';
 import {
   dispatchAgentWorkspaceIndex,
+  dispatchAgentWorkspaceRead,
   dispatchWorkspaceProvision,
   resolveOutboundForHost,
   type DataPlaneFailure,
@@ -97,7 +98,6 @@ import { WorkspaceRepo, agentHomeWorkspaceId } from './repos/workspace-repo.js';
 import { ConversationRepo, type RepoError } from './repos/conversation-repo.js';
 import { ensureAgentL1Dir, seedAgentL2 } from './workspace-files.js';
 import { detectRuntimes } from '@silverhand/host/runtimes';
-import { buildAgentWorkspaceDto } from './agent-workspace.js';
 import { AttachmentRejection } from './services/attachment-service.js';
 import {
   ActorError as ChannelActorError,
@@ -4242,19 +4242,30 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
       return c.json({ error: 'agent not found' }, 404);
     }
-    if (standaloneMode(ctx)) {
-      // D4.b P1-1 (local filesystem op): agent workspace
-      // resolution reads `ctx.silverhandDir/agents/<id>` — the
-      // agent's L1 dir lives on the desktop, not the server. This
-      // route is fundamentally local-only; the guard is correct
-      // (NOT a runtime transport unavailable scenario, NOT a
-      // CRUD deferral). D2.0 daemon-host data-plane will likely
-      // proxy the L1 dir read; until then 503 is honest.
-      return hostRuntimeDisabledResponse(c, 'agent workspace resolution', 503);
+    // D4.e-2 — host-local read moved to the owning daemon (I1/I6). The
+    // agent's L1/agent-home dir lives on the agent's host, not the backend
+    // disk, so the backend dispatches `agent_workspace_read` (semantic id
+    // only — no path) and relays the daemon-assembled DTO. This works in
+    // BOTH modes: standalone reads over WSS, embedded over the local Unix
+    // socket — the old standalone 503 disable is gone (A6). ACL + owning-
+    // host resolution stay here; the daemon only does the host-local read.
+    const outbound = resolveOutboundForHost(
+      ctx.outboundFrameAdapter?.() ?? null,
+      agent.host_id,
+    );
+    if (outbound.kind === 'failed') {
+      return c.json({ error: outbound.message, code: outbound.code }, outbound.status);
     }
-    const l1Dir = join(ctx.silverhandDir, 'agents', agent.id);
-    const workspace = await buildAgentWorkspaceDto(l1Dir);
-    return c.json({ workspace });
+    const read = await dispatchAgentWorkspaceRead(
+      outbound.adapter,
+      agent.host_id,
+      outbound.connectionId,
+      { agent_id: agent.id },
+    );
+    if (read.kind === 'failed') {
+      return c.json({ error: read.message, code: read.code }, read.status);
+    }
+    return c.json({ workspace: read.result.workspace });
   });
 
   app.get('/api/agents/:id/runtime-state', c => {

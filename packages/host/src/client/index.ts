@@ -69,9 +69,10 @@ import { SocketTransport } from './socket-transport.js';
  *
  * The `code` type is intentionally widened to `string` (Cindy D2
  * P1-1). For typed intents — `agent_materialize` plus the D4.e
- * workspace intents (`workspace_provision`, `agent_workspace_index`)
- * — the daemon may surface per-intent codes (e.g.
- * `agent_dir_collision`, `fs_quota_exceeded`, `registry_unavailable`)
+ * workspace data-plane intents (`workspace_provision`,
+ * `agent_workspace_index`, `agent_workspace_read`) — the daemon may
+ * surface per-intent codes (e.g. `agent_dir_collision`,
+ * `fs_quota_exceeded`, `registry_unavailable`, `fs_unavailable`)
  * that are not in the 5-code generic `ResponseError` enum.
  * `HostClient.handleFrame` validates the
  * incoming `code` against `intentErrorSchema(intent)` before
