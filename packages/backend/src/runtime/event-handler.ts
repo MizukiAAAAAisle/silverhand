@@ -839,9 +839,9 @@ export class RuntimeEventHandler {
       );
       // D4.b P1-2: invoke post-hydrate callback now that the cache
       // reflects the daemon's authoritative snapshot. The fanout
-      // uses this to drive auto-drain of pending inbox rows on
-      // reattach — deferred to post-hydrate so per-pair phase
-      // checks see the right state.
+      // uses this to re-drive pending inbox rows for runtimes the
+      // snapshot reports as already alive on reattach — deferred to
+      // post-hydrate so the live-runtime check sees the right state.
       if (this.onHydrateCompleteCb) {
         try {
           await this.onHydrateCompleteCb(trigger);
@@ -853,7 +853,7 @@ export class RuntimeEventHandler {
               trigger,
               err: (err as Error).message,
             },
-            'post-hydrate callback threw; auto-drain may be incomplete',
+            'post-hydrate callback threw; reattach re-drive may be incomplete',
           );
         }
       }

@@ -241,41 +241,6 @@ export class ConversationInboxRepo {
     return row?.c ?? 0;
   }
 
-  /**
-   * D4.b P1-2 (Cindy round-2 `0Hd5ComnzYxHJ6Rk` P1): list every
-   * `(conversation_id, agent_id)` pair owned by `hostId` that has at
-   * least one pending inbox row (delivered_at NULL + failed_at NULL +
-   * in_flight_owner NULL). Used by `OutboundRuntimeEventFanout.onEvent`
-   * on the `ready` arm to drive automatic drain after a daemon
-   * reattach: §5.2 contract requires reconnect to replay pending
-   * rows, not wait for the next user/route trigger.
-   *
-   * Sorted by (conversation_id, agent_id) for deterministic replay
-   * order across reattaches. Distinct because a pair can have
-   * multiple pending rows but only needs one `startDeliveryBacked`
-   * dispatch (which drains the whole batch).
-   */
-  listPendingPairsForHost(
-    hostId: string,
-  ): { conversationId: string; agentId: string }[] {
-    const rows = this.db
-      .prepare<[string], { conversation_id: string; agent_id: string }>(
-        `SELECT DISTINCT i.conversation_id, i.agent_id
-           FROM conversation_inboxes i
-           JOIN agents a ON a.id = i.agent_id
-          WHERE a.host_id = ?
-            AND i.delivered_at IS NULL
-            AND i.failed_at IS NULL
-            AND i.in_flight_owner IS NULL
-          ORDER BY i.conversation_id ASC, i.agent_id ASC`,
-      )
-      .all(hostId);
-    return rows.map(r => ({
-      conversationId: r.conversation_id,
-      agentId: r.agent_id,
-    }));
-  }
-
   private deliveryRow(
     conversationId: string,
     agentId: string,

@@ -250,8 +250,10 @@ describe('D5.a-3 embedded boot + shutdown order (real startBackend)', () => {
     const localHostId = new HostRepo(db).ensureLocal().id;
 
     // Seed a (workspace, agent, conversation, conversation_agents=idle)
-    // owned by the local host + one pending inbox row, so the daemon's
-    // `ready` triggers hydrate → auto-replay → runtime_start.
+    // owned by the local host + one pending inbox row. An EXPLICIT
+    // `runtimeHost.start` below is the activation trigger — boot no
+    // longer auto-spawns from the pending set (boot-herd fix) — and it
+    // produces the `runtime_start` this test inspects.
     const now = Date.now();
     const userId = 'user-d5a-boot';
     const workspaceId = 'ws-d5a-boot';
@@ -305,9 +307,17 @@ describe('D5.a-3 embedded boot + shutdown order (real startBackend)', () => {
     new ConversationInboxRepo(db).enqueue(conversationId, agentId, messageId);
 
     // The backend has dialed by now (connect fired from the listen
-    // callback). Release `ready` so hydrate → auto-replay runs.
+    // callback). Release `ready` so the backend hydrates the cache.
     await daemon.waitConnected();
     daemon.sendReady();
+    await waitFor(() => !!daemon!.find('runtime_status'), {
+      label: 'runtime_status hydrate after ready',
+    });
+
+    // Activation trigger: an explicit start (the embedded analogue of
+    // the user sending into this conversation). Boot no longer
+    // auto-spawns the backlog, so this is what dispatches runtime_start.
+    await running.context.runtimeHost.start(conversationId, agentId);
 
     // ── P1-1 assertion ──
     await waitFor(() => !!daemon!.find('runtime_start'), {

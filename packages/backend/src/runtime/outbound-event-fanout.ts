@@ -272,15 +272,16 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         event.daemon_pid,
         event.started_at,
       );
-      // D4.b P1-2 (Cindy round-2 `0Hd5ComnzYxHJ6Rk` P1): auto-drain
-      // is wired through the handler's `onHydrateComplete` callback
-      // (see `stateForHost` below), NOT here on `ready`. The handler's
-      // `onDaemonReady(ready)` path triggers a fire-and-forget
-      // `hydrateSafely('daemon_ready', ...)` that fetches the
-      // daemon's `runtime_status` snapshot and populates the cache;
-      // only after that is the per-pair phase check (`ready` →
-      // wake, absent → spawn) authoritative. Firing the drain on
-      // `ready` itself raced the hydrate and took the wrong branch.
+      // Reattach re-drive is wired through the handler's
+      // `onHydrateComplete` callback (see `stateForHost` below), NOT
+      // here on `ready`. The handler's `onDaemonReady(ready)` path
+      // triggers a fire-and-forget `hydrateSafely('daemon_ready', ...)`
+      // that fetches the daemon's `runtime_status` snapshot and
+      // populates the cache; only after that does `replayPendingForHost`
+      // re-drive the runtimes the snapshot reports as ALREADY ALIVE
+      // (`phase === 'ready'`), wake-only. It never derives a spawn from
+      // the DB pending set — that was the boot-herd bug. Firing on
+      // `ready` itself would race the hydrate and act on a stale cache.
     } else if (
       event.kind === 'runtime_ready_for_drain' &&
       state.currentDaemonKey
@@ -1347,14 +1348,13 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         }
         return this.replayPendingForAgent(hostId, connectionId, cid, aid);
       },
-      // D4.b P1-2 (Cindy round-2 `0Hd5ComnzYxHJ6Rk` P1) — auto-drain
-      // on reattach. Fires AFTER the daemon's `runtime_status`
-      // snapshot has hydrated the cache, so the per-pair phase
-      // check (`ready` → wake / absent → spawn) in
-      // `startDeliveryBacked` is authoritative. We dispatch via
-      // `queueMicrotask` so the hydrate code path returns first
-      // (the dispatch awaits the WS round-trip and we don't want
-      // to nest that inside the hydrate callback).
+      // Reattach re-drive. Fires AFTER the daemon's `runtime_status`
+      // snapshot has hydrated the cache, scoped (in
+      // `replayPendingForHost`) to runtimes the snapshot reports as
+      // ALREADY ALIVE — wake-only, never spawn. We dispatch via
+      // `queueMicrotask` so the hydrate code path returns first (the
+      // dispatch awaits the WS round-trip and we don't want to nest
+      // that inside the hydrate callback).
       onHydrateComplete: () => {
         const connectionId = state.currentConnectionId;
         if (!connectionId) {
@@ -1383,50 +1383,83 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
   }
 
   /**
-   * D4.b P1-2 (Cindy round-2 `0Hd5ComnzYxHJ6Rk` P1): drive automatic
-   * drain of pending inbox rows for every (conversation, agent) pair
-   * owned by `hostId` after a daemon reattach. Called from
-   * `onEvent('ready', ...)` via `queueMicrotask` so the WS read loop
-   * stays unblocked.
+   * Re-drive pending inbox drain after a daemon reattach, scoped to the
+   * runtimes that are **already alive** in the just-hydrated snapshot.
+   * Called from `onHydrateComplete` via `queueMicrotask` so the WS read
+   * loop stays unblocked.
    *
-   * Implementation notes:
+   * Why scoped to live runtimes (root-cause fix for the boot herd):
+   * we must NOT derive "runtimes to start" from the DB's full pending
+   * set. The previous implementation enumerated every pending
+   * (conversation, agent) pair for the host (a since-removed
+   * `listPendingPairsForHost` repo query) and called
+   * `startDeliveryBacked` per pair, which `runtime_start`-spawns a
+   * fresh runtime whenever the pair has no live cache entry. On a cold
+   * daemon boot the hydrated cache is empty, so EVERY historical
+   * pending (conversation, agent) pair took the spawn path — an agent
+   * that's a member of N backlogged conversations booted N persistent
+   * `claude` processes at once (O(conversations) memory, one ~280MB
+   * process each). A daemon reattach is not an instruction to execute
+   * every historical inbox.
    *
-   *   - `expectedConnectionId` guard: if `currentConnectionId` flipped
-   *     to a newer one between the `queueMicrotask` schedule and
-   *     execution (i.e. the daemon bounced again before we even got
-   *     around to the drain), abort. The newer ready frame will
-   *     schedule its own replay.
-   *   - Per-pair try/catch: a single bad pair (e.g. agent's
-   *     host_credentials race-deleted, options builder throw) must
-   *     not poison the rest of the host's drain. The caller's
-   *     host-level catch is the outer net for unanticipated failures.
-   *   - `startDeliveryBacked` is the right entry point even for an
-   *     already-running runtime: it short-circuits to
-   *     `replayPendingForAgent` (live-wake path) when the cache
-   *     reports phase === 'ready', and proceeds with `runtime_start`
-   *     + `startup_delivery` otherwise. On fresh daemon reattach the
-   *     cache is empty (disconnect cleared it), so every pair takes
-   *     the spawn path.
+   * New contract: only runtimes the daemon reports as alive (`phase ===
+   * 'ready'`) in the hydrate snapshot are re-driven, via the wake-only
+   * `replayPendingForAgent` path (it submits a ready-for-drain batch to
+   * an existing runtime and can never `runtime_start`). This handles the
+   * real reattach concern — a live runtime whose in-flight delivery got
+   * rolled back across the reconnect window. Pending for a pair with NO
+   * live runtime stays a durable inbox and drains lazily on the next
+   * live delivery to that specific pair (`startDeliveryBacked`), never
+   * here. Cold boot with no live runtimes therefore spawns nothing.
+   *
+   *   - `expectedConnectionId` guard: if `currentConnectionId` flipped to
+   *     a newer one between the `queueMicrotask` schedule and execution
+   *     (the daemon bounced again), abort. The newer ready frame
+   *     schedules its own replay.
+   *   - Per-pair try/catch: one bad pair must not poison the rest of the
+   *     host's drain.
    */
   private async replayPendingForHost(
     hostId: string,
     expectedConnectionId: string,
   ): Promise<void> {
-    const pairs = this.inboxRepo.listPendingPairsForHost(hostId);
-    if (pairs.length === 0) return;
-    for (const { conversationId, agentId } of pairs) {
-      const state = this.states.get(hostId);
-      if (!state || state.currentConnectionId !== expectedConnectionId) {
-        // Connection bounced between scheduling and execution. Bail
-        // out — the newer connection's ready frame will replay.
+    const state = this.states.get(hostId);
+    if (!state || state.currentConnectionId !== expectedConnectionId) return;
+    // Live runtimes only — derived from the hydrated cache, NOT from the
+    // DB pending set. `phase === 'ready'` is the only drainable-live
+    // phase (a 'starting' runtime drains on its own ready_for_drain
+    // event; 'draining'/'exited'/'idle' are not wakeable here).
+    const liveReady = state.cache
+      .list()
+      .filter(entry => entry.phase === 'ready');
+    for (const { conversationId, agentId } of liveReady) {
+      if (
+        !this.states.get(hostId) ||
+        this.states.get(hostId)?.currentConnectionId !== expectedConnectionId
+      ) {
+        // Connection bounced between scheduling and execution. Bail —
+        // the newer connection's hydrate will replay.
         this.opts.logger.info(
-          { hostId, expectedConnectionId, currentConnectionId: state?.currentConnectionId ?? null },
+          {
+            hostId,
+            expectedConnectionId,
+            currentConnectionId:
+              this.states.get(hostId)?.currentConnectionId ?? null,
+          },
           'outbound replay-on-reattach: connection changed mid-drain, aborting',
         );
         return;
       }
+      if (this.inboxRepo.listPending(conversationId, agentId).length === 0) {
+        continue;
+      }
       try {
-        await this.startDeliveryBacked(conversationId, agentId);
+        await this.replayPendingForAgent(
+          hostId,
+          expectedConnectionId,
+          conversationId,
+          agentId,
+        );
       } catch (err) {
         this.opts.logger.warn(
           { hostId, conversationId, agentId, err },

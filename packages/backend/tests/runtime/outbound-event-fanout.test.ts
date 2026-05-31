@@ -279,6 +279,61 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
+  // Boot-herd root-cause pin (shiki: "为什么会同一时间拉起那么多" / Cindy
+  // negative `Glz2dqd_gmAlDOv2`). The reattach replay
+  // (`onHydrateComplete → replayPendingForHost`) must derive its
+  // re-drive set from the daemon's LIVE runtime snapshot — never from
+  // the DB pending set. A cold daemon (re)start reports zero live
+  // runtimes, so DB backlog must NOT be turned into runtime_start /
+  // runtime_wake at attach time. Activation happens only on a real send.
+  it('cold daemon attach with DB pending but NO live runtime in the hydrate snapshot does NOT replay backlog into runtime_start/wake; a later live send starts exactly that one pair', async () => {
+    const fix = makeFixture({ runtime: 'codex' });
+    try {
+      // Historical backlog from a prior session — the exact state that,
+      // pre-fix, made every pending (conv, agent) pair spawn a runtime
+      // at boot (29 claude procs / 8GB in shiki's dogfood).
+      enqueueMessage(fix, 'historical pending from a prior session');
+
+      // Cold daemon: just (re)started, so its runtime_status snapshot
+      // reports ZERO live runtimes. Hydrate populates an empty cache.
+      fix.transport.snapshot = { runtimes: [] };
+
+      fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+      await waitFor(() =>
+        fix.transport.calls.some(call => call.kind === 'runtime_status'),
+      );
+      // Let the queueMicrotask-scheduled onHydrateComplete replay run.
+      await wait(25);
+
+      // Root-cause invariant: no live runtime in the snapshot ⇒ NOTHING
+      // derived from DB pending. Neither a spawn nor a wake.
+      expect(
+        fix.transport.calls.some(call => call.kind === 'runtime_start'),
+      ).toBe(false);
+      expect(fix.transport.wakeCalls()).toHaveLength(0);
+      // The backlog stays a durable pending inbox, untouched.
+      expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toHaveLength(1);
+
+      // The user actually sends into this conversation. THAT — and only
+      // that — is the activation trigger: exactly one runtime_start for
+      // this one pair (the backlog drains with it via startup_delivery).
+      const live = fix.messages.insertForConversation({
+        conversationId: fix.channelId,
+        fromKind: 'user',
+        content: 'live send',
+      });
+      await fix.fanout.deliverMessage(fix.channelId, fix.agentId, live.id);
+      await waitFor(() =>
+        fix.transport.calls.some(call => call.kind === 'runtime_start'),
+      );
+      expect(
+        fix.transport.calls.filter(call => call.kind === 'runtime_start'),
+      ).toHaveLength(1);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
   it('claims replay rows FIFO and does not issue concurrent wakes for repeated ready_for_drain', async () => {
     const fix = makeFixture({ runtime: 'codex' });
     try {

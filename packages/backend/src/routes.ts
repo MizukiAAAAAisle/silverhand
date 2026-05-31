@@ -2948,17 +2948,20 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     // per-agent `runtimeHost.deliverMessage(...)` fan-out is
     // wrapped in a top-level catch so a transient daemon-down
     // state does NOT bubble up as an HTTP error. The message stays
-    // in `conversation_inboxes` as pending; the daemon's next
-    // reattach drives the post-hydrate auto-drain (see
-    // `OutboundRuntimeEventFanout.onHydrateComplete`) and the
-    // inbox row's `delivered_at` flips then. So:
+    // in `conversation_inboxes` as pending and drains when the
+    // target runtime is next alive:
     //
-    //   - No daemon attached → 201 success; message pending;
-    //     auto-drain handles delivery on next reattach. The typed
-    //     `HostWsCommandTransportError('transport_no_connection')`
-    //     fires inside `deliverMessage` but is logged + swallowed
-    //     by `sendMessage`'s `try/catch`. The HTTP response does
-    //     NOT surface `host_attach_pending` here.
+    //   - No daemon attached → 201 success; message pending. The
+    //     typed `HostWsCommandTransportError('transport_no_connection')`
+    //     fires inside `deliverMessage` but is logged + swallowed by
+    //     `sendMessage`'s `try/catch`. The row drains on the next
+    //     live delivery to this (conversation, agent) — either a
+    //     surviving runtime re-driven on WS-reconnect
+    //     (`OutboundRuntimeEventFanout.replayPendingForHost`, scoped
+    //     to already-alive runtimes) or the next explicit send/start
+    //     to this pair (`startDeliveryBacked`). A COLD daemon reattach
+    //     (no live runtime) deliberately does NOT spawn from the DB
+    //     pending set — that was the boot-herd bug.
     //   - Daemon attached, runtime errors → same: 201 + logged.
     //
     // The typed `host_attach_pending` (503) surface lives on the

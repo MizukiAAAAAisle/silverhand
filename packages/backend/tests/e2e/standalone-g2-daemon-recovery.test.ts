@@ -1,70 +1,60 @@
 /**
- * D4.b P1-2 — Standalone G2 daemon disconnect + pending inbox
- * replay recovery e2e.
+ * D4.b P1-2 (revised for the boot-herd root-cause fix) — Standalone
+ * G2 daemon disconnect + pending inbox recovery e2e.
  *
- * Cindy `wY_2I5y4l-FXO19h` review carved this out as the proper
- * "delivery recovery" arm B5 was missing. The B5 commit pinned the
- * agent-child crash projection (`status='crashed'` arm of the
- * `RuntimeStatusProjector.runtimeExit` mapping) — that's the WRONG
- * recovery axis. The §5.2 design contract is about the DAEMON
- * (not its child) disappearing mid-flight: the daemon's outbound
- * WS drops; the backend rolls back in-flight inbox rows owned by
- * that connection; a fresh daemon attaches with the same
- * host_id/host_token; pending rows drain on the new attachment
- * without loss and without duplicate delivery.
+ * §5.2 design contract: the DAEMON disappears mid-flight; the backend
+ * rolls back in-flight inbox rows owned by that connection; a fresh
+ * daemon attaches with the same host_id/host_token; the rolled-back
+ * pending recovers without loss and without duplicate delivery.
  *
- * **What this test pins (Cindy boundary, this commit)**:
+ * **Semantic revision (shiki `CKFaAk3TZMFYWLE-` boot-herd fix):** this
+ * test originally asserted that a COLD daemon reattach *automatically*
+ * drained the whole DB backlog on `ready` (the old
+ * `replayPendingForHost → listPendingPairsForHost → startDeliveryBacked`
+ * per-pair fan-out). That fan-out was the memory bug: an agent that was
+ * a member of N backlogged conversations spawned N `claude` processes
+ * the instant a daemon attached (29 procs / 8GB observed in dogfood).
  *
- *   1. **No-loss across reconnect** — a row sitting in
- *      `in_flight_owner = <old connectionId>` at the moment the
- *      daemon disconnects ends up `delivered_at IS NOT NULL`
- *      after the new daemon attaches and the **automatic on-ready
- *      drain** runs. The rollback path is
- *      `OutboundRuntimeEventFanout.onDisconnect` →
- *      `inboxRepo.rollbackInFlightForOwner(connectionId)`, which
- *      flips the in-flight back to pending so the auto-drain can
- *      claim it again.
- *   2. **`in_flight_owner` cleared on disconnect** — the rollback
- *      writes `NULL` to `in_flight_owner` / `in_flight_at` for
- *      every row owned by the dropped connection (the SQL
- *      predicate filters `delivered_at IS NULL AND failed_at IS
- *      NULL` so already-delivered rows are untouched).
- *   3. **Automatic on-ready drain (Cindy round-2 `0Hd5ComnzYxHJ6Rk`
- *      P1)** — after the new daemon attaches, the backend's
- *      `OutboundRuntimeEventFanout.onEvent('ready', ...)` schedules
- *      `replayPendingForHost(hostId)` automatically. The test does
- *      NOT call `runtimeHost.deliverMessage` / `runtimeHost.start`
- *      by hand; it only polls the durable DB observable
- *      (`delivered_at` non-null). The §5.2 contract requires this
- *      automatic replay path; the pre-round-2 version of this test
- *      drove the drain manually and so didn't prove the contract.
- *   4. **No duplicate delivery (Cindy's headline "no-dup")** —
- *      after the new daemon attaches and replays the pending
- *      payload as `startup_delivery`, the wire `STDIN:<payload>`
- *      echo count for that payload remains EXACTLY 1. A bug
- *      that double-delivered (e.g. didn't clear `in_flight_at` on
- *      rollback so the second attempt got combined with a stale
- *      row, or replayed the row twice from two different code
- *      paths) would push the count to 2 and trip the assertion.
- *   5. **Same daemon credentials across the restart** —
- *      `daemon-config.json` is unchanged: the new daemon attaches
- *      with the SAME `host_id` + `host_token` the old daemon
- *      used. `HostTokenService.verifyHostToken` accepts the bearer
- *      and the backend's `authenticateHost` issues a freshly
- *      minted `hostws-*` connectionId distinct from the dropped
- *      one (the rollback owner-key vs the new claim owner-key
- *      proves the connection identity changed, even though the
- *      host identity didn't).
+ * The fix scopes the reattach re-drive to runtimes the daemon reports
+ * as ALREADY ALIVE in its `runtime_status` hydrate snapshot (wake-only,
+ * never spawn). A cold daemon's snapshot is empty, so a cold reattach
+ * spawns NOTHING from the DB pending set — activation happens only when
+ * a real send lands. This test is rewritten to that contract.
+ *
+ * **What this test pins now**:
+ *
+ *   1. **Live runtime established by an explicit send** — row #1 drains
+ *      as `startup_delivery` after `runtimeHost.start`, not by any
+ *      attach-time auto-drain. This is the only activation trigger.
+ *   2. **Rollback on disconnect** — a row sitting in
+ *      `in_flight_owner = <old connectionId>` when the daemon drops is
+ *      flipped back to pending with `in_flight_owner` / `in_flight_at`
+ *      cleared (the SQL predicate spares already-delivered rows).
+ *   3. **NO auto-spawn on COLD reattach (the boot-herd invariant)** —
+ *      after the fresh daemon reattaches with an EMPTY runtime snapshot,
+ *      the rolled-back row #2 stays pending: `delivered_at` is still
+ *      null and the post-reattach `secondSessionId` never appears (no
+ *      runtime was spawned from the DB backlog). This is the core
+ *      regression guard for the 29-process herd.
+ *   4. **Recovery via an explicit send** — a subsequent
+ *      `runtimeHost.start` spawns one fresh runtime (`secondSessionId`),
+ *      drains the rolled-back row #2 as `startup_delivery`, and lands
+ *      `delivered_at` non-null.
+ *   5. **No duplicate delivery** — the recovered payload's wire
+ *      `STDIN:<payload>` echo count is EXACTLY 1.
+ *   6. **Same daemon credentials across the restart** — the new daemon
+ *      attaches with the SAME host_id + host_token; the backend mints a
+ *      fresh `hostws-*` connectionId distinct from the dropped one.
  *
  * **Reconnect determinism (Cindy boundary #4)** — the harness's
- * deterministic `OutboundDaemonClient` backoff
- * (`{minDelayMs: 25, maxDelayMs: 100, factor: 2, jitterRatio: 0}`
- * — see `g2-harness.ts`'s `bootHarnessDaemon`) governs the
- * reattach window; bounded `waitFor` polls catch the reattach
- * without wall-clock betting. No `setTimeout(...)` in this test
- * bets on real-time backoff windows; the only non-`waitFor` wait
- * is the rollback observability tick (a deliberate 0-arg
- * `setImmediate` window, not a backoff bet).
+ * deterministic `OutboundDaemonClient` backoff governs the reattach
+ * window; bounded `waitFor` polls catch the reattach without wall-clock
+ * betting. The only fixed wait is a short settle window for the
+ * negative assertion in (3) — proving "nothing spawned" needs a bounded
+ * quiet period; the deterministic unit pin
+ * (`outbound-event-fanout.test.ts` — "cold daemon attach … does NOT
+ * replay backlog into runtime_start/wake") is the authoritative,
+ * race-free guard and this e2e is the integration companion.
  *
  * **R4 (this IPC is local supervisor/control, not server↔daemon
  * formal semantics)**: same boundary lock as B1-B6.
@@ -81,6 +71,7 @@ import {
   bootG2Harness,
   waitFor,
   waitForAttachment,
+  waitForFreshAttachment,
   type DaemonWithSupervisorHandle,
   type G2Harness,
 } from './g2-harness.js';
@@ -185,7 +176,7 @@ describe('Standalone G2 — daemon disconnect + pending inbox replay recovery', 
     }
   });
 
-  it('a row in_flight on the OLD connection rolls back on disconnect, is replayed AUTOMATICALLY by the on-ready drain when the reattached daemon emits ready, and lands delivered_at without duplicate STDIN echoes (no manual drain trigger)', async () => {
+  it('rolls an in-flight row back to pending on daemon disconnect; a COLD reattach does NOT auto-spawn the backlog; an explicit send then recovers it exactly once (no-loss, no-dup)', async () => {
     harness = await bootG2Harness();
     const { db } = harness.backend.context;
 
@@ -273,16 +264,17 @@ describe('Standalone G2 — daemon disconnect + pending inbox replay recovery', 
     const oldAttachment = await waitForAttachment(controller, harness.hostId);
     const oldConnectionId = oldAttachment.connectionId;
 
-    // ── First-attach auto-drain baseline ────────────────────────
+    // ── Establish a live runtime via an EXPLICIT send ───────────
     //
-    // Cindy round-2: the auto-drain hook fires on EVERY daemon
-    // `ready`, including the very first attach in a test. Row #1
-    // (enqueued pre-daemon-boot) is drained automatically as soon
-    // as the daemon connects — we don't need to call
-    // `runtimeHost.start` ourselves. Wait for the first
-    // session_init projection to confirm row #1 was drained and
-    // the runtime is up; this is the precondition for the
-    // disconnect/reattach scenario below.
+    // Boot-herd fix: a daemon attach no longer auto-drains the DB
+    // backlog. Row #1 (enqueued pre-daemon-boot) is therefore NOT
+    // delivered just because the daemon connected. We trigger the
+    // one legitimate activation — an explicit `runtimeHost.start`
+    // (the standalone analogue of the user sending into this
+    // conversation) — which spawns the runtime and drains row #1 as
+    // `startup_delivery`. This is the precondition (a genuinely live
+    // runtime) for the disconnect/reattach scenario below.
+    await harness.backend.context.runtimeHost.start(conversationId, agentId);
     await waitFor(
       () => {
         const row = harness!.backend.context.db
@@ -293,11 +285,9 @@ describe('Standalone G2 — daemon disconnect + pending inbox replay recovery', 
           .get(conversationId, agentId);
         return row && row.cli_session_id === firstSessionId ? true : null;
       },
-      { timeoutMs: 10_000, label: 'first session_init landed pre-recovery (via auto-drain)' },
+      { timeoutMs: 10_000, label: 'first session_init landed via explicit start' },
     );
-    // Row #1 must show delivered_at non-null too — the auto-drain
-    // chained markDelivered after the wake ACK, same as the manual
-    // path would have.
+    // Row #1 drained as startup_delivery → delivered_at non-null.
     await waitFor(
       () => {
         const row = readInboxRow(
@@ -310,7 +300,7 @@ describe('Standalone G2 — daemon disconnect + pending inbox replay recovery', 
         if (row.delivered_at === null) return null;
         return row;
       },
-      { timeoutMs: 5_000, label: 'row #1 delivered_at via first-attach auto-drain' },
+      { timeoutMs: 5_000, label: 'row #1 delivered_at via explicit start' },
     );
 
     // ── Set up the in-flight row scenario ───────────────────────
@@ -412,35 +402,59 @@ describe('Standalone G2 — daemon disconnect + pending inbox replay recovery', 
       driverFor: (_kind: RuntimeKind) => makeSessionInitDriver(pendingSessionId),
     });
 
-    const newAttachment = await waitForAttachment(controller, harness.hostId);
+    const newAttachment = await waitForFreshAttachment(
+      controller,
+      harness.hostId,
+      oldConnectionId,
+    );
     const newConnectionId = newAttachment.connectionId;
     expect(newConnectionId).not.toBe(oldConnectionId);
     expect(newConnectionId).toMatch(/^hostws-/);
 
-    // ── Auto-drain on reconnect (Cindy round-2 `0Hd5ComnzYxHJ6Rk` P1) ─
+    // ── NO auto-spawn on COLD reattach (the boot-herd invariant) ─
     //
-    // §5.2 contract: after the new daemon attaches, the backend
-    // MUST automatically replay previously-pending inbox rows for
-    // that host. No manual `runtimeHost.deliverMessage(...)` /
-    // `runtimeHost.start(...)` trigger from the user/route path is
-    // required.
+    // The killed daemon took its runtime with it, so the fresh
+    // daemon's `runtime_status` hydrate snapshot is EMPTY. The
+    // scoped reattach replay (`replayPendingForHost` — wake-only,
+    // live-runtimes-only) must therefore do nothing: it must NOT
+    // derive a `runtime_start` from the DB pending set. Pre-fix this
+    // is exactly where the 29-process herd was born.
     //
-    // Implementation: `OutboundRuntimeEventFanout.onEvent('ready', ...)`
-    // schedules `replayPendingForHost(hostId, connectionId)` via
-    // `queueMicrotask`. The replay dispatches `startDeliveryBacked`
-    // for every (conv, agent) pair owned by this host with at least
-    // one pending inbox row. The new daemon's supervisor spawns a
-    // fresh runtime; the fixture echoes the payload back via
-    // `STDIN:<secondBody>` on stdout.
-    //
-    // The previous version of this test called
-    // `runtimeHost.deliverMessage` here by hand — that proved
-    // rollback worked but not the auto-drain contract Cindy
-    // required. This polling block is the only push needed: the
-    // ready frame from the reattaching daemon does the rest.
+    // Settle window: the (no-op) replay runs in a microtask after
+    // the post-attach `runtime_status` round-trip. Give it room, then
+    // assert the rolled-back row #2 is STILL pending and the
+    // post-reattach `secondSessionId` never materialised (nothing
+    // spawned). The deterministic, race-free guard for this lives in
+    // `outbound-event-fanout.test.ts`; this is the integration
+    // companion.
+    await new Promise(resolve => setTimeout(resolve, 300));
+    const afterReattachRow = readInboxRow(
+      harness,
+      conversationId,
+      agentId,
+      secondMessageId,
+    );
+    expect(afterReattachRow).toBeTruthy();
+    expect(afterReattachRow!.delivered_at).toBeNull();
+    expect(afterReattachRow!.in_flight_owner).toBeNull();
+    const sessionAfterReattach = harness.backend.context.db
+      .prepare<[string, string], { cli_session_id: string | null }>(
+        `SELECT cli_session_id FROM conversation_agents
+          WHERE conversation_id = ? AND agent_id = ?`,
+      )
+      .get(conversationId, agentId);
+    expect(sessionAfterReattach?.cli_session_id).not.toBe(secondSessionId);
 
-    // No-loss: the row ends up delivered_at non-null on the new
-    // daemon's attachment.
+    // ── Recovery via an EXPLICIT send ───────────────────────────
+    //
+    // The user sends into the conversation again (here: an explicit
+    // `runtimeHost.start`, the standalone analogue). With no live
+    // runtime, this spawns a fresh one (`secondSessionId`) and drains
+    // the rolled-back row #2 as `startup_delivery`. The fixture echoes
+    // the payload back via `STDIN:<secondBody>` on stdout.
+    //
+    // No-loss: the row ends up delivered_at non-null.
+    await harness.backend.context.runtimeHost.start(conversationId, agentId);
     const recoveredRow = await waitFor(
       () => {
         const row = readInboxRow(
@@ -455,7 +469,7 @@ describe('Standalone G2 — daemon disconnect + pending inbox replay recovery', 
       },
       {
         timeoutMs: 15_000,
-        label: 'second row delivered_at lands after daemon reattach',
+        label: 'second row delivered_at lands after explicit recovery send',
       },
     );
     expect(recoveredRow.delivered_at).not.toBeNull();
