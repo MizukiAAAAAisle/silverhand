@@ -863,17 +863,18 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     agentId: string,
   ): Promise<boolean> {
     if (this.inboxRepo.listPending(conversationId, agentId).length === 0) {
-      // D4.b P1-2 (Cindy round-2 `0Hd5ComnzYxHJ6Rk` P1) idempotency
-      // guard. With the auto-drain on `ready` now claiming pending
-      // rows the moment the daemon attaches, an explicit
-      // `runtimeHost.start` / HTTP POST `/start` racing the
-      // microtask will see an empty `listPending` even though a
-      // `runtime_start` dispatch is already in flight (the auto-
-      // drain transitioned the rows to `in_flight_owner = <conn>`).
-      // Without this guard the explicit start would throw
-      // `HostRuntimeDisabledError` ("nothing to drain") and the
-      // route would return a generic 400 — strictly worse UX than
-      // an idempotent success.
+      // Idempotency guard for concurrent claimants. A pending row can
+      // already be in-flight when an explicit `runtimeHost.start` / HTTP
+      // POST `/start` races another path that just claimed it — the
+      // scoped reattach re-drive of a LIVE runtime
+      // (`replayPendingForHost`), a per-pair `ready_for_drain` replay,
+      // or another in-flight start. The racing caller then sees an empty
+      // `listPending` even though a `runtime_start`/wake dispatch is
+      // already in flight (the winner transitioned the rows to
+      // `in_flight_owner = <conn>`). Without this guard the explicit
+      // start would throw `HostRuntimeDisabledError` ("nothing to
+      // drain") and the route would return a generic 400 — strictly
+      // worse UX than an idempotent success.
       //
       // We treat "any in-flight row for this pair" as proof that
       // the runtime is being started, and return success. The
