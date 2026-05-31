@@ -181,6 +181,47 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
+  it('drops stale ready_for_drain events and does not pin a live wake to the old connection', async () => {
+    const fix = makeFixture({ runtime: 'codex' });
+    try {
+      fix.transport.snapshot = {
+        runtimes: [
+          runtimeDto(fix.channelId, fix.agentId, 'ready', {
+            ...RUN_STATE,
+            conversationId: fix.channelId,
+            agentId: fix.agentId,
+            status: 'idle',
+          }),
+        ],
+      };
+      fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+      await waitFor(() => fix.transport.calls.some(call => call.kind === 'runtime_status'));
+
+      // The transport has accepted a newer attachment, but an old
+      // socket/frame delivers a late ready_for_drain. It must not write
+      // state.currentConnectionId back to conn-1 or dispatch a wake
+      // pinned to that dead connection.
+      fix.transport.connectionId = 'conn-2';
+      fix.fanout.onEvent(fix.hostId, readyForDrainEvent(fix), 'conn-1');
+      await wait(25);
+      expect(fix.transport.wakeCalls()).toHaveLength(0);
+
+      const msg = fix.messages.insertForConversation({
+        conversationId: fix.channelId,
+        fromKind: 'user',
+        content: 'live after stale event',
+      });
+      await fix.fanout.deliverMessage(fix.channelId, fix.agentId, msg.id);
+      await waitFor(() =>
+        fix.transport.calls.some(call => call.kind === 'runtime_start'),
+      );
+      const start = fix.transport.calls.find(call => call.kind === 'runtime_start');
+      expect(start?.opts?.expectedConnectionId).toBe('conn-2');
+    } finally {
+      fix.cleanup();
+    }
+  });
+
   it('replays pending inbox rows only after runtime_ready_for_drain', async () => {
     const fix = makeFixture({ runtime: 'codex' });
     try {
@@ -428,6 +469,80 @@ describe('OutboundRuntimeEventFanout', () => {
       expect(wakeFix.transport.calls.some(call => call.kind === 'runtime_start')).toBe(false);
     } finally {
       wakeFix.cleanup();
+    }
+  });
+
+  it('wires coordinator.respawn → a non-fatal runtime_exit with pending inbox re-runs startup_delivery (D5.a-3 respawn-wiring regression)', async () => {
+    // Regression pin: the D5.a-3 unification onto OutboundRuntimeEventFanout
+    // dropped the `respawn` callback, so a runtime that exited with pending
+    // inbox logged "no respawn callback wired" and never drained. The
+    // coordinator's onRuntimeExit gate (intentional===false AND !initTimedOut
+    // AND !fatalError AND hasPendingInbox) must auto-respawn via
+    // `startDeliveryBacked` — the ONLY correct redelivery path for an exited
+    // runtime (a fresh runtime_start + startup_delivery; a direct wake cannot
+    // drain a dead child). The gate is driver-agnostic, so codex stands in.
+    const fix = makeFixture({ runtime: 'codex' });
+    try {
+      const delivery = enqueueMessage(fix, 'drain me after crash');
+
+      // Crash exit: intentional=false, code!=0, and no prior init-timeout /
+      // fatal-error flag → meta is { intentional:false, initTimedOut:false,
+      // fatalError:false } with pending inbox. This is exactly the gate.
+      fix.fanout.onEvent(
+        fix.hostId,
+        {
+          direction: 'daemon_to_server',
+          type: 'event',
+          kind: 'runtime_exit',
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+          code: 1,
+          intentional: false,
+          ts: 1700000010000,
+        },
+        'conn-1',
+      );
+
+      // respawn fires on a microtask (Promise.resolve().then in the
+      // coordinator); the spawn path dispatches a fresh runtime_start.
+      await waitFor(() =>
+        fix.transport.calls.some(call => call.kind === 'runtime_start'),
+      );
+      const start = fix.transport.calls.find(
+        call => call.kind === 'runtime_start',
+      )!.params;
+      // It drains the still-pending row via startup_delivery, not a wake.
+      expect(start).toMatchObject({
+        startup_delivery: { delivery_ids: [delivery.inboxId] },
+      });
+      expect(fix.transport.calls.some(call => call.kind === 'runtime_wake')).toBe(
+        false,
+      );
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('does NOT respawn on an intentional runtime_exit even with pending inbox', async () => {
+    // Complement to the wiring pin: the gate must stay closed for an
+    // intentional stop so a deliberate shutdown isn't immediately undone.
+    const fix = makeFixture({ runtime: 'codex' });
+    try {
+      const delivery = enqueueMessage(fix, 'stay pending on intentional stop');
+      emitRuntimeExit(fix); // intentional: true
+
+      // Give any errant microtask-scheduled respawn a chance to run.
+      await new Promise(resolve => setImmediate(resolve));
+      await new Promise(resolve => setImmediate(resolve));
+      expect(
+        fix.transport.calls.some(call => call.kind === 'runtime_start'),
+      ).toBe(false);
+      // Row remains pending — durable, to be drained on the next deliberate start.
+      expect(
+        fix.inbox.listPending(fix.channelId, fix.agentId).map(p => p.inboxId),
+      ).toEqual([delivery.inboxId]);
+    } finally {
+      fix.cleanup();
     }
   });
 
@@ -1213,6 +1328,7 @@ class FakeTransport implements HostWsServerController {
     hostId: string;
     kind: string;
     params: Record<string, unknown>;
+    opts?: { expectedConnectionId?: string };
   }> = [];
   snapshot: RuntimeStatusResult = { runtimes: [] };
   connectionId = 'conn-1';
@@ -1256,7 +1372,12 @@ class FakeTransport implements HostWsServerController {
     if (opts?.expectedConnectionId && opts.expectedConnectionId !== this.connectionId) {
       return Promise.reject(new Error('connection changed'));
     }
-    this.calls.push({ hostId, kind, params: params as Record<string, unknown> });
+    this.calls.push({
+      hostId,
+      kind,
+      params: params as Record<string, unknown>,
+      ...(opts ? { opts: { expectedConnectionId: opts.expectedConnectionId } } : {}),
+    });
     if (kind === 'runtime_status') {
       return Promise.resolve(this.snapshot) as Promise<OutboundServerCommandResult<K>>;
     }
@@ -1605,4 +1726,8 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<voi
     await new Promise(resolve => setTimeout(resolve, 5));
   }
   throw new Error('timed out waiting for condition');
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }

@@ -2177,6 +2177,64 @@ describe('Supervisor 3c-b — 3-tier init watchdog', () => {
     );
   });
 
+  it('deferred-init: requires_first_message + startup_delivery arms watchdog only after the first stdin write', async () => {
+    class DelayedWriteStub extends EventEmitter {
+      readonly pid = 34_567;
+      readonly stdout = new EventEmitter();
+      readonly stderr = new EventEmitter();
+      pendingWrite: ((err?: Error | null) => void) | null = null;
+      readonly stdin = {
+        write: (
+          _line: string,
+          cb?: (err?: Error | null) => void,
+        ): boolean => {
+          this.pendingWrite = cb ?? null;
+          return true;
+        },
+        end: () => {},
+        destroyed: false,
+        once: () => {},
+      };
+      kill(_sig?: NodeJS.Signals | number): boolean {
+        setImmediate(() => this.emit('exit', null, 'SIGTERM'));
+        return true;
+      }
+    }
+    const stub = new DelayedWriteStub();
+    const { supervisor, events } = make3cSupervisor({
+      driverOverride: base => ({
+        ...base,
+        kickoffMode: 'requires_first_message',
+      }),
+      spawnFn: () => stub as unknown as ChildProcess,
+      initWatchdogMs: 60,
+      initMaxRetries: 0,
+      sigtermToSigkillMs: 30,
+    });
+
+    await supervisor.start({
+      ...baseStartParams,
+      startup_delivery: {
+        delivery_ids: [901],
+        text: 'boot batch',
+      },
+    });
+    await waitFor(() => stub.pendingWrite !== null, 1_000);
+
+    // Wait past the watchdog window while the startup_delivery write is
+    // still unresolved. A spawn-time watchdog would fire here; the
+    // correct boundary for Claude-like runtimes is the first completed
+    // stdin write, not process spawn.
+    await wait(150);
+    expect(events.find(e => e.event === 'runtime_init_timeout')).toBeUndefined();
+
+    stub.pendingWrite?.();
+    await waitFor(
+      () => events.some(e => e.event === 'runtime_init_timeout'),
+      2_000,
+    );
+  });
+
   it('override precedence: opts.initLivenessSilenceMs overrides driver.initLivenessSilenceMs', async () => {
     // Use the no-output fixture so silence fires from a true "no
     // bytes received" state (not "echo-runtime READY refreshed the

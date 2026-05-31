@@ -558,26 +558,21 @@ export class Supervisor implements SupervisorContract {
       });
     }
 
-    // 3c-b: 3-tier init watchdog. Two arming paths (Cindy plan v2
-    // issue #1 + CM's `deferInitWatchdog` rule, lines 678-682):
+    // 3c-b: 3-tier init watchdog. Two arming paths:
     //
-    //   - DEFAULT: arm immediately at spawn. Covers claude with a
-    //     kickoff inbox, codex (self_inits), cursor (oneShot — but
-    //     oneShot drivers exit before the watchdog usually matters,
-    //     so this is cheap belt-and-suspenders).
-    //   - DEFERRED: `requires_first_message` + no startup_delivery +
-    //     `initAttempt === 0`. Empty-inbox claude does not emit
-    //     `system.init` until something actually appears on stdin, so
-    //     arming at spawn would guarantee a `silence` timeout on
-    //     every dormant agent. We defer to `wake()`'s post-write
-    //     `ensureInitWatchdogArmed()`. On retry (`initAttempt > 0`)
-    //     we ALWAYS arm: a failed first attempt with empty inbox
-    //     should not silently turn into an unguarded live process.
-    const deferInitWatchdog =
-      initAttempt === 0 &&
-      handle.driver.kickoffMode === 'requires_first_message' &&
-      !startupBatch;
-    if (!deferInitWatchdog) this.startInitWatchdog(handle);
+    //   - `self_inits`: arm immediately at spawn. These runtimes own
+    //     their startup protocol and should emit session-ready without
+    //     any user stdin.
+    //   - `requires_first_message`: defer until the FIRST successful
+    //     stdin write (`startup_delivery` or `runtime_wake`). Claude
+    //     Code does not emit `system.init` merely because the process
+    //     spawned; it emits only after accepting a real user turn. A
+    //     spawn-time watchdog therefore kills legitimate idle Claude
+    //     processes and retry respawns that are waiting for backend to
+    //     replay the still-pending inbox row.
+    if (handle.driver.kickoffMode !== 'requires_first_message') {
+      this.startInitWatchdog(handle);
+    }
 
     // Optimistic ready transition. The init watchdog is armed above
     // when required; we still mark the runtime `ready` after a single
@@ -719,6 +714,13 @@ export class Supervisor implements SupervisorContract {
       this.maybeEmitReadyForDrain(handle);
       return;
     }
+
+    // `requires_first_message` drivers reach session init only after
+    // this first real user turn lands on stdin. Arm the init watchdog
+    // from the write boundary, not from process spawn. For self-init
+    // drivers the watchdog was already armed at spawn, so this is a
+    // no-op.
+    this.ensureInitWatchdogArmed(handle);
 
     // Write succeeded. For `requires_first_message` drivers we must
     // defer the consumed emit until `session_init` confirms the

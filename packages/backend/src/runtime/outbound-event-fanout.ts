@@ -45,7 +45,7 @@ import {
   type RuntimeEventSource,
   type RuntimeStatusBridge,
 } from './event-handler.js';
-import { RunStateCache } from './run-state-cache.js';
+import { RunStateCache, type CachedRuntimeEntry } from './run-state-cache.js';
 import {
   combineGatedBatch,
   formatInboxBatch,
@@ -99,6 +99,7 @@ interface HostFanoutState {
   handler: RuntimeEventHandler;
   currentConnectionId: string | null;
   currentDaemonKey: string | null;
+  dispatchConnectionId: string | null;
 }
 
 /**
@@ -208,6 +209,32 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     event: OutboundDaemonToServerEventFrame,
     connectionId: string,
   ): void {
+    // Replacement-safe event ingress. A daemon/socket can still have
+    // buffered frames in flight after the backend has accepted a newer
+    // outbound connection for the same host. Those stale frames must
+    // not write `currentConnectionId` back to the old value: otherwise
+    // a late `runtime_ready_for_drain` can immediately issue
+    // `runtime_wake` pinned to a dead connection and leave rows
+    // pending behind `transport_disconnected`. The command side already
+    // has an `expectedConnectionId` guard; mirror that boundary on the
+    // event side before any state mutation.
+    const liveConnectionId =
+      this.opts.transport()?.connectionIdForHost(hostId) ?? null;
+    if (liveConnectionId !== connectionId) {
+      this.onDisconnect(hostId, connectionId);
+      this.opts.logger.warn(
+        {
+          connectionHostId: hostId,
+          eventKind: event.kind,
+          eventConnectionId: connectionId,
+          liveConnectionId,
+          action: 'outbound_event_stale_connection',
+        },
+        'outbound event arrived from a stale connection — dropped',
+      );
+      return;
+    }
+
     // D4.c C5 — runtime perimeter check. The connection is
     // already authenticated to `hostId` at the WS layer (host
     // token verify). What we DON'T trust is the per-event
@@ -264,7 +291,12 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         'ready',
       );
     }
-    state.handler.dispatch(outboundEventToEventFrame(event));
+    state.dispatchConnectionId = connectionId;
+    try {
+      state.handler.dispatch(outboundEventToEventFrame(event));
+    } finally {
+      state.dispatchConnectionId = null;
+    }
   }
 
   /**
@@ -414,9 +446,10 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     this.inboxRepo.rollbackInFlightForOwner(connectionId);
     const state = this.states.get(hostId);
     if (!state) return;
-    if (state.currentConnectionId === connectionId) {
+    if (state.currentConnectionId === connectionId || state.currentConnectionId === null) {
       state.currentConnectionId = null;
       state.currentDaemonKey = null;
+      state.dispatchConnectionId = null;
       for (const entry of state.cache.list()) {
         state.coordinator.clearRuntime(
           entry.conversationId,
@@ -441,7 +474,13 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     if (delivery.deliveredAt !== null) return;
     const hostId = this.hostIdForAgent(agentId);
     const connectionId = this.connectedConnectionId(hostId, 'runtime_wake');
-    const entry = this.stateForHost(hostId).cache.get(conversationId, agentId);
+    const state = this.stateForHost(hostId);
+    const entry = this.cacheEntryForLiveConnection(
+      state,
+      connectionId,
+      conversationId,
+      agentId,
+    );
     if (!entry || entry.phase === 'idle' || entry.phase === 'exited') {
       await this.startDeliveryBacked(conversationId, agentId);
       return;
@@ -842,7 +881,12 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     const hostId = this.hostIdForAgent(agentId);
     const connectionId = this.connectedConnectionId(hostId, 'runtime_start');
     const state = this.stateForHost(hostId);
-    const entry = state.cache.get(conversationId, agentId);
+    const entry = this.cacheEntryForLiveConnection(
+      state,
+      connectionId,
+      conversationId,
+      agentId,
+    );
     if (entry && entry.phase !== 'idle' && entry.phase !== 'exited') {
       if (entry.phase === 'ready') {
         await this.replayPendingForAgent(
@@ -1184,21 +1228,28 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       handler: undefined as unknown as RuntimeEventHandler,
       currentConnectionId: null,
       currentDaemonKey: null,
+      dispatchConnectionId: null,
     };
     const bridge: RuntimeStatusBridge = {
       runtimeStatus: async () => {
         const transport = this.requireTransport();
-        return transport.sendCommand(
+        const expectedConnectionId =
+          state.dispatchConnectionId ?? state.currentConnectionId;
+        const snapshot = await transport.sendCommand(
           hostId,
           'runtime_status',
           {},
           {
             timeoutMs: 5_000,
-            ...(state.currentConnectionId
-              ? { expectedConnectionId: state.currentConnectionId }
+            ...(expectedConnectionId
+              ? { expectedConnectionId }
               : {}),
           },
         );
+        if (state.currentConnectionId !== expectedConnectionId) {
+          throw new Error('outbound connection changed during runtime_status hydrate');
+        }
+        return snapshot;
       },
     };
     const coordinator = new RuntimeDeliveryCoordinator({
@@ -1222,6 +1273,27 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         markDelivered: ids => this.inboxRepo.markDelivered([...ids]),
       },
       callbacks: {
+        // Auto-respawn-to-drain on non-fatal runtime exit with pending
+        // inbox. The coordinator's `onRuntimeExit` gate
+        // (intentional===false AND !initTimedOut AND !fatalError AND
+        // hasPendingInbox) is the ONLY correct redelivery path for a
+        // runtime that exited while inbox rows are still pending: a
+        // fresh `runtime_start` + `startup_delivery` lets the new
+        // daemon-side runtime drain the inbox during its init phase (a
+        // direct `runtime_wake` cannot — there is no live child).
+        // `startDeliveryBacked` is idempotent (in-flight guard + atomic
+        // claim) so a spurious or duplicate call is a benign no-op.
+        //
+        // Regression fix: the D5.a-3 unification onto
+        // OutboundRuntimeEventFanout dropped this wiring — the old
+        // embedded DaemonHost bound `respawn` to its own start, but the
+        // unified fanout constructed the coordinator without it, so a
+        // runtime that exited with pending inbox logged "no respawn
+        // callback wired" and never drained. Mapped to `Promise<void>`
+        // so any rejection still reaches the coordinator's best-effort
+        // `.catch`.
+        respawn: (cid, aid) =>
+          this.startDeliveryBacked(cid, aid).then(() => undefined),
         hasPendingInbox: (cid, aid) =>
           this.inboxRepo.listPending(cid, aid).length > 0,
         combineGated: texts =>
@@ -1397,6 +1469,22 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       this.inboxRepo.rollbackInFlight(batch.deliveryIds, connectionId);
       throw err;
     }
+  }
+
+  private cacheEntryForLiveConnection(
+    state: HostFanoutState,
+    connectionId: string,
+    conversationId: string,
+    agentId: string,
+  ): CachedRuntimeEntry | undefined {
+    if (state.currentConnectionId !== connectionId) {
+      state.currentConnectionId = null;
+      state.currentDaemonKey = null;
+      state.dispatchConnectionId = null;
+      state.cache.clearAll();
+      return undefined;
+    }
+    return state.cache.get(conversationId, agentId);
   }
 
   private async deliverLivePendingForAgent(
