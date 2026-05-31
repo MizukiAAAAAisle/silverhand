@@ -427,7 +427,7 @@
         </p>
       </div>
       <div class="stamp">
-        <strong>Status</strong>: planning / non-committal<br>
+        <strong>Status</strong>: M1 达成 ✅ · M2 planning<br>
         <strong>Last updated</strong>: 2026-05-30<br>
         <strong>Maintainer</strong>: @Alice
       </div>
@@ -442,17 +442,17 @@
     <section class="milestones" aria-label="milestone split">
       <div class="ms-card current">
         <div class="ms-head">
-          <h3 class="ms-title">Milestone 1 — Final-form 语义完成（这期目标）</h3>
-          <span class="ms-pin">CURRENT</span>
+          <h3 class="ms-title">Milestone 1 — Final-form 语义完成（已达成）</h3>
+          <span class="ms-pin">✅ 达成</span>
         </div>
         <p class="ms-body">
-          协议 / daemon / materialization / data-plane 模型按 R1-R4 终态正确实现；
+          <strong>M1 已达成（2026-05-30）</strong>：协议 / daemon / materialization / data-plane 模型按 R1-R4 终态正确实现；
           backend 仍通过 adapter 跑在本地（embedded in Electron main），<strong>不要求云部署形态成熟</strong>。
           换句话说：代码长得已经像 standalone，但实际部署还是 embedded，「切到 standalone」是 deployment 动作而非代码改造。
         </p>
         <p class="ms-scope">
           <strong>包含</strong>：Foundations（已 done）· D3 desktop daemon lifecycle 全套 ·
-          D4.a/b/c/d/e（含 create-agent materialize intent + daemon-owned data-plane proxy）·
+          D4.a/b/c/d/e（含 create-agent materialize intent + daemon 成为唯一 host-local path 权威）·
           D5.a（R4 envelope unification）· sticky host ownership / no auto migration。
           <br><strong>不包含</strong>：production deploy infra / 容器化 / 云端 TLS / observability shipping / 多用户云端 auth 加固 / cloud soak。
         </p>
