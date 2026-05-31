@@ -227,14 +227,13 @@ export function ComposerActivityHeader({
           title={`${subjectName}: ${snippet}`}
           className="flex h-8 w-full min-w-0 items-center gap-2 px-3 text-xs text-text-secondary transition-colors hover:bg-bg-hover/50"
         >
-          <span className="shrink-0">
-            <AgentAvatar
-              runtime={subjectAgent?.runtime ?? 'claude'}
-              size={16}
-              avatarObjectUrl={agentAvatarUrls.get(subject.agentId) ?? null}
-              alt={subjectAgent?.display_name || subjectAgent?.name}
-            />
-          </span>
+          <AgentAvatar
+            runtime={subjectAgent?.runtime ?? 'claude'}
+            size={16}
+            className="shrink-0"
+            avatarObjectUrl={agentAvatarUrls.get(subject.agentId) ?? null}
+            alt={subjectAgent?.display_name || subjectAgent?.name}
+          />
           <StatusIcon
             className={
               'size-3 shrink-0 ' +
