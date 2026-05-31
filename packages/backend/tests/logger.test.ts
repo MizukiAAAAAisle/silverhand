@@ -2,7 +2,11 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createFileLogger, createLogLevelControl } from '../src/logger.js';
+import {
+  createCategorizedLoggers,
+  createFileLogger,
+  createLogLevelControl,
+} from '../src/logger.js';
 
 const dirs: string[] = [];
 
@@ -60,6 +64,33 @@ describe('backend file logger levels', () => {
       'visible child debug',
       'visible direct info',
     ]);
+  });
+
+  it('keeps CLI audit categories visible at warn-level default', async () => {
+    const loggers = createCategorizedLoggers({
+      dir: tempDir(),
+      alsoConsole: false,
+      logControl: createLogLevelControl('warn'),
+    });
+
+    loggers.cli.info({ category: 'cli.invoke', status: 'success' }, 'cli.invoke');
+    loggers.cli.info(
+      { category: 'cli.preflight_failure', status: 'failure' },
+      'cli.preflight_failure',
+    );
+    loggers.cli.info({ category: 'other.info' }, 'hidden info');
+    loggers.system.info({ category: 'cli.invoke' }, 'hidden on system sink');
+    await Promise.all([
+      loggers.system.close(),
+      loggers.agent.close(),
+      loggers.cli.close(),
+    ]);
+
+    expect(readLines(loggers.cli.filePath).map(line => line.category)).toEqual([
+      'cli.invoke',
+      'cli.preflight_failure',
+    ]);
+    expect(readLines(loggers.system.filePath)).toEqual([]);
   });
 
   it('redacts forbidden top-level field names at every level', async () => {
