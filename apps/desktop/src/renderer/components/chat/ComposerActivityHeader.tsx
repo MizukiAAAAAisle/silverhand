@@ -186,72 +186,85 @@ export function ComposerActivityHeader({
       data-composer-activity=""
       className="border-b border-border-subtle bg-bg-floating"
     >
-      {/* Resting line — fixed slots + one elastic, truncating middle. */}
-      <button
-        type="button"
-        onClick={() => setExpanded(e => !e)}
-        aria-expanded={expanded}
-        aria-label={
-          expanded ? '收起运行详情' : `${subjectName} 运行中 — 展开运行详情`
-        }
-        title={`${subjectName}: ${snippet}`}
-        className="flex h-8 w-full min-w-0 items-center gap-2 px-3 text-xs text-text-secondary transition-colors hover:bg-bg-hover/50"
-      >
-        <span className="shrink-0">
-          <AgentAvatar
-            runtime={subjectAgent?.runtime ?? 'claude'}
-            size={16}
-            avatarObjectUrl={agentAvatarUrls.get(subject.agentId) ?? null}
-            alt={subjectAgent?.display_name || subjectAgent?.name}
-          />
-        </span>
-        <StatusIcon
-          className={
-            'size-3 shrink-0 ' +
-            (showCompaction
-              ? subject.compactionStale
-                ? 'text-warning'
-                : 'text-text-muted'
-              : 'animate-spin text-accent')
-          }
-        />
-        <span className="shrink-0 font-medium text-accent">{subjectName}</span>
-        {badge ? (
-          <span className="shrink-0 rounded border border-border-subtle/70 px-1.5 py-px font-mono text-[10px] leading-4 text-text-muted">
-            {badge}
-          </span>
-        ) : null}
-        <span className="min-w-0 flex-1 truncate text-left text-text-muted">
-          {snippet}
-        </span>
-        {extra > 0 ? (
-          <span className="shrink-0 rounded-full bg-bg-hover px-1.5 text-[10px] leading-4 text-text-muted">
-            +{extra}
-          </span>
-        ) : null}
-        <span className="shrink-0 tabular-nums text-text-muted/60">
-          {formatMs(subjectElapsedMs)}
-        </span>
-        {expanded ? (
-          <ChevronUp className="size-3 shrink-0 text-text-muted/60" />
-        ) : (
-          <ChevronDown className="size-3 shrink-0 text-text-muted/60" />
-        )}
-      </button>
-
-      {/* In-place detail — one row per running agent, same priority order. */}
       {expanded ? (
-        <div className="flex flex-col gap-0.5 px-2 pb-1.5">
-          {active.map(state => (
-            <ActivityDetailRow
-              key={state.runId}
-              state={state}
-              agent={agentsById.get(state.agentId)}
-              avatarObjectUrl={agentAvatarUrls.get(state.agentId) ?? null}
+        // Expanded: a slim GENERIC header (collapse control only — no
+        // per-agent info, so it never duplicates the first detail row) plus
+        // one row per running agent. Header icon and row avatars share the
+        // same 12px left inset as the collapsed line.
+        <>
+          <button
+            type="button"
+            onClick={() => setExpanded(false)}
+            aria-expanded
+            aria-label="收起运行详情"
+            className="flex h-8 w-full min-w-0 items-center gap-2 px-3 text-xs text-text-secondary transition-colors hover:bg-bg-hover/50"
+          >
+            <Loader2 className="size-3 shrink-0 animate-spin text-accent" />
+            <span className="font-medium text-text-secondary">
+              运行中{active.length > 1 ? ` · ${active.length} 个 agent` : ''}
+            </span>
+            <span className="min-w-0 flex-1" />
+            <ChevronUp className="size-3 shrink-0 text-text-muted/60" />
+          </button>
+          <div className="flex flex-col gap-0.5 px-1 pb-1.5">
+            {active.map(state => (
+              <ActivityDetailRow
+                key={state.runId}
+                state={state}
+                agent={agentsById.get(state.agentId)}
+                avatarObjectUrl={agentAvatarUrls.get(state.agentId) ?? null}
+              />
+            ))}
+          </div>
+        </>
+      ) : (
+        // Resting line — fixed slots + one elastic, truncating middle.
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          aria-expanded={false}
+          aria-label={`${subjectName} 运行中 — 展开运行详情`}
+          title={`${subjectName}: ${snippet}`}
+          className="flex h-8 w-full min-w-0 items-center gap-2 px-3 text-xs text-text-secondary transition-colors hover:bg-bg-hover/50"
+        >
+          <span className="shrink-0">
+            <AgentAvatar
+              runtime={subjectAgent?.runtime ?? 'claude'}
+              size={16}
+              avatarObjectUrl={agentAvatarUrls.get(subject.agentId) ?? null}
+              alt={subjectAgent?.display_name || subjectAgent?.name}
             />
-          ))}
-        </div>
-      ) : null}
+          </span>
+          <StatusIcon
+            className={
+              'size-3 shrink-0 ' +
+              (showCompaction
+                ? subject.compactionStale
+                  ? 'text-warning'
+                  : 'text-text-muted'
+                : 'animate-spin text-accent')
+            }
+          />
+          <span className="shrink-0 font-medium text-accent">{subjectName}</span>
+          {badge ? (
+            <span className="shrink-0 rounded border border-border-subtle/70 px-1.5 py-px font-mono text-[10px] leading-4 text-text-muted">
+              {badge}
+            </span>
+          ) : null}
+          <span className="min-w-0 flex-1 truncate text-left text-text-muted">
+            {snippet}
+          </span>
+          {extra > 0 ? (
+            <span className="shrink-0 rounded-full bg-bg-hover px-1.5 text-[10px] leading-4 text-text-muted">
+              +{extra}
+            </span>
+          ) : null}
+          <span className="shrink-0 tabular-nums text-text-muted/60">
+            {formatMs(subjectElapsedMs)}
+          </span>
+          <ChevronDown className="size-3 shrink-0 text-text-muted/60" />
+        </button>
+      )}
     </div>
   );
 }
