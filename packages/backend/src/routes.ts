@@ -5986,7 +5986,7 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
     const principal = getAgentPrincipal(c);
-    ctx.loggers.cli.info(
+    ctx.loggers.cli.warn(
       {
         category: 'cli.preflight_failure',
         conversationId: principal.conversationId,

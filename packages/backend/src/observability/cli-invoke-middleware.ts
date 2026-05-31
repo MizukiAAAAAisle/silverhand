@@ -84,42 +84,46 @@ export function createCliInvokeMiddleware(ctx: BackendContext): MiddlewareHandle
       }
       const conversationId = c.req.param('cid') ?? null;
       const agentId = c.req.param('aid') ?? null;
-      log.info(
-        {
-          category: 'cli.invoke',
-          request_id: requestId,
-          conversationId,
-          agentId,
-          noun: route?.noun ?? null,
-          verb: route?.verb ?? null,
-          method: c.req.method,
-          // Normalized route pattern (never the raw URL). For routes
-          // with a wildcard segment (e.g. `attachments/*/locate`) the
-          // attachment id is collapsed to `*` so it never lands in
-          // `cli-*.log`. Falls back to `null` for unmapped paths so
-          // we don't accidentally log raw user-controlled data.
-          route_suffix: route?.routeSuffix ?? null,
-          query_keys: extractQueryKeys(c),
-          http_status: httpStatus,
-          duration_ms: durationMs,
-          status,
-          ...(errorCode ? { error_code: errorCode } : {}),
-          // Schema-validation field summary, sanitized: only `path`
-          // (joined dotted) and `code` (zod tag like `too_small`,
-          // `invalid_type`). NEVER `received` / `minimum` / `message`
-          // since those can carry user-supplied values. Closes the 5/14
-          // observability gap where `schedule.create | invalid_input`
-          // logged with `error_message=''` because the structured
-          // `issues[]` was discarded.
-          ...(errorIssues && errorIssues.length > 0
-            ? { error_issues: errorIssues }
-            : {}),
-          ...(thrown && status === 'failure'
-            ? { error_kind: 'throw' }
-            : {}),
-        },
-        'cli.invoke',
-      );
+      const payload = {
+        category: 'cli.invoke',
+        request_id: requestId,
+        conversationId,
+        agentId,
+        noun: route?.noun ?? null,
+        verb: route?.verb ?? null,
+        method: c.req.method,
+        // Normalized route pattern (never the raw URL). For routes
+        // with a wildcard segment (e.g. `attachments/*/locate`) the
+        // attachment id is collapsed to `*` so it never lands in
+        // `cli-*.log`. Falls back to `null` for unmapped paths so
+        // we don't accidentally log raw user-controlled data.
+        route_suffix: route?.routeSuffix ?? null,
+        query_keys: extractQueryKeys(c),
+        http_status: httpStatus,
+        duration_ms: durationMs,
+        status,
+        ...(errorCode ? { error_code: errorCode } : {}),
+        // Schema-validation field summary, sanitized: only `path`
+        // (joined dotted) and `code` (zod tag like `too_small`,
+        // `invalid_type`). NEVER `received` / `minimum` / `message`
+        // since those can carry user-supplied values. Closes the 5/14
+        // observability gap where `schedule.create | invalid_input`
+        // logged with `error_message=''` because the structured
+        // `issues[]` was discarded.
+        ...(errorIssues && errorIssues.length > 0
+          ? { error_issues: errorIssues }
+          : {}),
+        ...(thrown && status === 'failure'
+          ? { error_kind: 'throw' }
+          : {}),
+      };
+      if (status === 'success') {
+        log.info(payload, 'cli.invoke');
+      } else if (thrown || httpStatus >= 500) {
+        log.error(payload, 'cli.invoke');
+      } else {
+        log.warn(payload, 'cli.invoke');
+      }
     }
   };
 }

@@ -130,6 +130,7 @@ describe('cli invoke middleware', () => {
 
     const line = captured.lines.find(l => l.payload.category === 'cli.invoke');
     expect(line).toBeDefined();
+    expect(line!.level).toBe('warn');
     expect(line!.payload.status).toBe('failure');
     expect(line!.payload.http_status).toBe(400);
     expect(line!.payload.error_code).toBe('invalid input');
@@ -265,6 +266,7 @@ describe('cli-trace endpoint', () => {
       error_code: 'validation_error',
       status: 'failure',
     });
+    expect(trace!.level).toBe('warn');
     expect(trace!.payload.conversationId).toBe(conversationId);
     expect(trace!.payload.agentId).toBe(agentId);
 
@@ -311,6 +313,7 @@ describe('cli-trace endpoint', () => {
         l => l.payload.category === 'cli.preflight_failure',
       );
       expect(trace).toBeDefined();
+      expect(trace!.level).toBe('warn');
       expect(trace!.payload.error_subkind).toBe(subkind);
     },
   );
