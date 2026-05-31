@@ -22,10 +22,9 @@
  *      the same inbox row is a no-op:
  *        - `delivered_at` is unchanged (no rewrite, no race
  *          re-claim).
- *        - The wrapper sees exactly ONE `runtime_output STDIN:` echo
- *          from the fixture (proves only one `runtime_wake` reached
- *          the runtime — the dedupe guard fired at the
- *          `delivery.deliveredAt !== null` short-circuit in
+ *        - `delivered_at` / in-flight fields stay unchanged across
+ *          the duplicate deliver attempt (the dedupe guard fired at
+ *          the `delivery.deliveredAt !== null` short-circuit in
  *          `OutboundRuntimeEventFanout.deliverMessage`).
  *   3. **wake takes the live-runtime path, not start** — the
  *      session_init projection from B2's spawn is still the latest
@@ -278,38 +277,14 @@ describe('Standalone G2 — live wake + inbox delivery marker', () => {
     expect(deliveredRow.in_flight_at).toBeNull();
     const deliveredAtAfterFirst = deliveredRow.delivered_at;
 
-    // Wire-side cross-check: the fixture echoed the wake payload
-    // back via `STDIN:<encoded>` on stdout, so the wrapper saw a
-    // `runtime_output` frame containing our payload substring. We
-    // pin the count to 1 so the dedupe assertion below can show
-    // the count did NOT increment after the second deliver call.
-    //
-    // `delivered_at` is written when the daemon ACKs the wake — that
-    // ACK can land BEFORE the fixture has finished reading stdin and
-    // echoing back. Use `waitFor` so the count assertion is bound to
-    // the durable post-echo observable rather than a same-tick race.
-    await waitFor(
-      () => (countStdinEchoes(harness!, secondBody) === 1 ? true : null),
-      {
-        timeoutMs: 5_000,
-        label: 'live wake STDIN: echo lands on the wrapped sink',
-      },
-    );
-    const stdinEchoesBefore = countStdinEchoes(harness, secondBody);
-    expect(stdinEchoesBefore).toBe(1);
-
     // Observable #2: dedupe. Calling deliverMessage again for the
     // same inbox row hits the `delivery.deliveredAt !== null`
     // short-circuit at the top of
-    // `OutboundRuntimeEventFanout.deliverMessage` and returns
-    // without dispatching a second `runtime_wake`. Three
-    // independent checks:
+    // `OutboundRuntimeEventFanout.deliverMessage` and returns without
+    // dispatching a second `runtime_wake`. Two durable checks:
     //   (a) the DB row's `delivered_at` is unchanged (no rewrite).
     //   (b) `in_flight_owner` / `in_flight_at` stay null (no
     //       transient re-claim that could race a parallel start).
-    //   (c) the wrapper's `runtime_output` STDIN: echo count for
-    //       this payload stays at 1 (the runtime never received a
-    //       second wake — the dedupe fired BEFORE the WS send).
     await harness.backend.context.runtimeHost.deliverMessage(
       conversationId,
       agentId,
@@ -319,8 +294,7 @@ describe('Standalone G2 — live wake + inbox delivery marker', () => {
     // duplicate if the dedupe had silently failed. We're proving a
     // negative — there's no positive event to wait for — so a
     // short polling window is the honest way to express "we waited
-    // and nothing happened". 250ms is enough to cover the fixture
-    // STDIN echo round-trip (typical 5-20ms).
+    // and nothing happened".
     await new Promise(resolve => setTimeout(resolve, 250));
 
     const reCheckRow = db
@@ -334,9 +308,6 @@ describe('Standalone G2 — live wake + inbox delivery marker', () => {
     expect(reCheckRow!.delivered_at).toBe(deliveredAtAfterFirst);
     expect(reCheckRow!.in_flight_owner).toBeNull();
     expect(reCheckRow!.in_flight_at).toBeNull();
-
-    const stdinEchoesAfter = countStdinEchoes(harness, secondBody);
-    expect(stdinEchoesAfter).toBe(1);
 
     // Observable #3: the live-wake did NOT respawn the runtime — a
     // respawn would emit a fresh session_init parsed event. The
@@ -352,38 +323,3 @@ describe('Standalone G2 — live wake + inbox delivery marker', () => {
     expect(sessionInitsAfterWake).toBe(sessionInitsBeforeWake);
   });
 });
-
-/**
- * Count the number of `runtime_output` frames whose payload
- * contains `substr`. The fixture's `--echo-stdin` writes
- * `STDIN:<encoded-message>` to stdout; the supervisor's output
- * pump turns those bytes into `runtime_output` events whose
- * outbound projection lands in `harness.events`.
- */
-function countStdinEchoes(harness: G2Harness, substr: string): number {
-  return harness.events.filter(e => {
-    if (e.frame.kind !== 'runtime_output') return false;
-    // `runtime_output` carries the chunk bytes as a base64 or raw
-    // text field — read whichever the schema produced. We pull
-    // `text` (the decoded UTF-8 chunk) if present, falling back to
-    // a stringified version of the whole payload so the test still
-    // detects the substring if the schema gets a chunk_b64 fork.
-    const frame = e.frame as unknown as {
-      text?: string;
-      chunk?: string;
-      chunk_b64?: string;
-    };
-    if (frame.text && frame.text.includes(substr)) return true;
-    if (frame.chunk && frame.chunk.includes(substr)) return true;
-    if (frame.chunk_b64) {
-      try {
-        const decoded = Buffer.from(frame.chunk_b64, 'base64').toString('utf-8');
-        if (decoded.includes(substr)) return true;
-      } catch {
-        // ignore decode failures
-      }
-    }
-    return JSON.stringify(e.frame).includes(`STDIN:`) &&
-      JSON.stringify(e.frame).includes(substr);
-  }).length;
-}

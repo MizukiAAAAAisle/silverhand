@@ -1909,10 +1909,15 @@ export type LooseResponseFrame = z.infer<typeof LooseResponseFrameSchema>;
 /**
  * Unsolicited events. Two categories:
  *
- *  - **droppable** = `runtime_output` only. Subject to the
- *    per-(conv,agent) 4 MiB un-flushed buffer cap (§2.2.2 of design
- *    lock). Daemon may emit `runtime_output_dropped` when bytes are
- *    discarded — that ack itself is non-droppable.
+ *  - **droppable** = legacy `runtime_output` only. Production
+ *    supervisor wiring no longer emits raw child stdout/stderr by
+ *    default: tool output is unbounded and would duplicate the
+ *    structured parsed/state stream. The frame remains in the schema
+ *    for compatibility and targeted diagnostics; when emitted it is
+ *    still subject to the per-(conv,agent) 4 MiB un-flushed buffer cap
+ *    (§2.2.2 of design lock). Daemon may emit
+ *    `runtime_output_dropped` when bytes are discarded — that ack
+ *    itself is non-droppable.
  *  - **non-droppable** = everything else. Daemon must never sacrifice
  *    one of these to relieve backpressure.
  *
@@ -1937,10 +1942,10 @@ export type LooseResponseFrame = z.infer<typeof LooseResponseFrameSchema>;
  *
  *  PR-2 step 2 commit 3b (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWfnq-bKJ`):
  *
- *  - `runtime_parsed_event` — non-droppable structured sidecar of
- *    `runtime_output`. Each line the driver's `parseLine` recognizes
- *    becomes one of these frames. Raw bytes still go on
- *    `runtime_output` unchanged; this is additive, not a replacement.
+ *  - `runtime_parsed_event` — non-droppable structured runtime
+ *    projection. Each line the driver's `parseLine` recognizes
+ *    becomes one of these frames. This is the production activity /
+ *    coordination surface; raw `runtime_output` is legacy/diagnostic.
  *  - `runtime_parsed_event_dropped` — non-droppable metadata-only
  *    frame the daemon emits when a parsed event's encoded form
  *    exceeds `MAX_FRAME_BYTES`. Carries `parsed_kind` + `encoded_bytes`
@@ -2141,13 +2146,13 @@ export const EventFrameSchema = z.discriminatedUnion('event', [
   // ── runtime parsed event fanout (locked by Cindy `OQCA05pivtB8nSTC` +
   //     `C2BZGDbQWfnq-bKJ`) ─────────────────────────────────────────
   //
-  // `runtime_parsed_event` is the structured sidecar of `runtime_output`:
-  // each line the driver's `parseLine` recognizes becomes one of these
-  // frames. The raw byte stream stays on `runtime_output` unchanged —
-  // backend's observability / activity log / unparsed-line surface all
-  // continue to read from there. Parsed events are NOT a replacement;
-  // they are a strict superset of recognition signals derived from the
-  // same bytes.
+  // `runtime_parsed_event` is the structured runtime projection
+  // surface: each line the driver's `parseLine` recognizes becomes
+  // one of these frames. Production no longer forwards raw child
+  // stdout/stderr by default (`runtime_output` is a legacy/diagnostic
+  // compatibility arm) because tool output is unbounded and can fill
+  // the outbound socket buffer. Backend observability / activity UI /
+  // delivery coordination must use parsed/state events instead.
   //
   // Non-droppable: backend's `handleParsedEvent` drives the
   // AgentRunState lifecycle (thinking / tool_running / compacting /
@@ -2156,10 +2161,9 @@ export const EventFrameSchema = z.discriminatedUnion('event', [
   // is recoverable from `runtime_output` alone (only the driver
   // knows the schema).
   //
-  // No `raw_line` field: raw bytes are already on `runtime_output`,
-  // so carrying them here would duplicate every byte at twice the
-  // wire cost. The `parsed` payload is the only thing this frame
-  // contributes beyond what `runtime_output` already provides.
+  // No `raw_line` field: carrying raw bytes here would reintroduce
+  // the same unbounded tool-output channel this split is meant to
+  // avoid. The `parsed` payload is the bounded structured contract.
   z
     .object({
       event: z.literal('runtime_parsed_event'),

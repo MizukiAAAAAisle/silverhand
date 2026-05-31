@@ -151,6 +151,7 @@ function makeSupervisor(opts: {
   daemonInstanceId?: string;
   runtimePidRootDir?: string | null;
   runtimeStartResolveDeps?: ReturnType<typeof testRuntimeStartResolveDeps>;
+  emitRawRuntimeOutput?: boolean;
 } = {}): {
   supervisor: Supervisor;
   events: EventFrame[];
@@ -173,6 +174,7 @@ function makeSupervisor(opts: {
     runtimePidRootDir: opts.runtimePidRootDir,
     runtimeStartResolveDeps:
       opts.runtimeStartResolveDeps ?? testRuntimeStartResolveDeps(),
+    emitRawRuntimeOutput: opts.emitRawRuntimeOutput ?? true,
     sigtermToSigkillMs: opts.sigtermToSigkillMs ?? 50,
     sigkillTimeoutMs: opts.sigkillTimeoutMs ?? 200,
   });
@@ -446,6 +448,24 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
 });
 
 describe('Supervisor 3a — output pump', () => {
+  it('does not emit raw runtime_output by default', async () => {
+    const { supervisor, events } = makeSupervisor({
+      driverArgs: ['--echo', 'large-tool-output-stays-local'],
+      emitRawRuntimeOutput: false,
+    });
+    await supervisor.start(baseStartParams);
+    await waitFor(() => events.some(e => e.event === 'runtime_ready_for_drain'));
+    await wait(100);
+    expect(
+      events.some(
+        e =>
+          e.event === 'runtime_output' &&
+          e.chunk.includes('large-tool-output-stays-local'),
+      ),
+    ).toBe(false);
+    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+
   it('emits runtime_output for stdout chunks the child writes', async () => {
     const { supervisor, events } = makeSupervisor({
       driverArgs: ['--echo', 'hello-from-stdout'],
@@ -1139,6 +1159,7 @@ function makeProgrammableDriver(
 function makeSupervisorWithDriver(driver: Driver, opts: {
   sigtermToSigkillMs?: number;
   sigkillTimeoutMs?: number;
+  emitRawRuntimeOutput?: boolean;
 } = {}): {
   supervisor: Supervisor;
   events: EventFrame[];
@@ -1157,6 +1178,7 @@ function makeSupervisorWithDriver(driver: Driver, opts: {
     resolveBinary: async (_kind, fallback) => fallback,
     spawnFn,
     runtimeStartResolveDeps: testRuntimeStartResolveDeps(),
+    emitRawRuntimeOutput: opts.emitRawRuntimeOutput ?? true,
     sigtermToSigkillMs: opts.sigtermToSigkillMs ?? 50,
     sigkillTimeoutMs: opts.sigkillTimeoutMs ?? 200,
   });
@@ -1905,6 +1927,7 @@ function make3cSupervisor(
       | 'initFailureCooldownThreshold'
       | 'initFailureCooldownMs'
       | 'compactionStaleMs'
+      | 'emitRawRuntimeOutput'
     >
   > = {},
 ): { supervisor: Supervisor; events: EventFrame[]; driver: Driver } {
@@ -1932,6 +1955,7 @@ function make3cSupervisor(
     initFailureCooldownThreshold: opts.initFailureCooldownThreshold,
     initFailureCooldownMs: opts.initFailureCooldownMs,
     compactionStaleMs: opts.compactionStaleMs,
+    emitRawRuntimeOutput: opts.emitRawRuntimeOutput ?? true,
   });
   return { supervisor, events: spy.events, driver };
 }

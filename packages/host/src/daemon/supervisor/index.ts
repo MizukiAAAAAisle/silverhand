@@ -188,6 +188,12 @@ export interface SupervisorOptions {
   initFailureCooldownThreshold?: number;
   initFailureCooldownMs?: number;
   compactionStaleMs?: number;
+  /**
+   * Test/debug escape hatch only. Production leaves this false so raw
+   * child stdout/stderr never crosses daemon→backend. Structured
+   * parsed/state events are the supported runtime projection surface.
+   */
+  emitRawRuntimeOutput?: boolean;
 }
 
 /** Composite key for `Map<key, RuntimeHandle>` — null byte separator
@@ -234,6 +240,7 @@ export class Supervisor implements SupervisorContract {
   private readonly initFailureCooldownThreshold: number;
   private readonly initFailureCooldownMs: number;
   private readonly compactionStaleMs: number;
+  private readonly emitRawRuntimeOutput: boolean;
 
   constructor(opts: SupervisorOptions) {
     this.emit = opts.emit;
@@ -258,6 +265,7 @@ export class Supervisor implements SupervisorContract {
     this.initFailureCooldownMs =
       opts.initFailureCooldownMs ?? DEFAULT_INIT_FAILURE_COOLDOWN_MS;
     this.compactionStaleMs = opts.compactionStaleMs ?? DEFAULT_COMPACTION_STALE_MS;
+    this.emitRawRuntimeOutput = opts.emitRawRuntimeOutput ?? false;
   }
 
   // ── runtime_start ──────────────────────────────────────────────
@@ -1399,11 +1407,23 @@ export class Supervisor implements SupervisorContract {
     // pre-first-protocol-frame.
     this.refreshInitLiveness(handle);
 
-    // Raw `runtime_output` is the only droppable wire frame and ALWAYS
-    // reflects exactly what the child wrote. Per Cindy `C2BZGDbQWfnq-bKJ`,
-    // parse fanout is a strict sidecar: we never consume or replace
-    // the raw stream. We still respect `outputPaused` for this arm.
-    if (!handle.outputPaused) {
+    // Do NOT forward raw child bytes on the daemon→backend wire by default.
+    //
+    // The raw stream is unbounded: a single tool invocation can print
+    // megabytes of stdout/stderr, and forwarding that as
+    // `runtime_output` duplicates data that backend does not consume
+    // for correctness. UI state, wake gates, delivery ack, and DB
+    // projection are all driven by bounded structured events
+    // (`runtime_parsed_event` / `runtime_state`) below. Keeping raw
+    // tool output daemon-local prevents large `cat`/`grep`/shell
+    // results from filling the outbound socket buffer while preserving
+    // all control-plane semantics. `runtime_output_pause/resume` stay
+    // as protocol compatibility no-ops for older callers.
+    //
+    // `emitRawRuntimeOutput` exists only for targeted supervisor
+    // tests/debugging of this legacy wire arm. Production wiring never
+    // sets it.
+    if (this.emitRawRuntimeOutput && !handle.outputPaused) {
       this.emit({
         event: 'runtime_output',
         conversation_id: handle.conversationId,

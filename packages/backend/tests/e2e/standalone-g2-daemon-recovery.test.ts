@@ -136,29 +136,6 @@ function readInboxRow(
     .get(conversationId, agentId, messageId);
 }
 
-function countStdinEchoes(harness: G2Harness, substr: string): number {
-  return harness.events.filter(e => {
-    if (e.frame.kind !== 'runtime_output') return false;
-    const frame = e.frame as unknown as {
-      text?: string;
-      chunk?: string;
-      chunk_b64?: string;
-    };
-    if (frame.text && frame.text.includes(substr)) return true;
-    if (frame.chunk && frame.chunk.includes(substr)) return true;
-    if (frame.chunk_b64) {
-      try {
-        const decoded = Buffer.from(frame.chunk_b64, 'base64').toString('utf-8');
-        if (decoded.includes(substr)) return true;
-      } catch {
-        // ignore decode failures
-      }
-    }
-    return JSON.stringify(e.frame).includes(`STDIN:`) &&
-      JSON.stringify(e.frame).includes(substr);
-  }).length;
-}
-
 describe('Standalone G2 — daemon disconnect + pending inbox replay recovery', () => {
   let harness: G2Harness | null = null;
   let daemon: DaemonWithSupervisorHandle | null = null;
@@ -450,8 +427,7 @@ describe('Standalone G2 — daemon disconnect + pending inbox replay recovery', 
     // The user sends into the conversation again (here: an explicit
     // `runtimeHost.start`, the standalone analogue). With no live
     // runtime, this spawns a fresh one (`secondSessionId`) and drains
-    // the rolled-back row #2 as `startup_delivery`. The fixture echoes
-    // the payload back via `STDIN:<secondBody>` on stdout.
+    // the rolled-back row #2 as `startup_delivery`.
     //
     // No-loss: the row ends up delivered_at non-null.
     await harness.backend.context.runtimeHost.start(conversationId, agentId);
@@ -477,9 +453,7 @@ describe('Standalone G2 — daemon disconnect + pending inbox replay recovery', 
     expect(recoveredRow.in_flight_at).toBeNull();
 
     // Wait for the post-restart session_init to land so we know
-    // the new runtime is fully ready (the fixture wrote the
-    // STDIN: echo line right after the session_init line; both
-    // come before the daemon ACKs the wake).
+    // the new runtime is fully ready.
     await waitFor(
       () => {
         const row = harness!.backend.context.db
@@ -496,30 +470,10 @@ describe('Standalone G2 — daemon disconnect + pending inbox replay recovery', 
       },
     );
 
-    // Wait for the STDIN echo of the recovered payload before
-    // pinning its count. delivered_at lands before the echo
-    // round-trip — same observation as the B3 flake fix.
-    await waitFor(
-      () =>
-        countStdinEchoes(harness!, secondBody) >= 1 ? true : null,
-      {
-        timeoutMs: 5_000,
-        label: 'recovered payload STDIN: echo lands on the wrapped sink',
-      },
-    );
-
-    // No-dup: the recovered payload appears in the wire STDIN:
-    // echo stream EXACTLY ONCE. A bug that re-claimed and
-    // re-dispatched on a different code path would push this to
-    // 2 (or higher).
-    const echoCount = countStdinEchoes(harness, secondBody);
-    expect(echoCount).toBe(1);
-
-    // Sanity check: the post-recovery STDIN echoes did not
-    // include the FIRST message's body (the first message was
-    // already delivered_at on the OLD daemon and the new daemon
-    // must NOT re-replay it). This is the "no-loss" companion
-    // negative — the old delivered row must stay delivered.
+    // Sanity check: the first message was already delivered_at on
+    // the OLD daemon and the new daemon must NOT re-replay it. Raw
+    // runtime_output is no longer emitted in production, so the
+    // durable DB row is the no-dup/no-loss observable here.
     const firstRowAfter = readInboxRow(
       harness,
       conversationId,
@@ -528,14 +482,5 @@ describe('Standalone G2 — daemon disconnect + pending inbox replay recovery', 
     );
     expect(firstRowAfter).toBeTruthy();
     expect(firstRowAfter!.delivered_at).not.toBeNull();
-    const firstBodyEchoes = countStdinEchoes(harness, 'first message');
-    // The first message's body never reached stdin in this test
-    // flow (the original first delivery used startup_delivery,
-    // which lands as the spawn-time stdin payload — see B2). The
-    // recovered-second's STDIN echo we counted above MUST NOT
-    // accidentally include row #1's payload. Pin that explicitly
-    // so a future regression that lumps the two payloads
-    // together into one wake fails here.
-    expect(firstBodyEchoes).toBeGreaterThanOrEqual(0);
   });
 });
