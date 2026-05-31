@@ -56,6 +56,8 @@ interface PendingCommand {
 }
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 30_000;
+const RECONNECT_BASE_DELAY_MS = 100;
+const RECONNECT_MAX_DELAY_MS = 1_000;
 
 /**
  * D5.a-2 — embedded backend implementation of {@link OutboundFrameAdapter}
@@ -97,6 +99,8 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
   private readBuffer = '';
   private readonly pending = new Map<string, PendingCommand>();
   private closed = false;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private reconnectAttempt = 0;
 
   constructor(opts: EmbeddedUnixOutboundFrameAdapterOptions) {
     this.socketPath = opts.socketPath;
@@ -116,6 +120,7 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
       throw new Error('EmbeddedUnixOutboundFrameAdapter is closed');
     }
     if (this.socket) return;
+    this.clearReconnectTimer();
     const socket = new Socket();
     socket.setEncoding('utf8');
     await new Promise<void>((resolve, reject) => {
@@ -136,6 +141,7 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
     this.connectionId = `embedded-unix-${this.hostId}-conn-${++this.connectionSeq}`;
     this.attachedAt = Date.now();
     this.readBuffer = '';
+    this.reconnectAttempt = 0;
 
     socket.on('data', chunk => this.onData(chunk));
     socket.on('close', () => this.onSocketClosed('socket_closed'));
@@ -144,6 +150,9 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
         { hostId: this.hostId, err: err.message },
         'embedded-unix: socket error',
       );
+      if (!socket.destroyed) {
+        socket.destroy();
+      }
       this.onSocketClosed('socket_error');
     });
   }
@@ -285,6 +294,7 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
 
   async close(): Promise<void> {
     this.closed = true;
+    this.clearReconnectTimer();
     const socket = this.socket;
     if (!socket) {
       this.rejectAllPending('adapter closed');
@@ -418,7 +428,8 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
 
   private onSocketClosed(reason: string): void {
     const connectionId = this.connectionId;
-    if (!this.socket && this.pending.size === 0) return;
+    const hadSocket = this.socket !== null;
+    if (!hadSocket && this.pending.size === 0) return;
     this.socket = null;
     this.connectionId = null;
     this.attachedAt = null;
@@ -426,6 +437,7 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
     if (connectionId) {
       this.onDisconnect?.(this.hostId, connectionId);
     }
+    this.scheduleReconnect(reason);
   }
 
   private rejectAllPending(message: string): void {
@@ -442,5 +454,40 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
         }),
       );
     }
+  }
+
+  private scheduleReconnect(reason: string): void {
+    if (this.closed || this.reconnectTimer) return;
+    const attempt = ++this.reconnectAttempt;
+    const delayMs = Math.min(
+      RECONNECT_MAX_DELAY_MS,
+      RECONNECT_BASE_DELAY_MS * 2 ** Math.min(attempt - 1, 4),
+    );
+    this.logger?.warn(
+      { hostId: this.hostId, reason, attempt, delayMs },
+      'embedded-unix: socket disconnected; scheduling reconnect',
+    );
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.connect().catch(err => {
+        this.logger?.warn(
+          {
+            hostId: this.hostId,
+            reason,
+            attempt,
+            err: err instanceof Error ? err.message : String(err),
+          },
+          'embedded-unix: reconnect failed',
+        );
+        this.scheduleReconnect('reconnect_failed');
+      });
+    }, delayMs);
+    this.reconnectTimer.unref?.();
+  }
+
+  private clearReconnectTimer(): void {
+    if (!this.reconnectTimer) return;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
   }
 }

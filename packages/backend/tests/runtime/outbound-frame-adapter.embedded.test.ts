@@ -2,6 +2,7 @@ import { createServer, type Server as NetServer, type Socket } from 'node:net';
 import { existsSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
 import { splitNdjson } from '@silverhand/host';
 import { EmbeddedUnixOutboundFrameAdapter } from '../../src/runtime/embedded-unix-outbound-frame-adapter.js';
 import {
@@ -96,6 +97,119 @@ runOutboundFrameAdapterContract(
     return fixture;
   },
 );
+
+describe('EmbeddedUnixOutboundFrameAdapter reconnect', () => {
+  it('redials the daemon outbound socket after an unexpected disconnect', async () => {
+    const socketPath = join(
+      tmpdir(),
+      `sh-d5a-reconnect-${process.pid}-${++socketSeq}.sock`,
+    );
+    if (existsSync(socketPath)) unlinkSync(socketPath);
+
+    const accepted: Socket[] = [];
+    let pendingAccept: ((s: Socket) => void) | null = null;
+    const acceptQueue: Socket[] = [];
+    const server: NetServer = createServer(sock => {
+      accepted.push(sock);
+      if (pendingAccept) {
+        const resolve = pendingAccept;
+        pendingAccept = null;
+        resolve(sock);
+      } else {
+        acceptQueue.push(sock);
+      }
+    });
+
+    const nextAccepted = (): Promise<Socket> => {
+      const queued = acceptQueue.shift();
+      if (queued) return Promise.resolve(queued);
+      return new Promise(resolve => {
+        pendingAccept = resolve;
+      });
+    };
+
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(socketPath, () => {
+        server.off('error', reject);
+        resolve();
+      });
+    });
+
+    const hostId = 'local';
+    const warnings: Array<{ meta: Record<string, unknown>; msg: string }> = [];
+    const adapter = new EmbeddedUnixOutboundFrameAdapter({
+      socketPath,
+      hostId,
+      logger: {
+        info: () => undefined,
+        warn: (meta, msg) => warnings.push({ meta, msg }),
+        error: () => undefined,
+      },
+    });
+
+    try {
+      const firstAccept = nextAccepted();
+      await adapter.connect();
+      const firstSocket = await firstAccept;
+      const firstConnectionId = adapter.connectionIdForHost(hostId);
+      expect(firstConnectionId).toMatch(/^embedded-unix-local-conn-/);
+
+      firstSocket.destroy();
+
+      const secondSocket = await nextAccepted();
+      await waitFor(
+        () =>
+          adapter.connectionIdForHost(hostId) !== null &&
+          adapter.connectionIdForHost(hostId) !== firstConnectionId,
+      );
+      const secondConnectionId = adapter.connectionIdForHost(hostId);
+      expect(secondConnectionId).toMatch(/^embedded-unix-local-conn-/);
+      expect(secondConnectionId).not.toBe(firstConnectionId);
+      expect(
+        warnings.some(entry =>
+          entry.msg.includes('socket disconnected; scheduling reconnect'),
+        ),
+      ).toBe(true);
+
+      const daemon = new EmbeddedFakeDaemon(secondSocket, secondConnectionId!);
+      const pending = adapter.sendCommand(
+        hostId,
+        'runtime_status',
+        { conversation_id: 'c1', agent_id: 'a1' },
+        { timeoutMs: 500 },
+      );
+      const cmd = await daemon.nextCommand();
+      daemon.respondResult(cmd.id, 'runtime_status', {
+        runtimes: [
+          {
+            conversation_id: 'c1',
+            agent_id: 'a1',
+            pid: null,
+            phase: 'idle',
+            run_state: null,
+            started_at: null,
+          },
+        ],
+      });
+
+      await expect(pending).resolves.toMatchObject({
+        runtimes: [{ agent_id: 'a1' }],
+      });
+    } finally {
+      await adapter.close();
+      for (const s of accepted) {
+        if (!s.destroyed) s.destroy();
+      }
+      await new Promise<void>(resolve => server.close(() => resolve()));
+      try {
+        if (existsSync(socketPath)) unlinkSync(socketPath);
+      } catch {
+        /* best-effort */
+      }
+    }
+  });
+});
 
 class EmbeddedFakeDaemon implements FakeDaemonConnection {
   readonly connectionId: string;
@@ -195,4 +309,13 @@ class EmbeddedFakeDaemon implements FakeDaemonConnection {
   private writeFrame(frame: Record<string, unknown>): void {
     this.socket.write(`${JSON.stringify(frame)}\n`);
   }
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (predicate()) return;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  throw new Error('condition was not met before timeout');
 }
