@@ -453,7 +453,7 @@
         <p class="ms-scope">
           <strong>包含</strong>：Foundations（已 done）· D3 desktop daemon lifecycle 全套 ·
           D4.a/b/c/d/e（含 create-agent materialize intent + daemon-owned data-plane proxy）·
-          D5.a（R4 envelope unification）· T1 内的 sticky host ownership / Remote UX 收口。
+          D5.a（R4 envelope unification）· sticky host ownership / no auto migration。
           <br><strong>不包含</strong>：production deploy infra / 容器化 / 云端 TLS / observability shipping / 多用户云端 auth 加固 / cloud soak。
         </p>
       </div>
@@ -486,11 +486,11 @@
     </section>
 
     <div class="summary">
-      <div class="summary-cell"><span class="count" style="color: var(--green)">18</span><div><div class="lbl">done</div></div></div>
-      <div class="summary-cell"><span class="count" style="color: var(--blue)">1</span><div><div class="lbl">in-progress</div></div></div>
+      <div class="summary-cell"><span class="count" style="color: var(--green)">23</span><div><div class="lbl">done</div></div></div>
+      <div class="summary-cell"><span class="count" style="color: var(--blue)">0</span><div><div class="lbl">in-progress</div></div></div>
       <div class="summary-cell"><span class="count" style="color: var(--purple)">0</span><div><div class="lbl">in-review</div></div></div>
-      <div class="summary-cell"><span class="count" style="color: var(--orange)">3</span><div><div class="lbl">planned</div></div></div>
-      <div class="summary-cell"><span class="count" style="color: var(--gray)">9</span><div><div class="lbl">future</div></div></div>
+      <div class="summary-cell"><span class="count" style="color: var(--orange)">0</span><div><div class="lbl">planned</div></div></div>
+      <div class="summary-cell"><span class="count" style="color: var(--gray)">8</span><div><div class="lbl">future</div></div></div>
     </div>
 
     <!-- ========================================== -->
@@ -631,15 +631,16 @@
           </div>
         </div>
 
-        <div class="card in-progress">
+        <div class="card done">
           <div class="card-head">
             <h3 class="card-title">D3.b — Crash respawn + supervisor budget + detach IPC</h3>
-            <span class="badge in-progress">in progress</span>
+            <span class="badge done">done</span>
           </div>
           <p class="card-body">
             Commit 1 = exponential backoff (500ms→30s cap) 复用 D3.a freshness gate；
             Commit 2 = 60s 内 ≥ 8 次 → <code>local_host_status: failed</code>（严格来源）；
             Commit 3 = <code>host_outbound_detach</code> IPC + Electron <code>before-quit</code>（best-effort optimization）。
+            8 commits（<code>6c7c8ac → 27c35fc</code>），Cindy review gates closed。
           </p>
           <div class="card-meta">
             <span class="m-tag m1">M1</span>
@@ -647,42 +648,46 @@
           </div>
         </div>
 
-        <div class="card planned">
+        <div class="card done">
           <div class="card-head">
             <h3 class="card-title">D3.c — server_url loopback + config_reload</h3>
-            <span class="badge planned">planned</span>
+            <span class="badge done">done</span>
           </div>
           <p class="card-body">
-            backend bind 地址变更后 daemon-config.json 重写 + daemon 端 reload 走干净路径。
-            未开工。
+            shared loopback classifier；<code>host_outbound_reload</code> daemon-control IPC；
+            Settings <code>saveServerUrl</code> atomic rewrite → reload IPC → fresh-attach watchdog；
+            Server settings pane + typed outcome copy。12 commits（<code>0f1a1fa → 05b9277</code>）。
           </p>
           <div class="card-meta">
             <span class="m-tag m1">M1</span>
           </div>
         </div>
 
-        <div class="card planned">
+        <div class="card done">
           <div class="card-head">
             <h3 class="card-title">D3.d — Hosts 页面 UI</h3>
-            <span class="badge planned">planned</span>
+            <span class="badge done">done</span>
           </div>
           <p class="card-body">
-            list / status / rotate-token / revoke / reclaim 的 UI 状态机。
-            multi-host pending / failed / online 的展示。
+            Hosts pane connection pill maps <code>local_host_status × attached_at</code>
+            into disconnected / connecting / connected / failed / revoked presentation states；
+            polling narrowed so the pill flips Connecting → Connected. 2 commits（<code>5da4974 → a90ca36</code>）。
           </p>
           <div class="card-meta">
             <span class="m-tag m1">M1</span>
           </div>
         </div>
 
-        <div class="card planned">
+        <div class="card done">
           <div class="card-head">
             <h3 class="card-title">D3.e — logout vs disable-this-host 语义</h3>
-            <span class="badge planned">planned</span>
+            <span class="badge done">done</span>
           </div>
           <p class="card-body">
             「我退出我的账号」 vs 「我这台机器不再当 host」的清晰分流；
-            session revoke / host revoke 分开 UX。
+            default <code>Log out</code> 不碰 host record；
+            secondary destructive path 严格 revoke-host → logout 顺序，no shared code path with default logout。
+            Commit <code>3a8e4d5</code>。
           </p>
           <div class="card-meta">
             <span class="m-tag m1">M1</span>
@@ -943,14 +948,15 @@
           </div>
         </div>
 
-        <div class="card future">
+        <div class="card done">
           <div class="card-head">
             <h3 class="card-title">Sticky host ownership / no auto migration</h3>
-            <span class="badge future">future</span>
+            <span class="badge done">done</span>
           </div>
           <p class="card-body">
             用户同时开 desktop + laptop daemon 时，M1 采用 sticky ownership：agent / workspace / runtime / local files 归一个 host。
-            不做自动状态合并、自动 failover、跨 daemon live migration；迁移如果要做，必须是显式操作和独立 design。
+            D4.c 锁定 host ownership / event perimeter，D4.e 把 host-local path authority 下沉到 owning daemon；
+            不做自动状态合并、自动 failover、跨 daemon live migration。迁移如要做，必须是显式操作和独立 design。
           </p>
           <div class="card-meta">
             <span class="m-tag m1">M1</span>
@@ -964,11 +970,10 @@
           </div>
           <p class="card-body">
             create-agent pending/materializing/failed/retry/revoke/rotate-token 在 desktop UI 的状态机。
-            和 D3.d/e + D4.d 衔接。
-            <em>Cindy item 5</em>。
+            和 D3.d/e + D4.d 衔接。M1 已有最小可用 surface；这里保留为 post-M1 UX polish。
           </p>
           <div class="card-meta">
-            <span class="m-tag m1">M1</span>
+            <span class="m-tag m2">M2</span>
           </div>
         </div>
 
@@ -1152,12 +1157,11 @@
     <footer>
       <p>
         <strong>Milestone 1 路径</strong>（这期）：
-        D3.b（in-progress） →
+        D3.a–e ✅ done — desktop daemon lifecycle / config reload / Hosts UI / logout-vs-disable closed →
         D4.c ✅ done — G3 closed 2026-05-28（branch <code>feature/remote-backend-v1-stage-d4-c-g3</code> tip <code>1498ccb</code>） →
         <strong>D4.d ✅ done — D1–D6 closed 2026-05-29（branch <code>feature/remote-backend-v1-stage-d4-d-design</code> tip <code>38a4b12</code>）</strong> →
         <strong>D5.a ✅ done — R4 envelope adapter unification，merged into main <code>2e5fd60</code>（branch tip <code>2826cd1</code>）</strong> →
         <strong>D4.e ✅ done — daemon 成为唯一 host-local path 权威，D4.e-1…-6 closed（branch <code>feature/remote-backend-v1-stage-d4-e-design</code> tip <code>185fbe7</code>，pre-squash 备份 tag <code>d4e-pre-squash-backup</code>）→ M1 协议/语义核心闭合，M1 closure 可宣告</strong> →
-        剩余 M1 尾巴：D3.b/c/d/e（desktop daemon lifecycle）+ T1 sticky host ownership / Remote UX 收口 →
         <strong>= M1 达成（final-form 协议，embedded 部署）</strong>.
       </p>
       <p>
