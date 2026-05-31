@@ -605,8 +605,14 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     }
     hostWs = installHostWebSocketServer(server as HttpServer, ctx, {
       eventSink: opts.testHooks?.wrapHostWsEventSink
-        ? opts.testHooks.wrapHostWsEventSink(outboundFanout ?? undefined)
-        : outboundFanout ?? undefined,
+        ? opts.testHooks.wrapHostWsEventSink(
+            opts.mode === 'standalone'
+              ? outboundFanout ?? undefined
+              : undefined,
+          )
+        : opts.mode === 'standalone'
+          ? outboundFanout ?? undefined
+          : undefined,
     });
     // Construct the deployment-specific outbound transport. This runs
     // synchronously before the listen callback fires, so `outboundAdapter`

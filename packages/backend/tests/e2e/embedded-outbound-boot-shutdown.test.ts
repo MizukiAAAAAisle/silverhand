@@ -335,4 +335,45 @@ describe('D5.a-3 embedded boot + shutdown order (real startBackend)', () => {
       kinds.indexOf('runtime_stop_all'),
     );
   });
+
+  it('does not wire host-ws runtime event fanout in embedded mode', async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'sh-nohostws-'));
+    const socketPath = join(tmpDir, 'daemon-outbound.sock');
+
+    const config: ServerConfig = {
+      mode: 'embedded',
+      url: 'http://127.0.0.1:0',
+      auth_token: 'c'.repeat(32),
+      refresh_token: null,
+      child_sessions: {
+        max_concurrent_per_parent: null,
+        spawn_cooldown_seconds: null,
+        max_depth: 1,
+      },
+    };
+    let wrappedReal: unknown = 'not-called';
+
+    running = await startBackend({
+      mode: 'embedded',
+      dbPath: join(tmpDir, 'silverhand.db'),
+      silverhandDir: tmpDir,
+      serverConfig: config,
+      silverhandCliLauncher: { command: 'true', args: [] },
+      logger: { info() {}, warn() {}, error() {} },
+      outboundSocketPath: socketPath,
+      testHooks: {
+        wrapHostWsEventSink: real => {
+          wrappedReal = real;
+          return real;
+        },
+      },
+    });
+
+    // Embedded has a real OutboundRuntimeEventFanout for the local
+    // daemon-outbound Unix socket, but host-ws must NOT be wired to it.
+    // If host-ws events enter the fanout, their `hostws-*` connection id
+    // races the authoritative `embedded-unix-*` command/event namespace
+    // and can either poison runtime_wake or drop live runtime events.
+    expect(wrappedReal).toBeUndefined();
+  });
 });
