@@ -135,14 +135,27 @@ export function extractAttachmentSnapshots(
 export function extractAttachmentSnapshotsFromRow(
   row: { metadata: string | null },
 ): AttachmentSnapshot[] | null {
-  if (!row.metadata) return null;
+  const metadata = parseMessageMetadata(row.metadata);
+  return extractAttachmentSnapshots(metadata);
+}
+
+export function extractSubtypeFromRow(
+  row: { metadata: string | null },
+): string | null {
+  const metadata = parseMessageMetadata(row.metadata);
+  const subtype = metadata?.subtype;
+  return typeof subtype === 'string' ? subtype : null;
+}
+
+function parseMessageMetadata(metadata: string | null): Record<string, unknown> | null {
+  if (!metadata) return null;
   let parsed: Record<string, unknown> | null = null;
   try {
-    parsed = JSON.parse(row.metadata) as Record<string, unknown>;
+    parsed = JSON.parse(metadata) as Record<string, unknown>;
   } catch {
     return null;
   }
-  return extractAttachmentSnapshots(parsed);
+  return parsed;
 }
 
 export class MessageRepo {

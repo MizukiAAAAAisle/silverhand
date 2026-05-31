@@ -560,6 +560,10 @@ describe('ThreadService.closeThread', () => {
       const summary = parentMessages.find(m => m.metadata?.subtype === 'thread_summary');
       expect(summary?.content).toContain('@bob');
       expect(summary?.content).toContain('done');
+      expect(summary?.metadata).toMatchObject({
+        subtype: 'thread_summary',
+        summary: 'done',
+      });
       expect(t.fake.delivered.map(d => d.agentId).sort()).toEqual(
         [t.alice.id, t.bob.id].sort(),
       );

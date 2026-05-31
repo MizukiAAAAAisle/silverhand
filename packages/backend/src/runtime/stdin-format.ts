@@ -24,7 +24,10 @@
 import { extractMentions } from '@silverhand/shared';
 import type { AttachmentSnapshot, FromKind } from '@silverhand/shared';
 import type { PendingConversationInboxItem } from '../repos/conversation-inbox-repo.js';
-import { extractAttachmentSnapshotsFromRow } from '../repos/message-repo.js';
+import {
+  extractAttachmentSnapshotsFromRow,
+  extractSubtypeFromRow,
+} from '../repos/message-repo.js';
 
 /** The CLI tool name an agent should call to reply. */
 export function sendMessageToolName(): string {
@@ -41,6 +44,7 @@ export interface MessageLite {
   from_user_id: string | null;
   content: string;
   created_at: number;
+  subtype?: string | null;
   attachments?: AttachmentSnapshot[] | null;
 }
 
@@ -76,7 +80,10 @@ export function formatInboxBatch(
     })
     .join('\n\n---\n\n');
   return `${header}\n\n${body}\n\n${formatDeliveryInstruction(
-    items.map(i => i.message),
+    items.map(({ message }) => ({
+      ...message,
+      subtype: extractSubtypeFromRow(message),
+    })),
     recipientAgentName,
     sendMessageTool,
   )}`;
@@ -237,6 +244,9 @@ export function formatDeliveryInstruction(
     );
   });
   const hasOnlySystemMessages = messages.every(m => m.from_kind === 'system');
+  const hasActionableThreadSummary = messages.some(
+    m => m.from_kind === 'system' && m.subtype === 'thread_summary',
+  );
 
   if (hasUserMessage && hasUserMessageForRecipient) {
     const mentionHint = nonSystemMentionsRecipient
@@ -268,6 +278,14 @@ export function formatDeliveryInstruction(
   }
 
   if (hasOnlySystemMessages) {
+    if (hasActionableThreadSummary) {
+      return (
+        `The system messages above include a closed-thread summary. ` +
+        `If you are a relevant parent-channel agent or can move the next step forward, ` +
+        `call \`${sendMessageTool}\` with a reply or take the appropriate action before stopping. ` +
+        `If no follow-up is needed from you, no visible reply is required.`
+      );
+    }
     return (
       `Respond as appropriate. System messages do not require a reply ` +
       `unless they explicitly ask for one.`
