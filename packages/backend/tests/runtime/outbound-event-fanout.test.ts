@@ -222,6 +222,31 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
+  it('logs at most one warning per stale outbound event connection', () => {
+    const warnings: Array<Record<string, unknown>> = [];
+    const fix = makeFixture({
+      logger: {
+        ...SILENT_LOGGER,
+        warn: (obj: Record<string, unknown>) => warnings.push(obj),
+      },
+    });
+    try {
+      fix.transport.connectionId = 'conn-2';
+
+      fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+      fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+      fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+
+      expect(
+        warnings.filter(
+          warning => warning.action === 'outbound_event_stale_connection',
+        ),
+      ).toHaveLength(1);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
   it('replays pending inbox rows only after runtime_ready_for_drain', async () => {
     const fix = makeFixture({ runtime: 'codex' });
     try {
@@ -1190,6 +1215,7 @@ function makeFixture(
   opts: {
     runtime?: RuntimeKind;
     clearSessionExitTimeoutMs?: number;
+    logger?: typeof SILENT_LOGGER;
     workspaceRegistryBackfiller?: (ctx: {
       transport: FakeTransport;
       workspaces: WorkspaceRepo;
@@ -1233,7 +1259,7 @@ function makeFixture(
     db,
     events: publisher,
     transport: () => transport,
-    logger: SILENT_LOGGER,
+    logger: opts.logger ?? SILENT_LOGGER,
     workspacesRoot,
     silverhandCli: { command: 'silverhand', args: [] },
     agentTokens: new AgentTokenStore(),
@@ -1714,9 +1740,9 @@ function outboundEventFixture(kind: OutboundDaemonEventKind): OutboundDaemonToSe
 }
 
 const SILENT_LOGGER = {
-  info() {},
-  warn() {},
-  error() {},
+  info(..._args: unknown[]) {},
+  warn(..._args: unknown[]) {},
+  error(..._args: unknown[]) {},
 };
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {

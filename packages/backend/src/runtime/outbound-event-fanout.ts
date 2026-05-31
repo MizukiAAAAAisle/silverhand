@@ -142,6 +142,7 @@ const OUTBOUND_SOCKET_SENTINEL = 'outbound-ws';
 
 export class OutboundRuntimeEventFanout implements HostWsEventSink {
   private readonly states = new Map<string, HostFanoutState>();
+  private readonly staleEventConnectionsWarned = new Set<string>();
   private readonly inboxRepo: ConversationInboxRepo;
   private readonly conversations: ConversationRepo;
   private readonly agents: AgentRepo;
@@ -222,16 +223,20 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       this.opts.transport()?.connectionIdForHost(hostId) ?? null;
     if (liveConnectionId !== connectionId) {
       this.onDisconnect(hostId, connectionId);
-      this.opts.logger.warn(
-        {
-          connectionHostId: hostId,
-          eventKind: event.kind,
-          eventConnectionId: connectionId,
-          liveConnectionId,
-          action: 'outbound_event_stale_connection',
-        },
-        'outbound event arrived from a stale connection — dropped',
-      );
+      const warnKey = JSON.stringify([hostId, connectionId]);
+      if (!this.staleEventConnectionsWarned.has(warnKey)) {
+        this.staleEventConnectionsWarned.add(warnKey);
+        this.opts.logger.warn(
+          {
+            connectionHostId: hostId,
+            eventKind: event.kind,
+            eventConnectionId: connectionId,
+            liveConnectionId,
+            action: 'outbound_event_stale_connection',
+          },
+          'outbound event arrived from a stale connection — dropped',
+        );
+      }
       return;
     }
 
