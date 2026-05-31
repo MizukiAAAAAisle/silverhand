@@ -428,7 +428,7 @@
       </div>
       <div class="stamp">
         <strong>Status</strong>: planning / non-committal<br>
-        <strong>Last updated</strong>: 2026-05-29<br>
+        <strong>Last updated</strong>: 2026-05-30<br>
         <strong>Maintainer</strong>: @Alice
       </div>
     </header>
@@ -486,11 +486,11 @@
     </section>
 
     <div class="summary">
-      <div class="summary-cell"><span class="count" style="color: var(--green)">17</span><div><div class="lbl">done</div></div></div>
+      <div class="summary-cell"><span class="count" style="color: var(--green)">18</span><div><div class="lbl">done</div></div></div>
       <div class="summary-cell"><span class="count" style="color: var(--blue)">1</span><div><div class="lbl">in-progress</div></div></div>
       <div class="summary-cell"><span class="count" style="color: var(--purple)">0</span><div><div class="lbl">in-review</div></div></div>
       <div class="summary-cell"><span class="count" style="color: var(--orange)">3</span><div><div class="lbl">planned</div></div></div>
-      <div class="summary-cell"><span class="count" style="color: var(--gray)">10</span><div><div class="lbl">future</div></div></div>
+      <div class="summary-cell"><span class="count" style="color: var(--gray)">9</span><div><div class="lbl">future</div></div></div>
     </div>
 
     <!-- ========================================== -->
@@ -808,19 +808,33 @@
           </div>
         </div>
 
-        <div class="card future">
+        <div class="card done">
           <div class="card-head">
-            <h3 class="card-title">D4.e — daemon-owned data-plane proxy</h3>
-            <span class="badge future">future</span>
+            <h3 class="card-title">D4.e — daemon as sole host-local path authority</h3>
+            <span class="badge done">done</span>
           </div>
           <p class="card-body">
-            system_prompt / MEMORY / notes / CONSENSUS 的 truth 始终在 owning daemon 的本地 fs，<strong>不向 server 同步正文</strong>。
-            desktop 需要查看或编辑时走 desktop → server (ACL/routing) → daemon request/response proxy；server 不持久化这些 bytes。
-            <code>/api/agents/:id/workspace</code> + runtime detection 这类 desktop-local fs surface 走同一类 daemon proxy，或明确 permanent embedded-only。
+            8 commits（squash 成 design + D4.e-1…-6 各 1，base D5.a-done tip <code>eb35192</code>，pre-squash 备份 tag <code>d4e-pre-squash-backup</code>）。把 backend 控制面里所有 agent-host 路径解析全部下沉到 daemon，最后一刀 D4.e-6 撤掉 <code>runtime_start</code> 的 path carve-out。Cindy 全程 LGTM。
+            <br>
+            • D4.e-1 daemon workspace <strong>registry</strong> + <code>workspace_provision</code>(bind) + <code>agent_workspace_index</code> + lazy <code>WorkspaceRegistryBackfiller</code>；<code>list_workspaces</code> daemon-stamp <code>agent_dir</code>；A3 contract + A4 parity。
+            <br>
+            • D4.e-2 <code>agent_workspace_read</code> intent；<code>GET /api/agents/:id/workspace</code> 改 semantic id；删 backend <code>src/agent-workspace.ts</code>；standalone disable 移除（A6）。
+            <br>
+            • D4.e-3 <code>agent_l2_seed</code> intent；member-add + create-with-members 改走 daemon；删 backend <code>seedAgentL2</code>；co-location gate 取消（universal）。
+            <br>
+            • D4.e-4 <code>agent_files_purge</code> intent；<code>DELETE /api/agents/:id</code> 改在 §3.3 fail-fast commit 边界；删 backend <code>fs.rm</code> + delete-impact 的 l1/l2 path；backfill-before-purge + <code>skipped_unprovisioned</code> fail-closed。
+            <br>
+            • D4.e-5 清掉死的 agent-host fs/path 代码（<code>workspace-files.ts</code> / <code>agent-profile.ts</code> / <code>validateWorkspacePath</code>）+ <strong>A1 dependency-guard</strong> + acceptance doc。
+            <br>
+            • D4.e-6 <code>runtime_start</code> 语义化（<strong>M1 closure gate</strong>）：wire refs 只剩 <code>{id,name,kind}</code> <code>.strict()</code>，daemon 经 registry / <code>computeAgentDir</code> 单源解析、typed fail-closed；backend semantic-only builder + bounded lazy backfill（I4 host-equality gate，partial/failed 不 dispatch 并回滚 pending）；A1 guard 扩到 path-emission 半边。<strong>A1/A2/A7 DONE、I1/I6 完整成立 → M1 closure 可宣告</strong>。
+            <br>
+            Gates @ tip <code>bac9635</code>：<code>pnpm -r typecheck</code> clean；backend full 1458 pass | 1 skip；host 827 pass。
           </p>
           <div class="card-meta">
             <span class="m-tag m1">M1</span>
-            <span class="meta-tag">Cindy item 4</span>
+            <span class="meta-tag">branch feature/remote-backend-v1-stage-d4-e-design tip 185fbe7</span>
+            <span class="meta-tag">acceptance docs/d4-e-acceptance.md</span>
+            <span class="meta-tag">success = D4.e-1…-6 closed ✓</span>
           </div>
         </div>
 
@@ -1142,9 +1156,9 @@
         D4.c ✅ done — G3 closed 2026-05-28（branch <code>feature/remote-backend-v1-stage-d4-c-g3</code> tip <code>1498ccb</code>） →
         <strong>D4.d ✅ done — D1–D6 closed 2026-05-29（branch <code>feature/remote-backend-v1-stage-d4-d-design</code> tip <code>38a4b12</code>）</strong> →
         <strong>D5.a ✅ done — R4 envelope adapter unification，merged into main <code>2e5fd60</code>（branch tip <code>2826cd1</code>）</strong> →
-        D4.e（daemon-owned data-plane proxy，next）→
-        T1 内 M1 子项（sticky host ownership + Remote UX 收口）→
-        <strong>= M1 达成（final-form 协议，embedded 部署）</strong>。
+        <strong>D4.e ✅ done — daemon 成为唯一 host-local path 权威，D4.e-1…-6 closed（branch <code>feature/remote-backend-v1-stage-d4-e-design</code> tip <code>185fbe7</code>，pre-squash 备份 tag <code>d4e-pre-squash-backup</code>）→ M1 协议/语义核心闭合，M1 closure 可宣告</strong> →
+        剩余 M1 尾巴：D3.b/c/d/e（desktop daemon lifecycle）+ T1 sticky host ownership / Remote UX 收口 →
+        <strong>= M1 达成（final-form 协议，embedded 部署）</strong>.
       </p>
       <p>
         <strong>Milestone 2 路径</strong>（后续）：
