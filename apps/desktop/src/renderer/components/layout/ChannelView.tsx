@@ -24,7 +24,6 @@ import {
 } from 'lucide-react';
 import type {
   AgentDto,
-  AgentRunState,
   ConversationAgentDto,
   HumanMemberDto,
   MemberDto,
@@ -34,7 +33,6 @@ import type {
 } from '@silverhand/shared';
 import { Composer } from '@/components/chat/Composer';
 import { MessageItem } from '@/components/chat/MessageItem';
-import { AgentActivityDock } from '@/components/chat/AgentActivityBubble';
 import { QuotedMessagePreview } from '@/components/chat/QuotedMessagePreview';
 import { findThreadAnchor, readAnchorMessageId } from '@/components/chat/threadAnchor';
 import { SystemMessage } from '@/components/chat/SystemMessage';
@@ -77,7 +75,6 @@ import {
 import {
   useChannelAgents,
   useChannelMessages,
-  useAgentRunStates,
   useMarkMessageChannelRead,
   useStartAgent,
   useStopAgent,
@@ -244,25 +241,14 @@ function ActiveChannelView({
     [conversation.id, routeKind],
   );
   useConversationStream(conversation.id, onStreamEvent, routeKind);
-  const { data: runStates = [] } = useAgentRunStates(conversation.id, routeKind);
 
-  // Active = non-terminal states only (idle/failed are removed by the hook).
-  // Guard defensively in case a terminal event arrives just before re-render.
-  const activeRunStates = useMemo(
-    () => runStates.filter(s => s.status !== 'idle' && s.status !== 'failed'),
-    [runStates],
-  );
   const { data: agents = [] } = useAgents();
   // Single batch fetch for every agent avatar in this channel — threaded
-  // down to MemberStrip, MessageList (→ MessageItem authors), and the
-  // AgentActivityDock so the same blob URL is reused everywhere instead
-  // of three independent hook instances each firing the same network calls.
+  // down to MemberStrip and MessageList (→ MessageItem authors) so the
+  // same blob URL is reused everywhere instead of independent hook
+  // instances each firing the same network calls. The Composer's
+  // activity header (variant A) sources run-state on its own.
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
-  const activityAgentsById = useMemo(() => {
-    const m = new Map<string, AgentDto>();
-    for (const agent of agents) m.set(agent.id, agent);
-    return m;
-  }, [agents]);
 
   const closed = conversation.closed_at !== null;
   const isArchived = conversation.archived_at !== null;
@@ -335,17 +321,6 @@ function ActiveChannelView({
     () => (anchor ? messages.filter(m => m.id !== anchor.id) : messages),
     [messages, anchor],
   );
-  const activityAnchorMessageId = useMemo(() => {
-    for (let i = visibleMessages.length - 1; i >= 0; i -= 1) {
-      const message = visibleMessages[i]!;
-      if (message.from_kind === 'user') return message.id;
-    }
-    return null;
-  }, [visibleMessages]);
-  const [activityJumpMessageId, setActivityJumpMessageId] = useState<string | null>(null);
-  useEffect(() => {
-    setActivityJumpMessageId(null);
-  }, [conversation.id]);
   const loadEarlierMessages = useCallback(() => {
     if (!hasPreviousPage || isFetchingPreviousPage) return;
     void fetchPreviousPage();
@@ -358,13 +333,11 @@ function ActiveChannelView({
   const effectiveJumpMessageId =
     jumpTarget && jumpTarget.channelId === conversation.id
       ? jumpTarget.messageId
-      : activityJumpMessageId;
+      : null;
   const handleMessageJumped = useCallback(() => {
     if (jumpTarget && jumpTarget.channelId === conversation.id) {
       onJumped?.();
-      return;
     }
-    setActivityJumpMessageId(null);
   }, [conversation.id, jumpTarget, onJumped]);
 
   // Open-thread summary for this channel — only fetched on parent
@@ -590,26 +563,11 @@ function ActiveChannelView({
             onResetToLatest={resetToLatest}
             onThreadCreated={onThreadCreated}
             threadByAnchor={threadByAnchor}
-            activeRunStates={activeRunStates}
             routeKind={routeKind}
             conversationRefsById={conversationRefsById}
             onOpenConversationRef={onOpenConversationRef}
             onOpenChannelRef={onOpenChannelRef ? handleOpenChannelRef : undefined}
           />
-
-          {activeRunStates.length > 0 ? (
-            <AgentActivityDock
-              states={activeRunStates}
-              agentsById={activityAgentsById}
-              agentAvatarUrls={agentAvatarUrls}
-              anchorMessageId={activityAnchorMessageId}
-              onJumpToAnchor={() => {
-                if (activityAnchorMessageId) {
-                  setActivityJumpMessageId(activityAnchorMessageId);
-                }
-              }}
-            />
-          ) : null}
         </div>
 
         <Composer
@@ -873,7 +831,6 @@ function MessageList({
   onResetToLatest,
   onThreadCreated,
   threadByAnchor,
-  activeRunStates,
   routeKind,
   conversationRefsById,
   onOpenConversationRef,
@@ -915,10 +872,6 @@ function MessageList({
    *  "{count} Reply" badge and short-circuits the POST when a thread
    *  already exists (just opens it). */
   threadByAnchor?: Map<string, ThreadSummary>;
-  /** In-flight agent run states. The fixed strip renders outside this
-   *  scroller; MessageList only uses runId changes to keep bottom-following
-   *  stable when the strip appears. */
-  activeRunStates?: AgentRunState[];
   routeKind: 'channel' | 'thread';
   conversationRefsById?: Map<string, ConversationReference>;
   onOpenConversationRef?: (id: string) => void;
@@ -1604,18 +1557,10 @@ function MessageList({
             ),
             // Bottom padding spacer — keeps the last message off the
             // composer edge without baking the gutter into every item.
-            // Taller when the activity dock is showing so its resting pill
-            // never occludes the last message (this grows scroll *content*,
-            // not the viewport, so it adds no judder).
-            Footer: () => (
-              <div
-                className={
-                  activeRunStates && activeRunStates.length > 0
-                    ? 'h-14'
-                    : 'h-3'
-                }
-              />
-            ),
+            // The activity status now lives inside the Composer's own
+            // chrome (variant A), so there is no bottom overlay to
+            // reserve space for.
+            Footer: () => <div className="h-3" />,
           }}
           itemContent={(_index, item) => (
             <div className="mx-auto max-w-[1200px] px-4 py-0.5">
@@ -1641,15 +1586,7 @@ function MessageList({
             }
             scrollToBottom();
           }}
-          className={
-            'absolute left-1/2 z-20 flex size-9 -translate-x-1/2 items-center justify-center rounded-full bg-accent text-text-on-accent shadow-lg transition-all hover:opacity-90 active:opacity-75 ' +
-            // Lift above the activity dock's resting pill when it's
-            // showing so the round button and the pill don't collide
-            // at bottom-center.
-            (activeRunStates && activeRunStates.length > 0
-              ? 'bottom-16'
-              : 'bottom-4')
-          }
+          className="absolute bottom-4 left-1/2 z-20 flex size-9 -translate-x-1/2 items-center justify-center rounded-full bg-accent text-text-on-accent shadow-lg transition-all hover:opacity-90 active:opacity-75"
         >
           <ArrowDown className="size-4" />
         </button>

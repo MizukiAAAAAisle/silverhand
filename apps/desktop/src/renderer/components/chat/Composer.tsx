@@ -35,6 +35,7 @@ import {
   type ComposerDraftSnapshot,
 } from '@/lib/composer-draft-cache';
 import { Lightbox } from './Lightbox';
+import { ComposerActivityHeader } from './ComposerActivityHeader';
 
 interface ComposerProps {
   conversationId: string;
@@ -546,6 +547,12 @@ export function Composer({
          *  `focus-within:` ring so the focused-textarea outline still
          *  encloses both rows. */}
         <div className="flex flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-floating focus-within:border-border-focus focus-within:ring-2 focus-within:ring-border-focus">
+          <ComposerActivityHeader
+            conversationId={conversationId}
+            routeKind={routeKind}
+            agents={agents}
+            agentAvatarUrls={agentAvatarUrls}
+          />
           <textarea
             ref={ref}
             value={draft}

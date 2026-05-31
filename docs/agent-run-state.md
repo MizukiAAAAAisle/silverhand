@@ -246,28 +246,44 @@ useConversationStream(conversationId, onEvent, scope)
 
 ---
 
-## 7. UI：Composer 上方 Activity Strip
+## 7. UI：Composer 内置 Activity Header（方案 A）
 
-`AgentActivityBubble.tsx` 现在导出 `AgentActivityStrip`，固定渲染在 `MessageList` 与 `Composer` 之间：
+`ComposerActivityHeader.tsx`（旧 `AgentActivityBubble.tsx` / `AgentActivityStrip` /
+`AgentActivityDock` 已废弃删除）渲染为 **Composer 输入框 shell 盒子的第一个子元素**，
+与 textarea 共用同一圈圆角边框（无浮层、无阴影、无缝隙）。读感是"输入区在忙"，不是
+调试 HUD。
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│ @Alice  ⟳ 正在思考下一步实现…                         45s │
-│         Bash ×2  Read ×1                                │
-│ @Cindy  ⟳ 正在整理 review 结论…                         31s │
-│         ⚠ 上下文压缩耗时较长                            5m │
+┌─────────────────────────────────────────────────────────┐   ← Composer shell（共享边框）
+│ ⟳ @Alice  Bash ×2  正在思考下一步实现…       +1   45s  ⌄ │   ← 折叠：永远一行
 ├─────────────────────────────────────────────────────────┤
-│ Composer                                                 │
+│ 输入消息…                                                 │   ← textarea
+│                                            📎      Send   │
 └─────────────────────────────────────────────────────────┘
 ```
 
-- **位置**：不再跟随消息流尾部；它是 channel/thread-level realtime state，所以放在 composer 上方。用户上滚阅读历史时仍能看到当前谁在跑。
-- **idle collapse**：`activeRunStates.length === 0` 时组件不渲染，整条区域 0 高度，不留下占位。
-- **row 内容**：每个 in-flight agent 一行，透明底，只在 hover 时轻微显底色；不再用横向 chip/白色卡片，避免工具面板感。
-- **主状态行**：avatar + `@agent` + spinner + `activitySnippet || STATUS_LABEL[state.status]` + run elapsed。activity 文本占满剩余宽度，避免多 agent 并排时被压到不可读。
-- **tool calls**：使用 `toolCallCounts` 按工具名逐项展示，如 `Bash ×2` / `Read ×1`，不合并成 `{total} tools`。
-- **compacting**：压缩是与 thinking/tool_running 正交的状态。`state.compacting` 时在主状态行下方额外显示一行：`Layers` + `压缩上下文中…` + compaction elapsed；`compactionStale` 时改用 `AlertTriangle` + `上下文压缩耗时较长` warning 配色。主 thinking 文本仍保留，不被 compaction 文案替换。
-- **click-to-jump**：activity row 点击跳到当前 view 里最近一条 user message，作为"这次 activity 由哪条消息触发"的上下文补偿。后端若以后提供 precise trigger message id，可以替换这个 fallback。
+- **位置**：并入 composer 自身 chrome（不是浮在上方的独立条）。`activeRunStates.length === 0`
+  时组件 `return null`，输入框恢复原状，对 idle 态零影响。
+- **折叠态永远一行**：固定槽位 `[图标] @agent [主状态 badge] [明细 snippet…] [+N] [elapsed] [⌄]`，
+  其中只有明细 snippet 是弹性的（`flex-1 min-width:0 truncate`），其余全是 `shrink-0` 固定槽。
+  阶段在 tool call / thinking / compacting / waiting 之间切换时只换文字、不增减元素、不换行、
+  高度恒定。
+- **主状态优先级**（`statusRank`）：`tool_running > compacting > thinking > starting > idle`。
+  同时只显示一个主状态：正跑 tool 时 badge=工具名，否则才轮到 compacting/thinking。
+- **tool badge**：多个 tool call 不堆叠，取 count 最高的工具名 + `×总数`（如 `Edit ×3`），
+  完整逐项列表放展开区。
+- **多 agent 折叠取谁**：按 `statusRank` 升序、同级按 `lastActivityAt` 新者优先取 top agent
+  作为折叠行主体，末尾 `+N` 表示其余正在跑的 agent。
+- **展开**：点折叠行就地向下展开（textarea 被推下，内容增长，不浮层、不盖历史消息），
+  每个 in-flight agent 一行，按相同优先级排序；含 compaction 行（`Layers` / stale 时
+  `AlertTriangle` + warning 配色）与逐项 tool badge。
+- **主题适配**：全部用 token（`text-accent` / `text-text-secondary` / `border-border-subtle` /
+  `bg-bg-hover` / `text-warning`），forza6 等主题的替换自动生效；带 `data-composer-activity`
+  属性，便于后续主题做 poster 化定制。
+- **取舍**：方案 A 去掉了旧 dock 的 click-to-jump（跳回触发 user message）。dock 浮在历史上方
+  时该补偿有意义；A 常驻 composer 底部（永远在"现在"），点击改为就地展开/收起详情，跳转语义
+  失去价值，故移除。
+
 
 ---
 

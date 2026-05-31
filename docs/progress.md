@@ -2271,3 +2271,28 @@ until D4.e-6 (`runtime_start` semantic-ids) lands.
 
 Gates: `pnpm -r typecheck` clean; backend 1451 pass | 1 skip (118 files); host
 byte-parity 62 pass.
+
+## 2026-05-31 — Activity indicator 方案 A：折叠进 Composer chrome（#task:748）
+
+dogfood 反馈：旧 activity dock 的 hover-expand 浮层（#746）读感像 debug HUD
+（detached floating overlay + 阴影 + 横向块 + light→heavy 跳变）。shiki 在 4 个
+方向（A 内置 composer 状态头 / B 头像呼吸+hover / C 自写气泡 / D Cindy 的 composer
+rail）中选定 **A**。
+
+实现：
+- 新组件 `apps/desktop/src/renderer/components/chat/ComposerActivityHeader.tsx`，
+  渲染为 `Composer.tsx` 输入框 shell 盒子（`flex flex-col overflow-hidden rounded-md
+  border …`）的第一个子元素，与 textarea 共用边框，无浮层/阴影/缝隙。
+- 折叠态固定一行：`[图标] @agent [主状态 badge] [明细 snippet…(truncate)] [+N]
+  [elapsed] [⌄]`，仅 snippet 弹性，其余 `shrink-0`。阶段切换不换行、不改高度。
+- 主状态优先级 `statusRank`：`tool_running > compacting > thinking > starting`；
+  tool badge 取最高 count 工具名 + `×总数`。多 agent 折叠按 `statusRank` 再
+  `lastActivityAt` 取 top + `+N`；点击就地展开列出全部（同序）。
+- 全 token 配色（forza6 等主题自动适配），带 `data-composer-activity` 主题钩子。
+- 删除旧 `AgentActivityBubble.tsx`（`AgentActivityDock`）；`ChannelView.tsx` 移除
+  dock 浮层挂载、footer h-14 占位（→恒 h-3）、scroll-button bottom-16 条件
+  （→恒 bottom-4）、以及随之失效的 `activeRunStates` / `activityAgentsById` /
+  `activityAnchorMessageId` / activity-jump 链路（A 常驻 composer 底部，跳回触发
+  消息的补偿失去价值，移除 click-to-jump）。
+
+Gates：`@silverhand/desktop` typecheck clean；desktop vitest 678 pass（52 files）。
