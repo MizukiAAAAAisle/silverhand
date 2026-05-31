@@ -34,7 +34,7 @@ import type {
 } from '@silverhand/shared';
 import { Composer } from '@/components/chat/Composer';
 import { MessageItem } from '@/components/chat/MessageItem';
-import { AgentActivityStrip } from '@/components/chat/AgentActivityBubble';
+import { AgentActivityDock } from '@/components/chat/AgentActivityBubble';
 import { QuotedMessagePreview } from '@/components/chat/QuotedMessagePreview';
 import { findThreadAnchor, readAnchorMessageId } from '@/components/chat/threadAnchor';
 import { SystemMessage } from '@/components/chat/SystemMessage';
@@ -255,7 +255,7 @@ function ActiveChannelView({
   const { data: agents = [] } = useAgents();
   // Single batch fetch for every agent avatar in this channel — threaded
   // down to MemberStrip, MessageList (→ MessageItem authors), and the
-  // AgentActivityStrip so the same blob URL is reused everywhere instead
+  // AgentActivityDock so the same blob URL is reused everywhere instead
   // of three independent hook instances each firing the same network calls.
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
   const activityAgentsById = useMemo(() => {
@@ -547,64 +547,70 @@ function ActiveChannelView({
       </header>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <MessageList
-          channelId={conversation.id}
-          workspaceId={conversation.workspace_id}
-          messages={visibleMessages}
-          isLoading={isLoading}
-          hasMoreBefore={!!hasPreviousPage}
-          isFetchingEarlier={isFetchingPreviousPage}
-          onLoadEarlier={loadEarlierMessages}
-          agentAvatarUrls={agentAvatarUrls}
-          leadingSlot={
-            anchor ? (
-              <QuotedMessagePreview
-                quoteMessage={anchor}
-                onJumpToOriginal={
-                  onJumpToOriginal && anchorMessageId
-                    ? () => onJumpToOriginal(anchorMessageId)
-                    : undefined
-                }
-              />
-            ) : null
-          }
-          highlightedMessageId={highlightedMessageId ?? null}
-          jumpToMessageId={effectiveJumpMessageId}
-          jumpPrimePending={
-            // Only pass `true` when this pane's prop-driven jump
-            // (the App-orchestrated saved/task jump) is the one
-            // App is currently priming. activity-strip jumps stay
-            // local — those messages are by construction recent
-            // and already in cache, so they never go through the
-            // prime path.
-            jumpPrimePending && !!jumpTarget && jumpTarget.channelId === conversation.id
-          }
-          onJumped={handleMessageJumped}
-          isAtTail={isAtTail}
-          hasNewerLiveGap={hasNewerLiveGap}
-          onResetToLatest={resetToLatest}
-          onThreadCreated={onThreadCreated}
-          threadByAnchor={threadByAnchor}
-          activeRunStates={activeRunStates}
-          routeKind={routeKind}
-          conversationRefsById={conversationRefsById}
-          onOpenConversationRef={onOpenConversationRef}
-          onOpenChannelRef={onOpenChannelRef ? handleOpenChannelRef : undefined}
-        />
-
-        {activeRunStates.length > 0 ? (
-          <AgentActivityStrip
-            states={activeRunStates}
-            agentsById={activityAgentsById}
+        {/* Message area + activity dock share a relative box so the dock
+            can float out-of-flow at the bottom (above the composer). The
+            scroller's viewport height never changes when the dock shows /
+            hides / grows — no content judder. */}
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          <MessageList
+            channelId={conversation.id}
+            workspaceId={conversation.workspace_id}
+            messages={visibleMessages}
+            isLoading={isLoading}
+            hasMoreBefore={!!hasPreviousPage}
+            isFetchingEarlier={isFetchingPreviousPage}
+            onLoadEarlier={loadEarlierMessages}
             agentAvatarUrls={agentAvatarUrls}
-            anchorMessageId={activityAnchorMessageId}
-            onJumpToAnchor={() => {
-              if (activityAnchorMessageId) {
-                setActivityJumpMessageId(activityAnchorMessageId);
-              }
-            }}
+            leadingSlot={
+              anchor ? (
+                <QuotedMessagePreview
+                  quoteMessage={anchor}
+                  onJumpToOriginal={
+                    onJumpToOriginal && anchorMessageId
+                      ? () => onJumpToOriginal(anchorMessageId)
+                      : undefined
+                  }
+                />
+              ) : null
+            }
+            highlightedMessageId={highlightedMessageId ?? null}
+            jumpToMessageId={effectiveJumpMessageId}
+            jumpPrimePending={
+              // Only pass `true` when this pane's prop-driven jump
+              // (the App-orchestrated saved/task jump) is the one
+              // App is currently priming. activity-strip jumps stay
+              // local — those messages are by construction recent
+              // and already in cache, so they never go through the
+              // prime path.
+              jumpPrimePending && !!jumpTarget && jumpTarget.channelId === conversation.id
+            }
+            onJumped={handleMessageJumped}
+            isAtTail={isAtTail}
+            hasNewerLiveGap={hasNewerLiveGap}
+            onResetToLatest={resetToLatest}
+            onThreadCreated={onThreadCreated}
+            threadByAnchor={threadByAnchor}
+            activeRunStates={activeRunStates}
+            routeKind={routeKind}
+            conversationRefsById={conversationRefsById}
+            onOpenConversationRef={onOpenConversationRef}
+            onOpenChannelRef={onOpenChannelRef ? handleOpenChannelRef : undefined}
           />
-        ) : null}
+
+          {activeRunStates.length > 0 ? (
+            <AgentActivityDock
+              states={activeRunStates}
+              agentsById={activityAgentsById}
+              agentAvatarUrls={agentAvatarUrls}
+              anchorMessageId={activityAnchorMessageId}
+              onJumpToAnchor={() => {
+                if (activityAnchorMessageId) {
+                  setActivityJumpMessageId(activityAnchorMessageId);
+                }
+              }}
+            />
+          ) : null}
+        </div>
 
         <Composer
           key={conversation.id}
@@ -1598,7 +1604,18 @@ function MessageList({
             ),
             // Bottom padding spacer — keeps the last message off the
             // composer edge without baking the gutter into every item.
-            Footer: () => <div className="h-3" />,
+            // Taller when the activity dock is showing so its resting pill
+            // never occludes the last message (this grows scroll *content*,
+            // not the viewport, so it adds no judder).
+            Footer: () => (
+              <div
+                className={
+                  activeRunStates && activeRunStates.length > 0
+                    ? 'h-14'
+                    : 'h-3'
+                }
+              />
+            ),
           }}
           itemContent={(_index, item) => (
             <div className="mx-auto max-w-[1200px] px-4 py-0.5">
@@ -1624,7 +1641,15 @@ function MessageList({
             }
             scrollToBottom();
           }}
-          className="absolute bottom-4 left-1/2 z-20 flex size-9 -translate-x-1/2 items-center justify-center rounded-full bg-accent text-text-on-accent shadow-lg transition-opacity hover:opacity-90 active:opacity-75"
+          className={
+            'absolute left-1/2 z-20 flex size-9 -translate-x-1/2 items-center justify-center rounded-full bg-accent text-text-on-accent shadow-lg transition-all hover:opacity-90 active:opacity-75 ' +
+            // Lift above the activity dock's resting pill when it's
+            // showing so the round button and the pill don't collide
+            // at bottom-center.
+            (activeRunStates && activeRunStates.length > 0
+              ? 'bottom-16'
+              : 'bottom-4')
+          }
         >
           <ArrowDown className="size-4" />
         </button>
