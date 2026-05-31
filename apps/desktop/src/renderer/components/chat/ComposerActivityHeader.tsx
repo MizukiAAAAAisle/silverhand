@@ -54,28 +54,40 @@ function pickOrder(a: AgentRunState, b: AgentRunState): number {
 }
 
 interface ToolSummary {
-  /** Highest-count tool name, the badge's primary label. */
-  primary: string;
-  /** Sum of all tool-call counts this run. */
-  total: number;
+  /** The tool to surface on the collapsed line — the live current tool
+   *  (`state.detail`, set on each tool_call) when running, else the
+   *  highest-count tool as a fallback. */
+  name: string;
+  /** That ONE tool's own count — NOT the sum across tools. Summing under
+   *  a single tool's name reads as "shell ×everything", which is wrong. */
+  count: number;
 }
 
-function summarizeTools(state: AgentRunState): ToolSummary | null {
-  const entries = Object.entries(state.toolCallCounts ?? {}).filter(
-    ([, count]) => count > 0,
-  );
-  if (entries.length === 0) return null;
-  let primary = entries[0]![0];
-  let max = entries[0]![1];
-  let total = 0;
-  for (const [name, count] of entries) {
-    total += count;
-    if (count > max) {
-      max = count;
-      primary = name;
+/**
+ * Pick the single tool to show on the collapsed line and its own count.
+ * Prefers the live current tool (`detail`); falls back to the dominant
+ * tool by count. Never sums distinct tools under one name — the full
+ * per-tool breakdown lives in the expanded rows.
+ */
+function currentToolSummary(state: AgentRunState): ToolSummary | null {
+  if (state.status !== 'tool_running') return null;
+  const counts = state.toolCallCounts ?? {};
+  const entries = Object.entries(counts).filter(([, count]) => count > 0);
+  let name = state.detail?.trim() || null;
+  if (!name || !(name in counts)) {
+    // Fall back to the dominant tool when `detail` is absent / not yet
+    // reflected in the counts map.
+    if (entries.length === 0) return name ? { name, count: 0 } : null;
+    let max = entries[0]![1];
+    name = entries[0]![0];
+    for (const [n, c] of entries) {
+      if (c > max) {
+        max = c;
+        name = n;
+      }
     }
   }
-  return { primary, total };
+  return { name, count: counts[name] ?? 0 };
 }
 
 function displayNameOf(agent: AgentDto | undefined): string {
@@ -146,20 +158,24 @@ export function ComposerActivityHeader({
 
   const subjectAgent = agentsById.get(subject.agentId);
   const subjectName = displayNameOf(subjectAgent);
-  const tools = summarizeTools(subject);
-  const badge = subject.compacting
-    ? subject.compactionStale
-      ? 'Compacting · 慢'
-      : 'Compacting'
-    : tools
-      ? tools.total > 1
-        ? `${tools.primary} ×${tools.total}`
-        : tools.primary
+  // Main-status priority: a running tool wins over compaction for the
+  // badge slot. Show the live tool with ITS OWN count, never a grand
+  // total summed across distinct tools.
+  const tool = currentToolSummary(subject);
+  const showCompaction = subject.compacting && !tool;
+  const badge = tool
+    ? tool.count > 1
+      ? `${tool.name} ×${tool.count}`
+      : tool.name
+    : showCompaction
+      ? subject.compactionStale
+        ? 'Compacting · 慢'
+        : 'Compacting'
       : null;
   const snippet =
     subject.activitySnippet || STATUS_LABEL[subject.status] || subject.status;
   const extra = active.length - 1;
-  const StatusIcon = subject.compacting
+  const StatusIcon = showCompaction
     ? subject.compactionStale
       ? AlertTriangle
       : Layers
@@ -184,7 +200,7 @@ export function ComposerActivityHeader({
         <StatusIcon
           className={
             'size-3 shrink-0 ' +
-            (subject.compacting
+            (showCompaction
               ? subject.compactionStale
                 ? 'text-warning'
                 : 'text-text-muted'
