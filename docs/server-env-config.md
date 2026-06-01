@@ -26,7 +26,7 @@ runtime difference is explicit config (`mode='embedded'` plus a daemon
 | `SILVERHAND_DATA_DIR` | `/var/lib/silverhand` | absolute path | `dataDir.source` |
 | `SILVERHAND_DISABLE_SIGNUP` | `0` | `0` or `1` | `disableSignup.source` |
 | `SILVERHAND_LOG_LEVEL` | `info` | `error`, `warn`, `info`, or `debug` | `logLevel.source` |
-| `SILVERHAND_MIGRATE` | `0` | `0` or `1` | `migrate.source` |
+| `SILVERHAND_MIGRATE` | standalone: `0`; embedded desktop: `1` | `0` or `1` | `migrate.source` |
 
 `source` is `default` when the process used the default and `env` when the
 variable was supplied. Invalid values fail before the HTTP listener starts.
@@ -58,14 +58,20 @@ and old schedules may target a disabled host runtime.
 ## Schema Migrations
 
 Fresh installs initialize the current schema without an opt-in. Existing
-databases behave differently:
+databases behave differently by deployment mode:
 
 - If `silverhand.db` is already at the current code-supported schema version,
   startup is idempotent: no backup and no migration.
-- If `silverhand.db` is older than the current code-supported schema version,
-  startup fails by default with a message that includes the detected version,
-  target version, sibling backup path pattern, and `SILVERHAND_MIGRATE=1`.
-- With `SILVERHAND_MIGRATE=1`, startup first checkpoints WAL, copies the entire
+- Embedded desktop defaults to auto-upgrade because it is a single-user local DB.
+  The same backup/lock/fail-loud migration runner still applies. Set
+  `SILVERHAND_MIGRATE=0` only for debugging when you want startup to stop before
+  applying pending migrations.
+- Standalone server defaults to operator opt-in. If `silverhand.db` is older
+  than the current code-supported schema version, startup fails by default with
+  a message that includes the detected version, target version, sibling backup
+  path pattern, and `SILVERHAND_MIGRATE=1`.
+- When migration is allowed (`SILVERHAND_MIGRATE=1`, or embedded default),
+  startup first checkpoints WAL, copies the entire
   data directory to a sibling backup directory named
   `<data_dir>-backup-<utc>/`, then applies pending migrations. Example:
   `/var/lib/silverhand` backs up to `/var/lib/silverhand-backup-20260526T140000Z/`.
@@ -153,7 +159,7 @@ SILVERHAND_LOG_LEVEL=info \
 pnpm --filter @silverhand/server start
 ```
 
-Opt-in schema upgrade:
+Standalone opt-in schema upgrade:
 
 ```bash
 SILVERHAND_MIGRATE=1 \

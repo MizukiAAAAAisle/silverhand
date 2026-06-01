@@ -13,12 +13,15 @@ import {
 } from '@silverhand/backend';
 import type { ServerConfig } from '@silverhand/shared';
 import {
+  DEFAULT_EMBEDDED_SILVERHAND_MIGRATE,
+  resolveEmbeddedMigrationEnv,
   resolveMigrationEnv,
   resolveStandaloneServerEnv,
   type StandaloneServerEnvConfig,
 } from './config.js';
 
 export {
+  DEFAULT_EMBEDDED_SILVERHAND_MIGRATE,
   DEFAULT_SILVERHAND_DATA_DIR,
   DEFAULT_SILVERHAND_DISABLE_SIGNUP,
   DEFAULT_SILVERHAND_LISTEN,
@@ -35,6 +38,7 @@ export {
   parseListen,
   parseLogLevel,
   parseMigrate,
+  resolveEmbeddedMigrationEnv,
   resolveStandaloneServerEnv,
   resolveMigrationEnv,
   type ListenConfig,
@@ -81,7 +85,7 @@ export interface StartStandaloneSilverhandServerOptions {
 export async function startEmbeddedSilverhandServer(
   opts: StartEmbeddedSilverhandServerOptions,
 ): Promise<RunningBackend> {
-  const migrate = resolveMigrationEnv(opts.env ?? process.env);
+  const migrate = resolveEmbeddedMigrationEnv(opts.env ?? process.env);
   return startBackend({
     mode: 'embedded',
     dbPath: join(opts.dataDir, 'silverhand.db'),

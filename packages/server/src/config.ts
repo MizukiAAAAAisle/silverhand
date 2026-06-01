@@ -14,7 +14,10 @@ export const DEFAULT_SILVERHAND_LISTEN = '127.0.0.1:8080';
 export const DEFAULT_SILVERHAND_DATA_DIR = '/var/lib/silverhand';
 export const DEFAULT_SILVERHAND_DISABLE_SIGNUP = false;
 export const DEFAULT_SILVERHAND_SERVER_LOG_LEVEL: SilverhandLogLevel = 'info';
+/** Standalone server default: operator opt-in before upgrading an existing DB. */
 export const DEFAULT_SILVERHAND_MIGRATE = false;
+/** Embedded desktop default: user-friendly auto-upgrade with pre-migration backup. */
+export const DEFAULT_EMBEDDED_SILVERHAND_MIGRATE = true;
 
 export interface ListenConfig {
   hostname: string;
@@ -78,13 +81,20 @@ export function resolveStandaloneServerEnv(
 
 export function resolveMigrationEnv(
   env: NodeJS.ProcessEnv = process.env,
+  defaultValue = DEFAULT_SILVERHAND_MIGRATE,
 ): ResolvedValue<boolean> {
   return resolveValue(
     env[SILVERHAND_MIGRATE_ENV],
     parseMigrate,
     SILVERHAND_MIGRATE_ENV,
-    DEFAULT_SILVERHAND_MIGRATE,
+    defaultValue,
   );
+}
+
+export function resolveEmbeddedMigrationEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): ResolvedValue<boolean> {
+  return resolveMigrationEnv(env, DEFAULT_EMBEDDED_SILVERHAND_MIGRATE);
 }
 
 function resolveValue<T>(

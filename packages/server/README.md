@@ -9,10 +9,12 @@ The package exports two primary startup helpers from `src/index.ts`:
 - `startEmbeddedSilverhandServer(...)` is used by the desktop main process. It
   maps the desktop data directory to `silverhand.db`, passes desktop
   server-config and CLI-launcher dependencies, chooses an ephemeral local listen
-  port by default, and starts `@silverhand/backend` with `mode: 'embedded'`.
+  port by default, auto-allows schema upgrades with pre-migration backup, and
+  starts `@silverhand/backend` with `mode: 'embedded'`.
 - `startStandaloneSilverhandServer(...)` is used by the `silverhand-server`
   process. It reads standalone environment variables, prepares the data/log
-  directories, configures auth/signup/migration/logging, and starts
+  directories, configures auth/signup/migration/logging, keeps schema upgrades
+  operator-opt-in via `SILVERHAND_MIGRATE=1`, and starts
   `@silverhand/backend` with `mode: 'standalone'`.
 
 The package also owns the standalone command-line surface:

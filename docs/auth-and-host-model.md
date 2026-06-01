@@ -608,9 +608,10 @@ replica SQLite/WAL invariant.
 - `SILVERHAND_DATA_DIR` — persistent state root, default `/var/lib/silverhand`
 - `SILVERHAND_DISABLE_SIGNUP` — `0|1`, default `0`
 - `SILVERHAND_LOG_LEVEL` — `debug|info|warn|error`, default `info`
-- `SILVERHAND_MIGRATE` — `0|1`, default `0`; existing DB schema upgrades
-  require `1`, after which startup backs up the whole data dir to a sibling
-  `<data_dir>-backup-<utc>/` before applying migrations
+- `SILVERHAND_MIGRATE` — `0|1`; standalone default `0` (existing DB schema
+  upgrades require operator opt-in), embedded desktop default `1` (auto-upgrade
+  with the same pre-migration backup). Any allowed upgrade backs up the whole
+  data dir to a sibling `<data_dir>-backup-<utc>/` before applying migrations
 - (V2 / Appendix A) `SILVERHAND_AUTH_PROVIDERS` — comma list
 
 ### 7.4 Admin operations (recovery / maintenance)

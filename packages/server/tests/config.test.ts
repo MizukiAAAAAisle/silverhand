@@ -5,8 +5,11 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { apiPaths, authPaths } from '@silverhand/shared';
 import {
+  DEFAULT_EMBEDDED_SILVERHAND_MIGRATE,
   DEFAULT_SILVERHAND_DATA_DIR,
   resolveStandaloneServerEnv,
+  resolveEmbeddedMigrationEnv,
+  resolveMigrationEnv,
   ServerEnvConfigError,
   startStandaloneSilverhandServer,
 } from '../src/index.js';
@@ -46,6 +49,27 @@ describe('standalone server env config', () => {
 
     expect(resolveStandaloneServerEnv({ SILVERHAND_MIGRATE: '1' }).migrate).toEqual({
       value: true,
+      source: 'env',
+    });
+  });
+
+  it('resolves deployment-aware migration defaults', () => {
+    expect(resolveMigrationEnv({})).toEqual({
+      value: false,
+      source: 'default',
+    });
+    expect(resolveMigrationEnv({}, DEFAULT_EMBEDDED_SILVERHAND_MIGRATE)).toEqual({
+      value: true,
+      source: 'default',
+    });
+    expect(resolveEmbeddedMigrationEnv({})).toEqual({
+      value: true,
+      source: 'default',
+    });
+    expect(
+      resolveEmbeddedMigrationEnv({ SILVERHAND_MIGRATE: '0' }),
+    ).toEqual({
+      value: false,
       source: 'env',
     });
   });
