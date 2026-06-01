@@ -353,11 +353,7 @@ function ProbeBannerView({ submit }: { submit: SubmitState }): JSX.Element | nul
   return (
     <BannerShell
       tone="error"
-      title={
-        submit.reason === 'storage_unavailable'
-          ? 'Could not write the profile — secure storage is unavailable.'
-          : 'Could not write the profile.'
-      }
+      title="Could not write the profile."
     >
       {submit.detail ? (
         <p className="text-[11px] text-text-muted">{submit.detail}</p>

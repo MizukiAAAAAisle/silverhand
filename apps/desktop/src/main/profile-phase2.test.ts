@@ -570,26 +570,6 @@ function makeReconcileDeps(opts: ReconcileFakeOptions): {
 }
 
 describe('reconcilePartialApplyAtBoot — Cindy gate 1: profile read failure → unusable_profile', () => {
-  // Pin all three failing read reasons separately. The discriminator
-  // must reach `state.reason` verbatim — `parse_failed` carries a
-  // detail; the other two reuse the reason name as detail.
-  it('decrypt_failed → unusable_profile/decrypt_failed', async () => {
-    const { deps, state } = makeReconcileDeps({
-      read: { ok: false, reason: 'decrypt_failed' },
-      daemonConfig: null,
-    });
-    const out = await reconcilePartialApplyAtBoot(deps);
-    expect(out).toEqual({
-      kind: 'unusable_profile',
-      reason: 'decrypt_failed',
-      detail: 'decrypt_failed',
-      lastReadAt: 1_700_000_500_000,
-    });
-    // gate 1 invariant: phase-2 MUST NOT run when profile is
-    // unreadable — there's no profile to derive daemon-config from.
-    expect(state.phase2Calls).toEqual([]);
-  });
-
   it('parse_failed → unusable_profile/parse_failed (detail propagated)', async () => {
     const { deps, state } = makeReconcileDeps({
       read: { ok: false, reason: 'parse_failed', detail: 'invalid version field' },
@@ -605,29 +585,14 @@ describe('reconcilePartialApplyAtBoot — Cindy gate 1: profile read failure →
     expect(state.phase2Calls).toEqual([]);
   });
 
-  it('storage_unavailable → unusable_profile/storage_unavailable', async () => {
-    const { deps, state } = makeReconcileDeps({
-      read: { ok: false, reason: 'storage_unavailable' },
-      daemonConfig: null,
-    });
-    const out = await reconcilePartialApplyAtBoot(deps);
-    expect(out).toEqual({
-      kind: 'unusable_profile',
-      reason: 'storage_unavailable',
-      detail: 'storage_unavailable',
-      lastReadAt: 1_700_000_500_000,
-    });
-    expect(state.phase2Calls).toEqual([]);
-  });
-
   // Distinct-from-no_profile pin: even if the daemon-config is
   // ALSO absent (so the cheap inference might be "nothing
-  // configured"), an unreadable profile blob is still
+  // configured"), an unreadable profile file is still
   // `unusable_profile`. Cindy 5c-1 note explicitly forbade
   // collapsing to `<none>` / `no_profile` here.
-  it('decrypt_failed + no daemon-config → still unusable_profile (NOT no_profile)', async () => {
+  it('parse_failed + no daemon-config → still unusable_profile (NOT no_profile)', async () => {
     const { deps } = makeReconcileDeps({
-      read: { ok: false, reason: 'decrypt_failed' },
+      read: { ok: false, reason: 'parse_failed', detail: 'invalid profile' },
       daemonConfig: null,
     });
     const out = await reconcilePartialApplyAtBoot(deps);

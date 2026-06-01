@@ -579,7 +579,7 @@
           <rect x="60" y="310" width="260" height="84" rx="8" class="npurple"></rect>
           <text x="190" y="338" text-anchor="middle" class="nh">Desktop UI (user A)</text>
           <text x="190" y="358" text-anchor="middle" class="ns">Electron renderer + main</text>
-          <text x="190" y="374" text-anchor="middle" class="ns">session bearer · safeStorage</text>
+          <text x="190" y="374" text-anchor="middle" class="ns">session bearer · 0600 local file</text>
           <text x="190" y="388" text-anchor="middle" class="ns">main 仍管 local daemon supervisor</text>
 
           <rect x="60" y="420" width="260" height="78" rx="8" class="npurple"></rect>
@@ -792,7 +792,7 @@
       <div class="cell" style="grid-column: 2 / span 2;"><strong>完全一致</strong>。embedded 的 IPC / loopback HTTP 只是 transport adapter，承载的 frame envelope 与 standalone 的 HTTPS / WSS 同形——<strong>禁止 protocol fork</strong>（R4 acceptance gate：protocol parity test 钉死）。</div>
 
       <div class="cell">UI ↔ backend</div>
-      <div class="cell">renderer → main IPC proxy → 进程内 Hono fetch；frame 是 HTTP request shape，只是 transport 不出网。session bearer 在 main safeStorage。</div>
+      <div class="cell">renderer → main IPC proxy → 进程内 Hono fetch；frame 是 HTTP request shape，只是 transport 不出网。session bearer 在 main-owned 0600 local file。</div>
       <div class="cell">UI（Electron 或 browser）→ HTTPS（REST）+ WSS（viewer-scope push）；TLS 必须；session bearer 在客户端本地。<strong>frame 与 embedded 同形</strong>。</div>
 
       <div class="cell">daemon ↔ backend</div>
@@ -811,8 +811,8 @@
       <div class="cell">backend 端 DB（Postgres / 共享 SQLite）；daemon 离线 / 网络抖动期间 inbox 是<strong>唯一可达 buffer</strong>，daemon 重连后回放。</div>
 
       <div class="cell">凭证存储</div>
-      <div class="cell">session：safeStorage(0o600)；host_token：<code>daemon-config.json</code> 0o600 atomic tmp+rename。</div>
-      <div class="cell">session：UI 客户端本地（cookie / safeStorage）；host_token：local daemon 仍是 daemon-config.json，sandbox daemon 由 secret store / 镜像 env 注入。</div>
+      <div class="cell">session：<code>session.bin</code> 0o600 plaintext；host_token：<code>daemon-config.json</code> 0o600 atomic tmp+rename。</div>
+      <div class="cell">session：UI 客户端本地（cookie / 0o600 desktop file）；host_token：local daemon 仍是 daemon-config.json，sandbox daemon 由 secret store / 镜像 env 注入。</div>
 
       <div class="cell">daemon-placement 维度</div>
       <div class="cell" style="grid-column: 2 / span 2;"><strong>两种 placement 共存</strong>：用户机器 local（<code>fs.local</code>）+ datacenter sandbox container（<code>fs.sandbox.&lt;name&gt;</code>）。<strong>不影响</strong> wire protocol，只影响 capability / fs 边界；与 backend 部署形态正交。</div>

@@ -127,7 +127,7 @@ codepath is identical to the multi-user case.
 - Error uniformity for credential failures (constant-time compare +
   401 `auth_failed`).
 - Desktop UI: Setup Wizard (signup / login forms), Logout button,
-  password storage via `safeStorage.encryptString` → 0600 file.
+  session storage via a main-owned 0600 local file.
 
 **Out of scope** (push back if asked):
 
@@ -148,8 +148,8 @@ codepath is identical to the multi-user case.
 3. **A.3 ACL applied across existing routes**: every backend route
    audited; scoped by viewer; tests pin the three ACL classes per
    resource. `app_settings.viewer_user_id` fallback removed.
-4. **A.4 Desktop Setup Wizard + safeStorage session**: renderer Setup
-   Wizard, main-process auth client, encrypted blob persistence,
+4. **A.4 Desktop Setup Wizard + local session file**: renderer Setup
+   Wizard, main-process auth client, 0600 session persistence,
    logout flow.
 
 **Acceptance criteria**:
@@ -174,8 +174,8 @@ codepath is identical to the multi-user case.
 - `SILVERHAND_DISABLE_SIGNUP=1` → `POST /auth/signup` returns 404
   identical to a missing route; startup log prints the resolved value.
 - Desktop: fresh install → Setup Wizard appears; signup → login →
-  logout cycle works; encrypted session blob survives restart;
-  unencrypted token never written to disk or `localStorage`.
+  logout cycle works; 0600 local session file survives restart;
+  token never reaches renderer, `localStorage`, logs, or IPC payloads.
 
 **Detail spec**: `auth-and-host-model.md` §2–§4, §8.1–§8.3, §10.
 
@@ -358,8 +358,8 @@ in-process shortcuts on every audit.
   failing any returns 404. This route is independent of
   `SILVERHAND_DISABLE_SIGNUP`.
 - Renderer never sees `user_token` plaintext for embedded mode either;
-  bootstrap returns a normal session that's persisted via
-  `safeStorage` just like the remote signup path. Event WS uses that
+  bootstrap returns a normal session that's persisted via the same
+  main-owned 0600 local session file as the remote signup path. Event WS uses that
   same session subject via an Electron-main-owned `HttpOnly` cookie
   scoped to `/api/ws/events`; renderer never receives a bearer field in
   `BackendInfo`.
@@ -390,7 +390,7 @@ in-process shortcuts on every audit.
    mode.
 4. **C.4 Embedded bootstrap**: server-side route + the four
    constraints + desktop reads bootstrap file and POSTs over loopback;
-   embedded user flows through the same `safeStorage` session path.
+   embedded user flows through the same main-owned 0600 local session path.
 
 **Acceptance criteria**:
 
@@ -1202,7 +1202,7 @@ this list — round 4 of this roadmap moved it into Stage D2.
     for all desktop→backend transports across pre-auth + post-auth;
     minimal shape `{ version, server_url, created_at, updated_at }`
     (no SPKI pin, no insecure_dev); desktop-main exclusive owner,
-    `safeStorage`-encrypted; daemon never reads profile, only
+    stored as a main-owned 0600 plaintext file; daemon never reads profile, only
     reads derived daemon-config; daemon-config is additive
     migration (preserves existing `server_url` / `host_id` /
     `host_token`, adds `profile_version` only); profile update

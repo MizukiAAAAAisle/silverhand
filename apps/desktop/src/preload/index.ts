@@ -245,7 +245,7 @@ export type DesktopProfileSaveWithTestResult =
   | {
       ok: false;
       phase: 'write';
-      reason: 'storage_unavailable' | 'write_failed';
+      reason: 'write_failed';
       detail?: string;
     };
 
@@ -291,7 +291,7 @@ export type DesktopPartialApplyState =
   | { kind: 'no_profile' }
   | {
       kind: 'unusable_profile';
-      reason: 'storage_unavailable' | 'decrypt_failed' | 'parse_failed';
+      reason: 'parse_failed';
       detail: string;
       lastReadAt: number;
     }
@@ -360,7 +360,7 @@ const api = {
   saveServerUrl: (input: { serverUrl: string }): Promise<DesktopSaveServerUrlResult> =>
     ipcRenderer.invoke('settings:saveServerUrl', input),
   /** D4.a Commit 2 — read the persisted server connection profile or
-   *  null. Renderer-safe redacted view; encrypted blob never crosses. */
+   *  null. Renderer-safe redacted view; raw profile contents never cross. */
   getServerConnectionProfile: (): Promise<ServerConnectionProfileView | null> =>
     ipcRenderer.invoke('profile:get'),
   /** D4.a Commit 2 — Setup Wizard / Settings full save pipeline. Test

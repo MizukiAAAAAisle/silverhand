@@ -168,7 +168,7 @@ export interface DecideBackendBootModeInput {
    * the profile file is absent (first run) or unreadable. We accept
    * the **view** rather than the full profile because (a) the
    * decision only needs `server_url`, and (b) the redacted view is
-   * what bootstrap already has on hand (the encrypted full profile
+   * what bootstrap already has on hand (the full profile
    * is read only when the writer needs to bump version).
    */
   profileView: ServerConnectionProfileView | null;

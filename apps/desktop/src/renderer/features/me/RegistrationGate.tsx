@@ -14,7 +14,8 @@ type AuthMode = 'signup' | 'login';
 /**
  * Full-screen desktop auth gate. The renderer never receives the
  * `user_token`: submit calls an IPC method, main performs `/auth/*`,
- * persists the encrypted session, and returns only the resolved user.
+ * persists the main-owned 0600 local session file, and returns only
+ * the resolved user.
  */
 export function RegistrationGate({
   signupEnabled,

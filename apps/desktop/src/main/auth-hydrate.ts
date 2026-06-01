@@ -23,7 +23,7 @@
  * This module splits the outcome into a typed union and provides
  * a pure `executeHydrate()` orchestrator that takes injected
  * dependencies, so the three-arm flow is unit-testable without
- * Electron / safeStorage / fetch / disk side effects. `index.ts`
+ * Electron / fetch / disk side effects. `index.ts`
  * wires the real dependencies in. The regression test pinned by
  * Cindy lives in `__tests__/auth-hydrate.test.ts`.
  */
@@ -120,7 +120,7 @@ export type HydrateOutcome =
   | 'unreachable';
 
 export interface HydrateDeps {
-  /** Read the persisted session token from disk (safeStorage). */
+  /** Read the persisted session token from disk. */
   loadToken: () => string | null;
   /** Validate the token against the active backend. */
   validate: (token: string) => Promise<SessionValidationResult>;
@@ -142,7 +142,7 @@ export interface HydrateDeps {
 
 /**
  * The orchestrator. Pure in the sense that all side effects go
- * through `deps` — no `fetch`, no `safeStorage`, no `unlinkSync`
+ * through `deps` — no `fetch`, no direct file I/O, no `unlinkSync`
  * appear here. The three-arm switch is the load-bearing invariant
  * (Cindy P1):
  *

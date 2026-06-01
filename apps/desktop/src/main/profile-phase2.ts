@@ -373,9 +373,8 @@ export async function performProfilePhase2(
  *     completed, or `profile:clear` was invoked). Distinct from
  *     `fully_applied` for telemetry / future UX even though both
  *     render no banner today.
- *   - `unusable_profile` — profile blob exists but the storage layer
- *     could not return it (`storage_unavailable` / `decrypt_failed`
- *     / `parse_failed`). Cindy 5c-1 review note: profile read
+ *   - `unusable_profile` — profile file exists but the storage layer
+ *     could not parse it (`parse_failed`). Cindy 5c-1 review note: profile read
  *     failure ≠ profile absent — the typed repair state must
  *     surface so the renderer offers a "reset profile" affordance
  *     instead of pretending the profile is in-sync.
@@ -404,7 +403,7 @@ export type PartialApplyState =
   | { kind: 'no_profile' }
   | {
       kind: 'unusable_profile';
-      reason: 'storage_unavailable' | 'decrypt_failed' | 'parse_failed';
+      reason: 'parse_failed';
       detail: string;
       lastReadAt: number;
     }
@@ -455,12 +454,12 @@ export function derivePartialApplyState(
  * Runs once at desktop launch (after `hostClient` / backend are ready
  * AND after the auth-bootstrap claim attempt has settled) so the
  * renderer's banner reflects reality even when the previous session
- * crashed mid-phase-2 or the user mutated the on-disk blob between
+ * crashed mid-phase-2 or the user mutated the on-disk profile between
  * launches.
  *
  * State machine (priority top-down):
- *   1. profile read fails (`storage_unavailable` / `decrypt_failed` /
- *      `parse_failed`) → `unusable_profile`. Cindy 5c-1 review note:
+ *   1. profile read fails (`parse_failed`) → `unusable_profile`.
+ *      Cindy 5c-1 review note:
  *      profile read failure ≠ profile absent — the typed repair
  *      state must NOT collapse to `<none>` / `fully_applied`. UI
  *      surfaces a "reset profile" affordance keyed off this.
@@ -519,14 +518,13 @@ export async function reconcilePartialApplyAtBoot(
       // `fully_applied` for telemetry; same UX (no banner).
       return { kind: 'no_profile' };
     }
-    // Cindy 5c-3 gate 1: profile blob exists but the storage layer
+    // Cindy 5c-3 gate 1: profile file exists but the storage layer
     // could not return it. Surface the typed repair state — do NOT
-    // fall through to "fully_applied" or "no_profile". `parse_failed`
-    // carries a `detail`; the other two arms reuse the reason name.
+    // fall through to "fully_applied" or "no_profile".
     return {
       kind: 'unusable_profile',
       reason: read.reason,
-      detail: 'detail' in read ? read.detail : read.reason,
+      detail: read.detail,
       lastReadAt: now(),
     };
   }

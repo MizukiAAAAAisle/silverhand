@@ -4,6 +4,93 @@
 
 ---
 
+## 2026-06-01 — 打包 .app 无法打开修复 + electron-builder 25→26 升级
+
+### 症状
+
+`./scripts/package.sh` 产出的 `Silverhand.app` 双击无法打开（dmg 安装后被
+Gatekeeper 硬拦）。
+
+### 根因
+
+`electron-builder.yml` 的 `mac.identity: null` 被误以为是"用本地 codesign
+做 ad-hoc 签名"，实际在 electron-builder 里 `identity: null` 是**完全跳过签名**
+（`app-builder-lib` `macPackager.js`：`if (qualifier === null) { ...; return
+false }`，日志 `skipped macOS code signing`）。本机也没有任何 codesigning
+身份（`security find-identity -v -p codesigning` → 0 valid）。于是产物只带
+Electron 自带的 stub 签名（`Identifier=Electron`、`Info.plist` not bound、无
+`CodeResources`），被 macOS 判为无效 bundle → 无法打开；dmg/zip 再叠加
+quarantine xattr → 硬拦。
+
+### 修复
+
+新增 `apps/desktop/scripts/afterPack.cjs`，经 `electron-builder.yml` 的
+`afterPack:` 挂载：在 `.app` 组装完成、dmg/zip 生成**之前**执行
+`codesign --deep --force --sign -` + `--verify --deep --strict`。
+- 选 `afterPack` 而非 `afterSign`：当未发生签名时 electron-builder 会跳过
+  `afterSign`（`skipping "afterSign" hook as no signing occurred`）。
+- 保留 `identity: null` 让内置签名干净 no-op，hook 成为签名的唯一来源。
+- 修正了 `electron-builder.yml` 与 `docs/build-release.md` 里"null = ad-hoc"
+  的错误注释。
+- 结果：`Identifier=com.silverhand.desktop`、`Info.plist` bound、
+  `--verify --deep --strict` 通过。ad-hoc 仍会 `spctl -a` rejected（故
+  `gatekeeperAssess: false`），清掉 quarantine 即可打开。
+
+### electron-builder 25.1.8 → 26.8.1
+
+- 26.0.0 的 breaking changes 与本项目配置无交集：移除 `winOptions`/`macOptions`
+  的废弃字段（我们用的 `win.signtoolOptions`/`mac.notarize` 都没用到）、
+  `.desktop` actions（Linux）、node_modules 子目录支持（内部）；asar 引擎换成
+  官方 `@electron/asar`（兼容）。已知 26.0 回归 #9092（缺 `.exe`）是 Windows-only。
+- 升级后无需改任何配置。`./scripts/package.sh --dir` 通过，afterPack 签名正常。
+- 新增一条无害告警：`arm64 requires signing, but identity is set to null and
+  signing is being skipped`（我们的 afterPack 已覆盖）。`@tailwindcss/oxide-*` /
+  `lightningcss-*` 的 "dependency not found on disk" 也无害（其它平台的可选原生包）。
+
+### electron-builder 26 dmg 步骤 404（后续修复）
+
+完整 `package.sh`（带 dmg）在 v26 下报 `404` 拉
+`cdn.npmmirror.com/binaries/electron/dmg-builder@1.2.0/dmgbuild-bundle-arm64-*.tar.gz`。
+- 根因：v26 的 dmg-builder 改用 `@electron/get` 下载一个自带的 `dmgbuild`
+  bundle（Python 工具链）。`@electron/get` 的 `mirrorVar` 读 `ELECTRON_MIRROR`
+  的优先级**高于** dmg-builder 传入的 mirror（github electron-builder-binaries），
+  于是 package.sh 给 electron 二进制设的 `ELECTRON_MIRROR`（electron 路径）劫持了
+  bundle 的 URL，指到一个没有该文件的 npmmirror electron 路径 → 404。
+- 修复：`scripts/package.sh` 新增 `stage_dmgbuild_bundle()`，在 dmg 构建前
+  从 electron-builder-binaries 镜像（github 兜底）预拉 bundle、按 dmgUtil.js 里的
+  sha256 校验、解压，导出 `CUSTOM_DMGBUILD_PATH` 指向解压出的 `dmgbuild`——
+  dmg-builder 优先用这个环境变量，彻底跳过网络解析。release/version/arch/校验和
+  都从已安装的 dmg-builder 源码里解析（经 electron-builder 链式 resolve，因为
+  dmg-builder 是 pnpm 传递依赖），升级 electron-builder 后自动跟随，不写死。
+- 结果：zip + dmg 均构建成功，`Silverhand.app` `--verify --deep --strict` 通过；
+  二次运行走缓存命中不再下载。`--dir` 构建不碰 dmg，故跳过 staging。
+
+### 打包后启动崩溃：@node-rs/argon2 native binding（后续修复）
+
+装好的 app 启动即崩：`Error: Failed to load native binding`，栈指向
+`app.asar/node_modules/@node-rs/argon2/index.js`。
+- 根因：`@node-rs/argon2`（backend `auth/password.ts` 用来做密码哈希，被
+  electron-vite externalize）的原生 binding 在平台子包
+  `@node-rs/argon2-darwin-arm64` 里。pnpm 把该可选依赖嵌套在虚拟 store
+  （`.pnpm/@node-rs+argon2@2.0.2/node_modules/@node-rs/argon2-darwin-arm64`），
+  没有 hoist 到顶层；electron-builder 不会把这种嵌套的可选原生依赖打进 asar
+  （electron-userland/electron-builder#6289）。结果 asar 里只有 argon2 的 JS，
+  没有 `.node`，loader 两条路径（`./argon2.darwin-arm64.node` 与
+  `require('@node-rs/argon2-darwin-arm64')`）都失败 → 抛错。对比
+  `lightningcss-darwin-arm64` 被 hoist 到顶层所以正常打进去了。
+- 修复：在 `apps/desktop/package.json` 显式声明
+  `optionalDependencies: { "@node-rs/argon2-darwin-arm64": "^2.0.2" }`
+  （pnpm 据此把它链到 `apps/desktop/node_modules/@node-rs/`，electron-builder
+  即可纳入），并在 `electron-builder.yml` 的 `asarUnpack` 加
+  `node_modules/@node-rs/argon2-darwin-arm64/**/*` 让 `.node` 落到磁盘。
+  没用社区常见的 `node-linker=hoisted`——那会重塑整个 monorepo 的 node_modules
+  布局，冲击 better-sqlite3 的 ABI swap 机制。
+- 验证：用打包后的 Electron 运行时（`ELECTRON_RUN_AS_NODE=1`）从 asar 里
+  `require('@node-rs/argon2').hash(...)` 成功产出合法哈希；完整 dmg 重打通过。
+  注意：旧的 `/Applications/Silverhand.app` 需用新 dmg 重装。
+
+---
+
 ## 2026-05-30 — Remote backend D4.e-6：runtime_start 语义化 + M1 closure
 
 ### 背景

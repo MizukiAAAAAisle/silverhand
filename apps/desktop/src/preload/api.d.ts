@@ -304,7 +304,7 @@ export type DesktopProfileSaveWithTestResult =
   | {
       ok: false;
       phase: 'write';
-      reason: 'storage_unavailable' | 'write_failed';
+      reason: 'write_failed';
       detail?: string;
     };
 
@@ -369,11 +369,11 @@ export type DesktopPartialApplyState =
   | { kind: 'no_profile' }
   | {
       kind: 'unusable_profile';
-      // D4.a Commit 5c-3 (Cindy 5c-1 review note) — profile blob
+      // D4.a Commit 5c-3 (Cindy 5c-1 review note) — profile file
       // exists but the storage layer could not return it. Distinct
       // from `no_profile` (file absent) — renderer surfaces "reset
       // profile" affordance, not "configure backend".
-      reason: 'storage_unavailable' | 'decrypt_failed' | 'parse_failed';
+      reason: 'parse_failed';
       detail: string;
       lastReadAt: number;
     }
@@ -445,9 +445,9 @@ declare global {
       /**
        * D4.a Commit 2 — read the persisted server connection profile,
        * if any. Returns the renderer-safe redacted view (just
-       * `server_url + updated_at`); encrypted bytes never cross IPC.
+       * `server_url + updated_at`); raw profile contents never cross IPC.
        * Null when no profile is persisted (pre-Wizard state) or when
-       * the on-disk blob failed to decrypt — the renderer should
+       * the on-disk profile failed to parse — the renderer should
        * surface a "reset profile" affordance in the failure case
        * (and the storage layer logs the diagnostic so an operator
        * can correlate).
@@ -469,7 +469,7 @@ declare global {
        * D4.a Commit 2 — explicit reset / disconnect affordance.
        * Idempotent — reports whether it actually removed a file. Used
        * for both the "disconnect from remote backend" UX and recovery
-       * from a wedged on-disk blob.
+       * from a wedged on-disk profile.
        */
       clearServerConnectionProfile(): Promise<DesktopClearProfileResult>;
       /**

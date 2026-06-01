@@ -453,13 +453,13 @@ see §8 (TLS policy) and §10 (non-goals).
 
 - **Desktop main process exclusive owner**. File path:
   `~/.silverhand/desktop/server-profile.bin`, mode `0600`, contents
-  encrypted via `safeStorage.encryptString` (same primitive A.4
-  already uses for the user session bearer).
+  JSON-serialized plaintext under the V1 0600 local credential/profile
+  file policy.
 - **Persisted profile flows main → renderer only as a redacted
   view**. Renderer-facing IPC surfaces (Settings UI, Setup Wizard
   "current profile" panel) get
-  `{ server_url, updated_at }` — encrypted blob never crosses IPC,
-  consistent with A.4 secret-handling convention.
+  `{ server_url, updated_at }` — raw profile contents never cross IPC,
+  consistent with A.4 local-file handling convention.
 - **Renderer → main URL submission is allowed**. The Setup Wizard
   and Settings URL editor both pass user-entered `server_url`
   through IPC to main; main runs the §7.5 validate-and-commit flow.
@@ -964,9 +964,7 @@ acceptance):
    respawn naturally converges.
 
 If none of the three converges, capture
-`~/.silverhand/desktop/server-profile.bin` (the safeStorage-
-encrypted profile blob — do NOT expect to be able to open it
-directly; capture as-is) +
+`~/.silverhand/desktop/server-profile.bin` (0600 JSON profile) +
 `~/.silverhand/daemon-config.json` and the desktop logs and
 escalate — this should be a real bug, not normal operation.
 
@@ -1110,8 +1108,8 @@ Operator implications:
 
 - **Do not** rely on this file existing or being valid for a
   remote-mode deploy. The remote-mode boot path reads
-  `~/.silverhand/desktop/server-profile.bin` (§7.2; a
-  safeStorage-encrypted blob, not human-readable JSON), not
+  `~/.silverhand/desktop/server-profile.bin` (§7.2; the
+  main-owned 0600 JSON profile), not
   this file.
 - Deleting this file is safe on a remote-mode desktop and
   triggers no behavior change. On an embedded-mode desktop
@@ -1322,7 +1320,7 @@ tool. T1 / M2 may layer one on later.
     "Server connection profile" inserted as the single source of
     `{server_url, spki_pin?}` for all desktop→backend transport
     across pre-auth + post-auth. Storage is desktop-main exclusive
-    (`safeStorage`-encrypted, mode 0600); daemon never reads the
+    (0600 JSON, desktop-main owned); daemon never reads the
     profile, only reads the derived daemon-config artifact (Cindy
     correction). Profile update flow is "validated-first + staged
     writes + old retained on pre-commit failure; post-profile-commit

@@ -89,7 +89,7 @@ listed in the order they appear in main.
 | IPC channel | Preload method | Tag | Notes / V1 disposition |
 |---|---|---|---|
 | `backend:info` | `getBackendInfo` | **protocol metadata** | Returns `{url, mode, local_host_id, local_host_status}` only. Renderer needs this neutral connection/host metadata to address the backend and gate host-kind UX; no bearer or embedded-only auth token crosses IPC after C.4. |
-| `auth:getState` | `getAuthState` | **data** | Main-owned auth-session proxy. Renderer receives safe auth state (`authenticated` + user DTO or `unauthenticated`) but never receives the session bearer. Kept as a narrowly-shaped HTTP proxy because main owns `safeStorage` / token lifecycle. |
+| `auth:getState` | `getAuthState` | **data** | Main-owned auth-session proxy. Renderer receives safe auth state (`authenticated` + user DTO or `unauthenticated`) but never receives the session bearer. Kept as a narrowly-shaped HTTP proxy because main owns the 0600 local session file / token lifecycle. |
 | `auth:signup` | `signup` | **data** | Main POSTs `/auth/signup`, persists the returned session bearer, and returns only `{ok, user}` or sanitized failure metadata. No token crosses IPC. |
 | `auth:login` | `login` | **data** | Same as `auth:signup`, for `/auth/login`. |
 | `auth:logout` | `logout` | **data** | Main clears its saved session and best-effort revokes it server-side. Renderer only receives `{ok:true}`. |
@@ -186,9 +186,9 @@ longer reads a bearer for those paths. C.4 also removed the remaining
 renderer token surface (`event_auth_token`) by giving WS the same
 session subject per mode:
 
-- embedded → bootstrap session persisted via `safeStorage`
+- embedded → bootstrap session persisted via the main-owned 0600 local session file
   (initialised by `/auth/embedded-bootstrap` on first launch)
-- remote → signup/login session persisted via `safeStorage`
+- remote → signup/login session persisted via the main-owned 0600 local session file
 
 | Site | Today | C.4 disposition |
 |---|---|---|

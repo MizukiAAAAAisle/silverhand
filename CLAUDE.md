@@ -17,12 +17,13 @@ Authoritative design docs:
 - `docs/design-new-theme.md` — theme/token guide (colors, spacing, typography per theme).
 - `docs/progress.md` — append-only history; add a dated section after meaningful changes.
 - `docs/electron-agent-hub.md` — original product/architecture brief.
+- `docs/electron-install-troubleshooting.md` — fix for `pnpm dev` failing with `Electron uninstall` (half-installed electron / missing `path.txt`). Note it's an `extract-zip` extraction failure, **not** a download/mirror problem.
 
 ## Common commands
 
 All commands run from the repo root unless noted.
 
-- `pnpm dev` — full dev launcher (`./scripts/dev.sh`): installs deps if missing, swaps the `better-sqlite3` native binding to the Electron ABI (cached per-ABI under `node_modules/.bsq-cache/`), starts `electron-vite dev`. Use `--clean` to drop build outputs, `--reinstall` to wipe `node_modules` and the binding cache.
+- `pnpm dev` — full dev launcher (`./scripts/dev.sh`): installs deps if missing, swaps the `better-sqlite3` native binding to the Electron ABI (cached per-ABI under `node_modules/.bsq-cache/`), starts `electron-vite dev`. Use `--clean` to drop build outputs, `--reinstall` to wipe `node_modules` and the binding cache. If this fails with `Error: Electron uninstall`, the electron package is half-installed — see `docs/electron-install-troubleshooting.md` (not a mirror/download issue).
 - `pnpm dev:headless` — backend only (no Electron window). Useful for `curl` smoke-tests against `http://127.0.0.1:<port>`.
 - `pnpm test` — runs vitest under **system node** via `./scripts/test.sh`. The script swaps the `better-sqlite3` binding back to the Node ABI before invoking vitest. Pass-through args supported: `./scripts/test.sh packages/backend/src/foo.test.ts -t 'name'`.
 - `pnpm typecheck` — `tsc --noEmit` across all workspaces (`pnpm -r typecheck`).

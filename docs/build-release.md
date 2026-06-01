@@ -95,6 +95,9 @@ Three things this dance handles that electron-builder alone can't:
 | 3 | "runtime 'codex' is not installed (no binary on PATH)" only in packaged build, fine in dev | macOS GUI apps inherit launchd PATH, not the shell PATH | login-shell PATH probe in `main/index.ts` (see point 3 above) |
 | 4 | `silverhand: command not found` inside an agent | CLI bundle missing from the packaged resources, or the per-spawn PATH shim was not prepended | ensure `pnpm --filter @silverhand/cli build` runs before packaging and `extraResources` copies to `silverhand-cli/cli.mjs` (the `.mjs` rename is required — Node rejects ESM `.js` without a sibling `package.json` type=module) |
 | 5 | codex spawns OK but can't reach chatgpt.com | proxy URL had `https://` scheme; almost all local proxies (Clash/mihomo) speak plain HTTP CONNECT | `expandProxyEnv()` in `packages/backend/src/proxy.ts` rewrites `https://` → `http://` and derives `socks5://` for `all_proxy` |
+| 6 | packaged `.app` won't open / "is damaged" after `package.sh` | `mac.identity: null` does NOT ad-hoc sign — electron-builder *skips* signing, leaving only Electron's stub sig (Identifier=Electron, no CodeResources) → invalid bundle | `scripts/afterPack.cjs` ad-hoc deep-signs the .app before dmg/zip are built. See "Signing & notarization" below |
+| 7 | (electron-builder **26+**) dmg step fails with `404` for `cdn.npmmirror.com/binaries/electron/dmg-builder@.../dmgbuild-bundle-*.tar.gz` | v26's dmg-builder fetches a `dmgbuild` bundle via `@electron/get`, which honors `ELECTRON_MIRROR` over the mirror it passes — so our *electron* mirror hijacks the *electron-builder-binaries* URL to a path that 404s | `scripts/package.sh` `stage_dmgbuild_bundle()` pre-downloads the bundle from the electron-builder-binaries mirror (github fallback), checksum-verifies it, and exports `CUSTOM_DMGBUILD_PATH` so dmg-builder skips the network |
+| 8 | packaged app crashes at launch: `Error: Failed to load native binding` from `app.asar/node_modules/@node-rs/argon2/index.js` | `@node-rs/argon2`'s native binding ships in a platform-specific optional dep (`@node-rs/argon2-darwin-arm64`) that pnpm nests in its virtual store; electron-builder doesn't pull nested optional native deps into the asar (electron-userland/electron-builder#6289) | declare `@node-rs/argon2-darwin-arm64` as a direct `optionalDependencies` entry in `apps/desktop/package.json` (surfaces it so electron-builder includes it) **and** add it to `asarUnpack` so the `.node` lands on disk. Chose this over `node-linker=hoisted` to avoid reshaping the whole monorepo's node_modules (would disrupt the better-sqlite3 ABI swap) |
 
 ---
 
@@ -131,20 +134,49 @@ electron-builder cache (`~/Library/Caches/electron/`) then retry.
 
 ---
 
-## Signing & notarization (not yet wired)
+## Signing & notarization
 
-- `mac.identity: null` in `electron-builder.yml` → ad-hoc signed
-  with the local `codesign --sign -`. Gatekeeper warns on first
-  open ("App can't be opened because it is from an unidentified
-  developer"). User has to right-click → Open the first time,
-  then it remembers.
-- For wider distribution: get an Apple Developer ID Application
-  certificate, set `mac.identity: "Developer ID Application: <name>
-  (<team-id>)"`, set `mac.hardenedRuntime: true`, add a notarization
-  step (`afterSign` hook calling `@electron/notarize`).
+### How we ad-hoc sign (and why it's not via `identity`)
+
+The app is **ad-hoc signed** so macOS will open it on the build machine.
+Important gotcha that bit us once: `mac.identity: null` does **NOT** ad-hoc
+sign. In electron-builder it means *skip signing entirely* — the packager logs
+`skipped macOS code signing  reason=identity explicitly is set to null` and
+returns (see `app-builder-lib` `macPackager.js`: `if (qualifier === null) {
+...; return false }`). With signing skipped, the bundle keeps only Electron's
+own linker-signed stub (`Identifier=Electron`, `Info.plist` not bound, no
+`CodeResources`), which macOS rejects as an invalid bundle — the packaged app
+**won't open**, and once the dmg/zip add a quarantine xattr it's a hard
+Gatekeeper block.
+
+The actual ad-hoc signature is applied by **`apps/desktop/scripts/afterPack.cjs`**
+(wired via `afterPack:` in `electron-builder.yml`). It runs `codesign --deep
+--force --sign -` on the assembled `.app` after files/asar/extraResources are
+in place but **before** the dmg/zip are built, so the artifacts ship a valid
+signature (`Identifier=com.silverhand.desktop`, `Info.plist` bound,
+`--verify --deep --strict` passes).
+
+- Why `afterPack`, not `afterSign`: electron-builder **skips the `afterSign`
+  hook when no signing occurred** (`skipping "afterSign" hook as no signing
+  occurred`). Since builtin signing is disabled, only `afterPack` runs.
+- We keep `identity: null` so the builtin signer cleanly no-ops; the hook is
+  the single source of the signature. (electron-builder 26 additionally prints
+  `arm64 requires signing, but identity is set to null and signing is being
+  skipped` — that warning is expected and harmless; our hook covers it.)
+- Ad-hoc apps still fail `spctl -a` (rejected) — that's why
+  `gatekeeperAssess: false` is set. They launch fine once the quarantine xattr
+  is cleared (right-click → Open the first time, or `xattr -dr
+  com.apple.quarantine <app>`).
+
+### For wider distribution (not yet wired)
+
+- Get an Apple Developer ID Application certificate, set `mac.identity:
+  "Developer ID Application: <name> (<team-id>)"`, set `mac.hardenedRuntime:
+  true`. With a real identity the builtin signer runs (and `afterSign` fires),
+  so move notarization into an `afterSign` hook calling `@electron/notarize`
+  and drop / guard the ad-hoc `afterPack` step.
 - For the App Store: completely different config (`mas` target,
-  provisioning profiles, App Sandbox entitlements). Out of scope
-  here.
+  provisioning profiles, App Sandbox entitlements). Out of scope here.
 
 ---
 
@@ -152,9 +184,10 @@ electron-builder cache (`~/Library/Caches/electron/`) then retry.
 
 | file | role |
 |---|---|
-| `scripts/package.sh` | wrapper: build → ABI swap → electron-builder |
+| `scripts/package.sh` | wrapper: build → ABI swap → stage dmgbuild bundle → electron-builder |
 | `scripts/_native.sh` | shared with `dev.sh`/`test.sh`; per-ABI binding cache |
 | `apps/desktop/electron-builder.yml` | files / asarUnpack / extraResources / mac config |
+| `apps/desktop/scripts/afterPack.cjs` | ad-hoc `codesign --deep` of the .app (builtin signing is disabled via `identity: null`) |
 | `apps/desktop/build/` | icon + README with `sips` recipe |
 | `apps/desktop/build/icon.icns` | gets baked into `Contents/Resources/icon.icns` |
 | `apps/desktop/src/main/index.ts` | `patchPathFromLoginShell()` + `resolveSilverhandCliLauncher()` packaged-build path |

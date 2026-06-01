@@ -25,6 +25,16 @@ directories:
 npmRebuild: false
 nodeGypRebuild: false
 
+# Ad-hoc code signing. We have no Developer ID identity, so `mac.identity: null`
+# (below) tells electron-builder's builtin signer to cleanly skip — it does NOT
+# ad-hoc sign, despite older lore; see app-builder-lib macPackager.js. The
+# actual ad-hoc signature is applied by this `afterPack` hook, which runs after
+# the .app is assembled but before the dmg/zip are built, so the artifacts ship
+# a valid bundle signature. Without it the app carries only Electron's stub
+# signature (Identifier=Electron) and macOS refuses to open it. See
+# scripts/afterPack.cjs.
+afterPack: scripts/afterPack.cjs
+
 # What gets included in the asar.
 # - out/**: electron-vite output (main + preload + renderer)
 # - package.json: electron uses "main" to find the entrypoint
@@ -46,8 +56,17 @@ files:
 # better-sqlite3's .node binary cannot live inside the asar — Node's
 # dlopen needs a real path on disk. The glob unpacks the whole package
 # (binding + JS shim) so requires resolve cleanly.
+#
+# @node-rs/argon2 is the same story: its native binding ships in a
+# platform-specific optional dep (@node-rs/argon2-darwin-arm64). pnpm nests
+# that package in its virtual store, so electron-builder doesn't pull it into
+# the asar (electron-userland/electron-builder#6289) — we declare it as a
+# direct optionalDependency in package.json to surface it, then unpack the
+# .node here so the @node-rs loader's `require('@node-rs/argon2-darwin-arm64')`
+# resolves at runtime.
 asarUnpack:
   - node_modules/better-sqlite3/**/*
+  - node_modules/@node-rs/argon2-darwin-arm64/**/*
 
 # Ship the esbuild-bundled Silverhand CLI outside the asar so the per-spawn
 # `bin/silverhand` PATH shim can forward to it through Electron's Node runtime
@@ -79,9 +98,10 @@ mac:
     - target: zip
       arch:
         - arm64
-  # null = ad-hoc sign with the local codesign tool ("codesign --sign -").
-  # Required so Gatekeeper at least loads the app on the build machine.
-  # For distribution, set to a Developer ID identity.
+  # null = SKIP electron-builder's builtin signing (it does NOT ad-hoc sign on
+  # null — it logs "skipped macOS code signing" and returns). The ad-hoc
+  # signature is applied instead by the afterPack hook (see top of file). For
+  # distribution, set this to a Developer ID identity and add notarization.
   identity: null
   hardenedRuntime: false
   gatekeeperAssess: false

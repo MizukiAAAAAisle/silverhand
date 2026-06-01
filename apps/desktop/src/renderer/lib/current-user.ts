@@ -3,8 +3,8 @@
  * desktop auth session.
  *
  * The renderer never receives the `user_token`. On boot,
- * `useViewerUser()` asks main for the auth state; main decrypts /
- * validates the safeStorage-backed session and returns only the
+ * `useViewerUser()` asks main for the auth state; main reads /
+ * validates the main-owned 0600 local session file and returns only the
  * resolved `UserDto`. When unauthenticated, the app mounts the setup
  * wizard instead of the shell, so `setCurrentUserId` is never called.
  * After signup/login succeeds, main stores the token and returns the

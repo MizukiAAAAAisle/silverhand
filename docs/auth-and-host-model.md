@@ -229,14 +229,24 @@ profile root.
   `auth_sessions(id, user_id, token_hash, created_at, last_used_at, revoked_at, user_agent, ip_first_seen)`.
 - Token transport: `Authorization: Bearer <user_token>` on every HTTP call
   from desktop UI / renderer.
-- Storage on desktop: the `user_token` is encrypted via Electron
-  `safeStorage.encryptString()` (which uses the OS keychain as the key
-  source on macOS, DPAPI on Windows); the resulting **encrypted blob** is
-  persisted to a 0600 file under `~/.silverhand/desktop/session.bin`.
-  `safeStorage` is an encrypt/decrypt API, not a key-value store, so the
-  blob lives in the filesystem; we do NOT use `localStorage`, plain config
-  files, or any unencrypted location. Cleartext token is held in main
-  process memory only.
+- Storage on desktop: V1 stores the opaque `user_token` in a main-owned
+  0600 plaintext file under `~/.silverhand/desktop/session.bin`. This is
+  intentionally the same local-file policy used by `daemon-config.json`
+  for `host_token`: the desktop is inside the V1 trust boundary, and
+  local encryption would not defend against user-level code execution.
+  The renderer never sees the token; the file must not be copied into
+  workspaces, logs, IPC payloads, attachments, or support bundles. Server
+  storage remains hash-only and logout/session revoke invalidates the
+  bearer immediately.
+- V1 local credential file policy applies uniformly to `session.bin`,
+  `daemon-config.json` (`host_token`), and `server-profile.bin`:
+  main/daemon-only access, mode 0600, opaque bearer values, renderer
+  never receives credentials, no credential bytes in logs/IPC/attachments,
+  and server-side revoke/rotation is the real containment boundary. If
+  the threat model later changes to "untrusted desktop / multi-tenant
+  managed endpoint / cloud-synced credential material", migrate all local
+  long-lived credentials together to a real secret store instead of
+  encrypting only one token class.
 
 ### 3.2 Provider interface reserved for V2
 
@@ -259,7 +269,7 @@ Regardless of provider, every successful auth ends in the same `auth_sessions` r
 
 Two distinct UX actions, two distinct mutations:
 
-- **Logout (UI only)**: invalidates the current `auth_sessions` row, clears keychain `user_token`. Local Host's `host_token` is **not** affected — the daemon stays online (independent lifecycle).
+- **Logout (UI only)**: invalidates the current `auth_sessions` row and removes the local session file. Local Host's `host_token` is **not** affected — the daemon stays online (independent lifecycle).
 - **Sign out and disable this host**: above, plus `POST /api/hosts/{id}/revoke` for the local host. Daemon connection drops, won't reconnect.
 
 Default UI button label: "Logout". The "disable this host too" affordance lives behind a secondary control or in the Hosts page, not as the default action.
@@ -348,7 +358,7 @@ This flow runs in the Electron **main** process; the renderer only sees
 
 ```
 [main] desktop login (POST /auth/login from main process)
-       └─→ user_token issued, stored in safeStorage-encrypted blob
+       └─→ user_token issued, stored in main-owned 0600 local file
 [main] read ~/.silverhand/installation_id (creates uuid if absent)
 [main] POST /api/hosts/claim-or-create
          Authorization: Bearer <user_token>
@@ -886,8 +896,9 @@ This doc deliberately leaves the following undecided:
     it"; renderer/main process responsibilities annotated in §6.1.
   - Auth error uniformity scoped to credential failure; signup-disabled
     404 explicitly allowed.
-  - `safeStorage` description corrected (encryption API, encrypted blob in
-    file, not a Keychain key-value store).
+  - Desktop local credential policy later simplified to unified 0600
+    plaintext files for session/profile/host credentials; server keeps
+    hash-only state.
   - `user_auth_links` deferred to V2 migration (Cindy open question).
 - 2026-05-25 — Round 3 cleanup (Alice). Addresses Cindy review round 2 P2:
   - Revoke uses soft-delete on **both** `hosts.revoked_at` and

@@ -47,7 +47,7 @@
  * (`spawnDaemonChild`, `onDaemonGenerationChanged`,
  * `waitForDaemonGeneration`), this whole concept of "desktop main
  * tracking daemon liveness" goes away when daemon is launchd-managed
- * and self-attaches via keychain — at that point the local host
+ * and self-attaches with its local host credential — at that point the local host
  * row is just a server-side resource and `local_host_status:
  * 'failed'` is no longer a useful client concept.
  */

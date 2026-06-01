@@ -1,6 +1,6 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, safeStorage, session as electronSession, shell, type MenuItemConstructorOptions } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, session as electronSession, shell, type MenuItemConstructorOptions } from 'electron';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import {
@@ -81,6 +81,11 @@ import {
   readServerConnectionProfileViewOrNull,
   writeServerConnectionProfile,
 } from './server-connection-profile.js';
+import {
+  clearPersistedDesktopSession,
+  loadPersistedDesktopSessionToken,
+  persistDesktopSessionToken,
+} from './desktop-session-storage.js';
 import {
   decideBackendBootMode,
   evaluateProfileCommitGuard,
@@ -442,10 +447,6 @@ function daemonPaths(): DaemonPaths {
   };
 }
 
-function desktopSessionPath(): string {
-  return join(silverhandDir(), 'desktop', 'session.bin');
-}
-
 function embeddedBootstrapPath(): string {
   return join(silverhandDir(), EMBEDDED_BOOTSTRAP_FILENAME);
 }
@@ -578,45 +579,15 @@ function installBackendEventWsOriginOverride(): void {
 }
 
 function clearPersistedUserSession(): void {
-  try {
-    unlinkSync(desktopSessionPath());
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      logger?.warn({ err }, 'failed to remove desktop auth session blob');
-    }
-  }
+  clearPersistedDesktopSession({ silverhandRoot: silverhandDir(), logger });
 }
 
 function loadPersistedUserSessionToken(): string | null {
-  if (!safeStorage.isEncryptionAvailable()) {
-    logger?.warn('desktop auth session storage unavailable; encrypted session restore disabled');
-    return null;
-  }
-  const path = desktopSessionPath();
-  if (!existsSync(path)) return null;
-  try {
-    const token = safeStorage.decryptString(readFileSync(path)).trim();
-    return token.length > 0 ? token : null;
-  } catch (err) {
-    logger?.warn({ err }, 'failed to decrypt desktop auth session; clearing blob');
-    clearPersistedUserSession();
-    return null;
-  }
+  return loadPersistedDesktopSessionToken({ silverhandRoot: silverhandDir(), logger });
 }
 
 function persistUserSessionToken(token: string): void {
-  if (!safeStorage.isEncryptionAvailable()) {
-    logger?.warn('desktop auth session storage unavailable; keeping token in memory only');
-    return;
-  }
-  const path = desktopSessionPath();
-  mkdirSync(join(silverhandDir(), 'desktop'), { recursive: true });
-  writeFileSync(path, safeStorage.encryptString(token), { mode: 0o600 });
-  try {
-    chmodSync(path, 0o600);
-  } catch (err) {
-    logger?.warn({ err }, 'failed to chmod desktop auth session blob');
-  }
+  persistDesktopSessionToken({ silverhandRoot: silverhandDir(), token, logger });
 }
 
 async function storeUserSession(token: string, user: UserDto): Promise<void> {
@@ -979,7 +950,6 @@ async function claimLocalHostForUserSession(): Promise<void> {
     // stable state distinct from any explicit version.
     const profileRead = readServerConnectionProfile({
       silverhandRoot: silverhandDir(),
-      safe: safeStorage,
       logger: logger ?? undefined,
     });
     const profileVersion =
@@ -1654,12 +1624,11 @@ async function bootstrap(): Promise<void> {
     // but BEFORE we spawn the daemon / start the embedded backend so
     // the trip wire (remote mode → throw) fires before any partial
     // state lands on disk. Inputs are taken from the existing
-    // `safeStorage`-backed profile reader and the strict env helpers
+    // local 0600 profile reader and the strict env helpers
     // in `@silverhand/shared/config`. See `backend-boot-mode.ts` for
     // the full decision matrix and the trip-wire rationale.
     const bootProfileView = readServerConnectionProfileViewOrNull({
       silverhandRoot: silverhandDir(),
-      safe: safeStorage,
       logger: logger
         ? {
             warn: (payload, msg) => logger?.warn(payload, msg),
@@ -1820,7 +1789,7 @@ async function bootstrap(): Promise<void> {
     // Architectural framing (R1/R4): this IPC is a V1 desktop-embedded
     // local supervisor adapter. It is NOT part of the server↔daemon
     // formal protocol — terminal-state daemon is started by launchd
-    // with a keychain-loaded host_token and attaches without main, at
+    // with its local host credential and attaches without main, at
     // which point this hook (and `spawnDaemonChild`) disappear.
     //
     // Dedup by `instanceId` only — the canonical daemon-generation
@@ -2049,7 +2018,6 @@ async function runBootReconciliation(): Promise<void> {
       readProfile: () =>
         readServerConnectionProfile({
           silverhandRoot: silverhandDir(),
-          safe: safeStorage,
           logger: logger ?? undefined,
         }),
       readDaemonHostConfig: () => readDaemonHostConfig(silverhandDir()),
@@ -2414,7 +2382,7 @@ ipcMain.handle(
  *
  * Boundary discipline:
  *   - `profile:get` returns a redacted view (`server_url + updated_at`
- *     only). The encrypted blob bytes NEVER cross IPC. Schema metadata
+ *     only). The raw profile file contents NEVER cross IPC. Schema metadata
  *     (`version`, `created_at`) stays in main.
  *   - `profile:saveWithTest` runs the validate → test-connect →
  *     commit pipeline atomically. Renderer never sees the
@@ -2422,7 +2390,7 @@ ipcMain.handle(
  *     step fails, nothing lands on disk and the renderer gets a
  *     typed failure with the failing phase.
  *   - `profile:clear` is the explicit reset affordance (recovery
- *     from `decrypt_failed` / `parse_failed` reads, and the
+ *     from `parse_failed` reads, and the
  *     "disconnect from remote backend" UX).
  *
  * Commit 2 scope:
@@ -2504,7 +2472,7 @@ export type ProfileSaveWithTestResult =
   | {
       ok: false;
       phase: 'write';
-      reason: 'storage_unavailable' | 'write_failed';
+      reason: 'write_failed';
       detail?: string;
     };
 
@@ -2517,8 +2485,8 @@ export type ProfileSaveWithTestResult =
  *   - `ok: false; reason: 'no_profile'` — no profile is committed (e.g.
  *     user pressed Retry without ever saving). Caller should send
  *     them through the Wizard, not surface a generic error.
- *   - `ok: false; reason: 'profile_unreadable'` — profile blob exists
- *     but read failed (decrypt / parse / storage_unavailable). 5c-2
+ *   - `ok: false; reason: 'profile_unreadable'` — profile file exists
+ *     but read failed (`parse_failed`). 5c-2
  *     surfaces this as-is; 5c-3 reconciliation owns the typed repair
  *     state (`unusable_profile`) per Cindy's 5c-1 review note.
  */
@@ -2645,7 +2613,6 @@ async function handleProfileSaveWithTest(
   // the system never sees the un-canonicalized round-trip.
   const writeResult = writeServerConnectionProfile({
     silverhandRoot: silverhandDir(),
-    safe: safeStorage,
     serverUrl: test.originUrl,
     logger: logger ?? undefined,
   });
@@ -2731,7 +2698,6 @@ async function handleProfileSaveWithTest(
 async function handlePartialApplyRetry(): Promise<PartialApplyRetryResult> {
   const read = readServerConnectionProfile({
     silverhandRoot: silverhandDir(),
-    safe: safeStorage,
     logger: logger ?? undefined,
   });
   if (!read.ok) {
@@ -2747,13 +2713,13 @@ async function handlePartialApplyRetry(): Promise<PartialApplyRetryResult> {
       partialApplyState = { kind: 'no_profile' };
       return { ok: false, reason: 'no_profile' };
     }
-    // decrypt_failed / parse_failed / storage_unavailable — typed
+    // parse_failed — typed
     // repair state. 5c-3 reconciliation produces the same
     // `unusable_profile` from the same on-disk read. We mutate
     // `partialApplyState` here so the renderer banner shows the
     // reset affordance immediately after a failed Retry, not only
     // after the next launch.
-    const detail = 'detail' in read ? read.detail : read.reason;
+    const detail = read.detail;
     logger?.warn(
       { reason: read.reason, detail },
       'D4.a partialApply:retry — profile read failed → unusable_profile state',
@@ -2791,7 +2757,6 @@ ipcMain.handle(
   (): ServerConnectionProfileView | null =>
     readServerConnectionProfileViewOrNull({
       silverhandRoot: silverhandDir(),
-      safe: safeStorage,
       logger: logger ?? undefined,
     }),
 );
@@ -2804,7 +2769,6 @@ ipcMain.handle(
 ipcMain.handle('profile:clear', () => {
   const result = clearServerConnectionProfile({
     silverhandRoot: silverhandDir(),
-    safe: safeStorage,
     logger: logger ?? undefined,
   });
   if (result.ok) {
