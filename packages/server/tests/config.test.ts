@@ -137,7 +137,19 @@ describe('standalone server env config', () => {
     }
   });
 
-  it('supports signup, workspace creation, and human messages without a host runtime', async () => {
+  // D4.c/D4.d/D4.e rewrite of the original D1/G1 test
+  // ("supports signup, workspace creation, and human messages without
+  //  a host runtime"). That story is obsolete: placement is now
+  // unified across deployment modes, so BOTH agent and workspace
+  // creation resolve an owning host first — and workspace creation is
+  // daemon-mediated (`workspace_provision` dispatched to the owning
+  // daemon). A bare standalone server with no claimed host (and no
+  // attached daemon) is therefore a pure auth/control surface: signup
+  // and runtime detection answer, but any resource that needs a host
+  // fails fast with a typed `local_host_unbound` 409. Human-message
+  // coverage moved to the backend e2e suites (which attach a daemon);
+  // it cannot exist here because there is no workspace to post into.
+  it('standalone server with no claimed host: signup answers; agent + workspace creation fail-fast typed', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'silverhand-server-test-'));
     tmpDirs.push(dataDir);
 
@@ -169,19 +181,35 @@ describe('standalone server env config', () => {
         code: 'host_runtime_disabled',
       });
 
+      // D4.d D3: `POST /api/agents` is now the materialization
+      // lifecycle route (the pre-D4 standalone `host_runtime_disabled`
+      // short-circuit is gone; handlers no longer fork by deployment
+      // mode — R4 invariant). Two contract changes this pins:
+      //   1. the route REQUIRES an `Idempotency-Key` header (else 400
+      //      `idempotency_key_missing`), and
+      //   2. with no claimed host, unified placement
+      //      (`resolveOwnedLocalForUser`) fails fast → 409
+      //      `local_host_unbound`, NOT the old 409 `host_runtime_disabled`.
       const agentCreate = await fetch(`${running.url}${apiPaths.agents}`, {
         method: 'POST',
         body: JSON.stringify({ name: 'standalone_agent', runtime: 'codex' }),
         headers: {
           authorization: `Bearer ${session.user_token}`,
           'content-type': 'application/json',
+          'Idempotency-Key': 'config-test-standalone-agent',
         },
       });
       expect(agentCreate.status).toBe(409);
       expect(await agentCreate.json()).toMatchObject({
-        code: 'host_runtime_disabled',
+        code: 'local_host_unbound',
       });
 
+      // D4.c C3: workspace creation runs the SAME unified placement
+      // (`resolveCreateHostId` → `resolveOwnedLocalForUser`). The
+      // pre-D4.c synthesized `STANDALONE_SERVER` placeholder host is
+      // gone, so with no claimed host this also fails fast typed —
+      // the old "control-plane builds a workspace without a host" 201
+      // is no longer reachable.
       const workspace = await fetch(`${running.url}${apiPaths.workspaces}`, {
         method: 'POST',
         body: JSON.stringify({ name: 'remote_control_plane' }),
@@ -190,27 +218,9 @@ describe('standalone server env config', () => {
           'content-type': 'application/json',
         },
       });
-      expect(workspace.status).toBe(201);
-      const workspaceBody = await workspace.json() as {
-        channel: { id: string };
-        workspace: { workspace_host_id: string };
-      };
-      expect(workspaceBody.workspace.workspace_host_id).toBeTruthy();
-
-      const message = await fetch(
-        `${running.url}${apiPaths.channelMessages(workspaceBody.channel.id)}`,
-        {
-          method: 'POST',
-          body: JSON.stringify({ content: 'hello from standalone' }),
-          headers: {
-            authorization: `Bearer ${session.user_token}`,
-            'content-type': 'application/json',
-          },
-        },
-      );
-      expect(message.status).toBe(201);
-      expect(await message.json()).toMatchObject({
-        message: { content: 'hello from standalone' },
+      expect(workspace.status).toBe(409);
+      expect(await workspace.json()).toMatchObject({
+        code: 'local_host_unbound',
       });
     } finally {
       await running.close();
