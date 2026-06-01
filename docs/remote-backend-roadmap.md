@@ -10,16 +10,20 @@
 > the per-table or per-route detail.
 >
 > **What this document is NOT**: target architecture (see
-> `remote-server-target-architecture.md`) or implementation detail (see
-> per-stage spec links below). The roadmap deliberately links out rather
-> than restating either.
+> `remote-server-target-architecture.md`) or implementation detail. The
+> per-stage design/acceptance drafts (D4.a–e, D5.a) have been consolidated
+> into `remote-backend-architecture-notes.md` — read that for the accepted
+> design decisions, invariants, and error-code contracts. The roadmap
+> deliberately links out rather than restating either.
 >
 > **Reading order**:
 > 1. `remote-server-target-architecture.md` — the destination (read for
 >    topology + phase plan only; its auth §5 is **superseded** by
 >    `auth-and-host-model.md` — do not implement from it)
 > 2. This document — the path
-> 3. Per-stage detail spec (linked below)
+> 3. `remote-backend-architecture-notes.md` — consolidated accepted design
+>    decisions + invariants + error-code contracts (replaces the deleted
+>    per-stage drafts)
 
 ---
 
@@ -781,9 +785,10 @@ Local host only.
 
 #### D4 — Remote backend e2e (deployment + runtime + multi-host)
 
-**Detail spec**: `docs/remote-backend-d4-design.md` — D4.0 design
-pass output. Lock semantics live there; this section is a pointer +
-short summary only.
+**Detail spec**: `docs/remote-backend-architecture-notes.md` §3 (D4) —
+consolidated accepted decisions + invariants + error-code contracts (the
+former per-stage `remote-backend-d4-design.md` draft was absorbed there).
+This section is a pointer + short summary only.
 
 **Shape** (locked in D4.0):
 
@@ -824,9 +829,9 @@ time.
   hotspots; PR description must declare "this IPC is local
   supervisor/control, not server↔daemon formal semantics".
 
-See `docs/remote-backend-d4-design.md` for the full G1/G2/G3
-acceptance lists, the non-goals table, hard ordering, and the
-deployment runbook (drafted inside D4.a).
+See `docs/remote-backend-architecture-notes.md` §3 for the G1/G2/G3
+acceptance essence, the non-goals table (§7), hard ordering, and the
+deployment decisions (absorbed from the D4.a draft).
 
 ---
 
@@ -901,7 +906,7 @@ section exists so the roadmap reader sees the deferral target.
             ┌─────────────────────────────────────────────────────┐
             │ D4 remote backend e2e (deployment + runtime + multi- │
             │    host); ships as G1 → G2 → G3; honours R1/R2/R3;   │
-            │    R4 deferred to D5. See remote-backend-d4-design.md│
+            │    R4 deferred to D5. See architecture-notes.md §3 │
             └──┬───────────────────────────────────────────────────┘
                │ D4 closed (all three gates) before D5 starts
                ▼
@@ -1214,9 +1219,9 @@ this list — round 4 of this roadmap moved it into Stage D2.
   - R4 deferral mechanics (mandatory `TODO(D5,R4)` anchor format
     with required reference to design contract §9; PR description
     must declare local supervisor/control transport scope)
-  - Doc structure (separate `docs/remote-backend-d4-design.md` as
-    the lock-semantics owner; this roadmap holds a short summary +
-    pointer only — Cindy nit)
+  - Doc structure (lock semantics now consolidated in
+    `docs/remote-backend-architecture-notes.md`; this roadmap holds a
+    short summary + pointer only — Cindy nit)
   - Stage D §3 D4 section rewritten; new D5 placeholder section
     inserted; dependency graph + hard-constraint ordering updated
     to include the D4 → D5 gate

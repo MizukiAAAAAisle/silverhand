@@ -7,7 +7,7 @@
 - `docs/auth-and-host-model.md` §7-§10 — host identity / token model
 - `docs/remote-backend-roadmap.md` — V1 prep stage map (esp. D2.0 / D2 / D3)
 - `docs/multi-daemon-registry.md` v5 status note — V1 vs future placement model
-- `docs/silverhand-daemon-pr2-design.md` — current daemon intent surface
+- `docs/silverhand-daemon.md` + `docs/remote-backend-architecture-notes.md` §5 — current daemon intent surface
 
 ## 1. Guiding principle (LOCK)
 
@@ -233,9 +233,10 @@ Daemon-host **must not**:
 
 ### 3.3 Boundary crossings (the V1 protocol surface)
 
-Every cross-boundary call is a typed intent. PR-2 already defines the
-runtime-intent vocabulary in `docs/silverhand-daemon-pr2-design.md`;
-this section reproduces the canonical shapes (preserving PR-2's
+Every cross-boundary call is a typed intent. The runtime-intent
+vocabulary is consolidated in `docs/remote-backend-architecture-notes.md`
+§5 (daemon execution-plane split);
+this section reproduces the canonical shapes (preserving the
 `(conversation_id, agent_id)` tuple identity) and locks them as the
 V1 vocabulary. **Additions need an explicit D2.0 amendment, not silent
 expansion in D2/D3 PRs.**

@@ -6,7 +6,8 @@ path**. It owns runtime spawn/supervision and the
 plane (runtime commands + materialize + runtime-event projection)
 goes through the `OutboundFrameAdapter` port — embedded over the
 local `daemon-outbound.sock`, standalone over WSS (see "Local
-outbound frame socket (D5.a)" below and `docs/d5-a-r4-acceptance.md`).
+outbound frame socket (D5.a)" below and
+`docs/remote-backend-architecture-notes.md` §4).
 `HostClient` over the control socket (`daemon.sock`) is now scoped to
 **desktop host-control IPC only** (ping / status / daemon-respawn
 re-attach), not the formal data plane.
@@ -47,7 +48,7 @@ become the only place those processes are owned.
 > *(Historical PR-1 text — superseded: the D-series moved runtime
 > spawn/supervision and the `agent_materialize` flow into the daemon;
 > the backend reaches them over the formal outbound frame plane, not a
-> `HostClient` RPC. See `docs/d5-a-r4-acceptance.md`.)*
+> `HostClient` RPC. See `docs/remote-backend-architecture-notes.md` §4.)*
 
 ## Why a separate process
 
@@ -181,8 +182,7 @@ there is no durable transport queue or heartbeat; a dropped socket
 rejects in-flight commands. `HostClient` survives **only** as
 desktop-main host-control IPC (ping / status / daemon-respawn
 re-attach), never for runtime/materialize data-plane business
-commands. See `docs/remote-backend-d5a-design.md` and
-`docs/d5-a-r4-acceptance.md`.
+commands. See `docs/remote-backend-architecture-notes.md` §4 (D5.a).
 
 ## CLI surface
 
