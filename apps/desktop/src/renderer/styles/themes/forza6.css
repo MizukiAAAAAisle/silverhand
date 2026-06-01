@@ -215,6 +215,30 @@
   --forza6-syntax-addition: #D4F523;
   --forza6-syntax-deletion: #FF6F8C;
 
+  /* ── forza6 indigo (theme-private; #task:762 placement A) ──
+     The deep blue-violet shiki liked on the "DISCOVER JAPAN" festival
+     card. Scoped to the code island only (header slab + meta syntax +
+     content selection) — NOT a global accent. Deliberately NOT named
+     `--accent-3`: that reads as "a third brand colour" and invites
+     misuse as a general hover/selected/foreground token. The festival
+     triad (pink / lime / cyan) stays the brand identity; indigo is a
+     cool dark-stage surface that only lives where the ground is already
+     dark (the deep-teal-black island), so contrast is safe by
+     construction.
+       - `-slab`   : code-block header background (white island-light
+                     text + lime lang label both read AA+ on it).
+       - `-meta`   : bright tint for `.hljs-meta` — lifts decorators /
+                     pragmas off the dark island as a foreground ink
+                     (the muted-white meta was easy to miss).
+       - `-select` : content-selection background inside the island.
+                     Deliberately NOT the global `::selection`
+                     (`--accent-soft`, too pale on the dark ground) and
+                     NOT `--bg-hover` (would bleed into the scrollbar).
+                     White selection text reads ~8:1 on it. */
+  --forza6-indigo-slab: #2D2AB8;
+  --forza6-indigo-meta: #9D97FF;
+  --forza6-indigo-select: #3B36C9;
+
   /* ── Accent —
      Forza tokens have a dual-role tension: the bright neon palette
      (lime / cyan / hot pink / yellow) reads as TILE SURFACE in the

@@ -439,7 +439,7 @@
   border-radius: 2px;
 }
 [data-theme='forza6'] .markdown-body .code-block__header {
-  background: #0A0A0A;
+  background: var(--forza6-indigo-slab);
   border-bottom: 1px solid #0F2F2C;
 }
 [data-theme='forza6'] .markdown-body .code-block__lang {
@@ -533,7 +533,20 @@
 }
 [data-theme='forza6'] .markdown-body .code-block .hljs-meta,
 [data-theme='forza6'] .markdown-body .code-block .hljs-meta-string {
-  color: var(--forza6-syntax-meta);
+  color: var(--forza6-indigo-meta);
+}
+
+/* Content selection inside the code island — indigo highlight (#task:762
+   placement A). Scoped to `.code-block` so it does NOT touch the global
+   `::selection` (which stays `--accent-soft` for prose) and never goes
+   through `--bg-hover` (would tint the scrollbar). Deep indigo ground +
+   white text reads ~8:1; selecting over a lime keyword or the indigo
+   header slab both stay legible because the white text overrides the
+   token colour while selected. shiki `kQv1HDktm-y_HA1n` asked the
+   selection colour be designed to match, not left on the system blue. */
+[data-theme='forza6'] .markdown-body .code-block ::selection {
+  background: var(--forza6-indigo-select);
+  color: #FFFFFF;
 }
 [data-theme='forza6'] .markdown-body .code-block .hljs-addition {
   color: var(--forza6-syntax-addition);
