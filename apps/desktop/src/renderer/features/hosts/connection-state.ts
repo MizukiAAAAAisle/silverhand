@@ -24,23 +24,29 @@
  *     mapper itself is theme-agnostic — the consumer just picks the
  *     matching Tailwind utility (`text-success` / `text-error` / …).
  *
+ * Labels are product-oriented ("This computer is …"): the pane renders
+ * this pill next to the "This computer" heading, so the words describe
+ * what the machine can do, not the daemon/attachment plumbing
+ * underneath.
+ *
  * Six-state matrix (status × attachedAt):
  *
  *   | status     | attachedAt | label              | tone     |
  *   |------------|------------|--------------------|----------|
  *   | unclaimed  | (n/a)      | (no pill rendered) | hidden   |
  *   | claimed    | null       | Connecting…        | accent   |
- *   | claimed    | number     | Connected          | success  |
- *   | revoked    | (n/a)      | Revoked            | muted    |
- *   | error      | (n/a)      | Disconnected       | warning  |
- *   | failed     | (n/a)      | Daemon stopped     | error    |
+ *   | claimed    | number     | Ready              | success  |
+ *   | revoked    | (n/a)      | Removed            | muted    |
+ *   | error      | (n/a)      | Offline            | warning  |
+ *   | failed     | (n/a)      | Stopped            | error    |
  *
- * Why `error` is "Disconnected" (warning) but `failed` is "Daemon
- * stopped" (error): `error` is a transient claim-side failure (network
- * blip while talking to the backend), expected to self-heal on the
- * next refresh; `failed` is the supervisor's hard-fail signal after
- * the restart budget is exhausted (`local-host-failure.ts`), which
- * requires explicit user action (relaunch the app).
+ * Why `error` is "Offline" (warning) but `failed` is "Stopped"
+ * (error): `error` is a transient claim-side failure (network blip
+ * while talking to the backend), expected to self-heal on the next
+ * refresh; `failed` is the supervisor's hard-fail signal after the
+ * restart budget is exhausted (`local-host-failure.ts`), which requires
+ * explicit user action (relaunch the app). They MUST stay distinct
+ * labels so the two different user actions don't read identically.
  */
 import type { BackendInfoSnapshot } from './hooks';
 
@@ -109,28 +115,28 @@ export function describeConnectionState(
       }
       return {
         visible: true,
-        label: 'Connected',
+        label: 'Ready',
         tone: 'success',
         detail: `since ${formatAttachedSince(attachedAt, nowMs)}`,
       };
     case 'revoked':
       return {
         visible: true,
-        label: 'Revoked',
+        label: 'Removed',
         tone: 'muted',
         detail: null,
       };
     case 'error':
       return {
         visible: true,
-        label: 'Disconnected',
+        label: 'Offline',
         tone: 'warning',
         detail: null,
       };
     case 'failed':
       return {
         visible: true,
-        label: 'Daemon stopped',
+        label: 'Stopped',
         tone: 'error',
         detail: null,
       };

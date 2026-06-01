@@ -46,6 +46,14 @@
   --bg-surface: #DDE0DC;
   --bg-hover: #DAE0DA;
   --bg-active: #C9D1C9;
+  /* Selectable-option hover preview — pale lime, the "this is pickable"
+     fill shared by Proxy runtime cards and task-filter dropdown rows.
+     Pairs with `--bg-row-selected` (#D4F523 acid lime, committed): hover
+     = pale lime → selected = bright lime. NOT `--bg-row-hover` (magenta
+     brand tint) and NOT the cool-neutral `--bg-hover`. Explicit semantic
+     token; dropdown rows no longer lean on the forza6-components.css
+     scoped `--bg-hover` redefine to land on this colour. */
+  --bg-option-hover: var(--forza6-lime-pale);
   /* Selected (NavRail icons / segment current). `--bg-selected` is the
      brand magenta wedge and is intentionally NOT aligned with
      `--bg-row-selected` (festive lime): row-selection across sidebar /
@@ -143,13 +151,13 @@
   --text-inline-code: var(--forza6-ink);
 
   /* Inline-code chip — lime poster sticker (per shiki `z7QboHr4aDIoAHQX`):
-     full acid-lime background + 2px near-black border + 0 radius so the
+     full acid-lime background + 1px near-black border + 0 radius so the
      chip stands clearly against the cool-white chat surface (lime alone
      vs white is only 1.42:1; the black outline carries the visual
      separation). Promoted from the previous `[data-theme='forza6']
      .markdown-body :not(pre) > code` override block in forza6-components.css. */
   --bg-inline-code: var(--forza6-lime);
-  --border-inline-code: 2px solid var(--forza6-ink);
+  --border-inline-code: 1px solid var(--forza6-ink);
   --radius-inline-code: 0;
 
   /* Task status badge — 4 statuses × {bg, text, border} = 12 tokens.
@@ -401,13 +409,8 @@
      #task:490). Fallback chain keeps Impact / Helvetica Condensed /
      Arial Narrow so a missing webfont doesn't drop us to ugly system-ui
      at the same metrics. `--font-serif` is set to sans because the
-     festival vibe rejects serif altogether.
-
-     `--forza6-font-task-ref` is deliberately separate: inline Markdown
-     task chips still need a poster face, but they sit inside prose and
-     should not follow every chrome/header `--font-display` trial. */
+     festival vibe rejects serif altogether. */
   --font-display: 'Rajdhani', 'Impact', 'Helvetica Neue Condensed', 'Arial Narrow', system-ui, sans-serif;
-  --forza6-font-task-ref: 'Barlow Condensed', 'Impact', 'Helvetica Neue Condensed', 'Arial Narrow', system-ui, sans-serif;
   --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', 'Helvetica Neue', sans-serif;
   --font-serif: var(--font-sans);
   --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', 'Sarasa Mono SC', 'Source Han Mono SC', 'Noto Sans Mono CJK SC', 'PingFang SC', monospace;

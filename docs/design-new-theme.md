@@ -141,7 +141,7 @@ appearance.test.ts 锁定）。这是 §3.1 关键 3 的硬约束：不显式定
 | Token | 用途 | 取值原则 |
 |---|---|---|
 | `--bg-inline-code` | chip 背景 | 暖系常用 `color-mix(text-primary 14%, bg-base)` 软底；海报系用饱和填充色 |
-| `--border-inline-code` | chip 边框 shorthand（含 width + style + color） | 软底主题给 `none`；海报系给 `2px solid <near-black>` |
+| `--border-inline-code` | chip 边框 shorthand（含 width + style + color） | 软底主题给 `none`；海报系给可见 near-black 描边（forza6 当前 `1px solid <near-black>`） |
 | `--radius-inline-code` | chip 圆角 | 软底主题给 `var(--radius-sm)`；海报系给 `0` 方角 |
 
 ### 3.2.2 Task status badge（PR-3 token promotion）
@@ -609,7 +609,7 @@ shiki 决定先保留胶囊（forza6 用饱和填色表达状态语义，不需�
 
   /* ── Inline-code chip (§3.2.1) ── */
   --bg-inline-code: ...;        /* 软底主题常用 color-mix(text-primary X%, bg-base) */
-  --border-inline-code: ...;    /* shorthand：软底主题给 `none`，海报系给 `2px solid <near-black>` */
+  --border-inline-code: ...;    /* shorthand：软底主题给 `none`，海报系给可见 near-black 描边 */
   --radius-inline-code: ...;    /* 软底主题给 var(--radius-sm)，海报系给 `0` */
 
   /* ── Task status badge (§3.2.2 / §3.2.2.1) ── 5 状态 × {bg / text / border}；closed 是终态 status */
@@ -903,7 +903,7 @@ forza6-components.css **不得**再出现裸 `[data-theme='forza6'] {` root 重�
 | 2 | NavRail / Sidebar | 浅 lime carrier `#F4F8E8`；selected lime `#D4F523` pill + 黑边 + 3px 黑左侧 dock notch；hover lime preview `#E6F68A` + 2px 黑边；count → magenta + tnum |
 | 3 | Chat header | `#` magenta + 900 + 1.25em + margin-right；title display caps；右侧 action button cluster transparent + 2px 黑边方角 + 每按钮 lime hover preview；sidebar Hash icon stroke-width 2.75 + magenta |
 | 4 | Composer | textarea focus magenta + padding-right 5.5rem；send button magenta sticker + 方角 + display caps（v5.x 之后 product 默认是 "Send" 文字，forza6 只保留配色/几何特化） |
-| 5 | Markdown | inline code lime body `#D4F523` + 2px 黑边方角海报贴纸；多行 fenced code block 深青-黑 HUD island `#0F2F2C` + 2px 黑边 + lime display caps 语言标签 + 浅文 `#E8F1EF` (12.6:1 AAA) + dark hljs syntax palette（forza6-scoped，不动 global github.css）|
+| 5 | Markdown | inline code lime body `#D4F523` + 1px 黑边方角海报贴纸；多行 fenced code block 深青-黑 HUD island `#0F2F2C` + 2px 黑边 + lime display caps 语言标签 + 浅文 `#E8F1EF` (12.6:1 AAA) + dark hljs syntax palette（forza6-scoped，不动 global github.css）|
 | 6 | Task 系统 | task panel/drawer 列容器 2px 黑边 + 顶 5px 状态色条；列头 display caps + magenta count；卡片 sticker + lime hover preview；`#nnn` magenta display caps；status badge 配色阶梯（todo 透明黑边 / in_progress cyan `#22B7E0` / in_review magenta `#FF2C7A` / done muted green）。**四处共用 `data-task-status` hook**：panel / drawer / task popover / markdown system message task event |
 | 7 | Popper / 浮层 | 全 Radix wrapper 局部 `--bg-hover: #E6F68A` lime preview（dropdown / context menu / popover / select / tooltip / hovercard item hover 统一）；context menu + agent/human profile popover + ManageMembersPopover + task popover (HoverPopover) 加 2px 黑边方角海报硬框；菜单内 menuitem 同步方角 |
 | 8 | Settings appearance | `THEME_META.forza6` 4 色 swatch：浅 lime + 节日粉 + 黑 + 酸 lime（双 lime + magenta + 黑） |

@@ -154,41 +154,54 @@ describe('describeSaveServerUrlOutcome — reload_rejected reasons', () => {
   const cases: ReadonlyArray<{
     reason: Extract<DesktopSaveServerUrlResult, { kind: 'reload_rejected' }>['reason'];
     titleMatch: RegExp;
+    desc: string;
   }> = [
-    { reason: 'not_attached', titleMatch: /sign in/i },
-    { reason: 'config_unreadable', titleMatch: /could not read/i },
-    { reason: 'parse_failed', titleMatch: /rejected the new config/i },
-    { reason: 'invalid_server_url', titleMatch: /rejected the new server url/i },
+    { reason: 'not_attached', titleMatch: /sign in/i, desc: '' },
+    {
+      reason: 'config_unreadable',
+      titleMatch: /could not read/i,
+      desc: 'Try saving the address again.',
+    },
+    {
+      reason: 'parse_failed',
+      titleMatch: /could not apply/i,
+      desc: 'Try saving the address again.',
+    },
+    { reason: 'invalid_server_url', titleMatch: /address was rejected/i, desc: '' },
   ];
 
   for (const c of cases) {
-    it(`reload_rejected/${c.reason} → tone=error with reason-specific headline`, () => {
+    it(`reload_rejected/${c.reason} → tone=error, product copy, NO raw daemon message`, () => {
       const banner = describeSaveServerUrlOutcome({
         ok: false,
         kind: 'reload_rejected',
         reason: c.reason,
-        message: 'daemon verbatim message',
+        // Raw backend message MUST NOT reach the banner — pin that the
+        // mapper substitutes product copy instead of passing it through.
+        message: 'daemon could not parse daemon-config.json',
       });
       expect(banner.tone).toBe('error');
       expect(banner.title).toMatch(c.titleMatch);
-      expect(banner.description).toBe('daemon verbatim message');
+      expect(banner.description).toBe(c.desc);
     });
   }
 });
 
 describe('describeSaveServerUrlOutcome — other failure arms', () => {
-  it('config_write_failed → tone=error with disk-write headline', () => {
+  it('config_write_failed → tone=error, product copy, NO raw disk path', () => {
     const banner = describeSaveServerUrlOutcome({
       ok: false,
       kind: 'config_write_failed',
       message: 'EACCES /path/daemon-config.json',
     });
     expect(banner.tone).toBe('error');
-    expect(banner.title).toMatch(/could not write/i);
-    expect(banner.description).toBe('EACCES /path/daemon-config.json');
+    expect(banner.title).toMatch(/could not save/i);
+    // Raw path / errno withheld from the user-facing banner.
+    expect(banner.description).not.toContain('daemon-config.json');
+    expect(banner.description).toMatch(/app data folder/i);
   });
 
-  it('no_attachment_controller → tone=info (save succeeded; just no verification surface)', () => {
+  it('no_attachment_controller → tone=info, product copy, NO controller type', () => {
     const banner = describeSaveServerUrlOutcome({
       ok: false,
       kind: 'no_attachment_controller',
@@ -197,6 +210,65 @@ describe('describeSaveServerUrlOutcome — other failure arms', () => {
     expect(banner.tone).toBe('info');
     expect(banner.title).toMatch(/saved/i);
     expect(banner.title).toMatch(/not available/i);
-    expect(banner.description).toBe('backend HostWsServerController unavailable');
+    expect(banner.description).not.toContain('HostWsServerController');
+    expect(banner.description).toMatch(/cannot verify the connection/i);
   });
+});
+
+describe('describeSaveServerUrlOutcome — no implementation language in user-visible copy', () => {
+  // Guard (Cindy review): the Connection pane renders BOTH title and
+  // description verbatim. After the product-copy pass, NO arm may leak
+  // implementation words into either field — otherwise a future edit
+  // that re-introduces `result.message` passthrough would quietly put
+  // daemon/config/attachment jargon back on the primary surface.
+  const TECH = /daemon|host_token|HostWsController|HostWsServerController|attachment|attach|daemon-config|\bWS\b/i;
+
+  const results: ReadonlyArray<DesktopSaveServerUrlResult> = [
+    { ok: true, kind: 'reloaded', elapsedMs: 380, attachedAt: 1 },
+    { ok: true, kind: 'unchanged' },
+    { ok: true, kind: 'connectivity_unverified', elapsedMs: 10_000 },
+    {
+      ok: false,
+      kind: 'config_write_failed',
+      message: 'EACCES /path/daemon-config.json',
+    },
+    {
+      ok: false,
+      kind: 'reload_rejected',
+      reason: 'not_attached',
+      message: 'no active daemon attachment',
+    },
+    {
+      ok: false,
+      kind: 'reload_rejected',
+      reason: 'config_unreadable',
+      message: 'daemon could not read daemon-config.json',
+    },
+    {
+      ok: false,
+      kind: 'reload_rejected',
+      reason: 'parse_failed',
+      message: 'daemon parse_failed',
+    },
+    {
+      ok: false,
+      kind: 'reload_rejected',
+      reason: 'invalid_server_url',
+      message: 'daemon rejected url',
+    },
+    {
+      ok: false,
+      kind: 'no_attachment_controller',
+      message: 'backend HostWsServerController unavailable',
+    },
+  ];
+
+  for (const result of results) {
+    const tag = result.ok ? result.kind : `${result.kind}`;
+    it(`${tag} → neither title nor description leaks implementation language`, () => {
+      const banner = describeSaveServerUrlOutcome(result);
+      expect(banner.title).not.toMatch(TECH);
+      expect(banner.description).not.toMatch(TECH);
+    });
+  }
 });

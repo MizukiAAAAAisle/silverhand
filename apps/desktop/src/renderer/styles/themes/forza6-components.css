@@ -30,7 +30,7 @@
                             composer (and any other input that
                             consumes the same focus token) paints
                             magenta when active.
-        INLINE CODE = lime chip + 2px solid near-black square
+        INLINE CODE = lime chip + 1px solid near-black square
                       border + near-black text. Poster-style HUD
                       sticker: lime body, hard rectangular outline,
                       no rounded corners.
@@ -44,8 +44,8 @@
        = READ/NAV CARRIER: sidebar + NavRail rail bg.
      Acid lime `#D4F523`
        = SELECTED + INLINE CODE: the "you-are-here" wedge in
-         NavRail/sidebar + the markdown-body inline code chip.
-         Poster-style HUD: black 2px border + near-black text.
+        NavRail/sidebar + the markdown-body inline code chip.
+        Poster-style HUD: black 1px border + near-black text.
      荧光黄 `#FFEB00` ── REMOVED FROM CHROME in v5. The locked role
        ("counters on dark chrome / black structure") has no live
        site in the current PR-2 surface; sidebar count uses
@@ -245,27 +245,28 @@
 [data-theme='forza6']
   aside[data-sidebar] .text-text-muted\/70 {
   color: var(--accent);
-  font-family: var(--font-mono);
+  font-family: var(--md-code-font, var(--font-mono));
   font-feature-settings: 'tnum';
   opacity: 1;
 }
 
 /* ── #4 Display caps on task-ref chips ─────────────────────────────
-   Chat task-tag chip — `[data-task-ref]` (TaskRef.tsx). Keep the
-   poster-chip uppercase + tracking, but do NOT use `--font-display`.
-   shiki 8sDhI2IlI5gcSI6r / lV4V87a8VnTQEEJ8: Markdown task chips sit
-   inside prose, so they need a stable poster face that harmonises with
-   Markdown text instead of following every channel-header/sidebar font
-   trial. */
+   Chat task-tag chip — `[data-task-ref]` (TaskRef.tsx). It sits inline
+   in the message stream, so its TYPEFACE follows the Appearance prose
+   font (`--md-prose-font`, default `var(--font-sans)`) for a consistent
+   markdown view — same rule as the task-event status pill (shiki). The
+   poster-chip identity (uppercase + tracking + colour + shape) stays;
+   only the font tracks the user's setting. Was a fixed Barlow Condensed
+   (`--forza6-font-task-ref`, since removed). */
 [data-theme='forza6'] [data-task-ref] {
-  font-family: var(--forza6-font-task-ref);
+  font-family: var(--md-prose-font, var(--font-sans));
   letter-spacing: 0.10em;
   text-transform: uppercase;
 }
 
 /* ── Markdown inline code ─────────────────────────────────────────
    Promoted to the token contract in PR-3 (#task:344). The lime
-   sticker recipe (acid-lime bg + 2px near-black border + 0 radius +
+   sticker recipe (acid-lime bg + 1px near-black border + 0 radius +
    near-black text) now lives entirely in forza6.css via
    `--bg-inline-code` / `--border-inline-code` / `--radius-inline-code`
    / `--text-inline-code`, consumed by the single
@@ -406,22 +407,35 @@
    rgba(255,255,255,0.08)`, so `.markdown-body .code-block` and
    `.code-block pre` pick those up directly. What stays in this
    forza6-only block:
-     - Poster sticker geometry: 2px near-black outline + 2px radius
-       (the same poster vocabulary as inline-code / NavRail selected
-       / send button). Not a code-island role — a forza6 chrome role.
-     - Header strip: pure `#0A0A0A` slab (`--bg-structure-dark` family)
-       with island-light foreground. Header bg stays forza6-scoped
-       because warm-script's `--bg-island-deep` warm stone would be
-       wrong here, and global keeps the header transparent.
+     - Poster sticker geometry: 2px near-black outline + 0 radius — the
+       same hard-cut poster vocabulary as inline-code
+       (`--radius-inline-code: 0`), floating frames (`--floating-radius:
+       0`) and controls (`--control-radius: 0`).
+     - Header is a full-bleed cap, NOT a slab framed inside the outline.
+       The indigo header carries a `-2px` top/left/right margin so it
+       overlaps the 2px black frame and meets the island's outer edge,
+       which needs `overflow: visible` on the island (safe at radius 0 —
+       the rounded-corner clip the base rule relied on is moot here, and
+       `pre` keeps its own `overflow:auto`). The black frame then reads
+       as the body's border only, so the island reads as two parts:
+       indigo header cap + framed code body (shiki #task:796 — the slab
+       used to sit inside the frame and looked embedded/box-in-box).
+       Not a code-island role — a forza6 chrome role.
+     - Header strip: indigo slab (`--forza6-indigo-slab`) with
+       island-light foreground. Header bg stays forza6-scoped because
+       warm-script's `--bg-island-deep` warm stone would be wrong here,
+       and global keeps the header transparent.
      - lime small label for the language tag (this is the `lime/粉
        只做边框或小标题` Cindy asked for).
      - lime-tinted hover on the expand toggle to match the rest of
        the forza6 hover vocabulary. */
 [data-theme='forza6'] .markdown-body .code-block {
   border: 2px solid #0A0A0A;
-  border-radius: 2px;
+  border-radius: 0;
+  overflow: visible;
 }
 [data-theme='forza6'] .markdown-body .code-block__header {
+  margin: -2px -2px 0;
   background: var(--forza6-indigo-slab);
   border-bottom: 1px solid #0F2F2C;
 }
@@ -663,7 +677,7 @@
   color: #0A0A0A;
 }
 [data-theme='forza6'] [data-tasks-column] > header > span:last-of-type {
-  font-family: var(--font-mono);
+  font-family: var(--md-code-font, var(--font-mono));
   font-feature-settings: 'tnum';
   color: var(--brand-primary);
   font-weight: 700;
@@ -729,6 +743,41 @@
   letter-spacing: 0.06em;
   font-weight: 700;
   border-radius: 0;
+}
+
+/* The system-event status pill (TaskStatusPill, `[data-task-event-status]`)
+   lives in the chat stream — its row (`.system-message-row`) already runs
+   on the Appearance prose font (`--md-prose-font`), but the rule above
+   forces every `[data-task-status]` consumer onto the forza6 poster
+   display face (Rajdhani), so the event pill stayed locked and ignored
+   the font setting (shiki). Re-home just the EVENT pill to the prose font
+   so it tracks Appearance like the surrounding "moved" text. Board badges
+   (TaskStatusBadge — `[data-task-status]` WITHOUT `[data-task-event-status]`)
+   keep the poster caps. Equal specificity to the rule above, wins on
+   source order; the poster tracking / weight / 0-radius still apply. */
+[data-theme='forza6'] [data-task-event-status] {
+  font-family: var(--md-prose-font, var(--font-sans));
+}
+
+/* Clustered system-event status pills (global.css:573) demote to a
+   transparent fill + `currentColor` outline+text, where currentColor
+   resolves to the status's `--task-status-*-text` token. In forza6 the
+   todo / done / closed text tokens are ON-FILL foregrounds (near-white
+   #F7F8F6 / #FFFFFF, legible only on their saturated board chips), so as
+   an outline on the light chat canvas they all but vanish — shiki saw
+   "CLOSED" disappear (#task:796). Re-home those three to their SIGNATURE
+   fill colour (the `-bg` token: slate / deep-green / indigo), which is
+   canvas-legible by construction and keeps each status's colour identity
+   (the rule's stated intent). in_progress / in_review already use a dark
+   ink text token, so they read fine as-is and are left untouched. */
+[data-theme='forza6'] .system-activity-cluster [data-task-event-status='todo'] {
+  color: var(--task-status-todo-bg);
+}
+[data-theme='forza6'] .system-activity-cluster [data-task-event-status='done'] {
+  color: var(--task-status-done-bg);
+}
+[data-theme='forza6'] .system-activity-cluster [data-task-event-status='closed'] {
+  color: var(--task-status-closed-bg);
 }
 
 /* ── Radix popper surfaces (v5.7) ──────────────────────────────────

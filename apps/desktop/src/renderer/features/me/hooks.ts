@@ -250,7 +250,7 @@ export async function runLogoutAndDisableHost(
       ok: false,
       kind: 'no_current_host',
       message:
-        'No current local host to disable. Sign out without disabling instead.',
+        'This computer is not connected. Use Log out instead.',
     };
   }
   // Step 1 — revoke. If the daemon revoke route returns ok:false

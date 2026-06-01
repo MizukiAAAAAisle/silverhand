@@ -81,7 +81,15 @@
 
   --font-sans: var(--font-sans);
   --font-serif: var(--font-serif);
-  --font-mono: var(--font-mono);
+  /* The `font-mono` utility follows the user's appearance CODE font
+     (`--md-code-font`, set on the document root by applyAppearanceOverrides),
+     falling back to the theme mono stack when unset. Without this, every
+     monospace chrome bit (chat @handles, task `#nnn`, conversation ids,
+     activity-bubble pids) stayed locked to the theme's JetBrains Mono and
+     ignored the Appearance → code-font setting (shiki). `--md-code-font`
+     itself defaults to `var(--font-mono)` per theme, so the fallback is
+     belt-and-suspenders. */
+  --font-mono: var(--md-code-font, var(--font-mono));
   --font-display: var(--font-display);
 
   /* New tokens introduced by forza6 — see docs/design-new-theme.md §3.
@@ -682,7 +690,7 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   padding: 0.25em 0.6em;
   background: var(--bg-island-deep);
   border-bottom: 1px solid var(--border-island);
-  font-family: var(--font-mono);
+  font-family: var(--md-code-font, var(--font-mono));
   font-size: 0.75em;
   color: var(--text-island);
   user-select: none;

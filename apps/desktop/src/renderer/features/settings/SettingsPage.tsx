@@ -58,8 +58,7 @@ import {
   PROSE_FONT_PRESETS,
   type FontPreset,
 } from '@/settings/font-presets';
-import { HostsPane } from './HostsPane';
-import { ServerUrlPane } from './ServerUrlPane';
+import { ConnectionPane } from './ConnectionPane';
 
 const settingsKey = ['settings'] as const;
 
@@ -133,12 +132,11 @@ function parseRuntimes(raw: string | undefined | null): RuntimeKind[] {
  *  page-internal sub-nav; selection is local React state, persisted to
  *  localStorage so a refresh stays put. (No URL routing yet — settings
  *  deep-links are rare and the URL slot belongs to the chat router.) */
-type SettingsSection = 'appearance' | 'profile' | 'server' | 'hosts' | 'proxy';
+type SettingsSection = 'appearance' | 'profile' | 'connection' | 'proxy';
 const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   'appearance',
   'profile',
-  'server',
-  'hosts',
+  'connection',
   'proxy',
 ];
 const SETTINGS_SECTION_KEY = 'silverhand:settings-section';
@@ -146,6 +144,10 @@ const SETTINGS_SECTION_KEY = 'silverhand:settings-section';
 function readPersistedSection(): SettingsSection {
   if (typeof localStorage === 'undefined') return 'appearance';
   const raw = localStorage.getItem(SETTINGS_SECTION_KEY);
+  // Migrate the pre-merge 'server' / 'hosts' sections (now folded into
+  // the single 'connection' pane) so a returning user lands somewhere
+  // valid instead of falling back to 'appearance'.
+  if (raw === 'server' || raw === 'hosts') return 'connection';
   return SETTINGS_SECTIONS.includes(raw as SettingsSection)
     ? (raw as SettingsSection)
     : 'appearance';
@@ -274,10 +276,8 @@ export function SettingsPage(): JSX.Element {
             />
           ) : section === 'profile' ? (
             <ProfilePane />
-          ) : section === 'server' ? (
-            <ServerUrlPane />
-          ) : section === 'hosts' ? (
-            <HostsPane />
+          ) : section === 'connection' ? (
+            <ConnectionPane />
           ) : (
             <ProxyPane
               proxyUrl={proxyUrl}
@@ -301,10 +301,12 @@ export function SettingsPage(): JSX.Element {
 }
 
 /** Page-internal vertical nav. The settings sub-nav is *secondary*
- *  navigation (the user already chose Settings from the rail), so the
- *  selected state stays soft — a subtle background tint + medium-weight
- *  text rather than the strong border-accent + filled selected bg used
- *  by the channel sidebar. */
+ *  navigation (the user already chose Settings from the rail). Rows
+ *  follow the app-wide selected-row vocabulary: hover paints a pale
+ *  `--bg-option-hover` preview, the selected row a bright
+ *  `--bg-row-selected` fill + `--text-on-selected` ink — the same
+ *  two-step hierarchy as the channel sidebar / task board, with radius
+ *  on `--control-radius`. */
 function SettingsSubNav({
   section,
   onSelect,
@@ -319,8 +321,7 @@ function SettingsSubNav({
   }> = [
     { id: 'appearance', label: 'Appearance', icon: <Palette className="size-3.5" /> },
     { id: 'profile', label: 'Profile', icon: <User className="size-3.5" /> },
-    { id: 'server', label: 'Server', icon: <Server className="size-3.5" /> },
-    { id: 'hosts', label: 'Local host', icon: <Server className="size-3.5" /> },
+    { id: 'connection', label: 'Connection', icon: <Server className="size-3.5" /> },
     { id: 'proxy', label: 'Proxy', icon: <Network className="size-3.5" /> },
   ];
 
@@ -339,10 +340,10 @@ function SettingsSubNav({
               aria-current={selected ? 'page' : undefined}
               onClick={() => onSelect(item.id)}
               className={cn(
-                'flex w-full items-center gap-2 rounded-[6px] px-2.5 py-1.5 text-left text-sm transition-colors',
+                'flex w-full items-center gap-2 rounded-[var(--control-radius)] px-2.5 py-1.5 text-left text-sm transition-colors',
                 selected
-                  ? 'bg-[var(--bg-row-hover,var(--bg-hover))] font-medium text-text-primary'
-                  : 'text-text-secondary hover:bg-[var(--bg-row-hover,var(--bg-hover))] hover:text-text-primary',
+                  ? 'bg-[var(--bg-row-selected)] font-medium text-[color:var(--text-on-selected)]'
+                  : 'text-text-secondary hover:bg-[var(--bg-option-hover)] hover:text-text-primary',
               )}
             >
               {item.icon}
@@ -504,7 +505,7 @@ function ProfilePane(): JSX.Element {
   const uploadAvatar = useUploadAvatar();
   const clearAvatar = useClearAvatar();
   const logout = useLogout();
-  // D3.e — secondary affordance: "Sign out and disable this host".
+  // D3.e — secondary affordance: "Remove this computer and log out".
   // Reuses `hosts:revoke` + `auth:logout` in strict sequence; the
   // plain `logout` mutation above stays as-is so the default Log out
   // path NEVER touches the host record (Cindy review gate 2).
@@ -638,7 +639,7 @@ function ProfilePane(): JSX.Element {
     }
   };
 
-  // Disable the "Sign out and disable this host" button when there's
+  // Disable the "Remove this computer" action when there's
   // no current local host (unclaimed / already revoked) — revoking
   // an already-revoked host returns a typed `host_revoked` error
   // that's user-confusing in this context.
@@ -677,7 +678,7 @@ function ProfilePane(): JSX.Element {
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
         <div className="flex flex-col gap-2">
           <Label>Name</Label>
-          <div className="flex max-w-sm items-center gap-2 rounded-md border border-border-subtle bg-bg-row-hover px-3 py-1.5 text-sm text-text-primary">
+          <div className="flex max-w-sm items-center gap-2 rounded-[var(--control-radius)] border border-border-subtle bg-bg-row-hover px-3 py-1.5 text-sm text-text-primary">
             <span className="font-mono text-text-muted">@</span>
             <span className="select-text">{dto.name}</span>
           </div>
@@ -770,13 +771,12 @@ function ProfilePane(): JSX.Element {
         </footer>
       </form>
 
-      <div className="flex max-w-sm flex-col gap-3 border-t border-border-subtle pt-5">
+      <div className="flex max-w-2xl flex-col gap-3 border-t border-border-subtle pt-5">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-xs font-medium text-text-secondary">Session</p>
+            <p className="text-xs font-medium text-text-secondary">Account</p>
             <p className="text-[11px] text-text-muted">
-              Sign out of this desktop client. The local host stays
-              registered; signing back in reuses it.
+              Sign out on this computer.
             </p>
           </div>
           <Button
@@ -801,12 +801,10 @@ function ProfilePane(): JSX.Element {
         <div className="flex items-center justify-between gap-3 pt-1">
           <div className="min-w-0">
             <p className="text-[11px] font-medium text-text-secondary">
-              Sign out and disable this host
+              Remove this computer
             </p>
             <p className="text-[11px] text-text-muted">
-              Revokes the local host record on the server before signing
-              out. The daemon will not reconnect until you sign in again
-              and a new host record is provisioned.
+              Stop this computer from running agents, then log out.
             </p>
           </div>
           <Button
@@ -820,7 +818,7 @@ function ProfilePane(): JSX.Element {
             }
             title={
               disableHostUnavailable
-                ? 'No current local host to disable.'
+                ? 'This computer is not connected.'
                 : undefined
             }
           >
@@ -829,20 +827,17 @@ function ProfilePane(): JSX.Element {
             ) : (
               <ShieldOff className="size-3.5 text-error" />
             )}
-            <span className="text-error">Disable & sign out</span>
+            <span className="text-error">Remove & log out</span>
           </Button>
         </div>
         {confirmDisableHost && (
           <div className="rounded-md border border-error bg-bg-row-hover px-3 py-2 text-[11px] text-text-secondary">
             <p>
-              This immediately revokes this desktop's host token on the
-              server, stops the local daemon from delivering messages,
-              and signs you out.{' '}
+              This computer will stop running agents until you sign in
+              again and reconnect it.{' '}
               <span className="text-text-primary">
-                Existing agents and conversations are kept
-              </span>{' '}
-              — but you'll need to sign in again and provision a new
-              host record before this desktop can deliver messages.
+                Your workspaces and messages are kept.
+              </span>
             </p>
             <div className="mt-2 flex gap-2">
               <Button
@@ -866,7 +861,7 @@ function ProfilePane(): JSX.Element {
                 ) : (
                   <ShieldOff className="mr-1 size-3.5" />
                 )}
-                Disable & sign out
+                Remove & log out
               </Button>
             </div>
           </div>
@@ -967,13 +962,13 @@ function ProxyPane({
                       <label
                         key={runtime.kind}
                         className={cn(
-                          'flex min-w-0 items-center gap-3 rounded-[6px] border px-3 py-2 transition-colors',
+                          'flex min-w-0 items-center gap-3 rounded-[var(--control-radius)] border px-3 py-2 transition-colors',
                           proxyEnabled
                             ? 'cursor-pointer'
                             : 'cursor-not-allowed',
                           checked
                             ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))]'
-                            : 'border-border-subtle bg-bg-floating hover:bg-[var(--bg-row-hover,var(--bg-hover))]',
+                            : 'border-border-subtle bg-bg-floating hover:bg-[var(--bg-option-hover)]',
                         )}
                       >
                         <input

@@ -77,7 +77,7 @@ describe('runLogoutAndDisableHost — Cindy gate 2 (no logout without successful
     expect(result).toEqual({
       ok: false,
       kind: 'no_current_host',
-      message: expect.stringContaining('No current local host'),
+      message: expect.stringContaining('This computer is not connected'),
     });
     expect(deps.revokeHost).not.toHaveBeenCalled();
     expect(deps.logout).not.toHaveBeenCalled();
@@ -127,7 +127,7 @@ describe('runLogoutAndDisableHost — Cindy gate 2 (no logout without successful
     // `network_error` may surface without a message; the orchestrator
     // still has to return something the UI can render. We chose the
     // code over a generic "Revoke failed" to give the user a hint
-    // they can match against the matrix in HostsPane.
+    // they can match against the failure matrix in ConnectionPane.
     const deps = makeFakeDeps({
       revokeResult: {
         ok: false,

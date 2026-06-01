@@ -36,38 +36,38 @@ describe('describeConnectionState — six-arm presentation matrix (D3.d)', () =>
     expect(v.detail).toBeNull();
   });
 
-  it('claimed + attached_at===number → "Connected" + since X (success tone)', () => {
+  it('claimed + attached_at===number → "Ready" + since X (success tone)', () => {
     const v = describeConnectionState('claimed', NOW - 5 * ONE_MIN, NOW);
     expect(v.visible).toBe(true);
-    expect(v.label).toBe('Connected');
+    expect(v.label).toBe('Ready');
     expect(v.tone).toBe('success');
     expect(v.detail).toBe('since 5m ago');
   });
 
-  it('revoked → "Revoked" (muted tone — server-side terminal, not connection error)', () => {
+  it('revoked → "Removed" (muted tone — server-side terminal, not connection error)', () => {
     const v = describeConnectionState('revoked', null, NOW);
     expect(v.visible).toBe(true);
-    expect(v.label).toBe('Revoked');
+    expect(v.label).toBe('Removed');
     expect(v.tone).toBe('muted');
     expect(v.detail).toBeNull();
   });
 
-  it('error → "Disconnected" (warning tone — transient claim-side blip)', () => {
+  it('error → "Offline" (warning tone — transient claim-side blip)', () => {
     const v = describeConnectionState('error', null, NOW);
     expect(v.visible).toBe(true);
-    expect(v.label).toBe('Disconnected');
+    expect(v.label).toBe('Offline');
     expect(v.tone).toBe('warning');
     expect(v.detail).toBeNull();
   });
 
-  it('failed → "Daemon stopped" (error tone — supervisor budget exhausted)', () => {
+  it('failed → "Stopped" (error tone — supervisor budget exhausted)', () => {
     // `failed` and `revoked` look superficially similar (both
     // unavailable), but they have very different user actions: revoked
     // needs a re-sign-in to provision a fresh host record, failed
     // needs an app relaunch. They MUST render as distinct labels.
     const v = describeConnectionState('failed', null, NOW);
     expect(v.visible).toBe(true);
-    expect(v.label).toBe('Daemon stopped');
+    expect(v.label).toBe('Stopped');
     expect(v.tone).toBe('error');
     expect(v.detail).toBeNull();
   });
@@ -85,14 +85,14 @@ describe('describeConnectionState — anti-collapse pins (Cindy gate 1)', () => 
     expect(failed.tone).not.toBe(revoked.tone);
   });
 
-  it('claimed without attached_at NEVER promotes to "Connected" via the mapper', () => {
+  it('claimed without attached_at NEVER promotes to "Ready" via the mapper', () => {
     // `attached_at===null` is the entire signal that the WS hasn't
     // landed. If a future refactor reads `attached_at ?? someDefault`
     // somewhere upstream we want this test to fail before the user
-    // sees a green "Connected" pill on a daemon that isn't actually
+    // sees a green "Ready" pill on a daemon that isn't actually
     // attached.
     const v = describeConnectionState('claimed', null, NOW);
-    expect(v.label).not.toBe('Connected');
+    expect(v.label).not.toBe('Ready');
     expect(v.tone).not.toBe('success');
   });
 
@@ -100,19 +100,19 @@ describe('describeConnectionState — anti-collapse pins (Cindy gate 1)', () => 
     // Even if the backend snapshot accidentally carries an
     // `attached_at` number on a `revoked` / `failed` host (it
     // shouldn't, but `BackendInfo` doesn't structurally exclude it),
-    // the mapper must NOT silently render "Connected".
+    // the mapper must NOT silently render "Ready".
     const revokedWithStaleAttach = describeConnectionState(
       'revoked',
       NOW - ONE_MIN,
       NOW,
     );
-    expect(revokedWithStaleAttach.label).toBe('Revoked');
+    expect(revokedWithStaleAttach.label).toBe('Removed');
     const failedWithStaleAttach = describeConnectionState(
       'failed',
       NOW - ONE_MIN,
       NOW,
     );
-    expect(failedWithStaleAttach.label).toBe('Daemon stopped');
+    expect(failedWithStaleAttach.label).toBe('Stopped');
   });
 });
 

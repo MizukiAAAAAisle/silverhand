@@ -13,6 +13,12 @@
   --bg-surface: #E1DCD3;
   --bg-hover: #EFECE6;
   --bg-active: #D5D0C6;
+  /* Selectable-option hover preview — the soft fill a row/card gets on
+     hover to say "this is pickable" (Proxy runtime cards, task-filter
+     dropdown rows). Distinct from `--bg-row-hover` (brand-tinted list
+     scanning) and from `--bg-row-selected` (committed). warm keeps the
+     cool-neutral hover so it doesn't strobe; forza6 maps it to pale lime. */
+  --bg-option-hover: var(--bg-hover);
   --bg-selected: #FFFFFF;
   --bg-floating: #FFFFFF;
   --bg-chat: #FFFAEF;

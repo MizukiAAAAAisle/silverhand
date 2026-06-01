@@ -42,8 +42,8 @@ describe('connectingRefetchIntervalMs — only polls inside the connecting windo
   });
 
   it('claimed + attached_at===number → stops polling (already connected)', () => {
-    // Anti-spam pin: once the pill flips to "Connected" we MUST
-    // stop polling. Otherwise HostsPane sits open hammering
+    // Anti-spam pin: once the pill flips to "Ready" we MUST
+    // stop polling. Otherwise ConnectionPane sits open hammering
     // backend:info every 1.5s indefinitely.
     expect(
       connectingRefetchIntervalMs(

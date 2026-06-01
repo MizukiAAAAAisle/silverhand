@@ -13,9 +13,9 @@ import {
   Hash,
   MessageSquareText,
   PenLine,
+  RotateCcw,
   Search,
   User,
-  X,
 } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import {
@@ -129,10 +129,19 @@ export function TaskFilterBar({
         <button
           type="button"
           onClick={() => onChange(baselineFilters)}
-          className="flex items-center gap-1 rounded-[var(--chip-radius)] px-1.5 py-1 text-[11px] text-text-muted transition-colors hover:text-text-primary"
+          aria-label="Reset filters"
+          title="Reset filters"
+          className={cn(
+            // Reset affordance: icon-only, no label. Idle is a bare muted
+            // glyph; hover paints a square box behind it — radius follows
+            // `--control-radius` (forza6 squares it to 0, warm rounds) and
+            // the fill is the theme hover token, so it adapts per theme
+            // (shiki #task:795).
+            'inline-flex items-center justify-center rounded-[var(--control-radius)] p-1.5',
+            'text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary',
+          )}
         >
-          <X className="size-3" />
-          Clear
+          <RotateCcw className="size-3.5" />
         </button>
       ) : null}
     </div>
@@ -233,16 +242,15 @@ function OptionRow({
       aria-selected={selected}
       onClick={onSelect}
       className={cn(
-        // Hover = pale-lime preview FILL only, no border. forza6
-        // redefines `--bg-hover` to its #E6F68A pale-lime ground inside
-        // every Radix popper wrapper, so `hover:bg-bg-hover` reads light
-        // lime here and the cool neutral hover in warm themes — same
-        // menu-hover vocabulary as Select.Item / context menu, without
-        // touching the global token or scrollbar. The transparent border
-        // is kept only to reserve layout space (no hover colour) so rows
-        // don't shift (shiki #task:790).
+        // Hover = pale-lime preview FILL only, no border. Routes through
+        // the shared `--bg-option-hover` semantic token (forza6 → #E6F68A
+        // pale lime, warm → cool-neutral hover) — the same "selectable
+        // option hover" vocabulary the Proxy runtime cards use, so the two
+        // surfaces stay in lock-step. The transparent border is kept only
+        // to reserve layout space (no hover colour) so rows don't shift
+        // (shiki #task:790).
         'flex w-full items-center gap-2 rounded-[var(--select-item-radius)] px-2 py-1.5 text-left text-xs transition-colors',
-        'border border-transparent hover:bg-bg-hover hover:text-text-primary',
+        'border border-transparent hover:bg-[var(--bg-option-hover)] hover:text-text-primary',
         // A real (non-default) current value = the app-wide selected-row
         // vocabulary (festive lime fill + on-selected ink), NOT the magenta
         // `accent-soft` tint. The ALL/All-channels default row stays plain

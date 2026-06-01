@@ -9,11 +9,6 @@ import { queryClient } from './lib/queryClient';
 // flash through a system fallback during a cold start with no network.
 // Single weight (700) only, ~16KB woff2.
 import '@fontsource/rajdhani/700.css';
-// Barlow Condensed is forza6's prose-poster face for the markdown task
-// chip (`--forza6-font-task-ref`, #task:494). Deliberately separate
-// from `--font-display` so chrome-label font trials don't drag the
-// inline-in-prose chip with them. Single weight (700) only, ~18KB woff2.
-import '@fontsource/barlow-condensed/700.css';
 import './styles/global.css';
 
 const root = document.getElementById('root');

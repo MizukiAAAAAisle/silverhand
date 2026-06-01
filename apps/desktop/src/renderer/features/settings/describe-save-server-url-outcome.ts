@@ -53,8 +53,8 @@ export function describeSaveServerUrlOutcome(
       case 'reloaded':
         return {
           tone: 'success',
-          title: 'Saved — daemon reconnected to the new server.',
-          description: `Fresh attachment observed in ${formatMs(result.elapsedMs)}.`,
+          title: 'Saved. Reconnected to the server.',
+          description: `Verified in ${formatMs(result.elapsedMs)}.`,
         };
       case 'unchanged':
         // No-op write. The bytes were already what the user typed —
@@ -63,21 +63,21 @@ export function describeSaveServerUrlOutcome(
         // (the existing connection is whatever it was before).
         return {
           tone: 'info',
-          title: 'No changes — server URL was already that value.',
+          title: 'No changes — the address was already that value.',
           description: '',
         };
       case 'connectivity_unverified':
         // CRITICAL: Cindy `#task:634` review note 1 — this MUST
-        // NOT be rendered as "Connected". The user's CONFIG is
+        // NOT be rendered as "Connected". The user's address is
         // saved (the daemon acked the reload); we just didn't
-        // observe the new WS landing within the watchdog budget,
-        // which most often means the new backend is unreachable.
-        // Copy is deliberately "saved" + "still reconnecting" so
-        // the user knows to either wait or undo the URL change.
+        // observe the new connection landing within the watchdog
+        // budget, which most often means the new server is
+        // unreachable. Copy is deliberately "saved" + "reconnecting"
+        // so the user knows to either wait or undo the change.
         return {
           tone: 'info',
-          title: 'Saved — still reconnecting to the new server.',
-          description: `No connection observed within ${formatMs(result.elapsedMs)}. The previous connection has been dropped; the new one may still be in progress, or the server may be unreachable.`,
+          title: 'Saved. Reconnecting…',
+          description: `No connection was confirmed within ${formatMs(result.elapsedMs)}. The server may still be starting or unreachable.`,
         };
       default: {
         // Exhaustiveness gate — adding a new ok arm without
@@ -112,24 +112,33 @@ export function describeSaveServerUrlOutcome(
     case 'config_write_failed':
       return {
         tone: 'error',
-        title: 'Could not write daemon config to disk.',
-        description: result.message,
+        title: 'Could not save the address.',
+        description:
+          'Check that Silverhand can write to its app data folder, then try again.',
       };
-    case 'reload_rejected':
+    case 'reload_rejected': {
+      // The raw daemon message is deliberately NOT surfaced: it carries
+      // implementation language (daemon / config / parse) that this
+      // product surface must not show. The title already names the
+      // failure; only retryable reasons get a short next-step line.
+      const retryable =
+        result.reason === 'config_unreadable' ||
+        result.reason === 'parse_failed';
       return {
         tone: 'error',
         title: describeReloadReason(result.reason),
-        description: result.message,
+        description: retryable ? 'Try saving the address again.' : '',
       };
+    }
     case 'no_attachment_controller':
-      // Mode-specific edge: daemon acked the reload but the
-      // backend mode lacks a `HostWsController` to observe the
-      // resulting attachment. Bytes are saved; verification is
-      // structurally impossible in this build.
+      // Mode-specific edge: the address was saved but this backend
+      // mode lacks a controller to observe the resulting connection.
+      // Bytes are saved; verification is structurally impossible. Raw
+      // message withheld — it names an internal controller type.
       return {
         tone: 'info',
-        title: 'Saved — connection verification not available in this mode.',
-        description: result.message,
+        title: 'Saved. Connection check is not available in this mode.',
+        description: 'The address was saved, but this build cannot verify the connection.',
       };
     default: {
       const _exhaustive: never = result;
@@ -180,13 +189,13 @@ function describeReloadReason(
 ): string {
   switch (reason) {
     case 'not_attached':
-      return 'No active daemon connection to refresh — sign in first.';
+      return 'This computer is not connected yet — sign in first.';
     case 'config_unreadable':
-      return 'Daemon could not read the new config file. Retry the save.';
+      return 'Could not read the saved address. Retry the save.';
     case 'parse_failed':
-      return 'Daemon rejected the new config bytes. Retry the save.';
+      return 'Could not apply the saved address. Retry the save.';
     case 'invalid_server_url':
-      return 'Daemon rejected the new server URL.';
+      return 'The saved address was rejected.';
     default: {
       const _exhaustive: never = reason;
       return _exhaustive;
