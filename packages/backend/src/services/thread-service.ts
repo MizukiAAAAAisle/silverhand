@@ -531,6 +531,14 @@ export class ThreadService {
         thread_id: closed.thread.id,
       },
     });
+    this.events.publishToScope(
+      `workspace:${closed.thread.workspace_id}`,
+      'workspace_channels_changed',
+      {
+        workspace_id: closed.thread.workspace_id,
+        channel_id: closed.thread.id,
+      },
+    );
     this.runtimeHost.resolveConversationRuns(
       closed.thread.id,
       CONVERSATION_CLOSED,

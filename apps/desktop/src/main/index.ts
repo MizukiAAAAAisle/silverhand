@@ -1,8 +1,8 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, safeStorage, session as electronSession, shell, type MenuItemConstructorOptions } from 'electron';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { delimiter, join, resolve } from 'node:path';
 import {
   AuthSessionResponseSchema,
   EMBEDDED_BOOTSTRAP_FILENAME,
@@ -274,6 +274,21 @@ function readRemoteDebugPortEnv(): { name: string; value: string } | null {
   return null;
 }
 
+function appendExistingPathEntries(
+  rawPath: string,
+  candidates: readonly string[],
+): { path: string; added: string[] } {
+  const parts = rawPath.split(delimiter).filter(Boolean);
+  const seen = new Set(parts);
+  const added = candidates.filter(candidate => {
+    if (seen.has(candidate)) return false;
+    if (!existsSync(candidate)) return false;
+    seen.add(candidate);
+    return true;
+  });
+  return { path: [...added, ...parts].join(delimiter), added };
+}
+
 /**
  * macOS: when launched from Finder/Dock, GUI apps inherit launchd's
  * minimal default PATH (`/usr/bin:/bin:/usr/sbin:/sbin`) — they do NOT
@@ -290,6 +305,12 @@ function readRemoteDebugPortEnv(): { name: string; value: string } | null {
  * Only runs when packaged + macOS; in `pnpm dev` we already inherit
  * the terminal's PATH so this would be wasted work (and could conflict
  * if the dev shell has a different PATH than the user's login shell).
+ *
+ * The login-shell probe is necessary but not sufficient: users can have
+ * version-manager shims installed in common per-user locations without
+ * exporting those directories from their shell rc files. We prepend only
+ * existing fallback directories so packaged daemon children can find
+ * runtime shims like `~/.local/bin/claude` without inventing PATH entries.
  */
 function patchPathFromLoginShell(): { ok: boolean; detail: string } {
   if (!app.isPackaged || process.platform !== 'darwin') {
@@ -315,8 +336,19 @@ function patchPathFromLoginShell(): { ok: boolean; detail: string } {
         detail: `no marker match (shell=${userShell}, raw=${JSON.stringify(out.slice(0, 200))})`,
       };
     }
-    process.env.PATH = m[1].trim();
-    return { ok: true, detail: `shell=${userShell}, len=${process.env.PATH.length}` };
+    const patched = appendExistingPathEntries(m[1].trim(), [
+      join(homedir(), '.local', 'bin'),
+      join(homedir(), '.npm-global', 'bin'),
+      join(homedir(), '.bun', 'bin'),
+      '/opt/homebrew/bin',
+      '/opt/homebrew/sbin',
+      '/usr/local/bin',
+    ]);
+    process.env.PATH = patched.path;
+    return {
+      ok: true,
+      detail: `shell=${userShell}, len=${process.env.PATH.length}, added=${patched.added.join(':') || 'none'}`,
+    };
   } catch (err) {
     return {
       ok: false,

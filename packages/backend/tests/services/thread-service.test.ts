@@ -537,10 +537,15 @@ describe('ThreadService.closeThread', () => {
       t.fake.delivered = [];
       t.fake.stops = [];
       const order: string[] = [];
+      const workspaceEvents: Array<{ kind: string; payload: unknown }> = [];
       const unsub = t.events.subscribe(t.channel.id, e => {
         if (e.kind === 'message') order.push('publish-message');
         if (e.kind === 'thread_updated') order.push('publish-thread');
       });
+      const unsubWorkspace = t.events.subscribeScope(
+        `workspace:${t.workspace.id}`,
+        e => workspaceEvents.push({ kind: e.kind, payload: e.payload }),
+      );
       t.fake.onDeliver = () => order.push('deliver');
 
       const closed = await t.service.closeThread({
@@ -550,9 +555,14 @@ describe('ThreadService.closeThread', () => {
         postedToParent: false,
       });
       unsub();
+      unsubWorkspace();
 
       expect(closed.thread.closed_at).not.toBeNull();
       expect(order.slice(0, 2)).toEqual(['publish-message', 'publish-thread']);
+      expect(workspaceEvents).toContainEqual({
+        kind: 'workspace_channels_changed',
+        payload: { workspace_id: t.workspace.id, channel_id: created.thread.id },
+      });
       expect(t.fake.resolvedConversations).toEqual([
         { conversationId: created.thread.id, reason: 'conversation_closed' },
       ]);
