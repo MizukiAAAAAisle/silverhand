@@ -149,7 +149,8 @@ appearance.test.ts 锁定）。这是 §3.1 关键 3 的硬约束：不显式定
 任务状态徽标在 5 个渲染点出现（`WorkspaceTasksDrawer` / `TasksSection`
 看板卡 / `TaskRef` 内联 chip / `SystemMessage` task-event pill /
 `TaskStatusPill` popover 选择器），全部经 `[data-task-status='<status>']`
-钩子从同一 12-token 契约取色。每个主题 MUST 全部 12 个都显式定义；
+钩子从同一 15-token 契约取色（5 status × {bg/text/border}，含终态
+`closed`，见 §3.2.2.1）。每个主题 MUST 全部 15 个都显式定义；
 不允许漏一个回退到 `:root`，否则 forza6 的饱和青/品红会泄漏到暖系。
 
 命名用 domain-prefix `--task-status-*` 而非通用 `--status-*`：这些值
@@ -163,8 +164,12 @@ narrow namespace 防止被复用到不合适的尺寸。
 | `--task-status-in-review-bg` / `-text` / `-border` | "in review" — **awaiting human attention 语义**，配 accent/brand 一路（loud beacon） |
 | `--task-status-done-bg` / `-text` / `-border` | "done" 徽标背景 / 字 / 边框 shorthand |
 
-边框使用 shorthand（含 width + style + color）：暖软底主题三个状态
-基本都给 `none`，海报系按 hard-fill / soft-fill 决定是否加 1.5px 黑环。
+边框使用 shorthand（含 width + style + color）。**forza6 v5.8（#task:778）：
+5 个 status 统一成同一套海报形态——实心饱和/中性填充 + `border: none` +
+0 圆角**；旧的 todo（透明+黑环）/ done（半透明+黑环）描边形态已废弃，因为
+它们在实心 tile 旁边读起来像另一种 chip。各 status 保留语义 hue：todo 中性
+灰青、in_progress cyan、in_review 品牌品红、done 实心深绿、closed 靛蓝，
+ink 全部过 AA。暖软底主题仍走 `none` 边框 + 软底。
 
 **语义提醒**：`in_progress` = active / 正在跑 → warning/HUD-live；
 `in_review` = 等待人类介入 → accent/loud-beacon。如果你直觉相反，
@@ -362,6 +367,37 @@ content 6px 跟 control / chip 同一逻辑保持 pixel-zero。item 4px 是
 select listbox 在概念上是配对的（一个打开另一个），radius 一致很合理。
 但 control = 6px、listbox item = 2px、listbox container = 6px 是三个值
 而 control 只是一个，复用会丢 item 维度。独立 2 token 更稳。
+
+### 3.6.3 `data-dropdown-frame` —— 下拉框海报边框（#task:782）
+
+§3.6.2 把 Select listbox 排除在 floating frame 的 **border** 之外（理由
+是"小气泡不套 2px 黑框"）。但 shiki 复核 forza6 时认为 task filter /
+message search / archived channels 这几处**功能性下拉框**在海报主题下
+缺了硬边、跟周边 2px 黑框语言不一致——它们不是 tooltip 那种瞬时小气泡，
+而是停留型选择面板，应当吃海报边框。
+
+为避免一刀切回退 §3.6.2 的边界（`[role='listbox']` 一挂边框会误伤
+Composer mention 这类内联下拉、且 channel filter 是 combobox：`role=listbox`
+落在**内层子列表**而非 Content 根，挂上去会双重边框），改用**显式 opt-in
+属性** `data-dropdown-frame`：只有手动标了这个属性的 `Content` 根才吃框。
+
+```css
+/* global.css —— 复用 --floating-border，不新增 token */
+[data-dropdown-frame] { border: var(--floating-border); }
+```
+
+| 维度 | 取值 |
+|---|---|
+| 命中 | 仅显式带 `data-dropdown-frame` 的浮层根（Radix `Select.Content` / `Popover.Content`） |
+| 边框 | 复用 `--floating-border`（暖系 `1px solid var(--border)`，海报系 `2px solid <near-black>`）|
+| 不动 radius | radius 仍由各自既有契约管（Select 走 §3.6.2 的 `--select-*-radius`，filter popover 走自身 `--select-content-radius`）|
+
+当前消费点：`TaskFilterBar`（channel/assignee/creator 三个 Content）、
+`SearchPanel`（3 个 Select.Content + trigger 边框走 `--control-border-width`）、
+`ArchivedChannelsPanel`（2 个 Select.Content + 同样 trigger）、`Composer`
+mention picker。**边界**：Tooltip / 非 listbox 的瞬时 popover **不**加这个
+属性（Cindy `别把 Tooltip/非 listbox popover 误纳进 2px Select 语义`）——
+§3.6.2 "小气泡不接重框"对它们仍然成立，这里只升级"停留型功能下拉"。
 
 ### 3.7 几何 + 排版 + 节奏
 
@@ -822,6 +858,42 @@ forza6 是首个走"token + component skin"两层的主题，不只是换色。�
 
 - `apps/desktop/src/renderer/styles/themes/forza6.css` — token 层（约 250 行，PR-1）
 - `apps/desktop/src/renderer/styles/themes/forza6-components.css` — component 特化层（约 740 行，PR-2）。**所有 selector 都必须 `[data-theme='forza6']`-scoped**，warm 三主题像素零变化。
+
+### 12.1.1 三层 token 模型（#task:788 重构）
+
+重构前 forza6 配色有三个结构病：(A) root token 块被 `forza6-components.css`
+里一个裸 `[data-theme='forza6'] {}` 块**静默重定义**，root 那份成 dead value；
+(B) 同一个色相散落成三种写法——root 语义 token 内嵌 hex、组件层再抄一遍字面值、
+个别 scope 又覆盖一次；(C) 死/误导 token（如 `--bg-selected` 洋红无可见消费者）。
+P1 把配色收成**三层**，三条硬规则：
+
+1. **L1 — Raw palette（唯一允许 hex 的地方）。** forza6.css 顶部 `--forza6-*`
+   原始色相块（pink / pink-deep / lime / lime-pale / lime-deep / cyan / yellow /
+   ink / teal-island / teal-deep / carrier-channels / carrier-sessions）是 forza6
+   品牌/festival 色相**唯一**可以写裸 hex 字面量的地方。改一个色相，只改这里一处。
+   （`--forza6-syntax-*` / `--forza6-indigo-*` 是 code-island 子系统的 theme-private
+   raw，同属 L1。）冷中性 bg 阶梯（`#F7F8F6`/`#ECEEEB`…）和深饱和语义变体
+   （`--warning`/`--error` deep）不是 festival 品牌色，暂不强制入 raw palette。
+
+2. **L2 — 语义 token 全走 `var(--forza6-*)` 衍生。** forza6.css 的 `[data-theme=
+   'forza6']` **单个** root 块里，每个语义 token（`--brand-primary`/`--accent`/
+   `--bg-row-selected`/`--task-status-*`/`--border-focus`…）的值都是 `var(--forza6-*)`
+   或其 alpha/`color-mix` 衍生，**不再内嵌品牌 hex**。语义 token 名保持区分（per-role
+   alias），只是值指向同一 raw——`--text-on-selected`/`--border-avatar`/`--bg-structure-dark`
+   都读 `var(--forza6-ink)` 但仍是独立 token，不合并。alpha 形（`rgba(179,24,106,…)`）
+   是允许的例外。
+
+3. **L3 — `forza6-components.css` 0 hex（例外：data-uri / alpha / 几何）。** 组件特化层
+   只读语义 token（必要时读 L1 raw，如 sidebar carrier），**不写品牌 hex 字面量**，
+   也**不再有第二个 root-level token 重定义块**——root token 的唯一定义点是
+   forza6.css。例外：SVG data-uri 里的 `rgba()`、纯 alpha 叠层、几何尺寸。
+
+`appearance.test.ts` 锁这三条：forza6.css 必须含 `--forza6-pink:` 等 raw；
+forza6-components.css **不得**再出现裸 `[data-theme='forza6'] {` root 重定义块；
+关键 root token（`--bg-app`/`--bg-nav-rail`/`--border-focus`）不得是 dead value。
+分期：P1 引 raw + root 归位 + 删 components root-reassign（本节）；P2 抽 `--bg-hover-preview`
+（`#E6F68A` ×10）；P3 换组件层 `#0A0A0A`（→ ink 语义 alias）；P4 换 `#D4F523` + 收口
+`--bg-selected`。P2–P4 同样视觉零变化。
 
 ### 12.2 特化覆盖面（8 大块）
 

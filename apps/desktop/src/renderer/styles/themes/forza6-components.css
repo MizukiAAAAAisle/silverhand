@@ -7,10 +7,15 @@
    `backgroundImage: var(--bg-pattern-image, none)`, warm three
    themes resolve to `none`.
 
-   Token-layer values live in `forza6.css`. This file may re-assign
-   forza6's own tokens AND add component-targeted CSS, but does not
-   expand the global token contract (design-new-theme.md §3 stays
-   the PR-1 surface).
+   Token-layer values live in `forza6.css`. This file does NOT do any
+   root-level token reassignment (the bare `[data-theme='forza6'] {}`
+   block was removed in P1 #task:788 — root tokens have a single source
+   in forza6.css). It may only (a) add component-targeted CSS and (b)
+   redefine tokens inside element-/state-scoped bundles (e.g.
+   `aside[data-sidebar]`, focus/hover states) so Tailwind utilities
+   cascade locally. It does not expand the global token contract
+   (design-new-theme.md §3 stays the PR-1 surface). See §12.1.1 for the
+   three-layer model.
 
    ── PR-2 v5 — selected/focus role swap + poster-style inline code,
       per shiki `z7QboHr4aDIoAHQX`.
@@ -65,30 +70,12 @@
    ================================================================ */
 
 /* ── Root forza6 token re-assignments ──
-   None of these leak outside forza6 — consumed only by surfaces
-   that already render under `[data-theme='forza6']`. */
-[data-theme='forza6'] {
-  /* Frame perimeter: festival magenta. Visible as the 8px gap
-     around panels (App.tsx outer `<div>`) plus the titlebar bar.
-     Titlebar bg matches frame exactly — no dark tint overlay. */
-  --bg-app: var(--brand-primary);
-
-  /* NavRail bg: pale lime tint, same family as the sidebars
-     (left-side carrier). Selected button below paints a hot lime
-     wedge over this pale bg via the explicit override block. */
-  --bg-nav-rail: #F4F8E8;
-  --text-nav-rail: #0A0A0A;
-  --text-nav-rail-hover: #0A0A0A;
-  --bg-nav-rail-hover: rgba(0, 0, 0, 0.08);
-
-  /* Focus ring: festival magenta. shiki `z7QboHr4aDIoAHQX` "文字
-     输入区的 active border 用节日粉". The chat composer textarea
-     uses `focus:border-border-focus focus:ring-2 focus:ring-border-focus`
-     (Composer.tsx:546); other inputs across the app inherit the
-     same token. Magenta border + magenta ring on focus is the
-     "you're inputting here" cue — distinct from selected (lime). */
-  --border-focus: var(--brand-primary);
-}
+   REMOVED in P1 (#task:788). Every value this block held (`--bg-app`,
+   `--bg-nav-rail`, `--text-nav-rail`, `--text-nav-rail-hover`,
+   `--bg-nav-rail-hover`, `--border-focus`) is now defined once at the
+   forza6.css root — the live values were pulled back there so the root
+   token block is the single source of truth (no more silent
+   component-layer override of dead root tokens). */
 
 /* ── Titlebar — same magenta as frame, scattered hard slivers ──
    shiki `tAkNayaDiv8uWASp` "只有 2-3 片大的，斜的那种感觉" → v4
@@ -185,23 +172,19 @@
   background-color: #E6F68A;
 }
 
-/* ── Sidebar token bundle — pale lime carrier, lime selected wedge ──
-   `--bg-row-selected` and `--text-on-selected` are redefined here
-   (overriding PR-1 forza6 root scope, where both used brand magenta
-   + near-black) so sidebar selection paints lime + near-black
-   instead of magenta + near-black. Other surfaces consuming
-   `--bg-row-selected` (SettingsPage.tsx:779) keep PR-1 magenta
-   because this redefinition is scoped to `aside[data-sidebar]`. */
+/* ── Sidebar token bundle — pale lime carrier, dark ink ──
+   `--bg-row-selected` is the festive lime selection wedge for the whole app
+   now (defined at the forza6 root), so it is NOT redefined here anymore —
+   this scope only carries the sidebar's pale-lime surface ladder + dark text
+   tokens. `--text-on-selected` likewise comes from root (#0A0A0A). */
 [data-theme='forza6'] aside[data-sidebar] {
-  --bg-channels-sidebar: #F4F8E8;
-  --bg-sessions-sidebar: #EEF3DC;
-  --text-primary: #0A0A0A;
+  --bg-channels-sidebar: var(--forza6-carrier-channels);
+  --bg-sessions-sidebar: var(--forza6-carrier-sessions);
+  --text-primary: var(--forza6-ink);
   --text-secondary: #1A1F1E;
   --text-muted: #4F5F5C;
   --bg-hover: rgba(0, 0, 0, 0.06);
   --bg-elevated: rgba(0, 0, 0, 0.10);
-  --bg-row-selected: #D4F523;
-  --text-on-selected: #0A0A0A;
 }
 
 /* Selected row: poster-style near-black 2px border + dark token
@@ -686,6 +669,23 @@
   font-weight: 700;
 }
 
+/* Drop target (#task:784). The base block above forces the column bg to
+   `--bg-elevated` and the header count span to brand magenta — both wrong on
+   the selection wash. The column fill comes from the global
+   `[data-tasks-column][data-drop-target]` rule (→ `--bg-row-selected`, now
+   festive lime at the forza6 root). These higher-specificity overrides only
+   add what global can't reach: keep the poster black frame (global sets it to
+   `--accent` ≈ wine-magenta, which muddies on lime) and flip both header
+   spans to `--text-on-selected` so the brand-magenta count span becomes
+   legible near-black on lime. */
+[data-theme='forza6'] [data-tasks-column][data-drop-target] {
+  border-color: #0A0A0A;
+}
+[data-theme='forza6'] [data-tasks-column][data-drop-target] > header > span:first-of-type,
+[data-theme='forza6'] [data-tasks-column][data-drop-target] > header > span:last-of-type {
+  color: var(--text-on-selected);
+}
+
 /* Task card — poster sticker + lime hover preview. Selectors target
    `[data-tasks-board] [data-task-number]` so they apply to both the
    drawer and the TasksSection without affecting any other element
@@ -713,8 +713,9 @@
 }
 
 /* Status badge typography is forza6-only: poster-display caps with
-   tight tracking and a hard 2px corner radius. Per-status colours +
-   borders live in the `--task-status-*` token family (see forza6.css);
+   tight tracking and zero corner radius (poster hard-cut; shiki
+   #task:778 — all 5 status tags share one square solid form). Per-status
+   colours live in the `--task-status-*` token family (see forza6.css);
    colour application happens in global.css's `[data-task-status]`
    rules so warm themes get the same structural contract.
 
@@ -727,7 +728,7 @@
   font-family: var(--font-display);
   letter-spacing: 0.06em;
   font-weight: 700;
-  border-radius: 2px;
+  border-radius: 0;
 }
 
 /* ── Radix popper surfaces (v5.7) ──────────────────────────────────

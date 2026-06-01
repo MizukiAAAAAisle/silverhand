@@ -833,6 +833,7 @@ function PickerMenu({
       // substitution leaks into `::-webkit-scrollbar-thumb`). See
       // #task:505.
       data-composer-picker=""
+      data-dropdown-frame
       role="listbox"
       // Don't steal focus from the textarea on click — submit handler
       // still needs the caret position to do the replacement.

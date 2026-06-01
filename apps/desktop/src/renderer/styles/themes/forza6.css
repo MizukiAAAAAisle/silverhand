@@ -13,6 +13,32 @@
    ================================================================ */
 
 [data-theme='forza6'] {
+  /* ════════════════════════════════════════════════════════════════
+     L1 — RAW PALETTE (forza6 refactor #task:788, P1)
+     The ONLY place a forza6 brand/festival hex literal is allowed to
+     live. Every semantic token below (L2) derives from these via
+     `var(--forza6-*)`; `forza6-components.css` (L3) reads the semantic
+     tokens and never a bare brand hex. It MAY read these raws directly
+     in the one controlled exception documented in docs/design-new-theme
+     §12.1.1 — a scoped carrier bundle with no matching L2 semantic token
+     (the sidebar `--forza6-carrier-*` re-derivation). To restyle a hue,
+     edit it here once. See docs/design-new-theme.md §12.1.1 token model.
+     (The `--forza6-syntax-*` / `--forza6-indigo-*` families further down
+     are already theme-private raws for the code-island sub-system.)
+     ════════════════════════════════════════════════════════════════ */
+  --forza6-pink: #FF2C7A;            /* brand hot magenta */
+  --forza6-pink-deep: #B3186A;       /* AA-on-light foreground magenta (--accent) */
+  --forza6-lime: #D4F523;            /* acid lime — selection / inline-code / keyword */
+  --forza6-lime-pale: #E6F68A;       /* pale-lime hover / selected-preview ground (P2) */
+  --forza6-lime-deep: #3F7A1B;       /* AA deep lime — success / done */
+  --forza6-cyan: #22B7E0;            /* electric cyan — accent-2 / in_progress / number */
+  --forza6-yellow: #FFEB00;          /* fluorescent HUD yellow (dormant) */
+  --forza6-ink: #0A0A0A;             /* poster near-black — ink / poster border / structure */
+  --forza6-teal-island: #0F2F2C;     /* code-island ground */
+  --forza6-teal-deep: #081E1B;       /* code-island deep ground */
+  --forza6-carrier-channels: #F4F8E8;/* pale-lime channels-sidebar / NavRail carrier */
+  --forza6-carrier-sessions: #EEF3DC;/* pale-lime sessions-sidebar carrier */
+
   /* ── Backgrounds (cool-neutral ladder for chat read area) ── */
   --bg-base: #F7F8F6;
   --bg-primary: #ECEEEB;
@@ -20,20 +46,22 @@
   --bg-surface: #DDE0DC;
   --bg-hover: #DAE0DA;
   --bg-active: #C9D1C9;
-  /* Selected (NavRail icons / sidebar rows / segment current).
-     Magenta + near-black via `--text-on-brand` → 5.56:1 (AA, not AAA).
-     `--bg-selected` is intentionally aligned with `--bg-row-selected`
-     so NavRail (which reads `--bg-selected`) and sidebar row tokens
-     paint the same magenta selection wedge. */
+  /* Selected (NavRail icons / segment current). `--bg-selected` is the
+     brand magenta wedge and is intentionally NOT aligned with
+     `--bg-row-selected` (festive lime): row-selection across sidebar /
+     Settings / task board reads as lime, while NavRail/segment current
+     stay magenta. Keep the two tokens distinct. */
   --bg-selected: var(--brand-primary);
   --bg-floating: #FFFFFF;
   --bg-chat: #F7F8F6;
 
   /* ── Card frame —
-     Hard chrome/read split: 8px frame padding exposes the deep teal
-     `--bg-app`, so the chat panel reads as a flat cool-white island
-     dropped onto the festival frame. */
-  --bg-app: #0F847B;
+     8px frame padding exposes `--bg-app` around the chat panel. The
+     festival frame + titlebar read as brand magenta (this was the
+     component-layer live value; the old v1-era teal #0F847B it used to
+     hold was dead — overridden in forza6-components.css. P1 #task:788
+     pulled the live value back to this single root definition). */
+  --bg-app: var(--forza6-pink);
   --frame-padding: 8px;
   --card-radius: 6px;          /* tighter than warm 8px — Forza tile feel */
   --card-shadow: 0 1px 2px rgba(var(--shadow-base), 0.06);
@@ -53,18 +81,23 @@
      display-caps headlines; chat-app sidebar/CTA labels don't qualify.
      Cindy review `jD0-Ik9O0c-QzuXd` blocker #1, AA/AAA correction in
      `JzkPVNV3svN97WSR`. */
-  --brand-primary: #FF2C7A;
-  --text-on-brand: #0A0A0A;
-  --text-nav-rail: rgba(0, 0, 0, 0.78);
-  --text-nav-rail-hover: #0A0A0A;
-  --bg-nav-rail-hover: rgba(0, 0, 0, 0.14);
+  --brand-primary: var(--forza6-pink);
+  --text-on-brand: var(--forza6-ink);
+  --text-nav-rail: var(--forza6-ink);
+  --text-nav-rail-hover: var(--forza6-ink);
+  --bg-nav-rail-hover: rgba(0, 0, 0, 0.08);
   --bg-task-tag: var(--brand-primary);
   --text-on-task-tag: var(--text-on-brand);
   --border-task-tag: rgba(0, 0, 0, 0.18);
   --sidebar-row-border-width: 2px;
 
-  /* ── Sidebar row state — hot magenta selected; lighter pink wash on hover ── */
-  --bg-row-selected: var(--brand-primary);
+  /* ── Sidebar row state — festive lime selected; lighter pink wash on hover ──
+     `--bg-row-selected` is the forza6 "selected row" identity across the whole
+     app (sidebar/workspaces/members rows, Settings selected cards, task-board
+     drop target): festive lime #D4F523, black ink (14.8:1 AAA). NavRail icons
+     / segment current read the separate `--bg-selected` token, which stays
+     brand magenta — do not fold them together. */
+  --bg-row-selected: var(--forza6-lime);
   --bg-row-hover: color-mix(in oklab, var(--brand-primary) 22%, var(--bg-channels-sidebar));
 
   /* ── Sidebar identity ladder —
@@ -77,13 +110,17 @@
      structure-dark variant headers. Doing it now without component-
      layer fg overrides produces ~1.5:1 sidebar text on dark teal — the
      PR-1 review blocker Cindy flagged on `-a3eR3PFtTRqtVsq`. */
-  --bg-nav-rail: var(--brand-primary);
+  /* NavRail carrier: pale-lime tint (same family as the sidebars). The
+     selected button paints a hot lime wedge over this via a component
+     rule. P1 #task:788 pulled the live value back here (root used to say
+     `var(--brand-primary)`, dead — overridden in forza6-components.css). */
+  --bg-nav-rail: var(--forza6-carrier-channels);
   --bg-channels-sidebar: color-mix(in oklab, var(--brand-primary) 8%, var(--bg-base));
   --bg-sessions-sidebar: color-mix(in oklab, var(--brand-primary) 4%, var(--bg-base));
 
   /* ── Islands (code blocks) — deep teal-black HUD aesthetic ── */
-  --bg-island: #0F2F2C;
-  --bg-island-deep: #081E1B;
+  --bg-island: var(--forza6-teal-island);
+  --bg-island-deep: var(--forza6-teal-deep);
 
   /* ── Text (cool-neutral on light, light on dark island) ── */
   --text-primary: #0F1F1D;
@@ -103,7 +140,7 @@
      promotion (#task:344) moves that chip into `--bg-inline-code` /
      `--border-inline-code` / `--radius-inline-code`, and `text-inline-code`
      follows it to near-black so the chip text reads ~13.8:1 AAA on lime. */
-  --text-inline-code: #0A0A0A;
+  --text-inline-code: var(--forza6-ink);
 
   /* Inline-code chip — lime poster sticker (per shiki `z7QboHr4aDIoAHQX`):
      full acid-lime background + 2px near-black border + 0 radius so the
@@ -111,8 +148,8 @@
      vs white is only 1.42:1; the black outline carries the visual
      separation). Promoted from the previous `[data-theme='forza6']
      .markdown-body :not(pre) > code` override block in forza6-components.css. */
-  --bg-inline-code: #D4F523;
-  --border-inline-code: 2px solid #0A0A0A;
+  --bg-inline-code: var(--forza6-lime);
+  --border-inline-code: 2px solid var(--forza6-ink);
   --radius-inline-code: 0;
 
   /* Task status badge — 4 statuses × {bg, text, border} = 12 tokens.
@@ -120,25 +157,34 @@
      (in_progress cyan, in_review brand magenta) drop their border
      because the fill itself frames the chip; todo + done keep a
      poster-sticker outline for identity. See shiki `u3MEX9LowZZLMa8Z` /
-     Cindy `qE1wgoD3Oy_aQLFH` for the crowding rationale. */
-  --task-status-todo-bg: transparent;
-  --task-status-todo-text: #0A0A0A;
-  --task-status-todo-border: 1.5px solid #0A0A0A;
-  --task-status-in-progress-bg: #22B7E0;
-  --task-status-in-progress-text: #0A0A0A;
+     Cindy `qE1wgoD3Oy_aQLFH` for the crowding rationale.
+
+     v5.8 (shiki #task:778): all FIVE statuses now share ONE poster
+     form — solid saturated/muted fill + no border + 0 radius. The old
+     todo (transparent + outline) and done (translucent + outline) read
+     as a different chip species next to the filled in_progress/in_review/
+     closed tiles; unified so the column reads as one vocabulary. Each
+     keeps its semantic hue: todo = muted gray-teal (pending/neutral),
+     in_progress = cyan, in_review = brand magenta, done = deep lime,
+     closed = indigo. All fills clear AA against their ink. */
+  --task-status-todo-bg: #5A6B67;
+  --task-status-todo-text: #F7F8F6;
+  --task-status-todo-border: none;
+  --task-status-in-progress-bg: var(--forza6-cyan);
+  --task-status-in-progress-text: var(--forza6-ink);
   --task-status-in-progress-border: none;
   --task-status-in-review-bg: var(--brand-primary);
   --task-status-in-review-text: var(--text-on-brand);
   --task-status-in-review-border: none;
-  --task-status-done-bg: rgba(63, 122, 27, 0.18);
-  --task-status-done-text: #2E5A14;
-  --task-status-done-border: 1.5px solid rgba(0, 0, 0, 0.40);
+  --task-status-done-bg: var(--forza6-lime-deep);
+  --task-status-done-text: #F7F8F6;
+  --task-status-done-border: none;
 
   /* ── Floating frame (§3.x) ──
      Menu / popover / hover-card 共用一套外框契约。forza6 走 poster
      sticker hardness：2px 全黑边 + 零圆角 + items 也零圆角（避免外方
      内圆的"歪贴纸"观感，沿用 forza6-components.css v5.7.1 的设计）。 */
-  --floating-border: 2px solid #0A0A0A;
+  --floating-border: 2px solid var(--forza6-ink);
   --floating-radius: 0;
   --floating-item-radius: 0;
 
@@ -146,8 +192,8 @@
      Sidebar / NavRail 行的 selected + hover 边框颜色。forza6 走
      poster sticker 硬边：两态同一近黑色 (#0A0A0A)，差异化由背景填充
      承担（lime 选中 vs pale-lime 预览），不靠边框色梯度。 */
-  --border-row-hover: #0A0A0A;
-  --border-row-selected: #0A0A0A;
+  --border-row-hover: var(--forza6-ink);
+  --border-row-selected: var(--forza6-ink);
 
   /* ── Chrome label utility (§3.7.1) ──
      forza6 走 display 字体栈 + 稍开的 tracking（0.06em，跟
@@ -207,12 +253,12 @@
      island ground; all foreground/background pairings AA+ except the
      intentionally-muted comment line). */
   --forza6-syntax-base: #E8F1EF;
-  --forza6-syntax-keyword: #D4F523;
+  --forza6-syntax-keyword: var(--forza6-lime);
   --forza6-syntax-string: #FFD7E5;
-  --forza6-syntax-number: #22B7E0;
+  --forza6-syntax-number: var(--forza6-cyan);
   --forza6-syntax-comment: rgba(255, 255, 255, 0.45);
   --forza6-syntax-meta: rgba(255, 255, 255, 0.55);
-  --forza6-syntax-addition: #D4F523;
+  --forza6-syntax-addition: var(--forza6-lime);
   --forza6-syntax-deletion: #FF6F8C;
 
   /* ── forza6 indigo (theme-private; #task:762 placement A) ──
@@ -247,7 +293,7 @@
      the contract-token rationale. */
   --task-status-closed-bg: var(--forza6-indigo-slab);
   --task-status-closed-text: #FFFFFF;
-  --task-status-closed-border: 1.5px solid var(--forza6-indigo-slab);
+  --task-status-closed-border: none;
 
   /* ── Accent —
      Forza tokens have a dual-role tension: the bright neon palette
@@ -266,7 +312,7 @@
      `[data-theme='forza6']` component-layer specialization (progress
      fills, focus rings, icon highlights), and `--accent-2` (cyan,
      surface-only — see comment below). */
-  --accent: #B3186A;
+  --accent: var(--forza6-pink-deep);
   --accent-soft: rgba(179, 24, 106, 0.14);
   --accent-hover: #8E0F50;
   --accent-glow: rgba(179, 24, 106, 0.30);
@@ -276,7 +322,7 @@
      bg. The neon versions remain visible in PR-2 chrome surfaces under
      forza6-only specialization (e.g., progress fill = bright lime,
      warning HUD strip = bright yellow). ── */
-  --success: #3F7A1B;             /* deep lime — ~5.4:1 on bg-base, AA */
+  --success: var(--forza6-lime-deep); /* ~5.4:1 on bg-base, AA */
   --success-soft: rgba(63, 122, 27, 0.16);
   --warning: #8A5A00;             /* deep amber — ~5.56:1 on bg-base, AA
                                      (was `#B07820` at only 3.55:1 — fail) */
@@ -301,11 +347,17 @@
   --border: rgba(15, 31, 29, 0.14);
   --border-subtle: rgba(15, 31, 29, 0.10);
   --border-island: rgba(255, 255, 255, 0.08);
-  --border-focus: var(--accent);
+  /* Input/focus cue = festival magenta (NOT `--accent` deep magenta):
+     the chat composer reads `focus:border-border-focus` / `ring-border-focus`
+     (Composer.tsx) and other inputs inherit it — magenta border+ring is the
+     "you're inputting here" cue, distinct from selected (lime). Live value
+     pulled back from the forza6-components.css root-reassign block (P1
+     #task:788). */
+  --border-focus: var(--brand-primary);
   /* Chat avatar frame — forza6 uses the brand near-black to harden
      the head-shot edge against neon backgrounds. Other themes alias
      this to `--border-subtle` so the chat surface stays soft. */
-  --border-avatar: #0A0A0A;
+  --border-avatar: var(--forza6-ink);
   --border-avatar-width: 2px;
 
   /* ── On-color foregrounds —
@@ -321,7 +373,7 @@
   --text-on-success: #FFFFFF;       /* deep lime + white ≈ 5.9:1 AA */
   --text-on-warning: #FFFFFF;       /* deep amber + white ≈ 5.93:1 AA */
   --text-on-error: #FFFFFF;         /* deep red + white ≈ 5.9:1 AA */
-  --text-on-selected: var(--text-on-brand);  /* selected = brand magenta → near-black ≈ 5.56:1 AA */
+  --text-on-selected: var(--forza6-ink);  /* selected = festive lime → near-black 14.8:1 AAA */
 
   /* ── Overlay / shadow ── */
   --overlay-backdrop: rgba(8, 30, 27, 0.45);
@@ -396,8 +448,8 @@
      is only ~2.21:1 (Cindy review `JzkPVNV3svN97WSR`). If a future
      foreground "info ink" is needed, add a separate token; don't
      overload this one. */
-  --accent-2: #22B7E0;
-  --text-on-accent-2: #0A0A0A;
+  --accent-2: var(--forza6-cyan);
+  --text-on-accent-2: var(--forza6-ink);
 
   /* `--bg-structure-dark` — near-black structural layer.
      Roles (review-locked, do not bleed beyond these):
@@ -406,7 +458,7 @@
        tool-call card header, popover header, workspace-tile background,
        3px NavRail dock notch.
      NEVER use as decoration on chat-read surface. */
-  --bg-structure-dark: #0A0A0A;
+  --bg-structure-dark: var(--forza6-ink);
   --text-on-structure: #FFFFFF;
 
   /* `--text-on-dark-pop` — fluorescent yellow metadata.
@@ -414,5 +466,5 @@
        currency / level numbers / counters that sit ON dark chrome or
        black structure. NEVER on `--bg-chat` or any light surface — the
        contrast disappears and the festival HUD vibe breaks. */
-  --text-on-dark-pop: #FFEB00;
+  --text-on-dark-pop: var(--forza6-yellow);
 }

@@ -410,6 +410,23 @@ button:disabled { cursor: not-allowed; }
   border-radius: var(--select-item-radius);
 }
 
+/* Dropdown content poster frame (#task:782). shiki asked that the
+   task-filter / message-search / archived-channels dropdowns adopt the
+   poster 2px frame in forza6 — overriding the earlier "Select listbox
+   stays light, no heavy frame" call (`L4ApUD5JQCD8LuAQ`) for these
+   dropdown popups specifically. Opt-in via `data-dropdown-frame` on the
+   visible popup frame, NOT via `[role='listbox']`: the channel combobox
+   carries `role='listbox'` on an INNER sub-list (it has a search box
+   above), so a role hook would paint a second border inside the frame.
+   Tooltips and non-listbox info popovers deliberately do NOT carry the
+   attr, so they keep their own treatment (Cindy review: don't fold them
+   into Select semantics). Reuses `--floating-border` so the width/colour
+   lives in one place per theme (forza6 → 2px black; warm → 1px subtle),
+   the same border the full menus already use. */
+[data-dropdown-frame] {
+  border: var(--floating-border);
+}
+
 /* Row-state border color (PR-5 token promotion). Sidebar rows
    (`.sidebar-row-border` class on ChannelsSidebar / WorkspacesPanel /
    Sidebar / sidebar-shared — all rendered inside an
@@ -903,4 +920,23 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 }
 [data-panel-control] {
   border-radius: var(--control-radius);
+}
+
+/* Kanban column drop target (#task:784). The drag-over wash can't be a
+   Tailwind utility on the column: forza6-components.css gives
+   `[data-tasks-column]` a (0,2,0) background/border that outweighs any
+   single-class utility. So the highlight is keyed on the `data-drop-target`
+   attribute here — placed after the forza6 import, this equal-specificity
+   (0,2,0) rule wins on source order in every theme (forza6 overrides the
+   border back to its poster black + flips header ink in
+   forza6-components.css, since `--accent` ≈ the brand fill there). Header
+   label/count/icon flip to `--text-on-selected` so they stay legible on the
+   brand wash; selectors clear Tailwind's per-span text utilities (0,1,0). */
+[data-tasks-column][data-drop-target] {
+  background-color: var(--bg-row-selected);
+  border-color: var(--accent);
+}
+[data-tasks-column][data-drop-target] > header > span,
+[data-tasks-column][data-drop-target] > header > svg {
+  color: var(--text-on-selected);
 }

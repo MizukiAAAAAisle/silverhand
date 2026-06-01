@@ -395,4 +395,59 @@ describe('theme markdown token cascade contract', () => {
       /\[data-panel-(?:card|pill|tabs|control)[^\]]*\][\s\S]{0,400}?\bborder-radius:/g;
     expect(forza6ComponentsCss.match(panelHookRadiusRegex)).toBeNull();
   });
+
+  /* #task:788 forza6 colour-system refactor — three-layer token model.
+     L1 raw palette is the ONLY place a forza6 brand hex literal lives;
+     L2 semantic tokens derive via var(--forza6-*); L3
+     (forza6-components.css) carries NO second root-level token block —
+     root tokens are defined once in forza6.css. See design-new-theme
+     §12.1.1. */
+  it('defines the forza6 raw palette in forza6.css', () => {
+    const RAW_PALETTE = [
+      '--forza6-pink',
+      '--forza6-pink-deep',
+      '--forza6-lime',
+      '--forza6-lime-pale',
+      '--forza6-lime-deep',
+      '--forza6-cyan',
+      '--forza6-yellow',
+      '--forza6-ink',
+      '--forza6-teal-island',
+      '--forza6-teal-deep',
+      '--forza6-carrier-channels',
+      '--forza6-carrier-sessions',
+    ];
+    for (const token of RAW_PALETTE) {
+      expect(forza6Css).toContain(`${token}:`);
+    }
+  });
+
+  it('keeps forza6 root tokens defined once (no component-layer root reassign)', () => {
+    const forza6ComponentsCss = readFileSync(
+      new URL('../styles/themes/forza6-components.css', import.meta.url),
+      'utf8',
+    );
+    // Strip CSS block comments so prose mentions of a token (e.g. the
+    // header rationale) don't count as declarations.
+    const code = forza6ComponentsCss.replace(/\/\*[\s\S]*?\*\//g, '');
+    // No bare `[data-theme='forza6'] {` block — every selector in the
+    // component layer must be element-scoped, never a second root-level
+    // token reassignment.
+    expect(code).not.toMatch(/\[data-theme='forza6'\]\s*\{/);
+    // The tokens the deleted root-reassign block used to own are now
+    // owned solely by forza6.css; the component layer must not redefine
+    // them (which would re-create the dead-root-value bug).
+    for (const token of ['--bg-app', '--bg-nav-rail', '--border-focus']) {
+      expect(code).not.toContain(`${token}:`);
+    }
+  });
+
+  it('homes the live forza6 root token values in forza6.css (not dead values)', () => {
+    // `--border-focus` live value (festival magenta) was previously set
+    // in the component-layer root block; P1 pulled it back to root.
+    expect(forza6Css).toContain('--border-focus: var(--brand-primary);');
+    // Brand + carrier semantic tokens derive from raws, not inline hex.
+    expect(forza6Css).toContain('--brand-primary: var(--forza6-pink);');
+    expect(forza6Css).toContain('--bg-nav-rail: var(--forza6-carrier-channels);');
+  });
 });

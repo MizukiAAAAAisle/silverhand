@@ -9,7 +9,6 @@ import {
 } from 'react';
 import {
   Archive,
-  Check,
   CheckCircle2,
   Circle,
   CircleDashed,
@@ -27,8 +26,10 @@ import {
   DEFAULT_TASK_FILTERS,
   type TaskFilters,
 } from '@/features/tasks/taskFilters';
+import { isTaskDrag, readTaskDrag, writeTaskDrag } from '@/features/tasks/taskDnd';
 import { useRelativeTime } from '@/components/chat/useRelativeTime';
 import { TaskStatusBadge, TaskCardContextMenu } from '@/components/tasks/TaskStatusBadge';
+import { TaskDropPlaceholder } from '@/components/tasks/TaskDropPlaceholder';
 import { TaskFilterBar, type ChannelOption } from '@/components/tasks/TaskFilterBar';
 
 /**
@@ -459,7 +460,7 @@ export function WorkspaceTasksDrawer({
               onChange={setFilters}
               baselineFilters={baselineFilters}
               channelOptions={channelOptions}
-              allChannelsLabel="All channels"
+              allChannelsLabel="ALL"
               assigneeOptions={assigneeOptions}
               creatorOptions={creatorOptions}
               hasUnassigned={hasUnassigned}
@@ -646,15 +647,40 @@ function KanbanColumn({
   onStatusChange: (messageId: string, next: TaskStatus) => void;
   highlightedTaskNumber: number | null;
 }): JSX.Element {
+  // Drag-over highlight (#task:779) — mirrors TasksSection.
+  const [dragOver, setDragOver] = useState(false);
   return (
     <section
       data-tasks-column
       data-status={status}
+      data-drop-target={dragOver || undefined}
+      onDragOver={e => {
+        if (!isTaskDrag(e.dataTransfer)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        if (!dragOver) setDragOver(true);
+      }}
+      onDragLeave={e => {
+        if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+        setDragOver(false);
+      }}
+      onDrop={e => {
+        const payload = readTaskDrag(e.dataTransfer);
+        setDragOver(false);
+        if (!payload) return;
+        e.preventDefault();
+        if (payload.from === status) return; // same-column drop = no-op
+        onStatusChange(payload.messageId, status);
+      }}
       className={cn(
         // Mirrors TasksSection — column hugs content height with a
         // `max-h-full` cap; body scrolls inside when content overflows.
-        'flex min-h-0 max-h-full flex-1 flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-base',
+        'flex min-h-0 max-h-full flex-1 flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-base transition-colors',
         (status === 'done' || status === 'closed') && 'opacity-80',
+        // Drop affordance (`data-drop-target`) is painted in CSS, not here —
+        // forza6's high-specificity `[data-tasks-column]` background/border
+        // can't be beaten by a Tailwind utility (shiki #task:784, Cindy
+        // review). See global.css / forza6-components.css.
       )}
     >
       <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-3 py-2">
@@ -671,12 +697,13 @@ function KanbanColumn({
           <p className="px-2 py-3 text-center text-[11px] text-text-muted">
             加载中…
           </p>
-        ) : tasks.length === 0 ? (
+        ) : tasks.length === 0 && !dragOver ? (
           <p className="px-2 py-3 text-center text-[11px] italic text-text-muted">
             No {title.toLowerCase()} tasks
           </p>
         ) : (
           <ul className="space-y-1.5">
+            {dragOver ? <TaskDropPlaceholder /> : null}
             {tasks.map(t => (
               <li key={t.message_id}>
                 <TaskCard
@@ -708,25 +735,35 @@ function TaskCard({
   onStatusChange: (next: TaskStatus) => void;
 }): JSX.Element {
   const { relative, absolute } = useRelativeTime(task.created_at);
+  const [dragging, setDragging] = useState(false);
   return (
     <TaskCardContextMenu status={task.status} onStatusChange={onStatusChange}>
       <div
         data-task-number={task.task_number}
+        draggable
+        onDragStart={e => {
+          writeTaskDrag(e.dataTransfer, { messageId: task.message_id, from: task.status });
+          setDragging(true);
+        }}
+        onDragEnd={() => setDragging(false)}
         className={cn(
-          'group relative rounded-md border border-border-subtle bg-bg-primary transition-all hover:border-accent hover:bg-bg-hover',
+          'group relative cursor-grab rounded-md border border-border-subtle bg-bg-primary transition-all hover:border-accent hover:bg-bg-hover active:cursor-grabbing',
           // Brief ring pulse when this card is the focused-task target.
           // Cleared by the drawer's setTimeout (~1.4s) so the highlight
           // doesn't linger on next open. `transition-all` lets the ring
           // fade in/out smoothly without a custom keyframe.
           highlighted && 'ring-2 ring-accent ring-offset-1 ring-offset-bg-base',
+          dragging && 'opacity-50',
         )}
       >
       {/* Stretched jump overlay — covers the whole card so clicking
           anywhere (except the interactive controls layered above) jumps
           to the message. Lets the status badge live as an independently
-          clickable control without a button-in-button. */}
+          clickable control without a button-in-button. `draggable=false`
+          so a press-drag here initiates the card's drag, not the button. */}
       <button
         type="button"
+        draggable={false}
         onClick={onClick}
         aria-label="跳转到消息"
         className="absolute inset-0 z-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
@@ -734,7 +771,7 @@ function TaskCard({
       {/* Content layer. `pointer-events-none` so text clicks fall
           through to the jump overlay; only the status badge re-enables
           pointer events. */}
-      <div className="pointer-events-none relative z-10 p-2 pr-7">
+      <div className="pointer-events-none relative z-10 p-2">
         {/* Row 1: #number + interactive status badge inline (reads
             "Closed" for a closed task — no separate chip). */}
         <div className="flex items-center gap-1.5 pb-0.5">
@@ -772,22 +809,6 @@ function TaskCard({
           <span className="shrink-0" title={absolute}>{relative}</span>
         </div>
       </div>
-
-      {/* Check button — top-right corner, only for in_review. Quick
-          one-click approve fast-path; arbitrary status moves go through
-          the badge picker above. Ring-only by default; turns green on
-          hover. */}
-      {task.status === 'in_review' ? (
-        <button
-          type="button"
-          aria-label="标记完成"
-          title="标记完成"
-          onClick={() => onStatusChange('done')}
-          className="absolute right-2 top-2 z-10 flex size-[18px] items-center justify-center rounded-full border-[1.5px] border-border-subtle bg-white text-transparent shadow-sm transition-all hover:border-success hover:text-success focus-visible:border-success focus-visible:text-success focus-visible:outline-none"
-        >
-          <Check className="size-3" />
-        </button>
-      ) : null}
       </div>
     </TaskCardContextMenu>
   );

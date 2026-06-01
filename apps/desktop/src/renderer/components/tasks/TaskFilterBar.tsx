@@ -111,7 +111,7 @@ export function TaskFilterBar({
       <PersonFilterControl
         icon={<User className="size-3.5" />}
         label="Assignee"
-        anyLabel="Anyone"
+        anyLabel="ALL"
         options={assigneeOptions}
         allowUnassigned={hasUnassigned}
         value={filters.assignee}
@@ -119,8 +119,8 @@ export function TaskFilterBar({
       />
       <PersonFilterControl
         icon={<PenLine className="size-3.5" />}
-        label="Creator"
-        anyLabel="Anyone"
+        label="From"
+        anyLabel="ALL"
         options={creatorOptions}
         value={filters.creator}
         onChange={creator => onChange({ ...filters, creator })}
@@ -156,16 +156,38 @@ const FilterTrigger = forwardRef<
       className={cn(
         'flex max-w-[200px] items-center gap-1.5 rounded-[var(--control-radius)]',
         'border-[length:var(--control-border-width)] px-2 py-1 text-[11px] transition-colors',
+        // Hover always paints the theme's poster hover border
+        // (`--border-row-hover`: forza6 near-black ink / warm accent) —
+        // same hover language as the OptionRow + sidebar rows. Higher
+        // specificity than the resting border, so it wins in both states.
+        'hover:border-[color:var(--border-row-hover)]',
         active
-          ? 'border-accent bg-bg-primary text-accent'
-          : 'border-border-subtle bg-bg-primary text-text-secondary hover:border-border hover:text-text-primary',
+          ? // Non-default value → theme selected-row fill (forza6 festive
+            // lime) + on-selected ink + the selected-row border colour
+            // (`--border-row-selected`, same near-black as hover) so the
+            // chip reads as a framed poster sticker, not a borderless fill
+            // (shiki #task:790).
+            'border-[color:var(--border-row-selected)] bg-[var(--bg-row-selected)] text-[color:var(--text-on-selected)]'
+          : 'border-border-subtle bg-bg-primary text-text-secondary hover:text-text-primary',
         className,
       )}
       {...props}
     >
-      <span className="shrink-0 text-text-muted">{icon}</span>
+      <span
+        className={cn(
+          'shrink-0',
+          active ? 'text-[color:var(--text-on-selected)]' : 'text-text-muted',
+        )}
+      >
+        {icon}
+      </span>
       <span className="truncate">{children}</span>
-      <ChevronDown className="size-3 shrink-0 text-text-muted" />
+      <ChevronDown
+        className={cn(
+          'size-3 shrink-0',
+          active ? 'text-[color:var(--text-on-selected)]' : 'text-text-muted',
+        )}
+      />
     </button>
   );
 });
@@ -178,6 +200,7 @@ function FilterPanel({ children }: { children: ReactNode }): JSX.Element {
         sideOffset={4}
         role="listbox"
         data-task-filter-panel
+        data-dropdown-frame
         className="z-[70] max-h-[50vh] min-w-[180px] overflow-y-auto rounded-[var(--select-content-radius)] border border-border bg-bg-floating p-1 shadow-lg outline-none"
       >
         {children}
@@ -188,13 +211,21 @@ function FilterPanel({ children }: { children: ReactNode }): JSX.Element {
 
 function OptionRow({
   selected,
+  neutral = false,
   onSelect,
   children,
 }: {
   selected: boolean;
+  /** This row is the "no filter" default (ALL / All channels). When it's
+   *  the current value it gets a muted check but NOT the lime active fill
+   *  — lime in this surface means "a filter is applied", which would
+   *  contradict the plain (inactive) trigger for the ALL state (shiki +
+   *  Cindy #task:790). */
+  neutral?: boolean;
   onSelect: () => void;
   children: ReactNode;
 }): JSX.Element {
+  const activeSelected = selected && !neutral;
   return (
     <button
       type="button"
@@ -202,19 +233,37 @@ function OptionRow({
       aria-selected={selected}
       onClick={onSelect}
       className={cn(
-        // Row-state border contract (§3.5.1): default transparent edge,
-        // hover paints `--border-row-hover` (forza6 near-black / warm
-        // accent) — the same poster-sticker hover language as sidebar
-        // rows, instead of a lime `--bg-hover` fill (shiki feedback).
-        // Selected keeps the accent-soft fill + check so it still reads
-        // as the committed choice.
+        // Hover = pale-lime preview FILL only, no border. forza6
+        // redefines `--bg-hover` to its #E6F68A pale-lime ground inside
+        // every Radix popper wrapper, so `hover:bg-bg-hover` reads light
+        // lime here and the cool neutral hover in warm themes — same
+        // menu-hover vocabulary as Select.Item / context menu, without
+        // touching the global token or scrollbar. The transparent border
+        // is kept only to reserve layout space (no hover colour) so rows
+        // don't shift (shiki #task:790).
         'flex w-full items-center gap-2 rounded-[var(--select-item-radius)] px-2 py-1.5 text-left text-xs transition-colors',
-        'border border-transparent hover:border-[color:var(--border-row-hover)] hover:text-text-primary',
-        selected ? 'bg-accent-soft text-text-primary' : 'text-text-secondary',
+        'border border-transparent hover:bg-bg-hover hover:text-text-primary',
+        // A real (non-default) current value = the app-wide selected-row
+        // vocabulary (festive lime fill + on-selected ink), NOT the magenta
+        // `accent-soft` tint. The ALL/All-channels default row stays plain
+        // text even when current (shiki #task:790: ALL was reading pink).
+        activeSelected
+          ? 'bg-[var(--bg-row-selected)] text-[color:var(--text-on-selected)]'
+          : 'text-text-secondary',
       )}
     >
       <span className="min-w-0 flex-1 truncate">{children}</span>
-      {selected ? <Check className="size-3.5 shrink-0 text-accent" /> : null}
+      {selected ? (
+        <Check
+          className={cn(
+            'size-3.5 shrink-0',
+            // Real selection → on-selected ink on the lime fill; the
+            // neutral default current row → a muted check (no pink, no
+            // lime) so it reads as "current" without the active look.
+            activeSelected ? 'text-[color:var(--text-on-selected)]' : 'text-text-muted',
+          )}
+        />
+      ) : null}
     </button>
   );
 }
@@ -257,6 +306,7 @@ function ChannelFilter({
         <FilterTrigger
           icon={<ChannelKindIcon kind={selected?.kind} />}
           active={value !== null}
+          aria-label="Channel"
         >
           {selected?.label ?? allChannelsLabel}
         </FilterTrigger>
@@ -266,6 +316,7 @@ function ChannelFilter({
           align="start"
           sideOffset={4}
           data-task-filter-panel
+          data-dropdown-frame
           className="z-[70] flex max-h-[50vh] w-[240px] flex-col rounded-[var(--select-content-radius)] border border-border bg-bg-floating p-1 shadow-lg outline-none"
         >
           <div className="flex items-center gap-1.5 border-b border-border-subtle px-2 pb-1.5 pt-1">
@@ -281,6 +332,7 @@ function ChannelFilter({
           <div role="listbox" className="mt-1 min-h-0 flex-1 overflow-y-auto">
             <OptionRow
               selected={value === null}
+              neutral
               onSelect={() => {
                 onChange(null);
                 setOpen(false);
@@ -347,7 +399,11 @@ function PersonFilterControl({
   const selectedName = options.find(
     o => personFilterKey({ kind: 'person', person: o.person }) === personFilterKey(value),
   )?.name;
-  const valueLabel =
+  // Value half of the trigger label. The trigger always renders
+  // `${label}:${valuePart}` (e.g. "Assignee:ALL" / "From:@cindy") so the
+  // dimension stays legible even at the default "ALL" state (shiki
+  // #task:790) — the label is no longer carried by the icon alone.
+  const valuePart =
     value.kind === 'any'
       ? anyLabel
       : value.kind === 'unassigned'
@@ -367,12 +423,16 @@ function PersonFilterControl({
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger asChild>
-        <FilterTrigger icon={icon} active={value.kind !== 'any'}>
-          {value.kind === 'any' ? label : valueLabel}
+        <FilterTrigger icon={icon} active={value.kind !== 'any'} aria-label={label}>
+          {`${label}:${valuePart}`}
         </FilterTrigger>
       </Popover.Trigger>
       <FilterPanel>
-        <OptionRow selected={value.kind === 'any'} onSelect={() => choose({ kind: 'any' })}>
+        <OptionRow
+          selected={value.kind === 'any'}
+          neutral
+          onSelect={() => choose({ kind: 'any' })}
+        >
           {anyLabel}
         </OptionRow>
         {allowUnassigned ? (
