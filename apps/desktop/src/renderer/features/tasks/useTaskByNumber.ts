@@ -66,6 +66,7 @@ export function applyTaskChangedToTaskByNumberCache(
       status: task.status,
       title: task.title,
       assignee: task.assignee,
+      archived_at: task.archived_at,
     };
   });
 }
@@ -90,6 +91,7 @@ export function useTaskByNumber(
       const params = new URLSearchParams();
       params.set('workspace_id', workspaceId as string);
       params.set('task_number', String(taskNumber));
+      params.set('archived', 'all');
       params.set('limit', '1');
       const res = await api<{ tasks: TaskSummaryDto[] }>(
         `/api/tasks?${params.toString()}`,

@@ -31,6 +31,7 @@ function makeSystemMessage(
     task_status: null,
     task_title: null,
     task_workspace_id: null,
+    task_archived_at: null,
     task_assignee: null,
     ...overrides,
   };
@@ -51,6 +52,7 @@ function seededTask(overrides: Partial<TaskSummaryDto> = {}): TaskSummaryDto {
     assignee: null,
     creator: { type: 'agent', id: 'a-alice', name: 'Alice' },
     created_at: 0,
+    archived_at: null,
     ...overrides,
   };
 }

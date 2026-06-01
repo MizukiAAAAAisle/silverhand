@@ -7,6 +7,7 @@ import {
   type CreateTasksResult,
   type MessageRow,
   type TaskAssigneeDto,
+  type TaskArchiveFilter,
   type TaskChangedEvent,
   type TaskMutationErrorCode,
   type TaskMutationResult,
@@ -70,6 +71,7 @@ type AgentActor = Extract<TaskActor, { kind: 'agent' }>;
 
 type AgentTaskRef = { messageId: string } | { taskNumber: number };
 type UserTaskRef = { messageId: string };
+type TaskNarrativeKind = Exclude<TaskChangedEvent['kind'], 'archive'>;
 
 export interface CreateTasksInput {
   conversationId: string;
@@ -103,6 +105,12 @@ export type UpdateStatusInput =
       workspaceSelector?: WorkspaceSelector;
     };
 
+export interface ArchiveTaskInput {
+  actor: UserActor;
+  by: UserTaskRef;
+  archived: boolean;
+}
+
 /** Optional `--workspace-id` / `--workspace <name>` selector wired
  *  through from the CLI. Empty / undefined means "use the actor's
  *  current conversation's workspace" (the legacy default). The
@@ -126,6 +134,8 @@ export interface ListTasksFilters {
   taskNumbers?: readonly number[];
   /** Filter by assignee agent id. Single-valued. */
   assigneeAgentId?: string;
+  /** Archive visibility. Omitted = active only. */
+  archived?: TaskArchiveFilter;
   /** Cap the number of rows returned. */
   limit?: number;
 }
@@ -158,6 +168,7 @@ interface TaskJoinedRow {
   task_number: number;
   task_status: TaskStatus;
   task_title: string | null;
+  task_archived_at: number | null;
   workspace_id: string;
   workspace_name: string;
   channel_id: string;
@@ -182,6 +193,7 @@ const SELECT_TASK_JOINED = `
     m.task_number              AS task_number,
     m.task_status              AS task_status,
     m.task_title               AS task_title,
+    m.task_archived_at         AS task_archived_at,
     COALESCE(m.task_workspace_id, conv.workspace_id)
                                AS workspace_id,
     CASE
@@ -217,6 +229,7 @@ interface ResolvedTaskRow {
   task_number: number;
   task_workspace_id: string;
   task_status: TaskStatus;
+  task_archived_at: number | null;
   task_assignee_agent_id: string | null;
   task_title: string | null;
   content: string;
@@ -236,6 +249,7 @@ interface ResolvedMessageRow {
   task_number: number | null;
   task_workspace_id: string | null;
   task_status: TaskStatus | null;
+  task_archived_at: number | null;
   task_assignee_agent_id: string | null;
   task_title: string | null;
 }
@@ -313,6 +327,12 @@ export class TaskService {
     if (filters.assigneeAgentId) {
       clauses.push('m.task_assignee_agent_id = ?');
       args.push(filters.assigneeAgentId);
+    }
+    const archived = filters.archived ?? 'active';
+    if (archived === 'active') {
+      clauses.push('m.task_archived_at IS NULL');
+    } else if (archived === 'archived') {
+      clauses.push('m.task_archived_at IS NOT NULL');
     }
 
     let sql = `${SELECT_TASK_JOINED} WHERE ${clauses.join(' AND ')} ORDER BY m.task_number ASC`;
@@ -400,6 +420,7 @@ export class TaskService {
         title: t.title,
         status: 'todo',
         assignee: null,
+        archivedAt: null,
         actor: input.actor,
         sysMessage: `${actorLabel} created task #${t.task_number} "${t.title}"`,
       });
@@ -655,14 +676,16 @@ export class TaskService {
       taskWorkspaceId: resolvedTaskWorkspaceId,
     });
 
+    const fresh = this.refetchTaskSnapshot(txOut.messageId);
     await this.broadcast({
       conversation: ownerConv,
       kind: 'claim',
       messageId: txOut.messageId,
       taskNumber: txOut.taskNumber,
-      title: txOut.title,
-      status: txOut.status,
-      assignee: this.assigneeDtoForAgent(actor.agentId),
+      title: fresh?.title ?? txOut.title,
+      status: fresh?.task_status ?? txOut.status,
+      assignee: fresh?.assignee ?? this.assigneeDtoForAgent(actor.agentId),
+      archivedAt: fresh?.archived_at ?? null,
       actor,
       sysMessage: `${this.actorLabel(actor)} claimed task #${txOut.taskNumber}`,
     });
@@ -762,6 +785,7 @@ export class TaskService {
         title: fresh?.title ?? firstLine(txOut.content),
         status: fresh?.task_status ?? 'in_progress',
         assignee: fresh?.assignee ?? null,
+        archivedAt: fresh?.archived_at ?? null,
         actor,
         sysMessage,
       });
@@ -900,14 +924,16 @@ export class TaskService {
       taskWorkspaceId: resolvedTaskWorkspaceId,
     });
 
+    const fresh = this.refetchTaskSnapshot(txOut.messageId);
     await this.broadcast({
       conversation: ownerConv,
       kind: 'unclaim',
       messageId: txOut.messageId,
       taskNumber: txOut.taskNumber,
-      title: txOut.title,
-      status: 'todo',
-      assignee: null,
+      title: fresh?.title ?? txOut.title,
+      status: fresh?.task_status ?? 'todo',
+      assignee: fresh?.assignee ?? null,
+      archivedAt: fresh?.archived_at ?? null,
       actor,
       sysMessage: `task #${txOut.taskNumber} unclaimed (was @${this.agentName(actor.agentId)})`,
     });
@@ -967,6 +993,7 @@ export class TaskService {
         title: fresh?.title ?? firstLine(txOut.content),
         status: 'todo',
         assignee: null,
+        archivedAt: fresh?.archived_at ?? null,
         actor,
         sysMessage: `task #${txOut.taskNumber} unclaimed (by user)`,
       });
@@ -1112,16 +1139,18 @@ export class TaskService {
       status,
     });
 
+    const fresh = this.refetchTaskSnapshot(txOut.messageId);
     await this.broadcast({
       conversation: ownerConv,
       kind: 'status',
       messageId: txOut.messageId,
       taskNumber: txOut.taskNumber,
-      title: txOut.title,
-      status,
-      assignee: txOut.assigneeAgentId
+      title: fresh?.title ?? txOut.title,
+      status: fresh?.task_status ?? status,
+      assignee: fresh?.assignee ?? (txOut.assigneeAgentId
         ? this.assigneeDtoForAgent(txOut.assigneeAgentId)
-        : null,
+        : null),
+      archivedAt: fresh?.archived_at ?? null,
       actor,
       sysMessage: `task #${txOut.taskNumber} → ${status} (by @${this.agentName(actor.agentId)})`,
     });
@@ -1184,8 +1213,71 @@ export class TaskService {
         title: fresh?.title ?? firstLine(txOut.content),
         status,
         assignee: fresh?.assignee ?? null,
+        archivedAt: fresh?.archived_at ?? null,
         actor,
         sysMessage: `task #${txOut.taskNumber} → ${status} (by user)`,
+      });
+    }
+
+    return { success: true };
+  }
+
+  // ── Archive (human visibility action) ───────────────────────────
+
+  async archiveTask(input: ArchiveTaskInput): Promise<TaskMutationResult> {
+    type ArchiveTxOut =
+      | { failure: TaskMutationResult }
+      | {
+          success: true;
+          messageId: string;
+          taskNumber: number;
+          conversationId: string;
+          title: string;
+          status: TaskStatus;
+          assignee: TaskAssigneeDto | null;
+          archivedAt: number | null;
+        };
+
+    const txOut = this.db.transaction((): ArchiveTxOut => {
+      const msg = this.fetchMessage(input.by.messageId);
+      if (!msg || msg.task_number === null || !msg.task_workspace_id || !msg.task_status) {
+        return { failure: { success: false, code: 'not_a_task', reason: 'not a task' } };
+      }
+      if (!this.canUserAccessConversation(input.actor.userId, msg.conversation_id)) {
+        return { failure: { success: false, code: 'not_a_task', reason: 'not a task' } };
+      }
+      const nextArchivedAt = input.archived
+        ? (msg.task_archived_at ?? Date.now())
+        : null;
+      this.db
+        .prepare(`UPDATE messages SET task_archived_at = ? WHERE id = ?`)
+        .run(nextArchivedAt, msg.id);
+      const fresh = this.refetchTaskSnapshot(msg.id);
+      return {
+        success: true,
+        messageId: msg.id,
+        taskNumber: msg.task_number,
+        conversationId: msg.conversation_id,
+        title: fresh?.title ?? msg.task_title ?? firstLine(msg.content),
+        status: fresh?.task_status ?? msg.task_status,
+        assignee: fresh?.assignee ?? null,
+        archivedAt: fresh?.archived_at ?? nextArchivedAt,
+      };
+    })();
+
+    if ('failure' in txOut) return txOut.failure;
+
+    const conversation = this.conversations.get(txOut.conversationId);
+    if (conversation) {
+      this.publishTaskChanged({
+        conversation,
+        kind: 'archive',
+        messageId: txOut.messageId,
+        taskNumber: txOut.taskNumber,
+        title: txOut.title,
+        status: txOut.status,
+        assignee: txOut.assignee,
+        archivedAt: txOut.archivedAt,
       });
     }
 
@@ -1356,6 +1448,7 @@ export class TaskService {
                 m.task_number,
                 m.task_workspace_id,
                 m.task_status,
+                m.task_archived_at,
                 m.task_assignee_agent_id,
                 m.task_title,
                 m.content,
@@ -1385,6 +1478,7 @@ export class TaskService {
                 m.task_number,
                 m.task_workspace_id,
                 m.task_status,
+                m.task_archived_at,
                 m.task_assignee_agent_id,
                 m.task_title,
                 m.content,
@@ -1460,7 +1554,7 @@ export class TaskService {
       .prepare<[string], ResolvedMessageRow>(
         `SELECT id, conversation_id AS conversation_id,
                 from_kind, metadata, content,
-                task_number, task_workspace_id, task_status,
+                task_number, task_workspace_id, task_status, task_archived_at,
                 task_assignee_agent_id, task_title
          FROM messages WHERE id = ?`,
       )
@@ -1471,12 +1565,14 @@ export class TaskService {
   private refetchTaskSnapshot(messageId: string): {
     title: string;
     task_status: TaskStatus | null;
+    archived_at: number | null;
     assignee: TaskAssigneeDto | null;
   } | null {
     const row = this.db
       .prepare<[string], {
         content: string;
         task_status: TaskStatus | null;
+        task_archived_at: number | null;
         task_title: string | null;
         task_assignee_agent_id: string | null;
         task_assignee_user_id: string | null;
@@ -1484,6 +1580,7 @@ export class TaskService {
       }>(
         `SELECT m.content,
                 m.task_status,
+                m.task_archived_at,
                 m.task_title,
                 m.task_assignee_agent_id,
                 m.task_assignee_user_id,
@@ -1511,6 +1608,7 @@ export class TaskService {
     return {
       title: row.task_title ?? firstLine(row.content),
       task_status: row.task_status,
+      archived_at: row.task_archived_at,
       assignee,
     };
   }
@@ -1554,9 +1652,10 @@ export class TaskService {
                 type: 'user',
                 id: row.from_user_id,
                 name: row.from_user_id ?? 'user',
-              }
-            : { type: 'system', id: null, name: 'system' },
+            }
+          : { type: 'system', id: null, name: 'system' },
       created_at: row.created_at,
+      archived_at: row.task_archived_at,
     };
   }
 
@@ -1637,7 +1736,7 @@ export class TaskService {
 
   private async broadcast(args: {
     conversation: ConversationDto;
-    kind: TaskChangedEvent['kind'];
+    kind: TaskNarrativeKind;
     /** Canonical task body message id — same value for every mutation
      *  on a given task (the row created by `task_create`). Used to
      *  anchor cross-thread / cross-workspace task lookups without
@@ -1648,15 +1747,13 @@ export class TaskService {
     /** Status snapshot AFTER this mutation. */
     status: TaskStatus;
     assignee: TaskAssigneeDto | null;
+    archivedAt: number | null;
     /** Who triggered the mutation. Rendered as an actor pill on the
      *  task event row instead of being parsed back out of `sysMessage`. */
     actor: TaskActor;
     sysMessage: string;
   }): Promise<void> {
     const conversationId = args.conversation.id;
-    const workspaceId = args.conversation.workspace_id;
-    const channelId = args.conversation.parent_conversation_id ?? args.conversation.id;
-    const threadId = args.conversation.parent_conversation_id ? args.conversation.id : null;
 
     const systemActor: TaskSystemActor = this.taskSystemActor(args.actor);
     const sysMsg = this.db.transaction(() =>
@@ -1682,20 +1779,16 @@ export class TaskService {
       kind: 'message',
       payload: { message: sysMsg },
     });
-    const event: TaskChangedEvent = {
+    this.publishTaskChanged({
+      conversation: args.conversation,
       kind: args.kind,
-      workspace_id: workspaceId,
-      channel_id: channelId,
-      thread_id: threadId,
-      conversation_id: conversationId,
-      task_number: args.taskNumber,
-      message_id: args.messageId,
+      messageId: args.messageId,
+      taskNumber: args.taskNumber,
+      title: args.title,
       status: args.status,
       assignee: args.assignee,
-      title: args.title,
-    };
-    this.events.publish(conversationId, { kind: 'task_changed', payload: event });
-    this.events.publishToScope(`workspace:${workspaceId}`, 'task_changed', event);
+      archivedAt: args.archivedAt,
+    });
 
     // Best-effort, fire-and-forget delivery to recipients.
     const recipients = this.conversations.listAgents(conversationId);
@@ -1709,6 +1802,37 @@ export class TaskService {
           );
         });
     }
+  }
+
+  private publishTaskChanged(args: {
+    conversation: ConversationDto;
+    kind: TaskChangedEvent['kind'];
+    messageId: string;
+    taskNumber: number;
+    title: string;
+    status: TaskStatus;
+    assignee: TaskAssigneeDto | null;
+    archivedAt: number | null;
+  }): void {
+    const conversationId = args.conversation.id;
+    const workspaceId = args.conversation.workspace_id;
+    const channelId = args.conversation.parent_conversation_id ?? args.conversation.id;
+    const threadId = args.conversation.parent_conversation_id ? args.conversation.id : null;
+    const event: TaskChangedEvent = {
+      kind: args.kind,
+      workspace_id: workspaceId,
+      channel_id: channelId,
+      thread_id: threadId,
+      conversation_id: conversationId,
+      task_number: args.taskNumber,
+      message_id: args.messageId,
+      status: args.status,
+      assignee: args.assignee,
+      title: args.title,
+      archived_at: args.archivedAt,
+    };
+    this.events.publish(conversationId, { kind: 'task_changed', payload: event });
+    this.events.publishToScope(`workspace:${workspaceId}`, 'task_changed', event);
   }
 }
 

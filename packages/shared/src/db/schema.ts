@@ -288,6 +288,7 @@ export interface MessageRow {
   task_assignee_user_id: string | null;
   task_title: string | null;
   task_workspace_id: string | null;
+  task_archived_at: number | null;
 }
 
 export interface ConversationReadRow {

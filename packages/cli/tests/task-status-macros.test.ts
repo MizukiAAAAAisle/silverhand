@@ -20,6 +20,7 @@ import type { CliError } from '../src/errors.js';
 interface ListTasksCall {
   status?: readonly string[];
   task_number?: readonly number[];
+  archived?: string;
 }
 
 function fakeListClient(): {
@@ -166,6 +167,32 @@ describe('task list --status filter macros', () => {
       'in_review',
       'done',
     ]);
+  });
+
+  it('passes the archive visibility filter through without changing task actions', async () => {
+    const { client, capture } = fakeListClient();
+    await list.run({
+      env,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      client: client as any,
+      args: parsedFlags({ archived: 'archived' }),
+    });
+    expect(capture()!.archived).toBe('archived');
+  });
+
+  it('rejects unknown archive visibility filters', async () => {
+    const { client } = fakeListClient();
+    await expect(
+      list.run({
+        env,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        client: client as any,
+        args: parsedFlags({ archived: 'hidden' }),
+      }),
+    ).rejects.toMatchObject({
+      code: 'validation_error',
+      subkind: 'enum_invalid',
+    });
   });
 
   it('deduplicates overlapping macros without losing order', async () => {

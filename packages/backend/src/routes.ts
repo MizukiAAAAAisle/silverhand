@@ -22,6 +22,7 @@ import {
   CreateTasksInputSchema,
   DeleteAgentInputSchema,
   ConversationLogDebugInputSchema,
+  HumanArchiveTaskInputSchema,
   HumanClaimTaskInputSchema,
   HumanUpdateTaskStatusInputSchema,
   HostClaimOrCreateInputSchema,
@@ -5075,6 +5076,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     const parsed = ListTasksQuerySchema.safeParse({
       workspace_id: c.req.query('workspace_id') || undefined,
       conversation_id: c.req.query('conversation_id') || undefined,
+      archived: c.req.query('archived') || undefined,
       status: statusValues.length > 0 ? statusValues : undefined,
       task_number: taskNumberValues.length > 0 ? taskNumberValues : undefined,
       assignee_id: c.req.query('assignee_id') || undefined,
@@ -5088,6 +5090,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
         actor: getUserPrincipal(c),
         workspaceId: parsed.data.workspace_id,
         conversationId: parsed.data.conversation_id,
+        archived: parsed.data.archived,
         status: parsed.data.status,
         taskNumbers: parsed.data.task_number,
         assigneeAgentId: parsed.data.assignee_id,
@@ -5128,6 +5131,20 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       actor: getUserPrincipal(c),
       by: { messageId: c.req.param('messageId') },
       status: parsed.data.status,
+    });
+    return c.json(result, result.success ? 200 : 409);
+  });
+
+  app.post('/api/tasks/:messageId/archive', async c => {
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = HumanArchiveTaskInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    const result = await ctx.taskService.archiveTask({
+      actor: getUserPrincipal(c),
+      by: { messageId: c.req.param('messageId') },
+      archived: parsed.data.archived,
     });
     return c.json(result, result.success ? 200 : 409);
   });
@@ -6351,6 +6368,7 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
     const parsed = ListTasksQuerySchema.safeParse({
       workspace_id: c.req.query('workspace_id') || undefined,
       conversation_id: c.req.query('conversation_id') || undefined,
+      archived: c.req.query('archived') || undefined,
       status: statusValues.length > 0 ? statusValues : undefined,
       task_number: taskNumberValues.length > 0 ? taskNumberValues : undefined,
       assignee_id: c.req.query('assignee_id') || undefined,
@@ -6399,6 +6417,7 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
         actor: principal,
         workspaceId: effectiveWorkspaceId,
         conversationId: parsed.data.conversation_id,
+        archived: parsed.data.archived,
         status: parsed.data.status,
         taskNumbers: parsed.data.task_number,
         assigneeAgentId: parsed.data.assignee_id,

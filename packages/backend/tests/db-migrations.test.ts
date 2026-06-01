@@ -1043,6 +1043,41 @@ describe('database migrations', () => {
     }
   });
 
+  it('v34 adds task_archived_at to messages with active/archived task indexes', () => {
+    const db = openDbAt(33);
+    try {
+      runMigrations(db);
+      expect(
+        db.prepare(`SELECT version FROM _migrations WHERE version = 34`).get(),
+      ).toBeDefined();
+
+      const messageCols = (db.pragma('table_info(messages)') as Array<{
+        name: string;
+        notnull: number;
+      }>).map(c => ({ name: c.name, notnull: c.notnull }));
+      expect(messageCols).toContainEqual({ name: 'task_archived_at', notnull: 0 });
+
+      const indexes = (db.pragma('index_list(messages)') as Array<{
+        name: string;
+        partial: number;
+      }>);
+      expect(indexes).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: 'idx_messages_task_workspace_active',
+            partial: 1,
+          }),
+          expect.objectContaining({
+            name: 'idx_messages_task_workspace_archived',
+            partial: 1,
+          }),
+        ]),
+      );
+    } finally {
+      db.close();
+    }
+  });
+
   describe('v21 users registry (Deferred Adoption)', () => {
     /**
      * Deferred Adoption contract: `users` is empty after migration and

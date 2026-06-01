@@ -36,6 +36,7 @@ function msg(id: string, seq: number, content = `body-${id}`): MessageDto {
     task_status: null,
     task_title: null,
     task_workspace_id: null,
+    task_archived_at: null,
     task_assignee: null,
   };
 }

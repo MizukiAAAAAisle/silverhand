@@ -202,6 +202,26 @@ describe('theme markdown token cascade contract', () => {
     }
   });
 
+  /* Archived-task badge (#task:767 A-track; backend c88e13f): the
+     archived-visibility badge is a 3-token contract (bg / text /
+     border). Every theme MUST declare all three so a theme switch from
+     forza6 doesn't leak its indigo poster chip into warm themes via
+     :root fallback. Naming mirrors --task-status-*-{bg,text,border} for
+     one task-badge vocabulary. Consumed ONLY by the archived-task badge
+     — not channel/other archived surfaces (Cindy review boundary). */
+  it('every theme explicitly defines archived-task badge tokens', () => {
+    const TASK_ARCHIVED_TOKENS = [
+      '--task-archived-bg',
+      '--task-archived-text',
+      '--task-archived-border',
+    ];
+    for (const css of [warmScriptCss, forza6Css]) {
+      for (const token of TASK_ARCHIVED_TOKENS) {
+        expect(css).toContain(`${token}:`);
+      }
+    }
+  });
+
   /* PR-4 token promotion (#task:350): floating frame (menu /
      popover / hover-card outer chrome + inner item radius) is now a
      3-token contract. Every theme MUST declare all three so a theme

@@ -158,6 +158,7 @@ gaps without changing Stage B host ownership schema early.
 | POST | `/api/tasks/:messageId/claim` | Inherited via parent | Calls service with user principal and message id. | Verify service gates by source message conversation visibility. |
 | POST | `/api/tasks/:messageId/unclaim` | Inherited via parent | Calls service with user principal and message id. | Verify service gates by source message conversation visibility. |
 | POST | `/api/tasks/:messageId/status` | Inherited via parent | Calls service with user principal and message id. | Verify service gates by source message conversation visibility. |
+| POST | `/api/tasks/:messageId/archive` | Inherited via parent | Calls service with user principal and message id. Archive is visibility-only, not a status transition. | Verify service gates by source message conversation visibility. |
 
 ## Internal Agent Routes
 

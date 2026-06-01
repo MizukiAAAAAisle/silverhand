@@ -30,6 +30,7 @@ import {
   type ScheduleListOutput,
   type SendMessageTarget,
   type TaskMutationResult,
+  type TaskArchiveFilter,
   type TaskStatus,
   type TaskSummaryDto,
 } from '@silverhand/shared';
@@ -172,6 +173,7 @@ export class BackendClient {
     /** Multi-value: passed as repeated query keys. */
     task_number?: readonly number[];
     assignee_id?: string;
+    archived?: TaskArchiveFilter;
     limit?: number;
   }): Promise<{ tasks: TaskSummaryDto[] }> {
     return this.request(
@@ -184,6 +186,7 @@ export class BackendClient {
         status: filters.status,
         task_number: filters.task_number,
         assignee_id: filters.assignee_id,
+        archived: filters.archived,
         limit: filters.limit,
       },
     );

@@ -8,11 +8,12 @@ import {
   CircleEllipsis,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
+import type { TaskArchiveFilter, TaskStatus, TaskSummaryDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
 import { useWorkspaces } from '@/features/workspaces/hooks';
-import { useTasks, useUpdateTaskStatus } from '@/features/tasks/hooks';
+import { useTasks, useUpdateTaskStatus, useArchiveTaskHuman } from '@/features/tasks/hooks';
 import { useRelativeTime } from '@/components/chat/useRelativeTime';
+import { TaskStatusBadge, TaskCardContextMenu, ArchivedBadge, ArchiveFilterToggle } from '@/components/tasks/TaskStatusBadge';
 
 /**
  * NavRail "Tasks" section — global aggregate view across every channel
@@ -38,7 +39,9 @@ export interface TasksSectionProps {
 
 export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
   const [channelFilter, setChannelFilter] = useState<string | null>(null);
+  const [archiveFilter, setArchiveFilter] = useState<TaskArchiveFilter>('active');
   const updateStatus = useUpdateTaskStatus();
+  const archiveTask = useArchiveTaskHuman();
   const { data: workspaces = [] } = useWorkspaces();
   const taskWorkspaceScopeIds = useMemo(
     () => [...new Set(workspaces.flatMap(workspace => workspace.workspace_scope_ids))],
@@ -51,6 +54,7 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
 
   const { data: tasks = [] } = useTasks({
     workspace_id: channelFilter ?? undefined,
+    archived: archiveFilter,
   }, {
     workspaceScopeIds: channelFilter
       ? filteredWorkspaceScopeIds
@@ -111,7 +115,12 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
             : 'All Tasks'}
         </span>
         <span className="text-xs text-text-muted">· {tasks.length}</span>
-        <span className="ml-auto text-[10px] text-text-muted">
+        <ArchiveFilterToggle
+          value={archiveFilter}
+          onChange={setArchiveFilter}
+          className="ml-auto"
+        />
+        <span className="text-[10px] text-text-muted">
           {totalActive} active
         </span>
       </header>
@@ -150,6 +159,9 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
             }
             onStatusChange={(messageId, next) =>
               updateStatus.mutate({ messageId, status: next })
+            }
+            onArchive={(messageId, archived) =>
+              archiveTask.mutate({ messageId, archived })
             }
           />
         ))}
@@ -341,6 +353,7 @@ function KanbanColumn({
   tasks,
   onCardClick,
   onStatusChange,
+  onArchive,
 }: {
   title: string;
   status: TaskStatus;
@@ -349,6 +362,7 @@ function KanbanColumn({
   tasks: TaskSummaryDto[];
   onCardClick: (t: TaskSummaryDto) => void;
   onStatusChange: (messageId: string, next: TaskStatus) => void;
+  onArchive: (messageId: string, archived: boolean) => void;
 }): JSX.Element {
   return (
     <section
@@ -386,6 +400,7 @@ function KanbanColumn({
                   task={t}
                   onClick={() => onCardClick(t)}
                   onStatusChange={next => onStatusChange(t.message_id, next)}
+                  onArchive={archived => onArchive(t.message_id, archived)}
                 />
               </li>
             ))}
@@ -402,29 +417,44 @@ function TaskCard({
   task,
   onClick,
   onStatusChange,
+  onArchive,
 }: {
   task: TaskSummaryDto;
   onClick: () => void;
   onStatusChange: (next: TaskStatus) => void;
+  onArchive: (archived: boolean) => void;
 }): JSX.Element {
   const { relative, absolute } = useRelativeTime(task.created_at);
+  const archived = task.archived_at != null;
   return (
-    <div
-      data-task-number={task.task_number}
-      className="group relative rounded-md border border-border-subtle bg-bg-base transition-colors hover:border-accent hover:bg-bg-hover"
+    <TaskCardContextMenu
+      status={task.status}
+      archived={archived}
+      onStatusChange={onStatusChange}
+      onArchive={onArchive}
     >
-      {/* Jump button: covers the content area */}
+      <div
+        data-task-number={task.task_number}
+        className="group relative rounded-md border border-border-subtle bg-bg-base transition-colors hover:border-accent hover:bg-bg-hover"
+      >
+      {/* Stretched jump overlay — see WorkspaceTasksDrawer TaskCard for
+          the stretched-link rationale (badge as independent control). */}
       <button
         type="button"
         onClick={onClick}
-        className="block w-full p-2 pr-7 text-left"
-      >
-        {/* Row 1: #number + status badge inline */}
+        aria-label="跳转到消息"
+        className="absolute inset-0 z-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      />
+      <div className="pointer-events-none relative z-10 p-2 pr-7">
+        {/* Row 1: #number + interactive status badge inline */}
         <div className="flex items-center gap-1.5 pb-0.5">
           <span data-tasks-num className="shrink-0 font-mono text-[10px] text-text-muted">
             #{task.task_number}
           </span>
-          <TaskStatusBadge status={task.status} />
+          <span className="pointer-events-auto">
+            <TaskStatusBadge status={task.status} onChange={onStatusChange} />
+          </span>
+          {archived ? <ArchivedBadge /> : null}
         </div>
         {/* Row 2: title */}
         <span className="block min-w-0 break-words text-xs text-text-primary">
@@ -452,9 +482,10 @@ function TaskCard({
           <span aria-hidden className="shrink-0 text-text-muted/60">·</span>
           <span className="shrink-0" title={absolute}>{relative}</span>
         </div>
-      </button>
+      </div>
 
-      {/* Check button — top-right corner, only for in_review.
+      {/* Check button — top-right corner, only for in_review. Quick
+          one-click approve; arbitrary moves go through the badge picker.
           Ring-only by default; turns green on hover. */}
       {task.status === 'in_review' ? (
         <button
@@ -462,29 +493,15 @@ function TaskCard({
           aria-label="标记完成"
           title="标记完成"
           onClick={() => onStatusChange('done')}
-          className="absolute right-2 top-2 flex size-[18px] items-center justify-center rounded-full border-[1.5px] border-border-subtle bg-white text-transparent shadow-sm transition-all hover:border-success hover:text-success focus-visible:border-success focus-visible:text-success focus-visible:outline-none"
+          className="absolute right-2 top-2 z-10 flex size-[18px] items-center justify-center rounded-full border-[1.5px] border-border-subtle bg-white text-transparent shadow-sm transition-all hover:border-success hover:text-success focus-visible:border-success focus-visible:text-success focus-visible:outline-none"
         >
           <Check className="size-3" />
         </button>
       ) : null}
-    </div>
+      </div>
+    </TaskCardContextMenu>
   );
 }
 
-/** Small inline status badge — non-interactive, color-coded by status. */
-function TaskStatusBadge({ status }: { status: TaskStatus }): JSX.Element {
-  const labels: Record<TaskStatus, string> = {
-    todo: 'todo',
-    in_progress: 'in progress',
-    in_review: 'in review',
-    done: 'done',
-  };
-  return (
-    <span
-      data-task-status={status}
-      className="rounded-[var(--chip-radius)] px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide"
-    >
-      {labels[status]}
-    </span>
-  );
-}
+/** Small inline status badge — moved to components/tasks/TaskStatusBadge
+ *  (now shared + interactive). */

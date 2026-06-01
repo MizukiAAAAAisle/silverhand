@@ -274,12 +274,13 @@ Assignee-only。合法转换：
 
 | Method | Path | 作用 |
 |---|---|---|
-| `GET` | `/api/tasks?channel_id=&session_id=&status=&assignee=&cursor=` | 列表查询，支持不传任何过滤 = 全局聚合 |
+| `GET` | `/api/tasks?workspace_id=&conversation_id=&status=&assignee_id=&task_number=&archived=` | 列表查询；`archived` 支持 `active`（默认）/ `archived` / `all` |
 | `POST` | `/api/tasks/:messageId/claim` | human 代 claim（可选：为自己 / 为某 agent）|
 | `POST` | `/api/tasks/:messageId/unclaim` | human 强制 unclaim |
 | `POST` | `/api/tasks/:messageId/status` | human 改 status（含 `in_review → done` 审批）|
+| `POST` | `/api/tasks/:messageId/archive` | human 归档 / 取消归档（body: `{ archived: boolean }`），与 status 正交 |
 
-Human 操作也写 system message（subtype 复用 `task_claim` / `task_unclaim` / `task_status`，但 metadata 里 `actor.type = 'user'`），agent 能看到"human 把 #7 推到 done 了"。
+Human 的 claim / unclaim / status 写 system message（subtype 复用 `task_claim` / `task_unclaim` / `task_status`，但 metadata 里 `actor.type = 'user'`），agent 能看到"human 把 #7 推到 done 了"。Archive 是低噪音可见性操作，只发 `task_changed(kind='archive')`，不插入 chat system message。
 
 ### 6.3 SSE 事件
 
@@ -287,7 +288,7 @@ Human 操作也写 system message（subtype 复用 `task_claim` / `task_unclaim`
 
 | kind | payload |
 |---|---|
-| `task_changed` | `{ channel_id, session_id, task_number, status, assignee, ... }` |
+| `task_changed` | `{ workspace_id, channel_id, thread_id, conversation_id, task_number, message_id, status, assignee, title, archived_at, ... }` |
 
 renderer 订阅后刷新所有 task 视图（NavRail 全局列表、channel tab、session 视图）。
 

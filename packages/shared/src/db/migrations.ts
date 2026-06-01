@@ -2309,6 +2309,27 @@ export const migrations: Migration[] = [
         WHERE idempotency_key IS NOT NULL;
     `,
   },
+  {
+    version: 34,
+    name: 'task_archive',
+    // Task archive is a visibility / organization dimension, not a
+    // workflow status. Tasks remain message metadata; `task_archived_at`
+    // is scoped to the message's task role rather than to the message
+    // itself, so we intentionally avoid a generic `archived_at` column.
+    up: `
+      ALTER TABLE messages ADD COLUMN task_archived_at INTEGER;
+
+      CREATE INDEX idx_messages_task_workspace_active
+        ON messages(task_workspace_id, task_status)
+        WHERE task_workspace_id IS NOT NULL
+          AND task_archived_at IS NULL;
+
+      CREATE INDEX idx_messages_task_workspace_archived
+        ON messages(task_workspace_id, task_archived_at)
+        WHERE task_workspace_id IS NOT NULL
+          AND task_archived_at IS NOT NULL;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

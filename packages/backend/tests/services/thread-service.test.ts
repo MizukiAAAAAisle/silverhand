@@ -108,6 +108,7 @@ function makeFakeTaskSummary(
         : null,
     creator: { type: 'agent', id: 'creator', name: 'creator' },
     created_at: 0,
+    archived_at: null,
   };
 }
 

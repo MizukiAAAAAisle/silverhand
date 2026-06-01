@@ -18,10 +18,11 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
-import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
+import type { TaskArchiveFilter, TaskStatus, TaskSummaryDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
-import { useTasks, useUpdateTaskStatus } from '@/features/tasks/hooks';
+import { useTasks, useUpdateTaskStatus, useArchiveTaskHuman } from '@/features/tasks/hooks';
 import { useRelativeTime } from '@/components/chat/useRelativeTime';
+import { TaskStatusBadge, TaskCardContextMenu, ArchivedBadge, ArchiveFilterToggle } from '@/components/tasks/TaskStatusBadge';
 
 /**
  * Workspace-wide tasks panel — a floating right-side drawer that overlays
@@ -223,14 +224,22 @@ export function WorkspaceTasksDrawer({
   const [conversationFilter, setConversationFilter] = useState<TaskFilterValue>(
     defaultConversationId ? { kind: 'channel', id: defaultConversationId } : null,
   );
+  const [archiveFilter, setArchiveFilter] = useState<TaskArchiveFilter>('active');
   // Re-sync to the active conversation every time the drawer opens.
-  // When a `?task=<n>` focus is in flight, override the filter to "all"
-  // so the focused row is in the rendered tree (the channel filter
-  // would silently hide it if the task lives in a different channel).
+  // When a `?task=<n>` focus is in flight, override BOTH filters to the
+  // widest setting so the focused row is in the rendered tree:
+  //  - conversation → "all" (the channel filter would hide a task that
+  //    lives in a different channel);
+  //  - archive → "all" (a focused task may be archived; the default
+  //    `active` list would drop it, so the scroll-and-highlight effect
+  //    below can't find `[data-task-number]` and clears focus with no
+  //    visible highlight). We only know the number, not the archive
+  //    state, so "all" is the safe superset.
   useEffect(() => {
     if (open) {
       if (focusedTaskNumber !== null) {
         setConversationFilter(null);
+        setArchiveFilter('all');
       } else {
         setConversationFilter(
           defaultConversationId ? { kind: 'channel', id: defaultConversationId } : null,
@@ -265,7 +274,7 @@ export function WorkspaceTasksDrawer({
   // server-side filter entirely and let the renderer slice. Workspace
   // task counts here are small enough that the extra payload is fine.
   const { data: allTasks = [], isLoading } = useTasks(
-    { workspace_id: workspaceId },
+    { workspace_id: workspaceId, archived: archiveFilter },
     { workspaceScopeIds },
   );
   const tasks = useMemo(
@@ -273,6 +282,7 @@ export function WorkspaceTasksDrawer({
     [allTasks, conversationFilter],
   );
   const updateStatus = useUpdateTaskStatus();
+  const archiveTask = useArchiveTaskHuman();
 
   // Channels with their threads grouped underneath. Threads attach to
   // their parent via `parent_channel_id`; orphaned threads (parent
@@ -409,12 +419,17 @@ export function WorkspaceTasksDrawer({
                 </span>
               ) : null}
             </span>
+            <ArchiveFilterToggle
+              value={archiveFilter}
+              onChange={setArchiveFilter}
+              className="ml-auto"
+            />
             <button
               type="button"
               onPointerDown={closeDrawer}
               onClick={closeDrawer}
               aria-label="关闭 Tasks"
-              className="ml-auto flex size-6 shrink-0 cursor-pointer items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
+              className="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
             >
               <X className="size-4" />
             </button>
@@ -448,6 +463,9 @@ export function WorkspaceTasksDrawer({
                 onCardClick={handleCardClick}
                 onStatusChange={(messageId, status) =>
                   updateStatus.mutate({ messageId, status })
+                }
+                onArchive={(messageId, archived) =>
+                  archiveTask.mutate({ messageId, archived })
                 }
                 highlightedTaskNumber={highlightedTaskNumber}
               />
@@ -810,6 +828,7 @@ function KanbanColumn({
   isLoading,
   onCardClick,
   onStatusChange,
+  onArchive,
   highlightedTaskNumber,
 }: {
   title: string;
@@ -820,6 +839,7 @@ function KanbanColumn({
   isLoading: boolean;
   onCardClick: (t: TaskSummaryDto) => void;
   onStatusChange: (messageId: string, next: TaskStatus) => void;
+  onArchive: (messageId: string, archived: boolean) => void;
   highlightedTaskNumber: number | null;
 }): JSX.Element {
   return (
@@ -860,6 +880,7 @@ function KanbanColumn({
                   highlighted={highlightedTaskNumber === t.task_number}
                   onClick={() => onCardClick(t)}
                   onStatusChange={next => onStatusChange(t.message_id, next)}
+                  onArchive={archived => onArchive(t.message_id, archived)}
                 />
               </li>
             ))}
@@ -877,37 +898,57 @@ function TaskCard({
   highlighted,
   onClick,
   onStatusChange,
+  onArchive,
 }: {
   task: TaskSummaryDto;
   highlighted: boolean;
   onClick: () => void;
   onStatusChange: (next: TaskStatus) => void;
+  onArchive: (archived: boolean) => void;
 }): JSX.Element {
   const { relative, absolute } = useRelativeTime(task.created_at);
+  const archived = task.archived_at != null;
   return (
-    <div
-      data-task-number={task.task_number}
-      className={cn(
-        'group relative rounded-md border border-border-subtle bg-bg-primary transition-all hover:border-accent hover:bg-bg-hover',
-        // Brief ring pulse when this card is the focused-task target.
-        // Cleared by the drawer's setTimeout (~1.4s) so the highlight
-        // doesn't linger on next open. `transition-all` lets the ring
-        // fade in/out smoothly without a custom keyframe.
-        highlighted && 'ring-2 ring-accent ring-offset-1 ring-offset-bg-base',
-      )}
+    <TaskCardContextMenu
+      status={task.status}
+      archived={archived}
+      onStatusChange={onStatusChange}
+      onArchive={onArchive}
     >
-      {/* Jump to message — full card content area */}
+      <div
+        data-task-number={task.task_number}
+        className={cn(
+          'group relative rounded-md border border-border-subtle bg-bg-primary transition-all hover:border-accent hover:bg-bg-hover',
+          // Brief ring pulse when this card is the focused-task target.
+          // Cleared by the drawer's setTimeout (~1.4s) so the highlight
+          // doesn't linger on next open. `transition-all` lets the ring
+          // fade in/out smoothly without a custom keyframe.
+          highlighted && 'ring-2 ring-accent ring-offset-1 ring-offset-bg-base',
+        )}
+      >
+      {/* Stretched jump overlay — covers the whole card so clicking
+          anywhere (except the interactive controls layered above) jumps
+          to the message. Lets the status badge live as an independently
+          clickable control without a button-in-button. */}
       <button
         type="button"
         onClick={onClick}
-        className="block w-full p-2 pr-7 text-left"
-      >
-        {/* Row 1: #number + status badge inline */}
+        aria-label="跳转到消息"
+        className="absolute inset-0 z-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      />
+      {/* Content layer. `pointer-events-none` so text clicks fall
+          through to the jump overlay; only the status badge re-enables
+          pointer events. */}
+      <div className="pointer-events-none relative z-10 p-2 pr-7">
+        {/* Row 1: #number + interactive status badge inline */}
         <div className="flex items-center gap-1.5 pb-0.5">
           <span data-tasks-num className="font-mono text-[10px] text-text-muted">
             #{task.task_number}
           </span>
-          <TaskStatusBadge status={task.status} />
+          <span className="pointer-events-auto">
+            <TaskStatusBadge status={task.status} onChange={onStatusChange} />
+          </span>
+          {archived ? <ArchivedBadge /> : null}
         </div>
         {/* Row 2: title */}
         <span className="block min-w-0 break-words text-xs text-text-primary">
@@ -935,39 +976,28 @@ function TaskCard({
           <span aria-hidden className="shrink-0 text-text-muted/60">·</span>
           <span className="shrink-0" title={absolute}>{relative}</span>
         </div>
-      </button>
+      </div>
 
-      {/* Check button — top-right corner, only for in_review.
-          Ring-only by default; turns green on hover to signal the action. */}
+      {/* Check button — top-right corner, only for in_review. Quick
+          one-click approve fast-path; arbitrary status moves go through
+          the badge picker above. Ring-only by default; turns green on
+          hover to signal the action. */}
       {task.status === 'in_review' ? (
         <button
           type="button"
           aria-label="标记完成"
           title="标记完成"
           onClick={() => onStatusChange('done')}
-          className="absolute right-2 top-2 flex size-[18px] items-center justify-center rounded-full border-[1.5px] border-border-subtle bg-white text-transparent shadow-sm transition-all hover:border-success hover:text-success focus-visible:border-success focus-visible:text-success focus-visible:outline-none"
+          className="absolute right-2 top-2 z-10 flex size-[18px] items-center justify-center rounded-full border-[1.5px] border-border-subtle bg-white text-transparent shadow-sm transition-all hover:border-success hover:text-success focus-visible:border-success focus-visible:text-success focus-visible:outline-none"
         >
           <Check className="size-3" />
         </button>
       ) : null}
-    </div>
+      </div>
+    </TaskCardContextMenu>
   );
 }
 
-/** Small inline status badge — non-interactive, color-coded by status. */
-function TaskStatusBadge({ status }: { status: TaskStatus }): JSX.Element {
-  const labels: Record<TaskStatus, string> = {
-    todo: 'todo',
-    in_progress: 'in progress',
-    in_review: 'in review',
-    done: 'done',
-  };
-  return (
-    <span
-      data-task-status={status}
-      className="rounded-[var(--chip-radius)] px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide"
-    >
-      {labels[status]}
-    </span>
-  );
-}
+
+/** Small inline status badge — moved to ./TaskStatusBadge (now shared
+ *  + interactive). */

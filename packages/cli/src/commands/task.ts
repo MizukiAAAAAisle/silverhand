@@ -1,7 +1,7 @@
 /**
  * `silverhand task` — list, create, claim, unclaim, status.
  */
-import type { TaskStatus } from '@silverhand/shared';
+import type { TaskArchiveFilter, TaskStatus } from '@silverhand/shared';
 import { CliError } from '../errors.js';
 import {
   flagBool,
@@ -15,6 +15,7 @@ import type { Command } from './index.js';
 
 const VALID_STATUSES: readonly TaskStatus[] = ['todo', 'in_progress', 'in_review', 'done'];
 const VALID_UPDATE_STATUSES: readonly TaskStatus[] = ['in_progress', 'in_review', 'done'];
+const VALID_ARCHIVE_FILTERS: readonly TaskArchiveFilter[] = ['active', 'archived', 'all'];
 
 /**
  * List-only filter macros for `task list --status`. Each macro expands
@@ -97,6 +98,7 @@ const listCommand: Command = {
   summary: 'View the workspace task board.',
   help: `silverhand task list [--task-number N [--task-number N ...]]
                        [--status STATUS [--status STATUS ...]]
+                       [--archived active|archived|all]
                        [--assignee <agent_id>] [--mine]
                        [--workspace-id <id>] [--conversation-id <id>]
                        [--limit N]
@@ -125,6 +127,10 @@ Flags:
                        \`silverhand task status --status\` fails with
                        enum_invalid.
   --assignee <id>      Filter by assignee agent id.
+  --archived VALUE     Archive visibility filter:
+                         active   → default; hide archived tasks
+                         archived → only archived tasks
+                         all      → active + archived tasks
   --mine               Shortcut for --assignee=<your agent id>.
                        Resolves locally to this agent.
   --workspace-id <id>  Optional filter to a specific workspace.
@@ -136,6 +142,7 @@ stdout: { "tasks": [TaskSummaryDto, ...] }`,
   flags: [
     'task-number',
     'status',
+    'archived',
     'assignee',
     'workspace-id',
     'conversation-id',
@@ -148,6 +155,20 @@ stdout: { "tasks": [TaskSummaryDto, ...] }`,
     const expandedStatuses = statusValues
       ? expandFilterStatuses(statusValues)
       : undefined;
+    const archived = flagString(args, 'archived') as TaskArchiveFilter | undefined;
+    if (archived && !VALID_ARCHIVE_FILTERS.includes(archived)) {
+      throw new CliError({
+        code: 'validation_error',
+        subkind: 'enum_invalid',
+        message: `--archived must be one of ${VALID_ARCHIVE_FILTERS.join('|')}; got "${archived}"`,
+        retriable: false,
+        details: {
+          flag: 'archived',
+          value: archived,
+          allowed: VALID_ARCHIVE_FILTERS,
+        },
+      });
+    }
     const explicitAssignee = flagString(args, 'assignee');
     const mine = flagBool(args, 'mine');
     if (mine && explicitAssignee) {
@@ -172,6 +193,7 @@ stdout: { "tasks": [TaskSummaryDto, ...] }`,
         ? { status: expandedStatuses }
         : {}),
       ...(assigneeId ? { assignee_id: assigneeId } : {}),
+      ...(archived ? { archived } : {}),
       ...(flagString(args, 'workspace-id')
         ? { workspace_id: flagString(args, 'workspace-id') }
         : {}),

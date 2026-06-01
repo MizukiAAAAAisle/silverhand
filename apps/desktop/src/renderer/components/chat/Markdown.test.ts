@@ -118,6 +118,7 @@ describe('SystemMessage channel refs', () => {
       task_status: null,
       task_title: null,
       task_workspace_id: null,
+      task_archived_at: null,
       task_assignee: null,
     };
   }
@@ -753,6 +754,7 @@ describe('SystemMessage task event rows (PR-2)', () => {
       task_status: null,
       task_title: null,
       task_workspace_id: null,
+      task_archived_at: null,
       task_assignee: null,
     };
   }
@@ -807,6 +809,7 @@ describe('SystemMessage task event rows (PR-2)', () => {
       assignee: null,
       creator: { type: 'agent', id: 'a-alice', name: 'Alice' },
       created_at: 0,
+      archived_at: null,
       ...overrides,
     };
   }

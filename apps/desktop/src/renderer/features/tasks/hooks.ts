@@ -4,7 +4,12 @@ import {
   useQueryClient,
 } from '@tanstack/react-query';
 import { useEffect } from 'react';
-import type { TaskChangedEvent, TaskStatus, TaskSummaryDto } from '@silverhand/shared';
+import type {
+  TaskArchiveFilter,
+  TaskChangedEvent,
+  TaskStatus,
+  TaskSummaryDto,
+} from '@silverhand/shared';
 import { api } from '@/lib/api';
 import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
 import { applyTaskChangedToTaskByNumberCache } from './useTaskByNumber';
@@ -20,10 +25,17 @@ export interface TaskFilter {
   workspace_id?: string;
   conversation_id?: string;
   status?: TaskStatus | 'all';
+  archived?: TaskArchiveFilter;
 }
 
 export const tasksKey = (f: TaskFilter) =>
-  ['tasks', f.workspace_id ?? '*', f.conversation_id ?? '*', f.status ?? 'all'] as const;
+  [
+    'tasks',
+    f.workspace_id ?? '*',
+    f.conversation_id ?? '*',
+    f.status ?? 'all',
+    f.archived ?? 'active',
+  ] as const;
 
 export interface UseTasksOptions {
   enabled?: boolean;
@@ -35,6 +47,7 @@ function buildQs(f: TaskFilter): string {
   if (f.workspace_id) params.set('workspace_id', f.workspace_id);
   if (f.conversation_id) params.set('conversation_id', f.conversation_id);
   if (f.status && f.status !== 'all') params.set('status', f.status);
+  if (f.archived && f.archived !== 'active') params.set('archived', f.archived);
   const qs = params.toString();
   return qs ? `?${qs}` : '';
 }
@@ -117,6 +130,23 @@ export function useUnclaimTaskHuman() {
         { method: 'POST' },
       );
       if (!res.success) throw new Error(res.reason ?? 'unclaim failed');
+      return res;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['tasks'] });
+    },
+  });
+}
+
+export function useArchiveTaskHuman() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (args: { messageId: string; archived: boolean }) => {
+      const res = await api<{ success: boolean; reason?: string }>(
+        `/api/tasks/${args.messageId}/archive`,
+        { method: 'POST', body: JSON.stringify({ archived: args.archived }) },
+      );
+      if (!res.success) throw new Error(res.reason ?? 'archive failed');
       return res;
     },
     onSuccess: () => {

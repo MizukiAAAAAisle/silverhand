@@ -408,6 +408,56 @@ describe('Tasks (PR-T1)', () => {
     expect(listed.tasks[0].status).toBe('done');
   });
 
+  it('human POST /api/tasks/:messageId/archive toggles task visibility without changing status', async () => {
+    t = buildTestApp();
+    const { sessionId, agentIds } = await setup(t);
+    const h = http(t);
+    const received: { kind: string; payload: unknown }[] = [];
+
+    const created = (await (
+      await h.post(
+        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+        { tasks: [{ title: 'file later' }] },
+      )
+    ).json()) as any;
+    const messageId = created.tasks[0].message_id;
+    const unsub = t.ctx.events.subscribe(sessionId, e => received.push(e));
+
+    const archived = (await (
+      await http(t).post(`/api/tasks/${messageId}/archive`, { archived: true })
+    ).json()) as any;
+    unsub();
+    expect(archived.success).toBe(true);
+    expect(received.map(e => e.kind)).toEqual(['task_changed']);
+    expect((received[0]!.payload as any)).toMatchObject({
+      kind: 'archive',
+      message_id: messageId,
+      status: 'todo',
+      archived_at: expect.any(Number),
+    });
+
+    const active = (await (await http(t).get('/api/tasks')).json()) as any;
+    expect(active.tasks).toEqual([]);
+    const archivedList = (await (
+      await http(t).get('/api/tasks?archived=archived')
+    ).json()) as any;
+    expect(archivedList.tasks).toHaveLength(1);
+    expect(archivedList.tasks[0]).toMatchObject({
+      message_id: messageId,
+      title: 'file later',
+      status: 'todo',
+      archived_at: expect.any(Number),
+    });
+
+    const unarchived = (await (
+      await http(t).post(`/api/tasks/${messageId}/archive`, { archived: false })
+    ).json()) as any;
+    expect(unarchived.success).toBe(true);
+    const restored = (await (await http(t).get('/api/tasks')).json()) as any;
+    expect(restored.tasks).toHaveLength(1);
+    expect(restored.tasks[0].archived_at).toBeNull();
+  });
+
   it('agent task list filters by repeated --task-number / --status / --assignee + --limit', async () => {
     t = buildTestApp();
     const { sessionId, agentIds } = await setup(t);

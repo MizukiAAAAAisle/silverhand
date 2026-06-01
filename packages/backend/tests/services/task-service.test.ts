@@ -874,6 +874,73 @@ describe('TaskService.updateStatus', () => {
 });
 
 describe('TaskService.list / getByMessageId', () => {
+  it('human archive is a visibility filter, not a task status', async () => {
+    const t = bootstrap();
+    try {
+      const created = await createTask(t, t.alice.id, 'archive me');
+      if (!('tasks' in created)) throw new Error();
+      const task = created.tasks[0]!;
+      const conversationEvents: Array<{ kind: string; payload?: unknown }> = [];
+      const workspaceEvents: Array<{ kind: string; payload?: unknown }> = [];
+      const unsubA = t.events.subscribe(t.channel.id, e => conversationEvents.push(e));
+      const unsubB = t.events.subscribeScope(`workspace:${t.workspace.id}`, e =>
+        workspaceEvents.push(e),
+      );
+
+      const archived = await t.service.archiveTask({
+        actor: { kind: 'user', userId: 'local' },
+        by: { messageId: task.message_id },
+        archived: true,
+      });
+      unsubA();
+      unsubB();
+
+      expect(archived).toEqual({ success: true });
+      expect(conversationEvents.map(e => e.kind)).toEqual(['task_changed']);
+      expect(workspaceEvents.map(e => e.kind)).toEqual(['task_changed']);
+      const event = conversationEvents[0]!.payload as {
+        kind: string;
+        status: string;
+        archived_at: number | null;
+      };
+      expect(event.kind).toBe('archive');
+      expect(event.status).toBe('todo');
+      expect(event.archived_at).toEqual(expect.any(Number));
+
+      const active = t.service.list({ actor: { kind: 'user', userId: 'local' } });
+      expect(active).toEqual([]);
+      const archivedList = t.service.list({
+        actor: { kind: 'user', userId: 'local' },
+        archived: 'archived',
+      });
+      expect(archivedList).toHaveLength(1);
+      expect(archivedList[0]).toMatchObject({
+        message_id: task.message_id,
+        status: 'todo',
+        title: 'archive me',
+      });
+      expect(archivedList[0]!.archived_at).toEqual(expect.any(Number));
+      expect(t.service.list({
+        actor: { kind: 'user', userId: 'local' },
+        archived: 'all',
+      })).toHaveLength(1);
+
+      const unarchived = await t.service.archiveTask({
+        actor: { kind: 'user', userId: 'local' },
+        by: { messageId: task.message_id },
+        archived: false,
+      });
+      expect(unarchived).toEqual({ success: true });
+      expect(t.service.list({ actor: { kind: 'user', userId: 'local' } })).toHaveLength(1);
+      expect(t.service.getByMessageId(task.message_id, {
+        kind: 'user',
+        userId: 'local',
+      })?.archived_at).toBeNull();
+    } finally {
+      t.cleanup();
+    }
+  });
+
   it('user list global sees tasks across all workspaces', async () => {
     const t = bootstrap();
     try {
