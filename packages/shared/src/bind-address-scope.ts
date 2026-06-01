@@ -1,7 +1,7 @@
 /**
  * D4.a Commit 4 — `bind_address_scope` classifier.
  *
- * Backed by `docs/remote-backend-d4-design.md` §6.3 condition 3:
+ * Backed by `docs/remote-backend-architecture-notes.md §3` condition 3:
  *
  *   > On backend boot:
  *   >   - If listen address is non-loopback AND `signup_enabled = true`:

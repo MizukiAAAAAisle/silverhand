@@ -3,7 +3,7 @@
  *
  * **What this pins**: the `authConfig.signupEnabled` boundary in
  * `startBackend` is a **boot-time-frozen** input. Toggling it at
- * runtime is forbidden by design (see remote-backend-d4-design.md
+ * runtime is forbidden by design (see `docs/remote-backend-architecture-notes.md §3`
  * §6.3). The contract is: change the flag → restart backend → new
  * boot picks up the new value. This test exercises that contract
  * end-to-end with a real listener and a real backend close+restart

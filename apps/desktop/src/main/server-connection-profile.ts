@@ -1,6 +1,6 @@
 /**
  * D4.a Commit 2 — desktop main-process storage for the server
- * connection profile (per `docs/remote-backend-d4-design.md` §7.2).
+ * connection profile (per `docs/remote-backend-architecture-notes.md §3`).
  *
  * Contract:
  *   - File path: `<silverhandDir>/desktop/server-profile.bin`,

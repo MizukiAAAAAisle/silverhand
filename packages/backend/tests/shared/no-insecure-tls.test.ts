@@ -18,7 +18,7 @@
  *   - Pure Node implementation (no ripgrep / shell dependency) makes
  *     this portable across the macOS dev box and any CI runner.
  *
- * Scope (verbatim from `docs/remote-backend-d4-design.md` §8.3):
+ * Scope (verbatim from `docs/remote-backend-architecture-notes.md §3`):
  *   - apps/desktop/src/main
  *   - apps/desktop/src/preload
  *   - packages/host/src

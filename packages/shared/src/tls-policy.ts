@@ -1,7 +1,7 @@
 /**
  * `@silverhand/shared` — typed TLS error mapping primitive.
  *
- * D4.a Commit 1 (per `docs/remote-backend-d4-design.md` §8).
+ * D4.a Commit 1 (per `docs/remote-backend-architecture-notes.md §3`).
  *
  * SCOPE LOCK (Cindy review + shiki ack 2026-05-28):
  *   - We do NOT write a custom certificate verifier.

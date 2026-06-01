@@ -152,7 +152,7 @@ export type BindAddressScope = z.infer<typeof BindAddressScopeSchema>;
 export const ServerInfoSchema = z.object({
   signup_enabled: z.boolean(),
   /**
-   * D4.a Commit 4 (per `docs/remote-backend-d4-design.md` §6.3
+   * D4.a Commit 4 (per `docs/remote-backend-architecture-notes.md §3`
    * condition 3): classification of the address the standalone /
    * embedded backend is bound to, so desktop and ops tooling can
    * read "signup_enabled + bind_address_scope" together

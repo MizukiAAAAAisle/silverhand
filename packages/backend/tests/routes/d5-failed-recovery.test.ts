@@ -1,7 +1,7 @@
 /**
  * D4.d D5 — failed-row recovery surface tests.
  *
- * Pins the D5 deliverables in `docs/remote-backend-d4d-design.md`
+ * Pins the D5 deliverables in `docs/remote-backend-architecture-notes.md §3.4`
  * §3.2 / §4.1 / §7.3 / §10.3:
  *
  *   1. DELETE branches:

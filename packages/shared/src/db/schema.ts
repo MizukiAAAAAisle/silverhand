@@ -75,7 +75,7 @@ export type ConversationEventKind = z.infer<typeof ConversationEventKindSchema>;
  * through the legacy backend-direct-fs path so the L1 already
  * exists). New rows START in 'pending_materialization' and flip
  * to 'active' on daemon ack (L3a) or 'failed' on typed error /
- * timeout (L3b). See `docs/remote-backend-d4d-design.md` §4.1.
+ * timeout (L3b). See `docs/remote-backend-architecture-notes.md §3.4`.
  */
 export const AgentMaterializationStatusSchema = z.enum([
   'pending_materialization',

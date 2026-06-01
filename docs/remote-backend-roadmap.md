@@ -787,7 +787,7 @@ Local host only.
 
 **Detail spec**: `docs/remote-backend-architecture-notes.md` §3 (D4) —
 consolidated accepted decisions + invariants + error-code contracts (the
-former per-stage `remote-backend-d4-design.md` draft was absorbed there).
+former per-stage D4 design draft was absorbed there).
 This section is a pointer + short summary only.
 
 **Shape** (locked in D4.0):

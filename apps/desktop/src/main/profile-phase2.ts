@@ -1,7 +1,7 @@
 /**
  * D4.a Commit 5c-2 — phase-2 orchestrator triggered by a profile commit.
  *
- * Per `docs/remote-backend-d4-design.md` §7.5:
+ * Per `docs/remote-backend-architecture-notes.md §3`:
  *
  *   When user updates `server_url` from Settings:
  *     Phase 0 — validate (`probeServerInfo` — owned by the IPC caller)

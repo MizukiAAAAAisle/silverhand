@@ -1395,7 +1395,7 @@ export const migrations: Migration[] = [
     // staging tables and rewrites the legacy ids to the new viewer.
     // After successful registration the staging tables are dropped and
     // an audit row is written to `app_settings`. See
-    // `docs/human-identity-migration-cleanup-plan.md` for the long-term
+    // `docs/remote-backend-architecture-notes.md §1` for the long-term
     // plan to retire the bridge.
     //
     // What this migration does (NON-DESTRUCTIVE):
@@ -2269,7 +2269,7 @@ export const migrations: Migration[] = [
     version: 33,
     name: 'agent_materialization_status',
     // D4.d (additive, server↔daemon formal semantics; see
-    // docs/remote-backend-d4d-design.md §4.1): tag the `agents` row
+    // `docs/remote-backend-architecture-notes.md §3.4`): tag the `agents` row
     // with the daemon-side materialization lifecycle so
     // `POST /api/agents` can keep the row reserved across the wire
     // round-trip and so failed/in-progress rows are excluded from

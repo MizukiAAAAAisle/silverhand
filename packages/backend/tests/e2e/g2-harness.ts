@@ -1,7 +1,7 @@
 /**
  * D4.b-1 — Stage D4 / G2 e2e harness.
  *
- * **Why this exists**: G2 acceptance (§5.2 of `docs/remote-backend-d4-design.md`)
+ * **Why this exists**: G2 acceptance (§5.2 of `docs/remote-backend-architecture-notes.md §3`)
  * requires that the standalone backend ↔ daemon outbound WS path
  * works end-to-end against the real wire — no `Hono.fetch()`
  * shortcuts, no hand-built outbound frames, no direct

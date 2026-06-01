@@ -38,7 +38,7 @@ export const DaemonHostConfigSchema = z.object({
   host_token: z.string().min(1),
   /**
    * D4.a Commit 5b — local config consistency anchor (per
-   * `docs/remote-backend-d4-design.md` §7.6). When the desktop main
+   * `docs/remote-backend-architecture-notes.md §3`). When the desktop main
    * process derives daemon-config from the server connection profile
    * it stamps the profile's monotonic `version` here; the daemon
    * reads it solely to:
@@ -97,7 +97,7 @@ export const SILVERHAND_AUTH_TOKEN_ENV = 'SILVERHAND_AUTH_TOKEN';
  *   - affect the loopback http path (which never needed it).
  *
  * The flag value is intentionally NOT persisted to the server
- * connection profile (`docs/remote-backend-d4-design.md` §7.2): if it
+ * connection profile (`docs/remote-backend-architecture-notes.md §3`): if it
  * were, toggling the env would cause profile↔runtime drift. Profile
  * acceptance is re-evaluated on every read against current env.
  *
@@ -126,7 +126,7 @@ export function readAllowInsecureRemoteFlag(
 /**
  * D4.a Commit 3 — dev-only escape hatch that forces the desktop main
  * process to boot the EMBEDDED backend even when a server connection
- * profile (`docs/remote-backend-d4-design.md` §7) is present and would
+ * profile (`docs/remote-backend-architecture-notes.md §3`) is present and would
  * otherwise route to remote mode.
  *
  * Intended use cases (all dev-only):

@@ -1,7 +1,7 @@
 /**
  * `@silverhand/shared` — server connection profile primitive.
  *
- * D4.a Commit 2 (per `docs/remote-backend-d4-design.md` §7.1).
+ * D4.a Commit 2 (per `docs/remote-backend-architecture-notes.md §3`).
  *
  * ## What this is
  *
@@ -43,7 +43,7 @@ import { z } from 'zod';
 
 /**
  * Profile **generation** version. Per
- * `docs/remote-backend-d4-design.md` §7.1:
+ * `docs/remote-backend-architecture-notes.md §3`:
  *
  *   `version: int // monotonic; increments on every commit`
  *

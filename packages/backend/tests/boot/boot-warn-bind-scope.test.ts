@@ -1,6 +1,6 @@
 /**
  * D4.a Commit 4 — boot-time WARN on non-loopback bind + signup enabled
- * (per `docs/remote-backend-d4-design.md` §6.3 condition 3).
+ * (per `docs/remote-backend-architecture-notes.md §3` condition 3).
  *
  * The classifier itself is unit-tested in
  * `tests/shared/bind-address-scope.test.ts`. This file pins the

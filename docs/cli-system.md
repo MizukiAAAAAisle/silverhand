@@ -111,7 +111,7 @@ Pre-flight failures (exit 1, code `validation_error`):
 Decision note, 2026-05-26: `silverhand thread create` and
 `silverhand channel create` should use the same heredoc / pipe model for
 their initial prompt body as `silverhand message send`. The focused plan lives
-in `docs/thread-channel-create-initial-prompt-stdin.md`.
+in `docs/remote-backend-architecture-notes.md §6`.
 
 Target semantics for the follow-up implementation:
 

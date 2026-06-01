@@ -94,7 +94,7 @@ export interface BackendContext {
    * tooling can read `(signup_enabled, bind_address_scope)`
    * together, and used at boot to decide whether to emit the
    * "non-loopback bind + signup enabled" WARN line (per
-   * `docs/remote-backend-d4-design.md` §6.3 condition 3).
+   * `docs/remote-backend-architecture-notes.md §3` condition 3).
    *
    * Derived once at boot via `classifyBindAddressScope(listenHostname)`;
    * stored on the context so handlers don't re-derive (the

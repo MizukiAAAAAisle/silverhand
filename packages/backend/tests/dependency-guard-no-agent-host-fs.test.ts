@@ -2,7 +2,7 @@
  * D4.e-5 A1 tripwire: `packages/backend/src/**` performs ZERO agent-host
  * filesystem operations.
  *
- * Invariant I6 / acceptance A1 (design `docs/remote-backend-d4e-design.md`
+ * Invariant I6 / acceptance A1 (design `docs/remote-backend-architecture-notes.md §3.5`
  * §4, §7): the daemon is the sole authority for host-local path resolution.
  * The backend control plane must never `mkdir`/`writeFile`/`rm`/`readFile` an
  * agent L1 home, an L2 workspace memory dir, or a workspace `.silverhand/`
@@ -31,7 +31,7 @@
  * runtime_start builder (`runtime/runtime-start-options.ts`) imports no
  * `node:path`/`node:fs` and emits no host-path field, and the agent L1 home
  * key `home_dir` appears nowhere in backend/src. With both halves enforced,
- * I6 is fully true and A7 (M1 closure) is claimable. See `docs/d4-e-acceptance.md`.
+ * I6 is fully true and A7 (M1 closure) is claimable. See `docs/remote-backend-architecture-notes.md §3.5`.
  */
 import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';

@@ -219,7 +219,7 @@ export function assertApiProxyPath(path: string): void {
  *  reused by the `hosts:rotate` IPC and unit-tested separately. The
  *  main process wraps this in network I/O + token bookkeeping.
  *
- *  D4.a Commit 5c-1 (per `docs/remote-backend-d4-design.md` §7.6):
+ *  D4.a Commit 5c-1 (per `docs/remote-backend-architecture-notes.md §3`):
  *  rotate does NOT change the profile generation, so it MUST preserve
  *  the existing `profile_version` from the current daemon-config. A
  *  rotate that silently drops the field would force the daemon to

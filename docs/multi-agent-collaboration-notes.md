@@ -8,7 +8,7 @@ rounds.
 
 Sources referenced:
 
-- `docs/inbox-msg-draft.md` — original AX framing article.
+- `docs/remote-backend-architecture-notes.md §6` — original AX framing article.
 - `@slock-ai/daemon@0.54.1` — reference implementation studied by reading the
   published npm package.
 
@@ -16,12 +16,12 @@ Sources referenced:
 
 ### 1.1 Asymmetry between humans and agents
 
-As stated in `inbox-msg-draft.md`: humans have continuous ambient presence in
+As stated in `docs/remote-backend-architecture-notes.md §6`: humans have continuous ambient presence in
 shared rooms; agents are turn-based snapshot consumers. Many failure modes
 observed in multi-agent rooms — duplicate replies, stale replies, missed
 plan-changes — trace back to this asymmetry.
 
-### 1.2 The four AX questions (from `inbox-msg-draft.md`)
+### 1.2 The four AX questions (from `docs/remote-backend-architecture-notes.md §6`)
 
 - What does the agent see at the moment of action?
 - What state does it carry between calls?

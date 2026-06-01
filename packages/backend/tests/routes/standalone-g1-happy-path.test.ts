@@ -50,7 +50,7 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
   });
 
   it('GET /api/server/info on a standalone (lan-scoped) backend exposes signup_enabled + bind_address_scope', async () => {
-    // Pinned shape per `docs/remote-backend-d4-design.md` §6.2 / §6.3 —
+    // Pinned shape per `docs/remote-backend-architecture-notes.md §3` —
     // these two fields are the contract the desktop wizard reads to
     // decide whether to render the signup form and whether to surface
     // the "exposed beyond loopback" badge. A drift that drops either

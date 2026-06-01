@@ -249,7 +249,7 @@ export type ServerUrlRejectionReason =
   /** The URL has a non-trivial path, query, or fragment (e.g.
    *  `https://x/foo`, `https://x?bar=1`, `https://x/#frag`). The
    *  server connection profile is an origin-only concept (per
-   *  `docs/remote-backend-d4-design.md` §7.1: "server_url: canonical
+   *  `docs/remote-backend-architecture-notes.md §3`: "server_url: canonical
    *  URL string (scheme + host + port)"). Subpath / search / fragment
    *  semantics are not supported; admitting them would let the
    *  Setup Wizard test one base (we strip path before fetching

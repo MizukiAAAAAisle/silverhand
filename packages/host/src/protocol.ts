@@ -134,7 +134,7 @@ export type HelloResult = z.infer<typeof HelloResultSchema>;
 // compatibility, then ping/status/echo prove the IPC carries
 // structured payloads, plumbs lifecycle, and supports reconnect.
 // PR-2 expands this with the runtime_* family that the
-// design lock at `docs/silverhand-daemon-pr2-design.md` describes.
+// design lock at `docs/remote-backend-architecture-notes.md §5` describes.
 //
 // PR-2 step 1 lands the wire schemas here PLUS a daemon-internal fake
 // supervisor that satisfies the contract without doing any real
@@ -229,7 +229,7 @@ export type ConversationLogDebugResult = z.infer<
 //
 // Wire surface for the (conversation, agent) supervisor that the
 // daemon owns. The shapes below match the design lock in
-// `docs/silverhand-daemon-pr2-design.md` §3 verbatim. Anything that
+// `docs/remote-backend-architecture-notes.md §5` verbatim. Anything that
 // looks "runtime_*" goes through one (conversation_id, agent_id) pair
 // — the daemon serializes operations on that key with the same
 // per-pair lifecycle lock CM uses today.
@@ -1041,7 +1041,7 @@ export type HostOutboundReloadResult = z.infer<
 // per-command error scoping — see Cindy D1 round-1 P1) stays a
 // thin envelope around the same Zod definitions.
 //
-// See docs/remote-backend-d4d-design.md §3.1 / §3.4 / §4.6 / §8.
+// See `docs/remote-backend-architecture-notes.md §3.4`.
 
 export const AgentMaterializeParamsSchema = z
   .object({

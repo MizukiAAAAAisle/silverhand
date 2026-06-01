@@ -275,7 +275,7 @@ describe('GET /api/agents/:id', () => {
   //
   // Coverage gap closed by Cindy `mWQVcAFMbuzFfd3U`: workspace +
   // host + conversation cross-user paths already had explicit pins
-  // (see `docs/d4-c-g3-acceptance.md` ACL #1 row); the agent-by-id
+  // (see `docs/remote-backend-architecture-notes.md §3.3` ACL #1 row); the agent-by-id
   // surface was the missing piece.
   it('cross-user GET returns 404 (not 403) — anti-enumeration (G3 ACL #1)', async () => {
     t = buildTestApp();

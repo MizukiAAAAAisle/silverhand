@@ -135,7 +135,7 @@ let localHostClaim: LocalHostClaimStatus = { status: 'unclaimed', hostId: null }
 /**
  * D4.a Commit 5c-2 — in-memory state describing whether the desktop's
  * view of the server connection profile has been fully applied to the
- * daemon's running config (per `docs/remote-backend-d4-design.md` §7.5).
+ * daemon's running config (per `docs/remote-backend-architecture-notes.md §3`).
  *
  * Lives on the desktop main process only — NOT serialized to disk
  * (the source of truth is the comparison `profile.version` vs
@@ -940,7 +940,7 @@ async function claimLocalHostForUserSession(): Promise<void> {
     const localHostId = parsed.data.host_id;
     const attachWindow = captureAttachWindow(localHostId);
 
-    // D4.a Commit 5c-1 (per `docs/remote-backend-d4-design.md` §7.6):
+    // D4.a Commit 5c-1 (per `docs/remote-backend-architecture-notes.md §3`):
     // when a server connection profile is committed, claim writes the
     // profile generation into daemon-config so the daemon's fingerprint
     // (5b) stays in sync with desktop's view of the current profile.
@@ -2378,7 +2378,7 @@ ipcMain.handle(
  *
  * Pre-auth Setup Wizard / Settings UI uses these handlers to read,
  * test, and commit the on-disk server connection profile (per
- * `docs/remote-backend-d4-design.md` §7).
+ * `docs/remote-backend-architecture-notes.md §3`).
  *
  * Boundary discipline:
  *   - `profile:get` returns a redacted view (`server_url + updated_at`
@@ -2417,7 +2417,7 @@ export type ProfileSaveWithTestResult =
       /**
        * D4.a Commit 5c-2 — phase-2 outcome from
        * `performProfilePhase2` after the profile commit succeeded
-       * (`docs/remote-backend-d4-design.md` §7.5).
+       * (`docs/remote-backend-architecture-notes.md §3`).
        *
        * Three high-level kinds; renderer copy keys off the
        * discriminator:

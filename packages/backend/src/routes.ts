@@ -1191,7 +1191,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     });
   }
 
-  // D4.a Commit 4 (per `docs/remote-backend-d4-design.md` §6.2):
+  // D4.a Commit 4 (per `docs/remote-backend-architecture-notes.md §3`):
   // `/auth/signup` is **always mounted**. The handler branches on
   // `signupEnabled` and returns a typed `403 { code:
   // 'signup_disabled' }` body when disabled — a change from the

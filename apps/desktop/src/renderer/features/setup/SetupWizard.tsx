@@ -2,7 +2,7 @@
  * D4.a Commit 2 — Setup Wizard.
  *
  * Pre-auth UX entry to the server connection profile system (per
- * `docs/remote-backend-d4-design.md` §7.4).
+ * `docs/remote-backend-architecture-notes.md §3`).
  *
  * Discovery (Commit 2): triggered exclusively by the App menu's
  * "Connect to backend…" item, which fires `navigate:setupWizard` over

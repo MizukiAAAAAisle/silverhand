@@ -6,7 +6,7 @@
  * stubs; D3 un-skips invariants 1 + 3 (this commit); D5 un-skips
  * invariant 2.
  *
- * Cross-referenced from `docs/remote-backend-d4d-design.md`:
+ * Cross-referenced from `docs/remote-backend-architecture-notes.md §3.4`:
  *   - §3.2  + §6.1 (metadata mismatch precedence)
  *   - §4.1  + §7.3 + §10.3 (ACL-first list/get widener — D5)
  *   - §6.3  L3a/L3b + §10.3 (L3a tx atomicity contract)

@@ -582,7 +582,7 @@ describe('performOutboundReload — happy path end-to-end shape', () => {
   });
 
   // ── D4.a Commit 5c-1: profile_version carry-through (per
-  //    docs/remote-backend-d4-design.md §7.6) ──────────────────────
+  //    `docs/remote-backend-architecture-notes.md §3`) ──────────────────────
 
   it('writes profile_version when currentProfileVersion returns a value (legacy save preserves the field)', async () => {
     // Legacy `settings:saveServerUrl` is NOT a profile commit — it

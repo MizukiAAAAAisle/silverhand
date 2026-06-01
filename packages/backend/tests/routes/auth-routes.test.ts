@@ -11,7 +11,7 @@ describe('auth routes', () => {
   });
 
   it('exposes server info with bind scope and serves typed 403 when signup is disabled', async () => {
-    // D4.a Commit 4 contract (per docs/remote-backend-d4-design.md §6.2):
+    // D4.a Commit 4 contract (per `docs/remote-backend-architecture-notes.md §3`):
     //   - `/api/server/info` exposes both `signup_enabled` AND
     //     `bind_address_scope` so desktop/ops tooling can read the
     //     "exposure + signup" combination programmatically.
