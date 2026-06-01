@@ -27,7 +27,7 @@ interface JoinedRow extends SavedMessageRow {
   m_task_status: TaskStatus | null;
   m_task_title: string | null;
   m_task_workspace_id: string | null;
-  m_task_archived_at: number | null;
+  m_task_closed_at: number | null;
   m_task_assignee_agent_id: string | null;
   m_task_assignee_user_id: string | null;
   m_task_assignee_name: string | null;
@@ -80,7 +80,7 @@ function rowToDto(row: JoinedRow): SavedMessageDto {
       task_status: row.m_task_status,
       task_title: row.m_task_title,
       task_workspace_id: row.m_task_workspace_id,
-      task_archived_at: row.m_task_archived_at,
+      task_closed_at: row.m_task_closed_at,
       task_assignee: assignee,
     },
   };
@@ -141,7 +141,7 @@ const SELECT_JOINED = `
     m.task_status             AS m_task_status,
     m.task_title              AS m_task_title,
     m.task_workspace_id       AS m_task_workspace_id,
-    m.task_archived_at        AS m_task_archived_at,
+    m.task_closed_at          AS m_task_closed_at,
     m.task_assignee_agent_id  AS m_task_assignee_agent_id,
     m.task_assignee_user_id   AS m_task_assignee_user_id,
     ta.display_name           AS m_task_assignee_name,

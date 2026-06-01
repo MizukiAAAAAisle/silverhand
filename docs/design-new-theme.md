@@ -172,25 +172,26 @@ narrow namespace 防止被复用到不合适的尺寸。
 magenta(in_review)：cyan 是 dashboard-live，magenta 是 attention-grabbing
 beacon，跟语义同向。
 
-#### 3.2.2.1 Archived-task badge（#task:767 A-track；后端 c88e13f）
+#### 3.2.2.1 Closed-status chip（#task:770 closed-as-status cutover）
 
-`archived` 是跟 `task_status` **正交**的可见性维度（后端 `messages.task_archived_at`，
-human-only `POST /api/tasks/:id/archive`），不是第五个 status。归档卡片在
-status badge 旁额外显示一个 `Archived` chip（`ArchivedBadge`，
-`apps/desktop/src/renderer/components/tasks/TaskStatusBadge.tsx`），通过
-`data-task-archived` 钩子从 3-token 契约取色。每个主题 MUST 三个都显式定义，
-不允许漏一个回退 `:root`（否则 forza6 的 indigo 会泄漏到暖系）。命名对齐
-`--task-status-*-{bg,text,border}`，复用同一套 task-badge 词汇。
+`closed` 是**第五个终态 status**（不再是跟 `task_status` 正交的 archived 可见性维度）。
+后端把 `messages.task_archived_at` 重命名为 `task_closed_at`（仅作排序/审计 metadata），
+复用 `POST /api/tasks/:id/status` 做 any→any 转移（含进入/退出 closed 做 reopen），
+agent 与 human 都可处理；旧的 `POST /api/tasks/:id/archive` 端点、`TaskArchiveFilter`
+可见性查询参数、独立 `Archived` chip 全部移除。closed 卡片落在 kanban 第五列（Done 之后），
+status badge 直接显示 `closed`（不再额外叠 chip）。chip 通过 `data-task-status='closed'`
+钩子从 3-token 契约取色，命名对齐 `--task-status-*-{bg,text,border}`，与其它四个 status
+同属一套 task-badge 词汇。每个主题 MUST 三个都显式定义，不允许漏一个回退 `:root`
+（否则 forza6 的 indigo 会泄漏到暖系）。
 
 | Token | 用途 | 取值原则 |
 |---|---|---|
-| `--task-archived-bg` | `Archived` chip 背景 | 暖软底给 `transparent` 低噪；海报系给饱和填充（forza6 复用 `--forza6-indigo-slab`） |
-| `--task-archived-text` | chip 字色 | 暖系 `var(--text-muted)`；海报系填充上给高对比（forza6 `#FFFFFF`，~8:1） |
-| `--task-archived-border` | chip 边框色 | 暖系 `var(--border-subtle)` hairline；海报系同 bg 做无缝实心块 |
+| `--task-status-closed-bg` | closed chip 背景 | 暖软底给 `transparent` 低噪；海报系给饱和填充（forza6 复用 `--forza6-indigo-slab`） |
+| `--task-status-closed-text` | chip 字色 | 暖系 `var(--text-muted)`；海报系填充上给高对比（forza6 `#FFFFFF`，~8:1） |
+| `--task-status-closed-border` | chip 边框 | 暖系 `1px solid var(--border-subtle)` hairline；海报系 `1.5px solid var(--forza6-indigo-slab)` 同 bg 做无缝实心块 |
 
-**消费边界**（Cindy review）：这组 token **只**被 archived-task badge 消费，
-不外扩到 channel archived badge 或其它 archived surface —— 避免「archived」
-语义跨域复用导致 token 含义漂移。
+**消费边界**（Cindy review）：这组 token **只**被 task status chip（closed 态）消费，
+不外扩到 channel archived badge 或其它 surface —— 避免语义跨域复用导致 token 含义漂移。
 
 ### 3.2.3 Primary control surface（PR-10 token promotion）
 
@@ -575,16 +576,13 @@ shiki 决定先保留胶囊（forza6 用饱和填色表达状态语义，不需�
   --border-inline-code: ...;    /* shorthand：软底主题给 `none`，海报系给 `2px solid <near-black>` */
   --radius-inline-code: ...;    /* 软底主题给 var(--radius-sm)，海报系给 `0` */
 
-  /* ── Task status badge (§3.2.2) ── 4 状态 × {bg / text / border} */
+  /* ── Task status badge (§3.2.2 / §3.2.2.1) ── 5 状态 × {bg / text / border}；closed 是终态 status */
   --task-status-todo-bg: ...;          --task-status-todo-text: ...;          --task-status-todo-border: ...;
   --task-status-in-progress-bg: ...;   --task-status-in-progress-text: ...;   --task-status-in-progress-border: ...;
   --task-status-in-review-bg: ...;     --task-status-in-review-text: ...;     --task-status-in-review-border: ...;
   --task-status-done-bg: ...;          --task-status-done-text: ...;          --task-status-done-border: ...;
-
-  /* ── Archived-task badge (§3.2.2.1) ── archived 可见性维度，只此 badge 消费 */
-  --task-archived-bg: ...;       /* 暖系 transparent；海报系 var(--forza6-indigo-slab) */
-  --task-archived-text: ...;     /* 暖系 var(--text-muted)；海报系填充上高对比白 */
-  --task-archived-border: ...;   /* 暖系 var(--border-subtle)；海报系同 bg 做实心块 */
+  --task-status-closed-bg: ...;        --task-status-closed-text: ...;        --task-status-closed-border: ...;
+  /* closed: 暖系 transparent / var(--text-muted) / 1px subtle；海报系 var(--forza6-indigo-slab) / #FFFFFF / 1.5px solid slab */
 
   /* ── Floating frame (§3.6.1) ── menu / popover / hover-card 共用 */
   --floating-border: ...;        /* shorthand：暖系 `1px solid var(--border)`，海报系 `2px solid <near-black>` */

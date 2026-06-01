@@ -138,9 +138,9 @@ describe('Tasks (PR-T1)', () => {
     expect(listed.tasks[0].creator).toMatchObject({
       type: 'user',
       id: 'teammate',
-      name: 'teammate',
+      name: 'Teammate',
     });
-    expect(listed.tasks[0].creator.name).not.toBe('you');
+    expect(listed.tasks[0].creator.name).not.toBe('teammate');
   });
 
   it('cross-conversation claim within same workspace succeeds (#task:530)', async () => {
@@ -408,7 +408,7 @@ describe('Tasks (PR-T1)', () => {
     expect(listed.tasks[0].status).toBe('done');
   });
 
-  it('human POST /api/tasks/:messageId/archive toggles task visibility without changing status', async () => {
+  it('human POST /api/tasks/:messageId/status can close and reopen tasks', async () => {
     t = buildTestApp();
     const { sessionId, agentIds } = await setup(t);
     const h = http(t);
@@ -423,39 +423,38 @@ describe('Tasks (PR-T1)', () => {
     const messageId = created.tasks[0].message_id;
     const unsub = t.ctx.events.subscribe(sessionId, e => received.push(e));
 
-    const archived = (await (
-      await http(t).post(`/api/tasks/${messageId}/archive`, { archived: true })
+    const closed = (await (
+      await http(t).post(`/api/tasks/${messageId}/status`, { status: 'closed' })
     ).json()) as any;
     unsub();
-    expect(archived.success).toBe(true);
-    expect(received.map(e => e.kind)).toEqual(['task_changed']);
-    expect((received[0]!.payload as any)).toMatchObject({
-      kind: 'archive',
+    expect(closed.success).toBe(true);
+    const taskChanged = received.filter(e => e.kind === 'task_changed');
+    expect(taskChanged).toHaveLength(1);
+    expect((taskChanged[0]!.payload as any)).toMatchObject({
+      kind: 'status',
       message_id: messageId,
-      status: 'todo',
-      archived_at: expect.any(Number),
+      status: 'closed',
+      closed_at: expect.any(Number),
     });
 
-    const active = (await (await http(t).get('/api/tasks')).json()) as any;
-    expect(active.tasks).toEqual([]);
-    const archivedList = (await (
-      await http(t).get('/api/tasks?archived=archived')
+    const closedList = (await (
+      await http(t).get('/api/tasks?status=closed')
     ).json()) as any;
-    expect(archivedList.tasks).toHaveLength(1);
-    expect(archivedList.tasks[0]).toMatchObject({
+    expect(closedList.tasks).toHaveLength(1);
+    expect(closedList.tasks[0]).toMatchObject({
       message_id: messageId,
       title: 'file later',
-      status: 'todo',
-      archived_at: expect.any(Number),
+      status: 'closed',
+      closed_at: expect.any(Number),
     });
 
-    const unarchived = (await (
-      await http(t).post(`/api/tasks/${messageId}/archive`, { archived: false })
+    const reopened = (await (
+      await http(t).post(`/api/tasks/${messageId}/status`, { status: 'todo' })
     ).json()) as any;
-    expect(unarchived.success).toBe(true);
-    const restored = (await (await http(t).get('/api/tasks')).json()) as any;
+    expect(reopened.success).toBe(true);
+    const restored = (await (await http(t).get('/api/tasks?status=todo')).json()) as any;
     expect(restored.tasks).toHaveLength(1);
-    expect(restored.tasks[0].archived_at).toBeNull();
+    expect(restored.tasks[0].closed_at).toBeNull();
   });
 
   it('agent task list filters by repeated --task-number / --status / --assignee + --limit', async () => {

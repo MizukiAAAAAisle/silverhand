@@ -667,6 +667,7 @@ function TaskEventDot({ kind }: { kind: TaskEventDotKind }): JSX.Element {
     in_progress: 'bg-accent',
     in_review: 'bg-warning',
     done: 'bg-success',
+    closed: 'bg-text-muted/40',
     unclaim: 'border border-dashed border-text-muted/60 bg-transparent',
   };
   return (
@@ -698,6 +699,7 @@ function TaskStatusPill({ status }: { status: TaskStatus }): JSX.Element {
     in_progress: 'in progress',
     in_review: 'in review',
     done: 'done',
+    closed: 'closed',
   };
   return (
     <span

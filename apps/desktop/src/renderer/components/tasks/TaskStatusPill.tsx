@@ -26,6 +26,7 @@ const COPY: Record<TaskStatus, string> = {
   in_progress: 'In progress',
   in_review: 'In review',
   done: 'Done',
+  closed: 'Closed',
 };
 
 const SIZE: Record<NonNullable<TaskStatusPillProps['size']>, string> = {
@@ -33,7 +34,13 @@ const SIZE: Record<NonNullable<TaskStatusPillProps['size']>, string> = {
   md: 'h-6 px-2 text-xs',
 };
 
-const ALL_STATUSES: TaskStatus[] = ['todo', 'in_progress', 'in_review', 'done'];
+const ALL_STATUSES: TaskStatus[] = [
+  'todo',
+  'in_progress',
+  'in_review',
+  'done',
+  'closed',
+];
 
 export function TaskStatusPill({
   status,

@@ -856,7 +856,7 @@ export const MessageDtoSchema = z.object({
   task_status: TaskStatusSchema.nullable(),
   task_title: z.string().nullable(),
   task_workspace_id: z.string().nullable(),
-  task_archived_at: z.number().nullable(),
+  task_closed_at: z.number().nullable(),
   task_assignee: TaskAssigneeDtoSchema.nullable(),
 });
 export type MessageDto = z.infer<typeof MessageDtoSchema>;
@@ -1049,19 +1049,14 @@ export const TaskSummaryDtoSchema = z.object({
   assignee: TaskAssigneeDtoSchema.nullable(),
   creator: TaskCreatorDtoSchema,
   created_at: z.number(),
-  archived_at: z.number().nullable(),
+  closed_at: z.number().nullable(),
 });
 export type TaskSummaryDto = z.infer<typeof TaskSummaryDtoSchema>;
-
-export const TaskArchiveFilterSchema = z.enum(['active', 'archived', 'all']);
-export type TaskArchiveFilter = z.infer<typeof TaskArchiveFilterSchema>;
 
 // GET /api/tasks (human) / /internal/agent/:aid/tasks (agent)
 export const ListTasksQuerySchema = z.object({
   workspace_id: z.string().optional(),
   conversation_id: z.string().optional(),
-  /** Filter by task archive visibility. Omitted = active only. */
-  archived: TaskArchiveFilterSchema.optional(),
   /** Filter by status. Empty / omitted = no filter. Multiple values are
    *  OR-ed (e.g. `?status=in_progress&status=in_review`). */
   status: z.array(TaskStatusSchema).optional(),
@@ -1155,6 +1150,7 @@ export const ClaimErrorCodeSchema = z.enum([
   'cannot_promote_system_message',
   'cannot_promote_anchor',
   'task_done',
+  'task_closed',
   'already_claimed',
   'not_self_assignment',
   'assignee_not_conversation_member',
@@ -1225,6 +1221,7 @@ export const TaskMutationErrorCodeSchema = z.enum([
   'not_assignee',
   'invalid_transition',
   'already_at_status',
+  'task_closed',
   'conversation_not_found',
   'not_conversation_member',
   'agent_not_found',
@@ -1254,12 +1251,6 @@ export type HumanUpdateTaskStatusInput = z.infer<
   typeof HumanUpdateTaskStatusInputSchema
 >;
 
-// Human UI — POST /api/tasks/:messageId/archive
-export const HumanArchiveTaskInputSchema = z.object({
-  archived: z.boolean(),
-});
-export type HumanArchiveTaskInput = z.infer<typeof HumanArchiveTaskInputSchema>;
-
 // Human UI — POST /api/tasks/:messageId/claim (optional target agent)
 export const HumanClaimTaskInputSchema = z.object({
   agent_id: z.string().optional(),
@@ -1270,7 +1261,7 @@ export type HumanClaimTaskInput = z.infer<typeof HumanClaimTaskInputSchema>;
 // unclaim / status change). Consumers refresh the list + any open
 // conversation's inline task drawer.
 export const TaskChangedEventSchema = z.object({
-  kind: z.enum(['create', 'claim', 'unclaim', 'status', 'archive']),
+  kind: z.enum(['create', 'claim', 'unclaim', 'status']),
   workspace_id: z.string(),
   channel_id: z.string(),
   thread_id: z.string().nullable(),
@@ -1280,7 +1271,7 @@ export const TaskChangedEventSchema = z.object({
   status: TaskStatusSchema,
   assignee: TaskAssigneeDtoSchema.nullable(),
   title: z.string(),
-  archived_at: z.number().nullable(),
+  closed_at: z.number().nullable(),
 });
 export type TaskChangedEvent = z.infer<typeof TaskChangedEventSchema>;
 

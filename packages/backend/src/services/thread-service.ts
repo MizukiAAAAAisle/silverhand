@@ -759,7 +759,7 @@ function formatThreadOpenTasksMessage(
   return (
     `cannot close thread: ${n} open task${n === 1 ? '' : 's'} ` +
     `(status in todo/in_progress/in_review). ` +
-    `Close or move tasks to done first, ` +
+    `Move tasks to done or closed first, ` +
     `or pass --allow-open-tasks to override.`
   );
 }

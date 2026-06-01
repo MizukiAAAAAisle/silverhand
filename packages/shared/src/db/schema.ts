@@ -49,6 +49,7 @@ export const TaskStatusSchema = z.enum([
   'in_progress',
   'in_review',
   'done',
+  'closed',
 ]);
 export type TaskStatus = z.infer<typeof TaskStatusSchema>;
 
@@ -288,7 +289,7 @@ export interface MessageRow {
   task_assignee_user_id: string | null;
   task_title: string | null;
   task_workspace_id: string | null;
-  task_archived_at: number | null;
+  task_closed_at: number | null;
 }
 
 export interface ConversationReadRow {

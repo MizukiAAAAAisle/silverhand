@@ -62,7 +62,7 @@ function taskSummary(
     assignee: null,
     creator: { type: 'agent', id: 'agent-creator', name: 'Alice' },
     created_at: 1_000,
-    archived_at: null,
+    closed_at: null,
     ...overrides,
   };
 }
@@ -81,7 +81,7 @@ function taskChanged(
     status: 'done',
     assignee: null,
     title: 'Task title',
-    archived_at: null,
+    closed_at: null,
     ...overrides,
   };
 }

@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
+  Archive,
   Check,
   CheckCircle2,
   CheckSquare,
@@ -8,22 +9,30 @@ import {
   CircleEllipsis,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type { TaskArchiveFilter, TaskStatus, TaskSummaryDto } from '@silverhand/shared';
+import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
 import { useWorkspaces } from '@/features/workspaces/hooks';
-import { useTasks, useUpdateTaskStatus, useArchiveTaskHuman } from '@/features/tasks/hooks';
+import { useTasks, useUpdateTaskStatus } from '@/features/tasks/hooks';
+import {
+  applyTaskFilters,
+  collectAssignees,
+  collectCreators,
+  DEFAULT_TASK_FILTERS,
+  type TaskFilters,
+} from '@/features/tasks/taskFilters';
 import { useRelativeTime } from '@/components/chat/useRelativeTime';
-import { TaskStatusBadge, TaskCardContextMenu, ArchivedBadge, ArchiveFilterToggle } from '@/components/tasks/TaskStatusBadge';
+import { TaskStatusBadge, TaskCardContextMenu } from '@/components/tasks/TaskStatusBadge';
+import { TaskFilterBar, type ChannelOption } from '@/components/tasks/TaskFilterBar';
 
 /**
  * NavRail "Tasks" section — global aggregate view across every channel
- * and conversation, rendered as a four-column kanban (Todo / In progress /
- * In review / Done) so the layout matches the channel-scoped dialog
- * surfaced from the titlebar.
+ * and conversation, rendered as a five-column kanban (Todo / In progress /
+ * In review / Done / Closed) so the layout matches the channel-scoped
+ * dialog surfaced from the titlebar. `closed` is a terminal status, not a
+ * separate visibility axis (shiki + Cindy cutover).
  *
- * Channel filter sits in a chip strip below the header (parallel to
- * the conversation strip in `ChannelTasksDialog`) — no separate sidebar,
- * which gives the kanban the full window width.
+ * Channel/assignee/creator filtering sits in the TaskFilterBar below the
+ * header — no separate sidebar, which gives the kanban the full width.
  *
  * Click a card → onJump scrolls back into chat at the source message
  * (App.tsx wires this through handleJumpToMessage).
@@ -38,50 +47,51 @@ export interface TasksSectionProps {
 }
 
 export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
-  const [channelFilter, setChannelFilter] = useState<string | null>(null);
-  const [archiveFilter, setArchiveFilter] = useState<TaskArchiveFilter>('active');
+  const [filters, setFilters] = useState<TaskFilters>(DEFAULT_TASK_FILTERS);
   const updateStatus = useUpdateTaskStatus();
-  const archiveTask = useArchiveTaskHuman();
   const { data: workspaces = [] } = useWorkspaces();
   const taskWorkspaceScopeIds = useMemo(
     () => [...new Set(workspaces.flatMap(workspace => workspace.workspace_scope_ids))],
     [workspaces],
   );
-  const filteredWorkspaceScopeIds = useMemo(
-    () => workspaces.find(workspace => workspace.id === channelFilter)?.workspace_scope_ids ?? [],
-    [channelFilter, workspaces],
-  );
 
-  const { data: tasks = [] } = useTasks({
-    workspace_id: channelFilter ?? undefined,
-    archived: archiveFilter,
-  }, {
-    workspaceScopeIds: channelFilter
-      ? filteredWorkspaceScopeIds
-      : taskWorkspaceScopeIds,
-  });
-
-  // Per-channel active counts drive both the chip badges and the
-  // sort order — channels with active work float to the front so
-  // the chips that matter are visible without scanning.
-  const allTasksForCounts = useTasks(
+  // Fetch broadly across every workspace scope (all statuses, incl.
+  // closed — it's just the 5th column). Channel / assignee / creator are
+  // sliced client-side (no pagination, dto carries the fields) — see
+  // features/tasks/taskFilters.ts.
+  const { data: allTasks = [] } = useTasks(
     {},
     { workspaceScopeIds: taskWorkspaceScopeIds },
-  ).data ?? [];
+  );
+
+  const tasks = useMemo(
+    () =>
+      applyTaskFilters(
+        allTasks,
+        filters,
+        // Global surface: "channel" === workspace (Cindy boundary —
+        // global scope is workspace-level, not conversation-level).
+        (task, workspaceId) => task.workspace_id === workspaceId,
+      ),
+    [allTasks, filters],
+  );
+
+  // Active counts (not done, not closed) drive channel ordering + tally.
   const channelActiveCounts = useMemo(() => {
     const m = new Map<string, number>();
-    for (const t of allTasksForCounts) {
-      if (t.status !== 'done') {
+    for (const t of allTasks) {
+      if (t.status !== 'done' && t.status !== 'closed') {
         m.set(t.workspace_id, (m.get(t.workspace_id) ?? 0) + 1);
       }
     }
     return m;
-  }, [allTasksForCounts]);
-  const totalActive = allTasksForCounts.filter(
-    t => t.status !== 'done',
-  ).length;
+  }, [allTasks]);
+  const totalActive = useMemo(
+    () => tasks.filter(t => t.status !== 'done' && t.status !== 'closed').length,
+    [tasks],
+  );
 
-  const orderedChannels = useMemo(() => {
+  const channelOptions = useMemo<ChannelOption[]>(() => {
     const sortByActivity = (
       a: { id: string; name: string },
       b: { id: string; name: string },
@@ -91,12 +101,29 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
       if (ac !== bc) return bc - ac;
       return a.name.localeCompare(b.name);
     };
-    const regular = workspaces.filter(w => w.kind !== 'dm').map(w => ({ id: w.id, name: w.name, kind: 'regular' as const })).sort(sortByActivity);
-    const dm = workspaces.filter(w => w.kind === 'dm').map(w => ({ id: w.id, name: w.name, kind: 'dm' as const })).sort(sortByActivity);
-    return { regular, dm };
+    const regular = workspaces
+      .filter(w => w.kind !== 'dm')
+      .sort(sortByActivity)
+      .map(w => ({ id: w.id, label: w.name, kind: 'channel' as const }));
+    const dm = workspaces
+      .filter(w => w.kind === 'dm')
+      .sort(sortByActivity)
+      .map(w => ({ id: w.id, label: w.name.replace(/^dm-/, ''), kind: 'dm' as const }));
+    return [...regular, ...dm];
   }, [workspaces, channelActiveCounts]);
 
+  const assigneeOptions = useMemo(() => collectAssignees(allTasks), [allTasks]);
+  const creatorOptions = useMemo(() => collectCreators(allTasks), [allTasks]);
+  // Gate the assignee "No assignee" option: only meaningful when the set
+  // actually has unclaimed tasks (shiki feedback — else it reads as a
+  // stray pseudo-person).
+  const hasUnassigned = useMemo(() => allTasks.some(t => !t.assignee), [allTasks]);
+
   const grouped = useMemo(() => groupByStatus(tasks), [tasks]);
+
+  const selectedChannelName = filters.channelId
+    ? workspaces.find(w => w.id === filters.channelId)?.name
+    : null;
 
   return (
     <main
@@ -110,33 +137,30 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
       <header className="flex h-[var(--titlebar-height)] shrink-0 items-center gap-2 border-b border-border-subtle px-4">
         <CheckSquare className="size-4 text-text-muted" />
         <span className="font-serif text-sm font-semibold text-text-primary">
-          {channelFilter
-            ? `Tasks in #${workspaces.find(w => w.id === channelFilter)?.name ?? '…'}`
-            : 'All Tasks'}
+          {selectedChannelName ? `Tasks in #${selectedChannelName}` : 'All Tasks'}
         </span>
         <span className="text-xs text-text-muted">· {tasks.length}</span>
-        <ArchiveFilterToggle
-          value={archiveFilter}
-          onChange={setArchiveFilter}
-          className="ml-auto"
-        />
-        <span className="text-[10px] text-text-muted">
+        <span className="ml-auto text-[10px] text-text-muted">
           {totalActive} active
         </span>
       </header>
 
-      <ChannelStrip
-        value={channelFilter}
-        regular={orderedChannels.regular}
-        dm={orderedChannels.dm}
-        counts={channelActiveCounts}
-        onChange={setChannelFilter}
-      />
+      <div className="shrink-0 border-b border-border-subtle px-4 py-2">
+        <TaskFilterBar
+          filters={filters}
+          onChange={setFilters}
+          baselineFilters={DEFAULT_TASK_FILTERS}
+          channelOptions={channelOptions}
+          allChannelsLabel="All channels"
+          assigneeOptions={assigneeOptions}
+          creatorOptions={creatorOptions}
+          hasUnassigned={hasUnassigned}
+        />
+      </div>
 
-      {/* Switched from grid to flex so columns size to their content
-        * (height = content) while staying capped at the available height
-        * via `max-h-full`. `items-start` keeps short columns hugging the
-        * top instead of stretching to the tallest column. */}
+      {/* Five-column kanban. Flex (not grid) so columns size to content
+        * height while capped at `max-h-full`; `items-start` keeps short
+        * columns hugging the top. Closed is the terminal 5th column. */}
       <div
         data-tasks-board
         className="flex min-h-0 flex-1 items-start gap-3 overflow-hidden p-4"
@@ -159,9 +183,6 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
             }
             onStatusChange={(messageId, next) =>
               updateStatus.mutate({ messageId, status: next })
-            }
-            onArchive={(messageId, archived) =>
-              archiveTask.mutate({ messageId, archived })
             }
           />
         ))}
@@ -201,6 +222,12 @@ const COLUMNS: ReadonlyArray<ColumnSpec> = [
     icon: CheckCircle2,
     iconClass: 'text-success',
   },
+  {
+    status: 'closed',
+    label: 'Closed',
+    icon: Archive,
+    iconClass: 'text-text-muted',
+  },
 ];
 
 function groupByStatus(
@@ -211,136 +238,10 @@ function groupByStatus(
     in_progress: [],
     in_review: [],
     done: [],
+    closed: [],
   };
   for (const t of tasks) out[t.status].push(t);
   return out;
-}
-
-function prefixForKind(kind: 'regular' | 'dm', name: string): string {
-  return kind === 'dm' ? `@${name.replace(/^dm-/, '')}` : `#${name}`;
-}
-
-// ── Channel strip ──────────────────────────────────────────────────
-
-const REGULAR_CHANNEL_LIMIT = 10;
-
-function ChannelStrip({
-  value,
-  regular,
-  dm,
-  counts,
-  onChange,
-}: {
-  value: string | null;
-  regular: Array<{ id: string; name: string; kind: 'regular' | 'dm' }>;
-  dm: Array<{ id: string; name: string; kind: 'regular' | 'dm' }>;
-  counts: Map<string, number>;
-  onChange: (id: string | null) => void;
-}): JSX.Element {
-  // Cap regular channels at 10, but keep the active filter visible
-  // even if it would otherwise be sliced off (e.g. picked from a
-  // bookmark or another surface). DMs aren't capped — they're already
-  // grouped semantically (one per agent) and kept compact.
-  const visibleRegular = (() => {
-    const top = regular.slice(0, REGULAR_CHANNEL_LIMIT);
-    if (value && !top.some(c => c.id === value)) {
-      const sel = regular.find(c => c.id === value);
-      if (sel) top.push(sel);
-    }
-    return top;
-  })();
-
-  return (
-    <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border-subtle px-4 py-2">
-      <Chip selected={value === null} onClick={() => onChange(null)}>
-        All
-      </Chip>
-      {visibleRegular.map(c => (
-        <ChannelChip
-          key={c.id}
-          channel={c}
-          active={counts.get(c.id) ?? 0}
-          selected={value === c.id}
-          onClick={() => onChange(c.id)}
-        />
-      ))}
-      {dm.length > 0 ? (
-        <span
-          aria-hidden
-          className="mx-1 h-4 w-px shrink-0 bg-border-subtle"
-        />
-      ) : null}
-      {dm.map(c => (
-        <ChannelChip
-          key={c.id}
-          channel={c}
-          active={counts.get(c.id) ?? 0}
-          selected={value === c.id}
-          onClick={() => onChange(c.id)}
-        />
-      ))}
-    </div>
-  );
-}
-
-function ChannelChip({
-  channel,
-  active,
-  selected,
-  onClick,
-}: {
-  channel: { id: string; name: string; kind: 'regular' | 'dm' };
-  active: number;
-  selected: boolean;
-  onClick: () => void;
-}): JSX.Element {
-  const label = prefixForKind(channel.kind, channel.name);
-  return (
-    <Chip
-      selected={selected}
-      dim={active === 0}
-      onClick={onClick}
-      title={label}
-    >
-      <span>{label}</span>
-      {active > 0 ? (
-        <span className="ml-1 text-[10px] tabular-nums opacity-70">
-          {active}
-        </span>
-      ) : null}
-    </Chip>
-  );
-}
-
-function Chip({
-  selected,
-  dim = false,
-  onClick,
-  title,
-  children,
-}: {
-  selected: boolean;
-  dim?: boolean;
-  onClick: () => void;
-  title?: string;
-  children: React.ReactNode;
-}): JSX.Element {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      className={cn(
-        'flex max-w-[200px] items-center truncate rounded-full border px-2.5 py-0.5 text-[11px] transition-colors',
-        selected
-          ? 'border-accent bg-accent text-text-on-accent'
-          : 'border-border-subtle bg-bg-primary text-text-secondary hover:border-accent hover:text-text-primary',
-        dim && !selected && 'opacity-60',
-      )}
-    >
-      {children}
-    </button>
-  );
 }
 
 // ── Column ─────────────────────────────────────────────────────────
@@ -353,7 +254,6 @@ function KanbanColumn({
   tasks,
   onCardClick,
   onStatusChange,
-  onArchive,
 }: {
   title: string;
   status: TaskStatus;
@@ -362,7 +262,6 @@ function KanbanColumn({
   tasks: TaskSummaryDto[];
   onCardClick: (t: TaskSummaryDto) => void;
   onStatusChange: (messageId: string, next: TaskStatus) => void;
-  onArchive: (messageId: string, archived: boolean) => void;
 }): JSX.Element {
   return (
     <section
@@ -375,7 +274,9 @@ function KanbanColumn({
         // (`flex-auto + overflow-y-auto`) handles scrolling so the page
         // itself never scrolls.
         'flex min-h-0 max-h-full flex-1 flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-primary',
-        status === 'done' && 'opacity-80',
+        // Done + Closed are terminal — dim slightly so the live columns
+        // read as the focus.
+        (status === 'done' || status === 'closed') && 'opacity-80',
       )}
     >
       <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-3 py-2">
@@ -400,7 +301,6 @@ function KanbanColumn({
                   task={t}
                   onClick={() => onCardClick(t)}
                   onStatusChange={next => onStatusChange(t.message_id, next)}
-                  onArchive={archived => onArchive(t.message_id, archived)}
                 />
               </li>
             ))}
@@ -417,22 +317,14 @@ function TaskCard({
   task,
   onClick,
   onStatusChange,
-  onArchive,
 }: {
   task: TaskSummaryDto;
   onClick: () => void;
   onStatusChange: (next: TaskStatus) => void;
-  onArchive: (archived: boolean) => void;
 }): JSX.Element {
   const { relative, absolute } = useRelativeTime(task.created_at);
-  const archived = task.archived_at != null;
   return (
-    <TaskCardContextMenu
-      status={task.status}
-      archived={archived}
-      onStatusChange={onStatusChange}
-      onArchive={onArchive}
-    >
+    <TaskCardContextMenu status={task.status} onStatusChange={onStatusChange}>
       <div
         data-task-number={task.task_number}
         className="group relative rounded-md border border-border-subtle bg-bg-base transition-colors hover:border-accent hover:bg-bg-hover"
@@ -446,7 +338,8 @@ function TaskCard({
         className="absolute inset-0 z-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       />
       <div className="pointer-events-none relative z-10 p-2 pr-7">
-        {/* Row 1: #number + interactive status badge inline */}
+        {/* Row 1: #number + interactive status badge (reads "Closed" for
+            a closed task — no separate chip). */}
         <div className="flex items-center gap-1.5 pb-0.5">
           <span data-tasks-num className="shrink-0 font-mono text-[10px] text-text-muted">
             #{task.task_number}
@@ -454,7 +347,6 @@ function TaskCard({
           <span className="pointer-events-auto">
             <TaskStatusBadge status={task.status} onChange={onStatusChange} />
           </span>
-          {archived ? <ArchivedBadge /> : null}
         </div>
         {/* Row 2: title */}
         <span className="block min-w-0 break-words text-xs text-text-primary">

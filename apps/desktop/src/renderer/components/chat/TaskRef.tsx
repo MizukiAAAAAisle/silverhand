@@ -214,6 +214,7 @@ function TaskStatusBadge({ status }: { status: TaskStatus }): JSX.Element {
     in_progress: 'in progress',
     in_review: 'in review',
     done: 'done',
+    closed: 'closed',
   };
   return (
     <span

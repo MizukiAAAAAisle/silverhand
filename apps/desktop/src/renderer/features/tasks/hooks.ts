@@ -5,7 +5,6 @@ import {
 } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import type {
-  TaskArchiveFilter,
   TaskChangedEvent,
   TaskStatus,
   TaskSummaryDto,
@@ -25,7 +24,6 @@ export interface TaskFilter {
   workspace_id?: string;
   conversation_id?: string;
   status?: TaskStatus | 'all';
-  archived?: TaskArchiveFilter;
 }
 
 export const tasksKey = (f: TaskFilter) =>
@@ -34,7 +32,6 @@ export const tasksKey = (f: TaskFilter) =>
     f.workspace_id ?? '*',
     f.conversation_id ?? '*',
     f.status ?? 'all',
-    f.archived ?? 'active',
   ] as const;
 
 export interface UseTasksOptions {
@@ -47,7 +44,6 @@ function buildQs(f: TaskFilter): string {
   if (f.workspace_id) params.set('workspace_id', f.workspace_id);
   if (f.conversation_id) params.set('conversation_id', f.conversation_id);
   if (f.status && f.status !== 'all') params.set('status', f.status);
-  if (f.archived && f.archived !== 'active') params.set('archived', f.archived);
   const qs = params.toString();
   return qs ? `?${qs}` : '';
 }
@@ -136,48 +132,4 @@ export function useUnclaimTaskHuman() {
       void qc.invalidateQueries({ queryKey: ['tasks'] });
     },
   });
-}
-
-export function useArchiveTaskHuman() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async (args: { messageId: string; archived: boolean }) => {
-      const res = await api<{ success: boolean; reason?: string }>(
-        `/api/tasks/${args.messageId}/archive`,
-        { method: 'POST', body: JSON.stringify({ archived: args.archived }) },
-      );
-      if (!res.success) throw new Error(res.reason ?? 'archive failed');
-      return res;
-    },
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['tasks'] });
-    },
-  });
-}
-
-// ── Aggregations ───────────────────────────────────────────────────
-
-const ACTIVE: ReadonlySet<TaskStatus> = new Set(['todo', 'in_progress', 'in_review']);
-
-export function partitionByActive(
-  tasks: TaskSummaryDto[],
-): { active: TaskSummaryDto[]; done: TaskSummaryDto[] } {
-  const active: TaskSummaryDto[] = [];
-  const done: TaskSummaryDto[] = [];
-  for (const t of tasks) (ACTIVE.has(t.status) ? active : done).push(t);
-  return { active, done };
-}
-
-/** Group active tasks by status — drives the drawer's section headers. */
-export function groupActiveByStatus(
-  tasks: TaskSummaryDto[],
-): Record<TaskStatus, TaskSummaryDto[]> {
-  const out: Record<TaskStatus, TaskSummaryDto[]> = {
-    todo: [],
-    in_progress: [],
-    in_review: [],
-    done: [],
-  };
-  for (const t of tasks) out[t.status].push(t);
-  return out;
 }

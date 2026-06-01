@@ -144,14 +144,14 @@
   --control-radius: 6px;
   --chip-radius: 4px;
 
-  /* ── Archived task badge (#task:767 A-track; backend c88e13f) ──
-     archived 是跟 status 正交的可见性维度。这组 token 只由 archived task
-     卡片上的 `Archived` badge 消费，不外扩到 channel archived badge 或其它
-     archived surface（Cindy review 边界 `Obp1y_YcFPIr8h6Y`）。warm 走低噪：
-     透明底 + muted 字 + subtle 描边，不和 status badge 抢视觉。 */
-  --task-archived-bg: transparent;
-  --task-archived-text: var(--text-muted);
-  --task-archived-border: var(--border-subtle);
+  /* ── Closed-status chip (#task:770 closed-as-status cutover) ──
+     closed 是终态 status（第 5 列），不再是跟 status 正交的 archived 可见性
+     维度。这组 token 只由 task status chip 在 closed 时消费，不外扩到 channel
+     archived badge 或其它 surface（Cindy review 边界 `Obp1y_YcFPIr8h6Y`）。
+     warm 走低噪：透明底 + muted 字 + subtle 描边，不和其它 status chip 抢视觉。 */
+  --task-status-closed-bg: transparent;
+  --task-status-closed-text: var(--text-muted);
+  --task-status-closed-border: 1px solid var(--border-subtle);
 
   /* ── Control border width (#task:555 release-testing 2) ──
      warm-script 不走 forza6 的 2px hard-cut，control 边框留 1px。看

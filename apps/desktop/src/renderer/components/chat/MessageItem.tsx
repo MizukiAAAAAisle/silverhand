@@ -433,6 +433,7 @@ const TASK_STATUS_LABELS: Record<NonNullable<MessageDto['task_status']>, string>
   in_progress: 'doing',
   in_review: 'review',
   done: 'done',
+  closed: 'closed',
 };
 
 function TaskMetaTag({

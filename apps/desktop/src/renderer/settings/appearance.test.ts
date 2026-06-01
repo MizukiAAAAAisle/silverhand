@@ -172,14 +172,17 @@ describe('theme markdown token cascade contract', () => {
     }
   });
 
-  /* PR-5 token promotion (#task:345): task-status badge is now a
-     12-token contract (4 statuses × {bg / text / border}). Every
-     theme MUST declare all twelve so a theme switch doesn't leak
-     forza6's saturated cyan/magenta fills via :root fallback into
-     warm themes. Domain-prefixed (`--task-status-*`) over generic
-     (`--status-*`) because the namespace must stay narrow — these
-     values are tuned for a single ~10px poster-display badge, not
-     a general "status colour" vocabulary. */
+  /* PR-5 token promotion (#task:345; closed status #task:770): the
+     task-status badge is now a 15-token contract (5 statuses × {bg /
+     text / border} — todo / in_progress / in_review / done / closed).
+     `closed` is a terminal status (not a separate visibility axis), so
+     it joins the same family; its forza6 indigo poster chip / warm
+     low-noise chip must be declared per theme so a switch doesn't leak
+     forza6's indigo via :root fallback. Domain-prefixed
+     (`--task-status-*`) over generic (`--status-*`) because the
+     namespace must stay narrow — these values are tuned for a single
+     ~10px poster-display badge, not a general "status colour"
+     vocabulary. */
   it('every theme explicitly defines task-status badge tokens', () => {
     const TASK_STATUS_TOKENS = [
       '--task-status-todo-bg',
@@ -194,29 +197,12 @@ describe('theme markdown token cascade contract', () => {
       '--task-status-done-bg',
       '--task-status-done-text',
       '--task-status-done-border',
+      '--task-status-closed-bg',
+      '--task-status-closed-text',
+      '--task-status-closed-border',
     ];
     for (const css of [warmScriptCss, forza6Css]) {
       for (const token of TASK_STATUS_TOKENS) {
-        expect(css).toContain(`${token}:`);
-      }
-    }
-  });
-
-  /* Archived-task badge (#task:767 A-track; backend c88e13f): the
-     archived-visibility badge is a 3-token contract (bg / text /
-     border). Every theme MUST declare all three so a theme switch from
-     forza6 doesn't leak its indigo poster chip into warm themes via
-     :root fallback. Naming mirrors --task-status-*-{bg,text,border} for
-     one task-badge vocabulary. Consumed ONLY by the archived-task badge
-     — not channel/other archived surfaces (Cindy review boundary). */
-  it('every theme explicitly defines archived-task badge tokens', () => {
-    const TASK_ARCHIVED_TOKENS = [
-      '--task-archived-bg',
-      '--task-archived-text',
-      '--task-archived-border',
-    ];
-    for (const css of [warmScriptCss, forza6Css]) {
-      for (const token of TASK_ARCHIVED_TOKENS) {
         expect(css).toContain(`${token}:`);
       }
     }

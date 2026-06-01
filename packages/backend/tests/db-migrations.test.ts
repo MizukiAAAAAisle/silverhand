@@ -1043,19 +1043,66 @@ describe('database migrations', () => {
     }
   });
 
-  it('v34 adds task_archived_at to messages with active/archived task indexes', () => {
+  it('v35 converts task archive metadata into closed status metadata', () => {
     const db = openDbAt(33);
     try {
-      runMigrations(db);
+      applyMigrationsThrough(db, 34);
+      db.exec(`
+        INSERT INTO hosts (id, name, kind, created_at)
+        VALUES ('h1', 'local', 'local', 1);
+
+        INSERT INTO users (id, name, display_name, created_at, updated_at)
+        VALUES ('u1', 'viewer', 'Viewer', 1, 1);
+
+        INSERT INTO agents
+          (id, name, runtime, host_id, created_at, updated_at, created_by_user_id)
+        VALUES ('a1', 'alice', 'claude', 'h1', 1, 1, 'u1');
+
+        INSERT INTO workspaces
+          (id, name, description, workspace_kind, workspace_path, workspace_host_id,
+           owner_agent_id, archived_at, pinned_at, created_at, updated_at)
+        VALUES
+          ('ws1', 'main', NULL, 'regular', '/tmp/ws1', 'h1',
+           NULL, NULL, NULL, 1, 1);
+
+        INSERT INTO conversations
+          (id, workspace_id, workspace_path, kind, parent_conversation_id, title,
+           status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
+           archived_at, created_at, updated_at)
+        VALUES
+          ('c1', 'ws1', '/tmp/ws1', 'channel', NULL, 'general',
+           'idle', NULL, NULL, NULL, NULL, NULL, 1, 1);
+
+        INSERT INTO messages
+          (id, conversation_id, from_kind, from_agent_id, from_user_id, content,
+           metadata, seq, created_at, task_number, task_status,
+           task_assignee_agent_id, task_assignee_user_id, task_title,
+           task_workspace_id, task_archived_at)
+        VALUES
+          ('msg_task', 'c1', 'agent', 'a1', NULL, 'task body',
+           NULL, 1, 1, 1, 'in_review', NULL, NULL, 'task body',
+           'ws1', 123);
+      `);
+
+      applyMigrationsThrough(db, 35);
       expect(
-        db.prepare(`SELECT version FROM _migrations WHERE version = 34`).get(),
+        db.prepare(`SELECT version FROM _migrations WHERE version = 35`).get(),
       ).toBeDefined();
 
       const messageCols = (db.pragma('table_info(messages)') as Array<{
         name: string;
         notnull: number;
       }>).map(c => ({ name: c.name, notnull: c.notnull }));
-      expect(messageCols).toContainEqual({ name: 'task_archived_at', notnull: 0 });
+      expect(messageCols).not.toContainEqual({ name: 'task_archived_at', notnull: 0 });
+      expect(messageCols).toContainEqual({ name: 'task_closed_at', notnull: 0 });
+
+      expect(
+        db
+          .prepare(
+            `SELECT task_status, task_closed_at FROM messages WHERE id = 'msg_task'`,
+          )
+          .get(),
+      ).toEqual({ task_status: 'closed', task_closed_at: 123 });
 
       const indexes = (db.pragma('index_list(messages)') as Array<{
         name: string;
@@ -1064,14 +1111,16 @@ describe('database migrations', () => {
       expect(indexes).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            name: 'idx_messages_task_workspace_active',
-            partial: 1,
-          }),
-          expect.objectContaining({
-            name: 'idx_messages_task_workspace_archived',
+            name: 'idx_messages_task_workspace_closed_at',
             partial: 1,
           }),
         ]),
+      );
+      expect(indexes.some(i => i.name === 'idx_messages_task_workspace_active')).toBe(
+        false,
+      );
+      expect(indexes.some(i => i.name === 'idx_messages_task_workspace_archived')).toBe(
+        false,
       );
     } finally {
       db.close();

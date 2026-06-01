@@ -133,6 +133,15 @@ html, body, #root {
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--bg-active); }
 
+/* Task filter-bar dropdowns: the global thumb reads `--bg-hover`, which
+   in forza6 is a lime tile colour and looked like a "green scrollbar"
+   inside these popovers (shiki feedback). Scope them to a neutral
+   subtle thumb instead — the panels carry `data-task-filter-panel`. */
+[data-task-filter-panel]::-webkit-scrollbar-thumb,
+[data-task-filter-panel] ::-webkit-scrollbar-thumb {
+  background: var(--border);
+}
+
 /* Opt-in: hide the scrollbar entirely while keeping the area scrollable. */
 .scrollbar-hide { scrollbar-width: none; }
 .scrollbar-hide::-webkit-scrollbar { display: none; width: 0; height: 0; }
@@ -343,6 +352,11 @@ button:disabled { cursor: not-allowed; }
   background-color: var(--task-status-done-bg);
   color: var(--task-status-done-text);
   border: var(--task-status-done-border);
+}
+[data-task-status='closed'] {
+  background-color: var(--task-status-closed-bg);
+  color: var(--task-status-closed-text);
+  border: var(--task-status-closed-border);
 }
 
 /* Floating frame (PR-4 token promotion). All Radix menu surfaces

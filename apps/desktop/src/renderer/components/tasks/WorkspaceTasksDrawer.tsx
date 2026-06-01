@@ -8,29 +8,37 @@ import {
   type RefObject,
 } from 'react';
 import {
+  Archive,
   Check,
   CheckCircle2,
-  ChevronDown,
   Circle,
   CircleDashed,
   CircleEllipsis,
   X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
-import type { TaskArchiveFilter, TaskStatus, TaskSummaryDto } from '@silverhand/shared';
+import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
-import { useTasks, useUpdateTaskStatus, useArchiveTaskHuman } from '@/features/tasks/hooks';
+import { useTasks, useUpdateTaskStatus } from '@/features/tasks/hooks';
+import {
+  applyTaskFilters,
+  collectAssignees,
+  collectCreators,
+  DEFAULT_TASK_FILTERS,
+  type TaskFilters,
+} from '@/features/tasks/taskFilters';
 import { useRelativeTime } from '@/components/chat/useRelativeTime';
-import { TaskStatusBadge, TaskCardContextMenu, ArchivedBadge, ArchiveFilterToggle } from '@/components/tasks/TaskStatusBadge';
+import { TaskStatusBadge, TaskCardContextMenu } from '@/components/tasks/TaskStatusBadge';
+import { TaskFilterBar, type ChannelOption } from '@/components/tasks/TaskFilterBar';
 
 /**
  * Workspace-wide tasks panel — a floating right-side drawer that overlays
  * the main layout without displacing it. Width is user-adjustable via a
  * drag handle on the left edge and persisted in localStorage.
  *
- * Content is a four-column kanban with a conversation filter strip and
- * card → jump navigation.
+ * Content is a five-column status kanban (Todo / In progress / In review /
+ * Done / Closed) with a unified TaskFilterBar (channel / assignee /
+ * creator) and card → jump navigation.
  */
 export interface WorkspaceTasksDrawerProps {
   open: boolean;
@@ -213,40 +221,34 @@ export function WorkspaceTasksDrawer({
   const drawerShellRef = useRef<HTMLDivElement>(null);
   const { width: drawerWidth, startResize } = useDrawerWidth(drawerShellRef);
 
-  // Filter is a discriminated union so we can distinguish:
-  //  - `null`            → all tasks in the workspace
-  //  - `{ channel, id }` → all tasks under that channel (incl. its threads)
-  //  - `{ thread, id }`  → only tasks in that one thread
-  // The previous shape (`conversation_id` only) treated "channel" as
-  // strictly that conversation row, which excluded thread tasks even
-  // when the dropdown said "All". That made the All option look broken
-  // — see #214.
-  const [conversationFilter, setConversationFilter] = useState<TaskFilterValue>(
-    defaultConversationId ? { kind: 'channel', id: defaultConversationId } : null,
+  // Unified filter model (channel / assignee / creator), shared with the
+  // global Tasks board. `channelId` is a conversation id:
+  //  - a channel id → matches that channel + all its threads;
+  //  - a thread id  → matches only that thread.
+  // Baseline (= reset/Clear target) is the current channel — the drawer's
+  // entry context — but it stays switchable to any channel/thread or All
+  // (shiki/Cindy: don't lock the drawer to the current channel). Clear
+  // restores this baseline rather than jumping to All.
+  const baselineFilters = useMemo<TaskFilters>(
+    () => ({ ...DEFAULT_TASK_FILTERS, channelId: defaultConversationId }),
+    [defaultConversationId],
   );
-  const [archiveFilter, setArchiveFilter] = useState<TaskArchiveFilter>('active');
-  // Re-sync to the active conversation every time the drawer opens.
-  // When a `?task=<n>` focus is in flight, override BOTH filters to the
-  // widest setting so the focused row is in the rendered tree:
-  //  - conversation → "all" (the channel filter would hide a task that
-  //    lives in a different channel);
-  //  - archive → "all" (a focused task may be archived; the default
-  //    `active` list would drop it, so the scroll-and-highlight effect
-  //    below can't find `[data-task-number]` and clears focus with no
-  //    visible highlight). We only know the number, not the archive
-  //    state, so "all" is the safe superset.
+  const [filters, setFilters] = useState<TaskFilters>(baselineFilters);
+  // Re-sync every time the drawer opens. When a `?task=<n>` focus is in
+  // flight, widen channel → All so the focused row is in the rendered
+  // tree (a different channel would otherwise be filtered out and the
+  // scroll-and-highlight effect below couldn't find `[data-task-number]`).
+  // Closed tasks are always in the tree now (a status column, not a
+  // hidden visibility tier), so no visibility widening is needed. The
+  // user can still re-select afterward.
   useEffect(() => {
-    if (open) {
-      if (focusedTaskNumber !== null) {
-        setConversationFilter(null);
-        setArchiveFilter('all');
-      } else {
-        setConversationFilter(
-          defaultConversationId ? { kind: 'channel', id: defaultConversationId } : null,
-        );
-      }
+    if (!open) return;
+    if (focusedTaskNumber !== null) {
+      setFilters({ ...DEFAULT_TASK_FILTERS, channelId: null });
+    } else {
+      setFilters(baselineFilters);
     }
-  }, [open, defaultConversationId, focusedTaskNumber]);
+  }, [open, baselineFilters, focusedTaskNumber]);
 
   const closeDrawer = useCallback(
     (event?: React.SyntheticEvent): void => {
@@ -267,34 +269,53 @@ export function WorkspaceTasksDrawer({
     return () => document.removeEventListener('keydown', handler);
   }, [open, closeDrawer]);
 
-  // Always fetch the workspace-wide list, then narrow client-side.
-  // Channel-mode filtering needs `task.channel_id === id`, which spans
-  // the channel row + all its thread rows; the API's single
-  // `conversation_id` filter can't express that, so we drop the
-  // server-side filter entirely and let the renderer slice. Workspace
-  // task counts here are small enough that the extra payload is fine.
+  // Always fetch the workspace-wide list (all statuses, incl. closed —
+  // it's just the 5th column). Channel / assignee / creator are sliced
+  // client-side via applyTaskFilters (channel match spans a channel + its
+  // threads, which the API's single `conversation_id` filter can't
+  // express — see #214).
   const { data: allTasks = [], isLoading } = useTasks(
-    { workspace_id: workspaceId, archived: archiveFilter },
+    { workspace_id: workspaceId },
     { workspaceScopeIds },
   );
-  const tasks = useMemo(
-    () => filterTasks(allTasks, conversationFilter),
-    [allTasks, conversationFilter],
-  );
-  const updateStatus = useUpdateTaskStatus();
-  const archiveTask = useArchiveTaskHuman();
 
-  // Channels with their threads grouped underneath. Threads attach to
-  // their parent via `parent_channel_id`; orphaned threads (parent
-  // missing for any reason) are surfaced as their own chip so the user
-  // can still filter to them. Top-level channels are sorted newest-first;
-  // threads inside each channel mirror that ordering.
+  // Channels with their threads grouped underneath — drives both the
+  // channel combobox options and the channel/thread match semantics.
   const channelGroups = useMemo<ChannelGroup[]>(
     () => buildChannelGroups(conversations),
     [conversations],
   );
+  const threadIds = useMemo(
+    () => new Set(conversations.filter(c => c.kind === 'thread').map(c => c.id)),
+    [conversations],
+  );
+  const channelOptions = useMemo<ChannelOption[]>(() => {
+    const opts: ChannelOption[] = [];
+    for (const g of channelGroups) {
+      opts.push({ id: g.channel.id, label: g.channel.title, kind: 'channel' });
+      for (const t of g.threads) {
+        opts.push({ id: t.id, label: t.title, kind: 'thread', sublabel: g.channel.title });
+      }
+    }
+    return opts;
+  }, [channelGroups]);
 
-  const grouped = groupByStatus(tasks);
+  const tasks = useMemo(
+    () =>
+      applyTaskFilters(allTasks, filters, (task, conversationId) =>
+        threadIds.has(conversationId)
+          ? task.thread_id === conversationId
+          : task.channel_id === conversationId,
+      ),
+    [allTasks, filters, threadIds],
+  );
+  const updateStatus = useUpdateTaskStatus();
+
+  const assigneeOptions = useMemo(() => collectAssignees(allTasks), [allTasks]);
+  const creatorOptions = useMemo(() => collectCreators(allTasks), [allTasks]);
+  const hasUnassigned = useMemo(() => allTasks.some(t => !t.assignee), [allTasks]);
+
+  const grouped = useMemo(() => groupByStatus(tasks), [tasks]);
 
   const handleCardClick = (t: TaskSummaryDto): void => {
     onJumpToMessage?.({
@@ -409,7 +430,8 @@ export function WorkspaceTasksDrawer({
             aria-hidden
           />
 
-          {/* Header */}
+          {/* Header — title + count only; all narrowing lives in the
+              filter bar below (no archived segment here). */}
           <div className="flex shrink-0 items-center gap-3 border-b border-border-subtle px-4 py-3">
             <span className="font-serif text-base font-semibold text-text-primary">
               Tasks
@@ -419,34 +441,35 @@ export function WorkspaceTasksDrawer({
                 </span>
               ) : null}
             </span>
-            <ArchiveFilterToggle
-              value={archiveFilter}
-              onChange={setArchiveFilter}
-              className="ml-auto"
-            />
             <button
               type="button"
               onPointerDown={closeDrawer}
               onClick={closeDrawer}
               aria-label="关闭 Tasks"
-              className="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
+              className="ml-auto flex size-6 shrink-0 cursor-pointer items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
             >
               <X className="size-4" />
             </button>
           </div>
 
-          {/* Conversation filter strip */}
+          {/* Unified filter bar — replaces the old conversation chip strip */}
           <div className="shrink-0 border-b border-border-subtle px-4 py-2">
-            <ConversationStrip
-              value={conversationFilter}
-              groups={channelGroups}
-              onChange={setConversationFilter}
+            <TaskFilterBar
+              filters={filters}
+              onChange={setFilters}
+              baselineFilters={baselineFilters}
+              channelOptions={channelOptions}
+              allChannelsLabel="All channels"
+              assigneeOptions={assigneeOptions}
+              creatorOptions={creatorOptions}
+              hasUnassigned={hasUnassigned}
             />
           </div>
 
-          {/* Kanban board — flex row of columns. Each column hugs its
-              own content height (items-start) but caps at `max-h-full`,
-              so a sparse column doesn't claim 100% of the page. */}
+          {/* Kanban board — flex row of five status columns. Each column
+              hugs its own content height (items-start) but caps at
+              `max-h-full`, so a sparse column doesn't claim 100% of the
+              page. Closed is the terminal 5th column. */}
           <div
             data-tasks-board
             className="flex min-h-0 flex-1 items-start gap-3 overflow-hidden p-4"
@@ -463,9 +486,6 @@ export function WorkspaceTasksDrawer({
                 onCardClick={handleCardClick}
                 onStatusChange={(messageId, status) =>
                   updateStatus.mutate({ messageId, status })
-                }
-                onArchive={(messageId, archived) =>
-                  archiveTask.mutate({ messageId, archived })
                 }
                 highlightedTaskNumber={highlightedTaskNumber}
               />
@@ -506,6 +526,12 @@ const COLUMNS: ReadonlyArray<ColumnSpec> = [
     icon: CheckCircle2,
     iconClass: 'text-success',
   },
+  {
+    status: 'closed',
+    label: 'Closed',
+    icon: Archive,
+    iconClass: 'text-text-muted',
+  },
 ];
 
 function groupByStatus(
@@ -516,36 +542,10 @@ function groupByStatus(
     in_progress: [],
     in_review: [],
     done: [],
+    closed: [],
   };
   for (const t of tasks) out[t.status].push(t);
   return out;
-}
-
-// ── Conversation strip ───────────────────────────────────────────────
-
-/**
- * Drawer-local filter shape. Distinguishes "all tasks under this
- * channel including its threads" from "tasks in exactly this thread";
- * see the dispatch comment on `setConversationFilter` for why the API
- * `conversation_id` parameter alone can't express the channel form.
- */
-export type TaskFilterValue =
-  | { kind: 'channel'; id: string }
-  | { kind: 'thread'; id: string }
-  | null;
-
-function filterTasks(
-  tasks: TaskSummaryDto[],
-  filter: TaskFilterValue,
-): TaskSummaryDto[] {
-  if (filter === null) return tasks;
-  if (filter.kind === 'channel') {
-    // Tasks created in a thread carry the parent channel's id in
-    // `channel_id` (and the thread id in `thread_id`), so this single
-    // predicate captures both channel-direct and thread tasks.
-    return tasks.filter(t => t.channel_id === filter.id);
-  }
-  return tasks.filter(t => t.thread_id === filter.id);
 }
 
 interface StripConversation {
@@ -623,200 +623,6 @@ function buildChannelGroups(
   return [...channelGroups, ...orphanThreads];
 }
 
-function ConversationStrip({
-  value,
-  groups,
-  onChange,
-}: {
-  value: TaskFilterValue;
-  groups: ChannelGroup[];
-  onChange: (next: TaskFilterValue) => void;
-}): JSX.Element {
-  return (
-    <div className="flex flex-wrap items-center gap-1">
-      <ConversationChip selected={value === null} onClick={() => onChange(null)}>
-        All
-      </ConversationChip>
-      {groups.map(group => (
-        <ChannelChip
-          key={group.channel.id}
-          group={group}
-          value={value}
-          onChange={onChange}
-        />
-      ))}
-    </div>
-  );
-}
-
-/**
- * One chip per channel. When the channel has threads, a small caret
- * splits the chip into a button + dropdown trigger. Selecting "All"
- * filters by the channel scope (channel + its threads); selecting a
- * thread narrows to that thread alone. The chip body shows
- * `Channel › Thread` while a thread is active so the breadcrumb stays
- * visible.
- */
-function ChannelChip({
-  group,
-  value,
-  onChange,
-}: {
-  group: ChannelGroup;
-  value: TaskFilterValue;
-  onChange: (next: TaskFilterValue) => void;
-}): JSX.Element {
-  const { channel, threads } = group;
-  const isChannelSelected =
-    value !== null && value.kind === 'channel' && value.id === channel.id;
-  const activeThread =
-    value !== null && value.kind === 'thread'
-      ? threads.find(t => t.id === value.id) ?? null
-      : null;
-  const isBranchSelected = isChannelSelected || activeThread !== null;
-  const dim = channel.closed_at !== null;
-  const hasThreads = threads.length > 0;
-
-  if (!hasThreads) {
-    return (
-      <ConversationChip
-        selected={isChannelSelected}
-        dim={dim}
-        onClick={() => onChange({ kind: 'channel', id: channel.id })}
-        title={channel.title}
-      >
-        {channel.title}
-      </ConversationChip>
-    );
-  }
-
-  // Split-button form: chip body + caret. Same border/typography as the
-  // plain ConversationChip so the strip stays visually uniform; the
-  // internal divider is a 1px subtle line that matches whichever side
-  // is currently active.
-  const baseSelected =
-    'border-accent bg-accent text-text-on-accent hover:bg-accent';
-  const baseIdle =
-    'border-border-subtle bg-bg-primary text-text-secondary hover:border-accent hover:text-text-primary';
-  const groupBaseClass = cn(
-    'inline-flex items-stretch overflow-hidden rounded-full border text-[11px] transition-colors',
-    isBranchSelected ? baseSelected : baseIdle,
-    dim && !isBranchSelected && 'opacity-60',
-  );
-  const dividerClass = isBranchSelected
-    ? 'border-text-on-accent/40'
-    : 'border-border-subtle';
-
-  const labelText = activeThread
-    ? `${channel.title} › ${activeThread.title}`
-    : channel.title;
-
-  return (
-    <span className={groupBaseClass} title={labelText}>
-      <button
-        type="button"
-        onClick={() => onChange({ kind: 'channel', id: channel.id })}
-        className="max-w-[200px] truncate px-2.5 py-0.5 outline-none"
-      >
-        {labelText}
-      </button>
-      <DropdownMenu.Root>
-        <DropdownMenu.Trigger asChild>
-          <button
-            type="button"
-            aria-label="Filter by thread"
-            className={cn(
-              'flex items-center justify-center border-l px-1.5 outline-none transition-colors',
-              dividerClass,
-              // Lighten the trigger half a touch so the user sees the
-              // split affordance even on the selected (filled) variant.
-              isBranchSelected
-                ? 'hover:bg-accent/80'
-                : 'hover:bg-bg-hover hover:text-text-primary',
-            )}
-          >
-            <ChevronDown className="size-3" />
-          </button>
-        </DropdownMenu.Trigger>
-        <DropdownMenu.Portal>
-          <DropdownMenu.Content
-            align="start"
-            sideOffset={4}
-            className="z-[80] min-w-[200px] rounded-md border border-border bg-bg-floating p-1 text-xs text-text-primary shadow-lg outline-none"
-          >
-            <DropdownMenu.Item
-              onSelect={() => onChange({ kind: 'channel', id: channel.id })}
-              className={cn(
-                'flex cursor-pointer select-none items-center justify-between gap-2 rounded-sm px-2 py-1.5 outline-none transition-colors',
-                'data-[highlighted]:bg-bg-hover data-[highlighted]:text-text-primary',
-              )}
-            >
-              <span className="truncate">All</span>
-              {isChannelSelected ? (
-                <Check className="size-3 shrink-0 text-accent" />
-              ) : null}
-            </DropdownMenu.Item>
-            <DropdownMenu.Separator className="my-1 h-px bg-border-subtle/60" />
-            {threads.map(t => {
-              const selected = activeThread?.id === t.id;
-              const tDim = t.closed_at !== null;
-              return (
-                <DropdownMenu.Item
-                  key={t.id}
-                  onSelect={() => onChange({ kind: 'thread', id: t.id })}
-                  className={cn(
-                    'flex cursor-pointer select-none items-center justify-between gap-2 rounded-sm px-2 py-1.5 outline-none transition-colors',
-                    'data-[highlighted]:bg-bg-hover data-[highlighted]:text-text-primary',
-                    tDim && 'opacity-60',
-                  )}
-                >
-                  <span className="truncate" title={t.title}>
-                    {t.title}
-                  </span>
-                  {selected ? (
-                    <Check className="size-3 shrink-0 text-accent" />
-                  ) : null}
-                </DropdownMenu.Item>
-              );
-            })}
-          </DropdownMenu.Content>
-        </DropdownMenu.Portal>
-      </DropdownMenu.Root>
-    </span>
-  );
-}
-
-function ConversationChip({
-  selected,
-  dim = false,
-  onClick,
-  title,
-  children,
-}: {
-  selected: boolean;
-  dim?: boolean;
-  onClick: () => void;
-  title?: string;
-  children: React.ReactNode;
-}): JSX.Element {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      className={cn(
-        'max-w-[160px] truncate rounded-full border px-2.5 py-0.5 text-[11px] transition-colors',
-        selected
-          ? 'border-accent bg-accent text-text-on-accent'
-          : 'border-border-subtle bg-bg-primary text-text-secondary hover:border-accent hover:text-text-primary',
-        dim && !selected && 'opacity-60',
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
 // ── Kanban column ────────────────────────────────────────────────────
 
 function KanbanColumn({
@@ -828,7 +634,6 @@ function KanbanColumn({
   isLoading,
   onCardClick,
   onStatusChange,
-  onArchive,
   highlightedTaskNumber,
 }: {
   title: string;
@@ -839,7 +644,6 @@ function KanbanColumn({
   isLoading: boolean;
   onCardClick: (t: TaskSummaryDto) => void;
   onStatusChange: (messageId: string, next: TaskStatus) => void;
-  onArchive: (messageId: string, archived: boolean) => void;
   highlightedTaskNumber: number | null;
 }): JSX.Element {
   return (
@@ -850,7 +654,7 @@ function KanbanColumn({
         // Mirrors TasksSection — column hugs content height with a
         // `max-h-full` cap; body scrolls inside when content overflows.
         'flex min-h-0 max-h-full flex-1 flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-base',
-        status === 'done' && 'opacity-80',
+        (status === 'done' || status === 'closed') && 'opacity-80',
       )}
     >
       <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-3 py-2">
@@ -880,7 +684,6 @@ function KanbanColumn({
                   highlighted={highlightedTaskNumber === t.task_number}
                   onClick={() => onCardClick(t)}
                   onStatusChange={next => onStatusChange(t.message_id, next)}
-                  onArchive={archived => onArchive(t.message_id, archived)}
                 />
               </li>
             ))}
@@ -898,23 +701,15 @@ function TaskCard({
   highlighted,
   onClick,
   onStatusChange,
-  onArchive,
 }: {
   task: TaskSummaryDto;
   highlighted: boolean;
   onClick: () => void;
   onStatusChange: (next: TaskStatus) => void;
-  onArchive: (archived: boolean) => void;
 }): JSX.Element {
   const { relative, absolute } = useRelativeTime(task.created_at);
-  const archived = task.archived_at != null;
   return (
-    <TaskCardContextMenu
-      status={task.status}
-      archived={archived}
-      onStatusChange={onStatusChange}
-      onArchive={onArchive}
-    >
+    <TaskCardContextMenu status={task.status} onStatusChange={onStatusChange}>
       <div
         data-task-number={task.task_number}
         className={cn(
@@ -940,7 +735,8 @@ function TaskCard({
           through to the jump overlay; only the status badge re-enables
           pointer events. */}
       <div className="pointer-events-none relative z-10 p-2 pr-7">
-        {/* Row 1: #number + interactive status badge inline */}
+        {/* Row 1: #number + interactive status badge inline (reads
+            "Closed" for a closed task — no separate chip). */}
         <div className="flex items-center gap-1.5 pb-0.5">
           <span data-tasks-num className="font-mono text-[10px] text-text-muted">
             #{task.task_number}
@@ -948,7 +744,6 @@ function TaskCard({
           <span className="pointer-events-auto">
             <TaskStatusBadge status={task.status} onChange={onStatusChange} />
           </span>
-          {archived ? <ArchivedBadge /> : null}
         </div>
         {/* Row 2: title */}
         <span className="block min-w-0 break-words text-xs text-text-primary">
@@ -981,7 +776,7 @@ function TaskCard({
       {/* Check button — top-right corner, only for in_review. Quick
           one-click approve fast-path; arbitrary status moves go through
           the badge picker above. Ring-only by default; turns green on
-          hover to signal the action. */}
+          hover. */}
       {task.status === 'in_review' ? (
         <button
           type="button"

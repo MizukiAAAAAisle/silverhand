@@ -463,8 +463,12 @@ function RegisteredAppShell(): JSX.Element {
       workspaceScopeIds: selectedWorkspace?.workspace_scope_ids,
     },
   );
+  // Exclude both terminal statuses: `done` (completed) and `closed`
+  // (shelved). After the closed-as-status cutover `closed` is the 5th
+  // status, so the badge must drop it too — otherwise every shelved task
+  // counts as "active" (matches TasksSection's channelActiveCounts).
   const workspaceActiveTaskCount = workspaceTasks.filter(
-    t => t.status !== 'done',
+    t => t.status !== 'done' && t.status !== 'closed',
   ).length;
 
   const resolveNavWorkspaceId = (

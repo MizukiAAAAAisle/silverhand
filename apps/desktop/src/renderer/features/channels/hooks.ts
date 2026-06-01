@@ -220,7 +220,7 @@ function applyTaskChangedToCache(
         task_status: task.status,
         task_title: task.title,
         task_workspace_id: task.workspace_id,
-        task_archived_at: task.archived_at,
+        task_closed_at: task.closed_at,
         task_assignee: task.assignee,
       };
     });
@@ -669,7 +669,7 @@ export function useSendMessage(
         task_assignee: null,
         task_title: null,
         task_workspace_id: null,
-        task_archived_at: null,
+        task_closed_at: null,
       };
       qc.setQueryData<MessagesCache>(key, cur =>
         appendMessageToCache(cur, tempMsg),

@@ -239,14 +239,15 @@
   --forza6-indigo-meta: #9D97FF;
   --forza6-indigo-select: #3B36C9;
 
-  /* archived task badge → reuse the theme-private indigo as a filled
-     poster chip (white ink reads ~8:1 on the slab). Only the archived
-     task badge consumes these — NOT channel/other archived surfaces
+  /* closed-status chip → reuse the theme-private indigo as a filled
+     poster chip (white ink reads ~8:1 on the slab). `closed` is the
+     terminal 5th status (not a separate visibility axis); only the
+     task status chip consumes these — NOT channel/other surfaces
      (Cindy review boundary `Obp1y_YcFPIr8h6Y`). See warm-script.css for
      the contract-token rationale. */
-  --task-archived-bg: var(--forza6-indigo-slab);
-  --task-archived-text: #FFFFFF;
-  --task-archived-border: var(--forza6-indigo-slab);
+  --task-status-closed-bg: var(--forza6-indigo-slab);
+  --task-status-closed-text: #FFFFFF;
+  --task-status-closed-border: 1.5px solid var(--forza6-indigo-slab);
 
   /* ── Accent —
      Forza tokens have a dual-role tension: the bright neon palette

@@ -739,6 +739,41 @@ describe('TaskService.updateStatus', () => {
     }
   });
 
+  it('agent can close and reopen its own task through status', async () => {
+    const t = bootstrap();
+    try {
+      await createTask(t, t.alice.id, 'x');
+      await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+      });
+      const closed = await t.service.updateStatus({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+        status: 'closed',
+      });
+      expect(closed).toEqual({ success: true });
+      let fresh = t.service.list({
+        actor: { kind: 'user', userId: 'local' },
+        status: ['closed'],
+      })[0]!;
+      expect(fresh.status).toBe('closed');
+      expect(fresh.closed_at).toEqual(expect.any(Number));
+
+      const reopened = await t.service.updateStatus({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+        status: 'todo',
+      });
+      expect(reopened).toEqual({ success: true });
+      fresh = t.service.getByMessageId(fresh.message_id, { kind: 'user', userId: 'local' })!;
+      expect(fresh.status).toBe('todo');
+      expect(fresh.closed_at).toBeNull();
+    } finally {
+      t.cleanup();
+    }
+  });
+
   it('agent invalid transition (in_progress → todo) → invalid_transition', async () => {
     const t = bootstrap();
     try {
@@ -874,10 +909,10 @@ describe('TaskService.updateStatus', () => {
 });
 
 describe('TaskService.list / getByMessageId', () => {
-  it('human archive is a visibility filter, not a task status', async () => {
+  it('closed is a task status with closed_at metadata', async () => {
     const t = bootstrap();
     try {
-      const created = await createTask(t, t.alice.id, 'archive me');
+      const created = await createTask(t, t.alice.id, 'close me');
       if (!('tasks' in created)) throw new Error();
       const task = created.tasks[0]!;
       const conversationEvents: Array<{ kind: string; payload?: unknown }> = [];
@@ -887,55 +922,50 @@ describe('TaskService.list / getByMessageId', () => {
         workspaceEvents.push(e),
       );
 
-      const archived = await t.service.archiveTask({
+      const closed = await t.service.updateStatus({
         actor: { kind: 'user', userId: 'local' },
         by: { messageId: task.message_id },
-        archived: true,
+        status: 'closed',
       });
       unsubA();
       unsubB();
 
-      expect(archived).toEqual({ success: true });
-      expect(conversationEvents.map(e => e.kind)).toEqual(['task_changed']);
+      expect(closed).toEqual({ success: true });
+      const conversationTaskChanges = conversationEvents.filter(e => e.kind === 'task_changed');
+      expect(conversationTaskChanges).toHaveLength(1);
       expect(workspaceEvents.map(e => e.kind)).toEqual(['task_changed']);
-      const event = conversationEvents[0]!.payload as {
+      const event = conversationTaskChanges[0]!.payload as {
         kind: string;
         status: string;
-        archived_at: number | null;
+        closed_at: number | null;
       };
-      expect(event.kind).toBe('archive');
-      expect(event.status).toBe('todo');
-      expect(event.archived_at).toEqual(expect.any(Number));
+      expect(event.kind).toBe('status');
+      expect(event.status).toBe('closed');
+      expect(event.closed_at).toEqual(expect.any(Number));
 
-      const active = t.service.list({ actor: { kind: 'user', userId: 'local' } });
-      expect(active).toEqual([]);
-      const archivedList = t.service.list({
+      const closedList = t.service.list({
         actor: { kind: 'user', userId: 'local' },
-        archived: 'archived',
+        status: ['closed'],
       });
-      expect(archivedList).toHaveLength(1);
-      expect(archivedList[0]).toMatchObject({
+      expect(closedList).toHaveLength(1);
+      expect(closedList[0]).toMatchObject({
         message_id: task.message_id,
-        status: 'todo',
-        title: 'archive me',
+        status: 'closed',
+        title: 'close me',
       });
-      expect(archivedList[0]!.archived_at).toEqual(expect.any(Number));
-      expect(t.service.list({
-        actor: { kind: 'user', userId: 'local' },
-        archived: 'all',
-      })).toHaveLength(1);
+      expect(closedList[0]!.closed_at).toEqual(expect.any(Number));
 
-      const unarchived = await t.service.archiveTask({
+      const reopened = await t.service.updateStatus({
         actor: { kind: 'user', userId: 'local' },
         by: { messageId: task.message_id },
-        archived: false,
+        status: 'todo',
       });
-      expect(unarchived).toEqual({ success: true });
+      expect(reopened).toEqual({ success: true });
       expect(t.service.list({ actor: { kind: 'user', userId: 'local' } })).toHaveLength(1);
       expect(t.service.getByMessageId(task.message_id, {
         kind: 'user',
         userId: 'local',
-      })?.archived_at).toBeNull();
+      })?.closed_at).toBeNull();
     } finally {
       t.cleanup();
     }
@@ -1822,7 +1852,7 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
         by: { messageId },
         assignee: { agentId: t.alice.id },
       });
-      // alice closes → assignee path
+      // alice advances → assignee path
       const r = await t.service.updateStatus({
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
@@ -1859,7 +1889,7 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
     }
   });
 
-  it('updateStatus: agent self-created + null-assignee + in_progress → creator-self closes', async () => {
+  it('updateStatus: agent self-created + null-assignee + in_progress → creator-self completes', async () => {
     const t = bootstrap();
     try {
       const created = await t.service.createTasks({

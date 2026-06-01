@@ -1,7 +1,7 @@
 /**
  * `silverhand task` — list, create, claim, unclaim, status.
  */
-import type { TaskArchiveFilter, TaskStatus } from '@silverhand/shared';
+import type { TaskStatus } from '@silverhand/shared';
 import { CliError } from '../errors.js';
 import {
   flagBool,
@@ -13,15 +13,20 @@ import {
 } from '../parse.js';
 import type { Command } from './index.js';
 
-const VALID_STATUSES: readonly TaskStatus[] = ['todo', 'in_progress', 'in_review', 'done'];
-const VALID_UPDATE_STATUSES: readonly TaskStatus[] = ['in_progress', 'in_review', 'done'];
-const VALID_ARCHIVE_FILTERS: readonly TaskArchiveFilter[] = ['active', 'archived', 'all'];
+const VALID_STATUSES: readonly TaskStatus[] = ['todo', 'in_progress', 'in_review', 'done', 'closed'];
+const VALID_UPDATE_STATUSES: readonly TaskStatus[] = [
+  'todo',
+  'in_progress',
+  'in_review',
+  'done',
+  'closed',
+];
 
 /**
  * List-only filter macros for `task list --status`. Each macro expands
  * to one or more canonical `TaskStatus` values that the agent passes to
  * the backend filter. Macros are NOT new task states: a task in the DB
- * is always one of `todo|in_progress|in_review|done`. They exist purely
+ * is always one of `todo|in_progress|in_review|done|closed`. They exist purely
  * to match common natural-language asks ("show me active work", "show
  * everything") with the ergonomic words agents reach for first.
  *
@@ -98,7 +103,6 @@ const listCommand: Command = {
   summary: 'View the workspace task board.',
   help: `silverhand task list [--task-number N [--task-number N ...]]
                        [--status STATUS [--status STATUS ...]]
-                       [--archived active|archived|all]
                        [--assignee <agent_id>] [--mine]
                        [--workspace-id <id>] [--conversation-id <id>]
                        [--limit N]
@@ -114,7 +118,7 @@ Flags:
   --task-number N      Repeatable. Filter to specific task numbers.
                        Last-wins is NOT used; values OR together.
   --status STATUS      Repeatable. Filter by status. Canonical values:
-                       todo | in_progress | in_review | done.
+                       todo | in_progress | in_review | done | closed.
                        List-only filter macros (NOT writable states):
                          active|open  → todo + in_progress + in_review
                          pending      → todo
@@ -127,10 +131,6 @@ Flags:
                        \`silverhand task status --status\` fails with
                        enum_invalid.
   --assignee <id>      Filter by assignee agent id.
-  --archived VALUE     Archive visibility filter:
-                         active   → default; hide archived tasks
-                         archived → only archived tasks
-                         all      → active + archived tasks
   --mine               Shortcut for --assignee=<your agent id>.
                        Resolves locally to this agent.
   --workspace-id <id>  Optional filter to a specific workspace.
@@ -142,7 +142,6 @@ stdout: { "tasks": [TaskSummaryDto, ...] }`,
   flags: [
     'task-number',
     'status',
-    'archived',
     'assignee',
     'workspace-id',
     'conversation-id',
@@ -155,20 +154,6 @@ stdout: { "tasks": [TaskSummaryDto, ...] }`,
     const expandedStatuses = statusValues
       ? expandFilterStatuses(statusValues)
       : undefined;
-    const archived = flagString(args, 'archived') as TaskArchiveFilter | undefined;
-    if (archived && !VALID_ARCHIVE_FILTERS.includes(archived)) {
-      throw new CliError({
-        code: 'validation_error',
-        subkind: 'enum_invalid',
-        message: `--archived must be one of ${VALID_ARCHIVE_FILTERS.join('|')}; got "${archived}"`,
-        retriable: false,
-        details: {
-          flag: 'archived',
-          value: archived,
-          allowed: VALID_ARCHIVE_FILTERS,
-        },
-      });
-    }
     const explicitAssignee = flagString(args, 'assignee');
     const mine = flagBool(args, 'mine');
     if (mine && explicitAssignee) {
@@ -193,7 +178,6 @@ stdout: { "tasks": [TaskSummaryDto, ...] }`,
         ? { status: expandedStatuses }
         : {}),
       ...(assigneeId ? { assignee_id: assigneeId } : {}),
-      ...(archived ? { archived } : {}),
       ...(flagString(args, 'workspace-id')
         ? { workspace_id: flagString(args, 'workspace-id') }
         : {}),
@@ -379,15 +363,20 @@ stdout: TaskMutationResult JSON.`,
 const statusCommand: Command = {
   verb: 'status',
   summary: 'Move a task through its status workflow.',
-  help: `silverhand task status --task-number N --status in_progress|in_review|done
+  help: `silverhand task status --task-number N --status todo|in_progress|in_review|done|closed
                           [--workspace-id <id> | --workspace <name>]
 
 Allowed transitions (you must be the assignee, or the creator of an
 unassigned task you created yourself):
   in_progress → in_review : your work is ready for human validation
   in_progress → done      : trivial tasks or after explicit human approval
+  in_progress → closed    : close work that will not be handled
   in_review   → done      : after human approval (usually the human does this)
+  in_review   → closed    : close work that will not be handled
   in_review   → in_progress : if you need to iterate
+  todo        → closed    : close work before it starts
+  done        → closed    : close completed work out of the board
+  closed      → todo / in_progress / in_review / done : reopen into a concrete state
 
 --status takes a single concrete state. The list-only filter macros
 (active|open|pending|all) accepted by \`silverhand task list --status\`

@@ -2330,6 +2330,30 @@ export const migrations: Migration[] = [
           AND task_archived_at IS NOT NULL;
     `,
   },
+  {
+    version: 35,
+    name: 'task_closed_status',
+    // Replaces v34's task archive visibility axis with a real workflow
+    // terminal status. `task_closed_at` is metadata for ordering/audit;
+    // the source of truth is `task_status = 'closed'`.
+    up: `
+      DROP INDEX IF EXISTS idx_messages_task_workspace_active;
+      DROP INDEX IF EXISTS idx_messages_task_workspace_archived;
+
+      ALTER TABLE messages RENAME COLUMN task_archived_at TO task_closed_at;
+
+      UPDATE messages
+         SET task_status = 'closed'
+       WHERE task_number IS NOT NULL
+         AND task_closed_at IS NOT NULL;
+
+      CREATE INDEX idx_messages_task_workspace_closed_at
+        ON messages(task_workspace_id, task_closed_at)
+        WHERE task_workspace_id IS NOT NULL
+          AND task_status = 'closed'
+          AND task_closed_at IS NOT NULL;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

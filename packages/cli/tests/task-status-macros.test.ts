@@ -20,7 +20,6 @@ import type { CliError } from '../src/errors.js';
 interface ListTasksCall {
   status?: readonly string[];
   task_number?: readonly number[];
-  archived?: string;
 }
 
 function fakeListClient(): {
@@ -81,11 +80,11 @@ describe('task list --status filter macros', () => {
       env,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       client: client as any,
-      args: parsedFlags({ status: ['todo', 'in_review'] }),
+      args: parsedFlags({ status: ['todo', 'in_review', 'closed'] }),
     });
     const call = capture();
     expect(call).not.toBeNull();
-    expect(call!.status).toEqual(['todo', 'in_review']);
+    expect(call!.status).toEqual(['todo', 'in_review', 'closed']);
   });
 
   it('expands `active` to todo + in_progress + in_review', async () => {
@@ -169,32 +168,6 @@ describe('task list --status filter macros', () => {
     ]);
   });
 
-  it('passes the archive visibility filter through without changing task actions', async () => {
-    const { client, capture } = fakeListClient();
-    await list.run({
-      env,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      client: client as any,
-      args: parsedFlags({ archived: 'archived' }),
-    });
-    expect(capture()!.archived).toBe('archived');
-  });
-
-  it('rejects unknown archive visibility filters', async () => {
-    const { client } = fakeListClient();
-    await expect(
-      list.run({
-        env,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        client: client as any,
-        args: parsedFlags({ archived: 'hidden' }),
-      }),
-    ).rejects.toMatchObject({
-      code: 'validation_error',
-      subkind: 'enum_invalid',
-    });
-  });
-
   it('deduplicates overlapping macros without losing order', async () => {
     const { client, capture } = fakeListClient();
     await list.run({
@@ -248,6 +221,28 @@ describe('task status --status mutation guards', () => {
     expect(capture()).toEqual({ task_number: 7, status: 'in_review' });
   });
 
+  it('accepts closed as a writable status', async () => {
+    const { client, capture } = fakeUpdateClient();
+    await status.run({
+      env,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      client: client as any,
+      args: parsedFlags({ 'task-number': '7', status: 'closed' }),
+    });
+    expect(capture()).toEqual({ task_number: 7, status: 'closed' });
+  });
+
+  it('accepts todo as a writable status for closed-task reopen', async () => {
+    const { client, capture } = fakeUpdateClient();
+    await status.run({
+      env,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      client: client as any,
+      args: parsedFlags({ 'task-number': '7', status: 'todo' }),
+    });
+    expect(capture()).toEqual({ task_number: 7, status: 'todo' });
+  });
+
   it.each(['active', 'open', 'pending', 'all'] as const)(
     'rejects list-only macro %s with enum_invalid + reason=list_only_macro',
     async macro => {
@@ -276,32 +271,13 @@ describe('task status --status mutation guards', () => {
         value: macro,
         reason: 'list_only_macro',
       });
-      expect(err.details!.allowed).toEqual(['in_progress', 'in_review', 'done']);
+      expect(err.details!.allowed).toEqual([
+        'todo',
+        'in_progress',
+        'in_review',
+        'done',
+        'closed',
+      ]);
     },
   );
-
-  it('rejects `todo` as an enum_invalid (not a writable transition target)', async () => {
-    // todo is canonical but not in the allowed update set — server-side
-    // workflow forbids it. The CLI mirrors that with `enum_invalid` so
-    // the agent never wastes an HTTP round-trip to learn it.
-    let caught: unknown;
-    try {
-      await status.run({
-        env,
-        client: {
-          updateTaskStatus: async () => ({ ok: true } as const),
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } as any,
-        args: parsedFlags({ 'task-number': '7', status: 'todo' }),
-      });
-    } catch (e) {
-      caught = e;
-    }
-    const err = caught as CliError;
-    expect(err.subkind).toBe('enum_invalid');
-    expect(err.details).toMatchObject({ flag: 'status', value: 'todo' });
-    // Should NOT mention list_only_macro — `todo` is canonical, just
-    // not transition-writable, so the reason field is omitted.
-    expect((err.details as { reason?: string }).reason).toBeUndefined();
-  });
 });

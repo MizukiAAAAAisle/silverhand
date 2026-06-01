@@ -1,12 +1,11 @@
 import { useState, type ReactElement, type ReactNode } from 'react';
 import * as Popover from '@radix-ui/react-popover';
-import { Archive, ArchiveRestore, ArrowRight } from 'lucide-react';
-import type { TaskArchiveFilter, TaskStatus } from '@silverhand/shared';
+import { ArrowRight } from 'lucide-react';
+import type { TaskStatus } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
 import {
   AppContextMenu,
   AppContextMenuItem,
-  AppContextMenuSeparator,
 } from '@/components/menus/AppContextMenu';
 
 /**
@@ -20,19 +19,17 @@ import {
  * Read-only by default. Pass `onChange` to make it click-to-open a tiny
  * popover that moves the task to any other status — the human-side
  * "manage any task, not just in_review" affordance (shiki
- * `x9rIbAIlyUBVneiu`). Human status transitions are unrestricted on the
- * backend (`POST /api/tasks/:id/status` allows any→any), so we offer
- * every status except the current one.
- *
- * Archive is intentionally NOT here — it's a visibility dimension
- * orthogonal to workflow status (Cindy B-track design), so it lives in
- * a separate affordance once the backend `task_archived_at` lands.
+ * `x9rIbAIlyUBVneiu`). Status transitions are unrestricted (`POST
+ * /api/tasks/:id/status` allows any→any), so we offer every status except
+ * the current one — including `closed` (move-to-close) and, on a closed
+ * task, the four open statuses (reopen).
  */
 const LABELS: Record<TaskStatus, string> = {
   todo: 'todo',
   in_progress: 'in progress',
   in_review: 'in review',
   done: 'done',
+  closed: 'closed',
 };
 
 /** Title-case labels for menu/sentence contexts ("Move to In review"). */
@@ -41,9 +38,16 @@ const MOVE_LABELS: Record<TaskStatus, string> = {
   in_progress: 'In progress',
   in_review: 'In review',
   done: 'Done',
+  closed: 'Closed',
 };
 
-const ALL_STATUSES: TaskStatus[] = ['todo', 'in_progress', 'in_review', 'done'];
+const ALL_STATUSES: TaskStatus[] = [
+  'todo',
+  'in_progress',
+  'in_review',
+  'done',
+  'closed',
+];
 
 const CHIP =
   'rounded-[var(--chip-radius)] px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide';
@@ -132,28 +136,21 @@ function StatusPicker({
 
 /**
  * Right-click context menu for task cards — direct "Move to {status}"
- * items (shiki `wCrBduGkOdT7EBTt`) plus an Archive/Unarchive action
- * (orthogonal visibility dimension, backend `POST .../archive`, c88e13f).
- * Mirrors the StatusPicker's any→any transitions but reachable without
- * first hitting the small badge, so the whole card surface becomes a
- * status-management affordance.
+ * items (shiki `wCrBduGkOdT7EBTt`), now including `closed` and reopen
+ * (any→any via `ALL_STATUSES`). Mirrors the StatusPicker but reachable
+ * without first hitting the small badge, so the whole card surface
+ * becomes a status-management affordance.
  *
  * `children` must be a single element (Radix ContextMenu.Trigger asChild)
- * — pass the card's root <div>. When `onArchive` is omitted the archive
- * row is hidden (e.g. surfaces without the archive mutation wired).
+ * — pass the card's root <div>.
  */
 export function TaskCardContextMenu({
   status,
-  archived = false,
   onStatusChange,
-  onArchive,
   children,
 }: {
   status: TaskStatus;
-  /** Whether the task is currently archived — flips the action to Unarchive. */
-  archived?: boolean;
   onStatusChange: (next: TaskStatus) => void;
-  onArchive?: (archived: boolean) => void;
   children: ReactElement;
 }): JSX.Element {
   return (
@@ -167,108 +164,6 @@ export function TaskCardContextMenu({
           Move to {MOVE_LABELS[s]}
         </AppContextMenuItem>
       ))}
-      {onArchive ? (
-        <>
-          <AppContextMenuSeparator />
-          <AppContextMenuItem
-            icon={
-              archived ? (
-                <ArchiveRestore className="size-3.5" />
-              ) : (
-                <Archive className="size-3.5" />
-              )
-            }
-            onSelect={() => onArchive(!archived)}
-          >
-            {archived ? 'Unarchive' : 'Archive'}
-          </AppContextMenuItem>
-        </>
-      ) : null}
     </AppContextMenu>
-  );
-}
-
-/**
- * "Archived" chip shown on archived task cards. Theme-adaptive via the
- * `--task-archived-*` contract tokens (forza6 → indigo poster chip;
- * warm → low-noise muted). Those tokens are consumed ONLY here — not by
- * channel/other archived surfaces (Cindy review boundary).
- */
-export function ArchivedBadge({
-  className,
-}: {
-  className?: string;
-}): JSX.Element {
-  return (
-    <span
-      data-task-archived
-      className={cn(
-        CHIP,
-        'inline-flex items-center gap-1 border',
-        className,
-      )}
-      style={{
-        backgroundColor: 'var(--task-archived-bg)',
-        color: 'var(--task-archived-text)',
-        borderColor: 'var(--task-archived-border)',
-      }}
-    >
-      <Archive className="size-2.5" aria-hidden />
-      Archived
-    </span>
-  );
-}
-
-// ── Archive visibility toggle ──────────────────────────────────────
-
-const ARCHIVE_FILTERS: ReadonlyArray<{ value: TaskArchiveFilter; label: string }> = [
-  { value: 'active', label: 'Active' },
-  { value: 'archived', label: 'Archived' },
-  { value: 'all', label: 'All' },
-];
-
-/**
- * Segmented control for the orthogonal archived-visibility dimension,
- * shared by the global Tasks board and the workspace drawer. Default
- * `active` mirrors the backend default (`GET /api/tasks?archived=active`);
- * switching to `archived` surfaces the archived board (cards carry the
- * ArchivedBadge).
- */
-export function ArchiveFilterToggle({
-  value,
-  onChange,
-  className,
-}: {
-  value: TaskArchiveFilter;
-  onChange: (next: TaskArchiveFilter) => void;
-  className?: string;
-}): JSX.Element {
-  return (
-    <div
-      role="tablist"
-      aria-label="归档可见性"
-      className={cn(
-        'flex items-center gap-0.5 rounded-[var(--control-radius)] border border-border-subtle bg-bg-primary p-0.5',
-        className,
-      )}
-    >
-      {ARCHIVE_FILTERS.map(f => (
-        <button
-          key={f.value}
-          type="button"
-          role="tab"
-          aria-selected={value === f.value}
-          onClick={() => onChange(f.value)}
-          className={cn(
-            'rounded-[var(--chip-radius)] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide transition-colors',
-            value === f.value
-              ? 'bg-accent text-text-on-accent'
-              : 'text-text-muted hover:text-text-primary',
-          )}
-        >
-          {f.label}
-        </button>
-      ))}
-    </div>
   );
 }

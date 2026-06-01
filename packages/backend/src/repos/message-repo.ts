@@ -95,7 +95,7 @@ export function messageRowToDto(
     task_status: row.task_status,
     task_title: row.task_title,
     task_workspace_id: row.task_workspace_id,
-    task_archived_at: row.task_archived_at,
+    task_closed_at: row.task_closed_at,
     task_assignee: assignee,
   };
 }

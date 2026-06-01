@@ -448,8 +448,8 @@ ${closeThread} to avoid duplicate posting.
 ${closeThread} hard-rejects when the Thread still has tasks in
 \`todo\` / \`in_progress\` / \`in_review\` — error code \`conflict\` with
 \`details.blocking_tasks\` listing each task's number, status, and
-assignee. The fix is almost always to move those tasks to \`done\` (or
-re-claim and finish them) before closing, not to add
+assignee. The fix is almost always to move those tasks to \`done\` /
+\`closed\` (or re-claim and finish them) before closing, not to add
 \`--allow-open-tasks\`. \`--allow-open-tasks\` is a user-approved
 escape hatch for accepting residue, not a normal close-path flag —
 do not auto-include it.
@@ -500,10 +500,12 @@ Commands:
   only become a task in its own conversation.
 - ${unclaimTask} — \`--task-number N\` (+ optional workspace selector).
   Releases your claim (not a "done" signal).
-- ${updateTaskStatus} — \`--task-number N --status in_progress|in_review|done\`
+- ${updateTaskStatus} — \`--task-number N --status todo|in_progress|in_review|done|closed\`
   (+ optional workspace selector).
-  Allowed transitions: \`in_progress → in_review / done\`,
-  \`in_review → in_progress / done\`. You must be the assignee, or the
+  Allowed transitions include \`in_progress → in_review / done / closed\`,
+  \`in_review → in_progress / done / closed\`, \`todo → closed\`,
+  \`done → closed\`, and \`closed → todo / in_progress / in_review / done\`.
+  You must be the assignee, or the
   creator of a still-unassigned task you created yourself.
 
 Rules:
@@ -806,7 +808,7 @@ should stop and be reported.
   the query as \`--q <text>\` (or its alias \`--query <text>\`); passing
   both at once fails with \`subkind: 'mutually_exclusive'\`.
 - **\`silverhand task list\`**: View the workspace task board. \`--status\`
-  accepts canonical values (\`todo|in_progress|in_review|done\`) plus
+  accepts canonical values (\`todo|in_progress|in_review|done|closed\`) plus
   list-only filter macros: \`active|open\` (= todo+in_progress+in_review),
   \`pending\` (= todo), \`all\` (no-filter sentinel — \`status\` field is
   omitted from the request and overrides any narrower token). Macros may
