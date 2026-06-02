@@ -1,7 +1,6 @@
 import type { AgentDto, UserDto } from '@silverhand/shared';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
 import { HumanInfoPopover } from '@/components/HumanInfoPopover';
-import { useViewerAvatarObjectUrl } from '@/features/me/hooks';
 import { useNav } from '@/router';
 
 interface MentionProps {
@@ -96,24 +95,19 @@ function AgentMention({
 }
 
 function HumanMention({ human }: { human: UserDto }): JSX.Element {
-  // v1 invariant: the only registered human is the viewer themselves
-  // (no `/api/users` listing endpoint yet), so the avatar always belongs
-  // to the viewer. When multi-human lands, swap to a prop-threaded
-  // avatar map keyed by user id.
-  const avatarObjectUrl = useViewerAvatarObjectUrl();
   const nav = useNav();
   const label = human.display_name?.trim() || human.name;
   // Keep element + classes identical to AgentMention so both mentions
-  // share box model, baseline, and focus ring. Clicking @yourself
-  // jumps to Settings where the viewer manages their profile (v1
-  // invariant: human === viewer).
+  // share box model, baseline, and focus ring. Human mentions navigate
+  // to the members human route; that route resolves both the viewer and
+  // other registered humans.
   return (
-    <HumanInfoPopover human={human} trigger="hover" avatarObjectUrl={avatarObjectUrl}>
+    <HumanInfoPopover human={human} trigger="hover">
       <button
         type="button"
         onClick={event => {
           event.preventDefault();
-          nav.toSettings();
+          nav.toMembersUser(human.id);
         }}
         className="rounded-[var(--chip-radius)] px-1 -mx-0.5 font-medium text-accent transition-colors hover:bg-accent-soft focus-visible:bg-accent-soft focus-visible:outline-none"
         aria-label={`@${human.name}`}

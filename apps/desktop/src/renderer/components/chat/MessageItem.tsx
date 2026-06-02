@@ -41,6 +41,8 @@ interface MessageItemProps {
   agentsByName: Map<string, AgentDto>;
   /** Lookup by `user.name` in the same @mention namespace as agents. */
   humansByName?: Map<string, UserDto>;
+  /** Lookup by `users.id`, used to resolve user-authored message rows. */
+  humansById?: Map<string, UserDto>;
   /** Lookup by `channel.title` (the #handle used in inline refs).
    *  `null` value = ambiguity sentinel (multiple channels share that
    *  title in this workspace) → chip degrades to inert text. Threaded
@@ -74,6 +76,8 @@ interface MessageItemProps {
    *  not complete or still loading; the row falls back to the bare
    *  avatar/label. */
   viewer?: UserDto;
+  /** Object-URL map keyed by human user id. */
+  humanAvatarUrls?: Map<string, string | null>;
   /** Object-URL map keyed by agent id. The parent pane runs a single
    *  `useAgentAvatarObjectUrls` over the workspace agent list so every
    *  authored message reuses the same blob URL instead of N independent
@@ -135,6 +139,7 @@ export function MessageItem({
   agentsById,
   agentsByName,
   humansByName,
+  humansById,
   channelsByName,
   onOpenChannelRef,
   conversationRefsById,
@@ -146,6 +151,7 @@ export function MessageItem({
   highlighted = false,
   viewerAvatarObjectUrl = null,
   viewer,
+  humanAvatarUrls,
   agentAvatarUrls,
   selectionMode = false,
   selected = false,
@@ -160,6 +166,12 @@ export function MessageItem({
   const agent = !isUser && message.from_agent_id
     ? agentsById.get(message.from_agent_id)
     : undefined;
+  const messageHuman = isUser && message.from_user_id
+    ? humansById?.get(message.from_user_id)
+    : undefined;
+  const human = isUser && isCurrentUser
+    ? viewer ?? messageHuman
+    : messageHuman;
   // Author avatar URL resolved by the parent's batch hook. `undefined`
   // means the parent didn't thread the map (legacy / non-channel
   // surfaces) — pass `undefined` straight through so AgentInfoPopover
@@ -170,17 +182,28 @@ export function MessageItem({
     agent && agentAvatarUrls
       ? agentAvatarUrls.get(agent.id) ?? null
       : undefined;
+  const humanAvatarObjectUrl = human
+    ? (
+        isCurrentUser && viewerAvatarObjectUrl
+          ? viewerAvatarObjectUrl
+          : humanAvatarUrls?.get(human.id) ?? null
+      )
+    : null;
   const name = isUser
-    ? formatUserDisplayName(message.from_user_id)
+    ? human?.name ?? formatUserDisplayName(message.from_user_id)
     : agent?.name ?? 'agent';
   const displayLabel = isUser
-    ? name
+    ? human?.display_name?.trim() || name
     : `@${agent?.display_name?.trim() || name}`;
   const { relative, absolute } = useRelativeTime(message.created_at);
-  const { toMembers } = useNav();
+  const { toMembers, toMembersUser } = useNav();
   const navigateToAgent = useCallback(
     (agentId: string) => toMembers(agentId),
     [toMembers],
+  );
+  const navigateToHuman = useCallback(
+    (userId: string) => toMembersUser(userId),
+    [toMembersUser],
   );
   const taskTag = <TaskMetaTag message={message} agentsById={agentsById} />;
   const [hover, setHover] = useState(false);
@@ -250,9 +273,8 @@ export function MessageItem({
       ) : null}
       <Avatar
         isUser={isUser}
-        isCurrentUser={isCurrentUser}
-        viewer={viewer}
-        viewerAvatarObjectUrl={viewerAvatarObjectUrl}
+        human={human}
+        humanAvatarObjectUrl={humanAvatarObjectUrl}
         agent={agent}
         agentAvatarObjectUrl={
           agent ? agentAvatarUrls?.get(agent.id) ?? null : null
@@ -260,6 +282,7 @@ export function MessageItem({
         conversationId={conversationId}
         routeKind={routeKind}
         onNavigateAgent={navigateToAgent}
+        onNavigateHuman={navigateToHuman}
       />
       <div className="min-w-0 max-w-[85%]">
         <header className={'mb-1 text-xs ' + (alignRight ? 'text-right' : '')}>
@@ -275,15 +298,15 @@ export function MessageItem({
               <span className="ml-2 inline-block">
                 <AuthorLabel
                   isUser={isUser}
-                  isCurrentUser={isCurrentUser}
-                  viewer={viewer}
+                  human={human}
                   agent={agent}
                   conversationId={conversationId}
                   routeKind={routeKind}
                   agentAvatarObjectUrl={agentAvatarObjectUrl}
-                  viewerAvatarObjectUrl={viewerAvatarObjectUrl}
+                  humanAvatarObjectUrl={humanAvatarObjectUrl}
                   displayLabel={displayLabel}
                   onNavigateAgent={navigateToAgent}
+                  onNavigateHuman={navigateToHuman}
                 />
               </span>
               {taskTag}
@@ -292,15 +315,15 @@ export function MessageItem({
             <>
               <AuthorLabel
                 isUser={isUser}
-                isCurrentUser={isCurrentUser}
-                viewer={viewer}
+                human={human}
                 agent={agent}
                 conversationId={conversationId}
                 routeKind={routeKind}
                 agentAvatarObjectUrl={agentAvatarObjectUrl}
-                viewerAvatarObjectUrl={viewerAvatarObjectUrl}
+                humanAvatarObjectUrl={humanAvatarObjectUrl}
                 displayLabel={displayLabel}
                 onNavigateAgent={navigateToAgent}
+                onNavigateHuman={navigateToHuman}
               />
               <time
                 dateTime={new Date(message.created_at).toISOString()}
@@ -493,25 +516,21 @@ function formatTaskAssignee(
 
 function Avatar({
   isUser,
-  isCurrentUser,
-  viewer,
-  viewerAvatarObjectUrl,
+  human,
+  humanAvatarObjectUrl,
   agent,
   agentAvatarObjectUrl,
   conversationId,
   routeKind,
   onNavigateAgent,
+  onNavigateHuman,
 }: {
   isUser: boolean;
-  /** True iff `from_user_id` resolves to the registered viewer (legacy
-   *  null-author rows count as the viewer). Other-user messages would
-   *  fall through to the placeholder. */
-  isCurrentUser: boolean;
-  /** Viewer's user row. When present + `isCurrentUser`, the avatar is
-   *  wrapped in a `HumanInfoPopover` so hover gives the same identity
-   *  card the chip strip and `@mention` show. */
-  viewer: UserDto | undefined;
-  viewerAvatarObjectUrl: string | null;
+  /** Resolved human author row. When present, the avatar is wrapped in
+   *  a `HumanInfoPopover` so hover gives the same identity card as the
+   *  member chip / `@mention` surfaces. */
+  human: UserDto | undefined;
+  humanAvatarObjectUrl: string | null;
   agent: AgentDto | undefined;
   /** This message's authoring-agent avatar object URL, looked up by the
    *  parent from the workspace-wide `agentAvatarUrls` map. `null` falls
@@ -520,6 +539,7 @@ function Avatar({
   conversationId: string;
   routeKind: 'channel' | 'thread';
   onNavigateAgent: (agentId: string) => void;
+  onNavigateHuman: (userId: string) => void;
 }): JSX.Element {
   if (isUser) {
     // Make the avatar's outermost element (button when wrapped, span
@@ -530,23 +550,27 @@ function Avatar({
     // `osrdZIlji8lBfdiv`). With size on the outermost element the
     // box stays square regardless of the avatar image's natural
     // aspect ratio (`object-cover` already crops the image to fill).
-    if (isCurrentUser && viewer) {
+    if (human) {
       return (
         <HumanInfoPopover
-          human={viewer}
+          human={human}
           trigger="hover"
-          avatarObjectUrl={viewerAvatarObjectUrl}
+          avatarObjectUrl={humanAvatarObjectUrl}
         >
           <button
             type="button"
-            aria-label={`@${viewer.name}`}
+            aria-label={`@${human.name}`}
+            onClick={event => {
+              event.preventDefault();
+              onNavigateHuman(human.id);
+            }}
             className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-none border-[length:var(--border-avatar-width)] border-border-avatar bg-bg-elevated text-text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
           >
-            {viewerAvatarObjectUrl ? (
+            {humanAvatarObjectUrl ? (
               /* eslint-disable-next-line jsx-a11y/img-redundant-alt */
               <img
-                src={viewerAvatarObjectUrl}
-                alt="Your avatar"
+                src={humanAvatarObjectUrl}
+                alt=""
                 className="size-full object-cover"
                 draggable={false}
               />
@@ -557,24 +581,8 @@ function Avatar({
         </HumanInfoPopover>
       );
     }
-    // Unwrapped path (other-user message or viewer not yet loaded):
+    // Unwrapped path (user row not yet resolved):
     // span carries both the size and the mt-0.5 offset directly.
-    if (isCurrentUser && viewerAvatarObjectUrl) {
-      return (
-        <span
-          className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-none border-[length:var(--border-avatar-width)] border-border-avatar bg-bg-elevated"
-          aria-hidden
-        >
-          {/* eslint-disable-next-line jsx-a11y/img-redundant-alt */}
-          <img
-            src={viewerAvatarObjectUrl}
-            alt="Your avatar"
-            className="size-full object-cover"
-            draggable={false}
-          />
-        </span>
-      );
-    }
     return (
       <span
         className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-none border-[length:var(--border-avatar-width)] border-border-avatar bg-bg-elevated text-text-muted"
@@ -626,34 +634,33 @@ function Avatar({
 /**
  * Header author label. Renders display name + the right popover trigger:
  * - agent → `<AgentInfoPopover>` (existing behavior)
- * - viewer-authored user message with viewer dto resolved →
+ * - resolved user message →
  *   `<HumanInfoPopover>` so hover reveals the same identity card the
  *   member chip / `@mention` surfaces show
- * - everything else → plain span (legacy null-author rows, other humans
- *   we can't yet resolve in v1)
+ * - everything else → plain span (legacy null-author rows / unresolved users)
  */
 function AuthorLabel({
   isUser,
-  isCurrentUser,
-  viewer,
+  human,
   agent,
   conversationId,
   routeKind,
   agentAvatarObjectUrl,
-  viewerAvatarObjectUrl,
+  humanAvatarObjectUrl,
   displayLabel,
   onNavigateAgent,
+  onNavigateHuman,
 }: {
   isUser: boolean;
-  isCurrentUser: boolean;
-  viewer: UserDto | undefined;
+  human: UserDto | undefined;
   agent: AgentDto | undefined;
   conversationId: string;
   routeKind: 'channel' | 'thread';
   agentAvatarObjectUrl: string | null | undefined;
-  viewerAvatarObjectUrl: string | null;
+  humanAvatarObjectUrl: string | null;
   displayLabel: string;
   onNavigateAgent: (agentId: string) => void;
+  onNavigateHuman: (userId: string) => void;
 }): JSX.Element {
   if (agent) {
     return (
@@ -677,15 +684,19 @@ function AuthorLabel({
       </AgentInfoPopover>
     );
   }
-  if (isUser && isCurrentUser && viewer) {
+  if (isUser && human) {
     return (
       <HumanInfoPopover
-        human={viewer}
+        human={human}
         trigger="hover"
-        avatarObjectUrl={viewerAvatarObjectUrl}
+        avatarObjectUrl={humanAvatarObjectUrl}
       >
         <button
           type="button"
+          onClick={event => {
+            event.preventDefault();
+            onNavigateHuman(human.id);
+          }}
           className="rounded font-medium text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
         >
           {displayLabel}

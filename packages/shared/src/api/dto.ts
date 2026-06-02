@@ -757,6 +757,9 @@ export const CreateWorkspaceInputSchema = z.object({
   workspace_path: z.string().optional(),
   workspace_host_id: z.string().optional(),
   member_agent_ids: z.array(z.string()).default([]),
+  /** Initial human workspace members. The creator is always added
+   *  separately; including them here is harmless (`INSERT OR IGNORE`). */
+  member_user_ids: z.array(z.string()).default([]),
 });
 export type CreateWorkspaceInput = z.infer<typeof CreateWorkspaceInputSchema>;
 
@@ -804,6 +807,7 @@ export type DmChannelDto = z.infer<typeof DmChannelDtoSchema>;
 export const CreateConversationChannelInputSchema = z.object({
   title: z.string().min(1).max(128),
   member_agent_ids: z.array(z.string()).default([]),
+  member_user_ids: z.array(z.string()).optional(),
 });
 export type CreateConversationChannelInput = z.infer<
   typeof CreateConversationChannelInputSchema

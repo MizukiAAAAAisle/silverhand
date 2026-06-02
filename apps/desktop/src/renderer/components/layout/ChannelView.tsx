@@ -73,6 +73,7 @@ import {
   useViewerAvatarObjectUrl,
   useViewerUser,
 } from '@/features/me/hooks';
+import { useUsers } from '@/features/users/hooks';
 import {
   useChannelAgents,
   useChannelMessages,
@@ -911,6 +912,7 @@ function MessageList({
   onOpenChannelRef?: (channelId: string) => void;
 }): JSX.Element {
   const { data: agents = [] } = useAgents();
+  const { data: users = [] } = useUsers();
   const { data: workspaces = [] } = useWorkspaces();
   // Resolve `#<channel_name>` against the message's workspace — not the
   // primary-selected workspace — so cross-workspace `?side` panes still
@@ -932,6 +934,16 @@ function MessageList({
   const { toggle: toggleSave } = useToggleSave();
   const { data: viewer } = useViewerUser();
   const viewerAvatarObjectUrl = useViewerAvatarObjectUrl();
+  const conversationMembers = useConversationMembers(channelId);
+  const humansById = useMemo(() => {
+    const byId = new Map<string, UserDto>();
+    for (const user of users) byId.set(user.id, user);
+    if (viewer && !isRegistrationRequired(viewer) && !isBackendUnreachable(viewer)) {
+      byId.set(viewer.id, viewer);
+    }
+    return byId;
+  }, [users, viewer]);
+  const humanAvatarUrls = useAgentAvatarObjectUrls(users);
   const startThread = useStartThread(workspaceId);
   const handleCopyMarkdown = useCallback(async (msg: MessageDto): Promise<void> => {
     // Single-message copy semantic: clipboard receives ONLY
@@ -969,11 +981,18 @@ function MessageList({
   }, [agents]);
   const humansByName = useMemo(() => {
     const byName = new Map<string, UserDto>();
+    if (conversationMembers.status === 'resolved') {
+      for (const member of conversationMembers.members) {
+        if (member.kind !== 'human') continue;
+        const user = humansById.get(member.user_id);
+        if (user) byName.set(user.name, user);
+      }
+    }
     if (viewer && !isRegistrationRequired(viewer) && !isBackendUnreachable(viewer)) {
       byName.set(viewer.name, viewer);
     }
     return byName;
-  }, [viewer]);
+  }, [conversationMembers.status, conversationMembers.members, humansById, viewer]);
   // Build the channel-name lookup keyed by channel `title`. Threads
   // aren't addressable by `#<name>` (use `#conv:<id>` for threads), so
   // we filter to top-level channels (`channel` / `dm_channel`). When
@@ -1454,6 +1473,7 @@ function MessageList({
           agentsById={agentsById}
           agentsByName={agentsByName}
           humansByName={humansByName}
+          humansById={humansById}
           channelsByName={channelsByName}
           onOpenChannelRef={onOpenChannelRef}
           conversationRefsById={conversationRefsById}
@@ -1464,6 +1484,7 @@ function MessageList({
           threadReplyCount={threadByAnchor?.get(m.id)?.reply_count}
           viewerAvatarObjectUrl={viewerAvatarObjectUrl}
           viewer={viewer && !isRegistrationRequired(viewer) && !isBackendUnreachable(viewer) ? viewer : undefined}
+          humanAvatarUrls={humanAvatarUrls}
           agentAvatarUrls={agentAvatarUrls}
           highlighted={
             highlightedMessageId != null && m.id === highlightedMessageId

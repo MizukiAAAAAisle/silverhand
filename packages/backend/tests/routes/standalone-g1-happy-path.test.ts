@@ -362,6 +362,58 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
     ).toBeDefined();
   });
 
+  it('POST /api/workspaces/:id/channels with member_agent_ids on standalone creates an agent-backed channel', async () => {
+    // Remote standalone servers are now control-plane capable for
+    // existing workspace agents. The old route-level
+    // `host_runtime_disabled` guard was stale after daemon-mediated
+    // workspace/member provisioning landed.
+    t = buildTestApp({ deploymentMode: 'standalone', bindAddressScope: 'lan' });
+    const token = await signupReturnToken(t, 'channel.agent@example.test');
+    const claimedHostId = await claimLocalHost(t, token);
+    const ownerUserId = t.ctx.db
+      .prepare<[], { id: string }>(
+        `SELECT id FROM users WHERE email = 'channel.agent@example.test'`,
+      )
+      .get()?.id;
+    expect(ownerUserId).toEqual(expect.any(String));
+
+    const agentId = `channel-agent-${randomSlug()}`;
+    const now = Date.now();
+    t.ctx.db
+      .prepare(
+        `INSERT INTO agents (id, name, runtime, host_id, created_by_user_id, created_at, updated_at)
+         VALUES (?, ?, 'claude', ?, ?, ?, ?)`,
+      )
+      .run(agentId, `channel-${randomSlug()}`, claimedHostId, ownerUserId!, now, now);
+
+    const ws = await fetchJson(
+      t,
+      'POST',
+      apiPaths.workspaces,
+      { name: `g1agentch-${randomSlug()}`, member_agent_ids: [agentId] },
+      bearer(token),
+    );
+    expect(ws.status).toBe(201);
+    const workspaceId = ws.body.workspace.id as string;
+
+    const channel = await fetchJson(
+      t,
+      'POST',
+      apiPaths.workspaceChannels(workspaceId),
+      { title: 'standalone-agent-backed', member_agent_ids: [agentId] },
+      bearer(token),
+    );
+    expect(channel.status).toBe(201);
+    const memberCount = t.ctx.db
+      .prepare<[string, string], { c: number }>(
+        `SELECT COUNT(*) AS c
+           FROM conversation_agents
+          WHERE conversation_id = ? AND agent_id = ?`,
+      )
+      .get(channel.body.channel.id as string, agentId)?.c;
+    expect(memberCount).toBe(1);
+  });
+
   it('POST /api/channels/:id/messages (no agents in channel) on standalone persists the message and publishes a conversation event', async () => {
     // End-to-end pin: standalone backend, fresh user, fresh workspace
     // + channel, post a human message, observe the conversation-level

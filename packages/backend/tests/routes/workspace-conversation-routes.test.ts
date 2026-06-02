@@ -100,6 +100,98 @@ describe('workspace/conversation routes', () => {
     expect(body.workspace.workspace_host_id).toBe(ownedLocal?.id);
   });
 
+  it('adds selected human initial members to workspace and onboarding channel', async () => {
+    t = buildTestApp();
+    t.ctx.db.exec(
+      `DROP TRIGGER IF EXISTS test_seed_workspace_users;
+       DROP TRIGGER IF EXISTS test_seed_conversation_users;`,
+    );
+
+    const res = await http(t).post('/api/workspaces', {
+      name: 'initial-humans',
+      member_agent_ids: [],
+      member_user_ids: ['teammate'],
+    });
+
+    expect(res.status).toBe(201);
+    const body = await res.json() as any;
+    const workspaceUsers = t.ctx.db
+      .prepare(
+        `SELECT user_id FROM workspace_users
+         WHERE workspace_id = ?
+         ORDER BY user_id`,
+      )
+      .all(body.workspace.id)
+      .map((row: any) => row.user_id);
+    const onboardingUsers = t.ctx.db
+      .prepare(
+        `SELECT user_id FROM conversation_users
+         WHERE conversation_id = ?
+         ORDER BY user_id`,
+      )
+      .all(body.onboarding_channel_id)
+      .map((row: any) => row.user_id);
+
+    expect(workspaceUsers).toEqual(['local', 'teammate']);
+    expect(onboardingUsers).toEqual(['local', 'teammate']);
+  });
+
+  it('creates regular channels with selected human members', async () => {
+    t = buildTestApp();
+    t.ctx.db.exec(
+      `DROP TRIGGER IF EXISTS test_seed_workspace_users;
+       DROP TRIGGER IF EXISTS test_seed_conversation_users;`,
+    );
+
+    const workspaceRes = await http(t).post('/api/workspaces', {
+      name: 'channel-humans',
+      member_agent_ids: [],
+      member_user_ids: ['teammate'],
+    });
+    expect(workspaceRes.status).toBe(201);
+    const workspaceBody = await workspaceRes.json() as any;
+
+    const creatorOnlyRes = await http(t).post(
+      `/api/workspaces/${workspaceBody.workspace.id}/channels`,
+      {
+        title: 'creator-only',
+        member_agent_ids: [],
+        member_user_ids: [],
+      },
+    );
+    expect(creatorOnlyRes.status).toBe(201);
+    const creatorOnlyBody = await creatorOnlyRes.json() as any;
+    const creatorOnlyUsers = t.ctx.db
+      .prepare(
+        `SELECT user_id FROM conversation_users
+         WHERE conversation_id = ?
+         ORDER BY user_id`,
+      )
+      .all(creatorOnlyBody.channel.id)
+      .map((row: any) => row.user_id);
+    expect(creatorOnlyUsers).toEqual(['local']);
+
+    const teammateRes = await http(t).post(
+      `/api/workspaces/${workspaceBody.workspace.id}/channels`,
+      {
+        title: 'with-teammate',
+        member_agent_ids: [],
+        member_user_ids: ['teammate'],
+      },
+    );
+    expect(teammateRes.status).toBe(201);
+    const teammateBody = await teammateRes.json() as any;
+    const teammateUsers = t.ctx.db
+      .prepare(
+        `SELECT user_id FROM conversation_users
+         WHERE conversation_id = ?
+         ORDER BY user_id`,
+      )
+      .all(teammateBody.channel.id)
+      .map((row: any) => row.user_id);
+    expect(teammateUsers).toEqual(['local', 'teammate']);
+  });
+
   it('fails closed when workspace creator has no owned local host', async () => {
     t = buildTestApp({ ownedLocalHostUserIds: [] });
     const res = await http(t).post('/api/workspaces', {

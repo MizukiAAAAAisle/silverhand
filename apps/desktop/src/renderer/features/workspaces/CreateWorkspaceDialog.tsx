@@ -1,5 +1,6 @@
-import { useState, type FormEvent } from 'react';
+import { useMemo, useState, type FormEvent } from 'react';
 import { FolderOpen } from 'lucide-react';
+import type { AgentDto, UserDto } from '@silverhand/shared';
 import {
   Dialog,
   DialogContent,
@@ -12,7 +13,8 @@ import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { useHostProvenanceGate } from '@/features/hosts/hooks';
 import { useAgents } from '@/features/agents/hooks';
-import { AgentPicker } from './AgentPicker';
+import { useUsers } from '@/features/users/hooks';
+import { MemberPicker, type MemberPickerCandidate } from './AgentPicker';
 import { useCreateWorkspace } from './hooks';
 
 interface CreateWorkspaceDialogProps {
@@ -30,9 +32,11 @@ export function CreateWorkspaceDialog({
   const [workspacePath, setWorkspacePath] = useState('');
   const [showAdvancedPath, setShowAdvancedPath] = useState(false);
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
+  const [selectedHumans, setSelectedHumans] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const { data: agents = [] } = useAgents();
+  const { data: users = [] } = useUsers();
   const createWorkspace = useCreateWorkspace();
   const hostProvenance = useHostProvenanceGate();
   // Local desktop host → the user can pick a real folder on this machine.
@@ -47,7 +51,39 @@ export function CreateWorkspaceDialog({
     setWorkspacePath('');
     setShowAdvancedPath(false);
     setSelectedAgents([]);
+    setSelectedHumans([]);
     setError(null);
+  };
+
+  const memberCandidates = useMemo<MemberPickerCandidate[]>(
+    () => [
+      ...agents.map((agent: AgentDto) => ({ kind: 'agent' as const, agent })),
+      ...users.map((user: UserDto) => ({ kind: 'human' as const, user })),
+    ],
+    [agents, users],
+  );
+
+  const selectedMembers = useMemo(
+    () => [
+      ...selectedAgents.map(id => `agent:${id}`),
+      ...selectedHumans.map(id => `human:${id}`),
+    ],
+    [selectedAgents, selectedHumans],
+  );
+
+  const setSelectedMembers = (values: string[]): void => {
+    const agentsNext: string[] = [];
+    const humansNext: string[] = [];
+    for (const value of values) {
+      const sep = value.indexOf(':');
+      if (sep <= 0) continue;
+      const kind = value.slice(0, sep);
+      const id = value.slice(sep + 1);
+      if (kind === 'agent') agentsNext.push(id);
+      if (kind === 'human') humansNext.push(id);
+    }
+    setSelectedAgents(agentsNext);
+    setSelectedHumans(humansNext);
   };
 
   const handleSubmit = async (e: FormEvent) => {
@@ -62,6 +98,7 @@ export function CreateWorkspaceDialog({
         name: name.trim(),
         workspace_path: workspacePath.trim() || undefined,
         member_agent_ids: selectedAgents,
+        member_user_ids: selectedHumans,
       });
       onCreated?.({
         workspaceId: res.workspace.id,
@@ -164,21 +201,21 @@ export function CreateWorkspaceDialog({
             <Label htmlFor="ch-add-member">
               初始成员
               <span className="ml-1 text-text-muted">
-                ({selectedAgents.length} / {agents.length})
+                ({selectedMembers.length} / {memberCandidates.length})
               </span>
             </Label>
-            {agents.length === 0 ? (
+            {memberCandidates.length === 0 ? (
               <span className="text-xs text-text-muted">
                 还没有可添加的成员。可以稍后从 Members 面板加入。
               </span>
             ) : (
-              <AgentPicker
+              <MemberPicker
                 selectId="ch-add-member"
-                candidates={agents}
-                value={selectedAgents}
-                onChange={setSelectedAgents}
+                candidates={memberCandidates}
+                value={selectedMembers}
+                onChange={setSelectedMembers}
                 placeholder={
-                  selectedAgents.length === 0
+                  selectedMembers.length === 0
                     ? '选择初始成员…'
                     : '继续添加成员…'
                 }

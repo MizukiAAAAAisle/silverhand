@@ -1,5 +1,4 @@
 import { useState, useEffect, useMemo, useRef, type FormEvent } from 'react';
-import type { AgentDto } from '@silverhand/shared';
 import {
   Dialog,
   DialogContent,
@@ -10,12 +9,12 @@ import {
 } from '@/components/ui/dialog';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { AgentPicker } from './AgentPicker';
-import { useCreateChannel, useWorkspaceMembers } from './hooks';
+import { MemberPicker, type MemberPickerCandidate } from './AgentPicker';
+import { useCreateChannel, useWorkspaceMemberLists } from './hooks';
 
-// Stable empty array so the useEffect dependency on `members` doesn't
+// Stable empty member object so the useEffect dependency on `members` doesn't
 // create a new reference every render when the query hasn't resolved yet.
-const EMPTY_AGENTS: AgentDto[] = [];
+const EMPTY_MEMBERS = { agents: [], humans: [] } as const;
 
 interface CreateChannelDialogProps {
   open: boolean;
@@ -37,9 +36,10 @@ export function CreateChannelDialog({
 }: CreateChannelDialogProps): JSX.Element {
   const [title, setTitle] = useState('');
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
+  const [selectedHumans, setSelectedHumans] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const { data: members = EMPTY_AGENTS } = useWorkspaceMembers(workspaceId);
+  const { data: members = EMPTY_MEMBERS } = useWorkspaceMemberLists(workspaceId);
   const createChannel = useCreateChannel(workspaceId);
 
   const isDm = workspaceKind === 'dm';
@@ -55,6 +55,7 @@ export function CreateChannelDialog({
     if (open) return;
     setTitle('');
     setSelectedAgents([]);
+    setSelectedHumans([]);
     setError(null);
     seededOnceRef.current = false;
   }, [open]);
@@ -63,16 +64,27 @@ export function CreateChannelDialog({
     if (!open) return;
     if (seededOnceRef.current) return;
     if (isDm) return;
-    if (members.length === 0) return; // wait for the query to land
-    setSelectedAgents(members.map(m => m.id));
+    const totalMembers = members.agents.length + members.humans.length;
+    if (totalMembers === 0) return; // wait for the query to land
+    setSelectedAgents(members.agents.map(m => m.id));
+    setSelectedHumans(members.humans.map(m => m.id));
     seededOnceRef.current = true;
   }, [open, isDm, members]);
 
-  const nameById = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const a of members) m.set(a.id, a.name);
-    return m;
-  }, [members]);
+  const candidates = useMemo<MemberPickerCandidate[]>(
+    () => [
+      ...members.agents.map(agent => ({ kind: 'agent' as const, agent })),
+      ...members.humans.map(user => ({ kind: 'human' as const, user })),
+    ],
+    [members],
+  );
+  const selectedMembers = useMemo(
+    () => [
+      ...selectedAgents.map(id => `agent:${id}`),
+      ...selectedHumans.map(id => `human:${id}`),
+    ],
+    [selectedAgents, selectedHumans],
+  );
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -82,11 +94,13 @@ export function CreateChannelDialog({
       return;
     }
     // DM channels are always 1:1 — no member selection needed.
-    const memberIds = isDm ? [] : selectedAgents;
+    const memberAgentIds = isDm ? [] : selectedAgents;
+    const memberUserIds = isDm ? undefined : selectedHumans;
     try {
       const channel = await createChannel.mutateAsync({
         title: title.trim(),
-        member_agent_ids: memberIds,
+        member_agent_ids: memberAgentIds,
+        member_user_ids: memberUserIds,
       });
       onCreated?.(channel.id);
       onOpenChange(false);
@@ -119,9 +133,20 @@ export function CreateChannelDialog({
             <DmMemberHint />
           ) : (
             <RegularMemberPicker
-              members={members}
-              selected={selectedAgents}
-              onChange={setSelectedAgents}
+              candidates={candidates}
+              selected={selectedMembers}
+              onChange={values => {
+                const agents: string[] = [];
+                const humans: string[] = [];
+                for (const value of values) {
+                  const [kind, id] = value.split(':', 2);
+                  if (!id) continue;
+                  if (kind === 'agent') agents.push(id);
+                  if (kind === 'human') humans.push(id);
+                }
+                setSelectedAgents(agents);
+                setSelectedHumans(humans);
+              }}
             />
           )}
 
@@ -154,15 +179,15 @@ function DmMemberHint(): JSX.Element {
 }
 
 function RegularMemberPicker({
-  members,
+  candidates,
   selected,
   onChange,
 }: {
-  members: AgentDto[];
+  candidates: MemberPickerCandidate[];
   selected: string[];
-  onChange: (ids: string[]) => void;
+  onChange: (values: string[]) => void;
 }): JSX.Element {
-  if (members.length === 0) {
+  if (candidates.length === 0) {
     return (
       <div className="flex flex-col gap-1.5">
         <Label>成员</Label>
@@ -178,13 +203,13 @@ function RegularMemberPicker({
       <Label htmlFor="se-add-member">
         成员
         <span className="ml-1 text-text-muted">
-          ({selected.length} / {members.length})
+          ({selected.length} / {candidates.length})
         </span>
       </Label>
 
-      <AgentPicker
+      <MemberPicker
         selectId="se-add-member"
-        candidates={members}
+        candidates={candidates}
         value={selected}
         onChange={onChange}
         placeholder={

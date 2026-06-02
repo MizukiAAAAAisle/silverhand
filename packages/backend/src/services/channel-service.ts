@@ -23,6 +23,9 @@ import type { AgentPrincipal, UserPrincipal } from '../auth/principal.js';
  * Contract:
  * - `createChannel` only targets regular workspaces.
  * - Every requested member must exist and already be a workspace member.
+ * - User actors may pass an explicit human member subset. If omitted,
+ *   channel creation preserves the legacy full workspace-human snapshot.
+ *   Agent actors inherit humans from the source conversation instead.
  * - Agent actors must be members of their source conversation, and that
  *   source conversation must belong to the target workspace.
  * - Agent routes explicitly snapshot `memberAgentIds` from the current
@@ -41,6 +44,7 @@ export interface CreateChannelInput {
   workspaceId: string;
   title: string;
   memberAgentIds: string[];
+  memberUserIds?: string[];
   actor: ChannelActor;
   seed?: {
     systemMessageBody: string;
@@ -79,12 +83,13 @@ export class WorkspaceUnsuitableError extends Error {
 
 export type MemberErrorCode =
   | 'agent_not_found'
-  | 'agent_not_workspace_member';
+  | 'agent_not_workspace_member'
+  | 'user_not_workspace_member';
 
 export class MemberError extends Error {
   constructor(
     public readonly code: MemberErrorCode,
-    public readonly agentId: string,
+    public readonly memberId: string,
     message: string,
   ) {
     super(message);
@@ -135,6 +140,7 @@ interface CreateChannelTxResult {
   channel: ChannelConversationDto;
   contextMsg: MessageDto | null;
   promptMsg: MessageDto | null;
+  humanMemberCount: number;
 }
 
 export class ChannelService {
@@ -174,6 +180,10 @@ export class ChannelService {
     }
 
     const memberAgentIds = Array.from(new Set(input.memberAgentIds));
+    const explicitUserMemberIds =
+      input.memberUserIds === undefined
+        ? null
+        : Array.from(new Set(input.memberUserIds));
     for (const agentId of memberAgentIds) {
       if (!this.agents.get(agentId)) {
         throw new MemberError('agent_not_found', agentId, `agent ${agentId} not found`);
@@ -184,6 +194,17 @@ export class ChannelService {
           agentId,
           `agent ${agentId} is not a member of this workspace`,
         );
+      }
+    }
+    if (input.actor.kind === 'user' && explicitUserMemberIds) {
+      for (const userId of explicitUserMemberIds) {
+        if (!this.workspaces.isUserMember(workspace.id, userId)) {
+          throw new MemberError(
+            'user_not_workspace_member',
+            userId,
+            `user ${userId} is not a human member of this workspace`,
+          );
+        }
       }
     }
 
@@ -231,9 +252,12 @@ export class ChannelService {
         this.conversations.addAgent(channel.id, memberId);
       }
 
-      // v25 human membership snapshot:
-      //   - user-created channel: snapshot full `workspace_users` so
-      //     every workspace human gets the new channel.
+      // v25+ human membership snapshot:
+      //   - user-created channel with no explicit human list:
+      //     snapshot full `workspace_users` for legacy callers.
+      //   - user-created channel with an explicit human list: add that
+      //     subset plus the creator, so creators cannot accidentally
+      //     create a channel they cannot view.
       //   - agent-created channel: inherit narrowly from the SOURCE
       //     conversation's `conversation_users`. v1 single-human is
       //     equivalent to the workspace snapshot; v2 multi-human will
@@ -244,7 +268,9 @@ export class ChannelService {
         ? this.conversations
             .listUsers(input.actor.conversationId)
             .map(u => u.user_id)
-        : this.workspaces.listUserMemberIds(workspace.id);
+        : explicitUserMemberIds
+          ? Array.from(new Set([input.actor.userId, ...explicitUserMemberIds]))
+          : this.workspaces.listUserMemberIds(workspace.id);
       for (const userId of userMemberIds) {
         this.conversations.addUser(channel.id, userId);
       }
@@ -277,7 +303,7 @@ export class ChannelService {
         });
       }
 
-      return { channel, contextMsg, promptMsg };
+      return { channel, contextMsg, promptMsg, humanMemberCount: userMemberIds.length };
     })();
 
     this.publishWorkspaceChannelsChanged(workspace.id, created.channel.id);
@@ -288,6 +314,7 @@ export class ChannelService {
         actorKind: input.actor.kind,
         actorId: input.actor.kind === 'agent' ? input.actor.agentId : input.actor.userId,
         memberCount: memberAgentIds.length,
+        humanMemberCount: created.humanMemberCount,
         seeded: !!input.seed,
       },
       'channel-service: channel created',

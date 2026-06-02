@@ -2203,6 +2203,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     const viewerUserId = requireViewerUserId(c);
     let workspaceHostId: string;
     let memberAgents: AgentDto[];
+    let memberUserIds: string[];
     try {
       // D4.c C3 — unified placement decision: both embedded and
       // standalone go through `resolveCreateHostId`. Caller-supplied
@@ -2219,6 +2220,8 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       memberAgents = parsed.data.member_agent_ids
         .map(id => agents.get(id))
         .filter((agent): agent is AgentDto => agent !== null);
+      memberUserIds = parsed.data.member_user_ids
+        .filter(id => users.get(id) !== null);
       for (const agent of memberAgents) {
         ctx.placement.assertAgentMatchesHost(agent.id, workspaceHostId);
       }
@@ -2280,6 +2283,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     // always the same one viewer; in v2 multi-human it's still
     // correct — the creator is a member by default.
     workspaces.addUserMember(workspace.id, viewerUserId);
+    for (const userId of memberUserIds) {
+      workspaces.addUserMember(workspace.id, userId);
+    }
 
     // D4.e-3 — seed EVERY member's L2 on the owning daemon BEFORE inserting
     // ANY agent `workspace_members` row (Cindy ordering red line, P1 fixup):
@@ -2727,9 +2733,12 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       return c.json({ error: 'forbidden' }, 403);
     }
     if (workspace.workspace_kind === 'agent_home') {
-      if (parsed.data.member_agent_ids.length > 0) {
+      if (
+        parsed.data.member_agent_ids.length > 0 ||
+        (parsed.data.member_user_ids?.length ?? 0) > 0
+      ) {
         return c.json(
-          { error: 'agent_home channels always use the home owner as member' },
+          { error: 'agent_home channels always use the home owner/current user as members' },
           400,
         );
       }
@@ -2764,18 +2773,12 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       });
       return c.json({ channel }, 201);
     }
-    if (standaloneMode(ctx) && parsed.data.member_agent_ids.length > 0) {
-      // D4.b P1-1 (B-class deferral): agent-backed channel
-      // creation needs the agent CRUD placement model (D4.c /
-      // G3). Typed `host_runtime_disabled` here means CRUD
-      // deferral, NOT runtime transport unavailable.
-      return hostRuntimeDisabledResponse(c, 'agent-backed channel creation');
-    }
     try {
       const result = await ctx.channelService.createChannel({
         workspaceId: id,
         title: parsed.data.title,
         memberAgentIds: parsed.data.member_agent_ids,
+        memberUserIds: parsed.data.member_user_ids,
         actor: getUserPrincipal(c),
       });
       return c.json({ channel: result.channel }, 201);

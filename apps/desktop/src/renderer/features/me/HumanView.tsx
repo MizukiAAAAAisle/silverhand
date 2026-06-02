@@ -1,12 +1,11 @@
 import { useEffect } from 'react';
+import { useUsers } from '@/features/users/hooks';
 import { useViewerUser, isRegistrationRequired, isBackendUnreachable } from './hooks';
 import { HumanHeader } from './HumanHeader';
 import { HumanProfileCard } from './HumanProfileCard';
 
 interface HumanViewProps {
-  /** Identifier from the URL (`/members/u/:userId`). v1 only ever
-   *  resolves the viewer's own id; the not-self branch renders a
-   *  defensive fallback rather than a broken card. */
+  /** Identifier from the URL (`/members/u/:userId`). */
   userId: string;
   /** Called when the routed user is unreachable so the parent can
    *  navigate the right pane back to the agent fallback. */
@@ -20,36 +19,34 @@ interface HumanViewProps {
  * runtime/workspace/schedules to navigate between, so a single section
  * doesn't earn its own rail.
  *
- * v1 contract: the only routable userId IS the viewer's. The backend
- * does not expose `GET /api/users/:id` (only `GET /api/users/:id/avatar`),
- * so non-self ids cannot be resolved into a `UserDto` here. We render
- * a clear "not viewable" fallback rather than guessing — and call
- * `onUnreachable` so the App can redirect.
+ * Human profile route. The viewer row comes from `useViewerUser`; other
+ * registered humans are resolved from the shared `GET /api/users` list.
  */
 export function HumanView({
   userId,
   onUnreachable,
 }: HumanViewProps): JSX.Element {
   const viewer = useViewerUser();
+  const users = useUsers();
 
-  // v2 multi-human will swap in a `useUserById(userId)` query that can
-  // resolve any user. For now we treat any non-viewer id as a routing
-  // miss — the App-level redirect picks the viewer's id (or the
-  // agents-first fallback) on the next paint.
-  const dto =
+  const viewerDto =
     viewer.data
     && !isRegistrationRequired(viewer.data)
     && !isBackendUnreachable(viewer.data)
       ? viewer.data
       : null;
-  const reachable = dto != null && dto.id === userId;
+  const dto = viewerDto?.id === userId
+    ? viewerDto
+    : users.data?.find(user => user.id === userId) ?? null;
+  const isLoading = viewer.isLoading || users.isLoading;
+  const reachable = dto != null;
 
   useEffect(() => {
-    if (viewer.isLoading) return;
+    if (isLoading) return;
     if (!reachable) onUnreachable?.();
-  }, [reachable, viewer.isLoading, onUnreachable]);
+  }, [reachable, isLoading, onUnreachable]);
 
-  if (viewer.isLoading) {
+  if (isLoading) {
     return (
       <main
         className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"

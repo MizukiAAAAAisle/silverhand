@@ -12,6 +12,7 @@ import { Hash, Paperclip, X } from 'lucide-react';
 import type { AgentDto, ChannelConversationDto } from '@silverhand/shared';
 import { Button } from '@/components/ui/button';
 import { AgentAvatar } from '@/components/AgentAvatar';
+import { UserAvatar } from '@/components/UserAvatar';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import {
@@ -19,7 +20,9 @@ import {
   type ChannelListItem,
 } from '@/features/workspaces/hooks';
 import { useConversationById } from '@/features/conversations/useConversationById';
+import { useConversationMembers } from '@/features/conversations/useConversationMembers';
 import { useSendMessage } from '@/features/channels/hooks';
+import { useUsers } from '@/features/users/hooks';
 import {
   clearComposerDraft,
   dropSentAttachmentsFromDraft,
@@ -229,7 +232,33 @@ export function Composer({
   }, [conversationId, routeKind]);
 
   const { data: agents = [] } = useAgents();
+  const { data: users = [] } = useUsers();
+  const usersById = useMemo(() => {
+    const m = new Map<string, typeof users[number]>();
+    for (const user of users) m.set(user.id, user);
+    return m;
+  }, [users]);
+  const conversationMembers = useConversationMembers(conversationId);
+  const mentionHumans = useMemo<HumanMentionCandidate[]>(() => {
+    if (conversationMembers.status !== 'resolved') return [];
+    const out: HumanMentionCandidate[] = [];
+    const seen = new Set<string>();
+    for (const member of conversationMembers.members) {
+      if (member.kind !== 'human') continue;
+      if (seen.has(member.user_id)) continue;
+      seen.add(member.user_id);
+      const user = usersById.get(member.user_id);
+      out.push({
+        id: member.user_id,
+        name: user?.name ?? member.name,
+        display_name: user?.display_name ?? member.display_name,
+        avatar_url: user?.avatar_url ?? null,
+      });
+    }
+    return out;
+  }, [conversationMembers.status, conversationMembers.members, usersById]);
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
+  const humanAvatarUrls = useAgentAvatarObjectUrls(mentionHumans);
   // `#` autocomplete is scoped to the *current* conversation's
   // workspace — channel references in chat resolve per-workspace
   // (see Markdown.tsx CHANNEL_PREFIX → ChannelRef), so suggesting
@@ -253,10 +282,10 @@ export function Composer({
   const items = useMemo<PickerItem[]>(() => {
     if (!trigger) return [];
     if (trigger.kind === '@') {
-      return filterAgents(agents, trigger.query);
+      return filterMentionPeople(agents, mentionHumans, trigger.query);
     }
     return filterChannels(workspaceChannels, trigger.query);
-  }, [trigger, agents, workspaceChannels]);
+  }, [trigger, agents, mentionHumans, workspaceChannels]);
 
   const [active, setActive] = useState(0);
   // Keep the highlight in range as the candidate list shrinks/grows.
@@ -534,6 +563,7 @@ export function Composer({
             onPick={insertPick}
             onHover={setActive}
             agentAvatarUrls={agentAvatarUrls}
+            humanAvatarUrls={humanAvatarUrls}
           />
         ) : null}
         {/* Composer shell: border + bg + focus-ring live on the
@@ -576,7 +606,7 @@ export function Composer({
                 ? '会话已归档，无法发送'
                 : disabled
                   ? '会话已关闭，无法发送'
-                  : 'Enter 发送，Shift + Enter 换行，@agent，#channel'
+                  : 'Enter 发送，Shift + Enter 换行，@member，#channel'
             }
             // No bottom/right padding to dodge buttons anymore — they
             // live in the toolbar below. `min-h-[60px]` keeps the
@@ -756,21 +786,50 @@ function detectTrigger(text: string, caret: number): ActiveTrigger | null {
 
 // ── filtering ─────────────────────────────────────────────────────
 
-type PickerItem =
+export interface HumanMentionCandidate {
+  id: string;
+  name: string;
+  display_name: string;
+  avatar_url: string | null;
+}
+
+export type PickerItem =
   | { kind: 'agent'; agent: AgentDto }
+  | { kind: 'human'; human: HumanMentionCandidate }
   | { kind: 'channel'; channel: ChannelConversationDto };
 
-function filterAgents(agents: AgentDto[], query: string): PickerItem[] {
+export function filterMentionPeople(
+  agents: AgentDto[],
+  humans: HumanMentionCandidate[],
+  query: string,
+): PickerItem[] {
   const q = query.toLowerCase();
   // Empty query — show everything (capped) so the menu acts as a
-  // browser when the user just types `@` to explore.
-  const matched = q
+  // browser when the user just types `@` to explore. Human members are
+  // shown first in that browser case so they are not hidden behind the
+  // global agent list cap.
+  const matchedAgents = q
     ? agents.filter(a =>
         a.name.toLowerCase().includes(q) ||
         (a.display_name ?? '').toLowerCase().includes(q),
       )
     : agents;
-  return matched.slice(0, 8).map(agent => ({ kind: 'agent', agent }));
+  const matchedHumans = q
+    ? humans.filter(h =>
+        h.name.toLowerCase().includes(q) ||
+        h.display_name.toLowerCase().includes(q),
+      )
+    : humans;
+  const agentItems: PickerItem[] = matchedAgents.map(agent => ({
+    kind: 'agent',
+    agent,
+  }));
+  const humanItems: PickerItem[] = matchedHumans.map(human => ({
+    kind: 'human',
+    human,
+  }));
+  return (q ? [...agentItems, ...humanItems] : [...humanItems, ...agentItems])
+    .slice(0, 8);
 }
 
 /**
@@ -808,12 +867,14 @@ function PickerMenu({
   onPick,
   onHover,
   agentAvatarUrls,
+  humanAvatarUrls,
 }: {
   items: PickerItem[];
   active: number;
   onPick: (item: PickerItem) => void;
   onHover: (index: number) => void;
   agentAvatarUrls: Map<string, string | null>;
+  humanAvatarUrls: Map<string, string | null>;
 }): JSX.Element {
   return (
     <div
@@ -851,6 +912,11 @@ function PickerMenu({
               ? agentAvatarUrls.get(item.agent.id) ?? null
               : null
           }
+          humanAvatarUrl={
+            item.kind === 'human'
+              ? humanAvatarUrls.get(item.human.id) ?? null
+              : null
+          }
         />
       ))}
     </div>
@@ -863,12 +929,14 @@ function Row({
   onPick,
   onHover,
   agentAvatarUrl,
+  humanAvatarUrl,
 }: {
   item: PickerItem;
   active: boolean;
   onPick: () => void;
   onHover: () => void;
   agentAvatarUrl: string | null;
+  humanAvatarUrl: string | null;
 }): JSX.Element {
   const cls =
     'flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-left ' +
@@ -918,6 +986,24 @@ function Row({
             </div>
           </div>
         </>
+      ) : item.kind === 'human' ? (
+        <>
+          <UserAvatar
+            size={28}
+            avatarObjectUrl={humanAvatarUrl}
+            alt={item.human.display_name || item.human.name}
+          />
+          <div className="flex min-w-0 flex-1 flex-col leading-tight">
+            <span className="truncate text-sm font-medium text-text-primary">
+              {item.human.display_name?.trim() || item.human.name}
+            </span>
+            <div className="flex items-center gap-1.5 text-[11px] text-text-muted">
+              <span className="truncate font-mono">@{item.human.name}</span>
+              <span aria-hidden>·</span>
+              <span className="shrink-0">human</span>
+            </div>
+          </div>
+        </>
       ) : (
         // Channel rows are intentionally one line: the Hash glyph in
         // front already says "this is a channel", so we drop both the
@@ -936,9 +1022,9 @@ function Row({
 }
 
 function rowKey(item: PickerItem): string {
-  return item.kind === 'agent'
-    ? `a:${item.agent.id}`
-    : `c:${item.channel.id}`;
+  if (item.kind === 'agent') return `a:${item.agent.id}`;
+  if (item.kind === 'human') return `h:${item.human.id}`;
+  return `c:${item.channel.id}`;
 }
 
 /**
@@ -965,5 +1051,6 @@ function rowKey(item: PickerItem): string {
  */
 export function formatPickInsertion(item: PickerItem): string {
   if (item.kind === 'agent') return `@${item.agent.name}`;
+  if (item.kind === 'human') return `@${item.human.name}`;
   return `#conv:${item.channel.id}`;
 }

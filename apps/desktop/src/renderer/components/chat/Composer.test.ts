@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentDto, ChannelConversationDto } from '@silverhand/shared';
-import { formatPickInsertion } from './Composer';
+import {
+  filterMentionPeople,
+  formatPickInsertion,
+  type HumanMentionCandidate,
+} from './Composer';
 
 /**
  * Locks the two branches `formatPickInsertion` can produce so the
@@ -58,9 +62,25 @@ function channel(overrides: Partial<ChannelConversationDto> = {}): ChannelConver
   } as ChannelConversationDto;
 }
 
+function human(
+  overrides: Partial<HumanMentionCandidate> = {},
+): HumanMentionCandidate {
+  return {
+    id: 'u-1',
+    name: 'shiki',
+    display_name: 'Shiki',
+    avatar_url: null,
+    ...overrides,
+  };
+}
+
 describe('formatPickInsertion', () => {
   it('agent → @<name> (handle is always url-safe by schema)', () => {
     expect(formatPickInsertion({ kind: 'agent', agent: agent() })).toBe('@alice');
+  });
+
+  it('human → @<name> (same mention namespace as agents)', () => {
+    expect(formatPickInsertion({ kind: 'human', human: human() })).toBe('@shiki');
   });
 
   it('channel with handle-safe title → still #conv:<id> (no title shortcut)', () => {
@@ -112,5 +132,29 @@ describe('formatPickInsertion', () => {
         channel: channel({ id: 'feat0000000clidg', title: 'feature/cli design' }),
       }),
     ).toBe('#conv:feat0000000clidg');
+  });
+});
+
+describe('filterMentionPeople', () => {
+  it('includes human conversation members in @ picker results', () => {
+    const items = filterMentionPeople(
+      [agent({ id: 'a-1', name: 'alice', display_name: 'Alice' })],
+      [human({ id: 'u-1', name: 'shiki', display_name: 'Shiki' })],
+      'shi',
+    );
+
+    expect(items).toEqual([
+      { kind: 'human', human: human({ id: 'u-1', name: 'shiki', display_name: 'Shiki' }) },
+    ]);
+  });
+
+  it('shows humans before global agents for empty @ browse so they are not capped away', () => {
+    const items = filterMentionPeople(
+      [agent({ id: 'a-1', name: 'alice', display_name: 'Alice' })],
+      [human({ id: 'u-1', name: 'shiki', display_name: 'Shiki' })],
+      '',
+    );
+
+    expect(items[0]?.kind).toBe('human');
   });
 });
