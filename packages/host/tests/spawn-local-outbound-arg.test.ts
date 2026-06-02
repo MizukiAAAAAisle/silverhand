@@ -54,7 +54,11 @@ class FakeChild extends EventEmitter {
 }
 
 async function captureSpawnArgs(
-  localOutboundSocketPath?: string | null,
+  opts: {
+    localOutboundSocketPath?: string | null;
+    runtimePidRootDir?: string | null;
+    agentHomeRootDir?: string | null;
+  } = {},
 ): Promise<readonly string[]> {
   const socketPath = '/tmp/silverhand-fake.sock';
   let captured: readonly string[] = [];
@@ -75,7 +79,15 @@ async function captureSpawnArgs(
     alsoStderr: false,
     reclaimStaleDaemon: false,
     spawnProcess: spawnImpl,
-    ...(localOutboundSocketPath !== undefined ? { localOutboundSocketPath } : {}),
+    ...(opts.localOutboundSocketPath !== undefined
+      ? { localOutboundSocketPath: opts.localOutboundSocketPath }
+      : {}),
+    ...(opts.runtimePidRootDir !== undefined
+      ? { runtimePidRootDir: opts.runtimePidRootDir }
+      : {}),
+    ...(opts.agentHomeRootDir !== undefined
+      ? { agentHomeRootDir: opts.agentHomeRootDir }
+      : {}),
   });
   // Let the supervisor register its stdout listener, then hand it ready.
   await new Promise(resolve => setImmediate(resolve));
@@ -86,19 +98,55 @@ async function captureSpawnArgs(
 
 describe('spawnDaemonChild — local outbound socket arg forwarding (D5.a-3)', () => {
   it('forwards --local-outbound-socket-path when localOutboundSocketPath is set', async () => {
-    const args = await captureSpawnArgs('/tmp/silverhand-fake-outbound.sock');
+    const args = await captureSpawnArgs({
+      localOutboundSocketPath: '/tmp/silverhand-fake-outbound.sock',
+    });
     const idx = args.indexOf('--local-outbound-socket-path');
     expect(idx).toBeGreaterThanOrEqual(0);
     expect(args[idx + 1]).toBe('/tmp/silverhand-fake-outbound.sock');
   });
 
   it('omits the flag when localOutboundSocketPath is unset', async () => {
-    const args = await captureSpawnArgs(undefined);
+    const args = await captureSpawnArgs();
     expect(args).not.toContain('--local-outbound-socket-path');
   });
 
   it('omits the flag when localOutboundSocketPath is explicitly null', async () => {
-    const args = await captureSpawnArgs(null);
+    const args = await captureSpawnArgs({ localOutboundSocketPath: null });
     expect(args).not.toContain('--local-outbound-socket-path');
+  });
+
+  it('forwards --runtime-pid-root-dir when runtimePidRootDir is set', async () => {
+    const args = await captureSpawnArgs({
+      runtimePidRootDir: '/tmp/silverhand-fake-runtime-pids',
+    });
+    const idx = args.indexOf('--runtime-pid-root-dir');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe('/tmp/silverhand-fake-runtime-pids');
+  });
+
+  it('omits --runtime-pid-root-dir when runtimePidRootDir is unset or null', async () => {
+    const unsetArgs = await captureSpawnArgs();
+    expect(unsetArgs).not.toContain('--runtime-pid-root-dir');
+
+    const nullArgs = await captureSpawnArgs({ runtimePidRootDir: null });
+    expect(nullArgs).not.toContain('--runtime-pid-root-dir');
+  });
+
+  it('forwards --agent-home-root-dir when agentHomeRootDir is set', async () => {
+    const args = await captureSpawnArgs({
+      agentHomeRootDir: '/tmp/silverhand-fake-agent-home-root',
+    });
+    const idx = args.indexOf('--agent-home-root-dir');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe('/tmp/silverhand-fake-agent-home-root');
+  });
+
+  it('omits --agent-home-root-dir when agentHomeRootDir is unset or null', async () => {
+    const unsetArgs = await captureSpawnArgs();
+    expect(unsetArgs).not.toContain('--agent-home-root-dir');
+
+    const nullArgs = await captureSpawnArgs({ agentHomeRootDir: null });
+    expect(nullArgs).not.toContain('--agent-home-root-dir');
   });
 });

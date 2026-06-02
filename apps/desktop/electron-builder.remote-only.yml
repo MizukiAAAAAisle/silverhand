@@ -1,0 +1,62 @@
+# Remote-only package variant. Keep this intentionally close to
+# electron-builder.yml, but exclude embedded backend/native packages
+# and native unpack rules because @silverhand/server is aliased to a
+# desktop-local stub by electron.vite.config.ts.
+
+appId: com.silverhand.desktop
+productName: Silverhand-remote-server
+artifactName: ${productName}-${version}-${arch}.${ext}
+copyright: Copyright © 2026 Silverhand
+
+directories:
+  buildResources: build
+  output: release-remote-server
+
+npmRebuild: false
+nodeGypRebuild: false
+
+afterPack: scripts/afterPack.cjs
+
+files:
+  - out/**/*
+  - from: package.remote-only.json
+    to: package.json
+  - "!node_modules/@silverhand"
+  - "!node_modules/@silverhand/**"
+  - "!node_modules/@hono"
+  - "!node_modules/@hono/**"
+  - "!node_modules/hono"
+  - "!node_modules/hono/**"
+  - "!node_modules/better-sqlite3"
+  - "!node_modules/better-sqlite3/**"
+  - "!node_modules/@node-rs/argon2"
+  - "!node_modules/@node-rs/argon2/**"
+  - "!node_modules/@node-rs/argon2-darwin-arm64"
+  - "!node_modules/@node-rs/argon2-darwin-arm64/**"
+  - "!**/{tsconfig*.json,*.tsbuildinfo}"
+  - "!**/node_modules/*/{README.md,readme.md,*.d.ts,LICENSE*,license*}"
+  - "!**/node_modules/**/test/**"
+
+extraResources:
+  - from: ../../packages/cli/dist/cli.js
+    to: silverhand-cli/cli.mjs
+  - from: ../../packages/host/dist/daemon.js
+    to: silverhand-daemon/daemon.mjs
+
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch:
+        - arm64
+    - target: zip
+      arch:
+        - arm64
+  identity: null
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  icon: build/icon.icns
+
+dmg:
+  sign: false
+  writeUpdateInfo: false

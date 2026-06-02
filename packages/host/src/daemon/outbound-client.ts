@@ -868,35 +868,23 @@ export function hostConnectWebSocketUrl(serverUrl: string): string {
   // string. Strict allowlist must be enforced against the RAW
   // authority host on every hop.
   //
-  // D4.a Commit 1: the classifier now also returns
-  // `kind: 'remote'` for non-loopback https (and non-loopback http
-  // with the dev flag), but **this call site keeps the D3 loopback-
-  // only contract**: daemon outbound-WS does NOT attach to a remote
-  // backend yet — that's the G2 (D4.b) work-block. Until then,
-  // remote URLs are funneled through the same legacy error name so
-  // existing log greps / alerting on
-  // `tls_required_for_non_loopback_host_ws` still fire.
-  //
-  // When D4.b widens daemon-WS to accept remote backends, replace
-  // this guard with the same scheme/insecure decisioning the
-  // classifier surfaces, and re-derive a wss:// (or guarded ws://)
-  // URL from `classification.url`.
+  // Remote attach policy: non-loopback HTTPS is accepted and converted
+  // to `wss://.../api/hosts/connect`; non-loopback HTTP remains
+  // rejected unless a future caller explicitly opts into the dev-only
+  // insecure classifier flag. Keep the legacy error name for the
+  // non-loopback HTTP rejection so older daemon logs / runbooks still
+  // line up with the failure mode operators know.
   const classification = classifyServerUrl(serverUrl);
   if (!classification.ok) {
     if (classification.reason === 'insecure_remote_http_disallowed') {
-      // Pre-D4.b daemon contract: this is the same "non-loopback http
-      // is rejected" outcome the D3 code emitted, even though the
-      // typed rejection reason now points at the new dev-flag escape
-      // hatch. Preserve the legacy error name for ops continuity.
+      // Non-loopback http is still rejected at the daemon WS layer.
+      // Preserve the legacy error name for ops continuity.
       throw new Error('tls_required_for_non_loopback_host_ws');
     }
     if (classification.reason === 'obfuscated_loopback_disallowed') {
       // D4.a Commit 1 review — disguised loopback rejection. Map to
       // the same legacy error name so existing ops alerting on
-      // `tls_required_for_non_loopback_host_ws` still fires (the
-      // daemon's WS gate is still loopback-only in D4.a; this branch
-      // is just defense-in-depth against a hand-edited daemon-config
-      // that smuggled in an obfuscated loopback form).
+      // `tls_required_for_non_loopback_host_ws` still fires.
       throw new Error('tls_required_for_non_loopback_host_ws');
     }
     if (classification.reason === 'unsupported_scheme') {
@@ -904,17 +892,9 @@ export function hostConnectWebSocketUrl(serverUrl: string): string {
     }
     throw new Error(`invalid_server_url:${classification.reason}`);
   }
-  if (classification.kind === 'remote') {
-    // D4.a Commit 1 boundary: classifier admits remote, but daemon
-    // outbound-WS does not yet attach to remote backends — see
-    // comment block above. Emit the legacy error so the D3 contract
-    // is preserved verbatim from the caller's perspective.
-    // TODO(D4.b): widen daemon attach to remote backends here.
-    throw new Error('tls_required_for_non_loopback_host_ws');
-  }
   // Re-derive the WS URL from the parsed URL (path appended) so we
   // share the URL parser's normalization with the rest of the file
-  // (origin / port / etc.). The loopback gate already passed.
+  // (origin / port / etc.). The URL policy gate already passed.
   const url = new URL(apiPaths.hostConnect, classification.url);
   if (url.protocol === 'http:') {
     url.protocol = 'ws:';

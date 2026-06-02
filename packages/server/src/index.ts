@@ -31,6 +31,7 @@ export {
   SILVERHAND_DISABLE_SIGNUP_ENV,
   SILVERHAND_LISTEN_ENV,
   SILVERHAND_MIGRATE_ENV,
+  SILVERHAND_PUBLIC_ORIGIN_ENV,
   SILVERHAND_SERVER_LOG_LEVEL_ENV,
   ServerEnvConfigError,
   parseDataDir,
@@ -38,6 +39,7 @@ export {
   parseListen,
   parseLogLevel,
   parseMigrate,
+  parsePublicOrigin,
   resolveEmbeddedMigrationEnv,
   resolveStandaloneServerEnv,
   resolveMigrationEnv,
@@ -142,6 +144,10 @@ export async function startStandaloneSilverhandServer(
         value: config.migrate.value,
         source: config.migrate.source,
       },
+      publicOrigin: {
+        value: config.publicOrigin.value,
+        source: config.publicOrigin.source,
+      },
     },
     'silverhand-server config resolved',
   );
@@ -168,6 +174,9 @@ function standaloneServerConfig(config: StandaloneServerEnvConfig): ServerConfig
   return {
     mode: 'remote',
     url: urlForListen(config.listen.value),
+    ...(config.publicOrigin.value
+      ? { event_ws_allowed_origins: [config.publicOrigin.value] }
+      : {}),
     refresh_token: null,
     child_sessions: {
       max_concurrent_per_parent: null,

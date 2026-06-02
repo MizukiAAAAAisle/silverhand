@@ -46,6 +46,10 @@ describe('standalone server env config', () => {
       value: false,
       source: 'default',
     });
+    expect(resolved.publicOrigin).toEqual({
+      value: null,
+      source: 'default',
+    });
 
     expect(resolveStandaloneServerEnv({ SILVERHAND_MIGRATE: '1' }).migrate).toEqual({
       value: true,
@@ -90,6 +94,23 @@ describe('standalone server env config', () => {
     expect(() =>
       resolveStandaloneServerEnv({ SILVERHAND_MIGRATE: 'true' }),
     ).toThrow(ServerEnvConfigError);
+    expect(() =>
+      resolveStandaloneServerEnv({ SILVERHAND_PUBLIC_ORIGIN: 'wss://example.test' }),
+    ).toThrow(ServerEnvConfigError);
+    expect(() =>
+      resolveStandaloneServerEnv({ SILVERHAND_PUBLIC_ORIGIN: 'https://example.test/ws' }),
+    ).toThrow(ServerEnvConfigError);
+  });
+
+  it('resolves standalone public origin for reverse-proxy event WS origin checks', () => {
+    const resolved = resolveStandaloneServerEnv({
+      SILVERHAND_PUBLIC_ORIGIN: 'https://proxy.example.test/',
+    });
+
+    expect(resolved.publicOrigin).toEqual({
+      value: 'https://proxy.example.test',
+      source: 'env',
+    });
   });
 
   it('boots standalone in control-plane mode without embedded bootstrap', async () => {
@@ -102,11 +123,15 @@ describe('standalone server env config', () => {
         SILVERHAND_DATA_DIR: dataDir,
         SILVERHAND_DISABLE_SIGNUP: '1',
         SILVERHAND_LOG_LEVEL: 'warn',
+        SILVERHAND_PUBLIC_ORIGIN: 'https://proxy.example.test/',
       },
     });
     try {
       expect(running.context.deploymentMode).toBe('standalone');
       expect(running.context.serverConfig.mode).toBe('remote');
+      expect(running.context.serverConfig.event_ws_allowed_origins).toEqual([
+        'https://proxy.example.test',
+      ]);
       expect(running.context.embeddedBootstrap.enabled).toBe(false);
 
       const health = await fetch(`${running.url}/api/health`);

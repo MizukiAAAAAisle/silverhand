@@ -104,7 +104,15 @@ function isWebSocketUpgrade(req: IncomingMessage): boolean {
 function hasExpectedOrigin(req: IncomingMessage, ctx: BackendContext): boolean {
   const origin = req.headers.origin;
   if (typeof origin !== 'string') return false;
-  return origin === new URL(ctx.serverConfig.url).origin;
+  return eventWsAllowedOrigins(ctx).has(origin);
+}
+
+function eventWsAllowedOrigins(ctx: BackendContext): Set<string> {
+  const origins = new Set<string>([new URL(ctx.serverConfig.url).origin]);
+  for (const configured of ctx.serverConfig.event_ws_allowed_origins ?? []) {
+    origins.add(new URL(configured).origin);
+  }
+  return origins;
 }
 
 function resolveViewerUserIdFromCookie(

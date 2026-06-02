@@ -13,8 +13,10 @@
 #      would crash at startup.
 #   3. Run electron-builder, which packages the .app bundle and dmg.
 #
-# Usage: ./scripts/package.sh [--dir]
-#   --dir   skip dmg creation, only produce the .app (faster iteration)
+# Usage: ./scripts/package.sh [--dir] [--remote-only --server-url <origin>]
+#   --dir          skip dmg creation, only produce the .app (faster iteration)
+#   --remote-only  package a Desktop build without embedded backend/server code
+#   --server-url   bake a default backend origin into the app
 
 set -euo pipefail
 
@@ -25,14 +27,35 @@ cd "$ROOT_DIR"
 source "$ROOT_DIR/scripts/_native.sh"
 
 DIR_ONLY=0
-for arg in "$@"; do
-  case "$arg" in
-    --dir) DIR_ONLY=1 ;;
+REMOTE_ONLY=0
+SERVER_URL=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dir)
+      DIR_ONLY=1
+      shift
+      ;;
+    --remote-only)
+      REMOTE_ONLY=1
+      shift
+      ;;
+    --server-url)
+      if [[ $# -lt 2 ]]; then
+        echo "[package] --server-url requires a value" >&2
+        exit 2
+      fi
+      SERVER_URL="$2"
+      shift 2
+      ;;
+    --server-url=*)
+      SERVER_URL="${1#--server-url=}"
+      shift
+      ;;
     -h|--help)
-      echo "Usage: $0 [--dir]"
+      echo "Usage: $0 [--dir] [--remote-only --server-url <origin>]"
       exit 0
       ;;
-    *) echo "unknown arg: $arg" >&2; exit 2 ;;
+    *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
 
@@ -40,6 +63,63 @@ if ! command -v pnpm >/dev/null 2>&1; then
   echo "[package] pnpm not found" >&2
   exit 1
 fi
+
+validate_server_url() {
+  local raw="$1"
+  local remote_only="$2"
+  node - "$raw" "$remote_only" "${SILVERHAND_ALLOW_INSECURE_REMOTE:-}" <<'NODE'
+const raw = process.argv[2].trim();
+const remoteOnly = process.argv[3] === '1';
+const allowInsecureRemote = process.argv[4] === '1';
+
+function fail(message) {
+  console.error(`[package] invalid --server-url: ${message}`);
+  process.exit(2);
+}
+
+function isLoopback(hostname) {
+  const h = hostname.toLowerCase();
+  return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]';
+}
+
+if (!raw) fail('value is empty');
+
+let url;
+try {
+  url = new URL(raw);
+} catch (err) {
+  fail(err instanceof Error ? err.message : String(err));
+}
+
+if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+  fail('only http:// and https:// origins are supported');
+}
+if (url.pathname !== '/' || url.search !== '' || url.hash !== '') {
+  fail('value must be an origin, for example https://backend.example.com');
+}
+
+const loopback = isLoopback(url.hostname);
+if (remoteOnly && loopback) {
+  fail('remote-only packages require a non-loopback remote URL');
+}
+if (url.protocol === 'http:' && !loopback && !allowInsecureRemote) {
+  fail('non-loopback http requires SILVERHAND_ALLOW_INSECURE_REMOTE=1');
+}
+
+process.stdout.write(url.origin);
+NODE
+}
+
+if [[ -n "$SERVER_URL" ]]; then
+  SERVER_URL="$(validate_server_url "$SERVER_URL" "$REMOTE_ONLY")"
+fi
+if [[ "$REMOTE_ONLY" == "1" && -z "$SERVER_URL" ]]; then
+  echo "[package] --remote-only requires --server-url <origin>" >&2
+  exit 2
+fi
+
+export SILVERHAND_DESKTOP_REMOTE_ONLY="$REMOTE_ONLY"
+export SILVERHAND_DESKTOP_DEFAULT_SERVER_URL="$SERVER_URL"
 
 # electron-builder downloads the per-arch Electron zip from GitHub
 # releases by default; from CN networks that connection EOFs partway
@@ -49,6 +129,12 @@ fi
 export ELECTRON_MIRROR="${ELECTRON_MIRROR:-https://npmmirror.com/mirrors/electron/}"
 export ELECTRON_BUILDER_BINARIES_MIRROR="${ELECTRON_BUILDER_BINARIES_MIRROR:-https://npmmirror.com/mirrors/electron-builder-binaries/}"
 echo "[package] ELECTRON_MIRROR=$ELECTRON_MIRROR"
+if [[ "$REMOTE_ONLY" == "1" ]]; then
+  echo "[package] remote-only Desktop enabled"
+fi
+if [[ -n "$SERVER_URL" ]]; then
+  echo "[package] packaged default server URL: $SERVER_URL"
+fi
 
 # electron-builder 26's dmg-builder fetches a self-contained `dmgbuild` bundle
 # (Python + tooling) from electron-userland/electron-builder-binaries via
@@ -155,18 +241,29 @@ if [[ -z "$ELECTRON_ABI" ]]; then
   exit 1
 fi
 
-locate_binding
-ensure_binding "$ELECTRON_ABI" \
-  "pnpm --filter @silverhand/desktop exec electron-rebuild -f -w better-sqlite3" \
-  "package (electron $ELECTRON_VERSION)"
+if [[ "$REMOTE_ONLY" == "1" ]]; then
+  echo "[package] remote-only: skipping better-sqlite3 Electron ABI swap"
+else
+  locate_binding
+  ensure_binding "$ELECTRON_ABI" \
+    "pnpm --filter @silverhand/desktop exec electron-rebuild -f -w better-sqlite3" \
+    "package (electron $ELECTRON_VERSION)"
+fi
+
+BUILDER_CONFIG="electron-builder.yml"
+ARTIFACT_OUTPUT_DIR="release"
+if [[ "$REMOTE_ONLY" == "1" ]]; then
+  BUILDER_CONFIG="electron-builder.remote-only.yml"
+  ARTIFACT_OUTPUT_DIR="release-remote-server"
+fi
 
 if [[ "$DIR_ONLY" == "1" ]]; then
   echo "[package] running electron-builder --dir"
-  ( cd "$ROOT_DIR/apps/desktop" && pnpm exec electron-builder --mac --dir --config electron-builder.yml )
+  ( cd "$ROOT_DIR/apps/desktop" && pnpm exec electron-builder --mac --dir --config "$BUILDER_CONFIG" )
 else
   stage_dmgbuild_bundle
   echo "[package] running electron-builder"
-  ( cd "$ROOT_DIR/apps/desktop" && pnpm exec electron-builder --mac --config electron-builder.yml )
+  ( cd "$ROOT_DIR/apps/desktop" && pnpm exec electron-builder --mac --config "$BUILDER_CONFIG" )
 fi
 
-echo "[package] artifacts in apps/desktop/release/"
+echo "[package] artifacts in apps/desktop/$ARTIFACT_OUTPUT_DIR/"

@@ -3,7 +3,7 @@ import type {
   AgentWorkspaceFileReadParams,
   AgentWorkspaceFileReadResult,
 } from '../../protocol.js';
-import { computeAgentDir } from '../agent-materialize/index.js';
+import { resolveAgentDir } from '../agent-materialize/index.js';
 import { AgentWorkspaceFsError } from './error.js';
 import { parseAndResolveVirtualPath } from './parse-virtual-path.js';
 
@@ -39,6 +39,8 @@ import { parseAndResolveVirtualPath } from './parse-virtual-path.js';
 export interface ReadAgentWorkspaceFileDeps {
   /** Parent dir for agent-home resolution. Default: daemon's homedir. */
   homeDir?: string;
+  /** Exact root for agent-home resolution. Takes precedence over homeDir. */
+  agentHomeRootDir?: string;
 }
 
 const MAX_PREVIEW_BYTES = 64 * 1024;
@@ -48,7 +50,7 @@ export async function readAgentWorkspaceFile(
   params: AgentWorkspaceFileReadParams,
   deps: ReadAgentWorkspaceFileDeps = {},
 ): Promise<AgentWorkspaceFileReadResult> {
-  const baseDir = computeAgentDir(params.agent_id, deps.homeDir);
+  const baseDir = resolveAgentDir(params.agent_id, deps);
   let resolved;
   try {
     resolved = await parseAndResolveVirtualPath(params.path, baseDir);

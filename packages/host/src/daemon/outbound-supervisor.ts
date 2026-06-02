@@ -235,7 +235,8 @@ export class OutboundSupervisor {
 
     // Verify the URL is acceptable to the WS layer before we tear
     // down the old client. This catches "loopback http -> ws OK,
-    // non-loopback http -> tls_required" and unsupported schemes.
+    // remote https -> wss OK, non-loopback http -> tls_required" and
+    // unsupported schemes.
     try {
       hostConnectWebSocketUrl(probe.config.server_url);
     } catch (err) {
@@ -370,11 +371,11 @@ export class OutboundSupervisor {
     }
 
     // Validate the new server_url before deciding swap-or-keep. This
-    // catches the case where the user (or a stale field) wrote a
-    // non-loopback URL straight into the file, bypassing the Settings
-    // UI validation. Delegates to `classifyServerUrl` via
-    // `hostConnectWebSocketUrl` so the V1 loopback-only lock applies
-    // here just as it does at attach time.
+    // catches the case where the user (or a stale field) wrote an
+    // insecure remote URL straight into the file, bypassing the
+    // Settings UI validation. Delegates to `classifyServerUrl` via
+    // `hostConnectWebSocketUrl` so the daemon WS policy applies here
+    // just as it does at attach time.
     try {
       hostConnectWebSocketUrl(probe.config.server_url);
     } catch (err) {

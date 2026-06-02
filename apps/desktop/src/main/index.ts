@@ -35,8 +35,18 @@ import {
   type RunningBackend,
   type FileLogger,
 } from '@silverhand/server';
+import {
+  DESKTOP_REMOTE_ONLY,
+  PACKAGED_DEFAULT_SERVER_URL,
+} from '../build-flags.js';
 import { HostClient, spawnDaemonChild, type DaemonHandle } from '@silverhand/host';
-import { loadOrCreateServerConfig, silverhandDir, writeServerConfig } from './config.js';
+import {
+  electronUserDataPath,
+  loadOrCreateServerConfig,
+  silverhandDir,
+  writeServerConfig,
+} from './config.js';
+import { resolveEffectiveBootProfile } from './desktop-build-config.js';
 import { waitForDaemonGeneration } from './daemon-generation-attach.js';
 import { applyFatalExitToClaim } from './local-host-failure.js';
 import {
@@ -120,9 +130,25 @@ type BackendHandle =
   | { readonly kind: 'embedded'; readonly running: RunningBackend }
   | RemoteBackendHandle;
 
+class RemoteOnlyServerProfileRequiredError extends Error {
+  constructor(reason: string) {
+    super(
+      `This Silverhand Desktop package was built as remote-only, but no ` +
+        `usable remote server profile is available. ${reason} ` +
+        `Repackage with --server-url <https-origin>, or save a non-loopback ` +
+        `remote server profile before launching this build.`,
+    );
+    this.name = 'RemoteOnlyServerProfileRequiredError';
+  }
+}
+
 let backend: BackendHandle | null = null;
 let daemon: DaemonHandle | null = null;
 let hostClient: HostClient | null = null;
+
+if (process.env.SILVERHAND_DIR) {
+  app.setPath('userData', electronUserDataPath());
+}
 let logger: FileLogger | null = null;
 let loggers: CategorizedLoggers | null = null;
 let mainWindow: BrowserWindow | null = null;
@@ -426,6 +452,8 @@ interface DaemonPaths {
   socketPath: string;
   pidFilePath: string;
   logDir: string;
+  runtimePidRootDir: string;
+  agentHomeRootDir: string;
   hostConfigPath: string;
   /** Local outbound frame socket — the daemon binds it and the embedded
    *  backend dials it for the D5.a R4-unified outbound envelope. */
@@ -442,6 +470,8 @@ function daemonPaths(): DaemonPaths {
     socketPath: join(runDir, 'daemon.sock'),
     pidFilePath: join(runDir, 'daemon.pid'),
     logDir: join(silverhandDir(), 'logs'),
+    runtimePidRootDir: join(runDir, 'runtime-pids'),
+    agentHomeRootDir: join(silverhandDir(), 'agents'),
     hostConfigPath: daemonHostConfigPath(silverhandDir()),
     localOutboundSocketPath: join(runDir, 'daemon-outbound.sock'),
   };
@@ -1627,7 +1657,7 @@ async function bootstrap(): Promise<void> {
     // local 0600 profile reader and the strict env helpers
     // in `@silverhand/shared/config`. See `backend-boot-mode.ts` for
     // the full decision matrix and the trip-wire rationale.
-    const bootProfileView = readServerConnectionProfileViewOrNull({
+    const savedBootProfileView = readServerConnectionProfileViewOrNull({
       silverhandRoot: silverhandDir(),
       logger: logger
         ? {
@@ -1636,10 +1666,43 @@ async function bootstrap(): Promise<void> {
           }
         : undefined,
     });
+    const allowInsecureRemote = readAllowInsecureRemoteFlag(process.env);
+    const forceEmbedded = readForceEmbeddedFlag(process.env);
+    const effectiveBootProfile = resolveEffectiveBootProfile({
+      savedProfileView: savedBootProfileView,
+      packagedDefaultServerUrl: PACKAGED_DEFAULT_SERVER_URL,
+      allowInsecureRemote,
+      remoteOnly: DESKTOP_REMOTE_ONLY,
+    });
+    if (effectiveBootProfile.warning) {
+      logger.warn(
+        {
+          reason: effectiveBootProfile.warning.reason,
+          packagedDefaultServerUrl: PACKAGED_DEFAULT_SERVER_URL,
+          remoteOnly: DESKTOP_REMOTE_ONLY,
+        },
+        effectiveBootProfile.warning.message,
+      );
+    }
+    if (effectiveBootProfile.source === 'packaged_default') {
+      logger.info(
+        {
+          serverUrl: effectiveBootProfile.profileView.server_url,
+          remoteOnly: DESKTOP_REMOTE_ONLY,
+        },
+        'desktop packaged default server URL selected for boot',
+      );
+    }
+    if (DESKTOP_REMOTE_ONLY && forceEmbedded) {
+      logger.warn(
+        {},
+        'SILVERHAND_FORCE_EMBEDDED=1 ignored because this package is remote-only',
+      );
+    }
     const bootDecision = decideBackendBootMode({
-      profileView: bootProfileView,
-      forceEmbedded: readForceEmbeddedFlag(process.env),
-      allowInsecureRemote: readAllowInsecureRemoteFlag(process.env),
+      profileView: effectiveBootProfile.profileView,
+      forceEmbedded: DESKTOP_REMOTE_ONLY ? false : forceEmbedded,
+      allowInsecureRemote,
     });
     // D4.a Commit 5d — convert the boot decision into a startup plan
     // via the pure adapter (`backend-boot-mode.ts`). The adapter is
@@ -1672,6 +1735,21 @@ async function bootstrap(): Promise<void> {
         profileUrl: startupPlan.profileUrl,
         classifyMessage: startupPlan.classifyMessage,
       });
+    }
+    if (DESKTOP_REMOTE_ONLY && startupPlan.mode !== 'remote') {
+      logger.error(
+        {
+          startupPlan,
+          packagedDefaultServerUrl: PACKAGED_DEFAULT_SERVER_URL,
+          effectiveProfileSource: effectiveBootProfile.source,
+        },
+        'remote-only desktop refused embedded backend startup',
+      );
+      throw new RemoteOnlyServerProfileRequiredError(
+        startupPlan.mode === 'embedded'
+          ? `Boot decision landed on embedded/${startupPlan.embeddedReason}.`
+          : 'Boot decision did not land on remote mode.',
+      );
     }
     if (startupPlan.mode === 'remote') {
       logger.info(
@@ -1718,6 +1796,8 @@ async function bootstrap(): Promise<void> {
       socketPath: paths.socketPath,
       pidFilePath: paths.pidFilePath,
       logDir: paths.logDir,
+      runtimePidRootDir: paths.runtimePidRootDir,
+      agentHomeRootDir: paths.agentHomeRootDir,
       // D5.a-3: the daemon binds its local outbound frame server here so
       // the embedded backend can dial it and speak the same outbound
       // envelope as the standalone WSS path (R4 unification). This is the

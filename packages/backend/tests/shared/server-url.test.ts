@@ -412,9 +412,9 @@ describe('classifyServerUrl — V1 acceptance policy', () => {
 
   it('the success arm carries kind:"loopback" for loopback inputs', () => {
     // Pin the loopback discriminant. Callers branching on
-    // `kind === 'loopback'` (e.g. the daemon outbound-WS gate that
-    // preserves the D3 loopback-only contract until D4.b) MUST be
-    // revisited whenever this changes.
+    // `kind === 'loopback'` (e.g. daemon branches that keep loopback
+    // HTTP distinct from remote HTTPS) MUST be revisited whenever
+    // this changes.
     const out = classifyServerUrl('http://localhost:18080');
     expect(out.ok).toBe(true);
     if (out.ok) expect(out.kind).toBe('loopback');

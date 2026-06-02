@@ -6,7 +6,7 @@ import type {
   AgentWorkspaceIndexResult,
 } from '../../protocol.js';
 import { DaemonTypedError } from '../typed-error.js';
-import { computeAgentDir } from '../agent-materialize/index.js';
+import { resolveAgentDir } from '../agent-materialize/index.js';
 import { WorkspaceRegistry, WorkspaceRegistryError } from './registry.js';
 
 /**
@@ -36,6 +36,8 @@ export interface IndexAgentWorkspacesDeps {
   registry: WorkspaceRegistry;
   /** Parent dir for agent-home resolution. Default: daemon's homedir(). */
   homeDir?: string;
+  /** Exact root for agent-home resolution. Takes precedence over homeDir. */
+  agentHomeRootDir?: string;
 }
 
 export async function indexAgentWorkspaces(
@@ -51,7 +53,7 @@ export async function indexAgentWorkspaces(
     if (isAgentHomeWorkspaceId(workspaceId, params.agent_id)) {
       entries.push({
         workspace_id: workspaceId,
-        agent_dir: computeAgentDir(params.agent_id, deps.homeDir),
+        agent_dir: resolveAgentDir(params.agent_id, deps),
       });
       continue;
     }

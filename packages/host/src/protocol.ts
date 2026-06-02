@@ -1001,8 +1001,7 @@ export type HostOutboundDetachResult = z.infer<
 //                                  client kept.
 //       - `invalid_server_url`   — `hostConnectWebSocketUrl` threw on
 //                                  the NEW server_url (e.g. user edited
-//                                  to a non-loopback host that bypassed
-//                                  Settings UI validation). Old client
+//                                  to insecure remote HTTP). Old client
 //                                  kept.
 //
 // Result shape mirrors `host_outbound_attach`: discriminated on a

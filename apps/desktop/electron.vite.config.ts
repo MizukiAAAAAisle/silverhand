@@ -3,6 +3,10 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { resolve } from 'node:path';
 
+const remoteOnly = process.env.SILVERHAND_DESKTOP_REMOTE_ONLY === '1';
+const packagedDefaultServerUrl =
+  process.env.SILVERHAND_DESKTOP_DEFAULT_SERVER_URL ?? '';
+
 const workspaceDeps = [
   '@silverhand/shared',
   '@silverhand/backend',
@@ -19,6 +23,22 @@ const nativeExternalDeps = [
 
 export default defineConfig({
   main: {
+    define: {
+      __SILVERHAND_DESKTOP_REMOTE_ONLY__: JSON.stringify(remoteOnly),
+      __SILVERHAND_DESKTOP_DEFAULT_SERVER_URL__: JSON.stringify(
+        packagedDefaultServerUrl,
+      ),
+    },
+    resolve: {
+      alias: remoteOnly
+        ? {
+            '@silverhand/server': resolve(
+              __dirname,
+              'src/main/remote-only-server-stub.ts',
+            ),
+          }
+        : {},
+    },
     plugins: [externalizeDepsPlugin({ exclude: workspaceDeps })],
     build: {
       rollupOptions: {
@@ -28,6 +48,12 @@ export default defineConfig({
     },
   },
   preload: {
+    define: {
+      __SILVERHAND_DESKTOP_REMOTE_ONLY__: JSON.stringify(remoteOnly),
+      __SILVERHAND_DESKTOP_DEFAULT_SERVER_URL__: JSON.stringify(
+        packagedDefaultServerUrl,
+      ),
+    },
     plugins: [externalizeDepsPlugin({ exclude: workspaceDeps })],
     build: {
       rollupOptions: {

@@ -17,6 +17,16 @@
  *                         the D5.a R4-unified outbound envelope). When
  *                         omitted the daemon does not start the local
  *                         outbound server.
+ *   --runtime-pid-root-dir <abs>
+ *                         optional; root for runtime child pidfiles.
+ *                         Desktop passes a SILVERHAND_DIR-scoped path
+ *                         so two app instances cannot reap each other's
+ *                         runtime children.
+ *   --agent-home-root-dir <abs>
+ *                         optional; root for daemon-owned agent L1
+ *                         dirs. Desktop passes `<SILVERHAND_DIR>/agents`
+ *                         so remote-only smoke apps do not write into
+ *                         global `~/.silverhand/agents`.
  *   --stderr              optional; mirror log lines to stderr too
  *
  * Stdout:
@@ -47,6 +57,8 @@ interface ParsedArgv {
   logDir: string;
   hostConfigPath: string | null;
   localOutboundSocketPath: string | null;
+  runtimePidRootDir: string | null;
+  agentHomeRootDir: string | null;
   alsoStderr: boolean;
 }
 
@@ -56,6 +68,8 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
   let logDir: string | null = null;
   let hostConfigPath: string | null = null;
   let localOutboundSocketPath: string | null = null;
+  let runtimePidRootDir: string | null = null;
+  let agentHomeRootDir: string | null = null;
   let alsoStderr = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -74,6 +88,12 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
         break;
       case '--local-outbound-socket-path':
         localOutboundSocketPath = argv[++i] ?? null;
+        break;
+      case '--runtime-pid-root-dir':
+        runtimePidRootDir = argv[++i] ?? null;
+        break;
+      case '--agent-home-root-dir':
+        agentHomeRootDir = argv[++i] ?? null;
         break;
       case '--stderr':
         alsoStderr = true;
@@ -94,12 +114,20 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
   if (localOutboundSocketPath !== null && !localOutboundSocketPath.startsWith('/')) {
     return { error: '--local-outbound-socket-path must be absolute' };
   }
+  if (runtimePidRootDir !== null && !runtimePidRootDir.startsWith('/')) {
+    return { error: '--runtime-pid-root-dir must be absolute' };
+  }
+  if (agentHomeRootDir !== null && !agentHomeRootDir.startsWith('/')) {
+    return { error: '--agent-home-root-dir must be absolute' };
+  }
   return {
     socketPath,
     pidFilePath,
     logDir,
     hostConfigPath,
     localOutboundSocketPath,
+    runtimePidRootDir,
+    agentHomeRootDir,
     alsoStderr,
   };
 }
@@ -117,6 +145,8 @@ async function main(): Promise<void> {
       logDir: parsed.logDir,
       hostConfigPath: parsed.hostConfigPath,
       localOutboundSocketPath: parsed.localOutboundSocketPath,
+      runtimePidRootDir: parsed.runtimePidRootDir ?? undefined,
+      agentHomeRootDir: parsed.agentHomeRootDir ?? undefined,
       installSignals: true,
       writeStdoutHandshake: true,
       alsoStderr: parsed.alsoStderr,

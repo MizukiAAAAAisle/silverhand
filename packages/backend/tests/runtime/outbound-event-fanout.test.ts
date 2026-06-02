@@ -787,6 +787,21 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
+  it('explicit start with an empty pending inbox dispatches runtime_start without startup_delivery', async () => {
+    const fix = makeFixture({ runtime: 'codex' });
+    try {
+      await expect(
+        fix.fanout.start(fix.channelId, fix.agentId),
+      ).resolves.toBeUndefined();
+      const start = fix.transport.calls.find(c => c.kind === 'runtime_start');
+      expect(start).toBeDefined();
+      expect(start?.opts?.expectedConnectionId).toBe('conn-1');
+      expect(start?.params).not.toHaveProperty('startup_delivery');
+    } finally {
+      fix.cleanup();
+    }
+  });
+
   // P1-2 — the dispatched `runtime_start` carries the resolved server URL,
   // never a placeholder. The fanout reads `serverUrl()` lazily at dispatch
   // time; production index.ts wires `() => ctx.serverConfig.url` and only

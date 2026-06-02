@@ -122,10 +122,18 @@ function SetupWizardBody({
   // confirmed empty.
   useEffect(() => {
     let cancelled = false;
-    window.agentHub
-      .getServerConnectionProfile()
-      .then(view => {
+    Promise.allSettled([
+      window.agentHub.getServerConnectionProfile(),
+      window.agentHub.getDesktopBuildConfig(),
+    ])
+      .then(results => {
         if (cancelled) return;
+        const view =
+          results[0].status === 'fulfilled' ? results[0].value : null;
+        const buildConfig =
+          results[1].status === 'fulfilled'
+            ? results[1].value
+            : { remote_only: false, default_server_url: '' };
         if (view) {
           setCurrent({
             serverUrl: view.server_url,
@@ -136,6 +144,9 @@ function SetupWizardBody({
           setServerUrl(view.server_url);
         } else {
           setCurrent(null);
+          if (buildConfig.default_server_url.length > 0) {
+            setServerUrl(buildConfig.default_server_url);
+          }
         }
       })
       .catch(() => {

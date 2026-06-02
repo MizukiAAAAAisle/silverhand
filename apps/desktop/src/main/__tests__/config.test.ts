@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SERVER_CONFIG_FILENAME } from '@silverhand/shared';
 import {
+  electronUserDataPath,
   loadOrCreateServerConfig,
   writeServerConfig,
 } from '../config.js';
@@ -60,6 +61,13 @@ describe('desktop server config', () => {
     await writeServerConfig(config);
     const raw = readConfig(tmp);
     expect(raw).not.toHaveProperty('auth_token');
+  });
+
+  it('derives isolated Electron userData under the silverhand root', () => {
+    tmp = mkdtempSync(join(tmpdir(), 'silverhand-config-'));
+    expect(electronUserDataPath(tmp)).toBe(
+      join(tmp, 'desktop', 'electron-user-data'),
+    );
   });
 });
 

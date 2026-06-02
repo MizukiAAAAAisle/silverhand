@@ -5,7 +5,10 @@ import {
   RuntimeStartResolveError,
   type RuntimeStartResolveDeps,
 } from '../src/daemon/runtime-start-resolve.js';
-import { computeAgentDir } from '../src/daemon/agent-materialize/handler.js';
+import {
+  computeAgentDir,
+  computeAgentDirFromRoot,
+} from '../src/daemon/agent-materialize/handler.js';
 import { testStartOptions } from './_helpers/runtime-start-options.js';
 import type { StartOptions } from '../src/protocol.js';
 
@@ -82,6 +85,24 @@ describe('resolveRuntimeStartPaths — agent_home workspace', () => {
     expect(resolved.agent.home_dir).toBe(computeAgentDir('a9', HOME));
     // The valid ref is THIS agent's own home workspace id.
     expect(resolved.workspace.id).toBe(agentHomeWorkspaceId('a9'));
+  });
+
+  it('uses agentHomeRootDir for agent.home_dir and agent_home workspace paths', () => {
+    const agentHomeRootDir = '/tmp/isolated-silverhand/agents';
+    const options = testStartOptions({
+      agentId: 'a9',
+      workspaceKind: 'agent_home',
+    });
+    const resolved = resolveRuntimeStartPaths(options, {
+      agentHomeRootDir,
+      resolveRegularWorkspacePath: () => {
+        throw new Error('registry must not be consulted for agent_home');
+      },
+    });
+    const expected = computeAgentDirFromRoot('a9', agentHomeRootDir);
+    expect(resolved.agent.home_dir).toBe(expected);
+    expect(resolved.workspace.path).toBe(expected);
+    expect(resolved.workspace_memory_index[0]!.path).toBe(expected);
   });
 
   it('fails closed when an agent_home ref carries a FOREIGN home id (no silent normalization)', () => {

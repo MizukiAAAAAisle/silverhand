@@ -83,6 +83,7 @@ interface SupervisorFixture {
   writeInvalidJson(name?: string): string;
   writeInvalidShape(name?: string): string;
   writeNonLoopbackHttp(name?: string): string;
+  writeRemoteHttps(name?: string): string;
   writeDirectory(name?: string): string;
   cleanup(): void;
 }
@@ -141,6 +142,15 @@ function makeFixture(): SupervisorFixture {
         name,
         JSON.stringify({
           server_url: 'http://example.com:8765',
+          host_id: 'host-1',
+          host_token: 'token-1',
+        }),
+      ),
+    writeRemoteHttps: (name = 'daemon-config-remote-https.json') =>
+      writeJson(
+        name,
+        JSON.stringify({
+          server_url: 'https://example.com:8765',
           host_id: 'host-1',
           host_token: 'token-1',
         }),
@@ -238,6 +248,18 @@ describe('OutboundSupervisor — validation matrix (fail-closed; never mutates a
     const res = f.supervisor.attach({ config_path: path });
     expect(res).toMatchObject({ attached: false, reason: 'invalid_server_url' });
     expect(f.spawned).toEqual([]);
+  });
+
+  it('accepts remote https server_url for daemon outbound attach', () => {
+    f = makeFixture();
+    const path = f.writeRemoteHttps();
+    const res = f.supervisor.attach({ config_path: path });
+    expect(res).toMatchObject({
+      attached: true,
+      action: 'started',
+      config_path: path,
+    });
+    expect(f.spawned).toHaveLength(1);
   });
 
   it('CRITICAL: a failed validation attempt MUST NOT stop or restart the currently-active outbound client', () => {
@@ -417,7 +439,7 @@ describe('OutboundSupervisor — idempotency matrix (started / noop / switched)'
     if (!first.attached) throw new Error('unreachable');
 
     // Plant a config that would fail URL classification on a fresh
-    // attach (V1 loopback-only gate).
+    // attach (non-loopback HTTP still requires TLS).
     writeFileSync(
       path,
       JSON.stringify({
@@ -732,11 +754,11 @@ describe('OutboundSupervisor — reload() (D3.c Commit 2)', () => {
     expect(f.spawned[0]!.stopCalls).toEqual([]);
   });
 
-  it('invalid_server_url (non-loopback host snuck into the file) → leaves old client running and returns reason=invalid_server_url', () => {
-    // Defense-in-depth: Settings UI rejects non-loopback (Commit 4),
-    // main re-validates (Commit 3), AND daemon checks here. Tests
-    // pin the daemon-side gate — a hand-edited config carrying a
-    // non-loopback host gets rejected without taking down the old
+  it('invalid_server_url (non-loopback http snuck into the file) → leaves old client running and returns reason=invalid_server_url', () => {
+    // Defense-in-depth: non-loopback http is rejected unless the
+    // process explicitly opts into the dev-only insecure remote flag.
+    // Tests pin the daemon-side gate — a hand-edited config carrying
+    // insecure remote http gets rejected without taking down the old
     // client, even if the upper layers somehow allow it through.
     f = makeFixture();
     const path = f.writeValidConfig();

@@ -199,6 +199,15 @@ export interface SpawnDaemonOptions {
    * backend against this daemon. Forwarded as
    * `--local-outbound-socket-path` to the daemon entry. */
   localOutboundSocketPath?: string | null;
+  /** Root for runtime pidfiles owned by this daemon. Desktop passes a
+   *  path under SILVERHAND_DIR so parallel isolated apps do not reap
+   *  each other's runtime children. Omit to let daemon entry use its
+   *  legacy default. */
+  runtimePidRootDir?: string | null;
+  /** Root for daemon-owned agent L1 dirs. Desktop passes a
+   *  SILVERHAND_DIR-scoped path so isolated apps do not materialize
+   *  agents under the global user profile. */
+  agentHomeRootDir?: string | null;
   /** Mirror daemon log lines to stderr too. Default true in dev. */
   alsoStderr?: boolean;
   /** Max time to wait for the `ready` handshake. Default 10_000ms. */
@@ -366,6 +375,12 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
       ...(opts.hostConfigPath ? ['--host-config', opts.hostConfigPath] : []),
       ...(opts.localOutboundSocketPath
         ? ['--local-outbound-socket-path', opts.localOutboundSocketPath]
+        : []),
+      ...(opts.runtimePidRootDir
+        ? ['--runtime-pid-root-dir', opts.runtimePidRootDir]
+        : []),
+      ...(opts.agentHomeRootDir
+        ? ['--agent-home-root-dir', opts.agentHomeRootDir]
         : []),
       ...(alsoStderr ? ['--stderr'] : []),
     ];

@@ -27,7 +27,112 @@
 //   with a Developer ID identity + notarization.
 
 const { execFileSync } = require("node:child_process");
+const { createHash } = require("node:crypto");
+const { createRequire } = require("node:module");
+const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
+
+function loadAsar(projectDir) {
+  const projectRequire = createRequire(path.join(projectDir, "package.json"));
+  const builderRequire = createRequire(
+    projectRequire.resolve("electron-builder/package.json"),
+  );
+  return builderRequire("@electron/asar");
+}
+
+function asarHeaderSha256Hex(asar, filePath) {
+  return createHash("sha256")
+    .update(asar.getRawHeader(filePath).headerString)
+    .digest("hex");
+}
+
+function updateElectronAsarIntegrity(appPath, asarPath, asar) {
+  const infoPlistPath = path.join(appPath, "Contents", "Info.plist");
+  if (!fs.existsSync(infoPlistPath)) {
+    return;
+  }
+
+  try {
+    execFileSync(
+      "/usr/libexec/PlistBuddy",
+      [
+        "-c",
+        "Print :ElectronAsarIntegrity:Resources/app.asar:hash",
+        infoPlistPath,
+      ],
+      { stdio: "ignore" },
+    );
+  } catch {
+    return;
+  }
+
+  const nextHash = asarHeaderSha256Hex(asar, asarPath);
+  execFileSync(
+    "/usr/libexec/PlistBuddy",
+    [
+      "-c",
+      `Set :ElectronAsarIntegrity:Resources/app.asar:hash ${nextHash}`,
+      infoPlistPath,
+    ],
+    { stdio: "inherit" },
+  );
+  console.log(
+    `[afterPack] ElectronAsarIntegrity header hash updated to ${nextHash}`,
+  );
+}
+
+async function rewriteRemoteOnlyAsar(context, appPath) {
+  if (process.env.SILVERHAND_DESKTOP_REMOTE_ONLY !== "1") {
+    return;
+  }
+
+  const resourcesDir = path.join(appPath, "Contents", "Resources");
+  const asarPath = path.join(resourcesDir, "app.asar");
+  const remoteOnlyPackagePath = path.join(
+    context.packager.projectDir,
+    "package.remote-only.json",
+  );
+  if (!fs.existsSync(asarPath)) {
+    throw new Error(`[afterPack] remote-only asar not found: ${asarPath}`);
+  }
+  if (!fs.existsSync(remoteOnlyPackagePath)) {
+    throw new Error(
+      `[afterPack] remote-only package metadata not found: ${remoteOnlyPackagePath}`,
+    );
+  }
+
+  const asar = loadAsar(context.packager.projectDir);
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "silverhand-remote-asar-"));
+  const nextAsarPath = `${asarPath}.next`;
+  try {
+    asar.extractAll(asarPath, tmpDir);
+
+    const nodeModulesDir = path.join(tmpDir, "node_modules");
+    if (fs.existsSync(nodeModulesDir)) {
+      for (const entry of fs.readdirSync(nodeModulesDir)) {
+        if (entry === "zod") continue;
+        fs.rmSync(path.join(nodeModulesDir, entry), {
+          recursive: true,
+          force: true,
+        });
+      }
+    }
+    fs.copyFileSync(remoteOnlyPackagePath, path.join(tmpDir, "package.json"));
+    fs.rmSync(nextAsarPath, { force: true });
+    await asar.createPackageWithOptions(tmpDir, nextAsarPath, {});
+    fs.renameSync(nextAsarPath, asarPath);
+    updateElectronAsarIntegrity(appPath, asarPath, asar);
+    fs.rmSync(path.join(resourcesDir, "app.asar.unpacked"), {
+      recursive: true,
+      force: true,
+    });
+    console.log("[afterPack] remote-only app.asar pruned and metadata replaced");
+  } finally {
+    fs.rmSync(nextAsarPath, { force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
 
 exports.default = async function afterPack(context) {
   if (context.electronPlatformName !== "darwin") {
@@ -36,6 +141,8 @@ exports.default = async function afterPack(context) {
 
   const appName = `${context.packager.appInfo.productFilename}.app`;
   const appPath = path.join(context.appOutDir, appName);
+
+  await rewriteRemoteOnlyAsar(context, appPath);
 
   console.log(`[afterPack] ad-hoc deep-signing ${appPath}`);
   execFileSync("codesign", ["--deep", "--force", "--sign", "-", appPath], {

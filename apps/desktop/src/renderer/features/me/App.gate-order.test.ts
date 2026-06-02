@@ -69,6 +69,10 @@ const COPY_LOADING = 'Loading';
 // the whole `window` object so any unsolicited access surfaces as
 // `agentHub.<method> is not a function` rather than `undefined`.
 const agentHub = {
+  getDesktopBuildConfig: vi.fn(() => Promise.resolve({
+    remote_only: false,
+    default_server_url: '',
+  })),
   getAuthState: vi.fn(),
   getBackendInfo: vi.fn(),
   backendRequest: vi.fn(),

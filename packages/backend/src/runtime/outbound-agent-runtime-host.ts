@@ -13,6 +13,12 @@ const UNAVAILABLE_REASON =
   'agent runtime is unavailable: no outbound daemon transport is attached for this host';
 
 export interface OutboundAgentRuntimeProjection {
+  /**
+   * User/API requested start. Uses pending inbox rows as startup_delivery
+   * when available, but still dispatches a direct runtime_start when the
+   * runtime is crashed/stopped and there is no new message to drain.
+   */
+  start(conversationId: string, agentId: string): Promise<void>;
   startDeliveryBacked(conversationId: string, agentId: string): Promise<boolean>;
   /**
    * D4.b-4: dispatch `runtime_stop` to the daemon over the outbound
@@ -93,9 +99,7 @@ export class HostRuntimeDisabledError extends Error {
  * no runtime state itself — every method delegates to the
  * {@link OutboundAgentRuntimeProjection} (the fanout). When no daemon is
  * attached the projection's dispatch path throws a typed
- * `transport_no_connection`, which routes map to 503 `host_attach_pending`;
- * `start` additionally returns false-then-throws `HostRuntimeDisabledError`
- * (409) when there is nothing delivery-backed to start.
+ * `transport_no_connection`, which routes map to 503 `host_attach_pending`.
  *
  * (Formerly `ControlPlaneRuntimeHost`; renamed in D5.a-3 once embedded and
  * standalone became one path — the "control-plane only" framing no longer
@@ -112,11 +116,11 @@ export class OutboundAgentRuntimeHost implements AgentRuntimeHost {
     agentId: string,
     _opts: StartOptions = {},
   ): Promise<void> {
-    const handled = await this.projection?.()?.startDeliveryBacked(
-      conversationId,
-      agentId,
-    );
-    if (handled) return;
+    const projection = this.projection?.();
+    if (projection) {
+      await projection.start(conversationId, agentId);
+      return;
+    }
     throw this.unavailable('start', { conversationId, agentId });
   }
 

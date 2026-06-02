@@ -7,6 +7,7 @@ import {
   AGENT_HOME_TEMPLATE_VERSION,
   AgentMaterializeError,
   computeAgentDir,
+  computeAgentDirFromRoot,
   materializeAgent,
   readSentinel,
 } from '../../src/daemon/agent-materialize/index.js';
@@ -85,6 +86,20 @@ describe('materializeAgent — §4.6 decision tree', () => {
       runtime: 'claude',
       materialized_at: 1_700_000_000_000,
     });
+  });
+
+  it('uses agentHomeRootDir when provided', async () => {
+    const agentHomeRootDir = join(homeDir, 'isolated-agents');
+    const result = await materializeAgent(baseParams(), {
+      agentHomeRootDir,
+      now: () => 1_700_000_000_000,
+    });
+
+    const agentDir = computeAgentDirFromRoot('aid_abc', agentHomeRootDir);
+    expect(result.agent_dir).toBe(agentDir);
+    expect(result.agent_home_workspace_path).toBe(agentDir);
+    expect(existsSync(join(agentDir, 'system_prompt.md'))).toBe(true);
+    expect(existsSync(computeAgentDir('aid_abc', homeDir))).toBe(false);
   });
 
   it('idempotent re-call: all three sentinel fields match → ok without rewrite', async () => {

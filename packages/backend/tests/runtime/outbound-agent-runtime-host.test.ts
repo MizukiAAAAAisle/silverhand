@@ -20,6 +20,9 @@ function makeSpyProjection(): {
 } {
   const calls: string[] = [];
   const projection: OutboundAgentRuntimeProjection = {
+    start: async (...a) => {
+      calls.push(`start:${a.join(',')}`);
+    },
     startDeliveryBacked: async (...a) => {
       calls.push(`startDeliveryBacked:${a.join(',')}`);
       return true;
@@ -130,27 +133,25 @@ describe('OutboundAgentRuntimeHost', () => {
     ).rejects.toBeInstanceOf(HostRuntimeDisabledError);
   });
 
-  it('start returns (no throw) when the projection reports delivery-backed', async () => {
+  it('start delegates to the projection', async () => {
     const { projection, calls } = makeSpyProjection();
     const host = new OutboundAgentRuntimeHost(SILENT_LOGGER, () => projection);
     await expect(host.start('conv-1', 'agent-1')).resolves.toBeUndefined();
-    expect(calls).toContain('startDeliveryBacked:conv-1,agent-1');
+    expect(calls).toContain('start:conv-1,agent-1');
   });
 
-  it('start throws when projection reports nothing delivery-backed (false)', async () => {
+  it('start propagates projection failures', async () => {
     const calls: string[] = [];
     const projection = {
       ...makeSpyProjection().projection,
-      startDeliveryBacked: async () => {
-        calls.push('startDeliveryBacked');
-        return false;
+      start: async () => {
+        calls.push('start');
+        throw new Error('start failed');
       },
     } satisfies OutboundAgentRuntimeProjection;
     const host = new OutboundAgentRuntimeHost(SILENT_LOGGER, () => projection);
-    await expect(host.start('conv-1', 'agent-1')).rejects.toBeInstanceOf(
-      HostRuntimeDisabledError,
-    );
-    expect(calls).toEqual(['startDeliveryBacked']);
+    await expect(host.start('conv-1', 'agent-1')).rejects.toThrow('start failed');
+    expect(calls).toEqual(['start']);
   });
 
   it('reconcileOnBoot is a no-op and does not throw', () => {

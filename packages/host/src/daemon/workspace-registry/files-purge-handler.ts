@@ -1,5 +1,4 @@
 import { promises as fs } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type {
   AgentFilesPurgeErrorCode,
@@ -7,7 +6,7 @@ import type {
   AgentFilesPurgeResult,
 } from '../../protocol.js';
 import { DaemonTypedError } from '../typed-error.js';
-import { computeAgentDir } from '../agent-materialize/handler.js';
+import { resolveAgentDir } from '../agent-materialize/handler.js';
 import { WorkspaceRegistry, WorkspaceRegistryError } from './registry.js';
 
 /**
@@ -46,6 +45,8 @@ export interface PurgeAgentFilesDeps {
   registry: WorkspaceRegistry;
   /** Parent dir L1 is computed under. Production: `~`. Tests: tmp dir. */
   homeDir?: string;
+  /** Exact root L1 is computed under. Takes precedence over homeDir. */
+  agentHomeRootDir?: string;
 }
 
 export async function purgeAgentFiles(
@@ -58,7 +59,7 @@ export async function purgeAgentFiles(
   let skippedUnprovisioned = 0;
 
   if (params.scope === 'all') {
-    targets.push(computeAgentDir(params.agent_id, deps.homeDir ?? homedir()));
+    targets.push(resolveAgentDir(params.agent_id, deps));
   }
 
   for (const workspaceId of params.workspace_ids) {

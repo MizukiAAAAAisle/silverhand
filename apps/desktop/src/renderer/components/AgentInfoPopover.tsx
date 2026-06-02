@@ -188,7 +188,7 @@ export function AgentInfoPopover({
               {agent.description}
             </p>
           ) : null}
-          {conversationId ? (
+          {conversationId && !management ? (
             <RetryRow
               agentId={agent.id}
               conversationId={conversationId}
@@ -304,7 +304,9 @@ function AgentManagementActions({
   };
   const restart = async (): Promise<void> => {
     if (pending) return;
-    await stop.mutateAsync({ agentId: agent.id, mode: 'hard' });
+    if (row.status === 'active' || row.status === 'starting') {
+      await stop.mutateAsync({ agentId: agent.id, mode: 'hard' });
+    }
     await start.mutateAsync(agent.id);
   };
   const stopAgent = (): void => {

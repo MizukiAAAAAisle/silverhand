@@ -420,9 +420,15 @@ export type DesktopClearProfileResult =
   | { ok: true; cleared: boolean }
   | { ok: false; reason: 'unlink_failed'; detail: string };
 
+export interface DesktopBuildConfig {
+  remote_only: boolean;
+  default_server_url: string;
+}
+
 declare global {
   interface Window {
     agentHub: {
+      getDesktopBuildConfig(): Promise<DesktopBuildConfig>;
       getBackendInfo(): Promise<BackendInfo | null>;
       getAuthState(): Promise<DesktopAuthState>;
       signup(input: AuthSignupInput): Promise<DesktopAuthResult>;

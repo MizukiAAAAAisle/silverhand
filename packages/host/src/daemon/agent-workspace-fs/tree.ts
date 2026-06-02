@@ -8,7 +8,7 @@ import type {
   AgentWorkspaceTreeParams,
   AgentWorkspaceTreeResult,
 } from '../../protocol.js';
-import { computeAgentDir } from '../agent-materialize/index.js';
+import { resolveAgentDir } from '../agent-materialize/index.js';
 import { AgentWorkspaceFsError } from './error.js';
 import {
   isAllowedSegmentName,
@@ -46,6 +46,8 @@ import {
 export interface ListAgentWorkspaceTreeDeps {
   /** Parent dir for agent-home resolution. Default: daemon's homedir. */
   homeDir?: string;
+  /** Exact root for agent-home resolution. Takes precedence over homeDir. */
+  agentHomeRootDir?: string;
 }
 
 const MAX_NODES = 5000;
@@ -54,7 +56,7 @@ export async function listAgentWorkspaceTree(
   params: AgentWorkspaceTreeParams,
   deps: ListAgentWorkspaceTreeDeps = {},
 ): Promise<AgentWorkspaceTreeResult> {
-  const baseDir = computeAgentDir(params.agent_id, deps.homeDir);
+  const baseDir = resolveAgentDir(params.agent_id, deps);
   const nodes: AgentWorkspaceTreeNode[] = [];
   try {
     const base = await resolveAgentHomeBase(baseDir);

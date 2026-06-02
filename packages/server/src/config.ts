@@ -9,6 +9,7 @@ export const SILVERHAND_DATA_DIR_ENV = 'SILVERHAND_DATA_DIR';
 export const SILVERHAND_DISABLE_SIGNUP_ENV = 'SILVERHAND_DISABLE_SIGNUP';
 export const SILVERHAND_SERVER_LOG_LEVEL_ENV = 'SILVERHAND_LOG_LEVEL';
 export const SILVERHAND_MIGRATE_ENV = 'SILVERHAND_MIGRATE';
+export const SILVERHAND_PUBLIC_ORIGIN_ENV = 'SILVERHAND_PUBLIC_ORIGIN';
 
 export const DEFAULT_SILVERHAND_LISTEN = '127.0.0.1:8080';
 export const DEFAULT_SILVERHAND_DATA_DIR = '/var/lib/silverhand';
@@ -35,6 +36,7 @@ export interface StandaloneServerEnvConfig {
   disableSignup: ResolvedValue<boolean>;
   logLevel: ResolvedValue<SilverhandLogLevel>;
   migrate: ResolvedValue<boolean>;
+  publicOrigin: ResolvedValue<string | null>;
 }
 
 export class ServerEnvConfigError extends Error {
@@ -76,6 +78,12 @@ export function resolveStandaloneServerEnv(
       DEFAULT_SILVERHAND_SERVER_LOG_LEVEL,
     ),
     migrate: resolveMigrationEnv(env),
+    publicOrigin: resolveValue<string | null>(
+      env[SILVERHAND_PUBLIC_ORIGIN_ENV],
+      parsePublicOrigin,
+      SILVERHAND_PUBLIC_ORIGIN_ENV,
+      null,
+    ),
   };
 }
 
@@ -178,6 +186,35 @@ export function parseLogLevel(
     variable,
     `must be one of ${SILVERHAND_LOG_LEVELS.join(', ')}`,
   );
+}
+
+export function parsePublicOrigin(
+  raw: string,
+  variable = SILVERHAND_PUBLIC_ORIGIN_ENV,
+): string {
+  const value = raw.trim();
+  if (!value) throw new ServerEnvConfigError(variable, 'must not be empty');
+
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new ServerEnvConfigError(variable, `must be a valid URL: ${message}`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new ServerEnvConfigError(variable, 'must use http:// or https://');
+  }
+  if (parsed.username || parsed.password) {
+    throw new ServerEnvConfigError(variable, 'must not include userinfo');
+  }
+  if (parsed.pathname !== '/' || parsed.search || parsed.hash) {
+    throw new ServerEnvConfigError(
+      variable,
+      'must be an origin URL without path, query, or fragment',
+    );
+  }
+  return parsed.origin;
 }
 
 function parseBoolean01(raw: string, variable: string): boolean {

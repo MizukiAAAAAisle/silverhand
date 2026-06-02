@@ -81,6 +81,13 @@ export interface MaterializeAgentDeps {
    * Production: `~`. Tests: a tmp directory. Default: `homedir()`.
    */
   homeDir?: string;
+  /**
+   * Override the exact root under which per-agent L1 dirs live.
+   * Production Desktop passes `<SILVERHAND_DIR>/agents` so isolated
+   * app launches do not write L1 files into the global user profile.
+   * Takes precedence over `homeDir`.
+   */
+  agentHomeRootDir?: string;
   /** Override `Date.now()` so tests can pin `materialized_at`. */
   now?: () => number;
   /**
@@ -107,6 +114,22 @@ export function computeAgentDir(agentId: string, homeDir = homedir()): string {
   return join(homeDir, '.silverhand', 'agents', agentId);
 }
 
+export function computeAgentDirFromRoot(
+  agentId: string,
+  agentHomeRootDir: string,
+): string {
+  return join(agentHomeRootDir, agentId);
+}
+
+export function resolveAgentDir(
+  agentId: string,
+  deps: Pick<MaterializeAgentDeps, 'homeDir' | 'agentHomeRootDir'> = {},
+): string {
+  return deps.agentHomeRootDir
+    ? computeAgentDirFromRoot(agentId, deps.agentHomeRootDir)
+    : computeAgentDir(agentId, deps.homeDir);
+}
+
 /**
  * Run the §4.6 decision tree and return a typed result.
  *
@@ -121,7 +144,7 @@ export async function materializeAgent(
   deps: MaterializeAgentDeps = {},
 ): Promise<AgentMaterializeResult> {
   const now = deps.now ?? Date.now;
-  const agentDir = computeAgentDir(params.agent_id, deps.homeDir);
+  const agentDir = resolveAgentDir(params.agent_id, deps);
 
   // 1. Resolve the template before touching disk so an
   //    unsupported choice fails fast without leaving a half-

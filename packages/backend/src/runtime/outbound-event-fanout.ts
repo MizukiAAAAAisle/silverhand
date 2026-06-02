@@ -984,6 +984,55 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     }
   }
 
+  async start(conversationId: string, agentId: string): Promise<void> {
+    if (await this.startDeliveryBacked(conversationId, agentId)) return;
+    await this.startDirect(conversationId, agentId);
+  }
+
+  private async startDirect(
+    conversationId: string,
+    agentId: string,
+  ): Promise<void> {
+    const hostId = this.hostIdForAgent(agentId);
+    const connectionId = this.connectedConnectionId(hostId, 'runtime_start');
+    const state = this.stateForHost(hostId);
+    const entry = this.cacheEntryForLiveConnection(
+      state,
+      connectionId,
+      conversationId,
+      agentId,
+    );
+    if (entry && entry.phase !== 'idle' && entry.phase !== 'exited') {
+      return;
+    }
+    if (!this.runtimeStartHostsConsistent(hostId, conversationId, agentId)) {
+      throw new Error(
+        'runtime_start blocked: referenced workspace is owned by a different host',
+      );
+    }
+    const backfillOk = await this.backfillRuntimeStartWorkspaces(
+      hostId,
+      conversationId,
+      agentId,
+    );
+    if (!backfillOk) {
+      throw new Error(
+        'runtime_start blocked: workspace registry backfill incomplete',
+      );
+    }
+    const transport = this.requireTransport();
+    await transport.sendCommand(
+      hostId,
+      'runtime_start',
+      {
+        conversation_id: conversationId,
+        agent_id: agentId,
+        options: this.runtimeStartOptions(conversationId, agentId),
+      } satisfies RuntimeStartParams,
+      { timeoutMs: 60_000, expectedConnectionId: connectionId },
+    );
+  }
+
   private runtimeStartOptions(
     conversationId: string,
     agentId: string,

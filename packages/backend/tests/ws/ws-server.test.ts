@@ -105,6 +105,27 @@ describe('event WebSocket server', () => {
     ).rejects.toThrow();
   });
 
+  it('accepts configured public origins for event websocket upgrades', async () => {
+    t = buildTestApp();
+    t.ctx.serverConfig = {
+      ...t.ctx.serverConfig,
+      event_ws_allowed_origins: ['https://proxy.example.test/'],
+    };
+    server = await openServer(t);
+
+    const { ws, authenticated } = await connectAuthenticated(
+      server.url,
+      t.ctx.authSessions.issueSession({ userId: 'local' }).userToken,
+      { origin: 'https://proxy.example.test' },
+    );
+    sockets.push(ws);
+
+    expect(authenticated).toMatchObject({
+      type: 'authenticated',
+      viewerId: 'local',
+    });
+  });
+
   it('subscribes to app scope and receives scoped events', async () => {
     t = buildTestApp();
     server = await openServer(t);

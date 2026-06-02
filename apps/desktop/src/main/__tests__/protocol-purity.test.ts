@@ -199,6 +199,70 @@ describe('desktop protocol purity catalogue', () => {
     );
   });
 
+  it('remote-only main build aliases @silverhand/server to a desktop-local stub', () => {
+    const config = readFileSync(
+      join(desktopRoot, 'electron.vite.config.ts'),
+      'utf8',
+    );
+    const stub = readFileSync(
+      join(mainRoot, 'remote-only-server-stub.ts'),
+      'utf8',
+    );
+
+    expect(config).toMatch(/SILVERHAND_DESKTOP_REMOTE_ONLY/);
+    expect(config).toMatch(/@silverhand\/server/);
+    expect(config).toMatch(/remote-only-server-stub\.ts/);
+    expect(stub).not.toMatch(/@silverhand\/server|@silverhand\/backend/);
+    expect(stub).toMatch(/startEmbeddedSilverhandServer/);
+    expect(stub).toMatch(/remote-only/);
+  });
+
+  it('remote-only package config excludes embedded backend/native runtime packages', () => {
+    const config = readFileSync(
+      join(desktopRoot, 'electron-builder.remote-only.yml'),
+      'utf8',
+    );
+    const packageScript = readFileSync(
+      join(desktopRoot, '../../scripts/package.sh'),
+      'utf8',
+    );
+    const afterPackScript = readFileSync(
+      join(desktopRoot, 'scripts/afterPack.cjs'),
+      'utf8',
+    );
+    const remoteOnlyPackage = readFileSync(
+      join(desktopRoot, 'package.remote-only.json'),
+      'utf8',
+    );
+
+    expect(config).toMatch(/appId:\s*com\.silverhand\.desktop/);
+    expect(config).toMatch(/productName:\s*Silverhand-remote-server/);
+    expect(config).toMatch(/artifactName:\s*\$\{productName\}-\$\{version\}-\$\{arch\}\.\$\{ext\}/);
+    expect(config).toMatch(/output:\s*release-remote-server/);
+    for (const dep of [
+      '@hono',
+      'hono',
+      'better-sqlite3',
+      '@node-rs/argon2',
+      '@node-rs/argon2-darwin-arm64',
+    ]) {
+      expect(config).toContain(`!node_modules/${dep}`);
+    }
+    expect(config).not.toMatch(/^asarUnpack:/m);
+    expect(packageScript).toMatch(/--remote-only/);
+    expect(packageScript).toMatch(/--server-url/);
+    expect(packageScript).toMatch(/SILVERHAND_DESKTOP_REMOTE_ONLY/);
+    expect(config).toMatch(/package\.remote-only\.json/);
+    expect(remoteOnlyPackage).toContain('"zod"');
+    expect(remoteOnlyPackage).not.toMatch(
+      /@hono|hono|better-sqlite3|@node-rs\/argon2|@silverhand\/server|@silverhand\/backend/,
+    );
+    expect(afterPackScript).toMatch(/rewriteRemoteOnlyAsar/);
+    expect(afterPackScript).toMatch(/SILVERHAND_DESKTOP_REMOTE_ONLY/);
+    expect(afterPackScript).toMatch(/package\.remote-only\.json/);
+    expect(afterPackScript).toMatch(/ElectronAsarIntegrity/);
+  });
+
   it('keeps bundled workspace packages out of packaged app runtime dependencies', () => {
     const workspaceRuntimeDeps = Object.keys(desktopPackage.dependencies)
       .filter(name => name.startsWith('@silverhand/'))

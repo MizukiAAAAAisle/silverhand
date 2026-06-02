@@ -8,7 +8,9 @@
 export {
   AgentMaterializeError,
   computeAgentDir,
+  computeAgentDirFromRoot,
   materializeAgent,
+  resolveAgentDir,
   type MaterializeAgentDeps,
 } from './handler.js';
 export {

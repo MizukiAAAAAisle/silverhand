@@ -1033,7 +1033,7 @@ const RESPONSES_SUCCESS: WireFixture[] = [
   {
     name: 'response/host_outbound_reload-failed-invalid_server_url',
     description:
-      'Reload refusal: new server_url failed loopback policy gate (e.g. user hand-edited to a non-loopback host bypassing Settings UI). Old client untouched.',
+      'Reload refusal: new server_url failed daemon WS policy gate (e.g. user hand-edited to insecure remote HTTP). Old client untouched.',
     frame: enc({
       id: 'req-outbound-reload',
       result: {

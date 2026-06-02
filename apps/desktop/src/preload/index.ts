@@ -8,6 +8,10 @@ import type {
   TlsErrorCode,
   UserDto,
 } from '@silverhand/shared';
+import {
+  desktopBuildConfig,
+  type DesktopBuildConfig,
+} from '../build-flags.js';
 
 export interface BackendInfo {
   url: string;
@@ -328,6 +332,8 @@ export type DesktopClearProfileResult =
   | { ok: false; reason: 'unlink_failed'; detail: string };
 
 const api = {
+  getDesktopBuildConfig: async (): Promise<DesktopBuildConfig> =>
+    desktopBuildConfig(),
   getBackendInfo: (): Promise<BackendInfo | null> => ipcRenderer.invoke('backend:info'),
   getAuthState: (): Promise<DesktopAuthState> => ipcRenderer.invoke('auth:getState'),
   signup: (input: AuthSignupInput): Promise<DesktopAuthResult> =>

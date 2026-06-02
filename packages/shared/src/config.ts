@@ -15,6 +15,7 @@ export const ServerConfigSchema = z.object({
   mode: ServerModeSchema,
   url: z.string().url(),
   auth_token: z.string().min(16).optional(),
+  event_ws_allowed_origins: z.array(z.string().url()).optional(),
   refresh_token: z.string().nullable().default(null),
   child_sessions: ChildSessionLimitsSchema.default({
     max_concurrent_per_parent: null,

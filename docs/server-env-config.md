@@ -27,9 +27,15 @@ runtime difference is explicit config (`mode='embedded'` plus a daemon
 | `SILVERHAND_DISABLE_SIGNUP` | `0` | `0` or `1` | `disableSignup.source` |
 | `SILVERHAND_LOG_LEVEL` | `info` | `error`, `warn`, `info`, or `debug` | `logLevel.source` |
 | `SILVERHAND_MIGRATE` | standalone: `0`; embedded desktop: `1` | `0` or `1` | `migrate.source` |
+| `SILVERHAND_PUBLIC_ORIGIN` | unset | `http://` or `https://` origin, no path/query/fragment | `publicOrigin.source` |
 
 `source` is `default` when the process used the default and `env` when the
 variable was supplied. Invalid values fail before the HTTP listener starts.
+
+Set `SILVERHAND_PUBLIC_ORIGIN` when the process is reached through a reverse
+proxy, sandbox ingress, or other public URL whose browser `Origin` differs from
+the internal `SILVERHAND_LISTEN` URL. The backend event WebSocket accepts both
+the bound server origin and this configured public origin.
 
 ## Data Layout
 

@@ -297,13 +297,14 @@ function ActiveChannelView({
       : `Stop ${routeKind === 'thread' ? 'Thread' : 'Channel'} agents`;
   const restartAgents = useCallback(async () => {
     if (agentActionDisabled) return;
-    for (const agentId of agentIds) {
-      await stopAgent.mutateAsync({ agentId, mode: 'hard' });
+    for (const agent of channelAgents) {
+      if (agent.status !== 'active' && agent.status !== 'starting') continue;
+      await stopAgent.mutateAsync({ agentId: agent.agent_id, mode: 'hard' });
     }
     for (const agentId of agentIds) {
       await startAgent.mutateAsync(agentId);
     }
-  }, [agentActionDisabled, agentIds, startAgent, stopAgent]);
+  }, [agentActionDisabled, agentIds, channelAgents, startAgent, stopAgent]);
   const stopAgents = useCallback(async () => {
     if (agentActionDisabled) return;
     for (const agentId of agentIds) {

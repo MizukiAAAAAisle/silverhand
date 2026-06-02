@@ -110,6 +110,13 @@ export interface RunDaemonOptions {
    *  fixtures. */
   runtimePidRootDir?: string | null;
   /**
+   * Root for daemon-owned per-agent L1 dirs. Omit to keep the legacy
+   * `~/.silverhand/agents/<id>` default; Desktop passes
+   * `<SILVERHAND_DIR>/agents` so remote-only smoke apps can be fully
+   * isolated from the user's normal profile.
+   */
+  agentHomeRootDir?: string | null;
+  /**
    * Persistent daemon identity file. Four resolution cases:
    *
    *   - `=== null` — skip reading/creating any identity file; the
@@ -407,6 +414,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   const silverhandStateRoot =
     opts.testHooks?.silverhandStateRoot ?? dirname(workspaceRegistryStateDir);
   const legacyWorkspacesRoot = join(silverhandStateRoot, 'workspaces');
+  const agentHomeRootDir = opts.agentHomeRootDir ?? undefined;
   const resolveRegistryBinding = (): RegistryBinding | null => {
     if (localOutboundServer != null) {
       return {
@@ -427,6 +435,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   // corrupt registry, or no binding at all, → hard `registry_unavailable`.
   const runtimeStartResolveDeps = {
     homeDir: opts.testHooks?.agentMaterializeHomeDir,
+    agentHomeRootDir,
     resolveRegularWorkspacePath: (workspaceId: string): string => {
       const binding = resolveRegistryBinding();
       if (binding == null) {
@@ -489,6 +498,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
       if (fault) throw fault;
       return materializeAgent(params, {
         homeDir: opts.testHooks?.agentMaterializeHomeDir,
+        agentHomeRootDir,
       });
     },
     // D4.e-1 — workspace_provision: bind a regular workspace into the
@@ -534,6 +544,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
       return indexAgentWorkspaces(params, {
         registry,
         homeDir: opts.testHooks?.agentMaterializeHomeDir,
+        agentHomeRootDir,
       });
     },
     // #task:811 — agent_workspace_tree: flat tree of every visible
@@ -544,6 +555,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     agentWorkspaceTreeHandler: async params =>
       listAgentWorkspaceTree(params, {
         homeDir: opts.testHooks?.agentMaterializeHomeDir,
+        agentHomeRootDir,
       }),
     // #task:811 — agent_workspace_file_read: read one file from the
     // agent home dir by virtual path. The helper enforces the
@@ -553,6 +565,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     agentWorkspaceFileReadHandler: async params =>
       readAgentWorkspaceFile(params, {
         homeDir: opts.testHooks?.agentMaterializeHomeDir,
+        agentHomeRootDir,
       }),
     // D4.e-3 — agent_l2_seed: seed a member agent's L2 (per-workspace)
     // memory dir on the owning host. Resolves the regular workspace's path
@@ -600,6 +613,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
       return purgeAgentFiles(params, {
         registry,
         homeDir: opts.testHooks?.agentMaterializeHomeDir,
+        agentHomeRootDir,
       });
     },
   });

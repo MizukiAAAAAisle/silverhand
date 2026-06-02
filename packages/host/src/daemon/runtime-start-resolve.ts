@@ -8,8 +8,8 @@
  * the exact same single sources as the other D4.e intents:
  *   - `regular` workspaces → the daemon workspace registry
  *     (`registry.resolve(id)`), fail-closed when unbound;
- *   - `agent_home` → `computeAgentDir(agentId, homeDir)` (homedir-derived,
- *     never registry-backed), identical to `agent_materialize` /
+ *   - `agent_home` → daemon-local agent home root + agent id
+ *     (never registry-backed), identical to `agent_materialize` /
  *     `agent_workspace_tree`.
  *
  * The result is a `ResolvedStartOptions` — structurally the pre-D4.e-6
@@ -28,7 +28,7 @@
  */
 import type { RuntimeStartErrorCode, StartOptions } from '../protocol.js';
 import { agentHomeWorkspaceId } from '@silverhand/shared';
-import { computeAgentDir } from './agent-materialize/handler.js';
+import { resolveAgentDir } from './agent-materialize/handler.js';
 import { DaemonTypedError } from './typed-error.js';
 
 /** A workspace ref with the daemon-resolved absolute `path` attached. */
@@ -72,6 +72,11 @@ export interface RuntimeStartResolveDeps {
    */
   homeDir?: string;
   /**
+   * Exact root under which per-agent L1 dirs live. Production Desktop
+   * passes `<SILVERHAND_DIR>/agents`; takes precedence over `homeDir`.
+   */
+  agentHomeRootDir?: string;
+  /**
    * Resolve a `regular` workspace id to its absolute host path. Production
    * wires this to the registry (`registry.resolve(id)`), mapping any
    * `WorkspaceRegistryError` / missing-binding into a
@@ -96,7 +101,7 @@ export function resolveRuntimeStartPaths(
   deps: RuntimeStartResolveDeps,
 ): ResolvedStartOptions {
   const agentId = options.agent.id;
-  const homeDir = computeAgentDir(agentId, deps.homeDir);
+  const homeDir = resolveAgentDir(agentId, deps);
   const ownHomeWorkspaceId = agentHomeWorkspaceId(agentId);
 
   const resolveWorkspace = (

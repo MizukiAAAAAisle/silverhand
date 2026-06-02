@@ -13,6 +13,10 @@ export function silverhandDir(): string {
   return process.env.SILVERHAND_DIR || join(homedir(), '.silverhand');
 }
 
+export function electronUserDataPath(silverhandRoot = silverhandDir()): string {
+  return join(silverhandRoot, 'desktop', 'electron-user-data');
+}
+
 export async function loadOrCreateServerConfig(): Promise<ServerConfig> {
   const dir = silverhandDir();
   const filepath = join(dir, SERVER_CONFIG_FILENAME);
