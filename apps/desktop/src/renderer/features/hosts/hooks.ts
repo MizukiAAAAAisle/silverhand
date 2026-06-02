@@ -1,15 +1,28 @@
 import { useCallback, useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { z } from 'zod';
 import {
+  HostDtoSchema,
   HostListResponseSchema,
+  HostStatusResponseSchema,
+  UpdateHostInputSchema,
+  apiPaths,
   type HostDto,
   type HostListResponse,
+  type HostStatusResponse,
+  type UpdateHostInput,
 } from '@silverhand/shared';
 import { api } from '@/lib/api';
 import { canUseLocalHostPath } from './host-provenance';
 
 export const hostsKey = ['hosts'] as const;
 export const backendInfoKey = ['backend-info'] as const;
+/** Per-host dynamic-status query key. Each host gets its own cache entry
+ *  so the manual-refresh button on `HostDetailView` only revalidates that
+ *  one host's snapshot (registration view + daemon-derived facts), never
+ *  the whole host list. */
+export const hostStatusKey = (hostId: string) =>
+  ['host-status', hostId] as const;
 
 export interface BackendInfoSnapshot {
   /** D3.c Commit 4 — embedded backend's listen URL (where the
@@ -172,4 +185,74 @@ export function useHostProvenanceGate(): {
     canUseLocalHostPathFor,
     isLoading: backendInfoQuery.isLoading || hostsQuery.isLoading,
   };
+}
+
+/**
+ * `#task:808` slice 4 — fetch the per-host dynamic snapshot powering
+ * `HostDetailView`. Returns the discriminated `HostStatusResponse`; the
+ * detail view branches on `data.availability` for the snapshot card and
+ * always renders `data.agents[]` (registration is a DB fact, survives
+ * daemon disconnect — see Cindy `Mtf5zZL-Y7PauIDi`).
+ *
+ * **Manual refresh only** (shiki: "agents 列表我觉得手动 refresh 就够了"):
+ *   - `staleTime: Infinity` — never auto-refetches on focus / interval /
+ *     remount; the cache entry is fresh as long as it's in memory.
+ *   - `refetchOnWindowFocus: false` / `refetchInterval: false` — explicit
+ *     belts on the same constraint.
+ *   - The detail view exposes a Refresh button that calls
+ *     `qc.invalidateQueries({ queryKey: hostStatusKey(hostId) })` to
+ *     trigger a single one-off refetch.
+ *
+ * The hook is `enabled` only when `hostId` is provided so the master/
+ * detail right pane mounting with no selection doesn't burn a request.
+ */
+export function useHostStatusQuery(
+  hostId: string | null | undefined,
+  options?: { enabled?: boolean },
+) {
+  return useQuery<HostStatusResponse>({
+    queryKey: hostStatusKey(hostId ?? '__none__'),
+    queryFn: async () => {
+      const raw = await api<unknown>(apiPaths.hostStatus(hostId!));
+      return HostStatusResponseSchema.parse(raw);
+    },
+    enabled: (options?.enabled ?? true) && Boolean(hostId),
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchInterval: false,
+  });
+}
+
+export interface UpdateHostMutationVars {
+  display_label: string | null;
+}
+
+/**
+ * `#task:808` slice 4 — rename a host (only `display_label` is mutable;
+ * `name` stays the stable identifier set at claim time). On success we
+ * invalidate `hostsKey` so the sidebar list re-renders the new label.
+ *
+ * Schema-guard the input client-side so a typo in the InlineRename
+ * component fails fast in dev instead of surfacing as a 400 in the UI
+ * (the server still enforces the same 256-char cap; this just keeps the
+ * boundary loud-and-early). Server-side, the repo trims+slices to 64 and
+ * maps empty → null, so a clear-on-blank flow works without a separate
+ * "Clear" mutation: send `{ display_label: null }` to clear.
+ */
+export function useUpdateHostMutation(hostId: string) {
+  const qc = useQueryClient();
+  return useMutation<HostDto, Error, UpdateHostMutationVars>({
+    mutationFn: async (vars: UpdateHostMutationVars): Promise<HostDto> => {
+      const body: UpdateHostInput = UpdateHostInputSchema.parse(vars);
+      const raw = await api<unknown>(apiPaths.host(hostId), {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      });
+      const parsed = z.object({ host: HostDtoSchema }).parse(raw);
+      return parsed.host;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: hostsKey });
+    },
+  });
 }

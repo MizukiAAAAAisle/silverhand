@@ -5,8 +5,10 @@ import type {
   AgentFilesPurgeResult,
   AgentWorkspaceIndexParams,
   AgentWorkspaceIndexResult,
-  AgentWorkspaceReadParams,
-  AgentWorkspaceReadResult,
+  AgentWorkspaceTreeParams,
+  AgentWorkspaceTreeResult,
+  AgentWorkspaceFileReadParams,
+  AgentWorkspaceFileReadResult,
   WorkspaceProvisionParams,
   WorkspaceProvisionResult,
 } from '@silverhand/host';
@@ -18,7 +20,7 @@ import type { OutboundFrameAdapter } from './outbound-frame-adapter.js';
 
 /**
  * D4.e — backend dispatch layer for the host data-plane intents
- * (`workspace_provision`, `agent_workspace_index`, `agent_workspace_read`,
+ * (`workspace_provision`, `agent_workspace_index`,
  * `agent_l2_seed`, `agent_files_purge`).
  * The daemon is the sole authority for host-local path resolution (I1); the
  * backend only speaks `workspace_id` / `agent_id` and forwards an optional
@@ -47,10 +49,13 @@ export type DataPlaneFailureCode =
   | 'unsupported_template'
   // typed wire code (agent_files_purge)
   | 'partial_purge'
+  // typed wire codes (agent_workspace_tree / agent_workspace_file_read)
+  | 'forbidden_path'
+  | 'not_found'
   // typed wire code (multiple)
   | 'registry_unavailable';
 
-export type DataPlaneHttpStatus = 400 | 409 | 502 | 503 | 504 | 507;
+export type DataPlaneHttpStatus = 400 | 403 | 404 | 409 | 502 | 503 | 504 | 507;
 
 export interface DataPlaneFailure {
   kind: 'failed';
@@ -149,6 +154,19 @@ export function mapDataPlaneError(err: unknown): DataPlaneFailure {
         // the DB row so a later retry has its routing anchor. Retriable — the
         // operator can clear the fs condition (perm/space) and re-issue.
         return fail('partial_purge', err.message, 503, true);
+      case 'forbidden_path':
+        // #task:811 — agent_workspace_tree / agent_workspace_file_read: the
+        // caller-supplied virtual path is shape-rejected (`.` / `..` /
+        // dotfile / NUL / backslash / leading or trailing slash) OR its
+        // resolution would escape the agent home base (symlink in chain,
+        // realpath crossed the boundary). 400 — the renderer must show the
+        // failure as a UI-level reject, not a transient retry. Not retriable.
+        return fail('forbidden_path', err.message, 400, false);
+      case 'not_found':
+        // #task:811: graceful missing along the walk OR the path resolves to
+        // a directory when the read endpoint asked for a file. 404 — same
+        // semantics as a renderer asking for a non-existent agent.
+        return fail('not_found', err.message, 404, false);
       case 'internal_error':
       default:
         return fail('daemon_internal_error', err.message, 502, false);
@@ -231,25 +249,53 @@ export async function dispatchAgentWorkspaceIndex(
 }
 
 /**
- * D4.e-2 — dispatch `agent_workspace_read` to the owning daemon: the
- * host-local L1/agent-home read for `GET /api/agents/:id/workspace`. The
- * daemon resolves the agent-home dir from its own homedir and reads
- * `system_prompt.md` / `MEMORY.md` / `notes/`, returning the
- * `AgentWorkspaceDto` the backend relays verbatim — no server-side fs read,
- * no path derivation. A hard host-local fs failure maps fail-closed to
- * `fs_unavailable` (503); the backend never falls back to its own disk.
+ * #task:811 — dispatch `agent_workspace_tree` to the owning daemon. The
+ * daemon walks the agent home dir and returns a flat list of every visible
+ * entry; the backend relays it verbatim — no fs read, no path derivation.
+ * Hard host-local fs failure (perm/IO/EROFS) → `fs_unavailable` (503), the
+ * backend never falls back to its own disk.
  */
-export async function dispatchAgentWorkspaceRead(
+export async function dispatchAgentWorkspaceTree(
   adapter: OutboundFrameAdapter,
   hostId: string,
   connectionId: string,
-  params: AgentWorkspaceReadParams,
-): Promise<DataPlaneOutcome<AgentWorkspaceReadResult>> {
+  params: AgentWorkspaceTreeParams,
+): Promise<DataPlaneOutcome<AgentWorkspaceTreeResult>> {
   try {
-    const result = await adapter.sendCommand(hostId, 'agent_workspace_read', params, {
+    const result = await adapter.sendCommand(hostId, 'agent_workspace_tree', params, {
       timeoutMs: READ_TIMEOUT_MS,
       expectedConnectionId: connectionId,
     });
+    return { kind: 'ok', result };
+  } catch (err) {
+    return mapDataPlaneError(err);
+  }
+}
+
+/**
+ * #task:811 — dispatch `agent_workspace_file_read` to the owning daemon.
+ * The daemon enforces the path security rules (segment shape, per-segment
+ * lstat, realpath boundary) before returning the file bytes; the backend
+ * forwards `path` opaquely and surfaces the daemon's typed error verdict
+ * directly. The 64KB cap is daemon-side; the backend just relays
+ * `truncated`.
+ */
+export async function dispatchAgentWorkspaceFileRead(
+  adapter: OutboundFrameAdapter,
+  hostId: string,
+  connectionId: string,
+  params: AgentWorkspaceFileReadParams,
+): Promise<DataPlaneOutcome<AgentWorkspaceFileReadResult>> {
+  try {
+    const result = await adapter.sendCommand(
+      hostId,
+      'agent_workspace_file_read',
+      params,
+      {
+        timeoutMs: READ_TIMEOUT_MS,
+        expectedConnectionId: connectionId,
+      },
+    );
     return { kind: 'ok', result };
   } catch (err) {
     return mapDataPlaneError(err);

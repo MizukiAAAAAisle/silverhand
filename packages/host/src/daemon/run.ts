@@ -60,7 +60,10 @@ import {
   purgeAgentFiles,
   type RegistryBinding,
 } from './workspace-registry/index.js';
-import { readAgentWorkspace } from './agent-workspace-read/index.js';
+import {
+  listAgentWorkspaceTree,
+  readAgentWorkspaceFile,
+} from './agent-workspace-fs/index.js';
 import {
   RuntimeStartResolveError,
   type RuntimeStartResolveDeps,
@@ -533,14 +536,22 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
         homeDir: opts.testHooks?.agentMaterializeHomeDir,
       });
     },
-    // D4.e-2 — agent_workspace_read: host-local L1/agent-home read proxy
-    // for `GET /api/agents/:id/workspace`. Resolves the agent-home dir from
-    // the daemon's homedir (test override via `agentMaterializeHomeDir`) and
-    // reads system_prompt/MEMORY/notes there. No registry binding needed:
-    // agent-home is homedir-derived, never registry-backed (L2/regular read
-    // is a later slice).
-    agentWorkspaceReadHandler: async params =>
-      readAgentWorkspace(params, {
+    // #task:811 — agent_workspace_tree: flat tree of every visible
+    // file/directory under the agent home dir. Resolves the agent-home
+    // dir from the daemon's homedir (test override via
+    // `agentMaterializeHomeDir`); no registry binding needed because
+    // agent-home is homedir-derived, never registry-backed.
+    agentWorkspaceTreeHandler: async params =>
+      listAgentWorkspaceTree(params, {
+        homeDir: opts.testHooks?.agentMaterializeHomeDir,
+      }),
+    // #task:811 — agent_workspace_file_read: read one file from the
+    // agent home dir by virtual path. The helper enforces the
+    // segment-shape rules + per-segment lstat-walk + realpath boundary
+    // check so the daemon never follows a symlink or reads outside
+    // the agent home base.
+    agentWorkspaceFileReadHandler: async params =>
+      readAgentWorkspaceFile(params, {
         homeDir: opts.testHooks?.agentMaterializeHomeDir,
       }),
     // D4.e-3 — agent_l2_seed: seed a member agent's L2 (per-workspace)

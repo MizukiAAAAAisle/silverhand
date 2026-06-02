@@ -28,11 +28,32 @@ export const apiPaths = {
    *  proxy, and the desktop IPC strips the token from any value that
    *  crosses back to the renderer. */
   hostRotateToken: (id: string) => `/api/hosts/${id}/rotate-token`,
+  /** v36 (#task:808): rename a host the caller owns. Body =
+   *  `UpdateHostInput { display_label }`. Only `display_label` is
+   *  mutable today; `name` is the stable identifier set at claim time. */
+  host: (id: string) => `/api/hosts/${id}`,
+  /** v36 (#task:808): dynamic host snapshot (OS / daemon version /
+   *  registered agents + online state). Always HTTP 200 with tagged
+   *  `availability` once owner ACL passes. 404 for missing / cross-user. */
+  hostStatus: (id: string) => `/api/hosts/${id}/status`,
 
   // agents
   agents: '/api/agents',
   agent: (id: string) => `/api/agents/${id}`,
-  agentWorkspace: (id: string) => `/api/agents/${id}/workspace`,
+  /** #task:811 — flat tree of every visible file/directory under the
+   *  agent home dir. The two-column AgentWorkspacePane drives left-side
+   *  navigation off this list; `path` values are valid inputs to the
+   *  read endpoint below. Path semantics are agent-home-rooted today; a
+   *  future scope/workspace selector will be additive (see
+   *  AgentWorkspaceTreeNodeSchema). */
+  agentWorkspaceTree: (id: string) => `/api/agents/${id}/workspace/tree`,
+  /** #task:811 — read one file from the agent home dir by virtual path.
+   *  The `path` query param is parsed segment-by-segment and rejects
+   *  empty / `.` / `..` / dotfile / NUL / backslash segments; symlinks
+   *  (intermediate or leaf) and any escape from the agent-home base are
+   *  fail-closed (404 not_found, never a leaked path). 64KB preview cap;
+   *  the response carries `truncated` so the UI can surface a banner. */
+  agentWorkspaceFile: (id: string) => `/api/agents/${id}/workspace/file`,
   agentRuntimeState: (id: string) => `/api/agents/${id}/runtime-state`,
   agentStop: (id: string) => `/api/agents/${id}/stop`,
   agentDeleteImpact: (id: string) => `/api/agents/${id}/delete-impact`,

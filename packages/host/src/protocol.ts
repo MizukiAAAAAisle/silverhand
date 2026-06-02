@@ -58,7 +58,8 @@
 import { z } from 'zod';
 import {
   AgentRunStateSchema,
-  AgentWorkspaceDtoSchema,
+  AgentWorkspaceFileReadSchema,
+  AgentWorkspaceTreeSchema,
   ConversationKindSchema,
   HostKindSchema,
   MemberDtoSchema,
@@ -193,6 +194,50 @@ export const EchoResultSchema = z
   .strict();
 export type EchoResult = z.infer<typeof EchoResultSchema>;
 
+// ── host_status (outbound command, #task:808) ────────────────────────
+//
+// Server → daemon RPC powering `GET /api/hosts/:id/status`. Distinct
+// from the local inbound `status` intent — that one is HostClient
+// (backend/test) → daemon-on-local-socket; this one rides the same
+// `outboundServerCommandSchemas` channel as `runtime_start` / etc., so
+// backend can dispatch it for ANY host (embedded local, future remote
+// sandbox) through `OutboundFrameAdapter.sendCommand(hostId, ...)`.
+//
+// Payload is host-facts only: OS, architecture, daemon process info,
+// uptime, plus the active agent_id set (which agents are currently
+// spawned on this host). Backend joins that set against the
+// registration table (`agents.host_id == hostId`) to enrich the
+// per-row `online` flag in `AgentOnHostDto`. The daemon NEVER
+// references agent names, conversation ids, or any other backend-
+// owned semantic — those live above the host boundary.
+export const HostStatusParamsSchema = z.object({}).strict();
+export type HostStatusParams = z.infer<typeof HostStatusParamsSchema>;
+
+export const HostStatusResultSchema = z
+  .object({
+    /** Human-readable OS string composed daemon-side
+     *  (e.g. "macOS 14.5", "Linux Ubuntu 22.04"). Renderer shows verbatim.
+     *  `.min(1)` pins the never-empty contract — the daemon helper always
+     *  composes SOMETHING (falls back to `${platform} ${release}`), and an
+     *  empty value reaching this schema is a daemon bug we want to fail
+     *  loud at the IPC boundary instead of letting a blank cell render
+     *  in ComputerPane. */
+    os: z.string().min(1),
+    /** `os.arch()` token; optional so older daemons stay forward-compatible. */
+    os_arch: z.string().optional(),
+    daemon_pid: z.number().int(),
+    daemon_version: z.string(),
+    started_at: z.number().int(),
+    uptime_ms: z.number().int(),
+    /** Subset of registered agents currently alive on this host. Backend
+     *  intersects this with `agents.host_id == hostId` to compute
+     *  per-agent `online` in `AgentOnHostDto`. Empty array = host has
+     *  no live runtimes (renderer shows everything as offline). */
+    active_agent_ids: z.array(z.string()),
+  })
+  .strict();
+export type HostStatusResult = z.infer<typeof HostStatusResultSchema>;
+
 // ── conversation_log_debug ─────────────────────────────────────────
 
 export const ConversationLogDebugParamsSchema = z.discriminatedUnion('enabled', [
@@ -293,7 +338,7 @@ const RuntimeStartAgentRefSchema = z
     // D4.e-6: SEMANTIC ref only — no `home_dir`. Revokes the prior
     // carve-out (design §3.5). The daemon resolves the agent's L1
     // profile base locally as `computeAgentDir(agentId)` — identical
-    // to how `agent_materialize`/`agent_workspace_read` already resolve
+    // to how `agent_materialize`/`agent_workspace_tree` already resolve
     // it — and reads `system_prompt.md` under it.
   })
   .strict();
@@ -1190,7 +1235,7 @@ export type ResponseErrorCode = z.infer<typeof ResponseErrorCodeSchema>;
  * Intents that may legitimately surface daemon-business typed
  * codes — `agent_materialize` and the D4.e workspace data-plane
  * intents (`workspace_provision`, `agent_workspace_index`,
- * `agent_workspace_read`, `agent_l2_seed`, `agent_files_purge`) — override with a wider schema that unions
+ * `agent_l2_seed`, `agent_files_purge`) — override with a wider schema that unions
  * the 5 generic codes with the intent's own taxonomy (e.g.
  * `AgentMaterializeErrorCodeSchema`).
  *
@@ -1431,69 +1476,108 @@ const AgentWorkspaceIndexIpcErrorSchema = z
   })
   .strict();
 
-// ── D4.e-2 — agent_workspace_read (host-local L1/agent-home read proxy) ──
-// `GET /api/agents/:id/workspace` reads the agent's host-local L1
-// (agent-home) directory — `system_prompt.md`, `MEMORY.md`, `notes/`.
-// Pre-D4.e the backend read its own disk (and 503'd in standalone, where
-// the files live on a different machine). D4.e-2 makes the daemon the
-// reader: the backend sends ONLY the agent id (never a path), the daemon
-// resolves the dir from its own homedir (`computeAgentDir`) and assembles
-// the snapshot. This is the read counterpart of the D4.e-1 data-plane
-// intents and the first step of removing host-local fs from backend src
-// (I6). Scope is deliberately narrow: L1/agent-home read only — no L2/
-// regular-workspace read (a later slice adds a workspace selector), no
-// write, no directory browse.
-export const AgentWorkspaceReadParamsSchema = z
+// ── #task:811 — agent_workspace_tree + agent_workspace_file_read ─────
+// Two-protocol read pair backing the two-column AgentWorkspacePane: one
+// intent returns the flat tree of every visible file under the agent
+// home dir; the other reads any of those files by virtual path. This is
+// intentionally NOT segmented by `system_prompt`/`MEMORY`/`notes` — the
+// protocol speaks one virtual path namespace, the UI categorizes (or
+// doesn't).
+//
+// Forward-compat: a future expansion that exposes a different file
+// root (e.g. an L2 workspace dir) MUST be additive selectors (`scope`,
+// `workspace_id`) — never reinterpret an existing path. Today
+// `path: "MEMORY.md"` unambiguously means the agent-home `MEMORY.md`,
+// and that meaning is frozen.
+//
+// Security: every input path is validated by
+// `parseAndResolveVirtualPath` daemon-side — segment-by-segment shape
+// rules (no empty/`.`/`..`/dotfile/NUL/backslash), per-segment lstat
+// to refuse symlinks intermediate or leaf, and a final
+// `path.relative` boundary check against the realpath of the agent
+// home base. Fail-closed: any escape is `forbidden_path`, never a
+// silent fallthrough.
+
+export const AgentWorkspaceTreeParamsSchema = z
   .object({
-    /**
-     * The agent whose host-local L1 (agent-home) dir is read. The backend
-     * forwards ONLY this semantic id; the daemon owns the path resolution
-     * (`computeAgentDir`), so I1 (daemon = sole host-local path authority)
-     * holds — no `workspace_path` or server-derived path crosses the wire.
-     */
+    /** The agent whose home dir is walked. The daemon owns path
+     *  resolution (`computeAgentDir`) — no server-derived path
+     *  crosses the wire. */
     agent_id: z.string().min(1),
   })
   .strict();
-export type AgentWorkspaceReadParams = z.infer<
-  typeof AgentWorkspaceReadParamsSchema
+export type AgentWorkspaceTreeParams = z.infer<
+  typeof AgentWorkspaceTreeParamsSchema
 >;
 
-export const AgentWorkspaceReadResultSchema = z
+export const AgentWorkspaceTreeResultSchema = z
   .object({
     ok: z.literal(true),
-    /**
-     * The agent-workspace snapshot, assembled daemon-side by reading the
-     * resolved L1 dir. Shape is the shared `AgentWorkspaceDto` so the
-     * backend route relays it verbatim — no path work, no fs read. A
-     * missing per-file (brand-new agent) is a `null` preview / empty
-     * notes, NOT an error (matches the pre-D4.e graceful read).
-     */
-    workspace: AgentWorkspaceDtoSchema,
+    /** Flat list of every visible entry under the agent home dir,
+     *  ordered (parent-dir, kind=directory-first, name). Hidden
+     *  entries (anything starting with '.') and symlinks (intermediate
+     *  or leaf) are filtered server-side. */
+    tree: AgentWorkspaceTreeSchema,
   })
   .strict();
-export type AgentWorkspaceReadResult = z.infer<
-  typeof AgentWorkspaceReadResultSchema
+export type AgentWorkspaceTreeResult = z.infer<
+  typeof AgentWorkspaceTreeResultSchema
 >;
 
-export const AgentWorkspaceReadErrorCodeSchema = z.enum([
-  /**
-   * A host-local fs read failed HARD (perm/IO/EROFS) — distinct from a
-   * missing file, which is reported gracefully as a `null` preview. The
-   * daemon never falls back to a server-side path; a hard failure is
-   * surfaced fail-closed (Cindy D4.e-2 focus #3).
-   */
+export const AgentWorkspaceFileReadParamsSchema = z
+  .object({
+    /** The agent whose home dir is the read base. */
+    agent_id: z.string().min(1),
+    /** Virtual path under the agent home (e.g. `system_prompt.md`,
+     *  `notes/work-log.md`). The daemon parses + resolves with the
+     *  per-segment rules described above. */
+    path: z.string().min(1),
+  })
+  .strict();
+export type AgentWorkspaceFileReadParams = z.infer<
+  typeof AgentWorkspaceFileReadParamsSchema
+>;
+
+export const AgentWorkspaceFileReadResultSchema = z
+  .object({
+    ok: z.literal(true),
+    /** Single-file read: 64KB preview cap with a `truncated` flag the
+     *  renderer surfaces as a banner. */
+    file: AgentWorkspaceFileReadSchema,
+  })
+  .strict();
+export type AgentWorkspaceFileReadResult = z.infer<
+  typeof AgentWorkspaceFileReadResultSchema
+>;
+
+/**
+ * Shared error taxonomy for the two new intents. The daemon never
+ * distinguishes "your path was malformed" from "you tried to escape"
+ * on the wire — both look like `forbidden_path` so a probe can't use
+ * the error class to enumerate filesystem layout.
+ */
+export const AgentWorkspaceFsErrorCodeSchema = z.enum([
+  /** Caller-supplied path is shape-rejected OR resolution would escape
+   *  the agent home base (symlink in chain, realpath crossed the
+   *  boundary). Route projects 400/403. */
+  'forbidden_path',
+  /** Graceful missing along the walk (ENOENT/ENOTDIR on a non-leaf,
+   *  the leaf is a directory when the read endpoint asked for a file,
+   *  etc). Route projects 404. */
+  'not_found',
+  /** Hard host-local fs failure (perm/IO/EROFS/…). Route projects 503. */
   'fs_unavailable',
   'internal_error',
 ]);
-export type AgentWorkspaceReadErrorCode = z.infer<
-  typeof AgentWorkspaceReadErrorCodeSchema
+export type AgentWorkspaceFsErrorCode = z.infer<
+  typeof AgentWorkspaceFsErrorCodeSchema
 >;
 
-const AgentWorkspaceReadIpcErrorSchema = z
+const AgentWorkspaceFsIpcErrorSchema = z
   .object({
     code: z.union([
       ResponseErrorCodeSchema,
-      AgentWorkspaceReadErrorCodeSchema,
+      AgentWorkspaceFsErrorCodeSchema,
     ]),
     message: z.string(),
   })
@@ -1652,7 +1736,7 @@ const AgentFilesPurgeIpcErrorSchema = z
  * that may legitimately surface daemon-business typed codes —
  * `agent_materialize` (D4.d) plus the D4.e workspace data-plane
  * intents `workspace_provision` / `agent_workspace_index` /
- * `agent_workspace_read` / `agent_l2_seed` / `agent_files_purge` — declare their own widened error schema. The wire surface stays
+ * `agent_l2_seed` / `agent_files_purge` — declare their own widened error schema. The wire surface stays
  * per-intent-scoped (Cindy D2 P1-1 + D1 round-1 P1): a typed code
  * in one intent's error arm cannot leak into another intent's
  * error arm at validation time.
@@ -1673,6 +1757,17 @@ export const intentSchemas = {
   echo: {
     params: EchoParamsSchema,
     result: EchoResultSchema,
+  },
+  // #task:808 — host snapshot for the ComputerPane. Dispatched here so the
+  // shared `IntentDispatcher` validates params/result via the same registry
+  // every other intent uses; the outbound WS surface re-references the same
+  // schemas in `outboundServerCommandSchemas` so embedded local-socket and
+  // standalone WSS reach the same handler path. Generic error taxonomy is
+  // sufficient — failures are transport-level (timeout / disconnected /
+  // shutting_down) and surface through the adapter wrapper.
+  host_status: {
+    params: HostStatusParamsSchema,
+    result: HostStatusResultSchema,
   },
   conversation_log_debug: {
     params: ConversationLogDebugParamsSchema,
@@ -1766,10 +1861,15 @@ export const intentSchemas = {
     result: AgentWorkspaceIndexResultSchema,
     error: AgentWorkspaceIndexIpcErrorSchema,
   },
-  agent_workspace_read: {
-    params: AgentWorkspaceReadParamsSchema,
-    result: AgentWorkspaceReadResultSchema,
-    error: AgentWorkspaceReadIpcErrorSchema,
+  agent_workspace_tree: {
+    params: AgentWorkspaceTreeParamsSchema,
+    result: AgentWorkspaceTreeResultSchema,
+    error: AgentWorkspaceFsIpcErrorSchema,
+  },
+  agent_workspace_file_read: {
+    params: AgentWorkspaceFileReadParamsSchema,
+    result: AgentWorkspaceFileReadResultSchema,
+    error: AgentWorkspaceFsIpcErrorSchema,
   },
   agent_l2_seed: {
     params: AgentL2SeedParamsSchema,

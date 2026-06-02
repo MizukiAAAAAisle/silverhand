@@ -220,6 +220,16 @@
   --control-radius: 0;
   --chip-radius: 0;
 
+  /* ── Profile section radius (#task:814) ──
+     `[data-panel-card="profile-section"]` (Identity / Capabilities /
+     Metadata cards in Agent / Human profile, FileBlock, NotesBlock)
+     gets the poster hard-cut treatment in forza6 — square corners +
+     2px hover-reveal frame (gray default → ink black on hover, see
+     `forza6-components.css`). The dedicated token leaves
+     `--card-radius: 6px` intact for other tile consumers (badges,
+     small chrome) so this scopes cleanly. */
+  --profile-section-radius: 0;
+
   /* ── Control border width (#task:555 release-testing 2) ──
      forza6 的 hard-cut 语汇在 sidebar / select / focus ring 上都走 2px
      描边；selection toolbar 上的 Cancel / Copy markdown / Save image
@@ -271,16 +281,20 @@
 
   /* ── forza6 indigo (theme-private; #task:762 placement A) ──
      The deep blue-violet shiki liked on the "DISCOVER JAPAN" festival
-     card. Scoped to the code island only (header slab + meta syntax +
-     content selection) — NOT a global accent. Deliberately NOT named
-     `--accent-3`: that reads as "a third brand colour" and invites
-     misuse as a general hover/selected/foreground token. The festival
-     triad (pink / lime / cyan) stays the brand identity; indigo is a
-     cool dark-stage surface that only lives where the ground is already
-     dark (the deep-teal-black island), so contrast is safe by
-     construction.
+     card. Originally scoped to the code island only (header slab +
+     meta syntax + content selection); subsequent reuse for the
+     `closed` task-status chip (poster sticker) and #task:817 schedule
+     pills (cron expression chip + target conversation chip) extended
+     it to "deep slab landmark" duty more broadly. Still NOT a global
+     accent: the festival triad (pink / lime / cyan) carries brand
+     identity; indigo only lives where the surface is meant to read
+     as a deep cool stage that pulls the eye out of the surrounding
+     warm/cream chrome. White ink reads ~8:1 on the slab so contrast
+     is safe by construction.
        - `-slab`   : code-block header background (white island-light
-                     text + lime lang label both read AA+ on it).
+                     text + lime lang label both read AA+ on it);
+                     `closed` status chip; #task:817 schedule-spec /
+                     schedule-target pills.
        - `-meta`   : bright tint for `.hljs-meta` — lifts decorators /
                      pragmas off the dark island as a foreground ink
                      (the muted-white meta was easy to miss).

@@ -145,7 +145,16 @@ export function AgentProfileCard({
         * Hero is read-only by design (it's the page chrome, not the
         * editor surface). */}
       <ProfileSection title="Identity">
-        <div className="flex items-center gap-4">
+        {/* `items-start` (was `items-center`) — the avatar column
+            (avatar + Remove + optional error from EditableAgentAvatar)
+            is taller than the name column (name input + meta line),
+            so center-aligning pushed the name visibly below the
+            avatar's top edge. Combined with the GhostInput fix below,
+            the name text top now hits the avatar top exactly when an
+            image avatar is set. shiki `k5TNBjN5IxwbTUgW` (#task:827)
+            after the matching #task:824/825 human-pane fixes:
+            '我看着还不是' (with screenshot of the AGENT pane). */}
+        <div className="flex items-start gap-4">
           {canEdit ? (
             <EditableAgentAvatar
               agentId={agent.id}
@@ -376,10 +385,21 @@ const GhostInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputEle
     <input
       ref={ref}
       data-panel-control="ghost-input"
+      // No `border border-transparent` and no `py-*` in idle state —
+      // the previous defaults pushed the visible text 5px below the
+      // input box top (1px transparent border + 4px py-1), creating a
+      // visible y-shift between the avatar (image fills its 56×56
+      // box from corner to corner, visible top = column top) and the
+      // name input. shiki `k5TNBjN5IxwbTUgW` (#task:827) — same
+      // diagnosis as the matching #task:825 human-pane fix. Hover
+      // affordance survives via `hover:bg-bg-base/40`, focus via
+      // `bg-bg-floating + ring-2 ring-border-focus`. The Capabilities/
+      // Model GhostInput consumer also picks up the change — bg-only
+      // hover is consistent with the Identity name input there too.
       className={cn(
-        'w-full border border-transparent bg-transparent px-2 py-1 text-sm text-text-primary placeholder:text-text-muted',
-        'transition-colors hover:border-border-subtle hover:bg-bg-base/40',
-        'focus:border-border focus:bg-bg-floating focus:outline-none focus:ring-2 focus:ring-border-focus',
+        'w-full bg-transparent px-2 text-sm text-text-primary placeholder:text-text-muted',
+        'transition-colors hover:bg-bg-base/40',
+        'focus:bg-bg-floating focus:outline-none focus:ring-2 focus:ring-border-focus',
         className,
       )}
       {...props}

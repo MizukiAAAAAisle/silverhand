@@ -97,6 +97,13 @@ export interface HostRow {
   last_seen_at: number | null;
   revoked_at: number | null;
   created_at: number;
+  /** v36 (#task:808): user-facing rename target for the ComputerPane
+   *  / host registry view. `name` stays the stable normalized identifier
+   *  used by `claimOrCreateLocal` and future ref resolvers. Renderer
+   *  reads `display_label ?? name`. NULL on rows claimed before this
+   *  column existed (and after a rename clears the label back to default).
+   *  Length 1-64; CJK/spaces allowed (display field, not an identifier). */
+  display_label: string | null;
 }
 
 export interface HostCredentialRow {

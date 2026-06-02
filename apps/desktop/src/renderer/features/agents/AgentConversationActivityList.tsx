@@ -172,7 +172,11 @@ function ActivityCard({
     <li
       data-panel-card="row"
       className={cn(
-        'relative overflow-hidden border border-border-subtle bg-bg-floating/50 px-4 py-3 transition-colors hover:bg-bg-hover/60',
+        // Hover affordance: subtle bg lift + border deepens
+        // (`border-border-subtle` → `border-border`). Forza6 amplifies
+        // border-color into ink-black + lime fill via its component
+        // overrides; warm reads soft. #task:815.
+        'relative overflow-hidden border border-border-subtle bg-bg-floating/50 px-4 py-3 transition-colors hover:border-border hover:bg-bg-hover/60',
         closed ? 'opacity-70' : '',
       )}
     >
@@ -222,7 +226,19 @@ function ActivityCard({
               type="button"
               onClick={() => onOpen(row)}
               data-panel-control="row-action"
-              className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] text-text-muted hover:bg-bg-hover hover:text-text-primary"
+              // shiki dogfood `1VDBRm6j6351TVso`: "agent runtime card
+              // 也是一样的问题" — the prior `hover:bg-bg-hover`
+              // painted a white pill on top of the row's own lime
+              // hover wash in forza6, two surfaces fighting. Drop the
+              // bg block; keep the ink-darken (`hover:text-text-primary`)
+              // and pair it with a `hover:scale-105` kinetic cue + a
+              // 150ms `transition-all` so the affordance reads
+              // unmistakeably as interactive without painting a second
+              // surface. Smaller scale than the icon-only Cancel
+              // (scale-110) because this button has text + arrow
+              // visible and a 10% jump on the wider footprint reads as
+              // jittery; 5% is enough.
+              className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] text-text-muted transition-all duration-150 hover:scale-105 hover:text-text-primary"
               title="Open"
             >
               Open
@@ -312,7 +328,16 @@ function OverflowMenu({
         <button
           type="button"
           data-panel-control="row-action"
-          className="inline-grid size-6 place-items-center text-text-muted hover:bg-bg-hover hover:text-text-primary"
+          // shiki dogfood `1VDBRm6j6351TVso`: same theme/affordance
+          // pattern as the sibling Open button — drop
+          // `hover:bg-bg-hover` (white pill on lime hover wash) and
+          // pair `hover:text-text-primary` with the icon-only
+          // kinetic norm (`hover:scale-110` + 150ms transition,
+          // matching the Cancel row action). Stays `size-6` (24×24)
+          // because the Open button next to it doesn't get a square
+          // shell either; visual symmetry beats matching the
+          // standalone Cancel button's 28×28 here.
+          className="inline-grid size-6 place-items-center text-text-muted transition-all duration-150 hover:scale-110 hover:text-text-primary"
           title="Show runtime details"
           aria-label="Show runtime details"
         >

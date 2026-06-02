@@ -67,7 +67,17 @@ export function ProfileSection({
       </header>
       <div
         data-panel-card="profile-section"
-        className="border border-border-subtle/60 bg-bg-floating/50 p-4"
+        className={cn(
+          'border border-border-subtle bg-bg-floating/50 p-4',
+          // Hover affordance: subtle → stronger border to give the
+          // section card a "alive" feel. Forza6 theme amplifies this
+          // into the poster-sticker hover (gray → ink near-black) via
+          // its component overrides; warm stays soft. Radius lives in
+          // global.css under the `[data-panel-card='profile-section']`
+          // hook (drives off `--profile-section-radius`) — do not add
+          // a `rounded-*` class or inline `border-radius` here. #task:814.
+          'transition-colors duration-150 hover:border-border',
+        )}
       >
         {children}
       </div>

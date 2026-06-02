@@ -38,6 +38,7 @@ import {
   SendMessageInputSchema,
   UnclaimTaskInputSchema,
   UpdateAgentInputSchema,
+  UpdateHostInputSchema,
   UpdateUserProfileInputSchema,
   UpdateWorkspaceInputSchema,
   ArchiveWorkspaceInputSchema,
@@ -50,11 +51,13 @@ import {
   type AgentListedWorkspace,
   type AgentListChannelsDto,
   type AgentListWorkspacesDto,
+  type AgentOnHostDto,
   type AgentRow,
   type CreateAgentInput,
   type AgentReadHistoryDto,
   type AgentSearchMessageHit,
   type AgentSearchMessagesDto,
+  type HostStatusResponse,
   type MessageRef,
   type MessageRow,
   type MessageSenderRef,
@@ -77,13 +80,15 @@ import type { OutboundFrameAdapter } from './runtime/outbound-frame-adapter.js';
 import {
   dispatchAgentFilesPurge,
   dispatchAgentL2Seed,
+  dispatchAgentWorkspaceFileRead,
   dispatchAgentWorkspaceIndex,
-  dispatchAgentWorkspaceRead,
+  dispatchAgentWorkspaceTree,
   dispatchWorkspaceProvision,
   resolveOutboundForHost,
   type DataPlaneFailure,
   type DataPlaneHttpStatus,
 } from './runtime/workspace-data-plane.js';
+import { dispatchHostStatus } from './runtime/host-status-dispatch.js';
 import {
   HostTokenRotationCoordinator,
   HostTokenRotationError,
@@ -1562,6 +1567,185 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       host: hosts.toDto(refreshed),
       host_token: issued.hostToken,
     });
+  });
+
+  // PATCH /api/hosts/:id — v36 (#task:808) rename. Only `display_label`
+  // is mutable; `name` stays the stable identifier set at claim time.
+  // Owner-only; 404 on cross-user / missing (no enumeration); the route
+  // also refuses revoked hosts so a renamed-then-revoked workflow can't
+  // silently mutate audit history. Body validation is loose (256-char
+  // cap) — the repo's `normalizeDisplayLabel` does trim + slice-to-64 +
+  // empty→null in one round-trip, so a user typing past the visible
+  // field length gets auto-truncation rather than a 400 (Cindy nit #2).
+  app.patch(apiPaths.host(':id'), async c => {
+    const userId = requireSessionBearerUser(c, ctx);
+    if (userId instanceof Response) return userId;
+
+    const hostId = c.req.param('id');
+    if (!hostId) {
+      return c.json(
+        { error: 'host not found', error_code: 'host_not_found' },
+        404,
+      );
+    }
+    const host = hosts.get(hostId);
+    if (!host || host.user_id !== userId) {
+      return c.json(
+        { error: 'host not found', error_code: 'host_not_found' },
+        404,
+      );
+    }
+    if (host.revoked_at !== null) {
+      return c.json(
+        { error: 'host has been revoked', error_code: 'host_revoked' },
+        409,
+      );
+    }
+
+    const body = await c.req.json().catch(() => null);
+    const parsed = UpdateHostInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json(
+        { error: 'invalid input', issues: parsed.error.issues },
+        400,
+      );
+    }
+
+    const updated = hosts.updateDisplayLabel(hostId, parsed.data.display_label);
+    if (!updated) {
+      // Unreachable: SELECT immediately after the UPDATE we just ran on
+      // a row we know exists. Surface as 500 if it ever happens so the
+      // contract stays loud.
+      throw new Error(
+        `HostRepo.updateDisplayLabel returned null for ${hostId}`,
+      );
+    }
+    return c.json({ host: hosts.toDto(updated) });
+  });
+
+  // GET /api/hosts/:id/status — v36 (#task:808) dynamic host snapshot.
+  // Powers the ComputerPane / HostDetailView. Owner-only; 404 on
+  // cross-user / missing (no enumeration). Always HTTP 200 with a
+  // tagged `availability` once owner ACL passes — the renderer
+  // discriminates between `available` / `disconnected` / `unreachable` /
+  // `revoked` rather than mapping a 503 to "offline".
+  //
+  // Branch construction is intentionally per-arm (no shared mutable base
+  // object): the renderer-facing schema is a discriminatedUnion and each
+  // arm is `.strict()`, so building each response inline guarantees we
+  // never accidentally leak a half-built `snapshot` onto a non-available
+  // arm or a `reason` onto an `available` arm (Cindy `nTB67NWSepk054UL`
+  // slice-1 review constraint).
+  //
+  // Registration view (Cindy `Mtf5zZL-Y7PauIDi` slice-3 P1): `agents[]`
+  // sits at the response arm root on EVERY 200 arm — registration is a
+  // DB fact, not a daemon fact. On non-`available` arms every row has
+  // `online: 'offline'`; on `available` we enrich with daemon's
+  // `active_agent_ids`. `snapshot` carries ONLY dynamic daemon-derived
+  // fields (OS / daemon_version / pid / uptime).
+  app.get(apiPaths.hostStatus(':id'), async c => {
+    const userId = requireSessionBearerUser(c, ctx);
+    if (userId instanceof Response) return userId;
+
+    const hostId = c.req.param('id');
+    if (!hostId) {
+      return c.json(
+        { error: 'host not found', error_code: 'host_not_found' },
+        404,
+      );
+    }
+    const host = hosts.get(hostId);
+    if (!host || host.user_id !== userId) {
+      return c.json(
+        { error: 'host not found', error_code: 'host_not_found' },
+        404,
+      );
+    }
+
+    // Build the registration view in ONE place — same `failed`-filter,
+    // same row mapping, regardless of arm. `activeSet` is null on every
+    // non-`available` arm (no live daemon to ask) so every row falls to
+    // `offline`. On `available` we pass the daemon-derived set so the
+    // live runtimes light up. Cindy `GU0BwnFf9foN_f1W` non-blocker:
+    // single function prevents drift between offline + online arms.
+    //
+    // Match `AgentRepo.list()` default projection — the failed-agent
+    // management view is a separate surface (Q6.a). `pending_materialization`
+    // rows stay so freshly created agents show up immediately (they
+    // just can't be online yet).
+    const buildAgentRows = (
+      activeSet: ReadonlySet<string> | null,
+    ): AgentOnHostDto[] =>
+      agents
+        .listByHost(hostId)
+        .filter(a => a.materialization_status !== 'failed')
+        .map(a => ({
+          agent_id: a.id,
+          display_name: a.display_name,
+          handle: `@${a.name}`,
+          runtime: a.runtime,
+          avatar_url: a.avatar_url,
+          online: activeSet?.has(a.id) ? 'online' : 'offline',
+        }));
+
+    // Revoked hosts short-circuit BEFORE the daemon dispatch — even if
+    // the daemon happens to still be answering on a stale long_lived
+    // credential (rotate-token grace window) we don't want ComputerPane
+    // to pretend the host is usable. We still include the registered
+    // agents list (all offline) so the user can see which agents lived
+    // on this host before deciding to delete or re-claim.
+    if (host.revoked_at !== null) {
+      return c.json({
+        host_id: hostId,
+        availability: 'revoked',
+        agents: buildAgentRows(null),
+        last_seen_at: host.last_seen_at,
+      } satisfies HostStatusResponse);
+    }
+
+    const dispatch = await dispatchHostStatus(
+      ctx.outboundFrameAdapter?.() ?? null,
+      hostId,
+    );
+
+    if (dispatch.kind === 'disconnected') {
+      return c.json({
+        host_id: hostId,
+        availability: 'disconnected',
+        agents: buildAgentRows(null),
+        last_seen_at: host.last_seen_at,
+      } satisfies HostStatusResponse);
+    }
+    if (dispatch.kind === 'unreachable') {
+      return c.json({
+        host_id: hostId,
+        availability: 'unreachable',
+        reason: dispatch.reason,
+        agents: buildAgentRows(null),
+        last_seen_at: host.last_seen_at,
+      } satisfies HostStatusResponse);
+    }
+
+    // `dispatch.kind === 'ok'` — live daemon → per-row `online`
+    // enrichment from `active_agent_ids`. Daemon-reported ids NOT in
+    // the registration are filler-noise and do NOT get injected as
+    // phantom rows (registration view is the source of truth).
+    const activeSet = new Set(dispatch.result.active_agent_ids);
+
+    return c.json({
+      host_id: hostId,
+      availability: 'available',
+      snapshot: {
+        os: dispatch.result.os,
+        os_arch: dispatch.result.os_arch,
+        daemon_pid: dispatch.result.daemon_pid,
+        daemon_version: dispatch.result.daemon_version,
+        started_at: dispatch.result.started_at,
+        uptime_ms: dispatch.result.uptime_ms,
+      },
+      agents: buildAgentRows(activeSet),
+      last_seen_at: host.last_seen_at,
+    } satisfies HostStatusResponse);
   });
 
   function resolveCreateHostId(
@@ -4302,19 +4486,21 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     );
   });
 
-  app.get('/api/agents/:id/workspace', async c => {
-    const agent = agents.get(c.req.param('id'));
+  // #task:811 — two-protocol read pair backing the two-column
+  // AgentWorkspacePane: `/workspace/tree` returns the flat tree (every
+  // visible file/dir under the agent home dir); `/workspace/file?path=…`
+  // reads one file by virtual path. Both go through the same data-plane
+  // dispatch so embedded + remote daemons share one code path. The
+  // `?path=` query param is forwarded opaquely — the daemon owns the
+  // security check (parser + per-segment lstat + realpath boundary).
+  app.get(apiPaths.agentWorkspaceTree(':id'), async c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'agent id required' }, 400);
+    const agent = agents.get(id);
     if (!agent) return c.json({ error: 'agent not found' }, 404);
     if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
       return c.json({ error: 'agent not found' }, 404);
     }
-    // D4.e-2 — host-local read moved to the owning daemon (I1/I6). The
-    // agent's L1/agent-home dir lives on the agent's host, not the backend
-    // disk, so the backend dispatches `agent_workspace_read` (semantic id
-    // only — no path) and relays the daemon-assembled DTO. This works in
-    // BOTH modes: standalone reads over WSS, embedded over the local Unix
-    // socket — the old standalone 503 disable is gone (A6). ACL + owning-
-    // host resolution stay here; the daemon only does the host-local read.
     const outbound = resolveOutboundForHost(
       ctx.outboundFrameAdapter?.() ?? null,
       agent.host_id,
@@ -4322,16 +4508,55 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (outbound.kind === 'failed') {
       return c.json({ error: outbound.message, code: outbound.code }, outbound.status);
     }
-    const read = await dispatchAgentWorkspaceRead(
+    const tree = await dispatchAgentWorkspaceTree(
       outbound.adapter,
       agent.host_id,
       outbound.connectionId,
       { agent_id: agent.id },
     );
-    if (read.kind === 'failed') {
-      return c.json({ error: read.message, code: read.code }, read.status);
+    if (tree.kind === 'failed') {
+      return c.json({ error: tree.message, code: tree.code }, tree.status);
     }
-    return c.json({ workspace: read.result.workspace });
+    return c.json({ tree: tree.result.tree });
+  });
+
+  app.get(apiPaths.agentWorkspaceFile(':id'), async c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'agent id required' }, 400);
+    const agent = agents.get(id);
+    if (!agent) return c.json({ error: 'agent not found' }, 404);
+    if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
+      return c.json({ error: 'agent not found' }, 404);
+    }
+    // The query param is the only piece of caller-supplied input that
+    // crosses the wire. The backend does NO shape work on it — the
+    // daemon's `parseAndResolveVirtualPath` is the single security
+    // boundary, and double-validation here would just add a second
+    // place for a bug to live. Empty string is rejected by the
+    // intent's wire schema (path: z.string().min(1)); we surface that
+    // pre-flight as a clean 400 so the renderer doesn't pay a daemon
+    // round-trip for an obvious typo.
+    const path = c.req.query('path');
+    if (!path) {
+      return c.json({ error: 'path query param is required', code: 'forbidden_path' }, 400);
+    }
+    const outbound = resolveOutboundForHost(
+      ctx.outboundFrameAdapter?.() ?? null,
+      agent.host_id,
+    );
+    if (outbound.kind === 'failed') {
+      return c.json({ error: outbound.message, code: outbound.code }, outbound.status);
+    }
+    const file = await dispatchAgentWorkspaceFileRead(
+      outbound.adapter,
+      agent.host_id,
+      outbound.connectionId,
+      { agent_id: agent.id, path },
+    );
+    if (file.kind === 'failed') {
+      return c.json({ error: file.message, code: file.code }, file.status);
+    }
+    return c.json({ file: file.result.file });
   });
 
   app.get('/api/agents/:id/runtime-state', c => {

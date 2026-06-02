@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { IntentDispatcher } from '../src/daemon/dispatcher.js';
 import { DAEMON_VERSION } from '../src/daemon/version.js';
+import type { SupervisorContract } from '../src/daemon/supervisor-contract.js';
 import { FakeSupervisor } from './_helpers/fake-supervisor.js';
 import { testStartOptions } from './_helpers/runtime-start-options.js';
 import { createDaemonLogControl, type DaemonLogger } from '../src/daemon/logger.js';
@@ -53,6 +54,137 @@ describe('IntentDispatcher', () => {
     if ('result' in r) expect(r.result).toEqual({ echoed: 'hi' });
   });
 
+  it('handles host_status without a supervisor (empty active set)', async () => {
+    // #task:808 — protocol-only surface returns the daemon facts and an
+    // empty `active_agent_ids` list. The handler must not crash on a
+    // null supervisor (matches the same pattern `status` follows) so
+    // ComputerPane can still render OS / version even if the daemon's
+    // supervisor wiring is in a transient state.
+    const d = new IntentDispatcher({
+      logger: silentLogger(),
+      startedAt: 1_700_000_000_000,
+      now: () => 1_700_000_001_500,
+    });
+    const r = await d.dispatch('req-host-status', 'host_status', {});
+    expect('result' in r).toBe(true);
+    if (!('result' in r)) return;
+    expect(r.result).toMatchObject({
+      daemon_pid: process.pid,
+      daemon_version: DAEMON_VERSION,
+      started_at: 1_700_000_000_000,
+      uptime_ms: 1_500,
+      active_agent_ids: [],
+    });
+    // OS string is host-dependent — assert only that the daemon
+    // composed SOMETHING (never empty) so renderer doesn't show a blank cell.
+    expect(typeof (r.result as { os: unknown }).os).toBe('string');
+    expect((r.result as { os: string }).os.length).toBeGreaterThan(0);
+  });
+
+  it('handles host_status with a supervisor (active agent_ids deduped, exited filtered)', async () => {
+    // Two handles for the same agent in different conversations must
+    // collapse to one entry in `active_agent_ids` — the registry list
+    // backend joins this against is per-agent, not per-conversation.
+    // An exited runtime must drop out so the renderer's `online`
+    // enrichment doesn't light up a stale agent. Drive via the public
+    // `start` API + a synchronous scheduler so we don't depend on
+    // FakeSupervisor internals.
+    const supervisor = new FakeSupervisor({
+      emit: () => {},
+      schedule: cb => cb(),
+    });
+    const startOne = (conv: string, agent: string): void => {
+      supervisor.start({
+        conversation_id: conv,
+        agent_id: agent,
+        options: testStartOptions({ conversationId: conv, agentId: agent }),
+      });
+    };
+    startOne('c1', 'a1');
+    startOne('c2', 'a1');
+    startOne('c3', 'a2');
+    startOne('c4', 'a3');
+    // Hard-stop a3 so it transitions to exited (sync schedule runs the
+    // exit transition before stop() returns).
+    supervisor.stop({ conversation_id: 'c4', agent_id: 'a3', mode: 'hard' });
+
+    const d = new IntentDispatcher({ logger: silentLogger(), supervisor });
+    const r = await d.dispatch('req-host-status-2', 'host_status', {});
+    expect('result' in r).toBe(true);
+    if (!('result' in r)) return;
+    const ids = (r.result as { active_agent_ids: string[] }).active_agent_ids
+      .slice()
+      .sort();
+    expect(ids).toEqual(['a1', 'a2']);
+  });
+
+  it('host_status excludes idle phases from active_agent_ids (Cindy slice-1 P1 #2)', async () => {
+    // The dispatcher's filter is a WHITELIST of active phases
+    // (`spawning | startup_pending | ready | draining`), not a denylist
+    // of `exited`. A handle parked in `idle` (the protocol phase for
+    // "alive but no live work" — backend's wake/start gates treat
+    // `idle || exited` identically as non-live) must NOT appear in
+    // `active_agent_ids`, or ComputerPane would mark the agent
+    // online. FakeSupervisor never exposes `idle` itself, so drive the
+    // contract through a stub supervisor that returns every phase the
+    // schema admits.
+    const stubSupervisor: SupervisorContract = {
+      async start() {
+        throw new Error('not used');
+      },
+      async stop() {
+        throw new Error('not used');
+      },
+      async wake() {
+        throw new Error('not used');
+      },
+      async status() {
+        return {
+          runtimes: [
+            { conversation_id: 'c1', agent_id: 'a-spawning', pid: 1, phase: 'spawning', run_state: null, started_at: 1 },
+            { conversation_id: 'c2', agent_id: 'a-startup', pid: 2, phase: 'startup_pending', run_state: null, started_at: 2 },
+            { conversation_id: 'c3', agent_id: 'a-ready', pid: 3, phase: 'ready', run_state: null, started_at: 3 },
+            { conversation_id: 'c4', agent_id: 'a-draining', pid: 4, phase: 'draining', run_state: null, started_at: 4 },
+            { conversation_id: 'c5', agent_id: 'a-idle', pid: 5, phase: 'idle', run_state: null, started_at: 5 },
+            { conversation_id: 'c6', agent_id: 'a-exited', pid: null, phase: 'exited', run_state: null, started_at: 6 },
+          ],
+        };
+      },
+      async clearSession() {
+        throw new Error('not used');
+      },
+      async stopAll() {
+        throw new Error('not used');
+      },
+      async closeActivityLog() {
+        throw new Error('not used');
+      },
+      async pauseOutput() {
+        throw new Error('not used');
+      },
+      async resumeOutput() {
+        throw new Error('not used');
+      },
+    };
+    const d = new IntentDispatcher({
+      logger: silentLogger(),
+      supervisor: stubSupervisor,
+    });
+    const r = await d.dispatch('req-host-status-idle', 'host_status', {});
+    expect('result' in r).toBe(true);
+    if (!('result' in r)) return;
+    const ids = (r.result as { active_agent_ids: string[] }).active_agent_ids
+      .slice()
+      .sort();
+    expect(ids).toEqual([
+      'a-draining',
+      'a-ready',
+      'a-spawning',
+      'a-startup',
+    ]);
+    expect(ids).not.toContain('a-idle');
+    expect(ids).not.toContain('a-exited');
+  });
   it('syncs conversation log debug windows into the daemon logger control', async () => {
     const logger = silentLogger();
     const d = new IntentDispatcher({ logger });

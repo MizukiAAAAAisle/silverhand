@@ -10,7 +10,7 @@
  *     (`registry.resolve(id)`), fail-closed when unbound;
  *   - `agent_home` → `computeAgentDir(agentId, homeDir)` (homedir-derived,
  *     never registry-backed), identical to `agent_materialize` /
- *     `agent_workspace_read`.
+ *     `agent_workspace_tree`.
  *
  * The result is a `ResolvedStartOptions` — structurally the pre-D4.e-6
  * path-bearing shape — consumed verbatim by `buildPromptContextFromRuntime

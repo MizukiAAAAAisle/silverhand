@@ -124,6 +124,13 @@ const REQUESTS: WireFixture[] = [
     kind: { kind: 'request', intent: 'echo' },
   },
   {
+    name: 'request/host_status',
+    description:
+      '#task:808 — empty-params snapshot powering the ComputerPane (OS, daemon version, active agent_ids).',
+    frame: enc({ id: 'req-host-status', intent: 'host_status', params: {} }),
+    kind: { kind: 'request', intent: 'host_status' },
+  },
+  {
     name: 'request/conversation_log_debug-enable',
     description:
       'Conversation log debug toggle — enabled arm carries expires_at.',
@@ -371,17 +378,31 @@ const REQUESTS: WireFixture[] = [
     kind: { kind: 'request', intent: 'agent_workspace_index' },
   },
   {
-    name: 'request/agent_workspace_read',
+    name: 'request/agent_workspace_tree',
     description:
-      'D4.e-2: host-local L1/agent-home read proxy for GET /api/agents/:id/workspace. Backend sends ONLY {agent_id} — no path. The daemon resolves the agent-home dir from its own homedir (computeAgentDir) and reads system_prompt.md/MEMORY.md/notes there, so I1 holds (daemon = sole host-local path authority). Narrow scope: L1/agent-home read only — no workspace selector, no write, no browse.',
+      "#task:811: flat tree of every visible file/directory under the agent home dir. Backend sends ONLY {agent_id} — no path. The daemon walks computeAgentDir(agent_id, homedir), filters dotfiles + symlinks (intermediate or leaf), and emits `nodes` ordered (parent dir, kind=directory-first, name). A brand-new agent (no L1 dir yet) returns `{ nodes: [] }` gracefully — never an error.",
     frame: enc({
-      id: 'req-agent-workspace-read-1',
-      intent: 'agent_workspace_read',
+      id: 'req-agent-workspace-tree-1',
+      intent: 'agent_workspace_tree',
       params: {
         agent_id: 'aid_FpzaAEM',
       },
     }),
-    kind: { kind: 'request', intent: 'agent_workspace_read' },
+    kind: { kind: 'request', intent: 'agent_workspace_tree' },
+  },
+  {
+    name: 'request/agent_workspace_file_read',
+    description:
+      "#task:811: read one file from the agent home dir by virtual path. Backend forwards a /-joined virtual path (no leading or trailing slash, no `.`/`..`/dotfile/NUL/backslash segments); the daemon enforces those rules + a per-segment lstat walk (refuses symlinks intermediate or leaf) + a final realpath boundary check against the agent-home base. 64KB preview cap; `truncated` is set when exceeded.",
+    frame: enc({
+      id: 'req-agent-workspace-file-read-1',
+      intent: 'agent_workspace_file_read',
+      params: {
+        agent_id: 'aid_FpzaAEM',
+        path: 'notes/work-log.md',
+      },
+    }),
+    kind: { kind: 'request', intent: 'agent_workspace_file_read' },
   },
   {
     name: 'request/agent_l2_seed',
@@ -493,6 +514,24 @@ const RESPONSES_SUCCESS: WireFixture[] = [
     description: 'echo result — one-field round-trip.',
     frame: enc({ id: 'req-echo', result: { echoed: 'hello' } }),
     kind: { kind: 'response_success', intent: 'echo' },
+  },
+  {
+    name: 'response/host_status',
+    description:
+      '#task:808 — host snapshot. OS string composed daemon-side; active_agent_ids enables backend online-state join.',
+    frame: enc({
+      id: 'req-host-status',
+      result: {
+        os: 'macOS 14.5',
+        os_arch: 'arm64',
+        daemon_pid: PID,
+        daemon_version: '0.1.0',
+        started_at: TS,
+        uptime_ms: 60_000,
+        active_agent_ids: ['a1', 'a2'],
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'host_status' },
   },
   {
     name: 'response/conversation_log_debug-enabled',
@@ -1075,37 +1114,69 @@ const RESPONSES_SUCCESS: WireFixture[] = [
     kind: { kind: 'response_success', intent: 'agent_workspace_index' },
   },
   {
-    name: 'response/agent_workspace_read',
+    name: 'response/agent_workspace_tree',
     description:
-      'D4.e-2: daemon read the agent-home L1 dir host-side and returned the AgentWorkspaceDto verbatim — the daemon-resolved l1_path, the system_prompt + MEMORY previews (size-capped at 64 KiB; truncated:false here), and the notes listing (newest-first). The backend relays this with no fs read and no path derivation.',
+      '#task:811: daemon walked the agent home dir host-side and returned the flat tree — every visible entry, dotfiles + symlinks filtered, ordered (parent dir, kind=directory-first, name).',
     frame: enc({
-      id: 'req-agent-workspace-read-1',
+      id: 'req-agent-workspace-tree-1',
       result: {
         ok: true,
-        workspace: {
-          l1_path: '/home/silverhand/.silverhand/agents/aid_FpzaAEM',
-          system_prompt: {
-            path: '/home/silverhand/.silverhand/agents/aid_FpzaAEM/system_prompt.md',
-            size: 12,
-            mtime: 1_780_000_000_000,
-            content: '# I am Alice',
-            truncated: false,
-          },
-          memory: {
-            path: '/home/silverhand/.silverhand/agents/aid_FpzaAEM/MEMORY.md',
-            size: 9,
-            mtime: 1_780_000_000_001,
-            content: 'remember.',
-            truncated: false,
-          },
-          notes: [
-            { name: 'work-log.md', size: 240, mtime: 1_780_000_000_050 },
-            { name: 'project.md', size: 128, mtime: 1_780_000_000_010 },
+        tree: {
+          nodes: [
+            {
+              path: 'notes',
+              kind: 'directory',
+              size: 0,
+              mtime: 1_780_000_000_000,
+            },
+            {
+              path: 'MEMORY.md',
+              kind: 'file',
+              size: 9,
+              mtime: 1_780_000_000_001,
+            },
+            {
+              path: 'system_prompt.md',
+              kind: 'file',
+              size: 12,
+              mtime: 1_780_000_000_000,
+            },
+            {
+              path: 'notes/project.md',
+              kind: 'file',
+              size: 128,
+              mtime: 1_780_000_000_010,
+            },
+            {
+              path: 'notes/work-log.md',
+              kind: 'file',
+              size: 240,
+              mtime: 1_780_000_000_050,
+            },
           ],
         },
       },
     }),
-    kind: { kind: 'response_success', intent: 'agent_workspace_read' },
+    kind: { kind: 'response_success', intent: 'agent_workspace_tree' },
+  },
+  {
+    name: 'response/agent_workspace_file_read',
+    description:
+      '#task:811: daemon read one file under the agent home dir host-side and returned `{path, content, size, mtime, truncated}`. `path` echoes the caller-supplied virtual path verbatim for cache-key stability; `truncated:false` here (≤64KB).',
+    frame: enc({
+      id: 'req-agent-workspace-file-read-1',
+      result: {
+        ok: true,
+        file: {
+          path: 'notes/work-log.md',
+          content: '## entry\nworked on slice 4',
+          size: 28,
+          mtime: 1_780_000_000_050,
+          truncated: false,
+        },
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'agent_workspace_file_read' },
   },
   {
     name: 'response/agent_l2_seed',
@@ -1408,34 +1479,123 @@ const AGENT_WORKSPACE_INDEX_ERROR_FIXTURES: WireFixture[] = [
     kind: { kind: 'response_error_typed', intent: 'agent_workspace_index' },
   },
 ];
-// D4.e-2 agent_workspace_read typed errors. A MISSING per-file (brand-new
-// agent) is NOT an error — it comes back as a `null` preview / empty notes
-// in the success result (read graceful). The only typed errors are a HARD
-// host-local fs failure (fail-closed, never a server-path fallback) and the
-// catch-all.
-const AGENT_WORKSPACE_READ_ERROR_FIXTURES: WireFixture[] = [
+// #task:811 agent_workspace_tree typed errors. Same taxonomy as the
+// sibling agent_workspace_file_read intent (`AgentWorkspaceFsError`):
+// forbidden_path / not_found / fs_unavailable / internal_error.
+// `forbidden_path` here is mostly defensive — the tree handler walks
+// from the agent home dir downward and never accepts a caller-supplied
+// path — but the wire taxonomy is shared so the renderer can write one
+// translation table for both intents.
+const AGENT_WORKSPACE_TREE_ERROR_FIXTURES: WireFixture[] = [
   {
-    name: 'response/agent_workspace_read-error-fs_unavailable',
+    name: 'response/agent_workspace_tree-error-forbidden_path',
     description:
-      'Host-local read failed hard (perm/IO/EROFS) — distinct from a missing file (which is a null preview). Surfaced fail-closed; the daemon never falls back to a server-side path.',
+      'A future path-bearing variant (e.g. sub-tree under a virtual path) would surface this when the resolver rejects shape OR detects a symlink in the chain. Today the tree handler walks from the agent home root and this code is reserved for forward-compat.',
     frame: enc({
-      id: 'req-agent-workspace-read-1',
+      id: 'req-agent-workspace-tree-1',
+      error: {
+        code: 'forbidden_path',
+        message: 'path is not a readable subtree under the agent home dir',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_workspace_tree' },
+  },
+  {
+    name: 'response/agent_workspace_tree-error-not_found',
+    description:
+      'A future path-bearing variant would surface this when an intermediate directory along the requested sub-tree path is missing. Today the tree handler returns `{ nodes: [] }` for a brand-new agent dir gracefully (never an error).',
+    frame: enc({
+      id: 'req-agent-workspace-tree-1',
+      error: { code: 'not_found', message: 'path not found' },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_workspace_tree' },
+  },
+  {
+    name: 'response/agent_workspace_tree-error-fs_unavailable',
+    description:
+      'Host-local readdir/lstat failed hard (perm/IO/EROFS) while walking the agent home dir. Surfaced fail-closed; the daemon never falls back to a server-side path or silently degrades to an empty tree.',
+    frame: enc({
+      id: 'req-agent-workspace-tree-1',
+      error: {
+        code: 'fs_unavailable',
+        message: "EACCES: permission denied, scandir 'notes'",
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_workspace_tree' },
+  },
+  {
+    name: 'response/agent_workspace_tree-error-internal_error',
+    description:
+      'Catch-all for an unexpected failure while walking the agent home dir.',
+    frame: enc({
+      id: 'req-agent-workspace-tree-1',
+      error: { code: 'internal_error', message: 'unexpected walk failure' },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_workspace_tree' },
+  },
+];
+// #task:811 agent_workspace_file_read typed errors. The daemon never
+// distinguishes "your path was malformed" from "you tried to escape"
+// on the wire — both look like `forbidden_path` so a probe can't use
+// the error class to enumerate filesystem layout.
+const AGENT_WORKSPACE_FILE_READ_ERROR_FIXTURES: WireFixture[] = [
+  {
+    name: 'response/agent_workspace_file_read-error-forbidden_path',
+    description:
+      "Caller-supplied path was shape-rejected (empty / leading or trailing `/` / `.` / `..` / dotfile / NUL / backslash) OR resolution would escape the agent home base (symlink in chain, realpath crossed the boundary). Surfaced opaquely: the daemon doesn't tell the client which rule fired so the error class can't be used as a layout probe.",
+    frame: enc({
+      id: 'req-agent-workspace-file-read-1',
+      error: {
+        code: 'forbidden_path',
+        message: 'path is not a readable file under the agent home dir',
+      },
+    }),
+    kind: {
+      kind: 'response_error_typed',
+      intent: 'agent_workspace_file_read',
+    },
+  },
+  {
+    name: 'response/agent_workspace_file_read-error-not_found',
+    description:
+      'Graceful missing along the walk (ENOENT/ENOTDIR on a non-leaf, the leaf is a directory when the read endpoint asked for a file, etc).',
+    frame: enc({
+      id: 'req-agent-workspace-file-read-1',
+      error: { code: 'not_found', message: 'path not found' },
+    }),
+    kind: {
+      kind: 'response_error_typed',
+      intent: 'agent_workspace_file_read',
+    },
+  },
+  {
+    name: 'response/agent_workspace_file_read-error-fs_unavailable',
+    description:
+      'Host-local read failed hard (perm/IO/EROFS). Surfaced fail-closed; the daemon never falls back to a server-side path.',
+    frame: enc({
+      id: 'req-agent-workspace-file-read-1',
       error: {
         code: 'fs_unavailable',
         message: "EACCES: permission denied, open 'system_prompt.md'",
       },
     }),
-    kind: { kind: 'response_error_typed', intent: 'agent_workspace_read' },
+    kind: {
+      kind: 'response_error_typed',
+      intent: 'agent_workspace_file_read',
+    },
   },
   {
-    name: 'response/agent_workspace_read-error-internal_error',
+    name: 'response/agent_workspace_file_read-error-internal_error',
     description:
-      'Catch-all for an unexpected failure while assembling the agent-workspace snapshot.',
+      'Catch-all for an unexpected failure while reading one file from the agent home dir.',
     frame: enc({
-      id: 'req-agent-workspace-read-1',
+      id: 'req-agent-workspace-file-read-1',
       error: { code: 'internal_error', message: 'unexpected read failure' },
     }),
-    kind: { kind: 'response_error_typed', intent: 'agent_workspace_read' },
+    kind: {
+      kind: 'response_error_typed',
+      intent: 'agent_workspace_file_read',
+    },
   },
 ];
 // D4.e-3 agent_l2_seed typed errors. One per AgentL2SeedErrorCode slot.
@@ -1579,7 +1739,8 @@ const RUNTIME_START_ERROR_FIXTURES: WireFixture[] = [
 RESPONSES_ERROR_TYPED.push(
   ...WORKSPACE_PROVISION_ERROR_FIXTURES,
   ...AGENT_WORKSPACE_INDEX_ERROR_FIXTURES,
-  ...AGENT_WORKSPACE_READ_ERROR_FIXTURES,
+  ...AGENT_WORKSPACE_TREE_ERROR_FIXTURES,
+  ...AGENT_WORKSPACE_FILE_READ_ERROR_FIXTURES,
   ...AGENT_L2_SEED_ERROR_FIXTURES,
   ...AGENT_FILES_PURGE_ERROR_FIXTURES,
   ...RUNTIME_START_ERROR_FIXTURES,

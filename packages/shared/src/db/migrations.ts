@@ -2354,6 +2354,21 @@ export const migrations: Migration[] = [
           AND task_closed_at IS NOT NULL;
     `,
   },
+  {
+    version: 36,
+    name: 'host_display_label',
+    // ComputerPane / host registry view (#task:808): hosts get a
+    // user-facing rename target separate from `name`. `name` stays the
+    // stable normalized identifier used by `claimOrCreateLocal` and any
+    // future ref resolver; `display_label` carries whatever the user
+    // typed (or PATCHed via /api/hosts/:id). Renderer reads
+    // `display_label ?? name`. Old rows backfill NULL and fall back to
+    // `name` at the render seam — no behavior change for hosts that
+    // were claimed before rename existed.
+    up: `
+      ALTER TABLE hosts ADD COLUMN display_label TEXT;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

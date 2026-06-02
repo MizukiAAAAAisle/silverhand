@@ -883,8 +883,11 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 
      [data-panel-card="profile-section"] Profile / FileBlock /
                                          NotesBlock static cards
-       Static block tiles → `var(--card-radius)` (forza6 6px tile,
-       warm 8px tile).
+       Static block tiles → `var(--profile-section-radius,
+       var(--card-radius))`. The dedicated token lets forza6 hard-cut
+       the section to 0 (poster sticker geometry, #task:814) without
+       dragging every other `--card-radius` consumer down with it;
+       warm keeps the soft 8px tile by inheriting `--card-radius`.
 
      [data-panel-pill="*"]              Status / kind / thread /
                                          presence / path chips
@@ -915,7 +918,7 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   border-radius: 0;
 }
 [data-panel-card='profile-section'] {
-  border-radius: var(--card-radius);
+  border-radius: var(--profile-section-radius, var(--card-radius));
 }
 [data-panel-pill] {
   border-radius: var(--chip-radius);

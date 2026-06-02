@@ -26,9 +26,11 @@ import {
   AgentWorkspaceIndexErrorCodeSchema,
   AgentWorkspaceIndexParamsSchema,
   AgentWorkspaceIndexResultSchema,
-  AgentWorkspaceReadErrorCodeSchema,
-  AgentWorkspaceReadParamsSchema,
-  AgentWorkspaceReadResultSchema,
+  AgentWorkspaceFsErrorCodeSchema,
+  AgentWorkspaceTreeParamsSchema,
+  AgentWorkspaceTreeResultSchema,
+  AgentWorkspaceFileReadParamsSchema,
+  AgentWorkspaceFileReadResultSchema,
   AgentL2SeedErrorCodeSchema,
   AgentL2SeedParamsSchema,
   AgentL2SeedResultSchema,
@@ -36,6 +38,8 @@ import {
   AgentFilesPurgeParamsSchema,
   AgentFilesPurgeResultSchema,
   HelloResultSchema,
+  HostStatusParamsSchema,
+  HostStatusResultSchema,
   MAX_FRAME_BYTES,
   ResponseErrorSchema,
   RuntimeClearSessionParamsSchema,
@@ -78,9 +82,9 @@ export {
 
 // D4.e-1: workspace_provision + agent_workspace_index schemas also live
 // in `protocol.ts` (same IPC-catalogue reason as agent_materialize);
-// re-exported here so outbound-WS callers see them. D4.e-2 adds
-// agent_workspace_read; D4.e-3 adds agent_l2_seed (same reason). D4.e-4 adds
-// agent_files_purge (same reason).
+// re-exported here so outbound-WS callers see them. D4.e-3 adds
+// agent_l2_seed (same reason). D4.e-4 adds agent_files_purge (same reason).
+// #task:811 adds agent_workspace_tree + agent_workspace_file_read.
 export {
   WorkspaceProvisionParamsSchema,
   WorkspaceProvisionResultSchema,
@@ -88,9 +92,6 @@ export {
   AgentWorkspaceIndexParamsSchema,
   AgentWorkspaceIndexResultSchema,
   AgentWorkspaceIndexErrorCodeSchema,
-  AgentWorkspaceReadParamsSchema,
-  AgentWorkspaceReadResultSchema,
-  AgentWorkspaceReadErrorCodeSchema,
   AgentL2SeedParamsSchema,
   AgentL2SeedResultSchema,
   AgentL2SeedErrorCodeSchema,
@@ -104,9 +105,6 @@ export {
   type AgentWorkspaceIndexParams,
   type AgentWorkspaceIndexResult,
   type AgentWorkspaceIndexErrorCode,
-  type AgentWorkspaceReadParams,
-  type AgentWorkspaceReadResult,
-  type AgentWorkspaceReadErrorCode,
   type AgentL2SeedParams,
   type AgentL2SeedResult,
   type AgentL2SeedErrorCode,
@@ -222,17 +220,25 @@ export type AgentWorkspaceIndexWireError = z.infer<
   typeof AgentWorkspaceIndexWireErrorSchema
 >;
 
-export const AgentWorkspaceReadWireErrorSchema = z
+/**
+ * #task:811 — shared wire error envelope for the new agent home
+ * workspace tree+read pair. Both intents project the same
+ * `AgentWorkspaceFsError` taxonomy on the daemon side
+ * (`forbidden_path` / `not_found` / `fs_unavailable` /
+ * `internal_error`), so the renderer can write one translation table
+ * for both endpoints.
+ */
+export const AgentWorkspaceFsWireErrorSchema = z
   .object({
     code: z.union([
       ResponseErrorSchema.shape.code,
-      AgentWorkspaceReadErrorCodeSchema,
+      AgentWorkspaceFsErrorCodeSchema,
     ]),
     message: z.string(),
   })
   .strict();
-export type AgentWorkspaceReadWireError = z.infer<
-  typeof AgentWorkspaceReadWireErrorSchema
+export type AgentWorkspaceFsWireError = z.infer<
+  typeof AgentWorkspaceFsWireErrorSchema
 >;
 
 export const AgentL2SeedWireErrorSchema = z
@@ -291,7 +297,8 @@ export type RuntimeStartWireError = z.infer<
  * transport-level codes). Commands that may legitimately surface
  * typed daemon-business errors (`agent_materialize`; the D4.e
  * workspace data-plane commands `workspace_provision` /
- * `agent_workspace_index` / `agent_workspace_read` / `agent_l2_seed` / `agent_files_purge`;
+ * `agent_workspace_index` / `agent_l2_seed` / `agent_files_purge`;
+ * #task:811 commands `agent_workspace_tree` / `agent_workspace_file_read`;
  * and `runtime_start` — D4.e-6, codes `workspace_not_provisioned` /
  * `registry_unavailable`) override with their own wider schema.
  */
@@ -361,10 +368,15 @@ export const outboundServerCommandSchemas = {
     result: AgentWorkspaceIndexResultSchema,
     error: AgentWorkspaceIndexWireErrorSchema,
   },
-  agent_workspace_read: {
-    params: AgentWorkspaceReadParamsSchema,
-    result: AgentWorkspaceReadResultSchema,
-    error: AgentWorkspaceReadWireErrorSchema,
+  agent_workspace_tree: {
+    params: AgentWorkspaceTreeParamsSchema,
+    result: AgentWorkspaceTreeResultSchema,
+    error: AgentWorkspaceFsWireErrorSchema,
+  },
+  agent_workspace_file_read: {
+    params: AgentWorkspaceFileReadParamsSchema,
+    result: AgentWorkspaceFileReadResultSchema,
+    error: AgentWorkspaceFsWireErrorSchema,
   },
   agent_l2_seed: {
     params: AgentL2SeedParamsSchema,
@@ -375,6 +387,17 @@ export const outboundServerCommandSchemas = {
     params: AgentFilesPurgeParamsSchema,
     result: AgentFilesPurgeResultSchema,
     error: AgentFilesPurgeWireErrorSchema,
+  },
+  /** #task:808 — dynamic host snapshot for the ComputerPane / host
+   *  registry view. Payload is host-facts only (OS, daemon process,
+   *  active agent_ids); backend joins the active set against
+   *  `agents.host_id` to render per-agent `online` state. Generic
+   *  `ResponseErrorSchema` is enough — failures are transport-level
+   *  (timeout / disconnected) and surface through the adapter wrapper. */
+  host_status: {
+    params: HostStatusParamsSchema,
+    result: HostStatusResultSchema,
+    error: ResponseErrorSchema,
   },
 } as const;
 

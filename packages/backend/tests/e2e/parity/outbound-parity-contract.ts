@@ -459,46 +459,6 @@ export function registerParityPhases(getRig: () => ParityRig): void {
     expect(index.unresolved).toEqual([neverId]);
   }, 30_000);
 
-  it('Phase E — GET /api/agents/:id/workspace → real adapter → real daemon agent_workspace_read of the materialized L1 (same envelope)', async () => {
-    const rig = getRig();
-    const key = `parity-read-${rig.name}-${Date.now()}`;
-    const body = { name: `parity-read-${rig.name}-${Date.now()}`, runtime: 'claude' };
-
-    // Materialize a real agent first (same path Phase B exercises) so the
-    // daemon-side L1 template exists to be read back.
-    const created = await postCreateAgent(rig.baseUrl, rig.bearer, body, key);
-    expect(created.status, JSON.stringify(created.json)).toBe(201);
-    const agentId = (created.json as CreateAgentOk).agent.id;
-
-    // The route forwards a SEMANTIC id only; the daemon resolves the L1 dir
-    // from its OWN homedir and reads system_prompt.md / MEMORY.md / notes.
-    const res = await fetch(`${rig.baseUrl}/api/agents/${agentId}/workspace`, {
-      headers: { authorization: `Bearer ${rig.bearer}` },
-    });
-    const readBody = (await res.json()) as {
-      workspace?: {
-        l1_path: string;
-        system_prompt: { content: string } | null;
-        memory: { content: string } | null;
-        notes: { name: string }[];
-      };
-      error?: string;
-      code?: string;
-    };
-    expect(res.status, JSON.stringify(readBody)).toBe(200);
-    const ws = readBody.workspace!;
-
-    // The DTO carries the DAEMON-stamped L1 path (computed host-side from the
-    // daemon's homedir), proving the backend never derived it. The real
-    // template wrote a non-empty system_prompt.md + MEMORY.md.
-    expect(ws.l1_path).toBe(agentL1Dir(rig.agentHomeDir, agentId));
-    expect(ws.system_prompt).not.toBeNull();
-    expect(ws.system_prompt!.content.length).toBeGreaterThan(0);
-    expect(ws.memory).not.toBeNull();
-    expect(ws.memory!.content.length).toBeGreaterThan(0);
-    expect(Array.isArray(ws.notes)).toBe(true);
-  }, 30_000);
-
   it('Phase F — agent_l2_seed over the real daemon: seeds MEMORY.md + notes/ (NO system_prompt.md), idempotent, fail-closed on unprovisioned (same envelope)', async () => {
     const rig = getRig();
     const now = Date.now();

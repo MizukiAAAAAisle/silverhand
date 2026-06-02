@@ -10,6 +10,7 @@ function host(partial: Partial<HostDto> & Pick<HostDto, 'id'>): HostDto {
     created_at: partial.created_at ?? 1,
     revoked_at: partial.revoked_at ?? null,
     last_seen_at: partial.last_seen_at ?? 2,
+    display_label: partial.display_label ?? null,
   };
 }
 

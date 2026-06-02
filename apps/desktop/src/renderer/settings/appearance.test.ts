@@ -370,7 +370,7 @@ describe('theme markdown token cascade contract', () => {
       /\[data-panel-card='placeholder'\][\s\S]{0,200}border-radius:\s*0\b/,
     );
     expect(globalCss).toMatch(
-      /\[data-panel-card='profile-section'\][\s\S]{0,200}border-radius:\s*var\(--card-radius\)/,
+      /\[data-panel-card='profile-section'\][\s\S]{0,200}border-radius:\s*var\(--profile-section-radius,\s*var\(--card-radius\)\)/,
     );
     expect(globalCss).toMatch(
       /\[data-panel-pill\][\s\S]{0,200}border-radius:\s*var\(--chip-radius\)/,

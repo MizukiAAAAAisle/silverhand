@@ -864,36 +864,109 @@
    refactor → #task:415 cascade-layer lock → #task:417 token-only
    refactor that retired the lock) is captured in
    `#conv:m-jmqBPrOO8gkYsp`. */
-[data-theme='forza6'] [data-panel-card='row'],
+[data-theme='forza6'] [data-panel-card='row'] {
+  /* #task:815 — same hover-reveal grammar as `profile-section`
+     (#task:814): gray default that recedes, near-black on hover.
+     The earlier "always 2px #0A0A0A" gave every row the sticker
+     identity even at rest, which read as ad-banner the same way
+     profile-section did before its #task:814 fix. Now the structural
+     2px width stays (poster geometry), but border-color animates
+     `--border-subtle` → `--forza6-ink` on hover so the stack reads
+     as a quiet ledger until you pick a row out of it. The lime fill
+     (`background-color: #E6F68A`) and ink text recolor stay — those
+     are the row's "selected-preview" identity, distinct from the
+     border-only treatment profile-section uses. */
+  border: 2px solid var(--border-subtle);
+  transition: border-color 150ms ease, background-color 150ms ease,
+    color 150ms ease;
+}
 [data-theme='forza6'] [data-panel-card='placeholder'] {
+  /* Empty / error state — keeps the always-black 2px structural frame
+     because dashed-on-gray would read as a non-functional draft.
+     Dashed stroke is the only forza6-specific identity beyond the
+     frame; corners are squared via `--card-radius`-free declaration
+     in global.css. */
   border: 2px solid #0A0A0A;
+  border-style: dashed;
 }
 [data-theme='forza6'] [data-panel-card='row']:hover {
   /* Lime preview — same vocabulary as task card / sidebar / NavRail
-     hover. Bump the priority over Tailwind's `hover:bg-bg-hover/60`. */
+     hover. Bump the priority over Tailwind's `hover:bg-bg-hover/60`.
+     Border simultaneously snaps to `--forza6-ink` so the row reveals
+     a full poster sticker (lime fill + ink frame + ink text) on
+     hover, distinguishing it crisply from the gray-bordered rest. */
+  border-color: var(--forza6-ink);
   background-color: #E6F68A;
   color: #0A0A0A;
 }
-[data-theme='forza6'] [data-panel-card='placeholder'] {
-  /* Empty / error state — dashed stroke is the only forza6-specific
-     identity here; corners are squared via `--card-radius`-free
-     declaration in global.css. */
-  border-style: dashed;
+/* `data-panel-card="profile-section"` — Identity / Capabilities /
+   Metadata cards in Agent / Human profile (ProfileSection wraps every
+   one). #task:814 reinstates a poster-style 2px frame, but unlike the
+   v5 "always near-black" treatment that shiki `FDv3rR0UhmOEIPaE`
+   rejected as ad-banner, the new vocabulary is a hover reveal:
+
+     default = `--border-subtle` gray (recedes — the section reads as
+               an information block, not a sticker)
+     hover   = `--forza6-ink` near-black (poster reveal — same hover
+               grammar as NavRail / sidebar rows / inline TaskRef chip)
+
+   Geometry is poster hard-cut — square corners come from the
+   `--profile-section-radius: 0` token routed through global.css
+   (radius contract lives there, not here). This rule ships only the
+   non-radius identity: 2px structural border-width, gray-default
+   border-color, ink-black hover, smooth 150ms transition. The
+   renderer side ships a softer baseline (`border-border-subtle` +
+   `hover:border-border` + transition) so warm keeps its rounded
+   soft-card feel; this rule is the theme amplification, not the spec. */
+[data-theme='forza6'] [data-panel-card='profile-section'] {
+  border-width: 2px;
+  border-color: var(--border-subtle);
+  transition: border-color 150ms ease;
 }
-/* `data-panel-card="profile-section"` deliberately does NOT pick up
-   the 2px black poster frame — shiki `FDv3rR0UhmOEIPaE` flagged that
-   the heavy frame on the three Identity / Capabilities / Metadata
-   cards in Agent / Human profile read as ad-banner rather than
-   information block. They keep the JSX-supplied
-   `border-border-subtle/60` only, which renders as a hairline divider
-   in every theme. The poster identity stays focused on the surfaces
-   that are actually scan-line records (rows, dashed empty states). */
+[data-theme='forza6'] [data-panel-card='profile-section']:hover {
+  border-color: var(--forza6-ink);
+}
 
 [data-theme='forza6'] [data-panel-pill] {
   /* Pill identity is type + saturation — caps + heavier tracking. */
   font-family: var(--font-display);
   letter-spacing: 0.06em;
   font-weight: 700;
+}
+
+/* `data-panel-pill="schedule-spec"` (cron expression / interval chip) —
+   colour now driven by JSX classes (`bg-warning` for cron,
+   `bg-success` for interval) so the chip color-keys to its KindPill
+   and KindTile (#task:822, shiki `LI8UlqKBuXtWw_gm`). This rule only
+   resets the generic `[data-panel-pill]` display-caps treatment back
+   to mono — cron expressions like `0 10 * * 0` and `every 60s` are
+   code-island content, stylized caps would mangle the values.
+   Background / border / foreground are NOT touched here so the kind
+   semantic stays the single source of color truth. */
+[data-theme='forza6'] [data-panel-pill='schedule-spec'] {
+  font-family: var(--font-mono);
+  letter-spacing: 0;
+  font-weight: 400;
+}
+
+/* `data-panel-pill="schedule-target"` (target conversation chip) —
+   #task:817. shiki: 'tag 背景色没有主题适配。在 forza6 下是灰色,
+   试试 --forza6-indigo-slab.' Target is the "where it fires" pointer,
+   not kind-keyed, so it keeps the saturated indigo-slab landmark
+   (warm theme keeps its softer `bg-bg-surface` baseline from the
+   renderer). Border and background match colors so no visible
+   hairline — the chip reads as a single block of color. White ink
+   reads ~8:1 on `--forza6-indigo-slab`. See
+   `forza6.css --forza6-indigo-slab` doc for scope rationale. */
+[data-theme='forza6'] [data-panel-pill='schedule-target'] {
+  background-color: var(--forza6-indigo-slab);
+  border-color: var(--forza6-indigo-slab);
+  color: #FFFFFF;
+  /* Reset the generic pill display-caps treatment above — same
+     rationale as schedule-spec: structured config text in mono. */
+  font-family: var(--font-mono);
+  letter-spacing: 0;
+  font-weight: 400;
 }
 
 [data-theme='forza6'] [data-panel-tabs] {

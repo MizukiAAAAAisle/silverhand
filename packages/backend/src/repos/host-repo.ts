@@ -14,6 +14,7 @@ function rowToDto(row: HostRow): HostDto {
     created_at: row.created_at,
     revoked_at: row.revoked_at,
     last_seen_at: row.last_seen_at,
+    display_label: row.display_label,
   };
 }
 
@@ -24,6 +25,10 @@ export interface CreateHostOptions {
   userId?: string | null;
   installationId?: string | null;
   lastSeenAt?: number | null;
+  /** v36: raw user-supplied label captured at claim time. Stored as
+   *  `hosts.display_label`; the renderer reads `display_label ?? name`.
+   *  `name` is independently the normalized stable identifier. */
+  displayLabel?: string | null;
 }
 
 export interface ClaimLocalHostResult {
@@ -81,8 +86,8 @@ export class HostRepo {
     this.db
       .prepare(
         `INSERT INTO hosts
-           (id, name, kind, user_id, installation_id, last_seen_at, revoked_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`,
+           (id, name, kind, user_id, installation_id, last_seen_at, revoked_at, created_at, display_label)
+         VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
       )
       .run(
         id,
@@ -92,6 +97,7 @@ export class HostRepo {
         opts.installationId ?? null,
         opts.lastSeenAt ?? null,
         now,
+        normalizeDisplayLabel(opts.displayLabel),
       );
     const row = this.get(id);
     if (!row) throw new Error('insert failed');
@@ -217,15 +223,25 @@ export class HostRepo {
 
     const legacyLocal = this.getUnclaimedLocal();
     if (legacyLocal) {
-      return {
-        host: this.bindToUserInstallation({
-          hostId: legacyLocal.id,
-          userId: input.userId,
-          installationId: input.installationId,
-          lastSeenAt: now,
-        }),
-        created: false,
-      };
+      const bound = this.bindToUserInstallation({
+        hostId: legacyLocal.id,
+        userId: input.userId,
+        installationId: input.installationId,
+        lastSeenAt: now,
+      });
+      // v36 (#task:808): the preferred label is the user's chosen
+      // rename; it must apply whether we minted a fresh row OR bound an
+      // existing legacy `local` placeholder — otherwise renaming would
+      // silently drop on bootstrap-only installs (those where
+      // `ensureLocal` ran first and left an unclaimed row sitting on the
+      // canonical `LOCAL_HOST_NAME`). Only set when a label was actually
+      // supplied, so subsequent reclaims without a label don't blank an
+      // existing display_label.
+      const labeled =
+        input.preferredName !== undefined
+          ? this.updateDisplayLabel(bound.id, input.preferredName)
+          : null;
+      return { host: labeled ?? bound, created: false };
     }
 
     return {
@@ -233,9 +249,22 @@ export class HostRepo {
         userId: input.userId,
         installationId: input.installationId,
         lastSeenAt: now,
+        displayLabel: input.preferredName ?? null,
       }),
       created: true,
     };
+  }
+
+  /** v36 (#task:808): user-facing rename. Pass `null` to clear the
+   *  custom label back to the default (renderer falls back to `name`).
+   *  Returns the updated row, or `null` when the host id doesn't exist.
+   *  Trims/validates length per `normalizeDisplayLabel`. */
+  updateDisplayLabel(id: string, label: string | null): HostRow | null {
+    const normalized = normalizeDisplayLabel(label);
+    this.db
+      .prepare(`UPDATE hosts SET display_label = ? WHERE id = ?`)
+      .run(normalized, id);
+    return this.get(id);
   }
 
   touchLastSeen(id: string, lastSeenAt = Date.now()): boolean {
@@ -316,4 +345,16 @@ function normalizeHostName(value: string): string {
     .replace(/^-+|-+$/g, '')
     .slice(0, 48);
   return normalized || LOCAL_HOST_NAME;
+}
+
+/**
+ * v36: display-label normalization. UI-facing field — much looser than
+ * `name`: keep user-typed characters as-is (CJK, spaces, casing all
+ * fine) but trim whitespace, cap length, and coerce empty → null so
+ * the renderer's `display_label ?? name` fallback fires.
+ */
+function normalizeDisplayLabel(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  const trimmed = value.trim().slice(0, 64);
+  return trimmed.length > 0 ? trimmed : null;
 }

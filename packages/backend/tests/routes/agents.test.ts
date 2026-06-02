@@ -509,80 +509,73 @@ describe('PATCH /api/agents/:id', () => {
   });
 });
 
-describe('GET /api/agents/:id/workspace', () => {
+// #task:811 — replacement for the legacy single-shot snapshot above.
+// The renderer no longer needs a curated `system_prompt + MEMORY +
+// notes/` triple; the new two-column AgentWorkspacePane talks to two
+// generic endpoints — `/workspace/tree` for the file list and
+// `/workspace/file?path=…` for one file at a time. The daemon owns
+// path security.
+describe('GET /api/agents/:id/workspace/tree', () => {
   let t: TestApp | null = null;
   afterEach(() => { t?.cleanup(); t = null; });
 
-  it('returns L1 path + seeded system_prompt + memory previews', async () => {
+  it('returns the flat tree of every visible entry under the agent home dir', async () => {
     t = buildTestApp();
     const created = await (
       await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
     ).json() as any;
-    const res = await (
-      await http(t).get(`/api/agents/${created.agent.id}/workspace`)
-    ).json() as any;
-    expect(res.workspace.l1_path).toContain(created.agent.id);
-    expect(res.workspace.system_prompt).not.toBeNull();
-    expect(res.workspace.memory).not.toBeNull();
-    expect(res.workspace.system_prompt.content).toContain('Global role');
-    expect(res.workspace.memory.content).toContain('Key Knowledge');
-    expect(res.workspace.memory.content).toContain('notes/work-log.md');
-    expect(Array.isArray(res.workspace.notes)).toBe(true);
-    expect(res.workspace.notes.map((n: any) => n.name)).toContain('work-log.md');
+    const res = await http(t).get(
+      `/api/agents/${created.agent.id}/workspace/tree`,
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    const paths = body.tree.nodes.map((n: any) => `${n.kind}:${n.path}`);
+    // Seeded L1 always includes system_prompt.md + MEMORY.md + the
+    // notes/ directory. Directories sort before files at the same
+    // parent; the tree is flat (the renderer reconstructs the
+    // hierarchy off `path`).
+    expect(paths).toContain('directory:notes');
+    expect(paths).toContain('file:system_prompt.md');
+    expect(paths).toContain('file:MEMORY.md');
   });
 
-  // D4.e-2 — the host-local read now flows through the daemon
-  // (`agent_workspace_read`), not a backend fs read. These pin the three
-  // Cindy review focuses: (1) backend dispatches a semantic id only — no
-  // path; (2) it works in BOTH modes (the old standalone 503 disable is
-  // gone, A6); (3) every daemon-side failure fails closed with a typed
-  // code — the backend never falls back to its own disk.
-  it('dispatches agent_workspace_read with a semantic agent_id only (no path)', async () => {
+  it('dispatches agent_workspace_tree with a semantic agent_id only (no path)', async () => {
     t = buildTestApp();
     const created = await (
       await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
     ).json() as any;
     t.fakeHostWs!.calls.length = 0;
-    await http(t).get(`/api/agents/${created.agent.id}/workspace`);
-    const reads = t.fakeHostWs!.calls.filter(
-      c => c.kind === 'agent_workspace_read',
+    await http(t).get(`/api/agents/${created.agent.id}/workspace/tree`);
+    const calls = t.fakeHostWs!.calls.filter(
+      c => c.kind === 'agent_workspace_tree',
     );
-    expect(reads).toHaveLength(1);
-    // Exactly { agent_id } — no path/workspace_path leaks to the daemon.
-    expect(reads[0]!.params).toEqual({ agent_id: created.agent.id });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.params).toEqual({ agent_id: created.agent.id });
   });
 
-  it('works in standalone mode — the old standalone 503 disable is gone (A6)', async () => {
-    t = buildTestApp({ deploymentMode: 'standalone' });
-    const created = await (
-      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
-    ).json() as any;
-    const res = await http(t).get(`/api/agents/${created.agent.id}/workspace`);
-    expect(res.status).toBe(200);
-    const body = await res.json() as any;
-    expect(body.workspace.system_prompt.content).toContain('Global role');
-    // Proves it went through the daemon read, not a backend fs read.
-    expect(
-      t.fakeHostWs!.calls.some(c => c.kind === 'agent_workspace_read'),
-    ).toBe(true);
+  it('404 for an unknown agent', async () => {
+    t = buildTestApp();
+    const res = await http(t).get('/api/agents/aid_missing/workspace/tree');
+    expect(res.status).toBe(404);
   });
 
-  it('daemon not attached → 503 host_attach_pending (fail-closed, no fs fallback)', async () => {
+  it('daemon not attached → 503 host_attach_pending (fail-closed)', async () => {
     t = buildTestApp();
     const created = await (
       await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
     ).json() as any;
     t.fakeHostWs!.sendCommandError = new HostWsCommandTransportError(
       'transport_no_connection',
-      'host local is not connected to outbound websocket',
-      { hostId: 'local', commandKind: 'agent_workspace_read', requestId: 'r' },
+      'host local is not connected',
+      { hostId: 'local', commandKind: 'agent_workspace_tree', requestId: 'r' },
     );
-    const res = await http(t).get(`/api/agents/${created.agent.id}/workspace`);
+    const res = await http(t).get(
+      `/api/agents/${created.agent.id}/workspace/tree`,
+    );
     expect(res.status).toBe(503);
     const body = await res.json() as any;
     expect(body.code).toBe('host_attach_pending');
-    // Fail-closed: no workspace payload was synthesized from server disk.
-    expect(body.workspace).toBeUndefined();
+    expect(body.tree).toBeUndefined();
   });
 
   it('host-local fs failure → 503 fs_unavailable (typed, no fs fallback)', async () => {
@@ -592,14 +585,170 @@ describe('GET /api/agents/:id/workspace', () => {
     ).json() as any;
     t.fakeHostWs!.sendCommandError = new HostWsCommandResponseError(
       'fs_unavailable' as never,
-      'host-local read failed: EACCES',
-      { hostId: 'local', commandKind: 'agent_workspace_read', requestId: 'r' },
+      'EACCES while walking the agent home dir',
+      { hostId: 'local', commandKind: 'agent_workspace_tree', requestId: 'r' },
     );
-    const res = await http(t).get(`/api/agents/${created.agent.id}/workspace`);
+    const res = await http(t).get(
+      `/api/agents/${created.agent.id}/workspace/tree`,
+    );
     expect(res.status).toBe(503);
     const body = await res.json() as any;
     expect(body.code).toBe('fs_unavailable');
-    expect(body.workspace).toBeUndefined();
+  });
+});
+
+describe('GET /api/agents/:id/workspace/file', () => {
+  let t: TestApp | null = null;
+  afterEach(() => { t?.cleanup(); t = null; });
+
+  it('reads a top-level file via virtual path', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
+    ).json() as any;
+    const res = await http(t).get(
+      `/api/agents/${created.agent.id}/workspace/file?path=${encodeURIComponent(
+        'system_prompt.md',
+      )}`,
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.file.path).toBe('system_prompt.md');
+    expect(body.file.content).toContain('Global role');
+    expect(body.file.truncated).toBe(false);
+  });
+
+  it('forwards the path query param opaquely to the daemon', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
+    ).json() as any;
+    t.fakeHostWs!.calls.length = 0;
+    // The backend MUST NOT do shape work on the path — it forwards the
+    // string verbatim and the daemon enforces every rule. We pin that
+    // here by sending a clearly invalid `..`-shape path and asserting
+    // the daemon receives it unchanged (the daemon then projects it
+    // to forbidden_path; the route surfaces the typed code).
+    await http(t).get(
+      `/api/agents/${created.agent.id}/workspace/file?path=${encodeURIComponent(
+        '../etc/passwd',
+      )}`,
+    );
+    const calls = t.fakeHostWs!.calls.filter(
+      c => c.kind === 'agent_workspace_file_read',
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.params).toEqual({
+      agent_id: created.agent.id,
+      path: '../etc/passwd',
+    });
+  });
+
+  it('400 forbidden_path when the path query param is missing', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
+    ).json() as any;
+    const res = await http(t).get(
+      `/api/agents/${created.agent.id}/workspace/file`,
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json() as any;
+    expect(body.code).toBe('forbidden_path');
+    // No daemon round-trip for an obvious typo.
+    expect(
+      t.fakeHostWs!.calls.some(c => c.kind === 'agent_workspace_file_read'),
+    ).toBe(false);
+  });
+
+  it('forbidden_path daemon verdict → 400 (UI-level reject, not retry)', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
+    ).json() as any;
+    t.fakeHostWs!.sendCommandError = new HostWsCommandResponseError(
+      'forbidden_path' as never,
+      'path is not a readable file under the agent home dir',
+      {
+        hostId: 'local',
+        commandKind: 'agent_workspace_file_read',
+        requestId: 'r',
+      },
+    );
+    const res = await http(t).get(
+      `/api/agents/${created.agent.id}/workspace/file?path=${encodeURIComponent(
+        '../etc/passwd',
+      )}`,
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json() as any;
+    expect(body.code).toBe('forbidden_path');
+    expect(body.file).toBeUndefined();
+  });
+
+  it('not_found daemon verdict → 404', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
+    ).json() as any;
+    const res = await http(t).get(
+      `/api/agents/${created.agent.id}/workspace/file?path=${encodeURIComponent(
+        'notes/missing.md',
+      )}`,
+    );
+    expect(res.status).toBe(404);
+    const body = await res.json() as any;
+    expect(body.code).toBe('not_found');
+  });
+
+  it('host-local fs failure → 503 fs_unavailable (typed)', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
+    ).json() as any;
+    t.fakeHostWs!.sendCommandError = new HostWsCommandResponseError(
+      'fs_unavailable' as never,
+      'EACCES while reading the file',
+      {
+        hostId: 'local',
+        commandKind: 'agent_workspace_file_read',
+        requestId: 'r',
+      },
+    );
+    const res = await http(t).get(
+      `/api/agents/${created.agent.id}/workspace/file?path=${encodeURIComponent(
+        'system_prompt.md',
+      )}`,
+    );
+    expect(res.status).toBe(503);
+    const body = await res.json() as any;
+    expect(body.code).toBe('fs_unavailable');
+  });
+
+  it('relays `truncated:true` from the daemon for a 64KB+ file', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
+    ).json() as any;
+    t.fakeHostWs!.agentWorkspaceFileReadAckOverride = (params): any => ({
+      ok: true,
+      file: {
+        path: params.path,
+        content: 'x'.repeat(64 * 1024) + '\n\n… (truncated; …)',
+        size: 64 * 1024 + 500,
+        mtime: 1_780_000_000_000,
+        truncated: true,
+      },
+    });
+    const res = await http(t).get(
+      `/api/agents/${created.agent.id}/workspace/file?path=${encodeURIComponent(
+        'MEMORY.md',
+      )}`,
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.file.truncated).toBe(true);
+    expect(body.file.size).toBe(64 * 1024 + 500);
   });
 });
 

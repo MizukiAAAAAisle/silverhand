@@ -123,7 +123,15 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
       {!canEdit ? <ReadOnlyNotice /> : null}
 
       <ProfileSection title="Identity">
-        <div className="flex items-center gap-4">
+        {/* `items-start` (was `items-center`) — the avatar column
+            (avatar + Remove + optional error) is taller than the
+            name column (name input + meta line), so center-aligning
+            pushed the name visibly below the avatar's top edge.
+            shiki `1nxzdHvkmh_X8fN1` (#task:824): '顶部没有和头像
+            对齐?'. Top-aligning makes the name and avatar share the
+            top inset; the Remove button just hangs below the avatar
+            on its own. */}
+        <div className="flex items-start gap-4">
           {canEdit ? (
             // Avatar column: picker on top, Remove link centered below
             // (vertical-stack mirror of EditableAgentAvatar — same copy,
@@ -302,10 +310,21 @@ const GhostInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputEle
     <input
       ref={ref}
       data-panel-control="ghost-input"
+      // No `border border-transparent` and no `py-*` in the idle
+      // state — the previous defaults (`border-transparent` + `py-1`)
+      // pushed the visible text 5px below the input's box top, which
+      // showed up as a visible y-shift between the avatar (image fills
+      // its 56×56 box from corner to corner, visible top = column top)
+      // and the name input (visible text top = column top + 5px).
+      // shiki `jlFehpdzColU0Cvs` (#task:825) saw this whenever the
+      // image-bearing avatar was present (UserIcon-fallback masked the
+      // gap by happening to center 14px below column top). Hover /
+      // focus affordance survives via bg + ring; the border-on-hover
+      // was a nice-to-have, not load-bearing.
       className={cn(
-        'w-full border border-transparent bg-transparent px-2 py-1 text-sm text-text-primary placeholder:text-text-muted',
-        'transition-colors hover:border-border-subtle hover:bg-bg-base/40',
-        'focus:border-border focus:bg-bg-floating focus:outline-none focus:ring-2 focus:ring-border-focus',
+        'w-full bg-transparent px-2 text-sm text-text-primary placeholder:text-text-muted',
+        'transition-colors hover:bg-bg-base/40',
+        'focus:bg-bg-floating focus:outline-none focus:ring-2 focus:ring-border-focus',
         className,
       )}
       {...props}

@@ -773,7 +773,413 @@ describe('host routes', () => {
       expect(await res.json()).toMatchObject({ error: 'unauthorized' });
     });
   });
+
+  // ─── v36 (#task:808) — PATCH /api/hosts/:id rename ──────────────────
+  describe('PATCH /api/hosts/:id', () => {
+    it('renames a host the caller owns and exposes display_label on the DTO', async () => {
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const host = new HostRepo(t.ctx.db).getOwnedLocalForUser(t.viewerUserId);
+      expect(host).not.toBeNull();
+
+      const res = await sessionHttp(t, userToken).patch(
+        apiPaths.host(host!.id),
+        { display_label: 'Studio Mac' },
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json() as { host: { id: string; name: string; display_label: string | null } };
+      expect(body.host.id).toBe(host!.id);
+      expect(body.host.display_label).toBe('Studio Mac');
+      // `name` stays stable — never the rename target.
+      expect(body.host.name).toBe(host!.name);
+    });
+
+    it('clears the label with null', async () => {
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const host = new HostRepo(t.ctx.db).getOwnedLocalForUser(t.viewerUserId);
+      const h = sessionHttp(t, userToken);
+      await h.patch(apiPaths.host(host!.id), { display_label: 'temp' });
+      const res = await h.patch(apiPaths.host(host!.id), { display_label: null });
+      expect(res.status).toBe(200);
+      const body = await res.json() as { host: { display_label: string | null } };
+      expect(body.host.display_label).toBeNull();
+    });
+
+    it('auto-truncates over-long labels via the repo (single round-trip UX)', async () => {
+      // Schema allows up to 256; the repo trims+slices to 64. A 200-char
+      // input should land as the first 64 chars, NOT as a 400.
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const host = new HostRepo(t.ctx.db).getOwnedLocalForUser(t.viewerUserId);
+      const long = 'A'.repeat(200);
+      const res = await sessionHttp(t, userToken).patch(
+        apiPaths.host(host!.id),
+        { display_label: long },
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json() as { host: { display_label: string | null } };
+      expect(body.host.display_label).toBe('A'.repeat(64));
+    });
+
+    it('rejects display_label past the hard cap (256 chars)', async () => {
+      // Anything well past the UI's plausible cap is rejected — protects
+      // the column from a buggy renderer / direct curl spamming KB-class
+      // strings (Cindy slice-1 nit #2 boundary).
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const host = new HostRepo(t.ctx.db).getOwnedLocalForUser(t.viewerUserId);
+      const tooBig = 'A'.repeat(257);
+      const res = await sessionHttp(t, userToken).patch(
+        apiPaths.host(host!.id),
+        { display_label: tooBig },
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it('returns 404 for cross-user host (no enumeration)', async () => {
+      // Default fixture provisions a local host for every TEST_FIXTURE_USER_IDS
+      // entry — `alice` and `bob` each own one. Caller=alice, target=bob's.
+      t = buildTestApp();
+      const bobHost = new HostRepo(t.ctx.db)
+        .listOwnedActiveLocalForUser('bob')[0];
+      expect(bobHost).toBeDefined();
+      const aliceToken = t.ctx.authSessions.issueSession({ userId: 'alice' }).userToken;
+      const res = await sessionHttp(t, aliceToken).patch(
+        apiPaths.host(bobHost!.id),
+        { display_label: 'ha' },
+      );
+      expect(res.status).toBe(404);
+      expect(await res.json()).toMatchObject({ error_code: 'host_not_found' });
+    });
+
+    it('returns 404 for missing id (no enumeration)', async () => {
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const res = await sessionHttp(t, userToken).patch(
+        apiPaths.host('nonexistent'),
+        { display_label: 'x' },
+      );
+      expect(res.status).toBe(404);
+      expect(await res.json()).toMatchObject({ error_code: 'host_not_found' });
+    });
+
+    it('rejects rename on a revoked host with 409', async () => {
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const repo = new HostRepo(t.ctx.db);
+      const host = repo.getOwnedLocalForUser(t.viewerUserId);
+      expect(repo.revoke(host!.id)).toBe(true);
+
+      const res = await sessionHttp(t, userToken).patch(
+        apiPaths.host(host!.id),
+        { display_label: 'new' },
+      );
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({ error_code: 'host_revoked' });
+    });
+  });
+
+  // ─── v36 (#task:808) — GET /api/hosts/:id/status snapshot ──────────
+  describe('GET /api/hosts/:id/status', () => {
+    it('returns `available` arm with snapshot + top-level agents when the daemon answers', async () => {
+      let controller: FakeHostWsController | null = null;
+      t = buildTestApp({ hostWsController: () => controller });
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const host = new HostRepo(t.ctx.db).getOwnedLocalForUser(t.viewerUserId);
+      expect(host).not.toBeNull();
+
+      // Register an agent on this host so the registration list has at
+      // least one row to enrich with `online`.
+      const insertedAgentId = insertTestAgent(t, {
+        hostId: host!.id,
+        name: 'helper',
+        displayName: 'Helper',
+        runtime: 'claude',
+      });
+
+      controller = new FakeHostWsController(async call => {
+        expect(call.kind).toBe('host_status');
+        expect(call.params).toEqual({});
+        return {
+          os: 'macOS 14.5',
+          os_arch: 'arm64',
+          daemon_pid: 4242,
+          daemon_version: '0.1.0',
+          started_at: 1_700_000_000_000,
+          uptime_ms: 60_000,
+          active_agent_ids: [insertedAgentId],
+        };
+      });
+
+      const res = await sessionHttp(t, userToken).get(
+        apiPaths.hostStatus(host!.id),
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json() as Record<string, unknown>;
+      expect(body).toMatchObject({
+        host_id: host!.id,
+        availability: 'available',
+        snapshot: {
+          os: 'macOS 14.5',
+          os_arch: 'arm64',
+          daemon_pid: 4242,
+          daemon_version: '0.1.0',
+          started_at: 1_700_000_000_000,
+          uptime_ms: 60_000,
+        },
+        agents: [
+          {
+            agent_id: insertedAgentId,
+            display_name: 'Helper',
+            handle: '@helper',
+            runtime: 'claude',
+            avatar_url: null,
+            online: 'online',
+          },
+        ],
+      });
+      // Registration moved OUT of snapshot (Cindy `Mtf5zZL-Y7PauIDi` P1):
+      // snapshot carries ONLY dynamic daemon-derived fields now.
+      expect(body.snapshot as Record<string, unknown>).not.toHaveProperty('agents');
+      // Tagged-union strictness: `available` arm MUST NOT carry a `reason`.
+      expect(body).not.toHaveProperty('reason');
+    });
+
+    it('marks unregistered active agent_ids as filler-noise (NOT injected into top-level agents[])', async () => {
+      // The registration list is the source of truth. A daemon that
+      // reports an active id NOT in `agents.host_id == hostId` does not
+      // get a phantom row injected — ComputerPane shows registrations
+      // only.
+      let controller: FakeHostWsController | null = null;
+      t = buildTestApp({ hostWsController: () => controller });
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const host = new HostRepo(t.ctx.db).getOwnedLocalForUser(t.viewerUserId);
+      const agentId = insertTestAgent(t, {
+        hostId: host!.id,
+        name: 'real',
+        displayName: 'Real Agent',
+        runtime: 'claude',
+      });
+
+      controller = new FakeHostWsController(async () => ({
+        os: 'macOS 14.5',
+        daemon_pid: 1,
+        daemon_version: '0.1.0',
+        started_at: 1,
+        uptime_ms: 1,
+        active_agent_ids: [agentId, 'phantom-not-registered'],
+      }));
+
+      const res = await sessionHttp(t, userToken).get(
+        apiPaths.hostStatus(host!.id),
+      );
+      const body = await res.json() as {
+        availability: string;
+        agents: Array<{ agent_id: string; online: string }>;
+      };
+      expect(body.availability).toBe('available');
+      expect(body.agents.map(a => a.agent_id)).toEqual([agentId]);
+      expect(body.agents[0]!.online).toBe('online');
+    });
+
+    it('returns `disconnected` arm with registration list (all offline) when daemon not attached', async () => {
+      // Cindy `Mtf5zZL-Y7PauIDi` P1: registration view must survive daemon
+      // disconnect. ComputerPane still shows which agents live on this
+      // host even when the daemon is offline — they just can't be online.
+      t = buildTestApp({ hostWsController: () => null });
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const host = new HostRepo(t.ctx.db).getOwnedLocalForUser(t.viewerUserId);
+      const agentA = insertTestAgent(t, {
+        hostId: host!.id,
+        name: 'a',
+        displayName: 'A',
+        runtime: 'claude',
+      });
+      const agentB = insertTestAgent(t, {
+        hostId: host!.id,
+        name: 'b',
+        displayName: 'B',
+        runtime: 'claude',
+      });
+
+      const res = await sessionHttp(t, userToken).get(
+        apiPaths.hostStatus(host!.id),
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json() as {
+        availability: string;
+        agents: Array<{ agent_id: string; online: string; handle: string; avatar_url: string | null }>;
+      } & Record<string, unknown>;
+      expect(body).toMatchObject({
+        host_id: host!.id,
+        availability: 'disconnected',
+      });
+      // Registration survives daemon disconnect, all offline.
+      expect(body.agents.map(a => a.agent_id).sort()).toEqual([agentA, agentB].sort());
+      expect(body.agents.every(a => a.online === 'offline')).toBe(true);
+      // `avatar_url` MUST be present on every offline-arm row too —
+      // the field is canonical on the producer side regardless of
+      // availability. Cindy `r96u1vc8awdjfnVT`: pin every arm so the
+      // schema/route invariant doesn't drift on one arm only.
+      expect(body.agents.every(a => 'avatar_url' in a && a.avatar_url === null)).toBe(true);
+      // Tagged-union strictness: never leak a half-snapshot or a reason
+      // onto a non-`available` arm (Cindy `nTB67NWSepk054UL` constraint).
+      expect(body).not.toHaveProperty('snapshot');
+      expect(body).not.toHaveProperty('reason');
+    });
+
+    it('returns `unreachable{reason:"timeout"}` with registration list (all offline) when daemon RPC times out', async () => {
+      let controller: FakeHostWsController | null = null;
+      t = buildTestApp({ hostWsController: () => controller });
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const host = new HostRepo(t.ctx.db).getOwnedLocalForUser(t.viewerUserId);
+      const agentId = insertTestAgent(t, {
+        hostId: host!.id,
+        name: 'reg',
+        displayName: 'Reg',
+        runtime: 'claude',
+      });
+
+      controller = new FakeHostWsController(async call => {
+        // Importing the error class inline keeps this test from
+        // forcing a top-level dependency the other suites don't need.
+        const { HostWsCommandTransportError } = await import(
+          '../../src/ws/host-ws-server.js'
+        );
+        throw new HostWsCommandTransportError(
+          'transport_timeout',
+          'simulated timeout',
+          { hostId: call.hostId, commandKind: call.kind },
+        );
+      });
+
+      const res = await sessionHttp(t, userToken).get(
+        apiPaths.hostStatus(host!.id),
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json() as {
+        availability: string;
+        agents: Array<{ agent_id: string; online: string; avatar_url: string | null }>;
+      } & Record<string, unknown>;
+      expect(body).toMatchObject({
+        host_id: host!.id,
+        availability: 'unreachable',
+        reason: 'timeout',
+      });
+      // Registration still visible; offline because no live daemon answered.
+      expect(body.agents.map(a => a.agent_id)).toEqual([agentId]);
+      expect(body.agents[0]!.online).toBe('offline');
+      expect(body.agents[0]!.avatar_url).toBeNull();
+      expect(body).not.toHaveProperty('snapshot');
+    });
+
+    it('returns `revoked` arm with registration list (all offline), no daemon dispatch', async () => {
+      let controller: FakeHostWsController | null = null;
+      t = buildTestApp({ hostWsController: () => controller });
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const repo = new HostRepo(t.ctx.db);
+      const host = repo.getOwnedLocalForUser(t.viewerUserId);
+      const agentId = insertTestAgent(t, {
+        hostId: host!.id,
+        name: 'orphan',
+        displayName: 'Orphan',
+        runtime: 'claude',
+      });
+      expect(repo.revoke(host!.id)).toBe(true);
+
+      controller = new FakeHostWsController(async () => {
+        throw new Error('daemon should NOT be dispatched for a revoked host');
+      });
+
+      const res = await sessionHttp(t, userToken).get(
+        apiPaths.hostStatus(host!.id),
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json() as {
+        availability: string;
+        agents: Array<{ agent_id: string; online: string; avatar_url: string | null }>;
+      } & Record<string, unknown>;
+      expect(body).toMatchObject({
+        host_id: host!.id,
+        availability: 'revoked',
+      });
+      // Registrations survive revocation so the user can audit / cleanup.
+      expect(body.agents.map(a => a.agent_id)).toEqual([agentId]);
+      expect(body.agents[0]!.online).toBe('offline');
+      expect(body.agents[0]!.avatar_url).toBeNull();
+      expect(body).not.toHaveProperty('snapshot');
+      expect(body).not.toHaveProperty('reason');
+      // Daemon dispatch was short-circuited — controller stayed idle.
+      expect(controller!.calls).toHaveLength(0);
+    });
+
+    it('returns 404 for cross-user host', async () => {
+      t = buildTestApp();
+      const bobHost = new HostRepo(t.ctx.db)
+        .listOwnedActiveLocalForUser('bob')[0];
+      const aliceToken = t.ctx.authSessions.issueSession({ userId: 'alice' }).userToken;
+      const res = await sessionHttp(t, aliceToken).get(
+        apiPaths.hostStatus(bobHost!.id),
+      );
+      expect(res.status).toBe(404);
+    });
+  });
 });
+
+/** Helper: insert a minimal agent row bound to `hostId` so the route's
+ *  registration projection has something to render. The agent service
+ *  has its own materialization machinery (D4.d) we don't need here —
+ *  these tests focus on the route projection, not the spawn lifecycle.
+ */
+function insertTestAgent(
+  t: TestApp,
+  input: { hostId: string; name: string; displayName: string; runtime: string },
+): string {
+  const id = `agent-${input.name}-${Math.floor(Math.random() * 1_000_000)}`;
+  const now = Date.now();
+  t.ctx.db
+    .prepare(
+      `INSERT INTO agents
+         (id, name, display_name, runtime, model, reasoning_effort, fast_mode,
+          host_id, description, created_by_user_id,
+          materialization_status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?, NULL, ?, 'active', ?, ?)`,
+    )
+    .run(
+      id,
+      input.name,
+      input.displayName,
+      input.runtime,
+      input.hostId,
+      t.viewerUserId,
+      now,
+      now,
+    );
+  return id;
+}
 
 function sessionHttp(t: TestApp, token: string) {
   return http(t, { authorization: `Bearer ${token}` });

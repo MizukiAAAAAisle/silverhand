@@ -63,6 +63,23 @@ export class AgentRepo {
     return rows.map(rowToDto);
   }
 
+  /**
+   * v36 (#task:808) — host-scoped registration view used by
+   * `GET /api/hosts/:id/status` to render the agents bound to a host
+   * (NOT a process list — that's `runtime_status`). Cross-user / ACL
+   * checks live at the route layer; this method only joins on
+   * `host_id`. Ordering matches the global list so the renderer's
+   * row-key stability matches between contexts.
+   */
+  listByHost(hostId: string): AgentDto[] {
+    const rows = this.db
+      .prepare<[string], AgentRow>(
+        'SELECT * FROM agents WHERE host_id = ? ORDER BY created_at ASC',
+      )
+      .all(hostId);
+    return rows.map(rowToDto);
+  }
+
   get(id: string): AgentDto | null {
     const row = this.db
       .prepare<[string], AgentRow>('SELECT * FROM agents WHERE id = ?')

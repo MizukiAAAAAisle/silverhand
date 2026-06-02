@@ -362,7 +362,6 @@ describe('D5.a-4 embedded parity (real startBackend embedded + real in-process d
     expect(kinds.has('agent_materialize')).toBe(true);
     expect(kinds.has('workspace_provision')).toBe(true);
     expect(kinds.has('agent_workspace_index')).toBe(true);
-    expect(kinds.has('agent_workspace_read')).toBe(true);
     expect(kinds.has('agent_l2_seed')).toBe(true);
     expect(kinds.has('agent_files_purge')).toBe(true);
 

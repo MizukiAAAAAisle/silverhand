@@ -3,13 +3,12 @@ import type { AgentRuntimeConversation } from '@silverhand/shared';
 import { AgentHeader } from './AgentHeader';
 import { AgentProfileCard } from './AgentProfileCard';
 import { AgentSchedulesCard } from './AgentSchedulesCard';
-import { AgentWorkspaceCard } from './AgentWorkspaceCard';
+import { AgentWorkspacePane } from './AgentWorkspacePane';
 import { AgentConversationActivityList } from './AgentConversationActivityList';
 import { AgentSidebar, type AgentSection } from './AgentSidebar';
 import {
   useAgent,
   useAgentRuntimeState,
-  useAgentWorkspace,
 } from './hooks';
 import { useHostProvenanceGate } from '@/features/hosts/hooks';
 
@@ -50,7 +49,6 @@ export function AgentView({
   onOpenConversation,
 }: AgentViewProps): JSX.Element {
   const agentQuery = useAgent(agentId);
-  const workspaceQuery = useAgentWorkspace(agentId);
   const runtimeQuery = useAgentRuntimeState(agentId);
   const hostProvenance = useHostProvenanceGate();
 
@@ -114,28 +112,41 @@ export function AgentView({
       <div className="flex min-h-0 flex-1">
         <AgentSidebar active={section} onChange={setSection} />
 
-        <div className="min-w-0 flex-1 overflow-y-auto">
-          <div className="px-8 py-6">
-            {section === 'profile' ? (
-              <AgentProfileCard agent={agent} runtimeState={runtimeQuery.data} />
-            ) : null}
-            {section === 'workspace' ? (
-              <AgentWorkspaceCard
-                workspace={workspaceQuery.data}
-                isLoading={workspaceQuery.isLoading}
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          {section === 'workspace' ? (
+            // Workspace pane manages its own scrolling — file tree and
+            // preview each scroll internally. The outer column must NOT
+            // add a vertical scrollbar of its own (would defeat the
+            // two-internal-scroll design and chop the pane off below
+            // the fold). #task:812.
+            <div className="flex min-h-0 flex-1 flex-col px-8 py-6">
+              <AgentWorkspacePane
+                agentId={agent.id}
+                hostId={agent.host_id}
                 canRevealPath={hostProvenance.canUseLocalHostPathFor(agent.host_id)}
               />
-            ) : null}
-            {section === 'runtime' ? (
-              <AgentConversationActivityList
-                state={runtimeQuery.data}
-                onOpenConversation={onOpenConversation}
-              />
-            ) : null}
-            {section === 'schedules' ? (
-              <AgentSchedulesCard agentId={agent.id} />
-            ) : null}
-          </div>
+            </div>
+          ) : (
+            <div className="flex-1 overflow-y-auto">
+              <div className="px-8 py-6">
+                {section === 'profile' ? (
+                  <AgentProfileCard
+                    agent={agent}
+                    runtimeState={runtimeQuery.data}
+                  />
+                ) : null}
+                {section === 'runtime' ? (
+                  <AgentConversationActivityList
+                    state={runtimeQuery.data}
+                    onOpenConversation={onOpenConversation}
+                  />
+                ) : null}
+                {section === 'schedules' ? (
+                  <AgentSchedulesCard agentId={agent.id} />
+                ) : null}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </main>

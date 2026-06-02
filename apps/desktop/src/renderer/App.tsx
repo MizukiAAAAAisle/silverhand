@@ -3,6 +3,11 @@ import { Power } from 'lucide-react';
 import { Toaster } from 'sonner';
 import { NavRail } from '@/components/layout/NavRail';
 import { ComputersPanel } from '@/components/layout/ComputersPanel';
+import { HostDetailView } from '@/features/hosts/HostDetailView';
+import {
+  useBackendInfoSnapshot,
+  useHostsQuery,
+} from '@/features/hosts/hooks';
 import { MembersPanel } from '@/components/layout/MembersPanel';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { ChannelsSidebar } from '@/components/layout/ChannelsSidebar';
@@ -250,6 +255,13 @@ function RegisteredAppShell(): JSX.Element {
   const [createChannelOpen, setCreateChannelOpen] = useState(false);
   const [workspaceSettingsOpen, setWorkspaceSettingsOpen] = useState(false);
   const [tasksDrawerOpen, setTasksDrawerOpen] = useState(false);
+  // #task:808 slice 4 — selected host in the Computers section. In-memory
+  // (no URL persistence in v1; no other surface deep-links to a specific
+  // host). Auto-defaults to the local host once the host list lands so
+  // the right pane isn't empty on first visit. Selection is cleared if
+  // the host disappears (e.g. revoke) so the detail view doesn't render
+  // a stale row.
+  const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
   const {
     jumpTarget,
     requestJump,
@@ -608,6 +620,44 @@ function RegisteredAppShell(): JSX.Element {
       : agents[0]!.id;
     nav.go(routes.membersAgent(target), { replace: true });
   }, [agents, appSection, nav, selectedAgentId, selectedUserId]);
+
+  // #task:808 slice 4 — host list + auto-default selection. We own the
+  // hosts/backend-info queries here so the master `ComputersPanel` and
+  // the right-pane `HostDetailView` both read from a single resolved
+  // list (no double React Query subscription, no race between them
+  // mid-update). ComputersPanel takes the data as props; HostDetailView
+  // gets the resolved `selectedHost` directly.
+  const hostsQuery = useHostsQuery();
+  const backendInfoQuery = useBackendInfoSnapshot();
+  const computerHosts = hostsQuery.data?.hosts ?? [];
+  const localHostIdForComputers =
+    backendInfoQuery.data?.local_host_id ?? null;
+  const localHostAttached =
+    backendInfoQuery.data?.local_host_ws_attached_at !== null &&
+    backendInfoQuery.data?.local_host_ws_attached_at !== undefined;
+  useEffect(() => {
+    if (computerHosts.length === 0) return;
+    // Drop a stale selection (e.g. the host was revoked from another
+    // surface) before falling through to the default-picker.
+    if (
+      selectedHostId &&
+      !computerHosts.some(h => h.id === selectedHostId)
+    ) {
+      setSelectedHostId(null);
+    }
+    if (selectedHostId) return;
+    const localHit = localHostIdForComputers
+      ? computerHosts.find(h => h.id === localHostIdForComputers)
+      : null;
+    setSelectedHostId(localHit?.id ?? computerHosts[0]!.id);
+  }, [computerHosts, localHostIdForComputers, selectedHostId]);
+  const selectedHost = useMemo(
+    () =>
+      selectedHostId
+        ? computerHosts.find(h => h.id === selectedHostId) ?? null
+        : null,
+    [computerHosts, selectedHostId],
+  );
 
   // If the open thread is loaded and its parent doesn't match the current
   // selection, drop it. Don't drop on "missing from list" — that fires
@@ -1377,19 +1427,32 @@ function RegisteredAppShell(): JSX.Element {
               }}
             >
               <nav className="flex-1 overflow-y-auto py-1.5">
-                <ComputersPanel />
+                <ComputersPanel
+                  hosts={computerHosts}
+                  localHostId={localHostIdForComputers}
+                  localAttached={localHostAttached}
+                  isLoading={hostsQuery.isLoading}
+                  selectedHostId={selectedHostId}
+                  onSelectHost={setSelectedHostId}
+                />
               </nav>
             </aside>
-            <main
-              className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
-              style={{
-                borderRadius: 'var(--card-radius, 0)',
-                boxShadow: 'var(--card-shadow, none)',
-                overflow: 'hidden',
-              }}
-            >
-              选一台 computer 看详情
-            </main>
+            {selectedHost ? (
+              <HostDetailView key={selectedHost.id} host={selectedHost} />
+            ) : (
+              <main
+                className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
+                style={{
+                  borderRadius: 'var(--card-radius, 0)',
+                  boxShadow: 'var(--card-shadow, none)',
+                  overflow: 'hidden',
+                }}
+              >
+                {hostsQuery.isLoading
+                  ? 'Loading computers…'
+                  : '选一台 computer 看详情'}
+              </main>
+            )}
           </>
         ) : (
           <>

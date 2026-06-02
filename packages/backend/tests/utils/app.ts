@@ -5,8 +5,9 @@ import { randomBytes } from 'node:crypto';
 import type {
   AgentRunState,
   AgentRunTerminalReason,
-  AgentWorkspaceDto,
-  AgentWorkspaceNote,
+  AgentWorkspaceFileRead,
+  AgentWorkspaceTree,
+  AgentWorkspaceTreeNode,
   BindAddressScope,
   ServerConfig,
 } from '@silverhand/shared';
@@ -266,14 +267,27 @@ export class FakeHostWsServerController implements HostWsServerController {
       ) => OutboundServerCommandResult<'agent_workspace_index'>)
     | null = null;
   /**
-   * D4.e-2 — override the `agent_workspace_read` ack. Tests that want to
-   * exercise a typed `fs_unavailable` failure or a specific DTO can swap
-   * this. Default reads the agent's seeded L1 dir on the embedded test fs.
+   * #task:811 — override the `agent_workspace_tree` ack. Default mirrors
+   * the daemon: walk the agent home dir on the embedded test fs and emit
+   * a flat sorted tree. Tests swap this to surface typed errors
+   * (`forbidden_path` / `not_found` / `fs_unavailable`) or a custom shape.
    */
-  agentWorkspaceReadAckOverride:
+  agentWorkspaceTreeAckOverride:
     | ((
-        params: OutboundServerCommandParams<'agent_workspace_read'>,
-      ) => OutboundServerCommandResult<'agent_workspace_read'>)
+        params: OutboundServerCommandParams<'agent_workspace_tree'>,
+      ) => OutboundServerCommandResult<'agent_workspace_tree'>)
+    | null = null;
+  /**
+   * #task:811 — override the `agent_workspace_file_read` ack. Default
+   * mirrors the daemon: validate the virtual path (segment shape +
+   * leaf is a regular file under the seeded L1 dir) and return the
+   * file content with the 64KB cap. Tests swap this to surface typed
+   * errors or to assert that the daemon receives the path opaquely.
+   */
+  agentWorkspaceFileReadAckOverride:
+    | ((
+        params: OutboundServerCommandParams<'agent_workspace_file_read'>,
+      ) => OutboundServerCommandResult<'agent_workspace_file_read'>)
     | null = null;
   /**
    * D4.e-3 — override the `agent_l2_seed` ack. Tests that want to exercise a
@@ -439,19 +453,39 @@ export class FakeHostWsServerController implements HostWsServerController {
         unresolved,
       } as OutboundServerCommandResult<K>;
     }
-    if (kind === 'agent_workspace_read') {
-      const p = params as OutboundServerCommandParams<'agent_workspace_read'>;
-      if (this.agentWorkspaceReadAckOverride) {
-        return this.agentWorkspaceReadAckOverride(
+    if (kind === 'agent_workspace_tree') {
+      const p = params as OutboundServerCommandParams<'agent_workspace_tree'>;
+      if (this.agentWorkspaceTreeAckOverride) {
+        return this.agentWorkspaceTreeAckOverride(
           p,
         ) as OutboundServerCommandResult<K>;
       }
-      // Mirror the daemon: read the agent's L1/agent-home dir host-side. On
-      // the embedded test fs that dir is `<silverhandDir>/agents/<agent_id>`
-      // — where the fake `agent_materialize` seeds the L1 template clone.
       const dir = joinPath(this.silverhandDir, 'agents', p.agent_id);
-      const workspace = await readFakeAgentWorkspace(dir);
-      return { ok: true as const, workspace } as OutboundServerCommandResult<K>;
+      const tree = await listFakeAgentWorkspaceTree(dir);
+      return { ok: true as const, tree } as OutboundServerCommandResult<K>;
+    }
+    if (kind === 'agent_workspace_file_read') {
+      const p =
+        params as OutboundServerCommandParams<'agent_workspace_file_read'>;
+      if (this.agentWorkspaceFileReadAckOverride) {
+        return this.agentWorkspaceFileReadAckOverride(
+          p,
+        ) as OutboundServerCommandResult<K>;
+      }
+      const dir = joinPath(this.silverhandDir, 'agents', p.agent_id);
+      const file = await readFakeAgentWorkspaceFile(dir, p.path);
+      if (!file) {
+        throw new HostWsCommandResponseError(
+          'not_found' as never,
+          'path not found',
+          {
+            hostId,
+            commandKind: 'agent_workspace_file_read',
+            requestId: 'fake',
+          },
+        );
+      }
+      return { ok: true as const, file } as OutboundServerCommandResult<K>;
     }
     if (kind === 'agent_l2_seed') {
       const p = params as OutboundServerCommandParams<'agent_l2_seed'>;
@@ -571,53 +605,102 @@ async function seedFakeAgentL2(l2Dir: string): Promise<boolean> {
 }
 
 /**
- * D4.e-2 — the fake adapter's stand-in for the daemon's host-local read
- * (`readAgentWorkspace`). Reads `system_prompt.md` / `MEMORY.md` / `notes/`
- * from the agent's L1 dir on the shared embedded test fs and assembles the
- * `AgentWorkspaceDto` the route relays. Mirrors the daemon body (64 KiB
- * preview cap, newest-first notes, graceful null on missing).
+ * #task:811 fake — flat tree of every visible file/dir under the
+ * agent home dir. Mirrors the production daemon body
+ * (`listAgentWorkspaceTree`): dotfile filter at every depth, symlinks
+ * skipped, **tree preorder** (each directory immediately followed by
+ * its descendants, then the next sibling), with per-parent sort
+ * (directories before files, alpha within each kind). Cindy round-1 P2
+ * — a global flat sort would separate `notes/a.md` from its parent
+ * `notes/` and break the renderer's depth-from-iteration-order layout.
+ * Used by tests exercising the `agent_workspace_tree` route.
  */
-async function readFakeAgentWorkspace(dir: string): Promise<AgentWorkspaceDto> {
-  const MAX = 64 * 1024;
-  const preview = async (
-    path: string,
-  ): Promise<AgentWorkspaceDto['system_prompt']> => {
-    let stat: Awaited<ReturnType<typeof fsp.stat>>;
-    try {
-      stat = await fsp.stat(path);
-    } catch {
-      return null;
+async function listFakeAgentWorkspaceTree(
+  baseDir: string,
+): Promise<AgentWorkspaceTree> {
+  const nodes: AgentWorkspaceTreeNode[] = [];
+  const baseExists = await fsp
+    .stat(baseDir)
+    .then(() => true)
+    .catch(() => false);
+  if (!baseExists) return { nodes: [] };
+  await walkFakeTree(baseDir, baseDir, nodes);
+  return { nodes };
+}
+
+async function walkFakeTree(
+  baseDir: string,
+  current: string,
+  out: AgentWorkspaceTreeNode[],
+): Promise<void> {
+  const entries = await fsp
+    .readdir(current, { withFileTypes: true })
+    .catch(() => null);
+  if (!entries) return;
+  // Per-parent sort: dirs first, alpha within each kind. Combined with
+  // the recursive descendant push below, this yields tree preorder.
+  const sorted = entries.slice().sort((a, b) => {
+    const aDir = a.isDirectory();
+    const bDir = b.isDirectory();
+    if (aDir !== bDir) return aDir ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  for (const e of sorted) {
+    if (e.name.startsWith('.')) continue;
+    if (e.isSymbolicLink()) continue;
+    const full = joinPath(current, e.name);
+    const rel = full.startsWith(baseDir)
+      ? full.slice(baseDir.length).replace(/^[\\/]+/, '').replace(/\\/g, '/')
+      : full;
+    const stat = await fsp.lstat(full).catch(() => null);
+    if (!stat) continue;
+    if (stat.isSymbolicLink()) continue;
+    if (e.isDirectory()) {
+      out.push({
+        path: rel,
+        kind: 'directory',
+        size: 0,
+        mtime: stat.mtimeMs,
+      });
+      // Push descendants immediately after the dir entry (preorder).
+      await walkFakeTree(baseDir, full, out);
+    } else if (e.isFile()) {
+      out.push({
+        path: rel,
+        kind: 'file',
+        size: stat.size,
+        mtime: stat.mtimeMs,
+      });
     }
-    if (!stat.isFile()) return null;
-    const buf = await fsp.readFile(path);
-    const truncated = buf.byteLength > MAX;
-    return {
-      path,
-      size: stat.size,
-      mtime: stat.mtimeMs,
-      content: truncated ? buf.subarray(0, MAX).toString('utf8') : buf.toString('utf8'),
-      truncated,
-    };
-  };
-  let notes: AgentWorkspaceNote[] = [];
-  try {
-    const entries = await fsp.readdir(joinPath(dir, 'notes'), {
-      withFileTypes: true,
-    });
-    for (const e of entries) {
-      if (!e.isFile() || e.name.startsWith('.')) continue;
-      const s = await fsp.stat(joinPath(dir, 'notes', e.name)).catch(() => null);
-      if (s) notes.push({ name: e.name, size: s.size, mtime: s.mtimeMs });
-    }
-    notes.sort((a, b) => b.mtime - a.mtime || a.name.localeCompare(b.name));
-  } catch {
-    notes = [];
   }
-  const [system_prompt, memory] = await Promise.all([
-    preview(joinPath(dir, 'system_prompt.md')),
-    preview(joinPath(dir, 'MEMORY.md')),
-  ]);
-  return { l1_path: dir, system_prompt, memory, notes };
+}
+
+/**
+ * #task:811 fake — read a single file under the agent home dir. Returns
+ * null when the path doesn't exist or resolves to a directory; the
+ * caller projects null to a typed `not_found` to mirror the daemon.
+ * Shape rules / symlink rejection are handled by the production daemon
+ * helper; tests that need to exercise those paths use the
+ * `agentWorkspaceFileReadAckOverride` hook to simulate the daemon
+ * verdict directly.
+ */
+async function readFakeAgentWorkspaceFile(
+  baseDir: string,
+  virtualPath: string,
+): Promise<AgentWorkspaceFileRead | null> {
+  const full = joinPath(baseDir, virtualPath);
+  const stat = await fsp.lstat(full).catch(() => null);
+  if (!stat || !stat.isFile()) return null;
+  const MAX = 64 * 1024;
+  const buf = await fsp.readFile(full);
+  const truncated = buf.byteLength > MAX;
+  return {
+    path: virtualPath,
+    content: truncated ? buf.subarray(0, MAX).toString('utf8') : buf.toString('utf8'),
+    size: stat.size,
+    mtime: stat.mtimeMs,
+    truncated,
+  };
 }
 
 const TEST_PASSWORD_HASH_PARAMS: Argon2idPasswordHashParams = {

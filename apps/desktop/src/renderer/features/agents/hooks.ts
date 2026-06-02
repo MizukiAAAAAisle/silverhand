@@ -3,7 +3,8 @@ import type {
   AgentDeleteImpactDto,
   AgentDto,
   AgentRuntimeStateDto,
-  AgentWorkspaceDto,
+  AgentWorkspaceFileRead,
+  AgentWorkspaceTree,
   CreateAgentInput,
   ScheduleDto,
   ScheduleListStatusFilter,
@@ -14,7 +15,10 @@ import { api, apiUpload } from '@/lib/api';
 
 const agentsKey = ['agents'] as const;
 const agentKey = (id: string) => ['agents', id] as const;
-const agentWorkspaceKey = (id: string) => ['agents', id, 'workspace'] as const;
+const agentWorkspaceTreeKey = (id: string) =>
+  ['agents', id, 'workspace', 'tree'] as const;
+const agentWorkspaceFileKey = (id: string, path: string) =>
+  ['agents', id, 'workspace', 'file', path] as const;
 const agentRuntimeStateKey = (id: string) => ['agents', id, 'runtime-state'] as const;
 const agentDeleteImpactKey = (id: string) => ['agents', id, 'delete-impact'] as const;
 const agentSchedulesKey = (id: string, status: ScheduleListStatusFilter) =>
@@ -167,19 +171,49 @@ export function useClearAgentAvatar(agentId: string | null) {
   });
 }
 
-export function useAgentWorkspace(agentId: string | null) {
+export function useAgentWorkspaceTree(agentId: string | null) {
   return useQuery({
-    queryKey: agentId ? agentWorkspaceKey(agentId) : ['agents', 'none', 'workspace'],
+    queryKey: agentId
+      ? agentWorkspaceTreeKey(agentId)
+      : ['agents', 'none', 'workspace', 'tree'],
     enabled: !!agentId,
     queryFn: async () => {
-      const res = await api<{ workspace: AgentWorkspaceDto }>(
-        `/api/agents/${agentId}/workspace`,
+      const res = await api<{ tree: AgentWorkspaceTree }>(
+        apiPaths.agentWorkspaceTree(agentId!),
       );
-      return res.workspace;
+      return res.tree;
     },
-    // Workspace files change rarely from the UI's POV (agent edits
-    // them via tool use); a 30s stale window is plenty and avoids
-    // refetching every focus change.
+    // The tree is essentially static for the human's purposes — files
+    // appear/disappear when the agent edits them via tools. 30s stale
+    // window plus a manual Refresh button on the pane header.
+    staleTime: 30_000,
+  });
+}
+
+/**
+ * Read one file by virtual path. The path is the cache key suffix —
+ * switching the selected file is a fresh query, and React Query's
+ * structural-share keeps the previous file's content rendered until
+ * the new one resolves so the preview never blanks.
+ *
+ * Pass `null` to disable the query (no file selected → preview shows
+ * an empty-state).
+ */
+export function useAgentWorkspaceFile(
+  agentId: string | null,
+  path: string | null,
+) {
+  return useQuery({
+    queryKey:
+      agentId && path
+        ? agentWorkspaceFileKey(agentId, path)
+        : ['agents', 'none', 'workspace', 'file'],
+    enabled: !!agentId && !!path,
+    queryFn: async () => {
+      const url = `${apiPaths.agentWorkspaceFile(agentId!)}?path=${encodeURIComponent(path!)}`;
+      const res = await api<{ file: AgentWorkspaceFileRead }>(url);
+      return res.file;
+    },
     staleTime: 30_000,
   });
 }

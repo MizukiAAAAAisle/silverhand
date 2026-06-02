@@ -226,4 +226,77 @@ describe('HostRepo', () => {
     // Alice's list.
     expect(aliceList.find(h => h.id.startsWith('bob'))).toBeUndefined();
   });
+
+  // v36 (#task:808) — display_label is the renderer-facing rename field;
+  // `name` stays the stable wire identifier. The DTO exposes both so the
+  // renderer can fall back to `name` when the user hasn't renamed. The
+  // label must land on the row whether `claimOrCreateLocal` minted a
+  // fresh row OR adopted a legacy `local` placeholder (`ensureLocal`-only
+  // installs hit the bind branch first).
+  it('claimOrCreateLocal persists the preferred name into display_label (not name)', () => {
+    const { db, viewerUserId } = openTestDb();
+    const repo = new HostRepo(db);
+    const result = repo.claimOrCreateLocal({
+      userId: viewerUserId,
+      installationId: 'install-pref',
+      preferredName: "shiki's MacBook Pro",
+    });
+    expect(result.host.display_label).toBe("shiki's MacBook Pro");
+    // `name` must remain a normalized stable identifier — never the raw label.
+    expect(result.host.name).not.toBe("shiki's MacBook Pro");
+    expect(result.host.name).toMatch(/^[a-z0-9_-]+$/);
+  });
+
+  it('updateDisplayLabel sets, clears, and trims; missing id returns null', () => {
+    const { db, viewerUserId } = openTestDb();
+    const repo = new HostRepo(db);
+    const host = repo.create('owned-local', 'local', {
+      userId: viewerUserId,
+      installationId: 'install-1',
+    });
+    expect(host.display_label).toBeNull();
+
+    // Set
+    const renamed = repo.updateDisplayLabel(host.id, 'Studio Desk');
+    expect(renamed?.display_label).toBe('Studio Desk');
+
+    // Trim + cap at 64 chars (silent normalization, NOT an error — keeps
+    // the renderer's rename UX a single round-trip).
+    const long = 'A'.repeat(120);
+    const trimmed = repo.updateDisplayLabel(host.id, `   ${long}   `);
+    expect(trimmed?.display_label).toBe('A'.repeat(64));
+
+    // Empty / whitespace-only → null (renderer falls back to `name`).
+    expect(repo.updateDisplayLabel(host.id, '   ')?.display_label).toBeNull();
+    expect(repo.updateDisplayLabel(host.id, '')?.display_label).toBeNull();
+
+    // Explicit clear via null.
+    expect(repo.updateDisplayLabel(host.id, 'Visible')?.display_label).toBe(
+      'Visible',
+    );
+    expect(repo.updateDisplayLabel(host.id, null)?.display_label).toBeNull();
+
+    // Missing id surfaces null rather than throwing — caller projects to
+    // a 404 in the HTTP route layer.
+    expect(repo.updateDisplayLabel('does-not-exist', 'whatever')).toBeNull();
+  });
+
+  it('rowToDto carries display_label through both create and list paths', () => {
+    const { db, viewerUserId } = openTestDb();
+    const repo = new HostRepo(db);
+    repo.create('host-a', 'local', {
+      userId: viewerUserId,
+      installationId: 'install-a',
+      displayLabel: 'Workstation',
+    });
+    repo.create('host-b', 'local', {
+      userId: viewerUserId,
+      installationId: 'install-b',
+    });
+    const list = repo.listForUser(viewerUserId);
+    const a = list.find(h => h.name === 'host-a');
+    const b = list.find(h => h.name === 'host-b');
+    expect(a?.display_label).toBe('Workstation');
+    expect(b?.display_label).toBeNull();
+  });
 });

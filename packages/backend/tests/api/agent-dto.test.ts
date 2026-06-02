@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   AgentDtoSchema,
+  AgentOnHostDtoSchema,
   CreateAgentInputSchema,
   UpdateAgentInputSchema,
 } from '@silverhand/shared';
@@ -124,5 +125,53 @@ describe('agent materialization fields (D4.d v33)', () => {
       materialization_failed_at: null,
     });
     expect('idempotency_key' in parsed).toBe(false);
+  });
+});
+
+describe('AgentOnHostDto avatar_url skew tolerance (#task:809)', () => {
+  // shiki dogfood `xAro_4AQQApUJG7H` / Cindy `r96u1vc8awdjfnVT`:
+  // `avatar_url` is additive display enrichment, not a required wire
+  // field. The shared schema must default missing → null so a dev
+  // hot-reload window (renderer ahead of backend) or any future
+  // producer/consumer skew can't break the whole `HostStatusResponse`
+  // parse and crash the detail pane. New backend always emits the
+  // field as canonical producer; this regression locks the receive-
+  // side safety net.
+  const baseAgentRow = {
+    agent_id: 'a-1',
+    display_name: 'Helper',
+    handle: '@helper',
+    runtime: 'claude',
+    online: 'online' as const,
+  };
+
+  it('parses a row that omits avatar_url and normalizes it to null', () => {
+    const parsed = AgentOnHostDtoSchema.parse({ ...baseAgentRow });
+    expect(parsed.avatar_url).toBeNull();
+  });
+
+  it('parses a row with explicit null avatar_url', () => {
+    const parsed = AgentOnHostDtoSchema.parse({
+      ...baseAgentRow,
+      avatar_url: null,
+    });
+    expect(parsed.avatar_url).toBeNull();
+  });
+
+  it('parses a row with a real avatar_url string', () => {
+    const parsed = AgentOnHostDtoSchema.parse({
+      ...baseAgentRow,
+      avatar_url: '/api/agents/a-1/avatar?v=1',
+    });
+    expect(parsed.avatar_url).toBe('/api/agents/a-1/avatar?v=1');
+  });
+
+  it('rejects a non-string avatar_url that is not null/undefined', () => {
+    expect(
+      AgentOnHostDtoSchema.safeParse({
+        ...baseAgentRow,
+        avatar_url: 42,
+      }).success,
+    ).toBe(false);
   });
 });

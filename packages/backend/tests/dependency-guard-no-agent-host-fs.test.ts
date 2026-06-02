@@ -8,7 +8,7 @@
  * agent L1 home, an L2 workspace memory dir, or a workspace `.silverhand/`
  * skeleton — those all go through daemon intents (`agent_materialize`,
  * `agent_l2_seed`, `agent_files_purge`, `workspace_provision`,
- * `agent_workspace_read`). The pre-D4.e seeding/purge code
+ * `agent_workspace_tree`, `agent_workspace_file_read`). The pre-D4.e seeding/purge code
  * (`workspace-files.ts`, the DELETE `fs.rm` block, `agent-workspace.ts`,
  * `agent-profile.ts`) has been removed across D4.e-2…-5.
  *
@@ -141,7 +141,7 @@ describe('backend/src → filesystem import boundary (D4.e-5 A1 / I6)', () => {
           'agent L1 home, an L2 workspace memory dir, or a workspace',
           '.silverhand/ skeleton — route it through a daemon intent',
           '(agent_materialize / agent_l2_seed / agent_files_purge /',
-          'workspace_provision / agent_workspace_read).',
+          'workspace_provision / agent_workspace_tree / agent_workspace_file_read).',
           '',
           'If this is genuine backend-local infrastructure (db / logs / blob',
           'storage / managed-root bootstrap), add it to FS_ALLOWLIST with a',

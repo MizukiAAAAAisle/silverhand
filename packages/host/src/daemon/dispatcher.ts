@@ -33,8 +33,10 @@ import {
   type AgentMaterializeResult,
   type AgentWorkspaceIndexParams,
   type AgentWorkspaceIndexResult,
-  type AgentWorkspaceReadParams,
-  type AgentWorkspaceReadResult,
+  type AgentWorkspaceTreeParams,
+  type AgentWorkspaceTreeResult,
+  type AgentWorkspaceFileReadParams,
+  type AgentWorkspaceFileReadResult,
   type AgentL2SeedParams,
   type AgentL2SeedResult,
   type AgentFilesPurgeParams,
@@ -60,6 +62,7 @@ import {
   type WorkspaceProvisionResult,
 } from '../protocol.js';
 import { DAEMON_VERSION, createDaemonHelloResult } from './version.js';
+import { composeHostOs, hostOsArch } from './host-os.js';
 import type { DaemonLogger } from './logger.js';
 import type { SupervisorContract } from './supervisor-contract.js';
 import { logIntent } from './daemon-logging.js';
@@ -169,15 +172,26 @@ export interface DispatcherOptions {
     params: AgentWorkspaceIndexParams,
   ) => AgentWorkspaceIndexResult | Promise<AgentWorkspaceIndexResult>;
   /**
-   * D4.e-2 — handler for `agent_workspace_read` (host-local L1/agent-home
-   * read proxy for `GET /api/agents/:id/workspace`). Production wiring:
-   * `readAgentWorkspace`. Typed errors (`AgentWorkspaceReadError`) are
-   * projected with their code by the catch arm after per-intent schema
-   * validation. `undefined` → the dispatcher throws (→ `internal_error`).
+   * #task:811 — handler for `agent_workspace_tree` (flat tree of every
+   * visible entry under the agent home dir). Production wiring:
+   * `listAgentWorkspaceTree`. Typed errors (`AgentWorkspaceFsError`)
+   * are projected by the catch arm after per-intent schema validation.
+   * `undefined` → the dispatcher throws (→ `internal_error`).
    */
-  agentWorkspaceReadHandler?: (
-    params: AgentWorkspaceReadParams,
-  ) => AgentWorkspaceReadResult | Promise<AgentWorkspaceReadResult>;
+  agentWorkspaceTreeHandler?: (
+    params: AgentWorkspaceTreeParams,
+  ) => AgentWorkspaceTreeResult | Promise<AgentWorkspaceTreeResult>;
+  /**
+   * #task:811 — handler for `agent_workspace_file_read` (read one file
+   * from the agent home dir by virtual path). Production wiring:
+   * `readAgentWorkspaceFile`. Same typed-error handling as the tree
+   * handler (the two share `AgentWorkspaceFsError` taxonomy:
+   * `forbidden_path` / `not_found` / `fs_unavailable` /
+   * `internal_error`).
+   */
+  agentWorkspaceFileReadHandler?: (
+    params: AgentWorkspaceFileReadParams,
+  ) => AgentWorkspaceFileReadResult | Promise<AgentWorkspaceFileReadResult>;
   /**
    * D4.e-3 — handler for `agent_l2_seed` (member agent L2 seed on the
    * owning host). Production wiring: `seedAgentL2`. Typed errors
@@ -232,10 +246,17 @@ export class IntentDispatcher {
         params: AgentWorkspaceIndexParams,
       ) => AgentWorkspaceIndexResult | Promise<AgentWorkspaceIndexResult>)
     | undefined;
-  private readonly agentWorkspaceReadHandler:
+  private readonly agentWorkspaceTreeHandler:
     | ((
-        params: AgentWorkspaceReadParams,
-      ) => AgentWorkspaceReadResult | Promise<AgentWorkspaceReadResult>)
+        params: AgentWorkspaceTreeParams,
+      ) => AgentWorkspaceTreeResult | Promise<AgentWorkspaceTreeResult>)
+    | undefined;
+  private readonly agentWorkspaceFileReadHandler:
+    | ((
+        params: AgentWorkspaceFileReadParams,
+      ) =>
+        | AgentWorkspaceFileReadResult
+        | Promise<AgentWorkspaceFileReadResult>)
     | undefined;
   private readonly agentL2SeedHandler:
     | ((
@@ -270,7 +291,8 @@ export class IntentDispatcher {
     this.agentMaterializeHandler = opts.agentMaterializeHandler;
     this.workspaceProvisionHandler = opts.workspaceProvisionHandler;
     this.agentWorkspaceIndexHandler = opts.agentWorkspaceIndexHandler;
-    this.agentWorkspaceReadHandler = opts.agentWorkspaceReadHandler;
+    this.agentWorkspaceTreeHandler = opts.agentWorkspaceTreeHandler;
+    this.agentWorkspaceFileReadHandler = opts.agentWorkspaceFileReadHandler;
     this.agentL2SeedHandler = opts.agentL2SeedHandler;
     this.agentFilesPurgeHandler = opts.agentFilesPurgeHandler;
   }
@@ -566,6 +588,50 @@ export class IntentDispatcher {
         const p = params as { message: string };
         return { echoed: p.message };
       }
+      case 'host_status': {
+        // #task:808 — host snapshot powering `GET /api/hosts/:id/status`.
+        // Daemon-owned facts: OS string composed locally (the server NEVER
+        // synthesizes OS from cached DB rows — that's the whole point of
+        // routing this through the daemon), `process.pid`/version/uptime,
+        // plus the active agent_id subset so backend can intersect against
+        // the registration table for `online` enrichment. The full
+        // `RuntimeStateDto` shape is intentionally NOT echoed back — backend
+        // only needs the id set; sending pid/phase/run_state here would
+        // duplicate the `runtime_status` surface and leak runtime detail
+        // that ComputerPane doesn't render.
+        //
+        // Phase whitelist (Cindy `oJ-mzKP7kbXtHUTe` slice-1 review P1 #2):
+        // backend's outbound-event-fanout already treats `idle || exited`
+        // as non-live (wake / start gates). The first cut here only
+        // excluded `exited`, which would have let a future `idle` handle
+        // light up ComputerPane's "online" pip incorrectly. Express the
+        // contract as a whitelist of active phases so a NEW phase added
+        // to the protocol enum fails CLOSED (not online) until the
+        // ComputerPane semantics for it are explicit.
+        const ACTIVE_PHASES = new Set([
+          'spawning',
+          'startup_pending',
+          'ready',
+          'draining',
+        ]);
+        return {
+          os: composeHostOs(),
+          os_arch: hostOsArch(),
+          daemon_pid: process.pid,
+          daemon_version: DAEMON_VERSION,
+          started_at: this.startedAt,
+          uptime_ms: this.now() - this.startedAt,
+          active_agent_ids: this.supervisor
+            ? Array.from(
+                new Set(
+                  (await this.supervisor.status({})).runtimes
+                    .filter(r => ACTIVE_PHASES.has(r.phase))
+                    .map(r => r.agent_id),
+                ),
+              )
+            : [],
+        };
+      }
       case 'conversation_log_debug': {
         const p = params as ConversationLogDebugParams;
         if (p.enabled) {
@@ -660,12 +726,21 @@ export class IntentDispatcher {
         return this.requireAgentWorkspaceIndexHandler()(
           params as AgentWorkspaceIndexParams,
         );
-      case 'agent_workspace_read':
-        // D4.e-2 — host-local L1/agent-home read proxy. Slot wired to
-        // `readAgentWorkspace`. Typed errors (AgentWorkspaceReadError)
-        // are projected by the DaemonTypedError catch arm.
-        return this.requireAgentWorkspaceReadHandler()(
-          params as AgentWorkspaceReadParams,
+      case 'agent_workspace_tree':
+        // #task:811 — flat tree of every visible file/directory under
+        // the agent home dir. Slot wired to `listAgentWorkspaceTree`.
+        // Typed errors (AgentWorkspaceFsError) are projected by the
+        // DaemonTypedError catch arm.
+        return this.requireAgentWorkspaceTreeHandler()(
+          params as AgentWorkspaceTreeParams,
+        );
+      case 'agent_workspace_file_read':
+        // #task:811 — read one file from the agent home dir by virtual
+        // path. Slot wired to `readAgentWorkspaceFile`. Same typed-
+        // error taxonomy as the tree handler (forbidden_path /
+        // not_found / fs_unavailable / internal_error).
+        return this.requireAgentWorkspaceFileReadHandler()(
+          params as AgentWorkspaceFileReadParams,
         );
       case 'agent_l2_seed':
         // D4.e-3 — member agent L2 seed on the owning host. Slot wired to
@@ -762,15 +837,28 @@ export class IntentDispatcher {
     return this.agentWorkspaceIndexHandler;
   }
 
-  private requireAgentWorkspaceReadHandler(): (
-    params: AgentWorkspaceReadParams,
-  ) => AgentWorkspaceReadResult | Promise<AgentWorkspaceReadResult> {
-    if (!this.agentWorkspaceReadHandler) {
+  private requireAgentWorkspaceTreeHandler(): (
+    params: AgentWorkspaceTreeParams,
+  ) => AgentWorkspaceTreeResult | Promise<AgentWorkspaceTreeResult> {
+    if (!this.agentWorkspaceTreeHandler) {
       throw new Error(
-        'agent_workspace_read intent reached dispatcher with no handler wired',
+        'agent_workspace_tree intent reached dispatcher with no handler wired',
       );
     }
-    return this.agentWorkspaceReadHandler;
+    return this.agentWorkspaceTreeHandler;
+  }
+
+  private requireAgentWorkspaceFileReadHandler(): (
+    params: AgentWorkspaceFileReadParams,
+  ) =>
+    | AgentWorkspaceFileReadResult
+    | Promise<AgentWorkspaceFileReadResult> {
+    if (!this.agentWorkspaceFileReadHandler) {
+      throw new Error(
+        'agent_workspace_file_read intent reached dispatcher with no handler wired',
+      );
+    }
+    return this.agentWorkspaceFileReadHandler;
   }
 
   private requireAgentL2SeedHandler(): (
