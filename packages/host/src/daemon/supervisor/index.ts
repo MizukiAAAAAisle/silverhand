@@ -426,6 +426,25 @@ export class Supervisor implements SupervisorContract {
       // child without an explicit groupkill. CM uses the same.
     });
 
+    // `spawn()` can return a ChildProcess with no pid and emit `error`
+    // asynchronously. Register before checking pid so a single failed
+    // runtime_start cannot become an unhandled EventEmitter error that
+    // terminates the daemon.
+    const earlyChildErrorListener = (err: Error): void => {
+      this.logger.warn(
+        {
+          kind: 'process',
+          action: 'child_error_before_handle',
+          conversationId: params.conversation_id,
+          agent_id: params.agent_id,
+          runtime: runtimeKind,
+          error_message: err.message,
+        },
+        'child process emitted error before runtime handle was registered',
+      );
+    };
+    child.once('error', earlyChildErrorListener);
+
     const pid = child.pid;
     if (typeof pid !== 'number') {
       throw new Error(
@@ -526,6 +545,7 @@ export class Supervisor implements SupervisorContract {
     this.emitState(handle);
 
     this.attachChildListeners(handle);
+    child.off('error', earlyChildErrorListener);
 
     if (driver.oneShot && params.startup_delivery) {
       this.emitStartupDeliveryConsumed(

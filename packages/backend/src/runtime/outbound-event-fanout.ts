@@ -467,6 +467,73 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     }
   }
 
+  private reconcileMissingRuntimesAfterHydrate(
+    hostId: string,
+    state: HostFanoutState,
+  ): void {
+    // A daemon swap cannot adopt the prior daemon's child processes; its
+    // runtime_status snapshot is authoritative. If DB still says a runtime
+    // on this host is active/starting but the snapshot omits it, project a
+    // terminal state so the UI does not keep showing a stale live agent.
+    const livePairs = new Set(
+      state.cache
+        .list()
+        .filter(entry => entry.phase !== 'exited')
+        .map(entry => clearSessionKey(entry.conversationId, entry.agentId)),
+    );
+
+    const staleRows = this.opts.db
+      .prepare<
+        [string],
+        {
+          conversation_id: string;
+          agent_id: string;
+          status: 'active' | 'starting';
+          pid: number | null;
+        }
+      >(
+        `SELECT ca.conversation_id, ca.agent_id, ca.status, ca.pid
+           FROM conversation_agents ca
+           JOIN agents a ON a.id = ca.agent_id
+          WHERE a.host_id = ?
+            AND ca.status IN ('active', 'starting')`,
+      )
+      .all(hostId);
+
+    for (const row of staleRows) {
+      if (livePairs.has(clearSessionKey(row.conversation_id, row.agent_id))) {
+        continue;
+      }
+      const updated = this.conversations.updateAgentRuntime(
+        row.conversation_id,
+        row.agent_id,
+        { status: 'crashed', pid: null },
+      );
+      if (!updated) continue;
+      this.opts.events.publish(row.conversation_id, {
+        kind: 'agent_status',
+        payload: {
+          agent_id: row.agent_id,
+          status: 'crashed',
+          pid: null,
+          reason: 'daemon_hydrate_missing',
+        },
+      });
+      this.opts.logger.warn(
+        {
+          kind: 'runtime',
+          action: 'stale_runtime_reconciled_after_hydrate',
+          hostId,
+          conversationId: row.conversation_id,
+          agent_id: row.agent_id,
+          previous_status: row.status,
+          previous_pid: row.pid,
+        },
+        'runtime_status hydrate omitted a DB-active runtime; marked it crashed',
+      );
+    }
+  }
+
   async deliverMessage(
     conversationId: string,
     agentId: string,
@@ -1414,6 +1481,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
           // does.
           return;
         }
+        this.reconcileMissingRuntimesAfterHydrate(hostId, state);
         queueMicrotask(() => {
           this.replayPendingForHost(hostId, connectionId).catch(err => {
             this.opts.logger.warn(

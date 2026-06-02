@@ -181,6 +181,34 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
+  it('marks DB-active runtimes missing from a daemon hydrate snapshot as crashed', async () => {
+    const fix = makeFixture({ runtime: 'codex' });
+    try {
+      new ConversationRepo(fix.db).updateAgentRuntime(fix.channelId, fix.agentId, {
+        status: 'active',
+        pid: 999,
+      });
+      fix.transport.snapshot = { runtimes: [] };
+
+      fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+
+      await waitFor(() => fix.row().status === 'crashed');
+      expect(fix.row()).toMatchObject({ status: 'crashed', pid: null });
+      expect(fix.events).toContainEqual({
+        conv: fix.channelId,
+        kind: 'agent_status',
+        payload: {
+          agent_id: fix.agentId,
+          status: 'crashed',
+          pid: null,
+          reason: 'daemon_hydrate_missing',
+        },
+      });
+    } finally {
+      fix.cleanup();
+    }
+  });
+
   it('drops stale ready_for_drain events and does not pin a live wake to the old connection', async () => {
     const fix = makeFixture({ runtime: 'codex' });
     try {

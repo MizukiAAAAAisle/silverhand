@@ -206,6 +206,26 @@ async function waitFor(
 }
 
 describe('Supervisor 3a — spawn / status / phase emit', () => {
+  it('contains spawn children that report no pid so their async error cannot crash the daemon', async () => {
+    const fakeChild = Object.assign(new EventEmitter(), {
+      pid: undefined,
+      stdout: null,
+      stderr: null,
+      stdin: null,
+      kill: () => true,
+    }) as unknown as ChildProcess;
+    const { supervisor } = makeSupervisor({
+      spawnFn: () => fakeChild,
+    });
+
+    await expect(supervisor.start(baseStartParams)).rejects.toThrow(
+      /child spawned without a pid/,
+    );
+    expect(() => {
+      fakeChild.emit('error', new Error('spawn failed after return'));
+    }).not.toThrow();
+  });
+
   it('start spawns a child with a real pid and emits runtime_state (starting → idle) + runtime_ready_for_drain', async () => {
     const { supervisor, events } = makeSupervisor();
     const res = await supervisor.start(baseStartParams);
